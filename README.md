@@ -45,6 +45,12 @@ FinanceEXChatService
 - Relay Agent 内部工具调用接口
 - 文档上传与对象存储 Port
 
+## 架构设计
+
+系统分层、核心调用链路、记忆体系、Agent 路由和工具调用边界见：
+
+- [系统架构设计文档](docs/architecture/README.md)
+
 ## 启动
 
 ```bash

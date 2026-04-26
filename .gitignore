@@ -1,0 +1,22 @@
+# Build outputs
+target/
+*.class
+
+# IDE and editor files
+.idea/
+.vscode/
+*.iml
+
+# Local runtime files
+logs/
+*.log
+*.pid
+
+# Environment and local secrets
+.env
+.env.*
+application-local.yml
+
+# OS metadata
+.DS_Store
+Thumbs.db

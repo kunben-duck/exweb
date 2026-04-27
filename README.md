@@ -30,16 +30,18 @@ FinanceEXChatService
         └── resources
 ```
 
-## 第一版实现范围
+## 第一版实现范围与目标架构
 
 - FinanceEXChatService 主控编排
 - SSE / HTTP Stream 接入
 - Session / Message / ChatEvent 持久化 Port
 - MemoryContext 装配
-- Mock 第三方意图识别
-- LocalAgentExecutor + AgentEngine
-- AgentScope 1.0.9 实现层
-- RuntimeRelayService + Relay Agent Runtime Port
+- IntentService 意图识别
+- RoutingPolicy 轻量路由裁决
+- 统一 AgentRuntime 架构
+- 高置信简单任务直达工具或模型响应
+- 非 fast path 任务进入配置选定的 AgentRuntime
+- AgentScope、RelayAgent、Spring AI、LangChain 等作为同级 AgentRuntime provider
 - 工具列表查询
 - 工具统一调用网关
 - Relay Agent 内部工具调用接口
@@ -47,7 +49,7 @@ FinanceEXChatService
 
 ## 架构设计
 
-系统分层、核心调用链路、记忆体系、Agent 路由和工具调用边界见：
+系统分层、意图识别、轻量路由、简单任务直达、统一 AgentRuntime、会话绑定、记忆体系和工具调用边界见：
 
 - [系统架构设计文档](docs/architecture/README.md)
 
@@ -129,13 +131,15 @@ ws://localhost:8080/api/v1/finance/chat/ws?tenantId=default&userId=anonymous
 ## 重要边界
 
 - `domain` 与 `application` 包不直接引用 `io.agentscope.*`
-- AgentScope 只存在于 `infrastructure.agent.agentscope` 包
+- AgentScope、RelayAgent、Spring AI、LangChain 等只是 AgentRuntime provider，不承载简单/复杂任务语义
 - 所有工具调用必须经过 `ToolGatewayApplicationService`
-- Relay Agent / Python Runtime 不直接调用第三方工具
+- RelayAgent / Python Runtime 不直接调用第三方工具
 - Memory 由 `MemoryApplicationService` 统一装配
 
-## AgentScope 说明
+## AgentRuntime 说明
 
-`AgentScopeAgentEngine` 使用 AgentScope Java 1.0.9 的 `ReActAgent`、`OpenAIChatModel`、`Toolkit`、`@Tool`、`@ToolParam` 接入。
+当前实现中，不确定、低置信、需要规划或需要多轮交互的任务统一收敛到 `AgentRuntime` 抽象。AgentScope、远程 RelayAgent、Spring AI、LangChain 等都可以作为同级 provider，通过配置选择服务启动时启用哪一个。
+
+AgentScope provider 使用 AgentScope Java 1.0.9 的 `ReActAgent`、`OpenAIChatModel`、`Toolkit`、`@Tool`、`@ToolParam` 接入。
 
 如果内网 1.0.9 包中的 OpenAI SDK 版本与根 POM 中 `openai-java.version` 不一致，按内网制品仓版本调整根 POM 属性即可。

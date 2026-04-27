@@ -1,8 +1,8 @@
-package com.huawei.finance.front.one.infrastructure.agent.agentscope;
+package com.huawei.finance.front.one.infrastructure.agent.runtime.agentscope;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.huawei.finance.front.one.application.gateway.AgentRunRequest;
+import com.huawei.finance.front.one.application.gateway.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.service.ToolGatewayApplicationService;
 import com.huawei.finance.front.one.domain.tool.ToolInvocationEvent;
 import com.huawei.finance.front.one.domain.tool.ToolInvokeCommand;
@@ -17,11 +17,11 @@ import java.util.Map;
  * <p>Agent 只看到 invoke_finance_tool 一个工具入口；真实工具选择、权限和审计仍由统一网关处理。</p>
  */
 public class AgentScopeToolBridge {
-    private final AgentRunRequest runRequest;
+    private final AgentRuntimeRequest runRequest;
     private final ToolGatewayApplicationService toolGateway;
     private final ObjectMapper objectMapper;
 
-    public AgentScopeToolBridge(AgentRunRequest runRequest, ToolGatewayApplicationService toolGateway, ObjectMapper objectMapper) {
+    public AgentScopeToolBridge(AgentRuntimeRequest runRequest, ToolGatewayApplicationService toolGateway, ObjectMapper objectMapper) {
         this.runRequest = runRequest; this.toolGateway = toolGateway; this.objectMapper = objectMapper;
     }
 

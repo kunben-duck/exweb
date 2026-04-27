@@ -1,8 +1,20 @@
 package com.huawei.finance.front.one.domain.routing;
 
-public record RouteTarget(RouteType type, RuntimeProtocol runtimeProtocol, String reason) {
-    public static RouteTarget local(String reason) { return new RouteTarget(RouteType.LOCAL_AGENT, null, reason); }
-    public static RouteTarget relay(RuntimeProtocol protocol, String reason) { return new RouteTarget(RouteType.RELAY_AGENT, protocol, reason); }
-    public static RouteTarget clarification(String reason) { return new RouteTarget(RouteType.ASK_CLARIFICATION, null, reason); }
-    public static RouteTarget reject(String reason) { return new RouteTarget(RouteType.REJECT, null, reason); }
+/**
+ * 聊天请求路由结果。
+ *
+ * <p>这里只描述处理路径，不绑定某个 AgentRuntime 的具体实现。</p>
+ */
+public record RouteTarget(RouteType type, String selectedToolCode, String reason) {
+    public static RouteTarget directTool(String toolCode, String reason) {
+        return new RouteTarget(RouteType.DIRECT_TOOL, toolCode, reason);
+    }
+
+    public static RouteTarget directModel(String reason) {
+        return new RouteTarget(RouteType.DIRECT_MODEL, null, reason);
+    }
+
+    public static RouteTarget agentRuntime(String reason) {
+        return new RouteTarget(RouteType.AGENT_RUNTIME, null, reason);
+    }
 }

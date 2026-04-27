@@ -15,7 +15,7 @@ spring:
     hikari:
       maximum-pool-size: ${FINANCEEX_DB_MAX_POOL_SIZE:10}
       minimum-idle: ${FINANCEEX_DB_MIN_IDLE:0}
-      connection-timeout: ${FINANCEEX_DB_CONNECTION_TIMEOUT:3000}
+      connection-timeout: ${FINANCEEX_DB_CONNECTION_TIMEOUT:500}
       initialization-fail-timeout: ${FINANCEEX_DB_INITIALIZATION_FAIL_TIMEOUT:-1}
   sql:
     init:
@@ -31,7 +31,7 @@ spring:
 management:
   health:
     db:
-      enabled: ${FINANCEEX_DB_HEALTH_ENABLED:true}
+      enabled: ${FINANCEEX_DB_HEALTH_ENABLED:false}
     redis:
       enabled: false
 
@@ -44,6 +44,9 @@ financeex:
     provider: mock
   memory:
     short-term:
+      storage:
+        database-required: ${FINANCEEX_SHORT_TERM_DB_REQUIRED:false}
+        database-failure-backoff: 30s
       redis:
         enabled: true
         key-prefix: financeex:memory:short-term
@@ -52,16 +55,24 @@ financeex:
         failure-backoff: 30s
     long-term:
       provider: mock-external
-  agent:
-    engine: AGENTSCOPE
-    agentscope:
-      base-url: http://localhost:8000/v1
-      api-key: dummy-key
-      model-name: finance-llm
-      max-iters: 8
-  runtime:
-    enabled: false
-    base-url: http://localhost:9000
-    stream-path: /v1/agent/runs/stream
+  agent-runtime:
+    provider: ${FINANCEEX_AGENT_RUNTIME_PROVIDER:relay-agent}
+    providers:
+      relay-agent:
+        enabled: ${FINANCEEX_RELAY_AGENT_ENABLED:false}
+        base-url: ${FINANCEEX_RELAY_AGENT_BASE_URL:http://localhost:9000}
+        stream-path: ${FINANCEEX_RELAY_AGENT_STREAM_PATH:/v1/agent/runs/stream}
+      agentscope:
+        enabled: false
+        base-url: http://localhost:8000/v1
+        api-key: dummy-key
+        model-name: finance-llm
+        max-iters: 8
+      spring-ai:
+        enabled: false
+      langchain:
+        enabled: false
+  direct-model:
+    provider: mock
   storage:
     local-path: ${java.io.tmpdir}/financeex-docs

@@ -1,7 +1,6 @@
-package com.huawei.finance.front.one.infrastructure.agent.agentscope.memory;
+package com.huawei.finance.front.one.infrastructure.agent.runtime.agentscope.memory;
 
-import com.huawei.finance.front.one.application.gateway.AgentRunRequest;
-import com.huawei.finance.front.one.application.gateway.ChatMessageRepository;
+import com.huawei.finance.front.one.application.gateway.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.gateway.IdGenerator;
 import com.huawei.finance.front.one.application.gateway.LongTermMemoryStore;
 import io.agentscope.core.memory.LongTermMemory;
@@ -16,21 +15,19 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class AgentScopeMemoryFactory {
-    private final ChatMessageRepository chatMessages;
     private final LongTermMemoryStore longTermMemoryStore;
     private final IdGenerator idGenerator;
 
-    public AgentScopeMemoryFactory(ChatMessageRepository chatMessages, LongTermMemoryStore longTermMemoryStore, IdGenerator idGenerator) {
-        this.chatMessages = chatMessages;
+    public AgentScopeMemoryFactory(LongTermMemoryStore longTermMemoryStore, IdGenerator idGenerator) {
         this.longTermMemoryStore = longTermMemoryStore;
         this.idGenerator = idGenerator;
     }
 
-    public Memory shortTermMemory(AgentRunRequest request) {
-        return new FinanceAgentScopeMemory(request, chatMessages, idGenerator);
+    public Memory shortTermMemory(AgentRuntimeRequest request) {
+        return new FinanceAgentScopeMemory(request);
     }
 
-    public LongTermMemory longTermMemory(AgentRunRequest request) {
+    public LongTermMemory longTermMemory(AgentRuntimeRequest request) {
         return new FinanceAgentScopeLongTermMemory(request, longTermMemoryStore, idGenerator);
     }
 }

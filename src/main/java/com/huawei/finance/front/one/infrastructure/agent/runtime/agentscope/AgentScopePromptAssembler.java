@@ -1,6 +1,6 @@
-package com.huawei.finance.front.one.infrastructure.agent.agentscope;
+package com.huawei.finance.front.one.infrastructure.agent.runtime.agentscope;
 
-import com.huawei.finance.front.one.application.gateway.AgentRunRequest;
+import com.huawei.finance.front.one.application.gateway.AgentRuntimeRequest;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatResponseMode;
 import com.huawei.finance.front.one.domain.chat.ImMessageType;
@@ -15,7 +15,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class AgentScopePromptAssembler {
-    public String systemPrompt(AgentRunRequest request) {
+    public String systemPrompt(AgentRuntimeRequest request) {
         StringBuilder sb = new StringBuilder();
         ImMessageType messageType = request.messageType() == null ? ImMessageType.TEXT : request.messageType();
         ChatResponseMode responseMode = request.responseMode() == null ? ChatResponseMode.BLOCK : request.responseMode();

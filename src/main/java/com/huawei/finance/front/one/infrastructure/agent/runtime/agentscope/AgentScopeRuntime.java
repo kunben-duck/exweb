@@ -1,15 +1,15 @@
-package com.huawei.finance.front.one.infrastructure.agent.agentscope;
+package com.huawei.finance.front.one.infrastructure.agent.runtime.agentscope;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.huawei.finance.front.one.application.gateway.AgentEngine;
-import com.huawei.finance.front.one.application.gateway.AgentEngineType;
-import com.huawei.finance.front.one.application.gateway.AgentRunRequest;
+import com.huawei.finance.front.one.application.gateway.AgentRuntime;
+import com.huawei.finance.front.one.application.gateway.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.service.ToolGatewayApplicationService;
+import com.huawei.finance.front.one.domain.agent.AgentRuntimeProvider;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatResponseMode;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
-import com.huawei.finance.front.one.infrastructure.agent.agentscope.memory.AgentScopeMemoryFactory;
+import com.huawei.finance.front.one.infrastructure.agent.runtime.agentscope.memory.AgentScopeMemoryFactory;
 import io.agentscope.core.ReActAgent;
 import io.agentscope.core.agent.Event;
 import io.agentscope.core.agent.EventType;
@@ -28,37 +28,45 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 /**
- * AgentScope 本地 Agent 引擎实现。
- *
- * <p>application 层只依赖 AgentEngine，AgentScope 相关 API 被限制在 infrastructure 包内。</p>
+ * AgentScope AgentRuntime provider。
  */
 @Component
 @EnableConfigurationProperties(AgentScopeProperties.class)
-public class AgentScopeAgentEngine implements AgentEngine {
+public class AgentScopeRuntime implements AgentRuntime {
     private final AgentScopeProperties properties;
     private final AgentScopePromptAssembler promptAssembler;
     private final AgentScopeMemoryFactory memoryFactory;
     private final ToolGatewayApplicationService toolGateway;
     private final ObjectMapper objectMapper;
 
-    public AgentScopeAgentEngine(AgentScopeProperties properties, AgentScopePromptAssembler promptAssembler, AgentScopeMemoryFactory memoryFactory,
-                                        ToolGatewayApplicationService toolGateway, ObjectMapper objectMapper) {
-        this.properties = properties; this.promptAssembler = promptAssembler; this.memoryFactory = memoryFactory; this.toolGateway = toolGateway; this.objectMapper = objectMapper;
+    public AgentScopeRuntime(AgentScopeProperties properties, AgentScopePromptAssembler promptAssembler, AgentScopeMemoryFactory memoryFactory,
+                             ToolGatewayApplicationService toolGateway, ObjectMapper objectMapper) {
+        this.properties = properties;
+        this.promptAssembler = promptAssembler;
+        this.memoryFactory = memoryFactory;
+        this.toolGateway = toolGateway;
+        this.objectMapper = objectMapper;
     }
 
-    @Override public AgentEngineType engineType() { return AgentEngineType.AGENTSCOPE; }
-    @Override public boolean supports(AgentEngineType engineType) { return engineType == AgentEngineType.AGENTSCOPE; }
+    @Override
+    public AgentRuntimeProvider provider() {
+        return AgentRuntimeProvider.AGENTSCOPE;
+    }
 
     @Override
-    public Flux<ChatEvent> run(AgentRunRequest request) {
+    public boolean supports(AgentRuntimeProvider provider) {
+        return provider == AgentRuntimeProvider.AGENTSCOPE;
+    }
+
+    @Override
+    public Flux<ChatEvent> run(AgentRuntimeRequest request) {
         if (responseMode(request) == ChatResponseMode.STREAM) {
             return runStreaming(request);
         }
         return runBlocking(request);
     }
 
-    private Flux<ChatEvent> runBlocking(AgentRunRequest request) {
-        // block 模式等待 AgentScope 完整回复，再一次性映射为 message.delta。
+    private Flux<ChatEvent> runBlocking(AgentRuntimeRequest request) {
         return Mono.fromCallable(() -> executeBlocking(request))
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMapMany(text -> Flux.just(
@@ -67,7 +75,7 @@ public class AgentScopeAgentEngine implements AgentEngine {
                 ));
     }
 
-    private Flux<ChatEvent> runStreaming(AgentRunRequest request) {
+    private Flux<ChatEvent> runStreaming(AgentRuntimeRequest request) {
         return Flux.defer(() -> {
             ReActAgent agent = buildAgent(request);
             Msg msg = currentUserMessage(request);
@@ -81,7 +89,6 @@ public class AgentScopeAgentEngine implements AgentEngine {
                     .includeSummaryResult(false)
                     .build();
 
-            // stream 模式直接使用 AgentScope 原生流式事件，逐段转换为前端可消费的 message.delta。
             return agent.stream(msg, options)
                     .subscribeOn(Schedulers.boundedElastic())
                     .map(this::extractText)
@@ -91,28 +98,23 @@ public class AgentScopeAgentEngine implements AgentEngine {
         });
     }
 
-    private String executeBlocking(AgentRunRequest request) {
+    private String executeBlocking(AgentRuntimeRequest request) {
         ReActAgent agent = buildAgent(request);
-        Msg msg = currentUserMessage(request);
-        // block 模式使用 AgentScope call 获取完整消息。
-        Msg response = agent.call(msg).block();
+        Msg response = agent.call(currentUserMessage(request)).block();
         return response == null ? "" : response.getTextContent();
     }
 
-    private ReActAgent buildAgent(AgentRunRequest request) {
-        // 只注册一个统一工具桥，具体工具权限和审计仍由 ToolGatewayApplicationService 负责。
+    private ReActAgent buildAgent(AgentRuntimeRequest request) {
         Toolkit toolkit = new Toolkit();
         toolkit.registerTool(new AgentScopeToolBridge(request, toolGateway, objectMapper));
 
-        // OpenAIChatModel 使用兼容 OpenAI 协议的 baseUrl，方便接入内网模型网关。
         OpenAIChatModel model = OpenAIChatModel.builder()
                 .apiKey(properties.getApiKey())
                 .modelName(properties.getModelName())
                 .baseUrl(properties.getBaseUrl())
                 .build();
-        // 每次运行新建 ReActAgent，确保 prompt、工具上下文和 run 级变量不串用。
-        ReActAgent agent = ReActAgent.builder()
-                .name("FinanceEXLocalAgent")
+        return ReActAgent.builder()
+                .name("FinanceEXAgentScopeRuntime")
                 .sysPrompt(promptAssembler.systemPrompt(request))
                 .memory(memoryFactory.shortTermMemory(request))
                 .longTermMemory(memoryFactory.longTermMemory(request))
@@ -121,11 +123,9 @@ public class AgentScopeAgentEngine implements AgentEngine {
                 .toolkit(toolkit)
                 .maxIters(properties.getMaxIters())
                 .build();
-        return agent;
     }
 
-    private Msg currentUserMessage(AgentRunRequest request) {
-        // 明确标记为 USER，确保 AgentScope 的长期记忆 Hook 能基于最后一条用户消息做检索。
+    private Msg currentUserMessage(AgentRuntimeRequest request) {
         return Msg.builder()
                 .name("user")
                 .role(MsgRole.USER)
@@ -134,7 +134,7 @@ public class AgentScopeAgentEngine implements AgentEngine {
                 .build();
     }
 
-    private Map<String, Object> currentMessageMetadata(AgentRunRequest request) {
+    private Map<String, Object> currentMessageMetadata(AgentRuntimeRequest request) {
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("source", "current-request");
         if (request.tenantId() != null) metadata.put("tenantId", request.tenantId());
@@ -151,7 +151,7 @@ public class AgentScopeAgentEngine implements AgentEngine {
         return event.getMessage().getTextContent();
     }
 
-    private ChatResponseMode responseMode(AgentRunRequest request) {
+    private ChatResponseMode responseMode(AgentRuntimeRequest request) {
         return request.responseMode() == null ? ChatResponseMode.BLOCK : request.responseMode();
     }
 }

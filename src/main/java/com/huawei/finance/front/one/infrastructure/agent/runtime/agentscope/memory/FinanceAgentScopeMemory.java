@@ -1,44 +1,30 @@
-package com.huawei.finance.front.one.infrastructure.agent.agentscope.memory;
+package com.huawei.finance.front.one.infrastructure.agent.runtime.agentscope.memory;
 
-import com.huawei.finance.front.one.application.gateway.AgentRunRequest;
-import com.huawei.finance.front.one.application.gateway.ChatMessageRepository;
-import com.huawei.finance.front.one.application.gateway.IdGenerateContext;
-import com.huawei.finance.front.one.application.gateway.IdGenerator;
+import com.huawei.finance.front.one.application.gateway.AgentRuntimeRequest;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import io.agentscope.core.memory.Memory;
-import io.agentscope.core.message.GenerateReason;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * 项目存储驱动的 AgentScope 短期记忆。
  *
- * <p>构造时加载会话历史；AgentScope 运行过程中调用 addMessage 时，同步写回项目消息仓储。
- * 这样 AgentScope 负责记忆调用时机，项目负责真正的存储、隔离和后续替换实现。</p>
+ * <p>构造时加载会话历史；本次运行产生的临时消息只保留在 AgentScope 运行内。
+ * 前端可见的 user/assistant 消息由 FinanceEXChatService 统一保存，避免重复写入。</p>
  */
 public class FinanceAgentScopeMemory implements Memory {
     private static final String HISTORY_SOURCE = "project-short-memory";
 
-    private final AgentRunRequest request;
-    private final ChatMessageRepository chatMessages;
-    private final IdGenerator idGenerator;
     private final List<Msg> historyMessages;
     private final List<Msg> runtimeMessages = new CopyOnWriteArrayList<>();
-    private final Set<String> persistedRuntimeKeys = ConcurrentHashMap.newKeySet();
 
-    public FinanceAgentScopeMemory(AgentRunRequest request, ChatMessageRepository chatMessages, IdGenerator idGenerator) {
-        this.request = request;
-        this.chatMessages = chatMessages;
-        this.idGenerator = idGenerator;
+    public FinanceAgentScopeMemory(AgentRuntimeRequest request) {
         this.historyMessages = loadHistory(request);
     }
 
@@ -48,7 +34,6 @@ public class FinanceAgentScopeMemory implements Memory {
             return;
         }
         runtimeMessages.add(msg);
-        persistVisibleMessage(msg);
     }
 
     @Override
@@ -76,7 +61,7 @@ public class FinanceAgentScopeMemory implements Memory {
         runtimeMessages.clear();
     }
 
-    private List<Msg> loadHistory(AgentRunRequest request) {
+    private List<Msg> loadHistory(AgentRuntimeRequest request) {
         List<Msg> messages = new ArrayList<>();
         request.memoryContext().conversationSummary().ifPresent(summary -> messages.add(Msg.builder()
                 .id(summary.id())
@@ -127,39 +112,4 @@ public class FinanceAgentScopeMemory implements Memory {
         return MsgRole.USER;
     }
 
-    private void persistVisibleMessage(Msg msg) {
-        MsgRole role = msg.getRole();
-        if (role != MsgRole.USER && role != MsgRole.ASSISTANT) {
-            return;
-        }
-        if (isToolOnlyAssistantMessage(msg)) {
-            return;
-        }
-        String text = msg.getTextContent();
-        if (text == null || text.isBlank()) {
-            return;
-        }
-        String key = role.name() + "\n" + text;
-        if (!persistedRuntimeKeys.add(key)) {
-            return;
-        }
-
-        // 只持久化用户和助手可见文本；工具过程消息保留在 AgentScope 本次运行内，避免污染前端会话历史。
-        String messageId = idGenerator.newId("msg", IdGenerateContext.of(request.tenantId(), request.userId(), request.sessionId()));
-        chatMessages.save(new ChatMessage(
-                messageId,
-                request.tenantId(),
-                request.userId(),
-                request.sessionId(),
-                role == MsgRole.ASSISTANT ? "assistant" : "user",
-                text,
-                null,
-                Instant.now()
-        ));
-    }
-
-    private boolean isToolOnlyAssistantMessage(Msg msg) {
-        GenerateReason reason = msg.getGenerateReason();
-        return msg.getRole() == MsgRole.ASSISTANT && (reason == GenerateReason.TOOL_CALLS || reason == GenerateReason.TOOL_SUSPENDED);
-    }
 }

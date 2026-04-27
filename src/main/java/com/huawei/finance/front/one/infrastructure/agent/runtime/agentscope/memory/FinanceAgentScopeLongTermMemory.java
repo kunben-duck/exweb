@@ -1,6 +1,6 @@
-package com.huawei.finance.front.one.infrastructure.agent.agentscope.memory;
+package com.huawei.finance.front.one.infrastructure.agent.runtime.agentscope.memory;
 
-import com.huawei.finance.front.one.application.gateway.AgentRunRequest;
+import com.huawei.finance.front.one.application.gateway.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.gateway.IdGenerateContext;
 import com.huawei.finance.front.one.application.gateway.IdGenerator;
 import com.huawei.finance.front.one.application.gateway.LongTermMemoryStore;
@@ -22,11 +22,11 @@ import reactor.core.publisher.Mono;
 public class FinanceAgentScopeLongTermMemory implements LongTermMemory {
     private static final int TOP_K = 5;
 
-    private final AgentRunRequest request;
+    private final AgentRuntimeRequest request;
     private final LongTermMemoryStore store;
     private final IdGenerator idGenerator;
 
-    public FinanceAgentScopeLongTermMemory(AgentRunRequest request, LongTermMemoryStore store, IdGenerator idGenerator) {
+    public FinanceAgentScopeLongTermMemory(AgentRuntimeRequest request, LongTermMemoryStore store, IdGenerator idGenerator) {
         this.request = request;
         this.store = store;
         this.idGenerator = idGenerator;

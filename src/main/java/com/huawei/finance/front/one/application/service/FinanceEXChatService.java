@@ -5,7 +5,7 @@ import com.huawei.finance.front.one.application.gateway.AuthContextProvider;
 import com.huawei.finance.front.one.application.gateway.ChatEventStore;
 import com.huawei.finance.front.one.application.gateway.IdGenerateContext;
 import com.huawei.finance.front.one.application.gateway.IdGenerator;
-import com.huawei.finance.front.one.application.gateway.IntentRecognizer;
+import com.huawei.finance.front.one.application.gateway.IntentService;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
@@ -14,14 +14,12 @@ import com.huawei.finance.front.one.domain.chat.ChatResponseMode;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ErrorEvent;
 import com.huawei.finance.front.one.domain.chat.ImMessageType;
-import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
 import com.huawei.finance.front.one.domain.chat.RunCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.RunStartedEvent;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
-import com.huawei.finance.front.one.domain.routing.RouteType;
 import com.huawei.finance.front.one.domain.routing.RoutingPolicy;
 import java.util.List;
 import java.util.Map;
@@ -40,20 +38,20 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private final PermissionChecker permissionChecker;
     private final SessionApplicationService sessionService;
     private final MemoryApplicationService memoryService;
-    private final IntentRecognizer intentRecognizer;
+    private final IntentService intentService;
     private final RoutingPolicy routingPolicy;
-    private final LocalAgentExecutor localAgentExecutor;
-    private final RuntimeRelayService runtimeRelayService;
+    private final DirectTaskExecutor directTaskExecutor;
+    private final AgentRuntimeExecutor agentRuntimeExecutor;
     private final ChatEventStore eventStore;
     private final IdGenerator idGenerator;
 
     public FinanceEXChatService(AuthContextProvider auth, PermissionChecker permissionChecker, SessionApplicationService sessionService,
-                                MemoryApplicationService memoryService, IntentRecognizer intentRecognizer, RoutingPolicy routingPolicy,
-                                LocalAgentExecutor localAgentExecutor, RuntimeRelayService runtimeRelayService, ChatEventStore eventStore,
+                                MemoryApplicationService memoryService, IntentService intentService, RoutingPolicy routingPolicy,
+                                DirectTaskExecutor directTaskExecutor, AgentRuntimeExecutor agentRuntimeExecutor, ChatEventStore eventStore,
                                 IdGenerator idGenerator) {
         this.auth = auth; this.permissionChecker = permissionChecker; this.sessionService = sessionService; this.memoryService = memoryService;
-        this.intentRecognizer = intentRecognizer; this.routingPolicy = routingPolicy; this.localAgentExecutor = localAgentExecutor;
-        this.runtimeRelayService = runtimeRelayService; this.eventStore = eventStore; this.idGenerator = idGenerator;
+        this.intentService = intentService; this.routingPolicy = routingPolicy; this.directTaskExecutor = directTaskExecutor;
+        this.agentRuntimeExecutor = agentRuntimeExecutor; this.eventStore = eventStore; this.idGenerator = idGenerator;
     }
 
     @Override
@@ -79,22 +77,18 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
             // 先装配短期/长期上下文，再做意图识别和路由决策。
             MemoryContext memory = memoryService.loadForRun(normalized);
-            IntentDecision intent = intentRecognizer.recognize(normalized, memory, user);
+            IntentDecision intent = intentService.recognize(normalized, memory, user);
             RouteTarget route = routingPolicy.decide(normalized, memory, intent, user);
-            boolean localAgentRoute = route.type() == RouteType.LOCAL_AGENT;
             StringBuilder assistant = new StringBuilder();
 
-            // 本地 Agent 路径由 AgentScope Memory 负责保存 user/assistant；其他路径由应用编排保存。
-            if (!localAgentRoute) {
-                sessionService.saveUserMessage(normalized, session);
-            }
+            // Java 服务统一保存前端可见用户消息，AgentRuntime 内部记忆只负责自身运行状态。
+            sessionService.saveUserMessage(normalized, session);
 
-            // 根据路由结果选择本地 Agent、Relay Runtime、澄清或拒绝。
+            // 根据路由结果选择直接工具、直接模型或统一 AgentRuntime。
             Flux<ChatEvent> body = switch (route.type()) {
-                case LOCAL_AGENT -> localAgentExecutor.execute(normalized, runId, memory, intent, user);
-                case RELAY_AGENT -> runtimeRelayService.relay(normalized, runId, memory, intent, user, route.runtimeProtocol());
-                case ASK_CLARIFICATION -> Flux.just(MessageDeltaEvent.of(runId, session.id(), "请补充具体业务口径或查询条件。"), MessageCompletedEvent.of(runId, session.id()));
-                case REJECT -> Flux.just(ErrorEvent.of(runId, session.id(), "REJECT", route.reason()));
+                case DIRECT_TOOL -> directTaskExecutor.executeTool(normalized, runId, intent, route, user);
+                case DIRECT_MODEL -> directTaskExecutor.executeModel(normalized, runId, intent);
+                case AGENT_RUNTIME -> agentRuntimeExecutor.execute(normalized, runId, memory, intent, route, user);
             };
 
             // 外层统一补齐 run.started/run.completed，接口层只需要转发事件流。
@@ -105,8 +99,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                         if (event instanceof MessageDeltaEvent delta) assistant.append(delta.delta());
                     })
                     .doOnComplete(() -> {
-                        // 完整回复只保存一次；本地 Agent 的回复由 AgentScope Memory 写回项目仓储。
-                        if (!localAgentRoute && !assistant.isEmpty()) sessionService.saveAssistantMessage(user.tenantId(), user.userId(), session.id(), assistant.toString());
+                        // 完整回复只保存一次，避免前端历史由运行时 provider 各自写入导致重复。
+                        if (!assistant.isEmpty()) sessionService.saveAssistantMessage(user.tenantId(), user.userId(), session.id(), assistant.toString());
                         memoryService.updateAfterRun(normalized, Map.of("lastRunId", runId));
                     })
                     // 运行期异常转换为协议事件，避免直接中断前端流。

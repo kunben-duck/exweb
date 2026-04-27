@@ -1,8 +1,8 @@
-package com.huawei.finance.front.one.infrastructure.agent.agentscope;
+package com.huawei.finance.front.one.infrastructure.agent.runtime.agentscope;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
-@ConfigurationProperties(prefix = "financeex.agent.agentscope")
+@ConfigurationProperties(prefix = "financeex.agent-runtime.providers.agentscope")
 public class AgentScopeProperties {
     private String baseUrl = "http://localhost:8000/v1";
     private String apiKey = "dummy-key";

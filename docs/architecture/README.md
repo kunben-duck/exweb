@@ -81,6 +81,26 @@ flowchart TB
 - 不支持任务走 `SYSTEM_RESPONSE`，返回可控说明。
 - 前端可通过 `metadata.forceNewTask=true` 取消当前 binding 并重新路由。
 
+## 会话与执行标识
+
+v2 同时保留多种 ID，它们的职责不同：
+
+```text
+sessionId         前端聊天会话，一段持续对话
+runId             SuperAgent 单轮执行追踪 ID
+agentSessionId    SubAgent 内部会话 ID
+runtimeSessionId  AgentRuntime 内部会话 ID
+```
+
+`runId` 在每轮用户请求进入 `FinanceEXChatService` 时生成，贯穿该轮的所有 ChatEvent。它用于：
+
+- 前端把同一轮 SSE/NDJSON/WebSocket 事件聚合成一次响应。
+- `fin_ex_chat_event_t.run_id` 按运行轮次回查事件轨迹。
+- `fin_ex_agent_binding_t.last_run_id` 记录最近触发该 binding 的运行轮次。
+- 传给 SubAgent/AgentRuntime，方便跨服务日志关联。
+
+`runId` 不参与多轮保持决策。多轮保持由 `AgentBinding.status`、`agentSessionId` 和 `runtimeSessionId` 决定。
+
 ## AgentBinding
 
 `AgentBinding` 维护前端 chat session 与下游 SubAgent/AgentRuntime session 的关系。Redis 是热缓存，openGauss 是事实源。

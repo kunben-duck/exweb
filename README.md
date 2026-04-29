@@ -73,6 +73,15 @@ X-User-Id: anonymous
 
 `metadata.forceNewTask=true` 会取消当前 active AgentBinding，并重新走用例库/意图服务路由。
 
+## 会话与执行标识
+
+- `sessionId`：前端聊天会话 ID，一次聊天会话内可以包含多轮用户请求。
+- `runId`：SuperAgent 为每一轮用户请求生成的执行追踪 ID，用于把 `run.started`、`message.delta`、`message.completed`、`run.completed` 或 `run.failed` 串成同一次响应。
+- `agentSessionId`：SubAgent 自己的会话 ID，由下游返回后保存在 AgentBinding 中，下一轮续接时原样带回。
+- `runtimeSessionId`：AgentRuntime 自己的会话 ID，由 Runtime provider 维护，SuperAgent 只负责保存和转发。
+
+`runId` 不代表长期任务会话，也不是工具调用残留；它是单轮执行的 correlation id。事件表 `fin_ex_chat_event_t.run_id` 和绑定表 `fin_ex_agent_binding_t.last_run_id` 都用它做运行轨迹和排障定位。
+
 ## 存储命名
 
 所有数据库表统一使用 `fin_ex_*_t`：

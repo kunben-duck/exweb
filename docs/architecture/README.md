@@ -17,6 +17,145 @@ FinanceEXChatService 是前端聊天入口和 SuperAgent 主控服务。v2 的�
             -> 复杂/不确定：AgentRuntime.query
 ```
 
+## 全局流程图
+
+```mermaid
+flowchart TD
+    User["用户请求"] --> Normalize["身份校验与会话归一化"]
+    Normalize --> Memory["加载 MemoryContext"]
+    Memory --> ForceNew{"metadata.forceNewTask 为 true?"}
+    ForceNew -- "是" --> CancelBinding["取消 active AgentBinding"]
+    ForceNew -- "否" --> FindBinding["查询 AgentBinding"]
+    CancelBinding --> FindBinding
+    FindBinding --> HasBinding{"存在 active binding?"}
+
+    HasBinding -- "是" --> BindingType{"binding_type"}
+    BindingType -- "SUB_AGENT" --> BoundSubAgent["续接 SubAgentClient.query"]
+    BindingType -- "AGENT_RUNTIME" --> BoundRuntime["续接 AgentRuntime.query"]
+
+    HasBinding -- "否" --> UseCase["UseCaseLibraryClient.match"]
+    UseCase --> UseCaseHit{"命中且分数达标且有 subAgentCode?"}
+    UseCaseHit -- "是" --> CreateSubBinding["创建 SUB_AGENT binding"]
+    CreateSubBinding --> CallSubAgent["调用 SubAgentClient.query"]
+
+    UseCaseHit -- "否" --> Intent["IntentService.recognize"]
+    Intent --> IntentRoute{"意图路由结果"}
+    IntentRoute -- "UNSUPPORTED" --> SystemResponse["SYSTEM_RESPONSE"]
+    IntentRoute -- "SIMPLE 且有 subAgentCode" --> CreateIntentBinding["创建 SUB_AGENT binding"]
+    CreateIntentBinding --> CallSubAgent
+    IntentRoute -- "COMPLEX / 低置信 / 无 subAgentCode" --> CreateRuntimeBinding["创建 AGENT_RUNTIME binding"]
+    CreateRuntimeBinding --> CallRuntime["调用 AgentRuntime.query"]
+
+    BoundSubAgent --> EventStream["输出 ChatEvent 流"]
+    BoundRuntime --> EventStream
+    CallSubAgent --> EventStream
+    CallRuntime --> EventStream
+    SystemResponse --> EventStream
+    EventStream --> Persist["事件与消息写入 openGauss"]
+    Persist --> ObserveStatus["观察 taskStatus"]
+    ObserveStatus --> BindingUpdate{"任务是否终态?"}
+    BindingUpdate -- "是" --> ReleaseBinding["释放 Redis binding 并写终态"]
+    BindingUpdate -- "否" --> KeepBinding["刷新 Redis binding 与过期时间"]
+```
+
+## 全局顺序图
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Frontend as "Frontend"
+    participant API as "Chat API"
+    participant SuperAgent as "FinanceEXChatService"
+    participant Session as "SessionApplicationService"
+    participant Memory as "MemoryApplicationService"
+    participant Binding as "AgentBindingApplicationService"
+    participant Redis as "Redis"
+    participant DB as "openGauss"
+    participant UseCase as "UseCaseLibraryService"
+    participant Intent as "IntentService"
+    participant SubAgent as "SubAgent"
+    participant Runtime as "AgentRuntime"
+    participant EventStore as "ChatEventStore"
+
+    Frontend->>API: "发送聊天请求"
+    API->>SuperAgent: "chat(command)"
+    SuperAgent->>SuperAgent: "生成 runId"
+    SuperAgent->>Session: "loadOrCreate(command)"
+    Session->>DB: "读取或写入 fin_ex_chat_session_t"
+    SuperAgent->>Memory: "loadForRun(command)"
+    Memory->>Redis: "读取短期消息与工作记忆"
+    Memory->>DB: "Redis miss 时回源消息和摘要"
+
+    alt "metadata.forceNewTask 为 true"
+        SuperAgent->>Binding: "cancelActive(sessionId)"
+        Binding->>DB: "写入 CANCELLED 状态"
+        Binding->>Redis: "删除 fin_ex:agent_binding key"
+    end
+
+    SuperAgent->>Binding: "findActive(sessionId)"
+    Binding->>Redis: "读取 active binding"
+    alt "Redis miss"
+        Binding->>DB: "查询 fin_ex_agent_binding_t"
+        DB-->>Binding: "返回 active binding 或空"
+        Binding->>Redis: "回填 active binding"
+    end
+
+    alt "存在 SUB_AGENT binding"
+        SuperAgent->>Binding: "touchForRun(runId)"
+        Binding->>DB: "刷新 last_run_id 与 expires_at"
+        Binding->>Redis: "刷新 binding TTL"
+        SuperAgent->>SubAgent: "query(runId, agentSessionId, message)"
+    else "存在 AGENT_RUNTIME binding"
+        SuperAgent->>Binding: "touchForRun(runId)"
+        Binding->>DB: "刷新 last_run_id 与 expires_at"
+        Binding->>Redis: "刷新 binding TTL"
+        SuperAgent->>Runtime: "query(runId, runtimeSessionId, message)"
+    else "不存在 active binding"
+        SuperAgent->>UseCase: "match(request)"
+        alt "用例库命中 SubAgent"
+            SuperAgent->>Binding: "createSubAgentBinding(runId)"
+            Binding->>DB: "写入 fin_ex_agent_binding_t"
+            Binding->>Redis: "缓存 binding"
+            SuperAgent->>SubAgent: "query(runId, message)"
+        else "用例库未命中"
+            SuperAgent->>Intent: "recognize(command, memory)"
+            alt "简单任务且有 subAgentCode"
+                SuperAgent->>Binding: "createSubAgentBinding(runId)"
+                Binding->>DB: "写入 fin_ex_agent_binding_t"
+                Binding->>Redis: "缓存 binding"
+                SuperAgent->>SubAgent: "query(runId, message)"
+            else "复杂或不确定任务"
+                SuperAgent->>Binding: "createRuntimeBinding(runId)"
+                Binding->>DB: "写入 fin_ex_agent_binding_t"
+                Binding->>Redis: "缓存 binding"
+                SuperAgent->>Runtime: "query(runId, message)"
+            else "不支持任务"
+                SuperAgent->>SuperAgent: "生成 SYSTEM_RESPONSE 事件"
+            end
+        end
+    end
+
+    loop "输出 ChatEvent"
+        SubAgent-->>SuperAgent: "message.delta / message.completed"
+        Runtime-->>SuperAgent: "message.delta / message.completed"
+        SuperAgent->>EventStore: "append(event)"
+        EventStore->>DB: "写入 fin_ex_chat_event_t"
+        SuperAgent-->>API: "转发事件"
+        API-->>Frontend: "SSE / NDJSON / WebSocket"
+    end
+
+    SuperAgent->>Session: "保存完整 assistant 消息"
+    Session->>DB: "写入 fin_ex_chat_message_t"
+    SuperAgent->>Binding: "observeEvent(taskStatus)"
+    alt "COMPLETED / FAILED / CANCELLED"
+        Binding->>DB: "写入终态"
+        Binding->>Redis: "删除 binding"
+    else "ACTIVE / REQUIRES_USER_INPUT"
+        Binding->>DB: "保持可续接状态"
+        Binding->>Redis: "刷新 binding TTL"
+    end
+```
+
 ## 分层架构
 
 ```mermaid

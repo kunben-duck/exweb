@@ -31,7 +31,7 @@ public class ChatRequestTranslator {
         if (metadata != null) {
             normalized.putAll(metadata);
         }
-        // 把传输协议和 IM 类型放入 metadata，便于 Runtime 或工具侧无需理解前端 DTO。
+        // 把传输协议和 IM 类型放入 metadata，便于 Runtime 或 SubAgent 侧无需理解前端 DTO。
         normalized.putIfAbsent("transportProtocol", protocol);
         normalized.putIfAbsent("imMessageType", messageType.code());
         normalized.putIfAbsent("responseMode", responseMode.code());

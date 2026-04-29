@@ -3,7 +3,7 @@ package com.huawei.finance.front.one.infrastructure.memory.mybatis;
 import java.time.Instant;
 
 /**
- * chat_message 表的 MyBatis 行模型。
+ * fin_ex_chat_message_t 表的 MyBatis 行模型。
  *
  * <p>基础设施层使用可变对象承接 MyBatis 映射，再转换为领域层不可变 ChatMessage。</p>
  */

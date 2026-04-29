@@ -41,17 +41,40 @@ mybatis:
 
 financeex:
   intent:
-    provider: mock
+    provider: ${FINANCEEX_INTENT_PROVIDER:http}
+    base-url: ${FINANCEEX_INTENT_BASE_URL:http://localhost:9200}
+    recognize-path: ${FINANCEEX_INTENT_RECOGNIZE_PATH:/v1/intents/recognize}
+    timeout: 5s
+  use-case-library:
+    provider: ${FINANCEEX_USE_CASE_LIBRARY_PROVIDER:http}
+    min-score: 0.85
+    base-url: ${FINANCEEX_USE_CASE_LIBRARY_BASE_URL:http://localhost:9100}
+    match-path: ${FINANCEEX_USE_CASE_LIBRARY_MATCH_PATH:/v1/use-cases/match}
+    timeout: 5s
+  agent-binding:
+    ttl: 3d
+    redis-key-prefix: fin_ex:agent_binding
+    redis-ttl: 3d
+  sub-agent:
+    mock-fallback-enabled: ${FINANCEEX_SUB_AGENT_MOCK_FALLBACK_ENABLED:false}
+    timeout: 30s
+    agents: {}
   memory:
     short-term:
       storage:
-        database-required: ${FINANCEEX_SHORT_TERM_DB_REQUIRED:false}
+        database-required: ${FINANCEEX_SHORT_TERM_DB_REQUIRED:true}
         database-failure-backoff: 30s
       redis:
         enabled: true
-        key-prefix: financeex:memory:short-term
+        key-prefix: fin_ex:memory:short_term
         ttl: 3d
         max-cached-messages: 200
+        failure-backoff: 30s
+    working:
+      redis:
+        enabled: true
+        key-prefix: fin_ex:memory:working
+        ttl: 3d
         failure-backoff: 30s
     long-term:
       provider: mock-external
@@ -72,7 +95,5 @@ financeex:
         enabled: false
       langchain:
         enabled: false
-  direct-model:
-    provider: mock
   storage:
     local-path: ${java.io.tmpdir}/financeex-docs

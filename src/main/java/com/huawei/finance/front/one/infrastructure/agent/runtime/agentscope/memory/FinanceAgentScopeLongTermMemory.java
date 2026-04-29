@@ -6,7 +6,6 @@ import com.huawei.finance.front.one.application.gateway.IdGenerator;
 import com.huawei.finance.front.one.application.gateway.LongTermMemoryStore;
 import com.huawei.finance.front.one.domain.memory.LongTermMemoryItem;
 import io.agentscope.core.memory.LongTermMemory;
-import io.agentscope.core.message.GenerateReason;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import java.time.Instant;
@@ -85,9 +84,6 @@ public class FinanceAgentScopeLongTermMemory implements LongTermMemory {
             if (role != MsgRole.USER && role != MsgRole.ASSISTANT) {
                 continue;
             }
-            if (isToolOnlyAssistantMessage(message)) {
-                continue;
-            }
             String text = message.getTextContent();
             if (text == null || text.isBlank()) {
                 continue;
@@ -104,8 +100,4 @@ public class FinanceAgentScopeLongTermMemory implements LongTermMemory {
         return metadata != null && "project-short-memory".equals(metadata.get("source"));
     }
 
-    private boolean isToolOnlyAssistantMessage(Msg message) {
-        GenerateReason reason = message.getGenerateReason();
-        return message.getRole() == MsgRole.ASSISTANT && (reason == GenerateReason.TOOL_CALLS || reason == GenerateReason.TOOL_SUSPENDED);
-    }
 }

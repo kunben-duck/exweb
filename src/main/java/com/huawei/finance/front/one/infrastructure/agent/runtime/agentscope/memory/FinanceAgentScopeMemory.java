@@ -106,9 +106,6 @@ public class FinanceAgentScopeMemory implements Memory {
         if ("system".equalsIgnoreCase(role)) {
             return MsgRole.SYSTEM;
         }
-        if ("tool".equalsIgnoreCase(role)) {
-            return MsgRole.TOOL;
-        }
         return MsgRole.USER;
     }
 

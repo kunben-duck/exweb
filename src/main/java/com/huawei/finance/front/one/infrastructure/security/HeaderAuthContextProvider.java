@@ -28,7 +28,7 @@ public class HeaderAuthContextProvider implements AuthContextProvider {
         String safeTenant = tenantId == null || tenantId.isBlank() ? "default" : tenantId;
         String safeUser = userIdResolver.resolveUserId(new UserIdResolveRequest(safeTenant, userId, Map.of("source", "front")));
         // 开发环境用系统属性模拟权限范围，默认包含通配符便于本地调试。
-        Set<String> scopes = Arrays.stream(System.getProperty("financeex.dev.scopes", "finance:chat,finance:tool:read,*").split(","))
+        Set<String> scopes = Arrays.stream(System.getProperty("financeex.dev.scopes", "finance:chat,*").split(","))
                 .map(String::trim).filter(s -> !s.isBlank()).collect(Collectors.toSet());
         return new UserContext(safeTenant, safeUser, safeUser, scopes);
     }

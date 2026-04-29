@@ -4,7 +4,6 @@ import com.huawei.finance.front.one.application.gateway.IntentService;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
-import com.huawei.finance.front.one.domain.intent.SimpleTaskType;
 import com.huawei.finance.front.one.domain.intent.TaskComplexity;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import java.util.List;
@@ -25,24 +24,24 @@ public class MockIntentService implements IntentService {
         String message = command.message() == null ? "" : command.message().trim();
         if (message.contains("不支持")) {
             return new IntentDecision("unsupported", "不支持任务", TaskComplexity.UNSUPPORTED, 0.95, false,
-                    SimpleTaskType.DIRECT_MODEL, null, Map.of(), List.of(), Map.of("source", "mock"));
+                    null, Map.of(), List.of(), Map.of("source", "mock"));
         }
         if (isComplex(message)) {
             return new IntentDecision("finance.complex", "复杂财经任务", TaskComplexity.COMPLEX, 0.92, false,
-                    SimpleTaskType.NONE, null, Map.of(), List.of(), Map.of("source", "mock"));
+                    null, Map.of(), List.of(), Map.of("source", "mock"));
         }
         if (message.contains("员工") || message.contains("工号")) {
             Map<String, Object> slots = employeeSlots(message);
             return new IntentDecision("finance.employee.query", "员工信息查询", TaskComplexity.SIMPLE, 0.91, true,
-                    SimpleTaskType.DIRECT_TOOL, "finance.employee.query", slots, missing(slots, "employeeNo", "employeeName"), Map.of("source", "mock"));
+                    "finance.employee.agent", slots, missing(slots, "employeeNo", "employeeName"), Map.of("source", "mock"));
         }
         if (message.contains("代表处") || message.contains("办事处") || message.contains("国家")) {
             Map<String, Object> slots = officeSlots(message);
             return new IntentDecision("finance.office.query", "代表处办事处查询", TaskComplexity.SIMPLE, 0.91, true,
-                    SimpleTaskType.DIRECT_TOOL, "finance.office.query", slots, missing(slots, "country", "repOffice"), Map.of("source", "mock"));
+                    "finance.office.agent", slots, missing(slots, "country", "repOffice"), Map.of("source", "mock"));
         }
         return new IntentDecision("finance.simple.answer", "简单财经问答", TaskComplexity.SIMPLE, 0.90, true,
-                SimpleTaskType.DIRECT_MODEL, null, Map.of(), List.of(), Map.of("source", "mock"));
+                null, Map.of(), List.of(), Map.of("source", "mock"));
     }
 
     @Override

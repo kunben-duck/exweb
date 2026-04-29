@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "financeex.memory.short-term.redis")
 public class ShortTermMemoryRedisProperties {
     private boolean enabled = true;
-    private String keyPrefix = "financeex:memory:short-term";
+    private String keyPrefix = "fin_ex:memory:short_term";
     private Duration ttl = Duration.ofDays(3);
     private int maxCachedMessages = 200;
     private Duration failureBackoff = Duration.ofSeconds(30);

@@ -40,7 +40,7 @@ public class RelayAgentRuntime implements AgentRuntime {
     }
 
     @Override
-    public Flux<ChatEvent> run(AgentRuntimeRequest request) {
+    public Flux<ChatEvent> query(AgentRuntimeRequest request) {
         if (!properties.isEnabled()) {
             return mockResponse(request);
         }
@@ -56,24 +56,24 @@ public class RelayAgentRuntime implements AgentRuntime {
                     .map(this::joinDeltas)
                     .map(text -> (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), text))
                     .flux()
-                    .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId()));
+                    .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId(), "ACTIVE"));
         }
         return deltas
                 .map(delta -> (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), delta))
-                .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId()));
+                .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId(), "ACTIVE"));
     }
 
     private Flux<ChatEvent> mockResponse(AgentRuntimeRequest request) {
         if (responseMode(request) == ChatResponseMode.BLOCK) {
             return Flux.just(
-                    MessageDeltaEvent.of(request.runId(), request.sessionId(), "任务已进入 AgentRuntime。当前 provider=relay-agent，处于 mock 模式，可通过 financeex.agent-runtime.providers.relay-agent.enabled=true 接入真实 RelayAgent。"),
-                    MessageCompletedEvent.of(request.runId(), request.sessionId())
+                    (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), "任务已进入 AgentRuntime。当前 provider=relay-agent，处于 mock 模式，可通过 financeex.agent-runtime.providers.relay-agent.enabled=true 接入真实 RelayAgent。"),
+                    (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), "ACTIVE")
             );
         }
         return Flux.just(
-                MessageDeltaEvent.of(request.runId(), request.sessionId(), "任务已进入 AgentRuntime。"),
-                MessageDeltaEvent.of(request.runId(), request.sessionId(), "当前 provider=relay-agent，处于 mock 模式。"),
-                MessageCompletedEvent.of(request.runId(), request.sessionId())
+                (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), "任务已进入 AgentRuntime。"),
+                (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), "当前 provider=relay-agent，处于 mock 模式。"),
+                (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), "ACTIVE")
         );
     }
 

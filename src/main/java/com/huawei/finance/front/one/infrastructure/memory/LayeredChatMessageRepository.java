@@ -42,7 +42,7 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
         try {
             return databaseStore.save(message);
         } catch (RuntimeException ex) {
-            // 生产可开启 databaseRequired 强制失败；本地 mock 环境允许降级，避免阻塞前端/架构联调。
+            // 默认要求 openGauss 写成功，确保数据库是消息事实源；本地联调可显式关闭 databaseRequired。
             if (properties.isDatabaseRequired()) {
                 if (cached) {
                     redisCache.remove(message);

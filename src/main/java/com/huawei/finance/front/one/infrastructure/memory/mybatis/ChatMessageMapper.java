@@ -10,14 +10,14 @@ import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
 
 /**
- * chat_message 表的 MyBatis Mapper。
+ * fin_ex_chat_message_t 表的 MyBatis Mapper。
  *
  * <p>短期记忆的数据库读写集中在这里，组合缓存策略仍由外层仓储负责。</p>
  */
 @Mapper
 public interface ChatMessageMapper {
     @Insert("""
-            INSERT INTO chat_message(id, tenant_id, user_id, session_id, role, content, token_count, created_at)
+            INSERT INTO fin_ex_chat_message_t(id, tenant_id, user_id, session_id, role, content, token_count, created_at)
             VALUES (#{id}, #{tenantId}, #{userId}, #{sessionId}, #{role}, #{content}, #{tokenCount}, #{createdAt})
             """)
     void insert(
@@ -33,7 +33,7 @@ public interface ChatMessageMapper {
 
     @Select("""
             SELECT id, tenant_id, user_id, session_id, role, content, token_count, created_at
-            FROM chat_message
+            FROM fin_ex_chat_message_t
             WHERE tenant_id = #{tenantId}
               AND user_id = #{userId}
               AND session_id = #{sessionId}
@@ -56,7 +56,7 @@ public interface ChatMessageMapper {
 
     @Select("""
             SELECT id, tenant_id, user_id, session_id, role, content, token_count, created_at
-            FROM chat_message
+            FROM fin_ex_chat_message_t
             WHERE session_id = #{sessionId}
             ORDER BY created_at DESC
             LIMIT #{limit}

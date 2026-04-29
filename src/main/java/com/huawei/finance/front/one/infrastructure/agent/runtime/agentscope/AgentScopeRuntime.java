@@ -1,9 +1,7 @@
 package com.huawei.finance.front.one.infrastructure.agent.runtime.agentscope;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.gateway.AgentRuntime;
 import com.huawei.finance.front.one.application.gateway.AgentRuntimeRequest;
-import com.huawei.finance.front.one.application.service.ToolGatewayApplicationService;
 import com.huawei.finance.front.one.domain.agent.AgentRuntimeProvider;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatResponseMode;
@@ -18,7 +16,6 @@ import io.agentscope.core.memory.LongTermMemoryMode;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.model.OpenAIChatModel;
-import io.agentscope.core.tool.Toolkit;
 import java.util.HashMap;
 import java.util.Map;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -36,16 +33,11 @@ public class AgentScopeRuntime implements AgentRuntime {
     private final AgentScopeProperties properties;
     private final AgentScopePromptAssembler promptAssembler;
     private final AgentScopeMemoryFactory memoryFactory;
-    private final ToolGatewayApplicationService toolGateway;
-    private final ObjectMapper objectMapper;
 
-    public AgentScopeRuntime(AgentScopeProperties properties, AgentScopePromptAssembler promptAssembler, AgentScopeMemoryFactory memoryFactory,
-                             ToolGatewayApplicationService toolGateway, ObjectMapper objectMapper) {
+    public AgentScopeRuntime(AgentScopeProperties properties, AgentScopePromptAssembler promptAssembler, AgentScopeMemoryFactory memoryFactory) {
         this.properties = properties;
         this.promptAssembler = promptAssembler;
         this.memoryFactory = memoryFactory;
-        this.toolGateway = toolGateway;
-        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -59,7 +51,7 @@ public class AgentScopeRuntime implements AgentRuntime {
     }
 
     @Override
-    public Flux<ChatEvent> run(AgentRuntimeRequest request) {
+    public Flux<ChatEvent> query(AgentRuntimeRequest request) {
         if (responseMode(request) == ChatResponseMode.STREAM) {
             return runStreaming(request);
         }
@@ -70,8 +62,8 @@ public class AgentScopeRuntime implements AgentRuntime {
         return Mono.fromCallable(() -> executeBlocking(request))
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMapMany(text -> Flux.just(
-                        MessageDeltaEvent.of(request.runId(), request.sessionId(), text),
-                        MessageCompletedEvent.of(request.runId(), request.sessionId())
+                        (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), text),
+                        (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), "ACTIVE")
                 ));
     }
 
@@ -94,7 +86,7 @@ public class AgentScopeRuntime implements AgentRuntime {
                     .map(this::extractText)
                     .filter(text -> text != null && !text.isBlank())
                     .map(text -> (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), text))
-                    .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId()));
+                    .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId(), "ACTIVE"));
         });
     }
 
@@ -105,9 +97,6 @@ public class AgentScopeRuntime implements AgentRuntime {
     }
 
     private ReActAgent buildAgent(AgentRuntimeRequest request) {
-        Toolkit toolkit = new Toolkit();
-        toolkit.registerTool(new AgentScopeToolBridge(request, toolGateway, objectMapper));
-
         OpenAIChatModel model = OpenAIChatModel.builder()
                 .apiKey(properties.getApiKey())
                 .modelName(properties.getModelName())
@@ -120,7 +109,6 @@ public class AgentScopeRuntime implements AgentRuntime {
                 .longTermMemory(memoryFactory.longTermMemory(request))
                 .longTermMemoryMode(LongTermMemoryMode.STATIC_CONTROL)
                 .model(model)
-                .toolkit(toolkit)
                 .maxIters(properties.getMaxIters())
                 .build();
     }

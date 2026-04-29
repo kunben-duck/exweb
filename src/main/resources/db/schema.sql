@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS chat_session (
+CREATE TABLE IF NOT EXISTS fin_ex_chat_session_t (
     id VARCHAR(64) PRIMARY KEY,
     tenant_id VARCHAR(64) NOT NULL,
     user_id VARCHAR(64) NOT NULL,
@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS chat_session (
     updated_at TIMESTAMPTZ NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS chat_message (
+CREATE TABLE IF NOT EXISTS fin_ex_chat_message_t (
     id VARCHAR(64) PRIMARY KEY,
     tenant_id VARCHAR(64) NOT NULL,
     user_id VARCHAR(64) NOT NULL,
@@ -20,10 +20,12 @@ CREATE TABLE IF NOT EXISTS chat_message (
     created_at TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_chat_message_session_created_at ON chat_message(session_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_chat_message_owner_session_created_at ON chat_message(tenant_id, user_id, session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_message_session_created_at
+    ON fin_ex_chat_message_t(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_message_owner_session_created_at
+    ON fin_ex_chat_message_t(tenant_id, user_id, session_id, created_at);
 
-CREATE TABLE IF NOT EXISTS chat_event (
+CREATE TABLE IF NOT EXISTS fin_ex_chat_event_t (
     id VARCHAR(64) PRIMARY KEY,
     tenant_id VARCHAR(64) NOT NULL,
     user_id VARCHAR(64) NOT NULL,
@@ -36,7 +38,7 @@ CREATE TABLE IF NOT EXISTS chat_event (
     UNIQUE(session_id, run_id, seq)
 );
 
-CREATE TABLE IF NOT EXISTS conversation_summary (
+CREATE TABLE IF NOT EXISTS fin_ex_conversation_summary_t (
     id VARCHAR(64) PRIMARY KEY,
     tenant_id VARCHAR(64) NOT NULL,
     user_id VARCHAR(64) NOT NULL,
@@ -47,51 +49,7 @@ CREATE TABLE IF NOT EXISTS conversation_summary (
     created_at TIMESTAMPTZ NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS tool_definition (
-    id VARCHAR(64) PRIMARY KEY,
-    tenant_id VARCHAR(64),
-    tool_code VARCHAR(128) NOT NULL,
-    name VARCHAR(256) NOT NULL,
-    description TEXT,
-    category VARCHAR(128),
-    provider_code VARCHAR(128) NOT NULL,
-    provider_tool_id VARCHAR(256),
-    source_type VARCHAR(64) NOT NULL,
-    invocation_mode VARCHAR(64) NOT NULL,
-    risk_level VARCHAR(64) NOT NULL,
-    input_schema_json TEXT,
-    output_schema_json TEXT,
-    required_scopes_json TEXT,
-    enabled BOOLEAN NOT NULL DEFAULT TRUE,
-    requires_confirmation BOOLEAN NOT NULL DEFAULT FALSE,
-    extension_json TEXT,
-    version VARCHAR(64),
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL,
-    UNIQUE(tenant_id, tool_code)
-);
-
-CREATE TABLE IF NOT EXISTS tool_invocation_record (
-    id VARCHAR(64) PRIMARY KEY,
-    tenant_id VARCHAR(64) NOT NULL,
-    user_id VARCHAR(64) NOT NULL,
-    session_id VARCHAR(64),
-    run_id VARCHAR(64),
-    tool_code VARCHAR(128) NOT NULL,
-    provider_code VARCHAR(128),
-    provider_tool_id VARCHAR(256),
-    idempotency_key VARCHAR(128),
-    status VARCHAR(64) NOT NULL,
-    input_json TEXT,
-    output_json TEXT,
-    error_code VARCHAR(128),
-    error_message TEXT,
-    started_at TIMESTAMPTZ NOT NULL,
-    completed_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS uploaded_document (
+CREATE TABLE IF NOT EXISTS fin_ex_uploaded_document_t (
     id VARCHAR(64) PRIMARY KEY,
     tenant_id VARCHAR(64) NOT NULL,
     user_id VARCHAR(64) NOT NULL,
@@ -105,3 +63,26 @@ CREATE TABLE IF NOT EXISTS uploaded_document (
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS fin_ex_agent_binding_t (
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL,
+    user_id VARCHAR(64) NOT NULL,
+    chat_session_id VARCHAR(64) NOT NULL,
+    binding_type VARCHAR(64) NOT NULL,
+    agent_code VARCHAR(128),
+    provider VARCHAR(128),
+    agent_session_id VARCHAR(128),
+    runtime_session_id VARCHAR(128),
+    status VARCHAR(64) NOT NULL,
+    last_run_id VARCHAR(64),
+    expires_at TIMESTAMPTZ,
+    metadata_json TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fin_ex_agent_binding_owner_session_status
+    ON fin_ex_agent_binding_t(tenant_id, user_id, chat_session_id, status);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_agent_binding_expires_at
+    ON fin_ex_agent_binding_t(expires_at);

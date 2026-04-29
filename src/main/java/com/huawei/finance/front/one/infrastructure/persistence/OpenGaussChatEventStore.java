@@ -74,7 +74,7 @@ public class OpenGaussChatEventStore implements ChatEventStore {
         return sequenceGenerator.updateAndGet(previous -> Math.max(previous + 1, nowBasedSequence));
     }
 
-    private StoredChatEvent toDomain(ChatEventRow row) {
+    private ChatEvent toDomain(ChatEventRow row) {
         return new StoredChatEvent(
                 row.getRunId(),
                 row.getSessionId(),

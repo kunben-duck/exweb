@@ -88,14 +88,9 @@ financeex:
         base-url: ${FINANCEEX_RELAY_AGENT_BASE_URL:http://localhost:9000}
         stream-path: ${FINANCEEX_RELAY_AGENT_STREAM_PATH:/v1/agent/runs/stream}
       agentscope:
-        enabled: false
         base-url: http://localhost:8000/v1
         api-key: dummy-key
         model-name: finance-llm
         max-iters: 8
-      spring-ai:
-        enabled: false
-      langchain:
-        enabled: false
   storage:
     local-path: ${java.io.tmpdir}/financeex-docs

@@ -1,6 +1,6 @@
 package com.huawei.finance.front.one.infrastructure.memory;
 
-import com.huawei.finance.front.one.application.gateway.LongTermMemoryStore;
+import com.huawei.finance.front.one.application.integration.memory.LongTermMemoryStore;
 import com.huawei.finance.front.one.domain.memory.LongTermMemoryItem;
 import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;

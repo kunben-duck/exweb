@@ -56,7 +56,7 @@ public interface AgentBindingMapper {
             WHERE tenant_id = #{tenantId}
               AND user_id = #{userId}
               AND chat_session_id = #{sessionId}
-              AND status IN ('ACTIVE', 'REQUIRES_USER_INPUT')
+              AND status IN ('ACTIVE', 'REQUIRES_USER_INPUT', 'WAITING_EXTERNAL_SYSTEM', 'WAITING_USER_CONFIRMATION')
               AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
             ORDER BY updated_at DESC
             LIMIT 1

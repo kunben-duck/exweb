@@ -13,12 +13,14 @@ import org.springframework.stereotype.Service;
 @Service
 public class SystemResponseExecutor {
     public Flux<ChatEvent> execute(ChatCommand command, String runId, IntentDecision intent, RouteTarget route) {
-        String text = intent != null && "unsupported".equals(intent.intentCode())
+        String text = route != null && route.reason() != null && !route.reason().isBlank() && !"unsupported intent".equals(route.reason())
+                ? route.reason()
+                : intent != null && "unsupported".equals(intent.intentCode())
                 ? "当前暂不支持该请求。"
                 : "当前请求无法被路由到可用 Agent。";
         return Flux.just(
                 (ChatEvent) MessageDeltaEvent.of(runId, command.sessionId(), text),
-                (ChatEvent) MessageCompletedEvent.of(runId, command.sessionId(), "COMPLETED")
+                (ChatEvent) MessageCompletedEvent.of(runId, command.sessionId())
         );
     }
 }

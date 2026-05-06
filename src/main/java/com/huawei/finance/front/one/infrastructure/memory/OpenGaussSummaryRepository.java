@@ -1,6 +1,6 @@
 package com.huawei.finance.front.one.infrastructure.memory;
 
-import com.huawei.finance.front.one.application.gateway.SummaryRepository;
+import com.huawei.finance.front.one.application.integration.memory.SummaryRepository;
 import com.huawei.finance.front.one.domain.memory.ConversationSummary;
 import com.huawei.finance.front.one.infrastructure.memory.mybatis.ConversationSummaryMapper;
 import com.huawei.finance.front.one.infrastructure.memory.mybatis.ConversationSummaryRow;

@@ -1,11 +1,12 @@
 package com.huawei.finance.front.one.infrastructure.storage;
 
-import com.huawei.finance.front.one.application.gateway.ObjectStorage;
+import com.huawei.finance.front.one.application.integration.document.ObjectStorage;
 import com.huawei.finance.front.one.domain.document.StoredObject;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Component;
  * <p>用于本地开发和第一版验证；生产环境通常替换为 OBS/S3/MinIO 等对象存储实现。</p>
  */
 @Component
+@ConditionalOnProperty(prefix = "financeex.storage", name = "provider", havingValue = "local", matchIfMissing = true)
 public class LocalObjectStorage implements ObjectStorage {
     private final Path root;
     public LocalObjectStorage(@Value("${financeex.storage.local-path:${java.io.tmpdir}/financeex-docs}") String root) { this.root = Path.of(root); }

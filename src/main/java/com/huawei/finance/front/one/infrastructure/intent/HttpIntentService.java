@@ -1,6 +1,6 @@
 package com.huawei.finance.front.one.infrastructure.intent;
 
-import com.huawei.finance.front.one.application.gateway.IntentService;
+import com.huawei.finance.front.one.application.integration.intent.IntentService;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;

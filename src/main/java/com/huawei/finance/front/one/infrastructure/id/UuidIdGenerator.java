@@ -1,7 +1,7 @@
 package com.huawei.finance.front.one.infrastructure.id;
 
-import com.huawei.finance.front.one.application.gateway.IdGenerateContext;
-import com.huawei.finance.front.one.application.gateway.IdGenerator;
+import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
+import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
 

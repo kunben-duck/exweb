@@ -31,7 +31,7 @@ public record AgentBinding(
     }
 
     public boolean routableAt(Instant now) {
-        // 只有非终态且未过期的 binding 才能截断正常路由流程，直接续接下游 Agent。
+        // 只有可路由且未过期的 binding 才能进入 active 分支；SubAgent 仍需再经过 TaskCard 续接判断。
         return status != null && status.routable() && (expiresAt == null || expiresAt.isAfter(now));
     }
 

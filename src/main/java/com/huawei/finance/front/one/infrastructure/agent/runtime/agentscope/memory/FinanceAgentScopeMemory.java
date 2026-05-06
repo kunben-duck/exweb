@@ -1,6 +1,6 @@
 package com.huawei.finance.front.one.infrastructure.agent.runtime.agentscope.memory;
 
-import com.huawei.finance.front.one.application.gateway.AgentRuntimeRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import io.agentscope.core.memory.Memory;
 import io.agentscope.core.message.Msg;

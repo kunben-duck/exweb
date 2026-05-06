@@ -9,14 +9,13 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 聊天会话管理接口。
  *
- * <p>第一版提供创建、查询、列表和关闭能力；会话归属由 application 层校验 tenantId + userId + sessionId。</p>
+ * <p>第一版提供创建、查询、列表和关闭能力；会话归属由 application 层通过当前 UserContext 校验。</p>
  */
 @RestController
 @RequestMapping("/api/v1/finance/chat/sessions")
@@ -28,32 +27,25 @@ public class ChatSessionController {
     }
 
     @PostMapping
-    public FrontChatSessionDto create(@RequestBody(required = false) CreateChatSessionRequest request,
-                                      @RequestHeader(value = "X-Tenant-Id", defaultValue = "default") String tenantId,
-                                      @RequestHeader(value = "X-User-Id", defaultValue = "anonymous") String userId) {
+    public FrontChatSessionDto create(@RequestBody(required = false) CreateChatSessionRequest request) {
         String title = request == null ? null : request.title();
         String channel = request == null ? null : request.channel();
-        return toDto(facade.createSession(tenantId, userId, title, channel));
+        return toDto(facade.createSession(title, channel));
     }
 
     @GetMapping
-    public List<FrontChatSessionDto> list(@RequestHeader(value = "X-Tenant-Id", defaultValue = "default") String tenantId,
-                                          @RequestHeader(value = "X-User-Id", defaultValue = "anonymous") String userId) {
-        return facade.listSessions(tenantId, userId).stream().map(this::toDto).toList();
+    public List<FrontChatSessionDto> list() {
+        return facade.listSessions().stream().map(this::toDto).toList();
     }
 
     @GetMapping("/{sessionId}")
-    public FrontChatSessionDto get(@PathVariable String sessionId,
-                                   @RequestHeader(value = "X-Tenant-Id", defaultValue = "default") String tenantId,
-                                   @RequestHeader(value = "X-User-Id", defaultValue = "anonymous") String userId) {
-        return toDto(facade.getSession(tenantId, userId, sessionId));
+    public FrontChatSessionDto get(@PathVariable String sessionId) {
+        return toDto(facade.getSession(sessionId));
     }
 
     @PostMapping("/{sessionId}/close")
-    public FrontChatSessionDto close(@PathVariable String sessionId,
-                                     @RequestHeader(value = "X-Tenant-Id", defaultValue = "default") String tenantId,
-                                     @RequestHeader(value = "X-User-Id", defaultValue = "anonymous") String userId) {
-        return toDto(facade.closeSession(tenantId, userId, sessionId));
+    public FrontChatSessionDto close(@PathVariable String sessionId) {
+        return toDto(facade.closeSession(sessionId));
     }
 
     private FrontChatSessionDto toDto(ChatSession session) {

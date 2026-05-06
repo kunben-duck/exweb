@@ -1,6 +1,6 @@
 package com.huawei.finance.front.one.application.service;
 
-import com.huawei.finance.front.one.application.gateway.SubAgentClient;
+import com.huawei.finance.front.one.application.integration.agent.SubAgentClient;
 import com.huawei.finance.front.one.domain.agent.AgentBinding;
 import com.huawei.finance.front.one.domain.agent.AgentQueryRequest;
 import com.huawei.finance.front.one.domain.auth.UserContext;
@@ -9,6 +9,7 @@ import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
+import com.huawei.finance.front.one.domain.task.TaskCard;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -22,7 +23,7 @@ public class SubAgentExecutor {
     }
 
     public Flux<ChatEvent> execute(ChatCommand command, String runId, MemoryContext memory, RouteTarget route,
-                                   UserContext user, AgentBinding binding) {
+                                   UserContext user, AgentBinding binding, TaskCard taskCard) {
         List<AttachmentRef> attachments = command.attachments() == null ? List.of() : command.attachments();
         // AgentQueryRequest 是 SuperAgent 与第三方 SubAgent 的防腐层契约。
         // 对下游只暴露当前消息、上下文快照、附件元信息和已保存的 agentSessionId；
@@ -41,6 +42,7 @@ public class SubAgentExecutor {
                 attachments,
                 memory,
                 route,
+                taskCard,
                 command.metadata()
         );
         return subAgentClient.query(request);

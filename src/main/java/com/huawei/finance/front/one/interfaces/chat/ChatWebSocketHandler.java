@@ -10,7 +10,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.socket.WebSocketHandler;
 import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.WebSocketSession;
-import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -39,17 +38,15 @@ public class ChatWebSocketHandler implements WebSocketHandler {
 
     @Override
     public Mono<Void> handle(WebSocketSession session) {
-        String tenantId = resolveIdentity(session, "X-Tenant-Id", "tenantId", "default");
-        String userId = resolveIdentity(session, "X-User-Id", "userId", "anonymous");
         Flux<WebSocketMessage> outbound = session.receive()
                 .filter(message -> message.getType() == WebSocketMessage.Type.TEXT)
                 // concatMap 保证同一连接内的多条用户消息按接收顺序处理和回写。
-                .concatMap(message -> handleTextMessage(session, message.getPayloadAsText(), tenantId, userId))
+                .concatMap(message -> handleTextMessage(session, message.getPayloadAsText()))
                 .onErrorResume(ex -> Flux.just(errorMessage(session, "WS_STREAM_ERROR", ex.getMessage())));
         return session.send(outbound);
     }
 
-    private Flux<WebSocketMessage> handleTextMessage(WebSocketSession session, String payload, String tenantId, String userId) {
+    private Flux<WebSocketMessage> handleTextMessage(WebSocketSession session, String payload) {
         FrontChatRequest request;
         try {
             // WebSocket 只接收文本 JSON；解析失败时返回协议内错误事件，不关闭连接。
@@ -57,7 +54,7 @@ public class ChatWebSocketHandler implements WebSocketHandler {
         } catch (Exception ex) {
             return Flux.just(errorMessage(session, "BAD_WS_MESSAGE", ex.getMessage()));
         }
-        return chatFacade.chat(requestTranslator.toCommand(request, PROTOCOL, tenantId, userId))
+        return chatFacade.chat(requestTranslator.toCommand(request, PROTOCOL))
                 .map(eventTranslator::toDto)
                 .map(dto -> toMessage(session, dto))
                 .onErrorResume(ex -> Flux.just(errorMessage(session, "RUN_ERROR", ex.getMessage())));
@@ -75,21 +72,5 @@ public class ChatWebSocketHandler implements WebSocketHandler {
         FrontChatEventDto dto = new FrontChatEventDto(null, null, 0, "run.failed", "system",
                 Map.of("code", code, "message", message == null ? "" : message));
         return toMessage(session, dto);
-    }
-
-    private String resolveIdentity(WebSocketSession session, String headerName, String queryName, String defaultValue) {
-        // 优先使用握手 Header；浏览器侧不便设置 Header 时可退化使用 query 参数。
-        String headerValue = session.getHandshakeInfo().getHeaders().getFirst(headerName);
-        if (headerValue != null && !headerValue.isBlank()) {
-            return headerValue;
-        }
-        String queryValue = UriComponentsBuilder.fromUri(session.getHandshakeInfo().getUri())
-                .build()
-                .getQueryParams()
-                .getFirst(queryName);
-        if (queryValue != null && !queryValue.isBlank()) {
-            return queryValue;
-        }
-        return defaultValue;
     }
 }

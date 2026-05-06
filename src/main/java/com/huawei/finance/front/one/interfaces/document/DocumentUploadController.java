@@ -6,7 +6,6 @@ import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
@@ -24,9 +23,7 @@ public class DocumentUploadController {
     public DocumentUploadController(DocumentUploadFacade facade) { this.facade = facade; }
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Mono<UploadedDocument> upload(@RequestPart("file") FilePart file,
-                                         @RequestPart(value = "sessionId", required = false) String sessionId,
-                                         @RequestHeader(value = "X-Tenant-Id", defaultValue = "default") String tenantId,
-                                         @RequestHeader(value = "X-User-Id", defaultValue = "anonymous") String userId) {
+                                         @RequestPart(value = "sessionId", required = false) String sessionId) {
         // 当前实现会把整个上传文件读入内存，适合小文件和第一版验证。
         return file.content().reduce(new java.io.ByteArrayOutputStream(), (out, dataBuffer) -> {
             try {
@@ -36,6 +33,6 @@ public class DocumentUploadController {
                 org.springframework.core.io.buffer.DataBufferUtils.release(dataBuffer);
                 return out;
             } catch (Exception e) { throw new RuntimeException(e); }
-        }).flatMap(out -> facade.upload(new DocumentUploadCommand(tenantId, userId, sessionId, file.filename(), file.headers().getContentType() == null ? null : file.headers().getContentType().toString(), out.size(), new java.io.ByteArrayInputStream(out.toByteArray()))));
+        }).flatMap(out -> facade.upload(new DocumentUploadCommand(sessionId, file.filename(), file.headers().getContentType() == null ? null : file.headers().getContentType().toString(), out.size(), new java.io.ByteArrayInputStream(out.toByteArray()))));
     }
 }

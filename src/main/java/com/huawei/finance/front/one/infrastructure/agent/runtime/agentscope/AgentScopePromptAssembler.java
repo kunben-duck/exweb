@@ -1,6 +1,6 @@
 package com.huawei.finance.front.one.infrastructure.agent.runtime.agentscope;
 
-import com.huawei.finance.front.one.application.gateway.AgentRuntimeRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatResponseMode;
 import com.huawei.finance.front.one.domain.chat.ImMessageType;

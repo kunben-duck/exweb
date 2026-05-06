@@ -1,6 +1,6 @@
 package com.huawei.finance.front.one.infrastructure.session.persistence;
 
-import com.huawei.finance.front.one.application.gateway.SessionRepository;
+import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.infrastructure.session.persistence.mybatis.ChatSessionMapper;
 import com.huawei.finance.front.one.infrastructure.session.persistence.mybatis.ChatSessionRow;

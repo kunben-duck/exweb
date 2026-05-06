@@ -1,7 +1,7 @@
 package com.huawei.finance.front.one.application.service;
 
-import com.huawei.finance.front.one.application.gateway.AgentRuntime;
-import com.huawei.finance.front.one.application.gateway.AgentRuntimeRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.domain.agent.AgentBinding;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;

@@ -1,6 +1,6 @@
 package com.huawei.finance.front.one.infrastructure.storage;
 
-import com.huawei.finance.front.one.application.gateway.DocumentRepository;
+import com.huawei.finance.front.one.application.integration.document.DocumentRepository;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import com.huawei.finance.front.one.infrastructure.storage.mybatis.UploadedDocumentMapper;
 import org.springframework.stereotype.Repository;

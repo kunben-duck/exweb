@@ -3,7 +3,7 @@ package com.huawei.finance.front.one.infrastructure.memory;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.huawei.finance.front.one.application.gateway.WorkingMemoryStore;
+import com.huawei.finance.front.one.application.integration.memory.WorkingMemoryStore;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;

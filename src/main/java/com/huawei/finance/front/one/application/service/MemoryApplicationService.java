@@ -1,9 +1,9 @@
 package com.huawei.finance.front.one.application.service;
 
-import com.huawei.finance.front.one.application.gateway.ChatMessageRepository;
-import com.huawei.finance.front.one.application.gateway.LongTermMemoryStore;
-import com.huawei.finance.front.one.application.gateway.SummaryRepository;
-import com.huawei.finance.front.one.application.gateway.WorkingMemoryStore;
+import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
+import com.huawei.finance.front.one.application.integration.memory.LongTermMemoryStore;
+import com.huawei.finance.front.one.application.integration.memory.SummaryRepository;
+import com.huawei.finance.front.one.application.integration.memory.WorkingMemoryStore;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import java.util.Map;

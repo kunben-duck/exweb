@@ -1,6 +1,6 @@
 package com.huawei.finance.front.one.infrastructure.memory;
 
-import com.huawei.finance.front.one.application.gateway.ChatMessageRepository;
+import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import java.time.Instant;
 import java.util.List;

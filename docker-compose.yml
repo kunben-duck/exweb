@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: financeex-postgres
+    environment:
+      POSTGRES_DB: financeex
+      POSTGRES_USER: fin_supervisor
+      POSTGRES_PASSWORD: kunone123
+    ports:
+      - "5432:5432"
+    volumes:
+      - financeex-postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init/001-init.sh:/docker-entrypoint-initdb.d/001-init.sh:ro
+      - ./src/main/resources/db/schema.sql:/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fin_supervisor -d financeex"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: financeex-redis
+    command: ["redis-server", "--requirepass", "kunone123", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - financeex-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "kunone123", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    container_name: financeex-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: fin_supervisor
+      MINIO_ROOT_PASSWORD: kunone123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - financeex-minio-data:/data
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: financeex-minio-init
+    depends_on:
+      - minio
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 fin_supervisor kunone123; do
+          echo "waiting for minio..."
+          sleep 2
+        done
+        mc mb --ignore-existing local/financeex-documents
+        mc anonymous set none local/financeex-documents
+
+volumes:
+  financeex-postgres-data:
+  financeex-redis-data:
+  financeex-minio-data:

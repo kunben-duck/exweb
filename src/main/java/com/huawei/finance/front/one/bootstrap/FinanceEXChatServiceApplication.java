@@ -12,7 +12,8 @@ import org.springframework.context.annotation.ComponentScan;
         "com.huawei.finance.front.one.infrastructure.agent.binding.mybatis",
         "com.huawei.finance.front.one.infrastructure.persistence.mybatis",
         "com.huawei.finance.front.one.infrastructure.session.persistence.mybatis",
-        "com.huawei.finance.front.one.infrastructure.storage.mybatis"
+        "com.huawei.finance.front.one.infrastructure.storage.mybatis",
+        "com.huawei.finance.front.one.infrastructure.task.mybatis"
 })
 public class FinanceEXChatServiceApplication {
     public static void main(String[] args) {

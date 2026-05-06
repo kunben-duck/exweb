@@ -1,7 +1,7 @@
 package com.huawei.finance.front.one.infrastructure.usecase;
 
-import com.huawei.finance.front.one.application.gateway.UseCaseLibraryClient;
-import com.huawei.finance.front.one.application.gateway.UseCaseMatchRequest;
+import com.huawei.finance.front.one.application.integration.usecase.UseCaseLibraryClient;
+import com.huawei.finance.front.one.application.integration.usecase.UseCaseMatchRequest;
 import com.huawei.finance.front.one.domain.usecase.UseCaseMatchResult;
 import java.time.Duration;
 import org.springframework.beans.factory.annotation.Value;

@@ -1,8 +1,8 @@
 package com.huawei.finance.front.one.infrastructure.agent.runtime.agentscope.memory;
 
-import com.huawei.finance.front.one.application.gateway.AgentRuntimeRequest;
-import com.huawei.finance.front.one.application.gateway.IdGenerator;
-import com.huawei.finance.front.one.application.gateway.LongTermMemoryStore;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
+import com.huawei.finance.front.one.application.integration.id.IdGenerator;
+import com.huawei.finance.front.one.application.integration.memory.LongTermMemoryStore;
 import io.agentscope.core.memory.LongTermMemory;
 import io.agentscope.core.memory.Memory;
 import org.springframework.stereotype.Component;

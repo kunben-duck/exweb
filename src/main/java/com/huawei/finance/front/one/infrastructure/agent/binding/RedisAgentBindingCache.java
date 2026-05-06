@@ -2,7 +2,7 @@ package com.huawei.finance.front.one.infrastructure.agent.binding;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.huawei.finance.front.one.application.gateway.AgentBindingCache;
+import com.huawei.finance.front.one.application.integration.agent.binding.AgentBindingCache;
 import com.huawei.finance.front.one.domain.agent.AgentBinding;
 import java.util.Optional;
 import org.slf4j.Logger;

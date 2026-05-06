@@ -1,11 +1,11 @@
 package com.huawei.finance.front.one.application.service;
 
 import com.huawei.finance.front.one.application.facade.ChatSessionFacade;
-import com.huawei.finance.front.one.application.gateway.AuthContextProvider;
-import com.huawei.finance.front.one.application.gateway.ChatMessageRepository;
-import com.huawei.finance.front.one.application.gateway.IdGenerateContext;
-import com.huawei.finance.front.one.application.gateway.IdGenerator;
-import com.huawei.finance.front.one.application.gateway.SessionRepository;
+import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
+import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
+import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
+import com.huawei.finance.front.one.application.integration.id.IdGenerator;
+import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
@@ -37,7 +37,7 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     public ChatSession loadOrCreate(ChatCommand command) {
-        // 前端未传 sessionId 时由服务端创建；传入时必须属于当前 tenant/user，避免串会话。
+        // 聊天主编排会先把 UserContext 回填到 ChatCommand；这里只根据已识别身份维护会话归属。
         if (command.sessionId() == null || command.sessionId().isBlank()) {
             return createOwnedSession(command.tenantId(), command.userId(), shortTitle(command.message()), command.channel());
         }
@@ -45,26 +45,26 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     @Override
-    public ChatSession createSession(String tenantId, String userId, String title, String channel) {
-        UserContext user = resolveChatUser(tenantId, userId);
+    public ChatSession createSession(String title, String channel) {
+        UserContext user = resolveChatUser();
         return createOwnedSession(user.tenantId(), user.userId(), title, channel);
     }
 
     @Override
-    public ChatSession getSession(String tenantId, String userId, String sessionId) {
-        UserContext user = resolveChatUser(tenantId, userId);
+    public ChatSession getSession(String sessionId) {
+        UserContext user = resolveChatUser();
         return requireOwnedSession(user.tenantId(), user.userId(), sessionId);
     }
 
     @Override
-    public List<ChatSession> listSessions(String tenantId, String userId) {
-        UserContext user = resolveChatUser(tenantId, userId);
+    public List<ChatSession> listSessions() {
+        UserContext user = resolveChatUser();
         return sessionRepository.findByTenantIdAndUserId(user.tenantId(), user.userId());
     }
 
     @Override
-    public ChatSession closeSession(String tenantId, String userId, String sessionId) {
-        UserContext user = resolveChatUser(tenantId, userId);
+    public ChatSession closeSession(String sessionId) {
+        UserContext user = resolveChatUser();
         ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId);
         ChatSession closed = new ChatSession(session.id(), session.tenantId(), session.userId(), session.title(), STATUS_CLOSED, session.channel(), session.createdAt(), Instant.now());
         return sessionRepository.save(closed);
@@ -82,8 +82,8 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
     private String shortTitle(String text) { return text == null ? "新会话" : text.substring(0, Math.min(40, text.length())); }
 
-    private UserContext resolveChatUser(String tenantId, String userId) {
-        UserContext user = auth.resolve(tenantId, userId);
+    private UserContext resolveChatUser() {
+        UserContext user = auth.resolve();
         permissionChecker.checkChatPermission(user);
         return user;
     }

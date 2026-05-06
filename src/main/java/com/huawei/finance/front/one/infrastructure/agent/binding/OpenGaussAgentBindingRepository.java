@@ -3,7 +3,7 @@ package com.huawei.finance.front.one.infrastructure.agent.binding;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.huawei.finance.front.one.application.gateway.AgentBindingRepository;
+import com.huawei.finance.front.one.application.integration.agent.binding.AgentBindingRepository;
 import com.huawei.finance.front.one.domain.agent.AgentBinding;
 import com.huawei.finance.front.one.domain.agent.AgentBindingStatus;
 import com.huawei.finance.front.one.domain.agent.AgentBindingType;

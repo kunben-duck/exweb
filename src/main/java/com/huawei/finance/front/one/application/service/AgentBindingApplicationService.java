@@ -1,9 +1,9 @@
 package com.huawei.finance.front.one.application.service;
 
-import com.huawei.finance.front.one.application.gateway.AgentBindingCache;
-import com.huawei.finance.front.one.application.gateway.AgentBindingRepository;
-import com.huawei.finance.front.one.application.gateway.IdGenerateContext;
-import com.huawei.finance.front.one.application.gateway.IdGenerator;
+import com.huawei.finance.front.one.application.integration.agent.binding.AgentBindingCache;
+import com.huawei.finance.front.one.application.integration.agent.binding.AgentBindingRepository;
+import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
+import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.domain.agent.AgentBinding;
 import com.huawei.finance.front.one.domain.agent.AgentBindingStatus;
 import com.huawei.finance.front.one.domain.agent.AgentBindingType;
@@ -32,7 +32,7 @@ public class AgentBindingApplicationService {
 
     public Optional<AgentBinding> findActive(String tenantId, String userId, String sessionId) {
         Instant now = Instant.now();
-        // Redis 是 active binding 的热路径。命中且未过期时，主链路可以直接续接下游 Agent。
+        // Redis 是 active binding 的热路径。命中且未过期时，主链路会继续加载 TaskCard 或 Runtime 续接信息。
         Optional<AgentBinding> cached = cache.get(tenantId, userId, sessionId).filter(binding -> binding.routableAt(now));
         if (cached.isPresent()) {
             return cached;
@@ -57,6 +57,13 @@ public class AgentBindingApplicationService {
     public AgentBinding touchForRun(AgentBinding binding, String runId) {
         // 每轮续接都刷新 runId 和过期时间，表示这个任务仍处于用户会话活跃窗口内。
         return save(binding.withRun(runId, expiresAt()));
+    }
+
+    public AgentBinding updateStatus(AgentBinding binding, AgentBindingStatus status) {
+        if (binding == null || status == null) {
+            return binding;
+        }
+        return save(binding.withStatus(status));
     }
 
     public void cancelActive(String tenantId, String userId, String sessionId) {
@@ -139,7 +146,7 @@ public class AgentBindingApplicationService {
         // 先写 openGauss，并且必须写成功。Redis 只是热缓存，不能在事实源失败时单独承载状态。
         AgentBinding saved = repository.save(binding);
         // 终态不再参与续接，必须清除 Redis；非终态则刷新热缓存和 TTL。
-        if (saved.status().terminal()) {
+        if (!saved.status().routable()) {
             cache.evict(saved.tenantId(), saved.userId(), saved.chatSessionId());
         } else {
             cache.put(saved);

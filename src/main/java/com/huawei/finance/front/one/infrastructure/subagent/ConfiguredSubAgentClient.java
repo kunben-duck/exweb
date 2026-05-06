@@ -1,12 +1,15 @@
 package com.huawei.finance.front.one.infrastructure.subagent;
 
-import com.huawei.finance.front.one.application.gateway.SubAgentClient;
+import com.huawei.finance.front.one.application.integration.agent.SubAgentClient;
 import com.huawei.finance.front.one.domain.agent.AgentQueryRequest;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatResponseMode;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
+import com.huawei.finance.front.one.domain.task.SubAgentTaskRequest;
+import com.huawei.finance.front.one.domain.task.SubAgentTaskResult;
 import java.util.List;
+import java.util.Map;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -17,17 +20,22 @@ import reactor.core.publisher.Flux;
 public class ConfiguredSubAgentClient implements SubAgentClient {
     private final WebClient.Builder webClientBuilder;
     private final SubAgentProperties properties;
+    private final SubAgentTaskPromptBuilder promptBuilder;
+    private final SubAgentResponseNormalizer responseNormalizer;
 
-    public ConfiguredSubAgentClient(WebClient.Builder webClientBuilder, SubAgentProperties properties) {
+    public ConfiguredSubAgentClient(WebClient.Builder webClientBuilder, SubAgentProperties properties,
+                                    SubAgentTaskPromptBuilder promptBuilder, SubAgentResponseNormalizer responseNormalizer) {
         this.webClientBuilder = webClientBuilder;
         this.properties = properties;
+        this.promptBuilder = promptBuilder;
+        this.responseNormalizer = responseNormalizer;
     }
 
     @Override
     public Flux<ChatEvent> query(AgentQueryRequest request) {
         // SubAgent 以 agentCode 为稳定业务标识，具体 endpoint/protocol 在配置里解析。
         // 这样用例库和意图服务只需要返回 agentCode，不需要知道部署地址或协议细节。
-        SubAgentProperties.AgentEndpoint endpoint = properties.getAgents().get(request.agentCode());
+        SubAgentProperties.AgentEndpoint endpoint = endpoint(request.agentCode());
         if (endpoint == null || !endpoint.isEnabled() || endpoint.getEndpoint() == null || endpoint.getEndpoint().isBlank()) {
             return mockOrUnavailable(request);
         }
@@ -36,6 +44,9 @@ public class ConfiguredSubAgentClient implements SubAgentClient {
                     (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), "SubAgent 协议暂不支持: " + endpoint.getProtocol()),
                     (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), "FAILED")
             );
+        }
+        if ("natural-language-contract".equalsIgnoreCase(endpoint.getInteractionMode())) {
+            return queryWithNaturalLanguageContract(request, endpoint);
         }
         Flux<String> deltas = webClientBuilder.build()
                 .post()
@@ -60,13 +71,32 @@ public class ConfiguredSubAgentClient implements SubAgentClient {
                 ));
     }
 
+    private Flux<ChatEvent> queryWithNaturalLanguageContract(AgentQueryRequest request, SubAgentProperties.AgentEndpoint endpoint) {
+        SubAgentTaskRequest taskRequest = promptBuilder.build(request, endpoint);
+        Flux<String> response = webClientBuilder.build()
+                .post()
+                .uri(endpoint.getEndpoint())
+                .bodyValue(taskRequest)
+                .retrieve()
+                .bodyToFlux(String.class)
+                .timeout(properties.getTimeout());
+        return response.collectList()
+                .map(this::join)
+                .map(responseNormalizer::normalize)
+                .flatMapMany(result -> Flux.just(
+                        (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), result.message()),
+                        (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), completionPayload(request, result))
+                ));
+    }
+
     private Flux<ChatEvent> mockOrUnavailable(AgentQueryRequest request) {
         // 本地联调默认允许 mock fallback，方便在第三方 SubAgent 尚未部署时验证主控路由。
         // 生产环境可关闭 mockFallbackEnabled，让缺失配置显式失败。
         if (!properties.isMockFallbackEnabled()) {
             return Flux.just(
                     (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), "未找到可用 SubAgent: " + request.agentCode()),
-                    (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), "FAILED")
+                    (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), completionPayload(request,
+                            SubAgentTaskResult.failed("未找到可用 SubAgent: " + request.agentCode())))
             );
         }
         return Flux.just(
@@ -77,5 +107,31 @@ public class ConfiguredSubAgentClient implements SubAgentClient {
 
     private String join(List<String> deltas) {
         return String.join("", deltas == null ? List.of() : deltas);
+    }
+
+    private SubAgentProperties.AgentEndpoint endpoint(String agentCode) {
+        if (properties.getAgents() == null || agentCode == null) {
+            return null;
+        }
+        SubAgentProperties.AgentEndpoint direct = properties.getAgents().get(agentCode);
+        if (direct != null) {
+            return direct;
+        }
+        return properties.getAgents().get(agentCode.replace("_", "-"));
+    }
+
+    private Map<String, Object> completionPayload(AgentQueryRequest request, SubAgentTaskResult result) {
+        return Map.ofEntries(
+                Map.entry("taskStatus", result.taskStatus().name()),
+                Map.entry("rawNormalizedStatus", result.rawNormalizedStatus().name()),
+                Map.entry("requiredInputs", result.requiredInputs()),
+                Map.entry("businessObjectRefs", result.businessObjectRefs()),
+                Map.entry("confidence", result.confidence()),
+                Map.entry("message", result.message() == null ? "" : result.message()),
+                Map.entry("agentCode", request.agentCode() == null ? "" : request.agentCode()),
+                Map.entry("taskId", request.taskCard() == null ? "" : request.taskCard().taskId()),
+                Map.entry("agentSessionId", result.agentSessionId() == null ? "" : result.agentSessionId()),
+                Map.entry("confirmationQuestion", result.confirmationQuestion() == null ? "" : result.confirmationQuestion())
+        );
     }
 }

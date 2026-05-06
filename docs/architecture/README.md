@@ -6,14 +6,15 @@ FinanceEXChatService 是前端聊天入口和 SuperAgent 主控服务。v2 的�
 
 ```text
 用户请求
- -> 会话和身份解析
+ -> 应用身份解析和会话归一化
  -> MemoryContext 装配
- -> AgentBinding 查询
-    -> active binding：续接 SubAgent 或 AgentRuntime
+ -> AgentBinding + TaskCard 查询
+    -> active AgentRuntime binding：续接 AgentRuntime
+    -> active SubAgent task：ContinuationGuard 判断续接/挂起/取消/澄清
     -> 无 binding：用例库 match
-        -> 命中 SubAgent：SubAgentClient.query
+        -> 命中 SubAgent：创建 TaskCard + AgentBinding 后 SubAgentClient.query
         -> 未命中：IntentService
-            -> 简单任务 + subAgentCode：SubAgentClient.query
+            -> 简单任务 + subAgentCode：创建 TaskCard + AgentBinding 后 SubAgentClient.query
             -> 复杂/不确定：AgentRuntime.query
 ```
 
@@ -21,7 +22,7 @@ FinanceEXChatService 是前端聊天入口和 SuperAgent 主控服务。v2 的�
 
 ```mermaid
 flowchart TD
-    User["用户请求"] --> Normalize["身份校验与会话归一化"]
+    User["用户请求"] --> Normalize["应用身份解析与会话归一化"]
     Normalize --> Memory["加载 MemoryContext"]
     Memory --> ForceNew{"metadata.forceNewTask 为 true?"}
     ForceNew -- "是" --> CancelBinding["取消 active AgentBinding"]
@@ -30,19 +31,30 @@ flowchart TD
     FindBinding --> HasBinding{"存在 active binding?"}
 
     HasBinding -- "是" --> BindingType{"binding_type"}
-    BindingType -- "SUB_AGENT" --> BoundSubAgent["续接 SubAgentClient.query"]
+    BindingType -- "SUB_AGENT" --> FindTask["读取 active TaskCard"]
+    FindTask --> Guard["ContinuationGuard + 必要时 shadow route"]
+    Guard --> GuardDecision{"续接决策"}
+    GuardDecision -- "CONTINUE_CURRENT" --> BoundSubAgent["续接 SubAgentClient.query"]
+    GuardDecision -- "SUSPEND_AND_ROUTE_NEW" --> SuspendTask["TaskCard=SUSPENDED"]
+    GuardDecision -- "CANCEL_CURRENT" --> CancelTask["TaskCard=CANCELLED"]
+    GuardDecision -- "ASK_USER_CONFIRMATION" --> Clarify["SYSTEM_RESPONSE 澄清"]
+    SuspendTask --> UseCase
+    CancelTask --> EventStream
+    Clarify --> EventStream
     BindingType -- "AGENT_RUNTIME" --> BoundRuntime["续接 AgentRuntime.query"]
 
     HasBinding -- "否" --> UseCase["UseCaseLibraryClient.match"]
     UseCase --> UseCaseHit{"命中且分数达标且有 subAgentCode?"}
     UseCaseHit -- "是" --> CreateSubBinding["创建 SUB_AGENT binding"]
-    CreateSubBinding --> CallSubAgent["调用 SubAgentClient.query"]
+    CreateSubBinding --> CreateTask["创建 TaskCard"]
+    CreateTask --> CallSubAgent["调用 SubAgentClient.query"]
 
     UseCaseHit -- "否" --> Intent["IntentService.recognize"]
     Intent --> IntentRoute{"意图路由结果"}
     IntentRoute -- "UNSUPPORTED" --> SystemResponse["SYSTEM_RESPONSE"]
     IntentRoute -- "SIMPLE 且有 subAgentCode" --> CreateIntentBinding["创建 SUB_AGENT binding"]
-    CreateIntentBinding --> CallSubAgent
+    CreateIntentBinding --> CreateIntentTask["创建 TaskCard"]
+    CreateIntentTask --> CallSubAgent
     IntentRoute -- "COMPLEX / 低置信 / 无 subAgentCode" --> CreateRuntimeBinding["创建 AGENT_RUNTIME binding"]
     CreateRuntimeBinding --> CallRuntime["调用 AgentRuntime.query"]
 
@@ -52,10 +64,11 @@ flowchart TD
     CallRuntime --> EventStream
     SystemResponse --> EventStream
     EventStream --> Persist["事件与消息写入 openGauss"]
-    Persist --> ObserveStatus["观察 taskStatus"]
-    ObserveStatus --> BindingUpdate{"任务是否终态?"}
-    BindingUpdate -- "是" --> ReleaseBinding["释放 Redis binding 并写终态"]
-    BindingUpdate -- "否" --> KeepBinding["刷新 Redis binding 与过期时间"]
+    Persist --> ObserveStatus["标准化并观察 taskStatus"]
+    ObserveStatus --> TaskUpdate["写 TaskCard 与 TaskEvent"]
+    TaskUpdate --> BindingUpdate{"任务是否终态或挂起?"}
+    BindingUpdate -- "是" --> ReleaseBinding["释放 Redis active key 并写状态"]
+    BindingUpdate -- "否" --> KeepBinding["刷新 Redis binding/task 与过期时间"]
 ```
 
 ## 全局顺序图
@@ -69,6 +82,7 @@ sequenceDiagram
     participant Session as "SessionApplicationService"
     participant Memory as "MemoryApplicationService"
     participant Binding as "AgentBindingApplicationService"
+    participant Task as "TaskCardApplicationService"
     participant Redis as "Redis"
     participant DB as "openGauss"
     participant UseCase as "UseCaseLibraryService"
@@ -79,6 +93,7 @@ sequenceDiagram
 
     Frontend->>API: "发送聊天请求"
     API->>SuperAgent: "chat(command)"
+    SuperAgent->>SuperAgent: "AuthContextProvider.resolve()"
     SuperAgent->>SuperAgent: "生成 runId"
     SuperAgent->>Session: "loadOrCreate(command)"
     Session->>DB: "读取或写入 fin_ex_chat_session_t"
@@ -87,6 +102,9 @@ sequenceDiagram
     Memory->>DB: "Redis miss 时回源消息和摘要"
 
     alt "metadata.forceNewTask 为 true"
+        SuperAgent->>Task: "取消 active TaskCard"
+        Task->>DB: "写入 fin_ex_task_card_t / fin_ex_task_event_t"
+        Task->>Redis: "删除 fin_ex:task:active key"
         SuperAgent->>Binding: "cancelActive(sessionId)"
         Binding->>DB: "写入 CANCELLED 状态"
         Binding->>Redis: "删除 fin_ex:agent_binding key"
@@ -101,10 +119,33 @@ sequenceDiagram
     end
 
     alt "存在 SUB_AGENT binding"
-        SuperAgent->>Binding: "touchForRun(runId)"
-        Binding->>DB: "刷新 last_run_id 与 expires_at"
-        Binding->>Redis: "刷新 binding TTL"
-        SuperAgent->>SubAgent: "query(runId, agentSessionId, message)"
+        SuperAgent->>Task: "findActive(sessionId)"
+        Task->>Redis: "读取 fin_ex:task:active"
+        alt "Redis miss"
+            Task->>DB: "查询 fin_ex_task_card_t"
+            Task->>Redis: "回填 active TaskCard"
+        end
+        SuperAgent->>SuperAgent: "ContinuationGuard 判断本轮输入"
+        alt "继续当前任务"
+            SuperAgent->>Binding: "touchForRun(runId)"
+            Binding->>DB: "刷新 last_run_id 与 expires_at"
+            Binding->>Redis: "刷新 binding TTL"
+            SuperAgent->>Task: "touch(taskId)"
+            Task->>DB: "续期 TaskCard 并记录事件"
+            Task->>Redis: "刷新 task TTL"
+            SuperAgent->>SubAgent: "query(SubAgentTaskRequest)"
+        else "明显新任务"
+            SuperAgent->>Task: "SUSPENDED"
+            Task->>DB: "写 TaskCard 和 TaskEvent"
+            Task->>Redis: "删除 active task"
+            SuperAgent->>Binding: "SUSPENDED"
+            Binding->>Redis: "删除 active binding"
+            SuperAgent->>UseCase: "shadow/new route match"
+        else "无法判断"
+            SuperAgent->>Task: "WAITING_USER_CONFIRMATION"
+            Task->>DB: "写 TaskCard 和 TaskEvent"
+            SuperAgent->>SuperAgent: "返回澄清问题"
+        end
     else "存在 AGENT_RUNTIME binding"
         SuperAgent->>Binding: "touchForRun(runId)"
         Binding->>DB: "刷新 last_run_id 与 expires_at"
@@ -116,14 +157,20 @@ sequenceDiagram
             SuperAgent->>Binding: "createSubAgentBinding(runId)"
             Binding->>DB: "写入 fin_ex_agent_binding_t"
             Binding->>Redis: "缓存 binding"
-            SuperAgent->>SubAgent: "query(runId, message)"
+            SuperAgent->>Task: "createForSubAgent(runId)"
+            Task->>DB: "写入 fin_ex_task_card_t / fin_ex_task_event_t"
+            Task->>Redis: "缓存 active task"
+            SuperAgent->>SubAgent: "query(SubAgentTaskRequest)"
         else "用例库未命中"
             SuperAgent->>Intent: "recognize(command, memory)"
             alt "简单任务且有 subAgentCode"
                 SuperAgent->>Binding: "createSubAgentBinding(runId)"
                 Binding->>DB: "写入 fin_ex_agent_binding_t"
                 Binding->>Redis: "缓存 binding"
-                SuperAgent->>SubAgent: "query(runId, message)"
+                SuperAgent->>Task: "createForSubAgent(runId)"
+                Task->>DB: "写入 fin_ex_task_card_t / fin_ex_task_event_t"
+                Task->>Redis: "缓存 active task"
+                SuperAgent->>SubAgent: "query(SubAgentTaskRequest)"
             else "复杂或不确定任务"
                 SuperAgent->>Binding: "createRuntimeBinding(runId)"
                 Binding->>DB: "写入 fin_ex_agent_binding_t"
@@ -147,10 +194,15 @@ sequenceDiagram
     SuperAgent->>Session: "保存完整 assistant 消息"
     Session->>DB: "写入 fin_ex_chat_message_t"
     SuperAgent->>Binding: "observeEvent(taskStatus)"
+    SuperAgent->>Task: "observeEvent(taskStatus)"
     alt "COMPLETED / FAILED / CANCELLED"
+        Task->>DB: "写任务终态与事件"
+        Task->>Redis: "删除 active task"
         Binding->>DB: "写入终态"
         Binding->>Redis: "删除 binding"
-    else "ACTIVE / REQUIRES_USER_INPUT"
+    else "ACTIVE / REQUIRES_USER_INPUT / WAITING_*"
+        Task->>DB: "保持可续接状态并记录事件"
+        Task->>Redis: "刷新 task TTL"
         Binding->>DB: "保持可续接状态"
         Binding->>Redis: "刷新 binding TTL"
     end
@@ -172,23 +224,32 @@ flowchart TB
         SessionService["SessionApplicationService"]
         MemoryService["MemoryApplicationService"]
         BindingService["AgentBindingApplicationService"]
-        UseCaseClient["UseCaseLibraryClient"]
-        IntentService["IntentService"]
+        TaskService["TaskCardApplicationService"]
+        Guard["ContinuationGuard"]
         RoutingPolicy["RoutingPolicy"]
         SubAgentExecutor["SubAgentExecutor"]
         RuntimeExecutor["AgentRuntimeExecutor"]
     end
 
+    subgraph Integration["application.integration 出站集成抽象"]
+        UseCaseClient["UseCaseLibraryClient"]
+        IntentService["IntentService"]
+        SubAgentClient["SubAgentClient"]
+        AgentRuntime["AgentRuntime"]
+        Repositories["Session / Memory / Document / Binding / Task Repositories"]
+    end
+
     subgraph Domain["domain"]
         ChatModel["ChatCommand / ChatEvent"]
         AgentBinding["AgentBinding"]
+        TaskCard["TaskCard / TaskStatus"]
         Routing["RouteTarget / RouteType"]
         Intent["IntentDecision"]
         UseCase["UseCaseMatchResult"]
     end
 
     subgraph Infrastructure["infrastructure"]
-        Redis["Redis AgentBinding / ShortTerm Cache"]
+        Redis["Redis AgentBinding / TaskCard / ShortTerm Cache"]
         OpenGauss["openGauss + MyBatis"]
         UseCaseHttp["UseCase HTTP Adapter"]
         SubAgentHttp["SubAgent HTTP Adapter"]
@@ -199,26 +260,34 @@ flowchart TB
     ChatService --> SessionService
     ChatService --> MemoryService
     ChatService --> BindingService
+    ChatService --> TaskService
+    ChatService --> Guard
     ChatService --> UseCaseClient
     ChatService --> IntentService
     ChatService --> RoutingPolicy
     ChatService --> SubAgentExecutor
     ChatService --> RuntimeExecutor
+    Application --> Integration
     Application --> Domain
-    Infrastructure --> Application
+    Infrastructure --> Integration
     BindingService --> Redis
     BindingService --> OpenGauss
 ```
 
+`application.integration` 是 application 层的出站集成抽象，用来表达应用服务依赖外部能力的边界；它不是具体基础设施实现。Redis、openGauss/MyBatis、HTTP 客户端、对象存储和 AgentRuntime provider 的落地代码仍归属 `infrastructure`。
+
 ## 路由规则
 
-- active `AgentBinding` 优先级最高，避免多轮任务被重新分类打断。
+- active `AgentBinding` 只是未完成任务索引；SubAgent binding 必须先读取 `TaskCard` 并经过 `ContinuationGuard`。
+- `ContinuationGuard` 只在用户补参数、确认上一轮问题、解释当前任务或上传当前任务附件时续接原 SubAgent。
+- 用户明显切换任务时，当前 `TaskCard` 置为 `SUSPENDED`，本轮重新走用例库/意图路由。
+- 判断不清时先做 shadow route；仍无法确认时进入 `WAITING_USER_CONFIRMATION`，向用户澄清。
 - 用例库命中阈值默认 `0.85`，命中并返回 `subAgentCode` 后直接调用 SubAgent。
 - 用例库未命中才调用 `IntentService`。
 - `IntentService` 返回简单任务且有 `candidateSubAgentCode` 时调用 SubAgent。
 - 复杂、低置信、缺少 SubAgent 的任务进入 AgentRuntime。
 - 不支持任务走 `SYSTEM_RESPONSE`，返回可控说明。
-- 前端可通过 `metadata.forceNewTask=true` 取消当前 binding 并重新路由。
+- 前端可通过 `metadata.forceNewTask=true` 取消当前 TaskCard 和 binding 并重新路由。
 
 ## 会话与执行标识
 
@@ -227,6 +296,7 @@ v2 同时保留多种 ID，它们的职责不同：
 ```text
 sessionId         前端聊天会话，一段持续对话
 runId             SuperAgent 单轮执行追踪 ID
+taskId            SuperAgent 侧可续接业务任务 ID
 agentSessionId    SubAgent 内部会话 ID
 runtimeSessionId  AgentRuntime 内部会话 ID
 ```
@@ -238,7 +308,7 @@ runtimeSessionId  AgentRuntime 内部会话 ID
 - `fin_ex_agent_binding_t.last_run_id` 记录最近触发该 binding 的运行轮次。
 - 传给 SubAgent/AgentRuntime，方便跨服务日志关联。
 
-`runId` 不参与多轮保持决策。多轮保持由 `AgentBinding.status`、`agentSessionId` 和 `runtimeSessionId` 决定。
+`runId` 不参与多轮保持决策。SubAgent 多轮保持由 `TaskCard.taskStatus`、`requiredInputs`、`AgentBinding.status` 和 `agentSessionId` 共同决定；AgentRuntime 多轮保持由 `AgentBinding.status` 和 `runtimeSessionId` 决定。
 
 ## AgentBinding
 
@@ -272,7 +342,47 @@ created_at
 updated_at
 ```
 
-状态包括 `ACTIVE`、`REQUIRES_USER_INPUT`、`COMPLETED`、`FAILED`、`CANCELLED`、`EXPIRED`。只有 `ACTIVE` 和 `REQUIRES_USER_INPUT` 会继续续接。
+状态包括 `ACTIVE`、`REQUIRES_USER_INPUT`、`WAITING_EXTERNAL_SYSTEM`、`WAITING_USER_CONFIRMATION`、`SUSPENDED`、`COMPLETED`、`FAILED`、`CANCELLED`、`EXPIRED`、`UNKNOWN`。只有 `ACTIVE`、`REQUIRES_USER_INPUT`、`WAITING_EXTERNAL_SYSTEM`、`WAITING_USER_CONFIRMATION` 会进入 active 查询；`SUSPENDED` 保留事实但不作为当前路由。
+
+## TaskCard
+
+`TaskCard` 是简单 SubAgent 任务状态事实。它记录任务目标、任务领域、当前 SubAgent、下游 `agentSessionId`、任务状态、待补充参数、已收集参数、最近一次 Agent 回复和澄清问题。
+
+```text
+Redis key:
+fin_ex:task:active:{tenantId}:{userId}:{sessionId}
+fin_ex:task:card:{tenantId}:{userId}:{sessionId}:{taskId}
+
+openGauss tables:
+fin_ex_task_card_t
+fin_ex_task_event_t
+```
+
+状态模型：
+
+- 可续接：`ACTIVE`、`REQUIRES_USER_INPUT`、`WAITING_EXTERNAL_SYSTEM`、`WAITING_USER_CONFIRMATION`
+- 可恢复但非当前活跃：`SUSPENDED`
+- 终态：`COMPLETED`、`FAILED`、`CANCELLED`、`EXPIRED`
+- 内部诊断：`UNKNOWN`
+
+`UNKNOWN` 不直接面向用户。SubAgent 响应无法判断时，`rawNormalizedStatus=UNKNOWN`，对外任务状态统一转为 `WAITING_USER_CONFIRMATION`。
+
+## SubAgent 契约
+
+员工报销 SubAgent 固定编码为 `employee_reimbursement_agent`，默认配置：
+
+```yaml
+financeex.sub-agent.agents.employee_reimbursement_agent.interaction-mode: natural-language-contract
+financeex.sub-agent.agents.employee_reimbursement_agent.endpoint: ${FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENDPOINT:}
+```
+
+`SubAgentTaskPromptBuilder` 会基于 `TaskCard`、用户本轮 query、附件和上下文生成增强任务 Prompt，要求自然语言 Agent 只处理当前任务并返回 JSON。`SubAgentResponseNormalizer` 会按以下顺序兜底：
+
+- 直接解析 JSON。
+- 提取 markdown JSON code block。
+- 执行字段别名映射：`reply/message/content`、`status/taskStatus`、`sessionId/agentSessionId`。
+- 对普通文本做状态推断，例如“请上传/请提供”映射为 `REQUIRES_USER_INPUT`，“已完成/提交成功”映射为 `COMPLETED`，“处理中/请稍后”映射为 `WAITING_EXTERNAL_SYSTEM`。
+- 无法判断时进入 `WAITING_USER_CONFIRMATION`，由 SuperAgent 询问用户继续当前报销任务还是开始新任务。
 
 ## AgentRuntime
 
@@ -300,9 +410,13 @@ AgentRuntime 自己负责内部 session、上下文管理、压缩和规划。Su
 - `fin_ex_conversation_summary_t`
 - `fin_ex_uploaded_document_t`
 - `fin_ex_agent_binding_t`
+- `fin_ex_task_card_t`
+- `fin_ex_task_event_t`
 
 Redis key 必须以 `fin_ex` 开头：
 
 - `fin_ex:agent_binding:{tenantId}:{userId}:{sessionId}`
+- `fin_ex:task:active:{tenantId}:{userId}:{sessionId}`
+- `fin_ex:task:card:{tenantId}:{userId}:{sessionId}:{taskId}`
 - `fin_ex:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
 - `fin_ex:memory:working:variables:{sessionId}`

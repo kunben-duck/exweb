@@ -2,10 +2,10 @@ package com.huawei.finance.front.one.application.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.huawei.finance.front.one.application.gateway.AgentBindingCache;
-import com.huawei.finance.front.one.application.gateway.AgentBindingRepository;
-import com.huawei.finance.front.one.application.gateway.IdGenerateContext;
-import com.huawei.finance.front.one.application.gateway.IdGenerator;
+import com.huawei.finance.front.one.application.integration.agent.binding.AgentBindingCache;
+import com.huawei.finance.front.one.application.integration.agent.binding.AgentBindingRepository;
+import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
+import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.domain.agent.AgentBinding;
 import com.huawei.finance.front.one.domain.agent.AgentBindingStatus;
 import com.huawei.finance.front.one.domain.agent.AgentBindingType;

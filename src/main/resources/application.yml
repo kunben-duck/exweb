@@ -42,6 +42,14 @@ mybatis:
     map-underscore-to-camel-case: true
 
 financeex:
+  security:
+    dev:
+      # 本地开发态用配置模拟企业权限上下文；接口层不再接收前端传入的 tenantId/userId。
+      # 身份信息不提供默认值，缺失时 AuthContextProvider 会直接拒绝请求。
+      # 后续接入统一权限框架时，替换 AuthContextProvider 实现即可，业务编排不需要调整。
+      tenant-id: ${FINANCEEX_DEV_TENANT_ID:}
+      user-id: ${FINANCEEX_DEV_USER_ID:}
+      username: ${FINANCEEX_DEV_USERNAME:}
   intent:
     provider: ${FINANCEEX_INTENT_PROVIDER:http}
     base-url: ${FINANCEEX_INTENT_BASE_URL:http://localhost:9200}
@@ -57,10 +65,23 @@ financeex:
     ttl: 3d
     redis-key-prefix: fin_ex:agent_binding
     redis-ttl: 3d
+  task:
+    ttl: 3d
+    redis:
+      active-key-prefix: fin_ex:task:active
+      card-key-prefix: fin_ex:task:card
+      ttl: 3d
   sub-agent:
     mock-fallback-enabled: ${FINANCEEX_SUB_AGENT_MOCK_FALLBACK_ENABLED:false}
     timeout: 30s
-    agents: {}
+    agents:
+      employee_reimbursement_agent:
+        enabled: ${FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENABLED:true}
+        protocol: http
+        interaction-mode: natural-language-contract
+        endpoint: ${FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENDPOINT:}
+        task-goal: 创建并推进员工报销单
+        task-domain: employee_reimbursement
   memory:
     short-term:
       storage:
@@ -93,4 +114,13 @@ financeex:
         model-name: finance-llm
         max-iters: 8
   storage:
+    provider: ${FINANCEEX_STORAGE_PROVIDER:local}
     local-path: ${java.io.tmpdir}/financeex-docs
+    s3:
+      bucket: ${FINANCEEX_S3_BUCKET:}
+      region: ${FINANCEEX_S3_REGION:}
+      endpoint: ${FINANCEEX_S3_ENDPOINT:}
+      access-key: ${FINANCEEX_S3_ACCESS_KEY:}
+      secret-key: ${FINANCEEX_S3_SECRET_KEY:}
+      path-style-access-enabled: ${FINANCEEX_S3_PATH_STYLE_ACCESS_ENABLED:false}
+      key-prefix: ${FINANCEEX_S3_KEY_PREFIX:documents}

@@ -1,9 +1,9 @@
 package com.huawei.finance.front.one.infrastructure.agent.runtime.agentscope.memory;
 
-import com.huawei.finance.front.one.application.gateway.AgentRuntimeRequest;
-import com.huawei.finance.front.one.application.gateway.IdGenerateContext;
-import com.huawei.finance.front.one.application.gateway.IdGenerator;
-import com.huawei.finance.front.one.application.gateway.LongTermMemoryStore;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
+import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
+import com.huawei.finance.front.one.application.integration.id.IdGenerator;
+import com.huawei.finance.front.one.application.integration.memory.LongTermMemoryStore;
 import com.huawei.finance.front.one.domain.memory.LongTermMemoryItem;
 import io.agentscope.core.memory.LongTermMemory;
 import io.agentscope.core.message.Msg;

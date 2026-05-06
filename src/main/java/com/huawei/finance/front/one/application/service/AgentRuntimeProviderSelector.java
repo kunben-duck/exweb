@@ -1,6 +1,6 @@
 package com.huawei.finance.front.one.application.service;
 
-import com.huawei.finance.front.one.application.gateway.AgentRuntime;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
 import com.huawei.finance.front.one.domain.agent.AgentRuntimeProvider;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;

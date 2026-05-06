@@ -1,7 +1,7 @@
 package com.huawei.finance.front.one.infrastructure.agent.runtime.relay;
 
-import com.huawei.finance.front.one.application.gateway.AgentRuntime;
-import com.huawei.finance.front.one.application.gateway.AgentRuntimeRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.domain.agent.AgentRuntimeProvider;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatResponseMode;

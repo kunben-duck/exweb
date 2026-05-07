@@ -8,7 +8,9 @@ import java.util.Locale;
  * <p>block 表示等待 Agent 完整回复后一次性返回；stream 表示通过事件流逐段返回。</p>
  */
 public enum ChatResponseMode {
+    /** 通过 SSE、NDJSON 或 WebSocket 逐段返回事件。 */
     STREAM,
+    /** 等待下游完整回复后返回单次消息事件。 */
     BLOCK;
 
     public static ChatResponseMode from(String value) {

@@ -8,6 +8,22 @@ import java.util.Map;
  *
  * <p>它不是下游 Agent 的完整会话模型，只保存“前端 chatSession 应继续路由到哪里”的最小事实：
  * SubAgent/AgentRuntime 类型、下游会话 ID、状态、过期时间和少量扩展元数据。</p>
+ *
+ * @param id 路由绑定唯一标识。
+ * @param tenantId 租户标识。
+ * @param userId 用户标识。
+ * @param chatSessionId 前端聊天会话标识。
+ * @param bindingType 绑定目标类型，区分 SubAgent 与 AgentRuntime。
+ * @param agentCode SubAgent 编码，bindingType 为 SUB_AGENT 时有效。
+ * @param provider AgentRuntime provider 编码，bindingType 为 AGENT_RUNTIME 时有效。
+ * @param agentSessionId 下游 SubAgent 自己的会话标识。
+ * @param runtimeSessionId AgentRuntime 自己的会话标识。
+ * @param status 当前路由绑定状态。
+ * @param lastRunId 最近一次触发该 binding 的 SuperAgent runId。
+ * @param expiresAt 该 binding 可作为 active route 的过期时间。
+ * @param createdAt 创建时间。
+ * @param updatedAt 最近更新时间。
+ * @param metadata 扩展元数据，保存路由来源、诊断信息等非核心字段。
  */
 public record AgentBinding(
         String id,

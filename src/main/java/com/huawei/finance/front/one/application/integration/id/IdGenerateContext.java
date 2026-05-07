@@ -6,6 +6,12 @@ import java.util.Map;
  * ID 生成上下文。
  *
  * <p>第一版实现暂不使用这些字段；企业化实现可以按租户、用户、会话或扩展变量生成不同 ID。</p>
+ *
+ * @param tenantId 租户标识，用于生成具备租户隔离特征的 ID。
+ * @param userId 用户标识，用于生成具备用户上下文特征的 ID。
+ * @param sessionId 前端聊天会话标识。
+ * @param runId 本轮执行追踪标识。
+ * @param attributes 额外 ID 生成属性，供未来雪花、号段或企业 ID 服务适配使用。
  */
 public record IdGenerateContext(
         String tenantId,

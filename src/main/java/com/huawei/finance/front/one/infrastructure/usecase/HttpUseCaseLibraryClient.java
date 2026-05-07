@@ -5,7 +5,6 @@ import com.huawei.finance.front.one.application.integration.usecase.UseCaseMatch
 import com.huawei.finance.front.one.domain.usecase.UseCaseMatchResult;
 import java.time.Duration;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -13,10 +12,10 @@ import org.springframework.web.reactive.function.client.WebClient;
  * 用例库服务 HTTP 适配器。
  *
  * <p>用例库是简单任务的第一优先级路由信号。这里只负责协议转换，命中阈值和后续路由仍由
- * RoutingPolicy/FinanceEXChatService 控制。</p>
+ * RoutingPolicy/FinanceEXChatService 控制。更换用例库部署地址时，只需要调整
+ * financeex.use-case-library.base-url 和 match-path。</p>
  */
 @Component
-@ConditionalOnProperty(name = "financeex.use-case-library.provider", havingValue = "http")
 public class HttpUseCaseLibraryClient implements UseCaseLibraryClient {
     private final WebClient webClient;
     private final String matchPath;

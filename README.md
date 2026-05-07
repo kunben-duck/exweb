@@ -131,6 +131,24 @@ export FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENDPOINT=http://localhost:9300/v1/
 
 SubAgent 返回标准 JSON 时会直接更新 TaskCard；返回 markdown JSON code block 或普通文本时，`SubAgentResponseNormalizer` 会执行字段别名映射和文本推断，例如“请上传发票图片”会推断为 `REQUIRES_USER_INPUT`，“好的，我先看一下”会转为 `WAITING_USER_CONFIRMATION`。
 
+## 外部服务接入
+
+生产代码不再包含本地 mock 服务。意图服务、用例库服务、SubAgent 和 RelayAgentRuntime 都通过 HTTP API 接入；切换环境时只需要替换配置中的 API 地址和路径。
+
+```bash
+export FINANCEEX_USE_CASE_LIBRARY_BASE_URL=http://use-case-library:9100
+export FINANCEEX_USE_CASE_LIBRARY_MATCH_PATH=/v1/use-cases/match
+export FINANCEEX_INTENT_BASE_URL=http://intent-service:9200
+export FINANCEEX_INTENT_RECOGNIZE_PATH=/v1/intents/recognize
+export FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENDPOINT=http://employee-reimbursement-agent:9300/v1/query
+export FINANCEEX_RELAY_AGENT_BASE_URL=http://relay-agent:9000
+export FINANCEEX_RELAY_AGENT_STREAM_PATH=/v1/agent/runs/stream
+```
+
+SubAgent endpoint 是完整 HTTP 地址，支持流式文本返回。员工报销默认使用 `natural-language-contract`，服务会聚合下游流式片段并标准化为统一任务状态。普通 SubAgent 可配置为 `raw-text`，事件协议仍统一输出 `message.delta` 和 `message.completed`。
+
+长期记忆默认是 `disabled`，表示不启用外部长记忆服务，也不会注入伪造记忆；接入真实长记忆服务时新增对应 `LongTermMemoryStore` 适配器即可。
+
 ## 启动
 
 本地没有 PostgreSQL/Redis/MinIO 时，可以先启动 Docker 依赖：

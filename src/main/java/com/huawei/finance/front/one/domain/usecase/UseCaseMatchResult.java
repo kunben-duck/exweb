@@ -7,6 +7,13 @@ import java.util.Map;
  *
  * <p>用例库是“已沉淀业务样例”的优先路由来源。它不直接执行任务，只告诉主控服务是否命中、
  * 命中分数以及应该调用哪个 SubAgent。</p>
+ *
+ * @param matched true 表示用例库命中了已有业务样例。
+ * @param score 命中分数，范围 0 到 1。
+ * @param subAgentCode 命中后推荐调用的 SubAgent 编码。
+ * @param reason 用例库返回的命中或未命中原因。
+ * @param slots 用例库从样例中提取出的槽位。
+ * @param raw 用例库原始响应或诊断信息。
  */
 public record UseCaseMatchResult(
         boolean matched,

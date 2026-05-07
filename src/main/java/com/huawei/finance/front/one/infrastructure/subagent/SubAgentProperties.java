@@ -13,20 +13,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = "financeex.sub-agent")
 public class SubAgentProperties {
-    /** 缺少 endpoint 时是否允许本地 mock 响应，生产环境建议关闭。 */
-    private boolean mockFallbackEnabled = true;
     /** 调用第三方 SubAgent 的超时时间。 */
     private Duration timeout = Duration.ofSeconds(30);
     /** SubAgent 编码到调用配置的映射。 */
     private Map<String, AgentEndpoint> agents = new HashMap<>();
-
-    public boolean isMockFallbackEnabled() {
-        return mockFallbackEnabled;
-    }
-
-    public void setMockFallbackEnabled(boolean mockFallbackEnabled) {
-        this.mockFallbackEnabled = mockFallbackEnabled;
-    }
 
     public Duration getTimeout() {
         return timeout;
@@ -51,7 +41,7 @@ public class SubAgentProperties {
         private String protocol = "http";
         /** SubAgent 服务 endpoint。 */
         private String endpoint;
-        /** 交互模式：natural-language-contract、raw-text 或 custom-adapter。 */
+        /** 交互模式：natural-language-contract 或 raw-text。 */
         private String interactionMode = "raw-text";
         /** 任务目标，用于自然语言契约 Prompt。 */
         private String taskGoal;

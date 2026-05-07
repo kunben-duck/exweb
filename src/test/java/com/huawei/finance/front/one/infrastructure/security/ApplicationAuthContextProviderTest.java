@@ -40,6 +40,6 @@ class ApplicationAuthContextProviderTest {
     }
 
     private ApplicationAuthContextProvider provider(String tenantId, String userId, String username) {
-        return new ApplicationAuthContextProvider(new ConfiguredUserIdResolver(), tenantId, userId, username);
+        return new ApplicationAuthContextProvider(tenantId, userId, username);
     }
 }

@@ -9,6 +9,7 @@ import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.S3ClientBuilder;
@@ -29,6 +30,8 @@ public class S3StorageConfiguration {
                                       @Value("${financeex.storage.s3.secret-key:}") String secretKey,
                                       @Value("${financeex.storage.s3.path-style-access-enabled:false}") boolean pathStyleAccessEnabled) {
         S3ClientBuilder builder = S3Client.builder()
+                // 使用 JDK URLConnection 客户端，避免引入 apache-client 的 commons-logging 冲突。
+                .httpClientBuilder(UrlConnectionHttpClient.builder())
                 .region(Region.of(requireText(region, "S3 region 不能为空")))
                 .serviceConfiguration(S3Configuration.builder()
                         .pathStyleAccessEnabled(pathStyleAccessEnabled)

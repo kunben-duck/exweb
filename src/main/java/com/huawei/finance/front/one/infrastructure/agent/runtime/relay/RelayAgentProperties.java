@@ -1,20 +1,13 @@
 package com.huawei.finance.front.one.infrastructure.agent.runtime.relay;
 
+import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "financeex.agent-runtime.providers.relay-agent")
 public class RelayAgentProperties {
-    private boolean enabled = false;
     private String baseUrl = "http://localhost:9000";
     private String streamPath = "/v1/agent/runs/stream";
-
-    public boolean isEnabled() {
-        return enabled;
-    }
-
-    public void setEnabled(boolean enabled) {
-        this.enabled = enabled;
-    }
+    private Duration timeout = Duration.ofSeconds(60);
 
     public String getBaseUrl() {
         return baseUrl;
@@ -30,5 +23,13 @@ public class RelayAgentProperties {
 
     public void setStreamPath(String streamPath) {
         this.streamPath = streamPath;
+    }
+
+    public Duration getTimeout() {
+        return timeout;
+    }
+
+    public void setTimeout(Duration timeout) {
+        this.timeout = timeout;
     }
 }

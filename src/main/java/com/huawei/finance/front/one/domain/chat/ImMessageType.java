@@ -8,15 +8,25 @@ import java.util.Locale;
  * <p>该枚举用于在 HTTP/SSE/WebSocket 协议之间统一消息类型表达。</p>
  */
 public enum ImMessageType {
+    /** 普通文本消息。 */
     TEXT,
+    /** 图片消息。 */
     IMAGE,
+    /** 文件消息。 */
     FILE,
+    /** 音频消息。 */
     AUDIO,
+    /** 视频消息。 */
     VIDEO,
+    /** 富文本消息。 */
     RICH_TEXT,
+    /** 卡片消息。 */
     CARD,
+    /** 位置消息。 */
     LOCATION,
+    /** 系统消息。 */
     SYSTEM,
+    /** 无法识别的前端消息类型。 */
     UNKNOWN;
 
     public static ImMessageType from(String value) {

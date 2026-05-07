@@ -51,12 +51,10 @@ financeex:
       user-id: ${FINANCEEX_DEV_USER_ID:}
       username: ${FINANCEEX_DEV_USERNAME:}
   intent:
-    provider: ${FINANCEEX_INTENT_PROVIDER:http}
     base-url: ${FINANCEEX_INTENT_BASE_URL:http://localhost:9200}
     recognize-path: ${FINANCEEX_INTENT_RECOGNIZE_PATH:/v1/intents/recognize}
     timeout: 5s
   use-case-library:
-    provider: ${FINANCEEX_USE_CASE_LIBRARY_PROVIDER:http}
     min-score: 0.85
     base-url: ${FINANCEEX_USE_CASE_LIBRARY_BASE_URL:http://localhost:9100}
     match-path: ${FINANCEEX_USE_CASE_LIBRARY_MATCH_PATH:/v1/use-cases/match}
@@ -72,7 +70,6 @@ financeex:
       card-key-prefix: fin_ex:task:card
       ttl: 3d
   sub-agent:
-    mock-fallback-enabled: ${FINANCEEX_SUB_AGENT_MOCK_FALLBACK_ENABLED:false}
     timeout: 30s
     agents:
       employee_reimbursement_agent:
@@ -100,14 +97,14 @@ financeex:
         ttl: 3d
         failure-backoff: 30s
     long-term:
-      provider: mock-external
+      provider: disabled
   agent-runtime:
     provider: ${FINANCEEX_AGENT_RUNTIME_PROVIDER:relay-agent}
     providers:
       relay-agent:
-        enabled: ${FINANCEEX_RELAY_AGENT_ENABLED:false}
         base-url: ${FINANCEEX_RELAY_AGENT_BASE_URL:http://localhost:9000}
         stream-path: ${FINANCEEX_RELAY_AGENT_STREAM_PATH:/v1/agent/runs/stream}
+        timeout: 60s
       agentscope:
         base-url: http://localhost:8000/v1
         api-key: dummy-key

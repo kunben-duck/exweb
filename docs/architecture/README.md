@@ -384,13 +384,25 @@ financeex.sub-agent.agents.employee_reimbursement_agent.endpoint: ${FINANCEEX_EM
 - 对普通文本做状态推断，例如“请上传/请提供”映射为 `REQUIRES_USER_INPUT`，“已完成/提交成功”映射为 `COMPLETED`，“处理中/请稍后”映射为 `WAITING_EXTERNAL_SYSTEM`。
 - 无法判断时进入 `WAITING_USER_CONFIRMATION`，由 SuperAgent 询问用户继续当前报销任务还是开始新任务。
 
+## 外部 API 接入
+
+生产代码不再提供本地 mock 服务。以下外部能力均通过 HTTP API 适配器接入，环境切换只调整配置：
+
+- 用例库服务：`financeex.use-case-library.base-url`、`financeex.use-case-library.match-path`
+- 意图服务：`financeex.intent.base-url`、`financeex.intent.recognize-path`
+- 员工报销 SubAgent：`financeex.sub-agent.agents.employee_reimbursement_agent.endpoint`
+- RelayAgentRuntime：`financeex.agent-runtime.providers.relay-agent.base-url`、`financeex.agent-runtime.providers.relay-agent.stream-path`
+
+用例库和意图服务只返回路由信号，不创建 binding，也不直接执行业务。SubAgent HTTP endpoint 支持流式文本返回；`natural-language-contract` 模式会聚合下游片段并进入响应标准化器，`raw-text` 模式会直接转发文本事件。
+
+长期记忆默认 `disabled`，明确表示当前环境未启用外部长记忆服务；该实现不会注入伪造记忆，也不会写入业务数据。接入真实长期记忆时新增 `LongTermMemoryStore` HTTP/gRPC/SDK 适配器。
+
 ## AgentRuntime
 
 `AgentRuntime` 只强制实现统一 `query(request)` 接口。不同 provider 通过防腐层适配：
 
 - `relay-agent`：转发到远程完整 Agent 服务。
 - `agentscope`：进程内 AgentScope 实现。
-- `spring-ai`、`langchain`：保留枚举和扩展方向。
 
 AgentRuntime 自己负责内部 session、上下文管理、压缩和规划。SuperAgent 只保存最小可见消息、摘要和 binding。
 

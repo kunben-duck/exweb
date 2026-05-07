@@ -10,7 +10,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -18,10 +17,9 @@ import org.springframework.web.reactive.function.client.WebClient;
  * 第三方意图服务 HTTP 适配器。
  *
  * <p>主控服务只依赖 IntentService 端口；HTTP 的地址、路径和超时留在基础设施配置中。
- * 如果意图服务暂时不可用，这里降级为复杂任务，让 AgentRuntime 兜住用户请求。</p>
+ * 更换第三方意图服务部署地址时，只需要调整 financeex.intent.base-url 和 recognize-path。</p>
  */
 @Component
-@ConditionalOnProperty(name = "financeex.intent.provider", havingValue = "http")
 public class HttpIntentService implements IntentService {
     private final WebClient webClient;
     private final String recognizePath;
@@ -54,20 +52,15 @@ public class HttpIntentService implements IntentService {
                     .bodyToMono(IntentDecision.class)
                     .timeout(timeout)
                     .blockOptional()
-                    .orElseGet(() -> fallbackDecision("empty intent response"));
+                    .orElseGet(() -> runtimeDecision("empty intent response"));
         } catch (RuntimeException ex) {
-            return fallbackDecision("intent service failed: " + ex.getMessage());
+            return runtimeDecision("intent service failed: " + ex.getMessage());
         }
     }
 
-    @Override
-    public String provider() {
-        return "http";
-    }
-
-    private IntentDecision fallbackDecision(String reason) {
+    private IntentDecision runtimeDecision(String reason) {
         return new IntentDecision(
-                "finance.runtime.fallback",
+                "finance.runtime.degraded",
                 "意图服务不可用，转入 AgentRuntime",
                 TaskComplexity.COMPLEX,
                 0.0,
@@ -75,7 +68,7 @@ public class HttpIntentService implements IntentService {
                 null,
                 Map.of(),
                 List.of(),
-                Map.of("source", "http-intent-fallback", "reason", reason == null ? "" : reason)
+                Map.of("source", "http-intent-degraded", "reason", reason == null ? "" : reason)
         );
     }
 }

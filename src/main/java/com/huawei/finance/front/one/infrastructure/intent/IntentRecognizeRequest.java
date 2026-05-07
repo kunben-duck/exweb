@@ -9,6 +9,14 @@ import java.util.Map;
  * 发送给第三方意图服务的请求 DTO。
  *
  * <p>DTO 放在 infra 层，避免把外部 HTTP 契约反向污染 application/domain。</p>
+ *
+ * @param tenantId 租户标识。
+ * @param userId 用户标识。
+ * @param sessionId 前端聊天会话标识。
+ * @param message 本轮用户输入文本。
+ * @param attachments 本轮关联附件引用。
+ * @param metadata 前端或上游扩展元数据。
+ * @param memory SuperAgent 装配的上下文快照。
  */
 public record IntentRecognizeRequest(
         String tenantId,

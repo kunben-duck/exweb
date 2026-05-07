@@ -1,10 +1,7 @@
 package com.huawei.finance.front.one.infrastructure.security;
 
 import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
-import com.huawei.finance.front.one.application.integration.identity.UserIdResolveRequest;
-import com.huawei.finance.front.one.application.integration.identity.UserIdResolver;
 import com.huawei.finance.front.one.domain.auth.UserContext;
-import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -23,32 +20,24 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class ApplicationAuthContextProvider implements AuthContextProvider {
-    private final UserIdResolver userIdResolver;
     private final String tenantId;
-    private final String externalUserId;
+    private final String userId;
     private final String username;
 
-    public ApplicationAuthContextProvider(UserIdResolver userIdResolver,
-                                          @Value("${financeex.security.dev.tenant-id:}") String tenantId,
+    public ApplicationAuthContextProvider(@Value("${financeex.security.dev.tenant-id:}") String tenantId,
                                           @Value("${financeex.security.dev.user-id:}") String externalUserId,
                                           @Value("${financeex.security.dev.username:}") String username) {
-        this.userIdResolver = userIdResolver;
         this.tenantId = tenantId;
-        this.externalUserId = externalUserId;
+        this.userId = externalUserId;
         this.username = username;
     }
 
     @Override
     public UserContext resolve() {
         String resolvedTenant = requireText(tenantId, "当前租户 ID 缺失");
-        String resolvedExternalUser = requireText(externalUserId, "当前用户 ID 缺失");
+        String resolvedUserId = requireText(userId, "当前用户 ID 缺失");
         String resolvedUsername = requireText(username, "当前用户名缺失");
-        String resolvedUserId = userIdResolver.resolveUserId(new UserIdResolveRequest(
-                resolvedTenant,
-                resolvedExternalUser,
-                Map.of("source", "application-auth-context")));
-        return new UserContext(resolvedTenant, requireText(resolvedUserId, "当前用户 ID 解析结果缺失"),
-                resolvedUsername);
+        return new UserContext(resolvedTenant, resolvedUserId, resolvedUsername);
     }
 
     private String requireText(String value, String message) {

@@ -16,7 +16,9 @@ import com.huawei.finance.front.one.domain.usecase.UseCaseMatchResult;
  * 低置信和 unsupported 分支。</p>
  */
 public class RoutingPolicy {
+    /** 意图服务简单任务进入 SubAgent fast path 的最低置信度。 */
     private static final double FAST_PATH_CONFIDENCE = 0.85;
+    /** 用例库命中进入 SubAgent fast path 的最低分数。 */
     private final double useCaseMinScore;
 
     public RoutingPolicy(double useCaseMinScore) {

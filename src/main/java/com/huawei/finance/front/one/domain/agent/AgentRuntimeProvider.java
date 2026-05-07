@@ -6,11 +6,12 @@ import java.util.Arrays;
  * AgentRuntime provider 类型。
  */
 public enum AgentRuntimeProvider {
+    /** 远程 RelayAgent 服务实现。 */
     RELAY_AGENT("relay-agent"),
-    AGENTSCOPE("agentscope"),
-    SPRING_AI("spring-ai"),
-    LANGCHAIN("langchain");
+    /** 本服务进程内 AgentScope 实现。 */
+    AGENTSCOPE("agentscope");
 
+    /** 配置文件中使用的 provider 编码。 */
     private final String configValue;
 
     AgentRuntimeProvider(String configValue) {

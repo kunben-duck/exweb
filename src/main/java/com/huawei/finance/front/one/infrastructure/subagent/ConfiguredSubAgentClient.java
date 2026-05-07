@@ -37,7 +37,7 @@ public class ConfiguredSubAgentClient implements SubAgentClient {
         // 这样用例库和意图服务只需要返回 agentCode，不需要知道部署地址或协议细节。
         SubAgentProperties.AgentEndpoint endpoint = endpoint(request.agentCode());
         if (endpoint == null || !endpoint.isEnabled() || endpoint.getEndpoint() == null || endpoint.getEndpoint().isBlank()) {
-            return mockOrUnavailable(request);
+            return unavailable(request, "未找到可用 SubAgent 配置: " + request.agentCode());
         }
         if (!"http".equalsIgnoreCase(endpoint.getProtocol())) {
             return Flux.just(
@@ -45,8 +45,18 @@ public class ConfiguredSubAgentClient implements SubAgentClient {
                     (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), "FAILED")
             );
         }
-        if ("natural-language-contract".equalsIgnoreCase(endpoint.getInteractionMode())) {
+        String interactionMode = endpoint.getInteractionMode() == null || endpoint.getInteractionMode().isBlank()
+                ? "raw-text"
+                : endpoint.getInteractionMode();
+        if ("natural-language-contract".equalsIgnoreCase(interactionMode)) {
             return queryWithNaturalLanguageContract(request, endpoint);
+        }
+        if (!"raw-text".equalsIgnoreCase(interactionMode)) {
+            return Flux.just(
+                    (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), "SubAgent 交互模式暂不支持: " + interactionMode),
+                    (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), completionPayload(request,
+                            SubAgentTaskResult.failed("SubAgent 交互模式暂不支持: " + interactionMode)))
+            );
         }
         Flux<String> deltas = webClientBuilder.build()
                 .post()
@@ -60,7 +70,8 @@ public class ConfiguredSubAgentClient implements SubAgentClient {
             // 前端仍只理解 message.delta/message.completed，不感知 SubAgent 协议。
             return deltas
                     .map(delta -> (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), delta))
-                    .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId(), "COMPLETED"));
+                    .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId(), "COMPLETED"))
+                    .onErrorResume(ex -> unavailable(request, "SubAgent 调用失败: " + ex.getMessage()));
         }
         // block 模式下先聚合下游片段，再作为单个 assistant delta 返回，保持前端事件结构一致。
         return deltas.collectList()
@@ -68,7 +79,8 @@ public class ConfiguredSubAgentClient implements SubAgentClient {
                 .flatMapMany(text -> Flux.just(
                         (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), text),
                         (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), "COMPLETED")
-                ));
+                ))
+                .onErrorResume(ex -> unavailable(request, "SubAgent 调用失败: " + ex.getMessage()));
     }
 
     private Flux<ChatEvent> queryWithNaturalLanguageContract(AgentQueryRequest request, SubAgentProperties.AgentEndpoint endpoint) {
@@ -86,22 +98,15 @@ public class ConfiguredSubAgentClient implements SubAgentClient {
                 .flatMapMany(result -> Flux.just(
                         (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), result.message()),
                         (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), completionPayload(request, result))
-                ));
+                ))
+                .onErrorResume(ex -> unavailable(request, "SubAgent 调用失败: " + ex.getMessage()));
     }
 
-    private Flux<ChatEvent> mockOrUnavailable(AgentQueryRequest request) {
-        // 本地联调默认允许 mock fallback，方便在第三方 SubAgent 尚未部署时验证主控路由。
-        // 生产环境可关闭 mockFallbackEnabled，让缺失配置显式失败。
-        if (!properties.isMockFallbackEnabled()) {
-            return Flux.just(
-                    (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), "未找到可用 SubAgent: " + request.agentCode()),
-                    (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), completionPayload(request,
-                            SubAgentTaskResult.failed("未找到可用 SubAgent: " + request.agentCode())))
-            );
-        }
+    private Flux<ChatEvent> unavailable(AgentQueryRequest request, String message) {
         return Flux.just(
-                (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), "已路由到 SubAgent: " + request.agentCode() + "。当前为 mock 响应。"),
-                (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), "COMPLETED")
+                (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), message),
+                (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(),
+                        completionPayload(request, SubAgentTaskResult.failed(message)))
         );
     }
 

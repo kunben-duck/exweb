@@ -88,6 +88,10 @@ export FINANCEEX_RELAY_AGENT_STREAM_PATH=/v1/agent/runs/stream
 
 SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP 文本流调用。Relay Runtime 是唯一 AgentRuntime 实现。
 
+## 上线版本边界
+
+当前上线版本明确不包含 AgentScope 设计和实现，也不保留运行时 provider 选择器。复杂任务统一通过 Relay Runtime HTTP API 执行；如果后续需要接入新的 Runtime，应通过新的正式架构评审重新设计，不在当前版本预留半成品扩展点。
+
 ## 启动
 
 本地没有 PostgreSQL/Redis/MinIO 时，可以先启动 Docker 依赖：

@@ -230,7 +230,9 @@ updated_at
 - SubAgent：`financeex.sub-agent.agents.{agentCode}.endpoint`
 - Relay Runtime：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`
 
-SubAgent 当前只支持单轮 HTTP 文本流调用。Relay Runtime 是唯一 Runtime 实现，项目内不再包含其他进程内 Runtime 实现。
+SubAgent 当前只支持单轮 HTTP 文本流调用。Relay Runtime 是唯一 Runtime 实现。
+
+当前上线版本明确去掉 AgentScope 设计和实现，也不保留运行时 provider 选择器、AgentScope memory、AgentScope prompt assembler 或相关配置。复杂任务统一通过 Relay Runtime HTTP API 执行；项目内不再包含任何 AgentScope 架构分支。
 
 ## 命名规范
 

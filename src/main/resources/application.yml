@@ -93,6 +93,8 @@ financeex:
     long-term:
       provider: disabled
   agent-runtime:
+    # AgentRuntime 防腐层 provider。当前上线版本默认 relay；后续替换 Runtime 实现时新增 adapter 并切换该值。
+    provider: ${FINANCEEX_AGENT_RUNTIME_PROVIDER:relay}
     base-url: ${FINANCEEX_RELAY_AGENT_BASE_URL:http://localhost:9000}
     stream-path: ${FINANCEEX_RELAY_AGENT_STREAM_PATH:/v1/agent/runs/stream}
     timeout: 60s

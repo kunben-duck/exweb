@@ -17,8 +17,9 @@ import reactor.core.publisher.Flux;
 /**
  * 统一 AgentRuntime 执行器。
  *
- * <p>当前正式版本只接入 Relay Runtime。简单任务如果命中 SubAgent 会一次性执行；
- * 其他复杂、低置信或未命中的请求都会进入 Relay Runtime，并通过 RuntimeBinding 保持多轮会话。</p>
+ * <p>该类只依赖 AgentRuntime 防腐层接口，不关心底层实现是 Relay、HTTP、gRPC 还是其他企业内部
+ * Runtime。当前上线版本通过配置默认装配 Relay adapter；简单任务如果命中 SubAgent 会一次性执行，
+ * 其他复杂、低置信或未命中的请求都会进入当前 AgentRuntime，并通过 RuntimeBinding 保持多轮会话。</p>
  */
 @Service
 public class AgentRuntimeExecutor {

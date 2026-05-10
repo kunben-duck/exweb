@@ -7,6 +7,7 @@ import com.huawei.finance.front.one.domain.chat.ChatResponseMode;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
 import java.util.List;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -15,11 +16,13 @@ import reactor.core.publisher.Flux;
 /**
  * RelayAgent Runtime HTTP 适配器。
  *
- * <p>当前正式版本只保留 Relay Runtime。更换 RelayAgent 部署地址时，只需要调整
- * financeex.agent-runtime.base-url 和 stream-path。</p>
+ * <p>这是当前上线版本默认的 AgentRuntime adapter。它只出现在 infrastructure 层，
+ * application 层仍然依赖 AgentRuntime 接口。后续如果替换 Runtime 实现，应新增另一个
+ * AgentRuntime adapter，并通过 financeex.agent-runtime.provider 切换装配。</p>
  */
 @Component
 @EnableConfigurationProperties(RelayAgentProperties.class)
+@ConditionalOnProperty(prefix = "financeex.agent-runtime", name = "provider", havingValue = "relay", matchIfMissing = true)
 public class RelayAgentRuntime implements AgentRuntime {
     private final WebClient.Builder webClientBuilder;
     private final RelayAgentProperties properties;

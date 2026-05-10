@@ -228,11 +228,14 @@ updated_at
 - 用例库服务：`financeex.use-case-library.enabled`、`financeex.use-case-library.base-url`、`financeex.use-case-library.match-path`
 - 意图服务：`financeex.intent.enabled`、`financeex.intent.base-url`、`financeex.intent.recognize-path`
 - SubAgent：`financeex.sub-agent.agents.{agentCode}.endpoint`
+- AgentRuntime provider：`financeex.agent-runtime.provider`，当前默认 `relay`
 - Relay Runtime：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`
 
 SubAgent 当前只支持单轮 HTTP 文本流调用。Relay Runtime 是唯一 Runtime 实现。
 
-当前上线版本明确去掉 AgentScope 设计和实现，也不保留运行时 provider 选择器、AgentScope memory、AgentScope prompt assembler 或相关配置。复杂任务统一通过 Relay Runtime HTTP API 执行；项目内不再包含任何 AgentScope 架构分支。
+当前上线版本明确去掉 AgentScope 设计和实现，也不包含 AgentScope memory、AgentScope prompt assembler 或相关配置。复杂任务默认通过 Relay Runtime HTTP API 执行；项目内不再包含任何 AgentScope 架构分支。
+
+AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 `AgentRuntimeRequest` 契约，当前 `relay` provider 只是基础设施层默认 adapter。后续如果替换 Runtime 实现，应新增一个实现 `AgentRuntime` 的 adapter，并通过 `financeex.agent-runtime.provider` 选择装配，避免改动 `FinanceEXChatService` 主编排。
 
 ## 命名规范
 

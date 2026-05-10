@@ -82,6 +82,7 @@ export FINANCEEX_INTENT_RECOGNIZE_PATH=/v1/intents/recognize
 
 export FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENDPOINT=http://employee-reimbursement-agent:9300/v1/query
 
+export FINANCEEX_AGENT_RUNTIME_PROVIDER=relay
 export FINANCEEX_RELAY_AGENT_BASE_URL=http://relay-agent:9000
 export FINANCEEX_RELAY_AGENT_STREAM_PATH=/v1/agent/runs/stream
 ```
@@ -90,7 +91,9 @@ SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP �
 
 ## 上线版本边界
 
-当前上线版本明确不包含 AgentScope 设计和实现，也不保留运行时 provider 选择器。复杂任务统一通过 Relay Runtime HTTP API 执行；如果后续需要接入新的 Runtime，应通过新的正式架构评审重新设计，不在当前版本预留半成品扩展点。
+当前上线版本明确不包含 AgentScope 设计和实现，也不包含 AgentScope memory、prompt assembler 或相关配置。复杂任务默认通过 Relay Runtime HTTP API 执行。
+
+AgentRuntime 防腐层必须保留：应用层只依赖 `AgentRuntime` 接口和 `AgentRuntimeRequest` 契约，不依赖 Relay 的 HTTP 协议细节。当前 `financeex.agent-runtime.provider=relay` 只装配 Relay adapter；后续替换 Runtime 实现时，应新增另一个 `AgentRuntime` adapter，并通过 provider 配置切换。
 
 ## 启动
 

@@ -2,7 +2,6 @@ package com.huawei.finance.front.one.infrastructure.agent.runtime.relay;
 
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
-import com.huawei.finance.front.one.domain.agent.AgentRuntimeProvider;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatResponseMode;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
@@ -14,10 +13,10 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 
 /**
- * RelayAgent AgentRuntime provider。
+ * RelayAgent Runtime HTTP 适配器。
  *
- * <p>该 provider 始终转发到配置的外部完整 Agent 服务。更换 RelayAgent 部署地址时，只需要调整
- * financeex.agent-runtime.providers.relay-agent.base-url 和 stream-path。</p>
+ * <p>当前正式版本只保留 Relay Runtime。更换 RelayAgent 部署地址时，只需要调整
+ * financeex.agent-runtime.base-url 和 stream-path。</p>
  */
 @Component
 @EnableConfigurationProperties(RelayAgentProperties.class)
@@ -28,16 +27,6 @@ public class RelayAgentRuntime implements AgentRuntime {
     public RelayAgentRuntime(WebClient.Builder webClientBuilder, RelayAgentProperties properties) {
         this.webClientBuilder = webClientBuilder;
         this.properties = properties;
-    }
-
-    @Override
-    public AgentRuntimeProvider provider() {
-        return AgentRuntimeProvider.RELAY_AGENT;
-    }
-
-    @Override
-    public boolean supports(AgentRuntimeProvider provider) {
-        return provider == AgentRuntimeProvider.RELAY_AGENT;
     }
 
     @Override
@@ -55,11 +44,11 @@ public class RelayAgentRuntime implements AgentRuntime {
                     .map(this::joinDeltas)
                     .map(text -> (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), text))
                     .flux()
-                    .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId(), "ACTIVE"));
+                    .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId()));
         }
         return deltas
                 .map(delta -> (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), delta))
-                .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId(), "ACTIVE"));
+                .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId()));
     }
 
     private String joinDeltas(List<String> deltas) {

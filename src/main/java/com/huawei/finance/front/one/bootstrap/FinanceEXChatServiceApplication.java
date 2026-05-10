@@ -9,11 +9,10 @@ import org.springframework.context.annotation.ComponentScan;
 @ComponentScan(basePackages = "com.huawei.finance.front.one")
 @MapperScan(basePackages = {
         "com.huawei.finance.front.one.infrastructure.memory.mybatis",
-        "com.huawei.finance.front.one.infrastructure.agent.binding.mybatis",
         "com.huawei.finance.front.one.infrastructure.persistence.mybatis",
+        "com.huawei.finance.front.one.infrastructure.runtime.binding.mybatis",
         "com.huawei.finance.front.one.infrastructure.session.persistence.mybatis",
-        "com.huawei.finance.front.one.infrastructure.storage.mybatis",
-        "com.huawei.finance.front.one.infrastructure.task.mybatis"
+        "com.huawei.finance.front.one.infrastructure.storage.mybatis"
 })
 public class FinanceEXChatServiceApplication {
     public static void main(String[] args) {

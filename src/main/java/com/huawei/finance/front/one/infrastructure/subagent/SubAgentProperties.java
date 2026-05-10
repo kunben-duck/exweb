@@ -8,8 +8,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * 第三方 SubAgent 调用配置。
  *
- * <p>配置项只描述协议、地址和交互模式，不把具体中台业务响应结构写入主流程。自然语言 Agent
- * 默认通过契约 Prompt 约束输出；私有协议差异应收敛在 adapter 层。</p>
+ * <p>配置项只描述 SubAgent 业务编码和 HTTP 地址，不把具体中台业务响应结构写入主流程。
+ * 当前正式版本 SubAgent 仅支持单轮 HTTP 文本流调用。</p>
  */
 @ConfigurationProperties(prefix = "financeex.sub-agent")
 public class SubAgentProperties {
@@ -37,31 +37,14 @@ public class SubAgentProperties {
     public static class AgentEndpoint {
         /** 该 SubAgent 是否启用。 */
         private boolean enabled = true;
-        /** SubAgent 调用协议，首版支持 http，后续可扩展 a2a。 */
-        private String protocol = "http";
-        /** SubAgent 服务 endpoint。 */
+        /** SubAgent HTTP 流式接口完整地址。 */
         private String endpoint;
-        /** 交互模式：natural-language-contract 或 raw-text。 */
-        private String interactionMode = "raw-text";
-        /** 任务目标，用于自然语言契约 Prompt。 */
-        private String taskGoal;
-        /** 任务领域，用于 TaskCard 和 Prompt 诊断。 */
-        private String taskDomain;
-
         public boolean isEnabled() {
             return enabled;
         }
 
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
-        }
-
-        public String getProtocol() {
-            return protocol;
-        }
-
-        public void setProtocol(String protocol) {
-            this.protocol = protocol;
         }
 
         public String getEndpoint() {
@@ -72,28 +55,5 @@ public class SubAgentProperties {
             this.endpoint = endpoint;
         }
 
-        public String getInteractionMode() {
-            return interactionMode;
-        }
-
-        public void setInteractionMode(String interactionMode) {
-            this.interactionMode = interactionMode;
-        }
-
-        public String getTaskGoal() {
-            return taskGoal;
-        }
-
-        public void setTaskGoal(String taskGoal) {
-            this.taskGoal = taskGoal;
-        }
-
-        public String getTaskDomain() {
-            return taskDomain;
-        }
-
-        public void setTaskDomain(String taskDomain) {
-            this.taskDomain = taskDomain;
-        }
     }
 }

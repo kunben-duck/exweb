@@ -13,7 +13,7 @@ import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 class S3ObjectStorageTest {
     @Test
     void writesObjectToTenantScopedS3Key() {
-        FakeS3Client s3Client = new FakeS3Client();
+        RecordingS3Client s3Client = new RecordingS3Client();
         S3ObjectStorage storage = new S3ObjectStorage(s3Client, "financeex-documents", "uploads");
 
         StoredObject stored = storage.putObject("tenant/a", "../invoice image.pdf", "application/pdf", 3,
@@ -30,7 +30,7 @@ class S3ObjectStorageTest {
         assertThat(stored.sizeBytes()).isEqualTo(3);
     }
 
-    private static class FakeS3Client implements S3Client {
+    private static class RecordingS3Client implements S3Client {
         private PutObjectRequest lastRequest;
         private RequestBody lastBody;
 
@@ -48,7 +48,7 @@ class S3ObjectStorageTest {
 
         @Override
         public void close() {
-            // fake client has no resources to close
+            // Test client has no resources to close.
         }
     }
 }

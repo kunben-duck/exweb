@@ -51,34 +51,28 @@ financeex:
       user-id: ${FINANCEEX_DEV_USER_ID:}
       username: ${FINANCEEX_DEV_USERNAME:}
   intent:
+    # v3 中意图服务只是可选路由信号，默认关闭；关闭时首轮请求不会调用该 HTTP API。
+    enabled: ${FINANCEEX_INTENT_ENABLED:false}
     base-url: ${FINANCEEX_INTENT_BASE_URL:http://localhost:9200}
     recognize-path: ${FINANCEEX_INTENT_RECOGNIZE_PATH:/v1/intents/recognize}
     timeout: 5s
   use-case-library:
+    # v3 中用例库只是可选路由信号，默认关闭；关闭时首轮请求不会调用该 HTTP API。
+    enabled: ${FINANCEEX_USE_CASE_LIBRARY_ENABLED:false}
     min-score: 0.85
     base-url: ${FINANCEEX_USE_CASE_LIBRARY_BASE_URL:http://localhost:9100}
     match-path: ${FINANCEEX_USE_CASE_LIBRARY_MATCH_PATH:/v1/use-cases/match}
     timeout: 5s
-  agent-binding:
+  runtime-binding:
     ttl: 3d
-    redis-key-prefix: fin_ex:agent_binding
+    redis-key-prefix: fin_ex:runtime_binding
     redis-ttl: 3d
-  task:
-    ttl: 3d
-    redis:
-      active-key-prefix: fin_ex:task:active
-      card-key-prefix: fin_ex:task:card
-      ttl: 3d
   sub-agent:
     timeout: 30s
     agents:
       employee_reimbursement_agent:
         enabled: ${FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENABLED:true}
-        protocol: http
-        interaction-mode: natural-language-contract
         endpoint: ${FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENDPOINT:}
-        task-goal: 创建并推进员工报销单
-        task-domain: employee_reimbursement
   memory:
     short-term:
       storage:
@@ -99,17 +93,9 @@ financeex:
     long-term:
       provider: disabled
   agent-runtime:
-    provider: ${FINANCEEX_AGENT_RUNTIME_PROVIDER:relay-agent}
-    providers:
-      relay-agent:
-        base-url: ${FINANCEEX_RELAY_AGENT_BASE_URL:http://localhost:9000}
-        stream-path: ${FINANCEEX_RELAY_AGENT_STREAM_PATH:/v1/agent/runs/stream}
-        timeout: 60s
-      agentscope:
-        base-url: http://localhost:8000/v1
-        api-key: dummy-key
-        model-name: finance-llm
-        max-iters: 8
+    base-url: ${FINANCEEX_RELAY_AGENT_BASE_URL:http://localhost:9000}
+    stream-path: ${FINANCEEX_RELAY_AGENT_STREAM_PATH:/v1/agent/runs/stream}
+    timeout: 60s
   storage:
     provider: ${FINANCEEX_STORAGE_PROVIDER:local}
     local-path: ${java.io.tmpdir}/financeex-docs

@@ -10,7 +10,7 @@ import com.huawei.finance.front.one.domain.usecase.UseCaseMatchResult;
 /**
  * 聊天请求路由策略。
  *
- * <p>RoutingPolicy 只做路线裁决；多轮续接由 AgentBinding 优先处理，用例库和意图服务只负责提供路由信号。</p>
+ * <p>RoutingPolicy 只做路线裁决；Runtime 多轮续接由 RuntimeBinding 处理，用例库和意图服务只负责提供路由信号。</p>
  *
  * <p>这里故意不调用任何外部服务，也不创建 binding。它是纯领域策略，便于单元测试覆盖各种命中、
  * 低置信和 unsupported 分支。</p>

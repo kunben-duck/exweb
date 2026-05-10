@@ -11,7 +11,7 @@ import java.util.Map;
  * @param sessionId 前端聊天会话标识。
  * @param sequence 事件在本轮 run 内的序号。
  * @param createdAt 事件创建时间。
- * @param payload 完成事件载荷，包含 message 状态、taskStatus 等扩展字段。
+ * @param payload 完成事件载荷，包含 message 状态以及下游执行诊断字段。
  */
 public record MessageCompletedEvent(
         String runId,
@@ -22,10 +22,6 @@ public record MessageCompletedEvent(
 ) implements ChatEvent {
     public static MessageCompletedEvent of(String runId, String sessionId) {
         return new MessageCompletedEvent(runId, sessionId, 0, Instant.now(), Map.of("status", "MESSAGE_COMPLETED"));
-    }
-
-    public static MessageCompletedEvent of(String runId, String sessionId, String taskStatus) {
-        return new MessageCompletedEvent(runId, sessionId, 0, Instant.now(), Map.of("status", "MESSAGE_COMPLETED", "taskStatus", taskStatus));
     }
 
     public static MessageCompletedEvent of(String runId, String sessionId, Map<String, Object> payload) {

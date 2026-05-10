@@ -25,9 +25,7 @@ class ArchitectureNamingTest {
     void redisPrefixesUseFinExNaming() throws Exception {
         String application = Files.readString(Path.of("src/main/resources/application.yml"));
 
-        assertThat(application).contains("redis-key-prefix: fin_ex:agent_binding");
-        assertThat(application).contains("active-key-prefix: fin_ex:task:active");
-        assertThat(application).contains("card-key-prefix: fin_ex:task:card");
+        assertThat(application).contains("redis-key-prefix: fin_ex:runtime_binding");
         assertThat(application).contains("key-prefix: fin_ex:memory:short_term");
         assertThat(application).contains("key-prefix: fin_ex:memory:working");
     }

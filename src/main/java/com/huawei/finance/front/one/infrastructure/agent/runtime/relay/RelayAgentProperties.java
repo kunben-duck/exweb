@@ -3,7 +3,7 @@ package com.huawei.finance.front.one.infrastructure.agent.runtime.relay;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
-@ConfigurationProperties(prefix = "financeex.agent-runtime.providers.relay-agent")
+@ConfigurationProperties(prefix = "financeex.agent-runtime")
 public class RelayAgentProperties {
     private String baseUrl = "http://localhost:9000";
     private String streamPath = "/v1/agent/runs/stream";

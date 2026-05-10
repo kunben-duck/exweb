@@ -6,8 +6,6 @@ import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatResponseMode;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
-import com.huawei.finance.front.one.domain.task.SubAgentTaskRequest;
-import com.huawei.finance.front.one.domain.task.SubAgentTaskResult;
 import java.util.List;
 import java.util.Map;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -20,43 +18,19 @@ import reactor.core.publisher.Flux;
 public class ConfiguredSubAgentClient implements SubAgentClient {
     private final WebClient.Builder webClientBuilder;
     private final SubAgentProperties properties;
-    private final SubAgentTaskPromptBuilder promptBuilder;
-    private final SubAgentResponseNormalizer responseNormalizer;
 
-    public ConfiguredSubAgentClient(WebClient.Builder webClientBuilder, SubAgentProperties properties,
-                                    SubAgentTaskPromptBuilder promptBuilder, SubAgentResponseNormalizer responseNormalizer) {
+    public ConfiguredSubAgentClient(WebClient.Builder webClientBuilder, SubAgentProperties properties) {
         this.webClientBuilder = webClientBuilder;
         this.properties = properties;
-        this.promptBuilder = promptBuilder;
-        this.responseNormalizer = responseNormalizer;
     }
 
     @Override
     public Flux<ChatEvent> query(AgentQueryRequest request) {
-        // SubAgent 以 agentCode 为稳定业务标识，具体 endpoint/protocol 在配置里解析。
-        // 这样用例库和意图服务只需要返回 agentCode，不需要知道部署地址或协议细节。
+        // SubAgent 以 agentCode 为稳定业务标识，具体 HTTP endpoint 在配置里解析。
+        // 这样用例库和意图服务只需要返回 agentCode，不需要知道部署地址。
         SubAgentProperties.AgentEndpoint endpoint = endpoint(request.agentCode());
         if (endpoint == null || !endpoint.isEnabled() || endpoint.getEndpoint() == null || endpoint.getEndpoint().isBlank()) {
             return unavailable(request, "未找到可用 SubAgent 配置: " + request.agentCode());
-        }
-        if (!"http".equalsIgnoreCase(endpoint.getProtocol())) {
-            return Flux.just(
-                    (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), "SubAgent 协议暂不支持: " + endpoint.getProtocol()),
-                    (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), "FAILED")
-            );
-        }
-        String interactionMode = endpoint.getInteractionMode() == null || endpoint.getInteractionMode().isBlank()
-                ? "raw-text"
-                : endpoint.getInteractionMode();
-        if ("natural-language-contract".equalsIgnoreCase(interactionMode)) {
-            return queryWithNaturalLanguageContract(request, endpoint);
-        }
-        if (!"raw-text".equalsIgnoreCase(interactionMode)) {
-            return Flux.just(
-                    (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), "SubAgent 交互模式暂不支持: " + interactionMode),
-                    (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), completionPayload(request,
-                            SubAgentTaskResult.failed("SubAgent 交互模式暂不支持: " + interactionMode)))
-            );
         }
         Flux<String> deltas = webClientBuilder.build()
                 .post()
@@ -70,7 +44,8 @@ public class ConfiguredSubAgentClient implements SubAgentClient {
             // 前端仍只理解 message.delta/message.completed，不感知 SubAgent 协议。
             return deltas
                     .map(delta -> (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), delta))
-                    .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId(), "COMPLETED"))
+                    .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId(),
+                            completionPayload(request, "COMPLETED", null)))
                     .onErrorResume(ex -> unavailable(request, "SubAgent 调用失败: " + ex.getMessage()));
         }
         // block 模式下先聚合下游片段，再作为单个 assistant delta 返回，保持前端事件结构一致。
@@ -78,26 +53,8 @@ public class ConfiguredSubAgentClient implements SubAgentClient {
                 .map(this::join)
                 .flatMapMany(text -> Flux.just(
                         (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), text),
-                        (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), "COMPLETED")
-                ))
-                .onErrorResume(ex -> unavailable(request, "SubAgent 调用失败: " + ex.getMessage()));
-    }
-
-    private Flux<ChatEvent> queryWithNaturalLanguageContract(AgentQueryRequest request, SubAgentProperties.AgentEndpoint endpoint) {
-        SubAgentTaskRequest taskRequest = promptBuilder.build(request, endpoint);
-        Flux<String> response = webClientBuilder.build()
-                .post()
-                .uri(endpoint.getEndpoint())
-                .bodyValue(taskRequest)
-                .retrieve()
-                .bodyToFlux(String.class)
-                .timeout(properties.getTimeout());
-        return response.collectList()
-                .map(this::join)
-                .map(responseNormalizer::normalize)
-                .flatMapMany(result -> Flux.just(
-                        (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), result.message()),
-                        (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(), completionPayload(request, result))
+                        (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(),
+                                completionPayload(request, "COMPLETED", null))
                 ))
                 .onErrorResume(ex -> unavailable(request, "SubAgent 调用失败: " + ex.getMessage()));
     }
@@ -106,7 +63,7 @@ public class ConfiguredSubAgentClient implements SubAgentClient {
         return Flux.just(
                 (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), message),
                 (ChatEvent) MessageCompletedEvent.of(request.runId(), request.sessionId(),
-                        completionPayload(request, SubAgentTaskResult.failed(message)))
+                        completionPayload(request, "FAILED", message))
         );
     }
 
@@ -125,18 +82,12 @@ public class ConfiguredSubAgentClient implements SubAgentClient {
         return properties.getAgents().get(agentCode.replace("_", "-"));
     }
 
-    private Map<String, Object> completionPayload(AgentQueryRequest request, SubAgentTaskResult result) {
-        return Map.ofEntries(
-                Map.entry("taskStatus", result.taskStatus().name()),
-                Map.entry("rawNormalizedStatus", result.rawNormalizedStatus().name()),
-                Map.entry("requiredInputs", result.requiredInputs()),
-                Map.entry("businessObjectRefs", result.businessObjectRefs()),
-                Map.entry("confidence", result.confidence()),
-                Map.entry("message", result.message() == null ? "" : result.message()),
-                Map.entry("agentCode", request.agentCode() == null ? "" : request.agentCode()),
-                Map.entry("taskId", request.taskCard() == null ? "" : request.taskCard().taskId()),
-                Map.entry("agentSessionId", result.agentSessionId() == null ? "" : result.agentSessionId()),
-                Map.entry("confirmationQuestion", result.confirmationQuestion() == null ? "" : result.confirmationQuestion())
+    private Map<String, Object> completionPayload(AgentQueryRequest request, String subAgentStatus, String errorMessage) {
+        return Map.of(
+                "agentCode", request.agentCode() == null ? "" : request.agentCode(),
+                "subAgentStatus", subAgentStatus,
+                "executionMode", "single_turn",
+                "errorMessage", errorMessage == null ? "" : errorMessage
         );
     }
 }

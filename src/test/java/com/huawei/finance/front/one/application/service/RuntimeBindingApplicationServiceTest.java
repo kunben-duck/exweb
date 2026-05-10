@@ -67,9 +67,36 @@ class RuntimeBindingApplicationServiceTest {
 
         RuntimeBinding binding = service.create("t", "u", "s", "run1");
 
-        assertThat(binding.provider()).isEqualTo(RuntimeBindingApplicationService.RELAY_AGENT_PROVIDER);
+        assertThat(binding.provider()).isEqualTo(RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER);
         assertThat(binding.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
         assertThat(cache.get("t", "u", "s")).contains(binding);
+    }
+
+    @Test
+    void ignoresCachedBindingFromDifferentRuntimeProvider() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        cache.put(binding("legacy-runtime", RuntimeBindingStatus.ACTIVE));
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        Optional<RuntimeBinding> found = service.findActive("t", "u", "s");
+
+        assertThat(found).isEmpty();
+        assertThat(cache.get("t", "u", "s")).isEmpty();
+        assertThat(repository.findActiveCalls).isEqualTo(1);
+    }
+
+    @Test
+    void repositoryLookupUsesCurrentRuntimeProvider() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        repository.saved = binding("another-runtime", RuntimeBindingStatus.ACTIVE);
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        Optional<RuntimeBinding> found = service.findActive("t", "u", "s");
+
+        assertThat(found).isEmpty();
+        assertThat(cache.get("t", "u", "s")).isEmpty();
     }
 
     @Test
@@ -116,18 +143,22 @@ class RuntimeBindingApplicationServiceTest {
 
     private RuntimeBindingApplicationService service(InMemoryRuntimeBindingRepository repository,
                                                     InMemoryRuntimeBindingCache cache) {
-        return new RuntimeBindingApplicationService(repository, cache, new FixedIdGenerator(), Duration.ofDays(3));
+        return new RuntimeBindingApplicationService(repository, cache, new FixedIdGenerator(), Duration.ofDays(3), "relay");
     }
 
     private RuntimeBinding binding(RuntimeBindingStatus status) {
+        return binding("relay", status);
+    }
+
+    private RuntimeBinding binding(String provider, RuntimeBindingStatus status) {
         Instant now = Instant.now();
-        return new RuntimeBinding("binding1", "t", "u", "s", "relay-agent",
+        return new RuntimeBinding("binding1", "t", "u", "s", provider,
                 null, status, "run", now.plus(Duration.ofDays(1)), now, now, Map.of());
     }
 
     private RuntimeBinding expiredBinding() {
         Instant now = Instant.now();
-        return new RuntimeBinding("binding1", "t", "u", "s", "relay-agent",
+        return new RuntimeBinding("binding1", "t", "u", "s", "relay",
                 null, RuntimeBindingStatus.ACTIVE, "run", now.minus(Duration.ofMinutes(1)), now, now, Map.of());
     }
 
@@ -136,9 +167,9 @@ class RuntimeBindingApplicationServiceTest {
         private int findActiveCalls;
 
         @Override
-        public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId) {
+        public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId, String provider) {
             findActiveCalls++;
-            return Optional.ofNullable(saved);
+            return Optional.ofNullable(saved).filter(binding -> provider.equals(binding.provider()));
         }
 
         @Override

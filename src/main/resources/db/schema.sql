@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS fin_ex_runtime_binding_t (
     updated_at TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_fin_ex_runtime_binding_owner_session_status
-    ON fin_ex_runtime_binding_t(tenant_id, user_id, chat_session_id, status);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_runtime_binding_owner_session_provider_status
+    ON fin_ex_runtime_binding_t(tenant_id, user_id, chat_session_id, provider, status);
 CREATE INDEX IF NOT EXISTS idx_fin_ex_runtime_binding_expires_at
     ON fin_ex_runtime_binding_t(expires_at);

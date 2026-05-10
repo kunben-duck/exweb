@@ -29,8 +29,8 @@ public class OpenGaussRuntimeBindingRepository implements RuntimeBindingReposito
     }
 
     @Override
-    public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId) {
-        return Optional.ofNullable(mapper.findActive(tenantId, userId, sessionId)).map(this::toDomain);
+    public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId, String provider) {
+        return Optional.ofNullable(mapper.findActive(tenantId, userId, sessionId, provider)).map(this::toDomain);
     }
 
     @Override

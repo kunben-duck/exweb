@@ -196,7 +196,7 @@ flowchart TB
 
 ## RuntimeBinding
 
-RuntimeBinding 只维护前端 chat session 与 Relay Runtime session 的关系。
+RuntimeBinding 只维护前端 chat session 与当前 AgentRuntime provider session 的关系。当前上线默认 provider 是 `relay`。
 
 ```text
 Redis key:

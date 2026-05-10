@@ -52,6 +52,7 @@ public interface RuntimeBindingMapper {
             WHERE tenant_id = #{tenantId}
               AND user_id = #{userId}
               AND chat_session_id = #{sessionId}
+              AND provider = #{provider}
               AND status = 'ACTIVE'
               AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
             ORDER BY updated_at DESC
@@ -70,5 +71,6 @@ public interface RuntimeBindingMapper {
     })
     RuntimeBindingRow findActive(@Param("tenantId") String tenantId,
                                  @Param("userId") String userId,
-                                 @Param("sessionId") String sessionId);
+                                 @Param("sessionId") String sessionId,
+                                 @Param("provider") String provider);
 }

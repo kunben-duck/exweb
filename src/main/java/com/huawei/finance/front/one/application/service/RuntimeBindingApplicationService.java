@@ -15,20 +15,21 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
- * Relay Runtime 多轮绑定应用服务。
+ * AgentRuntime 多轮绑定应用服务。
  *
- * <p>简单 SubAgent 不创建任何绑定；只有进入 Relay Runtime 的复杂任务才会在这里建立会话续接索引。
- * 状态变更先写 openGauss，再刷新或删除 Redis 热缓存。</p>
+ * <p>简单 SubAgent 不创建任何绑定；只有进入当前 AgentRuntime provider 的复杂任务才会在这里建立
+ * 会话续接索引。状态变更先写 openGauss，再刷新或删除 Redis 热缓存。</p>
  */
 @Service
 public class RuntimeBindingApplicationService {
-    /** 当前正式版本唯一 Runtime provider 编码。 */
-    public static final String RELAY_AGENT_PROVIDER = "relay-agent";
+    /** 当前上线版本默认 AgentRuntime provider 编码。 */
+    public static final String DEFAULT_RUNTIME_PROVIDER = "relay";
 
     private final RuntimeBindingRepository repository;
     private final RuntimeBindingCache cache;
     private final IdGenerator idGenerator;
     private final Duration ttl;
+    private final String runtimeProvider;
 
     /**
      * 创建 Runtime 绑定服务。
@@ -37,14 +38,17 @@ public class RuntimeBindingApplicationService {
      * @param cache RuntimeBinding Redis 热缓存。
      * @param idGenerator 统一 ID 生成器。
      * @param ttl Runtime 绑定可续接窗口。
+     * @param runtimeProvider 当前装配的 AgentRuntime provider 编码。
      */
     public RuntimeBindingApplicationService(RuntimeBindingRepository repository, RuntimeBindingCache cache,
                                             IdGenerator idGenerator,
-                                            @Value("${financeex.runtime-binding.ttl:3d}") Duration ttl) {
+                                            @Value("${financeex.runtime-binding.ttl:3d}") Duration ttl,
+                                            @Value("${financeex.agent-runtime.provider:relay}") String runtimeProvider) {
         this.repository = repository;
         this.cache = cache;
         this.idGenerator = idGenerator;
         this.ttl = ttl == null ? Duration.ofDays(3) : ttl;
+        this.runtimeProvider = normalizeProvider(runtimeProvider);
     }
 
     /**
@@ -59,20 +63,21 @@ public class RuntimeBindingApplicationService {
         Instant now = Instant.now();
         Optional<RuntimeBinding> cached = cache.get(tenantId, userId, sessionId);
         if (cached.isPresent()) {
-            if (cached.get().routableAt(now)) {
+            if (routableForCurrentProvider(cached.get(), now)) {
                 return cached;
             }
-            // Redis 是热缓存，不是事实源；发现过期或不可路由的缓存后立即清理，避免后续请求反复读到脏索引。
+            // Redis 是热缓存，不是事实源；发现过期、不可路由或 provider 不匹配的缓存后立即清理，
+            // 避免 Runtime 切换后把旧实现的 runtimeSessionId 误传给新 Runtime。
             cache.evict(tenantId, userId, sessionId);
         }
-        Optional<RuntimeBinding> persisted = repository.findActive(tenantId, userId, sessionId)
-                .filter(binding -> binding.routableAt(now));
+        Optional<RuntimeBinding> persisted = repository.findActive(tenantId, userId, sessionId, runtimeProvider)
+                .filter(binding -> routableForCurrentProvider(binding, now));
         persisted.ifPresent(cache::put);
         return persisted;
     }
 
     /**
-     * 为复杂任务创建新的 Relay Runtime 绑定。
+     * 为复杂任务创建新的 AgentRuntime 绑定。
      *
      * @param tenantId 租户标识。
      * @param userId 用户标识。
@@ -83,7 +88,7 @@ public class RuntimeBindingApplicationService {
     public RuntimeBinding create(String tenantId, String userId, String sessionId, String runId) {
         Instant now = Instant.now();
         String id = idGenerator.newId("runtime_binding", IdGenerateContext.of(tenantId, userId, sessionId));
-        RuntimeBinding binding = new RuntimeBinding(id, tenantId, userId, sessionId, RELAY_AGENT_PROVIDER,
+        RuntimeBinding binding = new RuntimeBinding(id, tenantId, userId, sessionId, runtimeProvider,
                 null, RuntimeBindingStatus.ACTIVE, runId, expiresAt(), now, now, Map.of());
         return save(binding);
     }
@@ -149,5 +154,13 @@ public class RuntimeBindingApplicationService {
 
     private Instant expiresAt() {
         return Instant.now().plus(ttl);
+    }
+
+    private boolean routableForCurrentProvider(RuntimeBinding binding, Instant now) {
+        return binding.routableAt(now) && runtimeProvider.equals(binding.provider());
+    }
+
+    private String normalizeProvider(String provider) {
+        return provider == null || provider.isBlank() ? DEFAULT_RUNTIME_PROVIDER : provider.trim();
     }
 }

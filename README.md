@@ -46,7 +46,7 @@ export FINANCEEX_DEV_USERNAME=developer
 
 - `sessionId`：前端聊天会话 ID，一次聊天会话内可以包含多轮用户请求。
 - `runId`：SuperAgent 为每一轮用户请求生成的执行追踪 ID。
-- `runtimeSessionId`：Relay Runtime 自己的会话 ID，由 Runtime 返回后保存在 RuntimeBinding 中，下一轮续接时带回。
+- `runtimeSessionId`：当前 AgentRuntime provider 自己的会话 ID，由 Runtime 返回后保存在 RuntimeBinding 中，下一轮续接时带回。
 
 `runId` 不是长期任务会话；它是单轮执行 correlation id。事件表 `fin_ex_chat_event_t.run_id` 和绑定表 `fin_ex_runtime_binding_t.last_run_id` 都用它做运行轨迹和排障定位。
 

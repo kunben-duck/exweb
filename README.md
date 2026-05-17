@@ -154,13 +154,13 @@ AgentRuntime 防腐层必须保留：应用层只依赖 `AgentRuntime` 接口和
 
 ## 启动
 
-本地没有 PostgreSQL/Redis/MinIO 时，可以先启动 Docker 依赖：
+本地没有 PostgreSQL/Redis 时，可以先启动 Docker 依赖；MinIO 仍保留为本地对象存储兼容性验证环境：
 
 ```bash
-docker compose up -d postgres redis minio minio-init
+docker compose up -d postgres redis
 ```
 
-PostgreSQL 容器会创建 `financeex` 数据库和 `supervisor_dev` schema，并执行 `src/main/resources/db/schema.sql`。MinIO 控制台地址是 `http://localhost:9001`，本地账号密码为 `fin_supervisor / kunone123`，默认 bucket 为 `financeex-documents`。
+PostgreSQL 容器会创建 `financeex` 数据库和 `supervisor_dev` schema，并执行 `src/main/resources/db/schema.sql`。如需本地对象存储环境，可额外启动 `docker compose up -d minio minio-init`。
 
 ```bash
 mvn spring-boot:run
@@ -169,7 +169,7 @@ mvn spring-boot:run
 ## 文档存储
 
 文档能力分为“文档库资产”和“对象内容”两层：前端仍然把本地文件上传到 FinanceEXChatService 统一后端，
-后端再通过 `ObjectStorage` 防腐层写入本地文件系统、MinIO、AWS S3 或华为 OBS S3 兼容接口。
+后端再通过 `ObjectStorage` 防腐层写入本地文件系统或华为 OBS S3 对象存储。
 openGauss 的 `fin_ex_uploaded_document_t` 保存文档库元数据，聊天请求只引用 `documentId`，不会把文件正文放进消息体。
 
 文档接口：
@@ -204,14 +204,13 @@ openGauss 的 `fin_ex_uploaded_document_t` 保存文档库元数据，聊天请�
 financeex.storage.provider: local
 ```
 
-本地切换到 MinIO：
+切换到华为 OBS S3：
 
 ```bash
-export FINANCEEX_STORAGE_PROVIDER=s3
-export FINANCEEX_S3_BUCKET=financeex-documents
-export FINANCEEX_S3_REGION=us-east-1
-export FINANCEEX_S3_ENDPOINT=http://localhost:9000
-export FINANCEEX_S3_ACCESS_KEY=fin_supervisor
-export FINANCEEX_S3_SECRET_KEY=kunone123
-export FINANCEEX_S3_PATH_STYLE_ACCESS_ENABLED=true
+export FINANCEEX_STORAGE_PROVIDER=huawei-s3
+export FINANCEEX_HUAWEI_S3_BUCKET=financeex-documents
+export FINANCEEX_HUAWEI_S3_ENDPOINT=https://obs.cn-north-4.myhuaweicloud.com
+export FINANCEEX_HUAWEI_S3_ACCESS_KEY=your-access-key
+export FINANCEEX_HUAWEI_S3_SECRET_KEY=your-secret-key
+export FINANCEEX_HUAWEI_S3_KEY_PREFIX=documents
 ```

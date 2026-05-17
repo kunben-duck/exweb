@@ -1,5 +1,8 @@
 package com.huawei.finance.front.one.infrastructure.storage;
 
+import com.obs.services.model.ObjectMetadata;
+import com.obs.services.model.ObsObject;
+import com.obs.services.model.PutObjectRequest;
 import com.huawei.finance.front.one.application.integration.document.ObjectStorage;
 import com.huawei.finance.front.one.domain.document.StoredObject;
 import com.huawei.finance.front.one.domain.document.StoredObjectContent;
@@ -11,31 +14,28 @@ import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
-import software.amazon.awssdk.core.sync.RequestBody;
-import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.GetObjectRequest;
-import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 /**
- * S3 对象存储实现。
+ * 华为 OBS S3 对象存储实现。
  *
- * <p>文档二进制内容进入 S3，openGauss 仍只保存 bucket、objectKey、contentType 等元数据。
+ * <p>文档二进制内容进入华为对象存储，openGauss 仍只保存 bucket、objectKey、contentType 等元数据。
+ * provider 使用 {@code huawei-s3}，表示当前通过华为 OBS Java SDK 接入华为 S3/OBS 能力。
  * objectKey 按 prefix/tenant/date/uuid-filename 组织，既隔离租户，又避免同名文件覆盖。</p>
  */
 @Component
-@ConditionalOnProperty(prefix = "financeex.storage", name = "provider", havingValue = "s3")
-public class S3ObjectStorage implements ObjectStorage {
+@ConditionalOnProperty(prefix = "financeex.storage", name = "provider", havingValue = "huawei-s3")
+public class HuaweiS3ObjectStorage implements ObjectStorage {
     private static final DateTimeFormatter DATE_PATH = DateTimeFormatter.ofPattern("yyyy/MM/dd").withZone(ZoneOffset.UTC);
 
-    private final S3Client s3Client;
+    private final HuaweiS3Operations huaweiS3;
     private final String bucket;
     private final String keyPrefix;
 
-    public S3ObjectStorage(S3Client s3Client,
-                           @Value("${financeex.storage.s3.bucket:}") String bucket,
-                           @Value("${financeex.storage.s3.key-prefix:documents}") String keyPrefix) {
-        this.s3Client = s3Client;
-        this.bucket = requireText(bucket, "S3 bucket 不能为空");
+    public HuaweiS3ObjectStorage(HuaweiS3Operations huaweiS3,
+                                 @Value("${financeex.storage.huawei-s3.bucket:}") String bucket,
+                                 @Value("${financeex.storage.huawei-s3.key-prefix:documents}") String keyPrefix) {
+        this.huaweiS3 = huaweiS3;
+        this.bucket = requireText(bucket, "Huawei S3 bucket 不能为空");
         this.keyPrefix = normalizePrefix(keyPrefix);
     }
 
@@ -46,38 +46,41 @@ public class S3ObjectStorage implements ObjectStorage {
         }
         try {
             String objectKey = buildObjectKey(tenantId, originalFilename);
-            PutObjectRequest.Builder request = PutObjectRequest.builder()
-                    .bucket(bucket)
-                    .key(objectKey);
+            ObjectMetadata metadata = new ObjectMetadata();
+            metadata.setContentLength(sizeBytes);
             if (hasText(contentType)) {
-                request.contentType(contentType.trim());
+                metadata.setContentType(contentType.trim());
             }
-            s3Client.putObject(request.build(), RequestBody.fromInputStream(inputStream, sizeBytes));
+            PutObjectRequest request = new PutObjectRequest(bucket, objectKey, inputStream);
+            request.setMetadata(metadata);
+            request.setAutoClose(false);
+            huaweiS3.putObject(request);
             return new StoredObject(bucket, objectKey, sizeBytes, contentType);
         } catch (Exception ex) {
-            throw new IllegalStateException("文档写入 S3 对象存储失败", ex);
+            throw new IllegalStateException("文档写入 Huawei S3 对象存储失败", ex);
         }
     }
 
     @Override
     public StoredObjectContent getObject(String bucket, String objectKey) {
         try {
-            GetObjectRequest request = GetObjectRequest.builder()
-                    .bucket(requireText(bucket, "S3 bucket 不能为空"))
-                    .key(requireText(objectKey, "S3 objectKey 不能为空"))
-                    .build();
-            var response = s3Client.getObject(request);
+            ObsObject response = huaweiS3.getObject(
+                    requireText(bucket, "Huawei S3 bucket 不能为空"),
+                    requireText(objectKey, "Huawei S3 objectKey 不能为空"));
+            ObjectMetadata metadata = response.getMetadata();
+            Long contentLength = metadata == null ? null : metadata.getContentLength();
+            String contentType = metadata == null ? null : metadata.getContentType();
             return new StoredObjectContent(bucket, objectKey,
-                    response.response().contentLength() == null ? -1L : response.response().contentLength(),
-                    response.response().contentType(), response);
+                    contentLength == null ? -1L : contentLength,
+                    contentType, response.getObjectContent());
         } catch (Exception ex) {
-            throw new IllegalStateException("文档读取 S3 对象存储失败", ex);
+            throw new IllegalStateException("文档读取 Huawei S3 对象存储失败", ex);
         }
     }
 
     @Override
     public String provider() {
-        return "s3";
+        return "huawei-s3";
     }
 
     private String buildObjectKey(String tenantId, String originalFilename) {

@@ -7,8 +7,8 @@ import java.io.InputStream;
 /**
  * 对象存储防腐层。
  *
- * <p>统一后端接收文件后，通过该端口写入真实对象存储。当前可由本地文件系统、MinIO、AWS S3、
- * 华为 OBS S3 兼容接口等 adapter 实现，上层文档库不感知具体厂商。</p>
+ * <p>统一后端接收文件后，通过该端口写入真实对象存储。当前可由本地文件系统或华为 OBS S3
+ * adapter 实现，上层文档库不感知具体厂商。</p>
  */
 public interface ObjectStorage {
     /**
@@ -33,7 +33,7 @@ public interface ObjectStorage {
     StoredObjectContent getObject(String bucket, String objectKey);
 
     /**
-     * @return 存储实现标识，例如 local、s3。
+     * @return 存储实现标识，例如 local、huawei-s3。
      */
     String provider();
 }

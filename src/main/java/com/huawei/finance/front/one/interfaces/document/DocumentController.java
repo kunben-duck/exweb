@@ -40,7 +40,7 @@ import reactor.core.scheduler.Schedulers;
  * 文档库接口。
  *
  * <p>本控制器承载文档库的上传、查询、更新、删除、状态查询和受控下载。前端仍然把文件提交到统一后端服务，
- * 接口层先流式写入临时文件，再由应用层通过 ObjectStorage 防腐层上传到真实 S3/OBS/MinIO。
+ * 接口层先流式写入临时文件，再由应用层通过 ObjectStorage 防腐层上传到真实对象存储。
  * 这样业务入口统一，底层对象存储实现可替换。</p>
  */
 @RestController

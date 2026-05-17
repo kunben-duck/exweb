@@ -147,7 +147,7 @@ sequenceDiagram
     participant DocAPI as "Document API"
     participant DocApp as "DocumentApplicationService"
     participant Storage as "ObjectStorage Port"
-    participant S3 as "S3/OBS/MinIO Adapter"
+    participant HuaweiS3 as "Huawei OBS S3 Adapter"
     participant DB as "openGauss"
     participant Chat as "FinanceEXChatService"
     participant Runtime as "Relay Runtime"
@@ -157,8 +157,8 @@ sequenceDiagram
     DocAPI->>DocApp: "upload(UserContext, DocumentUploadCommand)"
     DocApp->>DocApp: "会话归属校验"
     DocApp->>Storage: "putObject(tenantId, file)"
-    Storage->>S3: "写入真实对象存储"
-    S3-->>Storage: "bucket/objectKey"
+    Storage->>HuaweiS3: "写入真实对象存储"
+    HuaweiS3-->>Storage: "bucket/objectKey"
     DocApp->>DB: "写 fin_ex_uploaded_document_t"
     DocApp-->>Frontend: "UploadedDocument(id,status,source)"
 
@@ -171,7 +171,7 @@ sequenceDiagram
 设计原则：
 
 - 前端上传仍先进入 FinanceEXChatService，方便统一鉴权、审计、限流和企业网关接入。
-- 真实文件内容通过 `ObjectStorage` port 写入对象存储；当前支持 local 和 S3 兼容实现。
+- 真实文件内容通过 `ObjectStorage` port 写入对象存储；当前支持 local 和 huawei-s3 实现。
 - 聊天请求只引用 `documentId`，不携带文件正文。
 - Runtime 看到的是经过文档库回查后的可信附件元数据。
 - `fin_ex_uploaded_document_t` 是文档库事实源，支持最近文档、库中文档选择和后续连接器文档扩展。
@@ -300,7 +300,7 @@ flowchart TB
         IntentHttp["Intent HTTP Adapter"]
         SubAgentHttp["SubAgent HTTP Adapter"]
         RelayHttp["Relay Runtime HTTP Adapter"]
-        Storage["Local / S3 ObjectStorage"]
+        Storage["Local / Huawei S3 ObjectStorage"]
     end
 
     Interfaces --> ChatService

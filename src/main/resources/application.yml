@@ -112,11 +112,13 @@ financeex:
   storage:
     provider: ${FINANCEEX_STORAGE_PROVIDER:local}
     local-path: ${java.io.tmpdir}/financeex-docs
-    s3:
-      bucket: ${FINANCEEX_S3_BUCKET:}
-      region: ${FINANCEEX_S3_REGION:}
-      endpoint: ${FINANCEEX_S3_ENDPOINT:}
-      access-key: ${FINANCEEX_S3_ACCESS_KEY:}
-      secret-key: ${FINANCEEX_S3_SECRET_KEY:}
-      path-style-access-enabled: ${FINANCEEX_S3_PATH_STYLE_ACCESS_ENABLED:false}
-      key-prefix: ${FINANCEEX_S3_KEY_PREFIX:documents}
+    huawei-s3:
+      bucket: ${FINANCEEX_HUAWEI_S3_BUCKET:}
+      endpoint: ${FINANCEEX_HUAWEI_S3_ENDPOINT:}
+      access-key: ${FINANCEEX_HUAWEI_S3_ACCESS_KEY:}
+      secret-key: ${FINANCEEX_HUAWEI_S3_SECRET_KEY:}
+      path-style-access-enabled: ${FINANCEEX_HUAWEI_S3_PATH_STYLE_ACCESS_ENABLED:false}
+      key-prefix: ${FINANCEEX_HUAWEI_S3_KEY_PREFIX:documents}
+      max-connections: ${FINANCEEX_HUAWEI_S3_MAX_CONNECTIONS:200}
+      connection-timeout-ms: ${FINANCEEX_HUAWEI_S3_CONNECTION_TIMEOUT_MS:10000}
+      socket-timeout-ms: ${FINANCEEX_HUAWEI_S3_SOCKET_TIMEOUT_MS:30000}

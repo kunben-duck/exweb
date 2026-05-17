@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FinanceEX ChatService Local Test</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>FinanceEX ChatService 联调台</h1>
+      <p>本地测试前端，覆盖会话、文档库、run、WebSocket、SSE resume、stop/retry 和跨页签恢复。</p>
+    </div>
+    <div class="header-actions">
+      <span id="backendLabel" class="pill">backend: loading</span>
+      <span id="wsState" class="pill muted">ws: disconnected</span>
+      <button id="connectWsBtn" type="button">连接 WS</button>
+      <button id="disconnectWsBtn" type="button">断开</button>
+      <button id="openCloneBtn" type="button">复制页签</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel sidebar">
+      <section>
+        <div class="section-title">
+          <h2>会话</h2>
+          <button id="refreshSessionsBtn" type="button">刷新</button>
+        </div>
+        <div class="inline-form">
+          <input id="newSessionTitle" placeholder="新会话标题" />
+          <button id="createSessionBtn" type="button">创建</button>
+        </div>
+        <div id="sessionsList" class="list"></div>
+      </section>
+
+      <section>
+        <div class="section-title">
+          <h2>当前会话</h2>
+          <button id="loadStateBtn" type="button">加载状态</button>
+        </div>
+        <dl class="kv">
+          <dt>sessionId</dt><dd id="currentSessionId">-</dd>
+          <dt>latestSeq</dt><dd id="currentSeq">0</dd>
+          <dt>activeRun</dt><dd id="activeRun">-</dd>
+        </dl>
+        <div class="inline-form">
+          <input id="renameTitle" placeholder="重命名" />
+          <button id="renameSessionBtn" type="button">保存</button>
+        </div>
+        <div class="button-row">
+          <button id="archiveSessionBtn" type="button">归档</button>
+          <button id="restoreSessionBtn" type="button">恢复</button>
+          <button id="closeSessionBtn" type="button">关闭</button>
+        </div>
+      </section>
+    </aside>
+
+    <section class="panel chat-panel">
+      <div class="section-title">
+        <h2>对话</h2>
+        <div class="button-row">
+          <button id="loadMessagesBtn" type="button">历史接口</button>
+          <button id="resumeSseBtn" type="button">SSE 补发</button>
+          <button id="subscribeActiveBtn" type="button">订阅 active run</button>
+          <button id="stopRunBtn" type="button">停止回答</button>
+          <button id="retryRunBtn" type="button">重新生成</button>
+        </div>
+      </div>
+      <div id="messages" class="messages"></div>
+      <div id="selectedDocs" class="selected-docs"></div>
+      <form id="chatForm" class="composer">
+        <textarea id="messageInput" rows="3" placeholder="输入消息，支持附加文档库中的 documentId"></textarea>
+        <div class="composer-actions">
+          <label><input id="forceNewTask" type="checkbox" /> forceNewTask</label>
+          <button type="submit">发送 run</button>
+        </div>
+      </form>
+    </section>
+
+    <aside class="panel docs-panel">
+      <section>
+        <div class="section-title">
+          <h2>文档库</h2>
+          <button id="refreshDocsBtn" type="button">刷新</button>
+        </div>
+        <form id="uploadForm" class="upload-form">
+          <input id="fileInput" type="file" />
+          <label><input id="uploadBindSession" type="checkbox" checked /> 关联当前会话</label>
+          <button type="submit">上传</button>
+        </form>
+        <div id="documentsList" class="list"></div>
+      </section>
+
+      <section>
+        <h2>事件日志</h2>
+        <pre id="eventLog" class="event-log"></pre>
+      </section>
+    </aside>
+  </main>
+
+  <template id="sessionItemTemplate">
+    <button class="list-item session-item" type="button"></button>
+  </template>
+
+  <template id="documentItemTemplate">
+    <div class="list-item document-item"></div>
+  </template>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

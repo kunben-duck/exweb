@@ -106,7 +106,6 @@ financeex:
     base-url: ${FINANCEEX_RELAY_AGENT_BASE_URL:http://localhost:9000}
     stream-path: ${FINANCEEX_RELAY_AGENT_STREAM_PATH:/v1/agent/runs/stream}
     stop-path: ${FINANCEEX_RELAY_AGENT_STOP_PATH:/v1/agent/runs/{runId}/stop}
-    websocket-url: ${FINANCEEX_RELAY_AGENT_WEBSOCKET_URL:}
     websocket-path: ${FINANCEEX_RELAY_AGENT_WEBSOCKET_PATH:/v1/agent/runs/ws}
     timeout: 60s
   storage:

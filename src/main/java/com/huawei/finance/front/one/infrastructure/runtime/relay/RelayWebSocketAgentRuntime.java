@@ -110,9 +110,6 @@ public class RelayWebSocketAgentRuntime implements AgentRuntime {
     }
 
     private URI websocketUri() {
-        if (properties.getWebsocketUrl() != null && !properties.getWebsocketUrl().isBlank()) {
-            return URI.create(properties.getWebsocketUrl().trim());
-        }
         String baseUrl = properties.getBaseUrl() == null ? "" : properties.getBaseUrl().trim();
         String path = properties.getWebsocketPath() == null || properties.getWebsocketPath().isBlank()
                 ? "/v1/agent/runs/ws"

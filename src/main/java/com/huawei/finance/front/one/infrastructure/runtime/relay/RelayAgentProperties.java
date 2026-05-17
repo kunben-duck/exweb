@@ -22,8 +22,6 @@ public class RelayAgentProperties {
     private String streamPath = "/v1/agent/runs/stream";
     /** Relay Runtime stop 接口路径，支持 {runId} 占位；为空表示下游暂不支持取消。 */
     private String stopPath = "/v1/agent/runs/{runId}/stop";
-    /** Relay Runtime WebSocket 完整地址；为空时由 baseUrl + websocketPath 推导。 */
-    private String websocketUrl = "";
     /** Relay Runtime WebSocket 对话接口路径。 */
     private String websocketPath = "/v1/agent/runs/ws";
     /** Relay Runtime 单次调用超时时间。 */
@@ -67,14 +65,6 @@ public class RelayAgentProperties {
 
     public void setStopPath(String stopPath) {
         this.stopPath = stopPath;
-    }
-
-    public String getWebsocketUrl() {
-        return websocketUrl;
-    }
-
-    public void setWebsocketUrl(String websocketUrl) {
-        this.websocketUrl = websocketUrl;
     }
 
     public String getWebsocketPath() {

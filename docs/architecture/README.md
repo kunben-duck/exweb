@@ -401,7 +401,7 @@ stop 语义：
 - AgentRuntime provider：`financeex.agent-runtime.provider`，表示 Runtime 类型，当前默认 `relay`
 - AgentRuntime protocol：`financeex.agent-runtime.protocol`，表示 Relay 传输协议，默认 `http-streamable`，可选 `websocket`
 - Relay HTTP Streamable Runtime：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`、`financeex.agent-runtime.stop-path`
-- Relay WebSocket Runtime：设置 `financeex.agent-runtime.provider=relay`、`financeex.agent-runtime.protocol=websocket`，并配置 `financeex.agent-runtime.websocket-url` 或 `financeex.agent-runtime.websocket-path`
+- Relay WebSocket Runtime：设置 `financeex.agent-runtime.provider=relay`、`financeex.agent-runtime.protocol=websocket`，并配置 `financeex.agent-runtime.websocket-path`
 
 SubAgent 当前只支持单轮 HTTP 文本流调用。当前上线版本只内置 Relay Runtime adapter，其中 `provider=relay, protocol=http-streamable` 是 HTTP 流式协议实现，`provider=relay, protocol=websocket` 是 RelayAgent WebSocket 对话协议实现。
 

@@ -139,8 +139,6 @@ export FINANCEEX_RELAY_AGENT_STREAM_PATH=/v1/agent/runs/stream
 export FINANCEEX_RELAY_AGENT_STOP_PATH=/v1/agent/runs/{runId}/stop
 # 如果 RelayAgent 对话接口使用 WebSocket，则保持 provider=relay，只切换协议：
 export FINANCEEX_AGENT_RUNTIME_PROTOCOL=websocket
-export FINANCEEX_RELAY_AGENT_WEBSOCKET_URL=ws://relay-agent:9000/v1/agent/runs/ws
-# 或仅配置 path，由 base-url 自动从 http/https 推导 ws/wss：
 export FINANCEEX_RELAY_AGENT_WEBSOCKET_PATH=/v1/agent/runs/ws
 ```
 
@@ -154,13 +152,13 @@ AgentRuntime 防腐层必须保留：应用层只依赖 `AgentRuntime` 接口和
 
 ## 启动
 
-本地没有 PostgreSQL/Redis 时，可以先启动 Docker 依赖；MinIO 仍保留为本地对象存储兼容性验证环境：
+本地没有 PostgreSQL/Redis 时，可以先启动 Docker 依赖：
 
 ```bash
 docker compose up -d postgres redis
 ```
 
-PostgreSQL 容器会创建 `financeex` 数据库和 `supervisor_dev` schema，并执行 `src/main/resources/db/schema.sql`。如需本地对象存储环境，可额外启动 `docker compose up -d minio minio-init`。
+PostgreSQL 容器会创建 `financeex` 数据库和 `supervisor_dev` schema，并执行 `src/main/resources/db/schema.sql`。
 
 ```bash
 mvn spring-boot:run

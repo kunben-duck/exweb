@@ -25,13 +25,13 @@ import reactor.core.scheduler.Schedulers;
 @Service
 public class ChatStreamApplicationService {
     private final ChatEventStore eventStore;
-    private final ChatEventStreamRegistry registry;
+    private final LocalChatEventStreamRegistry registry;
     private final ChatLiveEventBus liveEventBus;
     private final ChatRunRepository runRepository;
     private final PermissionChecker permissionChecker;
     private final SessionRepository sessionRepository;
 
-    public ChatStreamApplicationService(ChatEventStore eventStore, ChatEventStreamRegistry registry,
+    public ChatStreamApplicationService(ChatEventStore eventStore, LocalChatEventStreamRegistry registry,
                                         ChatLiveEventBus liveEventBus, ChatRunRepository runRepository,
                                         PermissionChecker permissionChecker,
                                         SessionRepository sessionRepository) {

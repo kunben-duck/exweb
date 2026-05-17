@@ -37,19 +37,20 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 /**
- * 文档上传接口。
+ * 文档库接口。
  *
- * <p>前端仍然把文件提交到本统一后端服务，接口层先流式写入临时文件，再由应用层通过 ObjectStorage
- * 防腐层上传到真实 S3/OBS/MinIO。这样业务入口统一，底层对象存储实现可替换。</p>
+ * <p>本控制器承载文档库的上传、查询、更新、删除、状态查询和受控下载。前端仍然把文件提交到统一后端服务，
+ * 接口层先流式写入临时文件，再由应用层通过 ObjectStorage 防腐层上传到真实 S3/OBS/MinIO。
+ * 这样业务入口统一，底层对象存储实现可替换。</p>
  */
 @RestController
 @RequestMapping("/api/v1/ex/documents")
-public class DocumentUploadController {
+public class DocumentController {
     private final DocumentFacade facade;
     private final AuthContextProvider auth;
     private final PermissionChecker permissionChecker;
 
-    public DocumentUploadController(DocumentFacade facade, AuthContextProvider auth, PermissionChecker permissionChecker) {
+    public DocumentController(DocumentFacade facade, AuthContextProvider auth, PermissionChecker permissionChecker) {
         this.facade = facade;
         this.auth = auth;
         this.permissionChecker = permissionChecker;
@@ -140,10 +141,10 @@ public class DocumentUploadController {
      * @return 文档状态和 tokenSize。
      */
     @GetMapping("/{documentId}/status")
-    public Mono<FrontDocumentStatusDto> status(@PathVariable String documentId) {
+    public Mono<DocumentStatusDto> status(@PathVariable String documentId) {
         UserContext user = resolveChatUser();
         return facade.get(user, documentId)
-                .map(document -> new FrontDocumentStatusDto(document.id(), document.status(), document.tokenSize()));
+                .map(document -> new DocumentStatusDto(document.id(), document.status(), document.tokenSize()));
     }
 
     /**
@@ -155,14 +156,14 @@ public class DocumentUploadController {
      * @return 后端受控预览/下载地址。
      */
     @GetMapping("/{documentId}/preview-url")
-    public Mono<FrontDocumentAccessDto> previewUrl(@PathVariable String documentId) {
+    public Mono<DocumentAccessDto> previewUrl(@PathVariable String documentId) {
         UserContext user = resolveChatUser();
         return facade.get(user, documentId)
                 .map(document -> {
                     if (!document.availableForChat()) {
                         throw new IllegalStateException("文档当前不可预览或下载: " + document.status());
                     }
-                    return new FrontDocumentAccessDto(
+                    return new DocumentAccessDto(
                             document.id(),
                             "/api/v1/ex/documents/" + document.id() + "/download",
                             "BACKEND_STREAM",

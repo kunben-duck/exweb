@@ -8,7 +8,7 @@ FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务
 用户请求
  -> Controller/WebSocket 入口通过 AuthContextProvider 解析租户和用户
  -> 将不可变 UserContext 显式传入 application
- -> 会话归一化与 MemoryContext 装配
+ -> 会话归一化与可选 MemoryContext 装配
  -> 查询 RuntimeBinding
     -> 有 active RuntimeBinding：继续调用 Relay Runtime
     -> 无 active RuntimeBinding：读取可选路由信号
@@ -18,6 +18,7 @@ FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务
 ```
 
 SubAgent 不创建绑定、不续接会话、不维护任务状态。只有 Relay Runtime 拥有多轮能力，内部 session、上下文压缩和规划机制由 Relay Runtime 自己负责。
+ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭；关闭时不会读取最近历史、Redis 短期缓存或长期记忆服务，只把当前消息和附件传给 Runtime/SubAgent。
 
 ## 分层边界
 
@@ -96,11 +97,28 @@ run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`�
 - Cancel flag：`fin_ex:chat_run:cancel:{runId}`
 - WebSocket run topic：`fin_ex:chat_stream:{streamTopicId}`
 - 短期消息：`fin_ex:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
-- 工作记忆：`fin_ex:memory:working:variables:{sessionId}`
+
+## 可选记忆上下文
+
+ChatService 保留未来演进为独立 SuperAgent 的记忆扩展点，但正式首版默认不启用：
+
+```bash
+export FINANCEEX_MEMORY_SHORT_TERM_ENABLED=false
+export FINANCEEX_MEMORY_SHORT_TERM_RECENT_TURNS=5
+export FINANCEEX_MEMORY_SHORT_TERM_CACHE_ENABLED=true
+
+export FINANCEEX_MEMORY_LONG_TERM_ENABLED=false
+export FINANCEEX_MEMORY_LONG_TERM_PROVIDER=disabled
+export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
+```
+
+- 短期记忆开启后，按 `recent-turns` 装配最近几轮 user/assistant 问答，优先读 Redis 热缓存，miss 后回源 openGauss 历史消息并回填。
+- 长期记忆开启后，通过 `LongTermMemoryStore` 防腐层按当前 query 检索 topK 条相关记忆；默认 `disabled` provider 返回空结果。
+- 两者都关闭时，`MemoryContext` 为空上下文，且不会发生 memory 相关 Redis、历史消息读取或长期记忆调用。
 
 ## 外部服务接入
 
-用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。SubAgent 与 Relay Runtime 都通过 HTTP API 接入，切换环境只需要替换配置。
+用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。SubAgent 当前通过单轮 HTTP 文本流接入；Relay Runtime 通过 AgentRuntime 防腐层接入，可按配置选择 HTTP 流式 adapter 或 WebSocket 对话 adapter。
 
 ```bash
 export FINANCEEX_USE_CASE_LIBRARY_ENABLED=true
@@ -115,18 +133,24 @@ export FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENDPOINT=http://employee-reimburse
 export FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_STOP_ENDPOINT=http://employee-reimbursement-agent:9300/v1/stop
 
 export FINANCEEX_AGENT_RUNTIME_PROVIDER=relay
+export FINANCEEX_AGENT_RUNTIME_PROTOCOL=http-streamable
 export FINANCEEX_RELAY_AGENT_BASE_URL=http://relay-agent:9000
 export FINANCEEX_RELAY_AGENT_STREAM_PATH=/v1/agent/runs/stream
 export FINANCEEX_RELAY_AGENT_STOP_PATH=/v1/agent/runs/{runId}/stop
+# 如果 RelayAgent 对话接口使用 WebSocket，则保持 provider=relay，只切换协议：
+export FINANCEEX_AGENT_RUNTIME_PROTOCOL=websocket
+export FINANCEEX_RELAY_AGENT_WEBSOCKET_URL=ws://relay-agent:9000/v1/agent/runs/ws
+# 或仅配置 path，由 base-url 自动从 http/https 推导 ws/wss：
+export FINANCEEX_RELAY_AGENT_WEBSOCKET_PATH=/v1/agent/runs/ws
 ```
 
-SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP 文本流调用。Relay Runtime 是唯一 AgentRuntime 实现。
+SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP 文本流调用。Relay Runtime 作为 AgentRuntime 实现支持两种协议：`financeex.agent-runtime.protocol=http-streamable` 使用 HTTP 流式协议，`websocket` 使用 RelayAgent WebSocket 对话协议。
 
 ## 上线版本边界
 
-当前上线版本明确不包含 AgentScope 设计和实现，也不包含 AgentScope memory、prompt assembler 或相关配置。复杂任务默认通过 Relay Runtime HTTP API 执行。
+当前上线版本明确不包含 AgentScope 设计和实现，也不包含 AgentScope memory、prompt assembler 或相关配置。复杂任务通过 Relay Runtime adapter 执行，默认 `provider=relay`、`protocol=http-streamable`，也可以切换为 `protocol=websocket` 适配 RelayAgent 的 WebSocket 对话接口。
 
-AgentRuntime 防腐层必须保留：应用层只依赖 `AgentRuntime` 接口和 `AgentRuntimeRequest` 契约，不依赖 Relay 的 HTTP 协议细节。当前 `financeex.agent-runtime.provider=relay` 只装配 Relay adapter；后续替换 Runtime 实现时，应新增另一个 `AgentRuntime` adapter，并通过 provider 配置切换。
+AgentRuntime 防腐层必须保留：应用层只依赖 `AgentRuntime` 接口和 `AgentRuntimeRequest` 契约，不依赖 Relay 的 HTTP 或 WebSocket 协议细节。`financeex.agent-runtime.provider` 表示 Runtime 类型，当前为 `relay`；`financeex.agent-runtime.protocol` 表示该 Runtime 类型下的协议，当前可选 `http-streamable` 或 `websocket`。后续替换 Runtime 实现时，应新增另一个 `AgentRuntime` adapter，并通过 provider 配置切换。
 
 ## 启动
 

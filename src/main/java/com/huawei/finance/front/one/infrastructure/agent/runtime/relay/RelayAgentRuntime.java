@@ -8,7 +8,7 @@ import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -18,13 +18,14 @@ import reactor.core.publisher.Mono;
 /**
  * RelayAgent Runtime HTTP 适配器。
  *
- * <p>这是当前上线版本默认的 AgentRuntime adapter。它只出现在 infrastructure 层，
- * application 层仍然依赖 AgentRuntime 接口。后续如果替换 Runtime 实现，应新增另一个
- * AgentRuntime adapter，并通过 financeex.agent-runtime.provider 切换装配。</p>
+ * <p>当 {@code financeex.agent-runtime.provider=relay} 且
+ * {@code financeex.agent-runtime.protocol=http-streamable} 时装配本实现。
+ * 它只出现在 infrastructure 层，application 层仍然依赖 AgentRuntime 接口。</p>
  */
 @Component
 @EnableConfigurationProperties(RelayAgentProperties.class)
-@ConditionalOnProperty(prefix = "financeex.agent-runtime", name = "provider", havingValue = "relay", matchIfMissing = true)
+@ConditionalOnExpression("'${financeex.agent-runtime.provider:relay}' == 'relay' "
+        + "&& '${financeex.agent-runtime.protocol:http-streamable}' == 'http-streamable'")
 public class RelayAgentRuntime implements AgentRuntime {
     private static final Logger log = LoggerFactory.getLogger(RelayAgentRuntime.class);
 

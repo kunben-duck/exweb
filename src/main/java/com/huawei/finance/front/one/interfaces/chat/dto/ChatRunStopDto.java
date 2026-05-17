@@ -11,7 +11,7 @@ import java.time.Instant;
  * @param latestSeq 当前 run 最后一个已持久化事件序号。
  * @param stoppedAt run 进入终态的时间；未终态时为当前响应时间。
  */
-public record FrontChatStopResultDto(
+public record ChatRunStopDto(
         String runId,
         String sessionId,
         String status,

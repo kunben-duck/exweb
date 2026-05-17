@@ -30,8 +30,7 @@ class ArchitectureNamingTest {
         assertThat(application).contains("active-key-prefix: fin_ex:chat_run:active");
         assertThat(application).contains("cancel-key-prefix: fin_ex:chat_run:cancel");
         assertThat(application).contains("redis-channel-prefix: fin_ex:chat_stream");
-        assertThat(application).contains("key-prefix: fin_ex:memory:short_term");
-        assertThat(application).contains("key-prefix: fin_ex:memory:working");
+        assertThat(application).contains("redis-key-prefix: fin_ex:memory:short_term");
     }
 
     @Test

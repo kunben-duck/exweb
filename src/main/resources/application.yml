@@ -84,29 +84,30 @@ financeex:
         stop-endpoint: ${FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_STOP_ENDPOINT:}
   memory:
     short-term:
+      enabled: ${FINANCEEX_MEMORY_SHORT_TERM_ENABLED:false}
+      recent-turns: ${FINANCEEX_MEMORY_SHORT_TERM_RECENT_TURNS:5}
+      cache-enabled: ${FINANCEEX_MEMORY_SHORT_TERM_CACHE_ENABLED:true}
+      redis-key-prefix: fin_ex:memory:short_term
+      ttl: 3d
+      max-cached-messages: 200
+      failure-backoff: 30s
       storage:
         database-required: ${FINANCEEX_SHORT_TERM_DB_REQUIRED:true}
         database-failure-backoff: 30s
-      redis:
-        enabled: true
-        key-prefix: fin_ex:memory:short_term
-        ttl: 3d
-        max-cached-messages: 200
-        failure-backoff: 30s
-    working:
-      redis:
-        enabled: true
-        key-prefix: fin_ex:memory:working
-        ttl: 3d
-        failure-backoff: 30s
     long-term:
-      provider: disabled
+      enabled: ${FINANCEEX_MEMORY_LONG_TERM_ENABLED:false}
+      provider: ${FINANCEEX_MEMORY_LONG_TERM_PROVIDER:disabled}
+      top-k: ${FINANCEEX_MEMORY_LONG_TERM_TOP_K:5}
   agent-runtime:
-    # AgentRuntime 防腐层 provider。当前上线版本默认 relay；后续替换 Runtime 实现时新增 adapter 并切换该值。
+    # AgentRuntime 防腐层类型。当前内置 relay；后续替换 Runtime 时新增 provider，不把协议写进 provider。
     provider: ${FINANCEEX_AGENT_RUNTIME_PROVIDER:relay}
+    # Relay Runtime 传输协议。http-streamable=HTTP 流式；websocket=Relay WebSocket 对话协议。
+    protocol: ${FINANCEEX_AGENT_RUNTIME_PROTOCOL:http-streamable}
     base-url: ${FINANCEEX_RELAY_AGENT_BASE_URL:http://localhost:9000}
     stream-path: ${FINANCEEX_RELAY_AGENT_STREAM_PATH:/v1/agent/runs/stream}
     stop-path: ${FINANCEEX_RELAY_AGENT_STOP_PATH:/v1/agent/runs/{runId}/stop}
+    websocket-url: ${FINANCEEX_RELAY_AGENT_WEBSOCKET_URL:}
+    websocket-path: ${FINANCEEX_RELAY_AGENT_WEBSOCKET_PATH:/v1/agent/runs/ws}
     timeout: 60s
   storage:
     provider: ${FINANCEEX_STORAGE_PROVIDER:local}

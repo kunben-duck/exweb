@@ -11,7 +11,7 @@ import java.util.Map;
  * @param commentText 用户补充说明，可为空。
  * @param metadata 前端扩展诊断信息。
  */
-public record FrontMessageFeedbackRequest(
+public record MessageFeedbackRequest(
         String runId,
         String rating,
         String reasonCode,

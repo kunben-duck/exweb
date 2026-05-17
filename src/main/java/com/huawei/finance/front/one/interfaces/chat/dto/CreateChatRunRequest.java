@@ -17,11 +17,11 @@ import java.util.Map;
  * @param attachments 本轮关联附件列表。
  * @param metadata 前端扩展元数据，例如 clientMessageId、forceNewTask。
  */
-public record FrontChatRequest(
+public record CreateChatRunRequest(
         String commandId,
         String sessionId,
         String conversationId,
         String message,
-        List<FrontAttachmentDto> attachments,
+        List<ChatAttachmentDto> attachments,
         Map<String, Object> metadata
 ) {}

@@ -15,7 +15,7 @@ import java.time.Instant;
  * @param tokenCount 消息 token 数估算值，可为空。
  * @param createdAt 消息创建时间。
  */
-public record FrontChatMessageDto(
+public record ChatMessageDto(
         String messageId,
         String sessionId,
         String role,

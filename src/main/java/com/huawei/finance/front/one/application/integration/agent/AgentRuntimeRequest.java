@@ -20,7 +20,7 @@ import java.util.Map;
  * @param runtimeSessionId AgentRuntime 自己的会话标识，首次调用可为空。
  * @param message 本轮用户输入文本。
  * @param attachments 本轮关联附件引用。
- * @param memoryContext SuperAgent 装配的上下文快照。
+ * @param memoryContext SuperAgent 可选记忆上下文；长短期记忆关闭时为空上下文。
  * @param intentDecision 意图服务识别结果，可能为空。
  * @param routeTarget 本轮路由决策结果。
  * @param metadata 前端或上游传入的扩展元数据。

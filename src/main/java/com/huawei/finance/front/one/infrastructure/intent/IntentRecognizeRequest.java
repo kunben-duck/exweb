@@ -16,7 +16,7 @@ import java.util.Map;
  * @param message 本轮用户输入文本。
  * @param attachments 本轮关联附件引用。
  * @param metadata 前端或上游扩展元数据。
- * @param memory SuperAgent 装配的上下文快照。
+ * @param memory SuperAgent 可选记忆上下文；长短期记忆关闭时为空上下文。
  */
 public record IntentRecognizeRequest(
         String tenantId,

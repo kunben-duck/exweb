@@ -10,7 +10,7 @@ import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
-import com.huawei.finance.front.one.domain.chat.ChatRunHandoff;
+import com.huawei.finance.front.one.domain.chat.ChatRunStartResult;
 import com.huawei.finance.front.one.domain.chat.ChatRunStopDecision;
 import com.huawei.finance.front.one.domain.chat.ChatRunStopResult;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
@@ -59,7 +59,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private final DocumentFacade documentFacade;
     private final ChatStreamApplicationService chatStreamService;
     private final ChatRunApplicationService chatRunService;
-    private final ChatRunExecutionRegistry runExecutionRegistry;
+    private final LocalChatRunExecutionRegistry runExecutionRegistry;
     private final IdGenerator idGenerator;
 
     public FinanceEXChatService(SessionApplicationService sessionService,
@@ -67,24 +67,30 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                 RouteSignalApplicationService routeSignalService,
                                 SubAgentExecutor subAgentExecutor, SystemResponseExecutor systemResponseExecutor,
                                 AgentRuntimeExecutor agentRuntimeExecutor, DocumentFacade documentFacade, ChatStreamApplicationService chatStreamService,
-                                ChatRunApplicationService chatRunService, ChatRunExecutionRegistry runExecutionRegistry,
+                                ChatRunApplicationService chatRunService, LocalChatRunExecutionRegistry runExecutionRegistry,
                                 IdGenerator idGenerator) {
-        this.sessionService = sessionService; this.memoryService = memoryService;
-        this.runtimeBindingService = runtimeBindingService; this.routeSignalService = routeSignalService;
+        this.sessionService = sessionService;
+        this.memoryService = memoryService;
+        this.runtimeBindingService = runtimeBindingService;
+        this.routeSignalService = routeSignalService;
         this.subAgentExecutor = subAgentExecutor;
         this.systemResponseExecutor = systemResponseExecutor;
-        this.agentRuntimeExecutor = agentRuntimeExecutor; this.documentFacade = documentFacade; this.chatStreamService = chatStreamService;
-        this.chatRunService = chatRunService; this.runExecutionRegistry = runExecutionRegistry; this.idGenerator = idGenerator;
+        this.agentRuntimeExecutor = agentRuntimeExecutor;
+        this.documentFacade = documentFacade;
+        this.chatStreamService = chatStreamService;
+        this.chatRunService = chatRunService;
+        this.runExecutionRegistry = runExecutionRegistry;
+        this.idGenerator = idGenerator;
     }
 
     @Override
-    public Mono<ChatRunHandoff> start(UserContext user, ChatCommand command) {
+    public Mono<ChatRunStartResult> startRun(UserContext user, ChatCommand command) {
         return Mono.defer(() -> {
             Sinks.One<ChatEvent> firstEvent = Sinks.one();
             AtomicReference<Disposable> disposableRef = new AtomicReference<>();
             AtomicReference<String> runIdRef = new AtomicReference<>();
             AtomicBoolean terminal = new AtomicBoolean(false);
-            Flux<ChatEvent> runFlux = chat(user, command)
+            Flux<ChatEvent> runFlux = executeRun(user, command)
                     .subscribeOn(Schedulers.boundedElastic())
                     .doOnNext(event -> {
                         if (runIdRef.compareAndSet(null, event.runId())) {
@@ -109,13 +115,13 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 runExecutionRegistry.register(runIdRef.get(), disposable);
             }
             return firstEvent.asMono()
-                    .map(event -> new ChatRunHandoff(event.runId(), event.sessionId(), event.sequence(),
+                    .map(event -> new ChatRunStartResult(event.runId(), event.sessionId(), event.sequence(),
                             event.createdAt(), ChatStreamTopics.runTopic(event.runId())));
         });
     }
 
     @Override
-    public Mono<ChatRunHandoff> retry(UserContext user, String runId, ChatCommand command) {
+    public Mono<ChatRunStartResult> retryRun(UserContext user, String runId, ChatCommand command) {
         return Mono.defer(() -> {
             ChatRun previous = chatRunService.requireOwnedRun(user, runId);
             String message = command == null ? null : command.message();
@@ -140,12 +146,12 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     command == null ? List.of() : command.attachments(),
                     metadata
             );
-            return start(user, retryCommand);
+            return startRun(user, retryCommand);
         });
     }
 
     @Override
-    public Mono<ChatRunStopResult> stop(UserContext user, String runId) {
+    public Mono<ChatRunStopResult> stopRun(UserContext user, String runId) {
         return Mono.defer(() -> {
             ChatRunStopDecision decision = chatRunService.requestStop(user, runId, "USER_STOP");
             ChatRun run = decision.run();
@@ -168,7 +174,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
     }
 
     @Override
-    public Flux<ChatEvent> chat(UserContext user, ChatCommand command) {
+    public Flux<ChatEvent> executeRun(UserContext user, ChatCommand command) {
         // defer 确保每个订阅都会生成独立 runId，避免热流复用导致事件串线。
         return Flux.defer(() -> {
             // 进入 application 后统一以 UserContext 为准；原始前端请求只保留会话、消息、附件和元数据。
@@ -186,8 +192,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     attachments, identified.metadata());
             String runId = idGenerator.newId("run", IdGenerateContext.of(user.tenantId(), user.userId(), session.id()));
 
-            // MemoryContext 是发给可选路由信号、SubAgent 和 AgentRuntime 的统一上下文快照。
-            // 当前用户输入还没有保存进去，避免下游 Runtime 既收到 current message 又在历史里看到重复消息。
+            // MemoryContext 是可选 SuperAgent 记忆增强。长短期记忆都关闭时这里返回空上下文，
+            // 且不会查询 Redis、历史消息或长期记忆服务；当前用户输入也不会进入本轮上下文，避免重复。
             MemoryContext memory = memoryService.loadForRun(normalized);
             if (forceNewTask(normalized.metadata())) {
                 // 前端显式要求开启新任务时，仅取消 Relay Runtime 续接绑定。
@@ -278,12 +284,11 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     bindingRef.set(runtimeBindingService.observeEvent(bindingRef.get(), event));
                 })
                 .doOnComplete(() -> {
-                    // 只有 run.completed 才代表完整回答可进入历史和 memory；stop/failed 的半截 delta 只保留在事件事实源中。
+                    // 只有 run.completed 才代表完整回答可进入历史；stop/failed 的半截 delta 只保留在事件事实源中。
                     if (completed.get()) {
                         if (!assistant.isEmpty()) {
                             sessionService.saveAssistantMessage(user.tenantId(), user.userId(), session.id(), assistant.toString());
                         }
-                        memoryService.updateAfterRun(normalized, Map.of("lastRunId", runId));
                     }
                 });
     }

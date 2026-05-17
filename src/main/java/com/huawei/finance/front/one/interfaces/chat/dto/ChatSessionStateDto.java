@@ -10,8 +10,8 @@ package com.huawei.finance.front.one.interfaces.chat.dto;
  * @param messages 最近一页历史消息。
  * @param streamStatus 当前会话事件流状态。
  */
-public record FrontChatSessionStateDto(
-        FrontChatSessionDto session,
-        FrontChatMessagePageDto messages,
-        FrontStreamStatusDto streamStatus
+public record ChatSessionStateDto(
+        ChatSessionDto session,
+        ChatMessagePageDto messages,
+        ChatStreamStatusDto streamStatus
 ) {}

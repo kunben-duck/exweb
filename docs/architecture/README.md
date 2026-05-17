@@ -6,14 +6,14 @@ FinanceEXChatService 是前端聊天入口和 SuperAgent 主控服务。正式�
 
 - 简单任务：用例库或意图服务命中后，按 `agentCode` 单轮调用一个 SubAgent。
 - 复杂任务：进入 Relay Runtime，并由 Relay Runtime 负责多轮、规划、上下文和压缩。
-- SuperAgent：负责身份、会话、上下文装配、路由、事件落库和 RuntimeBinding 续接。
+- SuperAgent：负责身份、会话、可选记忆上下文装配、路由、事件落库和 RuntimeBinding 续接。
 
 ## 全局流程图
 
 ```mermaid
 flowchart TD
     User["用户请求"] --> Normalize["身份解析与会话归一化"]
-    Normalize --> Memory["加载 MemoryContext"]
+    Normalize --> Memory["按配置加载 MemoryContext"]
     Memory --> ForceNew{"metadata.forceNewTask 为 true?"}
     ForceNew -- "是" --> CancelRuntime["取消 active RuntimeBinding"]
     ForceNew -- "否" --> FindRuntime["查询 RuntimeBinding"]
@@ -73,12 +73,17 @@ sequenceDiagram
 
     Frontend->>API: "POST /chat/runs"
     API->>API: "AuthContextProvider.resolve()"
-    API->>SuperAgent: "start(UserContext, command)"
+    API->>SuperAgent: "startRun(UserContext, command)"
     SuperAgent->>Session: "loadOrCreate(command)"
     Session->>DB: "读取或写入 fin_ex_chat_session_t"
     SuperAgent->>Memory: "loadForRun(command)"
-    Memory->>Redis: "读取短期消息与工作记忆"
-    Memory->>DB: "必要时回源消息和摘要"
+    alt "短期或长期记忆开启"
+        Memory->>Redis: "短期记忆优先读取最近问答缓存"
+        Memory->>DB: "缓存 miss 时回源历史消息"
+        Memory->>Memory: "长期记忆按 provider 检索"
+    else "记忆全部关闭"
+        Memory-->>SuperAgent: "返回空 MemoryContext"
+    end
 
     alt "metadata.forceNewTask=true"
         SuperAgent->>Binding: "cancelActive(sessionId)"
@@ -173,7 +178,7 @@ sequenceDiagram
 
 ## 流式响应与断点恢复
 
-正式版只保留后台 run handoff 模式。`POST /chat/runs` 是唯一提问入口，
+正式版只保留后台 run 创建模式。`POST /chat/runs` 是唯一提问入口，
 WebSocket 负责实时输出，SSE 只负责断线、刷新或复制页签后的缺失事件补发。
 
 ```text
@@ -197,7 +202,7 @@ sequenceDiagram
     participant SuperAgent as "FinanceEXChatService"
     participant EventStore as "ChatEventStore"
     participant RunStore as "ChatRunStore"
-    participant Live as "ChatEventStreamRegistry"
+    participant Live as "LocalChatEventStreamRegistry"
     participant RedisBus as "Redis Pub/Sub"
     participant Runtime as "Relay Runtime"
     participant DB as "openGauss"
@@ -247,7 +252,7 @@ sequenceDiagram
 关键约束：
 
 - `fin_ex_chat_event_t.seq` 是前端恢复游标，实时输出和补发输出使用同一份 seq；该序号由 openGauss sequence/default 生成并随事件写入一起返回，应用层不再本地生成恢复游标。
-- openGauss 是事件事实源，`ChatEventStreamRegistry` 是 JVM 内在线发布器，Redis Pub/Sub 只做跨实例实时扇出。
+- openGauss 是事件事实源，`LocalChatEventStreamRegistry` 是当前服务实例内在线发布器，Redis Pub/Sub 只做跨实例实时扇出。
 - `fin_ex_chat_run_t` 是 run 生命周期事实源；Redis 只保存 active run 和 cancel flag。
 - 后台 run 不依赖创建 run 的原始浏览器连接，刷新页面后用 `afterSeq` 恢复。
 - WebSocket 订阅消息格式：`{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}`。
@@ -263,7 +268,7 @@ flowchart TB
     subgraph Interfaces["interfaces"]
         ChatController["ChatController / WebSocket"]
         SessionController["ChatSessionController"]
-        DocumentController["DocumentUploadController"]
+        DocumentController["DocumentController"]
     end
 
     subgraph Application["application"]
@@ -393,14 +398,16 @@ stop 语义：
 - 意图服务：`financeex.intent.enabled`、`financeex.intent.base-url`、`financeex.intent.recognize-path`
 - SubAgent：`financeex.sub-agent.agents.{agentCode}.endpoint`
 - SubAgent stop：`financeex.sub-agent.agents.{agentCode}.stop-endpoint`
-- AgentRuntime provider：`financeex.agent-runtime.provider`，当前默认 `relay`
-- Relay Runtime：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`、`financeex.agent-runtime.stop-path`
+- AgentRuntime provider：`financeex.agent-runtime.provider`，表示 Runtime 类型，当前默认 `relay`
+- AgentRuntime protocol：`financeex.agent-runtime.protocol`，表示 Relay 传输协议，默认 `http-streamable`，可选 `websocket`
+- Relay HTTP Streamable Runtime：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`、`financeex.agent-runtime.stop-path`
+- Relay WebSocket Runtime：设置 `financeex.agent-runtime.provider=relay`、`financeex.agent-runtime.protocol=websocket`，并配置 `financeex.agent-runtime.websocket-url` 或 `financeex.agent-runtime.websocket-path`
 
-SubAgent 当前只支持单轮 HTTP 文本流调用。Relay Runtime 是唯一 Runtime 实现。
+SubAgent 当前只支持单轮 HTTP 文本流调用。当前上线版本只内置 Relay Runtime adapter，其中 `provider=relay, protocol=http-streamable` 是 HTTP 流式协议实现，`provider=relay, protocol=websocket` 是 RelayAgent WebSocket 对话协议实现。
 
-当前上线版本明确去掉 AgentScope 设计和实现，也不包含 AgentScope memory、AgentScope prompt assembler 或相关配置。复杂任务默认通过 Relay Runtime HTTP API 执行；项目内不再包含任何 AgentScope 架构分支。
+当前上线版本明确去掉 AgentScope 设计和实现，也不包含 AgentScope memory、AgentScope prompt assembler 或相关配置。复杂任务通过 Relay Runtime adapter 执行；项目内不再包含任何 AgentScope 架构分支。
 
-AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 `AgentRuntimeRequest` 契约，当前 `relay` provider 只是基础设施层默认 adapter。后续如果替换 Runtime 实现，应新增一个实现 `AgentRuntime` 的 adapter，并通过 `financeex.agent-runtime.provider` 选择装配，避免改动 `FinanceEXChatService` 主编排。
+AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 `AgentRuntimeRequest` 契约，当前 `relay` provider 是 Runtime 类型，协议由 `financeex.agent-runtime.protocol` 选择。后续如果替换 Runtime 实现，应新增一个实现 `AgentRuntime` 的 adapter，并通过 `financeex.agent-runtime.provider` 选择装配，避免改动 `FinanceEXChatService` 主编排。
 
 ## 命名规范
 
@@ -427,4 +434,11 @@ Redis key 必须以 `fin_ex` 开头：
 - `fin_ex:chat_run:cancel:{runId}`
 - `fin_ex:chat_stream:{streamTopicId}`
 - `fin_ex:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
-- `fin_ex:memory:working:variables:{sessionId}`
+
+## 可选记忆上下文
+
+- `financeex.memory.short-term.enabled=false` 时，不装配最近问答，也不访问 Redis 短期记忆缓存。
+- `financeex.memory.short-term.recent-turns=5` 表示短期记忆开启后读取最近 5 轮问答，即最多 10 条消息。
+- `financeex.memory.short-term.cache-enabled=true` 表示短期记忆开启时优先使用 Redis 热缓存，miss 后回源 openGauss。
+- `financeex.memory.long-term.enabled=false` 时，不调用长期记忆服务。
+- `financeex.memory.long-term.provider=disabled` 是默认安全 provider，开启长期记忆但未接真实服务时返回空结果。

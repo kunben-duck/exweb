@@ -12,14 +12,14 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 
 /**
- * JVM 内 run topic 事件发布器。
+ * 当前服务实例内的 run topic 在线事件发布器。
  *
  * <p>openGauss 是事件事实源，本发布器只负责把刚落库的事件推给当前 JVM 在线 WebSocket 连接。
  * 跨实例实时推送由 Redis Pub/Sub 完成，断线恢复仍以 {@code afterSeq} 从 openGauss 补发为准。</p>
  */
 @Component
-public class ChatEventStreamRegistry {
-    private static final Logger log = LoggerFactory.getLogger(ChatEventStreamRegistry.class);
+public class LocalChatEventStreamRegistry {
+    private static final Logger log = LoggerFactory.getLogger(LocalChatEventStreamRegistry.class);
 
     private final Map<String, TopicSink> topicSinks = new ConcurrentHashMap<>();
 
@@ -61,13 +61,13 @@ public class ChatEventStreamRegistry {
         }
         Sinks.EmitResult nextResult = topic.sink().tryEmitNext(event);
         if (nextResult.isFailure()) {
-            log.warn("JVM ChatEventStreamRegistry 投递失败，topicId={}, seq={}, result={}",
+            log.warn("本机 run topic 事件投递失败，topicId={}, seq={}, result={}",
                     topicId, event.sequence(), nextResult);
         }
         if (terminal) {
             Sinks.EmitResult completeResult = topic.sink().tryEmitComplete();
             if (completeResult.isFailure()) {
-                log.warn("JVM ChatEventStreamRegistry 结束 topic 失败，topicId={}, result={}", topicId, completeResult);
+                log.warn("本机 run topic 结束失败，topicId={}, result={}", topicId, completeResult);
             }
             if (topic.subscribers().get() <= 0) {
                 topicSinks.remove(topicId, topic);

@@ -7,8 +7,8 @@ import com.huawei.finance.front.one.application.integration.identity.AuthContext
 import com.huawei.finance.front.one.application.service.PermissionChecker;
 import com.huawei.finance.front.one.application.service.ChatStreamApplicationService;
 import com.huawei.finance.front.one.domain.auth.UserContext;
-import com.huawei.finance.front.one.interfaces.chat.dto.FrontChatEventDto;
-import com.huawei.finance.front.one.interfaces.chat.dto.FrontWebSocketEnvelopeDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.ChatEventDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.ChatWebSocketEnvelopeDto;
 import java.util.Map;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.socket.CloseStatus;
@@ -34,13 +34,13 @@ public class ChatWebSocketHandler implements WebSocketHandler {
     private final AuthContextProvider auth;
     private final PermissionChecker permissionChecker;
     private final ChatStreamApplicationService chatStreamService;
-    private final WebSocketConnectionRegistry connectionRegistry;
+    private final LocalWebSocketConnectionRegistry connectionRegistry;
     private final ChatEventTranslator eventTranslator;
     private final ObjectMapper objectMapper;
 
     public ChatWebSocketHandler(AuthContextProvider auth, PermissionChecker permissionChecker,
                                 ChatStreamApplicationService chatStreamService,
-                                WebSocketConnectionRegistry connectionRegistry,
+                                LocalWebSocketConnectionRegistry connectionRegistry,
                                 ChatEventTranslator eventTranslator, ObjectMapper objectMapper) {
         this.auth = auth;
         this.permissionChecker = permissionChecker;
@@ -65,7 +65,7 @@ public class ChatWebSocketHandler implements WebSocketHandler {
             connectionRegistry.register(session.getId(), user);
         } catch (RuntimeException ex) {
             return session.send(Flux.just(toMessage(session,
-                    FrontWebSocketEnvelopeDto.error(null, "WS_AUTH_FAILED", ex.getMessage()))));
+                    ChatWebSocketEnvelopeDto.error(null, "WS_AUTH_FAILED", ex.getMessage()))));
         }
 
         Sinks.Many<WebSocketMessage> outbound = Sinks.many().unicast()
@@ -75,7 +75,7 @@ public class ChatWebSocketHandler implements WebSocketHandler {
                 // 当前只接受连接控制消息。聊天请求必须走 POST /chat/runs 创建后台 run。
                 .concatMap(message -> handleTextMessage(session, user, outbound, message.getPayloadAsText()))
                 .onErrorResume(ex -> {
-                    emit(session, outbound, FrontWebSocketEnvelopeDto.error(null, "WS_STREAM_ERROR", ex.getMessage()));
+                    emit(session, outbound, ChatWebSocketEnvelopeDto.error(null, "WS_STREAM_ERROR", ex.getMessage()));
                     return Mono.empty();
                 })
                 .doFinally(signalType -> {
@@ -93,12 +93,12 @@ public class ChatWebSocketHandler implements WebSocketHandler {
         try {
             root = objectMapper.readTree(payload);
         } catch (Exception ex) {
-            emit(session, outbound, FrontWebSocketEnvelopeDto.error(null, "BAD_WS_MESSAGE", ex.getMessage()));
+            emit(session, outbound, ChatWebSocketEnvelopeDto.error(null, "BAD_WS_MESSAGE", ex.getMessage()));
             return Mono.empty();
         }
         String commandId = root.path("id").asText(null);
         if (!root.hasNonNull("type")) {
-            emit(session, outbound, FrontWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE", "WebSocket 仅支持控制消息"));
+            emit(session, outbound, ChatWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE", "WebSocket 仅支持控制消息"));
             return Mono.empty();
         }
         return handleCommandMessage(session, user, outbound, root, commandId);
@@ -111,14 +111,14 @@ public class ChatWebSocketHandler implements WebSocketHandler {
         if ("connect".equals(type)) {
             String presence = presenceState(root.path("presence"));
             connectionRegistry.updatePresence(session.getId(), presence);
-            emit(session, outbound, FrontWebSocketEnvelopeDto.reply(commandId,
+            emit(session, outbound, ChatWebSocketEnvelopeDto.reply(commandId,
                     Map.of("type", "connect", "connectionId", session.getId(), "presence", presence)));
             return Mono.empty();
         }
         if ("presence".equals(type)) {
             String state = root.path("state").asText("foreground");
             connectionRegistry.updatePresence(session.getId(), state);
-            emit(session, outbound, FrontWebSocketEnvelopeDto.reply(commandId, Map.of("type", "presence", "state", state)));
+            emit(session, outbound, ChatWebSocketEnvelopeDto.reply(commandId, Map.of("type", "presence", "state", state)));
             return Mono.empty();
         }
         if ("subscribe".equals(type)) {
@@ -127,25 +127,25 @@ public class ChatWebSocketHandler implements WebSocketHandler {
         if ("unsubscribe".equals(type)) {
             String topicId = root.path("topicId").asText(null);
             if (topicId == null || topicId.isBlank()) {
-                emit(session, outbound, FrontWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE", "topicId 不能为空"));
+                emit(session, outbound, ChatWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE", "topicId 不能为空"));
                 return Mono.empty();
             }
             connectionRegistry.unsubscribe(session.getId(), topicId);
-            emit(session, outbound, FrontWebSocketEnvelopeDto.reply(commandId, Map.of("type", "unsubscribe", "topicId", topicId)));
+            emit(session, outbound, ChatWebSocketEnvelopeDto.reply(commandId, Map.of("type", "unsubscribe", "topicId", topicId)));
             return Mono.empty();
         }
         if ("ack".equals(type)) {
             String topicId = root.path("topicId").asText(null);
             long seq = root.path("seq").asLong(0);
             if (topicId == null || topicId.isBlank()) {
-                emit(session, outbound, FrontWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE", "topicId 不能为空"));
+                emit(session, outbound, ChatWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE", "topicId 不能为空"));
                 return Mono.empty();
             }
             connectionRegistry.ack(session.getId(), topicId, seq);
-            emit(session, outbound, FrontWebSocketEnvelopeDto.reply(commandId, Map.of("type", "ack", "topicId", topicId, "seq", seq)));
+            emit(session, outbound, ChatWebSocketEnvelopeDto.reply(commandId, Map.of("type", "ack", "topicId", topicId, "seq", seq)));
             return Mono.empty();
         }
-        emit(session, outbound, FrontWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE",
+        emit(session, outbound, ChatWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE",
                 "不支持的 WebSocket command type: " + type));
         return Mono.empty();
     }
@@ -155,7 +155,7 @@ public class ChatWebSocketHandler implements WebSocketHandler {
         String topicId = root.path("topicId").asText(null);
         long afterSeq = root.path("afterSeq").asLong(0);
         if (topicId == null || topicId.isBlank()) {
-            emit(session, outbound, FrontWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE", "topicId 不能为空"));
+            emit(session, outbound, ChatWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE", "topicId 不能为空"));
             return Mono.empty();
         }
         return Mono.fromCallable(() -> chatStreamService.ensureRunTopicAccessible(user, topicId))
@@ -164,7 +164,7 @@ public class ChatWebSocketHandler implements WebSocketHandler {
                     if (connectionRegistry.get(session.getId()).isEmpty()) {
                         return Mono.<Void>empty();
                     }
-                    emit(session, outbound, FrontWebSocketEnvelopeDto.reply(commandId,
+                    emit(session, outbound, ChatWebSocketEnvelopeDto.reply(commandId,
                             Map.of("type", "subscribe", "topicId", topicId, "recovered", afterSeq > 0, "lastSeq", afterSeq)));
                     Sinks.Empty<Void> cancellation = Sinks.empty();
                     connectionRegistry.subscribe(session.getId(), topicId, afterSeq, cancellationDisposable(cancellation));
@@ -175,7 +175,7 @@ public class ChatWebSocketHandler implements WebSocketHandler {
                             .subscribe(
                                     dto -> emitTopicEvent(session, outbound, topicId, cancellation, dto),
                                     ex -> {
-                                        emit(session, outbound, FrontWebSocketEnvelopeDto.error(commandId,
+                                        emit(session, outbound, ChatWebSocketEnvelopeDto.error(commandId,
                                                 "SUBSCRIBE_ERROR", ex.getMessage()));
                                         connectionRegistry.unsubscribe(session.getId(), topicId);
                                     }
@@ -183,22 +183,22 @@ public class ChatWebSocketHandler implements WebSocketHandler {
                     return Mono.<Void>empty();
                 })
                 .onErrorResume(ex -> {
-                    emit(session, outbound, FrontWebSocketEnvelopeDto.error(commandId, "SUBSCRIBE_ERROR", ex.getMessage()));
+                    emit(session, outbound, ChatWebSocketEnvelopeDto.error(commandId, "SUBSCRIBE_ERROR", ex.getMessage()));
                     return Mono.<Void>empty();
                 });
     }
 
     private void emitTopicEvent(WebSocketSession session, Sinks.Many<WebSocketMessage> outbound, String topicId,
-                                Sinks.Empty<Void> cancellation, FrontChatEventDto dto) {
+                                Sinks.Empty<Void> cancellation, ChatEventDto dto) {
         if (dto == null) {
             return;
         }
-        WebSocketConnectionRegistry.DeliveryDecision decision =
+        LocalWebSocketConnectionRegistry.DeliveryDecision decision =
                 connectionRegistry.markDelivered(session.getId(), topicId, dto.sequence());
-        if (decision.action() == WebSocketConnectionRegistry.Action.DELIVER) {
-            emit(session, outbound, FrontWebSocketEnvelopeDto.message(topicId, dto));
-        } else if (decision.action() == WebSocketConnectionRegistry.Action.RECOVER_REQUIRED) {
-            emit(session, outbound, FrontWebSocketEnvelopeDto.recoverRequired(topicId, decision.lastAckSeq(), decision.actualSeq()));
+        if (decision.action() == LocalWebSocketConnectionRegistry.Action.DELIVER) {
+            emit(session, outbound, ChatWebSocketEnvelopeDto.message(topicId, dto));
+        } else if (decision.action() == LocalWebSocketConnectionRegistry.Action.RECOVER_REQUIRED) {
+            emit(session, outbound, ChatWebSocketEnvelopeDto.recoverRequired(topicId, decision.lastAckSeq(), decision.actualSeq()));
             // 一旦发现乱序或缺口，先把 recover-required 发给前端，再暂停该 topic，避免继续推送更高 seq。
             cancellation.tryEmitEmpty();
             connectionRegistry.unsubscribe(session.getId(), topicId);
@@ -222,7 +222,7 @@ public class ChatWebSocketHandler implements WebSocketHandler {
         };
     }
 
-    private void emit(WebSocketSession session, Sinks.Many<WebSocketMessage> outbound, FrontWebSocketEnvelopeDto dto) {
+    private void emit(WebSocketSession session, Sinks.Many<WebSocketMessage> outbound, ChatWebSocketEnvelopeDto dto) {
         Sinks.EmitResult result = outbound.tryEmitNext(toMessage(session, dto));
         if (result.isFailure()) {
             connectionRegistry.unregister(session.getId());
@@ -231,7 +231,7 @@ public class ChatWebSocketHandler implements WebSocketHandler {
         }
     }
 
-    private WebSocketMessage toMessage(WebSocketSession session, FrontWebSocketEnvelopeDto dto) {
+    private WebSocketMessage toMessage(WebSocketSession session, ChatWebSocketEnvelopeDto dto) {
         try {
             return session.textMessage(objectMapper.writeValueAsString(dto));
         } catch (JsonProcessingException ex) {

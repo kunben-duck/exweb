@@ -6,9 +6,10 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 聊天消息仓储，也是当前短期记忆的应用层抽象。
+ * 聊天消息仓储，也可作为短期最近问答记忆的数据来源。
  *
- * <p>application 层只表达保存和读取最近会话消息的能力，不关心底层是 Redis、数据库还是组合存储。</p>
+ * <p>会话历史消息始终是可审计事实；短期记忆是否读取最近消息由 MemoryApplicationService 配置决定。
+ * application 层只表达保存和读取最近会话消息的能力，不关心底层是 Redis、数据库还是组合存储。</p>
  */
 public interface ChatMessageRepository {
     /**

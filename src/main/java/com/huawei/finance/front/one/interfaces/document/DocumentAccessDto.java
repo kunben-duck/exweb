@@ -10,7 +10,7 @@ import java.time.Instant;
  * @param accessType 访问方式，首版为 BACKEND_STREAM。
  * @param expiresAt 地址过期时间；受控后端流可为空。
  */
-public record FrontDocumentAccessDto(
+public record DocumentAccessDto(
         String documentId,
         String accessUrl,
         String accessType,

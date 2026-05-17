@@ -6,13 +6,13 @@ import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 
 /**
- * 当前 JVM 内正在执行的后台 run 订阅注册表。
+ * 当前服务实例内正在执行的后台 run 订阅注册表。
  *
  * <p>Redis cancel flag 负责跨 JVM 协调；本注册表只用于命中当前 JVM 时立即 dispose
  * 原始 Runtime/SubAgent 流订阅，减少后端资源消耗和迟到事件。</p>
  */
 @Component
-public class ChatRunExecutionRegistry {
+public class LocalChatRunExecutionRegistry {
     private final Map<String, Disposable> running = new ConcurrentHashMap<>();
 
     /**

@@ -12,16 +12,22 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
- * 本地文件系统对象存储实现。
+ * 文件系统对象存储实现。
  *
  * <p>用于本地开发和第一版验证；生产环境通常替换为 OBS/S3/MinIO 等对象存储实现。</p>
  */
 @Component
 @ConditionalOnProperty(prefix = "financeex.storage", name = "provider", havingValue = "local", matchIfMissing = true)
-public class LocalObjectStorage implements ObjectStorage {
+public class FileSystemObjectStorage implements ObjectStorage {
     private final Path root;
-    public LocalObjectStorage(@Value("${financeex.storage.local-path:${java.io.tmpdir}/financeex-docs}") String root) { this.root = Path.of(root); }
-    @Override public StoredObject putObject(String tenantId, String originalFilename, String contentType, long sizeBytes, InputStream inputStream) {
+
+    public FileSystemObjectStorage(@Value("${financeex.storage.local-path:${java.io.tmpdir}/financeex-docs}") String root) {
+        this.root = Path.of(root);
+    }
+
+    @Override
+    public StoredObject putObject(String tenantId, String originalFilename, String contentType, long sizeBytes,
+                                  InputStream inputStream) {
         try {
             // 按租户隔离目录，并用 UUID 前缀降低同名文件冲突概率。
             String tenantPath = sanitizePathSegment(tenantId);
@@ -30,7 +36,9 @@ public class LocalObjectStorage implements ObjectStorage {
             Path target = root.resolve(tenantPath).resolve(objectKey);
             Files.copy(inputStream, target);
             return new StoredObject("local", tenantPath + "/" + objectKey, Files.size(target), contentType);
-        } catch (Exception e) { throw new IllegalStateException("文档写入对象存储失败", e); }
+        } catch (Exception e) {
+            throw new IllegalStateException("文档写入对象存储失败", e);
+        }
     }
 
     @Override
@@ -47,7 +55,10 @@ public class LocalObjectStorage implements ObjectStorage {
         }
     }
 
-    @Override public String provider() { return "local"; }
+    @Override
+    public String provider() {
+        return "local";
+    }
 
     private String sanitizeFilename(String originalFilename) {
         String filename = originalFilename == null || originalFilename.isBlank() ? "document" : originalFilename.trim();

@@ -16,7 +16,7 @@ public interface IntentService {
      * 识别当前用户输入的任务意图。
      *
      * @param command 当前聊天命令。
-     * @param memory SuperAgent 装配的会话上下文快照。
+     * @param memory SuperAgent 可选记忆上下文；长短期记忆关闭时为空上下文。
      * @param user 当前用户身份上下文。
      * @return 意图识别结果；服务不可用时由调用方降级到 AgentRuntime。
      */

@@ -19,7 +19,7 @@ import java.util.Map;
  * @param agentCode 目标 SubAgent 编码。
  * @param message 本轮用户输入。
  * @param attachments 本轮用户关联附件。
- * @param memoryContext SuperAgent 装配的上下文快照。
+ * @param memoryContext SuperAgent 可选记忆上下文；长短期记忆关闭时为空上下文。
  * @param routeTarget 本轮路由决策结果。
  * @param metadata 前端或上游传入的扩展元数据。
  */

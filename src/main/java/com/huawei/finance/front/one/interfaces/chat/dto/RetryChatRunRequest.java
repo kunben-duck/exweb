@@ -19,6 +19,6 @@ public record RetryChatRunRequest(
         String commandId,
         String conversationId,
         String message,
-        List<FrontAttachmentDto> attachments,
+        List<ChatAttachmentDto> attachments,
         Map<String, Object> metadata
 ) {}

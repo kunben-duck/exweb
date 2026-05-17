@@ -11,7 +11,7 @@ import java.util.Map;
  * @param type 事件类型，例如 run.started、message.delta。
  * @param payload 事件载荷。
  */
-public record FrontChatEventDto(
+public record ChatEventDto(
         String runId,
         String sessionId,
         long sequence,

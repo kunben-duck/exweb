@@ -14,7 +14,7 @@ import java.time.Instant;
  * @param createdAt 创建时间。
  * @param updatedAt 最近更新时间。
  */
-public record FrontChatSessionDto(
+public record ChatSessionDto(
         String sessionId,
         String tenantId,
         String userId,

@@ -11,7 +11,7 @@ import java.time.Instant;
  * @param rating 反馈评级。
  * @param createdAt 反馈创建时间。
  */
-public record FrontMessageFeedbackDto(
+public record MessageFeedbackDto(
         String feedbackId,
         String messageId,
         String runId,

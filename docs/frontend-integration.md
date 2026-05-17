@@ -367,8 +367,8 @@ ws.onopen = () => {
 ws.send(JSON.stringify({
   id: "2",
   type: "subscribe",
-  topicId: handoff.streamTopicId,
-  afterSeq: handoff.firstSeq
+  topicId: runStart.streamTopicId,
+  afterSeq: runStart.firstSeq
 }));
 ```
 
@@ -446,7 +446,7 @@ ws.send(JSON.stringify({
 }));
 ```
 
-WebSocket 不接受 `{"type":"chat"}` 或旧 `FrontChatRequest`。发送旧聊天请求会得到 `BAD_WS_MESSAGE`。
+WebSocket 不接受 `{"type":"chat"}` 或旧 `CreateChatRunRequest`。发送旧聊天请求会得到 `BAD_WS_MESSAGE`。
 
 如果服务端检测到当前连接收到乱序实时事件，会返回恢复提示而不是静默丢弃：
 
@@ -487,7 +487,7 @@ const handleSse = event => {
 ].forEach(type => source.addEventListener(type, handleSse));
 ```
 
-服务端 SSE event name 等于事件 `type`，data 是 `FrontChatEventDto`。浏览器的 `EventSource.onmessage` 只处理默认 `message` 事件，因此前端需要按上面的方式注册具名事件监听：
+服务端 SSE event name 等于事件 `type`，data 是 `ChatEventDto`。浏览器的 `EventSource.onmessage` 只处理默认 `message` 事件，因此前端需要按上面的方式注册具名事件监听：
 
 ```json
 {
@@ -692,16 +692,16 @@ async function ask(message, sessionId) {
       metadata: { clientMessageId: crypto.randomUUID() }
     })
   });
-  const handoff = await response.json();
-  currentRunId = handoff.runId;
-  currentTopicId = handoff.streamTopicId;
-  lastSeq = Math.max(lastSeq, handoff.firstSeq);
+  const runStart = await response.json();
+  currentRunId = runStart.runId;
+  currentTopicId = runStart.streamTopicId;
+  lastSeq = Math.max(lastSeq, runStart.firstSeq);
 
   ws.send(JSON.stringify({
-    id: `sub-${handoff.runId}`,
+    id: `sub-${runStart.runId}`,
     type: "subscribe",
-    topicId: handoff.streamTopicId,
-    afterSeq: handoff.firstSeq
+    topicId: runStart.streamTopicId,
+    afterSeq: runStart.firstSeq
   }));
 }
 

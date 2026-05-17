@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.application.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.huawei.finance.front.one.application.config.MemoryProperties;
 import com.huawei.finance.front.one.application.config.RouteSignalProperties;
 import com.huawei.finance.front.one.application.facade.DocumentFacade;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
@@ -16,7 +17,6 @@ import com.huawei.finance.front.one.application.integration.id.IdGenerateContext
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.finance.front.one.application.integration.memory.LongTermMemoryStore;
-import com.huawei.finance.front.one.application.integration.memory.WorkingMemoryStore;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.finance.front.one.application.command.DocumentUpdateCommand;
@@ -62,14 +62,13 @@ class FinanceEXChatServiceTest {
         CountingCancelRunCache runCache = new CountingCancelRunCache();
         InMemoryRunRepository runs = new InMemoryRunRepository();
         InMemoryEventStore events = new InMemoryEventStore();
-        RecordingWorkingMemory workingMemory = new RecordingWorkingMemory();
         UserContext user = new UserContext("tenant1", "user1", "User One");
         IdGenerator ids = new FixedIdGenerator();
         PermissionChecker permissionChecker = new PermissionChecker();
 
         FinanceEXChatService service = new FinanceEXChatService(
                 new SessionApplicationService(sessions, messages, ids, permissionChecker),
-                new MemoryApplicationService(messages, workingMemory, longTermMemory()),
+                new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
                 new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
                 systemRouteService(),
                 new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
@@ -83,20 +82,19 @@ class FinanceEXChatServiceTest {
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(noopRuntime()),
                 documentFacade(),
-                new ChatStreamApplicationService(events, new ChatEventStreamRegistry(), liveEventBus(), runs,
+                new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
                         permissionChecker, sessions),
                 new ChatRunApplicationService(runs, runCache, events, permissionChecker, sessions),
-                new ChatRunExecutionRegistry(),
+                new LocalChatRunExecutionRegistry(),
                 ids
         );
 
-        StepVerifier.create(service.chat(user, new ChatCommand("cmd1", null, null,
+        StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
                         null, null, "web", "hello", List.of(), Map.of())))
                 .expectNextCount(3)
                 .verifyComplete();
 
         assertThat(messages.messages).extracting(ChatMessage::role).containsExactly("user");
-        assertThat(workingMemory.updated).isFalse();
     }
 
     private RouteSignalApplicationService systemRouteService() {
@@ -218,13 +216,6 @@ class FinanceEXChatServiceTest {
         @Override public Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId) {
             return messages.stream().filter(message -> messageId.equals(message.id())).findFirst();
         }
-    }
-
-    private static class RecordingWorkingMemory implements WorkingMemoryStore {
-        private boolean updated;
-        @Override public Map<String, Object> load(String sessionId) { return Map.of(); }
-        @Override public void update(String sessionId, Map<String, Object> variables) { updated = true; }
-        @Override public void clear(String sessionId) {}
     }
 
     private static class FixedIdGenerator implements IdGenerator {

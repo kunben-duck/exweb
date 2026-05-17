@@ -28,7 +28,7 @@ class ChatStreamApplicationServiceTest {
     @Test
     void appendAssignsSeqAndResumeSessionReplaysOnlyPersistedEvents() {
         InMemoryChatEventStore store = new InMemoryChatEventStore();
-        ChatEventStreamRegistry registry = new ChatEventStreamRegistry();
+        LocalChatEventStreamRegistry registry = new LocalChatEventStreamRegistry();
         ChatStreamApplicationService service = new ChatStreamApplicationService(
                 store,
                 registry,
@@ -54,7 +54,7 @@ class ChatStreamApplicationServiceTest {
         InMemoryChatEventStore store = new InMemoryChatEventStore();
         ChatStreamApplicationService service = new ChatStreamApplicationService(
                 store,
-                new ChatEventStreamRegistry(),
+                new LocalChatEventStreamRegistry(),
                 new InMemoryLiveEventBus(),
                 new InMemoryRunRepository(),
                 new PermissionChecker(),
@@ -72,7 +72,7 @@ class ChatStreamApplicationServiceTest {
         InMemoryRunRepository runRepository = new InMemoryRunRepository();
         ChatStreamApplicationService service = new ChatStreamApplicationService(
                 store,
-                new ChatEventStreamRegistry(),
+                new LocalChatEventStreamRegistry(),
                 liveEventBus,
                 runRepository,
                 new PermissionChecker(),

@@ -17,8 +17,8 @@ import org.springframework.stereotype.Component;
 /**
  * Redis 短期记忆缓存。
  *
- * <p>Redis 只承担热数据缓存，不作为最终事实源；当 Redis 不可用或 key 过期时，
- * 上层组合仓储会回退到数据库并重新预热 Redis。</p>
+ * <p>Redis 只承担最近问答热缓存，不作为最终事实源。只有短期记忆和缓存同时开启时才访问 Redis；
+ * 当 Redis 不可用或 key 过期时，上层组合仓储会回退到数据库并重新预热 Redis。</p>
  */
 @Component
 public class RedisShortTermMemoryCache {
@@ -110,7 +110,7 @@ public class RedisShortTermMemoryCache {
     }
 
     private boolean canUseRedis() {
-        return properties.isEnabled() && !Instant.now().isBefore(retryAfter);
+        return properties.isEnabled() && properties.isCacheEnabled() && !Instant.now().isBefore(retryAfter);
     }
 
     private void markRedisFailure(RuntimeException ex) {
@@ -146,7 +146,7 @@ public class RedisShortTermMemoryCache {
     }
 
     private String key(String tenantId, String userId, String sessionId) {
-        return properties.getKeyPrefix()
+        return properties.getRedisKeyPrefix()
                 + ":messages:"
                 + normalize(tenantId)
                 + ":"

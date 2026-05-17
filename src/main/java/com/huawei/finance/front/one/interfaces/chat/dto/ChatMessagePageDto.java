@@ -8,7 +8,7 @@ import java.util.List;
  * @param items 当前页历史消息，按创建时间正序排列。
  * @param nextCursor 下一页游标；为空表示没有更早消息。
  */
-public record FrontChatMessagePageDto(
-        List<FrontChatMessageDto> items,
+public record ChatMessagePageDto(
+        List<ChatMessageDto> items,
         String nextCursor
 ) {}

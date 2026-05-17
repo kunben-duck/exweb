@@ -10,7 +10,7 @@ package com.huawei.finance.front.one.interfaces.chat.dto;
  * @param activeStreamTopicId 当前 active run 对应的 WebSocket topic。
  * @param cancellable 当前 active run 是否可取消。
  */
-public record FrontStreamStatusDto(
+public record ChatStreamStatusDto(
         String sessionId,
         long latestSeq,
         String activeRunId,

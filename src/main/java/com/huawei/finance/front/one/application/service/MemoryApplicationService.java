@@ -1,41 +1,53 @@
 package com.huawei.finance.front.one.application.service;
 
+import com.huawei.finance.front.one.application.config.MemoryProperties;
 import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.finance.front.one.application.integration.memory.LongTermMemoryStore;
-import com.huawei.finance.front.one.application.integration.memory.WorkingMemoryStore;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
+import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.domain.memory.LongTermMemoryItem;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
-import java.util.Map;
+import java.util.List;
 import org.springframework.stereotype.Service;
 
 /**
- * 记忆上下文装配服务。
+ * 可选 SuperAgent 记忆上下文装配服务。
  *
- * <p>集中读取 ChatService 主控链路需要的轻量上下文。会话压缩、长上下文窗口和 Runtime 内部记忆
- * 属于 AgentRuntime 自治能力，不在 ChatService 侧维护摘要事实源。</p>
+ * <p>短期记忆和长期记忆均由配置独立控制。全部关闭时，该服务只返回空上下文，不访问 Redis、
+ * openGauss 历史消息或长期记忆服务。会话压缩、长上下文窗口和 Runtime 内部记忆仍属于
+ * AgentRuntime 自治能力。</p>
  */
 @Service
 public class MemoryApplicationService {
     private final ChatMessageRepository messages;
-    private final WorkingMemoryStore workingMemory;
     private final LongTermMemoryStore longTermMemory;
+    private final MemoryProperties properties;
 
-    public MemoryApplicationService(ChatMessageRepository messages, WorkingMemoryStore workingMemory,
-                                    LongTermMemoryStore longTermMemory) {
-        this.messages = messages; this.workingMemory = workingMemory; this.longTermMemory = longTermMemory;
+    public MemoryApplicationService(ChatMessageRepository messages, LongTermMemoryStore longTermMemory,
+                                    MemoryProperties properties) {
+        this.messages = messages;
+        this.longTermMemory = longTermMemory;
+        this.properties = properties;
     }
 
+    /**
+     * 根据配置为本轮 run 装配可选记忆上下文。
+     *
+     * @param command 已由应用层回填身份和会话的聊天命令。
+     * @return 记忆上下文；全部记忆关闭时返回空上下文。
+     */
     public MemoryContext loadForRun(ChatCommand command) {
-        // 当前策略保留最近 20 条消息，并检索 5 条相关长期记忆。
-        return new MemoryContext(
-                messages.findRecentMessages(command.tenantId(), command.userId(), command.sessionId(), 20),
-                workingMemory.load(command.sessionId()),
-                longTermMemory.searchRelevant(command.tenantId(), command.userId(), command.message(), 5)
-        );
-    }
-
-    public void updateAfterRun(ChatCommand command, Map<String, Object> variables) {
-        // 工作记忆用于保存轻量运行变量，例如最近一次 runId。
-        workingMemory.update(command.sessionId(), variables == null ? Map.of() : variables);
+        if (!properties.contextEnabled()) {
+            return MemoryContext.empty();
+        }
+        List<ChatMessage> recentMessages = properties.getShortTerm().isEnabled()
+                ? messages.findRecentMessages(command.tenantId(), command.userId(), command.sessionId(),
+                        properties.getShortTerm().recentMessageLimit())
+                : List.of();
+        List<LongTermMemoryItem> longTermMemories = properties.getLongTerm().isEnabled()
+                ? longTermMemory.searchRelevant(command.tenantId(), command.userId(), command.message(),
+                        properties.getLongTerm().normalizedTopK())
+                : List.of();
+        return new MemoryContext(recentMessages, longTermMemories);
     }
 }

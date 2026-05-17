@@ -13,9 +13,10 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Repository;
 
 /**
- * 短期记忆组合仓储。
+ * 聊天历史消息组合仓储。
  *
- * <p>写入时先写 Redis，再写数据库；读取时优先查 Redis，Redis 为空或过期时回源数据库并预热缓存。</p>
+ * <p>openGauss 是历史消息事实源；Redis 仅在短期记忆开启且缓存开启时作为最近消息热缓存。
+ * 读取最近消息时优先查 Redis，Redis 为空或过期时回源数据库并预热缓存。</p>
  */
 @Primary
 @Repository

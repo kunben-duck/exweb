@@ -8,7 +8,7 @@ import java.util.List;
  * @param items 当前页会话，按最近更新时间倒序排列。
  * @param nextCursor 下一页游标；为空表示没有更多会话。
  */
-public record FrontChatSessionPageDto(
-        List<FrontChatSessionDto> items,
+public record ChatSessionPageDto(
+        List<ChatSessionDto> items,
         String nextCursor
 ) {}

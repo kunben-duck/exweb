@@ -7,14 +7,14 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
- * 关闭长期记忆时使用的生产实现。
+ * 默认长期记忆适配实现。
  *
- * <p>长期记忆不是聊天主链路的必需能力。本实现用于明确表达“当前环境未启用长期记忆服务”，
- * 不生成任何伪造记忆，也不吞入业务数据；接入真实长期记忆服务时替换为对应 HTTP/gRPC/SDK 适配器。</p>
+ * <p>长期记忆不是聊天主链路的必需能力。本实现作为默认安全适配器，
+ * 在未接入真实长期记忆服务时不生成任何伪造记忆，也不吞入业务数据；后续可替换为对应 HTTP/gRPC/SDK 适配器。</p>
  */
 @Component
 @ConditionalOnProperty(name = "financeex.memory.long-term.provider", havingValue = "disabled", matchIfMissing = true)
-public class DisabledLongTermMemoryStore implements LongTermMemoryStore {
+public class DefaultLongTermMemoryStore implements LongTermMemoryStore {
     @Override
     public List<LongTermMemoryItem> searchRelevant(String tenantId, String userId, String query, int topK) {
         return List.of();

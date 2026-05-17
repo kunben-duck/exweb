@@ -2,8 +2,8 @@ package com.huawei.finance.front.one.interfaces.chat;
 
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
-import com.huawei.finance.front.one.interfaces.chat.dto.FrontAttachmentDto;
-import com.huawei.finance.front.one.interfaces.chat.dto.FrontChatRequest;
+import com.huawei.finance.front.one.interfaces.chat.dto.ChatAttachmentDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatRunRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.RetryChatRunRequest;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -25,7 +25,7 @@ public class ChatRequestTranslator {
      * @param request 前端提问请求；身份字段不会从该对象读取。
      * @return 应用层聊天命令，tenantId/userId 保持为空并由聊天编排用入口 UserContext 回填。
      */
-    public ChatCommand toCommand(FrontChatRequest request) {
+    public ChatCommand toCommand(CreateChatRunRequest request) {
         Map<String, Object> metadata = normalizeMetadata(request.metadata());
         // 身份字段留空进入 application，由 Controller 入口解析出的 UserContext 统一回填。
         // 这样前端无法通过 Header/Query/Body 改写租户或用户，后续接入企业权限框架也只替换身份防腐层。
@@ -58,7 +58,7 @@ public class ChatRequestTranslator {
         return normalized;
     }
 
-    private List<AttachmentRef> toAttachmentRefs(List<FrontAttachmentDto> attachments) {
+    private List<AttachmentRef> toAttachmentRefs(List<ChatAttachmentDto> attachments) {
         if (attachments == null || attachments.isEmpty()) {
             return List.of();
         }

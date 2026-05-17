@@ -10,7 +10,7 @@ package com.huawei.finance.front.one.interfaces.chat.dto;
  * @param tokenSize 文档解析后的 token 数量，可为空。
  * @param source 文档来源，例如 LOCAL_UPLOAD、LIBRARY、CONNECTOR。
  */
-public record FrontAttachmentDto(
+public record ChatAttachmentDto(
         String documentId,
         String name,
         String contentType,

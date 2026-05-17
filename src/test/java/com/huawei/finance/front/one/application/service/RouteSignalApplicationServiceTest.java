@@ -26,7 +26,7 @@ class RouteSignalApplicationServiceTest {
             "测试会话", "ACTIVE", "web", Instant.now(), Instant.now());
     private final ChatCommand command = new ChatCommand("cmd1", "tenant1", "user1", "session1",
             null, "web", "帮我报销一张发票", List.of(), Map.of());
-    private final MemoryContext memory = new MemoryContext(List.of(), Map.of(), List.of());
+    private final MemoryContext memory = MemoryContext.empty();
 
     @Test
     void disabledSignalsRouteInitialToRuntimeWithoutCallingClients() {

@@ -10,13 +10,13 @@ import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 
 /**
- * 当前 JVM 内 WebSocket 连接注册表。
+ * 当前服务实例内的 WebSocket 连接注册表。
  *
  * <p>该注册表只保存运行态连接状态，不作为业务事实源。它用于连接级身份隔离、订阅释放、
  * 去重和排障；跨实例事件仍通过 Redis Pub/Sub 扇出，事件事实源仍是 openGauss。</p>
  */
 @Component
-public class WebSocketConnectionRegistry {
+public class LocalWebSocketConnectionRegistry {
     private final Map<String, ConnectionState> connections = new ConcurrentHashMap<>();
 
     /**
@@ -36,7 +36,7 @@ public class WebSocketConnectionRegistry {
      * 查询连接状态。
      *
      * @param connectionId WebSocket 物理连接 ID。
-     * @return 当前 JVM 内记录的连接状态；连接不存在时为空。
+     * @return 当前服务实例内记录的连接状态；连接不存在时为空。
      */
     public Optional<ConnectionState> get(String connectionId) {
         return Optional.ofNullable(connections.get(connectionId));

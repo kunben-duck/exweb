@@ -1,16 +1,33 @@
 package com.huawei.finance.front.one.interfaces.chat;
 
 import com.huawei.finance.front.one.application.facade.ChatSessionFacade;
+import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
+import com.huawei.finance.front.one.application.service.ChatRunApplicationService;
+import com.huawei.finance.front.one.application.service.PermissionChecker;
+import com.huawei.finance.front.one.domain.auth.UserContext;
+import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
+import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
+import com.huawei.finance.front.one.domain.chat.ChatStreamStatus;
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatSessionRequest;
+import com.huawei.finance.front.one.interfaces.chat.dto.FrontChatMessageDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.FrontChatMessagePageDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.FrontChatSessionDto;
-import java.util.List;
+import com.huawei.finance.front.one.interfaces.chat.dto.FrontChatSessionPageDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.FrontChatSessionStateDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.FrontStreamStatusDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.UpdateChatSessionRequest;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * 聊天会话管理接口。
@@ -18,37 +35,200 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>第一版提供创建、查询、列表和关闭能力；会话归属由 application 层通过当前 UserContext 校验。</p>
  */
 @RestController
-@RequestMapping("/api/v1/finance/chat/sessions")
+@RequestMapping("/api/v1/ex/chat/sessions")
 public class ChatSessionController {
     private final ChatSessionFacade facade;
+    private final ChatRunApplicationService chatRunService;
+    private final AuthContextProvider auth;
+    private final PermissionChecker permissionChecker;
 
-    public ChatSessionController(ChatSessionFacade facade) {
+    public ChatSessionController(ChatSessionFacade facade, ChatRunApplicationService chatRunService,
+                                 AuthContextProvider auth, PermissionChecker permissionChecker) {
         this.facade = facade;
+        this.chatRunService = chatRunService;
+        this.auth = auth;
+        this.permissionChecker = permissionChecker;
     }
 
+    /**
+     * 创建当前用户的新聊天会话。
+     *
+     * @param request 会话创建请求；为空时使用默认标题和 web 渠道。
+     * @return 新建会话元数据。
+     */
     @PostMapping
-    public FrontChatSessionDto create(@RequestBody(required = false) CreateChatSessionRequest request) {
-        String title = request == null ? null : request.title();
-        String channel = request == null ? null : request.channel();
-        return toDto(facade.createSession(title, channel));
+    public Mono<FrontChatSessionDto> create(@RequestBody(required = false) CreateChatSessionRequest request) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> {
+                    String title = request == null ? null : request.title();
+                    String channel = request == null ? null : request.channel();
+                    return toDto(facade.createSession(user, title, channel));
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
+    /**
+     * 分页查询当前用户会话列表。
+     *
+     * @param cursor 上一页返回的游标；为空时查询第一页。
+     * @param limit 最大返回条数，应用层会做上限保护。
+     * @return 会话分页结果，按最近更新时间倒序排列。
+     */
     @GetMapping
-    public List<FrontChatSessionDto> list() {
-        return facade.listSessions().stream().map(this::toDto).toList();
+    public Mono<FrontChatSessionPageDto> list(@RequestParam(value = "cursor", required = false) String cursor,
+                                              @RequestParam(value = "limit", defaultValue = "20") int limit) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> {
+                    ChatSessionPage page = facade.listSessions(user, cursor, limit);
+                    return new FrontChatSessionPageDto(page.items().stream().map(this::toDto).toList(), page.nextCursor());
+                })
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
+    /**
+     * 查询当前用户可见的单个会话。
+     *
+     * @param sessionId 会话标识；服务端会校验会话归属。
+     * @return 会话元数据。
+     */
     @GetMapping("/{sessionId}")
-    public FrontChatSessionDto get(@PathVariable String sessionId) {
-        return toDto(facade.getSession(sessionId));
+    public Mono<FrontChatSessionDto> get(@PathVariable String sessionId) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> toDto(facade.getSession(user, sessionId)))
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
+    /**
+     * 查询会话页面初始化状态。
+     *
+     * @param sessionId 会话标识；服务端会校验会话归属。
+     * @param messageLimit 返回最近历史消息条数，适合页面首次渲染。
+     * @return 会话元数据、最近历史消息分页和当前流式状态。
+     */
+    @GetMapping("/{sessionId}/state")
+    public Mono<FrontChatSessionStateDto> state(@PathVariable String sessionId,
+                                                @RequestParam(value = "messageLimit", defaultValue = "50") int messageLimit) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> {
+                    ChatSession session = facade.getSession(user, sessionId);
+                    ChatMessagePage messages = facade.listMessages(user, sessionId, null, messageLimit);
+                    ChatStreamStatus streamStatus = chatRunService.streamStatus(user, sessionId);
+                    return new FrontChatSessionStateDto(
+                            toDto(session),
+                            toMessagePageDto(messages),
+                            toStreamStatusDto(streamStatus)
+                    );
+                })
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * 查询所选会话的历史消息。
+     *
+     * <p>返回值按创建时间正序排列，适合前端切换会话后直接渲染历史气泡。
+     * 正在输出中的增量内容仍通过 WebSocket/SSE 事件恢复。</p>
+     *
+     * @param sessionId 会话标识；服务端会校验会话归属。
+     * @param cursor 上一页返回的游标；为空时查询最近一页。
+     * @param limit 最大返回条数，应用层会做上限保护。
+     * @return 历史消息分页结果。
+     */
+    @GetMapping("/{sessionId}/messages")
+    public Mono<FrontChatMessagePageDto> messages(@PathVariable String sessionId,
+                                                  @RequestParam(value = "cursor", required = false) String cursor,
+                                                  @RequestParam(value = "limit", defaultValue = "50") int limit) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> toMessagePageDto(facade.listMessages(user, sessionId, cursor, limit)))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * 重命名当前用户会话。
+     *
+     * @param sessionId 会话标识；服务端会校验会话归属。
+     * @param request 更新请求；title 为空时保留原标题。
+     * @return 更新后的会话元数据。
+     */
+    @PatchMapping("/{sessionId}")
+    public Mono<FrontChatSessionDto> update(@PathVariable String sessionId,
+                                            @RequestBody(required = false) UpdateChatSessionRequest request) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> toDto(facade.renameSession(user, sessionId, request == null ? null : request.title())))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * 归档当前用户会话。
+     *
+     * @param sessionId 会话标识；服务端会校验会话归属。
+     * @return 归档后的会话元数据。
+     */
+    @PostMapping("/{sessionId}/archive")
+    public Mono<FrontChatSessionDto> archive(@PathVariable String sessionId) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> toDto(facade.archiveSession(user, sessionId)))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * 恢复当前用户归档会话。
+     *
+     * @param sessionId 会话标识；服务端会校验会话归属。
+     * @return 恢复后的会话元数据。
+     */
+    @PostMapping("/{sessionId}/restore")
+    public Mono<FrontChatSessionDto> restore(@PathVariable String sessionId) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> toDto(facade.restoreSession(user, sessionId)))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * 关闭当前用户会话。
+     *
+     * @param sessionId 会话标识；服务端会校验会话归属。
+     * @return 关闭后的会话元数据。
+     */
     @PostMapping("/{sessionId}/close")
-    public FrontChatSessionDto close(@PathVariable String sessionId) {
-        return toDto(facade.closeSession(sessionId));
+    public Mono<FrontChatSessionDto> close(@PathVariable String sessionId) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> toDto(facade.closeSession(user, sessionId)))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    private UserContext resolveChatUser() {
+        UserContext user = auth.resolve();
+        permissionChecker.checkChatPermission(user);
+        return user;
     }
 
     private FrontChatSessionDto toDto(ChatSession session) {
         return new FrontChatSessionDto(session.id(), session.tenantId(), session.userId(), session.title(), session.status(), session.channel(), session.createdAt(), session.updatedAt());
+    }
+
+    private FrontChatMessageDto toMessageDto(ChatMessage message) {
+        return new FrontChatMessageDto(
+                message.id(),
+                message.sessionId(),
+                message.role(),
+                message.content(),
+                message.tokenCount(),
+                message.createdAt()
+        );
+    }
+
+    private FrontChatMessagePageDto toMessagePageDto(ChatMessagePage page) {
+        return new FrontChatMessagePageDto(page.items().stream().map(this::toMessageDto).toList(), page.nextCursor());
+    }
+
+    private FrontStreamStatusDto toStreamStatusDto(ChatStreamStatus status) {
+        return new FrontStreamStatusDto(
+                status.sessionId(),
+                status.latestSeq(),
+                status.activeRunId(),
+                status.activeRunStatus() == null ? null : status.activeRunStatus().name(),
+                status.activeStreamTopicId(),
+                status.cancellable()
+        );
     }
 }

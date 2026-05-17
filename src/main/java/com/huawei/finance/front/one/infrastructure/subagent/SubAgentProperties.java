@@ -39,6 +39,8 @@ public class SubAgentProperties {
         private boolean enabled = true;
         /** SubAgent HTTP 流式接口完整地址。 */
         private String endpoint;
+        /** SubAgent HTTP stop 接口完整地址；为空表示该 SubAgent 暂不支持取消。 */
+        private String stopEndpoint;
         public boolean isEnabled() {
             return enabled;
         }
@@ -53,6 +55,14 @@ public class SubAgentProperties {
 
         public void setEndpoint(String endpoint) {
             this.endpoint = endpoint;
+        }
+
+        public String getStopEndpoint() {
+            return stopEndpoint;
+        }
+
+        public void setStopEndpoint(String stopEndpoint) {
+            this.stopEndpoint = stopEndpoint;
         }
 
     }

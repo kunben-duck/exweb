@@ -2,8 +2,10 @@ package com.huawei.finance.front.one.infrastructure.memory;
 
 import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -77,6 +79,17 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
             redisCache.replaceSessionMessages(tenantId, userId, sessionId, persisted);
         }
         return persisted;
+    }
+
+    @Override
+    public ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String cursor, int limit) {
+        // 历史消息分页必须以 openGauss 为事实源；Redis 只缓存最近上下文，不适合作为翻页数据源。
+        return databaseStore.pageMessages(tenantId, userId, sessionId, cursor, limit);
+    }
+
+    @Override
+    public Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId) {
+        return databaseStore.findByOwnerAndId(tenantId, userId, messageId);
     }
 
     private boolean canUseDatabase() {

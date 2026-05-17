@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.infrastructure.storage;
 
 import com.huawei.finance.front.one.application.integration.document.ObjectStorage;
 import com.huawei.finance.front.one.domain.document.StoredObject;
+import com.huawei.finance.front.one.domain.document.StoredObjectContent;
 import java.io.InputStream;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -12,6 +13,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 /**
@@ -54,6 +56,22 @@ public class S3ObjectStorage implements ObjectStorage {
             return new StoredObject(bucket, objectKey, sizeBytes, contentType);
         } catch (Exception ex) {
             throw new IllegalStateException("文档写入 S3 对象存储失败", ex);
+        }
+    }
+
+    @Override
+    public StoredObjectContent getObject(String bucket, String objectKey) {
+        try {
+            GetObjectRequest request = GetObjectRequest.builder()
+                    .bucket(requireText(bucket, "S3 bucket 不能为空"))
+                    .key(requireText(objectKey, "S3 objectKey 不能为空"))
+                    .build();
+            var response = s3Client.getObject(request);
+            return new StoredObjectContent(bucket, objectKey,
+                    response.response().contentLength() == null ? -1L : response.response().contentLength(),
+                    response.response().contentType(), response);
+        } catch (Exception ex) {
+            throw new IllegalStateException("文档读取 S3 对象存储失败", ex);
         }
     }
 

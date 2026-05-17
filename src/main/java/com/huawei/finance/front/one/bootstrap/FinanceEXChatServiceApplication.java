@@ -5,6 +5,11 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.ComponentScan;
 
+/**
+ * FinanceEXChatService Spring Boot 启动类。
+ *
+ * <p>MapperScan 显式列出各基础设施 MyBatis 包，避免扫描到非 Mapper 类型。</p>
+ */
 @SpringBootApplication
 @ComponentScan(basePackages = "com.huawei.finance.front.one")
 @MapperScan(basePackages = {

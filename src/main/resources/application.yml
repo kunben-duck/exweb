@@ -67,12 +67,21 @@ financeex:
     ttl: 3d
     redis-key-prefix: fin_ex:runtime_binding
     redis-ttl: 3d
+  chat-run:
+    active-key-prefix: fin_ex:chat_run:active
+    cancel-key-prefix: fin_ex:chat_run:cancel
+    active-ttl: 6h
+    cancel-ttl: 1h
+  websocket:
+    # WebSocket 是用户级连接，事件按 run 级 stream topic 订阅；Redis Pub/Sub 只做跨实例实时扇出。
+    redis-channel-prefix: fin_ex:chat_stream
   sub-agent:
     timeout: 30s
     agents:
       employee_reimbursement_agent:
         enabled: ${FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENABLED:true}
         endpoint: ${FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENDPOINT:}
+        stop-endpoint: ${FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_STOP_ENDPOINT:}
   memory:
     short-term:
       storage:
@@ -97,6 +106,7 @@ financeex:
     provider: ${FINANCEEX_AGENT_RUNTIME_PROVIDER:relay}
     base-url: ${FINANCEEX_RELAY_AGENT_BASE_URL:http://localhost:9000}
     stream-path: ${FINANCEEX_RELAY_AGENT_STREAM_PATH:/v1/agent/runs/stream}
+    stop-path: ${FINANCEEX_RELAY_AGENT_STOP_PATH:/v1/agent/runs/{runId}/stop}
     timeout: 60s
   storage:
     provider: ${FINANCEEX_STORAGE_PROVIDER:local}

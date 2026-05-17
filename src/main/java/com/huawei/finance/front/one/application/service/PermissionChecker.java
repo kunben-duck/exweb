@@ -10,6 +10,6 @@ import com.huawei.finance.front.one.domain.auth.UserContext;
  */
 public class PermissionChecker {
     public void checkChatPermission(UserContext user) {
-        // 暂不做权限拦截；身份完整性由 AuthContextProvider 负责保证。
+        // 暂不做权限拦截；身份完整性由请求入口的身份解析防腐层负责保证。
     }
 }

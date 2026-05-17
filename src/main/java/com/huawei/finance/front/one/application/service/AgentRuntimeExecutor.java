@@ -1,18 +1,22 @@
 package com.huawei.finance.front.one.application.service;
 
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
+import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import java.util.List;
+import java.util.Map;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * 统一 AgentRuntime 执行器。
@@ -41,8 +45,6 @@ public class AgentRuntimeExecutor {
                 runId,
                 binding == null ? null : binding.runtimeSessionId(),
                 command.message(),
-                command.messageType(),
-                command.responseMode(),
                 attachments,
                 memory,
                 intent,
@@ -50,5 +52,25 @@ public class AgentRuntimeExecutor {
                 command.metadata()
         );
         return runtime.query(request);
+    }
+
+    /**
+     * 尽力取消当前 Runtime run。
+     */
+    public Mono<Void> cancel(ChatRun run, UserContext user) {
+        if (run == null) {
+            return Mono.empty();
+        }
+        AgentRuntimeCancelRequest request = new AgentRuntimeCancelRequest(
+                user.tenantId(),
+                user.userId(),
+                run.sessionId(),
+                run.id(),
+                run.runtimeSessionId(),
+                run.runtimeProvider(),
+                run.cancelReason(),
+                Map.of("routeType", run.routeType() == null ? "" : run.routeType())
+        );
+        return runtime.cancel(request);
     }
 }

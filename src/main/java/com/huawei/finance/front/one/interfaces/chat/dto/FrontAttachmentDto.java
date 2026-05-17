@@ -7,10 +7,14 @@ package com.huawei.finance.front.one.interfaces.chat.dto;
  * @param name 附件展示名称。
  * @param contentType 附件 MIME 类型。
  * @param sizeBytes 附件大小，单位字节。
+ * @param tokenSize 文档解析后的 token 数量，可为空。
+ * @param source 文档来源，例如 LOCAL_UPLOAD、LIBRARY、CONNECTOR。
  */
 public record FrontAttachmentDto(
         String documentId,
         String name,
         String contentType,
-        Long sizeBytes
+        Long sizeBytes,
+        Long tokenSize,
+        String source
 ) {}

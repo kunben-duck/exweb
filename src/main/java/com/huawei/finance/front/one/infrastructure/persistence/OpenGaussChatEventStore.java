@@ -13,24 +13,21 @@ import com.huawei.finance.front.one.infrastructure.persistence.mybatis.ChatEvent
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.stereotype.Repository;
 
 /**
  * 聊天事件 openGauss 事实源。
  *
- * <p>事件流会被 SSE、NDJSON 和 WebSocket 实时消费，同时也要能在断线重连、审计和排障时回放。
+ * <p>事件流会被 WebSocket 实时消费，并通过 SSE 在断线重连、刷新页面、审计和排障时回放。
  * 因此这里不再使用 JVM 内存列表，而是把每个 ChatEvent 持久化到 fin_ex_chat_event_t。</p>
  */
 @Repository
 public class OpenGaussChatEventStore implements ChatEventStore {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
-    private static final long MILLIS_TO_SEQUENCE_FACTOR = 1_000L;
 
     private final ChatEventMapper mapper;
     private final ObjectMapper objectMapper;
     private final IdGenerator idGenerator;
-    private final AtomicLong sequenceGenerator = new AtomicLong(System.currentTimeMillis() * MILLIS_TO_SEQUENCE_FACTOR);
 
     public OpenGaussChatEventStore(ChatEventMapper mapper, ObjectMapper objectMapper, IdGenerator idGenerator) {
         this.mapper = mapper;
@@ -39,22 +36,23 @@ public class OpenGaussChatEventStore implements ChatEventStore {
     }
 
     @Override
-    public void append(ChatEvent event) {
-        long sequence = nextPersistentSequence();
+    public ChatEvent append(ChatEvent event) {
         String eventId = idGenerator.newId("event",
                 IdGenerateContext.of(null, null, event.sessionId(), event.runId()));
-        int inserted = mapper.insertFromSession(
+        Instant createdAt = event.createdAt() == null ? Instant.now() : event.createdAt();
+        // seq 是前端恢复游标，必须以 openGauss 返回值为准，避免多实例本地生成导致 afterSeq 歧义。
+        ChatEventRow inserted = mapper.insertFromSession(
                 eventId,
                 event.sessionId(),
                 event.runId(),
-                sequence,
                 event.type(),
                 toJson(event.payload()),
-                event.createdAt() == null ? Instant.now() : event.createdAt()
+                createdAt
         );
-        if (inserted == 0) {
+        if (inserted == null) {
             throw new IllegalStateException("聊天事件无法落库，关联会话不存在: " + event.sessionId());
         }
+        return toDomain(inserted);
     }
 
     @Override
@@ -63,15 +61,13 @@ public class OpenGaussChatEventStore implements ChatEventStore {
     }
 
     @Override
-    public List<ChatEvent> findByRunId(String runId) {
-        return mapper.findByRunId(runId).stream().map(this::toDomain).toList();
+    public List<ChatEvent> findByRunIdAndAfterSeq(String runId, long afterSeq) {
+        return mapper.findByRunIdAndAfterSeq(runId, afterSeq).stream().map(this::toDomain).toList();
     }
 
-    private long nextPersistentSequence() {
-        // 领域事件的 sequence 目前由各事件工厂固定为 0；持久化层单独生成递增序号，
-        // 用于 findBySessionIdAndAfterSeq 的断线续传语义，并避免同一 run 内唯一键冲突。
-        long nowBasedSequence = System.currentTimeMillis() * MILLIS_TO_SEQUENCE_FACTOR;
-        return sequenceGenerator.updateAndGet(previous -> Math.max(previous + 1, nowBasedSequence));
+    @Override
+    public long findLatestSeqBySessionId(String sessionId) {
+        return mapper.findLatestSeqBySessionId(sessionId);
     }
 
     private ChatEvent toDomain(ChatEventRow row) {

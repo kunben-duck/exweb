@@ -16,15 +16,26 @@ import org.springframework.web.reactive.socket.server.support.WebSocketHandlerAd
  */
 @Configuration
 public class ChatWebSocketConfig {
+    /**
+     * 注册聊天 WebSocket 路由。
+     *
+     * @param handler 聊天 WebSocket 处理器。
+     * @return WebFlux HandlerMapping。
+     */
     @Bean
     public HandlerMapping chatWebSocketHandlerMapping(ChatWebSocketHandler handler) {
         SimpleUrlHandlerMapping mapping = new SimpleUrlHandlerMapping();
-        Map<String, WebSocketHandler> urlMap = Map.of("/api/v1/finance/chat/ws", handler);
+        Map<String, WebSocketHandler> urlMap = Map.of("/api/v1/ex/chat/ws", handler);
         mapping.setUrlMap(urlMap);
         mapping.setOrder(-1);
         return mapping;
     }
 
+    /**
+     * 注册 WebSocketHandlerAdapter。
+     *
+     * @return WebFlux WebSocket 处理器适配器。
+     */
     @Bean
     @ConditionalOnMissingBean(WebSocketHandlerAdapter.class)
     public WebSocketHandlerAdapter webSocketHandlerAdapter() {

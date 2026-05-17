@@ -1,66 +1,237 @@
 package com.huawei.finance.front.one.interfaces.chat;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.huawei.finance.front.one.application.facade.FinanceChatFacade;
+import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
+import com.huawei.finance.front.one.application.service.PermissionChecker;
+import com.huawei.finance.front.one.application.service.ChatStreamApplicationService;
+import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.interfaces.chat.dto.FrontChatEventDto;
-import com.huawei.finance.front.one.interfaces.chat.dto.FrontChatRequest;
+import com.huawei.finance.front.one.interfaces.chat.dto.FrontWebSocketEnvelopeDto;
 import java.util.Map;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.socket.CloseStatus;
 import org.springframework.web.reactive.socket.WebSocketHandler;
 import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.WebSocketSession;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
+import reactor.util.concurrent.Queues;
 
 /**
  * 聊天 WebSocket 入口。
  *
- * <p>客户端在同一个连接上发送 FrontChatRequest JSON，服务端把该请求产生的 ChatEvent
- * 逐条序列化为 FrontChatEventDto JSON 返回。</p>
+ * <p>WebSocket 是用户级长连接，连接身份由 {@link AuthContextProvider} 在服务端解析。
+ * 客户端必须先通过 {@code POST /chat/runs} 创建 run，再使用返回的 {@code streamTopicId}
+ * 订阅本轮回答。旧的“WebSocket 直接提交聊天请求”模式已移除。</p>
  */
 @Component
 public class ChatWebSocketHandler implements WebSocketHandler {
-    private static final String PROTOCOL = "websocket";
-
-    private final FinanceChatFacade chatFacade;
-    private final ChatRequestTranslator requestTranslator;
+    private final AuthContextProvider auth;
+    private final PermissionChecker permissionChecker;
+    private final ChatStreamApplicationService chatStreamService;
+    private final WebSocketConnectionRegistry connectionRegistry;
     private final ChatEventTranslator eventTranslator;
     private final ObjectMapper objectMapper;
 
-    public ChatWebSocketHandler(FinanceChatFacade chatFacade, ChatRequestTranslator requestTranslator,
+    public ChatWebSocketHandler(AuthContextProvider auth, PermissionChecker permissionChecker,
+                                ChatStreamApplicationService chatStreamService,
+                                WebSocketConnectionRegistry connectionRegistry,
                                 ChatEventTranslator eventTranslator, ObjectMapper objectMapper) {
-        this.chatFacade = chatFacade;
-        this.requestTranslator = requestTranslator;
+        this.auth = auth;
+        this.permissionChecker = permissionChecker;
+        this.chatStreamService = chatStreamService;
+        this.connectionRegistry = connectionRegistry;
         this.eventTranslator = eventTranslator;
         this.objectMapper = objectMapper;
     }
 
+    /**
+     * 建立并处理一条 WebSocket 连接。
+     *
+     * @param session WebFlux WebSocket 会话，承载当前物理连接的收发流。
+     * @return 连接生命周期完成信号。
+     */
     @Override
     public Mono<Void> handle(WebSocketSession session) {
-        Flux<WebSocketMessage> outbound = session.receive()
-                .filter(message -> message.getType() == WebSocketMessage.Type.TEXT)
-                // concatMap 保证同一连接内的多条用户消息按接收顺序处理和回写。
-                .concatMap(message -> handleTextMessage(session, message.getPayloadAsText()))
-                .onErrorResume(ex -> Flux.just(errorMessage(session, "WS_STREAM_ERROR", ex.getMessage())));
-        return session.send(outbound);
-    }
-
-    private Flux<WebSocketMessage> handleTextMessage(WebSocketSession session, String payload) {
-        FrontChatRequest request;
+        UserContext user;
         try {
-            // WebSocket 只接收文本 JSON；解析失败时返回协议内错误事件，不关闭连接。
-            request = objectMapper.readValue(payload, FrontChatRequest.class);
-        } catch (Exception ex) {
-            return Flux.just(errorMessage(session, "BAD_WS_MESSAGE", ex.getMessage()));
+            user = auth.resolve();
+            permissionChecker.checkChatPermission(user);
+            connectionRegistry.register(session.getId(), user);
+        } catch (RuntimeException ex) {
+            return session.send(Flux.just(toMessage(session,
+                    FrontWebSocketEnvelopeDto.error(null, "WS_AUTH_FAILED", ex.getMessage()))));
         }
-        return chatFacade.chat(requestTranslator.toCommand(request, PROTOCOL))
-                .map(eventTranslator::toDto)
-                .map(dto -> toMessage(session, dto))
-                .onErrorResume(ex -> Flux.just(errorMessage(session, "RUN_ERROR", ex.getMessage())));
+
+        Sinks.Many<WebSocketMessage> outbound = Sinks.many().unicast()
+                .onBackpressureBuffer(Queues.<WebSocketMessage>get(256).get());
+        Mono<Void> inbound = session.receive()
+                .filter(message -> message.getType() == WebSocketMessage.Type.TEXT)
+                // 当前只接受连接控制消息。聊天请求必须走 POST /chat/runs 创建后台 run。
+                .concatMap(message -> handleTextMessage(session, user, outbound, message.getPayloadAsText()))
+                .onErrorResume(ex -> {
+                    emit(session, outbound, FrontWebSocketEnvelopeDto.error(null, "WS_STREAM_ERROR", ex.getMessage()));
+                    return Mono.empty();
+                })
+                .doFinally(signalType -> {
+                    connectionRegistry.unregister(session.getId());
+                    outbound.tryEmitComplete();
+                })
+                .then();
+        return Mono.when(inbound, session.send(outbound.asFlux()));
     }
 
-    private WebSocketMessage toMessage(WebSocketSession session, FrontChatEventDto dto) {
+    private Mono<Void> handleTextMessage(WebSocketSession session, UserContext user,
+                                         Sinks.Many<WebSocketMessage> outbound,
+                                         String payload) {
+        JsonNode root;
+        try {
+            root = objectMapper.readTree(payload);
+        } catch (Exception ex) {
+            emit(session, outbound, FrontWebSocketEnvelopeDto.error(null, "BAD_WS_MESSAGE", ex.getMessage()));
+            return Mono.empty();
+        }
+        String commandId = root.path("id").asText(null);
+        if (!root.hasNonNull("type")) {
+            emit(session, outbound, FrontWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE", "WebSocket 仅支持控制消息"));
+            return Mono.empty();
+        }
+        return handleCommandMessage(session, user, outbound, root, commandId);
+    }
+
+    private Mono<Void> handleCommandMessage(WebSocketSession session, UserContext user,
+                                            Sinks.Many<WebSocketMessage> outbound,
+                                            JsonNode root, String commandId) {
+        String type = root.path("type").asText("");
+        if ("connect".equals(type)) {
+            String presence = presenceState(root.path("presence"));
+            connectionRegistry.updatePresence(session.getId(), presence);
+            emit(session, outbound, FrontWebSocketEnvelopeDto.reply(commandId,
+                    Map.of("type", "connect", "connectionId", session.getId(), "presence", presence)));
+            return Mono.empty();
+        }
+        if ("presence".equals(type)) {
+            String state = root.path("state").asText("foreground");
+            connectionRegistry.updatePresence(session.getId(), state);
+            emit(session, outbound, FrontWebSocketEnvelopeDto.reply(commandId, Map.of("type", "presence", "state", state)));
+            return Mono.empty();
+        }
+        if ("subscribe".equals(type)) {
+            return subscribe(session, user, outbound, root, commandId);
+        }
+        if ("unsubscribe".equals(type)) {
+            String topicId = root.path("topicId").asText(null);
+            if (topicId == null || topicId.isBlank()) {
+                emit(session, outbound, FrontWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE", "topicId 不能为空"));
+                return Mono.empty();
+            }
+            connectionRegistry.unsubscribe(session.getId(), topicId);
+            emit(session, outbound, FrontWebSocketEnvelopeDto.reply(commandId, Map.of("type", "unsubscribe", "topicId", topicId)));
+            return Mono.empty();
+        }
+        if ("ack".equals(type)) {
+            String topicId = root.path("topicId").asText(null);
+            long seq = root.path("seq").asLong(0);
+            if (topicId == null || topicId.isBlank()) {
+                emit(session, outbound, FrontWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE", "topicId 不能为空"));
+                return Mono.empty();
+            }
+            connectionRegistry.ack(session.getId(), topicId, seq);
+            emit(session, outbound, FrontWebSocketEnvelopeDto.reply(commandId, Map.of("type", "ack", "topicId", topicId, "seq", seq)));
+            return Mono.empty();
+        }
+        emit(session, outbound, FrontWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE",
+                "不支持的 WebSocket command type: " + type));
+        return Mono.empty();
+    }
+
+    private Mono<Void> subscribe(WebSocketSession session, UserContext user, Sinks.Many<WebSocketMessage> outbound,
+                                 JsonNode root, String commandId) {
+        String topicId = root.path("topicId").asText(null);
+        long afterSeq = root.path("afterSeq").asLong(0);
+        if (topicId == null || topicId.isBlank()) {
+            emit(session, outbound, FrontWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE", "topicId 不能为空"));
+            return Mono.empty();
+        }
+        return Mono.fromCallable(() -> chatStreamService.ensureRunTopicAccessible(user, topicId))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMap(ignored -> {
+                    if (connectionRegistry.get(session.getId()).isEmpty()) {
+                        return Mono.<Void>empty();
+                    }
+                    emit(session, outbound, FrontWebSocketEnvelopeDto.reply(commandId,
+                            Map.of("type", "subscribe", "topicId", topicId, "recovered", afterSeq > 0, "lastSeq", afterSeq)));
+                    Sinks.Empty<Void> cancellation = Sinks.empty();
+                    connectionRegistry.subscribe(session.getId(), topicId, afterSeq, cancellationDisposable(cancellation));
+                    chatStreamService.resumeRunTopic(user, topicId, afterSeq)
+                            .map(eventTranslator::toDto)
+                            .takeUntilOther(cancellation.asMono())
+                            .doFinally(signalType -> connectionRegistry.unsubscribe(session.getId(), topicId))
+                            .subscribe(
+                                    dto -> emitTopicEvent(session, outbound, topicId, cancellation, dto),
+                                    ex -> {
+                                        emit(session, outbound, FrontWebSocketEnvelopeDto.error(commandId,
+                                                "SUBSCRIBE_ERROR", ex.getMessage()));
+                                        connectionRegistry.unsubscribe(session.getId(), topicId);
+                                    }
+                            );
+                    return Mono.<Void>empty();
+                })
+                .onErrorResume(ex -> {
+                    emit(session, outbound, FrontWebSocketEnvelopeDto.error(commandId, "SUBSCRIBE_ERROR", ex.getMessage()));
+                    return Mono.<Void>empty();
+                });
+    }
+
+    private void emitTopicEvent(WebSocketSession session, Sinks.Many<WebSocketMessage> outbound, String topicId,
+                                Sinks.Empty<Void> cancellation, FrontChatEventDto dto) {
+        if (dto == null) {
+            return;
+        }
+        WebSocketConnectionRegistry.DeliveryDecision decision =
+                connectionRegistry.markDelivered(session.getId(), topicId, dto.sequence());
+        if (decision.action() == WebSocketConnectionRegistry.Action.DELIVER) {
+            emit(session, outbound, FrontWebSocketEnvelopeDto.message(topicId, dto));
+        } else if (decision.action() == WebSocketConnectionRegistry.Action.RECOVER_REQUIRED) {
+            emit(session, outbound, FrontWebSocketEnvelopeDto.recoverRequired(topicId, decision.lastAckSeq(), decision.actualSeq()));
+            // 一旦发现乱序或缺口，先把 recover-required 发给前端，再暂停该 topic，避免继续推送更高 seq。
+            cancellation.tryEmitEmpty();
+            connectionRegistry.unsubscribe(session.getId(), topicId);
+        }
+    }
+
+    private Disposable cancellationDisposable(Sinks.Empty<Void> cancellation) {
+        return new Disposable() {
+            private volatile boolean disposed;
+
+            @Override
+            public void dispose() {
+                disposed = true;
+                cancellation.tryEmitEmpty();
+            }
+
+            @Override
+            public boolean isDisposed() {
+                return disposed;
+            }
+        };
+    }
+
+    private void emit(WebSocketSession session, Sinks.Many<WebSocketMessage> outbound, FrontWebSocketEnvelopeDto dto) {
+        Sinks.EmitResult result = outbound.tryEmitNext(toMessage(session, dto));
+        if (result.isFailure()) {
+            connectionRegistry.unregister(session.getId());
+            outbound.tryEmitComplete();
+            session.close(CloseStatus.SERVICE_OVERLOAD).subscribe();
+        }
+    }
+
+    private WebSocketMessage toMessage(WebSocketSession session, FrontWebSocketEnvelopeDto dto) {
         try {
             return session.textMessage(objectMapper.writeValueAsString(dto));
         } catch (JsonProcessingException ex) {
@@ -68,9 +239,14 @@ public class ChatWebSocketHandler implements WebSocketHandler {
         }
     }
 
-    private WebSocketMessage errorMessage(WebSocketSession session, String code, String message) {
-        FrontChatEventDto dto = new FrontChatEventDto(null, null, 0, "run.failed", "system",
-                Map.of("code", code, "message", message == null ? "" : message));
-        return toMessage(session, dto);
+    private String presenceState(JsonNode presenceNode) {
+        if (presenceNode == null || presenceNode.isMissingNode() || presenceNode.isNull()) {
+            return "foreground";
+        }
+        if (presenceNode.isObject()) {
+            return presenceNode.path("state").asText("foreground");
+        }
+        String value = presenceNode.asText("foreground");
+        return value == null || value.isBlank() ? "foreground" : value;
     }
 }

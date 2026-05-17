@@ -45,8 +45,9 @@ flowchart TD
     SingleSubAgent --> EventStream["输出 ChatEvent 流"]
     RelayRuntime --> EventStream
     SystemResponse --> EventStream
-    EventStream --> Persist["事件与消息写入 openGauss"]
-    Persist --> RuntimeObserve["观察 runtimeSessionId"]
+    EventStream --> Persist["事件写入 fin_ex_chat_event_t"]
+    Persist --> Publish["发布到 run stream topic"]
+    Publish --> RuntimeObserve["观察 runtimeSessionId"]
     RuntimeObserve --> RuntimeCache["刷新 RuntimeBinding Redis 热缓存"]
 ```
 
@@ -70,9 +71,9 @@ sequenceDiagram
     participant DB as "openGauss"
     participant EventStore as "ChatEventStore"
 
-    Frontend->>API: "发送聊天请求"
-    API->>SuperAgent: "chat(command)"
-    SuperAgent->>SuperAgent: "AuthContextProvider.resolve()"
+    Frontend->>API: "POST /chat/runs"
+    API->>API: "AuthContextProvider.resolve()"
+    API->>SuperAgent: "start(UserContext, command)"
     SuperAgent->>Session: "loadOrCreate(command)"
     Session->>DB: "读取或写入 fin_ex_chat_session_t"
     SuperAgent->>Memory: "loadForRun(command)"
@@ -121,14 +122,139 @@ sequenceDiagram
         Runtime-->>SuperAgent: "message.delta / message.completed"
         SuperAgent->>EventStore: "append(event)"
         EventStore->>DB: "写入 fin_ex_chat_event_t"
+        EventStore-->>SuperAgent: "返回持久化 seq"
+        SuperAgent-->>Frontend: "WebSocket 实时事件"
         SuperAgent->>Binding: "observeEvent(runtimeSessionId)"
-        SuperAgent-->>API: "转发事件"
-        API-->>Frontend: "SSE / NDJSON / WebSocket"
     end
 
     SuperAgent->>Session: "保存完整 assistant 消息"
     Session->>DB: "写入 fin_ex_chat_message_t"
 ```
+
+## 文档库与附件使用
+
+文档能力采用“统一后端入口 + 对象存储防腐层 + 文档库资产”的模式。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Frontend as "Frontend"
+    participant DocAPI as "Document API"
+    participant DocApp as "DocumentApplicationService"
+    participant Storage as "ObjectStorage Port"
+    participant S3 as "S3/OBS/MinIO Adapter"
+    participant DB as "openGauss"
+    participant Chat as "FinanceEXChatService"
+    participant Runtime as "Relay Runtime"
+
+    Frontend->>DocAPI: "POST /documents multipart file"
+    DocAPI->>DocAPI: "AuthContextProvider.resolve()"
+    DocAPI->>DocApp: "upload(UserContext, DocumentUploadCommand)"
+    DocApp->>DocApp: "会话归属校验"
+    DocApp->>Storage: "putObject(tenantId, file)"
+    Storage->>S3: "写入真实对象存储"
+    S3-->>Storage: "bucket/objectKey"
+    DocApp->>DB: "写 fin_ex_uploaded_document_t"
+    DocApp-->>Frontend: "UploadedDocument(id,status,source)"
+
+    Frontend->>Chat: "聊天请求 attachments[{documentId}]"
+    Chat->>DB: "回查 fin_ex_uploaded_document_t"
+    Chat->>Chat: "校验归属、状态，补齐可信附件元数据"
+    Chat->>Runtime: "AgentRuntimeRequest.attachments"
+```
+
+设计原则：
+
+- 前端上传仍先进入 FinanceEXChatService，方便统一鉴权、审计、限流和企业网关接入。
+- 真实文件内容通过 `ObjectStorage` port 写入对象存储；当前支持 local 和 S3 兼容实现。
+- 聊天请求只引用 `documentId`，不携带文件正文。
+- Runtime 看到的是经过文档库回查后的可信附件元数据。
+- `fin_ex_uploaded_document_t` 是文档库事实源，支持最近文档、库中文档选择和后续连接器文档扩展。
+
+## 流式响应与断点恢复
+
+正式版只保留后台 run handoff 模式。`POST /chat/runs` 是唯一提问入口，
+WebSocket 负责实时输出，SSE 只负责断线、刷新或复制页签后的缺失事件补发。
+
+```text
+POST /api/v1/ex/chat/runs
+POST /api/v1/ex/chat/runs/{runId}/retry
+POST /api/v1/ex/chat/messages/{messageId}/feedback
+GET  /api/v1/ex/chat/sessions/{sessionId}/state?messageLimit=50
+GET  /api/v1/ex/chat/sessions/{sessionId}/events/sse?afterSeq={lastSeq}
+WS   /api/v1/ex/chat/ws subscribe(topicId=streamTopicId)
+POST /api/v1/ex/chat/runs/{runId}/stop
+```
+
+`/chat/runs` 只返回 run 运行标识和 run 级 `streamTopicId`，不返回 WebSocket、SSE resume 或 stop URL。
+这些 URL 属于前端 SDK、网关或部署配置，避免后端业务响应承担客户端路由配置职责。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Frontend as "Frontend"
+    participant ChatAPI as "Chat API"
+    participant SuperAgent as "FinanceEXChatService"
+    participant EventStore as "ChatEventStore"
+    participant RunStore as "ChatRunStore"
+    participant Live as "ChatEventStreamRegistry"
+    participant RedisBus as "Redis Pub/Sub"
+    participant Runtime as "Relay Runtime"
+    participant DB as "openGauss"
+
+    Frontend->>ChatAPI: "POST /chat/runs"
+    ChatAPI->>SuperAgent: "后台 start(command)"
+    SuperAgent->>RunStore: "create RUNNING fin_ex_chat_run_t"
+    SuperAgent->>EventStore: "append(run.started)"
+    EventStore->>DB: "持久化 seq=firstSeq"
+    EventStore-->>SuperAgent: "run.started(seq)"
+    SuperAgent->>RunStore: "记录 firstSeq/lastSeq"
+    SuperAgent->>Live: "publish(run.started)"
+    ChatAPI-->>Frontend: "runId/sessionId/firstSeq/streamTopicId"
+
+    Frontend->>ChatAPI: "WS subscribe(topicId=streamTopicId, afterSeq=firstSeq)"
+    ChatAPI->>EventStore: "findByRunIdAndAfterSeq"
+    EventStore->>DB: "补发 run 历史事件"
+    ChatAPI->>Live: "订阅本机 run topic"
+    ChatAPI->>RedisBus: "订阅远端 run topic"
+
+    SuperAgent->>Runtime: "query"
+    Runtime-->>SuperAgent: "message.delta"
+    SuperAgent->>EventStore: "append(delta)"
+    EventStore->>DB: "持久化 seq"
+    SuperAgent->>RunStore: "刷新 lastSeq"
+    SuperAgent->>Live: "publish(delta)"
+    SuperAgent->>RedisBus: "publish(delta)"
+    Live-->>Frontend: "WebSocket 实时事件"
+
+    opt "用户点击停止"
+        Frontend->>ChatAPI: "POST /chat/runs/{runId}/stop"
+        ChatAPI->>RunStore: "RUNNING -> CANCELLING + cancel flag"
+        ChatAPI->>Runtime: "best-effort cancel"
+        ChatAPI->>EventStore: "append(run.cancelled)"
+        EventStore->>DB: "持久化取消终态 seq"
+        ChatAPI->>RunStore: "CANCELLED + evict active run"
+        ChatAPI->>Live: "publish(run.cancelled)"
+        ChatAPI-->>Frontend: "status=CANCELLED/latestSeq"
+    end
+
+    Frontend--xChatAPI: "浏览器刷新/断线"
+    Frontend->>ChatAPI: "SSE resume afterSeq=lastReceivedSeq"
+    ChatAPI->>DB: "补发缺失事件"
+    ChatAPI-->>Frontend: "补发缺失事件"
+```
+
+关键约束：
+
+- `fin_ex_chat_event_t.seq` 是前端恢复游标，实时输出和补发输出使用同一份 seq；该序号由 openGauss sequence/default 生成并随事件写入一起返回，应用层不再本地生成恢复游标。
+- openGauss 是事件事实源，`ChatEventStreamRegistry` 是 JVM 内在线发布器，Redis Pub/Sub 只做跨实例实时扇出。
+- `fin_ex_chat_run_t` 是 run 生命周期事实源；Redis 只保存 active run 和 cancel flag。
+- 后台 run 不依赖创建 run 的原始浏览器连接，刷新页面后用 `afterSeq` 恢复。
+- WebSocket 订阅消息格式：`{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}`。
+- WebSocket 不接受聊天请求；仅支持 `connect`、`presence`、`subscribe`、`unsubscribe`、`ack` 控制消息。
+- stop 是 REST 生命周期接口，不是 WebSocket command；重复 stop 幂等返回当前 run 状态。
+- retry 会创建新的 run，不覆盖旧 run 事件；message 为空时复用原会话最近一条用户消息。
+- 会话 state 接口聚合会话元数据、最近历史消息和 `activeStreamTopicId`，用于前端切换会话后的恢复判断。
 
 ## 分层架构
 
@@ -142,24 +268,28 @@ flowchart TB
 
     subgraph Application["application"]
         ChatService["FinanceEXChatService"]
+        ChatRun["ChatRunApplicationService"]
         RouteSignal["RouteSignalApplicationService"]
         RuntimeBinding["RuntimeBindingApplicationService"]
         SubAgentExecutor["SubAgentExecutor"]
         RuntimeExecutor["AgentRuntimeExecutor"]
+        StreamService["ChatStreamApplicationService"]
+        DocumentService["DocumentApplicationService"]
         MemoryService["MemoryApplicationService"]
         SessionService["SessionApplicationService"]
     end
 
     subgraph Domain["domain"]
-        ChatModel["ChatCommand / ChatEvent"]
+        ChatModel["ChatCommand / ChatEvent / ChatRun"]
         Routing["RouteTarget / RouteType"]
         RuntimeModel["RuntimeBinding"]
+        DocumentModel["UploadedDocument / DocumentLibraryPage"]
         IntentModel["IntentDecision"]
         UseCaseModel["UseCaseMatchResult"]
     end
 
     subgraph Infrastructure["infrastructure"]
-        Redis["Redis RuntimeBinding / Memory Cache"]
+        Redis["Redis RuntimeBinding / ChatRun / Memory Cache"]
         OpenGauss["openGauss + MyBatis"]
         UseCaseHttp["UseCase HTTP Adapter"]
         IntentHttp["Intent HTTP Adapter"]
@@ -170,17 +300,23 @@ flowchart TB
 
     Interfaces --> ChatService
     ChatService --> RouteSignal
+    ChatService --> ChatRun
     ChatService --> RuntimeBinding
     ChatService --> SubAgentExecutor
     ChatService --> RuntimeExecutor
+    ChatService --> StreamService
+    ChatService --> DocumentService
     ChatService --> MemoryService
     ChatService --> SessionService
     RouteSignal --> UseCaseHttp
     RouteSignal --> IntentHttp
+    ChatRun --> Redis
+    ChatRun --> OpenGauss
     RuntimeBinding --> Redis
     RuntimeBinding --> OpenGauss
     SubAgentExecutor --> SubAgentHttp
     RuntimeExecutor --> RelayHttp
+    DocumentService --> Storage
     Application --> Domain
 ```
 
@@ -223,13 +359,42 @@ created_at
 updated_at
 ```
 
+## ChatRun 与 Stop
+
+ChatRun 维护单轮回答生命周期，表为 `fin_ex_chat_run_t`，Redis key 为：
+
+```text
+fin_ex:chat_run:active:{tenantId}:{userId}:{sessionId}
+fin_ex:chat_run:cancel:{runId}
+fin_ex:chat_stream:{streamTopicId}
+```
+
+状态流转：
+
+```mermaid
+stateDiagram-v2
+    [*] --> RUNNING
+    RUNNING --> COMPLETED: "run.completed"
+    RUNNING --> FAILED: "run.failed"
+    RUNNING --> CANCELLING: "POST /runs/{runId}/stop"
+    CANCELLING --> CANCELLED: "run.cancelled"
+```
+
+stop 语义：
+
+- 集群事实源优先：stop 先写 Redis cancel flag 与 openGauss `CANCELLING` 状态，再发布 `run.cancelled`。
+- JVM subscription registry 只是本机资源释放加速器；即使 stop 请求与输出流落在不同实例，输出实例也必须在追加事件前读取 Redis cancel flag，并周期性回源 `fin_ex_chat_run_t` 校验 run 状态。
+- 下游尽力取消：Relay Runtime 和 SubAgent cancel 失败只记录日志，不影响前端收到取消终态。
+- stop 不取消 RuntimeBinding；下一轮仍可续接 Runtime，除非请求 metadata 使用 `forceNewTask=true`。
+
 ## 外部 API 接入
 
 - 用例库服务：`financeex.use-case-library.enabled`、`financeex.use-case-library.base-url`、`financeex.use-case-library.match-path`
 - 意图服务：`financeex.intent.enabled`、`financeex.intent.base-url`、`financeex.intent.recognize-path`
 - SubAgent：`financeex.sub-agent.agents.{agentCode}.endpoint`
+- SubAgent stop：`financeex.sub-agent.agents.{agentCode}.stop-endpoint`
 - AgentRuntime provider：`financeex.agent-runtime.provider`，当前默认 `relay`
-- Relay Runtime：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`
+- Relay Runtime：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`、`financeex.agent-runtime.stop-path`
 
 SubAgent 当前只支持单轮 HTTP 文本流调用。Relay Runtime 是唯一 Runtime 实现。
 
@@ -249,13 +414,17 @@ AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 
 
 - `fin_ex_chat_session_t`
 - `fin_ex_chat_message_t`
+- `fin_ex_chat_run_t`
 - `fin_ex_chat_event_t`
-- `fin_ex_conversation_summary_t`
 - `fin_ex_uploaded_document_t`
+- `fin_ex_message_feedback_t`
 - `fin_ex_runtime_binding_t`
 
 Redis key 必须以 `fin_ex` 开头：
 
 - `fin_ex:runtime_binding:{tenantId}:{userId}:{sessionId}`
+- `fin_ex:chat_run:active:{tenantId}:{userId}:{sessionId}`
+- `fin_ex:chat_run:cancel:{runId}`
+- `fin_ex:chat_stream:{streamTopicId}`
 - `fin_ex:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
 - `fin_ex:memory:working:variables:{sessionId}`

@@ -1,17 +1,19 @@
 package com.huawei.finance.front.one.infrastructure.agent.runtime.relay;
 
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
-import com.huawei.finance.front.one.domain.chat.ChatResponseMode;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
-import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * RelayAgent Runtime HTTP 适配器。
@@ -24,6 +26,8 @@ import reactor.core.publisher.Flux;
 @EnableConfigurationProperties(RelayAgentProperties.class)
 @ConditionalOnProperty(prefix = "financeex.agent-runtime", name = "provider", havingValue = "relay", matchIfMissing = true)
 public class RelayAgentRuntime implements AgentRuntime {
+    private static final Logger log = LoggerFactory.getLogger(RelayAgentRuntime.class);
+
     private final WebClient.Builder webClientBuilder;
     private final RelayAgentProperties properties;
 
@@ -42,23 +46,29 @@ public class RelayAgentRuntime implements AgentRuntime {
                 .retrieve()
                 .bodyToFlux(String.class)
                 .timeout(properties.getTimeout());
-        if (responseMode(request) == ChatResponseMode.BLOCK) {
-            return deltas.collectList()
-                    .map(this::joinDeltas)
-                    .map(text -> (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), text))
-                    .flux()
-                    .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId()));
-        }
+        // 正式版统一以 delta 流输出，不再按前端响应模式聚合为整块文本。
         return deltas
                 .map(delta -> (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), delta))
                 .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId()));
     }
 
-    private String joinDeltas(List<String> deltas) {
-        return String.join("", deltas == null ? List.of() : deltas);
-    }
-
-    private ChatResponseMode responseMode(AgentRuntimeRequest request) {
-        return request.responseMode() == null ? ChatResponseMode.BLOCK : request.responseMode();
+    @Override
+    public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+        if (properties.getStopPath() == null || properties.getStopPath().isBlank()) {
+            return Mono.empty();
+        }
+        String path = properties.getStopPath().replace("{runId}", request.runId() == null ? "" : request.runId());
+        return webClientBuilder.baseUrl(properties.getBaseUrl())
+                .build()
+                .post()
+                .uri(path)
+                .bodyValue(request)
+                .retrieve()
+                .bodyToMono(Void.class)
+                .timeout(properties.getTimeout())
+                .onErrorResume(ex -> {
+                    log.warn("Relay Runtime cancel 失败，runId={}，原因：{}", request.runId(), ex.getMessage());
+                    return Mono.empty();
+                });
     }
 }

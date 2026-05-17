@@ -9,8 +9,8 @@ import org.springframework.stereotype.Component;
  * 应用身份上下文实现。
  *
  * <p>当前服务还没有接入企业统一权限框架，所以这里用配置项模拟“应用上下文中的当前用户”。
- * 这个类是明确的防腐层：业务编排只依赖 AuthContextProvider，不知道身份来自本地配置、
- * 网关鉴权、SSO Token 还是企业权限 SDK。</p>
+ * 这个类是明确的防腐层：接口入口只依赖 AuthContextProvider，不知道身份来自本地配置、
+ * 网关鉴权、SSO Token、ThreadLocal 企业上下文还是企业权限 SDK。</p>
  *
  * <p>身份信息不能兜底成默认租户或匿名用户。任何缺失都会直接抛出异常，避免财经作业在错误身份下
  * 读取数据、绑定会话或执行任务。</p>
@@ -34,6 +34,8 @@ public class ApplicationAuthContextProvider implements AuthContextProvider {
 
     @Override
     public UserContext resolve() {
+        // TODO 接入企业统一权限框架时，只替换这里的读取来源，例如 SecurityContext、网关上下文或内部权限 SDK。
+        //      聊天后台 run 已经在入口处固化 UserContext，不需要在异步线程中再次读取请求上下文。
         String resolvedTenant = requireText(tenantId, "当前租户 ID 缺失");
         String resolvedUserId = requireText(userId, "当前用户 ID 缺失");
         String resolvedUsername = requireText(username, "当前用户名缺失");

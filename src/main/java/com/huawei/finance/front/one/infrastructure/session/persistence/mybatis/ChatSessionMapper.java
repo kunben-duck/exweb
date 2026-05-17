@@ -9,6 +9,9 @@ import org.apache.ibatis.annotations.Result;
 import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
 
+/**
+ * fin_ex_chat_session_t 的 MyBatis Mapper。
+ */
 @Mapper
 public interface ChatSessionMapper {
     @Insert("""
@@ -73,4 +76,30 @@ public interface ChatSessionMapper {
             @Result(column = "updated_at", property = "updatedAt")
     })
     List<ChatSessionRow> findByOwner(@Param("tenantId") String tenantId, @Param("userId") String userId);
+
+    @Select("""
+            SELECT id, tenant_id, user_id, title, status, channel, created_at, updated_at
+            FROM fin_ex_chat_session_t
+            WHERE tenant_id = #{tenantId}
+              AND user_id = #{userId}
+              AND status <> 'DELETED'
+              AND (
+                    #{cursorUpdatedAt} IS NULL
+                    OR updated_at < #{cursorUpdatedAt}
+                    OR (updated_at = #{cursorUpdatedAt} AND id < #{cursorId})
+                  )
+            ORDER BY updated_at DESC, id DESC
+            LIMIT #{limit}
+            """)
+    @Results(id = "chatSessionPageResultMap", value = {
+            @Result(column = "tenant_id", property = "tenantId"),
+            @Result(column = "user_id", property = "userId"),
+            @Result(column = "created_at", property = "createdAt"),
+            @Result(column = "updated_at", property = "updatedAt")
+    })
+    List<ChatSessionRow> findPageByOwner(@Param("tenantId") String tenantId,
+                                         @Param("userId") String userId,
+                                         @Param("cursorUpdatedAt") Instant cursorUpdatedAt,
+                                         @Param("cursorId") String cursorId,
+                                         @Param("limit") int limit);
 }

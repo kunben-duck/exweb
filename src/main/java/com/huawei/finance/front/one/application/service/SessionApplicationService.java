@@ -1,7 +1,6 @@
 package com.huawei.finance.front.one.application.service;
 
 import com.huawei.finance.front.one.application.facade.ChatSessionFacade;
-import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
 import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
@@ -9,9 +8,11 @@ import com.huawei.finance.front.one.application.integration.conversation.Session
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
+import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import java.time.Instant;
-import java.util.List;
+import java.util.Optional;
 import org.springframework.stereotype.Service;
 
 /**
@@ -22,18 +23,18 @@ import org.springframework.stereotype.Service;
 @Service
 public class SessionApplicationService implements ChatSessionFacade {
     private static final String STATUS_ACTIVE = "ACTIVE";
+    private static final String STATUS_ARCHIVED = "ARCHIVED";
     private static final String STATUS_CLOSED = "CLOSED";
 
     private final SessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
     private final IdGenerator idGenerator;
-    private final AuthContextProvider auth;
     private final PermissionChecker permissionChecker;
 
     public SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
-                                     AuthContextProvider auth, PermissionChecker permissionChecker) {
+                                     PermissionChecker permissionChecker) {
         this.sessionRepository = sessionRepository; this.messageRepository = messageRepository; this.idGenerator = idGenerator;
-        this.auth = auth; this.permissionChecker = permissionChecker;
+        this.permissionChecker = permissionChecker;
     }
 
     public ChatSession loadOrCreate(ChatCommand command) {
@@ -45,29 +46,76 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     @Override
-    public ChatSession createSession(String title, String channel) {
-        UserContext user = resolveChatUser();
+    public ChatSession createSession(UserContext user, String title, String channel) {
+        checkChatUser(user);
         return createOwnedSession(user.tenantId(), user.userId(), title, channel);
     }
 
     @Override
-    public ChatSession getSession(String sessionId) {
-        UserContext user = resolveChatUser();
+    public ChatSession getSession(UserContext user, String sessionId) {
+        checkChatUser(user);
         return requireOwnedSession(user.tenantId(), user.userId(), sessionId);
     }
 
     @Override
-    public List<ChatSession> listSessions() {
-        UserContext user = resolveChatUser();
-        return sessionRepository.findByTenantIdAndUserId(user.tenantId(), user.userId());
+    public ChatMessagePage listMessages(UserContext user, String sessionId, String cursor, int limit) {
+        checkChatUser(user);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        return messageRepository.pageMessages(session.tenantId(), session.userId(), session.id(), cursor, limit);
     }
 
     @Override
-    public ChatSession closeSession(String sessionId) {
-        UserContext user = resolveChatUser();
+    public ChatSessionPage listSessions(UserContext user, String cursor, int limit) {
+        checkChatUser(user);
+        return sessionRepository.pageByTenantIdAndUserId(user.tenantId(), user.userId(), cursor, limit);
+    }
+
+    @Override
+    public Optional<ChatMessage> latestUserMessage(UserContext user, String sessionId) {
+        checkChatUser(user);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        return latestUserMessage(session.tenantId(), session.userId(), session.id());
+    }
+
+    /**
+     * 查询指定会话最近一条用户消息，供 run retry 在未传新文本时复用上一轮输入。
+     *
+     * <p>该方法接收显式 owner，是因为聊天主编排已经解析并校验过 UserContext，避免再次从
+     * ThreadLocal/请求上下文读取身份导致异步 run 中上下文不一致。</p>
+     */
+    public Optional<ChatMessage> latestUserMessage(String tenantId, String userId, String sessionId) {
+        return messageRepository.findRecentMessages(tenantId, userId, sessionId, 50).stream()
+                .filter(message -> "user".equals(message.role()))
+                .findFirst();
+    }
+
+    @Override
+    public ChatSession renameSession(UserContext user, String sessionId, String title) {
+        checkChatUser(user);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        String safeTitle = title == null || title.isBlank() ? session.title() : title.trim();
+        return saveWith(session, safeTitle, session.status());
+    }
+
+    @Override
+    public ChatSession archiveSession(UserContext user, String sessionId) {
+        checkChatUser(user);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        return saveWith(session, session.title(), STATUS_ARCHIVED);
+    }
+
+    @Override
+    public ChatSession restoreSession(UserContext user, String sessionId) {
+        checkChatUser(user);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        return saveWith(session, session.title(), STATUS_ACTIVE);
+    }
+
+    @Override
+    public ChatSession closeSession(UserContext user, String sessionId) {
+        checkChatUser(user);
         ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId);
-        ChatSession closed = new ChatSession(session.id(), session.tenantId(), session.userId(), session.title(), STATUS_CLOSED, session.channel(), session.createdAt(), Instant.now());
-        return sessionRepository.save(closed);
+        return saveWith(session, session.title(), STATUS_CLOSED);
     }
 
     public ChatMessage saveUserMessage(ChatCommand command, ChatSession session) {
@@ -82,10 +130,8 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
     private String shortTitle(String text) { return text == null ? "新会话" : text.substring(0, Math.min(40, text.length())); }
 
-    private UserContext resolveChatUser() {
-        UserContext user = auth.resolve();
+    private void checkChatUser(UserContext user) {
         permissionChecker.checkChatPermission(user);
-        return user;
     }
 
     private ChatSession createOwnedSession(String tenantId, String userId, String title, String channel) {
@@ -97,11 +143,15 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     private ChatSession requireOwnedSession(String tenantId, String userId, String sessionId) {
+        return requireOwnedSession(tenantId, userId, sessionId, true);
+    }
+
+    private ChatSession requireOwnedSession(String tenantId, String userId, String sessionId, boolean activeRequired) {
         if (sessionId == null || sessionId.isBlank()) {
             throw new IllegalArgumentException("sessionId 不能为空");
         }
         return sessionRepository.findByTenantIdAndUserIdAndId(tenantId, userId, sessionId)
-                .map(this::ensureActive)
+                .map(session -> activeRequired ? ensureActive(session) : session)
                 .orElseThrow(() -> sessionRepository.findById(sessionId).isPresent()
                         ? new SecurityException("会话不属于当前用户")
                         : new IllegalArgumentException("会话不存在: " + sessionId));
@@ -117,5 +167,11 @@ public class SessionApplicationService implements ChatSessionFacade {
     private ChatSession touch(ChatSession session) {
         ChatSession touched = new ChatSession(session.id(), session.tenantId(), session.userId(), session.title(), session.status(), session.channel(), session.createdAt(), Instant.now());
         return sessionRepository.save(touched);
+    }
+
+    private ChatSession saveWith(ChatSession session, String title, String status) {
+        ChatSession updated = new ChatSession(session.id(), session.tenantId(), session.userId(), title, status,
+                session.channel(), session.createdAt(), Instant.now());
+        return sessionRepository.save(updated);
     }
 }

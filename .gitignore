@@ -16,6 +16,7 @@ logs/
 .env
 .env.*
 application-local.yml
+*.har
 
 # OS metadata
 .DS_Store

@@ -6,7 +6,8 @@ import java.util.Map;
 /**
  * 聊天事件统一接口。
  *
- * <p>所有事件都带 runId/sessionId/type/payload，便于 SSE、NDJSON、WebSocket 共用同一套输出协议。</p>
+ * <p>所有事件都带 runId/sessionId/type/payload，便于 WebSocket 实时订阅和 SSE 断点补发
+ * 使用同一套事件结构。</p>
  */
 public interface ChatEvent {
     /**
@@ -20,7 +21,7 @@ public interface ChatEvent {
     String sessionId();
 
     /**
-     * @return 事件在本轮 run 内的序号。
+     * @return 事件持久化后的恢复游标序号，由 openGauss 事实源生成。
      */
     long sequence();
 

@@ -2,14 +2,25 @@ package com.huawei.finance.front.one.infrastructure.session.persistence.mybatis;
 
 import java.time.Instant;
 
+/**
+ * fin_ex_chat_session_t 的行模型。
+ */
 public class ChatSessionRow {
+    /** 会话主键。 */
     private String id;
+    /** 租户标识。 */
     private String tenantId;
+    /** 用户标识。 */
     private String userId;
+    /** 会话标题。 */
     private String title;
+    /** 会话状态。 */
     private String status;
+    /** 会话来源渠道。 */
     private String channel;
+    /** 创建时间。 */
     private Instant createdAt;
+    /** 最后更新时间。 */
     private Instant updatedAt;
 
     public String getId() { return id; }

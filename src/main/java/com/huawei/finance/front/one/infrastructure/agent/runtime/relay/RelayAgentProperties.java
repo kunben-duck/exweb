@@ -17,6 +17,8 @@ public class RelayAgentProperties {
     private String baseUrl = "http://localhost:9000";
     /** Relay Runtime 流式查询接口路径。 */
     private String streamPath = "/v1/agent/runs/stream";
+    /** Relay Runtime stop 接口路径，支持 {runId} 占位；为空表示下游暂不支持取消。 */
+    private String stopPath = "/v1/agent/runs/{runId}/stop";
     /** Relay Runtime 单次 HTTP 调用超时时间。 */
     private Duration timeout = Duration.ofSeconds(60);
 
@@ -42,6 +44,14 @@ public class RelayAgentProperties {
 
     public void setStreamPath(String streamPath) {
         this.streamPath = streamPath;
+    }
+
+    public String getStopPath() {
+        return stopPath;
+    }
+
+    public void setStopPath(String stopPath) {
+        this.stopPath = stopPath;
     }
 
     public Duration getTimeout() {

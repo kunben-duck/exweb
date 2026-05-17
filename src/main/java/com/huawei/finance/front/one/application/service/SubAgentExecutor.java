@@ -2,15 +2,19 @@ package com.huawei.finance.front.one.application.service;
 
 import com.huawei.finance.front.one.application.integration.agent.SubAgentClient;
 import com.huawei.finance.front.one.domain.agent.AgentQueryRequest;
+import com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
+import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
 import java.util.List;
+import java.util.Map;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * 一次性 SubAgent 执行器。
@@ -39,13 +43,30 @@ public class SubAgentExecutor {
                 runId,
                 route.selectedAgentCode(),
                 command.message(),
-                command.messageType(),
-                command.responseMode(),
                 attachments,
                 memory,
                 route,
                 command.metadata()
         );
         return subAgentClient.query(request);
+    }
+
+    /**
+     * 尽力取消当前 SubAgent run。
+     */
+    public Mono<Void> cancel(ChatRun run, UserContext user) {
+        if (run == null || run.agentCode() == null || run.agentCode().isBlank()) {
+            return Mono.empty();
+        }
+        SubAgentCancelRequest request = new SubAgentCancelRequest(
+                user.tenantId(),
+                user.userId(),
+                run.sessionId(),
+                run.id(),
+                run.agentCode(),
+                run.cancelReason(),
+                Map.of("routeType", run.routeType() == null ? "" : run.routeType())
+        );
+        return subAgentClient.cancel(request);
     }
 }

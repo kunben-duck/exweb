@@ -1,8 +1,6 @@
 package com.huawei.finance.front.one.domain.agent;
 
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
-import com.huawei.finance.front.one.domain.chat.ChatResponseMode;
-import com.huawei.finance.front.one.domain.chat.ImMessageType;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
 import java.util.List;
@@ -20,8 +18,6 @@ import java.util.Map;
  * @param runId 本轮 SuperAgent 运行标识。
  * @param agentCode 目标 SubAgent 编码。
  * @param message 本轮用户输入。
- * @param messageType 本轮消息类型。
- * @param responseMode 前端期望的响应模式。
  * @param attachments 本轮用户关联附件。
  * @param memoryContext SuperAgent 装配的上下文快照。
  * @param routeTarget 本轮路由决策结果。
@@ -34,8 +30,6 @@ public record AgentQueryRequest(
         String runId,
         String agentCode,
         String message,
-        ImMessageType messageType,
-        ChatResponseMode responseMode,
         List<AttachmentRef> attachments,
         MemoryContext memoryContext,
         RouteTarget routeTarget,

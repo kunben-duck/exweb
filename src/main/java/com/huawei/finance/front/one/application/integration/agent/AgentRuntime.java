@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.application.integration.agent;
 
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * 复杂任务 AgentRuntime 防腐层。
@@ -19,4 +20,14 @@ public interface AgentRuntime {
      * @return 标准聊天事件流。
      */
     Flux<ChatEvent> query(AgentRuntimeRequest request);
+
+    /**
+     * 尽力取消已提交到 Runtime 的 run。
+     *
+     * <p>取消失败不得影响本服务本地 run.cancelled 事件；实现方应把错误吞掉或转成空 Mono。</p>
+     *
+     * @param request Runtime 取消请求。
+     * @return 完成信号。
+     */
+    Mono<Void> cancel(AgentRuntimeCancelRequest request);
 }

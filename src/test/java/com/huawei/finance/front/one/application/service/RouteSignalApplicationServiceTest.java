@@ -17,7 +17,6 @@ import com.huawei.finance.front.one.domain.usecase.UseCaseMatchResult;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -26,8 +25,8 @@ class RouteSignalApplicationServiceTest {
     private final ChatSession session = new ChatSession("session1", "tenant1", "user1",
             "测试会话", "ACTIVE", "web", Instant.now(), Instant.now());
     private final ChatCommand command = new ChatCommand("cmd1", "tenant1", "user1", "session1",
-            null, "web", "sse", null, null, "帮我报销一张发票", List.of(), Map.of());
-    private final MemoryContext memory = new MemoryContext(List.of(), Optional.empty(), Map.of(), List.of());
+            null, "web", "帮我报销一张发票", List.of(), Map.of());
+    private final MemoryContext memory = new MemoryContext(List.of(), Map.of(), List.of());
 
     @Test
     void disabledSignalsRouteInitialToRuntimeWithoutCallingClients() {

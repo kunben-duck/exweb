@@ -1,8 +1,6 @@
 package com.huawei.finance.front.one.application.integration.agent;
 
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
-import com.huawei.finance.front.one.domain.chat.ChatResponseMode;
-import com.huawei.finance.front.one.domain.chat.ImMessageType;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
@@ -21,8 +19,6 @@ import java.util.Map;
  * @param runId 本轮 SuperAgent 执行追踪标识。
  * @param runtimeSessionId AgentRuntime 自己的会话标识，首次调用可为空。
  * @param message 本轮用户输入文本。
- * @param messageType 本轮消息类型。
- * @param responseMode 前端期望的响应方式。
  * @param attachments 本轮关联附件引用。
  * @param memoryContext SuperAgent 装配的上下文快照。
  * @param intentDecision 意图服务识别结果，可能为空。
@@ -36,8 +32,6 @@ public record AgentRuntimeRequest(
         String runId,
         String runtimeSessionId,
         String message,
-        ImMessageType messageType,
-        ChatResponseMode responseMode,
         List<AttachmentRef> attachments,
         MemoryContext memoryContext,
         IntentDecision intentDecision,

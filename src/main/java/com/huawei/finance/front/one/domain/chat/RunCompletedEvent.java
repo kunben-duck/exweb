@@ -8,7 +8,7 @@ import java.util.Map;
  *
  * @param runId 本轮执行追踪标识。
  * @param sessionId 前端聊天会话标识。
- * @param sequence 事件在本轮 run 内的序号。
+ * @param sequence 事件持久化后的恢复游标序号，由 openGauss 事实源生成。
  * @param createdAt 事件创建时间。
  * @param payload 完成事件载荷，包含路由、binding 等诊断字段。
  */

@@ -1,0 +1,282 @@
+package com.huawei.finance.front.one.application.service;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
+import com.huawei.finance.front.one.application.integration.conversation.ChatRunCache;
+import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
+import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
+import com.huawei.finance.front.one.domain.auth.UserContext;
+import com.huawei.finance.front.one.domain.chat.ChatEvent;
+import com.huawei.finance.front.one.domain.chat.ChatRun;
+import com.huawei.finance.front.one.domain.chat.ChatRunCancelSignal;
+import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
+import com.huawei.finance.front.one.domain.chat.ChatSession;
+import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
+import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
+import com.huawei.finance.front.one.domain.chat.RunCancelledEvent;
+import com.huawei.finance.front.one.domain.chat.RunCompletedEvent;
+import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import org.junit.jupiter.api.Test;
+
+class ChatRunApplicationServiceTest {
+    @Test
+    void stopRunningRunMarksCancelAndCancelledEventClosesRun() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRunApplicationService service = service(repository, cache);
+        ChatRun run = runningRun();
+        repository.save(run);
+        cache.putActive(run);
+
+        var decision = service.requestStop(user(), "run1", "USER_STOP");
+
+        assertThat(decision.appendCancelledEvent()).isTrue();
+        assertThat(repository.saved.status()).isEqualTo(ChatRunStatus.CANCELLING);
+        assertThat(cache.cancellationSignal("run1")).isEqualTo(ChatRunCancelSignal.REQUESTED);
+
+        service.observeEvent(new StoredChatEvent("run1", "session1", 8L, "run.cancelled",
+                Instant.now(), RunCancelledEvent.of("run1", "session1", "USER_STOP").payload()));
+
+        assertThat(repository.saved.status()).isEqualTo(ChatRunStatus.CANCELLED);
+        assertThat(repository.saved.lastSeq()).isEqualTo(8L);
+        assertThat(cache.getActive("tenant1", "user1", "session1")).isEmpty();
+    }
+
+    @Test
+    void stopCompletedRunIsIdempotent() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRun completed = runningRun().completed(9L);
+        repository.save(completed);
+
+        var decision = service(repository, cache).requestStop(user(), "run1", "USER_STOP");
+
+        assertThat(decision.appendCancelledEvent()).isFalse();
+        assertThat(decision.run().status()).isEqualTo(ChatRunStatus.COMPLETED);
+        assertThat(cache.cancellationSignal("run1")).isEqualTo(ChatRunCancelSignal.NOT_REQUESTED);
+    }
+
+    @Test
+    void stopDoesNotAppendCancelledEventWhenTerminalRaceWins() {
+        TerminalRaceRunRepository repository = new TerminalRaceRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        repository.save(runningRun());
+
+        var decision = service(repository, cache).requestStop(user(), "run1", "USER_STOP");
+
+        assertThat(decision.appendCancelledEvent()).isFalse();
+        assertThat(decision.run().status()).isEqualTo(ChatRunStatus.COMPLETED);
+    }
+
+    @Test
+    void shouldRejectEventsWhenOpenGaussRunIsCancellingEvenWithoutRedisFlag() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRunApplicationService service = service(repository, cache);
+        repository.save(runningRun().cancelling("USER_STOP"));
+
+        assertThat(service.shouldAcceptEvent(MessageDeltaEvent.of("run1", "session1", "late delta"))).isFalse();
+        assertThat(service.shouldAcceptEvent(RunCompletedEvent.of("run1", "session1"))).isFalse();
+        assertThat(service.shouldAcceptEvent(RunCancelledEvent.of("run1", "session1", "USER_STOP"))).isTrue();
+    }
+
+    @Test
+    void shouldRefreshPositiveAcceptanceSnapshotAfterShortTtl() throws InterruptedException {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRunApplicationService service = service(repository, cache);
+        repository.save(runningRun());
+
+        assertThat(service.shouldAcceptEvent(MessageDeltaEvent.of("run1", "session1", "first delta"))).isTrue();
+
+        repository.save(runningRun().cancelling("USER_STOP"));
+        Thread.sleep(150);
+
+        assertThat(service.shouldAcceptEvent(MessageDeltaEvent.of("run1", "session1", "late delta"))).isFalse();
+    }
+
+    @Test
+    void shouldRejectEventsImmediatelyWhenRedisCancelFlagExists() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRunApplicationService service = service(repository, cache);
+        repository.save(runningRun());
+        cache.markCancellationRequested("run1");
+
+        assertThat(service.shouldAcceptEvent(MessageDeltaEvent.of("run1", "session1", "late delta"))).isFalse();
+    }
+
+    @Test
+    void streamStatusUsesActiveRunAndLatestSeq() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        InMemoryEventStore eventStore = new InMemoryEventStore(11L);
+        ChatRun run = runningRun().withFirstSeq(1L).withLastSeq(3L);
+        repository.save(run);
+        cache.putActive(run);
+        ChatRunApplicationService service = new ChatRunApplicationService(repository, cache, eventStore,
+                new PermissionChecker(), new FixedSessionRepository());
+
+        var status = service.streamStatus(user(), "session1");
+
+        assertThat(status.latestSeq()).isEqualTo(11L);
+        assertThat(status.activeRunId()).isEqualTo("run1");
+        assertThat(status.activeRunStatus()).isEqualTo(ChatRunStatus.RUNNING);
+        assertThat(status.activeStreamTopicId()).isEqualTo("chat-run-run1");
+        assertThat(status.cancellable()).isTrue();
+    }
+
+    private ChatRunApplicationService service(InMemoryRunRepository repository, InMemoryRunCache cache) {
+        return new ChatRunApplicationService(repository, cache, new InMemoryEventStore(0L),
+                new PermissionChecker(), new FixedSessionRepository());
+    }
+
+    private UserContext user() {
+        return new UserContext("tenant1", "user1", "User One");
+    }
+
+    private ChatRun runningRun() {
+        Instant now = Instant.now();
+        return new ChatRun("run1", "tenant1", "user1", "session1", ChatRunStatus.RUNNING,
+                "AGENT_RUNTIME", null, "relay", null, null, null, null,
+                now, null, Map.of(), now, now);
+    }
+
+    private static class InMemoryRunRepository implements ChatRunRepository {
+        private final Map<String, ChatRun> runs = new HashMap<>();
+        private ChatRun saved;
+
+        @Override
+        public ChatRun save(ChatRun run) {
+            saved = run;
+            runs.put(run.id(), run);
+            return run;
+        }
+
+        @Override
+        public Optional<ChatRun> findById(String runId) {
+            return Optional.ofNullable(runs.get(runId));
+        }
+
+        @Override
+        public Optional<ChatRun> findByTenantIdAndUserIdAndId(String tenantId, String userId, String runId) {
+            return findById(runId)
+                    .filter(run -> tenantId.equals(run.tenantId()))
+                    .filter(run -> userId.equals(run.userId()));
+        }
+
+        @Override
+        public Optional<ChatRun> findActiveBySession(String tenantId, String userId, String sessionId) {
+            return runs.values().stream()
+                    .filter(run -> tenantId.equals(run.tenantId()))
+                    .filter(run -> userId.equals(run.userId()))
+                    .filter(run -> sessionId.equals(run.sessionId()))
+                    .filter(run -> !run.status().terminal())
+                    .findFirst();
+        }
+    }
+
+    private static class TerminalRaceRunRepository extends InMemoryRunRepository {
+        @Override
+        public ChatRun save(ChatRun run) {
+            if (run.status() == ChatRunStatus.CANCELLING) {
+                return super.save(run.completed(9L));
+            }
+            return super.save(run);
+        }
+    }
+
+    private static class InMemoryRunCache implements ChatRunCache {
+        private final Map<String, ChatRun> active = new HashMap<>();
+        private final Map<String, Boolean> cancelled = new HashMap<>();
+
+        @Override
+        public Optional<ChatRun> getActive(String tenantId, String userId, String sessionId) {
+            return Optional.ofNullable(active.get(tenantId + ":" + userId + ":" + sessionId));
+        }
+
+        @Override
+        public void putActive(ChatRun run) {
+            active.put(run.tenantId() + ":" + run.userId() + ":" + run.sessionId(), run);
+        }
+
+        @Override
+        public void evictActive(String tenantId, String userId, String sessionId) {
+            active.remove(tenantId + ":" + userId + ":" + sessionId);
+        }
+
+        @Override
+        public void markCancellationRequested(String runId) {
+            cancelled.put(runId, true);
+        }
+
+        @Override
+        public ChatRunCancelSignal cancellationSignal(String runId) {
+            return Boolean.TRUE.equals(cancelled.get(runId))
+                    ? ChatRunCancelSignal.REQUESTED
+                    : ChatRunCancelSignal.NOT_REQUESTED;
+        }
+    }
+
+    private static class InMemoryEventStore implements ChatEventStore {
+        private final long latestSeq;
+
+        private InMemoryEventStore(long latestSeq) {
+            this.latestSeq = latestSeq;
+        }
+
+        @Override
+        public ChatEvent append(ChatEvent event) {
+            return event;
+        }
+
+        @Override
+        public List<ChatEvent> findBySessionIdAndAfterSeq(String sessionId, long afterSeq) {
+            return List.of();
+        }
+
+        @Override
+        public List<ChatEvent> findByRunIdAndAfterSeq(String runId, long afterSeq) {
+            return List.of();
+        }
+
+        @Override
+        public long findLatestSeqBySessionId(String sessionId) {
+            return latestSeq;
+        }
+    }
+
+    private static class FixedSessionRepository implements SessionRepository {
+        @Override
+        public Optional<ChatSession> findById(String sessionId) {
+            return Optional.empty();
+        }
+
+        @Override
+        public Optional<ChatSession> findByTenantIdAndUserIdAndId(String tenantId, String userId, String sessionId) {
+            Instant now = Instant.now();
+            return Optional.of(new ChatSession(sessionId, tenantId, userId, "title", "ACTIVE", "web", now, now));
+        }
+
+        @Override
+        public List<ChatSession> findByTenantIdAndUserId(String tenantId, String userId) {
+            return List.of();
+        }
+
+        @Override
+        public ChatSessionPage pageByTenantIdAndUserId(String tenantId, String userId, String cursor, int limit) {
+            return new ChatSessionPage(List.of(), null);
+        }
+
+        @Override
+        public ChatSession save(ChatSession session) {
+            return session;
+        }
+    }
+}

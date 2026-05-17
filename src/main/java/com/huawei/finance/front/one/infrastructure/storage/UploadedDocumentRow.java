@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.storage.mybatis;
+package com.huawei.finance.front.one.infrastructure.storage;
 
 import java.time.Instant;
 

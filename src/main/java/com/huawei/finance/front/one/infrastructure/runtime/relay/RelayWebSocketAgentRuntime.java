@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.agent.runtime.relay;
+package com.huawei.finance.front.one.infrastructure.runtime.relay;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;

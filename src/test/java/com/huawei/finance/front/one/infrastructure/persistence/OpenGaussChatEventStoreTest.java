@@ -5,8 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
-import com.huawei.finance.front.one.infrastructure.persistence.mybatis.ChatEventMapper;
-import com.huawei.finance.front.one.infrastructure.persistence.mybatis.ChatEventRow;
 import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Test;

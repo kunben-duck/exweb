@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.runtime.binding.mybatis;
+package com.huawei.finance.front.one.infrastructure.runtime;
 
 import java.time.Instant;
 

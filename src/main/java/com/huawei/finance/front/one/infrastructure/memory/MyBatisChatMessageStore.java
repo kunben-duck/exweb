@@ -2,8 +2,6 @@ package com.huawei.finance.front.one.infrastructure.memory;
 
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
-import com.huawei.finance.front.one.infrastructure.memory.mybatis.ChatMessageMapper;
-import com.huawei.finance.front.one.infrastructure.memory.mybatis.ChatMessageRow;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;

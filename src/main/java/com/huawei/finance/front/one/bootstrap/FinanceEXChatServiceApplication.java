@@ -8,16 +8,17 @@ import org.springframework.context.annotation.ComponentScan;
 /**
  * FinanceEXChatService Spring Boot 启动类。
  *
- * <p>MapperScan 显式列出各基础设施 MyBatis 包，避免扫描到非 Mapper 类型。</p>
+ * <p>MapperScan 显式列出承载 Mapper 的基础设施包。Mapper 类与对应 Repository 实现放在同一业务
+ * 基础设施包内，避免为了 MyBatis 技术细节再创建额外深层目录。</p>
  */
 @SpringBootApplication
 @ComponentScan(basePackages = "com.huawei.finance.front.one")
 @MapperScan(basePackages = {
-        "com.huawei.finance.front.one.infrastructure.memory.mybatis",
-        "com.huawei.finance.front.one.infrastructure.persistence.mybatis",
-        "com.huawei.finance.front.one.infrastructure.runtime.binding.mybatis",
-        "com.huawei.finance.front.one.infrastructure.session.persistence.mybatis",
-        "com.huawei.finance.front.one.infrastructure.storage.mybatis"
+        "com.huawei.finance.front.one.infrastructure.memory",
+        "com.huawei.finance.front.one.infrastructure.persistence",
+        "com.huawei.finance.front.one.infrastructure.runtime",
+        "com.huawei.finance.front.one.infrastructure.session",
+        "com.huawei.finance.front.one.infrastructure.storage"
 })
 public class FinanceEXChatServiceApplication {
     public static void main(String[] args) {

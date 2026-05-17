@@ -6,8 +6,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
-import com.huawei.finance.front.one.infrastructure.persistence.mybatis.ChatRunMapper;
-import com.huawei.finance.front.one.infrastructure.persistence.mybatis.ChatRunRow;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;

@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.agent.runtime.relay;
+package com.huawei.finance.front.one.infrastructure.runtime.relay;
 
 /**
  * Relay Runtime 协议错误。

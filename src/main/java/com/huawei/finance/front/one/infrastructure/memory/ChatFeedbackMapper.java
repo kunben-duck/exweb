@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.memory.mybatis;
+package com.huawei.finance.front.one.infrastructure.memory;
 
 import java.time.Instant;
 import org.apache.ibatis.annotations.Insert;

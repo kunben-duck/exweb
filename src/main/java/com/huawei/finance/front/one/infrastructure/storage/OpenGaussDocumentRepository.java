@@ -6,8 +6,6 @@ import com.huawei.finance.front.one.domain.document.DocumentLibraryQuery;
 import com.huawei.finance.front.one.domain.document.DocumentSource;
 import com.huawei.finance.front.one.domain.document.DocumentStatus;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
-import com.huawei.finance.front.one.infrastructure.storage.mybatis.UploadedDocumentMapper;
-import com.huawei.finance.front.one.infrastructure.storage.mybatis.UploadedDocumentRow;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;

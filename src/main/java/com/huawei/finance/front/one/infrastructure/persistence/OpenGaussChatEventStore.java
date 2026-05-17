@@ -8,8 +8,6 @@ import com.huawei.finance.front.one.application.integration.id.IdGenerateContext
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
-import com.huawei.finance.front.one.infrastructure.persistence.mybatis.ChatEventMapper;
-import com.huawei.finance.front.one.infrastructure.persistence.mybatis.ChatEventRow;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;

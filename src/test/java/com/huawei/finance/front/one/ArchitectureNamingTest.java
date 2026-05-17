@@ -50,4 +50,21 @@ class ArchitectureNamingTest {
                     });
         }
     }
+
+    @Test
+    void infrastructurePackagesDoNotKeepRedundantTechnologySubpackages() throws Exception {
+        String sourceRoot = "src/main/java/com/huawei/finance/front/one/infrastructure";
+        try (Stream<Path> files = Files.walk(Path.of(sourceRoot))) {
+            files.filter(path -> path.toString().endsWith(".java"))
+                    .forEach(path -> {
+                        String normalized = path.toString().replace('\\', '/');
+                        assertThat(normalized)
+                                .as("infrastructure implementation packages should stay business-oriented: " + path)
+                                .doesNotContain("/mybatis/")
+                                .doesNotContain("/runtime/binding/")
+                                .doesNotContain("/session/persistence/")
+                                .doesNotContain("/agent/runtime/");
+                    });
+        }
+    }
 }

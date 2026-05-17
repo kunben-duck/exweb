@@ -4,7 +4,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.integration.memory.ChatFeedbackRepository;
 import com.huawei.finance.front.one.domain.chat.ChatMessageFeedback;
-import com.huawei.finance.front.one.infrastructure.memory.mybatis.ChatFeedbackMapper;
 import java.util.Map;
 import org.springframework.stereotype.Repository;
 

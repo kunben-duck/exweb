@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.runtime.binding;
+package com.huawei.finance.front.one.infrastructure.runtime;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;

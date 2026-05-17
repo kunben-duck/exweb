@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.agent.runtime.relay;
+package com.huawei.finance.front.one.infrastructure.runtime.relay;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

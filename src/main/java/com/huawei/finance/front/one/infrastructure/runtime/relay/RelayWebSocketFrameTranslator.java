@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.agent.runtime.relay;
+package com.huawei.finance.front.one.infrastructure.runtime.relay;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;

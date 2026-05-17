@@ -1,10 +1,8 @@
-package com.huawei.finance.front.one.infrastructure.session.persistence;
+package com.huawei.finance.front.one.infrastructure.session;
 
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
-import com.huawei.finance.front.one.infrastructure.session.persistence.mybatis.ChatSessionMapper;
-import com.huawei.finance.front.one.infrastructure.session.persistence.mybatis.ChatSessionRow;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;

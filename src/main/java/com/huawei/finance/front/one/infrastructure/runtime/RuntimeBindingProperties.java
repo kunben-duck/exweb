@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.runtime.binding;
+package com.huawei.finance.front.one.infrastructure.runtime;
 
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;

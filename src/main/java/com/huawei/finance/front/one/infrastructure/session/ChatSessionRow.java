@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.session.persistence.mybatis;
+package com.huawei.finance.front.one.infrastructure.session;
 
 import java.time.Instant;
 

@@ -25,7 +25,9 @@ BACKEND_URL=http://localhost:8080 PORT=5173 npm start
 http://localhost:5173
 ```
 
-`BACKEND_URL` 可以换成任意本地或测试环境后端地址。前端统一请求自身的 `/api/**`，由 `server.mjs` 代理到真实后端，因此不需要额外配置 CORS。
+`BACKEND_URL` 可以换成任意本地或测试环境后端地址，也可以包含后端 context root，例如
+`BACKEND_URL=http://localhost:8080/fin/ex`。前端统一请求自身的 `/api/**`，
+由 `server.mjs` 代理到真实后端，因此不需要额外配置 CORS。
 
 ## 企业鉴权请求头
 

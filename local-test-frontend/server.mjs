@@ -10,6 +10,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
 const port = Number(process.env.PORT || 5173);
 const backend = new URL(process.env.BACKEND_URL || "http://localhost:8080");
+const backendBasePath = normalizeBasePath(backend.pathname);
 const proxyProfileCookieName = "finex_proxy_profile";
 const proxyProfileHeaderName = "x-finex-proxy-profile";
 const authProfiles = new Map();
@@ -167,10 +168,26 @@ function deleteAuthConfig(req, res) {
 }
 
 function backendTarget(requestUrl) {
-  const target = new URL(requestUrl || "/", backend);
+  const incoming = new URL(requestUrl || "/", "http://localhost");
+  const target = new URL(backend.toString());
+  target.pathname = joinPaths(backendBasePath, incoming.pathname);
+  target.search = incoming.search;
   target.searchParams.delete("proxyProfileId");
   target.searchParams.delete("__finexProfile");
   return target;
+}
+
+function normalizeBasePath(pathname) {
+  const value = pathname || "";
+  if (!value || value === "/") {
+    return "";
+  }
+  return value.endsWith("/") ? value.slice(0, -1) : value;
+}
+
+function joinPaths(basePath, requestPath) {
+  const normalizedRequestPath = requestPath.startsWith("/") ? requestPath : `/${requestPath}`;
+  return `${basePath}${normalizedRequestPath}` || "/";
 }
 
 function backendHeaders(req, target) {

@@ -10,6 +10,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
 const port = Number(process.env.PORT || 5173);
 const backend = new URL(process.env.BACKEND_URL || "http://localhost:8080");
+const proxyProfileCookieName = "finex_proxy_profile";
+const proxyProfileHeaderName = "x-finex-proxy-profile";
+const authProfiles = new Map();
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -22,7 +25,19 @@ const mimeTypes = {
 const server = http.createServer(async (req, res) => {
   try {
     if (req.url === "/__config") {
-      sendJson(res, { backendUrl: backend.toString().replace(/\/$/, "") });
+      sendJson(res, {
+        backendUrl: backend.toString().replace(/\/$/, ""),
+        proxyProfileCookieName,
+        proxyProfileHeaderName
+      });
+      return;
+    }
+    if (req.url === "/__auth-config" && req.method === "POST") {
+      await saveAuthConfig(req, res);
+      return;
+    }
+    if (req.url?.startsWith("/__auth-config/") && req.method === "DELETE") {
+      deleteAuthConfig(req, res);
       return;
     }
     if (req.url?.startsWith("/api/")) {
@@ -72,8 +87,8 @@ async function serveStatic(req, res) {
 }
 
 function proxyHttp(req, res) {
-  const target = new URL(req.url || "/", backend);
-  const headers = { ...req.headers, host: target.host };
+  const target = backendTarget(req.url);
+  const headers = backendHeaders(req, target);
   delete headers["origin"];
   const transport = target.protocol === "https:" ? https : http;
 
@@ -98,11 +113,11 @@ function proxyHttp(req, res) {
 }
 
 function proxyWebSocket(req, clientSocket, head) {
-  const target = new URL(req.url || "/", backend);
+  const target = backendTarget(req.url);
   const port = Number(target.port || (target.protocol === "https:" ? 443 : 80));
   const connect = target.protocol === "https:" ? tls.connect : net.connect;
   const backendSocket = connect({ host: target.hostname, port }, () => {
-    const headers = { ...req.headers, host: target.host };
+    const headers = backendHeaders(req, target);
     delete headers["origin"];
     const headerLines = Object.entries(headers)
       .filter(([, value]) => value !== undefined)
@@ -124,4 +139,146 @@ function proxyWebSocket(req, clientSocket, head) {
 function sendJson(res, body) {
   res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   res.end(JSON.stringify(body));
+}
+
+async function saveAuthConfig(req, res) {
+  try {
+    const payload = JSON.parse(await readBody(req));
+    const profileId = requireProfileId(payload.profileId);
+    const headers = normalizeAuthHeaders(payload.headers);
+    authProfiles.set(profileId, headers);
+    sendJson(res, { profileId, headerCount: Object.keys(headers).length });
+  } catch (error) {
+    res.writeHead(400, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+    res.end(JSON.stringify({
+      error: "BAD_AUTH_CONFIG",
+      message: error instanceof Error ? error.message : String(error)
+    }));
+  }
+}
+
+function deleteAuthConfig(req, res) {
+  const pathname = new URL(req.url || "/", "http://localhost").pathname;
+  const profileId = decodeURIComponent(pathname.slice("/__auth-config/".length));
+  if (profileId) {
+    authProfiles.delete(profileId);
+  }
+  sendJson(res, { profileId, deleted: true });
+}
+
+function backendTarget(requestUrl) {
+  const target = new URL(requestUrl || "/", backend);
+  target.searchParams.delete("proxyProfileId");
+  target.searchParams.delete("__finexProfile");
+  return target;
+}
+
+function backendHeaders(req, target) {
+  const headers = { ...req.headers, host: target.host };
+  delete headers[proxyProfileHeaderName];
+  delete headers["cookie"];
+  delete headers["origin"];
+
+  const profileId = proxyProfileId(req);
+  const configuredHeaders = profileId ? authProfiles.get(profileId) : null;
+  if (!configuredHeaders) {
+    return headers;
+  }
+  for (const [name, value] of Object.entries(configuredHeaders)) {
+    const lowerName = name.toLowerCase();
+    if (!isProxySafeHeader(lowerName)) {
+      continue;
+    }
+    headers[lowerName] = value;
+  }
+  return headers;
+}
+
+function proxyProfileId(req) {
+  const headerValue = req.headers[proxyProfileHeaderName];
+  if (Array.isArray(headerValue) && headerValue[0]) {
+    return headerValue[0];
+  }
+  if (typeof headerValue === "string" && headerValue) {
+    return headerValue;
+  }
+  const urlProfile = new URL(req.url || "/", "http://localhost").searchParams.get("proxyProfileId");
+  if (urlProfile) {
+    return urlProfile;
+  }
+  return cookieValue(req.headers.cookie || "", proxyProfileCookieName);
+}
+
+function cookieValue(cookieHeader, name) {
+  for (const part of String(cookieHeader || "").split(";")) {
+    const [rawName, ...rest] = part.trim().split("=");
+    if (rawName === name) {
+      return decodeURIComponent(rest.join("="));
+    }
+  }
+  return "";
+}
+
+function normalizeAuthHeaders(input) {
+  const result = {};
+  const entries = Array.isArray(input) ? input : [];
+  for (const item of entries) {
+    if (!item || item.enabled === false) {
+      continue;
+    }
+    const name = String(item.name || "").trim();
+    const value = String(item.value ?? "");
+    if (!name) {
+      continue;
+    }
+    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) {
+      throw new Error(`非法 header 名称: ${name}`);
+    }
+    if (/[\r\n]/.test(value)) {
+      throw new Error(`header 值不能包含换行: ${name}`);
+    }
+    if (!isProxySafeHeader(name.toLowerCase())) {
+      continue;
+    }
+    result[name.toLowerCase()] = value;
+  }
+  return result;
+}
+
+function isProxySafeHeader(lowerName) {
+  return ![
+    "host",
+    "connection",
+    "upgrade",
+    "content-length",
+    "transfer-encoding",
+    "sec-websocket-key",
+    "sec-websocket-version",
+    "sec-websocket-protocol",
+    "sec-websocket-extensions"
+  ].includes(lowerName);
+}
+
+function requireProfileId(value) {
+  const profileId = String(value || "").trim();
+  if (!/^[A-Za-z0-9._:-]{8,128}$/.test(profileId)) {
+    throw new Error("profileId 格式非法");
+  }
+  return profileId;
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", chunk => {
+      body += chunk;
+      if (body.length > 256 * 1024) {
+        reject(new Error("请求体过大"));
+        req.destroy();
+      }
+    });
+    req.on("end", () => resolve(body || "{}"));
+    req.on("error", reject);
+  });
 }

@@ -81,8 +81,18 @@ public class LocalWebSocketConnectionRegistry {
      * @param topicId run 级 stream topic。
      * @param seq 客户端已经处理完成的最大事件序号。
      */
-    public void ack(String connectionId, String topicId, long seq) {
-        get(connectionId).ifPresent(state -> state.ack(topicId, seq));
+    public boolean ack(String connectionId, String topicId, long seq) {
+        return get(connectionId).map(state -> state.ack(topicId, seq)).orElse(false);
+    }
+
+    /**
+     * 获取当前连接上所有 topic 的最后 ack 序号快照。
+     *
+     * @param connectionId WebSocket 物理连接 ID。
+     * @return topicId 到最后 ack seq 的映射；连接不存在时为空映射。
+     */
+    public Map<String, Long> acknowledgedSubscriptions(String connectionId) {
+        return get(connectionId).map(ConnectionState::acknowledgedSubscriptions).orElse(Map.of());
     }
 
     /**
@@ -184,12 +194,20 @@ public class LocalWebSocketConnectionRegistry {
             touch();
         }
 
-        private void ack(String topicId, long seq) {
+        private boolean ack(String topicId, long seq) {
             SubscriptionState subscription = subscriptions.get(topicId);
             if (subscription != null) {
                 subscription.ack(seq);
+                touch();
+                return true;
             }
-            touch();
+            return false;
+        }
+
+        private Map<String, Long> acknowledgedSubscriptions() {
+            Map<String, Long> snapshot = new LinkedHashMap<>();
+            subscriptions.forEach((topicId, subscription) -> snapshot.put(topicId, subscription.lastAckSeq()));
+            return Map.copyOf(snapshot);
         }
 
         private DeliveryDecision markDelivered(String topicId, long seq) {
@@ -235,6 +253,10 @@ public class LocalWebSocketConnectionRegistry {
             if (seq > lastAckSeq) {
                 lastAckSeq = seq;
             }
+        }
+
+        private long lastAckSeq() {
+            return lastAckSeq;
         }
 
         private synchronized DeliveryDecision markDelivered(long seq) {

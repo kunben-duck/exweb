@@ -78,18 +78,21 @@ public interface ChatSessionMapper {
     List<ChatSessionRow> findByOwner(@Param("tenantId") String tenantId, @Param("userId") String userId);
 
     @Select("""
+            <script>
             SELECT id, tenant_id, user_id, title, status, channel, created_at, updated_at
             FROM fin_ex_chat_session_t
             WHERE tenant_id = #{tenantId}
               AND user_id = #{userId}
-              AND status <> 'DELETED'
+              AND status &lt;&gt; 'DELETED'
+              <if test="cursorUpdatedAt != null">
               AND (
-                    #{cursorUpdatedAt} IS NULL
-                    OR updated_at < #{cursorUpdatedAt}
-                    OR (updated_at = #{cursorUpdatedAt} AND id < #{cursorId})
+                    updated_at &lt; #{cursorUpdatedAt}
+                    OR (updated_at = #{cursorUpdatedAt} AND id &lt; #{cursorId})
                   )
+              </if>
             ORDER BY updated_at DESC, id DESC
             LIMIT #{limit}
+            </script>
             """)
     @Results(id = "chatSessionPageResultMap", value = {
             @Result(column = "tenant_id", property = "tenantId"),

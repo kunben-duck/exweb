@@ -84,20 +84,25 @@ public interface UploadedDocumentMapper {
     );
 
     @Select("""
+            <script>
             SELECT id, tenant_id, user_id, session_id, original_name, bucket, object_key,
                    content_type, size_bytes, status, source, token_size, metadata_json, created_at, updated_at
             FROM fin_ex_uploaded_document_t
             WHERE tenant_id = #{tenantId}
               AND user_id = #{userId}
-              AND status <> 'DELETED'
-              AND (#{sessionId} IS NULL OR session_id = #{sessionId})
+              AND status &lt;&gt; 'DELETED'
+              <if test="sessionId != null">
+              AND session_id = #{sessionId}
+              </if>
+              <if test="cursorUpdatedAt != null">
               AND (
-                    #{cursorUpdatedAt} IS NULL
-                    OR updated_at < #{cursorUpdatedAt}
-                    OR (updated_at = #{cursorUpdatedAt} AND id < #{cursorId})
+                    updated_at &lt; #{cursorUpdatedAt}
+                    OR (updated_at = #{cursorUpdatedAt} AND id &lt; #{cursorId})
                   )
+              </if>
             ORDER BY updated_at DESC, id DESC
             LIMIT #{limit}
+            </script>
             """)
     @Results(id = "uploadedDocumentListResultMap", value = {
             @Result(column = "tenant_id", property = "tenantId"),

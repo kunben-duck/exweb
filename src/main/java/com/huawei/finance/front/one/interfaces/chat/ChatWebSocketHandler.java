@@ -10,6 +10,8 @@ import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatEventDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatWebSocketEnvelopeDto;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.socket.CloseStatus;
 import org.springframework.web.reactive.socket.WebSocketHandler;
@@ -31,6 +33,8 @@ import reactor.util.concurrent.Queues;
  */
 @Component
 public class ChatWebSocketHandler implements WebSocketHandler {
+    private static final Logger log = LoggerFactory.getLogger(ChatWebSocketHandler.class);
+
     private final AuthContextProvider auth;
     private final PermissionChecker permissionChecker;
     private final ChatStreamApplicationService chatStreamService;
@@ -79,6 +83,16 @@ public class ChatWebSocketHandler implements WebSocketHandler {
                     return Mono.empty();
                 })
                 .doFinally(signalType -> {
+                    Map<String, Long> acknowledged = connectionRegistry.acknowledgedSubscriptions(session.getId());
+                    if (!acknowledged.isEmpty()) {
+                        Mono.fromRunnable(() -> chatStreamService.flushAcknowledgements(user, acknowledged))
+                                .subscribeOn(Schedulers.boundedElastic())
+                                .subscribe(
+                                        ignored -> { },
+                                        ex -> log.warn("WebSocket ack 游标关闭前刷新失败，connectionId={}, reason={}",
+                                                session.getId(), ex.getMessage())
+                                );
+                    }
                     connectionRegistry.unregister(session.getId());
                     outbound.tryEmitComplete();
                 })
@@ -141,9 +155,19 @@ public class ChatWebSocketHandler implements WebSocketHandler {
                 emit(session, outbound, ChatWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE", "topicId 不能为空"));
                 return Mono.empty();
             }
-            connectionRegistry.ack(session.getId(), topicId, seq);
-            emit(session, outbound, ChatWebSocketEnvelopeDto.reply(commandId, Map.of("type", "ack", "topicId", topicId, "seq", seq)));
-            return Mono.empty();
+            if (!connectionRegistry.ack(session.getId(), topicId, seq)) {
+                emit(session, outbound, ChatWebSocketEnvelopeDto.error(commandId, "NOT_SUBSCRIBED",
+                        "当前连接未订阅 topic: " + topicId));
+                return Mono.empty();
+            }
+            return Mono.<Void>fromRunnable(() -> chatStreamService.acknowledgeRunTopic(user, topicId, seq))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .doOnSuccess(ignored -> emit(session, outbound,
+                            ChatWebSocketEnvelopeDto.reply(commandId, Map.of("type", "ack", "topicId", topicId, "seq", seq))))
+                    .onErrorResume(ex -> {
+                        emit(session, outbound, ChatWebSocketEnvelopeDto.error(commandId, "ACK_ERROR", ex.getMessage()));
+                        return Mono.<Void>empty();
+                    });
         }
         emit(session, outbound, ChatWebSocketEnvelopeDto.error(commandId, "BAD_WS_MESSAGE",
                 "不支持的 WebSocket command type: " + type));
@@ -171,7 +195,6 @@ public class ChatWebSocketHandler implements WebSocketHandler {
                     chatStreamService.resumeRunTopic(user, topicId, afterSeq)
                             .map(eventTranslator::toDto)
                             .takeUntilOther(cancellation.asMono())
-                            .doFinally(signalType -> connectionRegistry.unsubscribe(session.getId(), topicId))
                             .subscribe(
                                     dto -> emitTopicEvent(session, outbound, topicId, cancellation, dto),
                                     ex -> {

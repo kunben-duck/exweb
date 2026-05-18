@@ -1,0 +1,60 @@
+package com.huawei.finance.front.one.interfaces;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
+import org.springframework.mock.web.server.MockServerWebExchange;
+
+/**
+ * {@link ApiExceptionHandler} 的状态码映射测试。
+ */
+class ApiExceptionHandlerTest {
+    private final ApiExceptionHandler handler = new ApiExceptionHandler();
+
+    @Test
+    void mapsResourceOwnershipViolationToForbidden() {
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> response = handler.handleSecurity(
+                new SecurityException("文档不能绑定到不属于当前用户的会话"),
+                exchange("/api/v1/ex/documents")
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code()).isEqualTo("ACCESS_DENIED");
+        assertThat(response.getBody().path()).isEqualTo("/api/v1/ex/documents");
+    }
+
+    @Test
+    void mapsMissingIdentityToUnauthorized() {
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> response = handler.handleSecurity(
+                new SecurityException("当前租户 ID 缺失"),
+                exchange("/api/v1/ex/chat/runs")
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code()).isEqualTo("AUTH_CONTEXT_MISSING");
+    }
+
+    @Test
+    void mapsBadRequestAndConflict() {
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> badRequest = handler.handleBadRequest(
+                new IllegalArgumentException("sessionId 不能为空"),
+                exchange("/api/v1/ex/chat/sessions")
+        );
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> conflict = handler.handleConflict(
+                new IllegalStateException("文档当前不可用于聊天: PROCESSING"),
+                exchange("/api/v1/ex/documents/doc1/download")
+        );
+
+        assertThat(badRequest.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(conflict.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    private MockServerWebExchange exchange(String path) {
+        return MockServerWebExchange.from(MockServerHttpRequest.get(path).build());
+    }
+}

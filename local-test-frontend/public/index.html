@@ -55,6 +55,20 @@
           <button id="closeSessionBtn" type="button">关闭</button>
         </div>
       </section>
+
+      <section>
+        <div class="section-title">
+          <h2>鉴权请求头</h2>
+          <span id="authHeadersState" class="pill muted">headers: none</span>
+        </div>
+        <textarea id="authHeadersInput" class="auth-headers-input" rows="6" spellcheck="false"
+          placeholder="Cookie: your_enterprise_cookie&#10;Authorization: Bearer token&#10;X-User-Ticket: value"></textarea>
+        <div class="button-row">
+          <button id="saveAuthHeadersBtn" type="button">保存请求头</button>
+          <button id="clearAuthHeadersBtn" type="button">清空</button>
+        </div>
+        <p class="hint">仅用于本地联调代理。浏览器不能直接设置 Cookie 或 WebSocket 请求头，保存后由本地代理转发到后端。</p>
+      </section>
     </aside>
 
     <section class="panel chat-panel">
@@ -63,8 +77,8 @@
         <div class="button-row">
           <button id="loadMessagesBtn" type="button">历史接口</button>
           <button id="resumeSseBtn" type="button">SSE 补发</button>
-          <button id="subscribeActiveBtn" type="button">订阅 active run</button>
-          <button id="stopRunBtn" type="button">停止回答</button>
+          <button id="restoreActiveRunBtn" type="button">恢复 active run</button>
+          <button id="stopRunBtn" class="danger" type="button" disabled>停止回答</button>
           <button id="retryRunBtn" type="button">重新生成</button>
         </div>
       </div>
@@ -74,7 +88,7 @@
         <textarea id="messageInput" rows="3" placeholder="输入消息，支持附加文档库中的 documentId"></textarea>
         <div class="composer-actions">
           <label><input id="forceNewTask" type="checkbox" /> forceNewTask</label>
-          <button type="submit">发送 run</button>
+          <button id="sendRunBtn" class="primary" type="submit">发送 run</button>
         </div>
       </form>
     </section>

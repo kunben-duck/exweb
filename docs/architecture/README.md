@@ -21,12 +21,12 @@ flowchart TD
 
     FindRuntime --> HasRuntime{"存在 active RuntimeBinding?"}
     HasRuntime -- "是" --> TouchRuntime["刷新 RuntimeBinding"]
-    TouchRuntime --> RelayRuntime["Relay Runtime query"]
+    TouchRuntime --> RuntimeQuery["AgentRuntime.query 防腐层"]
 
     HasRuntime -- "否" --> RouteSignal["RouteSignalApplicationService"]
     RouteSignal --> SignalEnabled{"用例库或意图服务已开启?"}
     SignalEnabled -- "否" --> CreateRuntime["创建 RuntimeBinding"]
-    CreateRuntime --> RelayRuntime
+    CreateRuntime --> RuntimeQuery
 
     SignalEnabled -- "是" --> UseCaseEnabled{"用例库开启?"}
     UseCaseEnabled -- "是" --> UseCase["UseCaseLibraryClient.match"]
@@ -43,10 +43,20 @@ flowchart TD
     IntentRoute -- "复杂/低置信/无 subAgentCode" --> CreateRuntime
 
     SingleSubAgent --> EventStream["输出 ChatEvent 流"]
-    RelayRuntime --> EventStream
+    RuntimeQuery --> RuntimeAdapter{"provider=relay api-adapter?"}
+    RuntimeAdapter -- "relay-stream-http" --> RelayHttp["RelayStreamHttpRuntimeAdapter"]
+    RuntimeAdapter -- "deepseek-chat-completions" --> DeepSeek["DeepSeekChatCompletionsRuntimeAdapter"]
+    RuntimeAdapter -- "relay-websocket" --> RelayWs["RelayWebSocketRuntimeAdapter 后端出站"]
+    RelayHttp --> EventStream
+    DeepSeek --> EventStream
+    RelayWs --> EventStream
     SystemResponse --> EventStream
     EventStream --> Persist["事件写入 fin_ex_chat_event_t"]
     Persist --> Publish["发布到 run stream topic"]
+    Publish --> FrontWS["前端 WebSocket 实时订阅"]
+    Persist --> ResumeSSE["SSE 按 afterSeq 恢复：session 有限补发 / run tail 到终态"]
+    FrontWS --> Ack["前端 ack(seq)"]
+    Ack --> ReadCursor["刷新 fin_ex_chat_read_cursor_t / Redis"]
     Publish --> RuntimeObserve["观察 runtimeSessionId"]
     RuntimeObserve --> RuntimeCache["刷新 RuntimeBinding Redis 热缓存"]
 ```
@@ -66,7 +76,13 @@ sequenceDiagram
     participant UseCase as "UseCaseLibraryService"
     participant Intent as "IntentService"
     participant SubAgent as "SubAgent"
-    participant Runtime as "Relay Runtime"
+    participant Runtime as "AgentRuntime Port"
+    participant RelayHttp as "RelayStreamHttpRuntimeAdapter"
+    participant DeepSeek as "DeepSeekChatCompletionsRuntimeAdapter"
+    participant RelayWs as "RelayWebSocketRuntimeAdapter"
+    participant RelayAgent as "RelayAgent Service"
+    participant Stream as "ChatStreamApplicationService"
+    participant Cursor as "ChatReadCursorStore"
     participant Redis as "Redis"
     participant DB as "openGauss"
     participant EventStore as "ChatEventStore"
@@ -102,7 +118,17 @@ sequenceDiagram
         SuperAgent->>Binding: "touchForRun(runId)"
         Binding->>DB: "刷新 last_run_id 与 expires_at"
         Binding->>Redis: "刷新 RuntimeBinding TTL"
-        SuperAgent->>Runtime: "query(runtimeSessionId, message)"
+        SuperAgent->>Runtime: "AgentRuntime.query(runtimeSessionId, message)"
+        alt "api-adapter=relay-stream-http"
+            Runtime->>RelayHttp: "delegate"
+            RelayHttp->>RelayAgent: "HTTP POST stream-path"
+        else "api-adapter=deepseek-chat-completions"
+            Runtime->>DeepSeek: "delegate"
+            DeepSeek->>RelayAgent: "HTTP POST /chat/completions"
+        else "api-adapter=relay-websocket"
+            Runtime->>RelayWs: "delegate"
+            RelayWs->>RelayAgent: "后端出站 WebSocket + 首帧 request"
+        end
     else "不存在 active RuntimeBinding"
         SuperAgent->>Signal: "routeInitial(command, memory)"
         alt "用例库或意图服务命中简单任务"
@@ -115,7 +141,17 @@ sequenceDiagram
             SuperAgent->>Binding: "create(runId)"
             Binding->>DB: "写入 fin_ex_runtime_binding_t"
             Binding->>Redis: "缓存 RuntimeBinding"
-            SuperAgent->>Runtime: "query(message)"
+            SuperAgent->>Runtime: "AgentRuntime.query(message)"
+            alt "api-adapter=relay-stream-http"
+                Runtime->>RelayHttp: "delegate"
+                RelayHttp->>RelayAgent: "HTTP POST stream-path"
+            else "api-adapter=deepseek-chat-completions"
+                Runtime->>DeepSeek: "delegate"
+                DeepSeek->>RelayAgent: "HTTP POST /chat/completions"
+            else "api-adapter=relay-websocket"
+                Runtime->>RelayWs: "delegate"
+                RelayWs->>RelayAgent: "后端出站 WebSocket + 首帧 request"
+            end
         else "不支持任务"
             Signal-->>SuperAgent: "SYSTEM_RESPONSE"
             SuperAgent->>SuperAgent: "生成可控系统回复"
@@ -123,12 +159,30 @@ sequenceDiagram
     end
 
     loop "输出 ChatEvent"
-        SubAgent-->>SuperAgent: "message.delta / message.completed"
-        Runtime-->>SuperAgent: "message.delta / message.completed"
+        alt "SubAgent route"
+            SubAgent-->>SuperAgent: "message.delta / message.completed"
+        else "Relay HTTP Runtime route"
+            RelayAgent-->>RelayHttp: "HTTP stream delta"
+            RelayHttp-->>Runtime: "ChatEvent"
+            Runtime-->>SuperAgent: "message.delta / message.completed"
+        else "DeepSeek Chat Completions route"
+            RelayAgent-->>DeepSeek: "JSON / SSE chunks"
+            DeepSeek-->>Runtime: "ChatEvent"
+            Runtime-->>SuperAgent: "message.delta / message.completed"
+        else "Relay WebSocket Runtime route"
+            RelayAgent-->>RelayWs: "WebSocket frame"
+            RelayWs-->>Runtime: "ChatEvent"
+            Runtime-->>SuperAgent: "message.delta / message.completed"
+        end
         SuperAgent->>EventStore: "append(event)"
         EventStore->>DB: "写入 fin_ex_chat_event_t"
         EventStore-->>SuperAgent: "返回持久化 seq"
-        SuperAgent-->>Frontend: "WebSocket 实时事件"
+        SuperAgent->>Stream: "publish(run stream topic)"
+        Stream-->>Frontend: "WebSocket envelope(message)"
+        Frontend->>Stream: "ack(topicId, seq)"
+        Stream->>Cursor: "刷新 read cursor"
+        Cursor->>Redis: "写入热游标"
+        Cursor->>DB: "节流/关闭时 flush"
         SuperAgent->>Binding: "observeEvent(runtimeSessionId)"
     end
 
@@ -150,7 +204,7 @@ sequenceDiagram
     participant HuaweiS3 as "Huawei OBS S3 Adapter"
     participant DB as "openGauss"
     participant Chat as "FinanceEXChatService"
-    participant Runtime as "Relay Runtime"
+    participant Executor as "SubAgentExecutor / AgentRuntimeExecutor"
 
     Frontend->>DocAPI: "POST /documents multipart file"
     DocAPI->>DocAPI: "AuthContextProvider.resolve()"
@@ -165,7 +219,7 @@ sequenceDiagram
     Frontend->>Chat: "聊天请求 attachments[{documentId}]"
     Chat->>DB: "回查 fin_ex_uploaded_document_t"
     Chat->>Chat: "校验归属、状态，补齐可信附件元数据"
-    Chat->>Runtime: "AgentRuntimeRequest.attachments"
+    Chat->>Executor: "AgentQueryRequest / AgentRuntimeRequest.attachments"
 ```
 
 设计原则：
@@ -173,22 +227,30 @@ sequenceDiagram
 - 前端上传仍先进入 FinanceEXChatService，方便统一鉴权、审计、限流和企业网关接入。
 - 真实文件内容通过 `ObjectStorage` port 写入对象存储；当前支持 local 和 huawei-s3 实现。
 - 聊天请求只引用 `documentId`，不携带文件正文。
-- Runtime 看到的是经过文档库回查后的可信附件元数据。
+- SubAgent 或 Runtime 看到的是经过文档库回查后的可信附件元数据。
 - `fin_ex_uploaded_document_t` 是文档库事实源，支持最近文档、库中文档选择和后续连接器文档扩展。
 
 ## 流式响应与断点恢复
 
-正式版只保留后台 run 创建模式。`POST /chat/runs` 是唯一提问入口，
-WebSocket 负责实时输出，SSE 只负责断线、刷新或复制页签后的缺失事件补发。
+正式版只保留后台 run 创建模式。`POST /chat/runs` 是唯一提问入口。
+本页新创建的 run 默认通过 WebSocket topic 接实时事件；新页签、新浏览器或跨电脑恢复已经存在的 active run 时，使用 run 级 SSE 先补发历史事件，再持续接续 live 事件直到本轮 run 终态。会话级 SSE 仍只负责有限缺失事件补发。
 
 ```text
 POST /api/v1/ex/chat/runs
 POST /api/v1/ex/chat/runs/{runId}/retry
 POST /api/v1/ex/chat/messages/{messageId}/feedback
+POST /api/v1/ex/chat/sessions
+GET  /api/v1/ex/chat/sessions?limit=20&cursor=...
 GET  /api/v1/ex/chat/sessions/{sessionId}/state?messageLimit=50
+GET  /api/v1/ex/chat/sessions/{sessionId}/messages?limit=50&cursor=...
 GET  /api/v1/ex/chat/sessions/{sessionId}/events/sse?afterSeq={lastSeq}
+GET  /api/v1/ex/chat/runs/{runId}/events/sse?afterSeq={lastSeq}
+GET  /api/v1/ex/chat/sessions/{sessionId}/stream-status
 WS   /api/v1/ex/chat/ws subscribe(topicId=streamTopicId)
 POST /api/v1/ex/chat/runs/{runId}/stop
+POST /api/v1/ex/chat/sessions/{sessionId}/archive
+POST /api/v1/ex/chat/sessions/{sessionId}/restore
+POST /api/v1/ex/chat/sessions/{sessionId}/close
 ```
 
 `/chat/runs` 只返回 run 运行标识和 run 级 `streamTopicId`，不返回 WebSocket、SSE resume 或 stop URL。
@@ -198,13 +260,16 @@ POST /api/v1/ex/chat/runs/{runId}/stop
 sequenceDiagram
     autonumber
     participant Frontend as "Frontend"
-    participant ChatAPI as "Chat API"
+    participant ChatAPI as "Chat HTTP API"
+    participant ChatWS as "Chat WebSocket"
     participant SuperAgent as "FinanceEXChatService"
     participant EventStore as "ChatEventStore"
+    participant CursorStore as "ChatReadCursorStore"
     participant RunStore as "ChatRunStore"
     participant Live as "LocalChatEventStreamRegistry"
     participant RedisBus as "Redis Pub/Sub"
-    participant Runtime as "Relay Runtime"
+    participant Runtime as "AgentRuntime Adapter"
+    participant RelayAgent as "RelayAgent Service"
     participant DB as "openGauss"
 
     Frontend->>ChatAPI: "POST /chat/runs"
@@ -217,20 +282,36 @@ sequenceDiagram
     SuperAgent->>Live: "publish(run.started)"
     ChatAPI-->>Frontend: "runId/sessionId/firstSeq/streamTopicId"
 
-    Frontend->>ChatAPI: "WS subscribe(topicId=streamTopicId, afterSeq=firstSeq)"
-    ChatAPI->>EventStore: "findByRunIdAndAfterSeq"
-    EventStore->>DB: "补发 run 历史事件"
-    ChatAPI->>Live: "订阅本机 run topic"
-    ChatAPI->>RedisBus: "订阅远端 run topic"
-
-    SuperAgent->>Runtime: "query"
-    Runtime-->>SuperAgent: "message.delta"
-    SuperAgent->>EventStore: "append(delta)"
-    EventStore->>DB: "持久化 seq"
-    SuperAgent->>RunStore: "刷新 lastSeq"
-    SuperAgent->>Live: "publish(delta)"
-    SuperAgent->>RedisBus: "publish(delta)"
-    Live-->>Frontend: "WebSocket 实时事件"
+    par "后台 run 执行链路，由 /chat/runs 创建后在服务端推进"
+        SuperAgent->>Runtime: "AgentRuntime.query"
+        alt "api-adapter=relay-stream-http"
+            Runtime->>RelayAgent: "HTTP POST stream-path"
+            RelayAgent-->>Runtime: "HTTP stream delta"
+        else "api-adapter=deepseek-chat-completions"
+            Runtime->>RelayAgent: "HTTP POST /chat/completions"
+            RelayAgent-->>Runtime: "JSON / SSE chunks"
+        else "api-adapter=relay-websocket"
+            Runtime->>RelayAgent: "后端出站 WebSocket + request 首帧"
+            RelayAgent-->>Runtime: "WebSocket 文本/JSON 帧"
+        end
+        Runtime-->>SuperAgent: "标准 ChatEvent(message.delta)"
+        SuperAgent->>EventStore: "append(delta)"
+        EventStore->>DB: "持久化 seq"
+        SuperAgent->>RunStore: "刷新 lastSeq"
+        SuperAgent->>Live: "publish(delta)"
+        SuperAgent->>RedisBus: "publish(delta)"
+    and "前端实时订阅链路，只订阅 ChatEvent，不触发 Runtime query"
+        Frontend->>ChatWS: "WS subscribe(topicId=streamTopicId, afterSeq=firstSeq)"
+        ChatWS->>EventStore: "findByRunIdAndAfterSeq"
+        EventStore->>DB: "补发 run 历史事件"
+        ChatWS->>Live: "订阅本机 run topic"
+        ChatWS->>RedisBus: "订阅远端 run topic"
+        Live-->>ChatWS: "ChatEvent"
+        ChatWS-->>Frontend: "WebSocket 实时事件"
+        Frontend->>ChatWS: "ack(topicId, seq)"
+        ChatWS->>CursorStore: "Redis 每次刷新 read cursor"
+        ChatWS->>CursorStore: "openGauss 节流写入，连接关闭强制 flush"
+    end
 
     opt "用户点击停止"
         Frontend->>ChatAPI: "POST /chat/runs/{runId}/stop"
@@ -243,10 +324,15 @@ sequenceDiagram
         ChatAPI-->>Frontend: "status=CANCELLED/latestSeq"
     end
 
-    Frontend--xChatAPI: "浏览器刷新/断线"
-    Frontend->>ChatAPI: "SSE resume afterSeq=lastReceivedSeq"
-    ChatAPI->>DB: "补发缺失事件"
-    ChatAPI-->>Frontend: "补发缺失事件"
+    Frontend--xChatAPI: "浏览器刷新/断线/换电脑"
+    Frontend->>ChatAPI: "GET stream-status"
+    ChatAPI->>CursorStore: "读取 readCursorSeq"
+    ChatAPI-->>Frontend: "activeRunId/topic/firstSeq/readCursorSeq"
+    Frontend->>ChatAPI: "Run SSE resume afterSeq=activeRunFirstSeq-1"
+    ChatAPI->>DB: "按 runId 补发缺失事件"
+    ChatAPI->>Live: "接入 run live topic"
+    ChatAPI->>RedisBus: "接入跨实例 run topic"
+    ChatAPI-->>Frontend: "SSE 补发 + live tail 到 run 终态"
 ```
 
 关键约束：
@@ -254,12 +340,23 @@ sequenceDiagram
 - `fin_ex_chat_event_t.seq` 是前端恢复游标，实时输出和补发输出使用同一份 seq；该序号由 openGauss sequence/default 生成并随事件写入一起返回，应用层不再本地生成恢复游标。
 - openGauss 是事件事实源，`LocalChatEventStreamRegistry` 是当前服务实例内在线发布器，Redis Pub/Sub 只做跨实例实时扇出。
 - `fin_ex_chat_run_t` 是 run 生命周期事实源；Redis 只保存 active run 和 cancel flag。
+- `fin_ex_chat_read_cursor_t` 是用户消费游标事实源；WebSocket ack 会刷新 Redis 热游标并节流写入 openGauss，用于展示和诊断用户消费进度。
 - 后台 run 不依赖创建 run 的原始浏览器连接，刷新页面后用 `afterSeq` 恢复。
-- WebSocket 订阅消息格式：`{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}`。
-- WebSocket 不接受聊天请求；仅支持 `connect`、`presence`、`subscribe`、`unsubscribe`、`ack` 控制消息。
+- 前端 WebSocket 订阅消息格式：`{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}`。
+- 前端 WebSocket 不触发 `AgentRuntime.query`，只补发和订阅 ChatEvent；它不接受聊天请求，仅支持 `connect`、`presence`、`subscribe`、`unsubscribe`、`ack` 控制消息。
 - stop 是 REST 生命周期接口，不是 WebSocket command；重复 stop 幂等返回当前 run 状态。
 - retry 会创建新的 run，不覆盖旧 run 事件；message 为空时复用原会话最近一条用户消息。
 - 会话 state 接口聚合会话元数据、最近历史消息和 `activeStreamTopicId`，用于前端切换会话后的恢复判断。
+- 新页签、新浏览器或跨电脑恢复 active run 时，前端应使用 `activeRunFirstSeq - 1` 打开 run SSE；该接口会先按 openGauss 事实源补发历史事件，再接入 live topic 持续输出到 run 终态，不能把 `latestSeq` 或 `readCursorSeq` 当作当前渲染实例已消费游标。
+
+### WebSocket 边界说明
+
+系统里存在两类 WebSocket，但职责完全不同：
+
+- 前端 WebSocket：`/api/v1/ex/chat/ws`，只连接 FinanceEXChatService。它是用户级连接，按 run 级 `streamTopicId` 订阅已经写入事件事实源的 ChatEvent；它不接受聊天请求，也不直接调用 RelayAgent。
+- RelayAgent WebSocket：仅当 `financeex.agent-runtime.provider=relay` 且 `financeex.agent-runtime.api-adapter=relay-websocket` 时启用。此时 FinanceEXChatService 后端作为客户端连接 RelayAgent 的 `websocket-path`，把 `AgentRuntimeRequest` 作为首帧发送，再把 RelayAgent 返回帧转换成标准 ChatEvent。
+
+因此架构图中的 `AgentRuntime.query` 是应用层防腐层调用，不等价于前端 WebSocket。默认配置 `api-adapter=relay-stream-http` 下，`AgentRuntime.query` 使用真实 Relay HTTP 流式 adapter；只有显式切换到 `api-adapter=relay-websocket` 时，后端到 RelayAgent 的出站链路才使用 WebSocket。
 
 ## 分层架构
 
@@ -274,6 +371,7 @@ flowchart TB
     subgraph Application["application"]
         ChatService["FinanceEXChatService"]
         ChatRun["ChatRunApplicationService"]
+        ChatCursor["ChatReadCursorApplicationService"]
         RouteSignal["RouteSignalApplicationService"]
         RuntimeBinding["RuntimeBindingApplicationService"]
         SubAgentExecutor["SubAgentExecutor"]
@@ -296,11 +394,16 @@ flowchart TB
     subgraph Infrastructure["infrastructure"]
         Redis["Redis RuntimeBinding / ChatRun / Memory Cache"]
         OpenGauss["openGauss + MyBatis"]
+        ReadCursorRedis["Redis ChatReadCursor Cache"]
+        LiveBus["Redis Pub/Sub ChatLiveEventBus"]
         UseCaseHttp["UseCase HTTP Adapter"]
         IntentHttp["Intent HTTP Adapter"]
         SubAgentHttp["SubAgent HTTP Adapter"]
-        RelayHttp["Relay Runtime HTTP Adapter"]
-        Storage["Local / Huawei S3 ObjectStorage"]
+        RelayRuntime["RelayAgentRuntime Provider"]
+        RelayHttp["RelayStreamHttpRuntimeAdapter"]
+        RelayDeepSeek["DeepSeekChatCompletionsRuntimeAdapter"]
+        RelayWs["RelayWebSocketRuntimeAdapter"]
+        Storage["Local / Huawei OBS S3 ObjectStorage"]
     end
 
     Interfaces --> ChatService
@@ -317,10 +420,17 @@ flowchart TB
     RouteSignal --> IntentHttp
     ChatRun --> Redis
     ChatRun --> OpenGauss
+    ChatCursor --> ReadCursorRedis
+    ChatCursor --> OpenGauss
+    StreamService --> ChatCursor
+    StreamService --> LiveBus
     RuntimeBinding --> Redis
     RuntimeBinding --> OpenGauss
     SubAgentExecutor --> SubAgentHttp
-    RuntimeExecutor --> RelayHttp
+    RuntimeExecutor --> RelayRuntime
+    RelayRuntime --> RelayHttp
+    RelayRuntime --> RelayDeepSeek
+    RelayRuntime --> RelayWs
     DocumentService --> Storage
     Application --> Domain
 ```
@@ -399,15 +509,35 @@ stop 语义：
 - SubAgent：`financeex.sub-agent.agents.{agentCode}.endpoint`
 - SubAgent stop：`financeex.sub-agent.agents.{agentCode}.stop-endpoint`
 - AgentRuntime provider：`financeex.agent-runtime.provider`，表示 Runtime 类型，当前默认 `relay`
-- AgentRuntime protocol：`financeex.agent-runtime.protocol`，表示 Relay 传输协议，默认 `http-streamable`，可选 `websocket`
-- Relay HTTP Streamable Runtime：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`、`financeex.agent-runtime.stop-path`
-- Relay WebSocket Runtime：设置 `financeex.agent-runtime.provider=relay`、`financeex.agent-runtime.protocol=websocket`，并配置 `financeex.agent-runtime.websocket-path`
+- Relay API adapter：`financeex.agent-runtime.api-adapter`，表示 relay provider 下的具体 API 接入协议，默认 `relay-stream-http`，可选 `deepseek-chat-completions`、`relay-websocket`
+- Relay HTTP Streamable adapter：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`、`financeex.agent-runtime.stop-path`
+- DeepSeek 替身联调：`financeex.agent-runtime.api-key`、`financeex.agent-runtime.model`、`financeex.agent-runtime.stream`、`financeex.agent-runtime.thinking-enabled`、`financeex.agent-runtime.reasoning-effort`、`financeex.agent-runtime.cancel-supported`
+- Relay WebSocket adapter：设置 `financeex.agent-runtime.provider=relay`、`financeex.agent-runtime.api-adapter=relay-websocket`，并配置 `financeex.agent-runtime.base-url` 与 `financeex.agent-runtime.websocket-path`；adapter 会把 `http(s)://` base-url 转换为 `ws(s)://` 出站连接地址
 
-SubAgent 当前只支持单轮 HTTP 文本流调用。当前上线版本只内置 Relay Runtime adapter，其中 `provider=relay, protocol=http-streamable` 是 HTTP 流式协议实现，`provider=relay, protocol=websocket` 是 RelayAgent WebSocket 对话协议实现。
+SubAgent 当前只支持单轮 HTTP 文本流调用。当前上线版本内置一个 `RelayAgentRuntime` provider 和三个 `RelayRuntimeProtocolAdapter`：`relay-stream-http` 是真实 Relay HTTP 流式协议实现，`deepseek-chat-completions` 是 DeepSeek/OpenAI-compatible 替身实现，`relay-websocket` 是 RelayAgent WebSocket 对话协议实现。新增下游协议时，应新增 adapter，而不是在 `RelayAgentRuntime` 主类里堆转换分支。
+
+DeepSeek 替身配置示例：
+
+```bash
+export DEEPSEEK_API_KEY='<your-local-secret>'
+export FINANCEEX_AGENT_RUNTIME_PROVIDER=relay
+export FINANCEEX_RELAY_AGENT_API_ADAPTER=deepseek-chat-completions
+export FINANCEEX_RELAY_AGENT_BASE_URL=https://api.deepseek.com
+export FINANCEEX_RELAY_AGENT_STREAM_PATH=/chat/completions
+export FINANCEEX_RELAY_AGENT_API_KEY="${DEEPSEEK_API_KEY}"
+export FINANCEEX_RELAY_AGENT_MODEL=deepseek-v4-pro
+export FINANCEEX_RELAY_AGENT_STREAM=true
+export FINANCEEX_RELAY_AGENT_THINKING_ENABLED=true
+export FINANCEEX_RELAY_AGENT_REASONING_EFFORT=high
+export FINANCEEX_RELAY_AGENT_CANCEL_SUPPORTED=false
+export FINANCEEX_RELAY_AGENT_STOP_PATH=
+```
+
+密钥必须来自环境变量或企业密钥系统，不能提交到配置文件、文档示例或 Git 历史。
 
 当前上线版本明确去掉 AgentScope 设计和实现，也不包含 AgentScope memory、AgentScope prompt assembler 或相关配置。复杂任务通过 Relay Runtime adapter 执行；项目内不再包含任何 AgentScope 架构分支。
 
-AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 `AgentRuntimeRequest` 契约，当前 `relay` provider 是 Runtime 类型，协议由 `financeex.agent-runtime.protocol` 选择。后续如果替换 Runtime 实现，应新增一个实现 `AgentRuntime` 的 adapter，并通过 `financeex.agent-runtime.provider` 选择装配，避免改动 `FinanceEXChatService` 主编排。
+AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 `AgentRuntimeRequest` 契约，当前 `relay` provider 是 Runtime 类型，下游 API 接入协议由 `financeex.agent-runtime.api-adapter` 选择。后续如果替换 Runtime 实现，应新增一个实现 `AgentRuntime` 的 provider；后续如果只新增 Relay 下游协议，应新增 `RelayRuntimeProtocolAdapter`，避免改动 `FinanceEXChatService` 主编排。
 
 ## 命名规范
 
@@ -423,6 +553,7 @@ AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 
 - `fin_ex_chat_message_t`
 - `fin_ex_chat_run_t`
 - `fin_ex_chat_event_t`
+- `fin_ex_chat_read_cursor_t`
 - `fin_ex_uploaded_document_t`
 - `fin_ex_message_feedback_t`
 - `fin_ex_runtime_binding_t`
@@ -432,6 +563,7 @@ Redis key 必须以 `fin_ex` 开头：
 - `fin_ex:runtime_binding:{tenantId}:{userId}:{sessionId}`
 - `fin_ex:chat_run:active:{tenantId}:{userId}:{sessionId}`
 - `fin_ex:chat_run:cancel:{runId}`
+- `fin_ex:chat_read_cursor:{tenantId}:{userId}:{sessionId}`
 - `fin_ex:chat_stream:{streamTopicId}`
 - `fin_ex:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
 

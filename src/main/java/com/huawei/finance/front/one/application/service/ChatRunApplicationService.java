@@ -36,16 +36,19 @@ public class ChatRunApplicationService {
     private final ChatRunRepository repository;
     private final ChatRunCache cache;
     private final ChatEventStore eventStore;
+    private final ChatReadCursorApplicationService readCursorService;
     private final PermissionChecker permissionChecker;
     private final SessionRepository sessionRepository;
     private final Map<String, EventAcceptanceSnapshot> eventAcceptanceCache = new ConcurrentHashMap<>();
 
     public ChatRunApplicationService(ChatRunRepository repository, ChatRunCache cache, ChatEventStore eventStore,
+                                     ChatReadCursorApplicationService readCursorService,
                                      PermissionChecker permissionChecker,
                                      SessionRepository sessionRepository) {
         this.repository = repository;
         this.cache = cache;
         this.eventStore = eventStore;
+        this.readCursorService = readCursorService;
         this.permissionChecker = permissionChecker;
         this.sessionRepository = sessionRepository;
     }
@@ -181,11 +184,13 @@ public class ChatRunApplicationService {
         permissionChecker.checkChatPermission(user);
         ensureOwnedSession(user, sessionId);
         long latestSeq = eventStore.findLatestSeqBySessionId(sessionId);
+        long readCursorSeq = readCursorService.findLastConsumedSeq(user, sessionId);
         Optional<ChatRun> active = findActive(user.tenantId(), user.userId(), sessionId);
         return active
-                .map(run -> new ChatStreamStatus(sessionId, latestSeq, run.id(), run.status(),
-                        ChatStreamTopics.runTopic(run.id()), run.cancellable()))
-                .orElseGet(() -> new ChatStreamStatus(sessionId, latestSeq, null, null, null, false));
+                .map(run -> new ChatStreamStatus(sessionId, latestSeq, readCursorSeq, run.id(), run.status(),
+                        ChatStreamTopics.runTopic(run.id()), run.firstSeq(), run.lastSeq(), run.cancellable()))
+                .orElseGet(() -> new ChatStreamStatus(sessionId, latestSeq, readCursorSeq,
+                        null, null, null, null, null, false));
     }
 
     private Optional<ChatRun> findActive(String tenantId, String userId, String sessionId) {

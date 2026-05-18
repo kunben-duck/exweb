@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
+import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorCache;
+import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorRepository;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunCache;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
@@ -16,6 +18,7 @@ import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessageFeedback;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.auth.UserContext;
+import com.huawei.finance.front.one.domain.chat.ChatReadCursor;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunCancelSignal;
 import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
@@ -94,8 +97,19 @@ class ChatFeedbackApplicationServiceTest {
                 runs,
                 new NoopRunCache(),
                 new EmptyEventStore(),
+                readCursorService(),
                 new PermissionChecker(),
                 new FixedSessionRepository()
+        );
+    }
+
+    private ChatReadCursorApplicationService readCursorService() {
+        return new ChatReadCursorApplicationService(
+                new EmptyReadCursorRepository(),
+                new EmptyReadCursorCache(),
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatReadCursorProperties()
         );
     }
 
@@ -191,6 +205,29 @@ class ChatFeedbackApplicationServiceTest {
         @Override public List<ChatEvent> findBySessionIdAndAfterSeq(String sessionId, long afterSeq) { return List.of(); }
         @Override public List<ChatEvent> findByRunIdAndAfterSeq(String runId, long afterSeq) { return List.of(); }
         @Override public long findLatestSeqBySessionId(String sessionId) { return 0L; }
+    }
+
+    private static class EmptyReadCursorRepository implements ChatReadCursorRepository {
+        @Override
+        public Optional<ChatReadCursor> find(String tenantId, String userId, String sessionId) {
+            return Optional.empty();
+        }
+
+        @Override
+        public ChatReadCursor upsert(String tenantId, String userId, String sessionId, long lastConsumedSeq) {
+            return new ChatReadCursor("cursor1", tenantId, userId, sessionId, lastConsumedSeq, Instant.now());
+        }
+    }
+
+    private static class EmptyReadCursorCache implements ChatReadCursorCache {
+        @Override
+        public Optional<ChatReadCursor> find(String tenantId, String userId, String sessionId) {
+            return Optional.empty();
+        }
+
+        @Override
+        public void put(ChatReadCursor cursor) {
+        }
     }
 
     private static class FixedSessionRepository implements SessionRepository {

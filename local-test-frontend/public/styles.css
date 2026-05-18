@@ -56,6 +56,17 @@ button.primary {
   color: #fff;
 }
 
+button.danger {
+  border-color: #f3b4b4;
+  color: var(--danger);
+}
+
+button.danger:not(:disabled):hover {
+  border-color: var(--danger);
+  background: #fff5f5;
+  color: var(--danger);
+}
+
 input, textarea {
   width: 100%;
   border: 1px solid var(--border);
@@ -67,6 +78,13 @@ input, textarea {
 
 textarea {
   resize: vertical;
+}
+
+.auth-headers-input {
+  min-height: 132px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .app-header {
@@ -222,6 +240,13 @@ section + section {
 .kv dd {
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.hint {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .messages {

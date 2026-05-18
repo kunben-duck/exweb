@@ -35,8 +35,8 @@ import reactor.core.scheduler.Schedulers;
  * 聊天 HTTP 接口。
  *
  * <p>正式版采用 ChatGPT-like 单一对话流协议：{@code POST /runs} 只创建后台 run 并返回
- * 订阅信息；实时输出由 WebSocket subscribe 承载；SSE 仅用于断线、刷新或复制页签后的
- * {@code afterSeq} 补发。</p>
+ * 订阅信息；本页新建 run 的实时输出由 WebSocket subscribe 承载；恢复已经存在的 active run
+ * 时使用 run 级 SSE 先补发历史事件，再接续 live 事件直到 run 终态。</p>
  */
 @RestController
 @RequestMapping("/api/v1/ex/chat")
@@ -165,6 +165,27 @@ public class ChatController {
     }
 
     /**
+     * SSE run 级补发/接续接口，只恢复指定 run 的事件。
+     *
+     * <p>跨电脑打开同一会话时，如果 stream-status 中存在 activeRunId，前端应优先使用
+     * 该接口从 activeRunFirstSeq 之前补齐当前回答已经生成的 event。若 run 仍未终止，
+     * 该 SSE 连接会继续接入 live topic 并持续输出到 run 终态；不要再对同一个 run
+     * 发 WebSocket subscribe。</p>
+     *
+     * @param runId 需要恢复事件的 run 标识；服务端会校验 run 归属。
+     * @param afterSeq 前端已经处理到的最大事件序号，只发送大于该值的事件。
+     * @return SSE 事件流，event name 等于聊天事件 type，data 为 ChatEventDto；active run 会持续到终态。
+     */
+    @GetMapping(value = "/runs/{runId}/events/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<ChatEventDto>> resumeRunSse(@PathVariable String runId,
+                                                            @RequestParam(value = "afterSeq", defaultValue = "0") long afterSeq) {
+        UserContext user = resolveChatUser();
+        return chatStreamService.resumeRun(user, runId, afterSeq)
+                .map(eventTranslator::toDto)
+                .map(dto -> ServerSentEvent.<ChatEventDto>builder().event(dto.type()).data(dto).build());
+    }
+
+    /**
      * 查询会话当前事件进度，前端重开页面后可先读取 latestSeq 再决定是否补发。
      *
      * @param sessionId 需要查询流式状态的聊天会话标识；服务端会校验会话归属。
@@ -197,9 +218,12 @@ public class ChatController {
         return new ChatStreamStatusDto(
                 status.sessionId(),
                 status.latestSeq(),
+                status.readCursorSeq(),
                 status.activeRunId(),
                 status.activeRunStatus() == null ? null : status.activeRunStatus().name(),
                 status.activeStreamTopicId(),
+                status.activeRunFirstSeq(),
+                status.activeRunLastSeq(),
                 status.cancellable()
         );
     }

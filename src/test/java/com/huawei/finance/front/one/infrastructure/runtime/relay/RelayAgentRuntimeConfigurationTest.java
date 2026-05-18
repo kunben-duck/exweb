@@ -14,28 +14,33 @@ class RelayAgentRuntimeConfigurationTest {
             .withBean(ObjectMapper.class, ObjectMapper::new)
             .withUserConfiguration(
                     RelayAgentRuntime.class,
-                    RelayWebSocketAgentRuntime.class,
+                    RelayStreamHttpRuntimeAdapter.class,
+                    DeepSeekChatCompletionsRuntimeAdapter.class,
+                    RelayWebSocketRuntimeAdapter.class,
+                    OpenAiChatCompletionRelayCodec.class,
                     RelayWebSocketFrameTranslator.class);
 
     @Test
-    void defaultRelayProtocolUsesHttpStreamableAdapter() {
+    void defaultRelayProviderCreatesRuntimeAndProtocolAdapters() {
         contextRunner.run(context -> {
             assertThat(context).hasSingleBean(AgentRuntime.class);
             assertThat(context).hasSingleBean(RelayAgentRuntime.class);
-            assertThat(context).doesNotHaveBean(RelayWebSocketAgentRuntime.class);
+            assertThat(context).hasSingleBean(RelayStreamHttpRuntimeAdapter.class);
+            assertThat(context).hasSingleBean(DeepSeekChatCompletionsRuntimeAdapter.class);
+            assertThat(context).hasSingleBean(RelayWebSocketRuntimeAdapter.class);
         });
     }
 
     @Test
-    void relayWebSocketProtocolUsesWebSocketAdapter() {
+    void relayWebSocketApiAdapterStillUsesSingleRelayRuntime() {
         contextRunner
                 .withPropertyValues(
                         "financeex.agent-runtime.provider=relay",
-                        "financeex.agent-runtime.protocol=websocket")
+                        "financeex.agent-runtime.api-adapter=relay-websocket")
                 .run(context -> {
                     assertThat(context).hasSingleBean(AgentRuntime.class);
-                    assertThat(context).hasSingleBean(RelayWebSocketAgentRuntime.class);
-                    assertThat(context).doesNotHaveBean(RelayAgentRuntime.class);
+                    assertThat(context).hasSingleBean(RelayAgentRuntime.class);
+                    assertThat(context).hasSingleBean(RelayWebSocketRuntimeAdapter.class);
                 });
     }
 

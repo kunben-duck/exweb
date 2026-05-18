@@ -1,41 +1,37 @@
 package com.huawei.finance.front.one.infrastructure.runtime.relay;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import java.net.URI;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient;
 import org.springframework.web.reactive.socket.client.WebSocketClient;
-import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * RelayAgent Runtime WebSocket 适配器。
+ * Relay WebSocket 对话 API adapter。
  *
- * <p>当 {@code financeex.agent-runtime.provider=relay} 且
- * {@code financeex.agent-runtime.protocol=websocket} 时装配本实现。
- * 应用层仍然只依赖 AgentRuntime 防腐层；本类负责把 AgentRuntimeRequest 序列化为 WebSocket 首帧，
- * 并把 Relay 返回的文本/JSON 帧转换成标准 ChatEvent 流。取消仍优先使用本服务本地 run stop 语义，
- * 下游尽力取消复用 Relay HTTP stop 接口。</p>
+ * <p>该 adapter 是 FinanceEXChatService 后端到 RelayAgent 的出站 WebSocket。它和前端
+ * `/api/v1/ex/chat/ws` 没有关系；前端 WebSocket 只订阅已经落库的 ChatEvent，不触发 Runtime query。</p>
  */
 @Component
 @EnableConfigurationProperties(RelayAgentProperties.class)
-@ConditionalOnExpression("'${financeex.agent-runtime.provider:relay}' == 'relay' "
-        + "&& '${financeex.agent-runtime.protocol:http-streamable}' == 'websocket'")
-public class RelayWebSocketAgentRuntime implements AgentRuntime {
-    private static final Logger log = LoggerFactory.getLogger(RelayWebSocketAgentRuntime.class);
+@ConditionalOnExpression("'${financeex.agent-runtime.provider:relay}' == 'relay'")
+public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter {
+    private static final Logger log = LoggerFactory.getLogger(RelayWebSocketRuntimeAdapter.class);
 
     private final WebClient.Builder webClientBuilder;
     private final RelayAgentProperties properties;
@@ -43,12 +39,17 @@ public class RelayWebSocketAgentRuntime implements AgentRuntime {
     private final RelayWebSocketFrameTranslator frameTranslator;
     private final WebSocketClient webSocketClient = new ReactorNettyWebSocketClient();
 
-    public RelayWebSocketAgentRuntime(WebClient.Builder webClientBuilder, RelayAgentProperties properties,
-                                      ObjectMapper objectMapper, RelayWebSocketFrameTranslator frameTranslator) {
+    public RelayWebSocketRuntimeAdapter(WebClient.Builder webClientBuilder, RelayAgentProperties properties,
+                                        ObjectMapper objectMapper, RelayWebSocketFrameTranslator frameTranslator) {
         this.webClientBuilder = webClientBuilder;
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.frameTranslator = frameTranslator;
+    }
+
+    @Override
+    public Set<String> adapterNames() {
+        return Set.of("relay-websocket");
     }
 
     @Override
@@ -62,7 +63,8 @@ public class RelayWebSocketAgentRuntime implements AgentRuntime {
                                 .flatMap(message -> session.send(Mono.just(message)));
                         Mono<Void> receiveEvents = session.receive()
                                 .map(WebSocketMessage::getPayloadAsText)
-                                .concatMap(frame -> Flux.fromIterable(frameTranslator.translate(request.runId(), request.sessionId(), frame)))
+                                .concatMap(frame -> Flux.fromIterable(frameTranslator.translate(
+                                        request.runId(), request.sessionId(), frame)))
                                 .doOnNext(event -> {
                                     if ("message.completed".equals(event.type())) {
                                         completed.set(true);
@@ -91,7 +93,7 @@ public class RelayWebSocketAgentRuntime implements AgentRuntime {
 
     @Override
     public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
-        if (properties.getStopPath() == null || properties.getStopPath().isBlank()) {
+        if (!properties.isCancelSupported() || properties.getStopPath() == null || properties.getStopPath().isBlank()) {
             return Mono.empty();
         }
         String path = properties.getStopPath().replace("{runId}", request.runId() == null ? "" : request.runId());
@@ -104,7 +106,7 @@ public class RelayWebSocketAgentRuntime implements AgentRuntime {
                 .bodyToMono(Void.class)
                 .timeout(properties.getTimeout())
                 .onErrorResume(ex -> {
-                    log.warn("Relay WebSocket Runtime cancel 失败，runId={}，原因：{}", request.runId(), ex.getMessage());
+                    log.warn("Relay WebSocket cancel failed, runId={}, reason={}", request.runId(), ex.getMessage());
                     return Mono.empty();
                 });
     }

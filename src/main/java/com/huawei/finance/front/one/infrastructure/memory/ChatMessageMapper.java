@@ -72,18 +72,21 @@ public interface ChatMessageMapper {
     List<ChatMessageRow> findRecentBySession(@Param("sessionId") String sessionId, @Param("limit") int limit);
 
     @Select("""
+            <script>
             SELECT id, tenant_id, user_id, session_id, role, content, token_count, created_at
             FROM fin_ex_chat_message_t
             WHERE tenant_id = #{tenantId}
               AND user_id = #{userId}
               AND session_id = #{sessionId}
+              <if test="cursorCreatedAt != null">
               AND (
-                    #{cursorCreatedAt} IS NULL
-                    OR created_at < #{cursorCreatedAt}
-                    OR (created_at = #{cursorCreatedAt} AND id < #{cursorId})
+                    created_at &lt; #{cursorCreatedAt}
+                    OR (created_at = #{cursorCreatedAt} AND id &lt; #{cursorId})
                   )
+              </if>
             ORDER BY created_at DESC, id DESC
             LIMIT #{limit}
+            </script>
             """)
     @Results(id = "chatMessagePageResultMap", value = {
             @Result(column = "tenant_id", property = "tenantId"),

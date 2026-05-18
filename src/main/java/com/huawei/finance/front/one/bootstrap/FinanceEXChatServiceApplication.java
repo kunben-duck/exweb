@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.bootstrap;
 
 import org.mybatis.spring.annotation.MapperScan;
+import org.apache.ibatis.annotations.Mapper;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.ComponentScan;
@@ -13,7 +14,7 @@ import org.springframework.context.annotation.ComponentScan;
  */
 @SpringBootApplication
 @ComponentScan(basePackages = "com.huawei.finance.front.one")
-@MapperScan(basePackages = {
+@MapperScan(annotationClass = Mapper.class, basePackages = {
         "com.huawei.finance.front.one.infrastructure.memory",
         "com.huawei.finance.front.one.infrastructure.persistence",
         "com.huawei.finance.front.one.infrastructure.runtime",

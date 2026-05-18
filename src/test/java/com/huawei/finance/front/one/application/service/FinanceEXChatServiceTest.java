@@ -10,6 +10,8 @@ import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCa
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
+import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorCache;
+import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorRepository;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunCache;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
@@ -27,6 +29,7 @@ import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
+import com.huawei.finance.front.one.domain.chat.ChatReadCursor;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunCancelSignal;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
@@ -65,6 +68,7 @@ class FinanceEXChatServiceTest {
         UserContext user = new UserContext("tenant1", "user1", "User One");
         IdGenerator ids = new FixedIdGenerator();
         PermissionChecker permissionChecker = new PermissionChecker();
+        ChatReadCursorApplicationService readCursorService = readCursorService(sessions);
 
         FinanceEXChatService service = new FinanceEXChatService(
                 new SessionApplicationService(sessions, messages, ids, permissionChecker),
@@ -83,8 +87,8 @@ class FinanceEXChatServiceTest {
                 new AgentRuntimeExecutor(noopRuntime()),
                 documentFacade(),
                 new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
-                        permissionChecker, sessions),
-                new ChatRunApplicationService(runs, runCache, events, permissionChecker, sessions),
+                        readCursorService, permissionChecker, sessions),
+                new ChatRunApplicationService(runs, runCache, events, readCursorService, permissionChecker, sessions),
                 new LocalChatRunExecutionRegistry(),
                 ids
         );
@@ -159,6 +163,19 @@ class FinanceEXChatServiceTest {
         };
     }
 
+    private ChatReadCursorApplicationService readCursorService(SessionRepository sessions) {
+        com.huawei.finance.front.one.application.config.ChatReadCursorProperties properties =
+                new com.huawei.finance.front.one.application.config.ChatReadCursorProperties();
+        properties.setDatabaseFlushInterval(Duration.ZERO);
+        return new ChatReadCursorApplicationService(
+                new EmptyReadCursorRepository(),
+                new EmptyReadCursorCache(),
+                new PermissionChecker(),
+                sessions,
+                properties
+        );
+    }
+
     private static class CountingCancelRunCache implements ChatRunCache {
         private final AtomicInteger checks = new AtomicInteger();
         @Override public Optional<ChatRun> getActive(String tenantId, String userId, String sessionId) { return Optional.empty(); }
@@ -188,6 +205,22 @@ class FinanceEXChatServiceTest {
         @Override public List<ChatEvent> findBySessionIdAndAfterSeq(String sessionId, long afterSeq) { return List.of(); }
         @Override public List<ChatEvent> findByRunIdAndAfterSeq(String runId, long afterSeq) { return List.of(); }
         @Override public long findLatestSeqBySessionId(String sessionId) { return seq; }
+    }
+
+    private static class EmptyReadCursorRepository implements ChatReadCursorRepository {
+        @Override public Optional<ChatReadCursor> find(String tenantId, String userId, String sessionId) {
+            return Optional.empty();
+        }
+        @Override public ChatReadCursor upsert(String tenantId, String userId, String sessionId, long lastConsumedSeq) {
+            return new ChatReadCursor("cursor1", tenantId, userId, sessionId, lastConsumedSeq, Instant.now());
+        }
+    }
+
+    private static class EmptyReadCursorCache implements ChatReadCursorCache {
+        @Override public Optional<ChatReadCursor> find(String tenantId, String userId, String sessionId) {
+            return Optional.empty();
+        }
+        @Override public void put(ChatReadCursor cursor) {}
     }
 
     private static class InMemorySessionRepository implements SessionRepository {

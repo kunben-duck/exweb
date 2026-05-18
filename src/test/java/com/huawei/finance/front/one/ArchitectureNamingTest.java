@@ -30,7 +30,20 @@ class ArchitectureNamingTest {
         assertThat(application).contains("active-key-prefix: fin_ex:chat_run:active");
         assertThat(application).contains("cancel-key-prefix: fin_ex:chat_run:cancel");
         assertThat(application).contains("redis-channel-prefix: fin_ex:chat_stream");
+        assertThat(application).contains("redis-key-prefix: fin_ex:chat_read_cursor");
         assertThat(application).contains("redis-key-prefix: fin_ex:memory:short_term");
+    }
+
+    @Test
+    void relayRuntimeConfigurationDoesNotExposeLegacyProtocolKeys() throws Exception {
+        String application = Files.readString(Path.of("src/main/resources/application.yml"));
+
+        assertThat(application)
+                .doesNotContain("FINANCEEX_AGENT_RUNTIME_PROTOCOL")
+                .doesNotContain("FINANCEEX_RELAY_AGENT_WEBSOCKET_URL")
+                .doesNotContain("http-streamable")
+                .doesNotContain("relay-http-streamable")
+                .doesNotContain("websocket-url");
     }
 
     @Test

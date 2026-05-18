@@ -26,19 +26,22 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `application`：聊天主编排、会话、记忆、RuntimeBinding、SubAgent 单轮调用和 Relay Runtime 调用。
 - `application.integration`：应用层出站集成抽象，定义对 Relay Runtime、SubAgent、IntentService、用例库、会话、记忆、文档、ID 和身份能力的依赖边界。
 - `domain`：聊天事件、意图结果、路由结果、RuntimeBinding、用例匹配结果等核心模型。
-- `infrastructure`：Redis、openGauss/MyBatis、用例库 HTTP、SubAgent HTTP、Relay Runtime HTTP、对象存储等适配。
+- `infrastructure`：Redis、openGauss/MyBatis、用例库 HTTP、SubAgent HTTP、Relay Runtime HTTP/WebSocket、对象存储等适配。
 
 ## 前端接入协议
 
 完整接口和 WebSocket 联调说明见 [前端联调文档](docs/frontend-integration.md)。
 
 - `POST /api/v1/ex/chat/runs`：唯一提问入口。创建后台 run，返回 `runId`、`sessionId`、`firstSeq` 和 `streamTopicId`。
+- `POST /api/v1/ex/chat/sessions`：显式创建会话；也可以在 `/chat/runs` 中不传 `sessionId` 由后端创建或归一化。
 - `GET /api/v1/ex/chat/sessions?limit=20&cursor=...`：分页查询当前用户会话列表。
 - `GET /api/v1/ex/chat/sessions/{sessionId}/state?messageLimit=50`：选择会话时聚合返回会话元数据、最近历史消息和流式状态。
 - `GET /api/v1/ex/chat/sessions/{sessionId}/messages?limit=50&cursor=...`：选择会话后分页查询历史消息，按时间正序返回完整 user/assistant 消息。
+- `POST /api/v1/ex/chat/sessions/{sessionId}/archive|restore|close`：会话归档、恢复和关闭。
 - `WS /api/v1/ex/chat/ws`：用户级实时输出通道。客户端使用 `{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}` 订阅本轮 run topic。
-- `GET /api/v1/ex/chat/sessions/{sessionId}/events/sse?afterSeq={seq}`：SSE 事件补发和续传。
-- `GET /api/v1/ex/chat/sessions/{sessionId}/stream-status`：查询当前会话最新事件序号、active run、`activeStreamTopicId` 和是否可取消。
+- `GET /api/v1/ex/chat/sessions/{sessionId}/events/sse?afterSeq={seq}`：会话级 SSE 有限补发，用于补齐整个会话缺失事件。
+- `GET /api/v1/ex/chat/runs/{runId}/events/sse?afterSeq={seq}`：run 级 SSE 补发并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态。
+- `GET /api/v1/ex/chat/sessions/{sessionId}/stream-status`：查询当前会话最新事件序号、服务端 read cursor、active run、`activeStreamTopicId` 和是否可取消。
 - `POST /api/v1/ex/chat/runs/{runId}/stop`：按 runId 停止当前回答，幂等返回 run 状态。
 - `POST /api/v1/ex/chat/runs/{runId}/retry`：基于原 run 所属会话重新生成回答。
 - `POST /api/v1/ex/chat/messages/{messageId}/feedback`：提交 assistant 消息反馈。
@@ -50,12 +53,16 @@ POST /chat/runs
  -> 获取 runId/sessionId/firstSeq/streamTopicId
  -> 使用前端配置的 WebSocket 地址发送 subscribe(topicId=streamTopicId, afterSeq)
  -> 实时输出由 WebSocket run topic 承载
- -> 浏览器刷新/复制页签后，使用前端配置的 SSE resume 地址或 WS afterSeq 补齐缺失事件
+ -> 浏览器刷新/复制页签后，使用前端配置的 SSE resume 地址按 lastSeq 补齐缺失事件
+ -> 新页签、新浏览器或跨电脑续接 active run 时，从 activeRunFirstSeq - 1 打开 run SSE
+ -> run SSE 先补发历史事件，再持续接续 live 事件，直到本轮 run 终态
  -> 用户点击停止时调用前端配置的 stop 接口，服务端发布 run.cancelled 终态事件
 ```
 
 当前请求体只有对话文本和可选文档附件，不暴露 IM 消息类型，也不让前端选择多套响应协议。文档不是消息类型，只是对话消息的上下文资源引用。
 WebSocket、SSE resume 和 stop 的 URL 由前端 SDK 或网关配置管理，不随 `/chat/runs` 响应返回。
+
+仓库提供独立本地联调台 `local-test-frontend/`。联调台通过 Node 代理访问后端，支持在页面中按 Postman 风格配置 `Cookie`、`Authorization`、`X-*` 等企业鉴权请求头；代理会在 HTTP、fetch SSE、文件下载和 WebSocket 握手时统一注入这些请求头。浏览器自身不会、也不能直接手写 `Cookie` 请求头或 WebSocket 自定义请求头。
 
 租户和用户身份不从前端 Header/Query/Body 透传，统一由请求入口通过 `AuthContextProvider` 从服务端身份上下文解析一次，并以不可变 `UserContext` 传入应用层。应用层、后台 run 和 `boundedElastic` 阻塞线程不会再次读取请求 ThreadLocal。本地开发态必须显式配置：
 
@@ -86,6 +93,7 @@ run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`�
 - `fin_ex_chat_message_t`
 - `fin_ex_chat_run_t`
 - `fin_ex_chat_event_t`
+- `fin_ex_chat_read_cursor_t`
 - `fin_ex_uploaded_document_t`
 - `fin_ex_message_feedback_t`
 - `fin_ex_runtime_binding_t`
@@ -95,6 +103,7 @@ run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`�
 - RuntimeBinding：`fin_ex:runtime_binding:{tenantId}:{userId}:{sessionId}`
 - Active run：`fin_ex:chat_run:active:{tenantId}:{userId}:{sessionId}`
 - Cancel flag：`fin_ex:chat_run:cancel:{runId}`
+- Read cursor：`fin_ex:chat_read_cursor:{tenantId}:{userId}:{sessionId}`
 - WebSocket run topic：`fin_ex:chat_stream:{streamTopicId}`
 - 短期消息：`fin_ex:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
 
@@ -118,7 +127,12 @@ export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
 
 ## 外部服务接入
 
-用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。SubAgent 当前通过单轮 HTTP 文本流接入；Relay Runtime 通过 AgentRuntime 防腐层接入，可按配置选择 HTTP 流式 adapter 或 WebSocket 对话 adapter。
+用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。SubAgent 当前通过单轮 HTTP 文本流接入；Relay Runtime 通过 AgentRuntime 防腐层接入，并在 Relay provider 内部通过 `api-adapter` 选择真实 Relay HTTP、DeepSeek 替身或 Relay WebSocket 接入实现。
+
+这里有两条不同的 WebSocket 边界，不要混淆：
+
+- 前端 WebSocket：`/api/v1/ex/chat/ws`，只连接 FinanceEXChatService，用于订阅 `streamTopicId` 并接收已经落库的 ChatEvent。
+- RelayAgent WebSocket：仅当 `FINANCEEX_RELAY_AGENT_API_ADAPTER=relay-websocket` 时，由 FinanceEXChatService 后端作为客户端主动连接 RelayAgent；前端不直接连接 RelayAgent，也不通过前端 WebSocket 发起 `AgentRuntime.query`。
 
 ```bash
 export FINANCEEX_USE_CASE_LIBRARY_ENABLED=true
@@ -133,22 +147,41 @@ export FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENDPOINT=http://employee-reimburse
 export FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_STOP_ENDPOINT=http://employee-reimbursement-agent:9300/v1/stop
 
 export FINANCEEX_AGENT_RUNTIME_PROVIDER=relay
-export FINANCEEX_AGENT_RUNTIME_PROTOCOL=http-streamable
+export FINANCEEX_RELAY_AGENT_API_ADAPTER=relay-stream-http
 export FINANCEEX_RELAY_AGENT_BASE_URL=http://relay-agent:9000
 export FINANCEEX_RELAY_AGENT_STREAM_PATH=/v1/agent/runs/stream
 export FINANCEEX_RELAY_AGENT_STOP_PATH=/v1/agent/runs/{runId}/stop
-# 如果 RelayAgent 对话接口使用 WebSocket，则保持 provider=relay，只切换协议：
-export FINANCEEX_AGENT_RUNTIME_PROTOCOL=websocket
+# 如果 RelayAgent 对话接口使用 WebSocket，则保持 provider=relay，只切换 api-adapter：
+export FINANCEEX_RELAY_AGENT_API_ADAPTER=relay-websocket
 export FINANCEEX_RELAY_AGENT_WEBSOCKET_PATH=/v1/agent/runs/ws
 ```
 
-SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP 文本流调用。Relay Runtime 作为 AgentRuntime 实现支持两种协议：`financeex.agent-runtime.protocol=http-streamable` 使用 HTTP 流式协议，`websocket` 使用 RelayAgent WebSocket 对话协议。
+SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP 文本流调用。Relay Runtime 作为 AgentRuntime 实现支持三个 API adapter：`relay-stream-http` 使用真实 Relay HTTP 流式协议，`deepseek-chat-completions` 使用 DeepSeek/OpenAI-compatible Chat Completions 替身，`relay-websocket` 使用 RelayAgent WebSocket 对话协议。
+
+真实 Relay streamable-http 服务未就绪时，可以把 Relay HTTP adapter 切到 DeepSeek/OpenAI-compatible Chat Completions wire format 做本地联调。API key 必须只通过环境变量或密钥系统注入，不要写入仓库：
+
+```bash
+export DEEPSEEK_API_KEY='<your-local-secret>'
+export FINANCEEX_AGENT_RUNTIME_PROVIDER=relay
+export FINANCEEX_RELAY_AGENT_API_ADAPTER=deepseek-chat-completions
+export FINANCEEX_RELAY_AGENT_BASE_URL=https://api.deepseek.com
+export FINANCEEX_RELAY_AGENT_STREAM_PATH=/chat/completions
+export FINANCEEX_RELAY_AGENT_API_KEY="${DEEPSEEK_API_KEY}"
+export FINANCEEX_RELAY_AGENT_MODEL=deepseek-v4-pro
+export FINANCEEX_RELAY_AGENT_STREAM=true
+export FINANCEEX_RELAY_AGENT_THINKING_ENABLED=true
+export FINANCEEX_RELAY_AGENT_REASONING_EFFORT=high
+export FINANCEEX_RELAY_AGENT_CANCEL_SUPPORTED=false
+export FINANCEEX_RELAY_AGENT_STOP_PATH=
+```
+
+该模式只改变后端出站 Runtime API adapter：前端仍然使用 `/chat/runs + WebSocket subscribe` 接收本页新建 run 的实时输出，使用 run SSE resume 接续已经存在的 active run；前端不会直接调用 DeepSeek，也不会看到下游 API key。本地验证流式体验时建议保持 `FINANCEEX_RELAY_AGENT_STREAM=true`；如果改成 `false`，DeepSeek 会等完整响应返回后才由后端一次性拆成事件，页面在首个可展示 token 前会像“卡住”。
 
 ## 上线版本边界
 
-当前上线版本明确不包含 AgentScope 设计和实现，也不包含 AgentScope memory、prompt assembler 或相关配置。复杂任务通过 Relay Runtime adapter 执行，默认 `provider=relay`、`protocol=http-streamable`，也可以切换为 `protocol=websocket` 适配 RelayAgent 的 WebSocket 对话接口。
+当前上线版本明确不包含 AgentScope 设计和实现，也不包含 AgentScope memory、prompt assembler 或相关配置。复杂任务通过 Relay Runtime adapter 执行，默认 `provider=relay`、`api-adapter=relay-stream-http`，也可以切换为 `deepseek-chat-completions` 或 `relay-websocket`。
 
-AgentRuntime 防腐层必须保留：应用层只依赖 `AgentRuntime` 接口和 `AgentRuntimeRequest` 契约，不依赖 Relay 的 HTTP 或 WebSocket 协议细节。`financeex.agent-runtime.provider` 表示 Runtime 类型，当前为 `relay`；`financeex.agent-runtime.protocol` 表示该 Runtime 类型下的协议，当前可选 `http-streamable` 或 `websocket`。后续替换 Runtime 实现时，应新增另一个 `AgentRuntime` adapter，并通过 provider 配置切换。
+AgentRuntime 防腐层必须保留：应用层只依赖 `AgentRuntime` 接口和 `AgentRuntimeRequest` 契约，不依赖 Relay 的 HTTP、DeepSeek 或 WebSocket 协议细节。`financeex.agent-runtime.provider` 表示 Runtime 类型，当前为 `relay`；`financeex.agent-runtime.api-adapter` 表示 relay provider 下的 API 接入 adapter。后续替换 Runtime 实现时，应新增另一个 `AgentRuntime` provider；后续只替换 Relay 下游协议时，应新增 `RelayRuntimeProtocolAdapter` 实现。
 
 ## 启动
 
@@ -173,7 +206,7 @@ openGauss 的 `fin_ex_uploaded_document_t` 保存文档库元数据，聊天请�
 文档接口：
 
 - `POST /api/v1/ex/documents`：上传本地文件并登记到文档库。
-- `GET /api/v1/ex/documents?limit=20&cursor=...`：分页查询当前用户文档库。
+- `GET /api/v1/ex/documents?sessionId=...&limit=20&cursor=...`：分页查询当前用户文档库，`sessionId` 可选。
 - `GET /api/v1/ex/documents/{documentId}`：查询单个文档。
 - `PATCH /api/v1/ex/documents/{documentId}`：更新文档展示名或扩展元数据。
 - `GET /api/v1/ex/documents/{documentId}/status`：查询文档处理状态。

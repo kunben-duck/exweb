@@ -72,6 +72,10 @@ financeex:
     cancel-key-prefix: fin_ex:chat_run:cancel
     active-ttl: 6h
     cancel-ttl: 1h
+  chat-read-cursor:
+    redis-key-prefix: fin_ex:chat_read_cursor
+    redis-ttl: 7d
+    database-flush-interval: 5s
   websocket:
     # WebSocket 是用户级连接，事件按 run 级 stream topic 订阅；Redis Pub/Sub 只做跨实例实时扇出。
     redis-channel-prefix: fin_ex:chat_stream
@@ -101,12 +105,19 @@ financeex:
   agent-runtime:
     # AgentRuntime 防腐层类型。当前内置 relay；后续替换 Runtime 时新增 provider，不把协议写进 provider。
     provider: ${FINANCEEX_AGENT_RUNTIME_PROVIDER:relay}
-    # Relay Runtime 传输协议。http-streamable=HTTP 流式；websocket=Relay WebSocket 对话协议。
-    protocol: ${FINANCEEX_AGENT_RUNTIME_PROTOCOL:http-streamable}
+    # Relay API 接入协议 adapter。relay-stream-http=真实 Relay HTTP；deepseek-chat-completions=DeepSeek 替身；relay-websocket=Relay 出站 WebSocket。
+    api-adapter: ${FINANCEEX_RELAY_AGENT_API_ADAPTER:relay-stream-http}
     base-url: ${FINANCEEX_RELAY_AGENT_BASE_URL:http://localhost:9000}
     stream-path: ${FINANCEEX_RELAY_AGENT_STREAM_PATH:/v1/agent/runs/stream}
     stop-path: ${FINANCEEX_RELAY_AGENT_STOP_PATH:/v1/agent/runs/{runId}/stop}
     websocket-path: ${FINANCEEX_RELAY_AGENT_WEBSOCKET_PATH:/v1/agent/runs/ws}
+    api-key: ${FINANCEEX_RELAY_AGENT_API_KEY:${DEEPSEEK_API_KEY:}}
+    model: ${FINANCEEX_RELAY_AGENT_MODEL:deepseek-v4-pro}
+    system-prompt: ${FINANCEEX_RELAY_AGENT_SYSTEM_PROMPT:You are a helpful assistant.}
+    stream: ${FINANCEEX_RELAY_AGENT_STREAM:true}
+    thinking-enabled: ${FINANCEEX_RELAY_AGENT_THINKING_ENABLED:false}
+    reasoning-effort: ${FINANCEEX_RELAY_AGENT_REASONING_EFFORT:}
+    cancel-supported: ${FINANCEEX_RELAY_AGENT_CANCEL_SUPPORTED:true}
     timeout: 60s
   storage:
     provider: ${FINANCEEX_STORAGE_PROVIDER:local}

@@ -205,17 +205,23 @@ public interface ChatMessageMapper {
     );
 
     @Select("""
+            <script>
             SELECT *
             FROM fin_ex_chat_message_t
             WHERE tenant_id = #{tenantId}
               AND user_id = #{userId}
               AND session_id = #{sessionId}
               AND role = #{role}
-              AND (
-                    (parent_message_id IS NULL AND CAST(#{parentMessageId} AS VARCHAR) IS NULL)
-                    OR parent_message_id = #{parentMessageId}
-                  )
+              <choose>
+                <when test="parentMessageId == null">
+              AND parent_message_id IS NULL
+                </when>
+                <otherwise>
+              AND parent_message_id = #{parentMessageId}
+                </otherwise>
+              </choose>
             ORDER BY sibling_index ASC, node_order ASC
+            </script>
             """)
     @Results(id = "chatMessageVariantsResultMap", value = {
             @Result(column = "tenant_id", property = "tenantId"),
@@ -244,16 +250,22 @@ public interface ChatMessageMapper {
     );
 
     @Select("""
+            <script>
             SELECT COUNT(1)
             FROM fin_ex_chat_message_t
             WHERE tenant_id = #{tenantId}
               AND user_id = #{userId}
               AND session_id = #{sessionId}
               AND role = #{role}
-              AND (
-                    (parent_message_id IS NULL AND CAST(#{parentMessageId} AS VARCHAR) IS NULL)
-                    OR parent_message_id = #{parentMessageId}
-                  )
+              <choose>
+                <when test="parentMessageId == null">
+              AND parent_message_id IS NULL
+                </when>
+                <otherwise>
+              AND parent_message_id = #{parentMessageId}
+                </otherwise>
+              </choose>
+            </script>
             """)
     int countSiblings(
             @Param("tenantId") String tenantId,

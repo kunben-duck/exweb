@@ -10,6 +10,7 @@ import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -29,7 +30,7 @@ public class OpenGaussChatRunRepository implements ChatRunRepository {
 
     @Override
     public ChatRun save(ChatRun run) {
-        mapper.upsert(
+        int updated = mapper.updateExisting(
                 run.id(),
                 run.tenantId(),
                 run.userId(),
@@ -52,6 +53,58 @@ public class OpenGaussChatRunRepository implements ChatRunRepository {
                 run.createdAt(),
                 run.updatedAt()
         );
+        if (updated == 0) {
+            try {
+                mapper.insert(
+                        run.id(),
+                        run.tenantId(),
+                        run.userId(),
+                        run.sessionId(),
+                        run.status().name(),
+                        run.routeType(),
+                        run.agentCode(),
+                        run.runtimeProvider(),
+                        run.runtimeSessionId(),
+                        run.runMode().name(),
+                        run.parentMessageId(),
+                        run.userMessageId(),
+                        run.assistantMessageId(),
+                        run.firstSeq(),
+                        run.lastSeq(),
+                        run.cancelReason(),
+                        run.startedAt(),
+                        run.finishedAt(),
+                        toJson(run.metadata()),
+                        run.createdAt(),
+                        run.updatedAt()
+                );
+            } catch (DuplicateKeyException ex) {
+                // 避免使用 PostgreSQL 专有 upsert；并发创建同一 run 时退化为受终态保护的更新。
+                mapper.updateExisting(
+                        run.id(),
+                        run.tenantId(),
+                        run.userId(),
+                        run.sessionId(),
+                        run.status().name(),
+                        run.routeType(),
+                        run.agentCode(),
+                        run.runtimeProvider(),
+                        run.runtimeSessionId(),
+                        run.runMode().name(),
+                        run.parentMessageId(),
+                        run.userMessageId(),
+                        run.assistantMessageId(),
+                        run.firstSeq(),
+                        run.lastSeq(),
+                        run.cancelReason(),
+                        run.startedAt(),
+                        run.finishedAt(),
+                        toJson(run.metadata()),
+                        run.createdAt(),
+                        run.updatedAt()
+                );
+            }
+        }
         return findById(run.id()).orElse(run);
     }
 

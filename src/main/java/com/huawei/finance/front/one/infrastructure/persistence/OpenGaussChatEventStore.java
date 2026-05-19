@@ -38,19 +38,28 @@ public class OpenGaussChatEventStore implements ChatEventStore {
         String eventId = idGenerator.newId("event",
                 IdGenerateContext.of(null, null, event.sessionId(), event.runId()));
         Instant createdAt = event.createdAt() == null ? Instant.now() : event.createdAt();
-        // seq 是前端恢复游标，必须以 openGauss 返回值为准，避免多实例本地生成导致 afterSeq 歧义。
-        ChatEventRow inserted = mapper.insertFromSession(
+        Long seq = mapper.nextSeq();
+        if (seq == null) {
+            throw new IllegalStateException("聊天事件序号生成失败");
+        }
+        // seq 是前端恢复游标，必须由 openGauss sequence 生成，避免多实例本地生成导致 afterSeq 歧义。
+        int inserted = mapper.insertFromSession(
                 eventId,
                 event.sessionId(),
                 event.runId(),
+                seq,
                 event.type(),
                 toJson(event.payload()),
                 createdAt
         );
-        if (inserted == null) {
+        if (inserted == 0) {
             throw new IllegalStateException("聊天事件无法落库，关联会话不存在: " + event.sessionId());
         }
-        return toDomain(inserted);
+        ChatEventRow insertedRow = mapper.findById(eventId);
+        if (insertedRow == null) {
+            throw new IllegalStateException("聊天事件落库后回读失败: " + eventId);
+        }
+        return toDomain(insertedRow);
     }
 
     @Override

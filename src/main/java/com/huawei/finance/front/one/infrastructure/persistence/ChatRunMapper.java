@@ -7,6 +7,7 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Result;
 import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 /**
  * fin_ex_chat_run_t 的 MyBatis Mapper。
@@ -26,37 +27,64 @@ public interface ChatRunMapper {
                 #{firstSeq}, #{lastSeq}, #{cancelReason}, #{startedAt}, #{finishedAt},
                 #{metadataJson}, #{createdAt}, #{updatedAt}
             )
-            ON CONFLICT (id) DO UPDATE SET
-                status = CASE
-                    WHEN fin_ex_chat_run_t.status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN fin_ex_chat_run_t.status
-                    ELSE EXCLUDED.status
-                END,
-                route_type = COALESCE(fin_ex_chat_run_t.route_type, EXCLUDED.route_type),
-                agent_code = COALESCE(fin_ex_chat_run_t.agent_code, EXCLUDED.agent_code),
-                runtime_provider = COALESCE(fin_ex_chat_run_t.runtime_provider, EXCLUDED.runtime_provider),
-                runtime_session_id = COALESCE(EXCLUDED.runtime_session_id, fin_ex_chat_run_t.runtime_session_id),
-                run_mode = COALESCE(fin_ex_chat_run_t.run_mode, EXCLUDED.run_mode),
-                parent_message_id = COALESCE(fin_ex_chat_run_t.parent_message_id, EXCLUDED.parent_message_id),
-                user_message_id = COALESCE(fin_ex_chat_run_t.user_message_id, EXCLUDED.user_message_id),
-                assistant_message_id = COALESCE(EXCLUDED.assistant_message_id, fin_ex_chat_run_t.assistant_message_id),
-                first_seq = COALESCE(fin_ex_chat_run_t.first_seq, EXCLUDED.first_seq),
-                last_seq = CASE
-                    WHEN fin_ex_chat_run_t.status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN fin_ex_chat_run_t.last_seq
-                    ELSE EXCLUDED.last_seq
-                END,
-                cancel_reason = COALESCE(EXCLUDED.cancel_reason, fin_ex_chat_run_t.cancel_reason),
-                started_at = COALESCE(fin_ex_chat_run_t.started_at, EXCLUDED.started_at),
-                finished_at = CASE
-                    WHEN fin_ex_chat_run_t.status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN fin_ex_chat_run_t.finished_at
-                    ELSE EXCLUDED.finished_at
-                END,
-                metadata_json = COALESCE(EXCLUDED.metadata_json, fin_ex_chat_run_t.metadata_json),
-                updated_at = CASE
-                    WHEN fin_ex_chat_run_t.status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN fin_ex_chat_run_t.updated_at
-                    ELSE EXCLUDED.updated_at
-                END
             """)
-    void upsert(
+    int insert(
+            @Param("id") String id,
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionId") String sessionId,
+            @Param("status") String status,
+            @Param("routeType") String routeType,
+            @Param("agentCode") String agentCode,
+            @Param("runtimeProvider") String runtimeProvider,
+            @Param("runtimeSessionId") String runtimeSessionId,
+            @Param("runMode") String runMode,
+            @Param("parentMessageId") String parentMessageId,
+            @Param("userMessageId") String userMessageId,
+            @Param("assistantMessageId") String assistantMessageId,
+            @Param("firstSeq") Long firstSeq,
+            @Param("lastSeq") Long lastSeq,
+            @Param("cancelReason") String cancelReason,
+            @Param("startedAt") Instant startedAt,
+            @Param("finishedAt") Instant finishedAt,
+            @Param("metadataJson") String metadataJson,
+            @Param("createdAt") Instant createdAt,
+            @Param("updatedAt") Instant updatedAt
+    );
+
+    @Update("""
+            UPDATE fin_ex_chat_run_t
+            SET status = CASE
+                    WHEN status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN status
+                    ELSE #{status}
+                END,
+                route_type = COALESCE(route_type, #{routeType}),
+                agent_code = COALESCE(agent_code, #{agentCode}),
+                runtime_provider = COALESCE(runtime_provider, #{runtimeProvider}),
+                runtime_session_id = COALESCE(#{runtimeSessionId}, runtime_session_id),
+                run_mode = COALESCE(run_mode, #{runMode}),
+                parent_message_id = COALESCE(parent_message_id, #{parentMessageId}),
+                user_message_id = COALESCE(user_message_id, #{userMessageId}),
+                assistant_message_id = COALESCE(#{assistantMessageId}, assistant_message_id),
+                first_seq = COALESCE(first_seq, #{firstSeq}),
+                last_seq = CASE
+                    WHEN status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN last_seq
+                    ELSE #{lastSeq}
+                END,
+                cancel_reason = COALESCE(#{cancelReason}, cancel_reason),
+                started_at = COALESCE(started_at, #{startedAt}),
+                finished_at = CASE
+                    WHEN status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN finished_at
+                    ELSE #{finishedAt}
+                END,
+                metadata_json = COALESCE(#{metadataJson}, metadata_json),
+                updated_at = CASE
+                    WHEN status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN updated_at
+                    ELSE #{updatedAt}
+                END
+            WHERE id = #{id}
+            """)
+    int updateExisting(
             @Param("id") String id,
             @Param("tenantId") String tenantId,
             @Param("userId") String userId,

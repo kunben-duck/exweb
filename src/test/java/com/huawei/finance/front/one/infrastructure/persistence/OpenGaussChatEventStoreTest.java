@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
 
 class OpenGaussChatEventStoreTest {
     @Test
-    void appendUsesDatabaseReturnedSequenceAsRecoveryCursor() {
+    void appendUsesDatabaseSequenceAsRecoveryCursor() {
         ChatEventMapper mapper = new ReturningEventMapper();
         OpenGaussChatEventStore store = new OpenGaussChatEventStore(
                 mapper,
@@ -27,12 +27,20 @@ class OpenGaussChatEventStoreTest {
     }
 
     private static class ReturningEventMapper implements ChatEventMapper {
+        private ChatEventRow insertedRow;
+
         @Override
-        public ChatEventRow insertFromSession(String id, String sessionId, String runId, String eventType,
-                                              String payloadJson, Instant createdAt) {
+        public Long nextSeq() {
+            return 42L;
+        }
+
+        @Override
+        public int insertFromSession(String id, String sessionId, String runId, long seq, String eventType,
+                                     String payloadJson, Instant createdAt) {
             assertThat(id).isEqualTo("event_1");
             assertThat(sessionId).isEqualTo("session1");
             assertThat(runId).isEqualTo("run1");
+            assertThat(seq).isEqualTo(42L);
             assertThat(eventType).isEqualTo("message.delta");
             ChatEventRow row = new ChatEventRow();
             row.setId(id);
@@ -44,7 +52,14 @@ class OpenGaussChatEventStoreTest {
             row.setEventType(eventType);
             row.setPayloadJson(payloadJson);
             row.setCreatedAt(Instant.parse("2026-05-16T00:00:00Z"));
-            return row;
+            insertedRow = row;
+            return 1;
+        }
+
+        @Override
+        public ChatEventRow findById(String id) {
+            assertThat(id).isEqualTo("event_1");
+            return insertedRow;
         }
 
         @Override

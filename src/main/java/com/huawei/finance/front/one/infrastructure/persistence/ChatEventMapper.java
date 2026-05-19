@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.infrastructure.persistence;
 
 import java.time.Instant;
 import java.util.List;
+import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Result;
@@ -16,14 +17,31 @@ import org.apache.ibatis.annotations.Select;
  */
 @Mapper
 public interface ChatEventMapper {
-    @Select("""
+    @Select("SELECT nextval('fin_ex_chat_event_seq')")
+    Long nextSeq();
+
+    @Insert("""
             INSERT INTO fin_ex_chat_event_t(
-                id, tenant_id, user_id, session_id, run_id, event_type, payload_json, created_at
+                id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
             )
-            SELECT #{id}, tenant_id, user_id, #{sessionId}, #{runId}, #{eventType}, #{payloadJson}, #{createdAt}
+            SELECT #{id}, tenant_id, user_id, #{sessionId}, #{runId}, #{seq}, #{eventType}, #{payloadJson}, #{createdAt}
             FROM fin_ex_chat_session_t
             WHERE id = #{sessionId}
-            RETURNING id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
+            """)
+    int insertFromSession(
+            @Param("id") String id,
+            @Param("sessionId") String sessionId,
+            @Param("runId") String runId,
+            @Param("seq") long seq,
+            @Param("eventType") String eventType,
+            @Param("payloadJson") String payloadJson,
+            @Param("createdAt") Instant createdAt
+    );
+
+    @Select("""
+            SELECT id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
+            FROM fin_ex_chat_event_t
+            WHERE id = #{id}
             """)
     @Results(id = "chatEventResultMap", value = {
             @Result(column = "tenant_id", property = "tenantId"),
@@ -34,14 +52,7 @@ public interface ChatEventMapper {
             @Result(column = "payload_json", property = "payloadJson"),
             @Result(column = "created_at", property = "createdAt")
     })
-    ChatEventRow insertFromSession(
-            @Param("id") String id,
-            @Param("sessionId") String sessionId,
-            @Param("runId") String runId,
-            @Param("eventType") String eventType,
-            @Param("payloadJson") String payloadJson,
-            @Param("createdAt") Instant createdAt
-    );
+    ChatEventRow findById(@Param("id") String id);
 
     @Select("""
             SELECT id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at

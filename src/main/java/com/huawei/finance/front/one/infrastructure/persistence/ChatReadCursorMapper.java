@@ -1,12 +1,14 @@
 package com.huawei.finance.front.one.infrastructure.persistence;
 
 import java.time.Instant;
+import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Result;
 import org.apache.ibatis.annotations.ResultMap;
 import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 /**
  * fin_ex_chat_read_cursor_t 的 MyBatis Mapper。
@@ -26,30 +28,38 @@ public interface ChatReadCursorMapper {
      * @param updatedAt 本次写入时间。
      * @return 写入后的数据库行。
      */
-    @Select("""
+    @Insert("""
             INSERT INTO fin_ex_chat_read_cursor_t(
                 id, tenant_id, user_id, session_id, last_consumed_seq, updated_at
             )
             VALUES (
                 #{id}, #{tenantId}, #{userId}, #{sessionId}, #{lastConsumedSeq}, #{updatedAt}
             )
-            ON CONFLICT (tenant_id, user_id, session_id) DO UPDATE SET
-                last_consumed_seq = GREATEST(fin_ex_chat_read_cursor_t.last_consumed_seq, EXCLUDED.last_consumed_seq),
-                updated_at = CASE
-                    WHEN EXCLUDED.last_consumed_seq >= fin_ex_chat_read_cursor_t.last_consumed_seq THEN EXCLUDED.updated_at
-                    ELSE fin_ex_chat_read_cursor_t.updated_at
-                END
-            RETURNING id, tenant_id, user_id, session_id, last_consumed_seq, updated_at
             """)
-    @Results(id = "chatReadCursorResultMap", value = {
-            @Result(column = "tenant_id", property = "tenantId"),
-            @Result(column = "user_id", property = "userId"),
-            @Result(column = "session_id", property = "sessionId"),
-            @Result(column = "last_consumed_seq", property = "lastConsumedSeq"),
-            @Result(column = "updated_at", property = "updatedAt")
-    })
-    ChatReadCursorRow upsert(
+    int insert(
             @Param("id") String id,
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionId") String sessionId,
+            @Param("lastConsumedSeq") long lastConsumedSeq,
+            @Param("updatedAt") Instant updatedAt
+    );
+
+    @Update("""
+            UPDATE fin_ex_chat_read_cursor_t
+            SET last_consumed_seq = CASE
+                    WHEN #{lastConsumedSeq} > last_consumed_seq THEN #{lastConsumedSeq}
+                    ELSE last_consumed_seq
+                END,
+                updated_at = CASE
+                    WHEN #{lastConsumedSeq} >= last_consumed_seq THEN #{updatedAt}
+                    ELSE updated_at
+                END
+            WHERE tenant_id = #{tenantId}
+              AND user_id = #{userId}
+              AND session_id = #{sessionId}
+            """)
+    int updateMax(
             @Param("tenantId") String tenantId,
             @Param("userId") String userId,
             @Param("sessionId") String sessionId,
@@ -72,7 +82,13 @@ public interface ChatReadCursorMapper {
               AND user_id = #{userId}
               AND session_id = #{sessionId}
             """)
-    @ResultMap("chatReadCursorResultMap")
+    @Results(id = "chatReadCursorResultMap", value = {
+            @Result(column = "tenant_id", property = "tenantId"),
+            @Result(column = "user_id", property = "userId"),
+            @Result(column = "session_id", property = "sessionId"),
+            @Result(column = "last_consumed_seq", property = "lastConsumedSeq"),
+            @Result(column = "updated_at", property = "updatedAt")
+    })
     ChatReadCursorRow find(
             @Param("tenantId") String tenantId,
             @Param("userId") String userId,

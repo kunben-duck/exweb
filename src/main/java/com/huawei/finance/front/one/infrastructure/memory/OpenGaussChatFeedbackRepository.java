@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.integration.memory.ChatFeedbackRepository;
 import com.huawei.finance.front.one.domain.chat.ChatMessageFeedback;
 import java.util.Map;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -22,7 +23,7 @@ public class OpenGaussChatFeedbackRepository implements ChatFeedbackRepository {
 
     @Override
     public ChatMessageFeedback save(ChatMessageFeedback feedback) {
-        mapper.upsert(
+        int updated = mapper.update(
                 feedback.id(),
                 feedback.tenantId(),
                 feedback.userId(),
@@ -36,6 +37,40 @@ public class OpenGaussChatFeedbackRepository implements ChatFeedbackRepository {
                 feedback.createdAt(),
                 feedback.updatedAt()
         );
+        if (updated == 0) {
+            try {
+                mapper.insert(
+                        feedback.id(),
+                        feedback.tenantId(),
+                        feedback.userId(),
+                        feedback.sessionId(),
+                        feedback.messageId(),
+                        feedback.runId(),
+                        feedback.rating(),
+                        feedback.reasonCode(),
+                        feedback.commentText(),
+                        toJson(feedback.metadata()),
+                        feedback.createdAt(),
+                        feedback.updatedAt()
+                );
+            } catch (DuplicateKeyException ex) {
+                // 反馈允许用户重复修改，避免使用 PostgreSQL 专有 upsert，重复插入时退回更新。
+                mapper.update(
+                        feedback.id(),
+                        feedback.tenantId(),
+                        feedback.userId(),
+                        feedback.sessionId(),
+                        feedback.messageId(),
+                        feedback.runId(),
+                        feedback.rating(),
+                        feedback.reasonCode(),
+                        feedback.commentText(),
+                        toJson(feedback.metadata()),
+                        feedback.createdAt(),
+                        feedback.updatedAt()
+                );
+            }
+        }
         return feedback;
     }
 

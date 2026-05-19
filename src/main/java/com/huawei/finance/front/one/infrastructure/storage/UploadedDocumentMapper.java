@@ -9,6 +9,7 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Result;
 import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 /**
  * fin_ex_uploaded_document_t 的 MyBatis Mapper。
@@ -24,20 +25,41 @@ public interface UploadedDocumentMapper {
                 #{id}, #{tenantId}, #{userId}, #{sessionId}, #{originalName}, #{bucket}, #{objectKey},
                 #{contentType}, #{sizeBytes}, #{status}, #{source}, #{tokenSize}, #{metadataJson}, #{createdAt}, #{updatedAt}
             )
-            ON CONFLICT (id) DO UPDATE SET
-                session_id = EXCLUDED.session_id,
-                original_name = EXCLUDED.original_name,
-                bucket = EXCLUDED.bucket,
-                object_key = EXCLUDED.object_key,
-                content_type = EXCLUDED.content_type,
-                size_bytes = EXCLUDED.size_bytes,
-                status = EXCLUDED.status,
-                source = EXCLUDED.source,
-                token_size = EXCLUDED.token_size,
-                metadata_json = EXCLUDED.metadata_json,
-                updated_at = EXCLUDED.updated_at
             """)
-    void upsert(
+    int insert(
+            @Param("id") String id,
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionId") String sessionId,
+            @Param("originalName") String originalName,
+            @Param("bucket") String bucket,
+            @Param("objectKey") String objectKey,
+            @Param("contentType") String contentType,
+            @Param("sizeBytes") long sizeBytes,
+            @Param("status") String status,
+            @Param("source") String source,
+            @Param("tokenSize") Long tokenSize,
+            @Param("metadataJson") String metadataJson,
+            @Param("createdAt") Instant createdAt,
+            @Param("updatedAt") Instant updatedAt
+    );
+
+    @Update("""
+            UPDATE fin_ex_uploaded_document_t
+            SET session_id = #{sessionId},
+                original_name = #{originalName},
+                bucket = #{bucket},
+                object_key = #{objectKey},
+                content_type = #{contentType},
+                size_bytes = #{sizeBytes},
+                status = #{status},
+                source = #{source},
+                token_size = #{tokenSize},
+                metadata_json = #{metadataJson},
+                updated_at = #{updatedAt}
+            WHERE id = #{id}
+            """)
+    int update(
             @Param("id") String id,
             @Param("tenantId") String tenantId,
             @Param("userId") String userId,

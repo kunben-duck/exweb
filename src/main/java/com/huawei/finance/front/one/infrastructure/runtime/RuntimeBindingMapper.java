@@ -9,6 +9,7 @@ import org.apache.ibatis.annotations.Result;
 import org.apache.ibatis.annotations.ResultMap;
 import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 /**
  * fin_ex_runtime_binding_t 的 MyBatis mapper。
@@ -24,16 +25,35 @@ public interface RuntimeBindingMapper {
                 #{id}, #{tenantId}, #{userId}, #{chatSessionId}, #{provider}, #{leafMessageId}, #{runtimeSessionId},
                 #{status}, #{lastRunId}, #{expiresAt}, #{metadataJson}, #{createdAt}, #{updatedAt}
             )
-            ON CONFLICT (id) DO UPDATE SET
-                leaf_message_id = EXCLUDED.leaf_message_id,
-                runtime_session_id = EXCLUDED.runtime_session_id,
-                status = EXCLUDED.status,
-                last_run_id = EXCLUDED.last_run_id,
-                expires_at = EXCLUDED.expires_at,
-                metadata_json = EXCLUDED.metadata_json,
-                updated_at = EXCLUDED.updated_at
             """)
-    void upsert(
+    int insert(
+            @Param("id") String id,
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("chatSessionId") String chatSessionId,
+            @Param("provider") String provider,
+            @Param("leafMessageId") String leafMessageId,
+            @Param("runtimeSessionId") String runtimeSessionId,
+            @Param("status") String status,
+            @Param("lastRunId") String lastRunId,
+            @Param("expiresAt") Instant expiresAt,
+            @Param("metadataJson") String metadataJson,
+            @Param("createdAt") Instant createdAt,
+            @Param("updatedAt") Instant updatedAt
+    );
+
+    @Update("""
+            UPDATE fin_ex_runtime_binding_t
+            SET leaf_message_id = #{leafMessageId},
+                runtime_session_id = #{runtimeSessionId},
+                status = #{status},
+                last_run_id = #{lastRunId},
+                expires_at = #{expiresAt},
+                metadata_json = #{metadataJson},
+                updated_at = #{updatedAt}
+            WHERE id = #{id}
+            """)
+    int update(
             @Param("id") String id,
             @Param("tenantId") String tenantId,
             @Param("userId") String userId,
@@ -50,6 +70,7 @@ public interface RuntimeBindingMapper {
     );
 
     @Select("""
+            <script>
             SELECT id, tenant_id, user_id, chat_session_id, provider, runtime_session_id,
                    leaf_message_id, status, last_run_id, expires_at, metadata_json, created_at, updated_at
             FROM fin_ex_runtime_binding_t
@@ -57,14 +78,19 @@ public interface RuntimeBindingMapper {
               AND user_id = #{userId}
               AND chat_session_id = #{sessionId}
               AND provider = #{provider}
-              AND (
-                    (leaf_message_id IS NULL AND CAST(#{leafMessageId} AS VARCHAR) IS NULL)
-                    OR leaf_message_id = #{leafMessageId}
-                  )
+              <choose>
+                <when test="leafMessageId == null">
+              AND leaf_message_id IS NULL
+                </when>
+                <otherwise>
+              AND leaf_message_id = #{leafMessageId}
+                </otherwise>
+              </choose>
               AND status = 'ACTIVE'
               AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
             ORDER BY updated_at DESC
             LIMIT 1
+            </script>
             """)
     @Results(id = "runtimeBindingResultMap", value = {
             @Result(column = "tenant_id", property = "tenantId"),

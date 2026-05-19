@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -31,7 +32,7 @@ public class OpenGaussDocumentRepository implements DocumentRepository {
 
     @Override
     public UploadedDocument save(UploadedDocument document) {
-        mapper.upsert(
+        int updated = mapper.update(
                 document.id(),
                 document.tenantId(),
                 document.userId(),
@@ -48,6 +49,46 @@ public class OpenGaussDocumentRepository implements DocumentRepository {
                 document.createdAt(),
                 document.updatedAt()
         );
+        if (updated == 0) {
+            try {
+                mapper.insert(
+                        document.id(),
+                        document.tenantId(),
+                        document.userId(),
+                        document.sessionId(),
+                        document.originalName(),
+                        document.bucket(),
+                        document.objectKey(),
+                        document.contentType(),
+                        document.sizeBytes(),
+                        document.status(),
+                        document.source(),
+                        document.tokenSize(),
+                        document.metadataJson(),
+                        document.createdAt(),
+                        document.updatedAt()
+                );
+            } catch (DuplicateKeyException ex) {
+                // 避免使用 PostgreSQL 专有 upsert；并发写同一 documentId 时退回更新。
+                mapper.update(
+                        document.id(),
+                        document.tenantId(),
+                        document.userId(),
+                        document.sessionId(),
+                        document.originalName(),
+                        document.bucket(),
+                        document.objectKey(),
+                        document.contentType(),
+                        document.sizeBytes(),
+                        document.status(),
+                        document.source(),
+                        document.tokenSize(),
+                        document.metadataJson(),
+                        document.createdAt(),
+                        document.updatedAt()
+                );
+            }
+        }
         return document;
     }
 

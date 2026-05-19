@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -47,7 +48,7 @@ public class OpenGaussRuntimeBindingRepository implements RuntimeBindingReposito
 
     @Override
     public RuntimeBinding save(RuntimeBinding binding) {
-        mapper.upsert(
+        int updated = mapper.update(
                 binding.id(),
                 binding.tenantId(),
                 binding.userId(),
@@ -62,6 +63,42 @@ public class OpenGaussRuntimeBindingRepository implements RuntimeBindingReposito
                 binding.createdAt(),
                 binding.updatedAt()
         );
+        if (updated == 0) {
+            try {
+                mapper.insert(
+                        binding.id(),
+                        binding.tenantId(),
+                        binding.userId(),
+                        binding.chatSessionId(),
+                        binding.provider(),
+                        binding.leafMessageId(),
+                        binding.runtimeSessionId(),
+                        binding.status().name(),
+                        binding.lastRunId(),
+                        binding.expiresAt(),
+                        toJson(binding.metadata()),
+                        binding.createdAt(),
+                        binding.updatedAt()
+                );
+            } catch (DuplicateKeyException ex) {
+                // openGauss 兼容写法：不使用 PostgreSQL 专有 upsert，并发插入成功后退回更新。
+                mapper.update(
+                        binding.id(),
+                        binding.tenantId(),
+                        binding.userId(),
+                        binding.chatSessionId(),
+                        binding.provider(),
+                        binding.leafMessageId(),
+                        binding.runtimeSessionId(),
+                        binding.status().name(),
+                        binding.lastRunId(),
+                        binding.expiresAt(),
+                        toJson(binding.metadata()),
+                        binding.createdAt(),
+                        binding.updatedAt()
+                );
+            }
+        }
         return binding;
     }
 

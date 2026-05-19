@@ -8,7 +8,9 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 聊天会话 openGauss 事实源实现。
@@ -59,19 +61,36 @@ public class OpenGaussSessionRepository implements SessionRepository {
 
     @Override
     public ChatSession save(ChatSession session) {
-        mapper.upsert(session.id(), session.tenantId(), session.userId(), session.title(), session.status(),
-                session.channel(), session.currentLeafMessageId(), session.rootSessionId(),
+        int updated = mapper.update(session.id(), session.tenantId(), session.userId(), session.title(),
+                session.status(), session.channel(), session.currentLeafMessageId(), session.rootSessionId(),
                 session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
                 session.metadataJson(), session.createdAt(), session.updatedAt());
+        if (updated == 0) {
+            try {
+                mapper.insert(session.id(), session.tenantId(), session.userId(), session.title(), session.status(),
+                        session.channel(), session.currentLeafMessageId(), session.rootSessionId(),
+                        session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
+                        session.metadataJson(), session.createdAt(), session.updatedAt());
+            } catch (DuplicateKeyException ex) {
+                // 并发创建同一会话时，另一事务可能先插入成功；此时回退为更新，避免依赖 PostgreSQL 专有 upsert。
+                mapper.update(session.id(), session.tenantId(), session.userId(), session.title(), session.status(),
+                        session.channel(), session.currentLeafMessageId(), session.rootSessionId(),
+                        session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
+                        session.metadataJson(), session.createdAt(), session.updatedAt());
+            }
+        }
         return session;
     }
 
     @Override
+    @Transactional
     public long nextNodeOrder(String tenantId, String userId, String sessionId) {
-        Long next = mapper.incrementNodeOrder(tenantId, userId, sessionId, Instant.now());
-        if (next == null) {
+        Long current = mapper.lockNodeOrder(tenantId, userId, sessionId);
+        if (current == null) {
             throw new IllegalArgumentException("会话不存在或不属于当前用户: " + sessionId);
         }
+        long next = current + 1;
+        mapper.updateNodeOrder(tenantId, userId, sessionId, next, Instant.now());
         return next;
     }
 

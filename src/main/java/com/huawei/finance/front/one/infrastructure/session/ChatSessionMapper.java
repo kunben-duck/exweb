@@ -26,19 +26,37 @@ public interface ChatSessionMapper {
                 #{rootSessionId}, #{branchSourceSessionId}, #{branchSourceMessageId},
                 #{lastNodeOrder}, #{metadataJson}, #{createdAt}, #{updatedAt}
             )
-            ON CONFLICT (id) DO UPDATE SET
-                title = EXCLUDED.title,
-                status = EXCLUDED.status,
-                channel = EXCLUDED.channel,
-                current_leaf_message_id = EXCLUDED.current_leaf_message_id,
-                root_session_id = EXCLUDED.root_session_id,
-                branch_source_session_id = EXCLUDED.branch_source_session_id,
-                branch_source_message_id = EXCLUDED.branch_source_message_id,
-                last_node_order = EXCLUDED.last_node_order,
-                metadata_json = EXCLUDED.metadata_json,
-                updated_at = EXCLUDED.updated_at
             """)
-    void upsert(@Param("id") String id,
+    int insert(@Param("id") String id,
+               @Param("tenantId") String tenantId,
+               @Param("userId") String userId,
+               @Param("title") String title,
+               @Param("status") String status,
+               @Param("channel") String channel,
+               @Param("currentLeafMessageId") String currentLeafMessageId,
+               @Param("rootSessionId") String rootSessionId,
+               @Param("branchSourceSessionId") String branchSourceSessionId,
+               @Param("branchSourceMessageId") String branchSourceMessageId,
+               @Param("lastNodeOrder") Long lastNodeOrder,
+               @Param("metadataJson") String metadataJson,
+               @Param("createdAt") Instant createdAt,
+               @Param("updatedAt") Instant updatedAt);
+
+    @Update("""
+            UPDATE fin_ex_chat_session_t
+            SET title = #{title},
+                status = #{status},
+                channel = #{channel},
+                current_leaf_message_id = #{currentLeafMessageId},
+                root_session_id = #{rootSessionId},
+                branch_source_session_id = #{branchSourceSessionId},
+                branch_source_message_id = #{branchSourceMessageId},
+                last_node_order = #{lastNodeOrder},
+                metadata_json = #{metadataJson},
+                updated_at = #{updatedAt}
+            WHERE id = #{id}
+            """)
+    int update(@Param("id") String id,
                 @Param("tenantId") String tenantId,
                 @Param("userId") String userId,
                 @Param("title") String title,
@@ -160,18 +178,30 @@ public interface ChatSessionMapper {
                                          @Param("limit") int limit);
 
     @Select("""
+            SELECT last_node_order
+            FROM fin_ex_chat_session_t
+            WHERE tenant_id = #{tenantId}
+              AND user_id = #{userId}
+              AND id = #{sessionId}
+            FOR UPDATE
+            """)
+    Long lockNodeOrder(@Param("tenantId") String tenantId,
+                       @Param("userId") String userId,
+                       @Param("sessionId") String sessionId);
+
+    @Update("""
             UPDATE fin_ex_chat_session_t
-            SET last_node_order = last_node_order + 1,
+            SET last_node_order = #{lastNodeOrder},
                 updated_at = #{updatedAt}
             WHERE tenant_id = #{tenantId}
               AND user_id = #{userId}
               AND id = #{sessionId}
-            RETURNING last_node_order
             """)
-    Long incrementNodeOrder(@Param("tenantId") String tenantId,
-                            @Param("userId") String userId,
-                            @Param("sessionId") String sessionId,
-                            @Param("updatedAt") Instant updatedAt);
+    int updateNodeOrder(@Param("tenantId") String tenantId,
+                        @Param("userId") String userId,
+                        @Param("sessionId") String sessionId,
+                        @Param("lastNodeOrder") long lastNodeOrder,
+                        @Param("updatedAt") Instant updatedAt);
 
     @Update("""
             UPDATE fin_ex_chat_session_t

@@ -68,7 +68,8 @@ public class RedisShortTermMemoryCache {
                     messages.add(message);
                 }
             }
-            messages.sort(Comparator.comparing(ChatMessage::createdAt).reversed());
+            // Redis 列表保存最近消息窗口；返回给 MemoryContext 时使用阅读顺序，避免下游上下文倒序。
+            messages.sort(Comparator.comparing(ChatMessage::createdAt));
             return messages;
         } catch (RuntimeException ex) {
             markRedisFailure(ex);

@@ -90,7 +90,6 @@ async function serveStatic(req, res) {
 function proxyHttp(req, res) {
   const target = backendTarget(req.url);
   const headers = backendHeaders(req, target);
-  delete headers["origin"];
   const transport = target.protocol === "https:" ? https : http;
 
   const proxy = transport.request({
@@ -119,7 +118,6 @@ function proxyWebSocket(req, clientSocket, head) {
   const connect = target.protocol === "https:" ? tls.connect : net.connect;
   const backendSocket = connect({ host: target.hostname, port }, () => {
     const headers = backendHeaders(req, target);
-    delete headers["origin"];
     const headerLines = Object.entries(headers)
       .filter(([, value]) => value !== undefined)
       .map(([name, value]) => `${name}: ${Array.isArray(value) ? value.join(", ") : value}`);

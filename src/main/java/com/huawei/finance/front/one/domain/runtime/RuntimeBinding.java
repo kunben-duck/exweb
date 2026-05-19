@@ -14,6 +14,7 @@ import java.util.Map;
  * @param userId 用户标识。
  * @param chatSessionId 前端聊天会话标识。
  * @param provider 当前装配的 AgentRuntime provider 编码。
+ * @param leafMessageId 该 Runtime 内部会话对应的前端消息树叶子，避免历史编辑后复用错误上下文。
  * @param runtimeSessionId AgentRuntime 返回的内部会话标识，首次调用可为空。
  * @param status 绑定状态，只用于判断是否继续路由到当前 AgentRuntime。
  * @param lastRunId 最近一次触发该绑定的 SuperAgent runId。
@@ -28,6 +29,7 @@ public record RuntimeBinding(
         String userId,
         String chatSessionId,
         String provider,
+        String leafMessageId,
         String runtimeSessionId,
         RuntimeBindingStatus status,
         String lastRunId,
@@ -36,6 +38,16 @@ public record RuntimeBinding(
         Instant updatedAt,
         Map<String, Object> metadata
 ) {
+    /**
+     * 兼容旧调用点的构造器。没有 leaf 时仅用于旧测试或迁移期，生产查询应显式传入 leafMessageId。
+     */
+    public RuntimeBinding(String id, String tenantId, String userId, String chatSessionId, String provider,
+                          String runtimeSessionId, RuntimeBindingStatus status, String lastRunId,
+                          Instant expiresAt, Instant createdAt, Instant updatedAt, Map<String, Object> metadata) {
+        this(id, tenantId, userId, chatSessionId, provider, null, runtimeSessionId, status,
+                lastRunId, expiresAt, createdAt, updatedAt, metadata);
+    }
+
     public RuntimeBinding {
         metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
     }
@@ -58,8 +70,22 @@ public record RuntimeBinding(
      * @return 更新后的绑定。
      */
     public RuntimeBinding withRun(String runId, Instant expiresAt) {
-        return new RuntimeBinding(id, tenantId, userId, chatSessionId, provider, runtimeSessionId,
+        return new RuntimeBinding(id, tenantId, userId, chatSessionId, provider, leafMessageId, runtimeSessionId,
                 RuntimeBindingStatus.ACTIVE, runId, expiresAt, createdAt, Instant.now(), metadata);
+    }
+
+    /**
+     * 将绑定移动到新的前端消息树叶子。
+     *
+     * <p>Runtime 完整返回 assistant 消息后，下一轮普通继续提问应沿新 assistant 叶子续接，
+     * 因此需要把绑定从本轮 parent leaf 移动到新 assistant leaf。</p>
+     *
+     * @param nextLeafMessageId 新的 active path 叶子消息。
+     * @return 更新后的绑定。
+     */
+    public RuntimeBinding withLeafMessageId(String nextLeafMessageId) {
+        return new RuntimeBinding(id, tenantId, userId, chatSessionId, provider, nextLeafMessageId,
+                runtimeSessionId, status, lastRunId, expiresAt, createdAt, Instant.now(), metadata);
     }
 
     /**
@@ -69,7 +95,7 @@ public record RuntimeBinding(
      * @return 更新后的绑定。
      */
     public RuntimeBinding withStatus(RuntimeBindingStatus nextStatus) {
-        return new RuntimeBinding(id, tenantId, userId, chatSessionId, provider, runtimeSessionId,
+        return new RuntimeBinding(id, tenantId, userId, chatSessionId, provider, leafMessageId, runtimeSessionId,
                 nextStatus, lastRunId, expiresAt, createdAt, Instant.now(), metadata);
     }
 
@@ -80,7 +106,7 @@ public record RuntimeBinding(
      * @return 更新后的绑定。
      */
     public RuntimeBinding withRuntimeSessionId(String nextRuntimeSessionId) {
-        return new RuntimeBinding(id, tenantId, userId, chatSessionId, provider, nextRuntimeSessionId,
+        return new RuntimeBinding(id, tenantId, userId, chatSessionId, provider, leafMessageId, nextRuntimeSessionId,
                 status, lastRunId, expiresAt, createdAt, Instant.now(), metadata);
     }
 }

@@ -290,8 +290,17 @@ section + section {
   min-height: 1.4em;
 }
 
+.message-meta {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .message-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
 }
@@ -299,6 +308,27 @@ section + section {
 .message-actions button {
   padding: 4px 7px;
   font-size: 12px;
+}
+
+.version-nav {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  margin-left: 2px;
+}
+
+.version-label {
+  min-width: 32px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.icon-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  text-align: center;
 }
 
 .selected-docs {

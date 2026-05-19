@@ -1,10 +1,12 @@
 package com.huawei.finance.front.one.infrastructure.runtime;
 
 import java.time.Instant;
+import java.util.List;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Result;
+import org.apache.ibatis.annotations.ResultMap;
 import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
 
@@ -15,14 +17,15 @@ import org.apache.ibatis.annotations.Select;
 public interface RuntimeBindingMapper {
     @Insert("""
             INSERT INTO fin_ex_runtime_binding_t(
-                id, tenant_id, user_id, chat_session_id, provider, runtime_session_id,
+                id, tenant_id, user_id, chat_session_id, provider, leaf_message_id, runtime_session_id,
                 status, last_run_id, expires_at, metadata_json, created_at, updated_at
             )
             VALUES (
-                #{id}, #{tenantId}, #{userId}, #{chatSessionId}, #{provider}, #{runtimeSessionId},
+                #{id}, #{tenantId}, #{userId}, #{chatSessionId}, #{provider}, #{leafMessageId}, #{runtimeSessionId},
                 #{status}, #{lastRunId}, #{expiresAt}, #{metadataJson}, #{createdAt}, #{updatedAt}
             )
             ON CONFLICT (id) DO UPDATE SET
+                leaf_message_id = EXCLUDED.leaf_message_id,
                 runtime_session_id = EXCLUDED.runtime_session_id,
                 status = EXCLUDED.status,
                 last_run_id = EXCLUDED.last_run_id,
@@ -36,6 +39,7 @@ public interface RuntimeBindingMapper {
             @Param("userId") String userId,
             @Param("chatSessionId") String chatSessionId,
             @Param("provider") String provider,
+            @Param("leafMessageId") String leafMessageId,
             @Param("runtimeSessionId") String runtimeSessionId,
             @Param("status") String status,
             @Param("lastRunId") String lastRunId,
@@ -47,12 +51,16 @@ public interface RuntimeBindingMapper {
 
     @Select("""
             SELECT id, tenant_id, user_id, chat_session_id, provider, runtime_session_id,
-                   status, last_run_id, expires_at, metadata_json, created_at, updated_at
+                   leaf_message_id, status, last_run_id, expires_at, metadata_json, created_at, updated_at
             FROM fin_ex_runtime_binding_t
             WHERE tenant_id = #{tenantId}
               AND user_id = #{userId}
               AND chat_session_id = #{sessionId}
               AND provider = #{provider}
+              AND (
+                    (leaf_message_id IS NULL AND CAST(#{leafMessageId} AS VARCHAR) IS NULL)
+                    OR leaf_message_id = #{leafMessageId}
+                  )
               AND status = 'ACTIVE'
               AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
             ORDER BY updated_at DESC
@@ -62,6 +70,7 @@ public interface RuntimeBindingMapper {
             @Result(column = "tenant_id", property = "tenantId"),
             @Result(column = "user_id", property = "userId"),
             @Result(column = "chat_session_id", property = "chatSessionId"),
+            @Result(column = "leaf_message_id", property = "leafMessageId"),
             @Result(column = "runtime_session_id", property = "runtimeSessionId"),
             @Result(column = "last_run_id", property = "lastRunId"),
             @Result(column = "expires_at", property = "expiresAt"),
@@ -72,5 +81,24 @@ public interface RuntimeBindingMapper {
     RuntimeBindingRow findActive(@Param("tenantId") String tenantId,
                                  @Param("userId") String userId,
                                  @Param("sessionId") String sessionId,
-                                 @Param("provider") String provider);
+                                 @Param("provider") String provider,
+                                 @Param("leafMessageId") String leafMessageId);
+
+    @Select("""
+            SELECT id, tenant_id, user_id, chat_session_id, provider, runtime_session_id,
+                   leaf_message_id, status, last_run_id, expires_at, metadata_json, created_at, updated_at
+            FROM fin_ex_runtime_binding_t
+            WHERE tenant_id = #{tenantId}
+              AND user_id = #{userId}
+              AND chat_session_id = #{sessionId}
+              AND provider = #{provider}
+              AND status = 'ACTIVE'
+              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            ORDER BY updated_at DESC
+            """)
+    @ResultMap("runtimeBindingResultMap")
+    List<RuntimeBindingRow> findActiveBySession(@Param("tenantId") String tenantId,
+                                                @Param("userId") String userId,
+                                                @Param("sessionId") String sessionId,
+                                                @Param("provider") String provider);
 }

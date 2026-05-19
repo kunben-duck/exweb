@@ -10,6 +10,7 @@ import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
+import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.finance.front.one.domain.chat.ChatRunStartResult;
 import com.huawei.finance.front.one.domain.chat.ChatRunStopDecision;
 import com.huawei.finance.front.one.domain.chat.ChatRunStopResult;
@@ -30,6 +31,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
@@ -49,6 +52,8 @@ import reactor.core.publisher.Sinks;
  */
 @Service
 public class FinanceEXChatService implements FinanceChatFacade {
+    private static final Logger log = LoggerFactory.getLogger(FinanceEXChatService.class);
+
     private final SessionApplicationService sessionService;
     private final MemoryApplicationService memoryService;
     private final RuntimeBindingApplicationService runtimeBindingService;
@@ -101,7 +106,6 @@ public class FinanceEXChatService implements FinanceChatFacade {
                         }
                         firstEvent.tryEmitValue(event);
                     })
-                    .doOnError(firstEvent::tryEmitError)
                     .doFinally(signalType -> {
                         terminal.set(true);
                         runExecutionRegistry.complete(runIdRef.get());
@@ -109,7 +113,18 @@ public class FinanceEXChatService implements FinanceChatFacade {
             Disposable disposable = runFlux
                     // 异步 run 由服务端订阅并持续执行；前端通过 resume 接口按 seq 读取事件。
                     // 这里不把浏览器连接作为 Runtime 生命周期，避免刷新页面导致运行中断。
-                    .subscribe();
+                    .subscribe(
+                            event -> {
+                                // 事件持久化、发布和 firstEvent handoff 都在上游 doOnNext 中完成。
+                            },
+                            error -> {
+                                Sinks.EmitResult result = firstEvent.tryEmitError(error);
+                                if (result.isFailure() && runIdRef.get() != null) {
+                                    log.warn("Background chat run terminated after handoff. runId={}, reason={}",
+                                            runIdRef.get(), error.getMessage(), error);
+                                }
+                            }
+                    );
             disposableRef.set(disposable);
             if (runIdRef.get() != null && !terminal.get()) {
                 runExecutionRegistry.register(runIdRef.get(), disposable);
@@ -117,36 +132,6 @@ public class FinanceEXChatService implements FinanceChatFacade {
             return firstEvent.asMono()
                     .map(event -> new ChatRunStartResult(event.runId(), event.sessionId(), event.sequence(),
                             event.createdAt(), ChatStreamTopics.runTopic(event.runId())));
-        });
-    }
-
-    @Override
-    public Mono<ChatRunStartResult> retryRun(UserContext user, String runId, ChatCommand command) {
-        return Mono.defer(() -> {
-            ChatRun previous = chatRunService.requireOwnedRun(user, runId);
-            String message = command == null ? null : command.message();
-            if (message == null || message.isBlank()) {
-                message = sessionService.latestUserMessage(user.tenantId(), user.userId(), previous.sessionId())
-                        .map(ChatMessage::content)
-                        .orElseThrow(() -> new IllegalStateException("原会话不存在可重试的用户消息"));
-            }
-            Map<String, Object> metadata = new LinkedHashMap<>();
-            if (command != null && command.metadata() != null) {
-                metadata.putAll(command.metadata());
-            }
-            metadata.put("retryOfRunId", runId);
-            ChatCommand retryCommand = new ChatCommand(
-                    command == null ? null : command.commandId(),
-                    null,
-                    null,
-                    previous.sessionId(),
-                    command == null ? null : command.conversationId(),
-                    command == null ? null : command.channel(),
-                    message,
-                    command == null ? List.of() : command.attachments(),
-                    metadata
-            );
-            return startRun(user, retryCommand);
         });
     }
 
@@ -180,7 +165,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
             // 进入 application 后统一以 UserContext 为准；原始前端请求只保留会话、消息、附件和元数据。
             ChatCommand identified = new ChatCommand(command.commandId(), user.tenantId(), user.userId(),
                     command.sessionId(), command.conversationId(), command.channel(), command.message(),
-                    command.attachments(), command.metadata());
+                    command.attachments(), command.metadata(), command.runMode(), command.parentMessageId(),
+                    command.editedMessageId(), command.regeneratedMessageId());
 
             // 会话不存在时创建会话；历史 Memory 先排除本轮输入，避免 Runtime 再接收用户消息时重复。
             ChatSession session = sessionService.loadOrCreate(identified);
@@ -189,12 +175,16 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     identified.attachments() == null ? List.of() : identified.attachments());
             ChatCommand normalized = new ChatCommand(identified.commandId(), user.tenantId(), user.userId(),
                     session.id(), identified.conversationId(), identified.channel(), identified.message(),
-                    attachments, identified.metadata());
+                    attachments, identified.metadata(), identified.runMode(), identified.parentMessageId(),
+                    identified.editedMessageId(), identified.regeneratedMessageId());
             String runId = idGenerator.newId("run", IdGenerateContext.of(user.tenantId(), user.userId(), session.id()));
 
             // MemoryContext 是可选 SuperAgent 记忆增强。长短期记忆都关闭时这里返回空上下文，
             // 且不会查询 Redis、历史消息或长期记忆服务；当前用户输入也不会进入本轮上下文，避免重复。
             MemoryContext memory = memoryService.loadForRun(normalized);
+            ChatRunMessagePlan messagePlan = sessionService.prepareRunMessage(user, normalized, session, runId, attachments);
+            ChatCommand runCommand = commandForExecution(normalized, messagePlan);
+            String runtimeBindingLeafId = runtimeBindingLeafId(messagePlan);
             if (forceNewTask(normalized.metadata())) {
                 // 前端显式要求开启新任务时，仅取消 Relay Runtime 续接绑定。
                 // SubAgent 不创建绑定，所以不存在需要释放的简单任务粘性会话。
@@ -203,7 +193,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
             IntentDecision intent = null;
             RouteTarget route = null;
             RuntimeBinding binding = null;
-            Optional<RuntimeBinding> activeRuntimeBinding = runtimeBindingService.findActive(user.tenantId(), user.userId(), session.id());
+            Optional<RuntimeBinding> activeRuntimeBinding = runtimeBindingService.findActive(user.tenantId(),
+                    user.userId(), session.id(), runtimeBindingLeafId);
             if (activeRuntimeBinding.isPresent()) {
                 // Runtime 是唯一允许多轮续接的执行主体；命中 active binding 后直接继续 Relay Runtime。
                 binding = runtimeBindingService.touchForRun(activeRuntimeBinding.get(), runId);
@@ -212,30 +203,28 @@ public class FinanceEXChatService implements FinanceChatFacade {
             if (route == null) {
                 // 首轮路由只读取已启用的外部路由信号。默认用例库和意图服务都关闭，
                 // 此时不会发生外部 HTTP 调用，请求直接进入 AgentRuntime。
-                RouteSignalResult routeSignal = routeSignalService.routeInitial(user, session, normalized, attachments, memory);
+                RouteSignalResult routeSignal = routeSignalService.routeInitial(user, session, runCommand, attachments, memory);
                 route = routeSignal.route();
                 intent = routeSignal.intentDecision();
                 if (route.type() == RouteType.SUB_AGENT) {
                     binding = null;
                 } else if (route.type() == RouteType.AGENT_RUNTIME) {
-                    binding = runtimeBindingService.create(user.tenantId(), user.userId(), session.id(), runId);
+                    binding = runtimeBindingService.create(user.tenantId(), user.userId(), session.id(), runId,
+                            runtimeBindingLeafId);
                 }
             }
             IntentDecision selectedIntent = intent;
             RouteTarget selectedRoute = route;
             AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>(binding);
-            AtomicBoolean completed = new AtomicBoolean(false);
             StringBuilder assistant = new StringBuilder();
-            chatRunService.createRunning(runId, user, session.id(), selectedRoute, bindingRef.get(), normalized.metadata());
+            chatRunService.createRunning(runId, user, session.id(), selectedRoute, bindingRef.get(),
+                    normalized.metadata(), messagePlan.runMode(), messagePlan.parentMessageId(), messagePlan.userMessage().id());
             try {
-                // Java 服务统一保存前端可见用户消息，AgentRuntime 内部记忆只负责自身运行状态。
-                sessionService.saveUserMessage(normalized, session);
-
                 // 根据路由结果选择 SubAgent、系统响应或统一 AgentRuntime。
                 Flux<ChatEvent> body = switch (selectedRoute.type()) {
-                    case SUB_AGENT -> subAgentExecutor.execute(normalized, runId, memory, selectedRoute, user);
-                    case SYSTEM_RESPONSE -> systemResponseExecutor.execute(normalized, runId, selectedIntent, selectedRoute);
-                    case AGENT_RUNTIME -> agentRuntimeExecutor.execute(normalized, runId, memory, selectedIntent, selectedRoute, user, bindingRef.get());
+                    case SUB_AGENT -> subAgentExecutor.execute(runCommand, runId, memory, selectedRoute, user);
+                    case SYSTEM_RESPONSE -> systemResponseExecutor.execute(runCommand, runId, selectedIntent, selectedRoute);
+                    case AGENT_RUNTIME -> agentRuntimeExecutor.execute(runCommand, runId, memory, selectedIntent, selectedRoute, user, bindingRef.get());
                 };
 
                 // 外层统一补齐 run.started/run.completed，接口层只需要转发事件流。
@@ -246,9 +235,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                 .onErrorResume(ex -> Flux.just(ErrorEvent.of(runId, session.id(), "RUN_ERROR", ex.getMessage()))),
                         user,
                         session,
-                        normalized,
+                        runCommand,
+                        messagePlan,
                         bindingRef,
-                        completed,
                         assistant,
                         runId
                 );
@@ -258,9 +247,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
                         Flux.just(ErrorEvent.of(runId, session.id(), "RUN_ERROR", ex.getMessage())),
                         user,
                         session,
-                        normalized,
+                        runCommand,
+                        messagePlan,
                         bindingRef,
-                        completed,
                         assistant,
                         runId
                 );
@@ -269,28 +258,58 @@ public class FinanceEXChatService implements FinanceChatFacade {
     }
 
     private Flux<ChatEvent> persistAndPublishRunEvents(Flux<ChatEvent> events, UserContext user, ChatSession session,
-                                                       ChatCommand normalized, AtomicReference<RuntimeBinding> bindingRef,
-                                                       AtomicBoolean completed, StringBuilder assistant, String runId) {
+                                                       ChatCommand normalized, ChatRunMessagePlan messagePlan,
+                                                       AtomicReference<RuntimeBinding> bindingRef,
+                                                       StringBuilder assistant, String runId) {
         return events
                 .takeWhile(chatRunService::shouldAcceptEvent)
-                .map(chatStreamService::appendAndPublish)
-                .doOnNext(event -> {
-                    // 事件已经带有 openGauss 持久化 seq，实时输出与断线补发看到的是同一份顺序。
-                    chatRunService.observeEvent(event);
-                    if ("run.completed".equals(event.type())) {
-                        completed.set(true);
-                    }
+                .concatMap(event -> {
                     appendAssistantDelta(assistant, event);
-                    bindingRef.set(runtimeBindingService.observeEvent(bindingRef.get(), event));
-                })
-                .doOnComplete(() -> {
-                    // 只有 run.completed 才代表完整回答可进入历史；stop/failed 的半截 delta 只保留在事件事实源中。
-                    if (completed.get()) {
-                        if (!assistant.isEmpty()) {
-                            sessionService.saveAssistantMessage(user.tenantId(), user.userId(), session.id(), assistant.toString());
-                        }
+                    /*
+                     * run.completed 是前端、SSE resume 和跨设备续接共同认可的“本轮回答已经闭合”信号。
+                     * 因此在发布该终态事件之前，必须先把完整 assistant 消息写入历史消息树，
+                     * 避免客户端收到 completed 后立即查询历史时只能看到 user 节点。
+                     */
+                    if ("run.completed".equals(event.type()) && !assistant.isEmpty()) {
+                        ChatMessage savedAssistant = sessionService.saveAssistantMessage(user.tenantId(), user.userId(),
+                                session, assistant.toString(), runId, messagePlan.userMessage().id(),
+                                messagePlan.regeneratedFromMessageId());
+                        chatRunService.bindAssistantMessage(runId, savedAssistant.id());
+                        bindingRef.set(runtimeBindingService.moveToLeaf(bindingRef.get(), savedAssistant.id()));
                     }
+                    ChatEvent stored = chatStreamService.appendAndPublish(event);
+                    // 事件已经带有 openGauss 持久化 seq，实时输出与断线补发看到的是同一份顺序。
+                    chatRunService.observeEvent(stored);
+                    bindingRef.set(runtimeBindingService.observeEvent(bindingRef.get(), stored));
+                    return Mono.just(stored);
                 });
+    }
+
+    /**
+     * 将消息树写入计划转换为真正下发给 Runtime/SubAgent 的命令。
+     *
+     * <p>普通提问和编辑历史问题使用本轮新用户消息；重新生成回答时不创建新的 user 消息，
+     * 因此要把原 user 消息内容作为本轮 query 传给下游，保证 Runtime 看到的输入和消息树一致。</p>
+     */
+    private ChatCommand commandForExecution(ChatCommand normalized, ChatRunMessagePlan messagePlan) {
+        ChatMessage userMessage = messagePlan.userMessage();
+        return new ChatCommand(normalized.commandId(), normalized.tenantId(), normalized.userId(),
+                normalized.sessionId(), normalized.conversationId(), normalized.channel(), userMessage.content(),
+                normalized.attachments(), normalized.metadata(), messagePlan.runMode(), messagePlan.parentMessageId(),
+                normalized.editedMessageId(), normalized.regeneratedMessageId());
+    }
+
+    /**
+     * 计算 RuntimeBinding 的查询 leaf。
+     *
+     * <p>普通继续提问应复用“提问前 active leaf”上的 Runtime session；编辑历史问题和重新生成回答
+     * 会从历史路径产生新的候选分支，因此先绑定到本轮 user leaf，完成后再移动到新 assistant leaf。</p>
+     */
+    private String runtimeBindingLeafId(ChatRunMessagePlan messagePlan) {
+        return switch (messagePlan.runMode()) {
+            case NEXT -> messagePlan.parentMessageId();
+            case EDIT_USER, REGENERATE_ASSISTANT -> messagePlan.userMessage().id();
+        };
     }
 
     private boolean forceNewTask(Map<String, Object> metadata) {

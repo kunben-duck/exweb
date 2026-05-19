@@ -34,16 +34,6 @@ public interface FinanceChatFacade {
     Mono<ChatRunStartResult> startRun(UserContext user, ChatCommand command);
 
     /**
-     * 基于已有 run 所属会话重新生成回答。
-     *
-     * @param user 请求入口解析出的不可变用户身份快照。
-     * @param runId 被重试的原 run 标识。
-     * @param command 本次重试的前端命令；message 为空时由应用层复用最近用户消息。
-     * @return 新 run 的创建结果。
-     */
-    Mono<ChatRunStartResult> retryRun(UserContext user, String runId, ChatCommand command);
-
-    /**
      * 停止指定 run 的当前回答。
      *
      * @param user 请求入口解析出的不可变用户身份快照。

@@ -60,13 +60,34 @@ public class OpenGaussSessionRepository implements SessionRepository {
     @Override
     public ChatSession save(ChatSession session) {
         mapper.upsert(session.id(), session.tenantId(), session.userId(), session.title(), session.status(),
-                session.channel(), session.createdAt(), session.updatedAt());
+                session.channel(), session.currentLeafMessageId(), session.rootSessionId(),
+                session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
+                session.metadataJson(), session.createdAt(), session.updatedAt());
         return session;
+    }
+
+    @Override
+    public long nextNodeOrder(String tenantId, String userId, String sessionId) {
+        Long next = mapper.incrementNodeOrder(tenantId, userId, sessionId, Instant.now());
+        if (next == null) {
+            throw new IllegalArgumentException("会话不存在或不属于当前用户: " + sessionId);
+        }
+        return next;
+    }
+
+    @Override
+    public void updateCurrentLeaf(String tenantId, String userId, String sessionId, String leafMessageId) {
+        int updated = mapper.updateCurrentLeaf(tenantId, userId, sessionId, leafMessageId, Instant.now());
+        if (updated == 0) {
+            throw new IllegalArgumentException("会话不存在或不属于当前用户: " + sessionId);
+        }
     }
 
     private ChatSession toDomain(ChatSessionRow row) {
         return new ChatSession(row.getId(), row.getTenantId(), row.getUserId(), row.getTitle(), row.getStatus(),
-                row.getChannel(), row.getCreatedAt() == null ? Instant.EPOCH : row.getCreatedAt(),
+                row.getChannel(), row.getCurrentLeafMessageId(), row.getRootSessionId(),
+                row.getBranchSourceSessionId(), row.getBranchSourceMessageId(), row.getLastNodeOrder(),
+                row.getMetadataJson(), row.getCreatedAt() == null ? Instant.EPOCH : row.getCreatedAt(),
                 row.getUpdatedAt() == null ? Instant.EPOCH : row.getUpdatedAt());
     }
 

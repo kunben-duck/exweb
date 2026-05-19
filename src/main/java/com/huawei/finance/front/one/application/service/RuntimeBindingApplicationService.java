@@ -59,9 +59,9 @@ public class RuntimeBindingApplicationService {
      * @param sessionId 前端聊天会话标识。
      * @return 当前可续接 Runtime 绑定。
      */
-    public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId) {
+    public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId, String leafMessageId) {
         Instant now = Instant.now();
-        Optional<RuntimeBinding> cached = cache.get(tenantId, userId, sessionId);
+        Optional<RuntimeBinding> cached = cache.get(tenantId, userId, sessionId, leafMessageId);
         if (cached.isPresent()) {
             if (routableForCurrentProvider(cached.get(), now)) {
                 return cached;
@@ -70,10 +70,17 @@ public class RuntimeBindingApplicationService {
             // 避免 Runtime 切换后把旧实现的 runtimeSessionId 误传给新 Runtime。
             cache.evict(tenantId, userId, sessionId);
         }
-        Optional<RuntimeBinding> persisted = repository.findActive(tenantId, userId, sessionId, runtimeProvider)
+        Optional<RuntimeBinding> persisted = repository.findActive(tenantId, userId, sessionId, runtimeProvider, leafMessageId)
                 .filter(binding -> routableForCurrentProvider(binding, now));
         persisted.ifPresent(cache::put);
         return persisted;
+    }
+
+    /**
+     * 兼容无消息树 leaf 的迁移期查询。
+     */
+    public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId) {
+        return findActive(tenantId, userId, sessionId, null);
     }
 
     /**
@@ -85,12 +92,16 @@ public class RuntimeBindingApplicationService {
      * @param runId 本轮运行标识。
      * @return 已保存的 Runtime 绑定。
      */
-    public RuntimeBinding create(String tenantId, String userId, String sessionId, String runId) {
+    public RuntimeBinding create(String tenantId, String userId, String sessionId, String runId, String leafMessageId) {
         Instant now = Instant.now();
         String id = idGenerator.newId("runtime_binding", IdGenerateContext.of(tenantId, userId, sessionId));
         RuntimeBinding binding = new RuntimeBinding(id, tenantId, userId, sessionId, runtimeProvider,
-                null, RuntimeBindingStatus.ACTIVE, runId, expiresAt(), now, now, Map.of());
+                leafMessageId, null, RuntimeBindingStatus.ACTIVE, runId, expiresAt(), now, now, Map.of());
         return save(binding);
+    }
+
+    public RuntimeBinding create(String tenantId, String userId, String sessionId, String runId) {
+        return create(tenantId, userId, sessionId, runId, null);
     }
 
     /**
@@ -108,6 +119,17 @@ public class RuntimeBindingApplicationService {
     }
 
     /**
+     * Runtime 完成后把绑定移动到新 assistant 叶子。
+     */
+    public RuntimeBinding moveToLeaf(RuntimeBinding binding, String leafMessageId) {
+        if (binding == null || leafMessageId == null || leafMessageId.isBlank()
+                || leafMessageId.equals(binding.leafMessageId())) {
+            return binding;
+        }
+        return save(binding.withLeafMessageId(leafMessageId));
+    }
+
+    /**
      * 取消当前 active Runtime 绑定。
      *
      * @param tenantId 租户标识。
@@ -115,8 +137,8 @@ public class RuntimeBindingApplicationService {
      * @param sessionId 前端聊天会话标识。
      */
     public void cancelActive(String tenantId, String userId, String sessionId) {
-        findActive(tenantId, userId, sessionId)
-                .ifPresent(binding -> save(binding.withStatus(RuntimeBindingStatus.CANCELLED)));
+        repository.findActiveBySession(tenantId, userId, sessionId, runtimeProvider)
+                .forEach(binding -> save(binding.withStatus(RuntimeBindingStatus.CANCELLED)));
         cache.evict(tenantId, userId, sessionId);
     }
 

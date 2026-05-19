@@ -18,6 +18,10 @@ import java.util.Map;
  * @param agentCode 本轮命中的 SubAgent 编码，可为空。
  * @param runtimeProvider 本轮使用的 AgentRuntime provider，可为空。
  * @param runtimeSessionId AgentRuntime 自己的会话标识，可为空。
+ * @param runMode 本轮消息树写入模式。
+ * @param parentMessageId 本轮 run 挂接的消息树父节点。
+ * @param userMessageId 本轮输入对应的用户消息；重新生成时指向原用户消息。
+ * @param assistantMessageId run.completed 后生成的完整 assistant 消息。
  * @param firstSeq run.started 持久化后的事件序号。
  * @param lastSeq 该 run 当前最后一个已持久化事件序号。
  * @param cancelReason stop 接口传入或系统生成的取消原因。
@@ -37,6 +41,10 @@ public record ChatRun(
         String agentCode,
         String runtimeProvider,
         String runtimeSessionId,
+        ChatRunMode runMode,
+        String parentMessageId,
+        String userMessageId,
+        String assistantMessageId,
         Long firstSeq,
         Long lastSeq,
         String cancelReason,
@@ -46,8 +54,21 @@ public record ChatRun(
         Instant createdAt,
         Instant updatedAt
 ) {
+    /**
+     * 兼容旧调用点的普通 NEXT run 构造器。
+     */
+    public ChatRun(String id, String tenantId, String userId, String sessionId, ChatRunStatus status,
+                   String routeType, String agentCode, String runtimeProvider, String runtimeSessionId,
+                   Long firstSeq, Long lastSeq, String cancelReason, Instant startedAt, Instant finishedAt,
+                   Map<String, Object> metadata, Instant createdAt, Instant updatedAt) {
+        this(id, tenantId, userId, sessionId, status, routeType, agentCode, runtimeProvider, runtimeSessionId,
+                ChatRunMode.NEXT, null, null, null, firstSeq, lastSeq, cancelReason, startedAt, finishedAt,
+                metadata, createdAt, updatedAt);
+    }
+
     public ChatRun {
         status = status == null ? ChatRunStatus.RUNNING : status;
+        runMode = runMode == null ? ChatRunMode.NEXT : runMode;
         metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
     }
 
@@ -63,8 +84,9 @@ public record ChatRun(
      */
     public ChatRun withFirstSeq(long sequence) {
         return new ChatRun(id, tenantId, userId, sessionId, status, routeType, agentCode, runtimeProvider,
-                runtimeSessionId, firstSeq == null ? sequence : firstSeq, sequence, cancelReason, startedAt,
-                finishedAt, metadata, createdAt, Instant.now());
+                runtimeSessionId, runMode, parentMessageId, userMessageId, assistantMessageId,
+                firstSeq == null ? sequence : firstSeq, sequence, cancelReason, startedAt, finishedAt,
+                metadata, createdAt, Instant.now());
     }
 
     /**
@@ -72,8 +94,8 @@ public record ChatRun(
      */
     public ChatRun withLastSeq(long sequence) {
         return new ChatRun(id, tenantId, userId, sessionId, status, routeType, agentCode, runtimeProvider,
-                runtimeSessionId, firstSeq, sequence, cancelReason, startedAt, finishedAt, metadata, createdAt,
-                Instant.now());
+                runtimeSessionId, runMode, parentMessageId, userMessageId, assistantMessageId,
+                firstSeq, sequence, cancelReason, startedAt, finishedAt, metadata, createdAt, Instant.now());
     }
 
     /**
@@ -81,8 +103,17 @@ public record ChatRun(
      */
     public ChatRun withRuntimeSessionId(String nextRuntimeSessionId) {
         return new ChatRun(id, tenantId, userId, sessionId, status, routeType, agentCode, runtimeProvider,
-                nextRuntimeSessionId, firstSeq, lastSeq, cancelReason, startedAt, finishedAt, metadata, createdAt,
-                Instant.now());
+                nextRuntimeSessionId, runMode, parentMessageId, userMessageId, assistantMessageId,
+                firstSeq, lastSeq, cancelReason, startedAt, finishedAt, metadata, createdAt, Instant.now());
+    }
+
+    /**
+     * 回填 run 完成后生成的 assistant 消息 ID。
+     */
+    public ChatRun withAssistantMessageId(String nextAssistantMessageId) {
+        return new ChatRun(id, tenantId, userId, sessionId, status, routeType, agentCode, runtimeProvider,
+                runtimeSessionId, runMode, parentMessageId, userMessageId, nextAssistantMessageId,
+                firstSeq, lastSeq, cancelReason, startedAt, finishedAt, metadata, createdAt, Instant.now());
     }
 
     /**
@@ -90,8 +121,8 @@ public record ChatRun(
      */
     public ChatRun cancelling(String reason) {
         return new ChatRun(id, tenantId, userId, sessionId, ChatRunStatus.CANCELLING, routeType, agentCode,
-                runtimeProvider, runtimeSessionId, firstSeq, lastSeq, reason, startedAt, finishedAt, metadata,
-                createdAt, Instant.now());
+                runtimeProvider, runtimeSessionId, runMode, parentMessageId, userMessageId, assistantMessageId,
+                firstSeq, lastSeq, reason, startedAt, finishedAt, metadata, createdAt, Instant.now());
     }
 
     /**
@@ -100,8 +131,8 @@ public record ChatRun(
     public ChatRun cancelled(long sequence) {
         Instant now = Instant.now();
         return new ChatRun(id, tenantId, userId, sessionId, ChatRunStatus.CANCELLED, routeType, agentCode,
-                runtimeProvider, runtimeSessionId, firstSeq, sequence, cancelReason, startedAt, now, metadata,
-                createdAt, now);
+                runtimeProvider, runtimeSessionId, runMode, parentMessageId, userMessageId, assistantMessageId,
+                firstSeq, sequence, cancelReason, startedAt, now, metadata, createdAt, now);
     }
 
     /**
@@ -110,8 +141,8 @@ public record ChatRun(
     public ChatRun completed(long sequence) {
         Instant now = Instant.now();
         return new ChatRun(id, tenantId, userId, sessionId, ChatRunStatus.COMPLETED, routeType, agentCode,
-                runtimeProvider, runtimeSessionId, firstSeq, sequence, cancelReason, startedAt, now, metadata,
-                createdAt, now);
+                runtimeProvider, runtimeSessionId, runMode, parentMessageId, userMessageId, assistantMessageId,
+                firstSeq, sequence, cancelReason, startedAt, now, metadata, createdAt, now);
     }
 
     /**
@@ -120,7 +151,7 @@ public record ChatRun(
     public ChatRun failed(long sequence) {
         Instant now = Instant.now();
         return new ChatRun(id, tenantId, userId, sessionId, ChatRunStatus.FAILED, routeType, agentCode,
-                runtimeProvider, runtimeSessionId, firstSeq, sequence, cancelReason, startedAt, now, metadata,
-                createdAt, now);
+                runtimeProvider, runtimeSessionId, runMode, parentMessageId, userMessageId, assistantMessageId,
+                firstSeq, sequence, cancelReason, startedAt, now, metadata, createdAt, now);
     }
 }

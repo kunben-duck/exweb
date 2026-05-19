@@ -237,12 +237,14 @@ sequenceDiagram
 
 ```text
 POST /api/v1/ex/chat/runs
-POST /api/v1/ex/chat/runs/{runId}/retry
 POST /api/v1/ex/chat/messages/{messageId}/feedback
 POST /api/v1/ex/chat/sessions
 GET  /api/v1/ex/chat/sessions?limit=20&cursor=...
 GET  /api/v1/ex/chat/sessions/{sessionId}/state?messageLimit=50
-GET  /api/v1/ex/chat/sessions/{sessionId}/messages?limit=50&cursor=...
+GET  /api/v1/ex/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50
+GET  /api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants
+POST /api/v1/ex/chat/sessions/{sessionId}/path
+POST /api/v1/ex/chat/sessions/{sessionId}/branches
 GET  /api/v1/ex/chat/sessions/{sessionId}/events/sse?afterSeq={lastSeq}
 GET  /api/v1/ex/chat/runs/{runId}/events/sse?afterSeq={lastSeq}
 GET  /api/v1/ex/chat/sessions/{sessionId}/stream-status
@@ -255,6 +257,26 @@ POST /api/v1/ex/chat/sessions/{sessionId}/close
 
 `/chat/runs` 只返回 run 运行标识和 run 级 `streamTopicId`，不返回 WebSocket、SSE resume 或 stop URL。
 这些 URL 属于前端 SDK、网关或部署配置，避免后端业务响应承担客户端路由配置职责。
+
+## 消息树与只读分支
+
+当前版本引入会话内消息树，但不改变现有流式协议。`POST /chat/runs` 创建后台 run 时会先根据 `runMode` 解析消息树写入计划：
+
+- `NEXT`：在 `parentMessageId` 或会话 `current_leaf_message_id` 后追加新的 user 消息，run 完成后追加 assistant 消息。
+- `EDIT_USER`：校验 `editedMessageId` 是未锁定 user 消息，在原父节点下创建新的 user sibling，旧消息不变。
+- `REGENERATE_ASSISTANT`：校验 `regeneratedMessageId` 是未锁定 assistant 消息，复用其父 user 消息，run 完成后创建新的 assistant sibling。
+
+`current_leaf_message_id` 表示当前会话激活路径叶子。历史消息查询默认返回 root 到 current leaf 的路径；指定 `leafMessageId` 时返回 root 到该 leaf 的路径。前端通过 `variants` 查询同父节点候选，通过 `path` 接口切换当前激活版本。
+
+```mermaid
+flowchart TD
+    RootUser["user: 原始问题"] --> A1["assistant: 第一次回答"]
+    RootUser --> A2["assistant: 重新生成回答"]
+    RootUserEdit["user: 编辑后的问题"] --> B1["assistant: 编辑后回答"]
+    RootUser -. "same parent sibling" .- RootUserEdit
+```
+
+从某条消息新建会话分支时，服务端使用只读物化快照方案：沿 `parent_message_id` 回溯 root，复制该路径到新 session，复制出的消息写入 `source_session_id/source_message_id`，并设置 `origin_type=BRANCH_SNAPSHOT`、`locked=true`。快照消息不能编辑、删除或重新生成；分支后续新增的 `NORMAL` 消息可以继续参与消息树版本管理。分支不继承源会话 RuntimeBinding，避免把源会话 Runtime session 错接到新分支。
 
 ```mermaid
 sequenceDiagram
@@ -274,6 +296,7 @@ sequenceDiagram
 
     Frontend->>ChatAPI: "POST /chat/runs"
     ChatAPI->>SuperAgent: "后台 start(command)"
+    SuperAgent->>DB: "按 runMode 写入或定位消息树 user node"
     SuperAgent->>RunStore: "create RUNNING fin_ex_chat_run_t"
     SuperAgent->>EventStore: "append(run.started)"
     EventStore->>DB: "持久化 seq=firstSeq"
@@ -300,6 +323,7 @@ sequenceDiagram
         SuperAgent->>RunStore: "刷新 lastSeq"
         SuperAgent->>Live: "publish(delta)"
         SuperAgent->>RedisBus: "publish(delta)"
+        SuperAgent->>DB: "run.completed 后保存完整 assistant message 并更新 current leaf"
     and "前端实时订阅链路，只订阅 ChatEvent，不触发 Runtime query"
         Frontend->>ChatWS: "WS subscribe(topicId=streamTopicId, afterSeq=firstSeq)"
         ChatWS->>EventStore: "findByRunIdAndAfterSeq"
@@ -345,7 +369,7 @@ sequenceDiagram
 - 前端 WebSocket 订阅消息格式：`{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}`。
 - 前端 WebSocket 不触发 `AgentRuntime.query`，只补发和订阅 ChatEvent；它不接受聊天请求，仅支持 `connect`、`presence`、`subscribe`、`unsubscribe`、`ack` 控制消息。
 - stop 是 REST 生命周期接口，不是 WebSocket command；重复 stop 幂等返回当前 run 状态。
-- retry 会创建新的 run，不覆盖旧 run 事件；message 为空时复用原会话最近一条用户消息。
+- 重新生成回答不再使用 run retry 接口，而是通过 `POST /chat/runs` 携带 `runMode=REGENERATE_ASSISTANT` 和 `regeneratedMessageId`，在同一 user 节点下生成新的 assistant sibling。
 - 会话 state 接口聚合会话元数据、最近历史消息和 `activeStreamTopicId`，用于前端切换会话后的恢复判断。
 - 新页签、新浏览器或跨电脑恢复 active run 时，前端应使用 `activeRunFirstSeq - 1` 打开 run SSE；该接口会先按 openGauss 事实源补发历史事件，再接入 live topic 持续输出到 run 终态，不能把 `latestSeq` 或 `readCursorSeq` 当作当前渲染实例已消费游标。
 
@@ -437,7 +461,7 @@ flowchart TB
 
 ## 路由规则
 
-- active RuntimeBinding 优先级最高；存在时本轮直接续接 Relay Runtime。
+- active RuntimeBinding 优先级最高；存在时本轮按当前消息树 leaf 续接 Relay Runtime。
 - 用例库和意图服务是可选路由信号，默认关闭；关闭时不调用外部 API。
 - 用例库开启时优先匹配；命中阈值默认 `0.85`，命中并返回 `subAgentCode` 后单轮调用 SubAgent。
 - 用例库关闭或未命中后，只有意图服务开启才调用 `IntentService`。
@@ -447,11 +471,11 @@ flowchart TB
 
 ## RuntimeBinding
 
-RuntimeBinding 只维护前端 chat session 与当前 AgentRuntime provider session 的关系。当前上线默认 provider 是 `relay`。
+RuntimeBinding 只维护前端 chat session、当前消息树 leaf 与当前 AgentRuntime provider session 的关系。当前上线默认 provider 是 `relay`。leaf 维度隔离可以避免编辑历史问题、切换版本或从历史消息新建分支时误用另一条路径的 Runtime session。
 
 ```text
 Redis key:
-fin_ex:runtime_binding:{tenantId}:{userId}:{sessionId}
+fin_ex:runtime_binding:{tenantId}:{userId}:{sessionId}:{leafMessageId}
 
 openGauss table:
 fin_ex_runtime_binding_t
@@ -465,6 +489,7 @@ tenant_id
 user_id
 chat_session_id
 provider
+leaf_message_id
 runtime_session_id
 status
 last_run_id
@@ -551,6 +576,7 @@ AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 
 
 - `fin_ex_chat_session_t`
 - `fin_ex_chat_message_t`
+- `fin_ex_chat_message_attachment_t`
 - `fin_ex_chat_run_t`
 - `fin_ex_chat_event_t`
 - `fin_ex_chat_read_cursor_t`
@@ -560,7 +586,7 @@ AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 
 
 Redis key 必须以 `fin_ex` 开头：
 
-- `fin_ex:runtime_binding:{tenantId}:{userId}:{sessionId}`
+- `fin_ex:runtime_binding:{tenantId}:{userId}:{sessionId}:{leafMessageId}`
 - `fin_ex:chat_run:active:{tenantId}:{userId}:{sessionId}`
 - `fin_ex:chat_run:cancel:{runId}`
 - `fin_ex:chat_read_cursor:{tenantId}:{userId}:{sessionId}`

@@ -56,4 +56,35 @@ public interface SessionRepository {
      * @return 已保存的会话。
      */
     ChatSession save(ChatSession session);
+
+    /**
+     * 为会话生成下一个消息树节点序号。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @return 会话内新的 nodeOrder。
+     */
+    default long nextNodeOrder(String tenantId, String userId, String sessionId) {
+        return findByTenantIdAndUserIdAndId(tenantId, userId, sessionId)
+                .map(session -> session.lastNodeOrder() + 1)
+                .orElse(1L);
+    }
+
+    /**
+     * 更新会话当前 active path 叶子。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param leafMessageId 新的叶子消息 ID。
+     */
+    default void updateCurrentLeaf(String tenantId, String userId, String sessionId, String leafMessageId) {
+        findByTenantIdAndUserIdAndId(tenantId, userId, sessionId)
+                .map(session -> new ChatSession(session.id(), session.tenantId(), session.userId(), session.title(),
+                        session.status(), session.channel(), leafMessageId, session.rootSessionId(),
+                        session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
+                        session.metadataJson(), session.createdAt(), java.time.Instant.now()))
+                .ifPresent(this::save);
+    }
 }

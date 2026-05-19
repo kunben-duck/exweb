@@ -34,8 +34,9 @@ public class ApplicationAuthContextProvider implements AuthContextProvider {
 
     @Override
     public UserContext resolve() {
-        // TODO 接入企业统一权限框架时，只替换这里的读取来源，例如 SecurityContext、网关上下文或内部权限 SDK。
-        //      聊天后台 run 已经在入口处固化 UserContext，不需要在异步线程中再次读取请求上下文。
+        // 企业权限框架接入点：后续可在这里从 SecurityContext、网关上下文、
+        // ThreadLocal 企业上下文或内部权限 SDK 读取身份。聊天后台 run 已经在入口处
+        // 固化 UserContext，不需要在异步线程中再次读取请求上下文。
         String resolvedTenant = requireText(tenantId, "当前租户 ID 缺失");
         String resolvedUserId = requireText(userId, "当前用户 ID 缺失");
         String resolvedUsername = requireText(username, "当前用户名缺失");

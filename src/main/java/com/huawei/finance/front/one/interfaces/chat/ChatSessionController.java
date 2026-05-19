@@ -17,7 +17,10 @@ import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionPageDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionStateDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatStreamStatusDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatBranchRequest;
+import com.huawei.finance.front.one.interfaces.chat.dto.SelectChatPathRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.UpdateChatSessionRequest;
+import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -135,10 +138,64 @@ public class ChatSessionController {
      */
     @GetMapping("/{sessionId}/messages")
     public Mono<ChatMessagePageDto> messages(@PathVariable String sessionId,
+                                                  @RequestParam(value = "leafMessageId", required = false) String leafMessageId,
                                                   @RequestParam(value = "cursor", required = false) String cursor,
                                                   @RequestParam(value = "limit", defaultValue = "50") int limit) {
         UserContext user = resolveChatUser();
-        return Mono.fromCallable(() -> toMessagePageDto(facade.listMessages(user, sessionId, cursor, limit)))
+        return Mono.fromCallable(() -> toMessagePageDto(facade.listMessages(user, sessionId, leafMessageId, cursor, limit)))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * 查询某条消息在同一父节点下的候选版本。
+     *
+     * @param sessionId 会话标识；服务端会校验会话归属。
+     * @param messageId 消息标识；服务端会校验消息属于该会话。
+     * @return 同父节点、同角色的候选消息列表，按 siblingIndex 排列。
+     */
+    @GetMapping("/{sessionId}/messages/{messageId}/variants")
+    public Mono<List<ChatMessageDto>> variants(@PathVariable String sessionId, @PathVariable String messageId) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> facade.listVariants(user, sessionId, messageId).stream()
+                        .map(this::toMessageDto)
+                        .toList())
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * 切换会话当前 active path。
+     *
+     * <p>该接口只改变会话当前叶子，不会创建新 run，也不会触发 Runtime/SubAgent 调用。</p>
+     *
+     * @param sessionId 会话标识；服务端会校验会话归属。
+     * @param request 目标叶子消息请求。
+     * @return 切换后的会话元数据。
+     */
+    @PostMapping("/{sessionId}/path")
+    public Mono<ChatSessionDto> selectPath(@PathVariable String sessionId, @RequestBody SelectChatPathRequest request) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> toDto(facade.selectPath(user, sessionId,
+                        request == null ? null : request.leafMessageId())))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * 从会话中的某条消息创建只读历史快照分支。
+     *
+     * <p>服务端会复制 root 到来源消息的可见路径，并把复制出的历史消息标记为 locked。
+     * 新分支后续新增消息仍然是普通 NORMAL 消息，可以继续编辑或重新生成。</p>
+     *
+     * @param sessionId 来源会话标识。
+     * @param request 分支来源消息与可选标题。
+     * @return 新建分支会话元数据。
+     */
+    @PostMapping("/{sessionId}/branches")
+    public Mono<ChatSessionDto> createBranch(@PathVariable String sessionId,
+                                             @RequestBody CreateChatBranchRequest request) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> toDto(facade.createBranch(user, sessionId,
+                        request == null ? null : request.sourceMessageId(),
+                        request == null ? null : request.title())))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -210,6 +267,10 @@ public class ChatSessionController {
                 session.title(),
                 session.status(),
                 session.channel(),
+                session.currentLeafMessageId(),
+                session.rootSessionId(),
+                session.branchSourceSessionId(),
+                session.branchSourceMessageId(),
                 session.createdAt(),
                 session.updatedAt()
         );
@@ -219,9 +280,20 @@ public class ChatSessionController {
         return new ChatMessageDto(
                 message.id(),
                 message.sessionId(),
+                message.parentMessageId(),
+                message.nodeOrder(),
+                message.treeDepth(),
+                message.siblingIndex(),
                 message.role(),
                 message.content(),
                 message.tokenCount(),
+                message.runId(),
+                message.originType(),
+                message.locked(),
+                message.sourceSessionId(),
+                message.sourceMessageId(),
+                message.editedFromMessageId(),
+                message.regeneratedFromMessageId(),
                 message.createdAt()
         );
     }

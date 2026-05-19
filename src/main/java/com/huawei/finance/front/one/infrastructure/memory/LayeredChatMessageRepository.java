@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.infrastructure.memory;
 
 import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import java.time.Instant;
 import java.util.List;
@@ -89,8 +90,40 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
     }
 
     @Override
+    public ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String leafMessageId,
+                                        String cursor, int limit) {
+        return databaseStore.pageMessages(tenantId, userId, sessionId, leafMessageId, cursor, limit);
+    }
+
+    @Override
     public Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId) {
         return databaseStore.findByOwnerAndId(tenantId, userId, messageId);
+    }
+
+    @Override
+    public List<ChatMessage> findSiblings(String tenantId, String userId, String sessionId,
+                                          String parentMessageId, String role) {
+        return databaseStore.findSiblings(tenantId, userId, sessionId, parentMessageId, role);
+    }
+
+    @Override
+    public int countSiblings(String tenantId, String userId, String sessionId, String parentMessageId, String role) {
+        return databaseStore.countSiblings(tenantId, userId, sessionId, parentMessageId, role);
+    }
+
+    @Override
+    public List<ChatMessage> findPathToMessage(String tenantId, String userId, String sessionId, String leafMessageId) {
+        return databaseStore.findPathToMessage(tenantId, userId, sessionId, leafMessageId);
+    }
+
+    @Override
+    public ChatMessageAttachment saveAttachment(ChatMessageAttachment attachment) {
+        return databaseStore.saveAttachment(attachment);
+    }
+
+    @Override
+    public List<ChatMessageAttachment> findAttachments(String tenantId, String userId, String messageId) {
+        return databaseStore.findAttachments(tenantId, userId, messageId);
     }
 
     private boolean canUseDatabase() {

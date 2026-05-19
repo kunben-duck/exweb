@@ -1,23 +1,31 @@
 package com.huawei.finance.front.one.application.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.finance.front.one.domain.auth.UserContext;
+import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
+import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
+import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class SessionApplicationServiceTest {
@@ -38,11 +46,111 @@ class SessionApplicationServiceTest {
         assertThat(history).extracting(ChatMessage::content).containsExactly("first", "second");
     }
 
+    @Test
+    void normalRunCreatesUserAndAssistantAsActivePath() {
+        TestFixture fixture = fixture();
+        ChatRunMessagePlan plan = fixture.service.prepareRunMessage(user(), command("hello", ChatRunMode.NEXT,
+                null, null, null), fixture.session, "run1", List.of());
+
+        ChatMessage assistant = fixture.service.saveAssistantMessage("tenant1", "user1", fixture.session,
+                "world", "run1", plan.userMessage().id(), null);
+        List<ChatMessage> activePath = fixture.service.listMessages(user(), fixture.session.id(), null, 50).items();
+
+        assertThat(plan.userMessage().parentMessageId()).isNull();
+        assertThat(assistant.parentMessageId()).isEqualTo(plan.userMessage().id());
+        assertThat(activePath).extracting(ChatMessage::role).containsExactly("user", "assistant");
+        assertThat(fixture.sessions.findById(fixture.session.id()).orElseThrow().currentLeafMessageId())
+                .isEqualTo(assistant.id());
+    }
+
+    @Test
+    void editingHistoricalUserMessageCreatesSiblingWithoutChangingOriginal() {
+        TestFixture fixture = fixture();
+        MessagePair original = completeTurn(fixture, "原始问题", "原始回答", "run1");
+
+        ChatRunMessagePlan editedPlan = fixture.service.prepareRunMessage(user(),
+                command("编辑后的问题", ChatRunMode.EDIT_USER, null, original.user().id(), null),
+                fixture.session, "run2", List.of());
+
+        assertThat(editedPlan.userMessage().id()).isNotEqualTo(original.user().id());
+        assertThat(editedPlan.userMessage().editedFromMessageId()).isEqualTo(original.user().id());
+        assertThat(editedPlan.userMessage().parentMessageId()).isEqualTo(original.user().parentMessageId());
+        assertThat(editedPlan.userMessage().siblingIndex()).isEqualTo(2);
+        assertThat(fixture.service.listVariants(user(), fixture.session.id(), original.user().id()))
+                .extracting(ChatMessage::content)
+                .containsExactly("原始问题", "编辑后的问题");
+    }
+
+    @Test
+    void regeneratingAssistantCreatesAssistantSiblingUnderSameUser() {
+        TestFixture fixture = fixture();
+        MessagePair original = completeTurn(fixture, "问题", "第一次回答", "run1");
+
+        ChatRunMessagePlan regeneratePlan = fixture.service.prepareRunMessage(user(),
+                command(null, ChatRunMode.REGENERATE_ASSISTANT, null, null, original.assistant().id()),
+                fixture.session, "run2", List.of());
+        ChatMessage regenerated = fixture.service.saveAssistantMessage("tenant1", "user1", fixture.session,
+                "第二次回答", "run2", regeneratePlan.userMessage().id(), regeneratePlan.regeneratedFromMessageId());
+
+        assertThat(regeneratePlan.userMessage().id()).isEqualTo(original.user().id());
+        assertThat(regenerated.parentMessageId()).isEqualTo(original.user().id());
+        assertThat(regenerated.regeneratedFromMessageId()).isEqualTo(original.assistant().id());
+        assertThat(regenerated.siblingIndex()).isEqualTo(2);
+        assertThat(fixture.service.listVariants(user(), fixture.session.id(), original.assistant().id()))
+                .extracting(ChatMessage::content)
+                .containsExactly("第一次回答", "第二次回答");
+    }
+
+    @Test
+    void branchCopiesReadonlySnapshotAndRejectsEditingSnapshotMessages() {
+        TestFixture fixture = fixture();
+        MessagePair original = completeTurn(fixture, "报销问题", "报销回答", "run1");
+
+        ChatSession branch = fixture.service.createBranch(user(), fixture.session.id(), original.assistant().id(), "报销分支");
+        List<ChatMessage> branchPath = fixture.service.listMessages(user(), branch.id(), null, 50).items();
+
+        assertThat(branch.branchSourceSessionId()).isEqualTo(fixture.session.id());
+        assertThat(branch.branchSourceMessageId()).isEqualTo(original.assistant().id());
+        assertThat(branchPath).hasSize(2);
+        assertThat(branchPath).allSatisfy(message -> {
+            assertThat(message.locked()).isTrue();
+            assertThat(message.originType()).isEqualTo("BRANCH_SNAPSHOT");
+            assertThat(message.sourceSessionId()).isEqualTo(fixture.session.id());
+        });
+        assertThatThrownBy(() -> fixture.service.prepareRunMessage(user(),
+                command("不能编辑快照", ChatRunMode.EDIT_USER, null, branchPath.getFirst().id(), null),
+                branch, "run2", List.of()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("分支历史快照");
+    }
+
+    private MessagePair completeTurn(TestFixture fixture, String userText, String assistantText, String runId) {
+        ChatRunMessagePlan plan = fixture.service.prepareRunMessage(user(),
+                command(userText, ChatRunMode.NEXT, null, null, null), fixture.session, runId, List.of());
+        ChatMessage assistant = fixture.service.saveAssistantMessage("tenant1", "user1", fixture.session,
+                assistantText, runId, plan.userMessage().id(), null);
+        return new MessagePair(plan.userMessage(), assistant);
+    }
+
+    private ChatCommand command(String message, ChatRunMode mode, String parentMessageId,
+                                String editedMessageId, String regeneratedMessageId) {
+        return new ChatCommand("cmd", "tenant1", "user1", "session1", null, "web", message, List.of(), Map.of(),
+                mode, parentMessageId, editedMessageId, regeneratedMessageId);
+    }
+
+    private TestFixture fixture() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        ChatSession session = sessions.save(new ChatSession("session1", "tenant1", "user1", "title", "ACTIVE", "web",
+                null, "session1", null, null, 0L, null, Instant.now(), Instant.now()));
+        return new TestFixture(service(sessions, messages), sessions, session);
+    }
+
     private SessionApplicationService service(InMemorySessionRepository sessions, InMemoryMessageRepository messages) {
         return new SessionApplicationService(
                 sessions,
                 messages,
-                new FixedIdGenerator(),
+                new IncrementingIdGenerator(),
                 new PermissionChecker()
         );
     }
@@ -50,6 +158,11 @@ class SessionApplicationServiceTest {
     private UserContext user() {
         return new UserContext("tenant1", "user1", "User One");
     }
+
+    private record TestFixture(SessionApplicationService service, InMemorySessionRepository sessions,
+                               ChatSession session) {}
+
+    private record MessagePair(ChatMessage user, ChatMessage assistant) {}
 
     private static class InMemorySessionRepository implements SessionRepository {
         private final Map<String, ChatSession> sessions = new HashMap<>();
@@ -84,20 +197,41 @@ class SessionApplicationServiceTest {
             sessions.put(session.id(), session);
             return session;
         }
+
+        @Override
+        public long nextNodeOrder(String tenantId, String userId, String sessionId) {
+            ChatSession session = findByTenantIdAndUserIdAndId(tenantId, userId, sessionId).orElseThrow();
+            long next = (session.lastNodeOrder() == null ? 0L : session.lastNodeOrder()) + 1;
+            sessions.put(sessionId, new ChatSession(session.id(), session.tenantId(), session.userId(), session.title(),
+                    session.status(), session.channel(), session.currentLeafMessageId(), session.rootSessionId(),
+                    session.branchSourceSessionId(), session.branchSourceMessageId(), next, session.metadataJson(),
+                    session.createdAt(), Instant.now()));
+            return next;
+        }
+
+        @Override
+        public void updateCurrentLeaf(String tenantId, String userId, String sessionId, String leafMessageId) {
+            ChatSession session = findByTenantIdAndUserIdAndId(tenantId, userId, sessionId).orElseThrow();
+            sessions.put(sessionId, new ChatSession(session.id(), session.tenantId(), session.userId(), session.title(),
+                    session.status(), session.channel(), leafMessageId, session.rootSessionId(),
+                    session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
+                    session.metadataJson(), session.createdAt(), Instant.now()));
+        }
     }
 
     private static class InMemoryMessageRepository implements ChatMessageRepository {
-        private final List<ChatMessage> messages = new ArrayList<>();
+        private final Map<String, ChatMessage> messages = new LinkedHashMap<>();
+        private final List<ChatMessageAttachment> attachments = new ArrayList<>();
 
         @Override
         public ChatMessage save(ChatMessage message) {
-            messages.add(message);
+            messages.put(message.id(), message);
             return message;
         }
 
         @Override
         public List<ChatMessage> findRecentMessages(String tenantId, String userId, String sessionId, int limit) {
-            return messages.stream()
+            return messages.values().stream()
                     .filter(message -> tenantId.equals(message.tenantId()))
                     .filter(message -> userId.equals(message.userId()))
                     .filter(message -> sessionId.equals(message.sessionId()))
@@ -108,29 +242,84 @@ class SessionApplicationServiceTest {
 
         @Override
         public ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String cursor, int limit) {
-            return new ChatMessagePage(messages.stream()
+            return pageMessages(tenantId, userId, sessionId, null, cursor, limit);
+        }
+
+        @Override
+        public ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String leafMessageId,
+                                            String cursor, int limit) {
+            List<ChatMessage> items = messages.values().stream()
                     .filter(message -> tenantId.equals(message.tenantId()))
                     .filter(message -> userId.equals(message.userId()))
                     .filter(message -> sessionId.equals(message.sessionId()))
-                    .sorted(Comparator.comparing(ChatMessage::createdAt).thenComparing(ChatMessage::id))
+                    .sorted(Comparator.comparing(ChatMessage::nodeOrder, Comparator.nullsLast(Long::compareTo))
+                            .thenComparing(ChatMessage::createdAt))
                     .limit(limit)
-                    .toList(), null);
+                    .toList();
+            return new ChatMessagePage(items, null);
         }
 
         @Override
         public Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId) {
-            return messages.stream()
+            return Optional.ofNullable(messages.get(messageId))
+                    .filter(message -> tenantId.equals(message.tenantId()))
+                    .filter(message -> userId.equals(message.userId()));
+        }
+
+        @Override
+        public List<ChatMessage> findSiblings(String tenantId, String userId, String sessionId,
+                                              String parentMessageId, String role) {
+            return messages.values().stream()
                     .filter(message -> tenantId.equals(message.tenantId()))
                     .filter(message -> userId.equals(message.userId()))
-                    .filter(message -> messageId.equals(message.id()))
-                    .findFirst();
+                    .filter(message -> sessionId.equals(message.sessionId()))
+                    .filter(message -> Objects.equals(parentMessageId, message.parentMessageId()))
+                    .filter(message -> Objects.equals(role, message.role()))
+                    .sorted(Comparator.comparing(ChatMessage::siblingIndex, Comparator.nullsLast(Integer::compareTo)))
+                    .toList();
+        }
+
+        @Override
+        public int countSiblings(String tenantId, String userId, String sessionId, String parentMessageId, String role) {
+            return findSiblings(tenantId, userId, sessionId, parentMessageId, role).size();
+        }
+
+        @Override
+        public List<ChatMessage> findPathToMessage(String tenantId, String userId, String sessionId, String leafMessageId) {
+            List<ChatMessage> path = new ArrayList<>();
+            ChatMessage current = findByOwnerAndId(tenantId, userId, leafMessageId)
+                    .filter(message -> sessionId.equals(message.sessionId()))
+                    .orElse(null);
+            while (current != null) {
+                path.addFirst(current);
+                String parentMessageId = current.parentMessageId();
+                current = parentMessageId == null ? null : messages.get(parentMessageId);
+            }
+            return path;
+        }
+
+        @Override
+        public ChatMessageAttachment saveAttachment(ChatMessageAttachment attachment) {
+            attachments.add(attachment);
+            return attachment;
+        }
+
+        @Override
+        public List<ChatMessageAttachment> findAttachments(String tenantId, String userId, String messageId) {
+            return attachments.stream()
+                    .filter(attachment -> tenantId.equals(attachment.tenantId()))
+                    .filter(attachment -> userId.equals(attachment.userId()))
+                    .filter(attachment -> messageId.equals(attachment.messageId()))
+                    .toList();
         }
     }
 
-    private static class FixedIdGenerator implements IdGenerator {
+    private static class IncrementingIdGenerator implements IdGenerator {
+        private final AtomicInteger counter = new AtomicInteger();
+
         @Override
         public String newId(String prefix, IdGenerateContext context) {
-            return prefix + "_1";
+            return prefix + "_" + counter.incrementAndGet();
         }
     }
 }

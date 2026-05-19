@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.application.integration.memory;
 
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import java.util.List;
 import java.util.Optional;
@@ -44,6 +45,22 @@ public interface ChatMessageRepository {
     ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String cursor, int limit);
 
     /**
+     * 查询指定 leaf 的可见消息路径。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param leafMessageId 叶子消息；为空时使用会话 current leaf。
+     * @param cursor 保留分页游标；active path 首版返回空 nextCursor。
+     * @param limit 最大返回条数。
+     * @return root 到 leaf 的 active path。
+     */
+    default ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String leafMessageId,
+                                         String cursor, int limit) {
+        return pageMessages(tenantId, userId, sessionId, cursor, limit);
+    }
+
+    /**
      * 按归属查询单条消息。
      *
      * @param tenantId 租户标识。
@@ -52,6 +69,42 @@ public interface ChatMessageRepository {
      * @return 当前用户拥有的消息；不存在或不属于当前用户时为空。
      */
     Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId);
+
+    /**
+     * 查询同一父节点下同角色的候选消息。
+     */
+    default List<ChatMessage> findSiblings(String tenantId, String userId, String sessionId,
+                                           String parentMessageId, String role) {
+        return List.of();
+    }
+
+    /**
+     * 统计同父节点下同角色候选数量，用于生成 siblingIndex。
+     */
+    default int countSiblings(String tenantId, String userId, String sessionId, String parentMessageId, String role) {
+        return 0;
+    }
+
+    /**
+     * 查询 root 到指定消息的完整路径。
+     */
+    default List<ChatMessage> findPathToMessage(String tenantId, String userId, String sessionId, String leafMessageId) {
+        return pageMessages(tenantId, userId, sessionId, leafMessageId, null, Integer.MAX_VALUE).items();
+    }
+
+    /**
+     * 保存消息附件引用。
+     */
+    default ChatMessageAttachment saveAttachment(ChatMessageAttachment attachment) {
+        return attachment;
+    }
+
+    /**
+     * 查询指定消息的附件引用。
+     */
+    default List<ChatMessageAttachment> findAttachments(String tenantId, String userId, String messageId) {
+        return List.of();
+    }
 
     /**
      * 按会话读取最近消息的兼容方法。

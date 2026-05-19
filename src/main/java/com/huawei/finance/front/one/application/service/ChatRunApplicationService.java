@@ -7,6 +7,7 @@ import com.huawei.finance.front.one.application.integration.conversation.Session
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
+import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatRunCancelSignal;
 import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
 import com.huawei.finance.front.one.domain.chat.ChatRunStopDecision;
@@ -57,7 +58,8 @@ public class ChatRunApplicationService {
      * 创建 RUNNING 状态的 run 快照。
      */
     public ChatRun createRunning(String runId, UserContext user, String sessionId, RouteTarget route,
-                                 RuntimeBinding binding, Map<String, Object> metadata) {
+                                 RuntimeBinding binding, Map<String, Object> metadata,
+                                 ChatRunMode runMode, String parentMessageId, String userMessageId) {
         Instant now = Instant.now();
         ChatRun run = new ChatRun(
                 runId,
@@ -69,6 +71,10 @@ public class ChatRunApplicationService {
                 route == null ? null : route.selectedAgentCode(),
                 binding == null ? null : binding.provider(),
                 binding == null ? null : binding.runtimeSessionId(),
+                runMode,
+                parentMessageId,
+                userMessageId,
+                null,
                 null,
                 null,
                 null,
@@ -79,6 +85,14 @@ public class ChatRunApplicationService {
                 now
         );
         return save(run);
+    }
+
+    /**
+     * 兼容旧调用点的普通 run 创建。
+     */
+    public ChatRun createRunning(String runId, UserContext user, String sessionId, RouteTarget route,
+                                 RuntimeBinding binding, Map<String, Object> metadata) {
+        return createRunning(runId, user, sessionId, route, binding, metadata, ChatRunMode.NEXT, null, null);
     }
 
     /**
@@ -109,6 +123,15 @@ public class ChatRunApplicationService {
             next = next.withRuntimeSessionId(String.valueOf(runtimeSessionId));
         }
         return save(next);
+    }
+
+    /**
+     * run.completed 后回填最终 assistant 消息，建立 run 与可见历史消息的关联。
+     */
+    public ChatRun bindAssistantMessage(String runId, String assistantMessageId) {
+        return repository.findById(runId)
+                .map(run -> save(run.withAssistantMessageId(assistantMessageId)))
+                .orElse(null);
     }
 
     /**

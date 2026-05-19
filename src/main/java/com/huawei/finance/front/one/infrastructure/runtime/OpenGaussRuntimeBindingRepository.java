@@ -7,6 +7,7 @@ import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindi
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBindingStatus;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.stereotype.Repository;
@@ -27,8 +28,21 @@ public class OpenGaussRuntimeBindingRepository implements RuntimeBindingReposito
     }
 
     @Override
+    public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId, String provider,
+                                               String leafMessageId) {
+        return Optional.ofNullable(mapper.findActive(tenantId, userId, sessionId, provider, leafMessageId)).map(this::toDomain);
+    }
+
+    @Override
     public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId, String provider) {
-        return Optional.ofNullable(mapper.findActive(tenantId, userId, sessionId, provider)).map(this::toDomain);
+        return findActive(tenantId, userId, sessionId, provider, null);
+    }
+
+    @Override
+    public List<RuntimeBinding> findActiveBySession(String tenantId, String userId, String sessionId, String provider) {
+        return mapper.findActiveBySession(tenantId, userId, sessionId, provider).stream()
+                .map(this::toDomain)
+                .toList();
     }
 
     @Override
@@ -39,6 +53,7 @@ public class OpenGaussRuntimeBindingRepository implements RuntimeBindingReposito
                 binding.userId(),
                 binding.chatSessionId(),
                 binding.provider(),
+                binding.leafMessageId(),
                 binding.runtimeSessionId(),
                 binding.status().name(),
                 binding.lastRunId(),
@@ -57,6 +72,7 @@ public class OpenGaussRuntimeBindingRepository implements RuntimeBindingReposito
                 row.getUserId(),
                 row.getChatSessionId(),
                 row.getProvider(),
+                row.getLeafMessageId(),
                 row.getRuntimeSessionId(),
                 RuntimeBindingStatus.valueOf(row.getStatus()),
                 row.getLastRunId(),

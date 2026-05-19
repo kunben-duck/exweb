@@ -18,6 +18,18 @@ public class ChatSessionRow {
     private String status;
     /** 会话来源渠道。 */
     private String channel;
+    /** 当前 active path 叶子消息。 */
+    private String currentLeafMessageId;
+    /** 分支族根会话。 */
+    private String rootSessionId;
+    /** 分支来源会话。 */
+    private String branchSourceSessionId;
+    /** 分支来源消息。 */
+    private String branchSourceMessageId;
+    /** 当前会话最大消息节点序号。 */
+    private Long lastNodeOrder;
+    /** 会话扩展元数据 JSON。 */
+    private String metadataJson;
     /** 创建时间。 */
     private Instant createdAt;
     /** 最后更新时间。 */
@@ -35,6 +47,18 @@ public class ChatSessionRow {
     public void setStatus(String status) { this.status = status; }
     public String getChannel() { return channel; }
     public void setChannel(String channel) { this.channel = channel; }
+    public String getCurrentLeafMessageId() { return currentLeafMessageId; }
+    public void setCurrentLeafMessageId(String currentLeafMessageId) { this.currentLeafMessageId = currentLeafMessageId; }
+    public String getRootSessionId() { return rootSessionId; }
+    public void setRootSessionId(String rootSessionId) { this.rootSessionId = rootSessionId; }
+    public String getBranchSourceSessionId() { return branchSourceSessionId; }
+    public void setBranchSourceSessionId(String branchSourceSessionId) { this.branchSourceSessionId = branchSourceSessionId; }
+    public String getBranchSourceMessageId() { return branchSourceMessageId; }
+    public void setBranchSourceMessageId(String branchSourceMessageId) { this.branchSourceMessageId = branchSourceMessageId; }
+    public Long getLastNodeOrder() { return lastNodeOrder; }
+    public void setLastNodeOrder(Long lastNodeOrder) { this.lastNodeOrder = lastNodeOrder; }
+    public String getMetadataJson() { return metadataJson; }
+    public void setMetadataJson(String metadataJson) { this.metadataJson = metadataJson; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }

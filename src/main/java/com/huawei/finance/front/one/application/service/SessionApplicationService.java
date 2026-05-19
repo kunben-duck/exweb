@@ -6,13 +6,17 @@ import com.huawei.finance.front.one.application.integration.id.IdGenerateContext
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
 import com.huawei.finance.front.one.domain.auth.UserContext;
+import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
+import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
+import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import java.time.Instant;
-import java.util.Optional;
+import java.util.List;
 import org.springframework.stereotype.Service;
 
 /**
@@ -59,34 +63,23 @@ public class SessionApplicationService implements ChatSessionFacade {
 
     @Override
     public ChatMessagePage listMessages(UserContext user, String sessionId, String cursor, int limit) {
+        return listMessages(user, sessionId, null, cursor, limit);
+    }
+
+    @Override
+    public ChatMessagePage listMessages(UserContext user, String sessionId, String leafMessageId, String cursor, int limit) {
         checkChatUser(user);
         ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
-        return messageRepository.pageMessages(session.tenantId(), session.userId(), session.id(), cursor, limit);
+        if (leafMessageId != null && !leafMessageId.isBlank()) {
+            requireMessageInSession(session, leafMessageId);
+        }
+        return messageRepository.pageMessages(session.tenantId(), session.userId(), session.id(), leafMessageId, cursor, limit);
     }
 
     @Override
     public ChatSessionPage listSessions(UserContext user, String cursor, int limit) {
         checkChatUser(user);
         return sessionRepository.pageByTenantIdAndUserId(user.tenantId(), user.userId(), cursor, limit);
-    }
-
-    @Override
-    public Optional<ChatMessage> latestUserMessage(UserContext user, String sessionId) {
-        checkChatUser(user);
-        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
-        return latestUserMessage(session.tenantId(), session.userId(), session.id());
-    }
-
-    /**
-     * 查询指定会话最近一条用户消息，供 run retry 在未传新文本时复用上一轮输入。
-     *
-     * <p>该方法接收显式 owner，是因为聊天主编排已经解析并校验过 UserContext，避免再次从
-     * ThreadLocal/请求上下文读取身份导致异步 run 中上下文不一致。</p>
-     */
-    public Optional<ChatMessage> latestUserMessage(String tenantId, String userId, String sessionId) {
-        return messageRepository.findRecentMessages(tenantId, userId, sessionId, 50).stream()
-                .filter(message -> "user".equals(message.role()))
-                .findFirst();
     }
 
     @Override
@@ -118,15 +111,156 @@ public class SessionApplicationService implements ChatSessionFacade {
         return saveWith(session, session.title(), STATUS_CLOSED);
     }
 
-    public ChatMessage saveUserMessage(ChatCommand command, ChatSession session) {
-        // 用户原始输入单独保存，后续用于上下文回放和审计。
-        String messageId = idGenerator.newId("msg", IdGenerateContext.of(command.tenantId(), command.userId(), session.id()));
-        return messageRepository.save(new ChatMessage(messageId, command.tenantId(), command.userId(), session.id(), "user", command.message(), null, Instant.now()));
+    /**
+     * 根据 runMode 创建或定位本轮用户消息。
+     *
+     * <p>编辑历史消息不会覆盖旧消息，而是在旧消息父节点下创建新的 user sibling。
+     * 重新生成回答不会创建新的 user 消息，而是复用被重新生成回答的父 user 消息。</p>
+     */
+    public ChatRunMessagePlan prepareRunMessage(UserContext user, ChatCommand command, ChatSession session,
+                                                String runId, List<AttachmentRef> attachments) {
+        ChatRunMode mode = command.runMode() == null ? ChatRunMode.NEXT : command.runMode();
+        return switch (mode) {
+            case NEXT -> createNextUserMessage(user, command, session, runId, attachments);
+            case EDIT_USER -> createEditedUserMessage(user, command, session, runId, attachments);
+            case REGENERATE_ASSISTANT -> resolveRegeneratePlan(user, command, session);
+        };
     }
+
+    public ChatMessage saveUserMessage(ChatCommand command, ChatSession session) {
+        return createUserMessage(command.tenantId(), command.userId(), session, command.message(), null, command.runMode(),
+                null, null, null, List.of());
+    }
+
     public ChatMessage saveAssistantMessage(String tenantId, String userId, String sessionId, String content) {
+        ChatSession session = requireOwnedSession(tenantId, userId, sessionId, false);
+        return saveAssistantMessage(tenantId, userId, session, content, null, session.currentLeafMessageId(), null);
+    }
+
+    /**
+     * 保存完整 assistant 回复，并把会话 current leaf 移动到该回复。
+     */
+    public ChatMessage saveAssistantMessage(String tenantId, String userId, ChatSession session, String content,
+                                            String runId, String parentMessageId, String regeneratedFromMessageId) {
         // 助手消息在事件流结束后保存完整文本，避免保存大量碎片 delta。
-        String messageId = idGenerator.newId("msg", IdGenerateContext.of(tenantId, userId, sessionId));
-        return messageRepository.save(new ChatMessage(messageId, tenantId, userId, sessionId, "assistant", content, null, Instant.now()));
+        String messageId = idGenerator.newId("msg", IdGenerateContext.of(tenantId, userId, session.id()));
+        ChatMessage parent = parentMessageId == null ? null : requireMessageInSession(session, parentMessageId);
+        ChatMessage message = new ChatMessage(
+                messageId,
+                tenantId,
+                userId,
+                session.id(),
+                parentMessageId,
+                nextNodeOrder(session),
+                parent == null ? 0 : parent.treeDepth() + 1,
+                nextSiblingIndex(tenantId, userId, session.id(), parentMessageId, "assistant"),
+                "assistant",
+                content,
+                null,
+                runId,
+                "NORMAL",
+                false,
+                null,
+                null,
+                null,
+                regeneratedFromMessageId,
+                null,
+                Instant.now()
+        );
+        ChatMessage saved = messageRepository.save(message);
+        sessionRepository.updateCurrentLeaf(tenantId, userId, session.id(), saved.id());
+        return saved;
+    }
+
+    /**
+     * 查询某条消息的同父同角色候选版本。
+     */
+    public List<ChatMessage> listVariants(UserContext user, String sessionId, String messageId) {
+        checkChatUser(user);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        ChatMessage message = requireMessageInSession(session, messageId);
+        return messageRepository.findSiblings(user.tenantId(), user.userId(), session.id(),
+                message.parentMessageId(), message.role());
+    }
+
+    /**
+     * 切换会话当前 active path 到指定消息。
+     *
+     * <p>前端的消息版本游标通常挂在 user 气泡下。为了让用户切换问题版本时仍然看到
+     * 该问题下已有的回答，这里会在目标 user 消息存在 assistant 子节点时自动选择最新
+     * assistant 子节点作为真正 leaf；没有回答时才把 user 消息本身作为 leaf。</p>
+     */
+    public ChatSession selectPath(UserContext user, String sessionId, String leafMessageId) {
+        checkChatUser(user);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        ChatMessage selected = requireMessageInSession(session, leafMessageId);
+        String effectiveLeafMessageId = effectiveLeafForPathSelection(user, session, selected);
+        sessionRepository.updateCurrentLeaf(user.tenantId(), user.userId(), session.id(), effectiveLeafMessageId);
+        return requireOwnedSession(user.tenantId(), user.userId(), session.id(), false);
+    }
+
+    /**
+     * 从指定消息创建只读历史快照分支。
+     */
+    public ChatSession createBranch(UserContext user, String sessionId, String sourceMessageId, String title) {
+        checkChatUser(user);
+        ChatSession sourceSession = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        ChatMessage sourceLeaf = requireMessageInSession(sourceSession, sourceMessageId);
+        List<ChatMessage> sourcePath = messageRepository.findPathToMessage(user.tenantId(), user.userId(),
+                sourceSession.id(), sourceLeaf.id());
+        if (sourcePath.isEmpty()) {
+            throw new IllegalArgumentException("分支来源消息不存在: " + sourceMessageId);
+        }
+        Instant now = Instant.now();
+        String branchId = idGenerator.newId("session", IdGenerateContext.of(user.tenantId(), user.userId()));
+        ChatSession branch = sessionRepository.save(new ChatSession(
+                branchId,
+                user.tenantId(),
+                user.userId(),
+                title == null || title.isBlank() ? "分支 · " + sourceSession.title() : title.trim(),
+                STATUS_ACTIVE,
+                sourceSession.channel(),
+                null,
+                sourceSession.rootSessionId() == null ? sourceSession.id() : sourceSession.rootSessionId(),
+                sourceSession.id(),
+                sourceLeaf.id(),
+                0L,
+                null,
+                now,
+                now
+        ));
+        String previousNewMessageId = null;
+        ChatMessage lastCopied = null;
+        for (ChatMessage source : sourcePath) {
+            String newMessageId = idGenerator.newId("msg", IdGenerateContext.of(user.tenantId(), user.userId(), branch.id()));
+            ChatMessage copy = new ChatMessage(
+                    newMessageId,
+                    user.tenantId(),
+                    user.userId(),
+                    branch.id(),
+                    previousNewMessageId,
+                    nextNodeOrder(branch),
+                    lastCopied == null ? 0 : lastCopied.treeDepth() + 1,
+                    1,
+                    source.role(),
+                    source.content(),
+                    source.tokenCount(),
+                    null,
+                    "BRANCH_SNAPSHOT",
+                    true,
+                    source.sessionId(),
+                    source.id(),
+                    null,
+                    null,
+                    source.metadataJson(),
+                    now
+            );
+            lastCopied = messageRepository.save(copy);
+            copyAttachments(user, source, lastCopied);
+            previousNewMessageId = lastCopied.id();
+        }
+        sessionRepository.updateCurrentLeaf(user.tenantId(), user.userId(), branch.id(), previousNewMessageId);
+        return requireOwnedSession(user.tenantId(), user.userId(), branch.id(), false);
     }
     private String shortTitle(String text) { return text == null ? "新会话" : text.substring(0, Math.min(40, text.length())); }
 
@@ -139,7 +273,8 @@ public class SessionApplicationService implements ChatSessionFacade {
         String sessionId = idGenerator.newId("session", IdGenerateContext.of(tenantId, userId));
         String safeTitle = title == null || title.isBlank() ? "新会话" : title;
         String safeChannel = channel == null || channel.isBlank() ? "web" : channel;
-        return sessionRepository.save(new ChatSession(sessionId, tenantId, userId, safeTitle, STATUS_ACTIVE, safeChannel, now, now));
+        return sessionRepository.save(new ChatSession(sessionId, tenantId, userId, safeTitle, STATUS_ACTIVE, safeChannel,
+                null, sessionId, null, null, 0L, null, now, now));
     }
 
     private ChatSession requireOwnedSession(String tenantId, String userId, String sessionId) {
@@ -165,13 +300,192 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     private ChatSession touch(ChatSession session) {
-        ChatSession touched = new ChatSession(session.id(), session.tenantId(), session.userId(), session.title(), session.status(), session.channel(), session.createdAt(), Instant.now());
+        ChatSession touched = new ChatSession(session.id(), session.tenantId(), session.userId(), session.title(),
+                session.status(), session.channel(), session.currentLeafMessageId(), session.rootSessionId(),
+                session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
+                session.metadataJson(), session.createdAt(), Instant.now());
         return sessionRepository.save(touched);
     }
 
     private ChatSession saveWith(ChatSession session, String title, String status) {
         ChatSession updated = new ChatSession(session.id(), session.tenantId(), session.userId(), title, status,
-                session.channel(), session.createdAt(), Instant.now());
+                session.channel(), session.currentLeafMessageId(), session.rootSessionId(),
+                session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
+                session.metadataJson(), session.createdAt(), Instant.now());
         return sessionRepository.save(updated);
+    }
+
+    private ChatRunMessagePlan createNextUserMessage(UserContext user, ChatCommand command, ChatSession session,
+                                                     String runId, List<AttachmentRef> attachments) {
+        String parentMessageId = blankToNull(command.parentMessageId()) == null
+                ? session.currentLeafMessageId()
+                : command.parentMessageId();
+        ChatMessage message = createUserMessage(user.tenantId(), user.userId(), session, command.message(),
+                parentMessageId, ChatRunMode.NEXT, runId, null, null, attachments);
+        return new ChatRunMessagePlan(ChatRunMode.NEXT, parentMessageId, message, null);
+    }
+
+    private ChatRunMessagePlan createEditedUserMessage(UserContext user, ChatCommand command, ChatSession session,
+                                                       String runId, List<AttachmentRef> attachments) {
+        ChatMessage edited = requireMessageInSession(session, command.editedMessageId());
+        ensureUnlockedUserMessage(edited, "被编辑消息");
+        ChatMessage message = createUserMessage(user.tenantId(), user.userId(), session, command.message(),
+                edited.parentMessageId(), ChatRunMode.EDIT_USER, runId, edited.id(), null, attachments);
+        return new ChatRunMessagePlan(ChatRunMode.EDIT_USER, edited.parentMessageId(), message, null);
+    }
+
+    private ChatRunMessagePlan resolveRegeneratePlan(UserContext user, ChatCommand command, ChatSession session) {
+        ChatMessage regenerated = requireMessageInSession(session, command.regeneratedMessageId());
+        ensureUnlockedAssistantMessage(regenerated, "被重新生成消息");
+        if (regenerated.parentMessageId() == null || regenerated.parentMessageId().isBlank()) {
+            throw new IllegalArgumentException("assistant 消息缺少父 user 节点，不能重新生成");
+        }
+        ChatMessage userMessage = requireMessageInSession(session, regenerated.parentMessageId());
+        if (!"user".equals(userMessage.role())) {
+            throw new IllegalArgumentException("assistant 消息父节点不是 user 消息，不能重新生成");
+        }
+        sessionRepository.updateCurrentLeaf(user.tenantId(), user.userId(), session.id(), userMessage.id());
+        return new ChatRunMessagePlan(ChatRunMode.REGENERATE_ASSISTANT, userMessage.id(), userMessage, regenerated.id());
+    }
+
+    private ChatMessage createUserMessage(String tenantId, String userId, ChatSession session, String content,
+                                          String parentMessageId, ChatRunMode mode, String runId,
+                                          String editedFromMessageId, String regeneratedFromMessageId,
+                                          List<AttachmentRef> attachments) {
+        if (content == null || content.isBlank()) {
+            throw new IllegalArgumentException("用户消息不能为空");
+        }
+        ChatMessage parent = parentMessageId == null ? null : requireMessageInSession(session, parentMessageId);
+        String messageId = idGenerator.newId("msg", IdGenerateContext.of(tenantId, userId, session.id()));
+        ChatMessage message = new ChatMessage(
+                messageId,
+                tenantId,
+                userId,
+                session.id(),
+                parentMessageId,
+                nextNodeOrder(session),
+                parent == null ? 0 : parent.treeDepth() + 1,
+                nextSiblingIndex(tenantId, userId, session.id(), parentMessageId, "user"),
+                "user",
+                content,
+                null,
+                runId,
+                "NORMAL",
+                false,
+                null,
+                null,
+                mode == ChatRunMode.EDIT_USER ? editedFromMessageId : null,
+                regeneratedFromMessageId,
+                null,
+                Instant.now()
+        );
+        ChatMessage saved = messageRepository.save(message);
+        saveAttachments(saved, attachments);
+        sessionRepository.updateCurrentLeaf(tenantId, userId, session.id(), saved.id());
+        return saved;
+    }
+
+    private long nextNodeOrder(ChatSession session) {
+        return sessionRepository.nextNodeOrder(session.tenantId(), session.userId(), session.id());
+    }
+
+    private int nextSiblingIndex(String tenantId, String userId, String sessionId, String parentMessageId, String role) {
+        return messageRepository.countSiblings(tenantId, userId, sessionId, parentMessageId, role) + 1;
+    }
+
+    private ChatMessage requireMessageInSession(ChatSession session, String messageId) {
+        if (messageId == null || messageId.isBlank()) {
+            throw new IllegalArgumentException("messageId 不能为空");
+        }
+        return messageRepository.findByOwnerAndId(session.tenantId(), session.userId(), messageId)
+                .filter(message -> session.id().equals(message.sessionId()))
+                .orElseThrow(() -> new IllegalArgumentException("消息不存在或不属于当前会话: " + messageId));
+    }
+
+    /**
+     * 计算前端版本游标切换后的真实 leaf。
+     *
+     * <p>用户问题本身可能不是路径终点；如果它下面已经有回答，选择该问题版本时应把会话
+     * leaf 落到最新回答，保持“问题 + 回答”成对展示。assistant 或其他角色消息本身就是 leaf。</p>
+     */
+    private String effectiveLeafForPathSelection(UserContext user, ChatSession session, ChatMessage selected) {
+        if (!"user".equalsIgnoreCase(selected.role())) {
+            return selected.id();
+        }
+        return messageRepository.findSiblings(user.tenantId(), user.userId(), session.id(), selected.id(), "assistant")
+                .stream()
+                .reduce((previous, current) -> current)
+                .map(ChatMessage::id)
+                .orElse(selected.id());
+    }
+
+    private void ensureUnlockedUserMessage(ChatMessage message, String label) {
+        if (!"user".equals(message.role())) {
+            throw new IllegalArgumentException(label + "必须是 user 消息");
+        }
+        ensureUnlocked(message, label);
+    }
+
+    private void ensureUnlockedAssistantMessage(ChatMessage message, String label) {
+        if (!"assistant".equals(message.role())) {
+            throw new IllegalArgumentException(label + "必须是 assistant 消息");
+        }
+        ensureUnlocked(message, label);
+    }
+
+    private void ensureUnlocked(ChatMessage message, String label) {
+        if (message.branchSnapshot()) {
+            throw new IllegalStateException(label + "是分支历史快照，不能编辑或重新生成");
+        }
+    }
+
+    private void saveAttachments(ChatMessage message, List<AttachmentRef> attachments) {
+        if (attachments == null || attachments.isEmpty()) {
+            return;
+        }
+        int index = 0;
+        for (AttachmentRef attachment : attachments) {
+            if (attachment == null || attachment.documentId() == null || attachment.documentId().isBlank()) {
+                continue;
+            }
+            messageRepository.saveAttachment(new ChatMessageAttachment(
+                    idGenerator.newId("msg_att", IdGenerateContext.of(message.tenantId(), message.userId(), message.sessionId())),
+                    message.tenantId(),
+                    message.userId(),
+                    message.sessionId(),
+                    message.id(),
+                    attachment.documentId(),
+                    ++index,
+                    attachment.name(),
+                    attachment.contentType(),
+                    attachment.sizeBytes(),
+                    null,
+                    Instant.now()
+            ));
+        }
+    }
+
+    private void copyAttachments(UserContext user, ChatMessage source, ChatMessage target) {
+        int index = 0;
+        for (ChatMessageAttachment attachment : messageRepository.findAttachments(user.tenantId(), user.userId(), source.id())) {
+            messageRepository.saveAttachment(new ChatMessageAttachment(
+                    idGenerator.newId("msg_att", IdGenerateContext.of(user.tenantId(), user.userId(), target.sessionId())),
+                    user.tenantId(),
+                    user.userId(),
+                    target.sessionId(),
+                    target.id(),
+                    attachment.documentId(),
+                    ++index,
+                    attachment.name(),
+                    attachment.contentType(),
+                    attachment.sizeBytes(),
+                    attachment.id(),
+                    Instant.now()
+            ));
+        }
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 }

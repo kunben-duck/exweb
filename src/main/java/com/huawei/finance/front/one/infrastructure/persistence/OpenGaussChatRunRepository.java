@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
+import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
 import java.time.Instant;
 import java.util.Map;
@@ -38,6 +39,10 @@ public class OpenGaussChatRunRepository implements ChatRunRepository {
                 run.agentCode(),
                 run.runtimeProvider(),
                 run.runtimeSessionId(),
+                run.runMode().name(),
+                run.parentMessageId(),
+                run.userMessageId(),
+                run.assistantMessageId(),
                 run.firstSeq(),
                 run.lastSeq(),
                 run.cancelReason(),
@@ -76,6 +81,10 @@ public class OpenGaussChatRunRepository implements ChatRunRepository {
                 row.getAgentCode(),
                 row.getRuntimeProvider(),
                 row.getRuntimeSessionId(),
+                ChatRunMode.from(row.getRunMode()),
+                row.getParentMessageId(),
+                row.getUserMessageId(),
+                row.getAssistantMessageId(),
                 row.getFirstSeq(),
                 row.getLastSeq(),
                 row.getCancelReason(),

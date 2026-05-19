@@ -1,10 +1,9 @@
 package com.huawei.finance.front.one.infrastructure.memory;
 
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -17,8 +16,6 @@ import org.springframework.stereotype.Repository;
  */
 @Repository
 public class MyBatisChatMessageStore {
-    private static final String CURSOR_SEPARATOR = "|";
-
     private final ChatMessageMapper mapper;
 
     public MyBatisChatMessageStore(ChatMessageMapper mapper) {
@@ -31,12 +28,42 @@ public class MyBatisChatMessageStore {
                 message.tenantId(),
                 message.userId(),
                 message.sessionId(),
+                message.parentMessageId(),
+                message.nodeOrder(),
+                message.treeDepth(),
+                message.siblingIndex(),
                 message.role(),
                 message.content(),
                 message.tokenCount(),
+                message.runId(),
+                message.originType(),
+                message.locked(),
+                message.sourceSessionId(),
+                message.sourceMessageId(),
+                message.editedFromMessageId(),
+                message.regeneratedFromMessageId(),
+                message.metadataJson(),
                 message.createdAt()
         );
         return message;
+    }
+
+    public ChatMessageAttachment saveAttachment(ChatMessageAttachment attachment) {
+        mapper.insertAttachment(
+                attachment.id(),
+                attachment.tenantId(),
+                attachment.userId(),
+                attachment.sessionId(),
+                attachment.messageId(),
+                attachment.documentId(),
+                attachment.attachmentOrder(),
+                attachment.name(),
+                attachment.contentType(),
+                attachment.sizeBytes(),
+                attachment.sourceAttachmentId(),
+                attachment.createdAt()
+        );
+        return attachment;
     }
 
     public List<ChatMessage> findRecentMessages(String tenantId, String userId, String sessionId, int limit) {
@@ -44,34 +71,33 @@ public class MyBatisChatMessageStore {
             return List.of();
         }
         if (tenantId == null || userId == null) {
-            return mapper.findRecentBySession(sessionId, limit).stream().map(this::toDomain).toList();
+            return List.of();
         }
-        return mapper.findRecentByOwner(tenantId, userId, sessionId, limit).stream().map(this::toDomain).toList();
+        // SQL 先从 leaf 向 root 取最近 N 条，返回给 Runtime/SubAgent 前再恢复为上下文阅读顺序。
+        return mapper.findRecentActivePath(tenantId, userId, sessionId, null, limit).stream()
+                .map(this::toDomain)
+                .sorted(Comparator.comparing(ChatMessage::treeDepth).thenComparing(ChatMessage::nodeOrder))
+                .toList();
     }
 
     public ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String cursor, int limit) {
+        return pageMessages(tenantId, userId, sessionId, null, cursor, limit);
+    }
+
+    public ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String leafMessageId, String cursor, int limit) {
         if (sessionId == null) {
             return new ChatMessagePage(List.of(), null);
         }
-        Cursor decoded = decodeCursor(cursor);
         int pageSize = Math.max(1, Math.min(limit <= 0 ? 50 : limit, 200));
-        List<ChatMessage> rows = mapper.findPageByOwner(
-                        tenantId,
-                        userId,
-                        sessionId,
-                        decoded.createdAt(),
-                        decoded.id(),
-                        pageSize + 1
-                ).stream()
+        List<ChatMessage> rows = mapper.findActivePath(tenantId, userId, sessionId, leafMessageId).stream()
                 .map(this::toDomain)
                 .toList();
-        boolean hasMore = rows.size() > pageSize;
-        List<ChatMessage> pageItemsDescending = hasMore ? rows.subList(0, pageSize) : rows;
-        String nextCursor = hasMore ? encodeCursor(pageItemsDescending.get(pageItemsDescending.size() - 1)) : null;
-        List<ChatMessage> pageItemsAscending = pageItemsDescending.stream()
-                .sorted(Comparator.comparing(ChatMessage::createdAt).thenComparing(ChatMessage::id))
+        // active path 是一条有限可见路径，首版不再按 created_at 翻页；limit 用于保护极长历史。
+        List<ChatMessage> pageItems = rows.size() > pageSize ? rows.subList(Math.max(0, rows.size() - pageSize), rows.size()) : rows;
+        List<ChatMessage> pageItemsAscending = pageItems.stream()
+                .sorted(Comparator.comparing(ChatMessage::treeDepth).thenComparing(ChatMessage::nodeOrder))
                 .toList();
-        return new ChatMessagePage(pageItemsAscending, nextCursor);
+        return new ChatMessagePage(pageItemsAscending, null);
     }
 
     public Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId) {
@@ -81,43 +107,68 @@ public class MyBatisChatMessageStore {
         return mapper.findByOwnerAndId(tenantId, userId, messageId).map(this::toDomain);
     }
 
+    public List<ChatMessage> findSiblings(String tenantId, String userId, String sessionId, String parentMessageId, String role) {
+        return mapper.findSiblings(tenantId, userId, sessionId, parentMessageId, role).stream()
+                .map(this::toDomain)
+                .toList();
+    }
+
+    public int countSiblings(String tenantId, String userId, String sessionId, String parentMessageId, String role) {
+        return mapper.countSiblings(tenantId, userId, sessionId, parentMessageId, role);
+    }
+
+    public List<ChatMessage> findPathToMessage(String tenantId, String userId, String sessionId, String leafMessageId) {
+        return mapper.findActivePath(tenantId, userId, sessionId, leafMessageId).stream()
+                .map(this::toDomain)
+                .toList();
+    }
+
+    public List<ChatMessageAttachment> findAttachments(String tenantId, String userId, String messageId) {
+        return mapper.findAttachmentsByMessage(tenantId, userId, messageId).stream()
+                .map(this::toAttachmentDomain)
+                .toList();
+    }
+
     private ChatMessage toDomain(ChatMessageRow row) {
         return new ChatMessage(
                 row.getId(),
                 row.getTenantId(),
                 row.getUserId(),
                 row.getSessionId(),
+                row.getParentMessageId(),
+                row.getNodeOrder() == null ? 0L : row.getNodeOrder(),
+                row.getTreeDepth(),
+                row.getSiblingIndex(),
                 row.getRole(),
                 row.getContent(),
                 row.getTokenCount(),
+                row.getRunId(),
+                row.getOriginType(),
+                Boolean.TRUE.equals(row.getLocked()),
+                row.getSourceSessionId(),
+                row.getSourceMessageId(),
+                row.getEditedFromMessageId(),
+                row.getRegeneratedFromMessageId(),
+                row.getMetadataJson(),
                 row.getCreatedAt() == null ? Instant.EPOCH : row.getCreatedAt()
         );
     }
 
-    private String encodeCursor(ChatMessage message) {
-        String raw = message.createdAt().toString() + CURSOR_SEPARATOR + message.id();
-        return Base64.getUrlEncoder().encodeToString(raw.getBytes(StandardCharsets.UTF_8));
+    private ChatMessageAttachment toAttachmentDomain(ChatMessageAttachmentRow row) {
+        return new ChatMessageAttachment(
+                row.getId(),
+                row.getTenantId(),
+                row.getUserId(),
+                row.getSessionId(),
+                row.getMessageId(),
+                row.getDocumentId(),
+                row.getAttachmentOrder() == null ? 0 : row.getAttachmentOrder(),
+                row.getName(),
+                row.getContentType(),
+                row.getSizeBytes(),
+                row.getSourceAttachmentId(),
+                row.getCreatedAt() == null ? Instant.EPOCH : row.getCreatedAt()
+        );
     }
 
-    private Cursor decodeCursor(String cursor) {
-        if (cursor == null || cursor.isBlank()) {
-            return Cursor.empty();
-        }
-        try {
-            String raw = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
-            int separator = raw.indexOf(CURSOR_SEPARATOR);
-            if (separator <= 0 || separator == raw.length() - 1) {
-                return Cursor.empty();
-            }
-            return new Cursor(Instant.parse(raw.substring(0, separator)), raw.substring(separator + 1));
-        } catch (RuntimeException ex) {
-            return Cursor.empty();
-        }
-    }
-
-    private record Cursor(Instant createdAt, String id) {
-        static Cursor empty() {
-            return new Cursor(null, null);
-        }
-    }
 }

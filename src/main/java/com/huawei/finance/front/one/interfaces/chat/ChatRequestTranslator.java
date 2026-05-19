@@ -2,9 +2,9 @@ package com.huawei.finance.front.one.interfaces.chat;
 
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
+import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatAttachmentDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatRunRequest;
-import com.huawei.finance.front.one.interfaces.chat.dto.RetryChatRunRequest;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,28 +26,16 @@ public class ChatRequestTranslator {
      * @return 应用层聊天命令，tenantId/userId 保持为空并由聊天编排用入口 UserContext 回填。
      */
     public ChatCommand toCommand(CreateChatRunRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("创建 run 请求体不能为空");
+        }
         Map<String, Object> metadata = normalizeMetadata(request.metadata());
         // 身份字段留空进入 application，由 Controller 入口解析出的 UserContext 统一回填。
         // 这样前端无法通过 Header/Query/Body 改写租户或用户，后续接入企业权限框架也只替换身份防腐层。
         return new ChatCommand(request.commandId(), null, null, request.sessionId(), request.conversationId(), "web",
-                request.message(), toAttachmentRefs(request.attachments()), metadata);
-    }
-
-    /**
-     * 将 retry 请求转换成应用命令。
-     *
-     * <p>retry 不接收 sessionId，原会话由服务端根据 runId 回查，避免前端把一个 run 重试到
-     * 另一个不相关会话中。</p>
-     *
-     * @param request 前端重试请求，可为空。
-     * @return 应用层聊天命令，sessionId 为空并由 retry 服务根据 runId 回填。
-     */
-    public ChatCommand toRetryCommand(RetryChatRunRequest request) {
-        RetryChatRunRequest safeRequest = request == null
-                ? new RetryChatRunRequest(null, null, null, List.of(), Map.of())
-                : request;
-        return new ChatCommand(safeRequest.commandId(), null, null, null, safeRequest.conversationId(), "web",
-                safeRequest.message(), toAttachmentRefs(safeRequest.attachments()), normalizeMetadata(safeRequest.metadata()));
+                request.message(), toAttachmentRefs(request.attachments()), metadata,
+                ChatRunMode.from(request.runMode()), request.parentMessageId(), request.editedMessageId(),
+                request.regeneratedMessageId());
     }
 
     private Map<String, Object> normalizeMetadata(Map<String, Object> metadata) {

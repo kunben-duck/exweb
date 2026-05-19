@@ -85,7 +85,6 @@ function bindUi() {
   bindClick("restoreSessionBtn", () => mutateSession("restore"));
   bindClick("closeSessionBtn", () => mutateSession("close"));
   bindClick("stopRunBtn", stopRun);
-  bindClick("retryRunBtn", retryRun);
   bindClick("resumeSseBtn", () => requireSession(sessionId => resumeSse(sessionId, lastSeq(sessionId))));
   bindClick("restoreActiveRunBtn", restoreActiveRun);
   bindClick("refreshDocsBtn", refreshDocuments);
@@ -300,8 +299,17 @@ function renderHistory(messages) {
   for (const message of messages) {
     appendMessage(message.role, message.content || "", {
       messageId: message.messageId,
-      createdAt: message.createdAt
-    });
+      createdAt: message.createdAt,
+      parentMessageId: message.parentMessageId,
+      nodeOrder: message.nodeOrder,
+      treeDepth: message.treeDepth,
+      siblingIndex: message.siblingIndex,
+      runId: message.runId,
+      originType: message.originType,
+      locked: message.locked,
+      editedFromMessageId: message.editedFromMessageId,
+      regeneratedFromMessageId: message.regeneratedFromMessageId
+    }, message);
   }
   scrollMessages();
 }
@@ -344,8 +352,16 @@ async function sendRun() {
     }
   };
 
-  appendMessage("user", message);
   $("messageInput").value = "";
+  await startRunRequest(body, { optimisticUserMessage: message });
+}
+
+async function startRunRequest(body, { optimisticUserMessage = null } = {}) {
+  // 本地联调台复用同一个 run 创建流程承载普通提问、编辑历史问题和重新生成回答。
+  // 后端仍以 /chat/runs 为唯一提问入口，runMode 决定消息树写入方式。
+  if (optimisticUserMessage) {
+    appendMessage("user", optimisticUserMessage);
+  }
   state.activeRunId = null;
   state.activeTopicId = null;
   state.activeRunStatus = "STARTING";
@@ -380,6 +396,7 @@ async function sendRun() {
   setSessionSeq(run.sessionId, Math.max(lastSeq(run.sessionId), Number(run.firstSeq || 0)));
   await ensureWs();
   subscribeTopic(run.streamTopicId, run.firstSeq || 0);
+  return run;
 }
 
 async function stopRun() {
@@ -403,22 +420,6 @@ async function stopRun() {
     await resumeSse(result.sessionId, resumeAfterSeq);
   }
   log(`stop ${result.runId} -> ${result.status}`);
-}
-
-async function retryRun() {
-  if (isRunInProgress()) return alert("当前回答仍在生成中，请先停止或等待完成后再重新生成");
-  if (!state.activeRunId) return alert("没有可重试 run");
-  const run = await requestJson(`/api/v1/ex/chat/runs/${encodeURIComponent(state.activeRunId)}/retry`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ commandId: `retry_${Date.now()}`, message: null, attachments: [], metadata: { source: "local-test-frontend" } })
-  });
-  state.activeRunId = run.runId;
-  state.activeTopicId = run.streamTopicId;
-  state.activeRunStatus = "RUNNING";
-  setActiveRunLabel();
-  await ensureWs();
-  subscribeTopic(run.streamTopicId, run.firstSeq || 0);
 }
 
 async function restoreActiveRun() {
@@ -690,7 +691,7 @@ function appendAssistantText(runId, delta) {
   scrollMessages();
 }
 
-function appendMessage(role, content, dataset = {}) {
+function appendMessage(role, content, dataset = {}, message = null) {
   const node = document.createElement("div");
   node.className = `message ${role || "system"}`;
   for (const [key, value] of Object.entries(dataset)) {
@@ -702,17 +703,131 @@ function appendMessage(role, content, dataset = {}) {
   contentNode.textContent = content;
   node.appendChild(contentNode);
 
-  if (role === "assistant" && dataset.messageId) {
+  if (dataset.messageId) {
+    node.appendChild(messageMeta(dataset));
     const actions = document.createElement("div");
     actions.className = "message-actions";
-    actions.appendChild(feedbackButton(dataset.messageId, "LIKE", "赞"));
-    actions.appendChild(feedbackButton(dataset.messageId, "DISLIKE", "踩"));
+    const locked = isLockedMessage(dataset);
+    actions.appendChild(messageActionButton("复制", false, () => copyMessageContent(message || dataset, content)));
+    if (role === "user") {
+      actions.appendChild(messageActionButton("编辑", locked, () => editUserMessage(message || dataset)));
+    }
+    if (role === "assistant") {
+      actions.appendChild(messageActionButton("重新生成", locked, () => regenerateAssistantMessage(message || dataset)));
+      actions.appendChild(feedbackButton(dataset.messageId, "LIKE", "赞"));
+      actions.appendChild(feedbackButton(dataset.messageId, "DISLIKE", "踩"));
+    }
+    const navigator = messageVersionNavigator();
+    actions.appendChild(navigator.node);
+    actions.appendChild(messageActionButton("新建分支", false, () => createBranchFromMessage(message || dataset)));
     node.appendChild(actions);
+    hydrateMessageVersionNavigator(message || dataset, navigator);
   }
 
   $("messages").appendChild(node);
   scrollMessages();
   return node;
+}
+
+function messageMeta(dataset) {
+  const meta = document.createElement("div");
+  meta.className = "message-meta";
+  const parts = [
+    dataset.messageId,
+    dataset.originType || "NORMAL",
+    `v${dataset.siblingIndex || 1}`,
+    dataset.locked === true || dataset.locked === "true" ? "locked" : null
+  ].filter(Boolean);
+  meta.textContent = parts.join(" · ");
+  return meta;
+}
+
+function messageActionButton(label, disabled, handler) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.disabled = Boolean(disabled);
+  button.addEventListener("click", () => runSafely(handler));
+  return button;
+}
+
+function isLockedMessage(message) {
+  return message?.locked === true || message?.locked === "true";
+}
+
+async function copyMessageContent(message, fallbackContent) {
+  const text = String(message?.content ?? fallbackContent ?? "");
+  if (!text) return;
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+  } else {
+    const box = document.createElement("textarea");
+    box.value = text;
+    box.style.position = "fixed";
+    box.style.left = "-9999px";
+    document.body.appendChild(box);
+    box.select();
+    document.execCommand("copy");
+    box.remove();
+  }
+  log(`message copied ${message.messageId || "-"}`);
+}
+
+function messageVersionNavigator() {
+  // 类 ChatGPT 的版本游标：同父同角色 sibling 超过一个时显示 < 1/3 >。
+  // 游标只负责切换当前会话 active path，不会创建新的 run。
+  const node = document.createElement("span");
+  node.className = "version-nav";
+  node.hidden = true;
+
+  const previous = document.createElement("button");
+  previous.type = "button";
+  previous.className = "icon-button";
+  previous.textContent = "<";
+  previous.title = "上一个历史版本";
+  previous.disabled = true;
+
+  const label = document.createElement("span");
+  label.className = "version-label";
+  label.textContent = "1/1";
+
+  const next = document.createElement("button");
+  next.type = "button";
+  next.className = "icon-button";
+  next.textContent = ">";
+  next.title = "下一个历史版本";
+  next.disabled = true;
+
+  node.append(previous, label, next);
+  return { node, previous, label, next };
+}
+
+async function hydrateMessageVersionNavigator(message, navigator) {
+  // 版本信息来自服务端事实源，避免前端只凭当前 path 猜测 sibling 数量。
+  const messageId = message?.messageId || message?.id;
+  if (!messageId) return;
+  try {
+    const variants = await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(requireSessionId())}/messages/${encodeURIComponent(messageId)}/variants`);
+    if (variants.length <= 1) {
+      navigator.node.hidden = true;
+      return;
+    }
+    const index = Math.max(0, variants.findIndex(item => item.messageId === messageId));
+    navigator.node.hidden = false;
+    renderVersionNavigator(navigator, variants, index);
+  } catch (error) {
+    log(`version nav failed ${messageId}: ${error.message}`);
+  }
+}
+
+function renderVersionNavigator(navigator, variants, index) {
+  // variants 已由后端按 siblingIndex 排序，左右箭头直接按数组位置切换。
+  const current = Math.max(0, Math.min(index, variants.length - 1));
+  navigator.label.textContent = `${current + 1}/${variants.length}`;
+  navigator.previous.disabled = current <= 0;
+  navigator.next.disabled = current >= variants.length - 1;
+  navigator.previous.onclick = () => runSafely(() => selectMessagePath(variants[current - 1].messageId));
+  navigator.next.onclick = () => runSafely(() => selectMessagePath(variants[current + 1].messageId));
 }
 
 function feedbackButton(messageId, rating, label) {
@@ -737,6 +852,70 @@ async function submitFeedback(messageId, rating) {
     })
   });
   log(`feedback ${feedback.feedbackId} ${feedback.rating}`);
+}
+
+async function editUserMessage(message) {
+  if (isRunInProgress()) return alert("当前回答仍在生成中，请先停止或等待完成后再编辑消息");
+  if (isLockedMessage(message)) return alert("分支快照消息是只读的，不能编辑");
+  const messageId = message.messageId || message.id;
+  const original = message.content || "";
+  const next = prompt("编辑这条用户消息，并从该位置重新提问：", original);
+  if (!next || next.trim() === original.trim()) return;
+  const body = {
+    commandId: `edit_${Date.now()}`,
+    sessionId: requireSessionId(),
+    conversationId: requireSessionId(),
+    message: next.trim(),
+    runMode: "EDIT_USER",
+    editedMessageId: messageId,
+    attachments: [],
+    metadata: { source: "local-test-frontend", treeAction: "edit-user" }
+  };
+  await startRunRequest(body, { optimisticUserMessage: next.trim() });
+  log(`edit user message ${messageId}`);
+}
+
+async function regenerateAssistantMessage(message) {
+  if (isRunInProgress()) return alert("当前回答仍在生成中，请先停止或等待完成后再重新生成");
+  if (isLockedMessage(message)) return alert("分支快照消息是只读的，不能重新生成");
+  const messageId = message.messageId || message.id;
+  if (!confirm("确认基于这条 assistant 消息重新生成一个候选回答？")) return;
+  const body = {
+    commandId: `regen_${Date.now()}`,
+    sessionId: requireSessionId(),
+    conversationId: requireSessionId(),
+    message: null,
+    runMode: "REGENERATE_ASSISTANT",
+    regeneratedMessageId: messageId,
+    attachments: [],
+    metadata: { source: "local-test-frontend", treeAction: "regenerate-assistant" }
+  };
+  await startRunRequest(body);
+  log(`regenerate assistant message ${messageId}`);
+}
+
+async function createBranchFromMessage(message) {
+  const messageId = message.messageId || message.id;
+  const title = prompt("新分支标题：", `从 ${messageId.slice(0, 12)} 新建分支`);
+  if (title === null) return;
+  const session = await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(requireSessionId())}/branches`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sourceMessageId: messageId, title: title.trim() || null })
+  });
+  await refreshSessions();
+  await selectSession(session.sessionId);
+  log(`branch created ${session.sessionId} from ${messageId}`);
+}
+
+async function selectMessagePath(leafMessageId) {
+  await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(requireSessionId())}/path`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ leafMessageId })
+  });
+  await loadSessionState(requireSessionId(), false);
+  log(`path selected leaf=${leafMessageId}`);
 }
 
 async function refreshDocuments() {
@@ -907,9 +1086,8 @@ function setActiveRunLabel() {
 function updateRunControls() {
   const sendButton = $("sendRunBtn");
   const stopButton = $("stopRunBtn");
-  const retryButton = $("retryRunBtn");
   const forceNewTask = $("forceNewTask");
-  if (!sendButton || !stopButton || !retryButton || !forceNewTask) return;
+  if (!sendButton || !stopButton || !forceNewTask) return;
 
   const starting = state.activeRunStatus === "STARTING";
   const running = isRunInProgressStatus(state.activeRunStatus);
@@ -919,7 +1097,6 @@ function updateRunControls() {
   sendButton.textContent = starting ? "启动中..." : running ? "生成中..." : "发送 run";
   stopButton.disabled = !cancellable;
   stopButton.textContent = state.activeRunStatus === "CANCELLING" ? "停止中..." : "停止回答";
-  retryButton.disabled = starting || running || !state.activeRunId;
   forceNewTask.disabled = starting || running;
 }
 

@@ -17,7 +17,6 @@ import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatRunRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatRunStartDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatRunStopDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatStreamStatusDto;
-import com.huawei.finance.front.one.interfaces.chat.dto.RetryChatRunRequest;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -96,28 +95,6 @@ public class ChatController {
         UserContext user = resolveChatUser();
         return chatFacade.stopRun(user, runId)
                 .map(this::toStopDto)
-                .subscribeOn(Schedulers.boundedElastic());
-    }
-
-    /**
-     * 基于原 run 所属会话重新生成回答。
-     *
-     * @param runId 被重试的原 run 标识；新回答会创建新的 run，不覆盖旧 run 事件。
-     * @param request 重试请求；message 为空时复用原会话最近一条用户消息。
-     * @return 新 run 的创建结果。
-     */
-    @PostMapping(value = "/runs/{runId}/retry")
-    public Mono<ChatRunStartDto> retryRun(@PathVariable String runId,
-                                                 @RequestBody(required = false) RetryChatRunRequest request) {
-        UserContext user = resolveChatUser();
-        return chatFacade.retryRun(user, runId, requestTranslator.toRetryCommand(request))
-                .map(runStart -> new ChatRunStartDto(
-                        runStart.runId(),
-                        runStart.sessionId(),
-                        runStart.firstSeq(),
-                        runStart.createdAt(),
-                        runStart.streamTopicId()
-                ))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 

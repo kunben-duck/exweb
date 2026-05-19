@@ -5,7 +5,6 @@ import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
-import java.util.Optional;
 
 /**
  * 会话应用门面。
@@ -55,13 +54,18 @@ public interface ChatSessionFacade {
     ChatMessagePage listMessages(UserContext user, String sessionId, String cursor, int limit);
 
     /**
-     * 查询当前用户可见会话中最近一条用户消息。
+     * 查询当前用户可见会话某条 leaf 对应的 active path。
      *
      * @param user 请求入口解析出的不可变用户身份快照。
      * @param sessionId 会话标识。
-     * @return 最近一条用户消息；不存在时为空。
+     * @param leafMessageId 指定 leaf；为空时使用会话当前 leaf。
+     * @param cursor 保留分页游标；当前 active path 查询返回空 nextCursor。
+     * @param limit 最大返回条数。
+     * @return root 到 leaf 的可见消息路径。
      */
-    Optional<ChatMessage> latestUserMessage(UserContext user, String sessionId);
+    default ChatMessagePage listMessages(UserContext user, String sessionId, String leafMessageId, String cursor, int limit) {
+        return listMessages(user, sessionId, cursor, limit);
+    }
 
     /**
      * 重命名当前用户可见的会话。
@@ -99,4 +103,25 @@ public interface ChatSessionFacade {
      * @return 关闭后的会话元数据。
      */
     ChatSession closeSession(UserContext user, String sessionId);
+
+    /**
+     * 查询指定消息的同父同角色候选版本。
+     */
+    default java.util.List<ChatMessage> listVariants(UserContext user, String sessionId, String messageId) {
+        return java.util.List.of();
+    }
+
+    /**
+     * 切换当前会话 active path 到指定叶子。
+     */
+    default ChatSession selectPath(UserContext user, String sessionId, String leafMessageId) {
+        return getSession(user, sessionId);
+    }
+
+    /**
+     * 从某条消息创建只读历史快照分支会话。
+     */
+    default ChatSession createBranch(UserContext user, String sessionId, String sourceMessageId, String title) {
+        return getSession(user, sessionId);
+    }
 }

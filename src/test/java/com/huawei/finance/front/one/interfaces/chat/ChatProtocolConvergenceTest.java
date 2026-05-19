@@ -92,11 +92,6 @@ class ChatProtocolConvergenceTest {
         }
 
         @Override
-        public Mono<ChatRunStartResult> retryRun(UserContext user, String runId, ChatCommand command) {
-            return Mono.just(runStart);
-        }
-
-        @Override
         public Mono<ChatRunStopResult> stopRun(UserContext user, String runId) {
             return Mono.just(stopResult);
         }

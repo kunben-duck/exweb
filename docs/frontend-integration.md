@@ -27,12 +27,14 @@ export FINANCEEX_DEV_USERNAME=developer
 | 会话列表 | `GET` | `/api/v1/ex/chat/sessions?limit=20&cursor=...` | 当前用户会话分页 |
 | 会话详情 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}` | 查询单个会话元数据 |
 | 会话状态 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/state?messageLimit=50` | 切换会话时聚合会话、历史消息和流状态 |
-| 历史消息 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages?limit=50&cursor=...` | 选择会话后分页查询历史消息 |
+| 历史消息 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50` | 查询当前 active path 或指定 leaf path |
+| 消息版本 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants` | 查询同父节点候选版本 |
+| 切换路径 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/path` | 将会话当前 leaf 切换到指定消息 |
+| 新建分支 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/branches` | 从某条消息创建只读历史快照分支 |
 | 重命名会话 | `PATCH` | `/api/v1/ex/chat/sessions/{sessionId}` | 更新会话标题 |
 | 归档/恢复会话 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/archive`、`/restore` | 会话列表管理 |
 | 关闭会话 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/close` | 将会话置为关闭状态 |
 | 创建 run | `POST` | `/api/v1/ex/chat/runs` | 唯一提问入口，返回 `streamTopicId` |
-| 重新生成 | `POST` | `/api/v1/ex/chat/runs/{runId}/retry` | 基于原 run 所属会话创建新 run |
 | WebSocket | `WS` | `/api/v1/ex/chat/ws` | 用户级长连接，按 run topic 订阅实时事件 |
 | 会话 SSE 补发 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/events/sse?afterSeq={seq}` | 有限补发整个会话缺失事件 |
 | Run SSE 恢复 | `GET` | `/api/v1/ex/chat/runs/{runId}/events/sse?afterSeq={seq}` | 跨页签、跨浏览器或跨电脑续接正在输出的当前回答 |
@@ -49,7 +51,7 @@ export FINANCEEX_DEV_USERNAME=developer
 
 旧版 `POST /chat/sse`、`POST /chat/stream`、NDJSON resume、WebSocket 直接发聊天请求均已删除，前端不要继续调用。
 
-仓库中提供了一个独立本地联调台：`local-test-frontend/`。它通过本地 Node 代理访问 `/api/v1/ex/**`，可用于验证会话、文档库、run、WebSocket topic、SSE resume、stop/retry 和跨页签续接，不会影响后端代码。
+仓库中提供了一个独立本地联调台：`local-test-frontend/`。它通过本地 Node 代理访问 `/api/v1/ex/**`，可用于验证会话、消息树、文档库、run、WebSocket topic、SSE resume、stop 和跨页签续接，不会影响后端代码。
 
 本地联调台支持类似 Postman 的自定义请求头配置。由于浏览器不能直接设置 `Cookie` 请求头，也不能给原生 `WebSocket` 自定义握手 header，联调台采用本地代理 profile：页面左侧“鉴权请求头”保存 `Cookie/Authorization/X-*` 后，浏览器只携带非敏感 profileId，`server.mjs` 代理在转发 HTTP、fetch SSE、文件下载和 WebSocket 握手时统一注入真实请求头。该能力只用于本地调试企业鉴权框架，不属于生产前端协议。
 
@@ -64,8 +66,11 @@ export FINANCEEX_DEV_USERNAME=developer
 | `POST /api/v1/ex/chat/sessions` | 用户点击“新建会话”时显式创建。 | JSON body：`title` 可选，`channel` 可选，默认可为空。 | `ChatSessionDto`：`sessionId`、`title`、`status`、`channel`、`createdAt`、`updatedAt`。 | 前端不传租户和用户；后端从身份上下文解析。 |
 | `GET /api/v1/ex/chat/sessions` | 左侧会话列表分页加载。 | Query：`limit` 可选，默认 20；`cursor` 可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`。 | 返回按最近更新时间倒序排列；`nextCursor=null` 表示无下一页。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
-| `GET /api/v1/ex/chat/sessions/{sessionId}/state` | 切换会话或跨电脑打开会话时首选。 | Path：`sessionId`；Query：`messageLimit` 可选，默认 50。 | `ChatSessionStateDto`：`session`、`messages`、`streamStatus`。 | 该接口不会返回正在输出的半截 assistant 历史消息；active run 需要继续用 run SSE 恢复。 |
-| `GET /api/v1/ex/chat/sessions/{sessionId}/messages` | 历史消息分页回看。 | Path：`sessionId`；Query：`limit` 默认 50，`cursor` 可选。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 只返回完整落库的 user/assistant 消息；流式增量以 event 为准。 |
+| `GET /api/v1/ex/chat/sessions/{sessionId}/state` | 切换会话或跨电脑打开会话时首选。 | Path：`sessionId`；Query：`messageLimit` 可选，默认 50。 | `ChatSessionStateDto`：`session`、`messages`、`streamStatus`。 | `messages` 返回当前 active path；该接口不会返回正在输出的半截 assistant 历史消息。 |
+| `GET /api/v1/ex/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 保留。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 不传 `leafMessageId` 时返回当前 active path；传入时返回 root 到该 leaf 的路径。 |
+| `GET /api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants` | 切换编辑/重新生成后的候选版本。 | Path：`sessionId`、`messageId`。 | `ChatMessageDto[]`。 | 返回同父节点、同角色的 sibling 版本。 |
+| `POST /api/v1/ex/chat/sessions/{sessionId}/path` | 用户选择某个历史版本作为当前路径。 | Path：`sessionId`；JSON body：`leafMessageId`。 | `ChatSessionDto`。 | 只切换 `currentLeafMessageId`，不创建 run。 |
+| `POST /api/v1/ex/chat/sessions/{sessionId}/branches` | 从某条消息新建只读历史快照分支。 | Path：来源 `sessionId`；JSON body：`sourceMessageId` 必填，`title` 可选。 | 新分支 `ChatSessionDto`。 | 复制 root 到来源消息路径；快照消息 locked，不可编辑/重新生成。 |
 | `PATCH /api/v1/ex/chat/sessions/{sessionId}` | 用户重命名会话。 | Path：`sessionId`；JSON body：`title`。 | `ChatSessionDto`。 | `title` 为空时保留原值。 |
 | `POST /api/v1/ex/chat/sessions/{sessionId}/archive` | 用户归档会话。 | Path：`sessionId`。 | `ChatSessionDto`。 | 归档通常用于列表隐藏，不删除历史。 |
 | `POST /api/v1/ex/chat/sessions/{sessionId}/restore` | 用户恢复归档会话。 | Path：`sessionId`。 | `ChatSessionDto`。 | 恢复后可重新出现在普通会话列表。 |
@@ -75,8 +80,7 @@ export FINANCEEX_DEV_USERNAME=developer
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/chat/runs` | 唯一提问入口，创建后台 run。 | JSON body：`commandId` 可选，`sessionId` 可选，`conversationId` 可选，`message` 必填，`attachments[]` 可选，`metadata` 可选。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | 不返回 WebSocket/SSE/stop URL；这些地址由前端配置。 |
-| `POST /api/v1/ex/chat/runs/{runId}/retry` | 重新生成回答。 | Path：原 `runId`；JSON body：`commandId`、`conversationId`、`message`、`attachments[]`、`metadata` 均可选。 | 新的 `ChatRunStartDto`。 | 不覆盖原 run；`message=null` 时复用原会话最近一条用户消息。 |
+| `POST /api/v1/ex/chat/runs` | 唯一提问入口，创建后台 run。 | JSON body：`commandId` 可选，`sessionId` 可选，`conversationId` 可选，`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`attachments[]`、`metadata`。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | `runMode` 默认 `NEXT`；编辑和重新生成不会覆盖历史消息。 |
 | `POST /api/v1/ex/chat/runs/{runId}/stop` | 用户点击停止回答。 | Path：`runId`。 | `ChatRunStopDto`：`runId`、`sessionId`、`status`、`latestSeq`、`stoppedAt`。 | 幂等；停止语义不是关闭 WebSocket。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/events/sse` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ChatEventDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`。 |
 | `GET /api/v1/ex/chat/runs/{runId}/events/sse` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ChatEventDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态。 |
@@ -235,6 +239,10 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/state?messageLim
     "title": "财经问答",
     "status": "ACTIVE",
     "channel": "web",
+    "currentLeafMessageId": "msg_002",
+    "rootSessionId": "session_xxx",
+    "branchSourceSessionId": null,
+    "branchSourceMessageId": null,
     "createdAt": "2026-05-17T01:00:00Z",
     "updatedAt": "2026-05-17T01:10:00Z"
   },
@@ -243,9 +251,20 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/state?messageLim
       {
         "messageId": "msg_001",
         "sessionId": "session_xxx",
+        "parentMessageId": null,
+        "nodeOrder": 1,
+        "treeDepth": 0,
+        "siblingIndex": 1,
         "role": "user",
         "content": "帮我分析一下这个费用趋势",
         "tokenCount": null,
+        "runId": "run_xxx",
+        "originType": "NORMAL",
+        "locked": false,
+        "sourceSessionId": null,
+        "sourceMessageId": null,
+        "editedFromMessageId": null,
+        "regeneratedFromMessageId": null,
         "createdAt": "2026-05-17T01:01:00Z"
       }
     ],
@@ -268,7 +287,10 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/state?messageLim
 单独分页查询历史消息：
 
 ```bash
-curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages?limit=50&cursor=..."
+curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages?limit=50"
+
+# 查询某个历史版本 leaf 的路径
+curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages?leafMessageId=msg_older_leaf&limit=50"
 ```
 
 响应按创建时间正序返回，适合直接渲染历史消息气泡：
@@ -279,17 +301,39 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages?limit=5
     {
       "messageId": "msg_001",
       "sessionId": "session_xxx",
+      "parentMessageId": null,
+      "nodeOrder": 1,
+      "treeDepth": 0,
+      "siblingIndex": 1,
       "role": "user",
       "content": "帮我分析一下这个费用趋势",
       "tokenCount": null,
+      "runId": "run_xxx",
+      "originType": "NORMAL",
+      "locked": false,
+      "sourceSessionId": null,
+      "sourceMessageId": null,
+      "editedFromMessageId": null,
+      "regeneratedFromMessageId": null,
       "createdAt": "2026-05-17T01:01:00Z"
     },
     {
       "messageId": "msg_002",
       "sessionId": "session_xxx",
+      "parentMessageId": "msg_001",
+      "nodeOrder": 2,
+      "treeDepth": 1,
+      "siblingIndex": 1,
       "role": "assistant",
       "content": "从趋势看，差旅费在三月出现明显上升...",
       "tokenCount": null,
+      "runId": "run_xxx",
+      "originType": "NORMAL",
+      "locked": false,
+      "sourceSessionId": null,
+      "sourceMessageId": null,
+      "editedFromMessageId": null,
+      "regeneratedFromMessageId": null,
       "createdAt": "2026-05-17T01:01:10Z"
     }
   ],
@@ -311,6 +355,49 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/close
 
 历史消息接口返回的是已经完整落库的 user/assistant 消息。若所选会话仍有 active run 正在输出，前端应继续调用 `stream-status` 和 run SSE 恢复缺失事件，把正在输出的增量接到当前 assistant 草稿上。
 
+## 消息版本与分支
+
+### 查询候选版本
+
+当用户编辑历史问题或重新生成回答后，同一个父节点下会出现多个 sibling。前端推荐像 ChatGPT 一样在消息下方展示
+`< 1/3 >` 形式的顺序版本游标，而不是把所有候选展开成列表。版本数量和当前位置来自 variants 接口：
+
+```bash
+curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages/msg_002/variants"
+```
+
+响应是 `ChatMessageDto[]`，其中 `siblingIndex` 表示候选序号，`editedFromMessageId` 和 `regeneratedFromMessageId` 用于说明版本来源。
+
+### 切换当前路径
+
+用户在历史版本之间切换时，只需要更新会话当前 leaf：
+
+```bash
+curl -X POST http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/path \
+  -H 'Content-Type: application/json' \
+  -d '{"leafMessageId":"msg_variant_leaf"}'
+```
+
+切换成功后，再查询 `GET /sessions/{sessionId}/messages` 会返回 root 到新 leaf 的 active path。
+如果前端在 user 消息游标上切换版本，服务端会优先把路径落到该 user 下最新的 assistant 子节点；
+这样用户看到的是“问题版本 + 对应回答”，而不是只剩一个 user 气泡。
+
+### 从某条消息新建分支
+
+```bash
+curl -X POST http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/branches \
+  -H 'Content-Type: application/json' \
+  -d '{"sourceMessageId":"msg_002","title":"费用分析分支"}'
+```
+
+服务端会把 root 到 `sourceMessageId` 的路径复制到新会话。复制出的历史消息：
+
+- `originType=BRANCH_SNAPSHOT`
+- `locked=true`
+- `sourceSessionId/sourceMessageId` 指向来源消息
+
+这些快照消息只读，不能编辑、删除或重新生成；分支后续新增的普通消息仍然可以使用 `NEXT/EDIT_USER/REGENERATE_ASSISTANT`。
+
 ## 创建 Run
 
 请求：
@@ -323,6 +410,10 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
     "sessionId": "session_xxx",
     "conversationId": "session_xxx",
     "message": "帮我分析一下这个费用趋势",
+    "runMode": "NEXT",
+    "parentMessageId": null,
+    "editedMessageId": null,
+    "regeneratedMessageId": null,
     "attachments": [],
     "metadata": {
       "clientMessageId": "msg_001"
@@ -337,7 +428,11 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
 | `commandId` | string | 否 | 前端命令 ID，用于排障和幂等扩展 |
 | `sessionId` | string | 否 | 聊天会话 ID；为空时后端会创建或归一化 |
 | `conversationId` | string | 否 | 前端对话 ID，通常与 `sessionId` 一致 |
-| `message` | string | 是 | 用户本轮输入 |
+| `message` | string | NEXT/EDIT_USER 必填 | 用户本轮输入；`REGENERATE_ASSISTANT` 可为空，服务端复用原 assistant 的父 user 消息 |
+| `runMode` | string | 否 | 消息树写入模式：`NEXT`、`EDIT_USER`、`REGENERATE_ASSISTANT`，默认 `NEXT` |
+| `parentMessageId` | string | 否 | `NEXT` 模式显式父节点；为空时使用会话 `currentLeafMessageId` |
+| `editedMessageId` | string | EDIT_USER 必填 | 被编辑的未锁定 user 消息 |
+| `regeneratedMessageId` | string | REGENERATE_ASSISTANT 必填 | 被重新生成的未锁定 assistant 消息 |
 | `attachments` | array | 否 | 文档附件引用列表 |
 | `metadata` | object | 否 | 扩展字段，例如 `clientMessageId`、`forceNewTask` |
 
@@ -365,34 +460,34 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
 
 前端不需要后端返回 WebSocket/SSE/stop URL，这些 URL 应由前端环境配置或网关配置管理。
 
-## 重新生成与反馈
-
-重新生成会基于原 run 所属会话创建一个新的 run，不覆盖旧 run 事件：
-
-```bash
-curl -X POST http://localhost:8080/api/v1/ex/chat/runs/run_xxx/retry \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "commandId": "cmd_retry_001",
-    "message": null,
-    "attachments": [],
-    "metadata": {
-      "clientMessageId": "msg_retry_001"
-    }
-  }'
-```
-
-`message=null` 时，后端复用该会话最近一条用户消息；传入 `message` 时表示基于同一会话发起一次修订提问。响应与创建 run 一致：
+编辑历史问题示例：
 
 ```json
 {
-  "runId": "run_retry_xxx",
   "sessionId": "session_xxx",
-  "firstSeq": 12020,
-  "createdAt": "2026-05-17T01:04:00Z",
-  "streamTopicId": "chat-run-run_retry_xxx"
+  "message": "把刚才的问题改成只分析差旅费",
+  "runMode": "EDIT_USER",
+  "editedMessageId": "msg_user_old",
+  "attachments": []
 }
 ```
+
+重新生成回答示例：
+
+```json
+{
+  "sessionId": "session_xxx",
+  "runMode": "REGENERATE_ASSISTANT",
+  "regeneratedMessageId": "msg_assistant_old",
+  "attachments": []
+}
+```
+
+## 反馈
+
+重新生成回答统一使用 `POST /api/v1/ex/chat/runs`，并传入 `runMode=REGENERATE_ASSISTANT` 与
+`regeneratedMessageId`。这样新回答会作为原 user 消息下的 assistant sibling 保存，前端可以通过
+`variants` 和 `path` 接口按版本游标切换。
 
 对 assistant 消息提交反馈：
 

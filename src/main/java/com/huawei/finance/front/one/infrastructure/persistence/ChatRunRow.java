@@ -15,6 +15,10 @@ public class ChatRunRow {
     private String agentCode;
     private String runtimeProvider;
     private String runtimeSessionId;
+    private String runMode;
+    private String parentMessageId;
+    private String userMessageId;
+    private String assistantMessageId;
     private Long firstSeq;
     private Long lastSeq;
     private String cancelReason;
@@ -42,6 +46,14 @@ public class ChatRunRow {
     public void setRuntimeProvider(String runtimeProvider) { this.runtimeProvider = runtimeProvider; }
     public String getRuntimeSessionId() { return runtimeSessionId; }
     public void setRuntimeSessionId(String runtimeSessionId) { this.runtimeSessionId = runtimeSessionId; }
+    public String getRunMode() { return runMode; }
+    public void setRunMode(String runMode) { this.runMode = runMode; }
+    public String getParentMessageId() { return parentMessageId; }
+    public void setParentMessageId(String parentMessageId) { this.parentMessageId = parentMessageId; }
+    public String getUserMessageId() { return userMessageId; }
+    public void setUserMessageId(String userMessageId) { this.userMessageId = userMessageId; }
+    public String getAssistantMessageId() { return assistantMessageId; }
+    public void setAssistantMessageId(String assistantMessageId) { this.assistantMessageId = assistantMessageId; }
     public Long getFirstSeq() { return firstSeq; }
     public void setFirstSeq(Long firstSeq) { this.firstSeq = firstSeq; }
     public Long getLastSeq() { return lastSeq; }

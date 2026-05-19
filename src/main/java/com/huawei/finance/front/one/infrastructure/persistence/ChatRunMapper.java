@@ -16,12 +16,14 @@ public interface ChatRunMapper {
     @Insert("""
             INSERT INTO fin_ex_chat_run_t(
                 id, tenant_id, user_id, session_id, status, route_type, agent_code, runtime_provider,
-                runtime_session_id, first_seq, last_seq, cancel_reason, started_at, finished_at,
+                runtime_session_id, run_mode, parent_message_id, user_message_id, assistant_message_id,
+                first_seq, last_seq, cancel_reason, started_at, finished_at,
                 metadata_json, created_at, updated_at
             )
             VALUES (
                 #{id}, #{tenantId}, #{userId}, #{sessionId}, #{status}, #{routeType}, #{agentCode}, #{runtimeProvider},
-                #{runtimeSessionId}, #{firstSeq}, #{lastSeq}, #{cancelReason}, #{startedAt}, #{finishedAt},
+                #{runtimeSessionId}, #{runMode}, #{parentMessageId}, #{userMessageId}, #{assistantMessageId},
+                #{firstSeq}, #{lastSeq}, #{cancelReason}, #{startedAt}, #{finishedAt},
                 #{metadataJson}, #{createdAt}, #{updatedAt}
             )
             ON CONFLICT (id) DO UPDATE SET
@@ -33,6 +35,10 @@ public interface ChatRunMapper {
                 agent_code = COALESCE(fin_ex_chat_run_t.agent_code, EXCLUDED.agent_code),
                 runtime_provider = COALESCE(fin_ex_chat_run_t.runtime_provider, EXCLUDED.runtime_provider),
                 runtime_session_id = COALESCE(EXCLUDED.runtime_session_id, fin_ex_chat_run_t.runtime_session_id),
+                run_mode = COALESCE(fin_ex_chat_run_t.run_mode, EXCLUDED.run_mode),
+                parent_message_id = COALESCE(fin_ex_chat_run_t.parent_message_id, EXCLUDED.parent_message_id),
+                user_message_id = COALESCE(fin_ex_chat_run_t.user_message_id, EXCLUDED.user_message_id),
+                assistant_message_id = COALESCE(EXCLUDED.assistant_message_id, fin_ex_chat_run_t.assistant_message_id),
                 first_seq = COALESCE(fin_ex_chat_run_t.first_seq, EXCLUDED.first_seq),
                 last_seq = CASE
                     WHEN fin_ex_chat_run_t.status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN fin_ex_chat_run_t.last_seq
@@ -60,6 +66,10 @@ public interface ChatRunMapper {
             @Param("agentCode") String agentCode,
             @Param("runtimeProvider") String runtimeProvider,
             @Param("runtimeSessionId") String runtimeSessionId,
+            @Param("runMode") String runMode,
+            @Param("parentMessageId") String parentMessageId,
+            @Param("userMessageId") String userMessageId,
+            @Param("assistantMessageId") String assistantMessageId,
             @Param("firstSeq") Long firstSeq,
             @Param("lastSeq") Long lastSeq,
             @Param("cancelReason") String cancelReason,
@@ -72,7 +82,8 @@ public interface ChatRunMapper {
 
     @Select("""
             SELECT id, tenant_id, user_id, session_id, status, route_type, agent_code, runtime_provider,
-                   runtime_session_id, first_seq, last_seq, cancel_reason, started_at, finished_at,
+                   runtime_session_id, run_mode, parent_message_id, user_message_id, assistant_message_id,
+                   first_seq, last_seq, cancel_reason, started_at, finished_at,
                    metadata_json, created_at, updated_at
             FROM fin_ex_chat_run_t
             WHERE id = #{runId}
@@ -85,6 +96,10 @@ public interface ChatRunMapper {
             @Result(column = "agent_code", property = "agentCode"),
             @Result(column = "runtime_provider", property = "runtimeProvider"),
             @Result(column = "runtime_session_id", property = "runtimeSessionId"),
+            @Result(column = "run_mode", property = "runMode"),
+            @Result(column = "parent_message_id", property = "parentMessageId"),
+            @Result(column = "user_message_id", property = "userMessageId"),
+            @Result(column = "assistant_message_id", property = "assistantMessageId"),
             @Result(column = "first_seq", property = "firstSeq"),
             @Result(column = "last_seq", property = "lastSeq"),
             @Result(column = "cancel_reason", property = "cancelReason"),
@@ -98,7 +113,8 @@ public interface ChatRunMapper {
 
     @Select("""
             SELECT id, tenant_id, user_id, session_id, status, route_type, agent_code, runtime_provider,
-                   runtime_session_id, first_seq, last_seq, cancel_reason, started_at, finished_at,
+                   runtime_session_id, run_mode, parent_message_id, user_message_id, assistant_message_id,
+                   first_seq, last_seq, cancel_reason, started_at, finished_at,
                    metadata_json, created_at, updated_at
             FROM fin_ex_chat_run_t
             WHERE tenant_id = #{tenantId}
@@ -113,6 +129,10 @@ public interface ChatRunMapper {
             @Result(column = "agent_code", property = "agentCode"),
             @Result(column = "runtime_provider", property = "runtimeProvider"),
             @Result(column = "runtime_session_id", property = "runtimeSessionId"),
+            @Result(column = "run_mode", property = "runMode"),
+            @Result(column = "parent_message_id", property = "parentMessageId"),
+            @Result(column = "user_message_id", property = "userMessageId"),
+            @Result(column = "assistant_message_id", property = "assistantMessageId"),
             @Result(column = "first_seq", property = "firstSeq"),
             @Result(column = "last_seq", property = "lastSeq"),
             @Result(column = "cancel_reason", property = "cancelReason"),
@@ -128,7 +148,8 @@ public interface ChatRunMapper {
 
     @Select("""
             SELECT id, tenant_id, user_id, session_id, status, route_type, agent_code, runtime_provider,
-                   runtime_session_id, first_seq, last_seq, cancel_reason, started_at, finished_at,
+                   runtime_session_id, run_mode, parent_message_id, user_message_id, assistant_message_id,
+                   first_seq, last_seq, cancel_reason, started_at, finished_at,
                    metadata_json, created_at, updated_at
             FROM fin_ex_chat_run_t
             WHERE tenant_id = #{tenantId}
@@ -146,6 +167,10 @@ public interface ChatRunMapper {
             @Result(column = "agent_code", property = "agentCode"),
             @Result(column = "runtime_provider", property = "runtimeProvider"),
             @Result(column = "runtime_session_id", property = "runtimeSessionId"),
+            @Result(column = "run_mode", property = "runMode"),
+            @Result(column = "parent_message_id", property = "parentMessageId"),
+            @Result(column = "user_message_id", property = "userMessageId"),
+            @Result(column = "assistant_message_id", property = "assistantMessageId"),
             @Result(column = "first_seq", property = "firstSeq"),
             @Result(column = "last_seq", property = "lastSeq"),
             @Result(column = "cancel_reason", property = "cancelReason"),

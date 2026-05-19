@@ -11,6 +11,7 @@ public class RuntimeBindingRow {
     private String userId;
     private String chatSessionId;
     private String provider;
+    private String leafMessageId;
     private String runtimeSessionId;
     private String status;
     private String lastRunId;
@@ -29,6 +30,8 @@ public class RuntimeBindingRow {
     public void setChatSessionId(String chatSessionId) { this.chatSessionId = chatSessionId; }
     public String getProvider() { return provider; }
     public void setProvider(String provider) { this.provider = provider; }
+    public String getLeafMessageId() { return leafMessageId; }
+    public void setLeafMessageId(String leafMessageId) { this.leafMessageId = leafMessageId; }
     public String getRuntimeSessionId() { return runtimeSessionId; }
     public void setRuntimeSessionId(String runtimeSessionId) { this.runtimeSessionId = runtimeSessionId; }
     public String getStatus() { return status; }

@@ -9,6 +9,7 @@ FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务
  -> Controller/WebSocket 入口通过 AuthContextProvider 解析租户和用户
  -> 将不可变 UserContext 显式传入 application
  -> 会话归一化与可选 MemoryContext 装配
+ -> 按 runMode 写入或定位消息树节点
  -> 查询 RuntimeBinding
     -> 有 active RuntimeBinding：继续调用 Relay Runtime
     -> 无 active RuntimeBinding：读取可选路由信号
@@ -36,14 +37,16 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `POST /api/v1/ex/chat/sessions`：显式创建会话；也可以在 `/chat/runs` 中不传 `sessionId` 由后端创建或归一化。
 - `GET /api/v1/ex/chat/sessions?limit=20&cursor=...`：分页查询当前用户会话列表。
 - `GET /api/v1/ex/chat/sessions/{sessionId}/state?messageLimit=50`：选择会话时聚合返回会话元数据、最近历史消息和流式状态。
-- `GET /api/v1/ex/chat/sessions/{sessionId}/messages?limit=50&cursor=...`：选择会话后分页查询历史消息，按时间正序返回完整 user/assistant 消息。
+- `GET /api/v1/ex/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50`：选择会话后查询当前 active path 或指定 leaf path 的完整 user/assistant 消息。
+- `GET /api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants`：查询某条消息同父节点下的候选版本，用于前端切换编辑/重新生成后的版本。
+- `POST /api/v1/ex/chat/sessions/{sessionId}/path`：把会话当前 active path 切换到指定 leaf。
+- `POST /api/v1/ex/chat/sessions/{sessionId}/branches`：从指定消息创建只读历史快照分支。
 - `POST /api/v1/ex/chat/sessions/{sessionId}/archive|restore|close`：会话归档、恢复和关闭。
 - `WS /api/v1/ex/chat/ws`：用户级实时输出通道。客户端使用 `{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}` 订阅本轮 run topic。
 - `GET /api/v1/ex/chat/sessions/{sessionId}/events/sse?afterSeq={seq}`：会话级 SSE 有限补发，用于补齐整个会话缺失事件。
 - `GET /api/v1/ex/chat/runs/{runId}/events/sse?afterSeq={seq}`：run 级 SSE 补发并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态。
 - `GET /api/v1/ex/chat/sessions/{sessionId}/stream-status`：查询当前会话最新事件序号、服务端 read cursor、active run、`activeStreamTopicId` 和是否可取消。
 - `POST /api/v1/ex/chat/runs/{runId}/stop`：按 runId 停止当前回答，幂等返回 run 状态。
-- `POST /api/v1/ex/chat/runs/{runId}/retry`：基于原 run 所属会话重新生成回答。
 - `POST /api/v1/ex/chat/messages/{messageId}/feedback`：提交 assistant 消息反馈。
 
 前端流式模式：
@@ -62,6 +65,8 @@ POST /chat/runs
 当前请求体只有对话文本和可选文档附件，不暴露 IM 消息类型，也不让前端选择多套响应协议。文档不是消息类型，只是对话消息的上下文资源引用。
 WebSocket、SSE resume 和 stop 的 URL 由前端 SDK 或网关配置管理，不随 `/chat/runs` 响应返回。
 
+`/chat/runs` 支持消息树写入模式：`runMode=NEXT` 表示沿当前 leaf 继续提问；`EDIT_USER` 表示编辑历史 user 消息并创建新的 user sibling；`REGENERATE_ASSISTANT` 表示复用原 user 消息重新生成新的 assistant sibling。历史版本不会被覆盖，前端通过 variants 与 path select 切换展示版本。
+
 仓库提供独立本地联调台 `local-test-frontend/`。联调台通过 Node 代理访问后端，支持在页面中按 Postman 风格配置 `Cookie`、`Authorization`、`X-*` 等企业鉴权请求头；代理会在 HTTP、fetch SSE、文件下载和 WebSocket 握手时统一注入这些请求头。浏览器自身不会、也不能直接手写 `Cookie` 请求头或 WebSocket 自定义请求头。
 
 租户和用户身份不从前端 Header/Query/Body 透传，统一由请求入口通过 `AuthContextProvider` 从服务端身份上下文解析一次，并以不可变 `UserContext` 传入应用层。应用层、后台 run 和 `boundedElastic` 阻塞线程不会再次读取请求 ThreadLocal。本地开发态必须显式配置：
@@ -77,6 +82,8 @@ export FINANCEEX_DEV_USERNAME=developer
 ## 会话与执行标识
 
 - `sessionId`：前端聊天会话 ID，一次聊天会话内可以包含多轮用户请求。
+- `messageId`：完整 user/assistant 历史消息 ID，组成会话内消息树。
+- `currentLeafMessageId`：会话当前激活路径叶子，历史查询默认从该 leaf 回溯 root。
 - `runId`：SuperAgent 为每一轮用户请求生成的执行追踪 ID。
 - `streamTopicId`：本轮 run 的 WebSocket 订阅 topic，格式为 `chat-run-{runId}`。
 - `runtimeSessionId`：当前 AgentRuntime provider 自己的会话 ID，由 Runtime 返回后保存在 RuntimeBinding 中，下一轮续接时带回。
@@ -85,12 +92,19 @@ export FINANCEEX_DEV_USERNAME=developer
 run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。stop 只停止本轮回答，不删除 `RuntimeBinding`。
 集群部署时，取消正确性依赖 Redis cancel flag 和 openGauss run 状态；JVM 内 subscription registry 只用于命中本机执行流时快速释放资源，不作为跨实例事实源。
 
+## 消息树与只读分支
+
+`fin_ex_chat_message_t.parent_message_id` 形成会话内消息树，`node_order/tree_depth/sibling_index` 用于稳定排序和版本切换。普通继续提问会在当前 leaf 后追加 `user -> assistant`；编辑历史问题会在原 user 的父节点下创建新的 user sibling；重新生成回答会在同一个 user 下创建新的 assistant sibling。只有 `run.completed` 后才保存完整 assistant 历史消息，stop/failed 的半截输出只保存在事件事实源中。
+
+从某条消息新建分支时，服务端会复制 root 到该消息的可见路径到新 session，并将复制出的历史消息标记为 `origin_type=BRANCH_SNAPSHOT`、`locked=true`。这些快照消息只能展示和继续向后提问，不能编辑、删除或重新生成；分支后续新增消息仍为 `NORMAL`，可以参与消息树版本管理。
+
 ## 存储命名
 
 所有数据库表统一使用 `fin_ex_*_t`：
 
 - `fin_ex_chat_session_t`
 - `fin_ex_chat_message_t`
+- `fin_ex_chat_message_attachment_t`
 - `fin_ex_chat_run_t`
 - `fin_ex_chat_event_t`
 - `fin_ex_chat_read_cursor_t`
@@ -100,7 +114,7 @@ run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`�
 
 所有 Redis key 统一以 `fin_ex` 开头：
 
-- RuntimeBinding：`fin_ex:runtime_binding:{tenantId}:{userId}:{sessionId}`
+- RuntimeBinding：`fin_ex:runtime_binding:{tenantId}:{userId}:{sessionId}:{leafMessageId}`
 - Active run：`fin_ex:chat_run:active:{tenantId}:{userId}:{sessionId}`
 - Cancel flag：`fin_ex:chat_run:cancel:{runId}`
 - Read cursor：`fin_ex:chat_read_cursor:{tenantId}:{userId}:{sessionId}`

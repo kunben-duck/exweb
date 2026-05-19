@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import java.util.Optional;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -32,9 +33,9 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
     }
 
     @Override
-    public Optional<RuntimeBinding> get(String tenantId, String userId, String sessionId) {
+    public Optional<RuntimeBinding> get(String tenantId, String userId, String sessionId, String leafMessageId) {
         try {
-            String value = redis.opsForValue().get(key(tenantId, userId, sessionId));
+            String value = redis.opsForValue().get(key(tenantId, userId, sessionId, leafMessageId));
             if (value == null || value.isBlank()) {
                 return Optional.empty();
             }
@@ -46,12 +47,17 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
     }
 
     @Override
+    public Optional<RuntimeBinding> get(String tenantId, String userId, String sessionId) {
+        return get(tenantId, userId, sessionId, null);
+    }
+
+    @Override
     public void put(RuntimeBinding binding) {
         if (binding == null) {
             return;
         }
         try {
-            redis.opsForValue().set(key(binding.tenantId(), binding.userId(), binding.chatSessionId()),
+            redis.opsForValue().set(key(binding.tenantId(), binding.userId(), binding.chatSessionId(), binding.leafMessageId()),
                     objectMapper.writeValueAsString(binding), properties.getRedisTtl());
         } catch (RuntimeException | JsonProcessingException ex) {
             log.warn("RuntimeBinding Redis 写入失败，openGauss 仍作为事实源。原因：{}", ex.getMessage());
@@ -61,20 +67,25 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
     @Override
     public void evict(String tenantId, String userId, String sessionId) {
         try {
-            redis.delete(key(tenantId, userId, sessionId));
+            Set<String> keys = redis.keys(key(tenantId, userId, sessionId, "*"));
+            if (keys != null && !keys.isEmpty()) {
+                redis.delete(keys);
+            }
         } catch (RuntimeException ex) {
             log.warn("RuntimeBinding Redis 删除失败。原因：{}", ex.getMessage());
         }
     }
 
-    private String key(String tenantId, String userId, String sessionId) {
+    private String key(String tenantId, String userId, String sessionId, String leafMessageId) {
         return properties.getRedisKeyPrefix()
                 + ":"
                 + normalize(tenantId)
                 + ":"
                 + normalize(userId)
                 + ":"
-                + normalize(sessionId);
+                + normalize(sessionId)
+                + ":"
+                + normalize(leafMessageId);
     }
 
     private String normalize(String value) {

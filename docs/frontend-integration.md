@@ -6,6 +6,9 @@
 
 - HTTP base URL：`http://localhost:8080`
 - WebSocket URL：`ws://localhost:8080/api/v1/ex/chat/ws`
+- 如果后端配置了上下文根，例如 Servlet/MVC 模式下 `server.servlet.context-path=/fin/ex`
+  或 WebFlux 模式下 `spring.webflux.base-path=/fin/ex`，则 WebSocket URL 也必须带上同一前缀：
+  `ws://localhost:8080/fin/ex/api/v1/ex/chat/ws`。
 - 所有时间字段均为 ISO-8601 字符串。
 - `seq` / `sequence` 是 openGauss 生成的事件恢复游标，前端断点恢复只保存最后收到的最大 `sequence`。
 - 前端只把 `sequence` 当作不透明数字游标，不要自行推算生成方式；服务端以事件表事实源保证同一会话内的恢复顺序。
@@ -520,6 +523,10 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/messages/msg_002/feedback \
 ## WebSocket 协议
 
 WebSocket 是用户级长连接，一个连接可以订阅多个 run topic。切换会话时不需要重建连接，只需要订阅新的 `streamTopicId`，必要时取消旧订阅。
+
+后端同时支持 WebFlux 和 Servlet/MVC 两种 WebSocket 服务端入口。企业框架引入
+`spring-boot-starter-web` 后，应用通常会以 MVC/Servlet 模式启动，此时 WebSocket 仍然使用
+同一条 `/api/v1/ex/chat/ws` 协议路径，只是上下文根应来自 `server.servlet.context-path`。
 
 ### 连接
 

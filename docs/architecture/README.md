@@ -382,6 +382,16 @@ sequenceDiagram
 
 因此架构图中的 `AgentRuntime.query` 是应用层防腐层调用，不等价于前端 WebSocket。默认配置 `api-adapter=relay-stream-http` 下，`AgentRuntime.query` 使用真实 Relay HTTP 流式 adapter；只有显式切换到 `api-adapter=relay-websocket` 时，后端到 RelayAgent 的出站链路才使用 WebSocket。
 
+前端 WebSocket 的服务端入口按启动模式自动切换：
+
+- Reactive WebFlux 应用：`ChatWebSocketConfig + ChatWebSocketHandler` 注册同一路径。
+- Servlet/MVC 应用：`ChatServletWebSocketConfig + ChatServletWebSocketHandler` 注册同一路径。
+
+两种 handler 都委托 `ChatWebSocketProtocolService` 执行 connect、presence、subscribe、
+unsubscribe、ack 和 recover-required 逻辑，避免协议实现分叉。企业框架自带
+`spring-boot-starter-web` 时，Spring Boot 会默认选择 Servlet/MVC 启动，此时应使用
+`server.servlet.context-path` 配置上下文根；纯 WebFlux 启动时才使用 `spring.webflux.base-path`。
+
 ## 分层架构
 
 ```mermaid

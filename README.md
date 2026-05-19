@@ -148,6 +148,13 @@ export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
 - 前端 WebSocket：`/api/v1/ex/chat/ws`，只连接 FinanceEXChatService，用于订阅 `streamTopicId` 并接收已经落库的 ChatEvent。
 - RelayAgent WebSocket：仅当 `FINANCEEX_RELAY_AGENT_API_ADAPTER=relay-websocket` 时，由 FinanceEXChatService 后端作为客户端主动连接 RelayAgent；前端不直接连接 RelayAgent，也不通过前端 WebSocket 发起 `AgentRuntime.query`。
 
+前端 WebSocket 入口同时兼容两种 Spring 启动模式：纯 WebFlux 启动时使用 WebFlux
+`WebSocketHandler`；企业框架引入 `spring-boot-starter-web` 并以 MVC/Servlet 模式启动时，
+使用 Servlet WebSocket handler 注册同一路径和同一套协议。如果 Servlet 应用配置
+`server.servlet.context-path=/fin/ex`，前端最终连接地址是
+`ws://host:port/fin/ex/api/v1/ex/chat/ws`；如果是 WebFlux 应用，则使用
+`spring.webflux.base-path=/fin/ex`。
+
 ```bash
 export FINANCEEX_USE_CASE_LIBRARY_ENABLED=true
 export FINANCEEX_USE_CASE_LIBRARY_BASE_URL=http://use-case-library:9100

@@ -78,6 +78,7 @@ financeex:
     database-flush-interval: 5s
   websocket:
     # WebSocket 是用户级连接，事件按 run 级 stream topic 订阅；Redis Pub/Sub 只做跨实例实时扇出。
+    # 前端 WS 入口同时支持 WebFlux 与 Servlet/MVC；Servlet 模式的上下文根使用 server.servlet.context-path。
     redis-channel-prefix: fin_ex:chat_stream
   sub-agent:
     timeout: 30s

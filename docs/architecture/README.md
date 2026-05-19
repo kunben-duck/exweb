@@ -392,6 +392,12 @@ unsubscribe、ack 和 recover-required 逻辑，避免协议实现分叉。企�
 `spring-boot-starter-web` 时，Spring Boot 会默认选择 Servlet/MVC 启动，此时应使用
 `server.servlet.context-path` 配置上下文根；纯 WebFlux 启动时才使用 `spring.webflux.base-path`。
 
+文档上传同样按启动模式做接口层适配：Servlet/MVC 注册 `MvcDocumentUploadController`
+并接收 `MultipartFile`，纯 WebFlux 注册 `ReactiveDocumentUploadController` 并接收
+`FilePart`。两种 Controller 都委托 `DocumentUploadSupport`，由它先把上传流写入临时文件，
+再通过 `DocumentFacade -> ObjectStorage` 写入华为 OBS S3 或其他对象存储实现。前端看到的路径、
+字段和响应始终是同一套 `POST /api/v1/ex/documents` 契约。
+
 ## 分层架构
 
 ```mermaid

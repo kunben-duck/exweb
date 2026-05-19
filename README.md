@@ -223,6 +223,8 @@ mvn spring-boot:run
 文档能力分为“文档库资产”和“对象内容”两层：前端仍然把本地文件上传到 FinanceEXChatService 统一后端，
 后端再通过 `ObjectStorage` 防腐层写入本地文件系统或华为 OBS S3 对象存储。
 openGauss 的 `fin_ex_uploaded_document_t` 保存文档库元数据，聊天请求只引用 `documentId`，不会把文件正文放进消息体。
+上传接口对外只有一条 `POST /api/v1/ex/documents`，服务端会按启动模式自动选择适配器：
+Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共用同一套临时落盘和 ObjectStorage 写入逻辑。
 
 文档接口：
 

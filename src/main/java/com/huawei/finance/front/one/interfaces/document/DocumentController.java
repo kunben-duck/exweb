@@ -1,7 +1,6 @@
 package com.huawei.finance.front.one.interfaces.document;
 
 import com.huawei.finance.front.one.application.command.DocumentUpdateCommand;
-import com.huawei.finance.front.one.application.command.DocumentUploadCommand;
 import com.huawei.finance.front.one.application.facade.DocumentFacade;
 import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
 import com.huawei.finance.front.one.application.service.PermissionChecker;
@@ -12,36 +11,28 @@ import com.huawei.finance.front.one.domain.document.DocumentLibraryQuery;
 import com.huawei.finance.front.one.domain.document.StoredObjectContent;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.InvalidMediaTypeException;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.core.io.buffer.DataBufferUtils;
-import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PatchMapping;
-import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 /**
  * 文档库接口。
  *
- * <p>本控制器承载文档库的上传、查询、更新、删除、状态查询和受控下载。前端仍然把文件提交到统一后端服务，
- * 接口层先流式写入临时文件，再由应用层通过 ObjectStorage 防腐层上传到真实对象存储。
- * 这样业务入口统一，底层对象存储实现可替换。</p>
+ * <p>本控制器承载文档库的查询、更新、删除、状态查询和受控下载。上传入口需要同时适配
+ * Servlet/MVC 的 {@code MultipartFile} 与 Reactive WebFlux 的 {@code FilePart}，因此拆分到
+ * 启动模式专用 Controller，并统一复用 {@link DocumentUploadSupport} 完成临时文件和对象存储写入。</p>
  */
 @RestController
 @RequestMapping("/api/v1/ex/documents")
@@ -54,27 +45,6 @@ public class DocumentController {
         this.facade = facade;
         this.auth = auth;
         this.permissionChecker = permissionChecker;
-    }
-
-    /**
-     * 上传本地文件并登记到当前用户文档库。
-     *
-     * @param file multipart 中名为 file 的文件分片；接口层只做临时落盘，真实存储由 ObjectStorage 防腐层处理。
-     * @param sessionId 可选会话标识；传入时服务端会校验会话归属并把文档关联到该会话。
-     * @return 上传完成后的文档库元数据。
-     */
-    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public Mono<UploadedDocument> upload(@RequestPart("file") FilePart file,
-                                         @RequestPart(value = "sessionId", required = false) String sessionId) {
-        UserContext user = resolveChatUser();
-        return Mono.usingWhen(
-                Mono.fromCallable(() -> Files.createTempFile("fin-ex-upload-", ".tmp"))
-                        .subscribeOn(Schedulers.boundedElastic()),
-                tempFile -> DataBufferUtils.write(file.content(), tempFile,
-                                StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)
-                        .then(Mono.defer(() -> uploadTempFile(user, file, sessionId, tempFile))),
-                tempFile -> Mono.fromRunnable(() -> deleteQuietly(tempFile)).subscribeOn(Schedulers.boundedElastic())
-        );
     }
 
     /**
@@ -184,32 +154,10 @@ public class DocumentController {
         return facade.prepareDownload(user, documentId).map(this::toDownloadResponse);
     }
 
-    private Mono<UploadedDocument> uploadTempFile(UserContext user, FilePart file, String sessionId, Path tempFile) {
-        return Mono.fromCallable(() -> {
-            long size = Files.size(tempFile);
-            InputStream inputStream = Files.newInputStream(tempFile, StandardOpenOption.READ);
-            return new DocumentUploadCommand(
-                    sessionId,
-                    file.filename(),
-                    file.headers().getContentType() == null ? null : file.headers().getContentType().toString(),
-                    size,
-                    inputStream
-            );
-        }).subscribeOn(Schedulers.boundedElastic()).flatMap(command -> facade.upload(user, command));
-    }
-
     private UserContext resolveChatUser() {
         UserContext user = auth.resolve();
         permissionChecker.checkChatPermission(user);
         return user;
-    }
-
-    private void deleteQuietly(Path path) {
-        try {
-            Files.deleteIfExists(path);
-        } catch (Exception ignored) {
-            // 临时文件清理失败不影响上传结果，容器或宿主机的临时目录清理策略会兜底处理。
-        }
     }
 
     private ResponseEntity<InputStreamResource> toDownloadResponse(DocumentDownload download) {

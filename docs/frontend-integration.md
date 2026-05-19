@@ -104,7 +104,7 @@ export FINANCEEX_DEV_USERNAME=developer
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选。 | `UploadedDocument`。 | 文件先到统一后端，再通过 ObjectStorage 写入 Huawei OBS S3 或其他对象存储实现。 |
+| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选。 | `UploadedDocument`。 | 文件先到统一后端，再通过 ObjectStorage 写入 Huawei OBS S3 或其他对象存储实现；Servlet/MVC 与 WebFlux 启动模式共用同一外部契约。 |
 | `GET /api/v1/ex/documents` | 文档库列表或最近文档选择器。 | Query：`sessionId` 可选，`limit` 默认 20，`cursor` 可选。 | `DocumentLibraryPage`：`items[]`、`nextCursor`。 | 默认不返回 `DELETED` 文档。 |
 | `GET /api/v1/ex/documents/{documentId}` | 查询文档详情。 | Path：`documentId`。 | `UploadedDocument`。 | 可查看 `AVAILABLE/PROCESSING/FAILED` 等非删除状态。 |
 | `PATCH /api/v1/ex/documents/{documentId}` | 修改展示文件名或扩展元数据。 | Path：`documentId`；JSON body：`originalName`、`metadataJson`。 | `UploadedDocument`。 | 空字段表示保留原值。 |
@@ -803,6 +803,11 @@ curl -X POST http://localhost:8080/api/v1/ex/documents \
   -F "file=@./demo.xlsx" \
   -F "sessionId=session_xxx"
 ```
+
+如果后端配置了上下文根，例如 `server.servlet.context-path=/fin/ex`，则上传地址同步变为
+`http://localhost:8080/fin/ex/api/v1/ex/documents`。前端始终使用标准 multipart 字段：
+`file` 放文件内容，`sessionId` 可选；后端在 Servlet/MVC 下绑定为 `MultipartFile`，在纯
+WebFlux 下绑定为 `FilePart`，前端不需要区分。
 
 响应中的 `id` 就是聊天附件的 `documentId`：
 

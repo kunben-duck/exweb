@@ -102,6 +102,23 @@ class DocumentApplicationServiceTest {
     }
 
     @Test
+    void uploadStoresSanitizedDisplayFilename() {
+        InMemoryDocumentRepository repository = new InMemoryDocumentRepository();
+        DocumentApplicationService service = service(repository);
+
+        UploadedDocument document = service.upload(user(), new DocumentUploadCommand(
+                "session1",
+                "C:\\users\\finance\\invoice\n2026.pdf",
+                "application/pdf",
+                1,
+                new ByteArrayInputStream(new byte[] {1})
+        )).block();
+
+        assertThat(document).isNotNull();
+        assertThat(document.originalName()).isEqualTo("invoice_2026.pdf");
+    }
+
+    @Test
     void managementGetCanReadFailedDocumentStatus() {
         InMemoryDocumentRepository repository = new InMemoryDocumentRepository();
         UploadedDocument stored = document("doc1", DocumentStatus.FAILED);
@@ -161,7 +178,8 @@ class DocumentApplicationServiceTest {
                 repository,
                 new FixedSessionRepository(),
                 new FixedIdGenerator(),
-                new PermissionChecker()
+                new PermissionChecker(),
+                new WorkloadConcurrencyLimiter(new com.huawei.finance.front.one.application.config.ResourceIsolationProperties())
         );
     }
 

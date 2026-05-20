@@ -69,6 +69,8 @@ class FinanceEXChatServiceTest {
         IdGenerator ids = new FixedIdGenerator();
         PermissionChecker permissionChecker = new PermissionChecker();
         ChatReadCursorApplicationService readCursorService = readCursorService(sessions);
+        WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
+                new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
 
         FinanceEXChatService service = new FinanceEXChatService(
                 new SessionApplicationService(sessions, messages, ids, permissionChecker),
@@ -82,14 +84,16 @@ class FinanceEXChatServiceTest {
                     @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
                         return Mono.empty();
                     }
-                }),
+                }, limiter),
                 new SystemResponseExecutor(),
-                new AgentRuntimeExecutor(noopRuntime()),
+                new AgentRuntimeExecutor(noopRuntime(), limiter),
                 documentFacade(),
                 new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
-                        readCursorService, permissionChecker, sessions),
+                        readCursorService, permissionChecker, sessions,
+                        new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
                 new ChatRunApplicationService(runs, runCache, events, readCursorService, permissionChecker, sessions),
                 new LocalChatRunExecutionRegistry(),
+                new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
                 ids
         );
 
@@ -179,6 +183,7 @@ class FinanceEXChatServiceTest {
     private static class CountingCancelRunCache implements ChatRunCache {
         private final AtomicInteger checks = new AtomicInteger();
         @Override public Optional<ChatRun> getActive(String tenantId, String userId, String sessionId) { return Optional.empty(); }
+        @Override public boolean tryClaimActive(ChatRun run) { return true; }
         @Override public void putActive(ChatRun run) {}
         @Override public void evictActive(String tenantId, String userId, String sessionId) {}
         @Override public void markCancellationRequested(String runId) {}

@@ -22,6 +22,17 @@ public interface ChatRunCache {
     Optional<ChatRun> getActive(String tenantId, String userId, String sessionId);
 
     /**
+     * 尝试声明某会话当前 active run。
+     *
+     * <p>生产 Redis 实现必须使用原子 set-if-absent，避免多实例同时为同一会话创建 run。
+     * 返回 false 时，调用方应拒绝本次创建并提示前端先等待或 stop 当前 run。</p>
+     *
+     * @param run 准备进入 RUNNING 的 run 快照。
+     * @return true 表示当前实例成功声明 active run；false 表示已有其他 active run。
+     */
+    boolean tryClaimActive(ChatRun run);
+
+    /**
      * 写入或刷新会话当前 active run。
      *
      * @param run 需要缓存的 active run 快照。

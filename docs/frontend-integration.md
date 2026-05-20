@@ -90,6 +90,10 @@ export FINANCEEX_DEV_USERNAME=developer
 | `GET /api/v1/ex/chat/sessions/{sessionId}/stream-status` | 判断是否存在 active run、是否可停止、从哪里恢复。 | Path：`sessionId`。 | `ChatStreamStatusDto`：`latestSeq`、`readCursorSeq`、`activeRunId`、`activeStreamTopicId`、`activeRunFirstSeq`、`activeRunLastSeq`、`cancellable`。 | `latestSeq` 是服务端事实源最新位置，不是客户端已消费位置。 |
 | `POST /api/v1/ex/chat/messages/{messageId}/feedback` | 用户对完整 assistant 消息点赞、点踩或提交原因。 | Path：`messageId`；JSON body：`runId` 可选，`rating`，`reasonCode` 可选，`commentText` 可选，`metadata` 可选。 | `MessageFeedbackDto`：`feedbackId`、`messageId`、`runId`、`rating`、`createdAt`。 | 如果传 `runId`，服务端会校验 message、session、run 归属一致。 |
 
+同一会话同一时间只允许一个 active run。若发送时已有 `RUNNING/CANCELLING` run，
+`POST /chat/runs` 会返回 HTTP 409，错误码 `ACTIVE_RUN_EXISTS`。前端应保持“生成中/停止”
+按钮状态，先调用 stop 或等待终态后再允许同一会话再次发送。
+
 ### WebSocket 控制消息
 
 | 消息 | 使用场景 | 入参 | 出参 | 注意事项 |
@@ -531,6 +535,11 @@ MVC/Servlet 模式下，后端会在 WebSocket handshake 阶段读取企业权�
 连接建立后的 subscribe、ack、unsubscribe 不再读取 ThreadLocal。因此前端只需要确保握手请求
 携带企业鉴权 cookie/header，协议消息体中不要传 tenantId/userId。
 
+生产环境必须配置 `financeex.websocket.allowed-origin-patterns` 为企业前端域名。默认值只允许
+localhost，避免 Cookie 鉴权场景下的跨站 WebSocket 滥用。服务端还会限制单用户连接数、单连接
+订阅数、单 topic 本机订阅数、控制消息大小、出站队列和空闲时间；超限时会返回明确错误并关闭
+连接或取消订阅。
+
 ### 连接
 
 ```js
@@ -660,12 +669,15 @@ WebSocket 不接受 `{"type":"chat"}` 或旧 `CreateChatRunRequest`。发送旧�
   "topicId": "chat-run-run_xxx",
   "offset": "12019",
   "code": "RECOVER_REQUIRED",
-  "message": "检测到实时事件乱序，请使用 SSE resume 从 afterSeq=12002 补齐"
+  "message": "实时事件需要恢复，请使用 SSE resume 从 afterSeq=12002 补齐"
 }
 ```
 
 收到 `RECOVER_REQUIRED` 后，前端应暂停该 topic 的实时拼接，使用本地最近 ACK 或最近成功处理的 `lastSeq`
 调用 SSE resume 补发，然后再按新的 `lastSeq` 重新 subscribe。
+
+`RECOVER_REQUIRED` 也可能由慢客户端或 run topic live buffer 溢出触发。此时不要继续等待同一个
+WebSocket 订阅恢复，正确做法仍是关闭当前 topic 拼接、通过 run SSE 补齐、再重新 subscribe。
 
 ## SSE 断点恢复
 
@@ -720,6 +732,9 @@ async function resumeActiveRun(status) {
 前端可以保留本地事件缓存做 UI 加速，但 active run 恢复时不要在 run SSE 之前 replay 未完成 run 的缓存事件，也不要让 BroadcastChannel 抢先渲染当前 run。正确顺序是：加载已完成历史消息 -> 打开 run SSE -> SSE 先 catchup 再持续 tail live 事件直到本轮 run 终态。这样新页签、新浏览器或新电脑看到的未完成回答都来自服务端事实源和服务端 live topic，而不是某个浏览器实例的内存或 localStorage。
 
 服务端 SSE event name 等于事件 `type`，data 是 `ChatEventDto`。会话级 SSE 是有限补发；run 级 SSE 在 run 未终止时会保持连接并继续输出 live 事件直到终态。推荐使用 `fetch` 读取响应流，避免 `EventSource` 在短流结束后自动重连造成重复补发。若必须使用 `EventSource`，需要按具名 event 注册监听，并在补发完成或收到终态后主动关闭。
+
+run 级 SSE 会在无业务事件时发送 `heartbeat` 事件或 keepalive comment，用于防止 MVC Servlet async、
+网关或代理把连接误判为空闲。前端收到 heartbeat 时只更新连接活跃状态，不要把它渲染成聊天消息。
 
 ```json
 {

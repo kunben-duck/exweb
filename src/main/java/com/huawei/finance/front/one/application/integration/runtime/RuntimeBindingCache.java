@@ -20,7 +20,7 @@ public interface RuntimeBindingCache {
     /**
      * 按消息树 leaf 从热缓存读取 Runtime 绑定。
      *
-     * <p>默认实现兼容旧测试与迁移期缓存；生产 Redis 缓存会覆盖该方法并把 leaf 写入 key。</p>
+     * <p>leaf 为空表示根路径绑定；生产 Redis 缓存会把 leaf 写入 key，避免历史路径串用 Runtime session。</p>
      */
     default Optional<RuntimeBinding> get(String tenantId, String userId, String sessionId, String leafMessageId) {
         return leafMessageId == null || leafMessageId.isBlank()

@@ -4,6 +4,7 @@ import com.huawei.finance.front.one.application.integration.conversation.ChatEve
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunCache;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
+import com.huawei.finance.front.one.domain.chat.ActiveRunExistsException;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
@@ -60,6 +61,7 @@ public class ChatRunApplicationService {
     public ChatRun createRunning(String runId, UserContext user, String sessionId, RouteTarget route,
                                  RuntimeBinding binding, Map<String, Object> metadata,
                                  ChatRunMode runMode, String parentMessageId, String userMessageId) {
+        rejectIfActiveRunExists(user, sessionId);
         Instant now = Instant.now();
         ChatRun run = new ChatRun(
                 runId,
@@ -84,11 +86,21 @@ public class ChatRunApplicationService {
                 now,
                 now
         );
-        return save(run);
+        if (!cache.tryClaimActive(run)) {
+            throw new ActiveRunExistsException(sessionId, findActive(user.tenantId(), user.userId(), sessionId)
+                    .map(ChatRun::id)
+                    .orElse("unknown"));
+        }
+        try {
+            return save(run);
+        } catch (RuntimeException ex) {
+            cache.evictActive(user.tenantId(), user.userId(), sessionId);
+            throw ex;
+        }
     }
 
     /**
-     * 兼容旧调用点的普通 run 创建。
+     * 创建普通 NEXT 模式的 run。
      */
     public ChatRun createRunning(String runId, UserContext user, String sessionId, RouteTarget route,
                                  RuntimeBinding binding, Map<String, Object> metadata) {
@@ -181,6 +193,19 @@ public class ChatRunApplicationService {
     }
 
     /**
+     * 校验当前会话没有仍在执行的 run。
+     *
+     * <p>该方法用于创建用户消息前的快速保护，避免 active run 已存在时仍然写入新的用户消息节点。
+     * 真正的并发声明仍在 {@link #createRunning} 中通过 Redis set-if-absent 完成。</p>
+     */
+    public void rejectIfActiveRunExists(UserContext user, String sessionId) {
+        findActive(user.tenantId(), user.userId(), sessionId)
+                .ifPresent(active -> {
+                    throw new ActiveRunExistsException(sessionId, active.id());
+                });
+    }
+
+    /**
      * 判断事件是否仍允许写入 run 事件流。
      *
      * <p>这是集群部署下的关键保护：当前 JVM subscription registry 只能加速本机资源释放，
@@ -219,8 +244,10 @@ public class ChatRunApplicationService {
     private Optional<ChatRun> findActive(String tenantId, String userId, String sessionId) {
         Optional<ChatRun> cached = cache.getActive(tenantId, userId, sessionId);
         if (cached.isPresent()) {
-            if (!cached.get().status().terminal()) {
-                return cached;
+            Optional<ChatRun> persisted = repository.findById(cached.get().id());
+            if (persisted.isPresent() && !persisted.get().status().terminal()) {
+                cache.putActive(persisted.get());
+                return persisted;
             }
             cache.evictActive(tenantId, userId, sessionId);
         }

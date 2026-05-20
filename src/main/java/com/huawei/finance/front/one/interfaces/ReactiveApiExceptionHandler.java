@@ -1,9 +1,12 @@
 package com.huawei.finance.front.one.interfaces;
 
+import com.huawei.finance.front.one.domain.chat.ActiveRunExistsException;
+import jakarta.validation.ConstraintViolationException;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ServerWebExchange;
 
@@ -45,6 +48,22 @@ public class ReactiveApiExceptionHandler {
         return ApiExceptionHandler.error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", ex.getMessage(), requestPath(exchange));
     }
 
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ApiExceptionHandler.ApiErrorResponse> handleInvalidBody(MethodArgumentNotValidException ex,
+                                                                                  ServerWebExchange exchange) {
+        String message = ex.getBindingResult().getFieldErrors().stream()
+                .findFirst()
+                .map(error -> error.getField() + ": " + error.getDefaultMessage())
+                .orElse("请求参数校验失败");
+        return ApiExceptionHandler.error(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", message, requestPath(exchange));
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ApiExceptionHandler.ApiErrorResponse> handleConstraintViolation(ConstraintViolationException ex,
+                                                                                         ServerWebExchange exchange) {
+        return ApiExceptionHandler.error(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", ex.getMessage(), requestPath(exchange));
+    }
+
     /**
      * 处理资源当前状态不允许执行操作的场景。
      *
@@ -55,6 +74,9 @@ public class ReactiveApiExceptionHandler {
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<ApiExceptionHandler.ApiErrorResponse> handleConflict(IllegalStateException ex,
                                                                                ServerWebExchange exchange) {
+        if (ex instanceof ActiveRunExistsException) {
+            return ApiExceptionHandler.error(HttpStatus.CONFLICT, "ACTIVE_RUN_EXISTS", ex.getMessage(), requestPath(exchange));
+        }
         return ApiExceptionHandler.error(HttpStatus.CONFLICT, "CONFLICT", ex.getMessage(), requestPath(exchange));
     }
 

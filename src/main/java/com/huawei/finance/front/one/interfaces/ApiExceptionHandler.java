@@ -1,11 +1,14 @@
 package com.huawei.finance.front.one.interfaces;
 
+import com.huawei.finance.front.one.domain.chat.ActiveRunExistsException;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.ConstraintViolationException;
 import java.time.Instant;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /**
@@ -46,6 +49,28 @@ public class ApiExceptionHandler {
     }
 
     /**
+     * 处理 Bean Validation 请求体校验失败。
+     */
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ApiErrorResponse> handleInvalidBody(MethodArgumentNotValidException ex,
+                                                              HttpServletRequest request) {
+        String message = ex.getBindingResult().getFieldErrors().stream()
+                .findFirst()
+                .map(error -> error.getField() + ": " + error.getDefaultMessage())
+                .orElse("请求参数校验失败");
+        return error(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", message, requestPath(request));
+    }
+
+    /**
+     * 处理 query/path 等参数校验失败。
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ApiErrorResponse> handleConstraintViolation(ConstraintViolationException ex,
+                                                                      HttpServletRequest request) {
+        return error(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", ex.getMessage(), requestPath(request));
+    }
+
+    /**
      * 处理资源当前状态不允许执行操作的场景。
      *
      * @param ex 状态冲突异常。
@@ -54,6 +79,9 @@ public class ApiExceptionHandler {
      */
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<ApiErrorResponse> handleConflict(IllegalStateException ex, HttpServletRequest request) {
+        if (ex instanceof ActiveRunExistsException) {
+            return error(HttpStatus.CONFLICT, "ACTIVE_RUN_EXISTS", ex.getMessage(), requestPath(request));
+        }
         return error(HttpStatus.CONFLICT, "CONFLICT", ex.getMessage(), requestPath(request));
     }
 

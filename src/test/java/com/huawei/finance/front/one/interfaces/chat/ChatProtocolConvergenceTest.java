@@ -61,7 +61,8 @@ class ChatProtocolConvergenceTest {
                 () -> user(),
                 new PermissionChecker(),
                 new ChatRequestTranslator(),
-                new ChatEventTranslator()
+                new ChatEventTranslator(),
+                new com.huawei.finance.front.one.application.config.MvcSseProperties()
         );
         CreateChatRunRequest request = new CreateChatRunRequest("cmd1", "session1", null, "你好", List.of(), Map.of());
 

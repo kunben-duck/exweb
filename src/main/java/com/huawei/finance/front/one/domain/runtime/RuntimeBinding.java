@@ -39,7 +39,10 @@ public record RuntimeBinding(
         Map<String, Object> metadata
 ) {
     /**
-     * 兼容旧调用点的构造器。没有 leaf 时仅用于旧测试或迁移期，生产查询应显式传入 leafMessageId。
+     * 创建根路径 RuntimeBinding。
+     *
+     * <p>新会话第一次提问时还没有前置消息树 leaf，因此允许 leaf 为空；run 完成后绑定会移动到
+     * 新生成的 assistant leaf。</p>
      */
     public RuntimeBinding(String id, String tenantId, String userId, String chatSessionId, String provider,
                           String runtimeSessionId, RuntimeBindingStatus status, String lastRunId,

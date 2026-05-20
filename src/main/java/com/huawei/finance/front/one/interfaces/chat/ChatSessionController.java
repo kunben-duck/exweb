@@ -95,7 +95,7 @@ public class ChatSessionController {
      * @return 会话元数据。
      */
     @GetMapping("/{sessionId}")
-    public Mono<ChatSessionDto> get(@PathVariable String sessionId) {
+    public Mono<ChatSessionDto> get(@PathVariable("sessionId") String sessionId) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> toDto(facade.getSession(user, sessionId)))
                 .subscribeOn(Schedulers.boundedElastic());
@@ -109,7 +109,7 @@ public class ChatSessionController {
      * @return 会话元数据、最近历史消息分页和当前流式状态。
      */
     @GetMapping("/{sessionId}/state")
-    public Mono<ChatSessionStateDto> state(@PathVariable String sessionId,
+    public Mono<ChatSessionStateDto> state(@PathVariable("sessionId") String sessionId,
                                                 @RequestParam(value = "messageLimit", defaultValue = "50") int messageLimit) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> {
@@ -137,7 +137,7 @@ public class ChatSessionController {
      * @return 历史消息分页结果。
      */
     @GetMapping("/{sessionId}/messages")
-    public Mono<ChatMessagePageDto> messages(@PathVariable String sessionId,
+    public Mono<ChatMessagePageDto> messages(@PathVariable("sessionId") String sessionId,
                                                   @RequestParam(value = "leafMessageId", required = false) String leafMessageId,
                                                   @RequestParam(value = "cursor", required = false) String cursor,
                                                   @RequestParam(value = "limit", defaultValue = "50") int limit) {
@@ -154,7 +154,8 @@ public class ChatSessionController {
      * @return 同父节点、同角色的候选消息列表，按 siblingIndex 排列。
      */
     @GetMapping("/{sessionId}/messages/{messageId}/variants")
-    public Mono<List<ChatMessageDto>> variants(@PathVariable String sessionId, @PathVariable String messageId) {
+    public Mono<List<ChatMessageDto>> variants(@PathVariable("sessionId") String sessionId,
+                                               @PathVariable("messageId") String messageId) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> facade.listVariants(user, sessionId, messageId).stream()
                         .map(this::toMessageDto)
@@ -172,7 +173,8 @@ public class ChatSessionController {
      * @return 切换后的会话元数据。
      */
     @PostMapping("/{sessionId}/path")
-    public Mono<ChatSessionDto> selectPath(@PathVariable String sessionId, @RequestBody SelectChatPathRequest request) {
+    public Mono<ChatSessionDto> selectPath(@PathVariable("sessionId") String sessionId,
+                                           @RequestBody SelectChatPathRequest request) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> toDto(facade.selectPath(user, sessionId,
                         request == null ? null : request.leafMessageId())))
@@ -190,7 +192,7 @@ public class ChatSessionController {
      * @return 新建分支会话元数据。
      */
     @PostMapping("/{sessionId}/branches")
-    public Mono<ChatSessionDto> createBranch(@PathVariable String sessionId,
+    public Mono<ChatSessionDto> createBranch(@PathVariable("sessionId") String sessionId,
                                              @RequestBody CreateChatBranchRequest request) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> toDto(facade.createBranch(user, sessionId,
@@ -207,7 +209,7 @@ public class ChatSessionController {
      * @return 更新后的会话元数据。
      */
     @PatchMapping("/{sessionId}")
-    public Mono<ChatSessionDto> update(@PathVariable String sessionId,
+    public Mono<ChatSessionDto> update(@PathVariable("sessionId") String sessionId,
                                             @RequestBody(required = false) UpdateChatSessionRequest request) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> toDto(facade.renameSession(user, sessionId, request == null ? null : request.title())))
@@ -221,7 +223,7 @@ public class ChatSessionController {
      * @return 归档后的会话元数据。
      */
     @PostMapping("/{sessionId}/archive")
-    public Mono<ChatSessionDto> archive(@PathVariable String sessionId) {
+    public Mono<ChatSessionDto> archive(@PathVariable("sessionId") String sessionId) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> toDto(facade.archiveSession(user, sessionId)))
                 .subscribeOn(Schedulers.boundedElastic());
@@ -234,7 +236,7 @@ public class ChatSessionController {
      * @return 恢复后的会话元数据。
      */
     @PostMapping("/{sessionId}/restore")
-    public Mono<ChatSessionDto> restore(@PathVariable String sessionId) {
+    public Mono<ChatSessionDto> restore(@PathVariable("sessionId") String sessionId) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> toDto(facade.restoreSession(user, sessionId)))
                 .subscribeOn(Schedulers.boundedElastic());
@@ -247,7 +249,7 @@ public class ChatSessionController {
      * @return 关闭后的会话元数据。
      */
     @PostMapping("/{sessionId}/close")
-    public Mono<ChatSessionDto> close(@PathVariable String sessionId) {
+    public Mono<ChatSessionDto> close(@PathVariable("sessionId") String sessionId) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> toDto(facade.closeSession(user, sessionId)))
                 .subscribeOn(Schedulers.boundedElastic());

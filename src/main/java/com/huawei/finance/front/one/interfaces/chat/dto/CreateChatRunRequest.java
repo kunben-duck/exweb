@@ -1,5 +1,7 @@
 package com.huawei.finance.front.one.interfaces.chat.dto;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Size;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -23,19 +25,33 @@ import java.util.Map;
  * @param metadata 前端扩展元数据，例如 clientMessageId、forceNewTask。
  */
 public record CreateChatRunRequest(
+        @Size(max = 128, message = "commandId 长度不能超过 128")
         String commandId,
+        @Size(max = 64, message = "sessionId 长度不能超过 64")
         String sessionId,
+        @Size(max = 64, message = "conversationId 长度不能超过 64")
         String conversationId,
+        @Size(max = 20000, message = "message 长度不能超过 20000")
         String message,
+        @Size(max = 32, message = "runMode 长度不能超过 32")
         String runMode,
+        @Size(max = 64, message = "parentMessageId 长度不能超过 64")
         String parentMessageId,
+        @Size(max = 64, message = "editedMessageId 长度不能超过 64")
         String editedMessageId,
+        @Size(max = 64, message = "regeneratedMessageId 长度不能超过 64")
         String regeneratedMessageId,
+        @Valid
+        @Size(max = 20, message = "单次聊天最多引用 20 个附件")
         List<ChatAttachmentDto> attachments,
+        @Size(max = 50, message = "metadata 最多允许 50 个字段")
         Map<String, Object> metadata
 ) {
     /**
-     * 兼容普通继续提问的测试/调用构造器。
+     * 创建普通继续提问请求。
+     *
+     * <p>普通 NEXT 提问不需要携带消息树编辑字段，因此保留该构造器让调用方只传核心会话、
+     * 文本、附件和元数据。</p>
      */
     public CreateChatRunRequest(String commandId, String sessionId, String conversationId, String message,
                                 List<ChatAttachmentDto> attachments, Map<String, ?> metadata) {

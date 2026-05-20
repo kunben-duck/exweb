@@ -56,6 +56,36 @@ class LocalWebSocketConnectionRegistryTest {
     }
 
     @Test
+    void rejectsTooManyConnectionsForSameUserOnCurrentInstance() {
+        com.huawei.finance.front.one.application.config.ChatWebSocketProperties properties =
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties();
+        properties.setMaxConnectionsPerUser(1);
+        LocalWebSocketConnectionRegistry registry = new LocalWebSocketConnectionRegistry(properties);
+
+        registry.register("conn1", new UserContext("tenant1", "user1", "User One"));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        registry.register("conn2", new UserContext("tenant1", "user1", "User One")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("WS_CONNECTION_LIMIT_EXCEEDED");
+    }
+
+    @Test
+    void rejectsTooManySubscriptionsOnSameConnection() {
+        com.huawei.finance.front.one.application.config.ChatWebSocketProperties properties =
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties();
+        properties.setMaxSubscriptionsPerConnection(1);
+        LocalWebSocketConnectionRegistry registry = new LocalWebSocketConnectionRegistry(properties);
+        registry.register("conn1", new UserContext("tenant1", "user1", "User One"));
+        registry.subscribe("conn1", "chat-run-run1", 0L, () -> {});
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        registry.subscribe("conn1", "chat-run-run2", 0L, () -> {}))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("WS_SUBSCRIPTION_LIMIT_EXCEEDED");
+    }
+
+    @Test
     void unsubscribeDisposesOnlySelectedTopic() {
         LocalWebSocketConnectionRegistry registry = new LocalWebSocketConnectionRegistry();
         TrackingDisposable first = new TrackingDisposable();
@@ -69,6 +99,19 @@ class LocalWebSocketConnectionRegistryTest {
         assertThat(first.disposed).isTrue();
         assertThat(second.disposed).isFalse();
         assertThat(registry.get("conn1").orElseThrow().subscriptionCount()).isEqualTo(1);
+    }
+
+    @Test
+    void duplicateConnectionIdReleasesPreviousSubscriptionsDefensively() {
+        LocalWebSocketConnectionRegistry registry = new LocalWebSocketConnectionRegistry();
+        TrackingDisposable disposable = new TrackingDisposable();
+        registry.register("conn1", new UserContext("tenant1", "user1", "User One"));
+        registry.subscribe("conn1", "chat-run-run1", 0L, disposable);
+
+        registry.register("conn1", new UserContext("tenant1", "user1", "User One"));
+
+        assertThat(disposable.disposed).isTrue();
+        assertThat(registry.get("conn1").orElseThrow().subscriptionCount()).isZero();
     }
 
     private static class TrackingDisposable implements Disposable {

@@ -48,6 +48,24 @@ public class RedisChatRunCache implements ChatRunCache {
     }
 
     @Override
+    public boolean tryClaimActive(ChatRun run) {
+        if (run == null) {
+            return false;
+        }
+        try {
+            Boolean claimed = redis.opsForValue().setIfAbsent(
+                    activeKey(run.tenantId(), run.userId(), run.sessionId()),
+                    objectMapper.writeValueAsString(run),
+                    properties.getActiveTtl()
+            );
+            return Boolean.TRUE.equals(claimed);
+        } catch (RuntimeException | JsonProcessingException ex) {
+            log.warn("ChatRun active Redis 原子声明失败，将退化为 openGauss active run 检查。原因：{}", ex.getMessage());
+            return true;
+        }
+    }
+
+    @Override
     public void putActive(ChatRun run) {
         if (run == null) {
             return;

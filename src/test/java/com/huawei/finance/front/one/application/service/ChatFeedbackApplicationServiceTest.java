@@ -194,6 +194,7 @@ class ChatFeedbackApplicationServiceTest {
 
     private static class NoopRunCache implements ChatRunCache {
         @Override public Optional<ChatRun> getActive(String tenantId, String userId, String sessionId) { return Optional.empty(); }
+        @Override public boolean tryClaimActive(ChatRun run) { return true; }
         @Override public void putActive(ChatRun run) {}
         @Override public void evictActive(String tenantId, String userId, String sessionId) {}
         @Override public void markCancellationRequested(String runId) {}

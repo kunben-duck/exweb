@@ -39,7 +39,8 @@ class ChatStreamApplicationServiceTest {
                 new InMemoryRunRepository(),
                 readCursorService(),
                 new PermissionChecker(),
-                new FixedSessionRepository()
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
         );
         ChatEvent first = service.appendAndPublish(MessageDeltaEvent.of("run1", "session1", "hello"));
 
@@ -63,7 +64,8 @@ class ChatStreamApplicationServiceTest {
                 new InMemoryRunRepository(),
                 readCursorService(),
                 new PermissionChecker(),
-                new FixedSessionRepository()
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
         );
         service.appendAndPublish(MessageDeltaEvent.of("run1", "session1", "hello"));
 
@@ -82,7 +84,8 @@ class ChatStreamApplicationServiceTest {
                 runRepository,
                 readCursorService(),
                 new PermissionChecker(),
-                new FixedSessionRepository()
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
         );
         runRepository.save(runningRun("run1", "tenant1", "user1"));
         ChatEvent first = service.appendAndPublish(MessageDeltaEvent.of("run1", "session1", "hello"));
@@ -108,7 +111,8 @@ class ChatStreamApplicationServiceTest {
                 runRepository,
                 readCursorService(),
                 new PermissionChecker(),
-                new FixedSessionRepository()
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
         );
         runRepository.save(runningRun("run1", "tenant1", "user1"));
         runRepository.save(runningRun("run2", "tenant1", "user1"));
@@ -137,7 +141,8 @@ class ChatStreamApplicationServiceTest {
                 runRepository,
                 readCursorService(),
                 new PermissionChecker(),
-                new FixedSessionRepository()
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
         );
         runRepository.save(runningRun("run1", "tenant1", "user1"));
         ChatEvent first = service.appendAndPublish(MessageDeltaEvent.of("run1", "session1", "hello"));
@@ -164,7 +169,8 @@ class ChatStreamApplicationServiceTest {
                 runRepository,
                 readCursorService(cursorRepository),
                 new PermissionChecker(),
-                new FixedSessionRepository()
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
         );
         runRepository.save(runningRun("run1", "tenant1", "user1"));
 

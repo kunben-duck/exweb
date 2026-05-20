@@ -70,7 +70,7 @@ public class DocumentController {
      * @return 文档元数据。
      */
     @GetMapping("/{documentId}")
-    public Mono<UploadedDocument> get(@PathVariable String documentId) {
+    public Mono<UploadedDocument> get(@PathVariable("documentId") String documentId) {
         UserContext user = resolveChatUser();
         return facade.get(user, documentId);
     }
@@ -83,7 +83,7 @@ public class DocumentController {
      * @return 更新后的文档元数据。
      */
     @PatchMapping("/{documentId}")
-    public Mono<UploadedDocument> update(@PathVariable String documentId,
+    public Mono<UploadedDocument> update(@PathVariable("documentId") String documentId,
                                          @RequestBody(required = false) UpdateDocumentRequest request) {
         UserContext user = resolveChatUser();
         return facade.update(user, documentId, new DocumentUpdateCommand(
@@ -99,7 +99,7 @@ public class DocumentController {
      * @return 删除后的文档元数据快照。
      */
     @DeleteMapping("/{documentId}")
-    public Mono<UploadedDocument> delete(@PathVariable String documentId) {
+    public Mono<UploadedDocument> delete(@PathVariable("documentId") String documentId) {
         UserContext user = resolveChatUser();
         return facade.delete(user, documentId);
     }
@@ -111,7 +111,7 @@ public class DocumentController {
      * @return 文档状态和 tokenSize。
      */
     @GetMapping("/{documentId}/status")
-    public Mono<DocumentStatusDto> status(@PathVariable String documentId) {
+    public Mono<DocumentStatusDto> status(@PathVariable("documentId") String documentId) {
         UserContext user = resolveChatUser();
         return facade.get(user, documentId)
                 .map(document -> new DocumentStatusDto(document.id(), document.status(), document.tokenSize()));
@@ -126,7 +126,7 @@ public class DocumentController {
      * @return 后端受控预览/下载地址。
      */
     @GetMapping("/{documentId}/preview-url")
-    public Mono<DocumentAccessDto> previewUrl(@PathVariable String documentId) {
+    public Mono<DocumentAccessDto> previewUrl(@PathVariable("documentId") String documentId) {
         UserContext user = resolveChatUser();
         return facade.get(user, documentId)
                 .map(document -> {
@@ -149,7 +149,7 @@ public class DocumentController {
      * @return 带 Content-Disposition 的对象内容响应。
      */
     @GetMapping("/{documentId}/download")
-    public Mono<ResponseEntity<InputStreamResource>> download(@PathVariable String documentId) {
+    public Mono<ResponseEntity<InputStreamResource>> download(@PathVariable("documentId") String documentId) {
         UserContext user = resolveChatUser();
         return facade.prepareDownload(user, documentId).map(this::toDownloadResponse);
     }

@@ -40,10 +40,17 @@ public class DocumentApplicationService implements DocumentFacade {
     private final SessionRepository sessionRepository;
     private final IdGenerator idGenerator;
     private final PermissionChecker permissionChecker;
+    private final WorkloadConcurrencyLimiter concurrencyLimiter;
+
     public DocumentApplicationService(ObjectStorage storage, DocumentRepository repository, SessionRepository sessionRepository,
-                                      IdGenerator idGenerator, PermissionChecker permissionChecker) {
-        this.storage = storage; this.repository = repository; this.sessionRepository = sessionRepository; this.idGenerator = idGenerator;
+                                      IdGenerator idGenerator, PermissionChecker permissionChecker,
+                                      WorkloadConcurrencyLimiter concurrencyLimiter) {
+        this.storage = storage;
+        this.repository = repository;
+        this.sessionRepository = sessionRepository;
+        this.idGenerator = idGenerator;
         this.permissionChecker = permissionChecker;
+        this.concurrencyLimiter = concurrencyLimiter;
     }
     @Override
     public Mono<UploadedDocument> upload(UserContext user, DocumentUploadCommand command) {
@@ -52,7 +59,10 @@ public class DocumentApplicationService implements DocumentFacade {
             ensureOwnedSessionIfPresent(user, command.sessionId());
 
             // 先存对象，再保存数据库可检索的文档记录；对象 key 和文档行都使用同一份 UserContext。
-            StoredObject object = putObjectClosingStream(user, command);
+            StoredObject object;
+            try (WorkloadConcurrencyLimiter.Permit ignored = concurrencyLimiter.acquireDocumentStorage()) {
+                object = putObjectClosingStream(user, command);
+            }
             Instant now = Instant.now();
             String documentId = idGenerator.newId("doc",
                     IdGenerateContext.of(user.tenantId(), user.userId(), command.sessionId()));
@@ -161,7 +171,10 @@ public class DocumentApplicationService implements DocumentFacade {
         return Mono.fromCallable(() -> {
             permissionChecker.checkChatPermission(user);
             UploadedDocument document = loadOwnedAvailableDocument(user, documentId);
-            StoredObjectContent content = storage.getObject(document.bucket(), document.objectKey());
+            StoredObjectContent content;
+            try (WorkloadConcurrencyLimiter.Permit ignored = concurrencyLimiter.acquireDocumentStorage()) {
+                content = storage.getObject(document.bucket(), document.objectKey());
+            }
             return new DocumentDownload(document, content);
         }).subscribeOn(Schedulers.boundedElastic());
     }
@@ -245,7 +258,17 @@ public class DocumentApplicationService implements DocumentFacade {
         if (originalFilename == null || originalFilename.isBlank()) {
             return "document";
         }
-        return originalFilename.trim();
+        // 展示名也需要剥离客户端路径和控制字符，避免把本地路径或换行注入到文档库元数据。
+        String filename = originalFilename.trim().replace('\\', '/');
+        int lastSlash = filename.lastIndexOf('/');
+        if (lastSlash >= 0) {
+            filename = filename.substring(lastSlash + 1);
+        }
+        filename = filename.replaceAll("[\\r\\n\\t]", "_").trim();
+        if (filename.isBlank() || ".".equals(filename) || "..".equals(filename)) {
+            return "document";
+        }
+        return filename.length() > 255 ? filename.substring(filename.length() - 255) : filename;
     }
 
     private String blankToNull(String value) {

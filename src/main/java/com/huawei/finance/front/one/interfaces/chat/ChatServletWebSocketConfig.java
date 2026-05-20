@@ -1,5 +1,6 @@
 package com.huawei.finance.front.one.interfaces.chat;
 
+import com.huawei.finance.front.one.application.config.ChatWebSocketProperties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Configuration;
@@ -21,11 +22,14 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 public class ChatServletWebSocketConfig implements WebSocketConfigurer {
     private final ChatServletWebSocketHandler handler;
     private final ChatServletWebSocketAuthInterceptor authInterceptor;
+    private final ChatWebSocketProperties properties;
 
     public ChatServletWebSocketConfig(ChatServletWebSocketHandler handler,
-                                      ChatServletWebSocketAuthInterceptor authInterceptor) {
+                                      ChatServletWebSocketAuthInterceptor authInterceptor,
+                                      ChatWebSocketProperties properties) {
         this.handler = handler;
         this.authInterceptor = authInterceptor;
+        this.properties = properties;
     }
 
     /**
@@ -40,6 +44,6 @@ public class ChatServletWebSocketConfig implements WebSocketConfigurer {
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(handler, "/api/v1/ex/chat/ws")
                 .addInterceptors(authInterceptor)
-                .setAllowedOriginPatterns("*");
+                .setAllowedOriginPatterns(properties.allowedOriginPatternArray());
     }
 }

@@ -28,9 +28,11 @@ import reactor.core.publisher.Mono;
 @Service
 public class AgentRuntimeExecutor {
     private final AgentRuntime runtime;
+    private final WorkloadConcurrencyLimiter concurrencyLimiter;
 
-    public AgentRuntimeExecutor(AgentRuntime runtime) {
+    public AgentRuntimeExecutor(AgentRuntime runtime, WorkloadConcurrencyLimiter concurrencyLimiter) {
         this.runtime = runtime;
+        this.concurrencyLimiter = concurrencyLimiter;
     }
 
     public Flux<ChatEvent> execute(ChatCommand command, String runId, MemoryContext memory,
@@ -51,7 +53,7 @@ public class AgentRuntimeExecutor {
                 route,
                 command.metadata()
         );
-        return runtime.query(request);
+        return concurrencyLimiter.protectAgentRuntime(runtime.query(request));
     }
 
     /**

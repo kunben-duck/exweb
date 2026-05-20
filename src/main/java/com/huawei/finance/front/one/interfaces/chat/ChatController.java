@@ -1,5 +1,6 @@
 package com.huawei.finance.front.one.interfaces.chat;
 
+import com.huawei.finance.front.one.application.config.MvcSseProperties;
 import com.huawei.finance.front.one.application.facade.FinanceChatFacade;
 import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
 import com.huawei.finance.front.one.application.service.ChatFeedbackApplicationService;
@@ -17,8 +18,13 @@ import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatRunRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatRunStartDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatRunStopDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatStreamStatusDto;
+import jakarta.validation.Valid;
+import java.time.Duration;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -39,6 +45,7 @@ import reactor.core.scheduler.Schedulers;
  */
 @RestController
 @RequestMapping("/api/v1/ex/chat")
+@Validated
 public class ChatController {
     private final FinanceChatFacade chatFacade;
     private final ChatStreamApplicationService chatStreamService;
@@ -48,10 +55,12 @@ public class ChatController {
     private final PermissionChecker permissionChecker;
     private final ChatRequestTranslator requestTranslator;
     private final ChatEventTranslator eventTranslator;
+    private final MvcSseProperties sseProperties;
     public ChatController(FinanceChatFacade chatFacade, ChatStreamApplicationService chatStreamService,
                           ChatRunApplicationService chatRunService, ChatFeedbackApplicationService feedbackService,
                           AuthContextProvider auth, PermissionChecker permissionChecker,
-                          ChatRequestTranslator requestTranslator, ChatEventTranslator eventTranslator) {
+                          ChatRequestTranslator requestTranslator, ChatEventTranslator eventTranslator,
+                          MvcSseProperties sseProperties) {
         this.chatFacade = chatFacade;
         this.chatStreamService = chatStreamService;
         this.chatRunService = chatRunService;
@@ -60,6 +69,7 @@ public class ChatController {
         this.permissionChecker = permissionChecker;
         this.requestTranslator = requestTranslator;
         this.eventTranslator = eventTranslator;
+        this.sseProperties = sseProperties;
     }
 
     /**
@@ -72,7 +82,7 @@ public class ChatController {
      * @return 新建后台 run 的创建结果，包含 runId、sessionId、firstSeq 和 streamTopicId。
      */
     @PostMapping(value = "/runs")
-    public Mono<ChatRunStartDto> startRun(@RequestBody CreateChatRunRequest request) {
+    public Mono<ChatRunStartDto> startRun(@Valid @RequestBody CreateChatRunRequest request) {
         UserContext user = resolveChatUser();
         return chatFacade.startRun(user, requestTranslator.toCommand(request))
                 .map(runStart -> new ChatRunStartDto(
@@ -91,7 +101,7 @@ public class ChatController {
      * @return stop 后的 run 状态；已终态 run 会幂等返回当前状态。
      */
     @PostMapping(value = "/runs/{runId}/stop")
-    public Mono<ChatRunStopDto> stopRun(@PathVariable String runId) {
+    public Mono<ChatRunStopDto> stopRun(@PathVariable("runId") String runId) {
         UserContext user = resolveChatUser();
         return chatFacade.stopRun(user, runId)
                 .map(this::toStopDto)
@@ -106,7 +116,7 @@ public class ChatController {
      * @return 已保存的反馈摘要。
      */
     @PostMapping(value = "/messages/{messageId}/feedback")
-    public Mono<MessageFeedbackDto> feedback(@PathVariable String messageId,
+    public Mono<MessageFeedbackDto> feedback(@PathVariable("messageId") String messageId,
                                                   @RequestBody MessageFeedbackRequest request) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> {
@@ -133,12 +143,13 @@ public class ChatController {
      * @return SSE 事件流，event name 等于聊天事件 type，data 为 ChatEventDto。
      */
     @GetMapping(value = "/sessions/{sessionId}/events/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<ServerSentEvent<ChatEventDto>> resumeSse(@PathVariable String sessionId,
-                                                             @RequestParam(value = "afterSeq", defaultValue = "0") long afterSeq) {
+    public ResponseEntity<Flux<ServerSentEvent<ChatEventDto>>> resumeSse(@PathVariable("sessionId") String sessionId,
+                                                                         @RequestParam(value = "afterSeq", defaultValue = "0") long afterSeq) {
         UserContext user = resolveChatUser();
-        return chatStreamService.resumeSession(user, sessionId, afterSeq)
+        Flux<ServerSentEvent<ChatEventDto>> events = chatStreamService.resumeSession(user, sessionId, afterSeq)
                 .map(eventTranslator::toDto)
                 .map(dto -> ServerSentEvent.<ChatEventDto>builder().event(dto.type()).data(dto).build());
+        return sseResponse(events);
     }
 
     /**
@@ -154,12 +165,13 @@ public class ChatController {
      * @return SSE 事件流，event name 等于聊天事件 type，data 为 ChatEventDto；active run 会持续到终态。
      */
     @GetMapping(value = "/runs/{runId}/events/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<ServerSentEvent<ChatEventDto>> resumeRunSse(@PathVariable String runId,
-                                                            @RequestParam(value = "afterSeq", defaultValue = "0") long afterSeq) {
+    public ResponseEntity<Flux<ServerSentEvent<ChatEventDto>>> resumeRunSse(@PathVariable("runId") String runId,
+                                                                            @RequestParam(value = "afterSeq", defaultValue = "0") long afterSeq) {
         UserContext user = resolveChatUser();
-        return chatStreamService.resumeRun(user, runId, afterSeq)
+        Flux<ServerSentEvent<ChatEventDto>> events = chatStreamService.resumeRun(user, runId, afterSeq)
                 .map(eventTranslator::toDto)
                 .map(dto -> ServerSentEvent.<ChatEventDto>builder().event(dto.type()).data(dto).build());
+        return sseResponse(withHeartbeat(events));
     }
 
     /**
@@ -169,7 +181,7 @@ public class ChatController {
      * @return 当前 latestSeq、activeRunId、activeStreamTopicId 和 cancellable 状态。
      */
     @GetMapping(value = "/sessions/{sessionId}/stream-status")
-    public Mono<ChatStreamStatusDto> streamStatus(@PathVariable String sessionId) {
+    public Mono<ChatStreamStatusDto> streamStatus(@PathVariable("sessionId") String sessionId) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> toStreamStatusDto(chatRunService.streamStatus(user, sessionId)))
                 .subscribeOn(Schedulers.boundedElastic());
@@ -179,6 +191,30 @@ public class ChatController {
         UserContext user = auth.resolve();
         permissionChecker.checkChatPermission(user);
         return user;
+    }
+
+    private ResponseEntity<Flux<ServerSentEvent<ChatEventDto>>> sseResponse(Flux<ServerSentEvent<ChatEventDto>> events) {
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_EVENT_STREAM)
+                .header(HttpHeaders.CACHE_CONTROL, "no-cache")
+                .header("X-Accel-Buffering", "no")
+                .body(events);
+    }
+
+    private Flux<ServerSentEvent<ChatEventDto>> withHeartbeat(Flux<ServerSentEvent<ChatEventDto>> events) {
+        Duration interval = sseProperties.normalizedHeartbeatInterval();
+        if (interval.isZero() || interval.isNegative()) {
+            return events;
+        }
+        return events.publish(shared -> Flux.merge(
+                shared,
+                Flux.interval(interval)
+                        .map(ignored -> ServerSentEvent.<ChatEventDto>builder()
+                                .event("heartbeat")
+                                .comment("keepalive")
+                                .build())
+                        .takeUntilOther(shared.ignoreElements())
+        ));
     }
 
     private ChatRunStopDto toStopDto(ChatRunStopResult result) {

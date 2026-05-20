@@ -25,9 +25,11 @@ import reactor.core.publisher.Mono;
 @Service
 public class SubAgentExecutor {
     private final SubAgentClient subAgentClient;
+    private final WorkloadConcurrencyLimiter concurrencyLimiter;
 
-    public SubAgentExecutor(SubAgentClient subAgentClient) {
+    public SubAgentExecutor(SubAgentClient subAgentClient, WorkloadConcurrencyLimiter concurrencyLimiter) {
         this.subAgentClient = subAgentClient;
+        this.concurrencyLimiter = concurrencyLimiter;
     }
 
     public Flux<ChatEvent> execute(ChatCommand command, String runId, MemoryContext memory, RouteTarget route,
@@ -48,7 +50,7 @@ public class SubAgentExecutor {
                 route,
                 command.metadata()
         );
-        return subAgentClient.query(request);
+        return concurrencyLimiter.protectSubAgent(subAgentClient.query(request));
     }
 
     /**

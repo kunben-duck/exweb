@@ -24,8 +24,8 @@ public interface RuntimeBindingRepository {
     /**
      * 按消息树 leaf 查询当前会话可续接的 Runtime 绑定。
      *
-     * <p>默认实现只兼容无 leaf 的旧测试与迁移期实现；生产 openGauss 仓储会覆盖该方法，
-     * 使用 {@code tenantId + userId + sessionId + provider + leafMessageId + ACTIVE} 精确查询。</p>
+     * <p>leaf 为空表示根路径绑定；openGauss 仓储使用
+     * {@code tenantId + userId + sessionId + provider + leafMessageId + ACTIVE} 精确查询。</p>
      */
     default Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId, String provider,
                                                 String leafMessageId) {

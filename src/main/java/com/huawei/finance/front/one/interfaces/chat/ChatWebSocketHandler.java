@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.interfaces.chat;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.finance.front.one.application.config.ChatWebSocketProperties;
 import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatWebSocketEnvelopeDto;
@@ -29,13 +30,16 @@ public class ChatWebSocketHandler implements WebSocketHandler {
     private final ChatWebSocketProtocolService protocolService;
     private final AuthContextProvider auth;
     private final ObjectMapper objectMapper;
+    private final ChatWebSocketProperties properties;
 
     public ChatWebSocketHandler(ChatWebSocketProtocolService protocolService,
                                 AuthContextProvider auth,
-                                ObjectMapper objectMapper) {
+                                ObjectMapper objectMapper,
+                                ChatWebSocketProperties properties) {
         this.protocolService = protocolService;
         this.auth = auth;
         this.objectMapper = objectMapper;
+        this.properties = properties;
     }
 
     /**
@@ -46,6 +50,12 @@ public class ChatWebSocketHandler implements WebSocketHandler {
      */
     @Override
     public Mono<Void> handle(WebSocketSession session) {
+        String origin = session.getHandshakeInfo().getHeaders().getOrigin();
+        if (!properties.originAllowed(origin)) {
+            return session.send(Flux.just(toMessage(session,
+                    ChatWebSocketEnvelopeDto.error(null, "WS_ORIGIN_FORBIDDEN", "WebSocket Origin 不在允许列表"))))
+                    .then(session.close(CloseStatus.POLICY_VIOLATION));
+        }
         UserContext user;
         try {
             user = auth.resolve();
@@ -56,13 +66,22 @@ public class ChatWebSocketHandler implements WebSocketHandler {
         }
 
         Sinks.Many<WebSocketMessage> outbound = Sinks.many().unicast()
-                .onBackpressureBuffer(Queues.<WebSocketMessage>get(256).get());
+                .onBackpressureBuffer(Queues.<WebSocketMessage>get(properties.normalizedOutboundQueueSize()).get());
         ChatWebSocketOutbound sender = envelope -> emit(session, outbound, user, envelope);
         Mono<Void> inbound = session.receive()
                 .filter(message -> message.getType() == WebSocketMessage.Type.TEXT)
+                .handle((message, sink) -> {
+                    if (message.getPayloadAsText().length() > properties.normalizedMaxInboundMessageBytes()) {
+                        sender.emit(ChatWebSocketEnvelopeDto.error(null,
+                                "WS_MESSAGE_TOO_LARGE", "WebSocket 控制消息超过最大允许大小"));
+                        sink.error(new IllegalArgumentException("WebSocket 控制消息超过最大允许大小"));
+                    } else {
+                        sink.next(message);
+                    }
+                })
                 // 当前只接受连接控制消息。聊天请求必须走 POST /chat/runs 创建后台 run。
                 .concatMap(message -> protocolService.handleTextMessage(
-                        session.getId(), user, sender, message.getPayloadAsText()))
+                        session.getId(), user, sender, ((WebSocketMessage) message).getPayloadAsText()))
                 .onErrorResume(ex -> {
                     sender.emit(ChatWebSocketEnvelopeDto.error(null, "WS_STREAM_ERROR", ex.getMessage()));
                     return Mono.empty();

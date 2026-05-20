@@ -395,6 +395,13 @@ Servlet/MVC WebSocket 会在 `HandshakeInterceptor.beforeHandshake` 阶段调用
 `AuthContextProvider.resolve()`，并把不可变 `UserContext` 写入 WebSocket session attributes；
 `afterConnectionEstablished` 和后续消息处理只读取该快照，不再访问企业 ThreadLocal。
 
+MVC/Servlet 生产模式增加了长连接治理层：`financeex.websocket.allowed-origin-patterns`
+限制握手来源，`max-connections-per-user`、`max-subscriptions-per-connection`、
+`max-subscribers-per-topic`、`outbound-queue-size`、`live-buffer-capacity` 和 `idle-timeout`
+限制本机连接资源。run 级 SSE 通过 `financeex.mvc.sse.heartbeat-interval` 发送 heartbeat，
+配合 `spring.mvc.async.request-timeout` 与 Tomcat 连接配置避免空闲断流。WebSocket 实时投递
+出现慢客户端、缓冲溢出或乱序时返回 `RECOVER_REQUIRED`，可靠恢复仍走 openGauss event + SSE resume。
+
 文档上传同样按启动模式做接口层适配：Servlet/MVC 注册 `MvcDocumentUploadController`
 并接收 `MultipartFile`，纯 WebFlux 注册 `ReactiveDocumentUploadController` 并接收
 `FilePart`。两种 Controller 都委托 `DocumentUploadSupport`，由它先把上传流写入临时文件，
@@ -613,6 +620,12 @@ Redis key 必须以 `fin_ex` 开头：
 - `fin_ex:chat_read_cursor:{tenantId}:{userId}:{sessionId}`
 - `fin_ex:chat_stream:{streamTopicId}`
 - `fin_ex:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
+
+同一会话的 active run 互斥由 Redis active key 和 openGauss run 状态共同保护。创建 run 前会先查询
+当前 active run，真正写入 `RUNNING` run 时通过 Redis set-if-absent 声明
+`fin_ex:chat_run:active:{tenantId}:{userId}:{sessionId}`；声明失败时返回 `ACTIVE_RUN_EXISTS`。
+run 进入 `COMPLETED/FAILED/CANCELLED` 后释放 active key。Redis 不可用时可退化为 openGauss
+active run 检查，但生产集群应保证 Redis Cluster 可用以降低并发竞态窗口。
 
 Redis 部署模式由 `financeex.redis.mode` 控制，默认 `standalone`；生产 Redis Cluster 设置为
 `cluster` 并配置 `financeex.redis.cluster.nodes`。RuntimeBinding 使用 Redis hash tag 保证同一会话

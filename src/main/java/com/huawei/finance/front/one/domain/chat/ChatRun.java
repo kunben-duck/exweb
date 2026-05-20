@@ -55,7 +55,9 @@ public record ChatRun(
         Instant updatedAt
 ) {
     /**
-     * 兼容旧调用点的普通 NEXT run 构造器。
+     * 创建普通 NEXT run。
+     *
+     * <p>该构造器适用于不需要编辑/重新生成语义的普通提问；消息树增强场景使用完整构造器。</p>
      */
     public ChatRun(String id, String tenantId, String userId, String sessionId, ChatRunStatus status,
                    String routeType, String agentCode, String runtimeProvider, String runtimeSessionId,

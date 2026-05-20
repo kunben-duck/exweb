@@ -1,5 +1,6 @@
 package com.huawei.finance.front.one.application.service;
 
+import com.huawei.finance.front.one.application.config.ChatWebSocketProperties;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
@@ -8,15 +9,15 @@ import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Service;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
+import reactor.util.concurrent.Queues;
 
 /**
  * 聊天事件流应用服务。
@@ -34,12 +35,14 @@ public class ChatStreamApplicationService {
     private final ChatReadCursorApplicationService readCursorService;
     private final PermissionChecker permissionChecker;
     private final SessionRepository sessionRepository;
+    private final ChatWebSocketProperties webSocketProperties;
 
     public ChatStreamApplicationService(ChatEventStore eventStore, LocalChatEventStreamRegistry registry,
                                         ChatLiveEventBus liveEventBus, ChatRunRepository runRepository,
                                         ChatReadCursorApplicationService readCursorService,
                                         PermissionChecker permissionChecker,
-                                        SessionRepository sessionRepository) {
+                                        SessionRepository sessionRepository,
+                                        ChatWebSocketProperties webSocketProperties) {
         this.eventStore = eventStore;
         this.registry = registry;
         this.liveEventBus = liveEventBus;
@@ -47,6 +50,7 @@ public class ChatStreamApplicationService {
         this.readCursorService = readCursorService;
         this.permissionChecker = permissionChecker;
         this.sessionRepository = sessionRepository;
+        this.webSocketProperties = webSocketProperties;
     }
 
     /**
@@ -201,7 +205,9 @@ public class ChatStreamApplicationService {
     }
 
     private RunTopicLiveBuffer liveBuffer(String topicId, long afterSeq) {
-        Sinks.Many<ChatEvent> sink = Sinks.many().unicast().onBackpressureBuffer();
+        Sinks.Many<ChatEvent> sink = Sinks.many().unicast().onBackpressureBuffer(
+                Queues.<ChatEvent>get(webSocketProperties.normalizedLiveBufferCapacity()).get()
+        );
         Disposable subscription = deduplicate(Flux.merge(
                 registry.subscribeRunTopic(topicId, afterSeq),
                 liveEventBus.subscribe(topicId).filter(event -> event.sequence() > afterSeq)
@@ -209,10 +215,12 @@ public class ChatStreamApplicationService {
                 event -> {
                     Sinks.EmitResult result = sink.tryEmitNext(event);
                     if (result.isFailure()) {
-                        sink.tryEmitError(new IllegalStateException("run topic live buffer emit failed: " + result));
+                        sink.tryEmitError(new StreamRecoveryRequiredException(topicId, afterSeq,
+                                "run topic live buffer emit failed: " + result));
                     }
                 },
-                sink::tryEmitError,
+                error -> sink.tryEmitError(new StreamRecoveryRequiredException(topicId, afterSeq,
+                        "run topic live source failed: " + error.getMessage())),
                 sink::tryEmitComplete
         );
         return new RunTopicLiveBuffer(sink.asFlux(), subscription);
@@ -220,8 +228,12 @@ public class ChatStreamApplicationService {
 
     private Flux<ChatEvent> deduplicate(Flux<ChatEvent> events) {
         return Flux.defer(() -> {
-            Set<Long> seen = ConcurrentHashMap.newKeySet();
-            return events.filter(event -> seen.add(event.sequence()));
+            Map<Long, Boolean> seen = new BoundedSeqMap(webSocketProperties.normalizedDeliveredSeqWindow());
+            return events.filter(event -> {
+                synchronized (seen) {
+                    return seen.putIfAbsent(event.sequence(), Boolean.TRUE) == null;
+                }
+            });
         });
     }
 
@@ -269,6 +281,25 @@ public class ChatStreamApplicationService {
             if (subscription != null && !subscription.isDisposed()) {
                 subscription.dispose();
             }
+        }
+    }
+
+    /**
+     * 有限窗口 seq 记忆表。
+     *
+     * <p>Redis Pub/Sub 与本机 registry 可能同时回流同一个事件，因此订阅侧需要去重。
+     * 该窗口只服务实时投递，不作为可靠游标；可靠恢复仍以 openGauss event 表为准。</p>
+     */
+    private static final class BoundedSeqMap extends LinkedHashMap<Long, Boolean> {
+        private final int maxSize;
+
+        private BoundedSeqMap(int maxSize) {
+            this.maxSize = maxSize;
+        }
+
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<Long, Boolean> eldest) {
+            return size() > maxSize;
         }
     }
 }

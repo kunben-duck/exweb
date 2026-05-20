@@ -77,7 +77,7 @@ public class RuntimeBindingApplicationService {
     }
 
     /**
-     * 兼容无消息树 leaf 的迁移期查询。
+     * 查询根路径 RuntimeBinding。
      */
     public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId) {
         return findActive(tenantId, userId, sessionId, null);

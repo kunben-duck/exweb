@@ -1,11 +1,14 @@
 package com.huawei.finance.front.one.interfaces.chat;
 
+import com.huawei.finance.front.one.application.config.ChatWebSocketProperties;
 import com.huawei.finance.front.one.domain.auth.UserContext;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 
@@ -18,6 +21,16 @@ import reactor.core.Disposable;
 @Component
 public class LocalWebSocketConnectionRegistry {
     private final Map<String, ConnectionState> connections = new ConcurrentHashMap<>();
+    private final ChatWebSocketProperties properties;
+
+    public LocalWebSocketConnectionRegistry() {
+        this(new ChatWebSocketProperties());
+    }
+
+    @Autowired
+    public LocalWebSocketConnectionRegistry(ChatWebSocketProperties properties) {
+        this.properties = properties;
+    }
 
     /**
      * 注册一条已完成握手鉴权的 WebSocket 连接。
@@ -26,9 +39,20 @@ public class LocalWebSocketConnectionRegistry {
      * @param user 当前连接的用户身份快照。
      * @return 连接状态。
      */
-    public ConnectionState register(String connectionId, UserContext user) {
+    public synchronized ConnectionState register(String connectionId, UserContext user) {
+        long currentConnections = connections.values().stream()
+                .filter(state -> state.tenantId().equals(user.tenantId()))
+                .filter(state -> state.userId().equals(user.userId()))
+                .count();
+        if (currentConnections >= properties.normalizedMaxConnectionsPerUser()) {
+            throw new IllegalStateException("WS_CONNECTION_LIMIT_EXCEEDED: 当前用户 WebSocket 连接数已达上限");
+        }
         ConnectionState state = new ConnectionState(connectionId, user.tenantId(), user.userId(), user.username());
-        connections.put(connectionId, state);
+        ConnectionState previous = connections.put(connectionId, state);
+        if (previous != null) {
+            // 正常情况下 WebSocket sessionId 不会复用；这里做防御性释放，避免异常重连污染 topic 订阅。
+            previous.close();
+        }
         return state;
     }
 
@@ -60,8 +84,18 @@ public class LocalWebSocketConnectionRegistry {
      * @param afterSeq 订阅起点，服务端不会向该连接重复投递小于等于该值的事件。
      * @param disposable 当前 topic 实时事件订阅句柄，取消订阅或断开连接时释放。
      */
-    public void subscribe(String connectionId, String topicId, long afterSeq, Disposable disposable) {
-        get(connectionId).ifPresent(state -> state.subscribe(topicId, afterSeq, disposable));
+    public synchronized void subscribe(String connectionId, String topicId, long afterSeq, Disposable disposable) {
+        get(connectionId).ifPresent(state -> {
+            if (!state.subscriptions.containsKey(topicId)
+                    && state.subscriptionCount() >= properties.normalizedMaxSubscriptionsPerConnection()) {
+                throw new IllegalStateException("WS_SUBSCRIPTION_LIMIT_EXCEEDED: 当前连接订阅 topic 数已达上限");
+            }
+            if (!state.subscriptions.containsKey(topicId)
+                    && topicSubscriberCount(topicId) >= properties.normalizedMaxSubscribersPerTopic()) {
+                throw new IllegalStateException("WS_TOPIC_SUBSCRIBER_LIMIT_EXCEEDED: 当前 topic 本机订阅数已达上限");
+            }
+            state.subscribe(topicId, afterSeq, disposable, properties.normalizedDeliveredSeqWindow());
+        });
     }
 
     /**
@@ -95,6 +129,10 @@ public class LocalWebSocketConnectionRegistry {
         return get(connectionId).map(ConnectionState::acknowledgedSubscriptions).orElse(Map.of());
     }
 
+    public Optional<Long> lastAckSeq(String connectionId, String topicId) {
+        return get(connectionId).flatMap(state -> state.lastAckSeq(topicId));
+    }
+
     /**
      * 判断事件是否应发送到该连接，并记录已发送序号。
      *
@@ -112,11 +150,33 @@ public class LocalWebSocketConnectionRegistry {
      *
      * @param connectionId WebSocket 物理连接 ID。
      */
-    public void unregister(String connectionId) {
+    public synchronized void unregister(String connectionId) {
         ConnectionState state = connections.remove(connectionId);
         if (state != null) {
             state.close();
         }
+    }
+
+    /**
+     * 判断连接是否已超过空闲时间。
+     *
+     * @param connectionId WebSocket 物理连接 ID。
+     * @param idleTimeout 空闲阈值；小于等于 0 表示不判定空闲。
+     * @return true 表示连接存在且已空闲超时。
+     */
+    public boolean idleForLongerThan(String connectionId, Duration idleTimeout) {
+        if (idleTimeout == null || idleTimeout.isZero() || idleTimeout.isNegative()) {
+            return false;
+        }
+        return get(connectionId)
+                .map(state -> state.lastActiveAt().plus(idleTimeout).isBefore(Instant.now()))
+                .orElse(false);
+    }
+
+    private long topicSubscriberCount(String topicId) {
+        return connections.values().stream()
+                .filter(state -> state.subscriptions.containsKey(topicId))
+                .count();
     }
 
     /**
@@ -180,9 +240,9 @@ public class LocalWebSocketConnectionRegistry {
             touch();
         }
 
-        private void subscribe(String topicId, long afterSeq, Disposable disposable) {
+        private void subscribe(String topicId, long afterSeq, Disposable disposable, int deliveredSeqWindow) {
             unsubscribe(topicId);
-            subscriptions.put(topicId, new SubscriptionState(topicId, afterSeq, disposable));
+            subscriptions.put(topicId, new SubscriptionState(topicId, afterSeq, disposable, deliveredSeqWindow));
             touch();
         }
 
@@ -210,6 +270,11 @@ public class LocalWebSocketConnectionRegistry {
             return Map.copyOf(snapshot);
         }
 
+        private Optional<Long> lastAckSeq(String topicId) {
+            SubscriptionState subscription = subscriptions.get(topicId);
+            return subscription == null ? Optional.empty() : Optional.of(subscription.lastAckSeq());
+        }
+
         private DeliveryDecision markDelivered(String topicId, long seq) {
             SubscriptionState subscription = subscriptions.get(topicId);
             if (subscription == null) {
@@ -234,19 +299,18 @@ public class LocalWebSocketConnectionRegistry {
      * 单个 topic 的订阅状态。
      */
     private static final class SubscriptionState {
-        private static final int MAX_REMEMBERED_DELIVERIES = 2048;
-
         private final String topicId;
         private final Disposable disposable;
-        private final Map<Long, Boolean> deliveredSeqs = new DeliveredSeqMap();
+        private final Map<Long, Boolean> deliveredSeqs;
         private volatile long lastAckSeq;
         private volatile long highestDeliveredSeq;
 
-        private SubscriptionState(String topicId, long afterSeq, Disposable disposable) {
+        private SubscriptionState(String topicId, long afterSeq, Disposable disposable, int deliveredSeqWindow) {
             this.topicId = topicId;
             this.lastAckSeq = afterSeq;
             this.highestDeliveredSeq = afterSeq;
             this.disposable = disposable;
+            this.deliveredSeqs = new DeliveredSeqMap(deliveredSeqWindow);
         }
 
         private void ack(long seq) {
@@ -283,9 +347,15 @@ public class LocalWebSocketConnectionRegistry {
         }
 
         private static final class DeliveredSeqMap extends LinkedHashMap<Long, Boolean> {
+            private final int maxSize;
+
+            private DeliveredSeqMap(int maxSize) {
+                this.maxSize = maxSize;
+            }
+
             @Override
             protected boolean removeEldestEntry(Map.Entry<Long, Boolean> eldest) {
-                return size() > MAX_REMEMBERED_DELIVERIES;
+                return size() > maxSize;
             }
         }
     }

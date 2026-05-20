@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.interfaces.chat;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.finance.front.one.application.config.ChatWebSocketProperties;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatWebSocketEnvelopeDto;
 import java.io.IOException;
@@ -11,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -30,16 +32,17 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class ChatServletWebSocketHandler extends TextWebSocketHandler {
     private static final Logger log = LoggerFactory.getLogger(ChatServletWebSocketHandler.class);
-    private static final int SEND_TIME_LIMIT_MS = 10_000;
-    private static final int BUFFER_SIZE_LIMIT_BYTES = 512 * 1024;
 
     private final ChatWebSocketProtocolService protocolService;
     private final ObjectMapper objectMapper;
+    private final ChatWebSocketProperties properties;
     private final Map<String, ServletConnection> connections = new ConcurrentHashMap<>();
 
-    public ChatServletWebSocketHandler(ChatWebSocketProtocolService protocolService, ObjectMapper objectMapper) {
+    public ChatServletWebSocketHandler(ChatWebSocketProtocolService protocolService, ObjectMapper objectMapper,
+                                       ChatWebSocketProperties properties) {
         this.protocolService = protocolService;
         this.objectMapper = objectMapper;
+        this.properties = properties;
     }
 
     @Override
@@ -56,7 +59,7 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
         // ConcurrentWebSocketSessionDecorator 给 Servlet WebSocket 出站发送提供并发保护和有界缓冲。
         // 这对应 WebFlux 版本的 unicast sink，避免多个 runtime 事件线程同时写底层 socket。
         ConcurrentWebSocketSessionDecorator decorated = new ConcurrentWebSocketSessionDecorator(
-                session, SEND_TIME_LIMIT_MS, BUFFER_SIZE_LIMIT_BYTES);
+                session, properties.normalizedSendTimeLimitMillis(), properties.normalizedSendBufferSizeBytes());
         connections.put(session.getId(), new ServletConnection(user, decorated));
     }
 
@@ -65,6 +68,12 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
         ServletConnection connection = connections.get(session.getId());
         if (connection == null) {
             closeSilently(session, CloseStatus.NOT_ACCEPTABLE);
+            return;
+        }
+        if (message.getPayloadLength() > properties.normalizedMaxInboundMessageBytes()) {
+            emit(session.getId(), connection, ChatWebSocketEnvelopeDto.error(null,
+                    "WS_MESSAGE_TOO_LARGE", "WebSocket 控制消息超过最大允许大小"));
+            closeSilently(session, CloseStatus.TOO_BIG_TO_PROCESS);
             return;
         }
         ChatWebSocketOutbound outbound = envelope -> emit(session.getId(), connection, envelope);
@@ -88,6 +97,25 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
     public void handleTransportError(WebSocketSession session, Throwable exception) {
         log.warn("Servlet WebSocket transport error, connectionId={}, reason={}", session.getId(), exception.getMessage());
         closeSilently(session, CloseStatus.SERVER_ERROR);
+    }
+
+    /**
+     * 清理 MVC WebSocket 空闲连接。
+     *
+     * <p>Servlet 容器会为长连接保留资源。生产环境中如果前端页面进入后台、网络中断但 TCP 未立即关闭，
+     * 该任务会主动释放本机连接状态和 topic 订阅，避免连接泄漏。</p>
+     */
+    @Scheduled(fixedDelayString = "#{@chatWebSocketProperties.normalizedIdleCheckIntervalMillis()}")
+    public void closeIdleConnections() {
+        connections.forEach((connectionId, connection) -> {
+            if (protocolService.idleForLongerThan(connectionId, properties.normalizedIdleTimeout())) {
+                emit(connectionId, connection, ChatWebSocketEnvelopeDto.error(null,
+                        "WS_IDLE_TIMEOUT", "WebSocket 连接空闲超时"));
+                protocolService.close(connectionId, connection.user());
+                connections.remove(connectionId);
+                closeSilently(connection.session(), CloseStatus.GOING_AWAY);
+            }
+        });
     }
 
     private void emit(String connectionId, ServletConnection connection, ChatWebSocketEnvelopeDto envelope) {

@@ -42,6 +42,9 @@ class WebSocketServerCompatibilityTest {
                 "src/main/java/com/huawei/finance/front/one/interfaces/chat/ChatWebSocketProtocolService.java"));
 
         assertThat(servletConfig).contains(".addInterceptors(authInterceptor)");
+        assertThat(servletConfig)
+                .contains("setAllowedOriginPatterns(properties.allowedOriginPatternArray())")
+                .doesNotContain("setAllowedOriginPatterns(\"*\")");
         assertThat(servletHandler).contains("ChatWebSocketUserContextAttributes.require(session.getAttributes())");
         assertThat(protocolService)
                 .doesNotContain("application.integration.identity.AuthContextProvider")

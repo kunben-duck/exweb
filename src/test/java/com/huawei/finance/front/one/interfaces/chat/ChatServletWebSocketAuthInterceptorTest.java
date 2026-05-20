@@ -75,7 +75,11 @@ class ChatServletWebSocketAuthInterceptorTest {
                 null,
                 null
         );
-        ChatServletWebSocketHandler handler = new ChatServletWebSocketHandler(protocolService, new ObjectMapper());
+        ChatServletWebSocketHandler handler = new ChatServletWebSocketHandler(
+                protocolService,
+                new ObjectMapper(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
+        );
 
         handler.afterConnectionEstablished(new TestWebSocketSession("conn1", attributes));
 

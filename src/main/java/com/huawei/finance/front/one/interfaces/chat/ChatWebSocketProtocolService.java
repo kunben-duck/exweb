@@ -2,12 +2,14 @@ package com.huawei.finance.front.one.interfaces.chat;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.finance.front.one.application.service.StreamRecoveryRequiredException;
 import com.huawei.finance.front.one.application.service.ChatStreamApplicationService;
 import com.huawei.finance.front.one.application.service.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatEventDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatWebSocketEnvelopeDto;
 import java.util.Map;
+import java.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -83,6 +85,17 @@ public class ChatWebSocketProtocolService {
                     );
         }
         connectionRegistry.unregister(connectionId);
+    }
+
+    /**
+     * 判断连接是否空闲超时。
+     *
+     * @param connectionId 当前物理 WebSocket 连接 ID。
+     * @param idleTimeout 空闲阈值。
+     * @return true 表示连接应由入口 handler 主动关闭。
+     */
+    public boolean idleForLongerThan(String connectionId, Duration idleTimeout) {
+        return connectionRegistry.idleForLongerThan(connectionId, idleTimeout);
     }
 
     /**
@@ -186,21 +199,22 @@ public class ChatWebSocketProtocolService {
                     if (connectionRegistry.get(connectionId).isEmpty()) {
                         return Mono.empty();
                     }
+                    Sinks.Empty<Void> cancellation = Sinks.empty();
+                    try {
+                        connectionRegistry.subscribe(connectionId, topicId, afterSeq, cancellationDisposable(cancellation));
+                    } catch (RuntimeException ex) {
+                        cancellation.tryEmitEmpty();
+                        return Mono.error(ex);
+                    }
                     outbound.emit(ChatWebSocketEnvelopeDto.reply(commandId,
                             Map.of("type", "subscribe", "topicId", topicId, "recovered", afterSeq > 0,
                                     "lastSeq", afterSeq)));
-                    Sinks.Empty<Void> cancellation = Sinks.empty();
-                    connectionRegistry.subscribe(connectionId, topicId, afterSeq, cancellationDisposable(cancellation));
                     chatStreamService.resumeRunTopic(user, topicId, afterSeq)
                             .map(eventTranslator::toDto)
                             .takeUntilOther(cancellation.asMono())
                             .subscribe(
                                     dto -> emitTopicEvent(connectionId, outbound, topicId, cancellation, dto),
-                                    ex -> {
-                                        outbound.emit(ChatWebSocketEnvelopeDto.error(commandId,
-                                                "SUBSCRIBE_ERROR", ex.getMessage()));
-                                        connectionRegistry.unsubscribe(connectionId, topicId);
-                                    }
+                                    ex -> handleSubscriptionError(connectionId, outbound, topicId, commandId, afterSeq, ex)
                             );
                     return Mono.<Void>empty();
                 })
@@ -208,6 +222,17 @@ public class ChatWebSocketProtocolService {
                     outbound.emit(ChatWebSocketEnvelopeDto.error(commandId, "SUBSCRIBE_ERROR", ex.getMessage()));
                     return Mono.<Void>empty();
                 });
+    }
+
+    private void handleSubscriptionError(String connectionId, ChatWebSocketOutbound outbound, String topicId,
+                                         String commandId, long afterSeq, Throwable ex) {
+        if (ex instanceof StreamRecoveryRequiredException recovery) {
+            long lastAckSeq = connectionRegistry.lastAckSeq(connectionId, topicId).orElse(afterSeq);
+            outbound.emit(ChatWebSocketEnvelopeDto.recoverRequired(topicId, lastAckSeq, recovery.afterSeq()));
+        } else {
+            outbound.emit(ChatWebSocketEnvelopeDto.error(commandId, "SUBSCRIBE_ERROR", ex.getMessage()));
+        }
+        connectionRegistry.unsubscribe(connectionId, topicId);
     }
 
     private void emitTopicEvent(String connectionId, ChatWebSocketOutbound outbound, String topicId,

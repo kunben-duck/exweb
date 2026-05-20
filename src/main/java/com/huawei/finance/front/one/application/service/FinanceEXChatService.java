@@ -65,6 +65,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private final ChatStreamApplicationService chatStreamService;
     private final ChatRunApplicationService chatRunService;
     private final LocalChatRunExecutionRegistry runExecutionRegistry;
+    private final RunAdmissionControlService runAdmissionControl;
     private final IdGenerator idGenerator;
 
     public FinanceEXChatService(SessionApplicationService sessionService,
@@ -73,7 +74,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                 SubAgentExecutor subAgentExecutor, SystemResponseExecutor systemResponseExecutor,
                                 AgentRuntimeExecutor agentRuntimeExecutor, DocumentFacade documentFacade, ChatStreamApplicationService chatStreamService,
                                 ChatRunApplicationService chatRunService, LocalChatRunExecutionRegistry runExecutionRegistry,
-                                IdGenerator idGenerator) {
+                                RunAdmissionControlService runAdmissionControl, IdGenerator idGenerator) {
         this.sessionService = sessionService;
         this.memoryService = memoryService;
         this.runtimeBindingService = runtimeBindingService;
@@ -85,12 +86,14 @@ public class FinanceEXChatService implements FinanceChatFacade {
         this.chatStreamService = chatStreamService;
         this.chatRunService = chatRunService;
         this.runExecutionRegistry = runExecutionRegistry;
+        this.runAdmissionControl = runAdmissionControl;
         this.idGenerator = idGenerator;
     }
 
     @Override
     public Mono<ChatRunStartResult> startRun(UserContext user, ChatCommand command) {
         return Mono.defer(() -> {
+            RunAdmissionControlService.Permit runPermit = runAdmissionControl.acquire(user);
             Sinks.One<ChatEvent> firstEvent = Sinks.one();
             AtomicReference<Disposable> disposableRef = new AtomicReference<>();
             AtomicReference<String> runIdRef = new AtomicReference<>();
@@ -109,6 +112,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     .doFinally(signalType -> {
                         terminal.set(true);
                         runExecutionRegistry.complete(runIdRef.get());
+                        runPermit.close();
                     });
             Disposable disposable = runFlux
                     // 异步 run 由服务端订阅并持续执行；前端通过 resume 接口按 seq 读取事件。
@@ -170,6 +174,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
             // 会话不存在时创建会话；历史 Memory 先排除本轮输入，避免 Runtime 再接收用户消息时重复。
             ChatSession session = sessionService.loadOrCreate(identified);
+            // 同一会话同一时刻只允许一个 active run。这里在写入用户消息前快速拒绝，
+            // 避免多页签重复提交时先污染消息树；createRunning 仍会再做一次 Redis 原子声明。
+            chatRunService.rejectIfActiveRunExists(user, session.id());
 
             List<AttachmentRef> attachments = documentFacade.resolveAttachmentsForUser(user,
                     identified.attachments() == null ? List.of() : identified.attachments());

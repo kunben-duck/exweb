@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.interfaces.document;
 
 import com.huawei.finance.front.one.application.command.DocumentUploadCommand;
+import com.huawei.finance.front.one.application.config.DocumentUploadProperties;
 import com.huawei.finance.front.one.application.facade.DocumentFacade;
 import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
 import com.huawei.finance.front.one.application.service.PermissionChecker;
@@ -34,11 +35,14 @@ public class DocumentUploadSupport {
     private final DocumentFacade facade;
     private final AuthContextProvider auth;
     private final PermissionChecker permissionChecker;
+    private final DocumentUploadProperties uploadProperties;
 
-    public DocumentUploadSupport(DocumentFacade facade, AuthContextProvider auth, PermissionChecker permissionChecker) {
+    public DocumentUploadSupport(DocumentFacade facade, AuthContextProvider auth, PermissionChecker permissionChecker,
+                                 DocumentUploadProperties uploadProperties) {
         this.facade = facade;
         this.auth = auth;
         this.permissionChecker = permissionChecker;
+        this.uploadProperties = uploadProperties;
     }
 
     /**
@@ -120,6 +124,9 @@ public class DocumentUploadSupport {
                                                  Path tempFile) {
         return Mono.fromCallable(() -> {
             long size = Files.size(tempFile);
+            if (size > uploadProperties.normalizedMaxUploadSizeBytes()) {
+                throw new IllegalArgumentException("上传文件超过最大允许大小: " + uploadProperties.normalizedMaxUploadSizeBytes());
+            }
             InputStream inputStream = Files.newInputStream(tempFile, StandardOpenOption.READ);
             return new DocumentUploadCommand(sessionId, originalFilename, contentType, size, inputStream);
         }).subscribeOn(Schedulers.boundedElastic()).flatMap(command -> facade.upload(user, command));

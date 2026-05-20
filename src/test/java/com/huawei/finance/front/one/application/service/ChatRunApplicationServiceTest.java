@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.application.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
 import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorCache;
@@ -138,6 +139,26 @@ class ChatRunApplicationServiceTest {
         assertThat(status.cancellable()).isTrue();
     }
 
+    @Test
+    void createRunningRejectsWhenSessionAlreadyHasActiveRun() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRun active = runningRun();
+        repository.save(active);
+        cache.putActive(active);
+        ChatRunApplicationService service = service(repository, cache);
+
+        assertThatThrownBy(() -> service.createRunning(
+                "run2",
+                user(),
+                "session1",
+                com.huawei.finance.front.one.domain.routing.RouteTarget.agentRuntime("test", 1.0, "test"),
+                null,
+                Map.of()
+        )).isInstanceOf(com.huawei.finance.front.one.domain.chat.ActiveRunExistsException.class)
+                .hasMessageContaining("ACTIVE_RUN_EXISTS");
+    }
+
     private ChatRunApplicationService service(InMemoryRunRepository repository, InMemoryRunCache cache) {
         return new ChatRunApplicationService(repository, cache, new InMemoryEventStore(0L),
                 readCursorService(0L), new PermissionChecker(), new FixedSessionRepository());
@@ -215,6 +236,16 @@ class ChatRunApplicationServiceTest {
         @Override
         public Optional<ChatRun> getActive(String tenantId, String userId, String sessionId) {
             return Optional.ofNullable(active.get(tenantId + ":" + userId + ":" + sessionId));
+        }
+
+        @Override
+        public boolean tryClaimActive(ChatRun run) {
+            String key = run.tenantId() + ":" + run.userId() + ":" + run.sessionId();
+            if (active.containsKey(key)) {
+                return false;
+            }
+            active.put(key, run);
+            return true;
         }
 
         @Override

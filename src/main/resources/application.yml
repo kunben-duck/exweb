@@ -1,9 +1,23 @@
 server:
   port: 8080
+  tomcat:
+    max-connections: ${FINANCEEX_TOMCAT_MAX_CONNECTIONS:8192}
+    threads:
+      max: ${FINANCEEX_TOMCAT_THREADS_MAX:200}
+      min-spare: ${FINANCEEX_TOMCAT_THREADS_MIN_SPARE:10}
+    accept-count: ${FINANCEEX_TOMCAT_ACCEPT_COUNT:200}
+    connection-timeout: ${FINANCEEX_TOMCAT_CONNECTION_TIMEOUT:20s}
 
 spring:
   application:
     name: FinanceEXChatService
+  mvc:
+    async:
+      request-timeout: ${FINANCEEX_MVC_ASYNC_REQUEST_TIMEOUT:30m}
+  servlet:
+    multipart:
+      max-file-size: ${FINANCEEX_MULTIPART_MAX_FILE_SIZE:50MB}
+      max-request-size: ${FINANCEEX_MULTIPART_MAX_REQUEST_SIZE:60MB}
   threads:
     virtual:
       enabled: true
@@ -84,10 +98,35 @@ financeex:
     redis-key-prefix: fin_ex:chat_read_cursor
     redis-ttl: 7d
     database-flush-interval: 5s
+  mvc:
+    sse:
+      # run 级 SSE resume 在 active run 无业务 token 时发送 heartbeat，防止 Servlet async、网关或代理误判空闲断流。
+      heartbeat-interval: ${FINANCEEX_SSE_HEARTBEAT_INTERVAL:15s}
   websocket:
     # WebSocket 是用户级连接，事件按 run 级 stream topic 订阅；Redis Pub/Sub 只做跨实例实时扇出。
     # 前端 WS 入口同时支持 WebFlux 与 Servlet/MVC；Servlet 模式的上下文根使用 server.servlet.context-path。
     redis-channel-prefix: fin_ex:chat_stream
+    # 生产必须替换为企业前端域名，例如 https://finex.example.com；本地默认仅允许 localhost。
+    allowed-origin-patterns: ${FINANCEEX_WEBSOCKET_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*,http://[::1]:*}
+    max-connections-per-user: ${FINANCEEX_WEBSOCKET_MAX_CONNECTIONS_PER_USER:8}
+    max-subscriptions-per-connection: ${FINANCEEX_WEBSOCKET_MAX_SUBSCRIPTIONS_PER_CONNECTION:8}
+    max-subscribers-per-topic: ${FINANCEEX_WEBSOCKET_MAX_SUBSCRIBERS_PER_TOPIC:128}
+    max-inbound-message-bytes: ${FINANCEEX_WEBSOCKET_MAX_INBOUND_MESSAGE_BYTES:16384}
+    outbound-queue-size: ${FINANCEEX_WEBSOCKET_OUTBOUND_QUEUE_SIZE:256}
+    live-buffer-capacity: ${FINANCEEX_WEBSOCKET_LIVE_BUFFER_CAPACITY:512}
+    delivered-seq-window: ${FINANCEEX_WEBSOCKET_DELIVERED_SEQ_WINDOW:2048}
+    send-time-limit: ${FINANCEEX_WEBSOCKET_SEND_TIME_LIMIT:10s}
+    send-buffer-size-bytes: ${FINANCEEX_WEBSOCKET_SEND_BUFFER_SIZE_BYTES:524288}
+    idle-timeout: ${FINANCEEX_WEBSOCKET_IDLE_TIMEOUT:10m}
+    idle-check-interval: ${FINANCEEX_WEBSOCKET_IDLE_CHECK_INTERVAL:60s}
+  run-admission:
+    enabled: ${FINANCEEX_RUN_ADMISSION_ENABLED:true}
+    max-runs-per-user-per-minute: ${FINANCEEX_RUN_MAX_PER_USER_PER_MINUTE:60}
+    max-concurrent-runs-per-tenant: ${FINANCEEX_RUN_MAX_CONCURRENT_PER_TENANT:200}
+  resource-isolation:
+    agent-runtime-max-concurrent: ${FINANCEEX_AGENT_RUNTIME_MAX_CONCURRENT:64}
+    sub-agent-max-concurrent: ${FINANCEEX_SUB_AGENT_MAX_CONCURRENT:64}
+    document-storage-max-concurrent: ${FINANCEEX_DOCUMENT_STORAGE_MAX_CONCURRENT:32}
   sub-agent:
     timeout: 30s
     agents:
@@ -141,3 +180,5 @@ financeex:
       max-connections: ${FINANCEEX_HUAWEI_S3_MAX_CONNECTIONS:200}
       connection-timeout-ms: ${FINANCEEX_HUAWEI_S3_CONNECTION_TIMEOUT_MS:10000}
       socket-timeout-ms: ${FINANCEEX_HUAWEI_S3_SOCKET_TIMEOUT_MS:30000}
+  document:
+    max-upload-size-bytes: ${FINANCEEX_DOCUMENT_MAX_UPLOAD_SIZE_BYTES:52428800}

@@ -75,6 +75,13 @@ MVC/Servlet WebSocket 是一个特殊入口：用户身份必须在 `HandshakeIn
 阶段从企业 ThreadLocal 解析并写入 WebSocket session attributes。`afterConnectionEstablished`、
 subscribe、ack 和连接关闭回调只读取该身份快照，不会再次调用 `AuthContextProvider`。
 
+生产使用 MVC/Servlet 模式时，需要把长连接当作 Servlet 资源治理：SSE 使用
+`spring.mvc.async.request-timeout` 和 run 级 heartbeat 防止空闲断流；WebSocket 使用
+`financeex.websocket.allowed-origin-patterns` 做 Origin 白名单，默认只允许 localhost。
+单用户连接数、单连接订阅数、单 topic 本机订阅数、出站缓冲、live buffer 和空闲超时都由
+`financeex.websocket.*` 统一配置。慢客户端或实时缓冲溢出时，服务端会返回
+`RECOVER_REQUIRED`，前端应通过 run SSE resume 补齐后再重新订阅。
+
 ```bash
 export FINANCEEX_DEV_TENANT_ID=tenant_dev
 export FINANCEEX_DEV_USER_ID=user_dev
@@ -95,6 +102,9 @@ export FINANCEEX_DEV_USERNAME=developer
 `runId` 不是长期任务会话；它是单轮执行 correlation id。事件表 `fin_ex_chat_event_t.run_id` 和绑定表 `fin_ex_runtime_binding_t.last_run_id` 都用它做运行轨迹和排障定位。
 run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。stop 只停止本轮回答，不删除 `RuntimeBinding`。
 集群部署时，取消正确性依赖 Redis cancel flag 和 openGauss run 状态；JVM 内 subscription registry 只用于命中本机执行流时快速释放资源，不作为跨实例事实源。
+同一 `tenantId + userId + sessionId` 同一时间只允许一个 active run。若会话已有
+`RUNNING/CANCELLING` run，`POST /chat/runs` 会返回 `ACTIVE_RUN_EXISTS`，前端应先调用 stop
+或等待当前回答终态后再提交新问题。
 
 ## 消息树与只读分支
 
@@ -183,6 +193,30 @@ export FINANCEEX_RELAY_AGENT_STOP_PATH=/v1/agent/runs/{runId}/stop
 # 如果 RelayAgent 对话接口使用 WebSocket，则保持 provider=relay，只切换 api-adapter：
 export FINANCEEX_RELAY_AGENT_API_ADAPTER=relay-websocket
 export FINANCEEX_RELAY_AGENT_WEBSOCKET_PATH=/v1/agent/runs/ws
+```
+
+### MVC 生产治理配置
+
+```bash
+# Servlet async / Tomcat 长连接容量
+export FINANCEEX_MVC_ASYNC_REQUEST_TIMEOUT=30m
+export FINANCEEX_TOMCAT_MAX_CONNECTIONS=8192
+export FINANCEEX_TOMCAT_THREADS_MAX=200
+export FINANCEEX_TOMCAT_ACCEPT_COUNT=200
+
+# WebSocket 白名单和连接治理；生产必须替换为企业前端域名
+export FINANCEEX_WEBSOCKET_ALLOWED_ORIGIN_PATTERNS=https://finex.example.com
+export FINANCEEX_WEBSOCKET_MAX_CONNECTIONS_PER_USER=8
+export FINANCEEX_WEBSOCKET_MAX_SUBSCRIPTIONS_PER_CONNECTION=8
+export FINANCEEX_WEBSOCKET_LIVE_BUFFER_CAPACITY=512
+export FINANCEEX_WEBSOCKET_IDLE_TIMEOUT=10m
+
+# run 准入与外部慢资源 bulkhead
+export FINANCEEX_RUN_MAX_PER_USER_PER_MINUTE=60
+export FINANCEEX_RUN_MAX_CONCURRENT_PER_TENANT=200
+export FINANCEEX_AGENT_RUNTIME_MAX_CONCURRENT=64
+export FINANCEEX_SUB_AGENT_MAX_CONCURRENT=64
+export FINANCEEX_DOCUMENT_STORAGE_MAX_CONCURRENT=32
 ```
 
 SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP 文本流调用。Relay Runtime 作为 AgentRuntime 实现支持三个 API adapter：`relay-stream-http` 使用真实 Relay HTTP 流式协议，`deepseek-chat-completions` 使用 DeepSeek/OpenAI-compatible Chat Completions 替身，`relay-websocket` 使用 RelayAgent WebSocket 对话协议。

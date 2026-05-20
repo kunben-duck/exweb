@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.interfaces.chat;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatWebSocketEnvelopeDto;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
@@ -26,10 +27,14 @@ import reactor.util.concurrent.Queues;
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.REACTIVE)
 public class ChatWebSocketHandler implements WebSocketHandler {
     private final ChatWebSocketProtocolService protocolService;
+    private final AuthContextProvider auth;
     private final ObjectMapper objectMapper;
 
-    public ChatWebSocketHandler(ChatWebSocketProtocolService protocolService, ObjectMapper objectMapper) {
+    public ChatWebSocketHandler(ChatWebSocketProtocolService protocolService,
+                                AuthContextProvider auth,
+                                ObjectMapper objectMapper) {
         this.protocolService = protocolService;
+        this.auth = auth;
         this.objectMapper = objectMapper;
     }
 
@@ -43,7 +48,8 @@ public class ChatWebSocketHandler implements WebSocketHandler {
     public Mono<Void> handle(WebSocketSession session) {
         UserContext user;
         try {
-            user = protocolService.open(session.getId());
+            user = auth.resolve();
+            protocolService.open(session.getId(), user);
         } catch (RuntimeException ex) {
             return session.send(Flux.just(toMessage(session,
                     ChatWebSocketEnvelopeDto.error(null, "WS_AUTH_FAILED", ex.getMessage()))));

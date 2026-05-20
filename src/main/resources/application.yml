@@ -22,14 +22,6 @@ spring:
     init:
       mode: never
       schema-locations: classpath:db/schema.sql
-  data:
-    redis:
-      host: localhost
-      port: 6379
-      password: ${FINANCEEX_REDIS_PASSWORD:kunone123}
-      timeout: 500ms
-      connect-timeout: 500ms
-
 management:
   health:
     db:
@@ -42,6 +34,22 @@ mybatis:
     map-underscore-to-camel-case: true
 
 financeex:
+  redis:
+    # Redis 只作为热缓存、取消标记、read cursor 和跨实例实时 fanout，不作为事实源。
+    # standalone 用于本地开发；生产 Redis Cluster 设置 FINANCEEX_REDIS_MODE=cluster 并配置 cluster.nodes。
+    mode: ${FINANCEEX_REDIS_MODE:standalone}
+    host: ${FINANCEEX_REDIS_HOST:localhost}
+    port: ${FINANCEEX_REDIS_PORT:6379}
+    database: ${FINANCEEX_REDIS_DATABASE:0}
+    password: ${FINANCEEX_REDIS_PASSWORD:kunone123}
+    timeout: ${FINANCEEX_REDIS_TIMEOUT:500ms}
+    connect-timeout: ${FINANCEEX_REDIS_CONNECT_TIMEOUT:500ms}
+    cluster:
+      # 逗号分隔，例如：10.0.0.1:6379,10.0.0.2:6379,10.0.0.3:6379
+      nodes: ${FINANCEEX_REDIS_CLUSTER_NODES:}
+      max-redirects: ${FINANCEEX_REDIS_CLUSTER_MAX_REDIRECTS:3}
+      topology-refresh-period: ${FINANCEEX_REDIS_CLUSTER_TOPOLOGY_REFRESH_PERIOD:30s}
+      adaptive-refresh-enabled: ${FINANCEEX_REDIS_CLUSTER_ADAPTIVE_REFRESH_ENABLED:true}
   security:
     dev:
       # 本地开发态用配置模拟企业权限上下文；接口层不再接收前端传入的 tenantId/userId。

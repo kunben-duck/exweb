@@ -391,6 +391,9 @@ sequenceDiagram
 unsubscribe、ack 和 recover-required 逻辑，避免协议实现分叉。企业框架自带
 `spring-boot-starter-web` 时，Spring Boot 会默认选择 Servlet/MVC 启动，此时应使用
 `server.servlet.context-path` 配置上下文根；纯 WebFlux 启动时才使用 `spring.webflux.base-path`。
+Servlet/MVC WebSocket 会在 `HandshakeInterceptor.beforeHandshake` 阶段调用
+`AuthContextProvider.resolve()`，并把不可变 `UserContext` 写入 WebSocket session attributes；
+`afterConnectionEstablished` 和后续消息处理只读取该快照，不再访问企业 ThreadLocal。
 
 文档上传同样按启动模式做接口层适配：Servlet/MVC 注册 `MvcDocumentUploadController`
 并接收 `MultipartFile`，纯 WebFlux 注册 `ReactiveDocumentUploadController` 并接收
@@ -491,7 +494,8 @@ RuntimeBinding 只维护前端 chat session、当前消息树 leaf 与当前 Age
 
 ```text
 Redis key:
-fin_ex:runtime_binding:{tenantId}:{userId}:{sessionId}:{leafMessageId}
+fin_ex:runtime_binding:{tenantId:userId:sessionId}:{leafMessageId}
+fin_ex:runtime_binding:index:{tenantId:userId:sessionId}
 
 openGauss table:
 fin_ex_runtime_binding_t
@@ -602,12 +606,19 @@ AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 
 
 Redis key 必须以 `fin_ex` 开头：
 
-- `fin_ex:runtime_binding:{tenantId}:{userId}:{sessionId}:{leafMessageId}`
+- `fin_ex:runtime_binding:{tenantId:userId:sessionId}:{leafMessageId}`
+- `fin_ex:runtime_binding:index:{tenantId:userId:sessionId}`
 - `fin_ex:chat_run:active:{tenantId}:{userId}:{sessionId}`
 - `fin_ex:chat_run:cancel:{runId}`
 - `fin_ex:chat_read_cursor:{tenantId}:{userId}:{sessionId}`
 - `fin_ex:chat_stream:{streamTopicId}`
 - `fin_ex:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
+
+Redis 部署模式由 `financeex.redis.mode` 控制，默认 `standalone`；生产 Redis Cluster 设置为
+`cluster` 并配置 `financeex.redis.cluster.nodes`。RuntimeBinding 使用 Redis hash tag 保证同一会话
+binding key 和索引集合落在同一 slot，因此会话级清理不使用 `KEYS`，只通过索引集合删除明确 key。
+ChatLiveEventBus 在本机出现 run topic 订阅者时动态订阅对应 Redis channel，Redis Pub/Sub 仍然只做
+跨实例实时 fanout，可靠恢复继续依赖 openGauss event + SSE resume。
 
 ## 可选记忆上下文
 

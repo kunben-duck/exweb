@@ -46,7 +46,8 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         UserContext user;
         try {
-            user = protocolService.open(session.getId());
+            user = ChatWebSocketUserContextAttributes.require(session.getAttributes());
+            protocolService.open(session.getId(), user);
         } catch (RuntimeException ex) {
             session.sendMessage(toMessage(ChatWebSocketEnvelopeDto.error(null, "WS_AUTH_FAILED", ex.getMessage())));
             session.close(CloseStatus.POLICY_VIOLATION);

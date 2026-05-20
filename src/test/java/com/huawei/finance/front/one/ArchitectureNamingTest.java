@@ -26,12 +26,25 @@ class ArchitectureNamingTest {
     void redisPrefixesUseFinExNaming() throws Exception {
         String application = Files.readString(Path.of("src/main/resources/application.yml"));
 
+        assertThat(application).contains("mode: ${FINANCEEX_REDIS_MODE:standalone}");
+        assertThat(application).contains("nodes: ${FINANCEEX_REDIS_CLUSTER_NODES:}");
         assertThat(application).contains("redis-key-prefix: fin_ex:runtime_binding");
         assertThat(application).contains("active-key-prefix: fin_ex:chat_run:active");
         assertThat(application).contains("cancel-key-prefix: fin_ex:chat_run:cancel");
         assertThat(application).contains("redis-channel-prefix: fin_ex:chat_stream");
         assertThat(application).contains("redis-key-prefix: fin_ex:chat_read_cursor");
         assertThat(application).contains("redis-key-prefix: fin_ex:memory:short_term");
+    }
+
+    @Test
+    void runtimeBindingCacheDoesNotUseRedisKeysCommand() throws Exception {
+        String source = Files.readString(Path.of(
+                "src/main/java/com/huawei/finance/front/one/infrastructure/runtime/RedisRuntimeBindingCache.java"
+        ));
+
+        assertThat(source)
+                .contains("opsForSet().members")
+                .doesNotContain(".keys(");
     }
 
     @Test

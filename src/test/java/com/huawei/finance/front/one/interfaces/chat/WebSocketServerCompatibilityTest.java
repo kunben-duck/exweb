@@ -31,4 +31,21 @@ class WebSocketServerCompatibilityTest {
         assertThat(reactiveConfig).contains("/api/v1/ex/chat/ws");
         assertThat(servletConfig).contains("/api/v1/ex/chat/ws");
     }
+
+    @Test
+    void servletWebSocketUsesHandshakeInterceptorForThreadLocalIdentity() throws Exception {
+        String servletConfig = Files.readString(Path.of(
+                "src/main/java/com/huawei/finance/front/one/interfaces/chat/ChatServletWebSocketConfig.java"));
+        String servletHandler = Files.readString(Path.of(
+                "src/main/java/com/huawei/finance/front/one/interfaces/chat/ChatServletWebSocketHandler.java"));
+        String protocolService = Files.readString(Path.of(
+                "src/main/java/com/huawei/finance/front/one/interfaces/chat/ChatWebSocketProtocolService.java"));
+
+        assertThat(servletConfig).contains(".addInterceptors(authInterceptor)");
+        assertThat(servletHandler).contains("ChatWebSocketUserContextAttributes.require(session.getAttributes())");
+        assertThat(protocolService)
+                .doesNotContain("application.integration.identity.AuthContextProvider")
+                .doesNotContain("private final AuthContextProvider")
+                .doesNotContain("auth.resolve()");
+    }
 }

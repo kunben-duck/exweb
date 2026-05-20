@@ -14,6 +14,10 @@ import org.springframework.stereotype.Component;
 
 /**
  * RuntimeBinding Redis 热缓存实现。
+ *
+ * <p>Redis Cluster 下禁止使用 {@code KEYS} 做会话级模糊删除，因此每个会话维护一个同 slot
+ * 的索引集合：binding key 与 index key 都包含相同 hash tag，删除时先读索引集合再批量删除。
+ * Redis 仍然只是热缓存，任何失败都回退 openGauss 事实源。</p>
  */
 @Component
 @EnableConfigurationProperties(RuntimeBindingProperties.class)
@@ -57,8 +61,11 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
             return;
         }
         try {
-            redis.opsForValue().set(key(binding.tenantId(), binding.userId(), binding.chatSessionId(), binding.leafMessageId()),
-                    objectMapper.writeValueAsString(binding), properties.getRedisTtl());
+            String key = key(binding.tenantId(), binding.userId(), binding.chatSessionId(), binding.leafMessageId());
+            String indexKey = indexKey(binding.tenantId(), binding.userId(), binding.chatSessionId());
+            redis.opsForValue().set(key, objectMapper.writeValueAsString(binding), properties.getRedisTtl());
+            redis.opsForSet().add(indexKey, key);
+            redis.expire(indexKey, properties.getRedisTtl());
         } catch (RuntimeException | JsonProcessingException ex) {
             log.warn("RuntimeBinding Redis 写入失败，openGauss 仍作为事实源。原因：{}", ex.getMessage());
         }
@@ -67,10 +74,12 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
     @Override
     public void evict(String tenantId, String userId, String sessionId) {
         try {
-            Set<String> keys = redis.keys(key(tenantId, userId, sessionId, "*"));
+            String indexKey = indexKey(tenantId, userId, sessionId);
+            Set<String> keys = redis.opsForSet().members(indexKey);
             if (keys != null && !keys.isEmpty()) {
                 redis.delete(keys);
             }
+            redis.delete(indexKey);
         } catch (RuntimeException ex) {
             log.warn("RuntimeBinding Redis 删除失败。原因：{}", ex.getMessage());
         }
@@ -79,13 +88,17 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
     private String key(String tenantId, String userId, String sessionId, String leafMessageId) {
         return properties.getRedisKeyPrefix()
                 + ":"
-                + normalize(tenantId)
-                + ":"
-                + normalize(userId)
-                + ":"
-                + normalize(sessionId)
+                + sessionHashTag(tenantId, userId, sessionId)
                 + ":"
                 + normalize(leafMessageId);
+    }
+
+    private String indexKey(String tenantId, String userId, String sessionId) {
+        return properties.getRedisKeyPrefix() + ":index:" + sessionHashTag(tenantId, userId, sessionId);
+    }
+
+    private String sessionHashTag(String tenantId, String userId, String sessionId) {
+        return "{" + normalize(tenantId) + ":" + normalize(userId) + ":" + normalize(sessionId) + "}";
     }
 
     private String normalize(String value) {

@@ -2,7 +2,6 @@ package com.huawei.finance.front.one.interfaces.chat;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
 import com.huawei.finance.front.one.application.service.ChatStreamApplicationService;
 import com.huawei.finance.front.one.application.service.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
@@ -29,18 +28,16 @@ import reactor.core.scheduler.Schedulers;
 public class ChatWebSocketProtocolService {
     private static final Logger log = LoggerFactory.getLogger(ChatWebSocketProtocolService.class);
 
-    private final AuthContextProvider auth;
     private final PermissionChecker permissionChecker;
     private final ChatStreamApplicationService chatStreamService;
     private final LocalWebSocketConnectionRegistry connectionRegistry;
     private final ChatEventTranslator eventTranslator;
     private final ObjectMapper objectMapper;
 
-    public ChatWebSocketProtocolService(AuthContextProvider auth, PermissionChecker permissionChecker,
+    public ChatWebSocketProtocolService(PermissionChecker permissionChecker,
                                         ChatStreamApplicationService chatStreamService,
                                         LocalWebSocketConnectionRegistry connectionRegistry,
                                         ChatEventTranslator eventTranslator, ObjectMapper objectMapper) {
-        this.auth = auth;
         this.permissionChecker = permissionChecker;
         this.chatStreamService = chatStreamService;
         this.connectionRegistry = connectionRegistry;
@@ -49,16 +46,20 @@ public class ChatWebSocketProtocolService {
     }
 
     /**
-     * 完成 WebSocket 握手后的入口鉴权，并把身份快照绑定到当前连接。
+     * 注册已经完成入口鉴权的 WebSocket 连接。
      *
-     * <p>企业权限框架通常使用 ThreadLocal 保存登录态，因此必须只在握手入口读取一次，
-     * 后续订阅、ack、恢复都使用这里返回的不可变 {@link UserContext}。</p>
+     * <p>该方法不得读取 {@code AuthContextProvider} 或企业 ThreadLocal。MVC/Servlet 模式下，
+     * 用户身份必须由 handshake interceptor 在 HTTP upgrade 前解析并固化；WebFlux 模式下，
+     * 也必须由入口 handler 解析后显式传入。</p>
      *
      * @param connectionId 当前物理 WebSocket 连接 ID。
+     * @param user 入口阶段解析出的用户身份快照。
      * @return 当前连接的用户身份快照。
      */
-    public UserContext open(String connectionId) {
-        UserContext user = auth.resolve();
+    public UserContext open(String connectionId, UserContext user) {
+        if (user == null) {
+            throw new SecurityException("WebSocket 用户身份缺失");
+        }
         permissionChecker.checkChatPermission(user);
         connectionRegistry.register(connectionId, user);
         return user;

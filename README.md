@@ -42,7 +42,7 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `POST /api/v1/ex/chat/sessions/{sessionId}/path`：把会话当前 active path 切换到指定 leaf。
 - `POST /api/v1/ex/chat/sessions/{sessionId}/branches`：从指定消息创建只读历史快照分支。
 - `POST /api/v1/ex/chat/sessions/{sessionId}/archive|restore|close`：会话归档、恢复和关闭。
-- `WS /api/v1/ex/chat/ws`：用户级实时输出通道。客户端使用 `{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}` 订阅本轮 run topic。
+- `WS /api/v1/ex/chat/ws`：用户级实时输出通道。客户端使用 `{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}` 订阅本轮 run topic；MVC/Servlet 模式会在 handshake 阶段固化用户身份。
 - `GET /api/v1/ex/chat/sessions/{sessionId}/events/sse?afterSeq={seq}`：会话级 SSE 有限补发，用于补齐整个会话缺失事件。
 - `GET /api/v1/ex/chat/runs/{runId}/events/sse?afterSeq={seq}`：run 级 SSE 补发并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态。
 - `GET /api/v1/ex/chat/sessions/{sessionId}/stream-status`：查询当前会话最新事件序号、服务端 read cursor、active run、`activeStreamTopicId` 和是否可取消。
@@ -70,6 +70,10 @@ WebSocket、SSE resume 和 stop 的 URL 由前端 SDK 或网关配置管理，�
 仓库提供独立本地联调台 `local-test-frontend/`。联调台通过 Node 代理访问后端，支持在页面中按 Postman 风格配置 `Cookie`、`Authorization`、`X-*` 等企业鉴权请求头；代理会在 HTTP、fetch SSE、文件下载和 WebSocket 握手时统一注入这些请求头。浏览器自身不会、也不能直接手写 `Cookie` 请求头或 WebSocket 自定义请求头。
 
 租户和用户身份不从前端 Header/Query/Body 透传，统一由请求入口通过 `AuthContextProvider` 从服务端身份上下文解析一次，并以不可变 `UserContext` 传入应用层。应用层、后台 run 和 `boundedElastic` 阻塞线程不会再次读取请求 ThreadLocal。本地开发态必须显式配置：
+
+MVC/Servlet WebSocket 是一个特殊入口：用户身份必须在 `HandshakeInterceptor.beforeHandshake`
+阶段从企业 ThreadLocal 解析并写入 WebSocket session attributes。`afterConnectionEstablished`、
+subscribe、ack 和连接关闭回调只读取该身份快照，不会再次调用 `AuthContextProvider`。
 
 ```bash
 export FINANCEEX_DEV_TENANT_ID=tenant_dev
@@ -114,12 +118,16 @@ run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`�
 
 所有 Redis key 统一以 `fin_ex` 开头：
 
-- RuntimeBinding：`fin_ex:runtime_binding:{tenantId}:{userId}:{sessionId}:{leafMessageId}`
+- RuntimeBinding：`fin_ex:runtime_binding:{tenantId:userId:sessionId}:{leafMessageId}`
+- RuntimeBinding 会话索引：`fin_ex:runtime_binding:index:{tenantId:userId:sessionId}`
 - Active run：`fin_ex:chat_run:active:{tenantId}:{userId}:{sessionId}`
 - Cancel flag：`fin_ex:chat_run:cancel:{runId}`
 - Read cursor：`fin_ex:chat_read_cursor:{tenantId}:{userId}:{sessionId}`
 - WebSocket run topic：`fin_ex:chat_stream:{streamTopicId}`
 - 短期消息：`fin_ex:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
+
+RuntimeBinding key 使用 Redis hash tag（花括号部分）把同一会话的 leaf binding 和索引集合放到同一 slot，
+会话级清理时不需要 `KEYS`，也不会触发 Redis Cluster 的跨 slot 批量删除问题。
 
 ## 可选记忆上下文
 
@@ -213,6 +221,18 @@ docker compose up -d postgres redis
 ```
 
 PostgreSQL 容器会创建 `financeex` 数据库和 `supervisor_dev` schema，并执行 `src/main/resources/db/schema.sql`。
+
+Redis 默认使用本地 standalone；生产 Redis Cluster 可用以下环境变量切换：
+
+```bash
+export FINANCEEX_REDIS_MODE=cluster
+export FINANCEEX_REDIS_CLUSTER_NODES=10.0.0.1:6379,10.0.0.2:6379,10.0.0.3:6379
+export FINANCEEX_REDIS_PASSWORD=kunone123
+export FINANCEEX_REDIS_CLUSTER_MAX_REDIRECTS=3
+```
+
+切到 cluster 后，业务代码仍然只使用 `StringRedisTemplate`。openGauss 仍是事实源；Redis Cluster
+只负责热缓存、取消标记、read cursor 加速和 WebSocket 跨实例实时 fanout。
 
 ```bash
 mvn spring-boot:run

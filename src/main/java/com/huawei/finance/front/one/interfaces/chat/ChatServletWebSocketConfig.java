@@ -20,9 +20,12 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class ChatServletWebSocketConfig implements WebSocketConfigurer {
     private final ChatServletWebSocketHandler handler;
+    private final ChatServletWebSocketAuthInterceptor authInterceptor;
 
-    public ChatServletWebSocketConfig(ChatServletWebSocketHandler handler) {
+    public ChatServletWebSocketConfig(ChatServletWebSocketHandler handler,
+                                      ChatServletWebSocketAuthInterceptor authInterceptor) {
         this.handler = handler;
+        this.authInterceptor = authInterceptor;
     }
 
     /**
@@ -36,6 +39,7 @@ public class ChatServletWebSocketConfig implements WebSocketConfigurer {
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(handler, "/api/v1/ex/chat/ws")
+                .addInterceptors(authInterceptor)
                 .setAllowedOriginPatterns("*");
     }
 }

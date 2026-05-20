@@ -19,7 +19,7 @@ import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.listener.PatternTopic;
+import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
@@ -29,7 +29,8 @@ import reactor.core.publisher.Sinks;
  * 基于 Redis Pub/Sub 的跨实例聊天实时事件总线。
  *
  * <p>该实现只传播已经写入 openGauss 的事件。Redis 不可用时，本机 WebSocket 与 SSE 恢复仍可工作；
- * 跨实例实时推送会退化为前端使用 {@code afterSeq} 重新补发。</p>
+ * 跨实例实时推送会退化为前端使用 {@code afterSeq} 重新补发。Redis Cluster 下不使用全局 pattern
+ * 订阅，而是在本机出现 run topic 订阅者时动态订阅对应 channel，减少集群广播和模式订阅的不确定性。</p>
  */
 @Component
 @EnableConfigurationProperties(ChatLiveEventBusProperties.class)
@@ -52,12 +53,13 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     }
 
     /**
-     * 启动 Redis pattern 订阅。
+     * 启动 Redis listener 容器。
+     *
+     * <p>具体 channel 在 {@link #subscribe(String)} 时按 topic 动态注册。</p>
      */
     @PostConstruct
     public void start() {
         try {
-            listenerContainer.addMessageListener(this, new PatternTopic(channel("*")));
             listenerContainer.afterPropertiesSet();
             listenerContainer.start();
         } catch (RuntimeException ex) {
@@ -93,12 +95,16 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
 
     @Override
     public Flux<ChatEvent> subscribe(String topicId) {
-        TopicSink topic = topicSinks.computeIfAbsent(topicId, ignored -> new TopicSink());
+        if (topicId == null || topicId.isBlank()) {
+            return Flux.empty();
+        }
+        TopicSink topic = topicSinks.computeIfAbsent(topicId, this::registerTopic);
         topic.subscribers().incrementAndGet();
         return topic.sink().asFlux()
                 .doFinally(signalType -> {
                     if (topic.subscribers().decrementAndGet() <= 0) {
                         topicSinks.remove(topicId, topic);
+                        unregisterTopic(topicId, topic);
                     }
                 });
     }
@@ -123,6 +129,7 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
                 if (completeResult.isFailure()) {
                     log.warn("Redis ChatLiveEventBus 本机结束 topic 失败，topicId={}, result={}", topicId, completeResult);
                 }
+                unregisterTopic(topicId, sink);
                 topicSinks.remove(topicId, sink);
             }
         } catch (RuntimeException | JsonProcessingException ex) {
@@ -132,6 +139,31 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
 
     private String channel(String topicId) {
         return properties.getRedisChannelPrefix() + ":" + topicId;
+    }
+
+    private TopicSink registerTopic(String topicId) {
+        ChannelTopic redisTopic = new ChannelTopic(channel(topicId));
+        TopicSink topic = new TopicSink(redisTopic);
+        try {
+            listenerContainer.addMessageListener(this, redisTopic);
+        } catch (RuntimeException ex) {
+            log.warn("Redis ChatLiveEventBus 订阅失败，topicId={}，跨实例实时推送将依赖 SSE resume。原因：{}",
+                    topicId, ex.getMessage());
+            topic.markRegistrationFailed();
+        }
+        return topic;
+    }
+
+    private void unregisterTopic(String topicId, TopicSink topic) {
+        if (!topic.registered()) {
+            return;
+        }
+        try {
+            listenerContainer.removeMessageListener(this, topic.redisTopic());
+            topic.markUnregistered();
+        } catch (RuntimeException ex) {
+            log.warn("Redis ChatLiveEventBus 取消订阅失败，topicId={}，原因：{}", topicId, ex.getMessage());
+        }
     }
 
     private String topicFromChannel(String channel) {
@@ -172,9 +204,38 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
         }
     }
 
-    private record TopicSink(Sinks.Many<ChatEvent> sink, AtomicInteger subscribers) {
-        private TopicSink() {
-            this(Sinks.many().replay().limit(512), new AtomicInteger());
+    private static class TopicSink {
+        private final Sinks.Many<ChatEvent> sink = Sinks.many().replay().limit(512);
+        private final AtomicInteger subscribers = new AtomicInteger();
+        private final ChannelTopic redisTopic;
+        private volatile boolean registered = true;
+
+        private TopicSink(ChannelTopic redisTopic) {
+            this.redisTopic = redisTopic;
+        }
+
+        private Sinks.Many<ChatEvent> sink() {
+            return sink;
+        }
+
+        private AtomicInteger subscribers() {
+            return subscribers;
+        }
+
+        private ChannelTopic redisTopic() {
+            return redisTopic;
+        }
+
+        private boolean registered() {
+            return registered;
+        }
+
+        private void markRegistrationFailed() {
+            this.registered = false;
+        }
+
+        private void markUnregistered() {
+            this.registered = false;
         }
     }
 }

@@ -381,6 +381,11 @@ sequenceDiagram
 - `fin_ex_chat_run_t`：业务生命周期事实源，记录 run 状态、路由类型、Runtime 信息、first/last seq 和取消原因。
 - `fin_ex_chat_run_execution_t`：运行控制面事实源，记录当前 owner 实例、心跳、租约、恢复状态、恢复租约和 `fencing_token`。
 
+控制面初始化是 run 启动的必备步骤。若业务 run 已写入 `fin_ex_chat_run_t`，但创建
+`fin_ex_chat_run_execution_t` 失败，服务端不会继续调用 Runtime/SubAgent，而是直接追加
+`run.failed` 终态事件，payload code 为 `RUN_EXECUTION_INIT_FAILED`，并释放 active run。
+此时没有可用 execution claim，因此不能绕过 fencing 继续输出。
+
 ```mermaid
 sequenceDiagram
     autonumber

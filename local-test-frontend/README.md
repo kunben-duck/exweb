@@ -57,6 +57,7 @@ Referer: http://localhost:8080/fin/ex/
 - 附件：选择文档库中 `AVAILABLE` 文档作为聊天附件发送。
 - 跨页签续接：复制页签后通过 run SSE 从 `activeRunFirstSeq - 1` 补发当前 active run 已生成事件，并继续接收 live 事件直到本轮 run 终态；active run 恢复期间不会先 replay 本地缓存，避免把同浏览器缓存误认为服务端续传结果。
 - 运行态按钮：active run 存在时发送按钮显示“生成中”并禁用，停止按钮保持可用；刷新、复制页签或切换会话后通过 `stream-status` 恢复同样状态。
+- 故障事件：支持观察 watchdog 或控制面初始化失败产生的 `run.failed`，验证前端能关闭 loading 并保留失败草稿。
 - 反馈：历史 assistant 消息支持 LIKE/DISLIKE 反馈提交。
 - 企业鉴权联调：通过本地代理为 HTTP/SSE/WebSocket 统一注入自定义请求头和 Cookie。
 

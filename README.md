@@ -117,6 +117,8 @@ run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实
 - `FAIL_FAST`：兜底把 stale run 置为失败并释放 active run，避免会话永久卡在 `RUNNING`。
 - `RUNTIME_TAKEOVER`：预留给支持可靠断点恢复的 Runtime。当前默认 Runtime recovery port 不支持 takeover，因此会自动降级到后续策略。
 
+如果业务 run 已创建，但 `fin_ex_chat_run_execution_t` 控制面初始化失败，服务端会立即追加 `run.failed`，payload code 为 `RUN_EXECUTION_INIT_FAILED`，并释放 active run，避免前端永远停留在生成中。
+
 恢复负载受配置保护：每轮扫描候选数、每轮最大抢占数、每租户最大抢占数、本机恢复并发和 Runtime takeover 并发分别限制，避免单个实例一次性续接或关闭大量 stale run 导致过载。
 
 ## 消息树与只读分支
@@ -276,7 +278,7 @@ AgentRuntime 防腐层必须保留：应用层只依赖 `AgentRuntime` 接口和
 
 ## 启动
 
-本地没有 PostgreSQL/Redis 时，可以先启动 Docker 依赖：
+本地没有数据库/Redis 时，可以先启动 Docker 依赖。`docker-compose.yml` 使用 PostgreSQL 兼容容器做本地联调；生产环境可以把 `FINANCEEX_DB_URL` 指向 openGauss，DDL 统一维护在 `src/main/resources/db/schema.sql`：
 
 ```bash
 docker compose up -d postgres redis

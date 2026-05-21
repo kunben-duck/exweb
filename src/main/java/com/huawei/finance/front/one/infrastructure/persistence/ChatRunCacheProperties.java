@@ -12,6 +12,8 @@ public class ChatRunCacheProperties {
     private String activeKeyPrefix = "fin_ex:chat_run:active";
     /** cancel flag Redis key 前缀，必须以 fin_ex 开头。 */
     private String cancelKeyPrefix = "fin_ex:chat_run:cancel";
+    /** stale run 恢复优化锁 Redis key 前缀，必须以 fin_ex 开头。 */
+    private String recoverLockKeyPrefix = "fin_ex:chat_run:recover_lock";
     /** active run 热缓存 TTL。 */
     private Duration activeTtl = Duration.ofHours(6);
     /** cancel flag TTL，用于跨 JVM 阻断迟到事件。 */
@@ -31,6 +33,14 @@ public class ChatRunCacheProperties {
 
     public void setCancelKeyPrefix(String cancelKeyPrefix) {
         this.cancelKeyPrefix = cancelKeyPrefix;
+    }
+
+    public String getRecoverLockKeyPrefix() {
+        return recoverLockKeyPrefix;
+    }
+
+    public void setRecoverLockKeyPrefix(String recoverLockKeyPrefix) {
+        this.recoverLockKeyPrefix = recoverLockKeyPrefix;
     }
 
     public Duration getActiveTtl() {

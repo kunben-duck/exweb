@@ -101,10 +101,23 @@ export FINANCEEX_DEV_USERNAME=developer
 
 `runId` 不是长期任务会话；它是单轮执行 correlation id。事件表 `fin_ex_chat_event_t.run_id` 和绑定表 `fin_ex_runtime_binding_t.last_run_id` 都用它做运行轨迹和排障定位。
 run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。stop 只停止本轮回答，不删除 `RuntimeBinding`。
-集群部署时，取消正确性依赖 Redis cancel flag 和 openGauss run 状态；JVM 内 subscription registry 只用于命中本机执行流时快速释放资源，不作为跨实例事实源。
+run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实例、心跳、租约、恢复状态和 `fencing_token`，不混入业务 run 表。后台执行流写入 run 事件前必须校验 execution owner 与 `fencing_token`；stop、watchdog 或未来 Runtime takeover 递增 token 后，旧实例迟到 delta/completed 会被拒绝。
+集群部署时，取消正确性依赖 Redis cancel flag 和 openGauss run 状态；实例故障治理依赖 openGauss execution 条件抢占和 fencing token。JVM 内 subscription registry 只用于命中本机执行流时快速释放资源，不作为跨实例事实源。
 同一 `tenantId + userId + sessionId` 同一时间只允许一个 active run。若会话已有
 `RUNNING/CANCELLING` run，`POST /chat/runs` 会返回 `ACTIVE_RUN_EXISTS`，前端应先调用 stop
 或等待当前回答终态后再提交新问题。
+
+## Run 故障治理
+
+所有实例启动后都会运行 watchdog。watchdog 在应用 ready 后延迟启动，每轮带随机 jitter，扫描 `fin_ex_chat_run_execution_t` 中租约过期的 `RUNNING/CANCELLING` execution 和恢复租约过期的 `RECOVERING` execution。Redis recover lock 只用于减少多实例同时抢占同一 run 的 DB 冲突；即使 Redis 不可用，仍会走 openGauss 条件更新，只有更新影响行数为 1 的实例获得恢复权。
+
+默认恢复策略链是 `MANUAL_CONFIRMATION,FAIL_FAST`：
+
+- `MANUAL_CONFIRMATION`：抢占 stale run 后写入 `run.failed` 终态事件，payload 包含 `RUN_EXECUTOR_LOST` 和前端可展示的恢复选项，例如重新生成回答或作为新 run 重试。
+- `FAIL_FAST`：兜底把 stale run 置为失败并释放 active run，避免会话永久卡在 `RUNNING`。
+- `RUNTIME_TAKEOVER`：预留给支持可靠断点恢复的 Runtime。当前默认 Runtime recovery port 不支持 takeover，因此会自动降级到后续策略。
+
+恢复负载受配置保护：每轮扫描候选数、每轮最大抢占数、每租户最大抢占数、本机恢复并发和 Runtime takeover 并发分别限制，避免单个实例一次性续接或关闭大量 stale run 导致过载。
 
 ## 消息树与只读分支
 
@@ -120,6 +133,7 @@ run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`�
 - `fin_ex_chat_message_t`
 - `fin_ex_chat_message_attachment_t`
 - `fin_ex_chat_run_t`
+- `fin_ex_chat_run_execution_t`
 - `fin_ex_chat_event_t`
 - `fin_ex_chat_read_cursor_t`
 - `fin_ex_uploaded_document_t`
@@ -132,6 +146,7 @@ run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`�
 - RuntimeBinding 会话索引：`fin_ex:runtime_binding:index:{tenantId:userId:sessionId}`
 - Active run：`fin_ex:chat_run:active:{tenantId}:{userId}:{sessionId}`
 - Cancel flag：`fin_ex:chat_run:cancel:{runId}`
+- Recover lock：`fin_ex:chat_run:recover_lock:{runId}`
 - Read cursor：`fin_ex:chat_read_cursor:{tenantId}:{userId}:{sessionId}`
 - WebSocket run topic：`fin_ex:chat_stream:{streamTopicId}`
 - 短期消息：`fin_ex:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
@@ -217,6 +232,19 @@ export FINANCEEX_RUN_MAX_CONCURRENT_PER_TENANT=200
 export FINANCEEX_AGENT_RUNTIME_MAX_CONCURRENT=64
 export FINANCEEX_SUB_AGENT_MAX_CONCURRENT=64
 export FINANCEEX_DOCUMENT_STORAGE_MAX_CONCURRENT=32
+
+# run 执行控制面、watchdog 与 stale run 恢复治理
+export FINANCEEX_INSTANCE_ID=
+export FINANCEEX_SCHEDULER_POOL_SIZE=4
+export FINANCEEX_CHAT_RUN_LEASE_DURATION=90s
+export FINANCEEX_CHAT_RUN_HEARTBEAT_INTERVAL=15s
+export FINANCEEX_CHAT_RUN_WATCHDOG_ENABLED=true
+export FINANCEEX_CHAT_RUN_WATCHDOG_SCAN_INTERVAL=30s
+export FINANCEEX_CHAT_RUN_WATCHDOG_MAX_CLAIMS_PER_SCAN=20
+export FINANCEEX_CHAT_RUN_RECOVERY_MAX_CONCURRENCY=4
+export FINANCEEX_CHAT_RUN_TAKEOVER_MAX_CONCURRENCY=1
+export FINANCEEX_CHAT_RUN_RECOVERY_MAX_CLAIMS_PER_TENANT_PER_SCAN=5
+export FINANCEEX_CHAT_RUN_STALE_RECOVERY_STRATEGIES=MANUAL_CONFIRMATION,FAIL_FAST
 ```
 
 SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP 文本流调用。Relay Runtime 作为 AgentRuntime 实现支持三个 API adapter：`relay-stream-http` 使用真实 Relay HTTP 流式协议，`deepseek-chat-completions` 使用 DeepSeek/OpenAI-compatible Chat Completions 替身，`relay-websocket` 使用 RelayAgent WebSocket 对话协议。

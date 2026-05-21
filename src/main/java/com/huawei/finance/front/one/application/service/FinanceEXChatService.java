@@ -14,9 +14,11 @@ import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.finance.front.one.domain.chat.ChatRunStartResult;
 import com.huawei.finance.front.one.domain.chat.ChatRunStopDecision;
 import com.huawei.finance.front.one.domain.chat.ChatRunStopResult;
+import com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import com.huawei.finance.front.one.domain.chat.ErrorEvent;
+import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
 import com.huawei.finance.front.one.domain.chat.RunCancelledEvent;
 import com.huawei.finance.front.one.domain.chat.RunCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.RunStartedEvent;
@@ -64,6 +66,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private final DocumentFacade documentFacade;
     private final ChatStreamApplicationService chatStreamService;
     private final ChatRunApplicationService chatRunService;
+    private final ChatRunLeaseApplicationService chatRunLeaseService;
     private final LocalChatRunExecutionRegistry runExecutionRegistry;
     private final RunAdmissionControlService runAdmissionControl;
     private final IdGenerator idGenerator;
@@ -73,7 +76,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                 RouteSignalApplicationService routeSignalService,
                                 SubAgentExecutor subAgentExecutor, SystemResponseExecutor systemResponseExecutor,
                                 AgentRuntimeExecutor agentRuntimeExecutor, DocumentFacade documentFacade, ChatStreamApplicationService chatStreamService,
-                                ChatRunApplicationService chatRunService, LocalChatRunExecutionRegistry runExecutionRegistry,
+                                ChatRunApplicationService chatRunService, ChatRunLeaseApplicationService chatRunLeaseService,
+                                LocalChatRunExecutionRegistry runExecutionRegistry,
                                 RunAdmissionControlService runAdmissionControl, IdGenerator idGenerator) {
         this.sessionService = sessionService;
         this.memoryService = memoryService;
@@ -85,6 +89,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         this.documentFacade = documentFacade;
         this.chatStreamService = chatStreamService;
         this.chatRunService = chatRunService;
+        this.chatRunLeaseService = chatRunLeaseService;
         this.runExecutionRegistry = runExecutionRegistry;
         this.runAdmissionControl = runAdmissionControl;
         this.idGenerator = idGenerator;
@@ -158,6 +163,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
             }
             ChatEvent cancelled = chatStreamService.appendAndPublish(cancelEvent);
             ChatRun latest = chatRunService.observeEvent(cancelled);
+            chatRunLeaseService.markTerminal(run.id(), ChatRunExecutionStatus.CANCELLED);
             return Mono.just(chatRunService.toStopResult(latest == null ? run : latest));
         });
     }
@@ -224,8 +230,23 @@ public class FinanceEXChatService implements FinanceChatFacade {
             RouteTarget selectedRoute = route;
             AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>(binding);
             StringBuilder assistant = new StringBuilder();
-            chatRunService.createRunning(runId, user, session.id(), selectedRoute, bindingRef.get(),
+            ChatRun run = chatRunService.createRunning(runId, user, session.id(), selectedRoute, bindingRef.get(),
                     normalized.metadata(), messagePlan.runMode(), messagePlan.parentMessageId(), messagePlan.userMessage().id());
+            RunExecutionClaim executionClaim;
+            try {
+                executionClaim = chatRunLeaseService.startRun(run);
+            } catch (RuntimeException ex) {
+                /*
+                 * run 已经作为业务事实创建后，execution 控制面初始化失败也必须把本轮 run 闭合。
+                 * 此时还没有 claim，不能进入统一 fencing 写入链路；直接写 run.failed 并交给
+                 * ChatRunApplicationService 释放 active run，避免会话永久卡在 RUNNING。
+                 */
+                ChatEvent failed = chatStreamService.appendAndPublish(
+                        ErrorEvent.of(runId, session.id(), "RUN_EXECUTION_INIT_FAILED", ex.getMessage()));
+                chatRunService.observeEvent(failed);
+                return Flux.just(failed);
+            }
+            runExecutionRegistry.registerClaim(executionClaim);
             try {
                 // 根据路由结果选择 SubAgent、系统响应或统一 AgentRuntime。
                 Flux<ChatEvent> body = switch (selectedRoute.type()) {
@@ -246,7 +267,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                         messagePlan,
                         bindingRef,
                         assistant,
-                        runId
+                        runId,
+                        executionClaim
                 );
             } catch (RuntimeException ex) {
                 // run 已创建后同步步骤失败时，也必须写入 run.failed 并释放 active run，避免前端看到永远 RUNNING。
@@ -258,7 +280,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                         messagePlan,
                         bindingRef,
                         assistant,
-                        runId
+                        runId,
+                        executionClaim
                 );
             }
         });
@@ -267,9 +290,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private Flux<ChatEvent> persistAndPublishRunEvents(Flux<ChatEvent> events, UserContext user, ChatSession session,
                                                        ChatCommand normalized, ChatRunMessagePlan messagePlan,
                                                        AtomicReference<RuntimeBinding> bindingRef,
-                                                       StringBuilder assistant, String runId) {
+                                                       StringBuilder assistant, String runId,
+                                                       RunExecutionClaim executionClaim) {
         return events
-                .takeWhile(chatRunService::shouldAcceptEvent)
+                .takeWhile(event -> shouldAcceptExecutionEvent(event, executionClaim))
                 .concatMap(event -> {
                     appendAssistantDelta(assistant, event);
                     /*
@@ -287,9 +311,30 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     ChatEvent stored = chatStreamService.appendAndPublish(event);
                     // 事件已经带有 openGauss 持久化 seq，实时输出与断线补发看到的是同一份顺序。
                     chatRunService.observeEvent(stored);
+                    markExecutionTerminalIfNeeded(stored);
                     bindingRef.set(runtimeBindingService.observeEvent(bindingRef.get(), stored));
                     return Mono.just(stored);
                 });
+    }
+
+    private boolean shouldAcceptExecutionEvent(ChatEvent event, RunExecutionClaim executionClaim) {
+        /*
+         * executionClaim 是后台执行流的写入栅栏。即使业务 run 仍是 RUNNING，只要 watchdog
+         * 或 takeover 已递增 fencing token，旧实例迟到输出也必须被拒绝，避免覆盖新的终态或续接。
+         */
+        return chatRunLeaseService.canWriteRunEvent(executionClaim) && chatRunService.shouldAcceptEvent(event);
+    }
+
+    private void markExecutionTerminalIfNeeded(ChatEvent event) {
+        ChatRunExecutionStatus terminalStatus = switch (event.type()) {
+            case "run.completed" -> ChatRunExecutionStatus.COMPLETED;
+            case "run.failed" -> ChatRunExecutionStatus.FAILED;
+            case "run.cancelled" -> ChatRunExecutionStatus.CANCELLED;
+            default -> null;
+        };
+        if (terminalStatus != null) {
+            chatRunLeaseService.markTerminal(event.runId(), terminalStatus);
+        }
     }
 
     /**

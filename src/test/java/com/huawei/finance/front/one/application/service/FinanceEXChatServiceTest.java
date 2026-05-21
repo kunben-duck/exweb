@@ -13,8 +13,10 @@ import com.huawei.finance.front.one.application.integration.conversation.ChatLiv
 import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorCache;
 import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorRepository;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunCache;
+import com.huawei.finance.front.one.application.integration.conversation.ChatRunExecutionRepository;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
+import com.huawei.finance.front.one.application.integration.identity.ApplicationInstanceIdProvider;
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
@@ -32,6 +34,8 @@ import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatReadCursor;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunCancelSignal;
+import com.huawei.finance.front.one.domain.chat.ChatRunExecution;
+import com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
@@ -71,6 +75,14 @@ class FinanceEXChatServiceTest {
         ChatReadCursorApplicationService readCursorService = readCursorService(sessions);
         WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
                 new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
+        LocalChatRunExecutionRegistry executionRegistry = new LocalChatRunExecutionRegistry();
+        ChatRunLeaseApplicationService leaseService = new ChatRunLeaseApplicationService(
+                new InMemoryExecutionRepository(),
+                (ApplicationInstanceIdProvider) () -> "instance-test",
+                new com.huawei.finance.front.one.application.config.ChatRunOperationalProperties(),
+                ids,
+                executionRegistry
+        );
 
         FinanceEXChatService service = new FinanceEXChatService(
                 new SessionApplicationService(sessions, messages, ids, permissionChecker),
@@ -92,7 +104,8 @@ class FinanceEXChatServiceTest {
                         readCursorService, permissionChecker, sessions,
                         new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
                 new ChatRunApplicationService(runs, runCache, events, readCursorService, permissionChecker, sessions),
-                new LocalChatRunExecutionRegistry(),
+                leaseService,
+                executionRegistry,
                 new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
                 ids
         );
@@ -210,6 +223,30 @@ class FinanceEXChatServiceTest {
         @Override public List<ChatEvent> findBySessionIdAndAfterSeq(String sessionId, long afterSeq) { return List.of(); }
         @Override public List<ChatEvent> findByRunIdAndAfterSeq(String runId, long afterSeq) { return List.of(); }
         @Override public long findLatestSeqBySessionId(String sessionId) { return seq; }
+    }
+
+    private static class InMemoryExecutionRepository implements ChatRunExecutionRepository {
+        private final Map<String, ChatRunExecution> executions = new HashMap<>();
+
+        @Override
+        public ChatRunExecution createForRun(ChatRun run, String executionId, String ownerInstanceId, Duration leaseDuration) {
+            Instant now = Instant.now();
+            ChatRunExecution execution = new ChatRunExecution(executionId, run.id(), run.tenantId(), run.userId(),
+                    run.sessionId(), ChatRunExecutionStatus.RUNNING, ownerInstanceId, now, now.plus(leaseDuration),
+                    1L, null, null, 0, null, null, Map.of(), now, now);
+            executions.put(run.id(), execution);
+            return execution;
+        }
+
+        @Override public Optional<ChatRunExecution> findByRunId(String runId) { return Optional.ofNullable(executions.get(runId)); }
+        @Override public boolean heartbeat(String runId, String ownerInstanceId, Duration leaseDuration) { return true; }
+        @Override public boolean markTerminal(String runId, ChatRunExecutionStatus terminalStatus) { return true; }
+        @Override public List<ChatRunExecution> findLeaseExpired(int limit) { return List.of(); }
+        @Override public List<ChatRunExecution> findRecoveryExpired(int limit) { return List.of(); }
+        @Override public Optional<ChatRunExecution> tryClaimRecovering(String runId, String recoveredByInstanceId, String strategy, Duration recoveryLeaseDuration) { return Optional.empty(); }
+        @Override public Optional<ChatRunExecution> markTakeoverRunning(String runId, String ownerInstanceId, Duration leaseDuration) { return Optional.empty(); }
+        @Override public boolean isWriteAllowed(String runId, String ownerInstanceId, long fencingToken) { return true; }
+        @Override public boolean isLeaseExpired(String runId, Instant now) { return false; }
     }
 
     private static class EmptyReadCursorRepository implements ChatReadCursorRepository {

@@ -72,6 +72,12 @@ financeex:
       tenant-id: ${FINANCEEX_DEV_TENANT_ID:}
       user-id: ${FINANCEEX_DEV_USER_ID:}
       username: ${FINANCEEX_DEV_USERNAME:}
+  # 可选覆盖当前进程运行实例 ID；为空时由 GeneratedApplicationInstanceIdProvider 生成。
+  # 后续如需从注册中心获取实例 ID，直接提供新的 ApplicationInstanceIdProvider bean。
+  instance-id: ${FINANCEEX_INSTANCE_ID:}
+  scheduler:
+    # 运行治理定时任务线程池；至少 2 个线程，避免 watchdog 抖动影响 heartbeat。
+    pool-size: ${FINANCEEX_SCHEDULER_POOL_SIZE:4}
   intent:
     # v3 中意图服务只是可选路由信号，默认关闭；关闭时首轮请求不会调用该 HTTP API。
     enabled: ${FINANCEEX_INTENT_ENABLED:false}
@@ -92,8 +98,23 @@ financeex:
   chat-run:
     active-key-prefix: fin_ex:chat_run:active
     cancel-key-prefix: fin_ex:chat_run:cancel
+    recover-lock-key-prefix: fin_ex:chat_run:recover_lock
     active-ttl: 6h
     cancel-ttl: 1h
+    lease-duration: ${FINANCEEX_CHAT_RUN_LEASE_DURATION:90s}
+    heartbeat-interval: ${FINANCEEX_CHAT_RUN_HEARTBEAT_INTERVAL:15s}
+    watchdog-enabled: ${FINANCEEX_CHAT_RUN_WATCHDOG_ENABLED:true}
+    watchdog-initial-delay: ${FINANCEEX_CHAT_RUN_WATCHDOG_INITIAL_DELAY:30s}
+    watchdog-scan-interval: ${FINANCEEX_CHAT_RUN_WATCHDOG_SCAN_INTERVAL:30s}
+    watchdog-batch-size: ${FINANCEEX_CHAT_RUN_WATCHDOG_BATCH_SIZE:100}
+    watchdog-max-claims-per-scan: ${FINANCEEX_CHAT_RUN_WATCHDOG_MAX_CLAIMS_PER_SCAN:20}
+    recovery-max-concurrency: ${FINANCEEX_CHAT_RUN_RECOVERY_MAX_CONCURRENCY:4}
+    takeover-max-concurrency: ${FINANCEEX_CHAT_RUN_TAKEOVER_MAX_CONCURRENCY:1}
+    recovery-max-claims-per-tenant-per-scan: ${FINANCEEX_CHAT_RUN_RECOVERY_MAX_CLAIMS_PER_TENANT_PER_SCAN:5}
+    watchdog-jitter: ${FINANCEEX_CHAT_RUN_WATCHDOG_JITTER:5s}
+    stale-recovery-strategies: ${FINANCEEX_CHAT_RUN_STALE_RECOVERY_STRATEGIES:MANUAL_CONFIRMATION,FAIL_FAST}
+    recover-lock-enabled: ${FINANCEEX_CHAT_RUN_RECOVER_LOCK_ENABLED:true}
+    recover-lock-ttl: ${FINANCEEX_CHAT_RUN_RECOVER_LOCK_TTL:30s}
   chat-read-cursor:
     redis-key-prefix: fin_ex:chat_read_cursor
     redis-ttl: 7d

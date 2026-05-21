@@ -812,6 +812,29 @@ stop 是 REST 生命周期接口，不是 WebSocket command。重复 stop 是幂
 
 前端点击停止后，不应把关闭 WebSocket 当作取消语义。推荐流程是：保存当前本地 `lastSeq`，调用 stop，随后继续通过 WebSocket 等待 `run.cancelled`；如果页面已经断线或没有收到终态事件，则用 stop 前保存的 `lastSeq` 调 SSE resume 补齐 `run.cancelled`。stop 响应里的 `latestSeq` 是服务端事实源位置，不代表当前页签已经消费到该事件。
 
+## Run 故障恢复事件
+
+如果执行 run 的服务实例宕机或长时间没有心跳，后台 watchdog 会把该 run 收敛到终态，避免会话永久显示“生成中”。前端无需调用额外接口，只需要像处理普通流式事件一样处理 `run.failed`：
+
+```json
+{
+  "type": "run.failed",
+  "runId": "run_xxx",
+  "sessionId": "session_xxx",
+  "sequence": 12008,
+  "payload": {
+    "code": "RUN_EXECUTOR_LOST",
+    "message": "本轮回答执行实例失联，请选择重新生成或作为新问题重试。",
+    "recoveryActionRequired": true,
+    "recoveryOptions": ["REGENERATE_ASSISTANT", "RETRY_AS_NEW_RUN"]
+  }
+}
+```
+
+`RUN_EXECUTOR_LOST` 表示服务端已经确认当前 run 的执行租约过期，并通过 openGauss 条件抢占完成状态收敛。前端收到该事件后应停止当前 loading 状态，保留已输出草稿作为只读失败草稿，不要保存为正式 assistant 历史消息；用户可以选择用 `runMode=REGENERATE_ASSISTANT` 重新生成，或发起新的 `NEXT` run。
+
+如果未来 Runtime 支持可靠接管，服务端可能先输出 `run.recovered`，随后继续输出同一个 run 的 `message.delta`。当前正式默认策略链是 `MANUAL_CONFIRMATION,FAIL_FAST`，因此通常表现为 `run.failed`。
+
 ## 文档上传与聊天附件
 
 上传本地文件：

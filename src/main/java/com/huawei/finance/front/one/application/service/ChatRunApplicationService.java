@@ -23,6 +23,8 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -41,18 +43,39 @@ public class ChatRunApplicationService {
     private final ChatReadCursorApplicationService readCursorService;
     private final PermissionChecker permissionChecker;
     private final SessionRepository sessionRepository;
+    private final ChatRunLeaseApplicationService leaseService;
+    private final ObjectProvider<ChatRunRecoveryOrchestrator> recoveryOrchestratorProvider;
     private final Map<String, EventAcceptanceSnapshot> eventAcceptanceCache = new ConcurrentHashMap<>();
 
+    @Autowired
     public ChatRunApplicationService(ChatRunRepository repository, ChatRunCache cache, ChatEventStore eventStore,
                                      ChatReadCursorApplicationService readCursorService,
                                      PermissionChecker permissionChecker,
-                                     SessionRepository sessionRepository) {
+                                     SessionRepository sessionRepository,
+                                     ChatRunLeaseApplicationService leaseService,
+                                     ObjectProvider<ChatRunRecoveryOrchestrator> recoveryOrchestratorProvider) {
         this.repository = repository;
         this.cache = cache;
         this.eventStore = eventStore;
         this.readCursorService = readCursorService;
         this.permissionChecker = permissionChecker;
         this.sessionRepository = sessionRepository;
+        this.leaseService = leaseService;
+        this.recoveryOrchestratorProvider = recoveryOrchestratorProvider;
+    }
+
+    ChatRunApplicationService(ChatRunRepository repository, ChatRunCache cache, ChatEventStore eventStore,
+                              ChatReadCursorApplicationService readCursorService,
+                              PermissionChecker permissionChecker,
+                              SessionRepository sessionRepository) {
+        this.repository = repository;
+        this.cache = cache;
+        this.eventStore = eventStore;
+        this.readCursorService = readCursorService;
+        this.permissionChecker = permissionChecker;
+        this.sessionRepository = sessionRepository;
+        this.leaseService = null;
+        this.recoveryOrchestratorProvider = null;
     }
 
     /**
@@ -119,7 +142,8 @@ public class ChatRunApplicationService {
             return null;
         }
         ChatRun run = current.get();
-        if (run.status().terminal() || run.status() == ChatRunStatus.CANCELLING && !"run.cancelled".equals(event.type())) {
+        if (run.status().terminal() || run.status() == ChatRunStatus.CANCELLING
+                && !"run.cancelled".equals(event.type()) && !"run.failed".equals(event.type())) {
             return run;
         }
         ChatRun next = switch (event.type()) {
@@ -234,10 +258,23 @@ public class ChatRunApplicationService {
         long latestSeq = eventStore.findLatestSeqBySessionId(sessionId);
         long readCursorSeq = readCursorService.findLastConsumedSeq(user, sessionId);
         Optional<ChatRun> active = findActive(user.tenantId(), user.userId(), sessionId);
+        if (active.isPresent() && leaseService != null && leaseService.isLeaseExpired(active.get().id())) {
+            ChatRunRecoveryOrchestrator orchestrator = recoveryOrchestratorProvider == null
+                    ? null
+                    : recoveryOrchestratorProvider.getIfAvailable();
+            if (orchestrator != null) {
+                orchestrator.recoverExpiredRun(active.get().id());
+                latestSeq = eventStore.findLatestSeqBySessionId(sessionId);
+                readCursorSeq = readCursorService.findLastConsumedSeq(user, sessionId);
+                active = findActive(user.tenantId(), user.userId(), sessionId);
+            }
+        }
+        long currentLatestSeq = latestSeq;
+        long currentReadCursorSeq = readCursorSeq;
         return active
-                .map(run -> new ChatStreamStatus(sessionId, latestSeq, readCursorSeq, run.id(), run.status(),
+                .map(run -> new ChatStreamStatus(sessionId, currentLatestSeq, currentReadCursorSeq, run.id(), run.status(),
                         ChatStreamTopics.runTopic(run.id()), run.firstSeq(), run.lastSeq(), run.cancellable()))
-                .orElseGet(() -> new ChatStreamStatus(sessionId, latestSeq, readCursorSeq,
+                .orElseGet(() -> new ChatStreamStatus(sessionId, currentLatestSeq, currentReadCursorSeq,
                         null, null, null, null, null, false));
     }
 

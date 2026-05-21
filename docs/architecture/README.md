@@ -364,6 +364,7 @@ sequenceDiagram
 - `fin_ex_chat_event_t.seq` 是前端恢复游标，实时输出和补发输出使用同一份 seq；该序号由 openGauss sequence/default 生成并随事件写入一起返回，应用层不再本地生成恢复游标。
 - openGauss 是事件事实源，`LocalChatEventStreamRegistry` 是当前服务实例内在线发布器，Redis Pub/Sub 只做跨实例实时扇出。
 - `fin_ex_chat_run_t` 是 run 生命周期事实源；Redis 只保存 active run 和 cancel flag。
+- `fin_ex_chat_run_execution_t` 是 run 执行控制面事实源；实例 ID、心跳、租约、恢复状态和 `fencing_token` 都在该表中，避免把运维执行信息混入业务 run 表。
 - `fin_ex_chat_read_cursor_t` 是用户消费游标事实源；WebSocket ack 会刷新 Redis 热游标并节流写入 openGauss，用于展示和诊断用户消费进度。
 - 后台 run 不依赖创建 run 的原始浏览器连接，刷新页面后用 `afterSeq` 恢复。
 - 前端 WebSocket 订阅消息格式：`{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}`。
@@ -372,6 +373,50 @@ sequenceDiagram
 - 重新生成回答不再使用 run retry 接口，而是通过 `POST /chat/runs` 携带 `runMode=REGENERATE_ASSISTANT` 和 `regeneratedMessageId`，在同一 user 节点下生成新的 assistant sibling。
 - 会话 state 接口聚合会话元数据、最近历史消息和 `activeStreamTopicId`，用于前端切换会话后的恢复判断。
 - 新页签、新浏览器或跨电脑恢复 active run 时，前端应使用 `activeRunFirstSeq - 1` 打开 run SSE；该接口会先按 openGauss 事实源补发历史事件，再接入 live topic 持续输出到 run 终态，不能把 `latestSeq` 或 `readCursorSeq` 当作当前渲染实例已消费游标。
+
+### Run 控制面与故障恢复
+
+后台 run 的业务状态和执行状态分离：
+
+- `fin_ex_chat_run_t`：业务生命周期事实源，记录 run 状态、路由类型、Runtime 信息、first/last seq 和取消原因。
+- `fin_ex_chat_run_execution_t`：运行控制面事实源，记录当前 owner 实例、心跳、租约、恢复状态、恢复租约和 `fencing_token`。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Runner as "执行实例"
+    participant ExecStore as "fin_ex_chat_run_execution_t"
+    participant Watchdog as "任意实例 Watchdog"
+    participant Lock as "Redis recover lock"
+    participant EventStore as "fin_ex_chat_event_t"
+    participant RunStore as "fin_ex_chat_run_t"
+
+    Runner->>ExecStore: "create RUNNING execution, fencing_token=1"
+    loop "heartbeat"
+        Runner->>ExecStore: "owner + token 续租 lease_until"
+    end
+    Runner--xExecStore: "实例宕机，心跳停止"
+    Watchdog->>ExecStore: "扫描 lease_until 过期"
+    Watchdog->>Lock: "try lock fin_ex:chat_run:recover_lock:{runId}"
+    Watchdog->>ExecStore: "条件抢占为 RECOVERING 并递增 fencing_token"
+    alt "MANUAL_CONFIRMATION / FAIL_FAST"
+        Watchdog->>EventStore: "append(run.failed)"
+        Watchdog->>RunStore: "RUNNING -> FAILED，释放 active run"
+        Watchdog->>ExecStore: "execution -> FAILED"
+    else "RUNTIME_TAKEOVER supported"
+        Watchdog->>ExecStore: "切换 owner，刷新 lease，保持 RUNNING"
+        Watchdog->>EventStore: "append(run.recovered)"
+        Watchdog->>Runner: "启动新的 Runtime subscription"
+    end
+    Runner->>ExecStore: "旧实例恢复后按旧 token 写事件"
+    ExecStore-->>Runner: "fencing 校验失败，拒绝迟到事件"
+```
+
+watchdog 是分层设计：`ChatRunWatchdogScheduler` 只负责按配置延迟、jitter 和周期触发；`ChatRunRecoveryOrchestrator` 负责候选拉取、容量检查、策略选择和指标日志；`ChatRunExecutionRepository` 负责 openGauss 条件抢占；`StaleRunRecoveryStrategy` 负责具体恢复动作。默认策略链为 `MANUAL_CONFIRMATION,FAIL_FAST`，`RUNTIME_TAKEOVER` 仅在 Runtime 明确支持可靠恢复并提供 resume token 时使用。
+
+所有治理类 `@Scheduled` 任务使用 `financeex.scheduler.pool-size` 配置的线程池调度器，避免 watchdog jitter 或慢巡检阻塞 run heartbeat、WebSocket 空闲清理和准入窗口清理。实例 ID 默认由 `GeneratedApplicationInstanceIdProvider` 在进程启动时生成；如需对接注册中心，提供新的 `ApplicationInstanceIdProvider` bean 即可替换默认实现。
+
+恢复负载治理包含四层保护：每轮扫描候选上限、每轮最大 claim 上限、每租户 claim 上限、本机恢复和 takeover semaphore。没有恢复容量时不抢占，留给下一轮或其他实例处理，避免单实例在大批 stale run 场景下被恢复任务压垮。
 
 ### WebSocket 边界说明
 
@@ -605,6 +650,7 @@ AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 
 - `fin_ex_chat_message_t`
 - `fin_ex_chat_message_attachment_t`
 - `fin_ex_chat_run_t`
+- `fin_ex_chat_run_execution_t`
 - `fin_ex_chat_event_t`
 - `fin_ex_chat_read_cursor_t`
 - `fin_ex_uploaded_document_t`
@@ -617,6 +663,7 @@ Redis key 必须以 `fin_ex` 开头：
 - `fin_ex:runtime_binding:index:{tenantId:userId:sessionId}`
 - `fin_ex:chat_run:active:{tenantId}:{userId}:{sessionId}`
 - `fin_ex:chat_run:cancel:{runId}`
+- `fin_ex:chat_run:recover_lock:{runId}`
 - `fin_ex:chat_read_cursor:{tenantId}:{userId}:{sessionId}`
 - `fin_ex:chat_stream:{streamTopicId}`
 - `fin_ex:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`

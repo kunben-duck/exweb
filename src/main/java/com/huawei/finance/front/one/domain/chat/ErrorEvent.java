@@ -26,5 +26,23 @@ public record ErrorEvent(
     public static ErrorEvent of(String runId, String sessionId, String code, String message) {
         return new ErrorEvent(runId, sessionId, 0, Instant.now(), code, message, Map.of("code", code, "message", message));
     }
+
+    /**
+     * 创建带自定义 payload 的 run.failed 事件。
+     *
+     * @param runId 本轮执行追踪标识。
+     * @param sessionId 前端聊天会话标识。
+     * @param code 错误码。
+     * @param message 错误说明。
+     * @param payload 前端可消费和审计可检索的失败载荷。
+     * @return run.failed 事件。
+     */
+    public static ErrorEvent of(String runId, String sessionId, String code, String message, Map<String, Object> payload) {
+        Map<String, Object> normalized = payload == null || payload.isEmpty()
+                ? Map.of("code", code, "message", message)
+                : Map.copyOf(payload);
+        return new ErrorEvent(runId, sessionId, 0, Instant.now(), code, message, normalized);
+    }
+
     @Override public String type() { return "run.failed"; }
 }

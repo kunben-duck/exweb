@@ -110,6 +110,35 @@ CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_run_owner_session_status_updated_at
 CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_run_session_last_seq
     ON fin_ex_chat_run_t(session_id, last_seq);
 
+CREATE TABLE IF NOT EXISTS fin_ex_chat_run_execution_t (
+    id VARCHAR(64) PRIMARY KEY,
+    run_id VARCHAR(64) NOT NULL,
+    tenant_id VARCHAR(64) NOT NULL,
+    user_id VARCHAR(64) NOT NULL,
+    session_id VARCHAR(64) NOT NULL,
+    execution_status VARCHAR(32) NOT NULL,
+    owner_instance_id VARCHAR(256),
+    heartbeat_at TIMESTAMPTZ,
+    lease_until TIMESTAMPTZ,
+    fencing_token BIGINT NOT NULL DEFAULT 1,
+    recovery_strategy VARCHAR(64),
+    recovered_by_instance_id VARCHAR(256),
+    recovery_attempts INTEGER NOT NULL DEFAULT 0,
+    recovery_lease_until TIMESTAMPTZ,
+    runtime_resume_token VARCHAR(512),
+    metadata_json TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    UNIQUE(run_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_run_execution_status_lease_until
+    ON fin_ex_chat_run_execution_t(execution_status, lease_until);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_run_execution_status_recovery_lease_until
+    ON fin_ex_chat_run_execution_t(execution_status, recovery_lease_until);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_run_execution_owner_status
+    ON fin_ex_chat_run_execution_t(owner_instance_id, execution_status);
+
 CREATE SEQUENCE IF NOT EXISTS fin_ex_chat_event_seq START WITH 1 INCREMENT BY 1;
 
 CREATE TABLE IF NOT EXISTS fin_ex_chat_event_t (
@@ -273,6 +302,26 @@ COMMENT ON COLUMN fin_ex_chat_run_t.finished_at IS 'run 进入终态时间。';
 COMMENT ON COLUMN fin_ex_chat_run_t.metadata_json IS 'run 扩展诊断元数据 JSON，例如 retryOfRunId、路由诊断信息。';
 COMMENT ON COLUMN fin_ex_chat_run_t.created_at IS 'run 记录创建时间。';
 COMMENT ON COLUMN fin_ex_chat_run_t.updated_at IS 'run 记录最后更新时间。';
+
+COMMENT ON TABLE fin_ex_chat_run_execution_t IS '聊天 run 执行控制面表，保存实例归属、心跳、租约、恢复策略和 fencing token，不承载用户业务状态。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.id IS '执行控制面记录主键，业务生成的 executionId。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.run_id IS '关联的业务 runId，对应 fin_ex_chat_run_t.id；唯一。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.tenant_id IS '租户标识，冗余自 run，用于多租户扫描、排障和恢复负载治理。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.user_id IS '用户标识，冗余自 run，用于用户级排障。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.session_id IS 'run 所属聊天会话 ID，冗余自 run。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.execution_status IS '执行控制面状态，包括 RUNNING、CANCELLING、RECOVERING、COMPLETED、FAILED、CANCELLED。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.owner_instance_id IS '当前拥有该 run 执行权的应用实例运行 ID，由 ApplicationInstanceIdProvider 提供。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.heartbeat_at IS 'owner 实例最后一次刷新心跳的时间。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.lease_until IS 'owner 实例运行租约到期时间；watchdog 以该字段判定 stale run。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.fencing_token IS '写事件栅栏令牌；接管或恢复抢占时递增，用于拒绝旧实例迟到输出。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.recovery_strategy IS '最近一次 stale run 恢复使用的策略，例如 MANUAL_CONFIRMATION、FAIL_FAST、RUNTIME_TAKEOVER。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.recovered_by_instance_id IS '最近一次执行恢复动作的实例运行 ID。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.recovery_attempts IS 'stale run 恢复尝试次数。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.recovery_lease_until IS 'RECOVERING 状态的恢复租约到期时间，防止恢复实例再次挂掉后永久卡住。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.runtime_resume_token IS 'Runtime 可靠断点接管所需的恢复 token；当前 Runtime 不支持时为空。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.metadata_json IS '执行控制面扩展元数据 JSON，用于排障和未来策略扩展。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.created_at IS '执行控制面记录创建时间。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.updated_at IS '执行控制面记录最后更新时间。';
 
 COMMENT ON SEQUENCE fin_ex_chat_event_seq IS '聊天事件恢复游标序号生成器，由 openGauss 统一生成 seq，供 WebSocket/SSE 断点恢复使用。';
 

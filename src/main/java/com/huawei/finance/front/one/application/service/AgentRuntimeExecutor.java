@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.application.service;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
@@ -36,10 +37,12 @@ public class AgentRuntimeExecutor {
     }
 
     public Flux<ChatEvent> execute(ChatCommand command, String runId, MemoryContext memory,
-                                   IntentDecision intent, RouteTarget route, UserContext user, RuntimeBinding binding) {
+                                   IntentDecision intent, RouteTarget route, UserContext user, RuntimeBinding binding,
+                                   RuntimeForwardHeaders forwardHeaders) {
         List<AttachmentRef> attachments = command.attachments() == null ? List.of() : command.attachments();
         // AgentRuntimeRequest 不再携带旧能力列表。复杂 Agent 需要的外部能力编排应由 Runtime 自己管理，
         // SuperAgent 只传当前用户消息、可见上下文快照、意图/路由信号和上次 runtimeSessionId。
+        // forwardHeaders 仅为运行期内存快照，Relay adapter 会按白名单决定是否放入出站请求头。
         AgentRuntimeRequest request = new AgentRuntimeRequest(
                 user.tenantId(),
                 user.userId(),
@@ -51,7 +54,8 @@ public class AgentRuntimeExecutor {
                 memory,
                 intent,
                 route,
-                command.metadata()
+                command.metadata(),
+                forwardHeaders
         );
         return concurrencyLimiter.protectAgentRuntime(runtime.query(request));
     }
@@ -59,7 +63,7 @@ public class AgentRuntimeExecutor {
     /**
      * 尽力取消当前 Runtime run。
      */
-    public Mono<Void> cancel(ChatRun run, UserContext user) {
+    public Mono<Void> cancel(ChatRun run, UserContext user, RuntimeForwardHeaders forwardHeaders) {
         if (run == null) {
             return Mono.empty();
         }
@@ -71,7 +75,8 @@ public class AgentRuntimeExecutor {
                 run.runtimeSessionId(),
                 run.runtimeProvider(),
                 run.cancelReason(),
-                Map.of("routeType", run.routeType() == null ? "" : run.routeType())
+                Map.of("routeType", run.routeType() == null ? "" : run.routeType()),
+                forwardHeaders
         );
         return runtime.cancel(request);
     }

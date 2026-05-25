@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.infrastructure.runtime.relay;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookieProperties;
 import org.junit.jupiter.api.Test;
 
 class RelayAgentPropertiesTest {
@@ -26,5 +27,14 @@ class RelayAgentPropertiesTest {
         properties.setApiAdapter(" ");
 
         assertThat(properties.selectedApiAdapter()).isEqualTo("relay-stream-http");
+    }
+
+    @Test
+    void forwardCookieOnlyAllowsConfiguredRelayAdapters() {
+        AgentRuntimeForwardCookieProperties properties = new AgentRuntimeForwardCookieProperties();
+
+        assertThat(properties.isAdapterAllowed("relay-stream-http")).isTrue();
+        assertThat(properties.isAdapterAllowed("relay-websocket")).isTrue();
+        assertThat(properties.isAdapterAllowed("deepseek-chat-completions")).isFalse();
     }
 }

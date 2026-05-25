@@ -1,5 +1,6 @@
 package com.huawei.finance.front.one.application.integration.agent;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
@@ -24,6 +25,7 @@ import java.util.Map;
  * @param intentDecision 意图服务识别结果，可能为空。
  * @param routeTarget 本轮路由决策结果。
  * @param metadata 前端或上游传入的扩展元数据。
+ * @param forwardHeaders 仅在内存中传递给 Runtime adapter 的入口请求头快照；必须被 JSON 序列化忽略。
  */
 public record AgentRuntimeRequest(
         String tenantId,
@@ -36,5 +38,11 @@ public record AgentRuntimeRequest(
         MemoryContext memoryContext,
         IntentDecision intentDecision,
         RouteTarget routeTarget,
-        Map<String, Object> metadata
-) {}
+        Map<String, Object> metadata,
+        @JsonIgnore RuntimeForwardHeaders forwardHeaders
+) {
+    public AgentRuntimeRequest {
+        metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+        forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
+    }
+}

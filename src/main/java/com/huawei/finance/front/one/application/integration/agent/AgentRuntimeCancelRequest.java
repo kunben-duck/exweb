@@ -1,5 +1,6 @@
 package com.huawei.finance.front.one.application.integration.agent;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import java.util.Map;
 
 /**
@@ -13,6 +14,7 @@ import java.util.Map;
  * @param provider 当前 Runtime provider 编码。
  * @param reason 取消原因。
  * @param metadata 扩展诊断元数据。
+ * @param forwardHeaders stop 请求入口捕获的请求头快照；仅用于可信 Runtime adapter 的出站请求头。
  */
 public record AgentRuntimeCancelRequest(
         String tenantId,
@@ -22,9 +24,11 @@ public record AgentRuntimeCancelRequest(
         String runtimeSessionId,
         String provider,
         String reason,
-        Map<String, Object> metadata
+        Map<String, Object> metadata,
+        @JsonIgnore RuntimeForwardHeaders forwardHeaders
 ) {
     public AgentRuntimeCancelRequest {
         metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+        forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
     }
 }

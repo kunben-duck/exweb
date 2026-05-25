@@ -134,6 +134,8 @@ POST /api/v1/ex/chat/runs/{runId}/stop
 
 `streamTopicId` 是 ChatService 的 run 级订阅 topic，不是 RelayAgent 的会话 ID。当前后端内部的 `AgentRuntime.query` 通过 `financeex.agent-runtime.api-adapter` 选择 `relay-stream-http`、`deepseek-chat-completions` 或 `relay-websocket`；这个选择不改变前端协议。
 
+如果 `POST /chat/runs` 或 `POST /chat/runs/{runId}/stop` 请求携带标准 `Cookie` 头，后端会在入口捕获一次，并只把它透传给可信 Relay Runtime adapter。该 Cookie 不会出现在请求 body、metadata、事件、历史消息或前端响应中。DeepSeek/OpenAI-compatible 联调 adapter 不接收企业 Cookie。
+
 ## 推荐前端流程
 
 ```mermaid
@@ -543,6 +545,8 @@ MVC/Servlet 模式下，后端会在 WebSocket handshake 阶段读取企业权�
 连接建立后的 subscribe、ack、unsubscribe 不再读取 ThreadLocal。因此前端只需要确保握手请求
 携带企业鉴权 cookie/header，协议消息体中不要传 tenantId/userId。
 
+企业 Cookie 有两类用途：请求入口身份解析，以及在 AgentRuntime 为可信 Relay adapter 时透传给下游 Relay。透传只发生在创建 run 和 stop run 的 HTTP 入口，WebSocket subscribe、SSE resume、历史查询、文档下载等接口不会把 Cookie 继续转发给 Runtime。
+
 生产环境必须配置 `financeex.websocket.allowed-origin-patterns` 为企业前端域名。默认值只允许
 localhost，避免 Cookie 鉴权场景下的跨站 WebSocket 滥用。服务端还会限制单用户连接数、单连接
 订阅数、单 topic 本机订阅数、控制消息大小、出站队列和空闲时间；超限时会返回明确错误并关闭
@@ -820,6 +824,8 @@ stop 是 REST 生命周期接口，不是 WebSocket command。重复 stop 是幂
 
 前端点击停止后，不应把关闭 WebSocket 当作取消语义。推荐流程是：保存当前本地 `lastSeq`，调用 stop，随后继续通过 WebSocket 等待 `run.cancelled`；如果页面已经断线或没有收到终态事件，则用 stop 前保存的 `lastSeq` 调 SSE resume 补齐 `run.cancelled`。stop 响应里的 `latestSeq` 是服务端事实源位置，不代表当前页签已经消费到该事件。
 
+stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可信 Relay cancel adapter，用于下游企业权限校验。即使下游 cancel 失败，本服务仍以本地 `run.cancelled` 终态为准。
+
 ## Run 故障恢复事件
 
 如果执行 run 的服务实例宕机或长时间没有心跳，后台 watchdog 会把该 run 收敛到终态，避免会话永久显示“生成中”。前端无需调用额外接口，只需要像处理普通流式事件一样处理 `run.failed`：
@@ -1006,6 +1012,8 @@ async function stopCurrentRun() {
   await fetch(`/api/v1/ex/chat/runs/${currentRunId}/stop`, { method: "POST" });
 }
 ```
+
+本地联调台的“鉴权请求头”如果配置了 `Cookie: finex_proxy_profile=...` 或企业登录 Cookie，Node 代理会把该 Cookie 注入 `/chat/runs` 和 `/chat/runs/{runId}/stop`。后端随后会根据 `financeex.agent-runtime.forward-cookie.*` 配置决定是否透传给 Relay Runtime；前端不需要在请求体里放 Cookie。
 
 ## 排障清单
 

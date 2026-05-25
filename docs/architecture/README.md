@@ -617,8 +617,11 @@ stop 语义：
 - Relay HTTP Streamable adapter：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`、`financeex.agent-runtime.stop-path`
 - DeepSeek 替身联调：`financeex.agent-runtime.api-key`、`financeex.agent-runtime.model`、`financeex.agent-runtime.stream`、`financeex.agent-runtime.thinking-enabled`、`financeex.agent-runtime.reasoning-effort`、`financeex.agent-runtime.cancel-supported`
 - Relay WebSocket adapter：设置 `financeex.agent-runtime.provider=relay`、`financeex.agent-runtime.api-adapter=relay-websocket`，并配置 `financeex.agent-runtime.base-url` 与 `financeex.agent-runtime.websocket-path`；adapter 会把 `http(s)://` base-url 转换为 `ws(s)://` 出站连接地址
+- Relay Cookie 透传：`financeex.agent-runtime.forward-cookie.enabled`、`max-length`、`allowed-adapters`。默认只允许 `relay-stream-http` 与 `relay-websocket` 接收入口 Cookie；DeepSeek/OpenAI-compatible 替身不透传企业 Cookie。
 
 SubAgent 当前只支持单轮 HTTP 文本流调用。当前上线版本内置一个 `RelayAgentRuntime` provider 和三个 `RelayRuntimeProtocolAdapter`：`relay-stream-http` 是真实 Relay HTTP 流式协议实现，`deepseek-chat-completions` 是 DeepSeek/OpenAI-compatible 替身实现，`relay-websocket` 是 RelayAgent WebSocket 对话协议实现。新增下游协议时，应新增 adapter，而不是在 `RelayAgentRuntime` 主类里堆转换分支。
+
+`Cookie` 是请求入口捕获的运行期内存快照，只会在 `AgentRuntimeRequest.forwardHeaders` 或 cancel 请求中向 adapter 传递；这些字段被 JSON 序列化忽略，不能进入 Relay 请求体、run metadata、事件 payload 或日志。该设计保证企业登录态不会因后台 run、SSE/WS 恢复或故障治理被持久化或回放。
 
 DeepSeek 替身配置示例：
 

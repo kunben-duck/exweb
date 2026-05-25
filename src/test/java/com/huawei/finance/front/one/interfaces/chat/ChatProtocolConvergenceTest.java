@@ -3,6 +3,8 @@ package com.huawei.finance.front.one.interfaces.chat;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.finance.front.one.application.facade.FinanceChatFacade;
+import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookieProperties;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.service.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.application.service.ChatStreamApplicationService;
@@ -17,6 +19,7 @@ import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatRunRequest;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -46,11 +49,15 @@ class ChatProtocolConvergenceTest {
 
     @Test
     void runsEndpointReturnsRunIdentifiersWithoutProtocolUrls() {
+        AtomicReference<RuntimeForwardHeaders> startHeaders = new AtomicReference<>();
+        AtomicReference<RuntimeForwardHeaders> stopHeaders = new AtomicReference<>();
         FinanceChatFacade chatFacade = new RunStartOnlyChatFacade(
                 new ChatRunStartResult("run1", "session1", 10L, Instant.parse("2026-05-16T00:00:00Z"),
                         ChatStreamTopics.runTopic("run1")),
                 new ChatRunStopResult("run1", "session1", ChatRunStatus.CANCELLED, 12L,
-                        Instant.parse("2026-05-16T00:00:01Z"))
+                        Instant.parse("2026-05-16T00:00:01Z")),
+                startHeaders,
+                stopHeaders
         );
         ChatStreamApplicationService streamService = null;
         ChatController controller = new ChatController(
@@ -62,38 +69,59 @@ class ChatProtocolConvergenceTest {
                 new PermissionChecker(),
                 new ChatRequestTranslator(),
                 new ChatEventTranslator(),
+                new RuntimeForwardHeaderExtractor(new AgentRuntimeForwardCookieProperties()),
                 new com.huawei.finance.front.one.application.config.MvcSseProperties()
         );
         CreateChatRunRequest request = new CreateChatRunRequest("cmd1", "session1", null, "你好", List.of(), Map.of());
 
-        var runStart = controller.startRun(request).block();
+        var runStart = controller.startRun(request, "finex_proxy_profile=profile1").block();
 
         assertThat(runStart).isNotNull();
         assertThat(runStart.runId()).isEqualTo("run1");
         assertThat(runStart.sessionId()).isEqualTo("session1");
         assertThat(runStart.firstSeq()).isEqualTo(10L);
         assertThat(runStart.streamTopicId()).isEqualTo("chat-run-run1");
+        assertThat(startHeaders.get()).isNotNull();
+        assertThat(startHeaders.get().cookieHeader()).isEqualTo("finex_proxy_profile=profile1");
 
-        var stopResult = controller.stopRun("run1").block();
+        var stopResult = controller.stopRun("run1", "finex_proxy_profile=profile1").block();
 
         assertThat(stopResult).isNotNull();
         assertThat(stopResult.status()).isEqualTo("CANCELLED");
         assertThat(stopResult.latestSeq()).isEqualTo(12L);
+        assertThat(stopHeaders.get()).isNotNull();
+        assertThat(stopHeaders.get().cookieHeader()).isEqualTo("finex_proxy_profile=profile1");
     }
 
-    private record RunStartOnlyChatFacade(ChatRunStartResult runStart, ChatRunStopResult stopResult) implements FinanceChatFacade {
+    @Test
+    void rejectsCookieHeaderAboveConfiguredRuntimeForwardLimit() {
+        AgentRuntimeForwardCookieProperties properties = new AgentRuntimeForwardCookieProperties();
+        properties.setMaxLength(4);
+        RuntimeForwardHeaderExtractor extractor = new RuntimeForwardHeaderExtractor(properties);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> extractor.fromCookieHeader("abcdef"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Cookie 请求头超过最大允许长度");
+    }
+
+    private record RunStartOnlyChatFacade(ChatRunStartResult runStart,
+                                          ChatRunStopResult stopResult,
+                                          AtomicReference<RuntimeForwardHeaders> startHeaders,
+                                          AtomicReference<RuntimeForwardHeaders> stopHeaders) implements FinanceChatFacade {
         @Override
-        public Flux<ChatEvent> executeRun(UserContext user, ChatCommand command) {
+        public Flux<ChatEvent> executeRun(UserContext user, ChatCommand command, RuntimeForwardHeaders forwardHeaders) {
             return Flux.error(new UnsupportedOperationException("executeRun is not used by this test"));
         }
 
         @Override
-        public Mono<ChatRunStartResult> startRun(UserContext user, ChatCommand command) {
+        public Mono<ChatRunStartResult> startRun(UserContext user, ChatCommand command, RuntimeForwardHeaders forwardHeaders) {
+            startHeaders.set(forwardHeaders);
             return Mono.just(runStart);
         }
 
         @Override
-        public Mono<ChatRunStopResult> stopRun(UserContext user, String runId) {
+        public Mono<ChatRunStopResult> stopRun(UserContext user, String runId, RuntimeForwardHeaders forwardHeaders) {
+            stopHeaders.set(forwardHeaders);
             return Mono.just(stopResult);
         }
     }

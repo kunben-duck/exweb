@@ -1,0 +1,129 @@
+package com.huawei.finance.front.one.infrastructure.runtime.relay;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookieProperties;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.finance.front.one.domain.memory.MemoryContext;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.reactive.function.client.ClientRequest;
+import org.springframework.web.reactive.function.client.ClientResponse;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
+
+class RelayStreamHttpRuntimeAdapterTest {
+
+    @Test
+    void forwardsCookieHeaderOnlyAsTrustedRelayHttpHeader() throws Exception {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> {
+                    captured.set(request);
+                    return Mono.just(ClientResponse.create(HttpStatus.OK)
+                            .header(HttpHeaders.CONTENT_TYPE, "text/plain")
+                            .body("hello")
+                            .build());
+                });
+        RelayAgentProperties properties = new RelayAgentProperties();
+        properties.setBaseUrl("http://relay.test");
+        properties.setStreamPath("/v1/query");
+        AgentRuntimeForwardCookieProperties forwardCookie = new AgentRuntimeForwardCookieProperties();
+        RelayStreamHttpRuntimeAdapter adapter = new RelayStreamHttpRuntimeAdapter(builder, properties, forwardCookie);
+        AgentRuntimeRequest request = request(RuntimeForwardHeaders.fromCookieHeader("sid=abc; theme=dark", 8192));
+
+        StepVerifier.create(adapter.query(request))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "hello"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                .verifyComplete();
+
+        assertThat(captured.get()).isNotNull();
+        assertThat(captured.get().headers().getFirst(HttpHeaders.COOKIE)).isEqualTo("sid=abc; theme=dark");
+        String json = new ObjectMapper().writeValueAsString(request);
+        assertThat(json)
+                .doesNotContain("sid=abc")
+                .doesNotContain("forwardHeaders")
+                .doesNotContain("cookieHeader");
+    }
+
+    @Test
+    void doesNotForwardCookieWhenAdapterIsNotAllowed() {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> {
+                    captured.set(request);
+                    return Mono.just(ClientResponse.create(HttpStatus.OK)
+                            .header(HttpHeaders.CONTENT_TYPE, "text/plain")
+                            .body("hello")
+                            .build());
+                });
+        RelayAgentProperties properties = new RelayAgentProperties();
+        properties.setBaseUrl("http://relay.test");
+        AgentRuntimeForwardCookieProperties forwardCookie = new AgentRuntimeForwardCookieProperties();
+        forwardCookie.setAllowedAdapters(List.of("relay-websocket"));
+        RelayStreamHttpRuntimeAdapter adapter = new RelayStreamHttpRuntimeAdapter(builder, properties, forwardCookie);
+
+        StepVerifier.create(adapter.query(request(RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192))))
+                .expectNextCount(2)
+                .verifyComplete();
+
+        assertThat(captured.get()).isNotNull();
+        assertThat(captured.get().headers()).doesNotContainKey(HttpHeaders.COOKIE);
+    }
+
+    @Test
+    void forwardsCookieHeaderOnRelayStopRequest() {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> {
+                    captured.set(request);
+                    return Mono.just(ClientResponse.create(HttpStatus.OK).build());
+                });
+        RelayAgentProperties properties = new RelayAgentProperties();
+        properties.setBaseUrl("http://relay.test");
+        properties.setStopPath("/v1/runs/{runId}/stop");
+        AgentRuntimeForwardCookieProperties forwardCookie = new AgentRuntimeForwardCookieProperties();
+        RelayStreamHttpRuntimeAdapter adapter = new RelayStreamHttpRuntimeAdapter(builder, properties, forwardCookie);
+        AgentRuntimeCancelRequest request = new AgentRuntimeCancelRequest(
+                "tenant1",
+                "user1",
+                "session1",
+                "run1",
+                "runtimeSession1",
+                "relay",
+                "USER_STOP",
+                Map.of(),
+                RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192)
+        );
+
+        StepVerifier.create(adapter.cancel(request)).verifyComplete();
+
+        assertThat(captured.get()).isNotNull();
+        assertThat(captured.get().headers().getFirst(HttpHeaders.COOKIE)).isEqualTo("sid=abc");
+    }
+
+    private AgentRuntimeRequest request(RuntimeForwardHeaders forwardHeaders) {
+        return new AgentRuntimeRequest(
+                "tenant1",
+                "user1",
+                "session1",
+                "run1",
+                "runtimeSession1",
+                "hello",
+                List.of(),
+                MemoryContext.empty(),
+                null,
+                null,
+                Map.of(),
+                forwardHeaders
+        );
+    }
+}

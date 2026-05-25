@@ -43,6 +43,8 @@ Referer: http://localhost:8080/fin/ex/
 
 点击“保存请求头”后，配置会保存到浏览器 `localStorage`，并同步到本地 Node 代理内存。后续所有 `/api/v1/ex/**` HTTP 请求、fetch 方式的 SSE resume、文件上传/下载，以及 `/api/v1/ex/chat/ws` WebSocket 握手都会由本地代理自动注入这些请求头。
 
+其中 `/api/v1/ex/chat/runs` 和 `/api/v1/ex/chat/runs/{runId}/stop` 的 `Cookie` 还会被后端按配置透传给可信 Relay Runtime adapter，用于本地模拟企业 Relay 服务鉴权。Cookie 不会写入后端数据库或前端事件；如果后端切到 DeepSeek/OpenAI-compatible 替身 adapter，则不会透传企业 Cookie。
+
 需要注意：浏览器出于安全限制，不允许前端 JavaScript 直接设置 `Cookie` 请求头，也不允许给原生 `WebSocket` 设置自定义请求头。因此这里采用本地代理 profile 机制：浏览器只携带非敏感的 profileId，真正的 `Cookie/Authorization/X-*` 由 `server.mjs` 转发到后端。该能力仅用于本地联调，不要把真实 Cookie 提交到仓库或日志。
 
 如果保存 Cookie 后接口返回 `412 Precondition Failed`，通常表示企业鉴权框架已经识别到登录态，但 CSRF、Origin、Referer、签名或票据前置校验没有通过。此时不要只填 Cookie，需要把框架要求的一组请求头一起复制过来，例如 `Origin`、`Referer`、CSRF token header、租户/用户票据 header 等。

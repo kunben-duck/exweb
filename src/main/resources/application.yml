@@ -188,6 +188,12 @@ financeex:
     reasoning-effort: ${FINANCEEX_RELAY_AGENT_REASONING_EFFORT:}
     cancel-supported: ${FINANCEEX_RELAY_AGENT_CANCEL_SUPPORTED:true}
     timeout: 60s
+    forward-cookie:
+      # 仅把 /chat/runs 与 /chat/runs/{runId}/stop 入口捕获到的 Cookie 透传给可信 Relay adapter。
+      # Cookie 不写入 metadata_json、不落库、不进入事件 payload，也不会发送给 DeepSeek/OpenAI-compatible 替身。
+      enabled: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ENABLED:true}
+      max-length: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_MAX_LENGTH:8192}
+      allowed-adapters: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ALLOWED_ADAPTERS:relay-stream-http,relay-websocket}
   storage:
     provider: ${FINANCEEX_STORAGE_PROVIDER:local}
     local-path: ${java.io.tmpdir}/financeex-docs

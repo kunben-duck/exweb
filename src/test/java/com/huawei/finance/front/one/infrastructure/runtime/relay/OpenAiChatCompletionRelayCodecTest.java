@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
@@ -102,7 +103,8 @@ class OpenAiChatCompletionRelayCodecTest {
                 MemoryContext.empty(),
                 null,
                 null,
-                Map.of()
+                Map.of(),
+                RuntimeForwardHeaders.empty()
         );
     }
 }

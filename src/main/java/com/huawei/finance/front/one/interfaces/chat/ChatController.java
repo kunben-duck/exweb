@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.interfaces.chat;
 
 import com.huawei.finance.front.one.application.config.MvcSseProperties;
 import com.huawei.finance.front.one.application.facade.FinanceChatFacade;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
 import com.huawei.finance.front.one.application.service.ChatFeedbackApplicationService;
 import com.huawei.finance.front.one.application.service.ChatRunApplicationService;
@@ -31,6 +32,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -55,11 +57,13 @@ public class ChatController {
     private final PermissionChecker permissionChecker;
     private final ChatRequestTranslator requestTranslator;
     private final ChatEventTranslator eventTranslator;
+    private final RuntimeForwardHeaderExtractor forwardHeaderExtractor;
     private final MvcSseProperties sseProperties;
     public ChatController(FinanceChatFacade chatFacade, ChatStreamApplicationService chatStreamService,
                           ChatRunApplicationService chatRunService, ChatFeedbackApplicationService feedbackService,
                           AuthContextProvider auth, PermissionChecker permissionChecker,
                           ChatRequestTranslator requestTranslator, ChatEventTranslator eventTranslator,
+                          RuntimeForwardHeaderExtractor forwardHeaderExtractor,
                           MvcSseProperties sseProperties) {
         this.chatFacade = chatFacade;
         this.chatStreamService = chatStreamService;
@@ -69,6 +73,7 @@ public class ChatController {
         this.permissionChecker = permissionChecker;
         this.requestTranslator = requestTranslator;
         this.eventTranslator = eventTranslator;
+        this.forwardHeaderExtractor = forwardHeaderExtractor;
         this.sseProperties = sseProperties;
     }
 
@@ -79,12 +84,15 @@ public class ChatController {
      * 不随每次 run 创建结果返回，避免后端业务响应承担客户端路由配置职责。</p>
      *
      * @param request 前端提问请求，只包含会话、用户文本、附件引用和 metadata；租户与用户由服务端身份上下文解析。
+     * @param cookieHeader 原始 HTTP Cookie 头；只会作为内存快照透传给可信 Relay Runtime adapter。
      * @return 新建后台 run 的创建结果，包含 runId、sessionId、firstSeq 和 streamTopicId。
      */
     @PostMapping(value = "/runs")
-    public Mono<ChatRunStartDto> startRun(@Valid @RequestBody CreateChatRunRequest request) {
+    public Mono<ChatRunStartDto> startRun(@Valid @RequestBody CreateChatRunRequest request,
+                                          @RequestHeader(value = HttpHeaders.COOKIE, required = false) String cookieHeader) {
         UserContext user = resolveChatUser();
-        return chatFacade.startRun(user, requestTranslator.toCommand(request))
+        RuntimeForwardHeaders forwardHeaders = forwardHeaderExtractor.fromCookieHeader(cookieHeader);
+        return chatFacade.startRun(user, requestTranslator.toCommand(request), forwardHeaders)
                 .map(runStart -> new ChatRunStartDto(
                         runStart.runId(),
                         runStart.sessionId(),
@@ -98,12 +106,15 @@ public class ChatController {
      * 停止指定 run 的当前回答。
      *
      * @param runId 需要停止的 run 标识；服务端会校验该 run 必须属于当前用户。
+     * @param cookieHeader 原始 HTTP Cookie 头；只会用于可信 Relay Runtime 的尽力取消请求。
      * @return stop 后的 run 状态；已终态 run 会幂等返回当前状态。
      */
     @PostMapping(value = "/runs/{runId}/stop")
-    public Mono<ChatRunStopDto> stopRun(@PathVariable("runId") String runId) {
+    public Mono<ChatRunStopDto> stopRun(@PathVariable("runId") String runId,
+                                        @RequestHeader(value = HttpHeaders.COOKIE, required = false) String cookieHeader) {
         UserContext user = resolveChatUser();
-        return chatFacade.stopRun(user, runId)
+        RuntimeForwardHeaders forwardHeaders = forwardHeaderExtractor.fromCookieHeader(cookieHeader);
+        return chatFacade.stopRun(user, runId, forwardHeaders)
                 .map(this::toStopDto)
                 .subscribeOn(Schedulers.boundedElastic());
     }

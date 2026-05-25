@@ -4,6 +4,7 @@ import com.huawei.finance.front.one.application.facade.FinanceChatFacade;
 import com.huawei.finance.front.one.application.facade.DocumentFacade;
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
@@ -96,14 +97,15 @@ public class FinanceEXChatService implements FinanceChatFacade {
     }
 
     @Override
-    public Mono<ChatRunStartResult> startRun(UserContext user, ChatCommand command) {
+    public Mono<ChatRunStartResult> startRun(UserContext user, ChatCommand command, RuntimeForwardHeaders forwardHeaders) {
         return Mono.defer(() -> {
+            RuntimeForwardHeaders headerSnapshot = normalizeForwardHeaders(forwardHeaders);
             RunAdmissionControlService.Permit runPermit = runAdmissionControl.acquire(user);
             Sinks.One<ChatEvent> firstEvent = Sinks.one();
             AtomicReference<Disposable> disposableRef = new AtomicReference<>();
             AtomicReference<String> runIdRef = new AtomicReference<>();
             AtomicBoolean terminal = new AtomicBoolean(false);
-            Flux<ChatEvent> runFlux = executeRun(user, command)
+            Flux<ChatEvent> runFlux = executeRun(user, command, headerSnapshot)
                     .subscribeOn(Schedulers.boundedElastic())
                     .doOnNext(event -> {
                         if (runIdRef.compareAndSet(null, event.runId())) {
@@ -145,8 +147,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
     }
 
     @Override
-    public Mono<ChatRunStopResult> stopRun(UserContext user, String runId) {
+    public Mono<ChatRunStopResult> stopRun(UserContext user, String runId, RuntimeForwardHeaders forwardHeaders) {
         return Mono.defer(() -> {
+            RuntimeForwardHeaders headerSnapshot = normalizeForwardHeaders(forwardHeaders);
             ChatRunStopDecision decision = chatRunService.requestStop(user, runId, "USER_STOP");
             ChatRun run = decision.run();
             if (!decision.appendCancelledEvent()) {
@@ -154,7 +157,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
             }
             // 本地 JVM 优先中断当前流订阅；跨 JVM 场景依靠 Redis cancel flag 与下游 cancel API 尽力收敛。
             runExecutionRegistry.cancel(run.id());
-            cancelDownstream(run, user)
+            cancelDownstream(run, user, headerSnapshot)
                     .onErrorResume(ex -> Mono.empty())
                     .subscribe();
             ChatEvent cancelEvent = RunCancelledEvent.of(run.id(), run.sessionId(), run.cancelReason());
@@ -169,9 +172,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
     }
 
     @Override
-    public Flux<ChatEvent> executeRun(UserContext user, ChatCommand command) {
+    public Flux<ChatEvent> executeRun(UserContext user, ChatCommand command, RuntimeForwardHeaders forwardHeaders) {
         // defer 确保每个订阅都会生成独立 runId，避免热流复用导致事件串线。
         return Flux.defer(() -> {
+            RuntimeForwardHeaders headerSnapshot = normalizeForwardHeaders(forwardHeaders);
             // 进入 application 后统一以 UserContext 为准；原始前端请求只保留会话、消息、附件和元数据。
             ChatCommand identified = new ChatCommand(command.commandId(), user.tenantId(), user.userId(),
                     command.sessionId(), command.conversationId(), command.channel(), command.message(),
@@ -252,7 +256,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 Flux<ChatEvent> body = switch (selectedRoute.type()) {
                     case SUB_AGENT -> subAgentExecutor.execute(runCommand, runId, memory, selectedRoute, user);
                     case SYSTEM_RESPONSE -> systemResponseExecutor.execute(runCommand, runId, selectedIntent, selectedRoute);
-                    case AGENT_RUNTIME -> agentRuntimeExecutor.execute(runCommand, runId, memory, selectedIntent, selectedRoute, user, bindingRef.get());
+                    case AGENT_RUNTIME -> agentRuntimeExecutor.execute(runCommand, runId, memory, selectedIntent,
+                            selectedRoute, user, bindingRef.get(), headerSnapshot);
                 };
 
                 // 外层统一补齐 run.started/run.completed，接口层只需要转发事件流。
@@ -395,17 +400,21 @@ public class FinanceEXChatService implements FinanceChatFacade {
         return value instanceof Boolean bool && bool || value instanceof String text && Boolean.parseBoolean(text);
     }
 
-    private Mono<Void> cancelDownstream(ChatRun run, UserContext user) {
+    private Mono<Void> cancelDownstream(ChatRun run, UserContext user, RuntimeForwardHeaders forwardHeaders) {
         if (run == null || run.routeType() == null) {
             return Mono.empty();
         }
         if (RouteType.AGENT_RUNTIME.name().equals(run.routeType())) {
-            return agentRuntimeExecutor.cancel(run, user);
+            return agentRuntimeExecutor.cancel(run, user, forwardHeaders);
         }
         if (RouteType.SUB_AGENT.name().equals(run.routeType())) {
             return subAgentExecutor.cancel(run, user);
         }
         return Mono.empty();
+    }
+
+    private RuntimeForwardHeaders normalizeForwardHeaders(RuntimeForwardHeaders forwardHeaders) {
+        return forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
     }
 
     private Map<String, Object> runCompletedPayload(RouteTarget route, RuntimeBinding binding) {

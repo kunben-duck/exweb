@@ -267,9 +267,15 @@ Relay Runtime Cookie 透传是 adapter 级能力：`relay-stream-http` 会把入
 
 ## 上线版本边界
 
-当前上线版本明确不包含 AgentScope 设计和实现，也不包含 AgentScope memory、prompt assembler 或相关配置。复杂任务通过 Relay Runtime adapter 执行，默认 `provider=relay`、`api-adapter=relay-stream-http`，也可以切换为 `relay-websocket`。
+当前上线版本只内置 Relay Runtime provider，不保留其他历史 Runtime 分支、专用 prompt assembler 或相关配置。复杂任务通过 Relay Runtime adapter 执行，默认 `provider=relay`、`api-adapter=relay-stream-http`，也可以切换为 `relay-websocket`。
 
 AgentRuntime 防腐层必须保留：应用层只依赖 `AgentRuntime` 接口和 `AgentRuntimeRequest` 契约，不依赖 Relay 的 HTTP 或 WebSocket 协议细节。`financeex.agent-runtime.provider` 表示 Runtime 类型，当前为 `relay`；`financeex.agent-runtime.api-adapter` 表示 relay provider 下的 API 接入 adapter。后续替换 Runtime 实现时，应新增另一个 `AgentRuntime` provider；后续只替换 Relay 下游协议时，应新增 `RelayRuntimeProtocolAdapter` 实现。
+
+HTTP 错误响应统一为 `{timestamp,path,status,error,code,message}`。常见错误码包括：
+`AUTH_CONTEXT_MISSING`、`ACCESS_DENIED`、`BAD_REQUEST`、`VALIDATION_FAILED`、
+`ACTIVE_RUN_EXISTS` 和 `CONFLICT`。WebSocket 错误通过 envelope 返回，常见 `code`
+包括 `WS_AUTH_FAILED`、`WS_ORIGIN_FORBIDDEN`、`BAD_WS_MESSAGE`、`SUBSCRIBE_ERROR`、
+`NOT_SUBSCRIBED` 和 `RECOVER_REQUIRED`。
 
 ## 启动
 

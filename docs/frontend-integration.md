@@ -52,11 +52,53 @@ export FINANCEEX_DEV_USERNAME=developer
 | 文档预览/下载 | `GET` | `/api/v1/ex/documents/{documentId}/preview-url`、`/download` | 后端受控流式访问 |
 | 文档删除 | `DELETE` | `/api/v1/ex/documents/{documentId}` | 软删除文档 |
 
-旧版 `POST /chat/sse`、`POST /chat/stream`、NDJSON resume、WebSocket 直接发聊天请求均已删除，前端不要继续调用。
+正式版只有上表这些对外入口。前端不要再保留历史多入口聊天协议，也不要通过 WebSocket 发送聊天请求体；聊天必须先创建 run，再订阅或恢复 run 的事件。
 
 仓库中提供了一个独立本地联调台：`local-test-frontend/`。它通过本地 Node 代理访问 `/api/v1/ex/**`，可用于验证会话、消息树、文档库、run、WebSocket topic、SSE resume、stop 和跨页签续接，不会影响后端代码。
 
 本地联调台支持类似 Postman 的自定义请求头配置。由于浏览器不能直接设置 `Cookie` 请求头，也不能给原生 `WebSocket` 自定义握手 header，联调台采用本地代理 profile：页面左侧“鉴权请求头”保存 `Cookie/Authorization/X-*` 后，浏览器只携带非敏感 profileId，`server.mjs` 代理在转发 HTTP、fetch SSE、文件下载和 WebSocket 握手时统一注入真实请求头。该能力只用于本地调试企业鉴权框架，不属于生产前端协议。
+
+## 错误响应
+
+HTTP 接口的错误响应结构稳定，前端可以统一解析 `code` 和 `message`：
+
+```json
+{
+  "timestamp": "2026-05-17T01:06:00Z",
+  "path": "/api/v1/ex/chat/runs",
+  "status": 409,
+  "error": "Conflict",
+  "code": "ACTIVE_RUN_EXISTS",
+  "message": "ACTIVE_RUN_EXISTS: 当前会话已有运行中的回答，请先停止或等待完成。activeRunId=run_xxx"
+}
+```
+
+常见 HTTP 错误码：
+
+| HTTP | `code` | 场景 | 前端建议 |
+| --- | --- | --- | --- |
+| 400 | `BAD_REQUEST` | 参数为空、文档 ID 为空、非法 topic 等业务参数错误 | 提示用户修正输入或刷新状态 |
+| 400 | `VALIDATION_FAILED` | 请求体字段长度、附件数量等 Bean Validation 失败 | 根据 `message` 标记表单字段 |
+| 401 | `AUTH_CONTEXT_MISSING` | 后端入口没有解析到企业身份上下文 | 跳转登录或提示重新认证 |
+| 403 | `ACCESS_DENIED` | 当前用户访问了不属于自己的 session/run/document/message | 清理本地缓存并重新加载会话列表 |
+| 409 | `ACTIVE_RUN_EXISTS` | 同一 session 已有运行中 run | 保持“生成中/停止”状态，先 stop 或等待终态 |
+| 409 | `CONFLICT` | 会话关闭、文档不可下载、快照消息不可编辑等状态冲突 | 按业务状态禁用相关操作 |
+
+WebSocket 错误不使用 HTTP body，而是 envelope：
+
+```json
+{
+  "id": "cmd-1",
+  "type": "error",
+  "topicId": "chat-run-run_xxx",
+  "offset": "12019",
+  "code": "RECOVER_REQUIRED",
+  "message": "实时事件需要恢复，请使用 SSE resume 从 afterSeq=12002 补齐"
+}
+```
+
+常见 WebSocket `code`：`WS_AUTH_FAILED`、`WS_ORIGIN_FORBIDDEN`、`WS_MESSAGE_TOO_LARGE`、
+`BAD_WS_MESSAGE`、`SUBSCRIBE_ERROR`、`NOT_SUBSCRIBED`、`ACK_ERROR`、`RECOVER_REQUIRED`。
 
 ## 接口使用速查
 
@@ -116,6 +158,70 @@ export FINANCEEX_DEV_USERNAME=developer
 | `GET /api/v1/ex/documents/{documentId}/status` | 查询解析状态或失败原因扩展信息。 | Path：`documentId`。 | `DocumentStatusDto`：`documentId`、`status`、`tokenSize`。 | `PROCESSING/FAILED` 可查状态，但不能下载、预览或作为聊天附件。 |
 | `GET /api/v1/ex/documents/{documentId}/preview-url` | 获取后端受控预览地址。 | Path：`documentId`。 | `DocumentAccessDto`。 | 当前返回后端 download 地址，不暴露对象存储签名。 |
 | `GET /api/v1/ex/documents/{documentId}/download` | 下载文档原始内容。 | Path：`documentId`。 | 二进制流，带 `Content-Disposition`。 | 只允许 `AVAILABLE` 文档下载。 |
+
+## 公共 DTO 字段
+
+这些字段在多个接口中复用，前端实现时建议按表统一建类型。
+
+### `ChatSessionDto`
+
+| 字段 | 含义 |
+| --- | --- |
+| `sessionId` | 前端聊天会话 ID，路由参数和列表 key 使用 |
+| `tenantId` / `userId` | 服务端身份上下文解析出的归属字段，仅用于调试展示，不要回传 |
+| `title` | 会话标题 |
+| `status` | `ACTIVE`、`ARCHIVED`、`CLOSED` 等会话状态 |
+| `channel` | 会话来源渠道，例如 `web`、`web-local-test` |
+| `currentLeafMessageId` | 当前激活消息树路径的叶子；历史查询默认返回 root 到该 leaf |
+| `rootSessionId` | 分支族根会话 ID |
+| `branchSourceSessionId` | 当前会话从哪个源会话分支而来，普通会话为空 |
+| `branchSourceMessageId` | 当前会话从源会话哪条消息分支而来，普通会话为空 |
+| `createdAt` / `updatedAt` | 创建和最后更新时间 |
+
+### `ChatMessageDto`
+
+| 字段 | 含义 |
+| --- | --- |
+| `messageId` | 完整历史消息 ID |
+| `sessionId` | 消息所属会话 ID |
+| `parentMessageId` | 消息树父节点 |
+| `nodeOrder` | 会话内消息节点创建顺序 |
+| `treeDepth` | 消息树深度 |
+| `siblingIndex` | 同一父节点下同角色版本序号，用于 `1/3` 版本游标 |
+| `role` | `user` 或 `assistant` |
+| `content` | 完整消息正文；流式半截输出不会写入历史消息 |
+| `tokenCount` | token 估算值，可为空 |
+| `runId` | 产生该消息的 run ID；分支快照可能为空 |
+| `originType` | `NORMAL` 或 `BRANCH_SNAPSHOT` |
+| `locked` | 是否只读；分支快照消息为 `true` |
+| `sourceSessionId` / `sourceMessageId` | 分支快照来源 |
+| `editedFromMessageId` | 编辑历史 user 消息时的新版本来源 |
+| `regeneratedFromMessageId` | 重新生成 assistant 消息时的新版本来源 |
+| `createdAt` | 消息创建时间 |
+
+### `ChatEventDto`
+
+| 字段 | 含义 |
+| --- | --- |
+| `runId` | 事件所属 run |
+| `sessionId` | 事件所属会话；前端必须按该字段分发到对应会话面板 |
+| `sequence` | openGauss 生成的事件恢复游标；WebSocket offset 和 SSE `afterSeq` 都使用它 |
+| `type` | `run.started`、`message.delta`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled`、`run.recovered` |
+| `payload` | 事件载荷；`message.delta` 使用 `payload.delta` 拼接文本 |
+
+### `UploadedDocument`
+
+| 字段 | 含义 |
+| --- | --- |
+| `id` | 文档库资产 ID；聊天附件使用 `attachments[].documentId` 引用它 |
+| `sessionId` | 文档关联会话，可为空 |
+| `originalName` | 展示文件名 |
+| `contentType` | MIME 类型 |
+| `sizeBytes` | 文件大小 |
+| `status` | `AVAILABLE`、`PROCESSING`、`FAILED`、`DELETED`；只有 `AVAILABLE` 可下载、预览和作为聊天附件 |
+| `source` | 来源，例如 `LOCAL_UPLOAD` |
+| `tokenSize` | 解析后 token 数，可为空 |
+| `createdAt` / `updatedAt` | 创建和更新时间 |
 
 ## 协议边界
 

@@ -177,6 +177,69 @@ sequenceDiagram
     Session->>DB: "写入 fin_ex_chat_message_t"
 ```
 
+## 简化版全局时序图
+
+下面的简化图只保留核心外部参与方和事实源，适合做整体链路评审。它省略了应用层内部服务、SubAgent 细节、WebSocket/SSE handler 细节和 Runtime adapter 细节；前端 WebSocket 接入仍然保留，只是不在本图展开。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Frontend as "前端"
+    participant EX as "EXChatService"
+    participant UseCase as "案例库"
+    participant Intent as "意图服务"
+    participant Relay as "下游 RelayAgentRuntime"
+    participant Redis as "Redis"
+    participant DB as "openGauss"
+    participant S3 as "S3 / OBS"
+
+    opt "上传文档"
+        Frontend->>EX: "POST /api/v1/ex/documents"
+        EX->>S3: "写入文件对象"
+        S3-->>EX: "bucket/objectKey"
+        EX->>DB: "写入 fin_ex_uploaded_document_t"
+        EX-->>Frontend: "documentId/status"
+    end
+
+    Frontend->>EX: "POST /api/v1/ex/chat/runs"
+    EX->>DB: "创建/读取 session，写 user message、run、run.started"
+    EX->>Redis: "写 active run / runtime binding / stream topic 热数据"
+
+    opt "用例库开启"
+        EX->>UseCase: "match(query, context)"
+        UseCase-->>EX: "matched/subAgentCode/score 或未命中"
+    end
+
+    opt "意图服务开启且用例未命中"
+        EX->>Intent: "recognize(query, context)"
+        Intent-->>EX: "simple/complex/candidateSubAgentCode"
+    end
+
+    alt "进入 Relay Runtime"
+        EX->>Relay: "AgentRuntime.query(sessionId, query, attachments, Cookie snapshot)"
+        Relay-->>EX: "message.delta / message.completed"
+    else "简单任务命中"
+        EX->>EX: "按 agentCode 单轮执行，细节在简图中省略"
+    end
+
+    loop "流式事件"
+        EX->>DB: "写入 fin_ex_chat_event_t，生成 seq"
+        EX->>Redis: "publish fin_ex:chat_stream:{topicId}"
+        EX-->>Frontend: "WebSocket message 或 SSE resume event"
+        Frontend->>EX: "WebSocket ack(seq)"
+        EX->>Redis: "刷新 read cursor 热缓存"
+        EX->>DB: "节流写入 fin_ex_chat_read_cursor_t"
+    end
+
+    opt "停止回答"
+        Frontend->>EX: "POST /api/v1/ex/chat/runs/{runId}/stop"
+        EX->>Redis: "写 cancel flag"
+        EX->>DB: "run -> CANCELLING/CANCELLED，写 run.cancelled"
+        EX->>Relay: "best-effort cancel"
+        EX-->>Frontend: "ChatRunStopDto"
+    end
+```
+
 ## 文档库与附件使用
 
 文档能力采用“统一后端入口 + 对象存储防腐层 + 文档库资产”的模式。
@@ -604,7 +667,7 @@ SubAgent 当前只支持单轮 HTTP 文本流调用。当前上线版本内置�
 
 `Cookie` 是请求入口捕获的运行期内存快照，只会在 `AgentRuntimeRequest.forwardHeaders` 或 cancel 请求中向 adapter 传递；这些字段被 JSON 序列化忽略，不能进入 Relay 请求体、run metadata、事件 payload 或日志。该设计保证企业登录态不会因后台 run、SSE/WS 恢复或故障治理被持久化或回放。
 
-当前上线版本明确去掉 AgentScope 设计和实现，也不包含 AgentScope memory、AgentScope prompt assembler 或相关配置。复杂任务通过 Relay Runtime adapter 执行；项目内不再包含任何 AgentScope 架构分支。
+当前上线版本只保留 Relay Runtime provider，不包含其他历史 Runtime provider 分支、专用 memory 分支或专用 prompt assembler 配置。复杂任务通过 Relay Runtime adapter 执行；后续如需替换 Runtime，应新增 `AgentRuntime` provider，而不是把新协议写进主编排。
 
 AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 `AgentRuntimeRequest` 契约，当前 `relay` provider 是 Runtime 类型，下游 API 接入协议由 `financeex.agent-runtime.api-adapter` 选择。后续如果替换 Runtime 实现，应新增一个实现 `AgentRuntime` 的 provider；后续如果只新增 Relay 下游协议，应新增 `RelayRuntimeProtocolAdapter`，避免改动 `FinanceEXChatService` 主编排。
 

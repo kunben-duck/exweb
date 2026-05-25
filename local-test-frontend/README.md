@@ -65,6 +65,26 @@ Referer: http://localhost:8080/fin/ex/
 - 反馈：历史 assistant 消息支持 LIKE/DISLIKE 反馈提交。
 - 企业鉴权联调：通过本地代理为 HTTP/SSE/WebSocket 统一注入自定义请求头和 Cookie。
 
+## 接口映射
+
+联调台页面不会直接访问真实后端域名，而是统一访问自身同源 `/api/**`，再由 `server.mjs`
+拼接 `BACKEND_URL` 代理到后端：
+
+| 页面功能 | 后端接口 | 说明 |
+| --- | --- | --- |
+| 新建/切换会话 | `POST /api/v1/ex/chat/sessions`、`GET /api/v1/ex/chat/sessions/{sessionId}/state` | 选择会话时同时恢复历史消息和 active run 状态 |
+| 发送问题 | `POST /api/v1/ex/chat/runs` | 返回 `runId/sessionId/firstSeq/streamTopicId`，随后通过 WebSocket 订阅 |
+| 实时输出 | `WS /api/v1/ex/chat/ws` | 发送 `connect`、`subscribe`、`ack`、`unsubscribe` 控制消息 |
+| 跨页签续接 | `GET /api/v1/ex/chat/runs/{runId}/events/sse` | active run 恢复时从 `activeRunFirstSeq - 1` 补发并 tail 到终态 |
+| 停止回答 | `POST /api/v1/ex/chat/runs/{runId}/stop` | REST 生命周期控制，不是 WebSocket command |
+| 历史版本 | `GET /messages/{messageId}/variants`、`POST /path` | 支持 `1/3` 版本游标和路径切换 |
+| 新建分支 | `POST /branches` | 从指定消息创建只读历史快照分支 |
+| 文档库 | `/api/v1/ex/documents/**` | 上传、列表、状态、预览、下载、改名、删除 |
+
+如果 `BACKEND_URL=http://localhost:8080/fin/ex`，页面仍然请求 `/api/v1/ex/**`；
+代理会转发为 `http://localhost:8080/fin/ex/api/v1/ex/**`。WebSocket 也同理转发到
+`/fin/ex/api/v1/ex/chat/ws`。
+
 ## 联调建议
 
 1. 创建会话或直接发送第一条消息。
@@ -72,6 +92,9 @@ Referer: http://localhost:8080/fin/ex/
 3. 输出中途点击“复制页签”，新页签会读取同一 `sessionId`，先加载历史，再通过 run SSE resume 持续恢复到本轮 run 终态。
 4. 输出中途点击“停止回答”，观察 `run.cancelled` 是否通过 WebSocket 或 SSE resume 到达。
 5. 上传文档，选择“作为附件”，再发送消息确认 `attachments[{documentId}]` 能进入请求。
+6. 对一条 user 消息点击编辑并重新提问，确认旧消息不变、新 user sibling 出现在版本游标中。
+7. 对一条 assistant 消息点击重新生成，确认同一 user 下出现新的 assistant sibling。
+8. 从某条历史消息创建分支，确认分支历史消息为只读，后续新增消息仍可继续编辑或重新生成。
 
 ## 跨页签续传测试
 

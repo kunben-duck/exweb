@@ -11,7 +11,7 @@ import reactor.core.publisher.Mono;
  * 的 SDK、HTTP 协议或内部会话模型。当前上线版本默认装配 Relay Runtime adapter。
  * {@code financeex.agent-runtime.provider} 表示 Runtime 类型；具体下游 API 接入协议由该
  * provider 自己的下级配置决定，例如 Relay 使用 {@code financeex.agent-runtime.api-adapter}
- * 在真实 Relay stream-http、DeepSeek 替身和 Relay WebSocket adapter 之间切换。</p>
+ * 在 Relay stream-http 和 Relay WebSocket adapter 之间切换。</p>
  */
 public interface AgentRuntime {
     /**

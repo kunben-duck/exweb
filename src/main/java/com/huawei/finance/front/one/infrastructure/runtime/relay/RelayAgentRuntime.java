@@ -18,8 +18,8 @@ import reactor.core.publisher.Mono;
  *
  * <p>该类是 application 层看到的唯一 Relay provider。它不直接拼接 HTTP/WebSocket 请求，
  * 只根据 {@code financeex.agent-runtime.api-adapter} 选择具体的
- * {@link RelayRuntimeProtocolAdapter}。真实 Relay stream-http、Relay WebSocket、DeepSeek
- * 替身等协议差异都被收敛到 adapter 内部。</p>
+ * {@link RelayRuntimeProtocolAdapter}。Relay stream-http 与 Relay WebSocket 等协议差异
+ * 都被收敛到 adapter 内部。</p>
  */
 @Component
 @EnableConfigurationProperties(RelayAgentProperties.class)

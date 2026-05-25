@@ -45,10 +45,8 @@ flowchart TD
     SingleSubAgent --> EventStream["输出 ChatEvent 流"]
     RuntimeQuery --> RuntimeAdapter{"provider=relay api-adapter?"}
     RuntimeAdapter -- "relay-stream-http" --> RelayHttp["RelayStreamHttpRuntimeAdapter"]
-    RuntimeAdapter -- "deepseek-chat-completions" --> DeepSeek["DeepSeekChatCompletionsRuntimeAdapter"]
     RuntimeAdapter -- "relay-websocket" --> RelayWs["RelayWebSocketRuntimeAdapter 后端出站"]
     RelayHttp --> EventStream
-    DeepSeek --> EventStream
     RelayWs --> EventStream
     SystemResponse --> EventStream
     EventStream --> Persist["事件写入 fin_ex_chat_event_t"]
@@ -78,7 +76,6 @@ sequenceDiagram
     participant SubAgent as "SubAgent"
     participant Runtime as "AgentRuntime Port"
     participant RelayHttp as "RelayStreamHttpRuntimeAdapter"
-    participant DeepSeek as "DeepSeekChatCompletionsRuntimeAdapter"
     participant RelayWs as "RelayWebSocketRuntimeAdapter"
     participant RelayAgent as "RelayAgent Service"
     participant Stream as "ChatStreamApplicationService"
@@ -122,9 +119,6 @@ sequenceDiagram
         alt "api-adapter=relay-stream-http"
             Runtime->>RelayHttp: "delegate"
             RelayHttp->>RelayAgent: "HTTP POST stream-path"
-        else "api-adapter=deepseek-chat-completions"
-            Runtime->>DeepSeek: "delegate"
-            DeepSeek->>RelayAgent: "HTTP POST /chat/completions"
         else "api-adapter=relay-websocket"
             Runtime->>RelayWs: "delegate"
             RelayWs->>RelayAgent: "后端出站 WebSocket + 首帧 request"
@@ -145,9 +139,6 @@ sequenceDiagram
             alt "api-adapter=relay-stream-http"
                 Runtime->>RelayHttp: "delegate"
                 RelayHttp->>RelayAgent: "HTTP POST stream-path"
-            else "api-adapter=deepseek-chat-completions"
-                Runtime->>DeepSeek: "delegate"
-                DeepSeek->>RelayAgent: "HTTP POST /chat/completions"
             else "api-adapter=relay-websocket"
                 Runtime->>RelayWs: "delegate"
                 RelayWs->>RelayAgent: "后端出站 WebSocket + 首帧 request"
@@ -164,10 +155,6 @@ sequenceDiagram
         else "Relay HTTP Runtime route"
             RelayAgent-->>RelayHttp: "HTTP stream delta"
             RelayHttp-->>Runtime: "ChatEvent"
-            Runtime-->>SuperAgent: "message.delta / message.completed"
-        else "DeepSeek Chat Completions route"
-            RelayAgent-->>DeepSeek: "JSON / SSE chunks"
-            DeepSeek-->>Runtime: "ChatEvent"
             Runtime-->>SuperAgent: "message.delta / message.completed"
         else "Relay WebSocket Runtime route"
             RelayAgent-->>RelayWs: "WebSocket frame"
@@ -310,9 +297,6 @@ sequenceDiagram
         alt "api-adapter=relay-stream-http"
             Runtime->>RelayAgent: "HTTP POST stream-path"
             RelayAgent-->>Runtime: "HTTP stream delta"
-        else "api-adapter=deepseek-chat-completions"
-            Runtime->>RelayAgent: "HTTP POST /chat/completions"
-            RelayAgent-->>Runtime: "JSON / SSE chunks"
         else "api-adapter=relay-websocket"
             Runtime->>RelayAgent: "后端出站 WebSocket + request 首帧"
             RelayAgent-->>Runtime: "WebSocket 文本/JSON 帧"
@@ -503,7 +487,6 @@ flowchart TB
         SubAgentHttp["SubAgent HTTP Adapter"]
         RelayRuntime["RelayAgentRuntime Provider"]
         RelayHttp["RelayStreamHttpRuntimeAdapter"]
-        RelayDeepSeek["DeepSeekChatCompletionsRuntimeAdapter"]
         RelayWs["RelayWebSocketRuntimeAdapter"]
         Storage["Local / Huawei OBS S3 ObjectStorage"]
     end
@@ -531,7 +514,6 @@ flowchart TB
     SubAgentExecutor --> SubAgentHttp
     RuntimeExecutor --> RelayRuntime
     RelayRuntime --> RelayHttp
-    RelayRuntime --> RelayDeepSeek
     RelayRuntime --> RelayWs
     DocumentService --> Storage
     Application --> Domain
@@ -613,34 +595,14 @@ stop 语义：
 - SubAgent：`financeex.sub-agent.agents.{agentCode}.endpoint`
 - SubAgent stop：`financeex.sub-agent.agents.{agentCode}.stop-endpoint`
 - AgentRuntime provider：`financeex.agent-runtime.provider`，表示 Runtime 类型，当前默认 `relay`
-- Relay API adapter：`financeex.agent-runtime.api-adapter`，表示 relay provider 下的具体 API 接入协议，默认 `relay-stream-http`，可选 `deepseek-chat-completions`、`relay-websocket`
+- Relay API adapter：`financeex.agent-runtime.api-adapter`，表示 relay provider 下的具体 API 接入协议，默认 `relay-stream-http`，可选 `relay-websocket`
 - Relay HTTP Streamable adapter：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`、`financeex.agent-runtime.stop-path`
-- DeepSeek 替身联调：`financeex.agent-runtime.api-key`、`financeex.agent-runtime.model`、`financeex.agent-runtime.stream`、`financeex.agent-runtime.thinking-enabled`、`financeex.agent-runtime.reasoning-effort`、`financeex.agent-runtime.cancel-supported`
 - Relay WebSocket adapter：设置 `financeex.agent-runtime.provider=relay`、`financeex.agent-runtime.api-adapter=relay-websocket`，并配置 `financeex.agent-runtime.base-url` 与 `financeex.agent-runtime.websocket-path`；adapter 会把 `http(s)://` base-url 转换为 `ws(s)://` 出站连接地址
-- Relay Cookie 透传：`financeex.agent-runtime.forward-cookie.enabled`、`max-length`、`allowed-adapters`。默认只允许 `relay-stream-http` 与 `relay-websocket` 接收入口 Cookie；DeepSeek/OpenAI-compatible 替身不透传企业 Cookie。
+- Relay Cookie 透传：`financeex.agent-runtime.forward-cookie.enabled`、`max-length`、`allowed-adapters`。默认只允许 `relay-stream-http` 与 `relay-websocket` 接收入口 Cookie。
 
-SubAgent 当前只支持单轮 HTTP 文本流调用。当前上线版本内置一个 `RelayAgentRuntime` provider 和三个 `RelayRuntimeProtocolAdapter`：`relay-stream-http` 是真实 Relay HTTP 流式协议实现，`deepseek-chat-completions` 是 DeepSeek/OpenAI-compatible 替身实现，`relay-websocket` 是 RelayAgent WebSocket 对话协议实现。新增下游协议时，应新增 adapter，而不是在 `RelayAgentRuntime` 主类里堆转换分支。
+SubAgent 当前只支持单轮 HTTP 文本流调用。当前上线版本内置一个 `RelayAgentRuntime` provider 和两个 `RelayRuntimeProtocolAdapter`：`relay-stream-http` 是 Relay HTTP 流式协议实现，`relay-websocket` 是 RelayAgent WebSocket 对话协议实现。新增下游协议时，应新增 adapter，而不是在 `RelayAgentRuntime` 主类里堆转换分支。
 
 `Cookie` 是请求入口捕获的运行期内存快照，只会在 `AgentRuntimeRequest.forwardHeaders` 或 cancel 请求中向 adapter 传递；这些字段被 JSON 序列化忽略，不能进入 Relay 请求体、run metadata、事件 payload 或日志。该设计保证企业登录态不会因后台 run、SSE/WS 恢复或故障治理被持久化或回放。
-
-DeepSeek 替身配置示例：
-
-```bash
-export DEEPSEEK_API_KEY='<your-local-secret>'
-export FINANCEEX_AGENT_RUNTIME_PROVIDER=relay
-export FINANCEEX_RELAY_AGENT_API_ADAPTER=deepseek-chat-completions
-export FINANCEEX_RELAY_AGENT_BASE_URL=https://api.deepseek.com
-export FINANCEEX_RELAY_AGENT_STREAM_PATH=/chat/completions
-export FINANCEEX_RELAY_AGENT_API_KEY="${DEEPSEEK_API_KEY}"
-export FINANCEEX_RELAY_AGENT_MODEL=deepseek-v4-pro
-export FINANCEEX_RELAY_AGENT_STREAM=true
-export FINANCEEX_RELAY_AGENT_THINKING_ENABLED=true
-export FINANCEEX_RELAY_AGENT_REASONING_EFFORT=high
-export FINANCEEX_RELAY_AGENT_CANCEL_SUPPORTED=false
-export FINANCEEX_RELAY_AGENT_STOP_PATH=
-```
-
-密钥必须来自环境变量或企业密钥系统，不能提交到配置文件、文档示例或 Git 历史。
 
 当前上线版本明确去掉 AgentScope 设计和实现，也不包含 AgentScope memory、AgentScope prompt assembler 或相关配置。复杂任务通过 Relay Runtime adapter 执行；项目内不再包含任何 AgentScope 架构分支。
 

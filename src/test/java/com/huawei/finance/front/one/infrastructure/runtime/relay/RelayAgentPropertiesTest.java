@@ -16,9 +16,9 @@ class RelayAgentPropertiesTest {
     @Test
     void selectedApiAdapterPrefersExplicitApiAdapter() {
         RelayAgentProperties properties = new RelayAgentProperties();
-        properties.setApiAdapter("deepseek-chat-completions");
+        properties.setApiAdapter("relay-websocket");
 
-        assertThat(properties.selectedApiAdapter()).isEqualTo("deepseek-chat-completions");
+        assertThat(properties.selectedApiAdapter()).isEqualTo("relay-websocket");
     }
 
     @Test
@@ -35,6 +35,6 @@ class RelayAgentPropertiesTest {
 
         assertThat(properties.isAdapterAllowed("relay-stream-http")).isTrue();
         assertThat(properties.isAdapterAllowed("relay-websocket")).isTrue();
-        assertThat(properties.isAdapterAllowed("deepseek-chat-completions")).isFalse();
+        assertThat(properties.isAdapterAllowed("third-party-adapter")).isFalse();
     }
 }

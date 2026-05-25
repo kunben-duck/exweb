@@ -9,8 +9,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * AgentRuntime Cookie 请求头透传配置。
  *
  * <p>Cookie 透传只用于 FinanceEXChatService 到可信 Relay Runtime 的出站调用。默认允许
- * {@code relay-stream-http} 与 {@code relay-websocket} 两个内部 adapter；DeepSeek/OpenAI-compatible
- * 第三方替身不在允许列表中，避免把企业登录态发送到公网模型服务。</p>
+ * {@code relay-stream-http} 与 {@code relay-websocket} 两个内部 adapter，避免把企业登录态
+ * 发送到非 Relay 的第三方服务。</p>
  */
 @ConfigurationProperties(prefix = "financeex.agent-runtime.forward-cookie")
 public class AgentRuntimeForwardCookieProperties {

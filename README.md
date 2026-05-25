@@ -69,7 +69,7 @@ WebSocket、SSE resume 和 stop 的 URL 由前端 SDK 或网关配置管理，�
 
 仓库提供独立本地联调台 `local-test-frontend/`。联调台通过 Node 代理访问后端，支持在页面中按 Postman 风格配置 `Cookie`、`Authorization`、`X-*` 等企业鉴权请求头；代理会在 HTTP、fetch SSE、文件下载和 WebSocket 握手时统一注入这些请求头。浏览器自身不会、也不能直接手写 `Cookie` 请求头或 WebSocket 自定义请求头。
 
-当 `POST /api/v1/ex/chat/runs` 或 `POST /api/v1/ex/chat/runs/{runId}/stop` 携带标准 `Cookie` 请求头时，ChatService 会在请求入口捕获一次，并只作为内存快照透传给可信 Relay Runtime adapter。Cookie 不会写入 `metadata_json`、消息、事件、日志或前端响应；`deepseek-chat-completions` 这类第三方联调 adapter 默认不会接收企业 Cookie。
+当 `POST /api/v1/ex/chat/runs` 或 `POST /api/v1/ex/chat/runs/{runId}/stop` 携带标准 `Cookie` 请求头时，ChatService 会在请求入口捕获一次，并只作为内存快照透传给可信 Relay Runtime adapter。Cookie 不会写入 `metadata_json`、消息、事件、日志或前端响应，也不会发送给非 Relay 第三方服务。
 
 租户和用户身份不从前端 Header/Query/Body 透传，统一由请求入口通过 `AuthContextProvider` 从服务端身份上下文解析一次，并以不可变 `UserContext` 传入应用层。应用层、后台 run 和 `boundedElastic` 阻塞线程不会再次读取请求 ThreadLocal。本地开发态必须显式配置：
 
@@ -184,7 +184,7 @@ export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
 
 ## 外部服务接入
 
-用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。SubAgent 当前通过单轮 HTTP 文本流接入；Relay Runtime 通过 AgentRuntime 防腐层接入，并在 Relay provider 内部通过 `api-adapter` 选择真实 Relay HTTP、DeepSeek 替身或 Relay WebSocket 接入实现。
+用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。SubAgent 当前通过单轮 HTTP 文本流接入；Relay Runtime 通过 AgentRuntime 防腐层接入，并在 Relay provider 内部通过 `api-adapter` 选择 Relay HTTP 或 Relay WebSocket 接入实现。
 
 这里有两条不同的 WebSocket 边界，不要混淆：
 
@@ -215,7 +215,7 @@ export FINANCEEX_RELAY_AGENT_API_ADAPTER=relay-stream-http
 export FINANCEEX_RELAY_AGENT_BASE_URL=http://relay-agent:9000
 export FINANCEEX_RELAY_AGENT_STREAM_PATH=/v1/agent/runs/stream
 export FINANCEEX_RELAY_AGENT_STOP_PATH=/v1/agent/runs/{runId}/stop
-# 入口 Cookie 只透传给可信 Relay adapter，不发送给 DeepSeek/OpenAI-compatible 替身
+# 入口 Cookie 只透传给可信 Relay adapter，不发送给非 Relay 第三方服务
 export FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ENABLED=true
 export FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_MAX_LENGTH=8192
 export FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ALLOWED_ADAPTERS=relay-stream-http,relay-websocket
@@ -261,34 +261,15 @@ export FINANCEEX_CHAT_RUN_RECOVERY_MAX_CLAIMS_PER_TENANT_PER_SCAN=5
 export FINANCEEX_CHAT_RUN_STALE_RECOVERY_STRATEGIES=MANUAL_CONFIRMATION,FAIL_FAST
 ```
 
-SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP 文本流调用。Relay Runtime 作为 AgentRuntime 实现支持三个 API adapter：`relay-stream-http` 使用真实 Relay HTTP 流式协议，`deepseek-chat-completions` 使用 DeepSeek/OpenAI-compatible Chat Completions 替身，`relay-websocket` 使用 RelayAgent WebSocket 对话协议。
+SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP 文本流调用。Relay Runtime 作为 AgentRuntime 实现支持两个 API adapter：`relay-stream-http` 使用 Relay HTTP 流式协议，`relay-websocket` 使用 RelayAgent WebSocket 对话协议。
 
-Relay Runtime Cookie 透传是 adapter 级能力：`relay-stream-http` 会把入口 Cookie 放入下游 HTTP 请求头；`relay-websocket` 会把入口 Cookie 放入后端出站 WebSocket 握手头和可选 stop HTTP 请求头；`deepseek-chat-completions` 不透传 Cookie。`AgentRuntimeRequest.forwardHeaders` 与 cancel 请求中的转发头均被 JSON 忽略，避免 Cookie 进入下游请求体。
-
-真实 Relay streamable-http 服务未就绪时，可以把 Relay HTTP adapter 切到 DeepSeek/OpenAI-compatible Chat Completions wire format 做本地联调。API key 必须只通过环境变量或密钥系统注入，不要写入仓库：
-
-```bash
-export DEEPSEEK_API_KEY='<your-local-secret>'
-export FINANCEEX_AGENT_RUNTIME_PROVIDER=relay
-export FINANCEEX_RELAY_AGENT_API_ADAPTER=deepseek-chat-completions
-export FINANCEEX_RELAY_AGENT_BASE_URL=https://api.deepseek.com
-export FINANCEEX_RELAY_AGENT_STREAM_PATH=/chat/completions
-export FINANCEEX_RELAY_AGENT_API_KEY="${DEEPSEEK_API_KEY}"
-export FINANCEEX_RELAY_AGENT_MODEL=deepseek-v4-pro
-export FINANCEEX_RELAY_AGENT_STREAM=true
-export FINANCEEX_RELAY_AGENT_THINKING_ENABLED=true
-export FINANCEEX_RELAY_AGENT_REASONING_EFFORT=high
-export FINANCEEX_RELAY_AGENT_CANCEL_SUPPORTED=false
-export FINANCEEX_RELAY_AGENT_STOP_PATH=
-```
-
-该模式只改变后端出站 Runtime API adapter：前端仍然使用 `/chat/runs + WebSocket subscribe` 接收本页新建 run 的实时输出，使用 run SSE resume 接续已经存在的 active run；前端不会直接调用 DeepSeek，也不会看到下游 API key。本地验证流式体验时建议保持 `FINANCEEX_RELAY_AGENT_STREAM=true`；如果改成 `false`，DeepSeek 会等完整响应返回后才由后端一次性拆成事件，页面在首个可展示 token 前会像“卡住”。
+Relay Runtime Cookie 透传是 adapter 级能力：`relay-stream-http` 会把入口 Cookie 放入下游 HTTP 请求头；`relay-websocket` 会把入口 Cookie 放入后端出站 WebSocket 握手头和可选 stop HTTP 请求头。`AgentRuntimeRequest.forwardHeaders` 与 cancel 请求中的转发头均被 JSON 忽略，避免 Cookie 进入下游请求体。
 
 ## 上线版本边界
 
-当前上线版本明确不包含 AgentScope 设计和实现，也不包含 AgentScope memory、prompt assembler 或相关配置。复杂任务通过 Relay Runtime adapter 执行，默认 `provider=relay`、`api-adapter=relay-stream-http`，也可以切换为 `deepseek-chat-completions` 或 `relay-websocket`。
+当前上线版本明确不包含 AgentScope 设计和实现，也不包含 AgentScope memory、prompt assembler 或相关配置。复杂任务通过 Relay Runtime adapter 执行，默认 `provider=relay`、`api-adapter=relay-stream-http`，也可以切换为 `relay-websocket`。
 
-AgentRuntime 防腐层必须保留：应用层只依赖 `AgentRuntime` 接口和 `AgentRuntimeRequest` 契约，不依赖 Relay 的 HTTP、DeepSeek 或 WebSocket 协议细节。`financeex.agent-runtime.provider` 表示 Runtime 类型，当前为 `relay`；`financeex.agent-runtime.api-adapter` 表示 relay provider 下的 API 接入 adapter。后续替换 Runtime 实现时，应新增另一个 `AgentRuntime` provider；后续只替换 Relay 下游协议时，应新增 `RelayRuntimeProtocolAdapter` 实现。
+AgentRuntime 防腐层必须保留：应用层只依赖 `AgentRuntime` 接口和 `AgentRuntimeRequest` 契约，不依赖 Relay 的 HTTP 或 WebSocket 协议细节。`financeex.agent-runtime.provider` 表示 Runtime 类型，当前为 `relay`；`financeex.agent-runtime.api-adapter` 表示 relay provider 下的 API 接入 adapter。后续替换 Runtime 实现时，应新增另一个 `AgentRuntime` provider；后续只替换 Relay 下游协议时，应新增 `RelayRuntimeProtocolAdapter` 实现。
 
 ## 启动
 

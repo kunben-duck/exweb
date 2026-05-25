@@ -132,9 +132,9 @@ POST /api/v1/ex/chat/runs/{runId}/stop
  -> 停止本轮回答
 ```
 
-`streamTopicId` 是 ChatService 的 run 级订阅 topic，不是 RelayAgent 的会话 ID。当前后端内部的 `AgentRuntime.query` 通过 `financeex.agent-runtime.api-adapter` 选择 `relay-stream-http`、`deepseek-chat-completions` 或 `relay-websocket`；这个选择不改变前端协议。
+`streamTopicId` 是 ChatService 的 run 级订阅 topic，不是 RelayAgent 的会话 ID。当前后端内部的 `AgentRuntime.query` 通过 `financeex.agent-runtime.api-adapter` 选择 `relay-stream-http` 或 `relay-websocket`；这个选择不改变前端协议。
 
-如果 `POST /chat/runs` 或 `POST /chat/runs/{runId}/stop` 请求携带标准 `Cookie` 头，后端会在入口捕获一次，并只把它透传给可信 Relay Runtime adapter。该 Cookie 不会出现在请求 body、metadata、事件、历史消息或前端响应中。DeepSeek/OpenAI-compatible 联调 adapter 不接收企业 Cookie。
+如果 `POST /chat/runs` 或 `POST /chat/runs/{runId}/stop` 请求携带标准 `Cookie` 头，后端会在入口捕获一次，并只把它透传给可信 Relay Runtime adapter。该 Cookie 不会出现在请求 body、metadata、事件、历史消息或前端响应中，也不会发送给非 Relay 第三方服务。
 
 ## 推荐前端流程
 

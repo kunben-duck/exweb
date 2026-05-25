@@ -15,9 +15,7 @@ class RelayAgentRuntimeConfigurationTest {
             .withUserConfiguration(
                     RelayAgentRuntime.class,
                     RelayStreamHttpRuntimeAdapter.class,
-                    DeepSeekChatCompletionsRuntimeAdapter.class,
                     RelayWebSocketRuntimeAdapter.class,
-                    OpenAiChatCompletionRelayCodec.class,
                     RelayWebSocketFrameTranslator.class);
 
     @Test
@@ -26,7 +24,6 @@ class RelayAgentRuntimeConfigurationTest {
             assertThat(context).hasSingleBean(AgentRuntime.class);
             assertThat(context).hasSingleBean(RelayAgentRuntime.class);
             assertThat(context).hasSingleBean(RelayStreamHttpRuntimeAdapter.class);
-            assertThat(context).hasSingleBean(DeepSeekChatCompletionsRuntimeAdapter.class);
             assertThat(context).hasSingleBean(RelayWebSocketRuntimeAdapter.class);
         });
     }

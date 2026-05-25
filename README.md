@@ -81,6 +81,12 @@ subscribe、ack 和连接关闭回调只读取该身份快照，不会再次调�
 单用户连接数、单连接订阅数、单 topic 本机订阅数、出站缓冲、live buffer 和空闲超时都由
 `financeex.websocket.*` 统一配置。慢客户端或实时缓冲溢出时，服务端会返回
 `RECOVER_REQUIRED`，前端应通过 run SSE resume 补齐后再重新订阅。
+同一 WebSocket 连接允许同时订阅多个 session 的多个 run topic。服务端不会因为切换会话而
+自动释放旧 topic；隔离依赖订阅前的用户归属校验、事件事实源的 `tenantId/userId/sessionId/runId`
+联合查询，以及投递前的 `topicId/runId/sessionId` 一致性校验。前端收到事件后必须按
+`payload.sessionId` 分发到对应会话。
+事件写入也会校验 run 与 session 的 tenant/user 归属一致，避免下游 Runtime/SubAgent 返回错误
+`runId/sessionId` 时污染事件事实源。
 
 ```bash
 export FINANCEEX_DEV_TENANT_ID=tenant_dev

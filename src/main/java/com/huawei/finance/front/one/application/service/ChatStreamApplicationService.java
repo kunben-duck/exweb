@@ -80,7 +80,7 @@ public class ChatStreamApplicationService {
         return Mono.fromCallable(() -> {
                     permissionChecker.checkChatPermission(user);
                     ensureOwnedSession(user, sessionId);
-                    return eventStore.findBySessionIdAndAfterSeq(sessionId, afterSeq);
+                    return eventStore.findByOwnerAndSessionAfterSeq(user.tenantId(), user.userId(), sessionId, afterSeq);
                 })
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMapMany(Flux::fromIterable);
@@ -126,8 +126,9 @@ public class ChatStreamApplicationService {
         return Mono.fromCallable(() -> ensureRunTopicAccessible(user, topicId))
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMapMany(run -> Flux.using(
-                        () -> liveBuffer(topicId, afterSeq),
-                        liveBuffer -> Mono.fromCallable(() -> eventStore.findByRunIdAndAfterSeq(run.id(), afterSeq))
+                        () -> liveBuffer(topicId, afterSeq, run.id(), run.sessionId()),
+                        liveBuffer -> Mono.fromCallable(() -> eventStore.findByOwnerAndRunAfterSeq(
+                                        user.tenantId(), user.userId(), run.sessionId(), run.id(), afterSeq))
                                 .subscribeOn(Schedulers.boundedElastic())
                                 .flatMapMany(replay -> {
                                     long liveAfterSeq = replay.stream().mapToLong(ChatEvent::sequence).max().orElse(afterSeq);
@@ -192,7 +193,7 @@ public class ChatStreamApplicationService {
     public long latestSeq(UserContext user, String sessionId) {
         permissionChecker.checkChatPermission(user);
         ensureOwnedSession(user, sessionId);
-        return eventStore.findLatestSeqBySessionId(sessionId);
+        return eventStore.findLatestSeqByOwnerAndSession(user.tenantId(), user.userId(), sessionId);
     }
 
     private void ensureOwnedSession(UserContext user, String sessionId) {
@@ -204,14 +205,21 @@ public class ChatStreamApplicationService {
         }
     }
 
-    private RunTopicLiveBuffer liveBuffer(String topicId, long afterSeq) {
+    private RunTopicLiveBuffer liveBuffer(String topicId, long afterSeq, String expectedRunId, String expectedSessionId) {
         Sinks.Many<ChatEvent> sink = Sinks.many().unicast().onBackpressureBuffer(
                 Queues.<ChatEvent>get(webSocketProperties.normalizedLiveBufferCapacity()).get()
         );
         Disposable subscription = deduplicate(Flux.merge(
                 registry.subscribeRunTopic(topicId, afterSeq),
                 liveEventBus.subscribe(topicId).filter(event -> event.sequence() > afterSeq)
-        )).subscribe(
+        )
+                /*
+                 * run topic 是前端实时隔离的核心边界。这里再按 runId + sessionId 做防御性过滤：
+                 * 即使 Redis Pub/Sub 或本机 live source 出现错误投递，也不会把其他会话/run 的事件推给当前订阅。
+                 */
+                .filter(event -> event != null
+                        && expectedRunId.equals(event.runId())
+                        && expectedSessionId.equals(event.sessionId()))).subscribe(
                 event -> {
                     Sinks.EmitResult result = sink.tryEmitNext(event);
                     if (result.isFailure()) {
@@ -240,8 +248,9 @@ public class ChatStreamApplicationService {
     private Flux<ChatEvent> resumeRunWithLiveTail(ChatRun run, long afterSeq) {
         String topicId = ChatStreamTopics.runTopic(run.id());
         return Flux.using(
-                () -> liveBuffer(topicId, afterSeq),
-                liveBuffer -> Mono.fromCallable(() -> eventStore.findByRunIdAndAfterSeq(run.id(), afterSeq))
+                () -> liveBuffer(topicId, afterSeq, run.id(), run.sessionId()),
+                liveBuffer -> Mono.fromCallable(() -> eventStore.findByOwnerAndRunAfterSeq(
+                                run.tenantId(), run.userId(), run.sessionId(), run.id(), afterSeq))
                         .subscribeOn(Schedulers.boundedElastic())
                         .flatMapMany(replay -> {
                             Flux<ChatEvent> replayFlux = Flux.fromIterable(replay);

@@ -156,6 +156,10 @@ CREATE TABLE IF NOT EXISTS fin_ex_chat_event_t (
 
 CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_event_run_seq
     ON fin_ex_chat_event_t(run_id, seq);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_event_owner_session_seq
+    ON fin_ex_chat_event_t(tenant_id, user_id, session_id, seq);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_event_owner_run_seq
+    ON fin_ex_chat_event_t(tenant_id, user_id, run_id, seq);
 
 CREATE TABLE IF NOT EXISTS fin_ex_chat_read_cursor_t (
     id VARCHAR(64) PRIMARY KEY,
@@ -325,12 +329,12 @@ COMMENT ON COLUMN fin_ex_chat_run_execution_t.updated_at IS '执行控制面记�
 
 COMMENT ON SEQUENCE fin_ex_chat_event_seq IS '聊天事件恢复游标序号生成器，由 openGauss 统一生成 seq，供 WebSocket/SSE 断点恢复使用。';
 
-COMMENT ON TABLE fin_ex_chat_event_t IS '聊天事件事实表，保存 run.started、message.delta、run.completed、run.failed、run.cancelled 等流式事件。';
+COMMENT ON TABLE fin_ex_chat_event_t IS '聊天事件事实表，保存 run.started、message.delta、run.completed、run.failed、run.cancelled 等流式事件；tenant_id/user_id/session_id/run_id 是防止多用户、多会话串线的事实边界。';
 COMMENT ON COLUMN fin_ex_chat_event_t.id IS '事件主键，业务生成的 eventId。';
-COMMENT ON COLUMN fin_ex_chat_event_t.tenant_id IS '租户标识，来自服务端身份上下文。';
-COMMENT ON COLUMN fin_ex_chat_event_t.user_id IS '用户标识，来自服务端身份上下文。';
-COMMENT ON COLUMN fin_ex_chat_event_t.session_id IS '事件所属聊天会话 ID。';
-COMMENT ON COLUMN fin_ex_chat_event_t.run_id IS '事件所属 runId，对应 fin_ex_chat_run_t.id。';
+COMMENT ON COLUMN fin_ex_chat_event_t.tenant_id IS '租户标识，来自服务端身份上下文；SSE/WS 恢复查询必须携带该字段。';
+COMMENT ON COLUMN fin_ex_chat_event_t.user_id IS '用户标识，来自服务端身份上下文；SSE/WS 恢复查询必须携带该字段。';
+COMMENT ON COLUMN fin_ex_chat_event_t.session_id IS '事件所属聊天会话 ID；写入时必须与 run 所属 session 一致。';
+COMMENT ON COLUMN fin_ex_chat_event_t.run_id IS '事件所属 runId，对应 fin_ex_chat_run_t.id；写入时必须与 session、tenant、user 归属一致。';
 COMMENT ON COLUMN fin_ex_chat_event_t.seq IS '事件恢复游标序号，由 openGauss sequence 生成；同一会话内按 seq 补发。';
 COMMENT ON COLUMN fin_ex_chat_event_t.event_type IS '事件类型，例如 run.started、message.delta、message.completed、run.completed、run.failed、run.cancelled。';
 COMMENT ON COLUMN fin_ex_chat_event_t.payload_json IS '事件载荷 JSON，保存前端可消费的 delta、状态和诊断字段。';

@@ -6,6 +6,7 @@ import com.huawei.finance.front.one.application.service.StreamRecoveryRequiredEx
 import com.huawei.finance.front.one.application.service.ChatStreamApplicationService;
 import com.huawei.finance.front.one.application.service.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
+import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatEventDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatWebSocketEnvelopeDto;
 import java.util.Map;
@@ -195,13 +196,14 @@ public class ChatWebSocketProtocolService {
         }
         return Mono.fromCallable(() -> chatStreamService.ensureRunTopicAccessible(user, topicId))
                 .subscribeOn(Schedulers.boundedElastic())
-                .flatMap(ignored -> {
+                .flatMap(run -> {
                     if (connectionRegistry.get(connectionId).isEmpty()) {
                         return Mono.empty();
                     }
                     Sinks.Empty<Void> cancellation = Sinks.empty();
                     try {
-                        connectionRegistry.subscribe(connectionId, topicId, afterSeq, cancellationDisposable(cancellation));
+                        connectionRegistry.subscribe(connectionId, topicId, run.sessionId(), afterSeq,
+                                cancellationDisposable(cancellation));
                     } catch (RuntimeException ex) {
                         cancellation.tryEmitEmpty();
                         return Mono.error(ex);
@@ -213,7 +215,7 @@ public class ChatWebSocketProtocolService {
                             .map(eventTranslator::toDto)
                             .takeUntilOther(cancellation.asMono())
                             .subscribe(
-                                    dto -> emitTopicEvent(connectionId, outbound, topicId, cancellation, dto),
+                                    dto -> emitTopicEvent(connectionId, outbound, topicId, run, cancellation, dto),
                                     ex -> handleSubscriptionError(connectionId, outbound, topicId, commandId, afterSeq, ex)
                             );
                     return Mono.<Void>empty();
@@ -235,9 +237,18 @@ public class ChatWebSocketProtocolService {
         connectionRegistry.unsubscribe(connectionId, topicId);
     }
 
-    private void emitTopicEvent(String connectionId, ChatWebSocketOutbound outbound, String topicId,
+    private void emitTopicEvent(String connectionId, ChatWebSocketOutbound outbound, String topicId, ChatRun run,
                                 Sinks.Empty<Void> cancellation, ChatEventDto dto) {
         if (dto == null) {
+            return;
+        }
+        if (!run.id().equals(dto.runId()) || !run.sessionId().equals(dto.sessionId())) {
+            /*
+             * topicId、runId、sessionId 三者必须同时匹配。出现不匹配说明 live source 或 Redis fanout
+             * 发生了错误投递；这里直接丢弃，避免跨会话实时消息串到当前连接。
+             */
+            log.warn("Dropped mismatched WebSocket event. topicId={}, expectedRunId={}, actualRunId={}, expectedSessionId={}, actualSessionId={}, seq={}",
+                    topicId, run.id(), dto.runId(), run.sessionId(), dto.sessionId(), dto.sequence());
             return;
         }
         LocalWebSocketConnectionRegistry.DeliveryDecision decision =

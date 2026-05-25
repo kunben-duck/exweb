@@ -15,6 +15,7 @@ const state = {
   activeRunStatus: null,
   sessionSeq: new Map(),
   subscribedTopics: new Set(),
+  topicSessionIds: new Map(),
   assistantNodeByRun: new Map(),
   renderedEventKeys: new Set(),
   pendingDeltaByRun: new Map(),
@@ -395,7 +396,7 @@ async function startRunRequest(body, { optimisticUserMessage = null } = {}) {
   log(`run created ${run.runId} topic=${run.streamTopicId}`);
   setSessionSeq(run.sessionId, Math.max(lastSeq(run.sessionId), Number(run.firstSeq || 0)));
   await ensureWs();
-  subscribeTopic(run.streamTopicId, run.firstSeq || 0);
+  subscribeTopic(run.streamTopicId, run.firstSeq || 0, run.sessionId);
   return run;
 }
 
@@ -461,6 +462,7 @@ function openWebSocket() {
   });
   state.ws.addEventListener("close", () => {
     state.subscribedTopics.clear();
+    state.topicSessionIds.clear();
     updateWsState("disconnected");
   });
   state.ws.addEventListener("error", () => updateWsState("error"));
@@ -468,14 +470,20 @@ function openWebSocket() {
 
 function disconnectWs() {
   if (state.ws) {
-    for (const topicId of state.subscribedTopics) {
-      sendWs({ type: "unsubscribe", topicId });
-    }
+    unsubscribeAllTopics("disconnect");
     state.ws.close();
   }
   state.ws = null;
-  state.subscribedTopics.clear();
   updateWsState("disconnected");
+}
+
+function unsubscribeAllTopics(reason) {
+  for (const topicId of [...state.subscribedTopics]) {
+    sendWs({ type: "unsubscribe", topicId });
+    log(`ws unsubscribe topic=${topicId} reason=${reason}`);
+  }
+  state.subscribedTopics.clear();
+  state.topicSessionIds.clear();
 }
 
 function ensureWs() {
@@ -495,10 +503,11 @@ function ensureWs() {
   });
 }
 
-function subscribeTopic(topicId, afterSeq) {
+function subscribeTopic(topicId, afterSeq, sessionId = state.selectedSessionId) {
   if (!topicId) return;
   ensureWs().then(() => {
     state.subscribedTopics.add(topicId);
+    if (sessionId) state.topicSessionIds.set(topicId, sessionId);
     sendWs({ type: "subscribe", topicId, afterSeq: Number(afterSeq || 0) });
     log(`ws subscribe topic=${topicId} afterSeq=${Number(afterSeq || 0)}`);
   }).catch(error => log(`ws subscribe failed: ${error.message}`));
@@ -519,21 +528,28 @@ function handleWsEnvelope(envelope) {
   }
   if (envelope.type === "error") {
     log(`ws error ${envelope.code}: ${envelope.message}`);
-    if (envelope.code === "RECOVER_REQUIRED" && state.selectedSessionId) {
+    const topicSessionId = state.topicSessionIds.get(envelope.topicId) || state.selectedSessionId;
+    if (envelope.code === "RECOVER_REQUIRED" && topicSessionId) {
       const runId = parseRunId(envelope.topicId);
       const resume = runId
-        ? resumeRunSse(runId, lastSeq(state.selectedSessionId))
-        : resumeSse(state.selectedSessionId, lastSeq(state.selectedSessionId));
+        ? resumeRunSse(runId, lastSeq(topicSessionId))
+        : resumeSse(topicSessionId, lastSeq(topicSessionId));
       resume.catch(error => log(error.message));
     }
     return;
   }
   if (envelope.type === "message" && envelope.payload) {
-    handleChatEvent(envelope.payload, "ws", { topicId: envelope.topicId });
-    sendWs({ type: "ack", topicId: envelope.topicId, seq: envelope.payload.sequence });
+    if (envelope.topicId && envelope.payload.sessionId) {
+      state.topicSessionIds.set(envelope.topicId, envelope.payload.sessionId);
+    }
+    const accepted = handleChatEvent(envelope.payload, "ws", { topicId: envelope.topicId });
+    if (accepted) {
+      sendWs({ type: "ack", topicId: envelope.topicId, seq: envelope.payload.sequence });
+    }
     if (terminalRunEvents.has(envelope.payload.type)) {
       sendWs({ type: "unsubscribe", topicId: envelope.topicId });
       state.subscribedTopics.delete(envelope.topicId);
+      state.topicSessionIds.delete(envelope.topicId);
     }
   }
 }
@@ -608,7 +624,7 @@ function parseSseBlock(block) {
 }
 
 function handleChatEvent(event, source = "event", options = {}) {
-  if (!event || !event.type) return;
+  if (!event || !event.type) return false;
   rememberEvent(event);
   updateSeqFromEvent(event);
 
@@ -617,23 +633,27 @@ function handleChatEvent(event, source = "event", options = {}) {
   }
   logChatEvent(event, source);
 
-  if (event.sessionId !== state.selectedSessionId) return;
+  if (event.sessionId !== state.selectedSessionId) {
+    // 本地联调台只有一个消息面板，但 WebSocket 是用户级连接，可能同时收到多个 session 的 run topic。
+    // 非当前会话事件已进入 sessionSeq/日志，可 ack 给服务端；正式前端应按 sessionId 分发到对应会话面板。
+    return true;
+  }
   const eventKey = `${event.sessionId}:${event.sequence}`;
-  if (event.sequence && state.renderedEventKeys.has(eventKey)) return;
+  if (event.sequence && state.renderedEventKeys.has(eventKey)) return false;
   if (event.sequence) state.renderedEventKeys.add(eventKey);
 
   if (event.type === "run.started") {
     state.activeRunId = event.runId;
     state.activeRunStatus = "RUNNING";
     setActiveRunLabel();
-    return;
+    return true;
   }
   if (event.type === "message.delta") {
     appendAssistantDelta(event.runId, event.payload?.delta || event.payload?.content || "");
-    return;
+    return true;
   }
   if (event.type === "message.completed") {
-    return;
+    return true;
   }
   if (terminalRunEvents.has(event.type)) {
     flushPendingDeltas(event.runId);
@@ -641,7 +661,9 @@ function handleChatEvent(event, source = "event", options = {}) {
     state.activeRunStatus = event.type.replace("run.", "").toUpperCase();
     setActiveRunLabel();
     appendMessage("system", `${event.type} ${event.runId}`);
+    return true;
   }
+  return true;
 }
 
 function logChatEvent(event, source) {

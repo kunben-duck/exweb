@@ -13,7 +13,8 @@ import org.apache.ibatis.annotations.Select;
 /**
  * fin_ex_chat_event_t 的 MyBatis Mapper。
  *
- * <p>写入时通过 fin_ex_chat_session_t 反查 tenant/user，保证事件事实源和会话归属一致。</p>
+ * <p>写入时同时校验 session 与 run 的 tenant/user/session 归属，保证事件事实源不会被
+ * 错误 runId 或 sessionId 污染。</p>
  */
 @Mapper
 public interface ChatEventMapper {
@@ -24,9 +25,14 @@ public interface ChatEventMapper {
             INSERT INTO fin_ex_chat_event_t(
                 id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
             )
-            SELECT #{id}, tenant_id, user_id, #{sessionId}, #{runId}, #{seq}, #{eventType}, #{payloadJson}, #{createdAt}
-            FROM fin_ex_chat_session_t
-            WHERE id = #{sessionId}
+            SELECT #{id}, s.tenant_id, s.user_id, s.id, r.id, #{seq}, #{eventType}, #{payloadJson}, #{createdAt}
+            FROM fin_ex_chat_session_t s
+            JOIN fin_ex_chat_run_t r
+              ON r.id = #{runId}
+             AND r.session_id = s.id
+             AND r.tenant_id = s.tenant_id
+             AND r.user_id = s.user_id
+            WHERE s.id = #{sessionId}
             """)
     int insertFromSession(
             @Param("id") String id,
@@ -57,12 +63,16 @@ public interface ChatEventMapper {
     @Select("""
             SELECT id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
             FROM fin_ex_chat_event_t
-            WHERE session_id = #{sessionId}
+            WHERE tenant_id = #{tenantId}
+              AND user_id = #{userId}
+              AND session_id = #{sessionId}
               AND seq > #{afterSeq}
             ORDER BY seq ASC
             """)
     @ResultMap("chatEventResultMap")
-    List<ChatEventRow> findBySessionIdAndAfterSeq(
+    List<ChatEventRow> findByOwnerAndSessionAfterSeq(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
             @Param("sessionId") String sessionId,
             @Param("afterSeq") long afterSeq
     );
@@ -70,12 +80,18 @@ public interface ChatEventMapper {
     @Select("""
             SELECT id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
             FROM fin_ex_chat_event_t
-            WHERE run_id = #{runId}
+            WHERE tenant_id = #{tenantId}
+              AND user_id = #{userId}
+              AND session_id = #{sessionId}
+              AND run_id = #{runId}
               AND seq > #{afterSeq}
             ORDER BY seq ASC
             """)
     @ResultMap("chatEventResultMap")
-    List<ChatEventRow> findByRunIdAndAfterSeq(
+    List<ChatEventRow> findByOwnerAndRunAfterSeq(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionId") String sessionId,
             @Param("runId") String runId,
             @Param("afterSeq") long afterSeq
     );
@@ -83,7 +99,11 @@ public interface ChatEventMapper {
     @Select("""
             SELECT COALESCE(MAX(seq), 0)
             FROM fin_ex_chat_event_t
-            WHERE session_id = #{sessionId}
+            WHERE tenant_id = #{tenantId}
+              AND user_id = #{userId}
+              AND session_id = #{sessionId}
             """)
-    long findLatestSeqBySessionId(@Param("sessionId") String sessionId);
+    long findLatestSeqByOwnerAndSession(@Param("tenantId") String tenantId,
+                                        @Param("userId") String userId,
+                                        @Param("sessionId") String sessionId);
 }

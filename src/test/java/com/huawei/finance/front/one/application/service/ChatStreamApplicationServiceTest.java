@@ -101,6 +101,42 @@ class ChatStreamApplicationServiceTest {
     }
 
     @Test
+    void resumeRunTopicDropsLiveEventsWhoseRunOrSessionDoesNotMatchTopic() {
+        InMemoryChatEventStore store = new InMemoryChatEventStore();
+        InMemoryLiveEventBus liveEventBus = new InMemoryLiveEventBus();
+        InMemoryRunRepository runRepository = new InMemoryRunRepository();
+        ChatStreamApplicationService service = new ChatStreamApplicationService(
+                store,
+                new LocalChatEventStreamRegistry(),
+                liveEventBus,
+                runRepository,
+                readCursorService(),
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
+        );
+        runRepository.save(runningRun("run1", "tenant1", "user1"));
+
+        StepVerifier.create(service.resumeRunTopic(user(), ChatStreamTopics.runTopic("run1"), 0).take(1))
+                .then(() -> {
+                    liveEventBus.publish(ChatStreamTopics.runTopic("run1"),
+                            new StoredChatEvent("run2", "session2", 1L, "message.delta",
+                                    Instant.now(), Map.of("delta", "wrong-run")));
+                    liveEventBus.publish(ChatStreamTopics.runTopic("run1"),
+                            new StoredChatEvent("run1", "session2", 2L, "message.delta",
+                                    Instant.now(), Map.of("delta", "wrong-session")));
+                    liveEventBus.publish(ChatStreamTopics.runTopic("run1"),
+                            new StoredChatEvent("run1", "session1", 3L, "message.delta",
+                                    Instant.now(), Map.of("delta", "right")));
+                })
+                .assertNext(event -> {
+                    assertThat(event.runId()).isEqualTo("run1");
+                    assertThat(event.payload()).containsEntry("delta", "right");
+                })
+                .verifyComplete();
+    }
+
+    @Test
     void resumeRunReplaysOnlyRequestedRunEventsUntilTerminal() {
         InMemoryChatEventStore store = new InMemoryChatEventStore();
         InMemoryRunRepository runRepository = new InMemoryRunRepository();
@@ -198,7 +234,7 @@ class ChatStreamApplicationServiceTest {
         }
 
         @Override
-        public List<ChatEvent> findBySessionIdAndAfterSeq(String sessionId, long afterSeq) {
+        public List<ChatEvent> findByOwnerAndSessionAfterSeq(String tenantId, String userId, String sessionId, long afterSeq) {
             return events.stream()
                     .filter(event -> sessionId.equals(event.sessionId()))
                     .filter(event -> event.sequence() > afterSeq)
@@ -206,15 +242,17 @@ class ChatStreamApplicationServiceTest {
         }
 
         @Override
-        public List<ChatEvent> findByRunIdAndAfterSeq(String runId, long afterSeq) {
+        public List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId,
+                                                         String runId, long afterSeq) {
             return events.stream()
                     .filter(event -> runId.equals(event.runId()))
+                    .filter(event -> sessionId.equals(event.sessionId()))
                     .filter(event -> event.sequence() > afterSeq)
                     .toList();
         }
 
         @Override
-        public long findLatestSeqBySessionId(String sessionId) {
+        public long findLatestSeqByOwnerAndSession(String tenantId, String userId, String sessionId) {
             return events.stream()
                     .filter(event -> sessionId.equals(event.sessionId()))
                     .mapToLong(ChatEvent::sequence)

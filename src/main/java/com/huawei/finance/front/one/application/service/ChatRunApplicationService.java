@@ -255,7 +255,7 @@ public class ChatRunApplicationService {
     public ChatStreamStatus streamStatus(UserContext user, String sessionId) {
         permissionChecker.checkChatPermission(user);
         ensureOwnedSession(user, sessionId);
-        long latestSeq = eventStore.findLatestSeqBySessionId(sessionId);
+        long latestSeq = eventStore.findLatestSeqByOwnerAndSession(user.tenantId(), user.userId(), sessionId);
         long readCursorSeq = readCursorService.findLastConsumedSeq(user, sessionId);
         Optional<ChatRun> active = findActive(user.tenantId(), user.userId(), sessionId);
         if (active.isPresent() && leaseService != null && leaseService.isLeaseExpired(active.get().id())) {
@@ -264,7 +264,7 @@ public class ChatRunApplicationService {
                     : recoveryOrchestratorProvider.getIfAvailable();
             if (orchestrator != null) {
                 orchestrator.recoverExpiredRun(active.get().id());
-                latestSeq = eventStore.findLatestSeqBySessionId(sessionId);
+                latestSeq = eventStore.findLatestSeqByOwnerAndSession(user.tenantId(), user.userId(), sessionId);
                 readCursorSeq = readCursorService.findLastConsumedSeq(user, sessionId);
                 active = findActive(user.tenantId(), user.userId(), sessionId);
             }

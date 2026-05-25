@@ -51,7 +51,9 @@ Referer: http://localhost:8080/fin/ex/
 
 - 会话：创建、列表、切换、state 聚合、历史消息分页、重命名、归档、恢复、关闭。
 - Run：创建、停止回答、stream-status 查询；重新生成通过消息树的 `REGENERATE_ASSISTANT` 操作完成。
-- WebSocket：连接、connect、subscribe、ack、跨 run topic 订阅。
+- WebSocket：连接、connect、subscribe、ack、跨 session / 跨 run topic 订阅。
+- 多会话隔离：同一 WebSocket 连接可以同时订阅多个 session 的 run topic；本地联调台会按事件
+  `sessionId` 更新游标和日志，正式前端应按 `sessionId` 分发到对应会话面板。
 - SSE resume：会话级 SSE 按 `afterSeq` 有限补发缺失事件；run 级 SSE 在 active run 恢复时补发并接续 live 事件到终态。
 - 文档库：上传本地文件、列表、详情、状态、预览地址、下载、改名、删除。
 - 附件：选择文档库中 `AVAILABLE` 文档作为聊天附件发送。

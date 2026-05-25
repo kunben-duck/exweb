@@ -526,7 +526,15 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/messages/msg_002/feedback \
 
 ## WebSocket 协议
 
-WebSocket 是用户级长连接，一个连接可以订阅多个 run topic。切换会话时不需要重建连接，只需要订阅新的 `streamTopicId`，必要时取消旧订阅。
+WebSocket 是用户级长连接，切换会话时不需要重建连接，也不要求释放其他会话的 run topic。
+同一连接可以同时订阅多个 session 的多个 run topic，服务端会在订阅前校验 topic 归属，
+并在输出前校验 `topicId/runId/sessionId` 一致。前端收到 `message` envelope 后必须按
+`payload.sessionId` 分发到对应会话面板；单会话页面如果不想继续接收后台会话输出，可以主动
+`unsubscribe(topicId)`。
+
+服务端不会信任 Redis Pub/Sub 或本机 live source 的 payload。所有 WebSocket/SSE 输出都来自
+已经落库的 ChatEvent，补发查询使用 `tenantId/userId/sessionId/runId` 联合条件；如果实时通道
+收到 topic 与 `runId/sessionId` 不一致的事件，会直接丢弃并记录日志。
 
 后端同时支持 WebFlux 和 Servlet/MVC 两种 WebSocket 服务端入口。企业框架引入
 `spring-boot-starter-web` 后，应用通常会以 MVC/Servlet 模式启动，此时 WebSocket 仍然使用

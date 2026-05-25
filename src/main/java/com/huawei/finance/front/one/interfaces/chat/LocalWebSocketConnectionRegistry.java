@@ -79,12 +79,17 @@ public class LocalWebSocketConnectionRegistry {
     /**
      * 注册或替换某个 topic 的订阅。
      *
+     * <p>WebSocket 是用户级连接，同一物理连接允许同时订阅多个 session 的 run topic。
+     * 串线防护依赖 topic 归属校验和事件输出前的 runId/sessionId 校验，而不是在服务端强制
+     * 释放其他 session 订阅。</p>
+     *
      * @param connectionId WebSocket 物理连接 ID。
      * @param topicId run 级 stream topic。
+     * @param sessionId topic 所属前端会话 ID，用于同一连接内跨会话订阅隔离。
      * @param afterSeq 订阅起点，服务端不会向该连接重复投递小于等于该值的事件。
      * @param disposable 当前 topic 实时事件订阅句柄，取消订阅或断开连接时释放。
      */
-    public synchronized void subscribe(String connectionId, String topicId, long afterSeq, Disposable disposable) {
+    public synchronized void subscribe(String connectionId, String topicId, String sessionId, long afterSeq, Disposable disposable) {
         get(connectionId).ifPresent(state -> {
             if (!state.subscriptions.containsKey(topicId)
                     && state.subscriptionCount() >= properties.normalizedMaxSubscriptionsPerConnection()) {
@@ -94,7 +99,7 @@ public class LocalWebSocketConnectionRegistry {
                     && topicSubscriberCount(topicId) >= properties.normalizedMaxSubscribersPerTopic()) {
                 throw new IllegalStateException("WS_TOPIC_SUBSCRIBER_LIMIT_EXCEEDED: 当前 topic 本机订阅数已达上限");
             }
-            state.subscribe(topicId, afterSeq, disposable, properties.normalizedDeliveredSeqWindow());
+            state.subscribe(topicId, sessionId, afterSeq, disposable, properties.normalizedDeliveredSeqWindow());
         });
     }
 
@@ -240,9 +245,9 @@ public class LocalWebSocketConnectionRegistry {
             touch();
         }
 
-        private void subscribe(String topicId, long afterSeq, Disposable disposable, int deliveredSeqWindow) {
+        private void subscribe(String topicId, String sessionId, long afterSeq, Disposable disposable, int deliveredSeqWindow) {
             unsubscribe(topicId);
-            subscriptions.put(topicId, new SubscriptionState(topicId, afterSeq, disposable, deliveredSeqWindow));
+            subscriptions.put(topicId, new SubscriptionState(topicId, sessionId, afterSeq, disposable, deliveredSeqWindow));
             touch();
         }
 
@@ -300,13 +305,15 @@ public class LocalWebSocketConnectionRegistry {
      */
     private static final class SubscriptionState {
         private final String topicId;
+        private final String sessionId;
         private final Disposable disposable;
         private final Map<Long, Boolean> deliveredSeqs;
         private volatile long lastAckSeq;
         private volatile long highestDeliveredSeq;
 
-        private SubscriptionState(String topicId, long afterSeq, Disposable disposable, int deliveredSeqWindow) {
+        private SubscriptionState(String topicId, String sessionId, long afterSeq, Disposable disposable, int deliveredSeqWindow) {
             this.topicId = topicId;
+            this.sessionId = sessionId;
             this.lastAckSeq = afterSeq;
             this.highestDeliveredSeq = afterSeq;
             this.disposable = disposable;

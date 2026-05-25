@@ -276,9 +276,9 @@ class ChatRunRecoveryOrchestratorTest {
             events.add(stored);
             return stored;
         }
-        @Override public List<ChatEvent> findBySessionIdAndAfterSeq(String sessionId, long afterSeq) { return List.of(); }
-        @Override public List<ChatEvent> findByRunIdAndAfterSeq(String runId, long afterSeq) { return List.of(); }
-        @Override public long findLatestSeqBySessionId(String sessionId) { return seq; }
+        @Override public List<ChatEvent> findByOwnerAndSessionAfterSeq(String tenantId, String userId, String sessionId, long afterSeq) { return List.of(); }
+        @Override public List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId, String runId, long afterSeq) { return List.of(); }
+        @Override public long findLatestSeqByOwnerAndSession(String tenantId, String userId, String sessionId) { return seq; }
     }
 
     private static class InMemoryRunCache implements ChatRunCache {

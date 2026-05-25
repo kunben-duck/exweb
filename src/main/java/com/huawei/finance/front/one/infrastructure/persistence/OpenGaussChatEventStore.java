@@ -53,7 +53,8 @@ public class OpenGaussChatEventStore implements ChatEventStore {
                 createdAt
         );
         if (inserted == 0) {
-            throw new IllegalStateException("聊天事件无法落库，关联会话不存在: " + event.sessionId());
+            throw new IllegalStateException("聊天事件无法落库，run 与 session 归属不一致或不存在: runId="
+                    + event.runId() + ", sessionId=" + event.sessionId());
         }
         ChatEventRow insertedRow = mapper.findById(eventId);
         if (insertedRow == null) {
@@ -63,18 +64,26 @@ public class OpenGaussChatEventStore implements ChatEventStore {
     }
 
     @Override
-    public List<ChatEvent> findBySessionIdAndAfterSeq(String sessionId, long afterSeq) {
-        return mapper.findBySessionIdAndAfterSeq(sessionId, afterSeq).stream().map(this::toDomain).toList();
+    public List<ChatEvent> findByOwnerAndSessionAfterSeq(String tenantId, String userId,
+                                                         String sessionId, long afterSeq) {
+        return mapper.findByOwnerAndSessionAfterSeq(tenantId, userId, sessionId, afterSeq)
+                .stream()
+                .map(this::toDomain)
+                .toList();
     }
 
     @Override
-    public List<ChatEvent> findByRunIdAndAfterSeq(String runId, long afterSeq) {
-        return mapper.findByRunIdAndAfterSeq(runId, afterSeq).stream().map(this::toDomain).toList();
+    public List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId,
+                                                     String runId, long afterSeq) {
+        return mapper.findByOwnerAndRunAfterSeq(tenantId, userId, sessionId, runId, afterSeq)
+                .stream()
+                .map(this::toDomain)
+                .toList();
     }
 
     @Override
-    public long findLatestSeqBySessionId(String sessionId) {
-        return mapper.findLatestSeqBySessionId(sessionId);
+    public long findLatestSeqByOwnerAndSession(String tenantId, String userId, String sessionId) {
+        return mapper.findLatestSeqByOwnerAndSession(tenantId, userId, sessionId);
     }
 
     private ChatEvent toDomain(ChatEventRow row) {

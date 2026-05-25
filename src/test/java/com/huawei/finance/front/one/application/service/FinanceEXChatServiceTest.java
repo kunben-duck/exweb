@@ -63,6 +63,76 @@ import reactor.test.StepVerifier;
 
 class FinanceEXChatServiceTest {
     @Test
+    void mismatchedRuntimeEventFailsCurrentRunWithoutPersistingForeignEvent() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        CountingCancelRunCache runCache = new CountingCancelRunCache();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        IdGenerator ids = new FixedIdGenerator();
+        PermissionChecker permissionChecker = new PermissionChecker();
+        ChatReadCursorApplicationService readCursorService = readCursorService(sessions);
+        WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
+                new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
+        LocalChatRunExecutionRegistry executionRegistry = new LocalChatRunExecutionRegistry();
+        ChatRunLeaseApplicationService leaseService = new ChatRunLeaseApplicationService(
+                new InMemoryExecutionRepository(),
+                (ApplicationInstanceIdProvider) () -> "instance-test",
+                new com.huawei.finance.front.one.application.config.ChatRunOperationalProperties(),
+                ids,
+                executionRegistry
+        );
+
+        AgentRuntime mismatchedRuntime = new AgentRuntime() {
+            @Override public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                return Flux.just(new StoredChatEvent(request.runId(), "foreign-session", 0L,
+                        "message.delta", Instant.now(), Map.of("delta", "wrong")));
+            }
+            @Override public Mono<Void> cancel(AgentRuntimeCancelRequest request) { return Mono.empty(); }
+        };
+
+        FinanceEXChatService service = new FinanceEXChatService(
+                new SessionApplicationService(sessions, messages, ids, permissionChecker),
+                new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
+                new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
+                runtimeRouteService(),
+                new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
+                    @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
+                        return Flux.empty();
+                    }
+                    @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
+                        return Mono.empty();
+                    }
+                }, limiter),
+                new SystemResponseExecutor(),
+                new AgentRuntimeExecutor(mismatchedRuntime, limiter),
+                documentFacade(),
+                new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
+                        readCursorService, permissionChecker, sessions,
+                        new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
+                new ChatRunApplicationService(runs, runCache, events, readCursorService, permissionChecker, sessions),
+                leaseService,
+                executionRegistry,
+                new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
+                ids
+        );
+
+        StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
+                        null, null, "web", "hello", List.of(), Map.of())))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("run.started"))
+                .assertNext(event -> {
+                    assertThat(event.type()).isEqualTo("run.failed");
+                    assertThat(event.payload()).containsEntry("code", "RUN_EVENT_IDENTITY_MISMATCH");
+                })
+                .verifyComplete();
+
+        assertThat(events.events).extracting(ChatEvent::sessionId).containsOnly("session_1");
+        assertThat(events.events).extracting(ChatEvent::type).doesNotContain("message.delta");
+        assertThat(messages.messages).extracting(ChatMessage::role).containsExactly("user");
+    }
+
+    @Test
     void cancelledRunDoesNotPersistPartialAssistantMessageAsHistory() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
@@ -127,6 +197,19 @@ class FinanceEXChatServiceTest {
                                                   List<AttachmentRef> attachments,
                                                   com.huawei.finance.front.one.domain.memory.MemoryContext memory) {
                 return RouteSignalResult.of(RouteTarget.systemResponse("partial answer"));
+            }
+        };
+    }
+
+    private RouteSignalApplicationService runtimeRouteService() {
+        return new RouteSignalApplicationService(request -> UseCaseMatchResult.notMatched("disabled"),
+                (command, memory, user) -> null, new com.huawei.finance.front.one.domain.routing.RoutingPolicy(0.85),
+                new RouteSignalProperties(false, false)) {
+            @Override
+            public RouteSignalResult routeInitial(UserContext user, ChatSession session, ChatCommand command,
+                                                  List<AttachmentRef> attachments,
+                                                  com.huawei.finance.front.one.domain.memory.MemoryContext memory) {
+                return RouteSignalResult.of(RouteTarget.agentRuntime("test-runtime"));
             }
         };
     }
@@ -217,12 +300,15 @@ class FinanceEXChatServiceTest {
 
     private static class InMemoryEventStore implements ChatEventStore {
         private long seq;
+        private final List<ChatEvent> events = new ArrayList<>();
         @Override public ChatEvent append(ChatEvent event) {
-            return new StoredChatEvent(event.runId(), event.sessionId(), ++seq, event.type(), Instant.now(), event.payload());
+            ChatEvent stored = new StoredChatEvent(event.runId(), event.sessionId(), ++seq, event.type(), Instant.now(), event.payload());
+            events.add(stored);
+            return stored;
         }
-        @Override public List<ChatEvent> findBySessionIdAndAfterSeq(String sessionId, long afterSeq) { return List.of(); }
-        @Override public List<ChatEvent> findByRunIdAndAfterSeq(String runId, long afterSeq) { return List.of(); }
-        @Override public long findLatestSeqBySessionId(String sessionId) { return seq; }
+        @Override public List<ChatEvent> findByOwnerAndSessionAfterSeq(String tenantId, String userId, String sessionId, long afterSeq) { return List.of(); }
+        @Override public List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId, String runId, long afterSeq) { return List.of(); }
+        @Override public long findLatestSeqByOwnerAndSession(String tenantId, String userId, String sessionId) { return seq; }
     }
 
     private static class InMemoryExecutionRepository implements ChatRunExecutionRepository {

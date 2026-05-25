@@ -63,17 +63,18 @@ class OpenGaussChatEventStoreTest {
         }
 
         @Override
-        public List<ChatEventRow> findBySessionIdAndAfterSeq(String sessionId, long afterSeq) {
+        public List<ChatEventRow> findByOwnerAndSessionAfterSeq(String tenantId, String userId, String sessionId, long afterSeq) {
             return List.of();
         }
 
         @Override
-        public List<ChatEventRow> findByRunIdAndAfterSeq(String runId, long afterSeq) {
+        public List<ChatEventRow> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId,
+                                                            String runId, long afterSeq) {
             return List.of();
         }
 
         @Override
-        public long findLatestSeqBySessionId(String sessionId) {
+        public long findLatestSeqByOwnerAndSession(String tenantId, String userId, String sessionId) {
             return 0;
         }
     }

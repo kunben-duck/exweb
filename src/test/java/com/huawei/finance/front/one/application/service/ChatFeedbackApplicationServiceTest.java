@@ -203,9 +203,9 @@ class ChatFeedbackApplicationServiceTest {
 
     private static class EmptyEventStore implements ChatEventStore {
         @Override public ChatEvent append(ChatEvent event) { return event; }
-        @Override public List<ChatEvent> findBySessionIdAndAfterSeq(String sessionId, long afterSeq) { return List.of(); }
-        @Override public List<ChatEvent> findByRunIdAndAfterSeq(String runId, long afterSeq) { return List.of(); }
-        @Override public long findLatestSeqBySessionId(String sessionId) { return 0L; }
+        @Override public List<ChatEvent> findByOwnerAndSessionAfterSeq(String tenantId, String userId, String sessionId, long afterSeq) { return List.of(); }
+        @Override public List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId, String runId, long afterSeq) { return List.of(); }
+        @Override public long findLatestSeqByOwnerAndSession(String tenantId, String userId, String sessionId) { return 0L; }
     }
 
     private static class EmptyReadCursorRepository implements ChatReadCursorRepository {

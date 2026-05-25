@@ -19,28 +19,38 @@ public interface ChatEventStore {
     ChatEvent append(ChatEvent event);
 
     /**
-     * 查询指定会话在某个序号之后的事件。
+     * 按用户归属查询指定会话在某个序号之后的事件。
      *
+     * <p>事件补发接口必须直接在事实源查询中携带 owner 条件，不能只依赖上层先校验 session
+     * 归属后再按裸 sessionId 查询；这样即使事件表存在异常数据，也不会跨租户或跨用户补发。</p>
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
      * @param sessionId 前端聊天会话标识。
      * @param afterSeq 已处理的最大事件序号。
      * @return 大于 afterSeq 的会话事件，按 seq 正序排列。
      */
-    List<ChatEvent> findBySessionIdAndAfterSeq(String sessionId, long afterSeq);
+    List<ChatEvent> findByOwnerAndSessionAfterSeq(String tenantId, String userId, String sessionId, long afterSeq);
 
     /**
-     * 查询指定 run 在某个序号之后的事件。
+     * 按用户归属查询指定 run 在某个序号之后的事件。
      *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId run 所属前端聊天会话标识。
      * @param runId run 标识。
      * @param afterSeq 已处理的最大事件序号。
      * @return 大于 afterSeq 的 run 事件，按 seq 正序排列。
      */
-    List<ChatEvent> findByRunIdAndAfterSeq(String runId, long afterSeq);
+    List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId, String runId, long afterSeq);
 
     /**
-     * 查询会话当前最大事件序号。
+     * 按用户归属查询会话当前最大事件序号。
      *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
      * @param sessionId 前端聊天会话标识。
      * @return 当前会话最大 seq；无事件时返回 0。
      */
-    long findLatestSeqBySessionId(String sessionId);
+    long findLatestSeqByOwnerAndSession(String tenantId, String userId, String sessionId);
 }

@@ -293,7 +293,29 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                                        StringBuilder assistant, String runId,
                                                        RunExecutionClaim executionClaim) {
         return events
-                .takeWhile(event -> shouldAcceptExecutionEvent(event, executionClaim))
+                .<ChatEvent>handle((event, sink) -> {
+                    if (!eventBelongsToCurrentRun(event, runId, session.id())) {
+                        /*
+                         * 下游 Runtime/SubAgent 的输出不是身份事实。任何 runId/sessionId 不匹配的事件
+                         * 都必须在落库前阻断，否则会污染 openGauss 事件事实源并经由 SSE/WS 串到其他会话。
+                         */
+                        log.error("Dropped mismatched chat event before persistence. expectedRunId={}, actualRunId={}, expectedSessionId={}, actualSessionId={}, type={}",
+                                runId,
+                                event == null ? null : event.runId(),
+                                session.id(),
+                                event == null ? null : event.sessionId(),
+                                event == null ? null : event.type());
+                        sink.next(ErrorEvent.of(runId, session.id(), "RUN_EVENT_IDENTITY_MISMATCH",
+                                "下游返回的事件身份与当前 run/session 不一致，已终止本轮回答"));
+                        sink.complete();
+                        return;
+                    }
+                    if (!shouldAcceptExecutionEvent(event, executionClaim)) {
+                        sink.complete();
+                        return;
+                    }
+                    sink.next(event);
+                })
                 .concatMap(event -> {
                     appendAssistantDelta(assistant, event);
                     /*
@@ -315,6 +337,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     bindingRef.set(runtimeBindingService.observeEvent(bindingRef.get(), stored));
                     return Mono.just(stored);
                 });
+    }
+
+    private boolean eventBelongsToCurrentRun(ChatEvent event, String runId, String sessionId) {
+        return event != null && runId.equals(event.runId()) && sessionId.equals(event.sessionId());
     }
 
     private boolean shouldAcceptExecutionEvent(ChatEvent event, RunExecutionClaim executionClaim) {

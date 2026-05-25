@@ -326,7 +326,7 @@ sequenceDiagram
         SuperAgent->>DB: "run.completed 后保存完整 assistant message 并更新 current leaf"
     and "前端实时订阅链路，只订阅 ChatEvent，不触发 Runtime query"
         Frontend->>ChatWS: "WS subscribe(topicId=streamTopicId, afterSeq=firstSeq)"
-        ChatWS->>EventStore: "findByRunIdAndAfterSeq"
+        ChatWS->>EventStore: "findByOwnerAndRunAfterSeq"
         EventStore->>DB: "补发 run 历史事件"
         ChatWS->>Live: "订阅本机 run topic"
         ChatWS->>RedisBus: "订阅远端 run topic"
@@ -353,7 +353,7 @@ sequenceDiagram
     ChatAPI->>CursorStore: "读取 readCursorSeq"
     ChatAPI-->>Frontend: "activeRunId/topic/firstSeq/readCursorSeq"
     Frontend->>ChatAPI: "Run SSE resume afterSeq=activeRunFirstSeq-1"
-    ChatAPI->>DB: "按 runId 补发缺失事件"
+    ChatAPI->>DB: "按 owner + runId 补发缺失事件"
     ChatAPI->>Live: "接入 run live topic"
     ChatAPI->>RedisBus: "接入跨实例 run topic"
     ChatAPI-->>Frontend: "SSE 补发 + live tail 到 run 终态"
@@ -363,12 +363,14 @@ sequenceDiagram
 
 - `fin_ex_chat_event_t.seq` 是前端恢复游标，实时输出和补发输出使用同一份 seq；该序号由 openGauss sequence/default 生成并随事件写入一起返回，应用层不再本地生成恢复游标。
 - openGauss 是事件事实源，`LocalChatEventStreamRegistry` 是当前服务实例内在线发布器，Redis Pub/Sub 只做跨实例实时扇出。
+- 事件写入必须校验 `runId/sessionId/tenantId/userId` 一致；事件补发和 `latestSeq` 查询也必须携带 `tenantId/userId/sessionId/runId` owner 条件，不能按裸 runId 或 sessionId 查询。
 - `fin_ex_chat_run_t` 是 run 生命周期事实源；Redis 只保存 active run 和 cancel flag。
 - `fin_ex_chat_run_execution_t` 是 run 执行控制面事实源；实例 ID、心跳、租约、恢复状态和 `fencing_token` 都在该表中，避免把运维执行信息混入业务 run 表。
 - `fin_ex_chat_read_cursor_t` 是用户消费游标事实源；WebSocket ack 会刷新 Redis 热游标并节流写入 openGauss，用于展示和诊断用户消费进度。
 - 后台 run 不依赖创建 run 的原始浏览器连接，刷新页面后用 `afterSeq` 恢复。
 - 前端 WebSocket 订阅消息格式：`{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}`。
 - 前端 WebSocket 不触发 `AgentRuntime.query`，只补发和订阅 ChatEvent；它不接受聊天请求，仅支持 `connect`、`presence`、`subscribe`、`unsubscribe`、`ack` 控制消息。
+- 同一 WebSocket 连接允许同时订阅多个 session 的多个 run topic；协议层不会因切换会话自动释放旧 topic。订阅前按用户校验 `topicId -> run` 归属，live 流和 WebSocket envelope 投递前再按 `topicId + runId + sessionId` 校验，避免跨会话实时消息串线。
 - stop 是 REST 生命周期接口，不是 WebSocket command；重复 stop 幂等返回当前 run 状态。
 - 重新生成回答不再使用 run retry 接口，而是通过 `POST /chat/runs` 携带 `runMode=REGENERATE_ASSISTANT` 和 `regeneratedMessageId`，在同一 user 节点下生成新的 assistant sibling。
 - 会话 state 接口聚合会话元数据、最近历史消息和 `activeStreamTopicId`，用于前端切换会话后的恢复判断。

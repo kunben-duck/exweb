@@ -284,17 +284,17 @@ class ChatRunApplicationServiceTest {
         }
 
         @Override
-        public List<ChatEvent> findBySessionIdAndAfterSeq(String sessionId, long afterSeq) {
+        public List<ChatEvent> findByOwnerAndSessionAfterSeq(String tenantId, String userId, String sessionId, long afterSeq) {
             return List.of();
         }
 
         @Override
-        public List<ChatEvent> findByRunIdAndAfterSeq(String runId, long afterSeq) {
+        public List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId, String runId, long afterSeq) {
             return List.of();
         }
 
         @Override
-        public long findLatestSeqBySessionId(String sessionId) {
+        public long findLatestSeqByOwnerAndSession(String tenantId, String userId, String sessionId) {
             return latestSeq;
         }
     }

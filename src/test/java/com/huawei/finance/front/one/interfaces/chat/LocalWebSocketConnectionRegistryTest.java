@@ -13,8 +13,8 @@ class LocalWebSocketConnectionRegistryTest {
         registry.register("conn1", new UserContext("tenant1", "user1", "User One"));
         Disposable disposable = () -> {};
 
-        registry.subscribe("conn1", "chat-run-run1", 10L, disposable);
-        registry.subscribe("conn1", "chat-run-run2", 0L, disposable);
+        registry.subscribe("conn1", "chat-run-run1", "session1", 10L, disposable);
+        registry.subscribe("conn1", "chat-run-run2", "session1", 0L, disposable);
 
         assertThat(registry.get("conn1")).isPresent();
         assertThat(registry.get("conn1").orElseThrow().subscriptionCount()).isEqualTo(2);
@@ -30,7 +30,7 @@ class LocalWebSocketConnectionRegistryTest {
     void outOfOrderUnseenEventRequiresClientRecoveryInsteadOfSilentDrop() {
         LocalWebSocketConnectionRegistry registry = new LocalWebSocketConnectionRegistry();
         registry.register("conn1", new UserContext("tenant1", "user1", "User One"));
-        registry.subscribe("conn1", "chat-run-run1", 10L, () -> {});
+        registry.subscribe("conn1", "chat-run-run1", "session1", 10L, () -> {});
 
         assertThat(registry.markDelivered("conn1", "chat-run-run1", 20L).action())
                 .isEqualTo(LocalWebSocketConnectionRegistry.Action.DELIVER);
@@ -47,7 +47,7 @@ class LocalWebSocketConnectionRegistryTest {
         LocalWebSocketConnectionRegistry registry = new LocalWebSocketConnectionRegistry();
         TrackingDisposable disposable = new TrackingDisposable();
         registry.register("conn1", new UserContext("tenant1", "user1", "User One"));
-        registry.subscribe("conn1", "chat-run-run1", 0L, disposable);
+        registry.subscribe("conn1", "chat-run-run1", "session1", 0L, disposable);
 
         registry.unregister("conn1");
 
@@ -77,10 +77,10 @@ class LocalWebSocketConnectionRegistryTest {
         properties.setMaxSubscriptionsPerConnection(1);
         LocalWebSocketConnectionRegistry registry = new LocalWebSocketConnectionRegistry(properties);
         registry.register("conn1", new UserContext("tenant1", "user1", "User One"));
-        registry.subscribe("conn1", "chat-run-run1", 0L, () -> {});
+        registry.subscribe("conn1", "chat-run-run1", "session1", 0L, () -> {});
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() ->
-                        registry.subscribe("conn1", "chat-run-run2", 0L, () -> {}))
+                        registry.subscribe("conn1", "chat-run-run2", "session1", 0L, () -> {}))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("WS_SUBSCRIPTION_LIMIT_EXCEEDED");
     }
@@ -91,8 +91,8 @@ class LocalWebSocketConnectionRegistryTest {
         TrackingDisposable first = new TrackingDisposable();
         TrackingDisposable second = new TrackingDisposable();
         registry.register("conn1", new UserContext("tenant1", "user1", "User One"));
-        registry.subscribe("conn1", "chat-run-run1", 0L, first);
-        registry.subscribe("conn1", "chat-run-run2", 0L, second);
+        registry.subscribe("conn1", "chat-run-run1", "session1", 0L, first);
+        registry.subscribe("conn1", "chat-run-run2", "session1", 0L, second);
 
         registry.unsubscribe("conn1", "chat-run-run1");
 
@@ -106,12 +106,27 @@ class LocalWebSocketConnectionRegistryTest {
         LocalWebSocketConnectionRegistry registry = new LocalWebSocketConnectionRegistry();
         TrackingDisposable disposable = new TrackingDisposable();
         registry.register("conn1", new UserContext("tenant1", "user1", "User One"));
-        registry.subscribe("conn1", "chat-run-run1", 0L, disposable);
+        registry.subscribe("conn1", "chat-run-run1", "session1", 0L, disposable);
 
         registry.register("conn1", new UserContext("tenant1", "user1", "User One"));
 
         assertThat(disposable.disposed).isTrue();
         assertThat(registry.get("conn1").orElseThrow().subscriptionCount()).isZero();
+    }
+
+    @Test
+    void sameConnectionCanSubscribeMultipleSessions() {
+        LocalWebSocketConnectionRegistry registry = new LocalWebSocketConnectionRegistry();
+        TrackingDisposable first = new TrackingDisposable();
+        TrackingDisposable second = new TrackingDisposable();
+        registry.register("conn1", new UserContext("tenant1", "user1", "User One"));
+        registry.subscribe("conn1", "chat-run-run1", "session1", 0L, first);
+
+        registry.subscribe("conn1", "chat-run-run2", "session2", 0L, second);
+
+        assertThat(first.disposed).isFalse();
+        assertThat(second.disposed).isFalse();
+        assertThat(registry.get("conn1").orElseThrow().subscriptionCount()).isEqualTo(2);
     }
 
     private static class TrackingDisposable implements Disposable {

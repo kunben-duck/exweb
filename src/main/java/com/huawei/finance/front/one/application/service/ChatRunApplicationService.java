@@ -18,11 +18,9 @@ import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import com.huawei.finance.front.one.domain.chat.ChatStreamStatus;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -35,8 +33,6 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class ChatRunApplicationService {
-    private static final Duration RUN_STATUS_FALLBACK_INTERVAL = Duration.ofMillis(100);
-
     private final ChatRunRepository repository;
     private final ChatRunCache cache;
     private final ChatEventStore eventStore;
@@ -45,7 +41,6 @@ public class ChatRunApplicationService {
     private final SessionRepository sessionRepository;
     private final ChatRunLeaseApplicationService leaseService;
     private final ObjectProvider<ChatRunRecoveryOrchestrator> recoveryOrchestratorProvider;
-    private final Map<String, EventAcceptanceSnapshot> eventAcceptanceCache = new ConcurrentHashMap<>();
 
     @Autowired
     public ChatRunApplicationService(ChatRunRepository repository, ChatRunCache cache, ChatEventStore eventStore,
@@ -137,6 +132,14 @@ public class ChatRunApplicationService {
         if (event == null || event.runId() == null || event.runId().isBlank()) {
             return null;
         }
+        if ("message.delta".equals(event.type()) || "message.completed".equals(event.type())) {
+            /*
+             * 非终态消息事件的可靠顺序事实已经在 fin_ex_chat_event_t。高并发输出时不再逐事件
+             * 更新 fin_ex_chat_run_t.last_seq，避免 run 表成为热点；stream-status.latestSeq 会直接
+             * 从事件表查询，run.started 和 run 终态事件仍会推进 run 表状态。
+             */
+            return null;
+        }
         Optional<ChatRun> current = repository.findById(event.runId());
         if (current.isEmpty()) {
             return null;
@@ -179,7 +182,6 @@ public class ChatRunApplicationService {
             return new ChatRunStopDecision(run, false);
         }
         cache.markCancellationRequested(runId);
-        eventAcceptanceCache.remove(runId);
         ChatRun cancelling = save(run.cancelling(reason == null || reason.isBlank() ? "USER_STOP" : reason));
         if (cancelling.status() != ChatRunStatus.CANCELLING) {
             return new ChatRunStopDecision(cancelling, false);
@@ -233,8 +235,9 @@ public class ChatRunApplicationService {
      * 判断事件是否仍允许写入 run 事件流。
      *
      * <p>这是集群部署下的关键保护：当前 JVM subscription registry 只能加速本机资源释放，
-     * 不能作为取消事实源。事件追加前必须优先检查 Redis cancel flag，并周期性回源 openGauss
-     * run 状态，确保 stop 请求打到任意节点后，其他节点不会继续写入新的 delta 或 completed。</p>
+     * 不能作为取消事实源。非终态事件只做 Redis cancel flag 快速判断，最终写入正确性由
+     * openGauss guarded insert 校验 run 状态和 execution fencing；run 终态和 run.cancelled
+     * 仍回源 DB 做幂等保护，避免重复闭合。</p>
      */
     public boolean shouldAcceptEvent(ChatEvent event) {
         if (event == null || event.runId() == null || event.runId().isBlank()) {
@@ -245,8 +248,15 @@ public class ChatRunApplicationService {
                     .map(run -> run.status() == ChatRunStatus.RUNNING || run.status() == ChatRunStatus.CANCELLING)
                     .orElse(false);
         }
-        boolean forceRepositoryCheck = "run.completed".equals(event.type()) || "run.failed".equals(event.type());
-        return shouldAcceptNonCancelledEvent(event.runId(), forceRepositoryCheck);
+        if (cache.cancellationSignal(event.runId()) == ChatRunCancelSignal.REQUESTED) {
+            return false;
+        }
+        if ("run.completed".equals(event.type()) || "run.failed".equals(event.type())) {
+            return repository.findById(event.runId())
+                    .map(run -> run.status() == ChatRunStatus.RUNNING)
+                    .orElse(false);
+        }
+        return true;
     }
 
     /**
@@ -297,38 +307,10 @@ public class ChatRunApplicationService {
         ChatRun saved = repository.save(run);
         if (saved.status().terminal()) {
             cache.evictActive(saved.tenantId(), saved.userId(), saved.sessionId());
-            eventAcceptanceCache.remove(saved.id());
         } else {
             cache.putActive(saved);
-            if (saved.status() == ChatRunStatus.CANCELLING) {
-                eventAcceptanceCache.remove(saved.id());
-            }
         }
         return saved;
-    }
-
-    private boolean shouldAcceptNonCancelledEvent(String runId, boolean forceRepositoryCheck) {
-        ChatRunCancelSignal signal = cache.cancellationSignal(runId);
-        if (signal == ChatRunCancelSignal.REQUESTED) {
-            return false;
-        }
-        if (signal == ChatRunCancelSignal.UNKNOWN) {
-            forceRepositoryCheck = true;
-        }
-        Instant now = Instant.now();
-        EventAcceptanceSnapshot snapshot = eventAcceptanceCache.get(runId);
-        if (!forceRepositoryCheck && snapshot != null && snapshot.validAt(now)) {
-            return snapshot.accept();
-        }
-        Optional<ChatRun> persisted = repository.findById(runId);
-        if (persisted.isEmpty()) {
-            eventAcceptanceCache.remove(runId);
-            return false;
-        }
-        boolean accept = persisted.get().status() == ChatRunStatus.RUNNING;
-        // 每个事件仍先看 Redis cancel flag；DB 状态只做短 TTL 快照，避免高频 token 输出把 openGauss 打成逐 token 查询。
-        eventAcceptanceCache.put(runId, new EventAcceptanceSnapshot(accept, now.plus(RUN_STATUS_FALLBACK_INTERVAL)));
-        return accept;
     }
 
     private void ensureOwnedSession(UserContext user, String sessionId) {
@@ -341,15 +323,4 @@ public class ChatRunApplicationService {
         }
     }
 
-    /**
-     * run 状态短周期判断缓存。
-     *
-     * @param accept 上一次 openGauss 判断结果。
-     * @param expiresAt 该判断结果的过期时间。
-     */
-    private record EventAcceptanceSnapshot(boolean accept, Instant expiresAt) {
-        private boolean validAt(Instant now) {
-            return expiresAt != null && expiresAt.isAfter(now);
-        }
-    }
 }

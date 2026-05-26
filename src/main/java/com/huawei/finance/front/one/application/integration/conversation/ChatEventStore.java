@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.application.integration.conversation;
 
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
+import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
 import java.util.List;
 
 /**
@@ -17,6 +18,19 @@ public interface ChatEventStore {
      * @return 带持久化 seq 的事件。
      */
     ChatEvent append(ChatEvent event);
+
+    /**
+     * 在 execution 写入权保护下追加事件，并返回带持久化序号的事件。
+     *
+     * <p>这是高并发流式输出的生产写入路径。实现层必须在同一条数据库写入语句内校验
+     * run/session/tenant/user 归属、业务 run 状态、execution owner 和 fencing token。
+     * 条件不满足时应抛出 {@link ChatEventAppendRejectedException}，调用方据此停止当前后台流。</p>
+     *
+     * @param event 原始领域事件。
+     * @param claim 后台执行流启动时获得的 execution 写入权声明。
+     * @return 带持久化 seq 的事件。
+     */
+    ChatEvent appendWithExecutionGuard(ChatEvent event, RunExecutionClaim claim);
 
     /**
      * 按用户归属查询指定会话在某个序号之后的事件。

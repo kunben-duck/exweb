@@ -166,18 +166,6 @@ public interface ChatRunExecutionMapper {
             SELECT COUNT(1)
             FROM fin_ex_chat_run_execution_t
             WHERE run_id = #{runId}
-              AND owner_instance_id = #{ownerInstanceId}
-              AND fencing_token = #{fencingToken}
-              AND execution_status = 'RUNNING'
-            """)
-    int countWritable(@Param("runId") String runId,
-                      @Param("ownerInstanceId") String ownerInstanceId,
-                      @Param("fencingToken") long fencingToken);
-
-    @Select("""
-            SELECT COUNT(1)
-            FROM fin_ex_chat_run_execution_t
-            WHERE run_id = #{runId}
               AND execution_status IN ('RUNNING', 'CANCELLING')
               AND lease_until < CURRENT_TIMESTAMP
             """)

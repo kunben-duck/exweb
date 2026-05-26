@@ -79,30 +79,30 @@ class ChatRunApplicationServiceTest {
     }
 
     @Test
-    void shouldRejectEventsWhenOpenGaussRunIsCancellingEvenWithoutRedisFlag() {
+    void shouldUseDatabaseOnlyForTerminalAndCancelledEventAdmission() {
         InMemoryRunRepository repository = new InMemoryRunRepository();
         InMemoryRunCache cache = new InMemoryRunCache();
         ChatRunApplicationService service = service(repository, cache);
         repository.save(runningRun().cancelling("USER_STOP"));
 
-        assertThat(service.shouldAcceptEvent(MessageDeltaEvent.of("run1", "session1", "late delta"))).isFalse();
+        // 非终态事件不再预查 run 表；最终拒绝由 guarded insert 的 r.status='RUNNING' 条件负责。
+        assertThat(service.shouldAcceptEvent(MessageDeltaEvent.of("run1", "session1", "late delta"))).isTrue();
         assertThat(service.shouldAcceptEvent(RunCompletedEvent.of("run1", "session1"))).isFalse();
         assertThat(service.shouldAcceptEvent(RunCancelledEvent.of("run1", "session1", "USER_STOP"))).isTrue();
     }
 
     @Test
-    void shouldRefreshPositiveAcceptanceSnapshotAfterShortTtl() throws InterruptedException {
+    void observeEventDoesNotUpdateRunForMessageDeltaOrMessageCompleted() {
         InMemoryRunRepository repository = new InMemoryRunRepository();
         InMemoryRunCache cache = new InMemoryRunCache();
         ChatRunApplicationService service = service(repository, cache);
         repository.save(runningRun());
 
-        assertThat(service.shouldAcceptEvent(MessageDeltaEvent.of("run1", "session1", "first delta"))).isTrue();
+        service.observeEvent(MessageDeltaEvent.of("run1", "session1", "first delta"));
+        service.observeEvent(new StoredChatEvent("run1", "session1", 4L, "message.completed", Instant.now(), Map.of()));
 
-        repository.save(runningRun().cancelling("USER_STOP"));
-        Thread.sleep(150);
-
-        assertThat(service.shouldAcceptEvent(MessageDeltaEvent.of("run1", "session1", "late delta"))).isFalse();
+        assertThat(repository.saved.status()).isEqualTo(ChatRunStatus.RUNNING);
+        assertThat(repository.saved.lastSeq()).isNull();
     }
 
     @Test
@@ -281,6 +281,11 @@ class ChatRunApplicationServiceTest {
         @Override
         public ChatEvent append(ChatEvent event) {
             return event;
+        }
+
+        @Override
+        public ChatEvent appendWithExecutionGuard(ChatEvent event, com.huawei.finance.front.one.domain.chat.RunExecutionClaim claim) {
+            return append(event);
         }
 
         @Override

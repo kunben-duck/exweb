@@ -113,6 +113,7 @@ class FinanceEXChatServiceTest {
                         new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
                 new ChatRunApplicationService(runs, runCache, events, readCursorService, permissionChecker, sessions),
                 leaseService,
+                new ChatDeltaCoalescer(new com.huawei.finance.front.one.application.config.ChatStreamProperties()),
                 executionRegistry,
                 new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
                 ids
@@ -175,6 +176,7 @@ class FinanceEXChatServiceTest {
                         new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
                 new ChatRunApplicationService(runs, runCache, events, readCursorService, permissionChecker, sessions),
                 leaseService,
+                new ChatDeltaCoalescer(new com.huawei.finance.front.one.application.config.ChatStreamProperties()),
                 executionRegistry,
                 new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
                 ids
@@ -306,6 +308,7 @@ class FinanceEXChatServiceTest {
             events.add(stored);
             return stored;
         }
+        @Override public ChatEvent appendWithExecutionGuard(ChatEvent event, com.huawei.finance.front.one.domain.chat.RunExecutionClaim claim) { return append(event); }
         @Override public List<ChatEvent> findByOwnerAndSessionAfterSeq(String tenantId, String userId, String sessionId, long afterSeq) { return List.of(); }
         @Override public List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId, String runId, long afterSeq) { return List.of(); }
         @Override public long findLatestSeqByOwnerAndSession(String tenantId, String userId, String sessionId) { return seq; }
@@ -331,7 +334,6 @@ class FinanceEXChatServiceTest {
         @Override public List<ChatRunExecution> findRecoveryExpired(int limit) { return List.of(); }
         @Override public Optional<ChatRunExecution> tryClaimRecovering(String runId, String recoveredByInstanceId, String strategy, Duration recoveryLeaseDuration) { return Optional.empty(); }
         @Override public Optional<ChatRunExecution> markTakeoverRunning(String runId, String ownerInstanceId, Duration leaseDuration) { return Optional.empty(); }
-        @Override public boolean isWriteAllowed(String runId, String ownerInstanceId, long fencingToken) { return true; }
         @Override public boolean isLeaseExpired(String runId, Instant now) { return false; }
     }
 

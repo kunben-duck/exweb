@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
+import reactor.util.concurrent.Queues;
 
 /**
  * 当前服务实例内的 run topic 在线事件发布器。
@@ -63,6 +64,12 @@ public class LocalChatEventStreamRegistry {
         if (nextResult.isFailure()) {
             log.warn("本机 run topic 事件投递失败，topicId={}, seq={}, result={}",
                     topicId, event.sequence(), nextResult);
+            /*
+             * live sink 只负责实时投递，不能为了慢客户端保留历史事件。溢出或投递失败时主动
+             * 通知订阅侧进入恢复流程；可靠补发始终由 openGauss + SSE resume 完成。
+             */
+            topic.sink().tryEmitError(new IllegalStateException(
+                    "run topic live sink emit failed, seq=" + event.sequence() + ", result=" + nextResult));
         }
         if (terminal) {
             Sinks.EmitResult completeResult = topic.sink().tryEmitComplete();
@@ -80,7 +87,8 @@ public class LocalChatEventStreamRegistry {
     }
 
     private static final class TopicSink {
-        private final Sinks.Many<ChatEvent> sink = Sinks.many().replay().limit(512);
+        private final Sinks.Many<ChatEvent> sink = Sinks.many().multicast()
+                .onBackpressureBuffer(Queues.SMALL_BUFFER_SIZE, false);
         private final AtomicInteger subscribers = new AtomicInteger();
 
         private Sinks.Many<ChatEvent> sink() {

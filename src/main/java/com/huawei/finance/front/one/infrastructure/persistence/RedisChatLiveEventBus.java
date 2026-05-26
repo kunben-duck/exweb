@@ -24,6 +24,7 @@ import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
+import reactor.util.concurrent.Queues;
 
 /**
  * 基于 Redis Pub/Sub 的跨实例聊天实时事件总线。
@@ -123,6 +124,13 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
             if (nextResult.isFailure()) {
                 log.warn("Redis ChatLiveEventBus 本机投递失败，topicId={}, seq={}, result={}",
                         topicId, event.sequence(), nextResult);
+                /*
+                 * Redis Pub/Sub 不是可靠队列，不能在本地堆积历史。投递失败时结束该 live 流，
+                 * 上层 ChatStreamApplicationService 会把错误转换成 RECOVER_REQUIRED，引导前端
+                 * 使用 openGauss 事实源做 SSE resume。
+                 */
+                sink.sink().tryEmitError(new IllegalStateException(
+                        "redis live sink emit failed, seq=" + event.sequence() + ", result=" + nextResult));
             }
             if (terminal(event)) {
                 Sinks.EmitResult completeResult = sink.sink().tryEmitComplete();
@@ -205,7 +213,8 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     }
 
     private static class TopicSink {
-        private final Sinks.Many<ChatEvent> sink = Sinks.many().replay().limit(512);
+        private final Sinks.Many<ChatEvent> sink = Sinks.many().multicast()
+                .onBackpressureBuffer(Queues.SMALL_BUFFER_SIZE, false);
         private final AtomicInteger subscribers = new AtomicInteger();
         private final ChannelTopic redisTopic;
         private volatile boolean registered = true;

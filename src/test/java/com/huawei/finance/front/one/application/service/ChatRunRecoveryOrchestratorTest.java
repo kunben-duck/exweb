@@ -88,7 +88,7 @@ class ChatRunRecoveryOrchestratorTest {
     }
 
     @Test
-    void fencingRejectsOldOwnerAfterRecoveryClaim() {
+    void recoveryClaimMovesExecutionOutOfWritableRunningState() {
         InMemoryExecutionRepository executions = new InMemoryExecutionRepository();
         ChatRun run = runningRun();
         executions.put(staleExecution(run));
@@ -97,7 +97,7 @@ class ChatRunRecoveryOrchestratorTest {
                 "MANUAL_CONFIRMATION", Duration.ofSeconds(30));
 
         assertThat(claimed).isPresent();
-        assertThat(executions.isWriteAllowed("run1", "instance-a", 1L)).isFalse();
+        assertThat(claimed.get().executionStatus()).isEqualTo(ChatRunExecutionStatus.RECOVERING);
         assertThat(claimed.get().fencingToken()).isEqualTo(2L);
     }
 
@@ -258,11 +258,6 @@ class ChatRunRecoveryOrchestratorTest {
             return Optional.of(claimed);
         }
         @Override public Optional<ChatRunExecution> markTakeoverRunning(String runId, String ownerInstanceId, Duration leaseDuration) { return Optional.empty(); }
-        @Override public boolean isWriteAllowed(String runId, String ownerInstanceId, long fencingToken) {
-            return findByRunId(runId).filter(e -> e.executionStatus() == ChatRunExecutionStatus.RUNNING)
-                    .filter(e -> ownerInstanceId.equals(e.ownerInstanceId()))
-                    .filter(e -> fencingToken == e.fencingToken()).isPresent();
-        }
         @Override public boolean isLeaseExpired(String runId, Instant now) {
             return findByRunId(runId).filter(e -> e.leaseUntil().isBefore(now)).isPresent();
         }
@@ -276,6 +271,7 @@ class ChatRunRecoveryOrchestratorTest {
             events.add(stored);
             return stored;
         }
+        @Override public ChatEvent appendWithExecutionGuard(ChatEvent event, com.huawei.finance.front.one.domain.chat.RunExecutionClaim claim) { return append(event); }
         @Override public List<ChatEvent> findByOwnerAndSessionAfterSeq(String tenantId, String userId, String sessionId, long afterSeq) { return List.of(); }
         @Override public List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId, String runId, long afterSeq) { return List.of(); }
         @Override public long findLatestSeqByOwnerAndSession(String tenantId, String userId, String sessionId) { return seq; }

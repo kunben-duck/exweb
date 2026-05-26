@@ -88,20 +88,6 @@ public class ChatRunLeaseApplicationService {
     }
 
     /**
-     * 校验当前执行流是否仍可写入本 run 的事件。
-     *
-     * @param claim 当前执行流写入权声明。
-     * @return true 表示 owner、状态和 fencing token 仍匹配。
-     */
-    public boolean canWriteRunEvent(RunExecutionClaim claim) {
-        if (claim == null) {
-            // 生产路径必须先创建 execution 并持有 claim；缺失 claim 时宁可停止输出，也不能绕过 fencing。
-            return false;
-        }
-        return executionRepository.isWriteAllowed(claim.runId(), claim.ownerInstanceId(), claim.fencingToken());
-    }
-
-    /**
      * 判断 run execution 租约是否已经过期。
      *
      * @param runId run 标识。

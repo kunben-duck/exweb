@@ -119,6 +119,12 @@ financeex:
     redis-key-prefix: fin_ex:chat_read_cursor
     redis-ttl: 7d
     database-flush-interval: 5s
+  chat-stream:
+    # 将连续 message.delta 合并成几十毫秒级文本片段，降低 openGauss event 表、Redis Pub/Sub 与 WS 投递写放大。
+    # 对外事件类型仍是 message.delta，前端协议和 afterSeq 恢复语义不变。
+    delta-coalesce-enabled: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_ENABLED:true}
+    delta-coalesce-window: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_WINDOW:50ms}
+    delta-coalesce-max-chars: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_MAX_CHARS:512}
   mvc:
     sse:
       # run 级 SSE resume 在 active run 无业务 token 时发送 heartbeat，防止 Servlet async、网关或代理误判空闲断流。

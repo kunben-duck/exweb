@@ -365,11 +365,11 @@ sequenceDiagram
             RelayAgent-->>Runtime: "WebSocket 文本/JSON 帧"
         end
         Runtime-->>SuperAgent: "标准 ChatEvent(message.delta)"
-        SuperAgent->>EventStore: "append(delta)"
-        EventStore->>DB: "持久化 seq"
-        SuperAgent->>RunStore: "刷新 lastSeq"
-        SuperAgent->>Live: "publish(delta)"
-        SuperAgent->>RedisBus: "publish(delta)"
+        SuperAgent->>SuperAgent: "连续 delta 合并"
+        SuperAgent->>EventStore: "guarded append(delta)"
+        EventStore->>DB: "INSERT...SELECT 校验 run/session/execution 并生成 seq"
+        SuperAgent->>Live: "publish persisted delta"
+        SuperAgent->>RedisBus: "publish persisted delta"
         SuperAgent->>DB: "run.completed 后保存完整 assistant message 并更新 current leaf"
     and "前端实时订阅链路，只订阅 ChatEvent，不触发 Runtime query"
         Frontend->>ChatWS: "WS subscribe(topicId=streamTopicId, afterSeq=firstSeq)"
@@ -647,7 +647,7 @@ stateDiagram-v2
 stop 语义：
 
 - 集群事实源优先：stop 先写 Redis cancel flag 与 openGauss `CANCELLING` 状态，再发布 `run.cancelled`。
-- JVM subscription registry 只是本机资源释放加速器；即使 stop 请求与输出流落在不同实例，输出实例也必须在追加事件前读取 Redis cancel flag，并周期性回源 `fin_ex_chat_run_t` 校验 run 状态。
+- JVM subscription registry 只是本机资源释放加速器；即使 stop 请求与输出流落在不同实例，输出实例也必须在追加事件前读取 Redis cancel flag。非终态事件不再逐条回源 run 表，最终写入正确性由 openGauss guarded insert 同时校验 run 状态、session 归属和 execution fencing。
 - 下游尽力取消：Relay Runtime 和 SubAgent cancel 失败只记录日志，不影响前端收到取消终态。
 - stop 不取消 RuntimeBinding；下一轮仍可续接 Runtime，除非请求 metadata 使用 `forceNewTask=true`。
 
@@ -662,6 +662,7 @@ stop 语义：
 - Relay HTTP Streamable adapter：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`、`financeex.agent-runtime.stop-path`
 - Relay WebSocket adapter：设置 `financeex.agent-runtime.provider=relay`、`financeex.agent-runtime.api-adapter=relay-websocket`，并配置 `financeex.agent-runtime.base-url` 与 `financeex.agent-runtime.websocket-path`；adapter 会把 `http(s)://` base-url 转换为 `ws(s)://` 出站连接地址
 - Relay Cookie 透传：`financeex.agent-runtime.forward-cookie.enabled`、`max-length`、`allowed-adapters`。默认只允许 `relay-stream-http` 与 `relay-websocket` 接收入口 Cookie。
+- 流式 delta 合并：`financeex.chat-stream.delta-coalesce-enabled`、`delta-coalesce-window`、`delta-coalesce-max-chars`。默认开启，只把连续 `message.delta` 合并为标准 delta event，降低事件表和实时 fanout 写放大。
 
 SubAgent 当前只支持单轮 HTTP 文本流调用。当前上线版本内置一个 `RelayAgentRuntime` provider 和两个 `RelayRuntimeProtocolAdapter`：`relay-stream-http` 是 Relay HTTP 流式协议实现，`relay-websocket` 是 RelayAgent WebSocket 对话协议实现。新增下游协议时，应新增 adapter，而不是在 `RelayAgentRuntime` 主类里堆转换分支。
 

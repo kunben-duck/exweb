@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.application.service;
 
 import com.huawei.finance.front.one.application.facade.FinanceChatFacade;
 import com.huawei.finance.front.one.application.facade.DocumentFacade;
+import com.huawei.finance.front.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
@@ -29,7 +30,6 @@ import com.huawei.finance.front.one.domain.routing.RouteTarget;
 import com.huawei.finance.front.one.domain.routing.RouteType;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import java.util.List;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -68,6 +68,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private final ChatStreamApplicationService chatStreamService;
     private final ChatRunApplicationService chatRunService;
     private final ChatRunLeaseApplicationService chatRunLeaseService;
+    private final ChatDeltaCoalescer chatDeltaCoalescer;
     private final LocalChatRunExecutionRegistry runExecutionRegistry;
     private final RunAdmissionControlService runAdmissionControl;
     private final IdGenerator idGenerator;
@@ -78,7 +79,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                 SubAgentExecutor subAgentExecutor, SystemResponseExecutor systemResponseExecutor,
                                 AgentRuntimeExecutor agentRuntimeExecutor, DocumentFacade documentFacade, ChatStreamApplicationService chatStreamService,
                                 ChatRunApplicationService chatRunService, ChatRunLeaseApplicationService chatRunLeaseService,
-                                LocalChatRunExecutionRegistry runExecutionRegistry,
+                                ChatDeltaCoalescer chatDeltaCoalescer, LocalChatRunExecutionRegistry runExecutionRegistry,
                                 RunAdmissionControlService runAdmissionControl, IdGenerator idGenerator) {
         this.sessionService = sessionService;
         this.memoryService = memoryService;
@@ -91,6 +92,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         this.chatStreamService = chatStreamService;
         this.chatRunService = chatRunService;
         this.chatRunLeaseService = chatRunLeaseService;
+        this.chatDeltaCoalescer = chatDeltaCoalescer;
         this.runExecutionRegistry = runExecutionRegistry;
         this.runAdmissionControl = runAdmissionControl;
         this.idGenerator = idGenerator;
@@ -115,6 +117,11 @@ public class FinanceEXChatService implements FinanceChatFacade {
                             }
                         }
                         firstEvent.tryEmitValue(event);
+                    })
+                    .doOnComplete(() -> {
+                        if (runIdRef.get() == null) {
+                            firstEvent.tryEmitError(new IllegalStateException("chat run finished before emitting any persisted event"));
+                        }
                     })
                     .doFinally(signalType -> {
                         terminal.set(true);
@@ -297,8 +304,15 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                                        AtomicReference<RuntimeBinding> bindingRef,
                                                        StringBuilder assistant, String runId,
                                                        RunExecutionClaim executionClaim) {
-        return events
+        AtomicBoolean writeRejected = new AtomicBoolean(false);
+        return chatDeltaCoalescer.coalesce(events)
+                .onErrorResume(ex -> Flux.just(ErrorEvent.of(runId, session.id(),
+                        "RUN_STREAM_COALESCE_ERROR", ex.getMessage())))
                 .<ChatEvent>handle((event, sink) -> {
+                    if (writeRejected.get()) {
+                        sink.complete();
+                        return;
+                    }
                     if (!eventBelongsToCurrentRun(event, runId, session.id())) {
                         /*
                          * 下游 Runtime/SubAgent 的输出不是身份事实。任何 runId/sessionId 不匹配的事件
@@ -315,45 +329,50 @@ public class FinanceEXChatService implements FinanceChatFacade {
                         sink.complete();
                         return;
                     }
-                    if (!shouldAcceptExecutionEvent(event, executionClaim)) {
+                    if (!chatRunService.shouldAcceptEvent(event)) {
                         sink.complete();
                         return;
                     }
                     sink.next(event);
                 })
                 .concatMap(event -> {
-                    appendAssistantDelta(assistant, event);
-                    /*
-                     * run.completed 是前端、SSE resume 和跨设备续接共同认可的“本轮回答已经闭合”信号。
-                     * 因此在发布该终态事件之前，必须先把完整 assistant 消息写入历史消息树，
-                     * 避免客户端收到 completed 后立即查询历史时只能看到 user 节点。
-                     */
-                    if ("run.completed".equals(event.type()) && !assistant.isEmpty()) {
-                        ChatMessage savedAssistant = sessionService.saveAssistantMessage(user.tenantId(), user.userId(),
-                                session, assistant.toString(), runId, messagePlan.userMessage().id(),
-                                messagePlan.regeneratedFromMessageId());
-                        chatRunService.bindAssistantMessage(runId, savedAssistant.id());
-                        bindingRef.set(runtimeBindingService.moveToLeaf(bindingRef.get(), savedAssistant.id()));
+                    try {
+                        /*
+                         * 只有 DB guarded insert 成功后，事件才算事实成立。assistant 文本累积、
+                         * 历史消息写入、run 状态推进和 Redis/WebSocket 发布都以该持久化结果为准，
+                         * 避免 stop/watchdog 后的迟到 delta 进入用户可见历史。
+                         */
+                        ChatEvent stored = chatStreamService.appendWithExecutionGuard(event, executionClaim);
+                        appendAssistantDelta(assistant, stored);
+                        /*
+                         * run.completed 是前端、SSE resume 和跨设备续接共同认可的“本轮回答已经闭合”信号。
+                         * 因此在发布该终态事件之前，必须先把完整 assistant 消息写入历史消息树，
+                         * 避免客户端收到 completed 后立即查询历史时只能看到 user 节点。
+                         */
+                        if ("run.completed".equals(stored.type()) && !assistant.isEmpty()) {
+                            ChatMessage savedAssistant = sessionService.saveAssistantMessage(user.tenantId(), user.userId(),
+                                    session, assistant.toString(), runId, messagePlan.userMessage().id(),
+                                    messagePlan.regeneratedFromMessageId());
+                            chatRunService.bindAssistantMessage(runId, savedAssistant.id());
+                            bindingRef.set(runtimeBindingService.moveToLeaf(bindingRef.get(), savedAssistant.id()));
+                        }
+                        // 事件已经带有 openGauss 持久化 seq，实时输出与断线补发看到的是同一份顺序。
+                        chatRunService.observeEvent(stored);
+                        markExecutionTerminalIfNeeded(stored);
+                        bindingRef.set(runtimeBindingService.observeEvent(bindingRef.get(), stored));
+                        chatStreamService.publishPersisted(stored);
+                        return Mono.just(stored);
+                    } catch (ChatEventAppendRejectedException ex) {
+                        writeRejected.set(true);
+                        log.info("Stop chat run event stream after guarded insert rejection. runId={}, reason={}",
+                                runId, ex.getMessage());
+                        return Mono.empty();
                     }
-                    ChatEvent stored = chatStreamService.appendAndPublish(event);
-                    // 事件已经带有 openGauss 持久化 seq，实时输出与断线补发看到的是同一份顺序。
-                    chatRunService.observeEvent(stored);
-                    markExecutionTerminalIfNeeded(stored);
-                    bindingRef.set(runtimeBindingService.observeEvent(bindingRef.get(), stored));
-                    return Mono.just(stored);
                 });
     }
 
     private boolean eventBelongsToCurrentRun(ChatEvent event, String runId, String sessionId) {
         return event != null && runId.equals(event.runId()) && sessionId.equals(event.sessionId());
-    }
-
-    private boolean shouldAcceptExecutionEvent(ChatEvent event, RunExecutionClaim executionClaim) {
-        /*
-         * executionClaim 是后台执行流的写入栅栏。即使业务 run 仍是 RUNNING，只要 watchdog
-         * 或 takeover 已递增 fencing token，旧实例迟到输出也必须被拒绝，避免覆盖新的终态或续接。
-         */
-        return chatRunLeaseService.canWriteRunEvent(executionClaim) && chatRunService.shouldAcceptEvent(event);
     }
 
     private void markExecutionTerminalIfNeeded(ChatEvent event) {

@@ -1,0 +1,89 @@
+package com.huawei.finance.front.one.application.service;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.huawei.finance.front.one.application.config.ChatStreamProperties;
+import com.huawei.finance.front.one.domain.chat.ChatEvent;
+import com.huawei.finance.front.one.domain.chat.ErrorEvent;
+import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
+import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
+import java.time.Duration;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+import reactor.core.publisher.Flux;
+
+class ChatDeltaCoalescerTest {
+    @Test
+    void coalescesConsecutiveDeltaAndFlushesBeforeBoundaryEvent() {
+        ChatStreamProperties properties = new ChatStreamProperties();
+        properties.setDeltaCoalesceWindow(Duration.ofSeconds(5));
+        properties.setDeltaCoalesceMaxChars(512);
+        ChatDeltaCoalescer coalescer = new ChatDeltaCoalescer(properties);
+
+        List<ChatEvent> events = coalescer.coalesce(Flux.just(
+                MessageDeltaEvent.of("run1", "session1", "你"),
+                MessageDeltaEvent.of("run1", "session1", "好"),
+                MessageCompletedEvent.of("run1", "session1")
+        )).collectList().block();
+
+        assertThat(events).hasSize(2);
+        assertThat(events.get(0).type()).isEqualTo("message.delta");
+        assertThat(events.get(0).payload()).containsEntry("delta", "你好");
+        assertThat(events.get(1).type()).isEqualTo("message.completed");
+    }
+
+    @Test
+    void flushesWhenMaxCharsReached() {
+        ChatStreamProperties properties = new ChatStreamProperties();
+        properties.setDeltaCoalesceWindow(Duration.ofSeconds(5));
+        properties.setDeltaCoalesceMaxChars(2);
+        ChatDeltaCoalescer coalescer = new ChatDeltaCoalescer(properties);
+
+        List<ChatEvent> events = coalescer.coalesce(Flux.just(
+                MessageDeltaEvent.of("run1", "session1", "ab"),
+                MessageDeltaEvent.of("run1", "session1", "c"),
+                MessageCompletedEvent.of("run1", "session1")
+        )).collectList().block();
+
+        assertThat(events).hasSize(3);
+        assertThat(events.get(0).payload()).containsEntry("delta", "ab");
+        assertThat(events.get(1).payload()).containsEntry("delta", "c");
+    }
+
+    @Test
+    void doesNotMergeDeltaAcrossDifferentRunOrSession() {
+        ChatStreamProperties properties = new ChatStreamProperties();
+        properties.setDeltaCoalesceWindow(Duration.ofSeconds(5));
+        ChatDeltaCoalescer coalescer = new ChatDeltaCoalescer(properties);
+
+        List<ChatEvent> events = coalescer.coalesce(Flux.just(
+                MessageDeltaEvent.of("run1", "session1", "a"),
+                MessageDeltaEvent.of("run2", "session2", "b"),
+                MessageCompletedEvent.of("run2", "session2")
+        )).collectList().block();
+
+        assertThat(events).hasSize(3);
+        assertThat(events.get(0).runId()).isEqualTo("run1");
+        assertThat(events.get(0).payload()).containsEntry("delta", "a");
+        assertThat(events.get(1).runId()).isEqualTo("run2");
+        assertThat(events.get(1).payload()).containsEntry("delta", "b");
+    }
+
+    @Test
+    void flushesBufferedDeltaBeforePropagatingSourceError() {
+        ChatStreamProperties properties = new ChatStreamProperties();
+        properties.setDeltaCoalesceWindow(Duration.ofSeconds(5));
+        ChatDeltaCoalescer coalescer = new ChatDeltaCoalescer(properties);
+
+        List<ChatEvent> events = coalescer.coalesce(Flux.concat(
+                Flux.just(MessageDeltaEvent.of("run1", "session1", "partial")),
+                Flux.error(new IllegalStateException("boom"))
+        )).onErrorResume(ex -> Flux.just(ErrorEvent.of("run1", "session1", "ERR", ex.getMessage())))
+                .collectList()
+                .block();
+
+        assertThat(events).hasSize(2);
+        assertThat(events.get(0).payload()).containsEntry("delta", "partial");
+        assertThat(events.get(1).type()).isEqualTo("run.failed");
+    }
+}

@@ -3,10 +3,12 @@ package com.huawei.finance.front.one.infrastructure.persistence;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.finance.front.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
+import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
 import java.time.Instant;
 import java.util.List;
@@ -56,11 +58,42 @@ public class OpenGaussChatEventStore implements ChatEventStore {
             throw new IllegalStateException("聊天事件无法落库，run 与 session 归属不一致或不存在: runId="
                     + event.runId() + ", sessionId=" + event.sessionId());
         }
-        ChatEventRow insertedRow = mapper.findById(eventId);
-        if (insertedRow == null) {
-            throw new IllegalStateException("聊天事件落库后回读失败: " + eventId);
+        return toStoredEvent(event, seq, createdAt);
+    }
+
+    @Override
+    public ChatEvent appendWithExecutionGuard(ChatEvent event, RunExecutionClaim claim) {
+        if (claim == null) {
+            throw new ChatEventAppendRejectedException("run execution claim 为空，拒绝写入聊天事件");
         }
-        return toDomain(insertedRow);
+        String eventId = idGenerator.newId("event",
+                IdGenerateContext.of(null, null, event.sessionId(), event.runId()));
+        Instant createdAt = event.createdAt() == null ? Instant.now() : event.createdAt();
+        Long seq = mapper.nextSeq();
+        if (seq == null) {
+            throw new IllegalStateException("聊天事件序号生成失败");
+        }
+        /*
+         * guarded insert 是流式输出的最终写入栅栏：同一条 SQL 同时校验 run/session 归属、
+         * run 业务状态、execution owner 与 fencing token。这样避免每个 delta 先查 execution
+         * 再插入事件的两次 DB 往返，也能挡住 stop/watchdog 后的迟到 token。
+         */
+        int inserted = mapper.insertFromSessionWithExecutionGuard(
+                eventId,
+                event.sessionId(),
+                event.runId(),
+                seq,
+                event.type(),
+                toJson(event.payload()),
+                createdAt,
+                claim.ownerInstanceId(),
+                claim.fencingToken()
+        );
+        if (inserted == 0) {
+            throw new ChatEventAppendRejectedException("聊天事件写入被 execution guard 拒绝: runId="
+                    + event.runId() + ", sessionId=" + event.sessionId());
+        }
+        return toStoredEvent(event, seq, createdAt);
     }
 
     @Override
@@ -94,6 +127,17 @@ public class OpenGaussChatEventStore implements ChatEventStore {
                 row.getEventType(),
                 row.getCreatedAt() == null ? Instant.EPOCH : row.getCreatedAt(),
                 fromJson(row.getPayloadJson())
+        );
+    }
+
+    private ChatEvent toStoredEvent(ChatEvent event, long seq, Instant createdAt) {
+        return new StoredChatEvent(
+                event.runId(),
+                event.sessionId(),
+                seq,
+                event.type(),
+                createdAt,
+                event.payload() == null ? Map.of() : event.payload()
         );
     }
 

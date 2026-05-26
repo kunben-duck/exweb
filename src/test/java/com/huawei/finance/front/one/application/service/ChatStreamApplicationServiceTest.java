@@ -234,6 +234,11 @@ class ChatStreamApplicationServiceTest {
         }
 
         @Override
+        public ChatEvent appendWithExecutionGuard(ChatEvent event, com.huawei.finance.front.one.domain.chat.RunExecutionClaim claim) {
+            return append(event);
+        }
+
+        @Override
         public List<ChatEvent> findByOwnerAndSessionAfterSeq(String tenantId, String userId, String sessionId, long afterSeq) {
             return events.stream()
                     .filter(event -> sessionId.equals(event.sessionId()))

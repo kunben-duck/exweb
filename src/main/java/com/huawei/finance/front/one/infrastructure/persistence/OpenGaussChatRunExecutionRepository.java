@@ -107,11 +107,6 @@ public class OpenGaussChatRunExecutionRepository implements ChatRunExecutionRepo
     }
 
     @Override
-    public boolean isWriteAllowed(String runId, String ownerInstanceId, long fencingToken) {
-        return mapper.countWritable(runId, ownerInstanceId, fencingToken) > 0;
-    }
-
-    @Override
     public boolean isLeaseExpired(String runId, Instant now) {
         return mapper.countLeaseExpired(runId) > 0;
     }

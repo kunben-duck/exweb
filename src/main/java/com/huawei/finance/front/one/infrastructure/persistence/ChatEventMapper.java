@@ -44,21 +44,39 @@ public interface ChatEventMapper {
             @Param("createdAt") Instant createdAt
     );
 
-    @Select("""
-            SELECT id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
-            FROM fin_ex_chat_event_t
-            WHERE id = #{id}
+    @Insert("""
+            INSERT INTO fin_ex_chat_event_t(
+                id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
+            )
+            SELECT #{id}, s.tenant_id, s.user_id, s.id, r.id, #{seq}, #{eventType}, #{payloadJson}, #{createdAt}
+            FROM fin_ex_chat_session_t s
+            JOIN fin_ex_chat_run_t r
+              ON r.id = #{runId}
+             AND r.session_id = s.id
+             AND r.tenant_id = s.tenant_id
+             AND r.user_id = s.user_id
+             AND r.status = 'RUNNING'
+            JOIN fin_ex_chat_run_execution_t e
+              ON e.run_id = r.id
+             AND e.tenant_id = r.tenant_id
+             AND e.user_id = r.user_id
+             AND e.session_id = r.session_id
+             AND e.owner_instance_id = #{ownerInstanceId}
+             AND e.fencing_token = #{fencingToken}
+             AND e.execution_status = 'RUNNING'
+            WHERE s.id = #{sessionId}
             """)
-    @Results(id = "chatEventResultMap", value = {
-            @Result(column = "tenant_id", property = "tenantId"),
-            @Result(column = "user_id", property = "userId"),
-            @Result(column = "session_id", property = "sessionId"),
-            @Result(column = "run_id", property = "runId"),
-            @Result(column = "event_type", property = "eventType"),
-            @Result(column = "payload_json", property = "payloadJson"),
-            @Result(column = "created_at", property = "createdAt")
-    })
-    ChatEventRow findById(@Param("id") String id);
+    int insertFromSessionWithExecutionGuard(
+            @Param("id") String id,
+            @Param("sessionId") String sessionId,
+            @Param("runId") String runId,
+            @Param("seq") long seq,
+            @Param("eventType") String eventType,
+            @Param("payloadJson") String payloadJson,
+            @Param("createdAt") Instant createdAt,
+            @Param("ownerInstanceId") String ownerInstanceId,
+            @Param("fencingToken") long fencingToken
+    );
 
     @Select("""
             SELECT id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
@@ -69,7 +87,15 @@ public interface ChatEventMapper {
               AND seq > #{afterSeq}
             ORDER BY seq ASC
             """)
-    @ResultMap("chatEventResultMap")
+    @Results(id = "chatEventResultMap", value = {
+            @Result(column = "tenant_id", property = "tenantId"),
+            @Result(column = "user_id", property = "userId"),
+            @Result(column = "session_id", property = "sessionId"),
+            @Result(column = "run_id", property = "runId"),
+            @Result(column = "event_type", property = "eventType"),
+            @Result(column = "payload_json", property = "payloadJson"),
+            @Result(column = "created_at", property = "createdAt")
+    })
     List<ChatEventRow> findByOwnerAndSessionAfterSeq(
             @Param("tenantId") String tenantId,
             @Param("userId") String userId,

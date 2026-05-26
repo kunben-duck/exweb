@@ -92,16 +92,6 @@ public interface ChatRunExecutionRepository {
     Optional<ChatRunExecution> markTakeoverRunning(String runId, String ownerInstanceId, Duration leaseDuration);
 
     /**
-     * 检查当前执行流 claim 是否仍有权写入 run 事件。
-     *
-     * @param runId run 标识。
-     * @param ownerInstanceId claim 中的 owner 实例 ID。
-     * @param fencingToken claim 中的 fencing token。
-     * @return true 表示允许继续写入 run 事件。
-     */
-    boolean isWriteAllowed(String runId, String ownerInstanceId, long fencingToken);
-
-    /**
      * 判断 execution 是否已经超出租约。
      *
      * @param runId run 标识。

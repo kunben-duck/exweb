@@ -742,6 +742,9 @@ ws.send(JSON.stringify({
 | `run.failed` | 本轮 run 失败 | 展示错误信息，关闭 loading |
 | `run.cancelled` | 用户停止本轮回答 | 展示已停止，关闭 loading |
 
+服务端可能把下游逐 token 输出合并为几十毫秒级 `message.delta` 文本片段。前端只需要按 `seq`
+顺序追加 `payload.delta`，不要假设一个 delta 等于一个 token。
+
 ### ACK
 
 前端每处理完一个事件，可以回传最新 `sequence`。后端会把 ack 写入服务端 read cursor：

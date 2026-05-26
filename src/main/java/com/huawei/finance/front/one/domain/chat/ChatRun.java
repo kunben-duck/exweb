@@ -92,7 +92,10 @@ public record ChatRun(
     }
 
     /**
-     * 记录非终态事件的最后序号。
+     * 记录需要写回 run 表的关键事件最后序号。
+     *
+     * <p>高并发流式输出期间，运行中 latest seq 以 {@code fin_ex_chat_event_t} 为事实源；
+     * run 表主要在 run.started 和终态事件路径更新，避免每个 delta 都写放大。</p>
      */
     public ChatRun withLastSeq(long sequence) {
         return new ChatRun(id, tenantId, userId, sessionId, status, routeType, agentCode, runtimeProvider,

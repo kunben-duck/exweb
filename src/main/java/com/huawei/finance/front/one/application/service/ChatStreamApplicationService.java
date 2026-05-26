@@ -8,6 +8,7 @@ import com.huawei.finance.front.one.application.integration.conversation.Session
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
+import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
 import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -61,11 +62,37 @@ public class ChatStreamApplicationService {
      */
     public ChatEvent appendAndPublish(ChatEvent event) {
         ChatEvent persisted = eventStore.append(event);
+        publishPersisted(persisted);
+        return persisted;
+    }
+
+    /**
+     * 在 execution 写入权保护下持久化事件，但暂不发布。
+     *
+     * <p>run.completed 需要先保证事件能通过 DB 栅栏，再写完整 assistant 历史消息，最后发布终态。
+     * 因此主编排会先调用该方法拿到持久化 seq，再决定是否发布。</p>
+     *
+     * @param event 原始事件。
+     * @param claim 当前后台执行流持有的写入权声明。
+     * @return 带持久化 seq 的事件。
+     */
+    public ChatEvent appendWithExecutionGuard(ChatEvent event, RunExecutionClaim claim) {
+        return eventStore.appendWithExecutionGuard(event, claim);
+    }
+
+    /**
+     * 发布已经写入 openGauss 的事实事件。
+     *
+     * <p>该方法只接受持久化后的事件。调用方必须先完成 openGauss append，避免 Redis 或本机
+     * live sink 推送出无法被 SSE resume 恢复的“悬空事件”。</p>
+     *
+     * @param persisted 已持久化并带有 seq 的事件。
+     */
+    public void publishPersisted(ChatEvent persisted) {
         registry.publish(persisted);
         if (persisted.runId() != null && !persisted.runId().isBlank()) {
             liveEventBus.publish(ChatStreamTopics.runTopic(persisted.runId()), persisted);
         }
-        return persisted;
     }
 
     /**

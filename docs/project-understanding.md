@@ -44,8 +44,9 @@ rg -n "methodName|className" src/main/java/com/huawei/finance/front/one
 
 - `application/service/ChatStreamApplicationService.java`
 - `ChatStreamApplicationService#appendAndPublish(...)`
+- `ChatStreamApplicationService#appendWithExecutionGuard(...)`
 - `infrastructure/persistence/OpenGaussChatEventStore.java`
-- `OpenGaussChatEventStore#append(...)`
+- `OpenGaussChatEventStore#appendWithExecutionGuard(...)`
 
 ### 2.3 ChatRun：一次后台回答
 
@@ -67,7 +68,7 @@ rg -n "methodName|className" src/main/java/com/huawei/finance/front/one
 - `ChatRunApplicationService#observeEvent(...)`
 - `application/service/ChatRunLeaseApplicationService.java`
 - `ChatRunLeaseApplicationService#startRun(...)`
-- `ChatRunLeaseApplicationService#canWriteRunEvent(...)`
+- `OpenGaussChatEventStore#appendWithExecutionGuard(...)`
 
 ## 3. 用户发起提问的入口链路
 
@@ -352,32 +353,46 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
    - 校验下游事件的 `runId` 和 `sessionId`。
    - 不匹配时生成 `RUN_EVENT_IDENTITY_MISMATCH`，防止串会话。
 
-2. `shouldAcceptExecutionEvent(...)`
-   - 调 `ChatRunLeaseApplicationService#canWriteRunEvent(...)` 校验 execution fencing。
-   - 调 `ChatRunApplicationService#shouldAcceptEvent(...)` 校验 run cancel / terminal 状态。
+2. `ChatDeltaCoalescer#coalesce(...)`
+   - 只合并连续 `message.delta`，降低逐 token 写库、Redis publish 和 WebSocket 投递放大。
+   - 遇到 `run.started`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled` 会先 flush，再原样输出边界事件。
 
-3. `appendAssistantDelta(...)`
+3. `ChatRunApplicationService#shouldAcceptEvent(...)`
+   - 先看 Redis cancel flag。
+   - `run.cancelled` 和 run 终态会回源 run 表做幂等状态判断。
+   - 运行中的 `message.delta/message.completed` 不再逐条查 run 表；最终写入正确性由 guarded insert 的 run 状态与 execution fencing 条件保证。
+
+4. `ChatStreamApplicationService#appendWithExecutionGuard(...)`
+   - 进入 `OpenGaussChatEventStore#appendWithExecutionGuard(...)`。
+   - Mapper 使用 `INSERT ... SELECT ... JOIN fin_ex_chat_session_t + fin_ex_chat_run_t + fin_ex_chat_run_execution_t`。
+   - 同一条 SQL 校验 run/session/tenant/user 归属、run 状态、execution owner 和 fencing token。
+   - 条件不满足时抛出写入拒绝，后台流停止，不发布该事件。
+
+5. `appendAssistantDelta(...)`
    - 累积 `message.delta` 内容。
-   - 注意：这里只在内存中累积，不写历史消息表。
+   - 注意：只有 guarded insert 成功后的 delta 才会进入 assistant buffer，不写未持久化的迟到 token。
 
-4. run 完成前保存完整 assistant message
+6. run 完成前保存完整 assistant message
    - 当事件类型是 `run.completed` 且 assistant buffer 非空时：
      - `SessionApplicationService#saveAssistantMessage(...)`
      - `ChatRunApplicationService#bindAssistantMessage(...)`
      - `RuntimeBindingApplicationService#moveToLeaf(...)`
 
-5. `ChatStreamApplicationService#appendAndPublish(...)`
-   - 进入事件入库和发布。
+7. `ChatRunApplicationService#observeEvent(...)`
+   - `run.started` 写 `firstSeq`。
+   - `run.completed/run.failed/run.cancelled` 写 `lastSeq/status/finishedAt`。
+   - `message.delta` 不再逐条更新 run 表；实时 latest seq 以 event 表为准。
 
-6. `ChatRunApplicationService#observeEvent(...)`
-   - 根据已持久化事件推进 run 状态和 `firstSeq/lastSeq`。
+8. `ChatStreamApplicationService#publishPersisted(...)`
+   - 只发布已经成功写入 openGauss、带 seq 的事件。
+   - 本机 live sink 与 Redis Pub/Sub 都不是事实源。
 
-7. `RuntimeBindingApplicationService#observeEvent(...)`
+9. `RuntimeBindingApplicationService#observeEvent(...)`
    - 从 event payload 中观察并保存 `runtimeSessionId`。
 
 重点排查：
 
-- Relay delta 到了但 event 表没有：查 `eventBelongsToCurrentRun(...)` 和 `shouldAcceptExecutionEvent(...)`。
+- Relay delta 到了但 event 表没有：查 `eventBelongsToCurrentRun(...)`、`ChatRunApplicationService#shouldAcceptEvent(...)` 和 guarded insert 条件。
 - stop 后还在写 token：查 `ChatRunApplicationService#shouldAcceptEvent(...)` 是否识别 Redis cancel flag。
 - completed 到了但历史消息没有 assistant：查 `run.completed` 前的 `SessionApplicationService#saveAssistantMessage(...)`。
 - Runtime 多轮没有 runtimeSessionId：查 `RuntimeBindingApplicationService#observeEvent(...)` 和 event payload。
@@ -424,15 +439,16 @@ src/main/java/com/huawei/finance/front/one/infrastructure/persistence/OpenGaussC
 
 ```text
 OpenGaussChatEventStore#append(...)
+OpenGaussChatEventStore#appendWithExecutionGuard(...)
 ```
 
 写入步骤：
 
 1. 生成 eventId。
 2. 调 `ChatEventMapper#nextSeq()` 获取 openGauss sequence。
-3. 调 `ChatEventMapper#insertFromSession(...)` 写 `fin_ex_chat_event_t`。
-4. 回读 `ChatEventMapper#findById(...)`。
-5. 转成 `StoredChatEvent` 返回。
+3. 普通恢复/取消/系统补偿事件调用 `ChatEventMapper#insertFromSession(...)`。
+4. 后台 run 流式事件调用 `ChatEventMapper#insertFromSessionWithExecutionGuard(...)`，在一条 SQL 内校验 run/session/tenant/user、run 状态、execution owner 和 fencing token。
+5. insert 成功后直接用已知 seq/createdAt/payload 构造 `StoredChatEvent`，不再回读 `findById(...)`。
 
 重点排查：
 
@@ -463,7 +479,8 @@ LocalChatEventStreamRegistry#subscribeRunTopic(...)
 - 当前 JVM 内的 run topic 在线事件发布。
 - 只负责推给连接在本实例上的 WebSocket。
 - topic 是 `chat-run-{runId}`。
-- sink 使用 replay limit，避免订阅刚建立时错过少量本机事件。
+- sink 是有界 multicast live 通道，不保存历史事件；订阅建立时的补发统一从 openGauss event 表读取。
+- live sink 溢出或异常时，上层会提示 `RECOVER_REQUIRED`，前端再用 SSE resume 补齐缺口。
 
 重点排查：
 
@@ -773,7 +790,6 @@ src/main/java/com/huawei/finance/front/one/application/service/ChatRunLeaseAppli
 ```text
 startRun(...)
 heartbeat(...)
-canWriteRunEvent(...)
 markTerminal(...)
 heartbeatActiveRuns(...)
 ```
@@ -782,13 +798,14 @@ heartbeatActiveRuns(...)
 
 - run 创建后写 `fin_ex_chat_run_execution_t`。
 - 定时刷新本机 active run heartbeat。
-- 每个事件写入前通过 `canWriteRunEvent(...)` 校验 owner 和 fencing token。
+- 事件写入权不再先单独查询 execution；由 `OpenGaussChatEventStore#appendWithExecutionGuard(...)`
+  在事件插入 SQL 中原子校验 owner 和 fencing token。
 - run 终态后把 execution 置为终态。
 
 重点排查：
 
 - 实例挂了 run 一直 RUNNING：查 watchdog 是否开启，以及 `lease_until` 是否过期。
-- 旧实例恢复后继续写事件：查 `canWriteRunEvent(...)` 是否返回 false。
+- 旧实例恢复后继续写事件：查 guarded insert 是否因 owner/fencing token 不匹配而拒绝写入。
 
 ### 14.3 watchdog 和恢复策略
 
@@ -885,8 +902,8 @@ cancelActive(...)
 | --- | --- |
 | `/runs` 不返回 | `FinanceEXChatService#startRun(...)`、`executeRun(...)`、`persistAndPublishRunEvents(...)` |
 | 用户消息入库但没有回答 | `AgentRuntimeExecutor#execute(...)`、Relay adapter、`persistAndPublishRunEvents(...)` |
-| Relay 有响应但前端没有 | `ChatStreamApplicationService#appendAndPublish(...)`、`LocalChatEventStreamRegistry#publish(...)`、`RedisChatLiveEventBus#publish(...)`、`ChatWebSocketProtocolService#emitTopicEvent(...)` |
-| event 表没有 delta | `FinanceEXChatService#eventBelongsToCurrentRun(...)`、`shouldAcceptExecutionEvent(...)`、`OpenGaussChatEventStore#append(...)` |
+| Relay 有响应但前端没有 | `ChatStreamApplicationService#appendWithExecutionGuard(...)`、`ChatStreamApplicationService#publishPersisted(...)`、`LocalChatEventStreamRegistry#publish(...)`、`RedisChatLiveEventBus#publish(...)`、`ChatWebSocketProtocolService#emitTopicEvent(...)` |
+| event 表没有 delta | `FinanceEXChatService#eventBelongsToCurrentRun(...)`、`ChatRunApplicationService#shouldAcceptEvent(...)`、`OpenGaussChatEventStore#appendWithExecutionGuard(...)` |
 | WebSocket 收不到实时消息 | `ChatWebSocketProtocolService#subscribe(...)`、`ChatStreamApplicationService#resumeRunTopic(...)`、`liveBuffer(...)` |
 | SSE 没有补发 | `ChatController#resumeRunSse(...)`、`ChatStreamApplicationService#resumeRun(...)`、`OpenGaussChatEventStore#findByOwnerAndRunAfterSeq(...)` |
 | 多会话串显示 | `emitTopicEvent(...)` 的 run/session 校验、前端按 `payload.sessionId` 分发 |
@@ -907,11 +924,10 @@ cancelActive(...)
 5. `AgentRuntimeExecutor#execute(...)`：Runtime 请求是否构造正确。
 6. `RelayStreamHttpRuntimeAdapter#query(...)` 或 `RelayWebSocketRuntimeAdapter#query(...)`：下游是否返回。
 7. `FinanceEXChatService#persistAndPublishRunEvents(...)`：事件是否被拦截。
-8. `OpenGaussChatEventStore#append(...)`：事件是否写入 openGauss 并生成 seq。
-9. `ChatStreamApplicationService#appendAndPublish(...)`：是否本机发布和 Redis 发布。
+8. `OpenGaussChatEventStore#appendWithExecutionGuard(...)`：事件是否写入 openGauss 并生成 seq，owner/fencing 是否匹配。
+9. `ChatStreamApplicationService#publishPersisted(...)`：是否本机发布和 Redis 发布。
 10. `ChatWebSocketProtocolService#subscribe(...)`：前端是否订阅正确 topic。
 11. `ChatStreamApplicationService#resumeRunTopic(...)`：是否 replay + live 正常。
 12. `ChatWebSocketProtocolService#emitTopicEvent(...)`：是否推给前端。
 13. `ChatRunApplicationService#observeEvent(...)`：run 状态是否正确推进。
 14. `SessionApplicationService#saveAssistantMessage(...)`：completed 后完整 assistant 是否入库。
-

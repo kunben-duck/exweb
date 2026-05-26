@@ -109,7 +109,8 @@ export FINANCEEX_DEV_USERNAME=developer
 
 `runId` 不是长期任务会话；它是单轮执行 correlation id。事件表 `fin_ex_chat_event_t.run_id` 和绑定表 `fin_ex_runtime_binding_t.last_run_id` 都用它做运行轨迹和排障定位。
 run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。stop 只停止本轮回答，不删除 `RuntimeBinding`。
-run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实例、心跳、租约、恢复状态和 `fencing_token`，不混入业务 run 表。后台执行流写入 run 事件前必须校验 execution owner 与 `fencing_token`；stop、watchdog 或未来 Runtime takeover 递增 token 后，旧实例迟到 delta/completed 会被拒绝。
+run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实例、心跳、租约、恢复状态和 `fencing_token`，不混入业务 run 表。后台执行流写入 run 事件时通过 openGauss guarded insert 原子校验 execution owner 与 `fencing_token`；stop、watchdog 或未来 Runtime takeover 递增 token 后，旧实例迟到 delta/completed 会被拒绝。
+连续 `message.delta` 默认按 `financeex.chat-stream.delta-coalesce-*` 合并为几十毫秒级文本片段，减少 openGauss event 表、Redis Pub/Sub 和 WebSocket 的逐 token 写放大；对外事件类型、`seq` 游标和恢复协议不变。
 集群部署时，取消正确性依赖 Redis cancel flag 和 openGauss run 状态；实例故障治理依赖 openGauss execution 条件抢占和 fencing token。JVM 内 subscription registry 只用于命中本机执行流时快速释放资源，不作为跨实例事实源。
 同一 `tenantId + userId + sessionId` 同一时间只允许一个 active run。若会话已有
 `RUNNING/CANCELLING` run，`POST /chat/runs` 会返回 `ACTIVE_RUN_EXISTS`，前端应先调用 stop
@@ -259,6 +260,11 @@ export FINANCEEX_CHAT_RUN_RECOVERY_MAX_CONCURRENCY=4
 export FINANCEEX_CHAT_RUN_TAKEOVER_MAX_CONCURRENCY=1
 export FINANCEEX_CHAT_RUN_RECOVERY_MAX_CLAIMS_PER_TENANT_PER_SCAN=5
 export FINANCEEX_CHAT_RUN_STALE_RECOVERY_STRATEGIES=MANUAL_CONFIRMATION,FAIL_FAST
+
+# 流式 delta 合并降压，不改变前端协议和 SSE/WS 恢复语义
+export FINANCEEX_CHAT_STREAM_DELTA_COALESCE_ENABLED=true
+export FINANCEEX_CHAT_STREAM_DELTA_COALESCE_WINDOW=50ms
+export FINANCEEX_CHAT_STREAM_DELTA_COALESCE_MAX_CHARS=512
 ```
 
 SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP 文本流调用。Relay Runtime 作为 AgentRuntime 实现支持两个 API adapter：`relay-stream-http` 使用 Relay HTTP 流式协议，`relay-websocket` 使用 RelayAgent WebSocket 对话协议。

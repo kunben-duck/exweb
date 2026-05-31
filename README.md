@@ -23,7 +23,7 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 
 ## 分层边界
 
-- `interfaces`：`/chat/runs`、WebSocket run topic subscribe、SSE resume、会话和文档上传协议适配。
+- `interfaces`：`/chat/runs`、WebSocket run topic subscribe、Event Resume、会话和文档上传协议适配。
 - `application`：聊天主编排、会话、记忆、RuntimeBinding、SubAgent 单轮调用和 Relay Runtime 调用。
 - `application.integration`：应用层出站集成抽象，定义对 Relay Runtime、SubAgent、IntentService、用例库、会话、记忆、文档、ID 和身份能力的依赖边界。
 - `domain`：聊天事件、意图结果、路由结果、RuntimeBinding、用例匹配结果等核心模型。
@@ -43,8 +43,8 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `POST /api/v1/ex/chat/sessions/{sessionId}/branches`：从指定消息创建只读历史快照分支。
 - `POST /api/v1/ex/chat/sessions/{sessionId}/archive|restore|close`：会话归档、恢复和关闭。
 - `WS /api/v1/ex/chat/ws`：用户级实时输出通道。客户端使用 `{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}` 订阅本轮 run topic；MVC/Servlet 模式会在 handshake 阶段固化用户身份。
-- `GET /api/v1/ex/chat/sessions/{sessionId}/events/sse?afterSeq={seq}`：会话级 SSE 有限补发，用于补齐整个会话缺失事件。
-- `GET /api/v1/ex/chat/runs/{runId}/events/sse?afterSeq={seq}`：run 级 SSE 补发并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态。
+- `GET /api/v1/ex/chat/sessions/{sessionId}/events/resume?afterSeq={seq}`：会话级事件恢复有限补发，用于补齐整个会话缺失事件。
+- `GET /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}`：run 级事件恢复并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态。
 - `GET /api/v1/ex/chat/sessions/{sessionId}/stream-status`：查询当前会话最新事件序号、服务端 read cursor、active run、`activeStreamTopicId` 和是否可取消。
 - `POST /api/v1/ex/chat/runs/{runId}/stop`：按 runId 停止当前回答，幂等返回 run 状态。
 - `POST /api/v1/ex/chat/messages/{messageId}/feedback`：提交 assistant 消息反馈。
@@ -56,18 +56,18 @@ POST /chat/runs
  -> 获取 runId/sessionId/firstSeq/streamTopicId
  -> 使用前端配置的 WebSocket 地址发送 subscribe(topicId=streamTopicId, afterSeq)
  -> 实时输出由 WebSocket run topic 承载
- -> 浏览器刷新/复制页签后，使用前端配置的 SSE resume 地址按 lastSeq 补齐缺失事件
- -> 新页签、新浏览器或跨电脑续接 active run 时，从 activeRunFirstSeq - 1 打开 run SSE
- -> run SSE 先补发历史事件，再持续接续 live 事件，直到本轮 run 终态
+ -> 浏览器刷新/复制页签后，使用前端配置的 Event Resume 地址按 lastSeq 补齐缺失事件
+ -> 新页签、新浏览器或跨电脑续接 active run 时，从 activeRunFirstSeq - 1 打开 run 级事件恢复
+ -> Run 事件恢复先补发历史事件，再持续接续 live 事件，直到本轮 run 终态
  -> 用户点击停止时调用前端配置的 stop 接口，服务端发布 run.cancelled 终态事件
 ```
 
 当前请求体只有对话文本和可选文档附件，不暴露 IM 消息类型，也不让前端选择多套响应协议。文档不是消息类型，只是对话消息的上下文资源引用。
-WebSocket、SSE resume 和 stop 的 URL 由前端 SDK 或网关配置管理，不随 `/chat/runs` 响应返回。
+WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，不随 `/chat/runs` 响应返回。
 
 `/chat/runs` 支持消息树写入模式：`runMode=NEXT` 表示沿当前 leaf 继续提问；`EDIT_USER` 表示编辑历史 user 消息并创建新的 user sibling；`REGENERATE_ASSISTANT` 表示复用原 user 消息重新生成新的 assistant sibling。历史版本不会被覆盖，前端通过 variants 与 path select 切换展示版本。
 
-仓库提供独立本地联调台 `local-test-frontend/`。联调台通过 Node 代理访问后端，支持在页面中按 Postman 风格配置 `Cookie`、`Authorization`、`X-*` 等企业鉴权请求头；代理会在 HTTP、fetch SSE、文件下载和 WebSocket 握手时统一注入这些请求头。浏览器自身不会、也不能直接手写 `Cookie` 请求头或 WebSocket 自定义请求头。
+仓库提供独立本地联调台 `local-test-frontend/`。联调台通过 Node 代理访问后端，支持在页面中按 Postman 风格配置 `Cookie`、`Authorization`、`X-*` 等企业鉴权请求头；代理会在 HTTP、fetch Event Resume、文件下载和 WebSocket 握手时统一注入这些请求头。浏览器自身不会、也不能直接手写 `Cookie` 请求头或 WebSocket 自定义请求头。
 
 当 `POST /api/v1/ex/chat/runs` 或 `POST /api/v1/ex/chat/runs/{runId}/stop` 携带标准 `Cookie` 请求头时，ChatService 会在请求入口捕获一次，并只作为内存快照透传给可信 Relay Runtime adapter。Cookie 不会写入 `metadata_json`、消息、事件、日志或前端响应，也不会发送给非 Relay 第三方服务。
 
@@ -77,12 +77,12 @@ MVC/Servlet WebSocket 是一个特殊入口：用户身份必须在 `HandshakeIn
 阶段从企业 ThreadLocal 解析并写入 WebSocket session attributes。`afterConnectionEstablished`、
 subscribe、ack 和连接关闭回调只读取该身份快照，不会再次调用 `AuthContextProvider`。
 
-生产使用 MVC/Servlet 模式时，需要把长连接当作 Servlet 资源治理：SSE 使用
+生产使用 MVC/Servlet 模式时，需要把长连接当作 Servlet 资源治理：Event Resume 使用
 `spring.mvc.async.request-timeout` 和 run 级 heartbeat 防止空闲断流；WebSocket 使用
 `financeex.websocket.allowed-origin-patterns` 做 Origin 白名单，默认只允许 localhost。
 单用户连接数、单连接订阅数、单 topic 本机订阅数、出站缓冲、live buffer 和空闲超时都由
 `financeex.websocket.*` 统一配置。慢客户端或实时缓冲溢出时，服务端会返回
-`RECOVER_REQUIRED`，前端应通过 run SSE resume 补齐后再重新订阅。
+`RECOVER_REQUIRED`，前端应通过 run event resume 补齐后再重新订阅。
 同一 WebSocket 连接允许同时订阅多个 session 的多个 run topic。服务端不会因为切换会话而
 自动释放旧 topic；隔离依赖订阅前的用户归属校验、事件事实源的 `tenantId/userId/sessionId/runId`
 联合查询，以及投递前的 `topicId/runId/sessionId` 一致性校验。前端收到事件后必须按
@@ -261,7 +261,7 @@ export FINANCEEX_CHAT_RUN_TAKEOVER_MAX_CONCURRENCY=1
 export FINANCEEX_CHAT_RUN_RECOVERY_MAX_CLAIMS_PER_TENANT_PER_SCAN=5
 export FINANCEEX_CHAT_RUN_STALE_RECOVERY_STRATEGIES=MANUAL_CONFIRMATION,FAIL_FAST
 
-# 流式 delta 合并降压，不改变前端协议和 SSE/WS 恢复语义
+# 流式 delta 合并降压，不改变前端协议和 Event Resume/WS 恢复语义
 export FINANCEEX_CHAT_STREAM_DELTA_COALESCE_ENABLED=true
 export FINANCEEX_CHAT_STREAM_DELTA_COALESCE_WINDOW=50ms
 export FINANCEEX_CHAT_STREAM_DELTA_COALESCE_MAX_CHARS=512

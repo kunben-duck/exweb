@@ -29,7 +29,7 @@ public class ChatWebSocketProperties {
     private int maxInboundMessageBytes = 16 * 1024;
     /** WebSocket 出站队列容量，WebFlux handler 使用该值做慢客户端背压。 */
     private int outboundQueueSize = 256;
-    /** run topic live 缓冲容量，超出后要求客户端使用 SSE resume 恢复。 */
+    /** run topic live 缓冲容量，超出后要求客户端使用 Event Resume 恢复。 */
     private int liveBufferCapacity = 512;
     /** 每个连接每个 topic 记住的已投递 seq 窗口大小，用于有限去重。 */
     private int deliveredSeqWindow = 2048;

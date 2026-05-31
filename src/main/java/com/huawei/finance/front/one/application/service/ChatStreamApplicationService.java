@@ -24,7 +24,7 @@ import reactor.util.concurrent.Queues;
  * 聊天事件流应用服务。
  *
  * <p>所有事件先写入 openGauss，再发布到 run 级实时 topic。WebSocket 用于当前页面新建 run 的
- * 实时订阅；run 级 SSE 用于新页签、新浏览器或跨电脑恢复已经存在的 active run，它会先从
+ * 实时订阅；run 级事件恢复用于新页签、新浏览器或跨电脑恢复已经存在的 active run，它会先从
  * openGauss 补发 afterSeq 之后的事实事件，再接续 live topic 直到 run 终态。</p>
  */
 @Service
@@ -84,7 +84,7 @@ public class ChatStreamApplicationService {
      * 发布已经写入 openGauss 的事实事件。
      *
      * <p>该方法只接受持久化后的事件。调用方必须先完成 openGauss append，避免 Redis 或本机
-     * live sink 推送出无法被 SSE resume 恢复的“悬空事件”。</p>
+     * live sink 推送出无法被 Event Resume 恢复的“悬空事件”。</p>
      *
      * @param persisted 已持久化并带有 seq 的事件。
      */
@@ -118,7 +118,7 @@ public class ChatStreamApplicationService {
      *
      * <p>该接口比会话级恢复更适合跨电脑续接“正在输出的当前回答”：新渲染实例应从
      * active run 的 firstSeq 之前开始补发。若 run 尚未终止，服务端会继续接入 live topic，
-     * 直到 {@code run.completed/run.failed/run.cancelled} 终态事件到达后再关闭 SSE。read cursor
+     * 直到 {@code run.completed/run.failed/run.cancelled} 终态事件到达后再关闭事件恢复连接。read cursor
      * 只表示用户某个连接曾经确认消费到哪里，不能作为新页面已经渲染到哪里的证据。</p>
      *
      * @param user 请求入口解析出的不可变用户身份快照。

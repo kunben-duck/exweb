@@ -19,7 +19,7 @@ import org.springframework.stereotype.Service;
  *
  * <p>WebSocket ack 会调用该服务记录用户已经消费到的最大 seq。该游标适合展示消费进度、
  * 辅助诊断以及非 active 场景减少重复；恢复正在输出的 active run 时，新渲染实例仍应
- * 打开 run 级 SSE，从 run 的 firstSeq 之前补发并持续接续到终态，避免把另一台设备的
+ * 打开 run 级事件恢复，从 run 的 firstSeq 之前补发并持续接续到终态，避免把另一台设备的
  * 已消费位置误当成当前页面的展示位置。</p>
  */
 @Service

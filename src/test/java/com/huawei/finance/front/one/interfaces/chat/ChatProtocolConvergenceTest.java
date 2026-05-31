@@ -17,10 +17,12 @@ import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatAttachmentDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatRunRequest;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.bind.annotation.GetMapping;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -91,6 +93,20 @@ class ChatProtocolConvergenceTest {
         assertThat(stopResult.latestSeq()).isEqualTo(12L);
         assertThat(stopHeaders.get()).isNotNull();
         assertThat(stopHeaders.get().cookieHeader()).isEqualTo("finex_proxy_profile=profile1");
+    }
+
+    @Test
+    void eventResumeEndpointsUseBusinessNamesInsteadOfTransportNames() {
+        List<String> getMappings = Arrays.stream(ChatController.class.getDeclaredMethods())
+                .map(method -> method.getAnnotation(GetMapping.class))
+                .filter(mapping -> mapping != null)
+                .flatMap(mapping -> Arrays.stream(mapping.value()))
+                .toList();
+
+        assertThat(getMappings)
+                .contains("/sessions/{sessionId}/events/resume", "/runs/{runId}/events/resume");
+        assertThat(getMappings)
+                .noneMatch(path -> path.contains("/events/" + "sse"));
     }
 
     @Test

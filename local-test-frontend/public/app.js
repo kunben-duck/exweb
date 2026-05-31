@@ -86,7 +86,7 @@ function bindUi() {
   bindClick("restoreSessionBtn", () => mutateSession("restore"));
   bindClick("closeSessionBtn", () => mutateSession("close"));
   bindClick("stopRunBtn", stopRun);
-  bindClick("resumeSseBtn", () => requireSession(sessionId => resumeSse(sessionId, lastSeq(sessionId))));
+  bindClick("resumeEventsBtn", () => requireSession(sessionId => resumeSessionEvents(sessionId, lastSeq(sessionId))));
   bindClick("restoreActiveRunBtn", restoreActiveRun);
   bindClick("refreshDocsBtn", refreshDocuments);
   $("chatForm").addEventListener("submit", event => {
@@ -273,14 +273,14 @@ function startActiveRunSseRestore(status, reason) {
   if (state.restoringRunIds.has(status.activeRunId)) return;
   state.restoringRunIds.add(status.activeRunId);
   const resumeAfterSeq = activeRunCatchupSeq(status);
-  resumeRunSse(status.activeRunId, resumeAfterSeq)
+  resumeRunEvents(status.activeRunId, resumeAfterSeq)
     .then(result => {
-      log(`restore ${reason} run=${status.activeRunId} sseEvents=${result.eventCount} lastSeq=${result.lastSeq} terminal=${result.terminal}`);
+      log(`restore ${reason} run=${status.activeRunId} resumeEvents=${result.eventCount} lastSeq=${result.lastSeq} terminal=${result.terminal}`);
       if (!result.terminal) {
-        log(`restore ${reason} run=${status.activeRunId} ended before terminal; use SSE resume again if the run is still active`);
+        log(`restore ${reason} run=${status.activeRunId} ended before terminal; use event resume again if the run is still active`);
       }
     })
-    .catch(error => log(`run sse restore failed: ${error.message}`))
+    .catch(error => log(`run event resume failed: ${error.message}`))
     .finally(() => state.restoringRunIds.delete(status.activeRunId));
 }
 
@@ -418,7 +418,7 @@ async function stopRun() {
   state.activeRunStatus = result.status;
   setActiveRunLabel();
   if (result.sessionId) {
-    await resumeSse(result.sessionId, resumeAfterSeq);
+    await resumeSessionEvents(result.sessionId, resumeAfterSeq);
   }
   log(`stop ${result.runId} -> ${result.status}`);
 }
@@ -532,8 +532,8 @@ function handleWsEnvelope(envelope) {
     if (envelope.code === "RECOVER_REQUIRED" && topicSessionId) {
       const runId = parseRunId(envelope.topicId);
       const resume = runId
-        ? resumeRunSse(runId, lastSeq(topicSessionId))
-        : resumeSse(topicSessionId, lastSeq(topicSessionId));
+        ? resumeRunEvents(runId, lastSeq(topicSessionId))
+        : resumeSessionEvents(topicSessionId, lastSeq(topicSessionId));
       resume.catch(error => log(error.message));
     }
     return;
@@ -554,24 +554,24 @@ function handleWsEnvelope(envelope) {
   }
 }
 
-async function resumeSse(sessionId, afterSeq) {
+async function resumeSessionEvents(sessionId, afterSeq) {
   await syncAuthProfile();
-  const response = await fetch(`${apiBase}/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}/events/sse?afterSeq=${Number(afterSeq || 0)}`,
+  const response = await fetch(`${apiBase}/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}/events/resume?afterSeq=${Number(afterSeq || 0)}`,
     withProxyProfile());
-  if (!response.ok) throw new Error(`SSE resume failed: ${response.status}`);
-  if (!response.body) throw new Error("SSE resume response body is empty");
-  log(`sse resume session=${sessionId} afterSeq=${afterSeq}`);
-  return consumeSseResponse(response, "sse");
+  if (!response.ok) throw new Error(`Event resume failed: ${response.status}`);
+  if (!response.body) throw new Error("Event resume response body is empty");
+  log(`event resume session=${sessionId} afterSeq=${afterSeq}`);
+  return consumeSseResponse(response, "event-resume");
 }
 
-async function resumeRunSse(runId, afterSeq) {
+async function resumeRunEvents(runId, afterSeq) {
   await syncAuthProfile();
-  const response = await fetch(`${apiBase}/api/v1/ex/chat/runs/${encodeURIComponent(runId)}/events/sse?afterSeq=${Number(afterSeq || 0)}`,
+  const response = await fetch(`${apiBase}/api/v1/ex/chat/runs/${encodeURIComponent(runId)}/events/resume?afterSeq=${Number(afterSeq || 0)}`,
     withProxyProfile());
-  if (!response.ok) throw new Error(`Run SSE resume failed: ${response.status}`);
-  if (!response.body) throw new Error("Run SSE resume response body is empty");
-  log(`sse resume run=${runId} afterSeq=${afterSeq}`);
-  return consumeSseResponse(response, "run-sse");
+  if (!response.ok) throw new Error(`Run event resume failed: ${response.status}`);
+  if (!response.body) throw new Error("Run event resume response body is empty");
+  log(`event resume run=${runId} afterSeq=${afterSeq}`);
+  return consumeSseResponse(response, "run-event-resume");
 }
 
 async function consumeSseResponse(response, source) {

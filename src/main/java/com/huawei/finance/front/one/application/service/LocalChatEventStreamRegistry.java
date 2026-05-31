@@ -66,7 +66,7 @@ public class LocalChatEventStreamRegistry {
                     topicId, event.sequence(), nextResult);
             /*
              * live sink 只负责实时投递，不能为了慢客户端保留历史事件。溢出或投递失败时主动
-             * 通知订阅侧进入恢复流程；可靠补发始终由 openGauss + SSE resume 完成。
+             * 通知订阅侧进入恢复流程；可靠补发始终由 openGauss + Event Resume 完成。
              */
             topic.sink().tryEmitError(new IllegalStateException(
                     "run topic live sink emit failed, seq=" + event.sequence() + ", result=" + nextResult));

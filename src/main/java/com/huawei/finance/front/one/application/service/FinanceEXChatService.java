@@ -316,7 +316,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     if (!eventBelongsToCurrentRun(event, runId, session.id())) {
                         /*
                          * 下游 Runtime/SubAgent 的输出不是身份事实。任何 runId/sessionId 不匹配的事件
-                         * 都必须在落库前阻断，否则会污染 openGauss 事件事实源并经由 SSE/WS 串到其他会话。
+                         * 都必须在落库前阻断，否则会污染 openGauss 事件事实源并经由 Event Resume/WS 串到其他会话。
                          */
                         log.error("Dropped mismatched chat event before persistence. expectedRunId={}, actualRunId={}, expectedSessionId={}, actualSessionId={}, type={}",
                                 runId,
@@ -345,7 +345,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                         ChatEvent stored = chatStreamService.appendWithExecutionGuard(event, executionClaim);
                         appendAssistantDelta(assistant, stored);
                         /*
-                         * run.completed 是前端、SSE resume 和跨设备续接共同认可的“本轮回答已经闭合”信号。
+                         * run.completed 是前端、Event Resume 和跨设备续接共同认可的“本轮回答已经闭合”信号。
                          * 因此在发布该终态事件之前，必须先把完整 assistant 消息写入历史消息树，
                          * 避免客户端收到 completed 后立即查询历史时只能看到 user 节点。
                          */

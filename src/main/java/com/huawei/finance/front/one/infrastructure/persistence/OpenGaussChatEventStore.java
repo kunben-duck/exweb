@@ -18,7 +18,7 @@ import org.springframework.stereotype.Repository;
 /**
  * 聊天事件 openGauss 事实源。
  *
- * <p>事件流会被 WebSocket 实时消费，并通过 SSE 在断线重连、刷新页面、审计和排障时回放。
+ * <p>事件流会被 WebSocket 实时消费，并通过 Event Resume 在断线重连、刷新页面、审计和排障时回放。
  * 因此这里不再使用 JVM 内存列表，而是把每个 ChatEvent 持久化到 fin_ex_chat_event_t。</p>
  */
 @Repository

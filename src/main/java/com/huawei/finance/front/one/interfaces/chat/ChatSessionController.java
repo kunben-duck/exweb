@@ -129,7 +129,7 @@ public class ChatSessionController {
      * 查询所选会话的历史消息。
      *
      * <p>返回值按创建时间正序排列，适合前端切换会话后直接渲染历史气泡。
-     * 正在输出中的增量内容仍通过 WebSocket/SSE 事件恢复。</p>
+     * 正在输出中的增量内容仍通过 WebSocket 或 Event Resume。</p>
      *
      * @param sessionId 会话标识；服务端会校验会话归属。
      * @param cursor 上一页返回的游标；为空时查询最近一页。

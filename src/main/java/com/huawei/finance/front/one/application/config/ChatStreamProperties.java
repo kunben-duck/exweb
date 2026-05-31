@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
  * 聊天事件流降压配置。
  *
  * <p>这些配置只改变服务端内部把下游 token 合并成 {@code message.delta} event 的粒度，
- * 不改变前端协议、run topic、SSE resume 或 openGauss seq 游标语义。</p>
+ * 不改变前端协议、run topic、Event Resume 或 openGauss seq 游标语义。</p>
  */
 @Component
 @ConfigurationProperties(prefix = "financeex.chat-stream")

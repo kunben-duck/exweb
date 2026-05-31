@@ -2,7 +2,7 @@
 
 ## 1. 文档用途
 
-这份文档不是架构介绍，而是用于理解当前代码执行路径和快速定位问题。重点说明一次用户提问从 HTTP 入口进入后，如何创建后台 run、调用 Relay、写入消息与事件、发布到 Redis、本机订阅、WebSocket 推送、SSE 恢复，以及 stop、watchdog、消息树相关代码在哪里。
+这份文档不是架构介绍，而是用于理解当前代码执行路径和快速定位问题。重点说明一次用户提问从 HTTP 入口进入后，如何创建后台 run、调用 Relay、写入消息与事件、发布到 Redis、本机订阅、WebSocket 推送、Event Resume 恢复，以及 stop、watchdog、消息树相关代码在哪里。
 
 为避免后续代码调整导致行号漂移，本文档以“文件路径 + 类名 + 方法名”为定位方式。需要精确行号时，建议在本地使用：
 
@@ -37,7 +37,7 @@ rg -n "methodName|className" src/main/java/com/huawei/finance/front/one
 用途：
 
 - 保存 `run.started`、`message.delta`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled` 等事件。
-- WebSocket 实时输出和 SSE 断点补发都基于这张表的事件。
+- WebSocket 实时输出和 Event Resume 断点恢复都基于这张表的事件。
 - `seq` 是 openGauss 生成的恢复游标。
 
 关键代码：
@@ -454,7 +454,7 @@ OpenGaussChatEventStore#appendWithExecutionGuard(...)
 
 - `seq` 乱序或重复：查 `fin_ex_chat_event_seq` 和 `ChatEventMapper#nextSeq()`。
 - 插入返回 0：通常是 run/session/tenant/user 归属不一致，查 `insertFromSession(...)` SQL。
-- SSE 补发缺事件：先直接查 `fin_ex_chat_event_t` 是否存在对应 `run_id/session_id/seq`。
+- 事件恢复缺事件：先直接查 `fin_ex_chat_event_t` 是否存在对应 `run_id/session_id/seq`。
 
 ## 9. 事件如何发布
 
@@ -480,7 +480,7 @@ LocalChatEventStreamRegistry#subscribeRunTopic(...)
 - 只负责推给连接在本实例上的 WebSocket。
 - topic 是 `chat-run-{runId}`。
 - sink 是有界 multicast live 通道，不保存历史事件；订阅建立时的补发统一从 openGauss event 表读取。
-- live sink 溢出或异常时，上层会提示 `RECOVER_REQUIRED`，前端再用 SSE resume 补齐缺口。
+- live sink 溢出或异常时，上层会提示 `RECOVER_REQUIRED`，前端再用 Event Resume 补齐缺口。
 
 重点排查：
 
@@ -512,7 +512,7 @@ RedisChatLiveEventBus#onMessage(...)
 注意：
 
 - Redis Pub/Sub 不是可靠消息源。
-- Redis 不可用时，跨实例实时推送可能缺失，但 SSE resume 仍可从 openGauss 补齐。
+- Redis 不可用时，跨实例实时推送可能缺失，但 Event Resume 仍可从 openGauss 补齐。
 
 重点排查：
 
@@ -596,7 +596,7 @@ ChatWebSocketProtocolService#close(...)
 
 - 前端订阅返回 `SUBSCRIBE_ERROR`：查 topic 是否为 `chat-run-{runId}`，run 是否属于当前用户。
 - 多会话串显示：先确认 `emitTopicEvent(...)` 是否丢弃了错 run/session；再检查前端是否按 payload.sessionId 分发。
-- 前端收到 `RECOVER_REQUIRED`：说明 seq 有缺口或乱序，应调用 SSE resume 后重新 subscribe。
+- 前端收到 `RECOVER_REQUIRED`：说明 seq 有缺口或乱序，应调用 Event Resume 后重新 subscribe。
 
 ### 10.3 连接注册表
 
@@ -668,11 +668,11 @@ RedisChatLiveEventBus#subscribe(...)
 
 重点排查：
 
-- 新开页签只收到 WebSocket 没走 SSE：这是前端策略问题；服务端 WebSocket subscribe 本身也会先查 openGauss 补历史。
-- 需要严格模拟 GPT 新页签恢复：前端应先调用 run SSE，再 subscribe WebSocket。
-- 跨实例实时缺事件：看 Redis Pub/Sub；但最终以 run SSE 是否能补齐为准。
+- 新开页签只收到 WebSocket、没有走 Event Resume：这是前端策略问题；服务端 WebSocket subscribe 本身也会先查 openGauss 补历史。
+- 需要严格模拟 GPT 新页签恢复：前端应先调用 run 级事件恢复，再 subscribe WebSocket。
+- 跨实例实时缺事件：看 Redis Pub/Sub；但最终以 run 级事件恢复 是否能补齐为准。
 
-## 12. SSE 恢复路径
+## 12. Event Resume 恢复路径
 
 HTTP 入口文件：
 
@@ -683,8 +683,8 @@ src/main/java/com/huawei/finance/front/one/interfaces/chat/ChatController.java
 入口方法：
 
 ```text
-ChatController#resumeSessionSse(...)
-ChatController#resumeRunSse(...)
+ChatController#resumeSessionEvents(...)
+ChatController#resumeRunEvents(...)
 ```
 
 应用层方法：
@@ -698,20 +698,20 @@ ChatStreamApplicationService#resumeRunWithLiveTail(...)
 两类接口：
 
 ```text
-GET /api/v1/ex/chat/sessions/{sessionId}/events/sse?afterSeq={seq}
-GET /api/v1/ex/chat/runs/{runId}/events/sse?afterSeq={seq}
+GET /api/v1/ex/chat/sessions/{sessionId}/events/resume?afterSeq={seq}
+GET /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}
 ```
 
 区别：
 
-- session SSE：只补发会话维度历史事件。
-- run SSE：补发指定 run，并在 run 未终态时接 live tail，直到终态。
+- session 级事件恢复：只补发会话维度历史事件。
+- run 级事件恢复：补发指定 run，并在 run 未终态时接 live tail，直到终态。
 
 重点排查：
 
-- SSE 没数据：先确认 `afterSeq` 是否已经大于等于最新 seq。
+- Event Resume 没数据：先确认 `afterSeq` 是否已经大于等于最新 seq。
 - 跨电脑恢复缺前半段：前端没有本地 cursor 时应从 `activeRunFirstSeq - 1` 开始。
-- SSE 一直不断：检查 run 是否一直未产生 terminal event。
+- Event Resume 一直不断：检查 run 是否一直未产生 terminal event。
 
 ## 13. stop 取消路径
 
@@ -905,11 +905,11 @@ cancelActive(...)
 | Relay 有响应但前端没有 | `ChatStreamApplicationService#appendWithExecutionGuard(...)`、`ChatStreamApplicationService#publishPersisted(...)`、`LocalChatEventStreamRegistry#publish(...)`、`RedisChatLiveEventBus#publish(...)`、`ChatWebSocketProtocolService#emitTopicEvent(...)` |
 | event 表没有 delta | `FinanceEXChatService#eventBelongsToCurrentRun(...)`、`ChatRunApplicationService#shouldAcceptEvent(...)`、`OpenGaussChatEventStore#appendWithExecutionGuard(...)` |
 | WebSocket 收不到实时消息 | `ChatWebSocketProtocolService#subscribe(...)`、`ChatStreamApplicationService#resumeRunTopic(...)`、`liveBuffer(...)` |
-| SSE 没有补发 | `ChatController#resumeRunSse(...)`、`ChatStreamApplicationService#resumeRun(...)`、`OpenGaussChatEventStore#findByOwnerAndRunAfterSeq(...)` |
+| 事件恢复没有补发 | `ChatController#resumeRunEvents(...)`、`ChatStreamApplicationService#resumeRun(...)`、`OpenGaussChatEventStore#findByOwnerAndRunAfterSeq(...)` |
 | 多会话串显示 | `emitTopicEvent(...)` 的 run/session 校验、前端按 `payload.sessionId` 分发 |
 | stop 后还在输出 | `ChatRunApplicationService#requestStop(...)`、`shouldAcceptEvent(...)`、`LocalChatRunExecutionRegistry#cancel(...)` |
 | 实例挂掉 run 不结束 | `ChatRunLeaseApplicationService#heartbeatActiveRuns(...)`、`ChatRunWatchdogScheduler`、`ChatRunRecoveryOrchestrator` |
-| 跨电脑续接缺内容 | `stream-status`、run SSE `afterSeq`、`fin_ex_chat_event_t` |
+| 跨电脑续接缺内容 | `stream-status`、run 级事件恢复 `afterSeq`、`fin_ex_chat_event_t` |
 | assistant 历史消息没保存 | `persistAndPublishRunEvents(...)` 处理 `run.completed` 的分支、`SessionApplicationService#saveAssistantMessage(...)` |
 | 文档附件没有进 Runtime | `DocumentFacade#resolveAttachmentsForUser(...)`、`SessionApplicationService#saveAttachments(...)`、`AgentRuntimeRequest.attachments` |
 

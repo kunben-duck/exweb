@@ -3,8 +3,6 @@ package com.huawei.finance.front.one.infrastructure.runtime;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRecoveryPort;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRecoveryRequest;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 
 /**
@@ -13,8 +11,6 @@ import reactor.core.publisher.Flux;
  * <p>当前正式版本不假设 Relay Runtime 具备可靠断点恢复能力，因此默认不支持接管续跑。
  * 如果后续 Runtime 提供了明确的 resume token 和幂等输出保证，可新增实现替换该 bean。</p>
  */
-@Component
-@ConditionalOnMissingBean(AgentRuntimeRecoveryPort.class)
 public class UnsupportedAgentRuntimeRecoveryPort implements AgentRuntimeRecoveryPort {
     @Override
     public boolean supports(AgentRuntimeRecoveryRequest request) {

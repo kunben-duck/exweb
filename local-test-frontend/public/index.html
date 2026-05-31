@@ -10,7 +10,7 @@
   <header class="app-header">
     <div>
       <h1>FinanceEX ChatService 联调台</h1>
-      <p>本地测试前端，覆盖会话、文档库、消息树、run、WebSocket、SSE resume、stop 和跨页签恢复。</p>
+      <p>本地测试前端，覆盖会话、文档库、消息树、run、WebSocket、Event Resume、stop 和跨页签恢复。</p>
     </div>
     <div class="header-actions">
       <span id="backendLabel" class="pill">backend: loading</span>
@@ -76,7 +76,7 @@
         <h2>对话</h2>
         <div class="button-row">
           <button id="loadMessagesBtn" type="button">历史接口</button>
-          <button id="resumeSseBtn" type="button">SSE 补发</button>
+          <button id="resumeEventsBtn" type="button">事件恢复</button>
           <button id="restoreActiveRunBtn" type="button">恢复 active run</button>
           <button id="stopRunBtn" class="danger" type="button" disabled>停止回答</button>
         </div>

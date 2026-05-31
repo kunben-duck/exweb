@@ -5,9 +5,6 @@ import java.lang.management.ManagementFactory;
 import java.net.InetAddress;
 import java.util.Locale;
 import java.util.UUID;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.stereotype.Component;
 
 /**
  * 默认应用实例 ID 提供者。
@@ -16,12 +13,10 @@ import org.springframework.stereotype.Component;
  * ID；后续如需从注册中心或企业运行框架获取实例标识，可新增 {@link ApplicationInstanceIdProvider}
  * 实现并替换该 bean。</p>
  */
-@Component
-@ConditionalOnMissingBean(ApplicationInstanceIdProvider.class)
 public class GeneratedApplicationInstanceIdProvider implements ApplicationInstanceIdProvider {
     private final String instanceId;
 
-    public GeneratedApplicationInstanceIdProvider(@Value("${financeex.instance-id:}") String configuredInstanceId) {
+    public GeneratedApplicationInstanceIdProvider(String configuredInstanceId) {
         this.instanceId = configuredInstanceId == null || configuredInstanceId.isBlank()
                 ? generatedInstanceId()
                 : configuredInstanceId.trim();

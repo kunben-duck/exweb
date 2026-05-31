@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 @Component
 @ConfigurationProperties(prefix = "financeex.mvc.sse")
 public class MvcSseProperties {
-    /** run 级 SSE 无业务事件时发送 heartbeat 的间隔。 */
+    /** run 级 Event Resume 无业务事件时发送 heartbeat 的间隔。 */
     private Duration heartbeatInterval = Duration.ofSeconds(15);
 
     public Duration getHeartbeatInterval() {

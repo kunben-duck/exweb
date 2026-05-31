@@ -44,6 +44,6 @@ public record ChatWebSocketEnvelopeDto(
 
     public static ChatWebSocketEnvelopeDto recoverRequired(String topicId, long afterSeq, long actualSeq) {
         return new ChatWebSocketEnvelopeDto(null, "error", topicId, String.valueOf(actualSeq), null, null,
-                "RECOVER_REQUIRED", "实时事件需要恢复，请使用 SSE resume 从 afterSeq=" + afterSeq + " 补齐");
+                "RECOVER_REQUIRED", "实时事件需要恢复，请使用 Event Resume 从 afterSeq=" + afterSeq + " 补齐");
     }
 }

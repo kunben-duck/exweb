@@ -52,7 +52,7 @@ flowchart TD
     EventStream --> Persist["事件写入 fin_ex_chat_event_t"]
     Persist --> Publish["发布到 run stream topic"]
     Publish --> FrontWS["前端 WebSocket 实时订阅"]
-    Persist --> ResumeSSE["SSE 按 afterSeq 恢复：session 有限补发 / run tail 到终态"]
+    Persist --> ResumeEvents["Event Resume 按 afterSeq 恢复：session 有限补发 / run tail 到终态"]
     FrontWS --> Ack["前端 ack(seq)"]
     Ack --> ReadCursor["刷新 fin_ex_chat_read_cursor_t / Redis"]
     Publish --> RuntimeObserve["观察 runtimeSessionId"]
@@ -179,7 +179,7 @@ sequenceDiagram
 
 ## 简化版全局时序图
 
-下面的简化图只保留核心外部参与方和事实源，适合做整体链路评审。它省略了应用层内部服务、SubAgent 细节、WebSocket/SSE handler 细节和 Runtime adapter 细节；前端 WebSocket 接入仍然保留，只是不在本图展开。
+下面的简化图只保留核心外部参与方和事实源，适合做整体链路评审。它省略了应用层内部服务、SubAgent 细节、WebSocket/Event Resume handler 细节和 Runtime adapter 细节；前端 WebSocket 接入仍然保留，只是不在本图展开。
 
 ```mermaid
 sequenceDiagram
@@ -225,7 +225,7 @@ sequenceDiagram
     loop "流式事件"
         EX->>DB: "写入 fin_ex_chat_event_t，生成 seq"
         EX->>Redis: "publish fin_ex:chat_stream:{topicId}"
-        EX-->>Frontend: "WebSocket message 或 SSE resume event"
+        EX-->>Frontend: "WebSocket message 或 Event Resume event"
         Frontend->>EX: "WebSocket ack(seq)"
         EX->>Redis: "刷新 read cursor 热缓存"
         EX->>DB: "节流写入 fin_ex_chat_read_cursor_t"
@@ -283,7 +283,7 @@ sequenceDiagram
 ## 流式响应与断点恢复
 
 正式版只保留后台 run 创建模式。`POST /chat/runs` 是唯一提问入口。
-本页新创建的 run 默认通过 WebSocket topic 接实时事件；新页签、新浏览器或跨电脑恢复已经存在的 active run 时，使用 run 级 SSE 先补发历史事件，再持续接续 live 事件直到本轮 run 终态。会话级 SSE 仍只负责有限缺失事件补发。
+本页新创建的 run 默认通过 WebSocket topic 接实时事件；新页签、新浏览器或跨电脑恢复已经存在的 active run 时，使用 run 级事件恢复先补发历史事件，再持续接续 live 事件直到本轮 run 终态。会话级事件恢复 仍只负责有限缺失事件补发。
 
 ```text
 POST /api/v1/ex/chat/runs
@@ -295,8 +295,8 @@ GET  /api/v1/ex/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50
 GET  /api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants
 POST /api/v1/ex/chat/sessions/{sessionId}/path
 POST /api/v1/ex/chat/sessions/{sessionId}/branches
-GET  /api/v1/ex/chat/sessions/{sessionId}/events/sse?afterSeq={lastSeq}
-GET  /api/v1/ex/chat/runs/{runId}/events/sse?afterSeq={lastSeq}
+GET  /api/v1/ex/chat/sessions/{sessionId}/events/resume?afterSeq={lastSeq}
+GET  /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={lastSeq}
 GET  /api/v1/ex/chat/sessions/{sessionId}/stream-status
 WS   /api/v1/ex/chat/ws subscribe(topicId=streamTopicId)
 POST /api/v1/ex/chat/runs/{runId}/stop
@@ -305,7 +305,7 @@ POST /api/v1/ex/chat/sessions/{sessionId}/restore
 POST /api/v1/ex/chat/sessions/{sessionId}/close
 ```
 
-`/chat/runs` 只返回 run 运行标识和 run 级 `streamTopicId`，不返回 WebSocket、SSE resume 或 stop URL。
+`/chat/runs` 只返回 run 运行标识和 run 级 `streamTopicId`，不返回 WebSocket、Event Resume 或 stop URL。
 这些 URL 属于前端 SDK、网关或部署配置，避免后端业务响应承担客户端路由配置职责。
 
 ## 消息树与只读分支
@@ -399,11 +399,11 @@ sequenceDiagram
     Frontend->>ChatAPI: "GET stream-status"
     ChatAPI->>CursorStore: "读取 readCursorSeq"
     ChatAPI-->>Frontend: "activeRunId/topic/firstSeq/readCursorSeq"
-    Frontend->>ChatAPI: "Run SSE resume afterSeq=activeRunFirstSeq-1"
+    Frontend->>ChatAPI: "Run Event Resume afterSeq=activeRunFirstSeq-1"
     ChatAPI->>DB: "按 owner + runId 补发缺失事件"
     ChatAPI->>Live: "接入 run live topic"
     ChatAPI->>RedisBus: "接入跨实例 run topic"
-    ChatAPI-->>Frontend: "SSE 补发 + live tail 到 run 终态"
+    ChatAPI-->>Frontend: "事件恢复 + live tail 到 run 终态"
 ```
 
 关键约束：
@@ -421,7 +421,7 @@ sequenceDiagram
 - stop 是 REST 生命周期接口，不是 WebSocket command；重复 stop 幂等返回当前 run 状态。
 - 重新生成回答不再使用 run retry 接口，而是通过 `POST /chat/runs` 携带 `runMode=REGENERATE_ASSISTANT` 和 `regeneratedMessageId`，在同一 user 节点下生成新的 assistant sibling。
 - 会话 state 接口聚合会话元数据、最近历史消息和 `activeStreamTopicId`，用于前端切换会话后的恢复判断。
-- 新页签、新浏览器或跨电脑恢复 active run 时，前端应使用 `activeRunFirstSeq - 1` 打开 run SSE；该接口会先按 openGauss 事实源补发历史事件，再接入 live topic 持续输出到 run 终态，不能把 `latestSeq` 或 `readCursorSeq` 当作当前渲染实例已消费游标。
+- 新页签、新浏览器或跨电脑恢复 active run 时，前端应使用 `activeRunFirstSeq - 1` 打开 run 级事件恢复；该接口会先按 openGauss 事实源补发历史事件，再接入 live topic 持续输出到 run 终态，不能把 `latestSeq` 或 `readCursorSeq` 当作当前渲染实例已消费游标。
 
 ### Run 控制面与故障恢复
 
@@ -497,9 +497,9 @@ Servlet/MVC WebSocket 会在 `HandshakeInterceptor.beforeHandshake` 阶段调用
 MVC/Servlet 生产模式增加了长连接治理层：`financeex.websocket.allowed-origin-patterns`
 限制握手来源，`max-connections-per-user`、`max-subscriptions-per-connection`、
 `max-subscribers-per-topic`、`outbound-queue-size`、`live-buffer-capacity` 和 `idle-timeout`
-限制本机连接资源。run 级 SSE 通过 `financeex.mvc.sse.heartbeat-interval` 发送 heartbeat，
+限制本机连接资源。run 级事件恢复通过 `financeex.mvc.sse.heartbeat-interval` 发送 heartbeat，
 配合 `spring.mvc.async.request-timeout` 与 Tomcat 连接配置避免空闲断流。WebSocket 实时投递
-出现慢客户端、缓冲溢出或乱序时返回 `RECOVER_REQUIRED`，可靠恢复仍走 openGauss event + SSE resume。
+出现慢客户端、缓冲溢出或乱序时返回 `RECOVER_REQUIRED`，可靠恢复仍走 openGauss event + Event Resume。
 
 文档上传同样按启动模式做接口层适配：Servlet/MVC 注册 `MvcDocumentUploadController`
 并接收 `MultipartFile`，纯 WebFlux 注册 `ReactiveDocumentUploadController` 并接收
@@ -666,7 +666,7 @@ stop 语义：
 
 SubAgent 当前只支持单轮 HTTP 文本流调用。当前上线版本内置一个 `RelayAgentRuntime` provider 和两个 `RelayRuntimeProtocolAdapter`：`relay-stream-http` 是 Relay HTTP 流式协议实现，`relay-websocket` 是 RelayAgent WebSocket 对话协议实现。新增下游协议时，应新增 adapter，而不是在 `RelayAgentRuntime` 主类里堆转换分支。
 
-`Cookie` 是请求入口捕获的运行期内存快照，只会在 `AgentRuntimeRequest.forwardHeaders` 或 cancel 请求中向 adapter 传递；这些字段被 JSON 序列化忽略，不能进入 Relay 请求体、run metadata、事件 payload 或日志。该设计保证企业登录态不会因后台 run、SSE/WS 恢复或故障治理被持久化或回放。
+`Cookie` 是请求入口捕获的运行期内存快照，只会在 `AgentRuntimeRequest.forwardHeaders` 或 cancel 请求中向 adapter 传递；这些字段被 JSON 序列化忽略，不能进入 Relay 请求体、run metadata、事件 payload 或日志。该设计保证企业登录态不会因后台 run、Event Resume/WS 恢复或故障治理被持久化或回放。
 
 当前上线版本只保留 Relay Runtime provider，不包含其他历史 Runtime provider 分支、专用 memory 分支或专用 prompt assembler 配置。复杂任务通过 Relay Runtime adapter 执行；后续如需替换 Runtime，应新增 `AgentRuntime` provider，而不是把新协议写进主编排。
 
@@ -714,7 +714,7 @@ Redis 部署模式由 `financeex.redis.mode` 控制，默认 `standalone`；生�
 `cluster` 并配置 `financeex.redis.cluster.nodes`。RuntimeBinding 使用 Redis hash tag 保证同一会话
 binding key 和索引集合落在同一 slot，因此会话级清理不使用 `KEYS`，只通过索引集合删除明确 key。
 ChatLiveEventBus 在本机出现 run topic 订阅者时动态订阅对应 Redis channel，Redis Pub/Sub 仍然只做
-跨实例实时 fanout，可靠恢复继续依赖 openGauss event + SSE resume。
+跨实例实时 fanout，可靠恢复继续依赖 openGauss event + Event Resume。
 
 ## 可选记忆上下文
 

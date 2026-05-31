@@ -4,7 +4,7 @@ package com.huawei.finance.front.one.application.service;
  * 实时事件流需要客户端恢复的内部异常。
  *
  * <p>慢客户端、live buffer 溢出或上游实时订阅异常时，WebSocket 不能继续盲目投递更高 seq。
- * 抛出该异常后协议层会返回 {@code RECOVER_REQUIRED}，要求前端通过 run SSE resume 补齐。</p>
+ * 抛出该异常后协议层会返回 {@code RECOVER_REQUIRED}，要求前端通过 run event resume 补齐。</p>
  */
 public class StreamRecoveryRequiredException extends RuntimeException {
     private final String topicId;

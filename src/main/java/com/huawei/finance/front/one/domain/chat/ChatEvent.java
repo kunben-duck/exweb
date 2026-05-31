@@ -6,7 +6,7 @@ import java.util.Map;
 /**
  * 聊天事件统一接口。
  *
- * <p>所有事件都带 runId/sessionId/type/payload，便于 WebSocket 实时订阅和 SSE 断点补发
+ * <p>所有事件都带 runId/sessionId/type/payload，便于 WebSocket 实时订阅和 Event Resume 断点恢复
  * 使用同一套事件结构。</p>
  */
 public interface ChatEvent {

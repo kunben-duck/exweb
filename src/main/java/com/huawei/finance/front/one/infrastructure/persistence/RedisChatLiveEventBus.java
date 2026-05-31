@@ -29,7 +29,7 @@ import reactor.util.concurrent.Queues;
 /**
  * 基于 Redis Pub/Sub 的跨实例聊天实时事件总线。
  *
- * <p>该实现只传播已经写入 openGauss 的事件。Redis 不可用时，本机 WebSocket 与 SSE 恢复仍可工作；
+ * <p>该实现只传播已经写入 openGauss 的事件。Redis 不可用时，本机 WebSocket 与 Event Resume 仍可工作；
  * 跨实例实时推送会退化为前端使用 {@code afterSeq} 重新补发。Redis Cluster 下不使用全局 pattern
  * 订阅，而是在本机出现 run topic 订阅者时动态订阅对应 channel，减少集群广播和模式订阅的不确定性。</p>
  */
@@ -127,7 +127,7 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
                 /*
                  * Redis Pub/Sub 不是可靠队列，不能在本地堆积历史。投递失败时结束该 live 流，
                  * 上层 ChatStreamApplicationService 会把错误转换成 RECOVER_REQUIRED，引导前端
-                 * 使用 openGauss 事实源做 SSE resume。
+                 * 使用 openGauss 事实源做 Event Resume。
                  */
                 sink.sink().tryEmitError(new IllegalStateException(
                         "redis live sink emit failed, seq=" + event.sequence() + ", result=" + nextResult));
@@ -155,7 +155,7 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
         try {
             listenerContainer.addMessageListener(this, redisTopic);
         } catch (RuntimeException ex) {
-            log.warn("Redis ChatLiveEventBus 订阅失败，topicId={}，跨实例实时推送将依赖 SSE resume。原因：{}",
+            log.warn("Redis ChatLiveEventBus 订阅失败，topicId={}，跨实例实时推送将依赖 Event Resume。原因：{}",
                     topicId, ex.getMessage());
             topic.markRegistrationFailed();
         }

@@ -144,7 +144,7 @@ public class LocalWebSocketConnectionRegistry {
      * @param connectionId WebSocket 物理连接 ID。
      * @param topicId run 级 stream topic。
      * @param seq 准备投递的事件序号。
-     * @return 投递决策；乱序事件会要求前端使用 SSE resume 恢复，而不是静默丢弃。
+     * @return 投递决策；乱序事件会要求前端使用 Event Resume 恢复，而不是静默丢弃。
      */
     public DeliveryDecision markDelivered(String connectionId, String topicId, long seq) {
         return get(connectionId).map(state -> state.markDelivered(topicId, seq)).orElse(DeliveryDecision.notSubscribed());

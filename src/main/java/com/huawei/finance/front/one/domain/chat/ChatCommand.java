@@ -7,8 +7,8 @@ import java.util.Map;
  * 聊天用例的统一输入命令。
  *
  * <p>正式版只有一个提问入口，接口层会把 {@code /chat/runs} 请求转换成该命令。
- * WebSocket 只负责订阅当前页面新建 run 的后台输出；SSE 负责恢复链路，其中会话级 SSE
- * 做有限补发，run 级 SSE 可接续 active run 到终态。因此命令不再携带传输协议、
+ * WebSocket 只负责订阅当前页面新建 run 的后台输出；Event Resume 负责恢复链路，其中会话级事件恢复
+ * 做有限补发，run 级事件恢复可接续 active run 到终态。因此命令不再携带传输协议、
  * 前端消息类型或前端响应模式。</p>
  *
  * @param commandId 前端或调用方生成的命令标识，用于幂等和排障。

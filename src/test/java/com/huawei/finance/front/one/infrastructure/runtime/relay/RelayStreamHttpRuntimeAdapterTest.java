@@ -37,7 +37,7 @@ class RelayStreamHttpRuntimeAdapterTest {
         properties.setBaseUrl("http://relay.test");
         properties.setStreamPath("/v1/query");
         AgentRuntimeForwardCookieProperties forwardCookie = new AgentRuntimeForwardCookieProperties();
-        RelayStreamHttpRuntimeAdapter adapter = new RelayStreamHttpRuntimeAdapter(builder, properties, forwardCookie);
+        RelayStreamHttpRuntimeAdapter adapter = adapter(builder, properties, forwardCookie);
         AgentRuntimeRequest request = request(RuntimeForwardHeaders.fromCookieHeader("sid=abc; theme=dark", 8192));
 
         StepVerifier.create(adapter.query(request))
@@ -47,11 +47,18 @@ class RelayStreamHttpRuntimeAdapterTest {
 
         assertThat(captured.get()).isNotNull();
         assertThat(captured.get().headers().getFirst(HttpHeaders.COOKIE)).isEqualTo("sid=abc; theme=dark");
-        String json = new ObjectMapper().writeValueAsString(request);
+        String json = new ObjectMapper().writeValueAsString(
+                RelayRuntimeWireRequestMapper.toQueryWireRequest(request));
         assertThat(json)
+                .contains("\"query\":\"hello\"")
                 .doesNotContain("sid=abc")
                 .doesNotContain("forwardHeaders")
-                .doesNotContain("cookieHeader");
+                .doesNotContain("cookieHeader")
+                .doesNotContain("tenantId")
+                .doesNotContain("userId")
+                .doesNotContain("memoryContext")
+                .doesNotContain("intentDecision")
+                .doesNotContain("routeTarget");
     }
 
     @Test
@@ -69,7 +76,7 @@ class RelayStreamHttpRuntimeAdapterTest {
         properties.setBaseUrl("http://relay.test");
         AgentRuntimeForwardCookieProperties forwardCookie = new AgentRuntimeForwardCookieProperties();
         forwardCookie.setAllowedAdapters(List.of("relay-websocket"));
-        RelayStreamHttpRuntimeAdapter adapter = new RelayStreamHttpRuntimeAdapter(builder, properties, forwardCookie);
+        RelayStreamHttpRuntimeAdapter adapter = adapter(builder, properties, forwardCookie);
 
         StepVerifier.create(adapter.query(request(RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192))))
                 .expectNextCount(2)
@@ -91,7 +98,7 @@ class RelayStreamHttpRuntimeAdapterTest {
         properties.setBaseUrl("http://relay.test");
         properties.setStopPath("/v1/runs/{runId}/stop");
         AgentRuntimeForwardCookieProperties forwardCookie = new AgentRuntimeForwardCookieProperties();
-        RelayStreamHttpRuntimeAdapter adapter = new RelayStreamHttpRuntimeAdapter(builder, properties, forwardCookie);
+        RelayStreamHttpRuntimeAdapter adapter = adapter(builder, properties, forwardCookie);
         AgentRuntimeCancelRequest request = new AgentRuntimeCancelRequest(
                 "tenant1",
                 "user1",
@@ -110,6 +117,71 @@ class RelayStreamHttpRuntimeAdapterTest {
         assertThat(captured.get().headers().getFirst(HttpHeaders.COOKIE)).isEqualTo("sid=abc");
     }
 
+    @Test
+    void relayWireRequestKeepsOnlyAllowedMetadata() throws Exception {
+        AgentRuntimeRequest request = new AgentRuntimeRequest(
+                "tenant1",
+                "user1",
+                "session1",
+                "run1",
+                "runtimeSession1",
+                "hello",
+                List.of(),
+                MemoryContext.empty(),
+                null,
+                null,
+                Map.of("source", "web", "authorization", "Bearer secret", "cookie", "sid=abc"),
+                RuntimeForwardHeaders.empty()
+        );
+
+        String json = new ObjectMapper().writeValueAsString(RelayRuntimeWireRequestMapper.toQueryWireRequest(request));
+
+        assertThat(json)
+                .contains("\"source\":\"web\"")
+                .doesNotContain("authorization")
+                .doesNotContain("Bearer secret")
+                .doesNotContain("cookie")
+                .doesNotContain("sid=abc");
+    }
+
+    @Test
+    void normalizesJsonAndSseChunksBeforeReturningChatEvents() {
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, "text/event-stream")
+                        .body("data: {\"type\":\"message.delta\",\"content\":\"你\"}\n\n"
+                                + "data: {\"choices\":[{\"delta\":{\"content\":\"好\"}}]}\n\n"
+                                + "data: [DONE]\n\n")
+                        .build()));
+        RelayAgentProperties properties = new RelayAgentProperties();
+        properties.setBaseUrl("http://relay.test");
+        AgentRuntimeForwardCookieProperties forwardCookie = new AgentRuntimeForwardCookieProperties();
+        RelayStreamHttpRuntimeAdapter adapter = adapter(builder, properties, forwardCookie);
+
+        StepVerifier.create(adapter.query(request(RuntimeForwardHeaders.empty())))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "你"))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "好"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                .verifyComplete();
+    }
+
+    @Test
+    void unknownJsonFrameFailsInsteadOfLeakingRawJsonToFrontend() {
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, "application/json")
+                        .body("{\"unexpected\":\"raw\"}")
+                        .build()));
+        RelayAgentProperties properties = new RelayAgentProperties();
+        properties.setBaseUrl("http://relay.test");
+        RelayStreamHttpRuntimeAdapter adapter = adapter(builder, properties,
+                new AgentRuntimeForwardCookieProperties());
+
+        StepVerifier.create(adapter.query(request(RuntimeForwardHeaders.empty())))
+                .expectError(RelayRuntimeProtocolException.class)
+                .verify();
+    }
+
     private AgentRuntimeRequest request(RuntimeForwardHeaders forwardHeaders) {
         return new AgentRuntimeRequest(
                 "tenant1",
@@ -125,5 +197,11 @@ class RelayStreamHttpRuntimeAdapterTest {
                 Map.of(),
                 forwardHeaders
         );
+    }
+
+    private RelayStreamHttpRuntimeAdapter adapter(WebClient.Builder builder, RelayAgentProperties properties,
+                                                  AgentRuntimeForwardCookieProperties forwardCookie) {
+        return new RelayStreamHttpRuntimeAdapter(builder, properties, forwardCookie,
+                new RelayRuntimeResponseNormalizer(new ObjectMapper()));
     }
 }

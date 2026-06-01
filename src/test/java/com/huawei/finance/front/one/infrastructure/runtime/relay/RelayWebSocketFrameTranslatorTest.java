@@ -9,7 +9,8 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class RelayWebSocketFrameTranslatorTest {
-    private final RelayWebSocketFrameTranslator translator = new RelayWebSocketFrameTranslator(new ObjectMapper());
+    private final RelayWebSocketFrameTranslator translator = new RelayWebSocketFrameTranslator(
+            new RelayRuntimeResponseNormalizer(new ObjectMapper()));
 
     @Test
     void plainTextFrameIsTranslatedToDeltaEvent() {
@@ -35,13 +36,60 @@ class RelayWebSocketFrameTranslatorTest {
     @Test
     void completedFrameIsTranslatedToMessageCompletedEvent() {
         List<ChatEvent> events = translator.translate("run1", "session1",
-                "{\"type\":\"message.completed\",\"runtimeSessionId\":\"runtime-1\"}");
+                "{\"type\":\"message.completed\",\"runtimeSessionId\":\"runtime-1\",\"raw\":\"ignored\"}");
 
         assertThat(events).hasSize(1);
         assertThat(events.getFirst().type()).isEqualTo("message.completed");
         assertThat(events.getFirst().payload())
                 .containsEntry("status", "MESSAGE_COMPLETED")
-                .containsEntry("runtimeSessionId", "runtime-1");
+                .containsEntry("runtimeSessionId", "runtime-1")
+                .doesNotContainKey("raw");
+    }
+
+    @Test
+    void sseDoneFrameIsTranslatedToMessageCompletedEvent() {
+        List<ChatEvent> events = translator.translate("run1", "session1", "data: [DONE]\n\n");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("message.completed");
+    }
+
+    @Test
+    void multipleSseDataFramesAreTranslatedIndependently() {
+        List<ChatEvent> events = translator.translate("run1", "session1",
+                "data: {\"delta\":\"你\"}\n\n"
+                        + "data: {\"delta\":\"好\"}\n\n"
+                        + "data: [DONE]\n\n");
+
+        assertThat(events).hasSize(3);
+        assertThat(events.get(0).payload()).containsEntry("delta", "你");
+        assertThat(events.get(1).payload()).containsEntry("delta", "好");
+        assertThat(events.get(2).type()).isEqualTo("message.completed");
+    }
+
+    @Test
+    void openAiLikeChunkIsTranslatedToDeltaEvent() {
+        List<ChatEvent> events = translator.translate("run1", "session1",
+                "{\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().payload()).containsEntry("delta", "hello");
+    }
+
+    @Test
+    void openAiLikeMetadataOnlyDeltaFrameIsIgnored() {
+        List<ChatEvent> events = translator.translate("run1", "session1",
+                "{\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}");
+
+        assertThat(events).isEmpty();
+    }
+
+    @Test
+    void unknownJsonFrameFailsProtocol() {
+        assertThatThrownBy(() -> translator.translate("run1", "session1",
+                "{\"unexpected\":\"raw\"}"))
+                .isInstanceOf(RelayRuntimeProtocolException.class)
+                .hasMessageContaining("Unsupported Relay runtime frame");
     }
 
     @Test

@@ -247,7 +247,7 @@ AgentRuntimeExecutor#execute(...)
 
 重点排查：
 
-- Relay 请求缺少 sessionId/query：先看这里构造的 `AgentRuntimeRequest`。
+- Relay 请求缺少 sessionId/query：先看这里构造的 `AgentRuntimeRequest`，再看 Relay adapter 是否正确映射为下游 wire DTO。
 - Cookie 没透传：先确认 `forwardHeaders` 没有在这里丢失。
 - Runtime 并发满：查看 `WorkloadConcurrencyLimiter` 和 `financeex.resource-isolation.agent-runtime-max-concurrent`。
 
@@ -294,16 +294,16 @@ RelayStreamHttpRuntimeAdapter#applyForwardedCookie(...)
 职责：
 
 - 通过 WebClient POST 到 Relay。
-- 请求体为 `AgentRuntimeRequest`。
+- 请求体由 `AgentRuntimeRequest` 映射为 Relay 专用 `RelayRuntimeQueryRequest`，只包含下游需要的 allowlist 字段。
 - 可选透传 Cookie 到 HTTP header。
 - 使用 `bodyToFlux(String.class)` 接收下游响应。
-- 每个字符串片段转成 `MessageDeltaEvent`。
+- 通过 `RelayRuntimeResponseNormalizer` 把 plain text、JSON chunk、SSE-like `data:` chunk 转成标准 ChatEvent。
 - 流结束时补 `MessageCompletedEvent`。
 
 重点排查：
 
 - Relay 返回了数据但前端没看到：先确认这里是否产生了 `MessageDeltaEvent`。
-- Relay 响应格式不是纯字符串片段：需要在这里或新增 adapter 做格式转换。
+- Relay 响应格式不是纯字符串片段：先看 `RelayRuntimeResponseNormalizer` 是否支持该 chunk 格式，不要把原始 JSON 直接塞给前端。
 - 第三方 Cookie 泄漏风险：确认只有可信 Relay adapter 调用 `applyForwardedCookie(...)`。
 
 ### 6.4 Relay 出站 WebSocket adapter
@@ -324,9 +324,9 @@ RelayWebSocketFrameTranslator#translate(...)
 职责：
 
 - EXChatService 作为客户端连接下游 Relay WebSocket。
-- 首帧发送 `AgentRuntimeRequest`。
+- 首帧发送 Relay 专用 `RelayRuntimeQueryRequest`，不是 ChatService 内部 `AgentRuntimeRequest`。
 - 接收 Relay frame。
-- 将 JSON frame 或纯文本 frame 转成 `ChatEvent`。
+- 复用 `RelayRuntimeResponseNormalizer` 将 JSON frame、SSE-like frame 或纯文本 frame 转成标准 `ChatEvent`。
 
 注意：
 

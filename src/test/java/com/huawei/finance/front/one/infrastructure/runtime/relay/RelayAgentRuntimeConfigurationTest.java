@@ -14,6 +14,7 @@ class RelayAgentRuntimeConfigurationTest {
             .withBean(ObjectMapper.class, ObjectMapper::new)
             .withUserConfiguration(
                     RelayAgentRuntime.class,
+                    RelayRuntimeResponseNormalizer.class,
                     RelayStreamHttpRuntimeAdapter.class,
                     RelayWebSocketRuntimeAdapter.class,
                     RelayWebSocketFrameTranslator.class);

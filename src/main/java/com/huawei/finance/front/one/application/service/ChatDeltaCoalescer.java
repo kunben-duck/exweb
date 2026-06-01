@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import org.springframework.stereotype.Service;
 import reactor.core.Disposable;
@@ -24,6 +25,12 @@ import reactor.core.scheduler.Schedulers;
  */
 @Service
 public class ChatDeltaCoalescer {
+    private static final Set<String> DELTA_PAYLOAD_ALLOWLIST = Set.of(
+            "runtimeSessionId",
+            "agentSessionId",
+            "finishReason"
+    );
+
     private final ChatStreamProperties properties;
 
     public ChatDeltaCoalescer(ChatStreamProperties properties) {
@@ -128,7 +135,11 @@ public class ChatDeltaCoalescer {
             delta.append(deltaText(event));
             if (event.payload() != null) {
                 event.payload().forEach((key, value) -> {
-                    if (!"delta".equals(key) && value != null) {
+                    /*
+                     * delta 合并只能保留 ChatService 标准 payload 字段。下游 Runtime 的原始
+                     * JSON chunk 不允许在这里被“顺手”带到前端事件里。
+                     */
+                    if (DELTA_PAYLOAD_ALLOWLIST.contains(key) && value != null) {
                         extraPayload.put(key, value);
                     }
                 });

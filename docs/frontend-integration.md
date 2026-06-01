@@ -768,8 +768,16 @@ ws.send(JSON.stringify({
 | `run.failed` | 本轮 run 失败 | 展示错误信息，关闭 loading |
 | `run.cancelled` | 用户停止本轮回答 | 展示已停止，关闭 loading |
 
+ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON chunk 或 SSE-like `data:` chunk 归一化成上表事件。前端不得解析 Relay 原始响应，只消费 ChatService 标准 payload：
+
+| 事件类型 | 标准 payload |
+| --- | --- |
+| `message.delta` | `{ "delta": "增量文本", "runtimeSessionId": "可选", "agentSessionId": "可选" }` |
+| `message.completed` | `{ "status": "MESSAGE_COMPLETED", "finishReason": "可选", "runtimeSessionId": "可选", "agentSessionId": "可选" }` |
+| `run.failed` | `{ "code": "错误码", "message": "错误说明", "recoverable": "可选", "recoveryOptions": "可选" }` |
+
 服务端可能把下游逐 token 输出合并为几十毫秒级 `message.delta` 文本片段。前端只需要按 `seq`
-顺序追加 `payload.delta`，不要假设一个 delta 等于一个 token。
+顺序追加 `payload.delta`，不要假设一个 delta 等于一个 token，也不要依赖任何 Relay 私有字段。
 
 ### ACK
 

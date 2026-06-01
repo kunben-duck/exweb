@@ -8,7 +8,9 @@ import com.huawei.finance.front.one.domain.chat.ErrorEvent;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 
@@ -85,5 +87,25 @@ class ChatDeltaCoalescerTest {
         assertThat(events).hasSize(2);
         assertThat(events.get(0).payload()).containsEntry("delta", "partial");
         assertThat(events.get(1).type()).isEqualTo("run.failed");
+    }
+
+    @Test
+    void coalescedDeltaKeepsOnlyStandardPayloadFields() {
+        ChatStreamProperties properties = new ChatStreamProperties();
+        properties.setDeltaCoalesceWindow(Duration.ofSeconds(5));
+        ChatDeltaCoalescer coalescer = new ChatDeltaCoalescer(properties);
+
+        List<ChatEvent> events = coalescer.coalesce(Flux.just(
+                new MessageDeltaEvent("run1", "session1", 0, Instant.now(), "a",
+                        Map.of("delta", "a", "runtimeSessionId", "runtime-1", "raw", "must-not-leak")),
+                MessageDeltaEvent.of("run1", "session1", "b"),
+                MessageCompletedEvent.of("run1", "session1")
+        )).collectList().block();
+
+        assertThat(events).hasSize(2);
+        assertThat(events.getFirst().payload())
+                .containsEntry("delta", "ab")
+                .containsEntry("runtimeSessionId", "runtime-1")
+                .doesNotContainKey("raw");
     }
 }

@@ -65,7 +65,8 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         return Flux.create(sink -> {
             AtomicBoolean completed = new AtomicBoolean(false);
             Disposable disposable = webSocketClient.execute(websocketUri, headers, session -> {
-                        Mono<Void> sendQuery = Mono.fromCallable(() -> objectMapper.writeValueAsString(request))
+                        Mono<Void> sendQuery = Mono.fromCallable(() -> objectMapper.writeValueAsString(
+                                        RelayRuntimeWireRequestMapper.toQueryWireRequest(request)))
                                 .map(session::textMessage)
                                 .flatMap(message -> session.send(Mono.just(message)));
                         Mono<Void> receiveEvents = session.receive()
@@ -109,7 +110,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 .post()
                 .uri(path);
         applyForwardedCookie(spec, request.forwardHeaders());
-        return spec.bodyValue(request)
+        return spec.bodyValue(RelayRuntimeWireRequestMapper.toCancelWireRequest(request))
                 .retrieve()
                 .bodyToMono(Void.class)
                 .timeout(properties.getTimeout())

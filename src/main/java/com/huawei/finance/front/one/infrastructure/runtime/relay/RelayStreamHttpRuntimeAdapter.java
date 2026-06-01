@@ -6,8 +6,8 @@ import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRe
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
-import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
@@ -21,8 +21,9 @@ import reactor.core.publisher.Mono;
 /**
  * 真实 Relay streamable-http API adapter。
  *
- * <p>该 adapter 使用 FinanceEX 内部 Relay HTTP 协议：请求体直接是标准
- * {@link AgentRuntimeRequest}，下游响应按字符串 delta 流返回。它是正式上线默认 adapter。</p>
+ * <p>该 adapter 是 Relay provider 的 HTTP 防腐层：请求体使用 Relay 专用 wire DTO，
+ * 响应先归一化为 ChatService 标准 ChatEvent，再交给应用层持久化和推送。前端不会看到
+ * Relay 原始 chunk。</p>
  */
 @Component
 @EnableConfigurationProperties({RelayAgentProperties.class, AgentRuntimeForwardCookieProperties.class})
@@ -33,12 +34,15 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
     private final WebClient.Builder webClientBuilder;
     private final RelayAgentProperties properties;
     private final AgentRuntimeForwardCookieProperties forwardCookieProperties;
+    private final RelayRuntimeResponseNormalizer responseNormalizer;
 
     public RelayStreamHttpRuntimeAdapter(WebClient.Builder webClientBuilder, RelayAgentProperties properties,
-                                         AgentRuntimeForwardCookieProperties forwardCookieProperties) {
+                                         AgentRuntimeForwardCookieProperties forwardCookieProperties,
+                                         RelayRuntimeResponseNormalizer responseNormalizer) {
         this.webClientBuilder = webClientBuilder;
         this.properties = properties;
         this.forwardCookieProperties = forwardCookieProperties;
+        this.responseNormalizer = responseNormalizer;
     }
 
     @Override
@@ -53,13 +57,22 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
                 .post()
                 .uri(properties.getStreamPath());
         applyForwardedCookie(spec, request.forwardHeaders());
-        Flux<String> deltas = spec.bodyValue(request)
+        AtomicBoolean completed = new AtomicBoolean(false);
+        Flux<String> chunks = spec.bodyValue(RelayRuntimeWireRequestMapper.toQueryWireRequest(request))
                 .retrieve()
                 .bodyToFlux(String.class)
                 .timeout(properties.getTimeout());
-        return deltas
-                .map(delta -> (ChatEvent) MessageDeltaEvent.of(request.runId(), request.sessionId(), delta))
-                .concatWithValues(MessageCompletedEvent.of(request.runId(), request.sessionId()));
+        return chunks
+                .concatMap(chunk -> Flux.fromIterable(responseNormalizer.normalize(
+                        request.runId(), request.sessionId(), chunk)))
+                .doOnNext(event -> {
+                    if ("message.completed".equals(event.type())) {
+                        completed.set(true);
+                    }
+                })
+                .concatWith(Mono.defer(() -> completed.get()
+                        ? Mono.empty()
+                        : Mono.just(MessageCompletedEvent.of(request.runId(), request.sessionId()))));
     }
 
     @Override
@@ -73,7 +86,7 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
                 .post()
                 .uri(path);
         applyForwardedCookie(spec, request.forwardHeaders());
-        return spec.bodyValue(request)
+        return spec.bodyValue(RelayRuntimeWireRequestMapper.toCancelWireRequest(request))
                 .retrieve()
                 .bodyToMono(Void.class)
                 .timeout(properties.getTimeout())

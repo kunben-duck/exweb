@@ -130,7 +130,12 @@ class RelayStreamHttpRuntimeAdapterTest {
                 MemoryContext.empty(),
                 null,
                 null,
-                Map.of("source", "web", "authorization", "Bearer secret", "cookie", "sid=abc"),
+                Map.of(
+                        "source", "web",
+                        "authorization", "Bearer secret",
+                        "cookie", "sid=abc",
+                        "nested", Map.of("token", "nested-secret", "safe", "yes")
+                ),
                 RuntimeForwardHeaders.empty()
         );
 
@@ -141,7 +146,9 @@ class RelayStreamHttpRuntimeAdapterTest {
                 .doesNotContain("authorization")
                 .doesNotContain("Bearer secret")
                 .doesNotContain("cookie")
-                .doesNotContain("sid=abc");
+                .doesNotContain("sid=abc")
+                .doesNotContain("nested-secret")
+                .contains("\"safe\":\"yes\"");
     }
 
     @Test
@@ -180,6 +187,26 @@ class RelayStreamHttpRuntimeAdapterTest {
         StepVerifier.create(adapter.query(request(RuntimeForwardHeaders.empty())))
                 .expectError(RelayRuntimeProtocolException.class)
                 .verify();
+    }
+
+    @Test
+    void stopsReadingAfterMessageCompletedEvent() {
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, "text/event-stream")
+                        .body("data: {\"delta\":\"before\"}\n\n"
+                                + "data: [DONE]\n\n"
+                                + "data: {\"delta\":\"after\"}\n\n")
+                        .build()));
+        RelayAgentProperties properties = new RelayAgentProperties();
+        properties.setBaseUrl("http://relay.test");
+        RelayStreamHttpRuntimeAdapter adapter = adapter(builder, properties,
+                new AgentRuntimeForwardCookieProperties());
+
+        StepVerifier.create(adapter.query(request(RuntimeForwardHeaders.empty())))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "before"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                .verifyComplete();
     }
 
     private AgentRuntimeRequest request(RuntimeForwardHeaders forwardHeaders) {

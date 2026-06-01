@@ -73,6 +73,12 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                                 .map(WebSocketMessage::getPayloadAsText)
                                 .concatMap(frame -> Flux.fromIterable(frameTranslator.translate(
                                         request.runId(), request.sessionId(), frame)))
+                                /*
+                                 * 有些 Relay WebSocket 服务会在 message.completed 后保持连接复用。
+                                 * ChatService 的一轮 run 以 completed 为边界，收到后主动结束本次出站会话，
+                                 * 避免等待下游关闭连接或最终超时。
+                                 */
+                                .takeUntil(event -> "message.completed".equals(event.type()))
                                 .doOnNext(event -> {
                                     if ("message.completed".equals(event.type())) {
                                         completed.set(true);
@@ -126,7 +132,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 && forwardHeaders != null && forwardHeaders.hasCookie()) {
             /*
              * 这里设置的是 FinanceEXChatService 后端到 RelayAgent 的 WebSocket 握手 Cookie。
-             * AgentRuntimeRequest.forwardHeaders 仍会被 @JsonIgnore 排除在首帧 JSON 之外。
+             * 首帧 JSON 使用 Relay 专用 wire DTO，不包含 forwardHeaders。
              */
             headers.set(HttpHeaders.COOKIE, forwardHeaders.cookieHeader());
         }

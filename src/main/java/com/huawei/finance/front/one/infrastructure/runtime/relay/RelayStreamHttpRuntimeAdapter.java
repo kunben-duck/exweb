@@ -65,6 +65,8 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
         return chunks
                 .concatMap(chunk -> Flux.fromIterable(responseNormalizer.normalize(
                         request.runId(), request.sessionId(), chunk)))
+                // 下游一旦声明消息完成，本轮 Runtime 流即可闭合；后续异常帧不再进入前端事件流。
+                .takeUntil(event -> "message.completed".equals(event.type()))
                 .doOnNext(event -> {
                     if ("message.completed".equals(event.type())) {
                         completed.set(true);
@@ -102,7 +104,7 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
             return;
         }
         /*
-         * Cookie 只进入出站请求头，AgentRuntimeRequest.forwardHeaders 已被 @JsonIgnore 标记，
+         * Cookie 只进入出站请求头；请求体由 RelayRuntimeWireRequestMapper 映射为 Relay 专用 DTO，
          * 因此不会进入 Relay 请求体、事件 payload 或持久化 metadata。
          */
         spec.headers(headers -> headers.set(HttpHeaders.COOKIE, forwardHeaders.cookieHeader()));

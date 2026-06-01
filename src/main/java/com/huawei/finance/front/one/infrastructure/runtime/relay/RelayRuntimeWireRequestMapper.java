@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.infrastructure.runtime.relay;
 
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -43,10 +44,28 @@ final class RelayRuntimeWireRequestMapper {
         Map<String, Object> sanitized = new LinkedHashMap<>();
         metadata.forEach((key, value) -> {
             if (key != null && value != null && !isSensitiveKey(key)) {
-                sanitized.put(key, value);
+                sanitized.put(key, sanitizeValue(value));
             }
         });
         return Map.copyOf(sanitized);
+    }
+
+    private static Object sanitizeValue(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> nested = new LinkedHashMap<>();
+            map.forEach((key, nestedValue) -> {
+                if (key != null && nestedValue != null && !isSensitiveKey(String.valueOf(key))) {
+                    nested.put(String.valueOf(key), sanitizeValue(nestedValue));
+                }
+            });
+            return Map.copyOf(nested);
+        }
+        if (value instanceof Collection<?> collection) {
+            return collection.stream()
+                    .map(RelayRuntimeWireRequestMapper::sanitizeValue)
+                    .toList();
+        }
+        return value;
     }
 
     private static boolean isSensitiveKey(String key) {

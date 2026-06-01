@@ -47,7 +47,8 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `GET /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}`：run 级事件恢复并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态。
 - `GET /api/v1/ex/chat/sessions/{sessionId}/stream-status`：查询当前会话最新事件序号、服务端 read cursor、active run、`activeStreamTopicId` 和是否可取消。
 - `POST /api/v1/ex/chat/runs/{runId}/stop`：按 runId 停止当前回答，幂等返回 run 状态。
-- `POST /api/v1/ex/chat/messages/{messageId}/feedback`：提交 assistant 消息反馈。
+- `POST /api/v1/ex/chat/messages/{messageId}/feedback`：提交或切换 assistant 消息点赞/点踩。
+- `DELETE /api/v1/ex/chat/messages/{messageId}/feedback`：取消当前用户对 assistant 消息的点赞或点踩。
 
 前端流式模式：
 
@@ -148,7 +149,7 @@ run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实
 - `fin_ex_chat_event_t`
 - `fin_ex_chat_read_cursor_t`
 - `fin_ex_uploaded_document_t`
-- `fin_ex_message_feedback_t`
+- `fin_ex_message_feedback_t`：保存当前用户对 assistant 消息的点赞/点踩状态；`status=CANCELLED` 表示已取消当前反馈。
 - `fin_ex_runtime_binding_t`
 
 所有 Redis key 统一以 `fin_ex` 开头：

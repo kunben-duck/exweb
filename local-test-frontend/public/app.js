@@ -736,8 +736,8 @@ function appendMessage(role, content, dataset = {}, message = null) {
     }
     if (role === "assistant") {
       actions.appendChild(messageActionButton("重新生成", locked, () => regenerateAssistantMessage(message || dataset)));
-      actions.appendChild(feedbackButton(dataset.messageId, "LIKE", "赞"));
-      actions.appendChild(feedbackButton(dataset.messageId, "DISLIKE", "踩"));
+      actions.appendChild(feedbackButton(message || dataset, dataset.messageId, "LIKE", "赞"));
+      actions.appendChild(feedbackButton(message || dataset, dataset.messageId, "DISLIKE", "踩"));
     }
     const navigator = messageVersionNavigator();
     actions.appendChild(navigator.node);
@@ -852,11 +852,24 @@ function renderVersionNavigator(navigator, variants, index) {
   navigator.next.onclick = () => runSafely(() => selectMessagePath(variants[current + 1].messageId));
 }
 
-function feedbackButton(messageId, rating, label) {
+function feedbackButton(message, messageId, rating, label) {
   const button = document.createElement("button");
   button.type = "button";
   button.textContent = label;
-  button.addEventListener("click", () => runSafely(() => submitFeedback(messageId, rating)));
+  const currentRating = message?.feedback?.status === "ACTIVE" ? message.feedback.rating : null;
+  if (currentRating === rating) {
+    button.className = "feedback-active";
+    button.title = "再次点击取消";
+  }
+  button.addEventListener("click", () => runSafely(async () => {
+    const result = currentRating === rating
+      ? await cancelFeedback(messageId)
+      : await submitFeedback(messageId, rating);
+    if (state.selectedSessionId) {
+      await loadMessagesOnly(state.selectedSessionId);
+    }
+    return result;
+  }));
   return button;
 }
 
@@ -874,6 +887,15 @@ async function submitFeedback(messageId, rating) {
     })
   });
   log(`feedback ${feedback.feedbackId} ${feedback.rating}`);
+  return feedback;
+}
+
+async function cancelFeedback(messageId) {
+  const feedback = await requestJson(`/api/v1/ex/chat/messages/${encodeURIComponent(messageId)}/feedback`, {
+    method: "DELETE"
+  });
+  log(`feedback cancelled message=${feedback.messageId}`);
+  return feedback;
 }
 
 async function editUserMessage(message) {

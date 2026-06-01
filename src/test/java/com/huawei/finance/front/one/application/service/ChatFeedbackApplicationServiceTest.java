@@ -25,6 +25,7 @@ import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +51,7 @@ class ChatFeedbackApplicationServiceTest {
 
         assertThat(feedback.id()).isEqualTo("feedback_1");
         assertThat(feedback.rating()).isEqualTo("LIKE");
+        assertThat(feedback.status()).isEqualTo("ACTIVE");
         assertThat(feedback.runId()).isNull();
         assertThat(feedbacks.saved).isSameAs(feedback);
     }
@@ -62,7 +64,7 @@ class ChatFeedbackApplicationServiceTest {
         ChatFeedbackApplicationService service = new ChatFeedbackApplicationService(
                 new PermissionChecker(),
                 messages,
-                feedback -> feedback,
+                new RecordingFeedbackRepository(),
                 new FixedIdGenerator(),
                 null
         );
@@ -82,7 +84,7 @@ class ChatFeedbackApplicationServiceTest {
         ChatFeedbackApplicationService service = new ChatFeedbackApplicationService(
                 new PermissionChecker(),
                 messages,
-                feedback -> feedback,
+                new RecordingFeedbackRepository(),
                 new FixedIdGenerator(),
                 chatRunService(runs)
         );
@@ -90,6 +92,74 @@ class ChatFeedbackApplicationServiceTest {
         assertThatThrownBy(() -> service.submit(user(), "msg1", "run2", "LIKE", null, null, null))
                 .isInstanceOf(SecurityException.class)
                 .hasMessageContaining("同一会话");
+    }
+
+    @Test
+    void cancelFeedbackMarksExistingFeedbackAsCancelled() {
+        InMemoryMessageRepository messages = new InMemoryMessageRepository(new ChatMessage(
+                "msg1", "tenant1", "user1", "session1", "assistant", "answer", null, Instant.now()
+        ));
+        RecordingFeedbackRepository feedbacks = new RecordingFeedbackRepository();
+        ChatFeedbackApplicationService service = new ChatFeedbackApplicationService(
+                new PermissionChecker(),
+                messages,
+                feedbacks,
+                new FixedIdGenerator(),
+                null
+        );
+        service.submit(user(), "msg1", null, "LIKE", null, null, null);
+
+        ChatMessageFeedback cancelled = service.cancel(user(), "msg1", null);
+
+        assertThat(cancelled.status()).isEqualTo("CANCELLED");
+        assertThat(feedbacks.saved.status()).isEqualTo("CANCELLED");
+        assertThat(service.findActiveByMessages(user(), "session1", List.of(messages.message))).isEmpty();
+    }
+
+    @Test
+    void cancelFeedbackIsIdempotentWhenNoFeedbackExists() {
+        InMemoryMessageRepository messages = new InMemoryMessageRepository(new ChatMessage(
+                "msg1", "tenant1", "user1", "session1", "assistant", "answer", null, Instant.now()
+        ));
+        ChatFeedbackApplicationService service = new ChatFeedbackApplicationService(
+                new PermissionChecker(),
+                messages,
+                new RecordingFeedbackRepository(),
+                new FixedIdGenerator(),
+                null
+        );
+
+        ChatMessageFeedback cancelled = service.cancel(user(), "msg1", null);
+
+        assertThat(cancelled.id()).isNull();
+        assertThat(cancelled.rating()).isNull();
+        assertThat(cancelled.status()).isEqualTo("CANCELLED");
+    }
+
+    @Test
+    void findActiveByMessagesOnlyReturnsAssistantActiveFeedback() {
+        ChatMessage assistant = new ChatMessage(
+                "msg1", "tenant1", "user1", "session1", "assistant", "answer", null, Instant.now()
+        );
+        ChatMessage userMessage = new ChatMessage(
+                "msg2", "tenant1", "user1", "session1", "user", "question", null, Instant.now()
+        );
+        InMemoryMessageRepository messages = new InMemoryMessageRepository(assistant);
+        RecordingFeedbackRepository feedbacks = new RecordingFeedbackRepository();
+        ChatFeedbackApplicationService service = new ChatFeedbackApplicationService(
+                new PermissionChecker(),
+                messages,
+                feedbacks,
+                new FixedIdGenerator(),
+                null
+        );
+        ChatMessageFeedback feedback = service.submit(user(), "msg1", null, "DISLIKE", null, null, null);
+
+        Map<String, ChatMessageFeedback> active = service.findActiveByMessages(
+                user(), "session1", List.of(assistant, userMessage));
+
+        assertThat(active).containsEntry("msg1", feedback);
+        assertThat(active).doesNotContainKey("msg2");
     }
 
     private ChatRunApplicationService chatRunService(InMemoryRunRepository runs) {
@@ -162,6 +232,50 @@ class ChatFeedbackApplicationServiceTest {
         public ChatMessageFeedback save(ChatMessageFeedback feedback) {
             saved = feedback;
             return feedback;
+        }
+
+        @Override
+        public Optional<ChatMessageFeedback> cancel(String tenantId, String userId, String messageId, Instant cancelledAt) {
+            if (saved == null || !tenantId.equals(saved.tenantId()) || !userId.equals(saved.userId())
+                    || !messageId.equals(saved.messageId())) {
+                return Optional.empty();
+            }
+            saved = new ChatMessageFeedback(
+                    saved.id(),
+                    saved.tenantId(),
+                    saved.userId(),
+                    saved.sessionId(),
+                    saved.messageId(),
+                    saved.runId(),
+                    saved.rating(),
+                    "CANCELLED",
+                    saved.reasonCode(),
+                    saved.commentText(),
+                    saved.metadata(),
+                    saved.createdAt(),
+                    cancelledAt
+            );
+            return Optional.of(saved);
+        }
+
+        @Override
+        public Map<String, ChatMessageFeedback> findActiveByMessages(
+                String tenantId, String userId, String sessionId, Collection<String> messageIds) {
+            if (saved == null || !"ACTIVE".equals(saved.status()) || !tenantId.equals(saved.tenantId())
+                    || !userId.equals(saved.userId()) || !sessionId.equals(saved.sessionId())
+                    || !messageIds.contains(saved.messageId())) {
+                return Map.of();
+            }
+            return Map.of(saved.messageId(), saved);
+        }
+
+        @Override
+        public Optional<ChatMessageFeedback> findByMessage(String tenantId, String userId, String messageId) {
+            if (saved == null || !tenantId.equals(saved.tenantId()) || !userId.equals(saved.userId())
+                    || !messageId.equals(saved.messageId())) {
+                return Optional.empty();
+            }
+            return Optional.of(saved);
         }
     }
 

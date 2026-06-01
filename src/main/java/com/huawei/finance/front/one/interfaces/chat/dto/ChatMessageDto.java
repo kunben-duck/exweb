@@ -24,6 +24,7 @@ import java.time.Instant;
  * @param sourceMessageId 分支快照来源消息。
  * @param editedFromMessageId 编辑历史 user 消息的来源。
  * @param regeneratedFromMessageId 重新生成 assistant 消息的来源。
+ * @param feedback 当前用户对该 assistant 消息的有效反馈；user 消息或已取消反馈时为空。
  * @param createdAt 消息创建时间。
  */
 public record ChatMessageDto(
@@ -43,5 +44,6 @@ public record ChatMessageDto(
         String sourceMessageId,
         String editedFromMessageId,
         String regeneratedFromMessageId,
+        MessageFeedbackDto feedback,
         Instant createdAt
 ) {}

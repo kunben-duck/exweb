@@ -2,10 +2,12 @@ package com.huawei.finance.front.one.interfaces.chat;
 
 import com.huawei.finance.front.one.application.facade.ChatSessionFacade;
 import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
+import com.huawei.finance.front.one.application.service.ChatFeedbackApplicationService;
 import com.huawei.finance.front.one.application.service.ChatRunApplicationService;
 import com.huawei.finance.front.one.application.service.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.domain.chat.ChatMessageFeedback;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
@@ -18,9 +20,11 @@ import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionPageDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionStateDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatStreamStatusDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatBranchRequest;
+import com.huawei.finance.front.one.interfaces.chat.dto.MessageFeedbackDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.SelectChatPathRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.UpdateChatSessionRequest;
 import java.util.List;
+import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -42,13 +46,16 @@ import reactor.core.scheduler.Schedulers;
 public class ChatSessionController {
     private final ChatSessionFacade facade;
     private final ChatRunApplicationService chatRunService;
+    private final ChatFeedbackApplicationService feedbackService;
     private final AuthContextProvider auth;
     private final PermissionChecker permissionChecker;
 
     public ChatSessionController(ChatSessionFacade facade, ChatRunApplicationService chatRunService,
-                                 AuthContextProvider auth, PermissionChecker permissionChecker) {
+                                 ChatFeedbackApplicationService feedbackService, AuthContextProvider auth,
+                                 PermissionChecker permissionChecker) {
         this.facade = facade;
         this.chatRunService = chatRunService;
+        this.feedbackService = feedbackService;
         this.auth = auth;
         this.permissionChecker = permissionChecker;
     }
@@ -118,7 +125,7 @@ public class ChatSessionController {
                     ChatStreamStatus streamStatus = chatRunService.streamStatus(user, sessionId);
                     return new ChatSessionStateDto(
                             toDto(session),
-                            toMessagePageDto(messages),
+                            toMessagePageDto(user, sessionId, messages),
                             toStreamStatusDto(streamStatus)
                     );
                 })
@@ -142,7 +149,8 @@ public class ChatSessionController {
                                                   @RequestParam(value = "cursor", required = false) String cursor,
                                                   @RequestParam(value = "limit", defaultValue = "50") int limit) {
         UserContext user = resolveChatUser();
-        return Mono.fromCallable(() -> toMessagePageDto(facade.listMessages(user, sessionId, leafMessageId, cursor, limit)))
+        return Mono.fromCallable(() -> toMessagePageDto(user, sessionId,
+                        facade.listMessages(user, sessionId, leafMessageId, cursor, limit)))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -157,9 +165,7 @@ public class ChatSessionController {
     public Mono<List<ChatMessageDto>> variants(@PathVariable("sessionId") String sessionId,
                                                @PathVariable("messageId") String messageId) {
         UserContext user = resolveChatUser();
-        return Mono.fromCallable(() -> facade.listVariants(user, sessionId, messageId).stream()
-                        .map(this::toMessageDto)
-                        .toList())
+        return Mono.fromCallable(() -> toMessageDtos(user, sessionId, facade.listVariants(user, sessionId, messageId)))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -278,7 +284,7 @@ public class ChatSessionController {
         );
     }
 
-    private ChatMessageDto toMessageDto(ChatMessage message) {
+    private ChatMessageDto toMessageDto(ChatMessage message, ChatMessageFeedback feedback) {
         return new ChatMessageDto(
                 message.id(),
                 message.sessionId(),
@@ -296,12 +302,32 @@ public class ChatSessionController {
                 message.sourceMessageId(),
                 message.editedFromMessageId(),
                 message.regeneratedFromMessageId(),
+                feedback == null ? null : toFeedbackDto(feedback),
                 message.createdAt()
         );
     }
 
-    private ChatMessagePageDto toMessagePageDto(ChatMessagePage page) {
-        return new ChatMessagePageDto(page.items().stream().map(this::toMessageDto).toList(), page.nextCursor());
+    private ChatMessagePageDto toMessagePageDto(UserContext user, String sessionId, ChatMessagePage page) {
+        return new ChatMessagePageDto(toMessageDtos(user, sessionId, page.items()), page.nextCursor());
+    }
+
+    private List<ChatMessageDto> toMessageDtos(UserContext user, String sessionId, List<ChatMessage> messages) {
+        Map<String, ChatMessageFeedback> feedbacks = feedbackService.findActiveByMessages(user, sessionId, messages);
+        return messages.stream()
+                .map(message -> toMessageDto(message, feedbacks.get(message.id())))
+                .toList();
+    }
+
+    private MessageFeedbackDto toFeedbackDto(ChatMessageFeedback feedback) {
+        return new MessageFeedbackDto(
+                feedback.id(),
+                feedback.messageId(),
+                feedback.runId(),
+                feedback.rating(),
+                feedback.status(),
+                feedback.createdAt(),
+                feedback.updatedAt()
+        );
     }
 
     private ChatStreamStatusDto toStreamStatusDto(ChatStreamStatus status) {

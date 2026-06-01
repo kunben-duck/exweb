@@ -310,6 +310,12 @@ section + section {
   font-size: 12px;
 }
 
+.message-actions button.feedback-active {
+  color: #ffffff;
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
 .version-nav {
   display: inline-flex;
   gap: 8px;

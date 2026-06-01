@@ -1,10 +1,16 @@
 package com.huawei.finance.front.one.infrastructure.memory;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.integration.memory.ChatFeedbackRepository;
 import com.huawei.finance.front.one.domain.chat.ChatMessageFeedback;
+import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
@@ -13,6 +19,9 @@ import org.springframework.stereotype.Repository;
  */
 @Repository
 public class OpenGaussChatFeedbackRepository implements ChatFeedbackRepository {
+    private static final String STATUS_ACTIVE = "ACTIVE";
+    private static final String STATUS_CANCELLED = "CANCELLED";
+
     private final ChatFeedbackMapper mapper;
     private final ObjectMapper objectMapper;
 
@@ -23,55 +32,136 @@ public class OpenGaussChatFeedbackRepository implements ChatFeedbackRepository {
 
     @Override
     public ChatMessageFeedback save(ChatMessageFeedback feedback) {
+        ChatMessageFeedback current = findByMessage(feedback.tenantId(), feedback.userId(), feedback.messageId())
+                .map(existing -> withCurrentState(existing, feedback))
+                .orElse(feedback);
         int updated = mapper.update(
-                feedback.id(),
-                feedback.tenantId(),
-                feedback.userId(),
-                feedback.sessionId(),
-                feedback.messageId(),
-                feedback.runId(),
-                feedback.rating(),
-                feedback.reasonCode(),
-                feedback.commentText(),
-                toJson(feedback.metadata()),
-                feedback.createdAt(),
-                feedback.updatedAt()
+                current.id(),
+                current.tenantId(),
+                current.userId(),
+                current.sessionId(),
+                current.messageId(),
+                current.runId(),
+                current.rating(),
+                STATUS_ACTIVE,
+                current.reasonCode(),
+                current.commentText(),
+                toJson(current.metadata()),
+                current.updatedAt()
         );
         if (updated == 0) {
-            try {
-                mapper.insert(
-                        feedback.id(),
-                        feedback.tenantId(),
-                        feedback.userId(),
-                        feedback.sessionId(),
-                        feedback.messageId(),
-                        feedback.runId(),
-                        feedback.rating(),
-                        feedback.reasonCode(),
-                        feedback.commentText(),
-                        toJson(feedback.metadata()),
-                        feedback.createdAt(),
-                        feedback.updatedAt()
-                );
-            } catch (DuplicateKeyException ex) {
-                // 反馈允许用户重复修改，避免使用 PostgreSQL 专有 upsert，重复插入时退回更新。
-                mapper.update(
-                        feedback.id(),
-                        feedback.tenantId(),
-                        feedback.userId(),
-                        feedback.sessionId(),
-                        feedback.messageId(),
-                        feedback.runId(),
-                        feedback.rating(),
-                        feedback.reasonCode(),
-                        feedback.commentText(),
-                        toJson(feedback.metadata()),
-                        feedback.createdAt(),
-                        feedback.updatedAt()
-                );
-            }
+            return insertOrUpdateAfterRace(current);
         }
-        return feedback;
+        return current;
+    }
+
+    @Override
+    public Optional<ChatMessageFeedback> cancel(String tenantId, String userId, String messageId, Instant cancelledAt) {
+        int updated = mapper.cancelCurrent(tenantId, userId, messageId, cancelledAt);
+        if (updated == 0) {
+            return Optional.empty();
+        }
+        return findByMessage(tenantId, userId, messageId)
+                .map(feedback -> new ChatMessageFeedback(
+                        feedback.id(),
+                        feedback.tenantId(),
+                        feedback.userId(),
+                        feedback.sessionId(),
+                        feedback.messageId(),
+                        feedback.runId(),
+                        feedback.rating(),
+                        STATUS_CANCELLED,
+                        feedback.reasonCode(),
+                        feedback.commentText(),
+                        feedback.metadata(),
+                        feedback.createdAt(),
+                        cancelledAt
+                ));
+    }
+
+    @Override
+    public Map<String, ChatMessageFeedback> findActiveByMessages(
+            String tenantId, String userId, String sessionId, Collection<String> messageIds) {
+        if (messageIds == null || messageIds.isEmpty()) {
+            return Map.of();
+        }
+        List<String> uniqueIds = messageIds.stream()
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+        if (uniqueIds.isEmpty()) {
+            return Map.of();
+        }
+        return mapper.findActiveByMessages(tenantId, userId, sessionId, uniqueIds)
+                .stream()
+                .map(this::toDomain)
+                .collect(Collectors.toMap(ChatMessageFeedback::messageId, feedback -> feedback, (left, right) -> right));
+    }
+
+    @Override
+    public Optional<ChatMessageFeedback> findByMessage(String tenantId, String userId, String messageId) {
+        return mapper.findByMessage(tenantId, userId, messageId).map(this::toDomain);
+    }
+
+    private ChatMessageFeedback withCurrentState(ChatMessageFeedback existing, ChatMessageFeedback incoming) {
+        // 同一用户同一消息只保留一条当前反馈；再次点赞/点踩表示修改当前状态，而不是新增流水。
+        return new ChatMessageFeedback(
+                existing.id(),
+                incoming.tenantId(),
+                incoming.userId(),
+                incoming.sessionId(),
+                incoming.messageId(),
+                incoming.runId(),
+                incoming.rating(),
+                STATUS_ACTIVE,
+                incoming.reasonCode(),
+                incoming.commentText(),
+                incoming.metadata(),
+                existing.createdAt(),
+                incoming.updatedAt()
+        );
+    }
+
+    private ChatMessageFeedback insertOrUpdateAfterRace(ChatMessageFeedback feedback) {
+        try {
+            mapper.insert(
+                    feedback.id(),
+                    feedback.tenantId(),
+                    feedback.userId(),
+                    feedback.sessionId(),
+                    feedback.messageId(),
+                    feedback.runId(),
+                    feedback.rating(),
+                    STATUS_ACTIVE,
+                    feedback.reasonCode(),
+                    feedback.commentText(),
+                    toJson(feedback.metadata()),
+                    feedback.createdAt(),
+                    feedback.updatedAt()
+            );
+            return feedback;
+        } catch (DuplicateKeyException ex) {
+            return findByMessage(feedback.tenantId(), feedback.userId(), feedback.messageId())
+                    .map(existing -> withCurrentState(existing, feedback))
+                    .map(existing -> {
+                        mapper.update(
+                            existing.id(),
+                            existing.tenantId(),
+                            existing.userId(),
+                            existing.sessionId(),
+                            existing.messageId(),
+                            existing.runId(),
+                            existing.rating(),
+                            STATUS_ACTIVE,
+                            existing.reasonCode(),
+                            existing.commentText(),
+                            toJson(existing.metadata()),
+                            existing.updatedAt()
+                        );
+                        return existing;
+                    })
+                    .orElse(feedback);
+        }
     }
 
     private String toJson(Map<String, Object> metadata) {
@@ -80,5 +170,34 @@ public class OpenGaussChatFeedbackRepository implements ChatFeedbackRepository {
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("消息反馈 metadata 序列化失败", ex);
         }
+    }
+
+    private Map<String, Object> fromJson(String metadataJson) {
+        if (metadataJson == null || metadataJson.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(metadataJson, new TypeReference<>() {});
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("消息反馈 metadata 反序列化失败", ex);
+        }
+    }
+
+    private ChatMessageFeedback toDomain(ChatMessageFeedbackRow row) {
+        return new ChatMessageFeedback(
+                row.getId(),
+                row.getTenantId(),
+                row.getUserId(),
+                row.getSessionId(),
+                row.getMessageId(),
+                row.getRunId(),
+                row.getRating(),
+                row.getStatus(),
+                row.getReasonCode(),
+                row.getCommentText(),
+                fromJson(row.getMetadataJson()),
+                row.getCreatedAt(),
+                row.getUpdatedAt()
+        );
     }
 }

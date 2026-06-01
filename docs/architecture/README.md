@@ -288,6 +288,7 @@ sequenceDiagram
 ```text
 POST /api/v1/ex/chat/runs
 POST /api/v1/ex/chat/messages/{messageId}/feedback
+DELETE /api/v1/ex/chat/messages/{messageId}/feedback
 POST /api/v1/ex/chat/sessions
 GET  /api/v1/ex/chat/sessions?limit=20&cursor=...
 GET  /api/v1/ex/chat/sessions/{sessionId}/state?messageLimit=50
@@ -690,7 +691,7 @@ AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 
 - `fin_ex_chat_event_t`
 - `fin_ex_chat_read_cursor_t`
 - `fin_ex_uploaded_document_t`
-- `fin_ex_message_feedback_t`
+- `fin_ex_message_feedback_t`：当前用户对 assistant 消息的点赞/点踩状态，支持 ACTIVE/CANCELLED。
 - `fin_ex_runtime_binding_t`
 
 Redis key 必须以 `fin_ex` 开头：

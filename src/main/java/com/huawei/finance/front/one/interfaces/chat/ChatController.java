@@ -26,6 +26,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -140,9 +141,23 @@ public class ChatController {
                             request == null ? null : request.commentText(),
                             request == null ? null : request.metadata()
                     );
-                    return new MessageFeedbackDto(feedback.id(), feedback.messageId(), feedback.runId(),
-                            feedback.rating(), feedback.createdAt());
+                    return toFeedbackDto(feedback);
                 })
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * 取消当前用户对 assistant 消息的点赞或点踩。
+     *
+     * @param messageId 被取消反馈的 assistant 消息标识；服务端会校验消息归属和角色。
+     * @param runId 可选 run 标识；存在时必须与消息属于同一会话。
+     * @return 取消后的反馈状态摘要。
+     */
+    @DeleteMapping(value = "/messages/{messageId}/feedback")
+    public Mono<MessageFeedbackDto> cancelFeedback(@PathVariable("messageId") String messageId,
+                                                   @RequestParam(value = "runId", required = false) String runId) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> toFeedbackDto(feedbackService.cancel(user, messageId, runId)))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -252,6 +267,18 @@ public class ChatController {
                 status.activeRunFirstSeq(),
                 status.activeRunLastSeq(),
                 status.cancellable()
+        );
+    }
+
+    private MessageFeedbackDto toFeedbackDto(ChatMessageFeedback feedback) {
+        return new MessageFeedbackDto(
+                feedback.id(),
+                feedback.messageId(),
+                feedback.runId(),
+                feedback.rating(),
+                feedback.status(),
+                feedback.createdAt(),
+                feedback.updatedAt()
         );
     }
 }

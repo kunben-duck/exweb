@@ -43,7 +43,7 @@ export FINANCEEX_DEV_USERNAME=developer
 | Run 事件恢复 | `GET` | `/api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}` | 跨页签、跨浏览器或跨电脑续接正在输出的当前回答 |
 | 流状态 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/stream-status` | 查询最新 `seq`、read cursor、active run 和是否可取消 |
 | 停止回答 | `POST` | `/api/v1/ex/chat/runs/{runId}/stop` | 幂等停止当前 run |
-| 消息反馈 | `POST` | `/api/v1/ex/chat/messages/{messageId}/feedback` | 对 assistant 消息点赞/点踩 |
+| 消息反馈 | `POST` / `DELETE` | `/api/v1/ex/chat/messages/{messageId}/feedback` | 对 assistant 消息点赞、点踩、切换或取消 |
 | 上传文档 | `POST` | `/api/v1/ex/documents` | multipart 上传本地文件 |
 | 文档列表 | `GET` | `/api/v1/ex/documents?sessionId=...&limit=20&cursor=...` | 当前用户文档库；`sessionId` 可选，用于筛选会话关联文档 |
 | 文档详情 | `GET` | `/api/v1/ex/documents/{documentId}` | 查询单个文档 |
@@ -130,7 +130,8 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `GET /api/v1/ex/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ChatEventDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`。 |
 | `GET /api/v1/ex/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ChatEventDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/stream-status` | 判断是否存在 active run、是否可停止、从哪里恢复。 | Path：`sessionId`。 | `ChatStreamStatusDto`：`latestSeq`、`readCursorSeq`、`activeRunId`、`activeStreamTopicId`、`activeRunFirstSeq`、`activeRunLastSeq`、`cancellable`。 | `latestSeq` 是服务端事实源最新位置，不是客户端已消费位置。 |
-| `POST /api/v1/ex/chat/messages/{messageId}/feedback` | 用户对完整 assistant 消息点赞、点踩或提交原因。 | Path：`messageId`；JSON body：`runId` 可选，`rating`，`reasonCode` 可选，`commentText` 可选，`metadata` 可选。 | `MessageFeedbackDto`：`feedbackId`、`messageId`、`runId`、`rating`、`createdAt`。 | 如果传 `runId`，服务端会校验 message、session、run 归属一致。 |
+| `POST /api/v1/ex/chat/messages/{messageId}/feedback` | 用户对完整 assistant 消息点赞、点踩或切换反馈。 | Path：`messageId`；JSON body：`runId` 可选，`rating=LIKE/DISLIKE`，`reasonCode` 可选，`commentText` 可选，`metadata` 可选。 | `MessageFeedbackDto`：`feedbackId`、`messageId`、`runId`、`rating`、`status=ACTIVE`、`createdAt`、`updatedAt`。 | 同一用户同一消息最多一条当前反馈；重复提交表示修改当前反馈。 |
+| `DELETE /api/v1/ex/chat/messages/{messageId}/feedback` | 用户取消已点赞或已点踩状态。 | Path：`messageId`；Query：`runId` 可选。 | `MessageFeedbackDto`：`status=CANCELLED`。 | 幂等；没有历史反馈时也返回取消成功。历史消息中的 `feedback` 会返回 `null`。 |
 
 同一会话同一时间只允许一个 active run。若发送时已有 `RUNNING/CANCELLING` run，
 `POST /chat/runs` 会返回 HTTP 409，错误码 `ACTIVE_RUN_EXISTS`。前端应保持“生成中/停止”
@@ -197,6 +198,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `sourceSessionId` / `sourceMessageId` | 分支快照来源 |
 | `editedFromMessageId` | 编辑历史 user 消息时的新版本来源 |
 | `regeneratedFromMessageId` | 重新生成 assistant 消息时的新版本来源 |
+| `feedback` | 当前用户对该 assistant 消息的有效反馈；user 消息或已取消反馈为 `null` |
 | `createdAt` | 消息创建时间 |
 
 ### `ChatEventDto`
@@ -604,7 +606,7 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
 `regeneratedMessageId`。这样新回答会作为原 user 消息下的 assistant sibling 保存，前端可以通过
 `variants` 和 `path` 接口按版本游标切换。
 
-对 assistant 消息提交反馈：
+对 assistant 消息提交点赞或点踩：
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/ex/chat/messages/msg_002/feedback \
@@ -628,9 +630,33 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/messages/msg_002/feedback \
   "messageId": "msg_002",
   "runId": "run_xxx",
   "rating": "DISLIKE",
-  "createdAt": "2026-05-17T01:05:00Z"
+  "status": "ACTIVE",
+  "createdAt": "2026-05-17T01:05:00Z",
+  "updatedAt": "2026-05-17T01:05:00Z"
 }
 ```
+
+再次对同一消息提交另一个 `rating` 会切换当前反馈；点击已高亮的同一按钮时，前端应调用取消接口：
+
+```bash
+curl -X DELETE "http://localhost:8080/api/v1/ex/chat/messages/msg_002/feedback?runId=run_xxx"
+```
+
+取消响应：
+
+```json
+{
+  "feedbackId": "feedback_xxx",
+  "messageId": "msg_002",
+  "runId": "run_xxx",
+  "rating": "DISLIKE",
+  "status": "CANCELLED",
+  "createdAt": "2026-05-17T01:05:00Z",
+  "updatedAt": "2026-05-17T01:06:00Z"
+}
+```
+
+历史消息接口会在 `ChatMessageDto.feedback` 返回当前用户的有效反馈状态。`feedback=null` 表示该消息没有当前反馈，或者反馈已取消。
 
 ## WebSocket 协议
 

@@ -15,7 +15,8 @@ import java.util.Map;
  * @param sessionId 消息所属会话标识。
  * @param messageId 被反馈的消息标识。
  * @param runId 反馈关联的 run 标识，可为空。
- * @param rating 反馈评级，例如 LIKE、DISLIKE。
+ * @param rating 反馈评级，例如 LIKE、DISLIKE；取消状态下保留最后一次有效评级或为空。
+ * @param status 当前反馈状态，ACTIVE 表示前端应高亮，CANCELLED 表示当前用户已撤销反馈。
  * @param reasonCode 结构化原因编码。
  * @param commentText 用户补充说明。
  * @param metadata 扩展诊断字段。
@@ -30,6 +31,7 @@ public record ChatMessageFeedback(
         String messageId,
         String runId,
         String rating,
+        String status,
         String reasonCode,
         String commentText,
         Map<String, Object> metadata,

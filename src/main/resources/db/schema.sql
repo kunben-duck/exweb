@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS fin_ex_message_feedback_t (
     message_id VARCHAR(64) NOT NULL,
     run_id VARCHAR(64),
     rating VARCHAR(32) NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
     reason_code VARCHAR(128),
     comment_text TEXT,
     metadata_json TEXT,
@@ -80,6 +81,12 @@ CREATE TABLE IF NOT EXISTS fin_ex_message_feedback_t (
 
 CREATE INDEX IF NOT EXISTS idx_fin_ex_message_feedback_owner_message
     ON fin_ex_message_feedback_t(tenant_id, user_id, message_id, updated_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_fin_ex_message_feedback_owner_message
+    ON fin_ex_message_feedback_t(tenant_id, user_id, message_id);
+
+CREATE INDEX IF NOT EXISTS idx_fin_ex_message_feedback_owner_session_status
+    ON fin_ex_message_feedback_t(tenant_id, user_id, session_id, status, message_id);
 
 CREATE TABLE IF NOT EXISTS fin_ex_chat_run_t (
     id VARCHAR(64) PRIMARY KEY,
@@ -277,7 +284,8 @@ COMMENT ON COLUMN fin_ex_message_feedback_t.user_id IS '用户标识，来自服
 COMMENT ON COLUMN fin_ex_message_feedback_t.session_id IS '被反馈消息所属会话 ID。';
 COMMENT ON COLUMN fin_ex_message_feedback_t.message_id IS '被反馈的 assistant 消息 ID，对应 fin_ex_chat_message_t.id。';
 COMMENT ON COLUMN fin_ex_message_feedback_t.run_id IS '反馈关联的 runId，可为空；存在时必须与消息属于同一会话。';
-COMMENT ON COLUMN fin_ex_message_feedback_t.rating IS '反馈评级，例如 LIKE、DISLIKE。';
+COMMENT ON COLUMN fin_ex_message_feedback_t.rating IS '反馈评级，例如 LIKE、DISLIKE；取消状态下保留最后一次有效评级。';
+COMMENT ON COLUMN fin_ex_message_feedback_t.status IS '当前反馈状态，ACTIVE 表示仍有效，CANCELLED 表示当前用户已撤销点赞或点踩。';
 COMMENT ON COLUMN fin_ex_message_feedback_t.reason_code IS '结构化反馈原因编码，便于统计归因。';
 COMMENT ON COLUMN fin_ex_message_feedback_t.comment_text IS '用户补充的反馈说明文本。';
 COMMENT ON COLUMN fin_ex_message_feedback_t.metadata_json IS '反馈扩展元数据 JSON，保存前端或诊断信息。';

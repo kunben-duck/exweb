@@ -6,8 +6,11 @@ import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRe
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
+import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
@@ -17,6 +20,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * 真实 Relay streamable-http API adapter。
@@ -62,7 +66,7 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
                 .retrieve()
                 .bodyToFlux(String.class)
                 .timeout(properties.getTimeout());
-        return chunks
+        Flux<ChatEvent> normalized = chunks
                 .concatMap(chunk -> Flux.fromIterable(responseNormalizer.normalize(
                         request.runId(), request.sessionId(), chunk)))
                 // 下游一旦声明消息完成，本轮 Runtime 流即可闭合；后续异常帧不再进入前端事件流。
@@ -71,7 +75,8 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
                     if ("message.completed".equals(event.type())) {
                         completed.set(true);
                     }
-                })
+                });
+        return enforceRuntimeDeadline(normalized)
                 .concatWith(Mono.defer(() -> completed.get()
                         ? Mono.empty()
                         : Mono.just(MessageCompletedEvent.of(request.runId(), request.sessionId()))));
@@ -108,5 +113,43 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
          * 因此不会进入 Relay 请求体、事件 payload 或持久化 metadata。
          */
         spec.headers(headers -> headers.set(HttpHeaders.COOKIE, forwardHeaders.cookieHeader()));
+    }
+
+    private Flux<ChatEvent> enforceRuntimeDeadline(Flux<ChatEvent> source) {
+        Duration timeout = properties.getTimeout();
+        if (timeout == null || timeout.isZero() || timeout.isNegative()) {
+            return source;
+        }
+        return Flux.create(sink -> {
+            AtomicBoolean terminated = new AtomicBoolean(false);
+            var timer = Schedulers.parallel().schedule(() -> {
+                if (terminated.compareAndSet(false, true) && !sink.isCancelled()) {
+                    sink.error(new TimeoutException("Relay runtime stream timed out after " + timeout));
+                }
+            }, Math.max(1L, timeout.toMillis()), TimeUnit.MILLISECONDS);
+            var upstream = source.subscribe(
+                    event -> {
+                        if (!terminated.get() && !sink.isCancelled()) {
+                            sink.next(event);
+                        }
+                    },
+                    error -> {
+                        if (terminated.compareAndSet(false, true) && !sink.isCancelled()) {
+                            timer.dispose();
+                            sink.error(error);
+                        }
+                    },
+                    () -> {
+                        if (terminated.compareAndSet(false, true) && !sink.isCancelled()) {
+                            timer.dispose();
+                            sink.complete();
+                        }
+                    });
+            sink.onDispose(() -> {
+                terminated.set(true);
+                timer.dispose();
+                upstream.dispose();
+            });
+        });
     }
 }

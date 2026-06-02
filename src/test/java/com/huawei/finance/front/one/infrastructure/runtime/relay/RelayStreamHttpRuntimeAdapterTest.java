@@ -173,11 +173,11 @@ class RelayStreamHttpRuntimeAdapterTest {
     }
 
     @Test
-    void unknownJsonFrameFailsInsteadOfLeakingRawJsonToFrontend() {
+    void unknownJsonFrameBecomesRuntimeEventInsteadOfLeakingAsAssistantText() {
         WebClient.Builder builder = WebClient.builder()
                 .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
                         .header(HttpHeaders.CONTENT_TYPE, "application/json")
-                        .body("{\"unexpected\":\"raw\"}")
+                        .body("{\"type\":\"project_home\",\"project_home\":\"/tmp/xxx\",\"cookie\":\"sid=secret\"}")
                         .build()));
         RelayAgentProperties properties = new RelayAgentProperties();
         properties.setBaseUrl("http://relay.test");
@@ -185,8 +185,17 @@ class RelayStreamHttpRuntimeAdapterTest {
                 new AgentRuntimeForwardCookieProperties());
 
         StepVerifier.create(adapter.query(request(RuntimeForwardHeaders.empty())))
-                .expectError(RelayRuntimeProtocolException.class)
-                .verify();
+                .assertNext(event -> {
+                    assertThat(event.type()).isEqualTo("runtime.event");
+                    assertThat(event.payload()).containsEntry("sourceType", "project_home");
+                    assertThat(event.payload().get("sourcePayload"))
+                            .asString()
+                            .contains("project_home")
+                            .doesNotContain("sid=secret")
+                            .contains("[REDACTED]");
+                })
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                .verifyComplete();
     }
 
     @Test

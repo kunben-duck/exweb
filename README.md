@@ -272,7 +272,7 @@ SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP �
 
 Relay Runtime Cookie 透传是 adapter 级能力：`relay-stream-http` 会把入口 Cookie 放入下游 HTTP 请求头；`relay-websocket` 会把入口 Cookie 放入后端出站 WebSocket 握手头和可选 stop HTTP 请求头。`AgentRuntimeRequest.forwardHeaders` 与 cancel 请求中的转发头均被 JSON 忽略，避免 Cookie 进入下游请求体。
 
-Relay Runtime 请求与响应均经过 adapter 防腐层：应用层使用 `AgentRuntimeRequest`，但下游请求体会映射为 Relay 专用 wire DTO，只保留 `runId/sessionId/runtimeSessionId/query/attachments/metadata` 等必要字段；下游 plain text、JSON chunk 或 SSE-like `data:` chunk 会先归一化为 ChatService 标准 `ChatEvent`。前端只消费 `message.delta.payload.delta`、`message.completed`、`run.failed` 等稳定事件，不需要理解 Relay 原始响应格式。
+Relay Runtime 请求与响应均经过 adapter 防腐层：应用层使用 `AgentRuntimeRequest`，但下游请求体会映射为 Relay 专用 wire DTO，只保留 `runId/sessionId/runtimeSessionId/query/attachments/metadata` 等必要字段；下游 plain text、JSON chunk 或 SSE-like `data:` chunk 会先归一化为 ChatService 标准 `ChatEvent`。前端只消费 `message.delta.payload.delta`、`runtime.event`、`message.completed`、`run.failed` 等稳定事件，不需要理解 Relay 原始响应格式。`message.delta` 只表示 assistant 正文；Relay 未知 JSON object 会以脱敏限长后的 `runtime.event.payload.sourcePayload` 可控透传，不会作为顶层事件类型污染 ChatService 协议。
 
 ## 上线版本边界
 

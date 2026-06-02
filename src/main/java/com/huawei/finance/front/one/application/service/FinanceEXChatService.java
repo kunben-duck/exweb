@@ -272,7 +272,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 return persistAndPublishRunEvents(
                         Flux.concat(Flux.just(RunStartedEvent.of(runId, session.id())), body,
                                         Flux.just(RunCompletedEvent.of(runId, session.id(), runCompletedPayload(selectedRoute, bindingRef.get()))))
-                                .onErrorResume(ex -> Flux.just(ErrorEvent.of(runId, session.id(), "RUN_ERROR", ex.getMessage()))),
+                                .onErrorResume(ex -> Flux.just(runtimeErrorEvent(runId, session.id(), ex))),
                         user,
                         session,
                         runCommand,
@@ -285,7 +285,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
             } catch (RuntimeException ex) {
                 // run 已创建后同步步骤失败时，也必须写入 run.failed 并释放 active run，避免前端看到永远 RUNNING。
                 return persistAndPublishRunEvents(
-                        Flux.just(ErrorEvent.of(runId, session.id(), "RUN_ERROR", ex.getMessage())),
+                        Flux.just(runtimeErrorEvent(runId, session.id(), ex)),
                         user,
                         session,
                         runCommand,
@@ -463,5 +463,27 @@ public class FinanceEXChatService implements FinanceChatFacade {
         if (delta != null) {
             assistant.append(delta);
         }
+    }
+
+    private ErrorEvent runtimeErrorEvent(String runId, String sessionId, Throwable ex) {
+        String code = isTimeout(ex) ? "RUNTIME_STREAM_TIMEOUT" : "RUN_ERROR";
+        String message = ex == null || ex.getMessage() == null || ex.getMessage().isBlank()
+                ? "Runtime execution failed"
+                : ex.getMessage();
+        return ErrorEvent.of(runId, sessionId, code, message);
+    }
+
+    private boolean isTimeout(Throwable ex) {
+        Throwable current = ex;
+        while (current != null) {
+            String className = current.getClass().getName();
+            String message = current.getMessage();
+            if (className.contains("TimeoutException")
+                    || (message != null && message.contains("Did not observe any item or terminal signal within"))) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 }

@@ -36,7 +36,7 @@ rg -n "methodName|className" src/main/java/com/huawei/finance/front/one
 
 用途：
 
-- 保存 `run.started`、`message.delta`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled` 等事件。
+- 保存 `run.started`、`message.delta`、`runtime.event`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled` 等事件。
 - WebSocket 实时输出和 Event Resume 断点恢复都基于这张表的事件。
 - `seq` 是 openGauss 生成的恢复游标。
 
@@ -298,12 +298,13 @@ RelayStreamHttpRuntimeAdapter#applyForwardedCookie(...)
 - 可选透传 Cookie 到 HTTP header。
 - 使用 `bodyToFlux(String.class)` 接收下游响应。
 - 通过 `RelayRuntimeResponseNormalizer` 把 plain text、JSON chunk、SSE-like `data:` chunk 转成标准 ChatEvent。
+- Relay 非正文扩展帧会转成 `runtime.event`；只有 `message.delta` 代表 assistant 正文并参与历史消息拼接。
 - 流结束时补 `MessageCompletedEvent`。
 
 重点排查：
 
-- Relay 返回了数据但前端没看到：先确认这里是否产生了 `MessageDeltaEvent`。
-- Relay 响应格式不是纯字符串片段：先看 `RelayRuntimeResponseNormalizer` 是否支持该 chunk 格式，不要把原始 JSON 直接塞给前端。
+- Relay 返回了数据但前端没看到：先确认这里是否产生了 `MessageDeltaEvent` 或 `RuntimeEvent`。
+- Relay 响应格式不是纯字符串片段：先看 `RelayRuntimeResponseNormalizer` 是否把正文转为 `message.delta`，或把非正文扩展帧转为 `runtime.event`。不要把 Relay 原始 JSON 作为 ChatService 顶层事件透传。
 - 第三方 Cookie 泄漏风险：确认只有可信 Relay adapter 调用 `applyForwardedCookie(...)`。
 
 ### 6.4 Relay 出站 WebSocket adapter
@@ -355,7 +356,7 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
 
 2. `ChatDeltaCoalescer#coalesce(...)`
    - 只合并连续 `message.delta`，降低逐 token 写库、Redis publish 和 WebSocket 投递放大。
-   - 遇到 `run.started`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled` 会先 flush，再原样输出边界事件。
+   - 遇到 `runtime.event`、`run.started`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled` 会先 flush，再原样输出边界事件。
 
 3. `ChatRunApplicationService#shouldAcceptEvent(...)`
    - 先看 Redis cancel flag。
@@ -369,7 +370,7 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
    - 条件不满足时抛出写入拒绝，后台流停止，不发布该事件。
 
 5. `appendAssistantDelta(...)`
-   - 累积 `message.delta` 内容。
+   - 累积 `message.delta` 内容；`runtime.event` 只作为运行态扩展事件落库和推送，不进入 assistant 历史消息。
    - 注意：只有 guarded insert 成功后的 delta 才会进入 assistant buffer，不写未持久化的迟到 token。
 
 6. run 完成前保存完整 assistant message

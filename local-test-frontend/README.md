@@ -56,6 +56,8 @@ Referer: http://localhost:8080/fin/ex/
 - WebSocket：连接、connect、subscribe、ack、跨 session / 跨 run topic 订阅。
 - 多会话隔离：同一 WebSocket 连接可以同时订阅多个 session 的 run topic；本地联调台会按事件
   `sessionId` 更新游标和日志，正式前端应按 `sessionId` 分发到对应会话面板。
+- Runtime 扩展事件：Relay 返回非正文 JSON（例如 `project_home/progress/thinking`）时会显示为
+  `runtime.event` system 行，便于确认事件已落库、推送并可通过 Event Resume 恢复。
 - Event Resume：会话级事件恢复按 `afterSeq` 有限补发缺失事件；run 级事件恢复在 active run 恢复时补发并接续 live 事件到终态。
 - 文档库：上传本地文件、列表、详情、状态、预览地址、下载、改名、删除。
 - 附件：选择文档库中 `AVAILABLE` 文档作为聊天附件发送。

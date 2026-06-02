@@ -7,6 +7,7 @@ import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ErrorEvent;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
+import com.huawei.finance.front.one.domain.chat.RuntimeEvent;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -107,5 +108,27 @@ class ChatDeltaCoalescerTest {
                 .containsEntry("delta", "ab")
                 .containsEntry("runtimeSessionId", "runtime-1")
                 .doesNotContainKey("raw");
+    }
+
+    @Test
+    void runtimeEventFlushesBufferedDeltaAndIsNotMerged() {
+        ChatStreamProperties properties = new ChatStreamProperties();
+        properties.setDeltaCoalesceWindow(Duration.ofSeconds(5));
+        ChatDeltaCoalescer coalescer = new ChatDeltaCoalescer(properties);
+        RuntimeEvent runtimeEvent = RuntimeEvent.relay("run1", "session1", "project_home",
+                "event", "runtime", "runtime", null, Map.of("project_home", "/tmp/xxx"));
+
+        List<ChatEvent> events = coalescer.coalesce(Flux.just(
+                MessageDeltaEvent.of("run1", "session1", "a"),
+                runtimeEvent,
+                MessageDeltaEvent.of("run1", "session1", "b"),
+                MessageCompletedEvent.of("run1", "session1")
+        )).collectList().block();
+
+        assertThat(events).hasSize(4);
+        assertThat(events.get(0).payload()).containsEntry("delta", "a");
+        assertThat(events.get(1).type()).isEqualTo("runtime.event");
+        assertThat(events.get(2).payload()).containsEntry("delta", "b");
+        assertThat(events.get(3).type()).isEqualTo("message.completed");
     }
 }

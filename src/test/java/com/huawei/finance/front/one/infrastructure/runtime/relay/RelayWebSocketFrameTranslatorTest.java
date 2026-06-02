@@ -85,11 +85,35 @@ class RelayWebSocketFrameTranslatorTest {
     }
 
     @Test
-    void unknownJsonFrameFailsProtocol() {
-        assertThatThrownBy(() -> translator.translate("run1", "session1",
-                "{\"unexpected\":\"raw\"}"))
-                .isInstanceOf(RelayRuntimeProtocolException.class)
-                .hasMessageContaining("Unsupported Relay runtime frame");
+    void unknownJsonFrameBecomesRuntimeEventWithoutLeakingSensitivePayload() {
+        List<ChatEvent> events = translator.translate("run1", "session1",
+                "{\"type\":\"project_home\",\"project_home\":\"/tmp/xxx\",\"nullable\":null,"
+                        + "\"authorization\":\"Bearer secret\"}");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("runtime.event");
+        assertThat(events.getFirst().payload())
+                .containsEntry("source", "relay")
+                .containsEntry("sourceType", "project_home")
+                .containsEntry("channel", "runtime");
+        assertThat(events.getFirst().payload().get("sourcePayload"))
+                .asString()
+                .contains("project_home")
+                .doesNotContain("Bearer secret")
+                .contains("[REDACTED]");
+    }
+
+    @Test
+    void progressMessageFrameDoesNotBecomeAssistantDelta() {
+        List<ChatEvent> events = translator.translate("run1", "session1",
+                "{\"type\":\"progress\",\"message\":\"处理中\"}");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("runtime.event");
+        assertThat(events.getFirst().payload())
+                .containsEntry("sourceType", "progress")
+                .containsEntry("channel", "progress")
+                .containsEntry("text", "处理中");
     }
 
     @Test

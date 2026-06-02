@@ -6,8 +6,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
+import com.huawei.finance.front.one.domain.chat.RuntimeEvent;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,10 +21,15 @@ import org.springframework.stereotype.Component;
  *
  * <p>Relay 下游可能返回纯文本、JSON chunk 或 SSE-like {@code data: ...} 片段。本组件把这些
  * 私有协议统一转换成 ChatService 标准 ChatEvent，确保前端只消费稳定的
- * {@code message.delta/message.completed/run.failed} 语义，不接触下游原始响应体。</p>
+ * {@code message.delta/message.completed/run.failed/runtime.event} 语义，不接触下游原始响应体。</p>
  */
 @Component
 public class RelayRuntimeResponseNormalizer {
+    private static final int MAX_SOURCE_PAYLOAD_DEPTH = 6;
+    private static final int MAX_SOURCE_PAYLOAD_STRING_LENGTH = 2048;
+    private static final int MAX_SOURCE_PAYLOAD_ARRAY_SIZE = 50;
+    private static final String REDACTED = "[REDACTED]";
+
     private final ObjectMapper objectMapper;
 
     public RelayRuntimeResponseNormalizer(ObjectMapper objectMapper) {
@@ -128,19 +136,23 @@ public class RelayRuntimeResponseNormalizer {
             throw new RelayRuntimeProtocolException(errorMessage(root));
         }
         if (isCompleted(type) || hasFinishReason(root)) {
-            String delta = extractDelta(root);
+            String delta = extractAnswerDelta(root, type);
             if (delta == null || delta.isBlank()) {
                 return List.of(MessageCompletedEvent.of(runId, sessionId, completionPayload(root)));
             }
             return List.of(deltaEvent(runId, sessionId, delta, root),
                     MessageCompletedEvent.of(runId, sessionId, completionPayload(root)));
         }
-        String delta = extractDelta(root);
+        String delta = extractAnswerDelta(root, type);
         if (delta == null || delta.isBlank()) {
             if (isMetadataOnlyDelta(root, type)) {
                 return List.of();
             }
-            throw new RelayRuntimeProtocolException("Unsupported Relay runtime frame: no delta or terminal status");
+            /*
+             * Relay 的事件类型会随下游 Agent 版本持续演进。没有 answer delta、也不是 terminal/error
+             * 的合法 JSON object 不应让本轮 run 失败，而是作为 runtime.event 可控透传给前端。
+             */
+            return List.of(runtimeEvent(runId, sessionId, root, type));
         }
         return List.of(deltaEvent(runId, sessionId, delta, root));
     }
@@ -175,22 +187,32 @@ public class RelayRuntimeResponseNormalizer {
         return Map.copyOf(payload);
     }
 
-    private String extractDelta(JsonNode root) {
+    private String extractAnswerDelta(JsonNode root, String type) {
+        JsonNode choice = firstChoice(root);
+        if (choice != null) {
+            String choiceDelta = extractChoiceDelta(choice);
+            if (choiceDelta != null) {
+                return choiceDelta;
+            }
+        }
+        if (!isAnswerDeltaCandidate(type)) {
+            return null;
+        }
         String direct = firstText(root, "delta", "content", "message", "text", "output_text");
         if (direct != null) {
             return direct;
         }
         JsonNode data = root.get("data");
         if (data != null && data.isObject()) {
-            String nested = extractDelta(data);
-            if (nested != null) {
-                return nested;
+            String nestedType = firstText(data, "type", "event", "status");
+            if (isAnswerDeltaCandidate(nestedType)) {
+                return extractAnswerDelta(data, nestedType);
             }
         }
-        JsonNode choice = firstChoice(root);
-        if (choice == null) {
-            return null;
-        }
+        return null;
+    }
+
+    private String extractChoiceDelta(JsonNode choice) {
         String choiceText = firstText(choice, "text", "content", "message");
         if (choiceText != null) {
             return choiceText;
@@ -207,6 +229,148 @@ public class RelayRuntimeResponseNormalizer {
             return firstText(messageNode, "content", "text");
         }
         return null;
+    }
+
+    private boolean isAnswerDeltaCandidate(String type) {
+        if (type == null || type.isBlank()) {
+            return true;
+        }
+        String normalized = type.trim().toLowerCase();
+        return "message.delta".equals(normalized)
+                || "delta".equals(normalized)
+                || "answer".equals(normalized)
+                || "answer.delta".equals(normalized)
+                || "assistant.delta".equals(normalized)
+                || "output".equals(normalized)
+                || "output.delta".equals(normalized)
+                || "output_text".equals(normalized)
+                || "text".equals(normalized);
+    }
+
+    private RuntimeEvent runtimeEvent(String runId, String sessionId, JsonNode root, String type) {
+        String sourceType = type == null || type.isBlank() ? "unknown" : type.trim();
+        String channel = runtimeChannel(sourceType);
+        String text = firstText(root, "displayText", "display_text", "title", "description");
+        if (text == null && isRuntimeTextSafe(sourceType)) {
+            text = firstText(root, "message", "text");
+        }
+        return RuntimeEvent.relay(runId, sessionId, sourceType, runtimeEventKind(sourceType),
+                channel, channel, text, sourcePayload(root));
+    }
+
+    private boolean isRuntimeTextSafe(String sourceType) {
+        String normalized = sourceType == null ? "" : sourceType.trim().toLowerCase();
+        return normalized.contains("progress")
+                || normalized.contains("thinking")
+                || normalized.contains("agent")
+                || normalized.contains("tool")
+                || normalized.contains("status");
+    }
+
+    private String runtimeEventKind(String sourceType) {
+        String normalized = sourceType == null ? "" : sourceType.trim().toLowerCase();
+        if (normalized.contains("delta")) {
+            return "delta";
+        }
+        if (normalized.contains("progress")) {
+            return "progress";
+        }
+        return "event";
+    }
+
+    private String runtimeChannel(String sourceType) {
+        String normalized = sourceType == null ? "" : sourceType.trim().toLowerCase();
+        if (normalized.contains("thinking") || normalized.contains("reasoning")) {
+            return "thinking";
+        }
+        if (normalized.contains("progress")) {
+            return "progress";
+        }
+        if (normalized.contains("agent")) {
+            return "agent";
+        }
+        if (normalized.contains("tool")) {
+            return "tool";
+        }
+        return "runtime";
+    }
+
+    private Map<String, Object> sourcePayload(JsonNode root) {
+        Object sanitized = sanitizeJson(root, "", 0);
+        if (sanitized instanceof Map<?, ?> map) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            map.forEach((key, value) -> result.put(String.valueOf(key), value));
+            return Collections.unmodifiableMap(result);
+        }
+        return Map.of("value", sanitized);
+    }
+
+    private Object sanitizeJson(JsonNode node, String fieldName, int depth) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return null;
+        }
+        if (isSensitiveField(fieldName)) {
+            return REDACTED;
+        }
+        if (depth >= MAX_SOURCE_PAYLOAD_DEPTH) {
+            return "[TRUNCATED]";
+        }
+        if (node.isObject()) {
+            Map<String, Object> map = new LinkedHashMap<>();
+            Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> entry = fields.next();
+                map.put(entry.getKey(), sanitizeJson(entry.getValue(), entry.getKey(), depth + 1));
+            }
+            return Collections.unmodifiableMap(map);
+        }
+        if (node.isArray()) {
+            List<Object> values = new ArrayList<>();
+            int count = 0;
+            for (JsonNode child : node) {
+                if (count++ >= MAX_SOURCE_PAYLOAD_ARRAY_SIZE) {
+                    values.add("[TRUNCATED]");
+                    break;
+                }
+                values.add(sanitizeJson(child, fieldName, depth + 1));
+            }
+            return Collections.unmodifiableList(values);
+        }
+        if (node.isTextual()) {
+            return truncate(node.asText(""));
+        }
+        if (node.isNumber()) {
+            return node.numberValue();
+        }
+        if (node.isBoolean()) {
+            return node.booleanValue();
+        }
+        return truncate(node.asText(""));
+    }
+
+    private boolean isSensitiveField(String fieldName) {
+        if (fieldName == null || fieldName.isBlank()) {
+            return false;
+        }
+        String normalized = fieldName.trim().toLowerCase();
+        return normalized.contains("cookie")
+                || normalized.contains("authorization")
+                || normalized.equals("auth")
+                || normalized.endsWith("_auth")
+                || normalized.contains("token")
+                || normalized.contains("secret")
+                || normalized.contains("password")
+                || normalized.contains("credential")
+                || normalized.contains("api_key")
+                || normalized.contains("apikey")
+                || normalized.contains("access_key");
+    }
+
+    private String truncate(String value) {
+        if (value == null || value.length() <= MAX_SOURCE_PAYLOAD_STRING_LENGTH) {
+            return value;
+        }
+        return value.substring(0, MAX_SOURCE_PAYLOAD_STRING_LENGTH) + "...[TRUNCATED]";
     }
 
     private boolean hasFinishReason(JsonNode root) {

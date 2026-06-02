@@ -655,6 +655,10 @@ function handleChatEvent(event, source = "event", options = {}) {
   if (event.type === "message.completed") {
     return true;
   }
+  if (event.type === "runtime.event") {
+    appendMessage("system", runtimeEventLabel(event.payload || {}));
+    return true;
+  }
   if (terminalRunEvents.has(event.type)) {
     flushPendingDeltas(event.runId);
     state.activeRunId = event.runId;
@@ -664,6 +668,12 @@ function handleChatEvent(event, source = "event", options = {}) {
     return true;
   }
   return true;
+}
+
+function runtimeEventLabel(payload) {
+  const sourceType = payload.sourceType || "unknown";
+  const text = payload.text || payload.sourcePayload?.message || payload.sourcePayload?.project_home || "";
+  return text ? `runtime.event ${sourceType}: ${text}` : `runtime.event ${sourceType}`;
 }
 
 function logChatEvent(event, source) {

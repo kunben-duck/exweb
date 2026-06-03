@@ -303,7 +303,7 @@ WS   /api/v1/ex/chat/ws subscribe(topicId=streamTopicId)
 POST /api/v1/ex/chat/runs/{runId}/stop
 POST /api/v1/ex/chat/sessions/{sessionId}/archive
 POST /api/v1/ex/chat/sessions/{sessionId}/restore
-POST /api/v1/ex/chat/sessions/{sessionId}/close
+DELETE /api/v1/ex/chat/sessions/{sessionId}
 ```
 
 `/chat/runs` 只返回 run 运行标识和 run 级 `streamTopicId`，不返回 WebSocket、Event Resume 或 stop URL。

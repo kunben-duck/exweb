@@ -51,7 +51,7 @@ Referer: http://localhost:8080/fin/ex/
 
 ## 覆盖范围
 
-- 会话：创建、列表、切换、state 聚合、历史消息分页、重命名、归档、恢复、关闭。
+- 会话：创建、列表、切换、state 聚合、历史消息分页、重命名、归档、恢复、软删除。
 - Run：创建、停止回答、stream-status 查询；重新生成通过消息树的 `REGENERATE_ASSISTANT` 操作完成。
 - WebSocket：连接、connect、subscribe、ack、跨 session / 跨 run topic 订阅。
 - 多会话隔离：同一 WebSocket 连接可以同时订阅多个 session 的 run topic；本地联调台会按事件
@@ -81,6 +81,7 @@ Referer: http://localhost:8080/fin/ex/
 | 停止回答 | `POST /api/v1/ex/chat/runs/{runId}/stop` | REST 生命周期控制，不是 WebSocket command |
 | 历史版本 | `GET /messages/{messageId}/variants`、`POST /path` | 支持 `1/3` 版本游标和路径切换 |
 | 新建分支 | `POST /branches` | 从指定消息创建只读历史快照分支 |
+| 删除会话 | `DELETE /api/v1/ex/chat/sessions/{sessionId}` | 软删除当前会话；active run 存在时需要先 stop |
 | 文档库 | `/api/v1/ex/documents/**` | 上传、列表、状态、预览、下载、改名、删除 |
 
 如果 `BACKEND_URL=http://localhost:8080/fin/ex`，页面仍然请求 `/api/v1/ex/**`；

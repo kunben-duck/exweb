@@ -17,6 +17,7 @@ import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import java.time.Instant;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -28,17 +29,28 @@ import org.springframework.stereotype.Service;
 public class SessionApplicationService implements ChatSessionFacade {
     private static final String STATUS_ACTIVE = "ACTIVE";
     private static final String STATUS_ARCHIVED = "ARCHIVED";
-    private static final String STATUS_CLOSED = "CLOSED";
+    private static final String STATUS_DELETED = "DELETED";
 
     private final SessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
     private final IdGenerator idGenerator;
     private final PermissionChecker permissionChecker;
+    private final ChatRunApplicationService chatRunService;
+    private final RuntimeBindingApplicationService runtimeBindingService;
 
+    @Autowired
     public SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
-                                     PermissionChecker permissionChecker) {
+                                     PermissionChecker permissionChecker, ChatRunApplicationService chatRunService,
+                                     RuntimeBindingApplicationService runtimeBindingService) {
         this.sessionRepository = sessionRepository; this.messageRepository = messageRepository; this.idGenerator = idGenerator;
         this.permissionChecker = permissionChecker;
+        this.chatRunService = chatRunService;
+        this.runtimeBindingService = runtimeBindingService;
+    }
+
+    SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
+                              PermissionChecker permissionChecker) {
+        this(sessionRepository, messageRepository, idGenerator, permissionChecker, null, null);
     }
 
     public ChatSession loadOrCreate(ChatCommand command) {
@@ -105,10 +117,21 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     @Override
-    public ChatSession closeSession(UserContext user, String sessionId) {
+    public ChatSession deleteSession(UserContext user, String sessionId) {
         checkChatUser(user);
-        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId);
-        return saveWith(session, session.title(), STATUS_CLOSED);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        /*
+         * 删除是前端视角的软删除，不是运行控制指令。若本会话仍有 active run，
+         * 先要求前端 stop，避免删除后后台继续写入事件并推送到已隐藏会话。
+         */
+        if (chatRunService != null) {
+            chatRunService.rejectIfActiveRunExists(user, session.id());
+        }
+        ChatSession deleted = saveWith(session, session.title(), STATUS_DELETED);
+        if (runtimeBindingService != null) {
+            runtimeBindingService.cancelActive(user.tenantId(), user.userId(), session.id());
+        }
+        return deleted;
     }
 
     /**
@@ -286,15 +309,23 @@ public class SessionApplicationService implements ChatSessionFacade {
             throw new IllegalArgumentException("sessionId 不能为空");
         }
         return sessionRepository.findByTenantIdAndUserIdAndId(tenantId, userId, sessionId)
-                .map(session -> activeRequired ? ensureActive(session) : session)
+                .map(session -> activeRequired ? ensureActive(session) : ensureNotDeleted(session))
                 .orElseThrow(() -> sessionRepository.findById(sessionId).isPresent()
                         ? new SecurityException("会话不属于当前用户")
                         : new IllegalArgumentException("会话不存在: " + sessionId));
     }
 
     private ChatSession ensureActive(ChatSession session) {
+        ensureNotDeleted(session);
         if (!STATUS_ACTIVE.equals(session.status())) {
             throw new IllegalStateException("会话不可用: " + session.id());
+        }
+        return session;
+    }
+
+    private ChatSession ensureNotDeleted(ChatSession session) {
+        if (STATUS_DELETED.equals(session.status())) {
+            throw new IllegalArgumentException("会话不存在: " + session.id());
         }
         return session;
     }

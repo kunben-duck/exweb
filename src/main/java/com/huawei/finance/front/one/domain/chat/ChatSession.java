@@ -9,7 +9,7 @@ import java.time.Instant;
  * @param tenantId 租户标识。
  * @param userId 用户标识。
  * @param title 会话标题。
- * @param status 会话状态，例如 ACTIVE、ARCHIVED。
+ * @param status 会话状态，例如 ACTIVE、ARCHIVED、DELETED。
  * @param channel 会话来源渠道，例如 web、im、mobile。
  * @param currentLeafMessageId 当前会话激活路径的叶子消息。
  * @param rootSessionId 分支族根会话 ID，普通会话等于自身。

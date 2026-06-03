@@ -9,6 +9,7 @@ import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
+import com.huawei.finance.front.one.domain.chat.ActiveRunExistsException;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
@@ -16,6 +17,7 @@ import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -124,6 +126,40 @@ class SessionApplicationServiceTest {
                 .hasMessageContaining("分支历史快照");
     }
 
+    @Test
+    void deleteSessionMarksDeletedAndCancelsRuntimeBinding() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        ChatSession session = sessions.save(new ChatSession("session1", "tenant1", "user1", "title", "ACTIVE", "web",
+                Instant.now(), Instant.now()));
+        CountingRuntimeBindingService bindings = new CountingRuntimeBindingService();
+        SessionApplicationService service = service(sessions, messages, new GuardChatRunService(false), bindings);
+
+        ChatSession deleted = service.deleteSession(user(), session.id());
+
+        assertThat(deleted.status()).isEqualTo("DELETED");
+        assertThat(bindings.cancellations).isEqualTo(1);
+        assertThat(service.listSessions(user(), null, 20).items()).isEmpty();
+        assertThatThrownBy(() -> service.getSession(user(), session.id()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("会话不存在");
+    }
+
+    @Test
+    void deleteSessionRejectsActiveRunAndKeepsSessionVisible() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        ChatSession session = sessions.save(new ChatSession("session1", "tenant1", "user1", "title", "ACTIVE", "web",
+                Instant.now(), Instant.now()));
+        CountingRuntimeBindingService bindings = new CountingRuntimeBindingService();
+        SessionApplicationService service = service(sessions, messages, new GuardChatRunService(true), bindings);
+
+        assertThatThrownBy(() -> service.deleteSession(user(), session.id()))
+                .isInstanceOf(ActiveRunExistsException.class);
+        assertThat(sessions.findById(session.id()).orElseThrow().status()).isEqualTo("ACTIVE");
+        assertThat(bindings.cancellations).isZero();
+    }
+
     private MessagePair completeTurn(TestFixture fixture, String userText, String assistantText, String runId) {
         ChatRunMessagePlan plan = fixture.service.prepareRunMessage(user(),
                 command(userText, ChatRunMode.NEXT, null, null, null), fixture.session, runId, List.of());
@@ -152,6 +188,19 @@ class SessionApplicationServiceTest {
                 messages,
                 new IncrementingIdGenerator(),
                 new PermissionChecker()
+        );
+    }
+
+    private SessionApplicationService service(InMemorySessionRepository sessions, InMemoryMessageRepository messages,
+                                              ChatRunApplicationService chatRunService,
+                                              RuntimeBindingApplicationService bindingService) {
+        return new SessionApplicationService(
+                sessions,
+                messages,
+                new IncrementingIdGenerator(),
+                new PermissionChecker(),
+                chatRunService,
+                bindingService
         );
     }
 
@@ -189,7 +238,9 @@ class SessionApplicationServiceTest {
 
         @Override
         public ChatSessionPage pageByTenantIdAndUserId(String tenantId, String userId, String cursor, int limit) {
-            return new ChatSessionPage(findByTenantIdAndUserId(tenantId, userId), null);
+            return new ChatSessionPage(findByTenantIdAndUserId(tenantId, userId).stream()
+                    .filter(session -> !"DELETED".equals(session.status()))
+                    .toList(), null);
         }
 
         @Override
@@ -216,6 +267,35 @@ class SessionApplicationServiceTest {
                     session.status(), session.channel(), leafMessageId, session.rootSessionId(),
                     session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
                     session.metadataJson(), session.createdAt(), Instant.now()));
+        }
+    }
+
+    private static class GuardChatRunService extends ChatRunApplicationService {
+        private final boolean activeRunExists;
+
+        GuardChatRunService(boolean activeRunExists) {
+            super(null, null, null, null, new PermissionChecker(), null);
+            this.activeRunExists = activeRunExists;
+        }
+
+        @Override
+        public void rejectIfActiveRunExists(UserContext user, String sessionId) {
+            if (activeRunExists) {
+                throw new ActiveRunExistsException(sessionId, "run1");
+            }
+        }
+    }
+
+    private static class CountingRuntimeBindingService extends RuntimeBindingApplicationService {
+        private int cancellations;
+
+        CountingRuntimeBindingService() {
+            super(null, null, null, Duration.ofDays(3), "relay");
+        }
+
+        @Override
+        public void cancelActive(String tenantId, String userId, String sessionId) {
+            cancellations++;
         }
     }
 

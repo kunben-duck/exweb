@@ -84,7 +84,7 @@ function bindUi() {
   bindClick("renameSessionBtn", renameSession);
   bindClick("archiveSessionBtn", () => mutateSession("archive"));
   bindClick("restoreSessionBtn", () => mutateSession("restore"));
-  bindClick("closeSessionBtn", () => mutateSession("close"));
+  bindClick("deleteSessionBtn", deleteSession);
   bindClick("stopRunBtn", stopRun);
   bindClick("resumeEventsBtn", () => requireSession(sessionId => resumeSessionEvents(sessionId, lastSeq(sessionId))));
   bindClick("restoreActiveRunBtn", restoreActiveRun);
@@ -328,6 +328,19 @@ async function renameSession() {
 async function mutateSession(action) {
   const sessionId = requireSessionId();
   await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}/${action}`, { method: "POST" });
+  await refreshSessions();
+}
+
+async function deleteSession() {
+  const sessionId = requireSessionId();
+  await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  state.selectedSessionId = null;
+  state.activeRun = null;
+  state.pendingDeltaByRun.clear();
+  $("currentSessionId").textContent = "-";
+  $("currentSeq").textContent = "0";
+  $("activeRun").textContent = "-";
+  $("messages").replaceChildren();
   await refreshSessions();
 }
 

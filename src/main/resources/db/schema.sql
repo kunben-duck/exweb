@@ -230,7 +230,7 @@ COMMENT ON COLUMN fin_ex_chat_session_t.id IS '会话主键，业务生成的 se
 COMMENT ON COLUMN fin_ex_chat_session_t.tenant_id IS '租户标识，来自服务端身份上下文，用于多租户数据隔离。';
 COMMENT ON COLUMN fin_ex_chat_session_t.user_id IS '用户标识，来自服务端身份上下文，用于用户级数据隔离。';
 COMMENT ON COLUMN fin_ex_chat_session_t.title IS '会话标题，默认由用户首轮输入截断生成，也可由前端重命名。';
-COMMENT ON COLUMN fin_ex_chat_session_t.status IS '会话状态，例如 ACTIVE、ARCHIVED、CLOSED。';
+COMMENT ON COLUMN fin_ex_chat_session_t.status IS '会话状态，例如 ACTIVE、ARCHIVED、DELETED；DELETED 表示软删除，不物理删除历史事实数据。';
 COMMENT ON COLUMN fin_ex_chat_session_t.channel IS '会话来源渠道，例如 web。';
 COMMENT ON COLUMN fin_ex_chat_session_t.current_leaf_message_id IS '当前会话激活路径的叶子消息 ID；历史查询默认沿该节点回溯 active path。';
 COMMENT ON COLUMN fin_ex_chat_session_t.root_session_id IS '分支族根会话 ID；普通会话等于自身，分支会话继承源会话根。';

@@ -36,7 +36,7 @@ export FINANCEEX_DEV_USERNAME=developer
 | 新建分支 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/branches` | 从某条消息创建只读历史快照分支 |
 | 重命名会话 | `PATCH` | `/api/v1/ex/chat/sessions/{sessionId}` | 更新会话标题 |
 | 归档/恢复会话 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/archive`、`/restore` | 会话列表管理 |
-| 关闭会话 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/close` | 将会话置为关闭状态 |
+| 删除会话 | `DELETE` | `/api/v1/ex/chat/sessions/{sessionId}` | 软删除会话，历史事实数据保留 |
 | 创建 run | `POST` | `/api/v1/ex/chat/runs` | 唯一提问入口，返回 `streamTopicId` |
 | WebSocket | `WS` | `/api/v1/ex/chat/ws` | 用户级长连接，按 run topic 订阅实时事件 |
 | 会话事件恢复 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/events/resume?afterSeq={seq}` | 有限补发整个会话缺失事件 |
@@ -119,7 +119,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `PATCH /api/v1/ex/chat/sessions/{sessionId}` | 用户重命名会话。 | Path：`sessionId`；JSON body：`title`。 | `ChatSessionDto`。 | `title` 为空时保留原值。 |
 | `POST /api/v1/ex/chat/sessions/{sessionId}/archive` | 用户归档会话。 | Path：`sessionId`。 | `ChatSessionDto`。 | 归档通常用于列表隐藏，不删除历史。 |
 | `POST /api/v1/ex/chat/sessions/{sessionId}/restore` | 用户恢复归档会话。 | Path：`sessionId`。 | `ChatSessionDto`。 | 恢复后可重新出现在普通会话列表。 |
-| `POST /api/v1/ex/chat/sessions/{sessionId}/close` | 用户关闭会话或业务侧终止会话。 | Path：`sessionId`。 | `ChatSessionDto`。 | 关闭是会话状态变更，不等于停止当前 run；停止回答请调用 stop。 |
+| `DELETE /api/v1/ex/chat/sessions/{sessionId}` | 用户删除会话。 | Path：`sessionId`。 | `ChatSessionDto`，`status=DELETED`。 | 软删除，不物理删除历史事实数据；如果会话存在 active run，需先调用 stop。 |
 
 ### Run 与流式接口
 
@@ -171,7 +171,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `sessionId` | 前端聊天会话 ID，路由参数和列表 key 使用 |
 | `tenantId` / `userId` | 服务端身份上下文解析出的归属字段，仅用于调试展示，不要回传 |
 | `title` | 会话标题 |
-| `status` | `ACTIVE`、`ARCHIVED`、`CLOSED` 等会话状态 |
+| `status` | `ACTIVE`、`ARCHIVED`、`DELETED` 等会话状态；`DELETED` 会话对列表和详情不可见 |
 | `channel` | 会话来源渠道，例如 `web`、`web-local-test` |
 | `currentLeafMessageId` | 当前激活消息树路径的叶子；历史查询默认返回 root 到该 leaf |
 | `rootSessionId` | 分支族根会话 ID |
@@ -467,7 +467,7 @@ curl -X PATCH http://localhost:8080/api/v1/ex/chat/sessions/session_xxx \
 
 curl -X POST http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/archive
 curl -X POST http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/restore
-curl -X POST http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/close
+curl -X DELETE http://localhost:8080/api/v1/ex/chat/sessions/session_xxx
 ```
 
 历史消息接口返回的是已经完整落库的 user/assistant 消息。若所选会话仍有 active run 正在输出，前端应继续调用 `stream-status` 和 run 级事件恢复缺失事件，把正在输出的增量接到当前 assistant 草稿上。

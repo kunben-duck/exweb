@@ -41,7 +41,8 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `GET /api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants`：查询某条消息同父节点下的候选版本，用于前端切换编辑/重新生成后的版本。
 - `POST /api/v1/ex/chat/sessions/{sessionId}/path`：把会话当前 active path 切换到指定 leaf。
 - `POST /api/v1/ex/chat/sessions/{sessionId}/branches`：从指定消息创建只读历史快照分支。
-- `POST /api/v1/ex/chat/sessions/{sessionId}/archive|restore|close`：会话归档、恢复和关闭。
+- `POST /api/v1/ex/chat/sessions/{sessionId}/archive|restore`：会话归档和恢复。
+- `DELETE /api/v1/ex/chat/sessions/{sessionId}`：软删除会话；只写 `status=DELETED`，不物理删除消息、run、event、反馈或附件引用。
 - `WS /api/v1/ex/chat/ws`：用户级实时输出通道。客户端使用 `{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}` 订阅本轮 run topic；MVC/Servlet 模式会在 handshake 阶段固化用户身份。
 - `GET /api/v1/ex/chat/sessions/{sessionId}/events/resume?afterSeq={seq}`：会话级事件恢复有限补发，用于补齐整个会话缺失事件。
 - `GET /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}`：run 级事件恢复并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态。

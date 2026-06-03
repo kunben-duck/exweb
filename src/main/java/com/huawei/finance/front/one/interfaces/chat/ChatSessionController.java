@@ -25,6 +25,7 @@ import com.huawei.finance.front.one.interfaces.chat.dto.SelectChatPathRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.UpdateChatSessionRequest;
 import java.util.List;
 import java.util.Map;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -39,7 +40,7 @@ import reactor.core.scheduler.Schedulers;
 /**
  * 聊天会话管理接口。
  *
- * <p>第一版提供创建、查询、列表和关闭能力；会话归属由 application 层通过当前 UserContext 校验。</p>
+ * <p>第一版提供创建、查询、列表、归档、恢复和删除能力；会话归属由 application 层通过当前 UserContext 校验。</p>
  */
 @RestController
 @RequestMapping("/api/v1/ex/chat/sessions")
@@ -249,15 +250,18 @@ public class ChatSessionController {
     }
 
     /**
-     * 关闭当前用户会话。
+     * 软删除当前用户会话。
+     *
+     * <p>该接口只把会话状态置为 DELETED，不物理删除消息、run、event、反馈或附件引用。
+     * 若会话仍有 active run，应用层会拒绝删除，要求前端先 stop 当前 run。</p>
      *
      * @param sessionId 会话标识；服务端会校验会话归属。
-     * @return 关闭后的会话元数据。
+     * @return 删除后的会话元数据。
      */
-    @PostMapping("/{sessionId}/close")
-    public Mono<ChatSessionDto> close(@PathVariable("sessionId") String sessionId) {
+    @DeleteMapping("/{sessionId}")
+    public Mono<ChatSessionDto> delete(@PathVariable("sessionId") String sessionId) {
         UserContext user = resolveChatUser();
-        return Mono.fromCallable(() -> toDto(facade.closeSession(user, sessionId)))
+        return Mono.fromCallable(() -> toDto(facade.deleteSession(user, sessionId)))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 

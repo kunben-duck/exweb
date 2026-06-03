@@ -96,13 +96,16 @@ public interface ChatSessionFacade {
     ChatSession restoreSession(UserContext user, String sessionId);
 
     /**
-     * 关闭当前用户可见的会话。
+     * 软删除当前用户可见的会话。
+     *
+     * <p>删除只把会话状态置为 {@code DELETED}，不会物理删除消息、run、event、反馈或附件引用。
+     * 这样可以保持审计和故障排查事实完整，同时让前端列表和详情不再看到该会话。</p>
      *
      * @param user 请求入口解析出的不可变用户身份快照。
      * @param sessionId 会话标识。
-     * @return 关闭后的会话元数据。
+     * @return 删除后的会话元数据。
      */
-    ChatSession closeSession(UserContext user, String sessionId);
+    ChatSession deleteSession(UserContext user, String sessionId);
 
     /**
      * 查询指定消息的同父同角色候选版本。

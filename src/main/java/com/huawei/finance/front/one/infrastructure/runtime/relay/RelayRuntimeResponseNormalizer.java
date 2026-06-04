@@ -14,6 +14,9 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -31,9 +34,23 @@ public class RelayRuntimeResponseNormalizer {
     private static final String REDACTED = "[REDACTED]";
 
     private final ObjectMapper objectMapper;
+    private final RelayRuntimeMappingProperties mappingProperties;
 
     public RelayRuntimeResponseNormalizer(ObjectMapper objectMapper) {
+        this(objectMapper, new RelayRuntimeMappingProperties());
+    }
+
+    @Autowired
+    public RelayRuntimeResponseNormalizer(ObjectMapper objectMapper,
+                                          ObjectProvider<RelayRuntimeMappingProperties> mappingPropertiesProvider) {
+        this(objectMapper, mappingPropertiesProvider == null
+                ? new RelayRuntimeMappingProperties()
+                : mappingPropertiesProvider.getIfAvailable(RelayRuntimeMappingProperties::new));
+    }
+
+    RelayRuntimeResponseNormalizer(ObjectMapper objectMapper, RelayRuntimeMappingProperties mappingProperties) {
         this.objectMapper = objectMapper;
+        this.mappingProperties = mappingProperties == null ? new RelayRuntimeMappingProperties() : mappingProperties;
     }
 
     /**
@@ -106,8 +123,8 @@ public class RelayRuntimeResponseNormalizer {
     }
 
     private List<ChatEvent> normalizeFrame(String runId, String sessionId, String frame) {
-        if (frame == null || frame.isBlank() || isDone(frame)) {
-            return isDone(frame) ? List.of(MessageCompletedEvent.of(runId, sessionId)) : List.of();
+        if (frame == null || frame.isBlank() || isTerminalText(frame)) {
+            return isTerminalText(frame) ? List.of(MessageCompletedEvent.of(runId, sessionId)) : List.of();
         }
         try {
             JsonNode root = objectMapper.readTree(frame);
@@ -129,11 +146,16 @@ public class RelayRuntimeResponseNormalizer {
             throw new RelayRuntimeProtocolException("Unsupported Relay runtime frame shape");
         }
         String type = firstText(root, "type", "event", "status");
+        String normalizedType = normalizeTypeName(type);
         if (isHeartbeat(type, root)) {
             return List.of();
         }
         if (hasError(root) || isError(type)) {
             throw new RelayRuntimeProtocolException(errorMessage(root));
+        }
+        ChatEvent runtimeEvent = mappedRuntimeEvent(runId, sessionId, root, type, normalizedType);
+        if (runtimeEvent != null) {
+            return List.of(runtimeEvent);
         }
         if (isCompleted(type) || hasFinishReason(root)) {
             String delta = extractAnswerDelta(root, type);
@@ -152,7 +174,7 @@ public class RelayRuntimeResponseNormalizer {
              * Relay 的事件类型会随下游 Agent 版本持续演进。没有 answer delta、也不是 terminal/error
              * 的合法 JSON object 不应让本轮 run 失败，而是作为 runtime.event 可控透传给前端。
              */
-            return List.of(runtimeEvent(runId, sessionId, root, type));
+            return List.of(fallbackRuntimeEvent(runId, sessionId, root, type));
         }
         return List.of(deltaEvent(runId, sessionId, delta, root));
     }
@@ -169,15 +191,18 @@ public class RelayRuntimeResponseNormalizer {
     private ChatEvent deltaEvent(String runId, String sessionId, String delta, JsonNode root) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("delta", delta);
-        copyText(root, payload, "runtimeSessionId", "runtimeSessionId", "runtime_session_id");
+        payload.put("sourceType", blankToDefault(firstText(root, "type", "event", "status"), "unknown"));
+        copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
+        copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
         copyText(root, payload, "agentSessionId", "agentSessionId", "agent_session_id");
+        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
         return new MessageDeltaEvent(runId, sessionId, 0, Instant.now(), delta, Map.copyOf(payload));
     }
 
     private Map<String, Object> completionPayload(JsonNode root) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("status", "MESSAGE_COMPLETED");
-        copyText(root, payload, "runtimeSessionId", "runtimeSessionId", "runtime_session_id");
+        copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
         copyText(root, payload, "agentSessionId", "agentSessionId", "agent_session_id");
         copyText(root, payload, "finishReason", "finishReason", "finish_reason");
         JsonNode choice = firstChoice(root);
@@ -198,7 +223,7 @@ public class RelayRuntimeResponseNormalizer {
         if (!isAnswerDeltaCandidate(type)) {
             return null;
         }
-        String direct = firstText(root, "delta", "content", "message", "text", "output_text");
+        String direct = firstConfiguredAnswerText(root, type);
         if (direct != null) {
             return direct;
         }
@@ -235,7 +260,8 @@ public class RelayRuntimeResponseNormalizer {
         if (type == null || type.isBlank()) {
             return true;
         }
-        String normalized = type.trim().toLowerCase();
+        String normalized = normalizeTypeName(type);
+        Set<String> configured = mappingProperties.normalizedAnswerEventTypes();
         return "message.delta".equals(normalized)
                 || "delta".equals(normalized)
                 || "answer".equals(normalized)
@@ -244,18 +270,116 @@ public class RelayRuntimeResponseNormalizer {
                 || "output".equals(normalized)
                 || "output.delta".equals(normalized)
                 || "output_text".equals(normalized)
-                || "text".equals(normalized);
+                || "text".equals(normalized)
+                || "output-text".equals(normalized)
+                || configured.contains(normalized);
     }
 
-    private RuntimeEvent runtimeEvent(String runId, String sessionId, JsonNode root, String type) {
+    private ChatEvent mappedRuntimeEvent(String runId, String sessionId, JsonNode root,
+                                         String sourceType, String normalizedType) {
+        return switch (normalizedType) {
+            case "relay-progress" -> RuntimeEvent.progress(runId, sessionId, progressPayload(root, sourceType));
+            case "project-home" -> RuntimeEvent.metadata(runId, sessionId, projectHomePayload(root, sourceType));
+            case "available-modes", "availbale-modes" ->
+                    RuntimeEvent.metadata(runId, sessionId, availableModesPayload(root, sourceType));
+            case "agent-call" -> RuntimeEvent.agent(runId, sessionId, agentCallPayload(root, sourceType));
+            case "thinking-operation-start", "thinkink-operation-start" ->
+                    RuntimeEvent.thinking(runId, sessionId, thinkingPayload(root, sourceType, "STARTED"));
+            case "thinking-operation-end", "thinking-operation-finish" ->
+                    RuntimeEvent.thinking(runId, sessionId, thinkingPayload(root, sourceType, "ENDED"));
+            case "tool-call-streaming" -> RuntimeEvent.tool(runId, sessionId, toolPayload(root, sourceType));
+            default -> null;
+        };
+    }
+
+    private RuntimeEvent fallbackRuntimeEvent(String runId, String sessionId, JsonNode root, String type) {
         String sourceType = type == null || type.isBlank() ? "unknown" : type.trim();
         String channel = runtimeChannel(sourceType);
         String text = firstText(root, "displayText", "display_text", "title", "description");
         if (text == null && isRuntimeTextSafe(sourceType)) {
             text = firstText(root, "message", "text");
         }
-        return RuntimeEvent.relay(runId, sessionId, sourceType, runtimeEventKind(sourceType),
+        return RuntimeEvent.fallback(runId, sessionId, sourceType, runtimeEventKind(sourceType),
                 channel, channel, text, sourcePayload(root));
+    }
+
+    private Map<String, Object> progressPayload(JsonNode root, String sourceType) {
+        Map<String, Object> payload = basePayload(sourceType);
+        copyText(root, payload, "text", "content", "message", "text");
+        copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
+        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
+        return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> projectHomePayload(JsonNode root, String sourceType) {
+        Map<String, Object> payload = basePayload(sourceType);
+        payload.put("metadataType", "project_home");
+        copyText(root, payload, "projectHome", "project_home", "projectHome");
+        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
+        return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> availableModesPayload(JsonNode root, String sourceType) {
+        Map<String, Object> payload = basePayload(sourceType);
+        payload.put("metadataType", "available_modes");
+        JsonNode modes = root.get("modes");
+        if (modes != null && modes.isArray()) {
+            List<Object> normalizedModes = new ArrayList<>();
+            for (JsonNode mode : modes) {
+                if (mode != null && mode.isObject()) {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    copyText(mode, item, "value", "value");
+                    copyText(mode, item, "label", "label", "lable");
+                    copyText(mode, item, "description", "description");
+                    copyText(mode, item, "source", "source");
+                    normalizedModes.add(Map.copyOf(item));
+                }
+            }
+            payload.put("modes", List.copyOf(normalizedModes));
+        }
+        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
+        return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> agentCallPayload(JsonNode root, String sourceType) {
+        Map<String, Object> payload = basePayload(sourceType);
+        copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
+        copyBoolean(root, payload, "started", "started", "istart", "isStart", "is_start");
+        copyText(root, payload, "task", "task");
+        copyText(root, payload, "modelName", "modelName", "modelname", "model_name");
+        copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
+        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
+        return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> thinkingPayload(JsonNode root, String sourceType, String status) {
+        Map<String, Object> payload = basePayload(sourceType);
+        payload.put("status", status);
+        copyText(root, payload, "operationId", "operationId", "operation_id");
+        copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
+        JsonNode tools = firstNode(root, "availableTools", "available_tools", "availbale_tools");
+        if (tools != null && tools.isArray()) {
+            payload.put("availableTools", sanitizeJson(tools, "availableTools", 0));
+        }
+        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
+        return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> toolPayload(JsonNode root, String sourceType) {
+        Map<String, Object> payload = basePayload(sourceType);
+        payload.put("status", "STREAMING");
+        copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
+        copyText(root, payload, "toolName", "toolName", "tool_name", "too_name", "tool-name");
+        copyText(root, payload, "inputPreview", "inputPreview", "input_preview");
+        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
+        return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> basePayload(String sourceType) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("source", "relay");
+        payload.put("sourceType", blankToDefault(sourceType, "unknown"));
+        return payload;
     }
 
     private boolean isRuntimeTextSafe(String sourceType) {
@@ -389,8 +513,13 @@ public class RelayRuntimeResponseNormalizer {
         return null;
     }
 
-    private boolean isDone(String frame) {
-        return "[DONE]".equalsIgnoreCase(frame == null ? "" : frame.trim());
+    private boolean isTerminalText(String frame) {
+        String normalized = normalizeTypeName(frame);
+        return "[done]".equalsIgnoreCase(frame == null ? "" : frame.trim())
+                || "steam-complete".equals(normalized)
+                || "stream-complete".equals(normalized)
+                || "stream.complete".equals(normalized)
+                || "stream-completed".equals(normalized);
     }
 
     private boolean hasError(JsonNode root) {
@@ -418,11 +547,16 @@ public class RelayRuntimeResponseNormalizer {
             return false;
         }
         String normalized = type.trim().toLowerCase();
+        normalized = normalizeTypeName(normalized);
         return "message.completed".equals(normalized)
                 || "run.completed".equals(normalized)
                 || "completed".equals(normalized)
                 || "complete".equals(normalized)
-                || "done".equals(normalized);
+                || "done".equals(normalized)
+                || "steam-complete".equals(normalized)
+                || "stream-complete".equals(normalized)
+                || "stream.complete".equals(normalized)
+                || "stream-completed".equals(normalized);
     }
 
     private boolean isError(String type) {
@@ -453,19 +587,72 @@ public class RelayRuntimeResponseNormalizer {
         }
     }
 
+    private void copyAny(JsonNode root, Map<String, Object> payload, String target, String... sourceNames) {
+        JsonNode value = firstNode(root, sourceNames);
+        if (value != null && !value.isNull()) {
+            payload.put(target, sanitizeJson(value, target, 0));
+        }
+    }
+
+    private void copyBoolean(JsonNode root, Map<String, Object> payload, String target, String... sourceNames) {
+        JsonNode value = firstNode(root, sourceNames);
+        if (value != null && value.isBoolean()) {
+            payload.put(target, value.booleanValue());
+        } else if (value != null && value.isTextual()) {
+            payload.put(target, Boolean.parseBoolean(value.asText()));
+        }
+    }
+
     private String firstText(JsonNode root, String... fieldNames) {
-        if (root == null) {
+        JsonNode value = firstNode(root, fieldNames);
+        if (value == null) {
+            return null;
+        }
+        String text = value.asText(null);
+        return text != null && !text.isBlank() ? text : null;
+    }
+
+    private JsonNode firstNode(JsonNode root, String... fieldNames) {
+        if (root == null || fieldNames == null) {
             return null;
         }
         for (String fieldName : fieldNames) {
             JsonNode value = root.get(fieldName);
             if (value != null && !value.isNull()) {
-                String text = value.asText(null);
-                if (text != null && !text.isBlank()) {
-                    return text;
-                }
+                return value;
             }
         }
         return null;
     }
+
+    private String firstConfiguredAnswerText(JsonNode root, String type) {
+        List<String> fields = mappingProperties.normalizedAnswerContentFields();
+        if (normalizeTypeName(type).equals("agent") && !mappingProperties.isAgentContextAsAnswer()) {
+            fields = fields.stream().filter(field -> !"context".equals(field)).toList();
+        }
+        return firstText(root, fields.toArray(String[]::new));
+    }
+
+    private String blankToDefault(String value, String defaultValue) {
+        return value == null || value.isBlank() ? defaultValue : value;
+    }
+
+    static String normalizeTypeName(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.trim()
+                .toLowerCase()
+                .replace('—', '-')
+                .replace('_', '-');
+    }
+
+    private static final String[] RUNTIME_SESSION_FIELDS = {
+            "runtimeSessionId", "runtime_session_id", "session_id", "session-id", "session—id",
+            "sessionId", "instansid", "instanceId", "instance_id"
+    };
+
+    private static final String[] AGENT_NAME_FIELDS = {
+            "agentName", "agent_name", "agent-name", "agentname"
+    };
 }

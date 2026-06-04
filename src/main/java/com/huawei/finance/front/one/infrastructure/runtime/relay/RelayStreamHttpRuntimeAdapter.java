@@ -4,6 +4,7 @@ import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookie
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.finance.front.one.application.service.RuntimeRawStreamLogService;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import java.time.Duration;
@@ -16,6 +17,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.http.HttpHeaders;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
@@ -39,14 +42,24 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
     private final RelayAgentProperties properties;
     private final AgentRuntimeForwardCookieProperties forwardCookieProperties;
     private final RelayRuntimeResponseNormalizer responseNormalizer;
+    private final RuntimeRawStreamLogService rawStreamLogService;
 
     public RelayStreamHttpRuntimeAdapter(WebClient.Builder webClientBuilder, RelayAgentProperties properties,
                                          AgentRuntimeForwardCookieProperties forwardCookieProperties,
                                          RelayRuntimeResponseNormalizer responseNormalizer) {
+        this(webClientBuilder, properties, forwardCookieProperties, responseNormalizer, null);
+    }
+
+    @Autowired
+    public RelayStreamHttpRuntimeAdapter(WebClient.Builder webClientBuilder, RelayAgentProperties properties,
+                                         AgentRuntimeForwardCookieProperties forwardCookieProperties,
+                                         RelayRuntimeResponseNormalizer responseNormalizer,
+                                         ObjectProvider<RuntimeRawStreamLogService> rawStreamLogServiceProvider) {
         this.webClientBuilder = webClientBuilder;
         this.properties = properties;
         this.forwardCookieProperties = forwardCookieProperties;
         this.responseNormalizer = responseNormalizer;
+        this.rawStreamLogService = rawStreamLogServiceProvider == null ? null : rawStreamLogServiceProvider.getIfAvailable();
     }
 
     @Override
@@ -66,6 +79,9 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
                 .retrieve()
                 .bodyToFlux(String.class)
                 .timeout(properties.getTimeout());
+        if (rawStreamLogService != null) {
+            chunks = rawStreamLogService.capture(chunks, request, "relay", "relay-stream-http");
+        }
         Flux<ChatEvent> normalized = chunks
                 .concatMap(chunk -> Flux.fromIterable(responseNormalizer.normalize(
                         request.runId(), request.sessionId(), chunk)))

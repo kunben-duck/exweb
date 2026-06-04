@@ -47,6 +47,29 @@ class RelayWebSocketFrameTranslatorTest {
     }
 
     @Test
+    void relayStreamCompleteTextIsTranslatedToMessageCompletedEvent() {
+        List<ChatEvent> events = translator.translate("run1", "session1", "steam-complete");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("message.completed");
+    }
+
+    @Test
+    void relayAgentFrameBecomesAssistantDeltaAndKeepsRuntimeSession() {
+        List<ChatEvent> events = translator.translate("run1", "session1",
+                "{\"type\":\"agent\",\"agent_name\":\"delegate_agent\",\"content\":\"你好\","
+                        + "\"session_id\":\"relay-session-1\",\"timestamp\":123}");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("message.delta");
+        assertThat(events.getFirst().payload())
+                .containsEntry("delta", "你好")
+                .containsEntry("sourceType", "agent")
+                .containsEntry("agentName", "delegate_agent")
+                .containsEntry("runtimeSessionId", "relay-session-1");
+    }
+
+    @Test
     void sseDoneFrameIsTranslatedToMessageCompletedEvent() {
         List<ChatEvent> events = translator.translate("run1", "session1", "data: [DONE]\n\n");
 
@@ -85,35 +108,57 @@ class RelayWebSocketFrameTranslatorTest {
     }
 
     @Test
-    void unknownJsonFrameBecomesRuntimeEventWithoutLeakingSensitivePayload() {
+    void projectHomeFrameBecomesRuntimeMetadata() {
         List<ChatEvent> events = translator.translate("run1", "session1",
                 "{\"type\":\"project_home\",\"project_home\":\"/tmp/xxx\",\"nullable\":null,"
                         + "\"authorization\":\"Bearer secret\"}");
 
         assertThat(events).hasSize(1);
-        assertThat(events.getFirst().type()).isEqualTo("runtime.event");
+        assertThat(events.getFirst().type()).isEqualTo("runtime.metadata");
         assertThat(events.getFirst().payload())
                 .containsEntry("source", "relay")
                 .containsEntry("sourceType", "project_home")
-                .containsEntry("channel", "runtime");
-        assertThat(events.getFirst().payload().get("sourcePayload"))
-                .asString()
-                .contains("project_home")
-                .doesNotContain("Bearer secret")
-                .contains("[REDACTED]");
+                .containsEntry("metadataType", "project_home")
+                .containsEntry("projectHome", "/tmp/xxx");
     }
 
     @Test
-    void progressMessageFrameDoesNotBecomeAssistantDelta() {
+    void relayProgressFrameBecomesRuntimeProgress() {
         List<ChatEvent> events = translator.translate("run1", "session1",
-                "{\"type\":\"progress\",\"message\":\"处理中\"}");
+                "{\"type\":\"relay-progress\",\"content\":\"处理中\",\"instansid\":\"relay-session-1\"}");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("runtime.progress");
+        assertThat(events.getFirst().payload())
+                .containsEntry("sourceType", "relay-progress")
+                .containsEntry("runtimeSessionId", "relay-session-1")
+                .containsEntry("text", "处理中");
+    }
+
+    @Test
+    void relayToolFrameBecomesRuntimeTool() {
+        List<ChatEvent> events = translator.translate("run1", "session1",
+                "{\"type\":\"tool_call_streaming\",\"agent_name\":\"delegate\",\"too_name\":\"eureka_chat\","
+                        + "\"input_preview\":\"查询报销流程\"}");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("runtime.tool");
+        assertThat(events.getFirst().payload())
+                .containsEntry("toolName", "eureka_chat")
+                .containsEntry("inputPreview", "查询报销流程");
+    }
+
+    @Test
+    void unknownJsonStillFallsBackToRuntimeEventWithRedaction() {
+        List<ChatEvent> events = translator.translate("run1", "session1",
+                "{\"type\":\"custom-event\",\"authorization\":\"Bearer secret\"}");
 
         assertThat(events).hasSize(1);
         assertThat(events.getFirst().type()).isEqualTo("runtime.event");
-        assertThat(events.getFirst().payload())
-                .containsEntry("sourceType", "progress")
-                .containsEntry("channel", "progress")
-                .containsEntry("text", "处理中");
+        assertThat(events.getFirst().payload().get("sourcePayload"))
+                .asString()
+                .doesNotContain("Bearer secret")
+                .contains("[REDACTED]");
     }
 
     @Test

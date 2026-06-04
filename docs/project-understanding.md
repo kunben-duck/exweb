@@ -36,7 +36,7 @@ rg -n "methodName|className" src/main/java/com/huawei/finance/front/one
 
 用途：
 
-- 保存 `run.started`、`message.delta`、`runtime.event`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled` 等事件。
+- 保存 `run.started`、`message.delta`、`message.completed`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.event`、`run.completed`、`run.failed`、`run.cancelled` 等 ChatService 标准事件。
 - WebSocket 实时输出和 Event Resume 断点恢复都基于这张表的事件。
 - `seq` 是 openGauss 生成的恢复游标。
 
@@ -48,7 +48,30 @@ rg -n "methodName|className" src/main/java/com/huawei/finance/front/one
 - `infrastructure/persistence/OpenGaussChatEventStore.java`
 - `OpenGaussChatEventStore#appendWithExecutionGuard(...)`
 
-### 2.3 ChatRun：一次后台回答
+### 2.3 RuntimeRawStreamLog：下游原始流日志
+
+表：`fin_ex_runtime_raw_stream_log_t`
+
+用途：
+
+- 保存 Relay normalizer 之前的原始流响应片段。
+- 只用于排障、协议分析和下游问题定位，不作为前端恢复事实源。
+- 可能保存多个 raw chunk 的窗口合并结果，也可能保存单个超大 chunk 的分片。
+- `truncated=true` 只表示确实丢弃了原始内容；普通分片不算截断。
+
+关键代码：
+
+- `application/service/RuntimeRawStreamLogService.java`
+- `RuntimeRawStreamLogService#capture(...)`
+- `infrastructure/persistence/OpenGaussRuntimeRawStreamLogRepository.java`
+- `infrastructure/persistence/RuntimeRawStreamLogMapper.java`
+
+排查建议：
+
+- 如果 Relay 返回内容看起来正确，但 ChatEvent 类型不对，先查 raw log 确认下游原始帧，再看 `RelayRuntimeResponseNormalizer` 的映射。
+- raw log 写入失败不会影响 run 主链路，因此不能把 raw log 当作可靠恢复或前端展示来源。
+
+### 2.4 ChatRun：一次后台回答
 
 表：
 
@@ -297,14 +320,17 @@ RelayStreamHttpRuntimeAdapter#applyForwardedCookie(...)
 - 请求体由 `AgentRuntimeRequest` 映射为 Relay 专用 `RelayRuntimeQueryRequest`，只包含下游需要的 allowlist 字段。
 - 可选透传 Cookie 到 HTTP header。
 - 使用 `bodyToFlux(String.class)` 接收下游响应。
+- 在 normalizer 之前调用 `RuntimeRawStreamLogService#capture(...)` 保存原始流日志。
 - 通过 `RelayRuntimeResponseNormalizer` 把 plain text、JSON chunk、SSE-like `data:` chunk 转成标准 ChatEvent。
-- Relay 非正文扩展帧会转成 `runtime.event`；只有 `message.delta` 代表 assistant 正文并参与历史消息拼接。
+- Relay `type=agent` 的 `content/context` 默认转成 `message.delta`；`steam-complete/stream-complete/[DONE]` 转成 `message.completed`。
+- Relay 过程帧按语义转成 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool`；未知 JSON 才转成 `runtime.event`。
+- 只有 `message.delta` 代表 assistant 正文并参与历史消息拼接。
 - 流结束时补 `MessageCompletedEvent`。
 
 重点排查：
 
 - Relay 返回了数据但前端没看到：先确认这里是否产生了 `MessageDeltaEvent` 或 `RuntimeEvent`。
-- Relay 响应格式不是纯字符串片段：先看 `RelayRuntimeResponseNormalizer` 是否把正文转为 `message.delta`，或把非正文扩展帧转为 `runtime.event`。不要把 Relay 原始 JSON 作为 ChatService 顶层事件透传。
+- Relay 响应格式不是纯字符串片段：先看 raw log，再看 `RelayRuntimeResponseNormalizer` 是否把正文转为 `message.delta`，或把非正文扩展帧转为对应 `runtime.*`。不要把 Relay 原始 JSON 作为 ChatService 顶层事件透传。
 - 第三方 Cookie 泄漏风险：确认只有可信 Relay adapter 调用 `applyForwardedCookie(...)`。
 
 ### 6.4 Relay 出站 WebSocket adapter
@@ -327,6 +353,7 @@ RelayWebSocketFrameTranslator#translate(...)
 - EXChatService 作为客户端连接下游 Relay WebSocket。
 - 首帧发送 Relay 专用 `RelayRuntimeQueryRequest`，不是 ChatService 内部 `AgentRuntimeRequest`。
 - 接收 Relay frame。
+- 在 normalizer 之前记录 raw stream log。
 - 复用 `RelayRuntimeResponseNormalizer` 将 JSON frame、SSE-like frame 或纯文本 frame 转成标准 `ChatEvent`。
 
 注意：
@@ -356,7 +383,7 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
 
 2. `ChatDeltaCoalescer#coalesce(...)`
    - 只合并连续 `message.delta`，降低逐 token 写库、Redis publish 和 WebSocket 投递放大。
-   - 遇到 `runtime.event`、`run.started`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled` 会先 flush，再原样输出边界事件。
+   - 遇到 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.event`、`run.started`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled` 会先 flush，再原样输出边界事件。
 
 3. `ChatRunApplicationService#shouldAcceptEvent(...)`
    - 先看 Redis cancel flag。
@@ -370,7 +397,7 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
    - 条件不满足时抛出写入拒绝，后台流停止，不发布该事件。
 
 5. `appendAssistantDelta(...)`
-   - 累积 `message.delta` 内容；`runtime.event` 只作为运行态扩展事件落库和推送，不进入 assistant 历史消息。
+   - 累积 `message.delta` 内容；`runtime.*` 只作为运行态扩展事件落库和推送，不进入 assistant 历史消息。
    - 注意：只有 guarded insert 成功后的 delta 才会进入 assistant buffer，不写未持久化的迟到 token。
 
 6. run 完成前保存完整 assistant message

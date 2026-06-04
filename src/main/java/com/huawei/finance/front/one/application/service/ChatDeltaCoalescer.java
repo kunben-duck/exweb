@@ -28,6 +28,9 @@ public class ChatDeltaCoalescer {
     private static final Set<String> DELTA_PAYLOAD_ALLOWLIST = Set.of(
             "runtimeSessionId",
             "agentSessionId",
+            "agentName",
+            "sourceType",
+            "timestamp",
             "finishReason"
     );
 

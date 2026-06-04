@@ -125,6 +125,14 @@ financeex:
     delta-coalesce-enabled: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_ENABLED:true}
     delta-coalesce-window: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_WINDOW:50ms}
     delta-coalesce-max-chars: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_MAX_CHARS:512}
+  runtime-raw-log:
+    # 记录 Relay normalizer 之前的原始响应片段，用于排障和协议分析；不作为前端恢复事实源。
+    enabled: ${FINANCEEX_RUNTIME_RAW_LOG_ENABLED:true}
+    coalesce-window: ${FINANCEEX_RUNTIME_RAW_LOG_COALESCE_WINDOW:100ms}
+    max-chars: ${FINANCEEX_RUNTIME_RAW_LOG_MAX_CHARS:4096}
+    hard-max-chars: ${FINANCEEX_RUNTIME_RAW_LOG_HARD_MAX_CHARS:65536}
+    max-rows-per-run: ${FINANCEEX_RUNTIME_RAW_LOG_MAX_ROWS_PER_RUN:1000}
+    redact-sensitive-fields: ${FINANCEEX_RUNTIME_RAW_LOG_REDACT_SENSITIVE_FIELDS:true}
   mvc:
     sse:
       # run 级 SSE resume 在 active run 无业务 token 时发送 heartbeat，防止 Servlet async、网关或代理误判空闲断流。
@@ -188,6 +196,11 @@ financeex:
     websocket-path: ${FINANCEEX_RELAY_AGENT_WEBSOCKET_PATH:/v1/agent/runs/ws}
     cancel-supported: ${FINANCEEX_RELAY_AGENT_CANCEL_SUPPORTED:true}
     timeout: 60s
+    relay:
+      # Relay 响应映射只属于 adapter 防腐层；ChatService 对前端仍输出稳定 ChatEvent。
+      answer-event-types: ${FINANCEEX_RELAY_ANSWER_EVENT_TYPES:agent,message.delta,answer,output}
+      answer-content-fields: ${FINANCEEX_RELAY_ANSWER_CONTENT_FIELDS:content,context,delta,message,text,output_text}
+      agent-context-as-answer: ${FINANCEEX_RELAY_AGENT_CONTEXT_AS_ANSWER:true}
     forward-cookie:
       # 仅把 /chat/runs 与 /chat/runs/{runId}/stop 入口捕获到的 Cookie 透传给可信 Relay adapter。
       # Cookie 不写入 metadata_json、不落库、不进入事件 payload，也不会发送给非 Relay 第三方服务。

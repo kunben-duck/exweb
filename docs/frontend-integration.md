@@ -208,7 +208,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `runId` | 事件所属 run |
 | `sessionId` | 事件所属会话；前端必须按该字段分发到对应会话面板 |
 | `sequence` | openGauss 生成的事件恢复游标；WebSocket offset 和 Event Resume `afterSeq` 都使用它 |
-| `type` | `run.started`、`message.delta`、`runtime.event`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled`、`run.recovered` |
+| `type` | `run.started`、`message.delta`、`message.completed`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.event`、`run.completed`、`run.failed`、`run.cancelled`、`run.recovered` |
 | `payload` | 事件载荷；`message.delta` 使用 `payload.delta` 拼接文本 |
 
 ### `UploadedDocument`
@@ -763,24 +763,42 @@ ws.send(JSON.stringify({
 | --- | --- | --- |
 | `run.started` | run 已创建 | 可记录 run 状态为 running |
 | `message.delta` | assistant 文本增量 | 追加 `payload.delta` 到当前 assistant 消息 |
-| `runtime.event` | 下游 Runtime 运行态扩展事件，例如进度、思考、工作区路径、工具状态 | 按 `payload.channel/displayHint/sourceType` 展示到运行态区域，不要拼入 assistant 正文 |
+| `runtime.progress` | 下游 Runtime 进度文本，例如 Relay `relay-progress` | 展示到运行进度区域，不要拼入 assistant 正文 |
+| `runtime.metadata` | 下游 Runtime 元数据，例如 `project_home`、`available-modes` | 更新运行态面板、工作区链接或模式列表，不要拼入 assistant 正文 |
+| `runtime.agent` | 下游 agent 调用生命周期，例如 `agent-call` | 展示当前 agent、模型和任务信息 |
+| `runtime.thinking` | 下游思考过程开始/结束 | 展示思考状态或可折叠过程 |
+| `runtime.tool` | 下游工具调用过程，例如 `tool_call_streaming` | 展示工具名、输入预览和调用状态 |
+| `runtime.event` | 未识别但合法的下游 Runtime JSON 事件 | 按 `payload.channel/displayHint/sourceType` 兜底展示，不要拼入 assistant 正文 |
 | `message.completed` | assistant 消息结束 | 可停止当前消息输入光标 |
 | `run.completed` | 本轮 run 正常结束 | 关闭 loading，保存 latestSeq |
 | `run.failed` | 本轮 run 失败 | 展示错误信息，关闭 loading |
 | `run.cancelled` | 用户停止本轮回答 | 展示已停止，关闭 loading |
 
-ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON chunk 或 SSE-like `data:` chunk 归一化成上表事件。前端不得解析 Relay 原始响应，只消费 ChatService 标准 payload：
+ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON chunk 或 SSE-like `data:` chunk 先写入 raw stream log，再归一化成上表事件。前端不得解析 Relay 原始响应，只消费 ChatService 标准 payload：
 
 | 事件类型 | 标准 payload |
 | --- | --- |
-| `message.delta` | `{ "delta": "增量文本", "runtimeSessionId": "可选", "agentSessionId": "可选" }` |
-| `runtime.event` | `{ "source": "relay", "sourceType": "project_home", "eventKind": "event", "channel": "runtime", "displayHint": "runtime", "text": "可选展示文本", "sourcePayload": { "...": "脱敏限长后的下游扩展载荷" } }` |
+| `message.delta` | `{ "delta": "增量文本", "sourceType": "agent", "runtimeSessionId": "可选", "agentSessionId": "可选", "agentName": "可选", "timestamp": "可选" }` |
+| `runtime.progress` | `{ "source": "relay", "sourceType": "relay-progress", "text": "进度文本", "runtimeSessionId": "可选", "timestamp": "可选" }` |
+| `runtime.metadata` | `{ "source": "relay", "sourceType": "project_home", "metadataType": "project_home", "projectHome": "/tmp/xxx", "timestamp": "可选" }` 或 `{ "metadataType": "available_modes", "modes": [...] }` |
+| `runtime.agent` | `{ "source": "relay", "sourceType": "agent-call", "agentName": "delegate-agent", "started": true, "task": "任务描述", "modelName": "可选", "runtimeSessionId": "可选", "timestamp": "可选" }` |
+| `runtime.thinking` | `{ "source": "relay", "sourceType": "thinking-operation-start", "status": "STARTED", "operationId": "可选", "agentName": "可选", "availableTools": [...] }` |
+| `runtime.tool` | `{ "source": "relay", "sourceType": "tool_call_streaming", "status": "STREAMING", "agentName": "可选", "toolName": "工具名", "inputPreview": "输入预览" }` |
+| `runtime.event` | `{ "source": "relay", "sourceType": "未知下游 type", "eventKind": "event", "channel": "runtime", "displayHint": "runtime", "text": "可选展示文本", "sourcePayload": { "...": "脱敏限长后的下游扩展载荷" } }` |
 | `message.completed` | `{ "status": "MESSAGE_COMPLETED", "finishReason": "可选", "runtimeSessionId": "可选", "agentSessionId": "可选" }` |
 | `run.failed` | `{ "code": "错误码", "message": "错误说明", "recoverable": "可选", "recoveryOptions": "可选" }` |
 
+Relay 映射规则：
+
+- `type=agent` 且存在 `content/context` 时，默认映射为 `message.delta`，这是 assistant 正文唯一来源。
+- 纯文本 `steam-complete`、`stream-complete`、`stream_complete`、`stream.complete`、`stream-completed`、`[DONE]` 映射为 `message.completed`。
+- `relay-progress`、`project_home`、`available-modes/availbale-modes`、`agent-call`、`thinking-operation-start/thinkink-operation-start`、`thinking-operation-end/thinking_operation-end`、`tool_call_streaming` 映射为对应 `runtime.*`。
+- 未识别合法 JSON 映射为 `runtime.event`。`sourcePayload` 会脱敏和限长，不能作为稳定字段依赖。
+- Relay 原始 `type` 不会成为 ChatService 顶层 `type`，只会作为 `payload.sourceType` 或 raw log 排障信息。
+
 服务端可能把下游逐 token 输出合并为几十毫秒级 `message.delta` 文本片段。前端只需要按 `seq`
 顺序追加 `payload.delta`，不要假设一个 delta 等于一个 token，也不要依赖任何 Relay 私有字段。
-`runtime.event` 不参与 delta 合并，也不参与 assistant 历史消息拼接；Event Resume 会和 WebSocket 一样恢复这些事件。
+`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.event` 不参与 delta 合并，也不参与 assistant 历史消息拼接；Event Resume 会和 WebSocket 一样恢复这些事件。
 
 ### ACK
 
@@ -1113,7 +1131,7 @@ ws.onmessage = event => {
   if (chatEvent.type === "message.delta") {
     appendAssistantDelta(chatEvent.payload.delta || "");
   }
-  if (chatEvent.type === "runtime.event") {
+  if (chatEvent.type.startsWith("runtime.")) {
     renderRuntimeEvent(chatEvent.payload);
   }
   if (["run.completed", "run.failed", "run.cancelled"].includes(chatEvent.type)) {

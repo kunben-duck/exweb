@@ -173,7 +173,7 @@ class RelayStreamHttpRuntimeAdapterTest {
     }
 
     @Test
-    void unknownJsonFrameBecomesRuntimeEventInsteadOfLeakingAsAssistantText() {
+    void relayProjectHomeFrameBecomesRuntimeMetadata() {
         WebClient.Builder builder = WebClient.builder()
                 .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
                         .header(HttpHeaders.CONTENT_TYPE, "application/json")
@@ -186,14 +186,32 @@ class RelayStreamHttpRuntimeAdapterTest {
 
         StepVerifier.create(adapter.query(request(RuntimeForwardHeaders.empty())))
                 .assertNext(event -> {
-                    assertThat(event.type()).isEqualTo("runtime.event");
-                    assertThat(event.payload()).containsEntry("sourceType", "project_home");
-                    assertThat(event.payload().get("sourcePayload"))
-                            .asString()
-                            .contains("project_home")
-                            .doesNotContain("sid=secret")
-                            .contains("[REDACTED]");
+                    assertThat(event.type()).isEqualTo("runtime.metadata");
+                    assertThat(event.payload())
+                            .containsEntry("sourceType", "project_home")
+                            .containsEntry("metadataType", "project_home")
+                            .containsEntry("projectHome", "/tmp/xxx");
                 })
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                .verifyComplete();
+    }
+
+    @Test
+    void relayAgentFrameBecomesAssistantDelta() {
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, "application/json")
+                        .body("{\"type\":\"agent\",\"content\":\"你好\",\"session_id\":\"relay-session-1\"}")
+                        .build()));
+        RelayAgentProperties properties = new RelayAgentProperties();
+        properties.setBaseUrl("http://relay.test");
+        RelayStreamHttpRuntimeAdapter adapter = adapter(builder, properties,
+                new AgentRuntimeForwardCookieProperties());
+
+        StepVerifier.create(adapter.query(request(RuntimeForwardHeaders.empty())))
+                .assertNext(event -> assertThat(event.payload())
+                        .containsEntry("delta", "你好")
+                        .containsEntry("runtimeSessionId", "relay-session-1"))
                 .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
                 .verifyComplete();
     }

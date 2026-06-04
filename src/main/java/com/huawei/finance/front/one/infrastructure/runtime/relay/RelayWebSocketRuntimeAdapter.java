@@ -5,6 +5,7 @@ import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookie
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.finance.front.one.application.service.RuntimeRawStreamLogService;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import java.net.URI;
@@ -12,6 +13,8 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.http.HttpHeaders;
@@ -41,16 +44,26 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     private final AgentRuntimeForwardCookieProperties forwardCookieProperties;
     private final ObjectMapper objectMapper;
     private final RelayWebSocketFrameTranslator frameTranslator;
+    private final RuntimeRawStreamLogService rawStreamLogService;
     private final WebSocketClient webSocketClient = new ReactorNettyWebSocketClient();
 
     public RelayWebSocketRuntimeAdapter(WebClient.Builder webClientBuilder, RelayAgentProperties properties,
                                         AgentRuntimeForwardCookieProperties forwardCookieProperties,
                                         ObjectMapper objectMapper, RelayWebSocketFrameTranslator frameTranslator) {
+        this(webClientBuilder, properties, forwardCookieProperties, objectMapper, frameTranslator, null);
+    }
+
+    @Autowired
+    public RelayWebSocketRuntimeAdapter(WebClient.Builder webClientBuilder, RelayAgentProperties properties,
+                                        AgentRuntimeForwardCookieProperties forwardCookieProperties,
+                                        ObjectMapper objectMapper, RelayWebSocketFrameTranslator frameTranslator,
+                                        ObjectProvider<RuntimeRawStreamLogService> rawStreamLogServiceProvider) {
         this.webClientBuilder = webClientBuilder;
         this.properties = properties;
         this.forwardCookieProperties = forwardCookieProperties;
         this.objectMapper = objectMapper;
         this.frameTranslator = frameTranslator;
+        this.rawStreamLogService = rawStreamLogServiceProvider == null ? null : rawStreamLogServiceProvider.getIfAvailable();
     }
 
     @Override
@@ -69,8 +82,11 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                                         RelayRuntimeWireRequestMapper.toQueryWireRequest(request)))
                                 .map(session::textMessage)
                                 .flatMap(message -> session.send(Mono.just(message)));
-                        Mono<Void> receiveEvents = session.receive()
-                                .map(WebSocketMessage::getPayloadAsText)
+                        Flux<String> frames = session.receive().map(WebSocketMessage::getPayloadAsText);
+                        if (rawStreamLogService != null) {
+                            frames = rawStreamLogService.capture(frames, request, "relay", "relay-websocket");
+                        }
+                        Mono<Void> receiveEvents = frames
                                 .concatMap(frame -> Flux.fromIterable(frameTranslator.translate(
                                         request.runId(), request.sessionId(), frame)))
                                 /*

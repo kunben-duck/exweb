@@ -103,7 +103,86 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 ## 接口使用速查
 
-本节把每个对外接口的使用场景、入参和出参集中说明。后续章节给出更完整的 curl 和前端代码示例。
+下面先给出前端接入路线图、关键字段关联关系、场景级调用编排和逐接口字段矩阵；后续章节给出更完整的 curl 和前端代码示例。新接入同学可以按本节顺序完成页面联调，不需要先阅读后端代码。
+
+### 前端开发接入路线图
+
+一个新前端开发人员建议按下面顺序完成集成，不要从 WebSocket 或 Event Resume 开始：
+
+1. **身份与基础地址**：确认 HTTP base URL、WebSocket URL、context path、企业 Cookie/header 注入方式。所有接口都依赖同一个后端身份上下文，不在请求体传 `tenantId/userId`。
+2. **会话列表与会话状态**：先接 `GET /chat/sessions` 和 `GET /chat/sessions/{sessionId}/state`。会话列表负责左侧导航，state 负责进入会话后一次性拿到历史消息和 active run 状态。
+3. **创建 run 与实时输出**：接 `POST /chat/runs`，拿到 `runId/sessionId/firstSeq/streamTopicId` 后，通过 WebSocket `subscribe(topicId, afterSeq)` 接实时事件。
+4. **事件恢复与停止**：接 `stream-status`、run 级 `/events/resume` 和 `/runs/{runId}/stop`。这三者决定刷新、跨页签、跨电脑和停止回答时的正确行为。
+5. **消息树功能**：接 `messages`、`variants`、`path`、`branches`，实现编辑历史问题、重新生成回答、版本切换和从消息新建分支。
+6. **文档和反馈**：最后接文档库、附件引用、点赞点踩和取消反馈；这些能力都依赖已经能稳定渲染历史消息。
+
+### 关键字段关联关系
+
+| 字段 | 由哪个接口产生 | 后续在哪些接口使用 | 前端保存建议 |
+| --- | --- | --- | --- |
+| `sessionId` | `POST /chat/sessions`、`POST /chat/runs`、会话列表 | 所有会话、消息、stream-status、Event Resume、文档上传关联 | 作为路由参数和会话状态 key 持久保存 |
+| `runId` | `POST /chat/runs`、`stream-status.activeRunId` | stop、run 级 Event Resume、反馈可选关联、日志排障 | 当前 active run 保存到会话运行态，终态后可清空运行态但保留消息里的 `runId` |
+| `streamTopicId` | `POST /chat/runs`、`stream-status.activeStreamTopicId` | WebSocket `subscribe/unsubscribe/ack` | 只用于实时订阅，不要手写；格式当前为 `chat-run-{runId}` |
+| `sequence` / `seq` | WebSocket `payload.sequence`、Event Resume 事件 | WebSocket `ack.seq`、Event Resume `afterSeq`、本地去重 | 每个 session 保存已处理最大值；渲染事件前按 `sessionId + sequence` 去重 |
+| `firstSeq` | `POST /chat/runs` | 新建 run 后首次 WebSocket subscribe 的 `afterSeq` | 创建 run 后立即保存；通常 `subscribe.afterSeq=firstSeq` |
+| `activeRunFirstSeq` | `stream-status` | 新页签、新浏览器、跨电脑恢复 active run | 恢复 active run 时用 `activeRunFirstSeq - 1`，不要直接用 `latestSeq` |
+| `messageId` | 历史消息接口、run completed 后的 assistant 消息 | variants、path、branch、feedback、编辑/重新生成入参 | 作为消息树节点 ID 保存到消息状态 |
+| `leafMessageId` | 历史消息、variants、会话 `currentLeafMessageId` | `GET /messages?leafMessageId=...`、`POST /path` | 切换历史版本时保存当前选中的 leaf |
+| `documentId` | 文档上传或文档列表 | `attachments[].documentId`、文档详情/状态/下载/删除 | 文档库资产 ID；只有 `AVAILABLE` 文档可作为附件 |
+| `feedbackId` | 反馈提交/取消接口 | 前端通常只展示，不作为后续必填入参 | 可用于排障；按钮高亮以 `ChatMessageDto.feedback.rating` 为准 |
+| `cursor` | 会话列表、文档列表分页响应 | 下一页查询参数 | 只对产生它的列表接口有效，不跨接口复用 |
+
+### 场景级调用编排
+
+| 场景 | 调用顺序 | 关键关联字段 | 前端状态处理 |
+| --- | --- | --- | --- |
+| 首次打开应用 | `GET /chat/sessions?limit=20` -> 用户选择会话后 `GET /chat/sessions/{sessionId}/state` -> 可选连接 WS `connect` | `sessionId`、`currentLeafMessageId`、`streamStatus.activeRunId` | 左侧列表使用 `firstAssistantAnswer` 做摘要；主面板用 state.messages 渲染历史 |
+| 新会话首轮提问 | 可选 `POST /chat/sessions`，或直接 `POST /chat/runs` 不传 `sessionId` -> WS `subscribe(streamTopicId, firstSeq)` | `runId`、`sessionId`、`firstSeq`、`streamTopicId` | 乐观渲染 user 消息；收到 `message.delta` 创建/追加 assistant 草稿；终态后关闭 loading |
+| 已有会话继续提问 | `GET /state` 确认无 active run -> `POST /chat/runs(sessionId, runMode=NEXT)` -> WS subscribe | `sessionId`、`parentMessageId` 可选、`streamTopicId` | 同一 session 存在 active run 时不要再次发送；遇到 409 使用 stop 或等待终态 |
+| 当前页短暂断线重连 | 本地保存 `lastSeq` -> 重建 WS -> `subscribe(topicId, afterSeq=lastSeq)`；如果收到 `RECOVER_REQUIRED`，先 Event Resume 再重新 subscribe | `topicId`、`lastSeq`、`sequence` | 以 `sessionId + sequence` 去重；不要重复追加同一 delta |
+| 新页签/新浏览器/跨电脑打开 active run | `GET /state` 或 `stream-status` -> 若有 `activeRunId`，调用 `GET /runs/{activeRunId}/events/resume?afterSeq=activeRunFirstSeq-1` | `activeRunId`、`activeRunFirstSeq`、`activeStreamTopicId` | run 级 Event Resume 会补发并 tail 到终态；同一个 run 恢复期间不要再 WebSocket subscribe |
+| 停止回答 | 用户点击停止 -> `POST /runs/{runId}/stop` -> 等待 WS 或 Event Resume 收到 `run.cancelled` | `runId`、stop 前本地 `lastSeq` | stop 不是关闭 WebSocket；未收到终态时用 Event Resume 从 stop 前 `lastSeq` 补齐 |
+| 编辑历史 user 消息 | 用户点击编辑 -> `POST /chat/runs(runMode=EDIT_USER, editedMessageId, message)` -> 订阅新 run -> `variants` 刷新版本游标 | `editedMessageId`、新 user `messageId`、新 assistant `messageId` | 旧消息不覆盖；新 user sibling 和新 assistant sibling 进入消息树 |
+| 重新生成 assistant | 用户点击重新生成 -> `POST /chat/runs(runMode=REGENERATE_ASSISTANT, regeneratedMessageId)` -> 订阅新 run -> `variants` 刷新版本游标 | `regeneratedMessageId`、原父 user messageId、新 assistant messageId | 复用原 user 节点，新 assistant 作为 sibling 保存 |
+| 切换历史版本 | `GET /messages/{messageId}/variants` -> 用户选择某个候选 -> `POST /sessions/{sessionId}/path(leafMessageId)` -> `GET /messages` 重渲染 | `messageId`、`leafMessageId`、`currentLeafMessageId` | 只切换展示路径，不创建 run，不调用 Runtime |
+| 从消息新建分支 | `POST /sessions/{sessionId}/branches(sourceMessageId)` -> 选择新 `sessionId` -> `GET /state` | `sourceMessageId`、新 `sessionId`、`sourceSessionId/sourceMessageId` | 分支快照消息 `locked=true`，禁用编辑、删除和重新生成 |
+| 上传文件并作为附件提问 | `POST /documents(file, sessionId)` -> 等状态 `AVAILABLE` -> `POST /chat/runs(attachments[{documentId}])` | `documentId`、`sessionId`、`attachments[].documentId` | 附件不是消息类型；PROCESSING/FAILED/DELETED 不可作为聊天附件 |
+| 点赞/点踩/取消 | 历史消息中找到 assistant `messageId` -> `POST /messages/{messageId}/feedback`；再次点击已选按钮 -> `DELETE /feedback` | `messageId`、可选 `runId`、`feedback.rating/status` | 历史消息 `feedback` 非空时高亮；取消后返回 `status=CANCELLED`，历史消息再查为 `feedback=null` |
+| 会话归档/恢复/删除 | 单个：`POST /archive`、`POST /restore`、`DELETE /sessions/{sessionId}`；批量：`DELETE /sessions` body `sessionIds[]` | `sessionId`、`sessionIds[]` | 删除是软删除；有 active run 时先 stop，否则删除失败 |
+| 文档库管理 | `GET /documents` -> `GET /documents/{documentId}`/`status`/`preview-url`/`download`/`PATCH`/`DELETE` | `documentId`、`cursor`、`status` | 列表默认不返回 DELETED；下载和预览只允许 AVAILABLE |
+
+### 逐接口字段矩阵
+
+| 接口 | 请求字段 | 响应字段 | 后续关联 |
+| --- | --- | --- | --- |
+| `POST /chat/sessions` | Body：`title` 会话标题，可空；`channel` 来源渠道，可空 | `ChatSessionDto` 全字段 | 使用 `sessionId` 作为会话路由和后续 run 入参 |
+| `GET /chat/sessions` | Query：`limit` 页大小；`cursor` 上一页游标 | `items[]`、`nextCursor`；item 带 `firstAssistantAnswer` | `nextCursor` 查下一页；`sessionId` 进入 state |
+| `GET /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto` | 只拿元数据，不返回历史和流状态 |
+| `GET /chat/sessions/{sessionId}/state` | Path：`sessionId`；Query：`messageLimit` | `session`、`messages.items[]`、`messages.nextCursor`、`streamStatus` | 页面切换会话首选接口；根据 `streamStatus.activeRunId` 决定是否恢复 |
+| `GET /chat/sessions/{sessionId}/messages` | Path：`sessionId`；Query：`leafMessageId` 可选，`cursor` 保留，`limit` | `ChatMessagePageDto.items[]`、`nextCursor` | 用 `messageId` 做反馈、版本、分支和重新生成 |
+| `GET /chat/sessions/{sessionId}/messages/{messageId}/variants` | Path：`sessionId`、`messageId` | `ChatMessageDto[]` | 用候选消息的 `messageId` 调 `path` 切换版本 |
+| `POST /chat/sessions/{sessionId}/path` | Path：`sessionId`；Body：`leafMessageId` | `ChatSessionDto` | 切换成功后重新查 `messages` 渲染 active path |
+| `POST /chat/sessions/{sessionId}/branches` | Path：源 `sessionId`；Body：`sourceMessageId`、`title` 可选 | 新分支 `ChatSessionDto` | 使用返回的新 `sessionId` 进入分支会话 |
+| `PATCH /chat/sessions/{sessionId}` | Path：`sessionId`；Body：`title` | `ChatSessionDto` | 更新左侧列表标题 |
+| `POST /chat/sessions/{sessionId}/archive` | Path：`sessionId` | `ChatSessionDto(status=ARCHIVED)` | 可从普通列表隐藏；恢复用 restore |
+| `POST /chat/sessions/{sessionId}/restore` | Path：`sessionId` | `ChatSessionDto(status=ACTIVE)` | 恢复后可继续发 run |
+| `DELETE /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto(status=DELETED)` | 删除后清理本地当前会话状态和订阅 |
+| `DELETE /chat/sessions` | Body：`sessionIds[]` | `deletedCount`、`items[]` | 批量删除成功后从列表移除这些 session |
+| `POST /chat/runs` | Body：`commandId`、`sessionId`、`conversationId`、`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`attachments[]`、`metadata` | `runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId` | 用 `streamTopicId` 订阅；用 `runId` stop/恢复/反馈 |
+| `POST /chat/runs/{runId}/stop` | Path：`runId`；Header：可选 Cookie | `runId`、`sessionId`、`status`、`latestSeq`、`stoppedAt` | 用 Event Resume 补齐 `run.cancelled` |
+| `GET /chat/sessions/{sessionId}/events/resume` | Path：`sessionId`；Query：`afterSeq` | SSE data：`ChatEventDto` | 补会话缺失事件；每条事件更新本地 `lastSeq` |
+| `GET /chat/runs/{runId}/events/resume` | Path：`runId`；Query：`afterSeq` | SSE data：`ChatEventDto`，active run 会持续到终态 | 新页签/跨设备恢复 active run 首选 |
+| `GET /chat/sessions/{sessionId}/stream-status` | Path：`sessionId` | `ChatStreamStatusDto` | 判断 active run、stop 按钮、恢复起点 |
+| `POST /chat/messages/{messageId}/feedback` | Path：`messageId`；Body：`runId`、`rating`、`reasonCode`、`commentText`、`metadata` | `MessageFeedbackDto(status=ACTIVE)` | 更新历史消息按钮高亮 |
+| `DELETE /chat/messages/{messageId}/feedback` | Path：`messageId`；Query：`runId` 可选 | `MessageFeedbackDto(status=CANCELLED)` | 取消按钮高亮 |
+| `POST /documents` | multipart：`file`；`sessionId` 可选 | `UploadedDocument` | 用返回 `id` 作为 `attachments[].documentId` |
+| `GET /documents` | Query：`sessionId` 可选，`limit`，`cursor` | `DocumentLibraryPage.items[]`、`nextCursor` | 文档选择器和最近文档列表 |
+| `GET /documents/{documentId}` | Path：`documentId` | `UploadedDocument` | 详情弹窗 |
+| `PATCH /documents/{documentId}` | Path：`documentId`；Body：`originalName`、`metadataJson` | `UploadedDocument` | 更新文档展示 |
+| `DELETE /documents/{documentId}` | Path：`documentId` | `UploadedDocument(status=DELETED)` | 从选择器移除，不再允许作为附件 |
+| `GET /documents/{documentId}/status` | Path：`documentId` | `documentId`、`status`、`tokenSize` | 轮询处理状态或展示失败 |
+| `GET /documents/{documentId}/preview-url` | Path：`documentId` | `documentId`、`accessUrl`、`accessType`、`expiresAt` | 前端打开后端受控预览/下载地址 |
+| `GET /documents/{documentId}/download` | Path：`documentId` | 二进制流 | 浏览器下载或预览 |
 
 ### 会话接口
 
@@ -195,6 +274,17 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `deletedCount` | 成功软删除的会话数量。 |
 | `items` | 删除后的 `ChatSessionDto[]`，每个状态均为 `DELETED`。 |
 
+### 会话管理请求 DTO
+
+| DTO | 字段 | 含义 |
+| --- | --- | --- |
+| `CreateChatSessionRequest` | `title` | 新会话标题；为空时后端使用默认标题。 |
+| `CreateChatSessionRequest` | `channel` | 会话来源渠道；普通 Web 端可传 `web`，本地联调台可传 `web-local-test`。 |
+| `UpdateChatSessionRequest` | `title` | 重命名后的会话标题；为空时保留原值。 |
+| `SelectChatPathRequest` | `leafMessageId` | 目标 active path 叶子消息 ID；必须属于当前会话。 |
+| `CreateChatBranchRequest` | `sourceMessageId` | 从当前会话哪条消息创建只读快照分支。 |
+| `CreateChatBranchRequest` | `title` | 新分支会话标题；为空时由后端生成。 |
+
 ### `ChatMessageDto`
 
 | 字段 | 含义 |
@@ -227,6 +317,72 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `type` | `run.started`、`message.delta`、`message.completed`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.event`、`run.completed`、`run.failed`、`run.cancelled`、`run.recovered` |
 | `payload` | 事件载荷；`message.delta` 使用 `payload.delta` 拼接文本 |
 
+### `ChatAttachmentDto`
+
+| 字段 | 含义 |
+| --- | --- |
+| `documentId` | 文档上传或文档库选择后得到的文档 ID；这是聊天附件唯一可信引用。 |
+| `name` | 附件展示名称；前端可传但服务端会按文档库事实源回填。 |
+| `contentType` | MIME 类型；前端可传但不作为事实源。 |
+| `sizeBytes` | 文件大小，单位字节；前端可传但不作为事实源。 |
+| `tokenSize` | 文档解析后的 token 数；可为空。 |
+| `source` | 附件来源，例如 `LOCAL_UPLOAD`、`LIBRARY`、`CONNECTOR`。 |
+
+### `ChatRunStartDto`
+
+| 字段 | 含义 |
+| --- | --- |
+| `runId` | 本轮后台 run 标识；stop、run 级事件恢复、排障使用。 |
+| `sessionId` | 本轮 run 所属会话；前端应以服务端返回值为准。 |
+| `firstSeq` | `run.started` 的事件序号；当前页面首次订阅该 run topic 时通常作为 `afterSeq`。 |
+| `createdAt` | run 创建时间。 |
+| `streamTopicId` | 本轮回答的 WebSocket run topic；必须来自服务端返回，不允许前端拼接或手写。 |
+
+### `ChatRunStopDto`
+
+| 字段 | 含义 |
+| --- | --- |
+| `runId` | 被停止的 run 标识。 |
+| `sessionId` | run 所属会话。 |
+| `status` | stop 后 run 状态，通常为 `CANCELLED`；已终态 run 会幂等返回当前状态。 |
+| `latestSeq` | 服务端事实源中该 run 或会话当前最新事件序号；不是当前页签已消费游标。 |
+| `stoppedAt` | stop 完成或幂等响应时间。 |
+
+### `ChatStreamStatusDto`
+
+| 字段 | 含义 |
+| --- | --- |
+| `sessionId` | 被查询的会话 ID。 |
+| `latestSeq` | 当前会话已落库的最大事件序号。 |
+| `readCursorSeq` | 服务端记录的当前用户已消费最大事件序号；不能替代 active run 恢复起点。 |
+| `activeRunId` | 仍在运行或取消中的 run；无 active run 时为空。 |
+| `activeRunStatus` | active run 状态，例如 `RUNNING`、`CANCELLING`。 |
+| `activeStreamTopicId` | active run 的 WebSocket topic；当前页重连时可用。 |
+| `activeRunFirstSeq` | active run 首个事件序号；跨页签/跨电脑恢复时使用 `activeRunFirstSeq - 1`。 |
+| `activeRunLastSeq` | active run 最近一个已持久化事件序号。 |
+| `cancellable` | 当前 active run 是否允许调用 stop。 |
+
+### `MessageFeedbackDto`
+
+| 字段 | 含义 |
+| --- | --- |
+| `feedbackId` | 反馈记录 ID。 |
+| `messageId` | 被反馈的 assistant 消息 ID。 |
+| `runId` | 反馈关联 run，可为空；传入时必须与消息属于同一会话。 |
+| `rating` | `LIKE` 或 `DISLIKE`；取消后可能保留最后一次评级，仅用于审计展示。 |
+| `status` | `ACTIVE` 表示当前反馈有效；`CANCELLED` 表示已取消。 |
+| `createdAt` / `updatedAt` | 创建和最后更新时间。 |
+
+### `MessageFeedbackRequest`
+
+| 字段 | 含义 |
+| --- | --- |
+| `runId` | 可选 run ID；存在时服务端校验它与消息属于同一会话。 |
+| `rating` | 必填反馈评级，取值 `LIKE` 或 `DISLIKE`。 |
+| `reasonCode` | 可选结构化原因编码，例如 `INACCURATE`、`UNHELPFUL`；具体枚举可由前端产品定义。 |
+| `commentText` | 可选用户补充说明。 |
+| `metadata` | 可选前端诊断扩展，例如 `clientTraceId`；不要放 Cookie、token 等敏感信息。 |
+
 ### `UploadedDocument`
 
 | 字段 | 含义 |
@@ -240,6 +396,22 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `source` | 来源，例如 `LOCAL_UPLOAD` |
 | `tokenSize` | 解析后 token 数，可为空 |
 | `createdAt` / `updatedAt` | 创建和更新时间 |
+
+### 文档访问 DTO
+
+| DTO | 字段 | 含义 |
+| --- | --- | --- |
+| `DocumentLibraryPage` | `items` | 当前页 `UploadedDocument[]`。 |
+| `DocumentLibraryPage` | `nextCursor` | 下一页游标；为空表示没有更多数据。 |
+| `DocumentStatusDto` | `documentId` | 被查询状态的文档 ID。 |
+| `DocumentStatusDto` | `status` | 文档处理状态，例如 `AVAILABLE`、`PROCESSING`、`FAILED`、`DELETED`。 |
+| `DocumentStatusDto` | `tokenSize` | 文档解析后的 token 数，可为空。 |
+| `DocumentAccessDto` | `documentId` | 被访问的文档 ID。 |
+| `DocumentAccessDto` | `accessUrl` | 后端受控预览或下载地址。 |
+| `DocumentAccessDto` | `accessType` | 访问方式，当前为 `BACKEND_STREAM`。 |
+| `DocumentAccessDto` | `expiresAt` | 访问地址过期时间；后端受控流当前可为空。 |
+| `UpdateDocumentRequest` | `originalName` | 新展示文件名；为空时保留原值。 |
+| `UpdateDocumentRequest` | `metadataJson` | 新扩展元数据 JSON 字符串；为空时保留原值。 |
 
 ## 协议边界
 
@@ -805,7 +977,7 @@ ws.send(JSON.stringify({
 | `run.failed` | 本轮 run 失败 | 展示错误信息，关闭 loading |
 | `run.cancelled` | 用户停止本轮回答 | 展示已停止，关闭 loading |
 
-ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON chunk 或 SSE-like `data:` chunk 先通过 raw log MQ 旁路发布，再归一化成上表事件。raw log 消费端异步写入 `fin_ex_runtime_raw_stream_log_t`，仅用于排障；前端不得解析 Relay 原始响应，只消费 ChatService 标准 payload：
+ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON chunk 或 SSE-like `data:` chunk 归一化成上表事件。Runtime raw log 是可选诊断旁路，默认关闭；后续接入企业 MQ 时，后端可以在 normalizer 之前 best-effort 发布原始 chunk，由消费端异步写入 `fin_ex_runtime_raw_stream_log_t`。raw log 仅用于排障，不参与前端恢复、WebSocket 推送或 assistant 历史消息拼接；前端不得解析 Relay 原始响应，只消费 ChatService 标准 payload：
 
 | 事件类型 | 标准 payload |
 | --- | --- |

@@ -113,7 +113,7 @@ export FINANCEEX_DEV_USERNAME=developer
 run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。stop 只停止本轮回答，不删除 `RuntimeBinding`。
 run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实例、心跳、租约、恢复状态和 `fencing_token`，不混入业务 run 表。后台执行流写入 run 事件时通过 openGauss guarded insert 原子校验 execution owner 与 `fencing_token`；stop、watchdog 或未来 Runtime takeover 递增 token 后，旧实例迟到 delta/completed 会被拒绝。
 连续 `message.delta` 默认按 `financeex.chat-stream.delta-coalesce-*` 合并为几十毫秒级文本片段，减少 openGauss event 表、Redis Pub/Sub 和 WebSocket 的逐 token 写放大；对外事件类型、`seq` 游标和恢复协议不变。
-Relay 原始流响应会先写入 `fin_ex_runtime_raw_stream_log_t`，再经过 normalizer 转成 ChatService 标准事件。raw log 只用于排障和协议分析，不用于前端恢复、不用于 WebSocket 推送，也不用于 assistant 历史消息拼接。
+Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPublisher` best-effort 发布到企业 MQ；消费端异步合并、脱敏、分片后写入 `fin_ex_runtime_raw_stream_log_t`。raw log 默认关闭，只用于排障和协议分析，不用于前端恢复、不用于 WebSocket 推送，也不用于 assistant 历史消息拼接；MQ 或 raw log 写库失败不会影响 run 主链路。
 集群部署时，取消正确性依赖 Redis cancel flag 和 openGauss run 状态；实例故障治理依赖 openGauss execution 条件抢占和 fencing token。JVM 内 subscription registry 只用于命中本机执行流时快速释放资源，不作为跨实例事实源。
 同一 `tenantId + userId + sessionId` 同一时间只允许一个 active run。若会话已有
 `RUNNING/CANCELLING` run，`POST /chat/runs` 会返回 `ACTIVE_RUN_EXISTS`，前端应先调用 stop
@@ -149,7 +149,7 @@ Relay 原始流响应会先写入 `fin_ex_runtime_raw_stream_log_t`，再经过 
 - `fin_ex_chat_run_t`
 - `fin_ex_chat_run_execution_t`
 - `fin_ex_chat_event_t`
-- `fin_ex_runtime_raw_stream_log_t`：保存 Relay normalizer 之前的原始流响应片段，仅用于排障。
+- `fin_ex_runtime_raw_stream_log_t`：保存 Relay normalizer 之前的原始流响应片段，由 raw log MQ 消费端异步写入，仅用于排障。
 - `fin_ex_chat_read_cursor_t`
 - `fin_ex_uploaded_document_t`
 - `fin_ex_message_feedback_t`：保存当前用户对 assistant 消息的点赞/点踩状态；`status=CANCELLED` 表示已取消当前反馈。
@@ -270,8 +270,10 @@ export FINANCEEX_CHAT_STREAM_DELTA_COALESCE_ENABLED=true
 export FINANCEEX_CHAT_STREAM_DELTA_COALESCE_WINDOW=50ms
 export FINANCEEX_CHAT_STREAM_DELTA_COALESCE_MAX_CHARS=512
 
-# Relay 原始流日志，仅用于排障；失败不影响主链路
-export FINANCEEX_RUNTIME_RAW_LOG_ENABLED=true
+# Relay 原始流日志，仅用于排障；默认关闭。
+# 后续接入企业 MQ 时，提供 RuntimeRawStreamLogPublisher bean，并把 enabled 打开。
+export FINANCEEX_RUNTIME_RAW_LOG_ENABLED=false
+export FINANCEEX_RUNTIME_RAW_LOG_TRANSPORT=disabled
 export FINANCEEX_RUNTIME_RAW_LOG_COALESCE_WINDOW=100ms
 export FINANCEEX_RUNTIME_RAW_LOG_MAX_CHARS=4096
 export FINANCEEX_RUNTIME_RAW_LOG_HARD_MAX_CHARS=65536
@@ -288,7 +290,7 @@ SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP �
 
 Relay Runtime Cookie 透传是 adapter 级能力：`relay-stream-http` 会把入口 Cookie 放入下游 HTTP 请求头；`relay-websocket` 会把入口 Cookie 放入后端出站 WebSocket 握手头和可选 stop HTTP 请求头。`AgentRuntimeRequest.forwardHeaders` 与 cancel 请求中的转发头均被 JSON 忽略，避免 Cookie 进入下游请求体。
 
-Relay Runtime 请求与响应均经过 adapter 防腐层：应用层使用 `AgentRuntimeRequest`，但下游请求体会映射为 Relay 专用 wire DTO，只保留 `runId/sessionId/runtimeSessionId/query/attachments/metadata` 等必要字段；下游 plain text、JSON chunk 或 SSE-like `data:` chunk 会先写入 raw stream log，再归一化为 ChatService 标准 `ChatEvent`。前端只消费 `message.delta.payload.delta`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.event`、`message.completed`、`run.failed` 等稳定事件，不需要理解 Relay 原始响应格式。
+Relay Runtime 请求与响应均经过 adapter 防腐层：应用层使用 `AgentRuntimeRequest`，但下游请求体会映射为 Relay 专用 wire DTO，只保留 `runId/sessionId/runtimeSessionId/query/attachments/metadata` 等必要字段；下游 plain text、JSON chunk 或 SSE-like `data:` chunk 可选进入 raw log MQ 旁路，再归一化为 ChatService 标准 `ChatEvent`。前端只消费 `message.delta.payload.delta`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.event`、`message.completed`、`run.failed` 等稳定事件，不需要理解 Relay 原始响应格式。
 
 Relay 响应映射的核心规则是：`type=agent` 且包含 `content/context` 时映射为 `message.delta`，用于 assistant 正文和历史消息拼接；纯文本 `steam-complete`、`stream-complete`、`[DONE]` 等终态映射为 `message.completed`；`relay-progress`、`project_home`、`available-modes`、`agent-call`、`thinking-operation-*`、`tool_call_streaming` 等运行过程分别映射为对应 `runtime.*` 事件；未知合法 JSON object 才进入脱敏限长后的 `runtime.event.payload.sourcePayload`。Relay 原始 `type` 只进入 payload 的 `sourceType` 或 raw log，不能作为 ChatService 顶层 `event_type`。
 

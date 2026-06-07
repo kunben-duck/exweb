@@ -664,7 +664,7 @@ stop 语义：
 - Relay WebSocket adapter：设置 `financeex.agent-runtime.provider=relay`、`financeex.agent-runtime.api-adapter=relay-websocket`，并配置 `financeex.agent-runtime.base-url` 与 `financeex.agent-runtime.websocket-path`；adapter 会把 `http(s)://` base-url 转换为 `ws(s)://` 出站连接地址
 - Relay Cookie 透传：`financeex.agent-runtime.forward-cookie.enabled`、`max-length`、`allowed-adapters`。默认只允许 `relay-stream-http` 与 `relay-websocket` 接收入口 Cookie。
 - 流式 delta 合并：`financeex.chat-stream.delta-coalesce-enabled`、`delta-coalesce-window`、`delta-coalesce-max-chars`。默认开启，只把连续 `message.delta` 合并为标准 delta event，降低事件表和实时 fanout 写放大；`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.event` 等非正文事件不会被合并。
-- Runtime 原始流日志：`financeex.runtime-raw-log.enabled`、`coalesce-window`、`max-chars`、`hard-max-chars`、`max-rows-per-run`、`redact-sensitive-fields`。该日志在 Relay normalizer 之前保存原始 chunk 的合并或分片结果，仅用于排障，不参与前端恢复、WebSocket 推送或 assistant 历史拼接。
+- Runtime 原始流日志：`financeex.runtime-raw-log.enabled`、`transport`、`coalesce-window`、`max-chars`、`hard-max-chars`、`max-rows-per-run`、`redact-sensitive-fields`。默认关闭；后续接入企业 MQ 时通过 `RuntimeRawStreamLogPublisher` 发布 raw chunk，消费端异步合并、脱敏、分片后写入 `fin_ex_runtime_raw_stream_log_t`。该日志仅用于排障，不参与前端恢复、WebSocket 推送或 assistant 历史拼接。
 - Relay 响应映射：`financeex.agent-runtime.relay.answer-event-types`、`answer-content-fields`、`agent-context-as-answer`。默认把 Relay `type=agent` 的 `content/context` 映射为 assistant 正文 `message.delta`，把 `steam-complete/stream-complete/[DONE]` 映射为 `message.completed`。
 
 SubAgent 当前只支持单轮 HTTP 文本流调用。当前上线版本内置一个 `RelayAgentRuntime` provider 和两个 `RelayRuntimeProtocolAdapter`：`relay-stream-http` 是 Relay HTTP 流式协议实现，`relay-websocket` 是 RelayAgent WebSocket 对话协议实现。新增下游协议时，应新增 adapter，而不是在 `RelayAgentRuntime` 主类里堆转换分支。

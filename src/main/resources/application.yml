@@ -127,12 +127,17 @@ financeex:
     delta-coalesce-max-chars: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_MAX_CHARS:512}
   runtime-raw-log:
     # 记录 Relay normalizer 之前的原始响应片段，用于排障和协议分析；不作为前端恢复事实源。
-    enabled: ${FINANCEEX_RUNTIME_RAW_LOG_ENABLED:true}
+    # 默认关闭；后续接入企业 MQ 时提供 RuntimeRawStreamLogPublisher bean，并将 enabled 打开。
+    enabled: ${FINANCEEX_RUNTIME_RAW_LOG_ENABLED:false}
+    transport: ${FINANCEEX_RUNTIME_RAW_LOG_TRANSPORT:disabled}
     coalesce-window: ${FINANCEEX_RUNTIME_RAW_LOG_COALESCE_WINDOW:100ms}
     max-chars: ${FINANCEEX_RUNTIME_RAW_LOG_MAX_CHARS:4096}
     hard-max-chars: ${FINANCEEX_RUNTIME_RAW_LOG_HARD_MAX_CHARS:65536}
     max-rows-per-run: ${FINANCEEX_RUNTIME_RAW_LOG_MAX_ROWS_PER_RUN:1000}
     redact-sensitive-fields: ${FINANCEEX_RUNTIME_RAW_LOG_REDACT_SENSITIVE_FIELDS:true}
+    consumer-state-idle-ttl: ${FINANCEEX_RUNTIME_RAW_LOG_CONSUMER_STATE_IDLE_TTL:5m}
+    consumer-max-active-run-buffers: ${FINANCEEX_RUNTIME_RAW_LOG_CONSUMER_MAX_ACTIVE_RUN_BUFFERS:1000}
+    consumer-state-cleanup-delay-ms: ${FINANCEEX_RUNTIME_RAW_LOG_CONSUMER_STATE_CLEANUP_DELAY_MS:60000}
   mvc:
     sse:
       # run 级 SSE resume 在 active run 无业务 token 时发送 heartbeat，防止 Servlet async、网关或代理误判空闲断流。

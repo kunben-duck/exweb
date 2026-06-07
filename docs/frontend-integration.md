@@ -774,7 +774,7 @@ ws.send(JSON.stringify({
 | `run.failed` | 本轮 run 失败 | 展示错误信息，关闭 loading |
 | `run.cancelled` | 用户停止本轮回答 | 展示已停止，关闭 loading |
 
-ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON chunk 或 SSE-like `data:` chunk 先写入 raw stream log，再归一化成上表事件。前端不得解析 Relay 原始响应，只消费 ChatService 标准 payload：
+ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON chunk 或 SSE-like `data:` chunk 先通过 raw log MQ 旁路发布，再归一化成上表事件。raw log 消费端异步写入 `fin_ex_runtime_raw_stream_log_t`，仅用于排障；前端不得解析 Relay 原始响应，只消费 ChatService 标准 payload：
 
 | 事件类型 | 标准 payload |
 | --- | --- |

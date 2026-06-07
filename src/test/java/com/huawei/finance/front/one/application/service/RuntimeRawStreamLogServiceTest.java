@@ -5,9 +5,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.huawei.finance.front.one.application.config.RuntimeRawStreamLogProperties;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.finance.front.one.application.integration.conversation.RuntimeRawStreamLogPublisher;
 import com.huawei.finance.front.one.application.integration.conversation.RuntimeRawStreamLogRepository;
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
+import com.huawei.finance.front.one.domain.chat.RuntimeRawStreamChunk;
 import com.huawei.finance.front.one.domain.chat.RuntimeRawStreamLogEntry;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import java.time.Duration;
@@ -21,31 +23,83 @@ import reactor.test.StepVerifier;
 class RuntimeRawStreamLogServiceTest {
 
     @Test
-    void coalescesRawChunksBeforePersisting() {
-        InMemoryRepository repository = new InMemoryRepository();
-        RuntimeRawStreamLogService service = service(repository, properties(100, 4096));
+    void capturePublishesRawChunksWithoutChangingMainStream() {
+        InMemoryPublisher publisher = new InMemoryPublisher();
+        RuntimeRawStreamLogService service = new RuntimeRawStreamLogService(properties(100, 4096), publisher);
+
+        StepVerifier.create(service.capture(Flux.just("a", "steam-complete"), request(), "relay", "relay-stream-http"))
+                .expectNext("a", "steam-complete")
+                .verifyComplete();
+
+        assertThat(publisher.chunks()).hasSize(2);
+        assertThat(publisher.chunks()).extracting(RuntimeRawStreamChunk::chunkIndex)
+                .containsExactly(1L, 2L);
+        assertThat(publisher.chunks().get(1).terminalCandidate()).isTrue();
+    }
+
+    @Test
+    void publisherFailureDoesNotAffectMainStream() {
+        RuntimeRawStreamLogService service = new RuntimeRawStreamLogService(
+                properties(100, 4096),
+                chunk -> {
+                    throw new IllegalStateException("mq down");
+                });
+
+        StepVerifier.create(service.capture(Flux.just("a", "b"), request(), "relay", "relay-stream-http"))
+                .expectNext("a", "b")
+                .verifyComplete();
+    }
+
+    @Test
+    void defaultDisabledPropertiesSkipPublisherCompletely() {
+        InMemoryPublisher publisher = new InMemoryPublisher();
+        RuntimeRawStreamLogService service = new RuntimeRawStreamLogService(new RuntimeRawStreamLogProperties(), publisher);
 
         StepVerifier.create(service.capture(Flux.just("a", "b"), request(), "relay", "relay-stream-http"))
                 .expectNext("a", "b")
                 .verifyComplete();
 
-        List<RuntimeRawStreamLogEntry> entries = awaitEntries(repository, 1);
+        assertThat(publisher.chunks()).isEmpty();
+    }
+
+    @Test
+    void disabledTransportSkipsPublisherCompletely() {
+        InMemoryPublisher publisher = new InMemoryPublisher();
+        RuntimeRawStreamLogProperties properties = properties(100, 4096);
+        properties.setTransport("disabled");
+        RuntimeRawStreamLogService service = new RuntimeRawStreamLogService(properties, publisher);
+
+        StepVerifier.create(service.capture(Flux.just("a"), request(), "relay", "relay-stream-http"))
+                .expectNext("a")
+                .verifyComplete();
+
+        assertThat(publisher.chunks()).isEmpty();
+    }
+
+    @Test
+    void processorCoalescesRawChunksBeforePersisting() {
+        InMemoryRepository repository = new InMemoryRepository();
+        RuntimeRawStreamLogProcessor processor = processor(repository, properties(100, 4096));
+
+        processor.consume(chunk(1, "a", false));
+        processor.consume(chunk(2, "b", true));
+
+        List<RuntimeRawStreamLogEntry> entries = repository.entries();
         assertThat(entries).hasSize(1);
         assertThat(entries.getFirst().rawContent()).isEqualTo("ab");
         assertThat(entries.getFirst().chunkCount()).isEqualTo(2);
+        assertThat(entries.getFirst().terminal()).isTrue();
         assertThat(entries.getFirst().truncated()).isFalse();
     }
 
     @Test
-    void splitsSingleOversizedChunkWithoutMarkingTruncated() {
+    void processorSplitsSingleOversizedChunkWithoutMarkingTruncated() {
         InMemoryRepository repository = new InMemoryRepository();
-        RuntimeRawStreamLogService service = service(repository, properties(4, 100));
+        RuntimeRawStreamLogProcessor processor = processor(repository, properties(4, 100));
 
-        StepVerifier.create(service.capture(Flux.just("abcdefghij"), request(), "relay", "relay-stream-http"))
-                .expectNext("abcdefghij")
-                .verifyComplete();
+        processor.consume(chunk(1, "abcdefghij", true));
 
-        List<RuntimeRawStreamLogEntry> entries = awaitEntries(repository, 3);
+        List<RuntimeRawStreamLogEntry> entries = repository.entries();
         assertThat(entries).extracting(RuntimeRawStreamLogEntry::rawContent)
                 .containsExactly("abcd", "efgh", "ij");
         assertThat(entries).allMatch(entry -> !entry.truncated());
@@ -54,33 +108,29 @@ class RuntimeRawStreamLogServiceTest {
     }
 
     @Test
-    void marksTerminalChunkAndRedactsSensitiveFields() {
+    void processorMarksTerminalChunkAndRedactsSensitiveFields() {
         InMemoryRepository repository = new InMemoryRepository();
-        RuntimeRawStreamLogService service = service(repository, properties(4096, 4096));
+        RuntimeRawStreamLogProcessor processor = processor(repository, properties(4096, 4096));
 
-        StepVerifier.create(service.capture(Flux.just("{\"token\":\"secret\",\"safe\":\"yes\"}", "steam-complete"),
-                        request(), "relay", "relay-stream-http"))
-                .expectNextCount(2)
-                .verifyComplete();
+        processor.consume(chunk(1, "{\"token\":\"secret\",\"safe\":\"yes\"}", false));
+        processor.consume(chunk(2, "steam-complete", true));
 
-        List<RuntimeRawStreamLogEntry> entries = awaitEntries(repository, 1);
+        List<RuntimeRawStreamLogEntry> entries = repository.entries();
+        assertThat(entries).hasSize(1);
         assertThat(entries.getFirst().rawContent())
                 .contains("[REDACTED]")
                 .doesNotContain("secret");
         assertThat(entries.getFirst().terminal()).isTrue();
-        assertThat(entries.getFirst().truncated()).isFalse();
     }
 
     @Test
-    void marksHardLimitDiscardAsTruncated() {
+    void processorMarksHardLimitDiscardAsTruncated() {
         InMemoryRepository repository = new InMemoryRepository();
-        RuntimeRawStreamLogService service = service(repository, properties(10, 20));
+        RuntimeRawStreamLogProcessor processor = processor(repository, properties(10, 20));
 
-        StepVerifier.create(service.capture(Flux.just("abcdefghijklmnopqrstuvwxyz1234"), request(), "relay", "relay-stream-http"))
-                .expectNext("abcdefghijklmnopqrstuvwxyz1234")
-                .verifyComplete();
+        processor.consume(chunk(1, "abcdefghijklmnopqrstuvwxyz1234", true));
 
-        List<RuntimeRawStreamLogEntry> entries = awaitEntries(repository, 2);
+        List<RuntimeRawStreamLogEntry> entries = repository.entries();
         assertThat(entries).hasSize(2);
         assertThat(entries.stream().map(RuntimeRawStreamLogEntry::rawContent).reduce("", String::concat))
                 .contains("[TRUNCATED]");
@@ -90,31 +140,21 @@ class RuntimeRawStreamLogServiceTest {
     }
 
     @Test
-    void rawLogEntryCreationFailureDoesNotAffectMainStream() {
-        RuntimeRawStreamLogService service = new RuntimeRawStreamLogService(
-                properties(100, 4096), new InMemoryRepository(), new FailingIdGenerator());
+    void processorWriteFailureDoesNotThrowToMqListener() {
+        RuntimeRawStreamLogProcessor processor = processor(new FailingRepository(), properties(100, 4096));
 
-        StepVerifier.create(service.capture(Flux.just("a", "b"), request(), "relay", "relay-stream-http"))
-                .expectNext("a", "b")
-                .verifyComplete();
+        processor.consume(chunk(1, "a", true));
     }
 
-    @Test
-    void rawLogRepositoryFailureDoesNotAffectMainStream() {
-        RuntimeRawStreamLogService service = service(new FailingRepository(), properties(100, 4096));
-
-        StepVerifier.create(service.capture(Flux.just("a", "b"), request(), "relay", "relay-stream-http"))
-                .expectNext("a", "b")
-                .verifyComplete();
-    }
-
-    private RuntimeRawStreamLogService service(RuntimeRawStreamLogRepository repository,
-                                               RuntimeRawStreamLogProperties properties) {
-        return new RuntimeRawStreamLogService(properties, repository, new TestIdGenerator());
+    private RuntimeRawStreamLogProcessor processor(RuntimeRawStreamLogRepository repository,
+                                                   RuntimeRawStreamLogProperties properties) {
+        return new RuntimeRawStreamLogProcessor(properties, repository, new TestIdGenerator());
     }
 
     private RuntimeRawStreamLogProperties properties(int maxChars, int hardMaxChars) {
         RuntimeRawStreamLogProperties properties = new RuntimeRawStreamLogProperties();
+        properties.setEnabled(true);
+        properties.setTransport("enterprise-mq");
         properties.setCoalesceWindow(Duration.ofMillis(100));
         properties.setMaxChars(maxChars);
         properties.setHardMaxChars(hardMaxChars);
@@ -139,17 +179,34 @@ class RuntimeRawStreamLogServiceTest {
         );
     }
 
-    private List<RuntimeRawStreamLogEntry> awaitEntries(InMemoryRepository repository, int expected) {
-        long deadline = System.currentTimeMillis() + 3000;
-        while (System.currentTimeMillis() < deadline && repository.entries().size() < expected) {
-            try {
-                Thread.sleep(10);
-            } catch (InterruptedException ex) {
-                Thread.currentThread().interrupt();
-                break;
-            }
+    private RuntimeRawStreamChunk chunk(long index, String content, boolean terminal) {
+        return new RuntimeRawStreamChunk(
+                "tenant1",
+                "user1",
+                "session1",
+                "run1",
+                "relay",
+                "relay-stream-http",
+                index,
+                content,
+                content.length(),
+                false,
+                terminal,
+                java.time.Instant.now()
+        );
+    }
+
+    private static class InMemoryPublisher implements RuntimeRawStreamLogPublisher {
+        private final List<RuntimeRawStreamChunk> chunks = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void publish(RuntimeRawStreamChunk chunk) {
+            chunks.add(chunk);
         }
-        return repository.entries();
+
+        List<RuntimeRawStreamChunk> chunks() {
+            return chunks;
+        }
     }
 
     private static class InMemoryRepository implements RuntimeRawStreamLogRepository {
@@ -178,13 +235,6 @@ class RuntimeRawStreamLogServiceTest {
         @Override
         public String newId(String prefix, IdGenerateContext context) {
             return prefix + "_" + (++sequence);
-        }
-    }
-
-    private static class FailingIdGenerator implements IdGenerator {
-        @Override
-        public String newId(String prefix, IdGenerateContext context) {
-            throw new IllegalStateException("id service down");
         }
     }
 }

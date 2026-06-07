@@ -304,6 +304,7 @@ POST /api/v1/ex/chat/runs/{runId}/stop
 POST /api/v1/ex/chat/sessions/{sessionId}/archive
 POST /api/v1/ex/chat/sessions/{sessionId}/restore
 DELETE /api/v1/ex/chat/sessions/{sessionId}
+DELETE /api/v1/ex/chat/sessions
 ```
 
 `/chat/runs` 只返回 run 运行标识和 run 级 `streamTopicId`，不返回 WebSocket、Event Resume 或 stop URL。

@@ -174,6 +174,56 @@ public interface ChatMessageMapper {
     );
 
     @Select("""
+            <script>
+            SELECT *
+            FROM (
+                SELECT m.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY m.session_id
+                           ORDER BY m.node_order ASC, m.created_at ASC, m.id ASC
+                       ) AS rn
+                FROM fin_ex_chat_message_t m
+                JOIN fin_ex_chat_session_t s
+                  ON s.id = m.session_id
+                 AND s.tenant_id = m.tenant_id
+                 AND s.user_id = m.user_id
+                WHERE m.tenant_id = #{tenantId}
+                  AND m.user_id = #{userId}
+                  AND m.role = 'assistant'
+                  AND s.status &lt;&gt; 'DELETED'
+                  AND m.session_id IN
+                  <foreach collection="sessionIds" item="sessionId" open="(" separator="," close=")">
+                      #{sessionId}
+                  </foreach>
+            ) ranked
+            WHERE ranked.rn = 1
+            </script>
+            """)
+    @Results(id = "chatMessageFirstAssistantResultMap", value = {
+            @Result(column = "tenant_id", property = "tenantId"),
+            @Result(column = "user_id", property = "userId"),
+            @Result(column = "session_id", property = "sessionId"),
+            @Result(column = "parent_message_id", property = "parentMessageId"),
+            @Result(column = "node_order", property = "nodeOrder"),
+            @Result(column = "tree_depth", property = "treeDepth"),
+            @Result(column = "sibling_index", property = "siblingIndex"),
+            @Result(column = "token_count", property = "tokenCount"),
+            @Result(column = "run_id", property = "runId"),
+            @Result(column = "origin_type", property = "originType"),
+            @Result(column = "source_session_id", property = "sourceSessionId"),
+            @Result(column = "source_message_id", property = "sourceMessageId"),
+            @Result(column = "edited_from_message_id", property = "editedFromMessageId"),
+            @Result(column = "regenerated_from_message_id", property = "regeneratedFromMessageId"),
+            @Result(column = "metadata_json", property = "metadataJson"),
+            @Result(column = "created_at", property = "createdAt")
+    })
+    List<ChatMessageRow> findFirstAssistantBySessions(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionIds") List<String> sessionIds
+    );
+
+    @Select("""
             SELECT *
             FROM fin_ex_chat_message_t
             WHERE tenant_id = #{tenantId}

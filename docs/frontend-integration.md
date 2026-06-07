@@ -36,7 +36,8 @@ export FINANCEEX_DEV_USERNAME=developer
 | 新建分支 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/branches` | 从某条消息创建只读历史快照分支 |
 | 重命名会话 | `PATCH` | `/api/v1/ex/chat/sessions/{sessionId}` | 更新会话标题 |
 | 归档/恢复会话 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/archive`、`/restore` | 会话列表管理 |
-| 删除会话 | `DELETE` | `/api/v1/ex/chat/sessions/{sessionId}` | 软删除会话，历史事实数据保留 |
+| 删除会话 | `DELETE` | `/api/v1/ex/chat/sessions/{sessionId}` | 软删除单个会话，历史事实数据保留 |
+| 批量删除会话 | `DELETE` | `/api/v1/ex/chat/sessions` | 批量软删除会话，active run 存在时整体失败 |
 | 创建 run | `POST` | `/api/v1/ex/chat/runs` | 唯一提问入口，返回 `streamTopicId` |
 | WebSocket | `WS` | `/api/v1/ex/chat/ws` | 用户级长连接，按 run topic 订阅实时事件 |
 | 会话事件恢复 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/events/resume?afterSeq={seq}` | 有限补发整个会话缺失事件 |
@@ -109,7 +110,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
 | `POST /api/v1/ex/chat/sessions` | 用户点击“新建会话”时显式创建。 | JSON body：`title` 可选，`channel` 可选，默认可为空。 | `ChatSessionDto`：`sessionId`、`title`、`status`、`channel`、`createdAt`、`updatedAt`。 | 前端不传租户和用户；后端从身份上下文解析。 |
-| `GET /api/v1/ex/chat/sessions` | 左侧会话列表分页加载。 | Query：`limit` 可选，默认 20；`cursor` 可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`。 | 返回按最近更新时间倒序排列；`nextCursor=null` 表示无下一页。 |
+| `GET /api/v1/ex/chat/sessions` | 左侧会话列表分页加载。 | Query：`limit` 可选，默认 20；`cursor` 可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每个 `ChatSessionDto` 带 `firstAssistantAnswer`。 | 返回按最近更新时间倒序排列；`nextCursor=null` 表示无下一页；`firstAssistantAnswer` 是会话第一条完整 assistant 回答，可为空。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/state` | 切换会话或跨电脑打开会话时首选。 | Path：`sessionId`；Query：`messageLimit` 可选，默认 50。 | `ChatSessionStateDto`：`session`、`messages`、`streamStatus`。 | `messages` 返回当前 active path；该接口不会返回正在输出的半截 assistant 历史消息。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 保留。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 不传 `leafMessageId` 时返回当前 active path；传入时返回 root 到该 leaf 的路径。 |
@@ -120,6 +121,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `POST /api/v1/ex/chat/sessions/{sessionId}/archive` | 用户归档会话。 | Path：`sessionId`。 | `ChatSessionDto`。 | 归档通常用于列表隐藏，不删除历史。 |
 | `POST /api/v1/ex/chat/sessions/{sessionId}/restore` | 用户恢复归档会话。 | Path：`sessionId`。 | `ChatSessionDto`。 | 恢复后可重新出现在普通会话列表。 |
 | `DELETE /api/v1/ex/chat/sessions/{sessionId}` | 用户删除会话。 | Path：`sessionId`。 | `ChatSessionDto`，`status=DELETED`。 | 软删除，不物理删除历史事实数据；如果会话存在 active run，需先调用 stop。 |
+| `DELETE /api/v1/ex/chat/sessions` | 用户批量删除会话。 | JSON body：`sessionIds[]`。 | `BatchDeleteChatSessionsDto`：`deletedCount`、`items[]`。 | all-or-nothing；任意会话不存在、不属于当前用户或存在 active run 时整体失败，不做部分删除。 |
 
 ### Run 与流式接口
 
@@ -177,7 +179,21 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `rootSessionId` | 分支族根会话 ID |
 | `branchSourceSessionId` | 当前会话从哪个源会话分支而来，普通会话为空 |
 | `branchSourceMessageId` | 当前会话从源会话哪条消息分支而来，普通会话为空 |
+| `firstAssistantAnswer` | 会话第一条 assistant 完整回答，仅会话分页列表保证装配；创建、详情、state 等非列表场景可为空 |
 | `createdAt` / `updatedAt` | 创建和最后更新时间 |
+
+### `BatchDeleteChatSessionsRequest`
+
+| 字段 | 含义 |
+| --- | --- |
+| `sessionIds` | 待软删除会话 ID 列表；服务端会去重，单次最多处理 100 个。 |
+
+### `BatchDeleteChatSessionsDto`
+
+| 字段 | 含义 |
+| --- | --- |
+| `deletedCount` | 成功软删除的会话数量。 |
+| `items` | 删除后的 `ChatSessionDto[]`，每个状态均为 `DELETED`。 |
 
 ### `ChatMessageDto`
 
@@ -306,6 +322,11 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/sessions \
   "title": "财经问答",
   "status": "ACTIVE",
   "channel": "web",
+  "currentLeafMessageId": null,
+  "rootSessionId": "session_xxx",
+  "branchSourceSessionId": null,
+  "branchSourceMessageId": null,
+  "firstAssistantAnswer": null,
   "createdAt": "2026-05-17T01:00:00Z",
   "updatedAt": "2026-05-17T01:00:00Z"
 }
@@ -331,6 +352,11 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions?limit=20"
       "title": "财经问答",
       "status": "ACTIVE",
       "channel": "web",
+      "currentLeafMessageId": "msg_002",
+      "rootSessionId": "session_xxx",
+      "branchSourceSessionId": null,
+      "branchSourceMessageId": null,
+      "firstAssistantAnswer": "从趋势看，差旅费在三月出现明显上升...",
       "createdAt": "2026-05-17T01:00:00Z",
       "updatedAt": "2026-05-17T01:10:00Z"
     }
@@ -360,6 +386,7 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/state?messageLim
     "rootSessionId": "session_xxx",
     "branchSourceSessionId": null,
     "branchSourceMessageId": null,
+    "firstAssistantAnswer": null,
     "createdAt": "2026-05-17T01:00:00Z",
     "updatedAt": "2026-05-17T01:10:00Z"
   },
@@ -468,6 +495,10 @@ curl -X PATCH http://localhost:8080/api/v1/ex/chat/sessions/session_xxx \
 curl -X POST http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/archive
 curl -X POST http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/restore
 curl -X DELETE http://localhost:8080/api/v1/ex/chat/sessions/session_xxx
+
+curl -X DELETE http://localhost:8080/api/v1/ex/chat/sessions \
+  -H 'Content-Type: application/json' \
+  -d '{"sessionIds":["session_xxx","session_yyy"]}'
 ```
 
 历史消息接口返回的是已经完整落库的 user/assistant 消息。若所选会话仍有 active run 正在输出，前端应继续调用 `stream-status` 和 run 级事件恢复缺失事件，把正在输出的增量接到当前 assistant 草稿上。

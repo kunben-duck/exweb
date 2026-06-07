@@ -5,6 +5,8 @@ import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
+import java.util.List;
+import java.util.Map;
 
 /**
  * 会话应用门面。
@@ -41,6 +43,18 @@ public interface ChatSessionFacade {
      * @return 会话分页结果。
      */
     ChatSessionPage listSessions(UserContext user, String cursor, int limit);
+
+    /**
+     * 批量查询会话首条 assistant 回答。
+     *
+     * <p>该能力专门服务会话分页列表摘要展示，避免 Controller 对每个会话逐个查历史消息造成 N+1 查询。
+     * 返回 Map 的 key 为 sessionId，value 为该会话第一条完整 assistant 消息正文。</p>
+     *
+     * @param user 请求入口解析出的不可变用户身份快照。
+     * @param sessions 当前分页页内会话快照，必须已通过 owner 查询得到。
+     * @return sessionId 到首条 assistant 回答的映射；没有 assistant 回复的会话不会出现在 Map 中。
+     */
+    Map<String, String> findFirstAssistantAnswers(UserContext user, List<ChatSession> sessions);
 
     /**
      * 查询当前用户可见会话的历史消息。
@@ -106,6 +120,18 @@ public interface ChatSessionFacade {
      * @return 删除后的会话元数据。
      */
     ChatSession deleteSession(UserContext user, String sessionId);
+
+    /**
+     * 批量软删除当前用户可见的会话。
+     *
+     * <p>删除语义为 all-or-nothing：所有会话都会先完成归属和 active run 校验；
+     * 任意一个会话不可删除时，本次请求整体失败，不做部分删除。</p>
+     *
+     * @param user 请求入口解析出的不可变用户身份快照。
+     * @param sessionIds 待软删除会话 ID 列表。
+     * @return 删除后的会话快照列表。
+     */
+    List<ChatSession> deleteSessions(UserContext user, List<String> sessionIds);
 
     /**
      * 查询指定消息的同父同角色候选版本。

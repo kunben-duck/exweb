@@ -12,6 +12,8 @@ import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import com.huawei.finance.front.one.domain.chat.ChatStreamStatus;
+import com.huawei.finance.front.one.interfaces.chat.dto.BatchDeleteChatSessionsDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.BatchDeleteChatSessionsRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatSessionRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessageDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessagePageDto;
@@ -91,7 +93,13 @@ public class ChatSessionController {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> {
                     ChatSessionPage page = facade.listSessions(user, cursor, limit);
-                    return new ChatSessionPageDto(page.items().stream().map(this::toDto).toList(), page.nextCursor());
+                    Map<String, String> firstAnswers = facade.findFirstAssistantAnswers(user, page.items());
+                    return new ChatSessionPageDto(
+                            page.items().stream()
+                                    .map(session -> toDto(session, firstAnswers.get(session.id())))
+                                    .toList(),
+                            page.nextCursor()
+                    );
                 })
                 .subscribeOn(Schedulers.boundedElastic());
     }
@@ -265,6 +273,26 @@ public class ChatSessionController {
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
+    /**
+     * 批量软删除当前用户会话。
+     *
+     * <p>删除采用 all-or-nothing 语义：只要任意会话不存在、不属于当前用户或仍有 active run，
+     * 本次批量请求整体失败，不做部分删除。</p>
+     *
+     * @param request 批量删除请求，包含待删除 sessionIds。
+     * @return 删除后的会话快照列表。
+     */
+    @DeleteMapping
+    public Mono<BatchDeleteChatSessionsDto> deleteBatch(@RequestBody(required = false) BatchDeleteChatSessionsRequest request) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> {
+                    List<ChatSession> deleted = facade.deleteSessions(user, request == null ? null : request.sessionIds());
+                    List<ChatSessionDto> items = deleted.stream().map(this::toDto).toList();
+                    return new BatchDeleteChatSessionsDto(items.size(), items);
+                })
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
     private UserContext resolveChatUser() {
         UserContext user = auth.resolve();
         permissionChecker.checkChatPermission(user);
@@ -272,6 +300,10 @@ public class ChatSessionController {
     }
 
     private ChatSessionDto toDto(ChatSession session) {
+        return toDto(session, null);
+    }
+
+    private ChatSessionDto toDto(ChatSession session, String firstAssistantAnswer) {
         return new ChatSessionDto(
                 session.id(),
                 session.tenantId(),
@@ -283,6 +315,7 @@ public class ChatSessionController {
                 session.rootSessionId(),
                 session.branchSourceSessionId(),
                 session.branchSourceMessageId(),
+                firstAssistantAnswer,
                 session.createdAt(),
                 session.updatedAt()
         );

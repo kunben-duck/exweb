@@ -225,6 +225,38 @@ section + section {
   overflow-wrap: anywhere;
 }
 
+.item-preview {
+  margin-top: 6px;
+  color: #374151;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.session-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.session-row input[type="checkbox"] {
+  margin-top: 2px;
+}
+
+.session-open {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  width: 100%;
+  min-width: 0;
+}
+
 .kv {
   display: grid;
   grid-template-columns: 78px 1fr;

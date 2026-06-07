@@ -6,7 +6,10 @@ import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -82,6 +85,16 @@ public class MyBatisChatMessageStore {
 
     public ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String cursor, int limit) {
         return pageMessages(tenantId, userId, sessionId, null, cursor, limit);
+    }
+
+    public Map<String, ChatMessage> findFirstAssistantMessagesBySessionIds(
+            String tenantId, String userId, List<String> sessionIds) {
+        if (tenantId == null || userId == null || sessionIds == null || sessionIds.isEmpty()) {
+            return Map.of();
+        }
+        return mapper.findFirstAssistantBySessions(tenantId, userId, sessionIds).stream()
+                .map(this::toDomain)
+                .collect(Collectors.toMap(ChatMessage::sessionId, Function.identity(), (first, ignored) -> first));
     }
 
     public ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String leafMessageId, String cursor, int limit) {

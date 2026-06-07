@@ -6,6 +6,7 @@ import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,6 +88,13 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
     public ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String cursor, int limit) {
         // 历史消息分页必须以 openGauss 为事实源；Redis 只缓存最近上下文，不适合作为翻页数据源。
         return databaseStore.pageMessages(tenantId, userId, sessionId, cursor, limit);
+    }
+
+    @Override
+    public Map<String, ChatMessage> findFirstAssistantMessagesBySessionIds(
+            String tenantId, String userId, List<String> sessionIds) {
+        // 会话列表摘要必须批量回源 openGauss；Redis 最近消息缓存无法保证包含“第一条回答”。
+        return databaseStore.findFirstAssistantMessagesBySessionIds(tenantId, userId, sessionIds);
     }
 
     @Override

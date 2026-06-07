@@ -15,6 +15,7 @@ import java.time.Instant;
  * @param rootSessionId 分支族根会话。
  * @param branchSourceSessionId 分支来源会话。
  * @param branchSourceMessageId 分支来源消息。
+ * @param firstAssistantAnswer 会话第一条 assistant 完整回答；列表页用于展示首轮回答摘要，非列表场景可为空。
  * @param createdAt 创建时间。
  * @param updatedAt 最近更新时间。
  */
@@ -29,6 +30,7 @@ public record ChatSessionDto(
         String rootSessionId,
         String branchSourceSessionId,
         String branchSourceMessageId,
+        String firstAssistantAnswer,
         Instant createdAt,
         Instant updatedAt
 ) {}

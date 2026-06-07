@@ -5,6 +5,7 @@ const authProfileStorageKey = "finex:test:authProfileId";
 
 const state = {
   sessions: [],
+  selectedSessionIds: new Set(),
   documents: [],
   selectedSessionId: new URLSearchParams(location.search).get("sessionId") || localStorage.getItem("finex:test:lastSessionId"),
   selectedDocuments: new Map(),
@@ -78,6 +79,7 @@ function bindUi() {
   bindClick("saveAuthHeadersBtn", saveAuthHeaders);
   bindClick("clearAuthHeadersBtn", clearAuthHeaders);
   bindClick("refreshSessionsBtn", refreshSessions);
+  bindClick("batchDeleteSessionsBtn", deleteSelectedSessions);
   bindClick("createSessionBtn", createSession);
   bindClick("loadStateBtn", () => requireSession(sessionId => loadSessionState(sessionId, true)));
   bindClick("loadMessagesBtn", () => requireSession(loadMessagesOnly));
@@ -213,6 +215,12 @@ async function createSession() {
 async function refreshSessions() {
   const page = await requestJson("/api/v1/ex/chat/sessions?limit=30");
   state.sessions = page.items || [];
+  const visibleIds = new Set(state.sessions.map(session => session.sessionId));
+  for (const sessionId of [...state.selectedSessionIds]) {
+    if (!visibleIds.has(sessionId)) {
+      state.selectedSessionIds.delete(sessionId);
+    }
+  }
   renderSessions();
 }
 
@@ -220,15 +228,29 @@ function renderSessions() {
   const list = $("sessionsList");
   list.replaceChildren();
   for (const session of state.sessions) {
-    const item = document.createElement("button");
-    item.type = "button";
+    const item = document.createElement("div");
     item.className = `list-item session-item${session.sessionId === state.selectedSessionId ? " active" : ""}`;
     item.innerHTML = `
-      <div class="item-title">${escapeHtml(session.title || "未命名会话")}</div>
-      <div class="item-meta">${escapeHtml(session.status)} · ${formatTime(session.updatedAt)}</div>
-      <div class="item-meta">${escapeHtml(session.sessionId)}</div>
+      <div class="session-row">
+        <input data-action="select-delete" type="checkbox"
+          ${state.selectedSessionIds.has(session.sessionId) ? "checked" : ""}
+          aria-label="选择 ${escapeHtml(session.title || session.sessionId)}" />
+        <button data-action="open" class="session-open" type="button">
+          <div class="item-title">${escapeHtml(session.title || "未命名会话")}</div>
+          <div class="item-meta">${escapeHtml(session.status)} · ${formatTime(session.updatedAt)}</div>
+          <div class="item-meta">${escapeHtml(session.sessionId)}</div>
+          ${session.firstAssistantAnswer ? `<div class="item-preview">答：${escapeHtml(session.firstAssistantAnswer)}</div>` : ""}
+        </button>
+      </div>
     `;
-    item.addEventListener("click", () => runSafely(() => selectSession(session.sessionId)));
+    item.querySelector('[data-action="open"]').addEventListener("click", () => runSafely(() => selectSession(session.sessionId)));
+    item.querySelector('[data-action="select-delete"]').addEventListener("change", event => {
+      if (event.target.checked) {
+        state.selectedSessionIds.add(session.sessionId);
+      } else {
+        state.selectedSessionIds.delete(session.sessionId);
+      }
+    });
     list.appendChild(item);
   }
 }
@@ -334,6 +356,7 @@ async function mutateSession(action) {
 async function deleteSession() {
   const sessionId = requireSessionId();
   await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  state.selectedSessionIds.delete(sessionId);
   state.selectedSessionId = null;
   state.activeRun = null;
   state.pendingDeltaByRun.clear();
@@ -341,6 +364,30 @@ async function deleteSession() {
   $("currentSeq").textContent = "0";
   $("activeRun").textContent = "-";
   $("messages").replaceChildren();
+  await refreshSessions();
+}
+
+async function deleteSelectedSessions() {
+  const sessionIds = [...state.selectedSessionIds];
+  if (sessionIds.length === 0) {
+    throw new Error("请先勾选要批量删除的会话");
+  }
+  const result = await requestJson("/api/v1/ex/chat/sessions", {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sessionIds })
+  });
+  if (state.selectedSessionId && sessionIds.includes(state.selectedSessionId)) {
+    state.selectedSessionId = null;
+    state.activeRun = null;
+    state.pendingDeltaByRun.clear();
+    $("currentSessionId").textContent = "-";
+    $("currentSeq").textContent = "0";
+    $("activeRun").textContent = "-";
+    $("messages").replaceChildren();
+  }
+  state.selectedSessionIds.clear();
+  log(`batch deleted sessions count=${result.deletedCount ?? sessionIds.length}`);
   await refreshSessions();
 }
 

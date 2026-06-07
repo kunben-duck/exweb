@@ -4,6 +4,7 @@ import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -43,6 +44,22 @@ public interface ChatMessageRepository {
      * @return 按时间正序排列的消息分页。
      */
     ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String cursor, int limit);
+
+    /**
+     * 批量查询每个会话的第一条 assistant 完整消息。
+     *
+     * <p>该方法用于会话分页列表摘要装配，必须以 tenantId/userId/sessionIds 联合过滤，避免跨租户、
+     * 跨用户读取其他会话内容。返回 Map 的 key 为 sessionId。</p>
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionIds 当前页会话 ID 列表。
+     * @return sessionId 到第一条 assistant 消息的映射。
+     */
+    default Map<String, ChatMessage> findFirstAssistantMessagesBySessionIds(
+            String tenantId, String userId, List<String> sessionIds) {
+        return Map.of();
+    }
 
     /**
      * 查询指定 leaf 的可见消息路径。

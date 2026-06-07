@@ -160,6 +160,64 @@ class SessionApplicationServiceTest {
         assertThat(bindings.cancellations).isZero();
     }
 
+    @Test
+    void findFirstAssistantAnswersReturnsOneAnswerPerSession() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        Instant now = Instant.now();
+        ChatSession first = sessions.save(new ChatSession("session1", "tenant1", "user1", "first", "ACTIVE", "web", now, now));
+        ChatSession second = sessions.save(new ChatSession("session2", "tenant1", "user1", "second", "ACTIVE", "web", now, now));
+        messages.save(new ChatMessage("msg1", "tenant1", "user1", "session1", null, 1L, 0, 1,
+                "user", "问题一", null, "run1", "NORMAL", false, null, null, null, null, null, now));
+        messages.save(new ChatMessage("msg2", "tenant1", "user1", "session1", "msg1", 2L, 1, 1,
+                "assistant", "第一条回答", null, "run1", "NORMAL", false, null, null, null, null, null, now.plusSeconds(1)));
+        messages.save(new ChatMessage("msg3", "tenant1", "user1", "session1", "msg1", 3L, 1, 2,
+                "assistant", "第二条回答", null, "run2", "NORMAL", false, null, null, null, null, null, now.plusSeconds(2)));
+        messages.save(new ChatMessage("msg4", "tenant1", "user1", "session2", null, 1L, 0, 1,
+                "user", "尚未回答", null, "run3", "NORMAL", false, null, null, null, null, null, now));
+        SessionApplicationService service = service(sessions, messages);
+
+        Map<String, String> firstAnswers = service.findFirstAssistantAnswers(user(), List.of(first, second));
+
+        assertThat(firstAnswers).containsEntry("session1", "第一条回答");
+        assertThat(firstAnswers).doesNotContainKey("session2");
+    }
+
+    @Test
+    void deleteSessionsDeletesAllAfterValidation() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        Instant now = Instant.now();
+        sessions.save(new ChatSession("session1", "tenant1", "user1", "first", "ACTIVE", "web", now, now));
+        sessions.save(new ChatSession("session2", "tenant1", "user1", "second", "ARCHIVED", "web", now, now));
+        CountingRuntimeBindingService bindings = new CountingRuntimeBindingService();
+        SessionApplicationService service = service(sessions, messages, new GuardChatRunService(false), bindings);
+
+        List<ChatSession> deleted = service.deleteSessions(user(), List.of("session1", "session2", "session1"));
+
+        assertThat(deleted).extracting(ChatSession::id).containsExactly("session1", "session2");
+        assertThat(deleted).extracting(ChatSession::status).containsExactly("DELETED", "DELETED");
+        assertThat(bindings.cancellations).isEqualTo(2);
+        assertThat(service.listSessions(user(), null, 20).items()).isEmpty();
+    }
+
+    @Test
+    void deleteSessionsRejectsAnyActiveRunBeforeMutating() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        Instant now = Instant.now();
+        sessions.save(new ChatSession("session1", "tenant1", "user1", "first", "ACTIVE", "web", now, now));
+        sessions.save(new ChatSession("session2", "tenant1", "user1", "second", "ACTIVE", "web", now, now));
+        CountingRuntimeBindingService bindings = new CountingRuntimeBindingService();
+        SessionApplicationService service = service(sessions, messages, new GuardChatRunService(true), bindings);
+
+        assertThatThrownBy(() -> service.deleteSessions(user(), List.of("session1", "session2")))
+                .isInstanceOf(ActiveRunExistsException.class);
+        assertThat(sessions.findById("session1").orElseThrow().status()).isEqualTo("ACTIVE");
+        assertThat(sessions.findById("session2").orElseThrow().status()).isEqualTo("ACTIVE");
+        assertThat(bindings.cancellations).isZero();
+    }
+
     private MessagePair completeTurn(TestFixture fixture, String userText, String assistantText, String runId) {
         ChatRunMessagePlan plan = fixture.service.prepareRunMessage(user(),
                 command(userText, ChatRunMode.NEXT, null, null, null), fixture.session, runId, List.of());
@@ -318,6 +376,23 @@ class SessionApplicationServiceTest {
                     .sorted(Comparator.comparing(ChatMessage::createdAt).reversed())
                     .limit(limit)
                     .toList();
+        }
+
+        @Override
+        public Map<String, ChatMessage> findFirstAssistantMessagesBySessionIds(
+                String tenantId, String userId, List<String> sessionIds) {
+            return sessionIds.stream()
+                    .distinct()
+                    .map(sessionId -> messages.values().stream()
+                            .filter(message -> tenantId.equals(message.tenantId()))
+                            .filter(message -> userId.equals(message.userId()))
+                            .filter(message -> sessionId.equals(message.sessionId()))
+                            .filter(message -> "assistant".equals(message.role()))
+                            .min(Comparator.comparing(ChatMessage::nodeOrder, Comparator.nullsLast(Long::compareTo))
+                                    .thenComparing(ChatMessage::createdAt))
+                            .orElse(null))
+                    .filter(Objects::nonNull)
+                    .collect(java.util.stream.Collectors.toMap(ChatMessage::sessionId, message -> message));
         }
 
         @Override

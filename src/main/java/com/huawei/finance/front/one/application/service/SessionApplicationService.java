@@ -16,9 +16,15 @@ import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 会话与消息应用服务。
@@ -30,6 +36,7 @@ public class SessionApplicationService implements ChatSessionFacade {
     private static final String STATUS_ACTIVE = "ACTIVE";
     private static final String STATUS_ARCHIVED = "ARCHIVED";
     private static final String STATUS_DELETED = "DELETED";
+    private static final int MAX_BATCH_DELETE_SIZE = 100;
 
     private final SessionRepository sessionRepository;
     private final ChatMessageRepository messageRepository;
@@ -95,6 +102,30 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     @Override
+    public Map<String, String> findFirstAssistantAnswers(UserContext user, List<ChatSession> sessions) {
+        checkChatUser(user);
+        if (sessions == null || sessions.isEmpty()) {
+            return Map.of();
+        }
+        List<String> sessionIds = sessions.stream()
+                .filter(session -> session != null)
+                .filter(session -> user.tenantId().equals(session.tenantId()))
+                .filter(session -> user.userId().equals(session.userId()))
+                .map(ChatSession::id)
+                .distinct()
+                .toList();
+        if (sessionIds.isEmpty()) {
+            return Map.of();
+        }
+        return messageRepository.findFirstAssistantMessagesBySessionIds(user.tenantId(), user.userId(), sessionIds)
+                .entrySet()
+                .stream()
+                .filter(entry -> entry.getValue() != null)
+                .collect(Collectors.toMap(Map.Entry::getKey,
+                        entry -> entry.getValue().content() == null ? "" : entry.getValue().content()));
+    }
+
+    @Override
     public ChatSession renameSession(UserContext user, String sessionId, String title) {
         checkChatUser(user);
         ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
@@ -118,20 +149,33 @@ public class SessionApplicationService implements ChatSessionFacade {
 
     @Override
     public ChatSession deleteSession(UserContext user, String sessionId) {
+        return deleteSessions(user, List.of(sessionId)).getFirst();
+    }
+
+    @Override
+    @Transactional
+    public List<ChatSession> deleteSessions(UserContext user, List<String> sessionIds) {
         checkChatUser(user);
-        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        List<String> normalizedIds = normalizeDeleteSessionIds(sessionIds);
+        List<ChatSession> sessions = normalizedIds.stream()
+                .map(sessionId -> requireOwnedSession(user.tenantId(), user.userId(), sessionId, false))
+                .toList();
         /*
-         * 删除是前端视角的软删除，不是运行控制指令。若本会话仍有 active run，
-         * 先要求前端 stop，避免删除后后台继续写入事件并推送到已隐藏会话。
+         * 批量删除采用 all-or-nothing 语义：先把所有 active run 校验完成，再执行软删除。
+         * 这样前端不会遇到“前半部分删除成功、后半部分因运行中失败”的不确定列表状态。
          */
         if (chatRunService != null) {
-            chatRunService.rejectIfActiveRunExists(user, session.id());
+            sessions.forEach(session -> chatRunService.rejectIfActiveRunExists(user, session.id()));
         }
-        ChatSession deleted = saveWith(session, session.title(), STATUS_DELETED);
-        if (runtimeBindingService != null) {
-            runtimeBindingService.cancelActive(user.tenantId(), user.userId(), session.id());
+        List<ChatSession> deleted = new ArrayList<>(sessions.size());
+        for (ChatSession session : sessions) {
+            ChatSession deletedSession = saveWith(session, session.title(), STATUS_DELETED);
+            if (runtimeBindingService != null) {
+                runtimeBindingService.cancelActive(user.tenantId(), user.userId(), session.id());
+            }
+            deleted.add(deletedSession);
         }
-        return deleted;
+        return List.copyOf(deleted);
     }
 
     /**
@@ -518,5 +562,25 @@ public class SessionApplicationService implements ChatSessionFacade {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    private List<String> normalizeDeleteSessionIds(List<String> sessionIds) {
+        if (sessionIds == null || sessionIds.isEmpty()) {
+            throw new IllegalArgumentException("sessionIds 不能为空");
+        }
+        Set<String> normalized = new LinkedHashSet<>();
+        for (String sessionId : sessionIds) {
+            if (sessionId == null || sessionId.isBlank()) {
+                continue;
+            }
+            normalized.add(sessionId.trim());
+        }
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException("sessionIds 不能为空");
+        }
+        if (normalized.size() > MAX_BATCH_DELETE_SIZE) {
+            throw new IllegalArgumentException("单次最多删除 " + MAX_BATCH_DELETE_SIZE + " 个会话");
+        }
+        return List.copyOf(normalized);
     }
 }

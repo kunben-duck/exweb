@@ -42,6 +42,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_fin_ex_chat_message_owner_session_node_orde
     ON fin_ex_chat_message_t(tenant_id, user_id, session_id, node_order);
 CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_message_owner_session_parent
     ON fin_ex_chat_message_t(tenant_id, user_id, session_id, parent_message_id, role, sibling_index);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_message_owner_session_role_order
+    ON fin_ex_chat_message_t(tenant_id, user_id, session_id, role, node_order, created_at);
 CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_message_owner_id
     ON fin_ex_chat_message_t(tenant_id, user_id, id);
 

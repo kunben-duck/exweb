@@ -55,6 +55,8 @@ public interface ChatSessionMapper {
                 metadata_json = #{metadataJson},
                 updated_at = #{updatedAt}
             WHERE id = #{id}
+              AND tenant_id = #{tenantId}
+              AND user_id = #{userId}
             """)
     int update(@Param("id") String id,
                 @Param("tenantId") String tenantId,

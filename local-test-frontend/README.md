@@ -62,8 +62,8 @@ Referer: http://localhost:8080/fin/ex/
 - 最终回答快照：Relay 返回 `type=agent,is_streaming=false` 时会显示为 `message.snapshot`，
   联调台会用 `payload.content` 替换当前 assistant 草稿，避免重复追加。
 - Event Resume：会话级事件恢复按 `afterSeq` 有限补发缺失事件；run 级事件恢复在 active run 恢复时补发并接续 live 事件到终态。
-- 文档库：上传本地文件、列表、详情、状态、预览地址、下载、改名、删除。
-- 附件：选择文档库中 `AVAILABLE` 文档作为聊天附件发送。
+- 文档库：上传本地文件、按 `targetProvider` 选择 default-storage 或 legacy-agent provider、列表、详情、状态、预览地址、下载、改名、删除。
+- 附件：选择文档库中 `AVAILABLE` 文档作为聊天附件发送；指定历史技能时应先用 `targetProvider=legacy-agent` 上传。
 - 跨页签续接：复制页签后通过 run 级事件恢复从 `activeRunFirstSeq - 1` 补发当前 active run 已生成事件，并继续接收 live 事件直到本轮 run 终态；active run 恢复期间不会先 replay 本地缓存，避免把同浏览器缓存误认为服务端续传结果。
 - 运行态按钮：active run 存在时发送按钮显示“生成中”并禁用，停止按钮保持可用；刷新、复制页签或切换会话后通过 `stream-status` 恢复同样状态。
 - 故障事件：支持观察 watchdog 或控制面初始化失败产生的 `run.failed`，验证前端能关闭 loading 并保留失败草稿。
@@ -99,9 +99,10 @@ Referer: http://localhost:8080/fin/ex/
 3. 输出中途点击“复制页签”，新页签会读取同一 `sessionId`，先加载历史，再通过 run event resume 持续恢复到本轮 run 终态。
 4. 输出中途点击“停止回答”，观察 `run.cancelled` 是否通过 WebSocket 或 Event Resume 到达。
 5. 上传文档，选择“作为附件”，再发送消息确认 `attachments[{documentId}]` 能进入请求。
-6. 对一条 user 消息点击编辑并重新提问，确认旧消息不变、新 user sibling 出现在版本游标中。
-7. 对一条 assistant 消息点击重新生成，确认同一 user 下出现新的 assistant sibling。
-8. 从某条历史消息创建分支，确认分支历史消息为只读，后续新增消息仍可继续编辑或重新生成。
+6. 测试历史技能兼容路径时，在上传区填写 `targetProvider=legacy-agent` 和对应 `skillId`，再在发送区填写同一个 `selectedSkillId`；后端会进入 `EXPLICIT_SKILL` 路由，不创建 RuntimeBinding。
+7. 对一条 user 消息点击编辑并重新提问，确认旧消息不变、新 user sibling 出现在版本游标中。
+8. 对一条 assistant 消息点击重新生成，确认同一 user 下出现新的 assistant sibling。
+9. 从某条历史消息创建分支，确认分支历史消息为只读，后续新增消息仍可继续编辑或重新生成。
 
 ## 跨页签续传测试
 

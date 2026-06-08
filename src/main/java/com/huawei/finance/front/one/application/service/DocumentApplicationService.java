@@ -3,19 +3,17 @@ package com.huawei.finance.front.one.application.service;
 import com.huawei.finance.front.one.application.command.DocumentUpdateCommand;
 import com.huawei.finance.front.one.application.command.DocumentUploadCommand;
 import com.huawei.finance.front.one.application.facade.DocumentFacade;
-import com.huawei.finance.front.one.application.integration.document.DocumentRepository;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
+import com.huawei.finance.front.one.application.integration.document.DocumentProviderUploadRequest;
+import com.huawei.finance.front.one.application.integration.document.DocumentRepository;
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
-import com.huawei.finance.front.one.application.integration.document.ObjectStorage;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.document.DocumentDownload;
 import com.huawei.finance.front.one.domain.document.DocumentLibraryPage;
 import com.huawei.finance.front.one.domain.document.DocumentLibraryQuery;
-import com.huawei.finance.front.one.domain.document.DocumentSource;
 import com.huawei.finance.front.one.domain.document.DocumentStatus;
-import com.huawei.finance.front.one.domain.document.StoredObject;
 import com.huawei.finance.front.one.domain.document.StoredObjectContent;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import java.io.InputStream;
@@ -30,60 +28,43 @@ import reactor.core.scheduler.Schedulers;
  * 文档库应用服务。
  *
  * <p>本服务是文档能力的主控入口：接口层先解析不可变 {@link UserContext}，这里只使用显式身份
- * 校验会话归属，通过 ObjectStorage 防腐层写入对象内容，再把文档资产元数据持久化到
- * DocumentRepository。</p>
+ * 校验会话归属，根据 targetProvider 选择文档 provider adapter，再把文档资产元数据持久化到
+ * DocumentRepository。默认 provider 仍是对象存储；老 Agent 和未来领域 Agent 通过 provider
+ * adapter 接入，不新增前端上传接口。</p>
  */
 @Service
 public class DocumentApplicationService implements DocumentFacade {
-    private final ObjectStorage storage;
     private final DocumentRepository repository;
     private final SessionRepository sessionRepository;
     private final IdGenerator idGenerator;
     private final PermissionChecker permissionChecker;
-    private final WorkloadConcurrencyLimiter concurrencyLimiter;
+    private final DocumentProviderAdapterRegistry providerRegistry;
 
-    public DocumentApplicationService(ObjectStorage storage, DocumentRepository repository, SessionRepository sessionRepository,
+    public DocumentApplicationService(DocumentRepository repository, SessionRepository sessionRepository,
                                       IdGenerator idGenerator, PermissionChecker permissionChecker,
-                                      WorkloadConcurrencyLimiter concurrencyLimiter) {
-        this.storage = storage;
+                                      DocumentProviderAdapterRegistry providerRegistry) {
         this.repository = repository;
         this.sessionRepository = sessionRepository;
         this.idGenerator = idGenerator;
         this.permissionChecker = permissionChecker;
-        this.concurrencyLimiter = concurrencyLimiter;
+        this.providerRegistry = providerRegistry;
     }
     @Override
     public Mono<UploadedDocument> upload(UserContext user, DocumentUploadCommand command) {
         return Mono.fromCallable(() -> {
-            permissionChecker.checkChatPermission(user);
-            ensureOwnedSessionIfPresent(user, command.sessionId());
-
-            // 先存对象，再保存数据库可检索的文档记录；对象 key 和文档行都使用同一份 UserContext。
-            StoredObject object;
-            try (WorkloadConcurrencyLimiter.Permit ignored = concurrencyLimiter.acquireDocumentStorage()) {
-                object = putObjectClosingStream(user, command);
+            try {
+                permissionChecker.checkChatPermission(user);
+                ensureOwnedSessionIfPresent(user, command.sessionId());
+                String documentId = idGenerator.newId("doc",
+                        IdGenerateContext.of(user.tenantId(), user.userId(), command.sessionId()));
+                DocumentProviderAdapterRegistry.ProviderResolution provider =
+                        providerRegistry.resolveForUpload(command.targetProvider());
+                UploadedDocument doc = provider.adapter().upload(new DocumentProviderUploadRequest(
+                        user, documentId, provider.providerCode(), provider.provider(), command));
+                return repository.save(doc);
+            } finally {
+                closeQuietly(command.inputStream());
             }
-            Instant now = Instant.now();
-            String documentId = idGenerator.newId("doc",
-                    IdGenerateContext.of(user.tenantId(), user.userId(), command.sessionId()));
-            UploadedDocument doc = new UploadedDocument(
-                    documentId,
-                    user.tenantId(),
-                    user.userId(),
-                    blankToNull(command.sessionId()),
-                    safeFilename(command.originalFilename()),
-                    object.bucket(),
-                    object.objectKey(),
-                    object.contentType(),
-                    object.sizeBytes(),
-                    DocumentStatus.AVAILABLE.name(),
-                    DocumentSource.LOCAL_UPLOAD.name(),
-                    null,
-                    metadataJson(storage.provider(), command.sessionId()),
-                    now,
-                    now
-            );
-            return repository.save(doc);
         }).subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -171,10 +152,10 @@ public class DocumentApplicationService implements DocumentFacade {
         return Mono.fromCallable(() -> {
             permissionChecker.checkChatPermission(user);
             UploadedDocument document = loadOwnedAvailableDocument(user, documentId);
-            StoredObjectContent content;
-            try (WorkloadConcurrencyLimiter.Permit ignored = concurrencyLimiter.acquireDocumentStorage()) {
-                content = storage.getObject(document.bucket(), document.objectKey());
-            }
+            DocumentProviderAdapterRegistry.ProviderResolution provider = providerRegistry.resolveForDocument(document);
+            StoredObjectContent content = provider.adapter()
+                    .download(document, provider.provider())
+                    .orElseThrow(() -> new IllegalStateException("DOCUMENT_CONTENT_MANAGED_BY_PROVIDER: 文档内容由下游 provider 管理"));
             return new DocumentDownload(document, content);
         }).subscribeOn(Schedulers.boundedElastic());
     }
@@ -196,18 +177,29 @@ public class DocumentApplicationService implements DocumentFacade {
                 .toList();
     }
 
-    private StoredObject putObjectClosingStream(UserContext user, DocumentUploadCommand command) {
-        try (InputStream inputStream = command.inputStream()) {
-            return storage.putObject(
-                    user.tenantId(),
-                    safeFilename(command.originalFilename()),
-                    blankToNull(command.contentType()),
-                    command.sizeBytes(),
-                    inputStream
-            );
-        } catch (Exception ex) {
-            throw new IllegalStateException("文档上传失败", ex);
+    @Override
+    public List<UploadedDocument> resolveDocumentsForUser(UserContext user, List<AttachmentRef> attachments) {
+        if (attachments == null || attachments.isEmpty()) {
+            return List.of();
         }
+        permissionChecker.checkChatPermission(user);
+        return attachments.stream()
+                .filter(Objects::nonNull)
+                .map(attachment -> loadOwnedAvailableDocument(user, attachment.documentId()))
+                .toList();
+    }
+
+    @Override
+    public Mono<UploadedDocument> prepareAccess(UserContext user, String documentId) {
+        return Mono.fromCallable(() -> {
+            permissionChecker.checkChatPermission(user);
+            UploadedDocument document = loadOwnedAvailableDocument(user, documentId);
+            DocumentProviderAdapterRegistry.ProviderResolution provider = providerRegistry.resolveForDocument(document);
+            if (!provider.adapter().downloadSupported(document, provider.provider())) {
+                throw new IllegalStateException("DOCUMENT_CONTENT_MANAGED_BY_PROVIDER: 文档内容由下游 provider 管理");
+            }
+            return document;
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 
     private AttachmentRef toTrustedAttachment(UserContext user, AttachmentRef attachment) {
@@ -249,11 +241,6 @@ public class DocumentApplicationService implements DocumentFacade {
         }
     }
 
-    private String metadataJson(String provider, String sessionId) {
-        // 当前不引入额外 JSON 依赖，保持元数据简单稳定；后续解析/索引服务可在该字段追加诊断信息。
-        return "{\"storageProvider\":\"" + escape(provider) + "\",\"originSessionId\":\"" + escape(blankToNull(sessionId)) + "\"}";
-    }
-
     private String safeFilename(String originalFilename) {
         if (originalFilename == null || originalFilename.isBlank()) {
             return "document";
@@ -275,7 +262,14 @@ public class DocumentApplicationService implements DocumentFacade {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    private String escape(String value) {
-        return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
+    private void closeQuietly(InputStream inputStream) {
+        if (inputStream == null) {
+            return;
+        }
+        try {
+            inputStream.close();
+        } catch (Exception ignored) {
+            // provider adapter 已经正常关闭或异常路径关闭失败时，不让清理动作改变业务错误语义。
+        }
     }
 }

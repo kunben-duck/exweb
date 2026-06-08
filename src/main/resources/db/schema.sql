@@ -449,20 +449,20 @@ COMMENT ON COLUMN fin_ex_chat_read_cursor_t.session_id IS '游标所属聊天会
 COMMENT ON COLUMN fin_ex_chat_read_cursor_t.last_consumed_seq IS '当前用户已确认消费的最大事件序号；写入必须单调递增。';
 COMMENT ON COLUMN fin_ex_chat_read_cursor_t.updated_at IS '游标最后更新时间。';
 
-COMMENT ON TABLE fin_ex_uploaded_document_t IS '用户文档库表，保存上传文件的对象存储位置、处理状态和可引用元数据。';
+COMMENT ON TABLE fin_ex_uploaded_document_t IS '用户文档库表，保存统一 documentId、目标 provider 位置、处理状态和可引用元数据。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.id IS '文档主键，业务生成的 documentId。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.tenant_id IS '租户标识，来自服务端身份上下文。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.user_id IS '用户标识，来自服务端身份上下文。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.session_id IS '文档关联的聊天会话 ID，可为空；为空表示用户文档库资产。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.original_name IS '用户上传或文档库展示的原始文件名。';
-COMMENT ON COLUMN fin_ex_uploaded_document_t.bucket IS '对象存储 bucket 名称。';
-COMMENT ON COLUMN fin_ex_uploaded_document_t.object_key IS '对象存储中的对象 key。';
+COMMENT ON COLUMN fin_ex_uploaded_document_t.bucket IS '文档 provider 编码或对象存储 bucket；legacy-agent 等 HTTP provider 使用 providerCode。';
+COMMENT ON COLUMN fin_ex_uploaded_document_t.object_key IS 'provider 内部文件标识；对象存储为 object key，legacy-agent 为下游 docId。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.content_type IS '文档 MIME 类型。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.size_bytes IS '文档字节大小。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.status IS '文档状态，例如 AVAILABLE、PROCESSING、FAILED、DELETED。只有 AVAILABLE 可作为聊天附件。';
-COMMENT ON COLUMN fin_ex_uploaded_document_t.source IS '文档来源，例如 LOCAL_UPLOAD、LIBRARY。';
+COMMENT ON COLUMN fin_ex_uploaded_document_t.source IS '文档来源，例如 LOCAL_UPLOAD、LIBRARY、CONNECTOR、LEGACY_AGENT_UPLOAD。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.token_size IS '文档解析后的 token 数量，供上下文预算和检索使用。';
-COMMENT ON COLUMN fin_ex_uploaded_document_t.metadata_json IS '文档扩展元数据 JSON，例如存储 provider、来源会话或处理诊断。';
+COMMENT ON COLUMN fin_ex_uploaded_document_t.metadata_json IS '文档扩展元数据 JSON，例如 providerCode、providerDocument、capabilities、上传上下文或处理诊断。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.created_at IS '文档记录创建时间。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.updated_at IS '文档记录最后更新时间。';
 

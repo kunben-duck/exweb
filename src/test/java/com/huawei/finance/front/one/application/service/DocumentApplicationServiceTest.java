@@ -5,11 +5,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.finance.front.one.application.command.DocumentUpdateCommand;
 import com.huawei.finance.front.one.application.command.DocumentUploadCommand;
+import com.huawei.finance.front.one.application.config.DocumentProviderProperties;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
 import com.huawei.finance.front.one.application.integration.document.DocumentRepository;
 import com.huawei.finance.front.one.application.integration.document.ObjectStorage;
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
@@ -30,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import com.huawei.finance.front.one.infrastructure.storage.ObjectStorageDocumentProviderAdapter;
 
 class DocumentApplicationServiceTest {
     @Test
@@ -173,13 +176,21 @@ class DocumentApplicationServiceTest {
     }
 
     private DocumentApplicationService service(InMemoryDocumentRepository repository) {
+        WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
+                new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
+        ObjectMapper objectMapper = new ObjectMapper();
+        DocumentProviderProperties properties = new DocumentProviderProperties();
+        DocumentProviderAdapterRegistry registry = new DocumentProviderAdapterRegistry(
+                List.of(new ObjectStorageDocumentProviderAdapter(new RecordingObjectStorage(), limiter, objectMapper)),
+                properties,
+                objectMapper
+        );
         return new DocumentApplicationService(
-                new RecordingObjectStorage(),
                 repository,
                 new FixedSessionRepository(),
                 new FixedIdGenerator(),
                 new PermissionChecker(),
-                new WorkloadConcurrencyLimiter(new com.huawei.finance.front.one.application.config.ResourceIsolationProperties())
+                registry
         );
     }
 

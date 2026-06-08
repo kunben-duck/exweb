@@ -10,11 +10,25 @@ import java.io.InputStream;
  * @param contentType 文件 MIME 类型，由接口层或浏览器上传协议提供。
  * @param sizeBytes 文件字节大小。
  * @param inputStream 文件内容输入流，由应用服务负责读取并关闭。
+ * @param targetProvider 目标文档 provider；为空时使用默认对象存储 provider。
+ * @param skillId 上传时关联的技能标识，可为空，仅由需要技能上下文的 provider 使用。
+ * @param metadataJson 上传扩展元数据 JSON，可为空；只用于审计和 provider adapter 参数。
  */
 public record DocumentUploadCommand(
         String sessionId,
         String originalFilename,
         String contentType,
         long sizeBytes,
-        InputStream inputStream
-) {}
+        InputStream inputStream,
+        String targetProvider,
+        String skillId,
+        String metadataJson
+) {
+    /**
+     * 兼容现有默认对象存储上传的构造器。
+     */
+    public DocumentUploadCommand(String sessionId, String originalFilename, String contentType, long sizeBytes,
+                                 InputStream inputStream) {
+        this(sessionId, originalFilename, contentType, sizeBytes, inputStream, null, null, null);
+    }
+}

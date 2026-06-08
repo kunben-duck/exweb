@@ -58,8 +58,14 @@ public record RuntimeEvent(
     public static RuntimeEvent fallback(String runId, String sessionId, String sourceType, String eventKind,
                                         String channel, String displayHint, String text,
                                         Map<String, Object> sourcePayload) {
+        return fallback("relay", runId, sessionId, sourceType, eventKind, channel, displayHint, text, sourcePayload);
+    }
+
+    public static RuntimeEvent fallback(String source, String runId, String sessionId, String sourceType, String eventKind,
+                                        String channel, String displayHint, String text,
+                                        Map<String, Object> sourcePayload) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("source", "relay");
+        payload.put("source", blankToDefault(source, "runtime"));
         payload.put("sourceType", blankToDefault(sourceType, "unknown"));
         payload.put("eventKind", blankToDefault(eventKind, "event"));
         payload.put("channel", blankToDefault(channel, "runtime"));

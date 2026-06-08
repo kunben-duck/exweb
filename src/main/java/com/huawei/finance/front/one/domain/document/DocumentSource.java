@@ -12,5 +12,7 @@ public enum DocumentSource {
     /** 用户从本服务文档库中选择的历史文档。 */
     LIBRARY,
     /** 用户从外部连接器导入的云端文档。 */
-    CONNECTOR
+    CONNECTOR,
+    /** 文档由下游老 Agent/领域 Agent 上传接口托管，本服务仅保存统一文档库元数据。 */
+    LEGACY_AGENT_UPLOAD
 }

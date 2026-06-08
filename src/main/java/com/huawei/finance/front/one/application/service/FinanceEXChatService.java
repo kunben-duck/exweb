@@ -63,6 +63,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private final RuntimeBindingApplicationService runtimeBindingService;
     private final RouteSignalApplicationService routeSignalService;
     private final SubAgentExecutor subAgentExecutor;
+    private final LegacySkillExecutor legacySkillExecutor;
     private final SystemResponseExecutor systemResponseExecutor;
     private final AgentRuntimeExecutor agentRuntimeExecutor;
     private final DocumentFacade documentFacade;
@@ -77,7 +78,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
     public FinanceEXChatService(SessionApplicationService sessionService,
                                 MemoryApplicationService memoryService, RuntimeBindingApplicationService runtimeBindingService,
                                 RouteSignalApplicationService routeSignalService,
-                                SubAgentExecutor subAgentExecutor, SystemResponseExecutor systemResponseExecutor,
+                                SubAgentExecutor subAgentExecutor, LegacySkillExecutor legacySkillExecutor,
+                                SystemResponseExecutor systemResponseExecutor,
                                 AgentRuntimeExecutor agentRuntimeExecutor, DocumentFacade documentFacade, ChatStreamApplicationService chatStreamService,
                                 ChatRunApplicationService chatRunService, ChatRunLeaseApplicationService chatRunLeaseService,
                                 ChatDeltaCoalescer chatDeltaCoalescer, LocalChatRunExecutionRegistry runExecutionRegistry,
@@ -87,6 +89,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         this.runtimeBindingService = runtimeBindingService;
         this.routeSignalService = routeSignalService;
         this.subAgentExecutor = subAgentExecutor;
+        this.legacySkillExecutor = legacySkillExecutor;
         this.systemResponseExecutor = systemResponseExecutor;
         this.agentRuntimeExecutor = agentRuntimeExecutor;
         this.documentFacade = documentFacade;
@@ -218,12 +221,19 @@ public class FinanceEXChatService implements FinanceChatFacade {
             IntentDecision intent = null;
             RouteTarget route = null;
             RuntimeBinding binding = null;
-            Optional<RuntimeBinding> activeRuntimeBinding = runtimeBindingService.findActive(user.tenantId(),
-                    user.userId(), session.id(), runtimeBindingLeafId);
-            if (activeRuntimeBinding.isPresent()) {
-                // Runtime 是唯一允许多轮续接的执行主体；命中 active binding 后直接继续 Relay Runtime。
-                binding = runtimeBindingService.touchForRun(activeRuntimeBinding.get(), runId);
-                route = RouteTarget.agentRuntime("runtime-binding", 1.0, "active relay runtime binding");
+            String selectedSkillId = selectedSkillId(normalized.metadata());
+            if (selectedSkillId != null) {
+                // 用户显式选择历史技能时优先进入指定技能路由，不被 active RuntimeBinding 抢走。
+                // 该路径不创建 RuntimeBinding，避免把无稳定上下文的历史技能误当成多轮 Runtime。
+                route = RouteTarget.explicitSkill(selectedSkillId, "front selected legacy skill");
+            } else {
+                Optional<RuntimeBinding> activeRuntimeBinding = runtimeBindingService.findActive(user.tenantId(),
+                        user.userId(), session.id(), runtimeBindingLeafId);
+                if (activeRuntimeBinding.isPresent()) {
+                    // Runtime 是唯一允许多轮续接的执行主体；命中 active binding 后直接继续 Relay Runtime。
+                    binding = runtimeBindingService.touchForRun(activeRuntimeBinding.get(), runId);
+                    route = RouteTarget.agentRuntime("runtime-binding", 1.0, "active relay runtime binding");
+                }
             }
             if (route == null) {
                 // 首轮路由只读取已启用的外部路由信号。默认用例库和意图服务都关闭，
@@ -263,6 +273,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 // 根据路由结果选择 SubAgent、系统响应或统一 AgentRuntime。
                 Flux<ChatEvent> body = switch (selectedRoute.type()) {
                     case SUB_AGENT -> subAgentExecutor.execute(runCommand, runId, memory, selectedRoute, user);
+                    case EXPLICIT_SKILL -> legacySkillExecutor.execute(runCommand, runId, selectedRoute, user);
                     case SYSTEM_RESPONSE -> systemResponseExecutor.execute(runCommand, runId, selectedIntent, selectedRoute);
                     case AGENT_RUNTIME -> agentRuntimeExecutor.execute(runCommand, runId, memory, selectedIntent,
                             selectedRoute, user, bindingRef.get(), headerSnapshot);
@@ -420,6 +431,15 @@ public class FinanceEXChatService implements FinanceChatFacade {
         return value instanceof Boolean bool && bool || value instanceof String text && Boolean.parseBoolean(text);
     }
 
+    private String selectedSkillId(Map<String, Object> metadata) {
+        Object value = metadata == null ? null : metadata.get("selectedSkillId");
+        if (value == null) {
+            return null;
+        }
+        String skillId = String.valueOf(value).trim();
+        return skillId.isBlank() ? null : skillId;
+    }
+
     private Mono<Void> cancelDownstream(ChatRun run, UserContext user, RuntimeForwardHeaders forwardHeaders) {
         if (run == null || run.routeType() == null) {
             return Mono.empty();
@@ -429,6 +449,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
         }
         if (RouteType.SUB_AGENT.name().equals(run.routeType())) {
             return subAgentExecutor.cancel(run, user);
+        }
+        if (RouteType.EXPLICIT_SKILL.name().equals(run.routeType())) {
+            return legacySkillExecutor.cancel(run, user);
         }
         return Mono.empty();
     }

@@ -128,11 +128,8 @@ public class DocumentController {
     @GetMapping("/{documentId}/preview-url")
     public Mono<DocumentAccessDto> previewUrl(@PathVariable("documentId") String documentId) {
         UserContext user = resolveChatUser();
-        return facade.get(user, documentId)
+        return facade.prepareAccess(user, documentId)
                 .map(document -> {
-                    if (!document.availableForChat()) {
-                        throw new IllegalStateException("文档当前不可预览或下载: " + document.status());
-                    }
                     return new DocumentAccessDto(
                             document.id(),
                             "/api/v1/ex/documents/" + document.id() + "/download",

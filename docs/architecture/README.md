@@ -14,7 +14,9 @@ FinanceEXChatService 是前端聊天入口和 SuperAgent 主控服务。正式�
 flowchart TD
     User["用户请求"] --> Normalize["身份解析与会话归一化"]
     Normalize --> Memory["按配置加载 MemoryContext"]
-    Memory --> ForceNew{"metadata.forceNewTask 为 true?"}
+    Memory --> ExplicitSkill{"metadata.selectedSkillId 存在?"}
+    ExplicitSkill -- "是" --> LegacySkill["EXPLICIT_SKILL：调用老 Agent 指定技能"]
+    ExplicitSkill -- "否" --> ForceNew{"metadata.forceNewTask 为 true?"}
     ForceNew -- "是" --> CancelRuntime["取消 active RuntimeBinding"]
     ForceNew -- "否" --> FindRuntime["查询 RuntimeBinding"]
     CancelRuntime --> FindRuntime
@@ -43,6 +45,7 @@ flowchart TD
     IntentRoute -- "复杂/低置信/无 subAgentCode" --> CreateRuntime
 
     SingleSubAgent --> EventStream["输出 ChatEvent 流"]
+    LegacySkill --> EventStream
     RuntimeQuery --> RuntimeAdapter{"provider=relay api-adapter?"}
     RuntimeAdapter -- "relay-stream-http" --> RelayHttp["RelayStreamHttpRuntimeAdapter"]
     RuntimeAdapter -- "relay-websocket" --> RelayWs["RelayWebSocketRuntimeAdapter 后端出站"]
@@ -104,11 +107,16 @@ sequenceDiagram
         Binding->>Redis: "删除 fin_ex:runtime_binding key"
     end
 
-    SuperAgent->>Binding: "findActive(sessionId)"
-    Binding->>Redis: "读取 RuntimeBinding"
-    alt "Redis miss"
-        Binding->>DB: "查询 fin_ex_runtime_binding_t"
-        Binding->>Redis: "回填 active RuntimeBinding"
+    alt "metadata.selectedSkillId 存在"
+        SuperAgent->>SuperAgent: "RouteTarget.EXPLICIT_SKILL，不读取 RuntimeBinding"
+        SuperAgent->>RelayAgent: "老 Agent chat(skillId, query, legacy docList)"
+    else "未显式指定技能"
+        SuperAgent->>Binding: "findActive(sessionId)"
+        Binding->>Redis: "读取 RuntimeBinding"
+        alt "Redis miss"
+            Binding->>DB: "查询 fin_ex_runtime_binding_t"
+            Binding->>Redis: "回填 active RuntimeBinding"
+        end
     end
 
     alt "存在 active RuntimeBinding"
@@ -152,6 +160,8 @@ sequenceDiagram
     loop "输出 ChatEvent"
         alt "SubAgent route"
             SubAgent-->>SuperAgent: "message.delta / message.snapshot / message.completed"
+        else "Explicit skill route"
+            RelayAgent-->>SuperAgent: "legacy eventStream -> message.delta / runtime.* / message.completed"
         else "Relay HTTP Runtime route"
             RelayAgent-->>RelayHttp: "HTTP stream delta"
             RelayHttp-->>Runtime: "ChatEvent"
@@ -195,8 +205,12 @@ sequenceDiagram
 
     opt "上传文档"
         Frontend->>EX: "POST /api/v1/ex/documents"
-        EX->>S3: "写入文件对象"
-        S3-->>EX: "bucket/objectKey"
+        alt "targetProvider=default-storage"
+            EX->>S3: "写入文件对象"
+            S3-->>EX: "bucket/objectKey"
+        else "targetProvider=legacy-agent"
+            EX->>EX: "调用配置化 HTTP DocumentProviderAdapter"
+        end
         EX->>DB: "写入 fin_ex_uploaded_document_t"
         EX-->>Frontend: "documentId/status"
     end
@@ -215,7 +229,9 @@ sequenceDiagram
         Intent-->>EX: "simple/complex/candidateSubAgentCode"
     end
 
-    alt "进入 Relay Runtime"
+    alt "metadata.selectedSkillId 存在"
+        EX->>EX: "EXPLICIT_SKILL：按 skillId 调用老 Agent，简图省略下游细节"
+    else "进入 Relay Runtime"
         EX->>Relay: "AgentRuntime.query(sessionId, query, attachments, Cookie snapshot)"
         Relay-->>EX: "message.delta / message.snapshot / runtime.* / message.completed"
     else "简单任务命中"
@@ -242,7 +258,7 @@ sequenceDiagram
 
 ## 文档库与附件使用
 
-文档能力采用“统一后端入口 + 对象存储防腐层 + 文档库资产”的模式。
+文档能力采用“统一后端入口 + DocumentProviderAdapter 防腐层 + 文档库资产”的模式。
 
 ```mermaid
 sequenceDiagram
@@ -250,19 +266,25 @@ sequenceDiagram
     participant Frontend as "Frontend"
     participant DocAPI as "Document API"
     participant DocApp as "DocumentApplicationService"
-    participant Storage as "ObjectStorage Port"
-    participant HuaweiS3 as "Huawei OBS S3 Adapter"
+    participant Provider as "DocumentProviderAdapter"
+    participant ObjectStorage as "ObjectStorage Provider"
+    participant HttpProvider as "HTTP Provider"
     participant DB as "openGauss"
     participant Chat as "FinanceEXChatService"
-    participant Executor as "SubAgentExecutor / AgentRuntimeExecutor"
+    participant Executor as "SubAgent / LegacySkill / AgentRuntime"
 
-    Frontend->>DocAPI: "POST /documents multipart file"
+    Frontend->>DocAPI: "POST /documents multipart file,targetProvider?,skillId?"
     DocAPI->>DocAPI: "AuthContextProvider.resolve()"
     DocAPI->>DocApp: "upload(UserContext, DocumentUploadCommand)"
     DocApp->>DocApp: "会话归属校验"
-    DocApp->>Storage: "putObject(tenantId, file)"
-    Storage->>HuaweiS3: "写入真实对象存储"
-    HuaweiS3-->>Storage: "bucket/objectKey"
+    DocApp->>Provider: "resolve(targetProvider)"
+    alt "default-storage"
+        Provider->>ObjectStorage: "putObject(tenantId, file)"
+        ObjectStorage-->>Provider: "bucket/objectKey"
+    else "legacy-agent / future domain provider"
+        Provider->>HttpProvider: "multipart upload by configured path"
+        HttpProvider-->>Provider: "provider docId/docName/docSize"
+    end
     DocApp->>DB: "写 fin_ex_uploaded_document_t"
     DocApp-->>Frontend: "UploadedDocument(id,status,source)"
 
@@ -275,9 +297,9 @@ sequenceDiagram
 设计原则：
 
 - 前端上传仍先进入 FinanceEXChatService，方便统一鉴权、审计、限流和企业网关接入。
-- 真实文件内容通过 `ObjectStorage` port 写入对象存储；当前支持 local 和 huawei-s3 实现。
+- 真实文件内容由 `DocumentProviderAdapter` 决定去向：默认 provider 仍写入 local 或 huawei-s3；老 Agent 或领域 Agent provider 可以转发自己的上传接口。
 - 聊天请求只引用 `documentId`，不携带文件正文。
-- SubAgent 或 Runtime 看到的是经过文档库回查后的可信附件元数据。
+- SubAgent、显式技能或 Runtime 看到的是经过文档库回查后的可信附件元数据。
 - `fin_ex_uploaded_document_t` 是文档库事实源，支持最近文档、库中文档选择和后续连接器文档扩展。
 
 ## 流式响应与断点恢复
@@ -508,8 +530,9 @@ MVC/Servlet 生产模式增加了长连接治理层：`financeex.websocket.allow
 文档上传同样按启动模式做接口层适配：Servlet/MVC 注册 `MvcDocumentUploadController`
 并接收 `MultipartFile`，纯 WebFlux 注册 `ReactiveDocumentUploadController` 并接收
 `FilePart`。两种 Controller 都委托 `DocumentUploadSupport`，由它先把上传流写入临时文件，
-再通过 `DocumentFacade -> ObjectStorage` 写入华为 OBS S3 或其他对象存储实现。前端看到的路径、
-字段和响应始终是同一套 `POST /api/v1/ex/documents` 契约。
+再通过 `DocumentFacade -> DocumentProviderAdapterRegistry` 选择 default-storage、legacy-agent
+或未来领域 Agent provider。前端看到的路径、字段和响应始终是同一套
+`POST /api/v1/ex/documents` 契约。
 
 ## 分层架构
 
@@ -556,6 +579,8 @@ flowchart TB
         RelayHttp["RelayStreamHttpRuntimeAdapter"]
         RelayWs["RelayWebSocketRuntimeAdapter"]
         Storage["Local / Huawei OBS S3 ObjectStorage"]
+        HttpDocumentProvider["HTTP DocumentProviderAdapter"]
+        LegacySkillHttp["LegacySkill HTTP Adapter"]
     end
 
     Interfaces --> ChatService
@@ -579,16 +604,19 @@ flowchart TB
     RuntimeBinding --> Redis
     RuntimeBinding --> OpenGauss
     SubAgentExecutor --> SubAgentHttp
+    ChatService --> LegacySkillHttp
     RuntimeExecutor --> RelayRuntime
     RelayRuntime --> RelayHttp
     RelayRuntime --> RelayWs
     DocumentService --> Storage
+    DocumentService --> HttpDocumentProvider
     Application --> Domain
 ```
 
 ## 路由规则
 
-- active RuntimeBinding 优先级最高；存在时本轮按当前消息树 leaf 续接 Relay Runtime。
+- `metadata.selectedSkillId` 优先级最高；存在时进入 `EXPLICIT_SKILL` 路由，直接调用老 Agent 指定技能，不读取或创建 RuntimeBinding。
+- active RuntimeBinding 优先级次之；存在时本轮按当前消息树 leaf 续接 Relay Runtime。
 - 用例库和意图服务是可选路由信号，默认关闭；关闭时不调用外部 API。
 - 用例库开启时优先匹配；命中阈值默认 `0.85`，命中并返回 `subAgentCode` 后单轮调用 SubAgent。
 - 用例库关闭或未命中后，只有意图服务开启才调用 `IntentService`。

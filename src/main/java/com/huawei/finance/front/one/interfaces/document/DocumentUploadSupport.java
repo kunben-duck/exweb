@@ -24,8 +24,8 @@ import reactor.core.scheduler.Schedulers;
  * 文档上传接口层共享组件。
  *
  * <p>上传协议在不同 Spring 启动模式下不同：Servlet/MVC 使用 {@link MultipartFile}，
- * Reactive WebFlux 使用 {@link FilePart}。本组件把两种入口统一收敛为临时文件，再交给
- * {@link DocumentFacade} 通过 ObjectStorage 防腐层写入真实对象存储，避免 Controller 分叉出两套业务逻辑。</p>
+     * Reactive WebFlux 使用 {@link FilePart}。本组件把两种入口统一收敛为临时文件，再交给
+     * {@link DocumentFacade} 根据 targetProvider 选择文档 provider，避免 Controller 分叉出两套业务逻辑。</p>
  *
  * <p>用户身份只在请求入口解析一次，并在切换到 {@code boundedElastic} 执行文件和数据库阻塞操作前
  * 固化为不可变 {@link UserContext}，便于后续企业 ThreadLocal 权限框架接入。</p>
@@ -50,9 +50,13 @@ public class DocumentUploadSupport {
      *
      * @param file MVC multipart 文件对象，字段名固定为 {@code file}。
      * @param sessionId 可选会话标识；传入时应用层会校验会话归属并建立文档关联。
+     * @param targetProvider 目标文档 provider；为空时走默认对象存储。
+     * @param skillId 上传关联技能标识，可为空。
+     * @param metadataJson 上传扩展元数据 JSON，可为空。
      * @return 上传完成后的文档库元数据。
      */
-    public Mono<UploadedDocument> uploadMultipartFile(MultipartFile file, String sessionId) {
+    public Mono<UploadedDocument> uploadMultipartFile(MultipartFile file, String sessionId, String targetProvider,
+                                                      String skillId, String metadataJson) {
         UserContext user = resolveChatUser();
         return Mono.usingWhen(
                 createTempFile(),
@@ -62,7 +66,10 @@ public class DocumentUploadSupport {
                                 sessionId,
                                 file == null ? null : file.getOriginalFilename(),
                                 file == null ? null : file.getContentType(),
-                                tempFile
+                                tempFile,
+                                targetProvider,
+                                skillId,
+                                metadataJson
                         ))),
                 this::deleteTempFile
         );
@@ -73,9 +80,13 @@ public class DocumentUploadSupport {
      *
      * @param file WebFlux 文件分片，字段名固定为 {@code file}。
      * @param sessionId 可选会话标识；传入时应用层会校验会话归属并建立文档关联。
+     * @param targetProvider 目标文档 provider；为空时走默认对象存储。
+     * @param skillId 上传关联技能标识，可为空。
+     * @param metadataJson 上传扩展元数据 JSON，可为空。
      * @return 上传完成后的文档库元数据。
      */
-    public Mono<UploadedDocument> uploadFilePart(FilePart file, String sessionId) {
+    public Mono<UploadedDocument> uploadFilePart(FilePart file, String sessionId, String targetProvider,
+                                                 String skillId, String metadataJson) {
         UserContext user = resolveChatUser();
         return Mono.usingWhen(
                 createTempFile(),
@@ -85,7 +96,10 @@ public class DocumentUploadSupport {
                                 sessionId,
                                 file == null ? null : file.filename(),
                                 file == null ? null : mediaType(file.headers().getContentType()),
-                                tempFile
+                                tempFile,
+                                targetProvider,
+                                skillId,
+                                metadataJson
                         ))),
                 this::deleteTempFile
         );
@@ -121,14 +135,18 @@ public class DocumentUploadSupport {
                                                  String sessionId,
                                                  String originalFilename,
                                                  String contentType,
-                                                 Path tempFile) {
+                                                 Path tempFile,
+                                                 String targetProvider,
+                                                 String skillId,
+                                                 String metadataJson) {
         return Mono.fromCallable(() -> {
             long size = Files.size(tempFile);
             if (size > uploadProperties.normalizedMaxUploadSizeBytes()) {
                 throw new IllegalArgumentException("上传文件超过最大允许大小: " + uploadProperties.normalizedMaxUploadSizeBytes());
             }
             InputStream inputStream = Files.newInputStream(tempFile, StandardOpenOption.READ);
-            return new DocumentUploadCommand(sessionId, originalFilename, contentType, size, inputStream);
+            return new DocumentUploadCommand(sessionId, originalFilename, contentType, size, inputStream,
+                    targetProvider, skillId, metadataJson);
         }).subscribeOn(Schedulers.boundedElastic()).flatMap(command -> facade.upload(user, command));
     }
 

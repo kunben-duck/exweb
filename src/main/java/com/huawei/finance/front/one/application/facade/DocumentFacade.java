@@ -70,13 +70,26 @@ public interface DocumentFacade {
      * 读取当前用户可下载文档的元数据和对象内容。
      *
      * <p>该方法在 application 层一次性完成身份、归属、状态和对象读取，接口层不再分别调用
-     * {@link #get(String)} 与 {@link #download(String)}，避免重复校验和资源释放不一致。</p>
+     * {@link #get(UserContext, String)} 与 {@link #download(UserContext, String)}，
+     * 避免重复校验和资源释放不一致。</p>
      *
      * @param user 请求入口解析出的不可变用户身份快照。
      * @param documentId 文档标识。
      * @return 文档元数据与对象内容流。
      */
     Mono<DocumentDownload> prepareDownload(UserContext user, String documentId);
+
+    /**
+     * 校验当前文档是否支持通过本服务生成预览/下载访问入口。
+     *
+     * <p>不同 provider 的文件内容可能托管在下游系统。该方法只做归属、状态和 provider 下载能力校验，
+     * 不提前打开文件流，避免 preview-url 接口造成不必要的对象存储或下游下载开销。</p>
+     *
+     * @param user 请求入口解析出的不可变用户身份快照。
+     * @param documentId 文档标识。
+     * @return 可通过本服务访问内容的文档元数据。
+     */
+    Mono<UploadedDocument> prepareAccess(UserContext user, String documentId);
 
     /**
      * 读取当前用户可见文档的对象内容。
@@ -98,4 +111,16 @@ public interface DocumentFacade {
      * @return 使用数据库元数据补齐后的附件引用。
      */
     List<AttachmentRef> resolveAttachmentsForUser(UserContext user, List<AttachmentRef> attachments);
+
+    /**
+     * 解析当前用户可用的完整文档元数据。
+     *
+     * <p>指定技能 adapter 需要读取 provider 私有文档 ID 和 metadataJson 来组装下游 chat 入参，
+     * 因此不能只依赖 {@link AttachmentRef} 的展示字段。</p>
+     *
+     * @param user 当前调用方身份快照。
+     * @param attachments 前端传入的附件引用。
+     * @return 已完成归属和状态校验的文档元数据。
+     */
+    List<UploadedDocument> resolveDocumentsForUser(UserContext user, List<AttachmentRef> attachments);
 }

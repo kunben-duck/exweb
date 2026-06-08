@@ -425,6 +425,7 @@ async function sendRun() {
   if (!message) return;
 
   const attachments = [...state.selectedDocuments.values()].map(document => ({ documentId: document.id }));
+  const selectedSkillId = $("selectedSkillIdInput")?.value?.trim();
   const body = {
     commandId: `cmd_${Date.now()}`,
     sessionId: state.selectedSessionId || null,
@@ -437,6 +438,16 @@ async function sendRun() {
       source: "local-test-frontend"
     }
   };
+  if (selectedSkillId) {
+    body.metadata.selectedSkillId = selectedSkillId;
+    body.metadata.legacyAgent = {
+      isThink: 1,
+      platform: "PC",
+      queryType: "normalQa",
+      streamFlag: "stream",
+      supMsg: ""
+    };
+  }
 
   $("messageInput").value = "";
   await startRunRequest(body, { optimisticUserMessage: message });
@@ -1114,6 +1125,14 @@ async function uploadDocument() {
   data.append("file", file);
   if ($("uploadBindSession").checked && state.selectedSessionId) {
     data.append("sessionId", state.selectedSessionId);
+  }
+  const targetProvider = $("uploadTargetProvider")?.value?.trim();
+  const skillId = $("uploadSkillId")?.value?.trim();
+  if (targetProvider) {
+    data.append("targetProvider", targetProvider);
+  }
+  if (skillId) {
+    data.append("skillId", skillId);
   }
   const document = await requestJson("/api/v1/ex/documents", { method: "POST", body: data });
   log(`document uploaded ${document.id}`);

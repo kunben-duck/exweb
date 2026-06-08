@@ -32,11 +32,17 @@ public class ReactiveDocumentUploadController {
      *
      * @param file multipart 中名为 {@code file} 的 WebFlux 文件分片。
      * @param sessionId 可选会话标识；传入时服务端会校验会话归属并把文档关联到该会话。
+     * @param targetProvider 目标文档 provider；为空时使用默认对象存储。
+     * @param skillId 上传关联技能标识，可为空。
+     * @param metadata 上传扩展元数据 JSON，可为空。
      * @return 上传完成后的文档库元数据。
      */
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Mono<UploadedDocument> upload(@RequestPart("file") FilePart file,
-                                         @RequestPart(value = "sessionId", required = false) String sessionId) {
-        return uploadSupport.uploadFilePart(file, sessionId);
+                                         @RequestPart(value = "sessionId", required = false) String sessionId,
+                                         @RequestPart(value = "targetProvider", required = false) String targetProvider,
+                                         @RequestPart(value = "skillId", required = false) String skillId,
+                                         @RequestPart(value = "metadata", required = false) String metadata) {
+        return uploadSupport.uploadFilePart(file, sessionId, targetProvider, skillId, metadata);
     }
 }

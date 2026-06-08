@@ -24,10 +24,10 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 ## 分层边界
 
 - `interfaces`：`/chat/runs`、WebSocket run topic subscribe、Event Resume、会话和文档上传协议适配。
-- `application`：聊天主编排、会话、记忆、RuntimeBinding、SubAgent 单轮调用和 Relay Runtime 调用。
+- `application`：聊天主编排、会话、记忆、RuntimeBinding、SubAgent 单轮调用、显式技能兼容调用和 Relay Runtime 调用。
 - `application.integration`：应用层出站集成抽象，定义对 Relay Runtime、SubAgent、IntentService、用例库、会话、记忆、文档、ID 和身份能力的依赖边界。
 - `domain`：聊天事件、意图结果、路由结果、RuntimeBinding、用例匹配结果等核心模型。
-- `infrastructure`：Redis、openGauss/MyBatis、用例库 HTTP、SubAgent HTTP、Relay Runtime HTTP/WebSocket、对象存储等适配。
+- `infrastructure`：Redis、openGauss/MyBatis、用例库 HTTP、SubAgent HTTP、Relay Runtime HTTP/WebSocket、DocumentProvider、对象存储和 legacy skill HTTP 等适配。
 
 ## 前端接入协议
 
@@ -100,6 +100,11 @@ export FINANCEEX_DEV_USERNAME=developer
 ```
 
 `metadata.forceNewTask=true` 会取消当前 active RuntimeBinding，并重新读取可选路由信号；如果用例库和意图服务都关闭，则直接进入 Relay Runtime。
+
+`metadata.selectedSkillId` 用于兼容存量 Agent 的“前端显式选择技能”场景。该字段存在且非空时，本轮 run 进入
+`EXPLICIT_SKILL` 路由，直接调用配置化老 Agent chat 接口，并使用文档库中 `targetProvider=legacy-agent`
+上传后保存的 provider 文档元数据组装 `sceneParam.docList`。该路径不会读取或创建 RuntimeBinding，
+避免把不具备稳定 ChatService 多轮契约的历史技能误当成 Relay Runtime 续接会话。
 
 ## 会话与执行标识
 
@@ -338,21 +343,25 @@ mvn spring-boot:run
 
 ## 文档存储
 
-文档能力分为“文档库资产”和“对象内容”两层：前端仍然把本地文件上传到 FinanceEXChatService 统一后端，
-后端再通过 `ObjectStorage` 防腐层写入本地文件系统或华为 OBS S3 对象存储。
+文档能力分为“文档库资产”和“provider 托管内容”两层：前端始终把本地文件上传到
+FinanceEXChatService 统一后端，后端再根据 `targetProvider` 选择对象存储、老 Agent 或未来领域
+Agent 的文档 provider adapter。
 openGauss 的 `fin_ex_uploaded_document_t` 保存文档库元数据，聊天请求只引用 `documentId`，不会把文件正文放进消息体。
 上传接口对外只有一条 `POST /api/v1/ex/documents`，服务端会按启动模式自动选择适配器：
-Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共用同一套临时落盘和 ObjectStorage 写入逻辑。
+Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共用同一套临时落盘和 provider 上传逻辑。
+不传 `targetProvider` 时走默认 `default-storage`，即当前 S3/OBS/local 对象存储；传
+`targetProvider=legacy-agent` 时会转发老 Agent upload 接口，并把老 Agent 返回的 docId/docName/docSize
+等写入统一文档库 `metadataJson.providerDocument`。
 
 文档接口：
 
-- `POST /api/v1/ex/documents`：上传本地文件并登记到文档库。
+- `POST /api/v1/ex/documents`：上传本地文件并登记到文档库；可选 multipart 字段包括 `targetProvider`、`skillId`、`metadata`。
 - `GET /api/v1/ex/documents?sessionId=...&limit=20&cursor=...`：分页查询当前用户文档库，`sessionId` 可选。
 - `GET /api/v1/ex/documents/{documentId}`：查询单个文档。
 - `PATCH /api/v1/ex/documents/{documentId}`：更新文档展示名或扩展元数据。
 - `GET /api/v1/ex/documents/{documentId}/status`：查询文档处理状态。
 - `GET /api/v1/ex/documents/{documentId}/preview-url`：获取后端受控预览地址。
-- `GET /api/v1/ex/documents/{documentId}/download`：下载文档对象内容。
+- `GET /api/v1/ex/documents/{documentId}/download`：下载文档对象内容；provider 未启用下载时返回 `DOCUMENT_CONTENT_MANAGED_BY_PROVIDER`。
 - `DELETE /api/v1/ex/documents/{documentId}`：软删除文档。
 
 聊天附件应使用文档库返回的 `id`：
@@ -369,6 +378,11 @@ Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共�
 ```
 
 服务端会在进入 Runtime 前回查文档库，补齐可信的文件名、MIME、大小、来源和 tokenSize，并校验文档归属和状态。
+
+指定历史技能时，前端应先使用同一个上传接口并传 `targetProvider=legacy-agent`。服务端会调用配置中的
+老 Agent upload path，把返回的 `docid/docname/docsize/levelCode/serverName/version` 等 allowlist 字段
+保存到 `metadataJson.providerDocument`；随后 `/chat/runs.metadata.selectedSkillId` 会触发老 Agent chat
+adapter，并只允许引用这些 legacy provider 文档。普通 default-storage 文档不会被自动转传给老 Agent。
 
 默认使用本地文件系统：
 

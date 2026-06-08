@@ -148,6 +148,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 切换历史版本 | `GET /messages/{messageId}/variants` -> 用户选择某个候选 -> `POST /sessions/{sessionId}/path(leafMessageId)` -> `GET /messages` 重渲染 | `messageId`、`leafMessageId`、`currentLeafMessageId` | 只切换展示路径，不创建 run，不调用 Runtime |
 | 从消息新建分支 | `POST /sessions/{sessionId}/branches(sourceMessageId)` -> 选择新 `sessionId` -> `GET /state` | `sourceMessageId`、新 `sessionId`、`sourceSessionId/sourceMessageId` | 分支快照消息 `locked=true`，禁用编辑、删除和重新生成 |
 | 上传文件并作为附件提问 | `POST /documents(file, sessionId)` -> 等状态 `AVAILABLE` -> `POST /chat/runs(attachments[{documentId}])` | `documentId`、`sessionId`、`attachments[].documentId` | 附件不是消息类型；PROCESSING/FAILED/DELETED 不可作为聊天附件 |
+| 选中历史技能并带文档提问 | `POST /documents(file,targetProvider=legacy-agent,skillId)` -> `POST /chat/runs(metadata.selectedSkillId,attachments)` | `documentId`、`metadata.selectedSkillId`、`metadata.legacyAgent` | 显式技能路由不创建 RuntimeBinding；附件必须来自 `legacy-agent` provider |
 | 点赞/点踩/取消 | 历史消息中找到 assistant `messageId` -> `POST /messages/{messageId}/feedback`；再次点击已选按钮 -> `DELETE /feedback` | `messageId`、可选 `runId`、`feedback.rating/status` | 历史消息 `feedback` 非空时高亮；取消后返回 `status=CANCELLED`，历史消息再查为 `feedback=null` |
 | 会话归档/恢复/删除 | 单个：`POST /archive`、`POST /restore`、`DELETE /sessions/{sessionId}`；批量：`DELETE /sessions` body `sessionIds[]` | `sessionId`、`sessionIds[]` | 删除是软删除；有 active run 时先 stop，否则删除失败 |
 | 文档库管理 | `GET /documents` -> `GET /documents/{documentId}`/`status`/`preview-url`/`download`/`PATCH`/`DELETE` | `documentId`、`cursor`、`status` | 列表默认不返回 DELETED；下载和预览只允许 AVAILABLE |
@@ -209,7 +210,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/chat/runs` | 唯一提问入口，创建后台 run。 | JSON body：`commandId` 可选，`sessionId` 可选，`conversationId` 可选，`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`attachments[]`、`metadata`。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | `runMode` 默认 `NEXT`；编辑和重新生成不会覆盖历史消息。 |
+| `POST /api/v1/ex/chat/runs` | 唯一提问入口，创建后台 run。 | JSON body：`commandId` 可选，`sessionId` 可选，`conversationId` 可选，`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`attachments[]`、`metadata`。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | `runMode` 默认 `NEXT`；`metadata.selectedSkillId` 存在时进入显式技能兼容路由，不读取或创建 RuntimeBinding。 |
 | `POST /api/v1/ex/chat/runs/{runId}/stop` | 用户点击停止回答。 | Path：`runId`。 | `ChatRunStopDto`：`runId`、`sessionId`、`status`、`latestSeq`、`stoppedAt`。 | 幂等；停止语义不是关闭 WebSocket。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ChatEventDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`。 |
 | `GET /api/v1/ex/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ChatEventDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态。 |
@@ -235,14 +236,14 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选。 | `UploadedDocument`。 | 文件先到统一后端，再通过 ObjectStorage 写入 Huawei OBS S3 或其他对象存储实现；Servlet/MVC 与 WebFlux 启动模式共用同一外部契约。 |
+| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`targetProvider` 可选，`skillId` 可选，`metadata` 可选 JSON 字符串。 | `UploadedDocument`。 | 不传 `targetProvider` 使用 default-storage；`targetProvider=legacy-agent` 时后端转发配置化老 Agent upload 接口，并把 provider docId 写入统一文档库。 |
 | `GET /api/v1/ex/documents` | 文档库列表或最近文档选择器。 | Query：`sessionId` 可选，`limit` 默认 20，`cursor` 可选。 | `DocumentLibraryPage`：`items[]`、`nextCursor`。 | 默认不返回 `DELETED` 文档。 |
 | `GET /api/v1/ex/documents/{documentId}` | 查询文档详情。 | Path：`documentId`。 | `UploadedDocument`。 | 可查看 `AVAILABLE/PROCESSING/FAILED` 等非删除状态。 |
 | `PATCH /api/v1/ex/documents/{documentId}` | 修改展示文件名或扩展元数据。 | Path：`documentId`；JSON body：`originalName`、`metadataJson`。 | `UploadedDocument`。 | 空字段表示保留原值。 |
 | `DELETE /api/v1/ex/documents/{documentId}` | 软删除文档。 | Path：`documentId`。 | `UploadedDocument`。 | 删除后不能再作为聊天附件。 |
 | `GET /api/v1/ex/documents/{documentId}/status` | 查询解析状态或失败原因扩展信息。 | Path：`documentId`。 | `DocumentStatusDto`：`documentId`、`status`、`tokenSize`。 | `PROCESSING/FAILED` 可查状态，但不能下载、预览或作为聊天附件。 |
-| `GET /api/v1/ex/documents/{documentId}/preview-url` | 获取后端受控预览地址。 | Path：`documentId`。 | `DocumentAccessDto`。 | 当前返回后端 download 地址，不暴露对象存储签名。 |
-| `GET /api/v1/ex/documents/{documentId}/download` | 下载文档原始内容。 | Path：`documentId`。 | 二进制流，带 `Content-Disposition`。 | 只允许 `AVAILABLE` 文档下载。 |
+| `GET /api/v1/ex/documents/{documentId}/preview-url` | 获取后端受控预览地址。 | Path：`documentId`。 | `DocumentAccessDto`。 | 当前返回后端 download 地址；provider 未启用 download 时返回 `DOCUMENT_CONTENT_MANAGED_BY_PROVIDER`。 |
+| `GET /api/v1/ex/documents/{documentId}/download` | 下载文档原始内容。 | Path：`documentId`。 | 二进制流，带 `Content-Disposition`。 | 只允许 `AVAILABLE` 文档下载；provider 未启用 download 时返回 `DOCUMENT_CONTENT_MANAGED_BY_PROVIDER`。 |
 
 ## 公共 DTO 字段
 
@@ -434,7 +435,10 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `contentType` | MIME 类型 |
 | `sizeBytes` | 文件大小 |
 | `status` | `AVAILABLE`、`PROCESSING`、`FAILED`、`DELETED`；只有 `AVAILABLE` 可下载、预览和作为聊天附件 |
-| `source` | 来源，例如 `LOCAL_UPLOAD` |
+| `source` | 来源，例如 `LOCAL_UPLOAD`、`LIBRARY`、`CONNECTOR`、`LEGACY_AGENT_UPLOAD` |
+| `bucket` | provider 位置字段；default-storage 表示对象存储 bucket，HTTP provider 表示 providerCode |
+| `objectKey` | provider 文件标识；default-storage 表示对象 key，legacy-agent 表示老 Agent docId |
+| `metadataJson` | provider 扩展元数据；legacy-agent 文档的 `providerDocument` 是组装老 Agent `sceneParam.docList` 的事实源 |
 | `tokenSize` | 解析后 token 数，可为空 |
 | `createdAt` / `updatedAt` | 创建和更新时间 |
 
@@ -808,7 +812,7 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
 | `editedMessageId` | string | EDIT_USER 必填 | 被编辑的未锁定 user 消息 |
 | `regeneratedMessageId` | string | REGENERATE_ASSISTANT 必填 | 被重新生成的未锁定 assistant 消息 |
 | `attachments` | array | 否 | 文档附件引用列表 |
-| `metadata` | object | 否 | 扩展字段，例如 `clientMessageId`、`forceNewTask` |
+| `metadata` | object | 否 | 扩展字段，例如 `clientMessageId`、`forceNewTask`、`selectedSkillId` |
 
 响应：
 
@@ -1279,7 +1283,7 @@ stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可
 
 ## 文档上传与聊天附件
 
-上传本地文件：
+上传本地文件到默认文档库 provider：
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/ex/documents \
@@ -1292,6 +1296,28 @@ curl -X POST http://localhost:8080/api/v1/ex/documents \
 `file` 放文件内容，`sessionId` 可选；后端在 Servlet/MVC 下绑定为 `MultipartFile`，在纯
 WebFlux 下绑定为 `FilePart`，前端不需要区分。
 
+当用户在前端选择存量 Agent 技能，并且该技能要求先把文档上传到老 Agent 文件服务时，仍然使用同一个
+`POST /api/v1/ex/documents` 接口，只是增加 provider 上下文字段：
+
+```bash
+curl -X POST http://localhost:8080/api/v1/ex/documents \
+  -F "file=@./invoice.pdf" \
+  -F "sessionId=session_xxx" \
+  -F "targetProvider=legacy-agent" \
+  -F "skillId=skill_tax_opinion" \
+  -F 'metadata={"source":"skill-picker"}'
+```
+
+字段说明：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `file` | 是 | 用户选择的本地文件内容。 |
+| `sessionId` | 否 | 上传时关联的会话；为空时作为用户文档库资产保存。 |
+| `targetProvider` | 否 | 目标文档 provider；为空使用 `default-storage`，选中历史技能上传时使用 `legacy-agent`。 |
+| `skillId` | 否 | 上传时关联的技能 ID；provider adapter 可把它透传给下游上传接口或用于审计。 |
+| `metadata` | 否 | 上传上下文 JSON 字符串；不要放 Cookie、token 等敏感信息。 |
+
 响应中的 `id` 就是聊天附件的 `documentId`：
 
 ```json
@@ -1303,9 +1329,24 @@ WebFlux 下绑定为 `FilePart`，前端不需要区分。
   "sizeBytes": 10240,
   "status": "AVAILABLE",
   "source": "LOCAL_UPLOAD",
+  "metadataJson": "{\"providerCode\":\"default-storage\",\"capabilities\":{\"download\":true,\"status\":false}}",
   "tokenSize": null,
   "createdAt": "2026-05-17T01:03:00Z",
   "updatedAt": "2026-05-17T01:03:00Z"
+}
+```
+
+`targetProvider=legacy-agent` 时，响应仍然是同一个 `UploadedDocument`，但 `source` 为
+`LEGACY_AGENT_UPLOAD`，`bucket` 语义上是 providerCode，`objectKey` 语义上是老 Agent 返回的 docId。
+`metadataJson.providerDocument` 保存老 Agent 返回的 allowlist 字段：
+
+```json
+{
+  "id": "doc_legacy_xxx",
+  "originalName": "invoice.pdf",
+  "status": "AVAILABLE",
+  "source": "LEGACY_AGENT_UPLOAD",
+  "metadataJson": "{\"providerCode\":\"legacy-agent\",\"providerDocument\":{\"docId\":\"legacy_doc_1\",\"docName\":\"invoice.pdf\",\"docSize\":19800,\"levelCode\":\"IP\",\"serverName\":\"shenzhen\",\"version\":\"V1\"},\"capabilities\":{\"download\":false,\"status\":false}}"
 }
 ```
 
@@ -1326,7 +1367,8 @@ curl -X PATCH http://localhost:8080/api/v1/ex/documents/doc_xxx \
 curl -X DELETE http://localhost:8080/api/v1/ex/documents/doc_xxx
 ```
 
-预览和下载仍走后端受控流，不直接暴露对象存储临时签名：
+预览和下载仍走后端受控流，不直接暴露对象存储临时签名。对于 `legacy-agent.download.enabled=false`
+这类 provider 托管文档，预览和下载会返回 `DOCUMENT_CONTENT_MANAGED_BY_PROVIDER`，前端应提示“该文档由下游服务托管，当前不可下载”：
 
 ```bash
 curl http://localhost:8080/api/v1/ex/documents/doc_xxx/preview-url
@@ -1363,6 +1405,35 @@ curl -OJ http://localhost:8080/api/v1/ex/documents/doc_xxx/download
 ```
 
 后端会按当前用户回查文档库，补齐可信的文件名、MIME、大小、来源和 tokenSize。前端传入的附件展示字段不会被当作事实源。
+
+指定历史技能调用时，`metadata.selectedSkillId` 触发 `EXPLICIT_SKILL` 路由。后端会用文档库中的
+`providerDocument` 可信元数据组装老 Agent 所需的 `sceneParam.docList`，前端不要在 metadata 里直接传
+`docList`：
+
+```json
+{
+  "commandId": "cmd_legacy_skill_001",
+  "sessionId": "session_xxx",
+  "message": "请基于附件出具税务意见",
+  "attachments": [
+    {
+      "documentId": "doc_legacy_xxx"
+    }
+  ],
+  "metadata": {
+    "selectedSkillId": "skill_tax_opinion",
+    "legacyAgent": {
+      "isThink": 1,
+      "platform": "PC",
+      "queryType": "normalQa",
+      "streamFlag": "stream",
+      "supMsg": ""
+    }
+  }
+}
+```
+
+显式技能路由不会读取或创建 RuntimeBinding，也不会调用用例库/意图服务。它只用于前端明确选择历史技能的兼容场景；如果附件不是 `legacy-agent` provider 上传的文档，后端会拒绝本轮 run，要求前端先按 legacy provider 重新上传。
 
 ## 前端联调最小示例
 

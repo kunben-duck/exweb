@@ -8,6 +8,9 @@ import com.huawei.finance.front.one.application.facade.DocumentFacade;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
+import com.huawei.finance.front.one.application.integration.agent.LegacySkillAgentClient;
+import com.huawei.finance.front.one.application.integration.agent.LegacySkillAgentRequest;
+import com.huawei.finance.front.one.application.integration.agent.LegacySkillCancelRequest;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
 import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorCache;
@@ -113,6 +116,7 @@ class FinanceEXChatServiceTest {
                         return Mono.empty();
                     }
                 }, limiter),
+                legacySkillExecutor(documentFacade(), limiter),
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(runtime, limiter),
                 documentFacade(),
@@ -145,6 +149,76 @@ class FinanceEXChatServiceTest {
                 .containsExactly("TOOL", "ANSWER");
         assertThat(assistant.parts()).extracting(ChatMessagePart::contentText)
                 .containsExactly("search: 查询报销流程", "最终\nMarkdown **正文**");
+    }
+
+    @Test
+    void selectedSkillIdRoutesToLegacySkillWithoutRuntimeBinding() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        NeverCancelRunCache runCache = new NeverCancelRunCache();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        IdGenerator ids = new FixedIdGenerator();
+        PermissionChecker permissionChecker = new PermissionChecker();
+        ChatReadCursorApplicationService readCursorService = readCursorService(sessions);
+        WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
+                new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
+        LocalChatRunExecutionRegistry executionRegistry = new LocalChatRunExecutionRegistry();
+        ChatRunLeaseApplicationService leaseService = new ChatRunLeaseApplicationService(
+                new InMemoryExecutionRepository(),
+                (ApplicationInstanceIdProvider) () -> "instance-test",
+                new com.huawei.finance.front.one.application.config.ChatRunOperationalProperties(),
+                ids,
+                executionRegistry
+        );
+        DocumentFacade documents = documentFacade();
+        LegacySkillExecutor legacySkillExecutor = new LegacySkillExecutor(new LegacySkillAgentClient() {
+            @Override public Flux<ChatEvent> query(LegacySkillAgentRequest request) {
+                return Flux.just(MessageDeltaEvent.of(request.runId(), request.sessionId(), "legacy answer"));
+            }
+            @Override public Mono<Void> cancel(LegacySkillCancelRequest request) { return Mono.empty(); }
+        }, documents, limiter);
+
+        FinanceEXChatService service = new FinanceEXChatService(
+                new SessionApplicationService(sessions, messages, ids, permissionChecker),
+                new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
+                new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
+                runtimeRouteService(),
+                new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
+                    @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
+                        return Flux.empty();
+                    }
+                    @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
+                        return Mono.empty();
+                    }
+                }, limiter),
+                legacySkillExecutor,
+                new SystemResponseExecutor(),
+                new AgentRuntimeExecutor(noopRuntime(), limiter),
+                documents,
+                new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
+                        readCursorService, permissionChecker, sessions,
+                        new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
+                new ChatRunApplicationService(runs, runCache, events, readCursorService, permissionChecker, sessions),
+                leaseService,
+                new ChatDeltaCoalescer(new com.huawei.finance.front.one.application.config.ChatStreamProperties()),
+                executionRegistry,
+                new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
+                ids
+        );
+
+        StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
+                        null, null, "web", "hello", List.of(), Map.of("selectedSkillId", "skill-tax"))))
+                .expectNextMatches(event -> "run.started".equals(event.type()))
+                .expectNextMatches(event -> "message.delta".equals(event.type()))
+                .expectNextMatches(event -> "run.completed".equals(event.type()))
+                .verifyComplete();
+
+        ChatRun run = runs.runs.values().iterator().next();
+        assertThat(run.routeType()).isEqualTo("EXPLICIT_SKILL");
+        assertThat(run.agentCode()).isEqualTo("skill-tax");
+        assertThat(run.runtimeProvider()).isNull();
     }
 
     @Test
@@ -190,6 +264,7 @@ class FinanceEXChatServiceTest {
                         return Mono.empty();
                     }
                 }, limiter),
+                legacySkillExecutor(documentFacade(), limiter),
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(mismatchedRuntime, limiter),
                 documentFacade(),
@@ -253,6 +328,7 @@ class FinanceEXChatServiceTest {
                         return Mono.empty();
                     }
                 }, limiter),
+                legacySkillExecutor(documentFacade(), limiter),
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(noopRuntime(), limiter),
                 documentFacade(),
@@ -309,9 +385,18 @@ class FinanceEXChatServiceTest {
             @Override public Mono<UploadedDocument> update(UserContext user, String documentId, DocumentUpdateCommand command) { return Mono.empty(); }
             @Override public Mono<UploadedDocument> delete(UserContext user, String documentId) { return Mono.empty(); }
             @Override public Mono<com.huawei.finance.front.one.domain.document.DocumentDownload> prepareDownload(UserContext user, String documentId) { return Mono.empty(); }
+            @Override public Mono<UploadedDocument> prepareAccess(UserContext user, String documentId) { return Mono.empty(); }
             @Override public Mono<StoredObjectContent> download(UserContext user, String documentId) { return Mono.empty(); }
             @Override public List<AttachmentRef> resolveAttachmentsForUser(UserContext user, List<AttachmentRef> attachments) { return List.of(); }
+            @Override public List<UploadedDocument> resolveDocumentsForUser(UserContext user, List<AttachmentRef> attachments) { return List.of(); }
         };
+    }
+
+    private LegacySkillExecutor legacySkillExecutor(DocumentFacade documentFacade, WorkloadConcurrencyLimiter limiter) {
+        return new LegacySkillExecutor(new LegacySkillAgentClient() {
+            @Override public Flux<ChatEvent> query(LegacySkillAgentRequest request) { return Flux.empty(); }
+            @Override public Mono<Void> cancel(LegacySkillCancelRequest request) { return Mono.empty(); }
+        }, documentFacade, limiter);
     }
 
     private AgentRuntime noopRuntime() {

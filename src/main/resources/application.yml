@@ -227,3 +227,56 @@ financeex:
       socket-timeout-ms: ${FINANCEEX_HUAWEI_S3_SOCKET_TIMEOUT_MS:30000}
   document:
     max-upload-size-bytes: ${FINANCEEX_DOCUMENT_MAX_UPLOAD_SIZE_BYTES:52428800}
+  documents:
+    providers:
+      # 前端统一调用 /api/v1/ex/documents；不传 targetProvider 时使用 default-storage。
+      default-provider: ${FINANCEEX_DOCUMENT_DEFAULT_PROVIDER:default-storage}
+      entries:
+        default-storage:
+          type: object-storage
+          enabled: true
+          source: LOCAL_UPLOAD
+        legacy-agent:
+          type: http
+          enabled: ${FINANCEEX_LEGACY_AGENT_DOCUMENT_PROVIDER_ENABLED:false}
+          source: LEGACY_AGENT_UPLOAD
+          base-url: ${FINANCEEX_LEGACY_AGENT_BASE_URL:}
+          timeout: ${FINANCEEX_LEGACY_AGENT_DOCUMENT_TIMEOUT:30s}
+          upload:
+            enabled: ${FINANCEEX_LEGACY_AGENT_UPLOAD_ENABLED:true}
+            path: ${FINANCEEX_LEGACY_AGENT_UPLOAD_PATH:/api/upload}
+            method: POST
+            content-type: multipart
+            file-field: ${FINANCEEX_LEGACY_AGENT_UPLOAD_FILE_FIELD:file}
+            extra-form-fields:
+              skillId: "${skillId}"
+          download:
+            enabled: ${FINANCEEX_LEGACY_AGENT_DOWNLOAD_ENABLED:false}
+            path: ${FINANCEEX_LEGACY_AGENT_DOWNLOAD_PATH:}
+            method: GET
+          status:
+            enabled: ${FINANCEEX_LEGACY_AGENT_DOCUMENT_STATUS_ENABLED:false}
+            path: ${FINANCEEX_LEGACY_AGENT_DOCUMENT_STATUS_PATH:}
+            method: GET
+          response-mapping:
+            data-array-path: ${FINANCEEX_LEGACY_AGENT_UPLOAD_DATA_ARRAY_PATH:data}
+            document-id-field: ${FINANCEEX_LEGACY_AGENT_UPLOAD_DOCUMENT_ID_FIELD:docid}
+            document-name-field: ${FINANCEEX_LEGACY_AGENT_UPLOAD_DOCUMENT_NAME_FIELD:docname}
+            document-size-field: ${FINANCEEX_LEGACY_AGENT_UPLOAD_DOCUMENT_SIZE_FIELD:docsize}
+            metadata-fields:
+              - levelCode
+              - serverName
+              - version
+  legacy-skill:
+    # 仅用于前端显式选择 selectedSkillId 的历史技能兼容路径；默认关闭。
+    enabled: ${FINANCEEX_LEGACY_SKILL_ENABLED:false}
+    base-url: ${FINANCEEX_LEGACY_SKILL_BASE_URL:${FINANCEEX_LEGACY_AGENT_BASE_URL:}}
+    chat-path: ${FINANCEEX_LEGACY_SKILL_CHAT_PATH:/api/chat}
+    stop-path: ${FINANCEEX_LEGACY_SKILL_STOP_PATH:}
+    timeout: ${FINANCEEX_LEGACY_SKILL_TIMEOUT:120s}
+    allowed-skill-ids: ${FINANCEEX_LEGACY_SKILL_ALLOWED_IDS:}
+    default-platform: ${FINANCEEX_LEGACY_SKILL_DEFAULT_PLATFORM:PC}
+    default-query-type: ${FINANCEEX_LEGACY_SKILL_DEFAULT_QUERY_TYPE:normalQa}
+    default-stream-flag: ${FINANCEEX_LEGACY_SKILL_DEFAULT_STREAM_FLAG:stream}
+    default-is-think: ${FINANCEEX_LEGACY_SKILL_DEFAULT_IS_THINK:1}
+    max-attachments: ${FINANCEEX_LEGACY_SKILL_MAX_ATTACHMENTS:10}

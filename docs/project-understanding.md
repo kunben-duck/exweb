@@ -196,18 +196,20 @@ FinanceEXChatService#executeRun(...)
 5. `IdGenerator#newId("run", ...)` 生成 runId。
 6. `MemoryApplicationService#loadForRun(...)` 按配置加载可选记忆。
 7. `SessionApplicationService#prepareRunMessage(...)` 写入或定位本轮 user message。
-8. 查询或创建 RuntimeBinding。
-9. `RouteSignalApplicationService#routeInitial(...)` 调用可选用例库和意图服务。
-10. `ChatRunApplicationService#createRunning(...)` 创建业务 run。
-11. `ChatRunLeaseApplicationService#startRun(...)` 创建 execution lease。
-12. 根据 `RouteType` 调用 SubAgent、SystemResponse 或 AgentRuntime。
-13. 外层补齐 `run.started` 和 `run.completed`。
-14. 进入 `persistAndPublishRunEvents(...)`。
+8. 先检查 `metadata.selectedSkillId`；存在时进入 `EXPLICIT_SKILL` 路由，不读取 RuntimeBinding。
+9. 未显式指定技能时查询或创建 RuntimeBinding。
+10. `RouteSignalApplicationService#routeInitial(...)` 调用可选用例库和意图服务。
+11. `ChatRunApplicationService#createRunning(...)` 创建业务 run。
+12. `ChatRunLeaseApplicationService#startRun(...)` 创建 execution lease。
+13. 根据 `RouteType` 调用 LegacySkill、SubAgent、SystemResponse 或 AgentRuntime。
+14. 外层补齐 `run.started` 和 `run.completed`。
+15. 进入 `persistAndPublishRunEvents(...)`。
 
 关键分支：
 
 ```text
 RouteType.SUB_AGENT        -> SubAgentExecutor#execute(...)
+RouteType.EXPLICIT_SKILL   -> LegacySkillExecutor#execute(...)
 RouteType.SYSTEM_RESPONSE  -> SystemResponseExecutor#execute(...)
 RouteType.AGENT_RUNTIME    -> AgentRuntimeExecutor#execute(...)
 ```
@@ -215,6 +217,7 @@ RouteType.AGENT_RUNTIME    -> AgentRuntimeExecutor#execute(...)
 重点排查：
 
 - 新问题没有进入 Relay：查看 `RouteSignalApplicationService#routeInitial(...)` 返回的 `RouteTarget`。
+- 指定技能没有进入老 Agent：查看 `FinanceEXChatService#selectedSkillId(...)`、`LegacySkillExecutor#execute(...)` 和 `ConfiguredLegacySkillAgentClient#query(...)`。
 - 多轮没有续接 Runtime：查看 `RuntimeBindingApplicationService#findActive(...)` 是否命中当前 `leafMessageId`。
 - 同一会话连续发两条报错：查看 `ChatRunApplicationService#rejectIfActiveRunExists(...)` 和 `ChatRunApplicationService#createRunning(...)`。
 - user message 已写入但 run 没创建：异常可能发生在 `prepareRunMessage(...)` 之后、`createRunning(...)` 之前，需要看日志和事务边界。
@@ -954,7 +957,7 @@ cancelActive(...)
 | 实例挂掉 run 不结束 | `ChatRunLeaseApplicationService#heartbeatActiveRuns(...)`、`ChatRunWatchdogScheduler`、`ChatRunRecoveryOrchestrator` |
 | 跨电脑续接缺内容 | `stream-status`、run 级事件恢复 `afterSeq`、`fin_ex_chat_event_t` |
 | assistant 历史消息没保存 | `persistAndPublishRunEvents(...)` 处理 `run.completed` 的分支、`SessionApplicationService#saveAssistantMessage(...)` |
-| 文档附件没有进 Runtime | `DocumentFacade#resolveAttachmentsForUser(...)`、`SessionApplicationService#saveAttachments(...)`、`AgentRuntimeRequest.attachments` |
+| 文档附件没有进 Runtime 或指定技能 | `DocumentFacade#resolveAttachmentsForUser(...)`、`LegacySkillChatRequestMapper#docList(...)`、`SessionApplicationService#saveAttachments(...)`、`AgentRuntimeRequest.attachments` |
 
 ## 18. 推荐调试顺序
 

@@ -4,6 +4,7 @@ import com.huawei.finance.front.one.application.integration.memory.ChatMessageRe
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
+import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -104,6 +105,11 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
     }
 
     @Override
+    public List<ChatMessage> findAllBySession(String tenantId, String userId, String sessionId) {
+        return databaseStore.findAllBySession(tenantId, userId, sessionId);
+    }
+
+    @Override
     public Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId) {
         return databaseStore.findByOwnerAndId(tenantId, userId, messageId);
     }
@@ -130,8 +136,19 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
     }
 
     @Override
+    public ChatMessagePart savePart(ChatMessagePart part) {
+        return databaseStore.savePart(part);
+    }
+
+    @Override
     public List<ChatMessageAttachment> findAttachments(String tenantId, String userId, String messageId) {
         return databaseStore.findAttachments(tenantId, userId, messageId);
+    }
+
+    @Override
+    public List<ChatMessagePart> findPartsByMessageIds(String tenantId, String userId, String sessionId,
+                                                       List<String> messageIds) {
+        return databaseStore.findPartsByMessageIds(tenantId, userId, sessionId, messageIds);
     }
 
     private boolean canUseDatabase() {

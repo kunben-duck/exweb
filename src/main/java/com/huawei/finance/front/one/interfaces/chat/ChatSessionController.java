@@ -8,6 +8,7 @@ import com.huawei.finance.front.one.application.service.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessageFeedback;
+import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
@@ -17,6 +18,9 @@ import com.huawei.finance.front.one.interfaces.chat.dto.BatchDeleteChatSessionsR
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatSessionRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessageDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessagePageDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessagePartDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessageTreeDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessageTreeNodeDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionPageDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionStateDto;
@@ -25,8 +29,12 @@ import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatBranchRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.MessageFeedbackDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.SelectChatPathRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.UpdateChatSessionRequest;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -160,6 +168,26 @@ public class ChatSessionController {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> toMessagePageDto(user, sessionId,
                         facade.listMessages(user, sessionId, leafMessageId, cursor, limit)))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * 查询当前会话完整可见消息树。
+     *
+     * <p>该接口借鉴 GPT 的 mapping/current leaf 结构，但只返回 user/assistant 业务可见消息；
+     * hidden system、raw log 和下游工具原始节点不会暴露给前端。</p>
+     *
+     * @param sessionId 会话标识；服务端会校验会话归属且排除已删除会话。
+     * @return 当前会话完整消息树。
+     */
+    @GetMapping("/{sessionId}/messages/tree")
+    public Mono<ChatMessageTreeDto> messageTree(@PathVariable("sessionId") String sessionId) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> {
+                    ChatSession session = facade.getSession(user, sessionId);
+                    List<ChatMessage> messages = facade.listMessageTree(user, sessionId);
+                    return toMessageTreeDto(user, session, messages);
+                })
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -339,13 +367,64 @@ public class ChatSessionController {
                 message.sourceMessageId(),
                 message.editedFromMessageId(),
                 message.regeneratedFromMessageId(),
+                toPartDtos(message.parts()),
                 feedback == null ? null : toFeedbackDto(feedback),
                 message.createdAt()
         );
     }
 
+    private List<ChatMessagePartDto> toPartDtos(List<ChatMessagePart> parts) {
+        if (parts == null || parts.isEmpty()) {
+            return List.of();
+        }
+        return parts.stream()
+                .map(part -> new ChatMessagePartDto(
+                        part.id(),
+                        part.messageId(),
+                        part.runId(),
+                        part.partType(),
+                        part.sourceType(),
+                        part.contentText(),
+                        part.title(),
+                        part.status(),
+                        part.channel(),
+                        part.displayHint(),
+                        part.visible(),
+                        part.payload(),
+                        part.partOrder(),
+                        part.createdAt()
+                ))
+                .toList();
+    }
+
     private ChatMessagePageDto toMessagePageDto(UserContext user, String sessionId, ChatMessagePage page) {
         return new ChatMessagePageDto(toMessageDtos(user, sessionId, page.items()), page.nextCursor());
+    }
+
+    private ChatMessageTreeDto toMessageTreeDto(UserContext user, ChatSession session, List<ChatMessage> messages) {
+        List<ChatMessage> orderedMessages = messages == null ? List.of() : messages.stream()
+                .sorted(Comparator.comparing(ChatMessage::nodeOrder).thenComparing(ChatMessage::createdAt))
+                .toList();
+        Set<String> messageIds = orderedMessages.stream().map(ChatMessage::id).collect(Collectors.toSet());
+        Map<String, ChatMessageFeedback> feedbacks = feedbackService.findActiveByMessages(user, session.id(), orderedMessages);
+        Map<String, List<String>> childrenByParent = orderedMessages.stream()
+                .filter(message -> message.parentMessageId() != null && messageIds.contains(message.parentMessageId()))
+                .collect(Collectors.groupingBy(ChatMessage::parentMessageId, LinkedHashMap::new,
+                        Collectors.mapping(ChatMessage::id, Collectors.toList())));
+        Map<String, ChatMessageTreeNodeDto> mapping = new LinkedHashMap<>();
+        for (ChatMessage message : orderedMessages) {
+            mapping.put(message.id(), new ChatMessageTreeNodeDto(
+                    message.id(),
+                    toMessageDto(message, feedbacks.get(message.id())),
+                    message.parentMessageId(),
+                    childrenByParent.getOrDefault(message.id(), List.of())
+            ));
+        }
+        List<String> rootMessageIds = orderedMessages.stream()
+                .filter(message -> message.parentMessageId() == null || !messageIds.contains(message.parentMessageId()))
+                .map(ChatMessage::id)
+                .toList();
+        return new ChatMessageTreeDto(session.id(), session.currentLeafMessageId(), rootMessageIds, mapping);
     }
 
     private List<ChatMessageDto> toMessageDtos(UserContext user, String sessionId, List<ChatMessage> messages) {

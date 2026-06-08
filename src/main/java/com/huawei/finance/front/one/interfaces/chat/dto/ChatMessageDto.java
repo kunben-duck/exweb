@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.interfaces.chat.dto;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * 前端历史消息 DTO。
@@ -24,6 +25,7 @@ import java.time.Instant;
  * @param sourceMessageId 分支快照来源消息。
  * @param editedFromMessageId 编辑历史 user 消息的来源。
  * @param regeneratedFromMessageId 重新生成 assistant 消息的来源。
+ * @param parts assistant 消息结构化过程信息；user 消息通常为空。
  * @param feedback 当前用户对该 assistant 消息的有效反馈；user 消息或已取消反馈时为空。
  * @param createdAt 消息创建时间。
  */
@@ -44,6 +46,7 @@ public record ChatMessageDto(
         String sourceMessageId,
         String editedFromMessageId,
         String regeneratedFromMessageId,
+        List<ChatMessagePartDto> parts,
         MessageFeedbackDto feedback,
         Instant createdAt
 ) {}

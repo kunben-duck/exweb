@@ -1,8 +1,12 @@
 package com.huawei.finance.front.one.infrastructure.memory;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
+import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
@@ -13,16 +17,21 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Repository;
 
 /**
- * 基于 MyBatis 的短期记忆数据库存储。
+ * 基于 MyBatis 的聊天消息数据库存储。
  *
- * <p>PostgreSQL 是短期记忆最终事实源；Redis 过期、失效或重启后，都从这里恢复会话消息。</p>
+ * <p>openGauss 是完整历史消息和消息 parts 的事实源；Redis 只缓存近期上下文，
+ * 失效或重启后都从这里恢复会话消息。</p>
  */
 @Repository
 public class MyBatisChatMessageStore {
-    private final ChatMessageMapper mapper;
+    private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
-    public MyBatisChatMessageStore(ChatMessageMapper mapper) {
+    private final ChatMessageMapper mapper;
+    private final ObjectMapper objectMapper;
+
+    public MyBatisChatMessageStore(ChatMessageMapper mapper, ObjectMapper objectMapper) {
         this.mapper = mapper;
+        this.objectMapper = objectMapper;
     }
 
     public ChatMessage save(ChatMessage message) {
@@ -48,7 +57,33 @@ public class MyBatisChatMessageStore {
                 message.metadataJson(),
                 message.createdAt()
         );
+        if (message.parts() != null) {
+            message.parts().forEach(this::savePart);
+        }
         return message;
+    }
+
+    public ChatMessagePart savePart(ChatMessagePart part) {
+        mapper.insertPart(
+                part.id(),
+                part.tenantId(),
+                part.userId(),
+                part.sessionId(),
+                part.messageId(),
+                part.runId(),
+                part.partType(),
+                part.sourceType(),
+                part.contentText(),
+                part.title(),
+                part.status(),
+                part.channel(),
+                part.displayHint(),
+                part.visible(),
+                toJson(part.payload()),
+                part.partOrder(),
+                part.createdAt()
+        );
+        return part;
     }
 
     public ChatMessageAttachment saveAttachment(ChatMessageAttachment attachment) {
@@ -110,20 +145,33 @@ public class MyBatisChatMessageStore {
         List<ChatMessage> pageItemsAscending = pageItems.stream()
                 .sorted(Comparator.comparing(ChatMessage::treeDepth).thenComparing(ChatMessage::nodeOrder))
                 .toList();
-        return new ChatMessagePage(pageItemsAscending, null);
+        return new ChatMessagePage(attachParts(tenantId, userId, sessionId, pageItemsAscending), null);
+    }
+
+    public List<ChatMessage> findAllBySession(String tenantId, String userId, String sessionId) {
+        if (tenantId == null || userId == null || sessionId == null) {
+            return List.of();
+        }
+        List<ChatMessage> messages = mapper.findAllBySession(tenantId, userId, sessionId).stream()
+                .map(this::toDomain)
+                .toList();
+        return attachParts(tenantId, userId, sessionId, messages);
     }
 
     public Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId) {
         if (messageId == null || messageId.isBlank()) {
             return Optional.empty();
         }
-        return mapper.findByOwnerAndId(tenantId, userId, messageId).map(this::toDomain);
+        return mapper.findByOwnerAndId(tenantId, userId, messageId)
+                .map(this::toDomain)
+                .map(message -> attachParts(tenantId, userId, message.sessionId(), List.of(message)).getFirst());
     }
 
     public List<ChatMessage> findSiblings(String tenantId, String userId, String sessionId, String parentMessageId, String role) {
-        return mapper.findSiblings(tenantId, userId, sessionId, parentMessageId, role).stream()
+        List<ChatMessage> messages = mapper.findSiblings(tenantId, userId, sessionId, parentMessageId, role).stream()
                 .map(this::toDomain)
                 .toList();
+        return attachParts(tenantId, userId, sessionId, messages);
     }
 
     public int countSiblings(String tenantId, String userId, String sessionId, String parentMessageId, String role) {
@@ -131,14 +179,45 @@ public class MyBatisChatMessageStore {
     }
 
     public List<ChatMessage> findPathToMessage(String tenantId, String userId, String sessionId, String leafMessageId) {
-        return mapper.findActivePath(tenantId, userId, sessionId, leafMessageId).stream()
+        List<ChatMessage> messages = mapper.findActivePath(tenantId, userId, sessionId, leafMessageId).stream()
                 .map(this::toDomain)
                 .toList();
+        return attachParts(tenantId, userId, sessionId, messages);
     }
 
     public List<ChatMessageAttachment> findAttachments(String tenantId, String userId, String messageId) {
         return mapper.findAttachmentsByMessage(tenantId, userId, messageId).stream()
                 .map(this::toAttachmentDomain)
+                .toList();
+    }
+
+    public List<ChatMessagePart> findPartsByMessageIds(String tenantId, String userId, String sessionId,
+                                                       List<String> messageIds) {
+        if (tenantId == null || userId == null || sessionId == null || messageIds == null || messageIds.isEmpty()) {
+            return List.of();
+        }
+        List<String> normalizedIds = messageIds.stream()
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+        if (normalizedIds.isEmpty()) {
+            return List.of();
+        }
+        return mapper.findPartsByMessages(tenantId, userId, sessionId, normalizedIds).stream()
+                .map(this::toPartDomain)
+                .toList();
+    }
+
+    private List<ChatMessage> attachParts(String tenantId, String userId, String sessionId, List<ChatMessage> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return List.of();
+        }
+        List<String> messageIds = messages.stream().map(ChatMessage::id).distinct().toList();
+        Map<String, List<ChatMessagePart>> partsByMessage = findPartsByMessageIds(tenantId, userId, sessionId, messageIds)
+                .stream()
+                .collect(Collectors.groupingBy(ChatMessagePart::messageId));
+        return messages.stream()
+                .map(message -> message.withParts(partsByMessage.getOrDefault(message.id(), List.of())))
                 .toList();
     }
 
@@ -184,4 +263,44 @@ public class MyBatisChatMessageStore {
         );
     }
 
+    private ChatMessagePart toPartDomain(ChatMessagePartRow row) {
+        return new ChatMessagePart(
+                row.getId(),
+                row.getTenantId(),
+                row.getUserId(),
+                row.getSessionId(),
+                row.getMessageId(),
+                row.getRunId(),
+                row.getPartType(),
+                row.getSourceType(),
+                row.getContentText(),
+                row.getTitle(),
+                row.getStatus(),
+                row.getChannel(),
+                row.getDisplayHint(),
+                row.getVisible(),
+                fromJson(row.getPayloadJson()),
+                row.getPartOrder(),
+                row.getCreatedAt() == null ? Instant.EPOCH : row.getCreatedAt()
+        );
+    }
+
+    private String toJson(Map<String, Object> payload) {
+        try {
+            return objectMapper.writeValueAsString(payload == null ? Map.of() : payload);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalArgumentException("序列化消息 part payload 失败", ex);
+        }
+    }
+
+    private Map<String, Object> fromJson(String payloadJson) {
+        if (payloadJson == null || payloadJson.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(payloadJson, MAP_TYPE);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalArgumentException("反序列化消息 part payload 失败", ex);
+        }
+    }
 }

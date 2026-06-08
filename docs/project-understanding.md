@@ -36,9 +36,17 @@ rg -n "methodName|className" src/main/java/com/huawei/finance/front/one
 
 用途：
 
-- 保存 `run.started`、`message.delta`、`message.completed`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.event`、`run.completed`、`run.failed`、`run.cancelled` 等 ChatService 标准事件。
+- 保存 `run.started`、`message.delta`、`message.snapshot`、`message.completed`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.event`、`run.completed`、`run.failed`、`run.cancelled` 等 ChatService 标准事件。
 - WebSocket 实时输出和 Event Resume 断点恢复都基于这张表的事件。
 - `seq` 是 openGauss 生成的恢复游标。
+
+表：`fin_ex_chat_message_part_t`
+
+用途：
+
+- 保存 run 正常完成后的 assistant 过程信息，例如进度、思考、工具调用、agent 调用和最终 ANSWER 快照。
+- `ChatMessageDto.parts` 会返回这些 part，并提供 `title/status/channel/displayHint/visible`，前端不需要解析 Relay 私有 payload。
+- `ANSWER` part 默认隐藏，正文仍由 `ChatMessageDto.content` 展示。
 
 关键代码：
 
@@ -328,15 +336,15 @@ RelayStreamHttpRuntimeAdapter#applyForwardedCookie(...)
 - 使用 `bodyToFlux(String.class)` 接收下游响应。
 - 在 normalizer 之前调用 `RuntimeRawStreamLogService#capture(...)` 发布 raw chunk 到 MQ 旁路。
 - 通过 `RelayRuntimeResponseNormalizer` 把 plain text、JSON chunk、SSE-like `data:` chunk 转成标准 ChatEvent。
-- Relay `type=agent` 的 `content/context` 默认转成 `message.delta`；`steam-complete/stream-complete/[DONE]` 转成 `message.completed`。
+- Relay `type=agent,is_streaming=true` 的 `content/context` 默认转成 `message.delta`；`type=agent,is_streaming=false` 转成 `message.snapshot`；`steam-complete/stream-complete/[DONE]` 转成 `message.completed`。
 - Relay 过程帧按语义转成 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool`；未知 JSON 才转成 `runtime.event`。
-- 只有 `message.delta` 代表 assistant 正文并参与历史消息拼接。
+- `message.delta` 代表 assistant 正文增量并参与草稿拼接；`message.snapshot` 代表下游最终回答快照，会覆盖草稿成为历史正文。
 - 流结束时补 `MessageCompletedEvent`。
 
 重点排查：
 
 - Relay 返回了数据但前端没看到：先确认这里是否产生了 `MessageDeltaEvent` 或 `RuntimeEvent`。
-- Relay 响应格式不是纯字符串片段：先看 raw log，再看 `RelayRuntimeResponseNormalizer` 是否把正文转为 `message.delta`，或把非正文扩展帧转为对应 `runtime.*`。不要把 Relay 原始 JSON 作为 ChatService 顶层事件透传。
+- Relay 响应格式不是纯字符串片段：先看 raw log，再看 `RelayRuntimeResponseNormalizer` 是否把正文转为 `message.delta/message.snapshot`，或把非正文扩展帧转为对应 `runtime.*`。不要把 Relay 原始 JSON 作为 ChatService 顶层事件透传。
 - 第三方 Cookie 泄漏风险：确认只有可信 Relay adapter 调用 `applyForwardedCookie(...)`。
 
 ### 6.4 Relay 出站 WebSocket adapter
@@ -389,7 +397,7 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
 
 2. `ChatDeltaCoalescer#coalesce(...)`
    - 只合并连续 `message.delta`，降低逐 token 写库、Redis publish 和 WebSocket 投递放大。
-   - 遇到 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.event`、`run.started`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled` 会先 flush，再原样输出边界事件。
+   - 遇到 `message.snapshot`、`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.event`、`run.started`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled` 会先 flush，再原样输出边界事件。
 
 3. `ChatRunApplicationService#shouldAcceptEvent(...)`
    - 先看 Redis cancel flag。
@@ -402,9 +410,10 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
    - 同一条 SQL 校验 run/session/tenant/user 归属、run 状态、execution owner 和 fencing token。
    - 条件不满足时抛出写入拒绝，后台流停止，不发布该事件。
 
-5. `appendAssistantDelta(...)`
-   - 累积 `message.delta` 内容；`runtime.*` 只作为运行态扩展事件落库和推送，不进入 assistant 历史消息。
-   - 注意：只有 guarded insert 成功后的 delta 才会进入 assistant buffer，不写未持久化的迟到 token。
+5. `AssistantAssembly`
+   - 累积 `message.delta` 草稿；收到 `message.snapshot` 时记录最终快照并覆盖草稿作为历史正文。
+   - `runtime.*` 只作为运行态扩展事件落库和推送，不进入 assistant 正文；run 正常完成后会保存为 `fin_ex_chat_message_part_t`，供历史消息回显思考、工具、进度和 agent 调用过程，并补齐稳定展示语义。
+   - 注意：只有 guarded insert 成功后的事件才会进入 assembly，不写未持久化的迟到 token。
 
 6. run 完成前保存完整 assistant message
    - 当事件类型是 `run.completed` 且 assistant buffer 非空时：

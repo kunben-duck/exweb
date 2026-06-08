@@ -83,6 +83,7 @@ function bindUi() {
   bindClick("createSessionBtn", createSession);
   bindClick("loadStateBtn", () => requireSession(sessionId => loadSessionState(sessionId, true)));
   bindClick("loadMessagesBtn", () => requireSession(loadMessagesOnly));
+  bindClick("loadTreeBtn", () => requireSession(loadMessageTree));
   bindClick("renameSessionBtn", renameSession);
   bindClick("archiveSessionBtn", () => mutateSession("archive"));
   bindClick("restoreSessionBtn", () => mutateSession("restore"));
@@ -313,6 +314,29 @@ async function loadMessagesOnly(sessionId) {
   log(`messages loaded session=${sessionId} count=${(page.items || []).length}`);
 }
 
+async function loadMessageTree(sessionId) {
+  const tree = await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}/messages/tree`);
+  const mapping = tree.mapping || {};
+  const summary = {
+    sessionId: tree.sessionId,
+    currentLeafMessageId: tree.currentLeafMessageId,
+    rootMessageIds: tree.rootMessageIds || [],
+    nodeCount: Object.keys(mapping).length,
+    nodes: Object.fromEntries(Object.entries(mapping).map(([id, node]) => [
+      id,
+      {
+        role: node.message?.role,
+        parentMessageId: node.parentMessageId,
+        children: node.children || [],
+        siblingIndex: node.message?.siblingIndex,
+        partCount: node.message?.parts?.length || 0
+      }
+    ]))
+  };
+  $("messageTreeView").textContent = JSON.stringify(summary, null, 2);
+  log(`tree loaded session=${sessionId} nodes=${summary.nodeCount}`);
+}
+
 function renderHistory(messages) {
   $("messages").replaceChildren();
   state.assistantNodeByRun.clear();
@@ -331,7 +355,8 @@ function renderHistory(messages) {
       originType: message.originType,
       locked: message.locked,
       editedFromMessageId: message.editedFromMessageId,
-      regeneratedFromMessageId: message.regeneratedFromMessageId
+      regeneratedFromMessageId: message.regeneratedFromMessageId,
+      parts: message.parts || []
     }, message);
   }
   scrollMessages();
@@ -712,11 +737,16 @@ function handleChatEvent(event, source = "event", options = {}) {
     appendAssistantDelta(event.runId, event.payload?.delta || event.payload?.content || "");
     return true;
   }
+  if (event.type === "message.snapshot") {
+    replaceAssistantSnapshot(event.runId, event.payload?.content || "");
+    return true;
+  }
   if (event.type === "message.completed") {
     return true;
   }
-  if (event.type === "runtime.event") {
-    appendMessage("system", runtimeEventLabel(event.payload || {}));
+  if (event.type?.startsWith("runtime.")) {
+    flushPendingDeltas(event.runId);
+    appendMessage("system", runtimeEventLabel(event.type, event.payload || {}));
     return true;
   }
   if (terminalRunEvents.has(event.type)) {
@@ -730,10 +760,10 @@ function handleChatEvent(event, source = "event", options = {}) {
   return true;
 }
 
-function runtimeEventLabel(payload) {
+function runtimeEventLabel(eventType, payload) {
   const sourceType = payload.sourceType || "unknown";
-  const text = payload.text || payload.sourcePayload?.message || payload.sourcePayload?.project_home || "";
-  return text ? `runtime.event ${sourceType}: ${text}` : `runtime.event ${sourceType}`;
+  const text = payload.text || payload.task || payload.inputPreview || payload.projectHome || payload.sourcePayload?.message || payload.sourcePayload?.project_home || "";
+  return text ? `${eventType} ${sourceType}: ${text}` : `${eventType} ${sourceType}`;
 }
 
 function logChatEvent(event, source) {
@@ -783,17 +813,35 @@ function appendAssistantText(runId, delta) {
   scrollMessages();
 }
 
+function replaceAssistantSnapshot(runId, content) {
+  state.pendingDeltaByRun.delete(runId);
+  let node = state.assistantNodeByRun.get(runId);
+  if (!node) {
+    node = appendMessage("assistant", "", { runId });
+    state.assistantNodeByRun.set(runId, node);
+  }
+  node.querySelector(".message-content").textContent = content;
+  scrollMessages();
+}
+
 function appendMessage(role, content, dataset = {}, message = null) {
   const node = document.createElement("div");
   node.className = `message ${role || "system"}`;
   for (const [key, value] of Object.entries(dataset)) {
-    if (value !== undefined && value !== null) node.dataset[key] = value;
+    if (value !== undefined && value !== null && typeof value !== "object") {
+      node.dataset[key] = value;
+    }
   }
 
   const contentNode = document.createElement("div");
   contentNode.className = "message-content";
   contentNode.textContent = content;
   node.appendChild(contentNode);
+
+  const messageParts = message?.parts || dataset.parts || [];
+  if (role === "assistant" && messageParts.length) {
+    node.appendChild(messagePartsNode(messageParts));
+  }
 
   if (dataset.messageId) {
     node.appendChild(messageMeta(dataset));
@@ -819,6 +867,26 @@ function appendMessage(role, content, dataset = {}, message = null) {
   $("messages").appendChild(node);
   scrollMessages();
   return node;
+}
+
+function messagePartsNode(parts) {
+  const visibleParts = parts.filter(part => part.visible !== false);
+  const renderParts = visibleParts.length ? visibleParts : parts;
+  const details = document.createElement("details");
+  details.className = "message-parts";
+  const summary = document.createElement("summary");
+  summary.textContent = `过程 ${visibleParts.length}/${parts.length}`;
+  details.appendChild(summary);
+  for (const part of renderParts) {
+    const row = document.createElement("div");
+    row.className = `message-part ${part.displayHint || "collapsible"}`;
+    const label = [part.partOrder, part.title || part.partType, part.status, part.channel, part.sourceType]
+      .filter(value => value !== undefined && value !== null && value !== "")
+      .join(" · ");
+    row.textContent = part.contentText ? `${label}: ${part.contentText}` : label;
+    details.appendChild(row);
+  }
+  return details;
 }
 
 function messageMeta(dataset) {

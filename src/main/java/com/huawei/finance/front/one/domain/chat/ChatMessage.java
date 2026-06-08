@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.domain.chat;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * 聊天消息树节点。
@@ -27,6 +28,7 @@ import java.time.Instant;
  * @param editedFromMessageId 编辑历史 user 消息时，新 user 消息来源。
  * @param regeneratedFromMessageId 重新生成 assistant 回复时，新 assistant 消息来源。
  * @param metadataJson 消息扩展元数据 JSON。
+ * @param parts assistant 消息的结构化过程信息；user 消息通常为空。
  * @param createdAt 消息创建时间。
  */
 public record ChatMessage(
@@ -49,8 +51,19 @@ public record ChatMessage(
         String editedFromMessageId,
         String regeneratedFromMessageId,
         String metadataJson,
+        List<ChatMessagePart> parts,
         Instant createdAt
 ) {
+    public ChatMessage(String id, String tenantId, String userId, String sessionId, String parentMessageId,
+                       Long nodeOrder, Integer treeDepth, Integer siblingIndex, String role, String content,
+                       Integer tokenCount, String runId, String originType, boolean locked, String sourceSessionId,
+                       String sourceMessageId, String editedFromMessageId, String regeneratedFromMessageId,
+                       String metadataJson, Instant createdAt) {
+        this(id, tenantId, userId, sessionId, parentMessageId, nodeOrder, treeDepth, siblingIndex, role, content,
+                tokenCount, runId, originType, locked, sourceSessionId, sourceMessageId, editedFromMessageId,
+                regeneratedFromMessageId, metadataJson, List.of(), createdAt);
+    }
+
     /**
      * 兼容普通线性消息写入的便捷构造器；新代码应显式传入消息树字段。
      */
@@ -64,6 +77,7 @@ public record ChatMessage(
         originType = originType == null || originType.isBlank() ? "NORMAL" : originType;
         treeDepth = treeDepth == null ? 0 : treeDepth;
         siblingIndex = siblingIndex == null ? 0 : siblingIndex;
+        parts = parts == null ? List.of() : List.copyOf(parts);
     }
 
     /**
@@ -71,5 +85,17 @@ public record ChatMessage(
      */
     public boolean branchSnapshot() {
         return locked || "BRANCH_SNAPSHOT".equals(originType);
+    }
+
+    /**
+     * 返回携带指定 message parts 的消息副本。
+     *
+     * @param nextParts 新的结构化过程信息。
+     * @return 带 parts 的不可变消息副本。
+     */
+    public ChatMessage withParts(List<ChatMessagePart> nextParts) {
+        return new ChatMessage(id, tenantId, userId, sessionId, parentMessageId, nodeOrder, treeDepth,
+                siblingIndex, role, content, tokenCount, runId, originType, locked, sourceSessionId,
+                sourceMessageId, editedFromMessageId, regeneratedFromMessageId, metadataJson, nextParts, createdAt);
     }
 }

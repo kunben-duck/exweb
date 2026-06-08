@@ -31,6 +31,7 @@ export FINANCEEX_DEV_USERNAME=developer
 | 会话详情 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}` | 查询单个会话元数据 |
 | 会话状态 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/state?messageLimit=50` | 切换会话时聚合会话、历史消息和流状态 |
 | 历史消息 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50` | 查询当前 active path 或指定 leaf path |
+| 消息树视图 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages/tree` | 查询完整可见消息树 mapping，用于复杂版本树或调试 |
 | 消息版本 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants` | 查询同父节点候选版本 |
 | 切换路径 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/path` | 将会话当前 leaf 切换到指定消息 |
 | 新建分支 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/branches` | 从某条消息创建只读历史快照分支 |
@@ -137,7 +138,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 场景 | 调用顺序 | 关键关联字段 | 前端状态处理 |
 | --- | --- | --- | --- |
 | 首次打开应用 | `GET /chat/sessions?limit=20` -> 用户选择会话后 `GET /chat/sessions/{sessionId}/state` -> 可选连接 WS `connect` | `sessionId`、`currentLeafMessageId`、`streamStatus.activeRunId` | 左侧列表使用 `firstAssistantAnswer` 做摘要；主面板用 state.messages 渲染历史 |
-| 新会话首轮提问 | 可选 `POST /chat/sessions`，或直接 `POST /chat/runs` 不传 `sessionId` -> WS `subscribe(streamTopicId, firstSeq)` | `runId`、`sessionId`、`firstSeq`、`streamTopicId` | 乐观渲染 user 消息；收到 `message.delta` 创建/追加 assistant 草稿；终态后关闭 loading |
+| 新会话首轮提问 | 可选 `POST /chat/sessions`，或直接 `POST /chat/runs` 不传 `sessionId` -> WS `subscribe(streamTopicId, firstSeq)` | `runId`、`sessionId`、`firstSeq`、`streamTopicId` | 乐观渲染 user 消息；收到 `message.delta` 创建/追加 assistant 草稿，收到 `message.snapshot` 替换草稿；终态后关闭 loading |
 | 已有会话继续提问 | `GET /state` 确认无 active run -> `POST /chat/runs(sessionId, runMode=NEXT)` -> WS subscribe | `sessionId`、`parentMessageId` 可选、`streamTopicId` | 同一 session 存在 active run 时不要再次发送；遇到 409 使用 stop 或等待终态 |
 | 当前页短暂断线重连 | 本地保存 `lastSeq` -> 重建 WS -> `subscribe(topicId, afterSeq=lastSeq)`；如果收到 `RECOVER_REQUIRED`，先 Event Resume 再重新 subscribe | `topicId`、`lastSeq`、`sequence` | 以 `sessionId + sequence` 去重；不要重复追加同一 delta |
 | 新页签/新浏览器/跨电脑打开 active run | `GET /state` 或 `stream-status` -> 若有 `activeRunId`，调用 `GET /runs/{activeRunId}/events/resume?afterSeq=activeRunFirstSeq-1` | `activeRunId`、`activeRunFirstSeq`、`activeStreamTopicId` | run 级 Event Resume 会补发并 tail 到终态；同一个 run 恢复期间不要再 WebSocket subscribe |
@@ -160,6 +161,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `GET /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto` | 只拿元数据，不返回历史和流状态 |
 | `GET /chat/sessions/{sessionId}/state` | Path：`sessionId`；Query：`messageLimit` | `session`、`messages.items[]`、`messages.nextCursor`、`streamStatus` | 页面切换会话首选接口；根据 `streamStatus.activeRunId` 决定是否恢复 |
 | `GET /chat/sessions/{sessionId}/messages` | Path：`sessionId`；Query：`leafMessageId` 可选，`cursor` 保留，`limit` | `ChatMessagePageDto.items[]`、`nextCursor` | 用 `messageId` 做反馈、版本、分支和重新生成 |
+| `GET /chat/sessions/{sessionId}/messages/tree` | Path：`sessionId` | `ChatMessageTreeDto`：`sessionId`、`currentLeafMessageId`、`rootMessageIds[]`、`mapping` | 读取完整可见消息树；不返回 hidden system、raw log 或下游工具原始节点 |
 | `GET /chat/sessions/{sessionId}/messages/{messageId}/variants` | Path：`sessionId`、`messageId` | `ChatMessageDto[]` | 用候选消息的 `messageId` 调 `path` 切换版本 |
 | `POST /chat/sessions/{sessionId}/path` | Path：`sessionId`；Body：`leafMessageId` | `ChatSessionDto` | 切换成功后重新查 `messages` 渲染 active path |
 | `POST /chat/sessions/{sessionId}/branches` | Path：源 `sessionId`；Body：`sourceMessageId`、`title` 可选 | 新分支 `ChatSessionDto` | 使用返回的新 `sessionId` 进入分支会话 |
@@ -193,6 +195,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `GET /api/v1/ex/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/state` | 切换会话或跨电脑打开会话时首选。 | Path：`sessionId`；Query：`messageLimit` 可选，默认 50。 | `ChatSessionStateDto`：`session`、`messages`、`streamStatus`。 | `messages` 返回当前 active path；该接口不会返回正在输出的半截 assistant 历史消息。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 保留。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 不传 `leafMessageId` 时返回当前 active path；传入时返回 root 到该 leaf 的路径。 |
+| `GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` | 复杂前端读取完整消息树，或联调排查版本关系。 | Path：`sessionId`。 | `ChatMessageTreeDto`。 | 只读接口；不改变当前路径，不创建 run；mapping 只包含业务可见 user/assistant 消息。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants` | 切换编辑/重新生成后的候选版本。 | Path：`sessionId`、`messageId`。 | `ChatMessageDto[]`。 | 返回同父节点、同角色的 sibling 版本。 |
 | `POST /api/v1/ex/chat/sessions/{sessionId}/path` | 用户选择某个历史版本作为当前路径。 | Path：`sessionId`；JSON body：`leafMessageId`。 | `ChatSessionDto`。 | 只切换 `currentLeafMessageId`，不创建 run。 |
 | `POST /api/v1/ex/chat/sessions/{sessionId}/branches` | 从某条消息新建只读历史快照分支。 | Path：来源 `sessionId`；JSON body：`sourceMessageId` 必填，`title` 可选。 | 新分支 `ChatSessionDto`。 | 复制 root 到来源消息路径；快照消息 locked，不可编辑/重新生成。 |
@@ -304,8 +307,46 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `sourceSessionId` / `sourceMessageId` | 分支快照来源 |
 | `editedFromMessageId` | 编辑历史 user 消息时的新版本来源 |
 | `regeneratedFromMessageId` | 重新生成 assistant 消息时的新版本来源 |
+| `parts` | assistant 消息结构化过程信息，包括思考、工具、进度、agent 调用和 ANSWER 快照；user 消息通常为空数组 |
 | `feedback` | 当前用户对该 assistant 消息的有效反馈；user 消息或已取消反馈为 `null` |
 | `createdAt` | 消息创建时间 |
+
+### `ChatMessagePartDto`
+
+| 字段 | 含义 |
+| --- | --- |
+| `partId` | 消息 part ID。 |
+| `messageId` | 所属 assistant 消息 ID。 |
+| `runId` | 产生该 part 的 run ID。 |
+| `partType` | `ANSWER`、`PROGRESS`、`METADATA`、`AGENT`、`THINKING`、`TOOL`、`RUNTIME_EVENT`。 |
+| `sourceType` | 下游原始事件类型，例如 `agent`、`relay-progress`、`tool_call_streaming`。 |
+| `contentText` | 可展示文本摘要，例如进度文本、工具输入预览、最终回答正文。 |
+| `title` | 前端展示标题，例如“运行进度”“思考过程”“工具调用”。 |
+| `status` | 展示状态：`INFO`、`STARTED`、`STREAMING`、`COMPLETED`、`FAILED`、`UNKNOWN`。 |
+| `channel` | 展示频道：`answer`、`progress`、`metadata`、`agent`、`thinking`、`tool`、`runtime`。 |
+| `displayHint` | 展示建议：`inline`、`collapsible`、`hidden`、`debug`。 |
+| `visible` | 是否默认展示；`ANSWER` 和 debug runtime event 默认不展示。 |
+| `payload` | 结构化展示载荷，已脱敏和标准化。 |
+| `partOrder` | 同一 assistant 消息内的展示顺序。 |
+| `createdAt` | part 创建时间。 |
+
+### `ChatMessageTreeDto`
+
+| 字段 | 含义 |
+| --- | --- |
+| `sessionId` | 会话 ID。 |
+| `currentLeafMessageId` | 当前 active path 叶子消息 ID。 |
+| `rootMessageIds` | 根消息 ID 列表，通常是会话第一条 user 消息。 |
+| `mapping` | `messageId -> ChatMessageTreeNodeDto` 映射。 |
+
+`ChatMessageTreeNodeDto` 字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `id` | 节点 ID，与 `message.messageId` 一致。 |
+| `message` | 当前节点的 `ChatMessageDto`，assistant 消息仍包含 `parts` 与 `feedback`。 |
+| `parentMessageId` | 父消息 ID；根节点为空。 |
+| `children` | 子消息 ID 列表，按会话内创建顺序排列。 |
 
 ### `ChatEventDto`
 
@@ -314,8 +355,8 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `runId` | 事件所属 run |
 | `sessionId` | 事件所属会话；前端必须按该字段分发到对应会话面板 |
 | `sequence` | openGauss 生成的事件恢复游标；WebSocket offset 和 Event Resume `afterSeq` 都使用它 |
-| `type` | `run.started`、`message.delta`、`message.completed`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.event`、`run.completed`、`run.failed`、`run.cancelled`、`run.recovered` |
-| `payload` | 事件载荷；`message.delta` 使用 `payload.delta` 拼接文本 |
+| `type` | `run.started`、`message.delta`、`message.snapshot`、`message.completed`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.event`、`run.completed`、`run.failed`、`run.cancelled`、`run.recovered` |
+| `payload` | 事件载荷；`message.delta` 使用 `payload.delta` 追加文本，`message.snapshot` 使用 `payload.content` 替换当前草稿 |
 
 ### `ChatAttachmentDto`
 
@@ -677,6 +718,19 @@ curl -X DELETE http://localhost:8080/api/v1/ex/chat/sessions \
 
 ## 消息版本与分支
 
+### 完整消息树视图
+
+普通聊天页推荐继续使用 `GET /sessions/{sessionId}/messages`，它只返回当前 active path。
+如果前端需要像 ChatGPT 一样展示完整版本树、调试 parent/children 关系，使用只读 tree 接口：
+
+```bash
+curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages/tree"
+```
+
+响应中的 `mapping` 只包含当前用户当前会话内可见的 user/assistant 消息；不会返回 hidden system、
+raw log 或下游工具原始节点。每个 assistant 节点仍带 `parts`，前端过程面板应优先使用
+`part.title/status/channel/displayHint/visible`，而不是解析 Relay 私有 payload。
+
 ### 查询候选版本
 
 当用户编辑历史问题或重新生成回答后，同一个父节点下会出现多个 sibling。前端推荐像 ChatGPT 一样在消息下方展示
@@ -966,6 +1020,7 @@ ws.send(JSON.stringify({
 | --- | --- | --- |
 | `run.started` | run 已创建 | 可记录 run 状态为 running |
 | `message.delta` | assistant 文本增量 | 追加 `payload.delta` 到当前 assistant 消息 |
+| `message.snapshot` | assistant 最终回答快照，例如 Relay `type=agent,is_streaming=false` | 使用 `payload.content` 替换当前 assistant 草稿，不要追加 |
 | `runtime.progress` | 下游 Runtime 进度文本，例如 Relay `relay-progress` | 展示到运行进度区域，不要拼入 assistant 正文 |
 | `runtime.metadata` | 下游 Runtime 元数据，例如 `project_home`、`available-modes` | 更新运行态面板、工作区链接或模式列表，不要拼入 assistant 正文 |
 | `runtime.agent` | 下游 agent 调用生命周期，例如 `agent-call` | 展示当前 agent、模型和任务信息 |
@@ -982,6 +1037,7 @@ ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON c
 | 事件类型 | 标准 payload |
 | --- | --- |
 | `message.delta` | `{ "delta": "增量文本", "sourceType": "agent", "runtimeSessionId": "可选", "agentSessionId": "可选", "agentName": "可选", "timestamp": "可选" }` |
+| `message.snapshot` | `{ "content": "完整最终回答", "sourceType": "agent", "runtimeSessionId": "可选", "agentSessionId": "可选", "agentName": "可选", "timestamp": "可选" }` |
 | `runtime.progress` | `{ "source": "relay", "sourceType": "relay-progress", "text": "进度文本", "runtimeSessionId": "可选", "timestamp": "可选" }` |
 | `runtime.metadata` | `{ "source": "relay", "sourceType": "project_home", "metadataType": "project_home", "projectHome": "/tmp/xxx", "timestamp": "可选" }` 或 `{ "metadataType": "available_modes", "modes": [...] }` |
 | `runtime.agent` | `{ "source": "relay", "sourceType": "agent-call", "agentName": "delegate-agent", "started": true, "task": "任务描述", "modelName": "可选", "runtimeSessionId": "可选", "timestamp": "可选" }` |
@@ -993,7 +1049,8 @@ ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON c
 
 Relay 映射规则：
 
-- `type=agent` 且存在 `content/context` 时，默认映射为 `message.delta`，这是 assistant 正文唯一来源。
+- `type=agent,is_streaming=true` 且存在 `content/context` 时，默认映射为 `message.delta`，前端追加 `payload.delta`。
+- `type=agent,is_streaming=false` 且存在 `content/context` 时，映射为 `message.snapshot`，这是更权威的最终回答快照；前端用 `payload.content` 替换当前草稿。
 - 纯文本 `steam-complete`、`stream-complete`、`stream_complete`、`stream.complete`、`stream-completed`、`[DONE]` 映射为 `message.completed`。
 - `relay-progress`、`project_home`、`available-modes/availbale-modes`、`agent-call`、`thinking-operation-start/thinkink-operation-start`、`thinking-operation-end/thinking_operation-end`、`tool_call_streaming` 映射为对应 `runtime.*`。
 - 未识别合法 JSON 映射为 `runtime.event`。`sourcePayload` 会脱敏和限长，不能作为稳定字段依赖。
@@ -1001,7 +1058,9 @@ Relay 映射规则：
 
 服务端可能把下游逐 token 输出合并为几十毫秒级 `message.delta` 文本片段。前端只需要按 `seq`
 顺序追加 `payload.delta`，不要假设一个 delta 等于一个 token，也不要依赖任何 Relay 私有字段。
-`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.event` 不参与 delta 合并，也不参与 assistant 历史消息拼接；Event Resume 会和 WebSocket 一样恢复这些事件。
+`message.snapshot`、`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.event`
+不参与 delta 合并。历史消息中，最终正文保存在 `ChatMessageDto.content`；过程信息通过
+`ChatMessageDto.parts` 返回，刷新会话后也可以回显思考、工具、进度和 agent 调用过程。
 
 ### ACK
 
@@ -1333,6 +1392,9 @@ ws.onmessage = event => {
 
   if (chatEvent.type === "message.delta") {
     appendAssistantDelta(chatEvent.payload.delta || "");
+  }
+  if (chatEvent.type === "message.snapshot") {
+    replaceAssistantDraft(chatEvent.payload.content || "");
   }
   if (chatEvent.type.startsWith("runtime.")) {
     renderRuntimeEvent(chatEvent.payload);

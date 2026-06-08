@@ -132,7 +132,8 @@ public class ChatRunApplicationService {
         if (event == null || event.runId() == null || event.runId().isBlank()) {
             return null;
         }
-        if ("message.delta".equals(event.type()) || "message.completed".equals(event.type())) {
+        if ("message.delta".equals(event.type()) || "message.snapshot".equals(event.type())
+                || "message.completed".equals(event.type())) {
             /*
              * 非终态消息事件的可靠顺序事实已经在 fin_ex_chat_event_t。高并发输出时不再逐事件
              * 更新 fin_ex_chat_run_t.last_seq，避免 run 表成为热点；stream-status.latestSeq 会直接

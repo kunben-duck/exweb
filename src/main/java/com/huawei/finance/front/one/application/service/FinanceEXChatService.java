@@ -11,6 +11,7 @@ import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.domain.chat.ChatMessagePartDraft;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.finance.front.one.domain.chat.ChatRunStartResult;
@@ -240,7 +241,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
             IntentDecision selectedIntent = intent;
             RouteTarget selectedRoute = route;
             AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>(binding);
-            StringBuilder assistant = new StringBuilder();
+            AssistantAssembly assistant = new AssistantAssembly();
             ChatRun run = chatRunService.createRunning(runId, user, session.id(), selectedRoute, bindingRef.get(),
                     normalized.metadata(), messagePlan.runMode(), messagePlan.parentMessageId(), messagePlan.userMessage().id());
             RunExecutionClaim executionClaim;
@@ -302,7 +303,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private Flux<ChatEvent> persistAndPublishRunEvents(Flux<ChatEvent> events, UserContext user, ChatSession session,
                                                        ChatCommand normalized, ChatRunMessagePlan messagePlan,
                                                        AtomicReference<RuntimeBinding> bindingRef,
-                                                       StringBuilder assistant, String runId,
+                                                       AssistantAssembly assistant, String runId,
                                                        RunExecutionClaim executionClaim) {
         AtomicBoolean writeRejected = new AtomicBoolean(false);
         return chatDeltaCoalescer.coalesce(events)
@@ -343,16 +344,16 @@ public class FinanceEXChatService implements FinanceChatFacade {
                          * 避免 stop/watchdog 后的迟到 delta 进入用户可见历史。
                          */
                         ChatEvent stored = chatStreamService.appendWithExecutionGuard(event, executionClaim);
-                        appendAssistantDelta(assistant, stored);
+                        assistant.observe(stored);
                         /*
                          * run.completed 是前端、Event Resume 和跨设备续接共同认可的“本轮回答已经闭合”信号。
                          * 因此在发布该终态事件之前，必须先把完整 assistant 消息写入历史消息树，
                          * 避免客户端收到 completed 后立即查询历史时只能看到 user 节点。
                          */
-                        if ("run.completed".equals(stored.type()) && !assistant.isEmpty()) {
+                        if ("run.completed".equals(stored.type()) && assistant.hasContent()) {
                             ChatMessage savedAssistant = sessionService.saveAssistantMessage(user.tenantId(), user.userId(),
-                                    session, assistant.toString(), runId, messagePlan.userMessage().id(),
-                                    messagePlan.regeneratedFromMessageId());
+                                    session, assistant.finalContent(), runId, messagePlan.userMessage().id(),
+                                    messagePlan.regeneratedFromMessageId(), assistant.parts());
                             chatRunService.bindAssistantMessage(runId, savedAssistant.id());
                             bindingRef.set(runtimeBindingService.moveToLeaf(bindingRef.get(), savedAssistant.id()));
                         }
@@ -455,16 +456,6 @@ public class FinanceEXChatService implements FinanceChatFacade {
         return base;
     }
 
-    private void appendAssistantDelta(StringBuilder assistant, ChatEvent event) {
-        if (!"message.delta".equals(event.type()) || event.payload() == null) {
-            return;
-        }
-        Object delta = event.payload().get("delta");
-        if (delta != null) {
-            assistant.append(delta);
-        }
-    }
-
     private ErrorEvent runtimeErrorEvent(String runId, String sessionId, Throwable ex) {
         String code = isTimeout(ex) ? "RUNTIME_STREAM_TIMEOUT" : "RUN_ERROR";
         String message = ex == null || ex.getMessage() == null || ex.getMessage().isBlank()
@@ -485,5 +476,109 @@ public class FinanceEXChatService implements FinanceChatFacade {
             current = current.getCause();
         }
         return false;
+    }
+
+    /**
+     * 单次 run 内的 assistant 汇总状态。
+     *
+     * <p>流式 delta 负责实时草稿；下游最终 {@code message.snapshot} 是更权威的最终正文。
+     * runtime.* 事件只保存为历史过程 parts，不混入 assistant 正文。</p>
+     */
+    private static final class AssistantAssembly {
+        private final StringBuilder deltaDraft = new StringBuilder();
+        private final java.util.List<ChatMessagePartDraft> parts = new java.util.ArrayList<>();
+        private String snapshot;
+
+        private void observe(ChatEvent event) {
+            if (event == null || event.payload() == null) {
+                return;
+            }
+            if ("message.delta".equals(event.type())) {
+                Object delta = event.payload().get("delta");
+                if (delta != null) {
+                    deltaDraft.append(delta);
+                }
+                return;
+            }
+            if ("message.snapshot".equals(event.type())) {
+                Object content = event.payload().get("content");
+                if (content != null) {
+                    snapshot = String.valueOf(content);
+                }
+                return;
+            }
+            if (event.type() != null && event.type().startsWith("runtime.")) {
+                parts.add(runtimePart(event));
+            }
+        }
+
+        private boolean hasContent() {
+            return snapshot != null && !snapshot.isEmpty() || !deltaDraft.isEmpty();
+        }
+
+        private String finalContent() {
+            return snapshot != null ? snapshot : deltaDraft.toString();
+        }
+
+        private java.util.List<ChatMessagePartDraft> parts() {
+            return java.util.List.copyOf(parts);
+        }
+
+        private static ChatMessagePartDraft runtimePart(ChatEvent event) {
+            Map<String, Object> payload = event.payload() == null ? Map.of() : event.payload();
+            String sourceType = stringValue(payload.get("sourceType"));
+            return new ChatMessagePartDraft(partType(event.type()), sourceType, contentText(event.type(), payload), payload);
+        }
+
+        private static String partType(String eventType) {
+            return switch (eventType) {
+                case "runtime.progress" -> "PROGRESS";
+                case "runtime.metadata" -> "METADATA";
+                case "runtime.agent" -> "AGENT";
+                case "runtime.thinking" -> "THINKING";
+                case "runtime.tool" -> "TOOL";
+                default -> "RUNTIME_EVENT";
+            };
+        }
+
+        private static String contentText(String eventType, Map<String, Object> payload) {
+            if ("runtime.progress".equals(eventType)) {
+                return firstText(payload, "text", "message");
+            }
+            if ("runtime.agent".equals(eventType)) {
+                return firstText(payload, "task", "agentName");
+            }
+            if ("runtime.tool".equals(eventType)) {
+                String toolName = firstText(payload, "toolName");
+                String preview = firstText(payload, "inputPreview");
+                if (toolName != null && preview != null) {
+                    return toolName + ": " + preview;
+                }
+                return toolName == null ? preview : toolName;
+            }
+            if ("runtime.thinking".equals(eventType)) {
+                String status = firstText(payload, "status");
+                String operationId = firstText(payload, "operationId");
+                return operationId == null ? status : status + ": " + operationId;
+            }
+            if ("runtime.metadata".equals(eventType)) {
+                return firstText(payload, "projectHome", "metadataType");
+            }
+            return firstText(payload, "text", "displayText", "sourceType");
+        }
+
+        private static String firstText(Map<String, Object> payload, String... keys) {
+            for (String key : keys) {
+                String value = stringValue(payload.get(key));
+                if (value != null && !value.isBlank()) {
+                    return value;
+                }
+            }
+            return null;
+        }
+
+        private static String stringValue(Object value) {
+            return value == null ? null : String.valueOf(value);
+        }
     }
 }

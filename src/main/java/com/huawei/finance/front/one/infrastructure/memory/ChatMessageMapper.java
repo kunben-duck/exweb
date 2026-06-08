@@ -7,6 +7,7 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Result;
+import org.apache.ibatis.annotations.ResultMap;
 import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
 
@@ -53,6 +54,38 @@ public interface ChatMessageMapper {
             @Param("editedFromMessageId") String editedFromMessageId,
             @Param("regeneratedFromMessageId") String regeneratedFromMessageId,
             @Param("metadataJson") String metadataJson,
+            @Param("createdAt") Instant createdAt
+    );
+
+    @Insert("""
+            INSERT INTO fin_ex_chat_message_part_t(
+                id, tenant_id, user_id, session_id, message_id, run_id, part_type,
+                source_type, content_text, title, status, channel, display_hint, visible,
+                payload_json, part_order, created_at
+            )
+            VALUES (
+                #{id}, #{tenantId}, #{userId}, #{sessionId}, #{messageId}, #{runId}, #{partType},
+                #{sourceType}, #{contentText}, #{title}, #{status}, #{channel}, #{displayHint}, #{visible},
+                #{payloadJson}, #{partOrder}, #{createdAt}
+            )
+            """)
+    void insertPart(
+            @Param("id") String id,
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionId") String sessionId,
+            @Param("messageId") String messageId,
+            @Param("runId") String runId,
+            @Param("partType") String partType,
+            @Param("sourceType") String sourceType,
+            @Param("contentText") String contentText,
+            @Param("title") String title,
+            @Param("status") String status,
+            @Param("channel") String channel,
+            @Param("displayHint") String displayHint,
+            @Param("visible") Boolean visible,
+            @Param("payloadJson") String payloadJson,
+            @Param("partOrder") Integer partOrder,
             @Param("createdAt") Instant createdAt
     );
 
@@ -171,6 +204,22 @@ public interface ChatMessageMapper {
             @Param("userId") String userId,
             @Param("sessionId") String sessionId,
             @Param("leafMessageId") String leafMessageId
+    );
+
+    @Select("""
+            SELECT *
+            FROM fin_ex_chat_message_t
+            WHERE tenant_id = #{tenantId}
+              AND user_id = #{userId}
+              AND session_id = #{sessionId}
+              AND role IN ('user', 'assistant')
+            ORDER BY node_order ASC, created_at ASC, id ASC
+            """)
+    @ResultMap("chatMessagePathResultMap")
+    List<ChatMessageRow> findAllBySession(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionId") String sessionId
     );
 
     @Select("""
@@ -349,5 +398,44 @@ public interface ChatMessageMapper {
             @Param("tenantId") String tenantId,
             @Param("userId") String userId,
             @Param("messageId") String messageId
+    );
+
+    @Select("""
+            <script>
+            SELECT *
+            FROM fin_ex_chat_message_part_t
+            WHERE tenant_id = #{tenantId}
+              AND user_id = #{userId}
+              AND session_id = #{sessionId}
+              AND message_id IN
+              <foreach collection="messageIds" item="messageId" open="(" separator="," close=")">
+                  #{messageId}
+              </foreach>
+            ORDER BY message_id ASC, part_order ASC, created_at ASC, id ASC
+            </script>
+            """)
+    @Results(id = "chatMessagePartResultMap", value = {
+            @Result(column = "tenant_id", property = "tenantId"),
+            @Result(column = "user_id", property = "userId"),
+            @Result(column = "session_id", property = "sessionId"),
+            @Result(column = "message_id", property = "messageId"),
+            @Result(column = "run_id", property = "runId"),
+            @Result(column = "part_type", property = "partType"),
+            @Result(column = "source_type", property = "sourceType"),
+            @Result(column = "content_text", property = "contentText"),
+            @Result(column = "title", property = "title"),
+            @Result(column = "status", property = "status"),
+            @Result(column = "channel", property = "channel"),
+            @Result(column = "display_hint", property = "displayHint"),
+            @Result(column = "visible", property = "visible"),
+            @Result(column = "payload_json", property = "payloadJson"),
+            @Result(column = "part_order", property = "partOrder"),
+            @Result(column = "created_at", property = "createdAt")
+    })
+    List<ChatMessagePartRow> findPartsByMessages(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionId") String sessionId,
+            @Param("messageIds") List<String> messageIds
     );
 }

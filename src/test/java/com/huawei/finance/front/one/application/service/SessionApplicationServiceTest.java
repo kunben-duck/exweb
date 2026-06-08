@@ -13,6 +13,8 @@ import com.huawei.finance.front.one.domain.chat.ActiveRunExistsException;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
+import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
+import com.huawei.finance.front.one.domain.chat.ChatMessagePartDraft;
 import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
@@ -181,6 +183,56 @@ class SessionApplicationServiceTest {
 
         assertThat(firstAnswers).containsEntry("session1", "第一条回答");
         assertThat(firstAnswers).doesNotContainKey("session2");
+    }
+
+    @Test
+    void assistantMessagePartsHaveStableDisplaySemantics() {
+        TestFixture fixture = fixture();
+        ChatRunMessagePlan plan = fixture.service.prepareRunMessage(user(), command("hello", ChatRunMode.NEXT,
+                null, null, null), fixture.session, "run1", List.of());
+
+        ChatMessage assistant = fixture.service.saveAssistantMessage("tenant1", "user1", fixture.session,
+                "最终回答", "run1", plan.userMessage().id(), null,
+                List.of(
+                        new ChatMessagePartDraft("PROGRESS", "relay-progress", "处理中", Map.of("text", "处理中")),
+                        new ChatMessagePartDraft("TOOL", "tool_call_streaming", "search: 查询流程",
+                                Map.of("toolName", "search", "inputPreview", "查询流程")),
+                        new ChatMessagePartDraft("THINKING", "thinking-operation-end", "ENDED: op1",
+                                Map.of("status", "ENDED", "operationId", "op1"))
+                ));
+
+        assertThat(assistant.parts()).extracting(ChatMessagePart::partType)
+                .containsExactly("PROGRESS", "TOOL", "THINKING", "ANSWER");
+        assertThat(assistant.parts()).extracting(ChatMessagePart::channel)
+                .containsExactly("progress", "tool", "thinking", "answer");
+        assertThat(assistant.parts()).extracting(ChatMessagePart::status)
+                .containsExactly("STREAMING", "STREAMING", "COMPLETED", "COMPLETED");
+        assertThat(assistant.parts()).extracting(ChatMessagePart::displayHint)
+                .containsExactly("inline", "collapsible", "collapsible", "hidden");
+        assertThat(assistant.parts()).extracting(ChatMessagePart::visible)
+                .containsExactly(true, true, true, false);
+    }
+
+    @Test
+    void listMessageTreeReturnsAllVisibleNodesIncludingSiblingVersions() {
+        TestFixture fixture = fixture();
+        MessagePair original = completeTurn(fixture, "原始问题", "原始回答", "run1");
+        fixture.service.prepareRunMessage(user(),
+                command("编辑后的问题", ChatRunMode.EDIT_USER, null, original.user().id(), null),
+                fixture.session, "run2", List.of());
+        ChatRunMessagePlan regeneratePlan = fixture.service.prepareRunMessage(user(),
+                command(null, ChatRunMode.REGENERATE_ASSISTANT, null, null, original.assistant().id()),
+                fixture.session, "run3", List.of());
+        fixture.service.saveAssistantMessage("tenant1", "user1", fixture.session,
+                "重新生成回答", "run3", regeneratePlan.userMessage().id(), regeneratePlan.regeneratedFromMessageId());
+
+        List<ChatMessage> tree = fixture.service.listMessageTree(user(), fixture.session.id());
+
+        assertThat(tree).extracting(ChatMessage::content)
+                .contains("原始问题", "原始回答", "编辑后的问题", "重新生成回答");
+        assertThat(tree.stream().filter(message -> original.user().id().equals(message.parentMessageId())))
+                .extracting(ChatMessage::content)
+                .containsExactly("原始回答", "重新生成回答");
     }
 
     @Test

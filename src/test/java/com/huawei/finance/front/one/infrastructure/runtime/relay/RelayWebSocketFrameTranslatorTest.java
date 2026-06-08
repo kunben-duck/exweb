@@ -70,6 +70,31 @@ class RelayWebSocketFrameTranslatorTest {
     }
 
     @Test
+    void relayAgentFinalSnapshotDoesNotBecomeDelta() {
+        List<ChatEvent> events = translator.translate("run1", "session1",
+                "{\"type\":\"agent\",\"agent_name\":\"delegate_agent\",\"is_streaming\":false,"
+                        + "\"content\":\"最终回答\\n保留格式\",\"session_id\":\"relay-session-1\"}");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("message.snapshot");
+        assertThat(events.getFirst().payload())
+                .containsEntry("content", "最终回答\n保留格式")
+                .containsEntry("sourceType", "agent")
+                .containsEntry("agentName", "delegate_agent")
+                .containsEntry("runtimeSessionId", "relay-session-1");
+    }
+
+    @Test
+    void relayAgentFinalSnapshotSupportsStreamingAliases() {
+        List<ChatEvent> events = translator.translate("run1", "session1",
+                "{\"type\":\"agent\",\"isStreaming\":\"false\",\"context\":\"  Markdown **正文**  \"}");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("message.snapshot");
+        assertThat(events.getFirst().payload()).containsEntry("content", "  Markdown **正文**  ");
+    }
+
+    @Test
     void sseDoneFrameIsTranslatedToMessageCompletedEvent() {
         List<ChatEvent> events = translator.translate("run1", "session1", "data: [DONE]\n\n");
 

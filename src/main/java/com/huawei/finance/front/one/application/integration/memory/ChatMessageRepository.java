@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.application.integration.memory;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
+import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -78,6 +79,18 @@ public interface ChatMessageRepository {
     }
 
     /**
+     * 查询当前会话内完整可见消息树节点。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @return 当前用户当前会话内全部 user/assistant 完整消息，按 nodeOrder 排序。
+     */
+    default List<ChatMessage> findAllBySession(String tenantId, String userId, String sessionId) {
+        return pageMessages(tenantId, userId, sessionId, null, null, Integer.MAX_VALUE).items();
+    }
+
+    /**
      * 按归属查询单条消息。
      *
      * @param tenantId 租户标识。
@@ -117,9 +130,33 @@ public interface ChatMessageRepository {
     }
 
     /**
+     * 保存一条 assistant 历史消息结构化 part。
+     *
+     * @param part 已补齐归属字段的 message part。
+     * @return 已保存的 part。
+     */
+    default ChatMessagePart savePart(ChatMessagePart part) {
+        return part;
+    }
+
+    /**
      * 查询指定消息的附件引用。
      */
     default List<ChatMessageAttachment> findAttachments(String tenantId, String userId, String messageId) {
+        return List.of();
+    }
+
+    /**
+     * 批量查询消息结构化 parts。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param messageIds 消息 ID 列表。
+     * @return 当前用户当前会话内的 message parts。
+     */
+    default List<ChatMessagePart> findPartsByMessageIds(String tenantId, String userId, String sessionId,
+                                                        List<String> messageIds) {
         return List.of();
     }
 

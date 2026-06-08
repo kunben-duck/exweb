@@ -7,6 +7,7 @@ import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ErrorEvent;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
+import com.huawei.finance.front.one.domain.chat.MessageSnapshotEvent;
 import com.huawei.finance.front.one.domain.chat.RuntimeEvent;
 import java.time.Duration;
 import java.time.Instant;
@@ -130,5 +131,25 @@ class ChatDeltaCoalescerTest {
         assertThat(events.get(1).type()).isEqualTo("runtime.event");
         assertThat(events.get(2).payload()).containsEntry("delta", "b");
         assertThat(events.get(3).type()).isEqualTo("message.completed");
+    }
+
+    @Test
+    void snapshotFlushesBufferedDeltaAndIsNotMerged() {
+        ChatStreamProperties properties = new ChatStreamProperties();
+        properties.setDeltaCoalesceWindow(Duration.ofSeconds(5));
+        ChatDeltaCoalescer coalescer = new ChatDeltaCoalescer(properties);
+
+        List<ChatEvent> events = coalescer.coalesce(Flux.just(
+                MessageDeltaEvent.of("run1", "session1", "草稿"),
+                MessageSnapshotEvent.of("run1", "session1", "最终\n正文"),
+                MessageCompletedEvent.of("run1", "session1")
+        )).collectList().block();
+
+        assertThat(events).hasSize(3);
+        assertThat(events.get(0).type()).isEqualTo("message.delta");
+        assertThat(events.get(0).payload()).containsEntry("delta", "草稿");
+        assertThat(events.get(1).type()).isEqualTo("message.snapshot");
+        assertThat(events.get(1).payload()).containsEntry("content", "最终\n正文");
+        assertThat(events.get(2).type()).isEqualTo("message.completed");
     }
 }

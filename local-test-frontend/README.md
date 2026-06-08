@@ -51,13 +51,16 @@ Referer: http://localhost:8080/fin/ex/
 
 ## 覆盖范围
 
-- 会话：创建、分页列表、首条回答摘要展示、切换、state 聚合、历史消息分页、重命名、归档、恢复、单个/批量软删除。
+- 会话：创建、分页列表、首条回答摘要展示、切换、state 聚合、历史消息分页、GPT-like 树视图、重命名、归档、恢复、单个/批量软删除。
 - Run：创建、停止回答、stream-status 查询；重新生成通过消息树的 `REGENERATE_ASSISTANT` 操作完成。
 - WebSocket：连接、connect、subscribe、ack、跨 session / 跨 run topic 订阅。
 - 多会话隔离：同一 WebSocket 连接可以同时订阅多个 session 的 run topic；本地联调台会按事件
   `sessionId` 更新游标和日志，正式前端应按 `sessionId` 分发到对应会话面板。
-- Runtime 扩展事件：Relay 返回非正文 JSON（例如 `project_home/progress/thinking`）时会显示为
-  `runtime.event` system 行，便于确认事件已落库、推送并可通过 Event Resume 恢复。
+- Runtime 扩展事件：Relay 返回非正文 JSON（例如 `project_home/progress/thinking/tool_call_streaming`）
+  时会显示为 `runtime.metadata/progress/thinking/tool/agent/event` system 行；历史消息的 `parts`
+  会按 `title/status/channel/displayHint/visible` 展示，前端无需解析 Relay 私有 payload。
+- 最终回答快照：Relay 返回 `type=agent,is_streaming=false` 时会显示为 `message.snapshot`，
+  联调台会用 `payload.content` 替换当前 assistant 草稿，避免重复追加。
 - Event Resume：会话级事件恢复按 `afterSeq` 有限补发缺失事件；run 级事件恢复在 active run 恢复时补发并接续 live 事件到终态。
 - 文档库：上传本地文件、列表、详情、状态、预览地址、下载、改名、删除。
 - 附件：选择文档库中 `AVAILABLE` 文档作为聊天附件发送。
@@ -75,6 +78,7 @@ Referer: http://localhost:8080/fin/ex/
 | 页面功能 | 后端接口 | 说明 |
 | --- | --- | --- |
 | 新建/切换会话 | `POST /api/v1/ex/chat/sessions`、`GET /api/v1/ex/chat/sessions/{sessionId}/state` | 选择会话时同时恢复历史消息和 active run 状态 |
+| 消息树视图 | `GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` | 读取完整可见消息树 mapping/currentLeaf，用于版本树调试 |
 | 发送问题 | `POST /api/v1/ex/chat/runs` | 返回 `runId/sessionId/firstSeq/streamTopicId`，随后通过 WebSocket 订阅 |
 | 实时输出 | `WS /api/v1/ex/chat/ws` | 发送 `connect`、`subscribe`、`ack`、`unsubscribe` 控制消息 |
 | 跨页签续接 | `GET /api/v1/ex/chat/runs/{runId}/events/resume` | active run 恢复时从 `activeRunFirstSeq - 1` 补发并 tail 到终态 |

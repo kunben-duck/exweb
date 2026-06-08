@@ -79,12 +79,17 @@
         <h2>对话</h2>
         <div class="button-row">
           <button id="loadMessagesBtn" type="button">历史接口</button>
+          <button id="loadTreeBtn" type="button">树视图</button>
           <button id="resumeEventsBtn" type="button">事件恢复</button>
           <button id="restoreActiveRunBtn" type="button">恢复 active run</button>
           <button id="stopRunBtn" class="danger" type="button" disabled>停止回答</button>
         </div>
       </div>
       <div id="messages" class="messages"></div>
+      <details class="tree-debug">
+        <summary>消息树视图 / 当前路径</summary>
+        <pre id="messageTreeView" class="tree-view">尚未加载</pre>
+      </details>
       <div id="selectedDocs" class="selected-docs"></div>
       <form id="chatForm" class="composer">
         <textarea id="messageInput" rows="3" placeholder="输入消息，支持附加文档库中的 documentId"></textarea>

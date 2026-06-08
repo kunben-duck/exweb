@@ -10,6 +10,8 @@ import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
+import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
+import com.huawei.finance.front.one.domain.chat.ChatMessagePartDraft;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.finance.front.one.domain.chat.ChatRunMode;
@@ -93,6 +95,13 @@ public class SessionApplicationService implements ChatSessionFacade {
             requireMessageInSession(session, leafMessageId);
         }
         return messageRepository.pageMessages(session.tenantId(), session.userId(), session.id(), leafMessageId, cursor, limit);
+    }
+
+    @Override
+    public List<ChatMessage> listMessageTree(UserContext user, String sessionId) {
+        checkChatUser(user);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        return messageRepository.findAllBySession(session.tenantId(), session.userId(), session.id());
     }
 
     @Override
@@ -209,9 +218,24 @@ public class SessionApplicationService implements ChatSessionFacade {
      */
     public ChatMessage saveAssistantMessage(String tenantId, String userId, ChatSession session, String content,
                                             String runId, String parentMessageId, String regeneratedFromMessageId) {
+        return saveAssistantMessage(tenantId, userId, session, content, runId, parentMessageId,
+                regeneratedFromMessageId, List.of());
+    }
+
+    /**
+     * 保存完整 assistant 回复及其结构化过程 parts，并把会话 current leaf 移动到该回复。
+     *
+     * <p>parts 只在 run.completed 后写入，stop/failed 的半截过程仍仅保存在事件事实源中。</p>
+     */
+    public ChatMessage saveAssistantMessage(String tenantId, String userId, ChatSession session, String content,
+                                            String runId, String parentMessageId, String regeneratedFromMessageId,
+                                            List<ChatMessagePartDraft> partDrafts) {
         // 助手消息在事件流结束后保存完整文本，避免保存大量碎片 delta。
         String messageId = idGenerator.newId("msg", IdGenerateContext.of(tenantId, userId, session.id()));
         ChatMessage parent = parentMessageId == null ? null : requireMessageInSession(session, parentMessageId);
+        Instant now = Instant.now();
+        List<ChatMessagePart> parts = buildMessageParts(tenantId, userId, session.id(), messageId, runId, content,
+                partDrafts, now);
         ChatMessage message = new ChatMessage(
                 messageId,
                 tenantId,
@@ -232,7 +256,8 @@ public class SessionApplicationService implements ChatSessionFacade {
                 null,
                 regeneratedFromMessageId,
                 null,
-                Instant.now()
+                parts,
+                now
         );
         ChatMessage saved = messageRepository.save(message);
         sessionRepository.updateCurrentLeaf(tenantId, userId, session.id(), saved.id());
@@ -320,6 +345,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                     null,
                     null,
                     source.metadataJson(),
+                    copyMessageParts(user, branch.id(), newMessageId, source.parts(), now),
                     now
             );
             lastCopied = messageRepository.save(copy);
@@ -329,6 +355,91 @@ public class SessionApplicationService implements ChatSessionFacade {
         sessionRepository.updateCurrentLeaf(user.tenantId(), user.userId(), branch.id(), previousNewMessageId);
         return requireOwnedSession(user.tenantId(), user.userId(), branch.id(), false);
     }
+
+    private List<ChatMessagePart> buildMessageParts(String tenantId, String userId, String sessionId,
+                                                    String messageId, String runId, String content,
+                                                    List<ChatMessagePartDraft> drafts, Instant now) {
+        List<ChatMessagePart> parts = new ArrayList<>();
+        int order = 1;
+        if (drafts != null) {
+            for (ChatMessagePartDraft draft : drafts) {
+                if (draft == null || draft.partType() == null || draft.partType().isBlank()) {
+                    continue;
+                }
+                parts.add(new ChatMessagePart(
+                        idGenerator.newId("part", IdGenerateContext.of(tenantId, userId, sessionId)),
+                        tenantId,
+                        userId,
+                        sessionId,
+                        messageId,
+                        runId,
+                        draft.partType(),
+                        draft.sourceType(),
+                        draft.contentText(),
+                        draft.title(),
+                        draft.status(),
+                        draft.channel(),
+                        draft.displayHint(),
+                        draft.visible(),
+                        draft.payload(),
+                        order++,
+                        now
+                ));
+            }
+        }
+        parts.add(new ChatMessagePart(
+                idGenerator.newId("part", IdGenerateContext.of(tenantId, userId, sessionId)),
+                tenantId,
+                userId,
+                sessionId,
+                messageId,
+                runId,
+                "ANSWER",
+                "message.snapshot",
+                content,
+                null,
+                null,
+                null,
+                null,
+                null,
+                Map.of("content", content == null ? "" : content),
+                order,
+                now
+        ));
+        return List.copyOf(parts);
+    }
+
+    private List<ChatMessagePart> copyMessageParts(UserContext user, String targetSessionId, String targetMessageId,
+                                                   List<ChatMessagePart> sourceParts, Instant now) {
+        if (sourceParts == null || sourceParts.isEmpty()) {
+            return List.of();
+        }
+        List<ChatMessagePart> copies = new ArrayList<>(sourceParts.size());
+        int order = 1;
+        for (ChatMessagePart sourcePart : sourceParts) {
+            copies.add(new ChatMessagePart(
+                    idGenerator.newId("part", IdGenerateContext.of(user.tenantId(), user.userId(), targetSessionId)),
+                    user.tenantId(),
+                    user.userId(),
+                    targetSessionId,
+                    targetMessageId,
+                    sourcePart.runId(),
+                    sourcePart.partType(),
+                    sourcePart.sourceType(),
+                    sourcePart.contentText(),
+                    sourcePart.title(),
+                    sourcePart.status(),
+                    sourcePart.channel(),
+                    sourcePart.displayHint(),
+                    sourcePart.visible(),
+                    sourcePart.payload(),
+                    order++,
+                    now
+            ));
+        }
+        return List.copyOf(copies);
+    }
+
     private String shortTitle(String text) { return text == null ? "新会话" : text.substring(0, Math.min(40, text.length())); }
 
     private void checkChatUser(UserContext user) {

@@ -47,6 +47,31 @@ CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_message_owner_session_role_order
 CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_message_owner_id
     ON fin_ex_chat_message_t(tenant_id, user_id, id);
 
+CREATE TABLE IF NOT EXISTS fin_ex_chat_message_part_t (
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL,
+    user_id VARCHAR(64) NOT NULL,
+    session_id VARCHAR(64) NOT NULL,
+    message_id VARCHAR(64) NOT NULL,
+    run_id VARCHAR(64),
+    part_type VARCHAR(32) NOT NULL,
+    source_type VARCHAR(128),
+    content_text TEXT,
+    title VARCHAR(256),
+    status VARCHAR(32),
+    channel VARCHAR(32),
+    display_hint VARCHAR(32),
+    visible BOOLEAN,
+    payload_json TEXT,
+    part_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_message_part_owner_message
+    ON fin_ex_chat_message_part_t(tenant_id, user_id, session_id, message_id, part_order);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_message_part_owner_run
+    ON fin_ex_chat_message_part_t(tenant_id, user_id, run_id, part_order);
+
 CREATE TABLE IF NOT EXISTS fin_ex_chat_message_attachment_t (
     id VARCHAR(64) PRIMARY KEY,
     tenant_id VARCHAR(64) NOT NULL,
@@ -293,6 +318,25 @@ COMMENT ON COLUMN fin_ex_chat_message_t.regenerated_from_message_id IS '重新�
 COMMENT ON COLUMN fin_ex_chat_message_t.metadata_json IS '消息扩展元数据 JSON，保存前端展示或诊断扩展信息。';
 COMMENT ON COLUMN fin_ex_chat_message_t.created_at IS '消息创建时间。';
 
+COMMENT ON TABLE fin_ex_chat_message_part_t IS '聊天消息结构化过程表，保存 assistant 正文快照、思考、工具调用、进度、agent 调用等历史回显信息。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.id IS '消息 part 主键，业务生成的 partId。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.tenant_id IS '租户标识，来自服务端身份上下文。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.user_id IS '用户标识，来自服务端身份上下文。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.session_id IS 'part 所属聊天会话 ID。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.message_id IS 'part 所属 assistant 消息 ID，对应 fin_ex_chat_message_t.id。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.run_id IS '产生该 part 的 runId；分支快照 part 可继承来源 runId。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.part_type IS 'part 类型：ANSWER、PROGRESS、METADATA、AGENT、THINKING、TOOL、RUNTIME_EVENT。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.source_type IS '下游原始事件类型，例如 agent、relay-progress、tool_call_streaming。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.content_text IS '可展示文本摘要，例如最终回答、进度文本、工具输入预览。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.title IS '前端展示标题，例如运行进度、思考过程或工具调用；为空时应用层按 part_type 默认生成。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.status IS '展示状态，例如 INFO、STARTED、STREAMING、COMPLETED、FAILED、UNKNOWN；为空时应用层按 part_type 和 payload 默认生成。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.channel IS '展示频道，例如 answer、progress、metadata、agent、thinking、tool、runtime。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.display_hint IS '展示建议，例如 inline、collapsible、hidden、debug。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.visible IS '是否默认展示该 part；ANSWER 和 debug 类 runtime event 默认不展示，避免和正文重复或噪音过多。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.payload_json IS '结构化展示载荷 JSON，保存脱敏限长后的 ChatService 标准 payload。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.part_order IS '同一 assistant 消息内 part 展示顺序。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.created_at IS 'part 创建时间。';
+
 COMMENT ON TABLE fin_ex_chat_message_attachment_t IS '聊天消息附件引用表，保存用户消息与文档库资产的关联事实。';
 COMMENT ON COLUMN fin_ex_chat_message_attachment_t.id IS '消息附件引用主键，业务生成的 attachmentRefId。';
 COMMENT ON COLUMN fin_ex_chat_message_attachment_t.tenant_id IS '租户标识，来自服务端身份上下文。';
@@ -367,7 +411,7 @@ COMMENT ON COLUMN fin_ex_chat_run_execution_t.updated_at IS '执行控制面记�
 
 COMMENT ON SEQUENCE fin_ex_chat_event_seq IS '聊天事件恢复游标序号生成器，由 openGauss 统一生成 seq，供 WebSocket/SSE 断点恢复使用。';
 
-COMMENT ON TABLE fin_ex_chat_event_t IS '聊天事件事实表，保存 ChatService 标准事件，例如 run.started、message.delta、runtime.progress、runtime.tool、message.completed、run.completed、run.failed、run.cancelled；tenant_id/user_id/session_id/run_id 是防止多用户、多会话串线的事实边界。';
+COMMENT ON TABLE fin_ex_chat_event_t IS '聊天事件事实表，保存 ChatService 标准事件，例如 run.started、message.delta、message.snapshot、runtime.progress、runtime.tool、message.completed、run.completed、run.failed、run.cancelled；tenant_id/user_id/session_id/run_id 是防止多用户、多会话串线的事实边界。';
 COMMENT ON TABLE fin_ex_runtime_raw_stream_log_t IS 'Runtime 原始流响应日志表，保存下游 Relay normalizer 之前的原始响应片段，仅用于排障和协议分析，不作为前端恢复事实源。';
 COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.id IS '原始流日志主键，业务生成的 rawlogId。';
 COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.tenant_id IS '租户标识，来自本轮 run 的用户上下文。';
@@ -393,7 +437,7 @@ COMMENT ON COLUMN fin_ex_chat_event_t.user_id IS '用户标识，来自服务端
 COMMENT ON COLUMN fin_ex_chat_event_t.session_id IS '事件所属聊天会话 ID；写入时必须与 run 所属 session 一致。';
 COMMENT ON COLUMN fin_ex_chat_event_t.run_id IS '事件所属 runId，对应 fin_ex_chat_run_t.id；写入时必须与 session、tenant、user 归属一致。';
 COMMENT ON COLUMN fin_ex_chat_event_t.seq IS '事件恢复游标序号，由 openGauss sequence 生成；同一会话内按 seq 补发。';
-COMMENT ON COLUMN fin_ex_chat_event_t.event_type IS 'ChatService 标准事件类型，例如 run.started、message.delta、message.completed、runtime.progress、runtime.metadata、runtime.agent、runtime.thinking、runtime.tool、runtime.event、run.completed、run.failed、run.cancelled。';
+COMMENT ON COLUMN fin_ex_chat_event_t.event_type IS 'ChatService 标准事件类型，例如 run.started、message.delta、message.snapshot、message.completed、runtime.progress、runtime.metadata、runtime.agent、runtime.thinking、runtime.tool、runtime.event、run.completed、run.failed、run.cancelled。';
 COMMENT ON COLUMN fin_ex_chat_event_t.payload_json IS '事件载荷 JSON，保存前端可消费的 delta、状态和诊断字段。';
 COMMENT ON COLUMN fin_ex_chat_event_t.created_at IS '事件创建并落库时间。';
 

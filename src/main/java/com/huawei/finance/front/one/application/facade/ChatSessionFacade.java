@@ -82,6 +82,19 @@ public interface ChatSessionFacade {
     }
 
     /**
+     * 查询当前用户可见会话的完整消息树。
+     *
+     * <p>该方法只返回业务可见的 user/assistant 完整消息，不返回 raw log、隐藏 system 或内部工具原始节点。</p>
+     *
+     * @param user 请求入口解析出的不可变用户身份快照。
+     * @param sessionId 会话标识。
+     * @return 当前会话内按 nodeOrder 排序的可见消息节点。
+     */
+    default List<ChatMessage> listMessageTree(UserContext user, String sessionId) {
+        return List.of();
+    }
+
+    /**
      * 重命名当前用户可见的会话。
      *
      * @param user 请求入口解析出的不可变用户身份快照。

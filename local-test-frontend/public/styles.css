@@ -330,6 +330,40 @@ section + section {
   overflow-wrap: anywhere;
 }
 
+.message-parts {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.message-parts summary {
+  cursor: pointer;
+}
+
+.message-part {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.message-part.debug {
+  color: #9ca3af;
+}
+
+.tree-debug {
+  margin: 8px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tree-view {
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f9fafb;
+}
+
 .message-actions {
   display: flex;
   flex-wrap: wrap;

@@ -30,6 +30,7 @@ import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatReadCursor;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
@@ -39,6 +40,9 @@ import com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
+import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
+import com.huawei.finance.front.one.domain.chat.MessageSnapshotEvent;
+import com.huawei.finance.front.one.domain.chat.RuntimeEvent;
 import com.huawei.finance.front.one.domain.document.DocumentLibraryPage;
 import com.huawei.finance.front.one.domain.document.DocumentLibraryQuery;
 import com.huawei.finance.front.one.domain.document.StoredObjectContent;
@@ -62,6 +66,87 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 class FinanceEXChatServiceTest {
+    @Test
+    void snapshotOverridesDeltaAndRuntimeEventsAreSavedAsMessageParts() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        NeverCancelRunCache runCache = new NeverCancelRunCache();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        IdGenerator ids = new FixedIdGenerator();
+        PermissionChecker permissionChecker = new PermissionChecker();
+        ChatReadCursorApplicationService readCursorService = readCursorService(sessions);
+        WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
+                new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
+        LocalChatRunExecutionRegistry executionRegistry = new LocalChatRunExecutionRegistry();
+        ChatRunLeaseApplicationService leaseService = new ChatRunLeaseApplicationService(
+                new InMemoryExecutionRepository(),
+                (ApplicationInstanceIdProvider) () -> "instance-test",
+                new com.huawei.finance.front.one.application.config.ChatRunOperationalProperties(),
+                ids,
+                executionRegistry
+        );
+        AgentRuntime runtime = new AgentRuntime() {
+            @Override public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                return Flux.just(
+                        MessageDeltaEvent.of(request.runId(), request.sessionId(), "草稿"),
+                        RuntimeEvent.tool(request.runId(), request.sessionId(),
+                                Map.of("sourceType", "tool_call_streaming", "toolName", "search",
+                                        "inputPreview", "查询报销流程")),
+                        MessageSnapshotEvent.of(request.runId(), request.sessionId(), "最终\nMarkdown **正文**")
+                );
+            }
+            @Override public Mono<Void> cancel(AgentRuntimeCancelRequest request) { return Mono.empty(); }
+        };
+
+        FinanceEXChatService service = new FinanceEXChatService(
+                new SessionApplicationService(sessions, messages, ids, permissionChecker),
+                new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
+                new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
+                runtimeRouteService(),
+                new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
+                    @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
+                        return Flux.empty();
+                    }
+                    @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
+                        return Mono.empty();
+                    }
+                }, limiter),
+                new SystemResponseExecutor(),
+                new AgentRuntimeExecutor(runtime, limiter),
+                documentFacade(),
+                new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
+                        readCursorService, permissionChecker, sessions,
+                        new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
+                new ChatRunApplicationService(runs, runCache, events, readCursorService, permissionChecker, sessions),
+                leaseService,
+                new ChatDeltaCoalescer(new com.huawei.finance.front.one.application.config.ChatStreamProperties()),
+                executionRegistry,
+                new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
+                ids
+        );
+
+        StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
+                        null, null, "web", "hello", List.of(), Map.of())))
+                .expectNextMatches(event -> "run.started".equals(event.type()))
+                .expectNextMatches(event -> "message.delta".equals(event.type()))
+                .expectNextMatches(event -> "runtime.tool".equals(event.type()))
+                .expectNextMatches(event -> "message.snapshot".equals(event.type()))
+                .expectNextMatches(event -> "run.completed".equals(event.type()))
+                .verifyComplete();
+
+        ChatMessage assistant = messages.messages.stream()
+                .filter(message -> "assistant".equals(message.role()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(assistant.content()).isEqualTo("最终\nMarkdown **正文**");
+        assertThat(assistant.parts()).extracting(ChatMessagePart::partType)
+                .containsExactly("TOOL", "ANSWER");
+        assertThat(assistant.parts()).extracting(ChatMessagePart::contentText)
+                .containsExactly("search: 查询报销流程", "最终\nMarkdown **正文**");
+    }
+
     @Test
     void mismatchedRuntimeEventFailsCurrentRunWithoutPersistingForeignEvent() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
@@ -287,6 +372,17 @@ class FinanceEXChatServiceTest {
         @Override public void markCancellationRequested(String runId) {}
         @Override public ChatRunCancelSignal cancellationSignal(String runId) {
             return checks.incrementAndGet() >= 4 ? ChatRunCancelSignal.REQUESTED : ChatRunCancelSignal.NOT_REQUESTED;
+        }
+    }
+
+    private static class NeverCancelRunCache implements ChatRunCache {
+        @Override public Optional<ChatRun> getActive(String tenantId, String userId, String sessionId) { return Optional.empty(); }
+        @Override public boolean tryClaimActive(ChatRun run) { return true; }
+        @Override public void putActive(ChatRun run) {}
+        @Override public void evictActive(String tenantId, String userId, String sessionId) {}
+        @Override public void markCancellationRequested(String runId) {}
+        @Override public ChatRunCancelSignal cancellationSignal(String runId) {
+            return ChatRunCancelSignal.NOT_REQUESTED;
         }
     }
 

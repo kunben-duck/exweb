@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
+import com.huawei.finance.front.one.domain.chat.MessageSnapshotEvent;
 import com.huawei.finance.front.one.domain.chat.RuntimeEvent;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -24,7 +25,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>Relay 下游可能返回纯文本、JSON chunk 或 SSE-like {@code data: ...} 片段。本组件把这些
  * 私有协议统一转换成 ChatService 标准 ChatEvent，确保前端只消费稳定的
- * {@code message.delta/message.completed/run.failed/runtime.event} 语义，不接触下游原始响应体。</p>
+ * {@code message.delta/message.snapshot/message.completed/runtime.*} 语义，不接触下游原始响应体。</p>
  */
 @Component
 public class RelayRuntimeResponseNormalizer {
@@ -65,7 +66,7 @@ public class RelayRuntimeResponseNormalizer {
         if (chunk == null || chunk.isBlank()) {
             return List.of();
         }
-        String text = chunk.trim();
+        String text = chunk;
         List<String> frames = splitFrames(text);
         List<ChatEvent> events = new ArrayList<>();
         for (String frame : frames) {
@@ -165,6 +166,10 @@ public class RelayRuntimeResponseNormalizer {
             return List.of(deltaEvent(runId, sessionId, delta, root),
                     MessageCompletedEvent.of(runId, sessionId, completionPayload(root)));
         }
+        String snapshot = extractAnswerSnapshot(root, type);
+        if (snapshot != null) {
+            return List.of(snapshotEvent(runId, sessionId, snapshot, root));
+        }
         String delta = extractAnswerDelta(root, type);
         if (delta == null || delta.isBlank()) {
             if (isMetadataOnlyDelta(root, type)) {
@@ -197,6 +202,17 @@ public class RelayRuntimeResponseNormalizer {
         copyText(root, payload, "agentSessionId", "agentSessionId", "agent_session_id");
         copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
         return new MessageDeltaEvent(runId, sessionId, 0, Instant.now(), delta, Map.copyOf(payload));
+    }
+
+    private ChatEvent snapshotEvent(String runId, String sessionId, String content, JsonNode root) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("content", content);
+        payload.put("sourceType", blankToDefault(firstText(root, "type", "event", "status"), "unknown"));
+        copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
+        copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
+        copyText(root, payload, "agentSessionId", "agentSessionId", "agent_session_id");
+        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
+        return new MessageSnapshotEvent(runId, sessionId, 0, Instant.now(), content, Map.copyOf(payload));
     }
 
     private Map<String, Object> completionPayload(JsonNode root) {
@@ -235,6 +251,31 @@ public class RelayRuntimeResponseNormalizer {
             }
         }
         return null;
+    }
+
+    private String extractAnswerSnapshot(JsonNode root, String type) {
+        if (!isExplicitStreamingFalse(root) || !isAnswerDeltaCandidate(type)) {
+            return null;
+        }
+        return firstConfiguredAnswerText(root, type);
+    }
+
+    private boolean isExplicitStreamingFalse(JsonNode root) {
+        JsonNode streaming = firstNode(root, "is_streaming", "isStreaming", "streaming");
+        if (streaming == null || streaming.isNull()) {
+            return false;
+        }
+        if (streaming.isBoolean()) {
+            return !streaming.booleanValue();
+        }
+        if (streaming.isTextual()) {
+            String value = streaming.asText("").trim();
+            return "false".equalsIgnoreCase(value) || "0".equals(value) || "no".equalsIgnoreCase(value);
+        }
+        if (streaming.isNumber()) {
+            return streaming.asInt(1) == 0;
+        }
+        return false;
     }
 
     private String extractChoiceDelta(JsonNode choice) {

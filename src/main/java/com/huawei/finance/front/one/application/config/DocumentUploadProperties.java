@@ -14,6 +14,8 @@ import org.springframework.stereotype.Component;
 public class DocumentUploadProperties {
     /** 单个上传文档最大字节数。 */
     private long maxUploadSizeBytes = 50L * 1024L * 1024L;
+    /** 文档 provider 上传时允许透传的 Cookie 请求头最大字符数。 */
+    private int forwardCookieMaxLength = 8192;
 
     public long getMaxUploadSizeBytes() {
         return maxUploadSizeBytes;
@@ -23,7 +25,19 @@ public class DocumentUploadProperties {
         this.maxUploadSizeBytes = maxUploadSizeBytes;
     }
 
+    public int getForwardCookieMaxLength() {
+        return forwardCookieMaxLength;
+    }
+
+    public void setForwardCookieMaxLength(int forwardCookieMaxLength) {
+        this.forwardCookieMaxLength = forwardCookieMaxLength;
+    }
+
     public long normalizedMaxUploadSizeBytes() {
         return Math.max(1L, maxUploadSizeBytes);
+    }
+
+    public int normalizedForwardCookieMaxLength() {
+        return Math.max(0, forwardCookieMaxLength);
     }
 }

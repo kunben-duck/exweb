@@ -193,12 +193,9 @@ financeex:
   agent-runtime:
     # AgentRuntime 防腐层类型。当前内置 relay；后续替换 Runtime 时新增 provider，不把协议写进 provider。
     provider: ${FINANCEEX_AGENT_RUNTIME_PROVIDER:relay}
-    # Relay API 接入协议 adapter。relay-stream-http=Relay HTTP；relay-websocket=Relay 出站 WebSocket。
-    api-adapter: ${FINANCEEX_RELAY_AGENT_API_ADAPTER:relay-stream-http}
     base-url: ${FINANCEEX_RELAY_AGENT_BASE_URL:http://localhost:9000}
     stream-path: ${FINANCEEX_RELAY_AGENT_STREAM_PATH:/v1/agent/runs/stream}
     stop-path: ${FINANCEEX_RELAY_AGENT_STOP_PATH:/v1/agent/runs/{runId}/stop}
-    websocket-path: ${FINANCEEX_RELAY_AGENT_WEBSOCKET_PATH:/v1/agent/runs/ws}
     cancel-supported: ${FINANCEEX_RELAY_AGENT_CANCEL_SUPPORTED:true}
     timeout: 60s
     relay:
@@ -207,11 +204,13 @@ financeex:
       answer-content-fields: ${FINANCEEX_RELAY_ANSWER_CONTENT_FIELDS:content,context,delta,message,text,output_text}
       agent-context-as-answer: ${FINANCEEX_RELAY_AGENT_CONTEXT_AS_ANSWER:true}
     forward-cookie:
-      # 仅把 /chat/runs 与 /chat/runs/{runId}/stop 入口捕获到的 Cookie 透传给可信 Relay adapter。
-      # Cookie 不写入 metadata_json、不落库、不进入事件 payload，也不会发送给非 Relay 第三方服务。
+      # 仅把 /chat/runs 与 /chat/runs/{runId}/stop 入口捕获到的 Cookie 透传给可信下游：
+      # Relay stream-http adapter 和显式技能 legacy Agent adapter。
+      # 文档 upload provider 的 Cookie 透传由 financeex.document 与 financeex.documents.providers.* 单独控制。
+      # Cookie 不写入 metadata_json、不落库、不进入事件 payload，也不会写入下游请求体。
       enabled: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ENABLED:true}
       max-length: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_MAX_LENGTH:8192}
-      allowed-adapters: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ALLOWED_ADAPTERS:relay-stream-http,relay-websocket}
+      allowed-adapters: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ALLOWED_ADAPTERS:relay-stream-http}
   storage:
     provider: ${FINANCEEX_STORAGE_PROVIDER:local}
     local-path: ${java.io.tmpdir}/financeex-docs
@@ -227,6 +226,8 @@ financeex:
       socket-timeout-ms: ${FINANCEEX_HUAWEI_S3_SOCKET_TIMEOUT_MS:30000}
   document:
     max-upload-size-bytes: ${FINANCEEX_DOCUMENT_MAX_UPLOAD_SIZE_BYTES:52428800}
+    # 文档上传入口 Cookie 最大长度；只供配置 forward-cookie=true 的 HTTP provider upload 使用。
+    forward-cookie-max-length: ${FINANCEEX_DOCUMENT_FORWARD_COOKIE_MAX_LENGTH:8192}
   documents:
     providers:
       # 前端统一调用 /api/v1/ex/documents；不传 targetProvider 时使用 default-storage。
@@ -242,6 +243,8 @@ financeex:
           source: LEGACY_AGENT_UPLOAD
           base-url: ${FINANCEEX_LEGACY_AGENT_BASE_URL:}
           timeout: ${FINANCEEX_LEGACY_AGENT_DOCUMENT_TIMEOUT:30s}
+          # 只把上传入口 Cookie 放入老 Agent upload 请求头，不进入 multipart form 或文档元数据。
+          forward-cookie: ${FINANCEEX_LEGACY_AGENT_DOCUMENT_FORWARD_COOKIE_ENABLED:true}
           upload:
             enabled: ${FINANCEEX_LEGACY_AGENT_UPLOAD_ENABLED:true}
             path: ${FINANCEEX_LEGACY_AGENT_UPLOAD_PATH:/api/upload}

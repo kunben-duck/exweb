@@ -7,26 +7,11 @@ import org.junit.jupiter.api.Test;
 
 class RelayAgentPropertiesTest {
     @Test
-    void selectedApiAdapterDefaultsToRelayStreamHttp() {
+    void relayPropertiesDefaultToStreamHttpEndpoint() {
         RelayAgentProperties properties = new RelayAgentProperties();
 
-        assertThat(properties.selectedApiAdapter()).isEqualTo("relay-stream-http");
-    }
-
-    @Test
-    void selectedApiAdapterPrefersExplicitApiAdapter() {
-        RelayAgentProperties properties = new RelayAgentProperties();
-        properties.setApiAdapter("relay-websocket");
-
-        assertThat(properties.selectedApiAdapter()).isEqualTo("relay-websocket");
-    }
-
-    @Test
-    void selectedApiAdapterFallsBackToDefaultWhenBlank() {
-        RelayAgentProperties properties = new RelayAgentProperties();
-        properties.setApiAdapter(" ");
-
-        assertThat(properties.selectedApiAdapter()).isEqualTo("relay-stream-http");
+        assertThat(properties.getStreamPath()).isEqualTo("/v1/agent/runs/stream");
+        assertThat(properties.getStopPath()).isEqualTo("/v1/agent/runs/{runId}/stop");
     }
 
     @Test
@@ -34,7 +19,6 @@ class RelayAgentPropertiesTest {
         AgentRuntimeForwardCookieProperties properties = new AgentRuntimeForwardCookieProperties();
 
         assertThat(properties.isAdapterAllowed("relay-stream-http")).isTrue();
-        assertThat(properties.isAdapterAllowed("relay-websocket")).isTrue();
         assertThat(properties.isAdapterAllowed("third-party-adapter")).isFalse();
     }
 }

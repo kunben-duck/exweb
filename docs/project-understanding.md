@@ -134,7 +134,10 @@ ChatController#startRun(...)
 重点排查：
 
 - 如果企业鉴权后用户为空，先看 `ChatController#resolveChatUser()` 和 `AuthContextProvider`。
-- 如果 Cookie 没有透传给 Relay，先看 `ChatController#startRun(...)` 是否读取到了 `HttpHeaders.COOKIE`，再看 `RuntimeForwardHeaderExtractor`。
+- 如果 Cookie 没有透传给 Relay 或显式技能 legacy Agent chat/cancel，先看 `ChatController#startRun(...)`
+  或 stop 入口是否读取到了 `HttpHeaders.COOKIE`，再看 `RuntimeForwardHeaderExtractor`。
+- 如果 legacy 文档上传没有权限，先看 `MvcDocumentUploadController/ReactiveDocumentUploadController`
+  是否把 `Cookie` 传入 `DocumentUploadSupport`，再看 provider 配置 `forward-cookie` 是否为 true。
 
 ### 3.2 创建后台 run
 
@@ -217,7 +220,7 @@ RouteType.AGENT_RUNTIME    -> AgentRuntimeExecutor#execute(...)
 重点排查：
 
 - 新问题没有进入 Relay：查看 `RouteSignalApplicationService#routeInitial(...)` 返回的 `RouteTarget`。
-- 指定技能没有进入老 Agent：查看 `FinanceEXChatService#selectedSkillId(...)`、`LegacySkillExecutor#execute(...)` 和 `ConfiguredLegacySkillAgentClient#query(...)`。
+- 指定技能没有进入老 Agent 或 chat Cookie 未透传：查看 `FinanceEXChatService#selectedSkillId(...)`、`LegacySkillExecutor#execute(...)` 和 `ConfiguredLegacySkillAgentClient#query(...)`。
 - 多轮没有续接 Runtime：查看 `RuntimeBindingApplicationService#findActive(...)` 是否命中当前 `leafMessageId`。
 - 同一会话连续发两条报错：查看 `ChatRunApplicationService#rejectIfActiveRunExists(...)` 和 `ChatRunApplicationService#createRunning(...)`。
 - user message 已写入但 run 没创建：异常可能发生在 `prepareRunMessage(...)` 之后、`createRunning(...)` 之前，需要看日志和事务边界。
@@ -309,12 +312,11 @@ RelayAgentRuntime#selectedAdapter(...)
 职责：
 
 - application 层只看到 `AgentRuntime`。
-- Relay provider 根据 `financeex.agent-runtime.api-adapter` 选择协议 adapter。
+- Relay provider 当前固定委托 streamable HTTP adapter；不再暴露下游协议选择配置。
 
 当前 adapter：
 
 - `relay-stream-http`
-- `relay-websocket`
 
 ### 6.3 streamable HTTP adapter
 
@@ -348,35 +350,7 @@ RelayStreamHttpRuntimeAdapter#applyForwardedCookie(...)
 
 - Relay 返回了数据但前端没看到：先确认这里是否产生了 `MessageDeltaEvent` 或 `RuntimeEvent`。
 - Relay 响应格式不是纯字符串片段：先看 raw log，再看 `RelayRuntimeResponseNormalizer` 是否把正文转为 `message.delta/message.snapshot`，或把非正文扩展帧转为对应 `runtime.*`。不要把 Relay 原始 JSON 作为 ChatService 顶层事件透传。
-- 第三方 Cookie 泄漏风险：确认只有可信 Relay adapter 调用 `applyForwardedCookie(...)`。
-
-### 6.4 Relay 出站 WebSocket adapter
-
-文件：
-
-```text
-src/main/java/com/huawei/finance/front/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java
-```
-
-方法：
-
-```text
-RelayWebSocketRuntimeAdapter#query(...)
-RelayWebSocketFrameTranslator#translate(...)
-```
-
-职责：
-
-- EXChatService 作为客户端连接下游 Relay WebSocket。
-- 首帧发送 Relay 专用 `RelayRuntimeQueryRequest`，不是 ChatService 内部 `AgentRuntimeRequest`。
-- 接收 Relay frame。
-- 在 normalizer 之前发布 raw stream log MQ 消息；消费端异步写入 raw log 表。
-- 复用 `RelayRuntimeResponseNormalizer` 将 JSON frame、SSE-like frame 或纯文本 frame 转成标准 `ChatEvent`。
-
-注意：
-
-- 这是“后端到下游 Relay”的 WebSocket，不是前端 WebSocket。
-- 前端 WebSocket 仍由 `ChatServletWebSocketHandler` / `ChatWebSocketProtocolService` 处理。
+- 第三方 Cookie 泄漏风险：确认只有可信 Relay adapter、显式技能 legacy Agent adapter 和配置 `forward-cookie=true` 的 HTTP 文档 provider upload 调用 `applyForwardedCookie(...)`，且 Cookie 没有进入请求体、multipart form 或元数据。
 
 ## 7. Relay 事件如何变成可恢复事件流
 
@@ -968,7 +942,7 @@ cancelActive(...)
 3. `FinanceEXChatService#executeRun(...)`：session、message、route、run、execution 是否创建。
 4. `SessionApplicationService#prepareRunMessage(...)`：user message 是否入库。
 5. `AgentRuntimeExecutor#execute(...)`：Runtime 请求是否构造正确。
-6. `RelayStreamHttpRuntimeAdapter#query(...)` 或 `RelayWebSocketRuntimeAdapter#query(...)`：下游是否返回。
+6. `RelayStreamHttpRuntimeAdapter#query(...)`：下游是否返回。
 7. `FinanceEXChatService#persistAndPublishRunEvents(...)`：事件是否被拦截。
 8. `OpenGaussChatEventStore#appendWithExecutionGuard(...)`：事件是否写入 openGauss 并生成 seq，owner/fencing 是否匹配。
 9. `ChatStreamApplicationService#publishPersisted(...)`：是否本机发布和 Redis 发布。

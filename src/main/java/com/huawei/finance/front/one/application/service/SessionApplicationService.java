@@ -16,6 +16,7 @@ import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
+import com.huawei.finance.front.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -108,6 +109,12 @@ public class SessionApplicationService implements ChatSessionFacade {
     public ChatSessionPage listSessions(UserContext user, String cursor, int limit) {
         checkChatUser(user);
         return sessionRepository.pageByTenantIdAndUserId(user.tenantId(), user.userId(), cursor, limit);
+    }
+
+    @Override
+    public ChatSessionNumberPage listSessionsByPage(UserContext user, int curPage, int pageSize) {
+        checkChatUser(user);
+        return sessionRepository.pageNumberByTenantIdAndUserId(user.tenantId(), user.userId(), curPage, pageSize);
     }
 
     @Override

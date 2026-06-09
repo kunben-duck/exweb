@@ -54,7 +54,9 @@ class ArchitectureNamingTest {
 
         assertThat(application)
                 .doesNotContain("FINANCEEX_AGENT_RUNTIME_PROTOCOL")
+                .doesNotContain("FINANCEEX_RELAY_AGENT_API_ADAPTER")
                 .doesNotContain("FINANCEEX_RELAY_AGENT_WEBSOCKET_URL")
+                .doesNotContain("FINANCEEX_RELAY_AGENT_WEBSOCKET_PATH")
                 .doesNotContain("http-streamable")
                 .doesNotContain("relay-http-streamable")
                 .doesNotContain("websocket-url");

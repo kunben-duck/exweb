@@ -21,7 +21,7 @@ public interface FinanceChatFacade {
      *
      * @param user 请求入口解析出的不可变用户身份快照。
      * @param command 聊天命令，包含会话、用户输入、附件和 metadata；身份由应用层回填。
-     * @param forwardHeaders 请求入口捕获的 Runtime 转发头快照；只允许进入可信 Runtime adapter。
+     * @param forwardHeaders 请求入口捕获的转发头快照；只允许进入可信下游 adapter。
      * @return 本轮 run 的标准聊天事件流。
      */
     Flux<ChatEvent> executeRun(UserContext user, ChatCommand command, RuntimeForwardHeaders forwardHeaders);
@@ -63,7 +63,7 @@ public interface FinanceChatFacade {
      *
      * @param user 请求入口解析出的不可变用户身份快照。
      * @param runId run 标识。
-     * @param forwardHeaders stop 请求入口捕获的 Runtime 转发头快照；用于可信 Runtime cancel。
+     * @param forwardHeaders stop 请求入口捕获的转发头快照；用于可信下游 cancel。
      * @return stop 后的 run 状态。
      */
     Mono<ChatRunStopResult> stopRun(UserContext user, String runId, RuntimeForwardHeaders forwardHeaders);

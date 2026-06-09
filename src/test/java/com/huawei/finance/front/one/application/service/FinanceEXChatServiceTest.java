@@ -11,6 +11,7 @@ import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRe
 import com.huawei.finance.front.one.application.integration.agent.LegacySkillAgentClient;
 import com.huawei.finance.front.one.application.integration.agent.LegacySkillAgentRequest;
 import com.huawei.finance.front.one.application.integration.agent.LegacySkillCancelRequest;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
 import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorCache;
@@ -63,6 +64,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -173,8 +175,10 @@ class FinanceEXChatServiceTest {
                 executionRegistry
         );
         DocumentFacade documents = documentFacade();
+        AtomicReference<RuntimeForwardHeaders> capturedHeaders = new AtomicReference<>();
         LegacySkillExecutor legacySkillExecutor = new LegacySkillExecutor(new LegacySkillAgentClient() {
             @Override public Flux<ChatEvent> query(LegacySkillAgentRequest request) {
+                capturedHeaders.set(request.forwardHeaders());
                 return Flux.just(MessageDeltaEvent.of(request.runId(), request.sessionId(), "legacy answer"));
             }
             @Override public Mono<Void> cancel(LegacySkillCancelRequest request) { return Mono.empty(); }
@@ -209,12 +213,15 @@ class FinanceEXChatServiceTest {
         );
 
         StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
-                        null, null, "web", "hello", List.of(), Map.of("selectedSkillId", "skill-tax"))))
+                        null, null, "web", "hello", List.of(), Map.of("selectedSkillId", "skill-tax")),
+                        RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192)))
                 .expectNextMatches(event -> "run.started".equals(event.type()))
                 .expectNextMatches(event -> "message.delta".equals(event.type()))
                 .expectNextMatches(event -> "run.completed".equals(event.type()))
                 .verifyComplete();
 
+        assertThat(capturedHeaders.get()).isNotNull();
+        assertThat(capturedHeaders.get().cookieHeader()).isEqualTo("sid=abc");
         ChatRun run = runs.runs.values().iterator().next();
         assertThat(run.routeType()).isEqualTo("EXPLICIT_SKILL");
         assertThat(run.agentCode()).isEqualTo("skill-tax");

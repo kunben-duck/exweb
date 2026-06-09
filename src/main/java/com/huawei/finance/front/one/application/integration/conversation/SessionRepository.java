@@ -1,7 +1,9 @@
 package com.huawei.finance.front.one.application.integration.conversation;
 
 import com.huawei.finance.front.one.domain.chat.ChatSession;
+import com.huawei.finance.front.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 
@@ -48,6 +50,36 @@ public interface SessionRepository {
      * @return 会话分页结果。
      */
     ChatSessionPage pageByTenantIdAndUserId(String tenantId, String userId, String cursor, int limit);
+
+    /**
+     * 基于页码分页查询当前用户会话。
+     *
+     * <p>默认实现仅服务测试和非 openGauss 替代仓储，生产 openGauss 实现会使用 count + offset SQL。
+     * 查询语义必须与游标分页保持一致：当前 owner、排除 DELETED、按 updatedAt/id 倒序。</p>
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param curPage 当前页码，从 1 开始；非法值按 1 处理。
+     * @param pageSize 每页条数；非法值按 20 处理，上限 100。
+     * @return 页码分页结果。
+     */
+    default ChatSessionNumberPage pageNumberByTenantIdAndUserId(
+            String tenantId, String userId, int curPage, int pageSize) {
+        int normalizedPage = Math.max(1, curPage);
+        int normalizedSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 100));
+        List<ChatSession> all = findByTenantIdAndUserId(tenantId, userId).stream()
+                .filter(session -> !"DELETED".equals(session.status()))
+                .sorted(Comparator.comparing(ChatSession::updatedAt).reversed()
+                        .thenComparing(ChatSession::id, Comparator.reverseOrder()))
+                .toList();
+        int totalRows = all.size();
+        long requestedOffset = (long) (normalizedPage - 1) * normalizedSize;
+        int fromIndex = requestedOffset >= totalRows ? totalRows : (int) requestedOffset;
+        int toIndex = Math.min(fromIndex + normalizedSize, totalRows);
+        long totalPages = totalRows == 0 ? 0 : (long) Math.ceil((double) totalRows / normalizedSize);
+        return new ChatSessionNumberPage(all.subList(fromIndex, toIndex), normalizedPage, normalizedSize,
+                totalRows, totalPages);
+    }
 
     /**
      * 保存或更新会话快照。

@@ -4,6 +4,7 @@ import com.huawei.finance.front.one.application.facade.DocumentFacade;
 import com.huawei.finance.front.one.application.integration.agent.LegacySkillAgentClient;
 import com.huawei.finance.front.one.application.integration.agent.LegacySkillAgentRequest;
 import com.huawei.finance.front.one.application.integration.agent.LegacySkillCancelRequest;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
@@ -35,7 +36,8 @@ public class LegacySkillExecutor {
         this.concurrencyLimiter = concurrencyLimiter;
     }
 
-    public Flux<ChatEvent> execute(ChatCommand command, String runId, RouteTarget route, UserContext user) {
+    public Flux<ChatEvent> execute(ChatCommand command, String runId, RouteTarget route, UserContext user,
+                                   RuntimeForwardHeaders forwardHeaders) {
         List<UploadedDocument> documents = documentFacade.resolveDocumentsForUser(user, command.attachments());
         LegacySkillAgentRequest request = new LegacySkillAgentRequest(
                 user,
@@ -44,12 +46,13 @@ public class LegacySkillExecutor {
                 route.selectedAgentCode(),
                 command.message(),
                 documents,
-                command.metadata()
+                command.metadata(),
+                forwardHeaders
         );
         return concurrencyLimiter.protectAgentRuntime(legacySkillAgentClient.query(request));
     }
 
-    public Mono<Void> cancel(ChatRun run, UserContext user) {
+    public Mono<Void> cancel(ChatRun run, UserContext user, RuntimeForwardHeaders forwardHeaders) {
         if (run == null || run.agentCode() == null || run.agentCode().isBlank()) {
             return Mono.empty();
         }
@@ -59,7 +62,8 @@ public class LegacySkillExecutor {
                 run.id(),
                 run.agentCode(),
                 run.cancelReason(),
-                Map.of("routeType", run.routeType() == null ? "" : run.routeType())
+                Map.of("routeType", run.routeType() == null ? "" : run.routeType()),
+                forwardHeaders
         ));
     }
 }

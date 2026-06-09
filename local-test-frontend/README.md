@@ -43,7 +43,10 @@ Referer: http://localhost:8080/fin/ex/
 
 点击“保存请求头”后，配置会保存到浏览器 `localStorage`，并同步到本地 Node 代理内存。后续所有 `/api/v1/ex/**` HTTP 请求、fetch 方式的 Event Resume、文件上传/下载，以及 `/api/v1/ex/chat/ws` WebSocket 握手都会由本地代理自动注入这些请求头。
 
-其中 `/api/v1/ex/chat/runs` 和 `/api/v1/ex/chat/runs/{runId}/stop` 的 `Cookie` 还会被后端按配置透传给可信 Relay Runtime adapter，用于本地模拟企业 Relay 服务鉴权。Cookie 不会写入后端数据库或前端事件，也不会发送给非 Relay 第三方服务。
+其中 `/api/v1/ex/chat/runs`、`/api/v1/ex/chat/runs/{runId}/stop` 和 `targetProvider=legacy-agent`
+的 `/api/v1/ex/documents` 上传请求会被后端按配置透传给可信下游 adapter，用于本地模拟企业 Relay
+或存量 Agent 文件服务鉴权。Cookie 不会写入后端数据库、文档元数据或前端事件，也不会发送给未显式开启
+`forward-cookie` 的 provider。
 
 需要注意：浏览器出于安全限制，不允许前端 JavaScript 直接设置 `Cookie` 请求头，也不允许给原生 `WebSocket` 设置自定义请求头。因此这里采用本地代理 profile 机制：浏览器只携带非敏感的 profileId，真正的 `Cookie/Authorization/X-*` 由 `server.mjs` 转发到后端。该能力仅用于本地联调，不要把真实 Cookie 提交到仓库或日志。
 
@@ -99,7 +102,7 @@ Referer: http://localhost:8080/fin/ex/
 3. 输出中途点击“复制页签”，新页签会读取同一 `sessionId`，先加载历史，再通过 run event resume 持续恢复到本轮 run 终态。
 4. 输出中途点击“停止回答”，观察 `run.cancelled` 是否通过 WebSocket 或 Event Resume 到达。
 5. 上传文档，选择“作为附件”，再发送消息确认 `attachments[{documentId}]` 能进入请求。
-6. 测试历史技能兼容路径时，在上传区填写 `targetProvider=legacy-agent` 和对应 `skillId`，再在发送区填写同一个 `selectedSkillId`；后端会进入 `EXPLICIT_SKILL` 路由，不创建 RuntimeBinding。
+6. 测试历史技能兼容路径时，在上传区填写 `targetProvider=legacy-agent` 和对应 `skillId`，再在发送区填写同一个 `selectedSkillId`；后端会进入 `EXPLICIT_SKILL` 路由，不创建 RuntimeBinding。若企业鉴权依赖 Cookie，请先在“鉴权请求头”保存完整 Cookie/header，代理会把 Cookie 注入上传入口，后端再按 provider 配置透传给老 Agent upload。
 7. 对一条 user 消息点击编辑并重新提问，确认旧消息不变、新 user sibling 出现在版本游标中。
 8. 对一条 assistant 消息点击重新生成，确认同一 user 下出现新的 assistant sibling。
 9. 从某条历史消息创建分支，确认分支历史消息为只读，后续新增消息仍可继续编辑或重新生成。

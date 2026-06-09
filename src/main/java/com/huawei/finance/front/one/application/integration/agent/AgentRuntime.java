@@ -9,9 +9,8 @@ import reactor.core.publisher.Mono;
  *
  * <p>SuperAgent 主控服务只依赖这个应用层端口提交复杂任务查询，不直接依赖任何具体 Runtime
  * 的 SDK、HTTP 协议或内部会话模型。当前上线版本默认装配 Relay Runtime adapter。
- * {@code financeex.agent-runtime.provider} 表示 Runtime 类型；具体下游 API 接入协议由该
- * provider 自己的下级配置决定，例如 Relay 使用 {@code financeex.agent-runtime.api-adapter}
- * 在 Relay stream-http 和 Relay WebSocket adapter 之间切换。</p>
+ * {@code financeex.agent-runtime.provider} 表示 Runtime 类型。当前 Relay provider 固定使用
+ * streamable HTTP；后续新增协议时应新增 provider 内部 adapter，而不是改动应用层端口。</p>
  */
 public interface AgentRuntime {
     /**

@@ -70,6 +70,8 @@ public class DocumentProviderProperties {
         private String baseUrl = "";
         /** HTTP provider 调用超时时间。 */
         private Duration timeout = Duration.ofSeconds(30);
+        /** 是否允许把上传入口 Cookie 作为下游 provider upload 请求头透传。 */
+        private boolean forwardCookie = false;
         /** 上传接口配置。 */
         private Endpoint upload = new Endpoint();
         /** 下载接口配置。 */
@@ -89,6 +91,8 @@ public class DocumentProviderProperties {
         public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
         public Duration getTimeout() { return timeout; }
         public void setTimeout(Duration timeout) { this.timeout = timeout; }
+        public boolean isForwardCookie() { return forwardCookie; }
+        public void setForwardCookie(boolean forwardCookie) { this.forwardCookie = forwardCookie; }
         public Endpoint getUpload() { return upload; }
         public void setUpload(Endpoint upload) { this.upload = upload == null ? new Endpoint() : upload; }
         public Endpoint getDownload() { return download; }

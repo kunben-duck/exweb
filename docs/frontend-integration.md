@@ -13,7 +13,7 @@
 - `seq` / `sequence` 是 openGauss 生成的事件恢复游标，前端断点恢复只保存最后收到的最大 `sequence`。
 - 前端只把 `sequence` 当作不透明数字游标，不要自行推算生成方式；服务端以事件表事实源保证同一会话内的恢复顺序。
 - 前端不要传 `tenantId`、`userId`，也不要通过 Header/Query/Body 伪造用户身份；身份由后端请求入口通过 `AuthContextProvider` 从服务端上下文解析一次，后台 run 不会再次读取请求 ThreadLocal。
-- 本文档中的 WebSocket 只指前端到 FinanceEXChatService 的 `/api/v1/ex/chat/ws` 连接。RelayAgent 如果配置 `financeex.agent-runtime.api-adapter=relay-websocket`，那是 FinanceEXChatService 后端到 RelayAgent 的出站 adapter，前端不直接连接 RelayAgent，也不通过前端 WebSocket 发起 `AgentRuntime.query`。
+- 本文档中的 WebSocket 只指前端到 FinanceEXChatService 的 `/api/v1/ex/chat/ws` 连接。FinanceEXChatService 到下游 RelayAgent 当前只保留 streamable HTTP adapter；前端不直接连接 RelayAgent，也不通过前端 WebSocket 发起 `AgentRuntime.query`。
 - 本地开发需要后端显式配置：
 
 ```bash
@@ -27,7 +27,8 @@ export FINANCEEX_DEV_USERNAME=developer
 | 场景 | 方法 | 路径 | 说明 |
 | --- | --- | --- | --- |
 | 创建会话 | `POST` | `/api/v1/ex/chat/sessions` | 显式创建会话；也可以直接调用 `/chat/runs`，不传 `sessionId` 时由后端创建或归一化 |
-| 会话列表 | `GET` | `/api/v1/ex/chat/sessions?limit=20&cursor=...` | 当前用户会话分页 |
+| 会话列表（游标） | `GET` | `/api/v1/ex/chat/sessions?limit=20&cursor=...` | 当前用户会话游标分页 |
+| 会话列表（页码） | `GET` | `/api/v1/ex/chat/sessions/page?curPage=1&pageSize=20` | 当前用户历史会话页码分页，返回 totalRows |
 | 会话详情 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}` | 查询单个会话元数据 |
 | 会话状态 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/state?messageLimit=50` | 切换会话时聚合会话、历史消息和流状态 |
 | 历史消息 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50` | 查询当前 active path 或指定 leaf path |
@@ -158,7 +159,8 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 接口 | 请求字段 | 响应字段 | 后续关联 |
 | --- | --- | --- | --- |
 | `POST /chat/sessions` | Body：`title` 会话标题，可空；`channel` 来源渠道，可空 | `ChatSessionDto` 全字段 | 使用 `sessionId` 作为会话路由和后续 run 入参 |
-| `GET /chat/sessions` | Query：`limit` 页大小；`cursor` 上一页游标 | `items[]`、`nextCursor`；item 带 `firstAssistantAnswer` | `nextCursor` 查下一页；`sessionId` 进入 state |
+| `GET /chat/sessions` | Query：`limit` 页大小；`cursor` 上一页游标 | `items[]`、`nextCursor`；item 带 `firstAssistantAnswer` | 游标分页；`nextCursor` 查下一页；`sessionId` 进入 state |
+| `GET /chat/sessions/page` | Query：`curPage` 当前页，默认 1；`pageSize` 页大小，默认 20 | `items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；item 带 `firstAssistantAnswer` | 页码分页；适合传统分页组件，旧游标接口保持不变 |
 | `GET /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto` | 只拿元数据，不返回历史和流状态 |
 | `GET /chat/sessions/{sessionId}/state` | Path：`sessionId`；Query：`messageLimit` | `session`、`messages.items[]`、`messages.nextCursor`、`streamStatus` | 页面切换会话首选接口；根据 `streamStatus.activeRunId` 决定是否恢复 |
 | `GET /chat/sessions/{sessionId}/messages` | Path：`sessionId`；Query：`leafMessageId` 可选，`cursor` 保留，`limit` | `ChatMessagePageDto.items[]`、`nextCursor` | 用 `messageId` 做反馈、版本、分支和重新生成 |
@@ -192,7 +194,8 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
 | `POST /api/v1/ex/chat/sessions` | 用户点击“新建会话”时显式创建。 | JSON body：`title` 可选，`channel` 可选，默认可为空。 | `ChatSessionDto`：`sessionId`、`title`、`status`、`channel`、`createdAt`、`updatedAt`。 | 前端不传租户和用户；后端从身份上下文解析。 |
-| `GET /api/v1/ex/chat/sessions` | 左侧会话列表分页加载。 | Query：`limit` 可选，默认 20；`cursor` 可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每个 `ChatSessionDto` 带 `firstAssistantAnswer`。 | 返回按最近更新时间倒序排列；`nextCursor=null` 表示无下一页；`firstAssistantAnswer` 是会话第一条完整 assistant 回答，可为空。 |
+| `GET /api/v1/ex/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`limit` 可选，默认 20；`cursor` 可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每个 `ChatSessionDto` 带 `firstAssistantAnswer`。 | 返回按最近更新时间倒序排列；`nextCursor=null` 表示无下一页；`firstAssistantAnswer` 是会话第一条完整 assistant 回答，可为空。 |
+| `GET /api/v1/ex/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`curPage` 可选，默认 1；`pageSize` 可选，默认 20，最大 100。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；每个 `ChatSessionDto` 带 `firstAssistantAnswer`。 | 不返回 `DELETED` 会话；适合需要总行数的传统分页组件；旧游标分页不受影响。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/state` | 切换会话或跨电脑打开会话时首选。 | Path：`sessionId`；Query：`messageLimit` 可选，默认 50。 | `ChatSessionStateDto`：`session`、`messages`、`streamStatus`。 | `messages` 返回当前 active path；该接口不会返回正在输出的半截 assistant 历史消息。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 保留。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 不传 `leafMessageId` 时返回当前 active path；传入时返回 root 到该 leaf 的路径。 |
@@ -236,7 +239,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`targetProvider` 可选，`skillId` 可选，`metadata` 可选 JSON 字符串。 | `UploadedDocument`。 | 不传 `targetProvider` 使用 default-storage；`targetProvider=legacy-agent` 时后端转发配置化老 Agent upload 接口，并把 provider docId 写入统一文档库。 |
+| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`targetProvider` 可选，`skillId` 可选，`metadata` 可选 JSON 字符串；Header 可带标准 `Cookie`。 | `UploadedDocument`。 | 不传 `targetProvider` 使用 default-storage；`targetProvider=legacy-agent` 时后端转发配置化老 Agent upload 接口，并把 provider docId 写入统一文档库。只有 provider 配置 `forward-cookie=true` 时，入口 Cookie 才会作为下游 upload HTTP header 透传。 |
 | `GET /api/v1/ex/documents` | 文档库列表或最近文档选择器。 | Query：`sessionId` 可选，`limit` 默认 20，`cursor` 可选。 | `DocumentLibraryPage`：`items[]`、`nextCursor`。 | 默认不返回 `DELETED` 文档。 |
 | `GET /api/v1/ex/documents/{documentId}` | 查询文档详情。 | Path：`documentId`。 | `UploadedDocument`。 | 可查看 `AVAILABLE/PROCESSING/FAILED` 等非删除状态。 |
 | `PATCH /api/v1/ex/documents/{documentId}` | 修改展示文件名或扩展元数据。 | Path：`documentId`；JSON body：`originalName`、`metadataJson`。 | `UploadedDocument`。 | 空字段表示保留原值。 |
@@ -473,9 +476,9 @@ POST /api/v1/ex/chat/runs/{runId}/stop
  -> 停止本轮回答
 ```
 
-`streamTopicId` 是 ChatService 的 run 级订阅 topic，不是 RelayAgent 的会话 ID。当前后端内部的 `AgentRuntime.query` 通过 `financeex.agent-runtime.api-adapter` 选择 `relay-stream-http` 或 `relay-websocket`；这个选择不改变前端协议。
+`streamTopicId` 是 ChatService 的 run 级订阅 topic，不是 RelayAgent 的会话 ID。当前后端内部的 `AgentRuntime.query` 通过 streamable HTTP 调用下游 Relay；这个内部实现不改变前端协议。
 
-如果 `POST /chat/runs` 或 `POST /chat/runs/{runId}/stop` 请求携带标准 `Cookie` 头，后端会在入口捕获一次，并只把它透传给可信 Relay Runtime adapter。该 Cookie 不会出现在请求 body、metadata、事件、历史消息或前端响应中，也不会发送给非 Relay 第三方服务。
+如果 `POST /chat/runs`、`POST /chat/runs/{runId}/stop` 或 `POST /documents` 请求携带标准 `Cookie` 头，后端会在入口捕获一次，并只把它透传给可信下游 adapter：Relay streamable HTTP、显式技能 legacy Agent chat/cancel，以及配置了 `forward-cookie=true` 的 legacy 文档 upload provider。该 Cookie 不会出现在请求 body、multipart form、metadata、事件、历史消息、文档元数据或前端响应中。
 
 ## 推荐前端流程
 
@@ -551,7 +554,7 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/sessions \
 
 前端展示可以使用 `sessionId` 作为会话路由参数。租户和用户字段只用于调试展示，不应回传给聊天接口。
 
-查询会话列表：
+查询会话列表，游标分页用于无限滚动：
 
 ```bash
 curl "http://localhost:8080/api/v1/ex/chat/sessions?limit=20"
@@ -579,6 +582,40 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions?limit=20"
     }
   ],
   "nextCursor": null
+}
+```
+
+查询会话列表，页码分页用于传统分页组件：
+
+```bash
+curl "http://localhost:8080/api/v1/ex/chat/sessions/page?curPage=1&pageSize=20"
+```
+
+页码分页响应会返回总行数：
+
+```json
+{
+  "items": [
+    {
+      "sessionId": "session_xxx",
+      "tenantId": "tenant_dev",
+      "userId": "user_dev",
+      "title": "财经问答",
+      "status": "ACTIVE",
+      "channel": "web",
+      "currentLeafMessageId": "msg_002",
+      "rootSessionId": "session_xxx",
+      "branchSourceSessionId": null,
+      "branchSourceMessageId": null,
+      "firstAssistantAnswer": "从趋势看，差旅费在三月出现明显上升...",
+      "createdAt": "2026-05-17T01:00:00Z",
+      "updatedAt": "2026-05-17T01:10:00Z"
+    }
+  ],
+  "curPage": 1,
+  "pageSize": 20,
+  "totalRows": 42,
+  "totalPages": 3
 }
 ```
 
@@ -938,7 +975,7 @@ MVC/Servlet 模式下，后端会在 WebSocket handshake 阶段读取企业权�
 连接建立后的 subscribe、ack、unsubscribe 不再读取 ThreadLocal。因此前端只需要确保握手请求
 携带企业鉴权 cookie/header，协议消息体中不要传 tenantId/userId。
 
-企业 Cookie 有两类用途：请求入口身份解析，以及在 AgentRuntime 为可信 Relay adapter 时透传给下游 Relay。透传只发生在创建 run 和 stop run 的 HTTP 入口，WebSocket subscribe、Event Resume、历史查询、文档下载等接口不会把 Cookie 继续转发给 Runtime。
+企业 Cookie 有两类用途：请求入口身份解析，以及在进入可信下游 adapter 时透传给 Relay、显式技能 legacy Agent 或 legacy 文档 upload provider。透传只发生在创建 run、stop run 和配置允许的文档上传 HTTP 入口；WebSocket subscribe、Event Resume、历史查询、文档下载等接口不会把 Cookie 继续转发给下游 Agent。
 
 生产环境必须配置 `financeex.websocket.allowed-origin-patterns` 为企业前端域名。默认值只允许
 localhost，避免 Cookie 鉴权场景下的跨站 WebSocket 滥用。服务端还会限制单用户连接数、单连接
@@ -1254,7 +1291,7 @@ stop 是 REST 生命周期接口，不是 WebSocket command。重复 stop 是幂
 
 前端点击停止后，不应把关闭 WebSocket 当作取消语义。推荐流程是：保存当前本地 `lastSeq`，调用 stop，随后继续通过 WebSocket 等待 `run.cancelled`；如果页面已经断线或没有收到终态事件，则用 stop 前保存的 `lastSeq` 调 Event Resume 补齐 `run.cancelled`。stop 响应里的 `latestSeq` 是服务端事实源位置，不代表当前页签已经消费到该事件。
 
-stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可信 Relay cancel adapter，用于下游企业权限校验。即使下游 cancel 失败，本服务仍以本地 `run.cancelled` 终态为准。
+stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可信 Relay 或显式技能 legacy Agent 的 cancel adapter，用于下游企业权限校验。即使下游 cancel 失败，本服务仍以本地 `run.cancelled` 终态为准。
 
 ## Run 故障恢复事件
 
@@ -1317,6 +1354,11 @@ curl -X POST http://localhost:8080/api/v1/ex/documents \
 | `targetProvider` | 否 | 目标文档 provider；为空使用 `default-storage`，选中历史技能上传时使用 `legacy-agent`。 |
 | `skillId` | 否 | 上传时关联的技能 ID；provider adapter 可把它透传给下游上传接口或用于审计。 |
 | `metadata` | 否 | 上传上下文 JSON 字符串；不要放 Cookie、token 等敏感信息。 |
+
+Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解析。只有当 `targetProvider=legacy-agent`
+且 provider 配置 `forward-cookie=true` 时，后端才会把该 Cookie 作为老 Agent upload HTTP header
+透传给下游；普通 `default-storage` 上传不会透传。Cookie 不会进入 multipart form、`metadata`、
+`UploadedDocument.metadataJson` 或响应体。
 
 响应中的 `id` 就是聊天附件的 `documentId`：
 
@@ -1516,7 +1558,7 @@ async function stopCurrentRun() {
 }
 ```
 
-本地联调台的“鉴权请求头”如果配置了 `Cookie: finex_proxy_profile=...` 或企业登录 Cookie，Node 代理会把该 Cookie 注入 `/chat/runs` 和 `/chat/runs/{runId}/stop`。后端随后会根据 `financeex.agent-runtime.forward-cookie.*` 配置决定是否透传给 Relay Runtime；前端不需要在请求体里放 Cookie。
+本地联调台的“鉴权请求头”如果配置了 `Cookie: finex_proxy_profile=...` 或企业登录 Cookie，Node 代理会把该 Cookie 注入 `/chat/runs`、`/chat/runs/{runId}/stop` 和 `/documents`。后端随后会根据 `financeex.agent-runtime.forward-cookie.*` 与文档 provider 的 `forward-cookie` 配置决定是否透传给 Relay Runtime、显式技能 legacy Agent 或 legacy 文档上传接口；前端不需要在请求体或 multipart form 里放 Cookie。
 
 ## 排障清单
 

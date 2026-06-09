@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.interfaces.document;
 import com.huawei.finance.front.one.application.command.DocumentUploadCommand;
 import com.huawei.finance.front.one.application.config.DocumentUploadProperties;
 import com.huawei.finance.front.one.application.facade.DocumentFacade;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
 import com.huawei.finance.front.one.application.service.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
@@ -24,8 +25,8 @@ import reactor.core.scheduler.Schedulers;
  * 文档上传接口层共享组件。
  *
  * <p>上传协议在不同 Spring 启动模式下不同：Servlet/MVC 使用 {@link MultipartFile}，
-     * Reactive WebFlux 使用 {@link FilePart}。本组件把两种入口统一收敛为临时文件，再交给
-     * {@link DocumentFacade} 根据 targetProvider 选择文档 provider，避免 Controller 分叉出两套业务逻辑。</p>
+ * Reactive WebFlux 使用 {@link FilePart}。本组件把两种入口统一收敛为临时文件，再交给
+ * {@link DocumentFacade} 根据 targetProvider 选择文档 provider，避免 Controller 分叉出两套业务逻辑。</p>
  *
  * <p>用户身份只在请求入口解析一次，并在切换到 {@code boundedElastic} 执行文件和数据库阻塞操作前
  * 固化为不可变 {@link UserContext}，便于后续企业 ThreadLocal 权限框架接入。</p>
@@ -53,11 +54,13 @@ public class DocumentUploadSupport {
      * @param targetProvider 目标文档 provider；为空时走默认对象存储。
      * @param skillId 上传关联技能标识，可为空。
      * @param metadataJson 上传扩展元数据 JSON，可为空。
+     * @param cookieHeader 原始 HTTP Cookie 头；只在 provider 配置允许时透传到下游 upload 请求头。
      * @return 上传完成后的文档库元数据。
      */
     public Mono<UploadedDocument> uploadMultipartFile(MultipartFile file, String sessionId, String targetProvider,
-                                                      String skillId, String metadataJson) {
+                                                      String skillId, String metadataJson, String cookieHeader) {
         UserContext user = resolveChatUser();
+        RuntimeForwardHeaders forwardHeaders = forwardHeaders(cookieHeader);
         return Mono.usingWhen(
                 createTempFile(),
                 tempFile -> copyMultipartFile(file, tempFile)
@@ -69,7 +72,8 @@ public class DocumentUploadSupport {
                                 tempFile,
                                 targetProvider,
                                 skillId,
-                                metadataJson
+                                metadataJson,
+                                forwardHeaders
                         ))),
                 this::deleteTempFile
         );
@@ -83,11 +87,13 @@ public class DocumentUploadSupport {
      * @param targetProvider 目标文档 provider；为空时走默认对象存储。
      * @param skillId 上传关联技能标识，可为空。
      * @param metadataJson 上传扩展元数据 JSON，可为空。
+     * @param cookieHeader 原始 HTTP Cookie 头；只在 provider 配置允许时透传到下游 upload 请求头。
      * @return 上传完成后的文档库元数据。
      */
     public Mono<UploadedDocument> uploadFilePart(FilePart file, String sessionId, String targetProvider,
-                                                 String skillId, String metadataJson) {
+                                                 String skillId, String metadataJson, String cookieHeader) {
         UserContext user = resolveChatUser();
+        RuntimeForwardHeaders forwardHeaders = forwardHeaders(cookieHeader);
         return Mono.usingWhen(
                 createTempFile(),
                 tempFile -> writeFilePart(file, tempFile)
@@ -99,7 +105,8 @@ public class DocumentUploadSupport {
                                 tempFile,
                                 targetProvider,
                                 skillId,
-                                metadataJson
+                                metadataJson,
+                                forwardHeaders
                         ))),
                 this::deleteTempFile
         );
@@ -138,7 +145,8 @@ public class DocumentUploadSupport {
                                                  Path tempFile,
                                                  String targetProvider,
                                                  String skillId,
-                                                 String metadataJson) {
+                                                 String metadataJson,
+                                                 RuntimeForwardHeaders forwardHeaders) {
         return Mono.fromCallable(() -> {
             long size = Files.size(tempFile);
             if (size > uploadProperties.normalizedMaxUploadSizeBytes()) {
@@ -146,7 +154,7 @@ public class DocumentUploadSupport {
             }
             InputStream inputStream = Files.newInputStream(tempFile, StandardOpenOption.READ);
             return new DocumentUploadCommand(sessionId, originalFilename, contentType, size, inputStream,
-                    targetProvider, skillId, metadataJson);
+                    targetProvider, skillId, metadataJson, forwardHeaders);
         }).subscribeOn(Schedulers.boundedElastic()).flatMap(command -> facade.upload(user, command));
     }
 
@@ -164,6 +172,11 @@ public class DocumentUploadSupport {
         UserContext user = auth.resolve();
         permissionChecker.checkChatPermission(user);
         return user;
+    }
+
+    private RuntimeForwardHeaders forwardHeaders(String cookieHeader) {
+        // Cookie 在入口线程转成不可变快照，后续临时文件处理和 provider 调用不再读取 HTTP 上下文。
+        return RuntimeForwardHeaders.fromCookieHeader(cookieHeader, uploadProperties.normalizedForwardCookieMaxLength());
     }
 
     private String mediaType(MediaType contentType) {

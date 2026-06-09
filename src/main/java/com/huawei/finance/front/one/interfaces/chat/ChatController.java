@@ -85,7 +85,7 @@ public class ChatController {
      * 不随每次 run 创建结果返回，避免后端业务响应承担客户端路由配置职责。</p>
      *
      * @param request 前端提问请求，只包含会话、用户文本、附件引用和 metadata；租户与用户由服务端身份上下文解析。
-     * @param cookieHeader 原始 HTTP Cookie 头；只会作为内存快照透传给可信 Relay Runtime adapter。
+     * @param cookieHeader 原始 HTTP Cookie 头；只会作为内存快照透传给可信下游 adapter。
      * @return 新建后台 run 的创建结果，包含 runId、sessionId、firstSeq 和 streamTopicId。
      */
     @PostMapping(value = "/runs")
@@ -107,7 +107,7 @@ public class ChatController {
      * 停止指定 run 的当前回答。
      *
      * @param runId 需要停止的 run 标识；服务端会校验该 run 必须属于当前用户。
-     * @param cookieHeader 原始 HTTP Cookie 头；只会用于可信 Relay Runtime 的尽力取消请求。
+     * @param cookieHeader 原始 HTTP Cookie 头；只会用于可信下游 adapter 的尽力取消请求。
      * @return stop 后的 run 状态；已终态 run 会幂等返回当前状态。
      */
     @PostMapping(value = "/runs/{runId}/stop")

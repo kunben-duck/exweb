@@ -46,11 +46,8 @@ flowchart TD
 
     SingleSubAgent --> EventStream["输出 ChatEvent 流"]
     LegacySkill --> EventStream
-    RuntimeQuery --> RuntimeAdapter{"provider=relay api-adapter?"}
-    RuntimeAdapter -- "relay-stream-http" --> RelayHttp["RelayStreamHttpRuntimeAdapter"]
-    RuntimeAdapter -- "relay-websocket" --> RelayWs["RelayWebSocketRuntimeAdapter 后端出站"]
+    RuntimeQuery --> RelayHttp["RelayStreamHttpRuntimeAdapter"]
     RelayHttp --> EventStream
-    RelayWs --> EventStream
     SystemResponse --> EventStream
     EventStream --> Persist["事件写入 fin_ex_chat_event_t"]
     Persist --> Publish["发布到 run stream topic"]
@@ -79,7 +76,6 @@ sequenceDiagram
     participant SubAgent as "SubAgent"
     participant Runtime as "AgentRuntime Port"
     participant RelayHttp as "RelayStreamHttpRuntimeAdapter"
-    participant RelayWs as "RelayWebSocketRuntimeAdapter"
     participant RelayAgent as "RelayAgent Service"
     participant Stream as "ChatStreamApplicationService"
     participant Cursor as "ChatReadCursorStore"
@@ -124,13 +120,8 @@ sequenceDiagram
         Binding->>DB: "刷新 last_run_id 与 expires_at"
         Binding->>Redis: "刷新 RuntimeBinding TTL"
         SuperAgent->>Runtime: "AgentRuntime.query(runtimeSessionId, message)"
-        alt "api-adapter=relay-stream-http"
-            Runtime->>RelayHttp: "delegate"
-            RelayHttp->>RelayAgent: "HTTP POST stream-path"
-        else "api-adapter=relay-websocket"
-            Runtime->>RelayWs: "delegate"
-            RelayWs->>RelayAgent: "后端出站 WebSocket + 首帧 request"
-        end
+        Runtime->>RelayHttp: "delegate"
+        RelayHttp->>RelayAgent: "HTTP POST stream-path"
     else "不存在 active RuntimeBinding"
         SuperAgent->>Signal: "routeInitial(command, memory)"
         alt "用例库或意图服务命中简单任务"
@@ -144,13 +135,8 @@ sequenceDiagram
             Binding->>DB: "写入 fin_ex_runtime_binding_t"
             Binding->>Redis: "缓存 RuntimeBinding"
             SuperAgent->>Runtime: "AgentRuntime.query(message)"
-            alt "api-adapter=relay-stream-http"
-                Runtime->>RelayHttp: "delegate"
-                RelayHttp->>RelayAgent: "HTTP POST stream-path"
-            else "api-adapter=relay-websocket"
-                Runtime->>RelayWs: "delegate"
-                RelayWs->>RelayAgent: "后端出站 WebSocket + 首帧 request"
-            end
+            Runtime->>RelayHttp: "delegate"
+            RelayHttp->>RelayAgent: "HTTP POST stream-path"
         else "不支持任务"
             Signal-->>SuperAgent: "SYSTEM_RESPONSE"
             SuperAgent->>SuperAgent: "生成可控系统回复"
@@ -165,10 +151,6 @@ sequenceDiagram
         else "Relay HTTP Runtime route"
             RelayAgent-->>RelayHttp: "HTTP stream delta"
             RelayHttp-->>Runtime: "ChatEvent"
-            Runtime-->>SuperAgent: "message.delta / message.snapshot / runtime.* / message.completed"
-        else "Relay WebSocket Runtime route"
-            RelayAgent-->>RelayWs: "WebSocket frame"
-            RelayWs-->>Runtime: "ChatEvent"
             Runtime-->>SuperAgent: "message.delta / message.snapshot / runtime.* / message.completed"
         end
         SuperAgent->>EventStore: "append(event)"
@@ -383,13 +365,8 @@ sequenceDiagram
 
     par "后台 run 执行链路，由 /chat/runs 创建后在服务端推进"
         SuperAgent->>Runtime: "AgentRuntime.query"
-        alt "api-adapter=relay-stream-http"
-            Runtime->>RelayAgent: "HTTP POST stream-path"
-            RelayAgent-->>Runtime: "HTTP stream delta"
-        else "api-adapter=relay-websocket"
-            Runtime->>RelayAgent: "后端出站 WebSocket + request 首帧"
-            RelayAgent-->>Runtime: "WebSocket 文本/JSON 帧"
-        end
+        Runtime->>RelayAgent: "HTTP POST stream-path"
+        RelayAgent-->>Runtime: "HTTP stream chunk"
         Runtime-->>SuperAgent: "标准 ChatEvent(message.delta/message.snapshot/runtime.*)"
         SuperAgent->>SuperAgent: "连续 delta 合并"
         SuperAgent->>EventStore: "guarded append(delta)"
@@ -500,12 +477,11 @@ watchdog 是分层设计：`ChatRunWatchdogScheduler` 只负责按配置延迟�
 
 ### WebSocket 边界说明
 
-系统里存在两类 WebSocket，但职责完全不同：
+当前系统只保留前端到 FinanceEXChatService 的 WebSocket：
 
 - 前端 WebSocket：`/api/v1/ex/chat/ws`，只连接 FinanceEXChatService。它是用户级连接，按 run 级 `streamTopicId` 订阅已经写入事件事实源的 ChatEvent；它不接受聊天请求，也不直接调用 RelayAgent。
-- RelayAgent WebSocket：仅当 `financeex.agent-runtime.provider=relay` 且 `financeex.agent-runtime.api-adapter=relay-websocket` 时启用。此时 FinanceEXChatService 后端作为客户端连接 RelayAgent 的 `websocket-path`，把 Relay 专用 `RelayRuntimeQueryRequest` 作为首帧发送，再通过统一 normalizer 把 RelayAgent 返回帧转换成标准 ChatEvent。
 
-因此架构图中的 `AgentRuntime.query` 是应用层防腐层调用，不等价于前端 WebSocket。默认配置 `api-adapter=relay-stream-http` 下，`AgentRuntime.query` 使用真实 Relay HTTP 流式 adapter；只有显式切换到 `api-adapter=relay-websocket` 时，后端到 RelayAgent 的出站链路才使用 WebSocket。
+因此架构图中的 `AgentRuntime.query` 是应用层防腐层调用，不等价于前端 WebSocket。当前 `AgentRuntime.query` 使用 Relay HTTP 流式 adapter；FinanceEXChatService 到 RelayAgent 的出站 WebSocket adapter 已从正式版移除。
 
 前端 WebSocket 的服务端入口按启动模式自动切换：
 
@@ -532,7 +508,9 @@ MVC/Servlet 生产模式增加了长连接治理层：`financeex.websocket.allow
 `FilePart`。两种 Controller 都委托 `DocumentUploadSupport`，由它先把上传流写入临时文件，
 再通过 `DocumentFacade -> DocumentProviderAdapterRegistry` 选择 default-storage、legacy-agent
 或未来领域 Agent provider。前端看到的路径、字段和响应始终是同一套
-`POST /api/v1/ex/documents` 契约。
+`POST /api/v1/ex/documents` 契约。legacy-agent 等 HTTP provider 可通过 `forward-cookie=true`
+允许上传入口 Cookie 作为下游 upload HTTP header 透传；普通对象存储 provider 不使用该 Cookie，
+且 Cookie 不进入 multipart form、文档元数据或前端响应。
 
 ## 分层架构
 
@@ -577,7 +555,6 @@ flowchart TB
         SubAgentHttp["SubAgent HTTP Adapter"]
         RelayRuntime["RelayAgentRuntime Provider"]
         RelayHttp["RelayStreamHttpRuntimeAdapter"]
-        RelayWs["RelayWebSocketRuntimeAdapter"]
         Storage["Local / Huawei OBS S3 ObjectStorage"]
         HttpDocumentProvider["HTTP DocumentProviderAdapter"]
         LegacySkillHttp["LegacySkill HTTP Adapter"]
@@ -607,7 +584,6 @@ flowchart TB
     ChatService --> LegacySkillHttp
     RuntimeExecutor --> RelayRuntime
     RelayRuntime --> RelayHttp
-    RelayRuntime --> RelayWs
     DocumentService --> Storage
     DocumentService --> HttpDocumentProvider
     Application --> Domain
@@ -690,21 +666,19 @@ stop 语义：
 - SubAgent：`financeex.sub-agent.agents.{agentCode}.endpoint`
 - SubAgent stop：`financeex.sub-agent.agents.{agentCode}.stop-endpoint`
 - AgentRuntime provider：`financeex.agent-runtime.provider`，表示 Runtime 类型，当前默认 `relay`
-- Relay API adapter：`financeex.agent-runtime.api-adapter`，表示 relay provider 下的具体 API 接入协议，默认 `relay-stream-http`，可选 `relay-websocket`
 - Relay HTTP Streamable adapter：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`、`financeex.agent-runtime.stop-path`
-- Relay WebSocket adapter：设置 `financeex.agent-runtime.provider=relay`、`financeex.agent-runtime.api-adapter=relay-websocket`，并配置 `financeex.agent-runtime.base-url` 与 `financeex.agent-runtime.websocket-path`；adapter 会把 `http(s)://` base-url 转换为 `ws(s)://` 出站连接地址
-- Relay Cookie 透传：`financeex.agent-runtime.forward-cookie.enabled`、`max-length`、`allowed-adapters`。默认只允许 `relay-stream-http` 与 `relay-websocket` 接收入口 Cookie。
+- 下游 Cookie 透传：`financeex.agent-runtime.forward-cookie.enabled`、`max-length`、`allowed-adapters` 控制 run/stop 到 Relay Runtime 的 Cookie 透传；显式技能 legacy Agent chat/cancel 也使用入口 Cookie 内存快照。文档 provider 上传另由 `financeex.document.forward-cookie-max-length` 与 `financeex.documents.providers.entries.{provider}.forward-cookie` 控制，默认只有 `legacy-agent` 开启 upload Cookie 透传。
 - 流式 delta 合并：`financeex.chat-stream.delta-coalesce-enabled`、`delta-coalesce-window`、`delta-coalesce-max-chars`。默认开启，只把连续 `message.delta` 合并为标准 delta event，降低事件表和实时 fanout 写放大；`message.snapshot` 和 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.event` 等非正文事件不会被合并。
 - Runtime 原始流日志：`financeex.runtime-raw-log.enabled`、`transport`、`coalesce-window`、`max-chars`、`hard-max-chars`、`max-rows-per-run`、`redact-sensitive-fields`。默认关闭；后续接入企业 MQ 时通过 `RuntimeRawStreamLogPublisher` 发布 raw chunk，消费端异步合并、脱敏、分片后写入 `fin_ex_runtime_raw_stream_log_t`。该日志仅用于排障，不参与前端恢复、WebSocket 推送或 assistant 历史拼接。
 - Relay 响应映射：`financeex.agent-runtime.relay.answer-event-types`、`answer-content-fields`、`agent-context-as-answer`。默认把 Relay `type=agent,is_streaming=true` 的 `content/context` 映射为 assistant 正文增量 `message.delta`，把 `type=agent,is_streaming=false` 映射为最终回答快照 `message.snapshot`，把 `steam-complete/stream-complete/[DONE]` 映射为 `message.completed`。
 
-SubAgent 当前只支持单轮 HTTP 文本流调用。当前上线版本内置一个 `RelayAgentRuntime` provider 和两个 `RelayRuntimeProtocolAdapter`：`relay-stream-http` 是 Relay HTTP 流式协议实现，`relay-websocket` 是 RelayAgent WebSocket 对话协议实现。新增下游协议时，应新增 adapter，而不是在 `RelayAgentRuntime` 主类里堆转换分支。
+SubAgent 当前只支持单轮 HTTP 文本流调用。当前上线版本内置一个 `RelayAgentRuntime` provider 和一个 `RelayRuntimeProtocolAdapter`：`relay-stream-http` 是 Relay HTTP 流式协议实现。新增下游协议时，应新增 adapter，而不是在 `RelayAgentRuntime` 主类里堆转换分支；未经过评审的出站 WebSocket adapter 不在正式版保留。
 
-`Cookie` 是请求入口捕获的运行期内存快照，只会在 `AgentRuntimeRequest.forwardHeaders` 或 cancel 请求中向 adapter 传递；这些字段被 JSON 序列化忽略，且 Relay adapter 会把内部请求映射为专用 wire DTO，不能进入 Relay 请求体、run metadata、事件 payload 或日志。该设计保证企业登录态不会因后台 run、Event Resume/WS 恢复或故障治理被持久化或回放。
+`Cookie` 是请求入口捕获的运行期内存快照，只会在 `AgentRuntimeRequest.forwardHeaders`、`LegacySkillAgentRequest.forwardHeaders`、`DocumentUploadCommand.forwardHeaders` 或 cancel 请求中向可信 adapter 传递；这些字段被 JSON 序列化忽略，且 adapter 会把内部请求映射为专用 wire DTO 或受控 multipart，不能进入下游请求体、form 字段、文档元数据、run metadata、事件 payload 或日志。该设计保证企业登录态不会因后台 run、Event Resume/WS 恢复、文档库管理或故障治理被持久化或回放。
 
 当前上线版本只保留 Relay Runtime provider，不包含其他历史 Runtime provider 分支、专用 memory 分支或专用 prompt assembler 配置。复杂任务通过 Relay Runtime adapter 执行；后续如需替换 Runtime，应新增 `AgentRuntime` provider，而不是把新协议写进主编排。
 
-AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 `AgentRuntimeRequest` 契约，当前 `relay` provider 是 Runtime 类型，下游 API 接入协议由 `financeex.agent-runtime.api-adapter` 选择。Relay adapter 内部负责请求 wire DTO 映射和响应 chunk 归一化，前端只消费 ChatService 标准 ChatEvent，不接触 Relay 原始 JSON。`message.delta` 是 assistant 正文增量；`message.snapshot` 是最终回答快照，前端 replace 草稿且历史正文优先使用它；`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool` 是过程事件，run 完成后进入 `ChatMessageDto.parts` 回显，parts 通过 `title/status/channel/displayHint/visible` 提供稳定展示语义；Relay 未知 JSON object 才以 `runtime.event` 可控透传，`sourcePayload` 会脱敏限长。不能把下游任意 `type` 直接作为 ChatService 顶层事件类型。后续如果替换 Runtime 实现，应新增一个实现 `AgentRuntime` 的 provider；后续如果只新增 Relay 下游协议，应新增 `RelayRuntimeProtocolAdapter`，避免改动 `FinanceEXChatService` 主编排。
+AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 `AgentRuntimeRequest` 契约，当前 `relay` provider 是 Runtime 类型，下游 API 接入协议固定为 streamable HTTP。Relay adapter 内部负责请求 wire DTO 映射和响应 chunk 归一化，前端只消费 ChatService 标准 ChatEvent，不接触 Relay 原始 JSON。`message.delta` 是 assistant 正文增量；`message.snapshot` 是最终回答快照，前端 replace 草稿且历史正文优先使用它；`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool` 是过程事件，run 完成后进入 `ChatMessageDto.parts` 回显，parts 通过 `title/status/channel/displayHint/visible` 提供稳定展示语义；Relay 未知 JSON object 才以 `runtime.event` 可控透传，`sourcePayload` 会脱敏限长。不能把下游任意 `type` 直接作为 ChatService 顶层事件类型。后续如果替换 Runtime 实现，应新增一个实现 `AgentRuntime` 的 provider；后续如果只新增 Relay 下游协议，应新增 `RelayRuntimeProtocolAdapter`，避免改动 `FinanceEXChatService` 主编排。
 
 ## 命名规范
 

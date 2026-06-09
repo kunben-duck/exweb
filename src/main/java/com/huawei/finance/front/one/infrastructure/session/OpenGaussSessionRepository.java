@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.infrastructure.session;
 
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
+import com.huawei.finance.front.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -57,6 +58,21 @@ public class OpenGaussSessionRepository implements SessionRepository {
         List<ChatSession> items = hasMore ? rows.subList(0, pageSize) : rows;
         String nextCursor = hasMore ? encodeCursor(items.get(items.size() - 1)) : null;
         return new ChatSessionPage(items, nextCursor);
+    }
+
+    @Override
+    public ChatSessionNumberPage pageNumberByTenantIdAndUserId(String tenantId, String userId, int curPage, int pageSize) {
+        int normalizedPage = Math.max(1, curPage);
+        int normalizedSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 100));
+        long totalRows = mapper.countPageByOwner(tenantId, userId);
+        long totalPages = totalRows == 0 ? 0 : (totalRows + normalizedSize - 1) / normalizedSize;
+        long offset = (long) (normalizedPage - 1) * normalizedSize;
+        List<ChatSession> items = totalRows == 0 || offset >= totalRows
+                ? List.of()
+                : mapper.findNumberPageByOwner(tenantId, userId, normalizedSize, offset).stream()
+                .map(this::toDomain)
+                .toList();
+        return new ChatSessionNumberPage(items, normalizedPage, normalizedSize, totalRows, totalPages);
     }
 
     @Override

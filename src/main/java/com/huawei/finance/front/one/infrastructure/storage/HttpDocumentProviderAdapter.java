@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.infrastructure.storage;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.config.DocumentProviderProperties;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.document.DocumentProviderAdapter;
 import com.huawei.finance.front.one.application.integration.document.DocumentProviderUploadRequest;
 import com.huawei.finance.front.one.application.service.WorkloadConcurrencyLimiter;
@@ -17,6 +18,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.core.io.ByteArrayResource;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.MultipartBodyBuilder;
@@ -140,10 +142,23 @@ public class HttpDocumentProviderAdapter implements DocumentProviderAdapter {
                 .method(HttpMethod.valueOf(blankToDefault(upload.getMethod(), "POST").toUpperCase(Locale.ROOT)))
                 .uri(fullUrl(provider, upload.getPath()))
                 .contentType(MediaType.MULTIPART_FORM_DATA)
+                .headers(headers -> applyForwardedCookie(headers, request))
                 .body(BodyInserters.fromMultipartData(builder.build()))
                 .retrieve()
                 .bodyToMono(String.class)
                 .block(timeout(provider));
+    }
+
+    private void applyForwardedCookie(HttpHeaders headers, DocumentProviderUploadRequest request) {
+        RuntimeForwardHeaders forwardHeaders = request.command().forwardHeaders();
+        if (!request.provider().isForwardCookie() || forwardHeaders == null || !forwardHeaders.hasCookie()) {
+            return;
+        }
+        /*
+         * Cookie 只用于可信 HTTP provider 的 upload 请求头。multipart form 字段、provider 元数据
+         * 和 UploadedDocument.metadataJson 都不会写入 Cookie，避免企业登录态落库或回显。
+         */
+        headers.set(HttpHeaders.COOKIE, forwardHeaders.cookieHeader());
     }
 
     private ProviderDocument parseUploadResponse(DocumentProviderUploadRequest request, String response) {

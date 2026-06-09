@@ -18,6 +18,7 @@ import com.huawei.finance.front.one.domain.chat.ChatMessagePartDraft;
 import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
+import com.huawei.finance.front.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import java.time.Duration;
 import java.time.Instant;
@@ -183,6 +184,36 @@ class SessionApplicationServiceTest {
 
         assertThat(firstAnswers).containsEntry("session1", "第一条回答");
         assertThat(firstAnswers).doesNotContainKey("session2");
+    }
+
+    @Test
+    void listSessionsByPageReturnsTotalRowsAndExcludesDeletedSessions() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        Instant now = Instant.now();
+        ChatSession first = sessions.save(new ChatSession("session1", "tenant1", "user1", "first", "ACTIVE", "web",
+                now, now.plusSeconds(1)));
+        ChatSession second = sessions.save(new ChatSession("session2", "tenant1", "user1", "second", "ARCHIVED", "web",
+                now, now.plusSeconds(2)));
+        sessions.save(new ChatSession("session3", "tenant1", "user1", "deleted", "DELETED", "web",
+                now, now.plusSeconds(3)));
+        sessions.save(new ChatSession("session4", "tenant1", "user2", "other", "ACTIVE", "web",
+                now, now.plusSeconds(4)));
+        messages.save(new ChatMessage("msg1", "tenant1", "user1", first.id(), null, 1L, 0, 1,
+                "assistant", "第一条回答", null, "run1", "NORMAL", false, null, null, null, null, null, now));
+        messages.save(new ChatMessage("msg2", "tenant1", "user1", second.id(), null, 1L, 0, 1,
+                "assistant", "归档回答", null, "run2", "NORMAL", false, null, null, null, null, null, now));
+        SessionApplicationService service = service(sessions, messages);
+
+        ChatSessionNumberPage page = service.listSessionsByPage(user(), 1, 1);
+        Map<String, String> firstAnswers = service.findFirstAssistantAnswers(user(), page.items());
+
+        assertThat(page.items()).extracting(ChatSession::id).containsExactly("session2");
+        assertThat(page.curPage()).isEqualTo(1);
+        assertThat(page.pageSize()).isEqualTo(1);
+        assertThat(page.totalRows()).isEqualTo(2);
+        assertThat(page.totalPages()).isEqualTo(2);
+        assertThat(firstAnswers).containsEntry("session2", "归档回答");
     }
 
     @Test

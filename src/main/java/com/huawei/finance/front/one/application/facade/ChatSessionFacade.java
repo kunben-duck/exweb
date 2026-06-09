@@ -4,6 +4,7 @@ import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
+import com.huawei.finance.front.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +44,26 @@ public interface ChatSessionFacade {
      * @return 会话分页结果。
      */
     ChatSessionPage listSessions(UserContext user, String cursor, int limit);
+
+    /**
+     * 按页码查询当前用户的会话列表。
+     *
+     * <p>该方法服务传统分页 UI，返回 totalRows/totalPages；旧游标分页接口继续使用
+     * {@link #listSessions(UserContext, String, int)}。</p>
+     *
+     * @param user 请求入口解析出的不可变用户身份快照。
+     * @param curPage 当前页码，从 1 开始。
+     * @param pageSize 每页条数。
+     * @return 页码分页结果。
+     */
+    default ChatSessionNumberPage listSessionsByPage(UserContext user, int curPage, int pageSize) {
+        int normalizedPage = Math.max(1, curPage);
+        int normalizedSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 100));
+        ChatSessionPage page = listSessions(user, null, normalizedSize);
+        long totalRows = page.items().size();
+        long totalPages = totalRows == 0 ? 0 : 1;
+        return new ChatSessionNumberPage(page.items(), normalizedPage, normalizedSize, totalRows, totalPages);
+    }
 
     /**
      * 批量查询会话首条 assistant 回答。

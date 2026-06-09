@@ -273,7 +273,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 // 根据路由结果选择 SubAgent、系统响应或统一 AgentRuntime。
                 Flux<ChatEvent> body = switch (selectedRoute.type()) {
                     case SUB_AGENT -> subAgentExecutor.execute(runCommand, runId, memory, selectedRoute, user);
-                    case EXPLICIT_SKILL -> legacySkillExecutor.execute(runCommand, runId, selectedRoute, user);
+                    case EXPLICIT_SKILL -> legacySkillExecutor.execute(runCommand, runId, selectedRoute, user,
+                            headerSnapshot);
                     case SYSTEM_RESPONSE -> systemResponseExecutor.execute(runCommand, runId, selectedIntent, selectedRoute);
                     case AGENT_RUNTIME -> agentRuntimeExecutor.execute(runCommand, runId, memory, selectedIntent,
                             selectedRoute, user, bindingRef.get(), headerSnapshot);
@@ -451,7 +452,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
             return subAgentExecutor.cancel(run, user);
         }
         if (RouteType.EXPLICIT_SKILL.name().equals(run.routeType())) {
-            return legacySkillExecutor.cancel(run, user);
+            return legacySkillExecutor.cancel(run, user, forwardHeaders);
         }
         return Mono.empty();
     }

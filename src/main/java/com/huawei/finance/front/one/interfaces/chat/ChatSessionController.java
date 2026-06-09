@@ -11,6 +11,7 @@ import com.huawei.finance.front.one.domain.chat.ChatMessageFeedback;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
+import com.huawei.finance.front.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import com.huawei.finance.front.one.domain.chat.ChatStreamStatus;
 import com.huawei.finance.front.one.interfaces.chat.dto.BatchDeleteChatSessionsDto;
@@ -22,6 +23,7 @@ import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessagePartDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessageTreeDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessageTreeNodeDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionNumberPageDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionPageDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionStateDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatStreamStatusDto;
@@ -107,6 +109,37 @@ public class ChatSessionController {
                                     .map(session -> toDto(session, firstAnswers.get(session.id())))
                                     .toList(),
                             page.nextCursor()
+                    );
+                })
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * 按页码分页查询当前用户历史会话列表。
+     *
+     * <p>该接口用于需要 {@code curPage/pageSize/totalRows} 的传统分页 UI；现有 cursor 分页接口
+     * 保持不变。返回项会批量装配首条 assistant 完整回答，避免列表页逐会话查询历史消息。</p>
+     *
+     * @param curPage 当前页码，从 1 开始；非法值由应用层归一化。
+     * @param pageSize 每页条数；应用层会限制最大值。
+     * @return 会话页码分页结果。
+     */
+    @GetMapping("/page")
+    public Mono<ChatSessionNumberPageDto> listByPage(
+            @RequestParam(value = "curPage", defaultValue = "1") int curPage,
+            @RequestParam(value = "pageSize", defaultValue = "20") int pageSize) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> {
+                    ChatSessionNumberPage page = facade.listSessionsByPage(user, curPage, pageSize);
+                    Map<String, String> firstAnswers = facade.findFirstAssistantAnswers(user, page.items());
+                    return new ChatSessionNumberPageDto(
+                            page.items().stream()
+                                    .map(session -> toDto(session, firstAnswers.get(session.id())))
+                                    .toList(),
+                            page.curPage(),
+                            page.pageSize(),
+                            page.totalRows(),
+                            page.totalPages()
                     );
                 })
                 .subscribeOn(Schedulers.boundedElastic());

@@ -6,20 +6,20 @@ import java.util.Locale;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * AgentRuntime Cookie 请求头透传配置。
+ * 下游 Agent Cookie 请求头透传配置。
  *
- * <p>Cookie 透传只用于 FinanceEXChatService 到可信 Relay Runtime 的出站调用。默认允许
- * {@code relay-stream-http} 与 {@code relay-websocket} 两个内部 adapter，避免把企业登录态
- * 发送到非 Relay 的第三方服务。</p>
+ * <p>Cookie 透传只用于 FinanceEXChatService 到可信下游 Agent 的出站调用。当前上线版本包括
+ * Relay streamable HTTP 和前端显式选择的 legacy skill。{@code allowedAdapters} 只约束
+ * Relay Runtime adapter；legacy skill 由显式路由和老 Agent 配置共同限定。</p>
  */
 @ConfigurationProperties(prefix = "financeex.agent-runtime.forward-cookie")
 public class AgentRuntimeForwardCookieProperties {
-    /** 是否启用入口 Cookie 到 Relay Runtime 的透传。 */
+    /** 是否启用入口 Cookie 到可信下游 Agent 的透传。 */
     private boolean enabled = true;
     /** 单个 Cookie 请求头允许透传的最大字符数，默认 8 KiB。 */
     private int maxLength = 8192;
-    /** 允许接收 Cookie 的 Runtime API adapter 名称列表。 */
-    private List<String> allowedAdapters = new ArrayList<>(List.of("relay-stream-http", "relay-websocket"));
+    /** 允许接收 Cookie 的 Relay Runtime API adapter 名称列表；显式技能 legacy Agent 不使用该列表。 */
+    private List<String> allowedAdapters = new ArrayList<>(List.of("relay-stream-http"));
 
     public boolean isEnabled() {
         return enabled;

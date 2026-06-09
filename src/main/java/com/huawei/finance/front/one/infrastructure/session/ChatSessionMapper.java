@@ -6,6 +6,7 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Result;
+import org.apache.ibatis.annotations.ResultMap;
 import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
@@ -178,6 +179,34 @@ public interface ChatSessionMapper {
                                          @Param("cursorUpdatedAt") Instant cursorUpdatedAt,
                                          @Param("cursorId") String cursorId,
                                          @Param("limit") int limit);
+
+    @Select("""
+            SELECT COUNT(1)
+            FROM fin_ex_chat_session_t
+            WHERE tenant_id = #{tenantId}
+              AND user_id = #{userId}
+              AND status <> 'DELETED'
+            """)
+    long countPageByOwner(@Param("tenantId") String tenantId,
+                          @Param("userId") String userId);
+
+    @Select("""
+            SELECT id, tenant_id, user_id, title, status, channel, current_leaf_message_id,
+                   root_session_id, branch_source_session_id, branch_source_message_id,
+                   last_node_order, metadata_json, created_at, updated_at
+            FROM fin_ex_chat_session_t
+            WHERE tenant_id = #{tenantId}
+              AND user_id = #{userId}
+              AND status <> 'DELETED'
+            ORDER BY updated_at DESC, id DESC
+            LIMIT #{limit}
+            OFFSET #{offset}
+            """)
+    @ResultMap("chatSessionPageResultMap")
+    List<ChatSessionRow> findNumberPageByOwner(@Param("tenantId") String tenantId,
+                                               @Param("userId") String userId,
+                                               @Param("limit") int limit,
+                                               @Param("offset") long offset);
 
     @Select("""
             SELECT last_node_order

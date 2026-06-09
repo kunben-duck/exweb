@@ -27,7 +27,7 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `application`：聊天主编排、会话、记忆、RuntimeBinding、SubAgent 单轮调用、显式技能兼容调用和 Relay Runtime 调用。
 - `application.integration`：应用层出站集成抽象，定义对 Relay Runtime、SubAgent、IntentService、用例库、会话、记忆、文档、ID 和身份能力的依赖边界。
 - `domain`：聊天事件、意图结果、路由结果、RuntimeBinding、用例匹配结果等核心模型。
-- `infrastructure`：Redis、openGauss/MyBatis、用例库 HTTP、SubAgent HTTP、Relay Runtime HTTP/WebSocket、DocumentProvider、对象存储和 legacy skill HTTP 等适配。
+- `infrastructure`：Redis、openGauss/MyBatis、用例库 HTTP、SubAgent HTTP、Relay Runtime streamable HTTP、DocumentProvider、对象存储和 legacy skill HTTP 等适配。
 
 ## 前端接入协议
 
@@ -35,7 +35,8 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 
 - `POST /api/v1/ex/chat/runs`：唯一提问入口。创建后台 run，返回 `runId`、`sessionId`、`firstSeq` 和 `streamTopicId`。
 - `POST /api/v1/ex/chat/sessions`：显式创建会话；也可以在 `/chat/runs` 中不传 `sessionId` 由后端创建或归一化。
-- `GET /api/v1/ex/chat/sessions?limit=20&cursor=...`：分页查询当前用户会话列表，并返回每个会话第一条 assistant 回答 `firstAssistantAnswer`。
+- `GET /api/v1/ex/chat/sessions?limit=20&cursor=...`：游标分页查询当前用户会话列表，并返回每个会话第一条 assistant 回答 `firstAssistantAnswer`。
+- `GET /api/v1/ex/chat/sessions/page?curPage=1&pageSize=20`：页码分页查询当前用户历史会话，返回 `totalRows/totalPages` 和每个会话的 `firstAssistantAnswer`。
 - `GET /api/v1/ex/chat/sessions/{sessionId}/state?messageLimit=50`：选择会话时聚合返回会话元数据、最近历史消息和流式状态。
 - `GET /api/v1/ex/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50`：选择会话后查询当前 active path 或指定 leaf path 的完整 user/assistant 消息。
 - `GET /api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants`：查询某条消息同父节点下的候选版本，用于前端切换编辑/重新生成后的版本。
@@ -72,7 +73,8 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 
 仓库提供独立本地联调台 `local-test-frontend/`。联调台通过 Node 代理访问后端，支持在页面中按 Postman 风格配置 `Cookie`、`Authorization`、`X-*` 等企业鉴权请求头；代理会在 HTTP、fetch Event Resume、文件下载和 WebSocket 握手时统一注入这些请求头。浏览器自身不会、也不能直接手写 `Cookie` 请求头或 WebSocket 自定义请求头。
 
-当 `POST /api/v1/ex/chat/runs` 或 `POST /api/v1/ex/chat/runs/{runId}/stop` 携带标准 `Cookie` 请求头时，ChatService 会在请求入口捕获一次，并只作为内存快照透传给可信 Relay Runtime adapter。Cookie 不会写入 `metadata_json`、消息、事件、日志或前端响应，也不会发送给非 Relay 第三方服务。
+当 `POST /api/v1/ex/chat/runs`、`POST /api/v1/ex/chat/runs/{runId}/stop` 或 `POST /api/v1/ex/documents`
+携带标准 `Cookie` 请求头时，ChatService 会在请求入口捕获一次，并只作为内存快照透传给可信下游 adapter：Relay streamable HTTP、显式技能 legacy Agent chat/cancel，以及显式配置 `forward-cookie=true` 的 legacy 文档 upload provider。Cookie 不会写入 `metadata_json`、消息、事件、日志、前端响应、multipart form 或下游请求体。普通 default-storage 对象存储上传不会透传 Cookie。
 
 租户和用户身份不从前端 Header/Query/Body 透传，统一由请求入口通过 `AuthContextProvider` 从服务端身份上下文解析一次，并以不可变 `UserContext` 传入应用层。应用层、后台 run 和 `boundedElastic` 阻塞线程不会再次读取请求 ThreadLocal。本地开发态必须显式配置：
 
@@ -198,12 +200,12 @@ export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
 
 ## 外部服务接入
 
-用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。SubAgent 当前通过单轮 HTTP 文本流接入；Relay Runtime 通过 AgentRuntime 防腐层接入，并在 Relay provider 内部通过 `api-adapter` 选择 Relay HTTP 或 Relay WebSocket 接入实现。
+用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。SubAgent 当前通过单轮 HTTP 文本流接入；Relay Runtime 通过 AgentRuntime 防腐层接入，当前上线版本只保留下游 Relay streamable HTTP 接入。
 
-这里有两条不同的 WebSocket 边界，不要混淆：
+这里需要明确 WebSocket 边界：
 
 - 前端 WebSocket：`/api/v1/ex/chat/ws`，只连接 FinanceEXChatService，用于订阅 `streamTopicId` 并接收已经落库的 ChatEvent。
-- RelayAgent WebSocket：仅当 `FINANCEEX_RELAY_AGENT_API_ADAPTER=relay-websocket` 时，由 FinanceEXChatService 后端作为客户端主动连接 RelayAgent；前端不直接连接 RelayAgent，也不通过前端 WebSocket 发起 `AgentRuntime.query`。
+- 下游 Relay：当前只通过 streamable HTTP 调用，不再保留 FinanceEXChatService 到 RelayAgent 的出站 WebSocket adapter。前端 WebSocket 不触发 `AgentRuntime.query`。
 
 前端 WebSocket 入口同时兼容两种 Spring 启动模式：纯 WebFlux 启动时使用 WebFlux
 `WebSocketHandler`；企业框架引入 `spring-boot-starter-web` 并以 MVC/Servlet 模式启动时，
@@ -225,17 +227,16 @@ export FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENDPOINT=http://employee-reimburse
 export FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_STOP_ENDPOINT=http://employee-reimbursement-agent:9300/v1/stop
 
 export FINANCEEX_AGENT_RUNTIME_PROVIDER=relay
-export FINANCEEX_RELAY_AGENT_API_ADAPTER=relay-stream-http
 export FINANCEEX_RELAY_AGENT_BASE_URL=http://relay-agent:9000
 export FINANCEEX_RELAY_AGENT_STREAM_PATH=/v1/agent/runs/stream
 export FINANCEEX_RELAY_AGENT_STOP_PATH=/v1/agent/runs/{runId}/stop
-# 入口 Cookie 只透传给可信 Relay adapter，不发送给非 Relay 第三方服务
+# 入口 Cookie 只透传给可信下游 adapter，不写入请求体或持久化数据
 export FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ENABLED=true
 export FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_MAX_LENGTH=8192
-export FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ALLOWED_ADAPTERS=relay-stream-http,relay-websocket
-# 如果 RelayAgent 对话接口使用 WebSocket，则保持 provider=relay，只切换 api-adapter：
-export FINANCEEX_RELAY_AGENT_API_ADAPTER=relay-websocket
-export FINANCEEX_RELAY_AGENT_WEBSOCKET_PATH=/v1/agent/runs/ws
+export FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ALLOWED_ADAPTERS=relay-stream-http
+# legacy-agent 文档 provider upload 可单独开启 Cookie 请求头透传
+export FINANCEEX_DOCUMENT_FORWARD_COOKIE_MAX_LENGTH=8192
+export FINANCEEX_LEGACY_AGENT_DOCUMENT_FORWARD_COOKIE_ENABLED=true
 ```
 
 ### MVC 生产治理配置
@@ -295,9 +296,11 @@ export FINANCEEX_RELAY_ANSWER_CONTENT_FIELDS=content,context,delta,message,text,
 export FINANCEEX_RELAY_AGENT_CONTEXT_AS_ANSWER=true
 ```
 
-SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP 文本流调用。Relay Runtime 作为 AgentRuntime 实现支持两个 API adapter：`relay-stream-http` 使用 Relay HTTP 流式协议，`relay-websocket` 使用 RelayAgent WebSocket 对话协议。
+SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP 文本流调用。Relay Runtime 作为 AgentRuntime 实现只保留 `relay-stream-http` API adapter，使用 Relay HTTP 流式协议。
 
-Relay Runtime Cookie 透传是 adapter 级能力：`relay-stream-http` 会把入口 Cookie 放入下游 HTTP 请求头；`relay-websocket` 会把入口 Cookie 放入后端出站 WebSocket 握手头和可选 stop HTTP 请求头。`AgentRuntimeRequest.forwardHeaders` 与 cancel 请求中的转发头均被 JSON 忽略，避免 Cookie 进入下游请求体。
+Cookie 透传是 adapter 级能力：`relay-stream-http`、显式技能 legacy Agent chat/cancel，以及 `forward-cookie=true`
+的 HTTP 文档 provider upload 会把入口 Cookie 放入下游 HTTP 请求头。`AgentRuntimeRequest.forwardHeaders`、
+`LegacySkillAgentRequest.forwardHeaders`、`DocumentUploadCommand.forwardHeaders` 与 cancel 请求中的转发头均被 JSON 忽略，避免 Cookie 进入下游请求体、multipart form 或文档元数据。
 
 Relay Runtime 请求与响应均经过 adapter 防腐层：应用层使用 `AgentRuntimeRequest`，但下游请求体会映射为 Relay 专用 wire DTO，只保留 `runId/sessionId/runtimeSessionId/query/attachments/metadata` 等必要字段；下游 plain text、JSON chunk 或 SSE-like `data:` chunk 可选进入 raw log MQ 旁路，再归一化为 ChatService 标准 `ChatEvent`。前端只消费 `message.delta.payload.delta`、`message.snapshot.payload.content`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.event`、`message.completed`、`run.failed` 等稳定事件，不需要理解 Relay 原始响应格式。
 
@@ -305,9 +308,9 @@ Relay 响应映射的核心规则是：`type=agent,is_streaming=true` 且包含 
 
 ## 上线版本边界
 
-当前上线版本只内置 Relay Runtime provider，不保留其他历史 Runtime 分支、专用 prompt assembler 或相关配置。复杂任务通过 Relay Runtime adapter 执行，默认 `provider=relay`、`api-adapter=relay-stream-http`，也可以切换为 `relay-websocket`。
+当前上线版本只内置 Relay Runtime provider，不保留其他历史 Runtime 分支、专用 prompt assembler 或相关配置。复杂任务通过 Relay Runtime adapter 执行，默认 `provider=relay`，下游固定使用 streamable HTTP，不再提供后端到 Relay 的 WebSocket adapter。
 
-AgentRuntime 防腐层必须保留：应用层只依赖 `AgentRuntime` 接口和 `AgentRuntimeRequest` 契约，不依赖 Relay 的 HTTP、WebSocket、wire DTO 或 chunk 格式。`financeex.agent-runtime.provider` 表示 Runtime 类型，当前为 `relay`；`financeex.agent-runtime.api-adapter` 表示 relay provider 下的 API 接入 adapter。后续替换 Runtime 实现时，应新增另一个 `AgentRuntime` provider；后续只替换 Relay 下游协议时，应新增 `RelayRuntimeProtocolAdapter` 实现。
+AgentRuntime 防腐层必须保留：应用层只依赖 `AgentRuntime` 接口和 `AgentRuntimeRequest` 契约，不依赖 Relay 的 HTTP、wire DTO 或 chunk 格式。`financeex.agent-runtime.provider` 表示 Runtime 类型，当前为 `relay`；Relay provider 当前固定走 streamable HTTP。后续替换 Runtime 实现时，应新增另一个 `AgentRuntime` provider；后续只替换 Relay 下游协议时，应新增 `RelayRuntimeProtocolAdapter` 实现。
 
 HTTP 错误响应统一为 `{timestamp,path,status,error,code,message}`。常见错误码包括：
 `AUTH_CONTEXT_MISSING`、`ACCESS_DENIED`、`BAD_REQUEST`、`VALIDATION_FAILED`、
@@ -351,7 +354,8 @@ openGauss 的 `fin_ex_uploaded_document_t` 保存文档库元数据，聊天请�
 Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共用同一套临时落盘和 provider 上传逻辑。
 不传 `targetProvider` 时走默认 `default-storage`，即当前 S3/OBS/local 对象存储；传
 `targetProvider=legacy-agent` 时会转发老 Agent upload 接口，并把老 Agent 返回的 docId/docName/docSize
-等写入统一文档库 `metadataJson.providerDocument`。
+等写入统一文档库 `metadataJson.providerDocument`。如果该 provider 配置 `forward-cookie=true`，上传入口捕获到的
+Cookie 会作为下游 upload HTTP header 透传，用于老 Agent 文件服务的企业鉴权；Cookie 不会进入 form 字段或文档库元数据。
 
 文档接口：
 

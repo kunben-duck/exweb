@@ -15,30 +15,26 @@ class RelayAgentRuntimeConfigurationTest {
             .withUserConfiguration(
                     RelayAgentRuntime.class,
                     RelayRuntimeResponseNormalizer.class,
-                    RelayStreamHttpRuntimeAdapter.class,
-                    RelayWebSocketRuntimeAdapter.class,
-                    RelayWebSocketFrameTranslator.class);
+                    RelayStreamHttpRuntimeAdapter.class);
 
     @Test
-    void defaultRelayProviderCreatesRuntimeAndProtocolAdapters() {
+    void defaultRelayProviderCreatesRuntimeAndStreamHttpAdapter() {
         contextRunner.run(context -> {
             assertThat(context).hasSingleBean(AgentRuntime.class);
             assertThat(context).hasSingleBean(RelayAgentRuntime.class);
             assertThat(context).hasSingleBean(RelayStreamHttpRuntimeAdapter.class);
-            assertThat(context).hasSingleBean(RelayWebSocketRuntimeAdapter.class);
         });
     }
 
     @Test
-    void relayWebSocketApiAdapterStillUsesSingleRelayRuntime() {
-        contextRunner
-                .withPropertyValues(
-                        "financeex.agent-runtime.provider=relay",
-                        "financeex.agent-runtime.api-adapter=relay-websocket")
+    void missingStreamHttpAdapterFailsFastAtStartup() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(RelayAgentRuntime.class)
+                .withPropertyValues("financeex.agent-runtime.provider=relay")
                 .run(context -> {
-                    assertThat(context).hasSingleBean(AgentRuntime.class);
-                    assertThat(context).hasSingleBean(RelayAgentRuntime.class);
-                    assertThat(context).hasSingleBean(RelayWebSocketRuntimeAdapter.class);
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasRootCauseMessage("Relay stream-http adapter is required. Registered adapters: []");
                 });
     }
 

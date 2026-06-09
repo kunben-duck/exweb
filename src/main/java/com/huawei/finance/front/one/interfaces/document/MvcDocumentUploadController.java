@@ -2,11 +2,13 @@ package com.huawei.finance.front.one.interfaces.document;
 
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import reactor.core.publisher.Mono;
@@ -36,6 +38,7 @@ public class MvcDocumentUploadController {
      * @param targetProvider 目标文档 provider；为空时使用默认对象存储。
      * @param skillId 上传关联技能标识，可为空。
      * @param metadata 上传扩展元数据 JSON，可为空。
+     * @param cookieHeader 原始 HTTP Cookie 头；仅按 provider 配置透传给可信下游 upload。
      * @return 上传完成后的文档库元数据。
      */
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -43,7 +46,8 @@ public class MvcDocumentUploadController {
                                          @RequestParam(value = "sessionId", required = false) String sessionId,
                                          @RequestParam(value = "targetProvider", required = false) String targetProvider,
                                          @RequestParam(value = "skillId", required = false) String skillId,
-                                         @RequestParam(value = "metadata", required = false) String metadata) {
-        return uploadSupport.uploadMultipartFile(file, sessionId, targetProvider, skillId, metadata);
+                                         @RequestParam(value = "metadata", required = false) String metadata,
+                                         @RequestHeader(value = HttpHeaders.COOKIE, required = false) String cookieHeader) {
+        return uploadSupport.uploadMultipartFile(file, sessionId, targetProvider, skillId, metadata, cookieHeader);
     }
 }

@@ -75,7 +75,7 @@ class RelayStreamHttpRuntimeAdapterTest {
         RelayAgentProperties properties = new RelayAgentProperties();
         properties.setBaseUrl("http://relay.test");
         AgentRuntimeForwardCookieProperties forwardCookie = new AgentRuntimeForwardCookieProperties();
-        forwardCookie.setAllowedAdapters(List.of("relay-websocket"));
+        forwardCookie.setAllowedAdapters(List.of("another-adapter"));
         RelayStreamHttpRuntimeAdapter adapter = adapter(builder, properties, forwardCookie);
 
         StepVerifier.create(adapter.query(request(RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192))))

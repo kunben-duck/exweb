@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
+import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyNamespace;
 import java.util.Optional;
 import java.util.Set;
 import org.slf4j.Logger;
@@ -28,12 +29,15 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
     private final RuntimeBindingProperties properties;
+    private final FinanceExRedisKeyNamespace keyNamespace;
 
     public RedisRuntimeBindingCache(StringRedisTemplate redis, ObjectMapper objectMapper,
-                                    RuntimeBindingProperties properties) {
+                                    RuntimeBindingProperties properties,
+                                    FinanceExRedisKeyNamespace keyNamespace) {
         this.redis = redis;
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.keyNamespace = keyNamespace;
     }
 
     @Override
@@ -86,7 +90,7 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
     }
 
     private String key(String tenantId, String userId, String sessionId, String leafMessageId) {
-        return properties.getRedisKeyPrefix()
+        return keyNamespace.prefix(properties.getRedisKeyPrefix())
                 + ":"
                 + sessionHashTag(tenantId, userId, sessionId)
                 + ":"
@@ -94,7 +98,7 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
     }
 
     private String indexKey(String tenantId, String userId, String sessionId) {
-        return properties.getRedisKeyPrefix() + ":index:" + sessionHashTag(tenantId, userId, sessionId);
+        return keyNamespace.prefix(properties.getRedisKeyPrefix()) + ":index:" + sessionHashTag(tenantId, userId, sessionId);
     }
 
     private String sessionHashTag(String tenantId, String userId, String sessionId) {

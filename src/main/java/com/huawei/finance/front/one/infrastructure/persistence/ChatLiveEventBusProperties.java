@@ -7,7 +7,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = "financeex.websocket")
 public class ChatLiveEventBusProperties {
-    /** Redis Pub/Sub channel 前缀，必须以 fin_ex 开头。 */
+    /** Redis Pub/Sub 逻辑 channel 前缀，必须以 fin_ex 开头；运行时会自动插入环境段。 */
     private String redisChannelPrefix = "fin_ex:chat_stream";
 
     public String getRedisChannelPrefix() {

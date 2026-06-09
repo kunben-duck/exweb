@@ -6,6 +6,7 @@ import com.huawei.finance.front.one.application.integration.conversation.ChatRun
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRecoverLock;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunCancelSignal;
+import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyNamespace;
 import java.time.Duration;
 import java.util.Optional;
 import org.slf4j.Logger;
@@ -28,11 +29,14 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
     private final ChatRunCacheProperties properties;
+    private final FinanceExRedisKeyNamespace keyNamespace;
 
-    public RedisChatRunCache(StringRedisTemplate redis, ObjectMapper objectMapper, ChatRunCacheProperties properties) {
+    public RedisChatRunCache(StringRedisTemplate redis, ObjectMapper objectMapper, ChatRunCacheProperties properties,
+                             FinanceExRedisKeyNamespace keyNamespace) {
         this.redis = redis;
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.keyNamespace = keyNamespace;
     }
 
     @Override
@@ -136,15 +140,16 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
     }
 
     private String activeKey(String tenantId, String userId, String sessionId) {
-        return properties.getActiveKeyPrefix() + ":" + normalize(tenantId) + ":" + normalize(userId) + ":" + normalize(sessionId);
+        return keyNamespace.prefix(properties.getActiveKeyPrefix())
+                + ":" + normalize(tenantId) + ":" + normalize(userId) + ":" + normalize(sessionId);
     }
 
     private String cancelKey(String runId) {
-        return properties.getCancelKeyPrefix() + ":" + normalize(runId);
+        return keyNamespace.prefix(properties.getCancelKeyPrefix()) + ":" + normalize(runId);
     }
 
     private String recoverLockKey(String runId) {
-        return properties.getRecoverLockKeyPrefix() + ":" + normalize(runId);
+        return keyNamespace.prefix(properties.getRecoverLockKeyPrefix()) + ":" + normalize(runId);
     }
 
     private String normalize(String value) {

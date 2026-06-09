@@ -166,16 +166,17 @@ Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPubli
 - `fin_ex_message_feedback_t`：保存当前用户对 assistant 消息的点赞/点踩状态；`status=CANCELLED` 表示已取消当前反馈。
 - `fin_ex_runtime_binding_t`
 
-所有 Redis key 统一以 `fin_ex` 开头：
+所有 Redis key 统一以 `fin_ex:{env}` 开头。`{env}` 由 `spring.profiles.active` 的第一个 profile
+自动注入；没有 active profile 时使用 `default`：
 
-- RuntimeBinding：`fin_ex:runtime_binding:{tenantId:userId:sessionId}:{leafMessageId}`
-- RuntimeBinding 会话索引：`fin_ex:runtime_binding:index:{tenantId:userId:sessionId}`
-- Active run：`fin_ex:chat_run:active:{tenantId}:{userId}:{sessionId}`
-- Cancel flag：`fin_ex:chat_run:cancel:{runId}`
-- Recover lock：`fin_ex:chat_run:recover_lock:{runId}`
-- Read cursor：`fin_ex:chat_read_cursor:{tenantId}:{userId}:{sessionId}`
-- WebSocket run topic：`fin_ex:chat_stream:{streamTopicId}`
-- 短期消息：`fin_ex:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
+- RuntimeBinding：`fin_ex:{env}:runtime_binding:{tenantId:userId:sessionId}:{leafMessageId}`
+- RuntimeBinding 会话索引：`fin_ex:{env}:runtime_binding:index:{tenantId:userId:sessionId}`
+- Active run：`fin_ex:{env}:chat_run:active:{tenantId}:{userId}:{sessionId}`
+- Cancel flag：`fin_ex:{env}:chat_run:cancel:{runId}`
+- Recover lock：`fin_ex:{env}:chat_run:recover_lock:{runId}`
+- Read cursor：`fin_ex:{env}:chat_read_cursor:{tenantId}:{userId}:{sessionId}`
+- WebSocket run topic：`fin_ex:{env}:chat_stream:{streamTopicId}`
+- 短期消息：`fin_ex:{env}:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
 
 RuntimeBinding key 使用 Redis hash tag（花括号部分）把同一会话的 leaf binding 和索引集合放到同一 slot，
 会话级清理时不需要 `KEYS`，也不会触发 Redis Cluster 的跨 slot 批量删除问题。

@@ -93,9 +93,12 @@ financeex:
     timeout: 5s
   runtime-binding:
     ttl: 3d
+    # 逻辑前缀；实际 Redis key 会自动注入 spring.profiles.active 的第一个 profile：
+    # fin_ex:runtime_binding -> fin_ex:{env}:runtime_binding。
     redis-key-prefix: fin_ex:runtime_binding
     redis-ttl: 3d
   chat-run:
+    # 以下均为逻辑前缀；实际 key 会由 FinanceExRedisKeyNamespace 变为 fin_ex:{env}:...
     active-key-prefix: fin_ex:chat_run:active
     cancel-key-prefix: fin_ex:chat_run:cancel
     recover-lock-key-prefix: fin_ex:chat_run:recover_lock
@@ -116,6 +119,7 @@ financeex:
     recover-lock-enabled: ${FINANCEEX_CHAT_RUN_RECOVER_LOCK_ENABLED:true}
     recover-lock-ttl: ${FINANCEEX_CHAT_RUN_RECOVER_LOCK_TTL:30s}
   chat-read-cursor:
+    # 逻辑前缀；实际 key 为 fin_ex:{env}:chat_read_cursor:...
     redis-key-prefix: fin_ex:chat_read_cursor
     redis-ttl: 7d
     database-flush-interval: 5s
@@ -145,6 +149,7 @@ financeex:
   websocket:
     # WebSocket 是用户级连接，事件按 run 级 stream topic 订阅；Redis Pub/Sub 只做跨实例实时扇出。
     # 前端 WS 入口同时支持 WebFlux 与 Servlet/MVC；Servlet 模式的上下文根使用 server.servlet.context-path。
+    # 逻辑 channel 前缀；实际 channel 为 fin_ex:{env}:chat_stream:...
     redis-channel-prefix: fin_ex:chat_stream
     # 生产必须替换为企业前端域名，例如 https://finex.example.com；本地默认仅允许 localhost。
     allowed-origin-patterns: ${FINANCEEX_WEBSOCKET_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*,http://[::1]:*}
@@ -179,6 +184,7 @@ financeex:
       enabled: ${FINANCEEX_MEMORY_SHORT_TERM_ENABLED:false}
       recent-turns: ${FINANCEEX_MEMORY_SHORT_TERM_RECENT_TURNS:5}
       cache-enabled: ${FINANCEEX_MEMORY_SHORT_TERM_CACHE_ENABLED:true}
+      # 逻辑前缀；实际 key 为 fin_ex:{env}:memory:short_term:...
       redis-key-prefix: fin_ex:memory:short_term
       ttl: 3d
       max-cached-messages: 200

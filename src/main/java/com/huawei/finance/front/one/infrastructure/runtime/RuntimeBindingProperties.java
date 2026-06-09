@@ -8,7 +8,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = "financeex.runtime-binding")
 public class RuntimeBindingProperties {
-    /** RuntimeBinding Redis key 前缀，必须以 fin_ex 开头。 */
+    /** RuntimeBinding Redis 逻辑 key 前缀，必须以 fin_ex 开头；运行时会自动插入环境段。 */
     private String redisKeyPrefix = "fin_ex:runtime_binding";
     /** RuntimeBinding Redis 热缓存 TTL。 */
     private Duration redisTtl = Duration.ofDays(3);

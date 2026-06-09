@@ -100,7 +100,7 @@ sequenceDiagram
     alt "metadata.forceNewTask=true"
         SuperAgent->>Binding: "cancelActive(sessionId)"
         Binding->>DB: "写 RuntimeBinding=CANCELLED"
-        Binding->>Redis: "删除 fin_ex:runtime_binding key"
+        Binding->>Redis: "删除 fin_ex:{env}:runtime_binding key"
     end
 
     alt "metadata.selectedSkillId 存在"
@@ -222,7 +222,7 @@ sequenceDiagram
 
     loop "流式事件"
         EX->>DB: "写入 fin_ex_chat_event_t，生成 seq"
-        EX->>Redis: "publish fin_ex:chat_stream:{topicId}"
+        EX->>Redis: "publish fin_ex:{env}:chat_stream:{topicId}"
         EX-->>Frontend: "WebSocket message 或 Event Resume event"
         Frontend->>EX: "WebSocket ack(seq)"
         EX->>Redis: "刷新 read cursor 热缓存"
@@ -454,7 +454,7 @@ sequenceDiagram
     end
     Runner--xExecStore: "实例宕机，心跳停止"
     Watchdog->>ExecStore: "扫描 lease_until 过期"
-    Watchdog->>Lock: "try lock fin_ex:chat_run:recover_lock:{runId}"
+    Watchdog->>Lock: "try lock fin_ex:{env}:chat_run:recover_lock:{runId}"
     Watchdog->>ExecStore: "条件抢占为 RECOVERING 并递增 fencing_token"
     alt "MANUAL_CONFIRMATION / FAIL_FAST"
         Watchdog->>EventStore: "append(run.failed)"
@@ -606,8 +606,8 @@ RuntimeBinding 只维护前端 chat session、当前消息树 leaf 与当前 Age
 
 ```text
 Redis key:
-fin_ex:runtime_binding:{tenantId:userId:sessionId}:{leafMessageId}
-fin_ex:runtime_binding:index:{tenantId:userId:sessionId}
+fin_ex:{env}:runtime_binding:{tenantId:userId:sessionId}:{leafMessageId}
+fin_ex:{env}:runtime_binding:index:{tenantId:userId:sessionId}
 
 openGauss table:
 fin_ex_runtime_binding_t
@@ -636,9 +636,9 @@ updated_at
 ChatRun 维护单轮回答生命周期，表为 `fin_ex_chat_run_t`，Redis key 为：
 
 ```text
-fin_ex:chat_run:active:{tenantId}:{userId}:{sessionId}
-fin_ex:chat_run:cancel:{runId}
-fin_ex:chat_stream:{streamTopicId}
+fin_ex:{env}:chat_run:active:{tenantId}:{userId}:{sessionId}
+fin_ex:{env}:chat_run:cancel:{runId}
+fin_ex:{env}:chat_stream:{streamTopicId}
 ```
 
 状态流转：
@@ -702,26 +702,29 @@ AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 
 - `fin_ex_message_feedback_t`：当前用户对 assistant 消息的点赞/点踩状态，支持 ACTIVE/CANCELLED。
 - `fin_ex_runtime_binding_t`
 
-Redis key 必须以 `fin_ex` 开头：
+Redis key 必须以 `fin_ex:{env}` 开头。`{env}` 从 `spring.profiles.active` 第一个 profile 自动注入，
+无 active profile 时为 `default`，非 `[a-z0-9_-]` 字符会规范化为 `_`：
 
-- `fin_ex:runtime_binding:{tenantId:userId:sessionId}:{leafMessageId}`
-- `fin_ex:runtime_binding:index:{tenantId:userId:sessionId}`
-- `fin_ex:chat_run:active:{tenantId}:{userId}:{sessionId}`
-- `fin_ex:chat_run:cancel:{runId}`
-- `fin_ex:chat_run:recover_lock:{runId}`
-- `fin_ex:chat_read_cursor:{tenantId}:{userId}:{sessionId}`
-- `fin_ex:chat_stream:{streamTopicId}`
-- `fin_ex:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
+- `fin_ex:{env}:runtime_binding:{tenantId:userId:sessionId}:{leafMessageId}`
+- `fin_ex:{env}:runtime_binding:index:{tenantId:userId:sessionId}`
+- `fin_ex:{env}:chat_run:active:{tenantId}:{userId}:{sessionId}`
+- `fin_ex:{env}:chat_run:cancel:{runId}`
+- `fin_ex:{env}:chat_run:recover_lock:{runId}`
+- `fin_ex:{env}:chat_read_cursor:{tenantId}:{userId}:{sessionId}`
+- `fin_ex:{env}:chat_stream:{streamTopicId}`
+- `fin_ex:{env}:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
 
 同一会话的 active run 互斥由 Redis active key 和 openGauss run 状态共同保护。创建 run 前会先查询
 当前 active run，真正写入 `RUNNING` run 时通过 Redis set-if-absent 声明
-`fin_ex:chat_run:active:{tenantId}:{userId}:{sessionId}`；声明失败时返回 `ACTIVE_RUN_EXISTS`。
+`fin_ex:{env}:chat_run:active:{tenantId}:{userId}:{sessionId}`；声明失败时返回 `ACTIVE_RUN_EXISTS`。
 run 进入 `COMPLETED/FAILED/CANCELLED` 后释放 active key。Redis 不可用时可退化为 openGauss
 active run 检查，但生产集群应保证 Redis Cluster 可用以降低并发竞态窗口。
 
 Redis 部署模式由 `financeex.redis.mode` 控制，默认 `standalone`；生产 Redis Cluster 设置为
-`cluster` 并配置 `financeex.redis.cluster.nodes`。RuntimeBinding 使用 Redis hash tag 保证同一会话
-binding key 和索引集合落在同一 slot，因此会话级清理不使用 `KEYS`，只通过索引集合删除明确 key。
+`cluster` 并配置 `financeex.redis.cluster.nodes`。配置文件中的 Redis prefix 仍是逻辑前缀
+`fin_ex:...`，不要手写 env，避免形成 `fin_ex:dev:dev:...` 这类双重环境段。RuntimeBinding 使用
+Redis hash tag 保证同一会话 binding key 和索引集合落在同一 slot；env 位于 hash tag 外面，不影响
+同 slot 设计，因此会话级清理不使用 `KEYS`，只通过索引集合删除明确 key。
 ChatLiveEventBus 在本机出现 run topic 订阅者时动态订阅对应 Redis channel，Redis Pub/Sub 仍然只做
 跨实例实时 fanout，可靠恢复继续依赖 openGauss event + Event Resume。
 

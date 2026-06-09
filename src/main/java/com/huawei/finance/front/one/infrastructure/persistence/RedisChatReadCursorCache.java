@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.infrastructure.persistence;
 import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorCache;
 import com.huawei.finance.front.one.application.config.ChatReadCursorProperties;
 import com.huawei.finance.front.one.domain.chat.ChatReadCursor;
+import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyNamespace;
 import java.time.Instant;
 import java.util.Optional;
 import org.slf4j.Logger;
@@ -25,10 +26,13 @@ public class RedisChatReadCursorCache implements ChatReadCursorCache {
 
     private final StringRedisTemplate redis;
     private final ChatReadCursorProperties properties;
+    private final FinanceExRedisKeyNamespace keyNamespace;
 
-    public RedisChatReadCursorCache(StringRedisTemplate redis, ChatReadCursorProperties properties) {
+    public RedisChatReadCursorCache(StringRedisTemplate redis, ChatReadCursorProperties properties,
+                                    FinanceExRedisKeyNamespace keyNamespace) {
         this.redis = redis;
         this.properties = properties;
+        this.keyNamespace = keyNamespace;
     }
 
     @Override
@@ -64,7 +68,8 @@ public class RedisChatReadCursorCache implements ChatReadCursorCache {
     }
 
     private String key(String tenantId, String userId, String sessionId) {
-        return properties.getRedisKeyPrefix() + ":" + normalize(tenantId) + ":" + normalize(userId) + ":" + normalize(sessionId);
+        return keyNamespace.prefix(properties.getRedisKeyPrefix())
+                + ":" + normalize(tenantId) + ":" + normalize(userId) + ":" + normalize(sessionId);
     }
 
     private String normalize(String value) {

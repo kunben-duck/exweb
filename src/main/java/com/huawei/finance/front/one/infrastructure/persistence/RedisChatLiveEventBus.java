@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
+import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyNamespace;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.nio.charset.StandardCharsets;
@@ -41,14 +42,17 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
     private final ChatLiveEventBusProperties properties;
+    private final FinanceExRedisKeyNamespace keyNamespace;
     private final RedisMessageListenerContainer listenerContainer;
     private final Map<String, TopicSink> topicSinks = new ConcurrentHashMap<>();
 
     public RedisChatLiveEventBus(StringRedisTemplate redis, ObjectMapper objectMapper,
-                                 ChatLiveEventBusProperties properties, RedisConnectionFactory connectionFactory) {
+                                 ChatLiveEventBusProperties properties, RedisConnectionFactory connectionFactory,
+                                 FinanceExRedisKeyNamespace keyNamespace) {
         this.redis = redis;
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.keyNamespace = keyNamespace;
         this.listenerContainer = new RedisMessageListenerContainer();
         this.listenerContainer.setConnectionFactory(connectionFactory);
     }
@@ -146,7 +150,7 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     }
 
     private String channel(String topicId) {
-        return properties.getRedisChannelPrefix() + ":" + topicId;
+        return keyNamespace.prefix(properties.getRedisChannelPrefix()) + ":" + topicId;
     }
 
     private TopicSink registerTopic(String topicId) {
@@ -175,7 +179,7 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     }
 
     private String topicFromChannel(String channel) {
-        String prefix = properties.getRedisChannelPrefix() + ":";
+        String prefix = keyNamespace.prefix(properties.getRedisChannelPrefix()) + ":";
         return channel != null && channel.startsWith(prefix) ? channel.substring(prefix.length()) : channel;
     }
 

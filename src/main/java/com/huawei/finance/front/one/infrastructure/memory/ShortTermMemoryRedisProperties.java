@@ -17,7 +17,7 @@ public class ShortTermMemoryRedisProperties {
     private boolean enabled = false;
     /** 是否启用 Redis 热缓存；短期记忆关闭时即使该值为 true 也不会访问 Redis。 */
     private boolean cacheEnabled = true;
-    /** Redis key 前缀，必须以 fin_ex 开头。 */
+    /** Redis 逻辑 key 前缀，必须以 fin_ex 开头；运行时会自动插入环境段。 */
     private String redisKeyPrefix = "fin_ex:memory:short_term";
     /** 最近消息缓存 TTL。 */
     private Duration ttl = Duration.ofDays(3);

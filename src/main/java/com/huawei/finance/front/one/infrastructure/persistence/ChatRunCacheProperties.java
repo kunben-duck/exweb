@@ -8,11 +8,11 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = "financeex.chat-run")
 public class ChatRunCacheProperties {
-    /** active run Redis key 前缀，必须以 fin_ex 开头。 */
+    /** active run Redis 逻辑 key 前缀，必须以 fin_ex 开头；运行时会自动插入环境段。 */
     private String activeKeyPrefix = "fin_ex:chat_run:active";
-    /** cancel flag Redis key 前缀，必须以 fin_ex 开头。 */
+    /** cancel flag Redis 逻辑 key 前缀，必须以 fin_ex 开头；运行时会自动插入环境段。 */
     private String cancelKeyPrefix = "fin_ex:chat_run:cancel";
-    /** stale run 恢复优化锁 Redis key 前缀，必须以 fin_ex 开头。 */
+    /** stale run 恢复优化锁 Redis 逻辑 key 前缀，必须以 fin_ex 开头；运行时会自动插入环境段。 */
     private String recoverLockKeyPrefix = "fin_ex:chat_run:recover_lock";
     /** active run 热缓存 TTL。 */
     private Duration activeTtl = Duration.ofHours(6);

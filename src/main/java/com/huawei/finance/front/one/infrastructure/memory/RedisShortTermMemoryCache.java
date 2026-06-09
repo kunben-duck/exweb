@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.infrastructure.memory;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyNamespace;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -28,12 +29,16 @@ public class RedisShortTermMemoryCache {
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
     private final ShortTermMemoryRedisProperties properties;
+    private final FinanceExRedisKeyNamespace keyNamespace;
     private volatile Instant retryAfter = Instant.MIN;
 
-    public RedisShortTermMemoryCache(StringRedisTemplate redis, ObjectMapper objectMapper, ShortTermMemoryRedisProperties properties) {
+    public RedisShortTermMemoryCache(StringRedisTemplate redis, ObjectMapper objectMapper,
+                                     ShortTermMemoryRedisProperties properties,
+                                     FinanceExRedisKeyNamespace keyNamespace) {
         this.redis = redis;
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.keyNamespace = keyNamespace;
     }
 
     public boolean append(ChatMessage message) {
@@ -147,7 +152,7 @@ public class RedisShortTermMemoryCache {
     }
 
     private String key(String tenantId, String userId, String sessionId) {
-        return properties.getRedisKeyPrefix()
+        return keyNamespace.prefix(properties.getRedisKeyPrefix())
                 + ":messages:"
                 + normalize(tenantId)
                 + ":"

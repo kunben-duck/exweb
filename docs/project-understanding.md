@@ -526,7 +526,7 @@ RedisChatLiveEventBus#onMessage(...)
 职责：
 
 - 将已落库事件发布到 Redis Pub/Sub。
-- channel 形态：`fin_ex:chat_stream:chat-run-{runId}`。
+- channel 形态：`fin_ex:{env}:chat_stream:chat-run-{runId}`，其中 `{env}` 来自 `spring.profiles.active` 的第一个 profile。
 - 其他实例收到 Redis 消息后，再投递给本实例订阅该 topic 的 WebSocket。
 
 注意：

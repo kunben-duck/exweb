@@ -1107,7 +1107,7 @@ Relay 映射规则：
 
 前端每处理完一个事件，可以回传最新 `sequence`。后端会把 ack 写入服务端 read cursor：
 
-- Redis 热缓存 key：`fin_ex:chat_read_cursor:{tenantId}:{userId}:{sessionId}`。
+- Redis 热缓存 key：`fin_ex:{env}:chat_read_cursor:{tenantId}:{userId}:{sessionId}`。
 - openGauss 表：`fin_ex_chat_read_cursor_t`。
 - Redis 每次 ack 都刷新，openGauss 按配置节流写入；连接关闭时会 best-effort flush。
 

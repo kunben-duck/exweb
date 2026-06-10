@@ -102,7 +102,7 @@ Referer: http://localhost:8080/fin/ex/
 3. 输出中途点击“复制页签”，新页签会读取同一 `sessionId`，先加载历史，再通过 run event resume 持续恢复到本轮 run 终态。
 4. 输出中途点击“停止回答”，观察 `run.cancelled` 是否通过 WebSocket 或 Event Resume 到达。
 5. 上传文档，选择“作为附件”，再发送消息确认 `attachments[{documentId}]` 能进入请求。
-6. 测试历史技能兼容路径时，在上传区填写 `targetProvider=legacy-agent` 和对应 `skillId`，再在发送区填写同一个 `selectedSkillId`；后端会进入 `EXPLICIT_SKILL` 路由，不创建 RuntimeBinding。若企业鉴权依赖 Cookie，请先在“鉴权请求头”保存完整 Cookie/header，代理会把 Cookie 注入上传入口，后端再按 provider 配置透传给老 Agent upload。
+6. 测试历史技能兼容路径时，在上传区填写 `targetProvider=legacy-agent` 和对应 `skillId`，再在发送区填写同一个 `selectedSkillId`；如老 Agent 还需要额外业务参数，可在 `legacyAgent.sceneParam JSON` 中填写 JSON object。后端会进入 `EXPLICIT_SKILL` 路由，不创建 RuntimeBinding，并用已选择附件生成可信 `sceneParam.docList` 覆盖前端传入的 `docList`。若企业鉴权依赖 Cookie，请先在“鉴权请求头”保存完整 Cookie/header，代理会把 Cookie 注入上传入口，后端再按 provider 配置透传给老 Agent upload。
 7. 对一条 user 消息点击编辑并重新提问，确认旧消息不变、新 user sibling 出现在版本游标中。
 8. 对一条 assistant 消息点击重新生成，确认同一 user 下出现新的 assistant sibling。
 9. 从某条历史消息创建分支，确认分支历史消息为只读，后续新增消息仍可继续编辑或重新生成。

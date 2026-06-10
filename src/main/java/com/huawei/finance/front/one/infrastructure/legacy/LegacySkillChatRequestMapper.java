@@ -7,6 +7,7 @@ import com.huawei.finance.front.one.application.integration.agent.LegacySkillAge
 import com.huawei.finance.front.one.domain.document.DocumentSource;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,7 +17,10 @@ import org.springframework.stereotype.Component;
  * 老 Agent chat wire DTO 映射器。
  *
  * <p>ChatService 对内只使用 documentId、UploadedDocument 和 selectedSkillId；老接口需要的
- * platform、steamFlag 和 sceneParam.docList 等历史字段集中在这里生成，避免污染主编排。</p>
+ * platform、streamFlag、sceneParam 以及 sceneParam.docList 等历史字段集中在这里生成，避免污染主编排。</p>
+ *
+ * <p>sceneParam 是老 Agent 的业务扩展对象，可以承载前端透传的非敏感业务参数；但 docList 必须由
+ * ChatService 根据已鉴权的文档库附件重新生成，不能信任前端直接传入的 docList。</p>
  */
 @Component
 public class LegacySkillChatRequestMapper {
@@ -31,16 +35,37 @@ public class LegacySkillChatRequestMapper {
     public Map<String, Object> toWireRequest(LegacySkillAgentRequest request) {
         Map<String, Object> legacyOptions = legacyOptions(request.metadata());
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("isThink", intOption(legacyOptions, "isThink", properties.getDefaultIsThink()));
+        body.put("isThinking", stringOption(legacyOptions, "isThinking",
+                String.valueOf(properties.getDefaultIsThinking())));
         body.put("platform", stringOption(legacyOptions, "platform", properties.getDefaultPlatform()));
-        body.put("queryType", stringOption(legacyOptions, "queryType", properties.getDefaultQueryType()));
+        body.put("qaType", stringOption(legacyOptions, "qaType", properties.getDefaultQaType()));
         body.put("query", request.query());
-        body.put("sceneParam", Map.of("docList", docList(request.documents())));
+        body.put("sceneParam", sceneParam(legacyOptions, request.documents()));
         body.put("sessionId", request.sessionId());
         body.put("skillId", request.skillId());
-        body.put("steamFlag", stringOption(legacyOptions, "streamFlag", properties.getDefaultStreamFlag()));
+        body.put("streamFlag", stringOption(legacyOptions, "streamFlag", properties.getDefaultStreamFlag()));
         body.put("supMsg", stringOption(legacyOptions, "supMsg", ""));
         return body;
+    }
+
+    private Map<String, Object> sceneParam(Map<String, Object> legacyOptions, List<UploadedDocument> documents) {
+        Map<String, Object> sceneParam = new LinkedHashMap<>();
+        Object configured = legacyOptions.get("sceneParam");
+        if (configured instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (entry.getKey() != null) {
+                    sceneParam.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+            }
+        } else if (configured != null) {
+            throw new IllegalArgumentException("legacyAgent.sceneParam 必须是 JSON object");
+        }
+        /*
+         * docList 是老 Agent 文档权限与文件引用的关键字段。即使前端 metadata.sceneParam 里也传了 docList，
+         * 这里也必须使用后端从 UploadedDocument.providerDocument 中重建的可信列表覆盖它。
+         */
+        sceneParam.put("docList", docList(documents));
+        return Collections.unmodifiableMap(sceneParam);
     }
 
     private List<Map<String, Object>> docList(List<UploadedDocument> documents) {
@@ -92,21 +117,6 @@ public class LegacySkillChatRequestMapper {
     private Map<String, Object> legacyOptions(Map<String, Object> metadata) {
         Object value = metadata == null ? null : metadata.get("legacyAgent");
         return value instanceof Map<?, ?> map ? (Map<String, Object>) map : Map.of();
-    }
-
-    private int intOption(Map<String, Object> options, String key, int defaultValue) {
-        Object value = options.get(key);
-        if (value instanceof Number number) {
-            return number.intValue();
-        }
-        if (value instanceof String text) {
-            try {
-                return Integer.parseInt(text);
-            } catch (NumberFormatException ignored) {
-                return defaultValue;
-            }
-        }
-        return defaultValue;
     }
 
     private String stringOption(Map<String, Object> options, String key, String defaultValue) {

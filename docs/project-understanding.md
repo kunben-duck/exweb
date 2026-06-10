@@ -931,7 +931,7 @@ cancelActive(...)
 | 实例挂掉 run 不结束 | `ChatRunLeaseApplicationService#heartbeatActiveRuns(...)`、`ChatRunWatchdogScheduler`、`ChatRunRecoveryOrchestrator` |
 | 跨电脑续接缺内容 | `stream-status`、run 级事件恢复 `afterSeq`、`fin_ex_chat_event_t` |
 | assistant 历史消息没保存 | `persistAndPublishRunEvents(...)` 处理 `run.completed` 的分支、`SessionApplicationService#saveAssistantMessage(...)` |
-| 文档附件没有进 Runtime 或指定技能 | `DocumentFacade#resolveAttachmentsForUser(...)`、`LegacySkillChatRequestMapper#docList(...)`、`SessionApplicationService#saveAttachments(...)`、`AgentRuntimeRequest.attachments` |
+| 文档附件没有进 Runtime 或指定技能 | `DocumentFacade#resolveAttachmentsForUser(...)`、`LegacySkillChatRequestMapper#sceneParam(...)` / `docList(...)`、`SessionApplicationService#saveAttachments(...)`、`AgentRuntimeRequest.attachments`。指定技能路径会保留 `metadata.legacyAgent.sceneParam` 的扩展字段，但 `docList` 始终由后端附件元数据覆盖生成。 |
 
 ## 18. 推荐调试顺序
 

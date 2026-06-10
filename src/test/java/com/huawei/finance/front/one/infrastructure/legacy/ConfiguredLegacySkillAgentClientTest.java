@@ -51,6 +51,12 @@ class ConfiguredLegacySkillAgentClientTest {
         String body = objectMapper.writeValueAsString(mapper.toWireRequest(request));
         assertThat(body)
                 .contains("\"skillId\":\"skill-tax\"")
+                .contains("\"isThinking\":\"1\"")
+                .contains("\"qaType\":\"normalQa\"")
+                .contains("\"streamFlag\":\"stream\"")
+                .doesNotContain("\"isThink\"")
+                .doesNotContain("\"queryType\"")
+                .doesNotContain("\"steamFlag\"")
                 .doesNotContain("sid=abc")
                 .doesNotContain("forwardHeaders")
                 .doesNotContain("cookieHeader");

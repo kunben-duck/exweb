@@ -6,13 +6,15 @@ import com.huawei.finance.front.one.application.integration.identity.AuthContext
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.document.DocumentDownload;
-import com.huawei.finance.front.one.domain.document.DocumentLibraryPage;
 import com.huawei.finance.front.one.domain.document.DocumentLibraryQuery;
 import com.huawei.finance.front.one.domain.document.StoredObjectContent;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import com.huawei.finance.front.one.interfaces.document.dto.DocumentAccessDto;
+import com.huawei.finance.front.one.interfaces.document.dto.DocumentDtoMapper;
+import com.huawei.finance.front.one.interfaces.document.dto.DocumentLibraryPageDto;
 import com.huawei.finance.front.one.interfaces.document.dto.DocumentStatusDto;
 import com.huawei.finance.front.one.interfaces.document.dto.UpdateDocumentRequest;
+import com.huawei.finance.front.one.interfaces.document.dto.UploadedDocumentDto;
 import com.huawei.finance.front.one.interfaces.document.upload.DocumentUploadSupport;
 import java.io.InputStream;
 import org.springframework.core.io.InputStreamResource;
@@ -44,11 +46,14 @@ public class DocumentController {
     private final DocumentFacade facade;
     private final AuthContextProvider auth;
     private final PermissionChecker permissionChecker;
+    private final DocumentDtoMapper dtoMapper;
 
-    public DocumentController(DocumentFacade facade, AuthContextProvider auth, PermissionChecker permissionChecker) {
+    public DocumentController(DocumentFacade facade, AuthContextProvider auth, PermissionChecker permissionChecker,
+                              DocumentDtoMapper dtoMapper) {
         this.facade = facade;
         this.auth = auth;
         this.permissionChecker = permissionChecker;
+        this.dtoMapper = dtoMapper;
     }
 
     /**
@@ -60,11 +65,12 @@ public class DocumentController {
      * @return 文档库分页结果。
      */
     @GetMapping
-    public Mono<DocumentLibraryPage> list(@RequestParam(value = "sessionId", required = false) String sessionId,
-                                          @RequestParam(value = "limit", defaultValue = "20") int limit,
-                                          @RequestParam(value = "cursor", required = false) String cursor) {
+    public Mono<DocumentLibraryPageDto> list(@RequestParam(value = "sessionId", required = false) String sessionId,
+                                             @RequestParam(value = "limit", defaultValue = "20") int limit,
+                                             @RequestParam(value = "cursor", required = false) String cursor) {
         UserContext user = resolveChatUser();
-        return facade.list(user, new DocumentLibraryQuery(sessionId, limit, cursor));
+        return facade.list(user, new DocumentLibraryQuery(sessionId, limit, cursor))
+                .map(dtoMapper::toDto);
     }
 
     /**
@@ -74,9 +80,10 @@ public class DocumentController {
      * @return 文档元数据。
      */
     @GetMapping("/{documentId}")
-    public Mono<UploadedDocument> get(@PathVariable("documentId") String documentId) {
+    public Mono<UploadedDocumentDto> get(@PathVariable("documentId") String documentId) {
         UserContext user = resolveChatUser();
-        return facade.get(user, documentId);
+        return facade.get(user, documentId)
+                .map(dtoMapper::toDto);
     }
 
     /**
@@ -87,13 +94,13 @@ public class DocumentController {
      * @return 更新后的文档元数据。
      */
     @PatchMapping("/{documentId}")
-    public Mono<UploadedDocument> update(@PathVariable("documentId") String documentId,
-                                         @RequestBody(required = false) UpdateDocumentRequest request) {
+    public Mono<UploadedDocumentDto> update(@PathVariable("documentId") String documentId,
+                                            @RequestBody(required = false) UpdateDocumentRequest request) {
         UserContext user = resolveChatUser();
         return facade.update(user, documentId, new DocumentUpdateCommand(
                 request == null ? null : request.originalName(),
                 request == null ? null : request.metadataJson()
-        ));
+        )).map(dtoMapper::toDto);
     }
 
     /**
@@ -103,9 +110,10 @@ public class DocumentController {
      * @return 删除后的文档元数据快照。
      */
     @DeleteMapping("/{documentId}")
-    public Mono<UploadedDocument> delete(@PathVariable("documentId") String documentId) {
+    public Mono<UploadedDocumentDto> delete(@PathVariable("documentId") String documentId) {
         UserContext user = resolveChatUser();
-        return facade.delete(user, documentId);
+        return facade.delete(user, documentId)
+                .map(dtoMapper::toDto);
     }
 
     /**

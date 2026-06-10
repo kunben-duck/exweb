@@ -27,12 +27,12 @@ public class LegacySkillProperties {
     private List<String> allowedSkillIds = new ArrayList<>();
     /** 老 Agent 默认平台字段。 */
     private String defaultPlatform = "PC";
-    /** 老 Agent 默认 queryType。 */
-    private String defaultQueryType = "normalQa";
-    /** 老 Agent 默认 stream flag，保留老接口 steamFlag 拼写。 */
+    /** 老 Agent 默认 qaType。 */
+    private String defaultQaType = "normalQa";
+    /** 老 Agent 默认 streamFlag。 */
     private String defaultStreamFlag = "stream";
     /** 老 Agent 默认思考开关。 */
-    private int defaultIsThink = 1;
+    private int defaultIsThinking = 1;
     /** 单次指定技能调用最大附件数。 */
     private int maxAttachments = 10;
 
@@ -55,12 +55,12 @@ public class LegacySkillProperties {
     }
     public String getDefaultPlatform() { return defaultPlatform; }
     public void setDefaultPlatform(String defaultPlatform) { this.defaultPlatform = defaultPlatform; }
-    public String getDefaultQueryType() { return defaultQueryType; }
-    public void setDefaultQueryType(String defaultQueryType) { this.defaultQueryType = defaultQueryType; }
+    public String getDefaultQaType() { return defaultQaType; }
+    public void setDefaultQaType(String defaultQaType) { this.defaultQaType = defaultQaType; }
     public String getDefaultStreamFlag() { return defaultStreamFlag; }
     public void setDefaultStreamFlag(String defaultStreamFlag) { this.defaultStreamFlag = defaultStreamFlag; }
-    public int getDefaultIsThink() { return defaultIsThink; }
-    public void setDefaultIsThink(int defaultIsThink) { this.defaultIsThink = defaultIsThink; }
+    public int getDefaultIsThinking() { return defaultIsThinking; }
+    public void setDefaultIsThinking(int defaultIsThinking) { this.defaultIsThinking = defaultIsThinking; }
     public int getMaxAttachments() { return maxAttachments; }
     public void setMaxAttachments(int maxAttachments) { this.maxAttachments = maxAttachments; }
 

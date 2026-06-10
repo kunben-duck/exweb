@@ -105,7 +105,8 @@ export FINANCEEX_DEV_USERNAME=developer
 
 `metadata.selectedSkillId` 用于兼容存量 Agent 的“前端显式选择技能”场景。该字段存在且非空时，本轮 run 进入
 `EXPLICIT_SKILL` 路由，直接调用配置化老 Agent chat 接口，并使用文档库中 `targetProvider=legacy-agent`
-上传后保存的 provider 文档元数据组装 `sceneParam.docList`。该路径不会读取或创建 RuntimeBinding，
+上传后保存的 provider 文档元数据组装 `sceneParam.docList`。前端可以在 `metadata.legacyAgent.sceneParam`
+传入其他业务扩展字段，但 `docList` 始终由后端可信生成并覆盖，避免伪造文档引用。该路径不会读取或创建 RuntimeBinding，
 避免把不具备稳定 ChatService 多轮契约的历史技能误当成 Relay Runtime 续接会话。
 
 ## 会话与执行标识
@@ -357,6 +358,7 @@ Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共�
 `targetProvider=legacy-agent` 时会转发老 Agent upload 接口，并把老 Agent 返回的 docId/docName/docSize
 等写入统一文档库 `metadataJson.providerDocument`。如果该 provider 配置 `forward-cookie=true`，上传入口捕获到的
 Cookie 会作为下游 upload HTTP header 透传，用于老 Agent 文件服务的企业鉴权；Cookie 不会进入 form 字段或文档库元数据。
+文档接口响应里的 `metadataJson` 会解析为 JSON object，便于前端直接读取；openGauss 表字段仍保存 JSON 字符串。
 
 文档接口：
 

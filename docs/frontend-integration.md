@@ -180,11 +180,11 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `GET /chat/sessions/{sessionId}/stream-status` | Path：`sessionId` | `ChatStreamStatusDto` | 判断 active run、stop 按钮、恢复起点 |
 | `POST /chat/messages/{messageId}/feedback` | Path：`messageId`；Body：`runId`、`rating`、`reasonCode`、`commentText`、`metadata` | `MessageFeedbackDto(status=ACTIVE)` | 更新历史消息按钮高亮 |
 | `DELETE /chat/messages/{messageId}/feedback` | Path：`messageId`；Query：`runId` 可选 | `MessageFeedbackDto(status=CANCELLED)` | 取消按钮高亮 |
-| `POST /documents` | multipart：`file`；`sessionId` 可选 | `UploadedDocument` | 用返回 `id` 作为 `attachments[].documentId` |
-| `GET /documents` | Query：`sessionId` 可选，`limit`，`cursor` | `DocumentLibraryPage.items[]`、`nextCursor` | 文档选择器和最近文档列表 |
-| `GET /documents/{documentId}` | Path：`documentId` | `UploadedDocument` | 详情弹窗 |
-| `PATCH /documents/{documentId}` | Path：`documentId`；Body：`originalName`、`metadataJson` | `UploadedDocument` | 更新文档展示 |
-| `DELETE /documents/{documentId}` | Path：`documentId` | `UploadedDocument(status=DELETED)` | 从选择器移除，不再允许作为附件 |
+| `POST /documents` | multipart：`file`；`sessionId` 可选 | `UploadedDocumentDto` | 用返回 `id` 作为 `attachments[].documentId` |
+| `GET /documents` | Query：`sessionId` 可选，`limit`，`cursor` | `DocumentLibraryPageDto.items[]`、`nextCursor` | 文档选择器和最近文档列表 |
+| `GET /documents/{documentId}` | Path：`documentId` | `UploadedDocumentDto` | 详情弹窗 |
+| `PATCH /documents/{documentId}` | Path：`documentId`；Body：`originalName`、`metadataJson` | `UploadedDocumentDto` | 更新文档展示 |
+| `DELETE /documents/{documentId}` | Path：`documentId` | `UploadedDocumentDto(status=DELETED)` | 从选择器移除，不再允许作为附件 |
 | `GET /documents/{documentId}/status` | Path：`documentId` | `documentId`、`status`、`tokenSize` | 轮询处理状态或展示失败 |
 | `GET /documents/{documentId}/preview-url` | Path：`documentId` | `documentId`、`accessUrl`、`accessType`、`expiresAt` | 前端打开后端受控预览/下载地址 |
 | `GET /documents/{documentId}/download` | Path：`documentId` | 二进制流 | 浏览器下载或预览 |
@@ -239,11 +239,11 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`targetProvider` 可选，`skillId` 可选，`metadata` 可选 JSON 字符串；Header 可带标准 `Cookie`。 | `UploadedDocument`。 | 不传 `targetProvider` 使用 default-storage；`targetProvider=legacy-agent` 时后端转发配置化老 Agent upload 接口，并把 provider docId 写入统一文档库。只有 provider 配置 `forward-cookie=true` 时，入口 Cookie 才会作为下游 upload HTTP header 透传。 |
-| `GET /api/v1/ex/documents` | 文档库列表或最近文档选择器。 | Query：`sessionId` 可选，`limit` 默认 20，`cursor` 可选。 | `DocumentLibraryPage`：`items[]`、`nextCursor`。 | 默认不返回 `DELETED` 文档。 |
-| `GET /api/v1/ex/documents/{documentId}` | 查询文档详情。 | Path：`documentId`。 | `UploadedDocument`。 | 可查看 `AVAILABLE/PROCESSING/FAILED` 等非删除状态。 |
-| `PATCH /api/v1/ex/documents/{documentId}` | 修改展示文件名或扩展元数据。 | Path：`documentId`；JSON body：`originalName`、`metadataJson`。 | `UploadedDocument`。 | 空字段表示保留原值。 |
-| `DELETE /api/v1/ex/documents/{documentId}` | 软删除文档。 | Path：`documentId`。 | `UploadedDocument`。 | 删除后不能再作为聊天附件。 |
+| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`targetProvider` 可选，`skillId` 可选，`metadata` 可选 JSON 字符串；Header 可带标准 `Cookie`。 | `UploadedDocumentDto`。 | 不传 `targetProvider` 使用 default-storage；`targetProvider=legacy-agent` 时后端转发配置化老 Agent upload 接口，并把 provider docId 写入统一文档库。只有 provider 配置 `forward-cookie=true` 时，入口 Cookie 才会作为下游 upload HTTP header 透传。 |
+| `GET /api/v1/ex/documents` | 文档库列表或最近文档选择器。 | Query：`sessionId` 可选，`limit` 默认 20，`cursor` 可选。 | `DocumentLibraryPageDto`：`items[]`、`nextCursor`。 | 默认不返回 `DELETED` 文档。 |
+| `GET /api/v1/ex/documents/{documentId}` | 查询文档详情。 | Path：`documentId`。 | `UploadedDocumentDto`。 | 可查看 `AVAILABLE/PROCESSING/FAILED` 等非删除状态。 |
+| `PATCH /api/v1/ex/documents/{documentId}` | 修改展示文件名或扩展元数据。 | Path：`documentId`；JSON body：`originalName`、`metadataJson`。 | `UploadedDocumentDto`。 | 空字段表示保留原值。 |
+| `DELETE /api/v1/ex/documents/{documentId}` | 软删除文档。 | Path：`documentId`。 | `UploadedDocumentDto`。 | 删除后不能再作为聊天附件。 |
 | `GET /api/v1/ex/documents/{documentId}/status` | 查询解析状态或失败原因扩展信息。 | Path：`documentId`。 | `DocumentStatusDto`：`documentId`、`status`、`tokenSize`。 | `PROCESSING/FAILED` 可查状态，但不能下载、预览或作为聊天附件。 |
 | `GET /api/v1/ex/documents/{documentId}/preview-url` | 获取后端受控预览地址。 | Path：`documentId`。 | `DocumentAccessDto`。 | 当前返回后端 download 地址；provider 未启用 download 时返回 `DOCUMENT_CONTENT_MANAGED_BY_PROVIDER`。 |
 | `GET /api/v1/ex/documents/{documentId}/download` | 下载文档原始内容。 | Path：`documentId`。 | 二进制流，带 `Content-Disposition`。 | 只允许 `AVAILABLE` 文档下载；provider 未启用 download 时返回 `DOCUMENT_CONTENT_MANAGED_BY_PROVIDER`。 |
@@ -428,11 +428,13 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `commentText` | 可选用户补充说明。 |
 | `metadata` | 可选前端诊断扩展，例如 `clientTraceId`；不要放 Cookie、token 等敏感信息。 |
 
-### `UploadedDocument`
+### `UploadedDocumentDto`
 
 | 字段 | 含义 |
 | --- | --- |
 | `id` | 文档库资产 ID；聊天附件使用 `attachments[].documentId` 引用它 |
+| `tenantId` | 文档所属租户 |
+| `userId` | 文档所属用户 |
 | `sessionId` | 文档关联会话，可为空 |
 | `originalName` | 展示文件名 |
 | `contentType` | MIME 类型 |
@@ -441,7 +443,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `source` | 来源，例如 `LOCAL_UPLOAD`、`LIBRARY`、`CONNECTOR`、`LEGACY_AGENT_UPLOAD` |
 | `bucket` | provider 位置字段；default-storage 表示对象存储 bucket，HTTP provider 表示 providerCode |
 | `objectKey` | provider 文件标识；default-storage 表示对象 key，legacy-agent 表示老 Agent docId |
-| `metadataJson` | provider 扩展元数据；legacy-agent 文档的 `providerDocument` 是组装老 Agent `sceneParam.docList` 的事实源 |
+| `metadataJson` | JSON object/null；provider 扩展元数据。legacy-agent 文档的 `providerDocument` 是组装老 Agent `sceneParam.docList` 的事实源。数据库内部仍以 JSON 字符串保存，但响应会解析成对象返回 |
 | `tokenSize` | 解析后 token 数，可为空 |
 | `createdAt` / `updatedAt` | 创建和更新时间 |
 
@@ -449,8 +451,8 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | DTO | 字段 | 含义 |
 | --- | --- | --- |
-| `DocumentLibraryPage` | `items` | 当前页 `UploadedDocument[]`。 |
-| `DocumentLibraryPage` | `nextCursor` | 下一页游标；为空表示没有更多数据。 |
+| `DocumentLibraryPageDto` | `items` | 当前页 `UploadedDocumentDto[]`。 |
+| `DocumentLibraryPageDto` | `nextCursor` | 下一页游标；为空表示没有更多数据。 |
 | `DocumentStatusDto` | `documentId` | 被查询状态的文档 ID。 |
 | `DocumentStatusDto` | `status` | 文档处理状态，例如 `AVAILABLE`、`PROCESSING`、`FAILED`、`DELETED`。 |
 | `DocumentStatusDto` | `tokenSize` | 文档解析后的 token 数，可为空。 |
@@ -459,7 +461,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `DocumentAccessDto` | `accessType` | 访问方式，当前为 `BACKEND_STREAM`。 |
 | `DocumentAccessDto` | `expiresAt` | 访问地址过期时间；后端受控流当前可为空。 |
 | `UpdateDocumentRequest` | `originalName` | 新展示文件名；为空时保留原值。 |
-| `UpdateDocumentRequest` | `metadataJson` | 新扩展元数据 JSON 字符串；为空时保留原值。 |
+| `UpdateDocumentRequest` | `metadataJson` | 新扩展元数据 JSON 字符串；为空时保留原值。注意这是写入请求字段，和响应里的结构化 `metadataJson` 不同。 |
 
 ## 协议边界
 
@@ -1358,7 +1360,7 @@ curl -X POST http://localhost:8080/api/v1/ex/documents \
 Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解析。只有当 `targetProvider=legacy-agent`
 且 provider 配置 `forward-cookie=true` 时，后端才会把该 Cookie 作为老 Agent upload HTTP header
 透传给下游；普通 `default-storage` 上传不会透传。Cookie 不会进入 multipart form、`metadata`、
-`UploadedDocument.metadataJson` 或响应体。
+`UploadedDocumentDto.metadataJson` 或响应体。
 
 响应中的 `id` 就是聊天附件的 `documentId`：
 
@@ -1371,14 +1373,20 @@ Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解
   "sizeBytes": 10240,
   "status": "AVAILABLE",
   "source": "LOCAL_UPLOAD",
-  "metadataJson": "{\"providerCode\":\"default-storage\",\"capabilities\":{\"download\":true,\"status\":false}}",
+  "metadataJson": {
+    "providerCode": "default-storage",
+    "capabilities": {
+      "download": true,
+      "status": false
+    }
+  },
   "tokenSize": null,
   "createdAt": "2026-05-17T01:03:00Z",
   "updatedAt": "2026-05-17T01:03:00Z"
 }
 ```
 
-`targetProvider=legacy-agent` 时，响应仍然是同一个 `UploadedDocument`，但 `source` 为
+`targetProvider=legacy-agent` 时，响应仍然是同一个 `UploadedDocumentDto`，但 `source` 为
 `LEGACY_AGENT_UPLOAD`，`bucket` 语义上是 providerCode，`objectKey` 语义上是老 Agent 返回的 docId。
 `metadataJson.providerDocument` 保存老 Agent 返回的 allowlist 字段：
 
@@ -1388,7 +1396,21 @@ Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解
   "originalName": "invoice.pdf",
   "status": "AVAILABLE",
   "source": "LEGACY_AGENT_UPLOAD",
-  "metadataJson": "{\"providerCode\":\"legacy-agent\",\"providerDocument\":{\"docId\":\"legacy_doc_1\",\"docName\":\"invoice.pdf\",\"docSize\":19800,\"levelCode\":\"IP\",\"serverName\":\"shenzhen\",\"version\":\"V1\"},\"capabilities\":{\"download\":false,\"status\":false}}"
+  "metadataJson": {
+    "providerCode": "legacy-agent",
+    "providerDocument": {
+      "docId": "legacy_doc_1",
+      "docName": "invoice.pdf",
+      "docSize": 19800,
+      "levelCode": "IP",
+      "serverName": "shenzhen",
+      "version": "V1"
+    },
+    "capabilities": {
+      "download": false,
+      "status": false
+    }
+  }
 }
 ```
 
@@ -1449,8 +1471,9 @@ curl -OJ http://localhost:8080/api/v1/ex/documents/doc_xxx/download
 后端会按当前用户回查文档库，补齐可信的文件名、MIME、大小、来源和 tokenSize。前端传入的附件展示字段不会被当作事实源。
 
 指定历史技能调用时，`metadata.selectedSkillId` 触发 `EXPLICIT_SKILL` 路由。后端会用文档库中的
-`providerDocument` 可信元数据组装老 Agent 所需的 `sceneParam.docList`，前端不要在 metadata 里直接传
-`docList`：
+`providerDocument` 可信元数据组装老 Agent 所需的 `sceneParam.docList`。前端可以通过
+`metadata.legacyAgent.sceneParam` 传入其他业务扩展参数，但不要依赖自己传入的 `docList`；即使传了，
+后端也会用已鉴权附件生成的可信 `docList` 覆盖：
 
 ```json
 {
@@ -1465,11 +1488,15 @@ curl -OJ http://localhost:8080/api/v1/ex/documents/doc_xxx/download
   "metadata": {
     "selectedSkillId": "skill_tax_opinion",
     "legacyAgent": {
-      "isThink": 1,
+      "isThinking": "1",
       "platform": "PC",
-      "queryType": "normalQa",
+      "qaType": "normalQa",
       "streamFlag": "stream",
-      "supMsg": ""
+      "supMsg": "",
+      "sceneParam": {
+        "regionCode": "CN-SZ",
+        "taxYear": "2026"
+      }
     }
   }
 }

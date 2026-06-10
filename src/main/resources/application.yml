@@ -285,7 +285,7 @@ financeex:
     timeout: ${FINANCEEX_LEGACY_SKILL_TIMEOUT:120s}
     allowed-skill-ids: ${FINANCEEX_LEGACY_SKILL_ALLOWED_IDS:}
     default-platform: ${FINANCEEX_LEGACY_SKILL_DEFAULT_PLATFORM:PC}
-    default-query-type: ${FINANCEEX_LEGACY_SKILL_DEFAULT_QUERY_TYPE:normalQa}
+    default-qa-type: ${FINANCEEX_LEGACY_SKILL_DEFAULT_QA_TYPE:normalQa}
     default-stream-flag: ${FINANCEEX_LEGACY_SKILL_DEFAULT_STREAM_FLAG:stream}
-    default-is-think: ${FINANCEEX_LEGACY_SKILL_DEFAULT_IS_THINK:1}
+    default-is-thinking: ${FINANCEEX_LEGACY_SKILL_DEFAULT_IS_THINKING:1}
     max-attachments: ${FINANCEEX_LEGACY_SKILL_MAX_ATTACHMENTS:10}

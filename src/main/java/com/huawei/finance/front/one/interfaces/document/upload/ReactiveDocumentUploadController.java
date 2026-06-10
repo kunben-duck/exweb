@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.interfaces.document.upload;
 
-import com.huawei.finance.front.one.domain.document.UploadedDocument;
+import com.huawei.finance.front.one.interfaces.document.dto.DocumentDtoMapper;
+import com.huawei.finance.front.one.interfaces.document.dto.UploadedDocumentDto;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -24,9 +25,11 @@ import reactor.core.publisher.Mono;
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.REACTIVE)
 public class ReactiveDocumentUploadController {
     private final DocumentUploadSupport uploadSupport;
+    private final DocumentDtoMapper dtoMapper;
 
-    public ReactiveDocumentUploadController(DocumentUploadSupport uploadSupport) {
+    public ReactiveDocumentUploadController(DocumentUploadSupport uploadSupport, DocumentDtoMapper dtoMapper) {
         this.uploadSupport = uploadSupport;
+        this.dtoMapper = dtoMapper;
     }
 
     /**
@@ -41,12 +44,13 @@ public class ReactiveDocumentUploadController {
      * @return 上传完成后的文档库元数据。
      */
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public Mono<UploadedDocument> upload(@RequestPart("file") FilePart file,
-                                         @RequestPart(value = "sessionId", required = false) String sessionId,
-                                         @RequestPart(value = "targetProvider", required = false) String targetProvider,
-                                         @RequestPart(value = "skillId", required = false) String skillId,
-                                         @RequestPart(value = "metadata", required = false) String metadata,
-                                         @RequestHeader(value = HttpHeaders.COOKIE, required = false) String cookieHeader) {
-        return uploadSupport.uploadFilePart(file, sessionId, targetProvider, skillId, metadata, cookieHeader);
+    public Mono<UploadedDocumentDto> upload(@RequestPart("file") FilePart file,
+                                            @RequestPart(value = "sessionId", required = false) String sessionId,
+                                            @RequestPart(value = "targetProvider", required = false) String targetProvider,
+                                            @RequestPart(value = "skillId", required = false) String skillId,
+                                            @RequestPart(value = "metadata", required = false) String metadata,
+                                            @RequestHeader(value = HttpHeaders.COOKIE, required = false) String cookieHeader) {
+        return uploadSupport.uploadFilePart(file, sessionId, targetProvider, skillId, metadata, cookieHeader)
+                .map(dtoMapper::toDto);
     }
 }

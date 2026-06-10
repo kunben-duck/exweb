@@ -439,13 +439,18 @@ async function sendRun() {
     }
   };
   if (selectedSkillId) {
+    const sceneParam = parseOptionalJsonObject($("legacySceneParamInput")?.value?.trim(), "legacyAgent.sceneParam");
+    if (sceneParam === undefined) {
+      return;
+    }
     body.metadata.selectedSkillId = selectedSkillId;
     body.metadata.legacyAgent = {
-      isThink: 1,
+      isThinking: "1",
       platform: "PC",
-      queryType: "normalQa",
+      qaType: "normalQa",
       streamFlag: "stream",
-      supMsg: ""
+      supMsg: "",
+      ...(sceneParam ? { sceneParam } : {})
     };
   }
 
@@ -1214,7 +1219,7 @@ async function renameDocument(doc) {
   await requestJson(`/api/v1/ex/documents/${encodeURIComponent(doc.id)}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ originalName, metadataJson: doc.metadataJson || null })
+    body: JSON.stringify({ originalName, metadataJson: metadataJsonForUpdate(doc.metadataJson) })
   });
   await refreshDocuments();
 }
@@ -1375,6 +1380,26 @@ function parseJsonBody(text) {
   } catch {
     return { message: text };
   }
+}
+
+function parseOptionalJsonObject(text, label) {
+  if (!text) return null;
+  try {
+    const value = JSON.parse(text);
+    if (!value || Array.isArray(value) || typeof value !== "object") {
+      alert(`${label} 必须是 JSON object`);
+      return undefined;
+    }
+    return value;
+  } catch (error) {
+    alert(`${label} JSON 格式错误：${error.message}`);
+    return undefined;
+  }
+}
+
+function metadataJsonForUpdate(metadataJson) {
+  if (metadataJson == null) return null;
+  return typeof metadataJson === "string" ? metadataJson : JSON.stringify(metadataJson);
 }
 
 function requireSession(handler) {

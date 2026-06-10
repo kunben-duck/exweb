@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
-import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyNamespace;
+import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyBuilder;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.nio.charset.StandardCharsets;
@@ -15,7 +15,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
@@ -35,24 +34,21 @@ import reactor.util.concurrent.Queues;
  * 订阅，而是在本机出现 run topic 订阅者时动态订阅对应 channel，减少集群广播和模式订阅的不确定性。</p>
  */
 @Component
-@EnableConfigurationProperties(ChatLiveEventBusProperties.class)
 public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener {
     private static final Logger log = LoggerFactory.getLogger(RedisChatLiveEventBus.class);
 
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
-    private final ChatLiveEventBusProperties properties;
-    private final FinanceExRedisKeyNamespace keyNamespace;
+    private final FinanceExRedisKeyBuilder redisKeys;
     private final RedisMessageListenerContainer listenerContainer;
     private final Map<String, TopicSink> topicSinks = new ConcurrentHashMap<>();
 
     public RedisChatLiveEventBus(StringRedisTemplate redis, ObjectMapper objectMapper,
-                                 ChatLiveEventBusProperties properties, RedisConnectionFactory connectionFactory,
-                                 FinanceExRedisKeyNamespace keyNamespace) {
+                                 RedisConnectionFactory connectionFactory,
+                                 FinanceExRedisKeyBuilder redisKeys) {
         this.redis = redis;
         this.objectMapper = objectMapper;
-        this.properties = properties;
-        this.keyNamespace = keyNamespace;
+        this.redisKeys = redisKeys;
         this.listenerContainer = new RedisMessageListenerContainer();
         this.listenerContainer.setConnectionFactory(connectionFactory);
     }
@@ -150,7 +146,7 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     }
 
     private String channel(String topicId) {
-        return keyNamespace.prefix(properties.getRedisChannelPrefix()) + ":" + topicId;
+        return redisKeys.chatStreamChannel(topicId);
     }
 
     private TopicSink registerTopic(String topicId) {
@@ -179,8 +175,7 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     }
 
     private String topicFromChannel(String channel) {
-        String prefix = keyNamespace.prefix(properties.getRedisChannelPrefix()) + ":";
-        return channel != null && channel.startsWith(prefix) ? channel.substring(prefix.length()) : channel;
+        return redisKeys.topicFromChatStreamChannel(channel);
     }
 
     private boolean terminal(ChatEvent event) {

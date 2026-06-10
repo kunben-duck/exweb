@@ -98,7 +98,7 @@ financeex:
     redis-key-prefix: fin_ex:runtime_binding
     redis-ttl: 3d
   chat-run:
-    # 以下均为逻辑前缀；实际 key 会由 FinanceExRedisKeyNamespace 变为 fin_ex:{env}:...
+    # 以下均为逻辑前缀；实际 key 会由 FinanceExRedisKeyBuilder 变为 fin_ex:{env}:...
     active-key-prefix: fin_ex:chat_run:active
     cancel-key-prefix: fin_ex:chat_run:cancel
     recover-lock-key-prefix: fin_ex:chat_run:recover_lock

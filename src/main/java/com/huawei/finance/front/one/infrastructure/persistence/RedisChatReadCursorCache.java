@@ -3,7 +3,7 @@ package com.huawei.finance.front.one.infrastructure.persistence;
 import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorCache;
 import com.huawei.finance.front.one.application.config.ChatReadCursorProperties;
 import com.huawei.finance.front.one.domain.chat.ChatReadCursor;
-import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyNamespace;
+import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyBuilder;
 import java.time.Instant;
 import java.util.Optional;
 import org.slf4j.Logger;
@@ -22,23 +22,22 @@ import org.springframework.stereotype.Component;
 @EnableConfigurationProperties(ChatReadCursorProperties.class)
 public class RedisChatReadCursorCache implements ChatReadCursorCache {
     private static final Logger log = LoggerFactory.getLogger(RedisChatReadCursorCache.class);
-    private static final String UNKNOWN = "_";
 
     private final StringRedisTemplate redis;
     private final ChatReadCursorProperties properties;
-    private final FinanceExRedisKeyNamespace keyNamespace;
+    private final FinanceExRedisKeyBuilder redisKeys;
 
     public RedisChatReadCursorCache(StringRedisTemplate redis, ChatReadCursorProperties properties,
-                                    FinanceExRedisKeyNamespace keyNamespace) {
+                                    FinanceExRedisKeyBuilder redisKeys) {
         this.redis = redis;
         this.properties = properties;
-        this.keyNamespace = keyNamespace;
+        this.redisKeys = redisKeys;
     }
 
     @Override
     public Optional<ChatReadCursor> find(String tenantId, String userId, String sessionId) {
         try {
-            String value = redis.opsForValue().get(key(tenantId, userId, sessionId));
+            String value = redis.opsForValue().get(redisKeys.readCursor(tenantId, userId, sessionId));
             if (value == null || value.isBlank()) {
                 return Optional.empty();
             }
@@ -56,7 +55,7 @@ public class RedisChatReadCursorCache implements ChatReadCursorCache {
             return;
         }
         try {
-            String key = key(cursor.tenantId(), cursor.userId(), cursor.sessionId());
+            String key = redisKeys.readCursor(cursor.tenantId(), cursor.userId(), cursor.sessionId());
             String currentValue = redis.opsForValue().get(key);
             long currentSeq = currentValue == null || currentValue.isBlank() ? 0L : Long.parseLong(currentValue);
             if (cursor.lastConsumedSeq() >= currentSeq) {
@@ -67,12 +66,4 @@ public class RedisChatReadCursorCache implements ChatReadCursorCache {
         }
     }
 
-    private String key(String tenantId, String userId, String sessionId) {
-        return keyNamespace.prefix(properties.getRedisKeyPrefix())
-                + ":" + normalize(tenantId) + ":" + normalize(userId) + ":" + normalize(sessionId);
-    }
-
-    private String normalize(String value) {
-        return value == null || value.isBlank() ? UNKNOWN : value;
-    }
 }

@@ -4,7 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
-import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyNamespace;
+import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyBuilder;
 import java.util.Optional;
 import java.util.Set;
 import org.slf4j.Logger;
@@ -24,26 +24,25 @@ import org.springframework.stereotype.Component;
 @EnableConfigurationProperties(RuntimeBindingProperties.class)
 public class RedisRuntimeBindingCache implements RuntimeBindingCache {
     private static final Logger log = LoggerFactory.getLogger(RedisRuntimeBindingCache.class);
-    private static final String UNKNOWN = "_";
 
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
     private final RuntimeBindingProperties properties;
-    private final FinanceExRedisKeyNamespace keyNamespace;
+    private final FinanceExRedisKeyBuilder redisKeys;
 
     public RedisRuntimeBindingCache(StringRedisTemplate redis, ObjectMapper objectMapper,
                                     RuntimeBindingProperties properties,
-                                    FinanceExRedisKeyNamespace keyNamespace) {
+                                    FinanceExRedisKeyBuilder redisKeys) {
         this.redis = redis;
         this.objectMapper = objectMapper;
         this.properties = properties;
-        this.keyNamespace = keyNamespace;
+        this.redisKeys = redisKeys;
     }
 
     @Override
     public Optional<RuntimeBinding> get(String tenantId, String userId, String sessionId, String leafMessageId) {
         try {
-            String value = redis.opsForValue().get(key(tenantId, userId, sessionId, leafMessageId));
+            String value = redis.opsForValue().get(redisKeys.runtimeBinding(tenantId, userId, sessionId, leafMessageId));
             if (value == null || value.isBlank()) {
                 return Optional.empty();
             }
@@ -65,8 +64,10 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
             return;
         }
         try {
-            String key = key(binding.tenantId(), binding.userId(), binding.chatSessionId(), binding.leafMessageId());
-            String indexKey = indexKey(binding.tenantId(), binding.userId(), binding.chatSessionId());
+            String key = redisKeys.runtimeBinding(binding.tenantId(), binding.userId(),
+                    binding.chatSessionId(), binding.leafMessageId());
+            String indexKey = redisKeys.runtimeBindingIndex(binding.tenantId(), binding.userId(),
+                    binding.chatSessionId());
             redis.opsForValue().set(key, objectMapper.writeValueAsString(binding), properties.getRedisTtl());
             redis.opsForSet().add(indexKey, key);
             redis.expire(indexKey, properties.getRedisTtl());
@@ -78,7 +79,7 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
     @Override
     public void evict(String tenantId, String userId, String sessionId) {
         try {
-            String indexKey = indexKey(tenantId, userId, sessionId);
+            String indexKey = redisKeys.runtimeBindingIndex(tenantId, userId, sessionId);
             Set<String> keys = redis.opsForSet().members(indexKey);
             if (keys != null && !keys.isEmpty()) {
                 redis.delete(keys);
@@ -89,23 +90,4 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
         }
     }
 
-    private String key(String tenantId, String userId, String sessionId, String leafMessageId) {
-        return keyNamespace.prefix(properties.getRedisKeyPrefix())
-                + ":"
-                + sessionHashTag(tenantId, userId, sessionId)
-                + ":"
-                + normalize(leafMessageId);
-    }
-
-    private String indexKey(String tenantId, String userId, String sessionId) {
-        return keyNamespace.prefix(properties.getRedisKeyPrefix()) + ":index:" + sessionHashTag(tenantId, userId, sessionId);
-    }
-
-    private String sessionHashTag(String tenantId, String userId, String sessionId) {
-        return "{" + normalize(tenantId) + ":" + normalize(userId) + ":" + normalize(sessionId) + "}";
-    }
-
-    private String normalize(String value) {
-        return value == null || value.isBlank() ? UNKNOWN : value;
-    }
 }

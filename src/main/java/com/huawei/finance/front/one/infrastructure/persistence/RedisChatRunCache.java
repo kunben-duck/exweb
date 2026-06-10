@@ -6,7 +6,7 @@ import com.huawei.finance.front.one.application.integration.conversation.ChatRun
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRecoverLock;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunCancelSignal;
-import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyNamespace;
+import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyBuilder;
 import java.time.Duration;
 import java.util.Optional;
 import org.slf4j.Logger;
@@ -24,25 +24,24 @@ import org.springframework.stereotype.Component;
 @EnableConfigurationProperties(ChatRunCacheProperties.class)
 public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
     private static final Logger log = LoggerFactory.getLogger(RedisChatRunCache.class);
-    private static final String UNKNOWN = "_";
 
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
     private final ChatRunCacheProperties properties;
-    private final FinanceExRedisKeyNamespace keyNamespace;
+    private final FinanceExRedisKeyBuilder redisKeys;
 
     public RedisChatRunCache(StringRedisTemplate redis, ObjectMapper objectMapper, ChatRunCacheProperties properties,
-                             FinanceExRedisKeyNamespace keyNamespace) {
+                             FinanceExRedisKeyBuilder redisKeys) {
         this.redis = redis;
         this.objectMapper = objectMapper;
         this.properties = properties;
-        this.keyNamespace = keyNamespace;
+        this.redisKeys = redisKeys;
     }
 
     @Override
     public Optional<ChatRun> getActive(String tenantId, String userId, String sessionId) {
         try {
-            String value = redis.opsForValue().get(activeKey(tenantId, userId, sessionId));
+            String value = redis.opsForValue().get(redisKeys.activeRun(tenantId, userId, sessionId));
             if (value == null || value.isBlank()) {
                 return Optional.empty();
             }
@@ -60,7 +59,7 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
         }
         try {
             Boolean claimed = redis.opsForValue().setIfAbsent(
-                    activeKey(run.tenantId(), run.userId(), run.sessionId()),
+                    redisKeys.activeRun(run.tenantId(), run.userId(), run.sessionId()),
                     objectMapper.writeValueAsString(run),
                     properties.getActiveTtl()
             );
@@ -77,7 +76,7 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
             return;
         }
         try {
-            redis.opsForValue().set(activeKey(run.tenantId(), run.userId(), run.sessionId()),
+            redis.opsForValue().set(redisKeys.activeRun(run.tenantId(), run.userId(), run.sessionId()),
                     objectMapper.writeValueAsString(run), properties.getActiveTtl());
         } catch (RuntimeException | JsonProcessingException ex) {
             log.warn("ChatRun active Redis 写入失败，openGauss 仍作为事实源。原因：{}", ex.getMessage());
@@ -87,7 +86,7 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
     @Override
     public void evictActive(String tenantId, String userId, String sessionId) {
         try {
-            redis.delete(activeKey(tenantId, userId, sessionId));
+            redis.delete(redisKeys.activeRun(tenantId, userId, sessionId));
         } catch (RuntimeException ex) {
             log.warn("ChatRun active Redis 删除失败。原因：{}", ex.getMessage());
         }
@@ -99,7 +98,7 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
             return;
         }
         try {
-            redis.opsForValue().set(cancelKey(runId), "1", properties.getCancelTtl());
+            redis.opsForValue().set(redisKeys.cancelFlag(runId), "1", properties.getCancelTtl());
         } catch (RuntimeException ex) {
             log.warn("ChatRun cancel Redis 写入失败，将依赖 openGauss CANCELLING 状态兜底阻断迟到事件。原因：{}", ex.getMessage());
         }
@@ -111,7 +110,7 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
             return ChatRunCancelSignal.NOT_REQUESTED;
         }
         try {
-            return Boolean.TRUE.equals(redis.hasKey(cancelKey(runId)))
+            return Boolean.TRUE.equals(redis.hasKey(redisKeys.cancelFlag(runId)))
                     ? ChatRunCancelSignal.REQUESTED
                     : ChatRunCancelSignal.NOT_REQUESTED;
         } catch (RuntimeException ex) {
@@ -127,8 +126,8 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
         }
         try {
             Boolean locked = redis.opsForValue().setIfAbsent(
-                    recoverLockKey(runId),
-                    normalize(ownerInstanceId),
+                    redisKeys.recoverLock(runId),
+                    ownerInstanceId == null || ownerInstanceId.isBlank() ? "_" : ownerInstanceId,
                     ttl == null || ttl.isZero() || ttl.isNegative() ? Duration.ofSeconds(30) : ttl
             );
             return Boolean.TRUE.equals(locked);
@@ -139,20 +138,4 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
         }
     }
 
-    private String activeKey(String tenantId, String userId, String sessionId) {
-        return keyNamespace.prefix(properties.getActiveKeyPrefix())
-                + ":" + normalize(tenantId) + ":" + normalize(userId) + ":" + normalize(sessionId);
-    }
-
-    private String cancelKey(String runId) {
-        return keyNamespace.prefix(properties.getCancelKeyPrefix()) + ":" + normalize(runId);
-    }
-
-    private String recoverLockKey(String runId) {
-        return keyNamespace.prefix(properties.getRecoverLockKeyPrefix()) + ":" + normalize(runId);
-    }
-
-    private String normalize(String value) {
-        return value == null || value.isBlank() ? UNKNOWN : value;
-    }
 }

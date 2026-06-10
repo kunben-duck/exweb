@@ -3,7 +3,7 @@ package com.huawei.finance.front.one.infrastructure.memory;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
-import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyNamespace;
+import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyBuilder;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -24,21 +24,20 @@ import org.springframework.stereotype.Component;
 @Component
 public class RedisShortTermMemoryCache {
     private static final Logger log = LoggerFactory.getLogger(RedisShortTermMemoryCache.class);
-    private static final String UNKNOWN = "_";
 
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
     private final ShortTermMemoryRedisProperties properties;
-    private final FinanceExRedisKeyNamespace keyNamespace;
+    private final FinanceExRedisKeyBuilder redisKeys;
     private volatile Instant retryAfter = Instant.MIN;
 
     public RedisShortTermMemoryCache(StringRedisTemplate redis, ObjectMapper objectMapper,
                                      ShortTermMemoryRedisProperties properties,
-                                     FinanceExRedisKeyNamespace keyNamespace) {
+                                     FinanceExRedisKeyBuilder redisKeys) {
         this.redis = redis;
         this.objectMapper = objectMapper;
         this.properties = properties;
-        this.keyNamespace = keyNamespace;
+        this.redisKeys = redisKeys;
     }
 
     public boolean append(ChatMessage message) {
@@ -46,7 +45,7 @@ public class RedisShortTermMemoryCache {
             return false;
         }
         try {
-            String key = key(message.tenantId(), message.userId(), message.sessionId());
+            String key = redisKeys.shortTermMemoryMessages(message.tenantId(), message.userId(), message.sessionId());
             redis.opsForList().rightPush(key, serialize(message));
             redis.opsForList().trim(key, -maxCachedMessages(), -1);
             redis.expire(key, properties.getTtl());
@@ -62,7 +61,8 @@ public class RedisShortTermMemoryCache {
             return List.of();
         }
         try {
-            List<String> values = redis.opsForList().range(key(tenantId, userId, sessionId), -limit, -1);
+            String key = redisKeys.shortTermMemoryMessages(tenantId, userId, sessionId);
+            List<String> values = redis.opsForList().range(key, -limit, -1);
             if (values == null || values.isEmpty()) {
                 return List.of();
             }
@@ -87,7 +87,7 @@ public class RedisShortTermMemoryCache {
             return;
         }
         try {
-            String key = key(tenantId, userId, sessionId);
+            String key = redisKeys.shortTermMemoryMessages(tenantId, userId, sessionId);
             redis.delete(key);
             List<String> values = messages.stream()
                     .sorted(Comparator.comparing(ChatMessage::createdAt).reversed())
@@ -109,7 +109,8 @@ public class RedisShortTermMemoryCache {
             return;
         }
         try {
-            redis.opsForList().remove(key(message.tenantId(), message.userId(), message.sessionId()), 1, serialize(message));
+            String key = redisKeys.shortTermMemoryMessages(message.tenantId(), message.userId(), message.sessionId());
+            redis.opsForList().remove(key, 1, serialize(message));
         } catch (RuntimeException ex) {
             markRedisFailure(ex);
         }
@@ -149,20 +150,6 @@ public class RedisShortTermMemoryCache {
             log.warn("忽略无法反序列化的 Redis 短期记忆消息。");
             return null;
         }
-    }
-
-    private String key(String tenantId, String userId, String sessionId) {
-        return keyNamespace.prefix(properties.getRedisKeyPrefix())
-                + ":messages:"
-                + normalize(tenantId)
-                + ":"
-                + normalize(userId)
-                + ":"
-                + normalize(sessionId);
-    }
-
-    private String normalize(String value) {
-        return value == null || value.isBlank() ? UNKNOWN : value;
     }
 
     private int maxCachedMessages() {

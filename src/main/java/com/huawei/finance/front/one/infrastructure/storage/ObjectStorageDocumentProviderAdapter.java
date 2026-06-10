@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.integration.document.DocumentProviderAdapter;
 import com.huawei.finance.front.one.application.integration.document.DocumentProviderUploadRequest;
 import com.huawei.finance.front.one.application.integration.document.ObjectStorage;
-import com.huawei.finance.front.one.application.service.WorkloadConcurrencyLimiter;
+import com.huawei.finance.front.one.application.service.runtime.WorkloadConcurrencyLimiter;
 import com.huawei.finance.front.one.domain.document.DocumentStatus;
 import com.huawei.finance.front.one.domain.document.StoredObject;
 import com.huawei.finance.front.one.domain.document.StoredObjectContent;

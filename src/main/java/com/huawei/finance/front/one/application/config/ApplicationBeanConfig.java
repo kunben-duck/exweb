@@ -1,6 +1,6 @@
 package com.huawei.finance.front.one.application.config;
 
-import com.huawei.finance.front.one.application.service.PermissionChecker;
+import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.routing.RoutingPolicy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;

@@ -6,7 +6,7 @@ import com.huawei.finance.front.one.application.config.DocumentProviderPropertie
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.document.DocumentProviderAdapter;
 import com.huawei.finance.front.one.application.integration.document.DocumentProviderUploadRequest;
-import com.huawei.finance.front.one.application.service.WorkloadConcurrencyLimiter;
+import com.huawei.finance.front.one.application.service.runtime.WorkloadConcurrencyLimiter;
 import com.huawei.finance.front.one.domain.document.DocumentStatus;
 import com.huawei.finance.front.one.domain.document.StoredObjectContent;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;

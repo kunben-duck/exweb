@@ -2,12 +2,12 @@ package com.huawei.finance.front.one.interfaces.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.huawei.finance.front.one.application.facade.FinanceChatFacade;
 import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookieProperties;
+import com.huawei.finance.front.one.application.facade.FinanceChatFacade;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
-import com.huawei.finance.front.one.application.service.PermissionChecker;
+import com.huawei.finance.front.one.application.service.chat.ChatStreamApplicationService;
+import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
-import com.huawei.finance.front.one.application.service.ChatStreamApplicationService;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatRunStartResult;
@@ -25,7 +25,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.web.bind.annotation.GetMapping;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-
 class ChatProtocolConvergenceTest {
 
     @Test

@@ -8,7 +8,7 @@ import com.huawei.finance.front.one.application.config.DocumentProviderPropertie
 import com.huawei.finance.front.one.application.config.ResourceIsolationProperties;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.document.DocumentProviderUploadRequest;
-import com.huawei.finance.front.one.application.service.WorkloadConcurrencyLimiter;
+import com.huawei.finance.front.one.application.service.runtime.WorkloadConcurrencyLimiter;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import java.io.ByteArrayInputStream;
@@ -22,7 +22,6 @@ import org.springframework.web.reactive.function.client.ClientRequest;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
-
 class HttpDocumentProviderAdapterTest {
     private static final String COOKIE = "sid=abc; theme=dark";
 

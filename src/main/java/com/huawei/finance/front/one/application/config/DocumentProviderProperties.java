@@ -150,6 +150,8 @@ public class DocumentProviderProperties {
         private String documentNameField = "docname";
         /** provider 文档大小字段名。 */
         private String documentSizeField = "docsize";
+        /** provider 文档 URL 字段名；当响应没有文档 ID 但有 URL 时，仍视为上传成功。 */
+        private String documentUrlField = "url";
         /** 允许保存到 metadataJson.providerDocument 的 provider 私有字段。 */
         private List<String> metadataFields = new ArrayList<>(List.of("levelCode", "serverName", "version"));
 
@@ -161,6 +163,8 @@ public class DocumentProviderProperties {
         public void setDocumentNameField(String documentNameField) { this.documentNameField = documentNameField; }
         public String getDocumentSizeField() { return documentSizeField; }
         public void setDocumentSizeField(String documentSizeField) { this.documentSizeField = documentSizeField; }
+        public String getDocumentUrlField() { return documentUrlField; }
+        public void setDocumentUrlField(String documentUrlField) { this.documentUrlField = documentUrlField; }
         public List<String> getMetadataFields() { return metadataFields; }
         public void setMetadataFields(List<String> metadataFields) {
             this.metadataFields = metadataFields == null ? List.of() : List.copyOf(metadataFields);

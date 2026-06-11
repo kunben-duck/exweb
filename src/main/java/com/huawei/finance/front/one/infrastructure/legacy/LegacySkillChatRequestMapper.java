@@ -35,8 +35,7 @@ public class LegacySkillChatRequestMapper {
     public Map<String, Object> toWireRequest(LegacySkillAgentRequest request) {
         Map<String, Object> legacyOptions = legacyOptions(request.metadata());
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("isThinking", stringOption(legacyOptions, "isThinking",
-                String.valueOf(properties.getDefaultIsThinking())));
+        body.put("isThinking", intOption(legacyOptions, "isThinking", properties.getDefaultIsThinking()));
         body.put("platform", stringOption(legacyOptions, "platform", properties.getDefaultPlatform()));
         body.put("qaType", stringOption(legacyOptions, "qaType", properties.getDefaultQaType()));
         body.put("query", request.query());
@@ -81,8 +80,13 @@ public class LegacySkillChatRequestMapper {
                 throw new IllegalArgumentException("指定技能仅支持 legacy-agent provider 上传的文档: " + document.id());
             }
             Map<String, Object> providerDocument = providerDocument(document);
+            String docId = stringValue(providerDocument.get("docId"), "");
+            if (docId.isBlank() || "URL".equals(providerDocument.get("providerLocatorType"))) {
+                throw new IllegalArgumentException("legacy-agent 文档缺少可用于指定技能的 docId，请按对应 skillId 重新上传: "
+                        + document.id());
+            }
             Map<String, Object> item = new LinkedHashMap<>();
-            item.put("docId", stringValue(providerDocument.get("docId"), document.objectKey()));
+            item.put("docId", docId);
             item.put("docName", stringValue(providerDocument.get("docName"), document.originalName()));
             item.put("docRelativePath", stringValue(providerDocument.get("docRelativePath"), ""));
             item.put("docSize", longValue(providerDocument.get("docSize"), document.sizeBytes()));
@@ -121,6 +125,21 @@ public class LegacySkillChatRequestMapper {
 
     private String stringOption(Map<String, Object> options, String key, String defaultValue) {
         return stringValue(options.get(key), defaultValue);
+    }
+
+    private int intOption(Map<String, Object> options, String key, int defaultValue) {
+        Object value = options.get(key);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String text) {
+            try {
+                return Integer.parseInt(text);
+            } catch (NumberFormatException ignored) {
+                return defaultValue;
+            }
+        }
+        return defaultValue;
     }
 
     private String stringValue(Object value, String defaultValue) {

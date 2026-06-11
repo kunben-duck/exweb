@@ -37,7 +37,7 @@ class LegacySkillChatRequestMapperTest {
         Map<String, Object> wire = mapper.toWireRequest(request);
 
         assertThat(wire)
-                .containsEntry("isThinking", "1")
+                .containsEntry("isThinking", 1)
                 .containsEntry("platform", "PC")
                 .containsEntry("qaType", "normalQa")
                 .containsEntry("query", "hello")
@@ -71,6 +71,15 @@ class LegacySkillChatRequestMapperTest {
         assertThatThrownBy(() -> mapper.toWireRequest(request))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("legacyAgent.sceneParam");
+    }
+
+    @Test
+    void rejectsUrlOnlyLegacyDocumentForExplicitSkillDocList() {
+        LegacySkillAgentRequest request = request(Map.of(), List.of(urlOnlyLegacyDocument()));
+
+        assertThatThrownBy(() -> mapper.toWireRequest(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("缺少可用于指定技能的 docId");
     }
 
     private LegacySkillAgentRequest request(Map<String, Object> metadata, List<UploadedDocument> documents) {
@@ -110,6 +119,37 @@ class LegacySkillChatRequestMapperTest {
                             "docRelativePath": "/legacy/invoice.pdf",
                             "docSize": 19800,
                             "levelCode": "IP"
+                          }
+                        }
+                        """,
+                now,
+                now
+        );
+    }
+
+    private UploadedDocument urlOnlyLegacyDocument() {
+        Instant now = Instant.parse("2026-06-11T00:00:00Z");
+        return new UploadedDocument(
+                "doc-url",
+                "tenant1",
+                "user1",
+                "session1",
+                "invoice.pdf",
+                "legacy-agent",
+                "legacy-url:abcd",
+                "application/pdf",
+                19800L,
+                DocumentStatus.AVAILABLE.name(),
+                DocumentSource.LEGACY_AGENT_UPLOAD.name(),
+                null,
+                """
+                        {
+                          "providerCode": "legacy-agent",
+                          "providerDocument": {
+                            "providerLocatorType": "URL",
+                            "url": "https://legacy.example/files/invoice.pdf",
+                            "docName": "invoice.pdf",
+                            "docSize": 19800
                           }
                         }
                         """,

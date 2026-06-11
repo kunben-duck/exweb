@@ -11,6 +11,8 @@ import com.huawei.finance.front.one.domain.document.DocumentStatus;
 import com.huawei.finance.front.one.domain.document.StoredObjectContent;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -35,6 +37,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 @Component
 public class HttpDocumentProviderAdapter implements DocumentProviderAdapter {
     private static final int MAX_METADATA_STRING_LENGTH = 2048;
+    private static final char[] HEX = "0123456789abcdef".toCharArray();
 
     private final WebClient.Builder webClientBuilder;
     private final ObjectMapper objectMapper;
@@ -77,7 +80,7 @@ public class HttpDocumentProviderAdapter implements DocumentProviderAdapter {
                 blankToNull(request.command().sessionId()),
                 safeFilename(blankToDefault(providerDocument.documentName(), request.command().originalFilename())),
                 request.providerCode(),
-                providerDocument.documentId(),
+                providerDocument.objectKey(),
                 request.command().contentType(),
                 providerDocument.documentSize() == null ? request.command().sizeBytes() : providerDocument.documentSize(),
                 DocumentStatus.AVAILABLE.name(),
@@ -169,14 +172,23 @@ public class HttpDocumentProviderAdapter implements DocumentProviderAdapter {
                 throw new IllegalArgumentException("文档 provider 上传响应缺少文档数据: " + request.providerCode());
             }
             DocumentProviderProperties.ResponseMapping mapping = request.provider().getResponseMapping();
-            String providerDocumentId = text(documentNode, mapping.getDocumentIdField());
-            if (providerDocumentId == null || providerDocumentId.isBlank()) {
-                throw new IllegalArgumentException("文档 provider 上传响应缺少文档 ID: " + request.providerCode());
+            String providerDocumentId = blankToNull(text(documentNode, mapping.getDocumentIdField()));
+            String providerDocumentUrl = blankToNull(text(documentNode, mapping.getDocumentUrlField()));
+            if (providerDocumentId == null && providerDocumentUrl == null) {
+                throw new IllegalArgumentException("文档 provider 上传响应缺少文档 ID 或 URL: " + request.providerCode());
             }
+            String locatorType = providerDocumentId == null ? "URL" : "DOC_ID";
+            String objectKey = providerDocumentId == null
+                    ? "legacy-url:" + sha256Hex(providerDocumentUrl)
+                    : providerDocumentId;
             String providerDocumentName = text(documentNode, mapping.getDocumentNameField());
             Long providerDocumentSize = longValue(documentNode, mapping.getDocumentSizeField());
             Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("providerLocatorType", locatorType);
             metadata.put("docId", providerDocumentId);
+            if (providerDocumentUrl != null) {
+                metadata.put("url", providerDocumentUrl);
+            }
             metadata.put("docName", providerDocumentName);
             metadata.put("docSize", providerDocumentSize);
             for (String field : mapping.getMetadataFields()) {
@@ -188,7 +200,8 @@ public class HttpDocumentProviderAdapter implements DocumentProviderAdapter {
                     metadata.put(field, sanitizeValue(field, value));
                 }
             }
-            return new ProviderDocument(providerDocumentId, providerDocumentName, providerDocumentSize, metadata);
+            return new ProviderDocument(providerDocumentId, providerDocumentUrl, objectKey,
+                    providerDocumentName, providerDocumentSize, metadata);
         } catch (IllegalArgumentException ex) {
             throw ex;
         } catch (Exception ex) {
@@ -323,6 +336,23 @@ public class HttpDocumentProviderAdapter implements DocumentProviderAdapter {
         return text.length() > MAX_METADATA_STRING_LENGTH ? text.substring(0, MAX_METADATA_STRING_LENGTH) : text;
     }
 
+    private String sha256Hex(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(value.getBytes(StandardCharsets.UTF_8));
+            char[] result = new char[bytes.length * 2];
+            int index = 0;
+            for (byte item : bytes) {
+                int unsigned = item & 0xff;
+                result[index++] = HEX[unsigned >>> 4];
+                result[index++] = HEX[unsigned & 0x0f];
+            }
+            return new String(result);
+        } catch (Exception ex) {
+            throw new IllegalStateException("生成 provider URL 稳定定位符失败", ex);
+        }
+    }
+
     private String safeFilename(String name) {
         if (name == null || name.isBlank()) {
             return "document";
@@ -348,7 +378,7 @@ public class HttpDocumentProviderAdapter implements DocumentProviderAdapter {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    private record ProviderDocument(String documentId, String documentName, Long documentSize,
+    private record ProviderDocument(String documentId, String documentUrl, String objectKey, String documentName, Long documentSize,
                                     Map<String, Object> metadata) {}
 
     private static class NamedByteArrayResource extends ByteArrayResource {

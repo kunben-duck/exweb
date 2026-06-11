@@ -355,10 +355,13 @@ openGauss 的 `fin_ex_uploaded_document_t` 保存文档库元数据，聊天请�
 上传接口对外只有一条 `POST /api/v1/ex/documents`，服务端会按启动模式自动选择适配器：
 Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共用同一套临时落盘和 provider 上传逻辑。
 不传 `targetProvider` 时走默认 `default-storage`，即当前 S3/OBS/local 对象存储；传
-`targetProvider=legacy-agent` 时会转发老 Agent upload 接口，并把老 Agent 返回的 docId/docName/docSize
+`targetProvider=legacy-agent` 时会转发老 Agent upload 接口，并把老 Agent 返回的 docId 或 url、docName、docSize
 等写入统一文档库 `metadataJson.providerDocument`。如果该 provider 配置 `forward-cookie=true`，上传入口捕获到的
 Cookie 会作为下游 upload HTTP header 透传，用于老 Agent 文件服务的企业鉴权；Cookie 不会进入 form 字段或文档库元数据。
 文档接口响应里的 `metadataJson` 会解析为 JSON object，便于前端直接读取；openGauss 表字段仍保存 JSON 字符串。
+如果老 Agent 上传响应没有 `docId` 但返回了 `url`，文档库仍视为上传成功：`objectKey` 保存
+`legacy-url:{sha256(url)}` 这种短稳定定位符，完整 URL 只保存在 `metadataJson.providerDocument.url`。
+这类 URL-only 文档可用于文档库展示和下载/跳转扩展，但第一版不会自动进入指定技能 `sceneParam.docList`。
 
 文档接口：
 

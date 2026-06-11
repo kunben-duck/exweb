@@ -239,7 +239,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`targetProvider` 可选，`skillId` 可选，`metadata` 可选 JSON 字符串；Header 可带标准 `Cookie`。 | `UploadedDocumentDto`。 | 不传 `targetProvider` 使用 default-storage；`targetProvider=legacy-agent` 时后端转发配置化老 Agent upload 接口，并把 provider docId 写入统一文档库。只有 provider 配置 `forward-cookie=true` 时，入口 Cookie 才会作为下游 upload HTTP header 透传。 |
+| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`targetProvider` 可选，`skillId` 可选，`metadata` 可选 JSON 字符串；Header 可带标准 `Cookie`。 | `UploadedDocumentDto`。 | 不传 `targetProvider` 使用 default-storage；`targetProvider=legacy-agent` 时后端转发配置化老 Agent upload 接口，并把 provider docId 或 url 写入统一文档库。只有 provider 配置 `forward-cookie=true` 时，入口 Cookie 才会作为下游 upload HTTP header 透传。 |
 | `GET /api/v1/ex/documents` | 文档库列表或最近文档选择器。 | Query：`sessionId` 可选，`limit` 默认 20，`cursor` 可选。 | `DocumentLibraryPageDto`：`items[]`、`nextCursor`。 | 默认不返回 `DELETED` 文档。 |
 | `GET /api/v1/ex/documents/{documentId}` | 查询文档详情。 | Path：`documentId`。 | `UploadedDocumentDto`。 | 可查看 `AVAILABLE/PROCESSING/FAILED` 等非删除状态。 |
 | `PATCH /api/v1/ex/documents/{documentId}` | 修改展示文件名或扩展元数据。 | Path：`documentId`；JSON body：`originalName`、`metadataJson`。 | `UploadedDocumentDto`。 | 空字段表示保留原值。 |
@@ -442,7 +442,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `status` | `AVAILABLE`、`PROCESSING`、`FAILED`、`DELETED`；只有 `AVAILABLE` 可下载、预览和作为聊天附件 |
 | `source` | 来源，例如 `LOCAL_UPLOAD`、`LIBRARY`、`CONNECTOR`、`LEGACY_AGENT_UPLOAD` |
 | `bucket` | provider 位置字段；default-storage 表示对象存储 bucket，HTTP provider 表示 providerCode |
-| `objectKey` | provider 文件标识；default-storage 表示对象 key，legacy-agent 表示老 Agent docId |
+| `objectKey` | provider 稳定定位符；default-storage 表示对象 key，legacy-agent 可为老 Agent docId 或 `legacy-url:{sha256(url)}` |
 | `metadataJson` | JSON object/null；provider 扩展元数据。legacy-agent 文档的 `providerDocument` 是组装老 Agent `sceneParam.docList` 的事实源。数据库内部仍以 JSON 字符串保存，但响应会解析成对象返回 |
 | `tokenSize` | 解析后 token 数，可为空 |
 | `createdAt` / `updatedAt` | 创建和更新时间 |
@@ -1387,8 +1387,11 @@ Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解
 ```
 
 `targetProvider=legacy-agent` 时，响应仍然是同一个 `UploadedDocumentDto`，但 `source` 为
-`LEGACY_AGENT_UPLOAD`，`bucket` 语义上是 providerCode，`objectKey` 语义上是老 Agent 返回的 docId。
-`metadataJson.providerDocument` 保存老 Agent 返回的 allowlist 字段：
+`LEGACY_AGENT_UPLOAD`，`bucket` 语义上是 providerCode。若老 Agent 返回 `docid`，`objectKey`
+为该 docId；若只返回 `url`，`objectKey` 为 `legacy-url:{sha256(url)}`，完整 URL 放在
+`metadataJson.providerDocument.url`。
+
+docId 模式的 `metadataJson.providerDocument` 示例：
 
 ```json
 {
@@ -1399,6 +1402,7 @@ Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解
   "metadataJson": {
     "providerCode": "legacy-agent",
     "providerDocument": {
+      "providerLocatorType": "DOC_ID",
       "docId": "legacy_doc_1",
       "docName": "invoice.pdf",
       "docSize": 19800,
@@ -1413,6 +1417,35 @@ Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解
   }
 }
 ```
+
+URL 模式的 `metadataJson.providerDocument` 示例：
+
+```json
+{
+  "id": "doc_legacy_url_xxx",
+  "originalName": "invoice.pdf",
+  "status": "AVAILABLE",
+  "source": "LEGACY_AGENT_UPLOAD",
+  "objectKey": "legacy-url:6a1b...",
+  "metadataJson": {
+    "providerCode": "legacy-agent",
+    "providerDocument": {
+      "providerLocatorType": "URL",
+      "docId": null,
+      "url": "https://legacy.example/files/invoice.pdf",
+      "docName": "invoice.pdf",
+      "docSize": 19800
+    },
+    "capabilities": {
+      "download": false,
+      "status": false
+    }
+  }
+}
+```
+
+URL-only 文档表示文档库上传成功，但当前不会自动作为指定技能 `sceneParam.docList` 附件使用。
+如果后续要在 `selectedSkillId` run 中引用该文档，需要按对应 skillId 重新上传并拿到老 Agent `docId`。
 
 查询文档库和文档状态：
 
@@ -1488,7 +1521,7 @@ curl -OJ http://localhost:8080/api/v1/ex/documents/doc_xxx/download
   "metadata": {
     "selectedSkillId": "skill_tax_opinion",
     "legacyAgent": {
-      "isThinking": "1",
+      "isThinking": 1,
       "platform": "PC",
       "qaType": "normalQa",
       "streamFlag": "stream",

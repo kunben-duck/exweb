@@ -14,8 +14,8 @@ import java.time.Instant;
  * @param userId 文档所属用户标识。
  * @param sessionId 文档首次关联的聊天会话标识，可为空。
  * @param originalName 用户上传或导入时的原始文件名。
- * @param bucket 对象所在 bucket。
- * @param objectKey 对象存储 key。
+ * @param bucket 文档 provider 编码或对象存储 bucket。
+ * @param objectKey provider 稳定定位符；对象存储为 object key，HTTP provider 可为 docId 或短 hash locator。
  * @param contentType 文件 MIME 类型。
  * @param sizeBytes 文件大小，单位字节。
  * @param status 文档状态，例如 AVAILABLE、DELETED、FAILED。

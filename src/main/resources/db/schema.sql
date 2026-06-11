@@ -456,7 +456,7 @@ COMMENT ON COLUMN fin_ex_uploaded_document_t.user_id IS '用户标识，来自�
 COMMENT ON COLUMN fin_ex_uploaded_document_t.session_id IS '文档关联的聊天会话 ID，可为空；为空表示用户文档库资产。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.original_name IS '用户上传或文档库展示的原始文件名。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.bucket IS '文档 provider 编码或对象存储 bucket；legacy-agent 等 HTTP provider 使用 providerCode。';
-COMMENT ON COLUMN fin_ex_uploaded_document_t.object_key IS 'provider 内部文件标识；对象存储为 object key，legacy-agent 为下游 docId。';
+COMMENT ON COLUMN fin_ex_uploaded_document_t.object_key IS 'provider 内部稳定定位符；对象存储为 object key，HTTP provider 可为下游 docId 或 legacy-url:{sha256(url)}，不保存完整 URL。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.content_type IS '文档 MIME 类型。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.size_bytes IS '文档字节大小。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.status IS '文档状态，例如 AVAILABLE、PROCESSING、FAILED、DELETED。只有 AVAILABLE 可作为聊天附件。';

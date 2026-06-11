@@ -272,6 +272,7 @@ financeex:
             document-id-field: ${FINANCEEX_LEGACY_AGENT_UPLOAD_DOCUMENT_ID_FIELD:docid}
             document-name-field: ${FINANCEEX_LEGACY_AGENT_UPLOAD_DOCUMENT_NAME_FIELD:docname}
             document-size-field: ${FINANCEEX_LEGACY_AGENT_UPLOAD_DOCUMENT_SIZE_FIELD:docsize}
+            document-url-field: ${FINANCEEX_LEGACY_AGENT_UPLOAD_DOCUMENT_URL_FIELD:url}
             metadata-fields:
               - levelCode
               - serverName

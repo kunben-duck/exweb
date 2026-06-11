@@ -445,7 +445,7 @@ async function sendRun() {
     }
     body.metadata.selectedSkillId = selectedSkillId;
     body.metadata.legacyAgent = {
-      isThinking: "1",
+      isThinking: 1,
       platform: "PC",
       qaType: "normalQa",
       streamFlag: "stream",

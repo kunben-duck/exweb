@@ -51,7 +51,7 @@ class ConfiguredLegacySkillAgentClientTest {
         String body = objectMapper.writeValueAsString(mapper.toWireRequest(request));
         assertThat(body)
                 .contains("\"skillId\":\"skill-tax\"")
-                .contains("\"isThinking\":\"1\"")
+                .contains("\"isThinking\":1")
                 .contains("\"qaType\":\"normalQa\"")
                 .contains("\"streamFlag\":\"stream\"")
                 .doesNotContain("\"isThink\"")

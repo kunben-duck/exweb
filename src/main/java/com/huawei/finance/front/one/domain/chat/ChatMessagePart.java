@@ -15,7 +15,7 @@ import java.util.Map;
  * @param sessionId 所属会话标识。
  * @param messageId 所属 assistant 消息标识。
  * @param runId 产生该 part 的 run 标识。
- * @param partType part 类型，例如 ANSWER、THINKING、TOOL、PROGRESS。
+ * @param partType part 类型，例如 ANSWER、THINKING、TOOL、PROGRESS、CARD。
  * @param sourceType 下游原始事件类型，例如 agent、relay-progress、tool_call_streaming。
  * @param contentText 可直接展示的文本摘要。
  * @param title 前端展示标题，例如“工具调用”或“思考过程”。
@@ -74,6 +74,7 @@ public record ChatMessagePart(
             case "THINKING" -> "思考过程";
             case "TOOL" -> "工具调用";
             case "REFERENCE" -> "引用来源";
+            case "CARD" -> "卡片展示";
             default -> "运行事件";
         };
     }
@@ -102,7 +103,7 @@ public record ChatMessagePart(
         return switch (partType) {
             case "ANSWER" -> "COMPLETED";
             case "PROGRESS", "TOOL" -> "STREAMING";
-            case "REFERENCE" -> "INFO";
+            case "REFERENCE", "CARD" -> "INFO";
             default -> "INFO";
         };
     }
@@ -116,6 +117,7 @@ public record ChatMessagePart(
             case "THINKING" -> "thinking";
             case "TOOL" -> "tool";
             case "REFERENCE" -> "reference";
+            case "CARD" -> "card";
             default -> "runtime";
         };
     }
@@ -126,6 +128,7 @@ public record ChatMessagePart(
             case "PROGRESS" -> "inline";
             case "RUNTIME_EVENT" -> "debug";
             case "REFERENCE" -> "collapsible";
+            case "CARD" -> "inline";
             default -> "collapsible";
         };
     }

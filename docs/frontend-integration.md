@@ -379,7 +379,7 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 | `runId` | 事件所属 run |
 | `sessionId` | 事件所属会话；前端必须按该字段分发到对应会话面板 |
 | `sequence` | openGauss 生成的事件恢复游标；WebSocket offset 和 Event Resume `afterSeq` 都使用它 |
-| `type` | `run.started`、`message.delta`、`message.snapshot`、`message.completed`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.reference`、`runtime.event`、`run.completed`、`run.failed`、`run.cancelled`、`run.recovered` |
+| `type` | `run.started`、`message.delta`、`message.snapshot`、`message.completed`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.reference`、`runtime.card`、`runtime.event`、`run.completed`、`run.failed`、`run.cancelled`、`run.recovered` |
 | `payload` | 事件载荷；`message.delta` 使用 `payload.delta` 追加文本，`message.snapshot` 使用 `payload.content` 替换当前草稿 |
 
 ### `ChatAttachmentDto`
@@ -1120,6 +1120,7 @@ heartbeat 和 done 使用同一个 envelope，不携带 `encodedItem`，也不�
 | `runtime.thinking` | 下游思考过程开始/结束 | 展示思考状态或可折叠过程 |
 | `runtime.tool` | 下游工具调用过程，例如 `tool_call_streaming` | 展示工具名、输入预览和调用状态 |
 | `runtime.reference` | 引用来源、网站引用、文件引用或安全 URL 信息 | 展示引用面板，不要拼入 assistant 正文 |
+| `runtime.card` | 下游卡片资源或结构化卡片信息 | 展示卡片，不要拼入 assistant 正文 |
 | `runtime.event` | 未识别但合法的下游 Runtime JSON 事件 | 按 `payload.channel/displayHint/sourceType` 兜底展示，不要拼入 assistant 正文 |
 | `message.completed` | assistant 消息结束 | 可停止当前消息输入光标 |
 | `run.completed` | 本轮 run 正常结束 | 关闭 loading，保存 latestSeq |
@@ -1138,6 +1139,7 @@ ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON c
 | `runtime.thinking` | `{ "source": "relay", "sourceType": "thinking-operation-start", "status": "STARTED", "operationId": "可选", "agentName": "可选", "availableTools": [...] }` |
 | `runtime.tool` | `{ "source": "relay", "sourceType": "tool_call_streaming", "status": "STREAMING", "agentName": "可选", "toolName": "工具名", "inputPreview": "输入预览" }` |
 | `runtime.reference` | `{ "source": "relay", "sourceType": "url_moderation", "referenceType": "url_moderation", "url": "可选", "title": "可选", "references": "可选数组", "sourcePayload": { "...": "脱敏限长后的引用扩展信息" } }` |
+| `runtime.card` | `{ "source": "legacy-agent", "sourceType": "legacy-card", "cardType": "legacy-card", "cardUrl": "可选", "intent": "可选", "skillId": "可选", "diyCardScene": "可选对象", "cardList": "可选数组" }` |
 | `runtime.event` | `{ "source": "relay", "sourceType": "未知下游 type", "eventKind": "event", "channel": "runtime", "displayHint": "runtime", "text": "可选展示文本", "sourcePayload": { "...": "脱敏限长后的下游扩展载荷" } }` |
 | `message.completed` | `{ "status": "MESSAGE_COMPLETED", "finishReason": "可选", "runtimeSessionId": "可选", "agentSessionId": "可选" }` |
 | `run.failed` | `{ "code": "错误码", "message": "错误说明", "recoverable": "可选", "recoveryOptions": "可选" }` |
@@ -1148,12 +1150,13 @@ Relay 映射规则：
 - `type=agent,is_streaming=false` 且存在 `content/context` 时，映射为 `message.snapshot`，这是更权威的最终回答快照；前端用 `payload.content` 替换当前草稿。
 - 纯文本 `steam-complete`、`stream-complete`、`stream_complete`、`stream.complete`、`stream-completed`、`[DONE]` 映射为 `message.completed`。
 - `relay-progress`、`project_home`、`available-modes/availbale-modes`、`agent-call`、`thinking-operation-start/thinkink-operation-start`、`thinking-operation-end/thinking_operation-end`、`tool_call_streaming`、引用/来源类事件映射为对应 `runtime.*`。
+- legacy-agent 指定技能响应中，`content` 的 `<think>...</think>` 片段映射为 `runtime.thinking`，不会拼入 assistant 正文；非 think 内容映射为 `message.delta`。`traceId/sessionId/messageId` 映射为 `runtime.metadata`；单独出现的 `intent/skillId` 映射为 `runtime.metadata`；如果 `intent/skillId` 与 `cardUrl/diyCardScene/cardList` 同帧出现，则一起放入 `runtime.card`。`processResult` 映射为 `runtime.thinking`，`searchList/sourcesDocuments` 映射为 `runtime.reference`，`endFlag=true` 映射为 `message.completed`。
 - 未识别合法 JSON 映射为 `runtime.event`。`sourcePayload` 会脱敏和限长，不能作为稳定字段依赖。
 - Relay 原始 `type` 不会成为 ChatService 顶层 `type`，只会作为 `payload.sourceType` 或 raw log 排障信息。
 
 服务端可能把下游逐 token 输出合并为几十毫秒级 `message.delta` 文本片段。前端只需要按 `seq`
 顺序追加 `payload.delta`，不要假设一个 delta 等于一个 token，也不要依赖任何 Relay 私有字段。
-`message.snapshot`、`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.event`
+`message.snapshot`、`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.card/runtime.event`
 不参与 delta 合并。历史消息中，最终正文保存在 `ChatMessageDto.content`；过程信息通过
 `ChatMessageDto.parts` 返回，刷新会话后也可以回显思考、工具、进度和 agent 调用过程。
 

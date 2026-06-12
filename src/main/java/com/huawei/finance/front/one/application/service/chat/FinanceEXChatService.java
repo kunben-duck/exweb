@@ -629,6 +629,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 case "runtime.thinking" -> "THINKING";
                 case "runtime.tool" -> "TOOL";
                 case "runtime.reference" -> "REFERENCE";
+                case "runtime.card" -> "CARD";
                 default -> "RUNTIME_EVENT";
             };
         }
@@ -649,6 +650,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 return toolName == null ? preview : toolName;
             }
             if ("runtime.thinking".equals(eventType)) {
+                String text = firstText(payload, "text", "title");
+                if (text != null) {
+                    return text;
+                }
                 String status = firstText(payload, "status");
                 String operationId = firstText(payload, "operationId");
                 return operationId == null ? status : status + ": " + operationId;
@@ -658,6 +663,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
             }
             if ("runtime.reference".equals(eventType)) {
                 return firstText(payload, "title", "url", "referenceType", "sourceType");
+            }
+            if ("runtime.card".equals(eventType)) {
+                return firstText(payload, "cardUrl", "intent", "skillId", "cardType", "sourceType");
             }
             return firstText(payload, "text", "displayText", "sourceType");
         }

@@ -36,7 +36,7 @@ rg -n "methodName|className" src/main/java/com/huawei/finance/front/one
 
 用途：
 
-- 保存 `run.started`、`message.delta`、`message.snapshot`、`message.completed`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.event`、`run.completed`、`run.failed`、`run.cancelled` 等 ChatService 标准事件。
+- 保存 `run.started`、`message.delta`、`message.snapshot`、`message.completed`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.reference`、`runtime.card`、`runtime.event`、`run.completed`、`run.failed`、`run.cancelled` 等 ChatService 标准事件。
 - WebSocket 实时输出和 Event Resume 断点恢复都基于这张表的事件。
 - `seq` 是 openGauss 生成的恢复游标。
 
@@ -342,7 +342,7 @@ RelayStreamHttpRuntimeAdapter#applyForwardedCookie(...)
 - 在 normalizer 之前调用 `RuntimeRawStreamLogService#capture(...)` 发布 raw chunk 到 MQ 旁路。
 - 通过 `RelayRuntimeResponseNormalizer` 把 plain text、JSON chunk、SSE-like `data:` chunk 转成标准 ChatEvent。
 - Relay `type=agent,is_streaming=true` 的 `content/context` 默认转成 `message.delta`；`type=agent,is_streaming=false` 转成 `message.snapshot`；`steam-complete/stream-complete/[DONE]` 转成 `message.completed`。
-- Relay 过程帧按语义转成 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference`；未知 JSON 才转成 `runtime.event`。
+- Relay 和 legacy-agent 过程帧按语义转成 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.card`；未知 JSON 才转成 `runtime.event`。
 - `message.delta` 代表 assistant 正文增量并参与草稿拼接；`message.snapshot` 代表下游最终回答快照，会覆盖草稿成为历史正文。
 - 流结束时补 `MessageCompletedEvent`。
 
@@ -374,7 +374,7 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
 
 2. `ChatDeltaCoalescer#coalesce(...)`
    - 只合并连续 `message.delta`，降低逐 token 写库、Redis publish 和 WebSocket 投递放大。
-  - 遇到 `message.snapshot`、`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.event`、`run.started`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled` 会先 flush，再原样输出边界事件。
+  - 遇到 `message.snapshot`、`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.card/runtime.event`、`run.started`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled` 会先 flush，再原样输出边界事件。
 
 3. `ChatRunApplicationService#shouldAcceptEvent(...)`
    - 先看 Redis cancel flag。

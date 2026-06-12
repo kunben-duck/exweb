@@ -59,6 +59,10 @@ public record RuntimeEvent(
         return typed("runtime.reference", runId, sessionId, payload);
     }
 
+    public static RuntimeEvent card(String runId, String sessionId, Map<String, Object> payload) {
+        return typed("runtime.card", runId, sessionId, payload);
+    }
+
     public static RuntimeEvent fallback(String runId, String sessionId, String sourceType, String eventKind,
                                         String channel, String displayHint, String text,
                                         Map<String, Object> sourcePayload) {

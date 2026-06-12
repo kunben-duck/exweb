@@ -8,7 +8,7 @@ import java.util.Map;
  * <p>草稿还没有 messageId 和 partId。只有 run.completed 且 assistant 正式落库后，
  * SessionApplicationService 才会把草稿补齐归属字段并写入 message part 表。</p>
  *
- * @param partType part 类型，例如 ANSWER、THINKING、TOOL、PROGRESS。
+ * @param partType part 类型，例如 ANSWER、THINKING、TOOL、PROGRESS、CARD。
  * @param sourceType 下游原始事件类型。
  * @param contentText 可展示文本摘要。
  * @param title 前端展示标题。

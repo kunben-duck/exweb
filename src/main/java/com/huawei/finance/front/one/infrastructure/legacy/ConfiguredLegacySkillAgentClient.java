@@ -51,23 +51,27 @@ public class ConfiguredLegacySkillAgentClient implements LegacySkillAgentClient 
     public Flux<ChatEvent> query(LegacySkillAgentRequest request) {
         validate(request);
         Map<String, Object> body = requestMapper.toWireRequest(request);
-        return webClientBuilder.build()
-                .post()
-                .uri(fullUrl(properties.getChatPath()))
-                .contentType(MediaType.APPLICATION_JSON)
-                .accept(MediaType.TEXT_EVENT_STREAM, MediaType.APPLICATION_NDJSON, MediaType.APPLICATION_JSON)
-                .headers(headers -> applyForwardedCookie(headers, request.forwardHeaders()))
-                .bodyValue(body)
-                .retrieve()
-                /*
-                 * 老 Agent 使用非标准的 "message: {...}" 私有 eventStream 帧。WebClient 在
-                 * text/event-stream 下按标准 SSE 解码 String 时只认 data 行，可能吞掉 message 行。
-                 * 因此这里读取原始 DataBuffer，再交给 LegacySkillResponseNormalizer 兼容 message/data/plain JSON。
-                 */
-                .bodyToFlux(DataBuffer.class)
-                .map(this::readUtf8)
-                .timeout(properties.getTimeout())
-                .flatMapIterable(chunk -> responseNormalizer.normalize(request.runId(), request.sessionId(), chunk));
+        return Flux.defer(() -> {
+            LegacySkillResponseNormalizer.LegacySkillStreamState streamState = responseNormalizer.newStreamState();
+            return webClientBuilder.build()
+                    .post()
+                    .uri(fullUrl(properties.getChatPath()))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.TEXT_EVENT_STREAM, MediaType.APPLICATION_NDJSON, MediaType.APPLICATION_JSON)
+                    .headers(headers -> applyForwardedCookie(headers, request.forwardHeaders()))
+                    .bodyValue(body)
+                    .retrieve()
+                    /*
+                     * 老 Agent 使用非标准的 "message: {...}" 私有 eventStream 帧。WebClient 在
+                     * text/event-stream 下按标准 SSE 解码 String 时只认 data 行，可能吞掉 message 行。
+                     * 因此这里读取原始 DataBuffer，再交给 LegacySkillResponseNormalizer 兼容 message/data/plain JSON。
+                     */
+                    .bodyToFlux(DataBuffer.class)
+                    .map(this::readUtf8)
+                    .timeout(properties.getTimeout())
+                    .flatMapIterable(chunk -> responseNormalizer.normalize(
+                            request.runId(), request.sessionId(), chunk, streamState));
+        });
     }
 
     @Override

@@ -65,6 +65,8 @@ import reactor.core.scheduler.Schedulers;
 @Service
 public class FinanceEXChatService implements FinanceChatFacade {
     private static final Logger log = LoggerFactory.getLogger(FinanceEXChatService.class);
+    private static final String USER_STOP_PARTIAL_ASSISTANT_METADATA =
+            "{\"partial\":true,\"finishReason\":\"USER_STOP\",\"runStatus\":\"CANCELLED\"}";
 
     private final SessionApplicationService sessionService;
     private final MemoryApplicationService memoryService;
@@ -179,6 +181,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
             cancelDownstream(run, user, headerSnapshot)
                     .onErrorResume(ex -> Mono.empty())
                     .subscribe();
+            persistPartialAssistantForUserStop(user, run);
             ChatEvent cancelEvent = RunCancelledEvent.of(run.id(), run.sessionId(), run.cancelReason());
             if (!chatRunService.shouldAcceptEvent(cancelEvent)) {
                 return Mono.just(chatRunService.toStopResult(run));
@@ -188,6 +191,50 @@ public class FinanceEXChatService implements FinanceChatFacade {
             chatRunLeaseService.markTerminal(run.id(), ChatRunExecutionStatus.CANCELLED);
             return Mono.just(chatRunService.toStopResult(latest == null ? run : latest));
         });
+    }
+
+    /**
+     * 用户主动 stop 后，把已经成功落库的 assistant 正文固化为历史消息。
+     *
+     * <p>这里不读取当前 JVM 内存里的流式草稿，而是从 openGauss 事件事实源重建，保证跨实例 stop、
+     * 浏览器断开和本机 subscription 已释放等场景下得到一致结果。没有正文时不创建空 assistant。</p>
+     */
+    private void persistPartialAssistantForUserStop(UserContext user, ChatRun run) {
+        if (run.assistantMessageId() != null && !run.assistantMessageId().isBlank()) {
+            return;
+        }
+        String parentMessageId = firstNonBlank(run.userMessageId(), run.parentMessageId());
+        if (parentMessageId == null) {
+            log.warn("Skip partial assistant persistence because run has no parent user message. runId={}", run.id());
+            return;
+        }
+        try {
+            AssistantAssembly assistant = new AssistantAssembly();
+            chatStreamService.findPersistedRunEvents(user, run).forEach(assistant::observe);
+            if (!assistant.hasContent()) {
+                return;
+            }
+            ChatSession session = sessionService.getSession(user, run.sessionId());
+            ChatMessage savedAssistant = sessionService.saveAssistantMessage(
+                    user.tenantId(),
+                    user.userId(),
+                    session,
+                    assistant.finalContent(),
+                    run.id(),
+                    parentMessageId,
+                    null,
+                    assistant.parts(),
+                    USER_STOP_PARTIAL_ASSISTANT_METADATA
+            );
+            chatRunService.bindAssistantMessage(run.id(), savedAssistant.id());
+        } catch (Exception ex) {
+            /*
+             * stop 的核心语义是尽快终止本轮 run。历史固化失败不能阻断 run.cancelled 事件落库，
+             * 否则用户会看到无法停止或 active run 长时间占用会话。
+             */
+            log.warn("Failed to persist partial assistant on user stop. runId={}, reason={}",
+                    run.id(), ex.getMessage(), ex);
+        }
     }
 
     @Override
@@ -469,6 +516,18 @@ public class FinanceEXChatService implements FinanceChatFacade {
         return forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
     }
 
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
     private Map<String, Object> runCompletedPayload(RouteTarget route, RuntimeBinding binding) {
         // run.completed 带出标准 status 和 v3 路由诊断字段，方便前端展示和排障。
         Map<String, Object> base = new java.util.LinkedHashMap<>();
@@ -569,6 +628,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 case "runtime.agent" -> "AGENT";
                 case "runtime.thinking" -> "THINKING";
                 case "runtime.tool" -> "TOOL";
+                case "runtime.reference" -> "REFERENCE";
                 default -> "RUNTIME_EVENT";
             };
         }
@@ -595,6 +655,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
             }
             if ("runtime.metadata".equals(eventType)) {
                 return firstText(payload, "projectHome", "metadataType");
+            }
+            if ("runtime.reference".equals(eventType)) {
+                return firstText(payload, "title", "url", "referenceType", "sourceType");
             }
             return firstText(payload, "text", "displayText", "sourceType");
         }

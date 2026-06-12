@@ -19,6 +19,8 @@ public class ChatStreamProperties {
     private Duration deltaCoalesceWindow = Duration.ofMillis(50);
     /** 单个合并后 delta 的最大字符数；超过该值立即 flush，避免前端首屏等待过久。 */
     private int deltaCoalesceMaxChars = 512;
+    /** turn stream heartbeat 间隔；用于 WebSocket/Event Resume 在长时间无业务事件时维持连接活跃。 */
+    private Duration turnHeartbeatInterval = Duration.ofSeconds(15);
 
     public boolean isDeltaCoalesceEnabled() {
         return deltaCoalesceEnabled;
@@ -53,5 +55,20 @@ public class ChatStreamProperties {
 
     public int normalizedDeltaCoalesceMaxChars() {
         return Math.max(1, deltaCoalesceMaxChars);
+    }
+
+    public Duration getTurnHeartbeatInterval() {
+        return turnHeartbeatInterval;
+    }
+
+    public void setTurnHeartbeatInterval(Duration turnHeartbeatInterval) {
+        this.turnHeartbeatInterval = turnHeartbeatInterval;
+    }
+
+    public Duration normalizedTurnHeartbeatInterval() {
+        if (turnHeartbeatInterval == null || turnHeartbeatInterval.isNegative()) {
+            return Duration.ofSeconds(15);
+        }
+        return turnHeartbeatInterval;
     }
 }

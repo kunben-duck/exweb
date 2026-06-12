@@ -37,7 +37,7 @@ class LocalWebSocketConnectionRegistryTest {
         LocalWebSocketConnectionRegistry.DeliveryDecision decision = registry.markDelivered("conn1", "chat-run-run1", 19L);
 
         assertThat(decision.action()).isEqualTo(LocalWebSocketConnectionRegistry.Action.RECOVER_REQUIRED);
-        assertThat(decision.lastAckSeq()).isEqualTo(10L);
+        assertThat(decision.resumeAfterSeq()).isEqualTo(10L);
         assertThat(decision.actualSeq()).isEqualTo(19L);
     }
 

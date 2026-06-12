@@ -34,14 +34,12 @@ public class ChatStreamApplicationService {
     private final LocalChatEventStreamRegistry registry;
     private final ChatLiveEventBus liveEventBus;
     private final ChatRunRepository runRepository;
-    private final ChatReadCursorApplicationService readCursorService;
     private final PermissionChecker permissionChecker;
     private final SessionRepository sessionRepository;
     private final ChatWebSocketProperties webSocketProperties;
 
     public ChatStreamApplicationService(ChatEventStore eventStore, LocalChatEventStreamRegistry registry,
                                         ChatLiveEventBus liveEventBus, ChatRunRepository runRepository,
-                                        ChatReadCursorApplicationService readCursorService,
                                         PermissionChecker permissionChecker,
                                         SessionRepository sessionRepository,
                                         ChatWebSocketProperties webSocketProperties) {
@@ -49,7 +47,6 @@ public class ChatStreamApplicationService {
         this.registry = registry;
         this.liveEventBus = liveEventBus;
         this.runRepository = runRepository;
-        this.readCursorService = readCursorService;
         this.permissionChecker = permissionChecker;
         this.sessionRepository = sessionRepository;
         this.webSocketProperties = webSocketProperties;
@@ -79,6 +76,23 @@ public class ChatStreamApplicationService {
      */
     public ChatEvent appendWithExecutionGuard(ChatEvent event, RunExecutionClaim claim) {
         return eventStore.appendWithExecutionGuard(event, claim);
+    }
+
+    /**
+     * 查询某个 run 已经成功落库的事实事件。
+     *
+     * <p>该方法服务于用户主动 stop 后的部分回答固化：只使用 openGauss 中已经获得 seq 的事件重建
+     * assistant 历史消息，避免把还在下游传输中、但未写入事实源的 chunk 当作用户可见历史。</p>
+     *
+     * @param user 请求入口解析出的不可变用户身份快照。
+     * @param run 当前用户拥有的 run 快照。
+     * @return run.started 之后已落库的事件，按 seq 正序排列。
+     */
+    public java.util.List<ChatEvent> findPersistedRunEvents(UserContext user, ChatRun run) {
+        permissionChecker.checkChatPermission(user);
+        ensureOwnedSession(user, run.sessionId());
+        long afterSeq = run.firstSeq() == null || run.firstSeq() <= 0 ? 0 : run.firstSeq() - 1;
+        return eventStore.findByOwnerAndRunAfterSeq(user.tenantId(), user.userId(), run.sessionId(), run.id(), afterSeq);
     }
 
     /**
@@ -119,8 +133,7 @@ public class ChatStreamApplicationService {
      *
      * <p>该接口比会话级恢复更适合跨电脑续接“正在输出的当前回答”：新渲染实例应从
      * active run 的 firstSeq 之前开始补发。若 run 尚未终止，服务端会继续接入 live topic，
-     * 直到 {@code run.completed/run.failed/run.cancelled} 终态事件到达后再关闭事件恢复连接。read cursor
-     * 只表示用户某个连接曾经确认消费到哪里，不能作为新页面已经渲染到哪里的证据。</p>
+     * 直到 {@code run.completed/run.failed/run.cancelled} 终态事件到达后再关闭事件恢复连接。</p>
      *
      * @param user 请求入口解析出的不可变用户身份快照。
      * @param runId 需要恢复的 run 标识。
@@ -167,37 +180,6 @@ public class ChatStreamApplicationService {
                                 }),
                         RunTopicLiveBuffer::dispose
                 ));
-    }
-
-    /**
-     * 记录当前 WebSocket 连接对某个 run topic 的 ack。
-     *
-     * @param user WebSocket 握手时解析出的用户身份快照。
-     * @param topicId run 级 stream topic。
-     * @param seq 客户端已经处理完成的最大事件序号。
-     */
-    public void acknowledgeRunTopic(UserContext user, String topicId, long seq) {
-        ChatRun run = ensureRunTopicAccessible(user, topicId);
-        readCursorService.acknowledgeTrustedSession(user, run.sessionId(), seq);
-    }
-
-    /**
-     * 强制刷新当前连接上多个 topic 的 ack 游标。
-     *
-     * @param user WebSocket 握手时解析出的用户身份快照。
-     * @param acknowledgements topicId 到最后 ack seq 的映射。
-     */
-    public void flushAcknowledgements(UserContext user, Map<String, Long> acknowledgements) {
-        if (acknowledgements == null || acknowledgements.isEmpty()) {
-            return;
-        }
-        acknowledgements.forEach((topicId, seq) -> {
-            if (seq == null || seq <= 0) {
-                return;
-            }
-            ChatRun run = ensureRunTopicAccessible(user, topicId);
-            readCursorService.flushTrustedSession(user, run.sessionId(), seq);
-        });
     }
 
     /**

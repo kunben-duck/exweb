@@ -16,8 +16,6 @@ import com.huawei.finance.front.one.application.integration.agent.LegacySkillCan
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
-import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorCache;
-import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorRepository;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunCache;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunExecutionRepository;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
@@ -46,11 +44,12 @@ import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
-import com.huawei.finance.front.one.domain.chat.ChatReadCursor;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunCancelSignal;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecution;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus;
+import com.huawei.finance.front.one.domain.chat.ChatRunMode;
+import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
@@ -90,7 +89,6 @@ class FinanceEXChatServiceTest {
         UserContext user = new UserContext("tenant1", "user1", "User One");
         IdGenerator ids = new FixedIdGenerator();
         PermissionChecker permissionChecker = new PermissionChecker();
-        ChatReadCursorApplicationService readCursorService = readCursorService(sessions);
         WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
                 new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
         LocalChatRunExecutionRegistry executionRegistry = new LocalChatRunExecutionRegistry();
@@ -132,9 +130,9 @@ class FinanceEXChatServiceTest {
                 new AgentRuntimeExecutor(runtime, limiter),
                 documentFacade(),
                 new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
-                        readCursorService, permissionChecker, sessions,
+                        permissionChecker, sessions,
                         new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
-                new ChatRunApplicationService(runs, runCache, events, readCursorService, permissionChecker, sessions),
+                new ChatRunApplicationService(runs, runCache, events, permissionChecker, sessions),
                 leaseService,
                 new ChatDeltaCoalescer(new com.huawei.finance.front.one.application.config.ChatStreamProperties()),
                 executionRegistry,
@@ -172,7 +170,6 @@ class FinanceEXChatServiceTest {
         UserContext user = new UserContext("tenant1", "user1", "User One");
         IdGenerator ids = new FixedIdGenerator();
         PermissionChecker permissionChecker = new PermissionChecker();
-        ChatReadCursorApplicationService readCursorService = readCursorService(sessions);
         WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
                 new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
         LocalChatRunExecutionRegistry executionRegistry = new LocalChatRunExecutionRegistry();
@@ -211,9 +208,9 @@ class FinanceEXChatServiceTest {
                 new AgentRuntimeExecutor(noopRuntime(), limiter),
                 documents,
                 new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
-                        readCursorService, permissionChecker, sessions,
+                        permissionChecker, sessions,
                         new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
-                new ChatRunApplicationService(runs, runCache, events, readCursorService, permissionChecker, sessions),
+                new ChatRunApplicationService(runs, runCache, events, permissionChecker, sessions),
                 leaseService,
                 new ChatDeltaCoalescer(new com.huawei.finance.front.one.application.config.ChatStreamProperties()),
                 executionRegistry,
@@ -247,7 +244,6 @@ class FinanceEXChatServiceTest {
         UserContext user = new UserContext("tenant1", "user1", "User One");
         IdGenerator ids = new FixedIdGenerator();
         PermissionChecker permissionChecker = new PermissionChecker();
-        ChatReadCursorApplicationService readCursorService = readCursorService(sessions);
         WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
                 new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
         LocalChatRunExecutionRegistry executionRegistry = new LocalChatRunExecutionRegistry();
@@ -285,9 +281,9 @@ class FinanceEXChatServiceTest {
                 new AgentRuntimeExecutor(mismatchedRuntime, limiter),
                 documentFacade(),
                 new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
-                        readCursorService, permissionChecker, sessions,
+                        permissionChecker, sessions,
                         new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
-                new ChatRunApplicationService(runs, runCache, events, readCursorService, permissionChecker, sessions),
+                new ChatRunApplicationService(runs, runCache, events, permissionChecker, sessions),
                 leaseService,
                 new ChatDeltaCoalescer(new com.huawei.finance.front.one.application.config.ChatStreamProperties()),
                 executionRegistry,
@@ -319,7 +315,6 @@ class FinanceEXChatServiceTest {
         UserContext user = new UserContext("tenant1", "user1", "User One");
         IdGenerator ids = new FixedIdGenerator();
         PermissionChecker permissionChecker = new PermissionChecker();
-        ChatReadCursorApplicationService readCursorService = readCursorService(sessions);
         WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
                 new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
         LocalChatRunExecutionRegistry executionRegistry = new LocalChatRunExecutionRegistry();
@@ -349,9 +344,9 @@ class FinanceEXChatServiceTest {
                 new AgentRuntimeExecutor(noopRuntime(), limiter),
                 documentFacade(),
                 new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
-                        readCursorService, permissionChecker, sessions,
+                        permissionChecker, sessions,
                         new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
-                new ChatRunApplicationService(runs, runCache, events, readCursorService, permissionChecker, sessions),
+                new ChatRunApplicationService(runs, runCache, events, permissionChecker, sessions),
                 leaseService,
                 new ChatDeltaCoalescer(new com.huawei.finance.front.one.application.config.ChatStreamProperties()),
                 executionRegistry,
@@ -367,6 +362,58 @@ class FinanceEXChatServiceTest {
         assertThat(messages.messages).extracting(ChatMessage::role).containsExactly("user");
     }
 
+    @Test
+    void userStopPersistsPartialAssistantMessageFromPersistedEvents() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        seedRunningRun(sessions, messages, runs, user, "run1", "session1", "msg-user");
+        events.append(RuntimeEvent.tool("run1", "session1", Map.of(
+                "sourceType", "tool_call_streaming",
+                "toolName", "search",
+                "inputPreview", "查询报销流程"
+        )));
+        events.append(MessageDeltaEvent.of("run1", "session1", "已输出的部分回答"));
+
+        FinanceEXChatService service = stopService(sessions, messages, runs, events);
+
+        assertThat(service.stopRun(user, "run1", RuntimeForwardHeaders.empty()).block().status())
+                .isEqualTo(ChatRunStatus.CANCELLED);
+
+        ChatMessage assistant = messages.messages.stream()
+                .filter(message -> "assistant".equals(message.role()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(assistant.content()).isEqualTo("已输出的部分回答");
+        assertThat(assistant.metadataJson()).contains("\"partial\":true").contains("USER_STOP");
+        assertThat(assistant.parts()).extracting(ChatMessagePart::partType)
+                .containsExactly("TOOL", "ANSWER");
+        assertThat(runs.findById("run1").orElseThrow().assistantMessageId()).isEqualTo(assistant.id());
+    }
+
+    @Test
+    void userStopDoesNotPersistAssistantMessageWhenNoAnswerContentExists() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        seedRunningRun(sessions, messages, runs, user, "run1", "session1", "msg-user");
+        events.append(RuntimeEvent.progress("run1", "session1", Map.of(
+                "sourceType", "relay-progress",
+                "text", "正在调用工具"
+        )));
+
+        FinanceEXChatService service = stopService(sessions, messages, runs, events);
+
+        assertThat(service.stopRun(user, "run1", RuntimeForwardHeaders.empty()).block().status())
+                .isEqualTo(ChatRunStatus.CANCELLED);
+        assertThat(messages.messages).extracting(ChatMessage::role).containsExactly("user");
+        assertThat(runs.findById("run1").orElseThrow().assistantMessageId()).isNull();
+    }
+
     private RouteSignalApplicationService systemRouteService() {
         return new RouteSignalApplicationService(request -> UseCaseMatchResult.notMatched("disabled"),
                 (command, memory, user) -> null, new com.huawei.finance.front.one.domain.routing.RoutingPolicy(0.85),
@@ -378,6 +425,63 @@ class FinanceEXChatServiceTest {
                 return RouteSignalResult.of(RouteTarget.systemResponse("partial answer"));
             }
         };
+    }
+
+    private FinanceEXChatService stopService(InMemorySessionRepository sessions, InMemoryMessageRepository messages,
+                                             InMemoryRunRepository runs, InMemoryEventStore events) {
+        IdGenerator ids = new FixedIdGenerator();
+        PermissionChecker permissionChecker = new PermissionChecker();
+        WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
+                new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
+        LocalChatRunExecutionRegistry executionRegistry = new LocalChatRunExecutionRegistry();
+        return new FinanceEXChatService(
+                new SessionApplicationService(sessions, messages, ids, permissionChecker),
+                new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
+                new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
+                runtimeRouteService(),
+                new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
+                    @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
+                        return Flux.empty();
+                    }
+                    @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
+                        return Mono.empty();
+                    }
+                }, limiter),
+                legacySkillExecutor(documentFacade(), limiter),
+                new SystemResponseExecutor(),
+                new AgentRuntimeExecutor(noopRuntime(), limiter),
+                documentFacade(),
+                new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
+                        permissionChecker, sessions,
+                        new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
+                new ChatRunApplicationService(runs, new NeverCancelRunCache(), events,
+                        permissionChecker, sessions),
+                new ChatRunLeaseApplicationService(
+                        new InMemoryExecutionRepository(),
+                        (ApplicationInstanceIdProvider) () -> "instance-test",
+                        new com.huawei.finance.front.one.application.config.ChatRunOperationalProperties(),
+                        ids,
+                        executionRegistry
+                ),
+                new ChatDeltaCoalescer(new com.huawei.finance.front.one.application.config.ChatStreamProperties()),
+                executionRegistry,
+                new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
+                ids
+        );
+    }
+
+    private void seedRunningRun(InMemorySessionRepository sessions, InMemoryMessageRepository messages,
+                                InMemoryRunRepository runs, UserContext user,
+                                String runId, String sessionId, String userMessageId) {
+        Instant now = Instant.parse("2026-06-11T00:00:00Z");
+        sessions.save(new ChatSession(sessionId, user.tenantId(), user.userId(), "测试会话", "ACTIVE", "web",
+                userMessageId, sessionId, null, null, 1L, null, now, now));
+        messages.save(new ChatMessage(userMessageId, user.tenantId(), user.userId(), sessionId,
+                null, 1L, 0, 1, "user", "帮我处理一下", null, runId,
+                "NORMAL", false, null, null, null, null, null, now));
+        runs.save(new ChatRun(runId, user.tenantId(), user.userId(), sessionId, ChatRunStatus.RUNNING,
+                "AGENT_RUNTIME", null, "relay", null, ChatRunMode.NEXT, null, userMessageId,
+                null, null, null, null, now, null, Map.of(), now, now));
     }
 
     private RouteSignalApplicationService runtimeRouteService() {
@@ -451,19 +555,6 @@ class FinanceEXChatServiceTest {
         };
     }
 
-    private ChatReadCursorApplicationService readCursorService(SessionRepository sessions) {
-        com.huawei.finance.front.one.application.config.ChatReadCursorProperties properties =
-                new com.huawei.finance.front.one.application.config.ChatReadCursorProperties();
-        properties.setDatabaseFlushInterval(Duration.ZERO);
-        return new ChatReadCursorApplicationService(
-                new EmptyReadCursorRepository(),
-                new EmptyReadCursorCache(),
-                new PermissionChecker(),
-                sessions,
-                properties
-        );
-    }
-
     private static class CountingCancelRunCache implements ChatRunCache {
         private final AtomicInteger checks = new AtomicInteger();
         @Override public Optional<ChatRun> getActive(String tenantId, String userId, String sessionId) { return Optional.empty(); }
@@ -506,8 +597,19 @@ class FinanceEXChatServiceTest {
             return stored;
         }
         @Override public ChatEvent appendWithExecutionGuard(ChatEvent event, com.huawei.finance.front.one.domain.chat.RunExecutionClaim claim) { return append(event); }
-        @Override public List<ChatEvent> findByOwnerAndSessionAfterSeq(String tenantId, String userId, String sessionId, long afterSeq) { return List.of(); }
-        @Override public List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId, String runId, long afterSeq) { return List.of(); }
+        @Override public List<ChatEvent> findByOwnerAndSessionAfterSeq(String tenantId, String userId, String sessionId, long afterSeq) {
+            return events.stream()
+                    .filter(event -> sessionId.equals(event.sessionId()))
+                    .filter(event -> event.sequence() > afterSeq)
+                    .toList();
+        }
+        @Override public List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId, String runId, long afterSeq) {
+            return events.stream()
+                    .filter(event -> sessionId.equals(event.sessionId()))
+                    .filter(event -> runId.equals(event.runId()))
+                    .filter(event -> event.sequence() > afterSeq)
+                    .toList();
+        }
         @Override public long findLatestSeqByOwnerAndSession(String tenantId, String userId, String sessionId) { return seq; }
     }
 
@@ -532,22 +634,6 @@ class FinanceEXChatServiceTest {
         @Override public Optional<ChatRunExecution> tryClaimRecovering(String runId, String recoveredByInstanceId, String strategy, Duration recoveryLeaseDuration) { return Optional.empty(); }
         @Override public Optional<ChatRunExecution> markTakeoverRunning(String runId, String ownerInstanceId, Duration leaseDuration) { return Optional.empty(); }
         @Override public boolean isLeaseExpired(String runId, Instant now) { return false; }
-    }
-
-    private static class EmptyReadCursorRepository implements ChatReadCursorRepository {
-        @Override public Optional<ChatReadCursor> find(String tenantId, String userId, String sessionId) {
-            return Optional.empty();
-        }
-        @Override public ChatReadCursor upsert(String tenantId, String userId, String sessionId, long lastConsumedSeq) {
-            return new ChatReadCursor("cursor1", tenantId, userId, sessionId, lastConsumedSeq, Instant.now());
-        }
-    }
-
-    private static class EmptyReadCursorCache implements ChatReadCursorCache {
-        @Override public Optional<ChatReadCursor> find(String tenantId, String userId, String sessionId) {
-            return Optional.empty();
-        }
-        @Override public void put(ChatReadCursor cursor) {}
     }
 
     private static class InMemorySessionRepository implements SessionRepository {

@@ -342,7 +342,7 @@ RelayStreamHttpRuntimeAdapter#applyForwardedCookie(...)
 - 在 normalizer 之前调用 `RuntimeRawStreamLogService#capture(...)` 发布 raw chunk 到 MQ 旁路。
 - 通过 `RelayRuntimeResponseNormalizer` 把 plain text、JSON chunk、SSE-like `data:` chunk 转成标准 ChatEvent。
 - Relay `type=agent,is_streaming=true` 的 `content/context` 默认转成 `message.delta`；`type=agent,is_streaming=false` 转成 `message.snapshot`；`steam-complete/stream-complete/[DONE]` 转成 `message.completed`。
-- Relay 过程帧按语义转成 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool`；未知 JSON 才转成 `runtime.event`。
+- Relay 过程帧按语义转成 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference`；未知 JSON 才转成 `runtime.event`。
 - `message.delta` 代表 assistant 正文增量并参与草稿拼接；`message.snapshot` 代表下游最终回答快照，会覆盖草稿成为历史正文。
 - 流结束时补 `MessageCompletedEvent`。
 
@@ -374,7 +374,7 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
 
 2. `ChatDeltaCoalescer#coalesce(...)`
    - 只合并连续 `message.delta`，降低逐 token 写库、Redis publish 和 WebSocket 投递放大。
-   - 遇到 `message.snapshot`、`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.event`、`run.started`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled` 会先 flush，再原样输出边界事件。
+  - 遇到 `message.snapshot`、`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.event`、`run.started`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled` 会先 flush，再原样输出边界事件。
 
 3. `ChatRunApplicationService#shouldAcceptEvent(...)`
    - 先看 Redis cancel flag。
@@ -389,7 +389,7 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
 
 5. `AssistantAssembly`
    - 累积 `message.delta` 草稿；收到 `message.snapshot` 时记录最终快照并覆盖草稿作为历史正文。
-   - `runtime.*` 只作为运行态扩展事件落库和推送，不进入 assistant 正文；run 正常完成后会保存为 `fin_ex_chat_message_part_t`，供历史消息回显思考、工具、进度和 agent 调用过程，并补齐稳定展示语义。
+   - `runtime.*` 只作为运行态扩展事件落库和推送，不进入 assistant 正文；run 正常完成后会保存为 `fin_ex_chat_message_part_t`，供历史消息回显思考、工具、进度、引用和 agent 调用过程，并补齐稳定展示语义。
    - 注意：只有 guarded insert 成功后的事件才会进入 assembly，不写未持久化的迟到 token。
 
 6. run 完成前保存完整 assistant message
@@ -587,7 +587,6 @@ src/main/java/com/huawei/finance/front/one/interfaces/chat/websocket/ChatWebSock
 ChatWebSocketProtocolService#open(...)
 ChatWebSocketProtocolService#handleTextMessage(...)
 ChatWebSocketProtocolService#subscribe(...)
-ChatWebSocketProtocolService#acknowledge(...)
 ChatWebSocketProtocolService#emitTopicEvent(...)
 ChatWebSocketProtocolService#close(...)
 ```
@@ -597,9 +596,8 @@ ChatWebSocketProtocolService#close(...)
 ```json
 {"id":"1","type":"connect","presence":"foreground"}
 {"id":"2","type":"subscribe","topicId":"chat-run-run_xxx","afterSeq":0}
-{"id":"3","type":"ack","topicId":"chat-run-run_xxx","seq":123}
-{"id":"4","type":"unsubscribe","topicId":"chat-run-run_xxx"}
-{"id":"5","type":"presence","state":"background"}
+{"id":"3","type":"unsubscribe","topicId":"chat-run-run_xxx"}
+{"id":"4","type":"presence","state":"background"}
 ```
 
 订阅流程：
@@ -609,13 +607,14 @@ ChatWebSocketProtocolService#close(...)
 3. `LocalWebSocketConnectionRegistry#subscribe(...)` 记录连接与 topic 关系。
 4. 发送 subscribe reply。
 5. 调 `ChatStreamApplicationService#resumeRunTopic(...)`。
-6. 每个事件转 DTO。
-7. `emitTopicEvent(...)` 校验 runId/sessionId，去重和 gap 检测后推给前端。
+6. 每个事件先转 `ChatEventDto`，再由 `ChatTurnStreamTranslator` 包装成 `conversation-turn-stream.stream-item`。
+7. `emitTopicEvent(...)` 校验 runId/sessionId，去重和 gap 检测后推给前端；如果事件是 run 终态，会额外发送一个 turn stream `done`。
+8. 订阅空闲期间按 `financeex.chat-stream.turn-heartbeat-interval` 发送 turn stream `heartbeat`，heartbeat 不落事件表、不推进 `afterSeq`。
 
 重点排查：
 
 - 前端订阅返回 `SUBSCRIBE_ERROR`：查 topic 是否为 `chat-run-{runId}`，run 是否属于当前用户。
-- 多会话串显示：先确认 `emitTopicEvent(...)` 是否丢弃了错 run/session；再检查前端是否按 payload.sessionId 分发。
+- 多会话串显示：先确认 `emitTopicEvent(...)` 是否丢弃了错 run/session；再检查前端是否按 `message.payload.payload.encodedItem.data.sessionId` 分发。
 - 前端收到 `RECOVER_REQUIRED`：说明 seq 有缺口或乱序，应调用 Event Resume 后重新 subscribe。
 
 ### 10.3 连接注册表
@@ -631,7 +630,6 @@ src/main/java/com/huawei/finance/front/one/interfaces/chat/websocket/LocalWebSoc
 ```text
 LocalWebSocketConnectionRegistry#register(...)
 LocalWebSocketConnectionRegistry#subscribe(...)
-LocalWebSocketConnectionRegistry#ack(...)
 LocalWebSocketConnectionRegistry#markDelivered(...)
 LocalWebSocketConnectionRegistry#unregister(...)
 ```
@@ -640,8 +638,8 @@ LocalWebSocketConnectionRegistry#unregister(...)
 
 - 保存当前 JVM 内 WebSocket 连接状态。
 - 限制单用户连接数、单连接 topic 数、单 topic 本机订阅数。
-- 记录每个 topic 的 lastAckSeq。
-- 做有限窗口去重和 seq gap 判断。
+- 记录每个 topic 的订阅起点和已投递 seq 窗口。
+- 做有限窗口去重和 seq gap 判断；缺口发生时提示前端用 Event Resume 补齐。
 - 连接关闭时释放所有 topic subscription。
 
 注意：
@@ -726,6 +724,12 @@ GET /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}
 
 - session 级事件恢复：只补发会话维度历史事件。
 - run 级事件恢复：补发指定 run，并在 run 未终态时接 live tail，直到终态。
+
+HTTP resume 的 SSE `data` 与 WebSocket `message.payload` 一样，都是 `ConversationTurnStreamDto`：
+
+- `payload.type=stream-item`：真实聊天事件在 `payload.encodedItem.data`。
+- `payload.type=heartbeat`：连接保活，不写入 `fin_ex_chat_event_t`，不推进 `afterSeq`。
+- `payload.type=done`：当前 turn 传输闭合，不代表新的 ChatEvent。
 
 重点排查：
 
@@ -873,7 +877,6 @@ ChatRunApplicationService#streamStatus(...)
 职责：
 
 - 查询当前 session 最新事件 seq。
-- 查询 read cursor。
 - 查询 active run。
 - 如果 active run lease 已过期，触发一次轻量懒恢复。
 - 返回 `activeRunId`、`activeRunStatus`、`streamTopicId`、`activeRunFirstSeq`、`activeRunLastSeq`、`cancellable`。
@@ -881,7 +884,7 @@ ChatRunApplicationService#streamStatus(...)
 重点排查：
 
 - 前端按钮状态不对：先查这个接口返回。
-- 跨设备不知道从哪里恢复：看 `activeRunFirstSeq` 和 read cursor。
+- 跨设备不知道从哪里恢复：看 `activeRunFirstSeq`，从 `activeRunFirstSeq - 1` 打开 run 级 Event Resume。
 - active run 已经失败但前端仍显示运行中：查 `streamStatus(...)` 是否触发了懒恢复。
 
 ## 16. RuntimeBinding 多轮续接路径

@@ -3,7 +3,6 @@ package com.huawei.finance.front.one.infrastructure.redis;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.huawei.finance.front.one.application.config.ChatReadCursorProperties;
 import com.huawei.finance.front.one.infrastructure.memory.ShortTermMemoryRedisProperties;
 import com.huawei.finance.front.one.infrastructure.persistence.ChatLiveEventBusProperties;
 import com.huawei.finance.front.one.infrastructure.persistence.ChatRunCacheProperties;
@@ -19,7 +18,7 @@ class FinanceExRedisKeyBuilderTest {
         environment.setActiveProfiles("dev", "blue");
 
         FinanceExRedisKeyBuilder redisKeys = new FinanceExRedisKeyBuilder(environment,
-                new RuntimeBindingProperties(), new ChatRunCacheProperties(), new ChatReadCursorProperties(),
+                new RuntimeBindingProperties(), new ChatRunCacheProperties(),
                 new ChatLiveEventBusProperties(), new ShortTermMemoryRedisProperties());
 
         assertThat(redisKeys.env()).isEqualTo("dev");
@@ -30,7 +29,7 @@ class FinanceExRedisKeyBuilderTest {
     @Test
     void usesDefaultEnvironmentWhenNoActiveProfileExists() {
         FinanceExRedisKeyBuilder redisKeys = new FinanceExRedisKeyBuilder(new MockEnvironment(),
-                new RuntimeBindingProperties(), new ChatRunCacheProperties(), new ChatReadCursorProperties(),
+                new RuntimeBindingProperties(), new ChatRunCacheProperties(),
                 new ChatLiveEventBusProperties(), new ShortTermMemoryRedisProperties());
 
         assertThat(redisKeys.env()).isEqualTo("default");
@@ -55,8 +54,6 @@ class FinanceExRedisKeyBuilderTest {
                 .isEqualTo("fin_ex:dev:runtime_binding:index:{tenant1:user1:session1}");
         assertThat(redisKeys.cancelFlag("run1")).isEqualTo("fin_ex:dev:chat_run:cancel:run1");
         assertThat(redisKeys.recoverLock("run1")).isEqualTo("fin_ex:dev:chat_run:recover_lock:run1");
-        assertThat(redisKeys.readCursor("tenant1", "user1", "session1"))
-                .isEqualTo("fin_ex:dev:chat_read_cursor:tenant1:user1:session1");
         assertThat(redisKeys.shortTermMemoryMessages("tenant1", "user1", "session1"))
                 .isEqualTo("fin_ex:dev:memory:short_term:messages:tenant1:user1:session1");
     }
@@ -77,7 +74,7 @@ class FinanceExRedisKeyBuilderTest {
         ChatRunCacheProperties properties = new ChatRunCacheProperties();
         properties.setActiveKeyPrefix("bad:chat_run:active");
         FinanceExRedisKeyBuilder redisKeys = new FinanceExRedisKeyBuilder(new MockEnvironment(),
-                new RuntimeBindingProperties(), properties, new ChatReadCursorProperties(),
+                new RuntimeBindingProperties(), properties,
                 new ChatLiveEventBusProperties(), new ShortTermMemoryRedisProperties());
 
         assertThatThrownBy(() -> redisKeys.activeRun("tenant1", "user1", "session1"))

@@ -622,9 +622,7 @@ function sendWs(payload) {
 
 function handleWsEnvelope(envelope) {
   if (envelope.type === "reply") {
-    if (envelope.reply?.type !== "ack") {
-      log(`ws reply ${JSON.stringify(envelope.reply)}`);
-    }
+    log(`ws reply ${JSON.stringify(envelope.reply)}`);
     return;
   }
   if (envelope.type === "error") {
@@ -640,14 +638,28 @@ function handleWsEnvelope(envelope) {
     return;
   }
   if (envelope.type === "message" && envelope.payload) {
-    if (envelope.topicId && envelope.payload.sessionId) {
-      state.topicSessionIds.set(envelope.topicId, envelope.payload.sessionId);
+    const turn = unwrapTurnStream(envelope.payload);
+    if (turn.kind === "heartbeat") {
+      log(`ws heartbeat topic=${envelope.topicId} lastSeq=${turn.lastSeq || 0}`);
+      return;
     }
-    const accepted = handleChatEvent(envelope.payload, "ws", { topicId: envelope.topicId });
-    if (accepted) {
-      sendWs({ type: "ack", topicId: envelope.topicId, seq: envelope.payload.sequence });
+    if (turn.kind === "done") {
+      log(`ws done topic=${envelope.topicId} lastSeq=${turn.lastSeq || 0} terminal=${turn.terminalEventType || "-"}`);
+      sendWs({ type: "unsubscribe", topicId: envelope.topicId });
+      state.subscribedTopics.delete(envelope.topicId);
+      state.topicSessionIds.delete(envelope.topicId);
+      return;
     }
-    if (terminalRunEvents.has(envelope.payload.type)) {
+    if (!turn.event) {
+      log(`ws unknown message payload ${JSON.stringify(envelope.payload)}`);
+      return;
+    }
+    const chatEvent = turn.event;
+    if (envelope.topicId && chatEvent.sessionId) {
+      state.topicSessionIds.set(envelope.topicId, chatEvent.sessionId);
+    }
+    handleChatEvent(chatEvent, "ws", { topicId: envelope.topicId });
+    if (terminalRunEvents.has(chatEvent.type)) {
       sendWs({ type: "unsubscribe", topicId: envelope.topicId });
       state.subscribedTopics.delete(envelope.topicId);
       state.topicSessionIds.delete(envelope.topicId);
@@ -683,7 +695,19 @@ async function consumeSseResponse(response, source) {
   let lastEventSeq = 0;
   let terminal = false;
   const consumeEvent = data => {
-    const event = JSON.parse(data);
+    const turn = unwrapTurnStream(JSON.parse(data));
+    if (turn.kind === "heartbeat") {
+      log(`${source} heartbeat lastSeq=${turn.lastSeq || 0}`);
+      return;
+    }
+    if (turn.kind === "done") {
+      terminal = true;
+      lastEventSeq = Math.max(lastEventSeq, Number(turn.lastSeq || 0));
+      log(`${source} done lastSeq=${turn.lastSeq || 0} terminal=${turn.terminalEventType || "-"}`);
+      return;
+    }
+    const event = turn.event;
+    if (!event) return;
     eventCount += 1;
     lastEventSeq = Math.max(lastEventSeq, Number(event.sequence || 0));
     terminal = terminal || terminalRunEvents.has(event.type);
@@ -713,6 +737,39 @@ async function consumeSseResponse(response, source) {
   return { eventCount, lastSeq: lastEventSeq, terminal };
 }
 
+function unwrapTurnStream(payload) {
+  if (!payload) return { kind: "empty" };
+  if (payload.type === "conversation-turn-stream") {
+    const turnPayload = payload.payload || {};
+    if (turnPayload.type === "stream-item") {
+      return { kind: "event", event: turnPayload.encodedItem?.data || null };
+    }
+    if (turnPayload.type === "heartbeat") {
+      return {
+        kind: "heartbeat",
+        lastSeq: turnPayload.lastSeq,
+        runId: turnPayload.turnId,
+        sessionId: turnPayload.conversationId
+      };
+    }
+    if (turnPayload.type === "done") {
+      return {
+        kind: "done",
+        lastSeq: turnPayload.lastSeq,
+        runId: turnPayload.turnId,
+        sessionId: turnPayload.conversationId,
+        terminalEventType: turnPayload.terminalEventType
+      };
+    }
+    return { kind: "unknown", raw: payload };
+  }
+  // 本地联调台允许解析旧 ChatEventDto，便于手动排查不同后端版本。
+  if (payload.runId && payload.sessionId && payload.type) {
+    return { kind: "event", event: payload };
+  }
+  return { kind: "unknown", raw: payload };
+}
+
 function parseSseBlock(block) {
   const result = {};
   const data = [];
@@ -736,7 +793,7 @@ function handleChatEvent(event, source = "event", options = {}) {
 
   if (event.sessionId !== state.selectedSessionId) {
     // 本地联调台只有一个消息面板，但 WebSocket 是用户级连接，可能同时收到多个 session 的 run topic。
-    // 非当前会话事件已进入 sessionSeq/日志，可 ack 给服务端；正式前端应按 sessionId 分发到对应会话面板。
+    // 非当前会话事件只进入 sessionSeq/日志；正式前端应按 sessionId 分发到对应会话面板。
     return true;
   }
   const eventKey = `${event.sessionId}:${event.sequence}`;

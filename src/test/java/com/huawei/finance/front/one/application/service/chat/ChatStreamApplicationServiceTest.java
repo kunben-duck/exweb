@@ -4,14 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
-import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorCache;
-import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorRepository;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
-import com.huawei.finance.front.one.domain.chat.ChatReadCursor;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
@@ -19,7 +16,6 @@ import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -37,7 +33,6 @@ class ChatStreamApplicationServiceTest {
                 registry,
                 new InMemoryLiveEventBus(),
                 new InMemoryRunRepository(),
-                readCursorService(),
                 new PermissionChecker(),
                 new FixedSessionRepository(),
                 new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
@@ -62,7 +57,6 @@ class ChatStreamApplicationServiceTest {
                 new LocalChatEventStreamRegistry(),
                 new InMemoryLiveEventBus(),
                 new InMemoryRunRepository(),
-                readCursorService(),
                 new PermissionChecker(),
                 new FixedSessionRepository(),
                 new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
@@ -82,7 +76,6 @@ class ChatStreamApplicationServiceTest {
                 new LocalChatEventStreamRegistry(),
                 liveEventBus,
                 runRepository,
-                readCursorService(),
                 new PermissionChecker(),
                 new FixedSessionRepository(),
                 new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
@@ -110,7 +103,6 @@ class ChatStreamApplicationServiceTest {
                 new LocalChatEventStreamRegistry(),
                 liveEventBus,
                 runRepository,
-                readCursorService(),
                 new PermissionChecker(),
                 new FixedSessionRepository(),
                 new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
@@ -145,7 +137,6 @@ class ChatStreamApplicationServiceTest {
                 new LocalChatEventStreamRegistry(),
                 new InMemoryLiveEventBus(),
                 runRepository,
-                readCursorService(),
                 new PermissionChecker(),
                 new FixedSessionRepository(),
                 new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
@@ -175,7 +166,6 @@ class ChatStreamApplicationServiceTest {
                 registry,
                 liveEventBus,
                 runRepository,
-                readCursorService(),
                 new PermissionChecker(),
                 new FixedSessionRepository(),
                 new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
@@ -192,27 +182,6 @@ class ChatStreamApplicationServiceTest {
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", " live"))
                 .assertNext(event -> assertThat(event.type()).isEqualTo("run.completed"))
                 .verifyComplete();
-    }
-
-    @Test
-    void acknowledgeRunTopicPersistsReadCursorForRunSession() {
-        InMemoryRunRepository runRepository = new InMemoryRunRepository();
-        TrackingReadCursorRepository cursorRepository = new TrackingReadCursorRepository();
-        ChatStreamApplicationService service = new ChatStreamApplicationService(
-                new InMemoryChatEventStore(),
-                new LocalChatEventStreamRegistry(),
-                new InMemoryLiveEventBus(),
-                runRepository,
-                readCursorService(cursorRepository),
-                new PermissionChecker(),
-                new FixedSessionRepository(),
-                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
-        );
-        runRepository.save(runningRun("run1", "tenant1", "user1"));
-
-        service.acknowledgeRunTopic(user(), ChatStreamTopics.runTopic("run1"), 19L);
-
-        assertThat(cursorRepository.seq).isEqualTo(19L);
     }
 
     private static class InMemoryChatEventStore implements ChatEventStore {
@@ -277,23 +246,6 @@ class ChatStreamApplicationServiceTest {
         return new UserContext("tenant1", "user1", "User One");
     }
 
-    private ChatReadCursorApplicationService readCursorService() {
-        return readCursorService(new TrackingReadCursorRepository());
-    }
-
-    private ChatReadCursorApplicationService readCursorService(ChatReadCursorRepository repository) {
-        com.huawei.finance.front.one.application.config.ChatReadCursorProperties properties =
-                new com.huawei.finance.front.one.application.config.ChatReadCursorProperties();
-        properties.setDatabaseFlushInterval(Duration.ZERO);
-        return new ChatReadCursorApplicationService(
-                repository,
-                new EmptyReadCursorCache(),
-                new PermissionChecker(),
-                new FixedSessionRepository(),
-                properties
-        );
-    }
-
     private static class InMemoryRunRepository implements ChatRunRepository {
         private final Map<String, ChatRun> runs = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -338,33 +290,6 @@ class ChatStreamApplicationServiceTest {
         public reactor.core.publisher.Flux<ChatEvent> subscribe(String topicId) {
             return sinks.computeIfAbsent(topicId, ignored -> reactor.core.publisher.Sinks.many().multicast().onBackpressureBuffer())
                     .asFlux();
-        }
-    }
-
-    private static class TrackingReadCursorRepository implements ChatReadCursorRepository {
-        private long seq;
-
-        @Override
-        public Optional<ChatReadCursor> find(String tenantId, String userId, String sessionId) {
-            return seq <= 0 ? Optional.empty()
-                    : Optional.of(new ChatReadCursor("cursor1", tenantId, userId, sessionId, seq, Instant.now()));
-        }
-
-        @Override
-        public ChatReadCursor upsert(String tenantId, String userId, String sessionId, long lastConsumedSeq) {
-            seq = Math.max(seq, lastConsumedSeq);
-            return new ChatReadCursor("cursor1", tenantId, userId, sessionId, seq, Instant.now());
-        }
-    }
-
-    private static class EmptyReadCursorCache implements ChatReadCursorCache {
-        @Override
-        public Optional<ChatReadCursor> find(String tenantId, String userId, String sessionId) {
-            return Optional.empty();
-        }
-
-        @Override
-        public void put(ChatReadCursor cursor) {
         }
     }
 

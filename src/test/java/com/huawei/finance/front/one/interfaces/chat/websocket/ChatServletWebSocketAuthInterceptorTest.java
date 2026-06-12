@@ -3,9 +3,12 @@ package com.huawei.finance.front.one.interfaces.chat.websocket;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.finance.front.one.application.config.ChatStreamProperties;
 import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
+import com.huawei.finance.front.one.interfaces.chat.ChatEventTranslator;
+import com.huawei.finance.front.one.interfaces.chat.ChatTurnStreamTranslator;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -71,8 +74,10 @@ class ChatServletWebSocketAuthInterceptorTest {
                 new PermissionChecker(),
                 null,
                 registry,
-                null,
-                null
+                new ChatEventTranslator(),
+                new ChatTurnStreamTranslator(),
+                new ChatStreamProperties(),
+                new ObjectMapper()
         );
         ChatServletWebSocketHandler handler = new ChatServletWebSocketHandler(
                 protocolService,

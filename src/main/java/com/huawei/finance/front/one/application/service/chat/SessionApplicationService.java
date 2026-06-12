@@ -234,11 +234,25 @@ public class SessionApplicationService implements ChatSessionFacade {
     /**
      * 保存完整 assistant 回复及其结构化过程 parts，并把会话 current leaf 移动到该回复。
      *
-     * <p>parts 只在 run.completed 后写入，stop/failed 的半截过程仍仅保存在事件事实源中。</p>
+     * <p>parts 在 run.completed 后写入；用户主动 stop 且已经产生 assistant 正文时，也会把
+     * 截止 stop 时已落库的正文和过程 parts 固化为历史消息。run.failed 和 watchdog 故障仍不保存
+     * 半截 assistant。</p>
      */
     public ChatMessage saveAssistantMessage(String tenantId, String userId, ChatSession session, String content,
                                             String runId, String parentMessageId, String regeneratedFromMessageId,
                                             List<ChatMessagePartDraft> partDrafts) {
+        return saveAssistantMessage(tenantId, userId, session, content, runId, parentMessageId,
+                regeneratedFromMessageId, partDrafts, null);
+    }
+
+    /**
+     * 保存 assistant 回复及扩展元数据。
+     *
+     * @param metadataJson 消息级元数据 JSON；用于标记用户 stop 后保存的 partial assistant 等场景。
+     */
+    public ChatMessage saveAssistantMessage(String tenantId, String userId, ChatSession session, String content,
+                                            String runId, String parentMessageId, String regeneratedFromMessageId,
+                                            List<ChatMessagePartDraft> partDrafts, String metadataJson) {
         // 助手消息在事件流结束后保存完整文本，避免保存大量碎片 delta。
         String messageId = idGenerator.newId("msg", IdGenerateContext.of(tenantId, userId, session.id()));
         ChatMessage parent = parentMessageId == null ? null : requireMessageInSession(session, parentMessageId);
@@ -264,7 +278,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                 null,
                 null,
                 regeneratedFromMessageId,
-                null,
+                metadataJson,
                 parts,
                 now
         );

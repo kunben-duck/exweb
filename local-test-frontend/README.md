@@ -56,7 +56,7 @@ Referer: http://localhost:8080/fin/ex/
 
 - 会话：创建、分页列表、首条回答摘要展示、切换、state 聚合、历史消息分页、GPT-like 树视图、重命名、归档、恢复、单个/批量软删除。
 - Run：创建、停止回答、stream-status 查询；重新生成通过消息树的 `REGENERATE_ASSISTANT` 操作完成。
-- WebSocket：连接、connect、subscribe、ack、跨 session / 跨 run topic 订阅。
+- WebSocket：连接、connect、subscribe、unsubscribe、跨 session / 跨 run topic 订阅。
 - 多会话隔离：同一 WebSocket 连接可以同时订阅多个 session 的 run topic；本地联调台会按事件
   `sessionId` 更新游标和日志，正式前端应按 `sessionId` 分发到对应会话面板。
 - Runtime 扩展事件：Relay 返回非正文 JSON（例如 `project_home/progress/thinking/tool_call_streaming`）
@@ -83,7 +83,7 @@ Referer: http://localhost:8080/fin/ex/
 | 新建/切换会话 | `POST /api/v1/ex/chat/sessions`、`GET /api/v1/ex/chat/sessions/{sessionId}/state` | 选择会话时同时恢复历史消息和 active run 状态 |
 | 消息树视图 | `GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` | 读取完整可见消息树 mapping/currentLeaf，用于版本树调试 |
 | 发送问题 | `POST /api/v1/ex/chat/runs` | 返回 `runId/sessionId/firstSeq/streamTopicId`，随后通过 WebSocket 订阅 |
-| 实时输出 | `WS /api/v1/ex/chat/ws` | 发送 `connect`、`subscribe`、`ack`、`unsubscribe` 控制消息 |
+| 实时输出 | `WS /api/v1/ex/chat/ws` | 发送 `connect`、`subscribe`、`unsubscribe` 控制消息 |
 | 跨页签续接 | `GET /api/v1/ex/chat/runs/{runId}/events/resume` | active run 恢复时从 `activeRunFirstSeq - 1` 补发并 tail 到终态 |
 | 停止回答 | `POST /api/v1/ex/chat/runs/{runId}/stop` | REST 生命周期控制，不是 WebSocket command |
 | 历史版本 | `GET /messages/{messageId}/variants`、`POST /path` | 支持 `1/3` 版本游标和路径切换 |
@@ -117,7 +117,7 @@ Referer: http://localhost:8080/fin/ex/
 4. 本轮 run 恢复期间，页签 B 不会再对同一个 run 发 WebSocket `subscribe`；后续新提问仍按 `/chat/runs + WebSocket subscribe` 走实时通道。
 5. 也可以手动刷新页签 B，或关闭页签 A 后在页签 B 点击“事件恢复”“恢复 active run”验证恢复链路。
 
-这里的关键点是：`stream-status.latestSeq` 只表示服务端事件事实源的最新位置，不能直接作为客户端已消费游标；`readCursorSeq` 也可能来自另一台设备或另一个页签，不能证明当前页面已经渲染到该位置。active run 恢复统一从 `activeRunFirstSeq - 1` 做 run 级事件恢复 catchup，并通过 `sessionId + sequence` 去重。
+这里的关键点是：`stream-status.latestSeq` 只表示服务端事件事实源的最新位置，不能直接作为客户端已消费游标。active run 恢复统一从 `activeRunFirstSeq - 1` 做 run 级事件恢复 catchup，并通过 `sessionId + sequence` 去重；联调台只在本地维护每个 session 的最大 `sequence`，不会向服务端发送消费确认命令。
 
 ## 注意事项
 

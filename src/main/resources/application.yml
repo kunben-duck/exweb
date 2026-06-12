@@ -49,7 +49,7 @@ mybatis:
 
 financeex:
   redis:
-    # Redis 只作为热缓存、取消标记、read cursor 和跨实例实时 fanout，不作为事实源。
+    # Redis 只作为热缓存、取消标记、恢复锁优化和跨实例实时 fanout，不作为事实源。
     # standalone 用于本地开发；生产 Redis Cluster 设置 FINANCEEX_REDIS_MODE=cluster 并配置 cluster.nodes。
     mode: ${FINANCEEX_REDIS_MODE:standalone}
     host: ${FINANCEEX_REDIS_HOST:localhost}
@@ -118,17 +118,14 @@ financeex:
     stale-recovery-strategies: ${FINANCEEX_CHAT_RUN_STALE_RECOVERY_STRATEGIES:MANUAL_CONFIRMATION,FAIL_FAST}
     recover-lock-enabled: ${FINANCEEX_CHAT_RUN_RECOVER_LOCK_ENABLED:true}
     recover-lock-ttl: ${FINANCEEX_CHAT_RUN_RECOVER_LOCK_TTL:30s}
-  chat-read-cursor:
-    # 逻辑前缀；实际 key 为 fin_ex:{env}:chat_read_cursor:...
-    redis-key-prefix: fin_ex:chat_read_cursor
-    redis-ttl: 7d
-    database-flush-interval: 5s
   chat-stream:
     # 将连续 message.delta 合并成几十毫秒级文本片段，降低 openGauss event 表、Redis Pub/Sub 与 WS 投递写放大。
     # 对外事件类型仍是 message.delta，前端协议和 afterSeq 恢复语义不变。
     delta-coalesce-enabled: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_ENABLED:true}
     delta-coalesce-window: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_WINDOW:50ms}
     delta-coalesce-max-chars: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_MAX_CHARS:512}
+    # WebSocket 与 run 级 Event Resume 的 turn stream heartbeat；不写入事件表，也不推进 afterSeq。
+    turn-heartbeat-interval: ${FINANCEEX_CHAT_STREAM_TURN_HEARTBEAT_INTERVAL:15s}
   runtime-raw-log:
     # 记录 Relay normalizer 之前的原始响应片段，用于排障和协议分析；不作为前端恢复事实源。
     # 默认关闭；后续接入企业 MQ 时提供 RuntimeRawStreamLogPublisher bean，并将 enabled 打开。
@@ -142,10 +139,6 @@ financeex:
     consumer-state-idle-ttl: ${FINANCEEX_RUNTIME_RAW_LOG_CONSUMER_STATE_IDLE_TTL:5m}
     consumer-max-active-run-buffers: ${FINANCEEX_RUNTIME_RAW_LOG_CONSUMER_MAX_ACTIVE_RUN_BUFFERS:1000}
     consumer-state-cleanup-delay-ms: ${FINANCEEX_RUNTIME_RAW_LOG_CONSUMER_STATE_CLEANUP_DELAY_MS:60000}
-  mvc:
-    sse:
-      # run 级 SSE resume 在 active run 无业务 token 时发送 heartbeat，防止 Servlet async、网关或代理误判空闲断流。
-      heartbeat-interval: ${FINANCEEX_SSE_HEARTBEAT_INTERVAL:15s}
   websocket:
     # WebSocket 是用户级连接，事件按 run 级 stream topic 订阅；Redis Pub/Sub 只做跨实例实时扇出。
     # 前端 WS 入口同时支持 WebFlux 与 Servlet/MVC；Servlet 模式的上下文根使用 server.servlet.context-path。

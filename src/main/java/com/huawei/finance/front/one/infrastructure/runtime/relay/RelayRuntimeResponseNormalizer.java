@@ -329,6 +329,10 @@ public class RelayRuntimeResponseNormalizer {
             case "thinking-operation-end", "thinking-operation-finish" ->
                     RuntimeEvent.thinking(runId, sessionId, thinkingPayload(root, sourceType, "ENDED"));
             case "tool-call-streaming" -> RuntimeEvent.tool(runId, sessionId, toolPayload(root, sourceType));
+            case "url-moderation", "url-moderation-result" ->
+                    RuntimeEvent.reference(runId, sessionId, urlModerationReferencePayload(root, sourceType));
+            case "search-result-groups", "content-references", "citations", "sources", "references", "safe-urls" ->
+                    RuntimeEvent.reference(runId, sessionId, genericReferencePayload(root, sourceType));
             default -> null;
         };
     }
@@ -413,6 +417,36 @@ public class RelayRuntimeResponseNormalizer {
         copyText(root, payload, "toolName", "toolName", "tool_name", "too_name", "tool-name");
         copyText(root, payload, "inputPreview", "inputPreview", "input_preview");
         copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
+        return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> urlModerationReferencePayload(JsonNode root, String sourceType) {
+        Map<String, Object> payload = basePayload(sourceType);
+        payload.put("referenceType", "url_moderation");
+        JsonNode result = firstNode(root, "url_moderation_result", "urlModerationResult", "result", "data");
+        JsonNode valueRoot = result == null || !result.isObject() ? root : result;
+        copyText(valueRoot, payload, "url", "full_url", "fullUrl", "url");
+        copyText(valueRoot, payload, "title", "title", "name");
+        copyAny(valueRoot, payload, "safe", "is_safe", "isSafe", "safe");
+        copyAny(valueRoot, payload, "blocked", "is_blocked", "isBlocked", "blocked");
+        copyText(valueRoot, payload, "messageId", "message_id", "messageId");
+        payload.put("sourcePayload", sourcePayload(root));
+        return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> genericReferencePayload(JsonNode root, String sourceType) {
+        Map<String, Object> payload = basePayload(sourceType);
+        payload.put("referenceType", "source");
+        copyText(root, payload, "title", "title", "name", "label");
+        copyText(root, payload, "url", "url", "href", "link");
+        copyText(root, payload, "text", "text", "snippet", "summary", "content");
+        JsonNode references = firstNode(root, "references", "citations", "sources", "safe_urls",
+                "safeUrls", "content_references", "contentReferences", "search_result_groups",
+                "searchResultGroups");
+        if (references != null) {
+            payload.put("references", sanitizeJson(references, "references", 0));
+        }
+        payload.put("sourcePayload", sourcePayload(root));
         return Map.copyOf(payload);
     }
 

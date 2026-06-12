@@ -4,15 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
-import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorCache;
-import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorRepository;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunCache;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
-import com.huawei.finance.front.one.domain.chat.ChatReadCursor;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunCancelSignal;
 import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
@@ -125,12 +122,11 @@ class ChatRunApplicationServiceTest {
         repository.save(run);
         cache.putActive(run);
         ChatRunApplicationService service = new ChatRunApplicationService(repository, cache, eventStore,
-                readCursorService(4L), new PermissionChecker(), new FixedSessionRepository());
+                new PermissionChecker(), new FixedSessionRepository());
 
         var status = service.streamStatus(user(), "session1");
 
         assertThat(status.latestSeq()).isEqualTo(11L);
-        assertThat(status.readCursorSeq()).isEqualTo(4L);
         assertThat(status.activeRunId()).isEqualTo("run1");
         assertThat(status.activeRunStatus()).isEqualTo(ChatRunStatus.RUNNING);
         assertThat(status.activeStreamTopicId()).isEqualTo("chat-run-run1");
@@ -161,17 +157,7 @@ class ChatRunApplicationServiceTest {
 
     private ChatRunApplicationService service(InMemoryRunRepository repository, InMemoryRunCache cache) {
         return new ChatRunApplicationService(repository, cache, new InMemoryEventStore(0L),
-                readCursorService(0L), new PermissionChecker(), new FixedSessionRepository());
-    }
-
-    private ChatReadCursorApplicationService readCursorService(long seq) {
-        return new ChatReadCursorApplicationService(
-                new FixedReadCursorRepository(seq),
-                new EmptyReadCursorCache(),
-                new PermissionChecker(),
-                new FixedSessionRepository(),
-                new com.huawei.finance.front.one.application.config.ChatReadCursorProperties()
-        );
+                new PermissionChecker(), new FixedSessionRepository());
     }
 
     private UserContext user() {
@@ -301,39 +287,6 @@ class ChatRunApplicationServiceTest {
         @Override
         public long findLatestSeqByOwnerAndSession(String tenantId, String userId, String sessionId) {
             return latestSeq;
-        }
-    }
-
-    private static class FixedReadCursorRepository implements ChatReadCursorRepository {
-        private long seq;
-
-        private FixedReadCursorRepository(long seq) {
-            this.seq = seq;
-        }
-
-        @Override
-        public Optional<ChatReadCursor> find(String tenantId, String userId, String sessionId) {
-            if (seq <= 0) {
-                return Optional.empty();
-            }
-            return Optional.of(new ChatReadCursor("cursor1", tenantId, userId, sessionId, seq, Instant.now()));
-        }
-
-        @Override
-        public ChatReadCursor upsert(String tenantId, String userId, String sessionId, long lastConsumedSeq) {
-            seq = Math.max(seq, lastConsumedSeq);
-            return new ChatReadCursor("cursor1", tenantId, userId, sessionId, seq, Instant.now());
-        }
-    }
-
-    private static class EmptyReadCursorCache implements ChatReadCursorCache {
-        @Override
-        public Optional<ChatReadCursor> find(String tenantId, String userId, String sessionId) {
-            return Optional.empty();
-        }
-
-        @Override
-        public void put(ChatReadCursor cursor) {
         }
     }
 

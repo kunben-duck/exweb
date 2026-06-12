@@ -2,15 +2,12 @@ package com.huawei.finance.front.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.huawei.finance.front.one.application.config.ChatReadCursorProperties;
 import com.huawei.finance.front.one.application.config.ChatRunOperationalProperties;
 import com.huawei.finance.front.one.application.config.ChatWebSocketProperties;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRecoveryPort;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRecoveryRequest;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
-import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorCache;
-import com.huawei.finance.front.one.application.integration.conversation.ChatReadCursorRepository;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunCache;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunExecutionRepository;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRecoverLock;
@@ -26,7 +23,6 @@ import com.huawei.finance.front.one.application.service.recovery.StaleRunRecover
 import com.huawei.finance.front.one.application.service.recovery.StaleRunRecoveryStrategyRegistry;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
-import com.huawei.finance.front.one.domain.chat.ChatReadCursor;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunCancelSignal;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecution;
@@ -53,14 +49,11 @@ class ChatRunRecoveryOrchestratorTest {
         InMemoryRunCache cache = new InMemoryRunCache();
         FixedSessionRepository sessions = new FixedSessionRepository();
         PermissionChecker permissionChecker = new PermissionChecker();
-        ChatReadCursorApplicationService readCursorService = new ChatReadCursorApplicationService(
-                new EmptyReadCursorRepository(), new EmptyReadCursorCache(), permissionChecker, sessions,
-                new ChatReadCursorProperties());
         ChatStreamApplicationService streamService = new ChatStreamApplicationService(events,
-                new LocalChatEventStreamRegistry(), new NoopLiveEventBus(), runs, readCursorService,
+                new LocalChatEventStreamRegistry(), new NoopLiveEventBus(), runs,
                 permissionChecker, sessions, new ChatWebSocketProperties());
         ChatRunApplicationService runService = new ChatRunApplicationService(runs, cache, events,
-                readCursorService, permissionChecker, sessions);
+                permissionChecker, sessions);
         ChatRunOperationalProperties properties = new ChatRunOperationalProperties();
         properties.setWatchdogBatchSize(10);
         properties.setWatchdogMaxClaimsPerScan(10);
@@ -165,14 +158,11 @@ class ChatRunRecoveryOrchestratorTest {
         InMemoryRunCache cache = new InMemoryRunCache();
         FixedSessionRepository sessions = new FixedSessionRepository();
         PermissionChecker permissionChecker = new PermissionChecker();
-        ChatReadCursorApplicationService readCursorService = new ChatReadCursorApplicationService(
-                new EmptyReadCursorRepository(), new EmptyReadCursorCache(), permissionChecker, sessions,
-                new ChatReadCursorProperties());
         ChatStreamApplicationService streamService = new ChatStreamApplicationService(events,
-                new LocalChatEventStreamRegistry(), new NoopLiveEventBus(), runs, readCursorService,
+                new LocalChatEventStreamRegistry(), new NoopLiveEventBus(), runs,
                 permissionChecker, sessions, new ChatWebSocketProperties());
         ChatRunApplicationService runService = new ChatRunApplicationService(runs, cache, events,
-                readCursorService, permissionChecker, sessions);
+                permissionChecker, sessions);
         ChatRunOperationalProperties properties = new ChatRunOperationalProperties();
         properties.setWatchdogBatchSize(10);
         properties.setWatchdogMaxClaimsPerScan(10);
@@ -299,18 +289,6 @@ class ChatRunRecoveryOrchestratorTest {
     private static class NoopLiveEventBus implements ChatLiveEventBus {
         @Override public void publish(String topicId, ChatEvent event) {}
         @Override public Flux<ChatEvent> subscribe(String topicId) { return Flux.never(); }
-    }
-
-    private static class EmptyReadCursorRepository implements ChatReadCursorRepository {
-        @Override public Optional<ChatReadCursor> find(String tenantId, String userId, String sessionId) { return Optional.empty(); }
-        @Override public ChatReadCursor upsert(String tenantId, String userId, String sessionId, long lastConsumedSeq) {
-            return new ChatReadCursor("cursor1", tenantId, userId, sessionId, lastConsumedSeq, Instant.now());
-        }
-    }
-
-    private static class EmptyReadCursorCache implements ChatReadCursorCache {
-        @Override public Optional<ChatReadCursor> find(String tenantId, String userId, String sessionId) { return Optional.empty(); }
-        @Override public void put(ChatReadCursor cursor) {}
     }
 
     private static class FixedSessionRepository implements SessionRepository {

@@ -1,6 +1,5 @@
 package com.huawei.finance.front.one.infrastructure.redis;
 
-import com.huawei.finance.front.one.application.config.ChatReadCursorProperties;
 import com.huawei.finance.front.one.infrastructure.memory.ShortTermMemoryRedisProperties;
 import com.huawei.finance.front.one.infrastructure.persistence.ChatLiveEventBusProperties;
 import com.huawei.finance.front.one.infrastructure.persistence.ChatRunCacheProperties;
@@ -21,7 +20,6 @@ import org.springframework.stereotype.Component;
 @EnableConfigurationProperties({
         RuntimeBindingProperties.class,
         ChatRunCacheProperties.class,
-        ChatReadCursorProperties.class,
         ChatLiveEventBusProperties.class
 })
 public class FinanceExRedisKeyBuilder {
@@ -32,30 +30,26 @@ public class FinanceExRedisKeyBuilder {
     private final String env;
     private final RuntimeBindingProperties runtimeBindingProperties;
     private final ChatRunCacheProperties chatRunCacheProperties;
-    private final ChatReadCursorProperties readCursorProperties;
     private final ChatLiveEventBusProperties liveEventBusProperties;
     private final ShortTermMemoryRedisProperties shortTermMemoryProperties;
 
     public FinanceExRedisKeyBuilder(Environment environment,
                                     RuntimeBindingProperties runtimeBindingProperties,
                                     ChatRunCacheProperties chatRunCacheProperties,
-                                    ChatReadCursorProperties readCursorProperties,
                                     ChatLiveEventBusProperties liveEventBusProperties,
                                     ShortTermMemoryRedisProperties shortTermMemoryProperties) {
-        this(resolveEnv(environment), runtimeBindingProperties, chatRunCacheProperties, readCursorProperties,
+        this(resolveEnv(environment), runtimeBindingProperties, chatRunCacheProperties,
                 liveEventBusProperties, shortTermMemoryProperties);
     }
 
     private FinanceExRedisKeyBuilder(String env,
                                      RuntimeBindingProperties runtimeBindingProperties,
                                      ChatRunCacheProperties chatRunCacheProperties,
-                                     ChatReadCursorProperties readCursorProperties,
                                      ChatLiveEventBusProperties liveEventBusProperties,
                                      ShortTermMemoryRedisProperties shortTermMemoryProperties) {
         this.env = normalizeEnv(env);
         this.runtimeBindingProperties = runtimeBindingProperties;
         this.chatRunCacheProperties = chatRunCacheProperties;
-        this.readCursorProperties = readCursorProperties;
         this.liveEventBusProperties = liveEventBusProperties;
         this.shortTermMemoryProperties = shortTermMemoryProperties;
     }
@@ -68,7 +62,7 @@ public class FinanceExRedisKeyBuilder {
      */
     public static FinanceExRedisKeyBuilder ofEnv(String env) {
         return new FinanceExRedisKeyBuilder(env, new RuntimeBindingProperties(), new ChatRunCacheProperties(),
-                new ChatReadCursorProperties(), new ChatLiveEventBusProperties(), new ShortTermMemoryRedisProperties());
+                new ChatLiveEventBusProperties(), new ShortTermMemoryRedisProperties());
     }
 
     /**
@@ -120,16 +114,6 @@ public class FinanceExRedisKeyBuilder {
      */
     public String recoverLock(String runId) {
         return prefix(chatRunCacheProperties.getRecoverLockKeyPrefix()) + ":" + normalize(runId);
-    }
-
-    /**
-     * @return 当前用户在会话中的事件消费游标 key。
-     */
-    public String readCursor(String tenantId, String userId, String sessionId) {
-        return prefix(readCursorProperties.getRedisKeyPrefix())
-                + ":" + normalize(tenantId)
-                + ":" + normalize(userId)
-                + ":" + normalize(sessionId);
     }
 
     /**

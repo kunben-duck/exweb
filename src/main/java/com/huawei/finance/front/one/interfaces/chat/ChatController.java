@@ -1,6 +1,6 @@
 package com.huawei.finance.front.one.interfaces.chat;
 
-import com.huawei.finance.front.one.application.config.MvcSseProperties;
+import com.huawei.finance.front.one.application.config.ChatStreamProperties;
 import com.huawei.finance.front.one.application.facade.FinanceChatFacade;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
@@ -16,11 +16,14 @@ import com.huawei.finance.front.one.interfaces.chat.dto.ChatEventDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatRunStartDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatRunStopDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatStreamStatusDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.ConversationTurnStreamDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatRunRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.MessageFeedbackDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.MessageFeedbackRequest;
 import jakarta.validation.Valid;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -58,14 +61,16 @@ public class ChatController {
     private final PermissionChecker permissionChecker;
     private final ChatRequestTranslator requestTranslator;
     private final ChatEventTranslator eventTranslator;
+    private final ChatTurnStreamTranslator turnStreamTranslator;
     private final RuntimeForwardHeaderExtractor forwardHeaderExtractor;
-    private final MvcSseProperties sseProperties;
+    private final ChatStreamProperties chatStreamProperties;
     public ChatController(FinanceChatFacade chatFacade, ChatStreamApplicationService chatStreamService,
                           ChatRunApplicationService chatRunService, ChatFeedbackApplicationService feedbackService,
                           AuthContextProvider auth, PermissionChecker permissionChecker,
                           ChatRequestTranslator requestTranslator, ChatEventTranslator eventTranslator,
+                          ChatTurnStreamTranslator turnStreamTranslator,
                           RuntimeForwardHeaderExtractor forwardHeaderExtractor,
-                          MvcSseProperties sseProperties) {
+                          ChatStreamProperties chatStreamProperties) {
         this.chatFacade = chatFacade;
         this.chatStreamService = chatStreamService;
         this.chatRunService = chatRunService;
@@ -74,8 +79,9 @@ public class ChatController {
         this.permissionChecker = permissionChecker;
         this.requestTranslator = requestTranslator;
         this.eventTranslator = eventTranslator;
+        this.turnStreamTranslator = turnStreamTranslator;
         this.forwardHeaderExtractor = forwardHeaderExtractor;
-        this.sseProperties = sseProperties;
+        this.chatStreamProperties = chatStreamProperties;
     }
 
     /**
@@ -169,15 +175,17 @@ public class ChatController {
      *
      * @param sessionId 需要恢复事件的聊天会话标识；服务端会校验会话归属。
      * @param afterSeq 前端已经处理到的最大事件序号，只返回大于该值的事件。
-     * @return 事件恢复流，event name 等于聊天事件 type，data 为 ChatEventDto。
+     * @return 事件恢复流，event name 固定为 conversation-turn-stream，真实 ChatEventDto 位于 encodedItem.data。
      */
     @GetMapping(value = "/sessions/{sessionId}/events/resume", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public ResponseEntity<Flux<ServerSentEvent<ChatEventDto>>> resumeSessionEvents(@PathVariable("sessionId") String sessionId,
-                                                                                   @RequestParam(value = "afterSeq", defaultValue = "0") long afterSeq) {
+    public ResponseEntity<Flux<ServerSentEvent<ConversationTurnStreamDto>>> resumeSessionEvents(
+            @PathVariable("sessionId") String sessionId,
+            @RequestParam(value = "afterSeq", defaultValue = "0") long afterSeq) {
         UserContext user = resolveChatUser();
-        Flux<ServerSentEvent<ChatEventDto>> events = chatStreamService.resumeSession(user, sessionId, afterSeq)
+        Flux<ServerSentEvent<ConversationTurnStreamDto>> events = chatStreamService.resumeSession(user, sessionId, afterSeq)
                 .map(eventTranslator::toDto)
-                .map(dto -> ServerSentEvent.<ChatEventDto>builder().event(dto.type()).data(dto).build());
+                .map(turnStreamTranslator::streamItem)
+                .map(this::toTurnStreamSse);
         return sseResponse(events);
     }
 
@@ -191,16 +199,17 @@ public class ChatController {
      *
      * @param runId 需要恢复事件的 run 标识；服务端会校验 run 归属。
      * @param afterSeq 前端已经处理到的最大事件序号，只发送大于该值的事件。
-     * @return 事件恢复流，event name 等于聊天事件 type，data 为 ChatEventDto；active run 会持续到终态。
+     * @return 事件恢复流，event name 固定为 conversation-turn-stream；active run 会持续到终态并发送 done。
      */
     @GetMapping(value = "/runs/{runId}/events/resume", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public ResponseEntity<Flux<ServerSentEvent<ChatEventDto>>> resumeRunEvents(@PathVariable("runId") String runId,
-                                                                               @RequestParam(value = "afterSeq", defaultValue = "0") long afterSeq) {
+    public ResponseEntity<Flux<ServerSentEvent<ConversationTurnStreamDto>>> resumeRunEvents(
+            @PathVariable("runId") String runId,
+            @RequestParam(value = "afterSeq", defaultValue = "0") long afterSeq) {
         UserContext user = resolveChatUser();
-        Flux<ServerSentEvent<ChatEventDto>> events = chatStreamService.resumeRun(user, runId, afterSeq)
-                .map(eventTranslator::toDto)
-                .map(dto -> ServerSentEvent.<ChatEventDto>builder().event(dto.type()).data(dto).build());
-        return sseResponse(withHeartbeat(events));
+        Flux<ChatEventDto> events = chatStreamService.resumeRun(user, runId, afterSeq)
+                .map(eventTranslator::toDto);
+        return sseResponse(withTurnHeartbeatAndDone(events)
+                .map(this::toTurnStreamSse));
     }
 
     /**
@@ -222,7 +231,8 @@ public class ChatController {
         return user;
     }
 
-    private ResponseEntity<Flux<ServerSentEvent<ChatEventDto>>> sseResponse(Flux<ServerSentEvent<ChatEventDto>> events) {
+    private ResponseEntity<Flux<ServerSentEvent<ConversationTurnStreamDto>>> sseResponse(
+            Flux<ServerSentEvent<ConversationTurnStreamDto>> events) {
         return ResponseEntity.ok()
                 .contentType(MediaType.TEXT_EVENT_STREAM)
                 .header(HttpHeaders.CACHE_CONTROL, "no-cache")
@@ -230,20 +240,56 @@ public class ChatController {
                 .body(events);
     }
 
-    private Flux<ServerSentEvent<ChatEventDto>> withHeartbeat(Flux<ServerSentEvent<ChatEventDto>> events) {
-        Duration interval = sseProperties.normalizedHeartbeatInterval();
+    private ServerSentEvent<ConversationTurnStreamDto> toTurnStreamSse(ConversationTurnStreamDto item) {
+        return ServerSentEvent.<ConversationTurnStreamDto>builder()
+                .event(ChatTurnStreamTranslator.TURN_STREAM_TYPE)
+                .data(item)
+                .build();
+    }
+
+    private Flux<ConversationTurnStreamDto> withTurnHeartbeatAndDone(Flux<ChatEventDto> events) {
+        Duration interval = chatStreamProperties.normalizedTurnHeartbeatInterval();
+        AtomicLong lastSeq = new AtomicLong(0);
+        AtomicReference<String> lastSessionId = new AtomicReference<>();
+        AtomicReference<String> lastRunId = new AtomicReference<>();
+        AtomicReference<String> terminalType = new AtomicReference<>();
+        Flux<ChatEventDto> trackedEvents = events.doOnNext(dto -> {
+            lastSeq.set(dto.sequence());
+            lastSessionId.set(dto.sessionId());
+            lastRunId.set(dto.runId());
+            if (turnStreamTranslator.isTerminal(dto)) {
+                terminalType.set(dto.type());
+            }
+        });
+        return trackedEvents.publish(shared -> {
+            Flux<ConversationTurnStreamDto> streamItems = shared.map(turnStreamTranslator::streamItem);
+            Flux<ConversationTurnStreamDto> heartbeat = turnHeartbeat(interval, lastSessionId, lastRunId, lastSeq)
+                    .takeUntilOther(shared.ignoreElements());
+            Flux<ConversationTurnStreamDto> merged = interval.isZero() || interval.isNegative()
+                    ? streamItems
+                    : Flux.merge(streamItems, heartbeat);
+            return merged.concatWith(Mono.defer(() -> {
+                String terminal = terminalType.get();
+                String sessionId = lastSessionId.get();
+                String runId = lastRunId.get();
+                if (terminal == null || sessionId == null || runId == null) {
+                    return Mono.empty();
+                }
+                return Mono.just(turnStreamTranslator.done(sessionId, runId, lastSeq.get(), terminal));
+            }));
+        });
+    }
+
+    private Flux<ConversationTurnStreamDto> turnHeartbeat(Duration interval,
+                                                          AtomicReference<String> sessionId,
+                                                          AtomicReference<String> runId,
+                                                          AtomicLong lastSeq) {
         if (interval.isZero() || interval.isNegative()) {
-            return events;
+            return Flux.empty();
         }
-        return events.publish(shared -> Flux.merge(
-                shared,
-                Flux.interval(interval)
-                        .map(ignored -> ServerSentEvent.<ChatEventDto>builder()
-                                .event("heartbeat")
-                                .comment("keepalive")
-                                .build())
-                        .takeUntilOther(shared.ignoreElements())
-        ));
+        return Flux.interval(interval)
+                .filter(ignored -> sessionId.get() != null && runId.get() != null)
+                .map(ignored -> turnStreamTranslator.heartbeat(sessionId.get(), runId.get(), lastSeq.get()));
     }
 
     private ChatRunStopDto toStopDto(ChatRunStopResult result) {
@@ -260,7 +306,6 @@ public class ChatController {
         return new ChatStreamStatusDto(
                 status.sessionId(),
                 status.latestSeq(),
-                status.readCursorSeq(),
                 status.activeRunId(),
                 status.activeRunStatus() == null ? null : status.activeRunStatus().name(),
                 status.activeStreamTopicId(),

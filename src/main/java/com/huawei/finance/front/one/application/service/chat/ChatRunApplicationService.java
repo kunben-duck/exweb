@@ -37,7 +37,6 @@ public class ChatRunApplicationService {
     private final ChatRunRepository repository;
     private final ChatRunCache cache;
     private final ChatEventStore eventStore;
-    private final ChatReadCursorApplicationService readCursorService;
     private final PermissionChecker permissionChecker;
     private final SessionRepository sessionRepository;
     private final ChatRunLeaseApplicationService leaseService;
@@ -45,7 +44,6 @@ public class ChatRunApplicationService {
 
     @Autowired
     public ChatRunApplicationService(ChatRunRepository repository, ChatRunCache cache, ChatEventStore eventStore,
-                                     ChatReadCursorApplicationService readCursorService,
                                      PermissionChecker permissionChecker,
                                      SessionRepository sessionRepository,
                                      ChatRunLeaseApplicationService leaseService,
@@ -53,7 +51,6 @@ public class ChatRunApplicationService {
         this.repository = repository;
         this.cache = cache;
         this.eventStore = eventStore;
-        this.readCursorService = readCursorService;
         this.permissionChecker = permissionChecker;
         this.sessionRepository = sessionRepository;
         this.leaseService = leaseService;
@@ -61,13 +58,11 @@ public class ChatRunApplicationService {
     }
 
     ChatRunApplicationService(ChatRunRepository repository, ChatRunCache cache, ChatEventStore eventStore,
-                              ChatReadCursorApplicationService readCursorService,
                               PermissionChecker permissionChecker,
                               SessionRepository sessionRepository) {
         this.repository = repository;
         this.cache = cache;
         this.eventStore = eventStore;
-        this.readCursorService = readCursorService;
         this.permissionChecker = permissionChecker;
         this.sessionRepository = sessionRepository;
         this.leaseService = null;
@@ -268,7 +263,6 @@ public class ChatRunApplicationService {
         permissionChecker.checkChatPermission(user);
         ensureOwnedSession(user, sessionId);
         long latestSeq = eventStore.findLatestSeqByOwnerAndSession(user.tenantId(), user.userId(), sessionId);
-        long readCursorSeq = readCursorService.findLastConsumedSeq(user, sessionId);
         Optional<ChatRun> active = findActive(user.tenantId(), user.userId(), sessionId);
         if (active.isPresent() && leaseService != null && leaseService.isLeaseExpired(active.get().id())) {
             ChatRunRecoveryOrchestrator orchestrator = recoveryOrchestratorProvider == null
@@ -277,16 +271,14 @@ public class ChatRunApplicationService {
             if (orchestrator != null) {
                 orchestrator.recoverExpiredRun(active.get().id());
                 latestSeq = eventStore.findLatestSeqByOwnerAndSession(user.tenantId(), user.userId(), sessionId);
-                readCursorSeq = readCursorService.findLastConsumedSeq(user, sessionId);
                 active = findActive(user.tenantId(), user.userId(), sessionId);
             }
         }
         long currentLatestSeq = latestSeq;
-        long currentReadCursorSeq = readCursorSeq;
         return active
-                .map(run -> new ChatStreamStatus(sessionId, currentLatestSeq, currentReadCursorSeq, run.id(), run.status(),
+                .map(run -> new ChatStreamStatus(sessionId, currentLatestSeq, run.id(), run.status(),
                         ChatStreamTopics.runTopic(run.id()), run.firstSeq(), run.lastSeq(), run.cancellable()))
-                .orElseGet(() -> new ChatStreamStatus(sessionId, currentLatestSeq, currentReadCursorSeq,
+                .orElseGet(() -> new ChatStreamStatus(sessionId, currentLatestSeq,
                         null, null, null, null, null, false));
     }
 

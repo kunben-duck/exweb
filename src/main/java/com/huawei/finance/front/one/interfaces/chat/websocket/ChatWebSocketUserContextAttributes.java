@@ -8,7 +8,7 @@ import java.util.Map;
  *
  * <p>MVC/Servlet WebSocket 完成 HTTP upgrade 后，连接生命周期已经脱离普通 Controller
  * 请求线程，企业权限 ThreadLocal 可能不可用。因此必须在 handshake 阶段把 {@link UserContext}
- * 写入 WebSocket attributes，后续连接建立、订阅和 ack 都只读取该不可变快照。</p>
+ * 写入 WebSocket attributes，后续连接建立和订阅都只读取该不可变快照。</p>
  */
 final class ChatWebSocketUserContextAttributes {
     /** Servlet WebSocket session attributes 中保存 UserContext 的固定 key。 */

@@ -55,6 +55,10 @@ public record RuntimeEvent(
         return typed("runtime.tool", runId, sessionId, payload);
     }
 
+    public static RuntimeEvent reference(String runId, String sessionId, Map<String, Object> payload) {
+        return typed("runtime.reference", runId, sessionId, payload);
+    }
+
     public static RuntimeEvent fallback(String runId, String sessionId, String sourceType, String eventKind,
                                         String channel, String displayHint, String text,
                                         Map<String, Object> sourcePayload) {

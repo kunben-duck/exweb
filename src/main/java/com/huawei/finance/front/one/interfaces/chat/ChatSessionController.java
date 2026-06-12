@@ -483,7 +483,6 @@ public class ChatSessionController {
         return new ChatStreamStatusDto(
                 status.sessionId(),
                 status.latestSeq(),
-                status.readCursorSeq(),
                 status.activeRunId(),
                 status.activeRunStatus() == null ? null : status.activeRunStatus().name(),
                 status.activeStreamTopicId(),

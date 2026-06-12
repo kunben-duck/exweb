@@ -9,7 +9,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * FinanceEX Redis 连接配置。
  *
- * <p>Redis 在本服务中只承担热缓存、取消标记、read cursor 加速和 WebSocket 跨实例 fanout，
+ * <p>Redis 在本服务中只承担热缓存、取消标记、恢复锁优化和 WebSocket 跨实例 fanout，
  * 不承担最终事实源。生产环境可以通过 {@code mode=cluster} 切换到 Redis Cluster；
  * 本地开发默认仍使用 standalone，避免单机调试成本。</p>
  */

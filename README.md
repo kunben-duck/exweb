@@ -45,10 +45,10 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `POST /api/v1/ex/chat/sessions/{sessionId}/archive|restore`：会话归档和恢复。
 - `DELETE /api/v1/ex/chat/sessions/{sessionId}`：软删除会话；只写 `status=DELETED`，不物理删除消息、run、event、反馈或附件引用。
 - `DELETE /api/v1/ex/chat/sessions`：批量软删除会话；请求体传 `sessionIds[]`，任意会话存在 active run 时整体失败。
-- `WS /api/v1/ex/chat/ws`：用户级实时输出通道。客户端使用 `{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}` 订阅本轮 run topic；MVC/Servlet 模式会在 handshake 阶段固化用户身份。
-- `GET /api/v1/ex/chat/sessions/{sessionId}/events/resume?afterSeq={seq}`：会话级事件恢复有限补发，用于补齐整个会话缺失事件。
-- `GET /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}`：run 级事件恢复并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态。
-- `GET /api/v1/ex/chat/sessions/{sessionId}/stream-status`：查询当前会话最新事件序号、服务端 read cursor、active run、`activeStreamTopicId` 和是否可取消。
+- `WS /api/v1/ex/chat/ws`：用户级实时输出通道。客户端使用 `{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}` 订阅本轮 run topic；MVC/Servlet 模式会在 handshake 阶段固化用户身份。服务端 `message.payload` 为 `conversation-turn-stream`，真实聊天事件在 `message.payload.payload.encodedItem.data`。
+- `GET /api/v1/ex/chat/sessions/{sessionId}/events/resume?afterSeq={seq}`：会话级事件恢复有限补发，用于补齐整个会话缺失事件；SSE data 同样是 `conversation-turn-stream`。
+- `GET /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}`：run 级事件恢复并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态；长时间无业务事件时发送 turn stream `heartbeat`，终态后发送 `done`。
+- `GET /api/v1/ex/chat/sessions/{sessionId}/stream-status`：查询当前会话最新事件序号、active run、`activeStreamTopicId` 和是否可取消。
 - `POST /api/v1/ex/chat/runs/{runId}/stop`：按 runId 停止当前回答，幂等返回 run 状态。
 - `POST /api/v1/ex/chat/messages/{messageId}/feedback`：提交或切换 assistant 消息点赞/点踩。
 - `DELETE /api/v1/ex/chat/messages/{messageId}/feedback`：取消当前用户对 assistant 消息的点赞或点踩。
@@ -63,7 +63,7 @@ POST /chat/runs
  -> 浏览器刷新/复制页签后，使用前端配置的 Event Resume 地址按 lastSeq 补齐缺失事件
  -> 新页签、新浏览器或跨电脑续接 active run 时，从 activeRunFirstSeq - 1 打开 run 级事件恢复
  -> Run 事件恢复先补发历史事件，再持续接续 live 事件，直到本轮 run 终态
- -> 用户点击停止时调用前端配置的 stop 接口，服务端发布 run.cancelled 终态事件
+ -> 用户点击停止时调用前端配置的 stop 接口，服务端在已有正文时保存 partial assistant，并发布 run.cancelled 终态事件
 ```
 
 当前请求体只有对话文本和可选文档附件，不暴露 IM 消息类型，也不让前端选择多套响应协议。文档不是消息类型，只是对话消息的上下文资源引用。
@@ -80,7 +80,7 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 
 MVC/Servlet WebSocket 是一个特殊入口：用户身份必须在 `HandshakeInterceptor.beforeHandshake`
 阶段从企业 ThreadLocal 解析并写入 WebSocket session attributes。`afterConnectionEstablished`、
-subscribe、ack 和连接关闭回调只读取该身份快照，不会再次调用 `AuthContextProvider`。
+subscribe 和连接关闭回调只读取该身份快照，不会再次调用 `AuthContextProvider`。
 
 生产使用 MVC/Servlet 模式时，需要把长连接当作 Servlet 资源治理：Event Resume 使用
 `spring.mvc.async.request-timeout` 和 run 级 heartbeat 防止空闲断流；WebSocket 使用
@@ -119,9 +119,9 @@ export FINANCEEX_DEV_USERNAME=developer
 - `runtimeSessionId`：当前 AgentRuntime provider 自己的会话 ID，由 Runtime 返回后保存在 RuntimeBinding 中，下一轮续接时带回。
 
 `runId` 不是长期任务会话；它是单轮执行 correlation id。事件表 `fin_ex_chat_event_t.run_id` 和绑定表 `fin_ex_runtime_binding_t.last_run_id` 都用它做运行轨迹和排障定位。
-run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。stop 只停止本轮回答，不删除 `RuntimeBinding`。
+run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。stop 只停止本轮回答，不删除 `RuntimeBinding`；如果用户主动 stop 前已经有 `message.delta` 或 `message.snapshot` 成功落库，ChatService 会把截至 stop 时的正文保存为 partial assistant 历史消息，并在消息 `metadata_json` 中标记 `partial=true`、`finishReason=USER_STOP`。
 run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实例、心跳、租约、恢复状态和 `fencing_token`，不混入业务 run 表。后台执行流写入 run 事件时通过 openGauss guarded insert 原子校验 execution owner 与 `fencing_token`；stop、watchdog 或未来 Runtime takeover 递增 token 后，旧实例迟到 delta/completed 会被拒绝。
-连续 `message.delta` 默认按 `financeex.chat-stream.delta-coalesce-*` 合并为几十毫秒级文本片段，减少 openGauss event 表、Redis Pub/Sub 和 WebSocket 的逐 token 写放大；`message.snapshot`、`runtime.*` 和 run 终态不参与合并。Relay `is_streaming=false` 的最终回答会映射为 `message.snapshot`，前端用它替换当前草稿，历史消息正文也优先使用该快照。
+连续 `message.delta` 默认按 `financeex.chat-stream.delta-coalesce-*` 合并为几十毫秒级文本片段，减少 openGauss event 表、Redis Pub/Sub 和 WebSocket 的逐 token 写放大；`message.snapshot`、`runtime.*`、turn stream `heartbeat/done` 和 run 终态不参与合并。Relay `is_streaming=false` 的最终回答会映射为 `message.snapshot`，前端用它替换当前草稿，历史消息正文也优先使用该快照。
 assistant 的思考、工具、进度、agent 调用等过程信息保存到 `fin_ex_chat_message_part_t`，并通过 `ChatMessageDto.parts` 返回。parts 会提供稳定的 `title/status/channel/displayHint/visible` 展示语义，前端不需要解析 Relay 私有 payload。
 Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPublisher` best-effort 发布到企业 MQ；消费端异步合并、脱敏、分片后写入 `fin_ex_runtime_raw_stream_log_t`。raw log 默认关闭，只用于排障和协议分析，不用于前端恢复、不用于 WebSocket 推送，也不用于 assistant 历史消息拼接；MQ 或 raw log 写库失败不会影响 run 主链路。
 集群部署时，取消正确性依赖 Redis cancel flag 和 openGauss run 状态；实例故障治理依赖 openGauss execution 条件抢占和 fencing token。JVM 内 subscription registry 只用于命中本机执行流时快速释放资源，不作为跨实例事实源。
@@ -145,7 +145,7 @@ Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPubli
 
 ## 消息树与只读分支
 
-`fin_ex_chat_message_t.parent_message_id` 形成会话内消息树，`node_order/tree_depth/sibling_index` 用于稳定排序和版本切换。普通继续提问会在当前 leaf 后追加 `user -> assistant`；编辑历史问题会在原 user 的父节点下创建新的 user sibling；重新生成回答会在同一个 user 下创建新的 assistant sibling。只有 `run.completed` 后才保存完整 assistant 历史消息，stop/failed 的半截输出只保存在事件事实源中。
+`fin_ex_chat_message_t.parent_message_id` 形成会话内消息树，`node_order/tree_depth/sibling_index` 用于稳定排序和版本切换。普通继续提问会在当前 leaf 后追加 `user -> assistant`；编辑历史问题会在原 user 的父节点下创建新的 user sibling；重新生成回答会在同一个 user 下创建新的 assistant sibling。`run.completed` 后保存完整 assistant 历史消息；用户主动 stop 且已经有正文时保存 partial assistant；`run.failed`、watchdog 故障或只有 runtime 过程事件时不保存空 assistant。
 
 历史消息接口分两层：`GET /api/v1/ex/chat/sessions/{sessionId}/messages` 仍返回当前 active path；新增 `GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` 返回 GPT-like `mapping/currentLeafMessageId/rootMessageIds`，用于复杂版本树和联调排障。tree 视图只包含业务可见的 user/assistant 消息，不暴露 hidden system、raw log 或下游工具原始节点。
 
@@ -162,7 +162,6 @@ Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPubli
 - `fin_ex_chat_run_execution_t`
 - `fin_ex_chat_event_t`
 - `fin_ex_runtime_raw_stream_log_t`：保存 Relay normalizer 之前的原始流响应片段，由 raw log MQ 消费端异步写入，仅用于排障。
-- `fin_ex_chat_read_cursor_t`
 - `fin_ex_uploaded_document_t`
 - `fin_ex_message_feedback_t`：保存当前用户对 assistant 消息的点赞/点踩状态；`status=CANCELLED` 表示已取消当前反馈。
 - `fin_ex_runtime_binding_t`
@@ -175,7 +174,6 @@ Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPubli
 - Active run：`fin_ex:{env}:chat_run:active:{tenantId}:{userId}:{sessionId}`
 - Cancel flag：`fin_ex:{env}:chat_run:cancel:{runId}`
 - Recover lock：`fin_ex:{env}:chat_run:recover_lock:{runId}`
-- Read cursor：`fin_ex:{env}:chat_read_cursor:{tenantId}:{userId}:{sessionId}`
 - WebSocket run topic：`fin_ex:{env}:chat_stream:{streamTopicId}`
 - 短期消息：`fin_ex:{env}:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
 
@@ -304,9 +302,9 @@ Cookie 透传是 adapter 级能力：`relay-stream-http`、显式技能 legacy A
 的 HTTP 文档 provider upload 会把入口 Cookie 放入下游 HTTP 请求头。`AgentRuntimeRequest.forwardHeaders`、
 `LegacySkillAgentRequest.forwardHeaders`、`DocumentUploadCommand.forwardHeaders` 与 cancel 请求中的转发头均被 JSON 忽略，避免 Cookie 进入下游请求体、multipart form 或文档元数据。
 
-Relay Runtime 请求与响应均经过 adapter 防腐层：应用层使用 `AgentRuntimeRequest`，但下游请求体会映射为 Relay 专用 wire DTO，只保留 `runId/sessionId/runtimeSessionId/query/attachments/metadata` 等必要字段；下游 plain text、JSON chunk 或 SSE-like `data:` chunk 可选进入 raw log MQ 旁路，再归一化为 ChatService 标准 `ChatEvent`。前端只消费 `message.delta.payload.delta`、`message.snapshot.payload.content`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.event`、`message.completed`、`run.failed` 等稳定事件，不需要理解 Relay 原始响应格式。
+Relay Runtime 请求与响应均经过 adapter 防腐层：应用层使用 `AgentRuntimeRequest`，但下游请求体会映射为 Relay 专用 wire DTO，只保留 `runId/sessionId/runtimeSessionId/query/attachments/metadata` 等必要字段；下游 plain text、JSON chunk 或 SSE-like `data:` chunk 可选进入 raw log MQ 旁路，再归一化为 ChatService 标准 `ChatEvent`。前端通过 `ConversationTurnStreamDto.payload.encodedItem.data` 消费 `message.delta.payload.delta`、`message.snapshot.payload.content`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.reference`、`runtime.event`、`message.completed`、`run.failed` 等稳定事件，不需要理解 Relay 原始响应格式。
 
-Relay 响应映射的核心规则是：`type=agent,is_streaming=true` 且包含 `content/context` 时映射为 `message.delta`，用于流式草稿追加；`type=agent,is_streaming=false` 映射为 `message.snapshot`，用于最终正文替换和历史消息保存；纯文本 `steam-complete`、`stream-complete`、`[DONE]` 等终态映射为 `message.completed`；`relay-progress`、`project_home`、`available-modes`、`agent-call`、`thinking-operation-*`、`tool_call_streaming` 等运行过程分别映射为对应 `runtime.*` 事件，并在 run 完成后保存到 `fin_ex_chat_message_part_t`，供历史消息回显；未知合法 JSON object 才进入脱敏限长后的 `runtime.event.payload.sourcePayload`。Relay 原始 `type` 只进入 payload 的 `sourceType` 或 raw log，不能作为 ChatService 顶层 `event_type`。
+Relay 响应映射的核心规则是：`type=agent,is_streaming=true` 且包含 `content/context` 时映射为 `message.delta`，用于流式草稿追加；`type=agent,is_streaming=false` 映射为 `message.snapshot`，用于最终正文替换和历史消息保存；纯文本 `steam-complete`、`stream-complete`、`[DONE]` 等终态映射为 `message.completed`；`relay-progress`、`project_home`、`available-modes`、`agent-call`、`thinking-operation-*`、`tool_call_streaming`、引用来源类事件等运行过程分别映射为对应 `runtime.*` 事件，并在 run 完成后保存到 `fin_ex_chat_message_part_t`，供历史消息回显；未知合法 JSON object 才进入脱敏限长后的 `runtime.event.payload.sourcePayload`。Relay 原始 `type` 只进入 payload 的 `sourceType` 或 raw log，不能作为 ChatService 顶层 `event_type`。
 
 ## 上线版本边界
 
@@ -340,7 +338,7 @@ export FINANCEEX_REDIS_CLUSTER_MAX_REDIRECTS=3
 ```
 
 切到 cluster 后，业务代码仍然只使用 `StringRedisTemplate`。openGauss 仍是事实源；Redis Cluster
-只负责热缓存、取消标记、read cursor 加速和 WebSocket 跨实例实时 fanout。
+只负责热缓存、取消标记、恢复锁优化和 WebSocket 跨实例实时 fanout。
 
 ```bash
 mvn spring-boot:run

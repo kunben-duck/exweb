@@ -5,7 +5,6 @@ package com.huawei.finance.front.one.interfaces.chat.dto;
  *
  * @param sessionId 前端聊天会话标识。
  * @param latestSeq 当前已持久化的最大事件序号。
- * @param readCursorSeq 当前用户在该会话中已经确认消费的最大事件序号。
  * @param activeRunId 当前仍在运行或取消中的 run 标识。
  * @param activeRunStatus 当前 active run 状态。
  * @param activeStreamTopicId 当前 active run 对应的 WebSocket topic。
@@ -16,7 +15,6 @@ package com.huawei.finance.front.one.interfaces.chat.dto;
 public record ChatStreamStatusDto(
         String sessionId,
         long latestSeq,
-        long readCursorSeq,
         String activeRunId,
         String activeRunStatus,
         String activeStreamTopicId,

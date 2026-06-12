@@ -6,14 +6,15 @@ import java.util.Map;
 /**
  * WebSocket 输出 envelope。
  *
- * <p>WebSocket 外层只表达连接控制、topic 和 offset；真正的聊天事件放在 {@code payload}
- * 中，仍复用稳定的 {@link ChatEventDto}。</p>
+ * <p>WebSocket 外层只表达连接控制、topic 和 offset；本轮回答的传输结构放在 {@code payload}
+ * 中。真实 ChatService 标准事件位于 {@code payload.payload.encodedItem.data}，heartbeat/done 则只表达
+ * turn stream 连接状态，不对应持久化事件。</p>
  *
  * @param id 客户端命令 ID，reply/error 会原样返回；服务端主动 message 可为空。
  * @param type envelope 类型：reply、message、error。
  * @param topicId run 级 stream topic。
- * @param offset 当前事件的 openGauss seq 字符串。
- * @param payload 聊天事件 DTO，仅 message 使用。
+ * @param offset 当前 stream-item 的 openGauss seq 字符串；heartbeat/done 不推进 offset。
+ * @param payload conversation turn stream 片段，仅 message 使用。
  * @param reply 控制命令响应，仅 reply 使用。
  * @param code 错误码，仅 error 使用。
  * @param message 错误说明，仅 error 使用。
@@ -24,7 +25,7 @@ public record ChatWebSocketEnvelopeDto(
         String type,
         String topicId,
         String offset,
-        ChatEventDto payload,
+        ConversationTurnStreamDto payload,
         Map<String, Object> reply,
         String code,
         String message
@@ -33,8 +34,7 @@ public record ChatWebSocketEnvelopeDto(
         return new ChatWebSocketEnvelopeDto(id, "reply", null, null, null, reply, null, null);
     }
 
-    public static ChatWebSocketEnvelopeDto message(String topicId, ChatEventDto payload) {
-        String offset = payload == null ? null : String.valueOf(payload.sequence());
+    public static ChatWebSocketEnvelopeDto message(String topicId, ConversationTurnStreamDto payload, String offset) {
         return new ChatWebSocketEnvelopeDto(null, "message", topicId, offset, payload, null, null, null);
     }
 

@@ -223,19 +223,6 @@ CREATE INDEX IF NOT EXISTS idx_fin_ex_runtime_raw_stream_log_run_chunk
 CREATE INDEX IF NOT EXISTS idx_fin_ex_runtime_raw_stream_log_created_at
     ON fin_ex_runtime_raw_stream_log_t(created_at);
 
-CREATE TABLE IF NOT EXISTS fin_ex_chat_read_cursor_t (
-    id VARCHAR(64) PRIMARY KEY,
-    tenant_id VARCHAR(64) NOT NULL,
-    user_id VARCHAR(64) NOT NULL,
-    session_id VARCHAR(64) NOT NULL,
-    last_consumed_seq BIGINT NOT NULL DEFAULT 0,
-    updated_at TIMESTAMPTZ NOT NULL,
-    UNIQUE(tenant_id, user_id, session_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_read_cursor_owner_session
-    ON fin_ex_chat_read_cursor_t(tenant_id, user_id, session_id);
-
 CREATE TABLE IF NOT EXISTS fin_ex_uploaded_document_t (
     id VARCHAR(64) PRIMARY KEY,
     tenant_id VARCHAR(64) NOT NULL,
@@ -440,14 +427,6 @@ COMMENT ON COLUMN fin_ex_chat_event_t.seq IS '事件恢复游标序号，由 ope
 COMMENT ON COLUMN fin_ex_chat_event_t.event_type IS 'ChatService 标准事件类型，例如 run.started、message.delta、message.snapshot、message.completed、runtime.progress、runtime.metadata、runtime.agent、runtime.thinking、runtime.tool、runtime.event、run.completed、run.failed、run.cancelled。';
 COMMENT ON COLUMN fin_ex_chat_event_t.payload_json IS '事件载荷 JSON，保存前端可消费的 delta、状态和诊断字段。';
 COMMENT ON COLUMN fin_ex_chat_event_t.created_at IS '事件创建并落库时间。';
-
-COMMENT ON TABLE fin_ex_chat_read_cursor_t IS '聊天事件消费游标表，保存用户在会话中已经处理完成的最大事件 seq，用于展示消费进度、诊断和非 active 场景减少重复补发。';
-COMMENT ON COLUMN fin_ex_chat_read_cursor_t.id IS '游标记录主键，业务生成的 cursorId。';
-COMMENT ON COLUMN fin_ex_chat_read_cursor_t.tenant_id IS '租户标识，来自服务端身份上下文。';
-COMMENT ON COLUMN fin_ex_chat_read_cursor_t.user_id IS '用户标识，来自服务端身份上下文。';
-COMMENT ON COLUMN fin_ex_chat_read_cursor_t.session_id IS '游标所属聊天会话 ID。';
-COMMENT ON COLUMN fin_ex_chat_read_cursor_t.last_consumed_seq IS '当前用户已确认消费的最大事件序号；写入必须单调递增。';
-COMMENT ON COLUMN fin_ex_chat_read_cursor_t.updated_at IS '游标最后更新时间。';
 
 COMMENT ON TABLE fin_ex_uploaded_document_t IS '用户文档库表，保存统一 documentId、目标 provider 位置、处理状态和可引用元数据。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.id IS '文档主键，业务生成的 documentId。';

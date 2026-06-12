@@ -6,8 +6,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
@@ -111,31 +111,6 @@ public class LocalWebSocketConnectionRegistry {
      */
     public void unsubscribe(String connectionId, String topicId) {
         get(connectionId).ifPresent(state -> state.unsubscribe(topicId));
-    }
-
-    /**
-     * 更新客户端确认消费到的序号。
-     *
-     * @param connectionId WebSocket 物理连接 ID。
-     * @param topicId run 级 stream topic。
-     * @param seq 客户端已经处理完成的最大事件序号。
-     */
-    public boolean ack(String connectionId, String topicId, long seq) {
-        return get(connectionId).map(state -> state.ack(topicId, seq)).orElse(false);
-    }
-
-    /**
-     * 获取当前连接上所有 topic 的最后 ack 序号快照。
-     *
-     * @param connectionId WebSocket 物理连接 ID。
-     * @return topicId 到最后 ack seq 的映射；连接不存在时为空映射。
-     */
-    public Map<String, Long> acknowledgedSubscriptions(String connectionId) {
-        return get(connectionId).map(ConnectionState::acknowledgedSubscriptions).orElse(Map.of());
-    }
-
-    public Optional<Long> lastAckSeq(String connectionId, String topicId) {
-        return get(connectionId).flatMap(state -> state.lastAckSeq(topicId));
     }
 
     /**
@@ -259,27 +234,6 @@ public class LocalWebSocketConnectionRegistry {
             touch();
         }
 
-        private boolean ack(String topicId, long seq) {
-            SubscriptionState subscription = subscriptions.get(topicId);
-            if (subscription != null) {
-                subscription.ack(seq);
-                touch();
-                return true;
-            }
-            return false;
-        }
-
-        private Map<String, Long> acknowledgedSubscriptions() {
-            Map<String, Long> snapshot = new LinkedHashMap<>();
-            subscriptions.forEach((topicId, subscription) -> snapshot.put(topicId, subscription.lastAckSeq()));
-            return Map.copyOf(snapshot);
-        }
-
-        private Optional<Long> lastAckSeq(String topicId) {
-            SubscriptionState subscription = subscriptions.get(topicId);
-            return subscription == null ? Optional.empty() : Optional.of(subscription.lastAckSeq());
-        }
-
         private DeliveryDecision markDelivered(String topicId, long seq) {
             SubscriptionState subscription = subscriptions.get(topicId);
             if (subscription == null) {
@@ -308,38 +262,28 @@ public class LocalWebSocketConnectionRegistry {
         private final String sessionId;
         private final Disposable disposable;
         private final Map<Long, Boolean> deliveredSeqs;
-        private volatile long lastAckSeq;
+        private final long resumeAfterSeq;
         private volatile long highestDeliveredSeq;
 
         private SubscriptionState(String topicId, String sessionId, long afterSeq, Disposable disposable, int deliveredSeqWindow) {
             this.topicId = topicId;
             this.sessionId = sessionId;
-            this.lastAckSeq = afterSeq;
+            this.resumeAfterSeq = afterSeq;
             this.highestDeliveredSeq = afterSeq;
             this.disposable = disposable;
             this.deliveredSeqs = new DeliveredSeqMap(deliveredSeqWindow);
         }
 
-        private void ack(long seq) {
-            if (seq > lastAckSeq) {
-                lastAckSeq = seq;
-            }
-        }
-
-        private long lastAckSeq() {
-            return lastAckSeq;
-        }
-
         private synchronized DeliveryDecision markDelivered(long seq) {
-            if (seq <= lastAckSeq || deliveredSeqs.containsKey(seq)) {
-                return DeliveryDecision.duplicate(lastAckSeq, seq);
+            if (seq <= resumeAfterSeq || deliveredSeqs.containsKey(seq)) {
+                return DeliveryDecision.duplicate(resumeAfterSeq, seq);
             }
             if (seq < highestDeliveredSeq) {
-                return DeliveryDecision.recoverRequired(lastAckSeq, seq);
+                return DeliveryDecision.recoverRequired(resumeAfterSeq, seq);
             }
             deliveredSeqs.put(seq, Boolean.TRUE);
             highestDeliveredSeq = Math.max(highestDeliveredSeq, seq);
-            return DeliveryDecision.deliver(lastAckSeq, seq);
+            return DeliveryDecision.deliver(resumeAfterSeq, seq);
         }
 
         private void dispose() {
@@ -350,7 +294,7 @@ public class LocalWebSocketConnectionRegistry {
 
         @Override
         public String toString() {
-            return topicId + "@" + highestDeliveredSeq + "/" + lastAckSeq;
+            return topicId + "@" + highestDeliveredSeq + "/" + resumeAfterSeq;
         }
 
         private static final class DeliveredSeqMap extends LinkedHashMap<Long, Boolean> {
@@ -371,20 +315,20 @@ public class LocalWebSocketConnectionRegistry {
      * 单条事件在连接侧的投递决策。
      *
      * @param action 投递动作。
-     * @param lastAckSeq 客户端最近确认消费到的序号。
+     * @param resumeAfterSeq 当前订阅声明的恢复起点。
      * @param actualSeq 当前事件序号。
      */
-    public record DeliveryDecision(Action action, long lastAckSeq, long actualSeq) {
-        public static DeliveryDecision deliver(long lastAckSeq, long actualSeq) {
-            return new DeliveryDecision(Action.DELIVER, lastAckSeq, actualSeq);
+    public record DeliveryDecision(Action action, long resumeAfterSeq, long actualSeq) {
+        public static DeliveryDecision deliver(long resumeAfterSeq, long actualSeq) {
+            return new DeliveryDecision(Action.DELIVER, resumeAfterSeq, actualSeq);
         }
 
-        public static DeliveryDecision duplicate(long lastAckSeq, long actualSeq) {
-            return new DeliveryDecision(Action.DUPLICATE, lastAckSeq, actualSeq);
+        public static DeliveryDecision duplicate(long resumeAfterSeq, long actualSeq) {
+            return new DeliveryDecision(Action.DUPLICATE, resumeAfterSeq, actualSeq);
         }
 
-        public static DeliveryDecision recoverRequired(long lastAckSeq, long actualSeq) {
-            return new DeliveryDecision(Action.RECOVER_REQUIRED, lastAckSeq, actualSeq);
+        public static DeliveryDecision recoverRequired(long resumeAfterSeq, long actualSeq) {
+            return new DeliveryDecision(Action.RECOVER_REQUIRED, resumeAfterSeq, actualSeq);
         }
 
         public static DeliveryDecision notSubscribed() {

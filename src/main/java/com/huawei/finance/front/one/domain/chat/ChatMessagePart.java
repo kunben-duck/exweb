@@ -73,6 +73,7 @@ public record ChatMessagePart(
             case "AGENT" -> "Agent 调用";
             case "THINKING" -> "思考过程";
             case "TOOL" -> "工具调用";
+            case "REFERENCE" -> "引用来源";
             default -> "运行事件";
         };
     }
@@ -101,6 +102,7 @@ public record ChatMessagePart(
         return switch (partType) {
             case "ANSWER" -> "COMPLETED";
             case "PROGRESS", "TOOL" -> "STREAMING";
+            case "REFERENCE" -> "INFO";
             default -> "INFO";
         };
     }
@@ -113,6 +115,7 @@ public record ChatMessagePart(
             case "AGENT" -> "agent";
             case "THINKING" -> "thinking";
             case "TOOL" -> "tool";
+            case "REFERENCE" -> "reference";
             default -> "runtime";
         };
     }
@@ -122,6 +125,7 @@ public record ChatMessagePart(
             case "ANSWER" -> "hidden";
             case "PROGRESS" -> "inline";
             case "RUNTIME_EVENT" -> "debug";
+            case "REFERENCE" -> "collapsible";
             default -> "collapsible";
         };
     }

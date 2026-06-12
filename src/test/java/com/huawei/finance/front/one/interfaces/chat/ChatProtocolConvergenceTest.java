@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.interfaces.chat;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookieProperties;
+import com.huawei.finance.front.one.application.config.ChatStreamProperties;
 import com.huawei.finance.front.one.application.facade.FinanceChatFacade;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.service.chat.ChatStreamApplicationService;
@@ -15,6 +16,7 @@ import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
 import com.huawei.finance.front.one.domain.chat.ChatRunStopResult;
 import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatAttachmentDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.ChatEventDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatRunRequest;
 import java.time.Instant;
 import java.util.Arrays;
@@ -70,8 +72,9 @@ class ChatProtocolConvergenceTest {
                 new PermissionChecker(),
                 new ChatRequestTranslator(),
                 new ChatEventTranslator(),
+                new ChatTurnStreamTranslator(),
                 new RuntimeForwardHeaderExtractor(new AgentRuntimeForwardCookieProperties()),
-                new com.huawei.finance.front.one.application.config.MvcSseProperties()
+                new ChatStreamProperties()
         );
         CreateChatRunRequest request = new CreateChatRunRequest("cmd1", "session1", null, "你好", List.of(), Map.of());
 
@@ -106,6 +109,25 @@ class ChatProtocolConvergenceTest {
                 .contains("/sessions/{sessionId}/events/resume", "/runs/{runId}/events/resume");
         assertThat(getMappings)
                 .noneMatch(path -> path.contains("/events/" + "sse"));
+    }
+
+    @Test
+    void turnStreamWrapsChatEventWithoutChangingEventContract() {
+        ChatTurnStreamTranslator translator = new ChatTurnStreamTranslator();
+        ChatEventDto event = new ChatEventDto("run1", "session1", 12L, "message.delta",
+                Map.of("delta", "hi"));
+
+        var streamItem = translator.streamItem(event);
+        var heartbeat = translator.heartbeat("session1", "run1", 12L);
+        var done = translator.done("session1", "run1", 13L, "run.completed");
+
+        assertThat(streamItem.type()).isEqualTo("conversation-turn-stream");
+        assertThat(streamItem.payload().type()).isEqualTo("stream-item");
+        assertThat(streamItem.payload().encodedItem().data()).isEqualTo(event);
+        assertThat(heartbeat.payload().type()).isEqualTo("heartbeat");
+        assertThat(heartbeat.payload().encodedItem()).isNull();
+        assertThat(done.payload().type()).isEqualTo("done");
+        assertThat(done.payload().terminalEventType()).isEqualTo("run.completed");
     }
 
     @Test

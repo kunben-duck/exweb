@@ -416,7 +416,7 @@ class SessionApplicationServiceTest {
         private final boolean activeRunExists;
 
         GuardChatRunService(boolean activeRunExists) {
-            super(null, null, null, null, new PermissionChecker(), null);
+            super(null, null, null, new PermissionChecker(), null);
             this.activeRunExists = activeRunExists;
         }
 

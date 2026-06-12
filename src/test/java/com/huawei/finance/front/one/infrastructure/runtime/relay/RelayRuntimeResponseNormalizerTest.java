@@ -153,6 +153,21 @@ class RelayRuntimeResponseNormalizerTest {
     }
 
     @Test
+    void relayReferenceFramesBecomeRuntimeReferenceEvents() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1",
+                "{\"type\":\"url_moderation\",\"url_moderation_result\":{"
+                        + "\"full_url\":\"https://example.com/report\",\"is_safe\":true,\"title\":\"Report\"}}");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("runtime.reference");
+        assertThat(events.getFirst().payload())
+                .containsEntry("sourceType", "url_moderation")
+                .containsEntry("referenceType", "url_moderation")
+                .containsEntry("url", "https://example.com/report")
+                .containsEntry("safe", true);
+    }
+
+    @Test
     void unknownJsonStillFallsBackToRuntimeEventWithRedaction() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1",
                 "{\"type\":\"custom-event\",\"authorization\":\"Bearer secret\"}");

@@ -53,8 +53,6 @@ flowchart TD
     Persist --> Publish["发布到 run stream topic"]
     Publish --> FrontWS["前端 WebSocket 实时订阅"]
     Persist --> ResumeEvents["Event Resume 按 afterSeq 恢复：session 有限补发 / run tail 到终态"]
-    FrontWS --> Ack["前端 ack(seq)"]
-    Ack --> ReadCursor["刷新 fin_ex_chat_read_cursor_t / Redis"]
     Publish --> RuntimeObserve["观察 runtimeSessionId"]
     RuntimeObserve --> RuntimeCache["刷新 RuntimeBinding Redis 热缓存"]
 ```
@@ -78,7 +76,6 @@ sequenceDiagram
     participant RelayHttp as "RelayStreamHttpRuntimeAdapter"
     participant RelayAgent as "RelayAgent Service"
     participant Stream as "ChatStreamApplicationService"
-    participant Cursor as "ChatReadCursorStore"
     participant Redis as "Redis"
     participant DB as "openGauss"
     participant EventStore as "ChatEventStore"
@@ -158,10 +155,6 @@ sequenceDiagram
         EventStore-->>SuperAgent: "返回持久化 seq"
         SuperAgent->>Stream: "publish(run stream topic)"
         Stream-->>Frontend: "WebSocket envelope(message)"
-        Frontend->>Stream: "ack(topicId, seq)"
-        Stream->>Cursor: "刷新 read cursor"
-        Cursor->>Redis: "写入热游标"
-        Cursor->>DB: "节流/关闭时 flush"
         SuperAgent->>Binding: "observeEvent(runtimeSessionId)"
     end
 
@@ -224,9 +217,6 @@ sequenceDiagram
         EX->>DB: "写入 fin_ex_chat_event_t，生成 seq"
         EX->>Redis: "publish fin_ex:{env}:chat_stream:{topicId}"
         EX-->>Frontend: "WebSocket message 或 Event Resume event"
-        Frontend->>EX: "WebSocket ack(seq)"
-        EX->>Redis: "刷新 read cursor 热缓存"
-        EX->>DB: "节流写入 fin_ex_chat_read_cursor_t"
     end
 
     opt "停止回答"
@@ -344,7 +334,6 @@ sequenceDiagram
     participant ChatWS as "Chat WebSocket"
     participant SuperAgent as "FinanceEXChatService"
     participant EventStore as "ChatEventStore"
-    participant CursorStore as "ChatReadCursorStore"
     participant RunStore as "ChatRunStore"
     participant Live as "LocalChatEventStreamRegistry"
     participant RedisBus as "Redis Pub/Sub"
@@ -382,15 +371,14 @@ sequenceDiagram
         ChatWS->>RedisBus: "订阅远端 run topic"
         Live-->>ChatWS: "ChatEvent"
         ChatWS-->>Frontend: "WebSocket 实时事件"
-        Frontend->>ChatWS: "ack(topicId, seq)"
-        ChatWS->>CursorStore: "Redis 每次刷新 read cursor"
-        ChatWS->>CursorStore: "openGauss 节流写入，连接关闭强制 flush"
     end
 
     opt "用户点击停止"
         Frontend->>ChatAPI: "POST /chat/runs/{runId}/stop"
         ChatAPI->>RunStore: "RUNNING -> CANCELLING + cancel flag"
         ChatAPI->>Runtime: "best-effort cancel"
+        ChatAPI->>EventStore: "读取本 run 已落库 message.delta/snapshot"
+        ChatAPI->>Session: "已有正文时保存 partial assistant message"
         ChatAPI->>EventStore: "append(run.cancelled)"
         EventStore->>DB: "持久化取消终态 seq"
         ChatAPI->>RunStore: "CANCELLED + evict active run"
@@ -400,8 +388,7 @@ sequenceDiagram
 
     Frontend--xChatAPI: "浏览器刷新/断线/换电脑"
     Frontend->>ChatAPI: "GET stream-status"
-    ChatAPI->>CursorStore: "读取 readCursorSeq"
-    ChatAPI-->>Frontend: "activeRunId/topic/firstSeq/readCursorSeq"
+    ChatAPI-->>Frontend: "activeRunId/topic/firstSeq/latestSeq"
     Frontend->>ChatAPI: "Run Event Resume afterSeq=activeRunFirstSeq-1"
     ChatAPI->>DB: "按 owner + runId 补发缺失事件"
     ChatAPI->>Live: "接入 run live topic"
@@ -416,15 +403,14 @@ sequenceDiagram
 - 事件写入必须校验 `runId/sessionId/tenantId/userId` 一致；事件补发和 `latestSeq` 查询也必须携带 `tenantId/userId/sessionId/runId` owner 条件，不能按裸 runId 或 sessionId 查询。
 - `fin_ex_chat_run_t` 是 run 生命周期事实源；Redis 只保存 active run 和 cancel flag。
 - `fin_ex_chat_run_execution_t` 是 run 执行控制面事实源；实例 ID、心跳、租约、恢复状态和 `fencing_token` 都在该表中，避免把运维执行信息混入业务 run 表。
-- `fin_ex_chat_read_cursor_t` 是用户消费游标事实源；WebSocket ack 会刷新 Redis 热游标并节流写入 openGauss，用于展示和诊断用户消费进度。
 - 后台 run 不依赖创建 run 的原始浏览器连接，刷新页面后用 `afterSeq` 恢复。
 - 前端 WebSocket 订阅消息格式：`{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}`。
-- 前端 WebSocket 不触发 `AgentRuntime.query`，只补发和订阅 ChatEvent；它不接受聊天请求，仅支持 `connect`、`presence`、`subscribe`、`unsubscribe`、`ack` 控制消息。
+- 前端 WebSocket 不触发 `AgentRuntime.query`，只补发和订阅 ChatEvent；它不接受聊天请求，仅支持 `connect`、`presence`、`subscribe`、`unsubscribe` 控制消息。
 - 同一 WebSocket 连接允许同时订阅多个 session 的多个 run topic；协议层不会因切换会话自动释放旧 topic。订阅前按用户校验 `topicId -> run` 归属，live 流和 WebSocket envelope 投递前再按 `topicId + runId + sessionId` 校验，避免跨会话实时消息串线。
 - stop 是 REST 生命周期接口，不是 WebSocket command；重复 stop 幂等返回当前 run 状态。
 - 重新生成回答不再使用 run retry 接口，而是通过 `POST /chat/runs` 携带 `runMode=REGENERATE_ASSISTANT` 和 `regeneratedMessageId`，在同一 user 节点下生成新的 assistant sibling。
 - 会话 state 接口聚合会话元数据、最近历史消息和 `activeStreamTopicId`，用于前端切换会话后的恢复判断。
-- 新页签、新浏览器或跨电脑恢复 active run 时，前端应使用 `activeRunFirstSeq - 1` 打开 run 级事件恢复；该接口会先按 openGauss 事实源补发历史事件，再接入 live topic 持续输出到 run 终态，不能把 `latestSeq` 或 `readCursorSeq` 当作当前渲染实例已消费游标。
+- 新页签、新浏览器或跨电脑恢复 active run 时，前端应使用 `activeRunFirstSeq - 1` 打开 run 级事件恢复；该接口会先按 openGauss 事实源补发历史事件，再接入 live topic 持续输出到 run 终态，不能把 `latestSeq` 当作当前渲染实例已消费游标。
 
 ### Run 控制面与故障恢复
 
@@ -489,7 +475,7 @@ watchdog 是分层设计：`ChatRunWatchdogScheduler` 只负责按配置延迟�
 - Servlet/MVC 应用：`ChatServletWebSocketConfig + ChatServletWebSocketHandler` 注册同一路径。
 
 两种 handler 都委托 `ChatWebSocketProtocolService` 执行 connect、presence、subscribe、
-unsubscribe、ack 和 recover-required 逻辑，避免协议实现分叉。企业框架自带
+unsubscribe 和 recover-required 逻辑，避免协议实现分叉。企业框架自带
 `spring-boot-starter-web` 时，Spring Boot 会默认选择 Servlet/MVC 启动，此时应使用
 `server.servlet.context-path` 配置上下文根；纯 WebFlux 启动时才使用 `spring.webflux.base-path`。
 Servlet/MVC WebSocket 会在 `HandshakeInterceptor.beforeHandshake` 阶段调用
@@ -499,9 +485,12 @@ Servlet/MVC WebSocket 会在 `HandshakeInterceptor.beforeHandshake` 阶段调用
 MVC/Servlet 生产模式增加了长连接治理层：`financeex.websocket.allowed-origin-patterns`
 限制握手来源，`max-connections-per-user`、`max-subscriptions-per-connection`、
 `max-subscribers-per-topic`、`outbound-queue-size`、`live-buffer-capacity` 和 `idle-timeout`
-限制本机连接资源。run 级事件恢复通过 `financeex.mvc.sse.heartbeat-interval` 发送 heartbeat，
-配合 `spring.mvc.async.request-timeout` 与 Tomcat 连接配置避免空闲断流。WebSocket 实时投递
+限制本机连接资源。WebSocket 与 run 级事件恢复通过 `financeex.chat-stream.turn-heartbeat-interval`
+发送 turn stream `heartbeat`，配合 `spring.mvc.async.request-timeout` 与 Tomcat 连接配置避免空闲断流。WebSocket 实时投递
 出现慢客户端、缓冲溢出或乱序时返回 `RECOVER_REQUIRED`，可靠恢复仍走 openGauss event + Event Resume。
+前端接收的 `message.payload` / SSE `data` 是 `conversation-turn-stream`，真实 ChatEvent 位于
+`stream-item.encodedItem.data`；`heartbeat` 和 `done` 只是传输层状态，不写入 `fin_ex_chat_event_t`，
+也不推进 `afterSeq`。
 
 文档上传同样按启动模式做接口层适配：Servlet/MVC 注册 `MvcDocumentUploadController`
 并接收 `MultipartFile`，纯 WebFlux 注册 `ReactiveDocumentUploadController` 并接收
@@ -525,7 +514,6 @@ flowchart TB
     subgraph Application["application"]
         ChatService["FinanceEXChatService"]
         ChatRun["ChatRunApplicationService"]
-        ChatCursor["ChatReadCursorApplicationService"]
         RouteSignal["RouteSignalApplicationService"]
         RuntimeBinding["RuntimeBindingApplicationService"]
         SubAgentExecutor["SubAgentExecutor"]
@@ -548,7 +536,6 @@ flowchart TB
     subgraph Infrastructure["infrastructure"]
         Redis["Redis RuntimeBinding / ChatRun / Memory Cache"]
         OpenGauss["openGauss + MyBatis"]
-        ReadCursorRedis["Redis ChatReadCursor Cache"]
         LiveBus["Redis Pub/Sub ChatLiveEventBus"]
         UseCaseHttp["UseCase HTTP Adapter"]
         IntentHttp["Intent HTTP Adapter"]
@@ -656,6 +643,7 @@ stop 语义：
 
 - 集群事实源优先：stop 先写 Redis cancel flag 与 openGauss `CANCELLING` 状态，再发布 `run.cancelled`。
 - JVM subscription registry 只是本机资源释放加速器；即使 stop 请求与输出流落在不同实例，输出实例也必须在追加事件前读取 Redis cancel flag。非终态事件不再逐条回源 run 表，最终写入正确性由 openGauss guarded insert 同时校验 run 状态、session 归属和 execution fencing。
+- 用户主动 stop 且已有 assistant 正文成功落库时，会从事件事实源重建并保存 partial assistant 历史消息，消息 metadata 标记 `partial=true`、`finishReason=USER_STOP`；只有 runtime 过程事件但无正文时不创建空 assistant。
 - 下游尽力取消：Relay Runtime 和 SubAgent cancel 失败只记录日志，不影响前端收到取消终态。
 - stop 不取消 RuntimeBinding；下一轮仍可续接 Runtime，除非请求 metadata 使用 `forceNewTask=true`。
 
@@ -668,7 +656,7 @@ stop 语义：
 - AgentRuntime provider：`financeex.agent-runtime.provider`，表示 Runtime 类型，当前默认 `relay`
 - Relay HTTP Streamable adapter：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`、`financeex.agent-runtime.stop-path`
 - 下游 Cookie 透传：`financeex.agent-runtime.forward-cookie.enabled`、`max-length`、`allowed-adapters` 控制 run/stop 到 Relay Runtime 的 Cookie 透传；显式技能 legacy Agent chat/cancel 也使用入口 Cookie 内存快照。文档 provider 上传另由 `financeex.document.forward-cookie-max-length` 与 `financeex.documents.providers.entries.{provider}.forward-cookie` 控制，默认只有 `legacy-agent` 开启 upload Cookie 透传。
-- 流式 delta 合并：`financeex.chat-stream.delta-coalesce-enabled`、`delta-coalesce-window`、`delta-coalesce-max-chars`。默认开启，只把连续 `message.delta` 合并为标准 delta event，降低事件表和实时 fanout 写放大；`message.snapshot` 和 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.event` 等非正文事件不会被合并。
+- 流式 delta 合并：`financeex.chat-stream.delta-coalesce-enabled`、`delta-coalesce-window`、`delta-coalesce-max-chars`。默认开启，只把连续 `message.delta` 合并为标准 delta event，降低事件表和实时 fanout 写放大；`message.snapshot` 和 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.event` 等非正文事件不会被合并。`financeex.chat-stream.turn-heartbeat-interval` 只控制传输层 heartbeat，不影响事件表。
 - Runtime 原始流日志：`financeex.runtime-raw-log.enabled`、`transport`、`coalesce-window`、`max-chars`、`hard-max-chars`、`max-rows-per-run`、`redact-sensitive-fields`。默认关闭；后续接入企业 MQ 时通过 `RuntimeRawStreamLogPublisher` 发布 raw chunk，消费端异步合并、脱敏、分片后写入 `fin_ex_runtime_raw_stream_log_t`。该日志仅用于排障，不参与前端恢复、WebSocket 推送或 assistant 历史拼接。
 - Relay 响应映射：`financeex.agent-runtime.relay.answer-event-types`、`answer-content-fields`、`agent-context-as-answer`。默认把 Relay `type=agent,is_streaming=true` 的 `content/context` 映射为 assistant 正文增量 `message.delta`，把 `type=agent,is_streaming=false` 映射为最终回答快照 `message.snapshot`，把 `steam-complete/stream-complete/[DONE]` 映射为 `message.completed`。
 
@@ -678,7 +666,7 @@ SubAgent 当前只支持单轮 HTTP 文本流调用。当前上线版本内置�
 
 当前上线版本只保留 Relay Runtime provider，不包含其他历史 Runtime provider 分支、专用 memory 分支或专用 prompt assembler 配置。复杂任务通过 Relay Runtime adapter 执行；后续如需替换 Runtime，应新增 `AgentRuntime` provider，而不是把新协议写进主编排。
 
-AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 `AgentRuntimeRequest` 契约，当前 `relay` provider 是 Runtime 类型，下游 API 接入协议固定为 streamable HTTP。Relay adapter 内部负责请求 wire DTO 映射和响应 chunk 归一化，前端只消费 ChatService 标准 ChatEvent，不接触 Relay 原始 JSON。`message.delta` 是 assistant 正文增量；`message.snapshot` 是最终回答快照，前端 replace 草稿且历史正文优先使用它；`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool` 是过程事件，run 完成后进入 `ChatMessageDto.parts` 回显，parts 通过 `title/status/channel/displayHint/visible` 提供稳定展示语义；Relay 未知 JSON object 才以 `runtime.event` 可控透传，`sourcePayload` 会脱敏限长。不能把下游任意 `type` 直接作为 ChatService 顶层事件类型。后续如果替换 Runtime 实现，应新增一个实现 `AgentRuntime` 的 provider；后续如果只新增 Relay 下游协议，应新增 `RelayRuntimeProtocolAdapter`，避免改动 `FinanceEXChatService` 主编排。
+AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 `AgentRuntimeRequest` 契约，当前 `relay` provider 是 Runtime 类型，下游 API 接入协议固定为 streamable HTTP。Relay adapter 内部负责请求 wire DTO 映射和响应 chunk 归一化，前端只通过 turn stream 的 `encodedItem.data` 消费 ChatService 标准 ChatEvent，不接触 Relay 原始 JSON。`message.delta` 是 assistant 正文增量；`message.snapshot` 是最终回答快照，前端 replace 草稿且历史正文优先使用它；`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference` 是过程或引用事件，run 完成后进入 `ChatMessageDto.parts` 回显，parts 通过 `title/status/channel/displayHint/visible` 提供稳定展示语义；Relay 未知 JSON object 才以 `runtime.event` 可控透传，`sourcePayload` 会脱敏限长。不能把下游任意 `type` 直接作为 ChatService 顶层事件类型。后续如果替换 Runtime 实现，应新增一个实现 `AgentRuntime` 的 provider；后续如果只新增 Relay 下游协议，应新增 `RelayRuntimeProtocolAdapter`，避免改动 `FinanceEXChatService` 主编排。
 
 ## 命名规范
 
@@ -697,7 +685,6 @@ AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 
 - `fin_ex_chat_run_execution_t`
 - `fin_ex_chat_event_t`
 - `fin_ex_runtime_raw_stream_log_t`
-- `fin_ex_chat_read_cursor_t`
 - `fin_ex_uploaded_document_t`
 - `fin_ex_message_feedback_t`：当前用户对 assistant 消息的点赞/点踩状态，支持 ACTIVE/CANCELLED。
 - `fin_ex_runtime_binding_t`
@@ -710,7 +697,6 @@ Redis key 必须以 `fin_ex:{env}` 开头。`{env}` 从 `spring.profiles.active`
 - `fin_ex:{env}:chat_run:active:{tenantId}:{userId}:{sessionId}`
 - `fin_ex:{env}:chat_run:cancel:{runId}`
 - `fin_ex:{env}:chat_run:recover_lock:{runId}`
-- `fin_ex:{env}:chat_read_cursor:{tenantId}:{userId}:{sessionId}`
 - `fin_ex:{env}:chat_stream:{streamTopicId}`
 - `fin_ex:{env}:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
 

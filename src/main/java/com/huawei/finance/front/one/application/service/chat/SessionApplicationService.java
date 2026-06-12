@@ -234,8 +234,8 @@ public class SessionApplicationService implements ChatSessionFacade {
     /**
      * 保存完整 assistant 回复及其结构化过程 parts，并把会话 current leaf 移动到该回复。
      *
-     * <p>parts 在 run.completed 后写入；用户主动 stop 且已经产生 assistant 正文时，也会把
-     * 截止 stop 时已落库的正文和过程 parts 固化为历史消息。run.failed 和 watchdog 故障仍不保存
+     * <p>parts 在 run.completed 后写入；用户主动 stop 且已经产生 assistant 正文或用户可见过程
+     * parts 时，也会把截止 stop 时已落库的内容固化为历史消息。run.failed 和 watchdog 故障仍不保存
      * 半截 assistant。</p>
      */
     public ChatMessage saveAssistantMessage(String tenantId, String userId, ChatSession session, String content,

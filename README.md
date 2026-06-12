@@ -63,7 +63,7 @@ POST /chat/runs
  -> 浏览器刷新/复制页签后，使用前端配置的 Event Resume 地址按 lastSeq 补齐缺失事件
  -> 新页签、新浏览器或跨电脑续接 active run 时，从 activeRunFirstSeq - 1 打开 run 级事件恢复
  -> Run 事件恢复先补发历史事件，再持续接续 live 事件，直到本轮 run 终态
- -> 用户点击停止时调用前端配置的 stop 接口，服务端在已有正文时保存 partial assistant，并发布 run.cancelled 终态事件
+ -> 用户点击停止时调用前端配置的 stop 接口，服务端在已有正文或用户可见 parts 时保存 partial assistant，并发布 run.cancelled 终态事件
 ```
 
 当前请求体只有对话文本和可选文档附件，不暴露 IM 消息类型，也不让前端选择多套响应协议。文档不是消息类型，只是对话消息的上下文资源引用。
@@ -119,7 +119,7 @@ export FINANCEEX_DEV_USERNAME=developer
 - `runtimeSessionId`：当前 AgentRuntime provider 自己的会话 ID，由 Runtime 返回后保存在 RuntimeBinding 中，下一轮续接时带回。
 
 `runId` 不是长期任务会话；它是单轮执行 correlation id。事件表 `fin_ex_chat_event_t.run_id` 和绑定表 `fin_ex_runtime_binding_t.last_run_id` 都用它做运行轨迹和排障定位。
-run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。stop 只停止本轮回答，不删除 `RuntimeBinding`；如果用户主动 stop 前已经有 `message.delta` 或 `message.snapshot` 成功落库，ChatService 会把截至 stop 时的正文保存为 partial assistant 历史消息，并在消息 `metadata_json` 中标记 `partial=true`、`finishReason=USER_STOP`。
+run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。stop 只停止本轮回答，不删除 `RuntimeBinding`；如果用户主动 stop 前已经有 `message.delta`、`message.snapshot` 或卡片、引用、思考、工具、进度等用户可见 parts 成功落库，ChatService 会把截至 stop 时的内容保存为 partial assistant 历史消息，并在消息 `metadata_json` 中标记 `partial=true`、`finishReason=USER_STOP`。
 run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实例、心跳、租约、恢复状态和 `fencing_token`，不混入业务 run 表。后台执行流写入 run 事件时通过 openGauss guarded insert 原子校验 execution owner 与 `fencing_token`；stop、watchdog 或未来 Runtime takeover 递增 token 后，旧实例迟到 delta/completed 会被拒绝。
 连续 `message.delta` 默认按 `financeex.chat-stream.delta-coalesce-*` 合并为几十毫秒级文本片段，减少 openGauss event 表、Redis Pub/Sub 和 WebSocket 的逐 token 写放大；`message.snapshot`、`runtime.*`、turn stream `heartbeat/done` 和 run 终态不参与合并。Relay `is_streaming=false` 的最终回答会映射为 `message.snapshot`，前端用它替换当前草稿，历史消息正文也优先使用该快照。
 assistant 的思考、工具、进度、agent 调用等过程信息保存到 `fin_ex_chat_message_part_t`，并通过 `ChatMessageDto.parts` 返回。parts 会提供稳定的 `title/status/channel/displayHint/visible` 展示语义，前端不需要解析 Relay 私有 payload。
@@ -145,7 +145,7 @@ Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPubli
 
 ## 消息树与只读分支
 
-`fin_ex_chat_message_t.parent_message_id` 形成会话内消息树，`node_order/tree_depth/sibling_index` 用于稳定排序和版本切换。普通继续提问会在当前 leaf 后追加 `user -> assistant`；编辑历史问题会在原 user 的父节点下创建新的 user sibling；重新生成回答会在同一个 user 下创建新的 assistant sibling。`run.completed` 后保存完整 assistant 历史消息；用户主动 stop 且已经有正文时保存 partial assistant；`run.failed`、watchdog 故障或只有 runtime 过程事件时不保存空 assistant。
+`fin_ex_chat_message_t.parent_message_id` 形成会话内消息树，`node_order/tree_depth/sibling_index` 用于稳定排序和版本切换。普通继续提问会在当前 leaf 后追加 `user -> assistant`；编辑历史问题会在原 user 的父节点下创建新的 user sibling；重新生成回答会在同一个 user 下创建新的 assistant sibling。`run.completed` 后保存完整 assistant 历史消息；如果没有正文但存在卡片、引用、思考、工具、进度等用户可见过程 parts，也会创建空正文 assistant 作为 parts 挂载点；用户主动 stop 时同样会保存已落库正文或用户可见 parts 作为 partial assistant；`run.failed`、watchdog 故障或只有 trace/metadata 等内部事件时不保存空 assistant。
 
 历史消息接口分两层：`GET /api/v1/ex/chat/sessions/{sessionId}/messages` 仍返回当前 active path；新增 `GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` 返回 GPT-like `mapping/currentLeafMessageId/rootMessageIds`，用于复杂版本树和联调排障。tree 视图只包含业务可见的 user/assistant 消息，不暴露 hidden system、raw log 或下游工具原始节点。
 

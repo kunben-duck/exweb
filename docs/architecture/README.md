@@ -378,7 +378,7 @@ sequenceDiagram
         ChatAPI->>RunStore: "RUNNING -> CANCELLING + cancel flag"
         ChatAPI->>Runtime: "best-effort cancel"
         ChatAPI->>EventStore: "读取本 run 已落库 message.delta/snapshot"
-        ChatAPI->>Session: "已有正文时保存 partial assistant message"
+        ChatAPI->>Session: "已有正文或用户可见 parts 时保存 partial assistant message"
         ChatAPI->>EventStore: "append(run.cancelled)"
         EventStore->>DB: "持久化取消终态 seq"
         ChatAPI->>RunStore: "CANCELLED + evict active run"
@@ -643,7 +643,7 @@ stop 语义：
 
 - 集群事实源优先：stop 先写 Redis cancel flag 与 openGauss `CANCELLING` 状态，再发布 `run.cancelled`。
 - JVM subscription registry 只是本机资源释放加速器；即使 stop 请求与输出流落在不同实例，输出实例也必须在追加事件前读取 Redis cancel flag。非终态事件不再逐条回源 run 表，最终写入正确性由 openGauss guarded insert 同时校验 run 状态、session 归属和 execution fencing。
-- 用户主动 stop 且已有 assistant 正文成功落库时，会从事件事实源重建并保存 partial assistant 历史消息，消息 metadata 标记 `partial=true`、`finishReason=USER_STOP`；只有 runtime 过程事件但无正文时不创建空 assistant。
+- 用户主动 stop 且已有 assistant 正文或用户可见 runtime parts 成功落库时，会从事件事实源重建并保存 partial assistant 历史消息，消息 metadata 标记 `partial=true`、`finishReason=USER_STOP`；只有 trace、legacy session 等内部 metadata 时不创建空 assistant。
 - 下游尽力取消：Relay Runtime 和 SubAgent cancel 失败只记录日志，不影响前端收到取消终态。
 - stop 不取消 RuntimeBinding；下一轮仍可续接 Runtime，除非请求 metadata 使用 `forceNewTask=true`。
 

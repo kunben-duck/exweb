@@ -161,6 +161,85 @@ class FinanceEXChatServiceTest {
     }
 
     @Test
+    void visibleRuntimePartsPersistAssistantMessageWhenNoAnswerTextExists() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        NeverCancelRunCache runCache = new NeverCancelRunCache();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        IdGenerator ids = new FixedIdGenerator();
+        PermissionChecker permissionChecker = new PermissionChecker();
+        WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
+                new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
+        LocalChatRunExecutionRegistry executionRegistry = new LocalChatRunExecutionRegistry();
+        ChatRunLeaseApplicationService leaseService = new ChatRunLeaseApplicationService(
+                new InMemoryExecutionRepository(),
+                (ApplicationInstanceIdProvider) () -> "instance-test",
+                new com.huawei.finance.front.one.application.config.ChatRunOperationalProperties(),
+                ids,
+                executionRegistry
+        );
+        AgentRuntime runtime = new AgentRuntime() {
+            @Override public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                return Flux.just(RuntimeEvent.card(request.runId(), request.sessionId(),
+                        Map.of("sourceType", "legacy-card",
+                                "cardUrl", "https://cards.example/render/1",
+                                "intent", "CreditSales",
+                                "skillId", "skill-card")));
+            }
+            @Override public Mono<Void> cancel(AgentRuntimeCancelRequest request) { return Mono.empty(); }
+        };
+
+        FinanceEXChatService service = new FinanceEXChatService(
+                new SessionApplicationService(sessions, messages, ids, permissionChecker),
+                new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
+                new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
+                runtimeRouteService(),
+                new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
+                    @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
+                        return Flux.empty();
+                    }
+                    @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
+                        return Mono.empty();
+                    }
+                }, limiter),
+                legacySkillExecutor(documentFacade(), limiter),
+                new SystemResponseExecutor(),
+                new AgentRuntimeExecutor(runtime, limiter),
+                documentFacade(),
+                new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
+                        permissionChecker, sessions,
+                        new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
+                new ChatRunApplicationService(runs, runCache, events, permissionChecker, sessions),
+                leaseService,
+                new ChatDeltaCoalescer(new com.huawei.finance.front.one.application.config.ChatStreamProperties()),
+                executionRegistry,
+                new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
+                ids
+        );
+
+        StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
+                        null, null, "web", "show card", List.of(), Map.of())))
+                .expectNextMatches(event -> "run.started".equals(event.type()))
+                .expectNextMatches(event -> "runtime.card".equals(event.type()))
+                .expectNextMatches(event -> "run.completed".equals(event.type()))
+                .verifyComplete();
+
+        ChatMessage assistant = messages.messages.stream()
+                .filter(message -> "assistant".equals(message.role()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(assistant.content()).isEmpty();
+        assertThat(assistant.parts()).extracting(ChatMessagePart::partType)
+                .containsExactly("CARD", "ANSWER");
+        assertThat(assistant.parts().get(0).payload()).containsEntry("cardUrl", "https://cards.example/render/1");
+        assertThat(messages.parts).extracting(ChatMessagePart::partType)
+                .containsExactly("CARD", "ANSWER");
+        assertThat(runs.runs.values().iterator().next().assistantMessageId()).isEqualTo(assistant.id());
+    }
+
+    @Test
     void selectedSkillIdRoutesToLegacySkillWithoutRuntimeBinding() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
@@ -394,7 +473,7 @@ class FinanceEXChatServiceTest {
     }
 
     @Test
-    void userStopDoesNotPersistAssistantMessageWhenNoAnswerContentExists() {
+    void userStopPersistsAssistantMessageWhenOnlyVisibleRuntimePartsExist() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -404,6 +483,37 @@ class FinanceEXChatServiceTest {
         events.append(RuntimeEvent.progress("run1", "session1", Map.of(
                 "sourceType", "relay-progress",
                 "text", "正在调用工具"
+        )));
+
+        FinanceEXChatService service = stopService(sessions, messages, runs, events);
+
+        assertThat(service.stopRun(user, "run1", RuntimeForwardHeaders.empty()).block().status())
+                .isEqualTo(ChatRunStatus.CANCELLED);
+        ChatMessage assistant = messages.messages.stream()
+                .filter(message -> "assistant".equals(message.role()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(assistant.content()).isEmpty();
+        assertThat(assistant.metadataJson()).contains("\"partial\":true").contains("USER_STOP");
+        assertThat(assistant.parts()).extracting(ChatMessagePart::partType)
+                .containsExactly("PROGRESS", "ANSWER");
+        assertThat(messages.parts).extracting(ChatMessagePart::partType)
+                .containsExactly("PROGRESS", "ANSWER");
+        assertThat(runs.findById("run1").orElseThrow().assistantMessageId()).isEqualTo(assistant.id());
+    }
+
+    @Test
+    void userStopDoesNotPersistAssistantMessageForMetadataOnlyEvents() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        seedRunningRun(sessions, messages, runs, user, "run1", "session1", "msg-user");
+        events.append(RuntimeEvent.metadata("run1", "session1", Map.of(
+                "sourceType", "trace",
+                "metadataType", "trace",
+                "traceId", "trace-1"
         )));
 
         FinanceEXChatService service = stopService(sessions, messages, runs, events);
@@ -651,7 +761,14 @@ class FinanceEXChatServiceTest {
 
     private static class InMemoryMessageRepository implements ChatMessageRepository {
         private final List<ChatMessage> messages = new ArrayList<>();
-        @Override public ChatMessage save(ChatMessage message) { messages.add(message); return message; }
+        private final List<ChatMessagePart> parts = new ArrayList<>();
+        @Override public ChatMessage save(ChatMessage message) {
+            messages.add(message);
+            if (message.parts() != null) {
+                parts.addAll(message.parts());
+            }
+            return message;
+        }
         @Override public List<ChatMessage> findRecentMessages(String tenantId, String userId, String sessionId, int limit) {
             return messages.stream().filter(message -> sessionId.equals(message.sessionId()))
                     .sorted(Comparator.comparing(ChatMessage::createdAt).reversed()).limit(limit).toList();

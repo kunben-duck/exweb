@@ -389,11 +389,12 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
 
 5. `AssistantAssembly`
    - 累积 `message.delta` 草稿；收到 `message.snapshot` 时记录最终快照并覆盖草稿作为历史正文。
-   - `runtime.*` 只作为运行态扩展事件落库和推送，不进入 assistant 正文；run 正常完成后会保存为 `fin_ex_chat_message_part_t`，供历史消息回显思考、工具、进度、引用和 agent 调用过程，并补齐稳定展示语义。
+   - `runtime.*` 只作为运行态扩展事件落库和推送，不进入 assistant 正文；run 正常完成后会保存为 `fin_ex_chat_message_part_t`，供历史消息回显思考、工具、进度、引用、卡片和 agent 调用过程，并补齐稳定展示语义。
+   - 如果本轮没有正文但存在卡片、引用、思考、工具、进度等用户可见 part，仍会创建一条空正文 assistant 消息作为 parts 挂载点；纯 trace/metadata 不会创建空 assistant。
    - 注意：只有 guarded insert 成功后的事件才会进入 assembly，不写未持久化的迟到 token。
 
 6. run 完成前保存完整 assistant message
-   - 当事件类型是 `run.completed` 且 assistant buffer 非空时：
+   - 当事件类型是 `run.completed` 且 assistant buffer 非空或存在用户可见 runtime parts 时：
      - `SessionApplicationService#saveAssistantMessage(...)`
      - `ChatRunApplicationService#bindAssistantMessage(...)`
      - `RuntimeBindingApplicationService#moveToLeaf(...)`

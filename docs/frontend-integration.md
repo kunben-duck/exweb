@@ -143,7 +143,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 已有会话继续提问 | `GET /state` 确认无 active run -> `POST /chat/runs(sessionId, runMode=NEXT)` -> WS subscribe | `sessionId`、`parentMessageId` 可选、`streamTopicId` | 同一 session 存在 active run 时不要再次发送；遇到 409 使用 stop 或等待终态 |
 | 当前页短暂断线重连 | 本地保存 `lastSeq` -> 重建 WS -> `subscribe(topicId, afterSeq=lastSeq)`；如果收到 `RECOVER_REQUIRED`，先 Event Resume 再重新 subscribe | `topicId`、`lastSeq`、`sequence` | 以 `sessionId + sequence` 去重；不要重复追加同一 delta |
 | 新页签/新浏览器/跨电脑打开 active run | `GET /state` 或 `stream-status` -> 若有 `activeRunId`，调用 `GET /runs/{activeRunId}/events/resume?afterSeq=activeRunFirstSeq-1` | `activeRunId`、`activeRunFirstSeq`、`activeStreamTopicId` | run 级 Event Resume 会补发并 tail 到终态；同一个 run 恢复期间不要再 WebSocket subscribe |
-| 停止回答 | 用户点击停止 -> `POST /runs/{runId}/stop` -> 等待 WS 或 Event Resume 收到 `run.cancelled` | `runId`、stop 前本地 `lastSeq` | stop 不是关闭 WebSocket；若 stop 前已有正文，历史消息会保存 partial assistant |
+| 停止回答 | 用户点击停止 -> `POST /runs/{runId}/stop` -> 等待 WS 或 Event Resume 收到 `run.cancelled` | `runId`、stop 前本地 `lastSeq` | stop 不是关闭 WebSocket；若 stop 前已有正文或用户可见 parts，历史消息会保存 partial assistant |
 | 编辑历史 user 消息 | 用户点击编辑 -> `POST /chat/runs(runMode=EDIT_USER, editedMessageId, message)` -> 订阅新 run -> `variants` 刷新版本游标 | `editedMessageId`、新 user `messageId`、新 assistant `messageId` | 旧消息不覆盖；新 user sibling 和新 assistant sibling 进入消息树 |
 | 重新生成 assistant | 用户点击重新生成 -> `POST /chat/runs(runMode=REGENERATE_ASSISTANT, regeneratedMessageId)` -> 订阅新 run -> `variants` 刷新版本游标 | `regeneratedMessageId`、原父 user messageId、新 assistant messageId | 复用原 user 节点，新 assistant 作为 sibling 保存 |
 | 切换历史版本 | `GET /messages/{messageId}/variants` -> 用户选择某个候选 -> `POST /sessions/{sessionId}/path(leafMessageId)` -> `GET /messages` 重渲染 | `messageId`、`leafMessageId`、`currentLeafMessageId` | 只切换展示路径，不创建 run，不调用 Runtime |
@@ -197,7 +197,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `GET /api/v1/ex/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`limit` 可选，默认 20；`cursor` 可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每个 `ChatSessionDto` 带 `firstAssistantAnswer`。 | 返回按最近更新时间倒序排列；`nextCursor=null` 表示无下一页；`firstAssistantAnswer` 是会话第一条完整 assistant 回答，可为空。 |
 | `GET /api/v1/ex/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`curPage` 可选，默认 1；`pageSize` 可选，默认 20，最大 100。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；每个 `ChatSessionDto` 带 `firstAssistantAnswer`。 | 不返回 `DELETED` 会话；适合需要总行数的传统分页组件；旧游标分页不受影响。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
-| `GET /api/v1/ex/chat/sessions/{sessionId}/state` | 切换会话或跨电脑打开会话时首选。 | Path：`sessionId`；Query：`messageLimit` 可选，默认 50。 | `ChatSessionStateDto`：`session`、`messages`、`streamStatus`。 | `messages` 返回当前 active path；正在输出的草稿仍走事件流，用户主动 stop 后已落库正文会作为 partial assistant 返回。 |
+| `GET /api/v1/ex/chat/sessions/{sessionId}/state` | 切换会话或跨电脑打开会话时首选。 | Path：`sessionId`；Query：`messageLimit` 可选，默认 50。 | `ChatSessionStateDto`：`session`、`messages`、`streamStatus`。 | `messages` 返回当前 active path；正在输出的草稿仍走事件流，用户主动 stop 后已落库正文或用户可见 parts 会作为 partial assistant 返回。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 保留。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 不传 `leafMessageId` 时返回当前 active path；传入时返回 root 到该 leaf 的路径。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` | 复杂前端读取完整消息树，或联调排查版本关系。 | Path：`sessionId`。 | `ChatMessageTreeDto`。 | 只读接口；不改变当前路径，不创建 run；mapping 只包含业务可见 user/assistant 消息。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants` | 切换编辑/重新生成后的候选版本。 | Path：`sessionId`、`messageId`。 | `ChatMessageDto[]`。 | 返回同父节点、同角色的 sibling 版本。 |
@@ -302,7 +302,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `treeDepth` | 消息树深度 |
 | `siblingIndex` | 同一父节点下同角色版本序号，用于 `1/3` 版本游标 |
 | `role` | `user` 或 `assistant` |
-| `content` | 完整消息正文；正常完成保存完整回答，用户主动 stop 且已有正文时保存截至 stop 的 partial 回答 |
+| `content` | 完整消息正文；正常完成保存完整回答，用户主动 stop 且已有正文时保存截至 stop 的 partial 回答；只有卡片/引用/思考等 parts 时可为空字符串 |
 | `tokenCount` | token 估算值，可为空 |
 | `runId` | 产生该消息的 run ID；分支快照可能为空 |
 | `originType` | `NORMAL` 或 `BRANCH_SNAPSHOT` |
@@ -1360,7 +1360,7 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/runs/run_xxx/stop
 
 stop 是 REST 生命周期接口，不是 WebSocket command。重复 stop 是幂等的：如果 run 已经 `COMPLETED`、`FAILED` 或 `CANCELLED`，会返回当前状态，不再追加新的取消事件。
 
-用户主动 stop 时，如果该 run 已经有 `message.delta` 或 `message.snapshot` 成功落库，后端会把截至 stop 时的正文保存为一条 assistant 历史消息。该消息的 `metadataJson` 会包含 `partial=true`、`finishReason=USER_STOP`、`runStatus=CANCELLED`。如果 stop 时只有 `runtime.progress/runtime.tool/runtime.thinking` 等过程事件、没有 assistant 正文，则不会创建空 assistant 消息；这些过程事件仍可通过 Event Resume 或事件表排障。
+用户主动 stop 时，如果该 run 已经有 `message.delta`、`message.snapshot` 或用户可见的 `runtime.progress/runtime.tool/runtime.thinking/runtime.reference/runtime.card` 成功落库，后端会把截至 stop 时的内容保存为一条 assistant 历史消息。该消息的 `metadataJson` 会包含 `partial=true`、`finishReason=USER_STOP`、`runStatus=CANCELLED`。如果 stop 时只有 trace、legacy session 等内部 `runtime.metadata`，则不会创建空 assistant 消息；这些内部事件仍可通过 Event Resume 或事件表排障。
 
 前端点击停止后，不应把关闭 WebSocket 当作取消语义。推荐流程是：保存当前本地 `lastSeq`，调用 stop，随后继续通过 WebSocket 等待 `run.cancelled`；如果页面已经断线或没有收到终态事件，则用 stop 前保存的 `lastSeq` 调 Event Resume 补齐 `run.cancelled`。stop 响应里的 `latestSeq` 是服务端事实源位置，不代表当前页签已经消费到该事件。
 

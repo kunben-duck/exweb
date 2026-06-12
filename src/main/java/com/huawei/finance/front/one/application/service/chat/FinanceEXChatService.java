@@ -197,7 +197,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
      * 用户主动 stop 后，把已经成功落库的 assistant 正文固化为历史消息。
      *
      * <p>这里不读取当前 JVM 内存里的流式草稿，而是从 openGauss 事件事实源重建，保证跨实例 stop、
-     * 浏览器断开和本机 subscription 已释放等场景下得到一致结果。没有正文时不创建空 assistant。</p>
+     * 浏览器断开和本机 subscription 已释放等场景下得到一致结果。没有正文且没有用户可见
+     * runtime parts 时不创建空 assistant。</p>
      */
     private void persistPartialAssistantForUserStop(UserContext user, ChatRun run) {
         if (run.assistantMessageId() != null && !run.assistantMessageId().isBlank()) {
@@ -211,7 +212,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         try {
             AssistantAssembly assistant = new AssistantAssembly();
             chatStreamService.findPersistedRunEvents(user, run).forEach(assistant::observe);
-            if (!assistant.hasContent()) {
+            if (!assistant.shouldPersistMessage()) {
                 return;
             }
             ChatSession session = sessionService.getSession(user, run.sessionId());
@@ -417,7 +418,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                          * 因此在发布该终态事件之前，必须先把完整 assistant 消息写入历史消息树，
                          * 避免客户端收到 completed 后立即查询历史时只能看到 user 节点。
                          */
-                        if ("run.completed".equals(stored.type()) && assistant.hasContent()) {
+                        if ("run.completed".equals(stored.type()) && assistant.shouldPersistMessage()) {
                             ChatMessage savedAssistant = sessionService.saveAssistantMessage(user.tenantId(), user.userId(),
                                     session, assistant.finalContent(), runId, messagePlan.userMessage().id(),
                                     messagePlan.regeneratedFromMessageId(), assistant.parts());
@@ -573,7 +574,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
      * 单次 run 内的 assistant 汇总状态。
      *
      * <p>流式 delta 负责实时草稿；下游最终 {@code message.snapshot} 是更权威的最终正文。
-     * runtime.* 事件只保存为历史过程 parts，不混入 assistant 正文。</p>
+     * runtime.* 事件只保存为历史过程 parts，不混入 assistant 正文。若没有正文但存在卡片、
+     * 引用、思考或进度等用户可见 part，也会创建一条空正文 assistant 消息作为 parts 挂载点。</p>
      */
     private static final class AssistantAssembly {
         private final StringBuilder deltaDraft = new StringBuilder();
@@ -607,12 +609,26 @@ public class FinanceEXChatService implements FinanceChatFacade {
             return snapshot != null && !snapshot.isEmpty() || !deltaDraft.isEmpty();
         }
 
+        private boolean shouldPersistMessage() {
+            return hasContent() || parts.stream().anyMatch(AssistantAssembly::userVisiblePart);
+        }
+
         private String finalContent() {
             return snapshot != null ? snapshot : deltaDraft.toString();
         }
 
         private java.util.List<ChatMessagePartDraft> parts() {
             return java.util.List.copyOf(parts);
+        }
+
+        private static boolean userVisiblePart(ChatMessagePartDraft part) {
+            if (part == null || part.partType() == null) {
+                return false;
+            }
+            return switch (part.partType()) {
+                case "PROGRESS", "AGENT", "THINKING", "TOOL", "REFERENCE", "CARD" -> true;
+                default -> false;
+            };
         }
 
         private static ChatMessagePartDraft runtimePart(ChatEvent event) {

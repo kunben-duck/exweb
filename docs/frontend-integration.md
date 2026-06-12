@@ -1139,7 +1139,7 @@ ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON c
 | `runtime.thinking` | `{ "source": "relay", "sourceType": "thinking-operation-start", "status": "STARTED", "operationId": "可选", "agentName": "可选", "availableTools": [...] }` |
 | `runtime.tool` | `{ "source": "relay", "sourceType": "tool_call_streaming", "status": "STREAMING", "agentName": "可选", "toolName": "工具名", "inputPreview": "输入预览" }` |
 | `runtime.reference` | `{ "source": "relay", "sourceType": "url_moderation", "referenceType": "url_moderation", "url": "可选", "title": "可选", "references": "可选数组", "sourcePayload": { "...": "脱敏限长后的引用扩展信息" } }` |
-| `runtime.card` | `{ "source": "legacy-agent", "sourceType": "legacy-card", "cardType": "legacy-card", "cardUrl": "可选", "intent": "可选", "skillId": "可选", "diyCardScene": "可选对象", "cardList": "可选数组" }` |
+| `runtime.card` | `{ "source": "legacy-agent", "sourceType": "cardUrl/diyCardScene/cardList", "cardType": "url/diyCardScene/cardList", "cardSources": ["原始卡片字段"], "cardUrl": "可选", "intent": "可选", "skillId": "可选", "diyCardScene": "可选对象", "cardList": "可选数组" }` |
 | `runtime.event` | `{ "source": "relay", "sourceType": "未知下游 type", "eventKind": "event", "channel": "runtime", "displayHint": "runtime", "text": "可选展示文本", "sourcePayload": { "...": "脱敏限长后的下游扩展载荷" } }` |
 | `message.completed` | `{ "status": "MESSAGE_COMPLETED", "finishReason": "可选", "runtimeSessionId": "可选", "agentSessionId": "可选" }` |
 | `run.failed` | `{ "code": "错误码", "message": "错误说明", "recoverable": "可选", "recoveryOptions": "可选" }` |
@@ -1150,7 +1150,7 @@ Relay 映射规则：
 - `type=agent,is_streaming=false` 且存在 `content/context` 时，映射为 `message.snapshot`，这是更权威的最终回答快照；前端用 `payload.content` 替换当前草稿。
 - 纯文本 `steam-complete`、`stream-complete`、`stream_complete`、`stream.complete`、`stream-completed`、`[DONE]` 映射为 `message.completed`。
 - `relay-progress`、`project_home`、`available-modes/availbale-modes`、`agent-call`、`thinking-operation-start/thinkink-operation-start`、`thinking-operation-end/thinking_operation-end`、`tool_call_streaming`、引用/来源类事件映射为对应 `runtime.*`。
-- legacy-agent 指定技能响应中，`content` 的 `<think>...</think>` 片段映射为 `runtime.thinking`，不会拼入 assistant 正文；非 think 内容映射为 `message.delta`。`traceId/sessionId/messageId` 映射为 `runtime.metadata`；单独出现的 `intent/skillId` 映射为 `runtime.metadata`；如果 `intent/skillId` 与 `cardUrl/diyCardScene/cardList` 同帧出现，则一起放入 `runtime.card`。`processResult` 映射为 `runtime.thinking`，`searchList/sourcesDocuments` 映射为 `runtime.reference`，`endFlag=true` 映射为 `message.completed`。
+- legacy-agent 指定技能响应中，`content` 的 `<think>...</think>` 片段映射为 `runtime.thinking`，不会拼入 assistant 正文；非 think 内容映射为 `message.delta`。`traceId/sessionId/messageId` 映射为 `runtime.metadata`；单独出现的 `intent/skillId` 映射为 `runtime.metadata`；如果 `intent/skillId` 与某个卡片字段同帧出现，则一起放入 `runtime.card`。当前 legacy 协议下 `cardUrl/diyCardScene/cardList` 不会在同一个 chunk 中同时出现，因此卡片事件会保留原始 `sourceType`，例如 `diyCardScene`；服务端仅保留 `sourceType=legacy-card/cardType=mixed` 作为非预期混合帧的防御兜底。`processResult` 映射为 `runtime.thinking`，`searchList/sourcesDocuments` 映射为 `runtime.reference`，`endFlag=true` 映射为 `message.completed`。
 - 未识别合法 JSON 映射为 `runtime.event`。`sourcePayload` 会脱敏和限长，不能作为稳定字段依赖。
 - Relay 原始 `type` 不会成为 ChatService 顶层 `type`，只会作为 `payload.sourceType` 或 raw log 排障信息。
 

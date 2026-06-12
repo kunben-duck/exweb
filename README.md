@@ -306,7 +306,7 @@ Relay Runtime 请求与响应均经过 adapter 防腐层：应用层使用 `Agen
 
 Relay 响应映射的核心规则是：`type=agent,is_streaming=true` 且包含 `content/context` 时映射为 `message.delta`，用于流式草稿追加；`type=agent,is_streaming=false` 映射为 `message.snapshot`，用于最终正文替换和历史消息保存；纯文本 `steam-complete`、`stream-complete`、`[DONE]` 等终态映射为 `message.completed`；`relay-progress`、`project_home`、`available-modes`、`agent-call`、`thinking-operation-*`、`tool_call_streaming`、引用来源类事件等运行过程分别映射为对应 `runtime.*` 事件，并在 run 完成后保存到 `fin_ex_chat_message_part_t`，供历史消息回显；未知合法 JSON object 才进入脱敏限长后的 `runtime.event.payload.sourcePayload`。Relay 原始 `type` 只进入 payload 的 `sourceType` 或 raw log，不能作为 ChatService 顶层 `event_type`。
 
-legacy-agent 指定技能响应也遵守同一标准事件契约：`content` 中 `<think>...</think>` 片段映射为 `runtime.thinking`，不会写入 assistant 正文；非 think 内容映射为 `message.delta`；`searchList/sourcesDocuments` 映射为 `runtime.reference`；`cardUrl/diyCardScene/cardList` 映射为 `runtime.card`，同帧的 `intent/skillId` 会保留在 card payload 中；`endFlag=true` 映射为 `message.completed`。
+legacy-agent 指定技能响应也遵守同一标准事件契约：`content` 中 `<think>...</think>` 片段映射为 `runtime.thinking`，不会写入 assistant 正文；非 think 内容映射为 `message.delta`；`searchList/sourcesDocuments` 映射为 `runtime.reference`；`cardUrl/diyCardScene/cardList` 映射为 `runtime.card`。当前 legacy 协议下三类卡片字段不会在同一个 chunk 中同时出现，卡片事件会保留原始 `sourceType`，同帧的 `intent/skillId` 会保留在 card payload 中；`endFlag=true` 映射为 `message.completed`。
 
 ## 上线版本边界
 

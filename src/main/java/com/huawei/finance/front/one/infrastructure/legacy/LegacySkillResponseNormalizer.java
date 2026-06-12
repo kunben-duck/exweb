@@ -257,10 +257,12 @@ public class LegacySkillResponseNormalizer {
     }
 
     private Map<String, Object> cardPayload(JsonNode root) {
+        List<String> sources = cardSources(root);
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("source", "legacy-agent");
-        payload.put("sourceType", "legacy-card");
-        payload.put("cardType", "legacy-card");
+        payload.put("sourceType", cardSourceType(sources));
+        payload.put("cardType", cardType(sources));
+        payload.put("cardSources", sources);
         putIfPresent(payload, "cardUrl", text(root, "cardUrl"));
         putIfPresent(payload, "intent", text(root, "intent"));
         putIfPresent(payload, "skillId", text(root, "skillId"));
@@ -271,6 +273,40 @@ public class LegacySkillResponseNormalizer {
             payload.put("cardList", sanitize(root.get("cardList")));
         }
         return Map.copyOf(payload);
+    }
+
+    private List<String> cardSources(JsonNode root) {
+        List<String> sources = new ArrayList<>(3);
+        if (root.hasNonNull("cardUrl")) {
+            sources.add("cardUrl");
+        }
+        if (root.hasNonNull("diyCardScene")) {
+            sources.add("diyCardScene");
+        }
+        if (root.hasNonNull("cardList")) {
+            sources.add("cardList");
+        }
+        return List.copyOf(sources);
+    }
+
+    /**
+     * 单一 legacy 卡片字段保留原始字段名，方便前端按下游真实来源选择渲染器。
+     * 多个卡片字段同帧到达时使用 legacy-card 作为聚合来源，并通过 cardSources 保留明细。
+     */
+    private String cardSourceType(List<String> sources) {
+        return sources.size() == 1 ? sources.get(0) : "legacy-card";
+    }
+
+    private String cardType(List<String> sources) {
+        if (sources.size() != 1) {
+            return "mixed";
+        }
+        return switch (sources.get(0)) {
+            case "cardUrl" -> "url";
+            case "diyCardScene" -> "diyCardScene";
+            case "cardList" -> "cardList";
+            default -> "legacy-card";
+        };
     }
 
     private Map<String, Object> metadataPayload(String metadataType, Map<String, Object> values) {

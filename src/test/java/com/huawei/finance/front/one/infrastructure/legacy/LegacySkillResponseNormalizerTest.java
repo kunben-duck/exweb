@@ -47,6 +47,8 @@ class LegacySkillResponseNormalizerTest {
         assertThat(events.get(2).payload()).containsEntry("metadataType", "legacy_message")
                 .containsEntry("legacyMessageId", "legacy-message-1");
         assertThat(events.get(3).payload()).containsEntry("cardUrl", "https://card")
+                .containsEntry("sourceType", "cardUrl")
+                .containsEntry("cardType", "url")
                 .containsEntry("intent", "tax")
                 .containsEntry("skillId", "skill-tax");
         assertThat(events.get(5).payload()).containsEntry("delta", "你好");
@@ -101,7 +103,7 @@ class LegacySkillResponseNormalizerTest {
 
                 message: {"state":"GENERATE","stateDesc":"生成答案"}
 
-                message: {"diyCardScene":{"type":"tax"},"cardList":[{"title":"卡片"}]}
+                message: {"diyCardScene":{"type":"tax"}}
 
                 """;
 
@@ -119,7 +121,9 @@ class LegacySkillResponseNormalizerTest {
         assertThat(events.get(1).payload()).containsEntry("referenceType", "search_list");
         assertThat(events.get(2).payload()).containsEntry("referenceType", "source_documents");
         assertThat(events.get(3).payload()).containsEntry("stage", "GENERATE");
-        assertThat(events.get(4).payload()).containsEntry("cardType", "legacy-card");
+        assertThat(events.get(4).payload()).containsEntry("sourceType", "diyCardScene")
+                .containsEntry("cardType", "diyCardScene")
+                .containsEntry("cardSources", List.of("diyCardScene"));
     }
 
     @Test
@@ -131,6 +135,32 @@ class LegacySkillResponseNormalizerTest {
         assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.reference", "runtime.card");
         assertThat(events.get(0).payload().toString()).contains("a.pdf").doesNotContain("null");
         assertThat(events.get(1).payload().toString()).contains("卡片").doesNotContain("null");
+        assertThat(events.get(1).payload()).containsEntry("sourceType", "cardList")
+                .containsEntry("cardType", "cardList");
+    }
+
+    @Test
+    void keepsOriginalSourceTypeForSingleDiyCardScene() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                message: {"diyCardScene":{"type":"tax"}}
+                """);
+
+        assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.card");
+        assertThat(events.getFirst().payload()).containsEntry("sourceType", "diyCardScene")
+                .containsEntry("cardType", "diyCardScene")
+                .containsEntry("cardSources", List.of("diyCardScene"));
+    }
+
+    @Test
+    void keepsDefensiveMixedCardMappingForUnexpectedCombinedFrame() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                message: {"diyCardScene":{"type":"tax"},"cardList":[{"title":"卡片"}]}
+                """);
+
+        assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.card");
+        assertThat(events.getFirst().payload()).containsEntry("sourceType", "legacy-card")
+                .containsEntry("cardType", "mixed")
+                .containsEntry("cardSources", List.of("diyCardScene", "cardList"));
     }
 
     @Test

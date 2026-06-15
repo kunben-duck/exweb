@@ -285,5 +285,5 @@ financeex:
     max-attachments: ${FINANCEEX_LEGACY_SKILL_MAX_ATTACHMENTS:10}
     # 只缓存尚未完成的单个 legacy frame；超过限制会输出小型诊断事件并丢弃该 frame，避免 OOM。
     max-pending-frame-bytes: ${FINANCEEX_LEGACY_SKILL_MAX_PENDING_FRAME_BYTES:1048576}
-    # diyCardScene/searchList/sourcesDocuments 等大对象按 typed fragment 输出时的单片大小。
+    # diyCardScene/searchList/sourcesDocuments/processResult 等大对象按 fragment payload 输出时的单片大小。
     max-fragment-bytes: ${FINANCEEX_LEGACY_SKILL_MAX_FRAGMENT_BYTES:8192}

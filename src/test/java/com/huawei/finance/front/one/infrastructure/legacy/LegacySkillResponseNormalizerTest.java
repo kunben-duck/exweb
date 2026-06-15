@@ -36,7 +36,7 @@ class LegacySkillResponseNormalizerTest {
                 "runtime.metadata",
                 "runtime.metadata",
                 "runtime.card",
-                "runtime.thinking",
+                "runtime.progress",
                 "message.delta",
                 "message.completed"
         );
@@ -135,10 +135,15 @@ class LegacySkillResponseNormalizerTest {
         List<ChatEvent> second = normalizer.normalize("run1", "session1",
                 "意见\",\"items\":[{\"name\":\"A\"}]}}", state);
 
-        assertThat(first).extracting(ChatEvent::type).containsExactly("runtime.card.delta");
-        assertThat(second).extracting(ChatEvent::type).containsExactly("runtime.card.delta", "runtime.card.completed");
+        assertThat(first).extracting(ChatEvent::type).containsExactly("runtime.card");
+        assertThat(second).extracting(ChatEvent::type).containsExactly("runtime.card", "runtime.card");
         assertThat(first.getFirst().payload()).containsEntry("sourceType", "diyCardScene")
-                .containsEntry("contentType", "application/json");
+                .containsEntry("contentType", "application/json")
+                .containsEntry("fragment", true)
+                .containsEntry("complete", false);
+        assertThat(second.getLast().payload()).containsEntry("sourceType", "diyCardScene")
+                .containsEntry("fragment", true)
+                .containsEntry("complete", true);
         assertThat(second).extracting(ChatEvent::type).doesNotContain("runtime.event");
     }
 
@@ -151,11 +156,16 @@ class LegacySkillResponseNormalizerTest {
         List<ChatEvent> second = normalizer.normalize("run1", "session1",
                 "文件\",\"url\":\"https://example.com/a.pdf\"}]}", state);
 
-        assertThat(first).extracting(ChatEvent::type).containsExactly("runtime.reference.delta");
+        assertThat(first).extracting(ChatEvent::type).containsExactly("runtime.reference");
         assertThat(second).extracting(ChatEvent::type)
-                .containsExactly("runtime.reference.delta", "runtime.reference.completed");
-        assertThat(first.getFirst().payload()).containsEntry("sourceType", "sourcesDocuments");
+                .containsExactly("runtime.reference", "runtime.reference");
+        assertThat(first.getFirst().payload()).containsEntry("sourceType", "sourcesDocuments")
+                .containsEntry("fragment", true)
+                .containsEntry("complete", false);
         assertThat(second.getFirst().payload()).containsEntry("sourceType", "sourcesDocuments");
+        assertThat(second.getLast().payload()).containsEntry("sourceType", "sourcesDocuments")
+                .containsEntry("fragment", true)
+                .containsEntry("complete", true);
     }
 
     @Test
@@ -167,10 +177,33 @@ class LegacySkillResponseNormalizerTest {
         List<ChatEvent> second = normalizer.normalize("run1", "session1",
                 "资料\",\"url\":\"https://example.com\"}]}", state);
 
-        assertThat(first).extracting(ChatEvent::type).containsExactly("runtime.reference.delta");
+        assertThat(first).extracting(ChatEvent::type).containsExactly("runtime.reference");
         assertThat(second).extracting(ChatEvent::type)
-                .containsExactly("runtime.reference.delta", "runtime.reference.completed");
+                .containsExactly("runtime.reference", "runtime.reference");
         assertThat(first.getFirst().payload()).containsEntry("sourceType", "searchList");
+        assertThat(second.getLast().payload()).containsEntry("sourceType", "searchList")
+                .containsEntry("fragment", true)
+                .containsEntry("complete", true);
+    }
+
+    @Test
+    void streamsSplitProcessResultAsProgressFragments() {
+        LegacySkillResponseNormalizer.LegacySkillStreamState state = normalizer.newStreamState();
+
+        List<ChatEvent> first = normalizer.normalize("run1", "session1",
+                "message: {\"processResult\":{\"dynamicResponse\":[{\"title\":\"工具", state);
+        List<ChatEvent> second = normalizer.normalize("run1", "session1",
+                "调用\",\"type\":\"str\"}]}}", state);
+
+        assertThat(first).extracting(ChatEvent::type).containsExactly("runtime.progress");
+        assertThat(second).extracting(ChatEvent::type)
+                .containsExactly("runtime.progress", "runtime.progress");
+        assertThat(first.getFirst().payload()).containsEntry("sourceType", "processResult")
+                .containsEntry("fragment", true)
+                .containsEntry("complete", false);
+        assertThat(second.getLast().payload()).containsEntry("sourceType", "processResult")
+                .containsEntry("fragment", true)
+                .containsEntry("complete", true);
     }
 
     @Test

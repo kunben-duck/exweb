@@ -642,10 +642,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 case "runtime.progress" -> "PROGRESS";
                 case "runtime.metadata" -> "METADATA";
                 case "runtime.agent" -> "AGENT";
-                case "runtime.thinking", "runtime.thinking.delta" -> "THINKING";
+                case "runtime.thinking" -> "THINKING";
                 case "runtime.tool" -> "TOOL";
-                case "runtime.reference", "runtime.reference.delta", "runtime.reference.completed" -> "REFERENCE";
-                case "runtime.card", "runtime.card.delta", "runtime.card.completed" -> "CARD";
+                case "runtime.reference" -> "REFERENCE";
+                case "runtime.card" -> "CARD";
                 default -> "RUNTIME_EVENT";
             };
         }
@@ -665,7 +665,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 }
                 return toolName == null ? preview : toolName;
             }
-            if ("runtime.thinking".equals(eventType) || "runtime.thinking.delta".equals(eventType)) {
+            if ("runtime.thinking".equals(eventType)) {
                 String text = firstText(payload, "text", "title");
                 if (text != null) {
                     return text;
@@ -677,12 +677,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
             if ("runtime.metadata".equals(eventType)) {
                 return firstText(payload, "projectHome", "metadataType");
             }
-            if ("runtime.reference".equals(eventType) || "runtime.reference.delta".equals(eventType)
-                    || "runtime.reference.completed".equals(eventType)) {
+            if ("runtime.reference".equals(eventType)) {
                 return firstText(payload, "delta", "title", "url", "referenceType", "sourceType");
             }
-            if ("runtime.card".equals(eventType) || "runtime.card.delta".equals(eventType)
-                    || "runtime.card.completed".equals(eventType)) {
+            if ("runtime.card".equals(eventType)) {
                 return firstText(payload, "delta", "cardUrl", "intent", "skillId", "cardType", "sourceType");
             }
             return firstText(payload, "text", "displayText", "sourceType");

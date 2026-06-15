@@ -90,17 +90,23 @@ public class LocalWebSocketConnectionRegistry {
      * @param disposable 当前 topic 实时事件订阅句柄，取消订阅或断开连接时释放。
      */
     public synchronized void subscribe(String connectionId, String topicId, String sessionId, long afterSeq, Disposable disposable) {
-        get(connectionId).ifPresent(state -> {
-            if (!state.subscriptions.containsKey(topicId)
-                    && state.subscriptionCount() >= properties.normalizedMaxSubscriptionsPerConnection()) {
-                throw new IllegalStateException("WS_SUBSCRIPTION_LIMIT_EXCEEDED: 当前连接订阅 topic 数已达上限");
-            }
-            if (!state.subscriptions.containsKey(topicId)
-                    && topicSubscriberCount(topicId) >= properties.normalizedMaxSubscribersPerTopic()) {
-                throw new IllegalStateException("WS_TOPIC_SUBSCRIBER_LIMIT_EXCEEDED: 当前 topic 本机订阅数已达上限");
-            }
-            state.subscribe(topicId, sessionId, afterSeq, disposable, properties.normalizedDeliveredSeqWindow());
-        });
+        ConnectionState state = connections.get(connectionId);
+        if (state == null) {
+            /*
+             * subscribe 与连接关闭可能并发发生。这里必须显式失败，避免调用方继续启动
+             * 无法被 registry 持有和释放的 live 订阅。
+             */
+            throw new IllegalStateException("WS_CONNECTION_NOT_FOUND: WebSocket 连接已关闭");
+        }
+        if (!state.subscriptions.containsKey(topicId)
+                && state.subscriptionCount() >= properties.normalizedMaxSubscriptionsPerConnection()) {
+            throw new IllegalStateException("WS_SUBSCRIPTION_LIMIT_EXCEEDED: 当前连接订阅 topic 数已达上限");
+        }
+        if (!state.subscriptions.containsKey(topicId)
+                && topicSubscriberCount(topicId) >= properties.normalizedMaxSubscribersPerTopic()) {
+            throw new IllegalStateException("WS_TOPIC_SUBSCRIBER_LIMIT_EXCEEDED: 当前 topic 本机订阅数已达上限");
+        }
+        state.subscribe(topicId, sessionId, afterSeq, disposable, properties.normalizedDeliveredSeqWindow());
     }
 
     /**

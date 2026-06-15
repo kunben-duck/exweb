@@ -279,15 +279,15 @@ public class LegacySkillResponseNormalizer {
             return null;
         }
         if ("diyCardScene".equals(sourceType) || "cardList".equals(sourceType) || "cardUrl".equals(sourceType)) {
-            return new LegacyFragmentKind(sourceType, "runtime.card.delta", "runtime.card.completed",
+            return new LegacyFragmentKind(sourceType, "runtime.card",
                     "card", "application/json");
         }
         if ("processResult".equals(sourceType)) {
-            return new LegacyFragmentKind(sourceType, "runtime.thinking.delta",
-                    "runtime.thinking", "thinking", "application/json");
+            return new LegacyFragmentKind(sourceType, "runtime.progress",
+                    "progress", "application/json");
         }
-        return new LegacyFragmentKind(sourceType, "runtime.reference.delta",
-                "runtime.reference.completed", "reference", "application/json");
+        return new LegacyFragmentKind(sourceType, "runtime.reference",
+                "reference", "application/json");
     }
 
     private String firstPresentSourceType(String payload, String... candidates) {
@@ -342,11 +342,12 @@ public class LegacySkillResponseNormalizer {
         payload.put("source", "legacy-agent");
         payload.put("sourceType", fragment.kind().sourceType());
         payload.put("itemId", fragment.itemId());
+        payload.put("fragment", true);
         payload.put("channel", fragment.kind().channel());
         payload.put("contentType", fragment.kind().contentType());
         payload.put("delta", delta);
         payload.put("complete", false);
-        return new RuntimeEvent(runId, sessionId, 0, Instant.now(), fragment.kind().deltaEventType(), Map.copyOf(payload));
+        return new RuntimeEvent(runId, sessionId, 0, Instant.now(), fragment.kind().eventType(), Map.copyOf(payload));
     }
 
     private List<ChatEvent> completeFragment(String runId, String sessionId, LegacySkillStreamState state) {
@@ -359,10 +360,11 @@ public class LegacySkillResponseNormalizer {
         payload.put("source", "legacy-agent");
         payload.put("sourceType", fragment.kind().sourceType());
         payload.put("itemId", fragment.itemId());
+        payload.put("fragment", true);
         payload.put("channel", fragment.kind().channel());
         payload.put("complete", true);
         return List.of(new RuntimeEvent(runId, sessionId, 0, Instant.now(),
-                fragment.kind().completedEventType(), Map.copyOf(payload)));
+                fragment.kind().eventType(), Map.copyOf(payload)));
     }
 
     private List<ChatEvent> normalizeFrame(String runId, String sessionId, String frame, LegacySkillStreamState state) {
@@ -456,7 +458,7 @@ public class LegacySkillResponseNormalizer {
 
     private void addStructuredEvents(String runId, String sessionId, JsonNode root, List<ChatEvent> events) {
         if (root.hasNonNull("processResult")) {
-            events.add(RuntimeEvent.thinking(runId, sessionId, processPayload(root)));
+            events.add(RuntimeEvent.progress(runId, sessionId, processPayload(root)));
         }
         if (root.hasNonNull("searchList")) {
             events.add(RuntimeEvent.reference(runId, sessionId,
@@ -809,8 +811,7 @@ public class LegacySkillResponseNormalizer {
 
     private record LegacyFragmentKind(
             String sourceType,
-            String deltaEventType,
-            String completedEventType,
+            String eventType,
             String channel,
             String contentType
     ) {

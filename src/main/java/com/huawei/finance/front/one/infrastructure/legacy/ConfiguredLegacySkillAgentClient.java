@@ -7,7 +7,11 @@ import com.huawei.finance.front.one.application.integration.agent.LegacySkillCan
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -19,6 +23,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * 配置化老 Agent 指定技能 HTTP adapter。
@@ -51,7 +56,7 @@ public class ConfiguredLegacySkillAgentClient implements LegacySkillAgentClient 
     public Flux<ChatEvent> query(LegacySkillAgentRequest request) {
         validate(request);
         Map<String, Object> body = requestMapper.toWireRequest(request);
-        return Flux.defer(() -> {
+        return enforceLegacyDeadline(Flux.defer(() -> {
             LegacySkillResponseNormalizer.LegacySkillStreamState streamState = responseNormalizer.newStreamState();
             return webClientBuilder.build()
                     .post()
@@ -72,8 +77,13 @@ public class ConfiguredLegacySkillAgentClient implements LegacySkillAgentClient 
                     .flatMapIterable(chunk -> responseNormalizer.normalize(
                             request.runId(), request.sessionId(), chunk, streamState))
                     .concatWith(Flux.defer(() -> Flux.fromIterable(
-                            responseNormalizer.finish(request.runId(), request.sessionId(), streamState))));
-        });
+                            responseNormalizer.finish(request.runId(), request.sessionId(), streamState))))
+                    /*
+                     * 老 Agent 的 endFlag=true 已经映射为 message.completed。收到后主动闭合本轮流，
+                     * 避免下游 HTTP 连接未关闭时持续占用本机 bulkhead 和 WebClient 资源。
+                     */
+                    .takeUntil(event -> "message.completed".equals(event.type()));
+        }));
     }
 
     @Override
@@ -149,5 +159,43 @@ public class ConfiguredLegacySkillAgentClient implements LegacySkillAgentClient 
         } finally {
             DataBufferUtils.release(buffer);
         }
+    }
+
+    private Flux<ChatEvent> enforceLegacyDeadline(Flux<ChatEvent> source) {
+        Duration timeout = properties.getTimeout();
+        if (timeout == null || timeout.isZero() || timeout.isNegative()) {
+            return source;
+        }
+        return Flux.create(sink -> {
+            AtomicBoolean terminated = new AtomicBoolean(false);
+            var timer = Schedulers.parallel().schedule(() -> {
+                if (terminated.compareAndSet(false, true) && !sink.isCancelled()) {
+                    sink.error(new TimeoutException("Legacy skill stream timed out after " + timeout));
+                }
+            }, Math.max(1L, timeout.toMillis()), TimeUnit.MILLISECONDS);
+            var upstream = source.subscribe(
+                    event -> {
+                        if (!terminated.get() && !sink.isCancelled()) {
+                            sink.next(event);
+                        }
+                    },
+                    error -> {
+                        if (terminated.compareAndSet(false, true) && !sink.isCancelled()) {
+                            timer.dispose();
+                            sink.error(error);
+                        }
+                    },
+                    () -> {
+                        if (terminated.compareAndSet(false, true) && !sink.isCancelled()) {
+                            timer.dispose();
+                            sink.complete();
+                        }
+                    });
+            sink.onDispose(() -> {
+                terminated.set(true);
+                timer.dispose();
+                upstream.dispose();
+            });
+        });
     }
 }

@@ -85,6 +85,16 @@ class LocalWebSocketConnectionRegistryTest {
     }
 
     @Test
+    void subscribingMissingConnectionFailsInsteadOfLeakingLiveSubscription() {
+        LocalWebSocketConnectionRegistry registry = new LocalWebSocketConnectionRegistry();
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        registry.subscribe("missing", "chat-run-run1", "session1", 0L, () -> {}))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("WS_CONNECTION_NOT_FOUND");
+    }
+
+    @Test
     void unsubscribeDisposesOnlySelectedTopic() {
         LocalWebSocketConnectionRegistry registry = new LocalWebSocketConnectionRegistry();
         TrackingDisposable first = new TrackingDisposable();

@@ -381,7 +381,7 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 | `runId` | 事件所属 run |
 | `sessionId` | 事件所属会话；前端必须按该字段分发到对应会话面板 |
 | `sequence` | openGauss 生成的事件恢复游标；WebSocket offset 和 Event Resume `afterSeq` 都使用它 |
-| `type` | `run.started`、`message.delta`、`message.snapshot`、`message.completed`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.thinking.delta`、`runtime.tool`、`runtime.reference`、`runtime.reference.delta`、`runtime.reference.completed`、`runtime.card`、`runtime.card.delta`、`runtime.card.completed`、`runtime.event`、`run.completed`、`run.failed`、`run.cancelled`、`run.recovered` |
+| `type` | `run.started`、`message.delta`、`message.snapshot`、`message.completed`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.reference`、`runtime.card`、`runtime.event`、`run.completed`、`run.failed`、`run.cancelled`、`run.recovered` |
 | `payload` | 事件载荷；`message.delta` 使用 `payload.delta` 追加文本，`message.snapshot` 使用 `payload.content` 替换当前草稿 |
 
 ### `ChatAttachmentDto`
@@ -1152,8 +1152,8 @@ Relay 映射规则：
 - `type=agent,is_streaming=false` 且存在 `content/context` 时，映射为 `message.snapshot`，这是更权威的最终回答快照；前端用 `payload.content` 替换当前草稿。
 - 纯文本 `steam-complete`、`stream-complete`、`stream_complete`、`stream.complete`、`stream-completed`、`[DONE]` 映射为 `message.completed`。
 - `relay-progress`、`project_home`、`available-modes/availbale-modes`、`agent-call`、`thinking-operation-start/thinkink-operation-start`、`thinking-operation-end/thinking_operation-end`、`tool_call_streaming`、引用/来源类事件映射为对应 `runtime.*`。
-- legacy-agent 指定技能响应中，`content` 的 `<think>...</think>` 片段映射为 `runtime.thinking`，不会拼入 assistant 正文；非 think 内容映射为 `message.delta`。`traceId/sessionId/messageId` 映射为 `runtime.metadata`；单独出现的 `intent/skillId` 映射为 `runtime.metadata`；如果 `intent/skillId` 与某个卡片字段同帧出现，则一起放入 `runtime.card`。当前 legacy 协议下 `cardUrl/diyCardScene/cardList` 不会在同一个 chunk 中同时出现，因此卡片事件会保留原始 `sourceType`，例如 `diyCardScene`；服务端仅保留 `sourceType=legacy-card/cardType=mixed` 作为非预期混合帧的防御兜底。`processResult` 映射为 `runtime.thinking`，`searchList/sourcesDocuments` 映射为 `runtime.reference`，`endFlag=true` 映射为 `message.completed`。
-- 当 legacy 的 `diyCardScene/searchList/sourcesDocuments` 大对象被网络截断到多个 chunk 时，服务端会先识别字段类型，再输出 typed fragment：`runtime.card.delta/completed` 或 `runtime.reference.delta/completed`。前端按 `payload.itemId` 拼接相同对象的 `payload.delta`；`completed` 表示该对象片段结束。fragment 只用于卡片、引用、思考等过程展示，不应拼入 assistant 正文。
+- legacy-agent 指定技能响应中，`content` 的 `<think>...</think>` 片段映射为 `runtime.thinking`，不会拼入 assistant 正文；非 think 内容映射为 `message.delta`。`traceId/sessionId/messageId` 映射为 `runtime.metadata`；单独出现的 `intent/skillId` 映射为 `runtime.metadata`；如果 `intent/skillId` 与某个卡片字段同帧出现，则一起放入 `runtime.card`。当前 legacy 协议下 `cardUrl/diyCardScene/cardList` 不会在同一个 chunk 中同时出现，因此卡片事件会保留原始 `sourceType`，例如 `diyCardScene`；服务端仅保留 `sourceType=legacy-card/cardType=mixed` 作为非预期混合帧的防御兜底。`processResult` 映射为 `runtime.progress`，`searchList/sourcesDocuments` 映射为 `runtime.reference`，`endFlag=true` 映射为 `message.completed`。
+- 当 legacy 的 `diyCardScene/searchList/sourcesDocuments/processResult` 大对象被网络截断到多个 chunk 时，服务端会先识别字段类型，再使用对应稳定事件类型输出分片：`runtime.card`、`runtime.reference` 或 `runtime.progress`。前端按 `payload.fragment=true` 判断分片，按 `payload.itemId` 拼接相同对象的 `payload.delta`；`payload.complete=true` 表示该对象片段结束。fragment 只用于卡片、引用、进度等过程展示，不应拼入 assistant 正文。
 - 未识别合法 JSON 映射为 `runtime.event`。`sourcePayload` 会脱敏和限长，不能作为稳定字段依赖。
 - Relay 原始 `type` 不会成为 ChatService 顶层 `type`，只会作为 `payload.sourceType` 或 raw log 排障信息。
 

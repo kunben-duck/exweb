@@ -93,6 +93,33 @@ class ConfiguredLegacySkillAgentClientTest {
         assertThat(captured.get().headers().getFirst(HttpHeaders.COOKIE)).isEqualTo("sid=abc");
     }
 
+    @Test
+    void queryStopsConsumingAfterLegacyMessageCompleted() {
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_EVENT_STREAM_VALUE)
+                        .body("""
+                                message: {"content":"ok"}
+
+                                message: {"endFlag":true}
+
+                                message: {"content":"late"}
+
+                                """)
+                        .build()));
+        LegacySkillProperties properties = properties();
+        ConfiguredLegacySkillAgentClient client = new ConfiguredLegacySkillAgentClient(
+                builder,
+                properties,
+                new LegacySkillChatRequestMapper(objectMapper, properties),
+                new LegacySkillResponseNormalizer(objectMapper));
+
+        StepVerifier.create(client.query(queryRequest(RuntimeForwardHeaders.empty())))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "ok"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                .verifyComplete();
+    }
+
     private LegacySkillAgentRequest queryRequest(RuntimeForwardHeaders forwardHeaders) {
         return new LegacySkillAgentRequest(
                 user(),

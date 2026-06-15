@@ -398,7 +398,7 @@ COMMENT ON COLUMN fin_ex_chat_run_execution_t.updated_at IS '执行控制面记�
 
 COMMENT ON SEQUENCE fin_ex_chat_event_seq IS '聊天事件恢复游标序号生成器，由 openGauss 统一生成 seq，供 WebSocket/SSE 断点恢复使用。';
 
-COMMENT ON TABLE fin_ex_chat_event_t IS '聊天事件事实表，保存 ChatService 标准事件，例如 run.started、message.delta、message.snapshot、runtime.progress、runtime.tool、runtime.reference.delta、runtime.card.delta、message.completed、run.completed、run.failed、run.cancelled；tenant_id/user_id/session_id/run_id 是防止多用户、多会话串线的事实边界。';
+COMMENT ON TABLE fin_ex_chat_event_t IS '聊天事件事实表，保存 ChatService 标准事件，例如 run.started、message.delta、message.snapshot、runtime.progress、runtime.tool、runtime.reference、runtime.card、message.completed、run.completed、run.failed、run.cancelled；tenant_id/user_id/session_id/run_id 是防止多用户、多会话串线的事实边界。';
 COMMENT ON TABLE fin_ex_runtime_raw_stream_log_t IS 'Runtime 原始流响应日志表，保存下游 Relay normalizer 之前的原始响应片段，仅用于排障和协议分析，不作为前端恢复事实源。';
 COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.id IS '原始流日志主键，业务生成的 rawlogId。';
 COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.tenant_id IS '租户标识，来自本轮 run 的用户上下文。';
@@ -424,8 +424,8 @@ COMMENT ON COLUMN fin_ex_chat_event_t.user_id IS '用户标识，来自服务端
 COMMENT ON COLUMN fin_ex_chat_event_t.session_id IS '事件所属聊天会话 ID；写入时必须与 run 所属 session 一致。';
 COMMENT ON COLUMN fin_ex_chat_event_t.run_id IS '事件所属 runId，对应 fin_ex_chat_run_t.id；写入时必须与 session、tenant、user 归属一致。';
 COMMENT ON COLUMN fin_ex_chat_event_t.seq IS '事件恢复游标序号，由 openGauss sequence 生成；同一会话内按 seq 补发。';
-COMMENT ON COLUMN fin_ex_chat_event_t.event_type IS 'ChatService 标准事件类型，例如 run.started、message.delta、message.snapshot、message.completed、runtime.progress、runtime.metadata、runtime.agent、runtime.thinking、runtime.thinking.delta、runtime.tool、runtime.reference、runtime.reference.delta、runtime.reference.completed、runtime.card、runtime.card.delta、runtime.card.completed、runtime.event、run.completed、run.failed、run.cancelled。';
-COMMENT ON COLUMN fin_ex_chat_event_t.payload_json IS '事件载荷 JSON，保存前端可消费的 delta、状态和诊断字段。';
+COMMENT ON COLUMN fin_ex_chat_event_t.event_type IS 'ChatService 标准事件类型，例如 run.started、message.delta、message.snapshot、message.completed、runtime.progress、runtime.metadata、runtime.agent、runtime.thinking、runtime.tool、runtime.reference、runtime.card、runtime.event、run.completed、run.failed、run.cancelled；大对象分片通过 payload.fragment/itemId/delta/complete 表达。';
+COMMENT ON COLUMN fin_ex_chat_event_t.payload_json IS '事件载荷 JSON，保存前端可消费的 delta、状态、分片标记和诊断字段。';
 COMMENT ON COLUMN fin_ex_chat_event_t.created_at IS '事件创建并落库时间。';
 
 COMMENT ON TABLE fin_ex_uploaded_document_t IS '用户文档库表，保存统一 documentId、目标 provider 位置、处理状态和可引用元数据。';

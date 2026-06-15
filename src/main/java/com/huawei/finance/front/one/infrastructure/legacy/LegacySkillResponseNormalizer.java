@@ -3,16 +3,19 @@ package com.huawei.finance.front.one.infrastructure.legacy;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.finance.front.one.application.config.LegacySkillProperties;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
 import com.huawei.finance.front.one.domain.chat.RuntimeEvent;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -24,9 +27,19 @@ import org.springframework.stereotype.Component;
 @Component
 public class LegacySkillResponseNormalizer {
     private final ObjectMapper objectMapper;
+    private final int maxPendingFrameBytes;
+    private final int maxFragmentBytes;
 
     public LegacySkillResponseNormalizer(ObjectMapper objectMapper) {
+        this(objectMapper, new LegacySkillProperties());
+    }
+
+    @Autowired
+    public LegacySkillResponseNormalizer(ObjectMapper objectMapper, LegacySkillProperties properties) {
         this.objectMapper = objectMapper;
+        LegacySkillProperties nextProperties = properties == null ? new LegacySkillProperties() : properties;
+        this.maxPendingFrameBytes = nextProperties.normalizedMaxPendingFrameBytes();
+        this.maxFragmentBytes = nextProperties.normalizedMaxFragmentBytes();
     }
 
     public List<ChatEvent> normalize(String runId, String sessionId, String chunk) {
@@ -51,71 +64,305 @@ public class LegacySkillResponseNormalizer {
         }
         LegacySkillStreamState streamState = state == null ? newStreamState() : state;
         List<ChatEvent> events = new ArrayList<>();
-        for (String frame : splitFrames(chunk)) {
-            if (frame == null || frame.isBlank()) {
-                continue;
-            }
-            events.addAll(normalizeFrame(runId, sessionId, frame, streamState));
+        if (streamState.activeFragment != null) {
+            events.addAll(continueFragment(runId, sessionId, chunk, streamState));
+            return List.copyOf(events);
         }
-        return events;
+        streamState.frameBuffer.append(chunk);
+        while (streamState.activeFragment == null) {
+            FrameExtraction extraction = extractCompleteFrame(streamState.frameBuffer);
+            if (extraction == null) {
+                break;
+            }
+            if (extraction.frame() != null && !extraction.frame().isBlank()) {
+                events.addAll(normalizeFrame(runId, sessionId, extraction.frame(), streamState));
+            }
+        }
+        if (streamState.activeFragment == null && !streamState.frameBuffer.isEmpty()) {
+            LegacyFragmentKind fragmentKind = detectFragmentKind(stripLeadingFramePrefix(streamState.frameBuffer.toString()));
+            if (fragmentKind != null) {
+                events.addAll(startFragment(runId, sessionId, streamState, fragmentKind));
+            } else if (utf8Length(streamState.frameBuffer) > maxPendingFrameBytes) {
+                String sourcePayload = truncate(streamState.frameBuffer.toString());
+                streamState.frameBuffer.setLength(0);
+                events.add(RuntimeEvent.fallback("legacy-agent", runId, sessionId,
+                        "legacy-frame-too-large", "event", "runtime", "debug", null,
+                        Map.of("maxPendingFrameBytes", maxPendingFrameBytes, "raw", sourcePayload)));
+            }
+        }
+        return List.copyOf(events);
     }
 
-    private List<String> splitFrames(String chunk) {
-        List<String> frames = new ArrayList<>();
-        StringBuilder sseData = new StringBuilder();
-        boolean sawSse = false;
-        for (String line : chunk.split("\\R")) {
-            String trimmed = line.trim();
-            if (trimmed.isEmpty()) {
-                flush(frames, sseData);
-                continue;
-            }
-            if (trimmed.startsWith(":")) {
-                sawSse = true;
-                continue;
-            }
-            if (trimmed.startsWith("event:") || trimmed.startsWith("id:") || trimmed.startsWith("retry:")) {
-                sawSse = true;
-                continue;
-            }
-            if (trimmed.startsWith("data:") || trimmed.startsWith("message:")
-                    || trimmed.startsWith("message.") || trimmed.startsWith("message ")) {
-                sawSse = true;
-                String value = valueAfterPrefix(trimmed);
-                if (!value.isBlank()) {
-                    if (!sseData.isEmpty()) {
-                        sseData.append('\n');
-                    }
-                    sseData.append(value);
-                }
+    /**
+     * 下游流结束时调用，用于处理未闭合的残留帧和未闭合的 think 内容。
+     *
+     * <p>正常分包不会在这里产生 invalid-json；只有上游连接结束后仍残留无法闭合的 frame，
+     * 才输出诊断事件，避免把半截 DataBuffer 误判为业务事件。</p>
+     */
+    public List<ChatEvent> finish(String runId, String sessionId, LegacySkillStreamState state) {
+        if (state == null) {
+            return List.of();
+        }
+        List<ChatEvent> events = new ArrayList<>();
+        if (state.activeFragment != null) {
+            if (state.activeFragment.scanner().isComplete()) {
+                events.addAll(completeFragment(runId, sessionId, state));
+            } else {
+                LegacyActiveFragment fragment = state.activeFragment;
+                state.activeFragment = null;
+                events.add(RuntimeEvent.fallback("legacy-agent", runId, sessionId,
+                        "invalid-json", "event", "runtime", "debug", null,
+                        Map.of("itemId", fragment.itemId(), "sourceType", fragment.kind().sourceType(),
+                                "reason", "legacy stream ended before current frame was closed")));
             }
         }
-        flush(frames, sseData);
-        if (!sawSse) {
-            frames.add(chunk.trim());
+        if (!state.frameBuffer.isEmpty()) {
+            String remaining = stripLeadingFramePrefix(state.frameBuffer.toString());
+            if (!remaining.isBlank()) {
+                events.add(RuntimeEvent.fallback("legacy-agent", runId, sessionId,
+                        "invalid-json", "event", "runtime", "debug", null,
+                        Map.of("raw", truncate(remaining))));
+            }
+            state.frameBuffer.setLength(0);
         }
-        return frames;
-    }
-
-    private void flush(List<String> frames, StringBuilder sseData) {
-        if (!sseData.isEmpty()) {
-            frames.add(sseData.toString());
-            sseData.setLength(0);
-        }
+        events.addAll(flushPendingContent(runId, sessionId, state));
+        return List.copyOf(events);
     }
 
     private String valueAfterPrefix(String line) {
         if (line.startsWith("message.")) {
-            return line.substring("message.".length()).trim();
+            return stripProtocolLeadingWhitespace(line.substring("message.".length()));
         }
         if (line.startsWith("message ")) {
-            return line.substring("message ".length()).trim();
+            return stripProtocolLeadingWhitespace(line.substring("message ".length()));
         }
         int colon = line.indexOf(':');
         if (colon >= 0) {
-            return line.substring(colon + 1).trim();
+            return stripProtocolLeadingWhitespace(line.substring(colon + 1));
         }
         return line;
+    }
+
+    private String stripProtocolLeadingWhitespace(String value) {
+        int index = 0;
+        while (index < value.length() && Character.isWhitespace(value.charAt(index))) {
+            index++;
+        }
+        return index == 0 ? value : value.substring(index);
+    }
+
+    private FrameExtraction extractCompleteFrame(StringBuilder buffer) {
+        trimLeadingWhitespace(buffer);
+        if (buffer.isEmpty()) {
+            return null;
+        }
+        EventDelimiter delimiter = findEventDelimiter(buffer);
+        if (delimiter != null) {
+            String segment = buffer.substring(0, delimiter.index());
+            buffer.delete(0, delimiter.index() + delimiter.length());
+            return new FrameExtraction(payloadFromSegment(segment));
+        }
+        String candidate = stripLeadingFramePrefix(buffer.toString());
+        int jsonStart = firstJsonStart(candidate);
+        if (jsonStart < 0) {
+            return null;
+        }
+        int end = completeJsonEnd(candidate, jsonStart);
+        if (end < 0) {
+            return null;
+        }
+        String frame = candidate.substring(jsonStart, end + 1);
+        int deleteLength = buffer.length() - candidate.length() + end + 1;
+        buffer.delete(0, deleteLength);
+        return new FrameExtraction(frame);
+    }
+
+    private String payloadFromSegment(String segment) {
+        if (segment == null || segment.isBlank()) {
+            return "";
+        }
+        StringBuilder payload = new StringBuilder();
+        boolean sawStreamPrefix = false;
+        for (String line : segment.split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty() || trimmed.startsWith(":")
+                    || trimmed.startsWith("event:") || trimmed.startsWith("id:")
+                    || trimmed.startsWith("retry:")) {
+                continue;
+            }
+            if (hasFramePrefix(trimmed)) {
+                sawStreamPrefix = true;
+                String value = valueAfterPrefix(trimmed);
+                if (!value.isBlank()) {
+                    if (!payload.isEmpty()) {
+                        payload.append('\n');
+                    }
+                    payload.append(value);
+                }
+            }
+        }
+        return sawStreamPrefix ? payload.toString() : segment.trim();
+    }
+
+    private String stripLeadingFramePrefix(String value) {
+        String next = value == null ? "" : value.stripLeading();
+        if (next.startsWith("data:") || next.startsWith("message:")
+                || next.startsWith("message.") || next.startsWith("message ")) {
+            return valueAfterPrefix(next);
+        }
+        return next;
+    }
+
+    private boolean hasFramePrefix(String value) {
+        return value.startsWith("data:") || value.startsWith("message:")
+                || value.startsWith("message.") || value.startsWith("message ");
+    }
+
+    private void trimLeadingWhitespace(StringBuilder buffer) {
+        int index = 0;
+        while (index < buffer.length() && Character.isWhitespace(buffer.charAt(index))) {
+            index++;
+        }
+        if (index > 0) {
+            buffer.delete(0, index);
+        }
+    }
+
+    private EventDelimiter findEventDelimiter(CharSequence value) {
+        int lf = indexOf(value, "\n\n");
+        int crlf = indexOf(value, "\r\n\r\n");
+        if (lf < 0 && crlf < 0) {
+            return null;
+        }
+        if (lf < 0 || crlf >= 0 && crlf < lf) {
+            return new EventDelimiter(crlf, "\r\n\r\n".length());
+        }
+        return new EventDelimiter(lf, "\n\n".length());
+    }
+
+    private int indexOf(CharSequence value, String target) {
+        int max = value.length() - target.length();
+        for (int i = 0; i <= max; i++) {
+            int j = 0;
+            while (j < target.length() && value.charAt(i + j) == target.charAt(j)) {
+                j++;
+            }
+            if (j == target.length()) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private int firstJsonStart(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == '{' || c == '[') {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private int completeJsonEnd(String value, int start) {
+        JsonFragmentScanner scanner = new JsonFragmentScanner();
+        return scanner.accept(value, start);
+    }
+
+    private LegacyFragmentKind detectFragmentKind(String payload) {
+        String sourceType = firstPresentSourceType(payload,
+                "diyCardScene", "cardList", "cardUrl",
+                "searchList", "SearchList",
+                "sourcesDocuments", "sourceDocuments", "SourceDocuments", "SourceDocuemts",
+                "processResult");
+        if (sourceType == null) {
+            return null;
+        }
+        if ("diyCardScene".equals(sourceType) || "cardList".equals(sourceType) || "cardUrl".equals(sourceType)) {
+            return new LegacyFragmentKind(sourceType, "runtime.card.delta", "runtime.card.completed",
+                    "card", "application/json");
+        }
+        if ("processResult".equals(sourceType)) {
+            return new LegacyFragmentKind(sourceType, "runtime.thinking.delta",
+                    "runtime.thinking", "thinking", "application/json");
+        }
+        return new LegacyFragmentKind(sourceType, "runtime.reference.delta",
+                "runtime.reference.completed", "reference", "application/json");
+    }
+
+    private String firstPresentSourceType(String payload, String... candidates) {
+        if (payload == null || payload.isBlank()) {
+            return null;
+        }
+        for (String candidate : candidates) {
+            if (payload.contains("\"" + candidate + "\"")) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private List<ChatEvent> startFragment(String runId, String sessionId, LegacySkillStreamState state,
+                                          LegacyFragmentKind kind) {
+        String payload = stripLeadingFramePrefix(state.frameBuffer.toString());
+        state.frameBuffer.setLength(0);
+        state.activeFragment = new LegacyActiveFragment(kind, state.nextItemId(kind.sourceType()));
+        return emitFragmentDelta(runId, sessionId, state, payload);
+    }
+
+    private List<ChatEvent> continueFragment(String runId, String sessionId, String chunk,
+                                             LegacySkillStreamState state) {
+        return emitFragmentDelta(runId, sessionId, state, stripLeadingFramePrefix(chunk));
+    }
+
+    private List<ChatEvent> emitFragmentDelta(String runId, String sessionId, LegacySkillStreamState state,
+                                              String text) {
+        if (state.activeFragment == null || text == null || text.isEmpty()) {
+            return List.of();
+        }
+        LegacyActiveFragment fragment = state.activeFragment;
+        List<ChatEvent> events = new ArrayList<>();
+        int completeIndex = fragment.scanner().accept(text, 0);
+        String effective = completeIndex >= 0 ? text.substring(0, completeIndex + 1) : text;
+        for (String part : splitByUtf8Bytes(effective, maxFragmentBytes)) {
+            events.add(fragmentDelta(runId, sessionId, fragment, part));
+        }
+        if (completeIndex >= 0) {
+            events.addAll(completeFragment(runId, sessionId, state));
+            String tail = text.substring(completeIndex + 1).trim();
+            if (!tail.isEmpty()) {
+                events.addAll(normalize(runId, sessionId, tail, state));
+            }
+        }
+        return events;
+    }
+
+    private RuntimeEvent fragmentDelta(String runId, String sessionId, LegacyActiveFragment fragment, String delta) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("source", "legacy-agent");
+        payload.put("sourceType", fragment.kind().sourceType());
+        payload.put("itemId", fragment.itemId());
+        payload.put("channel", fragment.kind().channel());
+        payload.put("contentType", fragment.kind().contentType());
+        payload.put("delta", delta);
+        payload.put("complete", false);
+        return new RuntimeEvent(runId, sessionId, 0, Instant.now(), fragment.kind().deltaEventType(), Map.copyOf(payload));
+    }
+
+    private List<ChatEvent> completeFragment(String runId, String sessionId, LegacySkillStreamState state) {
+        if (state.activeFragment == null) {
+            return List.of();
+        }
+        LegacyActiveFragment fragment = state.activeFragment;
+        state.activeFragment = null;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("source", "legacy-agent");
+        payload.put("sourceType", fragment.kind().sourceType());
+        payload.put("itemId", fragment.itemId());
+        payload.put("channel", fragment.kind().channel());
+        payload.put("complete", true);
+        return List.of(new RuntimeEvent(runId, sessionId, 0, Instant.now(),
+                fragment.kind().completedEventType(), Map.copyOf(payload)));
     }
 
     private List<ChatEvent> normalizeFrame(String runId, String sessionId, String frame, LegacySkillStreamState state) {
@@ -218,6 +465,10 @@ public class LegacySkillResponseNormalizer {
         if (root.hasNonNull("sourcesDocuments")) {
             events.add(RuntimeEvent.reference(runId, sessionId,
                     referencePayload("source_documents", "sourcesDocuments", root.get("sourcesDocuments"))));
+        }
+        if (root.hasNonNull("sourceDocuments")) {
+            events.add(RuntimeEvent.reference(runId, sessionId,
+                    referencePayload("source_documents", "sourceDocuments", root.get("sourceDocuments"))));
         }
         if (hasCardPayload(root)) {
             events.add(RuntimeEvent.card(runId, sessionId, cardPayload(root)));
@@ -519,11 +770,133 @@ public class LegacySkillResponseNormalizer {
         return value.substring(0, 2048);
     }
 
+    private int utf8Length(CharSequence value) {
+        return value == null ? 0 : value.toString().getBytes(StandardCharsets.UTF_8).length;
+    }
+
+    private List<String> splitByUtf8Bytes(String value, int maxBytes) {
+        if (value == null || value.isEmpty()) {
+            return List.of();
+        }
+        int limit = Math.max(1, maxBytes);
+        List<String> parts = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        int currentBytes = 0;
+        for (int i = 0; i < value.length();) {
+            int codePoint = value.codePointAt(i);
+            String next = new String(Character.toChars(codePoint));
+            int nextBytes = next.getBytes(StandardCharsets.UTF_8).length;
+            if (!current.isEmpty() && currentBytes + nextBytes > limit) {
+                parts.add(current.toString());
+                current.setLength(0);
+                currentBytes = 0;
+            }
+            current.append(next);
+            currentBytes += nextBytes;
+            i += Character.charCount(codePoint);
+        }
+        if (!current.isEmpty()) {
+            parts.add(current.toString());
+        }
+        return List.copyOf(parts);
+    }
+
+    private record FrameExtraction(String frame) {
+    }
+
+    private record EventDelimiter(int index, int length) {
+    }
+
+    private record LegacyFragmentKind(
+            String sourceType,
+            String deltaEventType,
+            String completedEventType,
+            String channel,
+            String contentType
+    ) {
+    }
+
+    private record LegacyActiveFragment(
+            LegacyFragmentKind kind,
+            String itemId,
+            JsonFragmentScanner scanner
+    ) {
+        private LegacyActiveFragment(LegacyFragmentKind kind, String itemId) {
+            this(kind, itemId, new JsonFragmentScanner());
+        }
+    }
+
+    /**
+     * 增量 JSON 边界扫描器。
+     *
+     * <p>它只判断当前 frame 的顶层 JSON 值是否闭合，不把完整对象缓存在内存中。字符串和转义
+     * 状态会跨 chunk 保留，因此 JSON 字符串里的花括号不会误触发完成。</p>
+     */
+    private static final class JsonFragmentScanner {
+        private boolean started;
+        private boolean inString;
+        private boolean escaping;
+        private int depth;
+        private boolean complete;
+
+        private int accept(String value, int offset) {
+            if (value == null || value.isEmpty()) {
+                return -1;
+            }
+            for (int i = Math.max(0, offset); i < value.length(); i++) {
+                char c = value.charAt(i);
+                if (!started) {
+                    if (c == '{' || c == '[') {
+                        started = true;
+                        depth = 1;
+                    }
+                    continue;
+                }
+                if (inString) {
+                    if (escaping) {
+                        escaping = false;
+                    } else if (c == '\\') {
+                        escaping = true;
+                    } else if (c == '"') {
+                        inString = false;
+                    }
+                    continue;
+                }
+                if (c == '"') {
+                    inString = true;
+                } else if (c == '{' || c == '[') {
+                    depth++;
+                } else if (c == '}' || c == ']') {
+                    depth--;
+                    if (depth == 0) {
+                        complete = true;
+                        return i;
+                    }
+                }
+            }
+            return -1;
+        }
+
+        private boolean isComplete() {
+            return complete;
+        }
+    }
+
     /**
      * 单次 legacy eventStream 的内容解析状态。
      */
     public static final class LegacySkillStreamState {
         private boolean inThinking;
         private String pending = "";
+        private final StringBuilder frameBuffer = new StringBuilder();
+        private LegacyActiveFragment activeFragment;
+        private int itemSequence;
+
+        private String nextItemId(String sourceType) {
+            String normalized = sourceType == null || sourceType.isBlank()
+                    ? "legacy"
+                    : sourceType.replaceAll("[^A-Za-z0-9_-]", "_");
+            return normalized + "_" + (++itemSequence);
+        }
     }
 }

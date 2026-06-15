@@ -35,6 +35,10 @@ public class LegacySkillProperties {
     private int defaultIsThinking = 1;
     /** 单次指定技能调用最大附件数。 */
     private int maxAttachments = 10;
+    /** 单个未完成 legacy 流式 frame 允许暂存的最大字节数，防止下游异常大 JSON 导致 OOM。 */
+    private int maxPendingFrameBytes = 1024 * 1024;
+    /** 大对象 fragment 输出的单片最大字节数，避免单个 WS/Event Resume 事件体过大。 */
+    private int maxFragmentBytes = 8192;
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
@@ -63,6 +67,10 @@ public class LegacySkillProperties {
     public void setDefaultIsThinking(int defaultIsThinking) { this.defaultIsThinking = defaultIsThinking; }
     public int getMaxAttachments() { return maxAttachments; }
     public void setMaxAttachments(int maxAttachments) { this.maxAttachments = maxAttachments; }
+    public int getMaxPendingFrameBytes() { return maxPendingFrameBytes; }
+    public void setMaxPendingFrameBytes(int maxPendingFrameBytes) { this.maxPendingFrameBytes = maxPendingFrameBytes; }
+    public int getMaxFragmentBytes() { return maxFragmentBytes; }
+    public void setMaxFragmentBytes(int maxFragmentBytes) { this.maxFragmentBytes = maxFragmentBytes; }
 
     public boolean skillAllowed(String skillId) {
         if (skillId == null || skillId.isBlank()) {
@@ -73,5 +81,13 @@ public class LegacySkillProperties {
 
     public int normalizedMaxAttachments() {
         return maxAttachments <= 0 ? 10 : maxAttachments;
+    }
+
+    public int normalizedMaxPendingFrameBytes() {
+        return maxPendingFrameBytes <= 0 ? 1024 * 1024 : maxPendingFrameBytes;
+    }
+
+    public int normalizedMaxFragmentBytes() {
+        return maxFragmentBytes <= 0 ? 8192 : maxFragmentBytes;
     }
 }

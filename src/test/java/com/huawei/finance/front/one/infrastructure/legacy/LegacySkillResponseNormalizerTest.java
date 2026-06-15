@@ -127,6 +127,53 @@ class LegacySkillResponseNormalizerTest {
     }
 
     @Test
+    void streamsSplitDiyCardSceneWithoutInvalidJson() {
+        LegacySkillResponseNormalizer.LegacySkillStreamState state = normalizer.newStreamState();
+
+        List<ChatEvent> first = normalizer.normalize("run1", "session1",
+                "message: {\"diyCardScene\":{\"title\":\"税务", state);
+        List<ChatEvent> second = normalizer.normalize("run1", "session1",
+                "意见\",\"items\":[{\"name\":\"A\"}]}}", state);
+
+        assertThat(first).extracting(ChatEvent::type).containsExactly("runtime.card.delta");
+        assertThat(second).extracting(ChatEvent::type).containsExactly("runtime.card.delta", "runtime.card.completed");
+        assertThat(first.getFirst().payload()).containsEntry("sourceType", "diyCardScene")
+                .containsEntry("contentType", "application/json");
+        assertThat(second).extracting(ChatEvent::type).doesNotContain("runtime.event");
+    }
+
+    @Test
+    void streamsSplitReferencesWithoutRequiringFieldNameInLaterChunks() {
+        LegacySkillResponseNormalizer.LegacySkillStreamState state = normalizer.newStreamState();
+
+        List<ChatEvent> first = normalizer.normalize("run1", "session1",
+                "message: {\"sourcesDocuments\":[{\"docName\":\"制度", state);
+        List<ChatEvent> second = normalizer.normalize("run1", "session1",
+                "文件\",\"url\":\"https://example.com/a.pdf\"}]}", state);
+
+        assertThat(first).extracting(ChatEvent::type).containsExactly("runtime.reference.delta");
+        assertThat(second).extracting(ChatEvent::type)
+                .containsExactly("runtime.reference.delta", "runtime.reference.completed");
+        assertThat(first.getFirst().payload()).containsEntry("sourceType", "sourcesDocuments");
+        assertThat(second.getFirst().payload()).containsEntry("sourceType", "sourcesDocuments");
+    }
+
+    @Test
+    void streamsSplitSearchListWithoutInvalidJson() {
+        LegacySkillResponseNormalizer.LegacySkillStreamState state = normalizer.newStreamState();
+
+        List<ChatEvent> first = normalizer.normalize("run1", "session1",
+                "message: {\"searchList\":[{\"title\":\"网页", state);
+        List<ChatEvent> second = normalizer.normalize("run1", "session1",
+                "资料\",\"url\":\"https://example.com\"}]}", state);
+
+        assertThat(first).extracting(ChatEvent::type).containsExactly("runtime.reference.delta");
+        assertThat(second).extracting(ChatEvent::type)
+                .containsExactly("runtime.reference.delta", "runtime.reference.completed");
+        assertThat(first.getFirst().payload()).containsEntry("sourceType", "searchList");
+    }
+
+    @Test
     void skipsNullItemsInStructuredArrays() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1", """
                 message: {"sourcesDocuments":[null,{"docName":"a.pdf"}],"cardList":[null,{"title":"卡片"}]}

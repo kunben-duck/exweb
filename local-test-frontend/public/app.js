@@ -835,7 +835,7 @@ function handleChatEvent(event, source = "event", options = {}) {
 
 function runtimeEventLabel(eventType, payload) {
   const sourceType = payload.sourceType || "unknown";
-  const text = payload.text || payload.task || payload.inputPreview || payload.projectHome || payload.sourcePayload?.message || payload.sourcePayload?.project_home || "";
+  const text = payload.text || payload.delta || payload.task || payload.inputPreview || payload.projectHome || payload.sourcePayload?.message || payload.sourcePayload?.project_home || "";
   return text ? `${eventType} ${sourceType}: ${text}` : `${eventType} ${sourceType}`;
 }
 

@@ -70,7 +70,9 @@ public class ConfiguredLegacySkillAgentClient implements LegacySkillAgentClient 
                     .map(this::readUtf8)
                     .timeout(properties.getTimeout())
                     .flatMapIterable(chunk -> responseNormalizer.normalize(
-                            request.runId(), request.sessionId(), chunk, streamState));
+                            request.runId(), request.sessionId(), chunk, streamState))
+                    .concatWith(Flux.defer(() -> Flux.fromIterable(
+                            responseNormalizer.finish(request.runId(), request.sessionId(), streamState))));
         });
     }
 

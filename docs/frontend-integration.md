@@ -1,6 +1,8 @@
 # FinanceEXChatService 前端联调文档
 
-本文档面向 Web 前端联调，覆盖会话、文档上传、创建 run、WebSocket 实时订阅、Event Resume 断点恢复、停止回答和常见排障。当前正式版采用 ChatGPT-like 单一对话流协议：HTTP 负责创建/控制后台 run；WebSocket 负责当前页面新建 run 的实时订阅；Event Resume 负责恢复链路，其中会话级事件恢复是有限补发，run 级事件恢复在 active run 场景会先补发再接续 live 事件直到 run 终态。
+本文档面向 Web 前端联调，覆盖会话、文档上传、创建 run、WebSocket 实时订阅、Event Resume 断点恢复、停止回答和常见排障。当前正式版采用“后台 run + 实时订阅 + 事件恢复”的单一对话流协议：HTTP 负责创建和控制后台 run；WebSocket 负责当前页面新建 run 的实时订阅；Event Resume 负责恢复链路，其中会话级事件恢复是有限补发，run 级事件恢复在 active run 场景会先补发再接续 live 事件直到 run 终态。
+
+本文档以 FinanceEXChatService 的正式接口为准，采用系统自身的设计术语描述接口边界、调用顺序和错误处理；下游 Runtime、legacy-agent 或浏览器实现细节只作为内部 adapter 行为说明，不作为前端协议依赖。
 
 ## 基础约定
 
@@ -781,7 +783,7 @@ curl -X DELETE http://localhost:8080/api/v1/ex/chat/sessions \
 ### 完整消息树视图
 
 普通聊天页推荐继续使用 `GET /sessions/{sessionId}/messages`，它只返回当前 active path。
-如果前端需要像 ChatGPT 一样展示完整版本树、调试 parent/children 关系，使用只读 tree 接口：
+如果前端需要展示完整版本树，或在联调时排查 parent/children 关系，使用只读 tree 接口：
 
 ```bash
 curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages/tree"
@@ -793,7 +795,7 @@ raw log 或下游工具原始节点。每个 assistant 节点仍带 `parts`，�
 
 ### 查询候选版本
 
-当用户编辑历史问题或重新生成回答后，同一个父节点下会出现多个 sibling。前端推荐像 ChatGPT 一样在消息下方展示
+当用户编辑历史问题或重新生成回答后，同一个父节点下会出现多个 sibling。前端推荐在消息下方展示
 `< 1/3 >` 形式的顺序版本游标，而不是把所有候选展开成列表。版本数量和当前位置来自 variants 接口：
 
 ```bash

@@ -314,7 +314,7 @@ DELETE /api/v1/ex/chat/sessions
 
 `current_leaf_message_id` 表示当前会话激活路径叶子。历史消息查询默认返回 root 到 current leaf 的路径；指定 `leafMessageId` 时返回 root 到该 leaf 的路径。前端通过 `variants` 查询同父节点候选，通过 `path` 接口切换当前激活版本。
 
-复杂前端或联调排障可以调用 `GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` 读取 GPT-like 完整可见消息树。该接口返回 `currentLeafMessageId`、`rootMessageIds` 和 `mapping`，但只包含业务可见的 user/assistant 消息，不返回 hidden system、raw log 或下游工具原始节点；普通聊天页继续使用 `/messages` active path。
+复杂前端或联调排障可以调用 `GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` 读取完整可见消息树。该接口返回 `currentLeafMessageId`、`rootMessageIds` 和 `mapping`，但只包含业务可见的 user/assistant 消息，不返回 hidden system、raw log 或下游工具原始节点；普通聊天页继续使用 `/messages` active path。
 
 ```mermaid
 flowchart TD

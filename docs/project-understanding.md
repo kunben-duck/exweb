@@ -688,7 +688,7 @@ RedisChatLiveEventBus#subscribe(...)
 重点排查：
 
 - 新开页签只收到 WebSocket、没有走 Event Resume：这是前端策略问题；服务端 WebSocket subscribe 本身也会先查 openGauss 补历史。
-- 需要严格模拟 GPT 新页签恢复：前端应先调用 run 级事件恢复，再 subscribe WebSocket。
+- 需要严格执行当前恢复协议：前端应先调用 run 级事件恢复补齐已落库事件，再根据页面需要订阅 WebSocket 实时 topic。
 - 跨实例实时缺事件：看 Redis Pub/Sub；但最终以 run 级事件恢复 是否能补齐为准。
 
 ## 12. Event Resume 恢复路径

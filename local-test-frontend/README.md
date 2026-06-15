@@ -54,7 +54,7 @@ Referer: http://localhost:8080/fin/ex/
 
 ## 覆盖范围
 
-- 会话：创建、分页列表、首条回答摘要展示、切换、state 聚合、历史消息分页、GPT-like 树视图、重命名、归档、恢复、单个/批量软删除。
+- 会话：创建、分页列表、首条回答摘要展示、切换、state 聚合、历史消息分页、完整可见消息树视图、重命名、归档、恢复、单个/批量软删除。
 - Run：创建、停止回答、stream-status 查询；重新生成通过消息树的 `REGENERATE_ASSISTANT` 操作完成。
 - WebSocket：连接、connect、subscribe、unsubscribe、跨 session / 跨 run topic 订阅。
 - 多会话隔离：同一 WebSocket 连接可以同时订阅多个 session 的 run topic；本地联调台会按事件

@@ -85,9 +85,9 @@ public class LegacySkillResponseNormalizer {
             } else if (utf8Length(streamState.frameBuffer) > maxPendingFrameBytes) {
                 String sourcePayload = truncate(streamState.frameBuffer.toString());
                 streamState.frameBuffer.setLength(0);
-                events.add(RuntimeEvent.fallback("legacy-agent", runId, sessionId,
-                        "legacy-frame-too-large", "event", "runtime", "debug", null,
-                        Map.of("maxPendingFrameBytes", maxPendingFrameBytes, "raw", sourcePayload)));
+                events.add(RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
+                        "legacy-agent", "legacy-frame-too-large", "event", "runtime", "debug", null,
+                        Map.of("maxPendingFrameBytes", maxPendingFrameBytes, "raw", sourcePayload))));
             }
         }
         return List.copyOf(events);
@@ -110,18 +110,18 @@ public class LegacySkillResponseNormalizer {
             } else {
                 LegacyActiveFragment fragment = state.activeFragment;
                 state.activeFragment = null;
-                events.add(RuntimeEvent.fallback("legacy-agent", runId, sessionId,
-                        "invalid-json", "event", "runtime", "debug", null,
+                events.add(RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
+                        "legacy-agent", "invalid-json", "event", "runtime", "debug", null,
                         Map.of("itemId", fragment.itemId(), "sourceType", fragment.kind().sourceType(),
-                                "reason", "legacy stream ended before current frame was closed")));
+                                "reason", "legacy stream ended before current frame was closed"))));
             }
         }
         if (!state.frameBuffer.isEmpty()) {
             String remaining = stripLeadingFramePrefix(state.frameBuffer.toString());
             if (!remaining.isBlank()) {
-                events.add(RuntimeEvent.fallback("legacy-agent", runId, sessionId,
-                        "invalid-json", "event", "runtime", "debug", null,
-                        Map.of("raw", truncate(remaining))));
+                events.add(RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
+                        "legacy-agent", "invalid-json", "event", "runtime", "debug", null,
+                        Map.of("raw", truncate(remaining)))));
             }
             state.frameBuffer.setLength(0);
         }
@@ -372,8 +372,10 @@ public class LegacySkillResponseNormalizer {
             JsonNode root = objectMapper.readTree(frame);
             return normalizeJson(runId, sessionId, root, state);
         } catch (JsonProcessingException ex) {
-            return List.of(RuntimeEvent.fallback("legacy-agent", runId, sessionId, "invalid-json", "event",
-                    "runtime", "debug", null, Map.of("raw", truncate(frame))));
+            RuntimeEvent.FallbackPayload payload = new RuntimeEvent.FallbackPayload(
+                    "legacy-agent", "invalid-json", "event", "runtime", "debug", null,
+                    Map.of("raw", truncate(frame)));
+            return List.of(RuntimeEvent.fallback(runId, sessionId, payload));
         }
     }
 
@@ -382,8 +384,9 @@ public class LegacySkillResponseNormalizer {
             return List.of();
         }
         if (!root.isObject()) {
-            return List.of(RuntimeEvent.fallback("legacy-agent", runId, sessionId, "unknown", "event",
-                    "runtime", "debug", null, Map.of("value", truncate(root.asText("")))));
+            return List.of(RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
+                    "legacy-agent", "unknown", "event", "runtime", "debug", null,
+                    Map.of("value", truncate(root.asText(""))))));
         }
         List<ChatEvent> events = new ArrayList<>();
         addMetadataEvents(runId, sessionId, root, events);
@@ -403,8 +406,10 @@ public class LegacySkillResponseNormalizer {
         if (!events.isEmpty()) {
             return List.copyOf(events);
         }
-        return List.of(RuntimeEvent.fallback("legacy-agent", runId, sessionId, "unknown", "event",
-                "runtime", "debug", null, Map.of("sourcePayload", sanitize(root))));
+        RuntimeEvent.FallbackPayload payload = new RuntimeEvent.FallbackPayload(
+                "legacy-agent", "unknown", "event", "runtime", "debug", null,
+                Map.of("sourcePayload", sanitize(root)));
+        return List.of(RuntimeEvent.fallback(runId, sessionId, payload));
     }
 
     private void addMetadataEvents(String runId, String sessionId, JsonNode root, List<ChatEvent> events) {
@@ -452,8 +457,9 @@ public class LegacySkillResponseNormalizer {
             return;
         }
         payload.put("eventKind", "state");
-        events.add(RuntimeEvent.fallback("legacy-agent", runId, sessionId, normalized, "state",
-                "runtime", "inline", text(root, "stateDesc"), Map.copyOf(payload)));
+        events.add(RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
+                "legacy-agent", normalized, "state", "runtime", "inline", text(root, "stateDesc"),
+                Map.copyOf(payload))));
     }
 
     private void addStructuredEvents(String runId, String sessionId, JsonNode root, List<ChatEvent> events) {

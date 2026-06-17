@@ -65,17 +65,14 @@ public interface ChatMessageRepository {
     /**
      * 查询指定 leaf 的可见消息路径。
      *
-     * @param tenantId 租户标识。
-     * @param userId 用户标识。
-     * @param sessionId 会话标识。
-     * @param leafMessageId 叶子消息；为空时使用会话 current leaf。
-     * @param cursor 保留分页游标；active path 首版返回空 nextCursor。
-     * @param limit 最大返回条数。
-     * @return root 到 leaf 的 active path。
+     * <p>默认实现只使用 owner/session/cursor/limit 查询普通历史分页，不理解 leafMessageId。
+     * 支持消息树路径查询的实现应覆盖该方法。</p>
+     *
+     * @param query 历史消息分页查询条件。
+     * @return 符合 query 的消息分页；覆盖实现可返回 root 到指定 leaf 的 active path。
      */
-    default ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String leafMessageId,
-                                         String cursor, int limit) {
-        return pageMessages(tenantId, userId, sessionId, cursor, limit);
+    default ChatMessagePage pageMessages(ChatMessagePageQuery query) {
+        return pageMessages(query.tenantId(), query.userId(), query.sessionId(), query.cursor(), query.limit());
     }
 
     /**
@@ -87,7 +84,7 @@ public interface ChatMessageRepository {
      * @return 当前用户当前会话内全部 user/assistant 完整消息，按 nodeOrder 排序。
      */
     default List<ChatMessage> findAllBySession(String tenantId, String userId, String sessionId) {
-        return pageMessages(tenantId, userId, sessionId, null, null, Integer.MAX_VALUE).items();
+        return pageMessages(new ChatMessagePageQuery(tenantId, userId, sessionId, null, null, Integer.MAX_VALUE)).items();
     }
 
     /**
@@ -119,7 +116,8 @@ public interface ChatMessageRepository {
      * 查询 root 到指定消息的完整路径。
      */
     default List<ChatMessage> findPathToMessage(String tenantId, String userId, String sessionId, String leafMessageId) {
-        return pageMessages(tenantId, userId, sessionId, leafMessageId, null, Integer.MAX_VALUE).items();
+        return pageMessages(new ChatMessagePageQuery(tenantId, userId, sessionId, leafMessageId, null,
+                Integer.MAX_VALUE)).items();
     }
 
     /**

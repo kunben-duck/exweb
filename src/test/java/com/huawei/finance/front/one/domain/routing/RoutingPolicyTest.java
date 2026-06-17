@@ -33,6 +33,17 @@ class RoutingPolicyTest {
     }
 
     @Test
+    void intentConfidenceThresholdIsConfigurable() {
+        RoutingPolicy strictPolicy = new RoutingPolicy(0.85, 0.96);
+        IntentDecision intent = new IntentDecision("finance.office.query", "office", TaskComplexity.SIMPLE, 0.95, true,
+                "finance.office.agent", Map.of(), java.util.List.of(), Map.of());
+
+        RouteTarget target = strictPolicy.decideFromIntent(null, null, intent, null);
+
+        assertThat(target.type()).isEqualTo(RouteType.AGENT_RUNTIME);
+    }
+
+    @Test
     void routesComplexIntentToAgentRuntime() {
         IntentDecision intent = new IntentDecision("finance.complex", "complex", TaskComplexity.COMPLEX, 0.92, false,
                 null, Map.of(), java.util.List.of(), Map.of());

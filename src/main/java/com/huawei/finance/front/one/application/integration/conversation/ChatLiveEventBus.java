@@ -6,7 +6,7 @@ import reactor.core.publisher.Flux;
 /**
  * 跨实例聊天实时事件总线端口。
  *
- * <p>openGauss 仍是事件事实源；该端口只负责把已经落库的 run topic 事件分发到其他应用实例，
+ * <p>数据库仍是事件事实源；该端口只负责把已经落库的 run topic 事件分发到其他应用实例，
  * 让 WebSocket 连接不依赖网关粘性路由。</p>
  */
 public interface ChatLiveEventBus {

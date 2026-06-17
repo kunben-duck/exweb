@@ -10,17 +10,13 @@ import com.huawei.finance.front.one.domain.chat.ActiveRunExistsException;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunCancelSignal;
-import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
 import com.huawei.finance.front.one.domain.chat.ChatRunStopDecision;
 import com.huawei.finance.front.one.domain.chat.ChatRunStopResult;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatStreamStatus;
 import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
-import com.huawei.finance.front.one.domain.routing.RouteTarget;
-import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import java.time.Instant;
-import java.util.Map;
 import java.util.Optional;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -72,53 +68,44 @@ public class ChatRunApplicationService {
     /**
      * 创建 RUNNING 状态的 run 快照。
      */
-    public ChatRun createRunning(String runId, UserContext user, String sessionId, RouteTarget route,
-                                 RuntimeBinding binding, Map<String, Object> metadata,
-                                 ChatRunMode runMode, String parentMessageId, String userMessageId) {
-        rejectIfActiveRunExists(user, sessionId);
+    public ChatRun createRunning(CreateChatRunContext context) {
+        UserContext user = context.user();
+        rejectIfActiveRunExists(user, context.sessionId());
         Instant now = Instant.now();
         ChatRun run = new ChatRun(
-                runId,
+                context.runId(),
                 user.tenantId(),
                 user.userId(),
-                sessionId,
+                context.sessionId(),
                 ChatRunStatus.RUNNING,
-                route == null || route.type() == null ? null : route.type().name(),
-                route == null ? null : route.selectedAgentCode(),
-                binding == null ? null : binding.provider(),
-                binding == null ? null : binding.runtimeSessionId(),
-                runMode,
-                parentMessageId,
-                userMessageId,
+                context.route() == null || context.route().type() == null ? null : context.route().type().name(),
+                context.route() == null ? null : context.route().selectedAgentCode(),
+                context.binding() == null ? null : context.binding().provider(),
+                context.binding() == null ? null : context.binding().runtimeSessionId(),
+                context.runMode(),
+                context.parentMessageId(),
+                context.userMessageId(),
                 null,
                 null,
                 null,
                 null,
                 now,
                 null,
-                metadata == null ? Map.of() : metadata,
+                context.safeMetadata(),
                 now,
                 now
         );
         if (!cache.tryClaimActive(run)) {
-            throw new ActiveRunExistsException(sessionId, findActive(user.tenantId(), user.userId(), sessionId)
+            throw new ActiveRunExistsException(context.sessionId(), findActive(user.tenantId(), user.userId(), context.sessionId())
                     .map(ChatRun::id)
                     .orElse("unknown"));
         }
         try {
             return save(run);
         } catch (RuntimeException ex) {
-            cache.evictActive(user.tenantId(), user.userId(), sessionId);
+            cache.evictActive(user.tenantId(), user.userId(), context.sessionId());
             throw ex;
         }
-    }
-
-    /**
-     * 创建普通 NEXT 模式的 run。
-     */
-    public ChatRun createRunning(String runId, UserContext user, String sessionId, RouteTarget route,
-                                 RuntimeBinding binding, Map<String, Object> metadata) {
-        return createRunning(runId, user, sessionId, route, binding, metadata, ChatRunMode.NEXT, null, null);
     }
 
     /**
@@ -233,7 +220,7 @@ public class ChatRunApplicationService {
      *
      * <p>这是集群部署下的关键保护：当前 JVM subscription registry 只能加速本机资源释放，
      * 不能作为取消事实源。非终态事件只做 Redis cancel flag 快速判断，最终写入正确性由
-     * openGauss guarded insert 校验 run 状态和 execution fencing；run 终态和 run.cancelled
+     * 数据库 guarded insert 校验 run 状态和 execution fencing；run 终态和 run.cancelled
      * 仍回源 DB 做幂等保护，避免重复闭合。</p>
      */
     public boolean shouldAcceptEvent(ChatEvent event) {

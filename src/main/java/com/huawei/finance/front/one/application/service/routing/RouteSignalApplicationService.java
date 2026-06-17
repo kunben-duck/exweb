@@ -4,18 +4,20 @@ import com.huawei.finance.front.one.application.config.RouteSignalProperties;
 import com.huawei.finance.front.one.application.integration.intent.IntentService;
 import com.huawei.finance.front.one.application.integration.usecase.UseCaseLibraryClient;
 import com.huawei.finance.front.one.application.integration.usecase.UseCaseMatchRequest;
-import com.huawei.finance.front.one.application.service.chat.FinanceEXChatService;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
+import com.huawei.finance.front.one.domain.intent.TaskComplexity;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
 import com.huawei.finance.front.one.domain.routing.RouteType;
 import com.huawei.finance.front.one.domain.routing.RoutingPolicy;
 import com.huawei.finance.front.one.domain.usecase.UseCaseMatchResult;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -75,8 +77,11 @@ public class RouteSignalApplicationService {
         }
 
         if (properties.intentEnabled()) {
+            long started = System.nanoTime();
             IntentDecision intent = recognizeIntent(command, memory, user);
-            return new RouteSignalResult(routingPolicy.decideFromIntent(command, memory, intent, user), intent);
+            long latencyMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+            return RouteSignalResult.ofIntent(routingPolicy.decideFromIntent(command, memory, intent, user),
+                    intent, latencyMs, routingPolicy.intentConfidenceThreshold());
         }
 
         return RouteSignalResult.of(RouteTarget.agentRuntime("route-signal", 0.0,
@@ -101,7 +106,21 @@ public class RouteSignalApplicationService {
         } catch (RuntimeException ex) {
             log.warn("Intent route signal failed, degrading to Relay Runtime. tenantId={}, userId={}, sessionId={}, reason={}",
                     user.tenantId(), user.userId(), command.sessionId(), ex.getMessage());
-            return null;
+            /*
+             * 保留一次真实调用失败的意图决策快照，方便异步记录服务统计降级样本。
+             * RoutingPolicy 会把该低置信复杂任务继续路由到 AgentRuntime。
+             */
+            return new IntentDecision(
+                    "finance.runtime.degraded",
+                    "意图服务不可用，转入 AgentRuntime",
+                    TaskComplexity.COMPLEX,
+                    0.0,
+                    false,
+                    null,
+                    Map.of(),
+                    List.of(),
+                    Map.of("source", "route-signal-intent-degraded", "reason", ex.getMessage() == null ? "" : ex.getMessage())
+            );
         }
     }
 

@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.infrastructure.memory;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.finance.front.one.application.integration.memory.ChatMessagePageQuery;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
@@ -19,7 +20,7 @@ import org.springframework.stereotype.Repository;
 /**
  * 基于 MyBatis 的聊天消息数据库存储。
  *
- * <p>openGauss 是完整历史消息和消息 parts 的事实源；Redis 只缓存近期上下文，
+ * <p>数据库是完整历史消息和消息 parts 的事实源；Redis 只缓存近期上下文，
  * 失效或重启后都从这里恢复会话消息。</p>
  */
 @Repository
@@ -35,28 +36,7 @@ public class MyBatisChatMessageStore {
     }
 
     public ChatMessage save(ChatMessage message) {
-        mapper.insert(
-                message.id(),
-                message.tenantId(),
-                message.userId(),
-                message.sessionId(),
-                message.parentMessageId(),
-                message.nodeOrder(),
-                message.treeDepth(),
-                message.siblingIndex(),
-                message.role(),
-                message.content(),
-                message.tokenCount(),
-                message.runId(),
-                message.originType(),
-                message.locked(),
-                message.sourceSessionId(),
-                message.sourceMessageId(),
-                message.editedFromMessageId(),
-                message.regeneratedFromMessageId(),
-                message.metadataJson(),
-                message.createdAt()
-        );
+        mapper.insert(toRow(message));
         if (message.parts() != null) {
             message.parts().forEach(this::savePart);
         }
@@ -64,44 +44,77 @@ public class MyBatisChatMessageStore {
     }
 
     public ChatMessagePart savePart(ChatMessagePart part) {
-        mapper.insertPart(
-                part.id(),
-                part.tenantId(),
-                part.userId(),
-                part.sessionId(),
-                part.messageId(),
-                part.runId(),
-                part.partType(),
-                part.sourceType(),
-                part.contentText(),
-                part.title(),
-                part.status(),
-                part.channel(),
-                part.displayHint(),
-                part.visible(),
-                toJson(part.payload()),
-                part.partOrder(),
-                part.createdAt()
-        );
+        mapper.insertPart(toRow(part));
         return part;
     }
 
     public ChatMessageAttachment saveAttachment(ChatMessageAttachment attachment) {
-        mapper.insertAttachment(
-                attachment.id(),
-                attachment.tenantId(),
-                attachment.userId(),
-                attachment.sessionId(),
-                attachment.messageId(),
-                attachment.documentId(),
-                attachment.attachmentOrder(),
-                attachment.name(),
-                attachment.contentType(),
-                attachment.sizeBytes(),
-                attachment.sourceAttachmentId(),
-                attachment.createdAt()
-        );
+        mapper.insertAttachment(toRow(attachment));
         return attachment;
+    }
+
+    private ChatMessageRow toRow(ChatMessage message) {
+        ChatMessageRow row = new ChatMessageRow();
+        row.setId(message.id());
+        row.setTenantId(message.tenantId());
+        row.setUserId(message.userId());
+        row.setSessionId(message.sessionId());
+        row.setParentMessageId(message.parentMessageId());
+        row.setNodeOrder(message.nodeOrder());
+        row.setTreeDepth(message.treeDepth());
+        row.setSiblingIndex(message.siblingIndex());
+        row.setRole(message.role());
+        row.setContent(message.content());
+        row.setTokenCount(message.tokenCount());
+        row.setRunId(message.runId());
+        row.setOriginType(message.originType());
+        row.setLocked(message.locked());
+        row.setSourceSessionId(message.sourceSessionId());
+        row.setSourceMessageId(message.sourceMessageId());
+        row.setEditedFromMessageId(message.editedFromMessageId());
+        row.setRegeneratedFromMessageId(message.regeneratedFromMessageId());
+        row.setMetadataJson(message.metadataJson());
+        row.setCreatedAt(message.createdAt());
+        return row;
+    }
+
+    private ChatMessagePartRow toRow(ChatMessagePart part) {
+        ChatMessagePartRow row = new ChatMessagePartRow();
+        row.setId(part.id());
+        row.setTenantId(part.tenantId());
+        row.setUserId(part.userId());
+        row.setSessionId(part.sessionId());
+        row.setMessageId(part.messageId());
+        row.setRunId(part.runId());
+        row.setPartType(part.partType());
+        row.setSourceType(part.sourceType());
+        row.setContentText(part.contentText());
+        row.setTitle(part.title());
+        row.setStatus(part.status());
+        row.setChannel(part.channel());
+        row.setDisplayHint(part.displayHint());
+        row.setVisible(part.visible());
+        row.setPayloadJson(toJson(part.payload()));
+        row.setPartOrder(part.partOrder());
+        row.setCreatedAt(part.createdAt());
+        return row;
+    }
+
+    private ChatMessageAttachmentRow toRow(ChatMessageAttachment attachment) {
+        ChatMessageAttachmentRow row = new ChatMessageAttachmentRow();
+        row.setId(attachment.id());
+        row.setTenantId(attachment.tenantId());
+        row.setUserId(attachment.userId());
+        row.setSessionId(attachment.sessionId());
+        row.setMessageId(attachment.messageId());
+        row.setDocumentId(attachment.documentId());
+        row.setAttachmentOrder(attachment.attachmentOrder());
+        row.setName(attachment.name());
+        row.setContentType(attachment.contentType());
+        row.setSizeBytes(attachment.sizeBytes());
+        row.setSourceAttachmentId(attachment.sourceAttachmentId());
+        row.setCreatedAt(attachment.createdAt());
+        return row;
     }
 
     public List<ChatMessage> findRecentMessages(String tenantId, String userId, String sessionId, int limit) {
@@ -119,7 +132,7 @@ public class MyBatisChatMessageStore {
     }
 
     public ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String cursor, int limit) {
-        return pageMessages(tenantId, userId, sessionId, null, cursor, limit);
+        return pageMessages(new ChatMessagePageQuery(tenantId, userId, sessionId, null, cursor, limit));
     }
 
     public Map<String, ChatMessage> findFirstAssistantMessagesBySessionIds(
@@ -132,12 +145,13 @@ public class MyBatisChatMessageStore {
                 .collect(Collectors.toMap(ChatMessage::sessionId, Function.identity(), (first, ignored) -> first));
     }
 
-    public ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String leafMessageId, String cursor, int limit) {
-        if (sessionId == null) {
+    public ChatMessagePage pageMessages(ChatMessagePageQuery query) {
+        if (query.sessionId() == null) {
             return new ChatMessagePage(List.of(), null);
         }
-        int pageSize = Math.max(1, Math.min(limit <= 0 ? 50 : limit, 200));
-        List<ChatMessage> rows = mapper.findActivePath(tenantId, userId, sessionId, leafMessageId).stream()
+        int pageSize = Math.max(1, Math.min(query.limit() <= 0 ? 50 : query.limit(), 200));
+        List<ChatMessage> rows = mapper.findActivePath(query.tenantId(), query.userId(), query.sessionId(),
+                        query.leafMessageId()).stream()
                 .map(this::toDomain)
                 .toList();
         // active path 是一条有限可见路径，首版不再按 created_at 翻页；limit 用于保护极长历史。
@@ -145,7 +159,8 @@ public class MyBatisChatMessageStore {
         List<ChatMessage> pageItemsAscending = pageItems.stream()
                 .sorted(Comparator.comparing(ChatMessage::treeDepth).thenComparing(ChatMessage::nodeOrder))
                 .toList();
-        return new ChatMessagePage(attachParts(tenantId, userId, sessionId, pageItemsAscending), null);
+        return new ChatMessagePage(attachParts(query.tenantId(), query.userId(), query.sessionId(), pageItemsAscending),
+                null);
     }
 
     public List<ChatMessage> findAllBySession(String tenantId, String userId, String sessionId) {

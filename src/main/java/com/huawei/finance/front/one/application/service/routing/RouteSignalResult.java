@@ -11,10 +11,14 @@ import com.huawei.finance.front.one.domain.routing.RouteTarget;
  *
  * @param route 本轮最终路由结果，不能为空。
  * @param intentDecision 意图服务识别结果；未调用意图服务时为空。
+ * @param intentLatencyMs 意图服务调用耗时；未调用意图服务时为空。
+ * @param intentConfidenceThreshold 本次意图采纳阈值；未调用意图服务时为空。
  */
 public record RouteSignalResult(
         RouteTarget route,
-        IntentDecision intentDecision
+        IntentDecision intentDecision,
+        Long intentLatencyMs,
+        Double intentConfidenceThreshold
 ) {
     /**
      * 创建不包含意图识别结果的路由信号结果。
@@ -23,6 +27,19 @@ public record RouteSignalResult(
      * @return 路由信号结果。
      */
     public static RouteSignalResult of(RouteTarget route) {
-        return new RouteSignalResult(route, null);
+        return new RouteSignalResult(route, null, null, null);
+    }
+
+    /**
+     * 创建包含意图识别结果的路由信号结果。
+     *
+     * @param route 本轮最终路由结果。
+     * @param intentDecision 意图识别结果。
+     * @param intentLatencyMs 意图服务调用耗时。
+     * @return 路由信号结果。
+     */
+    public static RouteSignalResult ofIntent(RouteTarget route, IntentDecision intentDecision, Long intentLatencyMs,
+                                             double intentConfidenceThreshold) {
+        return new RouteSignalResult(route, intentDecision, intentLatencyMs, intentConfidenceThreshold);
     }
 }

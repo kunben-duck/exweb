@@ -144,14 +144,17 @@ class ChatRunApplicationServiceTest {
         cache.putActive(active);
         ChatRunApplicationService service = service(repository, cache);
 
-        assertThatThrownBy(() -> service.createRunning(
+        assertThatThrownBy(() -> service.createRunning(new CreateChatRunContext(
                 "run2",
                 user(),
                 "session1",
                 com.huawei.finance.front.one.domain.routing.RouteTarget.agentRuntime("test", 1.0, "test"),
                 null,
-                Map.of()
-        )).isInstanceOf(com.huawei.finance.front.one.domain.chat.ActiveRunExistsException.class)
+                Map.of(),
+                com.huawei.finance.front.one.domain.chat.ChatRunMode.NEXT,
+                null,
+                null
+        ))).isInstanceOf(com.huawei.finance.front.one.domain.chat.ActiveRunExistsException.class)
                 .hasMessageContaining("ACTIVE_RUN_EXISTS");
     }
 

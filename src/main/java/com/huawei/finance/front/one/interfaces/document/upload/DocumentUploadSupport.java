@@ -50,30 +50,24 @@ public class DocumentUploadSupport {
      * 处理 Servlet/MVC multipart 上传。
      *
      * @param file MVC multipart 文件对象，字段名固定为 {@code file}。
-     * @param sessionId 可选会话标识；传入时应用层会校验会话归属并建立文档关联。
-     * @param targetProvider 目标文档 provider；为空时走默认对象存储。
-     * @param skillId 上传关联技能标识，可为空。
-     * @param metadataJson 上传扩展元数据 JSON，可为空。
-     * @param cookieHeader 原始 HTTP Cookie 头；只在 provider 配置允许时透传到下游 upload 请求头。
+     * @param context 上传表单上下文；字段名仍由 Controller 按 multipart 协议绑定。
      * @return 上传完成后的文档库元数据。
      */
-    public Mono<UploadedDocument> uploadMultipartFile(MultipartFile file, String sessionId, String targetProvider,
-                                                      String skillId, String metadataJson, String cookieHeader) {
+    public Mono<UploadedDocument> uploadMultipartFile(MultipartFile file, DocumentUploadContext context) {
         UserContext user = resolveChatUser();
-        RuntimeForwardHeaders forwardHeaders = forwardHeaders(cookieHeader);
+        DocumentUploadContext safeContext = context == null ? emptyContext() : context;
+        RuntimeForwardHeaders forwardHeaders = forwardHeaders(safeContext.cookieHeader());
         return Mono.usingWhen(
                 createTempFile(),
                 tempFile -> copyMultipartFile(file, tempFile)
                         .then(Mono.defer(() -> uploadTempFile(
                                 user,
-                                sessionId,
-                                file == null ? null : file.getOriginalFilename(),
-                                file == null ? null : file.getContentType(),
-                                tempFile,
-                                targetProvider,
-                                skillId,
-                                metadataJson,
-                                forwardHeaders
+                                safeContext,
+                                new UploadedTempFile(
+                                        file == null ? null : file.getOriginalFilename(),
+                                        file == null ? null : file.getContentType(),
+                                        tempFile,
+                                        forwardHeaders)
                         ))),
                 this::deleteTempFile
         );
@@ -83,30 +77,24 @@ public class DocumentUploadSupport {
      * 处理 Reactive WebFlux multipart 上传。
      *
      * @param file WebFlux 文件分片，字段名固定为 {@code file}。
-     * @param sessionId 可选会话标识；传入时应用层会校验会话归属并建立文档关联。
-     * @param targetProvider 目标文档 provider；为空时走默认对象存储。
-     * @param skillId 上传关联技能标识，可为空。
-     * @param metadataJson 上传扩展元数据 JSON，可为空。
-     * @param cookieHeader 原始 HTTP Cookie 头；只在 provider 配置允许时透传到下游 upload 请求头。
+     * @param context 上传表单上下文；字段名仍由 Controller 按 multipart 协议绑定。
      * @return 上传完成后的文档库元数据。
      */
-    public Mono<UploadedDocument> uploadFilePart(FilePart file, String sessionId, String targetProvider,
-                                                 String skillId, String metadataJson, String cookieHeader) {
+    public Mono<UploadedDocument> uploadFilePart(FilePart file, DocumentUploadContext context) {
         UserContext user = resolveChatUser();
-        RuntimeForwardHeaders forwardHeaders = forwardHeaders(cookieHeader);
+        DocumentUploadContext safeContext = context == null ? emptyContext() : context;
+        RuntimeForwardHeaders forwardHeaders = forwardHeaders(safeContext.cookieHeader());
         return Mono.usingWhen(
                 createTempFile(),
                 tempFile -> writeFilePart(file, tempFile)
                         .then(Mono.defer(() -> uploadTempFile(
                                 user,
-                                sessionId,
-                                file == null ? null : file.filename(),
-                                file == null ? null : mediaType(file.headers().getContentType()),
-                                tempFile,
-                                targetProvider,
-                                skillId,
-                                metadataJson,
-                                forwardHeaders
+                                safeContext,
+                                new UploadedTempFile(
+                                        file == null ? null : file.filename(),
+                                        file == null ? null : mediaType(file.headers().getContentType()),
+                                        tempFile,
+                                        forwardHeaders)
                         ))),
                 this::deleteTempFile
         );
@@ -139,23 +127,22 @@ public class DocumentUploadSupport {
     }
 
     private Mono<UploadedDocument> uploadTempFile(UserContext user,
-                                                 String sessionId,
-                                                 String originalFilename,
-                                                 String contentType,
-                                                 Path tempFile,
-                                                 String targetProvider,
-                                                 String skillId,
-                                                 String metadataJson,
-                                                 RuntimeForwardHeaders forwardHeaders) {
+                                                 DocumentUploadContext context,
+                                                 UploadedTempFile tempFile) {
         return Mono.fromCallable(() -> {
-            long size = Files.size(tempFile);
+            long size = Files.size(tempFile.path());
             if (size > uploadProperties.normalizedMaxUploadSizeBytes()) {
                 throw new IllegalArgumentException("上传文件超过最大允许大小: " + uploadProperties.normalizedMaxUploadSizeBytes());
             }
-            InputStream inputStream = Files.newInputStream(tempFile, StandardOpenOption.READ);
-            return new DocumentUploadCommand(sessionId, originalFilename, contentType, size, inputStream,
-                    targetProvider, skillId, metadataJson, forwardHeaders);
+            InputStream inputStream = Files.newInputStream(tempFile.path(), StandardOpenOption.READ);
+            return new DocumentUploadCommand(context.sessionId(), tempFile.originalFilename(), tempFile.contentType(),
+                    size, inputStream, context.targetProvider(), context.skillId(), context.metadataJson(),
+                    tempFile.forwardHeaders());
         }).subscribeOn(Schedulers.boundedElastic()).flatMap(command -> facade.upload(user, command));
+    }
+
+    private DocumentUploadContext emptyContext() {
+        return new DocumentUploadContext(null, null, null, null, null);
     }
 
     private Mono<Void> deleteTempFile(Path path) {
@@ -181,5 +168,9 @@ public class DocumentUploadSupport {
 
     private String mediaType(MediaType contentType) {
         return contentType == null ? null : contentType.toString();
+    }
+
+    private record UploadedTempFile(String originalFilename, String contentType, Path path,
+                                    RuntimeForwardHeaders forwardHeaders) {
     }
 }

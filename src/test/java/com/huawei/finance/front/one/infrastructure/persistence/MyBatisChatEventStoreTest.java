@@ -13,11 +13,11 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-class OpenGaussChatEventStoreTest {
+class MyBatisChatEventStoreTest {
     @Test
     void appendUsesDatabaseSequenceAsRecoveryCursor() {
         ChatEventMapper mapper = new ReturningEventMapper();
-        OpenGaussChatEventStore store = new OpenGaussChatEventStore(
+        MyBatisChatEventStore store = new MyBatisChatEventStore(
                 mapper,
                 new ObjectMapper(),
                 (bizType, context) -> "event_1"
@@ -34,7 +34,7 @@ class OpenGaussChatEventStoreTest {
     @Test
     void appendWithExecutionGuardUsesOwnerAndFencingToken() {
         ReturningEventMapper mapper = new ReturningEventMapper();
-        OpenGaussChatEventStore store = new OpenGaussChatEventStore(
+        MyBatisChatEventStore store = new MyBatisChatEventStore(
                 mapper,
                 new ObjectMapper(),
                 (bizType, context) -> "event_1"
@@ -54,7 +54,7 @@ class OpenGaussChatEventStoreTest {
     void appendWithExecutionGuardRejectsWhenDatabaseConditionDoesNotMatch() {
         ReturningEventMapper mapper = new ReturningEventMapper();
         mapper.guardInsertResult = 0;
-        OpenGaussChatEventStore store = new OpenGaussChatEventStore(
+        MyBatisChatEventStore store = new MyBatisChatEventStore(
                 mapper,
                 new ObjectMapper(),
                 (bizType, context) -> "event_1"
@@ -77,22 +77,19 @@ class OpenGaussChatEventStoreTest {
         }
 
         @Override
-        public int insertFromSession(String id, String sessionId, String runId, long seq, String eventType,
-                                     String payloadJson, Instant createdAt) {
-            assertThat(id).isEqualTo("event_1");
-            assertThat(sessionId).isEqualTo("session1");
-            assertThat(runId).isEqualTo("run1");
-            assertThat(seq).isEqualTo(42L);
-            assertThat(eventType).isEqualTo("message.delta");
+        public int insertFromSession(ChatEventWriteRow row) {
+            assertThat(row.id()).isEqualTo("event_1");
+            assertThat(row.sessionId()).isEqualTo("session1");
+            assertThat(row.runId()).isEqualTo("run1");
+            assertThat(row.seq()).isEqualTo(42L);
+            assertThat(row.eventType()).isEqualTo("message.delta");
             return 1;
         }
 
         @Override
-        public int insertFromSessionWithExecutionGuard(String id, String sessionId, String runId, long seq,
-                                                       String eventType, String payloadJson, Instant createdAt,
-                                                       String ownerInstanceId, long fencingToken) {
-            guardOwnerInstanceId = ownerInstanceId;
-            guardFencingToken = fencingToken;
+        public int insertFromSessionWithExecutionGuard(ChatEventWriteRow row) {
+            guardOwnerInstanceId = row.ownerInstanceId();
+            guardFencingToken = row.fencingToken();
             return guardInsertResult;
         }
 

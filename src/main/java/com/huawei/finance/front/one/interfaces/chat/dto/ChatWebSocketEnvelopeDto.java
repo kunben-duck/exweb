@@ -13,7 +13,7 @@ import java.util.Map;
  * @param id 客户端命令 ID，reply/error 会原样返回；服务端主动 message 可为空。
  * @param type envelope 类型：reply、message、error。
  * @param topicId run 级 stream topic。
- * @param offset 当前 stream-item 的 openGauss seq 字符串；heartbeat/done 不推进 offset。
+ * @param offset 当前 stream-item 的数据库 seq 字符串；heartbeat/done 不推进 offset。
  * @param payload conversation turn stream 片段，仅 message 使用。
  * @param reply 控制命令响应，仅 reply 使用。
  * @param code 错误码，仅 error 使用。

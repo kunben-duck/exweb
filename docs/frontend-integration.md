@@ -12,7 +12,7 @@
   或 WebFlux 模式下 `spring.webflux.base-path=/fin/ex`，则 WebSocket URL 也必须带上同一前缀：
   `ws://localhost:8080/fin/ex/api/v1/ex/chat/ws`。
 - 所有时间字段均为 ISO-8601 字符串。
-- `seq` / `sequence` 是 openGauss 生成的事件恢复游标，前端断点恢复只保存最后收到的最大 `sequence`。
+- `seq` / `sequence` 是数据库生成的事件恢复游标，前端断点恢复只保存最后收到的最大 `sequence`。
 - 前端只把 `sequence` 当作不透明数字游标，不要自行推算生成方式；服务端以事件表事实源保证同一会话内的恢复顺序。
 - 前端不要传 `tenantId`、`userId`，也不要通过 Header/Query/Body 伪造用户身份；身份由后端请求入口通过 `AuthContextProvider` 从服务端上下文解析一次，后台 run 不会再次读取请求 ThreadLocal。
 - 本文档中的 WebSocket 只指前端到 FinanceEXChatService 的 `/api/v1/ex/chat/ws` 连接。FinanceEXChatService 到下游 RelayAgent 当前只保留 streamable HTTP adapter；前端不直接连接 RelayAgent，也不通过前端 WebSocket 发起 `AgentRuntime.query`。
@@ -23,6 +23,14 @@ export FINANCEEX_DEV_TENANT_ID=tenant_dev
 export FINANCEEX_DEV_USER_ID=user_dev
 export FINANCEEX_DEV_USERNAME=developer
 ```
+
+## 内部旁路能力
+
+意图识别记录不新增前端接口，也不要求前端增加请求字段。后端只有在 `financeex.intent.enabled=true`
+且本轮确实调用意图服务时，才会在 `financeex.intent-record.enabled=true` 的配置下异步记录本轮
+query、候选意图、最高置信结果、最终路由是否采纳和调用耗时。显式技能、RuntimeBinding 续接、用例库已命中、
+意图服务关闭或未调用时不会写记录。该记录使用专用 Servlet/MVC 线程池 best-effort 写入
+`fin_ex_intent_recognition_t`，失败只影响统计排障数据，不影响 `/chat/runs`、WebSocket 或 Event Resume。
 
 ## 接口总览
 
@@ -380,7 +388,7 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 | --- | --- |
 | `runId` | 事件所属 run |
 | `sessionId` | 事件所属会话；前端必须按该字段分发到对应会话面板 |
-| `sequence` | openGauss 生成的事件恢复游标；WebSocket offset 和 Event Resume `afterSeq` 都使用它 |
+| `sequence` | 数据库生成的事件恢复游标；WebSocket offset 和 Event Resume `afterSeq` 都使用它 |
 | `type` | `run.started`、`message.delta`、`message.snapshot`、`message.completed`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.reference`、`runtime.card`、`runtime.event`、`run.completed`、`run.failed`、`run.cancelled`、`run.recovered` |
 | `payload` | 事件载荷；`message.delta` 使用 `payload.delta` 追加文本，`message.snapshot` 使用 `payload.content` 替换当前草稿 |
 
@@ -1388,7 +1396,7 @@ stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可
 }
 ```
 
-`RUN_EXECUTOR_LOST` 表示服务端已经确认当前 run 的执行租约过期，并通过 openGauss 条件抢占完成状态收敛。前端收到该事件后应停止当前 loading 状态，保留已输出草稿作为只读失败草稿，不要保存为正式 assistant 历史消息；用户可以选择用 `runMode=REGENERATE_ASSISTANT` 重新生成，或发起新的 `NEXT` run。
+`RUN_EXECUTOR_LOST` 表示服务端已经确认当前 run 的执行租约过期，并通过数据库条件抢占完成状态收敛。前端收到该事件后应停止当前 loading 状态，保留已输出草稿作为只读失败草稿，不要保存为正式 assistant 历史消息；用户可以选择用 `runMode=REGENERATE_ASSISTANT` 重新生成，或发起新的 `NEXT` run。
 
 `RUN_EXECUTION_INIT_FAILED` 表示业务 run 已创建，但服务端运行控制面初始化失败，后端已经主动把本轮 run 闭合为 `run.failed` 并释放 active run。前端处理方式与普通 `run.failed` 一致：停止 loading、展示错误、允许用户重新发送或重新生成，不要把半截输出保存为正式 assistant 历史消息。
 

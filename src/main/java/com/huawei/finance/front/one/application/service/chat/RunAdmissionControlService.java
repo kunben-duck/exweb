@@ -18,7 +18,7 @@ import org.springframework.stereotype.Service;
  * run 创建入口准入控制。
  *
  * <p>该服务用于保护当前 JVM：按用户限制创建速率，按租户限制本机并发 run 数。
- * 同一会话 active run 互斥由 {@link ChatRunApplicationService} 通过 Redis active key 与 openGauss
+ * 同一会话 active run 互斥由 {@link ChatRunApplicationService} 通过 Redis active key 与数据库
  * 状态共同保证。</p>
  */
 @Service

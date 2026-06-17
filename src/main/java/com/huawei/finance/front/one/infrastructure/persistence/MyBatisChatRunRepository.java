@@ -14,23 +14,37 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
 /**
- * ChatRun 的 openGauss 事实源实现。
+ * ChatRun 的数据库事实源实现。
  */
 @Repository
-public class OpenGaussChatRunRepository implements ChatRunRepository {
+public class MyBatisChatRunRepository implements ChatRunRepository {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     private final ChatRunMapper mapper;
     private final ObjectMapper objectMapper;
 
-    public OpenGaussChatRunRepository(ChatRunMapper mapper, ObjectMapper objectMapper) {
+    public MyBatisChatRunRepository(ChatRunMapper mapper, ObjectMapper objectMapper) {
         this.mapper = mapper;
         this.objectMapper = objectMapper;
     }
 
     @Override
     public ChatRun save(ChatRun run) {
-        int updated = mapper.updateExisting(
+        ChatRunWriteRow row = toRow(run);
+        int updated = mapper.updateExisting(row);
+        if (updated == 0) {
+            try {
+                mapper.insert(row);
+            } catch (DuplicateKeyException ex) {
+                // 避免使用 具体数据库专有 upsert；并发创建同一 run 时退化为受终态保护的更新。
+                mapper.updateExisting(row);
+            }
+        }
+        return findById(run.id()).orElse(run);
+    }
+
+    private ChatRunWriteRow toRow(ChatRun run) {
+        return new ChatRunWriteRow(
                 run.id(),
                 run.tenantId(),
                 run.userId(),
@@ -53,59 +67,6 @@ public class OpenGaussChatRunRepository implements ChatRunRepository {
                 run.createdAt(),
                 run.updatedAt()
         );
-        if (updated == 0) {
-            try {
-                mapper.insert(
-                        run.id(),
-                        run.tenantId(),
-                        run.userId(),
-                        run.sessionId(),
-                        run.status().name(),
-                        run.routeType(),
-                        run.agentCode(),
-                        run.runtimeProvider(),
-                        run.runtimeSessionId(),
-                        run.runMode().name(),
-                        run.parentMessageId(),
-                        run.userMessageId(),
-                        run.assistantMessageId(),
-                        run.firstSeq(),
-                        run.lastSeq(),
-                        run.cancelReason(),
-                        run.startedAt(),
-                        run.finishedAt(),
-                        toJson(run.metadata()),
-                        run.createdAt(),
-                        run.updatedAt()
-                );
-            } catch (DuplicateKeyException ex) {
-                // 避免使用 PostgreSQL 专有 upsert；并发创建同一 run 时退化为受终态保护的更新。
-                mapper.updateExisting(
-                        run.id(),
-                        run.tenantId(),
-                        run.userId(),
-                        run.sessionId(),
-                        run.status().name(),
-                        run.routeType(),
-                        run.agentCode(),
-                        run.runtimeProvider(),
-                        run.runtimeSessionId(),
-                        run.runMode().name(),
-                        run.parentMessageId(),
-                        run.userMessageId(),
-                        run.assistantMessageId(),
-                        run.firstSeq(),
-                        run.lastSeq(),
-                        run.cancelReason(),
-                        run.startedAt(),
-                        run.finishedAt(),
-                        toJson(run.metadata()),
-                        run.createdAt(),
-                        run.updatedAt()
-                );
-            }
-        }
-        return findById(run.id()).orElse(run);
     }
 
     @Override

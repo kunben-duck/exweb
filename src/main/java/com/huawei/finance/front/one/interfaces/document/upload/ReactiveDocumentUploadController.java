@@ -50,7 +50,8 @@ public class ReactiveDocumentUploadController {
                                             @RequestPart(value = "skillId", required = false) String skillId,
                                             @RequestPart(value = "metadata", required = false) String metadata,
                                             @RequestHeader(value = HttpHeaders.COOKIE, required = false) String cookieHeader) {
-        return uploadSupport.uploadFilePart(file, sessionId, targetProvider, skillId, metadata, cookieHeader)
+        DocumentUploadContext context = new DocumentUploadContext(sessionId, targetProvider, skillId, metadata, cookieHeader);
+        return uploadSupport.uploadFilePart(file, context)
                 .map(dtoMapper::toDto);
     }
 }

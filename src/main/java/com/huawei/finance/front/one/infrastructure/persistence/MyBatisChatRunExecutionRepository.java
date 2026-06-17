@@ -16,16 +16,16 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
 /**
- * ChatRun 执行控制面的 openGauss 事实源实现。
+ * ChatRun 执行控制面的数据库事实源实现。
  */
 @Repository
-public class OpenGaussChatRunExecutionRepository implements ChatRunExecutionRepository {
+public class MyBatisChatRunExecutionRepository implements ChatRunExecutionRepository {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     private final ChatRunExecutionMapper mapper;
     private final ObjectMapper objectMapper;
 
-    public OpenGaussChatRunExecutionRepository(ChatRunExecutionMapper mapper, ObjectMapper objectMapper) {
+    public MyBatisChatRunExecutionRepository(ChatRunExecutionMapper mapper, ObjectMapper objectMapper) {
         this.mapper = mapper;
         this.objectMapper = objectMapper;
     }
@@ -35,7 +35,7 @@ public class OpenGaussChatRunExecutionRepository implements ChatRunExecutionRepo
         Instant now = Instant.now();
         Instant leaseUntil = now.plus(normalizeLease(leaseDuration));
         try {
-            mapper.insert(
+            mapper.insert(new ChatRunExecutionWriteRow(
                     executionId,
                     run.id(),
                     run.tenantId(),
@@ -54,7 +54,7 @@ public class OpenGaussChatRunExecutionRepository implements ChatRunExecutionRepo
                     toJson(Map.of()),
                     now,
                     now
-            );
+            ));
         } catch (DuplicateKeyException ignored) {
             // createRunning 已经通过 active run 互斥保护。这里幂等回读，避免重试时因为已有 execution 误报。
         }

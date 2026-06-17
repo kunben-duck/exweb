@@ -7,12 +7,17 @@ import com.huawei.finance.front.one.application.integration.conversation.ChatEve
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.service.memory.MemoryApplicationService;
+import com.huawei.finance.front.one.application.service.routing.IntentRecognitionRecordService;
+import com.huawei.finance.front.one.application.service.routing.IntentRecognitionRecordSnapshot;
 import com.huawei.finance.front.one.application.service.routing.RouteSignalApplicationService;
 import com.huawei.finance.front.one.application.service.routing.RouteSignalResult;
 import com.huawei.finance.front.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.finance.front.one.application.service.runtime.LegacySkillExecutor;
+import com.huawei.finance.front.one.application.service.runtime.LegacySkillExecutionContext;
 import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingApplicationService;
+import com.huawei.finance.front.one.application.service.runtime.RuntimeExecutionContext;
 import com.huawei.finance.front.one.application.service.runtime.SubAgentExecutor;
+import com.huawei.finance.front.one.application.service.runtime.SubAgentExecutionContext;
 import com.huawei.finance.front.one.application.service.runtime.SystemResponseExecutor;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
@@ -55,7 +60,7 @@ import reactor.core.scheduler.Schedulers;
 /**
  * 聊天主编排服务：负责把一次前端请求串联成可追踪的 SuperAgent 运行。
  *
- * <p>这是 v3 架构的核心入口。这里不承载具体 SubAgent、AgentRuntime、Redis、openGauss
+ * <p>这是 v3 架构的核心入口。这里不承载具体 SubAgent、AgentRuntime、Redis、数据库
  * 或外部路由信号协议细节，只负责把稳定的业务顺序串起来：
  * 身份校验 -> 会话归一化 -> 上下文装配 -> Runtime 续接 -> 可选路由信号 -> Agent 调用。</p>
  *
@@ -72,6 +77,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private final MemoryApplicationService memoryService;
     private final RuntimeBindingApplicationService runtimeBindingService;
     private final RouteSignalApplicationService routeSignalService;
+    private final IntentRecognitionRecordService intentRecognitionRecordService;
     private final SubAgentExecutor subAgentExecutor;
     private final LegacySkillExecutor legacySkillExecutor;
     private final SystemResponseExecutor systemResponseExecutor;
@@ -88,6 +94,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
     public FinanceEXChatService(SessionApplicationService sessionService,
                                 MemoryApplicationService memoryService, RuntimeBindingApplicationService runtimeBindingService,
                                 RouteSignalApplicationService routeSignalService,
+                                IntentRecognitionRecordService intentRecognitionRecordService,
                                 SubAgentExecutor subAgentExecutor, LegacySkillExecutor legacySkillExecutor,
                                 SystemResponseExecutor systemResponseExecutor,
                                 AgentRuntimeExecutor agentRuntimeExecutor, DocumentFacade documentFacade, ChatStreamApplicationService chatStreamService,
@@ -98,6 +105,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         this.memoryService = memoryService;
         this.runtimeBindingService = runtimeBindingService;
         this.routeSignalService = routeSignalService;
+        this.intentRecognitionRecordService = intentRecognitionRecordService;
         this.subAgentExecutor = subAgentExecutor;
         this.legacySkillExecutor = legacySkillExecutor;
         this.systemResponseExecutor = systemResponseExecutor;
@@ -196,7 +204,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
     /**
      * 用户主动 stop 后，把已经成功落库的 assistant 正文固化为历史消息。
      *
-     * <p>这里不读取当前 JVM 内存里的流式草稿，而是从 openGauss 事件事实源重建，保证跨实例 stop、
+     * <p>这里不读取当前 JVM 内存里的流式草稿，而是从数据库事件事实源重建，保证跨实例 stop、
      * 浏览器断开和本机 subscription 已释放等场景下得到一致结果。没有正文且没有用户可见
      * runtime parts 时不创建空 assistant。</p>
      */
@@ -216,7 +224,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 return;
             }
             ChatSession session = sessionService.getSession(user, run.sessionId());
-            ChatMessage savedAssistant = sessionService.saveAssistantMessage(
+            ChatMessage savedAssistant = sessionService.saveAssistantMessage(new AssistantMessageSaveCommand(
                     user.tenantId(),
                     user.userId(),
                     session,
@@ -226,7 +234,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     null,
                     assistant.parts(),
                     USER_STOP_PARTIAL_ASSISTANT_METADATA
-            );
+            ));
             chatRunService.bindAssistantMessage(run.id(), savedAssistant.id());
         } catch (Exception ex) {
             /*
@@ -275,6 +283,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 runtimeBindingService.cancelActive(user.tenantId(), user.userId(), session.id());
             }
             IntentDecision intent = null;
+            Long intentLatencyMs = null;
+            Double intentConfidenceThreshold = null;
             RouteTarget route = null;
             RuntimeBinding binding = null;
             String selectedSkillId = selectedSkillId(normalized.metadata());
@@ -297,6 +307,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 RouteSignalResult routeSignal = routeSignalService.routeInitial(user, session, runCommand, attachments, memory);
                 route = routeSignal.route();
                 intent = routeSignal.intentDecision();
+                intentLatencyMs = routeSignal.intentLatencyMs();
+                intentConfidenceThreshold = routeSignal.intentConfidenceThreshold();
                 if (route.type() == RouteType.SUB_AGENT) {
                     binding = null;
                 } else if (route.type() == RouteType.AGENT_RUNTIME) {
@@ -305,11 +317,33 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 }
             }
             IntentDecision selectedIntent = intent;
+            Long selectedIntentLatencyMs = intentLatencyMs;
+            Double selectedIntentConfidenceThreshold = intentConfidenceThreshold;
             RouteTarget selectedRoute = route;
             AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>(binding);
             AssistantAssembly assistant = new AssistantAssembly();
-            ChatRun run = chatRunService.createRunning(runId, user, session.id(), selectedRoute, bindingRef.get(),
-                    normalized.metadata(), messagePlan.runMode(), messagePlan.parentMessageId(), messagePlan.userMessage().id());
+            ChatRun run = chatRunService.createRunning(new CreateChatRunContext(
+                    runId,
+                    user,
+                    session.id(),
+                    selectedRoute,
+                    bindingRef.get(),
+                    normalized.metadata(),
+                    messagePlan.runMode(),
+                    messagePlan.parentMessageId(),
+                    messagePlan.userMessage().id()
+            ));
+            if (selectedIntent != null) {
+                intentRecognitionRecordService.recordAsync(IntentRecognitionRecordSnapshot.of(
+                        new IntentRecognitionRecordSnapshot.IntentRecognitionRecordInput(
+                                user,
+                                runCommand,
+                                run.id(),
+                                selectedIntent,
+                                selectedRoute,
+                                selectedIntentConfidenceThreshold == null ? 0.0 : selectedIntentConfidenceThreshold,
+                                selectedIntentLatencyMs)));
+            }
             RunExecutionClaim executionClaim;
             try {
                 executionClaim = chatRunLeaseService.startRun(run);
@@ -328,12 +362,14 @@ public class FinanceEXChatService implements FinanceChatFacade {
             try {
                 // 根据路由结果选择 SubAgent、系统响应或统一 AgentRuntime。
                 Flux<ChatEvent> body = switch (selectedRoute.type()) {
-                    case SUB_AGENT -> subAgentExecutor.execute(runCommand, runId, memory, selectedRoute, user);
-                    case EXPLICIT_SKILL -> legacySkillExecutor.execute(runCommand, runId, selectedRoute, user,
-                            headerSnapshot);
+                    case SUB_AGENT -> subAgentExecutor.execute(new SubAgentExecutionContext(
+                            runCommand, runId, memory, selectedRoute, user));
+                    case EXPLICIT_SKILL -> legacySkillExecutor.execute(new LegacySkillExecutionContext(
+                            runCommand, runId, selectedRoute, user, headerSnapshot));
                     case SYSTEM_RESPONSE -> systemResponseExecutor.execute(runCommand, runId, selectedIntent, selectedRoute);
-                    case AGENT_RUNTIME -> agentRuntimeExecutor.execute(runCommand, runId, memory, selectedIntent,
-                            selectedRoute, user, bindingRef.get(), headerSnapshot);
+                    case AGENT_RUNTIME -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
+                            runCommand, runId, memory, selectedIntent, selectedRoute, user, bindingRef.get(),
+                            headerSnapshot));
                 };
 
                 // 外层统一补齐 run.started/run.completed，接口层只需要转发事件流。
@@ -342,38 +378,28 @@ public class FinanceEXChatService implements FinanceChatFacade {
                         Flux.concat(Flux.just(RunStartedEvent.of(runId, session.id())), body,
                                         Flux.just(RunCompletedEvent.of(runId, session.id(), runCompletedPayload(selectedRoute, bindingRef.get()))))
                                 .onErrorResume(ex -> Flux.just(runtimeErrorEvent(runId, session.id(), ex))),
-                        user,
-                        session,
-                        runCommand,
-                        messagePlan,
-                        bindingRef,
-                        assistant,
-                        runId,
-                        executionClaim
+                        new RunEventPipelineContext(user, session, messagePlan, bindingRef, assistant, runId,
+                                executionClaim)
                 );
             } catch (RuntimeException ex) {
                 // run 已创建后同步步骤失败时，也必须写入 run.failed 并释放 active run，避免前端看到永远 RUNNING。
                 return persistAndPublishRunEvents(
                         Flux.just(runtimeErrorEvent(runId, session.id(), ex)),
-                        user,
-                        session,
-                        runCommand,
-                        messagePlan,
-                        bindingRef,
-                        assistant,
-                        runId,
-                        executionClaim
+                        new RunEventPipelineContext(user, session, messagePlan, bindingRef, assistant, runId,
+                                executionClaim)
                 );
             }
         });
     }
 
-    private Flux<ChatEvent> persistAndPublishRunEvents(Flux<ChatEvent> events, UserContext user, ChatSession session,
-                                                       ChatCommand normalized, ChatRunMessagePlan messagePlan,
-                                                       AtomicReference<RuntimeBinding> bindingRef,
-                                                       AssistantAssembly assistant, String runId,
-                                                       RunExecutionClaim executionClaim) {
+    private Flux<ChatEvent> persistAndPublishRunEvents(Flux<ChatEvent> events, RunEventPipelineContext context) {
         AtomicBoolean writeRejected = new AtomicBoolean(false);
+        String runId = context.runId();
+        ChatSession session = context.session();
+        AssistantAssembly assistant = context.assistant();
+        AtomicReference<RuntimeBinding> bindingRef = context.bindingRef();
+        ChatRunMessagePlan messagePlan = context.messagePlan();
+        UserContext user = context.user();
         return chatDeltaCoalescer.coalesce(events)
                 .onErrorResume(ex -> Flux.just(ErrorEvent.of(runId, session.id(),
                         "RUN_STREAM_COALESCE_ERROR", ex.getMessage())))
@@ -385,7 +411,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     if (!eventBelongsToCurrentRun(event, runId, session.id())) {
                         /*
                          * 下游 Runtime/SubAgent 的输出不是身份事实。任何 runId/sessionId 不匹配的事件
-                         * 都必须在落库前阻断，否则会污染 openGauss 事件事实源并经由 Event Resume/WS 串到其他会话。
+                         * 都必须在落库前阻断，否则会污染数据库事件事实源并经由 Event Resume/WS 串到其他会话。
                          */
                         log.error("Dropped mismatched chat event before persistence. expectedRunId={}, actualRunId={}, expectedSessionId={}, actualSessionId={}, type={}",
                                 runId,
@@ -411,7 +437,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                          * 历史消息写入、run 状态推进和 Redis/WebSocket 发布都以该持久化结果为准，
                          * 避免 stop/watchdog 后的迟到 delta 进入用户可见历史。
                          */
-                        ChatEvent stored = chatStreamService.appendWithExecutionGuard(event, executionClaim);
+                        ChatEvent stored = chatStreamService.appendWithExecutionGuard(event, context.executionClaim());
                         assistant.observe(stored);
                         /*
                          * run.completed 是前端、Event Resume 和跨设备续接共同认可的“本轮回答已经闭合”信号。
@@ -419,13 +445,21 @@ public class FinanceEXChatService implements FinanceChatFacade {
                          * 避免客户端收到 completed 后立即查询历史时只能看到 user 节点。
                          */
                         if ("run.completed".equals(stored.type()) && assistant.shouldPersistMessage()) {
-                            ChatMessage savedAssistant = sessionService.saveAssistantMessage(user.tenantId(), user.userId(),
-                                    session, assistant.finalContent(), runId, messagePlan.userMessage().id(),
-                                    messagePlan.regeneratedFromMessageId(), assistant.parts());
+                            ChatMessage savedAssistant = sessionService.saveAssistantMessage(new AssistantMessageSaveCommand(
+                                    user.tenantId(),
+                                    user.userId(),
+                                    session,
+                                    assistant.finalContent(),
+                                    runId,
+                                    messagePlan.userMessage().id(),
+                                    messagePlan.regeneratedFromMessageId(),
+                                    assistant.parts(),
+                                    null
+                            ));
                             chatRunService.bindAssistantMessage(runId, savedAssistant.id());
                             bindingRef.set(runtimeBindingService.moveToLeaf(bindingRef.get(), savedAssistant.id()));
                         }
-                        // 事件已经带有 openGauss 持久化 seq，实时输出与断线补发看到的是同一份顺序。
+                        // 事件已经带有数据库持久化 seq，实时输出与断线补发看到的是同一份顺序。
                         chatRunService.observeEvent(stored);
                         markExecutionTerminalIfNeeded(stored);
                         bindingRef.set(runtimeBindingService.observeEvent(bindingRef.get(), stored));
@@ -442,6 +476,17 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
     private boolean eventBelongsToCurrentRun(ChatEvent event, String runId, String sessionId) {
         return event != null && runId.equals(event.runId()) && sessionId.equals(event.sessionId());
+    }
+
+    private record RunEventPipelineContext(
+            UserContext user,
+            ChatSession session,
+            ChatRunMessagePlan messagePlan,
+            AtomicReference<RuntimeBinding> bindingRef,
+            AssistantAssembly assistant,
+            String runId,
+            RunExecutionClaim executionClaim
+    ) {
     }
 
     private void markExecutionTerminalIfNeeded(ChatEvent event) {

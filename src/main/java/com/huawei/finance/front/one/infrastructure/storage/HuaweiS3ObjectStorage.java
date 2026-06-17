@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
 /**
  * 华为 OBS S3 对象存储实现。
  *
- * <p>文档二进制内容进入华为对象存储，openGauss 仍只保存 bucket、objectKey、contentType 等元数据。
+ * <p>文档二进制内容进入华为对象存储，数据库仍只保存 bucket、objectKey、contentType 等元数据。
  * provider 使用 {@code huawei-s3}，表示当前通过华为 OBS Java SDK 接入华为 S3/OBS 能力。
  * objectKey 按 prefix/tenant/date/uuid-filename 组织，既隔离租户，又避免同名文件覆盖。</p>
  */

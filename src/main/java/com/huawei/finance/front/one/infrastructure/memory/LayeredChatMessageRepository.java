@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.infrastructure.memory;
 
 import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
+import com.huawei.finance.front.one.application.integration.memory.ChatMessagePageQuery;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
@@ -18,7 +19,7 @@ import org.springframework.stereotype.Repository;
 /**
  * 聊天历史消息组合仓储。
  *
- * <p>openGauss 是历史消息事实源；Redis 仅在短期记忆开启且缓存开启时作为最近消息热缓存。
+ * <p>数据库是历史消息事实源；Redis 仅在短期记忆开启且缓存开启时作为最近消息热缓存。
  * 读取最近消息时优先查 Redis，Redis 为空或过期时回源数据库并预热缓存。</p>
  */
 @Primary
@@ -48,7 +49,7 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
         try {
             return databaseStore.save(message);
         } catch (RuntimeException ex) {
-            // 默认要求 openGauss 写成功，确保数据库是消息事实源；本地联调可显式关闭 databaseRequired。
+            // 默认要求数据库写成功，确保数据库是消息事实源；本地联调可显式关闭 databaseRequired。
             if (properties.isDatabaseRequired()) {
                 if (cached) {
                     redisCache.remove(message);
@@ -87,21 +88,20 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
 
     @Override
     public ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String cursor, int limit) {
-        // 历史消息分页必须以 openGauss 为事实源；Redis 只缓存最近上下文，不适合作为翻页数据源。
+        // 历史消息分页必须以数据库为事实源；Redis 只缓存最近上下文，不适合作为翻页数据源。
         return databaseStore.pageMessages(tenantId, userId, sessionId, cursor, limit);
     }
 
     @Override
     public Map<String, ChatMessage> findFirstAssistantMessagesBySessionIds(
             String tenantId, String userId, List<String> sessionIds) {
-        // 会话列表摘要必须批量回源 openGauss；Redis 最近消息缓存无法保证包含“第一条回答”。
+        // 会话列表摘要必须批量回源数据库；Redis 最近消息缓存无法保证包含“第一条回答”。
         return databaseStore.findFirstAssistantMessagesBySessionIds(tenantId, userId, sessionIds);
     }
 
     @Override
-    public ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String leafMessageId,
-                                        String cursor, int limit) {
-        return databaseStore.pageMessages(tenantId, userId, sessionId, leafMessageId, cursor, limit);
+    public ChatMessagePage pageMessages(ChatMessagePageQuery query) {
+        return databaseStore.pageMessages(query);
     }
 
     @Override

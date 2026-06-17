@@ -15,81 +15,54 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
 /**
- * 文档元数据 openGauss 仓储。
+ * 文档元数据数据库仓储。
  *
  * <p>对象二进制内容仍由 ObjectStorage 保存；fin_ex_uploaded_document_t 只保存前端、会话和 Agent
  * 后续检索所需的稳定元数据。</p>
  */
 @Repository
-public class OpenGaussDocumentRepository implements DocumentRepository {
+public class MyBatisDocumentRepository implements DocumentRepository {
     private static final String CURSOR_SEPARATOR = "|";
 
     private final UploadedDocumentMapper mapper;
 
-    public OpenGaussDocumentRepository(UploadedDocumentMapper mapper) {
+    public MyBatisDocumentRepository(UploadedDocumentMapper mapper) {
         this.mapper = mapper;
     }
 
     @Override
     public UploadedDocument save(UploadedDocument document) {
-        int updated = mapper.update(
-                document.id(),
-                document.tenantId(),
-                document.userId(),
-                document.sessionId(),
-                document.originalName(),
-                document.bucket(),
-                document.objectKey(),
-                document.contentType(),
-                document.sizeBytes(),
-                document.status(),
-                document.source(),
-                document.tokenSize(),
-                document.metadataJson(),
-                document.createdAt(),
-                document.updatedAt()
-        );
+        UploadedDocumentRow row = toRow(document);
+        int updated = mapper.update(row);
         if (updated == 0) {
             try {
-                mapper.insert(
-                        document.id(),
-                        document.tenantId(),
-                        document.userId(),
-                        document.sessionId(),
-                        document.originalName(),
-                        document.bucket(),
-                        document.objectKey(),
-                        document.contentType(),
-                        document.sizeBytes(),
-                        document.status(),
-                        document.source(),
-                        document.tokenSize(),
-                        document.metadataJson(),
-                        document.createdAt(),
-                        document.updatedAt()
-                );
+                mapper.insert(row);
             } catch (DuplicateKeyException ex) {
-                // 避免使用 PostgreSQL 专有 upsert；并发写同一 documentId 时退回更新。
-                mapper.update(
-                        document.id(),
-                        document.tenantId(),
-                        document.userId(),
-                        document.sessionId(),
-                        document.originalName(),
-                        document.bucket(),
-                        document.objectKey(),
-                        document.contentType(),
-                        document.sizeBytes(),
-                        document.status(),
-                        document.source(),
-                        document.tokenSize(),
-                        document.metadataJson(),
-                        document.createdAt(),
-                        document.updatedAt()
-                );
+                // 避免使用 具体数据库专有 upsert；并发写同一 documentId 时退回更新。
+                mapper.update(row);
             }
         }
         return document;
+    }
+
+    private UploadedDocumentRow toRow(UploadedDocument document) {
+        UploadedDocumentRow row = new UploadedDocumentRow();
+        row.setId(document.id());
+        row.setTenantId(document.tenantId());
+        row.setUserId(document.userId());
+        row.setSessionId(document.sessionId());
+        row.setOriginalName(document.originalName());
+        row.setBucket(document.bucket());
+        row.setObjectKey(document.objectKey());
+        row.setContentType(document.contentType());
+        row.setSizeBytes(document.sizeBytes());
+        row.setStatus(document.status());
+        row.setSource(document.source());
+        row.setTokenSize(document.tokenSize());
+        row.setMetadataJson(document.metadataJson());
+        row.setCreatedAt(document.createdAt());
+        row.setUpdatedAt(document.updatedAt());
+        return row;
     }
 
     @Override

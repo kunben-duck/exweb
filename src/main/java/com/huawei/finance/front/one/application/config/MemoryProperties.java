@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>ChatService 的记忆能力是可选增强，不是聊天主链路强依赖。短期记忆负责装配最近几轮问答，
  * 长期记忆负责调用可替换的外部长记忆服务；两者均默认关闭，避免正式首版在未明确启用时产生额外
- * Redis、openGauss 或外部服务访问。</p>
+ * Redis、数据库或外部服务访问。</p>
  */
 @Component
 @ConfigurationProperties(prefix = "financeex.memory")

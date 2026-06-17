@@ -4,6 +4,7 @@ import com.huawei.finance.front.one.application.config.ChatStreamProperties;
 import com.huawei.finance.front.one.application.facade.FinanceChatFacade;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
+import com.huawei.finance.front.one.application.service.chat.MessageFeedbackCommand;
 import com.huawei.finance.front.one.application.service.chat.ChatFeedbackApplicationService;
 import com.huawei.finance.front.one.application.service.chat.ChatRunApplicationService;
 import com.huawei.finance.front.one.application.service.chat.ChatStreamApplicationService;
@@ -138,15 +139,14 @@ public class ChatController {
                                                   @RequestBody MessageFeedbackRequest request) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> {
-                    ChatMessageFeedback feedback = feedbackService.submit(
-                            user,
+                    ChatMessageFeedback feedback = feedbackService.submit(user, new MessageFeedbackCommand(
                             messageId,
                             request == null ? null : request.runId(),
                             request == null ? null : request.rating(),
                             request == null ? null : request.reasonCode(),
                             request == null ? null : request.commentText(),
                             request == null ? null : request.metadata()
-                    );
+                    ));
                     return toFeedbackDto(feedback);
                 })
                 .subscribeOn(Schedulers.boundedElastic());

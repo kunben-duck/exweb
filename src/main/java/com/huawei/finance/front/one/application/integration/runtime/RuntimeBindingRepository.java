@@ -7,7 +7,7 @@ import java.util.Optional;
 /**
  * RuntimeBinding 持久化仓储端口。
  *
- * <p>openGauss 是 RuntimeBinding 的事实源；Redis 只能作为热缓存，不能单独承载绑定状态。</p>
+ * <p>数据库是 RuntimeBinding 的事实源；Redis 只能作为热缓存，不能单独承载绑定状态。</p>
  */
 public interface RuntimeBindingRepository {
     /**
@@ -24,7 +24,7 @@ public interface RuntimeBindingRepository {
     /**
      * 按消息树 leaf 查询当前会话可续接的 Runtime 绑定。
      *
-     * <p>leaf 为空表示根路径绑定；openGauss 仓储使用
+     * <p>leaf 为空表示根路径绑定；数据库仓储使用
      * {@code tenantId + userId + sessionId + provider + leafMessageId + ACTIVE} 精确查询。</p>
      */
     default Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId, String provider,

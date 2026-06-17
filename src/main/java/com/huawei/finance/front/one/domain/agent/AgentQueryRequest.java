@@ -9,7 +9,7 @@ import java.util.Map;
 /**
  * SuperAgent 调用下游 SubAgent 的统一请求对象。
  *
- * <p>该对象是应用层与第三方 Agent 服务之间的防腐层：前端 DTO、openGauss 行对象和 Redis
+ * <p>该对象是应用层与第三方 Agent 服务之间的防腐层：前端 DTO、数据库行对象和 Redis
  * 缓存结构都不会直接传给 SubAgent。SubAgent 在当前正式版本中只执行一轮简单任务，不参与会话保持。</p>
  *
  * @param tenantId 租户标识，来自服务端身份上下文。

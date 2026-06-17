@@ -43,7 +43,7 @@ public class ChatTurnStreamTranslator {
     }
 
     /**
-     * 构造 turn 级 heartbeat。heartbeat 不对应 openGauss event，不推进前端 afterSeq。
+     * 构造 turn 级 heartbeat。heartbeat 不对应数据库事件，不推进前端 afterSeq。
      *
      * @param sessionId 会话标识。
      * @param runId run 标识。

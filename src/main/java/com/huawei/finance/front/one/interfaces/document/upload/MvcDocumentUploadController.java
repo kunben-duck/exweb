@@ -51,7 +51,8 @@ public class MvcDocumentUploadController {
                                             @RequestParam(value = "skillId", required = false) String skillId,
                                             @RequestParam(value = "metadata", required = false) String metadata,
                                             @RequestHeader(value = HttpHeaders.COOKIE, required = false) String cookieHeader) {
-        return uploadSupport.uploadMultipartFile(file, sessionId, targetProvider, skillId, metadata, cookieHeader)
+        DocumentUploadContext context = new DocumentUploadContext(sessionId, targetProvider, skillId, metadata, cookieHeader);
+        return uploadSupport.uploadMultipartFile(file, context)
                 .map(dtoMapper::toDto);
     }
 }

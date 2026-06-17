@@ -14,15 +14,15 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 聊天会话 openGauss 事实源实现。
+ * 聊天会话数据库事实源实现。
  */
 @Repository
-public class OpenGaussSessionRepository implements SessionRepository {
+public class MyBatisSessionRepository implements SessionRepository {
     private static final String CURSOR_SEPARATOR = "|";
 
     private final ChatSessionMapper mapper;
 
-    public OpenGaussSessionRepository(ChatSessionMapper mapper) {
+    public MyBatisSessionRepository(ChatSessionMapper mapper) {
         this.mapper = mapper;
     }
 
@@ -77,22 +77,14 @@ public class OpenGaussSessionRepository implements SessionRepository {
 
     @Override
     public ChatSession save(ChatSession session) {
-        int updated = mapper.update(session.id(), session.tenantId(), session.userId(), session.title(),
-                session.status(), session.channel(), session.currentLeafMessageId(), session.rootSessionId(),
-                session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
-                session.metadataJson(), session.createdAt(), session.updatedAt());
+        ChatSessionRow row = toRow(session);
+        int updated = mapper.update(row);
         if (updated == 0) {
             try {
-                mapper.insert(session.id(), session.tenantId(), session.userId(), session.title(), session.status(),
-                        session.channel(), session.currentLeafMessageId(), session.rootSessionId(),
-                        session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
-                        session.metadataJson(), session.createdAt(), session.updatedAt());
+                mapper.insert(row);
             } catch (DuplicateKeyException ex) {
-                // 并发创建同一会话时，另一事务可能先插入成功；此时回退为更新，避免依赖 PostgreSQL 专有 upsert。
-                mapper.update(session.id(), session.tenantId(), session.userId(), session.title(), session.status(),
-                        session.channel(), session.currentLeafMessageId(), session.rootSessionId(),
-                        session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
-                        session.metadataJson(), session.createdAt(), session.updatedAt());
+                // 并发创建同一会话时，另一事务可能先插入成功；此时回退为更新，避免依赖 具体数据库专有 upsert。
+                mapper.update(row);
             }
         }
         return session;
@@ -124,6 +116,25 @@ public class OpenGaussSessionRepository implements SessionRepository {
                 row.getBranchSourceSessionId(), row.getBranchSourceMessageId(), row.getLastNodeOrder(),
                 row.getMetadataJson(), row.getCreatedAt() == null ? Instant.EPOCH : row.getCreatedAt(),
                 row.getUpdatedAt() == null ? Instant.EPOCH : row.getUpdatedAt());
+    }
+
+    private ChatSessionRow toRow(ChatSession session) {
+        ChatSessionRow row = new ChatSessionRow();
+        row.setId(session.id());
+        row.setTenantId(session.tenantId());
+        row.setUserId(session.userId());
+        row.setTitle(session.title());
+        row.setStatus(session.status());
+        row.setChannel(session.channel());
+        row.setCurrentLeafMessageId(session.currentLeafMessageId());
+        row.setRootSessionId(session.rootSessionId());
+        row.setBranchSourceSessionId(session.branchSourceSessionId());
+        row.setBranchSourceMessageId(session.branchSourceMessageId());
+        row.setLastNodeOrder(session.lastNodeOrder());
+        row.setMetadataJson(session.metadataJson());
+        row.setCreatedAt(session.createdAt());
+        row.setUpdatedAt(session.updatedAt());
+        return row;
     }
 
     private String encodeCursor(ChatSession session) {

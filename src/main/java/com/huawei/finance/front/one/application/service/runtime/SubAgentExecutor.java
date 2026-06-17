@@ -5,11 +5,8 @@ import com.huawei.finance.front.one.domain.agent.AgentQueryRequest;
 import com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
-import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
-import com.huawei.finance.front.one.domain.memory.MemoryContext;
-import com.huawei.finance.front.one.domain.routing.RouteTarget;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
@@ -32,8 +29,9 @@ public class SubAgentExecutor {
         this.concurrencyLimiter = concurrencyLimiter;
     }
 
-    public Flux<ChatEvent> execute(ChatCommand command, String runId, MemoryContext memory, RouteTarget route,
-                                   UserContext user) {
+    public Flux<ChatEvent> execute(SubAgentExecutionContext context) {
+        var command = context.command();
+        UserContext user = context.user();
         List<AttachmentRef> attachments = command.attachments() == null ? List.of() : command.attachments();
         // AgentQueryRequest 是 SuperAgent 与第三方 SubAgent 的防腐层契约。
         // 对下游只暴露当前消息、上下文快照和附件元信息；
@@ -42,12 +40,12 @@ public class SubAgentExecutor {
                 user.tenantId(),
                 user.userId(),
                 command.sessionId(),
-                runId,
-                route.selectedAgentCode(),
+                context.runId(),
+                context.route().selectedAgentCode(),
                 command.message(),
                 attachments,
-                memory,
-                route,
+                context.memory(),
+                context.route(),
                 command.metadata()
         );
         return concurrencyLimiter.protectSubAgent(subAgentClient.query(request));

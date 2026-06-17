@@ -6,7 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * 短期消息存储降级配置。
  *
- * <p>短期消息优先写 openGauss，Redis 只作为热缓存。本配置控制数据库不可用时是否允许降级。</p>
+ * <p>短期消息优先写数据库，Redis 只作为热缓存。本配置控制数据库不可用时是否允许降级。</p>
  */
 @ConfigurationProperties(prefix = "financeex.memory.short-term.storage")
 public class ShortTermMemoryStorageProperties {

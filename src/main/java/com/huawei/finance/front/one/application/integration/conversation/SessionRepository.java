@@ -54,7 +54,7 @@ public interface SessionRepository {
     /**
      * 基于页码分页查询当前用户会话。
      *
-     * <p>默认实现仅服务测试和非 openGauss 替代仓储，生产 openGauss 实现会使用 count + offset SQL。
+     * <p>默认实现仅服务测试和非数据库替代仓储，生产数据库实现会使用 count + offset SQL。
      * 查询语义必须与游标分页保持一致：当前 owner、排除 DELETED、按 updatedAt/id 倒序。</p>
      *
      * @param tenantId 租户标识。

@@ -115,8 +115,8 @@ class ChatDeltaCoalescerTest {
         ChatStreamProperties properties = new ChatStreamProperties();
         properties.setDeltaCoalesceWindow(Duration.ofSeconds(5));
         ChatDeltaCoalescer coalescer = new ChatDeltaCoalescer(properties);
-        RuntimeEvent runtimeEvent = RuntimeEvent.relay("run1", "session1", "project_home",
-                "event", "runtime", "runtime", null, Map.of("project_home", "/tmp/xxx"));
+        RuntimeEvent runtimeEvent = RuntimeEvent.relay("run1", "session1", new RuntimeEvent.FallbackPayload(
+                "relay", "project_home", "event", "runtime", "runtime", null, Map.of("project_home", "/tmp/xxx")));
 
         List<ChatEvent> events = coalescer.coalesce(Flux.just(
                 MessageDeltaEvent.of("run1", "session1", "a"),

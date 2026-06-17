@@ -2,8 +2,10 @@ package com.huawei.finance.front.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.command.DocumentUpdateCommand;
 import com.huawei.finance.front.one.application.command.DocumentUploadCommand;
+import com.huawei.finance.front.one.application.config.IntentRecordProperties;
 import com.huawei.finance.front.one.application.config.MemoryProperties;
 import com.huawei.finance.front.one.application.config.RouteSignalProperties;
 import com.huawei.finance.front.one.application.facade.DocumentFacade;
@@ -28,6 +30,7 @@ import com.huawei.finance.front.one.application.integration.memory.LongTermMemor
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.finance.front.one.application.service.memory.MemoryApplicationService;
+import com.huawei.finance.front.one.application.service.routing.IntentRecognitionRecordService;
 import com.huawei.finance.front.one.application.service.routing.RouteSignalApplicationService;
 import com.huawei.finance.front.one.application.service.routing.RouteSignalResult;
 import com.huawei.finance.front.one.application.service.runtime.AgentRuntimeExecutor;
@@ -117,6 +120,7 @@ class FinanceEXChatServiceTest {
                 new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
                 new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
                 runtimeRouteService(),
+                intentRecordService(),
                 new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
                     @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
                         return Flux.empty();
@@ -196,6 +200,7 @@ class FinanceEXChatServiceTest {
                 new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
                 new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
                 runtimeRouteService(),
+                intentRecordService(),
                 new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
                     @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
                         return Flux.empty();
@@ -274,6 +279,7 @@ class FinanceEXChatServiceTest {
                 new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
                 new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
                 runtimeRouteService(),
+                intentRecordService(),
                 new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
                     @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
                         return Flux.empty();
@@ -347,6 +353,7 @@ class FinanceEXChatServiceTest {
                 new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
                 new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
                 runtimeRouteService(),
+                intentRecordService(),
                 new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
                     @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
                         return Flux.empty();
@@ -410,6 +417,7 @@ class FinanceEXChatServiceTest {
                 new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
                 new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
                 systemRouteService(),
+                intentRecordService(),
                 new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
                     @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
                         return Flux.empty();
@@ -549,6 +557,7 @@ class FinanceEXChatServiceTest {
                 new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
                 new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
                 runtimeRouteService(),
+                intentRecordService(),
                 new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
                     @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
                         return Flux.empty();
@@ -605,6 +614,11 @@ class FinanceEXChatServiceTest {
                 return RouteSignalResult.of(RouteTarget.agentRuntime("test-runtime"));
             }
         };
+    }
+
+    private IntentRecognitionRecordService intentRecordService() {
+        return new IntentRecognitionRecordService(new IntentRecordProperties(), record -> {
+        }, new FixedIdGenerator(), new ObjectMapper(), Runnable::run);
     }
 
     private DocumentFacade documentFacade() {

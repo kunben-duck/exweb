@@ -38,7 +38,7 @@ rg -n "methodName|className" src/main/java/com/huawei/finance/front/one
 
 - 保存 `run.started`、`message.delta`、`message.snapshot`、`message.completed`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.reference`、`runtime.card`、`runtime.event`、`run.completed`、`run.failed`、`run.cancelled` 等 ChatService 标准事件。
 - WebSocket 实时输出和 Event Resume 断点恢复都基于这张表的事件。
-- `seq` 是 openGauss 生成的恢复游标。
+- `seq` 是数据库生成的恢复游标。
 
 表：`fin_ex_chat_message_part_t`
 
@@ -53,8 +53,8 @@ rg -n "methodName|className" src/main/java/com/huawei/finance/front/one
 - `application/service/chat/ChatStreamApplicationService.java`
 - `ChatStreamApplicationService#appendAndPublish(...)`
 - `ChatStreamApplicationService#appendWithExecutionGuard(...)`
-- `infrastructure/persistence/OpenGaussChatEventStore.java`
-- `OpenGaussChatEventStore#appendWithExecutionGuard(...)`
+- `infrastructure/persistence/MyBatisChatEventStore.java`
+- `MyBatisChatEventStore#appendWithExecutionGuard(...)`
 
 ### 2.3 RuntimeRawStreamLog：下游原始流日志
 
@@ -77,7 +77,7 @@ rg -n "methodName|className" src/main/java/com/huawei/finance/front/one
 - `application/integration/conversation/RuntimeRawStreamLogPublisher.java`
 - `application/integration/conversation/RuntimeRawStreamLogConsumer.java`
 - `infrastructure/messaging/NoopRuntimeRawStreamLogPublisher.java`
-- `infrastructure/persistence/OpenGaussRuntimeRawStreamLogRepository.java`
+- `infrastructure/persistence/MyBatisRuntimeRawStreamLogRepository.java`
 - `infrastructure/persistence/RuntimeRawStreamLogMapper.java`
 
 排查建议：
@@ -105,7 +105,7 @@ rg -n "methodName|className" src/main/java/com/huawei/finance/front/one
 - `ChatRunApplicationService#observeEvent(...)`
 - `application/service/chat/ChatRunLeaseApplicationService.java`
 - `ChatRunLeaseApplicationService#startRun(...)`
-- `OpenGaussChatEventStore#appendWithExecutionGuard(...)`
+- `MyBatisChatEventStore#appendWithExecutionGuard(...)`
 
 ## 3. 用户发起提问的入口链路
 
@@ -203,10 +203,11 @@ FinanceEXChatService#executeRun(...)
 9. 未显式指定技能时查询或创建 RuntimeBinding。
 10. `RouteSignalApplicationService#routeInitial(...)` 调用可选用例库和意图服务。
 11. `ChatRunApplicationService#createRunning(...)` 创建业务 run。
-12. `ChatRunLeaseApplicationService#startRun(...)` 创建 execution lease。
-13. 根据 `RouteType` 调用 LegacySkill、SubAgent、SystemResponse 或 AgentRuntime。
-14. 外层补齐 `run.started` 和 `run.completed`。
-15. 进入 `persistAndPublishRunEvents(...)`。
+12. 如果本轮实际调用了意图服务，`IntentRecognitionRecordService#recordAsync(...)` 用当前 `UserContext`、query、`IntentDecision`、最终 `RouteTarget` 和 runId 构造不可变快照，并提交到专用 Servlet/MVC 异步线程池；写入失败不影响主链路。
+13. `ChatRunLeaseApplicationService#startRun(...)` 创建 execution lease。
+14. 根据 `RouteType` 调用 LegacySkill、SubAgent、SystemResponse 或 AgentRuntime。
+15. 外层补齐 `run.started` 和 `run.completed`。
+16. 进入 `persistAndPublishRunEvents(...)`。
 
 关键分支：
 
@@ -220,6 +221,7 @@ RouteType.AGENT_RUNTIME    -> AgentRuntimeExecutor#execute(...)
 重点排查：
 
 - 新问题没有进入 Relay：查看 `RouteSignalApplicationService#routeInitial(...)` 返回的 `RouteTarget`。
+- 意图识别已调用但统计表没有记录：确认 `financeex.intent-record.enabled=true`，再看 `IntentRecognitionRecordService#recordAsync(...)` 是否被线程池拒绝或 repository 写库失败；该链路是 best-effort，不会向前端报错。
 - 指定技能没有进入老 Agent 或 chat Cookie 未透传：查看 `FinanceEXChatService#selectedSkillId(...)`、`LegacySkillExecutor#execute(...)` 和 `ConfiguredLegacySkillAgentClient#query(...)`。
 - 多轮没有续接 Runtime：查看 `RuntimeBindingApplicationService#findActive(...)` 是否命中当前 `leafMessageId`。
 - 同一会话连续发两条报错：查看 `ChatRunApplicationService#rejectIfActiveRunExists(...)` 和 `ChatRunApplicationService#createRunning(...)`。
@@ -382,7 +384,7 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
    - 运行中的 `message.delta/message.completed` 不再逐条查 run 表；最终写入正确性由 guarded insert 的 run 状态与 execution fencing 条件保证。
 
 4. `ChatStreamApplicationService#appendWithExecutionGuard(...)`
-   - 进入 `OpenGaussChatEventStore#appendWithExecutionGuard(...)`。
+   - 进入 `MyBatisChatEventStore#appendWithExecutionGuard(...)`。
    - Mapper 使用 `INSERT ... SELECT ... JOIN fin_ex_chat_session_t + fin_ex_chat_run_t + fin_ex_chat_run_execution_t`。
    - 同一条 SQL 校验 run/session/tenant/user 归属、run 状态、execution owner 和 fencing token。
    - 条件不满足时抛出写入拒绝，后台流停止，不发布该事件。
@@ -405,7 +407,7 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
    - `message.delta` 不再逐条更新 run 表；实时 latest seq 以 event 表为准。
 
 8. `ChatStreamApplicationService#publishPersisted(...)`
-   - 只发布已经成功写入 openGauss、带 seq 的事件。
+   - 只发布已经成功写入数据库、带 seq 的事件。
    - 本机 live sink 与 Redis Pub/Sub 都不是事实源。
 
 9. `RuntimeBindingApplicationService#observeEvent(...)`
@@ -445,28 +447,28 @@ liveEventBus.publish(chat-run-{runId}, persisted)
 注意：
 
 - 必须先入库，再发布。
-- 发布出去的事件是带 openGauss `seq` 的 persisted event。
+- 发布出去的事件是带数据库 `seq` 的 persisted event。
 - 如果事件没有 runId，不发布 Redis topic。
 
-### 8.2 openGauss 事件事实源
+### 8.2 数据库事件事实源
 
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/infrastructure/persistence/OpenGaussChatEventStore.java
+src/main/java/com/huawei/finance/front/one/infrastructure/persistence/MyBatisChatEventStore.java
 ```
 
 方法：
 
 ```text
-OpenGaussChatEventStore#append(...)
-OpenGaussChatEventStore#appendWithExecutionGuard(...)
+MyBatisChatEventStore#append(...)
+MyBatisChatEventStore#appendWithExecutionGuard(...)
 ```
 
 写入步骤：
 
 1. 生成 eventId。
-2. 调 `ChatEventMapper#nextSeq()` 获取 openGauss sequence。
+2. 调 `ChatEventMapper#nextSeq()` 获取数据库 sequence。
 3. 普通恢复/取消/系统补偿事件调用 `ChatEventMapper#insertFromSession(...)`。
 4. 后台 run 流式事件调用 `ChatEventMapper#insertFromSessionWithExecutionGuard(...)`，在一条 SQL 内校验 run/session/tenant/user、run 状态、execution owner 和 fencing token。
 5. insert 成功后直接用已知 seq/createdAt/payload 构造 `StoredChatEvent`，不再回读 `findById(...)`。
@@ -500,7 +502,7 @@ LocalChatEventStreamRegistry#subscribeRunTopic(...)
 - 当前 JVM 内的 run topic 在线事件发布。
 - 只负责推给连接在本实例上的 WebSocket。
 - topic 是 `chat-run-{runId}`。
-- sink 是有界 multicast live 通道，不保存历史事件；订阅建立时的补发统一从 openGauss event 表读取。
+- sink 是有界 multicast live 通道，不保存历史事件；订阅建立时的补发统一从数据库事件表读取。
 - live sink 溢出或异常时，上层会提示 `RECOVER_REQUIRED`，前端再用 Event Resume 补齐缺口。
 
 重点排查：
@@ -533,7 +535,7 @@ RedisChatLiveEventBus#onMessage(...)
 注意：
 
 - Redis Pub/Sub 不是可靠消息源。
-- Redis 不可用时，跨实例实时推送可能缺失，但 Event Resume 仍可从 openGauss 补齐。
+- Redis 不可用时，跨实例实时推送可能缺失，但 Event Resume 仍可从数据库补齐。
 
 重点排查：
 
@@ -668,7 +670,7 @@ ChatStreamApplicationService#deduplicate(...)
 
 1. `ensureRunTopicAccessible(...)` 校验 topic 对应 run 归属。
 2. 先创建 `liveBuffer(...)`，避免查库期间产生事件空窗。
-3. 从 openGauss 查询 `findByOwnerAndRunAfterSeq(...)` 补发历史事件。
+3. 从数据库查询 `findByOwnerAndRunAfterSeq(...)` 补发历史事件。
 4. 计算 replay 的最大 seq。
 5. `Flux.concat(replay, liveBuffer.events().filter(seq > liveAfterSeq))`。
 
@@ -687,7 +689,7 @@ RedisChatLiveEventBus#subscribe(...)
 
 重点排查：
 
-- 新开页签只收到 WebSocket、没有走 Event Resume：这是前端策略问题；服务端 WebSocket subscribe 本身也会先查 openGauss 补历史。
+- 新开页签只收到 WebSocket、没有走 Event Resume：这是前端策略问题；服务端 WebSocket subscribe 本身也会先查数据库补历史。
 - 需要严格执行当前恢复协议：前端应先调用 run 级事件恢复补齐已落库事件，再根据页面需要订阅 WebSocket 实时 topic。
 - 跨实例实时缺事件：看 Redis Pub/Sub；但最终以 run 级事件恢复 是否能补齐为准。
 
@@ -800,7 +802,7 @@ activeClaims(...)
 注意：
 
 - 它不是跨实例事实源。
-- 跨实例一致性依赖 Redis cancel flag、openGauss execution lease 和 fencing token。
+- 跨实例一致性依赖 Redis cancel flag、数据库 execution lease 和 fencing token。
 
 ### 14.2 execution lease 和 heartbeat
 
@@ -823,7 +825,7 @@ heartbeatActiveRuns(...)
 
 - run 创建后写 `fin_ex_chat_run_execution_t`。
 - 定时刷新本机 active run heartbeat。
-- 事件写入权不再先单独查询 execution；由 `OpenGaussChatEventStore#appendWithExecutionGuard(...)`
+- 事件写入权不再先单独查询 execution；由 `MyBatisChatEventStore#appendWithExecutionGuard(...)`
   在事件插入 SQL 中原子校验 owner 和 fencing token。
 - run 终态后把 execution 置为终态。
 
@@ -847,7 +849,7 @@ src/main/java/com/huawei/finance/front/one/application/service/RuntimeTakeoverRe
 职责：
 
 - Scheduler 只负责定时触发和 jitter。
-- Orchestrator 查询 stale execution、做容量治理、Redis recover lock、openGauss 条件抢占。
+- Orchestrator 查询 stale execution、做容量治理、Redis recover lock、数据库条件抢占。
 - Strategy 负责具体恢复动作。
 
 当前主要策略：
@@ -927,9 +929,9 @@ cancelActive(...)
 | `/runs` 不返回 | `FinanceEXChatService#startRun(...)`、`executeRun(...)`、`persistAndPublishRunEvents(...)` |
 | 用户消息入库但没有回答 | `AgentRuntimeExecutor#execute(...)`、Relay adapter、`persistAndPublishRunEvents(...)` |
 | Relay 有响应但前端没有 | `ChatStreamApplicationService#appendWithExecutionGuard(...)`、`ChatStreamApplicationService#publishPersisted(...)`、`LocalChatEventStreamRegistry#publish(...)`、`RedisChatLiveEventBus#publish(...)`、`ChatWebSocketProtocolService#emitTopicEvent(...)` |
-| event 表没有 delta | `FinanceEXChatService#eventBelongsToCurrentRun(...)`、`ChatRunApplicationService#shouldAcceptEvent(...)`、`OpenGaussChatEventStore#appendWithExecutionGuard(...)` |
+| event 表没有 delta | `FinanceEXChatService#eventBelongsToCurrentRun(...)`、`ChatRunApplicationService#shouldAcceptEvent(...)`、`MyBatisChatEventStore#appendWithExecutionGuard(...)` |
 | WebSocket 收不到实时消息 | `ChatWebSocketProtocolService#subscribe(...)`、`ChatStreamApplicationService#resumeRunTopic(...)`、`liveBuffer(...)` |
-| 事件恢复没有补发 | `ChatController#resumeRunEvents(...)`、`ChatStreamApplicationService#resumeRun(...)`、`OpenGaussChatEventStore#findByOwnerAndRunAfterSeq(...)` |
+| 事件恢复没有补发 | `ChatController#resumeRunEvents(...)`、`ChatStreamApplicationService#resumeRun(...)`、`MyBatisChatEventStore#findByOwnerAndRunAfterSeq(...)` |
 | 多会话串显示 | `emitTopicEvent(...)` 的 run/session 校验、前端按 `payload.sessionId` 分发 |
 | stop 后还在输出 | `ChatRunApplicationService#requestStop(...)`、`shouldAcceptEvent(...)`、`LocalChatRunExecutionRegistry#cancel(...)` |
 | 实例挂掉 run 不结束 | `ChatRunLeaseApplicationService#heartbeatActiveRuns(...)`、`ChatRunWatchdogScheduler`、`ChatRunRecoveryOrchestrator` |
@@ -948,7 +950,7 @@ cancelActive(...)
 5. `AgentRuntimeExecutor#execute(...)`：Runtime 请求是否构造正确。
 6. `RelayStreamHttpRuntimeAdapter#query(...)`：下游是否返回。
 7. `FinanceEXChatService#persistAndPublishRunEvents(...)`：事件是否被拦截。
-8. `OpenGaussChatEventStore#appendWithExecutionGuard(...)`：事件是否写入 openGauss 并生成 seq，owner/fencing 是否匹配。
+8. `MyBatisChatEventStore#appendWithExecutionGuard(...)`：事件是否写入数据库并生成 seq，owner/fencing 是否匹配。
 9. `ChatStreamApplicationService#publishPersisted(...)`：是否本机发布和 Redis 发布。
 10. `ChatWebSocketProtocolService#subscribe(...)`：前端是否订阅正确 topic。
 11. `ChatStreamApplicationService#resumeRunTopic(...)`：是否 replay + live 正常。

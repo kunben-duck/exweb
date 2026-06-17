@@ -25,7 +25,7 @@ import org.springframework.stereotype.Service;
 /**
  * stale run 恢复编排服务。
  *
- * <p>该服务负责拉取过期 execution、执行本机容量治理、尝试 Redis 优化锁、通过 openGauss 条件更新
+ * <p>该服务负责拉取过期 execution、执行本机容量治理、尝试 Redis 优化锁、通过数据库条件更新
  * 抢占恢复权，并按配置策略链调用具体恢复策略。它不承担定时调度，调度由 watchdog scheduler 完成。</p>
  */
 @Service

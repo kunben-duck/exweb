@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>Redis Cluster 下禁止使用 {@code KEYS} 做会话级模糊删除，因此每个会话维护一个同 slot
  * 的索引集合：binding key 与 index key 都包含相同 hash tag，删除时先读索引集合再批量删除。
- * Redis 仍然只是热缓存，任何失败都回退 openGauss 事实源。</p>
+ * Redis 仍然只是热缓存，任何失败都回退数据库事实源。</p>
  */
 @Component
 @EnableConfigurationProperties(RuntimeBindingProperties.class)
@@ -48,7 +48,7 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
             }
             return Optional.of(objectMapper.readValue(value, RuntimeBinding.class));
         } catch (RuntimeException | JsonProcessingException ex) {
-            log.warn("RuntimeBinding Redis 读取失败，本轮回源 openGauss。原因：{}", ex.getMessage());
+            log.warn("RuntimeBinding Redis 读取失败，本轮回源数据库。原因：{}", ex.getMessage());
             return Optional.empty();
         }
     }
@@ -72,7 +72,7 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
             redis.opsForSet().add(indexKey, key);
             redis.expire(indexKey, properties.getRedisTtl());
         } catch (RuntimeException | JsonProcessingException ex) {
-            log.warn("RuntimeBinding Redis 写入失败，openGauss 仍作为事实源。原因：{}", ex.getMessage());
+            log.warn("RuntimeBinding Redis 写入失败，数据库仍作为事实源。原因：{}", ex.getMessage());
         }
     }
 

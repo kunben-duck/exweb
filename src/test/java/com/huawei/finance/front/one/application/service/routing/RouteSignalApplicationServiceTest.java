@@ -106,6 +106,10 @@ class RouteSignalApplicationServiceTest {
         RouteSignalResult result = service.routeInitial(user, session, command, List.of(), memory);
 
         assertThat(result.route().type()).isEqualTo(RouteType.AGENT_RUNTIME);
+        assertThat(result.intentDecision()).isNotNull();
+        assertThat(result.intentDecision().intentCode()).isEqualTo("finance.runtime.degraded");
+        assertThat(result.intentDecision().raw()).containsEntry("source", "route-signal-intent-degraded")
+                .containsEntry("reason", "intent down");
     }
 
     private RouteSignalApplicationService service(boolean useCaseEnabled, boolean intentEnabled,

@@ -34,15 +34,7 @@ public interface ChatEventMapper {
              AND r.user_id = s.user_id
             WHERE s.id = #{sessionId}
             """)
-    int insertFromSession(
-            @Param("id") String id,
-            @Param("sessionId") String sessionId,
-            @Param("runId") String runId,
-            @Param("seq") long seq,
-            @Param("eventType") String eventType,
-            @Param("payloadJson") String payloadJson,
-            @Param("createdAt") Instant createdAt
-    );
+    int insertFromSession(ChatEventWriteRow row);
 
     @Insert("""
             INSERT INTO fin_ex_chat_event_t(
@@ -66,17 +58,7 @@ public interface ChatEventMapper {
              AND e.execution_status = 'RUNNING'
             WHERE s.id = #{sessionId}
             """)
-    int insertFromSessionWithExecutionGuard(
-            @Param("id") String id,
-            @Param("sessionId") String sessionId,
-            @Param("runId") String runId,
-            @Param("seq") long seq,
-            @Param("eventType") String eventType,
-            @Param("payloadJson") String payloadJson,
-            @Param("createdAt") Instant createdAt,
-            @Param("ownerInstanceId") String ownerInstanceId,
-            @Param("fencingToken") long fencingToken
-    );
+    int insertFromSessionWithExecutionGuard(ChatEventWriteRow row);
 
     @Select("""
             SELECT id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at

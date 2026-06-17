@@ -77,7 +77,7 @@ sequenceDiagram
     participant RelayAgent as "RelayAgent Service"
     participant Stream as "ChatStreamApplicationService"
     participant Redis as "Redis"
-    participant DB as "openGauss"
+    participant DB as "数据库"
     participant EventStore as "ChatEventStore"
 
     Frontend->>API: "POST /chat/runs"
@@ -175,7 +175,7 @@ sequenceDiagram
     participant Intent as "意图服务"
     participant Relay as "下游 RelayAgentRuntime"
     participant Redis as "Redis"
-    participant DB as "openGauss"
+    participant DB as "数据库"
     participant S3 as "S3 / OBS"
 
     opt "上传文档"
@@ -241,7 +241,7 @@ sequenceDiagram
     participant Provider as "DocumentProviderAdapter"
     participant ObjectStorage as "ObjectStorage Provider"
     participant HttpProvider as "HTTP Provider"
-    participant DB as "openGauss"
+    participant DB as "数据库"
     participant Chat as "FinanceEXChatService"
     participant Executor as "SubAgent / LegacySkill / AgentRuntime"
 
@@ -339,7 +339,7 @@ sequenceDiagram
     participant RedisBus as "Redis Pub/Sub"
     participant Runtime as "AgentRuntime Adapter"
     participant RelayAgent as "RelayAgent Service"
-    participant DB as "openGauss"
+    participant DB as "数据库"
 
     Frontend->>ChatAPI: "POST /chat/runs"
     ChatAPI->>SuperAgent: "后台 start(command)"
@@ -398,8 +398,8 @@ sequenceDiagram
 
 关键约束：
 
-- `fin_ex_chat_event_t.seq` 是前端恢复游标，实时输出和补发输出使用同一份 seq；该序号由 openGauss sequence/default 生成并随事件写入一起返回，应用层不再本地生成恢复游标。
-- openGauss 是事件事实源，`LocalChatEventStreamRegistry` 是当前服务实例内在线发布器，Redis Pub/Sub 只做跨实例实时扇出。
+- `fin_ex_chat_event_t.seq` 是前端恢复游标，实时输出和补发输出使用同一份 seq；该序号由数据库 sequence/default 生成并随事件写入一起返回，应用层不再本地生成恢复游标。
+- 数据库是事件事实源，`LocalChatEventStreamRegistry` 是当前服务实例内在线发布器，Redis Pub/Sub 只做跨实例实时扇出。
 - 事件写入必须校验 `runId/sessionId/tenantId/userId` 一致；事件补发和 `latestSeq` 查询也必须携带 `tenantId/userId/sessionId/runId` owner 条件，不能按裸 runId 或 sessionId 查询。
 - `fin_ex_chat_run_t` 是 run 生命周期事实源；Redis 只保存 active run 和 cancel flag。
 - `fin_ex_chat_run_execution_t` 是 run 执行控制面事实源；实例 ID、心跳、租约、恢复状态和 `fencing_token` 都在该表中，避免把运维执行信息混入业务 run 表。
@@ -410,7 +410,7 @@ sequenceDiagram
 - stop 是 REST 生命周期接口，不是 WebSocket command；重复 stop 幂等返回当前 run 状态。
 - 重新生成回答不再使用 run retry 接口，而是通过 `POST /chat/runs` 携带 `runMode=REGENERATE_ASSISTANT` 和 `regeneratedMessageId`，在同一 user 节点下生成新的 assistant sibling。
 - 会话 state 接口聚合会话元数据、最近历史消息和 `activeStreamTopicId`，用于前端切换会话后的恢复判断。
-- 新页签、新浏览器或跨电脑恢复 active run 时，前端应使用 `activeRunFirstSeq - 1` 打开 run 级事件恢复；该接口会先按 openGauss 事实源补发历史事件，再接入 live topic 持续输出到 run 终态，不能把 `latestSeq` 当作当前渲染实例已消费游标。
+- 新页签、新浏览器或跨电脑恢复 active run 时，前端应使用 `activeRunFirstSeq - 1` 打开 run 级事件恢复；该接口会先按数据库事实源补发历史事件，再接入 live topic 持续输出到 run 终态，不能把 `latestSeq` 当作当前渲染实例已消费游标。
 
 ### Run 控制面与故障恢复
 
@@ -455,7 +455,7 @@ sequenceDiagram
     ExecStore-->>Runner: "fencing 校验失败，拒绝迟到事件"
 ```
 
-watchdog 是分层设计：`ChatRunWatchdogScheduler` 只负责按配置延迟、jitter 和周期触发；`ChatRunRecoveryOrchestrator` 负责候选拉取、容量检查、策略选择和指标日志；`ChatRunExecutionRepository` 负责 openGauss 条件抢占；`StaleRunRecoveryStrategy` 负责具体恢复动作。默认策略链为 `MANUAL_CONFIRMATION,FAIL_FAST`，`RUNTIME_TAKEOVER` 仅在 Runtime 明确支持可靠恢复并提供 resume token 时使用。
+watchdog 是分层设计：`ChatRunWatchdogScheduler` 只负责按配置延迟、jitter 和周期触发；`ChatRunRecoveryOrchestrator` 负责候选拉取、容量检查、策略选择和指标日志；`ChatRunExecutionRepository` 负责数据库条件抢占；`StaleRunRecoveryStrategy` 负责具体恢复动作。默认策略链为 `MANUAL_CONFIRMATION,FAIL_FAST`，`RUNTIME_TAKEOVER` 仅在 Runtime 明确支持可靠恢复并提供 resume token 时使用。
 
 所有治理类 `@Scheduled` 任务使用 `financeex.scheduler.pool-size` 配置的线程池调度器，避免 watchdog jitter 或慢巡检阻塞 run heartbeat、WebSocket 空闲清理和准入窗口清理。实例 ID 默认由 `GeneratedApplicationInstanceIdProvider` 在进程启动时生成；如需对接注册中心，提供新的 `ApplicationInstanceIdProvider` bean 即可替换默认实现。
 
@@ -487,7 +487,7 @@ MVC/Servlet 生产模式增加了长连接治理层：`financeex.websocket.allow
 `max-subscribers-per-topic`、`outbound-queue-size`、`live-buffer-capacity` 和 `idle-timeout`
 限制本机连接资源。WebSocket 与 run 级事件恢复通过 `financeex.chat-stream.turn-heartbeat-interval`
 发送 turn stream `heartbeat`，配合 `spring.mvc.async.request-timeout` 与 Tomcat 连接配置避免空闲断流。WebSocket 实时投递
-出现慢客户端、缓冲溢出或乱序时返回 `RECOVER_REQUIRED`，可靠恢复仍走 openGauss event + Event Resume。
+出现慢客户端、缓冲溢出或乱序时返回 `RECOVER_REQUIRED`，可靠恢复仍走数据库事件 + Event Resume。
 前端接收的 `message.payload` / SSE `data` 是 `conversation-turn-stream`，真实 ChatEvent 位于
 `stream-item.encodedItem.data`；`heartbeat` 和 `done` 只是传输层状态，不写入 `fin_ex_chat_event_t`，
 也不推进 `afterSeq`。
@@ -515,6 +515,7 @@ flowchart TB
         ChatService["FinanceEXChatService"]
         ChatRun["ChatRunApplicationService"]
         RouteSignal["RouteSignalApplicationService"]
+        IntentRecord["IntentRecognitionRecordService"]
         RuntimeBinding["RuntimeBindingApplicationService"]
         SubAgentExecutor["SubAgentExecutor"]
         RuntimeExecutor["AgentRuntimeExecutor"]
@@ -535,7 +536,7 @@ flowchart TB
 
     subgraph Infrastructure["infrastructure"]
         Redis["Redis RuntimeBinding / ChatRun / Memory Cache"]
-        OpenGauss["openGauss + MyBatis"]
+        MyBatis["数据库 + MyBatis"]
         LiveBus["Redis Pub/Sub ChatLiveEventBus"]
         UseCaseHttp["UseCase HTTP Adapter"]
         IntentHttp["Intent HTTP Adapter"]
@@ -549,6 +550,7 @@ flowchart TB
 
     Interfaces --> ChatService
     ChatService --> RouteSignal
+    ChatService --> IntentRecord
     ChatService --> ChatRun
     ChatService --> RuntimeBinding
     ChatService --> SubAgentExecutor
@@ -559,14 +561,12 @@ flowchart TB
     ChatService --> SessionService
     RouteSignal --> UseCaseHttp
     RouteSignal --> IntentHttp
+    IntentRecord --> MyBatis
     ChatRun --> Redis
-    ChatRun --> OpenGauss
-    ChatCursor --> ReadCursorRedis
-    ChatCursor --> OpenGauss
-    StreamService --> ChatCursor
+    ChatRun --> MyBatis
     StreamService --> LiveBus
     RuntimeBinding --> Redis
-    RuntimeBinding --> OpenGauss
+    RuntimeBinding --> MyBatis
     SubAgentExecutor --> SubAgentHttp
     ChatService --> LegacySkillHttp
     RuntimeExecutor --> RelayRuntime
@@ -583,7 +583,9 @@ flowchart TB
 - 用例库和意图服务是可选路由信号，默认关闭；关闭时不调用外部 API。
 - 用例库开启时优先匹配；命中阈值默认 `0.85`，命中并返回 `subAgentCode` 后单轮调用 SubAgent。
 - 用例库关闭或未命中后，只有意图服务开启才调用 `IntentService`。
-- 意图服务返回简单任务、高置信且有 `candidateSubAgentCode` 时单轮调用 SubAgent。
+- 意图服务 adapter 的 HTTP 请求体和响应体转换由 infrastructure intent mapper 承载；当前解析 `code/data/result/items[]` 包装响应，选择最高 `confidence` 的 item，并把 `resourceInstruction.resourceId` 映射为 `candidateSubAgentCode`。
+- 意图服务返回简单任务、`confidence >= financeex.intent.confidence-threshold` 且有 `candidateSubAgentCode` 时单轮调用 SubAgent。
+- `financeex.intent-record.enabled=true` 时，只有实际调用过意图服务的 run 会异步写入 `fin_ex_intent_recognition_t`。记录内容包含本轮 query、候选 items、最高置信结果、最终路由是否采纳和意图服务耗时；显式技能、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会记录。
 - 两个信号均关闭、服务失败、复杂、低置信或缺少 SubAgent 的任务进入 Relay Runtime。
 - SubAgent 没有续接机制；如果用户下一轮继续提问，除非已经进入 Relay Runtime，否则重新走路由信号。
 
@@ -596,7 +598,7 @@ Redis key:
 fin_ex:{env}:runtime_binding:{tenantId:userId:sessionId}:{leafMessageId}
 fin_ex:{env}:runtime_binding:index:{tenantId:userId:sessionId}
 
-openGauss table:
+数据库表:
 fin_ex_runtime_binding_t
 ```
 
@@ -641,8 +643,8 @@ stateDiagram-v2
 
 stop 语义：
 
-- 集群事实源优先：stop 先写 Redis cancel flag 与 openGauss `CANCELLING` 状态，再发布 `run.cancelled`。
-- JVM subscription registry 只是本机资源释放加速器；即使 stop 请求与输出流落在不同实例，输出实例也必须在追加事件前读取 Redis cancel flag。非终态事件不再逐条回源 run 表，最终写入正确性由 openGauss guarded insert 同时校验 run 状态、session 归属和 execution fencing。
+- 集群事实源优先：stop 先写 Redis cancel flag 与数据库 `CANCELLING` 状态，再发布 `run.cancelled`。
+- JVM subscription registry 只是本机资源释放加速器；即使 stop 请求与输出流落在不同实例，输出实例也必须在追加事件前读取 Redis cancel flag。非终态事件不再逐条回源 run 表，最终写入正确性由数据库 guarded insert 同时校验 run 状态、session 归属和 execution fencing。
 - 用户主动 stop 且已有 assistant 正文或用户可见 runtime parts 成功落库时，会从事件事实源重建并保存 partial assistant 历史消息，消息 metadata 标记 `partial=true`、`finishReason=USER_STOP`；只有 trace、legacy session 等内部 metadata 时不创建空 assistant。
 - 下游尽力取消：Relay Runtime 和 SubAgent cancel 失败只记录日志，不影响前端收到取消终态。
 - stop 不取消 RuntimeBinding；下一轮仍可续接 Runtime，除非请求 metadata 使用 `forceNewTask=true`。
@@ -650,7 +652,8 @@ stop 语义：
 ## 外部 API 接入
 
 - 用例库服务：`financeex.use-case-library.enabled`、`financeex.use-case-library.base-url`、`financeex.use-case-library.match-path`
-- 意图服务：`financeex.intent.enabled`、`financeex.intent.base-url`、`financeex.intent.recognize-path`
+- 意图服务：`financeex.intent.enabled`、`financeex.intent.base-url`、`financeex.intent.recognize-path`、`financeex.intent.confidence-threshold`
+- 意图识别记录：`financeex.intent-record.enabled`、`max-query-length`、`max-raw-json-length`、`executor.*`。默认关闭；开启后使用 Servlet/MVC 友好的专用线程池 best-effort 写库，线程池拒绝、JSON 序列化失败或数据库写入失败都只记录 warn，不阻塞 `/chat/runs`。
 - SubAgent：`financeex.sub-agent.agents.{agentCode}.endpoint`
 - SubAgent stop：`financeex.sub-agent.agents.{agentCode}.stop-endpoint`
 - AgentRuntime provider：`financeex.agent-runtime.provider`，表示 Runtime 类型，当前默认 `relay`
@@ -701,10 +704,10 @@ Redis key 必须以 `fin_ex:{env}` 开头。`{env}` 从 `spring.profiles.active`
 - `fin_ex:{env}:chat_stream:{streamTopicId}`
 - `fin_ex:{env}:memory:short_term:messages:{tenantId}:{userId}:{sessionId}`
 
-同一会话的 active run 互斥由 Redis active key 和 openGauss run 状态共同保护。创建 run 前会先查询
+同一会话的 active run 互斥由 Redis active key 和数据库 run 状态共同保护。创建 run 前会先查询
 当前 active run，真正写入 `RUNNING` run 时通过 Redis set-if-absent 声明
 `fin_ex:{env}:chat_run:active:{tenantId}:{userId}:{sessionId}`；声明失败时返回 `ACTIVE_RUN_EXISTS`。
-run 进入 `COMPLETED/FAILED/CANCELLED` 后释放 active key。Redis 不可用时可退化为 openGauss
+run 进入 `COMPLETED/FAILED/CANCELLED` 后释放 active key。Redis 不可用时可退化为数据库
 active run 检查，但生产集群应保证 Redis Cluster 可用以降低并发竞态窗口。
 
 Redis 部署模式由 `financeex.redis.mode` 控制，默认 `standalone`；生产 Redis Cluster 设置为
@@ -713,12 +716,12 @@ Redis 部署模式由 `financeex.redis.mode` 控制，默认 `standalone`；生�
 Redis hash tag 保证同一会话 binding key 和索引集合落在同一 slot；env 位于 hash tag 外面，不影响
 同 slot 设计，因此会话级清理不使用 `KEYS`，只通过索引集合删除明确 key。
 ChatLiveEventBus 在本机出现 run topic 订阅者时动态订阅对应 Redis channel，Redis Pub/Sub 仍然只做
-跨实例实时 fanout，可靠恢复继续依赖 openGauss event + Event Resume。
+跨实例实时 fanout，可靠恢复继续依赖数据库事件 + Event Resume。
 
 ## 可选记忆上下文
 
 - `financeex.memory.short-term.enabled=false` 时，不装配最近问答，也不访问 Redis 短期记忆缓存。
 - `financeex.memory.short-term.recent-turns=5` 表示短期记忆开启后读取最近 5 轮问答，即最多 10 条消息。
-- `financeex.memory.short-term.cache-enabled=true` 表示短期记忆开启时优先使用 Redis 热缓存，miss 后回源 openGauss。
+- `financeex.memory.short-term.cache-enabled=true` 表示短期记忆开启时优先使用 Redis 热缓存，miss 后回源数据库。
 - `financeex.memory.long-term.enabled=false` 时，不调用长期记忆服务。
 - `financeex.memory.long-term.provider=disabled` 是默认安全 provider，开启长期记忆但未接真实服务时返回空结果。

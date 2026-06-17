@@ -8,6 +8,6 @@ public enum ChatRunCancelSignal {
     REQUESTED,
     /** Redis 明确不存在取消标记。 */
     NOT_REQUESTED,
-    /** Redis 暂不可用或读取失败，需要回源 openGauss。 */
+    /** Redis 暂不可用或读取失败，需要回源数据库。 */
     UNKNOWN
 }

@@ -5,21 +5,21 @@ import com.huawei.finance.front.one.domain.chat.RuntimeRawStreamLogEntry;
 import org.springframework.stereotype.Repository;
 
 /**
- * Runtime 原始流响应日志 openGauss 实现。
+ * Runtime 原始流响应日志数据库实现。
  *
  * <p>该 repository 只做单行插入；合并、分片、脱敏和失败吞吐由 application service 负责。</p>
  */
 @Repository
-public class OpenGaussRuntimeRawStreamLogRepository implements RuntimeRawStreamLogRepository {
+public class MyBatisRuntimeRawStreamLogRepository implements RuntimeRawStreamLogRepository {
     private final RuntimeRawStreamLogMapper mapper;
 
-    public OpenGaussRuntimeRawStreamLogRepository(RuntimeRawStreamLogMapper mapper) {
+    public MyBatisRuntimeRawStreamLogRepository(RuntimeRawStreamLogMapper mapper) {
         this.mapper = mapper;
     }
 
     @Override
     public void save(RuntimeRawStreamLogEntry entry) {
-        mapper.insert(
+        mapper.insert(new RuntimeRawStreamLogWriteRow(
                 entry.id(),
                 entry.tenantId(),
                 entry.userId(),
@@ -38,6 +38,6 @@ public class OpenGaussRuntimeRawStreamLogRepository implements RuntimeRawStreamL
                 entry.truncated(),
                 entry.terminal(),
                 entry.createdAt()
-        );
+        ));
     }
 }

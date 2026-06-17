@@ -144,6 +144,44 @@ CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_run_owner_session_status_updated_at
 CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_run_session_last_seq
     ON fin_ex_chat_run_t(session_id, last_seq);
 
+CREATE TABLE IF NOT EXISTS fin_ex_intent_recognition_t (
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL,
+    user_id VARCHAR(64) NOT NULL,
+    session_id VARCHAR(64),
+    run_id VARCHAR(64),
+    command_id VARCHAR(128),
+    query_text TEXT,
+    query_hash VARCHAR(64),
+    status VARCHAR(32) NOT NULL,
+    intent_id VARCHAR(128),
+    intent_name VARCHAR(256),
+    resource_id VARCHAR(128),
+    confidence NUMERIC(8, 6),
+    source VARCHAR(64),
+    candidate_count INTEGER,
+    confidence_threshold NUMERIC(8, 6),
+    accepted BOOLEAN,
+    route_type VARCHAR(64),
+    route_agent_code VARCHAR(128),
+    route_reason VARCHAR(512),
+    result_message TEXT,
+    items_json TEXT,
+    raw_response_json TEXT,
+    error_message TEXT,
+    latency_ms BIGINT,
+    created_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fin_ex_intent_recognition_owner_created_at
+    ON fin_ex_intent_recognition_t(tenant_id, user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_intent_recognition_session_run
+    ON fin_ex_intent_recognition_t(session_id, run_id);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_intent_recognition_intent_created_at
+    ON fin_ex_intent_recognition_t(intent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_intent_recognition_resource_accepted_created_at
+    ON fin_ex_intent_recognition_t(resource_id, accepted, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS fin_ex_chat_run_execution_t (
     id VARCHAR(64) PRIMARY KEY,
     run_id VARCHAR(64) NOT NULL,
@@ -376,6 +414,34 @@ COMMENT ON COLUMN fin_ex_chat_run_t.metadata_json IS 'run 扩展诊断元数据 
 COMMENT ON COLUMN fin_ex_chat_run_t.created_at IS 'run 记录创建时间。';
 COMMENT ON COLUMN fin_ex_chat_run_t.updated_at IS 'run 记录最后更新时间。';
 
+COMMENT ON TABLE fin_ex_intent_recognition_t IS '意图识别记录表，保存每次实际调用意图服务后的输入、识别结果和最终路由采纳结果，用于准确率统计和问题定位；该表是旁路记录，不参与聊天主链路决策。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.id IS '记录主键，业务生成的 intentrecId。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.tenant_id IS '租户标识，来自服务端身份上下文。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.user_id IS '用户标识，来自服务端身份上下文。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.session_id IS '触发意图识别的聊天会话 ID。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.run_id IS '触发意图识别的 ChatService runId。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.command_id IS '前端或调用方传入的命令标识，用于幂等排障。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.query_text IS '本轮用户问题文本，按 financeex.intent-record.max-query-length 截断。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.query_hash IS '本轮用户问题文本 SHA-256 摘要，用于重复问题统计。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.status IS '识别记录状态，例如 SUCCESS、NO_MATCH、FAILED、DEGRADED。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.intent_id IS '意图服务返回的意图 ID。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.intent_name IS '意图服务返回的意图名称。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.resource_id IS '意图服务推荐的资源或技能 ID，例如 resourceInstruction.resourceId。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.confidence IS '意图服务返回的最高候选置信度。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.source IS '意图候选来源，例如 llm。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.candidate_count IS '本次意图识别返回的候选数量。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.confidence_threshold IS '本次路由采用的置信度阈值。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.accepted IS '该意图候选是否被最终路由采纳。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.route_type IS '最终路由类型，例如 SUB_AGENT、AGENT_RUNTIME、SYSTEM_RESPONSE。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.route_agent_code IS '最终路由选中的 agent 或 skill 编码。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.route_reason IS '最终路由原因或降级说明。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.result_message IS '意图服务返回的识别解释文本。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.items_json IS '意图服务返回的候选 items JSON，按配置截断。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.raw_response_json IS '意图服务原始响应 JSON，按配置截断；不保存 Cookie、Authorization 或请求头。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.error_message IS '识别失败、降级或无匹配时的错误说明。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.latency_ms IS '意图服务调用耗时，单位毫秒。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.created_at IS '记录创建时间。';
+
 COMMENT ON TABLE fin_ex_chat_run_execution_t IS '聊天 run 执行控制面表，保存实例归属、心跳、租约、恢复策略和 fencing token，不承载用户业务状态。';
 COMMENT ON COLUMN fin_ex_chat_run_execution_t.id IS '执行控制面记录主键，业务生成的 executionId。';
 COMMENT ON COLUMN fin_ex_chat_run_execution_t.run_id IS '关联的业务 runId，对应 fin_ex_chat_run_t.id；唯一。';
@@ -396,7 +462,7 @@ COMMENT ON COLUMN fin_ex_chat_run_execution_t.metadata_json IS '执行控制面�
 COMMENT ON COLUMN fin_ex_chat_run_execution_t.created_at IS '执行控制面记录创建时间。';
 COMMENT ON COLUMN fin_ex_chat_run_execution_t.updated_at IS '执行控制面记录最后更新时间。';
 
-COMMENT ON SEQUENCE fin_ex_chat_event_seq IS '聊天事件恢复游标序号生成器，由 openGauss 统一生成 seq，供 WebSocket/SSE 断点恢复使用。';
+COMMENT ON SEQUENCE fin_ex_chat_event_seq IS '聊天事件恢复游标序号生成器，由数据库统一生成 seq，供 WebSocket/SSE 断点恢复使用。';
 
 COMMENT ON TABLE fin_ex_chat_event_t IS '聊天事件事实表，保存 ChatService 标准事件，例如 run.started、message.delta、message.snapshot、runtime.progress、runtime.tool、runtime.reference、runtime.card、message.completed、run.completed、run.failed、run.cancelled；tenant_id/user_id/session_id/run_id 是防止多用户、多会话串线的事实边界。';
 COMMENT ON TABLE fin_ex_runtime_raw_stream_log_t IS 'Runtime 原始流响应日志表，保存下游 Relay normalizer 之前的原始响应片段，仅用于排障和协议分析，不作为前端恢复事实源。';
@@ -423,7 +489,7 @@ COMMENT ON COLUMN fin_ex_chat_event_t.tenant_id IS '租户标识，来自服务�
 COMMENT ON COLUMN fin_ex_chat_event_t.user_id IS '用户标识，来自服务端身份上下文；SSE/WS 恢复查询必须携带该字段。';
 COMMENT ON COLUMN fin_ex_chat_event_t.session_id IS '事件所属聊天会话 ID；写入时必须与 run 所属 session 一致。';
 COMMENT ON COLUMN fin_ex_chat_event_t.run_id IS '事件所属 runId，对应 fin_ex_chat_run_t.id；写入时必须与 session、tenant、user 归属一致。';
-COMMENT ON COLUMN fin_ex_chat_event_t.seq IS '事件恢复游标序号，由 openGauss sequence 生成；同一会话内按 seq 补发。';
+COMMENT ON COLUMN fin_ex_chat_event_t.seq IS '事件恢复游标序号，由数据库 sequence 生成；同一会话内按 seq 补发。';
 COMMENT ON COLUMN fin_ex_chat_event_t.event_type IS 'ChatService 标准事件类型，例如 run.started、message.delta、message.snapshot、message.completed、runtime.progress、runtime.metadata、runtime.agent、runtime.thinking、runtime.tool、runtime.reference、runtime.card、runtime.event、run.completed、run.failed、run.cancelled；大对象分片通过 payload.fragment/itemId/delta/complete 表达。';
 COMMENT ON COLUMN fin_ex_chat_event_t.payload_json IS '事件载荷 JSON，保存前端可消费的 delta、状态、分片标记和诊断字段。';
 COMMENT ON COLUMN fin_ex_chat_event_t.created_at IS '事件创建并落库时间。';

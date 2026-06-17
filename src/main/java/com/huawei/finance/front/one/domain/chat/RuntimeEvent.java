@@ -13,7 +13,7 @@ import java.util.Map;
  *
  * @param runId 本轮执行追踪标识。
  * @param sessionId 前端聊天会话标识。
- * @param sequence 事件持久化后的恢复游标序号，由 openGauss 事实源生成。
+ * @param sequence 事件持久化后的恢复游标序号，由数据库事实源生成。
  * @param createdAt 事件创建时间。
  * @param payload 前端可消费的运行态事件载荷。
  */
@@ -29,10 +29,8 @@ public record RuntimeEvent(
         this(runId, sessionId, sequence, createdAt, "runtime.event", payload);
     }
 
-    public static RuntimeEvent relay(String runId, String sessionId, String sourceType, String eventKind,
-                                     String channel, String displayHint, String text,
-                                     Map<String, Object> sourcePayload) {
-        return fallback(runId, sessionId, sourceType, eventKind, channel, displayHint, text, sourcePayload);
+    public static RuntimeEvent relay(String runId, String sessionId, FallbackPayload fallbackPayload) {
+        return fallback(runId, sessionId, fallbackPayload);
     }
 
     public static RuntimeEvent progress(String runId, String sessionId, Map<String, Object> payload) {
@@ -63,25 +61,28 @@ public record RuntimeEvent(
         return typed("runtime.card", runId, sessionId, payload);
     }
 
-    public static RuntimeEvent fallback(String runId, String sessionId, String sourceType, String eventKind,
-                                        String channel, String displayHint, String text,
-                                        Map<String, Object> sourcePayload) {
-        return fallback("relay", runId, sessionId, sourceType, eventKind, channel, displayHint, text, sourcePayload);
+    public static RuntimeEvent fallback(String runId, String sessionId, FallbackPayload fallbackPayload) {
+        FallbackPayload safePayload = fallbackPayload == null ? FallbackPayload.empty() : fallbackPayload;
+        return buildFallback(runId, sessionId, safePayload.withDefaultSource("relay"));
     }
 
-    public static RuntimeEvent fallback(String source, String runId, String sessionId, String sourceType, String eventKind,
-                                        String channel, String displayHint, String text,
-                                        Map<String, Object> sourcePayload) {
+    public static RuntimeEvent fallback(String runId, String sessionId, FallbackPayload fallbackPayload,
+                                        String defaultSource) {
+        FallbackPayload safePayload = fallbackPayload == null ? FallbackPayload.empty() : fallbackPayload;
+        return buildFallback(runId, sessionId, safePayload.withDefaultSource(defaultSource));
+    }
+
+    private static RuntimeEvent buildFallback(String runId, String sessionId, FallbackPayload fallbackPayload) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("source", blankToDefault(source, "runtime"));
-        payload.put("sourceType", blankToDefault(sourceType, "unknown"));
-        payload.put("eventKind", blankToDefault(eventKind, "event"));
-        payload.put("channel", blankToDefault(channel, "runtime"));
-        payload.put("displayHint", blankToDefault(displayHint, "runtime"));
-        if (text != null && !text.isBlank()) {
-            payload.put("text", text);
+        payload.put("source", blankToDefault(fallbackPayload.source(), "runtime"));
+        payload.put("sourceType", blankToDefault(fallbackPayload.sourceType(), "unknown"));
+        payload.put("eventKind", blankToDefault(fallbackPayload.eventKind(), "event"));
+        payload.put("channel", blankToDefault(fallbackPayload.channel(), "runtime"));
+        payload.put("displayHint", blankToDefault(fallbackPayload.displayHint(), "runtime"));
+        if (fallbackPayload.text() != null && !fallbackPayload.text().isBlank()) {
+            payload.put("text", fallbackPayload.text());
         }
-        payload.put("sourcePayload", sourcePayload == null ? Map.of() : sourcePayload);
+        payload.put("sourcePayload", fallbackPayload.sourcePayload() == null ? Map.of() : fallbackPayload.sourcePayload());
         return typed("runtime.event", runId, sessionId, payload);
     }
 
@@ -97,5 +98,24 @@ public record RuntimeEvent(
 
     private static String blankToDefault(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value;
+    }
+
+    /**
+     * runtime.event 兜底事件载荷。
+     *
+     * <p>Relay/Legacy 等下游协议可能持续增加非正文事件，该对象集中表达这些事件的展示语义，
+     * 避免 fallback 工厂方法出现一长串容易传错顺序的字符串参数。</p>
+     */
+    public record FallbackPayload(String source, String sourceType, String eventKind, String channel,
+                                  String displayHint, String text, Map<String, Object> sourcePayload) {
+        public static FallbackPayload empty() {
+            return new FallbackPayload(null, null, null, null, null, null, Map.of());
+        }
+
+        private FallbackPayload withDefaultSource(String defaultSource) {
+            return source == null || source.isBlank()
+                    ? new FallbackPayload(defaultSource, sourceType, eventKind, channel, displayHint, text, sourcePayload)
+                    : this;
+        }
     }
 }

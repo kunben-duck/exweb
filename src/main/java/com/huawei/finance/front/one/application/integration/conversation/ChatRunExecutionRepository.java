@@ -12,7 +12,7 @@ import java.util.Optional;
  * ChatRun 执行控制面事实源端口。
  *
  * <p>该端口负责维护 run 的实例归属、心跳、租约、恢复抢占和 fencing token。
- * openGauss 实现是最终正确性来源；Redis recover lock 只能作为优化。</p>
+ *数据库实现是最终正确性来源；Redis recover lock 只能作为优化。</p>
  */
 public interface ChatRunExecutionRepository {
     /**

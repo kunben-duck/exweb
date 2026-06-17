@@ -14,7 +14,7 @@ import org.springframework.stereotype.Service;
  * 可选 SuperAgent 记忆上下文装配服务。
  *
  * <p>短期记忆和长期记忆均由配置独立控制。全部关闭时，该服务只返回空上下文，不访问 Redis、
- * openGauss 历史消息或长期记忆服务。会话压缩、长上下文窗口和 Runtime 内部记忆仍属于
+ * 数据库历史消息或长期记忆服务。会话压缩、长上下文窗口和 Runtime 内部记忆仍属于
  * AgentRuntime 自治能力。</p>
  */
 @Service

@@ -14,16 +14,16 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
 /**
- * RuntimeBinding 的 openGauss 仓储实现。
+ * RuntimeBinding 的数据库仓储实现。
  */
 @Repository
-public class OpenGaussRuntimeBindingRepository implements RuntimeBindingRepository {
+public class MyBatisRuntimeBindingRepository implements RuntimeBindingRepository {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     private final RuntimeBindingMapper mapper;
     private final ObjectMapper objectMapper;
 
-    public OpenGaussRuntimeBindingRepository(RuntimeBindingMapper mapper, ObjectMapper objectMapper) {
+    public MyBatisRuntimeBindingRepository(RuntimeBindingMapper mapper, ObjectMapper objectMapper) {
         this.mapper = mapper;
         this.objectMapper = objectMapper;
     }
@@ -48,58 +48,35 @@ public class OpenGaussRuntimeBindingRepository implements RuntimeBindingReposito
 
     @Override
     public RuntimeBinding save(RuntimeBinding binding) {
-        int updated = mapper.update(
-                binding.id(),
-                binding.tenantId(),
-                binding.userId(),
-                binding.chatSessionId(),
-                binding.provider(),
-                binding.leafMessageId(),
-                binding.runtimeSessionId(),
-                binding.status().name(),
-                binding.lastRunId(),
-                binding.expiresAt(),
-                toJson(binding.metadata()),
-                binding.createdAt(),
-                binding.updatedAt()
-        );
+        RuntimeBindingRow row = toRow(binding);
+        int updated = mapper.update(row);
         if (updated == 0) {
             try {
-                mapper.insert(
-                        binding.id(),
-                        binding.tenantId(),
-                        binding.userId(),
-                        binding.chatSessionId(),
-                        binding.provider(),
-                        binding.leafMessageId(),
-                        binding.runtimeSessionId(),
-                        binding.status().name(),
-                        binding.lastRunId(),
-                        binding.expiresAt(),
-                        toJson(binding.metadata()),
-                        binding.createdAt(),
-                        binding.updatedAt()
-                );
+                mapper.insert(row);
             } catch (DuplicateKeyException ex) {
-                // openGauss 兼容写法：不使用 PostgreSQL 专有 upsert，并发插入成功后退回更新。
-                mapper.update(
-                        binding.id(),
-                        binding.tenantId(),
-                        binding.userId(),
-                        binding.chatSessionId(),
-                        binding.provider(),
-                        binding.leafMessageId(),
-                        binding.runtimeSessionId(),
-                        binding.status().name(),
-                        binding.lastRunId(),
-                        binding.expiresAt(),
-                        toJson(binding.metadata()),
-                        binding.createdAt(),
-                        binding.updatedAt()
-                );
+                // 数据库兼容写法：不使用具体数据库专有 upsert，并发插入成功后退回更新。
+                mapper.update(row);
             }
         }
         return binding;
+    }
+
+    private RuntimeBindingRow toRow(RuntimeBinding binding) {
+        RuntimeBindingRow row = new RuntimeBindingRow();
+        row.setId(binding.id());
+        row.setTenantId(binding.tenantId());
+        row.setUserId(binding.userId());
+        row.setChatSessionId(binding.chatSessionId());
+        row.setProvider(binding.provider());
+        row.setLeafMessageId(binding.leafMessageId());
+        row.setRuntimeSessionId(binding.runtimeSessionId());
+        row.setStatus(binding.status().name());
+        row.setLastRunId(binding.lastRunId());
+        row.setExpiresAt(binding.expiresAt());
+        row.setMetadataJson(toJson(binding.metadata()));
+        row.setCreatedAt(binding.createdAt());
+        row.setUpdatedAt(binding.updatedAt());
+        return row;
     }
 
     private RuntimeBinding toDomain(RuntimeBindingRow row) {

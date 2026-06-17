@@ -26,23 +26,7 @@ public interface UploadedDocumentMapper {
                 #{contentType}, #{sizeBytes}, #{status}, #{source}, #{tokenSize}, #{metadataJson}, #{createdAt}, #{updatedAt}
             )
             """)
-    int insert(
-            @Param("id") String id,
-            @Param("tenantId") String tenantId,
-            @Param("userId") String userId,
-            @Param("sessionId") String sessionId,
-            @Param("originalName") String originalName,
-            @Param("bucket") String bucket,
-            @Param("objectKey") String objectKey,
-            @Param("contentType") String contentType,
-            @Param("sizeBytes") long sizeBytes,
-            @Param("status") String status,
-            @Param("source") String source,
-            @Param("tokenSize") Long tokenSize,
-            @Param("metadataJson") String metadataJson,
-            @Param("createdAt") Instant createdAt,
-            @Param("updatedAt") Instant updatedAt
-    );
+    int insert(UploadedDocumentRow row);
 
     @Update("""
             UPDATE fin_ex_uploaded_document_t
@@ -59,23 +43,7 @@ public interface UploadedDocumentMapper {
                 updated_at = #{updatedAt}
             WHERE id = #{id}
             """)
-    int update(
-            @Param("id") String id,
-            @Param("tenantId") String tenantId,
-            @Param("userId") String userId,
-            @Param("sessionId") String sessionId,
-            @Param("originalName") String originalName,
-            @Param("bucket") String bucket,
-            @Param("objectKey") String objectKey,
-            @Param("contentType") String contentType,
-            @Param("sizeBytes") long sizeBytes,
-            @Param("status") String status,
-            @Param("source") String source,
-            @Param("tokenSize") Long tokenSize,
-            @Param("metadataJson") String metadataJson,
-            @Param("createdAt") Instant createdAt,
-            @Param("updatedAt") Instant updatedAt
-    );
+    int update(UploadedDocumentRow row);
 
     @Select("""
             SELECT id, tenant_id, user_id, session_id, original_name, bucket, object_key,

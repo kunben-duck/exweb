@@ -34,28 +34,7 @@ public interface ChatMessageMapper {
                 #{regeneratedFromMessageId}, #{metadataJson}, #{createdAt}
             )
             """)
-    void insert(
-            @Param("id") String id,
-            @Param("tenantId") String tenantId,
-            @Param("userId") String userId,
-            @Param("sessionId") String sessionId,
-            @Param("parentMessageId") String parentMessageId,
-            @Param("nodeOrder") Long nodeOrder,
-            @Param("treeDepth") Integer treeDepth,
-            @Param("siblingIndex") Integer siblingIndex,
-            @Param("role") String role,
-            @Param("content") String content,
-            @Param("tokenCount") Integer tokenCount,
-            @Param("runId") String runId,
-            @Param("originType") String originType,
-            @Param("locked") boolean locked,
-            @Param("sourceSessionId") String sourceSessionId,
-            @Param("sourceMessageId") String sourceMessageId,
-            @Param("editedFromMessageId") String editedFromMessageId,
-            @Param("regeneratedFromMessageId") String regeneratedFromMessageId,
-            @Param("metadataJson") String metadataJson,
-            @Param("createdAt") Instant createdAt
-    );
+    void insert(ChatMessageRow row);
 
     @Insert("""
             INSERT INTO fin_ex_chat_message_part_t(
@@ -69,25 +48,7 @@ public interface ChatMessageMapper {
                 #{payloadJson}, #{partOrder}, #{createdAt}
             )
             """)
-    void insertPart(
-            @Param("id") String id,
-            @Param("tenantId") String tenantId,
-            @Param("userId") String userId,
-            @Param("sessionId") String sessionId,
-            @Param("messageId") String messageId,
-            @Param("runId") String runId,
-            @Param("partType") String partType,
-            @Param("sourceType") String sourceType,
-            @Param("contentText") String contentText,
-            @Param("title") String title,
-            @Param("status") String status,
-            @Param("channel") String channel,
-            @Param("displayHint") String displayHint,
-            @Param("visible") Boolean visible,
-            @Param("payloadJson") String payloadJson,
-            @Param("partOrder") Integer partOrder,
-            @Param("createdAt") Instant createdAt
-    );
+    void insertPart(ChatMessagePartRow row);
 
     @Insert("""
             INSERT INTO fin_ex_chat_message_attachment_t(
@@ -99,20 +60,7 @@ public interface ChatMessageMapper {
                 #{name}, #{contentType}, #{sizeBytes}, #{sourceAttachmentId}, #{createdAt}
             )
             """)
-    void insertAttachment(
-            @Param("id") String id,
-            @Param("tenantId") String tenantId,
-            @Param("userId") String userId,
-            @Param("sessionId") String sessionId,
-            @Param("messageId") String messageId,
-            @Param("documentId") String documentId,
-            @Param("attachmentOrder") int attachmentOrder,
-            @Param("name") String name,
-            @Param("contentType") String contentType,
-            @Param("sizeBytes") Long sizeBytes,
-            @Param("sourceAttachmentId") String sourceAttachmentId,
-            @Param("createdAt") Instant createdAt
-    );
+    void insertAttachment(ChatMessageAttachmentRow row);
 
     @Select("""
             WITH RECURSIVE active_path AS (

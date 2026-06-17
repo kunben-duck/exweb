@@ -15,17 +15,17 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
 
 /**
- * 消息反馈 openGauss 事实源实现。
+ * 消息反馈数据库事实源实现。
  */
 @Repository
-public class OpenGaussChatFeedbackRepository implements ChatFeedbackRepository {
+public class MyBatisChatFeedbackRepository implements ChatFeedbackRepository {
     private static final String STATUS_ACTIVE = "ACTIVE";
     private static final String STATUS_CANCELLED = "CANCELLED";
 
     private final ChatFeedbackMapper mapper;
     private final ObjectMapper objectMapper;
 
-    public OpenGaussChatFeedbackRepository(ChatFeedbackMapper mapper, ObjectMapper objectMapper) {
+    public MyBatisChatFeedbackRepository(ChatFeedbackMapper mapper, ObjectMapper objectMapper) {
         this.mapper = mapper;
         this.objectMapper = objectMapper;
     }
@@ -35,20 +35,7 @@ public class OpenGaussChatFeedbackRepository implements ChatFeedbackRepository {
         ChatMessageFeedback current = findByMessage(feedback.tenantId(), feedback.userId(), feedback.messageId())
                 .map(existing -> withCurrentState(existing, feedback))
                 .orElse(feedback);
-        int updated = mapper.update(
-                current.id(),
-                current.tenantId(),
-                current.userId(),
-                current.sessionId(),
-                current.messageId(),
-                current.runId(),
-                current.rating(),
-                STATUS_ACTIVE,
-                current.reasonCode(),
-                current.commentText(),
-                toJson(current.metadata()),
-                current.updatedAt()
-        );
+        int updated = mapper.update(toRow(current, STATUS_ACTIVE));
         if (updated == 0) {
             return insertOrUpdateAfterRace(current);
         }
@@ -124,44 +111,35 @@ public class OpenGaussChatFeedbackRepository implements ChatFeedbackRepository {
 
     private ChatMessageFeedback insertOrUpdateAfterRace(ChatMessageFeedback feedback) {
         try {
-            mapper.insert(
-                    feedback.id(),
-                    feedback.tenantId(),
-                    feedback.userId(),
-                    feedback.sessionId(),
-                    feedback.messageId(),
-                    feedback.runId(),
-                    feedback.rating(),
-                    STATUS_ACTIVE,
-                    feedback.reasonCode(),
-                    feedback.commentText(),
-                    toJson(feedback.metadata()),
-                    feedback.createdAt(),
-                    feedback.updatedAt()
-            );
+            mapper.insert(toRow(feedback, STATUS_ACTIVE));
             return feedback;
         } catch (DuplicateKeyException ex) {
             return findByMessage(feedback.tenantId(), feedback.userId(), feedback.messageId())
                     .map(existing -> withCurrentState(existing, feedback))
                     .map(existing -> {
-                        mapper.update(
-                            existing.id(),
-                            existing.tenantId(),
-                            existing.userId(),
-                            existing.sessionId(),
-                            existing.messageId(),
-                            existing.runId(),
-                            existing.rating(),
-                            STATUS_ACTIVE,
-                            existing.reasonCode(),
-                            existing.commentText(),
-                            toJson(existing.metadata()),
-                            existing.updatedAt()
-                        );
+                        mapper.update(toRow(existing, STATUS_ACTIVE));
                         return existing;
                     })
                     .orElse(feedback);
         }
+    }
+
+    private ChatMessageFeedbackRow toRow(ChatMessageFeedback feedback, String status) {
+        ChatMessageFeedbackRow row = new ChatMessageFeedbackRow();
+        row.setId(feedback.id());
+        row.setTenantId(feedback.tenantId());
+        row.setUserId(feedback.userId());
+        row.setSessionId(feedback.sessionId());
+        row.setMessageId(feedback.messageId());
+        row.setRunId(feedback.runId());
+        row.setRating(feedback.rating());
+        row.setStatus(status);
+        row.setReasonCode(feedback.reasonCode());
+        row.setCommentText(feedback.commentText());
+        row.setMetadataJson(toJson(feedback.metadata()));
+        row.setCreatedAt(feedback.createdAt());
+        row.setUpdatedAt(feedback.updatedAt());
+        return row;
     }
 
     private String toJson(Map<String, Object> metadata) {

@@ -344,8 +344,8 @@ public class RelayRuntimeResponseNormalizer {
         if (text == null && isRuntimeTextSafe(sourceType)) {
             text = firstText(root, "message", "text");
         }
-        return RuntimeEvent.fallback(runId, sessionId, sourceType, runtimeEventKind(sourceType),
-                channel, channel, text, sourcePayload(root));
+        return RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
+                "relay", sourceType, runtimeEventKind(sourceType), channel, channel, text, sourcePayload(root)));
     }
 
     private Map<String, Object> progressPayload(JsonNode root, String sourceType) {

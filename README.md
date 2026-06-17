@@ -27,7 +27,7 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `application`：聊天主编排、会话、记忆、RuntimeBinding、SubAgent 单轮调用、显式技能兼容调用和 Relay Runtime 调用。
 - `application.integration`：应用层出站集成抽象，定义对 Relay Runtime、SubAgent、IntentService、用例库、会话、记忆、文档、ID 和身份能力的依赖边界。
 - `domain`：聊天事件、意图结果、路由结果、RuntimeBinding、用例匹配结果等核心模型。
-- `infrastructure`：Redis、openGauss/MyBatis、用例库 HTTP、SubAgent HTTP、Relay Runtime streamable HTTP、DocumentProvider、对象存储和 legacy skill HTTP 等适配。
+- `infrastructure`：Redis、数据库/MyBatis、用例库 HTTP、SubAgent HTTP、Relay Runtime streamable HTTP、DocumentProvider、对象存储和 legacy skill HTTP 等适配。
 
 ## 前端接入协议
 
@@ -120,18 +120,18 @@ export FINANCEEX_DEV_USERNAME=developer
 
 `runId` 不是长期任务会话；它是单轮执行 correlation id。事件表 `fin_ex_chat_event_t.run_id` 和绑定表 `fin_ex_runtime_binding_t.last_run_id` 都用它做运行轨迹和排障定位。
 run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。stop 只停止本轮回答，不删除 `RuntimeBinding`；如果用户主动 stop 前已经有 `message.delta`、`message.snapshot` 或卡片、引用、思考、工具、进度等用户可见 parts 成功落库，ChatService 会把截至 stop 时的内容保存为 partial assistant 历史消息，并在消息 `metadata_json` 中标记 `partial=true`、`finishReason=USER_STOP`。
-run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实例、心跳、租约、恢复状态和 `fencing_token`，不混入业务 run 表。后台执行流写入 run 事件时通过 openGauss guarded insert 原子校验 execution owner 与 `fencing_token`；stop、watchdog 或未来 Runtime takeover 递增 token 后，旧实例迟到 delta/completed 会被拒绝。
-连续 `message.delta` 默认按 `financeex.chat-stream.delta-coalesce-*` 合并为几十毫秒级文本片段，减少 openGauss event 表、Redis Pub/Sub 和 WebSocket 的逐 token 写放大；`message.snapshot`、`runtime.*`、turn stream `heartbeat/done` 和 run 终态不参与合并。Relay `is_streaming=false` 的最终回答会映射为 `message.snapshot`，前端用它替换当前草稿，历史消息正文也优先使用该快照。
+run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实例、心跳、租约、恢复状态和 `fencing_token`，不混入业务 run 表。后台执行流写入 run 事件时通过数据库 guarded insert 原子校验 execution owner 与 `fencing_token`；stop、watchdog 或未来 Runtime takeover 递增 token 后，旧实例迟到 delta/completed 会被拒绝。
+连续 `message.delta` 默认按 `financeex.chat-stream.delta-coalesce-*` 合并为几十毫秒级文本片段，减少数据库事件表、Redis Pub/Sub 和 WebSocket 的逐 token 写放大；`message.snapshot`、`runtime.*`、turn stream `heartbeat/done` 和 run 终态不参与合并。Relay `is_streaming=false` 的最终回答会映射为 `message.snapshot`，前端用它替换当前草稿，历史消息正文也优先使用该快照。
 assistant 的思考、工具、进度、agent 调用等过程信息保存到 `fin_ex_chat_message_part_t`，并通过 `ChatMessageDto.parts` 返回。parts 会提供稳定的 `title/status/channel/displayHint/visible` 展示语义，前端不需要解析 Relay 私有 payload。
 Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPublisher` best-effort 发布到企业 MQ；消费端异步合并、脱敏、分片后写入 `fin_ex_runtime_raw_stream_log_t`。raw log 默认关闭，只用于排障和协议分析，不用于前端恢复、不用于 WebSocket 推送，也不用于 assistant 历史消息拼接；MQ 或 raw log 写库失败不会影响 run 主链路。
-集群部署时，取消正确性依赖 Redis cancel flag 和 openGauss run 状态；实例故障治理依赖 openGauss execution 条件抢占和 fencing token。JVM 内 subscription registry 只用于命中本机执行流时快速释放资源，不作为跨实例事实源。
+集群部署时，取消正确性依赖 Redis cancel flag 和数据库 run 状态；实例故障治理依赖数据库 execution 条件抢占和 fencing token。JVM 内 subscription registry 只用于命中本机执行流时快速释放资源，不作为跨实例事实源。
 同一 `tenantId + userId + sessionId` 同一时间只允许一个 active run。若会话已有
 `RUNNING/CANCELLING` run，`POST /chat/runs` 会返回 `ACTIVE_RUN_EXISTS`，前端应先调用 stop
 或等待当前回答终态后再提交新问题。
 
 ## Run 故障治理
 
-所有实例启动后都会运行 watchdog。watchdog 在应用 ready 后延迟启动，每轮带随机 jitter，扫描 `fin_ex_chat_run_execution_t` 中租约过期的 `RUNNING/CANCELLING` execution 和恢复租约过期的 `RECOVERING` execution。Redis recover lock 只用于减少多实例同时抢占同一 run 的 DB 冲突；即使 Redis 不可用，仍会走 openGauss 条件更新，只有更新影响行数为 1 的实例获得恢复权。
+所有实例启动后都会运行 watchdog。watchdog 在应用 ready 后延迟启动，每轮带随机 jitter，扫描 `fin_ex_chat_run_execution_t` 中租约过期的 `RUNNING/CANCELLING` execution 和恢复租约过期的 `RECOVERING` execution。Redis recover lock 只用于减少多实例同时抢占同一 run 的 DB 冲突；即使 Redis 不可用，仍会走数据库条件更新，只有更新影响行数为 1 的实例获得恢复权。
 
 默认恢复策略链是 `MANUAL_CONFIRMATION,FAIL_FAST`：
 
@@ -161,6 +161,7 @@ Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPubli
 - `fin_ex_chat_run_t`
 - `fin_ex_chat_run_execution_t`
 - `fin_ex_chat_event_t`
+- `fin_ex_intent_recognition_t`：保存实际调用意图服务后的输入、识别结果和最终路由采纳结果；旁路异步写入，不参与主链路决策。
 - `fin_ex_runtime_raw_stream_log_t`：保存 Relay normalizer 之前的原始流响应片段，由 raw log MQ 消费端异步写入，仅用于排障。
 - `fin_ex_uploaded_document_t`
 - `fin_ex_message_feedback_t`：保存当前用户对 assistant 消息的点赞/点踩状态；`status=CANCELLED` 表示已取消当前反馈。
@@ -194,13 +195,15 @@ export FINANCEEX_MEMORY_LONG_TERM_PROVIDER=disabled
 export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
 ```
 
-- 短期记忆开启后，按 `recent-turns` 装配最近几轮 user/assistant 问答，优先读 Redis 热缓存，miss 后回源 openGauss 历史消息并回填。
+- 短期记忆开启后，按 `recent-turns` 装配最近几轮 user/assistant 问答，优先读 Redis 热缓存，miss 后回源数据库历史消息并回填。
 - 长期记忆开启后，通过 `LongTermMemoryStore` 防腐层按当前 query 检索 topK 条相关记忆；默认 `disabled` provider 返回空结果。
 - 两者都关闭时，`MemoryContext` 为空上下文，且不会发生 memory 相关 Redis、历史消息读取或长期记忆调用。
 
 ## 外部服务接入
 
 用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。SubAgent 当前通过单轮 HTTP 文本流接入；Relay Runtime 通过 AgentRuntime 防腐层接入，当前上线版本只保留下游 Relay streamable HTTP 接入。
+意图服务当前适配 `code/data/result/items[]` 包装响应，选择最高 `confidence` 的 item，并把 `resourceInstruction.resourceId` 映射为候选技能；只有 `confidence >= FINANCEEX_INTENT_CONFIDENCE_THRESHOLD` 时才采用该技能，否则进入 Relay Runtime。意图服务 HTTP 入参和出参转换已收敛在 infrastructure intent mapper 中，后续下游协议变化优先修改 mapper，不影响应用层 `IntentService` 端口和路由策略。
+意图识别记录是可选旁路能力，默认关闭。开启 `FINANCEEX_INTENT_RECORD_ENABLED=true` 后，仅在本轮实际调用意图服务时异步写入 `fin_ex_intent_recognition_t`，记录用户问题、候选 items、最高置信结果、最终路由是否采纳以及调用耗时，便于后续准确率统计和排障。该写入使用 Servlet/MVC 友好的专用线程池，不读取请求 ThreadLocal；线程池拒绝、序列化失败或 DB 写入失败只记录 warn，不影响 `/chat/runs` 主链路。显式技能、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会写意图记录。
 
 这里需要明确 WebSocket 边界：
 
@@ -222,6 +225,12 @@ export FINANCEEX_USE_CASE_LIBRARY_MATCH_PATH=/v1/use-cases/match
 export FINANCEEX_INTENT_ENABLED=true
 export FINANCEEX_INTENT_BASE_URL=http://intent-service:9200
 export FINANCEEX_INTENT_RECOGNIZE_PATH=/v1/intents/recognize
+export FINANCEEX_INTENT_CONFIDENCE_THRESHOLD=0.85
+# 可选：记录每次实际调用意图服务后的输入、结果和最终采纳情况；默认关闭
+export FINANCEEX_INTENT_RECORD_ENABLED=false
+export FINANCEEX_INTENT_RECORD_EXECUTOR_CORE_SIZE=1
+export FINANCEEX_INTENT_RECORD_EXECUTOR_MAX_SIZE=2
+export FINANCEEX_INTENT_RECORD_EXECUTOR_QUEUE_CAPACITY=1000
 
 export FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENDPOINT=http://employee-reimbursement-agent:9300/v1/query
 export FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_STOP_ENDPOINT=http://employee-reimbursement-agent:9300/v1/stop
@@ -322,13 +331,13 @@ HTTP 错误响应统一为 `{timestamp,path,status,error,code,message}`。常见
 
 ## 启动
 
-本地没有数据库/Redis 时，可以先启动 Docker 依赖。`docker-compose.yml` 使用 PostgreSQL 兼容容器做本地联调；生产环境可以把 `FINANCEEX_DB_URL` 指向 openGauss，DDL 统一维护在 `src/main/resources/db/schema.sql`：
+本地没有数据库/Redis 时，可以先启动 Docker 依赖。`docker-compose.yml` 使用 PostgreSQL 兼容容器做本地联调；生产环境可以把 `FINANCEEX_DB_URL` 指向目标数据库，DDL 统一维护在 `src/main/resources/db/schema.sql`：
 
 ```bash
 docker compose up -d postgres redis
 ```
 
-PostgreSQL 容器会创建 `financeex` 数据库和 `supervisor_dev` schema，并执行 `src/main/resources/db/schema.sql`。
+数据库容器会创建 `financeex` 数据库和 `supervisor_dev` schema，并执行 `src/main/resources/db/schema.sql`。
 
 Redis 默认使用本地 standalone；生产 Redis Cluster 可用以下环境变量切换：
 
@@ -339,7 +348,7 @@ export FINANCEEX_REDIS_PASSWORD=kunone123
 export FINANCEEX_REDIS_CLUSTER_MAX_REDIRECTS=3
 ```
 
-切到 cluster 后，业务代码仍然只使用 `StringRedisTemplate`。openGauss 仍是事实源；Redis Cluster
+切到 cluster 后，业务代码仍然只使用 `StringRedisTemplate`。数据库仍是事实源；Redis Cluster
 只负责热缓存、取消标记、恢复锁优化和 WebSocket 跨实例实时 fanout。
 
 ```bash
@@ -351,14 +360,14 @@ mvn spring-boot:run
 文档能力分为“文档库资产”和“provider 托管内容”两层：前端始终把本地文件上传到
 FinanceEXChatService 统一后端，后端再根据 `targetProvider` 选择对象存储、老 Agent 或未来领域
 Agent 的文档 provider adapter。
-openGauss 的 `fin_ex_uploaded_document_t` 保存文档库元数据，聊天请求只引用 `documentId`，不会把文件正文放进消息体。
+数据库的 `fin_ex_uploaded_document_t` 保存文档库元数据，聊天请求只引用 `documentId`，不会把文件正文放进消息体。
 上传接口对外只有一条 `POST /api/v1/ex/documents`，服务端会按启动模式自动选择适配器：
 Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共用同一套临时落盘和 provider 上传逻辑。
 不传 `targetProvider` 时走默认 `default-storage`，即当前 S3/OBS/local 对象存储；传
 `targetProvider=legacy-agent` 时会转发老 Agent upload 接口，并把老 Agent 返回的 docId 或 url、docName、docSize
 等写入统一文档库 `metadataJson.providerDocument`。如果该 provider 配置 `forward-cookie=true`，上传入口捕获到的
 Cookie 会作为下游 upload HTTP header 透传，用于老 Agent 文件服务的企业鉴权；Cookie 不会进入 form 字段或文档库元数据。
-文档接口响应里的 `metadataJson` 会解析为 JSON object，便于前端直接读取；openGauss 表字段仍保存 JSON 字符串。
+文档接口响应里的 `metadataJson` 会解析为 JSON object，便于前端直接读取；数据库表字段仍保存 JSON 字符串。
 如果老 Agent 上传响应没有 `docId` 但返回了 `url`，文档库仍视为上传成功：`objectKey` 保存
 `legacy-url:{sha256(url)}` 这种短稳定定位符，完整 URL 只保存在 `metadataJson.providerDocument.url`。
 这类 URL-only 文档可用于文档库展示和下载/跳转扩展，但第一版不会自动进入指定技能 `sceneParam.docList`。

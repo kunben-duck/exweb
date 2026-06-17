@@ -21,7 +21,7 @@ public interface ChatEvent {
     String sessionId();
 
     /**
-     * @return 事件持久化后的恢复游标序号，由 openGauss 事实源生成。
+     * @return 事件持久化后的恢复游标序号，由数据库事实源生成。
      */
     long sequence();
 

@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 /**
  * 文档接口 DTO 转换器。
  *
- * <p>领域模型需要把 metadataJson 作为字符串交给 openGauss 持久化；接口响应则应该返回结构化
+ * <p>领域模型需要把 metadataJson 作为字符串交给数据库持久化；接口响应则应该返回结构化
  * JSON，避免前端在每个文档入口都手工 {@code JSON.parse}。该转换器只做展示层解析，不改变
  * 数据库存储格式。</p>
  */

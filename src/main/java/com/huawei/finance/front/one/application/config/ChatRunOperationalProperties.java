@@ -37,7 +37,7 @@ public class ChatRunOperationalProperties {
     private Duration watchdogJitter = Duration.ofSeconds(5);
     /** stale run 恢复策略链，按顺序尝试。 */
     private List<String> staleRecoveryStrategies = List.of("MANUAL_CONFIRMATION", "FAIL_FAST");
-    /** Redis recover lock 是否启用；禁用或 Redis 不可用时仍会走 openGauss 条件抢占。 */
+    /** Redis recover lock 是否启用；禁用或 Redis 不可用时仍会走数据库条件抢占。 */
     private boolean recoverLockEnabled = true;
     /** Redis recover lock TTL，仅用于减少 DB 抢占冲突，不作为正确性事实源。 */
     private Duration recoverLockTtl = Duration.ofSeconds(30);

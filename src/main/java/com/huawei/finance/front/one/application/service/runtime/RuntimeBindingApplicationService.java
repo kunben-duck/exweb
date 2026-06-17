@@ -18,7 +18,7 @@ import org.springframework.stereotype.Service;
  * AgentRuntime 多轮绑定应用服务。
  *
  * <p>简单 SubAgent 不创建任何绑定；只有进入当前 AgentRuntime provider 的复杂任务才会在这里建立
- * 会话续接索引。状态变更先写 openGauss，再刷新或删除 Redis 热缓存。</p>
+ * 会话续接索引。状态变更先写数据库，再刷新或删除 Redis 热缓存。</p>
  */
 @Service
 public class RuntimeBindingApplicationService {
@@ -52,7 +52,7 @@ public class RuntimeBindingApplicationService {
     }
 
     /**
-     * 查询当前会话 active RuntimeBinding，优先 Redis，miss 后回源 openGauss 并回填。
+     * 查询当前会话 active RuntimeBinding，优先 Redis，miss 后回源数据库并回填。
      *
      * @param tenantId 租户标识。
      * @param userId 用户标识。

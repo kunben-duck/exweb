@@ -6,11 +6,9 @@ import com.huawei.finance.front.one.application.integration.agent.LegacySkillAge
 import com.huawei.finance.front.one.application.integration.agent.LegacySkillCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.domain.auth.UserContext;
-import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
-import com.huawei.finance.front.one.domain.routing.RouteTarget;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
@@ -36,18 +34,19 @@ public class LegacySkillExecutor {
         this.concurrencyLimiter = concurrencyLimiter;
     }
 
-    public Flux<ChatEvent> execute(ChatCommand command, String runId, RouteTarget route, UserContext user,
-                                   RuntimeForwardHeaders forwardHeaders) {
+    public Flux<ChatEvent> execute(LegacySkillExecutionContext context) {
+        var command = context.command();
+        UserContext user = context.user();
         List<UploadedDocument> documents = documentFacade.resolveDocumentsForUser(user, command.attachments());
         LegacySkillAgentRequest request = new LegacySkillAgentRequest(
                 user,
                 command.sessionId(),
-                runId,
-                route.selectedAgentCode(),
+                context.runId(),
+                context.route().selectedAgentCode(),
                 command.message(),
                 documents,
                 command.metadata(),
-                forwardHeaders
+                context.forwardHeaders()
         );
         return concurrencyLimiter.protectAgentRuntime(legacySkillAgentClient.query(request));
     }

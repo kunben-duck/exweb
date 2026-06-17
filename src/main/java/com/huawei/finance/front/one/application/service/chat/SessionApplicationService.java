@@ -5,6 +5,7 @@ import com.huawei.finance.front.one.application.integration.conversation.Session
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
+import com.huawei.finance.front.one.application.integration.memory.ChatMessagePageQuery;
 import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
@@ -97,7 +98,8 @@ public class SessionApplicationService implements ChatSessionFacade {
         if (leafMessageId != null && !leafMessageId.isBlank()) {
             requireMessageInSession(session, leafMessageId);
         }
-        return messageRepository.pageMessages(session.tenantId(), session.userId(), session.id(), leafMessageId, cursor, limit);
+        return messageRepository.pageMessages(new ChatMessagePageQuery(session.tenantId(), session.userId(),
+                session.id(), leafMessageId, cursor, limit));
     }
 
     @Override
@@ -213,77 +215,57 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     public ChatMessage saveUserMessage(ChatCommand command, ChatSession session) {
-        return createUserMessage(command.tenantId(), command.userId(), session, command.message(), null, command.runMode(),
-                null, null, null, List.of());
+        return createUserMessage(new UserMessageCreateCommand(command.tenantId(), command.userId(), session,
+                command.message(), null, command.runMode(), null, null, null, List.of()));
     }
 
     public ChatMessage saveAssistantMessage(String tenantId, String userId, String sessionId, String content) {
         ChatSession session = requireOwnedSession(tenantId, userId, sessionId, false);
-        return saveAssistantMessage(tenantId, userId, session, content, null, session.currentLeafMessageId(), null);
-    }
-
-    /**
-     * 保存完整 assistant 回复，并把会话 current leaf 移动到该回复。
-     */
-    public ChatMessage saveAssistantMessage(String tenantId, String userId, ChatSession session, String content,
-                                            String runId, String parentMessageId, String regeneratedFromMessageId) {
-        return saveAssistantMessage(tenantId, userId, session, content, runId, parentMessageId,
-                regeneratedFromMessageId, List.of());
-    }
-
-    /**
-     * 保存完整 assistant 回复及其结构化过程 parts，并把会话 current leaf 移动到该回复。
-     *
-     * <p>parts 在 run.completed 后写入；用户主动 stop 且已经产生 assistant 正文或用户可见过程
-     * parts 时，也会把截止 stop 时已落库的内容固化为历史消息。run.failed 和 watchdog 故障仍不保存
-     * 半截 assistant。</p>
-     */
-    public ChatMessage saveAssistantMessage(String tenantId, String userId, ChatSession session, String content,
-                                            String runId, String parentMessageId, String regeneratedFromMessageId,
-                                            List<ChatMessagePartDraft> partDrafts) {
-        return saveAssistantMessage(tenantId, userId, session, content, runId, parentMessageId,
-                regeneratedFromMessageId, partDrafts, null);
+        return saveAssistantMessage(new AssistantMessageSaveCommand(tenantId, userId, session, content,
+                null, session.currentLeafMessageId(), null, List.of(), null));
     }
 
     /**
      * 保存 assistant 回复及扩展元数据。
      *
-     * @param metadataJson 消息级元数据 JSON；用于标记用户 stop 后保存的 partial assistant 等场景。
+     * <p>parts 在 run.completed 后写入；用户主动 stop 且已经产生 assistant 正文或用户可见过程
+     * parts 时，也会把截止 stop 时已落库的内容固化为历史消息。run.failed 和 watchdog 故障仍不保存
+     * 半截 assistant。</p>
      */
-    public ChatMessage saveAssistantMessage(String tenantId, String userId, ChatSession session, String content,
-                                            String runId, String parentMessageId, String regeneratedFromMessageId,
-                                            List<ChatMessagePartDraft> partDrafts, String metadataJson) {
+    public ChatMessage saveAssistantMessage(AssistantMessageSaveCommand command) {
         // 助手消息在事件流结束后保存完整文本，避免保存大量碎片 delta。
-        String messageId = idGenerator.newId("msg", IdGenerateContext.of(tenantId, userId, session.id()));
-        ChatMessage parent = parentMessageId == null ? null : requireMessageInSession(session, parentMessageId);
+        ChatSession session = command.session();
+        String messageId = idGenerator.newId("msg", IdGenerateContext.of(command.tenantId(), command.userId(), session.id()));
+        ChatMessage parent = command.parentMessageId() == null ? null : requireMessageInSession(session, command.parentMessageId());
         Instant now = Instant.now();
-        List<ChatMessagePart> parts = buildMessageParts(tenantId, userId, session.id(), messageId, runId, content,
-                partDrafts, now);
+        List<ChatMessagePart> parts = buildMessageParts(new MessagePartBuildContext(command.tenantId(),
+                command.userId(), session.id(), messageId, command.runId(), command.content(),
+                command.safePartDrafts(), now));
         ChatMessage message = new ChatMessage(
                 messageId,
-                tenantId,
-                userId,
+                command.tenantId(),
+                command.userId(),
                 session.id(),
-                parentMessageId,
+                command.parentMessageId(),
                 nextNodeOrder(session),
                 parent == null ? 0 : parent.treeDepth() + 1,
-                nextSiblingIndex(tenantId, userId, session.id(), parentMessageId, "assistant"),
+                nextSiblingIndex(command.tenantId(), command.userId(), session.id(), command.parentMessageId(), "assistant"),
                 "assistant",
-                content,
+                command.content(),
                 null,
-                runId,
+                command.runId(),
                 "NORMAL",
                 false,
                 null,
                 null,
                 null,
-                regeneratedFromMessageId,
-                metadataJson,
+                command.regeneratedFromMessageId(),
+                command.metadataJson(),
                 parts,
                 now
         );
         ChatMessage saved = messageRepository.save(message);
-        sessionRepository.updateCurrentLeaf(tenantId, userId, session.id(), saved.id());
+        sessionRepository.updateCurrentLeaf(command.tenantId(), command.userId(), session.id(), saved.id());
         return saved;
     }
 
@@ -379,23 +361,21 @@ public class SessionApplicationService implements ChatSessionFacade {
         return requireOwnedSession(user.tenantId(), user.userId(), branch.id(), false);
     }
 
-    private List<ChatMessagePart> buildMessageParts(String tenantId, String userId, String sessionId,
-                                                    String messageId, String runId, String content,
-                                                    List<ChatMessagePartDraft> drafts, Instant now) {
+    private List<ChatMessagePart> buildMessageParts(MessagePartBuildContext context) {
         List<ChatMessagePart> parts = new ArrayList<>();
         int order = 1;
-        if (drafts != null) {
-            for (ChatMessagePartDraft draft : drafts) {
+        if (context.drafts() != null) {
+            for (ChatMessagePartDraft draft : context.drafts()) {
                 if (draft == null || draft.partType() == null || draft.partType().isBlank()) {
                     continue;
                 }
                 parts.add(new ChatMessagePart(
-                        idGenerator.newId("part", IdGenerateContext.of(tenantId, userId, sessionId)),
-                        tenantId,
-                        userId,
-                        sessionId,
-                        messageId,
-                        runId,
+                        idGenerator.newId("part", IdGenerateContext.of(context.tenantId(), context.userId(), context.sessionId())),
+                        context.tenantId(),
+                        context.userId(),
+                        context.sessionId(),
+                        context.messageId(),
+                        context.runId(),
                         draft.partType(),
                         draft.sourceType(),
                         draft.contentText(),
@@ -406,28 +386,28 @@ public class SessionApplicationService implements ChatSessionFacade {
                         draft.visible(),
                         draft.payload(),
                         order++,
-                        now
+                        context.now()
                 ));
             }
         }
         parts.add(new ChatMessagePart(
-                idGenerator.newId("part", IdGenerateContext.of(tenantId, userId, sessionId)),
-                tenantId,
-                userId,
-                sessionId,
-                messageId,
-                runId,
+                idGenerator.newId("part", IdGenerateContext.of(context.tenantId(), context.userId(), context.sessionId())),
+                context.tenantId(),
+                context.userId(),
+                context.sessionId(),
+                context.messageId(),
+                context.runId(),
                 "ANSWER",
                 "message.snapshot",
-                content,
+                context.content(),
                 null,
                 null,
                 null,
                 null,
                 null,
-                Map.of("content", content == null ? "" : content),
+                Map.of("content", context.content() == null ? "" : context.content()),
                 order,
-                now
+                context.now()
         ));
         return List.copyOf(parts);
     }
@@ -529,8 +509,8 @@ public class SessionApplicationService implements ChatSessionFacade {
         String parentMessageId = blankToNull(command.parentMessageId()) == null
                 ? session.currentLeafMessageId()
                 : command.parentMessageId();
-        ChatMessage message = createUserMessage(user.tenantId(), user.userId(), session, command.message(),
-                parentMessageId, ChatRunMode.NEXT, runId, null, null, attachments);
+        ChatMessage message = createUserMessage(new UserMessageCreateCommand(user.tenantId(), user.userId(), session,
+                command.message(), parentMessageId, ChatRunMode.NEXT, runId, null, null, attachments));
         return new ChatRunMessagePlan(ChatRunMode.NEXT, parentMessageId, message, null);
     }
 
@@ -538,8 +518,9 @@ public class SessionApplicationService implements ChatSessionFacade {
                                                        String runId, List<AttachmentRef> attachments) {
         ChatMessage edited = requireMessageInSession(session, command.editedMessageId());
         ensureUnlockedUserMessage(edited, "被编辑消息");
-        ChatMessage message = createUserMessage(user.tenantId(), user.userId(), session, command.message(),
-                edited.parentMessageId(), ChatRunMode.EDIT_USER, runId, edited.id(), null, attachments);
+        ChatMessage message = createUserMessage(new UserMessageCreateCommand(user.tenantId(), user.userId(), session,
+                command.message(), edited.parentMessageId(), ChatRunMode.EDIT_USER, runId, edited.id(), null,
+                attachments));
         return new ChatRunMessagePlan(ChatRunMode.EDIT_USER, edited.parentMessageId(), message, null);
     }
 
@@ -557,40 +538,38 @@ public class SessionApplicationService implements ChatSessionFacade {
         return new ChatRunMessagePlan(ChatRunMode.REGENERATE_ASSISTANT, userMessage.id(), userMessage, regenerated.id());
     }
 
-    private ChatMessage createUserMessage(String tenantId, String userId, ChatSession session, String content,
-                                          String parentMessageId, ChatRunMode mode, String runId,
-                                          String editedFromMessageId, String regeneratedFromMessageId,
-                                          List<AttachmentRef> attachments) {
-        if (content == null || content.isBlank()) {
+    private ChatMessage createUserMessage(UserMessageCreateCommand command) {
+        if (command.content() == null || command.content().isBlank()) {
             throw new IllegalArgumentException("用户消息不能为空");
         }
-        ChatMessage parent = parentMessageId == null ? null : requireMessageInSession(session, parentMessageId);
-        String messageId = idGenerator.newId("msg", IdGenerateContext.of(tenantId, userId, session.id()));
+        ChatSession session = command.session();
+        ChatMessage parent = command.parentMessageId() == null ? null : requireMessageInSession(session, command.parentMessageId());
+        String messageId = idGenerator.newId("msg", IdGenerateContext.of(command.tenantId(), command.userId(), session.id()));
         ChatMessage message = new ChatMessage(
                 messageId,
-                tenantId,
-                userId,
+                command.tenantId(),
+                command.userId(),
                 session.id(),
-                parentMessageId,
+                command.parentMessageId(),
                 nextNodeOrder(session),
                 parent == null ? 0 : parent.treeDepth() + 1,
-                nextSiblingIndex(tenantId, userId, session.id(), parentMessageId, "user"),
+                nextSiblingIndex(command.tenantId(), command.userId(), session.id(), command.parentMessageId(), "user"),
                 "user",
-                content,
+                command.content(),
                 null,
-                runId,
+                command.runId(),
                 "NORMAL",
                 false,
                 null,
                 null,
-                mode == ChatRunMode.EDIT_USER ? editedFromMessageId : null,
-                regeneratedFromMessageId,
+                command.mode() == ChatRunMode.EDIT_USER ? command.editedFromMessageId() : null,
+                command.regeneratedFromMessageId(),
                 null,
                 Instant.now()
         );
         ChatMessage saved = messageRepository.save(message);
-        saveAttachments(saved, attachments);
-        sessionRepository.updateCurrentLeaf(tenantId, userId, session.id(), saved.id());
+        saveAttachments(saved, command.safeAttachments());
+        sessionRepository.updateCurrentLeaf(command.tenantId(), command.userId(), session.id(), saved.id());
         return saved;
     }
 

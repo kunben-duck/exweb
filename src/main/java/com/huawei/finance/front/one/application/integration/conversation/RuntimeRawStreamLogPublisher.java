@@ -7,7 +7,7 @@ import com.huawei.finance.front.one.domain.chat.RuntimeRawStreamChunk;
  *
  * <p>该端口位于 ChatService 主链路和企业 MQ 之间。实现必须采用 best-effort 语义：
  * 发布失败、超时或 MQ 不可用都不能影响 Relay normalizer、ChatEvent 入库、WebSocket 推送
- * 或 run 生命周期。</p>
+ * 或 run 生命周期。生产实现必须使用异步发送或极短超时，禁止在该方法内做阻塞重试。</p>
  */
 public interface RuntimeRawStreamLogPublisher {
     /**

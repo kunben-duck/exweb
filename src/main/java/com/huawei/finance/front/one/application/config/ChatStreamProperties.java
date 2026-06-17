@@ -8,12 +8,12 @@ import org.springframework.stereotype.Component;
  * 聊天事件流降压配置。
  *
  * <p>这些配置只改变服务端内部把下游 token 合并成 {@code message.delta} event 的粒度，
- * 不改变前端协议、run topic、Event Resume 或 openGauss seq 游标语义。</p>
+ * 不改变前端协议、run topic、Event Resume 或数据库 seq 游标语义。</p>
  */
 @Component
 @ConfigurationProperties(prefix = "financeex.chat-stream")
 public class ChatStreamProperties {
-    /** 是否合并连续 message.delta，默认开启以降低 openGauss 与 Redis 写放大。 */
+    /** 是否合并连续 message.delta，默认开启以降低数据库与 Redis 写放大。 */
     private boolean deltaCoalesceEnabled = true;
     /** 连续 delta 最大等待合并窗口；窗口到期后会立即 flush 为一个标准 message.delta event。 */
     private Duration deltaCoalesceWindow = Duration.ofMillis(50);

@@ -6,13 +6,8 @@ import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRe
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
-import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
-import com.huawei.finance.front.one.domain.intent.IntentDecision;
-import com.huawei.finance.front.one.domain.memory.MemoryContext;
-import com.huawei.finance.front.one.domain.routing.RouteTarget;
-import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
@@ -36,9 +31,10 @@ public class AgentRuntimeExecutor {
         this.concurrencyLimiter = concurrencyLimiter;
     }
 
-    public Flux<ChatEvent> execute(ChatCommand command, String runId, MemoryContext memory,
-                                   IntentDecision intent, RouteTarget route, UserContext user, RuntimeBinding binding,
-                                   RuntimeForwardHeaders forwardHeaders) {
+    public Flux<ChatEvent> execute(RuntimeExecutionContext context) {
+        var command = context.command();
+        var user = context.user();
+        var binding = context.binding();
         List<AttachmentRef> attachments = command.attachments() == null ? List.of() : command.attachments();
         // AgentRuntimeRequest 不再携带旧能力列表。复杂 Agent 需要的外部能力编排应由 Runtime 自己管理，
         // SuperAgent 只传当前用户消息、可见上下文快照、意图/路由信号和上次 runtimeSessionId。
@@ -47,15 +43,15 @@ public class AgentRuntimeExecutor {
                 user.tenantId(),
                 user.userId(),
                 command.sessionId(),
-                runId,
+                context.runId(),
                 binding == null ? null : binding.runtimeSessionId(),
                 command.message(),
                 attachments,
-                memory,
-                intent,
-                route,
+                context.memory(),
+                context.intent(),
+                context.route(),
                 command.metadata(),
-                forwardHeaders
+                context.forwardHeaders()
         );
         return concurrencyLimiter.protectAgentRuntime(runtime.query(request));
     }

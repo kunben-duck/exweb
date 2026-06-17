@@ -24,9 +24,9 @@ import reactor.util.concurrent.Queues;
 /**
  * 聊天事件流应用服务。
  *
- * <p>所有事件先写入 openGauss，再发布到 run 级实时 topic。WebSocket 用于当前页面新建 run 的
+ * <p>所有事件先写入数据库，再发布到 run 级实时 topic。WebSocket 用于当前页面新建 run 的
  * 实时订阅；run 级事件恢复用于新页签、新浏览器或跨电脑恢复已经存在的 active run，它会先从
- * openGauss 补发 afterSeq 之后的事实事件，再接续 live topic 直到 run 终态。</p>
+ * 数据库补发 afterSeq 之后的事实事件，再接续 live topic 直到 run 终态。</p>
  */
 @Service
 public class ChatStreamApplicationService {
@@ -81,7 +81,7 @@ public class ChatStreamApplicationService {
     /**
      * 查询某个 run 已经成功落库的事实事件。
      *
-     * <p>该方法服务于用户主动 stop 后的部分回答固化：只使用 openGauss 中已经获得 seq 的事件重建
+     * <p>该方法服务于用户主动 stop 后的部分回答固化：只使用数据库中已经获得 seq 的事件重建
      * assistant 历史消息，避免把还在下游传输中、但未写入事实源的 chunk 当作用户可见历史。</p>
      *
      * @param user 请求入口解析出的不可变用户身份快照。
@@ -96,9 +96,9 @@ public class ChatStreamApplicationService {
     }
 
     /**
-     * 发布已经写入 openGauss 的事实事件。
+     * 发布已经写入数据库的事实事件。
      *
-     * <p>该方法只接受持久化后的事件。调用方必须先完成 openGauss append，避免 Redis 或本机
+     * <p>该方法只接受持久化后的事件。调用方必须先完成数据库 append，避免 Redis 或本机
      * live sink 推送出无法被 Event Resume 恢复的“悬空事件”。</p>
      *
      * @param persisted 已持久化并带有 seq 的事件。
@@ -155,7 +155,7 @@ public class ChatStreamApplicationService {
     /**
      * 恢复当前连接用户可访问的 run topic 事件流。
      *
-     * <p>该方法是 WebSocket 的核心订阅入口：先用连接身份校验 run 归属，再按 openGauss seq
+     * <p>该方法是 WebSocket 的核心订阅入口：先用连接身份校验 run 归属，再按数据库 seq
      * 补发历史事件，最后同时接入本机 live sink 与 Redis Pub/Sub 远端事件。</p>
      *
      * @param user WebSocket 握手时解析出的用户身份快照。
@@ -307,7 +307,7 @@ public class ChatStreamApplicationService {
      * 有限窗口 seq 记忆表。
      *
      * <p>Redis Pub/Sub 与本机 registry 可能同时回流同一个事件，因此订阅侧需要去重。
-     * 该窗口只服务实时投递，不作为可靠游标；可靠恢复仍以 openGauss event 表为准。</p>
+     * 该窗口只服务实时投递，不作为可靠游标；可靠恢复仍以数据库事件表为准。</p>
      */
     private static final class BoundedSeqMap extends LinkedHashMap<Long, Boolean> {
         private final int maxSize;

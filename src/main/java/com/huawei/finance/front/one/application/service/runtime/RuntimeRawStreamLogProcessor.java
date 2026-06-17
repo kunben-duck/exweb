@@ -30,7 +30,7 @@ import reactor.core.scheduler.Schedulers;
  * Runtime raw chunk 消费处理器。
  *
  * <p>企业 MQ listener 或其他消息队列 consumer 将原始 chunk 交给该处理器。合并、脱敏、
- * hash、分片和 openGauss 写入都在消费端完成，因此这些诊断工作不会阻塞 Relay normalizer
+ * hash、分片和数据库写入都在消费端完成，因此这些诊断工作不会阻塞 Relay normalizer
  * 到 ChatEvent/WebSocket 的主链路。</p>
  */
 @Service
@@ -205,8 +205,8 @@ public class RuntimeRawStreamLogProcessor implements RuntimeRawStreamLogConsumer
                 int end = Math.min(content.length(), start + maxChars);
                 boolean lastPart = index == partCount - 1;
                 boolean truncated = hardTruncated && lastPart;
-                save(content.substring(start, end), sourceLength, 1, index + 1, partCount, truncated,
-                        terminal && lastPart);
+                save(new RawLogSegment(content.substring(start, end), sourceLength, 1, index + 1, partCount,
+                        truncated, terminal && lastPart));
             }
         }
 
@@ -219,15 +219,15 @@ public class RuntimeRawStreamLogProcessor implements RuntimeRawStreamLogConsumer
                 bufferChunkCount = 0;
                 return;
             }
-            save(buffer.toString(), bufferSourceLength, bufferChunkCount, 0, 0, bufferTruncated, terminal);
+            save(new RawLogSegment(buffer.toString(), bufferSourceLength, bufferChunkCount, 0, 0,
+                    bufferTruncated, terminal));
             buffer.setLength(0);
             bufferSourceLength = 0;
             bufferTruncated = false;
             bufferChunkCount = 0;
         }
 
-        private void save(String rawContent, int sourceContentLength, int chunkCount,
-                          int splitPartIndex, int splitPartCount, boolean truncated, boolean terminal) {
+        private void save(RawLogSegment segment) {
             if (capacityExhausted()) {
                 return;
             }
@@ -243,15 +243,15 @@ public class RuntimeRawStreamLogProcessor implements RuntimeRawStreamLogConsumer
                         key.runtimeProvider(),
                         key.apiAdapter(),
                         ++chunkIndex,
-                        rawContent,
-                        sha256(rawContent),
-                        rawContent == null ? 0 : rawContent.length(),
-                        sourceContentLength,
-                        chunkCount,
-                        splitPartIndex,
-                        splitPartCount,
-                        truncated,
-                        terminal,
+                        segment.rawContent(),
+                        sha256(segment.rawContent()),
+                        segment.rawContent() == null ? 0 : segment.rawContent().length(),
+                        segment.sourceContentLength(),
+                        segment.chunkCount(),
+                        segment.splitPartIndex(),
+                        segment.splitPartCount(),
+                        segment.truncated(),
+                        segment.terminal(),
                         Instant.now()
                 );
                 repository.save(entry);
@@ -340,6 +340,10 @@ public class RuntimeRawStreamLogProcessor implements RuntimeRawStreamLogConsumer
     }
 
     private record SanitizedContent(String content, boolean truncated) {
+    }
+
+    private record RawLogSegment(String rawContent, int sourceContentLength, int chunkCount,
+                                 int splitPartIndex, int splitPartCount, boolean truncated, boolean terminal) {
     }
 
     private record StateKey(String tenantId, String userId, String sessionId, String runId,

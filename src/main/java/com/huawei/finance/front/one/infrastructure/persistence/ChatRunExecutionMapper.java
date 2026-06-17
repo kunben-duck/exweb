@@ -28,26 +28,7 @@ public interface ChatRunExecutionMapper {
                 #{recoveryAttempts}, #{recoveryLeaseUntil}, #{runtimeResumeToken}, #{metadataJson}, #{createdAt}, #{updatedAt}
             )
             """)
-    int insert(
-            @Param("id") String id,
-            @Param("runId") String runId,
-            @Param("tenantId") String tenantId,
-            @Param("userId") String userId,
-            @Param("sessionId") String sessionId,
-            @Param("executionStatus") String executionStatus,
-            @Param("ownerInstanceId") String ownerInstanceId,
-            @Param("heartbeatAt") Instant heartbeatAt,
-            @Param("leaseUntil") Instant leaseUntil,
-            @Param("fencingToken") long fencingToken,
-            @Param("recoveryStrategy") String recoveryStrategy,
-            @Param("recoveredByInstanceId") String recoveredByInstanceId,
-            @Param("recoveryAttempts") int recoveryAttempts,
-            @Param("recoveryLeaseUntil") Instant recoveryLeaseUntil,
-            @Param("runtimeResumeToken") String runtimeResumeToken,
-            @Param("metadataJson") String metadataJson,
-            @Param("createdAt") Instant createdAt,
-            @Param("updatedAt") Instant updatedAt
-    );
+    int insert(ChatRunExecutionWriteRow row);
 
     @Select("""
             SELECT id, run_id, tenant_id, user_id, session_id, execution_status, owner_instance_id,

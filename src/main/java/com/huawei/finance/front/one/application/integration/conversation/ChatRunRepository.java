@@ -6,7 +6,7 @@ import java.util.Optional;
 /**
  * ChatRun 事实源仓储端口。
  *
- * <p>openGauss 是 run 生命周期状态的最终事实源；Redis 只能保存 active run 和取消标记。</p>
+ * <p>数据库是 run 生命周期状态的最终事实源；Redis 只能保存 active run 和取消标记。</p>
  */
 public interface ChatRunRepository {
     /**

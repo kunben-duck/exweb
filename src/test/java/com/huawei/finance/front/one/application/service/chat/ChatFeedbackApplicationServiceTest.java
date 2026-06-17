@@ -44,7 +44,7 @@ class ChatFeedbackApplicationServiceTest {
                 null
         );
 
-        ChatMessageFeedback feedback = service.submit(user(), "msg1", null, "like", "GOOD", "ok", null);
+        ChatMessageFeedback feedback = service.submit(user(), command("msg1", null, "like", "GOOD", "ok", null));
 
         assertThat(feedback.id()).isEqualTo("feedback_1");
         assertThat(feedback.rating()).isEqualTo("LIKE");
@@ -66,7 +66,7 @@ class ChatFeedbackApplicationServiceTest {
                 null
         );
 
-        assertThatThrownBy(() -> service.submit(user(), "msg1", "run1", "LIKE", null, null, null))
+        assertThatThrownBy(() -> service.submit(user(), command("msg1", "run1", "LIKE", null, null, null)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("assistant");
     }
@@ -86,7 +86,7 @@ class ChatFeedbackApplicationServiceTest {
                 chatRunService(runs)
         );
 
-        assertThatThrownBy(() -> service.submit(user(), "msg1", "run2", "LIKE", null, null, null))
+        assertThatThrownBy(() -> service.submit(user(), command("msg1", "run2", "LIKE", null, null, null)))
                 .isInstanceOf(SecurityException.class)
                 .hasMessageContaining("同一会话");
     }
@@ -104,7 +104,7 @@ class ChatFeedbackApplicationServiceTest {
                 new FixedIdGenerator(),
                 null
         );
-        service.submit(user(), "msg1", null, "LIKE", null, null, null);
+        service.submit(user(), command("msg1", null, "LIKE", null, null, null));
 
         ChatMessageFeedback cancelled = service.cancel(user(), "msg1", null);
 
@@ -150,7 +150,7 @@ class ChatFeedbackApplicationServiceTest {
                 new FixedIdGenerator(),
                 null
         );
-        ChatMessageFeedback feedback = service.submit(user(), "msg1", null, "DISLIKE", null, null, null);
+        ChatMessageFeedback feedback = service.submit(user(), command("msg1", null, "DISLIKE", null, null, null));
 
         Map<String, ChatMessageFeedback> active = service.findActiveByMessages(
                 user(), "session1", List.of(assistant, userMessage));
@@ -171,6 +171,11 @@ class ChatFeedbackApplicationServiceTest {
 
     private UserContext user() {
         return new UserContext("tenant1", "user1", "User One");
+    }
+
+    private MessageFeedbackCommand command(String messageId, String runId, String rating,
+                                           String reasonCode, String commentText, Map<String, Object> metadata) {
+        return new MessageFeedbackCommand(messageId, runId, rating, reasonCode, commentText, metadata);
     }
 
     private ChatRun run(String id, String sessionId) {

@@ -193,8 +193,10 @@ public class ChatWebSocketProtocolService {
                             .takeUntilOther(cancellation.asMono())
                             .doFinally(ignored -> heartbeat.dispose())
                             .subscribe(
-                                    dto -> emitTopicEvent(connectionId, outbound, topicId, run, cancellation, lastSeq, dto),
-                                    ex -> handleSubscriptionError(connectionId, outbound, topicId, commandId, afterSeq, ex)
+                                    dto -> emitTopicEvent(new TopicEventContext(connectionId, outbound, topicId,
+                                            run, cancellation, lastSeq), dto),
+                                    ex -> handleSubscriptionError(new SubscriptionErrorContext(connectionId,
+                                            outbound, topicId, commandId, afterSeq), ex)
                             );
                     return Mono.<Void>empty();
                 })
@@ -204,14 +206,15 @@ public class ChatWebSocketProtocolService {
                 });
     }
 
-    private void handleSubscriptionError(String connectionId, ChatWebSocketOutbound outbound, String topicId,
-                                         String commandId, long afterSeq, Throwable ex) {
+    private void handleSubscriptionError(SubscriptionErrorContext context, Throwable ex) {
         if (ex instanceof StreamRecoveryRequiredException recovery) {
-            outbound.emit(ChatWebSocketEnvelopeDto.recoverRequired(topicId, afterSeq, recovery.afterSeq()));
+            context.outbound().emit(ChatWebSocketEnvelopeDto.recoverRequired(
+                    context.topicId(), context.afterSeq(), recovery.afterSeq()));
         } else {
-            outbound.emit(ChatWebSocketEnvelopeDto.error(commandId, "SUBSCRIBE_ERROR", ex.getMessage()));
+            context.outbound().emit(ChatWebSocketEnvelopeDto.error(
+                    context.commandId(), "SUBSCRIBE_ERROR", ex.getMessage()));
         }
-        connectionRegistry.unsubscribe(connectionId, topicId);
+        connectionRegistry.unsubscribe(context.connectionId(), context.topicId());
     }
 
     private Disposable startTurnHeartbeat(ChatWebSocketOutbound outbound, String topicId, ChatRun run,
@@ -232,41 +235,42 @@ public class ChatWebSocketProtocolService {
                 );
     }
 
-    private void emitTopicEvent(String connectionId, ChatWebSocketOutbound outbound, String topicId, ChatRun run,
-                                Sinks.Empty<Void> cancellation, AtomicLong lastSeq, ChatEventDto dto) {
+    private void emitTopicEvent(TopicEventContext context, ChatEventDto dto) {
         if (dto == null) {
             return;
         }
+        ChatRun run = context.run();
         if (!run.id().equals(dto.runId()) || !run.sessionId().equals(dto.sessionId())) {
             /*
              * topicId、runId、sessionId 三者必须同时匹配。出现不匹配说明 live source 或 Redis fanout
              * 发生了错误投递；这里直接丢弃，避免跨会话实时消息串到当前连接。
              */
             log.warn("Dropped mismatched WebSocket event. topicId={}, expectedRunId={}, actualRunId={}, expectedSessionId={}, actualSessionId={}, seq={}",
-                    topicId, run.id(), dto.runId(), run.sessionId(), dto.sessionId(), dto.sequence());
+                    context.topicId(), run.id(), dto.runId(), run.sessionId(), dto.sessionId(), dto.sequence());
             return;
         }
         LocalWebSocketConnectionRegistry.DeliveryDecision decision =
-                connectionRegistry.markDelivered(connectionId, topicId, dto.sequence());
+                connectionRegistry.markDelivered(context.connectionId(), context.topicId(), dto.sequence());
         if (decision.action() == LocalWebSocketConnectionRegistry.Action.DELIVER) {
-            lastSeq.set(dto.sequence());
-            outbound.emit(ChatWebSocketEnvelopeDto.message(
-                    topicId,
+            context.lastSeq().set(dto.sequence());
+            context.outbound().emit(ChatWebSocketEnvelopeDto.message(
+                    context.topicId(),
                     turnStreamTranslator.streamItem(dto),
                     String.valueOf(dto.sequence())
             ));
             if (turnStreamTranslator.isTerminal(dto)) {
-                outbound.emit(ChatWebSocketEnvelopeDto.message(
-                        topicId,
+                context.outbound().emit(ChatWebSocketEnvelopeDto.message(
+                        context.topicId(),
                         turnStreamTranslator.done(dto.sessionId(), dto.runId(), dto.sequence(), dto.type()),
                         null
                 ));
             }
         } else if (decision.action() == LocalWebSocketConnectionRegistry.Action.RECOVER_REQUIRED) {
-            outbound.emit(ChatWebSocketEnvelopeDto.recoverRequired(topicId, decision.resumeAfterSeq(), decision.actualSeq()));
+            context.outbound().emit(ChatWebSocketEnvelopeDto.recoverRequired(
+                    context.topicId(), decision.resumeAfterSeq(), decision.actualSeq()));
             // 发现乱序或缺口后暂停该 topic，避免前端恢复期间继续接收更高 seq。
-            cancellation.tryEmitEmpty();
-            connectionRegistry.unsubscribe(connectionId, topicId);
+            context.cancellation().tryEmitEmpty();
+            connectionRegistry.unsubscribe(context.connectionId(), context.topicId());
         }
     }
 
@@ -296,5 +300,13 @@ public class ChatWebSocketProtocolService {
         }
         String value = presenceNode.asText("foreground");
         return value == null || value.isBlank() ? "foreground" : value;
+    }
+
+    private record SubscriptionErrorContext(String connectionId, ChatWebSocketOutbound outbound, String topicId,
+                                            String commandId, long afterSeq) {
+    }
+
+    private record TopicEventContext(String connectionId, ChatWebSocketOutbound outbound, String topicId,
+                                     ChatRun run, Sinks.Empty<Void> cancellation, AtomicLong lastSeq) {
     }
 }

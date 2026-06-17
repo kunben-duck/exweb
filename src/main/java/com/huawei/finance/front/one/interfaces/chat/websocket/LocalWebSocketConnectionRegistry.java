@@ -16,7 +16,7 @@ import reactor.core.Disposable;
  * 当前服务实例内的 WebSocket 连接注册表。
  *
  * <p>该注册表只保存运行态连接状态，不作为业务事实源。它用于连接级身份隔离、订阅释放、
- * 去重和排障；跨实例事件仍通过 Redis Pub/Sub 扇出，事件事实源仍是 openGauss。</p>
+ * 去重和排障；跨实例事件仍通过 Redis Pub/Sub 扇出，事件事实源仍是数据库。</p>
  */
 @Component
 public class LocalWebSocketConnectionRegistry {

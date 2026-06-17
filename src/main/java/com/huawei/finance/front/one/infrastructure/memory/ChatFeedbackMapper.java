@@ -26,21 +26,7 @@ public interface ChatFeedbackMapper {
                 #{rating}, #{status}, #{reasonCode}, #{commentText}, #{metadataJson}, #{createdAt}, #{updatedAt}
             )
             """)
-    int insert(
-            @Param("id") String id,
-            @Param("tenantId") String tenantId,
-            @Param("userId") String userId,
-            @Param("sessionId") String sessionId,
-            @Param("messageId") String messageId,
-            @Param("runId") String runId,
-            @Param("rating") String rating,
-            @Param("status") String status,
-            @Param("reasonCode") String reasonCode,
-            @Param("commentText") String commentText,
-            @Param("metadataJson") String metadataJson,
-            @Param("createdAt") Instant createdAt,
-            @Param("updatedAt") Instant updatedAt
-    );
+    int insert(ChatMessageFeedbackRow row);
 
     @Update("""
             UPDATE fin_ex_message_feedback_t
@@ -56,20 +42,7 @@ public interface ChatFeedbackMapper {
               AND user_id = #{userId}
               AND message_id = #{messageId}
             """)
-    int update(
-            @Param("id") String id,
-            @Param("tenantId") String tenantId,
-            @Param("userId") String userId,
-            @Param("sessionId") String sessionId,
-            @Param("messageId") String messageId,
-            @Param("runId") String runId,
-            @Param("rating") String rating,
-            @Param("status") String status,
-            @Param("reasonCode") String reasonCode,
-            @Param("commentText") String commentText,
-            @Param("metadataJson") String metadataJson,
-            @Param("updatedAt") Instant updatedAt
-    );
+    int update(ChatMessageFeedbackRow row);
 
     @Update("""
             UPDATE fin_ex_message_feedback_t

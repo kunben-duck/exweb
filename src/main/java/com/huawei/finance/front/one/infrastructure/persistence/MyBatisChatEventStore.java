@@ -16,20 +16,20 @@ import java.util.Map;
 import org.springframework.stereotype.Repository;
 
 /**
- * 聊天事件 openGauss 事实源。
+ * 聊天事件数据库事实源。
  *
  * <p>事件流会被 WebSocket 实时消费，并通过 Event Resume 在断线重连、刷新页面、审计和排障时回放。
  * 因此这里不再使用 JVM 内存列表，而是把每个 ChatEvent 持久化到 fin_ex_chat_event_t。</p>
  */
 @Repository
-public class OpenGaussChatEventStore implements ChatEventStore {
+public class MyBatisChatEventStore implements ChatEventStore {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     private final ChatEventMapper mapper;
     private final ObjectMapper objectMapper;
     private final IdGenerator idGenerator;
 
-    public OpenGaussChatEventStore(ChatEventMapper mapper, ObjectMapper objectMapper, IdGenerator idGenerator) {
+    public MyBatisChatEventStore(ChatEventMapper mapper, ObjectMapper objectMapper, IdGenerator idGenerator) {
         this.mapper = mapper;
         this.objectMapper = objectMapper;
         this.idGenerator = idGenerator;
@@ -44,16 +44,9 @@ public class OpenGaussChatEventStore implements ChatEventStore {
         if (seq == null) {
             throw new IllegalStateException("聊天事件序号生成失败");
         }
-        // seq 是前端恢复游标，必须由 openGauss sequence 生成，避免多实例本地生成导致 afterSeq 歧义。
-        int inserted = mapper.insertFromSession(
-                eventId,
-                event.sessionId(),
-                event.runId(),
-                seq,
-                event.type(),
-                toJson(event.payload()),
-                createdAt
-        );
+        // seq 是前端恢复游标，必须由数据库 sequence 生成，避免多实例本地生成导致 afterSeq 歧义。
+        int inserted = mapper.insertFromSession(new ChatEventWriteRow(eventId, event.sessionId(), event.runId(),
+                seq, event.type(), toJson(event.payload()), createdAt, null, 0L));
         if (inserted == 0) {
             throw new IllegalStateException("聊天事件无法落库，run 与 session 归属不一致或不存在: runId="
                     + event.runId() + ", sessionId=" + event.sessionId());
@@ -78,17 +71,9 @@ public class OpenGaussChatEventStore implements ChatEventStore {
          * run 业务状态、execution owner 与 fencing token。这样避免每个 delta 先查 execution
          * 再插入事件的两次 DB 往返，也能挡住 stop/watchdog 后的迟到 token。
          */
-        int inserted = mapper.insertFromSessionWithExecutionGuard(
-                eventId,
-                event.sessionId(),
-                event.runId(),
-                seq,
-                event.type(),
-                toJson(event.payload()),
-                createdAt,
-                claim.ownerInstanceId(),
-                claim.fencingToken()
-        );
+        int inserted = mapper.insertFromSessionWithExecutionGuard(new ChatEventWriteRow(eventId, event.sessionId(),
+                event.runId(), seq, event.type(), toJson(event.payload()), createdAt, claim.ownerInstanceId(),
+                claim.fencingToken()));
         if (inserted == 0) {
             throw new ChatEventAppendRejectedException("聊天事件写入被 execution guard 拒绝: runId="
                     + event.runId() + ", sessionId=" + event.sessionId());

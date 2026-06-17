@@ -26,21 +26,7 @@ public interface RuntimeBindingMapper {
                 #{status}, #{lastRunId}, #{expiresAt}, #{metadataJson}, #{createdAt}, #{updatedAt}
             )
             """)
-    int insert(
-            @Param("id") String id,
-            @Param("tenantId") String tenantId,
-            @Param("userId") String userId,
-            @Param("chatSessionId") String chatSessionId,
-            @Param("provider") String provider,
-            @Param("leafMessageId") String leafMessageId,
-            @Param("runtimeSessionId") String runtimeSessionId,
-            @Param("status") String status,
-            @Param("lastRunId") String lastRunId,
-            @Param("expiresAt") Instant expiresAt,
-            @Param("metadataJson") String metadataJson,
-            @Param("createdAt") Instant createdAt,
-            @Param("updatedAt") Instant updatedAt
-    );
+    int insert(RuntimeBindingRow row);
 
     @Update("""
             UPDATE fin_ex_runtime_binding_t
@@ -53,21 +39,7 @@ public interface RuntimeBindingMapper {
                 updated_at = #{updatedAt}
             WHERE id = #{id}
             """)
-    int update(
-            @Param("id") String id,
-            @Param("tenantId") String tenantId,
-            @Param("userId") String userId,
-            @Param("chatSessionId") String chatSessionId,
-            @Param("provider") String provider,
-            @Param("leafMessageId") String leafMessageId,
-            @Param("runtimeSessionId") String runtimeSessionId,
-            @Param("status") String status,
-            @Param("lastRunId") String lastRunId,
-            @Param("expiresAt") Instant expiresAt,
-            @Param("metadataJson") String metadataJson,
-            @Param("createdAt") Instant createdAt,
-            @Param("updatedAt") Instant updatedAt
-    );
+    int update(RuntimeBindingRow row);
 
     @Select("""
             <script>

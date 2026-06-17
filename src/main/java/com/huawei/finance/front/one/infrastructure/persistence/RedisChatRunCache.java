@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
 /**
  * ChatRun Redis 热缓存实现。
  *
- * <p>Redis 不承担事实源职责；任何 Redis 失败都只会让上层回源 openGauss 或退化为本 JVM 取消。</p>
+ * <p>Redis 不承担事实源职责；任何 Redis 失败都只会让上层回源数据库或退化为本 JVM 取消。</p>
  */
 @Component
 @EnableConfigurationProperties(ChatRunCacheProperties.class)
@@ -47,7 +47,7 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
             }
             return Optional.of(objectMapper.readValue(value, ChatRun.class));
         } catch (RuntimeException | JsonProcessingException ex) {
-            log.warn("ChatRun active Redis 读取失败，本轮回源 openGauss。原因：{}", ex.getMessage());
+            log.warn("ChatRun active Redis 读取失败，本轮回源数据库。原因：{}", ex.getMessage());
             return Optional.empty();
         }
     }
@@ -65,7 +65,7 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
             );
             return Boolean.TRUE.equals(claimed);
         } catch (RuntimeException | JsonProcessingException ex) {
-            log.warn("ChatRun active Redis 原子声明失败，将退化为 openGauss active run 检查。原因：{}", ex.getMessage());
+            log.warn("ChatRun active Redis 原子声明失败，将退化为数据库 active run 检查。原因：{}", ex.getMessage());
             return true;
         }
     }
@@ -79,7 +79,7 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
             redis.opsForValue().set(redisKeys.activeRun(run.tenantId(), run.userId(), run.sessionId()),
                     objectMapper.writeValueAsString(run), properties.getActiveTtl());
         } catch (RuntimeException | JsonProcessingException ex) {
-            log.warn("ChatRun active Redis 写入失败，openGauss 仍作为事实源。原因：{}", ex.getMessage());
+            log.warn("ChatRun active Redis 写入失败，数据库仍作为事实源。原因：{}", ex.getMessage());
         }
     }
 
@@ -100,7 +100,7 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
         try {
             redis.opsForValue().set(redisKeys.cancelFlag(runId), "1", properties.getCancelTtl());
         } catch (RuntimeException ex) {
-            log.warn("ChatRun cancel Redis 写入失败，将依赖 openGauss CANCELLING 状态兜底阻断迟到事件。原因：{}", ex.getMessage());
+            log.warn("ChatRun cancel Redis 写入失败，将依赖数据库 CANCELLING 状态兜底阻断迟到事件。原因：{}", ex.getMessage());
         }
     }
 
@@ -132,7 +132,7 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
             );
             return Boolean.TRUE.equals(locked);
         } catch (RuntimeException ex) {
-            log.warn("ChatRun recover Redis 锁获取失败，将继续依赖 openGauss 条件抢占。runId={}, reason={}",
+            log.warn("ChatRun recover Redis 锁获取失败，将继续依赖数据库条件抢占。runId={}, reason={}",
                     runId, ex.getMessage());
             return true;
         }

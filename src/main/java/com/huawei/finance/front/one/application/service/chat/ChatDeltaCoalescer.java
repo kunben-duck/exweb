@@ -18,7 +18,7 @@ import reactor.core.scheduler.Schedulers;
 /**
  * 将连续 {@code message.delta} 合并为较粗粒度事件的流式降压组件。
  *
- * <p>下游 Relay 可能按 token 甚至字符级输出。如果每个 token 都写 openGauss、更新 run、
+ * <p>下游 Relay 可能按 token 甚至字符级输出。如果每个 token 都写数据库、更新 run、
  * 发布 Redis 和投递 WebSocket，高并发时会产生明显写放大。该组件只合并连续 delta；
  * 遇到 run.started、message.completed、run.completed、run.failed、run.cancelled 等边界事件时会先
  * flush 已缓存文本，再原样输出边界事件，保证前端协议和事件顺序不变。</p>

@@ -14,11 +14,14 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class ApplicationBeanConfig {
     /**
-     * 创建用例库命中阈值可配置的路由策略。
+     * 创建路由策略。
+     *
+     * <p>用例库和意图服务都只是路由信号；阈值保留在配置层，便于不同环境按模型效果调优。</p>
      */
     @Bean
-    public RoutingPolicy routingPolicy(@Value("${financeex.use-case-library.min-score:0.85}") double minScore) {
-        return new RoutingPolicy(minScore);
+    public RoutingPolicy routingPolicy(@Value("${financeex.use-case-library.min-score:0.85}") double minScore,
+                                       @Value("${financeex.intent.confidence-threshold:0.85}") double intentConfidenceThreshold) {
+        return new RoutingPolicy(minScore, intentConfidenceThreshold);
     }
 
     /**

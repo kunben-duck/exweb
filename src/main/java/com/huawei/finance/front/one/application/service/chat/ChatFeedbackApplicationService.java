@@ -49,19 +49,13 @@ public class ChatFeedbackApplicationService {
      * 保存当前用户对某条 assistant 消息的反馈。
      *
      * @param user 请求入口解析出的不可变用户身份快照。
-     * @param messageId 被反馈消息标识。
-     * @param runId 反馈关联 run 标识，可为空。
-     * @param rating 反馈评级，例如 LIKE、DISLIKE。
-     * @param reasonCode 结构化原因编码，可为空。
-     * @param commentText 用户补充说明，可为空。
-     * @param metadata 前端扩展诊断信息。
+     * @param command 反馈命令，包含消息、run、评级、原因和扩展诊断信息。
      * @return 已保存的反馈事实。
      */
-    public ChatMessageFeedback submit(UserContext user, String messageId, String runId, String rating, String reasonCode,
-                                      String commentText, Map<String, Object> metadata) {
+    public ChatMessageFeedback submit(UserContext user, MessageFeedbackCommand command) {
         permissionChecker.checkChatPermission(user);
-        ChatMessage message = requireFeedbackTarget(user, messageId);
-        String ownedRunId = blankToNull(runId);
+        ChatMessage message = requireFeedbackTarget(user, command.messageId());
+        String ownedRunId = blankToNull(command.runId());
         validateRunInMessageSession(user, message, ownedRunId);
         Instant now = Instant.now();
         String feedbackId = idGenerator.newId("feedback",
@@ -73,11 +67,11 @@ public class ChatFeedbackApplicationService {
                 message.sessionId(),
                 message.id(),
                 ownedRunId,
-                normalizeRating(rating),
+                normalizeRating(command.rating()),
                 STATUS_ACTIVE,
-                blankToNull(reasonCode),
-                blankToNull(commentText),
-                metadata,
+                blankToNull(command.reasonCode()),
+                blankToNull(command.commentText()),
+                command.metadata(),
                 now,
                 now
         );

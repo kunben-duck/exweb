@@ -83,7 +83,18 @@ financeex:
     enabled: ${FINANCEEX_INTENT_ENABLED:false}
     base-url: ${FINANCEEX_INTENT_BASE_URL:http://localhost:9200}
     recognize-path: ${FINANCEEX_INTENT_RECOGNIZE_PATH:/v1/intents/recognize}
+    # 意图服务返回 resourceInstruction.resourceId 时，只有 confidence 达到该阈值才采用对应技能。
+    confidence-threshold: ${FINANCEEX_INTENT_CONFIDENCE_THRESHOLD:0.85}
     timeout: 5s
+  intent-record:
+    # 意图识别记录是统计排障旁路，默认关闭；关闭时不会写 fin_ex_intent_recognition_t。
+    enabled: ${FINANCEEX_INTENT_RECORD_ENABLED:false}
+    max-query-length: ${FINANCEEX_INTENT_RECORD_MAX_QUERY_LENGTH:4096}
+    max-raw-json-length: ${FINANCEEX_INTENT_RECORD_MAX_RAW_JSON_LENGTH:65536}
+    executor:
+      core-size: ${FINANCEEX_INTENT_RECORD_EXECUTOR_CORE_SIZE:1}
+      max-size: ${FINANCEEX_INTENT_RECORD_EXECUTOR_MAX_SIZE:2}
+      queue-capacity: ${FINANCEEX_INTENT_RECORD_EXECUTOR_QUEUE_CAPACITY:1000}
   use-case-library:
     # v3 中用例库只是可选路由信号，默认关闭；关闭时首轮请求不会调用该 HTTP API。
     enabled: ${FINANCEEX_USE_CASE_LIBRARY_ENABLED:false}
@@ -119,7 +130,7 @@ financeex:
     recover-lock-enabled: ${FINANCEEX_CHAT_RUN_RECOVER_LOCK_ENABLED:true}
     recover-lock-ttl: ${FINANCEEX_CHAT_RUN_RECOVER_LOCK_TTL:30s}
   chat-stream:
-    # 将连续 message.delta 合并成几十毫秒级文本片段，降低 openGauss event 表、Redis Pub/Sub 与 WS 投递写放大。
+    # 将连续 message.delta 合并成几十毫秒级文本片段，降低数据库事件表、Redis Pub/Sub 与 WS 投递写放大。
     # 对外事件类型仍是 message.delta，前端协议和 afterSeq 恢复语义不变。
     delta-coalesce-enabled: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_ENABLED:true}
     delta-coalesce-window: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_WINDOW:50ms}

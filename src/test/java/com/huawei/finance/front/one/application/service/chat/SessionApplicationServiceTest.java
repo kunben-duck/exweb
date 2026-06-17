@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
+import com.huawei.finance.front.one.application.integration.memory.ChatMessagePageQuery;
 import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
@@ -58,8 +59,7 @@ class SessionApplicationServiceTest {
         ChatRunMessagePlan plan = fixture.service.prepareRunMessage(user(), command("hello", ChatRunMode.NEXT,
                 null, null, null), fixture.session, "run1", List.of());
 
-        ChatMessage assistant = fixture.service.saveAssistantMessage("tenant1", "user1", fixture.session,
-                "world", "run1", plan.userMessage().id(), null);
+        ChatMessage assistant = saveAssistant(fixture, "world", "run1", plan.userMessage().id(), null);
         List<ChatMessage> activePath = fixture.service.listMessages(user(), fixture.session.id(), null, 50).items();
 
         assertThat(plan.userMessage().parentMessageId()).isNull();
@@ -95,8 +95,8 @@ class SessionApplicationServiceTest {
         ChatRunMessagePlan regeneratePlan = fixture.service.prepareRunMessage(user(),
                 command(null, ChatRunMode.REGENERATE_ASSISTANT, null, null, original.assistant().id()),
                 fixture.session, "run2", List.of());
-        ChatMessage regenerated = fixture.service.saveAssistantMessage("tenant1", "user1", fixture.session,
-                "第二次回答", "run2", regeneratePlan.userMessage().id(), regeneratePlan.regeneratedFromMessageId());
+        ChatMessage regenerated = saveAssistant(fixture, "第二次回答", "run2",
+                regeneratePlan.userMessage().id(), regeneratePlan.regeneratedFromMessageId());
 
         assertThat(regeneratePlan.userMessage().id()).isEqualTo(original.user().id());
         assertThat(regenerated.parentMessageId()).isEqualTo(original.user().id());
@@ -223,15 +223,15 @@ class SessionApplicationServiceTest {
         ChatRunMessagePlan plan = fixture.service.prepareRunMessage(user(), command("hello", ChatRunMode.NEXT,
                 null, null, null), fixture.session, "run1", List.of());
 
-        ChatMessage assistant = fixture.service.saveAssistantMessage("tenant1", "user1", fixture.session,
-                "最终回答", "run1", plan.userMessage().id(), null,
+        ChatMessage assistant = fixture.service.saveAssistantMessage(new AssistantMessageSaveCommand(
+                "tenant1", "user1", fixture.session, "最终回答", "run1", plan.userMessage().id(), null,
                 List.of(
                         new ChatMessagePartDraft("PROGRESS", "relay-progress", "处理中", Map.of("text", "处理中")),
                         new ChatMessagePartDraft("TOOL", "tool_call_streaming", "search: 查询流程",
                                 Map.of("toolName", "search", "inputPreview", "查询流程")),
                         new ChatMessagePartDraft("THINKING", "thinking-operation-end", "ENDED: op1",
                                 Map.of("status", "ENDED", "operationId", "op1"))
-                ));
+                ), null));
 
         assertThat(assistant.parts()).extracting(ChatMessagePart::partType)
                 .containsExactly("PROGRESS", "TOOL", "THINKING", "ANSWER");
@@ -255,8 +255,8 @@ class SessionApplicationServiceTest {
         ChatRunMessagePlan regeneratePlan = fixture.service.prepareRunMessage(user(),
                 command(null, ChatRunMode.REGENERATE_ASSISTANT, null, null, original.assistant().id()),
                 fixture.session, "run3", List.of());
-        fixture.service.saveAssistantMessage("tenant1", "user1", fixture.session,
-                "重新生成回答", "run3", regeneratePlan.userMessage().id(), regeneratePlan.regeneratedFromMessageId());
+        saveAssistant(fixture, "重新生成回答", "run3",
+                regeneratePlan.userMessage().id(), regeneratePlan.regeneratedFromMessageId());
 
         List<ChatMessage> tree = fixture.service.listMessageTree(user(), fixture.session.id());
 
@@ -305,9 +305,15 @@ class SessionApplicationServiceTest {
     private MessagePair completeTurn(TestFixture fixture, String userText, String assistantText, String runId) {
         ChatRunMessagePlan plan = fixture.service.prepareRunMessage(user(),
                 command(userText, ChatRunMode.NEXT, null, null, null), fixture.session, runId, List.of());
-        ChatMessage assistant = fixture.service.saveAssistantMessage("tenant1", "user1", fixture.session,
-                assistantText, runId, plan.userMessage().id(), null);
+        ChatMessage assistant = saveAssistant(fixture, assistantText, runId, plan.userMessage().id(), null);
         return new MessagePair(plan.userMessage(), assistant);
+    }
+
+    private ChatMessage saveAssistant(TestFixture fixture, String content, String runId,
+                                      String parentMessageId, String regeneratedFromMessageId) {
+        return fixture.service.saveAssistantMessage(new AssistantMessageSaveCommand(
+                "tenant1", "user1", fixture.session, content, runId, parentMessageId,
+                regeneratedFromMessageId, List.of(), null));
     }
 
     private ChatCommand command(String message, ChatRunMode mode, String parentMessageId,
@@ -481,19 +487,18 @@ class SessionApplicationServiceTest {
 
         @Override
         public ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String cursor, int limit) {
-            return pageMessages(tenantId, userId, sessionId, null, cursor, limit);
+            return pageMessages(new ChatMessagePageQuery(tenantId, userId, sessionId, null, cursor, limit));
         }
 
         @Override
-        public ChatMessagePage pageMessages(String tenantId, String userId, String sessionId, String leafMessageId,
-                                            String cursor, int limit) {
+        public ChatMessagePage pageMessages(ChatMessagePageQuery query) {
             List<ChatMessage> items = messages.values().stream()
-                    .filter(message -> tenantId.equals(message.tenantId()))
-                    .filter(message -> userId.equals(message.userId()))
-                    .filter(message -> sessionId.equals(message.sessionId()))
+                    .filter(message -> query.tenantId().equals(message.tenantId()))
+                    .filter(message -> query.userId().equals(message.userId()))
+                    .filter(message -> query.sessionId().equals(message.sessionId()))
                     .sorted(Comparator.comparing(ChatMessage::nodeOrder, Comparator.nullsLast(Long::compareTo))
                             .thenComparing(ChatMessage::createdAt))
-                    .limit(limit)
+                    .limit(query.limit())
                     .toList();
             return new ChatMessagePage(items, null);
         }

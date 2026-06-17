@@ -28,29 +28,7 @@ public interface ChatRunMapper {
                 #{metadataJson}, #{createdAt}, #{updatedAt}
             )
             """)
-    int insert(
-            @Param("id") String id,
-            @Param("tenantId") String tenantId,
-            @Param("userId") String userId,
-            @Param("sessionId") String sessionId,
-            @Param("status") String status,
-            @Param("routeType") String routeType,
-            @Param("agentCode") String agentCode,
-            @Param("runtimeProvider") String runtimeProvider,
-            @Param("runtimeSessionId") String runtimeSessionId,
-            @Param("runMode") String runMode,
-            @Param("parentMessageId") String parentMessageId,
-            @Param("userMessageId") String userMessageId,
-            @Param("assistantMessageId") String assistantMessageId,
-            @Param("firstSeq") Long firstSeq,
-            @Param("lastSeq") Long lastSeq,
-            @Param("cancelReason") String cancelReason,
-            @Param("startedAt") Instant startedAt,
-            @Param("finishedAt") Instant finishedAt,
-            @Param("metadataJson") String metadataJson,
-            @Param("createdAt") Instant createdAt,
-            @Param("updatedAt") Instant updatedAt
-    );
+    int insert(ChatRunWriteRow row);
 
     @Update("""
             UPDATE fin_ex_chat_run_t
@@ -84,29 +62,7 @@ public interface ChatRunMapper {
                 END
             WHERE id = #{id}
             """)
-    int updateExisting(
-            @Param("id") String id,
-            @Param("tenantId") String tenantId,
-            @Param("userId") String userId,
-            @Param("sessionId") String sessionId,
-            @Param("status") String status,
-            @Param("routeType") String routeType,
-            @Param("agentCode") String agentCode,
-            @Param("runtimeProvider") String runtimeProvider,
-            @Param("runtimeSessionId") String runtimeSessionId,
-            @Param("runMode") String runMode,
-            @Param("parentMessageId") String parentMessageId,
-            @Param("userMessageId") String userMessageId,
-            @Param("assistantMessageId") String assistantMessageId,
-            @Param("firstSeq") Long firstSeq,
-            @Param("lastSeq") Long lastSeq,
-            @Param("cancelReason") String cancelReason,
-            @Param("startedAt") Instant startedAt,
-            @Param("finishedAt") Instant finishedAt,
-            @Param("metadataJson") String metadataJson,
-            @Param("createdAt") Instant createdAt,
-            @Param("updatedAt") Instant updatedAt
-    );
+    int updateExisting(ChatRunWriteRow row);
 
     @Select("""
             SELECT id, tenant_id, user_id, session_id, status, route_type, agent_code, runtime_provider,

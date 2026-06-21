@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huawei.finance.front.one.infrastructure.runtime.RuntimeBindingMapper">
+    <resultMap id="runtimeBindingResultMap" type="com.huawei.finance.front.one.infrastructure.runtime.RuntimeBindingRow">
+        <result column="tenant_id" property="tenantId"/>
+        <result column="user_id" property="userId"/>
+        <result column="chat_session_id" property="chatSessionId"/>
+        <result column="leaf_message_id" property="leafMessageId"/>
+        <result column="runtime_session_id" property="runtimeSessionId"/>
+        <result column="last_run_id" property="lastRunId"/>
+        <result column="expires_at" property="expiresAt"/>
+        <result column="metadata_json" property="metadataJson"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="runtimeBindingColumns">
+        id, tenant_id, user_id, chat_session_id, provider, runtime_session_id,
+        leaf_message_id, status, last_run_id, expires_at, metadata_json, created_at, updated_at
+    </sql>
+
+    <!--
+      创建 ChatService leaf 与下游 Runtime session 的绑定，用于多轮续接。
+      入参: RuntimeBindingRow，id 为绑定主键，tenantId/userId/chatSessionId 为归属边界，provider 标识 Runtime，
+            leafMessageId/runtimeSessionId/status/lastRunId/expiresAt/metadataJson 描述绑定状态和续接信息。
+    -->
+    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.runtime.RuntimeBindingRow">
+        INSERT INTO fin_ex_runtime_binding_t(
+            id, tenant_id, user_id, chat_session_id, provider, leaf_message_id, runtime_session_id,
+            status, last_run_id, expires_at, metadata_json, created_at, updated_at
+        )
+        VALUES (
+            #{id}, #{tenantId}, #{userId}, #{chatSessionId}, #{provider}, #{leafMessageId}, #{runtimeSessionId},
+            #{status}, #{lastRunId}, #{expiresAt}, #{metadataJson}, #{createdAt}, #{updatedAt}
+        )
+    </insert>
+
+    <!--
+      更新 RuntimeBinding 的 leaf、runtime session、状态和过期时间。
+      入参: RuntimeBindingRow，id 定位绑定；leafMessageId/runtimeSessionId/status/lastRunId/expiresAt/
+            metadataJson/updatedAt 为待更新字段。
+    -->
+    <update id="update" parameterType="com.huawei.finance.front.one.infrastructure.runtime.RuntimeBindingRow">
+        UPDATE fin_ex_runtime_binding_t
+        SET leaf_message_id = #{leafMessageId},
+            runtime_session_id = #{runtimeSessionId},
+            status = #{status},
+            last_run_id = #{lastRunId},
+            expires_at = #{expiresAt},
+            metadata_json = #{metadataJson},
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+    </update>
+
+    <!--
+      查询指定 session、provider 和 leaf 的 active binding，避免编辑历史路径误复用最新上下文。
+      入参: tenantId/userId/sessionId 为归属边界；provider 为 Runtime 类型；leafMessageId 为消息树路径叶子，可为空。
+    -->
+    <select id="findActive" resultMap="runtimeBindingResultMap">
+        SELECT <include refid="runtimeBindingColumns"/>
+        FROM fin_ex_runtime_binding_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND chat_session_id = #{sessionId}
+          AND provider = #{provider}
+          <choose>
+            <when test="leafMessageId == null">
+          AND leaf_message_id IS NULL
+            </when>
+            <otherwise>
+          AND leaf_message_id = #{leafMessageId}
+            </otherwise>
+          </choose>
+          AND status = 'ACTIVE'
+          AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+        ORDER BY updated_at DESC
+        LIMIT 1
+    </select>
+
+    <!--
+      查询会话下指定 provider 的 active bindings，用于会话删除、取消和排障清理。
+      入参: tenantId/userId/sessionId 为归属边界，provider 为 Runtime 类型。
+    -->
+    <select id="findActiveBySession" resultMap="runtimeBindingResultMap">
+        SELECT <include refid="runtimeBindingColumns"/>
+        FROM fin_ex_runtime_binding_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND chat_session_id = #{sessionId}
+          AND provider = #{provider}
+          AND status = 'ACTIVE'
+          AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+        ORDER BY updated_at DESC
+    </select>
+</mapper>

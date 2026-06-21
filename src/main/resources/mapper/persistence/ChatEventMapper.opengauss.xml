@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huawei.finance.front.one.infrastructure.persistence.ChatEventMapper">
+    <resultMap id="chatEventResultMap" type="com.huawei.finance.front.one.infrastructure.persistence.ChatEventRow">
+        <result column="tenant_id" property="tenantId"/>
+        <result column="user_id" property="userId"/>
+        <result column="session_id" property="sessionId"/>
+        <result column="run_id" property="runId"/>
+        <result column="event_type" property="eventType"/>
+        <result column="payload_json" property="payloadJson"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <sql id="chatEventColumns">
+        id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
+    </sql>
+
+    <!--
+      从 openGauss sequence 预取事件 seq，作为 Event Resume 的事实游标。
+      入参: 无。
+    -->
+    <select id="nextSeq" resultType="long">
+        SELECT nextval('fin_ex_chat_event_seq')
+    </select>
+
+    <!--
+      追加已完成归属校验的事件，仍通过 session/run join 确保 run 与 session 归属一致。
+      入参: ChatEventWriteRow，id 为事件主键，sessionId/runId 定位事件所属上下文，seq 为已预取事件游标，
+            eventType/payloadJson 为标准事件内容，createdAt 为事件发生时间。
+    -->
+    <insert id="insertFromSession" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatEventWriteRow">
+        INSERT INTO fin_ex_chat_event_t(
+            id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
+        )
+        SELECT #{id}, s.tenant_id, s.user_id, s.id, r.id, #{seq}, #{eventType}, #{payloadJson}, #{createdAt}
+        FROM fin_ex_chat_session_t s
+        JOIN fin_ex_chat_run_t r
+          ON r.id = #{runId}
+         AND r.session_id = s.id
+         AND r.tenant_id = s.tenant_id
+         AND r.user_id = s.user_id
+        WHERE s.id = #{sessionId}
+    </insert>
+
+    <!--
+      流式事件 guarded insert：同时校验 run 状态、session 归属、execution owner 和 fencing token。
+      入参: ChatEventWriteRow，除普通事件字段外，ownerInstanceId 和 fencingToken 用于阻断旧实例迟到写入。
+    -->
+    <insert id="insertFromSessionWithExecutionGuard" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatEventWriteRow">
+        INSERT INTO fin_ex_chat_event_t(
+            id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
+        )
+        SELECT #{id}, s.tenant_id, s.user_id, s.id, r.id, #{seq}, #{eventType}, #{payloadJson}, #{createdAt}
+        FROM fin_ex_chat_session_t s
+        JOIN fin_ex_chat_run_t r
+          ON r.id = #{runId}
+         AND r.session_id = s.id
+         AND r.tenant_id = s.tenant_id
+         AND r.user_id = s.user_id
+         AND r.status = 'RUNNING'
+        JOIN fin_ex_chat_run_execution_t e
+          ON e.run_id = r.id
+         AND e.tenant_id = r.tenant_id
+         AND e.user_id = r.user_id
+         AND e.session_id = r.session_id
+         AND e.owner_instance_id = #{ownerInstanceId}
+         AND e.fencing_token = #{fencingToken}
+         AND e.execution_status = 'RUNNING'
+        WHERE s.id = #{sessionId}
+    </insert>
+
+    <!--
+      按 owner/session/afterSeq 补发会话事件，作为 Event Resume 的 session 级恢复查询。
+      入参: tenantId/userId/sessionId 为归属边界；afterSeq 表示只返回大于该游标的事件。
+    -->
+    <select id="findByOwnerAndSessionAfterSeq" resultMap="chatEventResultMap">
+        SELECT <include refid="chatEventColumns"/>
+        FROM fin_ex_chat_event_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND seq > #{afterSeq}
+        ORDER BY seq ASC
+    </select>
+
+    <!--
+      按 owner/session/run/afterSeq 补发单个 run 事件，避免跨 run 或跨会话串流。
+      入参: tenantId/userId/sessionId/runId 为强隔离边界；afterSeq 表示只返回大于该游标的事件。
+    -->
+    <select id="findByOwnerAndRunAfterSeq" resultMap="chatEventResultMap">
+        SELECT <include refid="chatEventColumns"/>
+        FROM fin_ex_chat_event_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND run_id = #{runId}
+          AND seq > #{afterSeq}
+        ORDER BY seq ASC
+    </select>
+
+    <!--
+      查询会话最新事件 seq，用于 stream-status 展示服务端事实进度。
+      入参: tenantId/userId/sessionId 为归属边界。
+    -->
+    <select id="findLatestSeqByOwnerAndSession" resultType="long">
+        SELECT COALESCE(MAX(seq), 0)
+        FROM fin_ex_chat_event_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+    </select>
+</mapper>

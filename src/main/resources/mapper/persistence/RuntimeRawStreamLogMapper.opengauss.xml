@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huawei.finance.front.one.infrastructure.persistence.RuntimeRawStreamLogMapper">
+    <!--
+      异步写入下游 Runtime 原始流片段日志；失败不影响 chat 主链路。
+      入参: RuntimeRawStreamLogWriteRow，id 为日志主键，tenantId/userId/sessionId/runId 为归属边界，
+            runtimeProvider/apiAdapter 标识下游来源，chunkIndex/rawContent/rawContentHash/contentLength/
+            sourceContentLength/chunkCount/splitPart*/truncated/terminal/createdAt 描述原始片段和裁剪状态。
+    -->
+    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.persistence.RuntimeRawStreamLogWriteRow">
+        INSERT INTO fin_ex_runtime_raw_stream_log_t(
+            id, tenant_id, user_id, session_id, run_id, runtime_provider, api_adapter,
+            chunk_index, raw_content, raw_content_hash, content_length, source_content_length,
+            chunk_count, split_part_index, split_part_count, truncated, terminal, created_at
+        )
+        VALUES(
+            #{id}, #{tenantId}, #{userId}, #{sessionId}, #{runId}, #{runtimeProvider}, #{apiAdapter},
+            #{chunkIndex}, #{rawContent}, #{rawContentHash}, #{contentLength}, #{sourceContentLength},
+            #{chunkCount}, #{splitPartIndex}, #{splitPartCount}, #{truncated}, #{terminal}, #{createdAt}
+        )
+    </insert>
+</mapper>

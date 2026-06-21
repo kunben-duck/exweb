@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huawei.finance.front.one.infrastructure.session.ChatSessionMapper">
+    <resultMap id="chatSessionResultMap" type="com.huawei.finance.front.one.infrastructure.session.ChatSessionRow">
+        <result column="tenant_id" property="tenantId"/>
+        <result column="user_id" property="userId"/>
+        <result column="current_leaf_message_id" property="currentLeafMessageId"/>
+        <result column="root_session_id" property="rootSessionId"/>
+        <result column="branch_source_session_id" property="branchSourceSessionId"/>
+        <result column="branch_source_message_id" property="branchSourceMessageId"/>
+        <result column="last_node_order" property="lastNodeOrder"/>
+        <result column="metadata_json" property="metadataJson"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="sessionColumns">
+        id, tenant_id, user_id, title, status, channel, current_leaf_message_id,
+        root_session_id, branch_source_session_id, branch_source_message_id,
+        last_node_order, metadata_json, created_at, updated_at
+    </sql>
+
+    <!--
+      新建聊天会话，保存会话归属、状态、消息树根信息和扩展元数据。
+      入参: ChatSessionRow，id 为会话主键，tenantId/userId 为归属边界，title/status/channel 为会话展示与状态，
+            currentLeafMessageId/rootSessionId/branchSource* 维护消息树和分支关系，lastNodeOrder 为节点序号水位，
+            metadataJson 为扩展元数据，createdAt/updatedAt 为审计时间。
+    -->
+    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.session.ChatSessionRow">
+        INSERT INTO fin_ex_chat_session_t(
+            id, tenant_id, user_id, title, status, channel, current_leaf_message_id,
+            root_session_id, branch_source_session_id, branch_source_message_id,
+            last_node_order, metadata_json, created_at, updated_at
+        )
+        VALUES (
+            #{id}, #{tenantId}, #{userId}, #{title}, #{status}, #{channel}, #{currentLeafMessageId},
+            #{rootSessionId}, #{branchSourceSessionId}, #{branchSourceMessageId},
+            #{lastNodeOrder}, #{metadataJson}, #{createdAt}, #{updatedAt}
+        )
+    </insert>
+
+    <!--
+      按会话归属更新会话标题、状态、当前 leaf 和分支信息，避免跨用户改写。
+      入参: ChatSessionRow，id/tenantId/userId 定位并校验归属；title/status/channel/currentLeafMessageId/rootSessionId/
+            branchSource*/lastNodeOrder/metadataJson 为待更新业务字段；updatedAt 为更新时间。
+    -->
+    <update id="update" parameterType="com.huawei.finance.front.one.infrastructure.session.ChatSessionRow">
+        UPDATE fin_ex_chat_session_t
+        SET title = #{title},
+            status = #{status},
+            channel = #{channel},
+            current_leaf_message_id = #{currentLeafMessageId},
+            root_session_id = #{rootSessionId},
+            branch_source_session_id = #{branchSourceSessionId},
+            branch_source_message_id = #{branchSourceMessageId},
+            last_node_order = #{lastNodeOrder},
+            metadata_json = #{metadataJson},
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND tenant_id = #{tenantId}
+          AND user_id = #{userId}
+    </update>
+
+    <!--
+      按会话 ID 查询单条会话，用于内部已完成归属校验后的读取。
+      入参: sessionId 为会话主键；调用方必须已完成归属校验。
+    -->
+    <select id="findById" resultMap="chatSessionResultMap">
+        SELECT <include refid="sessionColumns"/>
+        FROM fin_ex_chat_session_t
+        WHERE id = #{sessionId}
+    </select>
+
+    <!--
+      按租户、用户和会话 ID 查询会话，是接口层归属校验的基础查询。
+      入参: tenantId 为租户边界，userId 为用户边界，sessionId 为目标会话。
+    -->
+    <select id="findByOwnerAndId" resultMap="chatSessionResultMap">
+        SELECT <include refid="sessionColumns"/>
+        FROM fin_ex_chat_session_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{sessionId}
+    </select>
+
+    <!--
+      查询当前用户全部会话，主要用于内部批量装配或管理场景。
+      入参: tenantId 为租户边界，userId 为用户边界。
+    -->
+    <select id="findByOwner" resultMap="chatSessionResultMap">
+        SELECT <include refid="sessionColumns"/>
+        FROM fin_ex_chat_session_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+        ORDER BY updated_at DESC
+    </select>
+
+    <!--
+      游标分页查询当前用户未删除会话列表，按更新时间和 ID 稳定排序。
+      入参: tenantId/userId 为归属边界；cursorUpdatedAt/cursorId 为上一页最后一条游标，可为空；
+            limit 为本次最多返回条数。
+    -->
+    <select id="findPageByOwner" resultMap="chatSessionResultMap">
+        SELECT <include refid="sessionColumns"/>
+        FROM fin_ex_chat_session_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND status &lt;&gt; 'DELETED'
+          <if test="cursorUpdatedAt != null">
+          AND (
+                updated_at &lt; #{cursorUpdatedAt}
+                OR (updated_at = #{cursorUpdatedAt} AND id &lt; #{cursorId})
+              )
+          </if>
+        ORDER BY updated_at DESC, id DESC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+      统计当前用户未删除会话总数，用于页码式分页返回 totalRows。
+      入参: tenantId 为租户边界，userId 为用户边界。
+    -->
+    <select id="countPageByOwner" resultType="long">
+        SELECT COUNT(1)
+        FROM fin_ex_chat_session_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND status &lt;&gt; 'DELETED'
+    </select>
+
+    <!--
+      页码式分页查询当前用户未删除会话列表，兼容企业前端 curPage/pageSize 模式。
+      入参: tenantId/userId 为归属边界；limit 为 pageSize；offset 为 (curPage - 1) * pageSize。
+    -->
+    <select id="findNumberPageByOwner" resultMap="chatSessionResultMap">
+        SELECT <include refid="sessionColumns"/>
+        FROM fin_ex_chat_session_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND status &lt;&gt; 'DELETED'
+        ORDER BY updated_at DESC, id DESC
+        LIMIT #{limit}
+        OFFSET #{offset}
+    </select>
+
+    <!--
+      锁定会话行并读取当前最大节点序号，保证消息树 node_order 并发递增安全。
+      入参: tenantId/userId 为归属边界，sessionId 为需要分配新消息节点序号的会话。
+    -->
+    <select id="lockNodeOrder" resultType="long">
+        SELECT last_node_order
+        FROM fin_ex_chat_session_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{sessionId}
+        FOR UPDATE
+    </select>
+
+    <!--
+      更新会话最大消息节点序号，和 lockNodeOrder 配合维护消息树顺序。
+      入参: tenantId/userId/sessionId 定位会话；lastNodeOrder 为新的最大节点序号；updatedAt 为更新时间。
+    -->
+    <update id="updateNodeOrder">
+        UPDATE fin_ex_chat_session_t
+        SET last_node_order = #{lastNodeOrder},
+            updated_at = #{updatedAt}
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{sessionId}
+    </update>
+
+    <!--
+      切换会话当前 active path 的 leaf message，用于版本切换和 run 完成后落 leaf。
+      入参: tenantId/userId/sessionId 定位会话；leafMessageId 为新的 active path 叶子消息；updatedAt 为更新时间。
+    -->
+    <update id="updateCurrentLeaf">
+        UPDATE fin_ex_chat_session_t
+        SET current_leaf_message_id = #{leafMessageId},
+            updated_at = #{updatedAt}
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{sessionId}
+    </update>
+</mapper>

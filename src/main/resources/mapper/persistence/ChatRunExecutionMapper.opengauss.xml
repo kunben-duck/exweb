@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huawei.finance.front.one.infrastructure.persistence.ChatRunExecutionMapper">
+    <resultMap id="chatRunExecutionResultMap" type="com.huawei.finance.front.one.infrastructure.persistence.ChatRunExecutionRow">
+        <result column="run_id" property="runId"/>
+        <result column="tenant_id" property="tenantId"/>
+        <result column="user_id" property="userId"/>
+        <result column="session_id" property="sessionId"/>
+        <result column="execution_status" property="executionStatus"/>
+        <result column="owner_instance_id" property="ownerInstanceId"/>
+        <result column="heartbeat_at" property="heartbeatAt"/>
+        <result column="lease_until" property="leaseUntil"/>
+        <result column="fencing_token" property="fencingToken"/>
+        <result column="recovery_strategy" property="recoveryStrategy"/>
+        <result column="recovered_by_instance_id" property="recoveredByInstanceId"/>
+        <result column="recovery_attempts" property="recoveryAttempts"/>
+        <result column="recovery_lease_until" property="recoveryLeaseUntil"/>
+        <result column="runtime_resume_token" property="runtimeResumeToken"/>
+        <result column="metadata_json" property="metadataJson"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="executionColumns">
+        id, run_id, tenant_id, user_id, session_id, execution_status, owner_instance_id,
+        heartbeat_at, lease_until, fencing_token, recovery_strategy, recovered_by_instance_id,
+        recovery_attempts, recovery_lease_until, runtime_resume_token, metadata_json, created_at, updated_at
+    </sql>
+
+    <!--
+      创建 run 执行控制面记录，保存 owner、租约和 fencing token。
+      入参: ChatRunExecutionWriteRow，id/runId 为控制面主键和业务 run，tenantId/userId/sessionId 为归属边界，
+            executionStatus/ownerInstanceId/heartbeatAt/leaseUntil/fencingToken 为运行租约，
+            recovery* 与 runtimeResumeToken/metadataJson 为故障恢复扩展字段。
+    -->
+    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatRunExecutionWriteRow">
+        INSERT INTO fin_ex_chat_run_execution_t(
+            id, run_id, tenant_id, user_id, session_id, execution_status, owner_instance_id,
+            heartbeat_at, lease_until, fencing_token, recovery_strategy, recovered_by_instance_id,
+            recovery_attempts, recovery_lease_until, runtime_resume_token, metadata_json, created_at, updated_at
+        )
+        VALUES (
+            #{id}, #{runId}, #{tenantId}, #{userId}, #{sessionId}, #{executionStatus}, #{ownerInstanceId},
+            #{heartbeatAt}, #{leaseUntil}, #{fencingToken}, #{recoveryStrategy}, #{recoveredByInstanceId},
+            #{recoveryAttempts}, #{recoveryLeaseUntil}, #{runtimeResumeToken}, #{metadataJson}, #{createdAt}, #{updatedAt}
+        )
+    </insert>
+
+    <!--
+      按 run ID 查询执行控制面状态，用于 stop、watchdog 和故障恢复判断。
+      入参: runId 为业务 run 主键。
+    -->
+    <select id="findByRunId" resultMap="chatRunExecutionResultMap">
+        SELECT <include refid="executionColumns"/>
+        FROM fin_ex_chat_run_execution_t
+        WHERE run_id = #{runId}
+    </select>
+
+    <!--
+      仅允许当前 owner 刷新运行租约，防止非 owner 实例误续约。
+      入参: runId 定位 execution，ownerInstanceId 必须匹配当前 owner，leaseUntil 为新的租约截止时间。
+    -->
+    <update id="heartbeat">
+        UPDATE fin_ex_chat_run_execution_t
+        SET heartbeat_at = CURRENT_TIMESTAMP,
+            lease_until = #{leaseUntil},
+            updated_at = CURRENT_TIMESTAMP
+        WHERE run_id = #{runId}
+          AND owner_instance_id = #{ownerInstanceId}
+          AND execution_status IN ('RUNNING', 'CANCELLING')
+    </update>
+
+    <!--
+      标记 execution 终态，避免 watchdog 再次抢占已完成 run。
+      入参: runId 定位 execution，terminalStatus 为 COMPLETED/FAILED/CANCELLED 等终态。
+    -->
+    <update id="markTerminal">
+        UPDATE fin_ex_chat_run_execution_t
+        SET execution_status = #{terminalStatus},
+            updated_at = CURRENT_TIMESTAMP
+        WHERE run_id = #{runId}
+          AND execution_status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
+    </update>
+
+    <!--
+      扫描运行租约过期的 RUNNING/CANCELLING execution，供 watchdog 分批处理。
+      入参: limit 为本轮最多返回的 stale execution 数量。
+    -->
+    <select id="findLeaseExpired" resultMap="chatRunExecutionResultMap">
+        SELECT <include refid="executionColumns"/>
+        FROM fin_ex_chat_run_execution_t
+        WHERE execution_status IN ('RUNNING', 'CANCELLING')
+          AND lease_until &lt; CURRENT_TIMESTAMP
+        ORDER BY lease_until ASC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+      扫描恢复租约过期的 RECOVERING execution，支持恢复实例二次故障后的再抢占。
+      入参: limit 为本轮最多返回的 stale recovering execution 数量。
+    -->
+    <select id="findRecoveryExpired" resultMap="chatRunExecutionResultMap">
+        SELECT <include refid="executionColumns"/>
+        FROM fin_ex_chat_run_execution_t
+        WHERE execution_status = 'RECOVERING'
+          AND recovery_lease_until &lt; CURRENT_TIMESTAMP
+        ORDER BY recovery_lease_until ASC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+      条件抢占 stale execution 并递增 fencing token，保证多实例只有一个恢复者成功。
+      入参: runId 定位待抢占 run；recoveredByInstanceId 为本实例 ID；strategy 为本次恢复策略；
+            recoveryLeaseUntil 为恢复租约截止时间。
+    -->
+    <update id="tryClaimRecovering">
+        UPDATE fin_ex_chat_run_execution_t
+        SET execution_status = 'RECOVERING',
+            recovered_by_instance_id = #{recoveredByInstanceId},
+            recovery_strategy = #{strategy},
+            recovery_attempts = recovery_attempts + 1,
+            recovery_lease_until = #{recoveryLeaseUntil},
+            fencing_token = fencing_token + 1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE run_id = #{runId}
+          AND (
+                (execution_status IN ('RUNNING', 'CANCELLING') AND lease_until &lt; CURRENT_TIMESTAMP)
+                OR (execution_status = 'RECOVERING' AND recovery_lease_until &lt; CURRENT_TIMESTAMP)
+          )
+    </update>
+
+    <!--
+      Runtime takeover 成功后把 RECOVERING execution 切回 RUNNING 并转移 owner。
+      入参: runId 定位 run；ownerInstanceId 为接管成功的新 owner；leaseUntil 为新运行租约截止时间。
+    -->
+    <update id="markTakeoverRunning">
+        UPDATE fin_ex_chat_run_execution_t
+        SET execution_status = 'RUNNING',
+            owner_instance_id = #{ownerInstanceId},
+            heartbeat_at = CURRENT_TIMESTAMP,
+            lease_until = #{leaseUntil},
+            recovery_lease_until = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE run_id = #{runId}
+          AND execution_status = 'RECOVERING'
+          AND recovered_by_instance_id = #{ownerInstanceId}
+    </update>
+
+    <!--
+      判断指定 run 的运行租约是否已过期，用于轻量懒收敛和排障。
+      入参: runId 为待检查的业务 run。
+    -->
+    <select id="countLeaseExpired" resultType="int">
+        SELECT COUNT(1)
+        FROM fin_ex_chat_run_execution_t
+        WHERE run_id = #{runId}
+          AND execution_status IN ('RUNNING', 'CANCELLING')
+          AND lease_until &lt; CURRENT_TIMESTAMP
+    </select>
+</mapper>

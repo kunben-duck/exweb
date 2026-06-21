@@ -44,6 +44,7 @@ management:
       enabled: false
 
 mybatis:
+  mapper-locations: classpath*:mapper/**/*.opengauss.xml
   configuration:
     map-underscore-to-camel-case: true
 

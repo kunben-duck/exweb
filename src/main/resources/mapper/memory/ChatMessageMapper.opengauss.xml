@@ -1,0 +1,307 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huawei.finance.front.one.infrastructure.memory.ChatMessageMapper">
+    <resultMap id="chatMessageResultMap" type="com.huawei.finance.front.one.infrastructure.memory.ChatMessageRow">
+        <result column="tenant_id" property="tenantId"/>
+        <result column="user_id" property="userId"/>
+        <result column="session_id" property="sessionId"/>
+        <result column="parent_message_id" property="parentMessageId"/>
+        <result column="node_order" property="nodeOrder"/>
+        <result column="tree_depth" property="treeDepth"/>
+        <result column="sibling_index" property="siblingIndex"/>
+        <result column="token_count" property="tokenCount"/>
+        <result column="run_id" property="runId"/>
+        <result column="origin_type" property="originType"/>
+        <result column="source_session_id" property="sourceSessionId"/>
+        <result column="source_message_id" property="sourceMessageId"/>
+        <result column="edited_from_message_id" property="editedFromMessageId"/>
+        <result column="regenerated_from_message_id" property="regeneratedFromMessageId"/>
+        <result column="metadata_json" property="metadataJson"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <resultMap id="chatMessageAttachmentResultMap" type="com.huawei.finance.front.one.infrastructure.memory.ChatMessageAttachmentRow">
+        <result column="tenant_id" property="tenantId"/>
+        <result column="user_id" property="userId"/>
+        <result column="session_id" property="sessionId"/>
+        <result column="message_id" property="messageId"/>
+        <result column="document_id" property="documentId"/>
+        <result column="attachment_order" property="attachmentOrder"/>
+        <result column="content_type" property="contentType"/>
+        <result column="size_bytes" property="sizeBytes"/>
+        <result column="source_attachment_id" property="sourceAttachmentId"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <resultMap id="chatMessagePartResultMap" type="com.huawei.finance.front.one.infrastructure.memory.ChatMessagePartRow">
+        <result column="tenant_id" property="tenantId"/>
+        <result column="user_id" property="userId"/>
+        <result column="session_id" property="sessionId"/>
+        <result column="message_id" property="messageId"/>
+        <result column="run_id" property="runId"/>
+        <result column="part_type" property="partType"/>
+        <result column="source_type" property="sourceType"/>
+        <result column="content_text" property="contentText"/>
+        <result column="title" property="title"/>
+        <result column="status" property="status"/>
+        <result column="channel" property="channel"/>
+        <result column="display_hint" property="displayHint"/>
+        <result column="visible" property="visible"/>
+        <result column="payload_json" property="payloadJson"/>
+        <result column="part_order" property="partOrder"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <!--
+      写入用户或 assistant 可见消息节点，承载消息树父子关系、版本来源和锁定状态。
+      入参: ChatMessageRow，id 为消息主键，tenantId/userId/sessionId 为归属边界，parentMessageId/nodeOrder/
+            treeDepth/siblingIndex 维护消息树，role/content/tokenCount 为展示内容，runId 关联来源 run，
+            originType/locked/source*/editedFrom*/regeneratedFrom* 记录分支、编辑和重生成来源。
+    -->
+    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.memory.ChatMessageRow">
+        INSERT INTO fin_ex_chat_message_t(
+            id, tenant_id, user_id, session_id, parent_message_id, node_order, tree_depth,
+            sibling_index, role, content, token_count, run_id, origin_type, locked,
+            source_session_id, source_message_id, edited_from_message_id,
+            regenerated_from_message_id, metadata_json, created_at
+        )
+        VALUES (
+            #{id}, #{tenantId}, #{userId}, #{sessionId}, #{parentMessageId}, #{nodeOrder}, #{treeDepth},
+            #{siblingIndex}, #{role}, #{content}, #{tokenCount}, #{runId}, #{originType}, #{locked},
+            #{sourceSessionId}, #{sourceMessageId}, #{editedFromMessageId},
+            #{regeneratedFromMessageId}, #{metadataJson}, #{createdAt}
+        )
+    </insert>
+
+    <!--
+      写入 assistant 过程化展示片段，如 thinking、tool、reference、card 和 answer 校验片段。
+      入参: ChatMessagePartRow，id 为 part 主键，tenantId/userId/sessionId/messageId/runId 为归属与关联边界，
+            partType/sourceType/contentText/title/status/channel/displayHint/visible/payloadJson/partOrder 描述展示语义。
+    -->
+    <insert id="insertPart" parameterType="com.huawei.finance.front.one.infrastructure.memory.ChatMessagePartRow">
+        INSERT INTO fin_ex_chat_message_part_t(
+            id, tenant_id, user_id, session_id, message_id, run_id, part_type,
+            source_type, content_text, title, status, channel, display_hint, visible,
+            payload_json, part_order, created_at
+        )
+        VALUES (
+            #{id}, #{tenantId}, #{userId}, #{sessionId}, #{messageId}, #{runId}, #{partType},
+            #{sourceType}, #{contentText}, #{title}, #{status}, #{channel}, #{displayHint}, #{visible},
+            #{payloadJson}, #{partOrder}, #{createdAt}
+        )
+    </insert>
+
+    <!--
+      写入消息与文档附件的引用关系，分支时复制引用而不复制对象存储文件。
+      入参: ChatMessageAttachmentRow，id 为附件引用主键，tenantId/userId/sessionId/messageId 为归属边界，
+            documentId 指向统一文档库，attachmentOrder/name/contentType/sizeBytes/sourceAttachmentId 为展示快照。
+    -->
+    <insert id="insertAttachment" parameterType="com.huawei.finance.front.one.infrastructure.memory.ChatMessageAttachmentRow">
+        INSERT INTO fin_ex_chat_message_attachment_t(
+            id, tenant_id, user_id, session_id, message_id, document_id, attachment_order,
+            name, content_type, size_bytes, source_attachment_id, created_at
+        )
+        VALUES (
+            #{id}, #{tenantId}, #{userId}, #{sessionId}, #{messageId}, #{documentId}, #{attachmentOrder},
+            #{name}, #{contentType}, #{sizeBytes}, #{sourceAttachmentId}, #{createdAt}
+        )
+    </insert>
+
+    <!--
+      查询当前 active path 的最近消息，供可选短期记忆装配最近 N 轮上下文。
+      入参: tenantId/userId/sessionId 为归属边界；leafMessageId 可指定路径叶子，为空时使用会话 current leaf；
+            limit 为最多返回消息数。
+    -->
+    <select id="findRecentActivePath" resultMap="chatMessageResultMap">
+        WITH RECURSIVE active_path AS (
+            SELECT m.*
+            FROM fin_ex_chat_message_t m
+            JOIN fin_ex_chat_session_t s ON s.id = m.session_id
+            WHERE m.tenant_id = #{tenantId}
+              AND m.user_id = #{userId}
+              AND m.session_id = #{sessionId}
+              AND m.id = COALESCE(#{leafMessageId}, s.current_leaf_message_id)
+            UNION ALL
+            SELECT p.*
+            FROM fin_ex_chat_message_t p
+            JOIN active_path child ON child.parent_message_id = p.id
+            WHERE p.tenant_id = #{tenantId}
+              AND p.user_id = #{userId}
+              AND p.session_id = #{sessionId}
+        )
+        SELECT * FROM active_path
+        ORDER BY tree_depth DESC, node_order DESC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+      从指定 leaf 或会话 current leaf 回溯完整 active path，供历史消息接口展示。
+      入参: tenantId/userId/sessionId 为归属边界；leafMessageId 可指定版本路径叶子，为空时使用当前 leaf。
+    -->
+    <select id="findActivePath" resultMap="chatMessageResultMap">
+        WITH RECURSIVE active_path AS (
+            SELECT m.*
+            FROM fin_ex_chat_message_t m
+            JOIN fin_ex_chat_session_t s ON s.id = m.session_id
+            WHERE m.tenant_id = #{tenantId}
+              AND m.user_id = #{userId}
+              AND m.session_id = #{sessionId}
+              AND m.id = COALESCE(#{leafMessageId}, s.current_leaf_message_id)
+            UNION ALL
+            SELECT p.*
+            FROM fin_ex_chat_message_t p
+            JOIN active_path child ON child.parent_message_id = p.id
+            WHERE p.tenant_id = #{tenantId}
+              AND p.user_id = #{userId}
+              AND p.session_id = #{sessionId}
+        )
+        SELECT * FROM active_path
+        ORDER BY tree_depth ASC, node_order ASC
+    </select>
+
+    <!--
+      查询当前会话内全部可见 user/assistant 消息节点，用于 tree view 和分支快照。
+      入参: tenantId/userId/sessionId 为归属边界。
+    -->
+    <select id="findAllBySession" resultMap="chatMessageResultMap">
+        SELECT *
+        FROM fin_ex_chat_message_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND role IN ('user', 'assistant')
+        ORDER BY node_order ASC, created_at ASC, id ASC
+    </select>
+
+    <!--
+      批量查询每个会话第一条 assistant 回答，用于会话列表摘要展示。
+      入参: tenantId/userId 为归属边界；sessionIds 为待装配摘要的会话 ID 集合，空集合返回空结果。
+    -->
+    <select id="findFirstAssistantBySessions" resultMap="chatMessageResultMap">
+        SELECT *
+        FROM (
+            SELECT m.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY m.session_id
+                       ORDER BY m.node_order ASC, m.created_at ASC, m.id ASC
+                   ) AS rn
+            FROM fin_ex_chat_message_t m
+            JOIN fin_ex_chat_session_t s
+              ON s.id = m.session_id
+             AND s.tenant_id = m.tenant_id
+             AND s.user_id = m.user_id
+            WHERE m.tenant_id = #{tenantId}
+              AND m.user_id = #{userId}
+              AND m.role = 'assistant'
+              AND s.status &lt;&gt; 'DELETED'
+              <choose>
+                <when test="sessionIds != null and sessionIds.size() > 0">
+              AND m.session_id IN
+                  <foreach collection="sessionIds" item="sessionId" open="(" separator="," close=")">
+                      #{sessionId}
+                  </foreach>
+                </when>
+                <otherwise>
+              AND 1 = 0
+                </otherwise>
+              </choose>
+        ) ranked
+        WHERE ranked.rn = 1
+    </select>
+
+    <!--
+      按 owner 和 message ID 查询消息，作为反馈、分享、编辑和分支的归属校验入口。
+      入参: tenantId/userId 为归属边界，messageId 为目标消息。
+    -->
+    <select id="findByOwnerAndId" resultMap="chatMessageResultMap">
+        SELECT *
+        FROM fin_ex_chat_message_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{messageId}
+    </select>
+
+    <!--
+      查询同父节点同角色的 sibling 版本，用于问题编辑、回答重生成后的版本切换。
+      入参: tenantId/userId/sessionId 为归属边界；parentMessageId 为父消息，为空表示根节点；
+            role 为 user 或 assistant。
+    -->
+    <select id="findSiblings" resultMap="chatMessageResultMap">
+        SELECT *
+        FROM fin_ex_chat_message_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND role = #{role}
+          <choose>
+            <when test="parentMessageId == null">
+          AND parent_message_id IS NULL
+            </when>
+            <otherwise>
+          AND parent_message_id = #{parentMessageId}
+            </otherwise>
+          </choose>
+        ORDER BY sibling_index ASC, node_order ASC
+    </select>
+
+    <!--
+      统计同父节点同角色 sibling 数量，用于计算新消息版本的 sibling_index。
+      入参: tenantId/userId/sessionId 为归属边界；parentMessageId 为父消息，为空表示根节点；
+            role 为 user 或 assistant。
+    -->
+    <select id="countSiblings" resultType="int">
+        SELECT COUNT(1)
+        FROM fin_ex_chat_message_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND role = #{role}
+          <choose>
+            <when test="parentMessageId == null">
+          AND parent_message_id IS NULL
+            </when>
+            <otherwise>
+          AND parent_message_id = #{parentMessageId}
+            </otherwise>
+          </choose>
+    </select>
+
+    <!--
+      查询单条消息的附件展示快照，供历史消息和分享快照展示。
+      入参: tenantId/userId 为归属边界，messageId 为目标消息。
+    -->
+    <select id="findAttachmentsByMessage" resultMap="chatMessageAttachmentResultMap">
+        SELECT *
+        FROM fin_ex_chat_message_attachment_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND message_id = #{messageId}
+        ORDER BY attachment_order ASC
+    </select>
+
+    <!--
+      批量查询 assistant message parts，避免历史消息和 variants 装配时产生 N+1 查询。
+      入参: tenantId/userId/sessionId 为归属边界；messageIds 为待装配 part 的消息 ID 集合，空集合返回空结果。
+    -->
+    <select id="findPartsByMessages" resultMap="chatMessagePartResultMap">
+        SELECT *
+        FROM fin_ex_chat_message_part_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          <choose>
+            <when test="messageIds != null and messageIds.size() > 0">
+          AND message_id IN
+              <foreach collection="messageIds" item="messageId" open="(" separator="," close=")">
+                  #{messageId}
+              </foreach>
+            </when>
+            <otherwise>
+          AND 1 = 0
+            </otherwise>
+          </choose>
+        ORDER BY message_id ASC, part_order ASC, created_at ASC, id ASC
+    </select>
+</mapper>

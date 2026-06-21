@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huawei.finance.front.one.infrastructure.persistence.ChatRunMapper">
+    <resultMap id="chatRunResultMap" type="com.huawei.finance.front.one.infrastructure.persistence.ChatRunRow">
+        <result column="tenant_id" property="tenantId"/>
+        <result column="user_id" property="userId"/>
+        <result column="session_id" property="sessionId"/>
+        <result column="route_type" property="routeType"/>
+        <result column="agent_code" property="agentCode"/>
+        <result column="runtime_provider" property="runtimeProvider"/>
+        <result column="runtime_session_id" property="runtimeSessionId"/>
+        <result column="run_mode" property="runMode"/>
+        <result column="parent_message_id" property="parentMessageId"/>
+        <result column="user_message_id" property="userMessageId"/>
+        <result column="assistant_message_id" property="assistantMessageId"/>
+        <result column="first_seq" property="firstSeq"/>
+        <result column="last_seq" property="lastSeq"/>
+        <result column="cancel_reason" property="cancelReason"/>
+        <result column="started_at" property="startedAt"/>
+        <result column="finished_at" property="finishedAt"/>
+        <result column="metadata_json" property="metadataJson"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="chatRunColumns">
+        id, tenant_id, user_id, session_id, status, route_type, agent_code, runtime_provider,
+        runtime_session_id, run_mode, parent_message_id, user_message_id, assistant_message_id,
+        first_seq, last_seq, cancel_reason, started_at, finished_at,
+        metadata_json, created_at, updated_at
+    </sql>
+
+    <!--
+      创建一次 run 的业务生命周期记录，承载路由、消息树挂点和事件游标。
+      入参: ChatRunWriteRow，id 为 run 主键，tenantId/userId/sessionId 为归属边界，status 为生命周期状态，
+            routeType/agentCode/runtimeProvider/runtimeSessionId 描述执行目标，runMode/parentMessageId/userMessageId/
+            assistantMessageId 关联消息树，firstSeq/lastSeq 为事件游标，cancelReason/startedAt/finishedAt/
+            metadataJson/createdAt/updatedAt 为状态、审计和扩展信息。
+    -->
+    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatRunWriteRow">
+        INSERT INTO fin_ex_chat_run_t(
+            id, tenant_id, user_id, session_id, status, route_type, agent_code, runtime_provider,
+            runtime_session_id, run_mode, parent_message_id, user_message_id, assistant_message_id,
+            first_seq, last_seq, cancel_reason, started_at, finished_at,
+            metadata_json, created_at, updated_at
+        )
+        VALUES (
+            #{id}, #{tenantId}, #{userId}, #{sessionId}, #{status}, #{routeType}, #{agentCode}, #{runtimeProvider},
+            #{runtimeSessionId}, #{runMode}, #{parentMessageId}, #{userMessageId}, #{assistantMessageId},
+            #{firstSeq}, #{lastSeq}, #{cancelReason}, #{startedAt}, #{finishedAt},
+            #{metadataJson}, #{createdAt}, #{updatedAt}
+        )
+    </insert>
+
+    <!--
+      更新 run 状态和关联消息；终态保护避免 CANCELLED/FAILED 被迟到 completed 覆盖。
+      入参: ChatRunWriteRow，id 定位 run；status/lastSeq/finishedAt 等字段按终态保护规则更新；
+            routeType、消息 ID、metadataJson 等为空时尽量保留已有值。
+    -->
+    <update id="updateExisting" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatRunWriteRow">
+        UPDATE fin_ex_chat_run_t
+        SET status = CASE
+                WHEN status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN status
+                ELSE #{status}
+            END,
+            route_type = COALESCE(route_type, #{routeType}),
+            agent_code = COALESCE(agent_code, #{agentCode}),
+            runtime_provider = COALESCE(runtime_provider, #{runtimeProvider}),
+            runtime_session_id = COALESCE(#{runtimeSessionId}, runtime_session_id),
+            run_mode = COALESCE(run_mode, #{runMode}),
+            parent_message_id = COALESCE(parent_message_id, #{parentMessageId}),
+            user_message_id = COALESCE(user_message_id, #{userMessageId}),
+            assistant_message_id = COALESCE(#{assistantMessageId}, assistant_message_id),
+            first_seq = COALESCE(first_seq, #{firstSeq}),
+            last_seq = CASE
+                WHEN status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN last_seq
+                ELSE #{lastSeq}
+            END,
+            cancel_reason = COALESCE(#{cancelReason}, cancel_reason),
+            started_at = COALESCE(started_at, #{startedAt}),
+            finished_at = CASE
+                WHEN status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN finished_at
+                ELSE #{finishedAt}
+            END,
+            metadata_json = COALESCE(#{metadataJson}, metadata_json),
+            updated_at = CASE
+                WHEN status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN updated_at
+                ELSE #{updatedAt}
+            END
+        WHERE id = #{id}
+    </update>
+
+    <!--
+      按 run ID 查询 run，供内部已有归属上下文的编排逻辑使用。
+      入参: runId 为 run 主键；调用方必须确保后续不会绕过归属校验暴露给外部。
+    -->
+    <select id="findById" resultMap="chatRunResultMap">
+        SELECT <include refid="chatRunColumns"/>
+        FROM fin_ex_chat_run_t
+        WHERE id = #{runId}
+    </select>
+
+    <!--
+      按租户、用户和 run ID 查询 run，防止 stop/resume 等接口跨用户访问。
+      入参: tenantId 为租户边界，userId 为用户边界，runId 为目标 run。
+    -->
+    <select id="findByOwnerAndId" resultMap="chatRunResultMap">
+        SELECT <include refid="chatRunColumns"/>
+        FROM fin_ex_chat_run_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{runId}
+    </select>
+
+    <!--
+      查询同一会话当前 RUNNING/CANCELLING run，用于单会话 active run 保护和恢复状态展示。
+      入参: tenantId/userId/sessionId 为会话归属边界。
+    -->
+    <select id="findActiveBySession" resultMap="chatRunResultMap">
+        SELECT <include refid="chatRunColumns"/>
+        FROM fin_ex_chat_run_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND status IN ('RUNNING', 'CANCELLING')
+        ORDER BY updated_at DESC
+        LIMIT 1
+    </select>
+</mapper>

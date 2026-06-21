@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huawei.finance.front.one.infrastructure.memory.ChatFeedbackMapper">
+    <resultMap id="chatMessageFeedbackResultMap" type="com.huawei.finance.front.one.infrastructure.memory.ChatMessageFeedbackRow">
+        <result column="tenant_id" property="tenantId"/>
+        <result column="user_id" property="userId"/>
+        <result column="session_id" property="sessionId"/>
+        <result column="message_id" property="messageId"/>
+        <result column="run_id" property="runId"/>
+        <result column="reason_code" property="reasonCode"/>
+        <result column="comment_text" property="commentText"/>
+        <result column="metadata_json" property="metadataJson"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <!--
+      创建当前用户对 assistant 消息的反馈记录，唯一性由 tenant/user/message 约束保证。
+      入参: ChatMessageFeedbackRow，id 为反馈主键，tenantId/userId/sessionId/messageId/runId 为归属和关联边界，
+            rating/status/reasonCode/commentText/metadataJson 为反馈内容，createdAt/updatedAt 为审计时间。
+    -->
+    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.memory.ChatMessageFeedbackRow">
+        INSERT INTO fin_ex_message_feedback_t(
+            id, tenant_id, user_id, session_id, message_id, run_id,
+            rating, status, reason_code, comment_text, metadata_json, created_at, updated_at
+        )
+        VALUES (
+            #{id}, #{tenantId}, #{userId}, #{sessionId}, #{messageId}, #{runId},
+            #{rating}, #{status}, #{reasonCode}, #{commentText}, #{metadataJson}, #{createdAt}, #{updatedAt}
+        )
+    </insert>
+
+    <!--
+      更新当前用户对同一消息的反馈状态，实现 LIKE/DISLIKE 切换和重新激活。
+      入参: ChatMessageFeedbackRow，id/tenantId/userId/messageId 定位现有反馈；runId/rating/status/reasonCode/
+            commentText/metadataJson/updatedAt 为待更新内容。
+    -->
+    <update id="update" parameterType="com.huawei.finance.front.one.infrastructure.memory.ChatMessageFeedbackRow">
+        UPDATE fin_ex_message_feedback_t
+        SET run_id = #{runId},
+            rating = #{rating},
+            status = #{status},
+            reason_code = #{reasonCode},
+            comment_text = #{commentText},
+            metadata_json = #{metadataJson},
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND message_id = #{messageId}
+    </update>
+
+    <!--
+      幂等取消当前用户对指定消息的反馈，将当前状态标记为 CANCELLED。
+      入参: tenantId/userId 为归属边界，messageId 为目标 assistant 消息，updatedAt 为取消时间。
+    -->
+    <update id="cancelCurrent">
+        UPDATE fin_ex_message_feedback_t
+        SET status = 'CANCELLED',
+            updated_at = #{updatedAt}
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND message_id = #{messageId}
+    </update>
+
+    <!--
+      查询当前用户对单条消息的反馈记录，用于提交/取消时判断插入还是更新。
+      入参: tenantId/userId 为归属边界，messageId 为目标消息。
+    -->
+    <select id="findByMessage" resultMap="chatMessageFeedbackResultMap">
+        SELECT *
+        FROM fin_ex_message_feedback_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND message_id = #{messageId}
+    </select>
+
+    <!--
+      批量查询当前用户 active 反馈，用于历史消息和 variants 高亮赞踩状态。
+      入参: tenantId/userId/sessionId 为归属边界；messageIds 为待装配反馈的消息 ID 集合，空集合返回空结果。
+    -->
+    <select id="findActiveByMessages" resultMap="chatMessageFeedbackResultMap">
+        SELECT *
+        FROM fin_ex_message_feedback_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND status = 'ACTIVE'
+          <choose>
+            <when test="messageIds != null and messageIds.size() > 0">
+          AND message_id IN
+              <foreach collection="messageIds" item="messageId" open="(" separator="," close=")">
+                  #{messageId}
+              </foreach>
+            </when>
+            <otherwise>
+          AND 1 = 0
+            </otherwise>
+          </choose>
+    </select>
+</mapper>

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huawei.finance.front.one.infrastructure.persistence.IntentRecognitionRecordMapper">
+    <!--
+      异步记录一次意图识别输入、候选结果和最终路由采纳状态，用于统计与排障。
+      入参: IntentRecognitionRecordWriteRow，id 为记录主键，tenantId/userId/sessionId/runId/commandId 为归属和请求上下文，
+            queryText/queryHash 为用户输入摘要，status/intent*/resourceId/confidence/source/candidateCount 为识别结果，
+            confidenceThreshold/accepted/routeType/routeAgentCode/routeReason 为最终采纳结果，
+            resultMessage/itemsJson/rawResponseJson/errorMessage/latencyMs/createdAt 为排障和统计字段。
+    -->
+    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.persistence.IntentRecognitionRecordWriteRow">
+        INSERT INTO fin_ex_intent_recognition_t(
+            id, tenant_id, user_id, session_id, run_id, command_id, query_text, query_hash,
+            status, intent_id, intent_name, resource_id, confidence, source, candidate_count,
+            confidence_threshold, accepted, route_type, route_agent_code, route_reason,
+            result_message, items_json, raw_response_json, error_message, latency_ms, created_at
+        )
+        VALUES(
+            #{id}, #{tenantId}, #{userId}, #{sessionId}, #{runId}, #{commandId}, #{queryText}, #{queryHash},
+            #{status}, #{intentId}, #{intentName}, #{resourceId}, #{confidence}, #{source}, #{candidateCount},
+            #{confidenceThreshold}, #{accepted}, #{routeType}, #{routeAgentCode}, #{routeReason},
+            #{resultMessage}, #{itemsJson}, #{rawResponseJson}, #{errorMessage}, #{latencyMs}, #{createdAt}
+        )
+    </insert>
+</mapper>

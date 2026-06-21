@@ -2,220 +2,137 @@ package com.huawei.finance.front.one.infrastructure.session;
 
 import java.time.Instant;
 import java.util.List;
-import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Result;
-import org.apache.ibatis.annotations.ResultMap;
-import org.apache.ibatis.annotations.Results;
-import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.annotations.Update;
 
 /**
  * fin_ex_chat_session_t 的 MyBatis Mapper。
  */
 @Mapper
 public interface ChatSessionMapper {
-    @Insert("""
-            INSERT INTO fin_ex_chat_session_t(
-                id, tenant_id, user_id, title, status, channel, current_leaf_message_id,
-                root_session_id, branch_source_session_id, branch_source_message_id,
-                last_node_order, metadata_json, created_at, updated_at
-            )
-            VALUES (
-                #{id}, #{tenantId}, #{userId}, #{title}, #{status}, #{channel}, #{currentLeafMessageId},
-                #{rootSessionId}, #{branchSourceSessionId}, #{branchSourceMessageId},
-                #{lastNodeOrder}, #{metadataJson}, #{createdAt}, #{updatedAt}
-            )
-            """)
+    /**
+     * 新建聊天会话。
+     *
+     * @param row 会话写入行，包含归属、状态、标题、消息树 leaf 和分支信息。
+     * @return 影响行数。
+     */
     int insert(ChatSessionRow row);
 
-    @Update("""
-            UPDATE fin_ex_chat_session_t
-            SET title = #{title},
-                status = #{status},
-                channel = #{channel},
-                current_leaf_message_id = #{currentLeafMessageId},
-                root_session_id = #{rootSessionId},
-                branch_source_session_id = #{branchSourceSessionId},
-                branch_source_message_id = #{branchSourceMessageId},
-                last_node_order = #{lastNodeOrder},
-                metadata_json = #{metadataJson},
-                updated_at = #{updatedAt}
-            WHERE id = #{id}
-              AND tenant_id = #{tenantId}
-              AND user_id = #{userId}
-            """)
+    /**
+     * 按归属更新会话基础信息和消息树状态。
+     *
+     * @param row 会话更新行，id、tenantId、userId 用于限定归属。
+     * @return 影响行数。
+     */
     int update(ChatSessionRow row);
 
-    @Select("""
-            SELECT id, tenant_id, user_id, title, status, channel, current_leaf_message_id,
-                   root_session_id, branch_source_session_id, branch_source_message_id,
-                   last_node_order, metadata_json, created_at, updated_at
-            FROM fin_ex_chat_session_t
-            WHERE id = #{sessionId}
-            """)
-    @Results(id = "chatSessionResultMap", value = {
-            @Result(column = "tenant_id", property = "tenantId"),
-            @Result(column = "user_id", property = "userId"),
-            @Result(column = "current_leaf_message_id", property = "currentLeafMessageId"),
-            @Result(column = "root_session_id", property = "rootSessionId"),
-            @Result(column = "branch_source_session_id", property = "branchSourceSessionId"),
-            @Result(column = "branch_source_message_id", property = "branchSourceMessageId"),
-            @Result(column = "last_node_order", property = "lastNodeOrder"),
-            @Result(column = "metadata_json", property = "metadataJson"),
-            @Result(column = "created_at", property = "createdAt"),
-            @Result(column = "updated_at", property = "updatedAt")
-    })
+    /**
+     * 按会话 ID 查询会话。
+     *
+     * @param sessionId 会话标识。
+     * @return 会话行；不存在时为 {@code null}。
+     */
     ChatSessionRow findById(@Param("sessionId") String sessionId);
 
-    @Select("""
-            SELECT id, tenant_id, user_id, title, status, channel, current_leaf_message_id,
-                   root_session_id, branch_source_session_id, branch_source_message_id,
-                   last_node_order, metadata_json, created_at, updated_at
-            FROM fin_ex_chat_session_t
-            WHERE tenant_id = #{tenantId}
-              AND user_id = #{userId}
-              AND id = #{sessionId}
-            """)
-    @Results(id = "chatSessionOwnedResultMap", value = {
-            @Result(column = "tenant_id", property = "tenantId"),
-            @Result(column = "user_id", property = "userId"),
-            @Result(column = "current_leaf_message_id", property = "currentLeafMessageId"),
-            @Result(column = "root_session_id", property = "rootSessionId"),
-            @Result(column = "branch_source_session_id", property = "branchSourceSessionId"),
-            @Result(column = "branch_source_message_id", property = "branchSourceMessageId"),
-            @Result(column = "last_node_order", property = "lastNodeOrder"),
-            @Result(column = "metadata_json", property = "metadataJson"),
-            @Result(column = "created_at", property = "createdAt"),
-            @Result(column = "updated_at", property = "updatedAt")
-    })
+    /**
+     * 按 owner 边界查询会话。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @return 会话行；不存在或不属于当前用户时为 {@code null}。
+     */
     ChatSessionRow findByOwnerAndId(@Param("tenantId") String tenantId,
                                     @Param("userId") String userId,
                                     @Param("sessionId") String sessionId);
 
-    @Select("""
-            SELECT id, tenant_id, user_id, title, status, channel, current_leaf_message_id,
-                   root_session_id, branch_source_session_id, branch_source_message_id,
-                   last_node_order, metadata_json, created_at, updated_at
-            FROM fin_ex_chat_session_t
-            WHERE tenant_id = #{tenantId}
-              AND user_id = #{userId}
-            ORDER BY updated_at DESC
-            """)
-    @Results(id = "chatSessionListResultMap", value = {
-            @Result(column = "tenant_id", property = "tenantId"),
-            @Result(column = "user_id", property = "userId"),
-            @Result(column = "current_leaf_message_id", property = "currentLeafMessageId"),
-            @Result(column = "root_session_id", property = "rootSessionId"),
-            @Result(column = "branch_source_session_id", property = "branchSourceSessionId"),
-            @Result(column = "branch_source_message_id", property = "branchSourceMessageId"),
-            @Result(column = "last_node_order", property = "lastNodeOrder"),
-            @Result(column = "metadata_json", property = "metadataJson"),
-            @Result(column = "created_at", property = "createdAt"),
-            @Result(column = "updated_at", property = "updatedAt")
-    })
+    /**
+     * 查询当前用户全部会话。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @return 会话列表。
+     */
     List<ChatSessionRow> findByOwner(@Param("tenantId") String tenantId, @Param("userId") String userId);
 
-    @Select("""
-            <script>
-            SELECT id, tenant_id, user_id, title, status, channel, current_leaf_message_id,
-                   root_session_id, branch_source_session_id, branch_source_message_id,
-                   last_node_order, metadata_json, created_at, updated_at
-            FROM fin_ex_chat_session_t
-            WHERE tenant_id = #{tenantId}
-              AND user_id = #{userId}
-              AND status &lt;&gt; 'DELETED'
-              <if test="cursorUpdatedAt != null">
-              AND (
-                    updated_at &lt; #{cursorUpdatedAt}
-                    OR (updated_at = #{cursorUpdatedAt} AND id &lt; #{cursorId})
-                  )
-              </if>
-            ORDER BY updated_at DESC, id DESC
-            LIMIT #{limit}
-            </script>
-            """)
-    @Results(id = "chatSessionPageResultMap", value = {
-            @Result(column = "tenant_id", property = "tenantId"),
-            @Result(column = "user_id", property = "userId"),
-            @Result(column = "current_leaf_message_id", property = "currentLeafMessageId"),
-            @Result(column = "root_session_id", property = "rootSessionId"),
-            @Result(column = "branch_source_session_id", property = "branchSourceSessionId"),
-            @Result(column = "branch_source_message_id", property = "branchSourceMessageId"),
-            @Result(column = "last_node_order", property = "lastNodeOrder"),
-            @Result(column = "metadata_json", property = "metadataJson"),
-            @Result(column = "created_at", property = "createdAt"),
-            @Result(column = "updated_at", property = "updatedAt")
-    })
+    /**
+     * 游标分页查询当前用户未删除会话。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param cursorUpdatedAt 上一页最后一条会话的更新时间，可为空。
+     * @param cursorId 上一页最后一条会话 ID，可为空。
+     * @param limit 最大返回条数。
+     * @return 会话列表。
+     */
     List<ChatSessionRow> findPageByOwner(@Param("tenantId") String tenantId,
                                          @Param("userId") String userId,
                                          @Param("cursorUpdatedAt") Instant cursorUpdatedAt,
                                          @Param("cursorId") String cursorId,
                                          @Param("limit") int limit);
 
-    @Select("""
-            SELECT COUNT(1)
-            FROM fin_ex_chat_session_t
-            WHERE tenant_id = #{tenantId}
-              AND user_id = #{userId}
-              AND status <> 'DELETED'
-            """)
+    /**
+     * 统计当前用户未删除会话数量。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @return 会话总数。
+     */
     long countPageByOwner(@Param("tenantId") String tenantId,
                           @Param("userId") String userId);
 
-    @Select("""
-            SELECT id, tenant_id, user_id, title, status, channel, current_leaf_message_id,
-                   root_session_id, branch_source_session_id, branch_source_message_id,
-                   last_node_order, metadata_json, created_at, updated_at
-            FROM fin_ex_chat_session_t
-            WHERE tenant_id = #{tenantId}
-              AND user_id = #{userId}
-              AND status <> 'DELETED'
-            ORDER BY updated_at DESC, id DESC
-            LIMIT #{limit}
-            OFFSET #{offset}
-            """)
-    @ResultMap("chatSessionPageResultMap")
+    /**
+     * 页码式查询当前用户未删除会话。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param limit 本页最大返回数量。
+     * @param offset 分页偏移量。
+     * @return 会话列表。
+     */
     List<ChatSessionRow> findNumberPageByOwner(@Param("tenantId") String tenantId,
                                                @Param("userId") String userId,
                                                @Param("limit") int limit,
                                                @Param("offset") long offset);
 
-    @Select("""
-            SELECT last_node_order
-            FROM fin_ex_chat_session_t
-            WHERE tenant_id = #{tenantId}
-              AND user_id = #{userId}
-              AND id = #{sessionId}
-            FOR UPDATE
-            """)
+    /**
+     * 锁定会话行并读取当前消息节点序号水位。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @return 当前最大 node_order；会话不存在时为 {@code null}。
+     */
     Long lockNodeOrder(@Param("tenantId") String tenantId,
                        @Param("userId") String userId,
                        @Param("sessionId") String sessionId);
 
-    @Update("""
-            UPDATE fin_ex_chat_session_t
-            SET last_node_order = #{lastNodeOrder},
-                updated_at = #{updatedAt}
-            WHERE tenant_id = #{tenantId}
-              AND user_id = #{userId}
-              AND id = #{sessionId}
-            """)
+    /**
+     * 更新会话消息节点序号水位。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param lastNodeOrder 新的最大 node_order。
+     * @param updatedAt 更新时间。
+     * @return 影响行数。
+     */
     int updateNodeOrder(@Param("tenantId") String tenantId,
                         @Param("userId") String userId,
                         @Param("sessionId") String sessionId,
                         @Param("lastNodeOrder") long lastNodeOrder,
                         @Param("updatedAt") Instant updatedAt);
 
-    @Update("""
-            UPDATE fin_ex_chat_session_t
-            SET current_leaf_message_id = #{leafMessageId},
-                updated_at = #{updatedAt}
-            WHERE tenant_id = #{tenantId}
-              AND user_id = #{userId}
-              AND id = #{sessionId}
-            """)
+    /**
+     * 更新会话当前 active path 的叶子消息。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param leafMessageId 新的 leaf message ID。
+     * @param updatedAt 更新时间。
+     * @return 影响行数。
+     */
     int updateCurrentLeaf(@Param("tenantId") String tenantId,
                           @Param("userId") String userId,
                           @Param("sessionId") String sessionId,

@@ -9,8 +9,8 @@ import org.springframework.context.annotation.ComponentScan;
 /**
  * FinanceEXChatService Spring Boot 启动类。
  *
- * <p>MapperScan 显式列出承载 Mapper 的基础设施包。Mapper 类与对应 Repository 实现放在同一业务
- * 基础设施包内，避免为了 MyBatis 技术细节再创建额外深层目录。</p>
+ * <p>MapperScan 显式列出承载 Mapper 接口的基础设施包；具体 SQL 统一维护在
+ * {@code src/main/resources/mapper} 下的 XML 文件中，Java 接口只保留方法签名。</p>
  */
 @SpringBootApplication
 @ComponentScan(basePackages = "com.huawei.finance.front.one")

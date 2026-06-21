@@ -1,6 +1,5 @@
 package com.huawei.finance.front.one.infrastructure.persistence;
 
-import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 
 /**
@@ -8,17 +7,10 @@ import org.apache.ibatis.annotations.Mapper;
  */
 @Mapper
 public interface RuntimeRawStreamLogMapper {
-    @Insert("""
-            INSERT INTO fin_ex_runtime_raw_stream_log_t(
-                id, tenant_id, user_id, session_id, run_id, runtime_provider, api_adapter,
-                chunk_index, raw_content, raw_content_hash, content_length, source_content_length,
-                chunk_count, split_part_index, split_part_count, truncated, terminal, created_at
-            )
-            VALUES(
-                #{id}, #{tenantId}, #{userId}, #{sessionId}, #{runId}, #{runtimeProvider}, #{apiAdapter},
-                #{chunkIndex}, #{rawContent}, #{rawContentHash}, #{contentLength}, #{sourceContentLength},
-                #{chunkCount}, #{splitPartIndex}, #{splitPartCount}, #{truncated}, #{terminal}, #{createdAt}
-            )
-            """)
+    /**
+     * 写入一条下游 Runtime 原始流日志片段。
+     *
+     * @param row 原始流日志写入行，包含租户、用户、会话、run、provider、adapter、chunk 序号和裁剪状态。
+     */
     void insert(RuntimeRawStreamLogWriteRow row);
 }

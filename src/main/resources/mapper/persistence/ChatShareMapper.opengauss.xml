@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huawei.finance.front.one.infrastructure.persistence.ChatShareMapper">
+    <resultMap id="chatShareResultMap" type="com.huawei.finance.front.one.infrastructure.persistence.ChatShareRow">
+        <result column="tenant_id" property="tenantId"/>
+        <result column="owner_user_id" property="ownerUserId"/>
+        <result column="source_session_id" property="sourceSessionId"/>
+        <result column="source_user_message_id" property="sourceUserMessageId"/>
+        <result column="source_assistant_message_id" property="sourceAssistantMessageId"/>
+        <result column="source_run_id" property="sourceRunId"/>
+        <result column="expires_at" property="expiresAt"/>
+        <result column="revoked_at" property="revokedAt"/>
+        <result column="snapshot_json" property="snapshotJson"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="chatShareColumns">
+        id, tenant_id, owner_user_id, source_session_id, source_user_message_id,
+        source_assistant_message_id, source_run_id, title, scope, visibility,
+        status, expires_at, revoked_at, snapshot_json, created_at, updated_at
+    </sql>
+
+    <!--
+      创建单轮问答分享快照，保存来源消息和固定展示内容。
+      入参: ChatShareRow，id 为分享主键，tenantId/ownerUserId 为归属边界，sourceSessionId/sourceUserMessageId/
+            sourceAssistantMessageId/sourceRunId 记录来源，title/scope/visibility/status/expiresAt/revokedAt/
+            snapshotJson/createdAt/updatedAt 为分享展示、生命周期和审计信息。
+    -->
+    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatShareRow">
+        INSERT INTO fin_ex_chat_share_t(
+            id, tenant_id, owner_user_id, source_session_id, source_user_message_id,
+            source_assistant_message_id, source_run_id, title, scope, visibility,
+            status, expires_at, revoked_at, snapshot_json, created_at, updated_at
+        )
+        VALUES (
+            #{id}, #{tenantId}, #{ownerUserId}, #{sourceSessionId}, #{sourceUserMessageId},
+            #{sourceAssistantMessageId}, #{sourceRunId}, #{title}, #{scope}, #{visibility},
+            #{status}, #{expiresAt}, #{revokedAt}, #{snapshotJson}, #{createdAt}, #{updatedAt}
+        )
+    </insert>
+
+    <!--
+      更新分享状态、过期时间和快照内容，限定创建者 owner 防止跨用户改写。
+      入参: ChatShareRow，id/tenantId/ownerUserId 定位分享；title/visibility/status/expiresAt/revokedAt/
+            snapshotJson/updatedAt 为待更新字段。
+    -->
+    <update id="update" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatShareRow">
+        UPDATE fin_ex_chat_share_t
+        SET title = #{title},
+            visibility = #{visibility},
+            status = #{status},
+            expires_at = #{expiresAt},
+            revoked_at = #{revokedAt},
+            snapshot_json = #{snapshotJson},
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND tenant_id = #{tenantId}
+          AND owner_user_id = #{ownerUserId}
+    </update>
+
+    <!--
+      按分享 ID 查询分享详情，后续由 ChatShareAccessPolicy 判断查看权限。
+      入参: shareId 为分享主键。
+    -->
+    <select id="findById" resultMap="chatShareResultMap">
+        SELECT <include refid="chatShareColumns"/>
+        FROM fin_ex_chat_share_t
+        WHERE id = #{shareId}
+    </select>
+
+    <!--
+      统计当前用户创建的分享数量，用于分享管理页页码分页。
+      入参: tenantId 为租户边界，ownerUserId 为分享创建者。
+    -->
+    <select id="countByOwner" resultType="long">
+        SELECT COUNT(1)
+        FROM fin_ex_chat_share_t
+        WHERE tenant_id = #{tenantId}
+          AND owner_user_id = #{ownerUserId}
+    </select>
+
+    <!--
+      页码式查询当前用户创建的分享列表，按创建时间倒序展示。
+      入参: tenantId 为租户边界，ownerUserId 为分享创建者，limit 为 pageSize，offset 为分页偏移。
+    -->
+    <select id="findPageByOwner" resultMap="chatShareResultMap">
+        SELECT <include refid="chatShareColumns"/>
+        FROM fin_ex_chat_share_t
+        WHERE tenant_id = #{tenantId}
+          AND owner_user_id = #{ownerUserId}
+        ORDER BY created_at DESC, id DESC
+        LIMIT #{limit}
+        OFFSET #{offset}
+    </select>
+
+    <!--
+      会话软删除时批量撤销该会话下仍 ACTIVE 的分享，避免删除后外部继续查看快照。
+      入参: tenantId/ownerUserId 为归属边界，sessionId 为被删除会话，revokedAt/updatedAt 为撤销时间。
+    -->
+    <update id="revokeActiveBySession">
+        UPDATE fin_ex_chat_share_t
+        SET status = 'REVOKED',
+            revoked_at = #{revokedAt},
+            updated_at = #{updatedAt}
+        WHERE tenant_id = #{tenantId}
+          AND owner_user_id = #{ownerUserId}
+          AND source_session_id = #{sessionId}
+          AND status = 'ACTIVE'
+    </update>
+</mapper>

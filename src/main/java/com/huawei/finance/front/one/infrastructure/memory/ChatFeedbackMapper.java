@@ -3,55 +3,39 @@ package com.huawei.finance.front.one.infrastructure.memory;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
-import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Result;
-import org.apache.ibatis.annotations.Results;
-import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.annotations.Update;
 
 /**
  * fin_ex_message_feedback_t 的 MyBatis Mapper。
  */
 @Mapper
 public interface ChatFeedbackMapper {
-    @Insert("""
-            INSERT INTO fin_ex_message_feedback_t(
-                id, tenant_id, user_id, session_id, message_id, run_id,
-                rating, status, reason_code, comment_text, metadata_json, created_at, updated_at
-            )
-            VALUES (
-                #{id}, #{tenantId}, #{userId}, #{sessionId}, #{messageId}, #{runId},
-                #{rating}, #{status}, #{reasonCode}, #{commentText}, #{metadataJson}, #{createdAt}, #{updatedAt}
-            )
-            """)
+    /**
+     * 创建当前用户对 assistant 消息的反馈。
+     *
+     * @param row 反馈写入行，包含归属、messageId、runId、rating、status 和审计时间。
+     * @return 影响行数。
+     */
     int insert(ChatMessageFeedbackRow row);
 
-    @Update("""
-            UPDATE fin_ex_message_feedback_t
-            SET run_id = #{runId},
-                rating = #{rating},
-                status = #{status},
-                reason_code = #{reasonCode},
-                comment_text = #{commentText},
-                metadata_json = #{metadataJson},
-                updated_at = #{updatedAt}
-            WHERE id = #{id}
-              AND tenant_id = #{tenantId}
-              AND user_id = #{userId}
-              AND message_id = #{messageId}
-            """)
+    /**
+     * 更新当前用户对同一消息的反馈。
+     *
+     * @param row 反馈更新行，id、tenantId、userId、messageId 用于定位记录。
+     * @return 影响行数。
+     */
     int update(ChatMessageFeedbackRow row);
 
-    @Update("""
-            UPDATE fin_ex_message_feedback_t
-            SET status = 'CANCELLED',
-                updated_at = #{updatedAt}
-            WHERE tenant_id = #{tenantId}
-              AND user_id = #{userId}
-              AND message_id = #{messageId}
-            """)
+    /**
+     * 取消当前用户对指定消息的反馈。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param messageId 目标 assistant 消息标识。
+     * @param updatedAt 取消时间。
+     * @return 影响行数。
+     */
     int cancelCurrent(
             @Param("tenantId") String tenantId,
             @Param("userId") String userId,
@@ -59,64 +43,29 @@ public interface ChatFeedbackMapper {
             @Param("updatedAt") Instant updatedAt
     );
 
-    @Select("""
-            SELECT *
-            FROM fin_ex_message_feedback_t
-            WHERE tenant_id = #{tenantId}
-              AND user_id = #{userId}
-              AND message_id = #{messageId}
-            """)
-    @Results(id = "chatMessageFeedbackResultMap", value = {
-            @Result(column = "tenant_id", property = "tenantId"),
-            @Result(column = "user_id", property = "userId"),
-            @Result(column = "session_id", property = "sessionId"),
-            @Result(column = "message_id", property = "messageId"),
-            @Result(column = "run_id", property = "runId"),
-            @Result(column = "reason_code", property = "reasonCode"),
-            @Result(column = "comment_text", property = "commentText"),
-            @Result(column = "metadata_json", property = "metadataJson"),
-            @Result(column = "created_at", property = "createdAt"),
-            @Result(column = "updated_at", property = "updatedAt")
-    })
+    /**
+     * 查询当前用户对指定消息的反馈记录。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param messageId 目标消息标识。
+     * @return 反馈记录。
+     */
     Optional<ChatMessageFeedbackRow> findByMessage(
             @Param("tenantId") String tenantId,
             @Param("userId") String userId,
             @Param("messageId") String messageId
     );
 
-    @Select("""
-            <script>
-            SELECT *
-            FROM fin_ex_message_feedback_t
-            WHERE tenant_id = #{tenantId}
-              AND user_id = #{userId}
-              AND session_id = #{sessionId}
-              AND status = 'ACTIVE'
-              <choose>
-                <when test="messageIds != null and messageIds.size() > 0">
-              AND message_id IN
-                  <foreach collection="messageIds" item="messageId" open="(" separator="," close=")">
-                      #{messageId}
-                  </foreach>
-                </when>
-                <otherwise>
-              AND 1 = 0
-                </otherwise>
-              </choose>
-            </script>
-            """)
-    @Results(id = "activeChatMessageFeedbackResultMap", value = {
-            @Result(column = "tenant_id", property = "tenantId"),
-            @Result(column = "user_id", property = "userId"),
-            @Result(column = "session_id", property = "sessionId"),
-            @Result(column = "message_id", property = "messageId"),
-            @Result(column = "run_id", property = "runId"),
-            @Result(column = "reason_code", property = "reasonCode"),
-            @Result(column = "comment_text", property = "commentText"),
-            @Result(column = "metadata_json", property = "metadataJson"),
-            @Result(column = "created_at", property = "createdAt"),
-            @Result(column = "updated_at", property = "updatedAt")
-    })
+    /**
+     * 批量查询当前用户对一组消息的 active 反馈。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param messageIds 待装配反馈的消息 ID 列表。
+     * @return active 反馈记录列表。
+     */
     List<ChatMessageFeedbackRow> findActiveByMessages(
             @Param("tenantId") String tenantId,
             @Param("userId") String userId,

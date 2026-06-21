@@ -1,6 +1,5 @@
 package com.huawei.finance.front.one.infrastructure.persistence;
 
-import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 
 /**
@@ -8,19 +7,10 @@ import org.apache.ibatis.annotations.Mapper;
  */
 @Mapper
 public interface IntentRecognitionRecordMapper {
-    @Insert("""
-            INSERT INTO fin_ex_intent_recognition_t(
-                id, tenant_id, user_id, session_id, run_id, command_id, query_text, query_hash,
-                status, intent_id, intent_name, resource_id, confidence, source, candidate_count,
-                confidence_threshold, accepted, route_type, route_agent_code, route_reason,
-                result_message, items_json, raw_response_json, error_message, latency_ms, created_at
-            )
-            VALUES(
-                #{id}, #{tenantId}, #{userId}, #{sessionId}, #{runId}, #{commandId}, #{queryText}, #{queryHash},
-                #{status}, #{intentId}, #{intentName}, #{resourceId}, #{confidence}, #{source}, #{candidateCount},
-                #{confidenceThreshold}, #{accepted}, #{routeType}, #{routeAgentCode}, #{routeReason},
-                #{resultMessage}, #{itemsJson}, #{rawResponseJson}, #{errorMessage}, #{latencyMs}, #{createdAt}
-            )
-            """)
+    /**
+     * 写入一次意图识别记录，用于离线统计识别准确率和排查路由决策。
+     *
+     * @param row 意图识别记录写入行，包含请求上下文、输入摘要、识别结果、采纳结果和原始响应摘要。
+     */
     void insert(IntentRecognitionRecordWriteRow row);
 }

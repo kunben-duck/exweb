@@ -2,13 +2,8 @@ package com.huawei.finance.front.one.infrastructure.persistence;
 
 import java.time.Instant;
 import java.util.List;
-import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Result;
-import org.apache.ibatis.annotations.ResultMap;
-import org.apache.ibatis.annotations.Results;
-import org.apache.ibatis.annotations.Select;
 
 /**
  * fin_ex_chat_event_t 的 MyBatis Mapper。
@@ -18,66 +13,38 @@ import org.apache.ibatis.annotations.Select;
  */
 @Mapper
 public interface ChatEventMapper {
-    @Select("SELECT nextval('fin_ex_chat_event_seq')")
+    /**
+     * 从数据库 sequence 预取事件游标。
+     *
+     * @return 下一个全局事件序号。
+     */
     Long nextSeq();
 
-    @Insert("""
-            INSERT INTO fin_ex_chat_event_t(
-                id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
-            )
-            SELECT #{id}, s.tenant_id, s.user_id, s.id, r.id, #{seq}, #{eventType}, #{payloadJson}, #{createdAt}
-            FROM fin_ex_chat_session_t s
-            JOIN fin_ex_chat_run_t r
-              ON r.id = #{runId}
-             AND r.session_id = s.id
-             AND r.tenant_id = s.tenant_id
-             AND r.user_id = s.user_id
-            WHERE s.id = #{sessionId}
-            """)
+    /**
+     * 追加已完成外层校验的事件，SQL 仍会通过 session/run join 做归属兜底。
+     *
+     * @param row 事件写入行，包含 sessionId、runId、seq、eventType、payloadJson 和 createdAt。
+     * @return 影响行数；为 0 表示 run/session 归属不匹配。
+     */
     int insertFromSession(ChatEventWriteRow row);
 
-    @Insert("""
-            INSERT INTO fin_ex_chat_event_t(
-                id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
-            )
-            SELECT #{id}, s.tenant_id, s.user_id, s.id, r.id, #{seq}, #{eventType}, #{payloadJson}, #{createdAt}
-            FROM fin_ex_chat_session_t s
-            JOIN fin_ex_chat_run_t r
-              ON r.id = #{runId}
-             AND r.session_id = s.id
-             AND r.tenant_id = s.tenant_id
-             AND r.user_id = s.user_id
-             AND r.status = 'RUNNING'
-            JOIN fin_ex_chat_run_execution_t e
-              ON e.run_id = r.id
-             AND e.tenant_id = r.tenant_id
-             AND e.user_id = r.user_id
-             AND e.session_id = r.session_id
-             AND e.owner_instance_id = #{ownerInstanceId}
-             AND e.fencing_token = #{fencingToken}
-             AND e.execution_status = 'RUNNING'
-            WHERE s.id = #{sessionId}
-            """)
+    /**
+     * 追加流式事件，并在同一条 SQL 内校验 execution owner 和 fencing token。
+     *
+     * @param row 事件写入行，除事件字段外还包含 ownerInstanceId 和 fencingToken。
+     * @return 影响行数；为 0 表示 run 已非 RUNNING、owner 失效或 fencing token 失效。
+     */
     int insertFromSessionWithExecutionGuard(ChatEventWriteRow row);
 
-    @Select("""
-            SELECT id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
-            FROM fin_ex_chat_event_t
-            WHERE tenant_id = #{tenantId}
-              AND user_id = #{userId}
-              AND session_id = #{sessionId}
-              AND seq > #{afterSeq}
-            ORDER BY seq ASC
-            """)
-    @Results(id = "chatEventResultMap", value = {
-            @Result(column = "tenant_id", property = "tenantId"),
-            @Result(column = "user_id", property = "userId"),
-            @Result(column = "session_id", property = "sessionId"),
-            @Result(column = "run_id", property = "runId"),
-            @Result(column = "event_type", property = "eventType"),
-            @Result(column = "payload_json", property = "payloadJson"),
-            @Result(column = "created_at", property = "createdAt")
-    })
+    /**
+     * 查询指定会话在某个事件游标之后的事件，用于 session 级 Event Resume。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param afterSeq 恢复游标，仅返回 seq 大于该值的事件。
+     * @return 按 seq 正序排列的事件列表。
+     */
     List<ChatEventRow> findByOwnerAndSessionAfterSeq(
             @Param("tenantId") String tenantId,
             @Param("userId") String userId,
@@ -85,17 +52,16 @@ public interface ChatEventMapper {
             @Param("afterSeq") long afterSeq
     );
 
-    @Select("""
-            SELECT id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
-            FROM fin_ex_chat_event_t
-            WHERE tenant_id = #{tenantId}
-              AND user_id = #{userId}
-              AND session_id = #{sessionId}
-              AND run_id = #{runId}
-              AND seq > #{afterSeq}
-            ORDER BY seq ASC
-            """)
-    @ResultMap("chatEventResultMap")
+    /**
+     * 查询指定 run 在某个事件游标之后的事件，用于 run 级 Event Resume。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识，作为 run 查询的额外隔离边界。
+     * @param runId run 标识。
+     * @param afterSeq 恢复游标，仅返回 seq 大于该值的事件。
+     * @return 按 seq 正序排列的事件列表。
+     */
     List<ChatEventRow> findByOwnerAndRunAfterSeq(
             @Param("tenantId") String tenantId,
             @Param("userId") String userId,
@@ -104,13 +70,14 @@ public interface ChatEventMapper {
             @Param("afterSeq") long afterSeq
     );
 
-    @Select("""
-            SELECT COALESCE(MAX(seq), 0)
-            FROM fin_ex_chat_event_t
-            WHERE tenant_id = #{tenantId}
-              AND user_id = #{userId}
-              AND session_id = #{sessionId}
-            """)
+    /**
+     * 查询指定会话当前最新事件序号。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @return 最新 seq；没有事件时返回 0。
+     */
     long findLatestSeqByOwnerAndSession(@Param("tenantId") String tenantId,
                                         @Param("userId") String userId,
                                         @Param("sessionId") String sessionId);

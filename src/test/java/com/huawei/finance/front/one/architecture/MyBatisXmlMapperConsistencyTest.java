@@ -1,0 +1,341 @@
+package com.huawei.finance.front.one.architecture;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import org.junit.jupiter.api.Test;
+
+/**
+ * MyBatis SQL 管理方式护栏。
+ *
+ * <p>项目约定 SQL 只维护在 resources/mapper 下的 XML 文件中，Java Mapper 接口只保留方法签名。
+ * 该测试避免后续维护时重新引入注解 SQL，或新增 XML statement 后忘记同步接口方法。</p>
+ */
+class MyBatisXmlMapperConsistencyTest {
+    private static final Path MAIN_SOURCE_ROOT = Path.of("src/main/java");
+    private static final Path MAPPER_XML_ROOT = Path.of("src/main/resources/mapper");
+    private static final String ACTIVE_DIALECT_MAPPER_SUFFIX = ".opengauss.xml";
+    private static final Pattern NAMESPACE = Pattern.compile("<mapper\\s+namespace=\"([^\"]+)\"");
+    private static final Pattern STATEMENT_ID = Pattern.compile("<(?:select|insert|update|delete)\\s+id=\"([^\"]+)\"");
+    private static final Pattern STATEMENT_LINE = Pattern.compile("^\\s*<(select|insert|update|delete)\\s+id=\"([^\"]+)\".*");
+    private static final Pattern SQL_ANNOTATION = Pattern.compile("@(?:Select|Insert|Update|Delete|Results|ResultMap|Result)\\b");
+
+    @Test
+    void mapperXmlStatementsShouldMatchJavaMapperMethods() throws IOException {
+        List<String> violations;
+        try (var files = Files.walk(MAPPER_XML_ROOT)) {
+            violations = files.filter(path -> path.toString().endsWith(ACTIVE_DIALECT_MAPPER_SUFFIX))
+                    .flatMap(path -> validateXmlMapper(path).stream())
+                    .toList();
+        }
+
+        assertThat(violations)
+                .as("MyBatis XML namespace/id must match Java Mapper methods:%n%s",
+                        String.join(System.lineSeparator(), violations))
+                .isEmpty();
+    }
+
+    @Test
+    void infrastructureMyBatisMappersShouldNotUseSqlAnnotations() throws IOException {
+        Path infrastructureRoot = MAIN_SOURCE_ROOT.resolve("com/huawei/finance/front/one/infrastructure");
+        List<String> violations;
+        try (var files = Files.walk(infrastructureRoot)) {
+            violations = files.filter(path -> path.toString().endsWith(".java"))
+                    .filter(this::containsForbiddenSqlAnnotation)
+                    .map(MAIN_SOURCE_ROOT::relativize)
+                    .map(Path::toString)
+                    .toList();
+        }
+
+        assertThat(violations)
+                .as("MyBatis SQL should be kept in XML, not Java annotations:%n%s",
+                        String.join(System.lineSeparator(), violations))
+                .isEmpty();
+    }
+
+    @Test
+    void mapperXmlStatementsShouldHaveBusinessComments() throws IOException {
+        List<String> violations;
+        try (var files = Files.walk(MAPPER_XML_ROOT)) {
+            violations = files.filter(path -> path.toString().endsWith(ACTIVE_DIALECT_MAPPER_SUFFIX))
+                    .flatMap(path -> findStatementsWithoutBusinessComment(path).stream())
+                    .toList();
+        }
+
+        assertThat(violations)
+                .as("Every MyBatis statement should explain its database operation:%n%s",
+                        String.join(System.lineSeparator(), violations))
+                .isEmpty();
+    }
+
+    @Test
+    void javaMapperMethodsShouldHaveJavadocs() throws IOException {
+        List<Path> javaMapperFiles;
+        try (var files = Files.walk(MAPPER_XML_ROOT)) {
+            javaMapperFiles = files.filter(path -> path.toString().endsWith(ACTIVE_DIALECT_MAPPER_SUFFIX))
+                    .map(this::javaMapperFileFromXml)
+                    .toList();
+        }
+
+        List<String> violations = javaMapperFiles.stream()
+                .flatMap(path -> findMapperMethodsWithoutJavadocs(path).stream())
+                .toList();
+
+        assertThat(violations)
+                .as("Every Java Mapper method should document operation and parameters:%n%s",
+                        String.join(System.lineSeparator(), violations))
+                .isEmpty();
+    }
+
+    private List<String> validateXmlMapper(Path xmlFile) {
+        try {
+            String xml = Files.readString(xmlFile);
+            String namespace = requiredNamespace(xmlFile, xml);
+            Path javaFile = MAIN_SOURCE_ROOT.resolve(namespace.replace('.', '/') + ".java");
+            if (!Files.exists(javaFile)) {
+                return List.of(xmlFile + " namespace points to missing Java Mapper: " + namespace);
+            }
+
+            Set<String> statementIds = collectStatementIds(xml);
+            Set<String> methodNames = collectMapperMethods(javaFile);
+            Set<String> missingStatements = new LinkedHashSet<>(methodNames);
+            missingStatements.removeAll(statementIds);
+            Set<String> extraStatements = new LinkedHashSet<>(statementIds);
+            extraStatements.removeAll(methodNames);
+
+            if (missingStatements.isEmpty() && extraStatements.isEmpty()) {
+                return List.of();
+            }
+            return List.of(xmlFile + " missingStatements=" + missingStatements + ", extraStatements=" + extraStatements);
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to inspect MyBatis XML: " + xmlFile, ex);
+        }
+    }
+
+    private Path javaMapperFileFromXml(Path xmlFile) {
+        try {
+            String namespace = requiredNamespace(xmlFile, Files.readString(xmlFile));
+            return MAIN_SOURCE_ROOT.resolve(namespace.replace('.', '/') + ".java");
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to inspect MyBatis XML namespace: " + xmlFile, ex);
+        }
+    }
+
+    private String requiredNamespace(Path xmlFile, String xml) {
+        Matcher matcher = NAMESPACE.matcher(xml);
+        if (!matcher.find()) {
+            throw new IllegalStateException("Missing MyBatis mapper namespace: " + xmlFile);
+        }
+        return matcher.group(1);
+    }
+
+    private Set<String> collectStatementIds(String xml) {
+        Set<String> ids = new LinkedHashSet<>();
+        Matcher matcher = STATEMENT_ID.matcher(xml);
+        while (matcher.find()) {
+            ids.add(matcher.group(1));
+        }
+        return ids;
+    }
+
+    private Set<String> collectMapperMethods(Path javaFile) throws IOException {
+        Set<String> methods = new LinkedHashSet<>();
+        StringBuilder signature = new StringBuilder();
+        boolean collecting = false;
+        for (String line : Files.readAllLines(javaFile)) {
+            String trimmed = line.trim();
+            if (!collecting && shouldSkipLine(trimmed)) {
+                continue;
+            }
+            if (!collecting && trimmed.contains("(")) {
+                collecting = true;
+                signature.setLength(0);
+            }
+            if (collecting) {
+                signature.append(' ').append(trimmed);
+                if (trimmed.endsWith(";")) {
+                    String beforeArguments = signature.toString().split("\\(", 2)[0].trim();
+                    String[] tokens = beforeArguments.split("\\s+");
+                    methods.add(tokens[tokens.length - 1]);
+                    collecting = false;
+                }
+            }
+        }
+        return methods;
+    }
+
+    private boolean shouldSkipLine(String line) {
+        return line.isBlank()
+                || line.startsWith("package ")
+                || line.startsWith("import ")
+                || line.startsWith("@")
+                || line.startsWith("//")
+                || line.startsWith("*")
+                || line.startsWith("/*")
+                || line.startsWith("public interface ")
+                || line.equals("}");
+    }
+
+    private boolean containsForbiddenSqlAnnotation(Path path) {
+        try {
+            return SQL_ANNOTATION.matcher(Files.readString(path)).find();
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to inspect Java source: " + path, ex);
+        }
+    }
+
+    private List<String> findStatementsWithoutBusinessComment(Path xmlFile) {
+        try {
+            List<String> lines = Files.readAllLines(xmlFile);
+            Set<String> violations = new LinkedHashSet<>();
+            for (int i = 0; i < lines.size(); i++) {
+                Matcher matcher = STATEMENT_LINE.matcher(lines.get(i));
+                if (!matcher.matches() || hasPreviousXmlComment(lines, i)) {
+                    continue;
+                }
+                violations.add(xmlFile + ":" + (i + 1) + " statement " + matcher.group(2)
+                        + " is missing an explanatory XML comment");
+            }
+            return List.copyOf(violations);
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to inspect MyBatis XML comments: " + xmlFile, ex);
+        }
+    }
+
+    private boolean hasPreviousXmlComment(List<String> lines, int statementLineIndex) {
+        boolean foundEnd = false;
+        StringBuilder comment = new StringBuilder();
+        for (int i = statementLineIndex - 1; i >= 0; i--) {
+            String previous = lines.get(i).trim();
+            if (previous.isBlank()) {
+                continue;
+            }
+            if (!foundEnd) {
+                if (!previous.endsWith("-->")) {
+                    return false;
+                }
+                foundEnd = true;
+            }
+            comment.insert(0, previous).insert(0, ' ');
+            if (previous.startsWith("<!--")) {
+                return comment.toString().contains("入参");
+            }
+        }
+        return false;
+    }
+
+    private List<String> findMapperMethodsWithoutJavadocs(Path javaFile) {
+        try {
+            List<String> lines = Files.readAllLines(javaFile);
+            List<String> violations = new java.util.ArrayList<>();
+            StringBuilder signature = new StringBuilder();
+            int signatureStart = -1;
+            boolean collecting = false;
+            for (int i = 0; i < lines.size(); i++) {
+                String trimmed = lines.get(i).trim();
+                if (!collecting && shouldSkipLine(trimmed)) {
+                    continue;
+                }
+                if (!collecting && trimmed.contains("(")) {
+                    collecting = true;
+                    signature.setLength(0);
+                    signatureStart = i;
+                }
+                if (collecting) {
+                    signature.append(' ').append(trimmed);
+                    if (trimmed.endsWith(";")) {
+                        String methodSignature = signature.toString();
+                        String beforeArguments = methodSignature.split("\\(", 2)[0].trim();
+                        String[] tokens = beforeArguments.split("\\s+");
+                        String methodName = tokens[tokens.length - 1];
+                        String javaDoc = previousJavadoc(lines, signatureStart);
+                        if (javaDoc.isBlank()) {
+                            violations.add(javaFile + ":" + (signatureStart + 1) + " method " + methodName
+                                    + " is missing JavaDoc");
+                        } else {
+                            for (String parameterName : methodParameterNames(methodSignature)) {
+                                if (!javaDoc.contains("@param " + parameterName)) {
+                                    violations.add(javaFile + ":" + (signatureStart + 1) + " method " + methodName
+                                            + " should document parameter '" + parameterName + "'");
+                                }
+                            }
+                        }
+                        collecting = false;
+                    }
+                }
+            }
+            return violations;
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to inspect Java Mapper comments: " + javaFile, ex);
+        }
+    }
+
+    private List<String> methodParameterNames(String methodSignature) {
+        String arguments = methodSignature.substring(methodSignature.indexOf('(') + 1, methodSignature.lastIndexOf(')'));
+        if (arguments.isBlank()) {
+            return List.of();
+        }
+        List<String> names = new ArrayList<>();
+        for (String parameter : splitParameters(arguments)) {
+            String[] tokens = parameter.trim().split("\\s+");
+            if (tokens.length > 0) {
+                names.add(tokens[tokens.length - 1].replace("...", "").replace("[]", ""));
+            }
+        }
+        return names;
+    }
+
+    private List<String> splitParameters(String arguments) {
+        List<String> parameters = new ArrayList<>();
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int start = 0;
+        for (int i = 0; i < arguments.length(); i++) {
+            char ch = arguments.charAt(i);
+            if (ch == '<') {
+                angleDepth++;
+            } else if (ch == '>') {
+                angleDepth = Math.max(0, angleDepth - 1);
+            } else if (ch == '(') {
+                parenDepth++;
+            } else if (ch == ')') {
+                parenDepth = Math.max(0, parenDepth - 1);
+            } else if (ch == ',' && angleDepth == 0 && parenDepth == 0) {
+                parameters.add(arguments.substring(start, i));
+                start = i + 1;
+            }
+        }
+        parameters.add(arguments.substring(start));
+        return parameters;
+    }
+
+    private String previousJavadoc(List<String> lines, int signatureStart) {
+        boolean foundEnd = false;
+        StringBuilder javaDoc = new StringBuilder();
+        for (int i = signatureStart - 1; i >= 0; i--) {
+            String previous = lines.get(i).trim();
+            if (previous.isBlank()) {
+                continue;
+            }
+            if (!foundEnd) {
+                if (!previous.endsWith("*/")) {
+                    return "";
+                }
+                foundEnd = true;
+            }
+            javaDoc.insert(0, previous).insert(0, ' ');
+            if (previous.startsWith("/**")) {
+                return javaDoc.toString();
+            }
+        }
+        return "";
+    }
+}

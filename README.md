@@ -28,6 +28,7 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `application.integration`：应用层出站集成抽象，定义对 Relay Runtime、SubAgent、IntentService、用例库、会话、记忆、文档、ID 和身份能力的依赖边界。
 - `domain`：聊天事件、意图结果、路由结果、RuntimeBinding、用例匹配结果等核心模型。
 - `infrastructure`：Redis、数据库/MyBatis、用例库 HTTP、SubAgent HTTP、Relay Runtime streamable HTTP、DocumentProvider、对象存储和 legacy skill HTTP 等适配。
+- MyBatis Mapper 接口只保留方法签名，当前 openGauss SQL 统一维护在 `src/main/resources/mapper/**/*.opengauss.xml`；`db/schema.sql` 只保留 DDL。后续适配其他数据库时，通过切换 `mybatis.mapper-locations` 选择对应方言 XML。
 
 ## 前端接入协议
 

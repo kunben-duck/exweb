@@ -1379,12 +1379,25 @@ WebSocket 不接受 `{"type":"chat"}` 或旧 `CreateChatRunRequest`。发送旧�
   "topicId": "chat-run-run_xxx",
   "offset": "12019",
   "code": "RECOVER_REQUIRED",
-  "message": "实时事件需要恢复，请使用 Event Resume 从 afterSeq=12002 补齐"
+  "message": "实时事件需要恢复，请使用 Event Resume 从 afterSeq=12018 补齐",
+  "details": {
+    "reason": "SEQ_ROLLBACK",
+    "topicId": "chat-run-run_xxx",
+    "recoveryAfterSeq": 12018,
+    "actualSeq": 12019,
+    "highestDeliveredSeq": 12021,
+    "lastSentSeq": 12021
+  }
 }
 ```
 
 收到 `RECOVER_REQUIRED` 后，前端应暂停该 topic 的实时拼接，使用本地最近成功处理的 `lastSeq`
 调用 Event Resume 补发，然后再按新的 `lastSeq` 重新 subscribe。
+
+`sequence` 是数据库事件游标，不是 run topic 内连续序号；同一个 topic 出现 `19 -> 21` 并不一定是缺口，
+可能是其他会话或其他 run 使用了 `20`。前端只需要按 `sessionId + sequence` 去重，不要用
+`expectedNextSeq` 做连续性校验。`RECOVER_REQUIRED.details.recoveryAfterSeq` 是服务端建议的最小补发起点；
+旧前端也可以继续使用本地 `lastSeq`。
 
 `RECOVER_REQUIRED` 也可能由慢客户端或 run topic live buffer 溢出触发。此时不要继续等待同一个
 WebSocket 订阅恢复，正确做法仍是关闭当前 topic 拼接、通过 run 级事件恢复补齐、再重新 subscribe。

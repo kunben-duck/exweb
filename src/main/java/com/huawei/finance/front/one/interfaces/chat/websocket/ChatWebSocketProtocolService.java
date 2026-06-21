@@ -196,7 +196,7 @@ public class ChatWebSocketProtocolService {
                                     dto -> emitTopicEvent(new TopicEventContext(connectionId, outbound, topicId,
                                             run, cancellation, lastSeq), dto),
                                     ex -> handleSubscriptionError(new SubscriptionErrorContext(connectionId,
-                                            outbound, topicId, commandId, afterSeq), ex)
+                                            outbound, topicId, commandId, afterSeq, lastSeq), ex)
                             );
                     return Mono.<Void>empty();
                 })
@@ -208,8 +208,22 @@ public class ChatWebSocketProtocolService {
 
     private void handleSubscriptionError(SubscriptionErrorContext context, Throwable ex) {
         if (ex instanceof StreamRecoveryRequiredException recovery) {
+            long lastSentSeq = context.lastSeq().get();
+            long recoveryAfterSeq = Math.max(recovery.afterSeq(), lastSentSeq);
+            long actualSeq = recovery.actualSeq() > 0 ? recovery.actualSeq() : recoveryAfterSeq;
+            log.warn("WebSocket topic requires recovery. connectionId={}, topicId={}, reason={}, subscribeAfterSeq={}, recoveryAfterSeq={}, actualSeq={}, lastSentSeq={}, message={}",
+                    context.connectionId(), context.topicId(), recovery.reason(), context.afterSeq(),
+                    recoveryAfterSeq, actualSeq, lastSentSeq, recovery.getMessage());
             context.outbound().emit(ChatWebSocketEnvelopeDto.recoverRequired(
-                    context.topicId(), context.afterSeq(), recovery.afterSeq()));
+                    context.topicId(), recoveryAfterSeq, actualSeq,
+                    Map.of(
+                            "reason", recovery.reason(),
+                            "topicId", context.topicId(),
+                            "subscribeAfterSeq", context.afterSeq(),
+                            "recoveryAfterSeq", recoveryAfterSeq,
+                            "actualSeq", actualSeq,
+                            "lastSentSeq", lastSentSeq
+                    )));
         } else {
             context.outbound().emit(ChatWebSocketEnvelopeDto.error(
                     context.commandId(), "SUBSCRIBE_ERROR", ex.getMessage()));
@@ -264,11 +278,29 @@ public class ChatWebSocketProtocolService {
                         turnStreamTranslator.done(dto.sessionId(), dto.runId(), dto.sequence(), dto.type()),
                         null
                 ));
+                context.cancellation().tryEmitEmpty();
+                connectionRegistry.unsubscribe(context.connectionId(), context.topicId());
             }
         } else if (decision.action() == LocalWebSocketConnectionRegistry.Action.RECOVER_REQUIRED) {
+            long lastSentSeq = context.lastSeq().get();
+            log.warn("WebSocket event sequence rollback requires recovery. connectionId={}, topicId={}, runId={}, sessionId={}, subscribeAfterSeq={}, recoveryAfterSeq={}, actualSeq={}, highestDeliveredSeq={}, lastSentSeq={}",
+                    context.connectionId(), context.topicId(), run.id(), run.sessionId(),
+                    decision.resumeAfterSeq(), decision.recoveryAfterSeq(), decision.actualSeq(),
+                    decision.highestDeliveredSeq(), lastSentSeq);
             context.outbound().emit(ChatWebSocketEnvelopeDto.recoverRequired(
-                    context.topicId(), decision.resumeAfterSeq(), decision.actualSeq()));
-            // 发现乱序或缺口后暂停该 topic，避免前端恢复期间继续接收更高 seq。
+                    context.topicId(), decision.recoveryAfterSeq(), decision.actualSeq(),
+                    Map.of(
+                            "reason", "SEQ_ROLLBACK",
+                            "topicId", context.topicId(),
+                            "runId", run.id(),
+                            "sessionId", run.sessionId(),
+                            "subscribeAfterSeq", decision.resumeAfterSeq(),
+                            "recoveryAfterSeq", decision.recoveryAfterSeq(),
+                            "actualSeq", decision.actualSeq(),
+                            "highestDeliveredSeq", decision.highestDeliveredSeq(),
+                            "lastSentSeq", lastSentSeq
+                    )));
+            // 发现同 topic seq 回退后暂停该 topic，避免前端恢复期间继续接收更高 seq。
             context.cancellation().tryEmitEmpty();
             connectionRegistry.unsubscribe(context.connectionId(), context.topicId());
         }
@@ -303,7 +335,7 @@ public class ChatWebSocketProtocolService {
     }
 
     private record SubscriptionErrorContext(String connectionId, ChatWebSocketOutbound outbound, String topicId,
-                                            String commandId, long afterSeq) {
+                                            String commandId, long afterSeq, AtomicLong lastSeq) {
     }
 
     private record TopicEventContext(String connectionId, ChatWebSocketOutbound outbound, String topicId,

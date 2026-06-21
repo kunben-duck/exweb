@@ -9,11 +9,19 @@ package com.huawei.finance.front.one.application.service.chat;
 public class StreamRecoveryRequiredException extends RuntimeException {
     private final String topicId;
     private final long afterSeq;
+    private final long actualSeq;
+    private final String reason;
 
     public StreamRecoveryRequiredException(String topicId, long afterSeq, String message) {
+        this(topicId, afterSeq, afterSeq, "LIVE_SOURCE_ERROR", message);
+    }
+
+    public StreamRecoveryRequiredException(String topicId, long afterSeq, long actualSeq, String reason, String message) {
         super(message);
         this.topicId = topicId;
         this.afterSeq = afterSeq;
+        this.actualSeq = actualSeq;
+        this.reason = reason;
     }
 
     public String topicId() {
@@ -22,5 +30,13 @@ public class StreamRecoveryRequiredException extends RuntimeException {
 
     public long afterSeq() {
         return afterSeq;
+    }
+
+    public long actualSeq() {
+        return actualSeq;
+    }
+
+    public String reason() {
+        return reason;
     }
 }

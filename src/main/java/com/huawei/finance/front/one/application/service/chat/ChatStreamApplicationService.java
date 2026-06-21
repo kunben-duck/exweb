@@ -233,11 +233,14 @@ public class ChatStreamApplicationService {
                 event -> {
                     Sinks.EmitResult result = sink.tryEmitNext(event);
                     if (result.isFailure()) {
-                        sink.tryEmitError(new StreamRecoveryRequiredException(topicId, afterSeq,
+                        long recoveryAfterSeq = Math.max(afterSeq, Math.max(0L, event.sequence() - 1));
+                        sink.tryEmitError(new StreamRecoveryRequiredException(topicId, recoveryAfterSeq,
+                                event.sequence(), "LIVE_BUFFER_EMIT_FAILED",
                                 "run topic live buffer emit failed: " + result));
                     }
                 },
-                error -> sink.tryEmitError(new StreamRecoveryRequiredException(topicId, afterSeq,
+                error -> sink.tryEmitError(new StreamRecoveryRequiredException(topicId, afterSeq, afterSeq,
+                        "LIVE_SOURCE_ERROR",
                         "run topic live source failed: " + error.getMessage())),
                 sink::tryEmitComplete
         );

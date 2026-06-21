@@ -38,7 +38,23 @@ class LocalWebSocketConnectionRegistryTest {
 
         assertThat(decision.action()).isEqualTo(LocalWebSocketConnectionRegistry.Action.RECOVER_REQUIRED);
         assertThat(decision.resumeAfterSeq()).isEqualTo(10L);
+        assertThat(decision.recoveryAfterSeq()).isEqualTo(18L);
         assertThat(decision.actualSeq()).isEqualTo(19L);
+    }
+
+    @Test
+    void nonConsecutiveGlobalSeqOnSameTopicDoesNotRequireRecovery() {
+        LocalWebSocketConnectionRegistry registry = new LocalWebSocketConnectionRegistry();
+        registry.register("conn1", new UserContext("tenant1", "user1", "User One"));
+        registry.subscribe("conn1", "chat-run-run1", "session1", 0L, () -> {});
+
+        assertThat(registry.markDelivered("conn1", "chat-run-run1", 19L).action())
+                .isEqualTo(LocalWebSocketConnectionRegistry.Action.DELIVER);
+        LocalWebSocketConnectionRegistry.DeliveryDecision decision =
+                registry.markDelivered("conn1", "chat-run-run1", 21L);
+
+        assertThat(decision.action()).isEqualTo(LocalWebSocketConnectionRegistry.Action.DELIVER);
+        assertThat(decision.highestDeliveredSeq()).isEqualTo(21L);
     }
 
     @Test

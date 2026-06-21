@@ -93,6 +93,9 @@ subscribe 和连接关闭回调只读取该身份快照，不会再次调用 `Au
 单用户连接数、单连接订阅数、单 topic 本机订阅数、出站缓冲、live buffer 和空闲超时都由
 `financeex.websocket.*` 统一配置。慢客户端或实时缓冲溢出时，服务端会返回
 `RECOVER_REQUIRED`，前端应通过 run event resume 补齐后再重新订阅。
+`seq` 是数据库事件游标，不是 run topic 内连续序号；多会话并发时同一 topic 看到
+`19 -> 21` 不代表丢事件。服务端只在同 topic 更低且未见过的 seq 迟到、live buffer 溢出或
+实时源异常时要求恢复，并在错误 envelope 的 `details.recoveryAfterSeq` 中给出更小范围的建议补发点。
 同一 WebSocket 连接允许同时订阅多个 session 的多个 run topic。服务端不会因为切换会话而
 自动释放旧 topic；隔离依赖订阅前的用户归属校验、事件事实源的 `tenantId/userId/sessionId/runId`
 联合查询，以及投递前的 `topicId/runId/sessionId` 一致性校验。前端收到事件后必须按

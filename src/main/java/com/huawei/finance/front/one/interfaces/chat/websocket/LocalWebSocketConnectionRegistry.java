@@ -282,14 +282,14 @@ public class LocalWebSocketConnectionRegistry {
 
         private synchronized DeliveryDecision markDelivered(long seq) {
             if (seq <= resumeAfterSeq || deliveredSeqs.containsKey(seq)) {
-                return DeliveryDecision.duplicate(resumeAfterSeq, seq);
+                return DeliveryDecision.duplicate(resumeAfterSeq, seq, highestDeliveredSeq);
             }
             if (seq < highestDeliveredSeq) {
-                return DeliveryDecision.recoverRequired(resumeAfterSeq, seq);
+                return DeliveryDecision.recoverRequired(resumeAfterSeq, seq, highestDeliveredSeq);
             }
             deliveredSeqs.put(seq, Boolean.TRUE);
             highestDeliveredSeq = Math.max(highestDeliveredSeq, seq);
-            return DeliveryDecision.deliver(resumeAfterSeq, seq);
+            return DeliveryDecision.deliver(resumeAfterSeq, seq, highestDeliveredSeq);
         }
 
         private void dispose() {
@@ -323,22 +323,32 @@ public class LocalWebSocketConnectionRegistry {
      * @param action 投递动作。
      * @param resumeAfterSeq 当前订阅声明的恢复起点。
      * @param actualSeq 当前事件序号。
+     * @param recoveryAfterSeq 建议 Event Resume 使用的恢复起点；仅 RECOVER_REQUIRED 有业务意义。
+     * @param highestDeliveredSeq 当前 topic 已成功投递的最高事件序号。
      */
-    public record DeliveryDecision(Action action, long resumeAfterSeq, long actualSeq) {
-        public static DeliveryDecision deliver(long resumeAfterSeq, long actualSeq) {
-            return new DeliveryDecision(Action.DELIVER, resumeAfterSeq, actualSeq);
+    public record DeliveryDecision(Action action, long resumeAfterSeq, long actualSeq,
+                                   long recoveryAfterSeq, long highestDeliveredSeq) {
+        public static DeliveryDecision deliver(long resumeAfterSeq, long actualSeq, long highestDeliveredSeq) {
+            return new DeliveryDecision(Action.DELIVER, resumeAfterSeq, actualSeq, resumeAfterSeq, highestDeliveredSeq);
         }
 
-        public static DeliveryDecision duplicate(long resumeAfterSeq, long actualSeq) {
-            return new DeliveryDecision(Action.DUPLICATE, resumeAfterSeq, actualSeq);
+        public static DeliveryDecision duplicate(long resumeAfterSeq, long actualSeq, long highestDeliveredSeq) {
+            return new DeliveryDecision(Action.DUPLICATE, resumeAfterSeq, actualSeq, resumeAfterSeq, highestDeliveredSeq);
         }
 
-        public static DeliveryDecision recoverRequired(long resumeAfterSeq, long actualSeq) {
-            return new DeliveryDecision(Action.RECOVER_REQUIRED, resumeAfterSeq, actualSeq);
+        public static DeliveryDecision recoverRequired(long resumeAfterSeq, long actualSeq, long highestDeliveredSeq) {
+            /*
+             * seq 是数据库事件游标，不是 run/topic 内连续序号。这里不判断 expectedNext，只在已经
+             * 投递更高 seq 后又收到更低但未见过的 seq 时要求恢复。恢复点从 actualSeq - 1 开始，
+             * 可以覆盖迟到事件本身，同时避免新连接 afterSeq=0 时把整轮事件都要求重放。
+             */
+            long recoveryAfterSeq = Math.max(resumeAfterSeq, Math.max(0L, actualSeq - 1));
+            return new DeliveryDecision(Action.RECOVER_REQUIRED, resumeAfterSeq, actualSeq,
+                    recoveryAfterSeq, highestDeliveredSeq);
         }
 
         public static DeliveryDecision notSubscribed() {
-            return new DeliveryDecision(Action.NOT_SUBSCRIBED, 0L, 0L);
+            return new DeliveryDecision(Action.NOT_SUBSCRIBED, 0L, 0L, 0L, 0L);
         }
     }
 

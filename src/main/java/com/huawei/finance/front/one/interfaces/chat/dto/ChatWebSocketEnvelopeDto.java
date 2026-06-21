@@ -18,6 +18,7 @@ import java.util.Map;
  * @param reply 控制命令响应，仅 reply 使用。
  * @param code 错误码，仅 error 使用。
  * @param message 错误说明，仅 error 使用。
+ * @param details 可选诊断信息；旧前端可忽略。
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ChatWebSocketEnvelopeDto(
@@ -28,22 +29,34 @@ public record ChatWebSocketEnvelopeDto(
         ConversationTurnStreamDto payload,
         Map<String, Object> reply,
         String code,
-        String message
+        String message,
+        Map<String, Object> details
 ) {
     public static ChatWebSocketEnvelopeDto reply(String id, Map<String, Object> reply) {
-        return new ChatWebSocketEnvelopeDto(id, "reply", null, null, null, reply, null, null);
+        return new ChatWebSocketEnvelopeDto(id, "reply", null, null, null, reply, null, null, null);
     }
 
     public static ChatWebSocketEnvelopeDto message(String topicId, ConversationTurnStreamDto payload, String offset) {
-        return new ChatWebSocketEnvelopeDto(null, "message", topicId, offset, payload, null, null, null);
+        return new ChatWebSocketEnvelopeDto(null, "message", topicId, offset, payload, null, null, null, null);
     }
 
     public static ChatWebSocketEnvelopeDto error(String id, String code, String message) {
-        return new ChatWebSocketEnvelopeDto(id, "error", null, null, null, null, code, message);
+        return new ChatWebSocketEnvelopeDto(id, "error", null, null, null, null, code, message, null);
     }
 
     public static ChatWebSocketEnvelopeDto recoverRequired(String topicId, long afterSeq, long actualSeq) {
+        return recoverRequired(topicId, afterSeq, actualSeq, Map.of(
+                "reason", "UNKNOWN",
+                "topicId", topicId,
+                "recoveryAfterSeq", afterSeq,
+                "actualSeq", actualSeq
+        ));
+    }
+
+    public static ChatWebSocketEnvelopeDto recoverRequired(String topicId, long afterSeq, long actualSeq,
+                                                           Map<String, Object> details) {
         return new ChatWebSocketEnvelopeDto(null, "error", topicId, String.valueOf(actualSeq), null, null,
-                "RECOVER_REQUIRED", "实时事件需要恢复，请使用 Event Resume 从 afterSeq=" + afterSeq + " 补齐");
+                "RECOVER_REQUIRED", "实时事件需要恢复，请使用 Event Resume 从 afterSeq=" + afterSeq + " 补齐",
+                details);
     }
 }

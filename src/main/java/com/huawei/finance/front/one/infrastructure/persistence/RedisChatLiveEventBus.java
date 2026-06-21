@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.infrastructure.persistence;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
+import com.huawei.finance.front.one.application.integration.identity.ApplicationInstanceIdProvider;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
 import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyBuilder;
@@ -40,15 +41,18 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
     private final FinanceExRedisKeyBuilder redisKeys;
+    private final ApplicationInstanceIdProvider instanceIdProvider;
     private final RedisMessageListenerContainer listenerContainer;
     private final Map<String, TopicSink> topicSinks = new ConcurrentHashMap<>();
 
     public RedisChatLiveEventBus(StringRedisTemplate redis, ObjectMapper objectMapper,
                                  RedisConnectionFactory connectionFactory,
-                                 FinanceExRedisKeyBuilder redisKeys) {
+                                 FinanceExRedisKeyBuilder redisKeys,
+                                 ApplicationInstanceIdProvider instanceIdProvider) {
         this.redis = redis;
         this.objectMapper = objectMapper;
         this.redisKeys = redisKeys;
+        this.instanceIdProvider = instanceIdProvider;
         this.listenerContainer = new RedisMessageListenerContainer();
         this.listenerContainer.setConnectionFactory(connectionFactory);
     }
@@ -87,7 +91,8 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
             return;
         }
         try {
-            redis.convertAndSend(channel(topicId), objectMapper.writeValueAsString(ChatLiveEventPayload.from(event)));
+            redis.convertAndSend(channel(topicId), objectMapper.writeValueAsString(
+                    ChatLiveEventPayload.from(event, instanceIdProvider.currentInstanceId())));
         } catch (RuntimeException | JsonProcessingException ex) {
             log.warn("Redis ChatLiveEventBus 发布失败，topicId={}, seq={}, reason={}",
                     topicId, event.sequence(), ex.getMessage());
@@ -119,7 +124,16 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
         }
         try {
             String body = new String(message.getBody(), StandardCharsets.UTF_8);
-            ChatEvent event = objectMapper.readValue(body, ChatLiveEventPayload.class).toEvent();
+            ChatLiveEventPayload payload = objectMapper.readValue(body, ChatLiveEventPayload.class);
+            if (isPublishedByCurrentInstance(payload)) {
+                log.debug("Redis ChatLiveEventBus 丢弃本实例回声，topicId={}, seq={}, instanceId={}",
+                        topicId, payload.sequence(), payload.publisherInstanceId());
+                if (terminal(payload.eventType())) {
+                    completeTopic(topicId, sink);
+                }
+                return;
+            }
+            ChatEvent event = payload.toEvent();
             Sinks.EmitResult nextResult = sink.sink().tryEmitNext(event);
             if (nextResult.isFailure()) {
                 log.warn("Redis ChatLiveEventBus 本机投递失败，topicId={}, seq={}, result={}",
@@ -133,12 +147,7 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
                         "redis live sink emit failed, seq=" + event.sequence() + ", result=" + nextResult));
             }
             if (terminal(event)) {
-                Sinks.EmitResult completeResult = sink.sink().tryEmitComplete();
-                if (completeResult.isFailure()) {
-                    log.warn("Redis ChatLiveEventBus 本机结束 topic 失败，topicId={}, result={}", topicId, completeResult);
-                }
-                unregisterTopic(topicId, sink);
-                topicSinks.remove(topicId, sink);
+                completeTopic(topicId, sink);
             }
         } catch (RuntimeException | JsonProcessingException ex) {
             log.warn("Redis ChatLiveEventBus 消息解析失败，topicId={}, reason={}", topicId, ex.getMessage());
@@ -179,12 +188,36 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     }
 
     private boolean terminal(ChatEvent event) {
-        return "run.completed".equals(event.type()) || "run.failed".equals(event.type()) || "run.cancelled".equals(event.type());
+        return event != null && terminal(event.type());
+    }
+
+    private boolean terminal(String eventType) {
+        return "run.completed".equals(eventType) || "run.failed".equals(eventType) || "run.cancelled".equals(eventType);
+    }
+
+    private void completeTopic(String topicId, TopicSink sink) {
+        Sinks.EmitResult completeResult = sink.sink().tryEmitComplete();
+        if (completeResult.isFailure()) {
+            log.warn("Redis ChatLiveEventBus 本机结束 topic 失败，topicId={}, result={}", topicId, completeResult);
+        }
+        unregisterTopic(topicId, sink);
+        topicSinks.remove(topicId, sink);
+    }
+
+    private boolean isPublishedByCurrentInstance(ChatLiveEventPayload payload) {
+        /*
+         * 滚动发布期间旧版本 payload 可能没有 publisherInstanceId。缺失时按远端事件处理，
+         * 避免升级过程丢跨实例实时消息；新版本同实例 self-echo 则必须丢弃，防止 local sink
+         * 与 Redis Pub/Sub 合并后重复/迟到触发 RECOVER_REQUIRED。
+         */
+        return payload.publisherInstanceId() != null
+                && payload.publisherInstanceId().equals(instanceIdProvider.currentInstanceId());
     }
 
     /**
      * Redis Pub/Sub 中传输的最小事件快照。
      *
+     * @param publisherInstanceId 发布该事件的应用实例 ID；旧版本可能为空。
      * @param runId 本轮执行追踪标识。
      * @param sessionId 前端聊天会话标识。
      * @param sequence 持久化事件序号。
@@ -193,6 +226,7 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
      * @param payload 事件载荷。
      */
     private record ChatLiveEventPayload(
+            String publisherInstanceId,
             String runId,
             String sessionId,
             long sequence,
@@ -200,8 +234,9 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
             Instant createdAt,
             Map<String, Object> payload
     ) {
-        private static ChatLiveEventPayload from(ChatEvent event) {
-            return new ChatLiveEventPayload(event.runId(), event.sessionId(), event.sequence(), event.type(),
+        private static ChatLiveEventPayload from(ChatEvent event, String publisherInstanceId) {
+            return new ChatLiveEventPayload(publisherInstanceId, event.runId(), event.sessionId(),
+                    event.sequence(), event.type(),
                     event.createdAt(), event.payload());
         }
 

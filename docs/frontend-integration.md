@@ -57,6 +57,10 @@ query、候选意图、最高置信结果、最终路由是否采纳和调用耗
 | 流状态 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/stream-status` | 查询最新 `seq`、active run 和是否可取消 |
 | 停止回答 | `POST` | `/api/v1/ex/chat/runs/{runId}/stop` | 幂等停止当前 run |
 | 消息反馈 | `POST` / `DELETE` | `/api/v1/ex/chat/messages/{messageId}/feedback` | 对 assistant 消息点赞、点踩、切换或取消 |
+| 创建分享 | `POST` | `/api/v1/ex/chat/messages/{messageId}/share` | 对单条 assistant 消息创建固定问答快照分享 |
+| 分享详情 | `GET` | `/api/v1/ex/chat/shares/{shareId}` | 登录后查看分享快照 |
+| 撤销分享 | `DELETE` | `/api/v1/ex/chat/shares/{shareId}` | 创建者撤销分享 |
+| 我的分享 | `GET` | `/api/v1/ex/chat/shares?curPage=1&pageSize=20` | 分页管理当前用户创建的分享 |
 | 上传文档 | `POST` | `/api/v1/ex/documents` | multipart 上传本地文件 |
 | 文档列表 | `GET` | `/api/v1/ex/documents?sessionId=...&limit=20&cursor=...` | 当前用户文档库；`sessionId` 可选，用于筛选会话关联文档 |
 | 文档详情 | `GET` | `/api/v1/ex/documents/{documentId}` | 查询单个文档 |
@@ -95,6 +99,8 @@ HTTP 接口的错误响应结构稳定，前端可以统一解析 `code` 和 `me
 | 401 | `AUTH_CONTEXT_MISSING` | 后端入口没有解析到企业身份上下文 | 跳转登录或提示重新认证 |
 | 403 | `ACCESS_DENIED` | 当前用户访问了不属于自己的 session/run/document/message | 清理本地缓存并重新加载会话列表 |
 | 409 | `ACTIVE_RUN_EXISTS` | 同一 session 已有运行中 run | 保持“生成中/停止”状态，先 stop 或等待终态 |
+| 409 | `SHARE_REVOKED` | 分享已被创建者或会话删除动作撤销 | 展示分享已撤销，不再重试 |
+| 409 | `SHARE_EXPIRED` | 分享已超过 `expiresAt` | 展示分享已过期 |
 | 409 | `CONFLICT` | 会话关闭、文档不可下载、快照消息不可编辑等状态冲突 | 按业务状态禁用相关操作 |
 
 WebSocket 错误不使用 HTTP body，而是 envelope：
@@ -190,6 +196,10 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `GET /chat/sessions/{sessionId}/stream-status` | Path：`sessionId` | `ChatStreamStatusDto` | 判断 active run、stop 按钮、恢复起点 |
 | `POST /chat/messages/{messageId}/feedback` | Path：`messageId`；Body：`runId`、`rating`、`reasonCode`、`commentText`、`metadata` | `MessageFeedbackDto(status=ACTIVE)` | 更新历史消息按钮高亮 |
 | `DELETE /chat/messages/{messageId}/feedback` | Path：`messageId`；Query：`runId` 可选 | `MessageFeedbackDto(status=CANCELLED)` | 取消按钮高亮 |
+| `POST /chat/messages/{messageId}/share` | Path：assistant `messageId`；Body：`title`、`expiresAt` 可选 | `ChatShareDto(status=ACTIVE)` | 用 `shareId` 拼接分享页路由 |
+| `GET /chat/shares/{shareId}` | Path：`shareId` | `ChatShareDetailDto`：`share`、`question`、`answer`、`parts` | 登录后访问；过期/撤销返回稳定错误码 |
+| `DELETE /chat/shares/{shareId}` | Path：`shareId` | `ChatShareDto(status=REVOKED)` | 默认仅创建者可撤销 |
+| `GET /chat/shares` | Query：`curPage`、`pageSize` | `ChatSharePageDto` | 分享管理页使用 |
 | `POST /documents` | multipart：`file`；`sessionId` 可选 | `UploadedDocumentDto` | 用返回 `id` 作为 `attachments[].documentId` |
 | `GET /documents` | Query：`sessionId` 可选，`limit`，`cursor` | `DocumentLibraryPageDto.items[]`、`nextCursor` | 文档选择器和最近文档列表 |
 | `GET /documents/{documentId}` | Path：`documentId` | `UploadedDocumentDto` | 详情弹窗 |
@@ -984,6 +994,168 @@ curl -X DELETE "http://localhost:8080/api/v1/ex/chat/messages/msg_002/feedback?r
 ```
 
 历史消息接口会在 `ChatMessageDto.feedback` 返回当前用户的有效反馈状态。`feedback=null` 表示该消息没有当前反馈，或者反馈已取消。
+
+## 单轮问答分享
+
+分享用于把某一轮问答固定成可访问快照。前端选择一条完整 `assistant` 消息，调用创建接口：
+
+```bash
+curl -X POST http://localhost:8080/api/v1/ex/chat/messages/msg_assistant_001/share \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "title": "报销流程答复",
+    "expiresAt": "2026-06-30T10:00:00Z"
+  }'
+```
+
+请求字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `messageId` | 是 | Path 参数，必须是当前用户可访问的 `assistant` 消息。 |
+| `title` | 否 | 分享标题；为空时服务端使用父 user 问题生成。 |
+| `expiresAt` | 否 | 分享过期时间；为空表示不过期，传入时必须晚于当前时间。 |
+
+创建响应：
+
+```json
+{
+  "shareId": "share_xxx",
+  "title": "报销流程答复",
+  "scope": "SINGLE_TURN",
+  "visibility": "INTERNAL",
+  "status": "ACTIVE",
+  "expiresAt": "2026-06-30T10:00:00Z",
+  "sourceSessionId": "session_xxx",
+  "sourceUserMessageId": "msg_user_001",
+  "sourceAssistantMessageId": "msg_assistant_001",
+  "sourceRunId": "run_xxx",
+  "createdAt": "2026-06-21T05:30:00Z",
+  "updatedAt": "2026-06-21T05:30:00Z"
+}
+```
+
+查看分享：
+
+```bash
+curl http://localhost:8080/api/v1/ex/chat/shares/share_xxx
+```
+
+详情响应：
+
+```json
+{
+  "share": {
+    "shareId": "share_xxx",
+    "title": "报销流程答复",
+    "scope": "SINGLE_TURN",
+    "visibility": "INTERNAL",
+    "status": "ACTIVE",
+    "expiresAt": "2026-06-30T10:00:00Z",
+    "sourceSessionId": "session_xxx",
+    "sourceUserMessageId": "msg_user_001",
+    "sourceAssistantMessageId": "msg_assistant_001",
+    "sourceRunId": "run_xxx",
+    "createdAt": "2026-06-21T05:30:00Z",
+    "updatedAt": "2026-06-21T05:30:00Z"
+  },
+  "question": {
+    "messageId": "msg_user_001",
+    "sessionId": "session_xxx",
+    "role": "user",
+    "content": "报销流程是什么？",
+    "runId": "run_xxx",
+    "metadataJson": null,
+    "attachments": [
+      {
+        "documentId": "doc_xxx",
+        "name": "invoice.pdf",
+        "contentType": "application/pdf",
+        "sizeBytes": 1024
+      }
+    ],
+    "createdAt": "2026-06-21T05:29:50Z"
+  },
+  "answer": {
+    "messageId": "msg_assistant_001",
+    "sessionId": "session_xxx",
+    "role": "assistant",
+    "content": "请先提交发票和审批单。",
+    "runId": "run_xxx",
+    "metadataJson": null,
+    "attachments": [],
+    "createdAt": "2026-06-21T05:30:10Z"
+  },
+  "parts": [
+    {
+      "partId": "part_xxx",
+      "messageId": "msg_assistant_001",
+      "runId": "run_xxx",
+      "partType": "REFERENCE",
+      "sourceType": "sourcesDocuments",
+      "contentText": "引用文档",
+      "title": "引用来源",
+      "status": "INFO",
+      "channel": "reference",
+      "displayHint": "collapsible",
+      "visible": true,
+      "payload": {
+        "referenceType": "sourcesDocuments"
+      },
+      "partOrder": 1,
+      "createdAt": "2026-06-21T05:30:10Z"
+    }
+  ]
+}
+```
+
+分享规则：
+
+- 分享必须登录后访问；默认实现允许同租户登录用户查看，后续企业权限由后端 `ChatShareAccessPolicy` 替换。
+- 分享是固定快照；原会话后续编辑、重新生成、切换版本、反馈变化不会改变分享内容。
+- 快照只包含父 user 问题、assistant 正文、问题附件展示快照和 `visible=true` 的 parts。
+- 快照不包含 feedback、raw log、隐藏/debug parts、Cookie、Authorization 或企业鉴权信息。
+- 附件只用于展示名称、类型、大小和 `documentId`，不授予下载权限。
+- 会话软删除时，当前用户创建的该会话 ACTIVE 分享会被同步撤销。
+
+撤销分享：
+
+```bash
+curl -X DELETE http://localhost:8080/api/v1/ex/chat/shares/share_xxx
+```
+
+管理当前用户创建的分享：
+
+```bash
+curl "http://localhost:8080/api/v1/ex/chat/shares?curPage=1&pageSize=20"
+```
+
+分页响应：
+
+```json
+{
+  "items": [
+    {
+      "shareId": "share_xxx",
+      "title": "报销流程答复",
+      "scope": "SINGLE_TURN",
+      "visibility": "INTERNAL",
+      "status": "ACTIVE",
+      "expiresAt": null,
+      "sourceSessionId": "session_xxx",
+      "sourceUserMessageId": "msg_user_001",
+      "sourceAssistantMessageId": "msg_assistant_001",
+      "sourceRunId": "run_xxx",
+      "createdAt": "2026-06-21T05:30:00Z",
+      "updatedAt": "2026-06-21T05:30:00Z"
+    }
+  ],
+  "curPage": 1,
+  "pageSize": 20,
+  "totalRows": 1,
+  "totalPages": 1
+}
+```
 
 ## WebSocket 协议
 

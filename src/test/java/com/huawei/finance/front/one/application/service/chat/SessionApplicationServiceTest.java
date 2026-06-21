@@ -8,6 +8,7 @@ import com.huawei.finance.front.one.application.integration.id.IdGenerateContext
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.integration.memory.ChatMessagePageQuery;
 import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
+import com.huawei.finance.front.one.application.integration.share.ChatShareRepository;
 import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
@@ -23,6 +24,8 @@ import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
+import com.huawei.finance.front.one.domain.chat.ChatShare;
+import com.huawei.finance.front.one.domain.chat.ChatSharePage;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -137,12 +140,14 @@ class SessionApplicationServiceTest {
         ChatSession session = sessions.save(new ChatSession("session1", "tenant1", "user1", "title", "ACTIVE", "web",
                 Instant.now(), Instant.now()));
         CountingRuntimeBindingService bindings = new CountingRuntimeBindingService();
-        SessionApplicationService service = service(sessions, messages, new GuardChatRunService(false), bindings);
+        RecordingShareRepository shares = new RecordingShareRepository();
+        SessionApplicationService service = service(sessions, messages, new GuardChatRunService(false), bindings, shares);
 
         ChatSession deleted = service.deleteSession(user(), session.id());
 
         assertThat(deleted.status()).isEqualTo("DELETED");
         assertThat(bindings.cancellations).isEqualTo(1);
+        assertThat(shares.revokedSessions).containsExactly("session1");
         assertThat(service.listSessions(user(), null, 20).items()).isEmpty();
         assertThatThrownBy(() -> service.getSession(user(), session.id()))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -342,13 +347,21 @@ class SessionApplicationServiceTest {
     private SessionApplicationService service(InMemorySessionRepository sessions, InMemoryMessageRepository messages,
                                               ChatRunApplicationService chatRunService,
                                               RuntimeBindingApplicationService bindingService) {
+        return service(sessions, messages, chatRunService, bindingService, null);
+    }
+
+    private SessionApplicationService service(InMemorySessionRepository sessions, InMemoryMessageRepository messages,
+                                              ChatRunApplicationService chatRunService,
+                                              RuntimeBindingApplicationService bindingService,
+                                              ChatShareRepository shareRepository) {
         return new SessionApplicationService(
                 sessions,
                 messages,
                 new IncrementingIdGenerator(),
                 new PermissionChecker(),
                 chatRunService,
-                bindingService
+                bindingService,
+                shareRepository
         );
     }
 
@@ -444,6 +457,30 @@ class SessionApplicationServiceTest {
         @Override
         public void cancelActive(String tenantId, String userId, String sessionId) {
             cancellations++;
+        }
+    }
+
+    private static class RecordingShareRepository implements ChatShareRepository {
+        private final List<String> revokedSessions = new ArrayList<>();
+
+        @Override
+        public ChatShare save(ChatShare share) {
+            return share;
+        }
+
+        @Override
+        public Optional<ChatShare> findById(String shareId) {
+            return Optional.empty();
+        }
+
+        @Override
+        public ChatSharePage pageByOwner(String tenantId, String ownerUserId, int curPage, int pageSize) {
+            return new ChatSharePage(List.of(), 1, 20, 0, 0);
+        }
+
+        @Override
+        public void revokeActiveBySession(String tenantId, String ownerUserId, String sessionId, Instant revokedAt) {
+            revokedSessions.add(sessionId);
         }
     }
 

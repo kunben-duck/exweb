@@ -6,6 +6,7 @@ import com.huawei.finance.front.one.application.integration.id.IdGenerateContext
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.finance.front.one.application.integration.memory.ChatMessagePageQuery;
+import com.huawei.finance.front.one.application.integration.share.ChatShareRepository;
 import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
@@ -50,20 +51,23 @@ public class SessionApplicationService implements ChatSessionFacade {
     private final PermissionChecker permissionChecker;
     private final ChatRunApplicationService chatRunService;
     private final RuntimeBindingApplicationService runtimeBindingService;
+    private final ChatShareRepository shareRepository;
 
     @Autowired
     public SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
                                      PermissionChecker permissionChecker, ChatRunApplicationService chatRunService,
-                                     RuntimeBindingApplicationService runtimeBindingService) {
+                                     RuntimeBindingApplicationService runtimeBindingService,
+                                     ChatShareRepository shareRepository) {
         this.sessionRepository = sessionRepository; this.messageRepository = messageRepository; this.idGenerator = idGenerator;
         this.permissionChecker = permissionChecker;
         this.chatRunService = chatRunService;
         this.runtimeBindingService = runtimeBindingService;
+        this.shareRepository = shareRepository;
     }
 
     SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
                               PermissionChecker permissionChecker) {
-        this(sessionRepository, messageRepository, idGenerator, permissionChecker, null, null);
+        this(sessionRepository, messageRepository, idGenerator, permissionChecker, null, null, null);
     }
 
     public ChatSession loadOrCreate(ChatCommand command) {
@@ -192,6 +196,9 @@ public class SessionApplicationService implements ChatSessionFacade {
             ChatSession deletedSession = saveWith(session, session.title(), STATUS_DELETED);
             if (runtimeBindingService != null) {
                 runtimeBindingService.cancelActive(user.tenantId(), user.userId(), session.id());
+            }
+            if (shareRepository != null) {
+                shareRepository.revokeActiveBySession(user.tenantId(), user.userId(), session.id(), Instant.now());
             }
             deleted.add(deletedSession);
         }

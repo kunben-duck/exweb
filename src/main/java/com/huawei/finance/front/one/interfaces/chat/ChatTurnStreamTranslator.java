@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
  * ChatService 标准事件到前端 turn stream 传输结构的翻译器。
  *
  * <p>领域层和事件事实源仍只理解 {@code ChatEventDto}；该翻译器只存在于接口层，用于把对前端的
- * WebSocket/Event Resume 响应包装成 GPT-like 的 conversation turn stream。这样后续可以扩展
+ * WebSocket/Event Resume 响应包装成统一 conversation turn stream。这样后续可以扩展
  * heartbeat、done 或 turn 级状态，而不污染 {@code fin_ex_chat_event_t.event_type}。</p>
  */
 @Component

@@ -52,6 +52,10 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `POST /api/v1/ex/chat/runs/{runId}/stop`：按 runId 停止当前回答，幂等返回 run 状态。
 - `POST /api/v1/ex/chat/messages/{messageId}/feedback`：提交或切换 assistant 消息点赞/点踩。
 - `DELETE /api/v1/ex/chat/messages/{messageId}/feedback`：取消当前用户对 assistant 消息的点赞或点踩。
+- `POST /api/v1/ex/chat/messages/{messageId}/share`：为某条 assistant 消息创建单轮问答固定快照分享。
+- `GET /api/v1/ex/chat/shares/{shareId}`：登录后查看分享详情；默认策略允许同租户用户查看。
+- `DELETE /api/v1/ex/chat/shares/{shareId}`：撤销当前用户创建的分享。
+- `GET /api/v1/ex/chat/shares?curPage=1&pageSize=20`：分页查询当前用户创建的分享，便于管理和撤销。
 
 前端流式模式：
 
@@ -151,6 +155,22 @@ Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPubli
 
 从某条消息新建分支时，服务端会复制 root 到该消息的可见路径到新 session，并将复制出的历史消息标记为 `origin_type=BRANCH_SNAPSHOT`、`locked=true`。这些快照消息只能展示和继续向后提问，不能编辑、删除或重新生成；分支后续新增消息仍为 `NORMAL`，可以参与消息树版本管理。
 
+## 单轮问答分享
+
+分享能力面向“把某一轮问答发给同租户登录用户查看”的场景。前端对某条完整 `assistant`
+消息调用 `POST /api/v1/ex/chat/messages/{messageId}/share`，服务端会固定保存该 assistant
+消息的直接父 `user` 问题、assistant 正文、附件展示快照，以及 `visible=true` 的 parts。分享内容是
+创建时快照，原会话后续编辑、重新生成、反馈变化、路径切换或消息树分支都不会改变已经生成的分享。
+
+分享访问仍要求登录，但权限判断不写死在 Controller 或业务编排里，而是通过
+`ChatShareAccessPolicy` 防腐层完成。默认策略是：创建者必须拥有来源 assistant 消息；同租户登录用户
+可查看；只有创建者可撤销。后续接企业 ACL、部门权限或外部授权服务时，只需要提供新的
+`ChatShareAccessPolicy` bean 覆盖默认实现。
+
+分享支持 `expiresAt` 过期和创建者撤销。会话软删除时，当前用户创建的该会话 `ACTIVE` 分享会被同步撤销。
+分享快照只用于展示，不保存 feedback、raw stream log、隐藏/debug parts、Cookie 或鉴权信息；附件只保存
+名称、类型、大小和 `documentId` 展示字段，不授予文件下载权限。
+
 ## 存储命名
 
 所有数据库表统一使用 `fin_ex_*_t`：
@@ -165,6 +185,7 @@ Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPubli
 - `fin_ex_runtime_raw_stream_log_t`：保存 Relay normalizer 之前的原始流响应片段，由 raw log MQ 消费端异步写入，仅用于排障。
 - `fin_ex_uploaded_document_t`
 - `fin_ex_message_feedback_t`：保存当前用户对 assistant 消息的点赞/点踩状态；`status=CANCELLED` 表示已取消当前反馈。
+- `fin_ex_chat_share_t`：保存单轮问答分享固定快照；访问权限由 `ChatShareAccessPolicy` 防腐层判断。
 - `fin_ex_runtime_binding_t`
 
 所有 Redis key 统一以 `fin_ex:{env}` 开头。`{env}` 由 `spring.profiles.active` 的第一个 profile

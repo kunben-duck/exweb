@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * GPT-like 消息树响应 DTO。
+ * ChatService 消息树响应 DTO。
  *
  * <p>普通聊天页仍可使用 active path 的 {@code /messages}；该 DTO 用于复杂前端、
  * 调试台或版本树视图读取完整可见消息树。</p>

@@ -46,7 +46,7 @@ import reactor.core.scheduler.Schedulers;
 /**
  * 聊天 HTTP 接口。
  *
- * <p>正式版采用 ChatGPT-like 单一对话流协议：{@code POST /runs} 只创建后台 run 并返回
+ * <p>正式版采用单一对话流协议：{@code POST /runs} 只创建后台 run 并返回
  * 订阅信息；本页新建 run 的实时输出由 WebSocket subscribe 承载；恢复已经存在的 active run
  * 时使用 run 级事件恢复先补发历史事件，再接续 live 事件直到 run 终态。</p>
  */

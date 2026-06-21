@@ -283,6 +283,10 @@ sequenceDiagram
 POST /api/v1/ex/chat/runs
 POST /api/v1/ex/chat/messages/{messageId}/feedback
 DELETE /api/v1/ex/chat/messages/{messageId}/feedback
+POST /api/v1/ex/chat/messages/{messageId}/share
+GET  /api/v1/ex/chat/shares/{shareId}
+DELETE /api/v1/ex/chat/shares/{shareId}
+GET  /api/v1/ex/chat/shares?curPage=1&pageSize=20
 POST /api/v1/ex/chat/sessions
 GET  /api/v1/ex/chat/sessions?limit=20&cursor=...
 GET  /api/v1/ex/chat/sessions/{sessionId}/state?messageLimit=50
@@ -325,6 +329,43 @@ flowchart TD
 ```
 
 从某条消息新建会话分支时，服务端使用只读物化快照方案：沿 `parent_message_id` 回溯 root，复制该路径到新 session，复制出的消息写入 `source_session_id/source_message_id`，并设置 `origin_type=BRANCH_SNAPSHOT`、`locked=true`。快照消息不能编辑、删除或重新生成；分支后续新增的 `NORMAL` 消息可以继续参与消息树版本管理。分支不继承源会话 RuntimeBinding，避免把源会话 Runtime session 错接到新分支。
+
+## 单轮问答分享
+
+分享功能不复用实时 event，也不在访问时回源读取原始会话路径，而是在创建时生成固定展示快照：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Frontend as "Frontend"
+    participant ShareAPI as "ChatShareController"
+    participant ShareApp as "ChatShareApplicationService"
+    participant Policy as "ChatShareAccessPolicy"
+    participant Msg as "ChatMessageRepository"
+    participant ShareRepo as "ChatShareRepository"
+    participant DB as "数据库"
+
+    Frontend->>ShareAPI: "POST /chat/messages/{assistantMessageId}/share"
+    ShareAPI->>ShareApp: "create(UserContext, command)"
+    ShareApp->>Msg: "加载 assistant 与父 user 消息、附件、visible parts"
+    ShareApp->>Policy: "canCreate(user, assistant)"
+    Policy-->>ShareApp: "允许或拒绝"
+    ShareApp->>ShareRepo: "保存 ChatShare snapshot"
+    ShareRepo->>DB: "写 fin_ex_chat_share_t"
+    ShareApp-->>Frontend: "ChatShareDto"
+
+    Frontend->>ShareAPI: "GET /chat/shares/{shareId}"
+    ShareAPI->>ShareApp: "get(UserContext, shareId)"
+    ShareApp->>ShareRepo: "读取分享快照"
+    ShareApp->>Policy: "canView(user, share)"
+    ShareApp-->>Frontend: "ChatShareDetailDto"
+```
+
+`ChatShareAccessPolicy` 是分享鉴权防腐层，默认规则为同租户可查看、仅创建者可撤销。后续如果企业权限框架需要按组织、部门、用户白名单或外部 ACL 判断分享访问，只替换该 port 的 Spring bean，不修改 Controller、分享表或快照构造逻辑。
+
+`snapshot_json` 只保存父 user 问题、assistant 回答、问题附件展示快照和 `visible=true` 的 parts；不保存 feedback、raw log、隐藏/debug parts、Cookie、Authorization 或企业鉴权信息。附件快照只用于展示，不授予下载/预览权限。原会话后续编辑、重新生成、切换 path 或反馈变化都不会影响已经创建的分享。
+
+删除会话时，`SessionApplicationService` 会同步撤销当前用户创建的该会话 `ACTIVE` 分享，避免用户删除会话后外部仍访问其快照。
 
 ```mermaid
 sequenceDiagram
@@ -691,6 +732,7 @@ AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 
 - `fin_ex_runtime_raw_stream_log_t`
 - `fin_ex_uploaded_document_t`
 - `fin_ex_message_feedback_t`：当前用户对 assistant 消息的点赞/点踩状态，支持 ACTIVE/CANCELLED。
+- `fin_ex_chat_share_t`：单轮问答分享固定快照，支持 ACTIVE/REVOKED、过期和创建者撤销。
 - `fin_ex_runtime_binding_t`
 
 Redis key 必须以 `fin_ex:{env}` 开头。`{env}` 从 `spring.profiles.active` 第一个 profile 自动注入，

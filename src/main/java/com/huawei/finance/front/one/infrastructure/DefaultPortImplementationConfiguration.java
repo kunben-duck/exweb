@@ -2,8 +2,10 @@ package com.huawei.finance.front.one.infrastructure;
 
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRecoveryPort;
 import com.huawei.finance.front.one.application.integration.identity.ApplicationInstanceIdProvider;
+import com.huawei.finance.front.one.application.integration.share.ChatShareAccessPolicy;
 import com.huawei.finance.front.one.infrastructure.id.GeneratedApplicationInstanceIdProvider;
 import com.huawei.finance.front.one.infrastructure.runtime.UnsupportedAgentRuntimeRecoveryPort;
+import com.huawei.finance.front.one.infrastructure.share.DefaultChatShareAccessPolicy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
@@ -44,5 +46,17 @@ public class DefaultPortImplementationConfiguration {
     @ConditionalOnMissingBean(AgentRuntimeRecoveryPort.class)
     public AgentRuntimeRecoveryPort unsupportedAgentRuntimeRecoveryPort() {
         return new UnsupportedAgentRuntimeRecoveryPort();
+    }
+
+    /**
+     * 默认分享访问策略。
+     *
+     * <p>企业框架如需按组织、部门、用户白名单或外部 ACL 控制分享访问，提供新的
+     * {@link ChatShareAccessPolicy} bean 即可覆盖。</p>
+     */
+    @Bean
+    @ConditionalOnMissingBean(ChatShareAccessPolicy.class)
+    public ChatShareAccessPolicy chatShareAccessPolicy() {
+        return new DefaultChatShareAccessPolicy();
     }
 }

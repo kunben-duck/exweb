@@ -115,6 +115,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_fin_ex_message_feedback_owner_message
 CREATE INDEX IF NOT EXISTS idx_fin_ex_message_feedback_owner_session_status
     ON fin_ex_message_feedback_t(tenant_id, user_id, session_id, status, message_id);
 
+CREATE TABLE IF NOT EXISTS fin_ex_chat_share_t (
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL,
+    owner_user_id VARCHAR(64) NOT NULL,
+    source_session_id VARCHAR(64) NOT NULL,
+    source_user_message_id VARCHAR(64) NOT NULL,
+    source_assistant_message_id VARCHAR(64) NOT NULL,
+    source_run_id VARCHAR(64),
+    title VARCHAR(256),
+    scope VARCHAR(32) NOT NULL DEFAULT 'SINGLE_TURN',
+    visibility VARCHAR(32) NOT NULL DEFAULT 'INTERNAL',
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    expires_at TIMESTAMPTZ,
+    revoked_at TIMESTAMPTZ,
+    snapshot_json TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_share_tenant_status_expires_at
+    ON fin_ex_chat_share_t(tenant_id, status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_share_owner_created_at
+    ON fin_ex_chat_share_t(tenant_id, owner_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_share_source_assistant
+    ON fin_ex_chat_share_t(tenant_id, source_assistant_message_id);
+
 CREATE TABLE IF NOT EXISTS fin_ex_chat_run_t (
     id VARCHAR(64) PRIMARY KEY,
     tenant_id VARCHAR(64) NOT NULL,
@@ -390,6 +416,24 @@ COMMENT ON COLUMN fin_ex_message_feedback_t.comment_text IS '用户补充的反�
 COMMENT ON COLUMN fin_ex_message_feedback_t.metadata_json IS '反馈扩展元数据 JSON，保存前端或诊断信息。';
 COMMENT ON COLUMN fin_ex_message_feedback_t.created_at IS '反馈创建时间。';
 COMMENT ON COLUMN fin_ex_message_feedback_t.updated_at IS '反馈最后更新时间。';
+
+COMMENT ON TABLE fin_ex_chat_share_t IS '单轮问答分享表，保存父 user 问题、assistant 回答和可见 parts 的固定展示快照。';
+COMMENT ON COLUMN fin_ex_chat_share_t.id IS '分享主键，业务生成的 shareId。';
+COMMENT ON COLUMN fin_ex_chat_share_t.tenant_id IS '租户标识，用于分享查看时的默认租户级隔离。';
+COMMENT ON COLUMN fin_ex_chat_share_t.owner_user_id IS '创建分享的用户标识。';
+COMMENT ON COLUMN fin_ex_chat_share_t.source_session_id IS '来源聊天会话 ID。';
+COMMENT ON COLUMN fin_ex_chat_share_t.source_user_message_id IS '来源 user 问题消息 ID。';
+COMMENT ON COLUMN fin_ex_chat_share_t.source_assistant_message_id IS '来源 assistant 回答消息 ID。';
+COMMENT ON COLUMN fin_ex_chat_share_t.source_run_id IS '来源 runId，用于排障和分享来源追踪。';
+COMMENT ON COLUMN fin_ex_chat_share_t.title IS '分享标题；为空时由应用层使用父 user 问题生成。';
+COMMENT ON COLUMN fin_ex_chat_share_t.scope IS '分享范围，首版固定 SINGLE_TURN。';
+COMMENT ON COLUMN fin_ex_chat_share_t.visibility IS '访问模型，首版固定 INTERNAL，具体权限由 ChatShareAccessPolicy 判断。';
+COMMENT ON COLUMN fin_ex_chat_share_t.status IS '分享状态，ACTIVE 表示可访问，REVOKED 表示创建者或删除会话后撤销。';
+COMMENT ON COLUMN fin_ex_chat_share_t.expires_at IS '分享过期时间；为空表示不过期。';
+COMMENT ON COLUMN fin_ex_chat_share_t.revoked_at IS '分享撤销时间；未撤销为空。';
+COMMENT ON COLUMN fin_ex_chat_share_t.snapshot_json IS '固定展示快照 JSON，只保存 question、answer、visible=true 的 parts 和附件展示信息；不保存反馈、raw log、Cookie 或鉴权信息。';
+COMMENT ON COLUMN fin_ex_chat_share_t.created_at IS '分享创建时间。';
+COMMENT ON COLUMN fin_ex_chat_share_t.updated_at IS '分享最后更新时间。';
 
 COMMENT ON TABLE fin_ex_chat_run_t IS '单轮聊天运行表，保存一次用户提问对应的后台 run 生命周期事实。';
 COMMENT ON COLUMN fin_ex_chat_run_t.id IS 'run 主键，业务生成的 runId，用于 stop、retry、事件关联和排障。';

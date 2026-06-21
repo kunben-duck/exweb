@@ -7,7 +7,7 @@ import org.springframework.stereotype.Component;
 /**
  * 领域事件到前端事件 DTO 的翻译器。
  *
- * <p>对外隐藏领域事件实现类，只暴露 GPT-like 流式协议稳定需要的 runId、sessionId、
+ * <p>对外隐藏领域事件实现类，只暴露 ChatService 流式协议稳定需要的 runId、sessionId、
  * seq、type 和 payload。</p>
  */
 @Component

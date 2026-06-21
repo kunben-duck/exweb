@@ -207,7 +207,7 @@ public class ChatSessionController {
     /**
      * 查询当前会话完整可见消息树。
      *
-     * <p>该接口借鉴 GPT 的 mapping/current leaf 结构，但只返回 user/assistant 业务可见消息；
+     * <p>该接口返回 mapping/current leaf 结构，但只返回 user/assistant 业务可见消息；
      * hidden system、raw log 和下游工具原始节点不会暴露给前端。</p>
      *
      * @param sessionId 会话标识；服务端会校验会话归属且排除已删除会话。

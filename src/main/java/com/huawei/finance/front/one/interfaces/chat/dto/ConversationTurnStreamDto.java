@@ -1,7 +1,7 @@
 package com.huawei.finance.front.one.interfaces.chat.dto;
 
 /**
- * GPT-like conversation turn stream 传输层 DTO。
+ * Conversation turn stream 传输层 DTO。
  *
  * <p>该 DTO 是 WebSocket message 与 Event Resume SSE 的统一 data 结构。它把传输层
  * {@code stream-item/heartbeat/done} 与内部稳定的 {@link ChatEventDto} 解耦，便于未来扩展

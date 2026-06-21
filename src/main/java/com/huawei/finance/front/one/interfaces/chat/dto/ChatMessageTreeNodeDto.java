@@ -3,7 +3,7 @@ package com.huawei.finance.front.one.interfaces.chat.dto;
 import java.util.List;
 
 /**
- * GPT-like 消息树节点 DTO。
+ * ChatService 消息树节点 DTO。
  *
  * <p>该 DTO 只表达当前用户可见的 user/assistant 消息树关系，不承载隐藏 system、
  * raw log 或内部工具原始节点。</p>

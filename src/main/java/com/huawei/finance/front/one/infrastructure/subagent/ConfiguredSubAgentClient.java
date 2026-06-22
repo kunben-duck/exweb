@@ -1,6 +1,8 @@
 package com.huawei.finance.front.one.infrastructure.subagent;
 
+import com.huawei.finance.front.one.application.integration.auth.AuthHeaderRequest;
 import com.huawei.finance.front.one.application.integration.agent.SubAgentClient;
+import com.huawei.finance.front.one.application.service.auth.AuthHeaderProviderRegistry;
 import com.huawei.finance.front.one.domain.agent.AgentQueryRequest;
 import com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
@@ -10,6 +12,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
@@ -28,10 +31,13 @@ public class ConfiguredSubAgentClient implements SubAgentClient {
 
     private final WebClient.Builder webClientBuilder;
     private final SubAgentProperties properties;
+    private final AuthHeaderProviderRegistry authHeaders;
 
-    public ConfiguredSubAgentClient(WebClient.Builder webClientBuilder, SubAgentProperties properties) {
+    public ConfiguredSubAgentClient(WebClient.Builder webClientBuilder, SubAgentProperties properties,
+                                    AuthHeaderProviderRegistry authHeaders) {
         this.webClientBuilder = webClientBuilder;
         this.properties = properties;
+        this.authHeaders = authHeaders;
     }
 
     @Override
@@ -45,6 +51,7 @@ public class ConfiguredSubAgentClient implements SubAgentClient {
         Flux<String> deltas = webClientBuilder.build()
                 .post()
                 .uri(endpoint.getEndpoint())
+                .headers(headers -> applyAuthHeaders(headers, request, endpoint, "query"))
                 .bodyValue(request)
                 .retrieve()
                 .bodyToFlux(String.class)
@@ -68,6 +75,7 @@ public class ConfiguredSubAgentClient implements SubAgentClient {
         return webClientBuilder.build()
                 .post()
                 .uri(endpoint.getStopEndpoint())
+                .headers(headers -> applyAuthHeaders(headers, request, endpoint, "cancel"))
                 .bodyValue(request)
                 .retrieve()
                 .bodyToMono(Void.class)
@@ -96,6 +104,32 @@ public class ConfiguredSubAgentClient implements SubAgentClient {
             return direct;
         }
         return properties.getAgents().get(agentCode.replace("_", "-"));
+    }
+
+    private void applyAuthHeaders(HttpHeaders headers, AgentQueryRequest request,
+                                  SubAgentProperties.AgentEndpoint endpoint, String operationCode) {
+        authHeaders.headers(new AuthHeaderRequest(
+                request.tenantId(),
+                request.userId(),
+                "sub-agent",
+                operationCode,
+                endpoint.getEndpoint(),
+                null,
+                request.agentCode()
+        )).forEach(headers::set);
+    }
+
+    private void applyAuthHeaders(HttpHeaders headers, SubAgentCancelRequest request,
+                                  SubAgentProperties.AgentEndpoint endpoint, String operationCode) {
+        authHeaders.headers(new AuthHeaderRequest(
+                request.tenantId(),
+                request.userId(),
+                "sub-agent",
+                operationCode,
+                endpoint.getStopEndpoint(),
+                null,
+                request.agentCode()
+        )).forEach(headers::set);
     }
 
     private Map<String, Object> completionPayload(AgentQueryRequest request, String subAgentStatus, String errorMessage) {

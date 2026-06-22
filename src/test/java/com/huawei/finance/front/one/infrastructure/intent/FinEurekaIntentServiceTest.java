@@ -3,11 +3,15 @@ package com.huawei.finance.front.one.infrastructure.intent;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.finance.front.one.application.config.IntegrationAuthProperties;
+import com.huawei.finance.front.one.application.service.auth.AuthHeaderProviderRegistry;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.intent.TaskComplexity;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
+import com.huawei.finance.front.one.infrastructure.auth.NoopAuthHeaderProvider;
+import com.huawei.finance.front.one.infrastructure.auth.SgovAuthHeaderProvider;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -15,7 +19,10 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
 import org.springframework.web.reactive.function.client.WebClient;
 
 class FinEurekaIntentServiceTest {
@@ -114,9 +121,29 @@ class FinEurekaIntentServiceTest {
         assertThat(decision.raw()).containsEntry("reason", "intent response code is not 200");
     }
 
+    @Test
+    void appliesConfiguredOutboundAuthorizationHeader() throws Exception {
+        AtomicReference<String> capturedAuthorization = new AtomicReference<>();
+        IntentDecision decision = withServer("""
+                {"code":500,"data":{"status":"failed","message":"down"}}
+                """, capturedAuthorization, authHeaders(Optional.of("Bearer intent-token")))
+                .recognize(command(), MemoryContext.empty(), user());
+
+        assertThat(capturedAuthorization.get()).isEqualTo("Bearer intent-token");
+        assertThat(decision.complexity()).isEqualTo(TaskComplexity.COMPLEX);
+    }
+
     private FinEurekaIntentService withServer(String response) throws IOException {
+        AuthHeaderProviderRegistry authHeaders = new AuthHeaderProviderRegistry(
+                new IntegrationAuthProperties(), List.of(new NoopAuthHeaderProvider()));
+        return withServer(response, new AtomicReference<>(), authHeaders);
+    }
+
+    private FinEurekaIntentService withServer(String response, AtomicReference<String> capturedAuthorization,
+                                              AuthHeaderProviderRegistry authHeaders) throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
         server.createContext("/recognize", exchange -> {
+            capturedAuthorization.set(exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION));
             byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, bytes.length);
@@ -132,7 +159,16 @@ class FinEurekaIntentServiceTest {
         properties.setBaseUrl(baseUrl);
         properties.setRecognizePath("/recognize");
         return new FinEurekaIntentService(WebClient.builder(), properties, new IntentServiceRequestMapper(),
-                new IntentServiceResponseMapper(objectMapper));
+                new IntentServiceResponseMapper(objectMapper), authHeaders);
+    }
+
+    private AuthHeaderProviderRegistry authHeaders(Optional<String> token) {
+        IntegrationAuthProperties properties = new IntegrationAuthProperties();
+        properties.setEnabled(true);
+        return new AuthHeaderProviderRegistry(properties, List.of(
+                new NoopAuthHeaderProvider(),
+                new SgovAuthHeaderProvider(properties, (request, appId, secret) -> token)
+        ));
     }
 
     private ChatCommand command() {

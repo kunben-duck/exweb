@@ -4,10 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRecoveryPort;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRecoveryRequest;
+import com.huawei.finance.front.one.application.integration.auth.AuthHeaderRequest;
+import com.huawei.finance.front.one.application.integration.auth.SgovTokenResolver;
 import com.huawei.finance.front.one.application.integration.identity.ApplicationInstanceIdProvider;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.infrastructure.id.GeneratedApplicationInstanceIdProvider;
+import com.huawei.finance.front.one.infrastructure.auth.UnsupportedSgovTokenResolver;
 import com.huawei.finance.front.one.infrastructure.runtime.UnsupportedAgentRuntimeRecoveryPort;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import reactor.core.publisher.Flux;
@@ -25,6 +29,9 @@ class DefaultPortImplementationConfigurationTest {
             assertThat(context).hasSingleBean(AgentRuntimeRecoveryPort.class);
             assertThat(context.getBean(AgentRuntimeRecoveryPort.class))
                     .isInstanceOf(UnsupportedAgentRuntimeRecoveryPort.class);
+            assertThat(context).hasSingleBean(SgovTokenResolver.class);
+            assertThat(context.getBean(SgovTokenResolver.class))
+                    .isInstanceOf(UnsupportedSgovTokenResolver.class);
         });
     }
 
@@ -67,6 +74,23 @@ class DefaultPortImplementationConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasSingleBean(AgentRuntimeRecoveryPort.class);
                     assertThat(context.getBean(AgentRuntimeRecoveryPort.class)).isSameAs(custom);
+                });
+    }
+
+    @Test
+    void customSgovTokenResolverOverridesDefaultPortImplementation() {
+        SgovTokenResolver custom = new SgovTokenResolver() {
+            @Override
+            public Optional<String> resolve(AuthHeaderRequest request, String appId, String secret) {
+                return Optional.of("custom-token");
+            }
+        };
+
+        contextRunner
+                .withBean(SgovTokenResolver.class, () -> custom)
+                .run(context -> {
+                    assertThat(context).hasSingleBean(SgovTokenResolver.class);
+                    assertThat(context.getBean(SgovTokenResolver.class)).isSameAs(custom);
                 });
     }
 }

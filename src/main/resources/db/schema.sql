@@ -141,6 +141,34 @@ CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_share_owner_created_at
 CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_share_source_assistant
     ON fin_ex_chat_share_t(tenant_id, source_assistant_message_id);
 
+CREATE TABLE IF NOT EXISTS fin_ex_chat_share_delivery_t (
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL,
+    owner_user_id VARCHAR(64) NOT NULL,
+    share_id VARCHAR(64) NOT NULL,
+    provider VARCHAR(64) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    target_accounts_json TEXT NOT NULL,
+    group_ids_json TEXT NOT NULL,
+    title VARCHAR(256),
+    content VARCHAR(1024),
+    language VARCHAR(64),
+    link_url VARCHAR(1024) NOT NULL,
+    provider_response_json TEXT,
+    error_code VARCHAR(128),
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    sent_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_share_delivery_owner_created_at
+    ON fin_ex_chat_share_delivery_t(tenant_id, owner_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_share_delivery_share_created_at
+    ON fin_ex_chat_share_delivery_t(tenant_id, share_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_share_delivery_provider_status
+    ON fin_ex_chat_share_delivery_t(tenant_id, provider, status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS fin_ex_chat_run_t (
     id VARCHAR(64) PRIMARY KEY,
     tenant_id VARCHAR(64) NOT NULL,
@@ -434,6 +462,26 @@ COMMENT ON COLUMN fin_ex_chat_share_t.revoked_at IS '分享撤销时间；未撤
 COMMENT ON COLUMN fin_ex_chat_share_t.snapshot_json IS '固定展示快照 JSON，只保存 question、answer、visible=true 的 parts 和附件展示信息；不保存反馈、raw log、Cookie 或鉴权信息。';
 COMMENT ON COLUMN fin_ex_chat_share_t.created_at IS '分享创建时间。';
 COMMENT ON COLUMN fin_ex_chat_share_t.updated_at IS '分享最后更新时间。';
+
+COMMENT ON TABLE fin_ex_chat_share_delivery_t IS '单轮问答分享发送记录表，保存分享链接发送到 WeLink 等 provider 的请求摘要和发送结果。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.id IS '发送记录主键，业务生成的 deliveryId。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.tenant_id IS '租户标识，用于发送记录归属隔离。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.owner_user_id IS '分享创建者用户标识，首版默认只有创建者可发送。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.share_id IS '被发送的分享 ID，对应 fin_ex_chat_share_t.id。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.provider IS '发送 provider 编码，例如 welink。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.status IS '发送状态，SUCCESS 表示 provider 确认成功，FAILED 表示发送失败。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.target_accounts_json IS '目标用户账号 JSON 数组，来自前端入参去空去重后的结果。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.group_ids_json IS '目标群组 ID JSON 数组，来自前端入参去空去重后的结果。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.title IS '发送卡片标题，优先使用请求覆盖值，否则使用分享标题。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.content IS '发送卡片正文摘要，按配置长度截断后保存。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.language IS '前端透传语言标识。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.link_url IS '发送给 provider 的分享页完整 URL。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.provider_response_json IS 'provider 安全响应摘要 JSON，不保存 Cookie、Authorization 或企业鉴权头。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.error_code IS '发送失败错误码；成功时为空。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.error_message IS '发送失败错误信息；成功时为空。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.created_at IS '发送记录创建时间。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.sent_at IS 'provider 调用完成时间。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.updated_at IS '发送记录最后更新时间。';
 
 COMMENT ON TABLE fin_ex_chat_run_t IS '单轮聊天运行表，保存一次用户提问对应的后台 run 生命周期事实。';
 COMMENT ON COLUMN fin_ex_chat_run_t.id IS 'run 主键，业务生成的 runId，用于 stop、retry、事件关联和排障。';

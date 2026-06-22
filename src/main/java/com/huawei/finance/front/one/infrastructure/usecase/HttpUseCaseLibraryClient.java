@@ -1,10 +1,13 @@
 package com.huawei.finance.front.one.infrastructure.usecase;
 
+import com.huawei.finance.front.one.application.integration.auth.AuthHeaderRequest;
 import com.huawei.finance.front.one.application.integration.usecase.UseCaseLibraryClient;
 import com.huawei.finance.front.one.application.integration.usecase.UseCaseMatchRequest;
+import com.huawei.finance.front.one.application.service.auth.AuthHeaderProviderRegistry;
 import com.huawei.finance.front.one.domain.usecase.UseCaseMatchResult;
 import java.time.Duration;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -18,27 +21,45 @@ import org.springframework.web.reactive.function.client.WebClient;
 @Component
 public class HttpUseCaseLibraryClient implements UseCaseLibraryClient {
     private final WebClient webClient;
+    private final String baseUrl;
     private final String matchPath;
     private final Duration timeout;
+    private final AuthHeaderProviderRegistry authHeaders;
 
     public HttpUseCaseLibraryClient(WebClient.Builder webClientBuilder,
                                     @Value("${financeex.use-case-library.base-url:http://localhost:9100}") String baseUrl,
                                     @Value("${financeex.use-case-library.match-path:/v1/use-cases/match}") String matchPath,
-                                    @Value("${financeex.use-case-library.timeout:5s}") Duration timeout) {
+                                    @Value("${financeex.use-case-library.timeout:5s}") Duration timeout,
+                                    AuthHeaderProviderRegistry authHeaders) {
         this.webClient = webClientBuilder.baseUrl(baseUrl).build();
+        this.baseUrl = baseUrl;
         this.matchPath = matchPath;
         this.timeout = timeout;
+        this.authHeaders = authHeaders;
     }
 
     @Override
     public UseCaseMatchResult match(UseCaseMatchRequest request) {
         return webClient.post()
                 .uri(matchPath)
+                .headers(headers -> applyAuthHeaders(headers, request))
                 .bodyValue(request)
                 .retrieve()
                 .bodyToMono(UseCaseMatchResult.class)
                 .timeout(timeout)
                 .blockOptional()
                 .orElseGet(() -> UseCaseMatchResult.notMatched("empty use case response"));
+    }
+
+    private void applyAuthHeaders(HttpHeaders headers, UseCaseMatchRequest request) {
+        authHeaders.headers(new AuthHeaderRequest(
+                request == null ? null : request.tenantId(),
+                request == null ? null : request.userId(),
+                "use-case-library",
+                "match",
+                baseUrl,
+                matchPath,
+                null
+        )).forEach(headers::set);
     }
 }

@@ -16,4 +16,18 @@ public interface ChatShareAccessPolicy {
     boolean canView(UserContext user, ChatShare share);
 
     boolean canRevoke(UserContext user, ChatShare share);
+
+    /**
+     * 判断当前用户是否可以把分享发送给第三方 provider。
+     *
+     * <p>默认复用撤销权限，保持首版“仅创建者可发送”的行为；企业框架可覆盖该方法接入
+     * 部门、群组或外部 ACL。</p>
+     *
+     * @param user 当前登录用户。
+     * @param share 待发送分享。
+     * @return 是否允许发送。
+     */
+    default boolean canDeliver(UserContext user, ChatShare share) {
+        return canRevoke(user, share);
+    }
 }

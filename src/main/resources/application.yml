@@ -73,6 +73,22 @@ financeex:
       tenant-id: ${FINANCEEX_DEV_TENANT_ID:}
       user-id: ${FINANCEEX_DEV_USER_ID:}
       username: ${FINANCEEX_DEV_USERNAME:}
+  integration-auth:
+    # 集成服务鉴权请求头统一防腐层；默认关闭，不影响现有外部服务调用。
+    enabled: ${FINANCEEX_INTEGRATION_AUTH_ENABLED:false}
+    default-provider: ${FINANCEEX_INTEGRATION_AUTH_DEFAULT_PROVIDER:none}
+    sgov:
+      app-id: ${FINANCEEX_SGOV_APP_ID:}
+      secret: ${FINANCEEX_SGOV_SECRET:}
+    services:
+      welink-share:
+        provider: ${FINANCEEX_WELINK_SHARE_AUTH_PROVIDER:sgov}
+      intent-service:
+        provider: ${FINANCEEX_INTENT_SERVICE_AUTH_PROVIDER:sgov}
+      use-case-library:
+        provider: ${FINANCEEX_USE_CASE_LIBRARY_AUTH_PROVIDER:sgov}
+      sub-agent:
+        provider: ${FINANCEEX_SUB_AGENT_AUTH_PROVIDER:sgov}
   # 可选覆盖当前进程运行实例 ID；为空时由 GeneratedApplicationInstanceIdProvider 生成。
   # 后续如需从注册中心获取实例 ID，直接提供新的 ApplicationInstanceIdProvider bean。
   instance-id: ${FINANCEEX_INSTANCE_ID:}
@@ -239,6 +255,22 @@ financeex:
     max-upload-size-bytes: ${FINANCEEX_DOCUMENT_MAX_UPLOAD_SIZE_BYTES:52428800}
     # 文档上传入口 Cookie 最大长度；只供配置 forward-cookie=true 的 HTTP provider upload 使用。
     forward-cookie-max-length: ${FINANCEEX_DOCUMENT_FORWARD_COOKIE_MAX_LENGTH:8192}
+  share:
+    # 前端分享页地址前缀，发送 provider 会直接拼接 shareId，例如 https://finex.example.com/share/ + share_xxx。
+    share-url-prefix: ${FINANCEEX_SHARE_URL_PREFIX:}
+    delivery:
+      content-max-length: ${FINANCEEX_SHARE_DELIVERY_CONTENT_MAX_LENGTH:200}
+      max-targets: ${FINANCEEX_SHARE_DELIVERY_MAX_TARGETS:100}
+      # 当前 JVM 内分享发送 provider 调用并发上限，避免外部系统抖动时占满异步工作线程。
+      max-concurrency: ${FINANCEEX_SHARE_DELIVERY_MAX_CONCURRENCY:20}
+      providers:
+        welink:
+          enabled: ${FINANCEEX_SHARE_WELINK_ENABLED:false}
+          base-url: ${FINANCEEX_SHARE_WELINK_BASE_URL:}
+          send-path: ${FINANCEEX_SHARE_WELINK_SEND_PATH:}
+          timeout: ${FINANCEEX_SHARE_WELINK_TIMEOUT:5s}
+          success-status-field: ${FINANCEEX_SHARE_WELINK_SUCCESS_STATUS_FIELD:status}
+          success-status-value: ${FINANCEEX_SHARE_WELINK_SUCCESS_STATUS_VALUE:200}
   documents:
     providers:
       # 前端统一调用 /api/v1/ex/documents；不传 targetProvider 时使用 default-storage。

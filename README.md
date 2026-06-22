@@ -54,6 +54,8 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `POST /api/v1/ex/chat/messages/{messageId}/feedback`：提交或切换 assistant 消息点赞/点踩。
 - `DELETE /api/v1/ex/chat/messages/{messageId}/feedback`：取消当前用户对 assistant 消息的点赞或点踩。
 - `POST /api/v1/ex/chat/messages/{messageId}/share`：为某条 assistant 消息创建单轮问答固定快照分享。
+- `POST /api/v1/ex/chat/shares/{shareId}/deliveries`：把已有分享发送到指定 provider，首版内置 `welink`。
+- `POST /api/v1/ex/chat/messages/{messageId}/share/deliveries`：一键创建分享快照并发送到指定 provider。
 - `GET /api/v1/ex/chat/shares/{shareId}`：登录后查看分享详情；默认策略允许同租户用户查看。
 - `DELETE /api/v1/ex/chat/shares/{shareId}`：撤销当前用户创建的分享。
 - `GET /api/v1/ex/chat/shares?curPage=1&pageSize=20`：分页查询当前用户创建的分享，便于管理和撤销。
@@ -80,6 +82,12 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 
 当 `POST /api/v1/ex/chat/runs`、`POST /api/v1/ex/chat/runs/{runId}/stop` 或 `POST /api/v1/ex/documents`
 携带标准 `Cookie` 请求头时，ChatService 会在请求入口捕获一次，并只作为内存快照透传给可信下游 adapter：Relay streamable HTTP、显式技能 legacy Agent chat/cancel，以及显式配置 `forward-cookie=true` 的 legacy 文档 upload provider。Cookie 不会写入 `metadata_json`、消息、事件、日志、前端响应、multipart form 或下游请求体。普通 default-storage 对象存储上传不会透传 Cookie。
+
+外部 HTTP 服务调用还支持统一的集成服务鉴权请求头防腐层。`financeex.integration-auth.enabled=false`
+时不注入任何鉴权头；开启后，`AuthHeaderProviderRegistry` 会按 `serviceCode` 选择 provider。
+首版预置 `welink-share`、`intent-service`、`use-case-library`、`sub-agent` 可配置为 `sgov`，
+并由企业实现的 `SgovTokenResolver` 提供 `Authorization` 值。Relay Runtime、显式技能 legacy Agent
+和 legacy 文档 provider 默认不接入该鉴权头，仍保持现有 Cookie/普通调用行为。
 
 租户和用户身份不从前端 Header/Query/Body 透传，统一由请求入口通过 `AuthContextProvider` 从服务端身份上下文解析一次，并以不可变 `UserContext` 传入应用层。应用层、后台 run 和 `boundedElastic` 阻塞线程不会再次读取请求 ThreadLocal。本地开发态必须显式配置：
 
@@ -175,6 +183,15 @@ Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPubli
 分享快照只用于展示，不保存 feedback、raw stream log、隐藏/debug parts、Cookie 或鉴权信息；附件只保存
 名称、类型、大小和 `documentId` 展示字段，不授予文件下载权限。
 
+分享发送通过 `ChatShareDeliveryProvider` 防腐层完成。前端可先调用
+`POST /api/v1/ex/chat/messages/{messageId}/share` 创建快照，再调用
+`POST /api/v1/ex/chat/shares/{shareId}/deliveries` 发送；也可以用
+`POST /api/v1/ex/chat/messages/{messageId}/share/deliveries` 一键创建并发送。首版 `welink`
+provider 会把分享链接转换为 WeLink 卡片请求，`linkUrl` 由 `financeex.share.share-url-prefix + shareId`
+生成，`targetAccounts[]/groupIds[]` 会去空去重后以英文逗号拼接。发送失败只写
+`fin_ex_chat_share_delivery_t.status=FAILED`，不会删除或撤销分享快照，前端可以重试。分享发送还有
+`financeex.share.delivery.max-concurrency` 本机并发保护，避免外部发送 provider 抖动时占满异步工作线程。
+
 ## 存储命名
 
 所有数据库表统一使用 `fin_ex_*_t`：
@@ -190,6 +207,7 @@ Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPubli
 - `fin_ex_uploaded_document_t`
 - `fin_ex_message_feedback_t`：保存当前用户对 assistant 消息的点赞/点踩状态；`status=CANCELLED` 表示已取消当前反馈。
 - `fin_ex_chat_share_t`：保存单轮问答分享固定快照；访问权限由 `ChatShareAccessPolicy` 防腐层判断。
+- `fin_ex_chat_share_delivery_t`：保存分享发送到 WeLink 等 provider 的请求摘要和发送结果。
 - `fin_ex_runtime_binding_t`
 
 所有 Redis key 统一以 `fin_ex:{env}` 开头。`{env}` 由 `spring.profiles.active` 的第一个 profile

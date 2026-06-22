@@ -3,19 +3,27 @@ package com.huawei.finance.front.one.interfaces.chat;
 import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.application.service.share.ChatShareApplicationService;
+import com.huawei.finance.front.one.application.service.share.ChatShareDeliveryApplicationService;
+import com.huawei.finance.front.one.application.service.share.CreateChatShareAndDeliveryCommand;
 import com.huawei.finance.front.one.application.service.share.CreateChatShareCommand;
+import com.huawei.finance.front.one.application.service.share.CreateChatShareDeliveryCommand;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatShare;
 import com.huawei.finance.front.one.domain.chat.ChatShareAttachmentSnapshot;
+import com.huawei.finance.front.one.domain.chat.ChatShareDelivery;
 import com.huawei.finance.front.one.domain.chat.ChatShareMessageSnapshot;
 import com.huawei.finance.front.one.domain.chat.ChatSharePage;
 import com.huawei.finance.front.one.domain.chat.ChatShareSnapshotPart;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessagePartDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.ChatShareAndDeliveryDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatShareAttachmentSnapshotDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatShareDetailDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.ChatShareDeliveryDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatShareDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatSharePageDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatShareSnapshotMessageDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatShareAndDeliveryRequest;
+import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatShareDeliveryRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatShareRequest;
 import java.util.List;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -39,12 +47,16 @@ import reactor.core.scheduler.Schedulers;
 @RequestMapping("/api/v1/ex/chat")
 public class ChatShareController {
     private final ChatShareApplicationService shareService;
+    private final ChatShareDeliveryApplicationService deliveryService;
     private final AuthContextProvider auth;
     private final PermissionChecker permissionChecker;
 
-    public ChatShareController(ChatShareApplicationService shareService, AuthContextProvider auth,
+    public ChatShareController(ChatShareApplicationService shareService,
+                               ChatShareDeliveryApplicationService deliveryService,
+                               AuthContextProvider auth,
                                PermissionChecker permissionChecker) {
         this.shareService = shareService;
+        this.deliveryService = deliveryService;
         this.auth = auth;
         this.permissionChecker = permissionChecker;
     }
@@ -72,6 +84,36 @@ public class ChatShareController {
     }
 
     /**
+     * 创建分享快照并立即发送到指定 provider。
+     *
+     * @param messageId 被分享的 assistant 消息 ID。
+     * @param request 分享创建与发送请求。
+     * @return 分享快照元数据和发送结果。
+     */
+    @PostMapping("/messages/{messageId}/share/deliveries")
+    public Mono<ChatShareAndDeliveryDto> createAndDeliver(
+            @PathVariable("messageId") String messageId,
+            @RequestBody(required = false) CreateChatShareAndDeliveryRequest request) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> {
+                    CreateChatShareAndDeliveryCommand command = toCreateAndDeliveryCommand(messageId, request);
+                    ChatShare share = shareService.create(user,
+                            new CreateChatShareCommand(command.messageId(), command.title(), command.expiresAt()));
+                    ChatShareDelivery delivery = deliveryService.deliver(user, new CreateChatShareDeliveryCommand(
+                            share.id(),
+                            command.provider(),
+                            command.targetAccounts(),
+                            command.groupIds(),
+                            command.title(),
+                            command.content(),
+                            command.language()
+                    ));
+                    return new ChatShareAndDeliveryDto(toDto(share), toDeliveryDto(delivery));
+                })
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
      * 登录后查看分享详情。
      *
      * @param shareId 分享 ID。
@@ -81,6 +123,21 @@ public class ChatShareController {
     public Mono<ChatShareDetailDto> get(@PathVariable("shareId") String shareId) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> toDetailDto(shareService.get(user, shareId)))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * 把已有分享发送到指定 provider。
+     *
+     * @param shareId 分享 ID。
+     * @param request 发送请求。
+     * @return 分享发送结果。
+     */
+    @PostMapping("/shares/{shareId}/deliveries")
+    public Mono<ChatShareDeliveryDto> deliver(@PathVariable("shareId") String shareId,
+                                              @RequestBody(required = false) CreateChatShareDeliveryRequest request) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> toDeliveryDto(deliveryService.deliver(user, toDeliveryCommand(shareId, request))))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -118,6 +175,32 @@ public class ChatShareController {
         return user;
     }
 
+    private CreateChatShareAndDeliveryCommand toCreateAndDeliveryCommand(
+            String messageId, CreateChatShareAndDeliveryRequest request) {
+        return new CreateChatShareAndDeliveryCommand(
+                messageId,
+                request == null ? null : request.title(),
+                request == null ? null : request.expiresAt(),
+                request == null ? null : request.provider(),
+                request == null ? null : request.targetAccounts(),
+                request == null ? null : request.groupIds(),
+                request == null ? null : request.content(),
+                request == null ? null : request.language()
+        );
+    }
+
+    private CreateChatShareDeliveryCommand toDeliveryCommand(String shareId, CreateChatShareDeliveryRequest request) {
+        return new CreateChatShareDeliveryCommand(
+                shareId,
+                request == null ? null : request.provider(),
+                request == null ? null : request.targetAccounts(),
+                request == null ? null : request.groupIds(),
+                request == null ? null : request.title(),
+                request == null ? null : request.content(),
+                request == null ? null : request.language()
+        );
+    }
+
     private ChatSharePageDto toPageDto(ChatSharePage page) {
         return new ChatSharePageDto(
                 page.items().stream().map(this::toDto).toList(),
@@ -151,6 +234,21 @@ public class ChatShareController {
                 share.sourceRunId(),
                 share.createdAt(),
                 share.updatedAt()
+        );
+    }
+
+    private ChatShareDeliveryDto toDeliveryDto(ChatShareDelivery delivery) {
+        return new ChatShareDeliveryDto(
+                delivery.id(),
+                delivery.shareId(),
+                delivery.provider(),
+                delivery.status(),
+                delivery.linkUrl(),
+                delivery.errorCode(),
+                delivery.errorMessage(),
+                delivery.sentAt(),
+                delivery.createdAt(),
+                delivery.updatedAt()
         );
     }
 

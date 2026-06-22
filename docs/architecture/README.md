@@ -343,6 +343,7 @@ sequenceDiagram
     participant Policy as "ChatShareAccessPolicy"
     participant Msg as "ChatMessageRepository"
     participant ShareRepo as "ChatShareRepository"
+    participant Delivery as "ChatShareDeliveryProvider"
     participant DB as "数据库"
 
     Frontend->>ShareAPI: "POST /chat/messages/{assistantMessageId}/share"
@@ -359,13 +360,32 @@ sequenceDiagram
     ShareApp->>ShareRepo: "读取分享快照"
     ShareApp->>Policy: "canView(user, share)"
     ShareApp-->>Frontend: "ChatShareDetailDto"
+
+    Frontend->>ShareAPI: "POST /chat/shares/{shareId}/deliveries"
+    ShareAPI->>ShareApp: "deliver(UserContext, deliveryCommand)"
+    ShareApp->>Policy: "canDeliver(user, share)"
+    ShareApp->>ShareRepo: "读取分享快照"
+    ShareApp->>Delivery: "deliver(providerRequest)"
+    Delivery-->>ShareApp: "SUCCESS / FAILED"
+    ShareApp->>DB: "写 fin_ex_chat_share_delivery_t"
+    ShareApp-->>Frontend: "ChatShareDeliveryDto"
 ```
 
-`ChatShareAccessPolicy` 是分享鉴权防腐层，默认规则为同租户可查看、仅创建者可撤销。后续如果企业权限框架需要按组织、部门、用户白名单或外部 ACL 判断分享访问，只替换该 port 的 Spring bean，不修改 Controller、分享表或快照构造逻辑。
+`ChatShareAccessPolicy` 是分享鉴权防腐层，默认规则为同租户可查看、仅创建者可撤销和发送。后续如果企业权限框架需要按组织、部门、用户白名单或外部 ACL 判断分享访问，只替换该 port 的 Spring bean，不修改 Controller、分享表或快照构造逻辑。
 
 `snapshot_json` 只保存父 user 问题、assistant 回答、问题附件展示快照和 `visible=true` 的 parts；不保存 feedback、raw log、隐藏/debug parts、Cookie、Authorization 或企业鉴权信息。附件快照只用于展示，不授予下载/预览权限。原会话后续编辑、重新生成、切换 path 或反馈变化都不会影响已经创建的分享。
 
+分享发送通过 `ChatShareDeliveryProvider` 防腐层完成，首版 provider 为 `welink`。应用层只生成稳定的发送请求：分享人、标题、分享 URL、摘要、目标用户和目标群组；WeLink wire 字段如 `targetAccount/groupID` 只存在于 provider 实现中。发送失败不会回滚分享快照，只在 `fin_ex_chat_share_delivery_t` 中记录 `FAILED`、错误码和 provider 安全响应摘要，前端可按同一个 `shareId` 重试。分享发送使用 `financeex.share.delivery.max-concurrency` 做当前 JVM 内并发隔离，防止外部 provider 抖动时占满异步工作线程。
+
 删除会话时，`SessionApplicationService` 会同步撤销当前用户创建的该会话 `ACTIVE` 分享，避免用户删除会话后外部仍访问其快照。
+
+## 集成服务鉴权
+
+外部 HTTP 调用统一通过 `AuthHeaderProviderRegistry` 获取服务对服务鉴权请求头。该能力是集成服务调用防腐层，不读取前端请求 ThreadLocal，也不要求前端传 token。默认 `financeex.integration-auth.enabled=false`，不会改变现有调用行为。
+
+首版内置 `none` 和 `sgov` 两种 provider。`sgov` 只向出站 HTTP 请求注入 `Authorization` header，具体凭据获取由企业实现的 `SgovTokenResolver` bean 负责。本服务不会把 Authorization、服务 ID 或密钥写入请求 body、数据库、事件、raw log、metadata 或前端响应。
+
+当前只预置以下 serviceCode：`welink-share`、`intent-service`、`use-case-library`、`sub-agent`。Relay Runtime、显式技能 legacy Agent 和 legacy 文档 provider 默认不走该鉴权层，仍保持现有 Cookie 透传或普通调用行为；后续如需启用，只新增 `financeex.integration-auth.services.<serviceCode>.provider=sgov` 配置。
 
 ```mermaid
 sequenceDiagram
@@ -733,6 +753,7 @@ AgentRuntime 防腐层仍然保留。应用层只依赖 `AgentRuntime` port 和 
 - `fin_ex_uploaded_document_t`
 - `fin_ex_message_feedback_t`：当前用户对 assistant 消息的点赞/点踩状态，支持 ACTIVE/CANCELLED。
 - `fin_ex_chat_share_t`：单轮问答分享固定快照，支持 ACTIVE/REVOKED、过期和创建者撤销。
+- `fin_ex_chat_share_delivery_t`：分享发送记录，保存发送 provider、目标、分享链接和 SUCCESS/FAILED 结果。
 - `fin_ex_runtime_binding_t`
 
 Redis key 必须以 `fin_ex:{env}` 开头。`{env}` 从 `spring.profiles.active` 第一个 profile 自动注入，

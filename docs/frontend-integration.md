@@ -58,6 +58,8 @@ query、候选意图、最高置信结果、最终路由是否采纳和调用耗
 | 停止回答 | `POST` | `/api/v1/ex/chat/runs/{runId}/stop` | 幂等停止当前 run |
 | 消息反馈 | `POST` / `DELETE` | `/api/v1/ex/chat/messages/{messageId}/feedback` | 对 assistant 消息点赞、点踩、切换或取消 |
 | 创建分享 | `POST` | `/api/v1/ex/chat/messages/{messageId}/share` | 对单条 assistant 消息创建固定问答快照分享 |
+| 发送分享 | `POST` | `/api/v1/ex/chat/shares/{shareId}/deliveries` | 把已有分享发送到 WeLink 等 provider |
+| 创建并发送分享 | `POST` | `/api/v1/ex/chat/messages/{messageId}/share/deliveries` | 一键创建分享快照并发送 |
 | 分享详情 | `GET` | `/api/v1/ex/chat/shares/{shareId}` | 登录后查看分享快照 |
 | 撤销分享 | `DELETE` | `/api/v1/ex/chat/shares/{shareId}` | 创建者撤销分享 |
 | 我的分享 | `GET` | `/api/v1/ex/chat/shares?curPage=1&pageSize=20` | 分页管理当前用户创建的分享 |
@@ -520,6 +522,8 @@ POST /api/v1/ex/chat/runs/{runId}/stop
 `streamTopicId` 是 ChatService 的 run 级订阅 topic，不是 RelayAgent 的会话 ID。当前后端内部的 `AgentRuntime.query` 通过 streamable HTTP 调用下游 Relay；这个内部实现不改变前端协议。
 
 如果 `POST /chat/runs`、`POST /chat/runs/{runId}/stop` 或 `POST /documents` 请求携带标准 `Cookie` 头，后端会在入口捕获一次，并只把它透传给可信下游 adapter：Relay streamable HTTP、显式技能 legacy Agent chat/cancel，以及配置了 `forward-cookie=true` 的 legacy 文档 upload provider。该 Cookie 不会出现在请求 body、multipart form、metadata、事件、历史消息、文档元数据或前端响应中。
+
+集成服务鉴权请求头由后端 `AuthHeaderProviderRegistry` 统一注入，前端不需要传 Sgov token，也不要在请求体中放服务鉴权信息。当前可配置接入的 serviceCode 包括 `welink-share`、`intent-service`、`use-case-library` 和 `sub-agent`；Relay Runtime、显式技能 legacy Agent 和 legacy 文档 provider 默认不走该集成服务鉴权层。
 
 ## 推荐前端流程
 
@@ -1117,6 +1121,109 @@ curl http://localhost:8080/api/v1/ex/chat/shares/share_xxx
 - 快照不包含 feedback、raw log、隐藏/debug parts、Cookie、Authorization 或企业鉴权信息。
 - 附件只用于展示名称、类型、大小和 `documentId`，不授予下载权限。
 - 会话软删除时，当前用户创建的该会话 ACTIVE 分享会被同步撤销。
+
+发送已有分享到 provider：
+
+```bash
+curl -X POST http://localhost:8080/api/v1/ex/chat/shares/share_xxx/deliveries \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "provider": "welink",
+    "targetAccounts": ["u001", "u002"],
+    "groupIds": ["g001"],
+    "title": "报销流程答复",
+    "content": "请查看这条问答分享",
+    "language": "zh_CN"
+  }'
+```
+
+发送请求字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `provider` | 是 | 发送 provider 编码，首版支持 `welink`；未知或未启用 provider 返回明确错误。 |
+| `targetAccounts` | 否 | 被分享人账号列表，服务端会去空、去重，并转为 WeLink `targetAccount="u001,u002"`。 |
+| `groupIds` | 否 | 被分享群组 ID 列表，服务端会去空、去重，并转为 WeLink `groupID="g001"`。 |
+| `title` | 否 | 分享卡片标题；为空时使用 `share.title`。 |
+| `content` | 否 | 分享卡片正文；为空时从分享回答正文生成摘要，默认最多 200 字符。 |
+| `language` | 否 | 前端透传给 provider。 |
+
+`targetAccounts` 和 `groupIds` 至少需要一个非空目标。WeLink 发送时，后端会用
+`financeex.share.share-url-prefix + shareId` 生成 `linkUrl`，并使用当前登录用户的 `userId`
+作为 `userAccount`。
+分享发送有本机并发保护，默认 `financeex.share.delivery.max-concurrency=20`；超过上限时会返回
+`delivery.status=FAILED` 和 `errorCode=SHARE_DELIVERY_BUSY`，分享快照仍保留，前端可稍后重试。
+
+发送响应：
+
+```json
+{
+  "deliveryId": "share_delivery_xxx",
+  "shareId": "share_xxx",
+  "provider": "welink",
+  "status": "SUCCESS",
+  "linkUrl": "https://finex.example.com/share/share_xxx",
+  "errorCode": null,
+  "errorMessage": null,
+  "sentAt": "2026-06-21T05:31:00Z",
+  "createdAt": "2026-06-21T05:31:00Z",
+  "updatedAt": "2026-06-21T05:31:00Z"
+}
+```
+
+发送失败时，响应仍返回发送记录，`status=FAILED`，并带 `errorCode/errorMessage`。已创建的分享快照不会被删除、撤销或回滚，前端可以再次调用发送接口重试。
+
+一键创建并发送：
+
+```bash
+curl -X POST http://localhost:8080/api/v1/ex/chat/messages/msg_assistant_001/share/deliveries \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "title": "报销流程答复",
+    "expiresAt": "2026-06-30T10:00:00Z",
+    "provider": "welink",
+    "targetAccounts": ["u001"],
+    "groupIds": [],
+    "content": "请查看这条问答分享",
+    "language": "zh_CN"
+  }'
+```
+
+便捷接口会先创建分享快照，再调用 provider 发送。即使 provider 发送失败，返回中也会包含已创建的 `share`
+和 `delivery.status=FAILED`，前端可跳转分享详情或展示重试入口。
+
+便捷接口响应：
+
+```json
+{
+  "share": {
+    "shareId": "share_xxx",
+    "title": "报销流程答复",
+    "scope": "SINGLE_TURN",
+    "visibility": "INTERNAL",
+    "status": "ACTIVE",
+    "expiresAt": "2026-06-30T10:00:00Z",
+    "sourceSessionId": "session_xxx",
+    "sourceUserMessageId": "msg_user_001",
+    "sourceAssistantMessageId": "msg_assistant_001",
+    "sourceRunId": "run_xxx",
+    "createdAt": "2026-06-21T05:30:00Z",
+    "updatedAt": "2026-06-21T05:30:00Z"
+  },
+  "delivery": {
+    "deliveryId": "share_delivery_xxx",
+    "shareId": "share_xxx",
+    "provider": "welink",
+    "status": "FAILED",
+    "linkUrl": "https://finex.example.com/share/share_xxx",
+    "errorCode": "WELINK_STATUS",
+    "errorMessage": "WeLink 返回状态不是成功值: 500",
+    "sentAt": "2026-06-21T05:31:00Z",
+    "createdAt": "2026-06-21T05:31:00Z",
+    "updatedAt": "2026-06-21T05:31:00Z"
+  }
+}
+```
 
 撤销分享：
 

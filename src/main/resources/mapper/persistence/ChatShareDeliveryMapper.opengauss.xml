@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huawei.finance.front.one.infrastructure.persistence.ChatShareDeliveryMapper">
+    <!--
+      插入分享发送记录，用于审计、排障和后续重试依据。
+      入参: ChatShareDeliveryRow，id 为发送记录主键，tenantId/ownerUserId/shareId 为分享归属，
+            provider/status/targetAccountsJson/groupIdsJson/title/content/language/linkUrl 表示发送请求，
+            providerResponseJson/errorCode/errorMessage/sentAt 表示 provider 发送结果，
+            createdAt/updatedAt 为审计时间。
+    -->
+    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatShareDeliveryRow">
+        INSERT INTO fin_ex_chat_share_delivery_t(
+            id, tenant_id, owner_user_id, share_id, provider, status,
+            target_accounts_json, group_ids_json, title, content, language, link_url,
+            provider_response_json, error_code, error_message, created_at, sent_at, updated_at
+        )
+        VALUES (
+            #{id}, #{tenantId}, #{ownerUserId}, #{shareId}, #{provider}, #{status},
+            #{targetAccountsJson}, #{groupIdsJson}, #{title}, #{content}, #{language}, #{linkUrl},
+            #{providerResponseJson}, #{errorCode}, #{errorMessage}, #{createdAt}, #{sentAt}, #{updatedAt}
+        )
+    </insert>
+</mapper>

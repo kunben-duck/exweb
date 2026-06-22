@@ -93,6 +93,34 @@ class ChatServletWebSocketAuthInterceptorTest {
         assertThat(connection.username()).isEqualTo("User One");
     }
 
+    @Test
+    void transportErrorReleasesConnectionRegistryImmediately() throws Exception {
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        Map<String, Object> attributes = new HashMap<>();
+        ChatWebSocketUserContextAttributes.put(attributes, user);
+        LocalWebSocketConnectionRegistry registry = new LocalWebSocketConnectionRegistry();
+        ChatWebSocketProtocolService protocolService = new ChatWebSocketProtocolService(
+                new PermissionChecker(),
+                null,
+                registry,
+                new ChatEventTranslator(),
+                new ChatTurnStreamTranslator(),
+                new ChatStreamProperties(),
+                new ObjectMapper()
+        );
+        ChatServletWebSocketHandler handler = new ChatServletWebSocketHandler(
+                protocolService,
+                new ObjectMapper(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
+        );
+        TestWebSocketSession session = new TestWebSocketSession("conn1", attributes);
+        handler.afterConnectionEstablished(session);
+
+        handler.handleTransportError(session, new IOException("broken socket"));
+
+        assertThat(registry.get("conn1")).isEmpty();
+    }
+
     private AuthContextProvider threadLocalAuthProvider() {
         return () -> {
             UserContext user = CURRENT_USER.get();

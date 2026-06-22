@@ -96,6 +96,10 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) {
         log.warn("Servlet WebSocket transport error, connectionId={}, reason={}", session.getId(), exception.getMessage());
+        ServletConnection connection = connections.remove(session.getId());
+        if (connection != null) {
+            protocolService.close(session.getId(), connection.user());
+        }
         closeSilently(session, CloseStatus.SERVER_ERROR);
     }
 

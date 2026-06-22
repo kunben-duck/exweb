@@ -1,8 +1,10 @@
 package com.huawei.finance.front.one.infrastructure;
 
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRecoveryPort;
+import com.huawei.finance.front.one.application.integration.auth.SgovTokenResolver;
 import com.huawei.finance.front.one.application.integration.identity.ApplicationInstanceIdProvider;
 import com.huawei.finance.front.one.application.integration.share.ChatShareAccessPolicy;
+import com.huawei.finance.front.one.infrastructure.auth.UnsupportedSgovTokenResolver;
 import com.huawei.finance.front.one.infrastructure.id.GeneratedApplicationInstanceIdProvider;
 import com.huawei.finance.front.one.infrastructure.runtime.UnsupportedAgentRuntimeRecoveryPort;
 import com.huawei.finance.front.one.infrastructure.share.DefaultChatShareAccessPolicy;
@@ -51,12 +53,24 @@ public class DefaultPortImplementationConfiguration {
     /**
      * 默认分享访问策略。
      *
-     * <p>企业框架如需按组织、部门、用户白名单或外部 ACL 控制分享访问，提供新的
+     * <p>企业框架如需按组织、部门、用户白名单或外部 ACL 控制分享创建、查看、撤销或发送，提供新的
      * {@link ChatShareAccessPolicy} bean 即可覆盖。</p>
      */
     @Bean
     @ConditionalOnMissingBean(ChatShareAccessPolicy.class)
     public ChatShareAccessPolicy chatShareAccessPolicy() {
         return new DefaultChatShareAccessPolicy();
+    }
+
+    /**
+     * 默认 Sgov token resolver。
+     *
+     * <p>本服务不内置企业鉴权 token 获取逻辑；企业框架接入时提供新的
+     * {@link SgovTokenResolver} bean 覆盖。</p>
+     */
+    @Bean
+    @ConditionalOnMissingBean(SgovTokenResolver.class)
+    public SgovTokenResolver sgovTokenResolver() {
+        return new UnsupportedSgovTokenResolver();
     }
 }

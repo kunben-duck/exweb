@@ -5,12 +5,13 @@ import com.huawei.finance.front.one.application.integration.auth.SgovTokenResolv
 import java.util.Optional;
 
 /**
- * 默认 Sgov token resolver。
+ * Sgov token resolver 的生产默认实现。
  *
- * <p>本服务不内置企业 token 获取逻辑；接入企业框架时提供新的 {@link SgovTokenResolver}
- * bean 覆盖即可。</p>
+ * <p>默认实现不内置企业 token 获取逻辑，只返回空结果；当集成鉴权启用且目标服务选择
+ * {@code sgov} provider 时，上层会据此返回明确的鉴权配置错误。企业接入时可提供新的
+ * {@link SgovTokenResolver} bean 覆盖该实现。</p>
  */
-public class UnsupportedSgovTokenResolver implements SgovTokenResolver {
+public class DefaultSgovTokenResolver implements SgovTokenResolver {
     @Override
     public Optional<String> resolve(AuthHeaderRequest request, String appId, String secret) {
         return Optional.empty();

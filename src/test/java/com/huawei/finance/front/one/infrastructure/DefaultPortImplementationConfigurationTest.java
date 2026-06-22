@@ -8,8 +8,8 @@ import com.huawei.finance.front.one.application.integration.auth.AuthHeaderReque
 import com.huawei.finance.front.one.application.integration.auth.SgovTokenResolver;
 import com.huawei.finance.front.one.application.integration.identity.ApplicationInstanceIdProvider;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
+import com.huawei.finance.front.one.infrastructure.auth.DefaultSgovTokenResolver;
 import com.huawei.finance.front.one.infrastructure.id.GeneratedApplicationInstanceIdProvider;
-import com.huawei.finance.front.one.infrastructure.auth.UnsupportedSgovTokenResolver;
 import com.huawei.finance.front.one.infrastructure.runtime.UnsupportedAgentRuntimeRecoveryPort;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -31,7 +31,7 @@ class DefaultPortImplementationConfigurationTest {
                     .isInstanceOf(UnsupportedAgentRuntimeRecoveryPort.class);
             assertThat(context).hasSingleBean(SgovTokenResolver.class);
             assertThat(context.getBean(SgovTokenResolver.class))
-                    .isInstanceOf(UnsupportedSgovTokenResolver.class);
+                    .isInstanceOf(DefaultSgovTokenResolver.class);
         });
     }
 

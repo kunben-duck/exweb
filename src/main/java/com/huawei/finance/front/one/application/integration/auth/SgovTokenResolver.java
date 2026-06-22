@@ -5,8 +5,8 @@ import java.util.Optional;
 /**
  * Sgov 鉴权 token 获取端口。
  *
- * <p>默认实现不提供 token；企业框架接入时提供新的 Spring bean 覆盖该端口即可。
- * 具体 token 协议、缓存和刷新策略不在本服务中展开。</p>
+ * <p>具体 token 协议、缓存和刷新策略由企业框架实现；本服务只依赖该端口获取
+ * 可用于出站 HTTP 请求的 Authorization header 值。</p>
  */
 public interface SgovTokenResolver {
     /**

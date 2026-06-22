@@ -4,7 +4,7 @@ import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRe
 import com.huawei.finance.front.one.application.integration.auth.SgovTokenResolver;
 import com.huawei.finance.front.one.application.integration.identity.ApplicationInstanceIdProvider;
 import com.huawei.finance.front.one.application.integration.share.ChatShareAccessPolicy;
-import com.huawei.finance.front.one.infrastructure.auth.UnsupportedSgovTokenResolver;
+import com.huawei.finance.front.one.infrastructure.auth.DefaultSgovTokenResolver;
 import com.huawei.finance.front.one.infrastructure.id.GeneratedApplicationInstanceIdProvider;
 import com.huawei.finance.front.one.infrastructure.runtime.UnsupportedAgentRuntimeRecoveryPort;
 import com.huawei.finance.front.one.infrastructure.share.DefaultChatShareAccessPolicy;
@@ -65,12 +65,12 @@ public class DefaultPortImplementationConfiguration {
     /**
      * 默认 Sgov token resolver。
      *
-     * <p>本服务不内置企业鉴权 token 获取逻辑；企业框架接入时提供新的
+     * <p>默认 resolver 不返回 token。企业框架接入时可提供新的
      * {@link SgovTokenResolver} bean 覆盖。</p>
      */
     @Bean
     @ConditionalOnMissingBean(SgovTokenResolver.class)
     public SgovTokenResolver sgovTokenResolver() {
-        return new UnsupportedSgovTokenResolver();
+        return new DefaultSgovTokenResolver();
     }
 }

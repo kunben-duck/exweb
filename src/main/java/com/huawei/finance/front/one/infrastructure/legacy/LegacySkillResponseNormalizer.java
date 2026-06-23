@@ -271,14 +271,15 @@ public class LegacySkillResponseNormalizer {
 
     private LegacyFragmentKind detectFragmentKind(String payload) {
         String sourceType = firstPresentSourceType(payload,
-                "diyCardScene", "cardList", "cardUrl",
+                "diyCardScene", "cardList", "cardUrl", "openCard",
                 "searchList", "SearchList",
                 "sourcesDocuments", "sourceDocuments", "SourceDocuments", "SourceDocuemts",
                 "processResult");
         if (sourceType == null) {
             return null;
         }
-        if ("diyCardScene".equals(sourceType) || "cardList".equals(sourceType) || "cardUrl".equals(sourceType)) {
+        if ("diyCardScene".equals(sourceType) || "cardList".equals(sourceType)
+                || "cardUrl".equals(sourceType) || "openCard".equals(sourceType)) {
             return new LegacyFragmentKind(sourceType, "runtime.card",
                     "card", "application/json");
         }
@@ -484,7 +485,10 @@ public class LegacySkillResponseNormalizer {
     }
 
     private boolean hasCardPayload(JsonNode root) {
-        return root.hasNonNull("cardUrl") || root.hasNonNull("diyCardScene") || root.hasNonNull("cardList");
+        return root.hasNonNull("cardUrl")
+                || root.hasNonNull("diyCardScene")
+                || root.hasNonNull("cardList")
+                || root.hasNonNull("openCard");
     }
 
     private Map<String, Object> processPayload(JsonNode root) {
@@ -523,6 +527,7 @@ public class LegacySkillResponseNormalizer {
         payload.put("cardType", cardType(sources));
         payload.put("cardSources", sources);
         putIfPresent(payload, "cardUrl", text(root, "cardUrl"));
+        putIfPresent(payload, "openCard", text(root, "openCard"));
         putIfPresent(payload, "intent", text(root, "intent"));
         putIfPresent(payload, "skillId", text(root, "skillId"));
         if (root.hasNonNull("diyCardScene")) {
@@ -535,7 +540,7 @@ public class LegacySkillResponseNormalizer {
     }
 
     private List<String> cardSources(JsonNode root) {
-        List<String> sources = new ArrayList<>(3);
+        List<String> sources = new ArrayList<>(4);
         if (root.hasNonNull("cardUrl")) {
             sources.add("cardUrl");
         }
@@ -544,6 +549,9 @@ public class LegacySkillResponseNormalizer {
         }
         if (root.hasNonNull("cardList")) {
             sources.add("cardList");
+        }
+        if (root.hasNonNull("openCard")) {
+            sources.add("openCard");
         }
         return List.copyOf(sources);
     }
@@ -564,6 +572,7 @@ public class LegacySkillResponseNormalizer {
             case "cardUrl" -> "url";
             case "diyCardScene" -> "diyCardScene";
             case "cardList" -> "cardList";
+            case "openCard" -> "openCard";
             default -> "legacy-card";
         };
     }

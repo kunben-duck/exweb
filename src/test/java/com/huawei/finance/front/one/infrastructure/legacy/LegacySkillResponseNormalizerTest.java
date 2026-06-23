@@ -232,6 +232,21 @@ class LegacySkillResponseNormalizerTest {
     }
 
     @Test
+    void mapsOpenCardToRuntimeCard() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                message: {"openCard":"N","intent":"CreditSales","skillId":"skill-credit"}
+                """);
+
+        assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.card");
+        assertThat(events.getFirst().payload()).containsEntry("sourceType", "openCard")
+                .containsEntry("cardType", "openCard")
+                .containsEntry("cardSources", List.of("openCard"))
+                .containsEntry("openCard", "N")
+                .containsEntry("intent", "CreditSales")
+                .containsEntry("skillId", "skill-credit");
+    }
+
+    @Test
     void keepsDefensiveMixedCardMappingForUnexpectedCombinedFrame() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1", """
                 message: {"diyCardScene":{"type":"tax"},"cardList":[{"title":"卡片"}]}
@@ -241,6 +256,39 @@ class LegacySkillResponseNormalizerTest {
         assertThat(events.getFirst().payload()).containsEntry("sourceType", "legacy-card")
                 .containsEntry("cardType", "mixed")
                 .containsEntry("cardSources", List.of("diyCardScene", "cardList"));
+    }
+
+    @Test
+    void keepsDefensiveMixedCardMappingWhenOpenCardCombinesWithOtherCardFields() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                message: {"cardUrl":"https://card","openCard":"N"}
+                """);
+
+        assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.card");
+        assertThat(events.getFirst().payload()).containsEntry("sourceType", "legacy-card")
+                .containsEntry("cardType", "mixed")
+                .containsEntry("cardSources", List.of("cardUrl", "openCard"))
+                .containsEntry("cardUrl", "https://card")
+                .containsEntry("openCard", "N");
+    }
+
+    @Test
+    void streamsSplitOpenCardWithoutInvalidJson() {
+        LegacySkillResponseNormalizer.LegacySkillStreamState state = normalizer.newStreamState();
+
+        List<ChatEvent> first = normalizer.normalize("run1", "session1",
+                "message: {\"openCard\":\"", state);
+        List<ChatEvent> second = normalizer.normalize("run1", "session1",
+                "N\"}", state);
+
+        assertThat(first).extracting(ChatEvent::type).containsExactly("runtime.card");
+        assertThat(second).extracting(ChatEvent::type).containsExactly("runtime.card", "runtime.card");
+        assertThat(first.getFirst().payload()).containsEntry("sourceType", "openCard")
+                .containsEntry("fragment", true)
+                .containsEntry("complete", false);
+        assertThat(second.getLast().payload()).containsEntry("sourceType", "openCard")
+                .containsEntry("fragment", true)
+                .containsEntry("complete", true);
     }
 
     @Test

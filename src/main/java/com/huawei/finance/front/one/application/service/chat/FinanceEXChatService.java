@@ -432,19 +432,21 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 })
                 .concatMap(event -> {
                     try {
+                        CompletionMessageTarget completionTarget = completionMessageTarget(event, assistant, user, session, runId);
+                        ChatEvent eventToPersist = withCompletionFeedbackPayload(event, completionTarget);
                         /*
                          * 只有 DB guarded insert 成功后，事件才算事实成立。assistant 文本累积、
                          * 历史消息写入、run 状态推进和 Redis/WebSocket 发布都以该持久化结果为准，
                          * 避免 stop/watchdog 后的迟到 delta 进入用户可见历史。
                          */
-                        ChatEvent stored = chatStreamService.appendWithExecutionGuard(event, context.executionClaim());
+                        ChatEvent stored = chatStreamService.appendWithExecutionGuard(eventToPersist, context.executionClaim());
                         assistant.observe(stored);
                         /*
                          * run.completed 是前端、Event Resume 和跨设备续接共同认可的“本轮回答已经闭合”信号。
                          * 因此在发布该终态事件之前，必须先把完整 assistant 消息写入历史消息树，
                          * 避免客户端收到 completed 后立即查询历史时只能看到 user 节点。
                          */
-                        if ("run.completed".equals(stored.type()) && assistant.shouldPersistMessage()) {
+                        if ("run.completed".equals(stored.type()) && completionTarget.messageReady()) {
                             ChatMessage savedAssistant = sessionService.saveAssistantMessage(new AssistantMessageSaveCommand(
                                     user.tenantId(),
                                     user.userId(),
@@ -454,7 +456,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                     messagePlan.userMessage().id(),
                                     messagePlan.regeneratedFromMessageId(),
                                     assistant.parts(),
-                                    null
+                                    null,
+                                    completionTarget.assistantMessageId()
                             ));
                             chatRunService.bindAssistantMessage(runId, savedAssistant.id());
                             bindingRef.set(runtimeBindingService.moveToLeaf(bindingRef.get(), savedAssistant.id()));
@@ -478,6 +481,34 @@ public class FinanceEXChatService implements FinanceChatFacade {
         return event != null && runId.equals(event.runId()) && sessionId.equals(event.sessionId());
     }
 
+    private CompletionMessageTarget completionMessageTarget(ChatEvent event, AssistantAssembly assistant,
+                                                            UserContext user, ChatSession session, String runId) {
+        if (event == null || !"run.completed".equals(event.type())) {
+            return CompletionMessageTarget.notRunCompleted();
+        }
+        if (!assistant.shouldPersistMessage()) {
+            return CompletionMessageTarget.notReady();
+        }
+        String assistantMessageId = idGenerator.newId("msg",
+                IdGenerateContext.of(user.tenantId(), user.userId(), session.id(), runId));
+        return CompletionMessageTarget.ready(assistantMessageId);
+    }
+
+    private ChatEvent withCompletionFeedbackPayload(ChatEvent event, CompletionMessageTarget completionTarget) {
+        if (event == null || !completionTarget.runCompleted()) {
+            return event;
+        }
+        Map<String, Object> payload = new java.util.LinkedHashMap<>(
+                event.payload() == null ? Map.of() : event.payload());
+        payload.put("messageReady", completionTarget.messageReady());
+        if (completionTarget.messageReady()) {
+            payload.put("assistantMessageId", completionTarget.assistantMessageId());
+            payload.put("feedbackTargetMessageId", completionTarget.assistantMessageId());
+        }
+        return new RunCompletedEvent(event.runId(), event.sessionId(), event.sequence(),
+                event.createdAt(), java.util.Collections.unmodifiableMap(payload));
+    }
+
     private record RunEventPipelineContext(
             UserContext user,
             ChatSession session,
@@ -487,6 +518,24 @@ public class FinanceEXChatService implements FinanceChatFacade {
             String runId,
             RunExecutionClaim executionClaim
     ) {
+    }
+
+    private record CompletionMessageTarget(
+            boolean runCompleted,
+            boolean messageReady,
+            String assistantMessageId
+    ) {
+        private static CompletionMessageTarget notRunCompleted() {
+            return new CompletionMessageTarget(false, false, null);
+        }
+
+        private static CompletionMessageTarget notReady() {
+            return new CompletionMessageTarget(true, false, null);
+        }
+
+        private static CompletionMessageTarget ready(String assistantMessageId) {
+            return new CompletionMessageTarget(true, true, assistantMessageId);
+        }
     }
 
     private void markExecutionTerminalIfNeeded(ChatEvent event) {

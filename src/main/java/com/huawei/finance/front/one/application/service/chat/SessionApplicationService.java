@@ -242,7 +242,10 @@ public class SessionApplicationService implements ChatSessionFacade {
     public ChatMessage saveAssistantMessage(AssistantMessageSaveCommand command) {
         // 助手消息在事件流结束后保存完整文本，避免保存大量碎片 delta。
         ChatSession session = command.session();
-        String messageId = idGenerator.newId("msg", IdGenerateContext.of(command.tenantId(), command.userId(), session.id()));
+        String messageId = command.normalizedMessageId();
+        if (messageId == null) {
+            messageId = idGenerator.newId("msg", IdGenerateContext.of(command.tenantId(), command.userId(), session.id()));
+        }
         ChatMessage parent = command.parentMessageId() == null ? null : requireMessageInSession(session, command.parentMessageId());
         Instant now = Instant.now();
         List<ChatMessagePart> parts = buildMessageParts(new MessagePartBuildContext(command.tenantId(),

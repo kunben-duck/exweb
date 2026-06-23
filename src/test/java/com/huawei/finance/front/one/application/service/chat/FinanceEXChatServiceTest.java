@@ -150,7 +150,10 @@ class FinanceEXChatServiceTest {
                 .expectNextMatches(event -> "message.delta".equals(event.type()))
                 .expectNextMatches(event -> "runtime.tool".equals(event.type()))
                 .expectNextMatches(event -> "message.snapshot".equals(event.type()))
-                .expectNextMatches(event -> "run.completed".equals(event.type()))
+                .expectNextMatches(event -> "run.completed".equals(event.type())
+                        && Boolean.TRUE.equals(event.payload().get("messageReady"))
+                        && event.payload().get("assistantMessageId") != null
+                        && event.payload().get("assistantMessageId").equals(event.payload().get("feedbackTargetMessageId")))
                 .verifyComplete();
 
         ChatMessage assistant = messages.messages.stream()
@@ -158,6 +161,10 @@ class FinanceEXChatServiceTest {
                 .findFirst()
                 .orElseThrow();
         assertThat(assistant.content()).isEqualTo("最终\nMarkdown **正文**");
+        assertThat(events.events).filteredOn(event -> "run.completed".equals(event.type()))
+                .singleElement()
+                .extracting(event -> event.payload().get("assistantMessageId"))
+                .isEqualTo(assistant.id());
         assertThat(assistant.parts()).extracting(ChatMessagePart::partType)
                 .containsExactly("TOOL", "ANSWER");
         assertThat(assistant.parts()).extracting(ChatMessagePart::contentText)
@@ -228,7 +235,9 @@ class FinanceEXChatServiceTest {
                         null, null, "web", "show card", List.of(), Map.of())))
                 .expectNextMatches(event -> "run.started".equals(event.type()))
                 .expectNextMatches(event -> "runtime.card".equals(event.type()))
-                .expectNextMatches(event -> "run.completed".equals(event.type()))
+                .expectNextMatches(event -> "run.completed".equals(event.type())
+                        && Boolean.TRUE.equals(event.payload().get("messageReady"))
+                        && event.payload().get("assistantMessageId") != null)
                 .verifyComplete();
 
         ChatMessage assistant = messages.messages.stream()

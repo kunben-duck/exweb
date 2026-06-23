@@ -161,12 +161,23 @@ public class ChatFeedbackApplicationService {
     }
 
     private ChatMessage requireFeedbackTarget(UserContext user, String messageId) {
-        ChatMessage message = messageRepository.findByOwnerAndId(user.tenantId(), user.userId(), messageId)
+        String normalizedMessageId = normalizeMessageId(messageId);
+        ChatMessage message = messageRepository.findByOwnerAndId(user.tenantId(), user.userId(), normalizedMessageId)
                 .orElseThrow(() -> new SecurityException("消息不存在或不属于当前用户"));
         if (!"assistant".equals(message.role())) {
             throw new IllegalArgumentException("只能反馈 assistant 消息");
         }
         return message;
+    }
+
+    private String normalizeMessageId(String messageId) {
+        String normalized = blankToNull(messageId);
+        if (normalized == null
+                || "undefined".equalsIgnoreCase(normalized)
+                || "null".equalsIgnoreCase(normalized)) {
+            throw new IllegalArgumentException("assistant messageId 不能为空");
+        }
+        return normalized;
     }
 
     private void validateRunInMessageSession(UserContext user, ChatMessage message, String ownedRunId) {

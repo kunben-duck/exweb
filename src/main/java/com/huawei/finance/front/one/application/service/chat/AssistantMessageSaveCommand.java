@@ -19,6 +19,7 @@ import java.util.List;
  * @param regeneratedFromMessageId 重新生成来源 assistant，可为空。
  * @param partDrafts thinking/tool/card/reference 等过程信息草稿。
  * @param metadataJson 消息级元数据 JSON，例如用户 stop 固化 partial assistant 标记。
+ * @param messageId 可选的预分配 assistant 消息 ID；用于在 run.completed 事件入库前确定反馈目标。
  */
 public record AssistantMessageSaveCommand(
         String tenantId,
@@ -29,9 +30,21 @@ public record AssistantMessageSaveCommand(
         String parentMessageId,
         String regeneratedFromMessageId,
         List<ChatMessagePartDraft> partDrafts,
-        String metadataJson
+        String metadataJson,
+        String messageId
 ) {
+    public AssistantMessageSaveCommand(String tenantId, String userId, ChatSession session, String content,
+                                       String runId, String parentMessageId, String regeneratedFromMessageId,
+                                       List<ChatMessagePartDraft> partDrafts, String metadataJson) {
+        this(tenantId, userId, session, content, runId, parentMessageId, regeneratedFromMessageId,
+                partDrafts, metadataJson, null);
+    }
+
     public List<ChatMessagePartDraft> safePartDrafts() {
         return partDrafts == null ? List.of() : partDrafts;
+    }
+
+    public String normalizedMessageId() {
+        return messageId == null || messageId.isBlank() ? null : messageId.trim();
     }
 }

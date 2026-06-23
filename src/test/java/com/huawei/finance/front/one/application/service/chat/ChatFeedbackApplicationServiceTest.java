@@ -72,6 +72,21 @@ class ChatFeedbackApplicationServiceTest {
     }
 
     @Test
+    void submitFeedbackRejectsMissingAssistantMessageIdAsBadRequest() {
+        ChatFeedbackApplicationService service = new ChatFeedbackApplicationService(
+                new PermissionChecker(),
+                new InMemoryMessageRepository(null),
+                new RecordingFeedbackRepository(),
+                new FixedIdGenerator(),
+                null
+        );
+
+        assertThatThrownBy(() -> service.submit(user(), command("undefined", null, "LIKE", null, null, null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("assistant messageId");
+    }
+
+    @Test
     void submitFeedbackRejectsRunFromDifferentSession() {
         InMemoryMessageRepository messages = new InMemoryMessageRepository(new ChatMessage(
                 "msg1", "tenant1", "user1", "session1", "assistant", "answer", null, Instant.now()

@@ -824,6 +824,9 @@ function handleChatEvent(event, source = "event", options = {}) {
   }
   if (terminalRunEvents.has(event.type)) {
     flushPendingDeltas(event.runId);
+    if (event.type === "run.completed" && event.payload?.messageReady === true) {
+      bindAssistantMessageId(event.runId, event.payload);
+    }
     state.activeRunId = event.runId;
     state.activeRunStatus = event.type.replace("run.", "").toUpperCase();
     setActiveRunLabel();
@@ -897,6 +900,25 @@ function replaceAssistantSnapshot(runId, content) {
   scrollMessages();
 }
 
+function bindAssistantMessageId(runId, payload) {
+  const messageId = payload?.assistantMessageId || payload?.feedbackTargetMessageId;
+  if (!messageId) return;
+  const node = state.assistantNodeByRun.get(runId);
+  if (!node) return;
+  const dataset = {
+    ...node.dataset,
+    messageId,
+    runId,
+    originType: node.dataset.originType || "NORMAL"
+  };
+  for (const [key, value] of Object.entries(dataset)) {
+    if (value !== undefined && value !== null && typeof value !== "object") {
+      node.dataset[key] = value;
+    }
+  }
+  ensureMessageActions(node, "assistant", dataset, dataset);
+}
+
 function appendMessage(role, content, dataset = {}, message = null) {
   const node = document.createElement("div");
   node.className = `message ${role || "system"}`;
@@ -916,12 +938,23 @@ function appendMessage(role, content, dataset = {}, message = null) {
     node.appendChild(messagePartsNode(messageParts));
   }
 
+  ensureMessageActions(node, role, dataset, message, content);
+  $("messages").appendChild(node);
+  scrollMessages();
+  return node;
+}
+
+function ensureMessageActions(node, role, dataset = {}, message = null, fallbackContent = null) {
+  if (!dataset.messageId || node.querySelector(".message-actions")) {
+    return;
+  }
   if (dataset.messageId) {
     node.appendChild(messageMeta(dataset));
     const actions = document.createElement("div");
     actions.className = "message-actions";
     const locked = isLockedMessage(dataset);
-    actions.appendChild(messageActionButton("复制", false, () => copyMessageContent(message || dataset, content)));
+    actions.appendChild(messageActionButton("复制", false, () => copyMessageContent(message || dataset,
+      fallbackContent ?? node.querySelector(".message-content")?.textContent)));
     if (role === "user") {
       actions.appendChild(messageActionButton("编辑", locked, () => editUserMessage(message || dataset)));
     }
@@ -936,10 +969,6 @@ function appendMessage(role, content, dataset = {}, message = null) {
     node.appendChild(actions);
     hydrateMessageVersionNavigator(message || dataset, navigator);
   }
-
-  $("messages").appendChild(node);
-  scrollMessages();
-  return node;
 }
 
 function messagePartsNode(parts) {

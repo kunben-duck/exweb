@@ -1412,7 +1412,7 @@ heartbeat 和 done 使用同一个 envelope，不携带 `encodedItem`，也不�
 | `runtime.card` | 下游卡片资源或结构化卡片信息 | 展示卡片，不要拼入 assistant 正文 |
 | `runtime.event` | 未识别但合法的下游 Runtime JSON 事件 | 按 `payload.channel/displayHint/sourceType` 兜底展示，不要拼入 assistant 正文 |
 | `message.completed` | assistant 消息结束 | 可停止当前消息输入光标 |
-| `run.completed` | 本轮 run 正常结束 | 关闭 loading，保存 latestSeq |
+| `run.completed` | 本轮 run 正常结束；若 `payload.messageReady=true`，`payload.assistantMessageId` 即可作为点赞/点踩目标 | 关闭 loading，保存 latestSeq，并用 `assistantMessageId` 绑定当前回答的反馈按钮 |
 | `run.failed` | 本轮 run 失败 | 展示错误信息，关闭 loading |
 | `run.cancelled` | 用户停止本轮回答 | 展示已停止，关闭 loading |
 
@@ -1945,6 +1945,9 @@ ws.onmessage = event => {
   }
   if (chatEvent.type.startsWith("runtime.")) {
     renderRuntimeEvent(chatEvent.payload);
+  }
+  if (chatEvent.type === "run.completed" && chatEvent.payload?.messageReady === true) {
+    bindFeedbackTarget(chatEvent.payload.assistantMessageId);
   }
   if (["run.completed", "run.failed", "run.cancelled"].includes(chatEvent.type)) {
     setLoading(false);

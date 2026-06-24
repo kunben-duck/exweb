@@ -3,9 +3,11 @@ package com.huawei.finance.front.one.infrastructure;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRecoveryPort;
 import com.huawei.finance.front.one.application.integration.auth.SgovTokenResolver;
 import com.huawei.finance.front.one.application.integration.identity.ApplicationInstanceIdProvider;
+import com.huawei.finance.front.one.application.integration.intent.IntentRetryPolicy;
 import com.huawei.finance.front.one.application.integration.share.ChatShareAccessPolicy;
 import com.huawei.finance.front.one.infrastructure.auth.DefaultSgovTokenResolver;
 import com.huawei.finance.front.one.infrastructure.id.GeneratedApplicationInstanceIdProvider;
+import com.huawei.finance.front.one.infrastructure.intent.DefaultIntentRetryPolicy;
 import com.huawei.finance.front.one.infrastructure.runtime.UnsupportedAgentRuntimeRecoveryPort;
 import com.huawei.finance.front.one.infrastructure.share.DefaultChatShareAccessPolicy;
 import org.springframework.beans.factory.annotation.Value;
@@ -72,5 +74,17 @@ public class DefaultPortImplementationConfiguration {
     @ConditionalOnMissingBean(SgovTokenResolver.class)
     public SgovTokenResolver sgovTokenResolver() {
         return new DefaultSgovTokenResolver();
+    }
+
+    /**
+     * 默认意图识别重试策略。
+     *
+     * <p>默认策略只重试 HTTP 调用降级和意图服务错误结果。不同企业环境如果需要按错误码、
+     * 灰度版本或租户调整重试规则，提供新的 {@link IntentRetryPolicy} bean 即可覆盖。</p>
+     */
+    @Bean
+    @ConditionalOnMissingBean(IntentRetryPolicy.class)
+    public IntentRetryPolicy intentRetryPolicy() {
+        return new DefaultIntentRetryPolicy();
     }
 }

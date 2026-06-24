@@ -113,6 +113,8 @@ public class ChatShareDeliveryProperties {
      * WeLink 分享发送配置。
      */
     public static class Welink {
+        private static final int MAX_NORMALIZED_RETRIES = 10;
+
         /** 是否启用 WeLink 分享发送。 */
         private boolean enabled = false;
         /** WeLink API 基础地址。 */
@@ -121,6 +123,8 @@ public class ChatShareDeliveryProperties {
         private String sendPath = "";
         /** WeLink HTTP 调用超时时间。 */
         private Duration timeout = Duration.ofSeconds(5);
+        /** WeLink 调用失败后的最大重试次数；不包含首次调用，运行时会限制到安全上限。 */
+        private int maxRetries = 3;
         /** WeLink 成功状态字段。 */
         private String successStatusField = "status";
         /** WeLink 成功状态值。 */
@@ -158,6 +162,14 @@ public class ChatShareDeliveryProperties {
             this.timeout = timeout;
         }
 
+        public int getMaxRetries() {
+            return maxRetries;
+        }
+
+        public void setMaxRetries(int maxRetries) {
+            this.maxRetries = maxRetries;
+        }
+
         public String getSuccessStatusField() {
             return successStatusField;
         }
@@ -179,6 +191,10 @@ public class ChatShareDeliveryProperties {
                 return Duration.ofSeconds(5);
             }
             return timeout;
+        }
+
+        public int normalizedMaxRetries() {
+            return Math.min(MAX_NORMALIZED_RETRIES, Math.max(0, maxRetries));
         }
     }
 }

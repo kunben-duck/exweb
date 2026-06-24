@@ -193,6 +193,7 @@ provider 会把分享链接转换为 WeLink 卡片请求，`linkUrl` 由 `financ
 生成，`targetAccounts[]/groupIds[]` 会去空去重后以英文逗号拼接。发送失败只写
 `fin_ex_chat_share_delivery_t.status=FAILED`，不会删除或撤销分享快照，前端可以重试。分享发送还有
 `financeex.share.delivery.max-concurrency` 本机并发保护，避免外部发送 provider 抖动时占满异步工作线程。
+WeLink 调用失败后默认最多重试 3 次，可通过 `financeex.share.delivery.providers.welink.max-retries` 调整；为避免误配拖住 Servlet 工作线程，运行时最多按 10 次重试生效。
 
 ## 存储命名
 
@@ -247,7 +248,7 @@ export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
 ## 外部服务接入
 
 用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。SubAgent 当前通过单轮 HTTP 文本流接入；Relay Runtime 通过 AgentRuntime 防腐层接入，当前上线版本只保留下游 Relay streamable HTTP 接入。
-意图服务当前适配 `code/data/result/items[]` 包装响应，选择最高 `confidence` 的 item，并把 `resourceInstruction.resourceId` 映射为候选技能；只有 `confidence >= FINANCEEX_INTENT_CONFIDENCE_THRESHOLD` 时才采用该技能，否则进入 Relay Runtime。意图服务 HTTP 入参和出参转换已收敛在 infrastructure intent mapper 中，后续下游协议变化优先修改 mapper，不影响应用层 `IntentService` 端口和路由策略。
+意图服务当前适配 `code/data/result/items[]` 包装响应，选择最高 `confidence` 的 item，并把 `resourceInstruction.resourceId` 映射为候选技能；只有 `confidence >= FINANCEEX_INTENT_CONFIDENCE_THRESHOLD` 时才采用该技能，否则进入 Relay Runtime。意图服务 HTTP 入参和出参转换已收敛在 infrastructure intent mapper 中，后续下游协议变化优先修改 mapper，不影响应用层 `IntentService` 端口和路由策略。意图服务调用失败后默认最多重试 3 次，可通过 `FINANCEEX_INTENT_MAX_RETRIES` 调整；运行时最多按 10 次重试生效。
 意图识别记录是可选旁路能力，默认关闭。开启 `FINANCEEX_INTENT_RECORD_ENABLED=true` 后，仅在本轮实际调用意图服务时异步写入 `fin_ex_intent_recognition_t`，记录用户问题、候选 items、最高置信结果、最终路由是否采纳以及调用耗时，便于后续准确率统计和排障。该写入使用 Servlet/MVC 友好的专用线程池，不读取请求 ThreadLocal；线程池拒绝、序列化失败或 DB 写入失败只记录 warn，不影响 `/chat/runs` 主链路。显式技能、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会写意图记录。
 
 这里需要明确 WebSocket 边界：
@@ -368,8 +369,9 @@ legacy-agent 指定技能响应也遵守同一标准事件契约：`content` 中
 
 AgentRuntime 防腐层必须保留：应用层只依赖 `AgentRuntime` 接口和 `AgentRuntimeRequest` 契约，不依赖 Relay 的 HTTP、wire DTO 或 chunk 格式。`financeex.agent-runtime.provider` 表示 Runtime 类型，当前为 `relay`；Relay provider 当前固定走 streamable HTTP。后续替换 Runtime 实现时，应新增另一个 `AgentRuntime` provider；后续只替换 Relay 下游协议时，应新增 `RelayRuntimeProtocolAdapter` 实现。
 
-HTTP 错误响应统一为 `{timestamp,path,status,error,code,message}`。常见错误码包括：
-`AUTH_CONTEXT_MISSING`、`ACCESS_DENIED`、`BAD_REQUEST`、`VALIDATION_FAILED`、
+HTTP 错误/提示响应统一为 `{timestamp,path,status,error,code,message}`。身份缺失仍返回 401；
+资源不存在或不属于当前用户时返回 HTTP 200，并通过 `code=ACCESS_DENIED` 给出前端提示。
+常见错误码包括：`AUTH_CONTEXT_MISSING`、`ACCESS_DENIED`、`BAD_REQUEST`、`VALIDATION_FAILED`、
 `ACTIVE_RUN_EXISTS` 和 `CONFLICT`。WebSocket 错误通过 envelope 返回，常见 `code`
 包括 `WS_AUTH_FAILED`、`WS_ORIGIN_FORBIDDEN`、`BAD_WS_MESSAGE`、`SUBSCRIBE_ERROR`、
 `NOT_SUBSCRIBED` 和 `RECOVER_REQUIRED`。

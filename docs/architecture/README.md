@@ -375,7 +375,7 @@ sequenceDiagram
 
 `snapshot_json` 只保存父 user 问题、assistant 回答、问题附件展示快照和 `visible=true` 的 parts；不保存 feedback、raw log、隐藏/debug parts、Cookie、Authorization 或企业鉴权信息。附件快照只用于展示，不授予下载/预览权限。原会话后续编辑、重新生成、切换 path 或反馈变化都不会影响已经创建的分享。
 
-分享发送通过 `ChatShareDeliveryProvider` 防腐层完成，首版 provider 为 `welink`。应用层只生成稳定的发送请求：分享人、标题、分享 URL、摘要、目标用户和目标群组；WeLink wire 字段如 `targetAccount/groupID` 只存在于 provider 实现中。发送失败不会回滚分享快照，只在 `fin_ex_chat_share_delivery_t` 中记录 `FAILED`、错误码和 provider 安全响应摘要，前端可按同一个 `shareId` 重试。分享发送使用 `financeex.share.delivery.max-concurrency` 做当前 JVM 内并发隔离，防止外部 provider 抖动时占满异步工作线程。
+分享发送通过 `ChatShareDeliveryProvider` 防腐层完成，首版 provider 为 `welink`。应用层只生成稳定的发送请求：分享人、标题、分享 URL、摘要、目标用户和目标群组；WeLink wire 字段如 `targetAccount/groupID` 只存在于 provider 实现中。发送失败不会回滚分享快照，只在 `fin_ex_chat_share_delivery_t` 中记录 `FAILED`、错误码和 provider 安全响应摘要，前端可按同一个 `shareId` 重试。分享发送使用 `financeex.share.delivery.max-concurrency` 做当前 JVM 内并发隔离，防止外部 provider 抖动时占满异步工作线程；WeLink provider 失败后默认最多重试 3 次，运行时最多按 10 次重试生效。
 
 删除会话时，`SessionApplicationService` 会同步撤销当前用户创建的该会话 `ACTIVE` 分享，避免用户删除会话后外部仍访问其快照。
 
@@ -645,6 +645,7 @@ flowchart TB
 - 用例库开启时优先匹配；命中阈值默认 `0.85`，命中并返回 `subAgentCode` 后单轮调用 SubAgent。
 - 用例库关闭或未命中后，只有意图服务开启才调用 `IntentService`。
 - 意图服务 adapter 的 HTTP 请求体和响应体转换由 infrastructure intent mapper 承载；当前解析 `code/data/result/items[]` 包装响应，选择最高 `confidence` 的 item，并把 `resourceInstruction.resourceId` 映射为 `candidateSubAgentCode`。
+- 意图服务调用失败后默认最多重试 3 次；配置误设过大时运行时最多按 10 次生效，重试耗尽后仍按原有降级策略进入 Relay Runtime。
 - 意图服务返回简单任务、`confidence >= financeex.intent.confidence-threshold` 且有 `candidateSubAgentCode` 时单轮调用 SubAgent。
 - `financeex.intent-record.enabled=true` 时，只有实际调用过意图服务的 run 会异步写入 `fin_ex_intent_recognition_t`。记录内容包含本轮 query、候选 items、最高置信结果、最终路由是否采纳和意图服务耗时；显式技能、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会记录。
 - 两个信号均关闭、服务失败、复杂、低置信或缺少 SubAgent 的任务进入 Relay Runtime。
@@ -713,7 +714,7 @@ stop 语义：
 ## 外部 API 接入
 
 - 用例库服务：`financeex.use-case-library.enabled`、`financeex.use-case-library.base-url`、`financeex.use-case-library.match-path`
-- 意图服务：`financeex.intent.enabled`、`financeex.intent.base-url`、`financeex.intent.recognize-path`、`financeex.intent.confidence-threshold`
+- 意图服务：`financeex.intent.enabled`、`financeex.intent.base-url`、`financeex.intent.recognize-path`、`financeex.intent.confidence-threshold`、`financeex.intent.timeout`、`financeex.intent.max-retries`
 - 意图识别记录：`financeex.intent-record.enabled`、`max-query-length`、`max-raw-json-length`、`executor.*`。默认关闭；开启后使用 Servlet/MVC 友好的专用线程池 best-effort 写库，线程池拒绝、JSON 序列化失败或数据库写入失败都只记录 warn，不阻塞 `/chat/runs`。
 - SubAgent：`financeex.sub-agent.agents.{agentCode}.endpoint`
 - SubAgent stop：`financeex.sub-agent.agents.{agentCode}.stop-endpoint`

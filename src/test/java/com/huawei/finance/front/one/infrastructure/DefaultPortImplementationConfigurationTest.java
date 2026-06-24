@@ -7,9 +7,11 @@ import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRe
 import com.huawei.finance.front.one.application.integration.auth.AuthHeaderRequest;
 import com.huawei.finance.front.one.application.integration.auth.SgovTokenResolver;
 import com.huawei.finance.front.one.application.integration.identity.ApplicationInstanceIdProvider;
+import com.huawei.finance.front.one.application.integration.intent.IntentRetryPolicy;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.infrastructure.auth.DefaultSgovTokenResolver;
 import com.huawei.finance.front.one.infrastructure.id.GeneratedApplicationInstanceIdProvider;
+import com.huawei.finance.front.one.infrastructure.intent.DefaultIntentRetryPolicy;
 import com.huawei.finance.front.one.infrastructure.runtime.UnsupportedAgentRuntimeRecoveryPort;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -32,6 +34,9 @@ class DefaultPortImplementationConfigurationTest {
             assertThat(context).hasSingleBean(SgovTokenResolver.class);
             assertThat(context.getBean(SgovTokenResolver.class))
                     .isInstanceOf(DefaultSgovTokenResolver.class);
+            assertThat(context).hasSingleBean(IntentRetryPolicy.class);
+            assertThat(context.getBean(IntentRetryPolicy.class))
+                    .isInstanceOf(DefaultIntentRetryPolicy.class);
         });
     }
 
@@ -91,6 +96,18 @@ class DefaultPortImplementationConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasSingleBean(SgovTokenResolver.class);
                     assertThat(context.getBean(SgovTokenResolver.class)).isSameAs(custom);
+                });
+    }
+
+    @Test
+    void customIntentRetryPolicyOverridesDefaultPortImplementation() {
+        IntentRetryPolicy custom = context -> false;
+
+        contextRunner
+                .withBean(IntentRetryPolicy.class, () -> custom)
+                .run(context -> {
+                    assertThat(context).hasSingleBean(IntentRetryPolicy.class);
+                    assertThat(context.getBean(IntentRetryPolicy.class)).isSameAs(custom);
                 });
     }
 }

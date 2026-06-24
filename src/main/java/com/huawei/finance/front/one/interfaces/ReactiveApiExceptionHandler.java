@@ -26,14 +26,16 @@ public class ReactiveApiExceptionHandler {
      *
      * @param ex 权限异常。
      * @param exchange Reactive 请求上下文，用于返回请求路径。
-     * @return 身份缺失返回 401，资源越权返回 403。
+     * @return 身份缺失返回 401；资源越权返回 HTTP 200 和 ACCESS_DENIED 提示体。
      */
     @ExceptionHandler(SecurityException.class)
     public ResponseEntity<ApiExceptionHandler.ApiErrorResponse> handleSecurity(SecurityException ex,
                                                                                ServerWebExchange exchange) {
-        HttpStatus status = ApiExceptionHandler.isMissingIdentity(ex) ? HttpStatus.UNAUTHORIZED : HttpStatus.FORBIDDEN;
-        String code = status == HttpStatus.UNAUTHORIZED ? "AUTH_CONTEXT_MISSING" : "ACCESS_DENIED";
-        return ApiExceptionHandler.error(status, code, ex.getMessage(), requestPath(exchange));
+        if (ApiExceptionHandler.isMissingIdentity(ex)) {
+            return ApiExceptionHandler.error(HttpStatus.UNAUTHORIZED, "AUTH_CONTEXT_MISSING",
+                    ex.getMessage(), requestPath(exchange));
+        }
+        return ApiExceptionHandler.accessDeniedPrompt(ex.getMessage(), requestPath(exchange));
     }
 
     /**

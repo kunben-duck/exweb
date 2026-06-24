@@ -16,8 +16,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * Servlet/MVC 模式下的 HTTP API 统一异常映射。
  *
  * <p>应用层会使用 {@link IllegalArgumentException} 表达参数错误，使用 {@link SecurityException}
- * 表达身份缺失或资源越权。接口层必须把这些可预期业务异常转换成稳定 HTTP 状态码，
- * 避免 MVC 默认错误处理把它们暴露为 500。</p>
+ * 表达身份缺失或资源越权。身份缺失仍返回 401；资源不存在或不属于当前用户时返回 HTTP 200
+ * 并在响应体里携带 {@code ACCESS_DENIED}，便于前端以普通业务提示处理。</p>
  */
 @RestControllerAdvice(basePackages = "com.huawei.finance.front.one.interfaces")
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
@@ -28,13 +28,14 @@ public class ApiExceptionHandler {
      *
      * @param ex 权限异常。
      * @param request 当前 Servlet 请求上下文，用于返回请求路径。
-     * @return 身份缺失返回 401，资源越权返回 403。
+     * @return 身份缺失返回 401；资源越权返回 HTTP 200 和 ACCESS_DENIED 提示体。
      */
     @ExceptionHandler(SecurityException.class)
     public ResponseEntity<ApiErrorResponse> handleSecurity(SecurityException ex, HttpServletRequest request) {
-        HttpStatus status = isMissingIdentity(ex) ? HttpStatus.UNAUTHORIZED : HttpStatus.FORBIDDEN;
-        String code = status == HttpStatus.UNAUTHORIZED ? "AUTH_CONTEXT_MISSING" : "ACCESS_DENIED";
-        return error(status, code, ex.getMessage(), requestPath(request));
+        if (isMissingIdentity(ex)) {
+            return error(HttpStatus.UNAUTHORIZED, "AUTH_CONTEXT_MISSING", ex.getMessage(), requestPath(request));
+        }
+        return accessDeniedPrompt(ex.getMessage(), requestPath(request));
     }
 
     /**
@@ -106,6 +107,24 @@ public class ApiExceptionHandler {
                 status.getReasonPhrase(),
                 code,
                 message == null || message.isBlank() ? status.getReasonPhrase() : message
+        ));
+    }
+
+    /**
+     * 构造资源不可访问的业务提示响应。
+     *
+     * <p>这类场景通常由前端缓存了已删除、已归档或不属于当前用户的数据导致。使用 HTTP 200
+     * 可以避免企业统一错误页拦截，同时保留稳定 code/message 给前端展示和清理本地状态。</p>
+     */
+    static ResponseEntity<ApiErrorResponse> accessDeniedPrompt(String message, String path) {
+        HttpStatus status = HttpStatus.OK;
+        return ResponseEntity.ok(new ApiErrorResponse(
+                Instant.now(),
+                path,
+                status.value(),
+                status.getReasonPhrase(),
+                "ACCESS_DENIED",
+                message == null || message.isBlank() ? "当前数据不可访问或已不存在" : message
         ));
     }
 

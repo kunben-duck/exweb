@@ -51,6 +51,21 @@ public class WelinkChatShareDeliveryProvider implements ChatShareDeliveryProvide
     public ChatShareProviderDeliveryResult deliver(ChatShareProviderDeliveryRequest request) {
         ChatShareDeliveryProperties.Welink welink = properties.getDelivery().getProviders().getWelink();
         ensureEnabled(welink);
+        int maxAttempts = 1 + welink.normalizedMaxRetries();
+        ChatShareProviderDeliveryResult lastResult = null;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            lastResult = callOnce(request, welink);
+            if (lastResult.success()) {
+                return lastResult;
+            }
+        }
+        return lastResult == null
+                ? ChatShareProviderDeliveryResult.failed("WELINK_CALL_FAILED", "WeLink 调用失败", Map.of())
+                : lastResult;
+    }
+
+    private ChatShareProviderDeliveryResult callOnce(ChatShareProviderDeliveryRequest request,
+                                                     ChatShareDeliveryProperties.Welink welink) {
         Duration timeout = welink.normalizedTimeout();
         try {
             WelinkHttpResponse response = webClientBuilder.baseUrl(welink.getBaseUrl().trim())

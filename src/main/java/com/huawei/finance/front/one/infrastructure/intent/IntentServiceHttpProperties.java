@@ -11,12 +11,16 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = "financeex.intent")
 public class IntentServiceHttpProperties {
+    private static final int MAX_NORMALIZED_RETRIES = 10;
+
     /** 意图服务基础地址。 */
     private String baseUrl = "http://localhost:9200";
     /** 意图识别接口路径。 */
     private String recognizePath = "/v1/intents/recognize";
     /** 单次意图识别调用超时时间。 */
     private Duration timeout = Duration.ofSeconds(5);
+    /** 意图服务调用失败后的最大重试次数；不包含首次调用，运行时会限制到安全上限。 */
+    private int maxRetries = 3;
 
     public String getBaseUrl() {
         return baseUrl;
@@ -42,9 +46,21 @@ public class IntentServiceHttpProperties {
         this.timeout = timeout;
     }
 
+    public int getMaxRetries() {
+        return maxRetries;
+    }
+
+    public void setMaxRetries(int maxRetries) {
+        this.maxRetries = maxRetries;
+    }
+
     public Duration normalizedTimeout() {
         return timeout == null || timeout.isZero() || timeout.isNegative()
                 ? Duration.ofSeconds(5)
                 : timeout;
+    }
+
+    public int normalizedMaxRetries() {
+        return Math.min(MAX_NORMALIZED_RETRIES, Math.max(0, maxRetries));
     }
 }

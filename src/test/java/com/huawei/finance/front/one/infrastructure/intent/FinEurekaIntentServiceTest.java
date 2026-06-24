@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.config.IntegrationAuthProperties;
+import com.huawei.finance.front.one.application.integration.intent.IntentRetryContext;
+import com.huawei.finance.front.one.application.integration.intent.IntentRetryPolicy;
 import com.huawei.finance.front.one.application.service.auth.AuthHeaderProviderRegistry;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
@@ -20,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
@@ -122,6 +125,158 @@ class FinEurekaIntentServiceTest {
     }
 
     @Test
+    void retriesFailedIntentCallsUntilSuccess() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        IntentServerFixture fixture = withServerSequence(attempts,
+                """
+                {"code":500,"data":{"status":"failed","message":"down"}}
+                """,
+                """
+                {"code":500,"data":{"status":"failed","message":"still-down"}}
+                """,
+                """
+                {"code":200,"data":{"status":"success","result":{"items":[
+                  {"confidence":0.91,"intentId":"high","intentName":"高置信","resourceInstruction":{"resourceId":"HIGH"}}
+                ]}}}
+                """);
+
+        try {
+            IntentDecision decision = fixture.service().recognize(command(), MemoryContext.empty(), user());
+
+            assertThat(decision.intentCode()).isEqualTo("high");
+            assertThat(decision.candidateSubAgentCode()).isEqualTo("HIGH");
+            assertThat(attempts.get()).isEqualTo(3);
+        } finally {
+            fixture.close();
+        }
+    }
+
+    @Test
+    void stopsAfterConfiguredIntentRetries() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        IntentServerFixture fixture = withServerSequence(attempts,
+                """
+                {"code":500,"data":{"status":"failed","message":"down-1"}}
+                """,
+                """
+                {"code":500,"data":{"status":"failed","message":"down-2"}}
+                """,
+                """
+                {"code":500,"data":{"status":"failed","message":"down-3"}}
+                """,
+                """
+                {"code":500,"data":{"status":"failed","message":"down-4"}}
+                """,
+                """
+                {"code":200,"data":{"status":"success","result":{"items":[
+                  {"confidence":0.91,"intentId":"late","intentName":"迟到","resourceInstruction":{"resourceId":"LATE"}}
+                ]}}}
+                """);
+
+        try {
+            IntentDecision decision = fixture.service().recognize(command(), MemoryContext.empty(), user());
+
+            assertThat(decision.intentCode()).isEqualTo("finance.runtime.intent_error");
+            assertThat(attempts.get()).isEqualTo(4);
+        } finally {
+            fixture.close();
+        }
+    }
+
+    @Test
+    void doesNotRetryValidNoIntentResult() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        IntentServerFixture fixture = withServerSequence(attempts,
+                """
+                {"code":200,"data":{"status":"success","result":{"items":[]}}}
+                """,
+                """
+                {"code":200,"data":{"status":"success","result":{"items":[
+                  {"confidence":0.91,"intentId":"unexpected","intentName":"不应重试","resourceInstruction":{"resourceId":"UNEXPECTED"}}
+                ]}}}
+                """);
+
+        try {
+            IntentDecision decision = fixture.service().recognize(command(), MemoryContext.empty(), user());
+
+            assertThat(decision.intentCode()).isEqualTo("finance.runtime.no_intent");
+            assertThat(decision.candidateSubAgentCode()).isNull();
+            assertThat(attempts.get()).isEqualTo(1);
+        } finally {
+            fixture.close();
+        }
+    }
+
+    @Test
+    void customRetryPolicyCanDisableRetryForFailedIntentResult() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        IntentRetryPolicy noRetry = context -> false;
+        IntentServerFixture fixture = withServerSequence(attempts, noRetry,
+                """
+                {"code":500,"data":{"status":"failed","message":"down"}}
+                """,
+                """
+                {"code":200,"data":{"status":"success","result":{"items":[
+                  {"confidence":0.91,"intentId":"unexpected","intentName":"不应重试","resourceInstruction":{"resourceId":"UNEXPECTED"}}
+                ]}}}
+                """);
+
+        try {
+            IntentDecision decision = fixture.service().recognize(command(), MemoryContext.empty(), user());
+
+            assertThat(decision.intentCode()).isEqualTo("finance.runtime.intent_error");
+            assertThat(attempts.get()).isEqualTo(1);
+        } finally {
+            fixture.close();
+        }
+    }
+
+    @Test
+    void failingRetryPolicyDoesNotBreakIntentRecognition() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        IntentRetryPolicy brokenPolicy = context -> {
+            throw new IllegalStateException("policy down");
+        };
+        IntentServerFixture fixture = withServerSequence(attempts, brokenPolicy,
+                """
+                {"code":500,"data":{"status":"failed","message":"down"}}
+                """,
+                """
+                {"code":200,"data":{"status":"success","result":{"items":[
+                  {"confidence":0.91,"intentId":"unexpected","intentName":"不应重试","resourceInstruction":{"resourceId":"UNEXPECTED"}}
+                ]}}}
+                """);
+
+        try {
+            IntentDecision decision = fixture.service().recognize(command(), MemoryContext.empty(), user());
+
+            assertThat(decision.intentCode()).isEqualTo("finance.runtime.intent_error");
+            assertThat(attempts.get()).isEqualTo(1);
+        } finally {
+            fixture.close();
+        }
+    }
+
+    @Test
+    void defaultRetryPolicyDoesNotRetryWhenAttemptsAreExhausted() {
+        IntentRetryContext context = new IntentRetryContext(command(), MemoryContext.empty(), user(),
+                new IntentServiceResponseMapper(objectMapper).degraded("down"), 1, 1);
+
+        assertThat(new DefaultIntentRetryPolicy().shouldRetry(context)).isFalse();
+    }
+
+    @Test
+    void normalizesConfiguredRetryCountToSafeRange() {
+        IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
+
+        properties.setMaxRetries(-1);
+        assertThat(properties.normalizedMaxRetries()).isZero();
+
+        properties.setMaxRetries(100);
+        assertThat(properties.normalizedMaxRetries()).isEqualTo(10);
+    }
+
+    @Test
     void appliesConfiguredOutboundAuthorizationHeader() throws Exception {
         AtomicReference<String> capturedAuthorization = new AtomicReference<>();
         IntentDecision decision = withServer("""
@@ -158,8 +313,51 @@ class FinEurekaIntentServiceTest {
         IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
         properties.setBaseUrl(baseUrl);
         properties.setRecognizePath("/recognize");
-        return new FinEurekaIntentService(WebClient.builder(), properties, new IntentServiceRequestMapper(),
-                new IntentServiceResponseMapper(objectMapper), authHeaders);
+        properties.setMaxRetries(0);
+        return new FinEurekaIntentService(WebClient.builder(), properties, wireMapper(), authHeaders,
+                new DefaultIntentRetryPolicy());
+    }
+
+    private IntentServerFixture withServerSequence(AtomicInteger attempts, String... responses) throws IOException {
+        return withServerSequence(attempts, new DefaultIntentRetryPolicy(), responses);
+    }
+
+    private IntentServerFixture withServerSequence(AtomicInteger attempts, IntentRetryPolicy retryPolicy,
+                                                   String... responses) throws IOException {
+        AuthHeaderProviderRegistry authHeaders = new AuthHeaderProviderRegistry(
+                new IntegrationAuthProperties(), List.of(new NoopAuthHeaderProvider()));
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/recognize", exchange -> {
+            int attempt = attempts.incrementAndGet();
+            String response = responses[Math.min(attempt, responses.length) - 1];
+            byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream output = exchange.getResponseBody()) {
+                output.write(bytes);
+            }
+        });
+        server.start();
+        String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
+        IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
+        properties.setBaseUrl(baseUrl);
+        properties.setRecognizePath("/recognize");
+        properties.setMaxRetries(3);
+        FinEurekaIntentService service = new FinEurekaIntentService(WebClient.builder(), properties,
+                wireMapper(), authHeaders, retryPolicy);
+        return new IntentServerFixture(service, server);
+    }
+
+    private IntentServiceWireMapper wireMapper() {
+        return new IntentServiceWireMapper(new IntentServiceRequestMapper(),
+                new IntentServiceResponseMapper(objectMapper));
+    }
+
+    private record IntentServerFixture(FinEurekaIntentService service, HttpServer server) implements AutoCloseable {
+        @Override
+        public void close() {
+            server.stop(0);
+        }
     }
 
     private AuthHeaderProviderRegistry authHeaders(Optional<String> token) {

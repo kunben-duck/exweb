@@ -31,6 +31,8 @@ export FINANCEEX_DEV_USERNAME=developer
 query、候选意图、最高置信结果、最终路由是否采纳和调用耗时。显式技能、RuntimeBinding 续接、用例库已命中、
 意图服务关闭或未调用时不会写记录。该记录使用专用 Servlet/MVC 线程池 best-effort 写入
 `fin_ex_intent_recognition_t`，失败只影响统计排障数据，不影响 `/chat/runs`、WebSocket 或 Event Resume。
+意图服务调用失败后后端会按 `financeex.intent.max-retries` 重试，默认最多重试 3 次，运行时最多按 10 次生效；重试耗尽后仍按
+原有降级策略进入 Relay Runtime，前端不需要增加任何请求字段。
 
 ## 接口总览
 
@@ -99,7 +101,7 @@ HTTP 接口的错误响应结构稳定，前端可以统一解析 `code` 和 `me
 | 400 | `BAD_REQUEST` | 参数为空、文档 ID 为空、非法 topic 等业务参数错误 | 提示用户修正输入或刷新状态 |
 | 400 | `VALIDATION_FAILED` | 请求体字段长度、附件数量等 Bean Validation 失败 | 根据 `message` 标记表单字段 |
 | 401 | `AUTH_CONTEXT_MISSING` | 后端入口没有解析到企业身份上下文 | 跳转登录或提示重新认证 |
-| 403 | `ACCESS_DENIED` | 当前用户访问了不属于自己的 session/run/document/message | 清理本地缓存并重新加载会话列表 |
+| 200 | `ACCESS_DENIED` | 当前用户访问了不存在或不属于自己的 session/run/document/message | 按业务提示展示 `message`，清理本地缓存并重新加载会话列表 |
 | 409 | `ACTIVE_RUN_EXISTS` | 同一 session 已有运行中 run | 保持“生成中/停止”状态，先 stop 或等待终态 |
 | 409 | `SHARE_REVOKED` | 分享已被创建者或会话删除动作撤销 | 展示分享已撤销，不再重试 |
 | 409 | `SHARE_EXPIRED` | 分享已超过 `expiresAt` | 展示分享已过期 |
@@ -1153,6 +1155,8 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/shares/share_xxx/deliveries \
 作为 `userAccount`。
 分享发送有本机并发保护，默认 `financeex.share.delivery.max-concurrency=20`；超过上限时会返回
 `delivery.status=FAILED` 和 `errorCode=SHARE_DELIVERY_BUSY`，分享快照仍保留，前端可稍后重试。
+WeLink 调用失败后默认最多重试 3 次，可通过 `financeex.share.delivery.providers.welink.max-retries`
+调整，运行时最多按 10 次生效。
 
 发送响应：
 

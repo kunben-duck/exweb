@@ -17,14 +17,15 @@ class ApiExceptionHandlerTest {
     private final ReactiveApiExceptionHandler reactiveHandler = new ReactiveApiExceptionHandler();
 
     @Test
-    void mapsResourceOwnershipViolationToForbidden() {
+    void mapsResourceOwnershipViolationToSuccessPrompt() {
         ResponseEntity<ApiExceptionHandler.ApiErrorResponse> response = handler.handleSecurity(
                 new SecurityException("文档不能绑定到不属于当前用户的会话"),
                 servletRequest("/api/v1/ex/documents")
         );
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(200);
         assertThat(response.getBody().code()).isEqualTo("ACCESS_DENIED");
         assertThat(response.getBody().path()).isEqualTo("/api/v1/ex/documents");
     }
@@ -66,6 +67,19 @@ class ApiExceptionHandlerTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().path()).isEqualTo("/api/v1/ex/chat/sessions");
+    }
+
+    @Test
+    void reactiveHandlerMapsAccessDeniedToSuccessPrompt() {
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> response = reactiveHandler.handleSecurity(
+                new SecurityException("run 不存在或不属于当前用户"),
+                exchange("/api/v1/ex/chat/runs/run1/events/resume")
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code()).isEqualTo("ACCESS_DENIED");
+        assertThat(response.getBody().path()).isEqualTo("/api/v1/ex/chat/runs/run1/events/resume");
     }
 
     private MockHttpServletRequest servletRequest(String path) {

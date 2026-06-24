@@ -3,11 +3,15 @@ package com.huawei.finance.front.one.infrastructure.intent;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.huawei.finance.front.one.application.integration.auth.AuthHeaderRequest;
 import com.huawei.finance.front.one.application.integration.intent.IntentService;
+import com.huawei.finance.front.one.application.integration.intent.IntentRetryContext;
+import com.huawei.finance.front.one.application.integration.intent.IntentRetryPolicy;
 import com.huawei.finance.front.one.application.service.auth.AuthHeaderProviderRegistry;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
@@ -22,38 +26,66 @@ import org.springframework.web.reactive.function.client.WebClient;
 @Component
 @EnableConfigurationProperties(IntentServiceHttpProperties.class)
 public class FinEurekaIntentService implements IntentService {
+    private static final Logger log = LoggerFactory.getLogger(FinEurekaIntentService.class);
+
     private final WebClient webClient;
     private final IntentServiceHttpProperties properties;
-    private final IntentServiceRequestMapper requestMapper;
-    private final IntentServiceResponseMapper responseMapper;
+    private final IntentServiceWireMapper wireMapper;
     private final AuthHeaderProviderRegistry authHeaders;
+    private final IntentRetryPolicy retryPolicy;
 
     public FinEurekaIntentService(WebClient.Builder webClientBuilder, IntentServiceHttpProperties properties,
-                                  IntentServiceRequestMapper requestMapper,
-                                  IntentServiceResponseMapper responseMapper,
-                                  AuthHeaderProviderRegistry authHeaders) {
+                                  IntentServiceWireMapper wireMapper, AuthHeaderProviderRegistry authHeaders,
+                                  IntentRetryPolicy retryPolicy) {
         this.webClient = webClientBuilder.baseUrl(properties.getBaseUrl()).build();
         this.properties = properties;
-        this.requestMapper = requestMapper;
-        this.responseMapper = responseMapper;
+        this.wireMapper = wireMapper;
         this.authHeaders = authHeaders;
+        this.retryPolicy = retryPolicy;
     }
 
     @Override
     public IntentDecision recognize(ChatCommand command, MemoryContext memory, UserContext user) {
+        int maxAttempts = 1 + properties.normalizedMaxRetries();
+        IntentDecision lastDecision = null;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            lastDecision = recognizeOnce(command, memory, user);
+            IntentRetryContext retryContext = new IntentRetryContext(command, memory, user, lastDecision,
+                    attempt, maxAttempts);
+            if (!shouldRetry(retryContext)) {
+                return lastDecision;
+            }
+        }
+        return lastDecision == null ? wireMapper.degraded("empty intent response") : lastDecision;
+    }
+
+    private boolean shouldRetry(IntentRetryContext context) {
+        try {
+            return retryPolicy.shouldRetry(context);
+        } catch (RuntimeException ex) {
+            // Retry policy is an enterprise-replaceable extension point. A strategy bug should not fail
+            // the chat run; return the current decision and let normal routing degrade if needed.
+            log.warn("Intent retry policy failed; skip remaining retries. sessionId={}, attempt={}, reason={}",
+                    context.command() == null ? null : context.command().sessionId(),
+                    context.attempt(), ex.getMessage());
+            return false;
+        }
+    }
+
+    private IntentDecision recognizeOnce(ChatCommand command, MemoryContext memory, UserContext user) {
         try {
             return webClient.post()
                     .uri(properties.getRecognizePath())
                     .headers(headers -> applyAuthHeaders(headers, user))
-                    .bodyValue(requestMapper.toWireRequest(command, memory, user))
+                    .bodyValue(wireMapper.toWireRequest(command, memory, user))
                     .retrieve()
                     .bodyToMono(JsonNode.class)
-                    .map(responseMapper::toDecision)
+                    .map(wireMapper::toDecision)
                     .timeout(properties.normalizedTimeout())
                     .blockOptional()
-                    .orElseGet(() -> responseMapper.degraded("empty intent response"));
+                    .orElseGet(() -> wireMapper.degraded("empty intent response"));
         } catch (RuntimeException ex) {
-            return responseMapper.degraded("intent service failed: " + ex.getMessage());
+            return wireMapper.degraded("intent service failed: " + ex.getMessage());
         }
     }
 

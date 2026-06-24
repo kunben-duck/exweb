@@ -102,7 +102,9 @@ financeex:
     recognize-path: ${FINANCEEX_INTENT_RECOGNIZE_PATH:/v1/intents/recognize}
     # 意图服务返回 resourceInstruction.resourceId 时，只有 confidence 达到该阈值才采用对应技能。
     confidence-threshold: ${FINANCEEX_INTENT_CONFIDENCE_THRESHOLD:0.85}
-    timeout: 5s
+    timeout: ${FINANCEEX_INTENT_TIMEOUT:5s}
+    # 意图服务调用失败后的最大重试次数；不包含首次调用，运行时最多按 10 次生效。
+    max-retries: ${FINANCEEX_INTENT_MAX_RETRIES:3}
   intent-record:
     # 意图识别记录是统计排障旁路，默认关闭；关闭时不会写 fin_ex_intent_recognition_t。
     enabled: ${FINANCEEX_INTENT_RECORD_ENABLED:false}
@@ -269,6 +271,8 @@ financeex:
           base-url: ${FINANCEEX_SHARE_WELINK_BASE_URL:}
           send-path: ${FINANCEEX_SHARE_WELINK_SEND_PATH:}
           timeout: ${FINANCEEX_SHARE_WELINK_TIMEOUT:5s}
+          # WeLink 调用失败后的最大重试次数；不包含首次调用，运行时最多按 10 次生效。
+          max-retries: ${FINANCEEX_SHARE_WELINK_MAX_RETRIES:3}
           success-status-field: ${FINANCEEX_SHARE_WELINK_SUCCESS_STATUS_FIELD:status}
           success-status-value: ${FINANCEEX_SHARE_WELINK_SUCCESS_STATUS_VALUE:200}
   documents:

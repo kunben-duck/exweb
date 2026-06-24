@@ -12,6 +12,7 @@ import com.huawei.finance.front.one.infrastructure.auth.NoopAuthHeaderProvider;
 import com.huawei.finance.front.one.infrastructure.auth.SgovAuthHeaderProvider;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
@@ -58,6 +59,37 @@ class WelinkChatShareDeliveryProviderTest {
     }
 
     @Test
+    void retriesFailedWelinkCallsUntilSuccess() {
+        AtomicInteger attempts = new AtomicInteger();
+        WelinkChatShareDeliveryProvider provider = providerWithStatusSequence(attempts,
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                HttpStatus.OK);
+
+        ChatShareProviderDeliveryResult result = provider.deliver(request());
+
+        assertThat(result.success()).isTrue();
+        assertThat(attempts.get()).isEqualTo(3);
+    }
+
+    @Test
+    void stopsAfterConfiguredMaxRetries() {
+        AtomicInteger attempts = new AtomicInteger();
+        WelinkChatShareDeliveryProvider provider = providerWithStatusSequence(attempts,
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                HttpStatus.OK);
+
+        ChatShareProviderDeliveryResult result = provider.deliver(request());
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.errorCode()).isEqualTo("WELINK_HTTP_STATUS");
+        assertThat(attempts.get()).isEqualTo(4);
+    }
+
+    @Test
     void appliesConfiguredOutboundAuthorizationHeader() {
         AtomicReference<ClientRequest> captured = new AtomicReference<>();
         WelinkChatShareDeliveryProvider provider = providerWithAuth(captured, "Bearer sgov-token");
@@ -67,6 +99,17 @@ class WelinkChatShareDeliveryProviderTest {
         assertThat(result.success()).isTrue();
         assertThat(captured.get().headers().getFirst(HttpHeaders.AUTHORIZATION)).isEqualTo("Bearer sgov-token");
         assertThat(captured.get().headers().toString()).doesNotContain("app-secret");
+    }
+
+    @Test
+    void normalizesConfiguredRetryCountToSafeRange() {
+        ChatShareDeliveryProperties.Welink welink = new ChatShareDeliveryProperties.Welink();
+
+        welink.setMaxRetries(-1);
+        assertThat(welink.normalizedMaxRetries()).isZero();
+
+        welink.setMaxRetries(100);
+        assertThat(welink.normalizedMaxRetries()).isEqualTo(10);
     }
 
     private WelinkChatShareDeliveryProvider provider(AtomicReference<ClientRequest> captured,
@@ -113,6 +156,28 @@ class WelinkChatShareDeliveryProviderTest {
                 new NoopAuthHeaderProvider(),
                 new SgovAuthHeaderProvider(authProperties, (request, appId, secret) -> java.util.Optional.of(token))
         ));
+        return new WelinkChatShareDeliveryProvider(builder, properties, new ObjectMapper(), authHeaders);
+    }
+
+    private WelinkChatShareDeliveryProvider providerWithStatusSequence(AtomicInteger attempts, HttpStatus... statuses) {
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> {
+                    int attempt = attempts.incrementAndGet();
+                    HttpStatus status = statuses[Math.min(attempt, statuses.length) - 1];
+                    return Mono.just(ClientResponse.create(status)
+                            .header(HttpHeaders.CONTENT_TYPE, "application/json")
+                            .body("{\"status\":\"200\"}")
+                            .build());
+                });
+        ChatShareDeliveryProperties properties = new ChatShareDeliveryProperties();
+        ChatShareDeliveryProperties.Welink welink = properties.getDelivery().getProviders().getWelink();
+        welink.setEnabled(true);
+        welink.setBaseUrl("http://welink.test");
+        welink.setSendPath("/share/send");
+        welink.setTimeout(Duration.ofSeconds(1));
+        welink.setMaxRetries(3);
+        AuthHeaderProviderRegistry authHeaders = new AuthHeaderProviderRegistry(
+                new IntegrationAuthProperties(), List.of(new NoopAuthHeaderProvider()));
         return new WelinkChatShareDeliveryProvider(builder, properties, new ObjectMapper(), authHeaders);
     }
 

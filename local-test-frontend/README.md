@@ -54,7 +54,7 @@ Referer: http://localhost:8080/fin/ex/
 
 ## 覆盖范围
 
-- 会话：创建、分页列表、首条回答摘要展示、切换、state 聚合、历史消息分页、完整可见消息树视图、重命名、归档、恢复、单个/批量软删除。
+- 会话：创建、分页列表、首条回答摘要展示、切换、会话详情、历史消息分页、完整可见消息树视图、重命名、归档、恢复、单个/批量软删除。
 - Run：创建、停止回答、stream-status 查询；重新生成通过消息树的 `REGENERATE_ASSISTANT` 操作完成。
 - WebSocket：连接、connect、subscribe、unsubscribe、跨 session / 跨 run topic 订阅。
 - 多会话隔离：同一 WebSocket 连接可以同时订阅多个 session 的 run topic；本地联调台会按事件
@@ -64,6 +64,8 @@ Referer: http://localhost:8080/fin/ex/
   会按 `title/status/channel/displayHint/visible` 展示，前端无需解析 Relay 私有 payload。
 - 最终回答快照：Relay 返回 `type=agent,is_streaming=false` 时会显示为 `message.snapshot`，
   联调台会用 `payload.content` 替换当前 assistant 草稿，避免重复追加。
+- 消息版本：历史消息直接读取 `/messages` 返回的 `versionInfo` 展示 `<1/3>` 游标，
+  切换时先用 `switchLeafMessageId` 查询 `/messages?leafMessageId=...` 刷新聊天区，再后台保存 `/path`。
 - Event Resume：会话级事件恢复按 `afterSeq` 有限补发缺失事件；run 级事件恢复在 active run 恢复时补发并接续 live 事件到终态。
 - 文档库：上传本地文件、按 `targetProvider` 选择 default-storage 或 legacy-agent provider、列表、详情、状态、预览地址、下载、改名、删除。
 - 附件：选择文档库中 `AVAILABLE` 文档作为聊天附件发送；指定历史技能时应先用 `targetProvider=legacy-agent` 上传。
@@ -80,13 +82,13 @@ Referer: http://localhost:8080/fin/ex/
 
 | 页面功能 | 后端接口 | 说明 |
 | --- | --- | --- |
-| 新建/切换会话 | `POST /api/v1/ex/chat/sessions`、`GET /api/v1/ex/chat/sessions/{sessionId}/state` | 选择会话时同时恢复历史消息和 active run 状态 |
+| 新建/切换会话 | `POST /api/v1/ex/chat/sessions`、`GET /api/v1/ex/chat/sessions/{sessionId}`、`GET /api/v1/ex/chat/sessions/{sessionId}/messages`、`GET /api/v1/ex/chat/sessions/{sessionId}/stream-status` | 选择会话时分别恢复会话元数据、历史消息和 active run 状态 |
 | 消息树视图 | `GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` | 读取完整可见消息树 mapping/currentLeaf，用于版本树调试 |
 | 发送问题 | `POST /api/v1/ex/chat/runs` | 返回 `runId/sessionId/firstSeq/streamTopicId`，随后通过 WebSocket 订阅 |
 | 实时输出 | `WS /api/v1/ex/chat/ws` | 发送 `connect`、`subscribe`、`unsubscribe` 控制消息 |
 | 跨页签续接 | `GET /api/v1/ex/chat/runs/{runId}/events/resume` | active run 恢复时从 `activeRunFirstSeq - 1` 补发并 tail 到终态 |
 | 停止回答 | `POST /api/v1/ex/chat/runs/{runId}/stop` | REST 生命周期控制，不是 WebSocket command |
-| 历史版本 | `GET /messages/{messageId}/variants`、`POST /path` | 支持 `1/3` 版本游标和路径切换 |
+| 历史版本 | `GET /messages`、`GET /messages?leafMessageId=...`、`POST /path` | 使用 `versionInfo` 展示 `1/3` 游标，切换时先刷新目标 leaf path，再保存当前 leaf |
 | 新建分支 | `POST /branches` | 从指定消息创建只读历史快照分支 |
 | 删除会话 | `DELETE /api/v1/ex/chat/sessions/{sessionId}`、`DELETE /api/v1/ex/chat/sessions` | 单个或批量软删除会话；active run 存在时需要先 stop |
 | 文档库 | `/api/v1/ex/documents/**` | 上传、列表、状态、预览、下载、改名、删除 |
@@ -113,7 +115,7 @@ Referer: http://localhost:8080/fin/ex/
 
 1. 在页签 A 中选择或创建会话，发送一条会产生较长输出的问题。
 2. 在输出尚未完成时点击“复制页签”，打开页签 B。
-3. 页签 B 会先读取 `state`，如果发现 active run，则不会 replay `localStorage` 中的未完成 run 事件，而是调用 `runs/{activeRunId}/events/resume?afterSeq=activeRunFirstSeq-1` 补齐当前回答已经生成的事件，并继续接收后续 live event 直到 run 终态。
+3. 页签 B 会先读取历史消息和 `stream-status`，如果发现 active run，则不会 replay `localStorage` 中的未完成 run 事件，而是调用 `runs/{activeRunId}/events/resume?afterSeq=activeRunFirstSeq-1` 补齐当前回答已经生成的事件，并继续接收后续 live event 直到 run 终态。
 4. 本轮 run 恢复期间，页签 B 不会再对同一个 run 发 WebSocket `subscribe`；后续新提问仍按 `/chat/runs + WebSocket subscribe` 走实时通道。
 5. 也可以手动刷新页签 B，或关闭页签 A 后在页签 B 点击“事件恢复”“恢复 active run”验证恢复链路。
 

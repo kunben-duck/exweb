@@ -114,6 +114,13 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     @Override
+    public List<ChatMessage> listMessageTreeNodes(UserContext user, String sessionId) {
+        checkChatUser(user);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        return messageRepository.findAllMessageNodesBySession(session.tenantId(), session.userId(), session.id());
+    }
+
+    @Override
     public ChatSessionPage listSessions(UserContext user, String cursor, int limit) {
         checkChatUser(user);
         return sessionRepository.pageByTenantIdAndUserId(user.tenantId(), user.userId(), cursor, limit);

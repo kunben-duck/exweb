@@ -110,6 +110,11 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
     }
 
     @Override
+    public List<ChatMessage> findAllMessageNodesBySession(String tenantId, String userId, String sessionId) {
+        return databaseStore.findAllMessageNodesBySession(tenantId, userId, sessionId);
+    }
+
+    @Override
     public Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId) {
         return databaseStore.findByOwnerAndId(tenantId, userId, messageId);
     }

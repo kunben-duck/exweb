@@ -42,10 +42,9 @@ query、候选意图、最高置信结果、最终路由是否采纳和调用耗
 | 会话列表（游标） | `GET` | `/api/v1/ex/chat/sessions?limit=20&cursor=...` | 当前用户会话游标分页 |
 | 会话列表（页码） | `GET` | `/api/v1/ex/chat/sessions/page?curPage=1&pageSize=20` | 当前用户历史会话页码分页，返回 totalRows |
 | 会话详情 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}` | 查询单个会话元数据 |
-| 会话状态 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/state?messageLimit=50` | 切换会话时聚合会话、历史消息和流状态 |
-| 历史消息 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50` | 查询当前 active path 或指定 leaf path |
+| 历史消息 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50` | 查询当前 active path 或指定 leaf path，消息带轻量 `versionInfo` |
 | 消息树视图 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages/tree` | 查询完整可见消息树 mapping，用于复杂版本树或调试 |
-| 消息版本 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants` | 查询同父节点候选版本 |
+| 消息版本详情 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants` | 查询同父节点候选版本完整内容；普通聊天页优先使用 `/messages.versionInfo` |
 | 切换路径 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/path` | 将会话当前 leaf 切换到指定消息 |
 | 新建分支 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/branches` | 从某条消息创建只读历史快照分支 |
 | 重命名会话 | `PATCH` | `/api/v1/ex/chat/sessions/{sessionId}` | 更新会话标题 |
@@ -132,7 +131,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 一个新前端开发人员建议按下面顺序完成集成，不要从 WebSocket 或 Event Resume 开始：
 
 1. **身份与基础地址**：确认 HTTP base URL、WebSocket URL、context path、企业 Cookie/header 注入方式。所有接口都依赖同一个后端身份上下文，不在请求体传 `tenantId/userId`。
-2. **会话列表与会话状态**：先接 `GET /chat/sessions` 和 `GET /chat/sessions/{sessionId}/state`。会话列表负责左侧导航，state 负责进入会话后一次性拿到历史消息和 active run 状态。
+2. **会话列表与历史消息**：先接 `GET /chat/sessions`、`GET /chat/sessions/{sessionId}` 和 `GET /chat/sessions/{sessionId}/messages`。会话列表负责左侧导航，会话详情只取元数据，历史消息接口负责主面板渲染。
 3. **创建 run 与实时输出**：接 `POST /chat/runs`，拿到 `runId/sessionId/firstSeq/streamTopicId` 后，通过 WebSocket `subscribe(topicId, afterSeq)` 接实时事件。
 4. **事件恢复与停止**：接 `stream-status`、run 级 `/events/resume` 和 `/runs/{runId}/stop`。这三者决定刷新、跨页签、跨电脑和停止回答时的正确行为。
 5. **消息树功能**：接 `messages`、`variants`、`path`、`branches`，实现编辑历史问题、重新生成回答、版本切换和从消息新建分支。
@@ -158,16 +157,16 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 场景 | 调用顺序 | 关键关联字段 | 前端状态处理 |
 | --- | --- | --- | --- |
-| 首次打开应用 | `GET /chat/sessions?limit=20` -> 用户选择会话后 `GET /chat/sessions/{sessionId}/state` -> 可选连接 WS `connect` | `sessionId`、`currentLeafMessageId`、`streamStatus.activeRunId` | 左侧列表使用 `firstAssistantAnswer` 做摘要；主面板用 state.messages 渲染历史 |
+| 首次打开应用 | `GET /chat/sessions?limit=20` -> 用户选择会话后 `GET /chat/sessions/{sessionId}`、`GET /chat/sessions/{sessionId}/messages`、`GET /chat/sessions/{sessionId}/stream-status` -> 可选连接 WS `connect` | `sessionId`、`currentLeafMessageId`、`streamStatus.activeRunId` | 左侧列表使用 `firstAssistantAnswer` 做摘要；主面板用 messages 渲染历史，用 stream-status 恢复运行态 |
 | 新会话首轮提问 | 可选 `POST /chat/sessions`，或直接 `POST /chat/runs` 不传 `sessionId` -> WS `subscribe(streamTopicId, firstSeq)` | `runId`、`sessionId`、`firstSeq`、`streamTopicId` | 乐观渲染 user 消息；收到 `message.delta` 创建/追加 assistant 草稿，收到 `message.snapshot` 替换草稿；终态后关闭 loading |
-| 已有会话继续提问 | `GET /state` 确认无 active run -> `POST /chat/runs(sessionId, runMode=NEXT)` -> WS subscribe | `sessionId`、`parentMessageId` 可选、`streamTopicId` | 同一 session 存在 active run 时不要再次发送；遇到 409 使用 stop 或等待终态 |
+| 已有会话继续提问 | `GET /stream-status` 确认无 active run -> `POST /chat/runs(sessionId, runMode=NEXT)` -> WS subscribe | `sessionId`、`parentMessageId` 可选、`streamTopicId` | 同一 session 存在 active run 时不要再次发送；遇到 409 使用 stop 或等待终态 |
 | 当前页短暂断线重连 | 本地保存 `lastSeq` -> 重建 WS -> `subscribe(topicId, afterSeq=lastSeq)`；如果收到 `RECOVER_REQUIRED`，先 Event Resume 再重新 subscribe | `topicId`、`lastSeq`、`sequence` | 以 `sessionId + sequence` 去重；不要重复追加同一 delta |
-| 新页签/新浏览器/跨电脑打开 active run | `GET /state` 或 `stream-status` -> 若有 `activeRunId`，调用 `GET /runs/{activeRunId}/events/resume?afterSeq=activeRunFirstSeq-1` | `activeRunId`、`activeRunFirstSeq`、`activeStreamTopicId` | run 级 Event Resume 会补发并 tail 到终态；同一个 run 恢复期间不要再 WebSocket subscribe |
+| 新页签/新浏览器/跨电脑打开 active run | `GET /messages` 渲染历史 -> `GET /stream-status` -> 若有 `activeRunId`，调用 `GET /runs/{activeRunId}/events/resume?afterSeq=activeRunFirstSeq-1` | `activeRunId`、`activeRunFirstSeq`、`activeStreamTopicId` | run 级 Event Resume 会补发并 tail 到终态；同一个 run 恢复期间不要再 WebSocket subscribe |
 | 停止回答 | 用户点击停止 -> `POST /runs/{runId}/stop` -> 等待 WS 或 Event Resume 收到 `run.cancelled` | `runId`、stop 前本地 `lastSeq` | stop 不是关闭 WebSocket；若 stop 前已有正文或用户可见 parts，历史消息会保存 partial assistant |
-| 编辑历史 user 消息 | 用户点击编辑 -> `POST /chat/runs(runMode=EDIT_USER, editedMessageId, message)` -> 订阅新 run -> `variants` 刷新版本游标 | `editedMessageId`、新 user `messageId`、新 assistant `messageId` | 旧消息不覆盖；新 user sibling 和新 assistant sibling 进入消息树 |
-| 重新生成 assistant | 用户点击重新生成 -> `POST /chat/runs(runMode=REGENERATE_ASSISTANT, regeneratedMessageId)` -> 订阅新 run -> `variants` 刷新版本游标 | `regeneratedMessageId`、原父 user messageId、新 assistant messageId | 复用原 user 节点，新 assistant 作为 sibling 保存 |
-| 切换历史版本 | `GET /messages/{messageId}/variants` -> 用户选择某个候选 -> `POST /sessions/{sessionId}/path(leafMessageId)` -> `GET /messages` 重渲染 | `messageId`、`leafMessageId`、`currentLeafMessageId` | 只切换展示路径，不创建 run，不调用 Runtime |
-| 从消息新建分支 | `POST /sessions/{sessionId}/branches(sourceMessageId)` -> 选择新 `sessionId` -> `GET /state` | `sourceMessageId`、新 `sessionId`、`sourceSessionId/sourceMessageId` | 分支快照消息 `locked=true`，禁用编辑、删除和重新生成 |
+| 编辑历史 user 消息 | 用户点击编辑 -> `POST /chat/runs(runMode=EDIT_USER, editedMessageId, message)` -> 订阅新 run -> `run.completed` 后重新 `GET /messages` | `editedMessageId`、新 user `messageId`、新 assistant `messageId`、`versionInfo` | 旧消息不覆盖；新 user sibling 进入旧 user 的 `versionInfo.variants` |
+| 重新生成 assistant | 用户点击重新生成 -> `POST /chat/runs(runMode=REGENERATE_ASSISTANT, regeneratedMessageId)` -> 订阅新 run -> `run.completed` 后重新 `GET /messages` | `regeneratedMessageId`、原父 user messageId、新 assistant messageId、`versionInfo` | 复用原 user 节点，新 assistant sibling 进入旧 assistant 的 `versionInfo.variants` |
+| 切换历史版本 | 从当前消息 `versionInfo.variants` 取目标项 -> `GET /messages?leafMessageId={switchLeafMessageId}` 重渲染 -> 后台 `POST /path` 保存选择 | `versionInfo.currentIndex/total`、`switchLeafMessageId`、`currentLeafMessageId` | 先刷新展示路径，不创建 run，不调用 Runtime；`/path` 只负责持久化当前 leaf |
+| 从消息新建分支 | `POST /sessions/{sessionId}/branches(sourceMessageId)` -> 选择新 `sessionId` -> `GET /messages`、`GET /stream-status` | `sourceMessageId`、新 `sessionId`、`sourceSessionId/sourceMessageId` | 分支快照消息 `locked=true`，禁用编辑、删除和重新生成 |
 | 上传文件并作为附件提问 | `POST /documents(file, sessionId)` -> 等状态 `AVAILABLE` -> `POST /chat/runs(attachments[{documentId}])` | `documentId`、`sessionId`、`attachments[].documentId` | 附件不是消息类型；PROCESSING/FAILED/DELETED 不可作为聊天附件 |
 | 选中历史技能并带文档提问 | `POST /documents(file,targetProvider=legacy-agent,skillId)` -> `POST /chat/runs(metadata.selectedSkillId,attachments)` | `documentId`、`metadata.selectedSkillId`、`metadata.legacyAgent` | 显式技能路由不创建 RuntimeBinding；附件必须来自 `legacy-agent` provider |
 | 点赞/点踩/取消 | 历史消息中找到 assistant `messageId` -> `POST /messages/{messageId}/feedback`；再次点击已选按钮 -> `DELETE /feedback` | `messageId`、可选 `runId`、`feedback.rating/status` | 历史消息 `feedback` 非空时高亮；取消后返回 `status=CANCELLED`，历史消息再查为 `feedback=null` |
@@ -179,14 +178,13 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 接口 | 请求字段 | 响应字段 | 后续关联 |
 | --- | --- | --- | --- |
 | `POST /chat/sessions` | Body：`title` 会话标题，可空；`channel` 来源渠道，可空 | `ChatSessionDto` 全字段 | 使用 `sessionId` 作为会话路由和后续 run 入参 |
-| `GET /chat/sessions` | Query：`limit` 页大小；`cursor` 上一页游标 | `items[]`、`nextCursor`；item 带 `firstAssistantAnswer` | 游标分页；`nextCursor` 查下一页；`sessionId` 进入 state |
+| `GET /chat/sessions` | Query：`limit` 页大小；`cursor` 上一页游标 | `items[]`、`nextCursor`；item 带 `firstAssistantAnswer` | 游标分页；`nextCursor` 查下一页；`sessionId` 用于会话详情、历史消息和 stream-status |
 | `GET /chat/sessions/page` | Query：`curPage` 当前页，默认 1；`pageSize` 页大小，默认 20 | `items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；item 带 `firstAssistantAnswer` | 页码分页；适合传统分页组件，旧游标接口保持不变 |
 | `GET /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto` | 只拿元数据，不返回历史和流状态 |
-| `GET /chat/sessions/{sessionId}/state` | Path：`sessionId`；Query：`messageLimit` | `session`、`messages.items[]`、`messages.nextCursor`、`streamStatus` | 页面切换会话首选接口；根据 `streamStatus.activeRunId` 决定是否恢复 |
-| `GET /chat/sessions/{sessionId}/messages` | Path：`sessionId`；Query：`leafMessageId` 可选，`cursor` 保留，`limit` | `ChatMessagePageDto.items[]`、`nextCursor` | 用 `messageId` 做反馈、版本、分支和重新生成 |
+| `GET /chat/sessions/{sessionId}/messages` | Path：`sessionId`；Query：`leafMessageId` 可选，`cursor` 保留，`limit` | `ChatMessagePageDto.items[]`、`nextCursor`；item 可能带 `versionInfo` | 普通聊天页主接口；用 `messageId` 做反馈、分支和重新生成，用 `versionInfo.variants[].switchLeafMessageId` 切换版本 |
 | `GET /chat/sessions/{sessionId}/messages/tree` | Path：`sessionId` | `ChatMessageTreeDto`：`sessionId`、`currentLeafMessageId`、`rootMessageIds[]`、`mapping` | 读取完整可见消息树；不返回 hidden system、raw log 或下游工具原始节点 |
-| `GET /chat/sessions/{sessionId}/messages/{messageId}/variants` | Path：`sessionId`、`messageId` | `ChatMessageDto[]` | 用候选消息的 `messageId` 调 `path` 切换版本 |
-| `POST /chat/sessions/{sessionId}/path` | Path：`sessionId`；Body：`leafMessageId` | `ChatSessionDto` | 切换成功后重新查 `messages` 渲染 active path |
+| `GET /chat/sessions/{sessionId}/messages/{messageId}/variants` | Path：`sessionId`、`messageId` | `ChatMessageDto[]` | 查询完整候选内容和排障；普通聊天页优先使用 `/messages` 的 `versionInfo` |
+| `POST /chat/sessions/{sessionId}/path` | Path：`sessionId`；Body：`leafMessageId` | `ChatSessionDto` | 持久化当前 active leaf；UI 切换可先用 `/messages?leafMessageId=` 刷新，不必阻塞等待该接口 |
 | `POST /chat/sessions/{sessionId}/branches` | Path：源 `sessionId`；Body：`sourceMessageId`、`title` 可选 | 新分支 `ChatSessionDto` | 使用返回的新 `sessionId` 进入分支会话 |
 | `PATCH /chat/sessions/{sessionId}` | Path：`sessionId`；Body：`title` | `ChatSessionDto` | 更新左侧列表标题 |
 | `POST /chat/sessions/{sessionId}/archive` | Path：`sessionId` | `ChatSessionDto(status=ARCHIVED)` | 可从普通列表隐藏；恢复用 restore |
@@ -221,7 +219,6 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `GET /api/v1/ex/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`limit` 可选，默认 20；`cursor` 可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每个 `ChatSessionDto` 带 `firstAssistantAnswer`。 | 返回按最近更新时间倒序排列；`nextCursor=null` 表示无下一页；`firstAssistantAnswer` 是会话第一条完整 assistant 回答，可为空。 |
 | `GET /api/v1/ex/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`curPage` 可选，默认 1；`pageSize` 可选，默认 20，最大 100。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；每个 `ChatSessionDto` 带 `firstAssistantAnswer`。 | 不返回 `DELETED` 会话；适合需要总行数的传统分页组件；旧游标分页不受影响。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
-| `GET /api/v1/ex/chat/sessions/{sessionId}/state` | 切换会话或跨电脑打开会话时首选。 | Path：`sessionId`；Query：`messageLimit` 可选，默认 50。 | `ChatSessionStateDto`：`session`、`messages`、`streamStatus`。 | `messages` 返回当前 active path；正在输出的草稿仍走事件流，用户主动 stop 后已落库正文或用户可见 parts 会作为 partial assistant 返回。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 保留。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 不传 `leafMessageId` 时返回当前 active path；传入时返回 root 到该 leaf 的路径。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` | 复杂前端读取完整消息树，或联调排查版本关系。 | Path：`sessionId`。 | `ChatMessageTreeDto`。 | 只读接口；不改变当前路径，不创建 run；mapping 只包含业务可见 user/assistant 消息。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants` | 切换编辑/重新生成后的候选版本。 | Path：`sessionId`、`messageId`。 | `ChatMessageDto[]`。 | 返回同父节点、同角色的 sibling 版本。 |
@@ -336,7 +333,32 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `regeneratedFromMessageId` | 重新生成 assistant 消息时的新版本来源 |
 | `parts` | assistant 消息结构化过程信息，包括思考、工具、进度、agent 调用和 ANSWER 快照；user 消息通常为空数组 |
 | `feedback` | 当前用户对该 assistant 消息的有效反馈；user 消息或已取消反馈为 `null` |
+| `versionInfo` | 同父同角色候选版本摘要；无可切换版本时为 `null` |
 | `createdAt` | 消息创建时间 |
+
+### `ChatMessageVersionInfoDto`
+
+| 字段 | 含义 |
+| --- | --- |
+| `role` | 当前消息角色，通常为 `user` 或 `assistant`。 |
+| `currentMessageId` | 当前 active path 中的消息 ID。 |
+| `currentIndex` | 当前版本序号，从 1 开始。 |
+| `total` | 同父同角色 sibling 版本总数。 |
+| `variants` | 轻量候选版本列表，按版本序号排列。 |
+
+### `ChatMessageVersionItemDto`
+
+| 字段 | 含义 |
+| --- | --- |
+| `messageId` | 候选版本消息 ID。 |
+| `index` | 候选版本序号，从 1 开始。 |
+| `selected` | 是否为当前 active path 选中的版本。 |
+| `switchLeafMessageId` | 切换该版本时应传给 `/messages?leafMessageId=` 和 `/path` 的 leaf。 |
+| `locked` | 候选消息是否只读；分支快照通常为 `true`。 |
+| `originType` | `NORMAL` 或 `BRANCH_SNAPSHOT`。 |
+| `editedFromMessageId` | user 编辑版本来源；非编辑版本为空。 |
+| `regeneratedFromMessageId` | assistant 重新生成版本来源；非重生成版本为空。 |
+| `createdAt` | 候选消息创建时间。 |
 
 ### `ChatMessagePartDto`
 
@@ -665,65 +687,31 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions/page?curPage=1&pageSize=20"
 }
 ```
 
-选择会话后推荐先查询聚合状态：
+选择会话后推荐按职责分别查询会话元数据、历史消息和流状态：
 
 ```bash
-curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/state?messageLimit=50"
+curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx"
+curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages?limit=50"
+curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/stream-status"
 ```
 
-响应包含会话元数据、最近一页历史消息和流状态：
+会话详情只返回元数据：
 
 ```json
 {
-  "session": {
-    "sessionId": "session_xxx",
-    "tenantId": "tenant_dev",
-    "userId": "user_dev",
-    "title": "财经问答",
-    "status": "ACTIVE",
-    "channel": "web",
-    "currentLeafMessageId": "msg_002",
-    "rootSessionId": "session_xxx",
-    "branchSourceSessionId": null,
-    "branchSourceMessageId": null,
-    "firstAssistantAnswer": null,
-    "createdAt": "2026-05-17T01:00:00Z",
-    "updatedAt": "2026-05-17T01:10:00Z"
-  },
-  "messages": {
-    "items": [
-      {
-        "messageId": "msg_001",
-        "sessionId": "session_xxx",
-        "parentMessageId": null,
-        "nodeOrder": 1,
-        "treeDepth": 0,
-        "siblingIndex": 1,
-        "role": "user",
-        "content": "帮我分析一下这个费用趋势",
-        "tokenCount": null,
-        "runId": "run_xxx",
-        "originType": "NORMAL",
-        "locked": false,
-        "sourceSessionId": null,
-        "sourceMessageId": null,
-        "editedFromMessageId": null,
-        "regeneratedFromMessageId": null,
-        "createdAt": "2026-05-17T01:01:00Z"
-      }
-    ],
-    "nextCursor": null
-  },
-  "streamStatus": {
-    "sessionId": "session_xxx",
-    "latestSeq": 12005,
-    "activeRunId": "run_xxx",
-    "activeRunStatus": "RUNNING",
-    "activeStreamTopicId": "chat-run-run_xxx",
-    "activeRunFirstSeq": 12001,
-    "activeRunLastSeq": 12005,
-    "cancellable": true
-  }
+  "sessionId": "session_xxx",
+  "tenantId": "tenant_dev",
+  "userId": "user_dev",
+  "title": "财经问答",
+  "status": "ACTIVE",
+  "channel": "web",
+  "currentLeafMessageId": "msg_002",
+  "rootSessionId": "session_xxx",
+  "branchSourceSessionId": null,
+  "branchSourceMessageId": null,
+  "firstAssistantAnswer": null,
+  "createdAt": "2026-05-17T01:00:00Z",
+  "updatedAt": "2026-05-17T01:10:00Z"
 }
 ```
 
@@ -817,30 +805,86 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages/tree"
 raw log 或下游工具原始节点。每个 assistant 节点仍带 `parts`，前端过程面板应优先使用
 `part.title/status/channel/displayHint/visible`，而不是解析 Relay 私有 payload。
 
-### 查询候选版本
+### 普通聊天页版本游标
 
-当用户编辑历史问题或重新生成回答后，同一个父节点下会出现多个 sibling。前端推荐在消息下方展示
-`< 1/3 >` 形式的顺序版本游标，而不是把所有候选展开成列表。版本数量和当前位置来自 variants 接口：
+当用户编辑历史问题或重新生成回答后，同一个父节点下会出现多个 sibling。普通聊天页优先使用
+`GET /sessions/{sessionId}/messages` 返回的 `ChatMessageDto.versionInfo` 展示 `< 1/3 >`：
 
-```bash
-curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages/msg_002/variants"
+```json
+{
+  "messageId": "msg_q3_v2",
+  "role": "user",
+  "content": "编辑后的问题",
+  "versionInfo": {
+    "role": "user",
+    "currentMessageId": "msg_q3_v2",
+    "currentIndex": 2,
+    "total": 2,
+    "variants": [
+      {
+        "messageId": "msg_q3_v1",
+        "index": 1,
+        "selected": false,
+        "switchLeafMessageId": "msg_a3_v1"
+      },
+      {
+        "messageId": "msg_q3_v2",
+        "index": 2,
+        "selected": true,
+        "switchLeafMessageId": "msg_a4_v1"
+      }
+    ]
+  }
+}
 ```
 
-响应是 `ChatMessageDto[]`，其中 `siblingIndex` 表示候选序号，`editedFromMessageId` 和 `regeneratedFromMessageId` 用于说明版本来源。
+`switchLeafMessageId` 由后端按该候选版本所在分支计算。若 `Q3-2/A3-2` 后已经继续产生
+`Q4/A4`，切换到 `Q3-2` 时该字段会指向 `A4`，从而让前端直接展示完整分支。
+
+`GET /messages/{messageId}/variants` 仍保留，用于查看候选版本完整内容或排障；普通聊天页不需要为每条消息逐个调用它。
 
 ### 切换当前路径
 
-用户在历史版本之间切换时，只需要更新会话当前 leaf：
+用户在历史版本之间切换时，推荐先刷新展示路径，再保存当前 leaf：
+
+```bash
+curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages?leafMessageId=msg_a4_v1&limit=50"
+```
+
+前端用返回的 `items[]` 替换聊天区后，再调用 path 接口持久化当前选择：
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/path \
   -H 'Content-Type: application/json' \
-  -d '{"leafMessageId":"msg_variant_leaf"}'
+  -d '{"leafMessageId":"msg_a4_v1"}'
 ```
 
-切换成功后，再查询 `GET /sessions/{sessionId}/messages` 会返回 root 到新 leaf 的 active path。
-如果前端在 user 消息游标上切换版本，服务端会优先把路径落到该 user 下最新的 assistant 子节点；
-这样用户看到的是“问题版本 + 对应回答”，而不是只剩一个 user 气泡。
+`/messages?leafMessageId=...` 只用于临时展示，不修改会话 `currentLeafMessageId`。`/path`
+用于刷新页面后恢复同一路径，以及下一轮不传 `parentMessageId` 时确定默认追加位置。
+
+如果前端切换后马上继续提问，建议把当前展示路径最后一条消息 ID 显式作为 `/chat/runs`
+的 `parentMessageId`，这样即使 `/path` 保存还在路上，也不会把新消息挂错分支。
+
+### 编辑历史 user 与重新生成 assistant
+
+编辑历史 user：
+
+```bash
+curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
+  -H 'Content-Type: application/json' \
+  -d '{"sessionId":"session_xxx","runMode":"EDIT_USER","editedMessageId":"msg_user_old","message":"新的问题"}'
+```
+
+重新生成 assistant：
+
+```bash
+curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
+  -H 'Content-Type: application/json' \
+  -d '{"sessionId":"session_xxx","runMode":"REGENERATE_ASSISTANT","regeneratedMessageId":"msg_assistant_old"}'
+```
+
+两种操作都会创建新的 sibling，不覆盖旧消息。前端在新 run 终态后重新查询 `/messages`，
+即可在对应 user 或 assistant 的 `versionInfo.variants` 中看到新版本。
 
 ### 从某条消息新建分支
 

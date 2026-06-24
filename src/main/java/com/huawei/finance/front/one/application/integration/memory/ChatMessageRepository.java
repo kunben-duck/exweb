@@ -88,6 +88,21 @@ public interface ChatMessageRepository {
     }
 
     /**
+     * 查询当前会话内全部可见消息树节点，但不要求装配 message parts。
+     *
+     * <p>该方法用于 /messages 的版本摘要计算，避免为了计算 sibling 和 switch leaf 读取整棵树的
+     * assistant parts。需要展示完整 tree 的调用方继续使用 {@link #findAllBySession(String, String, String)}。</p>
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @return 当前用户当前会话内全部 user/assistant 消息节点，按 nodeOrder 排序。
+     */
+    default List<ChatMessage> findAllMessageNodesBySession(String tenantId, String userId, String sessionId) {
+        return findAllBySession(tenantId, userId, sessionId);
+    }
+
+    /**
      * 按归属查询单条消息。
      *
      * @param tenantId 租户标识。

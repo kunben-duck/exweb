@@ -81,7 +81,7 @@ function bindUi() {
   bindClick("refreshSessionsBtn", refreshSessions);
   bindClick("batchDeleteSessionsBtn", deleteSelectedSessions);
   bindClick("createSessionBtn", createSession);
-  bindClick("loadStateBtn", () => requireSession(sessionId => loadSessionState(sessionId, true)));
+  bindClick("loadSessionBtn", () => requireSession(sessionId => loadSessionMessagesAndStatus(sessionId, true)));
   bindClick("loadMessagesBtn", () => requireSession(loadMessagesOnly));
   bindClick("loadTreeBtn", () => requireSession(loadMessageTree));
   bindClick("renameSessionBtn", renameSession);
@@ -261,20 +261,24 @@ async function selectSession(sessionId) {
   localStorage.setItem("finex:test:lastSessionId", sessionId);
   history.replaceState(null, "", `?sessionId=${encodeURIComponent(sessionId)}`);
   renderSessions();
-  await loadSessionState(sessionId, true);
+  await loadSessionMessagesAndStatus(sessionId, true);
   await refreshDocuments();
 }
 
-async function loadSessionState(sessionId, restoreStream) {
-  const stateDto = await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}/state?messageLimit=50`);
-  const streamStatus = stateDto.streamStatus;
+async function loadSessionMessagesAndStatus(sessionId, restoreStream) {
+  const encodedSessionId = encodeURIComponent(sessionId);
+  const [sessionDto, messagesPage, streamStatus] = await Promise.all([
+    requestJson(`/api/v1/ex/chat/sessions/${encodedSessionId}`),
+    requestJson(`/api/v1/ex/chat/sessions/${encodedSessionId}/messages?limit=50`),
+    requestJson(`/api/v1/ex/chat/sessions/${encodedSessionId}/stream-status`)
+  ]);
   const hasActiveRun = Boolean(restoreStream && streamStatus?.activeRunId && streamStatus?.activeStreamTopicId);
   $("currentSessionId").textContent = sessionId;
-  $("renameTitle").value = stateDto.session?.title || "";
-  renderHistory(stateDto.messages?.items || []);
+  $("renameTitle").value = sessionDto?.title || "";
+  renderHistory(messagesPage?.items || []);
   setStreamStatus(streamStatus);
   if (hasActiveRun) {
-    startActiveRunSseRestore(streamStatus, "state");
+    startActiveRunSseRestore(streamStatus, "stream-status");
   } else {
     replayStoredEvents(sessionId);
   }
@@ -356,7 +360,8 @@ function renderHistory(messages) {
       locked: message.locked,
       editedFromMessageId: message.editedFromMessageId,
       regeneratedFromMessageId: message.regeneratedFromMessageId,
-      parts: message.parts || []
+      parts: message.parts || [],
+      versionInfo: message.versionInfo || null
     }, message);
   }
   scrollMessages();
@@ -1036,8 +1041,7 @@ async function copyMessageContent(message, fallbackContent) {
 }
 
 function messageVersionNavigator() {
-  // 类 ChatGPT 的版本游标：同父同角色 sibling 超过一个时显示 < 1/3 >。
-  // 游标只负责切换当前会话 active path，不会创建新的 run。
+  // 同父同角色 sibling 超过一个时显示 < 1/3 >；候选版本由 /messages 的 versionInfo 直接返回。
   const node = document.createElement("span");
   node.className = "version-nav";
   node.hidden = true;
@@ -1064,32 +1068,24 @@ function messageVersionNavigator() {
   return { node, previous, label, next };
 }
 
-async function hydrateMessageVersionNavigator(message, navigator) {
-  // 版本信息来自服务端事实源，避免前端只凭当前 path 猜测 sibling 数量。
-  const messageId = message?.messageId || message?.id;
-  if (!messageId) return;
-  try {
-    const variants = await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(requireSessionId())}/messages/${encodeURIComponent(messageId)}/variants`);
-    if (variants.length <= 1) {
-      navigator.node.hidden = true;
-      return;
-    }
-    const index = Math.max(0, variants.findIndex(item => item.messageId === messageId));
-    navigator.node.hidden = false;
-    renderVersionNavigator(navigator, variants, index);
-  } catch (error) {
-    log(`version nav failed ${messageId}: ${error.message}`);
+function hydrateMessageVersionNavigator(message, navigator) {
+  const versionInfo = message?.versionInfo;
+  if (!versionInfo || versionInfo.total <= 1 || !Array.isArray(versionInfo.variants)) {
+    navigator.node.hidden = true;
+    return;
   }
+  navigator.node.hidden = false;
+  renderVersionNavigator(navigator, versionInfo);
 }
 
-function renderVersionNavigator(navigator, variants, index) {
-  // variants 已由后端按 siblingIndex 排序，左右箭头直接按数组位置切换。
-  const current = Math.max(0, Math.min(index, variants.length - 1));
-  navigator.label.textContent = `${current + 1}/${variants.length}`;
+function renderVersionNavigator(navigator, versionInfo) {
+  const variants = versionInfo.variants || [];
+  const current = Math.max(0, Math.min((versionInfo.currentIndex || 1) - 1, variants.length - 1));
+  navigator.label.textContent = `${current + 1}/${versionInfo.total}`;
   navigator.previous.disabled = current <= 0;
   navigator.next.disabled = current >= variants.length - 1;
-  navigator.previous.onclick = () => runSafely(() => selectMessagePath(variants[current - 1].messageId));
-  navigator.next.onclick = () => runSafely(() => selectMessagePath(variants[current + 1].messageId));
+  navigator.previous.onclick = () => runSafely(() => selectMessageVersion(variants[current - 1]));
+  navigator.next.onclick = () => runSafely(() => selectMessageVersion(variants[current + 1]));
 }
 
 function feedbackButton(message, messageId, rating, label) {
@@ -1192,14 +1188,25 @@ async function createBranchFromMessage(message) {
   log(`branch created ${session.sessionId} from ${messageId}`);
 }
 
+async function selectMessageVersion(variant) {
+  if (!variant) return;
+  const leafMessageId = variant.switchLeafMessageId || variant.messageId;
+  await selectMessagePath(leafMessageId);
+}
+
 async function selectMessagePath(leafMessageId) {
-  await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(requireSessionId())}/path`, {
+  const sessionId = requireSessionId();
+  const page = await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}/messages?leafMessageId=${encodeURIComponent(leafMessageId)}&limit=50`);
+  renderHistory(page.items || []);
+  replayStoredEvents(sessionId);
+  requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}/path`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ leafMessageId })
-  });
-  await loadSessionState(requireSessionId(), false);
-  log(`path selected leaf=${leafMessageId}`);
+  })
+    .then(() => log(`path saved leaf=${leafMessageId}`))
+    .catch(error => log(`path save failed leaf=${leafMessageId}: ${error.message}`));
+  log(`path preview leaf=${leafMessageId}`);
 }
 
 async function refreshDocuments() {

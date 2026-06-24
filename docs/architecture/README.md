@@ -289,7 +289,7 @@ DELETE /api/v1/ex/chat/shares/{shareId}
 GET  /api/v1/ex/chat/shares?curPage=1&pageSize=20
 POST /api/v1/ex/chat/sessions
 GET  /api/v1/ex/chat/sessions?limit=20&cursor=...
-GET  /api/v1/ex/chat/sessions/{sessionId}/state?messageLimit=50
+GET  /api/v1/ex/chat/sessions/{sessionId}
 GET  /api/v1/ex/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50
 GET  /api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants
 POST /api/v1/ex/chat/sessions/{sessionId}/path
@@ -316,7 +316,7 @@ DELETE /api/v1/ex/chat/sessions
 - `EDIT_USER`：校验 `editedMessageId` 是未锁定 user 消息，在原父节点下创建新的 user sibling，旧消息不变。
 - `REGENERATE_ASSISTANT`：校验 `regeneratedMessageId` 是未锁定 assistant 消息，复用其父 user 消息，run 完成后创建新的 assistant sibling。
 
-`current_leaf_message_id` 表示当前会话激活路径叶子。历史消息查询默认返回 root 到 current leaf 的路径；指定 `leafMessageId` 时返回 root 到该 leaf 的路径。前端通过 `variants` 查询同父节点候选，通过 `path` 接口切换当前激活版本。
+`current_leaf_message_id` 表示当前会话激活路径叶子。历史消息查询默认返回 root 到 current leaf 的路径；指定 `leafMessageId` 时返回 root 到该 leaf 的路径。`/messages` 会在有多个 sibling 版本的消息上返回 `versionInfo`，包含当前版本序号、版本总数和候选版本的 `switchLeafMessageId`。前端切换版本时可以先用 `GET /messages?leafMessageId={switchLeafMessageId}` 刷新聊天区，再用 `POST /path` 持久化当前选择；`/variants` 保留为查询完整候选内容和调试的接口。
 
 复杂前端或联调排障可以调用 `GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` 读取完整可见消息树。该接口返回 `currentLeafMessageId`、`rootMessageIds` 和 `mapping`，但只包含业务可见的 user/assistant 消息，不返回 hidden system、raw log 或下游工具原始节点；普通聊天页继续使用 `/messages` active path。
 

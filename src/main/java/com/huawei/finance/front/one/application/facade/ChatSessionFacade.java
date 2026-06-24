@@ -116,6 +116,19 @@ public interface ChatSessionFacade {
     }
 
     /**
+     * 查询当前用户可见会话的轻量消息树节点。
+     *
+     * <p>该方法用于历史消息接口装配版本摘要，不要求返回 assistant parts。</p>
+     *
+     * @param user 请求入口解析出的不可变用户身份快照。
+     * @param sessionId 会话标识。
+     * @return 当前会话内按 nodeOrder 排序的可见消息节点。
+     */
+    default List<ChatMessage> listMessageTreeNodes(UserContext user, String sessionId) {
+        return listMessageTree(user, sessionId);
+    }
+
+    /**
      * 重命名当前用户可见的会话。
      *
      * @param user 请求入口解析出的不可变用户身份快照。

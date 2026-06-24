@@ -173,6 +173,15 @@ public class MyBatisChatMessageStore {
         return attachParts(tenantId, userId, sessionId, messages);
     }
 
+    public List<ChatMessage> findAllMessageNodesBySession(String tenantId, String userId, String sessionId) {
+        if (tenantId == null || userId == null || sessionId == null) {
+            return List.of();
+        }
+        return mapper.findAllBySession(tenantId, userId, sessionId).stream()
+                .map(this::toDomain)
+                .toList();
+    }
+
     public Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId) {
         if (messageId == null || messageId.isBlank()) {
             return Optional.empty();

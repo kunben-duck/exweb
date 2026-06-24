@@ -3,7 +3,6 @@ package com.huawei.finance.front.one.interfaces.chat;
 import com.huawei.finance.front.one.application.facade.ChatSessionFacade;
 import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
 import com.huawei.finance.front.one.application.service.chat.ChatFeedbackApplicationService;
-import com.huawei.finance.front.one.application.service.chat.ChatRunApplicationService;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
@@ -13,7 +12,6 @@ import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
-import com.huawei.finance.front.one.domain.chat.ChatStreamStatus;
 import com.huawei.finance.front.one.interfaces.chat.dto.BatchDeleteChatSessionsDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.BatchDeleteChatSessionsRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessageDto;
@@ -21,11 +19,10 @@ import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessagePageDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessagePartDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessageTreeDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessageTreeNodeDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessageVersionInfoDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionNumberPageDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionPageDto;
-import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionStateDto;
-import com.huawei.finance.front.one.interfaces.chat.dto.ChatStreamStatusDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatBranchRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatSessionRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.MessageFeedbackDto;
@@ -58,19 +55,20 @@ import reactor.core.scheduler.Schedulers;
 @RequestMapping("/api/v1/ex/chat/sessions")
 public class ChatSessionController {
     private final ChatSessionFacade facade;
-    private final ChatRunApplicationService chatRunService;
     private final ChatFeedbackApplicationService feedbackService;
     private final AuthContextProvider auth;
     private final PermissionChecker permissionChecker;
+    private final ChatMessageVersionViewAssembler versionViewAssembler;
 
-    public ChatSessionController(ChatSessionFacade facade, ChatRunApplicationService chatRunService,
-                                 ChatFeedbackApplicationService feedbackService, AuthContextProvider auth,
-                                 PermissionChecker permissionChecker) {
+    public ChatSessionController(ChatSessionFacade facade, ChatFeedbackApplicationService feedbackService,
+                                 AuthContextProvider auth,
+                                 PermissionChecker permissionChecker,
+                                 ChatMessageVersionViewAssembler versionViewAssembler) {
         this.facade = facade;
-        this.chatRunService = chatRunService;
         this.feedbackService = feedbackService;
         this.auth = auth;
         this.permissionChecker = permissionChecker;
+        this.versionViewAssembler = versionViewAssembler;
     }
 
     /**
@@ -159,30 +157,6 @@ public class ChatSessionController {
     }
 
     /**
-     * 查询会话页面初始化状态。
-     *
-     * @param sessionId 会话标识；服务端会校验会话归属。
-     * @param messageLimit 返回最近历史消息条数，适合页面首次渲染。
-     * @return 会话元数据、最近历史消息分页和当前流式状态。
-     */
-    @GetMapping("/{sessionId}/state")
-    public Mono<ChatSessionStateDto> state(@PathVariable("sessionId") String sessionId,
-                                                @RequestParam(value = "messageLimit", defaultValue = "50") int messageLimit) {
-        UserContext user = resolveChatUser();
-        return Mono.fromCallable(() -> {
-                    ChatSession session = facade.getSession(user, sessionId);
-                    ChatMessagePage messages = facade.listMessages(user, sessionId, null, messageLimit);
-                    ChatStreamStatus streamStatus = chatRunService.streamStatus(user, sessionId);
-                    return new ChatSessionStateDto(
-                            toDto(session),
-                            toMessagePageDto(user, sessionId, messages),
-                            toStreamStatusDto(streamStatus)
-                    );
-                })
-                .subscribeOn(Schedulers.boundedElastic());
-    }
-
-    /**
      * 查询所选会话的历史消息。
      *
      * <p>返回值按创建时间正序排列，适合前端切换会话后直接渲染历史气泡。
@@ -199,8 +173,13 @@ public class ChatSessionController {
                                                   @RequestParam(value = "cursor", required = false) String cursor,
                                                   @RequestParam(value = "limit", defaultValue = "50") int limit) {
         UserContext user = resolveChatUser();
-        return Mono.fromCallable(() -> toMessagePageDto(user, sessionId,
-                        facade.listMessages(user, sessionId, leafMessageId, cursor, limit)))
+        return Mono.fromCallable(() -> {
+                    ChatMessagePage page = facade.listMessages(user, sessionId, leafMessageId, cursor, limit);
+                    Map<String, ChatMessageVersionInfoDto> versionInfos = page.items().isEmpty()
+                            ? Map.of()
+                            : versionViewAssembler.assemble(page.items(), facade.listMessageTreeNodes(user, sessionId));
+                    return toMessagePageDto(user, sessionId, page, versionInfos);
+                })
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -382,7 +361,8 @@ public class ChatSessionController {
         );
     }
 
-    private ChatMessageDto toMessageDto(ChatMessage message, ChatMessageFeedback feedback) {
+    private ChatMessageDto toMessageDto(ChatMessage message, ChatMessageFeedback feedback,
+                                        ChatMessageVersionInfoDto versionInfo) {
         return new ChatMessageDto(
                 message.id(),
                 message.sessionId(),
@@ -402,6 +382,7 @@ public class ChatSessionController {
                 message.regeneratedFromMessageId(),
                 toPartDtos(message.parts()),
                 feedback == null ? null : toFeedbackDto(feedback),
+                versionInfo,
                 message.createdAt()
         );
     }
@@ -430,8 +411,9 @@ public class ChatSessionController {
                 .toList();
     }
 
-    private ChatMessagePageDto toMessagePageDto(UserContext user, String sessionId, ChatMessagePage page) {
-        return new ChatMessagePageDto(toMessageDtos(user, sessionId, page.items()), page.nextCursor());
+    private ChatMessagePageDto toMessagePageDto(UserContext user, String sessionId, ChatMessagePage page,
+                                                Map<String, ChatMessageVersionInfoDto> versionInfos) {
+        return new ChatMessagePageDto(toMessageDtos(user, sessionId, page.items(), versionInfos), page.nextCursor());
     }
 
     private ChatMessageTreeDto toMessageTreeDto(UserContext user, ChatSession session, List<ChatMessage> messages) {
@@ -440,6 +422,8 @@ public class ChatSessionController {
                 .toList();
         Set<String> messageIds = orderedMessages.stream().map(ChatMessage::id).collect(Collectors.toSet());
         Map<String, ChatMessageFeedback> feedbacks = feedbackService.findActiveByMessages(user, session.id(), orderedMessages);
+        Map<String, ChatMessageVersionInfoDto> versionInfos =
+                versionViewAssembler.assemble(orderedMessages, orderedMessages);
         Map<String, List<String>> childrenByParent = orderedMessages.stream()
                 .filter(message -> message.parentMessageId() != null && messageIds.contains(message.parentMessageId()))
                 .collect(Collectors.groupingBy(ChatMessage::parentMessageId, LinkedHashMap::new,
@@ -448,7 +432,7 @@ public class ChatSessionController {
         for (ChatMessage message : orderedMessages) {
             mapping.put(message.id(), new ChatMessageTreeNodeDto(
                     message.id(),
-                    toMessageDto(message, feedbacks.get(message.id())),
+                    toMessageDto(message, feedbacks.get(message.id()), versionInfos.get(message.id())),
                     message.parentMessageId(),
                     childrenByParent.getOrDefault(message.id(), List.of())
             ));
@@ -461,9 +445,14 @@ public class ChatSessionController {
     }
 
     private List<ChatMessageDto> toMessageDtos(UserContext user, String sessionId, List<ChatMessage> messages) {
+        return toMessageDtos(user, sessionId, messages, Map.of());
+    }
+
+    private List<ChatMessageDto> toMessageDtos(UserContext user, String sessionId, List<ChatMessage> messages,
+                                               Map<String, ChatMessageVersionInfoDto> versionInfos) {
         Map<String, ChatMessageFeedback> feedbacks = feedbackService.findActiveByMessages(user, sessionId, messages);
         return messages.stream()
-                .map(message -> toMessageDto(message, feedbacks.get(message.id())))
+                .map(message -> toMessageDto(message, feedbacks.get(message.id()), versionInfos.get(message.id())))
                 .toList();
     }
 
@@ -476,19 +465,6 @@ public class ChatSessionController {
                 feedback.status(),
                 feedback.createdAt(),
                 feedback.updatedAt()
-        );
-    }
-
-    private ChatStreamStatusDto toStreamStatusDto(ChatStreamStatus status) {
-        return new ChatStreamStatusDto(
-                status.sessionId(),
-                status.latestSeq(),
-                status.activeRunId(),
-                status.activeRunStatus() == null ? null : status.activeRunStatus().name(),
-                status.activeStreamTopicId(),
-                status.activeRunFirstSeq(),
-                status.activeRunLastSeq(),
-                status.cancellable()
         );
     }
 }

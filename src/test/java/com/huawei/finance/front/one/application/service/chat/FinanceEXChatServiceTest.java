@@ -475,8 +475,8 @@ class FinanceEXChatServiceTest {
 
         FinanceEXChatService service = stopService(sessions, messages, runs, events);
 
-        assertThat(service.stopRun(user, "run1", RuntimeForwardHeaders.empty()).block().status())
-                .isEqualTo(ChatRunStatus.CANCELLED);
+        var stopResult = service.stopRun(user, "run1", RuntimeForwardHeaders.empty()).block();
+        assertThat(stopResult.status()).isEqualTo(ChatRunStatus.CANCELLED);
 
         ChatMessage assistant = messages.messages.stream()
                 .filter(message -> "assistant".equals(message.role()))
@@ -487,6 +487,16 @@ class FinanceEXChatServiceTest {
         assertThat(assistant.parts()).extracting(ChatMessagePart::partType)
                 .containsExactly("TOOL", "ANSWER");
         assertThat(runs.findById("run1").orElseThrow().assistantMessageId()).isEqualTo(assistant.id());
+        assertThat(stopResult.messageReady()).isTrue();
+        assertThat(stopResult.assistantMessageId()).isEqualTo(assistant.id());
+        assertThat(stopResult.feedbackTargetMessageId()).isEqualTo(assistant.id());
+        ChatEvent cancelled = events.events.stream()
+                .filter(event -> "run.cancelled".equals(event.type()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(cancelled.payload()).containsEntry("messageReady", true)
+                .containsEntry("assistantMessageId", assistant.id())
+                .containsEntry("feedbackTargetMessageId", assistant.id());
     }
 
     @Test
@@ -504,8 +514,8 @@ class FinanceEXChatServiceTest {
 
         FinanceEXChatService service = stopService(sessions, messages, runs, events);
 
-        assertThat(service.stopRun(user, "run1", RuntimeForwardHeaders.empty()).block().status())
-                .isEqualTo(ChatRunStatus.CANCELLED);
+        var stopResult = service.stopRun(user, "run1", RuntimeForwardHeaders.empty()).block();
+        assertThat(stopResult.status()).isEqualTo(ChatRunStatus.CANCELLED);
         ChatMessage assistant = messages.messages.stream()
                 .filter(message -> "assistant".equals(message.role()))
                 .findFirst()
@@ -517,6 +527,14 @@ class FinanceEXChatServiceTest {
         assertThat(messages.parts).extracting(ChatMessagePart::partType)
                 .containsExactly("PROGRESS", "ANSWER");
         assertThat(runs.findById("run1").orElseThrow().assistantMessageId()).isEqualTo(assistant.id());
+        assertThat(stopResult.messageReady()).isTrue();
+        assertThat(stopResult.feedbackTargetMessageId()).isEqualTo(assistant.id());
+        ChatEvent cancelled = events.events.stream()
+                .filter(event -> "run.cancelled".equals(event.type()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(cancelled.payload()).containsEntry("messageReady", true)
+                .containsEntry("assistantMessageId", assistant.id());
     }
 
     @Test
@@ -535,9 +553,41 @@ class FinanceEXChatServiceTest {
 
         FinanceEXChatService service = stopService(sessions, messages, runs, events);
 
-        assertThat(service.stopRun(user, "run1", RuntimeForwardHeaders.empty()).block().status())
-                .isEqualTo(ChatRunStatus.CANCELLED);
+        var stopResult = service.stopRun(user, "run1", RuntimeForwardHeaders.empty()).block();
+        assertThat(stopResult.status()).isEqualTo(ChatRunStatus.CANCELLED);
         assertThat(messages.messages).extracting(ChatMessage::role).containsExactly("user");
+        assertThat(runs.findById("run1").orElseThrow().assistantMessageId()).isNull();
+        assertThat(stopResult.messageReady()).isFalse();
+        ChatEvent cancelled = events.events.stream()
+                .filter(event -> "run.cancelled".equals(event.type()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(cancelled.payload()).containsEntry("messageReady", false);
+        assertThat(cancelled.payload()).doesNotContainKeys("assistantMessageId", "feedbackTargetMessageId");
+    }
+
+    @Test
+    void userStopStillPublishesCancelledWhenPartialAssistantPersistenceFails() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        FailingMessageRepository messages = new FailingMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        seedRunningRun(sessions, messages, runs, user, "run1", "session1", "msg-user");
+        events.append(MessageDeltaEvent.of("run1", "session1", "已输出但保存失败的回答"));
+        messages.failSaves = true;
+
+        FinanceEXChatService service = stopService(sessions, messages, runs, events);
+
+        var stopResult = service.stopRun(user, "run1", RuntimeForwardHeaders.empty()).block();
+
+        assertThat(stopResult.status()).isEqualTo(ChatRunStatus.CANCELLED);
+        assertThat(stopResult.messageReady()).isFalse();
+        ChatEvent cancelled = events.events.stream()
+                .filter(event -> "run.cancelled".equals(event.type()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(cancelled.payload()).containsEntry("messageReady", false);
         assertThat(runs.findById("run1").orElseThrow().assistantMessageId()).isNull();
     }
 
@@ -801,6 +851,18 @@ class FinanceEXChatServiceTest {
         }
         @Override public Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId) {
             return messages.stream().filter(message -> messageId.equals(message.id())).findFirst();
+        }
+    }
+
+    private static class FailingMessageRepository extends InMemoryMessageRepository {
+        private boolean failSaves;
+
+        @Override
+        public ChatMessage save(ChatMessage message) {
+            if (failSaves) {
+                throw new IllegalStateException("message db down");
+            }
+            return super.save(message);
         }
     }
 

@@ -163,7 +163,7 @@ Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPubli
 
 `fin_ex_chat_message_t.parent_message_id` 形成会话内消息树，`node_order/tree_depth/sibling_index` 用于稳定排序和版本切换。普通继续提问会在当前 leaf 后追加 `user -> assistant`；编辑历史问题会在原 user 的父节点下创建新的 user sibling；重新生成回答会在同一个 user 下创建新的 assistant sibling。`run.completed` 后保存完整 assistant 历史消息；如果没有正文但存在卡片、引用、思考、工具、进度等用户可见过程 parts，也会创建空正文 assistant 作为 parts 挂载点；用户主动 stop 时同样会保存已落库正文或用户可见 parts 作为 partial assistant；`run.failed`、watchdog 故障或只有 trace/metadata 等内部事件时不保存空 assistant。
 
-前端点赞/点踩只能针对已落库 assistant 消息。流式阶段的 `message.delta/message.snapshot/message.completed` 只用于渲染草稿；`run.completed.payload.messageReady=true` 时会携带 `assistantMessageId` 和 `feedbackTargetMessageId`，前端应使用该 ID 绑定反馈按钮。
+前端点赞/点踩只能针对已落库 assistant 消息。流式阶段的 `message.delta/message.snapshot/message.completed` 只用于渲染草稿；`run.completed` 和用户主动 stop 后的 `run.cancelled` 在 `payload.messageReady=true` 时会携带 `assistantMessageId` 和 `feedbackTargetMessageId`，前端应使用该 ID 绑定反馈按钮。
 
 历史消息接口分两层：`GET /api/v1/ex/chat/sessions/{sessionId}/messages` 返回当前 active path，并在有多个 sibling 版本的消息上返回 `versionInfo`，前端可直接展示 `<currentIndex/total>` 版本游标；`versionInfo.variants[].switchLeafMessageId` 是切换该版本时传给 `/messages?leafMessageId=` 和 `/path` 的 leaf。`GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` 返回完整可见消息树 `mapping/currentLeafMessageId/rootMessageIds`，用于复杂版本树和联调排障。tree 视图只包含业务可见的 user/assistant 消息，不暴露 hidden system、raw log 或下游工具原始节点。
 

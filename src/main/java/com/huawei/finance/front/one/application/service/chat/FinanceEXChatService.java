@@ -189,11 +189,17 @@ public class FinanceEXChatService implements FinanceChatFacade {
             cancelDownstream(run, user, headerSnapshot)
                     .onErrorResume(ex -> Mono.empty())
                     .subscribe();
-            persistPartialAssistantForUserStop(user, run);
-            ChatEvent cancelEvent = RunCancelledEvent.of(run.id(), run.sessionId(), run.cancelReason());
-            if (!chatRunService.shouldAcceptEvent(cancelEvent)) {
+            if (!chatRunService.shouldAcceptEvent(RunCancelledEvent.of(run.id(), run.sessionId(), run.cancelReason()))) {
                 return Mono.just(chatRunService.toStopResult(run));
             }
+            /*
+             * 用户主动 stop 后，前端需要立即对 partial assistant 点赞/点踩。因此这里先用
+             * 已落库 event 重建并保存 assistant，拿到 messageId 后再发布 run.cancelled。
+             * 保存失败会降级为 messageReady=false，不阻断取消终态。
+             */
+            StopMessageTarget messageTarget = persistPartialAssistantForUserStop(user, run);
+            ChatEvent cancelEvent = RunCancelledEvent.of(run.id(), run.sessionId(), run.cancelReason(),
+                    messageTarget.messageReady(), messageTarget.assistantMessageId());
             ChatEvent cancelled = chatStreamService.appendAndPublish(cancelEvent);
             ChatRun latest = chatRunService.observeEvent(cancelled);
             chatRunLeaseService.markTerminal(run.id(), ChatRunExecutionStatus.CANCELLED);
@@ -208,22 +214,24 @@ public class FinanceEXChatService implements FinanceChatFacade {
      * 浏览器断开和本机 subscription 已释放等场景下得到一致结果。没有正文且没有用户可见
      * runtime parts 时不创建空 assistant。</p>
      */
-    private void persistPartialAssistantForUserStop(UserContext user, ChatRun run) {
+    private StopMessageTarget persistPartialAssistantForUserStop(UserContext user, ChatRun run) {
         if (run.assistantMessageId() != null && !run.assistantMessageId().isBlank()) {
-            return;
+            return StopMessageTarget.ready(run.assistantMessageId());
         }
         String parentMessageId = firstNonBlank(run.userMessageId(), run.parentMessageId());
         if (parentMessageId == null) {
             log.warn("Skip partial assistant persistence because run has no parent user message. runId={}", run.id());
-            return;
+            return StopMessageTarget.notReady();
         }
         try {
             AssistantAssembly assistant = new AssistantAssembly();
             chatStreamService.findPersistedRunEvents(user, run).forEach(assistant::observe);
             if (!assistant.shouldPersistMessage()) {
-                return;
+                return StopMessageTarget.notReady();
             }
             ChatSession session = sessionService.getSession(user, run.sessionId());
+            String assistantMessageId = idGenerator.newId("msg",
+                    IdGenerateContext.of(user.tenantId(), user.userId(), session.id(), run.id()));
             ChatMessage savedAssistant = sessionService.saveAssistantMessage(new AssistantMessageSaveCommand(
                     user.tenantId(),
                     user.userId(),
@@ -233,16 +241,19 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     parentMessageId,
                     null,
                     assistant.parts(),
-                    USER_STOP_PARTIAL_ASSISTANT_METADATA
+                    USER_STOP_PARTIAL_ASSISTANT_METADATA,
+                    assistantMessageId
             ));
             chatRunService.bindAssistantMessage(run.id(), savedAssistant.id());
+            return StopMessageTarget.ready(savedAssistant.id());
         } catch (Exception ex) {
             /*
-             * stop 的核心语义是尽快终止本轮 run。历史固化失败不能阻断 run.cancelled 事件落库，
-             * 否则用户会看到无法停止或 active run 长时间占用会话。
+             * 用户主动 stop 的终态事件需要尽量携带可反馈 messageId，但历史固化失败不能阻断
+             * run.cancelled。失败时降级为 messageReady=false，前端仍能可靠结束 loading。
              */
             log.warn("Failed to persist partial assistant on user stop. runId={}, reason={}",
                     run.id(), ex.getMessage(), ex);
+            return StopMessageTarget.notReady();
         }
     }
 
@@ -535,6 +546,19 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
         private static CompletionMessageTarget ready(String assistantMessageId) {
             return new CompletionMessageTarget(true, true, assistantMessageId);
+        }
+    }
+
+    private record StopMessageTarget(boolean messageReady, String assistantMessageId) {
+        private static StopMessageTarget notReady() {
+            return new StopMessageTarget(false, null);
+        }
+
+        private static StopMessageTarget ready(String assistantMessageId) {
+            if (assistantMessageId == null || assistantMessageId.isBlank()) {
+                return notReady();
+            }
+            return new StopMessageTarget(true, assistantMessageId);
         }
     }
 

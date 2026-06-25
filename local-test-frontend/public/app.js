@@ -829,7 +829,8 @@ function handleChatEvent(event, source = "event", options = {}) {
   }
   if (terminalRunEvents.has(event.type)) {
     flushPendingDeltas(event.runId);
-    if (event.type === "run.completed" && event.payload?.messageReady === true) {
+    if ((event.type === "run.completed" || event.type === "run.cancelled")
+        && event.payload?.messageReady === true) {
       bindAssistantMessageId(event.runId, event.payload);
     }
     state.activeRunId = event.runId;

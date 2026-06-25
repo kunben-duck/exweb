@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.domain.chat;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -20,8 +21,22 @@ public record RunCancelledEvent(
         Map<String, Object> payload
 ) implements ChatEvent {
     public static RunCancelledEvent of(String runId, String sessionId, String reason) {
+        return of(runId, sessionId, reason, false, null);
+    }
+
+    public static RunCancelledEvent of(String runId, String sessionId, String reason,
+                                       boolean messageReady, String assistantMessageId) {
+        boolean effectiveMessageReady = messageReady && assistantMessageId != null && !assistantMessageId.isBlank();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("status", "CANCELLED");
+        payload.put("reason", reason == null ? "" : reason);
+        payload.put("messageReady", effectiveMessageReady);
+        if (effectiveMessageReady) {
+            payload.put("assistantMessageId", assistantMessageId);
+            payload.put("feedbackTargetMessageId", assistantMessageId);
+        }
         return new RunCancelledEvent(runId, sessionId, 0, Instant.now(),
-                Map.of("status", "CANCELLED", "reason", reason == null ? "" : reason));
+                java.util.Collections.unmodifiableMap(payload));
     }
 
     @Override

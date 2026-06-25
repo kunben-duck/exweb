@@ -21,7 +21,7 @@ import java.util.Map;
  * @param runMode 本轮消息树写入模式。
  * @param parentMessageId 本轮 run 挂接的消息树父节点。
  * @param userMessageId 本轮输入对应的用户消息；重新生成时指向原用户消息。
- * @param assistantMessageId run.completed 后生成的完整 assistant 消息。
+ * @param assistantMessageId run.completed 或用户主动 stop 后生成的 assistant 消息。
  * @param firstSeq run.started 持久化后的事件序号。
  * @param lastSeq 该 run 当前最后一个已持久化事件序号。
  * @param cancelReason stop 接口传入或系统生成的取消原因。
@@ -113,7 +113,7 @@ public record ChatRun(
     }
 
     /**
-     * 回填 run 完成后生成的 assistant 消息 ID。
+     * 回填 run 终态后生成的 assistant 消息 ID。
      */
     public ChatRun withAssistantMessageId(String nextAssistantMessageId) {
         return new ChatRun(id, tenantId, userId, sessionId, status, routeType, agentCode, runtimeProvider,

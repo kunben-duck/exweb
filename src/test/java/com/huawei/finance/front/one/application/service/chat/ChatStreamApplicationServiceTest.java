@@ -15,6 +15,7 @@ import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
+import com.huawei.finance.front.one.domain.chat.RunCancelledEvent;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -124,6 +125,30 @@ class ChatStreamApplicationServiceTest {
                 .assertNext(event -> {
                     assertThat(event.runId()).isEqualTo("run1");
                     assertThat(event.payload()).containsEntry("delta", "right");
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void resumeRunTopicReceivesLocalRunCancelledTerminalEvent() {
+        InMemoryChatEventStore store = new InMemoryChatEventStore();
+        InMemoryRunRepository runRepository = new InMemoryRunRepository();
+        ChatStreamApplicationService service = new ChatStreamApplicationService(
+                store,
+                new LocalChatEventStreamRegistry(),
+                new InMemoryLiveEventBus(),
+                runRepository,
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
+        );
+        runRepository.save(runningRun("run1", "tenant1", "user1"));
+
+        StepVerifier.create(service.resumeRunTopic(user(), ChatStreamTopics.runTopic("run1"), 0).take(1))
+                .then(() -> service.appendAndPublish(RunCancelledEvent.of("run1", "session1", "USER_STOP")))
+                .assertNext(event -> {
+                    assertThat(event.type()).isEqualTo("run.cancelled");
+                    assertThat(event.payload()).containsEntry("status", "CANCELLED");
                 })
                 .verifyComplete();
     }

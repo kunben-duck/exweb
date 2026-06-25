@@ -178,12 +178,17 @@ public class ChatRunApplicationService {
      */
     public ChatRunStopResult toStopResult(ChatRun run) {
         ChatRun latest = repository.findById(run.id()).orElse(run);
+        String assistantMessageId = latest.assistantMessageId();
+        boolean messageReady = assistantMessageId != null && !assistantMessageId.isBlank();
         return new ChatRunStopResult(
                 latest.id(),
                 latest.sessionId(),
                 latest.status(),
                 latest.lastSeq() == null ? 0L : latest.lastSeq(),
-                latest.finishedAt() == null ? Instant.now() : latest.finishedAt()
+                latest.finishedAt() == null ? Instant.now() : latest.finishedAt(),
+                messageReady,
+                messageReady ? assistantMessageId : null,
+                messageReady ? assistantMessageId : null
         );
     }
 

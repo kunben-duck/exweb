@@ -298,7 +298,10 @@ public class ChatController {
                 result.sessionId(),
                 result.status().name(),
                 result.latestSeq(),
-                result.stoppedAt()
+                result.stoppedAt(),
+                result.messageReady(),
+                result.assistantMessageId(),
+                result.feedbackTargetMessageId()
         );
     }
 

@@ -47,6 +47,10 @@ public class ChatShareDeliveryProperties {
         return Math.max(1, delivery.getMaxConcurrency());
     }
 
+    public int normalizedForwardCookieMaxLength() {
+        return Math.max(0, delivery.getForwardCookieMaxLength());
+    }
+
     /**
      * 发送通用配置。
      */
@@ -57,6 +61,8 @@ public class ChatShareDeliveryProperties {
         private int maxTargets = 100;
         /** 当前 JVM 内同时执行的分享发送调用上限。 */
         private int maxConcurrency = 20;
+        /** 分享发送入口 Cookie 请求头最大透传长度；仅供显式支持 Cookie 的 provider 使用。 */
+        private int forwardCookieMaxLength = 8192;
         /** provider 配置集合。 */
         private Providers providers = new Providers();
 
@@ -82,6 +88,14 @@ public class ChatShareDeliveryProperties {
 
         public void setMaxConcurrency(int maxConcurrency) {
             this.maxConcurrency = maxConcurrency;
+        }
+
+        public int getForwardCookieMaxLength() {
+            return forwardCookieMaxLength;
+        }
+
+        public void setForwardCookieMaxLength(int forwardCookieMaxLength) {
+            this.forwardCookieMaxLength = forwardCookieMaxLength;
         }
 
         public Providers getProviders() {
@@ -119,6 +133,8 @@ public class ChatShareDeliveryProperties {
         private boolean enabled = false;
         /** WeLink API 基础地址。 */
         private String baseUrl = "";
+        /** WeLink 分享请求 Referer；为空时使用 base-url。 */
+        private String referer = "";
         /** WeLink 发送接口 path。 */
         private String sendPath = "";
         /** WeLink HTTP 调用超时时间。 */
@@ -144,6 +160,14 @@ public class ChatShareDeliveryProperties {
 
         public void setBaseUrl(String baseUrl) {
             this.baseUrl = baseUrl;
+        }
+
+        public String getReferer() {
+            return referer;
+        }
+
+        public void setReferer(String referer) {
+            this.referer = referer;
         }
 
         public String getSendPath() {
@@ -195,6 +219,14 @@ public class ChatShareDeliveryProperties {
 
         public int normalizedMaxRetries() {
             return Math.min(MAX_NORMALIZED_RETRIES, Math.max(0, maxRetries));
+        }
+
+        public String normalizedReferer() {
+            String configured = referer == null ? "" : referer.trim();
+            if (!configured.isBlank()) {
+                return configured;
+            }
+            return baseUrl == null ? "" : baseUrl.trim();
         }
     }
 }

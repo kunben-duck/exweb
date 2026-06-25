@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.config.ChatShareDeliveryProperties;
 import com.huawei.finance.front.one.application.config.IntegrationAuthProperties;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.share.ChatShareProviderDeliveryRequest;
 import com.huawei.finance.front.one.application.integration.share.ChatShareProviderDeliveryResult;
 import com.huawei.finance.front.one.application.service.auth.AuthHeaderProviderRegistry;
@@ -102,6 +103,18 @@ class WelinkChatShareDeliveryProviderTest {
     }
 
     @Test
+    void appliesRefererAndForwardedCookieHeaders() {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+        WelinkChatShareDeliveryProvider provider = provider(captured, HttpStatus.OK, "{\"status\":\"200\"}");
+
+        ChatShareProviderDeliveryResult result = provider.deliver(requestWithCookie("sid=abc; uid=u1"));
+
+        assertThat(result.success()).isTrue();
+        assertThat(captured.get().headers().getFirst(HttpHeaders.REFERER)).isEqualTo("http://welink.test");
+        assertThat(captured.get().headers().getFirst(HttpHeaders.COOKIE)).isEqualTo("sid=abc; uid=u1");
+    }
+
+    @Test
     void normalizesConfiguredRetryCountToSafeRange() {
         ChatShareDeliveryProperties.Welink welink = new ChatShareDeliveryProperties.Welink();
 
@@ -190,7 +203,22 @@ class WelinkChatShareDeliveryProviderTest {
                 "摘要",
                 "a,b",
                 "g1",
-                "zh_CN"
+                "zh_CN",
+                RuntimeForwardHeaders.empty()
+        );
+    }
+
+    private ChatShareProviderDeliveryRequest requestWithCookie(String cookieHeader) {
+        return new ChatShareProviderDeliveryRequest(
+                "tenant1",
+                "user1",
+                "分享标题",
+                "https://finex.example.com/share/share1",
+                "摘要",
+                "a,b",
+                "g1",
+                "zh_CN",
+                RuntimeForwardHeaders.fromCookieHeader(cookieHeader, 8192)
         );
     }
 }

@@ -1200,6 +1200,10 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/shares/share_xxx/deliveries \
 `targetAccounts` 和 `groupIds` 至少需要一个非空目标。WeLink 发送时，后端会用
 `financeex.share.share-url-prefix + shareId` 生成 `linkUrl`，并使用当前登录用户的 `userId`
 作为 `userAccount`。
+WeLink 出站请求会自动设置 `Referer`，默认取 `financeex.share.delivery.providers.welink.base-url`，
+也可通过 `financeex.share.delivery.providers.welink.referer` 覆盖。如果分享发送接口请求带有标准
+`Cookie` header，后端会把该 Cookie 作为 WeLink 出站 header 透传；前端不要把 Cookie 放入 JSON body，
+后端也不会把 Cookie 写入分享快照、发送记录或响应。
 分享发送有本机并发保护，默认 `financeex.share.delivery.max-concurrency=20`；超过上限时会返回
 `delivery.status=FAILED` 和 `errorCode=SHARE_DELIVERY_BUSY`，分享快照仍保留，前端可稍后重试。
 WeLink 调用失败后默认最多重试 3 次，可通过 `financeex.share.delivery.providers.welink.max-retries`

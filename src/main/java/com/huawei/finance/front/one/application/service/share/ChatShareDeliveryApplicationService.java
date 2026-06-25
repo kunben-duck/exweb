@@ -75,7 +75,8 @@ public class ChatShareDeliveryApplicationService {
                 content,
                 String.join(",", targets.targetAccounts()),
                 String.join(",", targets.groupIds()),
-                blankToNull(safeCommand.language())
+                blankToNull(safeCommand.language()),
+                safeCommand.forwardHeaders()
         );
         Instant createdAt = Instant.now();
         ChatShareProviderDeliveryResult result = callProviderWithBulkhead(provider, providerRequest);

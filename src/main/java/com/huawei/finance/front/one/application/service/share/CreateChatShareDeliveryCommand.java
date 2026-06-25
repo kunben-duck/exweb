@@ -1,5 +1,7 @@
 package com.huawei.finance.front.one.application.service.share;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import java.util.List;
 
 /**
@@ -12,6 +14,7 @@ import java.util.List;
  * @param title 发送标题覆盖值；为空时使用分享标题。
  * @param content 发送正文覆盖值；为空时从分享回答生成摘要。
  * @param language 前端透传语言标识。
+ * @param forwardHeaders 请求入口捕获到的敏感转发头快照，仅在出站 provider 调用中使用。
  */
 public record CreateChatShareDeliveryCommand(
         String shareId,
@@ -20,6 +23,10 @@ public record CreateChatShareDeliveryCommand(
         List<String> groupIds,
         String title,
         String content,
-        String language
+        String language,
+        @JsonIgnore RuntimeForwardHeaders forwardHeaders
 ) {
+    public CreateChatShareDeliveryCommand {
+        forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
+    }
 }

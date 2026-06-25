@@ -266,12 +266,16 @@ financeex:
     delivery:
       content-max-length: ${FINANCEEX_SHARE_DELIVERY_CONTENT_MAX_LENGTH:200}
       max-targets: ${FINANCEEX_SHARE_DELIVERY_MAX_TARGETS:100}
+      # 分享发送入口 Cookie 最大透传长度；仅 WeLink 等显式支持 Cookie 的 provider 使用，不进入请求体和发送记录。
+      forward-cookie-max-length: ${FINANCEEX_SHARE_DELIVERY_FORWARD_COOKIE_MAX_LENGTH:8192}
       # 当前 JVM 内分享发送 provider 调用并发上限，避免外部系统抖动时占满异步工作线程。
       max-concurrency: ${FINANCEEX_SHARE_DELIVERY_MAX_CONCURRENCY:20}
       providers:
         welink:
           enabled: ${FINANCEEX_SHARE_WELINK_ENABLED:false}
           base-url: ${FINANCEEX_SHARE_WELINK_BASE_URL:}
+          # WeLink 要求的 Referer；为空时使用 base-url。
+          referer: ${FINANCEEX_SHARE_WELINK_REFERER:${FINANCEEX_SHARE_WELINK_BASE_URL:}}
           send-path: ${FINANCEEX_SHARE_WELINK_SEND_PATH:}
           timeout: ${FINANCEEX_SHARE_WELINK_TIMEOUT:5s}
           # WeLink 调用失败后的最大重试次数；不包含首次调用，运行时最多按 10 次生效。

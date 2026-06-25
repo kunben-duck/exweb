@@ -20,8 +20,9 @@ import org.springframework.web.reactive.function.client.WebClient;
 /**
  * WeLink 分享发送 provider。
  *
- * <p>该实现只负责 WeLink wire 协议转换和成功判断，不读取 HTTP 请求上下文，
- * 也不会把 Cookie、Authorization 或企业鉴权头写入发送记录。</p>
+ * <p>该实现只负责 WeLink wire 协议转换和成功判断，不读取 HTTP 请求上下文。
+ * Cookie 必须由接口入口捕获为 {@link com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders}
+ * 后显式传入；Cookie、Authorization 或企业鉴权头都不会写入发送记录。</p>
  */
 @Component
 public class WelinkChatShareDeliveryProvider implements ChatShareDeliveryProvider {
@@ -73,7 +74,7 @@ public class WelinkChatShareDeliveryProvider implements ChatShareDeliveryProvide
                     .post()
                     .uri(welink.getSendPath().trim())
                     .contentType(MediaType.APPLICATION_JSON)
-                    .headers(headers -> applyAuthHeaders(headers, request, welink))
+                    .headers(headers -> applyOutboundHeaders(headers, request, welink))
                     .bodyValue(toWireRequest(request))
                     .exchangeToMono(clientResponse -> clientResponse.bodyToMono(String.class)
                             .defaultIfEmpty("")
@@ -116,8 +117,8 @@ public class WelinkChatShareDeliveryProvider implements ChatShareDeliveryProvide
         return body;
     }
 
-    private void applyAuthHeaders(HttpHeaders headers, ChatShareProviderDeliveryRequest request,
-                                  ChatShareDeliveryProperties.Welink welink) {
+    private void applyOutboundHeaders(HttpHeaders headers, ChatShareProviderDeliveryRequest request,
+                                      ChatShareDeliveryProperties.Welink welink) {
         authHeaders.headers(new AuthHeaderRequest(
                 request.tenantId(),
                 request.userAccount(),
@@ -127,6 +128,13 @@ public class WelinkChatShareDeliveryProvider implements ChatShareDeliveryProvide
                 welink.getSendPath(),
                 "welink"
         )).forEach(headers::set);
+        String referer = welink.normalizedReferer();
+        if (!referer.isBlank()) {
+            headers.set(HttpHeaders.REFERER, referer);
+        }
+        if (request.forwardHeaders().hasCookie()) {
+            headers.set(HttpHeaders.COOKIE, request.forwardHeaders().cookieHeader());
+        }
     }
 
     private ChatShareProviderDeliveryResult toResult(WelinkHttpResponse response,

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.finance.front.one.application.config.ChatShareDeliveryProperties;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.integration.share.ChatShareDeliveryProvider;
@@ -38,7 +39,7 @@ class ChatShareDeliveryApplicationServiceTest {
 
         ChatShareDelivery delivery = fixture.service.deliver(user(), new CreateChatShareDeliveryCommand(
                 "share1", "welink", List.of("a", "b", "a", " "), List.of("g1", "g2"),
-                "发送标题", null, "zh_CN"));
+                "发送标题", null, "zh_CN", RuntimeForwardHeaders.empty()));
         CapturingProvider provider = (CapturingProvider) fixture.provider;
 
         assertThat(delivery.status()).isEqualTo("SUCCESS");
@@ -56,11 +57,23 @@ class ChatShareDeliveryApplicationServiceTest {
         Fixture fixture = fixture(providerResult(false));
 
         ChatShareDelivery delivery = fixture.service.deliver(user(), new CreateChatShareDeliveryCommand(
-                "share1", "welink", List.of("a"), List.of(), null, null, null));
+                "share1", "welink", List.of("a"), List.of(), null, null, null, RuntimeForwardHeaders.empty()));
 
         assertThat(delivery.status()).isEqualTo("FAILED");
         assertThat(delivery.errorCode()).isEqualTo("PROVIDER_ERROR");
         assertThat(fixture.shares.findById("share1")).isPresent();
+    }
+
+    @Test
+    void deliverPassesForwardHeadersToProviderOnly() {
+        Fixture fixture = fixture(providerResult(true));
+        RuntimeForwardHeaders forwardHeaders = RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192);
+
+        fixture.service.deliver(user(), new CreateChatShareDeliveryCommand(
+                "share1", "welink", List.of("a"), List.of(), null, null, null, forwardHeaders));
+        CapturingProvider provider = (CapturingProvider) fixture.provider;
+
+        assertThat(provider.lastRequest.forwardHeaders().cookieHeader()).isEqualTo("sid=abc");
     }
 
     @Test
@@ -69,7 +82,7 @@ class ChatShareDeliveryApplicationServiceTest {
         fixture.properties.getDelivery().setContentMaxLength(5);
 
         ChatShareDelivery delivery = fixture.service.deliver(user(), new CreateChatShareDeliveryCommand(
-                "share1", "welink", List.of("a"), List.of(), null, "123456789", null));
+                "share1", "welink", List.of("a"), List.of(), null, "123456789", null, RuntimeForwardHeaders.empty()));
         CapturingProvider provider = (CapturingProvider) fixture.provider;
 
         assertThat(delivery.content()).isEqualTo("12345");
@@ -81,11 +94,13 @@ class ChatShareDeliveryApplicationServiceTest {
         BlockingProvider provider = new BlockingProvider();
         Fixture fixture = fixture(provider, properties -> properties.getDelivery().setMaxConcurrency(1));
         CompletableFuture<ChatShareDelivery> first = CompletableFuture.supplyAsync(() -> fixture.service.deliver(user(),
-                new CreateChatShareDeliveryCommand("share1", "welink", List.of("a"), List.of(), null, null, null)));
+                new CreateChatShareDeliveryCommand(
+                        "share1", "welink", List.of("a"), List.of(), null, null, null, RuntimeForwardHeaders.empty())));
         assertThat(provider.entered.await(2, TimeUnit.SECONDS)).isTrue();
 
         ChatShareDelivery second = fixture.service.deliver(user(),
-                new CreateChatShareDeliveryCommand("share1", "welink", List.of("b"), List.of(), null, null, null));
+                new CreateChatShareDeliveryCommand(
+                        "share1", "welink", List.of("b"), List.of(), null, null, null, RuntimeForwardHeaders.empty()));
         provider.release.countDown();
 
         assertThat(second.status()).isEqualTo("FAILED");
@@ -98,7 +113,8 @@ class ChatShareDeliveryApplicationServiceTest {
         Fixture fixture = fixture(providerResult(true));
 
         assertThatThrownBy(() -> fixture.service.deliver(new UserContext("tenant1", "user2", "User Two"),
-                new CreateChatShareDeliveryCommand("share1", "welink", List.of("a"), List.of(), null, null, null)))
+                new CreateChatShareDeliveryCommand(
+                        "share1", "welink", List.of("a"), List.of(), null, null, null, RuntimeForwardHeaders.empty())))
                 .isInstanceOf(SecurityException.class);
     }
 
@@ -107,7 +123,8 @@ class ChatShareDeliveryApplicationServiceTest {
         Fixture fixture = fixture(providerResult(true));
 
         assertThatThrownBy(() -> fixture.service.deliver(user(),
-                new CreateChatShareDeliveryCommand("share1", "welink", List.of(" "), List.of(), null, null, null)))
+                new CreateChatShareDeliveryCommand(
+                        "share1", "welink", List.of(" "), List.of(), null, null, null, RuntimeForwardHeaders.empty())))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("至少需要一个");
     }

@@ -190,7 +190,10 @@ Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPubli
 `POST /api/v1/ex/chat/shares/{shareId}/deliveries` 发送；也可以用
 `POST /api/v1/ex/chat/messages/{messageId}/share/deliveries` 一键创建并发送。首版 `welink`
 provider 会把分享链接转换为 WeLink 卡片请求，`linkUrl` 由 `financeex.share.share-url-prefix + shareId`
-生成，`targetAccounts[]/groupIds[]` 会去空去重后以英文逗号拼接。发送失败只写
+生成，`targetAccounts[]/groupIds[]` 会去空去重后以英文逗号拼接。WeLink 出站请求会设置
+`Referer`，默认取 `financeex.share.delivery.providers.welink.base-url`，也可通过
+`financeex.share.delivery.providers.welink.referer` 覆盖；分享发送入口的标准 `Cookie` 请求头会作为
+出站 header 透传给 WeLink，但不会进入请求体、发送记录或分享快照。发送失败只写
 `fin_ex_chat_share_delivery_t.status=FAILED`，不会删除或撤销分享快照，前端可以重试。分享发送还有
 `financeex.share.delivery.max-concurrency` 本机并发保护，避免外部发送 provider 抖动时占满异步工作线程。
 WeLink 调用失败后默认最多重试 3 次，可通过 `financeex.share.delivery.providers.welink.max-retries` 调整；为避免误配拖住 Servlet 工作线程，运行时最多按 10 次重试生效。

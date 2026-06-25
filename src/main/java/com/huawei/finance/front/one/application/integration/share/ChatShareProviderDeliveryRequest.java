@@ -1,5 +1,8 @@
 package com.huawei.finance.front.one.application.integration.share;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
+
 /**
  * 分享 provider 发送请求。
  *
@@ -11,6 +14,7 @@ package com.huawei.finance.front.one.application.integration.share;
  * @param targetAccount 目标用户账号，多个账号用英文逗号分隔。
  * @param groupId 目标群组 ID，多个群组用英文逗号分隔。
  * @param language 前端透传语言标识。
+ * @param forwardHeaders 请求入口捕获到的敏感转发头快照，不进入 provider 请求体和发送记录。
  */
 public record ChatShareProviderDeliveryRequest(
         String tenantId,
@@ -20,6 +24,10 @@ public record ChatShareProviderDeliveryRequest(
         String content,
         String targetAccount,
         String groupId,
-        String language
+        String language,
+        @JsonIgnore RuntimeForwardHeaders forwardHeaders
 ) {
+    public ChatShareProviderDeliveryRequest {
+        forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
+    }
 }

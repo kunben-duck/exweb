@@ -1,5 +1,7 @@
 package com.huawei.finance.front.one.interfaces.chat;
 
+import com.huawei.finance.front.one.application.config.ChatShareDeliveryProperties;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.application.service.share.ChatShareApplicationService;
@@ -26,11 +28,13 @@ import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatShareAndDelive
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatShareDeliveryRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatShareRequest;
 import java.util.List;
+import org.springframework.http.HttpHeaders;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -50,15 +54,18 @@ public class ChatShareController {
     private final ChatShareDeliveryApplicationService deliveryService;
     private final AuthContextProvider auth;
     private final PermissionChecker permissionChecker;
+    private final ChatShareDeliveryProperties shareDeliveryProperties;
 
     public ChatShareController(ChatShareApplicationService shareService,
                                ChatShareDeliveryApplicationService deliveryService,
                                AuthContextProvider auth,
-                               PermissionChecker permissionChecker) {
+                               PermissionChecker permissionChecker,
+                               ChatShareDeliveryProperties shareDeliveryProperties) {
         this.shareService = shareService;
         this.deliveryService = deliveryService;
         this.auth = auth;
         this.permissionChecker = permissionChecker;
+        this.shareDeliveryProperties = shareDeliveryProperties;
     }
 
     /**
@@ -93,10 +100,13 @@ public class ChatShareController {
     @PostMapping("/messages/{messageId}/share/deliveries")
     public Mono<ChatShareAndDeliveryDto> createAndDeliver(
             @PathVariable("messageId") String messageId,
-            @RequestBody(required = false) CreateChatShareAndDeliveryRequest request) {
+            @RequestBody(required = false) CreateChatShareAndDeliveryRequest request,
+            @RequestHeader(value = HttpHeaders.COOKIE, required = false) String cookieHeader) {
         UserContext user = resolveChatUser();
+        RuntimeForwardHeaders forwardHeaders = shareDeliveryForwardHeaders(cookieHeader);
         return Mono.fromCallable(() -> {
-                    CreateChatShareAndDeliveryCommand command = toCreateAndDeliveryCommand(messageId, request);
+                    CreateChatShareAndDeliveryCommand command =
+                            toCreateAndDeliveryCommand(messageId, request, forwardHeaders);
                     ChatShare share = shareService.create(user,
                             new CreateChatShareCommand(command.messageId(), command.title(), command.expiresAt()));
                     ChatShareDelivery delivery = deliveryService.deliver(user, new CreateChatShareDeliveryCommand(
@@ -106,7 +116,8 @@ public class ChatShareController {
                             command.groupIds(),
                             command.title(),
                             command.content(),
-                            command.language()
+                            command.language(),
+                            command.forwardHeaders()
                     ));
                     return new ChatShareAndDeliveryDto(toDto(share), toDeliveryDto(delivery));
                 })
@@ -135,9 +146,13 @@ public class ChatShareController {
      */
     @PostMapping("/shares/{shareId}/deliveries")
     public Mono<ChatShareDeliveryDto> deliver(@PathVariable("shareId") String shareId,
-                                              @RequestBody(required = false) CreateChatShareDeliveryRequest request) {
+                                              @RequestBody(required = false) CreateChatShareDeliveryRequest request,
+                                              @RequestHeader(value = HttpHeaders.COOKIE, required = false)
+                                              String cookieHeader) {
         UserContext user = resolveChatUser();
-        return Mono.fromCallable(() -> toDeliveryDto(deliveryService.deliver(user, toDeliveryCommand(shareId, request))))
+        RuntimeForwardHeaders forwardHeaders = shareDeliveryForwardHeaders(cookieHeader);
+        return Mono.fromCallable(() -> toDeliveryDto(deliveryService.deliver(user,
+                        toDeliveryCommand(shareId, request, forwardHeaders))))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -175,8 +190,19 @@ public class ChatShareController {
         return user;
     }
 
+    private RuntimeForwardHeaders shareDeliveryForwardHeaders(String cookieHeader) {
+        /*
+         * Cookie 只能在 Controller 入口捕获一次。后续 provider 调用运行在 boundedElastic，
+         * 不能再读取 Servlet request 或企业 ThreadLocal，以免异步线程拿到错误上下文。
+         */
+        return RuntimeForwardHeaders.fromCookieHeader(
+                cookieHeader,
+                shareDeliveryProperties.normalizedForwardCookieMaxLength()
+        );
+    }
+
     private CreateChatShareAndDeliveryCommand toCreateAndDeliveryCommand(
-            String messageId, CreateChatShareAndDeliveryRequest request) {
+            String messageId, CreateChatShareAndDeliveryRequest request, RuntimeForwardHeaders forwardHeaders) {
         return new CreateChatShareAndDeliveryCommand(
                 messageId,
                 request == null ? null : request.title(),
@@ -185,11 +211,13 @@ public class ChatShareController {
                 request == null ? null : request.targetAccounts(),
                 request == null ? null : request.groupIds(),
                 request == null ? null : request.content(),
-                request == null ? null : request.language()
+                request == null ? null : request.language(),
+                forwardHeaders
         );
     }
 
-    private CreateChatShareDeliveryCommand toDeliveryCommand(String shareId, CreateChatShareDeliveryRequest request) {
+    private CreateChatShareDeliveryCommand toDeliveryCommand(
+            String shareId, CreateChatShareDeliveryRequest request, RuntimeForwardHeaders forwardHeaders) {
         return new CreateChatShareDeliveryCommand(
                 shareId,
                 request == null ? null : request.provider(),
@@ -197,7 +225,8 @@ public class ChatShareController {
                 request == null ? null : request.groupIds(),
                 request == null ? null : request.title(),
                 request == null ? null : request.content(),
-                request == null ? null : request.language()
+                request == null ? null : request.language(),
+                forwardHeaders
         );
     }
 

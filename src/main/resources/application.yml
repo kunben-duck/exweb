@@ -227,6 +227,9 @@ financeex:
     stop-path: ${FINANCEEX_RELAY_AGENT_STOP_PATH:/v1/agent/runs/{runId}/stop}
     cancel-supported: ${FINANCEEX_RELAY_AGENT_CANCEL_SUPPORTED:true}
     timeout: 60s
+    # Relay 单个响应 frame 的 WebClient codec 上限；用于避免默认 256KB 过早拦截大引用/卡片响应。
+    # 这不是前端事件大小治理，持续超大对象仍应通过后续 DataBuffer 流式解码与 fragment 分片解决。
+    max-in-memory-size: ${FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE:1MB}
     relay:
       # Relay 响应映射只属于 adapter 防腐层；ChatService 对前端仍输出稳定 ChatEvent。
       answer-event-types: ${FINANCEEX_RELAY_ANSWER_EVENT_TYPES:agent,message.delta,answer,output}

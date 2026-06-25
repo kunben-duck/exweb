@@ -154,6 +154,9 @@ public class RelayRuntimeResponseNormalizer {
         if (hasError(root) || isError(type)) {
             throw new RelayRuntimeProtocolException(errorMessage(root));
         }
+        if ("tool-structured-result".equals(normalizedType)) {
+            return toolStructuredResultEvents(runId, sessionId, root);
+        }
         ChatEvent runtimeEvent = mappedRuntimeEvent(runId, sessionId, root, type, normalizedType);
         if (runtimeEvent != null) {
             return List.of(runtimeEvent);
@@ -335,6 +338,168 @@ public class RelayRuntimeResponseNormalizer {
                     RuntimeEvent.reference(runId, sessionId, genericReferencePayload(root, sourceType));
             default -> null;
         };
+    }
+
+    private List<ChatEvent> toolStructuredResultEvents(String runId, String sessionId, JsonNode root) {
+        JsonNode result = firstNode(root, "result_data", "resultData");
+        JsonNode data = toolStructuredData(result);
+        if (data == null || data.isNull() || data.isMissingNode()) {
+            return List.of(toolStructuredFallbackEvent(runId, sessionId, root));
+        }
+        Map<String, Object> context = toolStructuredContext(root, result);
+        List<ChatEvent> events = new ArrayList<>();
+        String content = firstText(data, "content");
+        if (content != null) {
+            events.add(toolStructuredDeltaEvent(runId, sessionId, content, context));
+        }
+        JsonNode processResult = firstNode(data, "processResult");
+        if (processResult != null) {
+            events.add(RuntimeEvent.progress(runId, sessionId,
+                    toolStructuredProgressPayload(data, processResult, context)));
+        }
+        JsonNode searchList = firstNode(data, "searchList", "SearchList");
+        if (searchList != null) {
+            events.add(RuntimeEvent.reference(runId, sessionId,
+                    toolStructuredReferencePayload("relay-searchList", "search_list",
+                            "searchList", searchList, context)));
+        }
+        JsonNode sourcesDocuments = firstNode(data, "sourcesDocuments", "sourceDocuments",
+                "SourcesDocuments", "SourceDocuments");
+        if (sourcesDocuments != null) {
+            String sourceType = data.has("sourceDocuments") || data.has("SourceDocuments")
+                    ? "relay-sourceDocuments"
+                    : "relay-sourcesDocuments";
+            events.add(RuntimeEvent.reference(runId, sessionId,
+                    toolStructuredReferencePayload(sourceType, "source_documents",
+                            "sourcesDocuments", sourcesDocuments, context)));
+        }
+        if (hasToolStructuredCardPayload(data)) {
+            events.add(RuntimeEvent.card(runId, sessionId, toolStructuredCardPayload(data, context)));
+        }
+        if (events.isEmpty()) {
+            events.add(toolStructuredFallbackEvent(runId, sessionId, root));
+        }
+        return List.copyOf(events);
+    }
+
+    private JsonNode toolStructuredData(JsonNode result) {
+        if (result == null || result.isNull() || result.isMissingNode()) {
+            return null;
+        }
+        JsonNode widget = result.get("widget");
+        if (widget != null && widget.isObject()) {
+            JsonNode widgetData = widget.get("data");
+            if (widgetData != null && !widgetData.isNull()) {
+                return widgetData;
+            }
+        }
+        JsonNode data = result.get("data");
+        return data == null || data.isNull() ? result : data;
+    }
+
+    private Map<String, Object> toolStructuredContext(JsonNode root, JsonNode result) {
+        Map<String, Object> context = new LinkedHashMap<>();
+        copyText(root, context, "agentName", AGENT_NAME_FIELDS);
+        copyText(root, context, "toolId", "tool_id", "toolId", "tool-id");
+        copyText(root, context, "parentInstanceId", "parent_instance_id", "parentInstanceId", "parent-instance-id");
+        copyText(root, context, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
+        copyAny(root, context, "timestamp", "timestamp", "time", "created_at");
+        if (result != null) {
+            copyAny(result, context, "index", "index");
+            copyAny(result, context, "total", "total");
+            copyBoolean(result, context, "isLast", "is_last", "isLast");
+        }
+        return Map.copyOf(context);
+    }
+
+    private ChatEvent toolStructuredDeltaEvent(String runId, String sessionId, String content,
+                                               Map<String, Object> context) {
+        Map<String, Object> payload = new LinkedHashMap<>(context);
+        payload.put("delta", content);
+        payload.put("sourceType", "relay-content");
+        return new MessageDeltaEvent(runId, sessionId, 0, Instant.now(), content, Map.copyOf(payload));
+    }
+
+    private Map<String, Object> toolStructuredProgressPayload(JsonNode data, JsonNode processResult,
+                                                              Map<String, Object> context) {
+        Map<String, Object> payload = basePayload("relay-processResult");
+        payload.putAll(context);
+        payload.put("status", "STREAMING");
+        payload.put("title", "思考过程");
+        payload.put("processResult", sanitizeJson(processResult, "processResult", 0));
+        JsonNode dynamicResponse = firstNode(processResult, "dynamicResponse", "dynamic_response");
+        if (dynamicResponse != null) {
+            payload.put("dynamicResponse", sanitizeJson(dynamicResponse, "dynamicResponse", 0));
+            String text = firstDynamicResponseText(dynamicResponse);
+            if (text != null) {
+                payload.put("text", text);
+            }
+        }
+        return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> toolStructuredReferencePayload(String sourceType, String referenceType,
+                                                               String fieldName, JsonNode references,
+                                                               Map<String, Object> context) {
+        Map<String, Object> payload = basePayload(sourceType);
+        payload.putAll(context);
+        payload.put("referenceType", referenceType);
+        payload.put("references", sanitizeJson(references, fieldName, 0));
+        return Map.copyOf(payload);
+    }
+
+    private boolean hasToolStructuredCardPayload(JsonNode data) {
+        return firstNode(data, "cardUrl", "diyCardScene", "cardList", "openCard") != null;
+    }
+
+    private Map<String, Object> toolStructuredCardPayload(JsonNode data, Map<String, Object> context) {
+        List<String> sources = toolStructuredCardSources(data);
+        String sourceType = sources.size() == 1 ? "relay-" + sources.getFirst() : "relay-card";
+        Map<String, Object> payload = basePayload(sourceType);
+        payload.putAll(context);
+        payload.put("cardType", sources.size() == 1 ? cardType(sources.getFirst()) : "mixed");
+        payload.put("cardSources", sources.stream().map(source -> "relay-" + source).toList());
+        copyText(data, payload, "cardUrl", "cardUrl");
+        copyText(data, payload, "openCard", "openCard");
+        copyText(data, payload, "intent", "intent");
+        copyText(data, payload, "skillId", "skillId", "skill_id");
+        copyAny(data, payload, "diyCardScene", "diyCardScene");
+        copyAny(data, payload, "cardList", "cardList");
+        return Map.copyOf(payload);
+    }
+
+    private List<String> toolStructuredCardSources(JsonNode data) {
+        List<String> sources = new ArrayList<>();
+        for (String field : List.of("cardUrl", "diyCardScene", "cardList", "openCard")) {
+            JsonNode value = data.get(field);
+            if (value != null && !value.isNull()) {
+                sources.add(field);
+            }
+        }
+        return List.copyOf(sources);
+    }
+
+    private String cardType(String source) {
+        return "cardUrl".equals(source) ? "url" : source;
+    }
+
+    private String firstDynamicResponseText(JsonNode dynamicResponse) {
+        if (dynamicResponse == null || !dynamicResponse.isArray() || dynamicResponse.isEmpty()) {
+            return null;
+        }
+        for (JsonNode item : dynamicResponse) {
+            String text = firstText(item, "title", "titile", "text", "content");
+            if (text != null) {
+                return text;
+            }
+        }
+        return null;
+    }
+
+    private RuntimeEvent toolStructuredFallbackEvent(String runId, String sessionId, JsonNode root) {
+        return RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
+                "relay", "relay-tool-structured-result", "event", "runtime", "runtime",
+                null, sourcePayload(root)));
     }
 
     private RuntimeEvent fallbackRuntimeEvent(String runId, String sessionId, JsonNode root, String type) {

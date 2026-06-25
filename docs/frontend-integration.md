@@ -1469,17 +1469,19 @@ heartbeat 和 done 使用同一个 envelope，不携带 `encodedItem`，也不�
 
 ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON chunk 或 SSE-like `data:` chunk 归一化成上表事件。Runtime raw log 是可选诊断旁路，默认关闭；后续接入企业 MQ 时，后端可以在 normalizer 之前 best-effort 发布原始 chunk，由消费端异步写入 `fin_ex_runtime_raw_stream_log_t`。raw log 仅用于排障，不参与前端恢复、WebSocket 推送或 assistant 历史消息拼接；前端不得解析 Relay 原始响应，只消费 ChatService 标准 payload：
 
+Relay stream-http adapter 会通过 `FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 配置单个响应 frame 的 WebClient codec 上限，默认 `1MB`，用于避免 Spring 默认 256KB 限制过早拦截较大的引用或卡片响应。该配置不改变前端协议，也不负责拆分超大事件；如果下游长期返回超大 `sourcesDocuments/diyCardScene/cardList`，仍需要后端后续引入 DataBuffer 流式解码和 fragment 分片治理。
+
 | 事件类型 | 标准 payload |
 | --- | --- |
-| `message.delta` | `{ "delta": "增量文本", "sourceType": "agent", "runtimeSessionId": "可选", "agentSessionId": "可选", "agentName": "可选", "timestamp": "可选" }` |
+| `message.delta` | `{ "delta": "增量文本", "sourceType": "agent/relay-content", "runtimeSessionId": "可选", "agentSessionId": "可选", "agentName": "可选", "toolId": "可选", "timestamp": "可选" }` |
 | `message.snapshot` | `{ "content": "完整最终回答", "sourceType": "agent", "runtimeSessionId": "可选", "agentSessionId": "可选", "agentName": "可选", "timestamp": "可选" }` |
 | `runtime.progress` | `{ "source": "relay", "sourceType": "relay-progress", "text": "进度文本", "runtimeSessionId": "可选", "timestamp": "可选" }` |
 | `runtime.metadata` | `{ "source": "relay", "sourceType": "project_home", "metadataType": "project_home", "projectHome": "/tmp/xxx", "timestamp": "可选" }` 或 `{ "metadataType": "available_modes", "modes": [...] }` |
 | `runtime.agent` | `{ "source": "relay", "sourceType": "agent-call", "agentName": "delegate-agent", "started": true, "task": "任务描述", "modelName": "可选", "runtimeSessionId": "可选", "timestamp": "可选" }` |
 | `runtime.thinking` | `{ "source": "relay", "sourceType": "thinking-operation-start", "status": "STARTED", "operationId": "可选", "agentName": "可选", "availableTools": [...] }` |
 | `runtime.tool` | `{ "source": "relay", "sourceType": "tool_call_streaming", "status": "STREAMING", "agentName": "可选", "toolName": "工具名", "inputPreview": "输入预览" }` |
-| `runtime.reference` | `{ "source": "relay", "sourceType": "url_moderation", "referenceType": "url_moderation", "url": "可选", "title": "可选", "references": "可选数组", "sourcePayload": { "...": "脱敏限长后的引用扩展信息" } }` |
-| `runtime.card` | `{ "source": "legacy-agent", "sourceType": "cardUrl/diyCardScene/cardList/openCard", "cardType": "url/diyCardScene/cardList/openCard", "cardSources": ["原始卡片字段"], "cardUrl": "可选", "openCard": "可选", "intent": "可选", "skillId": "可选", "diyCardScene": "可选对象", "cardList": "可选数组" }` |
+| `runtime.reference` | `{ "source": "relay", "sourceType": "url_moderation/relay-searchList/relay-sourcesDocuments", "referenceType": "url_moderation/search_list/source_documents", "url": "可选", "title": "可选", "references": "可选数组", "sourcePayload": { "...": "脱敏限长后的引用扩展信息" } }` |
+| `runtime.card` | `{ "source": "relay 或 legacy-agent", "sourceType": "relay-diyCardScene/cardUrl/diyCardScene/cardList/openCard", "cardType": "url/diyCardScene/cardList/openCard", "cardSources": ["原始或 relay-* 卡片字段"], "cardUrl": "可选", "openCard": "可选", "intent": "可选", "skillId": "可选", "diyCardScene": "可选对象", "cardList": "可选数组" }` |
 | `runtime.event` | `{ "source": "relay", "sourceType": "未知下游 type", "eventKind": "event", "channel": "runtime", "displayHint": "runtime", "text": "可选展示文本", "sourcePayload": { "...": "脱敏限长后的下游扩展载荷" } }` |
 | `message.completed` | `{ "status": "MESSAGE_COMPLETED", "finishReason": "可选", "runtimeSessionId": "可选", "agentSessionId": "可选" }` |
 | `run.failed` | `{ "code": "错误码", "message": "错误说明", "recoverable": "可选", "recoveryOptions": "可选" }` |
@@ -1490,6 +1492,7 @@ Relay 映射规则：
 - `type=agent,is_streaming=false` 且存在 `content/context` 时，映射为 `message.snapshot`，这是更权威的最终回答快照；前端用 `payload.content` 替换当前草稿。
 - 纯文本 `steam-complete`、`stream-complete`、`stream_complete`、`stream.complete`、`stream-completed`、`[DONE]` 映射为 `message.completed`。
 - `relay-progress`、`project_home`、`available-modes/availbale-modes`、`agent-call`、`thinking-operation-start/thinkink-operation-start`、`thinking-operation-end/thinking_operation-end`、`tool_call_streaming`、引用/来源类事件映射为对应 `runtime.*`。
+- `tool-structured-result` 是 Relay 内部工具调用的结构化结果。后端读取 `result_data/resultData` 下的 `widget.data`，其中 `content` 映射为 `message.delta(sourceType=relay-content)`，`processResult` 映射为 `runtime.progress(sourceType=relay-processResult)`，`searchList` 映射为 `runtime.reference(sourceType=relay-searchList)`，`sourcesDocuments/sourceDocuments` 映射为 `runtime.reference(sourceType=relay-sourcesDocuments/relay-sourceDocuments)`，`cardUrl/diyCardScene/cardList/openCard` 映射为 `runtime.card(sourceType=relay-*)`。`result_data.is_last=true` 只作为 payload 上下文字段，不表示本轮 run 完成；run 仍以 `stream-complete/[DONE]` 等终态闭合。
 - legacy-agent 指定技能响应中，`content` 的 `<think>...</think>` 片段映射为 `runtime.thinking`，不会拼入 assistant 正文；非 think 内容映射为 `message.delta`。`traceId/sessionId/messageId` 映射为 `runtime.metadata`；单独出现的 `intent/skillId` 映射为 `runtime.metadata`；如果 `intent/skillId` 与某个卡片字段同帧出现，则一起放入 `runtime.card`。当前 legacy 协议下 `cardUrl/diyCardScene/cardList/openCard` 通常不会在同一个 chunk 中同时出现，因此卡片事件会保留原始 `sourceType`，例如 `diyCardScene` 或 `openCard`；服务端仅保留 `sourceType=legacy-card/cardType=mixed` 作为非预期混合帧的防御兜底。`processResult` 映射为 `runtime.progress`，`searchList/sourcesDocuments` 映射为 `runtime.reference`，`endFlag=true` 映射为 `message.completed`。
 - 当 legacy 的 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 等对象被网络截断到多个 chunk 时，服务端会先识别字段类型，再使用对应稳定事件类型输出分片：`runtime.card`、`runtime.reference` 或 `runtime.progress`。前端按 `payload.fragment=true` 判断分片，按 `payload.itemId` 拼接相同对象的 `payload.delta`；`payload.complete=true` 表示该对象片段结束。fragment 只用于卡片、引用、进度等过程展示，不应拼入 assistant 正文。
 - 未识别合法 JSON 映射为 `runtime.event`。`sourcePayload` 会脱敏和限长，不能作为稳定字段依赖。

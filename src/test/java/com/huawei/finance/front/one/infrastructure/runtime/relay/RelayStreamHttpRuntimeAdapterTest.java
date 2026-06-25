@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.infrastructure.runtime.relay;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookieProperties;
@@ -8,12 +9,16 @@ import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCa
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
+import com.sun.net.httpserver.HttpServer;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.util.unit.DataSize;
 import org.springframework.web.reactive.function.client.ClientRequest;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -234,6 +239,57 @@ class RelayStreamHttpRuntimeAdapterTest {
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "before"))
                 .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
                 .verifyComplete();
+    }
+
+    @Test
+    void relayCodecLimitAllowsConfiguredLargeFrame() throws Exception {
+        String largeDelta = "知".repeat(300 * 1024);
+        byte[] body = ("{\"type\":\"message.delta\",\"content\":\"" + largeDelta + "\"}")
+                .getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/query", exchange -> {
+            exchange.getResponseHeaders().add(HttpHeaders.CONTENT_TYPE, "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            RelayAgentProperties properties = new RelayAgentProperties();
+            properties.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort());
+            properties.setStreamPath("/v1/query");
+            properties.setMaxInMemorySize(DataSize.ofMegabytes(1));
+            RelayStreamHttpRuntimeAdapter adapter = adapter(WebClient.builder(), properties,
+                    new AgentRuntimeForwardCookieProperties());
+
+            StepVerifier.create(adapter.query(request(RuntimeForwardHeaders.empty())))
+                    .assertNext(event -> assertThat(event.payload()).containsEntry("delta", largeDelta))
+                    .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                    .verifyComplete();
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void invalidRelayCodecLimitFailsFast() {
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .body("hello")
+                        .build()));
+        RelayAgentProperties zero = new RelayAgentProperties();
+        zero.setBaseUrl("http://relay.test");
+        zero.setMaxInMemorySize(DataSize.ofBytes(0));
+        RelayAgentProperties tooLarge = new RelayAgentProperties();
+        tooLarge.setBaseUrl("http://relay.test");
+        tooLarge.setMaxInMemorySize(DataSize.ofBytes((long) Integer.MAX_VALUE + 1));
+
+        assertThatThrownBy(() -> adapter(builder, zero, new AgentRuntimeForwardCookieProperties()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("max-in-memory-size must be greater than 0");
+        assertThatThrownBy(() -> adapter(builder, tooLarge, new AgentRuntimeForwardCookieProperties()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("max-in-memory-size must not exceed");
     }
 
     private AgentRuntimeRequest request(RuntimeForwardHeaders forwardHeaders) {

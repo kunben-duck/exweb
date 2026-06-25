@@ -168,6 +168,113 @@ class RelayRuntimeResponseNormalizerTest {
     }
 
     @Test
+    void toolStructuredResultContentBecomesAssistantDeltaWithRelayContext() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1",
+                "{\"type\":\"tool-structured-result\",\"agent_name\":\"delegate_agent\","
+                        + "\"tool_id\":\"tool-1\",\"parent_instance_id\":\"parent-1\","
+                        + "\"timestamp\":\"2026-06-25T20:22:03.001964\","
+                        + "\"session_id\":\"relay-session-1\","
+                        + "\"result_data\":{\"widget\":{\"data\":{\"content\":\"知识\"}},"
+                        + "\"index\":396,\"total\":403,\"is_last\":false}}");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("message.delta");
+        assertThat(events.getFirst().payload())
+                .containsEntry("delta", "知识")
+                .containsEntry("sourceType", "relay-content")
+                .containsEntry("agentName", "delegate_agent")
+                .containsEntry("toolId", "tool-1")
+                .containsEntry("parentInstanceId", "parent-1")
+                .containsEntry("runtimeSessionId", "relay-session-1")
+                .containsEntry("index", 396)
+                .containsEntry("total", 403)
+                .containsEntry("isLast", false);
+    }
+
+    @Test
+    void toolStructuredResultReferencesUseRelayPrefixedSourceTypes() {
+        List<ChatEvent> searchEvents = normalizer.normalize("run1", "session1",
+                "{\"type\":\"tool-structured-result\",\"result_data\":{\"widget\":{\"data\":{"
+                        + "\"searchList\":[{\"title\":\"网页\",\"url\":\"https://example.com\"}]"
+                        + "}},\"index\":1,\"total\":2}}");
+        List<ChatEvent> sourceEvents = normalizer.normalize("run1", "session1",
+                "{\"type\":\"tool-structured-result\",\"result_data\":{\"widget\":{\"data\":{"
+                        + "\"sourcesDocuments\":[{\"name\":\"报告.pdf\"}]"
+                        + "}}}}");
+
+        assertThat(searchEvents).hasSize(1);
+        assertThat(searchEvents.getFirst().type()).isEqualTo("runtime.reference");
+        assertThat(searchEvents.getFirst().payload())
+                .containsEntry("sourceType", "relay-searchList")
+                .containsEntry("referenceType", "search_list");
+        assertThat(sourceEvents).hasSize(1);
+        assertThat(sourceEvents.getFirst().type()).isEqualTo("runtime.reference");
+        assertThat(sourceEvents.getFirst().payload())
+                .containsEntry("sourceType", "relay-sourcesDocuments")
+                .containsEntry("referenceType", "source_documents");
+    }
+
+    @Test
+    void toolStructuredResultProgressAndCardsMapToStandardRuntimeEvents() {
+        List<ChatEvent> progressEvents = normalizer.normalize("run1", "session1",
+                "{\"type\":\"tool-structured-result\",\"resultData\":{\"widget\":{\"data\":{"
+                        + "\"processResult\":{\"dynamicResponse\":[{\"title\":\"正在调用工具\"}]}"
+                        + "}},\"isLast\":\"true\"}}");
+        List<ChatEvent> cardEvents = normalizer.normalize("run1", "session1",
+                "{\"type\":\"tool-structured-result\",\"result_data\":{\"widget\":{\"data\":{"
+                        + "\"diyCardScene\":{\"scene\":\"credit\"},\"skillId\":\"skill-1\""
+                        + "}}}}");
+
+        assertThat(progressEvents).hasSize(1);
+        assertThat(progressEvents.getFirst().type()).isEqualTo("runtime.progress");
+        assertThat(progressEvents.getFirst().payload())
+                .containsEntry("sourceType", "relay-processResult")
+                .containsEntry("status", "STREAMING")
+                .containsEntry("text", "正在调用工具")
+                .containsEntry("isLast", true);
+        assertThat(cardEvents).hasSize(1);
+        assertThat(cardEvents.getFirst().type()).isEqualTo("runtime.card");
+        assertThat(cardEvents.getFirst().payload())
+                .containsEntry("sourceType", "relay-diyCardScene")
+                .containsEntry("cardType", "diyCardScene")
+                .containsEntry("skillId", "skill-1");
+    }
+
+    @Test
+    void toolStructuredResultDoesNotCopyAnswerContentIntoProgressText() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1",
+                "{\"type\":\"tool-structured-result\",\"result_data\":{\"widget\":{\"data\":{"
+                        + "\"content\":\"正文答案\","
+                        + "\"processResult\":{\"phase\":\"thinking\"}"
+                        + "}}}}");
+
+        assertThat(events).hasSize(2);
+        assertThat(events.get(0).type()).isEqualTo("message.delta");
+        assertThat(events.get(0).payload()).containsEntry("delta", "正文答案");
+        assertThat(events.get(1).type()).isEqualTo("runtime.progress");
+        assertThat(events.get(1).payload())
+                .containsEntry("sourceType", "relay-processResult")
+                .doesNotContainKey("text");
+    }
+
+    @Test
+    void unrecognizedToolStructuredResultFallsBackWithRedaction() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1",
+                "{\"type\":\"tool-structured-result\",\"result_data\":{\"widget\":{\"data\":{"
+                        + "\"unknown\":{\"authorization\":\"Bearer secret\",\"value\":\"ok\"}"
+                        + "}}}}");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("runtime.event");
+        assertThat(events.getFirst().payload())
+                .containsEntry("sourceType", "relay-tool-structured-result");
+        assertThat(events.getFirst().payload().get("sourcePayload"))
+                .asString()
+                .doesNotContain("Bearer secret")
+                .contains("[REDACTED]");
+    }
+
+    @Test
     void unknownJsonStillFallsBackToRuntimeEventWithRedaction() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1",
                 "{\"type\":\"custom-event\",\"authorization\":\"Bearer secret\"}");

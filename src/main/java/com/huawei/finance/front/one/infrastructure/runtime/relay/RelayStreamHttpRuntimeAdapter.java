@@ -20,6 +20,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
+import org.springframework.util.unit.DataSize;
+import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -43,6 +45,7 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
     private final AgentRuntimeForwardCookieProperties forwardCookieProperties;
     private final RelayRuntimeResponseNormalizer responseNormalizer;
     private final RuntimeRawStreamLogService rawStreamLogService;
+    private final ExchangeStrategies relayExchangeStrategies;
 
     public RelayStreamHttpRuntimeAdapter(WebClient.Builder webClientBuilder, RelayAgentProperties properties,
                                          AgentRuntimeForwardCookieProperties forwardCookieProperties,
@@ -60,6 +63,9 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
         this.forwardCookieProperties = forwardCookieProperties;
         this.responseNormalizer = responseNormalizer;
         this.rawStreamLogService = rawStreamLogServiceProvider == null ? null : rawStreamLogServiceProvider.getIfAvailable();
+        this.relayExchangeStrategies = ExchangeStrategies.builder()
+                .codecs(codecs -> codecs.defaultCodecs().maxInMemorySize(relayMaxInMemoryBytes()))
+                .build();
     }
 
     @Override
@@ -69,7 +75,7 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
 
     @Override
     public Flux<ChatEvent> query(AgentRuntimeRequest request) {
-        WebClient.RequestBodySpec spec = webClientBuilder.baseUrl(properties.getBaseUrl())
+        WebClient.RequestBodySpec spec = relayWebClient()
                 .build()
                 .post()
                 .uri(properties.getStreamPath());
@@ -104,7 +110,7 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
             return Mono.empty();
         }
         String path = properties.getStopPath().replace("{runId}", request.runId() == null ? "" : request.runId());
-        WebClient.RequestBodySpec spec = webClientBuilder.baseUrl(properties.getBaseUrl())
+        WebClient.RequestBodySpec spec = relayWebClient()
                 .build()
                 .post()
                 .uri(path);
@@ -167,5 +173,23 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
                 upstream.dispose();
             });
         });
+    }
+
+    private WebClient.Builder relayWebClient() {
+        return webClientBuilder.clone()
+                .baseUrl(properties.getBaseUrl())
+                .exchangeStrategies(relayExchangeStrategies);
+    }
+
+    private int relayMaxInMemoryBytes() {
+        DataSize size = properties.getMaxInMemorySize();
+        if (size == null || size.toBytes() <= 0) {
+            throw new IllegalArgumentException("financeex.agent-runtime.max-in-memory-size must be greater than 0");
+        }
+        if (size.toBytes() > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException(
+                    "financeex.agent-runtime.max-in-memory-size must not exceed " + Integer.MAX_VALUE + " bytes");
+        }
+        return (int) size.toBytes();
     }
 }

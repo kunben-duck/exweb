@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.infrastructure.runtime.relay;
 
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.util.unit.DataSize;
 
 /**
  * Relay Runtime adapter 配置。
@@ -24,6 +25,8 @@ public class RelayAgentProperties {
     private boolean cancelSupported = true;
     /** Relay Runtime 单次调用超时时间。 */
     private Duration timeout = Duration.ofSeconds(60);
+    /** Relay 单个响应 frame 的 WebClient codec 内存上限。 */
+    private DataSize maxInMemorySize = DataSize.ofMegabytes(1);
 
     public String getProvider() {
         return provider;
@@ -71,6 +74,14 @@ public class RelayAgentProperties {
 
     public void setTimeout(Duration timeout) {
         this.timeout = timeout;
+    }
+
+    public DataSize getMaxInMemorySize() {
+        return maxInMemorySize;
+    }
+
+    public void setMaxInMemorySize(DataSize maxInMemorySize) {
+        this.maxInMemorySize = maxInMemorySize;
     }
 
 }

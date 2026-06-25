@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookieProperties;
 import org.junit.jupiter.api.Test;
+import org.springframework.util.unit.DataSize;
 
 class RelayAgentPropertiesTest {
     @Test
@@ -12,6 +13,7 @@ class RelayAgentPropertiesTest {
 
         assertThat(properties.getStreamPath()).isEqualTo("/v1/agent/runs/stream");
         assertThat(properties.getStopPath()).isEqualTo("/v1/agent/runs/{runId}/stop");
+        assertThat(properties.getMaxInMemorySize()).isEqualTo(DataSize.ofMegabytes(1));
     }
 
     @Test

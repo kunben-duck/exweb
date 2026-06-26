@@ -81,8 +81,10 @@ public class ChatStreamApplicationService {
     /**
      * 查询某个 run 已经成功落库的事实事件。
      *
-     * <p>该方法服务于用户主动 stop 后的部分回答固化：只使用数据库中已经获得 seq 的事件重建
-     * assistant 历史消息，避免把还在下游传输中、但未写入事实源的 chunk 当作用户可见历史。</p>
+     * <p>该方法服务于 stop 后的部分回答固化：只使用数据库中已经获得 seq 的事件重建
+     * assistant 历史消息，避免把还在下游传输中、但未写入事实源的 chunk 当作用户可见历史。
+     * 删除会话会在事务提交后复用 stop 编排，此时会话已是 DELETED，因此这里以 run 的
+     * tenant/user/session/run 归属边界查询事实事件，不再要求会话仍对前端可见。</p>
      *
      * @param user 请求入口解析出的不可变用户身份快照。
      * @param run 当前用户拥有的 run 快照。
@@ -90,7 +92,6 @@ public class ChatStreamApplicationService {
      */
     public java.util.List<ChatEvent> findPersistedRunEvents(UserContext user, ChatRun run) {
         permissionChecker.checkChatPermission(user);
-        ensureOwnedSession(user, run.sessionId());
         long afterSeq = run.firstSeq() == null || run.firstSeq() <= 0 ? 0 : run.firstSeq() - 1;
         return eventStore.findByOwnerAndRunAfterSeq(user.tenantId(), user.userId(), run.sessionId(), run.id(), afterSeq);
     }

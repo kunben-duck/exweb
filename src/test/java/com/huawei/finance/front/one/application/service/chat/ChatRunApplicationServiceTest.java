@@ -158,6 +158,28 @@ class ChatRunApplicationServiceTest {
                 .hasMessageContaining("ACTIVE_RUN_EXISTS");
     }
 
+    @Test
+    void createRunningRejectsDeletedSessionBeforeClaimingActiveRun() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRunApplicationService service = new ChatRunApplicationService(repository, cache, new InMemoryEventStore(0L),
+                new PermissionChecker(), new StatusSessionRepository("DELETED"));
+
+        assertThatThrownBy(() -> service.createRunning(new CreateChatRunContext(
+                "run2",
+                user(),
+                "session1",
+                com.huawei.finance.front.one.domain.routing.RouteTarget.agentRuntime("test", 1.0, "test"),
+                null,
+                Map.of(),
+                com.huawei.finance.front.one.domain.chat.ChatRunMode.NEXT,
+                null,
+                null
+        ))).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("会话不存在");
+        assertThat(cache.getActive("tenant1", "user1", "session1")).isEmpty();
+    }
+
     private ChatRunApplicationService service(InMemoryRunRepository repository, InMemoryRunCache cache) {
         return new ChatRunApplicationService(repository, cache, new InMemoryEventStore(0L),
                 new PermissionChecker(), new FixedSessionRepository());
@@ -318,6 +340,20 @@ class ChatRunApplicationServiceTest {
         @Override
         public ChatSession save(ChatSession session) {
             return session;
+        }
+    }
+
+    private static final class StatusSessionRepository extends FixedSessionRepository {
+        private final String status;
+
+        private StatusSessionRepository(String status) {
+            this.status = status;
+        }
+
+        @Override
+        public Optional<ChatSession> findByTenantIdAndUserIdAndId(String tenantId, String userId, String sessionId) {
+            Instant now = Instant.now();
+            return Optional.of(new ChatSession(sessionId, tenantId, userId, "title", status, "web", now, now));
         }
     }
 }

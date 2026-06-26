@@ -308,6 +308,10 @@ DELETE /api/v1/ex/chat/sessions
 `/chat/runs` 只返回 run 运行标识和 run 级 `streamTopicId`，不返回 WebSocket、Event Resume 或 stop URL。
 这些 URL 属于前端 SDK、网关或部署配置，避免后端业务响应承担客户端路由配置职责。
 
+删除会话是软删除语义。若目标会话存在 active run，删除接口会复用 run stop 编排先写入取消标记、
+发布 `run.cancelled` 并释放本服务 active run，再把会话置为 `DELETED`。前端删除会话时不需要串行调用
+stop；删除成功后应立即移除会话并取消本地订阅。
+
 ## 消息树与只读分支
 
 当前版本引入会话内消息树，但不改变现有流式协议。`POST /chat/runs` 创建后台 run 时会先根据 `runMode` 解析消息树写入计划：

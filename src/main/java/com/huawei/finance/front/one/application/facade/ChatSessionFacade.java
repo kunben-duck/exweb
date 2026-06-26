@@ -160,7 +160,8 @@ public interface ChatSessionFacade {
      * 软删除当前用户可见的会话。
      *
      * <p>删除只把会话状态置为 {@code DELETED}，不会物理删除消息、run、event、反馈或附件引用。
-     * 这样可以保持审计和故障排查事实完整，同时让前端列表和详情不再看到该会话。</p>
+     * 这样可以保持审计和故障排查事实完整，同时让前端列表和详情不再看到该会话。
+     * 如果会话仍有 active run，应用层会先主动取消该 run，再执行软删除。</p>
      *
      * @param user 请求入口解析出的不可变用户身份快照。
      * @param sessionId 会话标识。
@@ -171,7 +172,7 @@ public interface ChatSessionFacade {
     /**
      * 批量软删除当前用户可见的会话。
      *
-     * <p>删除语义为 all-or-nothing：所有会话都会先完成归属和 active run 校验；
+     * <p>删除语义为 all-or-nothing：所有会话都会先完成归属校验；
      * 任意一个会话不可删除时，本次请求整体失败，不做部分删除。</p>
      *
      * @param user 请求入口解析出的不可变用户身份快照。

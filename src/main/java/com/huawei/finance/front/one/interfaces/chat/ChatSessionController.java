@@ -301,7 +301,7 @@ public class ChatSessionController {
      * 软删除当前用户会话。
      *
      * <p>该接口只把会话状态置为 DELETED，不物理删除消息、run、event、反馈或附件引用。
-     * 若会话仍有 active run，应用层会拒绝删除，要求前端先 stop 当前 run。</p>
+     * 若会话仍有 active run，应用层会先主动取消本轮 run，再删除会话。</p>
      *
      * @param sessionId 会话标识；服务端会校验会话归属。
      * @return 删除后的会话元数据。
@@ -316,8 +316,8 @@ public class ChatSessionController {
     /**
      * 批量软删除当前用户会话。
      *
-     * <p>删除采用 all-or-nothing 语义：只要任意会话不存在、不属于当前用户或仍有 active run，
-     * 本次批量请求整体失败，不做部分删除。</p>
+     * <p>删除采用 all-or-nothing 语义：只要任意会话不存在或不属于当前用户，
+     * 本次批量请求整体失败，不做部分删除；运行中的会话会由应用层先主动取消 run。</p>
      *
      * @param request 批量删除请求，包含待删除 sessionIds。
      * @return 删除后的会话快照列表。

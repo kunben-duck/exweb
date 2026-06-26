@@ -50,7 +50,7 @@ query、候选意图、最高置信结果、最终路由是否采纳和调用耗
 | 重命名会话 | `PATCH` | `/api/v1/ex/chat/sessions/{sessionId}` | 更新会话标题 |
 | 归档/恢复会话 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/archive`、`/restore` | 会话列表管理 |
 | 删除会话 | `DELETE` | `/api/v1/ex/chat/sessions/{sessionId}` | 软删除单个会话，历史事实数据保留 |
-| 批量删除会话 | `DELETE` | `/api/v1/ex/chat/sessions` | 批量软删除会话，active run 存在时整体失败 |
+| 批量删除会话 | `DELETE` | `/api/v1/ex/chat/sessions` | 批量软删除会话，运行中的会话会先取消 run |
 | 创建 run | `POST` | `/api/v1/ex/chat/runs` | 唯一提问入口，返回 `streamTopicId` |
 | WebSocket | `WS` | `/api/v1/ex/chat/ws` | 用户级长连接，按 run topic 订阅实时事件 |
 | 会话事件恢复 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/events/resume?afterSeq={seq}` | 有限补发整个会话缺失事件 |
@@ -170,7 +170,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 上传文件并作为附件提问 | `POST /documents(file, sessionId)` -> 等状态 `AVAILABLE` -> `POST /chat/runs(attachments[{documentId}])` | `documentId`、`sessionId`、`attachments[].documentId` | 附件不是消息类型；PROCESSING/FAILED/DELETED 不可作为聊天附件 |
 | 选中历史技能并带文档提问 | `POST /documents(file,targetProvider=legacy-agent,skillId)` -> `POST /chat/runs(metadata.selectedSkillId,attachments)` | `documentId`、`metadata.selectedSkillId`、`metadata.legacyAgent` | 显式技能路由不创建 RuntimeBinding；附件必须来自 `legacy-agent` provider |
 | 点赞/点踩/取消 | 历史消息中找到 assistant `messageId` -> `POST /messages/{messageId}/feedback`；再次点击已选按钮 -> `DELETE /feedback` | `messageId`、可选 `runId`、`feedback.rating/status` | 历史消息 `feedback` 非空时高亮；取消后返回 `status=CANCELLED`，历史消息再查为 `feedback=null` |
-| 会话归档/恢复/删除 | 单个：`POST /archive`、`POST /restore`、`DELETE /sessions/{sessionId}`；批量：`DELETE /sessions` body `sessionIds[]` | `sessionId`、`sessionIds[]` | 删除是软删除；有 active run 时先 stop，否则删除失败 |
+| 会话归档/恢复/删除 | 单个：`POST /archive`、`POST /restore`、`DELETE /sessions/{sessionId}`；批量：`DELETE /sessions` body `sessionIds[]` | `sessionId`、`sessionIds[]` | 删除是软删除；有 active run 时后端会先主动取消 run |
 | 文档库管理 | `GET /documents` -> `GET /documents/{documentId}`/`status`/`preview-url`/`download`/`PATCH`/`DELETE` | `documentId`、`cursor`、`status` | 列表默认不返回 DELETED；下载和预览只允许 AVAILABLE |
 
 ### 逐接口字段矩阵
@@ -227,8 +227,11 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `PATCH /api/v1/ex/chat/sessions/{sessionId}` | 用户重命名会话。 | Path：`sessionId`；JSON body：`title`。 | `ChatSessionDto`。 | `title` 为空时保留原值。 |
 | `POST /api/v1/ex/chat/sessions/{sessionId}/archive` | 用户归档会话。 | Path：`sessionId`。 | `ChatSessionDto`。 | 归档通常用于列表隐藏，不删除历史。 |
 | `POST /api/v1/ex/chat/sessions/{sessionId}/restore` | 用户恢复归档会话。 | Path：`sessionId`。 | `ChatSessionDto`。 | 恢复后可重新出现在普通会话列表。 |
-| `DELETE /api/v1/ex/chat/sessions/{sessionId}` | 用户删除会话。 | Path：`sessionId`。 | `ChatSessionDto`，`status=DELETED`。 | 软删除，不物理删除历史事实数据；如果会话存在 active run，需先调用 stop。 |
-| `DELETE /api/v1/ex/chat/sessions` | 用户批量删除会话。 | JSON body：`sessionIds[]`。 | `BatchDeleteChatSessionsDto`：`deletedCount`、`items[]`。 | all-or-nothing；任意会话不存在、不属于当前用户或存在 active run 时整体失败，不做部分删除。 |
+| `DELETE /api/v1/ex/chat/sessions/{sessionId}` | 用户删除会话。 | Path：`sessionId`。 | `ChatSessionDto`，`status=DELETED`。 | 软删除，不物理删除历史事实数据；如果会话存在 active run，后端会先主动取消 run，再删除会话。 |
+| `DELETE /api/v1/ex/chat/sessions` | 用户批量删除会话。 | JSON body：`sessionIds[]`。 | `BatchDeleteChatSessionsDto`：`deletedCount`、`items[]`。 | all-or-nothing；任意会话不存在或不属于当前用户时整体失败，不做部分删除；运行中的会话会先取消 run。 |
+
+删除接口成功后，前端可以立即从列表和聊天区移除该会话，并主动 unsubscribe 该会话当前 topic。
+如果删除前 WebSocket 仍在订阅，随后收到该 run 的 `run.cancelled` 或 `done` 可直接忽略。
 
 ### Run 与流式接口
 

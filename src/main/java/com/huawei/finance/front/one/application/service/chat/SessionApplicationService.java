@@ -17,6 +17,7 @@ import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePartDraft;
+import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
@@ -30,8 +31,14 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * 会话与消息应用服务。
@@ -40,6 +47,7 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class SessionApplicationService implements ChatSessionFacade {
+    private static final Logger log = LoggerFactory.getLogger(SessionApplicationService.class);
     private static final String STATUS_ACTIVE = "ACTIVE";
     private static final String STATUS_ARCHIVED = "ARCHIVED";
     private static final String STATUS_DELETED = "DELETED";
@@ -52,17 +60,28 @@ public class SessionApplicationService implements ChatSessionFacade {
     private final ChatRunApplicationService chatRunService;
     private final RuntimeBindingApplicationService runtimeBindingService;
     private final ChatShareRepository shareRepository;
+    private final ObjectProvider<ChatRunStopCoordinator> stopCoordinatorProvider;
 
     @Autowired
     public SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
                                      PermissionChecker permissionChecker, ChatRunApplicationService chatRunService,
                                      RuntimeBindingApplicationService runtimeBindingService,
-                                     ChatShareRepository shareRepository) {
+                                     ChatShareRepository shareRepository,
+                                     ObjectProvider<ChatRunStopCoordinator> stopCoordinatorProvider) {
         this.sessionRepository = sessionRepository; this.messageRepository = messageRepository; this.idGenerator = idGenerator;
         this.permissionChecker = permissionChecker;
         this.chatRunService = chatRunService;
         this.runtimeBindingService = runtimeBindingService;
         this.shareRepository = shareRepository;
+        this.stopCoordinatorProvider = stopCoordinatorProvider;
+    }
+
+    SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
+                              PermissionChecker permissionChecker, ChatRunApplicationService chatRunService,
+                              RuntimeBindingApplicationService runtimeBindingService,
+                              ChatShareRepository shareRepository) {
+        this(sessionRepository, messageRepository, idGenerator, permissionChecker, chatRunService,
+                runtimeBindingService, shareRepository, null);
     }
 
     SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
@@ -191,13 +210,7 @@ public class SessionApplicationService implements ChatSessionFacade {
         List<ChatSession> sessions = normalizedIds.stream()
                 .map(sessionId -> requireOwnedSession(user.tenantId(), user.userId(), sessionId, false))
                 .toList();
-        /*
-         * 批量删除采用 all-or-nothing 语义：先把所有 active run 校验完成，再执行软删除。
-         * 这样前端不会遇到“前半部分删除成功、后半部分因运行中失败”的不确定列表状态。
-         */
-        if (chatRunService != null) {
-            sessions.forEach(session -> chatRunService.rejectIfActiveRunExists(user, session.id()));
-        }
+        List<SessionDeleteRunPlan> activeRunPlans = activeRunPlansForDelete(user, sessions);
         List<ChatSession> deleted = new ArrayList<>(sessions.size());
         for (ChatSession session : sessions) {
             ChatSession deletedSession = saveWith(session, session.title(), STATUS_DELETED);
@@ -209,8 +222,59 @@ public class SessionApplicationService implements ChatSessionFacade {
             }
             deleted.add(deletedSession);
         }
+        stopActiveRunsAfterDeleteCommit(user, activeRunPlans);
         return List.copyOf(deleted);
     }
+
+    private List<SessionDeleteRunPlan> activeRunPlansForDelete(UserContext user, List<ChatSession> sessions) {
+        if (sessions == null || sessions.isEmpty() || stopCoordinatorProvider == null) {
+            return List.of();
+        }
+        if (stopCoordinatorProvider.getIfAvailable() == null || chatRunService == null) {
+            return List.of();
+        }
+        List<SessionDeleteRunPlan> plans = new ArrayList<>();
+        for (ChatSession session : sessions) {
+            chatRunService.findActiveRun(user, session.id())
+                    .ifPresent(run -> plans.add(new SessionDeleteRunPlan(session, run)));
+        }
+        return List.copyOf(plans);
+    }
+
+    private void stopActiveRunsAfterDeleteCommit(UserContext user, List<SessionDeleteRunPlan> plans) {
+        if (plans == null || plans.isEmpty() || stopCoordinatorProvider == null) {
+            return;
+        }
+        ChatRunStopCoordinator stopCoordinator = stopCoordinatorProvider.getIfAvailable();
+        if (stopCoordinator == null) {
+            return;
+        }
+        Runnable stopTask = () -> plans.forEach(plan -> {
+            try {
+                stopCoordinator.stopRunForSessionDelete(user, plan.run(), plan.session());
+            } catch (Exception ex) {
+                log.warn("Failed to stop active run after session delete. sessionId={}, runId={}, error={}",
+                        plan.session().id(), plan.run().id(), ex.getMessage(), ex);
+            }
+        });
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            /*
+             * run.cancelled 会立即发布到 WebSocket/Redis。放到删除事务提交后执行，
+             * 避免前端收到一个尚未提交、暂时无法通过 Event Resume 恢复的终态事件。
+             * 这里再切到独立工作线程，避免 afterCommit 回调复用尚未解绑的事务资源去写 run/event/message。
+             */
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    Schedulers.boundedElastic().schedule(stopTask);
+                }
+            });
+        } else {
+            stopTask.run();
+        }
+    }
+
+    private record SessionDeleteRunPlan(ChatSession session, ChatRun run) {}
 
     /**
      * 根据 runMode 创建或定位本轮用户消息。

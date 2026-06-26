@@ -44,8 +44,8 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `POST /api/v1/ex/chat/sessions/{sessionId}/path`：持久化会话当前 active path leaf；UI 切换可先使用 `/messages?leafMessageId=...` 刷新展示。
 - `POST /api/v1/ex/chat/sessions/{sessionId}/branches`：从指定消息创建只读历史快照分支。
 - `POST /api/v1/ex/chat/sessions/{sessionId}/archive|restore`：会话归档和恢复。
-- `DELETE /api/v1/ex/chat/sessions/{sessionId}`：软删除会话；只写 `status=DELETED`，不物理删除消息、run、event、反馈或附件引用。
-- `DELETE /api/v1/ex/chat/sessions`：批量软删除会话；请求体传 `sessionIds[]`，任意会话存在 active run 时整体失败。
+- `DELETE /api/v1/ex/chat/sessions/{sessionId}`：软删除会话；若存在 active run，后端会先主动取消 run。
+- `DELETE /api/v1/ex/chat/sessions`：批量软删除会话；请求体传 `sessionIds[]`，运行中会话会先取消 run 后删除。
 - `WS /api/v1/ex/chat/ws`：用户级实时输出通道。客户端使用 `{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}` 订阅本轮 run topic；MVC/Servlet 模式会在 handshake 阶段固化用户身份。服务端 `message.payload` 为 `conversation-turn-stream`，真实聊天事件在 `message.payload.payload.encodedItem.data`。
 - `GET /api/v1/ex/chat/sessions/{sessionId}/events/resume?afterSeq={seq}`：会话级事件恢复有限补发，用于补齐整个会话缺失事件；SSE data 同样是 `conversation-turn-stream`。
 - `GET /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}`：run 级事件恢复并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态；长时间无业务事件时发送 turn stream `heartbeat`，终态后发送 `done`。

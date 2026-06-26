@@ -24,17 +24,14 @@ import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
-import com.huawei.finance.front.one.domain.chat.ChatMessagePartDraft;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus;
 import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.finance.front.one.domain.chat.ChatRunStartResult;
-import com.huawei.finance.front.one.domain.chat.ChatRunStopDecision;
 import com.huawei.finance.front.one.domain.chat.ChatRunStopResult;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import com.huawei.finance.front.one.domain.chat.ErrorEvent;
-import com.huawei.finance.front.one.domain.chat.RunCancelledEvent;
 import com.huawei.finance.front.one.domain.chat.RunCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
 import com.huawei.finance.front.one.domain.chat.RunStartedEvent;
@@ -48,6 +45,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -70,8 +68,6 @@ import reactor.core.scheduler.Schedulers;
 @Service
 public class FinanceEXChatService implements FinanceChatFacade {
     private static final Logger log = LoggerFactory.getLogger(FinanceEXChatService.class);
-    private static final String USER_STOP_PARTIAL_ASSISTANT_METADATA =
-            "{\"partial\":true,\"finishReason\":\"USER_STOP\",\"runStatus\":\"CANCELLED\"}";
 
     private final SessionApplicationService sessionService;
     private final MemoryApplicationService memoryService;
@@ -89,8 +85,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private final ChatDeltaCoalescer chatDeltaCoalescer;
     private final LocalChatRunExecutionRegistry runExecutionRegistry;
     private final RunAdmissionControlService runAdmissionControl;
+    private final ChatRunStopCoordinator stopCoordinator;
     private final IdGenerator idGenerator;
 
+    @Autowired
     public FinanceEXChatService(SessionApplicationService sessionService,
                                 MemoryApplicationService memoryService, RuntimeBindingApplicationService runtimeBindingService,
                                 RouteSignalApplicationService routeSignalService,
@@ -100,7 +98,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                 AgentRuntimeExecutor agentRuntimeExecutor, DocumentFacade documentFacade, ChatStreamApplicationService chatStreamService,
                                 ChatRunApplicationService chatRunService, ChatRunLeaseApplicationService chatRunLeaseService,
                                 ChatDeltaCoalescer chatDeltaCoalescer, LocalChatRunExecutionRegistry runExecutionRegistry,
-                                RunAdmissionControlService runAdmissionControl, IdGenerator idGenerator) {
+                                RunAdmissionControlService runAdmissionControl, ChatRunStopCoordinator stopCoordinator,
+                                IdGenerator idGenerator) {
         this.sessionService = sessionService;
         this.memoryService = memoryService;
         this.runtimeBindingService = runtimeBindingService;
@@ -117,7 +116,27 @@ public class FinanceEXChatService implements FinanceChatFacade {
         this.chatDeltaCoalescer = chatDeltaCoalescer;
         this.runExecutionRegistry = runExecutionRegistry;
         this.runAdmissionControl = runAdmissionControl;
+        this.stopCoordinator = stopCoordinator;
         this.idGenerator = idGenerator;
+    }
+
+    FinanceEXChatService(SessionApplicationService sessionService,
+                         MemoryApplicationService memoryService, RuntimeBindingApplicationService runtimeBindingService,
+                         RouteSignalApplicationService routeSignalService,
+                         IntentRecognitionRecordService intentRecognitionRecordService,
+                         SubAgentExecutor subAgentExecutor, LegacySkillExecutor legacySkillExecutor,
+                         SystemResponseExecutor systemResponseExecutor,
+                         AgentRuntimeExecutor agentRuntimeExecutor, DocumentFacade documentFacade,
+                         ChatStreamApplicationService chatStreamService,
+                         ChatRunApplicationService chatRunService, ChatRunLeaseApplicationService chatRunLeaseService,
+                         ChatDeltaCoalescer chatDeltaCoalescer, LocalChatRunExecutionRegistry runExecutionRegistry,
+                         RunAdmissionControlService runAdmissionControl, IdGenerator idGenerator) {
+        this(sessionService, memoryService, runtimeBindingService, routeSignalService, intentRecognitionRecordService,
+                subAgentExecutor, legacySkillExecutor, systemResponseExecutor, agentRuntimeExecutor, documentFacade,
+                chatStreamService, chatRunService, chatRunLeaseService, chatDeltaCoalescer, runExecutionRegistry,
+                runAdmissionControl, new ChatRunStopCoordinator(sessionService, chatStreamService, chatRunService,
+                        chatRunLeaseService, runExecutionRegistry, agentRuntimeExecutor, subAgentExecutor,
+                        legacySkillExecutor, idGenerator), idGenerator);
     }
 
     @Override
@@ -177,84 +196,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
     @Override
     public Mono<ChatRunStopResult> stopRun(UserContext user, String runId, RuntimeForwardHeaders forwardHeaders) {
-        return Mono.defer(() -> {
-            RuntimeForwardHeaders headerSnapshot = normalizeForwardHeaders(forwardHeaders);
-            ChatRunStopDecision decision = chatRunService.requestStop(user, runId, "USER_STOP");
-            ChatRun run = decision.run();
-            if (!decision.appendCancelledEvent()) {
-                return Mono.just(chatRunService.toStopResult(run));
-            }
-            // 本地 JVM 优先中断当前流订阅；跨 JVM 场景依靠 Redis cancel flag 与下游 cancel API 尽力收敛。
-            runExecutionRegistry.cancel(run.id());
-            cancelDownstream(run, user, headerSnapshot)
-                    .onErrorResume(ex -> Mono.empty())
-                    .subscribe();
-            if (!chatRunService.shouldAcceptEvent(RunCancelledEvent.of(run.id(), run.sessionId(), run.cancelReason()))) {
-                return Mono.just(chatRunService.toStopResult(run));
-            }
-            /*
-             * 用户主动 stop 后，前端需要立即对 partial assistant 点赞/点踩。因此这里先用
-             * 已落库 event 重建并保存 assistant，拿到 messageId 后再发布 run.cancelled。
-             * 保存失败会降级为 messageReady=false，不阻断取消终态。
-             */
-            StopMessageTarget messageTarget = persistPartialAssistantForUserStop(user, run);
-            ChatEvent cancelEvent = RunCancelledEvent.of(run.id(), run.sessionId(), run.cancelReason(),
-                    messageTarget.messageReady(), messageTarget.assistantMessageId());
-            ChatEvent cancelled = chatStreamService.appendAndPublish(cancelEvent);
-            ChatRun latest = chatRunService.observeEvent(cancelled);
-            chatRunLeaseService.markTerminal(run.id(), ChatRunExecutionStatus.CANCELLED);
-            return Mono.just(chatRunService.toStopResult(latest == null ? run : latest));
-        });
-    }
-
-    /**
-     * 用户主动 stop 后，把已经成功落库的 assistant 正文固化为历史消息。
-     *
-     * <p>这里不读取当前 JVM 内存里的流式草稿，而是从数据库事件事实源重建，保证跨实例 stop、
-     * 浏览器断开和本机 subscription 已释放等场景下得到一致结果。没有正文且没有用户可见
-     * runtime parts 时不创建空 assistant。</p>
-     */
-    private StopMessageTarget persistPartialAssistantForUserStop(UserContext user, ChatRun run) {
-        if (run.assistantMessageId() != null && !run.assistantMessageId().isBlank()) {
-            return StopMessageTarget.ready(run.assistantMessageId());
-        }
-        String parentMessageId = firstNonBlank(run.userMessageId(), run.parentMessageId());
-        if (parentMessageId == null) {
-            log.warn("Skip partial assistant persistence because run has no parent user message. runId={}", run.id());
-            return StopMessageTarget.notReady();
-        }
-        try {
-            AssistantAssembly assistant = new AssistantAssembly();
-            chatStreamService.findPersistedRunEvents(user, run).forEach(assistant::observe);
-            if (!assistant.shouldPersistMessage()) {
-                return StopMessageTarget.notReady();
-            }
-            ChatSession session = sessionService.getSession(user, run.sessionId());
-            String assistantMessageId = idGenerator.newId("msg",
-                    IdGenerateContext.of(user.tenantId(), user.userId(), session.id(), run.id()));
-            ChatMessage savedAssistant = sessionService.saveAssistantMessage(new AssistantMessageSaveCommand(
-                    user.tenantId(),
-                    user.userId(),
-                    session,
-                    assistant.finalContent(),
-                    run.id(),
-                    parentMessageId,
-                    null,
-                    assistant.parts(),
-                    USER_STOP_PARTIAL_ASSISTANT_METADATA,
-                    assistantMessageId
-            ));
-            chatRunService.bindAssistantMessage(run.id(), savedAssistant.id());
-            return StopMessageTarget.ready(savedAssistant.id());
-        } catch (Exception ex) {
-            /*
-             * 用户主动 stop 的终态事件需要尽量携带可反馈 messageId，但历史固化失败不能阻断
-             * run.cancelled。失败时降级为 messageReady=false，前端仍能可靠结束 loading。
-             */
-            log.warn("Failed to persist partial assistant on user stop. runId={}, reason={}",
-                    run.id(), ex.getMessage(), ex);
-            return StopMessageTarget.notReady();
-        }
+        return stopCoordinator.stopRun(user, runId, "USER_STOP", forwardHeaders);
     }
 
     @Override
@@ -549,19 +491,6 @@ public class FinanceEXChatService implements FinanceChatFacade {
         }
     }
 
-    private record StopMessageTarget(boolean messageReady, String assistantMessageId) {
-        private static StopMessageTarget notReady() {
-            return new StopMessageTarget(false, null);
-        }
-
-        private static StopMessageTarget ready(String assistantMessageId) {
-            if (assistantMessageId == null || assistantMessageId.isBlank()) {
-                return notReady();
-            }
-            return new StopMessageTarget(true, assistantMessageId);
-        }
-    }
-
     private void markExecutionTerminalIfNeeded(ChatEvent event) {
         ChatRunExecutionStatus terminalStatus = switch (event.type()) {
             case "run.completed" -> ChatRunExecutionStatus.COMPLETED;
@@ -615,36 +544,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
         return skillId.isBlank() ? null : skillId;
     }
 
-    private Mono<Void> cancelDownstream(ChatRun run, UserContext user, RuntimeForwardHeaders forwardHeaders) {
-        if (run == null || run.routeType() == null) {
-            return Mono.empty();
-        }
-        if (RouteType.AGENT_RUNTIME.name().equals(run.routeType())) {
-            return agentRuntimeExecutor.cancel(run, user, forwardHeaders);
-        }
-        if (RouteType.SUB_AGENT.name().equals(run.routeType())) {
-            return subAgentExecutor.cancel(run, user);
-        }
-        if (RouteType.EXPLICIT_SKILL.name().equals(run.routeType())) {
-            return legacySkillExecutor.cancel(run, user, forwardHeaders);
-        }
-        return Mono.empty();
-    }
-
     private RuntimeForwardHeaders normalizeForwardHeaders(RuntimeForwardHeaders forwardHeaders) {
         return forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
-    }
-
-    private String firstNonBlank(String... values) {
-        if (values == null) {
-            return null;
-        }
-        for (String value : values) {
-            if (value != null && !value.isBlank()) {
-                return value;
-            }
-        }
-        return null;
     }
 
     private Map<String, Object> runCompletedPayload(RouteTarget route, RuntimeBinding binding) {
@@ -688,134 +589,4 @@ public class FinanceEXChatService implements FinanceChatFacade {
         return false;
     }
 
-    /**
-     * 单次 run 内的 assistant 汇总状态。
-     *
-     * <p>流式 delta 负责实时草稿；下游最终 {@code message.snapshot} 是更权威的最终正文。
-     * runtime.* 事件只保存为历史过程 parts，不混入 assistant 正文。若没有正文但存在卡片、
-     * 引用、思考或进度等用户可见 part，也会创建一条空正文 assistant 消息作为 parts 挂载点。</p>
-     */
-    private static final class AssistantAssembly {
-        private final StringBuilder deltaDraft = new StringBuilder();
-        private final java.util.List<ChatMessagePartDraft> parts = new java.util.ArrayList<>();
-        private String snapshot;
-
-        private void observe(ChatEvent event) {
-            if (event == null || event.payload() == null) {
-                return;
-            }
-            if ("message.delta".equals(event.type())) {
-                Object delta = event.payload().get("delta");
-                if (delta != null) {
-                    deltaDraft.append(delta);
-                }
-                return;
-            }
-            if ("message.snapshot".equals(event.type())) {
-                Object content = event.payload().get("content");
-                if (content != null) {
-                    snapshot = String.valueOf(content);
-                }
-                return;
-            }
-            if (event.type() != null && event.type().startsWith("runtime.")) {
-                parts.add(runtimePart(event));
-            }
-        }
-
-        private boolean hasContent() {
-            return snapshot != null && !snapshot.isEmpty() || !deltaDraft.isEmpty();
-        }
-
-        private boolean shouldPersistMessage() {
-            return hasContent() || parts.stream().anyMatch(AssistantAssembly::userVisiblePart);
-        }
-
-        private String finalContent() {
-            return snapshot != null ? snapshot : deltaDraft.toString();
-        }
-
-        private java.util.List<ChatMessagePartDraft> parts() {
-            return java.util.List.copyOf(parts);
-        }
-
-        private static boolean userVisiblePart(ChatMessagePartDraft part) {
-            if (part == null || part.partType() == null) {
-                return false;
-            }
-            return switch (part.partType()) {
-                case "PROGRESS", "AGENT", "THINKING", "TOOL", "REFERENCE", "CARD" -> true;
-                default -> false;
-            };
-        }
-
-        private static ChatMessagePartDraft runtimePart(ChatEvent event) {
-            Map<String, Object> payload = event.payload() == null ? Map.of() : event.payload();
-            String sourceType = stringValue(payload.get("sourceType"));
-            return new ChatMessagePartDraft(partType(event.type()), sourceType, contentText(event.type(), payload), payload);
-        }
-
-        private static String partType(String eventType) {
-            return switch (eventType) {
-                case "runtime.progress" -> "PROGRESS";
-                case "runtime.metadata" -> "METADATA";
-                case "runtime.agent" -> "AGENT";
-                case "runtime.thinking" -> "THINKING";
-                case "runtime.tool" -> "TOOL";
-                case "runtime.reference" -> "REFERENCE";
-                case "runtime.card" -> "CARD";
-                default -> "RUNTIME_EVENT";
-            };
-        }
-
-        private static String contentText(String eventType, Map<String, Object> payload) {
-            if ("runtime.progress".equals(eventType)) {
-                return firstText(payload, "text", "message");
-            }
-            if ("runtime.agent".equals(eventType)) {
-                return firstText(payload, "task", "agentName");
-            }
-            if ("runtime.tool".equals(eventType)) {
-                String toolName = firstText(payload, "toolName");
-                String preview = firstText(payload, "inputPreview");
-                if (toolName != null && preview != null) {
-                    return toolName + ": " + preview;
-                }
-                return toolName == null ? preview : toolName;
-            }
-            if ("runtime.thinking".equals(eventType)) {
-                String text = firstText(payload, "text", "title");
-                if (text != null) {
-                    return text;
-                }
-                String status = firstText(payload, "status");
-                String operationId = firstText(payload, "operationId");
-                return operationId == null ? status : status + ": " + operationId;
-            }
-            if ("runtime.metadata".equals(eventType)) {
-                return firstText(payload, "projectHome", "metadataType");
-            }
-            if ("runtime.reference".equals(eventType)) {
-                return firstText(payload, "delta", "title", "url", "referenceType", "sourceType");
-            }
-            if ("runtime.card".equals(eventType)) {
-                return firstText(payload, "delta", "cardUrl", "intent", "skillId", "cardType", "sourceType");
-            }
-            return firstText(payload, "text", "displayText", "sourceType");
-        }
-
-        private static String firstText(Map<String, Object> payload, String... keys) {
-            for (String key : keys) {
-                String value = stringValue(payload.get(key));
-                if (value != null && !value.isBlank()) {
-                    return value;
-                }
-            }
-            return null;
-        }
-
-        private static String stringValue(Object value) {
-            return value == null ? null : String.valueOf(value);
-        }
-    }
 }

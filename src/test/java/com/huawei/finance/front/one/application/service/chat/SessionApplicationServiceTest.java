@@ -12,15 +12,16 @@ import com.huawei.finance.front.one.application.integration.share.ChatShareRepos
 import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
-import com.huawei.finance.front.one.domain.chat.ActiveRunExistsException;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePartDraft;
+import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.finance.front.one.domain.chat.ChatRunMode;
+import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
@@ -38,6 +39,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 class SessionApplicationServiceTest {
     @Test
     void listMessagesReturnsOwnedSessionHistoryInChronologicalOrder() {
@@ -141,7 +143,7 @@ class SessionApplicationServiceTest {
                 Instant.now(), Instant.now()));
         CountingRuntimeBindingService bindings = new CountingRuntimeBindingService();
         RecordingShareRepository shares = new RecordingShareRepository();
-        SessionApplicationService service = service(sessions, messages, new GuardChatRunService(false), bindings, shares);
+        SessionApplicationService service = service(sessions, messages, null, bindings, shares);
 
         ChatSession deleted = service.deleteSession(user(), session.id());
 
@@ -155,18 +157,22 @@ class SessionApplicationServiceTest {
     }
 
     @Test
-    void deleteSessionRejectsActiveRunAndKeepsSessionVisible() {
+    void deleteSessionStopsActiveRunAfterSoftDelete() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         ChatSession session = sessions.save(new ChatSession("session1", "tenant1", "user1", "title", "ACTIVE", "web",
                 Instant.now(), Instant.now()));
         CountingRuntimeBindingService bindings = new CountingRuntimeBindingService();
-        SessionApplicationService service = service(sessions, messages, new GuardChatRunService(true), bindings);
+        CountingStopCoordinator stopCoordinator = new CountingStopCoordinator();
+        SessionApplicationService service = service(sessions, messages, activeRunService("session1"), bindings, null,
+                stopCoordinator);
 
-        assertThatThrownBy(() -> service.deleteSession(user(), session.id()))
-                .isInstanceOf(ActiveRunExistsException.class);
-        assertThat(sessions.findById(session.id()).orElseThrow().status()).isEqualTo("ACTIVE");
-        assertThat(bindings.cancellations).isZero();
+        ChatSession deleted = service.deleteSession(user(), session.id());
+
+        assertThat(deleted.status()).isEqualTo("DELETED");
+        assertThat(stopCoordinator.stoppedSessions).containsExactly("session1");
+        assertThat(stopCoordinator.stoppedRuns).containsExactly("run-session1");
+        assertThat(bindings.cancellations).isEqualTo(1);
     }
 
     @Test
@@ -280,7 +286,7 @@ class SessionApplicationServiceTest {
         sessions.save(new ChatSession("session1", "tenant1", "user1", "first", "ACTIVE", "web", now, now));
         sessions.save(new ChatSession("session2", "tenant1", "user1", "second", "ARCHIVED", "web", now, now));
         CountingRuntimeBindingService bindings = new CountingRuntimeBindingService();
-        SessionApplicationService service = service(sessions, messages, new GuardChatRunService(false), bindings);
+        SessionApplicationService service = service(sessions, messages, null, bindings);
 
         List<ChatSession> deleted = service.deleteSessions(user(), List.of("session1", "session2", "session1"));
 
@@ -291,20 +297,23 @@ class SessionApplicationServiceTest {
     }
 
     @Test
-    void deleteSessionsRejectsAnyActiveRunBeforeMutating() {
+    void deleteSessionsStopsActiveRunsAndDeletesAll() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         Instant now = Instant.now();
         sessions.save(new ChatSession("session1", "tenant1", "user1", "first", "ACTIVE", "web", now, now));
         sessions.save(new ChatSession("session2", "tenant1", "user1", "second", "ACTIVE", "web", now, now));
         CountingRuntimeBindingService bindings = new CountingRuntimeBindingService();
-        SessionApplicationService service = service(sessions, messages, new GuardChatRunService(true), bindings);
+        CountingStopCoordinator stopCoordinator = new CountingStopCoordinator();
+        SessionApplicationService service = service(sessions, messages, activeRunService("session1", "session2"),
+                bindings, null, stopCoordinator);
 
-        assertThatThrownBy(() -> service.deleteSessions(user(), List.of("session1", "session2")))
-                .isInstanceOf(ActiveRunExistsException.class);
-        assertThat(sessions.findById("session1").orElseThrow().status()).isEqualTo("ACTIVE");
-        assertThat(sessions.findById("session2").orElseThrow().status()).isEqualTo("ACTIVE");
-        assertThat(bindings.cancellations).isZero();
+        List<ChatSession> deleted = service.deleteSessions(user(), List.of("session1", "session2"));
+
+        assertThat(deleted).extracting(ChatSession::status).containsExactly("DELETED", "DELETED");
+        assertThat(stopCoordinator.stoppedSessions).containsExactly("session1", "session2");
+        assertThat(stopCoordinator.stoppedRuns).containsExactly("run-session1", "run-session2");
+        assertThat(bindings.cancellations).isEqualTo(2);
     }
 
     private MessagePair completeTurn(TestFixture fixture, String userText, String assistantText, String runId) {
@@ -354,6 +363,14 @@ class SessionApplicationServiceTest {
                                               ChatRunApplicationService chatRunService,
                                               RuntimeBindingApplicationService bindingService,
                                               ChatShareRepository shareRepository) {
+        return service(sessions, messages, chatRunService, bindingService, shareRepository, null);
+    }
+
+    private SessionApplicationService service(InMemorySessionRepository sessions, InMemoryMessageRepository messages,
+                                              ChatRunApplicationService chatRunService,
+                                              RuntimeBindingApplicationService bindingService,
+                                              ChatShareRepository shareRepository,
+                                              ChatRunStopCoordinator stopCoordinator) {
         return new SessionApplicationService(
                 sessions,
                 messages,
@@ -361,12 +378,17 @@ class SessionApplicationServiceTest {
                 new PermissionChecker(),
                 chatRunService,
                 bindingService,
-                shareRepository
+                shareRepository,
+                stopCoordinator == null ? null : singletonProvider(stopCoordinator)
         );
     }
 
     private UserContext user() {
         return new UserContext("tenant1", "user1", "User One");
+    }
+
+    private ChatRunApplicationService activeRunService(String... activeSessionIds) {
+        return new ActiveRunService(List.of(activeSessionIds));
     }
 
     private record TestFixture(SessionApplicationService service, InMemorySessionRepository sessions,
@@ -431,19 +453,62 @@ class SessionApplicationServiceTest {
         }
     }
 
-    private static class GuardChatRunService extends ChatRunApplicationService {
-        private final boolean activeRunExists;
+    private ObjectProvider<ChatRunStopCoordinator> singletonProvider(ChatRunStopCoordinator coordinator) {
+        return new ObjectProvider<>() {
+            @Override
+            public ChatRunStopCoordinator getObject(Object... args) {
+                return coordinator;
+            }
 
-        GuardChatRunService(boolean activeRunExists) {
-            super(null, null, null, new PermissionChecker(), null);
-            this.activeRunExists = activeRunExists;
+            @Override
+            public ChatRunStopCoordinator getIfAvailable() {
+                return coordinator;
+            }
+
+            @Override
+            public ChatRunStopCoordinator getIfUnique() {
+                return coordinator;
+            }
+
+            @Override
+            public ChatRunStopCoordinator getObject() {
+                return coordinator;
+            }
+        };
+    }
+
+    private static class CountingStopCoordinator extends ChatRunStopCoordinator {
+        private final List<String> stoppedSessions = new ArrayList<>();
+        private final List<String> stoppedRuns = new ArrayList<>();
+
+        CountingStopCoordinator() {
+            super(null, null, null, null, null, null, null, null, null);
         }
 
         @Override
-        public void rejectIfActiveRunExists(UserContext user, String sessionId) {
-            if (activeRunExists) {
-                throw new ActiveRunExistsException(sessionId, "run1");
+        public void stopRunForSessionDelete(UserContext user, ChatRun run, ChatSession sessionSnapshot) {
+            stoppedSessions.add(sessionSnapshot.id());
+            stoppedRuns.add(run.id());
+        }
+    }
+
+    private static class ActiveRunService extends ChatRunApplicationService {
+        private final List<String> activeSessionIds;
+
+        ActiveRunService(List<String> activeSessionIds) {
+            super(null, null, null, new PermissionChecker(), null);
+            this.activeSessionIds = activeSessionIds;
+        }
+
+        @Override
+        public Optional<ChatRun> findActiveRun(UserContext user, String sessionId) {
+            if (!activeSessionIds.contains(sessionId)) {
+                return Optional.empty();
             }
+            Instant now = Instant.now();
+            return Optional.of(new ChatRun("run-" + sessionId, user.tenantId(), user.userId(), sessionId,
+                    ChatRunStatus.RUNNING, "AGENT_RUNTIME", null, "relay", null, 1L,
+                    null, null, now, null, Map.of(), now, now));
         }
     }
 

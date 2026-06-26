@@ -30,6 +30,9 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class ChatRunApplicationService {
+    private static final String SESSION_STATUS_ACTIVE = "ACTIVE";
+    private static final String SESSION_STATUS_DELETED = "DELETED";
+
     private final ChatRunRepository repository;
     private final ChatRunCache cache;
     private final ChatEventStore eventStore;
@@ -70,6 +73,7 @@ public class ChatRunApplicationService {
      */
     public ChatRun createRunning(CreateChatRunContext context) {
         UserContext user = context.user();
+        ensureOwnedActiveSession(user, context.sessionId());
         rejectIfActiveRunExists(user, context.sessionId());
         Instant now = Instant.now();
         ChatRun run = new ChatRun(
@@ -221,6 +225,17 @@ public class ChatRunApplicationService {
     }
 
     /**
+     * 查询当前会话仍在运行或取消中的 run。
+     *
+     * <p>删除会话会复用该方法找到 active run 并主动触发 stop。方法会校验会话归属和未删除，
+     * 避免跨用户删除或恢复逻辑误操作其他用户的运行态。</p>
+     */
+    public Optional<ChatRun> findActiveRun(UserContext user, String sessionId) {
+        ensureOwnedSession(user, sessionId);
+        return findActive(user.tenantId(), user.userId(), sessionId);
+    }
+
+    /**
      * 判断事件是否仍允许写入 run 事件流。
      *
      * <p>这是集群部署下的关键保护：当前 JVM subscription registry 只能加速本机资源释放，
@@ -300,13 +315,26 @@ public class ChatRunApplicationService {
     }
 
     private void ensureOwnedSession(UserContext user, String sessionId) {
+        loadOwnedNotDeletedSession(user, sessionId);
+    }
+
+    private void ensureOwnedActiveSession(UserContext user, String sessionId) {
+        ChatSession session = loadOwnedNotDeletedSession(user, sessionId);
+        if (!SESSION_STATUS_ACTIVE.equals(session.status())) {
+            throw new IllegalStateException("会话不可用: " + sessionId);
+        }
+    }
+
+    private ChatSession loadOwnedNotDeletedSession(UserContext user, String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
             throw new IllegalArgumentException("会话 ID 不能为空");
         }
-        Optional<ChatSession> session = sessionRepository.findByTenantIdAndUserIdAndId(user.tenantId(), user.userId(), sessionId);
-        if (session.isEmpty()) {
-            throw new SecurityException("会话不存在或不属于当前用户");
+        ChatSession session = sessionRepository.findByTenantIdAndUserIdAndId(user.tenantId(), user.userId(), sessionId)
+                .orElseThrow(() -> new SecurityException("会话不存在或不属于当前用户"));
+        if (SESSION_STATUS_DELETED.equals(session.status())) {
+            throw new IllegalArgumentException("会话不存在: " + sessionId);
         }
+        return session;
     }
 
 }

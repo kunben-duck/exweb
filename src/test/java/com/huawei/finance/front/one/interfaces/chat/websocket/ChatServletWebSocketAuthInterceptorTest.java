@@ -82,7 +82,8 @@ class ChatServletWebSocketAuthInterceptorTest {
         ChatServletWebSocketHandler handler = new ChatServletWebSocketHandler(
                 protocolService,
                 new ObjectMapper(),
-                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties(),
+                Runnable::run
         );
 
         handler.afterConnectionEstablished(new TestWebSocketSession("conn1", attributes));
@@ -111,7 +112,8 @@ class ChatServletWebSocketAuthInterceptorTest {
         ChatServletWebSocketHandler handler = new ChatServletWebSocketHandler(
                 protocolService,
                 new ObjectMapper(),
-                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties(),
+                Runnable::run
         );
         TestWebSocketSession session = new TestWebSocketSession("conn1", attributes);
         handler.afterConnectionEstablished(session);

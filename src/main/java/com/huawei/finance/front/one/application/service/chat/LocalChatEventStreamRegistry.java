@@ -60,26 +60,49 @@ public class LocalChatEventStreamRegistry {
         if (topic == null) {
             return;
         }
-        Sinks.EmitResult nextResult = topic.sink().tryEmitNext(event);
+        Sinks.EmitResult nextResult = topic.emitNext(event);
         if (nextResult.isFailure()) {
-            log.warn("本机 run topic 事件投递失败，topicId={}, seq={}, result={}",
-                    topicId, event.sequence(), nextResult);
-            /*
-             * live sink 只负责实时投递，不能为了慢客户端保留历史事件。溢出或投递失败时主动
-             * 通知订阅侧进入恢复流程；可靠补发始终由数据库 + Event Resume 完成。
-             */
-            topic.sink().tryEmitError(new IllegalStateException(
-                    "run topic live sink emit failed, seq=" + event.sequence() + ", result=" + nextResult));
+            handleEmitFailure(topicId, topic, event, nextResult);
+            return;
         }
         if (terminal) {
-            Sinks.EmitResult completeResult = topic.sink().tryEmitComplete();
+            Sinks.EmitResult completeResult = topic.emitComplete();
             if (completeResult.isFailure()) {
-                log.warn("本机 run topic 结束失败，topicId={}, result={}", topicId, completeResult);
+                logEmitFailure("LOCAL_EMIT_COMPLETE_FAILED", topicId, event, completeResult);
             }
             if (topic.subscribers().get() <= 0) {
                 topicSinks.remove(topicId, topic);
             }
         }
+    }
+
+    private void handleEmitFailure(String topicId, TopicSink topic, ChatEvent event, Sinks.EmitResult result) {
+        logEmitFailure("LOCAL_EMIT_NEXT_FAILED", topicId, event, result);
+        if (result == Sinks.EmitResult.FAIL_TERMINATED || result == Sinks.EmitResult.FAIL_CANCELLED) {
+            if (topic.subscribers().get() <= 0) {
+                topicSinks.remove(topicId, topic);
+            }
+            return;
+        }
+        /*
+         * live sink 只负责实时投递，不能为了慢客户端保留历史事件。溢出或投递失败时主动
+         * 通知订阅侧进入恢复流程；可靠补发始终由数据库 + Event Resume 完成。
+         */
+        Sinks.EmitResult errorResult = topic.emitError(new IllegalStateException(
+                "run topic live sink emit failed, seq=" + event.sequence() + ", result=" + result));
+        if (errorResult.isFailure()) {
+            logEmitFailure("LOCAL_EMIT_ERROR_FAILED", topicId, event, errorResult);
+        }
+    }
+
+    private void logEmitFailure(String reason, String topicId, ChatEvent event, Sinks.EmitResult result) {
+        if (result == Sinks.EmitResult.FAIL_TERMINATED || result == Sinks.EmitResult.FAIL_CANCELLED) {
+            log.debug("本机 run topic 已结束，reason={}, topicId={}, seq={}, result={}",
+                    reason, topicId, event.sequence(), result);
+            return;
+        }
+        log.warn("本机 run topic 事件投递失败，reason={}, topicId={}, runId={}, sessionId={}, seq={}, result={}",
+                reason, topicId, event.runId(), event.sessionId(), event.sequence(), result);
     }
 
     private boolean terminal(ChatEvent event) {
@@ -97,6 +120,18 @@ public class LocalChatEventStreamRegistry {
 
         private AtomicInteger subscribers() {
             return subscribers;
+        }
+
+        private synchronized Sinks.EmitResult emitNext(ChatEvent event) {
+            return sink.tryEmitNext(event);
+        }
+
+        private synchronized Sinks.EmitResult emitComplete() {
+            return sink.tryEmitComplete();
+        }
+
+        private synchronized Sinks.EmitResult emitError(Throwable error) {
+            return sink.tryEmitError(error);
         }
     }
 }

@@ -6,8 +6,12 @@ import com.huawei.finance.front.one.application.config.ChatWebSocketProperties;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatWebSocketEnvelopeDto;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -36,13 +40,16 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
     private final ChatWebSocketProtocolService protocolService;
     private final ObjectMapper objectMapper;
     private final ChatWebSocketProperties properties;
+    private final Executor sendExecutor;
     private final Map<String, ServletConnection> connections = new ConcurrentHashMap<>();
 
     public ChatServletWebSocketHandler(ChatWebSocketProtocolService protocolService, ObjectMapper objectMapper,
-                                       ChatWebSocketProperties properties) {
+                                       ChatWebSocketProperties properties,
+                                       @Qualifier("chatServletWebSocketSendExecutor") Executor sendExecutor) {
         this.protocolService = protocolService;
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.sendExecutor = sendExecutor;
     }
 
     @Override
@@ -60,7 +67,11 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
         // 这对应 WebFlux 版本的 unicast sink，避免多个 runtime 事件线程同时写底层 socket。
         ConcurrentWebSocketSessionDecorator decorated = new ConcurrentWebSocketSessionDecorator(
                 session, properties.normalizedSendTimeLimitMillis(), properties.normalizedSendBufferSizeBytes());
-        connections.put(session.getId(), new ServletConnection(user, decorated));
+        ServletWebSocketOutboundQueue outboundQueue = new ServletWebSocketOutboundQueue(
+                properties.normalizedServletSendQueueCapacity(),
+                properties.normalizedServletSendQueueMaxBytes()
+        );
+        connections.put(session.getId(), new ServletConnection(user, decorated, outboundQueue));
     }
 
     @Override
@@ -73,7 +84,7 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
         if (message.getPayloadLength() > properties.normalizedMaxInboundMessageBytes()) {
             emit(session.getId(), connection, ChatWebSocketEnvelopeDto.error(null,
                     "WS_MESSAGE_TOO_LARGE", "WebSocket 控制消息超过最大允许大小"));
-            closeSilently(session, CloseStatus.TOO_BIG_TO_PROCESS);
+            closeConnection(session.getId(), connection, "WS_MESSAGE_TOO_LARGE", CloseStatus.TOO_BIG_TO_PROCESS);
             return;
         }
         ChatWebSocketOutbound outbound = envelope -> emit(session.getId(), connection, envelope);
@@ -89,6 +100,7 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         ServletConnection connection = connections.remove(session.getId());
         if (connection != null) {
+            connection.outbound().close();
             protocolService.close(session.getId(), connection.user());
         }
     }
@@ -98,6 +110,7 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
         log.warn("Servlet WebSocket transport error, connectionId={}, reason={}", session.getId(), exception.getMessage());
         ServletConnection connection = connections.remove(session.getId());
         if (connection != null) {
+            connection.outbound().close();
             protocolService.close(session.getId(), connection.user());
         }
         closeSilently(session, CloseStatus.SERVER_ERROR);
@@ -113,32 +126,112 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
     public void closeIdleConnections() {
         connections.forEach((connectionId, connection) -> {
             if (protocolService.idleForLongerThan(connectionId, properties.normalizedIdleTimeout())) {
-                emit(connectionId, connection, ChatWebSocketEnvelopeDto.error(null,
-                        "WS_IDLE_TIMEOUT", "WebSocket 连接空闲超时"));
-                protocolService.close(connectionId, connection.user());
-                connections.remove(connectionId);
-                closeSilently(connection.session(), CloseStatus.GOING_AWAY);
+                closeConnection(connectionId, connection, "WS_IDLE_TIMEOUT", CloseStatus.GOING_AWAY);
             }
         });
     }
 
     private void emit(String connectionId, ServletConnection connection, ChatWebSocketEnvelopeDto envelope) {
+        ServletWebSocketOutboundQueue.OutboundMessage message;
         try {
-            connection.session().sendMessage(toMessage(envelope));
+            message = toOutboundMessage(envelope);
         } catch (Exception ex) {
-            log.warn("Servlet WebSocket send failed, connectionId={}, reason={}", connectionId, ex.getMessage());
-            protocolService.close(connectionId, connection.user());
-            connections.remove(connectionId);
-            closeSilently(connection.session(), CloseStatus.SESSION_NOT_RELIABLE);
+            log.warn("Servlet WebSocket envelope serialization failed, connectionId={}, reason={}",
+                    connectionId, ex.getMessage());
+            closeConnection(connectionId, connection, "WS_SERIALIZATION_FAILED", CloseStatus.SERVER_ERROR);
+            return;
+        }
+        ServletWebSocketOutboundQueue.OfferResult result = connection.outbound().offer(message);
+        if (result == ServletWebSocketOutboundQueue.OfferResult.ACCEPTED) {
+            scheduleDrain(connectionId, connection);
+        } else if (result == ServletWebSocketOutboundQueue.OfferResult.SKIPPED_HEARTBEAT) {
+            log.debug("Skip WebSocket heartbeat because outbound queue is busy, connectionId={}, topicId={}, offset={}",
+                    connectionId, message.topicId(), message.offset());
+        } else if (result == ServletWebSocketOutboundQueue.OfferResult.OVERFLOW) {
+            ServletWebSocketOutboundQueue.Snapshot snapshot = connection.outbound().snapshot();
+            log.warn("Servlet WebSocket outbound overflow, connectionId={}, topicId={}, offset={}, envelopeType={}, messageBytes={}, queueSize={}, queuedBytes={}",
+                    connectionId, message.topicId(), message.offset(), message.envelopeType(), message.bytes(),
+                    snapshot.queueSize(), snapshot.queuedBytes());
+            closeConnection(connectionId, connection, "WS_OUTBOUND_OVERFLOW", CloseStatus.SERVICE_OVERLOAD);
+        } else {
+            log.debug("Drop WebSocket envelope because connection is closing, connectionId={}, envelopeType={}, topicId={}",
+                    connectionId, message.envelopeType(), message.topicId());
         }
     }
 
-    private TextMessage toMessage(ChatWebSocketEnvelopeDto dto) {
+    private void scheduleDrain(String connectionId, ServletConnection connection) {
+        if (!connection.outbound().tryStartDraining()) {
+            return;
+        }
         try {
-            return new TextMessage(objectMapper.writeValueAsString(dto));
+            sendExecutor.execute(() -> drainOutbound(connectionId, connection));
+        } catch (RejectedExecutionException ex) {
+            log.warn("Servlet WebSocket send executor rejected drain task, connectionId={}, reason={}",
+                    connectionId, ex.getMessage());
+            closeConnection(connectionId, connection, "WS_SEND_EXECUTOR_REJECTED", CloseStatus.SERVICE_OVERLOAD);
+        }
+    }
+
+    private void drainOutbound(String connectionId, ServletConnection connection) {
+        ServletWebSocketOutboundQueue.OutboundMessage current = null;
+        try {
+            while ((current = connection.outbound().poll()) != null) {
+                if (!connection.session().isOpen()) {
+                    closeConnection(connectionId, connection, "WS_SESSION_CLOSED", CloseStatus.SESSION_NOT_RELIABLE);
+                    return;
+                }
+                connection.session().sendMessage(new TextMessage(current.payload()));
+            }
+        } catch (Exception ex) {
+            if (Thread.currentThread().isInterrupted()) {
+                Thread.currentThread().interrupt();
+            }
+            ServletWebSocketOutboundQueue.Snapshot snapshot = connection.outbound().snapshot();
+            log.warn("Servlet WebSocket async send failed, connectionId={}, topicId={}, offset={}, envelopeType={}, messageBytes={}, queueSize={}, queuedBytes={}, reason={}",
+                    connectionId, current == null ? null : current.topicId(), current == null ? null : current.offset(),
+                    current == null ? null : current.envelopeType(), current == null ? 0 : current.bytes(),
+                    snapshot.queueSize(), snapshot.queuedBytes(), ex.getMessage());
+            closeConnection(connectionId, connection, "WS_SEND_FAILED", CloseStatus.SESSION_NOT_RELIABLE);
+            return;
+        } finally {
+            if (connection.outbound().finishDrainingAndHasPending()) {
+                scheduleDrain(connectionId, connection);
+            }
+        }
+    }
+
+    private void closeConnection(String connectionId, ServletConnection connection, String reason, CloseStatus closeStatus) {
+        connection.outbound().close();
+        if (connections.remove(connectionId, connection)) {
+            protocolService.close(connectionId, connection.user());
+        }
+        closeSilently(connection.session(), closeStatus.withReason(reason));
+    }
+
+    private TextMessage toMessage(ChatWebSocketEnvelopeDto dto) {
+        return new TextMessage(toPayload(dto));
+    }
+
+    private ServletWebSocketOutboundQueue.OutboundMessage toOutboundMessage(ChatWebSocketEnvelopeDto dto) {
+        String payload = toPayload(dto);
+        int bytes = payload.getBytes(StandardCharsets.UTF_8).length;
+        return new ServletWebSocketOutboundQueue.OutboundMessage(payload, bytes, dto.type(), dto.topicId(),
+                dto.offset(), heartbeat(dto));
+    }
+
+    private String toPayload(ChatWebSocketEnvelopeDto dto) {
+        try {
+            return objectMapper.writeValueAsString(dto);
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("WebSocket 响应序列化失败", ex);
         }
+    }
+
+    private boolean heartbeat(ChatWebSocketEnvelopeDto dto) {
+        return "message".equals(dto.type())
+                && dto.payload() != null
+                && dto.payload().payload() != null
+                && "heartbeat".equals(dto.payload().payload().type());
     }
 
     private void closeSilently(WebSocketSession session, CloseStatus status) {
@@ -154,7 +247,9 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
      *
      * @param user 握手入口解析出的不可变用户身份。
      * @param session 具备并发发送保护的 Servlet WebSocket session。
+     * @param outbound 当前连接的有界异步发送队列。
      */
-    private record ServletConnection(UserContext user, ConcurrentWebSocketSessionDecorator session) {
+    private record ServletConnection(UserContext user, ConcurrentWebSocketSessionDecorator session,
+                                     ServletWebSocketOutboundQueue outbound) {
     }
 }

@@ -9,7 +9,14 @@ import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyBuilde
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.connection.RedisClusterConnection;
@@ -111,6 +118,47 @@ class RedisChatLiveEventBusTest {
                     org.assertj.core.api.Assertions.assertThat(event.payload()).containsEntry("delta", "legacy");
                 })
                 .verifyComplete();
+    }
+
+    @Test
+    void concurrentRemoteMessagesForSameTopicAreSerialized() throws Exception {
+        RedisChatLiveEventBus bus = newBus(new CapturingStringRedisTemplate());
+        int count = 64;
+        CompletableFuture<List<ChatEvent>> received = bus.subscribe("chat-run-run1")
+                .take(count)
+                .collectList()
+                .toFuture();
+
+        ExecutorService executor = Executors.newFixedThreadPool(8);
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        List<Future<?>> futures = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            long seq = i + 1L;
+            futures.add(executor.submit(() -> {
+                start.await();
+                bus.onMessage(message(Map.of(
+                        "publisherInstanceId", "instance-b",
+                        "runId", "run1",
+                        "sessionId", "session1",
+                        "sequence", seq,
+                        "eventType", "message.delta",
+                        "createdAt", Instant.now(),
+                        "payload", Map.of("delta", "remote-" + seq)
+                )), null);
+                return null;
+            }));
+        }
+
+        start.countDown();
+        for (Future<?> future : futures) {
+            future.get(2, TimeUnit.SECONDS);
+        }
+        executor.shutdownNow();
+
+        List<ChatEvent> events = received.get(5, TimeUnit.SECONDS);
+        org.assertj.core.api.Assertions.assertThat(events).hasSize(count);
+        org.assertj.core.api.Assertions.assertThat(events.stream().map(ChatEvent::sequence).distinct().count())
+                .isEqualTo(count);
     }
 
     private RedisChatLiveEventBus newBus(StringRedisTemplate redis) {

@@ -505,6 +505,7 @@ LocalChatEventStreamRegistry#subscribeRunTopic(...)
 - topic 是 `chat-run-{runId}`。
 - sink 是有界 multicast live 通道，不保存历史事件；订阅建立时的补发统一从数据库事件表读取。
 - live sink 溢出或异常时，上层会提示 `RECOVER_REQUIRED`，前端再用 Event Resume 补齐缺口。
+- 同一 topic 的 sink 写入必须串行化；Redis listener 或本机发布并发时，不能直接多线程 emit 同一个 Reactor sink。
 
 重点排查：
 
@@ -537,6 +538,7 @@ RedisChatLiveEventBus#onMessage(...)
 
 - Redis Pub/Sub 不是可靠消息源。
 - Redis 不可用时，跨实例实时推送可能缺失，但 Event Resume 仍可从数据库补齐。
+- Redis live source 异常不会影响已经落库的事件；run 级 Event Resume 会在 live tail 异常时降级轮询事件表直到 run 终态。
 
 重点排查：
 
@@ -569,13 +571,13 @@ ChatServletWebSocketHandler#emit(...)
 - `beforeHandshake(...)` 在 HTTP upgrade 前解析企业 ThreadLocal 身份，并写入 WebSocket attributes。
 - `afterConnectionEstablished(...)` 从 attributes 读取 `UserContext`，调用 `ChatWebSocketProtocolService#open(...)`。
 - `handleTextMessage(...)` 只处理 WebSocket 控制消息，不接收聊天 query。
-- `emit(...)` 负责把 envelope 写到底层 WebSocket session。
+- `emit(...)` 负责把 envelope 放入当前连接的有界发送队列；发送 executor 再串行 drain 到底层 WebSocket session。
 
 重点排查：
 
 - MVC 模式 WebSocket 404：查 `ChatServletWebSocketConfig` 是否生效，以及是否被 WebFlux/MVC 条件装配影响。
 - WebSocket 握手后用户为空：查 `ChatServletWebSocketAuthInterceptor#beforeHandshake(...)` 是否在企业 ThreadLocal 有效阶段执行。
-- 发送报错或连接关闭：查 `ChatServletWebSocketHandler#emit(...)` 和 `ConcurrentWebSocketSessionDecorator` 限制。
+- 发送报错或连接关闭：查 `ChatServletWebSocketHandler#emit(...)`、`ServletWebSocketOutboundQueue`、`ConcurrentWebSocketSessionDecorator` 和 `financeex.websocket.servlet-send-*` 限制。
 
 ### 10.2 WebSocket 协议服务
 
@@ -727,7 +729,7 @@ GET /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}
 区别：
 
 - session 级事件恢复：只补发会话维度历史事件。
-- run 级事件恢复：补发指定 run，并在 run 未终态时接 live tail，直到终态。
+- run 级事件恢复：补发指定 run，并在 run 未终态时接 live tail，直到终态；live tail 异常时按 `financeex.chat-stream.resume-poll-interval` 轮询事件表。
 
 HTTP resume 的 SSE `data` 与 WebSocket `message.payload` 一样，都是 `ConversationTurnStreamDto`：
 
@@ -740,6 +742,7 @@ HTTP resume 的 SSE `data` 与 WebSocket `message.payload` 一样，都是 `Conv
 - Event Resume 没数据：先确认 `afterSeq` 是否已经大于等于最新 seq。
 - 跨电脑恢复缺前半段：前端没有本地 cursor 时应从 `activeRunFirstSeq - 1` 开始。
 - Event Resume 一直不断：检查 run 是否一直未产生 terminal event。
+- Run 级 Event Resume 输出到一半停止：检查 live source 是否抛出 `StreamRecoveryRequiredException`，正常情况下会切换到 DB polling；如果仍断开，继续查 Servlet async timeout 或客户端主动关闭。
 
 ## 13. stop 取消路径
 

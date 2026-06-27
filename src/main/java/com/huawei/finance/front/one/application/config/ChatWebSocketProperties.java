@@ -6,6 +6,7 @@ import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 import org.springframework.util.PatternMatchUtils;
+import org.springframework.util.unit.DataSize;
 
 /**
  * 前端 WebSocket 连接治理配置。
@@ -37,6 +38,16 @@ public class ChatWebSocketProperties {
     private Duration sendTimeLimit = Duration.ofSeconds(10);
     /** Servlet WebSocket 出站缓冲最大字节数。 */
     private int sendBufferSizeBytes = 512 * 1024;
+    /** Servlet WebSocket 阻塞发送任务核心线程数；仅 MVC/Servlet WebSocket 使用。 */
+    private int servletSendExecutorCoreSize = 4;
+    /** Servlet WebSocket 阻塞发送任务最大线程数；仅 MVC/Servlet WebSocket 使用。 */
+    private int servletSendExecutorMaxSize = 16;
+    /** Servlet WebSocket 单连接出站队列容量；小于等于 0 时复用 outboundQueueSize。 */
+    private int servletSendQueueCapacity = 0;
+    /** Servlet WebSocket 单连接出站队列最大累计字节数。 */
+    private DataSize servletSendQueueMaxBytes = DataSize.ofMegabytes(2);
+    /** 是否使用 JDK 21 virtual thread 执行 Servlet WebSocket 阻塞发送任务。 */
+    private boolean servletSendUseVirtualThreads = false;
     /** 连接无控制消息或投递活动超过该时间后，由服务端主动关闭。 */
     private Duration idleTimeout = Duration.ofMinutes(10);
     /** 空闲连接清理任务执行间隔。 */
@@ -129,6 +140,46 @@ public class ChatWebSocketProperties {
         this.sendBufferSizeBytes = sendBufferSizeBytes;
     }
 
+    public int getServletSendExecutorCoreSize() {
+        return servletSendExecutorCoreSize;
+    }
+
+    public void setServletSendExecutorCoreSize(int servletSendExecutorCoreSize) {
+        this.servletSendExecutorCoreSize = servletSendExecutorCoreSize;
+    }
+
+    public int getServletSendExecutorMaxSize() {
+        return servletSendExecutorMaxSize;
+    }
+
+    public void setServletSendExecutorMaxSize(int servletSendExecutorMaxSize) {
+        this.servletSendExecutorMaxSize = servletSendExecutorMaxSize;
+    }
+
+    public int getServletSendQueueCapacity() {
+        return servletSendQueueCapacity;
+    }
+
+    public void setServletSendQueueCapacity(int servletSendQueueCapacity) {
+        this.servletSendQueueCapacity = servletSendQueueCapacity;
+    }
+
+    public DataSize getServletSendQueueMaxBytes() {
+        return servletSendQueueMaxBytes;
+    }
+
+    public void setServletSendQueueMaxBytes(DataSize servletSendQueueMaxBytes) {
+        this.servletSendQueueMaxBytes = servletSendQueueMaxBytes;
+    }
+
+    public boolean isServletSendUseVirtualThreads() {
+        return servletSendUseVirtualThreads;
+    }
+
+    public void setServletSendUseVirtualThreads(boolean servletSendUseVirtualThreads) {
+        this.servletSendUseVirtualThreads = servletSendUseVirtualThreads;
+    }
+
     public Duration getIdleTimeout() {
         return idleTimeout;
     }
@@ -200,6 +251,23 @@ public class ChatWebSocketProperties {
 
     public int normalizedSendBufferSizeBytes() {
         return Math.max(64 * 1024, sendBufferSizeBytes);
+    }
+
+    public int normalizedServletSendExecutorCoreSize() {
+        return Math.max(1, servletSendExecutorCoreSize);
+    }
+
+    public int normalizedServletSendExecutorMaxSize() {
+        return Math.max(normalizedServletSendExecutorCoreSize(), servletSendExecutorMaxSize);
+    }
+
+    public int normalizedServletSendQueueCapacity() {
+        return servletSendQueueCapacity > 0 ? servletSendQueueCapacity : normalizedOutboundQueueSize();
+    }
+
+    public long normalizedServletSendQueueMaxBytes() {
+        DataSize normalized = servletSendQueueMaxBytes == null ? DataSize.ofMegabytes(2) : servletSendQueueMaxBytes;
+        return Math.max(64 * 1024L, normalized.toBytes());
     }
 
     public Duration normalizedIdleTimeout() {

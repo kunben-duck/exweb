@@ -549,10 +549,15 @@ Servlet/MVC WebSocket 会在 `HandshakeInterceptor.beforeHandshake` 阶段调用
 
 MVC/Servlet 生产模式增加了长连接治理层：`financeex.websocket.allowed-origin-patterns`
 限制握手来源，`max-connections-per-user`、`max-subscriptions-per-connection`、
-`max-subscribers-per-topic`、`outbound-queue-size`、`live-buffer-capacity` 和 `idle-timeout`
-限制本机连接资源。WebSocket 与 run 级事件恢复通过 `financeex.chat-stream.turn-heartbeat-interval`
-发送 turn stream `heartbeat`，配合 `spring.mvc.async.request-timeout` 与 Tomcat 连接配置避免空闲断流。WebSocket 实时投递
-出现慢客户端、缓冲溢出或乱序时返回 `RECOVER_REQUIRED`，可靠恢复仍走数据库事件 + Event Resume。
+`max-subscribers-per-topic`、`outbound-queue-size`、`live-buffer-capacity`、`idle-timeout`
+以及 `servlet-send-*` 限制本机连接资源。Servlet WebSocket 的底层发送是阻塞调用，
+服务端会先把 envelope 放入单连接有界队列，再由全局发送 executor 串行 drain 当前连接，
+避免慢客户端把 Runtime、Redis fanout 或 scheduler 线程卡在 socket send 上。WebSocket 与 run 级事件恢复通过
+`financeex.chat-stream.turn-heartbeat-interval` 发送 turn stream `heartbeat`，配合
+`spring.mvc.async.request-timeout` 与 Tomcat 连接配置避免空闲断流。WebSocket 实时投递
+出现慢客户端、发送队列溢出或乱序时关闭当前连接或返回 `RECOVER_REQUIRED`，可靠恢复仍走数据库事件 + Event Resume。
+run 级 Event Resume 正常优先接入 live topic；如果 live source 异常，会按
+`financeex.chat-stream.resume-poll-interval` 回查事件表直到 run 终态，避免跨实例实时 fanout 故障让恢复流中途断开。
 前端接收的 `message.payload` / SSE `data` 是 `conversation-turn-stream`，真实 ChatEvent 位于
 `stream-item.encodedItem.data`；`heartbeat` 和 `done` 只是传输层状态，不写入 `fin_ex_chat_event_t`，
 也不推进 `afterSeq`。
@@ -726,6 +731,7 @@ stop 语义：
 - Relay HTTP Streamable adapter：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`、`financeex.agent-runtime.stop-path`
 - 下游 Cookie 透传：`financeex.agent-runtime.forward-cookie.enabled`、`max-length`、`allowed-adapters` 控制 run/stop 到 Relay Runtime 的 Cookie 透传；显式技能 legacy Agent chat/cancel 也使用入口 Cookie 内存快照。文档 provider 上传另由 `financeex.document.forward-cookie-max-length` 与 `financeex.documents.providers.entries.{provider}.forward-cookie` 控制，默认只有 `legacy-agent` 开启 upload Cookie 透传。
 - 流式 delta 合并：`financeex.chat-stream.delta-coalesce-enabled`、`delta-coalesce-window`、`delta-coalesce-max-chars`。默认开启，只把连续 `message.delta` 合并为标准 delta event，降低事件表和实时 fanout 写放大；`message.snapshot` 和 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.card/runtime.event` 等非正文事件不会被合并。`financeex.chat-stream.turn-heartbeat-interval` 只控制传输层 heartbeat，不影响事件表。
+- Servlet WebSocket 发送治理：`financeex.websocket.servlet-send-executor-core-size`、`servlet-send-executor-max-size`、`servlet-send-queue-capacity`、`servlet-send-queue-max-bytes`、`servlet-send-use-virtual-threads`。默认使用有界平台线程池和单连接有界队列；JDK 21 虚拟线程可按企业压测结果开启。
 - Legacy 大对象分片：`financeex.legacy-skill.max-pending-frame-bytes` 限制尚未识别完成的单个 legacy frame 缓冲，`financeex.legacy-skill.max-fragment-bytes` 限制 `runtime.card/runtime.reference/runtime.progress` 分片 payload 的单片大小。该机制避免 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 跨网络 chunk 时被误解析为 invalid-json，也避免为了完整 JSON 解析无限占用 JVM 内存。分片状态通过 `payload.fragment/itemId/delta/complete` 表达，不新增顶层 `.delta/.completed` 事件类型。
 - Runtime 原始流日志：`financeex.runtime-raw-log.enabled`、`transport`、`coalesce-window`、`max-chars`、`hard-max-chars`、`max-rows-per-run`、`redact-sensitive-fields`。默认关闭；后续接入企业 MQ 时通过 `RuntimeRawStreamLogPublisher` 发布 raw chunk，消费端异步合并、脱敏、分片后写入 `fin_ex_runtime_raw_stream_log_t`。该日志仅用于排障，不参与前端恢复、WebSocket 推送或 assistant 历史拼接。
 - Relay 响应映射：`financeex.agent-runtime.relay.answer-event-types`、`answer-content-fields`、`agent-context-as-answer`。默认把 Relay `type=agent,is_streaming=true` 的 `content/context` 映射为 assistant 正文增量 `message.delta`，把 `type=agent,is_streaming=false` 映射为最终回答快照 `message.snapshot`，把 `steam-complete/stream-complete/[DONE]` 映射为 `message.completed`。
@@ -784,7 +790,8 @@ Redis 部署模式由 `financeex.redis.mode` 控制，默认 `standalone`；生�
 Redis hash tag 保证同一会话 binding key 和索引集合落在同一 slot；env 位于 hash tag 外面，不影响
 同 slot 设计，因此会话级清理不使用 `KEYS`，只通过索引集合删除明确 key。
 ChatLiveEventBus 在本机出现 run topic 订阅者时动态订阅对应 Redis channel，Redis Pub/Sub 仍然只做
-跨实例实时 fanout，可靠恢复继续依赖数据库事件 + Event Resume。
+跨实例实时 fanout，可靠恢复继续依赖数据库事件 + Event Resume。同一 topic 的本机 live sink 写入需要串行化，
+避免 Redis listener 并发投递时触发 Reactor sink `FAIL_NON_SERIALIZED`。
 
 ## 可选记忆上下文
 

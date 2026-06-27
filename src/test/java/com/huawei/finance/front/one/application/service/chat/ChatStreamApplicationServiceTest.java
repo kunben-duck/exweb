@@ -6,6 +6,7 @@ import com.huawei.finance.front.one.application.integration.conversation.ChatEve
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
+import com.huawei.finance.front.one.application.config.ChatStreamProperties;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
@@ -17,6 +18,7 @@ import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
 import com.huawei.finance.front.one.domain.chat.RunCancelledEvent;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -209,12 +211,42 @@ class ChatStreamApplicationServiceTest {
                 .verifyComplete();
     }
 
+    @Test
+    void resumeRunFallsBackToDbPollingWhenLiveTailFails() {
+        InMemoryChatEventStore store = new InMemoryChatEventStore();
+        InMemoryRunRepository runRepository = new InMemoryRunRepository();
+        ChatStreamProperties streamProperties = new ChatStreamProperties();
+        streamProperties.setResumePollInterval(Duration.ofMillis(10));
+        ChatStreamApplicationService service = new ChatStreamApplicationService(
+                store,
+                new LocalChatEventStreamRegistry(),
+                new FailingLiveEventBus(),
+                runRepository,
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties(),
+                streamProperties
+        );
+        runRepository.save(runningRun("run1", "tenant1", "user1"));
+        ChatEvent first = service.appendAndPublish(MessageDeltaEvent.of("run1", "session1", "hello"));
+
+        StepVerifier.create(service.resumeRun(user(), "run1", first.sequence()))
+                .then(() -> {
+                    service.appendAndPublish(MessageDeltaEvent.of("run1", "session1", " polled"));
+                    service.appendAndPublish(new StoredChatEvent("run1", "session1", 0L, "run.completed",
+                            Instant.now(), Map.of("status", "COMPLETED")));
+                })
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", " polled"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("run.completed"))
+                .verifyComplete();
+    }
+
     private static class InMemoryChatEventStore implements ChatEventStore {
         private final List<ChatEvent> events = new ArrayList<>();
         private long seq;
 
         @Override
-        public ChatEvent append(ChatEvent event) {
+        public synchronized ChatEvent append(ChatEvent event) {
             ChatEvent stored = new StoredChatEvent(
                     event.runId(),
                     event.sessionId(),
@@ -228,12 +260,12 @@ class ChatStreamApplicationServiceTest {
         }
 
         @Override
-        public ChatEvent appendWithExecutionGuard(ChatEvent event, com.huawei.finance.front.one.domain.chat.RunExecutionClaim claim) {
+        public synchronized ChatEvent appendWithExecutionGuard(ChatEvent event, com.huawei.finance.front.one.domain.chat.RunExecutionClaim claim) {
             return append(event);
         }
 
         @Override
-        public List<ChatEvent> findByOwnerAndSessionAfterSeq(String tenantId, String userId, String sessionId, long afterSeq) {
+        public synchronized List<ChatEvent> findByOwnerAndSessionAfterSeq(String tenantId, String userId, String sessionId, long afterSeq) {
             return events.stream()
                     .filter(event -> sessionId.equals(event.sessionId()))
                     .filter(event -> event.sequence() > afterSeq)
@@ -241,8 +273,8 @@ class ChatStreamApplicationServiceTest {
         }
 
         @Override
-        public List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId,
-                                                         String runId, long afterSeq) {
+        public synchronized List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId,
+                                                                      String runId, long afterSeq) {
             return events.stream()
                     .filter(event -> runId.equals(event.runId()))
                     .filter(event -> sessionId.equals(event.sessionId()))
@@ -251,7 +283,7 @@ class ChatStreamApplicationServiceTest {
         }
 
         @Override
-        public long findLatestSeqByOwnerAndSession(String tenantId, String userId, String sessionId) {
+        public synchronized long findLatestSeqByOwnerAndSession(String tenantId, String userId, String sessionId) {
             return events.stream()
                     .filter(event -> sessionId.equals(event.sessionId()))
                     .mapToLong(ChatEvent::sequence)
@@ -315,6 +347,18 @@ class ChatStreamApplicationServiceTest {
         public reactor.core.publisher.Flux<ChatEvent> subscribe(String topicId) {
             return sinks.computeIfAbsent(topicId, ignored -> reactor.core.publisher.Sinks.many().multicast().onBackpressureBuffer())
                     .asFlux();
+        }
+    }
+
+    private static class FailingLiveEventBus implements ChatLiveEventBus {
+        @Override
+        public void publish(String topicId, ChatEvent event) {
+            // no-op: this fake only models a remote live source failure during run Event Resume.
+        }
+
+        @Override
+        public reactor.core.publisher.Flux<ChatEvent> subscribe(String topicId) {
+            return reactor.core.publisher.Flux.error(new IllegalStateException("redis live sink emit failed"));
         }
     }
 

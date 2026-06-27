@@ -134,17 +134,10 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
                 return;
             }
             ChatEvent event = payload.toEvent();
-            Sinks.EmitResult nextResult = sink.sink().tryEmitNext(event);
+            Sinks.EmitResult nextResult = sink.emitNext(event);
             if (nextResult.isFailure()) {
-                log.warn("Redis ChatLiveEventBus 本机投递失败，topicId={}, seq={}, result={}",
-                        topicId, event.sequence(), nextResult);
-                /*
-                 * Redis Pub/Sub 不是可靠队列，不能在本地堆积历史。投递失败时结束该 live 流，
-                 * 上层 ChatStreamApplicationService 会把错误转换成 RECOVER_REQUIRED，引导前端
-                 * 使用数据库事实源做 Event Resume。
-                 */
-                sink.sink().tryEmitError(new IllegalStateException(
-                        "redis live sink emit failed, seq=" + event.sequence() + ", result=" + nextResult));
+                handleEmitFailure(topicId, sink, event, nextResult);
+                return;
             }
             if (terminal(event)) {
                 completeTopic(topicId, sink);
@@ -196,12 +189,42 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     }
 
     private void completeTopic(String topicId, TopicSink sink) {
-        Sinks.EmitResult completeResult = sink.sink().tryEmitComplete();
+        Sinks.EmitResult completeResult = sink.emitComplete();
         if (completeResult.isFailure()) {
-            log.warn("Redis ChatLiveEventBus 本机结束 topic 失败，topicId={}, result={}", topicId, completeResult);
+            logEmitFailure("REDIS_EMIT_COMPLETE_FAILED", topicId, null, completeResult);
         }
         unregisterTopic(topicId, sink);
         topicSinks.remove(topicId, sink);
+    }
+
+    private void handleEmitFailure(String topicId, TopicSink sink, ChatEvent event, Sinks.EmitResult result) {
+        logEmitFailure("REDIS_EMIT_NEXT_FAILED", topicId, event, result);
+        if (result == Sinks.EmitResult.FAIL_TERMINATED || result == Sinks.EmitResult.FAIL_CANCELLED) {
+            topicSinks.remove(topicId, sink);
+            unregisterTopic(topicId, sink);
+            return;
+        }
+        /*
+         * Redis Pub/Sub 不是可靠队列，不能在本地堆积历史。只有无法确认业务事件是否已实时投递时，
+         * 才结束该 live 流，上层会引导前端使用数据库事实源做 Event Resume。
+         */
+        Sinks.EmitResult errorResult = sink.emitError(new IllegalStateException(
+                "redis live sink emit failed, seq=" + event.sequence() + ", result=" + result));
+        if (errorResult.isFailure()) {
+            logEmitFailure("REDIS_EMIT_ERROR_FAILED", topicId, event, errorResult);
+        }
+    }
+
+    private void logEmitFailure(String reason, String topicId, ChatEvent event, Sinks.EmitResult result) {
+        String threadName = Thread.currentThread().getName();
+        if (result == Sinks.EmitResult.FAIL_TERMINATED || result == Sinks.EmitResult.FAIL_CANCELLED) {
+            log.debug("Redis ChatLiveEventBus 投递已结束 topic，reason={}, topicId={}, seq={}, result={}, thread={}",
+                    reason, topicId, event == null ? null : event.sequence(), result, threadName);
+            return;
+        }
+        log.warn("Redis ChatLiveEventBus 投递失败，reason={}, topicId={}, runId={}, sessionId={}, seq={}, result={}, thread={}",
+                reason, topicId, event == null ? null : event.runId(), event == null ? null : event.sessionId(),
+                event == null ? null : event.sequence(), result, threadName);
     }
 
     private boolean isPublishedByCurrentInstance(ChatLiveEventPayload payload) {
@@ -259,6 +282,18 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
 
         private Sinks.Many<ChatEvent> sink() {
             return sink;
+        }
+
+        private synchronized Sinks.EmitResult emitNext(ChatEvent event) {
+            return sink.tryEmitNext(event);
+        }
+
+        private synchronized Sinks.EmitResult emitComplete() {
+            return sink.tryEmitComplete();
+        }
+
+        private synchronized Sinks.EmitResult emitError(Throwable error) {
+            return sink.tryEmitError(error);
         }
 
         private AtomicInteger subscribers() {

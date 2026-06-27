@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.application.service.chat;
 
 import com.huawei.finance.front.one.application.config.ChatWebSocketProperties;
+import com.huawei.finance.front.one.application.config.ChatStreamProperties;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
@@ -13,6 +14,11 @@ import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
@@ -30,6 +36,8 @@ import reactor.util.concurrent.Queues;
  */
 @Service
 public class ChatStreamApplicationService {
+    private static final Logger log = LoggerFactory.getLogger(ChatStreamApplicationService.class);
+
     private final ChatEventStore eventStore;
     private final LocalChatEventStreamRegistry registry;
     private final ChatLiveEventBus liveEventBus;
@@ -37,12 +45,24 @@ public class ChatStreamApplicationService {
     private final PermissionChecker permissionChecker;
     private final SessionRepository sessionRepository;
     private final ChatWebSocketProperties webSocketProperties;
+    private final ChatStreamProperties chatStreamProperties;
 
     public ChatStreamApplicationService(ChatEventStore eventStore, LocalChatEventStreamRegistry registry,
                                         ChatLiveEventBus liveEventBus, ChatRunRepository runRepository,
                                         PermissionChecker permissionChecker,
                                         SessionRepository sessionRepository,
                                         ChatWebSocketProperties webSocketProperties) {
+        this(eventStore, registry, liveEventBus, runRepository, permissionChecker, sessionRepository,
+                webSocketProperties, new ChatStreamProperties());
+    }
+
+    @Autowired
+    public ChatStreamApplicationService(ChatEventStore eventStore, LocalChatEventStreamRegistry registry,
+                                        ChatLiveEventBus liveEventBus, ChatRunRepository runRepository,
+                                        PermissionChecker permissionChecker,
+                                        SessionRepository sessionRepository,
+                                        ChatWebSocketProperties webSocketProperties,
+                                        ChatStreamProperties chatStreamProperties) {
         this.eventStore = eventStore;
         this.registry = registry;
         this.liveEventBus = liveEventBus;
@@ -50,6 +70,7 @@ public class ChatStreamApplicationService {
         this.permissionChecker = permissionChecker;
         this.sessionRepository = sessionRepository;
         this.webSocketProperties = webSocketProperties;
+        this.chatStreamProperties = chatStreamProperties;
     }
 
     /**
@@ -261,13 +282,15 @@ public class ChatStreamApplicationService {
 
     private Flux<ChatEvent> resumeRunWithLiveTail(ChatRun run, long afterSeq) {
         String topicId = ChatStreamTopics.runTopic(run.id());
+        AtomicLong deliveredSeq = new AtomicLong(afterSeq);
         return Flux.using(
                 () -> liveBuffer(topicId, afterSeq, run.id(), run.sessionId()),
                 liveBuffer -> Mono.fromCallable(() -> eventStore.findByOwnerAndRunAfterSeq(
                                 run.tenantId(), run.userId(), run.sessionId(), run.id(), afterSeq))
                         .subscribeOn(Schedulers.boundedElastic())
                         .flatMapMany(replay -> {
-                            Flux<ChatEvent> replayFlux = Flux.fromIterable(replay);
+                            Flux<ChatEvent> replayFlux = Flux.fromIterable(replay)
+                                    .doOnNext(event -> updateDeliveredSeq(deliveredSeq, event));
                             if (run.status().terminal() || replay.stream().anyMatch(this::terminalEvent)) {
                                 return replayFlux;
                             }
@@ -280,11 +303,40 @@ public class ChatStreamApplicationService {
                             return Flux.concat(
                                             replayFlux,
                                             liveBuffer.events().filter(event -> event.sequence() > liveAfterSeq)
+                                                    .doOnNext(event -> updateDeliveredSeq(deliveredSeq, event))
+                                                    .onErrorResume(StreamRecoveryRequiredException.class,
+                                                            ex -> pollRunEventsAfterLiveFailure(run, deliveredSeq.get(), ex))
                                     )
                                     .takeUntil(this::terminalEvent);
                         }),
                 RunTopicLiveBuffer::dispose
         );
+    }
+
+    private Flux<ChatEvent> pollRunEventsAfterLiveFailure(ChatRun run, long afterSeq,
+                                                          StreamRecoveryRequiredException cause) {
+        log.warn("Run Event Resume live tail failed, fallback to DB polling. runId={}, sessionId={}, afterSeq={}, reason={}, message={}",
+                run.id(), run.sessionId(), afterSeq, cause.reason(), cause.getMessage());
+        AtomicLong cursor = new AtomicLong(afterSeq);
+        AtomicBoolean terminalSeen = new AtomicBoolean(false);
+        return Flux.defer(() -> Mono.fromCallable(() -> eventStore.findByOwnerAndRunAfterSeq(
+                                run.tenantId(), run.userId(), run.sessionId(), run.id(), cursor.get()))
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .flatMapMany(Flux::fromIterable)
+                        .doOnNext(event -> {
+                            updateDeliveredSeq(cursor, event);
+                            if (terminalEvent(event)) {
+                                terminalSeen.set(true);
+                            }
+                        }))
+                .repeatWhen(repeat -> repeat
+                        .delayElements(chatStreamProperties.normalizedResumePollInterval())
+                        .takeWhile(ignored -> !terminalSeen.get()))
+                .takeUntil(this::terminalEvent);
+    }
+
+    private void updateDeliveredSeq(AtomicLong deliveredSeq, ChatEvent event) {
+        deliveredSeq.accumulateAndGet(event.sequence(), Math::max);
     }
 
     private boolean terminalEvent(ChatEvent event) {

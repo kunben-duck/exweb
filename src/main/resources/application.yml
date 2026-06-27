@@ -156,6 +156,8 @@ financeex:
     delta-coalesce-max-chars: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_MAX_CHARS:512}
     # WebSocket 与 run 级 Event Resume 的 turn stream heartbeat；不写入事件表，也不推进 afterSeq。
     turn-heartbeat-interval: ${FINANCEEX_CHAT_STREAM_TURN_HEARTBEAT_INTERVAL:15s}
+    # run 级 Event Resume 的 live tail 出错后，按该间隔从事件表轮询到 run 终态；正常实时路径不使用。
+    resume-poll-interval: ${FINANCEEX_CHAT_STREAM_RESUME_POLL_INTERVAL:1s}
   runtime-raw-log:
     # 记录 Relay normalizer 之前的原始响应片段，用于排障和协议分析；不作为前端恢复事实源。
     # 默认关闭；后续接入企业 MQ 时提供 RuntimeRawStreamLogPublisher bean，并将 enabled 打开。
@@ -185,6 +187,11 @@ financeex:
     delivered-seq-window: ${FINANCEEX_WEBSOCKET_DELIVERED_SEQ_WINDOW:2048}
     send-time-limit: ${FINANCEEX_WEBSOCKET_SEND_TIME_LIMIT:10s}
     send-buffer-size-bytes: ${FINANCEEX_WEBSOCKET_SEND_BUFFER_SIZE_BYTES:524288}
+    servlet-send-executor-core-size: ${FINANCEEX_WEBSOCKET_SERVLET_SEND_EXECUTOR_CORE_SIZE:4}
+    servlet-send-executor-max-size: ${FINANCEEX_WEBSOCKET_SERVLET_SEND_EXECUTOR_MAX_SIZE:16}
+    servlet-send-queue-capacity: ${FINANCEEX_WEBSOCKET_SERVLET_SEND_QUEUE_CAPACITY:${FINANCEEX_WEBSOCKET_OUTBOUND_QUEUE_SIZE:256}}
+    servlet-send-queue-max-bytes: ${FINANCEEX_WEBSOCKET_SERVLET_SEND_QUEUE_MAX_BYTES:2MB}
+    servlet-send-use-virtual-threads: ${FINANCEEX_WEBSOCKET_SERVLET_SEND_USE_VIRTUAL_THREADS:false}
     idle-timeout: ${FINANCEEX_WEBSOCKET_IDLE_TIMEOUT:10m}
     idle-check-interval: ${FINANCEEX_WEBSOCKET_IDLE_CHECK_INTERVAL:60s}
   run-admission:

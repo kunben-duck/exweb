@@ -48,7 +48,7 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `DELETE /api/v1/ex/chat/sessions`：批量软删除会话；请求体传 `sessionIds[]`，运行中会话会先取消 run 后删除。
 - `WS /api/v1/ex/chat/ws`：用户级实时输出通道。客户端使用 `{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}` 订阅本轮 run topic；MVC/Servlet 模式会在 handshake 阶段固化用户身份。服务端 `message.payload` 为 `conversation-turn-stream`，真实聊天事件在 `message.payload.payload.encodedItem.data`。
 - `GET /api/v1/ex/chat/sessions/{sessionId}/events/resume?afterSeq={seq}`：会话级事件恢复有限补发，用于补齐整个会话缺失事件；SSE data 同样是 `conversation-turn-stream`。
-- `GET /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}`：run 级事件恢复并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态；长时间无业务事件时发送 turn stream `heartbeat`，终态后发送 `done`。
+- `GET /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}`：run 级事件恢复并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态；长时间无业务事件时发送 turn stream `heartbeat`，终态后发送 `done`，live tail 异常时会降级按事件表轮询补齐。
 - `GET /api/v1/ex/chat/sessions/{sessionId}/stream-status`：查询当前会话最新事件序号、active run、`activeStreamTopicId` 和是否可取消。
 - `POST /api/v1/ex/chat/runs/{runId}/stop`：按 runId 停止当前回答，幂等返回 run 状态。
 - `POST /api/v1/ex/chat/messages/{messageId}/feedback`：提交或切换 assistant 消息点赞/点踩。
@@ -101,6 +101,8 @@ subscribe 和连接关闭回调只读取该身份快照，不会再次调用 `Au
 单用户连接数、单连接订阅数、单 topic 本机订阅数、出站缓冲、live buffer 和空闲超时都由
 `financeex.websocket.*` 统一配置。慢客户端或实时缓冲溢出时，服务端会返回
 `RECOVER_REQUIRED`，前端应通过 run event resume 补齐后再重新订阅。
+run 级 Event Resume 默认优先接入本机与 Redis live topic；若 live source 异常，会按
+`financeex.chat-stream.resume-poll-interval` 从数据库事件表轮询到 run 终态，避免 SSE 在输出中途断开。
 `seq` 是数据库事件游标，不是 run topic 内连续序号；多会话并发时同一 topic 看到
 `19 -> 21` 不代表丢事件。服务端只在同 topic 更低且未见过的 seq 迟到、live buffer 溢出或
 实时源异常时要求恢复，并在错误 envelope 的 `details.recoveryAfterSeq` 中给出更小范围的建议补发点。
@@ -312,6 +314,10 @@ export FINANCEEX_WEBSOCKET_ALLOWED_ORIGIN_PATTERNS=https://finex.example.com
 export FINANCEEX_WEBSOCKET_MAX_CONNECTIONS_PER_USER=8
 export FINANCEEX_WEBSOCKET_MAX_SUBSCRIPTIONS_PER_CONNECTION=8
 export FINANCEEX_WEBSOCKET_LIVE_BUFFER_CAPACITY=512
+export FINANCEEX_WEBSOCKET_SERVLET_SEND_EXECUTOR_CORE_SIZE=4
+export FINANCEEX_WEBSOCKET_SERVLET_SEND_EXECUTOR_MAX_SIZE=16
+export FINANCEEX_WEBSOCKET_SERVLET_SEND_QUEUE_CAPACITY=256
+export FINANCEEX_WEBSOCKET_SERVLET_SEND_QUEUE_MAX_BYTES=2MB
 export FINANCEEX_WEBSOCKET_IDLE_TIMEOUT=10m
 
 # run 准入与外部慢资源 bulkhead
@@ -338,6 +344,7 @@ export FINANCEEX_CHAT_RUN_STALE_RECOVERY_STRATEGIES=MANUAL_CONFIRMATION,FAIL_FAS
 export FINANCEEX_CHAT_STREAM_DELTA_COALESCE_ENABLED=true
 export FINANCEEX_CHAT_STREAM_DELTA_COALESCE_WINDOW=50ms
 export FINANCEEX_CHAT_STREAM_DELTA_COALESCE_MAX_CHARS=512
+export FINANCEEX_CHAT_STREAM_RESUME_POLL_INTERVAL=1s
 
 # Relay 原始流日志，仅用于排障；默认关闭。
 # 后续接入企业 MQ 时，提供 RuntimeRawStreamLogPublisher bean，并把 enabled 打开。

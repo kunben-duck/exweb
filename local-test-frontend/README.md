@@ -90,7 +90,7 @@ Referer: http://localhost:8080/fin/ex/
 | 停止回答 | `POST /api/v1/ex/chat/runs/{runId}/stop` | REST 生命周期控制，不是 WebSocket command |
 | 历史版本 | `GET /messages`、`GET /messages?leafMessageId=...`、`POST /path` | 使用 `versionInfo` 展示 `1/3` 游标，切换时先刷新目标 leaf path，再保存当前 leaf |
 | 新建分支 | `POST /branches` | 从指定消息创建只读历史快照分支 |
-| 删除会话 | `DELETE /api/v1/ex/chat/sessions/{sessionId}`、`DELETE /api/v1/ex/chat/sessions` | 单个或批量软删除会话；active run 存在时需要先 stop |
+| 删除会话 | `DELETE /api/v1/ex/chat/sessions/{sessionId}`、`DELETE /api/v1/ex/chat/sessions` | 单个或批量软删除会话；active run 存在时由后端自动取消 |
 | 文档库 | `/api/v1/ex/documents/**` | 上传、列表、状态、预览、下载、改名、删除 |
 
 如果 `BACKEND_URL=http://localhost:8080/fin/ex`，页面仍然请求 `/api/v1/ex/**`；
@@ -108,6 +108,7 @@ Referer: http://localhost:8080/fin/ex/
 7. 对一条 user 消息点击编辑并重新提问，确认旧消息不变、新 user sibling 出现在版本游标中。
 8. 对一条 assistant 消息点击重新生成，确认同一 user 下出现新的 assistant sibling。
 9. 从某条历史消息创建分支，确认分支历史消息为只读，后续新增消息仍可继续编辑或重新生成。
+10. 输出中途删除会话，确认后端自动取消 active run；页面删除成功后应移除该会话并退订对应 topic，若随后收到 `run.cancelled` 或 `done` 可忽略。
 
 ## 跨页签续传测试
 

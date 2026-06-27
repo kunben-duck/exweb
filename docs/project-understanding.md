@@ -753,6 +753,7 @@ ChatController#stopRun(...)
 
 ```text
 FinanceEXChatService#stopRun(...)
+ChatRunStopCoordinator#stop(...)
 ChatRunApplicationService#requestStop(...)
 LocalChatRunExecutionRegistry#cancel(...)
 AgentRuntimeExecutor#cancel(...)
@@ -762,17 +763,21 @@ ChatStreamApplicationService#appendAndPublish(...)
 执行顺序：
 
 1. 校验 run 属于当前用户。
-2. `ChatRunApplicationService#requestStop(...)` 写 Redis cancel flag，并把 run 置为 `CANCELLING`。
-3. `LocalChatRunExecutionRegistry#cancel(...)` 如果命中本机，立即 dispose 后台 subscription。
-4. `AgentRuntimeExecutor#cancel(...)` 尽力取消下游 Relay。
-5. 写入 `run.cancelled` 事件。
-6. `ChatRunLeaseApplicationService#markTerminal(...)` 标记 execution 终态。
+2. `ChatRunStopCoordinator#stop(...)` 统一编排用户 stop 和删除会话触发的 stop。
+3. `ChatRunApplicationService#requestStop(...)` 写 Redis cancel flag，并把 run 置为 `CANCELLING`。
+4. `LocalChatRunExecutionRegistry#cancel(...)` 如果命中本机，立即 dispose 后台 subscription。
+5. `AgentRuntimeExecutor#cancel(...)` 尽力取消下游 Relay。
+6. 如果 stop 前已有正文或用户可见 parts，先固化 partial assistant，再写入带 `messageReady` 的 `run.cancelled`。
+7. `ChatRunLeaseApplicationService#markTerminal(...)` 标记 execution 终态。
+
+删除会话时，`SessionApplicationService#deleteSession(...)` 会在会话软删除后复用同一套 stop 编排取消 active run。删除成功后前端可以立即移除会话并退订 topic；如果 WebSocket 随后收到该 run 的 `run.cancelled` 或 `done`，应按已删除会话的终态事件忽略。
 
 重点排查：
 
 - stop 后还出 delta：查 `ChatRunApplicationService#shouldAcceptEvent(...)` 是否拦截。
 - stop 没有通知前端：查 `run.cancelled` 是否写入 `fin_ex_chat_event_t`。
 - 下游 Relay 没停：查对应 adapter 的 `cancel(...)` 和 `financeex.agent-runtime.stop-path`。
+- 删除会话后仍收到终态事件：这是取消链路的正常异步收尾，前端已删除该会话时应忽略；若仍收到 delta，再查 cancel flag 和 guarded insert。
 
 ## 14. 后台任务与故障治理
 

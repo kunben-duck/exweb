@@ -5,6 +5,7 @@ import com.huawei.finance.front.one.infrastructure.persistence.ChatLiveEventBusP
 import com.huawei.finance.front.one.infrastructure.persistence.ChatRunCacheProperties;
 import com.huawei.finance.front.one.infrastructure.runtime.RuntimeBindingProperties;
 import java.util.Locale;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
@@ -33,6 +34,7 @@ public class FinanceExRedisKeyBuilder {
     private final ChatLiveEventBusProperties liveEventBusProperties;
     private final ShortTermMemoryRedisProperties shortTermMemoryProperties;
 
+    @Autowired
     public FinanceExRedisKeyBuilder(Environment environment,
                                     RuntimeBindingProperties runtimeBindingProperties,
                                     ChatRunCacheProperties chatRunCacheProperties,

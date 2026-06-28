@@ -6,10 +6,12 @@ import com.huawei.finance.front.one.application.integration.identity.Application
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
 import com.huawei.finance.front.one.infrastructure.redis.FinanceExRedisKeyBuilder;
+import java.lang.reflect.Constructor;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
@@ -22,6 +24,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.connection.RedisClusterConnection;
 import org.springframework.data.redis.connection.RedisConnection;
@@ -35,6 +38,16 @@ class RedisChatLiveEventBusTest {
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
     private final FinanceExRedisKeyBuilder redisKeys = FinanceExRedisKeyBuilder.ofEnv("test");
     private final ApplicationInstanceIdProvider instanceIdProvider = () -> "instance-a";
+
+    @Test
+    void productionConstructorIsExplicitlyAutowiredForSpring() {
+        Constructor<?>[] autowiredConstructors = Arrays.stream(RedisChatLiveEventBus.class.getDeclaredConstructors())
+                .filter(constructor -> constructor.isAnnotationPresent(Autowired.class))
+                .toArray(Constructor<?>[]::new);
+
+        org.assertj.core.api.Assertions.assertThat(autowiredConstructors).hasSize(1);
+        org.assertj.core.api.Assertions.assertThat(autowiredConstructors[0].getParameterCount()).isEqualTo(7);
+    }
 
     @Test
     void publishIncludesCurrentInstanceIdForSelfEchoFiltering() throws Exception {

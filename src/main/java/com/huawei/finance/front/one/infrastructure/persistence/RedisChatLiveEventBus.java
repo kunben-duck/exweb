@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
@@ -57,6 +58,7 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     private final Map<String, TopicSink> topicSinks = new ConcurrentHashMap<>();
     private final Map<String, TopicPublisher> topicPublishers = new ConcurrentHashMap<>();
 
+    @Autowired
     public RedisChatLiveEventBus(StringRedisTemplate redis, ObjectMapper objectMapper,
                                  RedisConnectionFactory connectionFactory,
                                  FinanceExRedisKeyBuilder redisKeys,

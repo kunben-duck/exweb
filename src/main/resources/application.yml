@@ -158,6 +158,9 @@ financeex:
     turn-heartbeat-interval: ${FINANCEEX_CHAT_STREAM_TURN_HEARTBEAT_INTERVAL:15s}
     # run 级 Event Resume 的 live tail 出错后，按该间隔从事件表轮询到 run 终态；正常实时路径不使用。
     resume-poll-interval: ${FINANCEEX_CHAT_STREAM_RESUME_POLL_INTERVAL:1s}
+    # 下游流式事件合并后，落库、run 状态推进和实时发布会切换到该专用 IO 调度器，避免占用 Reactor parallel/Servlet 线程。
+    event-io-executor-max-size: ${FINANCEEX_CHAT_STREAM_EVENT_IO_EXECUTOR_MAX_SIZE:16}
+    event-io-executor-queue-capacity: ${FINANCEEX_CHAT_STREAM_EVENT_IO_EXECUTOR_QUEUE_CAPACITY:10000}
   runtime-raw-log:
     # 记录 Relay normalizer 之前的原始响应片段，用于排障和协议分析；不作为前端恢复事实源。
     # 默认关闭；后续接入企业 MQ 时提供 RuntimeRawStreamLogPublisher bean，并将 enabled 打开。
@@ -176,6 +179,15 @@ financeex:
     # 前端 WS 入口同时支持 WebFlux 与 Servlet/MVC；Servlet 模式的上下文根使用 server.servlet.context-path。
     # 逻辑 channel 前缀；实际 channel 为 fin_ex:{env}:chat_stream:...
     redis-channel-prefix: fin_ex:chat_stream
+    # Redis Pub/Sub 跨实例实时发布使用独立有界执行器，避免 Redis 抖动阻塞 run 主链路。
+    redis-publish-executor-core-size: ${FINANCEEX_WEBSOCKET_REDIS_PUBLISH_EXECUTOR_CORE_SIZE:2}
+    redis-publish-executor-max-size: ${FINANCEEX_WEBSOCKET_REDIS_PUBLISH_EXECUTOR_MAX_SIZE:8}
+    redis-publish-queue-capacity: ${FINANCEEX_WEBSOCKET_REDIS_PUBLISH_QUEUE_CAPACITY:4096}
+    redis-publish-topic-queue-size: ${FINANCEEX_WEBSOCKET_REDIS_PUBLISH_TOPIC_QUEUE_SIZE:1024}
+    redis-publish-topic-max-bytes: ${FINANCEEX_WEBSOCKET_REDIS_PUBLISH_TOPIC_MAX_BYTES:8MB}
+    redis-publish-retry-attempts: ${FINANCEEX_WEBSOCKET_REDIS_PUBLISH_RETRY_ATTEMPTS:2}
+    redis-publish-retry-backoff: ${FINANCEEX_WEBSOCKET_REDIS_PUBLISH_RETRY_BACKOFF:20ms}
+    redis-publish-recovery-retry-interval: ${FINANCEEX_WEBSOCKET_REDIS_PUBLISH_RECOVERY_RETRY_INTERVAL:1s}
     # 生产必须替换为企业前端域名，例如 https://finex.example.com；本地默认仅允许 localhost。
     allowed-origin-patterns: ${FINANCEEX_WEBSOCKET_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*,http://[::1]:*}
     max-connections-per-user: ${FINANCEEX_WEBSOCKET_MAX_CONNECTIONS_PER_USER:8}

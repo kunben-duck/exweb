@@ -1567,10 +1567,13 @@ WebSocket 不接受 `{"type":"chat"}` 或旧 `CreateChatRunRequest`。发送旧�
 `expectedNextSeq` 做连续性校验。`RECOVER_REQUIRED.details.recoveryAfterSeq` 是服务端建议的最小补发起点；
 旧前端也可以继续使用本地 `lastSeq`。
 
-`RECOVER_REQUIRED` 也可能由慢客户端或 run topic live buffer 溢出触发。Servlet/MVC 生产模式下，
-服务端还会用单连接有界发送队列保护 WebSocket 阻塞发送；如果浏览器、网关或网络过慢导致队列溢出，
-服务端可能直接关闭当前 WebSocket 连接。此时不要继续等待同一个 WebSocket 订阅恢复，正确做法仍是
-关闭当前 topic 拼接、通过 run 级事件恢复补齐、再重新 subscribe。
+`RECOVER_REQUIRED` 也可能由慢客户端、run topic live buffer 溢出、Redis 跨实例实时发布失败或 Redis
+订阅注册失败触发。Servlet/MVC 生产模式下，服务端还会用单连接有界发送队列保护 WebSocket 阻塞发送；
+如果浏览器、网关或网络过慢导致队列溢出，服务端可能直接关闭当前 WebSocket 连接。此时不要继续等待
+同一个 WebSocket 订阅恢复，正确做法仍是关闭当前 topic 拼接、通过 run 级事件恢复补齐、再重新 subscribe。
+Redis Pub/Sub 只负责实时 fanout：服务端会先把事件写入数据库事实源，再进入本机 live sink 和 Redis
+后台发布队列。Redis 发布会按 topic 串行短重试；重试失败时不会阻塞 run 主链路，但会通过恢复提示要求
+前端用 Event Resume 补齐已经落库的缺口。
 
 ## Event Resume 断点恢复
 

@@ -103,6 +103,11 @@ subscribe 和连接关闭回调只读取该身份快照，不会再次调用 `Au
 `RECOVER_REQUIRED`，前端应通过 run event resume 补齐后再重新订阅。
 run 级 Event Resume 默认优先接入本机与 Redis live topic；若 live source 异常，会按
 `financeex.chat-stream.resume-poll-interval` 从数据库事件表轮询到 run 终态，避免 SSE 在输出中途断开。
+下游流式事件合并后，事件落库、run 状态推进和实时发布会切换到
+`financeex.chat-stream.event-io-executor-*` 专用调度器，避免阻塞式 DB/Redis 调用落到
+Reactor `parallel-*` 或 Servlet 请求线程。Redis Pub/Sub 发布使用
+`financeex.websocket.redis-publish-*` 有界后台队列，同一 topic 串行发布并做短重试；发布最终失败时会标记
+topic 需要恢复，恢复控制消息按较慢间隔重试，远端前端通过 `RECOVER_REQUIRED + Event Resume` 补齐缺口。
 `seq` 是数据库事件游标，不是 run topic 内连续序号；多会话并发时同一 topic 看到
 `19 -> 21` 不代表丢事件。服务端只在同 topic 更低且未见过的 seq 迟到、live buffer 溢出或
 实时源异常时要求恢复，并在错误 envelope 的 `details.recoveryAfterSeq` 中给出更小范围的建议补发点。

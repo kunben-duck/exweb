@@ -23,6 +23,10 @@ public class ChatStreamProperties {
     private Duration turnHeartbeatInterval = Duration.ofSeconds(15);
     /** run 级 Event Resume 的 live tail 故障后，按该间隔回查数据库直到 run 终态。 */
     private Duration resumePollInterval = Duration.ofSeconds(1);
+    /** 流式事件落库、run 状态推进和实时发布使用的阻塞 IO 线程数上限。 */
+    private int eventIoExecutorMaxSize = 16;
+    /** 流式事件 IO 线程池队列容量；队列满时上游 run 会失败而不是阻塞 Reactor timer/Servlet 线程。 */
+    private int eventIoExecutorQueueCapacity = 10_000;
 
     public boolean isDeltaCoalesceEnabled() {
         return deltaCoalesceEnabled;
@@ -87,5 +91,29 @@ public class ChatStreamProperties {
             return Duration.ofSeconds(1);
         }
         return resumePollInterval.isZero() ? Duration.ofSeconds(1) : resumePollInterval;
+    }
+
+    public int getEventIoExecutorMaxSize() {
+        return eventIoExecutorMaxSize;
+    }
+
+    public void setEventIoExecutorMaxSize(int eventIoExecutorMaxSize) {
+        this.eventIoExecutorMaxSize = eventIoExecutorMaxSize;
+    }
+
+    public int getEventIoExecutorQueueCapacity() {
+        return eventIoExecutorQueueCapacity;
+    }
+
+    public void setEventIoExecutorQueueCapacity(int eventIoExecutorQueueCapacity) {
+        this.eventIoExecutorQueueCapacity = eventIoExecutorQueueCapacity;
+    }
+
+    public int normalizedEventIoExecutorMaxSize() {
+        return Math.max(1, eventIoExecutorMaxSize);
+    }
+
+    public int normalizedEventIoExecutorQueueCapacity() {
+        return Math.max(128, eventIoExecutorQueueCapacity);
     }
 }

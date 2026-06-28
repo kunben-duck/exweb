@@ -12,11 +12,15 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.connection.RedisClusterConnection;
@@ -47,6 +51,34 @@ class RedisChatLiveEventBusTest {
         org.assertj.core.api.Assertions.assertThat(body.path("sessionId").asText()).isEqualTo("session1");
         org.assertj.core.api.Assertions.assertThat(body.path("sequence").asLong()).isEqualTo(1L);
         org.assertj.core.api.Assertions.assertThat(body.path("eventType").asText()).isEqualTo("message.delta");
+    }
+
+    @Test
+    void publishOnlyEnqueuesAndDrainsOnPublishExecutor() throws Exception {
+        CapturingStringRedisTemplate redis = new CapturingStringRedisTemplate();
+        ManualExecutor executor = new ManualExecutor();
+        RedisChatLiveEventBus bus = newBus(redis, new ChatLiveEventBusProperties(), executor);
+
+        bus.publish("chat-run-run1", event(1L));
+
+        org.assertj.core.api.Assertions.assertThat(redis.message).isNull();
+        executor.drain();
+        org.assertj.core.api.Assertions.assertThat(redis.channel).isEqualTo(redisKeys.chatStreamChannel("chat-run-run1"));
+        JsonNode body = objectMapper.readTree(redis.message);
+        org.assertj.core.api.Assertions.assertThat(body.path("sequence").asLong()).isEqualTo(1L);
+    }
+
+    @Test
+    void publishRetriesTransientRedisFailure() {
+        FailsThenSucceedsStringRedisTemplate redis = new FailsThenSucceedsStringRedisTemplate(1);
+        ChatLiveEventBusProperties properties = new ChatLiveEventBusProperties();
+        properties.setRedisPublishRetryBackoff(Duration.ZERO);
+        RedisChatLiveEventBus bus = newBus(redis, properties, Runnable::run);
+
+        bus.publish("chat-run-run1", event(1L));
+
+        org.assertj.core.api.Assertions.assertThat(redis.attempts()).isEqualTo(2);
+        org.assertj.core.api.Assertions.assertThat(redis.message).contains("\"sequence\":1");
     }
 
     @Test
@@ -121,6 +153,30 @@ class RedisChatLiveEventBusTest {
     }
 
     @Test
+    void subscribeReceivesRecoveryControlAsRecoveryError() {
+        RedisChatLiveEventBus bus = newBus(new CapturingStringRedisTemplate());
+
+        StepVerifier.create(bus.subscribe("chat-run-run1"))
+                .then(() -> bus.onMessage(message(Map.of(
+                        "controlType", "RECOVER_REQUIRED",
+                        "publisherInstanceId", "instance-b",
+                        "topicId", "chat-run-run1",
+                        "recoveryAfterSeq", 41L,
+                        "actualSeq", 42L,
+                        "reason", "REDIS_PUBLISH_FAILED"
+                )), null))
+                .expectErrorSatisfies(ex -> {
+                    org.assertj.core.api.Assertions.assertThat(ex)
+                            .isInstanceOf(com.huawei.finance.front.one.application.integration.conversation.ChatLiveRecoveryRequiredException.class);
+                    var recovery = (com.huawei.finance.front.one.application.integration.conversation.ChatLiveRecoveryRequiredException) ex;
+                    org.assertj.core.api.Assertions.assertThat(recovery.recoveryAfterSeq()).isEqualTo(41L);
+                    org.assertj.core.api.Assertions.assertThat(recovery.actualSeq()).isEqualTo(42L);
+                    org.assertj.core.api.Assertions.assertThat(recovery.reason()).isEqualTo("REDIS_PUBLISH_FAILED");
+                })
+                .verify();
+    }
+
+    @Test
     void concurrentRemoteMessagesForSameTopicAreSerialized() throws Exception {
         RedisChatLiveEventBus bus = newBus(new CapturingStringRedisTemplate());
         int count = 64;
@@ -162,7 +218,13 @@ class RedisChatLiveEventBusTest {
     }
 
     private RedisChatLiveEventBus newBus(StringRedisTemplate redis) {
-        return new RedisChatLiveEventBus(redis, objectMapper, new UnsupportedRedisConnectionFactory(), redisKeys, instanceIdProvider);
+        return newBus(redis, new ChatLiveEventBusProperties(), Runnable::run);
+    }
+
+    private RedisChatLiveEventBus newBus(StringRedisTemplate redis, ChatLiveEventBusProperties properties,
+                                         Executor executor) {
+        return new RedisChatLiveEventBus(redis, objectMapper, new UnsupportedRedisConnectionFactory(), redisKeys,
+                instanceIdProvider, properties, executor);
     }
 
     private ChatEvent event(long seq) {
@@ -195,14 +257,52 @@ class RedisChatLiveEventBusTest {
     }
 
     private static class CapturingStringRedisTemplate extends StringRedisTemplate {
-        private String channel;
-        private String message;
+        protected String channel;
+        protected String message;
 
         @Override
         public Long convertAndSend(String channel, Object message) {
             this.channel = channel;
             this.message = String.valueOf(message);
             return 1L;
+        }
+    }
+
+    private static class FailsThenSucceedsStringRedisTemplate extends CapturingStringRedisTemplate {
+        private final AtomicInteger failuresRemaining;
+        private final AtomicInteger attempts = new AtomicInteger();
+
+        private FailsThenSucceedsStringRedisTemplate(int failuresRemaining) {
+            this.failuresRemaining = new AtomicInteger(failuresRemaining);
+        }
+
+        @Override
+        public Long convertAndSend(String channel, Object message) {
+            attempts.incrementAndGet();
+            if (failuresRemaining.getAndDecrement() > 0) {
+                throw new IllegalStateException("Redis command interrupted");
+            }
+            return super.convertAndSend(channel, message);
+        }
+
+        private int attempts() {
+            return attempts.get();
+        }
+    }
+
+    private static class ManualExecutor implements Executor {
+        private final Queue<Runnable> tasks = new ConcurrentLinkedQueue<>();
+
+        @Override
+        public void execute(Runnable command) {
+            tasks.add(command);
+        }
+
+        private void drain() {
+            Runnable task;
+            while ((task = tasks.poll()) != null) {
+                task.run();
+            }
         }
     }
 

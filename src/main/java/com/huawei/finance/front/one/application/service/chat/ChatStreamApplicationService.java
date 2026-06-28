@@ -4,6 +4,7 @@ import com.huawei.finance.front.one.application.config.ChatWebSocketProperties;
 import com.huawei.finance.front.one.application.config.ChatStreamProperties;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
+import com.huawei.finance.front.one.application.integration.conversation.ChatLiveRecoveryRequiredException;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
@@ -261,12 +262,20 @@ public class ChatStreamApplicationService {
                                 "run topic live buffer emit failed: " + result));
                     }
                 },
-                error -> sink.tryEmitError(new StreamRecoveryRequiredException(topicId, afterSeq, afterSeq,
-                        "LIVE_SOURCE_ERROR",
-                        "run topic live source failed: " + error.getMessage())),
+                error -> sink.tryEmitError(toRecoveryRequired(topicId, afterSeq, error)),
                 sink::tryEmitComplete
         );
         return new RunTopicLiveBuffer(sink.asFlux(), subscription);
+    }
+
+    private StreamRecoveryRequiredException toRecoveryRequired(String topicId, long afterSeq, Throwable error) {
+        if (error instanceof ChatLiveRecoveryRequiredException recovery) {
+            long recoveryAfterSeq = Math.max(afterSeq, recovery.recoveryAfterSeq());
+            return new StreamRecoveryRequiredException(topicId, recoveryAfterSeq, recovery.actualSeq(),
+                    recovery.reason(), "run topic live source requires recovery: " + recovery.getMessage());
+        }
+        return new StreamRecoveryRequiredException(topicId, afterSeq, afterSeq,
+                "LIVE_SOURCE_ERROR", "run topic live source failed: " + error.getMessage());
     }
 
     private Flux<ChatEvent> deduplicate(Flux<ChatEvent> events) {

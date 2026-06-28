@@ -556,6 +556,10 @@ MVC/Servlet 生产模式增加了长连接治理层：`financeex.websocket.allow
 `financeex.chat-stream.turn-heartbeat-interval` 发送 turn stream `heartbeat`，配合
 `spring.mvc.async.request-timeout` 与 Tomcat 连接配置避免空闲断流。WebSocket 实时投递
 出现慢客户端、发送队列溢出或乱序时关闭当前连接或返回 `RECOVER_REQUIRED`，可靠恢复仍走数据库事件 + Event Resume。
+流式事件合并后的落库、run 状态推进和实时发布统一切到 `financeex.chat-stream.event-io-executor-*`
+专用调度器，避免阻塞式 DB/Redis 调用占用 Reactor `parallel-*` timer 或 Servlet 请求线程。
+Redis Pub/Sub 跨实例发布使用 `financeex.websocket.redis-publish-*` 有界后台队列；同一 run topic
+串行发布并做短重试，发布缺口会通过恢复控制消息转成 `RECOVER_REQUIRED`。
 run 级 Event Resume 正常优先接入 live topic；如果 live source 异常，会按
 `financeex.chat-stream.resume-poll-interval` 回查事件表直到 run 终态，避免跨实例实时 fanout 故障让恢复流中途断开。
 前端接收的 `message.payload` / SSE `data` 是 `conversation-turn-stream`，真实 ChatEvent 位于

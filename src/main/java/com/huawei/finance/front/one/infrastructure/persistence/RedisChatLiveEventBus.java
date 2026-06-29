@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.huawei.finance.front.one.application.config.ChatStreamProperties;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveRecoveryRequiredException;
 import com.huawei.finance.front.one.application.integration.identity.ApplicationInstanceIdProvider;
@@ -57,6 +58,7 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     private final RedisMessageListenerContainer listenerContainer;
     private final Map<String, TopicSink> topicSinks = new ConcurrentHashMap<>();
     private final Map<String, TopicPublisher> topicPublishers = new ConcurrentHashMap<>();
+    private volatile ChatStreamProperties chatStreamProperties = new ChatStreamProperties();
 
     @Autowired
     public RedisChatLiveEventBus(StringRedisTemplate redis, ObjectMapper objectMapper,
@@ -73,6 +75,13 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
         this.publishExecutor = publishExecutor == null ? Runnable::run : publishExecutor;
         this.listenerContainer = new RedisMessageListenerContainer();
         this.listenerContainer.setConnectionFactory(connectionFactory);
+    }
+
+    @Autowired
+    void setChatStreamProperties(ChatStreamProperties chatStreamProperties) {
+        if (chatStreamProperties != null) {
+            this.chatStreamProperties = chatStreamProperties;
+        }
     }
 
     RedisChatLiveEventBus(StringRedisTemplate redis, ObjectMapper objectMapper,
@@ -201,7 +210,7 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
 
     private void handleRecoveryControl(String topicId, TopicSink sink, JsonNode root) {
         String publisherInstanceId = root.path("publisherInstanceId").asText(null);
-        if (publisherInstanceId != null && publisherInstanceId.equals(instanceIdProvider.currentInstanceId())) {
+        if (shouldDropSelfPublished(publisherInstanceId)) {
             return;
         }
         long recoveryAfterSeq = Math.max(0L, root.path("recoveryAfterSeq").asLong(0L));
@@ -296,11 +305,16 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     private boolean isPublishedByCurrentInstance(ChatLiveEventPayload payload) {
         /*
          * 滚动发布期间旧版本 payload 可能没有 publisherInstanceId。缺失时按远端事件处理，
-         * 避免升级过程丢跨实例实时消息；新版本同实例 self-echo 则必须丢弃，防止 local sink
-         * 与 Redis Pub/Sub 合并后重复/迟到触发 RECOVER_REQUIRED。
+         * 避免升级过程丢跨实例实时消息。只有 merge 兼容模式会同时消费 local sink 和 Redis，
+         * 因此只在该模式丢弃同实例 self-echo；redis-only 生产模式必须消费本实例发布到 Redis 的事件。
          */
-        return payload.publisherInstanceId() != null
-                && payload.publisherInstanceId().equals(instanceIdProvider.currentInstanceId());
+        return shouldDropSelfPublished(payload.publisherInstanceId());
+    }
+
+    private boolean shouldDropSelfPublished(String publisherInstanceId) {
+        return chatStreamProperties.isMergeLiveSourceMode()
+                && publisherInstanceId != null
+                && publisherInstanceId.equals(instanceIdProvider.currentInstanceId());
     }
 
     private void scheduleDrain(TopicPublisher publisher) {

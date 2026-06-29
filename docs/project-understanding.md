@@ -532,7 +532,8 @@ RedisChatLiveEventBus#onMessage(...)
 
 - 将已落库事件发布到 Redis Pub/Sub。
 - channel 形态：`fin_ex:{env}:chat_stream:chat-run-{runId}`，其中 `{env}` 来自 `spring.profiles.active` 的第一个 profile。
-- 其他实例收到 Redis 消息后，再投递给本实例订阅该 topic 的 WebSocket。
+- `financeex.chat-stream.live-source-mode` 默认 `redis-only`，本实例和其他实例都通过 Redis 消费实时事件；
+  `merge` 保留旧的 local + Redis 合并模式，`local-only` 仅用于单机调试。
 - 发布侧不在调用线程直接执行 `convertAndSend`：事件会进入 Redis 发布后台队列，同一 topic FIFO 串行 drain，
   并按 `financeex.websocket.redis-publish-*` 做队列保护和短重试。
 - 若某个 topic 发布最终失败，Redis bus 会记录恢复起点；后续恢复控制消息会让远端订阅进入
@@ -681,11 +682,12 @@ ChatStreamApplicationService#deduplicate(...)
 4. 计算 replay 的最大 seq。
 5. `Flux.concat(replay, liveBuffer.events().filter(seq > liveAfterSeq))`。
 
-`liveBuffer(...)` 内部合并：
+`liveBuffer(...)` 按 `financeex.chat-stream.live-source-mode` 选择实时来源：
 
 ```text
-LocalChatEventStreamRegistry#subscribeRunTopic(...)
-RedisChatLiveEventBus#subscribe(...)
+redis-only: RedisChatLiveEventBus#subscribe(...)
+merge:      LocalChatEventStreamRegistry#subscribeRunTopic(...) + RedisChatLiveEventBus#subscribe(...)
+local-only: LocalChatEventStreamRegistry#subscribeRunTopic(...)
 ```
 
 然后做：

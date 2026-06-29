@@ -23,6 +23,11 @@ public class ChatStreamProperties {
     private Duration turnHeartbeatInterval = Duration.ofSeconds(15);
     /** run 级 Event Resume 的 live tail 故障后，按该间隔回查数据库直到 run 终态。 */
     private Duration resumePollInterval = Duration.ofSeconds(1);
+    /**
+     * run topic 实时事件来源。生产默认只消费 Redis，避免本机 local sink 与 Redis Pub/Sub
+     * 两条异步源合并后出现同一 topic 的 seq 乱序。
+     */
+    private LiveSourceMode liveSourceMode = LiveSourceMode.REDIS_ONLY;
     /** 流式事件落库、run 状态推进和实时发布使用的阻塞 IO 线程数上限。 */
     private int eventIoExecutorMaxSize = 16;
     /** 流式事件 IO 线程池队列容量；队列满时上游 run 会失败而不是阻塞 Reactor timer/Servlet 线程。 */
@@ -93,6 +98,22 @@ public class ChatStreamProperties {
         return resumePollInterval.isZero() ? Duration.ofSeconds(1) : resumePollInterval;
     }
 
+    public LiveSourceMode getLiveSourceMode() {
+        return liveSourceMode;
+    }
+
+    public void setLiveSourceMode(LiveSourceMode liveSourceMode) {
+        this.liveSourceMode = liveSourceMode;
+    }
+
+    public LiveSourceMode normalizedLiveSourceMode() {
+        return liveSourceMode == null ? LiveSourceMode.REDIS_ONLY : liveSourceMode;
+    }
+
+    public boolean isMergeLiveSourceMode() {
+        return normalizedLiveSourceMode() == LiveSourceMode.MERGE;
+    }
+
     public int getEventIoExecutorMaxSize() {
         return eventIoExecutorMaxSize;
     }
@@ -115,5 +136,14 @@ public class ChatStreamProperties {
 
     public int normalizedEventIoExecutorQueueCapacity() {
         return Math.max(128, eventIoExecutorQueueCapacity);
+    }
+
+    public enum LiveSourceMode {
+        /** 生产默认模式：WebSocket/Event Resume live tail 只消费 Redis live bus。 */
+        REDIS_ONLY,
+        /** 兼容模式：合并本机 local sink 与 Redis live bus。 */
+        MERGE,
+        /** 单机调试模式：只消费本机 local sink。 */
+        LOCAL_ONLY
     }
 }

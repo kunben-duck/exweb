@@ -122,7 +122,8 @@ public class ChatStreamApplicationService {
      * 发布已经写入数据库的事实事件。
      *
      * <p>该方法只接受持久化后的事件。调用方必须先完成数据库 append，避免 Redis 或本机
-     * live sink 推送出无法被 Event Resume 恢复的“悬空事件”。</p>
+     * live sink 推送出无法被 Event Resume 恢复的“悬空事件”。默认生产模式只消费 Redis；
+     * local sink 仍发布是为了支持 local-only/merge 回退和单机调试。</p>
      *
      * @param persisted 已持久化并带有 seq 的事件。
      */
@@ -179,7 +180,7 @@ public class ChatStreamApplicationService {
      * 恢复当前连接用户可访问的 run topic 事件流。
      *
      * <p>该方法是 WebSocket 的核心订阅入口：先用连接身份校验 run 归属，再按数据库 seq
-     * 补发历史事件，最后同时接入本机 live sink 与 Redis Pub/Sub 远端事件。</p>
+     * 补发历史事件，最后按 {@code financeex.chat-stream.live-source-mode} 接入实时事件源。</p>
      *
      * @param user WebSocket 握手时解析出的用户身份快照。
      * @param topicId {@code /chat/runs} 返回的 run 级 stream topic。
@@ -242,10 +243,7 @@ public class ChatStreamApplicationService {
         Sinks.Many<ChatEvent> sink = Sinks.many().unicast().onBackpressureBuffer(
                 Queues.<ChatEvent>get(webSocketProperties.normalizedLiveBufferCapacity()).get()
         );
-        Disposable subscription = deduplicate(Flux.merge(
-                registry.subscribeRunTopic(topicId, afterSeq),
-                liveEventBus.subscribe(topicId).filter(event -> event.sequence() > afterSeq)
-        )
+        Disposable subscription = deduplicate(liveSource(topicId, afterSeq)
                 /*
                  * run topic 是前端实时隔离的核心边界。这里再按 runId + sessionId 做防御性过滤：
                  * 即使 Redis Pub/Sub 或本机 live source 出现错误投递，也不会把其他会话/run 的事件推给当前订阅。
@@ -266,6 +264,17 @@ public class ChatStreamApplicationService {
                 sink::tryEmitComplete
         );
         return new RunTopicLiveBuffer(sink.asFlux(), subscription);
+    }
+
+    private Flux<ChatEvent> liveSource(String topicId, long afterSeq) {
+        return switch (chatStreamProperties.normalizedLiveSourceMode()) {
+            case REDIS_ONLY -> liveEventBus.subscribe(topicId).filter(event -> event.sequence() > afterSeq);
+            case LOCAL_ONLY -> registry.subscribeRunTopic(topicId, afterSeq);
+            case MERGE -> Flux.merge(
+                    registry.subscribeRunTopic(topicId, afterSeq),
+                    liveEventBus.subscribe(topicId).filter(event -> event.sequence() > afterSeq)
+            );
+        };
     }
 
     private StreamRecoveryRequiredException toRecoveryRequired(String topicId, long afterSeq, Throwable error) {

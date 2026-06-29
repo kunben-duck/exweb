@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.infrastructure.persistence;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.finance.front.one.application.config.ChatStreamProperties;
 import com.huawei.finance.front.one.application.integration.identity.ApplicationInstanceIdProvider;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
@@ -95,8 +96,30 @@ class RedisChatLiveEventBusTest {
     }
 
     @Test
-    void subscribeDropsSelfEchoPayloadFromCurrentInstance() throws Exception {
+    void subscribeAcceptsSelfEchoPayloadInRedisOnlyMode() throws Exception {
         RedisChatLiveEventBus bus = newBus(new CapturingStringRedisTemplate());
+
+        StepVerifier.create(bus.subscribe("chat-run-run1").take(1))
+                .then(() -> bus.onMessage(message(Map.of(
+                        "publisherInstanceId", "instance-a",
+                        "runId", "run1",
+                        "sessionId", "session1",
+                        "sequence", 1L,
+                        "eventType", "message.delta",
+                        "createdAt", Instant.now(),
+                        "payload", Map.of("delta", "self")
+                )), null))
+                .assertNext(event -> {
+                    org.assertj.core.api.Assertions.assertThat(event.sequence()).isEqualTo(1L);
+                    org.assertj.core.api.Assertions.assertThat(event.payload()).containsEntry("delta", "self");
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void subscribeDropsSelfEchoPayloadInMergeMode() throws Exception {
+        RedisChatLiveEventBus bus = newBus(new CapturingStringRedisTemplate(),
+                new ChatLiveEventBusProperties(), Runnable::run, liveSourceMode(ChatStreamProperties.LiveSourceMode.MERGE));
 
         StepVerifier.create(bus.subscribe("chat-run-run1"))
                 .then(() -> bus.onMessage(message(Map.of(
@@ -114,7 +137,7 @@ class RedisChatLiveEventBusTest {
     }
 
     @Test
-    void selfEchoTerminalCompletesRedisSideWithoutDeliveringDuplicateEvent() {
+    void selfEchoTerminalCompletesRedisOnlySubscription() {
         RedisChatLiveEventBus bus = newBus(new CapturingStringRedisTemplate());
 
         StepVerifier.create(bus.subscribe("chat-run-run1"))
@@ -127,6 +150,7 @@ class RedisChatLiveEventBusTest {
                         "createdAt", Instant.now(),
                         "payload", Map.of("status", "COMPLETED")
                 )), null))
+                .assertNext(event -> org.assertj.core.api.Assertions.assertThat(event.type()).isEqualTo("run.completed"))
                 .verifyComplete();
     }
 
@@ -236,8 +260,21 @@ class RedisChatLiveEventBusTest {
 
     private RedisChatLiveEventBus newBus(StringRedisTemplate redis, ChatLiveEventBusProperties properties,
                                          Executor executor) {
-        return new RedisChatLiveEventBus(redis, objectMapper, new UnsupportedRedisConnectionFactory(), redisKeys,
+        return newBus(redis, properties, executor, new ChatStreamProperties());
+    }
+
+    private RedisChatLiveEventBus newBus(StringRedisTemplate redis, ChatLiveEventBusProperties properties,
+                                         Executor executor, ChatStreamProperties streamProperties) {
+        RedisChatLiveEventBus bus = new RedisChatLiveEventBus(redis, objectMapper, new UnsupportedRedisConnectionFactory(), redisKeys,
                 instanceIdProvider, properties, executor);
+        bus.setChatStreamProperties(streamProperties);
+        return bus;
+    }
+
+    private ChatStreamProperties liveSourceMode(ChatStreamProperties.LiveSourceMode mode) {
+        ChatStreamProperties properties = new ChatStreamProperties();
+        properties.setLiveSourceMode(mode);
+        return properties;
     }
 
     private ChatEvent event(long seq) {

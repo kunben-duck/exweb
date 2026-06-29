@@ -158,6 +158,9 @@ financeex:
     turn-heartbeat-interval: ${FINANCEEX_CHAT_STREAM_TURN_HEARTBEAT_INTERVAL:15s}
     # run 级 Event Resume 的 live tail 出错后，按该间隔从事件表轮询到 run 终态；正常实时路径不使用。
     resume-poll-interval: ${FINANCEEX_CHAT_STREAM_RESUME_POLL_INTERVAL:1s}
+    # 实时事件来源。生产默认只消费 Redis，避免 local sink 与 Redis Pub/Sub merge 后同 topic seq 乱序。
+    # 可选：redis-only、merge、local-only；merge 仅建议兼容排障时使用。
+    live-source-mode: ${FINANCEEX_CHAT_STREAM_LIVE_SOURCE_MODE:redis-only}
     # 下游流式事件合并后，落库、run 状态推进和实时发布会切换到该专用 IO 调度器，避免占用 Reactor parallel/Servlet 线程。
     event-io-executor-max-size: ${FINANCEEX_CHAT_STREAM_EVENT_IO_EXECUTOR_MAX_SIZE:16}
     event-io-executor-queue-capacity: ${FINANCEEX_CHAT_STREAM_EVENT_IO_EXECUTOR_QUEUE_CAPACITY:10000}

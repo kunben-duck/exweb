@@ -1348,6 +1348,11 @@ localhost，避免 Cookie 鉴权场景下的跨站 WebSocket 滥用。服务端�
 订阅数、单 topic 本机订阅数、控制消息大小、出站队列和空闲时间；超限时会返回明确错误并关闭
 连接或取消订阅。
 
+实时事件来源由 `financeex.chat-stream.live-source-mode` 控制，生产默认 `redis-only`：WebSocket 和
+run 级 Event Resume live tail 只消费 Redis Pub/Sub，避免本机 local sink 与 Redis 双源合并导致
+同一 topic 乱序。`merge` 仅用于兼容排障，`local-only` 仅用于单机调试；可靠恢复始终以
+`/events/resume` 从事件表补发为准。
+
 ### 连接
 
 ```js

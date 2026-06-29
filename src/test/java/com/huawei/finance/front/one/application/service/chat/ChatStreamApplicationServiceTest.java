@@ -132,6 +132,100 @@ class ChatStreamApplicationServiceTest {
     }
 
     @Test
+    void defaultLiveSourceUsesRedisOnlyAndIgnoresLocalSink() {
+        InMemoryChatEventStore store = new InMemoryChatEventStore();
+        InMemoryLiveEventBus liveEventBus = new InMemoryLiveEventBus();
+        InMemoryRunRepository runRepository = new InMemoryRunRepository();
+        LocalChatEventStreamRegistry registry = new LocalChatEventStreamRegistry();
+        ChatStreamApplicationService service = new ChatStreamApplicationService(
+                store,
+                registry,
+                liveEventBus,
+                runRepository,
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()
+        );
+        runRepository.save(runningRun("run1", "tenant1", "user1"));
+
+        StepVerifier.create(service.resumeRunTopic(user(), ChatStreamTopics.runTopic("run1"), 0).take(1))
+                .thenAwait(Duration.ofMillis(50))
+                .then(() -> registry.publish(stored(1L, "local")))
+                .expectNoEvent(Duration.ofMillis(100))
+                .then(() -> liveEventBus.publish(ChatStreamTopics.runTopic("run1"), stored(2L, "redis")))
+                .assertNext(event -> {
+                    assertThat(event.sequence()).isEqualTo(2L);
+                    assertThat(event.payload()).containsEntry("delta", "redis");
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void localOnlyLiveSourceIgnoresRedisBus() {
+        InMemoryChatEventStore store = new InMemoryChatEventStore();
+        InMemoryLiveEventBus liveEventBus = new InMemoryLiveEventBus();
+        InMemoryRunRepository runRepository = new InMemoryRunRepository();
+        LocalChatEventStreamRegistry registry = new LocalChatEventStreamRegistry();
+        ChatStreamProperties streamProperties = new ChatStreamProperties();
+        streamProperties.setLiveSourceMode(ChatStreamProperties.LiveSourceMode.LOCAL_ONLY);
+        ChatStreamApplicationService service = new ChatStreamApplicationService(
+                store,
+                registry,
+                liveEventBus,
+                runRepository,
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties(),
+                streamProperties
+        );
+        runRepository.save(runningRun("run1", "tenant1", "user1"));
+
+        StepVerifier.create(service.resumeRunTopic(user(), ChatStreamTopics.runTopic("run1"), 0).take(1))
+                .thenAwait(Duration.ofMillis(50))
+                .then(() -> liveEventBus.publish(ChatStreamTopics.runTopic("run1"), stored(1L, "redis")))
+                .expectNoEvent(Duration.ofMillis(100))
+                .then(() -> registry.publish(stored(2L, "local")))
+                .assertNext(event -> {
+                    assertThat(event.sequence()).isEqualTo(2L);
+                    assertThat(event.payload()).containsEntry("delta", "local");
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void mergeLiveSourceConsumesLocalAndRedisBus() {
+        InMemoryChatEventStore store = new InMemoryChatEventStore();
+        InMemoryLiveEventBus liveEventBus = new InMemoryLiveEventBus();
+        InMemoryRunRepository runRepository = new InMemoryRunRepository();
+        LocalChatEventStreamRegistry registry = new LocalChatEventStreamRegistry();
+        ChatStreamProperties streamProperties = new ChatStreamProperties();
+        streamProperties.setLiveSourceMode(ChatStreamProperties.LiveSourceMode.MERGE);
+        ChatStreamApplicationService service = new ChatStreamApplicationService(
+                store,
+                registry,
+                liveEventBus,
+                runRepository,
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties(),
+                streamProperties
+        );
+        runRepository.save(runningRun("run1", "tenant1", "user1"));
+
+        StepVerifier.create(service.resumeRunTopic(user(), ChatStreamTopics.runTopic("run1"), 0)
+                        .take(2)
+                        .map(event -> String.valueOf(event.payload().get("delta")))
+                        .collectList())
+                .thenAwait(Duration.ofMillis(50))
+                .then(() -> {
+                    registry.publish(stored(1L, "local"));
+                    liveEventBus.publish(ChatStreamTopics.runTopic("run1"), stored(2L, "redis"));
+                })
+                .assertNext(deltas -> assertThat(deltas).containsExactlyInAnyOrder("local", "redis"))
+                .verifyComplete();
+    }
+
+    @Test
     void resumeRunTopicReceivesLocalRunCancelledTerminalEvent() {
         InMemoryChatEventStore store = new InMemoryChatEventStore();
         InMemoryRunRepository runRepository = new InMemoryRunRepository();
@@ -301,6 +395,11 @@ class ChatStreamApplicationServiceTest {
 
     private UserContext user() {
         return new UserContext("tenant1", "user1", "User One");
+    }
+
+    private ChatEvent stored(long seq, String delta) {
+        return new StoredChatEvent("run1", "session1", seq, "message.delta",
+                Instant.now(), Map.of("delta", delta));
     }
 
     private static class InMemoryRunRepository implements ChatRunRepository {

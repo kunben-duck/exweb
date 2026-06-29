@@ -101,7 +101,9 @@ subscribe 和连接关闭回调只读取该身份快照，不会再次调用 `Au
 单用户连接数、单连接订阅数、单 topic 本机订阅数、出站缓冲、live buffer 和空闲超时都由
 `financeex.websocket.*` 统一配置。慢客户端或实时缓冲溢出时，服务端会返回
 `RECOVER_REQUIRED`，前端应通过 run event resume 补齐后再重新订阅。
-run 级 Event Resume 默认优先接入本机与 Redis live topic；若 live source 异常，会按
+run 级 WebSocket 与 Event Resume live tail 默认使用 `financeex.chat-stream.live-source-mode=redis-only`，
+只消费 Redis Pub/Sub 实时通道，避免本机 local sink 与 Redis 双源合并导致同一 topic 乱序；
+`merge` 和 `local-only` 仅作为兼容排障或单机调试回退。若 live source 异常，会按
 `financeex.chat-stream.resume-poll-interval` 从数据库事件表轮询到 run 终态，避免 SSE 在输出中途断开。
 下游流式事件合并后，事件落库、run 状态推进和实时发布会切换到
 `financeex.chat-stream.event-io-executor-*` 专用调度器，避免阻塞式 DB/Redis 调用落到

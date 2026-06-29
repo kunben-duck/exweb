@@ -359,8 +359,6 @@ public class FinanceEXChatService implements FinanceChatFacade {
         ChatRunMessagePlan messagePlan = context.messagePlan();
         UserContext user = context.user();
         return chatDeltaCoalescer.coalesce(events)
-                .onErrorResume(ex -> Flux.just(ErrorEvent.of(runId, session.id(),
-                        "RUN_STREAM_COALESCE_ERROR", ex.getMessage())))
                 .publishOn(eventIoScheduler)
                 .<ChatEvent>handle((event, sink) -> {
                     if (writeRejected.get()) {

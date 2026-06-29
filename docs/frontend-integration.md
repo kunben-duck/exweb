@@ -1505,10 +1505,9 @@ Relay 映射规则：
 - 未识别合法 JSON 映射为 `runtime.event`。`sourcePayload` 会脱敏和限长，不能作为稳定字段依赖。
 - Relay 原始 `type` 不会成为 ChatService 顶层 `type`，只会作为 `payload.sourceType` 或 raw log 排障信息。
 
-服务端可能把下游逐 token 输出合并为几十毫秒级 `message.delta` 文本片段。前端只需要按 `seq`
+当前生产版本按下游标准事件原粒度输出 `message.delta`，前端只需要按 `seq`
 顺序追加 `payload.delta`，不要假设一个 delta 等于一个 token，也不要依赖任何 Relay 私有字段。
-`message.snapshot`、`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.card/runtime.event`
-不参与 delta 合并。历史消息中，最终正文保存在 `ChatMessageDto.content`；过程信息通过
+历史消息中，最终正文保存在 `ChatMessageDto.content`；过程信息通过
 `ChatMessageDto.parts` 返回，刷新会话后也可以回显思考、工具、进度和 agent 调用过程。
 
 ### 本地消费游标

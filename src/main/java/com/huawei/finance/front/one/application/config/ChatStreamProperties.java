@@ -5,19 +5,19 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * 聊天事件流降压配置。
+ * 聊天事件流传输配置。
  *
- * <p>这些配置只改变服务端内部把下游 token 合并成 {@code message.delta} event 的粒度，
- * 不改变前端协议、run topic、Event Resume 或数据库 seq 游标语义。</p>
+ * <p>当前生产版本不再合并 {@code message.delta}。历史合并配置字段保留为兼容入口，
+ * 后续只有在实现 demand-aware 合并器并完成压测后才会重新生效。</p>
  */
 @Component
 @ConfigurationProperties(prefix = "financeex.chat-stream")
 public class ChatStreamProperties {
-    /** 是否合并连续 message.delta，默认开启以降低数据库与 Redis 写放大。 */
-    private boolean deltaCoalesceEnabled = true;
-    /** 连续 delta 最大等待合并窗口；窗口到期后会立即 flush 为一个标准 message.delta event。 */
+    /** 历史 delta 合并开关；当前止血版本忽略该配置，事件按原粒度写入和推送。 */
+    private boolean deltaCoalesceEnabled = false;
+    /** 历史 delta 合并窗口；当前止血版本暂不生效。 */
     private Duration deltaCoalesceWindow = Duration.ofMillis(50);
-    /** 单个合并后 delta 的最大字符数；超过该值立即 flush，避免前端首屏等待过久。 */
+    /** 历史 delta 合并最大字符数；当前止血版本暂不生效。 */
     private int deltaCoalesceMaxChars = 512;
     /** turn stream heartbeat 间隔；用于 WebSocket/Event Resume 在长时间无业务事件时维持连接活跃。 */
     private Duration turnHeartbeatInterval = Duration.ofSeconds(15);

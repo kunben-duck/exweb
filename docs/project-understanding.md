@@ -376,8 +376,8 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
    - 不匹配时生成 `RUN_EVENT_IDENTITY_MISMATCH`，防止串会话。
 
 2. `ChatDeltaCoalescer#coalesce(...)`
-   - 只合并连续 `message.delta`，降低逐 token 写库、Redis publish 和 WebSocket 投递放大。
-  - 遇到 `message.snapshot`、`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.card/runtime.event`、`run.started`、`message.completed`、`run.completed`、`run.failed`、`run.cancelled` 会先 flush，再原样输出边界事件。
+   - 当前生产止血版本原样透传事件，不再合并连续 `message.delta`。
+   - 保留该扩展点是为了后续实现 demand-aware 合并器；旧的 push 型合并器不能再用于生产，否则内部背压可能误中断 run。
 
 3. `ChatRunApplicationService#shouldAcceptEvent(...)`
    - 先看 Redis cancel flag。

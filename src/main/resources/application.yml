@@ -149,9 +149,9 @@ financeex:
     recover-lock-enabled: ${FINANCEEX_CHAT_RUN_RECOVER_LOCK_ENABLED:true}
     recover-lock-ttl: ${FINANCEEX_CHAT_RUN_RECOVER_LOCK_TTL:30s}
   chat-stream:
-    # 将连续 message.delta 合并成几十毫秒级文本片段，降低数据库事件表、Redis Pub/Sub 与 WS 投递写放大。
-    # 对外事件类型仍是 message.delta，前端协议和 afterSeq 恢复语义不变。
-    delta-coalesce-enabled: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_ENABLED:true}
+    # 当前生产止血版本不合并 message.delta，避免 ChatService 内部背压把任务误标记为 run.failed。
+    # 以下 delta-coalesce-* 配置仅作为后续 demand-aware 合并器的兼容预留，当前不影响事件粒度。
+    delta-coalesce-enabled: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_ENABLED:false}
     delta-coalesce-window: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_WINDOW:50ms}
     delta-coalesce-max-chars: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_MAX_CHARS:512}
     # WebSocket 与 run 级 Event Resume 的 turn stream heartbeat；不写入事件表，也不推进 afterSeq。

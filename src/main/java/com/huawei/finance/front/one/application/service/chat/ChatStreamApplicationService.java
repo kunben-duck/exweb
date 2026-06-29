@@ -13,6 +13,7 @@ import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -243,14 +244,15 @@ public class ChatStreamApplicationService {
         Sinks.Many<ChatEvent> sink = Sinks.many().unicast().onBackpressureBuffer(
                 Queues.<ChatEvent>get(webSocketProperties.normalizedLiveBufferCapacity()).get()
         );
-        Disposable subscription = deduplicate(liveSource(topicId, afterSeq)
+        Flux<ChatEvent> orderedLiveEvents = reorderBySeq(deduplicate(liveSource(topicId, afterSeq)
                 /*
                  * run topic 是前端实时隔离的核心边界。这里再按 runId + sessionId 做防御性过滤：
                  * 即使 Redis Pub/Sub 或本机 live source 出现错误投递，也不会把其他会话/run 的事件推给当前订阅。
                  */
                 .filter(event -> event != null
                         && expectedRunId.equals(event.runId())
-                        && expectedSessionId.equals(event.sessionId()))).subscribe(
+                        && expectedSessionId.equals(event.sessionId()))));
+        Disposable subscription = orderedLiveEvents.subscribe(
                 event -> {
                     Sinks.EmitResult result = sink.tryEmitNext(event);
                     if (result.isFailure()) {
@@ -275,6 +277,25 @@ public class ChatStreamApplicationService {
                     liveEventBus.subscribe(topicId).filter(event -> event.sequence() > afterSeq)
             );
         };
+    }
+
+    private Flux<ChatEvent> reorderBySeq(Flux<ChatEvent> events) {
+        int maxEvents = chatStreamProperties.normalizedLiveReorderMaxEvents();
+        if (!chatStreamProperties.isLiveReorderEnabled()
+                || maxEvents <= 1
+                || chatStreamProperties.normalizedLiveReorderWindow().isZero()) {
+            return events;
+        }
+        /*
+         * seq 是全局数据库游标，单 run/topic 不保证连续，因此这里不能等待 seq+1。
+         * 只对短窗口内已经到达的事件排序后逐条原样输出，避免 Redis listener 调度抖动导致
+         * 414850 先于 414849 推给 WebSocket。
+         */
+        return events.bufferTimeout(maxEvents, chatStreamProperties.normalizedLiveReorderWindow())
+                .concatMapIterable(buffer -> {
+                    buffer.sort(Comparator.comparingLong(ChatEvent::sequence));
+                    return buffer;
+                });
     }
 
     private StreamRecoveryRequiredException toRecoveryRequired(String topicId, long afterSeq, Throwable error) {

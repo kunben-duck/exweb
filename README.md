@@ -105,6 +105,8 @@ run 级 WebSocket 与 Event Resume live tail 默认使用 `financeex.chat-stream
 只消费 Redis Pub/Sub 实时通道，避免本机 local sink 与 Redis 双源合并导致同一 topic 乱序；
 `merge` 和 `local-only` 仅作为兼容排障或单机调试回退。若 live source 异常，会按
 `financeex.chat-stream.resume-poll-interval` 从数据库事件表轮询到 run 终态，避免 SSE 在输出中途断开。
+实时订阅侧还会按 `financeex.chat-stream.live-reorder-*` 做短窗口排序：只对窗口内已到达事件按
+`seq` 升序逐条输出，不合并 payload，也不等待不存在的连续 seq，默认最多增加约 20ms 实时延迟。
 下游流式事件合并后，事件落库、run 状态推进和实时发布会切换到
 `financeex.chat-stream.event-io-executor-*` 专用调度器，避免阻塞式 DB/Redis 调用落到
 Reactor `parallel-*` 或 Servlet 请求线程。Redis Pub/Sub 发布使用

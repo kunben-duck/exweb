@@ -1571,6 +1571,11 @@ WebSocket 不接受 `{"type":"chat"}` 或旧 `CreateChatRunRequest`。发送旧�
 `expectedNextSeq` 做连续性校验。`RECOVER_REQUIRED.details.recoveryAfterSeq` 是服务端建议的最小补发起点；
 旧前端也可以继续使用本地 `lastSeq`。
 
+服务端会在 WebSocket 和 run 级 Event Resume live tail 的实时源后做短窗口排序，默认配置为
+`financeex.chat-stream.live-reorder-enabled=true`、`live-reorder-window=20ms`、
+`live-reorder-max-events=128`。该阶段只把窗口内已经收到的事件按 `sequence` 升序逐条输出，不合并
+`message.delta`，也不会等待 `seq+1`，因此不会把 `19 -> 21` 误判为必须等待 `20`。
+
 `RECOVER_REQUIRED` 也可能由慢客户端、run topic live buffer 溢出、Redis 跨实例实时发布失败或 Redis
 订阅注册失败触发。Servlet/MVC 生产模式下，服务端还会用单连接有界发送队列保护 WebSocket 阻塞发送；
 如果浏览器、网关或网络过慢导致队列溢出，服务端可能直接关闭当前 WebSocket 连接。此时不要继续等待

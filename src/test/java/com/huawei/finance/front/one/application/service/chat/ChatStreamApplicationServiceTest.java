@@ -226,6 +226,127 @@ class ChatStreamApplicationServiceTest {
     }
 
     @Test
+    void liveReorderSortsShortWindowEventsBySeq() {
+        InMemoryChatEventStore store = new InMemoryChatEventStore();
+        InMemoryLiveEventBus liveEventBus = new InMemoryLiveEventBus();
+        InMemoryRunRepository runRepository = new InMemoryRunRepository();
+        ChatStreamApplicationService service = new ChatStreamApplicationService(
+                store,
+                new LocalChatEventStreamRegistry(),
+                liveEventBus,
+                runRepository,
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties(),
+                streamProperties(true, Duration.ofMillis(20), 128)
+        );
+        runRepository.save(runningRun("run1", "tenant1", "user1"));
+
+        StepVerifier.create(service.resumeRunTopic(user(), ChatStreamTopics.runTopic("run1"), 0)
+                        .take(3)
+                        .map(ChatEvent::sequence)
+                        .collectList())
+                .thenAwait(Duration.ofMillis(50))
+                .then(() -> {
+                    liveEventBus.publish(ChatStreamTopics.runTopic("run1"), stored(414848L, "a"));
+                    liveEventBus.publish(ChatStreamTopics.runTopic("run1"), stored(414850L, "c"));
+                    liveEventBus.publish(ChatStreamTopics.runTopic("run1"), stored(414849L, "b"));
+                })
+                .assertNext(sequences -> assertThat(sequences).containsExactly(414848L, 414849L, 414850L))
+                .verifyComplete();
+    }
+
+    @Test
+    void liveReorderDoesNotWaitForNonexistentContinuousSeq() {
+        InMemoryChatEventStore store = new InMemoryChatEventStore();
+        InMemoryLiveEventBus liveEventBus = new InMemoryLiveEventBus();
+        InMemoryRunRepository runRepository = new InMemoryRunRepository();
+        ChatStreamApplicationService service = new ChatStreamApplicationService(
+                store,
+                new LocalChatEventStreamRegistry(),
+                liveEventBus,
+                runRepository,
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties(),
+                streamProperties(true, Duration.ofMillis(20), 128)
+        );
+        runRepository.save(runningRun("run1", "tenant1", "user1"));
+
+        StepVerifier.create(service.resumeRunTopic(user(), ChatStreamTopics.runTopic("run1"), 0)
+                        .take(2)
+                        .map(ChatEvent::sequence)
+                        .collectList())
+                .thenAwait(Duration.ofMillis(50))
+                .then(() -> {
+                    liveEventBus.publish(ChatStreamTopics.runTopic("run1"), stored(414848L, "a"));
+                    liveEventBus.publish(ChatStreamTopics.runTopic("run1"), stored(414850L, "c"));
+                })
+                .assertNext(sequences -> assertThat(sequences).containsExactly(414848L, 414850L))
+                .verifyComplete();
+    }
+
+    @Test
+    void liveReorderFlushesWhenMaxEventsReached() {
+        InMemoryChatEventStore store = new InMemoryChatEventStore();
+        InMemoryLiveEventBus liveEventBus = new InMemoryLiveEventBus();
+        InMemoryRunRepository runRepository = new InMemoryRunRepository();
+        ChatStreamApplicationService service = new ChatStreamApplicationService(
+                store,
+                new LocalChatEventStreamRegistry(),
+                liveEventBus,
+                runRepository,
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties(),
+                streamProperties(true, Duration.ofSeconds(5), 2)
+        );
+        runRepository.save(runningRun("run1", "tenant1", "user1"));
+
+        StepVerifier.create(service.resumeRunTopic(user(), ChatStreamTopics.runTopic("run1"), 0)
+                        .take(2)
+                        .map(ChatEvent::sequence)
+                        .collectList())
+                .thenAwait(Duration.ofMillis(50))
+                .then(() -> {
+                    liveEventBus.publish(ChatStreamTopics.runTopic("run1"), stored(414850L, "c"));
+                    liveEventBus.publish(ChatStreamTopics.runTopic("run1"), stored(414849L, "b"));
+                })
+                .assertNext(sequences -> assertThat(sequences).containsExactly(414849L, 414850L))
+                .verifyComplete();
+    }
+
+    @Test
+    void liveReorderCanBeDisabled() {
+        InMemoryChatEventStore store = new InMemoryChatEventStore();
+        InMemoryLiveEventBus liveEventBus = new InMemoryLiveEventBus();
+        InMemoryRunRepository runRepository = new InMemoryRunRepository();
+        ChatStreamApplicationService service = new ChatStreamApplicationService(
+                store,
+                new LocalChatEventStreamRegistry(),
+                liveEventBus,
+                runRepository,
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties(),
+                streamProperties(false, Duration.ofMillis(20), 128)
+        );
+        runRepository.save(runningRun("run1", "tenant1", "user1"));
+
+        StepVerifier.create(service.resumeRunTopic(user(), ChatStreamTopics.runTopic("run1"), 0)
+                        .take(2)
+                        .map(ChatEvent::sequence)
+                        .collectList())
+                .thenAwait(Duration.ofMillis(50))
+                .then(() -> {
+                    liveEventBus.publish(ChatStreamTopics.runTopic("run1"), stored(414850L, "c"));
+                    liveEventBus.publish(ChatStreamTopics.runTopic("run1"), stored(414849L, "b"));
+                })
+                .assertNext(sequences -> assertThat(sequences).containsExactly(414850L, 414849L))
+                .verifyComplete();
+    }
+
+    @Test
     void resumeRunTopicReceivesLocalRunCancelledTerminalEvent() {
         InMemoryChatEventStore store = new InMemoryChatEventStore();
         InMemoryRunRepository runRepository = new InMemoryRunRepository();
@@ -400,6 +521,14 @@ class ChatStreamApplicationServiceTest {
     private ChatEvent stored(long seq, String delta) {
         return new StoredChatEvent("run1", "session1", seq, "message.delta",
                 Instant.now(), Map.of("delta", delta));
+    }
+
+    private ChatStreamProperties streamProperties(boolean reorderEnabled, Duration reorderWindow, int maxEvents) {
+        ChatStreamProperties properties = new ChatStreamProperties();
+        properties.setLiveReorderEnabled(reorderEnabled);
+        properties.setLiveReorderWindow(reorderWindow);
+        properties.setLiveReorderMaxEvents(maxEvents);
+        return properties;
     }
 
     private static class InMemoryRunRepository implements ChatRunRepository {

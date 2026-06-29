@@ -536,6 +536,8 @@ RedisChatLiveEventBus#onMessage(...)
   `merge` 保留旧的 local + Redis 合并模式，`local-only` 仅用于单机调试。
 - 发布侧不在调用线程直接执行 `convertAndSend`：事件会进入 Redis 发布后台队列，同一 topic FIFO 串行 drain，
   并按 `financeex.websocket.redis-publish-*` 做队列保护和短重试。
+- 订阅消费侧会按 `financeex.chat-stream.live-reorder-*` 做短窗口排序，只对窗口内已到达事件按 seq 升序输出，
+  不合并事件、不等待连续 seq，用于减少同 topic 低 seq 迟到导致的 `SEQ_ROLLBACK`。
 - 若某个 topic 发布最终失败，Redis bus 会记录恢复起点；后续恢复控制消息会让远端订阅进入
   `RECOVER_REQUIRED`，前端再用数据库事实源 Event Resume 补齐。
 
@@ -694,6 +696,7 @@ local-only: LocalChatEventStreamRegistry#subscribeRunTopic(...)
 
 - 按 `expectedRunId + expectedSessionId` 过滤。
 - 按 seq 有限窗口去重。
+- 按短窗口排序已到达事件；seq 是全局游标，所以只排序、不等待缺失序号。
 - sink 有界缓冲，溢出时触发 `StreamRecoveryRequiredException`。
 - Redis 订阅注册失败或收到 Redis 恢复控制消息时，也会触发 `StreamRecoveryRequiredException`，避免 live tail
   安静停止。

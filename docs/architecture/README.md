@@ -467,6 +467,8 @@ sequenceDiagram
 - 数据库是事件事实源。生产默认使用 `financeex.chat-stream.live-source-mode=redis-only`，
   WebSocket 与 run 级 Event Resume live tail 只消费 Redis Pub/Sub，避免本机 local sink 与 Redis
   双源合并造成同一 topic seq 乱序；`LocalChatEventStreamRegistry` 保留为 `local-only/merge` 回退通道。
+- 实时消费侧使用 `financeex.chat-stream.live-reorder-*` 做短窗口排序。排序只处理已经到达的事件，
+  不合并事件、不改变 payload、不等待连续 seq，用于吸收 Redis listener 调度抖动带来的低 seq 迟到。
 - 事件写入必须校验 `runId/sessionId/tenantId/userId` 一致；事件补发和 `latestSeq` 查询也必须携带 `tenantId/userId/sessionId/runId` owner 条件，不能按裸 runId 或 sessionId 查询。
 - `fin_ex_chat_run_t` 是 run 生命周期事实源；Redis 只保存 active run 和 cancel flag。
 - `fin_ex_chat_run_execution_t` 是 run 执行控制面事实源；实例 ID、心跳、租约、恢复状态和 `fencing_token` 都在该表中，避免把运维执行信息混入业务 run 表。
@@ -562,6 +564,9 @@ MVC/Servlet 生产模式增加了长连接治理层：`financeex.websocket.allow
 专用调度器，避免阻塞式 DB/Redis 调用占用 Reactor `parallel-*` timer 或 Servlet 请求线程。
 Redis Pub/Sub 是默认实时 fanout 通道，跨实例发布使用 `financeex.websocket.redis-publish-*` 有界后台队列；同一 run topic
 串行发布并做短重试，发布缺口会通过恢复控制消息转成 `RECOVER_REQUIRED`。
+实时消费侧默认用 `financeex.chat-stream.live-reorder-window=20ms` 和
+`financeex.chat-stream.live-reorder-max-events=128` 对短窗口内事件按 seq 排序，避免同一 topic 中
+后写事件先到达时误触发 seq rollback；该阶段不改变事件粒度。
 run 级 Event Resume 正常优先接入 Redis live topic；如果 live source 异常，会按
 `financeex.chat-stream.resume-poll-interval` 回查事件表直到 run 终态，避免跨实例实时 fanout 故障让恢复流中途断开。
 前端接收的 `message.payload` / SSE `data` 是 `conversation-turn-stream`，真实 ChatEvent 位于

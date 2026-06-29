@@ -28,6 +28,12 @@ public class ChatStreamProperties {
      * 两条异步源合并后出现同一 topic 的 seq 乱序。
      */
     private LiveSourceMode liveSourceMode = LiveSourceMode.REDIS_ONLY;
+    /** 是否对 live topic 已到达事件做短窗口 seq 排序；不合并事件，只调整短暂乱序。 */
+    private boolean liveReorderEnabled = true;
+    /** live topic 短窗口排序等待时间；窗口到期后按 seq 升序逐条原样输出。 */
+    private Duration liveReorderWindow = Duration.ofMillis(20);
+    /** live topic 短窗口排序最多缓存事件数；达到上限立即 flush，避免单订阅无界缓存。 */
+    private int liveReorderMaxEvents = 128;
     /** 流式事件落库、run 状态推进和实时发布使用的阻塞 IO 线程数上限。 */
     private int eventIoExecutorMaxSize = 16;
     /** 流式事件 IO 线程池队列容量；队列满时上游 run 会失败而不是阻塞 Reactor timer/Servlet 线程。 */
@@ -112,6 +118,41 @@ public class ChatStreamProperties {
 
     public boolean isMergeLiveSourceMode() {
         return normalizedLiveSourceMode() == LiveSourceMode.MERGE;
+    }
+
+    public boolean isLiveReorderEnabled() {
+        return liveReorderEnabled;
+    }
+
+    public void setLiveReorderEnabled(boolean liveReorderEnabled) {
+        this.liveReorderEnabled = liveReorderEnabled;
+    }
+
+    public Duration getLiveReorderWindow() {
+        return liveReorderWindow;
+    }
+
+    public void setLiveReorderWindow(Duration liveReorderWindow) {
+        this.liveReorderWindow = liveReorderWindow;
+    }
+
+    public Duration normalizedLiveReorderWindow() {
+        if (liveReorderWindow == null || liveReorderWindow.isNegative()) {
+            return Duration.ofMillis(20);
+        }
+        return liveReorderWindow;
+    }
+
+    public int getLiveReorderMaxEvents() {
+        return liveReorderMaxEvents;
+    }
+
+    public void setLiveReorderMaxEvents(int liveReorderMaxEvents) {
+        this.liveReorderMaxEvents = liveReorderMaxEvents;
+    }
+
+    public int normalizedLiveReorderMaxEvents() {
+        return Math.max(1, liveReorderMaxEvents);
     }
 
     public int getEventIoExecutorMaxSize() {

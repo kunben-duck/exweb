@@ -21,8 +21,6 @@ public class ChatStreamProperties {
     private int deltaCoalesceMaxChars = 512;
     /** turn stream heartbeat 间隔；用于 WebSocket/Event Resume 在长时间无业务事件时维持连接活跃。 */
     private Duration turnHeartbeatInterval = Duration.ofSeconds(15);
-    /** run 级 Event Resume 的 live tail 故障后，按该间隔回查数据库直到 run 终态。 */
-    private Duration resumePollInterval = Duration.ofSeconds(1);
     /**
      * run topic 实时事件来源。生产默认只消费 Redis，避免本机 local sink 与 Redis Pub/Sub
      * 两条异步源合并后出现同一 topic 的 seq 乱序。
@@ -87,21 +85,6 @@ public class ChatStreamProperties {
             return Duration.ofSeconds(15);
         }
         return turnHeartbeatInterval;
-    }
-
-    public Duration getResumePollInterval() {
-        return resumePollInterval;
-    }
-
-    public void setResumePollInterval(Duration resumePollInterval) {
-        this.resumePollInterval = resumePollInterval;
-    }
-
-    public Duration normalizedResumePollInterval() {
-        if (resumePollInterval == null || resumePollInterval.isNegative()) {
-            return Duration.ofSeconds(1);
-        }
-        return resumePollInterval.isZero() ? Duration.ofSeconds(1) : resumePollInterval;
     }
 
     public LiveSourceMode getLiveSourceMode() {

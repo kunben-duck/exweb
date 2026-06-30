@@ -103,8 +103,8 @@ subscribe 和连接关闭回调只读取该身份快照，不会再次调用 `Au
 `RECOVER_REQUIRED`，前端应通过 run event resume 补齐后再重新订阅。
 run 级 WebSocket 与 Event Resume live tail 默认使用 `financeex.chat-stream.live-source-mode=redis-only`，
 只消费 Redis Pub/Sub 实时通道，避免本机 local sink 与 Redis 双源合并导致同一 topic 乱序；
-`merge` 和 `local-only` 仅作为兼容排障或单机调试回退。若 live source 异常，会按
-`financeex.chat-stream.resume-poll-interval` 从数据库事件表轮询到 run 终态，避免 SSE 在输出中途断开。
+`merge` 和 `local-only` 仅作为兼容排障或单机调试回退。run 级恢复只做一次数据库 catchup；
+live source 异常时结束当前实时 tail，由前端退避后重新 Event Resume，不在服务端循环查库。
 实时订阅侧还会按 `financeex.chat-stream.live-reorder-*` 做短窗口排序：只对窗口内已到达事件按
 `seq` 升序逐条输出，不合并 payload，也不等待不存在的连续 seq，默认最多增加约 20ms 实时延迟。
 下游流式事件合并后，事件落库、run 状态推进和实时发布会切换到

@@ -16,8 +16,6 @@ import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,7 +32,8 @@ import reactor.util.concurrent.Queues;
  *
  * <p>所有事件先写入数据库，再发布到 run 级实时 topic。WebSocket 用于当前页面新建 run 的
  * 实时订阅；run 级事件恢复用于新页签、新浏览器或跨电脑恢复已经存在的 active run，它会先从
- * 数据库补发 afterSeq 之后的事实事件，再接续 live topic 直到 run 终态。</p>
+ * 数据库补发 afterSeq 之后的事实事件，再接续 live topic。若 live source 异常，服务端返回恢复错误，
+ * 不做循环 DB polling，避免 Redis 抖动时放大数据库压力。</p>
  */
 @Service
 public class ChatStreamApplicationService {
@@ -321,15 +320,13 @@ public class ChatStreamApplicationService {
 
     private Flux<ChatEvent> resumeRunWithLiveTail(ChatRun run, long afterSeq) {
         String topicId = ChatStreamTopics.runTopic(run.id());
-        AtomicLong deliveredSeq = new AtomicLong(afterSeq);
         return Flux.using(
                 () -> liveBuffer(topicId, afterSeq, run.id(), run.sessionId()),
                 liveBuffer -> Mono.fromCallable(() -> eventStore.findByOwnerAndRunAfterSeq(
                                 run.tenantId(), run.userId(), run.sessionId(), run.id(), afterSeq))
                         .subscribeOn(Schedulers.boundedElastic())
                         .flatMapMany(replay -> {
-                            Flux<ChatEvent> replayFlux = Flux.fromIterable(replay)
-                                    .doOnNext(event -> updateDeliveredSeq(deliveredSeq, event));
+                            Flux<ChatEvent> replayFlux = Flux.fromIterable(replay);
                             if (run.status().terminal() || replay.stream().anyMatch(this::terminalEvent)) {
                                 return replayFlux;
                             }
@@ -342,40 +339,17 @@ public class ChatStreamApplicationService {
                             return Flux.concat(
                                             replayFlux,
                                             liveBuffer.events().filter(event -> event.sequence() > liveAfterSeq)
-                                                    .doOnNext(event -> updateDeliveredSeq(deliveredSeq, event))
-                                                    .onErrorResume(StreamRecoveryRequiredException.class,
-                                                            ex -> pollRunEventsAfterLiveFailure(run, deliveredSeq.get(), ex))
+                                                    .onErrorResume(StreamRecoveryRequiredException.class, ex -> {
+                                                        log.warn("Run Event Resume live tail requires recovery. runId={}, sessionId={}, afterSeq={}, reason={}, message={}",
+                                                                run.id(), run.sessionId(), liveAfterSeq,
+                                                                ex.reason(), ex.getMessage());
+                                                        return Flux.empty();
+                                                    })
                                     )
                                     .takeUntil(this::terminalEvent);
                         }),
                 RunTopicLiveBuffer::dispose
         );
-    }
-
-    private Flux<ChatEvent> pollRunEventsAfterLiveFailure(ChatRun run, long afterSeq,
-                                                          StreamRecoveryRequiredException cause) {
-        log.warn("Run Event Resume live tail failed, fallback to DB polling. runId={}, sessionId={}, afterSeq={}, reason={}, message={}",
-                run.id(), run.sessionId(), afterSeq, cause.reason(), cause.getMessage());
-        AtomicLong cursor = new AtomicLong(afterSeq);
-        AtomicBoolean terminalSeen = new AtomicBoolean(false);
-        return Flux.defer(() -> Mono.fromCallable(() -> eventStore.findByOwnerAndRunAfterSeq(
-                                run.tenantId(), run.userId(), run.sessionId(), run.id(), cursor.get()))
-                        .subscribeOn(Schedulers.boundedElastic())
-                        .flatMapMany(Flux::fromIterable)
-                        .doOnNext(event -> {
-                            updateDeliveredSeq(cursor, event);
-                            if (terminalEvent(event)) {
-                                terminalSeen.set(true);
-                            }
-                        }))
-                .repeatWhen(repeat -> repeat
-                        .delayElements(chatStreamProperties.normalizedResumePollInterval())
-                        .takeWhile(ignored -> !terminalSeen.get()))
-                .takeUntil(this::terminalEvent);
-    }
-
-    private void updateDeliveredSeq(AtomicLong deliveredSeq, ChatEvent event) {
-        deliveredSeq.accumulateAndGet(event.sequence(), Math::max);
     }
 
     private boolean terminalEvent(ChatEvent event) {

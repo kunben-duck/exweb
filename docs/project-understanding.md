@@ -545,7 +545,7 @@ RedisChatLiveEventBus#onMessage(...)
 
 - Redis Pub/Sub 不是可靠消息源。
 - Redis 不可用时，跨实例实时推送可能缺失，但 Event Resume 仍可从数据库补齐。
-- Redis live source 异常不会影响已经落库的事件；run 级 Event Resume 会在 live tail 异常时降级轮询事件表直到 run 终态。
+- Redis live source 异常不会影响已经落库的事件；run 级 Event Resume 只做一次数据库 catchup，不在 live tail 异常后循环轮询事件表。
 
 重点排查：
 
@@ -740,7 +740,7 @@ GET /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}
 区别：
 
 - session 级事件恢复：只补发会话维度历史事件。
-- run 级事件恢复：补发指定 run，并在 run 未终态时接 live tail，直到终态；live tail 异常时按 `financeex.chat-stream.resume-poll-interval` 轮询事件表。
+- run 级事件恢复：补发指定 run，并在 run 未终态时接 live tail，直到终态；live tail 异常时结束当前恢复流且不发送 `done`，由前端退避后重新 resume。
 
 HTTP resume 的 SSE `data` 与 WebSocket `message.payload` 一样，都是 `ConversationTurnStreamDto`：
 
@@ -753,7 +753,7 @@ HTTP resume 的 SSE `data` 与 WebSocket `message.payload` 一样，都是 `Conv
 - Event Resume 没数据：先确认 `afterSeq` 是否已经大于等于最新 seq。
 - 跨电脑恢复缺前半段：前端没有本地 cursor 时应从 `activeRunFirstSeq - 1` 开始。
 - Event Resume 一直不断：检查 run 是否一直未产生 terminal event。
-- Run 级 Event Resume 输出到一半停止：检查 live source 是否抛出 `StreamRecoveryRequiredException`，正常情况下会切换到 DB polling；如果仍断开，继续查 Servlet async timeout 或客户端主动关闭。
+- Run 级 Event Resume 输出到一半停止且没有 `done`：检查 live source 是否抛出 `StreamRecoveryRequiredException`。服务端不会为 live tail 做 DB polling，前端应退避后重新调用 run 级 Event Resume。
 
 ## 13. stop 取消路径
 

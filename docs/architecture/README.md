@@ -567,8 +567,8 @@ Redis Pub/Sub 是默认实时 fanout 通道，跨实例发布使用 `financeex.w
 实时消费侧默认用 `financeex.chat-stream.live-reorder-window=20ms` 和
 `financeex.chat-stream.live-reorder-max-events=128` 对短窗口内事件按 seq 排序，避免同一 topic 中
 后写事件先到达时误触发 seq rollback；该阶段不改变事件粒度。
-run 级 Event Resume 正常优先接入 Redis live topic；如果 live source 异常，会按
-`financeex.chat-stream.resume-poll-interval` 回查事件表直到 run 终态，避免跨实例实时 fanout 故障让恢复流中途断开。
+run 级 Event Resume 正常优先接入 Redis live topic；如果 live source 异常，会以恢复错误结束当前实时 tail，
+前端退避后重新 resume；服务端不做循环 DB polling，避免 Redis 抖动时把压力转移到数据库。
 前端接收的 `message.payload` / SSE `data` 是 `conversation-turn-stream`，真实 ChatEvent 位于
 `stream-item.encodedItem.data`；`heartbeat` 和 `done` 只是传输层状态，不写入 `fin_ex_chat_event_t`，
 也不推进 `afterSeq`。

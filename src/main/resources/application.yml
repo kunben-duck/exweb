@@ -156,8 +156,6 @@ financeex:
     delta-coalesce-max-chars: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_MAX_CHARS:512}
     # WebSocket 与 run 级 Event Resume 的 turn stream heartbeat；不写入事件表，也不推进 afterSeq。
     turn-heartbeat-interval: ${FINANCEEX_CHAT_STREAM_TURN_HEARTBEAT_INTERVAL:15s}
-    # run 级 Event Resume 的 live tail 出错后，按该间隔从事件表轮询到 run 终态；正常实时路径不使用。
-    resume-poll-interval: ${FINANCEEX_CHAT_STREAM_RESUME_POLL_INTERVAL:1s}
     # 实时事件来源。生产默认只消费 Redis，避免 local sink 与 Redis Pub/Sub merge 后同 topic seq 乱序。
     # 可选：redis-only、merge、local-only；merge 仅建议兼容排障时使用。
     live-source-mode: ${FINANCEEX_CHAT_STREAM_LIVE_SOURCE_MODE:redis-only}

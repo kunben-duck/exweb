@@ -427,11 +427,9 @@ class ChatStreamApplicationServiceTest {
     }
 
     @Test
-    void resumeRunFallsBackToDbPollingWhenLiveTailFails() {
+    void resumeRunStopsLiveTailWhenRecoveryRequired() {
         InMemoryChatEventStore store = new InMemoryChatEventStore();
         InMemoryRunRepository runRepository = new InMemoryRunRepository();
-        ChatStreamProperties streamProperties = new ChatStreamProperties();
-        streamProperties.setResumePollInterval(Duration.ofMillis(10));
         ChatStreamApplicationService service = new ChatStreamApplicationService(
                 store,
                 new LocalChatEventStreamRegistry(),
@@ -440,19 +438,12 @@ class ChatStreamApplicationServiceTest {
                 new PermissionChecker(),
                 new FixedSessionRepository(),
                 new com.huawei.finance.front.one.application.config.ChatWebSocketProperties(),
-                streamProperties
+                new ChatStreamProperties()
         );
         runRepository.save(runningRun("run1", "tenant1", "user1"));
         ChatEvent first = service.appendAndPublish(MessageDeltaEvent.of("run1", "session1", "hello"));
 
         StepVerifier.create(service.resumeRun(user(), "run1", first.sequence()))
-                .then(() -> {
-                    service.appendAndPublish(MessageDeltaEvent.of("run1", "session1", " polled"));
-                    service.appendAndPublish(new StoredChatEvent("run1", "session1", 0L, "run.completed",
-                            Instant.now(), Map.of("status", "COMPLETED")));
-                })
-                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", " polled"))
-                .assertNext(event -> assertThat(event.type()).isEqualTo("run.completed"))
                 .verifyComplete();
     }
 

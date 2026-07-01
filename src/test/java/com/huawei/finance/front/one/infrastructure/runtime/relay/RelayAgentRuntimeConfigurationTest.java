@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.infrastructure.runtime.relay;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookieProperties;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -15,7 +16,8 @@ class RelayAgentRuntimeConfigurationTest {
             .withUserConfiguration(
                     RelayAgentRuntime.class,
                     RelayRuntimeResponseNormalizer.class,
-                    RelayStreamHttpRuntimeAdapter.class);
+                    RelayStreamHttpRuntimeAdapter.class,
+                    RelayWebSocketRuntimeAdapter.class);
 
     @Test
     void defaultRelayProviderCreatesRuntimeAndStreamHttpAdapter() {
@@ -23,18 +25,43 @@ class RelayAgentRuntimeConfigurationTest {
             assertThat(context).hasSingleBean(AgentRuntime.class);
             assertThat(context).hasSingleBean(RelayAgentRuntime.class);
             assertThat(context).hasSingleBean(RelayStreamHttpRuntimeAdapter.class);
+            assertThat(context).hasSingleBean(RelayWebSocketRuntimeAdapter.class);
         });
     }
 
     @Test
-    void missingStreamHttpAdapterFailsFastAtStartup() {
+    void configuredRelayWebSocketAdapterCreatesRuntime() {
+        contextRunner
+                .withPropertyValues("financeex.agent-runtime.relay.adapter=relay-websocket")
+                .run(context -> {
+                    assertThat(context).hasSingleBean(AgentRuntime.class);
+                    assertThat(context).hasSingleBean(RelayAgentRuntime.class);
+                });
+    }
+
+    @Test
+    void unknownConfiguredAdapterFailsFastAtStartup() {
         new ApplicationContextRunner()
                 .withUserConfiguration(RelayAgentRuntime.class)
                 .withPropertyValues("financeex.agent-runtime.provider=relay")
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
-                            .hasRootCauseMessage("Relay stream-http adapter is required. Registered adapters: []");
+                            .hasRootCauseMessage("Relay adapter 'relay-stream-http' is not registered. Registered adapters: []");
+                });
+    }
+
+    @Test
+    void invalidConfiguredAdapterNameReportsRegisteredAdapters() {
+        contextRunner
+                .withPropertyValues("financeex.agent-runtime.relay.adapter=relay-missing")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .rootCause()
+                            .hasMessageContaining("Relay adapter 'relay-missing' is not registered")
+                            .hasMessageContaining("relay-stream-http")
+                            .hasMessageContaining("relay-websocket");
                 });
     }
 
@@ -43,5 +70,10 @@ class RelayAgentRuntimeConfigurationTest {
         contextRunner
                 .withPropertyValues("financeex.agent-runtime.provider=custom-runtime")
                 .run(context -> assertThat(context).doesNotHaveBean(AgentRuntime.class));
+    }
+
+    @Test
+    void relayWebSocketIsAllowedToReceiveForwardedCookieByDefault() {
+        assertThat(new AgentRuntimeForwardCookieProperties().isAdapterAllowed("relay-websocket")).isTrue();
     }
 }

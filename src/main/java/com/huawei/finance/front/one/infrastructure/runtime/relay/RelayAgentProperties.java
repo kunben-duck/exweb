@@ -8,8 +8,8 @@ import org.springframework.util.unit.DataSize;
  * Relay Runtime adapter 配置。
  *
  * <p>{@code provider} 表示 AgentRuntime 类型，当前上线版本内置 {@code relay}。
- * Relay 下游接入当前固定为 streamable HTTP。二级 adapter 防腐层仍然保留在代码结构中，
- * 未来新增其他 Relay 协议实现时新增 {@link RelayRuntimeProtocolAdapter} 即可，不改主编排。</p>
+ * Relay 下游接入通过 {@code relay.adapter} 在二级 adapter 中选择，默认仍为 streamable HTTP。
+ * 新增或替换 Relay 协议时只扩展 {@link RelayRuntimeProtocolAdapter}，不改主编排。</p>
  */
 @ConfigurationProperties(prefix = "financeex.agent-runtime")
 public class RelayAgentProperties {
@@ -27,6 +27,8 @@ public class RelayAgentProperties {
     private Duration timeout = Duration.ofSeconds(60);
     /** Relay 单个响应 frame 的 WebClient codec 内存上限。 */
     private DataSize maxInMemorySize = DataSize.ofMegabytes(1);
+    /** Relay 二级协议 adapter 配置。 */
+    private Relay relay = new Relay();
 
     public String getProvider() {
         return provider;
@@ -82,6 +84,96 @@ public class RelayAgentProperties {
 
     public void setMaxInMemorySize(DataSize maxInMemorySize) {
         this.maxInMemorySize = maxInMemorySize;
+    }
+
+    public Relay getRelay() {
+        return relay;
+    }
+
+    public void setRelay(Relay relay) {
+        this.relay = relay == null ? new Relay() : relay;
+    }
+
+    /**
+     * Relay provider 内部 adapter 配置。
+     */
+    public static class Relay {
+        /** 当前使用的 Relay API adapter，默认保持 stream-http 主链路。 */
+        private String adapter = "relay-stream-http";
+        /** WebSocket adapter 配置，仅在 adapter=relay-websocket 时使用。 */
+        private WebSocket websocket = new WebSocket();
+
+        public String getAdapter() {
+            return adapter;
+        }
+
+        public void setAdapter(String adapter) {
+            this.adapter = adapter;
+        }
+
+        public WebSocket getWebsocket() {
+            return websocket;
+        }
+
+        public void setWebsocket(WebSocket websocket) {
+            this.websocket = websocket == null ? new WebSocket() : websocket;
+        }
+    }
+
+    /**
+     * Relay WebSocket 普通问答 adapter 配置。
+     */
+    public static class WebSocket {
+        /** Relay WebSocket URL 前缀，adapter 会在后面追加 /{clientId}。 */
+        private String url = "ws://localhost:8080/ws";
+        /** Relay appMode，普通问答默认 delegate。 */
+        private String appMode = "delegate";
+        /** 建立下游 WebSocket 连接的超时时间。 */
+        private Duration connectTimeout = Duration.ofSeconds(5);
+        /** 普通问答期间等待下游下一帧的空闲超时时间。 */
+        private Duration idleTimeout = Duration.ofSeconds(60);
+        /** 单个下游 WebSocket 文本帧最大字节数。 */
+        private DataSize maxFrameBytes = DataSize.ofMegabytes(1);
+
+        public String getUrl() {
+            return url;
+        }
+
+        public void setUrl(String url) {
+            this.url = url;
+        }
+
+        public String getAppMode() {
+            return appMode;
+        }
+
+        public void setAppMode(String appMode) {
+            this.appMode = appMode;
+        }
+
+        public Duration getConnectTimeout() {
+            return connectTimeout;
+        }
+
+        public void setConnectTimeout(Duration connectTimeout) {
+            this.connectTimeout = connectTimeout;
+        }
+
+        public Duration getIdleTimeout() {
+            return idleTimeout;
+        }
+
+        public void setIdleTimeout(Duration idleTimeout) {
+            this.idleTimeout = idleTimeout;
+        }
+
+        public DataSize getMaxFrameBytes() {
+            return maxFrameBytes;
+        }
+
+        public void setMaxFrameBytes(DataSize maxFrameBytes) {
+            this.maxFrameBytes = maxFrameBytes;
+        }
     }
 
 }

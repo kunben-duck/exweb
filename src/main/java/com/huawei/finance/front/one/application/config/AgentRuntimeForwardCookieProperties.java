@@ -9,7 +9,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * 下游 Agent Cookie 请求头透传配置。
  *
  * <p>Cookie 透传只用于 FinanceEXChatService 到可信下游 Agent 的出站调用。当前上线版本包括
- * Relay streamable HTTP 和前端显式选择的 DomainAgent。{@code allowedAdapters} 只约束
+ * Relay streamable HTTP / WebSocket 和前端显式选择的 DomainAgent。{@code allowedAdapters} 只约束
  * Relay Runtime adapter；DomainAgent 由显式路由和 DomainAgent 配置共同限定。</p>
  */
 @ConfigurationProperties(prefix = "financeex.agent-runtime.forward-cookie")
@@ -19,7 +19,7 @@ public class AgentRuntimeForwardCookieProperties {
     /** 单个 Cookie 请求头允许透传的最大字符数，默认 8 KiB。 */
     private int maxLength = 8192;
     /** 允许接收 Cookie 的 Relay Runtime API adapter 名称列表；DomainAgent 不使用该列表。 */
-    private List<String> allowedAdapters = new ArrayList<>(List.of("relay-stream-http"));
+    private List<String> allowedAdapters = new ArrayList<>(List.of("relay-stream-http", "relay-websocket"));
 
     public boolean isEnabled() {
         return enabled;

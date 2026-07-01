@@ -7,7 +7,9 @@ import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -16,30 +18,31 @@ import reactor.core.publisher.Mono;
  * RelayAgent Runtime 防腐层实现。
  *
  * <p>该类是 application 层看到的唯一 Relay provider。它不直接拼接下游请求，
- * 固定委托 {@code relay-stream-http} {@link RelayRuntimeProtocolAdapter}。当前上线版本不再
- * 暴露下游协议选择配置；若未来新增其他 Relay 协议，实现新的 adapter 即可，不需要污染主编排。</p>
+ * 只根据配置选择一个 {@link RelayRuntimeProtocolAdapter}。若未来新增其他 Relay 协议，
+ * 实现新的 adapter 即可，不需要污染主编排。</p>
  */
 @Component
+@EnableConfigurationProperties(RelayAgentProperties.class)
 @ConditionalOnExpression("'${financeex.agent-runtime.provider:relay}' == 'relay'")
 public class RelayAgentRuntime implements AgentRuntime {
     static final String STREAM_HTTP_ADAPTER = "relay-stream-http";
 
     private final Map<String, RelayRuntimeProtocolAdapter> adapters;
-    private final RelayRuntimeProtocolAdapter streamHttpAdapter;
+    private final RelayRuntimeProtocolAdapter selectedAdapter;
 
-    public RelayAgentRuntime(List<RelayRuntimeProtocolAdapter> adapters) {
+    public RelayAgentRuntime(List<RelayRuntimeProtocolAdapter> adapters, RelayAgentProperties properties) {
         this.adapters = indexAdapters(adapters);
-        this.streamHttpAdapter = requireStreamHttpAdapter();
+        this.selectedAdapter = requireConfiguredAdapter(properties);
     }
 
     @Override
     public Flux<ChatEvent> query(AgentRuntimeRequest request) {
-        return streamHttpAdapter.query(request);
+        return selectedAdapter.query(request);
     }
 
     @Override
     public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
-        return streamHttpAdapter.cancel(request);
+        return selectedAdapter.cancel(request);
     }
 
     private Map<String, RelayRuntimeProtocolAdapter> indexAdapters(List<RelayRuntimeProtocolAdapter> adapters) {
@@ -54,12 +57,22 @@ public class RelayAgentRuntime implements AgentRuntime {
         return Map.copyOf(indexed);
     }
 
-    private RelayRuntimeProtocolAdapter requireStreamHttpAdapter() {
-        RelayRuntimeProtocolAdapter adapter = adapters.get(STREAM_HTTP_ADAPTER);
+    private RelayRuntimeProtocolAdapter requireConfiguredAdapter(RelayAgentProperties properties) {
+        String configured = properties == null || properties.getRelay() == null
+                ? STREAM_HTTP_ADAPTER
+                : properties.getRelay().getAdapter();
+        String adapterName = normalize(configured);
+        RelayRuntimeProtocolAdapter adapter = adapters.get(adapterName);
         if (adapter == null) {
-            throw new IllegalStateException("Relay stream-http adapter is required. Registered adapters: "
-                    + adapters.keySet());
+            throw new IllegalStateException("Relay adapter '" + adapterName
+                    + "' is not registered. Registered adapters: " + adapters.keySet());
         }
         return adapter;
+    }
+
+    private String normalize(String value) {
+        return value == null || value.isBlank()
+                ? STREAM_HTTP_ADAPTER
+                : value.trim().toLowerCase(Locale.ROOT);
     }
 }

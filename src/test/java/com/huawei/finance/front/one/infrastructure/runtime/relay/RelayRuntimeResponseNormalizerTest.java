@@ -153,6 +153,55 @@ class RelayRuntimeResponseNormalizerTest {
     }
 
     @Test
+    void relayWebSocketThinkingAndToolExecutionFramesBecomeRuntimeEvents() {
+        List<ChatEvent> reasoningEvents = normalizer.normalize("run1", "session1",
+                "{\"type\":\"agent-reasoning\",\"agent_name\":\"PlanAgent\",\"thought\":\"分析问题\","
+                        + "\"is_start\":true}");
+        List<ChatEvent> thinkingContentEvents = normalizer.normalize("run1", "session1",
+                "{\"type\":\"thinking-content-update\",\"agent_name\":\"delegate\","
+                        + "\"operation_id\":\"op-1\",\"content\":\"思考片段\"}");
+        List<ChatEvent> toolExecutionEvents = normalizer.normalize("run1", "session1",
+                "{\"type\":\"tool-execution\",\"agent_name\":\"delegate\",\"tool_name\":\"mcp__x__search\","
+                        + "\"tool_id\":\"tool-1\",\"is_start\":false,\"result_summary\":\"完成\"}");
+
+        assertThat(reasoningEvents).hasSize(1);
+        assertThat(reasoningEvents.getFirst().type()).isEqualTo("runtime.thinking");
+        assertThat(reasoningEvents.getFirst().payload())
+                .containsEntry("sourceType", "agent-reasoning")
+                .containsEntry("status", "STARTED")
+                .containsEntry("text", "分析问题");
+        assertThat(thinkingContentEvents).hasSize(1);
+        assertThat(thinkingContentEvents.getFirst().type()).isEqualTo("runtime.thinking");
+        assertThat(thinkingContentEvents.getFirst().payload())
+                .containsEntry("sourceType", "thinking-content-update")
+                .containsEntry("status", "STREAMING")
+                .containsEntry("text", "思考片段")
+                .containsEntry("operationId", "op-1");
+        assertThat(toolExecutionEvents).hasSize(1);
+        assertThat(toolExecutionEvents.getFirst().type()).isEqualTo("runtime.tool");
+        assertThat(toolExecutionEvents.getFirst().payload())
+                .containsEntry("sourceType", "tool-execution")
+                .containsEntry("status", "ENDED")
+                .containsEntry("toolName", "mcp__x__search")
+                .containsEntry("resultSummary", "完成");
+    }
+
+    @Test
+    void relayWebSocketSessionStateBecomesRuntimeMetadata() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1",
+                "{\"type\":\"session-state\",\"state\":\"idle\",\"detail\":\"Waiting\","
+                        + "\"session_id\":\"relay-session-1\"}");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("runtime.metadata");
+        assertThat(events.getFirst().payload())
+                .containsEntry("sourceType", "session-state")
+                .containsEntry("metadataType", "session_state")
+                .containsEntry("state", "idle")
+                .containsEntry("runtimeSessionId", "relay-session-1");
+    }
+
+    @Test
     void relayReferenceFramesBecomeRuntimeReferenceEvents() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1",
                 "{\"type\":\"url_moderation\",\"url_moderation_result\":{"

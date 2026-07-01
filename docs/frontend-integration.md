@@ -15,7 +15,7 @@
 - `seq` / `sequence` 是数据库生成的事件恢复游标，前端断点恢复只保存最后收到的最大 `sequence`。
 - 前端只把 `sequence` 当作不透明数字游标，不要自行推算生成方式；服务端以事件表事实源保证同一会话内的恢复顺序。
 - 前端不要传 `tenantId`、`userId`，也不要通过 Header/Query/Body 伪造用户身份；身份由后端请求入口通过 `AuthContextProvider` 从服务端上下文解析一次，后台 run 不会再次读取请求 ThreadLocal。
-- 本文档中的 WebSocket 只指前端到 FinanceEXChatService 的 `/api/v1/ex/chat/ws` 连接。FinanceEXChatService 到下游 RelayAgent 当前只保留 streamable HTTP adapter；前端不直接连接 RelayAgent，也不通过前端 WebSocket 发起 `AgentRuntime.query`。
+- 本文档中的 WebSocket 默认指前端到 FinanceEXChatService 的 `/api/v1/ex/chat/ws` 连接。FinanceEXChatService 到下游 RelayAgent 默认使用 streamable HTTP adapter，也可由后端配置切换为出站 Relay WebSocket 普通问答 adapter；前端不直接连接 RelayAgent，也不通过前端 WebSocket 发起 `AgentRuntime.query`。
 - 本地开发需要后端显式配置：
 
 ```bash
@@ -563,9 +563,9 @@ POST /api/v1/ex/chat/runs/{runId}/stop
  -> 停止本轮回答
 ```
 
-`streamTopicId` 是 ChatService 的 run 级订阅 topic，不是 RelayAgent 的会话 ID。当前后端内部的 `AgentRuntime.query` 通过 streamable HTTP 调用下游 Relay；这个内部实现不改变前端协议。
+`streamTopicId` 是 ChatService 的 run 级订阅 topic，不是 RelayAgent 的会话 ID。当前后端内部的 `AgentRuntime.query` 默认通过 streamable HTTP 调用下游 Relay；如果服务端配置 `FINANCEEX_RELAY_ADAPTER=relay-websocket`，则由 ChatService 出站连接 Relay WebSocket，但这个内部实现不改变前端协议。
 
-如果 `POST /chat/runs`、`POST /chat/runs/{runId}/stop` 或 `POST /documents` 请求携带标准 `Cookie` 头，后端会在入口捕获一次，并只把它透传给可信下游 adapter：Relay streamable HTTP、DomainAgent chat/cancel，以及配置了 `forward-cookie=true` 的 DomainAgent 文档 upload provider。该 Cookie 不会出现在请求 body、multipart form、metadata、事件、历史消息、文档元数据或前端响应中。
+如果 `POST /chat/runs`、`POST /chat/runs/{runId}/stop` 或 `POST /documents` 请求携带标准 `Cookie` 头，后端会在入口捕获一次，并只把它透传给可信下游 adapter：Relay streamable HTTP、Relay WebSocket、DomainAgent chat/cancel，以及配置了 `forward-cookie=true` 的 DomainAgent 文档 upload provider。该 Cookie 不会出现在请求 body、multipart form、metadata、事件、历史消息、文档元数据或前端响应中。
 
 集成服务鉴权请求头由后端 `AuthHeaderProviderRegistry` 统一注入，前端不需要传 Sgov token，也不要在请求体中放服务鉴权信息。当前可配置接入的 serviceCode 包括 `welink-share`、`intent-service`、`use-case-library` 和 `sub-agent`；Relay Runtime、DomainAgent 和 DomainAgent 文档 provider 默认不走该集成服务鉴权层。
 
@@ -1516,7 +1516,7 @@ heartbeat 和 done 使用同一个 envelope，不携带 `encodedItem`，也不�
 
 ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON chunk 或 SSE-like `data:` chunk 归一化成上表事件。Runtime raw log 是可选诊断旁路，默认关闭；后续接入企业 MQ 时，后端可以在 normalizer 之前 best-effort 发布原始 chunk，由消费端异步写入 `fin_ex_runtime_raw_stream_log_t`。raw log 仅用于排障，不参与前端恢复、WebSocket 推送或 assistant 历史消息拼接；前端不得解析 Relay 原始响应，只消费 ChatService 标准 payload：
 
-Relay stream-http adapter 会通过 `FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 配置单个响应 frame 的 WebClient codec 上限，默认 `1MB`，用于避免 Spring 默认 256KB 限制过早拦截较大的引用或卡片响应。该配置不改变前端协议，也不负责拆分超大事件；如果下游长期返回超大 `sourcesDocuments/diyCardScene/cardList`，仍需要后端后续引入 DataBuffer 流式解码和 fragment 分片治理。
+Relay stream-http adapter 会通过 `FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 配置单个响应 frame 的 WebClient codec 上限，默认 `1MB`，用于避免 Spring 默认 256KB 限制过早拦截较大的引用或卡片响应。Relay WebSocket adapter 通过 `FINANCEEX_RELAY_WS_MAX_FRAME_BYTES` 控制单个下游 WS 文本帧上限，默认 `1MB`。这些配置不改变前端协议，也不负责拆分超大事件；如果下游长期返回超大 `sourcesDocuments/diyCardScene/cardList`，仍需要后端后续引入 DataBuffer 流式解码和 fragment 分片治理。
 
 | 事件类型 | 标准 payload |
 | --- | --- |

@@ -322,16 +322,28 @@ public class RelayRuntimeResponseNormalizer {
     private ChatEvent mappedRuntimeEvent(String runId, String sessionId, JsonNode root,
                                          String sourceType, String normalizedType) {
         return switch (normalizedType) {
+            case "relay-start", "relay-end" -> RuntimeEvent.progress(runId, sessionId,
+                    relayLifecyclePayload(root, sourceType));
             case "relay-progress" -> RuntimeEvent.progress(runId, sessionId, progressPayload(root, sourceType));
             case "project-home" -> RuntimeEvent.metadata(runId, sessionId, projectHomePayload(root, sourceType));
             case "available-modes", "availbale-modes" ->
                     RuntimeEvent.metadata(runId, sessionId, availableModesPayload(root, sourceType));
             case "agent-call" -> RuntimeEvent.agent(runId, sessionId, agentCallPayload(root, sourceType));
+            case "agent-reasoning" -> RuntimeEvent.thinking(runId, sessionId,
+                    agentReasoningPayload(root, sourceType));
             case "thinking-operation-start", "thinkink-operation-start" ->
                     RuntimeEvent.thinking(runId, sessionId, thinkingPayload(root, sourceType, "STARTED"));
+            case "thinking-content-update" -> RuntimeEvent.thinking(runId, sessionId,
+                    thinkingContentPayload(root, sourceType));
             case "thinking-operation-end", "thinking-operation-finish" ->
                     RuntimeEvent.thinking(runId, sessionId, thinkingPayload(root, sourceType, "ENDED"));
             case "tool-call-streaming" -> RuntimeEvent.tool(runId, sessionId, toolPayload(root, sourceType));
+            case "tool-execution" -> RuntimeEvent.tool(runId, sessionId, toolExecutionPayload(root, sourceType));
+            case "session-state" -> RuntimeEvent.metadata(runId, sessionId, sessionStatePayload(root, sourceType));
+            case "generate-response", "clarified-query" ->
+                    RuntimeEvent.progress(runId, sessionId, progressPayload(root, sourceType));
+            case "self-evolution-status" -> RuntimeEvent.metadata(runId, sessionId,
+                    selfEvolutionPayload(root, sourceType));
             case "url-moderation", "url-moderation-result" ->
                     RuntimeEvent.reference(runId, sessionId, urlModerationReferencePayload(root, sourceType));
             case "search-result-groups", "content-references", "citations", "sources", "references", "safe-urls" ->
@@ -521,6 +533,14 @@ public class RelayRuntimeResponseNormalizer {
         return Map.copyOf(payload);
     }
 
+    private Map<String, Object> relayLifecyclePayload(JsonNode root, String sourceType) {
+        Map<String, Object> next = new LinkedHashMap<>(progressPayload(root, sourceType));
+        copyText(root, next, "status", "status");
+        copyAny(root, next, "mcpStatus", "mcp_status", "mcpStatus");
+        copyAny(root, next, "initialization", "is_initialization", "isInitialization");
+        return Map.copyOf(next);
+    }
+
     private Map<String, Object> projectHomePayload(JsonNode root, String sourceType) {
         Map<String, Object> payload = basePayload(sourceType);
         payload.put("metadataType", "project_home");
@@ -557,7 +577,21 @@ public class RelayRuntimeResponseNormalizer {
         copyBoolean(root, payload, "started", "started", "istart", "isStart", "is_start");
         copyText(root, payload, "task", "task");
         copyText(root, payload, "modelName", "modelName", "modelname", "model_name");
+        copyText(root, payload, "agentId", "agent_id", "agentId");
+        copyText(root, payload, "instanceId", "instance_id", "instanceId");
+        copyText(root, payload, "parentId", "parent_id", "parentId");
+        copyAny(root, payload, "endTimestamp", "end_timestamp", "endTimestamp");
         copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
+        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
+        return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> agentReasoningPayload(JsonNode root, String sourceType) {
+        Map<String, Object> payload = basePayload(sourceType);
+        copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
+        copyText(root, payload, "text", "thought", "content", "text");
+        copyBoolean(root, payload, "started", "is_start", "isStart", "started");
+        payload.put("status", Boolean.TRUE.equals(payload.get("started")) ? "STARTED" : "ENDED");
         copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
         return Map.copyOf(payload);
     }
@@ -567,10 +601,31 @@ public class RelayRuntimeResponseNormalizer {
         payload.put("status", status);
         copyText(root, payload, "operationId", "operationId", "operation_id");
         copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
+        copyText(root, payload, "instanceId", "instance_id", "instanceId");
+        copyText(root, payload, "modelId", "model_id", "modelId");
         JsonNode tools = firstNode(root, "availableTools", "available_tools", "availbale_tools");
         if (tools != null && tools.isArray()) {
             payload.put("availableTools", sanitizeJson(tools, "availableTools", 0));
         }
+        copyAny(root, payload, "inputTokens", "input_tokens", "inputTokens");
+        copyAny(root, payload, "outputTokens", "output_tokens", "outputTokens");
+        copyAny(root, payload, "reasoningTokens", "reasoning_tokens", "reasoningTokens");
+        copyAny(root, payload, "cachedTokens", "cached_tokens", "cachedTokens");
+        copyAny(root, payload, "toolCallCount", "tool_call_count", "toolCallCount");
+        copyAny(root, payload, "toolCallIds", "tool_call_ids", "toolCallIds");
+        copyText(root, payload, "reasoningContent", "reasoning_content", "reasoningContent");
+        copyText(root, payload, "output", "output");
+        copyAny(root, payload, "endTimestamp", "end_timestamp", "endTimestamp");
+        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
+        return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> thinkingContentPayload(JsonNode root, String sourceType) {
+        Map<String, Object> payload = basePayload(sourceType);
+        payload.put("status", "STREAMING");
+        copyText(root, payload, "operationId", "operationId", "operation_id");
+        copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
+        copyText(root, payload, "text", "content", "thought", "text");
         copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
         return Map.copyOf(payload);
     }
@@ -580,7 +635,46 @@ public class RelayRuntimeResponseNormalizer {
         payload.put("status", "STREAMING");
         copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
         copyText(root, payload, "toolName", "toolName", "tool_name", "too_name", "tool-name");
+        copyText(root, payload, "toolId", "tool_id", "toolId", "tool-id");
+        copyText(root, payload, "operationId", "operation_id", "operationId");
         copyText(root, payload, "inputPreview", "inputPreview", "input_preview");
+        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
+        return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> toolExecutionPayload(JsonNode root, String sourceType) {
+        Map<String, Object> payload = basePayload(sourceType);
+        boolean started = booleanValue(firstNode(root, "is_start", "isStart", "started"));
+        payload.put("status", started ? "STARTED" : "ENDED");
+        payload.put("started", started);
+        copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
+        copyText(root, payload, "toolName", "tool_name", "toolName", "tool-name");
+        copyText(root, payload, "toolId", "tool_id", "toolId", "tool-id");
+        copyText(root, payload, "displayName", "display_name", "displayName");
+        copyText(root, payload, "parentInstanceId", "parent_instance_id", "parentInstanceId");
+        copyText(root, payload, "modelId", "model_id", "modelId");
+        copyText(root, payload, "thinkingOperationId", "thinking_operation_id", "thinkingOperationId");
+        copyText(root, payload, "argsSummary", "args_summary", "argsSummary");
+        copyText(root, payload, "resultSummary", "result_summary", "resultSummary");
+        copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
+        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
+        return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> sessionStatePayload(JsonNode root, String sourceType) {
+        Map<String, Object> payload = basePayload(sourceType);
+        payload.put("metadataType", "session_state");
+        copyText(root, payload, "state", "state");
+        copyText(root, payload, "detail", "detail", "message", "content");
+        copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
+        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
+        return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> selfEvolutionPayload(JsonNode root, String sourceType) {
+        Map<String, Object> payload = basePayload(sourceType);
+        payload.put("metadataType", "self_evolution_status");
+        copyAny(root, payload, "data", "data");
         copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
         return Map.copyOf(payload);
     }
@@ -841,6 +935,23 @@ public class RelayRuntimeResponseNormalizer {
         } else if (value != null && value.isTextual()) {
             payload.put(target, Boolean.parseBoolean(value.asText()));
         }
+    }
+
+    private boolean booleanValue(JsonNode value) {
+        if (value == null || value.isNull() || value.isMissingNode()) {
+            return false;
+        }
+        if (value.isBoolean()) {
+            return value.booleanValue();
+        }
+        if (value.isNumber()) {
+            return value.asInt(0) != 0;
+        }
+        if (value.isTextual()) {
+            String text = value.asText("").trim();
+            return "true".equalsIgnoreCase(text) || "1".equals(text) || "yes".equalsIgnoreCase(text);
+        }
+        return false;
     }
 
     private String firstText(JsonNode root, String... fieldNames) {

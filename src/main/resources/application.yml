@@ -255,6 +255,14 @@ financeex:
     # 这不是前端事件大小治理，持续超大对象仍应通过后续 DataBuffer 流式解码与 fragment 分片解决。
     max-in-memory-size: ${FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE:1MB}
     relay:
+      # Relay provider 内部 API adapter。默认保持 stream-http；relay-websocket 用于灰度接入 Relay WS 普通问答。
+      adapter: ${FINANCEEX_RELAY_ADAPTER:relay-stream-http}
+      websocket:
+        url: ${FINANCEEX_RELAY_WS_URL:ws://localhost:8080/ws}
+        app-mode: ${FINANCEEX_RELAY_WS_APP_MODE:delegate}
+        connect-timeout: ${FINANCEEX_RELAY_WS_CONNECT_TIMEOUT:5s}
+        idle-timeout: ${FINANCEEX_RELAY_WS_IDLE_TIMEOUT:60s}
+        max-frame-bytes: ${FINANCEEX_RELAY_WS_MAX_FRAME_BYTES:1MB}
       # Relay 响应映射只属于 adapter 防腐层；ChatService 对前端仍输出稳定 ChatEvent。
       answer-event-types: ${FINANCEEX_RELAY_ANSWER_EVENT_TYPES:agent,message.delta,answer,output}
       answer-content-fields: ${FINANCEEX_RELAY_ANSWER_CONTENT_FIELDS:content,context,delta,message,text,output_text}
@@ -266,7 +274,7 @@ financeex:
       # Cookie 不写入 metadata_json、不落库、不进入事件 payload，也不会写入下游请求体。
       enabled: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ENABLED:true}
       max-length: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_MAX_LENGTH:8192}
-      allowed-adapters: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ALLOWED_ADAPTERS:relay-stream-http}
+      allowed-adapters: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ALLOWED_ADAPTERS:relay-stream-http,relay-websocket}
   storage:
     provider: ${FINANCEEX_STORAGE_PROVIDER:local}
     local-path: ${java.io.tmpdir}/financeex-docs

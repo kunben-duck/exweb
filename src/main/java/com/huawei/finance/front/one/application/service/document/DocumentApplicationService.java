@@ -30,7 +30,7 @@ import reactor.core.scheduler.Schedulers;
  *
  * <p>本服务是文档能力的主控入口：接口层先解析不可变 {@link UserContext}，这里只使用显式身份
  * 校验会话归属，根据 targetProvider 选择文档 provider adapter，再把文档资产元数据持久化到
- * DocumentRepository。默认 provider 仍是对象存储；老 Agent 和未来领域 Agent 通过 provider
+ * DocumentRepository。默认 provider 仍是对象存储；DomainAgent 和未来外部文档服务通过 provider
  * adapter 接入，不新增前端上传接口。</p>
  */
 @Service

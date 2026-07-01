@@ -592,12 +592,12 @@ COMMENT ON COLUMN fin_ex_uploaded_document_t.tenant_id IS '租户标识，来自
 COMMENT ON COLUMN fin_ex_uploaded_document_t.user_id IS '用户标识，来自服务端身份上下文。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.session_id IS '文档关联的聊天会话 ID，可为空；为空表示用户文档库资产。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.original_name IS '用户上传或文档库展示的原始文件名。';
-COMMENT ON COLUMN fin_ex_uploaded_document_t.bucket IS '文档 provider 编码或对象存储 bucket；legacy-agent 等 HTTP provider 使用 providerCode。';
-COMMENT ON COLUMN fin_ex_uploaded_document_t.object_key IS 'provider 内部稳定定位符；对象存储为 object key，HTTP provider 可为下游 docId 或 legacy-url:{sha256(url)}，不保存完整 URL。';
+COMMENT ON COLUMN fin_ex_uploaded_document_t.bucket IS '文档 provider 编码或对象存储 bucket；domain-agent 等 HTTP provider 使用 providerCode。';
+COMMENT ON COLUMN fin_ex_uploaded_document_t.object_key IS 'provider 内部稳定定位符；对象存储为 object key，HTTP provider 可为下游 docId 或 domain-agent-url:{sha256(url)}，不保存完整 URL。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.content_type IS '文档 MIME 类型。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.size_bytes IS '文档字节大小。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.status IS '文档状态，例如 AVAILABLE、PROCESSING、FAILED、DELETED。只有 AVAILABLE 可作为聊天附件。';
-COMMENT ON COLUMN fin_ex_uploaded_document_t.source IS '文档来源，例如 LOCAL_UPLOAD、LIBRARY、CONNECTOR、LEGACY_AGENT_UPLOAD。';
+COMMENT ON COLUMN fin_ex_uploaded_document_t.source IS '文档来源，例如 LOCAL_UPLOAD、LIBRARY、CONNECTOR、DOMAIN_AGENT_UPLOAD。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.token_size IS '文档解析后的 token 数量，供上下文预算和检索使用。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.metadata_json IS '文档扩展元数据 JSON，例如 providerCode、providerDocument、capabilities、上传上下文或处理诊断。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.created_at IS '文档记录创建时间。';

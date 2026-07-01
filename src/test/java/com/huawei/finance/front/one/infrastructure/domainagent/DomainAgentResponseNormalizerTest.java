@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.legacy;
+package com.huawei.finance.front.one.infrastructure.domainagent;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -7,17 +7,17 @@ import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-class LegacySkillResponseNormalizerTest {
-    private final LegacySkillResponseNormalizer normalizer = new LegacySkillResponseNormalizer(new ObjectMapper());
+class DomainAgentResponseNormalizerTest {
+    private final DomainAgentResponseNormalizer normalizer = new DomainAgentResponseNormalizer(new ObjectMapper());
 
     @Test
-    void mapsLegacyEventStreamFramesToChatServiceEvents() {
+    void mapsDomainAgentEventStreamFramesToChatServiceEvents() {
         String chunk = """
                 message: {"traceId":"trace-1"}
 
-                message: {"sessionId":"legacy-session-1"}
+                message: {"sessionId":"domain-session-1"}
 
-                message: {"messageId":"legacy-message-1"}
+                message: {"messageId":"domain-message-1"}
 
                 message: {"cardUrl":"https://card","intent":"tax","skillId":"skill-tax"}
 
@@ -42,17 +42,17 @@ class LegacySkillResponseNormalizerTest {
         );
         assertThat(events.get(0).payload()).containsEntry("metadataType", "trace")
                 .containsEntry("traceId", "trace-1");
-        assertThat(events.get(1).payload()).containsEntry("metadataType", "legacy_session")
-                .containsEntry("legacySessionId", "legacy-session-1");
-        assertThat(events.get(2).payload()).containsEntry("metadataType", "legacy_message")
-                .containsEntry("legacyMessageId", "legacy-message-1");
+        assertThat(events.get(1).payload()).containsEntry("metadataType", "domain_agent_session")
+                .containsEntry("domainAgentSessionId", "domain-session-1");
+        assertThat(events.get(2).payload()).containsEntry("metadataType", "domain_agent_message")
+                .containsEntry("domainAgentMessageId", "domain-message-1");
         assertThat(events.get(3).payload()).containsEntry("cardUrl", "https://card")
                 .containsEntry("sourceType", "cardUrl")
                 .containsEntry("cardType", "url")
                 .containsEntry("intent", "tax")
-                .containsEntry("skillId", "skill-tax");
+                .containsEntry("domainAgentId", "skill-tax");
         assertThat(events.get(5).payload()).containsEntry("delta", "你好");
-        assertThat(events.get(6).payload()).containsEntry("sourceType", "legacy-agent-end");
+        assertThat(events.get(6).payload()).containsEntry("sourceType", "domain-agent-end");
     }
 
     @Test
@@ -62,9 +62,9 @@ class LegacySkillResponseNormalizerTest {
 
         assertThat(events).hasSize(1);
         assertThat(events.getFirst().type()).isEqualTo("runtime.metadata");
-        assertThat(events.getFirst().payload()).containsEntry("metadataType", "legacy_skill")
+        assertThat(events.getFirst().payload()).containsEntry("metadataType", "domain_agent")
                 .containsEntry("intent", "CreditSales")
-                .containsEntry("skillId", "skill-credit");
+                .containsEntry("domainAgentId", "skill-credit");
     }
 
     @Test
@@ -73,11 +73,11 @@ class LegacySkillResponseNormalizerTest {
 
         assertThat(events).hasSize(1);
         assertThat(events.get(0).type()).isEqualTo("runtime.event");
-        assertThat(events.get(0).payload()).containsEntry("source", "legacy-agent");
+        assertThat(events.get(0).payload()).containsEntry("source", "domain-agent");
     }
 
     @Test
-    void supportsLegacyMessagePrefixesAndRedactsSensitiveUnknownPayload() {
+    void supportsDomainAgentMessagePrefixesAndRedactsSensitiveUnknownPayload() {
         String chunk = """
                 message. {"content":"A"}
 
@@ -128,7 +128,7 @@ class LegacySkillResponseNormalizerTest {
 
     @Test
     void streamsSplitDiyCardSceneWithoutInvalidJson() {
-        LegacySkillResponseNormalizer.LegacySkillStreamState state = normalizer.newStreamState();
+        DomainAgentResponseNormalizer.DomainAgentStreamState state = normalizer.newStreamState();
 
         List<ChatEvent> first = normalizer.normalize("run1", "session1",
                 "message: {\"diyCardScene\":{\"title\":\"税务", state);
@@ -149,7 +149,7 @@ class LegacySkillResponseNormalizerTest {
 
     @Test
     void streamsSplitReferencesWithoutRequiringFieldNameInLaterChunks() {
-        LegacySkillResponseNormalizer.LegacySkillStreamState state = normalizer.newStreamState();
+        DomainAgentResponseNormalizer.DomainAgentStreamState state = normalizer.newStreamState();
 
         List<ChatEvent> first = normalizer.normalize("run1", "session1",
                 "message: {\"sourcesDocuments\":[{\"docName\":\"制度", state);
@@ -170,7 +170,7 @@ class LegacySkillResponseNormalizerTest {
 
     @Test
     void streamsSplitSearchListWithoutInvalidJson() {
-        LegacySkillResponseNormalizer.LegacySkillStreamState state = normalizer.newStreamState();
+        DomainAgentResponseNormalizer.DomainAgentStreamState state = normalizer.newStreamState();
 
         List<ChatEvent> first = normalizer.normalize("run1", "session1",
                 "message: {\"searchList\":[{\"title\":\"网页", state);
@@ -188,7 +188,7 @@ class LegacySkillResponseNormalizerTest {
 
     @Test
     void streamsSplitProcessResultAsProgressFragments() {
-        LegacySkillResponseNormalizer.LegacySkillStreamState state = normalizer.newStreamState();
+        DomainAgentResponseNormalizer.DomainAgentStreamState state = normalizer.newStreamState();
 
         List<ChatEvent> first = normalizer.normalize("run1", "session1",
                 "message: {\"processResult\":{\"dynamicResponse\":[{\"title\":\"工具", state);
@@ -243,7 +243,7 @@ class LegacySkillResponseNormalizerTest {
                 .containsEntry("cardSources", List.of("openCard"))
                 .containsEntry("openCard", "N")
                 .containsEntry("intent", "CreditSales")
-                .containsEntry("skillId", "skill-credit");
+                .containsEntry("domainAgentId", "skill-credit");
     }
 
     @Test
@@ -253,7 +253,7 @@ class LegacySkillResponseNormalizerTest {
                 """);
 
         assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.card");
-        assertThat(events.getFirst().payload()).containsEntry("sourceType", "legacy-card")
+        assertThat(events.getFirst().payload()).containsEntry("sourceType", "domain-agent-card")
                 .containsEntry("cardType", "mixed")
                 .containsEntry("cardSources", List.of("diyCardScene", "cardList"));
     }
@@ -265,7 +265,7 @@ class LegacySkillResponseNormalizerTest {
                 """);
 
         assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.card");
-        assertThat(events.getFirst().payload()).containsEntry("sourceType", "legacy-card")
+        assertThat(events.getFirst().payload()).containsEntry("sourceType", "domain-agent-card")
                 .containsEntry("cardType", "mixed")
                 .containsEntry("cardSources", List.of("cardUrl", "openCard"))
                 .containsEntry("cardUrl", "https://card")
@@ -274,7 +274,7 @@ class LegacySkillResponseNormalizerTest {
 
     @Test
     void streamsSplitOpenCardWithoutInvalidJson() {
-        LegacySkillResponseNormalizer.LegacySkillStreamState state = normalizer.newStreamState();
+        DomainAgentResponseNormalizer.DomainAgentStreamState state = normalizer.newStreamState();
 
         List<ChatEvent> first = normalizer.normalize("run1", "session1",
                 "message: {\"openCard\":\"", state);
@@ -308,7 +308,7 @@ class LegacySkillResponseNormalizerTest {
 
     @Test
     void keepsThinkStateAcrossChunks() {
-        LegacySkillResponseNormalizer.LegacySkillStreamState state = normalizer.newStreamState();
+        DomainAgentResponseNormalizer.DomainAgentStreamState state = normalizer.newStreamState();
 
         List<ChatEvent> first = normalizer.normalize("run1", "session1",
                 "message: {\"content\":\"<think>分析\"}", state);

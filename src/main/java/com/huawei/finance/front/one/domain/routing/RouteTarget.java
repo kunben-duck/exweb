@@ -6,7 +6,7 @@ package com.huawei.finance.front.one.domain.routing;
  * <p>这里只描述处理路径，不绑定某个 AgentRuntime 或 SubAgent 的具体实现。</p>
  *
  * @param type 路由类型。
- * @param selectedAgentCode 选中的 SubAgent 编码或显式技能 ID，仅 SUB_AGENT/EXPLICIT_SKILL 路由有效。
+ * @param selectedAgentCode 选中的 SubAgent 编码或 DomainAgent ID，仅 SUB_AGENT/DOMAIN_AGENT 路由有效。
  * @param routeSource 路由信号来源，例如 use-case-library、intent-service、runtime-binding。
  * @param score 路由置信分数。
  * @param reason 路由原因或系统回复文本。
@@ -22,8 +22,8 @@ public record RouteTarget(
         return new RouteTarget(RouteType.SUB_AGENT, agentCode, routeSource, score, reason);
     }
 
-    public static RouteTarget explicitSkill(String skillId, String reason) {
-        return new RouteTarget(RouteType.EXPLICIT_SKILL, skillId, "explicit-skill", 1.0, reason);
+    public static RouteTarget domainAgent(String domainAgentId, String reason) {
+        return new RouteTarget(RouteType.DOMAIN_AGENT, domainAgentId, "domain-agent", 1.0, reason);
     }
 
     public static RouteTarget systemResponse(String reason) {

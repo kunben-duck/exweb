@@ -103,7 +103,7 @@ public record RuntimeEvent(
     /**
      * runtime.event 兜底事件载荷。
      *
-     * <p>Relay/Legacy 等下游协议可能持续增加非正文事件，该对象集中表达这些事件的展示语义，
+     * <p>Relay/DomainAgent 等下游协议可能持续增加非正文事件，该对象集中表达这些事件的展示语义，
      * 避免 fallback 工厂方法出现一长串容易传错顺序的字符串参数。</p>
      */
     public record FallbackPayload(String source, String sourceType, String eventKind, String channel,

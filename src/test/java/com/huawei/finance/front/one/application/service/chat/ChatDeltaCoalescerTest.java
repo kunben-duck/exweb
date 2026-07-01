@@ -15,7 +15,7 @@ import reactor.core.publisher.Flux;
 
 class ChatDeltaCoalescerTest {
     @Test
-    void passesEventsThroughWithoutMergingEvenWhenLegacyConfigIsEnabled() {
+    void passesEventsThroughWithoutMergingEvenWhenCoalescingConfigIsEnabled() {
         ChatStreamProperties properties = new ChatStreamProperties();
         properties.setDeltaCoalesceEnabled(true);
         ChatDeltaCoalescer coalescer = new ChatDeltaCoalescer(properties);

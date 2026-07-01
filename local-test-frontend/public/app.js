@@ -430,7 +430,7 @@ async function sendRun() {
   if (!message) return;
 
   const attachments = [...state.selectedDocuments.values()].map(document => ({ documentId: document.id }));
-  const selectedSkillId = $("selectedSkillIdInput")?.value?.trim();
+  const selectedDomainAgentId = $("selectedDomainAgentIdInput")?.value?.trim();
   const body = {
     commandId: `cmd_${Date.now()}`,
     sessionId: state.selectedSessionId || null,
@@ -443,13 +443,13 @@ async function sendRun() {
       source: "local-test-frontend"
     }
   };
-  if (selectedSkillId) {
-    const sceneParam = parseOptionalJsonObject($("legacySceneParamInput")?.value?.trim(), "legacyAgent.sceneParam");
+  if (selectedDomainAgentId) {
+    const sceneParam = parseOptionalJsonObject($("domainAgentSceneParamInput")?.value?.trim(), "domainAgent.sceneParam");
     if (sceneParam === undefined) {
       return;
     }
-    body.metadata.selectedSkillId = selectedSkillId;
-    body.metadata.legacyAgent = {
+    body.metadata.selectedDomainAgentId = selectedDomainAgentId;
+    body.metadata.domainAgent = {
       isThinking: 1,
       platform: "PC",
       qaType: "normalQa",
@@ -1226,12 +1226,12 @@ async function uploadDocument() {
     data.append("sessionId", state.selectedSessionId);
   }
   const targetProvider = $("uploadTargetProvider")?.value?.trim();
-  const skillId = $("uploadSkillId")?.value?.trim();
+  const domainAgentId = $("uploadDomainAgentId")?.value?.trim();
   if (targetProvider) {
     data.append("targetProvider", targetProvider);
   }
-  if (skillId) {
-    data.append("skillId", skillId);
+  if (domainAgentId) {
+    data.append("domainAgentId", domainAgentId);
   }
   const document = await requestJson("/api/v1/ex/documents", { method: "POST", body: data });
   log(`document uploaded ${document.id}`);

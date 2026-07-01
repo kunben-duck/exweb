@@ -1,11 +1,11 @@
-package com.huawei.finance.front.one.infrastructure.legacy;
+package com.huawei.finance.front.one.infrastructure.domainagent;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.huawei.finance.front.one.application.config.LegacySkillProperties;
-import com.huawei.finance.front.one.application.integration.agent.LegacySkillAgentRequest;
-import com.huawei.finance.front.one.application.integration.agent.LegacySkillCancelRequest;
+import com.huawei.finance.front.one.application.config.DomainAgentProperties;
+import com.huawei.finance.front.one.application.integration.agent.DomainAgentRequest;
+import com.huawei.finance.front.one.application.integration.agent.DomainAgentCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import java.util.List;
@@ -21,11 +21,11 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
-class ConfiguredLegacySkillAgentClientTest {
+class ConfiguredDomainAgentClientTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
-    void queryForwardsCookieOnlyAsLegacyAgentHttpHeader() throws Exception {
+    void queryForwardsCookieOnlyAsDomainAgentHttpHeader() throws Exception {
         AtomicReference<ClientRequest> captured = new AtomicReference<>();
         WebClient.Builder builder = WebClient.builder()
                 .exchangeFunction(request -> {
@@ -35,11 +35,11 @@ class ConfiguredLegacySkillAgentClientTest {
                             .body("message: {\"content\":\"ok\"}\n\nmessage: {\"endFlag\":true}\n\n")
                             .build());
                 });
-        LegacySkillProperties properties = properties();
-        LegacySkillChatRequestMapper mapper = new LegacySkillChatRequestMapper(objectMapper, properties);
-        ConfiguredLegacySkillAgentClient client = new ConfiguredLegacySkillAgentClient(
-                builder, properties, mapper, new LegacySkillResponseNormalizer(objectMapper));
-        LegacySkillAgentRequest request = queryRequest(RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192));
+        DomainAgentProperties properties = properties();
+        DomainAgentChatRequestMapper mapper = new DomainAgentChatRequestMapper(objectMapper, properties);
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
+                builder, properties, mapper, new DomainAgentResponseNormalizer(objectMapper));
+        DomainAgentRequest request = queryRequest(RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192));
 
         StepVerifier.create(client.query(request))
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "ok"))
@@ -63,22 +63,22 @@ class ConfiguredLegacySkillAgentClientTest {
     }
 
     @Test
-    void cancelForwardsCookieOnlyAsLegacyAgentHttpHeader() {
+    void cancelForwardsCookieOnlyAsDomainAgentHttpHeader() {
         AtomicReference<ClientRequest> captured = new AtomicReference<>();
         WebClient.Builder builder = WebClient.builder()
                 .exchangeFunction(request -> {
                     captured.set(request);
                     return Mono.just(ClientResponse.create(HttpStatus.OK).build());
                 });
-        LegacySkillProperties properties = properties();
+        DomainAgentProperties properties = properties();
         properties.setStopPath("/api/stop");
-        ConfiguredLegacySkillAgentClient client = new ConfiguredLegacySkillAgentClient(
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
                 builder,
                 properties,
-                new LegacySkillChatRequestMapper(objectMapper, properties),
-                new LegacySkillResponseNormalizer(objectMapper));
+                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentResponseNormalizer(objectMapper));
 
-        StepVerifier.create(client.cancel(new LegacySkillCancelRequest(
+        StepVerifier.create(client.cancel(new DomainAgentCancelRequest(
                         user(),
                         "session1",
                         "run1",
@@ -94,7 +94,7 @@ class ConfiguredLegacySkillAgentClientTest {
     }
 
     @Test
-    void queryStopsConsumingAfterLegacyMessageCompleted() {
+    void queryStopsConsumingAfterDomainAgentMessageCompleted() {
         WebClient.Builder builder = WebClient.builder()
                 .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
                         .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -107,12 +107,12 @@ class ConfiguredLegacySkillAgentClientTest {
 
                                 """)
                         .build()));
-        LegacySkillProperties properties = properties();
-        ConfiguredLegacySkillAgentClient client = new ConfiguredLegacySkillAgentClient(
+        DomainAgentProperties properties = properties();
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
                 builder,
                 properties,
-                new LegacySkillChatRequestMapper(objectMapper, properties),
-                new LegacySkillResponseNormalizer(objectMapper));
+                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentResponseNormalizer(objectMapper));
 
         StepVerifier.create(client.query(queryRequest(RuntimeForwardHeaders.empty())))
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "ok"))
@@ -120,8 +120,8 @@ class ConfiguredLegacySkillAgentClientTest {
                 .verifyComplete();
     }
 
-    private LegacySkillAgentRequest queryRequest(RuntimeForwardHeaders forwardHeaders) {
-        return new LegacySkillAgentRequest(
+    private DomainAgentRequest queryRequest(RuntimeForwardHeaders forwardHeaders) {
+        return new DomainAgentRequest(
                 user(),
                 "session1",
                 "run1",
@@ -137,12 +137,12 @@ class ConfiguredLegacySkillAgentClientTest {
         return new UserContext("tenant1", "user1", "User One");
     }
 
-    private LegacySkillProperties properties() {
-        LegacySkillProperties properties = new LegacySkillProperties();
+    private DomainAgentProperties properties() {
+        DomainAgentProperties properties = new DomainAgentProperties();
         properties.setEnabled(true);
-        properties.setBaseUrl("http://legacy.test");
+        properties.setBaseUrl("http://domain.test");
         properties.setChatPath("/api/chat");
-        properties.setAllowedSkillIds(List.of("skill-tax"));
+        properties.setAllowedDomainAgentIds(List.of("skill-tax"));
         return properties;
     }
 }

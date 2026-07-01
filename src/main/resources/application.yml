@@ -261,7 +261,7 @@ financeex:
       agent-context-as-answer: ${FINANCEEX_RELAY_AGENT_CONTEXT_AS_ANSWER:true}
     forward-cookie:
       # 仅把 /chat/runs 与 /chat/runs/{runId}/stop 入口捕获到的 Cookie 透传给可信下游：
-      # Relay stream-http adapter 和显式技能 legacy Agent adapter。
+      # Relay stream-http adapter 和 DomainAgent adapter。
       # 文档 upload provider 的 Cookie 透传由 financeex.document 与 financeex.documents.providers.* 单独控制。
       # Cookie 不写入 metadata_json、不落库、不进入事件 payload，也不会写入下游请求体。
       enabled: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ENABLED:true}
@@ -348,54 +348,55 @@ financeex:
               - fileSize
               - message
               - error
-        legacy-agent:
+        domain-agent:
           type: http
-          enabled: ${FINANCEEX_LEGACY_AGENT_DOCUMENT_PROVIDER_ENABLED:false}
-          source: LEGACY_AGENT_UPLOAD
-          base-url: ${FINANCEEX_LEGACY_AGENT_BASE_URL:}
-          timeout: ${FINANCEEX_LEGACY_AGENT_DOCUMENT_TIMEOUT:30s}
-          # 只把上传入口 Cookie 放入老 Agent upload 请求头，不进入 multipart form 或文档元数据。
-          forward-cookie: ${FINANCEEX_LEGACY_AGENT_DOCUMENT_FORWARD_COOKIE_ENABLED:true}
+          enabled: ${FINANCEEX_DOMAIN_AGENT_DOCUMENT_PROVIDER_ENABLED:false}
+          source: DOMAIN_AGENT_UPLOAD
+          base-url: ${FINANCEEX_DOMAIN_AGENT_BASE_URL:}
+          timeout: ${FINANCEEX_DOMAIN_AGENT_DOCUMENT_TIMEOUT:30s}
+          # 只把上传入口 Cookie 放入 DomainAgent upload 请求头，不进入 multipart form 或文档元数据。
+          forward-cookie: ${FINANCEEX_DOMAIN_AGENT_DOCUMENT_FORWARD_COOKIE_ENABLED:true}
           upload:
-            enabled: ${FINANCEEX_LEGACY_AGENT_UPLOAD_ENABLED:true}
-            path: ${FINANCEEX_LEGACY_AGENT_UPLOAD_PATH:/api/upload}
+            enabled: ${FINANCEEX_DOMAIN_AGENT_UPLOAD_ENABLED:true}
+            path: ${FINANCEEX_DOMAIN_AGENT_UPLOAD_PATH:/api/upload}
             method: POST
             content-type: multipart
-            file-field: ${FINANCEEX_LEGACY_AGENT_UPLOAD_FILE_FIELD:file}
+            file-field: ${FINANCEEX_DOMAIN_AGENT_UPLOAD_FILE_FIELD:file}
             extra-form-fields:
-              skillId: "${skillId}"
+              # 下游 upload wire contract 仍使用 skillId 字段，值来自 ChatService 的 domainAgentId。
+              skillId: "${domainAgentId}"
           download:
-            enabled: ${FINANCEEX_LEGACY_AGENT_DOWNLOAD_ENABLED:false}
-            path: ${FINANCEEX_LEGACY_AGENT_DOWNLOAD_PATH:}
+            enabled: ${FINANCEEX_DOMAIN_AGENT_DOWNLOAD_ENABLED:false}
+            path: ${FINANCEEX_DOMAIN_AGENT_DOWNLOAD_PATH:}
             method: GET
           status:
-            enabled: ${FINANCEEX_LEGACY_AGENT_DOCUMENT_STATUS_ENABLED:false}
-            path: ${FINANCEEX_LEGACY_AGENT_DOCUMENT_STATUS_PATH:}
+            enabled: ${FINANCEEX_DOMAIN_AGENT_DOCUMENT_STATUS_ENABLED:false}
+            path: ${FINANCEEX_DOMAIN_AGENT_DOCUMENT_STATUS_PATH:}
             method: GET
           response-mapping:
-            data-array-path: ${FINANCEEX_LEGACY_AGENT_UPLOAD_DATA_ARRAY_PATH:data}
-            document-id-field: ${FINANCEEX_LEGACY_AGENT_UPLOAD_DOCUMENT_ID_FIELD:docid}
-            document-name-field: ${FINANCEEX_LEGACY_AGENT_UPLOAD_DOCUMENT_NAME_FIELD:docname}
-            document-size-field: ${FINANCEEX_LEGACY_AGENT_UPLOAD_DOCUMENT_SIZE_FIELD:docsize}
-            document-url-field: ${FINANCEEX_LEGACY_AGENT_UPLOAD_DOCUMENT_URL_FIELD:url}
+            data-array-path: ${FINANCEEX_DOMAIN_AGENT_UPLOAD_DATA_ARRAY_PATH:data}
+            document-id-field: ${FINANCEEX_DOMAIN_AGENT_UPLOAD_DOCUMENT_ID_FIELD:docid}
+            document-name-field: ${FINANCEEX_DOMAIN_AGENT_UPLOAD_DOCUMENT_NAME_FIELD:docname}
+            document-size-field: ${FINANCEEX_DOMAIN_AGENT_UPLOAD_DOCUMENT_SIZE_FIELD:docsize}
+            document-url-field: ${FINANCEEX_DOMAIN_AGENT_UPLOAD_DOCUMENT_URL_FIELD:url}
             metadata-fields:
               - levelCode
               - serverName
               - version
-  legacy-skill:
-    # 仅用于前端显式选择 selectedSkillId 的历史技能兼容路径；默认关闭。
-    enabled: ${FINANCEEX_LEGACY_SKILL_ENABLED:false}
-    base-url: ${FINANCEEX_LEGACY_SKILL_BASE_URL:${FINANCEEX_LEGACY_AGENT_BASE_URL:}}
-    chat-path: ${FINANCEEX_LEGACY_SKILL_CHAT_PATH:/api/chat}
-    stop-path: ${FINANCEEX_LEGACY_SKILL_STOP_PATH:}
-    timeout: ${FINANCEEX_LEGACY_SKILL_TIMEOUT:120s}
-    allowed-skill-ids: ${FINANCEEX_LEGACY_SKILL_ALLOWED_IDS:}
-    default-platform: ${FINANCEEX_LEGACY_SKILL_DEFAULT_PLATFORM:PC}
-    default-qa-type: ${FINANCEEX_LEGACY_SKILL_DEFAULT_QA_TYPE:normalQa}
-    default-stream-flag: ${FINANCEEX_LEGACY_SKILL_DEFAULT_STREAM_FLAG:stream}
-    default-is-thinking: ${FINANCEEX_LEGACY_SKILL_DEFAULT_IS_THINKING:1}
-    max-attachments: ${FINANCEEX_LEGACY_SKILL_MAX_ATTACHMENTS:10}
-    # 只缓存尚未完成的单个 legacy frame；超过限制会输出小型诊断事件并丢弃该 frame，避免 OOM。
-    max-pending-frame-bytes: ${FINANCEEX_LEGACY_SKILL_MAX_PENDING_FRAME_BYTES:1048576}
+  domain-agent:
+    # 仅用于前端显式选择 selectedDomainAgentId 的财经领域 DomainAgent 调用路径；默认关闭。
+    enabled: ${FINANCEEX_DOMAIN_AGENT_ENABLED:false}
+    base-url: ${FINANCEEX_DOMAIN_AGENT_BASE_URL:}
+    chat-path: ${FINANCEEX_DOMAIN_AGENT_CHAT_PATH:/api/chat}
+    stop-path: ${FINANCEEX_DOMAIN_AGENT_STOP_PATH:}
+    timeout: ${FINANCEEX_DOMAIN_AGENT_TIMEOUT:120s}
+    allowed-domain-agent-ids: ${FINANCEEX_DOMAIN_AGENT_ALLOWED_IDS:}
+    default-platform: ${FINANCEEX_DOMAIN_AGENT_DEFAULT_PLATFORM:PC}
+    default-qa-type: ${FINANCEEX_DOMAIN_AGENT_DEFAULT_QA_TYPE:normalQa}
+    default-stream-flag: ${FINANCEEX_DOMAIN_AGENT_DEFAULT_STREAM_FLAG:stream}
+    default-is-thinking: ${FINANCEEX_DOMAIN_AGENT_DEFAULT_IS_THINKING:1}
+    max-attachments: ${FINANCEEX_DOMAIN_AGENT_MAX_ATTACHMENTS:10}
+    # 只缓存尚未完成的单个 DomainAgent frame；超过限制会输出小型诊断事件并丢弃该 frame，避免 OOM。
+    max-pending-frame-bytes: ${FINANCEEX_DOMAIN_AGENT_MAX_PENDING_FRAME_BYTES:1048576}
     # diyCardScene/searchList/sourcesDocuments/processResult 等大对象按 fragment payload 输出时的单片大小。
-    max-fragment-bytes: ${FINANCEEX_LEGACY_SKILL_MAX_FRAGMENT_BYTES:8192}
+    max-fragment-bytes: ${FINANCEEX_DOMAIN_AGENT_MAX_FRAGMENT_BYTES:8192}

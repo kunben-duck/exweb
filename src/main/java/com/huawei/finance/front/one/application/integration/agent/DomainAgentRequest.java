@@ -7,28 +7,28 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 老 Agent 指定技能调用请求。
+ * 财经领域 DomainAgent 指定调用请求。
  *
  * @param user 当前用户身份快照。
  * @param sessionId ChatService 会话 ID。
  * @param runId ChatService run ID。
- * @param skillId 前端显式选择的技能 ID。
+ * @param domainAgentId 前端显式选择的 DomainAgent ID。
  * @param query 用户本轮输入。
  * @param documents 已校验归属和状态的文档库元数据。
- * @param metadata run metadata，用于读取 legacyAgent 参数。
- * @param forwardHeaders 请求入口捕获的 Cookie 等转发头快照；仅用于出站请求头，不能进入老 Agent 请求体或持久化数据。
+ * @param metadata run metadata，用于读取 domainAgent 参数。
+ * @param forwardHeaders 请求入口捕获的 Cookie 等转发头快照；仅用于出站请求头，不能进入请求体或持久化数据。
  */
-public record LegacySkillAgentRequest(
+public record DomainAgentRequest(
         UserContext user,
         String sessionId,
         String runId,
-        String skillId,
+        String domainAgentId,
         String query,
         List<UploadedDocument> documents,
         Map<String, Object> metadata,
         @JsonIgnore RuntimeForwardHeaders forwardHeaders
 ) {
-    public LegacySkillAgentRequest {
+    public DomainAgentRequest {
         documents = documents == null ? List.of() : List.copyOf(documents);
         metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
         forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;

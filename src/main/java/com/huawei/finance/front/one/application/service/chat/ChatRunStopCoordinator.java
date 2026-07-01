@@ -4,7 +4,7 @@ import com.huawei.finance.front.one.application.integration.agent.RuntimeForward
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.service.runtime.AgentRuntimeExecutor;
-import com.huawei.finance.front.one.application.service.runtime.LegacySkillExecutor;
+import com.huawei.finance.front.one.application.service.runtime.DomainAgentExecutor;
 import com.huawei.finance.front.one.application.service.runtime.SubAgentExecutor;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
@@ -44,7 +44,7 @@ public class ChatRunStopCoordinator {
     private final LocalChatRunExecutionRegistry runExecutionRegistry;
     private final AgentRuntimeExecutor agentRuntimeExecutor;
     private final SubAgentExecutor subAgentExecutor;
-    private final LegacySkillExecutor legacySkillExecutor;
+    private final DomainAgentExecutor domainAgentExecutor;
     private final IdGenerator idGenerator;
 
     public ChatRunStopCoordinator(SessionApplicationService sessionService,
@@ -54,7 +54,7 @@ public class ChatRunStopCoordinator {
                                   LocalChatRunExecutionRegistry runExecutionRegistry,
                                   AgentRuntimeExecutor agentRuntimeExecutor,
                                   SubAgentExecutor subAgentExecutor,
-                                  LegacySkillExecutor legacySkillExecutor,
+                                  DomainAgentExecutor domainAgentExecutor,
                                   IdGenerator idGenerator) {
         this.sessionService = sessionService;
         this.chatStreamService = chatStreamService;
@@ -63,7 +63,7 @@ public class ChatRunStopCoordinator {
         this.runExecutionRegistry = runExecutionRegistry;
         this.agentRuntimeExecutor = agentRuntimeExecutor;
         this.subAgentExecutor = subAgentExecutor;
-        this.legacySkillExecutor = legacySkillExecutor;
+        this.domainAgentExecutor = domainAgentExecutor;
         this.idGenerator = idGenerator;
     }
 
@@ -165,8 +165,8 @@ public class ChatRunStopCoordinator {
         if (RouteType.SUB_AGENT.name().equals(run.routeType())) {
             return subAgentExecutor.cancel(run, user);
         }
-        if (RouteType.EXPLICIT_SKILL.name().equals(run.routeType())) {
-            return legacySkillExecutor.cancel(run, user, forwardHeaders);
+        if (RouteType.DOMAIN_AGENT.name().equals(run.routeType())) {
+            return domainAgentExecutor.cancel(run, user, forwardHeaders);
         }
         return Mono.empty();
     }

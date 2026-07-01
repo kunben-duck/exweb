@@ -134,9 +134,9 @@ ChatController#startRun(...)
 重点排查：
 
 - 如果企业鉴权后用户为空，先看 `ChatController#resolveChatUser()` 和 `AuthContextProvider`。
-- 如果 Cookie 没有透传给 Relay 或显式技能 legacy Agent chat/cancel，先看 `ChatController#startRun(...)`
+- 如果 Cookie 没有透传给 Relay 或 DomainAgent chat/cancel，先看 `ChatController#startRun(...)`
   或 stop 入口是否读取到了 `HttpHeaders.COOKIE`，再看 `RuntimeForwardHeaderExtractor`。
-- 如果 legacy 文档上传没有权限，先看 `MvcDocumentUploadController/ReactiveDocumentUploadController`
+- 如果 DomainAgent 文档上传没有权限，先看 `MvcDocumentUploadController/ReactiveDocumentUploadController`
   是否把 `Cookie` 传入 `DocumentUploadSupport`，再看 provider 配置 `forward-cookie` 是否为 true。
 
 ### 3.2 创建后台 run
@@ -199,13 +199,13 @@ FinanceEXChatService#executeRun(...)
 5. `IdGenerator#newId("run", ...)` 生成 runId。
 6. `MemoryApplicationService#loadForRun(...)` 按配置加载可选记忆。
 7. `SessionApplicationService#prepareRunMessage(...)` 写入或定位本轮 user message。
-8. 先检查 `metadata.selectedSkillId`；存在时进入 `EXPLICIT_SKILL` 路由，不读取 RuntimeBinding。
-9. 未显式指定技能时查询或创建 RuntimeBinding。
+8. 先检查 `metadata.selectedDomainAgentId`；存在时进入 `DOMAIN_AGENT` 路由，不读取 RuntimeBinding。
+9. 未显式指定 DomainAgent 时查询或创建 RuntimeBinding。
 10. `RouteSignalApplicationService#routeInitial(...)` 调用可选用例库和意图服务。
 11. `ChatRunApplicationService#createRunning(...)` 创建业务 run。
 12. 如果本轮实际调用了意图服务，`IntentRecognitionRecordService#recordAsync(...)` 用当前 `UserContext`、query、`IntentDecision`、最终 `RouteTarget` 和 runId 构造不可变快照，并提交到专用 Servlet/MVC 异步线程池；写入失败不影响主链路。
 13. `ChatRunLeaseApplicationService#startRun(...)` 创建 execution lease。
-14. 根据 `RouteType` 调用 LegacySkill、SubAgent、SystemResponse 或 AgentRuntime。
+14. 根据 `RouteType` 调用 DomainAgent、SubAgent、SystemResponse 或 AgentRuntime。
 15. 外层补齐 `run.started` 和 `run.completed`。
 16. 进入 `persistAndPublishRunEvents(...)`。
 
@@ -213,7 +213,7 @@ FinanceEXChatService#executeRun(...)
 
 ```text
 RouteType.SUB_AGENT        -> SubAgentExecutor#execute(...)
-RouteType.EXPLICIT_SKILL   -> LegacySkillExecutor#execute(...)
+RouteType.DOMAIN_AGENT   -> DomainAgentExecutor#execute(...)
 RouteType.SYSTEM_RESPONSE  -> SystemResponseExecutor#execute(...)
 RouteType.AGENT_RUNTIME    -> AgentRuntimeExecutor#execute(...)
 ```
@@ -222,7 +222,7 @@ RouteType.AGENT_RUNTIME    -> AgentRuntimeExecutor#execute(...)
 
 - 新问题没有进入 Relay：查看 `RouteSignalApplicationService#routeInitial(...)` 返回的 `RouteTarget`。
 - 意图识别已调用但统计表没有记录：确认 `financeex.intent-record.enabled=true`，再看 `IntentRecognitionRecordService#recordAsync(...)` 是否被线程池拒绝或 repository 写库失败；该链路是 best-effort，不会向前端报错。
-- 指定技能没有进入老 Agent 或 chat Cookie 未透传：查看 `FinanceEXChatService#selectedSkillId(...)`、`LegacySkillExecutor#execute(...)` 和 `ConfiguredLegacySkillAgentClient#query(...)`。
+- DomainAgent 指定调用没有进入 DomainAgent 路由，或 chat Cookie 未透传：查看 `FinanceEXChatService#selectedDomainAgentId(...)`、`DomainAgentExecutor#execute(...)` 和 `ConfiguredDomainAgentClient#query(...)`。
 - 多轮没有续接 Runtime：查看 `RuntimeBindingApplicationService#findActive(...)` 是否命中当前 `leafMessageId`。
 - 同一会话连续发两条报错：查看 `ChatRunApplicationService#rejectIfActiveRunExists(...)` 和 `ChatRunApplicationService#createRunning(...)`。
 - user message 已写入但 run 没创建：异常可能发生在 `prepareRunMessage(...)` 之后、`createRunning(...)` 之前，需要看日志和事务边界。
@@ -345,7 +345,7 @@ RelayStreamHttpRuntimeAdapter#applyForwardedCookie(...)
 - 通过 `RelayRuntimeResponseNormalizer` 把 plain text、JSON chunk、SSE-like `data:` chunk 转成标准 ChatEvent。
 - Relay `type=agent,is_streaming=true` 的 `content/context` 默认转成 `message.delta`；`type=agent,is_streaming=false` 转成 `message.snapshot`；`steam-complete/stream-complete/[DONE]` 转成 `message.completed`。
 - Relay `type=tool-structured-result` 是 MCP 工具结构化结果帧，normalizer 会读取 `result_data/resultData.widget.data` 后按字段映射：`content` -> `message.delta(sourceType=relay-content)`，`processResult` -> `runtime.progress(sourceType=relay-processResult)`，`searchList/sourcesDocuments` -> `runtime.reference(sourceType=relay-*)`，`cardUrl/diyCardScene/cardList/openCard` -> `runtime.card(sourceType=relay-*)`。其中 `is_last` 只是工具分片上下文，不触发 `message.completed`。
-- Relay 和 legacy-agent 过程帧按语义转成 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.card`；legacy 的 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 这类对象如果跨网络 chunk，会继续使用对应稳定事件类型，并在 payload 中用 `fragment/itemId/delta/complete` 表达分片状态，避免半截 JSON 被误转成 `invalid-json`。当前 legacy 协议下 `cardUrl/diyCardScene/cardList/openCard` 通常不会在同一个 chunk 中同时出现，`runtime.card.payload.sourceType` 会保留原始字段名，例如 `diyCardScene` 或 `openCard`；未知完整 JSON 才转成 `runtime.event`。
+- Relay 和 domain-agent 过程帧按语义转成 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.card`；domain-agent 的 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 这类对象如果跨网络 chunk，会继续使用对应稳定事件类型，并在 payload 中用 `fragment/itemId/delta/complete` 表达分片状态，避免半截 JSON 被误转成 `invalid-json`。当前 domain-agent 协议下 `cardUrl/diyCardScene/cardList/openCard` 通常不会在同一个 chunk 中同时出现，`runtime.card.payload.sourceType` 会保留原始字段名，例如 `diyCardScene` 或 `openCard`；未知完整 JSON 才转成 `runtime.event`。
 - `message.delta` 代表 assistant 正文增量并参与草稿拼接；`message.snapshot` 代表下游最终回答快照，会覆盖草稿成为历史正文。
 - 流结束时补 `MessageCompletedEvent`。
 
@@ -353,7 +353,7 @@ RelayStreamHttpRuntimeAdapter#applyForwardedCookie(...)
 
 - Relay 返回了数据但前端没看到：先确认这里是否产生了 `MessageDeltaEvent` 或 `RuntimeEvent`。
 - Relay 响应格式不是纯字符串片段：先看 raw log，再看 `RelayRuntimeResponseNormalizer` 是否把正文转为 `message.delta/message.snapshot`，或把非正文扩展帧转为对应 `runtime.*`。不要把 Relay 原始 JSON 作为 ChatService 顶层事件透传。
-- 第三方 Cookie 泄漏风险：确认只有可信 Relay adapter、显式技能 legacy Agent adapter 和配置 `forward-cookie=true` 的 HTTP 文档 provider upload 调用 `applyForwardedCookie(...)`，且 Cookie 没有进入请求体、multipart form 或元数据。
+- 第三方 Cookie 泄漏风险：确认只有可信 Relay adapter、DomainAgent adapter 和配置 `forward-cookie=true` 的 HTTP 文档 provider upload 调用 `applyForwardedCookie(...)`，且 Cookie 没有进入请求体、multipart form 或元数据。
 
 ## 7. Relay 事件如何变成可恢复事件流
 
@@ -957,7 +957,7 @@ cancelActive(...)
 | 实例挂掉 run 不结束 | `ChatRunLeaseApplicationService#heartbeatActiveRuns(...)`、`ChatRunWatchdogScheduler`、`ChatRunRecoveryOrchestrator` |
 | 跨电脑续接缺内容 | `stream-status`、run 级事件恢复 `afterSeq`、`fin_ex_chat_event_t` |
 | assistant 历史消息没保存 | `persistAndPublishRunEvents(...)` 处理 `run.completed` 的分支、`SessionApplicationService#saveAssistantMessage(...)` |
-| 文档附件没有进 Runtime 或指定技能 | `DocumentFacade#resolveAttachmentsForUser(...)`、`LegacySkillChatRequestMapper#sceneParam(...)` / `docList(...)`、`SessionApplicationService#saveAttachments(...)`、`AgentRuntimeRequest.attachments`。指定技能路径会保留 `metadata.legacyAgent.sceneParam` 的扩展字段，但 `docList` 始终由后端附件元数据覆盖生成。 |
+| 文档附件没有进 Runtime 或 DomainAgent 指定调用 | `DocumentFacade#resolveAttachmentsForUser(...)`、`DomainAgentChatRequestMapper#sceneParam(...)` / `docList(...)`、`SessionApplicationService#saveAttachments(...)`、`AgentRuntimeRequest.attachments`。DomainAgent 指定调用路径会保留 `metadata.domainAgent.sceneParam` 的扩展字段，但 `docList` 始终由后端附件元数据覆盖生成。 |
 
 ## 18. 推荐调试顺序
 

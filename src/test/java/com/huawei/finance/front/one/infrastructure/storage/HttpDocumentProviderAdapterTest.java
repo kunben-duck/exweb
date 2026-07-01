@@ -32,7 +32,7 @@ class HttpDocumentProviderAdapterTest {
     void forwardsCookieHeaderToTrustedHttpProviderUpload() throws Exception {
         AtomicReference<ClientRequest> captured = new AtomicReference<>();
         HttpDocumentProviderAdapter adapter = adapter(captured, """
-                {"data":[{"docid":"legacy-doc-1","docname":"invoice.pdf","docsize":3,
+                {"data":[{"docid":"domain-doc-1","docname":"invoice.pdf","docsize":3,
                 "levelCode":"IP","serverName":"shenzhen","version":"V1"}]}
                 """);
         DocumentProviderProperties.ProviderEntry provider = provider(true);
@@ -41,14 +41,15 @@ class HttpDocumentProviderAdapterTest {
 
         assertThat(captured.get()).isNotNull();
         assertThat(captured.get().headers().getFirst(HttpHeaders.COOKIE)).isEqualTo(COOKIE);
-        assertThat(document.objectKey()).isEqualTo("legacy-doc-1");
-        assertThat(document.source()).isEqualTo("LEGACY_AGENT_UPLOAD");
+        assertThat(document.objectKey()).isEqualTo("domain-doc-1");
+        assertThat(document.source()).isEqualTo("DOMAIN_AGENT_UPLOAD");
         JsonNode metadata = objectMapper.readTree(document.metadataJson());
         assertThat(metadata.at("/providerDocument/providerLocatorType").asText()).isEqualTo("DOC_ID");
-        assertThat(metadata.at("/providerDocument/docId").asText()).isEqualTo("legacy-doc-1");
+        assertThat(metadata.at("/providerDocument/docId").asText()).isEqualTo("domain-doc-1");
+        assertThat(metadata.at("/domainAgentId").asText()).isEqualTo("skill-tax");
         assertThat(document.metadataJson())
-                .contains("\"providerCode\":\"legacy-agent\"")
-                .contains("\"docId\":\"legacy-doc-1\"")
+                .contains("\"providerCode\":\"domain-agent\"")
+                .contains("\"docId\":\"domain-doc-1\"")
                 .doesNotContain(COOKIE)
                 .doesNotContain("cookieHeader");
     }
@@ -81,7 +82,7 @@ class HttpDocumentProviderAdapterTest {
     @Test
     void acceptsUrlOnlyUploadResponseAndStoresStableLocatorInsteadOfRawUrl() throws Exception {
         AtomicReference<ClientRequest> captured = new AtomicReference<>();
-        String url = "https://legacy.example/files/invoice.pdf?ticket=abc";
+        String url = "https://domain.example/files/invoice.pdf?ticket=abc";
         HttpDocumentProviderAdapter adapter = adapter(captured, """
                 {"data":[{"url":"%s","docname":"invoice.pdf","docsize":3}]}
                 """.formatted(url));
@@ -89,7 +90,7 @@ class HttpDocumentProviderAdapterTest {
 
         UploadedDocument document = adapter.upload(uploadRequest(provider, null));
 
-        assertThat(document.objectKey()).startsWith("legacy-url:");
+        assertThat(document.objectKey()).startsWith("domain-agent-url:");
         assertThat(document.objectKey()).doesNotContain(url);
         JsonNode metadata = objectMapper.readTree(document.metadataJson());
         assertThat(metadata.at("/providerDocument/providerLocatorType").asText()).isEqualTo("URL");
@@ -153,14 +154,14 @@ class HttpDocumentProviderAdapterTest {
 
     private String docIdResponse() {
         return """
-                {"data":[{"docid":"legacy-doc-1","docname":"invoice.pdf","docsize":3,
+                {"data":[{"docid":"domain-doc-1","docname":"invoice.pdf","docsize":3,
                 "levelCode":"IP","serverName":"shenzhen","version":"V1"}]}
                 """;
     }
 
     private DocumentProviderUploadRequest uploadRequest(DocumentProviderProperties.ProviderEntry provider,
                                                         String cookieHeader) {
-        return uploadRequest("legacy-agent", provider, cookieHeader);
+        return uploadRequest("domain-agent", provider, cookieHeader);
     }
 
     private DocumentProviderUploadRequest uploadRequest(String providerCode,
@@ -193,15 +194,15 @@ class HttpDocumentProviderAdapterTest {
         DocumentProviderProperties.ProviderEntry provider = new DocumentProviderProperties.ProviderEntry();
         provider.setType("http");
         provider.setEnabled(true);
-        provider.setSource("LEGACY_AGENT_UPLOAD");
-        provider.setBaseUrl("http://legacy.test");
+        provider.setSource("DOMAIN_AGENT_UPLOAD");
+        provider.setBaseUrl("http://domain.test");
         provider.setForwardCookie(forwardCookie);
         provider.getUpload().setEnabled(true);
         provider.getUpload().setPath("/upload");
         provider.getUpload().setMethod("POST");
         provider.getUpload().setContentType("multipart");
         provider.getUpload().setFileField("file");
-        provider.getUpload().setExtraFormFields(Map.of("skillId", "${skillId}", "sessionId", "${sessionId}"));
+        provider.getUpload().setExtraFormFields(Map.of("skillId", "${domainAgentId}", "sessionId", "${sessionId}"));
         return provider;
     }
 

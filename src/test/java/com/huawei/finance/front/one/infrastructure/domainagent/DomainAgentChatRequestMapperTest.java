@@ -1,11 +1,11 @@
-package com.huawei.finance.front.one.infrastructure.legacy;
+package com.huawei.finance.front.one.infrastructure.domainagent;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.huawei.finance.front.one.application.config.LegacySkillProperties;
-import com.huawei.finance.front.one.application.integration.agent.LegacySkillAgentRequest;
+import com.huawei.finance.front.one.application.config.DomainAgentProperties;
+import com.huawei.finance.front.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.document.DocumentSource;
@@ -16,23 +16,23 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-class LegacySkillChatRequestMapperTest {
-    private final LegacySkillProperties properties = new LegacySkillProperties();
-    private final LegacySkillChatRequestMapper mapper =
-            new LegacySkillChatRequestMapper(new ObjectMapper(), properties);
+class DomainAgentChatRequestMapperTest {
+    private final DomainAgentProperties properties = new DomainAgentProperties();
+    private final DomainAgentChatRequestMapper mapper =
+            new DomainAgentChatRequestMapper(new ObjectMapper(), properties);
 
     @Test
     @SuppressWarnings("unchecked")
     void preservesSceneParamExtensionFieldsAndOverridesDocListWithTrustedDocuments() {
-        LegacySkillAgentRequest request = request(Map.of(
-                "legacyAgent", Map.of(
+        DomainAgentRequest request = request(Map.of(
+                "domainAgent", Map.of(
                         "sceneParam", Map.of(
                                 "taxYear", "2026",
                                 "regionCode", "CN-SZ",
                                 "docList", List.of(Map.of("docId", "forged-doc"))
                         )
                 )
-        ), List.of(legacyDocument()));
+        ), List.of(domainAgentDocument()));
 
         Map<String, Object> wire = mapper.toWireRequest(request);
 
@@ -55,35 +55,35 @@ class LegacySkillChatRequestMapperTest {
         List<Map<String, Object>> docList = (List<Map<String, Object>>) sceneParam.get("docList");
         assertThat(docList).hasSize(1);
         assertThat(docList.get(0))
-                .containsEntry("docId", "legacy-doc-001")
+                .containsEntry("docId", "domain-doc-001")
                 .containsEntry("docName", "invoice.pdf")
-                .containsEntry("docRelativePath", "/legacy/invoice.pdf")
+                .containsEntry("docRelativePath", "/domain/invoice.pdf")
                 .containsEntry("docSize", 19800L)
                 .containsEntry("levelCode", "IP");
     }
 
     @Test
     void rejectsNonObjectSceneParam() {
-        LegacySkillAgentRequest request = request(Map.of(
-                "legacyAgent", Map.of("sceneParam", "bad-scene-param")
+        DomainAgentRequest request = request(Map.of(
+                "domainAgent", Map.of("sceneParam", "bad-scene-param")
         ), List.of());
 
         assertThatThrownBy(() -> mapper.toWireRequest(request))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("legacyAgent.sceneParam");
+                .hasMessageContaining("domainAgent.sceneParam");
     }
 
     @Test
-    void rejectsUrlOnlyLegacyDocumentForExplicitSkillDocList() {
-        LegacySkillAgentRequest request = request(Map.of(), List.of(urlOnlyLegacyDocument()));
+    void rejectsUrlOnlyDomainAgentDocumentForDocList() {
+        DomainAgentRequest request = request(Map.of(), List.of(urlOnlyDomainAgentDocument()));
 
         assertThatThrownBy(() -> mapper.toWireRequest(request))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("缺少可用于指定技能的 docId");
+                .hasMessageContaining("缺少可用于 DomainAgent 调用的 docId");
     }
 
-    private LegacySkillAgentRequest request(Map<String, Object> metadata, List<UploadedDocument> documents) {
-        return new LegacySkillAgentRequest(
+    private DomainAgentRequest request(Map<String, Object> metadata, List<UploadedDocument> documents) {
+        return new DomainAgentRequest(
                 new UserContext("tenant1", "user1", "User One"),
                 "session1",
                 "run1",
@@ -95,7 +95,7 @@ class LegacySkillChatRequestMapperTest {
         );
     }
 
-    private UploadedDocument legacyDocument() {
+    private UploadedDocument domainAgentDocument() {
         Instant now = Instant.parse("2026-06-11T00:00:00Z");
         return new UploadedDocument(
                 "doc1",
@@ -103,20 +103,20 @@ class LegacySkillChatRequestMapperTest {
                 "user1",
                 "session1",
                 "invoice.pdf",
-                "legacy-agent",
-                "legacy-doc-001",
+                "domain-agent",
+                "domain-doc-001",
                 "application/pdf",
                 19800L,
                 DocumentStatus.AVAILABLE.name(),
-                DocumentSource.LEGACY_AGENT_UPLOAD.name(),
+                DocumentSource.DOMAIN_AGENT_UPLOAD.name(),
                 null,
                 """
                         {
-                          "providerCode": "legacy-agent",
+                          "providerCode": "domain-agent",
                           "providerDocument": {
-                            "docId": "legacy-doc-001",
+                            "docId": "domain-doc-001",
                             "docName": "invoice.pdf",
-                            "docRelativePath": "/legacy/invoice.pdf",
+                            "docRelativePath": "/domain/invoice.pdf",
                             "docSize": 19800,
                             "levelCode": "IP"
                           }
@@ -127,7 +127,7 @@ class LegacySkillChatRequestMapperTest {
         );
     }
 
-    private UploadedDocument urlOnlyLegacyDocument() {
+    private UploadedDocument urlOnlyDomainAgentDocument() {
         Instant now = Instant.parse("2026-06-11T00:00:00Z");
         return new UploadedDocument(
                 "doc-url",
@@ -135,19 +135,19 @@ class LegacySkillChatRequestMapperTest {
                 "user1",
                 "session1",
                 "invoice.pdf",
-                "legacy-agent",
-                "legacy-url:abcd",
+                "domain-agent",
+                "domain-agent-url:abcd",
                 "application/pdf",
                 19800L,
                 DocumentStatus.AVAILABLE.name(),
-                DocumentSource.LEGACY_AGENT_UPLOAD.name(),
+                DocumentSource.DOMAIN_AGENT_UPLOAD.name(),
                 null,
                 """
                         {
-                          "providerCode": "legacy-agent",
+                          "providerCode": "domain-agent",
                           "providerDocument": {
                             "providerLocatorType": "URL",
-                            "url": "https://legacy.example/files/invoice.pdf",
+                            "url": "https://domain.example/files/invoice.pdf",
                             "docName": "invoice.pdf",
                             "docSize": 19800
                           }

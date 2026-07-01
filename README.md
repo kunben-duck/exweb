@@ -24,10 +24,10 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 ## 分层边界
 
 - `interfaces`：`/chat/runs`、WebSocket run topic subscribe、Event Resume、会话和文档上传协议适配。
-- `application`：聊天主编排、会话、记忆、RuntimeBinding、SubAgent 单轮调用、显式技能兼容调用和 Relay Runtime 调用。
+- `application`：聊天主编排、会话、记忆、RuntimeBinding、SubAgent 单轮调用、DomainAgent 指定调用和 Relay Runtime 调用。
 - `application.integration`：应用层出站集成抽象，定义对 Relay Runtime、SubAgent、IntentService、用例库、会话、记忆、文档、ID 和身份能力的依赖边界。
 - `domain`：聊天事件、意图结果、路由结果、RuntimeBinding、用例匹配结果等核心模型。
-- `infrastructure`：Redis、数据库/MyBatis、用例库 HTTP、SubAgent HTTP、Relay Runtime streamable HTTP、DocumentProvider、对象存储和 legacy skill HTTP 等适配。
+- `infrastructure`：Redis、数据库/MyBatis、用例库 HTTP、SubAgent HTTP、Relay Runtime streamable HTTP、DocumentProvider、对象存储和 DomainAgent HTTP 等适配。
 - MyBatis Mapper 接口只保留方法签名，当前 openGauss SQL 统一维护在 `src/main/resources/mapper/**/*.opengauss.xml`；`db/schema.sql` 只保留 DDL。后续适配其他数据库时，通过切换 `mybatis.mapper-locations` 选择对应方言 XML。
 
 ## 前端接入协议
@@ -81,13 +81,13 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 仓库提供独立本地联调台 `local-test-frontend/`。联调台通过 Node 代理访问后端，支持在页面中按 Postman 风格配置 `Cookie`、`Authorization`、`X-*` 等企业鉴权请求头；代理会在 HTTP、fetch Event Resume、文件下载和 WebSocket 握手时统一注入这些请求头。浏览器自身不会、也不能直接手写 `Cookie` 请求头或 WebSocket 自定义请求头。
 
 当 `POST /api/v1/ex/chat/runs`、`POST /api/v1/ex/chat/runs/{runId}/stop` 或 `POST /api/v1/ex/documents`
-携带标准 `Cookie` 请求头时，ChatService 会在请求入口捕获一次，并只作为内存快照透传给可信下游 adapter：Relay streamable HTTP、显式技能 legacy Agent chat/cancel，以及显式配置 `forward-cookie=true` 的 legacy 文档 upload provider。Cookie 不会写入 `metadata_json`、消息、事件、日志、前端响应、multipart form 或下游请求体。普通 default-storage 对象存储上传不会透传 Cookie。
+携带标准 `Cookie` 请求头时，ChatService 会在请求入口捕获一次，并只作为内存快照透传给可信下游 adapter：Relay streamable HTTP、DomainAgent chat/cancel，以及显式配置 `forward-cookie=true` 的 DomainAgent 文档 upload provider。Cookie 不会写入 `metadata_json`、消息、事件、日志、前端响应、multipart form 或下游请求体。普通 default-storage 对象存储上传不会透传 Cookie。
 
 外部 HTTP 服务调用还支持统一的集成服务鉴权请求头防腐层。`financeex.integration-auth.enabled=false`
 时不注入任何鉴权头；开启后，`AuthHeaderProviderRegistry` 会按 `serviceCode` 选择 provider。
 首版预置 `welink-share`、`intent-service`、`use-case-library`、`sub-agent` 可配置为 `sgov`，
-并由企业实现的 `SgovTokenResolver` 提供 `Authorization` 值。Relay Runtime、显式技能 legacy Agent
-和 legacy 文档 provider 默认不接入该鉴权头，仍保持现有 Cookie/普通调用行为。
+并由企业实现的 `SgovTokenResolver` 提供 `Authorization` 值。Relay Runtime、DomainAgent
+和 DomainAgent 文档 provider 默认不接入该鉴权头，仍保持现有 Cookie/普通调用行为。
 
 租户和用户身份不从前端 Header/Query/Body 透传，统一由请求入口通过 `AuthContextProvider` 从服务端身份上下文解析一次，并以不可变 `UserContext` 传入应用层。应用层、后台 run 和 `boundedElastic` 阻塞线程不会再次读取请求 ThreadLocal。本地开发态必须显式配置：
 
@@ -131,11 +131,11 @@ export FINANCEEX_DEV_USERNAME=developer
 
 `metadata.forceNewTask=true` 会取消当前 active RuntimeBinding，并重新读取可选路由信号；如果用例库和意图服务都关闭，则直接进入 Relay Runtime。
 
-`metadata.selectedSkillId` 用于兼容存量 Agent 的“前端显式选择技能”场景。该字段存在且非空时，本轮 run 进入
-`EXPLICIT_SKILL` 路由，直接调用配置化老 Agent chat 接口，并使用文档库中 `targetProvider=legacy-agent`
-上传后保存的 provider 文档元数据组装 `sceneParam.docList`。前端可以在 `metadata.legacyAgent.sceneParam`
+`metadata.selectedDomainAgentId` 用于前端显式选择财经领域 DomainAgent 的场景。该字段存在且非空时，本轮 run 进入
+`DOMAIN_AGENT` 路由，直接调用配置化 DomainAgent chat 接口，并使用文档库中 `targetProvider=domain-agent`
+上传后保存的 provider 文档元数据组装 `sceneParam.docList`。前端可以在 `metadata.domainAgent.sceneParam`
 传入其他业务扩展字段，但 `docList` 始终由后端可信生成并覆盖，避免伪造文档引用。该路径不会读取或创建 RuntimeBinding，
-避免把不具备稳定 ChatService 多轮契约的历史技能误当成 Relay Runtime 续接会话。
+避免把不具备稳定 ChatService 多轮契约的 DomainAgent 误当成 Relay Runtime 续接会话。
 
 ## 会话与执行标识
 
@@ -264,7 +264,7 @@ export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
 
 用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。SubAgent 当前通过单轮 HTTP 文本流接入；Relay Runtime 通过 AgentRuntime 防腐层接入，当前上线版本只保留下游 Relay streamable HTTP 接入。
 意图服务当前适配 `code/data/result/items[]` 包装响应，选择最高 `confidence` 的 item，并把 `resourceInstruction.resourceId` 映射为候选技能；只有 `confidence >= FINANCEEX_INTENT_CONFIDENCE_THRESHOLD` 时才采用该技能，否则进入 Relay Runtime。意图服务 HTTP 入参和出参转换已收敛在 infrastructure intent mapper 中，后续下游协议变化优先修改 mapper，不影响应用层 `IntentService` 端口和路由策略。意图服务调用失败后默认最多重试 3 次，可通过 `FINANCEEX_INTENT_MAX_RETRIES` 调整；运行时最多按 10 次重试生效。
-意图识别记录是可选旁路能力，默认关闭。开启 `FINANCEEX_INTENT_RECORD_ENABLED=true` 后，仅在本轮实际调用意图服务时异步写入 `fin_ex_intent_recognition_t`，记录用户问题、候选 items、最高置信结果、最终路由是否采纳以及调用耗时，便于后续准确率统计和排障。该写入使用 Servlet/MVC 友好的专用线程池，不读取请求 ThreadLocal；线程池拒绝、序列化失败或 DB 写入失败只记录 warn，不影响 `/chat/runs` 主链路。显式技能、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会写意图记录。
+意图识别记录是可选旁路能力，默认关闭。开启 `FINANCEEX_INTENT_RECORD_ENABLED=true` 后，仅在本轮实际调用意图服务时异步写入 `fin_ex_intent_recognition_t`，记录用户问题、候选 items、最高置信结果、最终路由是否采纳以及调用耗时，便于后续准确率统计和排障。该写入使用 Servlet/MVC 友好的专用线程池，不读取请求 ThreadLocal；线程池拒绝、序列化失败或 DB 写入失败只记录 warn，不影响 `/chat/runs` 主链路。DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会写意图记录。
 
 这里需要明确 WebSocket 边界：
 
@@ -304,9 +304,9 @@ export FINANCEEX_RELAY_AGENT_STOP_PATH=/v1/agent/runs/{runId}/stop
 export FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ENABLED=true
 export FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_MAX_LENGTH=8192
 export FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ALLOWED_ADAPTERS=relay-stream-http
-# legacy-agent 文档 provider upload 可单独开启 Cookie 请求头透传
+# domain-agent 文档 provider upload 可单独开启 Cookie 请求头透传
 export FINANCEEX_DOCUMENT_FORWARD_COOKIE_MAX_LENGTH=8192
-export FINANCEEX_LEGACY_AGENT_DOCUMENT_FORWARD_COOKIE_ENABLED=true
+export FINANCEEX_DOMAIN_AGENT_DOCUMENT_FORWARD_COOKIE_ENABLED=true
 ```
 
 ### MVC 生产治理配置
@@ -374,15 +374,15 @@ export FINANCEEX_RELAY_AGENT_CONTEXT_AS_ANSWER=true
 
 SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP 文本流调用。Relay Runtime 作为 AgentRuntime 实现只保留 `relay-stream-http` API adapter，使用 Relay HTTP 流式协议。
 
-Cookie 透传是 adapter 级能力：`relay-stream-http`、显式技能 legacy Agent chat/cancel，以及 `forward-cookie=true`
+Cookie 透传是 adapter 级能力：`relay-stream-http`、DomainAgent chat/cancel，以及 `forward-cookie=true`
 的 HTTP 文档 provider upload 会把入口 Cookie 放入下游 HTTP 请求头。`AgentRuntimeRequest.forwardHeaders`、
-`LegacySkillAgentRequest.forwardHeaders`、`DocumentUploadCommand.forwardHeaders` 与 cancel 请求中的转发头均被 JSON 忽略，避免 Cookie 进入下游请求体、multipart form 或文档元数据。
+`DomainAgentRequest.forwardHeaders`、`DocumentUploadCommand.forwardHeaders` 与 cancel 请求中的转发头均被 JSON 忽略，避免 Cookie 进入下游请求体、multipart form 或文档元数据。
 
-Relay Runtime 请求与响应均经过 adapter 防腐层：应用层使用 `AgentRuntimeRequest`，但下游请求体会映射为 Relay 专用 wire DTO，只保留 `runId/sessionId/runtimeSessionId/query/attachments/metadata` 等必要字段；下游 plain text、JSON chunk 或 SSE-like `data:` chunk 可选进入 raw log MQ 旁路，再归一化为 ChatService 标准 `ChatEvent`。`FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 只用于提高 Relay WebClient 单个响应 frame 的 codec 解码上限，避免默认 256KB 过早拦截大引用/卡片响应；它不是前端事件大小治理，持续超大对象后续仍应通过 DataBuffer 流式解码和 fragment 分片处理。前端通过 `ConversationTurnStreamDto.payload.encodedItem.data` 消费 `message.delta.payload.delta`、`message.snapshot.payload.content`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.reference`、`runtime.card`、`runtime.event`、`message.completed`、`run.failed` 等稳定事件，不需要理解 Relay 或 legacy-agent 原始响应格式。大对象分片不新增顶层事件类型，而是通过 `payload.fragment/itemId/delta/complete` 表达。
+Relay Runtime 请求与响应均经过 adapter 防腐层：应用层使用 `AgentRuntimeRequest`，但下游请求体会映射为 Relay 专用 wire DTO，只保留 `runId/sessionId/runtimeSessionId/query/attachments/metadata` 等必要字段；下游 plain text、JSON chunk 或 SSE-like `data:` chunk 可选进入 raw log MQ 旁路，再归一化为 ChatService 标准 `ChatEvent`。`FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 只用于提高 Relay WebClient 单个响应 frame 的 codec 解码上限，避免默认 256KB 过早拦截大引用/卡片响应；它不是前端事件大小治理，持续超大对象后续仍应通过 DataBuffer 流式解码和 fragment 分片处理。前端通过 `ConversationTurnStreamDto.payload.encodedItem.data` 消费 `message.delta.payload.delta`、`message.snapshot.payload.content`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.reference`、`runtime.card`、`runtime.event`、`message.completed`、`run.failed` 等稳定事件，不需要理解 Relay 或 domain-agent 原始响应格式。大对象分片不新增顶层事件类型，而是通过 `payload.fragment/itemId/delta/complete` 表达。
 
-Relay 响应映射的核心规则是：`type=agent,is_streaming=true` 且包含 `content/context` 时映射为 `message.delta`，用于流式草稿追加；`type=agent,is_streaming=false` 映射为 `message.snapshot`，用于最终正文替换和历史消息保存；纯文本 `steam-complete`、`stream-complete`、`[DONE]` 等终态映射为 `message.completed`；`relay-progress`、`project_home`、`available-modes`、`agent-call`、`thinking-operation-*`、`tool_call_streaming`、引用来源类事件等运行过程分别映射为对应 `runtime.*` 事件，并在 run 完成后保存到 `fin_ex_chat_message_part_t`，供历史消息回显。Relay `type=tool-structured-result` 表示 Relay 内部 MCP 工具结构化结果，ChatService 会读取 `result_data/resultData` 下的 `widget.data`，按 legacy-like 规则映射为 `message.delta`、`runtime.progress`、`runtime.reference` 或 `runtime.card`，并把 `sourceType` 标记为 `relay-content`、`relay-processResult`、`relay-searchList`、`relay-sourcesDocuments`、`relay-diyCardScene` 等。未知合法 JSON object 才进入脱敏限长后的 `runtime.event.payload.sourcePayload`。Relay 原始 `type` 只进入 payload 的 `sourceType` 或 raw log，不能作为 ChatService 顶层 `event_type`。
+Relay 响应映射的核心规则是：`type=agent,is_streaming=true` 且包含 `content/context` 时映射为 `message.delta`，用于流式草稿追加；`type=agent,is_streaming=false` 映射为 `message.snapshot`，用于最终正文替换和历史消息保存；纯文本 `steam-complete`、`stream-complete`、`[DONE]` 等终态映射为 `message.completed`；`relay-progress`、`project_home`、`available-modes`、`agent-call`、`thinking-operation-*`、`tool_call_streaming`、引用来源类事件等运行过程分别映射为对应 `runtime.*` 事件，并在 run 完成后保存到 `fin_ex_chat_message_part_t`，供历史消息回显。Relay `type=tool-structured-result` 表示 Relay 内部 MCP 工具结构化结果，ChatService 会读取 `result_data/resultData` 下的 `widget.data`，按 DomainAgent 风格 规则映射为 `message.delta`、`runtime.progress`、`runtime.reference` 或 `runtime.card`，并把 `sourceType` 标记为 `relay-content`、`relay-processResult`、`relay-searchList`、`relay-sourcesDocuments`、`relay-diyCardScene` 等。未知合法 JSON object 才进入脱敏限长后的 `runtime.event.payload.sourcePayload`。Relay 原始 `type` 只进入 payload 的 `sourceType` 或 raw log，不能作为 ChatService 顶层 `event_type`。
 
-legacy-agent 指定技能响应也遵守同一标准事件契约：`content` 中 `<think>...</think>` 片段映射为 `runtime.thinking`，不会写入 assistant 正文；非 think 内容映射为 `message.delta`；`processResult` 映射为 `runtime.progress`；`searchList/sourcesDocuments` 映射为 `runtime.reference`；`cardUrl/diyCardScene/cardList/openCard` 映射为 `runtime.card`。如果 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 等对象被下游网络 chunk 截断，服务端不会把半截内容解析为 invalid-json，而是在对应的 `runtime.card/runtime.reference/runtime.progress` payload 中携带 `fragment=true`、`itemId`、`delta` 和 `complete`；前端可按 `payload.itemId` 拼接，不应把这些 runtime 片段拼入 assistant 正文。当前 legacy 协议下卡片字段通常不会在同一个 chunk 中同时出现，卡片事件会保留原始 `sourceType`，同帧的 `intent/skillId` 会保留在 card payload 中；`endFlag=true` 映射为 `message.completed`。
+domain-agent DomainAgent 指定调用响应也遵守同一标准事件契约：`content` 中 `<think>...</think>` 片段映射为 `runtime.thinking`，不会写入 assistant 正文；非 think 内容映射为 `message.delta`；`processResult` 映射为 `runtime.progress`；`searchList/sourcesDocuments` 映射为 `runtime.reference`；`cardUrl/diyCardScene/cardList/openCard` 映射为 `runtime.card`。如果 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 等对象被下游网络 chunk 截断，服务端不会把半截内容解析为 invalid-json，而是在对应的 `runtime.card/runtime.reference/runtime.progress` payload 中携带 `fragment=true`、`itemId`、`delta` 和 `complete`；前端可按 `payload.itemId` 拼接，不应把这些 runtime 片段拼入 assistant 正文。当前 domain-agent 协议下卡片字段通常不会在同一个 chunk 中同时出现，卡片事件会保留原始 `sourceType`，同帧的 `intent/domainAgentId` 会保留在 card payload 中；`endFlag=true` 映射为 `message.completed`。
 
 ## 上线版本边界
 
@@ -426,26 +426,26 @@ mvn spring-boot:run
 ## 文档存储
 
 文档能力分为“文档库资产”和“provider 托管内容”两层：前端始终把本地文件上传到
-FinanceEXChatService 统一后端，后端再根据 `targetProvider` 选择对象存储、老 Agent 或未来领域
+FinanceEXChatService 统一后端，后端再根据 `targetProvider` 选择对象存储、DomainAgent 或未来领域
 Agent 的文档 provider adapter。
 数据库的 `fin_ex_uploaded_document_t` 保存文档库元数据，聊天请求只引用 `documentId`，不会把文件正文放进消息体。
 上传接口对外只有一条 `POST /api/v1/ex/documents`，服务端会按启动模式自动选择适配器：
 Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共用同一套临时落盘和 provider 上传逻辑。
 不传 `targetProvider` 时走默认 `default-storage`，即当前 S3/OBS/local 对象存储；传
-`targetProvider=legacy-agent` 时会转发老 Agent upload 接口，并把老 Agent 返回的 docId 或 url、docName、docSize
+`targetProvider=domain-agent` 时会转发 DomainAgent upload 接口，并把 DomainAgent 返回的 docId 或 url、docName、docSize
 等写入统一文档库 `metadataJson.providerDocument`。如果该 provider 配置 `forward-cookie=true`，上传入口捕获到的
-Cookie 会作为下游 upload HTTP header 透传，用于老 Agent 文件服务的企业鉴权；Cookie 不会进入 form 字段或文档库元数据。
+Cookie 会作为下游 upload HTTP header 透传，用于 DomainAgent 文件服务的企业鉴权；Cookie 不会进入 form 字段或文档库元数据。
 传 `targetProvider=s3-upload` 时会转发外部 `/uploadFile` multipart 接口，并把返回的
 `docId/docName/url/docSize/docRelativePath/docStatus/fileSize/message/error` 等字段写入统一文档库；该 provider
 默认关闭，可通过 `FINANCEEX_S3_UPLOAD_DOCUMENT_PROVIDER_ENABLED=true` 和 `FINANCEEX_S3_UPLOAD_BASE_URL` 启用。
 文档接口响应里的 `metadataJson` 会解析为 JSON object，便于前端直接读取；数据库表字段仍保存 JSON 字符串。
-如果老 Agent 上传响应没有 `docId` 但返回了 `url`，文档库仍视为上传成功：`objectKey` 保存
-`legacy-url:{sha256(url)}` 这种短稳定定位符，完整 URL 只保存在 `metadataJson.providerDocument.url`。
-这类 URL-only 文档可用于文档库展示和下载/跳转扩展，但第一版不会自动进入指定技能 `sceneParam.docList`。
+如果 DomainAgent 上传响应没有 `docId` 但返回了 `url`，文档库仍视为上传成功：`objectKey` 保存
+`domain-agent-url:{sha256(url)}` 这种短稳定定位符，完整 URL 只保存在 `metadataJson.providerDocument.url`。
+这类 URL-only 文档可用于文档库展示和下载/跳转扩展，但第一版不会自动进入 DomainAgent 指定调用 `sceneParam.docList`。
 
 文档接口：
 
-- `POST /api/v1/ex/documents`：上传本地文件并登记到文档库；可选 multipart 字段包括 `targetProvider`、`skillId`、`metadata`。
+- `POST /api/v1/ex/documents`：上传本地文件并登记到文档库；可选 multipart 字段包括 `targetProvider`、`domainAgentId`、`metadata`。
 - `GET /api/v1/ex/documents?sessionId=...&limit=20&cursor=...`：分页查询当前用户文档库，`sessionId` 可选。
 - `GET /api/v1/ex/documents/{documentId}`：查询单个文档。
 - `PATCH /api/v1/ex/documents/{documentId}`：更新文档展示名或扩展元数据。
@@ -469,10 +469,10 @@ Cookie 会作为下游 upload HTTP header 透传，用于老 Agent 文件服务�
 
 服务端会在进入 Runtime 前回查文档库，补齐可信的文件名、MIME、大小、来源和 tokenSize，并校验文档归属和状态。
 
-指定历史技能时，前端应先使用同一个上传接口并传 `targetProvider=legacy-agent`。服务端会调用配置中的
-老 Agent upload path，把返回的 `docid/docname/docsize/levelCode/serverName/version` 等 allowlist 字段
-保存到 `metadataJson.providerDocument`；随后 `/chat/runs.metadata.selectedSkillId` 会触发老 Agent chat
-adapter，并只允许引用这些 legacy provider 文档。普通 default-storage 文档不会被自动转传给老 Agent。
+指定 DomainAgent 时，前端应先使用同一个上传接口并传 `targetProvider=domain-agent`。服务端会调用配置中的
+DomainAgent upload path，把返回的 `docid/docname/docsize/levelCode/serverName/version` 等 allowlist 字段
+保存到 `metadataJson.providerDocument`；随后 `/chat/runs.metadata.selectedDomainAgentId` 会触发 DomainAgent chat
+adapter，并只允许引用这些 domain-agent provider 文档。普通 default-storage 文档不会被自动转传给 DomainAgent。
 
 外部 S3 upload API 接入示例：
 

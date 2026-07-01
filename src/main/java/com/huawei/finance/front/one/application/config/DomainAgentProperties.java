@@ -6,36 +6,36 @@ import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * 老 Agent 指定技能接入配置。
+ * 财经领域 DomainAgent 指定调用配置。
  *
- * <p>该配置只用于前端显式选择 skillId 的历史兼容路径。默认关闭，避免未配置老 Agent 地址时
- * 误把普通聊天流量路由到历史服务。</p>
+ * <p>该配置只用于前端显式选择 domainAgentId 的领域 Agent 调用路径。默认关闭，避免未配置
+ * DomainAgent 服务地址时误把普通聊天流量路由到指定领域 Agent。</p>
  */
-@ConfigurationProperties(prefix = "financeex.legacy-skill")
-public class LegacySkillProperties {
-    /** 是否启用历史技能调用能力。 */
+@ConfigurationProperties(prefix = "financeex.domain-agent")
+public class DomainAgentProperties {
+    /** 是否启用 DomainAgent 指定调用能力。 */
     private boolean enabled = false;
-    /** 老 Agent 服务基础地址。 */
+    /** DomainAgent 服务基础地址。 */
     private String baseUrl = "";
-    /** 老 Agent chat 流式接口路径。 */
+    /** DomainAgent chat 流式接口路径。 */
     private String chatPath = "/api/chat";
-    /** 老 Agent stop 接口路径；为空表示不支持下游取消。 */
+    /** DomainAgent stop 接口路径；为空表示不支持下游取消。 */
     private String stopPath = "";
-    /** 老 Agent 调用超时时间。 */
+    /** DomainAgent 调用超时时间。 */
     private Duration timeout = Duration.ofSeconds(120);
-    /** 允许调用的 skillId；为空表示不额外限制。 */
-    private List<String> allowedSkillIds = new ArrayList<>();
-    /** 老 Agent 默认平台字段。 */
+    /** 允许调用的 domainAgentId；为空表示不额外限制。 */
+    private List<String> allowedDomainAgentIds = new ArrayList<>();
+    /** DomainAgent 默认平台字段。 */
     private String defaultPlatform = "PC";
-    /** 老 Agent 默认 qaType。 */
+    /** DomainAgent 默认 qaType。 */
     private String defaultQaType = "normalQa";
-    /** 老 Agent 默认 streamFlag。 */
+    /** DomainAgent 默认 streamFlag。 */
     private String defaultStreamFlag = "stream";
-    /** 老 Agent 默认思考开关。 */
+    /** DomainAgent 默认思考开关。 */
     private int defaultIsThinking = 1;
-    /** 单次指定技能调用最大附件数。 */
+    /** 单次 DomainAgent 调用最大附件数。 */
     private int maxAttachments = 10;
-    /** 单个未完成 legacy 流式 frame 允许暂存的最大字节数，防止下游异常大 JSON 导致 OOM。 */
+    /** 单个未完成 DomainAgent 流式 frame 允许暂存的最大字节数，防止下游异常大 JSON 导致 OOM。 */
     private int maxPendingFrameBytes = 1024 * 1024;
     /** 大对象 fragment 输出的单片最大字节数，避免单个 WS/Event Resume 事件体过大。 */
     private int maxFragmentBytes = 8192;
@@ -50,9 +50,9 @@ public class LegacySkillProperties {
     public void setStopPath(String stopPath) { this.stopPath = stopPath; }
     public Duration getTimeout() { return timeout; }
     public void setTimeout(Duration timeout) { this.timeout = timeout; }
-    public List<String> getAllowedSkillIds() { return allowedSkillIds; }
-    public void setAllowedSkillIds(List<String> allowedSkillIds) {
-        this.allowedSkillIds = allowedSkillIds == null ? List.of() : allowedSkillIds.stream()
+    public List<String> getAllowedDomainAgentIds() { return allowedDomainAgentIds; }
+    public void setAllowedDomainAgentIds(List<String> allowedDomainAgentIds) {
+        this.allowedDomainAgentIds = allowedDomainAgentIds == null ? List.of() : allowedDomainAgentIds.stream()
                 .filter(value -> value != null && !value.isBlank())
                 .map(String::trim)
                 .toList();
@@ -72,11 +72,12 @@ public class LegacySkillProperties {
     public int getMaxFragmentBytes() { return maxFragmentBytes; }
     public void setMaxFragmentBytes(int maxFragmentBytes) { this.maxFragmentBytes = maxFragmentBytes; }
 
-    public boolean skillAllowed(String skillId) {
-        if (skillId == null || skillId.isBlank()) {
+    public boolean domainAgentAllowed(String domainAgentId) {
+        if (domainAgentId == null || domainAgentId.isBlank()) {
             return false;
         }
-        return allowedSkillIds == null || allowedSkillIds.isEmpty() || allowedSkillIds.contains(skillId);
+        return allowedDomainAgentIds == null || allowedDomainAgentIds.isEmpty()
+                || allowedDomainAgentIds.contains(domainAgentId);
     }
 
     public int normalizedMaxAttachments() {

@@ -75,7 +75,7 @@ class RuntimeBindingApplicationServiceTest {
     void ignoresCachedBindingFromDifferentRuntimeProvider() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
         InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
-        cache.put(binding("legacy-runtime", RuntimeBindingStatus.ACTIVE));
+        cache.put(binding("previous-runtime", RuntimeBindingStatus.ACTIVE));
         RuntimeBindingApplicationService service = service(repository, cache);
 
         Optional<RuntimeBinding> found = service.findActive("t", "u", "s");

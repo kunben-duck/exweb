@@ -13,7 +13,7 @@ import java.io.InputStream;
  * @param sizeBytes 文件字节大小。
  * @param inputStream 文件内容输入流，由应用服务负责读取并关闭。
  * @param targetProvider 目标文档 provider；为空时使用默认对象存储 provider。
- * @param skillId 上传时关联的技能标识，可为空，仅由需要技能上下文的 provider 使用。
+ * @param domainAgentId 上传时关联的 DomainAgent 标识，可为空，仅由需要领域 Agent 上下文的 provider 使用。
  * @param metadataJson 上传扩展元数据 JSON，可为空；只用于审计和 provider adapter 参数。
  * @param forwardHeaders 请求入口捕获的 Cookie 等转发头快照；仅用于 provider 出站请求头，不能进入 form 或 metadata。
  */
@@ -24,7 +24,7 @@ public record DocumentUploadCommand(
         long sizeBytes,
         InputStream inputStream,
         String targetProvider,
-        String skillId,
+        String domainAgentId,
         String metadataJson,
         @JsonIgnore RuntimeForwardHeaders forwardHeaders
 ) {
@@ -45,8 +45,8 @@ public record DocumentUploadCommand(
      * 兼容不需要 Cookie 透传的 provider 上传调用。
      */
     public DocumentUploadCommand(String sessionId, String originalFilename, String contentType, long sizeBytes,
-                                 InputStream inputStream, String targetProvider, String skillId, String metadataJson) {
-        this(sessionId, originalFilename, contentType, sizeBytes, inputStream, targetProvider, skillId, metadataJson,
+                                 InputStream inputStream, String targetProvider, String domainAgentId, String metadataJson) {
+        this(sessionId, originalFilename, contentType, sizeBytes, inputStream, targetProvider, domainAgentId, metadataJson,
                 RuntimeForwardHeaders.empty());
     }
 }

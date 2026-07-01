@@ -117,7 +117,7 @@ final class AssistantAssembly {
             return firstText(payload, "delta", "title", "url", "referenceType", "sourceType");
         }
         if ("runtime.card".equals(eventType)) {
-            return firstText(payload, "delta", "cardUrl", "intent", "skillId", "cardType", "sourceType");
+            return firstText(payload, "delta", "cardUrl", "intent", "domainAgentId", "skillId", "cardType", "sourceType");
         }
         return firstText(payload, "text", "displayText", "sourceType");
     }

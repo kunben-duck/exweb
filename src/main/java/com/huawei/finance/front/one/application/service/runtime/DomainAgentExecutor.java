@@ -1,9 +1,9 @@
 package com.huawei.finance.front.one.application.service.runtime;
 
 import com.huawei.finance.front.one.application.facade.DocumentFacade;
-import com.huawei.finance.front.one.application.integration.agent.LegacySkillAgentClient;
-import com.huawei.finance.front.one.application.integration.agent.LegacySkillAgentRequest;
-import com.huawei.finance.front.one.application.integration.agent.LegacySkillCancelRequest;
+import com.huawei.finance.front.one.application.integration.agent.DomainAgentClient;
+import com.huawei.finance.front.one.application.integration.agent.DomainAgentRequest;
+import com.huawei.finance.front.one.application.integration.agent.DomainAgentCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
@@ -16,29 +16,29 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * 显式技能执行器。
+ * 财经领域 DomainAgent 指定执行器。
  *
- * <p>该执行器只服务前端明确传入 selectedSkillId 的历史技能兼容路径。它不创建 RuntimeBinding，
+ * <p>该执行器只服务前端明确传入 selectedDomainAgentId 的 DomainAgent 路径。它不创建 RuntimeBinding，
  * 也不参与默认复杂任务 Runtime 多轮续接。</p>
  */
 @Service
-public class LegacySkillExecutor {
-    private final LegacySkillAgentClient legacySkillAgentClient;
+public class DomainAgentExecutor {
+    private final DomainAgentClient domainAgentClient;
     private final DocumentFacade documentFacade;
     private final WorkloadConcurrencyLimiter concurrencyLimiter;
 
-    public LegacySkillExecutor(LegacySkillAgentClient legacySkillAgentClient, DocumentFacade documentFacade,
+    public DomainAgentExecutor(DomainAgentClient domainAgentClient, DocumentFacade documentFacade,
                                WorkloadConcurrencyLimiter concurrencyLimiter) {
-        this.legacySkillAgentClient = legacySkillAgentClient;
+        this.domainAgentClient = domainAgentClient;
         this.documentFacade = documentFacade;
         this.concurrencyLimiter = concurrencyLimiter;
     }
 
-    public Flux<ChatEvent> execute(LegacySkillExecutionContext context) {
+    public Flux<ChatEvent> execute(DomainAgentExecutionContext context) {
         var command = context.command();
         UserContext user = context.user();
         List<UploadedDocument> documents = documentFacade.resolveDocumentsForUser(user, command.attachments());
-        LegacySkillAgentRequest request = new LegacySkillAgentRequest(
+        DomainAgentRequest request = new DomainAgentRequest(
                 user,
                 command.sessionId(),
                 context.runId(),
@@ -48,14 +48,14 @@ public class LegacySkillExecutor {
                 command.metadata(),
                 context.forwardHeaders()
         );
-        return concurrencyLimiter.protectAgentRuntime(legacySkillAgentClient.query(request));
+        return concurrencyLimiter.protectAgentRuntime(domainAgentClient.query(request));
     }
 
     public Mono<Void> cancel(ChatRun run, UserContext user, RuntimeForwardHeaders forwardHeaders) {
         if (run == null || run.agentCode() == null || run.agentCode().isBlank()) {
             return Mono.empty();
         }
-        return legacySkillAgentClient.cancel(new LegacySkillCancelRequest(
+        return domainAgentClient.cancel(new DomainAgentCancelRequest(
                 user,
                 run.sessionId(),
                 run.id(),

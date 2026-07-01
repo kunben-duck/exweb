@@ -155,7 +155,7 @@ class RedisChatLiveEventBusTest {
     }
 
     @Test
-    void subscribeAcceptsRemoteAndLegacyPayloads() throws Exception {
+    void subscribeAcceptsRemoteAndPayloadsWithoutPublisherInstance() throws Exception {
         RedisChatLiveEventBus bus = newBus(new CapturingStringRedisTemplate());
 
         StepVerifier.create(bus.subscribe("chat-run-run1").take(2))
@@ -175,7 +175,7 @@ class RedisChatLiveEventBusTest {
                             "sequence", 3L,
                             "eventType", "message.delta",
                             "createdAt", Instant.now(),
-                            "payload", Map.of("delta", "legacy")
+                            "payload", Map.of("delta", "without-instance-id")
                     )), null);
                 })
                 .assertNext(event -> {
@@ -184,7 +184,7 @@ class RedisChatLiveEventBusTest {
                 })
                 .assertNext(event -> {
                     org.assertj.core.api.Assertions.assertThat(event.sequence()).isEqualTo(3L);
-                    org.assertj.core.api.Assertions.assertThat(event.payload()).containsEntry("delta", "legacy");
+                    org.assertj.core.api.Assertions.assertThat(event.payload()).containsEntry("delta", "without-instance-id");
                 })
                 .verifyComplete();
     }

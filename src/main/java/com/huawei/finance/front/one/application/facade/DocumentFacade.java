@@ -115,7 +115,7 @@ public interface DocumentFacade {
     /**
      * 解析当前用户可用的完整文档元数据。
      *
-     * <p>指定技能 adapter 需要读取 provider 私有文档 ID 和 metadataJson 来组装下游 chat 入参，
+     * <p>DomainAgent adapter 需要读取 provider 私有文档 ID 和 metadataJson 来组装下游 chat 入参，
      * 因此不能只依赖 {@link AttachmentRef} 的展示字段。</p>
      *
      * @param user 当前调用方身份快照。

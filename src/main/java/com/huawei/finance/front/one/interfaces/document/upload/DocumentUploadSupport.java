@@ -136,7 +136,7 @@ public class DocumentUploadSupport {
             }
             InputStream inputStream = Files.newInputStream(tempFile.path(), StandardOpenOption.READ);
             return new DocumentUploadCommand(context.sessionId(), tempFile.originalFilename(), tempFile.contentType(),
-                    size, inputStream, context.targetProvider(), context.skillId(), context.metadataJson(),
+                    size, inputStream, context.targetProvider(), context.domainAgentId(), context.metadataJson(),
                     tempFile.forwardHeaders());
         }).subscribeOn(Schedulers.boundedElastic()).flatMap(command -> facade.upload(user, command));
     }

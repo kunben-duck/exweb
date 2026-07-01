@@ -11,7 +11,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * 文档 provider 配置。
  *
  * <p>前端始终调用统一文档库接口，后端根据 targetProvider 选择不同 provider adapter。
- * 该配置只描述 provider 能力、接口地址和响应字段映射，避免把老 Agent 或领域 Agent 的上传协议
+ * 该配置只描述 provider 能力、接口地址和响应字段映射，避免把 DomainAgent 或其他外部文档服务的上传协议
  * 写死到文档应用服务。</p>
  */
 @ConfigurationProperties(prefix = "financeex.documents.providers")
@@ -119,7 +119,7 @@ public class DocumentProviderProperties {
         private String contentType = "multipart";
         /** multipart 文件字段名。 */
         private String fileField = "file";
-        /** 额外 form 字段模板，例如 skillId: "${skillId}"。 */
+        /** 额外 form 字段模板，例如下游字段 skillId 可以配置为 "${domainAgentId}"。 */
         private Map<String, String> extraFormFields = new LinkedHashMap<>();
 
         public boolean isEnabled() { return enabled; }

@@ -31,7 +31,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 /**
  * 配置化 HTTP 文档 provider adapter。
  *
- * <p>该 adapter 用于老 Agent 和未来领域 Agent 的“先上传文件、再把 provider 文件 ID 传给 chat”
+ * <p>该 adapter 用于 DomainAgent 和未来外部文档 provider 的“先上传文件、再把 provider 文件 ID 传给 chat”
  * 场景。URL、multipart 文件字段、额外 form 字段和响应字段映射都来自配置，不写死具体服务协议。</p>
  */
 @Component
@@ -64,7 +64,7 @@ public class HttpDocumentProviderAdapter implements DocumentProviderAdapter {
         }
         /*
          * HTTP provider 上传需要把临时文件读入 multipart body。这里复用文档存储并发隔离，
-         * 防止多个 legacy/领域 Agent provider 同时上传大文件时把 JVM 堆内存打满。
+         * 防止多个外部文档 provider 同时上传大文件时把 JVM 堆内存打满。
          */
         String response;
         try (WorkloadConcurrencyLimiter.Permit ignored = concurrencyLimiter.acquireDocumentStorage()) {
@@ -179,7 +179,7 @@ public class HttpDocumentProviderAdapter implements DocumentProviderAdapter {
             }
             String locatorType = providerDocumentId == null ? "URL" : "DOC_ID";
             String objectKey = providerDocumentId == null
-                    ? "legacy-url:" + sha256Hex(providerDocumentUrl)
+                    ? "domain-agent-url:" + sha256Hex(providerDocumentUrl)
                     : providerDocumentId;
             String providerDocumentName = text(documentNode, mapping.getDocumentNameField());
             Long providerDocumentSize = longValue(documentNode, mapping.getDocumentSizeField());
@@ -245,7 +245,7 @@ public class HttpDocumentProviderAdapter implements DocumentProviderAdapter {
             Map<String, Object> metadata = new LinkedHashMap<>();
             metadata.put("providerCode", request.providerCode());
             metadata.put("targetProvider", request.providerCode());
-            metadata.put("skillId", blankToNull(request.command().skillId()));
+            metadata.put("domainAgentId", blankToNull(request.command().domainAgentId()));
             metadata.put("providerDocument", providerDocument.metadata());
             metadata.put("capabilities", capabilities);
             if (request.command().metadataJson() != null && !request.command().metadataJson().isBlank()) {
@@ -270,7 +270,7 @@ public class HttpDocumentProviderAdapter implements DocumentProviderAdapter {
             return null;
         }
         return template
-                .replace("${skillId}", blankToDefault(request.command().skillId(), ""))
+                .replace("${domainAgentId}", blankToDefault(request.command().domainAgentId(), ""))
                 .replace("${sessionId}", blankToDefault(request.command().sessionId(), ""))
                 .replace("${originalFilename}", blankToDefault(request.command().originalFilename(), ""));
     }

@@ -95,11 +95,11 @@
         <textarea id="messageInput" rows="3" placeholder="输入消息，支持附加文档库中的 documentId"></textarea>
         <div class="composer-actions">
           <label><input id="forceNewTask" type="checkbox" /> forceNewTask</label>
-          <input id="selectedSkillIdInput" type="text" placeholder="selectedSkillId，可选" />
+          <input id="selectedDomainAgentIdInput" type="text" placeholder="selectedDomainAgentId，可选" />
           <button id="sendRunBtn" class="primary" type="submit">发送 run</button>
         </div>
-        <textarea id="legacySceneParamInput" rows="2"
-          placeholder='legacyAgent.sceneParam JSON，可选，例如 {"regionCode":"CN-SZ"}'></textarea>
+        <textarea id="domainAgentSceneParamInput" rows="2"
+          placeholder='domainAgent.sceneParam JSON，可选，例如 {"regionCode":"CN-SZ"}'></textarea>
       </form>
     </section>
 
@@ -112,8 +112,8 @@
         <form id="uploadForm" class="upload-form">
           <input id="fileInput" type="file" />
           <label><input id="uploadBindSession" type="checkbox" checked /> 关联当前会话</label>
-          <input id="uploadTargetProvider" type="text" placeholder="targetProvider，如 legacy-agent" />
-          <input id="uploadSkillId" type="text" placeholder="上传关联 skillId，可选" />
+          <input id="uploadTargetProvider" type="text" placeholder="targetProvider，如 domain-agent" />
+          <input id="uploadDomainAgentId" type="text" placeholder="上传关联 domainAgentId，可选" />
           <button type="submit">上传</button>
         </form>
         <div id="documentsList" class="list"></div>

@@ -1,9 +1,9 @@
-package com.huawei.finance.front.one.infrastructure.legacy;
+package com.huawei.finance.front.one.infrastructure.domainagent;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.huawei.finance.front.one.application.config.LegacySkillProperties;
+import com.huawei.finance.front.one.application.config.DomainAgentProperties;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
@@ -19,25 +19,25 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
- * 老 Agent eventStream 响应归一化器。
+ * DomainAgent eventStream 响应归一化器。
  *
- * <p>老 Agent 使用 {@code message: {...}} 这类私有流式帧。该组件把它转换成 ChatService
+ * <p>DomainAgent 使用 {@code message: {...}} 这类私有流式帧。该组件把它转换成 ChatService
  * 标准事件，保证 WebSocket、Event Resume、message 与 parts 存储链路继续复用统一协议。</p>
  */
 @Component
-public class LegacySkillResponseNormalizer {
+public class DomainAgentResponseNormalizer {
     private final ObjectMapper objectMapper;
     private final int maxPendingFrameBytes;
     private final int maxFragmentBytes;
 
-    public LegacySkillResponseNormalizer(ObjectMapper objectMapper) {
-        this(objectMapper, new LegacySkillProperties());
+    public DomainAgentResponseNormalizer(ObjectMapper objectMapper) {
+        this(objectMapper, new DomainAgentProperties());
     }
 
     @Autowired
-    public LegacySkillResponseNormalizer(ObjectMapper objectMapper, LegacySkillProperties properties) {
+    public DomainAgentResponseNormalizer(ObjectMapper objectMapper, DomainAgentProperties properties) {
         this.objectMapper = objectMapper;
-        LegacySkillProperties nextProperties = properties == null ? new LegacySkillProperties() : properties;
+        DomainAgentProperties nextProperties = properties == null ? new DomainAgentProperties() : properties;
         this.maxPendingFrameBytes = nextProperties.normalizedMaxPendingFrameBytes();
         this.maxFragmentBytes = nextProperties.normalizedMaxFragmentBytes();
     }
@@ -47,22 +47,22 @@ public class LegacySkillResponseNormalizer {
     }
 
     /**
-     * 创建一次老 Agent 流式响应的解析状态。
+     * 创建一次 DomainAgent 流式响应的解析状态。
      *
-     * <p>老 Agent 的 {@code <think>} 与 {@code </think>} 可能跨 chunk 到达，因此状态必须是单次
+     * <p>DomainAgent 的 {@code <think>} 与 {@code </think>} 可能跨 chunk 到达，因此状态必须是单次
      * query 级别的，不能放在 Spring 单例 normalizer 上共享。</p>
      *
      * @return 单次响应流使用的状态对象。
      */
-    public LegacySkillStreamState newStreamState() {
-        return new LegacySkillStreamState();
+    public DomainAgentStreamState newStreamState() {
+        return new DomainAgentStreamState();
     }
 
-    public List<ChatEvent> normalize(String runId, String sessionId, String chunk, LegacySkillStreamState state) {
+    public List<ChatEvent> normalize(String runId, String sessionId, String chunk, DomainAgentStreamState state) {
         if (chunk == null || chunk.isBlank()) {
             return List.of();
         }
-        LegacySkillStreamState streamState = state == null ? newStreamState() : state;
+        DomainAgentStreamState streamState = state == null ? newStreamState() : state;
         List<ChatEvent> events = new ArrayList<>();
         if (streamState.activeFragment != null) {
             events.addAll(continueFragment(runId, sessionId, chunk, streamState));
@@ -79,14 +79,14 @@ public class LegacySkillResponseNormalizer {
             }
         }
         if (streamState.activeFragment == null && !streamState.frameBuffer.isEmpty()) {
-            LegacyFragmentKind fragmentKind = detectFragmentKind(stripLeadingFramePrefix(streamState.frameBuffer.toString()));
+            DomainAgentFragmentKind fragmentKind = detectFragmentKind(stripLeadingFramePrefix(streamState.frameBuffer.toString()));
             if (fragmentKind != null) {
                 events.addAll(startFragment(runId, sessionId, streamState, fragmentKind));
             } else if (utf8Length(streamState.frameBuffer) > maxPendingFrameBytes) {
                 String sourcePayload = truncate(streamState.frameBuffer.toString());
                 streamState.frameBuffer.setLength(0);
                 events.add(RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
-                        "legacy-agent", "legacy-frame-too-large", "event", "runtime", "debug", null,
+                        "domain-agent", "domain-agent-frame-too-large", "event", "runtime", "debug", null,
                         Map.of("maxPendingFrameBytes", maxPendingFrameBytes, "raw", sourcePayload))));
             }
         }
@@ -99,7 +99,7 @@ public class LegacySkillResponseNormalizer {
      * <p>正常分包不会在这里产生 invalid-json；只有上游连接结束后仍残留无法闭合的 frame，
      * 才输出诊断事件，避免把半截 DataBuffer 误判为业务事件。</p>
      */
-    public List<ChatEvent> finish(String runId, String sessionId, LegacySkillStreamState state) {
+    public List<ChatEvent> finish(String runId, String sessionId, DomainAgentStreamState state) {
         if (state == null) {
             return List.of();
         }
@@ -108,19 +108,19 @@ public class LegacySkillResponseNormalizer {
             if (state.activeFragment.scanner().isComplete()) {
                 events.addAll(completeFragment(runId, sessionId, state));
             } else {
-                LegacyActiveFragment fragment = state.activeFragment;
+                DomainAgentActiveFragment fragment = state.activeFragment;
                 state.activeFragment = null;
                 events.add(RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
-                        "legacy-agent", "invalid-json", "event", "runtime", "debug", null,
+                        "domain-agent", "invalid-json", "event", "runtime", "debug", null,
                         Map.of("itemId", fragment.itemId(), "sourceType", fragment.kind().sourceType(),
-                                "reason", "legacy stream ended before current frame was closed"))));
+                                "reason", "domain-agent stream ended before current frame was closed"))));
             }
         }
         if (!state.frameBuffer.isEmpty()) {
             String remaining = stripLeadingFramePrefix(state.frameBuffer.toString());
             if (!remaining.isBlank()) {
                 events.add(RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
-                        "legacy-agent", "invalid-json", "event", "runtime", "debug", null,
+                        "domain-agent", "invalid-json", "event", "runtime", "debug", null,
                         Map.of("raw", truncate(remaining)))));
             }
             state.frameBuffer.setLength(0);
@@ -269,7 +269,7 @@ public class LegacySkillResponseNormalizer {
         return scanner.accept(value, start);
     }
 
-    private LegacyFragmentKind detectFragmentKind(String payload) {
+    private DomainAgentFragmentKind detectFragmentKind(String payload) {
         String sourceType = firstPresentSourceType(payload,
                 "diyCardScene", "cardList", "cardUrl", "openCard",
                 "searchList", "SearchList",
@@ -280,14 +280,14 @@ public class LegacySkillResponseNormalizer {
         }
         if ("diyCardScene".equals(sourceType) || "cardList".equals(sourceType)
                 || "cardUrl".equals(sourceType) || "openCard".equals(sourceType)) {
-            return new LegacyFragmentKind(sourceType, "runtime.card",
+            return new DomainAgentFragmentKind(sourceType, "runtime.card",
                     "card", "application/json");
         }
         if ("processResult".equals(sourceType)) {
-            return new LegacyFragmentKind(sourceType, "runtime.progress",
+            return new DomainAgentFragmentKind(sourceType, "runtime.progress",
                     "progress", "application/json");
         }
-        return new LegacyFragmentKind(sourceType, "runtime.reference",
+        return new DomainAgentFragmentKind(sourceType, "runtime.reference",
                 "reference", "application/json");
     }
 
@@ -303,25 +303,25 @@ public class LegacySkillResponseNormalizer {
         return null;
     }
 
-    private List<ChatEvent> startFragment(String runId, String sessionId, LegacySkillStreamState state,
-                                          LegacyFragmentKind kind) {
+    private List<ChatEvent> startFragment(String runId, String sessionId, DomainAgentStreamState state,
+                                          DomainAgentFragmentKind kind) {
         String payload = stripLeadingFramePrefix(state.frameBuffer.toString());
         state.frameBuffer.setLength(0);
-        state.activeFragment = new LegacyActiveFragment(kind, state.nextItemId(kind.sourceType()));
+        state.activeFragment = new DomainAgentActiveFragment(kind, state.nextItemId(kind.sourceType()));
         return emitFragmentDelta(runId, sessionId, state, payload);
     }
 
     private List<ChatEvent> continueFragment(String runId, String sessionId, String chunk,
-                                             LegacySkillStreamState state) {
+                                             DomainAgentStreamState state) {
         return emitFragmentDelta(runId, sessionId, state, stripLeadingFramePrefix(chunk));
     }
 
-    private List<ChatEvent> emitFragmentDelta(String runId, String sessionId, LegacySkillStreamState state,
+    private List<ChatEvent> emitFragmentDelta(String runId, String sessionId, DomainAgentStreamState state,
                                               String text) {
         if (state.activeFragment == null || text == null || text.isEmpty()) {
             return List.of();
         }
-        LegacyActiveFragment fragment = state.activeFragment;
+        DomainAgentActiveFragment fragment = state.activeFragment;
         List<ChatEvent> events = new ArrayList<>();
         int completeIndex = fragment.scanner().accept(text, 0);
         String effective = completeIndex >= 0 ? text.substring(0, completeIndex + 1) : text;
@@ -338,9 +338,9 @@ public class LegacySkillResponseNormalizer {
         return events;
     }
 
-    private RuntimeEvent fragmentDelta(String runId, String sessionId, LegacyActiveFragment fragment, String delta) {
+    private RuntimeEvent fragmentDelta(String runId, String sessionId, DomainAgentActiveFragment fragment, String delta) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("source", "legacy-agent");
+        payload.put("source", "domain-agent");
         payload.put("sourceType", fragment.kind().sourceType());
         payload.put("itemId", fragment.itemId());
         payload.put("fragment", true);
@@ -351,14 +351,14 @@ public class LegacySkillResponseNormalizer {
         return new RuntimeEvent(runId, sessionId, 0, Instant.now(), fragment.kind().eventType(), Map.copyOf(payload));
     }
 
-    private List<ChatEvent> completeFragment(String runId, String sessionId, LegacySkillStreamState state) {
+    private List<ChatEvent> completeFragment(String runId, String sessionId, DomainAgentStreamState state) {
         if (state.activeFragment == null) {
             return List.of();
         }
-        LegacyActiveFragment fragment = state.activeFragment;
+        DomainAgentActiveFragment fragment = state.activeFragment;
         state.activeFragment = null;
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("source", "legacy-agent");
+        payload.put("source", "domain-agent");
         payload.put("sourceType", fragment.kind().sourceType());
         payload.put("itemId", fragment.itemId());
         payload.put("fragment", true);
@@ -368,25 +368,25 @@ public class LegacySkillResponseNormalizer {
                 fragment.kind().eventType(), Map.copyOf(payload)));
     }
 
-    private List<ChatEvent> normalizeFrame(String runId, String sessionId, String frame, LegacySkillStreamState state) {
+    private List<ChatEvent> normalizeFrame(String runId, String sessionId, String frame, DomainAgentStreamState state) {
         try {
             JsonNode root = objectMapper.readTree(frame);
             return normalizeJson(runId, sessionId, root, state);
         } catch (JsonProcessingException ex) {
             RuntimeEvent.FallbackPayload payload = new RuntimeEvent.FallbackPayload(
-                    "legacy-agent", "invalid-json", "event", "runtime", "debug", null,
+                    "domain-agent", "invalid-json", "event", "runtime", "debug", null,
                     Map.of("raw", truncate(frame)));
             return List.of(RuntimeEvent.fallback(runId, sessionId, payload));
         }
     }
 
-    private List<ChatEvent> normalizeJson(String runId, String sessionId, JsonNode root, LegacySkillStreamState state) {
+    private List<ChatEvent> normalizeJson(String runId, String sessionId, JsonNode root, DomainAgentStreamState state) {
         if (root == null || root.isNull() || root.isMissingNode()) {
             return List.of();
         }
         if (!root.isObject()) {
             return List.of(RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
-                    "legacy-agent", "unknown", "event", "runtime", "debug", null,
+                    "domain-agent", "unknown", "event", "runtime", "debug", null,
                     Map.of("value", truncate(root.asText(""))))));
         }
         List<ChatEvent> events = new ArrayList<>();
@@ -401,14 +401,14 @@ public class LegacySkillResponseNormalizer {
             events.addAll(flushPendingContent(runId, sessionId, state));
             events.add(MessageCompletedEvent.of(runId, sessionId, Map.of(
                     "status", "MESSAGE_COMPLETED",
-                    "sourceType", "legacy-agent-end"
+                    "sourceType", "domain-agent-end"
             )));
         }
         if (!events.isEmpty()) {
             return List.copyOf(events);
         }
         RuntimeEvent.FallbackPayload payload = new RuntimeEvent.FallbackPayload(
-                "legacy-agent", "unknown", "event", "runtime", "debug", null,
+                "domain-agent", "unknown", "event", "runtime", "debug", null,
                 Map.of("sourcePayload", sanitize(root)));
         return List.of(RuntimeEvent.fallback(runId, sessionId, payload));
     }
@@ -419,18 +419,18 @@ public class LegacySkillResponseNormalizer {
                     metadataPayload("trace", Map.of("traceId", text(root, "traceId")))));
         }
         if (root.hasNonNull("sessionId")) {
-            events.add(RuntimeEvent.metadata(runId, sessionId, metadataPayload("legacy_session",
-                    Map.of("legacySessionId", text(root, "sessionId")))));
+            events.add(RuntimeEvent.metadata(runId, sessionId, metadataPayload("domain_agent_session",
+                    Map.of("domainAgentSessionId", text(root, "sessionId")))));
         }
         if (root.hasNonNull("messageId")) {
-            events.add(RuntimeEvent.metadata(runId, sessionId, metadataPayload("legacy_message",
-                    Map.of("legacyMessageId", text(root, "messageId")))));
+            events.add(RuntimeEvent.metadata(runId, sessionId, metadataPayload("domain_agent_message",
+                    Map.of("domainAgentMessageId", text(root, "messageId")))));
         }
         if ((root.hasNonNull("intent") || root.hasNonNull("skillId")) && !hasCardPayload(root)) {
             Map<String, Object> values = new LinkedHashMap<>();
             putIfPresent(values, "intent", text(root, "intent"));
-            putIfPresent(values, "skillId", text(root, "skillId"));
-            events.add(RuntimeEvent.metadata(runId, sessionId, metadataPayload("legacy_skill", values)));
+            putIfPresent(values, "domainAgentId", text(root, "skillId"));
+            events.add(RuntimeEvent.metadata(runId, sessionId, metadataPayload("domain_agent", values)));
         }
     }
 
@@ -441,7 +441,7 @@ public class LegacySkillResponseNormalizer {
         }
         String normalized = state.trim().toUpperCase(Locale.ROOT);
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("source", "legacy-agent");
+        payload.put("source", "domain-agent");
         payload.put("sourceType", "state");
         payload.put("state", normalized);
         putIfPresent(payload, "stateDesc", text(root, "stateDesc"));
@@ -459,7 +459,7 @@ public class LegacySkillResponseNormalizer {
         }
         payload.put("eventKind", "state");
         events.add(RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
-                "legacy-agent", normalized, "state", "runtime", "inline", text(root, "stateDesc"),
+                "domain-agent", normalized, "state", "runtime", "inline", text(root, "stateDesc"),
                 Map.copyOf(payload))));
     }
 
@@ -493,7 +493,7 @@ public class LegacySkillResponseNormalizer {
 
     private Map<String, Object> processPayload(JsonNode root) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("source", "legacy-agent");
+        payload.put("source", "domain-agent");
         payload.put("sourceType", "processResult");
         payload.put("status", "STREAMING");
         payload.put("title", "思考过程");
@@ -512,7 +512,7 @@ public class LegacySkillResponseNormalizer {
 
     private Map<String, Object> referencePayload(String referenceType, String fieldName, JsonNode value) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("source", "legacy-agent");
+        payload.put("source", "domain-agent");
         payload.put("sourceType", fieldName);
         payload.put("referenceType", referenceType);
         payload.put("references", sanitize(value));
@@ -522,14 +522,14 @@ public class LegacySkillResponseNormalizer {
     private Map<String, Object> cardPayload(JsonNode root) {
         List<String> sources = cardSources(root);
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("source", "legacy-agent");
+        payload.put("source", "domain-agent");
         payload.put("sourceType", cardSourceType(sources));
         payload.put("cardType", cardType(sources));
         payload.put("cardSources", sources);
         putIfPresent(payload, "cardUrl", text(root, "cardUrl"));
         putIfPresent(payload, "openCard", text(root, "openCard"));
         putIfPresent(payload, "intent", text(root, "intent"));
-        putIfPresent(payload, "skillId", text(root, "skillId"));
+        putIfPresent(payload, "domainAgentId", text(root, "skillId"));
         if (root.hasNonNull("diyCardScene")) {
             payload.put("diyCardScene", sanitize(root.get("diyCardScene")));
         }
@@ -557,11 +557,11 @@ public class LegacySkillResponseNormalizer {
     }
 
     /**
-     * 单一 legacy 卡片字段保留原始字段名，方便前端按下游真实来源选择渲染器。
-     * 多个卡片字段同帧到达时使用 legacy-card 作为聚合来源，并通过 cardSources 保留明细。
+     * 单一 DomainAgent 卡片字段保留原始字段名，方便前端按下游真实来源选择渲染器。
+     * 多个卡片字段同帧到达时使用 domain-agent-card 作为聚合来源，并通过 cardSources 保留明细。
      */
     private String cardSourceType(List<String> sources) {
-        return sources.size() == 1 ? sources.get(0) : "legacy-card";
+        return sources.size() == 1 ? sources.get(0) : "domain-agent-card";
     }
 
     private String cardType(List<String> sources) {
@@ -573,13 +573,13 @@ public class LegacySkillResponseNormalizer {
             case "diyCardScene" -> "diyCardScene";
             case "cardList" -> "cardList";
             case "openCard" -> "openCard";
-            default -> "legacy-card";
+            default -> "domain-agent-card";
         };
     }
 
     private Map<String, Object> metadataPayload(String metadataType, Map<String, Object> values) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("source", "legacy-agent");
+        payload.put("source", "domain-agent");
         payload.put("sourceType", metadataType);
         payload.put("metadataType", metadataType);
         values.forEach((key, value) -> {
@@ -600,11 +600,11 @@ public class LegacySkillResponseNormalizer {
         return null;
     }
 
-    private List<ChatEvent> contentEvents(String runId, String sessionId, String content, LegacySkillStreamState state) {
+    private List<ChatEvent> contentEvents(String runId, String sessionId, String content, DomainAgentStreamState state) {
         if (content == null || content.isEmpty()) {
             return List.of();
         }
-        LegacySkillStreamState streamState = state == null ? newStreamState() : state;
+        DomainAgentStreamState streamState = state == null ? newStreamState() : state;
         List<ChatEvent> events = new ArrayList<>();
         String input = streamState.pending + content;
         streamState.pending = "";
@@ -639,7 +639,7 @@ public class LegacySkillResponseNormalizer {
         return events;
     }
 
-    private List<ChatEvent> flushPendingContent(String runId, String sessionId, LegacySkillStreamState state) {
+    private List<ChatEvent> flushPendingContent(String runId, String sessionId, DomainAgentStreamState state) {
         if (state == null) {
             return List.of();
         }
@@ -665,7 +665,7 @@ public class LegacySkillResponseNormalizer {
         }
         events.add(new MessageDeltaEvent(runId, sessionId, 0, Instant.now(), delta, Map.of(
                 "delta", delta,
-                "sourceType", "legacy-agent-content"
+                "sourceType", "domain-agent-content"
         )));
     }
 
@@ -674,7 +674,7 @@ public class LegacySkillResponseNormalizer {
             return;
         }
         events.add(RuntimeEvent.thinking(runId, sessionId, Map.of(
-                "source", "legacy-agent",
+                "source", "domain-agent",
                 "sourceType", "content.think",
                 "status", "STREAMING",
                 "text", text
@@ -683,7 +683,7 @@ public class LegacySkillResponseNormalizer {
 
     private RuntimeEvent thinkingBoundary(String runId, String sessionId, String status, String text) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("source", "legacy-agent");
+        payload.put("source", "domain-agent");
         payload.put("sourceType", "content.think");
         payload.put("status", status);
         if (text != null && !text.isBlank()) {
@@ -824,7 +824,7 @@ public class LegacySkillResponseNormalizer {
     private record EventDelimiter(int index, int length) {
     }
 
-    private record LegacyFragmentKind(
+    private record DomainAgentFragmentKind(
             String sourceType,
             String eventType,
             String channel,
@@ -832,12 +832,12 @@ public class LegacySkillResponseNormalizer {
     ) {
     }
 
-    private record LegacyActiveFragment(
-            LegacyFragmentKind kind,
+    private record DomainAgentActiveFragment(
+            DomainAgentFragmentKind kind,
             String itemId,
             JsonFragmentScanner scanner
     ) {
-        private LegacyActiveFragment(LegacyFragmentKind kind, String itemId) {
+        private DomainAgentActiveFragment(DomainAgentFragmentKind kind, String itemId) {
             this(kind, itemId, new JsonFragmentScanner());
         }
     }
@@ -899,18 +899,18 @@ public class LegacySkillResponseNormalizer {
     }
 
     /**
-     * 单次 legacy eventStream 的内容解析状态。
+     * 单次 DomainAgent eventStream 的内容解析状态。
      */
-    public static final class LegacySkillStreamState {
+    public static final class DomainAgentStreamState {
         private boolean inThinking;
         private String pending = "";
         private final StringBuilder frameBuffer = new StringBuilder();
-        private LegacyActiveFragment activeFragment;
+        private DomainAgentActiveFragment activeFragment;
         private int itemSequence;
 
         private String nextItemId(String sourceType) {
             String normalized = sourceType == null || sourceType.isBlank()
-                    ? "legacy"
+                    ? "domainAgent"
                     : sourceType.replaceAll("[^A-Za-z0-9_-]", "_");
             return normalized + "_" + (++itemSequence);
         }

@@ -1,9 +1,9 @@
-package com.huawei.finance.front.one.infrastructure.legacy;
+package com.huawei.finance.front.one.infrastructure.domainagent;
 
-import com.huawei.finance.front.one.application.config.LegacySkillProperties;
-import com.huawei.finance.front.one.application.integration.agent.LegacySkillAgentClient;
-import com.huawei.finance.front.one.application.integration.agent.LegacySkillAgentRequest;
-import com.huawei.finance.front.one.application.integration.agent.LegacySkillCancelRequest;
+import com.huawei.finance.front.one.application.config.DomainAgentProperties;
+import com.huawei.finance.front.one.application.integration.agent.DomainAgentClient;
+import com.huawei.finance.front.one.application.integration.agent.DomainAgentRequest;
+import com.huawei.finance.front.one.application.integration.agent.DomainAgentCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import java.nio.charset.StandardCharsets;
@@ -26,26 +26,25 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 /**
- * 配置化老 Agent 指定技能 HTTP adapter。
+ * 配置化 DomainAgent HTTP adapter。
  *
- * <p>该实现只处理历史 skillId 兼容路径。老接口的请求体和 eventStream 响应在 adapter 内部完成
- * 映射，对外只返回 ChatService 标准 ChatEvent。入口 Cookie 只作为出站 HTTP header 透传，
- * 不进入老 Agent 请求体。</p>
+ * <p>DomainAgent 是前端显式选择的财经领域 Agent。ChatService 对外使用 {@code domainAgentId}，
+ * 但下游 wire contract 仍要求字段名 {@code skillId}，该差异只在本 adapter 内部转换。</p>
  */
 @Component
-@EnableConfigurationProperties(LegacySkillProperties.class)
-public class ConfiguredLegacySkillAgentClient implements LegacySkillAgentClient {
-    private static final Logger log = LoggerFactory.getLogger(ConfiguredLegacySkillAgentClient.class);
+@EnableConfigurationProperties(DomainAgentProperties.class)
+public class ConfiguredDomainAgentClient implements DomainAgentClient {
+    private static final Logger log = LoggerFactory.getLogger(ConfiguredDomainAgentClient.class);
 
     private final WebClient.Builder webClientBuilder;
-    private final LegacySkillProperties properties;
-    private final LegacySkillChatRequestMapper requestMapper;
-    private final LegacySkillResponseNormalizer responseNormalizer;
+    private final DomainAgentProperties properties;
+    private final DomainAgentChatRequestMapper requestMapper;
+    private final DomainAgentResponseNormalizer responseNormalizer;
 
-    public ConfiguredLegacySkillAgentClient(WebClient.Builder webClientBuilder,
-                                            LegacySkillProperties properties,
-                                            LegacySkillChatRequestMapper requestMapper,
-                                            LegacySkillResponseNormalizer responseNormalizer) {
+    public ConfiguredDomainAgentClient(WebClient.Builder webClientBuilder,
+                                       DomainAgentProperties properties,
+                                       DomainAgentChatRequestMapper requestMapper,
+                                       DomainAgentResponseNormalizer responseNormalizer) {
         this.webClientBuilder = webClientBuilder;
         this.properties = properties;
         this.requestMapper = requestMapper;
@@ -53,11 +52,11 @@ public class ConfiguredLegacySkillAgentClient implements LegacySkillAgentClient 
     }
 
     @Override
-    public Flux<ChatEvent> query(LegacySkillAgentRequest request) {
+    public Flux<ChatEvent> query(DomainAgentRequest request) {
         validate(request);
         Map<String, Object> body = requestMapper.toWireRequest(request);
-        return enforceLegacyDeadline(Flux.defer(() -> {
-            LegacySkillResponseNormalizer.LegacySkillStreamState streamState = responseNormalizer.newStreamState();
+        return enforceDomainAgentDeadline(Flux.defer(() -> {
+            DomainAgentResponseNormalizer.DomainAgentStreamState streamState = responseNormalizer.newStreamState();
             return webClientBuilder.build()
                     .post()
                     .uri(fullUrl(properties.getChatPath()))
@@ -67,9 +66,9 @@ public class ConfiguredLegacySkillAgentClient implements LegacySkillAgentClient 
                     .bodyValue(body)
                     .retrieve()
                     /*
-                     * 老 Agent 使用非标准的 "message: {...}" 私有 eventStream 帧。WebClient 在
+                     * DomainAgent 使用非标准的 "message: {...}" 私有 eventStream 帧。WebClient 在
                      * text/event-stream 下按标准 SSE 解码 String 时只认 data 行，可能吞掉 message 行。
-                     * 因此这里读取原始 DataBuffer，再交给 LegacySkillResponseNormalizer 兼容 message/data/plain JSON。
+                     * 因此这里读取原始 DataBuffer，再交给 DomainAgentResponseNormalizer 兼容 message/data/plain JSON。
                      */
                     .bodyToFlux(DataBuffer.class)
                     .map(this::readUtf8)
@@ -79,7 +78,7 @@ public class ConfiguredLegacySkillAgentClient implements LegacySkillAgentClient 
                     .concatWith(Flux.defer(() -> Flux.fromIterable(
                             responseNormalizer.finish(request.runId(), request.sessionId(), streamState))))
                     /*
-                     * 老 Agent 的 endFlag=true 已经映射为 message.completed。收到后主动闭合本轮流，
+                     * DomainAgent 的 endFlag=true 已经映射为 message.completed。收到后主动闭合本轮流，
                      * 避免下游 HTTP 连接未关闭时持续占用本机 bulkhead 和 WebClient 资源。
                      */
                     .takeUntil(event -> "message.completed".equals(event.type()));
@@ -87,14 +86,14 @@ public class ConfiguredLegacySkillAgentClient implements LegacySkillAgentClient 
     }
 
     @Override
-    public Mono<Void> cancel(LegacySkillCancelRequest request) {
+    public Mono<Void> cancel(DomainAgentCancelRequest request) {
         if (!properties.isEnabled() || properties.getStopPath() == null || properties.getStopPath().isBlank()) {
             return Mono.empty();
         }
         Map<String, Object> body = Map.of(
                 "runId", request.runId(),
                 "sessionId", request.sessionId(),
-                "skillId", request.skillId() == null ? "" : request.skillId(),
+                "skillId", request.domainAgentId() == null ? "" : request.domainAgentId(),
                 "reason", request.reason() == null ? "" : request.reason()
         );
         return webClientBuilder.build()
@@ -107,20 +106,20 @@ public class ConfiguredLegacySkillAgentClient implements LegacySkillAgentClient 
                 .bodyToMono(Void.class)
                 .timeout(properties.getTimeout())
                 .onErrorResume(ex -> {
-                    log.warn("Legacy skill cancel failed. runId={}, reason={}", request.runId(), ex.getMessage());
+                    log.warn("DomainAgent cancel failed. runId={}, reason={}", request.runId(), ex.getMessage());
                     return Mono.empty();
                 });
     }
 
-    private void validate(LegacySkillAgentRequest request) {
+    private void validate(DomainAgentRequest request) {
         if (!properties.isEnabled()) {
-            throw new IllegalStateException("LEGACY_SKILL_DISABLED: 历史指定技能服务未启用");
+            throw new IllegalStateException("DOMAIN_AGENT_DISABLED: DomainAgent 服务未启用");
         }
-        if (!properties.skillAllowed(request.skillId())) {
-            throw new IllegalArgumentException("非法或未授权 skillId: " + request.skillId());
+        if (!properties.domainAgentAllowed(request.domainAgentId())) {
+            throw new IllegalArgumentException("非法或未授权 domainAgentId: " + request.domainAgentId());
         }
         if (properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()) {
-            throw new IllegalStateException("LEGACY_SKILL_BASE_URL_MISSING: 历史指定技能服务地址未配置");
+            throw new IllegalStateException("DOMAIN_AGENT_BASE_URL_MISSING: DomainAgent 服务地址未配置");
         }
     }
 
@@ -129,8 +128,8 @@ public class ConfiguredLegacySkillAgentClient implements LegacySkillAgentClient 
             return;
         }
         /*
-         * Cookie 只作为老 Agent 出站 HTTP 请求头透传。老 Agent wire body 由
-         * LegacySkillChatRequestMapper 生成，不包含 forwardHeaders，避免企业登录态落入请求体、
+         * Cookie 只作为 DomainAgent 出站 HTTP 请求头透传。DomainAgent wire body 由
+         * DomainAgentChatRequestMapper 生成，不包含 forwardHeaders，避免企业登录态落入请求体、
          * metadata、事件 payload 或日志。
          */
         headers.set(HttpHeaders.COOKIE, forwardHeaders.cookieHeader());
@@ -161,7 +160,7 @@ public class ConfiguredLegacySkillAgentClient implements LegacySkillAgentClient 
         }
     }
 
-    private Flux<ChatEvent> enforceLegacyDeadline(Flux<ChatEvent> source) {
+    private Flux<ChatEvent> enforceDomainAgentDeadline(Flux<ChatEvent> source) {
         Duration timeout = properties.getTimeout();
         if (timeout == null || timeout.isZero() || timeout.isNegative()) {
             return source;
@@ -170,7 +169,7 @@ public class ConfiguredLegacySkillAgentClient implements LegacySkillAgentClient 
             AtomicBoolean terminated = new AtomicBoolean(false);
             var timer = Schedulers.parallel().schedule(() -> {
                 if (terminated.compareAndSet(false, true) && !sink.isCancelled()) {
-                    sink.error(new TimeoutException("Legacy skill stream timed out after " + timeout));
+                    sink.error(new TimeoutException("DomainAgent stream timed out after " + timeout));
                 }
             }, Math.max(1L, timeout.toMillis()), TimeUnit.MILLISECONDS);
             var upstream = source.subscribe(

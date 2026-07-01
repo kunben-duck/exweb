@@ -19,18 +19,18 @@ class DocumentDtoMapperTest {
                 "user1",
                 "session1",
                 "invoice.pdf",
-                "legacy-agent",
-                "legacy-doc-001",
+                "domain-agent",
+                "domain-doc-001",
                 "application/pdf",
                 19800L,
                 DocumentStatus.AVAILABLE.name(),
-                "LEGACY_AGENT_UPLOAD",
+                "DOMAIN_AGENT_UPLOAD",
                 null,
                 """
                         {
-                          "providerCode": "legacy-agent",
+                          "providerCode": "domain-agent",
                           "providerDocument": {
-                            "docId": "legacy-doc-001",
+                            "docId": "domain-doc-001",
                             "levelCode": "IP"
                           }
                         }
@@ -41,8 +41,8 @@ class DocumentDtoMapperTest {
 
         UploadedDocumentDto dto = mapper.toDto(document);
 
-        assertThat(dto.metadataJson().get("providerCode").asText()).isEqualTo("legacy-agent");
-        assertThat(dto.metadataJson().get("providerDocument").get("docId").asText()).isEqualTo("legacy-doc-001");
+        assertThat(dto.metadataJson().get("providerCode").asText()).isEqualTo("domain-agent");
+        assertThat(dto.metadataJson().get("providerDocument").get("docId").asText()).isEqualTo("domain-doc-001");
         assertThat(dto.metadataJson().get("providerDocument").get("levelCode").asText()).isEqualTo("IP");
     }
 }

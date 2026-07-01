@@ -48,7 +48,7 @@ class ArchitectureNamingTest {
     }
 
     @Test
-    void relayRuntimeConfigurationDoesNotExposeLegacyProtocolKeys() throws Exception {
+    void relayRuntimeConfigurationDoesNotExposeRemovedProtocolKeys() throws Exception {
         String application = Files.readString(Path.of("src/main/resources/application.yml"));
 
         assertThat(application)

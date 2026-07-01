@@ -6,12 +6,12 @@ import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
 
 /**
- * 显式历史技能执行上下文。
+ * DomainAgent 指定调用执行上下文。
  *
- * <p>仅当前端通过 metadata.selectedSkillId 指定历史技能时使用。该路径不创建 RuntimeBinding，
- * 也不参与默认 AgentRuntime 多轮续接。</p>
+ * <p>仅当前端通过 metadata.selectedDomainAgentId 指定财经领域 Agent 时使用。该路径不创建
+ * RuntimeBinding，也不参与默认 AgentRuntime 多轮续接。</p>
  */
-public record LegacySkillExecutionContext(
+public record DomainAgentExecutionContext(
         ChatCommand command,
         String runId,
         RouteTarget route,

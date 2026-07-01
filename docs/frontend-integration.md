@@ -2,7 +2,7 @@
 
 本文档面向 Web 前端联调，覆盖会话、文档上传、创建 run、WebSocket 实时订阅、Event Resume 断点恢复、停止回答和常见排障。当前正式版采用“后台 run + 实时订阅 + 事件恢复”的单一对话流协议：HTTP 负责创建和控制后台 run；WebSocket 负责当前页面新建 run 的实时订阅；Event Resume 负责恢复链路，其中会话级事件恢复是有限补发，run 级事件恢复在 active run 场景会先补发再接续 live 事件直到 run 终态。
 
-本文档以 FinanceEXChatService 的正式接口为准，采用系统自身的设计术语描述接口边界、调用顺序和错误处理；下游 Runtime、legacy-agent 或浏览器实现细节只作为内部 adapter 行为说明，不作为前端协议依赖。
+本文档以 FinanceEXChatService 的正式接口为准，采用系统自身的设计术语描述接口边界、调用顺序和错误处理；下游 Runtime、domain-agent 或浏览器实现细节只作为内部 adapter 行为说明，不作为前端协议依赖。
 
 ## 基础约定
 
@@ -28,7 +28,7 @@ export FINANCEEX_DEV_USERNAME=developer
 
 意图识别记录不新增前端接口，也不要求前端增加请求字段。后端只有在 `financeex.intent.enabled=true`
 且本轮确实调用意图服务时，才会在 `financeex.intent-record.enabled=true` 的配置下异步记录本轮
-query、候选意图、最高置信结果、最终路由是否采纳和调用耗时。显式技能、RuntimeBinding 续接、用例库已命中、
+query、候选意图、最高置信结果、最终路由是否采纳和调用耗时。DomainAgent、RuntimeBinding 续接、用例库已命中、
 意图服务关闭或未调用时不会写记录。该记录使用专用 Servlet/MVC 线程池 best-effort 写入
 `fin_ex_intent_recognition_t`，失败只影响统计排障数据，不影响 `/chat/runs`、WebSocket 或 Event Resume。
 意图服务调用失败后后端会按 `financeex.intent.max-retries` 重试，默认最多重试 3 次，运行时最多按 10 次生效；重试耗尽后仍按
@@ -168,7 +168,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 切换历史版本 | 从当前消息 `versionInfo.variants` 取目标项 -> `GET /messages?leafMessageId={switchLeafMessageId}` 重渲染 -> 后台 `POST /path` 保存选择 | `versionInfo.currentIndex/total`、`switchLeafMessageId`、`currentLeafMessageId` | 先刷新展示路径，不创建 run，不调用 Runtime；`/path` 只负责持久化当前 leaf |
 | 从消息新建分支 | `POST /sessions/{sessionId}/branches(sourceMessageId)` -> 选择新 `sessionId` -> `GET /messages`、`GET /stream-status` | `sourceMessageId`、新 `sessionId`、`sourceSessionId/sourceMessageId` | 分支快照消息 `locked=true`，禁用编辑、删除和重新生成 |
 | 上传文件并作为附件提问 | `POST /documents(file, sessionId)` -> 等状态 `AVAILABLE` -> `POST /chat/runs(attachments[{documentId}])` | `documentId`、`sessionId`、`attachments[].documentId` | 附件不是消息类型；PROCESSING/FAILED/DELETED 不可作为聊天附件 |
-| 选中历史技能并带文档提问 | `POST /documents(file,targetProvider=legacy-agent,skillId)` -> `POST /chat/runs(metadata.selectedSkillId,attachments)` | `documentId`、`metadata.selectedSkillId`、`metadata.legacyAgent` | 显式技能路由不创建 RuntimeBinding；附件必须来自 `legacy-agent` provider |
+| 选中 DomainAgent 并带文档提问 | `POST /documents(file,targetProvider=domain-agent,domainAgentId)` -> `POST /chat/runs(metadata.selectedDomainAgentId,attachments)` | `documentId`、`metadata.selectedDomainAgentId`、`metadata.domainAgent` | DomainAgent 路由不创建 RuntimeBinding；附件必须来自 `domain-agent` provider |
 | 点赞/点踩/取消 | 历史消息中找到 assistant `messageId` -> `POST /messages/{messageId}/feedback`；再次点击已选按钮 -> `DELETE /feedback` | `messageId`、可选 `runId`、`feedback.rating/status` | 历史消息 `feedback` 非空时高亮；取消后返回 `status=CANCELLED`，历史消息再查为 `feedback=null` |
 | 会话归档/恢复/删除 | 单个：`POST /archive`、`POST /restore`、`DELETE /sessions/{sessionId}`；批量：`DELETE /sessions` body `sessionIds[]` | `sessionId`、`sessionIds[]` | 删除是软删除；有 active run 时后端会先主动取消 run |
 | 文档库管理 | `GET /documents` -> `GET /documents/{documentId}`/`status`/`preview-url`/`download`/`PATCH`/`DELETE` | `documentId`、`cursor`、`status` | 列表默认不返回 DELETED；下载和预览只允许 AVAILABLE |
@@ -237,7 +237,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/chat/runs` | 唯一提问入口，创建后台 run。 | JSON body：`commandId` 可选，`sessionId` 可选，`conversationId` 可选，`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`attachments[]`、`metadata`。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | `runMode` 默认 `NEXT`；`metadata.selectedSkillId` 存在时进入显式技能兼容路由，不读取或创建 RuntimeBinding。 |
+| `POST /api/v1/ex/chat/runs` | 唯一提问入口，创建后台 run。 | JSON body：`commandId` 可选，`sessionId` 可选，`conversationId` 可选，`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`attachments[]`、`metadata`。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | `runMode` 默认 `NEXT`；`metadata.selectedDomainAgentId` 存在时进入 DomainAgent 路由，不读取或创建 RuntimeBinding。 |
 | `POST /api/v1/ex/chat/runs/{runId}/stop` | 用户点击停止回答。 | Path：`runId`。 | `ChatRunStopDto`：`runId`、`sessionId`、`status`、`latestSeq`、`stoppedAt`、`messageReady`、`assistantMessageId`、`feedbackTargetMessageId`。 | 幂等；停止语义不是关闭 WebSocket。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`；只处理 `stream-item` 中的 `encodedItem.data`。 |
 | `GET /api/v1/ex/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态，并以 `done` 闭合；live source 异常时服务端会降级按 DB 事件轮询。 |
@@ -262,7 +262,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`targetProvider` 可选，`skillId` 可选，`metadata` 可选 JSON 字符串；Header 可带标准 `Cookie`。 | `UploadedDocumentDto`。 | 不传 `targetProvider` 使用 default-storage；`targetProvider=legacy-agent` 时后端转发配置化老 Agent upload 接口；`targetProvider=s3-upload` 时后端转发外部 `/uploadFile` S3 上传接口。只有 provider 配置 `forward-cookie=true` 时，入口 Cookie 才会作为下游 upload HTTP header 透传。 |
+| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`targetProvider` 可选，`domainAgentId` 可选，`metadata` 可选 JSON 字符串；Header 可带标准 `Cookie`。 | `UploadedDocumentDto`。 | 不传 `targetProvider` 使用 default-storage；`targetProvider=domain-agent` 时后端转发配置化 DomainAgent upload 接口；`targetProvider=s3-upload` 时后端转发外部 `/uploadFile` S3 上传接口。只有 provider 配置 `forward-cookie=true` 时，入口 Cookie 才会作为下游 upload HTTP header 透传。 |
 | `GET /api/v1/ex/documents` | 文档库列表或最近文档选择器。 | Query：`sessionId` 可选，`limit` 默认 20，`cursor` 可选。 | `DocumentLibraryPageDto`：`items[]`、`nextCursor`。 | 默认不返回 `DELETED` 文档。 |
 | `GET /api/v1/ex/documents/{documentId}` | 查询文档详情。 | Path：`documentId`。 | `UploadedDocumentDto`。 | 可查看 `AVAILABLE/PROCESSING/FAILED` 等非删除状态。 |
 | `PATCH /api/v1/ex/documents/{documentId}` | 修改展示文件名或扩展元数据。 | Path：`documentId`；JSON body：`originalName`、`metadataJson`。 | `UploadedDocumentDto`。 | 空字段表示保留原值。 |
@@ -525,10 +525,10 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 | `contentType` | MIME 类型 |
 | `sizeBytes` | 文件大小 |
 | `status` | `AVAILABLE`、`PROCESSING`、`FAILED`、`DELETED`；只有 `AVAILABLE` 可下载、预览和作为聊天附件 |
-| `source` | 来源，例如 `LOCAL_UPLOAD`、`LIBRARY`、`CONNECTOR`、`LEGACY_AGENT_UPLOAD`、`S3_UPLOAD` |
+| `source` | 来源，例如 `LOCAL_UPLOAD`、`LIBRARY`、`CONNECTOR`、`DOMAIN_AGENT_UPLOAD`、`S3_UPLOAD` |
 | `bucket` | provider 位置字段；default-storage 表示对象存储 bucket，HTTP provider 表示 providerCode |
-| `objectKey` | provider 稳定定位符；default-storage 表示对象 key，legacy-agent 可为老 Agent docId 或 `legacy-url:{sha256(url)}` |
-| `metadataJson` | JSON object/null；provider 扩展元数据。legacy-agent 文档的 `providerDocument` 是组装老 Agent `sceneParam.docList` 的事实源。数据库内部仍以 JSON 字符串保存，但响应会解析成对象返回 |
+| `objectKey` | provider 稳定定位符；default-storage 表示对象 key，domain-agent 可为 DomainAgent docId 或 `domain-agent-url:{sha256(url)}` |
+| `metadataJson` | JSON object/null；provider 扩展元数据。domain-agent 文档的 `providerDocument` 是组装 DomainAgent `sceneParam.docList` 的事实源。数据库内部仍以 JSON 字符串保存，但响应会解析成对象返回 |
 | `tokenSize` | 解析后 token 数，可为空 |
 | `createdAt` / `updatedAt` | 创建和更新时间 |
 
@@ -565,9 +565,9 @@ POST /api/v1/ex/chat/runs/{runId}/stop
 
 `streamTopicId` 是 ChatService 的 run 级订阅 topic，不是 RelayAgent 的会话 ID。当前后端内部的 `AgentRuntime.query` 通过 streamable HTTP 调用下游 Relay；这个内部实现不改变前端协议。
 
-如果 `POST /chat/runs`、`POST /chat/runs/{runId}/stop` 或 `POST /documents` 请求携带标准 `Cookie` 头，后端会在入口捕获一次，并只把它透传给可信下游 adapter：Relay streamable HTTP、显式技能 legacy Agent chat/cancel，以及配置了 `forward-cookie=true` 的 legacy 文档 upload provider。该 Cookie 不会出现在请求 body、multipart form、metadata、事件、历史消息、文档元数据或前端响应中。
+如果 `POST /chat/runs`、`POST /chat/runs/{runId}/stop` 或 `POST /documents` 请求携带标准 `Cookie` 头，后端会在入口捕获一次，并只把它透传给可信下游 adapter：Relay streamable HTTP、DomainAgent chat/cancel，以及配置了 `forward-cookie=true` 的 DomainAgent 文档 upload provider。该 Cookie 不会出现在请求 body、multipart form、metadata、事件、历史消息、文档元数据或前端响应中。
 
-集成服务鉴权请求头由后端 `AuthHeaderProviderRegistry` 统一注入，前端不需要传 Sgov token，也不要在请求体中放服务鉴权信息。当前可配置接入的 serviceCode 包括 `welink-share`、`intent-service`、`use-case-library` 和 `sub-agent`；Relay Runtime、显式技能 legacy Agent 和 legacy 文档 provider 默认不走该集成服务鉴权层。
+集成服务鉴权请求头由后端 `AuthHeaderProviderRegistry` 统一注入，前端不需要传 Sgov token，也不要在请求体中放服务鉴权信息。当前可配置接入的 serviceCode 包括 `welink-share`、`intent-service`、`use-case-library` 和 `sub-agent`；Relay Runtime、DomainAgent 和 DomainAgent 文档 provider 默认不走该集成服务鉴权层。
 
 ## 推荐前端流程
 
@@ -979,7 +979,7 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
 | `editedMessageId` | string | EDIT_USER 必填 | 被编辑的未锁定 user 消息 |
 | `regeneratedMessageId` | string | REGENERATE_ASSISTANT 必填 | 被重新生成的未锁定 assistant 消息 |
 | `attachments` | array | 否 | 文档附件引用列表 |
-| `metadata` | object | 否 | 扩展字段，例如 `clientMessageId`、`forceNewTask`、`selectedSkillId` |
+| `metadata` | object | 否 | 扩展字段，例如 `clientMessageId`、`forceNewTask`、`selectedDomainAgentId` |
 
 响应：
 
@@ -1376,7 +1376,7 @@ MVC/Servlet 模式下，后端会在 WebSocket handshake 阶段读取企业权�
 连接建立后的 subscribe、unsubscribe 不再读取 ThreadLocal。因此前端只需要确保握手请求
 携带企业鉴权 cookie/header，协议消息体中不要传 tenantId/userId。
 
-企业 Cookie 有两类用途：请求入口身份解析，以及在进入可信下游 adapter 时透传给 Relay、显式技能 legacy Agent 或 legacy 文档 upload provider。透传只发生在创建 run、stop run 和配置允许的文档上传 HTTP 入口；WebSocket subscribe、Event Resume、历史查询、文档下载等接口不会把 Cookie 继续转发给下游 Agent。
+企业 Cookie 有两类用途：请求入口身份解析，以及在进入可信下游 adapter 时透传给 Relay、DomainAgent 或 DomainAgent 文档 upload provider。透传只发生在创建 run、stop run 和配置允许的文档上传 HTTP 入口；WebSocket subscribe、Event Resume、历史查询、文档下载等接口不会把 Cookie 继续转发给下游 Agent。
 
 生产环境必须配置 `financeex.websocket.allowed-origin-patterns` 为企业前端域名。默认值只允许
 localhost，避免 Cookie 鉴权场景下的跨站 WebSocket 滥用。服务端还会限制单用户连接数、单连接
@@ -1528,7 +1528,7 @@ Relay stream-http adapter 会通过 `FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 配置�
 | `runtime.thinking` | `{ "source": "relay", "sourceType": "thinking-operation-start", "status": "STARTED", "operationId": "可选", "agentName": "可选", "availableTools": [...] }` |
 | `runtime.tool` | `{ "source": "relay", "sourceType": "tool_call_streaming", "status": "STREAMING", "agentName": "可选", "toolName": "工具名", "inputPreview": "输入预览" }` |
 | `runtime.reference` | `{ "source": "relay", "sourceType": "url_moderation/relay-searchList/relay-sourcesDocuments", "referenceType": "url_moderation/search_list/source_documents", "url": "可选", "title": "可选", "references": "可选数组", "sourcePayload": { "...": "脱敏限长后的引用扩展信息" } }` |
-| `runtime.card` | `{ "source": "relay 或 legacy-agent", "sourceType": "relay-diyCardScene/cardUrl/diyCardScene/cardList/openCard", "cardType": "url/diyCardScene/cardList/openCard", "cardSources": ["原始或 relay-* 卡片字段"], "cardUrl": "可选", "openCard": "可选", "intent": "可选", "skillId": "可选", "diyCardScene": "可选对象", "cardList": "可选数组" }` |
+| `runtime.card` | `{ "source": "relay 或 domain-agent", "sourceType": "relay-diyCardScene/cardUrl/diyCardScene/cardList/openCard", "cardType": "url/diyCardScene/cardList/openCard", "cardSources": ["原始或 relay-* 卡片字段"], "cardUrl": "可选", "openCard": "可选", "intent": "可选", "domainAgentId": "可选", "diyCardScene": "可选对象", "cardList": "可选数组" }` |
 | `runtime.event` | `{ "source": "relay", "sourceType": "未知下游 type", "eventKind": "event", "channel": "runtime", "displayHint": "runtime", "text": "可选展示文本", "sourcePayload": { "...": "脱敏限长后的下游扩展载荷" } }` |
 | `message.completed` | `{ "status": "MESSAGE_COMPLETED", "finishReason": "可选", "runtimeSessionId": "可选", "agentSessionId": "可选" }` |
 | `run.failed` | `{ "code": "错误码", "message": "错误说明", "recoverable": "可选", "recoveryOptions": "可选" }` |
@@ -1540,8 +1540,8 @@ Relay 映射规则：
 - 纯文本 `steam-complete`、`stream-complete`、`stream_complete`、`stream.complete`、`stream-completed`、`[DONE]` 映射为 `message.completed`。
 - `relay-progress`、`project_home`、`available-modes/availbale-modes`、`agent-call`、`thinking-operation-start/thinkink-operation-start`、`thinking-operation-end/thinking_operation-end`、`tool_call_streaming`、引用/来源类事件映射为对应 `runtime.*`。
 - `tool-structured-result` 是 Relay 内部工具调用的结构化结果。后端读取 `result_data/resultData` 下的 `widget.data`，其中 `content` 映射为 `message.delta(sourceType=relay-content)`，`processResult` 映射为 `runtime.progress(sourceType=relay-processResult)`，`searchList` 映射为 `runtime.reference(sourceType=relay-searchList)`，`sourcesDocuments/sourceDocuments` 映射为 `runtime.reference(sourceType=relay-sourcesDocuments/relay-sourceDocuments)`，`cardUrl/diyCardScene/cardList/openCard` 映射为 `runtime.card(sourceType=relay-*)`。`result_data.is_last=true` 只作为 payload 上下文字段，不表示本轮 run 完成；run 仍以 `stream-complete/[DONE]` 等终态闭合。
-- legacy-agent 指定技能响应中，`content` 的 `<think>...</think>` 片段映射为 `runtime.thinking`，不会拼入 assistant 正文；非 think 内容映射为 `message.delta`。`traceId/sessionId/messageId` 映射为 `runtime.metadata`；单独出现的 `intent/skillId` 映射为 `runtime.metadata`；如果 `intent/skillId` 与某个卡片字段同帧出现，则一起放入 `runtime.card`。当前 legacy 协议下 `cardUrl/diyCardScene/cardList/openCard` 通常不会在同一个 chunk 中同时出现，因此卡片事件会保留原始 `sourceType`，例如 `diyCardScene` 或 `openCard`；服务端仅保留 `sourceType=legacy-card/cardType=mixed` 作为非预期混合帧的防御兜底。`processResult` 映射为 `runtime.progress`，`searchList/sourcesDocuments` 映射为 `runtime.reference`，`endFlag=true` 映射为 `message.completed`。
-- 当 legacy 的 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 等对象被网络截断到多个 chunk 时，服务端会先识别字段类型，再使用对应稳定事件类型输出分片：`runtime.card`、`runtime.reference` 或 `runtime.progress`。前端按 `payload.fragment=true` 判断分片，按 `payload.itemId` 拼接相同对象的 `payload.delta`；`payload.complete=true` 表示该对象片段结束。fragment 只用于卡片、引用、进度等过程展示，不应拼入 assistant 正文。
+- domain-agent DomainAgent 指定调用响应中，`content` 的 `<think>...</think>` 片段映射为 `runtime.thinking`，不会拼入 assistant 正文；非 think 内容映射为 `message.delta`。`traceId/sessionId/messageId` 映射为 `runtime.metadata`；单独出现的 `intent/domainAgentId` 映射为 `runtime.metadata`；如果 `intent/domainAgentId` 与某个卡片字段同帧出现，则一起放入 `runtime.card`。当前 domain-agent 协议下 `cardUrl/diyCardScene/cardList/openCard` 通常不会在同一个 chunk 中同时出现，因此卡片事件会保留原始 `sourceType`，例如 `diyCardScene` 或 `openCard`；服务端仅保留 `sourceType=domain-agent-card/cardType=mixed` 作为非预期混合帧的防御兜底。`processResult` 映射为 `runtime.progress`，`searchList/sourcesDocuments` 映射为 `runtime.reference`，`endFlag=true` 映射为 `message.completed`。
+- 当 domain-agent 的 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 等对象被网络截断到多个 chunk 时，服务端会先识别字段类型，再使用对应稳定事件类型输出分片：`runtime.card`、`runtime.reference` 或 `runtime.progress`。前端按 `payload.fragment=true` 判断分片，按 `payload.itemId` 拼接相同对象的 `payload.delta`；`payload.complete=true` 表示该对象片段结束。fragment 只用于卡片、引用、进度等过程展示，不应拼入 assistant 正文。
 - 未识别合法 JSON 映射为 `runtime.event`。`sourcePayload` 会脱敏和限长，不能作为稳定字段依赖。
 - Relay 原始 `type` 不会成为 ChatService 顶层 `type`，只会作为 `payload.sourceType` 或 raw log 排障信息。
 
@@ -1773,11 +1773,11 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/runs/run_xxx/stop
 
 stop 是 REST 生命周期接口，不是 WebSocket command。重复 stop 是幂等的：如果 run 已经 `COMPLETED`、`FAILED` 或 `CANCELLED`，会返回当前状态，不再追加新的取消事件。
 
-用户主动 stop 时，如果该 run 已经有 `message.delta`、`message.snapshot` 或用户可见的 `runtime.progress/runtime.tool/runtime.thinking/runtime.reference/runtime.card` 成功落库，后端会把截至 stop 时的内容保存为一条 assistant 历史消息。该消息的 `metadataJson` 会包含 `partial=true`、`finishReason=USER_STOP`、`runStatus=CANCELLED`。如果 stop 时只有 trace、legacy session 等内部 `runtime.metadata`，则不会创建空 assistant 消息；这些内部事件仍可通过 Event Resume 或事件表排障。
+用户主动 stop 时，如果该 run 已经有 `message.delta`、`message.snapshot` 或用户可见的 `runtime.progress/runtime.tool/runtime.thinking/runtime.reference/runtime.card` 成功落库，后端会把截至 stop 时的内容保存为一条 assistant 历史消息。该消息的 `metadataJson` 会包含 `partial=true`、`finishReason=USER_STOP`、`runStatus=CANCELLED`。如果 stop 时只有 trace、domain-agent session 等内部 `runtime.metadata`，则不会创建空 assistant 消息；这些内部事件仍可通过 Event Resume 或事件表排障。
 
 前端点击停止后，不应把关闭 WebSocket 当作取消语义。推荐流程是：保存当前本地 `lastSeq`，调用 stop，随后继续通过 WebSocket 等待 `run.cancelled`；如果页面已经断线或没有收到终态事件，则用 stop 前保存的 `lastSeq` 调 Event Resume 补齐 `run.cancelled`。当 stop 前已有正文或用户可见 parts 时，`run.cancelled.payload.messageReady=true`，并携带 `assistantMessageId/feedbackTargetMessageId`；HTTP stop 响应也会返回同样的反馈目标作为兜底。stop 响应里的 `latestSeq` 是服务端事实源位置，不代表当前页签已经消费到该事件。
 
-stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可信 Relay 或显式技能 legacy Agent 的 cancel adapter，用于下游企业权限校验。即使下游 cancel 失败，本服务仍以本地 `run.cancelled` 终态为准。
+stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可信 Relay 或 DomainAgent 的 cancel adapter，用于下游企业权限校验。即使下游 cancel 失败，本服务仍以本地 `run.cancelled` 终态为准。
 
 ## Run 故障恢复事件
 
@@ -1819,15 +1819,15 @@ curl -X POST http://localhost:8080/api/v1/ex/documents \
 `file` 放文件内容，`sessionId` 可选；后端在 Servlet/MVC 下绑定为 `MultipartFile`，在纯
 WebFlux 下绑定为 `FilePart`，前端不需要区分。
 
-当用户在前端选择存量 Agent 技能，并且该技能要求先把文档上传到老 Agent 文件服务时，仍然使用同一个
+当用户在前端选择 DomainAgent 技能，并且该技能要求先把文档上传到 DomainAgent 文件服务时，仍然使用同一个
 `POST /api/v1/ex/documents` 接口，只是增加 provider 上下文字段：
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/ex/documents \
   -F "file=@./invoice.pdf" \
   -F "sessionId=session_xxx" \
-  -F "targetProvider=legacy-agent" \
-  -F "skillId=skill_tax_opinion" \
+  -F "targetProvider=domain-agent" \
+  -F "domainAgentId=skill_tax_opinion" \
   -F 'metadata={"source":"skill-picker"}'
 ```
 
@@ -1837,12 +1837,12 @@ curl -X POST http://localhost:8080/api/v1/ex/documents \
 | --- | --- | --- |
 | `file` | 是 | 用户选择的本地文件内容。 |
 | `sessionId` | 否 | 上传时关联的会话；为空时作为用户文档库资产保存。 |
-| `targetProvider` | 否 | 目标文档 provider；为空使用 `default-storage`，选中历史技能上传时使用 `legacy-agent`。 |
-| `skillId` | 否 | 上传时关联的技能 ID；provider adapter 可把它透传给下游上传接口或用于审计。 |
+| `targetProvider` | 否 | 目标文档 provider；为空使用 `default-storage`，选中 DomainAgent 上传时使用 `domain-agent`。 |
+| `domainAgentId` | 否 | 上传时关联的 DomainAgent ID；provider adapter 可把它透传给下游上传接口或用于审计。 |
 | `metadata` | 否 | 上传上下文 JSON 字符串；不要放 Cookie、token 等敏感信息。 |
 
-Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解析。只有当 `targetProvider=legacy-agent`
-且 provider 配置 `forward-cookie=true` 时，后端才会把该 Cookie 作为老 Agent upload HTTP header
+Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解析。只有当 `targetProvider=domain-agent`
+且 provider 配置 `forward-cookie=true` 时，后端才会把该 Cookie 作为 DomainAgent upload HTTP header
 透传给下游；普通 `default-storage` 上传不会透传。Cookie 不会进入 multipart form、`metadata`、
 `UploadedDocumentDto.metadataJson` 或响应体。
 
@@ -1870,9 +1870,9 @@ Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解
 }
 ```
 
-`targetProvider=legacy-agent` 时，响应仍然是同一个 `UploadedDocumentDto`，但 `source` 为
-`LEGACY_AGENT_UPLOAD`，`bucket` 语义上是 providerCode。若老 Agent 返回 `docid`，`objectKey`
-为该 docId；若只返回 `url`，`objectKey` 为 `legacy-url:{sha256(url)}`，完整 URL 放在
+`targetProvider=domain-agent` 时，响应仍然是同一个 `UploadedDocumentDto`，但 `source` 为
+`DOMAIN_AGENT_UPLOAD`，`bucket` 语义上是 providerCode。若 DomainAgent 返回 `docid`，`objectKey`
+为该 docId；若只返回 `url`，`objectKey` 为 `domain-agent-url:{sha256(url)}`，完整 URL 放在
 `metadataJson.providerDocument.url`。
 
 `targetProvider=s3-upload` 时，后端会调用配置中的外部 `/uploadFile` multipart 接口。该接口响应字段按
@@ -1885,7 +1885,7 @@ curl -X POST http://localhost:8080/api/v1/ex/documents \
 ```
 
 响应中的 `source` 为 `S3_UPLOAD`，`bucket` 为 providerCode `s3-upload`，`objectKey` 为下游返回的
-`docId`；如果下游只返回 `url`，则 `objectKey` 会保存为 `legacy-url:{sha256(url)}`，完整 URL 位于
+`docId`；如果下游只返回 `url`，则 `objectKey` 会保存为 `domain-agent-url:{sha256(url)}`，完整 URL 位于
 `metadataJson.providerDocument.url`。
 
 `s3-upload` 文档响应示例：
@@ -1924,15 +1924,15 @@ docId 模式的 `metadataJson.providerDocument` 示例：
 
 ```json
 {
-  "id": "doc_legacy_xxx",
+  "id": "doc_domain_agent_xxx",
   "originalName": "invoice.pdf",
   "status": "AVAILABLE",
-  "source": "LEGACY_AGENT_UPLOAD",
+  "source": "DOMAIN_AGENT_UPLOAD",
   "metadataJson": {
-    "providerCode": "legacy-agent",
+    "providerCode": "domain-agent",
     "providerDocument": {
       "providerLocatorType": "DOC_ID",
-      "docId": "legacy_doc_1",
+      "docId": "domain_doc_1",
       "docName": "invoice.pdf",
       "docSize": 19800,
       "levelCode": "IP",
@@ -1951,17 +1951,17 @@ URL 模式的 `metadataJson.providerDocument` 示例：
 
 ```json
 {
-  "id": "doc_legacy_url_xxx",
+  "id": "doc_domain_agent_url_xxx",
   "originalName": "invoice.pdf",
   "status": "AVAILABLE",
-  "source": "LEGACY_AGENT_UPLOAD",
-  "objectKey": "legacy-url:6a1b...",
+  "source": "DOMAIN_AGENT_UPLOAD",
+  "objectKey": "domain-agent-url:6a1b...",
   "metadataJson": {
-    "providerCode": "legacy-agent",
+    "providerCode": "domain-agent",
     "providerDocument": {
       "providerLocatorType": "URL",
       "docId": null,
-      "url": "https://legacy.example/files/invoice.pdf",
+      "url": "https://domain.example/files/invoice.pdf",
       "docName": "invoice.pdf",
       "docSize": 19800
     },
@@ -1973,8 +1973,8 @@ URL 模式的 `metadataJson.providerDocument` 示例：
 }
 ```
 
-URL-only 文档表示文档库上传成功，但当前不会自动作为指定技能 `sceneParam.docList` 附件使用。
-如果后续要在 `selectedSkillId` run 中引用该文档，需要按对应 skillId 重新上传并拿到老 Agent `docId`。
+URL-only 文档表示文档库上传成功，但当前不会自动作为 DomainAgent 指定调用 `sceneParam.docList` 附件使用。
+如果后续要在 `selectedDomainAgentId` run 中引用该文档，需要按对应 domainAgentId 重新上传并拿到 DomainAgent `docId`。
 
 查询文档库和文档状态：
 
@@ -1993,7 +1993,7 @@ curl -X PATCH http://localhost:8080/api/v1/ex/documents/doc_xxx \
 curl -X DELETE http://localhost:8080/api/v1/ex/documents/doc_xxx
 ```
 
-预览和下载仍走后端受控流，不直接暴露对象存储临时签名。对于 `legacy-agent.download.enabled=false`
+预览和下载仍走后端受控流，不直接暴露对象存储临时签名。对于 `domain-agent.download.enabled=false`
 这类 provider 托管文档，预览和下载会返回 `DOCUMENT_CONTENT_MANAGED_BY_PROVIDER`，前端应提示“该文档由下游服务托管，当前不可下载”：
 
 ```bash
@@ -2032,24 +2032,24 @@ curl -OJ http://localhost:8080/api/v1/ex/documents/doc_xxx/download
 
 后端会按当前用户回查文档库，补齐可信的文件名、MIME、大小、来源和 tokenSize。前端传入的附件展示字段不会被当作事实源。
 
-指定历史技能调用时，`metadata.selectedSkillId` 触发 `EXPLICIT_SKILL` 路由。后端会用文档库中的
-`providerDocument` 可信元数据组装老 Agent 所需的 `sceneParam.docList`。前端可以通过
-`metadata.legacyAgent.sceneParam` 传入其他业务扩展参数，但不要依赖自己传入的 `docList`；即使传了，
+指定 DomainAgent 调用时，`metadata.selectedDomainAgentId` 触发 `DOMAIN_AGENT` 路由。后端会用文档库中的
+`providerDocument` 可信元数据组装 DomainAgent 所需的 `sceneParam.docList`。前端可以通过
+`metadata.domainAgent.sceneParam` 传入其他业务扩展参数，但不要依赖自己传入的 `docList`；即使传了，
 后端也会用已鉴权附件生成的可信 `docList` 覆盖：
 
 ```json
 {
-  "commandId": "cmd_legacy_skill_001",
+  "commandId": "cmd_domain_agent_001",
   "sessionId": "session_xxx",
   "message": "请基于附件出具税务意见",
   "attachments": [
     {
-      "documentId": "doc_legacy_xxx"
+      "documentId": "doc_domain_agent_xxx"
     }
   ],
   "metadata": {
-    "selectedSkillId": "skill_tax_opinion",
-    "legacyAgent": {
+    "selectedDomainAgentId": "skill_tax_opinion",
+    "domainAgent": {
       "isThinking": 1,
       "platform": "PC",
       "qaType": "normalQa",
@@ -2064,7 +2064,7 @@ curl -OJ http://localhost:8080/api/v1/ex/documents/doc_xxx/download
 }
 ```
 
-显式技能路由不会读取或创建 RuntimeBinding，也不会调用用例库/意图服务。它只用于前端明确选择历史技能的兼容场景；如果附件不是 `legacy-agent` provider 上传的文档，后端会拒绝本轮 run，要求前端先按 legacy provider 重新上传。
+DomainAgent 路由不会读取或创建 RuntimeBinding，也不会调用用例库/意图服务。它只用于前端明确选择 DomainAgent 的场景；如果附件不是 `domain-agent` provider 上传的文档，后端会拒绝本轮 run，要求前端先按 domain-agent provider 重新上传。
 
 ## 前端联调最小示例
 
@@ -2145,7 +2145,7 @@ async function stopCurrentRun() {
 }
 ```
 
-本地联调台的“鉴权请求头”如果配置了 `Cookie: finex_proxy_profile=...` 或企业登录 Cookie，Node 代理会把该 Cookie 注入 `/chat/runs`、`/chat/runs/{runId}/stop` 和 `/documents`。后端随后会根据 `financeex.agent-runtime.forward-cookie.*` 与文档 provider 的 `forward-cookie` 配置决定是否透传给 Relay Runtime、显式技能 legacy Agent 或 legacy 文档上传接口；前端不需要在请求体或 multipart form 里放 Cookie。
+本地联调台的“鉴权请求头”如果配置了 `Cookie: finex_proxy_profile=...` 或企业登录 Cookie，Node 代理会把该 Cookie 注入 `/chat/runs`、`/chat/runs/{runId}/stop` 和 `/documents`。后端随后会根据 `financeex.agent-runtime.forward-cookie.*` 与文档 provider 的 `forward-cookie` 配置决定是否透传给 Relay Runtime、DomainAgent 或 DomainAgent 文档上传接口；前端不需要在请求体或 multipart form 里放 Cookie。
 
 ## 排障清单
 

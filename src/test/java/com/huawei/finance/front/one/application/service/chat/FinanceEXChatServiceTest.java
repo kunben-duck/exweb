@@ -12,9 +12,9 @@ import com.huawei.finance.front.one.application.facade.DocumentFacade;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
-import com.huawei.finance.front.one.application.integration.agent.LegacySkillAgentClient;
-import com.huawei.finance.front.one.application.integration.agent.LegacySkillAgentRequest;
-import com.huawei.finance.front.one.application.integration.agent.LegacySkillCancelRequest;
+import com.huawei.finance.front.one.application.integration.agent.DomainAgentClient;
+import com.huawei.finance.front.one.application.integration.agent.DomainAgentRequest;
+import com.huawei.finance.front.one.application.integration.agent.DomainAgentCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
@@ -34,7 +34,7 @@ import com.huawei.finance.front.one.application.service.routing.IntentRecognitio
 import com.huawei.finance.front.one.application.service.routing.RouteSignalApplicationService;
 import com.huawei.finance.front.one.application.service.routing.RouteSignalResult;
 import com.huawei.finance.front.one.application.service.runtime.AgentRuntimeExecutor;
-import com.huawei.finance.front.one.application.service.runtime.LegacySkillExecutor;
+import com.huawei.finance.front.one.application.service.runtime.DomainAgentExecutor;
 import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.finance.front.one.application.service.runtime.SubAgentExecutor;
 import com.huawei.finance.front.one.application.service.runtime.SystemResponseExecutor;
@@ -129,7 +129,7 @@ class FinanceEXChatServiceTest {
                         return Mono.empty();
                     }
                 }, limiter),
-                legacySkillExecutor(documentFacade(), limiter),
+                domainAgentExecutor(documentFacade(), limiter),
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(runtime, limiter),
                 documentFacade(),
@@ -194,10 +194,10 @@ class FinanceEXChatServiceTest {
         AgentRuntime runtime = new AgentRuntime() {
             @Override public Flux<ChatEvent> query(AgentRuntimeRequest request) {
                 return Flux.just(RuntimeEvent.card(request.runId(), request.sessionId(),
-                        Map.of("sourceType", "legacy-card",
+                        Map.of("sourceType", "domain-agent-card",
                                 "cardUrl", "https://cards.example/render/1",
                                 "intent", "CreditSales",
-                                "skillId", "skill-card")));
+                                "domainAgentId", "domain-agent-card")));
             }
             @Override public Mono<Void> cancel(AgentRuntimeCancelRequest request) { return Mono.empty(); }
         };
@@ -216,7 +216,7 @@ class FinanceEXChatServiceTest {
                         return Mono.empty();
                     }
                 }, limiter),
-                legacySkillExecutor(documentFacade(), limiter),
+                domainAgentExecutor(documentFacade(), limiter),
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(runtime, limiter),
                 documentFacade(),
@@ -254,7 +254,7 @@ class FinanceEXChatServiceTest {
     }
 
     @Test
-    void selectedSkillIdRoutesToLegacySkillWithoutRuntimeBinding() {
+    void selectedDomainAgentIdRoutesToDomainAgentWithoutRuntimeBinding() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         NeverCancelRunCache runCache = new NeverCancelRunCache();
@@ -275,12 +275,12 @@ class FinanceEXChatServiceTest {
         );
         DocumentFacade documents = documentFacade();
         AtomicReference<RuntimeForwardHeaders> capturedHeaders = new AtomicReference<>();
-        LegacySkillExecutor legacySkillExecutor = new LegacySkillExecutor(new LegacySkillAgentClient() {
-            @Override public Flux<ChatEvent> query(LegacySkillAgentRequest request) {
+        DomainAgentExecutor domainAgentExecutor = new DomainAgentExecutor(new DomainAgentClient() {
+            @Override public Flux<ChatEvent> query(DomainAgentRequest request) {
                 capturedHeaders.set(request.forwardHeaders());
-                return Flux.just(MessageDeltaEvent.of(request.runId(), request.sessionId(), "legacy answer"));
+                return Flux.just(MessageDeltaEvent.of(request.runId(), request.sessionId(), "domain answer"));
             }
-            @Override public Mono<Void> cancel(LegacySkillCancelRequest request) { return Mono.empty(); }
+            @Override public Mono<Void> cancel(DomainAgentCancelRequest request) { return Mono.empty(); }
         }, documents, limiter);
 
         FinanceEXChatService service = new FinanceEXChatService(
@@ -297,7 +297,7 @@ class FinanceEXChatServiceTest {
                         return Mono.empty();
                     }
                 }, limiter),
-                legacySkillExecutor,
+                domainAgentExecutor,
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(noopRuntime(), limiter),
                 documents,
@@ -313,7 +313,7 @@ class FinanceEXChatServiceTest {
         );
 
         StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
-                        null, null, "web", "hello", List.of(), Map.of("selectedSkillId", "skill-tax")),
+                        null, null, "web", "hello", List.of(), Map.of("selectedDomainAgentId", "skill-tax")),
                         RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192)))
                 .expectNextMatches(event -> "run.started".equals(event.type()))
                 .expectNextMatches(event -> "message.delta".equals(event.type()))
@@ -323,7 +323,7 @@ class FinanceEXChatServiceTest {
         assertThat(capturedHeaders.get()).isNotNull();
         assertThat(capturedHeaders.get().cookieHeader()).isEqualTo("sid=abc");
         ChatRun run = runs.runs.values().iterator().next();
-        assertThat(run.routeType()).isEqualTo("EXPLICIT_SKILL");
+        assertThat(run.routeType()).isEqualTo("DOMAIN_AGENT");
         assertThat(run.agentCode()).isEqualTo("skill-tax");
         assertThat(run.runtimeProvider()).isNull();
     }
@@ -371,7 +371,7 @@ class FinanceEXChatServiceTest {
                         return Mono.empty();
                     }
                 }, limiter),
-                legacySkillExecutor(documentFacade(), limiter),
+                domainAgentExecutor(documentFacade(), limiter),
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(mismatchedRuntime, limiter),
                 documentFacade(),
@@ -435,7 +435,7 @@ class FinanceEXChatServiceTest {
                         return Mono.empty();
                     }
                 }, limiter),
-                legacySkillExecutor(documentFacade(), limiter),
+                domainAgentExecutor(documentFacade(), limiter),
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(noopRuntime(), limiter),
                 documentFacade(),
@@ -625,7 +625,7 @@ class FinanceEXChatServiceTest {
                         return Mono.empty();
                     }
                 }, limiter),
-                legacySkillExecutor(documentFacade(), limiter),
+                domainAgentExecutor(documentFacade(), limiter),
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(noopRuntime(), limiter),
                 documentFacade(),
@@ -695,10 +695,10 @@ class FinanceEXChatServiceTest {
         };
     }
 
-    private LegacySkillExecutor legacySkillExecutor(DocumentFacade documentFacade, WorkloadConcurrencyLimiter limiter) {
-        return new LegacySkillExecutor(new LegacySkillAgentClient() {
-            @Override public Flux<ChatEvent> query(LegacySkillAgentRequest request) { return Flux.empty(); }
-            @Override public Mono<Void> cancel(LegacySkillCancelRequest request) { return Mono.empty(); }
+    private DomainAgentExecutor domainAgentExecutor(DocumentFacade documentFacade, WorkloadConcurrencyLimiter limiter) {
+        return new DomainAgentExecutor(new DomainAgentClient() {
+            @Override public Flux<ChatEvent> query(DomainAgentRequest request) { return Flux.empty(); }
+            @Override public Mono<Void> cancel(DomainAgentCancelRequest request) { return Mono.empty(); }
         }, documentFacade, limiter);
     }
 

@@ -150,7 +150,7 @@ export FINANCEEX_DEV_USERNAME=developer
 run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。stop 只停止本轮回答，不删除 `RuntimeBinding`；如果用户主动 stop 前已经有 `message.delta`、`message.snapshot` 或卡片、引用、思考、工具、进度等用户可见 parts 成功落库，ChatService 会把截至 stop 时的内容保存为 partial assistant 历史消息，并在消息 `metadata_json` 中标记 `partial=true`、`finishReason=USER_STOP`。
 run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实例、心跳、租约、恢复状态和 `fencing_token`，不混入业务 run 表。后台执行流写入 run 事件时通过数据库 guarded insert 原子校验 execution owner 与 `fencing_token`；stop、watchdog 或未来 Runtime takeover 递增 token 后，旧实例迟到 delta/completed 会被拒绝。
 当前生产版本按下游标准事件原粒度写入和推送 `message.delta`，不再在 ChatService 内合并 delta，避免内部背压误中断 run；`financeex.chat-stream.delta-coalesce-*` 仅作为后续 demand-aware 合并器的兼容预留。Relay `is_streaming=false` 的最终回答会映射为 `message.snapshot`，前端用它替换当前草稿，历史消息正文也优先使用该快照。
-assistant 的思考、工具、进度、agent 调用等过程信息保存到 `fin_ex_chat_message_part_t`，并通过 `ChatMessageDto.parts` 返回。parts 会提供稳定的 `title/status/channel/displayHint/visible` 展示语义，前端不需要解析 Relay 私有 payload。
+assistant 的思考、工具、进度、agent 调用等过程信息保存到 `fin_ex_chat_message_part_t`，并通过 `ChatMessageDto.parts` 返回。用户消息关联的文档附件保存到 `fin_ex_chat_message_attachment_t`，历史消息、tree 和 variants 会通过 `ChatMessageDto.attachments` 返回附件展示快照；下载和预览仍走文档库接口重新鉴权。parts 会提供稳定的 `title/status/channel/displayHint/visible` 展示语义，前端不需要解析 Relay 私有 payload。
 Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPublisher` best-effort 发布到企业 MQ；消费端异步合并、脱敏、分片后写入 `fin_ex_runtime_raw_stream_log_t`。raw log 默认关闭，只用于排障和协议分析，不用于前端恢复、不用于 WebSocket 推送，也不用于 assistant 历史消息拼接；MQ 或 raw log 写库失败不会影响 run 主链路。
 集群部署时，取消正确性依赖 Redis cancel flag 和数据库 run 状态；实例故障治理依赖数据库 execution 条件抢占和 fencing token。JVM 内 subscription registry 只用于命中本机执行流时快速释放资源，不作为跨实例事实源。
 同一 `tenantId + userId + sessionId` 同一时间只允许一个 active run。若会话已有
@@ -435,6 +435,9 @@ Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共�
 `targetProvider=legacy-agent` 时会转发老 Agent upload 接口，并把老 Agent 返回的 docId 或 url、docName、docSize
 等写入统一文档库 `metadataJson.providerDocument`。如果该 provider 配置 `forward-cookie=true`，上传入口捕获到的
 Cookie 会作为下游 upload HTTP header 透传，用于老 Agent 文件服务的企业鉴权；Cookie 不会进入 form 字段或文档库元数据。
+传 `targetProvider=s3-upload` 时会转发外部 `/uploadFile` multipart 接口，并把返回的
+`docId/docName/url/docSize/docRelativePath/docStatus/fileSize/message/error` 等字段写入统一文档库；该 provider
+默认关闭，可通过 `FINANCEEX_S3_UPLOAD_DOCUMENT_PROVIDER_ENABLED=true` 和 `FINANCEEX_S3_UPLOAD_BASE_URL` 启用。
 文档接口响应里的 `metadataJson` 会解析为 JSON object，便于前端直接读取；数据库表字段仍保存 JSON 字符串。
 如果老 Agent 上传响应没有 `docId` 但返回了 `url`，文档库仍视为上传成功：`objectKey` 保存
 `legacy-url:{sha256(url)}` 这种短稳定定位符，完整 URL 只保存在 `metadataJson.providerDocument.url`。
@@ -470,6 +473,22 @@ Cookie 会作为下游 upload HTTP header 透传，用于老 Agent 文件服务�
 老 Agent upload path，把返回的 `docid/docname/docsize/levelCode/serverName/version` 等 allowlist 字段
 保存到 `metadataJson.providerDocument`；随后 `/chat/runs.metadata.selectedSkillId` 会触发老 Agent chat
 adapter，并只允许引用这些 legacy provider 文档。普通 default-storage 文档不会被自动转传给老 Agent。
+
+外部 S3 upload API 接入示例：
+
+```bash
+export FINANCEEX_S3_UPLOAD_DOCUMENT_PROVIDER_ENABLED=true
+export FINANCEEX_S3_UPLOAD_BASE_URL=https://s3-upload.example.com
+export FINANCEEX_S3_UPLOAD_PATH=/uploadFile
+```
+
+前端上传时：
+
+```bash
+curl -X POST http://localhost:8080/api/v1/ex/documents \
+  -F "file=@./report.pdf" \
+  -F "targetProvider=s3-upload"
+```
 
 默认使用本地文件系统：
 

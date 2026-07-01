@@ -42,8 +42,8 @@ query、候选意图、最高置信结果、最终路由是否采纳和调用耗
 | 会话列表（游标） | `GET` | `/api/v1/ex/chat/sessions?limit=20&cursor=...` | 当前用户会话游标分页 |
 | 会话列表（页码） | `GET` | `/api/v1/ex/chat/sessions/page?curPage=1&pageSize=20` | 当前用户历史会话页码分页，返回 totalRows |
 | 会话详情 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}` | 查询单个会话元数据 |
-| 历史消息 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50` | 查询当前 active path 或指定 leaf path，消息带轻量 `versionInfo` |
-| 消息树视图 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages/tree` | 查询完整可见消息树 mapping，用于复杂版本树或调试 |
+| 历史消息 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50` | 查询当前 active path 或指定 leaf path，消息带轻量 `versionInfo` 和附件快照 |
+| 消息树视图 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages/tree` | 查询完整可见消息树 mapping，用于复杂版本树或调试，节点消息同样带附件快照 |
 | 消息版本详情 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants` | 查询同父节点候选版本完整内容；普通聊天页优先使用 `/messages.versionInfo` |
 | 切换路径 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/path` | 将会话当前 leaf 切换到指定消息 |
 | 新建分支 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/branches` | 从某条消息创建只读历史快照分支 |
@@ -262,7 +262,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`targetProvider` 可选，`skillId` 可选，`metadata` 可选 JSON 字符串；Header 可带标准 `Cookie`。 | `UploadedDocumentDto`。 | 不传 `targetProvider` 使用 default-storage；`targetProvider=legacy-agent` 时后端转发配置化老 Agent upload 接口，并把 provider docId 或 url 写入统一文档库。只有 provider 配置 `forward-cookie=true` 时，入口 Cookie 才会作为下游 upload HTTP header 透传。 |
+| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`targetProvider` 可选，`skillId` 可选，`metadata` 可选 JSON 字符串；Header 可带标准 `Cookie`。 | `UploadedDocumentDto`。 | 不传 `targetProvider` 使用 default-storage；`targetProvider=legacy-agent` 时后端转发配置化老 Agent upload 接口；`targetProvider=s3-upload` 时后端转发外部 `/uploadFile` S3 上传接口。只有 provider 配置 `forward-cookie=true` 时，入口 Cookie 才会作为下游 upload HTTP header 透传。 |
 | `GET /api/v1/ex/documents` | 文档库列表或最近文档选择器。 | Query：`sessionId` 可选，`limit` 默认 20，`cursor` 可选。 | `DocumentLibraryPageDto`：`items[]`、`nextCursor`。 | 默认不返回 `DELETED` 文档。 |
 | `GET /api/v1/ex/documents/{documentId}` | 查询文档详情。 | Path：`documentId`。 | `UploadedDocumentDto`。 | 可查看 `AVAILABLE/PROCESSING/FAILED` 等非删除状态。 |
 | `PATCH /api/v1/ex/documents/{documentId}` | 修改展示文件名或扩展元数据。 | Path：`documentId`；JSON body：`originalName`、`metadataJson`。 | `UploadedDocumentDto`。 | 空字段表示保留原值。 |
@@ -335,9 +335,23 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `editedFromMessageId` | 编辑历史 user 消息时的新版本来源 |
 | `regeneratedFromMessageId` | 重新生成 assistant 消息时的新版本来源 |
 | `parts` | assistant 消息结构化过程信息，包括思考、工具、进度、agent 调用和 ANSWER 快照；user 消息通常为空数组 |
+| `attachments` | 消息关联附件展示快照；通常用于 user 消息回显上传文档，下载/预览仍需调用文档库接口 |
 | `feedback` | 当前用户对该 assistant 消息的有效反馈；user 消息或已取消反馈为 `null` |
 | `versionInfo` | 同父同角色候选版本摘要；无可切换版本时为 `null` |
 | `createdAt` | 消息创建时间 |
+
+### `ChatMessageAttachmentDto`
+
+| 字段 | 含义 |
+| --- | --- |
+| `attachmentId` | 消息附件引用 ID。 |
+| `documentId` | 文档库资产 ID；下载、预览、状态查询继续使用文档库接口鉴权。 |
+| `attachmentOrder` | 同一消息内附件展示顺序。 |
+| `name` | 附件展示名称快照。 |
+| `contentType` | 附件 MIME 类型快照。 |
+| `sizeBytes` | 附件大小快照。 |
+| `sourceAttachmentId` | 分支复制时的来源附件引用 ID；普通消息为空。 |
+| `createdAt` | 附件引用创建时间。 |
 
 ### `ChatMessageVersionInfoDto`
 
@@ -511,7 +525,7 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 | `contentType` | MIME 类型 |
 | `sizeBytes` | 文件大小 |
 | `status` | `AVAILABLE`、`PROCESSING`、`FAILED`、`DELETED`；只有 `AVAILABLE` 可下载、预览和作为聊天附件 |
-| `source` | 来源，例如 `LOCAL_UPLOAD`、`LIBRARY`、`CONNECTOR`、`LEGACY_AGENT_UPLOAD` |
+| `source` | 来源，例如 `LOCAL_UPLOAD`、`LIBRARY`、`CONNECTOR`、`LEGACY_AGENT_UPLOAD`、`S3_UPLOAD` |
 | `bucket` | provider 位置字段；default-storage 表示对象存储 bucket，HTTP provider 表示 providerCode |
 | `objectKey` | provider 稳定定位符；default-storage 表示对象 key，legacy-agent 可为老 Agent docId 或 `legacy-url:{sha256(url)}` |
 | `metadataJson` | JSON object/null；provider 扩展元数据。legacy-agent 文档的 `providerDocument` 是组装老 Agent `sceneParam.docList` 的事实源。数据库内部仍以 JSON 字符串保存，但响应会解析成对象返回 |
@@ -752,6 +766,21 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages?leafMes
       "sourceMessageId": null,
       "editedFromMessageId": null,
       "regeneratedFromMessageId": null,
+      "parts": [],
+      "attachments": [
+        {
+          "attachmentId": "msg_att_001",
+          "documentId": "doc_001",
+          "attachmentOrder": 1,
+          "name": "report.pdf",
+          "contentType": "application/pdf",
+          "sizeBytes": 1024,
+          "sourceAttachmentId": null,
+          "createdAt": "2026-05-17T01:00:50Z"
+        }
+      ],
+      "feedback": null,
+      "versionInfo": null,
       "createdAt": "2026-05-17T01:01:00Z"
     },
     {
@@ -771,6 +800,10 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages?leafMes
       "sourceMessageId": null,
       "editedFromMessageId": null,
       "regeneratedFromMessageId": null,
+      "parts": [],
+      "attachments": [],
+      "feedback": null,
+      "versionInfo": null,
       "createdAt": "2026-05-17T01:01:10Z"
     }
   ],
@@ -794,7 +827,9 @@ curl -X DELETE http://localhost:8080/api/v1/ex/chat/sessions \
   -d '{"sessionIds":["session_xxx","session_yyy"]}'
 ```
 
-历史消息接口返回的是已经完整落库的 user/assistant 消息。若所选会话仍有 active run 正在输出，前端应继续调用 `stream-status` 和 run 级事件恢复缺失事件，把正在输出的增量接到当前 assistant 草稿上。
+历史消息接口返回的是已经完整落库的 user/assistant 消息，并会批量返回每条消息关联的 `attachments` 快照。
+附件快照只用于气泡回显，不授予文件下载权限；下载、预览和状态查询仍应使用 `/api/v1/ex/documents/{documentId}` 系列接口。
+若所选会话仍有 active run 正在输出，前端应继续调用 `stream-status` 和 run 级事件恢复缺失事件，把正在输出的增量接到当前 assistant 草稿上。
 
 ## 消息版本与分支
 
@@ -808,7 +843,7 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages/tree"
 ```
 
 响应中的 `mapping` 只包含当前用户当前会话内可见的 user/assistant 消息；不会返回 hidden system、
-raw log 或下游工具原始节点。每个 assistant 节点仍带 `parts`，前端过程面板应优先使用
+raw log 或下游工具原始节点。每个节点的 `message.attachments` 可用于回显文档附件；每个 assistant 节点仍带 `parts`，前端过程面板应优先使用
 `part.title/status/channel/displayHint/visible`，而不是解析 Relay 私有 payload。
 
 ### 普通聊天页版本游标
@@ -1839,6 +1874,51 @@ Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解
 `LEGACY_AGENT_UPLOAD`，`bucket` 语义上是 providerCode。若老 Agent 返回 `docid`，`objectKey`
 为该 docId；若只返回 `url`，`objectKey` 为 `legacy-url:{sha256(url)}`，完整 URL 放在
 `metadataJson.providerDocument.url`。
+
+`targetProvider=s3-upload` 时，后端会调用配置中的外部 `/uploadFile` multipart 接口。该接口响应字段按
+`docId/docName/url/docSize/docRelativePath/docStatus/fileSize/message/error` 映射到统一文档库：
+
+```bash
+curl -X POST http://localhost:8080/api/v1/ex/documents \
+  -F "file=@./report.pdf" \
+  -F "targetProvider=s3-upload"
+```
+
+响应中的 `source` 为 `S3_UPLOAD`，`bucket` 为 providerCode `s3-upload`，`objectKey` 为下游返回的
+`docId`；如果下游只返回 `url`，则 `objectKey` 会保存为 `legacy-url:{sha256(url)}`，完整 URL 位于
+`metadataJson.providerDocument.url`。
+
+`s3-upload` 文档响应示例：
+
+```json
+{
+  "id": "doc_s3_xxx",
+  "originalName": "report.pdf",
+  "status": "AVAILABLE",
+  "source": "S3_UPLOAD",
+  "bucket": "s3-upload",
+  "objectKey": "s3-doc-1",
+  "metadataJson": {
+    "providerCode": "s3-upload",
+    "providerDocument": {
+      "providerLocatorType": "DOC_ID",
+      "docId": "s3-doc-1",
+      "docName": "report.pdf",
+      "url": "https://s3.example/report.pdf",
+      "docSize": 1024,
+      "docRelativePath": "/2026/07/report.pdf",
+      "docStatus": 1,
+      "fileSize": 1024,
+      "message": "success",
+      "error": 0
+    },
+    "capabilities": {
+      "download": false,
+      "status": false
+    }
+  }
+}
+```
 
 docId 模式的 `metadataJson.providerDocument` 示例：
 

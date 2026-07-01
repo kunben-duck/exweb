@@ -161,6 +161,22 @@ public interface ChatMessageMapper {
     );
 
     /**
+     * 批量查询一组消息关联的附件展示快照。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param messageIds 待查询附件的消息 ID 列表。
+     * @return 附件引用列表，按 messageId 和 attachmentOrder 排序。
+     */
+    List<ChatMessageAttachmentRow> findAttachmentsByMessages(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionId") String sessionId,
+            @Param("messageIds") List<String> messageIds
+    );
+
+    /**
      * 批量查询一组消息的过程化 parts。
      *
      * @param tenantId 租户标识。

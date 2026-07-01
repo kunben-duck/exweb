@@ -315,6 +315,39 @@ financeex:
           type: object-storage
           enabled: true
           source: LOCAL_UPLOAD
+        s3-upload:
+          type: http
+          enabled: ${FINANCEEX_S3_UPLOAD_DOCUMENT_PROVIDER_ENABLED:false}
+          source: S3_UPLOAD
+          base-url: ${FINANCEEX_S3_UPLOAD_BASE_URL:}
+          timeout: ${FINANCEEX_S3_UPLOAD_TIMEOUT:30s}
+          forward-cookie: ${FINANCEEX_S3_UPLOAD_FORWARD_COOKIE_ENABLED:false}
+          upload:
+            enabled: ${FINANCEEX_S3_UPLOAD_ENABLED:true}
+            path: ${FINANCEEX_S3_UPLOAD_PATH:/uploadFile}
+            method: POST
+            content-type: multipart
+            file-field: ${FINANCEEX_S3_UPLOAD_FILE_FIELD:file}
+          download:
+            enabled: ${FINANCEEX_S3_UPLOAD_DOWNLOAD_ENABLED:false}
+            path: ${FINANCEEX_S3_UPLOAD_DOWNLOAD_PATH:}
+            method: GET
+          status:
+            enabled: ${FINANCEEX_S3_UPLOAD_STATUS_ENABLED:false}
+            path: ${FINANCEEX_S3_UPLOAD_STATUS_PATH:}
+            method: GET
+          response-mapping:
+            data-array-path: ${FINANCEEX_S3_UPLOAD_DATA_ARRAY_PATH:data}
+            document-id-field: ${FINANCEEX_S3_UPLOAD_DOCUMENT_ID_FIELD:docId}
+            document-name-field: ${FINANCEEX_S3_UPLOAD_DOCUMENT_NAME_FIELD:docName}
+            document-size-field: ${FINANCEEX_S3_UPLOAD_DOCUMENT_SIZE_FIELD:docSize}
+            document-url-field: ${FINANCEEX_S3_UPLOAD_DOCUMENT_URL_FIELD:url}
+            metadata-fields:
+              - docRelativePath
+              - docStatus
+              - fileSize
+              - message
+              - error
         legacy-agent:
           type: http
           enabled: ${FINANCEEX_LEGACY_AGENT_DOCUMENT_PROVIDER_ENABLED:false}

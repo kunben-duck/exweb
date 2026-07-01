@@ -159,7 +159,7 @@ public class MyBatisChatMessageStore {
         List<ChatMessage> pageItemsAscending = pageItems.stream()
                 .sorted(Comparator.comparing(ChatMessage::treeDepth).thenComparing(ChatMessage::nodeOrder))
                 .toList();
-        return new ChatMessagePage(attachParts(query.tenantId(), query.userId(), query.sessionId(), pageItemsAscending),
+        return new ChatMessagePage(attachMessageChildren(query.tenantId(), query.userId(), query.sessionId(), pageItemsAscending),
                 null);
     }
 
@@ -170,7 +170,7 @@ public class MyBatisChatMessageStore {
         List<ChatMessage> messages = mapper.findAllBySession(tenantId, userId, sessionId).stream()
                 .map(this::toDomain)
                 .toList();
-        return attachParts(tenantId, userId, sessionId, messages);
+        return attachMessageChildren(tenantId, userId, sessionId, messages);
     }
 
     public List<ChatMessage> findAllMessageNodesBySession(String tenantId, String userId, String sessionId) {
@@ -188,14 +188,14 @@ public class MyBatisChatMessageStore {
         }
         return mapper.findByOwnerAndId(tenantId, userId, messageId)
                 .map(this::toDomain)
-                .map(message -> attachParts(tenantId, userId, message.sessionId(), List.of(message)).getFirst());
+                .map(message -> attachMessageChildren(tenantId, userId, message.sessionId(), List.of(message)).getFirst());
     }
 
     public List<ChatMessage> findSiblings(String tenantId, String userId, String sessionId, String parentMessageId, String role) {
         List<ChatMessage> messages = mapper.findSiblings(tenantId, userId, sessionId, parentMessageId, role).stream()
                 .map(this::toDomain)
                 .toList();
-        return attachParts(tenantId, userId, sessionId, messages);
+        return attachMessageChildren(tenantId, userId, sessionId, messages);
     }
 
     public int countSiblings(String tenantId, String userId, String sessionId, String parentMessageId, String role) {
@@ -206,11 +206,28 @@ public class MyBatisChatMessageStore {
         List<ChatMessage> messages = mapper.findActivePath(tenantId, userId, sessionId, leafMessageId).stream()
                 .map(this::toDomain)
                 .toList();
-        return attachParts(tenantId, userId, sessionId, messages);
+        return attachMessageChildren(tenantId, userId, sessionId, messages);
     }
 
     public List<ChatMessageAttachment> findAttachments(String tenantId, String userId, String messageId) {
         return mapper.findAttachmentsByMessage(tenantId, userId, messageId).stream()
+                .map(this::toAttachmentDomain)
+                .toList();
+    }
+
+    public List<ChatMessageAttachment> findAttachmentsByMessageIds(String tenantId, String userId, String sessionId,
+                                                                   List<String> messageIds) {
+        if (tenantId == null || userId == null || sessionId == null || messageIds == null || messageIds.isEmpty()) {
+            return List.of();
+        }
+        List<String> normalizedIds = messageIds.stream()
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+        if (normalizedIds.isEmpty()) {
+            return List.of();
+        }
+        return mapper.findAttachmentsByMessages(tenantId, userId, sessionId, normalizedIds).stream()
                 .map(this::toAttachmentDomain)
                 .toList();
     }
@@ -232,7 +249,8 @@ public class MyBatisChatMessageStore {
                 .toList();
     }
 
-    private List<ChatMessage> attachParts(String tenantId, String userId, String sessionId, List<ChatMessage> messages) {
+    private List<ChatMessage> attachMessageChildren(String tenantId, String userId, String sessionId,
+                                                    List<ChatMessage> messages) {
         if (messages == null || messages.isEmpty()) {
             return List.of();
         }
@@ -240,8 +258,13 @@ public class MyBatisChatMessageStore {
         Map<String, List<ChatMessagePart>> partsByMessage = findPartsByMessageIds(tenantId, userId, sessionId, messageIds)
                 .stream()
                 .collect(Collectors.groupingBy(ChatMessagePart::messageId));
+        Map<String, List<ChatMessageAttachment>> attachmentsByMessage =
+                findAttachmentsByMessageIds(tenantId, userId, sessionId, messageIds)
+                        .stream()
+                        .collect(Collectors.groupingBy(ChatMessageAttachment::messageId));
         return messages.stream()
                 .map(message -> message.withParts(partsByMessage.getOrDefault(message.id(), List.of())))
+                .map(message -> message.withAttachments(attachmentsByMessage.getOrDefault(message.id(), List.of())))
                 .toList();
     }
 

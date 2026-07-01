@@ -282,6 +282,30 @@
     </select>
 
     <!--
+      批量查询消息附件展示快照，供历史消息、tree 和 variants 返回附件信息。
+      入参: tenantId/userId/sessionId 为归属边界；messageIds 为待装配附件的消息 ID 集合，空集合返回空结果。
+    -->
+    <select id="findAttachmentsByMessages" resultMap="chatMessageAttachmentResultMap">
+        SELECT *
+        FROM fin_ex_chat_message_attachment_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          <choose>
+            <when test="messageIds != null and messageIds.size() > 0">
+          AND message_id IN
+              <foreach collection="messageIds" item="messageId" open="(" separator="," close=")">
+                  #{messageId}
+              </foreach>
+            </when>
+            <otherwise>
+          AND 1 = 0
+            </otherwise>
+          </choose>
+        ORDER BY message_id ASC, attachment_order ASC, created_at ASC, id ASC
+    </select>
+
+    <!--
       批量查询 assistant message parts，避免历史消息和 variants 装配时产生 N+1 查询。
       入参: tenantId/userId/sessionId 为归属边界；messageIds 为待装配 part 的消息 ID 集合，空集合返回空结果。
     -->

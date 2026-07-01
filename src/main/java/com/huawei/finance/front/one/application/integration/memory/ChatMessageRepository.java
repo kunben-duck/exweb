@@ -160,6 +160,22 @@ public interface ChatMessageRepository {
     }
 
     /**
+     * 批量查询消息附件引用。
+     *
+     * <p>历史消息、tree 和 variants 装配附件时使用该方法，避免按消息逐条查询导致 N+1。</p>
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param messageIds 消息 ID 列表。
+     * @return 当前用户当前会话内的附件引用快照。
+     */
+    default List<ChatMessageAttachment> findAttachmentsByMessageIds(String tenantId, String userId, String sessionId,
+                                                                    List<String> messageIds) {
+        return List.of();
+    }
+
+    /**
      * 批量查询消息结构化 parts。
      *
      * @param tenantId 租户标识。

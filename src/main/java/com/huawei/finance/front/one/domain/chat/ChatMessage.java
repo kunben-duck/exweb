@@ -29,6 +29,7 @@ import java.util.List;
  * @param regeneratedFromMessageId 重新生成 assistant 回复时，新 assistant 消息来源。
  * @param metadataJson 消息扩展元数据 JSON。
  * @param parts assistant 消息的结构化过程信息；user 消息通常为空。
+ * @param attachments 用户消息关联的文档附件展示快照；assistant 消息通常为空。
  * @param createdAt 消息创建时间。
  */
 public record ChatMessage(
@@ -52,6 +53,7 @@ public record ChatMessage(
         String regeneratedFromMessageId,
         String metadataJson,
         List<ChatMessagePart> parts,
+        List<ChatMessageAttachment> attachments,
         Instant createdAt
 ) {
     public ChatMessage(String id, String tenantId, String userId, String sessionId, String parentMessageId,
@@ -61,7 +63,17 @@ public record ChatMessage(
                        String metadataJson, Instant createdAt) {
         this(id, tenantId, userId, sessionId, parentMessageId, nodeOrder, treeDepth, siblingIndex, role, content,
                 tokenCount, runId, originType, locked, sourceSessionId, sourceMessageId, editedFromMessageId,
-                regeneratedFromMessageId, metadataJson, List.of(), createdAt);
+                regeneratedFromMessageId, metadataJson, List.of(), List.of(), createdAt);
+    }
+
+    public ChatMessage(String id, String tenantId, String userId, String sessionId, String parentMessageId,
+                       Long nodeOrder, Integer treeDepth, Integer siblingIndex, String role, String content,
+                       Integer tokenCount, String runId, String originType, boolean locked, String sourceSessionId,
+                       String sourceMessageId, String editedFromMessageId, String regeneratedFromMessageId,
+                       String metadataJson, List<ChatMessagePart> parts, Instant createdAt) {
+        this(id, tenantId, userId, sessionId, parentMessageId, nodeOrder, treeDepth, siblingIndex, role, content,
+                tokenCount, runId, originType, locked, sourceSessionId, sourceMessageId, editedFromMessageId,
+                regeneratedFromMessageId, metadataJson, parts, List.of(), createdAt);
     }
 
     /**
@@ -78,6 +90,7 @@ public record ChatMessage(
         treeDepth = treeDepth == null ? 0 : treeDepth;
         siblingIndex = siblingIndex == null ? 0 : siblingIndex;
         parts = parts == null ? List.of() : List.copyOf(parts);
+        attachments = attachments == null ? List.of() : List.copyOf(attachments);
     }
 
     /**
@@ -96,6 +109,20 @@ public record ChatMessage(
     public ChatMessage withParts(List<ChatMessagePart> nextParts) {
         return new ChatMessage(id, tenantId, userId, sessionId, parentMessageId, nodeOrder, treeDepth,
                 siblingIndex, role, content, tokenCount, runId, originType, locked, sourceSessionId,
-                sourceMessageId, editedFromMessageId, regeneratedFromMessageId, metadataJson, nextParts, createdAt);
+                sourceMessageId, editedFromMessageId, regeneratedFromMessageId, metadataJson, nextParts,
+                attachments, createdAt);
+    }
+
+    /**
+     * 返回携带指定附件引用的消息副本。
+     *
+     * @param nextAttachments 新的附件展示快照。
+     * @return 带附件的不可变消息副本。
+     */
+    public ChatMessage withAttachments(List<ChatMessageAttachment> nextAttachments) {
+        return new ChatMessage(id, tenantId, userId, sessionId, parentMessageId, nodeOrder, treeDepth,
+                siblingIndex, role, content, tokenCount, runId, originType, locked, sourceSessionId,
+                sourceMessageId, editedFromMessageId, regeneratedFromMessageId, metadataJson, parts,
+                nextAttachments, createdAt);
     }
 }

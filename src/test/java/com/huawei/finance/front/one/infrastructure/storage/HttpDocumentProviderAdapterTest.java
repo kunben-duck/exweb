@@ -98,6 +98,34 @@ class HttpDocumentProviderAdapterTest {
     }
 
     @Test
+    void mapsS3UploadApiCamelCaseResponse() throws Exception {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+        HttpDocumentProviderAdapter adapter = adapter(captured, """
+                {"status":"success","message":"上传成功","data":[{"docId":"s3-doc-1","docName":"report.pdf",
+                "url":"https://s3.example/report.pdf","docSize":"1024","docRelativePath":"/2026/07/report.pdf",
+                "docStatus":1,"fileSize":1024,"message":"success","error":0}]}
+                """);
+        DocumentProviderProperties.ProviderEntry provider = s3UploadProvider();
+
+        UploadedDocument document = adapter.upload(uploadRequest("s3-upload", provider, null));
+
+        assertThat(captured.get()).isNotNull();
+        assertThat(captured.get().url().toString()).isEqualTo("http://s3-upload.test/uploadFile");
+        assertThat(document.objectKey()).isEqualTo("s3-doc-1");
+        assertThat(document.originalName()).isEqualTo("report.pdf");
+        assertThat(document.sizeBytes()).isEqualTo(1024);
+        assertThat(document.source()).isEqualTo("S3_UPLOAD");
+        JsonNode metadata = objectMapper.readTree(document.metadataJson());
+        assertThat(metadata.at("/providerCode").asText()).isEqualTo("s3-upload");
+        assertThat(metadata.at("/providerDocument/providerLocatorType").asText()).isEqualTo("DOC_ID");
+        assertThat(metadata.at("/providerDocument/docId").asText()).isEqualTo("s3-doc-1");
+        assertThat(metadata.at("/providerDocument/url").asText()).isEqualTo("https://s3.example/report.pdf");
+        assertThat(metadata.at("/providerDocument/docRelativePath").asText()).isEqualTo("/2026/07/report.pdf");
+        assertThat(metadata.at("/providerDocument/docStatus").asInt()).isEqualTo(1);
+        assertThat(metadata.at("/providerDocument/fileSize").asInt()).isEqualTo(1024);
+    }
+
+    @Test
     void rejectsUploadResponseWithoutDocumentIdOrUrl() {
         AtomicReference<ClientRequest> captured = new AtomicReference<>();
         HttpDocumentProviderAdapter adapter = adapter(captured, """
@@ -132,6 +160,12 @@ class HttpDocumentProviderAdapterTest {
 
     private DocumentProviderUploadRequest uploadRequest(DocumentProviderProperties.ProviderEntry provider,
                                                         String cookieHeader) {
+        return uploadRequest("legacy-agent", provider, cookieHeader);
+    }
+
+    private DocumentProviderUploadRequest uploadRequest(String providerCode,
+                                                        DocumentProviderProperties.ProviderEntry provider,
+                                                        String cookieHeader) {
         RuntimeForwardHeaders forwardHeaders = cookieHeader == null
                 ? RuntimeForwardHeaders.empty()
                 : RuntimeForwardHeaders.fromCookieHeader(cookieHeader, 8192);
@@ -141,7 +175,7 @@ class HttpDocumentProviderAdapterTest {
                 "application/pdf",
                 3,
                 new ByteArrayInputStream("pdf".getBytes(StandardCharsets.UTF_8)),
-                "legacy-agent",
+                providerCode,
                 "skill-tax",
                 "{\"clientTraceId\":\"trace-1\"}",
                 forwardHeaders
@@ -149,7 +183,7 @@ class HttpDocumentProviderAdapterTest {
         return new DocumentProviderUploadRequest(
                 new UserContext("tenant1", "user1", "Alice"),
                 "doc1",
-                "legacy-agent",
+                providerCode,
                 provider,
                 command
         );
@@ -168,6 +202,26 @@ class HttpDocumentProviderAdapterTest {
         provider.getUpload().setContentType("multipart");
         provider.getUpload().setFileField("file");
         provider.getUpload().setExtraFormFields(Map.of("skillId", "${skillId}", "sessionId", "${sessionId}"));
+        return provider;
+    }
+
+    private DocumentProviderProperties.ProviderEntry s3UploadProvider() {
+        DocumentProviderProperties.ProviderEntry provider = new DocumentProviderProperties.ProviderEntry();
+        provider.setType("http");
+        provider.setEnabled(true);
+        provider.setSource("S3_UPLOAD");
+        provider.setBaseUrl("http://s3-upload.test");
+        provider.getUpload().setEnabled(true);
+        provider.getUpload().setPath("/uploadFile");
+        provider.getUpload().setMethod("POST");
+        provider.getUpload().setContentType("multipart");
+        provider.getUpload().setFileField("file");
+        provider.getResponseMapping().setDocumentIdField("docId");
+        provider.getResponseMapping().setDocumentNameField("docName");
+        provider.getResponseMapping().setDocumentSizeField("docSize");
+        provider.getResponseMapping().setDocumentUrlField("url");
+        provider.getResponseMapping().setMetadataFields(
+                java.util.List.of("docRelativePath", "docStatus", "fileSize", "message", "error"));
         return provider;
     }
 }

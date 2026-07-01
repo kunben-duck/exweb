@@ -151,6 +151,12 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
     }
 
     @Override
+    public List<ChatMessageAttachment> findAttachmentsByMessageIds(String tenantId, String userId, String sessionId,
+                                                                   List<String> messageIds) {
+        return databaseStore.findAttachmentsByMessageIds(tenantId, userId, sessionId, messageIds);
+    }
+
+    @Override
     public List<ChatMessagePart> findPartsByMessageIds(String tenantId, String userId, String sessionId,
                                                        List<String> messageIds) {
         return databaseStore.findPartsByMessageIds(tenantId, userId, sessionId, messageIds);

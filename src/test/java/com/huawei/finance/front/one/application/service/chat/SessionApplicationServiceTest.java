@@ -59,6 +59,26 @@ class SessionApplicationServiceTest {
     }
 
     @Test
+    void listMessagesReturnsMessageAttachments() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        Instant now = Instant.now();
+        sessions.save(new ChatSession("session1", "tenant1", "user1", "title", "ACTIVE", "web", now, now));
+        messages.save(new ChatMessage("msg1", "tenant1", "user1", "session1", "user", "带附件的问题", null, now));
+        messages.saveAttachment(new ChatMessageAttachment("att1", "tenant1", "user1", "session1", "msg1",
+                "doc1", 1, "report.pdf", "application/pdf", 1024L, null, now));
+
+        SessionApplicationService service = service(sessions, messages);
+
+        List<ChatMessage> history = service.listMessages(user(), "session1", null, 50).items();
+
+        assertThat(history).hasSize(1);
+        assertThat(history.getFirst().attachments()).hasSize(1);
+        assertThat(history.getFirst().attachments().getFirst().documentId()).isEqualTo("doc1");
+        assertThat(history.getFirst().attachments().getFirst().name()).isEqualTo("report.pdf");
+    }
+
+    @Test
     void normalRunCreatesUserAndAssistantAsActivePath() {
         TestFixture fixture = fixture();
         ChatRunMessagePlan plan = fixture.service.prepareRunMessage(user(), command("hello", ChatRunMode.NEXT,
@@ -601,6 +621,7 @@ class SessionApplicationServiceTest {
                     .sorted(Comparator.comparing(ChatMessage::nodeOrder, Comparator.nullsLast(Long::compareTo))
                             .thenComparing(ChatMessage::createdAt))
                     .limit(query.limit())
+                    .map(this::withAttachments)
                     .toList();
             return new ChatMessagePage(items, null);
         }
@@ -622,6 +643,7 @@ class SessionApplicationServiceTest {
                     .filter(message -> Objects.equals(parentMessageId, message.parentMessageId()))
                     .filter(message -> Objects.equals(role, message.role()))
                     .sorted(Comparator.comparing(ChatMessage::siblingIndex, Comparator.nullsLast(Integer::compareTo)))
+                    .map(this::withAttachments)
                     .toList();
         }
 
@@ -641,7 +663,7 @@ class SessionApplicationServiceTest {
                 String parentMessageId = current.parentMessageId();
                 current = parentMessageId == null ? null : messages.get(parentMessageId);
             }
-            return path;
+            return path.stream().map(this::withAttachments).toList();
         }
 
         @Override
@@ -657,6 +679,21 @@ class SessionApplicationServiceTest {
                     .filter(attachment -> userId.equals(attachment.userId()))
                     .filter(attachment -> messageId.equals(attachment.messageId()))
                     .toList();
+        }
+
+        @Override
+        public List<ChatMessageAttachment> findAttachmentsByMessageIds(String tenantId, String userId, String sessionId,
+                                                                       List<String> messageIds) {
+            return attachments.stream()
+                    .filter(attachment -> tenantId.equals(attachment.tenantId()))
+                    .filter(attachment -> userId.equals(attachment.userId()))
+                    .filter(attachment -> sessionId.equals(attachment.sessionId()))
+                    .filter(attachment -> messageIds.contains(attachment.messageId()))
+                    .toList();
+        }
+
+        private ChatMessage withAttachments(ChatMessage message) {
+            return message.withAttachments(findAttachments(message.tenantId(), message.userId(), message.id()));
         }
     }
 

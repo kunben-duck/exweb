@@ -6,6 +6,7 @@ import com.huawei.finance.front.one.application.service.chat.ChatFeedbackApplica
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessageFeedback;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
@@ -14,6 +15,7 @@ import com.huawei.finance.front.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import com.huawei.finance.front.one.interfaces.chat.dto.BatchDeleteChatSessionsDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.BatchDeleteChatSessionsRequest;
+import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessageAttachmentDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessageDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessagePageDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessagePartDto;
@@ -381,6 +383,7 @@ public class ChatSessionController {
                 message.editedFromMessageId(),
                 message.regeneratedFromMessageId(),
                 toPartDtos(message.parts()),
+                toAttachmentDtos(message.attachments()),
                 feedback == null ? null : toFeedbackDto(feedback),
                 versionInfo,
                 message.createdAt()
@@ -407,6 +410,24 @@ public class ChatSessionController {
                         part.payload(),
                         part.partOrder(),
                         part.createdAt()
+                ))
+                .toList();
+    }
+
+    private List<ChatMessageAttachmentDto> toAttachmentDtos(List<ChatMessageAttachment> attachments) {
+        if (attachments == null || attachments.isEmpty()) {
+            return List.of();
+        }
+        return attachments.stream()
+                .map(attachment -> new ChatMessageAttachmentDto(
+                        attachment.id(),
+                        attachment.documentId(),
+                        attachment.attachmentOrder(),
+                        attachment.name(),
+                        attachment.contentType(),
+                        attachment.sizeBytes(),
+                        attachment.sourceAttachmentId(),
+                        attachment.createdAt()
                 ))
                 .toList();
     }

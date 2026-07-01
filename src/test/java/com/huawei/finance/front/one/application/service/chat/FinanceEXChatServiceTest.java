@@ -316,6 +316,9 @@ class FinanceEXChatServiceTest {
                         null, null, "web", "hello", List.of(), Map.of("selectedDomainAgentId", "skill-tax")),
                         RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192)))
                 .expectNextMatches(event -> "run.started".equals(event.type()))
+                .expectNextMatches(event -> "runtime.metadata".equals(event.type())
+                        && "skill-tax".equals(event.payload().get("skillId"))
+                        && "selected_domain_agent".equals(event.payload().get("metadataType")))
                 .expectNextMatches(event -> "message.delta".equals(event.type()))
                 .expectNextMatches(event -> "run.completed".equals(event.type()))
                 .verifyComplete();
@@ -326,6 +329,12 @@ class FinanceEXChatServiceTest {
         assertThat(run.routeType()).isEqualTo("DOMAIN_AGENT");
         assertThat(run.agentCode()).isEqualTo("skill-tax");
         assertThat(run.runtimeProvider()).isNull();
+        assertThat(messages.parts).anySatisfy(part -> {
+            assertThat(part.partType()).isEqualTo("METADATA");
+            assertThat(part.payload()).containsEntry("skillId", "skill-tax")
+                    .containsEntry("domainAgentId", "skill-tax")
+                    .containsEntry("metadataType", "selected_domain_agent");
+        });
     }
 
     @Test

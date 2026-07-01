@@ -2065,6 +2065,9 @@ curl -OJ http://localhost:8080/api/v1/ex/documents/doc_xxx/download
 ```
 
 DomainAgent 路由不会读取或创建 RuntimeBinding，也不会调用用例库/意图服务。它只用于前端明确选择 DomainAgent 的场景；如果附件不是 `domain-agent` provider 上传的文档，后端会拒绝本轮 run，要求前端先按 domain-agent provider 重新上传。
+本轮显式选择的 DomainAgent 会进入 `runtime.metadata`，并在历史 assistant 的 `parts` 返回：
+`partType=METADATA`、`payload.metadataType=selected_domain_agent`、`payload.domainAgentId=payload.skillId=所选技能 ID`、
+`payload.intentResult.source=front-selected`。前端历史页可以用该 part 展示“本轮调用技能”。
 
 ## 前端联调最小示例
 

@@ -8,7 +8,9 @@ import com.huawei.finance.front.one.application.integration.agent.RuntimeForward
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
+import com.huawei.finance.front.one.domain.chat.RuntimeEvent;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
@@ -48,7 +50,8 @@ public class DomainAgentExecutor {
                 command.metadata(),
                 context.forwardHeaders()
         );
-        return concurrencyLimiter.protectAgentRuntime(domainAgentClient.query(request));
+        return Flux.concat(Flux.just(selectedDomainAgentEvent(request)),
+                concurrencyLimiter.protectAgentRuntime(domainAgentClient.query(request)));
     }
 
     public Mono<Void> cancel(ChatRun run, UserContext user, RuntimeForwardHeaders forwardHeaders) {
@@ -64,5 +67,26 @@ public class DomainAgentExecutor {
                 Map.of("routeType", run.routeType() == null ? "" : run.routeType()),
                 forwardHeaders
         ));
+    }
+
+    private ChatEvent selectedDomainAgentEvent(DomainAgentRequest request) {
+        String domainAgentId = request.domainAgentId() == null ? "" : request.domainAgentId();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("source", "chatservice");
+        payload.put("sourceType", "selectedDomainAgent");
+        payload.put("metadataType", "selected_domain_agent");
+        payload.put("routeType", "DOMAIN_AGENT");
+        payload.put("domainAgentId", domainAgentId);
+        /*
+         * 下游 wire contract 仍叫 skillId。历史 parts 同时保留 skillId，方便前端按“技能”
+         * 文案展示，也避免调试时需要理解 adapter 内部命名转换。
+         */
+        payload.put("skillId", domainAgentId);
+        payload.put("intentResult", Map.of(
+                "accepted", true,
+                "source", "front-selected",
+                "resourceId", domainAgentId
+        ));
+        return RuntimeEvent.metadata(request.runId(), request.sessionId(), payload);
     }
 }

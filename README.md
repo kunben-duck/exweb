@@ -136,6 +136,8 @@ export FINANCEEX_DEV_USERNAME=developer
 上传后保存的 provider 文档元数据组装 `sceneParam.docList`。前端可以在 `metadata.domainAgent.sceneParam`
 传入其他业务扩展字段，但 `docList` 始终由后端可信生成并覆盖，避免伪造文档引用。该路径不会读取或创建 RuntimeBinding，
 避免把不具备稳定 ChatService 多轮契约的 DomainAgent 误当成 Relay Runtime 续接会话。
+显式选择的 DomainAgent 会作为 `runtime.metadata` 写入事件流，并在历史 assistant 的 `parts` 中返回；
+payload 同时包含 `domainAgentId`、`skillId` 和 `intentResult.source=front-selected`，用于前端回显本轮调用的技能。
 
 ## 会话与执行标识
 

@@ -343,7 +343,7 @@ RelayStreamHttpRuntimeAdapter#applyForwardedCookie(...)
 - 使用 `bodyToFlux(String.class)` 接收下游响应。
 - 在 normalizer 之前调用 `RuntimeRawStreamLogService#capture(...)` 发布 raw chunk 到 MQ 旁路。
 - 通过 `RelayRuntimeResponseNormalizer` 把 plain text、JSON chunk、SSE-like `data:` chunk 转成标准 ChatEvent。
-- Relay `type=agent,is_streaming=true` 的 `content/context` 默认转成 `message.delta`；`type=agent,is_streaming=false` 转成 `message.snapshot`；`steam-complete/stream-complete/[DONE]` 转成 `message.completed`。
+- Relay `type=agent,is_streaming=true` 的 `content/context` 默认转成 `message.delta`；`type=agent,is_streaming=false` 和 `type=generate-response` 且 `content` 非空时转成 `message.snapshot`；`steam-complete/stream-complete/[DONE]` 转成 `message.completed`。
 - Relay `type=tool-structured-result` 是 MCP 工具结构化结果帧，normalizer 会读取 `result_data/resultData.widget.data` 后按字段映射：`content` -> `message.delta(sourceType=relay-content)`，`processResult` -> `runtime.progress(sourceType=relay-processResult)`，`searchList/sourcesDocuments` -> `runtime.reference(sourceType=relay-*)`，`cardUrl/diyCardScene/cardList/openCard` -> `runtime.card(sourceType=relay-*)`。其中 `is_last` 只是工具分片上下文，不触发 `message.completed`。
 - Relay 和 domain-agent 过程帧按语义转成 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.card`；domain-agent 的 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 这类对象如果跨网络 chunk，会继续使用对应稳定事件类型，并在 payload 中用 `fragment/itemId/delta/complete` 表达分片状态，避免半截 JSON 被误转成 `invalid-json`。当前 domain-agent 协议下 `cardUrl/diyCardScene/cardList/openCard` 通常不会在同一个 chunk 中同时出现，`runtime.card.payload.sourceType` 会保留原始字段名，例如 `diyCardScene` 或 `openCard`；未知完整 JSON 才转成 `runtime.event`。
 - `message.delta` 代表 assistant 正文增量并参与草稿拼接；`message.snapshot` 代表下游最终回答快照，会覆盖草稿成为历史正文。

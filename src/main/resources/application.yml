@@ -264,6 +264,7 @@ financeex:
         connect-timeout: ${FINANCEEX_RELAY_WS_CONNECT_TIMEOUT:5s}
         config-handshake-timeout: ${FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT:10s}
         idle-timeout: ${FINANCEEX_RELAY_WS_IDLE_TIMEOUT:60s}
+        interrupt-pause-timeout: ${FINANCEEX_RELAY_WS_INTERRUPT_PAUSE_TIMEOUT:5s}
         max-frame-bytes: ${FINANCEEX_RELAY_WS_MAX_FRAME_BYTES:1MB}
         idle-ttl: ${FINANCEEX_RELAY_WS_IDLE_TTL:5m}
         max-cached-connections: ${FINANCEEX_RELAY_WS_MAX_CACHED_CONNECTIONS:1000}

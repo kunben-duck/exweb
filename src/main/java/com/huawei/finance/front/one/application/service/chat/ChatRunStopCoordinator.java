@@ -25,8 +25,8 @@ import reactor.core.publisher.Mono;
 /**
  * Run 取消协调器。
  *
- * <p>stop 接口和删除会话都会经过这里收敛运行态：写 cancel flag、取消本机订阅、
- * 尽力取消下游 Runtime、固化用户可见 partial assistant，并发布标准 {@code run.cancelled}。
+ * <p>stop 接口和删除会话都会经过这里收敛运行态：写 cancel flag、尽力取消下游 Runtime、
+ * 取消本机订阅、固化用户可见 partial assistant，并发布标准 {@code run.cancelled}。
  * 下游取消永远是 best-effort，不能拖住 Servlet 删除或 stop 请求。</p>
  */
 @Service
@@ -86,11 +86,12 @@ public class ChatRunStopCoordinator {
         if (!decision.appendCancelledEvent()) {
             return chatRunService.toStopResult(run);
         }
-        // 本机优先释放订阅；跨实例依赖 cancel flag 与 DB guarded insert 拦截迟到事件。
+        /*
+         * 先通知下游，再 dispose 本机订阅。Relay WebSocket 的 interrupt 需要命中仍存活的
+         * outbound exchange；取消正确性已由 requestStop 写入的 cancel flag 和 guarded insert 保证。
+         */
+        cancelDownstreamBestEffort(run, user, headerSnapshot);
         runExecutionRegistry.cancel(run.id());
-        cancelDownstream(run, user, headerSnapshot)
-                .onErrorResume(ex -> Mono.empty())
-                .subscribe();
         if (!chatRunService.shouldAcceptEvent(RunCancelledEvent.of(run.id(), run.sessionId(), run.cancelReason()))) {
             return chatRunService.toStopResult(run);
         }
@@ -101,6 +102,19 @@ public class ChatRunStopCoordinator {
         ChatRun latest = chatRunService.observeEvent(cancelled);
         chatRunLeaseService.markTerminal(run.id(), ChatRunExecutionStatus.CANCELLED);
         return chatRunService.toStopResult(latest == null ? run : latest);
+    }
+
+    private void cancelDownstreamBestEffort(ChatRun run, UserContext user, RuntimeForwardHeaders headerSnapshot) {
+        try {
+            cancelDownstream(run, user, headerSnapshot)
+                    .onErrorResume(ex -> {
+                        log.warn("Downstream run cancel failed. runId={}, reason={}", run.id(), ex.getMessage());
+                        return Mono.empty();
+                    })
+                    .subscribe();
+        } catch (Exception ex) {
+            log.warn("Downstream run cancel invocation failed. runId={}, reason={}", run.id(), ex.getMessage());
+        }
     }
 
     public void stopActiveRunForSessionDelete(UserContext user, String sessionId) {

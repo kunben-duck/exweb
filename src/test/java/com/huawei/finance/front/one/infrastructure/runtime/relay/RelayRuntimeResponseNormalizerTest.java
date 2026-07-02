@@ -94,6 +94,37 @@ class RelayRuntimeResponseNormalizerTest {
     }
 
     @Test
+    void generateResponseContentBecomesFinalSnapshot() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1",
+                "{\"type\":\"generate-response\",\"agent_name\":\"delegate_agent\","
+                        + "\"content\":\"完整总结\",\"is_final\":true,\"instance_id\":\"inst-1\","
+                        + "\"session_id\":\"relay-session-1\",\"version_id\":16}");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("message.snapshot");
+        assertThat(events.getFirst().payload())
+                .containsEntry("content", "完整总结")
+                .containsEntry("sourceType", "generate-response")
+                .containsEntry("agentName", "delegate_agent")
+                .containsEntry("runtimeSessionId", "relay-session-1")
+                .containsEntry("instanceId", "inst-1")
+                .containsEntry("versionId", 16)
+                .containsEntry("isFinal", true);
+    }
+
+    @Test
+    void generateResponseWithoutContentStaysRuntimeProgress() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1",
+                "{\"type\":\"generate-response\",\"message\":\"生成完成\",\"is_final\":true}");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("runtime.progress");
+        assertThat(events.getFirst().payload())
+                .containsEntry("sourceType", "generate-response")
+                .containsEntry("text", "生成完成");
+    }
+
+    @Test
     void sseDoneChunkIsTranslatedToMessageCompletedEvent() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1", "data: [DONE]\n\n");
 

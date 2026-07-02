@@ -1500,7 +1500,7 @@ heartbeat 和 done 使用同一个 envelope，不携带 `encodedItem`，也不�
 | --- | --- | --- |
 | `run.started` | run 已创建 | 可记录 run 状态为 running |
 | `message.delta` | assistant 文本增量 | 追加 `payload.delta` 到当前 assistant 消息 |
-| `message.snapshot` | assistant 最终回答快照，例如 Relay `type=agent,is_streaming=false` | 使用 `payload.content` 替换当前 assistant 草稿，不要追加 |
+| `message.snapshot` | assistant 最终回答快照，例如 Relay `type=agent,is_streaming=false` 或 `type=generate-response` | 使用 `payload.content` 替换当前 assistant 草稿，不要追加 |
 | `runtime.progress` | 下游 Runtime 进度文本，例如 Relay `relay-progress` | 展示到运行进度区域，不要拼入 assistant 正文 |
 | `runtime.metadata` | 下游 Runtime 元数据，例如 `project_home`、`available-modes` | 更新运行态面板、工作区链接或模式列表，不要拼入 assistant 正文 |
 | `runtime.agent` | 下游 agent 调用生命周期，例如 `agent-call` | 展示当前 agent、模型和任务信息 |
@@ -1516,12 +1516,12 @@ heartbeat 和 done 使用同一个 envelope，不携带 `encodedItem`，也不�
 
 ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON chunk 或 SSE-like `data:` chunk 归一化成上表事件。Runtime raw log 是可选诊断旁路，默认关闭；后续接入企业 MQ 时，后端可以在 normalizer 之前 best-effort 发布原始 chunk，由消费端异步写入 `fin_ex_runtime_raw_stream_log_t`。raw log 仅用于排障，不参与前端恢复、WebSocket 推送或 assistant 历史消息拼接；前端不得解析 Relay 原始响应，只消费 ChatService 标准 payload：
 
-Relay stream-http adapter 会通过 `FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 配置单个响应 frame 的 WebClient codec 上限，默认 `1MB`，用于避免 Spring 默认 256KB 限制过早拦截较大的引用或卡片响应。Relay WebSocket adapter 会先发送 `config`，丢弃配置阶段初始化响应，再发送 `user-message`；只有 `user-message` 后的 frame 会变成前端可见标准事件。`FINANCEEX_RELAY_WS_CONNECTION_MODE=short` 时每个 run 使用一条短连接；`single-instance-reuse` 时同一 JVM 内同一 ChatService 会话复用一条 Relay WS 连接，空闲 TTL 后释放。无论内部连接模式如何，同一个 ChatService 会话首次进入 Relay Runtime 才发送 `sessionMode=new`，后续提问均发送 `sessionMode=resume`。`FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT` 默认 `10s`，用于限制配置阶段等待时间；`FINANCEEX_RELAY_WS_MAX_FRAME_BYTES` 控制单个下游 WS 文本帧上限，默认 `1MB`。这些配置不改变前端协议，也不负责拆分超大事件；如果下游长期返回超大 `sourcesDocuments/diyCardScene/cardList`，仍需要后端后续引入 DataBuffer 流式解码和 fragment 分片治理。
+Relay stream-http adapter 会通过 `FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 配置单个响应 frame 的 WebClient codec 上限，默认 `1MB`，用于避免 Spring 默认 256KB 限制过早拦截较大的引用或卡片响应。Relay WebSocket adapter 会先发送 `config`，丢弃配置阶段初始化响应，再发送 `user-message`；`user-message` 后会继续丢弃 `relay-start` 前的前置 `session-state=idle/completed/ready/running/agent_thinking` 和迟到 `config`，并从 `relay-start`、首个业务帧或 `session-state=waiting_user_input/paused` 开始转成前端可见标准事件。`FINANCEEX_RELAY_WS_CONNECTION_MODE=short` 时每个 run 使用一条短连接；`single-instance-reuse` 时同一 JVM 内同一 ChatService 会话复用一条 Relay WS 连接，空闲 TTL 后释放。无论内部连接模式如何，同一个 ChatService 会话首次进入 Relay Runtime 才发送 `sessionMode=new`，后续提问均发送 `sessionMode=resume`。`FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT` 默认 `10s`，用于限制配置阶段等待时间；`FINANCEEX_RELAY_WS_INTERRUPT_PAUSE_TIMEOUT` 默认 `5s`，用于限制 stop 后等待 Relay 返回 `session-state=paused` 的时间；`FINANCEEX_RELAY_WS_MAX_FRAME_BYTES` 控制单个下游 WS 文本帧上限，默认 `1MB`。这些配置不改变前端协议，也不负责拆分超大事件；如果下游长期返回超大 `sourcesDocuments/diyCardScene/cardList`，仍需要后端后续引入 DataBuffer 流式解码和 fragment 分片治理。当前 `session-state=waiting_user_input` 在 Relay WS 普通问答 adapter 中只作为本次下游连接终态，后端会补齐 `message.completed/run.completed`，不会生成 `run.waiting_user`；`session-state=paused` 仅作为 interrupt 确认。
 
 | 事件类型 | 标准 payload |
 | --- | --- |
 | `message.delta` | `{ "delta": "增量文本", "sourceType": "agent/relay-content", "runtimeSessionId": "可选", "agentSessionId": "可选", "agentName": "可选", "toolId": "可选", "timestamp": "可选" }` |
-| `message.snapshot` | `{ "content": "完整最终回答", "sourceType": "agent", "runtimeSessionId": "可选", "agentSessionId": "可选", "agentName": "可选", "timestamp": "可选" }` |
+| `message.snapshot` | `{ "content": "完整最终回答", "sourceType": "agent/generate-response", "runtimeSessionId": "可选", "agentSessionId": "可选", "agentName": "可选", "instanceId": "可选", "versionId": "可选", "isFinal": "可选", "timestamp": "可选" }` |
 | `runtime.progress` | `{ "source": "relay", "sourceType": "relay-progress", "text": "进度文本", "runtimeSessionId": "可选", "timestamp": "可选" }` |
 | `runtime.metadata` | `{ "source": "relay", "sourceType": "project_home", "metadataType": "project_home", "projectHome": "/tmp/xxx", "timestamp": "可选" }` 或 `{ "metadataType": "available_modes", "modes": [...] }` |
 | `runtime.agent` | `{ "source": "relay", "sourceType": "agent-call", "agentName": "delegate-agent", "started": true, "task": "任务描述", "modelName": "可选", "runtimeSessionId": "可选", "timestamp": "可选" }` |
@@ -1537,6 +1537,7 @@ Relay 映射规则：
 
 - `type=agent,is_streaming=true` 且存在 `content/context` 时，默认映射为 `message.delta`，前端追加 `payload.delta`。
 - `type=agent,is_streaming=false` 且存在 `content/context` 时，映射为 `message.snapshot`，这是更权威的最终回答快照；前端用 `payload.content` 替换当前草稿。
+- `type=generate-response` 且存在 `content` 时，同样映射为 `message.snapshot`，用于以 Relay 最终完整总结覆盖前面的流式草稿；它本身不代表 run 完成，仍等待 `session-state` 或显式终态闭合。
 - 纯文本 `steam-complete`、`stream-complete`、`stream_complete`、`stream.complete`、`stream-completed`、`[DONE]` 映射为 `message.completed`。
 - `relay-progress`、`project_home`、`available-modes/availbale-modes`、`agent-call`、`thinking-operation-start/thinkink-operation-start`、`thinking-operation-end/thinking_operation-end`、`tool_call_streaming`、引用/来源类事件映射为对应 `runtime.*`。
 - `tool-structured-result` 是 Relay 内部工具调用的结构化结果。后端读取 `result_data/resultData` 下的 `widget.data`，其中 `content` 映射为 `message.delta(sourceType=relay-content)`，`processResult` 映射为 `runtime.progress(sourceType=relay-processResult)`，`searchList` 映射为 `runtime.reference(sourceType=relay-searchList)`，`sourcesDocuments/sourceDocuments` 映射为 `runtime.reference(sourceType=relay-sourcesDocuments/relay-sourceDocuments)`，`cardUrl/diyCardScene/cardList/openCard` 映射为 `runtime.card(sourceType=relay-*)`。`result_data.is_last=true` 只作为 payload 上下文字段，不表示本轮 run 完成；run 仍以 `stream-complete/[DONE]` 等终态闭合。
@@ -1777,7 +1778,7 @@ stop 是 REST 生命周期接口，不是 WebSocket command。重复 stop 是幂
 
 前端点击停止后，不应把关闭 WebSocket 当作取消语义。推荐流程是：保存当前本地 `lastSeq`，调用 stop，随后继续通过 WebSocket 等待 `run.cancelled`；如果页面已经断线或没有收到终态事件，则用 stop 前保存的 `lastSeq` 调 Event Resume 补齐 `run.cancelled`。当 stop 前已有正文或用户可见 parts 时，`run.cancelled.payload.messageReady=true`，并携带 `assistantMessageId/feedbackTargetMessageId`；HTTP stop 响应也会返回同样的反馈目标作为兜底。stop 响应里的 `latestSeq` 是服务端事实源位置，不代表当前页签已经消费到该事件。
 
-stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可信 Relay 或 DomainAgent 的 cancel adapter，用于下游企业权限校验。即使下游 cancel 失败，本服务仍以本地 `run.cancelled` 终态为准。
+stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可信 Relay 或 DomainAgent 的 cancel adapter，用于下游企业权限校验。Relay stream-http 使用 HTTP stopPath 尽力取消；Relay WebSocket 使用当前下游连接发送 `{"type":"interrupt"}` 尽力中断。单实例复用模式下，如果 Relay 及时返回 `session-state=paused` 且期间没有新 run 替换连接，后端可保留该物理连接继续复用；如果用户很快提交新问题或等待 `paused` 超时，后端会新建/清理连接并通过已有 runtime session `resume`。即使下游 cancel/interrupt 失败，本服务仍以本地 `run.cancelled` 终态为准。
 
 ## Run 故障恢复事件
 

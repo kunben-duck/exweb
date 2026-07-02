@@ -136,6 +136,8 @@ public class RelayAgentProperties {
         private Duration configHandshakeTimeout = Duration.ofSeconds(10);
         /** 普通问答期间等待下游下一帧的空闲超时时间。 */
         private Duration idleTimeout = Duration.ofSeconds(60);
+        /** interrupt 后等待 Relay 返回 session-state=paused 的最长时间。 */
+        private Duration interruptPauseTimeout = Duration.ofSeconds(5);
         /** 单个下游 WebSocket 文本帧最大字节数。 */
         private DataSize maxFrameBytes = DataSize.ofMegabytes(1);
         /** 单实例长连接空闲 TTL，仅在 connection-mode=single-instance-reuse 时生效。 */
@@ -189,6 +191,14 @@ public class RelayAgentProperties {
 
         public void setIdleTimeout(Duration idleTimeout) {
             this.idleTimeout = idleTimeout;
+        }
+
+        public Duration getInterruptPauseTimeout() {
+            return interruptPauseTimeout;
+        }
+
+        public void setInterruptPauseTimeout(Duration interruptPauseTimeout) {
+            this.interruptPauseTimeout = interruptPauseTimeout;
         }
 
         public DataSize getMaxFrameBytes() {

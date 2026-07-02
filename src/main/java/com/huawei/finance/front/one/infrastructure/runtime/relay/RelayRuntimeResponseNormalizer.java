@@ -157,6 +157,13 @@ public class RelayRuntimeResponseNormalizer {
         if ("tool-structured-result".equals(normalizedType)) {
             return toolStructuredResultEvents(runId, sessionId, root);
         }
+        if ("generate-response".equals(normalizedType)) {
+            String content = firstText(root, "content");
+            if (content != null && !content.isBlank()) {
+                return List.of(snapshotEvent(runId, sessionId, content, root));
+            }
+            return List.of(RuntimeEvent.progress(runId, sessionId, progressPayload(root, type)));
+        }
         ChatEvent runtimeEvent = mappedRuntimeEvent(runId, sessionId, root, type, normalizedType);
         if (runtimeEvent != null) {
             return List.of(runtimeEvent);
@@ -214,6 +221,9 @@ public class RelayRuntimeResponseNormalizer {
         copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
         copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
         copyText(root, payload, "agentSessionId", "agentSessionId", "agent_session_id");
+        copyText(root, payload, "instanceId", "instance_id", "instanceId");
+        copyAny(root, payload, "versionId", "version_id", "versionId");
+        copyAny(root, payload, "isFinal", "is_final", "isFinal");
         copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
         return new MessageSnapshotEvent(runId, sessionId, 0, Instant.now(), content, Map.copyOf(payload));
     }
@@ -340,8 +350,7 @@ public class RelayRuntimeResponseNormalizer {
             case "tool-call-streaming" -> RuntimeEvent.tool(runId, sessionId, toolPayload(root, sourceType));
             case "tool-execution" -> RuntimeEvent.tool(runId, sessionId, toolExecutionPayload(root, sourceType));
             case "session-state" -> RuntimeEvent.metadata(runId, sessionId, sessionStatePayload(root, sourceType));
-            case "generate-response", "clarified-query" ->
-                    RuntimeEvent.progress(runId, sessionId, progressPayload(root, sourceType));
+            case "clarified-query" -> RuntimeEvent.progress(runId, sessionId, progressPayload(root, sourceType));
             case "self-evolution-status" -> RuntimeEvent.metadata(runId, sessionId,
                     selfEvolutionPayload(root, sourceType));
             case "url-moderation", "url-moderation-result" ->

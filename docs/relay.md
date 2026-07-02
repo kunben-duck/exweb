@@ -98,6 +98,82 @@ ws://{host}:{port}/ws/{client_id}
 | scope | string | 否 | `"once"` 单次 |
 | questionnaire_answers | object | 否 | 澄清问的答案，key 为问题文本，value 为选项 |
 
+### 2.4 interrupt / pause — 中断当前轮次
+
+中断当前正在执行的 Agent 轮次（包括工具调用和同步 Sub-Agent），但**不影响**后台 Agent。
+
+```json
+{
+  "type": "interrupt"
+}
+```
+
+或等价的：
+
+```json
+{
+  "type": "pause"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| type | string | 是 | `"interrupt"` 或 `"pause"` |
+
+> **效果**：调用 `RelayApplication.interrupt_turn(reason="user_pause")`，取消当前轮次作用域，级联取消工具调用和同步 Sub-Agent，并终止已追踪的子进程。
+
+### 2.5 stop_agent — 停止指定后台 Agent
+
+```json
+{
+  "type": "stop_agent",
+  "agent_id": "developer_abc123"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| type | string | 是 | 固定值 `"stop_agent"` |
+| agent_id | string | 是 | 要停止的 Agent 的 **agent_id**（Runtime 身份，非 instance_id） |
+
+> **注意**：`agent_id` 是 Runtime 行为身份（可重入），不是前端时间线的 `instance_id`。详见 §2.8 Agent Identity。
+
+### 2.6 stop_all_agents — 停止所有 Agent
+
+停止所有后台 Agent + 当前活跃轮次。
+
+```json
+{
+  "type": "stop_all_agents"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| type | string | 是 | 固定值 `"stop_all_agents"` |
+
+> **效果**：取消当前 WebSocket 任务，为所有活跃 invocation 发送 `agent-call` END 事件，然后调用 `RelayApplication.interrupt_all_background_agents()`。
+
+### 2.7 stop_compression — 停止压缩 Agent
+
+停止当前正在执行的压缩 Agent；若无压缩 Agent 在运行，则回退为 `interrupt` 行为。
+
+```json
+{
+  "type": "stop_compression"
+}
+```
+
+### 2.8 cancel-initialization — 取消初始化
+
+在 MCP 初始化阶段取消初始化过程。
+
+```json
+{
+  "type": "cancel-initialization"
+}
+```
+
 ---
 
 ## 3. 出参（服务端推送的事件汇总）
@@ -806,3 +882,97 @@ Resume 时，若客户端传入的 `project_home` 与存储值不一致，后端
 | `self-evolution-status` | 全局 | 自演化状态通知 |
 | `session-mismatch` | 异常 | Resume 时 project_home 不匹配 |
 | `clear-session` | 异常 | 会话不存在，要求前端清除状态 |
+| `interrupt` / `pause` | 控制 | 中断当前轮次 |
+| `stop_agent` | 控制 | 停止指定后台 Agent |
+| `stop_all_agents` | 控制 | 停止所有 Agent |
+| `stop_compression` | 控制 | 停止压缩 Agent |
+| `cancel-initialization` | 控制 | 取消初始化 |
+| `heartbeat` | 控制 | 心跳请求 |
+| `heartbeat-response` | 控制 | 心跳响应（含当前状态） |
+
+---
+
+## 6. 流式结束标识
+
+判断一次流式响应是否结束，需组合使用以下三种信号：
+
+### 6.1 session-state — 会话级结束信号（推荐首选）
+
+收到以下 `state` 值时，表示当前轮次已结束：
+
+| state 值 | 含义 | 说明 |
+|-----------|------|------|
+| `idle` | 空闲 | 无活跃任务，默认终态 |
+| `waiting_user_input` | 等待用户输入 | Agent 执行完毕，最后一条消息来自助手 |
+| `completed` | 计划完成 | 所有 Plan 子任务执行完毕 |
+| `paused` | 已暂停 | 用户中断了当前轮次 |
+
+**典型判断逻辑**：
+
+```python
+if event["type"] == "session-state" and event["state"] in ("idle", "waiting_user_input", "completed", "paused"):
+    # 流式响应结束
+```
+
+> **注意**：初始化阶段也会收到 `session-state`（`state` 为 `ready`/`running`/`idle`），需结合是否已发送过 `user-message` 来区分。
+
+### 6.2 agent-call (is_start=false) — Agent 级结束信号
+
+每个 Agent 调用以 `agent-call` 事件成对出现（start + end）。当**根 Agent**（无 `parent_id` 或 `parent_id` 为 `relay-system-root`）的 `is_start: false` 事件到达时，表示该 Agent 执行结束：
+
+```json
+{
+  "type": "agent-call",
+  "is_start": false,
+  "agent_id": "delegate_agent_xxx",
+  "instance_id": "delegate_agent_xxx_yyy",
+  "error": null
+}
+```
+
+| error 字段 | 含义 |
+|-------------|------|
+| `null` / 缺失 | 正常完成 |
+| 非空字符串 | 执行出错 |
+
+> **注意**：多 Agent 场景下，需等待**根 Agent** 的 end 事件，而非 Sub-Agent 的 end 事件。
+
+### 6.3 heartbeat-response — 轮询确认信号
+
+客户端可定期发送 `{"type": "heartbeat"}`，服务端返回当前状态：
+
+```json
+{
+  "type": "heartbeat-response",
+  "state": "idle",
+  "stopped": false,
+  "compression": {
+    "in_flight": false,
+    "runs_by_agent": {},
+    "stopped": false
+  }
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| state | 同 `session-state` 的 `state` 值 |
+| stopped | 是否已被用户中断 |
+| compression.in_flight | 是否有压缩任务在运行 |
+
+### 6.4 推荐判断策略
+
+```
+1. 主信号：监听 session-state 事件，state ∈ {idle, waiting_user_input, completed, paused} → 结束
+2. 辅助信号：监听根 agent-call (is_start=false) → Agent 执行完毕
+3. 保底信号：定期 heartbeat 轮询确认状态
+4. 兜底：超时机制（如 60s 无新事件）
+```
+
+**典型时序**：
+
+```
+← agent-call (is_start=false, error=null)   ← Agent 执行完毕
+← session-state (state="idle")              ← 会话空闲，流式结束
+← self-evolution-status (×N)                ← 后续自演化通知（可选）
+```

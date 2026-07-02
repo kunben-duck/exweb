@@ -45,6 +45,7 @@ public class AgentRuntimeExecutor {
                 command.sessionId(),
                 context.runId(),
                 binding == null ? null : binding.runtimeSessionId(),
+                context.runtimeSessionMode(),
                 command.message(),
                 attachments,
                 context.memory(),

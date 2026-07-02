@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookieProperties;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import java.net.URI;
 import java.time.Duration;
@@ -27,6 +28,7 @@ import org.springframework.web.reactive.socket.WebSocketSession;
 import org.springframework.web.reactive.socket.client.WebSocketClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 class RelayWebSocketRuntimeAdapterTest {
@@ -35,6 +37,11 @@ class RelayWebSocketRuntimeAdapterTest {
     @Test
     void newRuntimeSessionSendsConfigThenUserMessageAndCompletesOnIdleState() throws Exception {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"relay-start\",\"content\":\"initializing\"}",
+                "{\"type\":\"relay-progress\",\"content\":\"loading modes\"}",
+                "{\"type\":\"project_home\",\"project_home\":\"/tmp/relay\"}",
+                "{\"type\":\"available-modes\",\"modes\":[]}",
+                "{\"type\":\"relay-end\",\"content\":\"ready\"}",
                 "{\"type\":\"agent\",\"content\":\"你好\",\"is_streaming\":true,\"session_id\":\"relay-session-1\"}",
                 "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}"
         ));
@@ -70,6 +77,7 @@ class RelayWebSocketRuntimeAdapterTest {
     @Test
     void existingRuntimeSessionUsesResumeModeAndForwardsCookieWhenAllowed() throws Exception {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-state\",\"state\":\"ready\",\"session_id\":\"relay-session-old\"}",
                 "{\"type\":\"agent\",\"content\":\"继续\",\"session_id\":\"relay-session-old\"}",
                 "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-old\"}"
         ));
@@ -87,27 +95,128 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(client.headers().getFirst(HttpHeaders.COOKIE)).isEqualTo("sid=abc");
     }
 
+    @Test
+    void configSuccessResponseCompletesHandshakeWithoutProducingChatEvent() {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"config\",\"ready\":true,\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"agent\",\"content\":\"回答\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(event -> {
+                    assertThat(event.type()).isEqualTo("message.delta");
+                    assertThat(event.payload()).containsEntry("delta", "回答");
+                })
+                .expectNextCount(2)
+                .verifyComplete();
+    }
+
+    @Test
+    void lateConfigFrameAfterUserMessageIsIgnored() {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"relay-end\",\"content\":\"ready\"}",
+                "{\"type\":\"agent\",\"content\":\"A\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"config\",\"status\":\"success\"}",
+                "{\"type\":\"agent\",\"content\":\"B\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "A"))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "B"))
+                .expectNextCount(2)
+                .verifyComplete();
+    }
+
+    @Test
+    void configHandshakeTimeoutFailsBeforeSendingUserMessage() {
+        FakeWebSocketClient client = new FakeWebSocketClient(Flux.never());
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofMillis(5));
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(RelayRuntimeProtocolException.class)
+                        .hasMessageContaining("RELAY_WS_CONFIG_TIMEOUT"))
+                .verify();
+
+        assertThat(client.sent()).hasSize(1);
+        assertThat(client.sent().getFirst()).contains("\"type\":\"config\"");
+    }
+
+    @Test
+    void singleInstanceReuseKeepsOneConnectionAndSkipsSecondConfig() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10), "single-instance-reuse");
+
+        StepVerifier.create(adapter.query(request("relay-session-1", RuntimeSessionMode.NEW, "run1")))
+                .then(() -> client.emit("{\"type\":\"config\",\"ready\":true,\"session_id\":\"relay-session-1\"}"))
+                .then(() -> client.emit("{\"type\":\"agent\",\"content\":\"A\",\"session_id\":\"relay-session-1\"}"))
+                .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "A"))
+                .expectNextCount(2)
+                .verifyComplete();
+
+        StepVerifier.create(adapter.query(request("relay-session-1", RuntimeSessionMode.RESUME, "run2")))
+                .then(() -> client.emit("{\"type\":\"agent\",\"content\":\"B\",\"session_id\":\"relay-session-1\"}"))
+                .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "B"))
+                .expectNextCount(2)
+                .verifyComplete();
+
+        assertThat(client.executeCount()).isEqualTo(1);
+        assertThat(client.sent()).hasSize(3);
+        assertThat(client.sent().get(0)).contains("\"type\":\"config\"");
+        assertThat(client.sent().get(1)).contains("\"type\":\"user-message\"").contains("hello-run1");
+        assertThat(client.sent().get(2)).contains("\"type\":\"user-message\"").contains("hello-run2");
+    }
+
     private RelayWebSocketRuntimeAdapter adapter(FakeWebSocketClient client) {
+        return adapter(client, Duration.ofSeconds(10));
+    }
+
+    private RelayWebSocketRuntimeAdapter adapter(FakeWebSocketClient client, Duration configHandshakeTimeout) {
+        return adapter(client, configHandshakeTimeout, "short");
+    }
+
+    private RelayWebSocketRuntimeAdapter adapter(WebSocketClient client, Duration configHandshakeTimeout,
+                                                 String connectionMode) {
         RelayAgentProperties properties = new RelayAgentProperties();
         properties.getRelay().getWebsocket().setUrl("ws://relay.test/ws");
         properties.getRelay().getWebsocket().setIdleTimeout(Duration.ofSeconds(5));
+        properties.getRelay().getWebsocket().setConfigHandshakeTimeout(configHandshakeTimeout);
+        properties.getRelay().getWebsocket().setConnectionMode(connectionMode);
         return new RelayWebSocketRuntimeAdapter(
                 objectMapper,
                 properties,
                 new AgentRuntimeForwardCookieProperties(),
                 new RelayRuntimeResponseNormalizer(objectMapper),
                 null,
-                client);
+                client,
+                () -> "instance-test");
     }
 
     private AgentRuntimeRequest request(String runtimeSessionId, RuntimeForwardHeaders forwardHeaders) {
+        return request(runtimeSessionId, runtimeSessionId == null ? RuntimeSessionMode.NEW : RuntimeSessionMode.RESUME,
+                "run1", "hello", forwardHeaders);
+    }
+
+    private AgentRuntimeRequest request(String runtimeSessionId, RuntimeSessionMode sessionMode, String runId) {
+        return request(runtimeSessionId, sessionMode, runId, "hello-" + runId, RuntimeForwardHeaders.empty());
+    }
+
+    private AgentRuntimeRequest request(String runtimeSessionId, RuntimeSessionMode sessionMode, String runId,
+                                        String message, RuntimeForwardHeaders forwardHeaders) {
         return new AgentRuntimeRequest(
                 "tenant1",
                 "user1",
                 "session1",
-                "run1",
+                runId,
                 runtimeSessionId,
-                "hello",
+                sessionMode,
+                message,
                 List.of(),
                 MemoryContext.empty(),
                 null,
@@ -117,13 +226,129 @@ class RelayWebSocketRuntimeAdapterTest {
         );
     }
 
+    private static final class ReusableFakeWebSocketClient implements WebSocketClient {
+        private final ReusableFakeWebSocketSession session = new ReusableFakeWebSocketSession();
+        private int executeCount;
+
+        @Override
+        public Mono<Void> execute(URI url, WebSocketHandler handler) {
+            return execute(url, new HttpHeaders(), handler);
+        }
+
+        @Override
+        public Mono<Void> execute(URI url, HttpHeaders requestHeaders, WebSocketHandler handler) {
+            executeCount++;
+            return handler.handle(session);
+        }
+
+        private void emit(String frame) {
+            session.emit(frame);
+        }
+
+        private List<String> sent() {
+            return session.sent();
+        }
+
+        private int executeCount() {
+            return executeCount;
+        }
+    }
+
+    private static final class ReusableFakeWebSocketSession implements WebSocketSession {
+        private final DataBufferFactory bufferFactory = new DefaultDataBufferFactory();
+        private final Sinks.Many<String> inbound = Sinks.many().multicast().directBestEffort();
+        private final java.util.ArrayList<String> sent = new java.util.ArrayList<>();
+
+        @Override
+        public String getId() {
+            return "fake-reusable-session";
+        }
+
+        @Override
+        public HandshakeInfo getHandshakeInfo() {
+            return null;
+        }
+
+        @Override
+        public DataBufferFactory bufferFactory() {
+            return bufferFactory;
+        }
+
+        @Override
+        public Map<String, Object> getAttributes() {
+            return new HashMap<>();
+        }
+
+        @Override
+        public Flux<WebSocketMessage> receive() {
+            return inbound.asFlux().map(this::textMessage);
+        }
+
+        @Override
+        public Mono<Void> send(Publisher<WebSocketMessage> messages) {
+            return Flux.from(messages)
+                    .map(WebSocketMessage::getPayloadAsText)
+                    .doOnNext(sent::add)
+                    .then();
+        }
+
+        @Override
+        public boolean isOpen() {
+            return true;
+        }
+
+        @Override
+        public Mono<Void> close(CloseStatus status) {
+            inbound.tryEmitComplete();
+            return Mono.empty();
+        }
+
+        @Override
+        public Mono<CloseStatus> closeStatus() {
+            return Mono.just(CloseStatus.NORMAL);
+        }
+
+        @Override
+        public WebSocketMessage textMessage(String payload) {
+            DataBuffer buffer = bufferFactory.wrap(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return new WebSocketMessage(WebSocketMessage.Type.TEXT, buffer);
+        }
+
+        @Override
+        public WebSocketMessage binaryMessage(java.util.function.Function<DataBufferFactory, DataBuffer> payloadFactory) {
+            return new WebSocketMessage(WebSocketMessage.Type.BINARY, payloadFactory.apply(bufferFactory));
+        }
+
+        @Override
+        public WebSocketMessage pingMessage(java.util.function.Function<DataBufferFactory, DataBuffer> payloadFactory) {
+            return new WebSocketMessage(WebSocketMessage.Type.PING, payloadFactory.apply(bufferFactory));
+        }
+
+        @Override
+        public WebSocketMessage pongMessage(java.util.function.Function<DataBufferFactory, DataBuffer> payloadFactory) {
+            return new WebSocketMessage(WebSocketMessage.Type.PONG, payloadFactory.apply(bufferFactory));
+        }
+
+        private void emit(String frame) {
+            inbound.tryEmitNext(frame);
+        }
+
+        private List<String> sent() {
+            return sent;
+        }
+    }
+
     private static final class FakeWebSocketClient implements WebSocketClient {
-        private final List<String> inboundFrames;
+        private final Flux<String> inboundFrames;
         private final FakeWebSocketSession session;
         private URI uri;
         private HttpHeaders headers;
 
         private FakeWebSocketClient(List<String> inboundFrames) {
+            this(Flux.fromIterable(inboundFrames));
+        }
+
+        private FakeWebSocketClient(Flux<String> inboundFrames) {
             this.inboundFrames = inboundFrames;
             this.session = new FakeWebSocketSession(inboundFrames);
         }
@@ -155,10 +380,10 @@ class RelayWebSocketRuntimeAdapterTest {
 
     private static final class FakeWebSocketSession implements WebSocketSession {
         private final DataBufferFactory bufferFactory = new DefaultDataBufferFactory();
-        private final List<String> inboundFrames;
+        private final Flux<String> inboundFrames;
         private final java.util.ArrayList<String> sent = new java.util.ArrayList<>();
 
-        private FakeWebSocketSession(List<String> inboundFrames) {
+        private FakeWebSocketSession(Flux<String> inboundFrames) {
             this.inboundFrames = inboundFrames;
         }
 
@@ -184,7 +409,7 @@ class RelayWebSocketRuntimeAdapterTest {
 
         @Override
         public Flux<WebSocketMessage> receive() {
-            return Flux.fromIterable(inboundFrames).map(this::textMessage);
+            return inboundFrames.map(this::textMessage);
         }
 
         @Override

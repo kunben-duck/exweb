@@ -13,7 +13,8 @@ import reactor.core.publisher.Mono;
  * <p>该接口是 Relay provider 内部的二级防腐层。{@link RelayAgentRuntime} 只根据配置选择一个
  * adapter 并委托执行；每个 adapter 独立负责自己的请求体构造、鉴权、响应解析、流式事件转换和下游
  * 取消语义。这样新增新的 Relay HTTP 变体或其他企业协议时，不需要改动
- * FinanceEXChatService 主编排。当前上线版本只提供 {@code relay-stream-http} 实现。</p>
+ * FinanceEXChatService 主编排。当前内置 {@code relay-stream-http} 与 {@code relay-websocket}
+ * 两种实现，生产默认仍使用 stream-http。</p>
  */
 public interface RelayRuntimeProtocolAdapter {
     /**

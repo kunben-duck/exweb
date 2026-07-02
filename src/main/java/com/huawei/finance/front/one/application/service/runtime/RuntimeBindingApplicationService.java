@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.application.service.runtime;
 
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
@@ -9,6 +10,8 @@ import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBindingStatus;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Value;
@@ -77,10 +80,59 @@ public class RuntimeBindingApplicationService {
     }
 
     /**
+     * 解析本轮 AgentRuntime 应使用的会话绑定。
+     *
+     * <p>Relay WebSocket 要求同一个 ChatService 会话只 {@code new} 一次，因此这里按会话维度复用
+     * active binding，不再因消息树 leaf 切换而创建新的下游 Runtime session。leaf 仍会保存在 binding
+     * 中用于诊断和后续消息树定位。</p>
+     */
+    public RuntimeBindingResolution resolveForRun(String tenantId, String userId, String sessionId,
+                                                  String runId, String leafMessageId) {
+        Instant now = Instant.now();
+        List<RuntimeBinding> activeBindings = repository.findActiveBySession(tenantId, userId, sessionId, runtimeProvider)
+                .stream()
+                .filter(binding -> routableForCurrentProvider(binding, now))
+                .sorted(Comparator.comparing(RuntimeBinding::updatedAt, Comparator.nullsLast(Comparator.naturalOrder()))
+                        .reversed())
+                .toList();
+        if (!activeBindings.isEmpty()) {
+            RuntimeBinding selected = touchForRun(activeBindings.getFirst(), runId);
+            cancelDuplicateBindings(activeBindings, selected);
+            cache.put(selected);
+            return new RuntimeBindingResolution(selected, RuntimeSessionMode.RESUME);
+        }
+        RuntimeBinding created = create(tenantId, userId, sessionId, runId, leafMessageId);
+        return new RuntimeBindingResolution(created, RuntimeSessionMode.NEW);
+    }
+
+    /**
      * 查询根路径 RuntimeBinding。
      */
     public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId) {
         return findActive(tenantId, userId, sessionId, null);
+    }
+
+    /**
+     * 按会话维度查询 active RuntimeBinding。
+     *
+     * <p>Relay WebSocket 会话只允许首次进入时 {@code new}，因此普通继续提问优先复用会话下最新的
+     * active binding。该方法不会创建新绑定。</p>
+     */
+    public Optional<RuntimeBinding> findActiveBySession(String tenantId, String userId, String sessionId) {
+        Instant now = Instant.now();
+        List<RuntimeBinding> activeBindings = repository.findActiveBySession(tenantId, userId, sessionId, runtimeProvider)
+                .stream()
+                .filter(binding -> routableForCurrentProvider(binding, now))
+                .sorted(Comparator.comparing(RuntimeBinding::updatedAt, Comparator.nullsLast(Comparator.naturalOrder()))
+                        .reversed())
+                .toList();
+        if (activeBindings.isEmpty()) {
+            return Optional.empty();
+        }
+        RuntimeBinding selected = activeBindings.getFirst();
+        cancelDuplicateBindings(activeBindings, selected);
+        cache.put(selected);
+        return Optional.of(selected);
     }
 
     /**
@@ -95,8 +147,9 @@ public class RuntimeBindingApplicationService {
     public RuntimeBinding create(String tenantId, String userId, String sessionId, String runId, String leafMessageId) {
         Instant now = Instant.now();
         String id = idGenerator.newId("runtime_binding", IdGenerateContext.of(tenantId, userId, sessionId));
+        String runtimeSessionId = idGenerator.newId("runtime_session", IdGenerateContext.of(tenantId, userId, sessionId));
         RuntimeBinding binding = new RuntimeBinding(id, tenantId, userId, sessionId, runtimeProvider,
-                leafMessageId, null, RuntimeBindingStatus.ACTIVE, runId, expiresAt(), now, now, Map.of());
+                leafMessageId, runtimeSessionId, RuntimeBindingStatus.ACTIVE, runId, expiresAt(), now, now, Map.of());
         return save(binding);
     }
 
@@ -172,6 +225,18 @@ public class RuntimeBindingApplicationService {
             cache.put(saved);
         }
         return saved;
+    }
+
+    private void cancelDuplicateBindings(List<RuntimeBinding> bindings, RuntimeBinding selected) {
+        if (bindings == null || bindings.size() <= 1 || selected == null) {
+            return;
+        }
+        for (RuntimeBinding binding : bindings) {
+            if (!selected.id().equals(binding.id())) {
+                save(binding.withStatus(RuntimeBindingStatus.CANCELLED));
+            }
+        }
+        cache.put(selected);
     }
 
     private Instant expiresAt() {

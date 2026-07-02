@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.application.service.runtime;
 
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
@@ -23,6 +24,7 @@ public record RuntimeExecutionContext(
         RouteTarget route,
         UserContext user,
         RuntimeBinding binding,
+        RuntimeSessionMode runtimeSessionMode,
         RuntimeForwardHeaders forwardHeaders
 ) {
 }

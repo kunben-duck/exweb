@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.application.service.chat;
 import com.huawei.finance.front.one.application.facade.DocumentFacade;
 import com.huawei.finance.front.one.application.facade.FinanceChatFacade;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
@@ -15,6 +16,7 @@ import com.huawei.finance.front.one.application.service.runtime.AgentRuntimeExec
 import com.huawei.finance.front.one.application.service.runtime.DomainAgentExecutor;
 import com.huawei.finance.front.one.application.service.runtime.DomainAgentExecutionContext;
 import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingApplicationService;
+import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingResolution;
 import com.huawei.finance.front.one.application.service.runtime.RuntimeExecutionContext;
 import com.huawei.finance.front.one.application.service.runtime.SubAgentExecutor;
 import com.huawei.finance.front.one.application.service.runtime.SubAgentExecutionContext;
@@ -42,7 +44,6 @@ import com.huawei.finance.front.one.domain.routing.RouteType;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -235,27 +236,24 @@ public class FinanceEXChatService implements FinanceChatFacade {
             ChatRunMessagePlan messagePlan = sessionService.prepareRunMessage(user, normalized, session, runId, attachments);
             ChatCommand runCommand = commandForExecution(normalized, messagePlan);
             String runtimeBindingLeafId = runtimeBindingLeafId(messagePlan);
-            if (forceNewTask(normalized.metadata())) {
-                // 前端显式要求开启新任务时，仅取消 Relay Runtime 续接绑定。
-                // SubAgent 不创建绑定，所以不存在需要释放的简单任务粘性会话。
-                runtimeBindingService.cancelActive(user.tenantId(), user.userId(), session.id());
-            }
             IntentDecision intent = null;
             Long intentLatencyMs = null;
             Double intentConfidenceThreshold = null;
             RouteTarget route = null;
             RuntimeBinding binding = null;
+            RuntimeSessionMode runtimeSessionMode = RuntimeSessionMode.RESUME;
             String selectedDomainAgentId = selectedDomainAgentId(normalized.metadata());
             if (selectedDomainAgentId != null) {
                 // 用户显式选择 DomainAgent 时优先进入指定调用路由，不被 active RuntimeBinding 抢走。
                 // 该路径不创建 RuntimeBinding，避免把非 ChatService Runtime 契约的领域 Agent 误当成多轮 Runtime。
                 route = RouteTarget.domainAgent(selectedDomainAgentId, "front selected domain agent");
             } else {
-                Optional<RuntimeBinding> activeRuntimeBinding = runtimeBindingService.findActive(user.tenantId(),
-                        user.userId(), session.id(), runtimeBindingLeafId);
+                var activeRuntimeBinding = runtimeBindingService.findActiveBySession(user.tenantId(),
+                        user.userId(), session.id());
                 if (activeRuntimeBinding.isPresent()) {
                     // Runtime 是唯一允许多轮续接的执行主体；命中 active binding 后直接继续 Relay Runtime。
                     binding = runtimeBindingService.touchForRun(activeRuntimeBinding.get(), runId);
+                    runtimeSessionMode = RuntimeSessionMode.RESUME;
                     route = RouteTarget.agentRuntime("runtime-binding", 1.0, "active relay runtime binding");
                 }
             }
@@ -270,14 +268,17 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 if (route.type() == RouteType.SUB_AGENT) {
                     binding = null;
                 } else if (route.type() == RouteType.AGENT_RUNTIME) {
-                    binding = runtimeBindingService.create(user.tenantId(), user.userId(), session.id(), runId,
-                            runtimeBindingLeafId);
+                    RuntimeBindingResolution resolution = runtimeBindingService.resolveForRun(user.tenantId(),
+                            user.userId(), session.id(), runId, runtimeBindingLeafId);
+                    binding = resolution.binding();
+                    runtimeSessionMode = resolution.sessionMode();
                 }
             }
             IntentDecision selectedIntent = intent;
             Long selectedIntentLatencyMs = intentLatencyMs;
             Double selectedIntentConfidenceThreshold = intentConfidenceThreshold;
             RouteTarget selectedRoute = route;
+            RuntimeSessionMode selectedRuntimeSessionMode = runtimeSessionMode;
             AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>(binding);
             AssistantAssembly assistant = new AssistantAssembly();
             ChatRun run = chatRunService.createRunning(new CreateChatRunContext(
@@ -327,7 +328,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     case SYSTEM_RESPONSE -> systemResponseExecutor.execute(runCommand, runId, selectedIntent, selectedRoute);
                     case AGENT_RUNTIME -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
                             runCommand, runId, memory, selectedIntent, selectedRoute, user, bindingRef.get(),
-                            headerSnapshot));
+                            selectedRuntimeSessionMode, headerSnapshot));
                 };
 
                 // 外层统一补齐 run.started/run.completed，接口层只需要转发事件流。
@@ -544,11 +545,6 @@ public class FinanceEXChatService implements FinanceChatFacade {
         };
     }
 
-    private boolean forceNewTask(Map<String, Object> metadata) {
-        Object value = metadata == null ? null : metadata.get("forceNewTask");
-        return value instanceof Boolean bool && bool || value instanceof String text && Boolean.parseBoolean(text);
-    }
-
     private String selectedDomainAgentId(Map<String, Object> metadata) {
         Object value = metadata == null ? null : metadata.get("selectedDomainAgentId");
         if (value == null) {
@@ -582,11 +578,25 @@ public class FinanceEXChatService implements FinanceChatFacade {
     }
 
     private ErrorEvent runtimeErrorEvent(String runId, String sessionId, Throwable ex) {
-        String code = isTimeout(ex) ? "RUNTIME_STREAM_TIMEOUT" : "RUN_ERROR";
+        String code = relayWebSocketConfigTimeout(ex)
+                ? "RELAY_WS_CONFIG_TIMEOUT"
+                : isTimeout(ex) ? "RUNTIME_STREAM_TIMEOUT" : "RUN_ERROR";
         String message = ex == null || ex.getMessage() == null || ex.getMessage().isBlank()
                 ? "Runtime execution failed"
                 : ex.getMessage();
         return ErrorEvent.of(runId, sessionId, code, message);
+    }
+
+    private boolean relayWebSocketConfigTimeout(Throwable ex) {
+        Throwable current = ex;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null && message.contains("RELAY_WS_CONFIG_TIMEOUT")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private boolean isTimeout(Throwable ex) {

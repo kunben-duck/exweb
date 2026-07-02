@@ -8,6 +8,7 @@ import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookie
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
@@ -130,6 +131,7 @@ class RelayStreamHttpRuntimeAdapterTest {
                 "session1",
                 "run1",
                 "runtimeSession1",
+                RuntimeSessionMode.RESUME,
                 "hello",
                 List.of(),
                 MemoryContext.empty(),
@@ -299,6 +301,7 @@ class RelayStreamHttpRuntimeAdapterTest {
                 "session1",
                 "run1",
                 "runtimeSession1",
+                RuntimeSessionMode.RESUME,
                 "hello",
                 List.of(),
                 MemoryContext.empty(),

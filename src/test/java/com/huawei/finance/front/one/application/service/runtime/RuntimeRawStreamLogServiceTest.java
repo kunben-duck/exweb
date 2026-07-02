@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.huawei.finance.front.one.application.config.RuntimeRawStreamLogProperties;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.finance.front.one.application.integration.conversation.RuntimeRawStreamLogPublisher;
 import com.huawei.finance.front.one.application.integration.conversation.RuntimeRawStreamLogRepository;
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
@@ -168,6 +169,7 @@ class RuntimeRawStreamLogServiceTest {
                 "session1",
                 "run1",
                 null,
+                RuntimeSessionMode.NEW,
                 "hello",
                 List.of(),
                 MemoryContext.empty(),

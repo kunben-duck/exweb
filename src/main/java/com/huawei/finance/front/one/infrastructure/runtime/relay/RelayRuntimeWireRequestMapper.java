@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.infrastructure.runtime.relay;
 
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -20,7 +21,7 @@ final class RelayRuntimeWireRequestMapper {
         return new RelayRuntimeQueryRequest(
                 request.runId(),
                 request.sessionId(),
-                request.runtimeSessionId(),
+                request.runtimeSessionMode() == RuntimeSessionMode.NEW ? null : request.runtimeSessionId(),
                 request.message(),
                 request.attachments(),
                 sanitizedMetadata(request.metadata())

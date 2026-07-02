@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
+import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
@@ -68,7 +69,35 @@ class RuntimeBindingApplicationServiceTest {
 
         assertThat(binding.provider()).isEqualTo(RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER);
         assertThat(binding.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(binding.runtimeSessionId()).isEqualTo("runtime_session_1");
         assertThat(cache.get("t", "u", "s")).contains(binding);
+    }
+
+    @Test
+    void resolveForRunCreatesNewSessionWhenNoActiveBindingExists() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        RuntimeBindingResolution resolution = service.resolveForRun("t", "u", "s", "run1", "leaf1");
+
+        assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.NEW);
+        assertThat(resolution.binding().runtimeSessionId()).isEqualTo("runtime_session_1");
+        assertThat(resolution.binding().leafMessageId()).isEqualTo("leaf1");
+    }
+
+    @Test
+    void resolveForRunReusesSessionBindingEvenWhenLeafChanges() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        RuntimeBinding existing = binding(RuntimeBindingStatus.ACTIVE).withRuntimeSessionId("runtime-1");
+        repository.saved = existing;
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        RuntimeBindingResolution resolution = service.resolveForRun("t", "u", "s", "run2", "leaf2");
+
+        assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
+        assertThat(resolution.binding().runtimeSessionId()).isEqualTo("runtime-1");
     }
 
     @Test

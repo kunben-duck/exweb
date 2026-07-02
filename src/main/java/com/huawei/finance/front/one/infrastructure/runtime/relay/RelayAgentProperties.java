@@ -128,12 +128,20 @@ public class RelayAgentProperties {
         private String url = "ws://localhost:8080/ws";
         /** Relay appMode，普通问答默认 delegate。 */
         private String appMode = "delegate";
+        /** Relay WebSocket 连接模式，默认每个 run 使用短连接。 */
+        private String connectionMode = "short";
         /** 建立下游 WebSocket 连接的超时时间。 */
         private Duration connectTimeout = Duration.ofSeconds(5);
+        /** 等待 config 初始化响应闭合的超时时间，超时后不会发送 user-message。 */
+        private Duration configHandshakeTimeout = Duration.ofSeconds(10);
         /** 普通问答期间等待下游下一帧的空闲超时时间。 */
         private Duration idleTimeout = Duration.ofSeconds(60);
         /** 单个下游 WebSocket 文本帧最大字节数。 */
         private DataSize maxFrameBytes = DataSize.ofMegabytes(1);
+        /** 单实例长连接空闲 TTL，仅在 connection-mode=single-instance-reuse 时生效。 */
+        private Duration idleTtl = Duration.ofMinutes(5);
+        /** 单实例最多缓存的 Relay WebSocket 长连接数量。 */
+        private int maxCachedConnections = 1000;
 
         public String getUrl() {
             return url;
@@ -151,12 +159,28 @@ public class RelayAgentProperties {
             this.appMode = appMode;
         }
 
+        public String getConnectionMode() {
+            return connectionMode;
+        }
+
+        public void setConnectionMode(String connectionMode) {
+            this.connectionMode = connectionMode;
+        }
+
         public Duration getConnectTimeout() {
             return connectTimeout;
         }
 
         public void setConnectTimeout(Duration connectTimeout) {
             this.connectTimeout = connectTimeout;
+        }
+
+        public Duration getConfigHandshakeTimeout() {
+            return configHandshakeTimeout;
+        }
+
+        public void setConfigHandshakeTimeout(Duration configHandshakeTimeout) {
+            this.configHandshakeTimeout = configHandshakeTimeout;
         }
 
         public Duration getIdleTimeout() {
@@ -173,6 +197,22 @@ public class RelayAgentProperties {
 
         public void setMaxFrameBytes(DataSize maxFrameBytes) {
             this.maxFrameBytes = maxFrameBytes;
+        }
+
+        public Duration getIdleTtl() {
+            return idleTtl;
+        }
+
+        public void setIdleTtl(Duration idleTtl) {
+            this.idleTtl = idleTtl;
+        }
+
+        public int getMaxCachedConnections() {
+            return maxCachedConnections;
+        }
+
+        public void setMaxCachedConnections(int maxCachedConnections) {
+            this.maxCachedConnections = maxCachedConnections;
         }
     }
 

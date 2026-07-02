@@ -22,7 +22,7 @@ import java.util.Map;
  * @param editedMessageId EDIT_USER 模式被编辑的 user 消息。
  * @param regeneratedMessageId REGENERATE_ASSISTANT 模式被重新生成的 assistant 消息。
  * @param attachments 本轮关联附件列表。
- * @param metadata 前端扩展元数据，例如 clientMessageId、forceNewTask。
+ * @param metadata 前端扩展元数据，例如 clientMessageId、selectedDomainAgentId。
  */
 public record CreateChatRunRequest(
         @Size(max = 128, message = "commandId 长度不能超过 128")

@@ -260,9 +260,13 @@ financeex:
       websocket:
         url: ${FINANCEEX_RELAY_WS_URL:ws://localhost:8080/ws}
         app-mode: ${FINANCEEX_RELAY_WS_APP_MODE:delegate}
+        connection-mode: ${FINANCEEX_RELAY_WS_CONNECTION_MODE:short}
         connect-timeout: ${FINANCEEX_RELAY_WS_CONNECT_TIMEOUT:5s}
+        config-handshake-timeout: ${FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT:10s}
         idle-timeout: ${FINANCEEX_RELAY_WS_IDLE_TIMEOUT:60s}
         max-frame-bytes: ${FINANCEEX_RELAY_WS_MAX_FRAME_BYTES:1MB}
+        idle-ttl: ${FINANCEEX_RELAY_WS_IDLE_TTL:5m}
+        max-cached-connections: ${FINANCEEX_RELAY_WS_MAX_CACHED_CONNECTIONS:1000}
       # Relay 响应映射只属于 adapter 防腐层；ChatService 对前端仍输出稳定 ChatEvent。
       answer-event-types: ${FINANCEEX_RELAY_ANSWER_EVENT_TYPES:agent,message.delta,answer,output}
       answer-content-fields: ${FINANCEEX_RELAY_ANSWER_CONTENT_FIELDS:content,context,delta,message,text,output_text}

@@ -922,6 +922,8 @@ src/main/java/com/huawei/finance/front/one/application/service/runtime/RuntimeBi
 
 ```text
 findActive(...)
+findActiveBySession(...)
+resolveForRun(...)
 create(...)
 touchForRun(...)
 observeEvent(...)
@@ -938,9 +940,9 @@ cancelActive(...)
 
 重点排查：
 
-- 多轮没有上下文：查 `findActive(...)` 是否按当前 leaf 命中。
-- 编辑历史问题串到最新上下文：查 `leafMessageId` 是否正确。
-- forceNewTask 不生效：查 `cancelActive(...)`。
+- 多轮没有上下文：查会话级 RuntimeBinding 是否存在，以及下游是否回传/接受 `runtimeSessionId`。
+- 编辑历史问题串到最新上下文：查 active path、`leafMessageId` 和 Relay 自身 session 上下文是否符合业务预期。
+- 需要全新 Relay 会话：创建新的 ChatService 会话。
 
 ## 17. 常见问题定位速查
 

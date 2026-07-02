@@ -979,7 +979,7 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
 | `editedMessageId` | string | EDIT_USER 必填 | 被编辑的未锁定 user 消息 |
 | `regeneratedMessageId` | string | REGENERATE_ASSISTANT 必填 | 被重新生成的未锁定 assistant 消息 |
 | `attachments` | array | 否 | 文档附件引用列表 |
-| `metadata` | object | 否 | 扩展字段，例如 `clientMessageId`、`forceNewTask`、`selectedDomainAgentId` |
+| `metadata` | object | 否 | 扩展字段，例如 `clientMessageId`、`selectedDomainAgentId`、`domainAgent` |
 
 响应：
 
@@ -1516,7 +1516,7 @@ heartbeat 和 done 使用同一个 envelope，不携带 `encodedItem`，也不�
 
 ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON chunk 或 SSE-like `data:` chunk 归一化成上表事件。Runtime raw log 是可选诊断旁路，默认关闭；后续接入企业 MQ 时，后端可以在 normalizer 之前 best-effort 发布原始 chunk，由消费端异步写入 `fin_ex_runtime_raw_stream_log_t`。raw log 仅用于排障，不参与前端恢复、WebSocket 推送或 assistant 历史消息拼接；前端不得解析 Relay 原始响应，只消费 ChatService 标准 payload：
 
-Relay stream-http adapter 会通过 `FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 配置单个响应 frame 的 WebClient codec 上限，默认 `1MB`，用于避免 Spring 默认 256KB 限制过早拦截较大的引用或卡片响应。Relay WebSocket adapter 通过 `FINANCEEX_RELAY_WS_MAX_FRAME_BYTES` 控制单个下游 WS 文本帧上限，默认 `1MB`。这些配置不改变前端协议，也不负责拆分超大事件；如果下游长期返回超大 `sourcesDocuments/diyCardScene/cardList`，仍需要后端后续引入 DataBuffer 流式解码和 fragment 分片治理。
+Relay stream-http adapter 会通过 `FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 配置单个响应 frame 的 WebClient codec 上限，默认 `1MB`，用于避免 Spring 默认 256KB 限制过早拦截较大的引用或卡片响应。Relay WebSocket adapter 会先发送 `config`，丢弃配置阶段初始化响应，再发送 `user-message`；只有 `user-message` 后的 frame 会变成前端可见标准事件。`FINANCEEX_RELAY_WS_CONNECTION_MODE=short` 时每个 run 使用一条短连接；`single-instance-reuse` 时同一 JVM 内同一 ChatService 会话复用一条 Relay WS 连接，空闲 TTL 后释放。无论内部连接模式如何，同一个 ChatService 会话首次进入 Relay Runtime 才发送 `sessionMode=new`，后续提问均发送 `sessionMode=resume`。`FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT` 默认 `10s`，用于限制配置阶段等待时间；`FINANCEEX_RELAY_WS_MAX_FRAME_BYTES` 控制单个下游 WS 文本帧上限，默认 `1MB`。这些配置不改变前端协议，也不负责拆分超大事件；如果下游长期返回超大 `sourcesDocuments/diyCardScene/cardList`，仍需要后端后续引入 DataBuffer 流式解码和 fragment 分片治理。
 
 | 事件类型 | 标准 payload |
 | --- | --- |

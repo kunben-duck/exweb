@@ -147,7 +147,7 @@ public class RuntimeBindingApplicationService {
     public RuntimeBinding create(String tenantId, String userId, String sessionId, String runId, String leafMessageId) {
         Instant now = Instant.now();
         String id = idGenerator.newId("runtime_binding", IdGenerateContext.of(tenantId, userId, sessionId));
-        String runtimeSessionId = idGenerator.newId("runtime_session", IdGenerateContext.of(tenantId, userId, sessionId));
+        String runtimeSessionId = sessionId;
         RuntimeBinding binding = new RuntimeBinding(id, tenantId, userId, sessionId, runtimeProvider,
                 leafMessageId, runtimeSessionId, RuntimeBindingStatus.ACTIVE, runId, expiresAt(), now, now, Map.of());
         return save(binding);

@@ -18,7 +18,7 @@ import java.util.Map;
  * @param userId 用户标识，来自应用身份上下文。
  * @param sessionId 前端聊天会话标识。
  * @param runId 本轮 SuperAgent 执行追踪标识。
- * @param runtimeSessionId AgentRuntime 自己的会话标识，首次调用可为空。
+ * @param runtimeSessionId AgentRuntime 实际会话标识；Relay 首次调用前可为空或等于 ChatService sessionId。
  * @param runtimeSessionMode 本轮 Runtime 会话协议模式，由应用层显式给出，adapter 不自行猜测。
  * @param message 本轮用户输入文本。
  * @param attachments 本轮关联附件引用。

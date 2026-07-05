@@ -69,7 +69,7 @@ class RuntimeBindingApplicationServiceTest {
 
         assertThat(binding.provider()).isEqualTo(RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER);
         assertThat(binding.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
-        assertThat(binding.runtimeSessionId()).isEqualTo("runtime_session_1");
+        assertThat(binding.runtimeSessionId()).isEqualTo("s");
         assertThat(cache.get("t", "u", "s")).contains(binding);
     }
 
@@ -82,7 +82,7 @@ class RuntimeBindingApplicationServiceTest {
         RuntimeBindingResolution resolution = service.resolveForRun("t", "u", "s", "run1", "leaf1");
 
         assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.NEW);
-        assertThat(resolution.binding().runtimeSessionId()).isEqualTo("runtime_session_1");
+        assertThat(resolution.binding().runtimeSessionId()).isEqualTo("s");
         assertThat(resolution.binding().leafMessageId()).isEqualTo("leaf1");
     }
 

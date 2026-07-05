@@ -10,7 +10,7 @@ import java.util.Map;
  *
  * @param runId 需要取消的 ChatService run 标识。
  * @param sessionId run 所属前端会话标识。
- * @param runtimeSessionId RelayAgentRuntime 自己的会话标识，可为空。
+ * @param runtimeSessionId Relay 确认的实际会话标识，可为空。
  * @param reason 取消原因。
  * @param metadata 允许透传给 Relay 的非敏感扩展信息。
  */

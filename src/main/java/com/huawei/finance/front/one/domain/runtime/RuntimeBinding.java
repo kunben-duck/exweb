@@ -15,7 +15,8 @@ import java.util.Map;
  * @param chatSessionId 前端聊天会话标识。
  * @param provider 当前装配的 AgentRuntime provider 编码。
  * @param leafMessageId 该 Runtime 内部会话对应的前端消息树叶子，避免历史编辑后复用错误上下文。
- * @param runtimeSessionId AgentRuntime 返回的内部会话标识，首次调用可为空。
+ * @param runtimeSessionId AgentRuntime 实际会话标识；Relay 首次调用前以 ChatService sessionId 兜底，
+ *                         收到 session-ready 后以 Relay 返回值为准。
  * @param status 绑定状态，只用于判断是否继续路由到当前 AgentRuntime。
  * @param lastRunId 最近一次触发该绑定的 SuperAgent runId。
  * @param expiresAt 绑定可作为 active runtime route 的过期时间。
@@ -103,7 +104,7 @@ public record RuntimeBinding(
     }
 
     /**
-     * 保存 AgentRuntime 返回的内部会话标识。
+     * 保存 AgentRuntime 确认的实际会话标识。
      *
      * @param nextRuntimeSessionId Runtime 内部会话 ID。
      * @return 更新后的绑定。

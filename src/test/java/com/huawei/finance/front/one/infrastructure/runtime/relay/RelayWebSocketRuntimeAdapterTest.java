@@ -70,7 +70,7 @@ class RelayWebSocketRuntimeAdapterTest {
         JsonNode userMessage = objectMapper.readTree(client.sent().get(1));
         assertThat(config.path("type").asText()).isEqualTo("config");
         assertThat(config.path("config").path("sessionMode").asText()).isEqualTo("new");
-        assertThat(config.path("config").path("sessionId").asText()).isEqualTo("run1");
+        assertThat(config.path("config").path("sessionId").asText()).isEqualTo("session1");
         assertThat(config.path("config").path("uid").asText()).isEqualTo("user1");
         assertThat(config.path("config").path("appMode").asText()).isEqualTo("delegate");
         assertThat(userMessage.path("type").asText()).isEqualTo("user-message");
@@ -351,7 +351,7 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
-    void shortConnectionReconnectsAndSendsConfigForEachRun() {
+    void shortConnectionReconnectsAndSendsConfigForEachRun() throws Exception {
         ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
         RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10));
 
@@ -379,6 +379,10 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(client.sent().get(1)).contains("\"type\":\"user-message\"").contains("hello-run1");
         assertThat(client.sent().get(2)).contains("\"type\":\"config\"").contains("\"sessionMode\":\"resume\"");
         assertThat(client.sent().get(3)).contains("\"type\":\"user-message\"").contains("hello-run2");
+        JsonNode firstConfig = objectMapper.readTree(client.sent().get(0));
+        JsonNode secondConfig = objectMapper.readTree(client.sent().get(2));
+        assertThat(firstConfig.path("config").path("sessionId").asText()).isEqualTo("session1");
+        assertThat(secondConfig.path("config").path("sessionId").asText()).isEqualTo("relay-session-1");
     }
 
     @Test
@@ -437,15 +441,21 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
-    void cancelWithoutRuntimeSessionDoesNotOpenTemporaryConnection() {
-        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
-        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10));
+    void cancelWithoutRuntimeSessionFallsBackToChatSessionId() throws Exception {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"session1\"}",
+                "{\"type\":\"session-state\",\"state\":\"paused\",\"session_id\":\"session1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
         StepVerifier.create(adapter.cancel(cancelRequest("run1", null)))
                 .verifyComplete();
 
-        assertThat(client.executeCount()).isZero();
-        assertThat(client.sent()).isEmpty();
+        assertThat(client.sent()).hasSize(2);
+        JsonNode config = objectMapper.readTree(client.sent().getFirst());
+        assertThat(config.path("config").path("sessionMode").asText()).isEqualTo("resume");
+        assertThat(config.path("config").path("sessionId").asText()).isEqualTo("session1");
+        assertThat(client.sent().get(1)).isEqualTo("{\"type\":\"interrupt\"}");
     }
 
     @Test

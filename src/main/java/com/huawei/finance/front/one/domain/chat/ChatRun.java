@@ -17,7 +17,7 @@ import java.util.Map;
  * @param routeType 本轮路由类型，例如 SUB_AGENT、AGENT_RUNTIME、SYSTEM_RESPONSE。
  * @param agentCode 本轮命中的 SubAgent 编码，可为空。
  * @param runtimeProvider 本轮使用的 AgentRuntime provider，可为空。
- * @param runtimeSessionId AgentRuntime 自己的会话标识，可为空。
+ * @param runtimeSessionId AgentRuntime 实际会话标识，可为空；Relay 会在 session-ready 后回填真实值。
  * @param runMode 本轮消息树写入模式。
  * @param parentMessageId 本轮 run 挂接的消息树父节点。
  * @param userMessageId 本轮输入对应的用户消息；重新生成时指向原用户消息。

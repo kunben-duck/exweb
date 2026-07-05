@@ -10,7 +10,7 @@ import java.util.Map;
  * @param userId 用户标识。
  * @param sessionId 前端聊天会话标识。
  * @param runId 需要取消的 SuperAgent run 标识。
- * @param runtimeSessionId AgentRuntime 自己的会话标识，可为空。
+ * @param runtimeSessionId AgentRuntime 实际会话标识；为空时可信 adapter 可回退到 ChatService sessionId。
  * @param provider 当前 Runtime provider 编码。
  * @param reason 取消原因。
  * @param metadata 扩展诊断元数据。

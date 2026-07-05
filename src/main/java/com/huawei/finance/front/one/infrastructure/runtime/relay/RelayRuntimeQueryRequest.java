@@ -13,7 +13,7 @@ import java.util.Map;
  *
  * @param runId 本轮 ChatService run 标识，用于下游日志追踪和 stop 关联。
  * @param sessionId 前端会话标识，用于下游建立或续接自己的会话上下文。
- * @param runtimeSessionId RelayAgentRuntime 自己的会话标识，首次调用可为空。
+ * @param runtimeSessionId Relay 确认的实际会话标识，首次调用为空，resume 时来自 RuntimeBinding。
  * @param query 本轮用户输入。
  * @param attachments 本轮用户显式引用的文档附件。
  * @param metadata 允许透传给 Relay 的非敏感扩展信息；不得包含 Cookie、token 或内部上下文对象。

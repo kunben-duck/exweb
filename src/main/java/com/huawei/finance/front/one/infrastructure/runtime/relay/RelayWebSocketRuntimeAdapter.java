@@ -159,12 +159,13 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     }
 
     private Mono<Void> interruptViaResumeConnection(AgentRuntimeCancelRequest request) {
-        if (request.runtimeSessionId() == null || request.runtimeSessionId().isBlank()) {
-            log.debug("Relay WebSocket active exchange not found and runtimeSessionId is empty on cancel. runId={}",
+        if (blank(request.runtimeSessionId()) && blank(request.sessionId())) {
+            log.debug("Relay WebSocket active exchange not found and session id is empty on cancel. runId={}",
                     request.runId());
             return Mono.empty();
         }
         String clientId = interruptClientId(request.runId());
+        String relaySessionId = relaySessionIdForCancel(request);
         return webSocketClient.execute(endpointUri(clientId), outboundHeaders(request.forwardHeaders()), session -> {
             Sinks.Many<String> outbound = Sinks.many().unicast().onBackpressureBuffer();
             Mono<Void> outboundSend = session.send(Flux.concat(Mono.just(configMessage(request)), outbound.asFlux())
@@ -173,18 +174,19 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     .map(WebSocketMessage::getPayloadAsText)
                     .doOnNext(frame -> validateFrameSize(frame, request.runId()))
                     .timeout(websocketProperties().getIdleTimeout());
-            Mono<Void> releaseInterrupt = waitForInterruptPausedAck(frames, outbound, request, clientId)
+            Mono<Void> releaseInterrupt = waitForInterruptPausedAck(frames, outbound, request, clientId, relaySessionId)
                     .doFinally(signal -> outbound.tryEmitComplete())
                     .then(session.close())
                     .onErrorResume(error -> session.close().then(Mono.error(error)));
             log.info("Relay WebSocket interrupt opens temporary resume connection. runId={}, runtimeSessionId={}, clientId={}",
-                    request.runId(), request.runtimeSessionId(), clientId);
+                    request.runId(), relaySessionId, clientId);
             return Mono.when(outboundSend, releaseInterrupt);
         });
     }
 
     private Mono<Void> waitForInterruptPausedAck(Flux<String> frames, Sinks.Many<String> outbound,
-                                                 AgentRuntimeCancelRequest request, String clientId) {
+                                                 AgentRuntimeCancelRequest request, String clientId,
+                                                 String relaySessionId) {
         return Mono.create(sink -> {
             AtomicBoolean done = new AtomicBoolean(false);
             AtomicBoolean configReady = new AtomicBoolean(false);
@@ -241,13 +243,13 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                             emitInterrupt(outbound, request.runId());
                             interruptSent.set(true);
                             log.info("Relay WebSocket interrupt sent. runId={}, runtimeSessionId={}, clientId={}, interruptSent=true",
-                                    request.runId(), request.runtimeSessionId(), clientId);
+                                    request.runId(), relaySessionId, clientId);
                             ackTimeout.set(Mono.delay(interruptAckTimeout()).subscribe(ignored -> {
                                 if (done.compareAndSet(false, true)) {
                                     cleanup.run();
                                     log.warn("Relay WebSocket interrupt paused ack timed out. runId={}, runtimeSessionId={}, "
                                                     + "clientId={}, interruptSent=true, pausedAck=false",
-                                            request.runId(), request.runtimeSessionId(), clientId);
+                                            request.runId(), relaySessionId, clientId);
                                     sink.success();
                                 }
                             }, fail));
@@ -262,7 +264,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     if (interruptPausedAckFrame(frame)) {
                         log.info("Relay WebSocket interrupt paused ack received. runId={}, runtimeSessionId={}, "
                                         + "clientId={}, interruptSent={}, pausedAck=true",
-                                request.runId(), request.runtimeSessionId(), clientId, interruptSent.get());
+                                request.runId(), relaySessionId, clientId, interruptSent.get());
                         complete.run();
                     }
                 } catch (Throwable ex) {
@@ -279,7 +281,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 }
                 log.warn("Relay WebSocket interrupt connection closed before paused ack. runId={}, runtimeSessionId={}, "
                                 + "clientId={}, interruptSent={}, pausedAck=false",
-                        request.runId(), request.runtimeSessionId(), clientId, interruptSent.get());
+                        request.runId(), relaySessionId, clientId, interruptSent.get());
                 complete.run();
             }));
             sink.onDispose(cleanup::run);
@@ -394,10 +396,10 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     }
 
     private String configMessage(AgentRuntimeRequest request) {
-        String runtimeSessionId = runtimeSessionId(request);
+        String relaySessionId = relaySessionIdForQuery(request);
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("sessionMode", request.runtimeSessionMode() == RuntimeSessionMode.NEW ? "new" : "resume");
-        config.put("sessionId", runtimeSessionId);
+        config.put("sessionId", relaySessionId);
         config.put("uid", request.userId());
         if (request.runtimeSessionMode() == RuntimeSessionMode.RESUME) {
             config.put("supports_incremental_recovery", true);
@@ -411,7 +413,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     private String configMessage(AgentRuntimeCancelRequest request) {
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("sessionMode", "resume");
-        config.put("sessionId", request.runtimeSessionId());
+        config.put("sessionId", relaySessionIdForCancel(request));
         config.put("uid", request.userId());
         config.put("supports_incremental_recovery", true);
         if (websocketProperties().getAppMode() != null && !websocketProperties().getAppMode().isBlank()) {
@@ -436,13 +438,19 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         }
     }
 
-    private String runtimeSessionId(AgentRuntimeRequest request) {
-        if (request.runtimeSessionId() != null && !request.runtimeSessionId().isBlank()) {
-            return request.runtimeSessionId();
+    private String relaySessionIdForQuery(AgentRuntimeRequest request) {
+        if (request.runtimeSessionMode() == RuntimeSessionMode.NEW) {
+            return request.sessionId();
         }
-        return request.runId() == null || request.runId().isBlank()
-                ? "relay-" + UUID.randomUUID()
-                : request.runId();
+        return blank(request.runtimeSessionId()) ? request.sessionId() : request.runtimeSessionId();
+    }
+
+    private String relaySessionIdForCancel(AgentRuntimeCancelRequest request) {
+        return blank(request.runtimeSessionId()) ? request.sessionId() : request.runtimeSessionId();
+    }
+
+    private boolean blank(String value) {
+        return value == null || value.isBlank();
     }
 
     private URI endpointUri(AgentRuntimeRequest request) {

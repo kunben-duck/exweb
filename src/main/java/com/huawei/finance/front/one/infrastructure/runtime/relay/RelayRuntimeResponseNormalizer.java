@@ -23,9 +23,9 @@ import org.springframework.stereotype.Component;
 /**
  * Relay Runtime 响应归一化器。
  *
- * <p>Relay 下游可能返回纯文本、JSON chunk 或 SSE-like {@code data: ...} 片段。本组件把这些
- * 私有协议统一转换成 ChatService 标准 ChatEvent，确保前端只消费稳定的
- * {@code message.delta/message.snapshot/message.completed/runtime.*} 语义，不接触下游原始响应体。</p>
+ * <p>Relay 下游可能返回纯文本、JSON chunk 或 SSE-like {@code data: ...} 片段。本组件只收敛
+ * ChatService 顶层事件类型，payload 保留 Relay 原始字段、命名和嵌套结构，并仅补充
+ * {@code source/sourceType/runtimeSessionId} 等少量辅助字段。</p>
  */
 @Component
 public class RelayRuntimeResponseNormalizer {
@@ -154,15 +154,12 @@ public class RelayRuntimeResponseNormalizer {
         if (hasError(root) || isError(type)) {
             throw new RelayRuntimeProtocolException(errorMessage(root));
         }
-        if ("tool-structured-result".equals(normalizedType)) {
-            return toolStructuredResultEvents(runId, sessionId, root);
-        }
         if ("generate-response".equals(normalizedType)) {
             String content = firstText(root, "content");
             if (content != null && !content.isBlank()) {
                 return List.of(snapshotEvent(runId, sessionId, content, root));
             }
-            return List.of(RuntimeEvent.progress(runId, sessionId, progressPayload(root, type)));
+            return List.of(RuntimeEvent.progress(runId, sessionId, relayPayload(root, type)));
         }
         ChatEvent runtimeEvent = mappedRuntimeEvent(runId, sessionId, root, type, normalizedType);
         if (runtimeEvent != null) {
@@ -204,41 +201,34 @@ public class RelayRuntimeResponseNormalizer {
     }
 
     private ChatEvent deltaEvent(String runId, String sessionId, String delta, JsonNode root) {
-        Map<String, Object> payload = new LinkedHashMap<>();
+        Map<String, Object> payload = relayPayload(root, firstText(root, "type", "event", "status"));
         payload.put("delta", delta);
-        payload.put("sourceType", blankToDefault(firstText(root, "type", "event", "status"), "unknown"));
-        copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
-        copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
-        copyText(root, payload, "agentSessionId", "agentSessionId", "agent_session_id");
-        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
         return new MessageDeltaEvent(runId, sessionId, 0, Instant.now(), delta, Map.copyOf(payload));
     }
 
     private ChatEvent snapshotEvent(String runId, String sessionId, String content, JsonNode root) {
-        Map<String, Object> payload = new LinkedHashMap<>();
+        Map<String, Object> payload = relayPayload(root, firstText(root, "type", "event", "status"));
         payload.put("content", content);
-        payload.put("sourceType", blankToDefault(firstText(root, "type", "event", "status"), "unknown"));
-        copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
-        copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
-        copyText(root, payload, "agentSessionId", "agentSessionId", "agent_session_id");
-        copyText(root, payload, "instanceId", "instance_id", "instanceId");
-        copyAny(root, payload, "versionId", "version_id", "versionId");
-        copyAny(root, payload, "isFinal", "is_final", "isFinal");
-        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
         return new MessageSnapshotEvent(runId, sessionId, 0, Instant.now(), content, Map.copyOf(payload));
     }
 
     private Map<String, Object> completionPayload(JsonNode root) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("status", "MESSAGE_COMPLETED");
-        copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
-        copyText(root, payload, "agentSessionId", "agentSessionId", "agent_session_id");
-        copyText(root, payload, "finishReason", "finishReason", "finish_reason");
+        putText(payload, "runtimeSessionId", firstText(root, RUNTIME_SESSION_FIELDS));
+        putText(payload, "agentSessionId", firstText(root, "agentSessionId", "agent_session_id"));
+        putText(payload, "finishReason", firstText(root, "finishReason", "finish_reason"));
         JsonNode choice = firstChoice(root);
         if (choice != null) {
-            copyText(choice, payload, "finishReason", "finishReason", "finish_reason");
+            putText(payload, "finishReason", firstText(choice, "finishReason", "finish_reason"));
         }
         return Map.copyOf(payload);
+    }
+
+    private void putText(Map<String, Object> payload, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            payload.put(key, value);
+        }
     }
 
     private String extractAnswerDelta(JsonNode root, String type) {
@@ -332,444 +322,45 @@ public class RelayRuntimeResponseNormalizer {
     private ChatEvent mappedRuntimeEvent(String runId, String sessionId, JsonNode root,
                                          String sourceType, String normalizedType) {
         return switch (normalizedType) {
-            case "relay-start", "relay-end" -> RuntimeEvent.progress(runId, sessionId,
-                    relayLifecyclePayload(root, sourceType));
-            case "relay-progress" -> RuntimeEvent.progress(runId, sessionId, progressPayload(root, sourceType));
-            case "project-home" -> RuntimeEvent.metadata(runId, sessionId, projectHomePayload(root, sourceType));
-            case "available-modes", "availbale-modes" ->
-                    RuntimeEvent.metadata(runId, sessionId, availableModesPayload(root, sourceType));
-            case "session-ready" -> RuntimeEvent.metadata(runId, sessionId, sessionReadyPayload(root, sourceType));
-            case "agent-call" -> RuntimeEvent.agent(runId, sessionId, agentCallPayload(root, sourceType));
+            case "relay-start", "relay-end", "relay-progress", "clarified-query", "plan-update",
+                    "subagent-plan-created", "subagent-subtask", "approval-result" ->
+                    RuntimeEvent.progress(runId, sessionId, relayPayload(root, sourceType));
+            case "project-home", "available-modes", "availbale-modes", "session-ready", "session-state",
+                    "self-evolution-status", "token-update", "heartbeat-response" ->
+                    RuntimeEvent.metadata(runId, sessionId, relayPayload(root, sourceType));
+            case "agent-call" -> RuntimeEvent.agent(runId, sessionId, relayPayload(root, sourceType));
             case "agent-reasoning" -> RuntimeEvent.thinking(runId, sessionId,
-                    agentReasoningPayload(root, sourceType));
+                    relayPayload(root, sourceType));
             case "thinking-operation-start", "thinkink-operation-start" ->
-                    RuntimeEvent.thinking(runId, sessionId, thinkingPayload(root, sourceType, "STARTED"));
+                    RuntimeEvent.thinking(runId, sessionId, relayPayload(root, sourceType));
             case "thinking-content-update" -> RuntimeEvent.thinking(runId, sessionId,
-                    thinkingContentPayload(root, sourceType));
+                    relayPayload(root, sourceType));
             case "thinking-operation-end", "thinking-operation-finish" ->
-                    RuntimeEvent.thinking(runId, sessionId, thinkingPayload(root, sourceType, "ENDED"));
-            case "tool-call-streaming" -> RuntimeEvent.tool(runId, sessionId, toolPayload(root, sourceType));
-            case "tool-execution" -> RuntimeEvent.tool(runId, sessionId, toolExecutionPayload(root, sourceType));
-            case "session-state" -> RuntimeEvent.metadata(runId, sessionId, sessionStatePayload(root, sourceType));
-            case "clarified-query" -> RuntimeEvent.progress(runId, sessionId, progressPayload(root, sourceType));
-            case "self-evolution-status" -> RuntimeEvent.metadata(runId, sessionId,
-                    selfEvolutionPayload(root, sourceType));
+                    RuntimeEvent.thinking(runId, sessionId, relayPayload(root, sourceType));
+            case "tool-call-streaming", "tool-execution", "tool-structured-result" ->
+                    RuntimeEvent.tool(runId, sessionId, relayPayload(root, sourceType));
+            case "approval-request" -> RuntimeEvent.card(runId, sessionId, relayPayload(root, sourceType));
             case "url-moderation", "url-moderation-result" ->
-                    RuntimeEvent.reference(runId, sessionId, urlModerationReferencePayload(root, sourceType));
+                    RuntimeEvent.reference(runId, sessionId, relayPayload(root, sourceType));
             case "search-result-groups", "content-references", "citations", "sources", "references", "safe-urls" ->
-                    RuntimeEvent.reference(runId, sessionId, genericReferencePayload(root, sourceType));
+                    RuntimeEvent.reference(runId, sessionId, relayPayload(root, sourceType));
             default -> null;
         };
     }
 
-    private List<ChatEvent> toolStructuredResultEvents(String runId, String sessionId, JsonNode root) {
-        JsonNode result = firstNode(root, "result_data", "resultData");
-        JsonNode data = toolStructuredData(result);
-        if (data == null || data.isNull() || data.isMissingNode()) {
-            return List.of(toolStructuredFallbackEvent(runId, sessionId, root));
-        }
-        Map<String, Object> context = toolStructuredContext(root, result);
-        List<ChatEvent> events = new ArrayList<>();
-        String content = firstText(data, "content");
-        if (content != null) {
-            events.add(toolStructuredDeltaEvent(runId, sessionId, content, context));
-        }
-        JsonNode processResult = firstNode(data, "processResult");
-        if (processResult != null) {
-            events.add(RuntimeEvent.progress(runId, sessionId,
-                    toolStructuredProgressPayload(data, processResult, context)));
-        }
-        JsonNode searchList = firstNode(data, "searchList", "SearchList");
-        if (searchList != null) {
-            events.add(RuntimeEvent.reference(runId, sessionId,
-                    toolStructuredReferencePayload("relay-searchList", "search_list",
-                            "searchList", searchList, context)));
-        }
-        JsonNode sourcesDocuments = firstNode(data, "sourcesDocuments", "sourceDocuments",
-                "SourcesDocuments", "SourceDocuments");
-        if (sourcesDocuments != null) {
-            String sourceType = data.has("sourceDocuments") || data.has("SourceDocuments")
-                    ? "relay-sourceDocuments"
-                    : "relay-sourcesDocuments";
-            events.add(RuntimeEvent.reference(runId, sessionId,
-                    toolStructuredReferencePayload(sourceType, "source_documents",
-                            "sourcesDocuments", sourcesDocuments, context)));
-        }
-        if (hasToolStructuredCardPayload(data)) {
-            events.add(RuntimeEvent.card(runId, sessionId, toolStructuredCardPayload(data, context)));
-        }
-        if (events.isEmpty()) {
-            events.add(toolStructuredFallbackEvent(runId, sessionId, root));
-        }
-        return List.copyOf(events);
-    }
-
-    private JsonNode toolStructuredData(JsonNode result) {
-        if (result == null || result.isNull() || result.isMissingNode()) {
-            return null;
-        }
-        JsonNode widget = result.get("widget");
-        if (widget != null && widget.isObject()) {
-            JsonNode widgetData = widget.get("data");
-            if (widgetData != null && !widgetData.isNull()) {
-                return widgetData;
-            }
-        }
-        JsonNode data = result.get("data");
-        return data == null || data.isNull() ? result : data;
-    }
-
-    private Map<String, Object> toolStructuredContext(JsonNode root, JsonNode result) {
-        Map<String, Object> context = new LinkedHashMap<>();
-        copyText(root, context, "agentName", AGENT_NAME_FIELDS);
-        copyText(root, context, "toolId", "tool_id", "toolId", "tool-id");
-        copyText(root, context, "parentInstanceId", "parent_instance_id", "parentInstanceId", "parent-instance-id");
-        copyText(root, context, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
-        copyAny(root, context, "timestamp", "timestamp", "time", "created_at");
-        if (result != null) {
-            copyAny(result, context, "index", "index");
-            copyAny(result, context, "total", "total");
-            copyBoolean(result, context, "isLast", "is_last", "isLast");
-        }
-        return Map.copyOf(context);
-    }
-
-    private ChatEvent toolStructuredDeltaEvent(String runId, String sessionId, String content,
-                                               Map<String, Object> context) {
-        Map<String, Object> payload = new LinkedHashMap<>(context);
-        payload.put("delta", content);
-        payload.put("sourceType", "relay-content");
-        return new MessageDeltaEvent(runId, sessionId, 0, Instant.now(), content, Map.copyOf(payload));
-    }
-
-    private Map<String, Object> toolStructuredProgressPayload(JsonNode data, JsonNode processResult,
-                                                              Map<String, Object> context) {
-        Map<String, Object> payload = basePayload("relay-processResult");
-        payload.putAll(context);
-        payload.put("status", "STREAMING");
-        payload.put("title", "思考过程");
-        payload.put("processResult", sanitizeJson(processResult, "processResult", 0));
-        JsonNode dynamicResponse = firstNode(processResult, "dynamicResponse", "dynamic_response");
-        if (dynamicResponse != null) {
-            payload.put("dynamicResponse", sanitizeJson(dynamicResponse, "dynamicResponse", 0));
-            String text = firstDynamicResponseText(dynamicResponse);
-            if (text != null) {
-                payload.put("text", text);
-            }
-        }
-        return Map.copyOf(payload);
-    }
-
-    private Map<String, Object> toolStructuredReferencePayload(String sourceType, String referenceType,
-                                                               String fieldName, JsonNode references,
-                                                               Map<String, Object> context) {
-        Map<String, Object> payload = basePayload(sourceType);
-        payload.putAll(context);
-        payload.put("referenceType", referenceType);
-        payload.put("references", sanitizeJson(references, fieldName, 0));
-        return Map.copyOf(payload);
-    }
-
-    private boolean hasToolStructuredCardPayload(JsonNode data) {
-        return firstNode(data, "cardUrl", "diyCardScene", "cardList", "openCard") != null;
-    }
-
-    private Map<String, Object> toolStructuredCardPayload(JsonNode data, Map<String, Object> context) {
-        List<String> sources = toolStructuredCardSources(data);
-        String sourceType = sources.size() == 1 ? "relay-" + sources.getFirst() : "relay-card";
-        Map<String, Object> payload = basePayload(sourceType);
-        payload.putAll(context);
-        payload.put("cardType", sources.size() == 1 ? cardType(sources.getFirst()) : "mixed");
-        payload.put("cardSources", sources.stream().map(source -> "relay-" + source).toList());
-        copyText(data, payload, "cardUrl", "cardUrl");
-        copyText(data, payload, "openCard", "openCard");
-        copyText(data, payload, "intent", "intent");
-        copyText(data, payload, "skillId", "skillId", "skill_id");
-        copyAny(data, payload, "diyCardScene", "diyCardScene");
-        copyAny(data, payload, "cardList", "cardList");
-        return Map.copyOf(payload);
-    }
-
-    private List<String> toolStructuredCardSources(JsonNode data) {
-        List<String> sources = new ArrayList<>();
-        for (String field : List.of("cardUrl", "diyCardScene", "cardList", "openCard")) {
-            JsonNode value = data.get(field);
-            if (value != null && !value.isNull()) {
-                sources.add(field);
-            }
-        }
-        return List.copyOf(sources);
-    }
-
-    private String cardType(String source) {
-        return "cardUrl".equals(source) ? "url" : source;
-    }
-
-    private String firstDynamicResponseText(JsonNode dynamicResponse) {
-        if (dynamicResponse == null || !dynamicResponse.isArray() || dynamicResponse.isEmpty()) {
-            return null;
-        }
-        for (JsonNode item : dynamicResponse) {
-            String text = firstText(item, "title", "titile", "text", "content");
-            if (text != null) {
-                return text;
-            }
-        }
-        return null;
-    }
-
-    private RuntimeEvent toolStructuredFallbackEvent(String runId, String sessionId, JsonNode root) {
-        return RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
-                "relay", "relay-tool-structured-result", "event", "runtime", "runtime",
-                null, sourcePayload(root)));
-    }
-
     private RuntimeEvent fallbackRuntimeEvent(String runId, String sessionId, JsonNode root, String type) {
-        String sourceType = type == null || type.isBlank() ? "unknown" : type.trim();
-        String channel = runtimeChannel(sourceType);
-        String text = firstText(root, "displayText", "display_text", "title", "description");
-        if (text == null && isRuntimeTextSafe(sourceType)) {
-            text = firstText(root, "message", "text");
+        return new RuntimeEvent(runId, sessionId, 0, Instant.now(), "runtime.event", relayPayload(root, type));
+    }
+
+    private Map<String, Object> relayPayload(JsonNode root, String sourceType) {
+        Map<String, Object> payload = new LinkedHashMap<>(sourcePayload(root));
+        payload.putIfAbsent("source", "relay");
+        payload.putIfAbsent("sourceType", blankToDefault(sourceType, "unknown"));
+        String runtimeSessionId = firstText(root, RUNTIME_SESSION_FIELDS);
+        if (runtimeSessionId != null) {
+            payload.putIfAbsent("runtimeSessionId", runtimeSessionId);
         }
-        return RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
-                "relay", sourceType, runtimeEventKind(sourceType), channel, channel, text, sourcePayload(root)));
-    }
-
-    private Map<String, Object> progressPayload(JsonNode root, String sourceType) {
-        Map<String, Object> payload = basePayload(sourceType);
-        copyText(root, payload, "text", "content", "message", "text");
-        copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
-        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
-        return Map.copyOf(payload);
-    }
-
-    private Map<String, Object> relayLifecyclePayload(JsonNode root, String sourceType) {
-        Map<String, Object> next = new LinkedHashMap<>(progressPayload(root, sourceType));
-        copyText(root, next, "status", "status");
-        copyAny(root, next, "mcpStatus", "mcp_status", "mcpStatus");
-        copyAny(root, next, "initialization", "is_initialization", "isInitialization");
-        return Map.copyOf(next);
-    }
-
-    private Map<String, Object> projectHomePayload(JsonNode root, String sourceType) {
-        Map<String, Object> payload = basePayload(sourceType);
-        payload.put("metadataType", "project_home");
-        copyText(root, payload, "projectHome", "project_home", "projectHome");
-        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
-        return Map.copyOf(payload);
-    }
-
-    private Map<String, Object> availableModesPayload(JsonNode root, String sourceType) {
-        Map<String, Object> payload = basePayload(sourceType);
-        payload.put("metadataType", "available_modes");
-        JsonNode modes = root.get("modes");
-        if (modes != null && modes.isArray()) {
-            List<Object> normalizedModes = new ArrayList<>();
-            for (JsonNode mode : modes) {
-                if (mode != null && mode.isObject()) {
-                    Map<String, Object> item = new LinkedHashMap<>();
-                    copyText(mode, item, "value", "value");
-                    copyText(mode, item, "label", "label", "lable");
-                    copyText(mode, item, "description", "description");
-                    copyText(mode, item, "source", "source");
-                    normalizedModes.add(Map.copyOf(item));
-                }
-            }
-            payload.put("modes", List.copyOf(normalizedModes));
-        }
-        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
-        return Map.copyOf(payload);
-    }
-
-    private Map<String, Object> sessionReadyPayload(JsonNode root, String sourceType) {
-        Map<String, Object> payload = basePayload(sourceType);
-        payload.put("metadataType", "relay_session_ready");
-        copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
-        copyText(root, payload, "sessionMode", "session_mode", "sessionMode");
-        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
-        return Map.copyOf(payload);
-    }
-
-    private Map<String, Object> agentCallPayload(JsonNode root, String sourceType) {
-        Map<String, Object> payload = basePayload(sourceType);
-        copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
-        copyBoolean(root, payload, "started", "started", "istart", "isStart", "is_start");
-        copyText(root, payload, "task", "task");
-        copyText(root, payload, "modelName", "modelName", "modelname", "model_name");
-        copyText(root, payload, "agentId", "agent_id", "agentId");
-        copyText(root, payload, "instanceId", "instance_id", "instanceId");
-        copyText(root, payload, "parentId", "parent_id", "parentId");
-        copyAny(root, payload, "endTimestamp", "end_timestamp", "endTimestamp");
-        copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
-        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
-        return Map.copyOf(payload);
-    }
-
-    private Map<String, Object> agentReasoningPayload(JsonNode root, String sourceType) {
-        Map<String, Object> payload = basePayload(sourceType);
-        copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
-        copyText(root, payload, "text", "thought", "content", "text");
-        copyBoolean(root, payload, "started", "is_start", "isStart", "started");
-        payload.put("status", Boolean.TRUE.equals(payload.get("started")) ? "STARTED" : "ENDED");
-        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
-        return Map.copyOf(payload);
-    }
-
-    private Map<String, Object> thinkingPayload(JsonNode root, String sourceType, String status) {
-        Map<String, Object> payload = basePayload(sourceType);
-        payload.put("status", status);
-        copyText(root, payload, "operationId", "operationId", "operation_id");
-        copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
-        copyText(root, payload, "instanceId", "instance_id", "instanceId");
-        copyText(root, payload, "modelId", "model_id", "modelId");
-        JsonNode tools = firstNode(root, "availableTools", "available_tools", "availbale_tools");
-        if (tools != null && tools.isArray()) {
-            payload.put("availableTools", sanitizeJson(tools, "availableTools", 0));
-        }
-        copyAny(root, payload, "inputTokens", "input_tokens", "inputTokens");
-        copyAny(root, payload, "outputTokens", "output_tokens", "outputTokens");
-        copyAny(root, payload, "reasoningTokens", "reasoning_tokens", "reasoningTokens");
-        copyAny(root, payload, "cachedTokens", "cached_tokens", "cachedTokens");
-        copyAny(root, payload, "toolCallCount", "tool_call_count", "toolCallCount");
-        copyAny(root, payload, "toolCallIds", "tool_call_ids", "toolCallIds");
-        copyText(root, payload, "reasoningContent", "reasoning_content", "reasoningContent");
-        copyText(root, payload, "output", "output");
-        copyAny(root, payload, "endTimestamp", "end_timestamp", "endTimestamp");
-        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
-        return Map.copyOf(payload);
-    }
-
-    private Map<String, Object> thinkingContentPayload(JsonNode root, String sourceType) {
-        Map<String, Object> payload = basePayload(sourceType);
-        payload.put("status", "STREAMING");
-        copyText(root, payload, "operationId", "operationId", "operation_id");
-        copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
-        copyText(root, payload, "text", "content", "thought", "text");
-        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
-        return Map.copyOf(payload);
-    }
-
-    private Map<String, Object> toolPayload(JsonNode root, String sourceType) {
-        Map<String, Object> payload = basePayload(sourceType);
-        payload.put("status", "STREAMING");
-        copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
-        copyText(root, payload, "toolName", "toolName", "tool_name", "too_name", "tool-name");
-        copyText(root, payload, "toolId", "tool_id", "toolId", "tool-id");
-        copyText(root, payload, "operationId", "operation_id", "operationId");
-        copyText(root, payload, "inputPreview", "inputPreview", "input_preview");
-        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
-        return Map.copyOf(payload);
-    }
-
-    private Map<String, Object> toolExecutionPayload(JsonNode root, String sourceType) {
-        Map<String, Object> payload = basePayload(sourceType);
-        boolean started = booleanValue(firstNode(root, "is_start", "isStart", "started"));
-        payload.put("status", started ? "STARTED" : "ENDED");
-        payload.put("started", started);
-        copyText(root, payload, "agentName", AGENT_NAME_FIELDS);
-        copyText(root, payload, "toolName", "tool_name", "toolName", "tool-name");
-        copyText(root, payload, "toolId", "tool_id", "toolId", "tool-id");
-        copyText(root, payload, "displayName", "display_name", "displayName");
-        copyText(root, payload, "parentInstanceId", "parent_instance_id", "parentInstanceId");
-        copyText(root, payload, "modelId", "model_id", "modelId");
-        copyText(root, payload, "thinkingOperationId", "thinking_operation_id", "thinkingOperationId");
-        copyText(root, payload, "argsSummary", "args_summary", "argsSummary");
-        copyText(root, payload, "resultSummary", "result_summary", "resultSummary");
-        copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
-        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
-        return Map.copyOf(payload);
-    }
-
-    private Map<String, Object> sessionStatePayload(JsonNode root, String sourceType) {
-        Map<String, Object> payload = basePayload(sourceType);
-        payload.put("metadataType", "session_state");
-        copyText(root, payload, "state", "state");
-        copyText(root, payload, "detail", "detail", "message", "content");
-        copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
-        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
-        return Map.copyOf(payload);
-    }
-
-    private Map<String, Object> selfEvolutionPayload(JsonNode root, String sourceType) {
-        Map<String, Object> payload = basePayload(sourceType);
-        payload.put("metadataType", "self_evolution_status");
-        copyAny(root, payload, "data", "data");
-        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
-        return Map.copyOf(payload);
-    }
-
-    private Map<String, Object> urlModerationReferencePayload(JsonNode root, String sourceType) {
-        Map<String, Object> payload = basePayload(sourceType);
-        payload.put("referenceType", "url_moderation");
-        JsonNode result = firstNode(root, "url_moderation_result", "urlModerationResult", "result", "data");
-        JsonNode valueRoot = result == null || !result.isObject() ? root : result;
-        copyText(valueRoot, payload, "url", "full_url", "fullUrl", "url");
-        copyText(valueRoot, payload, "title", "title", "name");
-        copyAny(valueRoot, payload, "safe", "is_safe", "isSafe", "safe");
-        copyAny(valueRoot, payload, "blocked", "is_blocked", "isBlocked", "blocked");
-        copyText(valueRoot, payload, "messageId", "message_id", "messageId");
-        payload.put("sourcePayload", sourcePayload(root));
-        return Map.copyOf(payload);
-    }
-
-    private Map<String, Object> genericReferencePayload(JsonNode root, String sourceType) {
-        Map<String, Object> payload = basePayload(sourceType);
-        payload.put("referenceType", "source");
-        copyText(root, payload, "title", "title", "name", "label");
-        copyText(root, payload, "url", "url", "href", "link");
-        copyText(root, payload, "text", "text", "snippet", "summary", "content");
-        JsonNode references = firstNode(root, "references", "citations", "sources", "safe_urls",
-                "safeUrls", "content_references", "contentReferences", "search_result_groups",
-                "searchResultGroups");
-        if (references != null) {
-            payload.put("references", sanitizeJson(references, "references", 0));
-        }
-        payload.put("sourcePayload", sourcePayload(root));
-        return Map.copyOf(payload);
-    }
-
-    private Map<String, Object> basePayload(String sourceType) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("source", "relay");
-        payload.put("sourceType", blankToDefault(sourceType, "unknown"));
         return payload;
-    }
-
-    private boolean isRuntimeTextSafe(String sourceType) {
-        String normalized = sourceType == null ? "" : sourceType.trim().toLowerCase();
-        return normalized.contains("progress")
-                || normalized.contains("thinking")
-                || normalized.contains("agent")
-                || normalized.contains("tool")
-                || normalized.contains("status");
-    }
-
-    private String runtimeEventKind(String sourceType) {
-        String normalized = sourceType == null ? "" : sourceType.trim().toLowerCase();
-        if (normalized.contains("delta")) {
-            return "delta";
-        }
-        if (normalized.contains("progress")) {
-            return "progress";
-        }
-        return "event";
-    }
-
-    private String runtimeChannel(String sourceType) {
-        String normalized = sourceType == null ? "" : sourceType.trim().toLowerCase();
-        if (normalized.contains("thinking") || normalized.contains("reasoning")) {
-            return "thinking";
-        }
-        if (normalized.contains("progress")) {
-            return "progress";
-        }
-        if (normalized.contains("agent")) {
-            return "agent";
-        }
-        if (normalized.contains("tool")) {
-            return "tool";
-        }
-        return "runtime";
     }
 
     private Map<String, Object> sourcePayload(JsonNode root) {
@@ -933,46 +524,6 @@ public class RelayRuntimeResponseNormalizer {
         return root.size() == 0;
     }
 
-    private void copyText(JsonNode root, Map<String, Object> payload, String target, String... sourceNames) {
-        String value = firstText(root, sourceNames);
-        if (value != null) {
-            payload.put(target, value);
-        }
-    }
-
-    private void copyAny(JsonNode root, Map<String, Object> payload, String target, String... sourceNames) {
-        JsonNode value = firstNode(root, sourceNames);
-        if (value != null && !value.isNull()) {
-            payload.put(target, sanitizeJson(value, target, 0));
-        }
-    }
-
-    private void copyBoolean(JsonNode root, Map<String, Object> payload, String target, String... sourceNames) {
-        JsonNode value = firstNode(root, sourceNames);
-        if (value != null && value.isBoolean()) {
-            payload.put(target, value.booleanValue());
-        } else if (value != null && value.isTextual()) {
-            payload.put(target, Boolean.parseBoolean(value.asText()));
-        }
-    }
-
-    private boolean booleanValue(JsonNode value) {
-        if (value == null || value.isNull() || value.isMissingNode()) {
-            return false;
-        }
-        if (value.isBoolean()) {
-            return value.booleanValue();
-        }
-        if (value.isNumber()) {
-            return value.asInt(0) != 0;
-        }
-        if (value.isTextual()) {
-            String text = value.asText("").trim();
-            return "true".equalsIgnoreCase(text) || "1".equals(text) || "yes".equalsIgnoreCase(text);
-        }
-        return false;
-    }
-
     private String firstText(JsonNode root, String... fieldNames) {
         JsonNode value = firstNode(root, fieldNames);
         if (value == null) {
@@ -1018,11 +569,7 @@ public class RelayRuntimeResponseNormalizer {
     }
 
     private static final String[] RUNTIME_SESSION_FIELDS = {
-            "runtimeSessionId", "runtime_session_id", "session_id", "session-id", "session—id",
-            "sessionId", "instansid", "instanceId", "instance_id"
+            "runtimeSessionId", "runtime_session_id", "session_id", "session-id", "session—id", "sessionId"
     };
 
-    private static final String[] AGENT_NAME_FIELDS = {
-            "agentName", "agent_name", "agent-name", "agentname"
-    };
 }

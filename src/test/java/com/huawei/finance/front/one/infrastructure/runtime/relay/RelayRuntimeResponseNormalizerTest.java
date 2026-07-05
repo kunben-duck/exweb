@@ -61,10 +61,10 @@ class RelayRuntimeResponseNormalizerTest {
         assertThat(events).hasSize(1);
         assertThat(events.getFirst().type()).isEqualTo("runtime.metadata");
         assertThat(events.getFirst().payload())
-                .containsEntry("metadataType", "relay_session_ready")
                 .containsEntry("sourceType", "session-ready")
                 .containsEntry("runtimeSessionId", "relay-session-1")
-                .containsEntry("sessionMode", "new");
+                .containsEntry("session_id", "relay-session-1")
+                .containsEntry("session_mode", "new");
     }
 
     @Test
@@ -78,7 +78,8 @@ class RelayRuntimeResponseNormalizerTest {
         assertThat(events.getFirst().payload())
                 .containsEntry("delta", "你好")
                 .containsEntry("sourceType", "agent")
-                .containsEntry("agentName", "delegate_agent")
+                .containsEntry("agent_name", "delegate_agent")
+                .doesNotContainKey("agentName")
                 .containsEntry("runtimeSessionId", "relay-session-1");
     }
 
@@ -93,7 +94,8 @@ class RelayRuntimeResponseNormalizerTest {
         assertThat(events.getFirst().payload())
                 .containsEntry("content", "最终回答\n保留格式")
                 .containsEntry("sourceType", "agent")
-                .containsEntry("agentName", "delegate_agent")
+                .containsEntry("agent_name", "delegate_agent")
+                .doesNotContainKey("agentName")
                 .containsEntry("runtimeSessionId", "relay-session-1");
     }
 
@@ -119,11 +121,13 @@ class RelayRuntimeResponseNormalizerTest {
         assertThat(events.getFirst().payload())
                 .containsEntry("content", "完整总结")
                 .containsEntry("sourceType", "generate-response")
-                .containsEntry("agentName", "delegate_agent")
+                .containsEntry("agent_name", "delegate_agent")
                 .containsEntry("runtimeSessionId", "relay-session-1")
-                .containsEntry("instanceId", "inst-1")
-                .containsEntry("versionId", 16)
-                .containsEntry("isFinal", true);
+                .containsEntry("instance_id", "inst-1")
+                .containsEntry("version_id", 16)
+                .containsEntry("is_final", true)
+                .doesNotContainKey("agentName")
+                .doesNotContainKey("versionId");
     }
 
     @Test
@@ -135,7 +139,8 @@ class RelayRuntimeResponseNormalizerTest {
         assertThat(events.getFirst().type()).isEqualTo("runtime.progress");
         assertThat(events.getFirst().payload())
                 .containsEntry("sourceType", "generate-response")
-                .containsEntry("text", "生成完成");
+                .containsEntry("message", "生成完成")
+                .doesNotContainKey("text");
     }
 
     @Test
@@ -188,13 +193,17 @@ class RelayRuntimeResponseNormalizerTest {
         assertThat(progressEvents.getFirst().type()).isEqualTo("runtime.progress");
         assertThat(progressEvents.getFirst().payload())
                 .containsEntry("sourceType", "relay-progress")
-                .containsEntry("runtimeSessionId", "relay-session-1")
-                .containsEntry("text", "处理中");
+                .containsEntry("content", "处理中")
+                .containsEntry("instansid", "relay-session-1")
+                .doesNotContainKey("runtimeSessionId")
+                .doesNotContainKey("text");
         assertThat(toolEvents).hasSize(1);
         assertThat(toolEvents.getFirst().type()).isEqualTo("runtime.tool");
         assertThat(toolEvents.getFirst().payload())
-                .containsEntry("toolName", "eureka_chat")
-                .containsEntry("inputPreview", "查询报销流程");
+                .containsEntry("too_name", "eureka_chat")
+                .containsEntry("input_preview", "查询报销流程")
+                .doesNotContainKey("toolName")
+                .doesNotContainKey("inputPreview");
     }
 
     @Test
@@ -213,22 +222,26 @@ class RelayRuntimeResponseNormalizerTest {
         assertThat(reasoningEvents.getFirst().type()).isEqualTo("runtime.thinking");
         assertThat(reasoningEvents.getFirst().payload())
                 .containsEntry("sourceType", "agent-reasoning")
-                .containsEntry("status", "STARTED")
-                .containsEntry("text", "分析问题");
+                .containsEntry("agent_name", "PlanAgent")
+                .containsEntry("is_start", true)
+                .containsEntry("thought", "分析问题")
+                .doesNotContainKey("status");
         assertThat(thinkingContentEvents).hasSize(1);
         assertThat(thinkingContentEvents.getFirst().type()).isEqualTo("runtime.thinking");
         assertThat(thinkingContentEvents.getFirst().payload())
                 .containsEntry("sourceType", "thinking-content-update")
-                .containsEntry("status", "STREAMING")
-                .containsEntry("text", "思考片段")
-                .containsEntry("operationId", "op-1");
+                .containsEntry("content", "思考片段")
+                .containsEntry("operation_id", "op-1")
+                .doesNotContainKey("operationId");
         assertThat(toolExecutionEvents).hasSize(1);
         assertThat(toolExecutionEvents.getFirst().type()).isEqualTo("runtime.tool");
         assertThat(toolExecutionEvents.getFirst().payload())
                 .containsEntry("sourceType", "tool-execution")
-                .containsEntry("status", "ENDED")
-                .containsEntry("toolName", "mcp__x__search")
-                .containsEntry("resultSummary", "完成");
+                .containsEntry("tool_name", "mcp__x__search")
+                .containsEntry("tool_id", "tool-1")
+                .containsEntry("is_start", false)
+                .containsEntry("result_summary", "完成")
+                .doesNotContainKey("toolName");
     }
 
     @Test
@@ -241,8 +254,8 @@ class RelayRuntimeResponseNormalizerTest {
         assertThat(events.getFirst().type()).isEqualTo("runtime.metadata");
         assertThat(events.getFirst().payload())
                 .containsEntry("sourceType", "session-state")
-                .containsEntry("metadataType", "session_state")
                 .containsEntry("state", "idle")
+                .containsEntry("session_id", "relay-session-1")
                 .containsEntry("runtimeSessionId", "relay-session-1");
     }
 
@@ -256,13 +269,13 @@ class RelayRuntimeResponseNormalizerTest {
         assertThat(events.getFirst().type()).isEqualTo("runtime.reference");
         assertThat(events.getFirst().payload())
                 .containsEntry("sourceType", "url_moderation")
-                .containsEntry("referenceType", "url_moderation")
-                .containsEntry("url", "https://example.com/report")
-                .containsEntry("safe", true);
+                .containsKey("url_moderation_result")
+                .doesNotContainKey("referenceType")
+                .doesNotContainKey("url");
     }
 
     @Test
-    void toolStructuredResultContentBecomesAssistantDeltaWithRelayContext() {
+    void toolStructuredResultBecomesRuntimeToolWithRawPayload() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1",
                 "{\"type\":\"tool-structured-result\",\"agent_name\":\"delegate_agent\","
                         + "\"tool_id\":\"tool-1\",\"parent_instance_id\":\"parent-1\","
@@ -272,21 +285,22 @@ class RelayRuntimeResponseNormalizerTest {
                         + "\"index\":396,\"total\":403,\"is_last\":false}}");
 
         assertThat(events).hasSize(1);
-        assertThat(events.getFirst().type()).isEqualTo("message.delta");
+        assertThat(events.getFirst().type()).isEqualTo("runtime.tool");
         assertThat(events.getFirst().payload())
-                .containsEntry("delta", "知识")
-                .containsEntry("sourceType", "relay-content")
-                .containsEntry("agentName", "delegate_agent")
-                .containsEntry("toolId", "tool-1")
-                .containsEntry("parentInstanceId", "parent-1")
+                .containsEntry("sourceType", "tool-structured-result")
+                .containsEntry("agent_name", "delegate_agent")
+                .containsEntry("tool_id", "tool-1")
+                .containsEntry("parent_instance_id", "parent-1")
+                .containsEntry("session_id", "relay-session-1")
                 .containsEntry("runtimeSessionId", "relay-session-1")
-                .containsEntry("index", 396)
-                .containsEntry("total", 403)
-                .containsEntry("isLast", false);
+                .containsKey("result_data")
+                .doesNotContainKey("delta")
+                .doesNotContainKey("toolId")
+                .doesNotContainKey("isLast");
     }
 
     @Test
-    void toolStructuredResultReferencesUseRelayPrefixedSourceTypes() {
+    void toolStructuredResultReferencesKeepRawResultData() {
         List<ChatEvent> searchEvents = normalizer.normalize("run1", "session1",
                 "{\"type\":\"tool-structured-result\",\"result_data\":{\"widget\":{\"data\":{"
                         + "\"searchList\":[{\"title\":\"网页\",\"url\":\"https://example.com\"}]"
@@ -297,19 +311,21 @@ class RelayRuntimeResponseNormalizerTest {
                         + "}}}}");
 
         assertThat(searchEvents).hasSize(1);
-        assertThat(searchEvents.getFirst().type()).isEqualTo("runtime.reference");
+        assertThat(searchEvents.getFirst().type()).isEqualTo("runtime.tool");
         assertThat(searchEvents.getFirst().payload())
-                .containsEntry("sourceType", "relay-searchList")
-                .containsEntry("referenceType", "search_list");
+                .containsEntry("sourceType", "tool-structured-result")
+                .containsKey("result_data")
+                .doesNotContainKey("referenceType");
         assertThat(sourceEvents).hasSize(1);
-        assertThat(sourceEvents.getFirst().type()).isEqualTo("runtime.reference");
+        assertThat(sourceEvents.getFirst().type()).isEqualTo("runtime.tool");
         assertThat(sourceEvents.getFirst().payload())
-                .containsEntry("sourceType", "relay-sourcesDocuments")
-                .containsEntry("referenceType", "source_documents");
+                .containsEntry("sourceType", "tool-structured-result")
+                .containsKey("result_data")
+                .doesNotContainKey("referenceType");
     }
 
     @Test
-    void toolStructuredResultProgressAndCardsMapToStandardRuntimeEvents() {
+    void toolStructuredResultProgressAndCardsStayRuntimeTool() {
         List<ChatEvent> progressEvents = normalizer.normalize("run1", "session1",
                 "{\"type\":\"tool-structured-result\",\"resultData\":{\"widget\":{\"data\":{"
                         + "\"processResult\":{\"dynamicResponse\":[{\"title\":\"正在调用工具\"}]}"
@@ -320,49 +336,51 @@ class RelayRuntimeResponseNormalizerTest {
                         + "}}}}");
 
         assertThat(progressEvents).hasSize(1);
-        assertThat(progressEvents.getFirst().type()).isEqualTo("runtime.progress");
+        assertThat(progressEvents.getFirst().type()).isEqualTo("runtime.tool");
         assertThat(progressEvents.getFirst().payload())
-                .containsEntry("sourceType", "relay-processResult")
-                .containsEntry("status", "STREAMING")
-                .containsEntry("text", "正在调用工具")
-                .containsEntry("isLast", true);
+                .containsEntry("sourceType", "tool-structured-result")
+                .containsKey("resultData")
+                .doesNotContainKey("text")
+                .doesNotContainKey("isLast");
         assertThat(cardEvents).hasSize(1);
-        assertThat(cardEvents.getFirst().type()).isEqualTo("runtime.card");
+        assertThat(cardEvents.getFirst().type()).isEqualTo("runtime.tool");
         assertThat(cardEvents.getFirst().payload())
-                .containsEntry("sourceType", "relay-diyCardScene")
-                .containsEntry("cardType", "diyCardScene")
-                .containsEntry("skillId", "skill-1");
+                .containsEntry("sourceType", "tool-structured-result")
+                .containsKey("result_data")
+                .doesNotContainKey("cardType")
+                .doesNotContainKey("skillId");
     }
 
     @Test
-    void toolStructuredResultDoesNotCopyAnswerContentIntoProgressText() {
+    void toolStructuredResultDoesNotSplitContentOrProcessResult() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1",
                 "{\"type\":\"tool-structured-result\",\"result_data\":{\"widget\":{\"data\":{"
                         + "\"content\":\"正文答案\","
                         + "\"processResult\":{\"phase\":\"thinking\"}"
                         + "}}}}");
 
-        assertThat(events).hasSize(2);
-        assertThat(events.get(0).type()).isEqualTo("message.delta");
-        assertThat(events.get(0).payload()).containsEntry("delta", "正文答案");
-        assertThat(events.get(1).type()).isEqualTo("runtime.progress");
-        assertThat(events.get(1).payload())
-                .containsEntry("sourceType", "relay-processResult")
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("runtime.tool");
+        assertThat(events.getFirst().payload())
+                .containsEntry("sourceType", "tool-structured-result")
+                .containsKey("result_data")
+                .doesNotContainKey("delta")
                 .doesNotContainKey("text");
     }
 
     @Test
-    void unrecognizedToolStructuredResultFallsBackWithRedaction() {
+    void toolStructuredResultKeepsRawPayloadWithRedaction() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1",
                 "{\"type\":\"tool-structured-result\",\"result_data\":{\"widget\":{\"data\":{"
                         + "\"unknown\":{\"authorization\":\"Bearer secret\",\"value\":\"ok\"}"
                         + "}}}}");
 
         assertThat(events).hasSize(1);
-        assertThat(events.getFirst().type()).isEqualTo("runtime.event");
+        assertThat(events.getFirst().type()).isEqualTo("runtime.tool");
         assertThat(events.getFirst().payload())
-                .containsEntry("sourceType", "relay-tool-structured-result");
-        assertThat(events.getFirst().payload().get("sourcePayload"))
+                .containsEntry("sourceType", "tool-structured-result")
+                .containsKey("result_data");
+        assertThat(events.getFirst().payload().get("result_data"))
                 .asString()
                 .doesNotContain("Bearer secret")
                 .contains("[REDACTED]");
@@ -375,7 +393,7 @@ class RelayRuntimeResponseNormalizerTest {
 
         assertThat(events).hasSize(1);
         assertThat(events.getFirst().type()).isEqualTo("runtime.event");
-        assertThat(events.getFirst().payload().get("sourcePayload"))
+        assertThat(events.getFirst().payload().get("authorization"))
                 .asString()
                 .doesNotContain("Bearer secret")
                 .contains("[REDACTED]");

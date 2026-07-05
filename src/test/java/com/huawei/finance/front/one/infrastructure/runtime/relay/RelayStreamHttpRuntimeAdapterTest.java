@@ -196,8 +196,9 @@ class RelayStreamHttpRuntimeAdapterTest {
                     assertThat(event.type()).isEqualTo("runtime.metadata");
                     assertThat(event.payload())
                             .containsEntry("sourceType", "project_home")
-                            .containsEntry("metadataType", "project_home")
-                            .containsEntry("projectHome", "/tmp/xxx");
+                            .containsEntry("project_home", "/tmp/xxx")
+                            .containsEntry("cookie", "[REDACTED]")
+                            .doesNotContainKeys("metadataType", "projectHome");
                 })
                 .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
                 .verifyComplete();

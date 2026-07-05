@@ -169,7 +169,9 @@ class RelayWebSocketRuntimeAdapterTest {
         StepVerifier.create(adapter.query(request("relay-session-old",
                         RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192))))
                 .assertNext(event -> assertThat(event.payload())
-                        .containsEntry("metadataType", "relay_session_ready")
+                        .containsEntry("sourceType", "session-ready")
+                        .containsEntry("session_id", "relay-session-old")
+                        .containsEntry("session_mode", "resume")
                         .containsEntry("runtimeSessionId", "relay-session-old"))
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "继续"))
                 .expectNextCount(2)
@@ -259,7 +261,7 @@ class RelayWebSocketRuntimeAdapterTest {
                     assertThat(event.type()).isEqualTo("runtime.progress");
                     assertThat(event.payload())
                             .containsEntry("sourceType", "relay-start")
-                            .containsEntry("text", "processing");
+                            .containsEntry("content", "processing");
                 })
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "A"))
                 .assertNext(event -> {
@@ -582,7 +584,9 @@ class RelayWebSocketRuntimeAdapterTest {
     private void assertSessionReadyMetadata(com.huawei.finance.front.one.domain.chat.ChatEvent event) {
         assertThat(event.type()).isEqualTo("runtime.metadata");
         assertThat(event.payload())
-                .containsEntry("metadataType", "relay_session_ready")
+                .containsEntry("source", "relay")
+                .containsEntry("sourceType", "session-ready")
+                .containsEntry("session_id", "relay-session-1")
                 .containsEntry("runtimeSessionId", "relay-session-1");
     }
 

@@ -41,7 +41,8 @@ ws://{host}:{port}/ws/{client_id}
   "config": {
     "sessionMode": "resume",
     "sessionId": "17ef2ed5-6a12-4d2a-8f4b-c9f1e3ae6ef7",
-    "uid": "xxx"
+    "uid": "xxx",
+    "supports_incremental_recovery": true
   }
 }
 ```
@@ -53,6 +54,7 @@ ws://{host}:{port}/ws/{client_id}
 | config.sessionId | string | 否 | 会话 ID；`new` 模式下若提供则使用该 ID，否则后端自动生成 UUID；`resume` 模式下必填，用于指定要恢复的会话 |
 | config.uid | string | 否 | 用户工号，用于用户隔离；后端存入 `ctx.uid`，可用于会话归属标识 |
 | config.appMode | string | 否 | 运行模式：`delegate`(默认) / `roleplay` / `solo` / `groupchat` / `guarded` |
+| config.supports_incremental_recovery | bool | 否 | 是否支持增量恢复；`true` 时服务端发送 `session-init(mode="incremental")`，客户端通过 `get-incremental-events` 查询驱动历史恢复；`false` 或缺省时走 legacy 全量回放路径 |
 
 > **注意**：`project_home` 无需传入，后端自动使用默认路径 `~/tmp/xxx`。
 
@@ -174,6 +176,46 @@ ws://{host}:{port}/ws/{client_id}
 }
 ```
 
+### 2.9 get-incremental-events — 增量事件查询（断线续传）
+
+客户端收到 `session-init(mode="incremental")` 后，通过此消息从服务端持久化存储中查询历史/遗漏事件。**支持正向（增量恢复）和反向（向上翻页）两种模式**。
+
+**正向模式（增量恢复 / 断线续传）：**
+
+```json
+{
+  "type": "get-incremental-events",
+  "session_id": "17ef2ed5-6a12-4d2a-8f4b-c9f1e3ae6ef7",
+  "since_version": 3,
+  "limit": 500,
+  "compact": true
+}
+```
+
+**反向模式（向上滚动翻页）：**
+
+```json
+{
+  "type": "get-incremental-events",
+  "session_id": "17ef2ed5-6a12-4d2a-8f4b-c9f1e3ae6ef7",
+  "before_version": 10,
+  "limit": 50
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| type | string | 是 | 固定值 `"get-incremental-events"` |
+| session_id | string | 是 | 要查询的会话 ID，必须与当前连接的会话一致 |
+| since_version | int | 否 | 正向模式：从哪个 `version_id` 之后开始查询（含），默认 0 表示从头开始；**断线续传时传入断线前最后收到的 `version_id`** |
+| before_version | int | 否 | 反向模式：查询此 `version_id` 之前的消息（用于向上滚动翻页）；设置此参数时进入反向模式 |
+| limit | int | 否 | 每页最大消息数，默认 500 |
+| compact | bool | 否 | 是否压缩传输（去除冗余字段如大 prompt），默认 false |
+
+> **断线续传关键**：`since_version` 的值应取自断线前最后收到的持久化事件的 `version_id`。服务端返回该值之后的所有持久化事件，确保无数据丢失。
+>
+> **注意**：`since_version` 和 `before_version` 互斥，同时设置时 `before_version` 优先（进入反向模式）。
+
 ---
 
 ## 3. 出参（服务端推送的事件汇总）
@@ -185,9 +227,111 @@ ws://{host}:{port}/ws/{client_id}
 | type | string | 事件类型 |
 | timestamp | string | ISO 8601 时间戳 |
 | session_id | string | 会话 ID |
-| version_id | int | 事件版本号（递增，可用于事件重放排序） |
+| version_id | int | 事件版本号（仅持久化事件有此字段，见下方说明） |
+
+**`version_id` 语义说明：**
+
+| 特性 | 说明 |
+|------|------|
+| 单调递增 | 每个 session 内 `version_id` 严格递增，不回退、不跳跃（持久化事件之间） |
+| 作用域 | per-session，不同 session 的 `version_id` 独立 |
+| 仅持久化事件有 | 短暂事件（`token-update`、`thinking-content-update`、`tool-call-streaming`、`tool-structured-result`、`session-state`、`heartbeat-response`）**没有** `version_id`，不可通过增量恢复获取 |
+| 进程重启安全 | 服务端重启后 `version_id` 从磁盘最大值继续递增，不会重置 |
+| 续传游标 | 断线续传时，客户端传入 `since_version` = 断线前最后收到的 `version_id`，服务端返回该值之后的所有持久化事件 |
 
 ### 3.1 初始化阶段事件
+
+#### system — 系统消息
+
+```json
+{
+  "type": "system",
+  "content": "Establishing connection...",
+  "level": "debug",
+  "timestamp": "..."
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| content | 消息内容，如 `"Establishing connection..."` / `"Connected to session xxx..."` / `"Ready to chat! Session ID: xxx"` |
+| level | 日志级别，通常为 `"debug"` |
+
+#### project_home — 项目路径
+
+```json
+{
+  "type": "project_home",
+  "project_home": "~/tmp/xxx",
+  "timestamp": "..."
+}
+```
+
+#### session-id — 会话 ID 确认
+
+```json
+{
+  "type": "session-id",
+  "session_id": "17ef2ed5-6a12-4d2a-8f4b-c9f1e3ae6ef7",
+  "topic": null,
+  "tags": {},
+  "timestamp": "..."
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| session_id | 服务端确认的会话 ID |
+| topic | 会话主题（resume 时可能从持久化恢复） |
+| tags | 会话标签（resume 时可能从持久化恢复） |
+
+> **注意**：`session-id` 在初始化阶段可能发送两次（`initialize_session` 一次，`finalize_session_state` 一次），以第二次为准。
+
+#### session-init — 增量恢复开始（仅 resume + `supports_incremental_recovery=true`）
+
+```json
+{
+  "type": "session-init",
+  "session_id": "17ef2ed5-...",
+  "mode": "incremental",
+  "timestamp": "..."
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| mode | 恢复模式，当前固定为 `"incremental"` |
+
+> 收到此事件后，前端通过 `get-incremental-events` 查询驱动历史恢复。
+
+#### role-changed — 角色状态恢复（仅 resume 且有活跃角色时）
+
+```json
+{
+  "type": "role-changed",
+  "role_name": "developer",
+  "app_mode": "delegate",
+  "timestamp": "..."
+}
+```
+
+#### session-ready — 初始化完成（唯一结束信号）★
+
+```json
+{
+  "type": "session-ready",
+  "session_id": "17ef2ed5-6a12-4d2a-8f4b-c9f1e3ae6ef7",
+  "session_mode": "new",
+  "timestamp": "..."
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| session_id | 会话 ID |
+| session_mode | `"new"` 或 `"resume"` |
+
+**此事件是 config 阶段的唯一结束标识**，无论 `new` 还是 `resume` 模式都会发送。收到此事件后，客户端可发送 `user-message`。
 
 #### relay-start — 启动开始
 
@@ -586,6 +730,7 @@ MCP 工具返回 `structuredContent` 时，除 `tool-execution` 外还会推送�
 }
 ```
 
+
 ---
 
 ### 3.5 审批/澄清问阶段事件
@@ -784,6 +929,80 @@ Resume 时，若客户端传入的 `project_home` 与存储值不一致，后端
 
 ---
 
+### 3.9 增量恢复事件（断线续传）
+
+以下事件由客户端发送 `get-incremental-events` 触发，用于断线续传和增量恢复。
+
+#### incremental-events-batch — 增量事件批次
+
+服务端将查询结果按 50 条一批分片推送。
+
+```json
+{
+  "type": "incremental-events-batch",
+  "batch_index": 0,
+  "total_batches": 2,
+  "messages": [
+    {"type": "agent-call", "version_id": 4, "agent_name": "plan_agent", "is_start": true, ...},
+    {"type": "agent-call", "version_id": 5, "agent_name": "plan_agent", "is_start": false, ...},
+    {"type": "tool-execution", "version_id": 6, "tool_name": "read", "is_start": true, ...}
+  ],
+  "timestamp": "..."
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| batch_index | 当前批次序号（从 0 开始） |
+| total_batches | 总批次数 |
+| messages | 事件数组，每条事件含 `version_id` 字段；若请求时 `compact=true`，大字段（如 `prompt`）会被省略并标记 `prompt_omitted` |
+
+#### incremental-events-complete — 增量查询完成
+
+所有批次发送完毕后，服务端推送此事件表示查询结束。
+
+```json
+{
+  "type": "incremental-events-complete",
+  "total_messages": 3,
+  "version_range": {"min": 4, "max": 6},
+  "has_more": false,
+  "mode": "forward",
+  "raw_max_version_id": 6,
+  "timestamp": "..."
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| total_messages | 本轮查询返回的总消息数 |
+| version_range | 返回消息的 `version_id` 范围，含 min 和 max |
+| has_more | 是否还有更多消息（用于分页续查） |
+| mode | `"forward"`（正向/增量恢复）或 `"reverse"`（反向/翻页） |
+| raw_max_version_id | 正向模式下，磁盘上实际的最大 `version_id`（用于下一页分页游标） |
+| raw_min_version_id | 反向模式下，磁盘上实际的最小 `version_id`（用于下一页分页游标） |
+
+> **分页续查**：若 `has_more=true`，客户端应使用 `raw_max_version_id`（正向）或 `raw_min_version_id`（反向）作为下一次查询的 `since_version` 或 `before_version`，继续获取剩余事件。
+
+#### incremental-events-error — 增量查询失败
+
+```json
+{
+  "type": "incremental-events-error",
+  "error_code": "MISSING_SESSION_ID",
+  "error_message": "Missing session_id parameter",
+  "timestamp": "..."
+}
+```
+
+| error_code | 说明 |
+|------------|------|
+| MISSING_SESSION_ID | 缺少 `session_id` 参数 |
+| SESSION_MISMATCH | 请求的 `session_id` 与当前连接的会话不匹配 |
+| QUERY_FAILED | 服务端查询异常 |
+
+---
+
 ## 4. 典型事件流时序
 
 ### 4.1 MCP 工具调用场景
@@ -792,7 +1011,14 @@ Resume 时，若客户端传入的 `project_home` 与存储值不一致，后端
 客户端                          服务端
   │                               │
   │──── config ──────────────────→│
-  │←─── user ────────────────────│  (回显)
+  │←─── system ──────────────────│  (Establishing connection...)
+  │←─── project_home ────────────│
+  │←─── session-id ──────────────│
+  │←─── system ──────────────────│  (Connected to session...)
+  │←─── session-id ──────────────│  (finalize 二次确认)
+  │←─── session-ready ───────────│  ★ config 阶段结束，可发送 user-message
+  │                               │
+  │──── user-message ────────────→│
   │←─── relay-start ─────────────│
   │←─── relay-progress (×8) ─────│
   │←─── project_home ────────────│
@@ -849,6 +1075,45 @@ Resume 时，若客户端传入的 `project_home` 与存储值不一致，后端
   │←─── self-evolution-status (×3) ──│
 ```
 
+### 4.3 断线续传场景
+
+客户端因网络中断等原因断开连接后，重连并通过 `version_id` 增量恢复遗漏事件。
+
+```
+客户端                          服务端
+  │                               │
+  │  [已收到 version_id=1,2,3]    │
+  │  [网络断开]                    │  [继续产生 v4,v5,v6 并持久化]
+  │                               │
+  │──── WebSocket 重连 ──────────→│
+  │──── config ──────────────────→│
+  │     sessionMode: "resume"
+  │     supports_incremental_
+  │     recovery: true            │
+  │←─── system ──────────────────│
+  │←─── project_home ────────────│
+  │←─── session-id ──────────────│
+  │←─── session-init ────────────│  mode="incremental"
+  │←─── session-ready ───────────│  ★ config 完成
+  │                               │
+  │──── get-incremental-events ──→│  since_version=3
+  │←─── incremental-events-batch ─│  [v4, v5, v6]
+  │←─── incremental-events-complete│  has_more=false
+  │                               │
+  │  [版本缓冲区同步到 v6]         │
+  │  [后续实时事件从 v7 开始]      │
+  │                               │
+  │──── user-message ────────────→│
+  │←─── ... (正常事件流) ─────────│
+```
+
+**关键步骤说明：**
+
+1. **config 阶段**：客户端发送 `config(sessionMode="resume", supports_incremental_recovery=true)`，服务端返回 `session-init(mode="incremental")` 而非全量回放
+2. **增量查询**：客户端发送 `get-incremental-events(since_version=3)`，`3` 是断线前最后收到的 `version_id`
+3. **事件恢复**：服务端从持久化存储中读取 `version_id > 3` 的事件，按批次返回
+4. **版本同步**：恢复完成后，客户端将版本缓冲区游标同步到 `raw_max_version_id`，后续实时事件从该值之后正常接收
+
 ---
 
 ## 5. 事件类型速查表
@@ -856,6 +1121,10 @@ Resume 时，若客户端传入的 `project_home` 与存储值不一致，后端
 | 事件类型 | 阶段 | 说明 |
 |----------|------|------|
 | `user` | 全局 | 用户消息回显 |
+| `session-id` | 初始化 | 会话 ID 确认 |
+| `session-init` | 初始化 | 增量恢复开始（仅 resume） |
+| `role-changed` | 初始化 | 角色状态恢复（仅 resume） |
+| `session-ready` | 初始化 | **config 阶段唯一结束信号**（new/resume 统一） |
 | `relay-start` | 初始化 | Agent 系统启动 |
 | `relay-progress` | 初始化 | 启动进度 |
 | `relay-end` | 初始化 | 启动完成 |
@@ -889,90 +1158,200 @@ Resume 时，若客户端传入的 `project_home` 与存储值不一致，后端
 | `cancel-initialization` | 控制 | 取消初始化 |
 | `heartbeat` | 控制 | 心跳请求 |
 | `heartbeat-response` | 控制 | 心跳响应（含当前状态） |
+| `get-incremental-events` | 恢复 | 增量事件查询（断线续传/翻页） |
+| `incremental-events-batch` | 恢复 | 增量事件批次（50 条/批） |
+| `incremental-events-complete` | 恢复 | 增量查询完成（含分页游标） |
+| `incremental-events-error` | 恢复 | 增量查询失败 |
 
 ---
 
-## 6. 流式结束标识
+## 6. Config 阶段完成判断
 
-判断一次流式响应是否结束，需组合使用以下三种信号：
+### 6.1 核心定义
 
-### 6.1 session-state — 会话级结束信号（推荐首选）
+**Config 阶段**：从客户端发送 `config` 消息开始，到服务端确认会话初始化完成、客户端可以发送 `user-message` 为止。
 
-收到以下 `state` 值时，表示当前轮次已结束：
+### 6.2 唯一结束信号
 
-| state 值 | 含义 | 说明 |
-|-----------|------|------|
-| `idle` | 空闲 | 无活跃任务，默认终态 |
-| `waiting_user_input` | 等待用户输入 | Agent 执行完毕，最后一条消息来自助手 |
-| `completed` | 计划完成 | 所有 Plan 子任务执行完毕 |
-| `paused` | 已暂停 | 用户中断了当前轮次 |
-
-**典型判断逻辑**：
+**`session-ready` 是 config 阶段的唯一结束标识**，无论 `new` 还是 `resume` 模式都会发送。
 
 ```python
-if event["type"] == "session-state" and event["state"] in ("idle", "waiting_user_input", "completed", "paused"):
-    # 流式响应结束
+def is_config_complete(event: dict) -> bool:
+    return event.get("type") == "session-ready"
 ```
 
-> **注意**：初始化阶段也会收到 `session-state`（`state` 为 `ready`/`running`/`idle`），需结合是否已发送过 `user-message` 来区分。
+### 6.3 各模式事件序列
 
-### 6.2 agent-call (is_start=false) — Agent 级结束信号
+**New 会话：**
 
-每个 Agent 调用以 `agent-call` 事件成对出现（start + end）。当**根 Agent**（无 `parent_id` 或 `parent_id` 为 `relay-system-root`）的 `is_start: false` 事件到达时，表示该 Agent 执行结束：
-
-```json
-{
-  "type": "agent-call",
-  "is_start": false,
-  "agent_id": "delegate_agent_xxx",
-  "instance_id": "delegate_agent_xxx_yyy",
-  "error": null
-}
+```
+← system (Establishing connection...)
+← project_home
+← session-id (含 topic/tags)
+← system (Connected to session xxx...)
+← session-id (finalize 二次确认)
+← system (Ready to chat! Session ID: xxx)
+← session-ready (session_mode="new")        ★ config 完成
 ```
 
-| error 字段 | 含义 |
-|-------------|------|
-| `null` / 缺失 | 正常完成 |
-| 非空字符串 | 执行出错 |
+**Resume 会话（supports_incremental_recovery=true）：**
 
-> **注意**：多 Agent 场景下，需等待**根 Agent** 的 end 事件，而非 Sub-Agent 的 end 事件。
-
-### 6.3 heartbeat-response — 轮询确认信号
-
-客户端可定期发送 `{"type": "heartbeat"}`，服务端返回当前状态：
-
-```json
-{
-  "type": "heartbeat-response",
-  "state": "idle",
-  "stopped": false,
-  "compression": {
-    "in_flight": false,
-    "runs_by_agent": {},
-    "stopped": false
-  }
-}
+```
+← system (Establishing connection...)
+← project_home
+← session-id (含 topic/tags)
+← system (Connected to session xxx...)
+← role-changed (如有活跃角色)
+← session-init (mode="incremental")
+← session-id (finalize 二次确认)
+← session-ready (session_mode="resume")     ★ config 完成
 ```
 
-| 字段 | 说明 |
+**Resume 会话（supports_incremental_recovery=false，legacy 路径）：**
+
+```
+← system (Establishing connection...)
+← project_home
+← session-id (含 topic/tags)
+← system (Connected to session xxx...)
+← system (Resuming session xxx...)
+← [历史消息批量回放...]
+← history-restore-complete
+← session-id (finalize 二次确认)
+← session-ready (session_mode="resume")     ★ config 完成
+```
+
+### 6.4 错误场景
+
+| 场景 | 事件 | 说明 |
+|------|------|------|
+| sessionMode 无效 | `error` (Invalid sessionMode) | `sessionMode` 不是 `"new"` 或 `"resume"` |
+| Resume 会话不存在 | `clear-session` + `error` | sessionId 对应的会话找不到或已损坏 |
+| 初始化异常 | `error` (Initialization failed) | 服务端内部错误 |
+
+> **注意**：错误场景下不会发送 `session-ready`，客户端应通过超时或收到 `error`/`clear-session` 判断初始化失败。
+
+---
+
+## 7. 用户轮次结束判断
+
+### 7.1 核心定义
+
+**用户轮次**：从客户端发送 `user-message` 开始，到服务端确认 Agent 执行完毕、用户可以发送下一条消息为止。
+
+**关键区分**：用户轮次结束 ≠ 所有 WebSocket 事件停止。收到轮次结束信号后，仍可能有以下**后台异步事件**继续到达，客户端应忽略它们对轮次状态的影响：
+- `self-evolution-status`（自演化通知）
+- 后台 Agent 的 `thinking-content-update` / `agent` / `thinking-operation-end` 等（如 `topic_generator`）
+- `token-update`（Token 用量更新）
+
+### 7.2 三个信号的可靠性分析
+
+| 信号 | 可靠性 | 说明 |
+|------|--------|------|
+| `session-state` 终态 | ✅ **可靠**（正常路径） | 在 `handle_user_message` 返回后显式广播，是用户轮次结束的**权威信号** |
+| `agent-call(is_start=false)` 根 Agent | ⚠️ **辅助** | 正常路径下先于 `session-state` 到达；中断/异常路径有 safety-net 补发；但 `get_observability_call_state()` 为 None 时会丢失 |
+| `generate-response(is_final=true)` | ❌ **不可靠** | Agent 无文本输出时跳过；被 mode 过滤规则跳过；**不能**用作轮次结束信号 |
+
+### 7.3 正常路径事件顺序（代码保证）
+
+```
+agent-call(is_start=true)                 ← pre_reply hook
+  ┊ [Agent 执行：LLM 调用、工具调用、Sub-Agent...]
+generate-response(is_final=true)           ← post_reply hook（不保证一定有）
+agent-call(is_start=false, error=null)     ← post_reply hook
+session-state(state="waiting_user_input")  ← handle_user_message 返回后广播
+  ┊ [后台异步事件：self-evolution-status、topic_generator 等，不影响轮次]
+```
+
+**顺序保证**：`agent-call(end)` → `session-state`（`session-state` 在 `handle_user_message` 返回后才广播，而 `agent-call(end)` 在 `post_reply` hook 中发出，先于返回）。
+
+### 7.4 明确判断逻辑
+
+```python
+class TurnState:
+    """用户轮次状态跟踪器"""
+  �
+    TERMINAL_STATES = {"idle", "waiting_user_input", "completed", "paused"}
+    # 非终态，收到这些不应改变轮次状态
+    NON_TERMINAL_STATES = {"ready", "running", "agent_thinking", "waiting_approval"}
+    # 后台异步事件类型，收到终态后应忽略
+    BACKGROUND_EVENT_TYPES = {
+        "self-evolution-status", "token-update",
+        # 后台 Agent 事件（agent_name 非根 Agent 的 thinking/agent 事件）
+    }
+  �
+    def __init__(self):
+        self.turn_active = False       # 当前轮次是否在进行中
+        self.user_message_sent = False  # 是否已发送过 user-message（区分初始化阶段的 session-state）
+        self.root_instance_id = None    # 根 Agent 的 instance_id
+  �
+    def on_send_user_message(self):
+        """客户端发送 user-message 时调用"""
+        self.turn_active = True
+        self.user_message_sent = True
+  �
+    def on_event(self, event: dict) -> str:
+        """
+        处理收到的 WebSocket 事件。
+        返回值：
+          "turn_ended"     - 用户轮次已结束，可启用输入框
+          "turn_active"    - 轮次仍在进行中
+          "background"     - 后台异步事件，不影响轮次状态
+        """
+        event_type = event.get("type")
+      �
+        # --- 信号1（主）：session-state ---
+        if event_type == "session-state":
+            state = event.get("state")
+          �
+            # 初始化阶段的 session-state，忽略
+            if not self.user_message_sent:
+                return "background"
+          �
+            if state in self.TERMINAL_STATES:
+                self.turn_active = False
+                return "turn_ended"
+          �
+            if state in self.NON_TERMINAL_STATES:
+                # waiting_approval 等非终态，轮次仍在进行（只是需要用户回复审批）
+                return "turn_active"
+      �
+        # --- 信号2（辅助）：根 Agent 的 agent-call(end) ---
+        if event_type == "agent-call":
+            if event.get("is_start") is True:
+                parent_id = event.get("parent_id")
+                if parent_id in (None, "relay-system-root"):
+                    self.root_instance_id = event.get("instance_id")
+          �
+            elif event.get("is_start") is False:
+                instance_id = event.get("instance_id")
+                if instance_id == self.root_instance_id:
+                    # 根 Agent 执行完毕，但 session-state 尚未到达
+                    # 可提前做 UI 准备（如显示"生成完成"），但不应启用输入框
+                    # 因为 session-state 才是权威的轮次结束信号
+                    return "turn_active"
+      �
+        # --- 后台异步事件：终态后忽略 ---
+        if not self.turn_active and event_type in self.BACKGROUND_EVENT_TYPES:
+            return "background"
+      �
+        return "turn_active"
+```
+
+### 7.5 各场景信号对照
+
+| 场景 | 收到的事件序列 | 判断时机 |
+|------|---------------|----------|
+| **正常完成** | `agent-call(start)` → ... → `generate-response` → `agent-call(end)` → `session-state(waiting_user_input)` | `session-state` 到达时 → `turn_ended` |
+| **澄清问** | `agent-call(start)` → ... → `approval-request` → `session-state(agent_thinking)` → [用户回复] → `agent-call(end)` → `session-state(waiting_user_input)` | `session-state(waiting_user_input)` 到达时 → `turn_ended` |
+| **用户中断** | `agent-call(start)` → ... → `agent-call(end, error="...PAUSE")` → `session-state(paused)` | `session-state(paused)` 到达时 → `turn_ended` |
+| **Agent 异常** | `agent-call(start)` → ... → `agent-call(end, error="...")` → `session-state(idle)` | `session-state(idle)` 到达时 → `turn_ended` |
+| **后台事件干扰**（反例） | `session-state(waiting_user_input)` → `self-evolution-status` → `thinking-content-update(topic_generator)` | `session-state` 到达时 → `turn_ended`；后续事件 → `background`，不改变状态 |
+
+### 7.6 兜底机制
+
+| 机制 | 说明 |
 |------|------|
-| state | 同 `session-state` 的 `state` 值 |
-| stopped | 是否已被用户中断 |
-| compression.in_flight | 是否有压缩任务在运行 |
-
-### 6.4 推荐判断策略
-
-```
-1. 主信号：监听 session-state 事件，state ∈ {idle, waiting_user_input, completed, paused} → 结束
-2. 辅助信号：监听根 agent-call (is_start=false) → Agent 执行完毕
-3. 保底信号：定期 heartbeat 轮询确认状态
-4. 兜底：超时机制（如 60s 无新事件）
-```
-
-**典型时序**：
-
-```
-← agent-call (is_start=false, error=null)   ← Agent 执行完毕
-← session-state (state="idle")              ← 会话空闲，流式结束
-← self-evolution-status (×N)                ← 后续自演化通知（可选）
-```
+| **heartbeat 轮询** | 定期发送 `{"type": "heartbeat"}`，通过 `heartbeat-response.state` 确认服务端状态 |
+| **超时** | 发送 `user-message` 后 60s 未收到 `session-state` 终态，视为异常，可主动 heartbeat 确认 |
+| **重连恢复** | WebSocket 断连后重连，发送 `config(sessionMode="resume", supports_incremental_recovery=true)`，收到 `session-init(mode="incremental")` 后通过 `get-incremental-events(since_version=最后收到的version_id)` 增量恢复遗漏事件 |

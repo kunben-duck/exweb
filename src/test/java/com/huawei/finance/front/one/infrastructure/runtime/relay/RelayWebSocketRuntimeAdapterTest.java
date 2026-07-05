@@ -43,6 +43,7 @@ class RelayWebSocketRuntimeAdapterTest {
                 "{\"type\":\"project_home\",\"project_home\":\"/tmp/relay\"}",
                 "{\"type\":\"available-modes\",\"modes\":[]}",
                 "{\"type\":\"relay-end\",\"content\":\"ready\"}",
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"agent\",\"content\":\"你好\",\"is_streaming\":true,\"session_id\":\"relay-session-1\"}",
                 "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}"
         ));
@@ -78,7 +79,7 @@ class RelayWebSocketRuntimeAdapterTest {
     @Test
     void existingRuntimeSessionUsesResumeModeAndForwardsCookieWhenAllowed() throws Exception {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
-                "{\"type\":\"session-state\",\"state\":\"ready\",\"session_id\":\"relay-session-old\"}",
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-old\",\"session_mode\":\"resume\"}",
                 "{\"type\":\"agent\",\"content\":\"继续\",\"session_id\":\"relay-session-old\"}",
                 "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-old\"}"
         ));
@@ -93,13 +94,16 @@ class RelayWebSocketRuntimeAdapterTest {
         JsonNode config = objectMapper.readTree(client.sent().get(0));
         assertThat(config.path("config").path("sessionMode").asText()).isEqualTo("resume");
         assertThat(config.path("config").path("sessionId").asText()).isEqualTo("relay-session-old");
+        assertThat(config.path("config").path("supports_incremental_recovery").asBoolean()).isTrue();
         assertThat(client.headers().getFirst(HttpHeaders.COOKIE)).isEqualTo("sid=abc");
     }
 
     @Test
-    void configSuccessResponseCompletesHandshakeWithoutProducingChatEvent() {
+    void sessionReadyCompletesConfigHandshakeWithoutProducingChatEvent() {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
-                "{\"type\":\"config\",\"ready\":true,\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"system\",\"content\":\"Connected\"}",
+                "{\"type\":\"session-id\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"agent\",\"content\":\"回答\",\"session_id\":\"relay-session-1\"}",
                 "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"
         ));
@@ -112,12 +116,32 @@ class RelayWebSocketRuntimeAdapterTest {
                 })
                 .expectNextCount(2)
                 .verifyComplete();
+
+        assertThat(client.sent()).hasSize(2);
+        assertThat(client.sent().get(1)).contains("\"type\":\"user-message\"");
+    }
+
+    @Test
+    void configSuccessResponseDoesNotCompleteHandshake() {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"config\",\"ready\":true,\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(RelayRuntimeProtocolException.class)
+                        .hasMessageContaining("closed before config handshake completed"))
+                .verify();
+
+        assertThat(client.sent()).hasSize(1);
+        assertThat(client.sent().getFirst()).contains("\"type\":\"config\"");
     }
 
     @Test
     void lateConfigFrameAfterUserMessageIsIgnored() {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
-                "{\"type\":\"relay-end\",\"content\":\"ready\"}",
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"agent\",\"content\":\"A\",\"session_id\":\"relay-session-1\"}",
                 "{\"type\":\"config\",\"status\":\"success\"}",
                 "{\"type\":\"agent\",\"content\":\"B\",\"session_id\":\"relay-session-1\"}",
@@ -135,7 +159,7 @@ class RelayWebSocketRuntimeAdapterTest {
     @Test
     void sessionStateBeforeRelayStartAfterUserMessageIsIgnored() {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
-                "{\"type\":\"config\",\"ready\":true,\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"session-state\",\"state\":\"agent_thinking\",\"session_id\":\"relay-session-1\"}",
                 "{\"type\":\"relay-start\",\"content\":\"processing\",\"session_id\":\"relay-session-1\"}",
                 "{\"type\":\"agent\",\"content\":\"A\",\"session_id\":\"relay-session-1\"}",
@@ -162,7 +186,7 @@ class RelayWebSocketRuntimeAdapterTest {
     @Test
     void idleAndCompletedBeforeRelayStartAfterUserMessageDoNotCloseEmptyAnswer() {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
-                "{\"type\":\"config\",\"ready\":true,\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}",
                 "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}",
                 "{\"type\":\"relay-start\",\"content\":\"processing\",\"session_id\":\"relay-session-1\"}",
@@ -188,7 +212,7 @@ class RelayWebSocketRuntimeAdapterTest {
     @Test
     void businessFrameStartsResponseWhenRelayStartIsMissingAndWaitingUserInputTerminates() {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
-                "{\"type\":\"config\",\"ready\":true,\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"session-state\",\"state\":\"agent_thinking\",\"session_id\":\"relay-session-1\"}",
                 "{\"type\":\"agent\",\"content\":\"A\",\"session_id\":\"relay-session-1\"}",
                 "{\"type\":\"session-state\",\"state\":\"waiting_user_input\",\"detail\":\"Waiting\","
@@ -211,7 +235,7 @@ class RelayWebSocketRuntimeAdapterTest {
     @Test
     void waitingUserInputCanStartAndTerminateResponse() {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
-                "{\"type\":\"config\",\"ready\":true,\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"session-state\",\"state\":\"waiting_user_input\",\"detail\":\"Waiting\","
                         + "\"session_id\":\"relay-session-1\"}"
         ));
@@ -231,7 +255,7 @@ class RelayWebSocketRuntimeAdapterTest {
     @Test
     void pausedCanStartAndTerminateResponse() {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
-                "{\"type\":\"config\",\"ready\":true,\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"session-state\",\"state\":\"paused\",\"detail\":\"Interrupted\","
                         + "\"session_id\":\"relay-session-1\"}"
         ));
@@ -251,7 +275,7 @@ class RelayWebSocketRuntimeAdapterTest {
     @Test
     void generateResponseAfterDeltaBecomesSnapshotBeforeTerminalState() {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
-                "{\"type\":\"config\",\"ready\":true,\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"relay-start\",\"content\":\"processing\",\"session_id\":\"relay-session-1\"}",
                 "{\"type\":\"agent\",\"content\":\"草稿\",\"session_id\":\"relay-session-1\"}",
                 "{\"type\":\"generate-response\",\"content\":\"完整总结\",\"is_final\":true,"
@@ -293,12 +317,34 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
-    void singleInstanceReuseKeepsOneConnectionAndSkipsSecondConfig() {
+    void configStageErrorFailsBeforeSendingUserMessage() {
+        assertConfigHandshakeFails(
+                "{\"type\":\"error\",\"message\":\"Initialization failed\"}",
+                "error: Initialization failed");
+    }
+
+    @Test
+    void configStageClearSessionFailsBeforeSendingUserMessage() {
+        assertConfigHandshakeFails(
+                "{\"type\":\"clear-session\",\"reason\":\"session_not_found\","
+                        + "\"message\":\"Session not found\"}",
+                "clear-session: Session not found");
+    }
+
+    @Test
+    void configStageSessionMismatchFailsBeforeSendingUserMessage() {
+        assertConfigHandshakeFails(
+                "{\"type\":\"session-mismatch\",\"expected\":\"/a\",\"got\":\"/b\"}",
+                "session-mismatch");
+    }
+
+    @Test
+    void shortConnectionReconnectsAndSendsConfigForEachRun() {
         ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
-        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10), "single-instance-reuse");
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10));
 
         StepVerifier.create(adapter.query(request("relay-session-1", RuntimeSessionMode.NEW, "run1")))
-                .then(() -> client.emit("{\"type\":\"config\",\"ready\":true,\"session_id\":\"relay-session-1\"}"))
+                .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
                 .then(() -> client.emit("{\"type\":\"agent\",\"content\":\"A\",\"session_id\":\"relay-session-1\"}"))
                 .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"))
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "A"))
@@ -306,55 +352,7 @@ class RelayWebSocketRuntimeAdapterTest {
                 .verifyComplete();
 
         StepVerifier.create(adapter.query(request("relay-session-1", RuntimeSessionMode.RESUME, "run2")))
-                .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"agent_thinking\","
-                        + "\"session_id\":\"relay-session-1\"}"))
-                .then(() -> client.emit("{\"type\":\"agent\",\"content\":\"B\",\"session_id\":\"relay-session-1\"}"))
-                .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"))
-                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "B"))
-                .expectNextCount(2)
-                .verifyComplete();
-
-        assertThat(client.executeCount()).isEqualTo(1);
-        assertThat(client.sent()).hasSize(3);
-        assertThat(client.sent().get(0)).contains("\"type\":\"config\"");
-        assertThat(client.sent().get(1)).contains("\"type\":\"user-message\"").contains("hello-run1");
-        assertThat(client.sent().get(2)).contains("\"type\":\"user-message\"").contains("hello-run2");
-    }
-
-    @Test
-    void shortConnectionCancelSendsInterruptFrame() {
-        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
-        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10), "short");
-
-        StepVerifier.create(adapter.query(request("relay-session-1", RuntimeSessionMode.RESUME, "run1")))
-                .then(() -> client.emit("{\"type\":\"config\",\"ready\":true,\"session_id\":\"relay-session-1\"}"))
-                .thenAwait(Duration.ofMillis(20))
-                .then(() -> adapter.cancel(cancelRequest("run1")).block())
-                .thenCancel()
-                .verify();
-
-        assertThat(client.sent()).hasSize(3);
-        assertThat(client.sent().get(0)).contains("\"type\":\"config\"");
-        assertThat(client.sent().get(1)).contains("\"type\":\"user-message\"");
-        assertThat(client.sent().get(2)).isEqualTo("{\"type\":\"interrupt\"}");
-    }
-
-    @Test
-    void reusedConnectionCancelSendsInterruptAndNextRunReconnectsWithResume() throws Exception {
-        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
-        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10), "single-instance-reuse");
-
-        StepVerifier.create(adapter.query(request("relay-session-1", RuntimeSessionMode.RESUME, "run1")))
-                .then(() -> client.emit("{\"type\":\"config\",\"ready\":true,\"session_id\":\"relay-session-1\"}"))
-                .thenAwait(Duration.ofMillis(20))
-                .then(() -> adapter.cancel(cancelRequest("run1")).block())
-                .expectErrorSatisfies(error -> assertThat(error)
-                        .isInstanceOf(RelayRuntimeProtocolException.class)
-                        .hasMessageContaining("interrupted"))
-                .verify();
-
-        StepVerifier.create(adapter.query(request("relay-session-1", RuntimeSessionMode.RESUME, "run2")))
-                .then(() -> client.emit("{\"type\":\"config\",\"ready\":true,\"session_id\":\"relay-session-1\"}"))
+                .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
                 .then(() -> client.emit("{\"type\":\"agent\",\"content\":\"B\",\"session_id\":\"relay-session-1\"}"))
                 .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"))
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "B"))
@@ -362,43 +360,106 @@ class RelayWebSocketRuntimeAdapterTest {
                 .verifyComplete();
 
         assertThat(client.executeCount()).isEqualTo(2);
-        assertThat(client.sent()).contains("{\"type\":\"interrupt\"}");
-        JsonNode secondConfig = objectMapper.readTree(client.sent().get(3));
-        assertThat(secondConfig.path("config").path("sessionMode").asText()).isEqualTo("resume");
-    }
-
-    @Test
-    void reusedConnectionPauseAfterInterruptKeepsConnectionReusable() {
-        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
-        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10), "single-instance-reuse");
-
-        StepVerifier.create(adapter.query(request("relay-session-1", RuntimeSessionMode.RESUME, "run1")))
-                .then(() -> client.emit("{\"type\":\"config\",\"ready\":true,\"session_id\":\"relay-session-1\"}"))
-                .thenAwait(Duration.ofMillis(20))
-                .then(() -> adapter.cancel(cancelRequest("run1")).block())
-                .expectErrorSatisfies(error -> assertThat(error)
-                        .isInstanceOf(RelayRuntimeProtocolException.class)
-                        .hasMessageContaining("interrupted"))
-                .verify();
-
-        client.emit("{\"type\":\"session-state\",\"state\":\"paused\",\"session_id\":\"relay-session-1\"}");
-
-        StepVerifier.create(adapter.query(request("relay-session-1", RuntimeSessionMode.RESUME, "run2")))
-                .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"idle\","
-                        + "\"session_id\":\"relay-session-1\"}"))
-                .then(() -> client.emit("{\"type\":\"agent\",\"content\":\"B\",\"session_id\":\"relay-session-1\"}"))
-                .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"completed\","
-                        + "\"session_id\":\"relay-session-1\"}"))
-                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "B"))
-                .expectNextCount(2)
-                .verifyComplete();
-
-        assertThat(client.executeCount()).isEqualTo(1);
         assertThat(client.sent()).hasSize(4);
         assertThat(client.sent().get(0)).contains("\"type\":\"config\"");
         assertThat(client.sent().get(1)).contains("\"type\":\"user-message\"").contains("hello-run1");
-        assertThat(client.sent().get(2)).isEqualTo("{\"type\":\"interrupt\"}");
+        assertThat(client.sent().get(2)).contains("\"type\":\"config\"").contains("\"sessionMode\":\"resume\"");
         assertThat(client.sent().get(3)).contains("\"type\":\"user-message\"").contains("hello-run2");
+    }
+
+    @Test
+    void shortConnectionCancelSendsInterruptFrame() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10));
+
+        StepVerifier.create(adapter.query(request("relay-session-1", RuntimeSessionMode.RESUME, "run1")))
+                .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
+                .thenAwait(Duration.ofMillis(20))
+                .then(() -> adapter.cancel(cancelRequest("run1")).block())
+                .thenCancel()
+                .verify();
+
+        assertThat(client.sent()).hasSize(3);
+        assertThat(client.executeCount()).isEqualTo(1);
+        assertThat(client.sent().get(0)).contains("\"type\":\"config\"");
+        assertThat(client.sent().get(1)).contains("\"type\":\"user-message\"");
+        assertThat(client.sent().get(2)).isEqualTo("{\"type\":\"interrupt\"}");
+    }
+
+    @Test
+    void cancelWithoutActiveExchangeOpensTemporaryResumeConnectionAndSendsInterrupt() throws Exception {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10));
+
+        StepVerifier.create(adapter.cancel(cancelRequest("run1")))
+                .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
+                .verifyComplete();
+
+        assertThat(client.executeCount()).isEqualTo(1);
+        assertThat(client.uri().toString()).isNotEqualTo("ws://relay.test/ws/run1");
+        assertThat(client.uri().toString()).startsWith("ws://relay.test/ws/run1-interrupt-");
+        assertThat(client.sent()).hasSize(2);
+        JsonNode config = objectMapper.readTree(client.sent().get(0));
+        assertThat(config.path("type").asText()).isEqualTo("config");
+        assertThat(config.path("config").path("sessionMode").asText()).isEqualTo("resume");
+        assertThat(config.path("config").path("sessionId").asText()).isEqualTo("relay-session-1");
+        assertThat(config.path("config").path("uid").asText()).isEqualTo("user1");
+        assertThat(config.path("config").path("supports_incremental_recovery").asBoolean()).isTrue();
+        assertThat(client.sent().get(1)).isEqualTo("{\"type\":\"interrupt\"}");
+    }
+
+    @Test
+    void cancelWithoutRuntimeSessionDoesNotOpenTemporaryConnection() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10));
+
+        StepVerifier.create(adapter.cancel(cancelRequest("run1", null)))
+                .verifyComplete();
+
+        assertThat(client.executeCount()).isZero();
+        assertThat(client.sent()).isEmpty();
+    }
+
+    @Test
+    void temporaryInterruptConfigFailureDoesNotSendInterrupt() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10));
+
+        StepVerifier.create(adapter.cancel(cancelRequest("run1")))
+                .then(() -> client.emit("{\"type\":\"session-mismatch\",\"message\":\"bad session\"}"))
+                .verifyComplete();
+
+        assertThat(client.executeCount()).isEqualTo(1);
+        assertThat(client.sent()).hasSize(1);
+        assertThat(client.sent().getFirst()).contains("\"type\":\"config\"");
+    }
+
+    @Test
+    void temporaryInterruptConfigTimeoutDoesNotFailCancel() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofMillis(5));
+
+        StepVerifier.create(adapter.cancel(cancelRequest("run1")))
+                .verifyComplete();
+
+        assertThat(client.executeCount()).isEqualTo(1);
+        assertThat(client.sent()).hasSize(1);
+        assertThat(client.sent().getFirst()).contains("\"type\":\"config\"");
+    }
+
+    private void assertConfigHandshakeFails(String configFrame, String expectedMessage) {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(configFrame));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(RelayRuntimeProtocolException.class)
+                        .hasMessageContaining("Relay WebSocket config handshake failed")
+                        .hasMessageContaining(expectedMessage))
+                .verify();
+
+        assertThat(client.sent()).hasSize(1);
+        assertThat(client.sent().getFirst()).contains("\"type\":\"config\"");
     }
 
     private RelayWebSocketRuntimeAdapter adapter(FakeWebSocketClient client) {
@@ -406,24 +467,21 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     private RelayWebSocketRuntimeAdapter adapter(FakeWebSocketClient client, Duration configHandshakeTimeout) {
-        return adapter(client, configHandshakeTimeout, "short");
+        return adapter((WebSocketClient) client, configHandshakeTimeout);
     }
 
-    private RelayWebSocketRuntimeAdapter adapter(WebSocketClient client, Duration configHandshakeTimeout,
-                                                 String connectionMode) {
+    private RelayWebSocketRuntimeAdapter adapter(WebSocketClient client, Duration configHandshakeTimeout) {
         RelayAgentProperties properties = new RelayAgentProperties();
         properties.getRelay().getWebsocket().setUrl("ws://relay.test/ws");
         properties.getRelay().getWebsocket().setIdleTimeout(Duration.ofSeconds(5));
         properties.getRelay().getWebsocket().setConfigHandshakeTimeout(configHandshakeTimeout);
-        properties.getRelay().getWebsocket().setConnectionMode(connectionMode);
         return new RelayWebSocketRuntimeAdapter(
                 objectMapper,
                 properties,
                 new AgentRuntimeForwardCookieProperties(),
                 new RelayRuntimeResponseNormalizer(objectMapper),
                 null,
-                client,
-                () -> "instance-test");
+                client);
     }
 
     private AgentRuntimeRequest request(String runtimeSessionId, RuntimeForwardHeaders forwardHeaders) {
@@ -455,12 +513,16 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     private AgentRuntimeCancelRequest cancelRequest(String runId) {
+        return cancelRequest(runId, "relay-session-1");
+    }
+
+    private AgentRuntimeCancelRequest cancelRequest(String runId, String runtimeSessionId) {
         return new AgentRuntimeCancelRequest(
                 "tenant1",
                 "user1",
                 "session1",
                 runId,
-                "relay-session-1",
+                runtimeSessionId,
                 "relay",
                 "USER_STOP",
                 Map.of(),
@@ -470,6 +532,7 @@ class RelayWebSocketRuntimeAdapterTest {
 
     private static final class ReusableFakeWebSocketClient implements WebSocketClient {
         private final ReusableFakeWebSocketSession session = new ReusableFakeWebSocketSession();
+        private URI uri;
         private int executeCount;
 
         @Override
@@ -480,6 +543,7 @@ class RelayWebSocketRuntimeAdapterTest {
         @Override
         public Mono<Void> execute(URI url, HttpHeaders requestHeaders, WebSocketHandler handler) {
             executeCount++;
+            this.uri = url;
             return handler.handle(session);
         }
 
@@ -493,6 +557,10 @@ class RelayWebSocketRuntimeAdapterTest {
 
         private int executeCount() {
             return executeCount;
+        }
+
+        private URI uri() {
+            return uri;
         }
     }
 

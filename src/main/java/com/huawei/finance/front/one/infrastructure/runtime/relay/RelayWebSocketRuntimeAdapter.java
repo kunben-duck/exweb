@@ -8,7 +8,6 @@ import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCa
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
-import com.huawei.finance.front.one.application.integration.identity.ApplicationInstanceIdProvider;
 import com.huawei.finance.front.one.application.service.runtime.RuntimeRawStreamLogService;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
@@ -16,15 +15,12 @@ import io.netty.channel.ChannelOption;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.time.Instant;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
@@ -49,9 +45,8 @@ import reactor.netty.http.client.HttpClient;
 /**
  * Relay WebSocket 普通问答 adapter。
  *
- * <p>短连接模式下每个 ChatService run 建立一条下游 WebSocket；单实例复用模式下同一 JVM 内按
- * ChatService 会话缓存连接。两种模式都会先完成 {@code config} 阶段，再发送 {@code user-message}。
- * 配置阶段 frame 只进入 raw log 排障链路，不进入 ChatService 标准事件流；{@code user-message}
+ * <p>每个 ChatService run 都建立一条短生命周期下游 WebSocket，先完成 {@code config} 阶段，再发送
+ * {@code user-message}。配置阶段 frame 只进入 raw log 排障链路，不进入 ChatService 标准事件流；{@code user-message}
  * 之后的下游 frame 才复用 {@link RelayRuntimeResponseNormalizer} 转为标准事件。本轮只支持普通问答；
  * {@code approval-request} 等 HITL 协议事件先按 runtime 事件透传，不进入等待用户状态。</p>
  */
@@ -68,23 +63,18 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     private final RelayRuntimeResponseNormalizer responseNormalizer;
     private final RuntimeRawStreamLogService rawStreamLogService;
     private final WebSocketClient webSocketClient;
-    private final ApplicationInstanceIdProvider instanceIdProvider;
-    private final ConnectionMode connectionMode;
-    private final ConcurrentHashMap<ConnectionKey, ManagedConnection> cachedConnections = new ConcurrentHashMap<>();
     /** Active run -> outbound exchange, used only for best-effort Relay WS interrupt on stop/delete. */
     private final ConcurrentHashMap<String, ActiveRelayWebSocketExchange> activeExchanges = new ConcurrentHashMap<>();
-    private final AtomicLong connectionSequence = new AtomicLong();
 
     @Autowired
     public RelayWebSocketRuntimeAdapter(ObjectMapper objectMapper,
                                         RelayAgentProperties properties,
                                         AgentRuntimeForwardCookieProperties forwardCookieProperties,
                                         RelayRuntimeResponseNormalizer responseNormalizer,
-                                        ObjectProvider<RuntimeRawStreamLogService> rawStreamLogServiceProvider,
-                                        ApplicationInstanceIdProvider instanceIdProvider) {
+                                        ObjectProvider<RuntimeRawStreamLogService> rawStreamLogServiceProvider) {
         this(objectMapper, properties, forwardCookieProperties, responseNormalizer,
                 rawStreamLogServiceProvider == null ? null : rawStreamLogServiceProvider.getIfAvailable(),
-                webSocketClient(properties), instanceIdProvider);
+                webSocketClient(properties));
     }
 
     RelayWebSocketRuntimeAdapter(ObjectMapper objectMapper,
@@ -92,17 +82,13 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                                  AgentRuntimeForwardCookieProperties forwardCookieProperties,
                                  RelayRuntimeResponseNormalizer responseNormalizer,
                                  RuntimeRawStreamLogService rawStreamLogService,
-                                 WebSocketClient webSocketClient,
-                                 ApplicationInstanceIdProvider instanceIdProvider) {
+                                 WebSocketClient webSocketClient) {
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.forwardCookieProperties = forwardCookieProperties;
         this.responseNormalizer = responseNormalizer;
         this.rawStreamLogService = rawStreamLogService;
         this.webSocketClient = webSocketClient;
-        this.instanceIdProvider = instanceIdProvider == null ? () -> "local" : instanceIdProvider;
-        this.connectionMode = ConnectionMode.from(websocketProperties().getConnectionMode());
-        validateConnectionCacheProperties();
     }
 
     @Override
@@ -113,9 +99,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     @Override
     public Flux<ChatEvent> query(AgentRuntimeRequest request) {
         AtomicBoolean messageCompleted = new AtomicBoolean(false);
-        Flux<ChatEvent> events = connectionMode == ConnectionMode.SINGLE_INSTANCE_REUSE
-                ? queryWithReusedConnection(request, messageCompleted)
-                : queryWithShortConnection(request, messageCompleted);
+        Flux<ChatEvent> events = queryWithShortConnection(request, messageCompleted);
 
         return events.concatWith(Mono.defer(() -> messageCompleted.get()
                 ? Mono.empty()
@@ -154,22 +138,6 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         }, FluxSink.OverflowStrategy.BUFFER);
     }
 
-    private Flux<ChatEvent> queryWithReusedConnection(AgentRuntimeRequest request, AtomicBoolean messageCompleted) {
-        return Flux.defer(() -> {
-            ManagedConnection connection = connectionFor(request);
-            ReusedExchange exchange = connection.exchange(request);
-            Flux<String> frames = exchange.frames().timeout(websocketProperties().getIdleTimeout());
-            if (rawStreamLogService != null) {
-                frames = rawStreamLogService.capture(frames, request, "relay", ADAPTER_NAME);
-            }
-            Flux<String> userFrames = exchange.requiresConfigHandshake()
-                    ? userMessageFrames(frames, request, connection::send)
-                    : sendUserMessageThenFrames(connection, request, frames);
-            return normalizeFrames(userFrames, request, messageCompleted)
-                    .doFinally(signal -> activeExchanges.remove(request.runId(), connection));
-        });
-    }
-
     private Flux<ChatEvent> normalizeFrames(Flux<String> frames, AgentRuntimeRequest request,
                                             AtomicBoolean messageCompleted) {
         return frames
@@ -182,7 +150,16 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
 
     @Override
     public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
-        return Mono.fromRunnable(() -> interruptActiveExchange(request))
+        return Mono.defer(() -> {
+                    if (request == null || request.runId() == null || request.runId().isBlank()) {
+                        return Mono.empty();
+                    }
+                    ActiveRelayWebSocketExchange exchange = activeExchanges.remove(request.runId());
+                    if (exchange != null) {
+                        return Mono.fromRunnable(() -> exchange.interrupt(request.runId()));
+                    }
+                    return interruptViaResumeConnection(request);
+                })
                 .onErrorResume(ex -> {
                     String runId = request == null ? null : request.runId();
                     log.warn("Relay WebSocket interrupt failed, runId={}, reason={}", runId, ex.getMessage());
@@ -191,16 +168,47 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 .then();
     }
 
-    private void interruptActiveExchange(AgentRuntimeCancelRequest request) {
-        if (request == null || request.runId() == null || request.runId().isBlank()) {
-            return;
+    private Mono<Void> interruptViaResumeConnection(AgentRuntimeCancelRequest request) {
+        if (request.runtimeSessionId() == null || request.runtimeSessionId().isBlank()) {
+            log.debug("Relay WebSocket active exchange not found and runtimeSessionId is empty on cancel. runId={}",
+                    request.runId());
+            return Mono.empty();
         }
-        ActiveRelayWebSocketExchange exchange = activeExchanges.remove(request.runId());
-        if (exchange == null) {
-            log.debug("Relay WebSocket active exchange not found on cancel. runId={}", request.runId());
-            return;
+        String clientId = interruptClientId(request.runId());
+        return webSocketClient.execute(endpointUri(clientId), outboundHeaders(request.forwardHeaders()), session -> {
+            Sinks.Many<String> outbound = Sinks.many().unicast().onBackpressureBuffer();
+            Mono<Void> outboundSend = session.send(Flux.concat(Mono.just(configMessage(request)), outbound.asFlux())
+                    .map(session::textMessage));
+            Mono<Void> releaseInterrupt = session.receive()
+                    .map(WebSocketMessage::getPayloadAsText)
+                    .doOnNext(frame -> validateFrameSize(frame, request.runId()))
+                    .timeout(websocketProperties().getIdleTimeout())
+                    .<String>handle((frame, sink) -> {
+                        RelayRuntimeProtocolException configFailure = configHandshakeFailure(frame);
+                        if (configFailure != null) {
+                            sink.error(configFailure);
+                        } else if (configHandshakeCompleteFrame(frame)) {
+                            sink.next(frame);
+                        }
+                    })
+                    .next()
+                    .timeout(configHandshakeTimeout())
+                    .switchIfEmpty(Mono.error(new RelayRuntimeProtocolException("Relay WebSocket closed before "
+                            + "interrupt config handshake completed. runId=" + request.runId())))
+                    .doOnNext(ignored -> emitInterrupt(outbound, request.runId()))
+                    .then()
+                    .doOnError(error -> outbound.tryEmitError(error));
+            return Mono.when(outboundSend, releaseInterrupt);
+        });
+    }
+
+    private void emitInterrupt(Sinks.Many<String> outbound, String runId) {
+        Sinks.EmitResult result = outbound.tryEmitNext(interruptMessage());
+        if (result.isFailure()) {
+            throw new RelayRuntimeProtocolException("Relay WebSocket interrupt outbound emit failed. runId="
+                    + runId + ", result=" + result);
         }
-        exchange.interrupt(request.runId());
+        outbound.tryEmitComplete();
     }
 
     private void registerActiveExchange(String runId, ActiveRelayWebSocketExchange exchange) {
@@ -208,54 +216,6 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
             return;
         }
         activeExchanges.put(runId, exchange);
-    }
-
-    private ManagedConnection connectionFor(AgentRuntimeRequest request) {
-        ConnectionKey key = ConnectionKey.from(request.tenantId(), request.userId(), request.sessionId());
-        ManagedConnection connection = cachedConnections.compute(key, (ignored, existing) -> {
-            if (existing != null && existing.isReusableForExchange()) {
-                return existing;
-            }
-            if (existing != null) {
-                existing.onReplacedByNewConnection();
-            }
-            return new ManagedConnection(key, nextConnectionClientId());
-        });
-        evictIdleConnections();
-        return connection;
-    }
-
-    private String nextConnectionClientId() {
-        String instanceId = instanceIdProvider.currentInstanceId();
-        String normalizedInstance = instanceId == null || instanceId.isBlank()
-                ? "local"
-                : instanceId.replaceAll("[^A-Za-z0-9_-]", "_");
-        return normalizedInstance + "-relay-ws-" + connectionSequence.incrementAndGet();
-    }
-
-    private void evictIdleConnections() {
-        int maxConnections = websocketProperties().getMaxCachedConnections();
-        if (cachedConnections.size() <= maxConnections) {
-            return;
-        }
-        cachedConnections.values().stream()
-                .filter(connection -> !connection.hasActiveRun())
-                .min(Comparator.comparing(ManagedConnection::lastUsedAt))
-                .ifPresent(connection -> {
-                    cachedConnections.remove(connection.key(), connection);
-                    connection.close(null);
-                });
-    }
-
-    private Flux<String> userMessageFrames(Flux<String> frames, AgentRuntimeRequest request,
-                                           Sinks.One<String> userMessageSink) {
-        return userMessageFrames(frames, request, message -> {
-            Sinks.EmitResult result = userMessageSink.tryEmitValue(message);
-            if (result.isFailure()) {
-                throw new RelayRuntimeProtocolException("Failed to release Relay WebSocket user-message after "
-                        + "config handshake: " + result);
-            }
-        });
     }
 
     private Flux<String> userMessageFrames(Flux<String> frames, AgentRuntimeRequest request,
@@ -277,6 +237,16 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     }, sink::error);
             frameSubscription.set(frames.subscribe(frame -> {
                 if (!userMessageReleased.get()) {
+                    RelayRuntimeProtocolException configFailure = configHandshakeFailure(frame);
+                    if (configFailure != null && userMessageReleased.compareAndSet(false, true)) {
+                        handshakeTimeout.dispose();
+                        sink.error(configFailure);
+                        Disposable subscription = frameSubscription.get();
+                        if (subscription != null) {
+                            subscription.dispose();
+                        }
+                        return;
+                    }
                     if (configHandshakeCompleteFrame(frame) && userMessageReleased.compareAndSet(false, true)) {
                         handshakeTimeout.dispose();
                         try {
@@ -327,20 +297,6 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         return false;
     }
 
-    private Flux<String> sendUserMessageThenFrames(ManagedConnection connection, AgentRuntimeRequest request,
-                                                   Flux<String> frames) {
-        return Flux.defer(() -> {
-            try {
-                connection.send(userMessage(request));
-            } catch (RuntimeException ex) {
-                connection.close(ex);
-                return Flux.error(ex);
-            }
-            AtomicBoolean responseStarted = new AtomicBoolean(false);
-            return frames.filter(frame -> shouldEmitUserResponseFrame(frame, responseStarted));
-        });
-    }
-
     private void emitEvent(AtomicBoolean messageCompleted, ChatEvent event) {
         if ("message.completed".equals(event.type())) {
             messageCompleted.set(true);
@@ -353,6 +309,21 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         config.put("sessionMode", request.runtimeSessionMode() == RuntimeSessionMode.NEW ? "new" : "resume");
         config.put("sessionId", runtimeSessionId);
         config.put("uid", request.userId());
+        if (request.runtimeSessionMode() == RuntimeSessionMode.RESUME) {
+            config.put("supports_incremental_recovery", true);
+        }
+        if (websocketProperties().getAppMode() != null && !websocketProperties().getAppMode().isBlank()) {
+            config.put("appMode", websocketProperties().getAppMode());
+        }
+        return toJson(Map.of("type", "config", "config", Map.copyOf(config)));
+    }
+
+    private String configMessage(AgentRuntimeCancelRequest request) {
+        Map<String, Object> config = new LinkedHashMap<>();
+        config.put("sessionMode", "resume");
+        config.put("sessionId", request.runtimeSessionId());
+        config.put("uid", request.userId());
+        config.put("supports_incremental_recovery", true);
         if (websocketProperties().getAppMode() != null && !websocketProperties().getAppMode().isBlank()) {
             config.put("appMode", websocketProperties().getAppMode());
         }
@@ -391,6 +362,12 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         return endpointUri(clientId);
     }
 
+    private String interruptClientId(String runId) {
+        String prefix = runId == null || runId.isBlank() ? "run" : runId;
+        String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+        return prefix + "-interrupt-" + suffix;
+    }
+
     private URI endpointUri(String clientId) {
         String configured = websocketProperties().getUrl();
         String base = configured == null || configured.isBlank() ? "ws://localhost:8080/ws" : configured.trim();
@@ -420,20 +397,62 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         try {
             JsonNode root = objectMapper.readTree(frame);
             String type = RelayRuntimeResponseNormalizer.normalizeTypeName(text(root.path("type")));
-            if ("relay-end".equals(type)) {
-                return true;
-            }
-            if ("config".equals(type)) {
-                return successLike(root);
-            }
-            if ("session-state".equals(type)) {
-                String state = RelayRuntimeResponseNormalizer.normalizeTypeName(text(root.path("state")));
-                return "idle".equals(state) || "ready".equals(state) || "configured".equals(state);
-            }
-            return false;
+            // Relay config phase has a single release signal. Other initialization frames stay in raw log only.
+            return "session-ready".equals(type);
         } catch (JsonProcessingException ex) {
             return false;
         }
+    }
+
+    private RelayRuntimeProtocolException configHandshakeFailure(String frame) {
+        if (frame == null || frame.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(frame);
+            String type = RelayRuntimeResponseNormalizer.normalizeTypeName(text(root.path("type")));
+            if (!"error".equals(type) && !"clear-session".equals(type) && !"session-mismatch".equals(type)
+                    && !hasErrorPayload(root)) {
+                return null;
+            }
+            return new RelayRuntimeProtocolException("Relay WebSocket config handshake failed: "
+                    + configFailureMessage(root, type));
+        } catch (JsonProcessingException ex) {
+            return null;
+        }
+    }
+
+    private boolean hasErrorPayload(JsonNode root) {
+        JsonNode error = root == null ? null : root.get("error");
+        return error != null && !error.isNull() && !(error.isTextual() && error.asText("").isBlank());
+    }
+
+    private String configFailureMessage(JsonNode root, String type) {
+        String message = text(root.path("error_message"));
+        if (message == null) {
+            message = text(root.path("message"));
+        }
+        if (message == null) {
+            message = text(root.path("reason"));
+        }
+        if (message == null) {
+            message = text(root.path("error_code"));
+        }
+        if (message == null) {
+            JsonNode error = root.get("error");
+            if (error != null && error.isObject()) {
+                message = text(error.path("message"));
+                if (message == null) {
+                    message = text(error.path("reason"));
+                }
+                if (message == null) {
+                    message = text(error.path("code"));
+                }
+            } else if (error != null && !error.isNull()) {
+                message = error.asText(null);
+            }
+        }
+        return (type == null || type.isBlank() ? "unknown" : type) + (message == null ? "" : ": " + message);
     }
 
     private boolean lateConfigFrame(String frame) {
@@ -447,37 +466,6 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         } catch (JsonProcessingException ex) {
             return false;
         }
-    }
-
-    private boolean successLike(JsonNode root) {
-        if (booleanValue(root.path("ready")) || booleanValue(root.path("success"))
-                || booleanValue(root.path("ok")) || booleanValue(root.path("configured"))) {
-            return true;
-        }
-        if (successText(root.path("status")) || successText(root.path("code"))
-                || successText(root.path("message"))) {
-            return true;
-        }
-        JsonNode config = root.path("config");
-        return booleanValue(config.path("ready")) || booleanValue(config.path("success"))
-                || booleanValue(config.path("ok")) || successText(config.path("status"));
-    }
-
-    private boolean successText(JsonNode node) {
-        String value = RelayRuntimeResponseNormalizer.normalizeTypeName(text(node));
-        return "success".equals(value) || "ok".equals(value) || "ready".equals(value)
-                || "configured".equals(value) || "200".equals(value) || "0".equals(value);
-    }
-
-    private boolean booleanValue(JsonNode node) {
-        if (node == null || node.isMissingNode() || node.isNull()) {
-            return false;
-        }
-        if (node.isBoolean()) {
-            return node.asBoolean();
-        }
-        String value = RelayRuntimeResponseNormalizer.normalizeTypeName(node.asText(null));
-        return "true".equals(value) || "1".equals(value) || "yes".equals(value);
     }
 
     private boolean ordinaryTerminalFrame(String frame) {
@@ -576,59 +564,6 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 : timeout;
     }
 
-    private Duration idleTtl() {
-        Duration ttl = websocketProperties().getIdleTtl();
-        return ttl == null || ttl.isZero() || ttl.isNegative() ? Duration.ofMinutes(5) : ttl;
-    }
-
-    private Duration interruptPauseTimeout() {
-        Duration timeout = websocketProperties().getInterruptPauseTimeout();
-        return timeout == null || timeout.isZero() || timeout.isNegative() ? Duration.ofSeconds(5) : timeout;
-    }
-
-    private void validateConnectionCacheProperties() {
-        if (websocketProperties().getMaxCachedConnections() <= 0) {
-            throw new IllegalArgumentException(
-                    "financeex.agent-runtime.relay.websocket.max-cached-connections must be greater than 0");
-        }
-        ConnectionMode.from(websocketProperties().getConnectionMode());
-    }
-
-    private enum ConnectionMode {
-        SHORT,
-        SINGLE_INSTANCE_REUSE;
-
-        static ConnectionMode from(String value) {
-            String normalized = value == null || value.isBlank() ? "short" : value.trim().toLowerCase();
-            return switch (normalized) {
-                case "short" -> SHORT;
-                case "single-instance-reuse" -> SINGLE_INSTANCE_REUSE;
-                default -> throw new IllegalArgumentException(
-                        "Unsupported Relay WebSocket connection-mode: " + value
-                                + ". Supported values: short, single-instance-reuse");
-            };
-        }
-    }
-
-    private enum ManagedConnectionState {
-        IDLE,
-        ACTIVE,
-        INTERRUPTING,
-        CLOSED
-    }
-
-    private record ConnectionKey(String tenantId, String userId, String sessionId) {
-        static ConnectionKey from(String tenantId, String userId, String sessionId) {
-            return new ConnectionKey(
-                    tenantId == null ? "" : tenantId,
-                    userId == null ? "" : userId,
-                    sessionId == null ? "" : sessionId);
-        }
-    }
-
-    private record ReusedExchange(Flux<String> frames, boolean requiresConfigHandshake) {
-    }
-
     private interface ActiveRelayWebSocketExchange {
         void interrupt(String runId);
     }
@@ -696,281 +631,6 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
             Disposable disposable = subscription.getAndSet(null);
             if (disposable != null) {
                 disposable.dispose();
-            }
-        }
-    }
-
-    private final class ManagedConnection implements ActiveRelayWebSocketExchange {
-        private final ConnectionKey key;
-        private final String clientId;
-        private final Sinks.Many<String> outbound = Sinks.many().unicast().onBackpressureBuffer();
-        private final AtomicBoolean started = new AtomicBoolean(false);
-        private final AtomicReference<ManagedConnectionState> state =
-                new AtomicReference<>(ManagedConnectionState.IDLE);
-        private final AtomicReference<ReusedRunExchange> activeRun = new AtomicReference<>();
-        private final AtomicReference<Disposable> subscription = new AtomicReference<>();
-        private final AtomicReference<Disposable> interruptPauseTimeout = new AtomicReference<>();
-        private volatile Instant lastUsedAt = Instant.now();
-
-        private ManagedConnection(ConnectionKey key, String clientId) {
-            this.key = key;
-            this.clientId = clientId;
-        }
-
-        ReusedExchange exchange(AgentRuntimeRequest request) {
-            ManagedConnectionState currentState = state.get();
-            if (currentState == ManagedConnectionState.CLOSED) {
-                return new ReusedExchange(Flux.error(new RelayRuntimeProtocolException(
-                        "Relay WebSocket cached connection is closed")), false);
-            }
-            if (currentState == ManagedConnectionState.INTERRUPTING) {
-                return new ReusedExchange(Flux.error(new RelayRuntimeProtocolException(
-                        "Relay WebSocket cached connection is waiting for interrupt pause. sessionId="
-                                + request.sessionId())), false);
-            }
-            if (!state.compareAndSet(ManagedConnectionState.IDLE, ManagedConnectionState.ACTIVE)) {
-                return new ReusedExchange(Flux.error(new RelayRuntimeProtocolException(
-                        "Relay WebSocket cached connection already has an active run. sessionId="
-                                + request.sessionId())), false);
-            }
-            ReusedRunExchange run = new ReusedRunExchange(request.runId());
-            if (!activeRun.compareAndSet(null, run)) {
-                state.compareAndSet(ManagedConnectionState.ACTIVE, ManagedConnectionState.IDLE);
-                return new ReusedExchange(Flux.error(new RelayRuntimeProtocolException(
-                        "Relay WebSocket cached connection already has an active run. sessionId="
-                                + request.sessionId())), false);
-            }
-            registerActiveExchange(request.runId(), this);
-            boolean firstExchange = started.compareAndSet(false, true);
-            if (firstExchange) {
-                connect(request);
-                try {
-                    send(configMessage(request));
-                } catch (RuntimeException ex) {
-                    close(ex);
-                    return new ReusedExchange(Flux.error(ex), false);
-                }
-            }
-            Flux<String> frames = run.frames()
-                    .doFinally(signal -> {
-                        if (activeRun.compareAndSet(run, null)) {
-                            state.compareAndSet(ManagedConnectionState.ACTIVE, ManagedConnectionState.IDLE);
-                            lastUsedAt = Instant.now();
-                            scheduleIdleClose(lastUsedAt);
-                        }
-                    });
-            return new ReusedExchange(frames, firstExchange);
-        }
-
-        void send(String message) {
-            Sinks.EmitResult result = outbound.tryEmitNext(message);
-            if (result.isFailure()) {
-                throw new RelayRuntimeProtocolException("Relay WebSocket outbound emit failed: " + result);
-            }
-        }
-
-        boolean isReusableForExchange() {
-            ManagedConnectionState currentState = state.get();
-            if (currentState == ManagedConnectionState.CLOSED) {
-                return false;
-            }
-            if (currentState == ManagedConnectionState.ACTIVE) {
-                return true;
-            }
-            if (currentState == ManagedConnectionState.INTERRUPTING) {
-                return false;
-            }
-            if (Instant.now().isAfter(lastUsedAt.plus(idleTtl()))) {
-                close(null);
-                return false;
-            }
-            return true;
-        }
-
-        boolean hasActiveRun() {
-            return state.get() == ManagedConnectionState.ACTIVE;
-        }
-
-        Instant lastUsedAt() {
-            return lastUsedAt;
-        }
-
-        ConnectionKey key() {
-            return key;
-        }
-
-        void onReplacedByNewConnection() {
-            if (state.get() != ManagedConnectionState.INTERRUPTING) {
-                close(null);
-            }
-        }
-
-        void close(Throwable cause) {
-            ManagedConnectionState previous = state.getAndSet(ManagedConnectionState.CLOSED);
-            if (previous == ManagedConnectionState.CLOSED) {
-                return;
-            }
-            Disposable timeout = interruptPauseTimeout.getAndSet(null);
-            if (timeout != null) {
-                timeout.dispose();
-            }
-            ReusedRunExchange run = activeRun.getAndSet(null);
-            if (run != null) {
-                activeExchanges.remove(run.runId(), this);
-                run.errorOrComplete(cause);
-            }
-            outbound.tryEmitComplete();
-            Disposable disposable = subscription.getAndSet(null);
-            if (disposable != null) {
-                disposable.dispose();
-            }
-            cachedConnections.remove(key, this);
-        }
-
-        @Override
-        public void interrupt(String requestedRunId) {
-            ReusedRunExchange run = activeRun.get();
-            if (run == null || requestedRunId == null || !requestedRunId.equals(run.runId())) {
-                return;
-            }
-            if (!state.compareAndSet(ManagedConnectionState.ACTIVE, ManagedConnectionState.INTERRUPTING)) {
-                return;
-            }
-            RuntimeException sendFailure = null;
-            try {
-                send(interruptMessage());
-            } catch (RuntimeException ex) {
-                sendFailure = ex;
-            } finally {
-                activeRun.compareAndSet(run, null);
-                activeExchanges.remove(requestedRunId, this);
-                run.errorOrComplete(new RelayRuntimeProtocolException(
-                        "Relay WebSocket run interrupted: " + requestedRunId));
-                scheduleInterruptPauseTimeout();
-            }
-            if (sendFailure != null) {
-                close(sendFailure);
-                throw sendFailure;
-            }
-        }
-
-        private void connect(AgentRuntimeRequest request) {
-            Disposable disposable = webSocketClient.execute(endpointUri(clientId), outboundHeaders(request.forwardHeaders()),
-                    session -> {
-                        Mono<Void> sender = session.send(outbound.asFlux().map(session::textMessage));
-                        Mono<Void> receiver = session.receive()
-                                .map(WebSocketMessage::getPayloadAsText)
-                                .doOnNext(frame -> validateFrameSize(frame, request.runId()))
-                                .doOnNext(this::emitFrame)
-                                .then()
-                                .doFinally(signal -> close(null));
-                        return Mono.when(sender, receiver);
-                    })
-                    .subscribe(null, this::close, () -> close(null));
-            subscription.set(disposable);
-        }
-
-        private void emitFrame(String frame) {
-            ReusedRunExchange run = activeRun.get();
-            if (run != null) {
-                run.emit(frame);
-                return;
-            }
-            /*
-             * interrupt 后 Relay 会返回 session-state=paused 表示当前输出已停止。此时没有 active run，
-             * 只能作为连接状态确认处理，不能投递给下一轮 run，避免 stop 后迟到帧串入新回答。
-             */
-            if (state.get() == ManagedConnectionState.INTERRUPTING && pausedFrame(frame)) {
-                onInterruptPauseAcknowledged();
-            }
-        }
-
-        private void onInterruptPauseAcknowledged() {
-            Disposable timeout = interruptPauseTimeout.getAndSet(null);
-            if (timeout != null) {
-                timeout.dispose();
-            }
-            if (!state.compareAndSet(ManagedConnectionState.INTERRUPTING, ManagedConnectionState.IDLE)) {
-                return;
-            }
-            lastUsedAt = Instant.now();
-            if (cachedConnections.get(key) == this) {
-                scheduleIdleClose(lastUsedAt);
-            } else {
-                close(null);
-            }
-        }
-
-        private void scheduleInterruptPauseTimeout() {
-            Disposable previous = interruptPauseTimeout.getAndSet(Mono.delay(interruptPauseTimeout())
-                    .subscribe(ignored -> {
-                        if (state.get() == ManagedConnectionState.INTERRUPTING) {
-                            log.debug("Relay WebSocket interrupt pause timed out, closing cached connection. "
-                                    + "clientId={}, key={}", clientId, key);
-                            close(null);
-                        }
-                    }));
-            if (previous != null) {
-                previous.dispose();
-            }
-        }
-
-        private void scheduleIdleClose(Instant observedLastUsedAt) {
-            Mono.delay(idleTtl()).subscribe(ignored -> {
-                if (state.get() == ManagedConnectionState.IDLE && observedLastUsedAt.equals(lastUsedAt)
-                        && Instant.now().isAfter(lastUsedAt.plus(idleTtl()).minusMillis(1))) {
-                    close(null);
-                }
-            });
-        }
-    }
-
-    private boolean pausedFrame(String frame) {
-        if (frame == null || frame.isBlank()) {
-            return false;
-        }
-        try {
-            JsonNode root = objectMapper.readTree(frame);
-            String type = RelayRuntimeResponseNormalizer.normalizeTypeName(text(root.path("type")));
-            if (!"session-state".equals(type)) {
-                return false;
-            }
-            String state = RelayRuntimeResponseNormalizer.normalizeTypeName(text(root.path("state")));
-            return "paused".equals(state);
-        } catch (JsonProcessingException ex) {
-            return false;
-        }
-    }
-
-    private static final class ReusedRunExchange {
-        private final String runId;
-        private final Sinks.Many<String> frames = Sinks.many().unicast().onBackpressureBuffer();
-
-        private ReusedRunExchange(String runId) {
-            this.runId = runId;
-        }
-
-        Flux<String> frames() {
-            return frames.asFlux();
-        }
-
-        String runId() {
-            return runId;
-        }
-
-        void emit(String frame) {
-            Sinks.EmitResult result = frames.tryEmitNext(frame);
-            if (result.isFailure()) {
-                frames.tryEmitError(new RelayRuntimeProtocolException(
-                        "Relay WebSocket inbound emit failed, runId=" + runId + ", result=" + result));
-            }
-        }
-
-        void errorOrComplete(Throwable cause) {
-            if (cause == null) {
-                frames.tryEmitComplete();
-            } else {
-                frames.tryEmitError(cause);
             }
         }
     }

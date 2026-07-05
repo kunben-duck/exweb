@@ -401,7 +401,8 @@ class RelayWebSocketRuntimeAdapterTest {
     @Test
     void cancelWithoutActiveExchangeOpensTemporaryResumeConnectionAndSendsInterrupt() throws Exception {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
-                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-state\",\"state\":\"paused\",\"session_id\":\"relay-session-1\"}"
         ));
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
@@ -417,6 +418,21 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(config.path("config").path("sessionId").asText()).isEqualTo("relay-session-1");
         assertThat(config.path("config").path("uid").asText()).isEqualTo("user1");
         assertThat(config.path("config").path("supports_incremental_recovery").asBoolean()).isTrue();
+        assertThat(client.sent().get(1)).isEqualTo("{\"type\":\"interrupt\"}");
+    }
+
+    @Test
+    void temporaryInterruptAckTimeoutDoesNotFailCancel() {
+        FakeWebSocketClient client = new FakeWebSocketClient(Flux.concat(
+                Mono.just("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"),
+                Flux.never()));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10), Duration.ofMillis(5));
+
+        StepVerifier.create(adapter.cancel(cancelRequest("run1")))
+                .verifyComplete();
+
+        assertThat(client.sent()).hasSize(2);
+        assertThat(client.sent().getFirst()).contains("\"type\":\"config\"");
         assertThat(client.sent().get(1)).isEqualTo("{\"type\":\"interrupt\"}");
     }
 
@@ -489,10 +505,16 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     private RelayWebSocketRuntimeAdapter adapter(WebSocketClient client, Duration configHandshakeTimeout) {
+        return adapter(client, configHandshakeTimeout, Duration.ofSeconds(5));
+    }
+
+    private RelayWebSocketRuntimeAdapter adapter(WebSocketClient client, Duration configHandshakeTimeout,
+                                                Duration interruptAckTimeout) {
         RelayAgentProperties properties = new RelayAgentProperties();
         properties.getRelay().getWebsocket().setUrl("ws://relay.test/ws");
         properties.getRelay().getWebsocket().setIdleTimeout(Duration.ofSeconds(5));
         properties.getRelay().getWebsocket().setConfigHandshakeTimeout(configHandshakeTimeout);
+        properties.getRelay().getWebsocket().setInterruptAckTimeout(interruptAckTimeout);
         return new RelayWebSocketRuntimeAdapter(
                 objectMapper,
                 properties,

@@ -132,6 +132,8 @@ public class RelayAgentProperties {
         private Duration connectTimeout = Duration.ofSeconds(5);
         /** 等待 config 初始化响应闭合的超时时间，超时后不会发送 user-message。 */
         private Duration configHandshakeTimeout = Duration.ofSeconds(10);
+        /** 跨实例 stop 临时连接发送 interrupt 后等待 Relay paused 确认的最长时间。 */
+        private Duration interruptAckTimeout = Duration.ofSeconds(5);
         /** 普通问答期间等待下游下一帧的空闲超时时间。 */
         private Duration idleTimeout = Duration.ofSeconds(60);
         /** 单个下游 WebSocket 文本帧最大字节数。 */
@@ -167,6 +169,14 @@ public class RelayAgentProperties {
 
         public void setConfigHandshakeTimeout(Duration configHandshakeTimeout) {
             this.configHandshakeTimeout = configHandshakeTimeout;
+        }
+
+        public Duration getInterruptAckTimeout() {
+            return interruptAckTimeout;
+        }
+
+        public void setInterruptAckTimeout(Duration interruptAckTimeout) {
+            this.interruptAckTimeout = interruptAckTimeout;
         }
 
         public Duration getIdleTimeout() {

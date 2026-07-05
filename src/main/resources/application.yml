@@ -249,6 +249,7 @@ financeex:
         app-mode: ${FINANCEEX_RELAY_WS_APP_MODE:delegate}
         connect-timeout: ${FINANCEEX_RELAY_WS_CONNECT_TIMEOUT:5s}
         config-handshake-timeout: ${FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT:10s}
+        interrupt-ack-timeout: ${FINANCEEX_RELAY_WS_INTERRUPT_ACK_TIMEOUT:5s}
         idle-timeout: ${FINANCEEX_RELAY_WS_IDLE_TIMEOUT:60s}
         max-frame-bytes: ${FINANCEEX_RELAY_WS_MAX_FRAME_BYTES:1MB}
       # Relay 响应映射只属于 adapter 防腐层；ChatService 对前端仍输出稳定 ChatEvent。

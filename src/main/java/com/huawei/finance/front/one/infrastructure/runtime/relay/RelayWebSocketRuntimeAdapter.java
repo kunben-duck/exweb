@@ -169,28 +169,120 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
             Sinks.Many<String> outbound = Sinks.many().unicast().onBackpressureBuffer();
             Mono<Void> outboundSend = session.send(Flux.concat(Mono.just(configMessage(request)), outbound.asFlux())
                     .map(session::textMessage));
-            Mono<Void> releaseInterrupt = session.receive()
+            Flux<String> frames = session.receive()
                     .map(WebSocketMessage::getPayloadAsText)
                     .doOnNext(frame -> validateFrameSize(frame, request.runId()))
-                    .timeout(websocketProperties().getIdleTimeout())
-                    .<String>handle((frame, sink) -> {
-                        RelayRuntimeProtocolException configFailure = configHandshakeFailure(frame);
-                        if (configFailure != null) {
-                            sink.error(configFailure);
-                        } else if (configHandshakeCompleteFrame(frame)) {
-                            sink.next(frame);
-                        }
-                    })
-                    .next()
-                    .timeout(configHandshakeTimeout())
-                    .switchIfEmpty(Mono.error(new RelayRuntimeProtocolException("Relay WebSocket closed before "
-                            + "interrupt config handshake completed. runId=" + request.runId())))
-                    .doOnNext(ignored -> emitInterrupt(outbound, request.runId()))
+                    .timeout(websocketProperties().getIdleTimeout());
+            Mono<Void> releaseInterrupt = waitForInterruptPausedAck(frames, outbound, request, clientId)
+                    .doFinally(signal -> outbound.tryEmitComplete())
                     .then(session.close())
-                    .doOnError(error -> outbound.tryEmitError(error));
+                    .onErrorResume(error -> session.close().then(Mono.error(error)));
             log.info("Relay WebSocket interrupt opens temporary resume connection. runId={}, runtimeSessionId={}, clientId={}",
                     request.runId(), request.runtimeSessionId(), clientId);
             return Mono.when(outboundSend, releaseInterrupt);
+        });
+    }
+
+    private Mono<Void> waitForInterruptPausedAck(Flux<String> frames, Sinks.Many<String> outbound,
+                                                 AgentRuntimeCancelRequest request, String clientId) {
+        return Mono.create(sink -> {
+            AtomicBoolean done = new AtomicBoolean(false);
+            AtomicBoolean configReady = new AtomicBoolean(false);
+            AtomicBoolean interruptSent = new AtomicBoolean(false);
+            AtomicReference<Disposable> frameSubscription = new AtomicReference<>();
+            AtomicReference<Disposable> configTimeout = new AtomicReference<>();
+            AtomicReference<Disposable> ackTimeout = new AtomicReference<>();
+            Runnable cleanup = () -> {
+                Disposable configTimer = configTimeout.getAndSet(null);
+                if (configTimer != null) {
+                    configTimer.dispose();
+                }
+                Disposable ackTimer = ackTimeout.getAndSet(null);
+                if (ackTimer != null) {
+                    ackTimer.dispose();
+                }
+                Disposable subscription = frameSubscription.getAndSet(null);
+                if (subscription != null) {
+                    subscription.dispose();
+                }
+            };
+            Consumer<Throwable> fail = error -> {
+                if (done.compareAndSet(false, true)) {
+                    cleanup.run();
+                    sink.error(error);
+                }
+            };
+            Runnable complete = () -> {
+                if (done.compareAndSet(false, true)) {
+                    cleanup.run();
+                    sink.success();
+                }
+            };
+            configTimeout.set(Mono.delay(configHandshakeTimeout()).subscribe(ignored -> fail.accept(
+                    new RelayRuntimeProtocolException("RELAY_WS_CONFIG_TIMEOUT: Relay WebSocket interrupt config "
+                            + "handshake timed out. runId=" + request.runId())), fail));
+            frameSubscription.set(frames.subscribe(frame -> {
+                if (done.get()) {
+                    return;
+                }
+                try {
+                    if (!configReady.get()) {
+                        RelayRuntimeProtocolException configFailure = configHandshakeFailure(frame);
+                        if (configFailure != null) {
+                            fail.accept(configFailure);
+                            return;
+                        }
+                        if (configHandshakeCompleteFrame(frame)) {
+                            configReady.set(true);
+                            Disposable configTimer = configTimeout.getAndSet(null);
+                            if (configTimer != null) {
+                                configTimer.dispose();
+                            }
+                            emitInterrupt(outbound, request.runId());
+                            interruptSent.set(true);
+                            log.info("Relay WebSocket interrupt sent. runId={}, runtimeSessionId={}, clientId={}, interruptSent=true",
+                                    request.runId(), request.runtimeSessionId(), clientId);
+                            ackTimeout.set(Mono.delay(interruptAckTimeout()).subscribe(ignored -> {
+                                if (done.compareAndSet(false, true)) {
+                                    cleanup.run();
+                                    log.warn("Relay WebSocket interrupt paused ack timed out. runId={}, runtimeSessionId={}, "
+                                                    + "clientId={}, interruptSent=true, pausedAck=false",
+                                            request.runId(), request.runtimeSessionId(), clientId);
+                                    sink.success();
+                                }
+                            }, fail));
+                        }
+                        return;
+                    }
+                    RelayRuntimeProtocolException failure = configHandshakeFailure(frame);
+                    if (failure != null) {
+                        fail.accept(failure);
+                        return;
+                    }
+                    if (interruptPausedAckFrame(frame)) {
+                        log.info("Relay WebSocket interrupt paused ack received. runId={}, runtimeSessionId={}, "
+                                        + "clientId={}, interruptSent={}, pausedAck=true",
+                                request.runId(), request.runtimeSessionId(), clientId, interruptSent.get());
+                        complete.run();
+                    }
+                } catch (Throwable ex) {
+                    fail.accept(ex);
+                }
+            }, fail, () -> {
+                if (done.get()) {
+                    return;
+                }
+                if (!configReady.get()) {
+                    fail.accept(new RelayRuntimeProtocolException("Relay WebSocket closed before interrupt config "
+                            + "handshake completed. runId=" + request.runId()));
+                    return;
+                }
+                log.warn("Relay WebSocket interrupt connection closed before paused ack. runId={}, runtimeSessionId={}, "
+                                + "clientId={}, interruptSent={}, pausedAck=false",
+                        request.runId(), request.runtimeSessionId(), clientId, interruptSent.get());
+                complete.run();
+            }));
+            sink.onDispose(cleanup::run);
         });
     }
 
@@ -486,6 +578,23 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         }
     }
 
+    private boolean interruptPausedAckFrame(String frame) {
+        if (frame == null || frame.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(frame);
+            String type = RelayRuntimeResponseNormalizer.normalizeTypeName(text(root.path("type")));
+            if (!"session-state".equals(type)) {
+                return false;
+            }
+            String state = RelayRuntimeResponseNormalizer.normalizeTypeName(text(root.path("state")));
+            return "paused".equals(state);
+        } catch (JsonProcessingException ex) {
+            return false;
+        }
+    }
+
     private boolean ordinaryTerminalState(String state) {
         String normalizedState = RelayRuntimeResponseNormalizer.normalizeTypeName(state);
         return "idle".equals(normalizedState)
@@ -559,6 +668,13 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         Duration timeout = websocketProperties().getConfigHandshakeTimeout();
         return timeout == null || timeout.isZero() || timeout.isNegative()
                 ? Duration.ofSeconds(10)
+                : timeout;
+    }
+
+    private Duration interruptAckTimeout() {
+        Duration timeout = websocketProperties().getInterruptAckTimeout();
+        return timeout == null || timeout.isZero() || timeout.isNegative()
+                ? Duration.ofSeconds(5)
                 : timeout;
     }
 

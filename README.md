@@ -153,7 +153,6 @@ run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`�
 run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实例、心跳、租约、恢复状态和 `fencing_token`，不混入业务 run 表。后台执行流写入 run 事件时通过数据库 guarded insert 原子校验 execution owner 与 `fencing_token`；stop、watchdog 或未来 Runtime takeover 递增 token 后，旧实例迟到 delta/completed 会被拒绝。
 当前生产版本按下游标准事件原粒度写入和推送 `message.delta`，不再在 ChatService 内合并 delta，避免内部背压误中断 run；`financeex.chat-stream.delta-coalesce-*` 仅作为后续 demand-aware 合并器的兼容预留。Relay `is_streaming=false` 或 `generate-response.content` 给出的最终回答会映射为 `message.snapshot`，前端用它替换当前草稿，历史消息正文也优先使用该快照。
 assistant 的思考、工具、进度、agent 调用等过程信息保存到 `fin_ex_chat_message_part_t`，并通过 `ChatMessageDto.parts` 返回。用户消息关联的文档附件保存到 `fin_ex_chat_message_attachment_t`，历史消息、tree 和 variants 会通过 `ChatMessageDto.attachments` 返回附件展示快照；下载和预览仍走文档库接口重新鉴权。parts 会提供稳定的 `title/status/channel/displayHint/visible` 展示语义，前端不需要解析 Relay 私有 payload。
-Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPublisher` best-effort 发布到企业 MQ；消费端异步合并、脱敏、分片后写入 `fin_ex_runtime_raw_stream_log_t`。raw log 默认关闭，只用于排障和协议分析，不用于前端恢复、不用于 WebSocket 推送，也不用于 assistant 历史消息拼接；MQ 或 raw log 写库失败不会影响 run 主链路。
 集群部署时，取消正确性依赖 Redis cancel flag 和数据库 run 状态；实例故障治理依赖数据库 execution 条件抢占和 fencing token。JVM 内 subscription registry 只用于命中本机执行流时快速释放资源，不作为跨实例事实源。
 同一 `tenantId + userId + sessionId` 同一时间只允许一个 active run。若会话已有
 `RUNNING/CANCELLING` run，`POST /chat/runs` 会返回 `ACTIVE_RUN_EXISTS`，前端应先调用 stop
@@ -179,7 +178,7 @@ Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPubli
 
 前端点赞/点踩只能针对已落库 assistant 消息。流式阶段的 `message.delta/message.snapshot/message.completed` 只用于渲染草稿；`run.completed` 和用户主动 stop 后的 `run.cancelled` 在 `payload.messageReady=true` 时会携带 `assistantMessageId` 和 `feedbackTargetMessageId`，前端应使用该 ID 绑定反馈按钮。
 
-历史消息接口分两层：`GET /api/v1/ex/chat/sessions/{sessionId}/messages` 返回当前 active path，并在有多个 sibling 版本的消息上返回 `versionInfo`，前端可直接展示 `<currentIndex/total>` 版本游标；`versionInfo.variants[].switchLeafMessageId` 是切换该版本时传给 `/messages?leafMessageId=` 和 `/path` 的 leaf。`GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` 返回完整可见消息树 `mapping/currentLeafMessageId/rootMessageIds`，用于复杂版本树和联调排障。tree 视图只包含业务可见的 user/assistant 消息，不暴露 hidden system、raw log 或下游工具原始节点。
+历史消息接口分两层：`GET /api/v1/ex/chat/sessions/{sessionId}/messages` 返回当前 active path，并在有多个 sibling 版本的消息上返回 `versionInfo`，前端可直接展示 `<currentIndex/total>` 版本游标；`versionInfo.variants[].switchLeafMessageId` 是切换该版本时传给 `/messages?leafMessageId=` 和 `/path` 的 leaf。`GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` 返回完整可见消息树 `mapping/currentLeafMessageId/rootMessageIds`，用于复杂版本树和联调排障。tree 视图只包含业务可见的 user/assistant 消息，不暴露 hidden system 或下游工具原始节点。
 
 从某条消息新建分支时，服务端会复制 root 到该消息的可见路径到新 session，并将复制出的历史消息标记为 `origin_type=BRANCH_SNAPSHOT`、`locked=true`。这些快照消息只能展示和继续向后提问，不能编辑、删除或重新生成；分支后续新增消息仍为 `NORMAL`，可以参与消息树版本管理。
 
@@ -196,7 +195,7 @@ Relay 原始流响应可以在 normalizer 之前通过 `RuntimeRawStreamLogPubli
 `ChatShareAccessPolicy` bean 覆盖默认实现。
 
 分享支持 `expiresAt` 过期和创建者撤销。会话软删除时，当前用户创建的该会话 `ACTIVE` 分享会被同步撤销。
-分享快照只用于展示，不保存 feedback、raw stream log、隐藏/debug parts、Cookie 或鉴权信息；附件只保存
+分享快照只用于展示，不保存 feedback、下游原始响应、隐藏/debug parts、Cookie 或鉴权信息；附件只保存
 名称、类型、大小和 `documentId` 展示字段，不授予文件下载权限。
 
 分享发送通过 `ChatShareDeliveryProvider` 防腐层完成。前端可先调用
@@ -223,7 +222,6 @@ WeLink 调用失败后默认最多重试 3 次，可通过 `financeex.share.deli
 - `fin_ex_chat_run_execution_t`
 - `fin_ex_chat_event_t`
 - `fin_ex_intent_recognition_t`：保存实际调用意图服务后的输入、识别结果和最终路由采纳结果；旁路异步写入，不参与主链路决策。
-- `fin_ex_runtime_raw_stream_log_t`：保存 Relay normalizer 之前的原始流响应片段，由 raw log MQ 消费端异步写入，仅用于排障。
 - `fin_ex_uploaded_document_t`
 - `fin_ex_message_feedback_t`：保存当前用户对 assistant 消息的点赞/点踩状态；`status=CANCELLED` 表示已取消当前反馈。
 - `fin_ex_chat_share_t`：保存单轮问答分享固定快照；访问权限由 `ChatShareAccessPolicy` 防腐层判断。
@@ -357,16 +355,6 @@ export FINANCEEX_CHAT_STREAM_DELTA_COALESCE_WINDOW=50ms
 export FINANCEEX_CHAT_STREAM_DELTA_COALESCE_MAX_CHARS=512
 export FINANCEEX_CHAT_STREAM_RESUME_POLL_INTERVAL=1s
 
-# Relay 原始流日志，仅用于排障；默认关闭。
-# 后续接入企业 MQ 时，提供 RuntimeRawStreamLogPublisher bean，并把 enabled 打开。
-export FINANCEEX_RUNTIME_RAW_LOG_ENABLED=false
-export FINANCEEX_RUNTIME_RAW_LOG_TRANSPORT=disabled
-export FINANCEEX_RUNTIME_RAW_LOG_COALESCE_WINDOW=100ms
-export FINANCEEX_RUNTIME_RAW_LOG_MAX_CHARS=4096
-export FINANCEEX_RUNTIME_RAW_LOG_HARD_MAX_CHARS=65536
-export FINANCEEX_RUNTIME_RAW_LOG_MAX_ROWS_PER_RUN=1000
-export FINANCEEX_RUNTIME_RAW_LOG_REDACT_SENSITIVE_FIELDS=true
-
 # Relay 响应映射，决定哪些下游 type/字段可成为 assistant 正文
 export FINANCEEX_RELAY_ADAPTER=relay-stream-http
 export FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE=1MB
@@ -381,15 +369,15 @@ export FINANCEEX_RELAY_ANSWER_CONTENT_FIELDS=content,context,delta,message,text,
 export FINANCEEX_RELAY_AGENT_CONTEXT_AS_ANSWER=true
 ```
 
-SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP 文本流调用。Relay Runtime 作为 AgentRuntime 实现默认使用 `relay-stream-http` API adapter；`relay-websocket` 是可选灰度 adapter。Relay WebSocket 始终采用短连接：每个 ChatService run 都新建一条下游 WebSocket，先发送 `config`，握手成功后发送 `user-message`，本轮输出结束、stop、异常或超时后立即释放物理连接。Relay 会话语义由 `RuntimeBinding` 保存的 `runtimeSessionId` 和应用层传入的 `runtimeSessionMode=NEW|RESUME` 控制：同一个 ChatService 会话下第一次进入 Relay Runtime 发送 `sessionMode=new`，后续提问即使重新建连也发送 `sessionMode=resume`，并携带 `supports_incremental_recovery=true`。Relay WS 只以 `session-ready` 作为 config 阶段唯一完成信号；配置阶段响应只进入 raw log 排障链路，不落 ChatService 事件表、不推送前端，若收到 `error/clear-session/session-mismatch` 会立即失败。`user-message` 后、`relay-start` 前的前置 `session-state=idle/completed/ready/running/agent_thinking` 和迟到 `config` 会被丢弃，只有 `relay-start`、业务帧或 `session-state=waiting_user_input/paused` 会打开回答阶段。普通问答以回答阶段内的 `session-state=idle/completed/waiting_user_input/paused` 或下游正常关闭补齐 `message.completed`。澄清/审批等待用户输入状态机本轮暂不启用，`waiting_user_input` 仅表示本次 Relay WS 普通问答连接闭合；`paused` 仅表示 Relay 对 interrupt 的确认。
+SubAgent endpoint 是完整 HTTP 地址，当前正式版本支持单轮 HTTP 文本流调用。Relay Runtime 作为 AgentRuntime 实现默认使用 `relay-stream-http` API adapter；`relay-websocket` 是可选灰度 adapter。Relay WebSocket 始终采用短连接：每个 ChatService run 都新建一条下游 WebSocket，先发送 `config`，握手成功后发送 `user-message`，本轮输出结束、stop、异常或超时后立即释放物理连接。Relay 会话语义由 `RuntimeBinding` 保存的 `runtimeSessionId` 和应用层传入的 `runtimeSessionMode=NEW|RESUME` 控制：同一个 ChatService 会话下第一次进入 Relay Runtime 发送 `sessionMode=new`，后续提问即使重新建连也发送 `sessionMode=resume`，并携带 `supports_incremental_recovery=true`。Relay WS 只以 `session-ready` 作为 config 阶段唯一完成信号；配置阶段响应只用于握手判定，不落 ChatService 事件表、不推送前端，若收到 `error/clear-session/session-mismatch` 会立即失败。`user-message` 后、`relay-start` 前的前置 `session-state=idle/completed/ready/running/agent_thinking` 和迟到 `config` 会被丢弃，只有 `relay-start`、业务帧或 `session-state=waiting_user_input/paused` 会打开回答阶段。普通问答以回答阶段内的 `session-state=idle/completed/waiting_user_input/paused` 或下游正常关闭补齐 `message.completed`。澄清/审批等待用户输入状态机本轮暂不启用，`waiting_user_input` 仅表示本次 Relay WS 普通问答连接闭合；`paused` 仅表示 Relay 对 interrupt 的确认。
 
 Cookie 透传是 adapter 级能力：`relay-stream-http`、`relay-websocket`、DomainAgent chat/cancel，以及 `forward-cookie=true`
 的 HTTP 文档 provider upload 会把入口 Cookie 放入下游 HTTP 请求头。`AgentRuntimeRequest.forwardHeaders`、
 `DomainAgentRequest.forwardHeaders`、`DocumentUploadCommand.forwardHeaders` 与 cancel 请求中的转发头均被 JSON 忽略，避免 Cookie 进入下游请求体、multipart form 或文档元数据。
 
-Relay Runtime 请求与响应均经过 adapter 防腐层：应用层使用 `AgentRuntimeRequest`，stream-http 会映射为 Relay 专用 wire DTO；relay-websocket 会映射为 Relay `config/user-message` 帧。`runtimeSessionMode=NEW|RESUME` 由应用层根据 RuntimeBinding 明确传给 adapter，避免 adapter 仅靠 `runtimeSessionId` 空值猜测。下游 plain text、JSON chunk、SSE-like `data:` chunk 或 WebSocket 文本 frame 可选进入 raw log MQ 旁路；relay-websocket 会隔离 `config` 握手阶段 frame，并在 `user-message` 后从 `relay-start`、首个业务帧或 `waiting_user_input/paused` 开始归一化为 ChatService 标准 `ChatEvent`。用户 stop 时，stream-http adapter 通过 HTTP `stopPath` 尽力取消；relay-websocket adapter 若命中本机 active WS，会直接发送 `{"type":"interrupt"}`，若 stop 请求落到其他实例或本机连接已清理，则新建临时 WS，发送 `config(sessionMode=resume, supports_incremental_recovery=true)`，收到 `session-ready` 后发送 `interrupt` 并释放临时连接。本服务取消正确性仍以 cancel flag、DB guarded insert 和 `run.cancelled` 为准。`FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 只用于提高 Relay HTTP WebClient 单个响应 frame 的 codec 解码上限；`FINANCEEX_RELAY_WS_MAX_FRAME_BYTES` 控制 Relay WebSocket 单帧上限。它们不是前端事件大小治理，持续超大对象后续仍应通过 DataBuffer 流式解码和 fragment 分片处理。前端通过 `ConversationTurnStreamDto.payload.encodedItem.data` 消费 `message.delta.payload.delta`、`message.snapshot.payload.content`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.reference`、`runtime.card`、`runtime.event`、`message.completed`、`run.failed` 等稳定事件，不需要理解 Relay 或 domain-agent 原始响应格式。大对象分片不新增顶层事件类型，而是通过 `payload.fragment/itemId/delta/complete` 表达。
+Relay Runtime 请求与响应均经过 adapter 防腐层：应用层使用 `AgentRuntimeRequest`，stream-http 会映射为 Relay 专用 wire DTO；relay-websocket 会映射为 Relay `config/user-message` 帧。`runtimeSessionMode=NEW|RESUME` 由应用层根据 RuntimeBinding 明确传给 adapter，避免 adapter 仅靠 `runtimeSessionId` 空值猜测。下游 plain text、JSON chunk、SSE-like `data:` chunk 或 WebSocket 文本 frame 由 adapter 归一化为 ChatService 标准 `ChatEvent`；relay-websocket 会隔离 `config` 握手阶段 frame，并在 `user-message` 后从 `relay-start`、首个业务帧或 `waiting_user_input/paused` 开始处理用户回答事件。用户 stop 时，stream-http adapter 通过 HTTP `stopPath` 尽力取消；relay-websocket adapter 若命中本机 active WS，会直接发送 `{"type":"interrupt"}`，若 stop 请求落到其他实例或本机连接已清理，则新建临时 WS，发送 `config(sessionMode=resume, supports_incremental_recovery=true)`，收到 `session-ready` 后发送 `interrupt` 并释放临时连接。本服务取消正确性仍以 cancel flag、DB guarded insert 和 `run.cancelled` 为准。`FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 只用于提高 Relay HTTP WebClient 单个响应 frame 的 codec 解码上限；`FINANCEEX_RELAY_WS_MAX_FRAME_BYTES` 控制 Relay WebSocket 单帧上限。它们不是前端事件大小治理，持续超大对象后续仍应通过 DataBuffer 流式解码和 fragment 分片处理。前端通过 `ConversationTurnStreamDto.payload.encodedItem.data` 消费 `message.delta.payload.delta`、`message.snapshot.payload.content`、`runtime.progress`、`runtime.metadata`、`runtime.agent`、`runtime.thinking`、`runtime.tool`、`runtime.reference`、`runtime.card`、`runtime.event`、`message.completed`、`run.failed` 等稳定事件，不需要理解 Relay 或 domain-agent 原始响应格式。大对象分片不新增顶层事件类型，而是通过 `payload.fragment/itemId/delta/complete` 表达。
 
-Relay 响应映射的核心规则是：`type=agent,is_streaming=true` 且包含 `content/context` 时映射为 `message.delta`，用于流式草稿追加；`type=agent,is_streaming=false` 和 `type=generate-response,content非空` 映射为 `message.snapshot`，用于最终正文替换和历史消息保存；纯文本 `steam-complete`、`stream-complete`、`[DONE]` 等终态映射为 `message.completed`；`relay-start/relay-progress/relay-end`、`project_home`、`available-modes`、`agent-call`、`agent-reasoning`、`thinking-operation-*`、`thinking-content-update`、`tool_call_streaming/tool-call-streaming`、`tool-execution`、`session-state`、引用来源类事件等运行过程分别映射为对应 `runtime.*` 事件，并在 run 完成后保存到 `fin_ex_chat_message_part_t`，供历史消息回显。Relay `type=tool-structured-result` 表示 Relay 内部 MCP 工具结构化结果，ChatService 会读取 `result_data/resultData` 下的 `widget.data`，按 DomainAgent 风格规则映射为 `message.delta`、`runtime.progress`、`runtime.reference` 或 `runtime.card`，并把 `sourceType` 标记为 `relay-content`、`relay-processResult`、`relay-searchList`、`relay-sourcesDocuments`、`relay-diyCardScene` 等。未知合法 JSON object 才进入脱敏限长后的 `runtime.event.payload.sourcePayload`。Relay 原始 `type` 只进入 payload 的 `sourceType` 或 raw log，不能作为 ChatService 顶层 `event_type`。
+Relay 响应映射的核心规则是：`type=agent,is_streaming=true` 且包含 `content/context` 时映射为 `message.delta`，用于流式草稿追加；`type=agent,is_streaming=false` 和 `type=generate-response,content非空` 映射为 `message.snapshot`，用于最终正文替换和历史消息保存；纯文本 `steam-complete`、`stream-complete`、`[DONE]` 等终态映射为 `message.completed`；`relay-start/relay-progress/relay-end`、`project_home`、`available-modes`、`agent-call`、`agent-reasoning`、`thinking-operation-*`、`thinking-content-update`、`tool_call_streaming/tool-call-streaming`、`tool-execution`、`session-state`、引用来源类事件等运行过程分别映射为对应 `runtime.*` 事件，并在 run 完成后保存到 `fin_ex_chat_message_part_t`，供历史消息回显。Relay `type=tool-structured-result` 表示 Relay 内部 MCP 工具结构化结果，ChatService 会读取 `result_data/resultData` 下的 `widget.data`，按 DomainAgent 风格规则映射为 `message.delta`、`runtime.progress`、`runtime.reference` 或 `runtime.card`，并把 `sourceType` 标记为 `relay-content`、`relay-processResult`、`relay-searchList`、`relay-sourcesDocuments`、`relay-diyCardScene` 等。未知合法 JSON object 才进入脱敏限长后的 `runtime.event.payload.sourcePayload`。Relay 原始 `type` 只进入 payload 的 `sourceType`，不能作为 ChatService 顶层 `event_type`。
 
 domain-agent DomainAgent 指定调用响应也遵守同一标准事件契约：`content` 中 `<think>...</think>` 片段映射为 `runtime.thinking`，不会写入 assistant 正文；非 think 内容映射为 `message.delta`；`processResult` 映射为 `runtime.progress`；`searchList/sourcesDocuments` 映射为 `runtime.reference`；`cardUrl/diyCardScene/cardList/openCard` 映射为 `runtime.card`。如果 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 等对象被下游网络 chunk 截断，服务端不会把半截内容解析为 invalid-json，而是在对应的 `runtime.card/runtime.reference/runtime.progress` payload 中携带 `fragment=true`、`itemId`、`delta` 和 `complete`；前端可按 `payload.itemId` 拼接，不应把这些 runtime 片段拼入 assistant 正文。当前 domain-agent 协议下卡片字段通常不会在同一个 chunk 中同时出现，卡片事件会保留原始 `sourceType`，同帧的 `intent/domainAgentId` 会保留在 card payload 中；`endFlag=true` 映射为 `message.completed`。
 

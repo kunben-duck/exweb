@@ -8,7 +8,6 @@ import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCa
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
-import com.huawei.finance.front.one.application.service.runtime.RuntimeRawStreamLogService;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import io.netty.channel.ChannelOption;
@@ -25,7 +24,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -46,7 +44,7 @@ import reactor.netty.http.client.HttpClient;
  * Relay WebSocket 普通问答 adapter。
  *
  * <p>每个 ChatService run 都建立一条短生命周期下游 WebSocket，先完成 {@code config} 阶段，再发送
- * {@code user-message}。配置阶段 frame 只进入 raw log 排障链路，不进入 ChatService 标准事件流；{@code user-message}
+ * {@code user-message}。配置阶段 frame 只用于握手判定，不进入 ChatService 标准事件流；{@code user-message}
  * 之后的下游 frame 才复用 {@link RelayRuntimeResponseNormalizer} 转为标准事件。本轮只支持普通问答；
  * {@code approval-request} 等 HITL 协议事件先按 runtime 事件透传，不进入等待用户状态。</p>
  */
@@ -61,7 +59,6 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     private final RelayAgentProperties properties;
     private final AgentRuntimeForwardCookieProperties forwardCookieProperties;
     private final RelayRuntimeResponseNormalizer responseNormalizer;
-    private final RuntimeRawStreamLogService rawStreamLogService;
     private final WebSocketClient webSocketClient;
     /** Active run -> outbound exchange, used only for best-effort Relay WS interrupt on stop/delete. */
     private final ConcurrentHashMap<String, ActiveRelayWebSocketExchange> activeExchanges = new ConcurrentHashMap<>();
@@ -70,24 +67,19 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     public RelayWebSocketRuntimeAdapter(ObjectMapper objectMapper,
                                         RelayAgentProperties properties,
                                         AgentRuntimeForwardCookieProperties forwardCookieProperties,
-                                        RelayRuntimeResponseNormalizer responseNormalizer,
-                                        ObjectProvider<RuntimeRawStreamLogService> rawStreamLogServiceProvider) {
-        this(objectMapper, properties, forwardCookieProperties, responseNormalizer,
-                rawStreamLogServiceProvider == null ? null : rawStreamLogServiceProvider.getIfAvailable(),
-                webSocketClient(properties));
+                                        RelayRuntimeResponseNormalizer responseNormalizer) {
+        this(objectMapper, properties, forwardCookieProperties, responseNormalizer, webSocketClient(properties));
     }
 
     RelayWebSocketRuntimeAdapter(ObjectMapper objectMapper,
                                  RelayAgentProperties properties,
                                  AgentRuntimeForwardCookieProperties forwardCookieProperties,
                                  RelayRuntimeResponseNormalizer responseNormalizer,
-                                 RuntimeRawStreamLogService rawStreamLogService,
                                  WebSocketClient webSocketClient) {
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.forwardCookieProperties = forwardCookieProperties;
         this.responseNormalizer = responseNormalizer;
-        this.rawStreamLogService = rawStreamLogService;
         this.webSocketClient = webSocketClient;
     }
 
@@ -118,9 +110,6 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                                 .map(WebSocketMessage::getPayloadAsText)
                                 .doOnNext(frame -> validateFrameSize(frame, request.runId()))
                                 .timeout(websocketProperties().getIdleTimeout());
-                        if (rawStreamLogService != null) {
-                            frames = rawStreamLogService.capture(frames, request, "relay", ADAPTER_NAME);
-                        }
                         Flux<ChatEvent> normalized = userMessageFrames(frames, request, exchange::send)
                                 .transform(frameStream -> normalizeFrames(frameStream, request, messageCompleted))
                                 .doOnNext(sink::next)
@@ -397,7 +386,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         try {
             JsonNode root = objectMapper.readTree(frame);
             String type = RelayRuntimeResponseNormalizer.normalizeTypeName(text(root.path("type")));
-            // Relay config phase has a single release signal. Other initialization frames stay in raw log only.
+            // Relay config phase has a single release signal. Other initialization frames are isolated here.
             return "session-ready".equals(type);
         } catch (JsonProcessingException ex) {
             return false;

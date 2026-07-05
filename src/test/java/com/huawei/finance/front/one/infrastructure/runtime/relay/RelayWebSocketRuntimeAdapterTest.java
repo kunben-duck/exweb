@@ -480,7 +480,6 @@ class RelayWebSocketRuntimeAdapterTest {
                 properties,
                 new AgentRuntimeForwardCookieProperties(),
                 new RelayRuntimeResponseNormalizer(objectMapper),
-                null,
                 client);
     }
 

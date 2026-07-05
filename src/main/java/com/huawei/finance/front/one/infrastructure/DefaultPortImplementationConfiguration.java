@@ -20,8 +20,8 @@ import org.springframework.context.annotation.Configuration;
  *
  * <p>本项目按 Bean 角色选择注册方式：普通业务服务使用 {@code @Service/@Component/@Repository}；
  * 按配置切换的实现使用 {@code @ConditionalOnProperty/@ConditionalOnExpression}；简单的企业可替换
- * 默认 Port 实现在这里使用 {@code @Bean + @ConditionalOnMissingBean} 注册。像 raw log MQ publisher
- * 这类需要按外部 SDK 可用性选择实现的默认 port，会放在对应基础设施专属配置类中。</p>
+ * 默认 Port 实现在这里使用 {@code @Bean + @ConditionalOnMissingBean} 注册。依赖外部 SDK 的复杂
+ * 默认 port，应放在对应基础设施专属配置类中。</p>
  */
 @Configuration(proxyBeanMethods = false)
 public class DefaultPortImplementationConfiguration {

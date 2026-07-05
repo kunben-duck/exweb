@@ -287,34 +287,6 @@ CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_event_owner_session_seq
 CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_event_owner_run_seq
     ON fin_ex_chat_event_t(tenant_id, user_id, run_id, seq);
 
-CREATE TABLE IF NOT EXISTS fin_ex_runtime_raw_stream_log_t (
-    id VARCHAR(64) PRIMARY KEY,
-    tenant_id VARCHAR(64) NOT NULL,
-    user_id VARCHAR(64) NOT NULL,
-    session_id VARCHAR(64) NOT NULL,
-    run_id VARCHAR(64) NOT NULL,
-    runtime_provider VARCHAR(128) NOT NULL,
-    api_adapter VARCHAR(128) NOT NULL,
-    chunk_index BIGINT NOT NULL,
-    raw_content TEXT NOT NULL,
-    raw_content_hash VARCHAR(128) NOT NULL,
-    content_length INTEGER NOT NULL,
-    source_content_length INTEGER NOT NULL,
-    chunk_count INTEGER NOT NULL,
-    split_part_index INTEGER NOT NULL DEFAULT 0,
-    split_part_count INTEGER NOT NULL DEFAULT 0,
-    truncated BOOLEAN NOT NULL DEFAULT FALSE,
-    terminal BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_fin_ex_runtime_raw_stream_log_owner_run_chunk
-    ON fin_ex_runtime_raw_stream_log_t(tenant_id, user_id, session_id, run_id, chunk_index);
-CREATE INDEX IF NOT EXISTS idx_fin_ex_runtime_raw_stream_log_run_chunk
-    ON fin_ex_runtime_raw_stream_log_t(run_id, chunk_index);
-CREATE INDEX IF NOT EXISTS idx_fin_ex_runtime_raw_stream_log_created_at
-    ON fin_ex_runtime_raw_stream_log_t(created_at);
-
 CREATE TABLE IF NOT EXISTS fin_ex_uploaded_document_t (
     id VARCHAR(64) PRIMARY KEY,
     tenant_id VARCHAR(64) NOT NULL,
@@ -459,7 +431,7 @@ COMMENT ON COLUMN fin_ex_chat_share_t.visibility IS '访问模型，首版固定
 COMMENT ON COLUMN fin_ex_chat_share_t.status IS '分享状态，ACTIVE 表示可访问，REVOKED 表示创建者或删除会话后撤销。';
 COMMENT ON COLUMN fin_ex_chat_share_t.expires_at IS '分享过期时间；为空表示不过期。';
 COMMENT ON COLUMN fin_ex_chat_share_t.revoked_at IS '分享撤销时间；未撤销为空。';
-COMMENT ON COLUMN fin_ex_chat_share_t.snapshot_json IS '固定展示快照 JSON，只保存 question、answer、visible=true 的 parts 和附件展示信息；不保存反馈、raw log、Cookie 或鉴权信息。';
+COMMENT ON COLUMN fin_ex_chat_share_t.snapshot_json IS '固定展示快照 JSON，只保存 question、answer、visible=true 的 parts 和附件展示信息；不保存反馈、下游原始响应、Cookie 或鉴权信息。';
 COMMENT ON COLUMN fin_ex_chat_share_t.created_at IS '分享创建时间。';
 COMMENT ON COLUMN fin_ex_chat_share_t.updated_at IS '分享最后更新时间。';
 
@@ -557,25 +529,6 @@ COMMENT ON COLUMN fin_ex_chat_run_execution_t.updated_at IS '执行控制面记�
 COMMENT ON SEQUENCE fin_ex_chat_event_seq IS '聊天事件恢复游标序号生成器，由数据库统一生成 seq，供 WebSocket/SSE 断点恢复使用。';
 
 COMMENT ON TABLE fin_ex_chat_event_t IS '聊天事件事实表，保存 ChatService 标准事件，例如 run.started、message.delta、message.snapshot、runtime.progress、runtime.tool、runtime.reference、runtime.card、message.completed、run.completed、run.failed、run.cancelled；tenant_id/user_id/session_id/run_id 是防止多用户、多会话串线的事实边界。';
-COMMENT ON TABLE fin_ex_runtime_raw_stream_log_t IS 'Runtime 原始流响应日志表，保存下游 Relay normalizer 之前的原始响应片段，仅用于排障和协议分析，不作为前端恢复事实源。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.id IS '原始流日志主键，业务生成的 rawlogId。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.tenant_id IS '租户标识，来自本轮 run 的用户上下文。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.user_id IS '用户标识，来自本轮 run 的用户上下文。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.session_id IS 'ChatService 会话 ID。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.run_id IS 'ChatService run ID。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.runtime_provider IS 'Runtime provider，例如 relay。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.api_adapter IS 'Runtime API adapter，例如 relay-stream-http。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.chunk_index IS '本 run 内原始日志片段顺序。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.raw_content IS '保存的下游原始响应文本，可能是多个 chunk 合并结果或超大 chunk 分片。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.raw_content_hash IS 'raw_content 的 SHA-256 hash，用于排重和排障。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.content_length IS '本行实际保存的 raw_content 字符长度。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.source_content_length IS '本行对应脱敏前原始内容的原始字符长度；脱敏或截断时可能不同于 content_length。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.chunk_count IS '本行合并的下游原始 chunk 数量。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.split_part_index IS '单个超大 chunk 分片序号；普通合并为 0。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.split_part_count IS '单个超大 chunk 分片总数；普通合并为 0。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.truncated IS '是否确实丢弃了部分原始内容；普通分片不算截断。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.terminal IS '本行是否包含下游流终态标记，例如 steam-complete、stream-complete 或 [DONE]。';
-COMMENT ON COLUMN fin_ex_runtime_raw_stream_log_t.created_at IS '原始流日志写入时间。';
 COMMENT ON COLUMN fin_ex_chat_event_t.id IS '事件主键，业务生成的 eventId。';
 COMMENT ON COLUMN fin_ex_chat_event_t.tenant_id IS '租户标识，来自服务端身份上下文；SSE/WS 恢复查询必须携带该字段。';
 COMMENT ON COLUMN fin_ex_chat_event_t.user_id IS '用户标识，来自服务端身份上下文；SSE/WS 恢复查询必须携带该字段。';

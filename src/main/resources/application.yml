@@ -166,19 +166,6 @@ financeex:
     # 下游流式事件合并后，落库、run 状态推进和实时发布会切换到该专用 IO 调度器，避免占用 Reactor parallel/Servlet 线程。
     event-io-executor-max-size: ${FINANCEEX_CHAT_STREAM_EVENT_IO_EXECUTOR_MAX_SIZE:16}
     event-io-executor-queue-capacity: ${FINANCEEX_CHAT_STREAM_EVENT_IO_EXECUTOR_QUEUE_CAPACITY:10000}
-  runtime-raw-log:
-    # 记录 Relay normalizer 之前的原始响应片段，用于排障和协议分析；不作为前端恢复事实源。
-    # 默认关闭；后续接入企业 MQ 时提供 RuntimeRawStreamLogPublisher bean，并将 enabled 打开。
-    enabled: ${FINANCEEX_RUNTIME_RAW_LOG_ENABLED:false}
-    transport: ${FINANCEEX_RUNTIME_RAW_LOG_TRANSPORT:disabled}
-    coalesce-window: ${FINANCEEX_RUNTIME_RAW_LOG_COALESCE_WINDOW:100ms}
-    max-chars: ${FINANCEEX_RUNTIME_RAW_LOG_MAX_CHARS:4096}
-    hard-max-chars: ${FINANCEEX_RUNTIME_RAW_LOG_HARD_MAX_CHARS:65536}
-    max-rows-per-run: ${FINANCEEX_RUNTIME_RAW_LOG_MAX_ROWS_PER_RUN:1000}
-    redact-sensitive-fields: ${FINANCEEX_RUNTIME_RAW_LOG_REDACT_SENSITIVE_FIELDS:true}
-    consumer-state-idle-ttl: ${FINANCEEX_RUNTIME_RAW_LOG_CONSUMER_STATE_IDLE_TTL:5m}
-    consumer-max-active-run-buffers: ${FINANCEEX_RUNTIME_RAW_LOG_CONSUMER_MAX_ACTIVE_RUN_BUFFERS:1000}
-    consumer-state-cleanup-delay-ms: ${FINANCEEX_RUNTIME_RAW_LOG_CONSUMER_STATE_CLEANUP_DELAY_MS:60000}
   websocket:
     # WebSocket 是用户级连接，事件按 run 级 stream topic 订阅；Redis Pub/Sub 只做跨实例实时扇出。
     # 前端 WS 入口同时支持 WebFlux 与 Servlet/MVC；Servlet 模式的上下文根使用 server.servlet.context-path。

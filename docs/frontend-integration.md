@@ -182,7 +182,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `GET /chat/sessions/page` | Query：`curPage` 当前页，默认 1；`pageSize` 页大小，默认 20 | `items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；item 带 `firstAssistantAnswer` | 页码分页；适合传统分页组件，旧游标接口保持不变 |
 | `GET /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto` | 只拿元数据，不返回历史和流状态 |
 | `GET /chat/sessions/{sessionId}/messages` | Path：`sessionId`；Query：`leafMessageId` 可选，`cursor` 保留，`limit` | `ChatMessagePageDto.items[]`、`nextCursor`；item 可能带 `versionInfo` | 普通聊天页主接口；用 `messageId` 做反馈、分支和重新生成，用 `versionInfo.variants[].switchLeafMessageId` 切换版本 |
-| `GET /chat/sessions/{sessionId}/messages/tree` | Path：`sessionId` | `ChatMessageTreeDto`：`sessionId`、`currentLeafMessageId`、`rootMessageIds[]`、`mapping` | 读取完整可见消息树；不返回 hidden system、raw log 或下游工具原始节点 |
+| `GET /chat/sessions/{sessionId}/messages/tree` | Path：`sessionId` | `ChatMessageTreeDto`：`sessionId`、`currentLeafMessageId`、`rootMessageIds[]`、`mapping` | 读取完整可见消息树；不返回 hidden system 或下游工具原始节点 |
 | `GET /chat/sessions/{sessionId}/messages/{messageId}/variants` | Path：`sessionId`、`messageId` | `ChatMessageDto[]` | 查询完整候选内容和排障；普通聊天页优先使用 `/messages` 的 `versionInfo` |
 | `POST /chat/sessions/{sessionId}/path` | Path：`sessionId`；Body：`leafMessageId` | `ChatSessionDto` | 持久化当前 active leaf；UI 切换可先用 `/messages?leafMessageId=` 刷新，不必阻塞等待该接口 |
 | `POST /chat/sessions/{sessionId}/branches` | Path：源 `sessionId`；Body：`sourceMessageId`、`title` 可选 | 新分支 `ChatSessionDto` | 使用返回的新 `sessionId` 进入分支会话 |
@@ -843,7 +843,7 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages/tree"
 ```
 
 响应中的 `mapping` 只包含当前用户当前会话内可见的 user/assistant 消息；不会返回 hidden system、
-raw log 或下游工具原始节点。每个节点的 `message.attachments` 可用于回显文档附件；每个 assistant 节点仍带 `parts`，前端过程面板应优先使用
+下游工具原始节点。每个节点的 `message.attachments` 可用于回显文档附件；每个 assistant 节点仍带 `parts`，前端过程面板应优先使用
 `part.title/status/channel/displayHint/visible`，而不是解析 Relay 私有 payload。
 
 ### 普通聊天页版本游标
@@ -1205,7 +1205,7 @@ curl http://localhost:8080/api/v1/ex/chat/shares/share_xxx
 - 分享必须登录后访问；默认实现允许同租户登录用户查看，后续企业权限由后端 `ChatShareAccessPolicy` 替换。
 - 分享是固定快照；原会话后续编辑、重新生成、切换版本、反馈变化不会改变分享内容。
 - 快照只包含父 user 问题、assistant 正文、问题附件展示快照和 `visible=true` 的 parts。
-- 快照不包含 feedback、raw log、隐藏/debug parts、Cookie、Authorization 或企业鉴权信息。
+- 快照不包含 feedback、下游原始响应、隐藏/debug parts、Cookie、Authorization 或企业鉴权信息。
 - 附件只用于展示名称、类型、大小和 `documentId`，不授予下载权限。
 - 会话软删除时，当前用户创建的该会话 ACTIVE 分享会被同步撤销。
 
@@ -1514,7 +1514,7 @@ heartbeat 和 done 使用同一个 envelope，不携带 `encodedItem`，也不�
 | `run.failed` | 本轮 run 失败 | 展示错误信息，关闭 loading |
 | `run.cancelled` | 用户停止本轮回答；若 `payload.messageReady=true`，`payload.assistantMessageId` 即为 partial assistant 反馈目标 | 展示已停止，关闭 loading，并在有反馈目标时启用点赞/点踩 |
 
-ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON chunk 或 SSE-like `data:` chunk 归一化成上表事件。Runtime raw log 是可选诊断旁路，默认关闭；后续接入企业 MQ 时，后端可以在 normalizer 之前 best-effort 发布原始 chunk，由消费端异步写入 `fin_ex_runtime_raw_stream_log_t`。raw log 仅用于排障，不参与前端恢复、WebSocket 推送或 assistant 历史消息拼接；前端不得解析 Relay 原始响应，只消费 ChatService 标准 payload：
+ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON chunk 或 SSE-like `data:` chunk 归一化成上表事件。下游原始响应不再持久化，也不参与前端恢复、WebSocket 推送或 assistant 历史消息拼接；前端不得解析 Relay 原始响应，只消费 ChatService 标准 payload：
 
 Relay stream-http adapter 会通过 `FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 配置单个响应 frame 的 WebClient codec 上限，默认 `1MB`，用于避免 Spring 默认 256KB 限制过早拦截较大的引用或卡片响应。Relay WebSocket adapter 始终使用短连接：每个 run 新建下游 WS，先发送 `config`，只以 `session-ready` 作为 config 阶段唯一完成信号，丢弃配置阶段初始化响应，再发送 `user-message`，本轮输出结束后释放连接；后续同会话请求会重新建连，并通过 RuntimeBinding 中的 `runtimeSessionId` 发送 `sessionMode=resume` 和 `supports_incremental_recovery=true`。配置阶段若收到 `error/clear-session/session-mismatch` 会直接失败，不等待握手超时。`user-message` 后会继续丢弃 `relay-start` 前的前置 `session-state=idle/completed/ready/running/agent_thinking` 和迟到 `config`，并从 `relay-start`、首个业务帧或 `session-state=waiting_user_input/paused` 开始转成前端可见标准事件。`FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT` 默认 `10s`，用于限制配置阶段等待时间；`FINANCEEX_RELAY_WS_MAX_FRAME_BYTES` 控制单个下游 WS 文本帧上限，默认 `1MB`。这些配置不改变前端协议，也不负责拆分超大事件；如果下游长期返回超大 `sourcesDocuments/diyCardScene/cardList`，仍需要后端后续引入 DataBuffer 流式解码和 fragment 分片治理。当前 `session-state=waiting_user_input` 在 Relay WS 普通问答 adapter 中只作为本次下游连接终态，后端会补齐 `message.completed/run.completed`，不会生成 `run.waiting_user`；`session-state=paused` 仅作为 interrupt 确认。
 
@@ -1544,7 +1544,7 @@ Relay 映射规则：
 - domain-agent DomainAgent 指定调用响应中，`content` 的 `<think>...</think>` 片段映射为 `runtime.thinking`，不会拼入 assistant 正文；非 think 内容映射为 `message.delta`。`traceId/sessionId/messageId` 映射为 `runtime.metadata`；单独出现的 `intent/domainAgentId` 映射为 `runtime.metadata`；如果 `intent/domainAgentId` 与某个卡片字段同帧出现，则一起放入 `runtime.card`。当前 domain-agent 协议下 `cardUrl/diyCardScene/cardList/openCard` 通常不会在同一个 chunk 中同时出现，因此卡片事件会保留原始 `sourceType`，例如 `diyCardScene` 或 `openCard`；服务端仅保留 `sourceType=domain-agent-card/cardType=mixed` 作为非预期混合帧的防御兜底。`processResult` 映射为 `runtime.progress`，`searchList/sourcesDocuments` 映射为 `runtime.reference`，`endFlag=true` 映射为 `message.completed`。
 - 当 domain-agent 的 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 等对象被网络截断到多个 chunk 时，服务端会先识别字段类型，再使用对应稳定事件类型输出分片：`runtime.card`、`runtime.reference` 或 `runtime.progress`。前端按 `payload.fragment=true` 判断分片，按 `payload.itemId` 拼接相同对象的 `payload.delta`；`payload.complete=true` 表示该对象片段结束。fragment 只用于卡片、引用、进度等过程展示，不应拼入 assistant 正文。
 - 未识别合法 JSON 映射为 `runtime.event`。`sourcePayload` 会脱敏和限长，不能作为稳定字段依赖。
-- Relay 原始 `type` 不会成为 ChatService 顶层 `type`，只会作为 `payload.sourceType` 或 raw log 排障信息。
+- Relay 原始 `type` 不会成为 ChatService 顶层 `type`，只会作为 `payload.sourceType` 等受控字段返回。
 
 当前生产版本按下游标准事件原粒度输出 `message.delta`，前端只需要按 `seq`
 顺序追加 `payload.delta`，不要假设一个 delta 等于一个 token，也不要依赖任何 Relay 私有字段。

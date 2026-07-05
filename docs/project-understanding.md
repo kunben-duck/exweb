@@ -56,36 +56,7 @@ rg -n "methodName|className" src/main/java/com/huawei/finance/front/one
 - `infrastructure/persistence/MyBatisChatEventStore.java`
 - `MyBatisChatEventStore#appendWithExecutionGuard(...)`
 
-### 2.3 RuntimeRawStreamLog：下游原始流日志
-
-表：`fin_ex_runtime_raw_stream_log_t`
-
-用途：
-
-- 保存 Relay normalizer 之前的原始流响应片段。
-- 只用于排障、协议分析和下游问题定位，不作为前端恢复事实源。
-- 可能保存多个 raw chunk 的窗口合并结果，也可能保存单个超大 chunk 的分片。
-- `truncated=true` 只表示确实丢弃了原始内容；普通分片不算截断。
-- ChatService 主链路可选通过 `RuntimeRawStreamLogPublisher` 把 raw chunk 发布到企业 MQ；合并、脱敏、hash、分片和写表由 MQ 消费端异步完成。
-- raw log 默认关闭；MQ 不可用、发送失败或 raw log 写表失败都不能影响 ChatEvent 入库、WebSocket 推送或 run 生命周期。
-
-关键代码：
-
-- `application/service/runtime/RuntimeRawStreamLogService.java`
-- `RuntimeRawStreamLogService#capture(...)`
-- `application/service/runtime/RuntimeRawStreamLogProcessor.java`
-- `application/integration/conversation/RuntimeRawStreamLogPublisher.java`
-- `application/integration/conversation/RuntimeRawStreamLogConsumer.java`
-- `infrastructure/messaging/NoopRuntimeRawStreamLogPublisher.java`
-- `infrastructure/persistence/MyBatisRuntimeRawStreamLogRepository.java`
-- `infrastructure/persistence/RuntimeRawStreamLogMapper.java`
-
-排查建议：
-
-- 如果 Relay 返回内容看起来正确，但 ChatEvent 类型不对，先查 raw log 确认下游原始帧，再看 `RelayRuntimeResponseNormalizer` 的映射。
-- raw log MQ 发布或写入失败不会影响 run 主链路，因此不能把 raw log 当作可靠恢复或前端展示来源。
-
-### 2.4 ChatRun：一次后台回答
+### 2.3 ChatRun：一次后台回答
 
 表：
 
@@ -341,7 +312,6 @@ RelayStreamHttpRuntimeAdapter#applyForwardedCookie(...)
 - 请求体由 `AgentRuntimeRequest` 映射为 Relay 专用 `RelayRuntimeQueryRequest`，只包含下游需要的 allowlist 字段。
 - 可选透传 Cookie 到 HTTP header。
 - 使用 `bodyToFlux(String.class)` 接收下游响应。
-- 在 normalizer 之前调用 `RuntimeRawStreamLogService#capture(...)` 发布 raw chunk 到 MQ 旁路。
 - 通过 `RelayRuntimeResponseNormalizer` 把 plain text、JSON chunk、SSE-like `data:` chunk 转成标准 ChatEvent。
 - Relay `type=agent,is_streaming=true` 的 `content/context` 默认转成 `message.delta`；`type=agent,is_streaming=false` 和 `type=generate-response` 且 `content` 非空时转成 `message.snapshot`；`steam-complete/stream-complete/[DONE]` 转成 `message.completed`。
 - Relay `type=tool-structured-result` 是 MCP 工具结构化结果帧，normalizer 会读取 `result_data/resultData.widget.data` 后按字段映射：`content` -> `message.delta(sourceType=relay-content)`，`processResult` -> `runtime.progress(sourceType=relay-processResult)`，`searchList/sourcesDocuments` -> `runtime.reference(sourceType=relay-*)`，`cardUrl/diyCardScene/cardList/openCard` -> `runtime.card(sourceType=relay-*)`。其中 `is_last` 只是工具分片上下文，不触发 `message.completed`。
@@ -352,7 +322,7 @@ RelayStreamHttpRuntimeAdapter#applyForwardedCookie(...)
 重点排查：
 
 - Relay 返回了数据但前端没看到：先确认这里是否产生了 `MessageDeltaEvent` 或 `RuntimeEvent`。
-- Relay 响应格式不是纯字符串片段：先看 raw log，再看 `RelayRuntimeResponseNormalizer` 是否把正文转为 `message.delta/message.snapshot`，或把非正文扩展帧转为对应 `runtime.*`。不要把 Relay 原始 JSON 作为 ChatService 顶层事件透传。
+- Relay 响应格式不是纯字符串片段：先看 `RelayRuntimeResponseNormalizer` 是否把正文转为 `message.delta/message.snapshot`，或把非正文扩展帧转为对应 `runtime.*`。不要把 Relay 原始 JSON 作为 ChatService 顶层事件透传。
 - 第三方 Cookie 泄漏风险：确认只有可信 Relay adapter、DomainAgent adapter 和配置 `forward-cookie=true` 的 HTTP 文档 provider upload 调用 `applyForwardedCookie(...)`，且 Cookie 没有进入请求体、multipart form 或元数据。
 
 ## 7. Relay 事件如何变成可恢复事件流

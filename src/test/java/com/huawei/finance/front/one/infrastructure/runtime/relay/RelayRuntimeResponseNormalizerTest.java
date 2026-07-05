@@ -54,6 +54,20 @@ class RelayRuntimeResponseNormalizerTest {
     }
 
     @Test
+    void sessionReadyBecomesRuntimeMetadataWithRuntimeSessionId() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1",
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("runtime.metadata");
+        assertThat(events.getFirst().payload())
+                .containsEntry("metadataType", "relay_session_ready")
+                .containsEntry("sourceType", "session-ready")
+                .containsEntry("runtimeSessionId", "relay-session-1")
+                .containsEntry("sessionMode", "new");
+    }
+
+    @Test
     void relayAgentStreamingChunkBecomesAssistantDeltaAndKeepsRuntimeSession() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1",
                 "{\"type\":\"agent\",\"agent_name\":\"delegate_agent\",\"content\":\"你好\","

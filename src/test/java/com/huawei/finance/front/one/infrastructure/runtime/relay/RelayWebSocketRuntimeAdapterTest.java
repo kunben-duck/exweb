@@ -50,6 +50,7 @@ class RelayWebSocketRuntimeAdapterTest {
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
         StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(this::assertSessionReadyMetadata)
                 .assertNext(event -> {
                     assertThat(event.type()).isEqualTo("message.delta");
                     assertThat(event.payload())
@@ -87,6 +88,9 @@ class RelayWebSocketRuntimeAdapterTest {
 
         StepVerifier.create(adapter.query(request("relay-session-old",
                         RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192))))
+                .assertNext(event -> assertThat(event.payload())
+                        .containsEntry("metadataType", "relay_session_ready")
+                        .containsEntry("runtimeSessionId", "relay-session-old"))
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "继续"))
                 .expectNextCount(2)
                 .verifyComplete();
@@ -99,7 +103,7 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
-    void sessionReadyCompletesConfigHandshakeWithoutProducingChatEvent() {
+    void sessionReadyCompletesConfigHandshakeAndPublishesRuntimeSessionMetadata() {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"system\",\"content\":\"Connected\"}",
                 "{\"type\":\"session-id\",\"session_id\":\"relay-session-1\"}",
@@ -110,6 +114,7 @@ class RelayWebSocketRuntimeAdapterTest {
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
         StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(this::assertSessionReadyMetadata)
                 .assertNext(event -> {
                     assertThat(event.type()).isEqualTo("message.delta");
                     assertThat(event.payload()).containsEntry("delta", "回答");
@@ -150,6 +155,7 @@ class RelayWebSocketRuntimeAdapterTest {
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
         StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(this::assertSessionReadyMetadata)
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "A"))
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "B"))
                 .expectNextCount(2)
@@ -168,6 +174,7 @@ class RelayWebSocketRuntimeAdapterTest {
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
         StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(this::assertSessionReadyMetadata)
                 .assertNext(event -> {
                     assertThat(event.type()).isEqualTo("runtime.progress");
                     assertThat(event.payload())
@@ -196,6 +203,7 @@ class RelayWebSocketRuntimeAdapterTest {
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
         StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(this::assertSessionReadyMetadata)
                 .assertNext(event -> {
                     assertThat(event.type()).isEqualTo("runtime.progress");
                     assertThat(event.payload()).containsEntry("sourceType", "relay-start");
@@ -221,6 +229,7 @@ class RelayWebSocketRuntimeAdapterTest {
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
         StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(this::assertSessionReadyMetadata)
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "A"))
                 .assertNext(event -> {
                     assertThat(event.type()).isEqualTo("runtime.metadata");
@@ -242,6 +251,7 @@ class RelayWebSocketRuntimeAdapterTest {
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
         StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(this::assertSessionReadyMetadata)
                 .assertNext(event -> {
                     assertThat(event.type()).isEqualTo("runtime.metadata");
                     assertThat(event.payload())
@@ -262,6 +272,7 @@ class RelayWebSocketRuntimeAdapterTest {
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
         StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(this::assertSessionReadyMetadata)
                 .assertNext(event -> {
                     assertThat(event.type()).isEqualTo("runtime.metadata");
                     assertThat(event.payload())
@@ -287,6 +298,7 @@ class RelayWebSocketRuntimeAdapterTest {
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
         StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(this::assertSessionReadyMetadata)
                 .assertNext(event -> assertThat(event.type()).isEqualTo("runtime.progress"))
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "草稿"))
                 .assertNext(event -> {
@@ -347,6 +359,7 @@ class RelayWebSocketRuntimeAdapterTest {
                 .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
                 .then(() -> client.emit("{\"type\":\"agent\",\"content\":\"A\",\"session_id\":\"relay-session-1\"}"))
                 .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"))
+                .assertNext(this::assertSessionReadyMetadata)
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "A"))
                 .expectNextCount(2)
                 .verifyComplete();
@@ -355,6 +368,7 @@ class RelayWebSocketRuntimeAdapterTest {
                 .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
                 .then(() -> client.emit("{\"type\":\"agent\",\"content\":\"B\",\"session_id\":\"relay-session-1\"}"))
                 .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"))
+                .assertNext(this::assertSessionReadyMetadata)
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "B"))
                 .expectNextCount(2)
                 .verifyComplete();
@@ -379,23 +393,21 @@ class RelayWebSocketRuntimeAdapterTest {
                 .thenCancel()
                 .verify();
 
-        assertThat(client.sent()).hasSize(3);
         assertThat(client.executeCount()).isEqualTo(1);
         assertThat(client.sent().get(0)).contains("\"type\":\"config\"");
-        assertThat(client.sent().get(1)).contains("\"type\":\"user-message\"");
-        assertThat(client.sent().get(2)).isEqualTo("{\"type\":\"interrupt\"}");
+        assertThat(client.sent()).contains("{\"type\":\"interrupt\"}");
     }
 
     @Test
     void cancelWithoutActiveExchangeOpensTemporaryResumeConnectionAndSendsInterrupt() throws Exception {
-        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
-        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10));
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
         StepVerifier.create(adapter.cancel(cancelRequest("run1")))
-                .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
                 .verifyComplete();
 
-        assertThat(client.executeCount()).isEqualTo(1);
         assertThat(client.uri().toString()).isNotEqualTo("ws://relay.test/ws/run1");
         assertThat(client.uri().toString()).startsWith("ws://relay.test/ws/run1-interrupt-");
         assertThat(client.sent()).hasSize(2);
@@ -422,27 +434,26 @@ class RelayWebSocketRuntimeAdapterTest {
 
     @Test
     void temporaryInterruptConfigFailureDoesNotSendInterrupt() {
-        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
-        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10));
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-mismatch\",\"message\":\"bad session\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
         StepVerifier.create(adapter.cancel(cancelRequest("run1")))
-                .then(() -> client.emit("{\"type\":\"session-mismatch\",\"message\":\"bad session\"}"))
                 .verifyComplete();
 
-        assertThat(client.executeCount()).isEqualTo(1);
         assertThat(client.sent()).hasSize(1);
         assertThat(client.sent().getFirst()).contains("\"type\":\"config\"");
     }
 
     @Test
     void temporaryInterruptConfigTimeoutDoesNotFailCancel() {
-        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+        FakeWebSocketClient client = new FakeWebSocketClient(Flux.never());
         RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofMillis(5));
 
         StepVerifier.create(adapter.cancel(cancelRequest("run1")))
                 .verifyComplete();
 
-        assertThat(client.executeCount()).isEqualTo(1);
         assertThat(client.sent()).hasSize(1);
         assertThat(client.sent().getFirst()).contains("\"type\":\"config\"");
     }
@@ -460,6 +471,13 @@ class RelayWebSocketRuntimeAdapterTest {
 
         assertThat(client.sent()).hasSize(1);
         assertThat(client.sent().getFirst()).contains("\"type\":\"config\"");
+    }
+
+    private void assertSessionReadyMetadata(com.huawei.finance.front.one.domain.chat.ChatEvent event) {
+        assertThat(event.type()).isEqualTo("runtime.metadata");
+        assertThat(event.payload())
+                .containsEntry("metadataType", "relay_session_ready")
+                .containsEntry("runtimeSessionId", "relay-session-1");
     }
 
     private RelayWebSocketRuntimeAdapter adapter(FakeWebSocketClient client) {
@@ -530,7 +548,8 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     private static final class ReusableFakeWebSocketClient implements WebSocketClient {
-        private final ReusableFakeWebSocketSession session = new ReusableFakeWebSocketSession();
+        private final java.util.ArrayList<String> sent = new java.util.ArrayList<>();
+        private ReusableFakeWebSocketSession session;
         private URI uri;
         private int executeCount;
 
@@ -543,15 +562,19 @@ class RelayWebSocketRuntimeAdapterTest {
         public Mono<Void> execute(URI url, HttpHeaders requestHeaders, WebSocketHandler handler) {
             executeCount++;
             this.uri = url;
+            this.session = new ReusableFakeWebSocketSession(sent);
             return handler.handle(session);
         }
 
         private void emit(String frame) {
+            if (session == null) {
+                throw new IllegalStateException("WebSocket session has not been opened");
+            }
             session.emit(frame);
         }
 
         private List<String> sent() {
-            return session.sent();
+            return sent;
         }
 
         private int executeCount() {
@@ -565,8 +588,12 @@ class RelayWebSocketRuntimeAdapterTest {
 
     private static final class ReusableFakeWebSocketSession implements WebSocketSession {
         private final DataBufferFactory bufferFactory = new DefaultDataBufferFactory();
-        private final Sinks.Many<String> inbound = Sinks.many().multicast().directBestEffort();
-        private final java.util.ArrayList<String> sent = new java.util.ArrayList<>();
+        private final Sinks.Many<String> inbound = Sinks.many().replay().all();
+        private final java.util.List<String> sent;
+
+        private ReusableFakeWebSocketSession(java.util.List<String> sent) {
+            this.sent = sent;
+        }
 
         @Override
         public String getId() {

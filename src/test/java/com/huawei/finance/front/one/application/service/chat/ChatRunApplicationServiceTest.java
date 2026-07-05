@@ -18,6 +18,7 @@ import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
 import com.huawei.finance.front.one.domain.chat.RunCancelledEvent;
 import com.huawei.finance.front.one.domain.chat.RunCompletedEvent;
+import com.huawei.finance.front.one.domain.chat.RuntimeEvent;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
 import java.time.Instant;
 import java.util.HashMap;
@@ -100,6 +101,20 @@ class ChatRunApplicationServiceTest {
 
         assertThat(repository.saved.status()).isEqualTo(ChatRunStatus.RUNNING);
         assertThat(repository.saved.lastSeq()).isNull();
+    }
+
+    @Test
+    void observeRuntimeMetadataUpdatesRuntimeSessionIdForCrossInstanceCancel() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRunApplicationService service = service(repository, cache);
+        repository.save(runningRun().withRuntimeSessionId("generated-session"));
+
+        service.observeEvent(RuntimeEvent.metadata("run1", "session1", Map.of(
+                "metadataType", "relay_session_ready",
+                "runtimeSessionId", "relay-session-actual")));
+
+        assertThat(repository.saved.runtimeSessionId()).isEqualTo("relay-session-actual");
     }
 
     @Test

@@ -145,6 +145,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     }
                     ActiveRelayWebSocketExchange exchange = activeExchanges.remove(request.runId());
                     if (exchange != null) {
+                        log.info("Relay WebSocket interrupt uses active exchange. runId={}", request.runId());
                         return Mono.fromRunnable(() -> exchange.interrupt(request.runId()));
                     }
                     return interruptViaResumeConnection(request);
@@ -185,8 +186,10 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     .switchIfEmpty(Mono.error(new RelayRuntimeProtocolException("Relay WebSocket closed before "
                             + "interrupt config handshake completed. runId=" + request.runId())))
                     .doOnNext(ignored -> emitInterrupt(outbound, request.runId()))
-                    .then()
+                    .then(session.close())
                     .doOnError(error -> outbound.tryEmitError(error));
+            log.info("Relay WebSocket interrupt opens temporary resume connection. runId={}, runtimeSessionId={}, clientId={}",
+                    request.runId(), request.runtimeSessionId(), clientId);
             return Mono.when(outboundSend, releaseInterrupt);
         });
     }
@@ -238,6 +241,12 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     }
                     if (configHandshakeCompleteFrame(frame) && userMessageReleased.compareAndSet(false, true)) {
                         handshakeTimeout.dispose();
+                        /*
+                         * session-ready 是 config 阶段唯一完成信号，也携带 Relay 确认的 session_id。
+                         * 这里只放行这一条受控 metadata，让 run 表和 RuntimeBinding 尽早学习真实
+                         * runtimeSessionId；其他 config 初始化帧仍然隔离，避免污染用户回答流。
+                         */
+                        sink.next(frame);
                         try {
                             userMessageSender.accept(userMessage(request));
                         } catch (RuntimeException ex) {

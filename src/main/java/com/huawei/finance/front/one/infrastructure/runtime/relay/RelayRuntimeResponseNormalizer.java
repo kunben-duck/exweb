@@ -338,6 +338,7 @@ public class RelayRuntimeResponseNormalizer {
             case "project-home" -> RuntimeEvent.metadata(runId, sessionId, projectHomePayload(root, sourceType));
             case "available-modes", "availbale-modes" ->
                     RuntimeEvent.metadata(runId, sessionId, availableModesPayload(root, sourceType));
+            case "session-ready" -> RuntimeEvent.metadata(runId, sessionId, sessionReadyPayload(root, sourceType));
             case "agent-call" -> RuntimeEvent.agent(runId, sessionId, agentCallPayload(root, sourceType));
             case "agent-reasoning" -> RuntimeEvent.thinking(runId, sessionId,
                     agentReasoningPayload(root, sourceType));
@@ -576,6 +577,15 @@ public class RelayRuntimeResponseNormalizer {
             }
             payload.put("modes", List.copyOf(normalizedModes));
         }
+        copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
+        return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> sessionReadyPayload(JsonNode root, String sourceType) {
+        Map<String, Object> payload = basePayload(sourceType);
+        payload.put("metadataType", "relay_session_ready");
+        copyText(root, payload, "runtimeSessionId", RUNTIME_SESSION_FIELDS);
+        copyText(root, payload, "sessionMode", "session_mode", "sessionMode");
         copyAny(root, payload, "timestamp", "timestamp", "time", "created_at");
         return Map.copyOf(payload);
     }

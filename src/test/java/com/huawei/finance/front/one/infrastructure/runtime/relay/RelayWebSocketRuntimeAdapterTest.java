@@ -75,6 +75,86 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(config.path("config").path("appMode").asText()).isEqualTo("delegate");
         assertThat(userMessage.path("type").asText()).isEqualTo("user-message");
         assertThat(userMessage.path("content").asText()).isEqualTo("hello");
+        assertThat(userMessage.has("metadata")).isFalse();
+    }
+
+    @Test
+    void userMessageIncludesSanitizedMetadataWhenPresent() throws Exception {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
+                "{\"type\":\"agent\",\"content\":\"你好\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+        Map<String, Object> metadata = Map.of(
+                "clientTraceId", "trace-1",
+                "source", "web"
+        );
+
+        StepVerifier.create(adapter.query(request(null, RuntimeSessionMode.NEW, "run1", "hello",
+                        metadata, RuntimeForwardHeaders.empty())))
+                .expectNextCount(4)
+                .verifyComplete();
+
+        JsonNode userMessage = objectMapper.readTree(client.sent().get(1));
+        assertThat(userMessage.path("type").asText()).isEqualTo("user-message");
+        assertThat(userMessage.path("metadata").path("clientTraceId").asText()).isEqualTo("trace-1");
+        assertThat(userMessage.path("metadata").path("source").asText()).isEqualTo("web");
+    }
+
+    @Test
+    void userMessageMetadataFiltersSensitiveKeysRecursively() throws Exception {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
+                "{\"type\":\"agent\",\"content\":\"你好\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+        Map<String, Object> metadata = Map.of(
+                "clientTraceId", "trace-1",
+                "token", "bad",
+                "nested", Map.of(
+                        "authorization", "bad",
+                        "safe", "ok"
+                ),
+                "items", List.of(Map.of(
+                        "secret", "bad",
+                        "name", "visible"
+                ))
+        );
+
+        StepVerifier.create(adapter.query(request(null, RuntimeSessionMode.NEW, "run1", "hello",
+                        metadata, RuntimeForwardHeaders.empty())))
+                .expectNextCount(4)
+                .verifyComplete();
+
+        JsonNode userMessage = objectMapper.readTree(client.sent().get(1));
+        JsonNode forwardedMetadata = userMessage.path("metadata");
+        assertThat(forwardedMetadata.path("clientTraceId").asText()).isEqualTo("trace-1");
+        assertThat(forwardedMetadata.has("token")).isFalse();
+        assertThat(forwardedMetadata.path("nested").has("authorization")).isFalse();
+        assertThat(forwardedMetadata.path("nested").path("safe").asText()).isEqualTo("ok");
+        assertThat(forwardedMetadata.path("items").get(0).has("secret")).isFalse();
+        assertThat(forwardedMetadata.path("items").get(0).path("name").asText()).isEqualTo("visible");
+    }
+
+    @Test
+    void userMessageOmitsMetadataWhenAllFieldsAreSensitive() throws Exception {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
+                "{\"type\":\"agent\",\"content\":\"你好\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.query(request(null, RuntimeSessionMode.NEW, "run1", "hello",
+                        Map.of("token", "bad", "authorization", "bad"),
+                        RuntimeForwardHeaders.empty())))
+                .expectNextCount(4)
+                .verifyComplete();
+
+        JsonNode userMessage = objectMapper.readTree(client.sent().get(1));
+        assertThat(userMessage.has("metadata")).isFalse();
     }
 
     @Test
@@ -544,6 +624,12 @@ class RelayWebSocketRuntimeAdapterTest {
 
     private AgentRuntimeRequest request(String runtimeSessionId, RuntimeSessionMode sessionMode, String runId,
                                         String message, RuntimeForwardHeaders forwardHeaders) {
+        return request(runtimeSessionId, sessionMode, runId, message, Map.of(), forwardHeaders);
+    }
+
+    private AgentRuntimeRequest request(String runtimeSessionId, RuntimeSessionMode sessionMode, String runId,
+                                        String message, Map<String, Object> metadata,
+                                        RuntimeForwardHeaders forwardHeaders) {
         return new AgentRuntimeRequest(
                 "tenant1",
                 "user1",
@@ -556,7 +642,7 @@ class RelayWebSocketRuntimeAdapterTest {
                 MemoryContext.empty(),
                 null,
                 null,
-                Map.of(),
+                metadata,
                 forwardHeaders
         );
     }

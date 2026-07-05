@@ -423,7 +423,14 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     }
 
     private String userMessage(AgentRuntimeRequest request) {
-        return toJson(Map.of("type", "user-message", "content", request.message() == null ? "" : request.message()));
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("type", "user-message");
+        message.put("content", request.message() == null ? "" : request.message());
+        Map<String, Object> metadata = RelayRuntimeWireRequestMapper.sanitizedMetadata(request.metadata());
+        if (!metadata.isEmpty()) {
+            message.put("metadata", metadata);
+        }
+        return toJson(message);
     }
 
     private String interruptMessage() {

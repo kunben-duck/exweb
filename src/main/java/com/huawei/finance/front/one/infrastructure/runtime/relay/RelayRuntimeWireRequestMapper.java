@@ -38,7 +38,7 @@ final class RelayRuntimeWireRequestMapper {
         );
     }
 
-    private static Map<String, Object> sanitizedMetadata(Map<String, Object> metadata) {
+    static Map<String, Object> sanitizedMetadata(Map<String, Object> metadata) {
         if (metadata == null || metadata.isEmpty()) {
             return Map.of();
         }

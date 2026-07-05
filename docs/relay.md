@@ -65,7 +65,10 @@ ws://{host}:{port}/ws/{client_id}
 ```json
 {
   "type": "user-message",
-  "content": "你的问题"
+  "content": "你的问题",
+  "metadata": {
+    "clientTraceId": "trace-xxx"
+  }
 }
 ```
 
@@ -73,6 +76,7 @@ ws://{host}:{port}/ws/{client_id}
 |------|------|------|------|
 | type | string | 是 | 固定值 `"user-message"` |
 | content | string | 是 | 用户输入内容 |
+| metadata | object | 否 | 业务扩展元数据；ChatService 会从 `AgentRuntimeRequest.metadata()` 透传非敏感字段，过滤 Cookie、token、Authorization、secret、password 等敏感 key |
 
 > **注意**：`app_mode` 无需传入，后端默认使用 `delegate` 模式。
 

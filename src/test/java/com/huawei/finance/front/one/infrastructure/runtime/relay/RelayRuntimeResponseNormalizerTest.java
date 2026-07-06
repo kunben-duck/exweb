@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class RelayRuntimeResponseNormalizerTest {
@@ -387,6 +388,46 @@ class RelayRuntimeResponseNormalizerTest {
     }
 
     @Test
+    void toolStructuredResultKeepsDeepDynamicResponseWithoutTruncation() {
+        String longText = "x".repeat(2100);
+        StringBuilder dynamicResponse = new StringBuilder("[");
+        for (int i = 0; i < 60; i++) {
+            if (i > 0) {
+                dynamicResponse.append(',');
+            }
+            dynamicResponse.append('"').append("第").append(i).append("段");
+            if (i == 59) {
+                dynamicResponse.append(longText);
+            }
+            dynamicResponse.append('"');
+        }
+        dynamicResponse.append(']');
+        List<ChatEvent> events = normalizer.normalize("run1", "session1",
+                "{\"type\":\"tool-structured-result\",\"result_data\":{\"widget\":{\"data\":{"
+                        + "\"processResult\":{\"dynamicResponse\":" + dynamicResponse + ","
+                        + "\"fixedResponse\":\"为您找到18条文章，引用文章10条\"}"
+                        + "}},\"index\":8,\"total\":690,\"is_last\":false}}");
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("runtime.tool");
+        Map<String, Object> payload = events.getFirst().payload();
+        Map<String, Object> resultData = asMap(payload.get("result_data"));
+        Map<String, Object> widget = asMap(resultData.get("widget"));
+        Map<String, Object> data = asMap(widget.get("data"));
+        Map<String, Object> processResult = asMap(data.get("processResult"));
+        assertThat((List<?>) processResult.get("dynamicResponse"))
+                .hasSize(60)
+                .first()
+                .isEqualTo("第0段");
+        assertThat((List<?>) processResult.get("dynamicResponse"))
+                .element(59)
+                .isEqualTo("第59段" + longText);
+        assertThat(processResult)
+                .containsEntry("fixedResponse", "为您找到18条文章，引用文章10条");
+        assertThat(payload.toString()).doesNotContain("[TRUNCATED]");
+    }
+
+    @Test
     void unknownJsonStillFallsBackToRuntimeEventWithRedaction() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1",
                 "{\"type\":\"custom-event\",\"authorization\":\"Bearer secret\"}");
@@ -405,5 +446,11 @@ class RelayRuntimeResponseNormalizerTest {
                 "{\"type\":\"error\",\"message\":\"relay failed\"}"))
                 .isInstanceOf(RelayRuntimeProtocolException.class)
                 .hasMessage("relay failed");
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> asMap(Object value) {
+        assertThat(value).isInstanceOf(Map.class);
+        return (Map<String, Object>) value;
     }
 }

@@ -29,9 +29,6 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class RelayRuntimeResponseNormalizer {
-    private static final int MAX_SOURCE_PAYLOAD_DEPTH = 6;
-    private static final int MAX_SOURCE_PAYLOAD_STRING_LENGTH = 2048;
-    private static final int MAX_SOURCE_PAYLOAD_ARRAY_SIZE = 50;
     private static final String REDACTED = "[REDACTED]";
 
     private final ObjectMapper objectMapper;
@@ -364,7 +361,7 @@ public class RelayRuntimeResponseNormalizer {
     }
 
     private Map<String, Object> sourcePayload(JsonNode root) {
-        Object sanitized = sanitizeJson(root, "", 0);
+        Object sanitized = sanitizeJson(root, "");
         if (sanitized instanceof Map<?, ?> map) {
             Map<String, Object> result = new LinkedHashMap<>();
             map.forEach((key, value) -> result.put(String.valueOf(key), value));
@@ -373,39 +370,31 @@ public class RelayRuntimeResponseNormalizer {
         return Map.of("value", sanitized);
     }
 
-    private Object sanitizeJson(JsonNode node, String fieldName, int depth) {
+    private Object sanitizeJson(JsonNode node, String fieldName) {
         if (node == null || node.isNull() || node.isMissingNode()) {
             return null;
         }
         if (isSensitiveField(fieldName)) {
             return REDACTED;
         }
-        if (depth >= MAX_SOURCE_PAYLOAD_DEPTH) {
-            return "[TRUNCATED]";
-        }
         if (node.isObject()) {
             Map<String, Object> map = new LinkedHashMap<>();
             Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
             while (fields.hasNext()) {
                 Map.Entry<String, JsonNode> entry = fields.next();
-                map.put(entry.getKey(), sanitizeJson(entry.getValue(), entry.getKey(), depth + 1));
+                map.put(entry.getKey(), sanitizeJson(entry.getValue(), entry.getKey()));
             }
             return Collections.unmodifiableMap(map);
         }
         if (node.isArray()) {
             List<Object> values = new ArrayList<>();
-            int count = 0;
             for (JsonNode child : node) {
-                if (count++ >= MAX_SOURCE_PAYLOAD_ARRAY_SIZE) {
-                    values.add("[TRUNCATED]");
-                    break;
-                }
-                values.add(sanitizeJson(child, fieldName, depth + 1));
+                values.add(sanitizeJson(child, fieldName));
             }
             return Collections.unmodifiableList(values);
         }
         if (node.isTextual()) {
-            return truncate(node.asText(""));
+            return node.asText("");
         }
         if (node.isNumber()) {
             return node.numberValue();
@@ -413,7 +402,7 @@ public class RelayRuntimeResponseNormalizer {
         if (node.isBoolean()) {
             return node.booleanValue();
         }
-        return truncate(node.asText(""));
+        return node.asText("");
     }
 
     private boolean isSensitiveField(String fieldName) {
@@ -432,13 +421,6 @@ public class RelayRuntimeResponseNormalizer {
                 || normalized.contains("api_key")
                 || normalized.contains("apikey")
                 || normalized.contains("access_key");
-    }
-
-    private String truncate(String value) {
-        if (value == null || value.length() <= MAX_SOURCE_PAYLOAD_STRING_LENGTH) {
-            return value;
-        }
-        return value.substring(0, MAX_SOURCE_PAYLOAD_STRING_LENGTH) + "...[TRUNCATED]";
     }
 
     private boolean hasFinishReason(JsonNode root) {

@@ -396,6 +396,40 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
+    void agentFrameThenWebSocketCloseWithoutTerminalFailsProtocol() {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
+                "{\"type\":\"agent\",\"content\":\"answer\",\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(this::assertSessionReadyMetadata)
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "answer"))
+                .expectErrorSatisfies(this::assertClosedBeforeTerminal)
+                .verify();
+    }
+
+    @Test
+    void generateResponseThenWebSocketCloseWithoutTerminalFailsProtocol() {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
+                "{\"type\":\"generate-response\",\"content\":\"final answer\",\"is_final\":true,"
+                        + "\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(this::assertSessionReadyMetadata)
+                .assertNext(event -> {
+                    assertThat(event.type()).isEqualTo("message.snapshot");
+                    assertThat(event.payload()).containsEntry("content", "final answer");
+                })
+                .expectErrorSatisfies(this::assertClosedBeforeTerminal)
+                .verify();
+    }
+
+    @Test
     void configHandshakeTimeoutFailsBeforeSendingUserMessage() {
         FakeWebSocketClient client = new FakeWebSocketClient(Flux.never());
         RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofMillis(5));
@@ -408,6 +442,145 @@ class RelayWebSocketRuntimeAdapterTest {
 
         assertThat(client.sent()).hasSize(1);
         assertThat(client.sent().getFirst()).contains("\"type\":\"config\"");
+    }
+
+    @Test
+    void userMessageStageKeepsWaitingAcrossIdleGapAndSendsHeartbeat() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10), Duration.ofSeconds(5),
+                Duration.ofSeconds(1), Duration.ofMillis(10), Duration.ofMillis(5));
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
+                .assertNext(this::assertSessionReadyMetadata)
+                .thenAwait(Duration.ofMillis(35))
+                .then(() -> client.emit("{\"type\":\"agent\",\"content\":\"慢任务完成\",\"session_id\":\"relay-session-1\"}"))
+                .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "慢任务完成"))
+                .expectNextCount(2)
+                .verifyComplete();
+
+        assertThat(client.sent()).contains("{\"type\":\"heartbeat\"}");
+    }
+
+    @Test
+    void heartbeatResponseIsNotPublishedAsChatEvent() {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
+                "{\"type\":\"relay-start\",\"content\":\"processing\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"heartbeat-response\",\"state\":\"agent_thinking\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"agent\",\"content\":\"A\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(this::assertSessionReadyMetadata)
+                .assertNext(event -> {
+                    assertThat(event.type()).isEqualTo("runtime.progress");
+                    assertThat(event.payload()).containsEntry("sourceType", "relay-start");
+                })
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "A"))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("state", "completed"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                .verifyComplete();
+    }
+
+    @Test
+    void heartbeatResponseRefreshesLivenessWithoutPublishingChatEvent() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10), Duration.ofSeconds(5),
+                Duration.ofSeconds(1), Duration.ofMillis(20), Duration.ofSeconds(5), Duration.ofMillis(100));
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
+                .assertNext(this::assertSessionReadyMetadata)
+                .thenAwait(Duration.ofMillis(70))
+                .then(() -> client.emit("{\"type\":\"heartbeat-response\",\"state\":\"agent_thinking\","
+                        + "\"detail\":\"Root Agent is processing your request\",\"session_id\":\"relay-session-1\"}"))
+                .thenAwait(Duration.ofMillis(70))
+                .then(() -> client.emit("{\"type\":\"agent\",\"content\":\"A\",\"session_id\":\"relay-session-1\"}"))
+                .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"completed\","
+                        + "\"session_id\":\"relay-session-1\"}"))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "A"))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("state", "completed"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                .verifyComplete();
+    }
+
+    @Test
+    void businessFrameRefreshesLivenessWithoutHeartbeatResponse() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10), Duration.ofSeconds(5),
+                Duration.ofSeconds(1), Duration.ofMillis(20), Duration.ofSeconds(5), Duration.ofMillis(100));
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
+                .assertNext(this::assertSessionReadyMetadata)
+                .thenAwait(Duration.ofMillis(70))
+                .then(() -> client.emit("{\"type\":\"relay-start\",\"content\":\"processing\","
+                        + "\"session_id\":\"relay-session-1\"}"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("runtime.progress"))
+                .thenAwait(Duration.ofMillis(70))
+                .then(() -> client.emit("{\"type\":\"agent\",\"content\":\"A\",\"session_id\":\"relay-session-1\"}"))
+                .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"completed\","
+                        + "\"session_id\":\"relay-session-1\"}"))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "A"))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("state", "completed"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                .verifyComplete();
+    }
+
+    @Test
+    void heartbeatResponseTimeoutFailsRunAndInterruptsRelay() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10), Duration.ofSeconds(5),
+                Duration.ofSeconds(1), Duration.ofMillis(10), Duration.ofSeconds(5), Duration.ofMillis(50));
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
+                .assertNext(this::assertSessionReadyMetadata)
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(RelayRuntimeProtocolException.class)
+                        .hasMessageContaining("RELAY_WS_HEARTBEAT_RESPONSE_TIMEOUT"))
+                .verify();
+
+        assertThat(client.sent()).contains("{\"type\":\"interrupt\"}");
+    }
+
+    @Test
+    void nonPositiveHeartbeatResponseTimeoutDisablesLivenessTimeout() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10), Duration.ofSeconds(5),
+                Duration.ofMillis(250), Duration.ofMillis(10), Duration.ofSeconds(5), Duration.ZERO);
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
+                .assertNext(this::assertSessionReadyMetadata)
+                .thenAwait(Duration.ofMillis(80))
+                .then(() -> client.emit("{\"type\":\"agent\",\"content\":\"A\",\"session_id\":\"relay-session-1\"}"))
+                .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"completed\","
+                        + "\"session_id\":\"relay-session-1\"}"))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "A"))
+                .expectNextCount(2)
+                .verifyComplete();
+    }
+
+    @Test
+    void maxRunDurationFailsRunAndBestEffortInterruptsRelay() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10), Duration.ofSeconds(5),
+                Duration.ofMillis(10), Duration.ofSeconds(1));
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
+                .assertNext(this::assertSessionReadyMetadata)
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(RelayRuntimeProtocolException.class)
+                        .hasMessageContaining("RELAY_WS_MAX_RUN_DURATION_EXCEEDED"))
+                .verify();
+
+        assertThat(client.sent()).contains("{\"type\":\"interrupt\"}");
     }
 
     @Test
@@ -590,6 +763,12 @@ class RelayWebSocketRuntimeAdapterTest {
                 .containsEntry("runtimeSessionId", "relay-session-1");
     }
 
+    private void assertClosedBeforeTerminal(Throwable error) {
+        assertThat(error)
+                .isInstanceOf(RelayRuntimeProtocolException.class)
+                .hasMessageContaining("RELAY_WS_CLOSED_BEFORE_TERMINAL");
+    }
+
     private RelayWebSocketRuntimeAdapter adapter(FakeWebSocketClient client) {
         return adapter(client, Duration.ofSeconds(10));
     }
@@ -604,11 +783,36 @@ class RelayWebSocketRuntimeAdapterTest {
 
     private RelayWebSocketRuntimeAdapter adapter(WebSocketClient client, Duration configHandshakeTimeout,
                                                 Duration interruptAckTimeout) {
+        return adapter(client, configHandshakeTimeout, interruptAckTimeout, Duration.ofMinutes(30),
+                Duration.ofSeconds(20));
+    }
+
+    private RelayWebSocketRuntimeAdapter adapter(WebSocketClient client, Duration configHandshakeTimeout,
+                                                Duration interruptAckTimeout, Duration maxRunDuration,
+                                                Duration heartbeatInterval) {
+        return adapter(client, configHandshakeTimeout, interruptAckTimeout, maxRunDuration, heartbeatInterval,
+                Duration.ofSeconds(5));
+    }
+
+    private RelayWebSocketRuntimeAdapter adapter(WebSocketClient client, Duration configHandshakeTimeout,
+                                                Duration interruptAckTimeout, Duration maxRunDuration,
+                                                Duration heartbeatInterval, Duration idleTimeout) {
+        return adapter(client, configHandshakeTimeout, interruptAckTimeout, maxRunDuration, heartbeatInterval,
+                idleTimeout, Duration.ofSeconds(90));
+    }
+
+    private RelayWebSocketRuntimeAdapter adapter(WebSocketClient client, Duration configHandshakeTimeout,
+                                                Duration interruptAckTimeout, Duration maxRunDuration,
+                                                Duration heartbeatInterval, Duration idleTimeout,
+                                                Duration heartbeatResponseTimeout) {
         RelayAgentProperties properties = new RelayAgentProperties();
         properties.getRelay().getWebsocket().setUrl("ws://relay.test/ws");
-        properties.getRelay().getWebsocket().setIdleTimeout(Duration.ofSeconds(5));
+        properties.getRelay().getWebsocket().setIdleTimeout(idleTimeout);
         properties.getRelay().getWebsocket().setConfigHandshakeTimeout(configHandshakeTimeout);
         properties.getRelay().getWebsocket().setInterruptAckTimeout(interruptAckTimeout);
+        properties.getRelay().getWebsocket().setMaxRunDuration(maxRunDuration);
+        properties.getRelay().getWebsocket().setHeartbeatInterval(heartbeatInterval);
+        properties.getRelay().getWebsocket().setHeartbeatResponseTimeout(heartbeatResponseTimeout);
         return new RelayWebSocketRuntimeAdapter(
                 objectMapper,
                 properties,
@@ -670,7 +874,7 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     private static final class ReusableFakeWebSocketClient implements WebSocketClient {
-        private final java.util.ArrayList<String> sent = new java.util.ArrayList<>();
+        private final java.util.List<String> sent = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
         private ReusableFakeWebSocketSession session;
         private URI uri;
         private int executeCount;
@@ -839,7 +1043,7 @@ class RelayWebSocketRuntimeAdapterTest {
     private static final class FakeWebSocketSession implements WebSocketSession {
         private final DataBufferFactory bufferFactory = new DefaultDataBufferFactory();
         private final Flux<String> inboundFrames;
-        private final java.util.ArrayList<String> sent = new java.util.ArrayList<>();
+        private final java.util.List<String> sent = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
 
         private FakeWebSocketSession(Flux<String> inboundFrames) {
             this.inboundFrames = inboundFrames;

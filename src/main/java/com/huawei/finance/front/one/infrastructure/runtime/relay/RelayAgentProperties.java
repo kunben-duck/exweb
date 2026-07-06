@@ -134,8 +134,14 @@ public class RelayAgentProperties {
         private Duration configHandshakeTimeout = Duration.ofSeconds(10);
         /** 跨实例 stop 临时连接发送 interrupt 后等待 Relay paused 确认的最长时间。 */
         private Duration interruptAckTimeout = Duration.ofSeconds(5);
-        /** 普通问答期间等待下游下一帧的空闲超时时间。 */
+        /** 控制类临时连接等待下游下一帧的空闲超时时间；普通问答阶段不再使用该值判定失败。 */
         private Duration idleTimeout = Duration.ofSeconds(60);
+        /** user-message 发出后的最长执行时间，超过后 ChatService 主动失败闭合本轮 run。 */
+        private Duration maxRunDuration = Duration.ofMinutes(30);
+        /** user-message 发出后的 Relay WebSocket 心跳发送间隔。 */
+        private Duration heartbeatInterval = Duration.ofSeconds(20);
+        /** user-message 发出后等待任意下游回包的最长时间，<=0 表示禁用该活性检测。 */
+        private Duration heartbeatResponseTimeout = Duration.ofSeconds(90);
         /** 单个下游 WebSocket 文本帧最大字节数。 */
         private DataSize maxFrameBytes = DataSize.ofMegabytes(1);
 
@@ -185,6 +191,30 @@ public class RelayAgentProperties {
 
         public void setIdleTimeout(Duration idleTimeout) {
             this.idleTimeout = idleTimeout;
+        }
+
+        public Duration getMaxRunDuration() {
+            return maxRunDuration;
+        }
+
+        public void setMaxRunDuration(Duration maxRunDuration) {
+            this.maxRunDuration = maxRunDuration;
+        }
+
+        public Duration getHeartbeatInterval() {
+            return heartbeatInterval;
+        }
+
+        public void setHeartbeatInterval(Duration heartbeatInterval) {
+            this.heartbeatInterval = heartbeatInterval;
+        }
+
+        public Duration getHeartbeatResponseTimeout() {
+            return heartbeatResponseTimeout;
+        }
+
+        public void setHeartbeatResponseTimeout(Duration heartbeatResponseTimeout) {
+            this.heartbeatResponseTimeout = heartbeatResponseTimeout;
         }
 
         public DataSize getMaxFrameBytes() {

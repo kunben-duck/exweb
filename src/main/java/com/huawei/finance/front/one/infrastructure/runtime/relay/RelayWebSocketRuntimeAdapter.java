@@ -20,6 +20,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
@@ -108,9 +109,8 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                                 .map(session::textMessage));
                         Flux<String> frames = session.receive()
                                 .map(WebSocketMessage::getPayloadAsText)
-                                .doOnNext(frame -> validateFrameSize(frame, request.runId()))
-                                .timeout(websocketProperties().getIdleTimeout());
-                        Flux<ChatEvent> normalized = userMessageFrames(frames, request, exchange::send)
+                                .doOnNext(frame -> validateFrameSize(frame, request.runId()));
+                        Flux<ChatEvent> normalized = userMessageFrames(frames, request, exchange)
                                 .transform(frameStream -> normalizeFrames(frameStream, request, messageCompleted))
                                 .doOnNext(sink::next)
                                 .doFinally(signal -> exchange.completeSending());
@@ -305,36 +305,74 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     }
 
     private Flux<String> userMessageFrames(Flux<String> frames, AgentRuntimeRequest request,
-                                           Consumer<String> userMessageSender) {
+                                           ShortRunExchange exchange) {
         return Flux.create(sink -> {
+            AtomicBoolean done = new AtomicBoolean(false);
             AtomicBoolean userMessageReleased = new AtomicBoolean(false);
             AtomicBoolean responseStarted = new AtomicBoolean(false);
+            AtomicBoolean terminalFrameSeen = new AtomicBoolean(false);
             AtomicReference<Disposable> frameSubscription = new AtomicReference<>();
-            Disposable handshakeTimeout = Mono.delay(configHandshakeTimeout())
+            AtomicReference<Disposable> handshakeTimeout = new AtomicReference<>();
+            AtomicReference<Disposable> heartbeatTimer = new AtomicReference<>();
+            AtomicReference<Disposable> livenessTimer = new AtomicReference<>();
+            AtomicReference<Disposable> maxRunTimer = new AtomicReference<>();
+            AtomicLong lastInboundNanos = new AtomicLong(System.nanoTime());
+            Runnable cleanup = () -> {
+                Disposable handshake = handshakeTimeout.getAndSet(null);
+                if (handshake != null) {
+                    handshake.dispose();
+                }
+                Disposable heartbeat = heartbeatTimer.getAndSet(null);
+                if (heartbeat != null) {
+                    heartbeat.dispose();
+                }
+                Disposable liveness = livenessTimer.getAndSet(null);
+                if (liveness != null) {
+                    liveness.dispose();
+                }
+                Disposable maxRun = maxRunTimer.getAndSet(null);
+                if (maxRun != null) {
+                    maxRun.dispose();
+                }
+                Disposable subscription = frameSubscription.getAndSet(null);
+                if (subscription != null) {
+                    subscription.dispose();
+                }
+            };
+            Consumer<Throwable> fail = error -> {
+                if (done.compareAndSet(false, true)) {
+                    cleanup.run();
+                    sink.error(error);
+                }
+            };
+            Runnable complete = () -> {
+                if (done.compareAndSet(false, true)) {
+                    cleanup.run();
+                    sink.complete();
+                }
+            };
+            handshakeTimeout.set(Mono.delay(configHandshakeTimeout())
                     .subscribe(ignored -> {
                         if (userMessageReleased.compareAndSet(false, true)) {
-                            sink.error(new RelayRuntimeProtocolException("RELAY_WS_CONFIG_TIMEOUT: Relay WebSocket "
+                            fail.accept(new RelayRuntimeProtocolException("RELAY_WS_CONFIG_TIMEOUT: Relay WebSocket "
                                     + "config handshake timed out. runId=" + request.runId()));
-                            Disposable subscription = frameSubscription.get();
-                            if (subscription != null) {
-                                subscription.dispose();
-                            }
                         }
-                    }, sink::error);
+                    }, fail));
             frameSubscription.set(frames.subscribe(frame -> {
+                if (done.get()) {
+                    return;
+                }
                 if (!userMessageReleased.get()) {
                     RelayRuntimeProtocolException configFailure = configHandshakeFailure(frame);
                     if (configFailure != null && userMessageReleased.compareAndSet(false, true)) {
-                        handshakeTimeout.dispose();
-                        sink.error(configFailure);
-                        Disposable subscription = frameSubscription.get();
-                        if (subscription != null) {
-                            subscription.dispose();
-                        }
+                        fail.accept(configFailure);
                         return;
                     }
                     if (configHandshakeCompleteFrame(frame) && userMessageReleased.compareAndSet(false, true)) {
-                        handshakeTimeout.dispose();
+                        Disposable handshake = handshakeTimeout.getAndSet(null);
+                        if (handshake != null) {
+                            handshake.dispose();
+                        }
                         /*
                          * session-ready 是 config 阶段唯一完成信号，也携带 Relay 确认的 session_id。
                          * 这里只放行这一条受控 metadata，让 run 表和 RuntimeBinding 尽早学习真实
@@ -342,41 +380,90 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                          */
                         sink.next(frame);
                         try {
-                            userMessageSender.accept(userMessage(request));
+                            exchange.send(userMessage(request));
+                            startRunControls(new RunControlContext(exchange, request, heartbeatTimer, livenessTimer,
+                                    maxRunTimer, lastInboundNanos, fail));
                         } catch (RuntimeException ex) {
-                            sink.error(ex);
+                            fail.accept(ex);
                         }
                     }
                     return;
                 }
+                lastInboundNanos.set(System.nanoTime());
                 if (!shouldEmitUserResponseFrame(frame, responseStarted)) {
                     return;
                 }
+                if (ordinaryTerminalFrame(frame) || terminalTextFrame(frame)) {
+                    terminalFrameSeen.set(true);
+                }
                 sink.next(frame);
             }, error -> {
-                handshakeTimeout.dispose();
-                sink.error(error);
+                fail.accept(error);
             }, () -> {
-                handshakeTimeout.dispose();
                 if (!userMessageReleased.get()) {
-                    sink.error(new RelayRuntimeProtocolException("Relay WebSocket closed before config handshake "
+                    fail.accept(new RelayRuntimeProtocolException("Relay WebSocket closed before config handshake "
                             + "completed. runId=" + request.runId()));
                     return;
                 }
-                sink.complete();
+                if (terminalFrameSeen.get()) {
+                    complete.run();
+                    return;
+                }
+                fail.accept(new RelayRuntimeProtocolException("RELAY_WS_CLOSED_BEFORE_TERMINAL: Relay WebSocket "
+                        + "closed before terminal session-state. runId=" + request.runId()));
             }));
             sink.onDispose(() -> {
-                handshakeTimeout.dispose();
-                Disposable subscription = frameSubscription.get();
-                if (subscription != null) {
-                    subscription.dispose();
-                }
+                done.set(true);
+                cleanup.run();
             });
         }, FluxSink.OverflowStrategy.BUFFER);
     }
 
+    private void startRunControls(RunControlContext context) {
+        context.lastInboundNanos().set(System.nanoTime());
+        context.heartbeatTimer().set(Flux.interval(heartbeatInterval()).subscribe(ignored -> {
+            try {
+                context.exchange().send(heartbeatMessage());
+            } catch (Throwable ex) {
+                context.fail().accept(ex);
+            }
+        }, context.fail()));
+        Duration heartbeatResponseTimeout = heartbeatResponseTimeout();
+        if (!heartbeatResponseTimeout.isZero() && !heartbeatResponseTimeout.isNegative()) {
+            context.livenessTimer().set(Flux.interval(livenessCheckInterval(heartbeatResponseTimeout)).subscribe(ignored -> {
+                long elapsedNanos = System.nanoTime() - context.lastInboundNanos().get();
+                if (elapsedNanos < durationToNanos(heartbeatResponseTimeout)) {
+                    return;
+                }
+                try {
+                    context.exchange().interrupt(context.request().runId());
+                } catch (Throwable ex) {
+                    log.warn("Relay WebSocket heartbeat timeout interrupt failed. runId={}, reason={}",
+                            context.request().runId(), ex.getMessage());
+                }
+                context.fail().accept(new RelayRuntimeProtocolException("RELAY_WS_HEARTBEAT_RESPONSE_TIMEOUT: Relay "
+                        + "WebSocket heartbeat response timed out. runId=" + context.request().runId()
+                        + ", timeout=" + heartbeatResponseTimeout));
+            }, context.fail()));
+        }
+        context.maxRunTimer().set(Mono.delay(maxRunDuration()).subscribe(ignored -> {
+            try {
+                context.exchange().interrupt(context.request().runId());
+            } catch (Throwable ex) {
+                log.warn("Relay WebSocket max run duration interrupt failed. runId={}, reason={}",
+                        context.request().runId(), ex.getMessage());
+            }
+            context.fail().accept(new RelayRuntimeProtocolException("RELAY_WS_MAX_RUN_DURATION_EXCEEDED: Relay WebSocket "
+                    + "run exceeded max duration. runId=" + context.request().runId()
+                    + ", maxRunDuration=" + maxRunDuration()));
+        }, context.fail()));
+    }
+
     private boolean shouldEmitUserResponseFrame(String frame, AtomicBoolean responseStarted) {
         if (lateConfigFrame(frame)) {
+            return false;
+        }
+        if (heartbeatFrame(frame)) {
             return false;
         }
         if (responseStarted.get()) {
@@ -435,6 +522,10 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
 
     private String interruptMessage() {
         return toJson(Map.of("type", "interrupt"));
+    }
+
+    private String heartbeatMessage() {
+        return toJson(Map.of("type", "heartbeat"));
     }
 
     private String toJson(Object value) {
@@ -573,6 +664,19 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         }
     }
 
+    private boolean heartbeatFrame(String frame) {
+        if (frame == null || frame.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(frame);
+            String type = RelayRuntimeResponseNormalizer.normalizeTypeName(text(root.path("type")));
+            return "heartbeat".equals(type) || "heartbeat-response".equals(type);
+        } catch (JsonProcessingException ex) {
+            return false;
+        }
+    }
+
     private boolean ordinaryTerminalFrame(String frame) {
         if (frame == null || frame.isBlank()) {
             return false;
@@ -591,6 +695,20 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         } catch (JsonProcessingException ex) {
             return false;
         }
+    }
+
+    private boolean terminalTextFrame(String frame) {
+        if (frame == null) {
+            return false;
+        }
+        String normalized = frame.trim().toLowerCase();
+        return "[done]".equals(normalized)
+                || "done".equals(normalized)
+                || "message.completed".equals(normalized)
+                || "steam-complete".equals(normalized)
+                || "stream-complete".equals(normalized)
+                || "stream.complete".equals(normalized)
+                || "stream-completed".equals(normalized);
     }
 
     private boolean interruptPausedAckFrame(String frame) {
@@ -693,8 +811,49 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 : timeout;
     }
 
+    private Duration maxRunDuration() {
+        Duration duration = websocketProperties().getMaxRunDuration();
+        return duration == null || duration.isZero() || duration.isNegative()
+                ? Duration.ofMinutes(30)
+                : duration;
+    }
+
+    private Duration heartbeatInterval() {
+        Duration interval = websocketProperties().getHeartbeatInterval();
+        return interval == null || interval.isZero() || interval.isNegative()
+                ? Duration.ofSeconds(20)
+                : interval;
+    }
+
+    private Duration heartbeatResponseTimeout() {
+        Duration timeout = websocketProperties().getHeartbeatResponseTimeout();
+        return timeout == null ? Duration.ofSeconds(90) : timeout;
+    }
+
+    private Duration livenessCheckInterval(Duration heartbeatResponseTimeout) {
+        Duration interval = heartbeatInterval();
+        return interval.compareTo(heartbeatResponseTimeout) > 0 ? heartbeatResponseTimeout : interval;
+    }
+
+    private long durationToNanos(Duration duration) {
+        try {
+            return duration.toNanos();
+        } catch (ArithmeticException ex) {
+            return Long.MAX_VALUE;
+        }
+    }
+
     private interface ActiveRelayWebSocketExchange {
         void interrupt(String runId);
+    }
+
+    private record RunControlContext(ShortRunExchange exchange,
+                                     AgentRuntimeRequest request,
+                                     AtomicReference<Disposable> heartbeatTimer,
+                                     AtomicReference<Disposable> livenessTimer,
+                                     AtomicReference<Disposable> maxRunTimer,
+                                     AtomicLong lastInboundNanos,
+                                     Consumer<Throwable> fail) {
     }
 
     private final class ShortRunExchange implements ActiveRelayWebSocketExchange {
@@ -716,17 +875,21 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         }
 
         void send(String message) {
-            if (closed.get()) {
-                throw new RelayRuntimeProtocolException("Relay WebSocket short connection is closed. runId=" + runId);
-            }
-            Sinks.EmitResult result = outbound.tryEmitNext(message);
-            if (result.isFailure()) {
-                throw new RelayRuntimeProtocolException("Relay WebSocket outbound emit failed: " + result);
+            synchronized (this) {
+                if (closed.get()) {
+                    throw new RelayRuntimeProtocolException("Relay WebSocket short connection is closed. runId=" + runId);
+                }
+                Sinks.EmitResult result = outbound.tryEmitNext(message);
+                if (result.isFailure()) {
+                    throw new RelayRuntimeProtocolException("Relay WebSocket outbound emit failed: " + result);
+                }
             }
         }
 
         void completeSending() {
-            outbound.tryEmitComplete();
+            synchronized (this) {
+                outbound.tryEmitComplete();
+            }
         }
 
         @Override
@@ -749,15 +912,18 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         }
 
         void close(Throwable cause) {
-            if (!closed.compareAndSet(false, true)) {
-                return;
+            Disposable disposable;
+            synchronized (this) {
+                if (!closed.compareAndSet(false, true)) {
+                    return;
+                }
+                if (cause == null) {
+                    outbound.tryEmitComplete();
+                } else {
+                    outbound.tryEmitError(cause);
+                }
+                disposable = subscription.getAndSet(null);
             }
-            if (cause == null) {
-                completeSending();
-            } else {
-                outbound.tryEmitError(cause);
-            }
-            Disposable disposable = subscription.getAndSet(null);
             if (disposable != null) {
                 disposable.dispose();
             }

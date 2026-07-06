@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.application.service.chat;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.finance.front.one.application.config.ChatHitlProperties;
 import com.huawei.finance.front.one.application.command.DocumentUpdateCommand;
 import com.huawei.finance.front.one.application.command.DocumentUploadCommand;
 import com.huawei.finance.front.one.application.config.IntentRecordProperties;
@@ -16,6 +17,7 @@ import com.huawei.finance.front.one.application.integration.agent.DomainAgentCli
 import com.huawei.finance.front.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.finance.front.one.application.integration.agent.DomainAgentCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.finance.front.one.application.integration.conversation.ChatHitlRequestRepository;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunCache;
@@ -44,6 +46,9 @@ import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
+import com.huawei.finance.front.one.domain.chat.ChatHitlRequest;
+import com.huawei.finance.front.one.domain.chat.ChatHitlStatus;
+import com.huawei.finance.front.one.domain.chat.ChatHitlWaitingType;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
@@ -51,6 +56,7 @@ import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunCancelSignal;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecution;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus;
+import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
@@ -58,6 +64,8 @@ import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
 import com.huawei.finance.front.one.domain.chat.MessageSnapshotEvent;
 import com.huawei.finance.front.one.domain.chat.RuntimeEvent;
+import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
+import com.huawei.finance.front.one.domain.chat.RunWaitingUserEvent;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
 import com.huawei.finance.front.one.domain.document.DocumentLibraryPage;
 import com.huawei.finance.front.one.domain.document.DocumentLibraryQuery;
@@ -66,6 +74,7 @@ import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import com.huawei.finance.front.one.domain.memory.LongTermMemoryItem;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
+import com.huawei.finance.front.one.domain.runtime.RuntimeBindingStatus;
 import com.huawei.finance.front.one.domain.usecase.UseCaseMatchResult;
 import java.time.Duration;
 import java.time.Instant;
@@ -600,6 +609,111 @@ class FinanceEXChatServiceTest {
         assertThat(runs.findById("run1").orElseThrow().assistantMessageId()).isNull();
     }
 
+    @Test
+    void terminalCommitPersistsWaitingUserStateTogether() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        InMemoryExecutionRepository executions = new InMemoryExecutionRepository();
+        InMemoryHitlRequestRepository hitlRequests = new InMemoryHitlRequestRepository();
+        CapturingRuntimeBindingRepository bindings = new CapturingRuntimeBindingRepository();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        PermissionChecker permissionChecker = new PermissionChecker();
+        IdGenerator ids = new FixedIdGenerator();
+        seedRunningRun(sessions, messages, runs, user, "run1", "session1", "msg-user");
+        executions.createForRun(runs.findById("run1").orElseThrow(), "exec1", "instance-test", Duration.ofMinutes(5));
+        ChatSession session = sessions.findById("session1").orElseThrow();
+        ChatMessage userMessage = messages.findByOwnerAndId(user.tenantId(), user.ownerUserId(), "msg-user")
+                .orElseThrow();
+        Instant now = Instant.now();
+        RuntimeBinding binding = new RuntimeBinding("binding1", user.tenantId(), user.ownerUserId(),
+                session.id(), "relay", userMessage.id(), "runtime-session-1", RuntimeBindingStatus.ACTIVE,
+                "run1", now.plus(Duration.ofMinutes(5)), now, now, Map.of());
+        bindings.save(binding);
+        ChatHitlApplicationService hitlService = new ChatHitlApplicationService(hitlRequests, ids,
+                permissionChecker, new ChatHitlProperties());
+        ChatRunTerminalCommitService commitService = new ChatRunTerminalCommitService(
+                new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
+                        permissionChecker, sessions,
+                        new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
+                new SessionApplicationService(sessions, messages, ids, permissionChecker),
+                runs,
+                new ChatRunLeaseApplicationService(executions,
+                        (ApplicationInstanceIdProvider) () -> "instance-test",
+                        new com.huawei.finance.front.one.application.config.ChatRunOperationalProperties(),
+                        ids,
+                        new LocalChatRunExecutionRegistry()),
+                bindings,
+                hitlService,
+                Duration.ofDays(3)
+        );
+        AssistantAssembly assistant = new AssistantAssembly();
+        assistant.observe(RuntimeEvent.card("run1", session.id(), Map.of(
+                "sourceType", "approval-request",
+                "operation_type", "questionnaire",
+                "approval_id", "approval-1",
+                "message", "请选择范围"
+        )));
+        ChatHitlRequest waitingRequest = hitlService.prepareWaiting(new ChatHitlCreateContext(
+                user,
+                session,
+                "run1",
+                userMessage,
+                "msg-assistant",
+                "relay",
+                binding.id(),
+                binding.runtimeSessionId(),
+                Map.of("sourceType", "approval-request", "operation_type", "questionnaire",
+                        "approval_id", "approval-1")
+        ));
+        AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>(binding);
+        ChatRunTerminalCommitService.TerminalCommitContext commitContext =
+                new ChatRunTerminalCommitService.TerminalCommitContext(
+                        user,
+                        session,
+                        new ChatRunMessagePlan(ChatRunMode.NEXT, userMessage.id(), userMessage, null),
+                        bindingRef,
+                        assistant,
+                        "run1",
+                        new RunExecutionClaim("run1", "instance-test", 1L),
+                        null
+                );
+
+        ChatRunTerminalCommitService.CommitResult result = commitService.commitWaitingUser(
+                new ChatRunTerminalCommitService.WaitingUserCommitCommand(
+                        new RunWaitingUserEvent("run1", session.id(), 0L, now, Map.of(
+                                "status", "WAITING_USER",
+                                "hitlRequestId", waitingRequest.id(),
+                                "messageReady", true,
+                                "assistantMessageId", waitingRequest.assistantMessageId())),
+                        commitContext,
+                        new ChatRunTerminalCommitService.MessageTarget(true, waitingRequest.assistantMessageId()),
+                        waitingRequest
+                ));
+
+        assertThat(result.event().type()).isEqualTo("run.waiting_user");
+        assertThat(events.events).extracting(ChatEvent::type).containsExactly("run.waiting_user");
+        ChatMessage assistantMessage = messages.messages.stream()
+                .filter(message -> "assistant".equals(message.role()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(assistantMessage.id()).isEqualTo("msg-assistant");
+        assertThat(assistantMessage.parts()).extracting(ChatMessagePart::partType)
+                .contains("CLARIFICATION_REQUEST");
+        ChatHitlRequest savedHitl = hitlRequests.requests.get(waitingRequest.id());
+        assertThat(savedHitl.runtimeBindingId()).isEqualTo(binding.id());
+        assertThat(savedHitl.status()).isEqualTo(ChatHitlStatus.WAITING);
+        assertThat(savedHitl.expiresAt()).isNotNull();
+        assertThat(runs.findById("run1").orElseThrow().status()).isEqualTo(ChatRunStatus.WAITING_USER);
+        assertThat(runs.findById("run1").orElseThrow().assistantMessageId()).isEqualTo("msg-assistant");
+        assertThat(executions.findByRunId("run1")).get()
+                .extracting(ChatRunExecution::executionStatus)
+                .isEqualTo(ChatRunExecutionStatus.WAITING_USER);
+        assertThat(bindings.saved.leafMessageId()).isEqualTo("msg-assistant");
+        assertThat(bindings.saved.runtimeSessionId()).isEqualTo("runtime-session-1");
+    }
+
     private RouteSignalApplicationService systemRouteService() {
         return new RouteSignalApplicationService(request -> UseCaseMatchResult.notMatched("disabled"),
                 (command, memory, user) -> null, new com.huawei.finance.front.one.domain.routing.RoutingPolicy(0.85),
@@ -734,6 +848,7 @@ class FinanceEXChatServiceTest {
 
     private RuntimeBindingRepository runtimeBindingRepository() {
         return new RuntimeBindingRepository() {
+            @Override public Optional<RuntimeBinding> findById(String bindingId) { return Optional.empty(); }
             @Override public RuntimeBinding save(RuntimeBinding binding) { return binding; }
             @Override public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId, String provider) { return Optional.empty(); }
         };
@@ -820,7 +935,20 @@ class FinanceEXChatServiceTest {
 
         @Override public Optional<ChatRunExecution> findByRunId(String runId) { return Optional.ofNullable(executions.get(runId)); }
         @Override public boolean heartbeat(String runId, String ownerInstanceId, Duration leaseDuration) { return true; }
-        @Override public boolean markTerminal(String runId, ChatRunExecutionStatus terminalStatus) { return true; }
+        @Override public boolean markTerminal(String runId, ChatRunExecutionStatus terminalStatus) {
+            ChatRunExecution current = executions.get(runId);
+            if (current == null || terminalStatus == null) {
+                return false;
+            }
+            ChatRunExecution next = new ChatRunExecution(current.id(), current.runId(), current.tenantId(),
+                    current.userId(), current.sessionId(), terminalStatus, current.ownerInstanceId(),
+                    current.heartbeatAt(), current.leaseUntil(), current.fencingToken(),
+                    current.recoveryStrategy(), current.recoveredByInstanceId(), current.recoveryAttempts(),
+                    current.recoveryLeaseUntil(), current.runtimeResumeToken(), current.metadata(),
+                    current.createdAt(), Instant.now());
+            executions.put(runId, next);
+            return true;
+        }
         @Override public List<ChatRunExecution> findLeaseExpired(int limit) { return List.of(); }
         @Override public List<ChatRunExecution> findRecoveryExpired(int limit) { return List.of(); }
         @Override public Optional<ChatRunExecution> tryClaimRecovering(String runId, String recoveredByInstanceId, String strategy, Duration recoveryLeaseDuration) { return Optional.empty(); }
@@ -839,6 +967,52 @@ class FinanceEXChatServiceTest {
             return new ChatSessionPage(List.of(), null);
         }
         @Override public ChatSession save(ChatSession session) { sessions.put(session.id(), session); return session; }
+    }
+
+    private static class CapturingRuntimeBindingRepository implements RuntimeBindingRepository {
+        private RuntimeBinding saved;
+
+        @Override public Optional<RuntimeBinding> findById(String bindingId) {
+            return Optional.ofNullable(saved).filter(binding -> binding.id().equals(bindingId));
+        }
+        @Override public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId, String provider) {
+            return Optional.ofNullable(saved)
+                    .filter(binding -> tenantId.equals(binding.tenantId()))
+                    .filter(binding -> userId.equals(binding.userId()))
+                    .filter(binding -> sessionId.equals(binding.chatSessionId()))
+                    .filter(binding -> provider.equals(binding.provider()));
+        }
+        @Override public RuntimeBinding save(RuntimeBinding binding) {
+            saved = binding;
+            return binding;
+        }
+    }
+
+    private static class InMemoryHitlRequestRepository implements ChatHitlRequestRepository {
+        private final Map<String, ChatHitlRequest> requests = new HashMap<>();
+
+        @Override public ChatHitlRequest insert(ChatHitlRequest request) {
+            requests.put(request.id(), request);
+            return request;
+        }
+        @Override public Optional<ChatHitlRequest> findByOwnerAndId(String tenantId, String userId, String hitlRequestId) {
+            return Optional.ofNullable(requests.get(hitlRequestId))
+                    .filter(request -> tenantId.equals(request.tenantId()))
+                    .filter(request -> userId.equals(request.userId()));
+        }
+        @Override public Optional<ChatHitlRequest> findWaitingBySession(String tenantId, String userId, String sessionId) {
+            return requests.values().stream()
+                    .filter(request -> tenantId.equals(request.tenantId()))
+                    .filter(request -> userId.equals(request.userId()))
+                    .filter(request -> sessionId.equals(request.sessionId()))
+                    .filter(ChatHitlRequest::waiting)
+                    .findFirst();
+        }
+        @Override public boolean claimForResponse(ChatHitlClaimCommand command) { return false; }
+        @Override public int markAnswered(String tenantId, String userId, String hitlRequestId, Instant answeredAt) { return 0; }
+        @Override public int markWaiting(String tenantId, String userId, String hitlRequestId) { return 0; }
+        @Override public int cancelOpenBySession(String tenantId, String userId, String sessionId, Instant cancelledAt) { return 0; }
+        @Override public int markExpired(String tenantId, String userId, String hitlRequestId) { return 0; }
     }
 
     private static class InMemoryMessageRepository implements ChatMessageRepository {

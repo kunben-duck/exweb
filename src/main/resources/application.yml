@@ -149,6 +149,9 @@ financeex:
     stale-recovery-strategies: ${FINANCEEX_CHAT_RUN_STALE_RECOVERY_STRATEGIES:MANUAL_CONFIRMATION,FAIL_FAST}
     recover-lock-enabled: ${FINANCEEX_CHAT_RUN_RECOVER_LOCK_ENABLED:true}
     recover-lock-ttl: ${FINANCEEX_CHAT_RUN_RECOVER_LOCK_TTL:30s}
+  chat-hitl:
+    # Relay questionnaire 等协议级等待用户输入的默认有效期；配置为 0 或负数表示不过期。
+    default-expire-duration: ${FINANCEEX_CHAT_HITL_DEFAULT_EXPIRE_DURATION:24h}
   chat-stream:
     # 当前生产止血版本不合并 message.delta，避免 ChatService 内部背压把任务误标记为 run.failed。
     # 以下 delta-coalesce-* 配置仅作为后续 demand-aware 合并器的兼容预留，当前不影响事件粒度。

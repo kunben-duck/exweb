@@ -43,6 +43,17 @@ public class MyBatisChatMessageStore {
         return message;
     }
 
+    public ChatMessage updateAssistantMessage(ChatMessage message) {
+        int updated = mapper.updateAssistant(toRow(message));
+        if (updated != 1) {
+            throw new IllegalArgumentException("assistant 消息不存在或不属于当前用户: " + message.id());
+        }
+        if (message.parts() != null) {
+            message.parts().forEach(this::savePart);
+        }
+        return message;
+    }
+
     public ChatMessagePart savePart(ChatMessagePart part) {
         mapper.insertPart(toRow(part));
         return part;

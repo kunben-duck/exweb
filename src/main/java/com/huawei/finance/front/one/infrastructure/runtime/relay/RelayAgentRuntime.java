@@ -2,6 +2,8 @@ package com.huawei.finance.front.one.infrastructure.runtime.relay;
 
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeHitlResponseRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteraction;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import java.util.LinkedHashMap;
@@ -24,7 +26,7 @@ import reactor.core.publisher.Mono;
 @Component
 @EnableConfigurationProperties(RelayAgentProperties.class)
 @ConditionalOnExpression("'${financeex.agent-runtime.provider:relay}' == 'relay'")
-public class RelayAgentRuntime implements AgentRuntime {
+public class RelayAgentRuntime implements AgentRuntime, AgentRuntimeInteraction {
     static final String STREAM_HTTP_ADAPTER = "relay-stream-http";
 
     private final Map<String, RelayRuntimeProtocolAdapter> adapters;
@@ -38,6 +40,16 @@ public class RelayAgentRuntime implements AgentRuntime {
     @Override
     public Flux<ChatEvent> query(AgentRuntimeRequest request) {
         return selectedAdapter.query(request);
+    }
+
+    @Override
+    public boolean supportsWaitingUserResponse(String runtimeProvider) {
+        return "relay".equalsIgnoreCase(runtimeProvider) && selectedAdapter.supportsUserResponseContinuation();
+    }
+
+    @Override
+    public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeHitlResponseRequest request) {
+        return selectedAdapter.continueWithUserResponse(request);
     }
 
     @Override

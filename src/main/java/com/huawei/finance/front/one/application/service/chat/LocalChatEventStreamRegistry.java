@@ -106,7 +106,10 @@ public class LocalChatEventStreamRegistry {
     }
 
     private boolean terminal(ChatEvent event) {
-        return "run.completed".equals(event.type()) || "run.failed".equals(event.type()) || "run.cancelled".equals(event.type());
+        return "run.completed".equals(event.type())
+                || "run.failed".equals(event.type())
+                || "run.cancelled".equals(event.type())
+                || "run.waiting_user".equals(event.type());
     }
 
     private static final class TopicSink {

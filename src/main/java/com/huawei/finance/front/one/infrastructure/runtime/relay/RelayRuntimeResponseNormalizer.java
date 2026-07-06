@@ -320,7 +320,7 @@ public class RelayRuntimeResponseNormalizer {
                                          String sourceType, String normalizedType) {
         return switch (normalizedType) {
             case "relay-start", "relay-end", "relay-progress", "clarified-query", "plan-update",
-                    "subagent-plan-created", "subagent-subtask", "approval-result" ->
+                    "subagent-plan-created", "subagent-subtask", "approval-result", "approval-response" ->
                     RuntimeEvent.progress(runId, sessionId, relayPayload(root, sourceType));
             case "project-home", "available-modes", "availbale-modes", "session-ready", "session-state",
                     "self-evolution-status", "token-update", "heartbeat-response" ->

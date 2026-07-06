@@ -18,6 +18,15 @@ record MessagePartBuildContext(
         String runId,
         String content,
         List<ChatMessagePartDraft> drafts,
-        Instant now
+        Instant now,
+        int startOrder
 ) {
+    MessagePartBuildContext(String tenantId, String userId, String sessionId, String messageId, String runId,
+                            String content, List<ChatMessagePartDraft> drafts, Instant now) {
+        this(tenantId, userId, sessionId, messageId, runId, content, drafts, now, 1);
+    }
+
+    MessagePartBuildContext {
+        startOrder = Math.max(1, startOrder);
+    }
 }

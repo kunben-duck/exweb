@@ -24,6 +24,16 @@ public interface ChatMessageRepository {
     ChatMessage save(ChatMessage message);
 
     /**
+     * 更新已有 assistant 消息的正文、run 关联和元数据。
+     *
+     * @param message 已存在的 assistant 消息快照。
+     * @return 更新后的消息。
+     */
+    default ChatMessage updateAssistantMessage(ChatMessage message) {
+        return message;
+    }
+
+    /**
      * 按租户、用户和会话读取最近消息，避免跨用户会话记忆串用。
      *
      * @param tenantId 租户标识。

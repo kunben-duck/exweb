@@ -55,6 +55,16 @@
     </update>
 
     <!--
+      按 RuntimeBinding 主键读取绑定，HITL 续接通过它回到创建等待态时的真实绑定。
+      入参: bindingId 为 RuntimeBinding 主键。
+    -->
+    <select id="findById" resultMap="runtimeBindingResultMap">
+        SELECT <include refid="runtimeBindingColumns"/>
+        FROM fin_ex_runtime_binding_t
+        WHERE id = #{bindingId}
+    </select>
+
+    <!--
       查询指定 session、provider 和 leaf 的 active binding，避免编辑历史路径误复用最新上下文。
       入参: tenantId/userId/sessionId 为归属边界；provider 为 Runtime 类型；leafMessageId 为消息树路径叶子，可为空。
     -->

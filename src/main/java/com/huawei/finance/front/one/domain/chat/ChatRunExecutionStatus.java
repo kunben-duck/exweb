@@ -15,6 +15,8 @@ public enum ChatRunExecutionStatus {
     RECOVERING,
     /** run 已正常完成，执行控制面也已闭合。 */
     COMPLETED,
+    /** run 等待用户输入，执行控制面已释放，不再由 watchdog 判为超时。 */
+    WAITING_USER,
     /** run 已失败，执行控制面也已闭合。 */
     FAILED,
     /** run 已被用户取消，执行控制面也已闭合。 */
@@ -24,6 +26,6 @@ public enum ChatRunExecutionStatus {
      * @return 是否为执行控制面的终态。
      */
     public boolean terminal() {
-        return this == COMPLETED || this == FAILED || this == CANCELLED;
+        return this == COMPLETED || this == WAITING_USER || this == FAILED || this == CANCELLED;
     }
 }

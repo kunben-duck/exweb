@@ -188,6 +188,7 @@ public class ChatRunRecoveryOrchestrator {
         }
         return switch (run.status()) {
             case COMPLETED -> com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus.COMPLETED;
+            case WAITING_USER -> com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus.WAITING_USER;
             case CANCELLED -> com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus.CANCELLED;
             case FAILED -> com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus.FAILED;
             default -> com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus.FAILED;

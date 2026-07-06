@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.infrastructure;
 
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRecoveryPort;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteraction;
 import com.huawei.finance.front.one.application.integration.auth.SgovTokenResolver;
 import com.huawei.finance.front.one.application.integration.identity.ApplicationInstanceIdProvider;
 import com.huawei.finance.front.one.application.integration.intent.IntentRetryPolicy;
@@ -8,6 +9,7 @@ import com.huawei.finance.front.one.application.integration.share.ChatShareAcces
 import com.huawei.finance.front.one.infrastructure.auth.DefaultSgovTokenResolver;
 import com.huawei.finance.front.one.infrastructure.id.GeneratedApplicationInstanceIdProvider;
 import com.huawei.finance.front.one.infrastructure.intent.DefaultIntentRetryPolicy;
+import com.huawei.finance.front.one.infrastructure.runtime.UnsupportedAgentRuntimeInteraction;
 import com.huawei.finance.front.one.infrastructure.runtime.UnsupportedAgentRuntimeRecoveryPort;
 import com.huawei.finance.front.one.infrastructure.share.DefaultChatShareAccessPolicy;
 import org.springframework.beans.factory.annotation.Value;
@@ -50,6 +52,18 @@ public class DefaultPortImplementationConfiguration {
     @ConditionalOnMissingBean(AgentRuntimeRecoveryPort.class)
     public AgentRuntimeRecoveryPort unsupportedAgentRuntimeRecoveryPort() {
         return new UnsupportedAgentRuntimeRecoveryPort();
+    }
+
+    /**
+     * 默认 Runtime 交互续接能力。
+     *
+     * <p>Relay WebSocket 等支持 HITL 的 Runtime 会提供自己的 {@link AgentRuntimeInteraction} bean；
+     * 其他 Runtime 默认不进入 WAITING_USER，避免保存出无法继续的等待态。</p>
+     */
+    @Bean
+    @ConditionalOnMissingBean(AgentRuntimeInteraction.class)
+    public AgentRuntimeInteraction unsupportedAgentRuntimeInteraction() {
+        return new UnsupportedAgentRuntimeInteraction();
     }
 
     /**

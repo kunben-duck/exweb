@@ -11,6 +11,14 @@ import java.util.Optional;
  */
 public interface RuntimeBindingRepository {
     /**
+     * 按主键查询 RuntimeBinding。
+     *
+     * @param bindingId RuntimeBinding 主键。
+     * @return 绑定快照。
+     */
+    Optional<RuntimeBinding> findById(String bindingId);
+
+    /**
      * 查询当前会话可续接的 Runtime 绑定。
      *
      * @param tenantId 租户标识。

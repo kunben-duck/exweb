@@ -55,14 +55,14 @@
     </insert>
 
     <!--
-      更新 run 状态和关联消息；终态保护避免 CANCELLED/FAILED 被迟到 completed 覆盖。
+      更新 run 状态和关联消息；终态保护避免 CANCELLED/WAITING_USER/FAILED 被迟到 completed 覆盖。
       入参: ChatRunWriteRow，id 定位 run；status/lastSeq/finishedAt 等字段按终态保护规则更新；
             routeType、消息 ID、metadataJson 等为空时尽量保留已有值。
     -->
     <update id="updateExisting" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatRunWriteRow">
         UPDATE fin_ex_chat_run_t
         SET status = CASE
-                WHEN status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN status
+                WHEN status IN ('COMPLETED', 'WAITING_USER', 'FAILED', 'CANCELLED') THEN status
                 ELSE #{status}
             END,
             route_type = COALESCE(route_type, #{routeType}),
@@ -75,18 +75,18 @@
             assistant_message_id = COALESCE(#{assistantMessageId}, assistant_message_id),
             first_seq = COALESCE(first_seq, #{firstSeq}),
             last_seq = CASE
-                WHEN status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN last_seq
+                WHEN status IN ('COMPLETED', 'WAITING_USER', 'FAILED', 'CANCELLED') THEN last_seq
                 ELSE #{lastSeq}
             END,
             cancel_reason = COALESCE(#{cancelReason}, cancel_reason),
             started_at = COALESCE(started_at, #{startedAt}),
             finished_at = CASE
-                WHEN status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN finished_at
+                WHEN status IN ('COMPLETED', 'WAITING_USER', 'FAILED', 'CANCELLED') THEN finished_at
                 ELSE #{finishedAt}
             END,
             metadata_json = COALESCE(#{metadataJson}, metadata_json),
             updated_at = CASE
-                WHEN status IN ('COMPLETED', 'FAILED', 'CANCELLED') THEN updated_at
+                WHEN status IN ('COMPLETED', 'WAITING_USER', 'FAILED', 'CANCELLED') THEN updated_at
                 ELSE #{updatedAt}
             END
         WHERE id = #{id}

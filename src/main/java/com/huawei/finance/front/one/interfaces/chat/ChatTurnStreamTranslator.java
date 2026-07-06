@@ -99,7 +99,8 @@ public class ChatTurnStreamTranslator {
         }
         return "run.completed".equals(event.type())
                 || "run.failed".equals(event.type())
-                || "run.cancelled".equals(event.type());
+                || "run.cancelled".equals(event.type())
+                || "run.waiting_user".equals(event.type());
     }
 
     private String streamItemId(ChatEventDto event) {

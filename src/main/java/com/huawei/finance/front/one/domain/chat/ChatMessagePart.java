@@ -75,6 +75,8 @@ public record ChatMessagePart(
             case "TOOL" -> "工具调用";
             case "REFERENCE" -> "引用来源";
             case "CARD" -> "卡片展示";
+            case "CLARIFICATION_REQUEST" -> "澄清请求";
+            case "CLARIFICATION_RESPONSE" -> "澄清回答";
             default -> "运行事件";
         };
     }
@@ -103,7 +105,7 @@ public record ChatMessagePart(
         return switch (partType) {
             case "ANSWER" -> "COMPLETED";
             case "PROGRESS", "TOOL" -> "STREAMING";
-            case "REFERENCE", "CARD" -> "INFO";
+            case "REFERENCE", "CARD", "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE" -> "INFO";
             default -> "INFO";
         };
     }
@@ -118,6 +120,7 @@ public record ChatMessagePart(
             case "TOOL" -> "tool";
             case "REFERENCE" -> "reference";
             case "CARD" -> "card";
+            case "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE" -> "clarification";
             default -> "runtime";
         };
     }
@@ -128,7 +131,7 @@ public record ChatMessagePart(
             case "PROGRESS" -> "inline";
             case "RUNTIME_EVENT" -> "debug";
             case "REFERENCE" -> "collapsible";
-            case "CARD" -> "inline";
+            case "CARD", "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE" -> "inline";
             default -> "collapsible";
         };
     }

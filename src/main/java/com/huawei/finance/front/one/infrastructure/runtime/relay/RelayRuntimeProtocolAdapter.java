@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.infrastructure.runtime.relay;
 
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeHitlResponseRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import java.util.Set;
@@ -29,6 +30,23 @@ public interface RelayRuntimeProtocolAdapter {
      * @return 标准聊天事件流。
      */
     Flux<ChatEvent> query(AgentRuntimeRequest request);
+
+    /**
+     * @return true 表示该 adapter 支持协议级等待用户输入后的续接。
+     */
+    default boolean supportsUserResponseContinuation() {
+        return false;
+    }
+
+    /**
+     * 继续执行协议级等待用户输入的 Runtime 会话。
+     *
+     * @param request HITL 续接请求。
+     * @return 标准聊天事件流。
+     */
+    default Flux<ChatEvent> continueWithUserResponse(AgentRuntimeHitlResponseRequest request) {
+        return Flux.error(new UnsupportedOperationException("Relay adapter 不支持 HITL 续接"));
+    }
 
     /**
      * 尽力取消下游 Runtime run。

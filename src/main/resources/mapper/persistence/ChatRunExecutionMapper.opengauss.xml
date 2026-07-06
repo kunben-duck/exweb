@@ -74,14 +74,14 @@
 
     <!--
       标记 execution 终态，避免 watchdog 再次抢占已完成 run。
-      入参: runId 定位 execution，terminalStatus 为 COMPLETED/FAILED/CANCELLED 等终态。
+      入参: runId 定位 execution，terminalStatus 为 COMPLETED/WAITING_USER/FAILED/CANCELLED 等终态。
     -->
     <update id="markTerminal">
         UPDATE fin_ex_chat_run_execution_t
         SET execution_status = #{terminalStatus},
             updated_at = CURRENT_TIMESTAMP
         WHERE run_id = #{runId}
-          AND execution_status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
+          AND execution_status NOT IN ('COMPLETED', 'WAITING_USER', 'FAILED', 'CANCELLED')
     </update>
 
     <!--

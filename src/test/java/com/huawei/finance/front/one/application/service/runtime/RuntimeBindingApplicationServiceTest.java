@@ -7,6 +7,9 @@ import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingRepository;
+import com.huawei.finance.front.one.domain.chat.ChatHitlRequest;
+import com.huawei.finance.front.one.domain.chat.ChatHitlStatus;
+import com.huawei.finance.front.one.domain.chat.ChatHitlWaitingType;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBindingStatus;
@@ -169,6 +172,42 @@ class RuntimeBindingApplicationServiceTest {
         assertThat(repository.saved).isNull();
     }
 
+    @Test
+    void touchAndMoveToLeafRefreshesBindingEvenWhenLeafIsUnchanged() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        Instant now = Instant.now();
+        RuntimeBinding binding = new RuntimeBinding("binding1", "t", "u", "s", "relay",
+                "leaf1", "runtime-1", RuntimeBindingStatus.ACTIVE, "run1",
+                now.plus(Duration.ofMinutes(1)), now, now, Map.of());
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        RuntimeBinding refreshed = service.touchAndMoveToLeaf(binding, "run2", "leaf1");
+
+        assertThat(refreshed.id()).isEqualTo("binding1");
+        assertThat(refreshed.leafMessageId()).isEqualTo("leaf1");
+        assertThat(refreshed.lastRunId()).isEqualTo("run2");
+        assertThat(refreshed.expiresAt()).isAfter(binding.expiresAt());
+        assertThat(repository.saved).isEqualTo(refreshed);
+    }
+
+    @Test
+    void resumeForHitlRefreshesOriginalBinding() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        RuntimeBinding binding = binding(RuntimeBindingStatus.ACTIVE).withRuntimeSessionId("runtime-old");
+        repository.saved = binding;
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        RuntimeBinding resumed = service.resumeForHitl(hitlRequest("runtime-new"), "run-hitl");
+
+        assertThat(resumed.id()).isEqualTo(binding.id());
+        assertThat(resumed.lastRunId()).isEqualTo("run-hitl");
+        assertThat(resumed.leafMessageId()).isEqualTo("msg-assistant");
+        assertThat(resumed.runtimeSessionId()).isEqualTo("runtime-new");
+        assertThat(resumed.expiresAt()).isAfter(binding.expiresAt());
+    }
+
     private RuntimeBindingApplicationService service(InMemoryRuntimeBindingRepository repository,
                                                     InMemoryRuntimeBindingCache cache) {
         return new RuntimeBindingApplicationService(repository, cache, new FixedIdGenerator(), Duration.ofDays(3), "relay");
@@ -190,9 +229,22 @@ class RuntimeBindingApplicationServiceTest {
                 null, RuntimeBindingStatus.ACTIVE, "run", now.minus(Duration.ofMinutes(1)), now, now, Map.of());
     }
 
+    private ChatHitlRequest hitlRequest(String runtimeSessionId) {
+        Instant now = Instant.now();
+        return new ChatHitlRequest("hitl1", "t", "u", "s", "run-source", null,
+                "msg-user", "msg-assistant", "relay", "binding1", runtimeSessionId, "approval1",
+                ChatHitlWaitingType.CLARIFICATION, ChatHitlStatus.WAITING, Map.of("approval_id", "approval1"),
+                Map.of(), null, null, null, now, now);
+    }
+
     private static class InMemoryRuntimeBindingRepository implements RuntimeBindingRepository {
         private RuntimeBinding saved;
         private int findActiveCalls;
+
+        @Override
+        public Optional<RuntimeBinding> findById(String bindingId) {
+            return Optional.ofNullable(saved).filter(binding -> binding.id().equals(bindingId));
+        }
 
         @Override
         public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId, String provider) {

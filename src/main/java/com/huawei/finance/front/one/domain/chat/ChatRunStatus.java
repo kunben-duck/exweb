@@ -4,7 +4,7 @@ package com.huawei.finance.front.one.domain.chat;
  * 单轮聊天 run 的生命周期状态。
  *
  * <p>run 是用户一次提问对应的服务端执行单元。浏览器连接断开不会改变 run 状态；
- * 只有执行完成、失败或显式 stop 才会进入终态。</p>
+ * 只有执行完成、失败、显式 stop 或协议级等待用户输入才会进入终态。</p>
  */
 public enum ChatRunStatus {
     /** run 正在执行，仍可被 stop 接口取消。 */
@@ -15,6 +15,8 @@ public enum ChatRunStatus {
     CANCELLED,
     /** run 已正常完成，事件流以 run.completed 结束。 */
     COMPLETED,
+    /** run 已等待用户澄清/审批输入，事件流以 run.waiting_user 结束。 */
+    WAITING_USER,
     /** run 执行失败，事件流以 run.failed 结束。 */
     FAILED;
 
@@ -22,7 +24,7 @@ public enum ChatRunStatus {
      * @return 当前状态是否已经是不可再写业务事件的终态。
      */
     public boolean terminal() {
-        return this == CANCELLED || this == COMPLETED || this == FAILED;
+        return this == CANCELLED || this == COMPLETED || this == WAITING_USER || this == FAILED;
     }
 
     /**

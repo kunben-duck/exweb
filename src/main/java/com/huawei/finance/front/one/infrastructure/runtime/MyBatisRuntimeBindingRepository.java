@@ -29,6 +29,14 @@ public class MyBatisRuntimeBindingRepository implements RuntimeBindingRepository
     }
 
     @Override
+    public Optional<RuntimeBinding> findById(String bindingId) {
+        if (bindingId == null || bindingId.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(mapper.findById(bindingId)).map(this::toDomain);
+    }
+
+    @Override
     public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId, String provider,
                                                String leafMessageId) {
         return Optional.ofNullable(mapper.findActive(tenantId, userId, sessionId, provider, leafMessageId)).map(this::toDomain);

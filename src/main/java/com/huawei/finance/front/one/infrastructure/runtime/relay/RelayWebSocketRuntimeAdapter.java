@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookieProperties;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeHitlResponseRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
@@ -14,6 +15,7 @@ import io.netty.channel.ChannelOption;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -99,6 +101,20 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 : Mono.just(MessageCompletedEvent.of(request.runId(), request.sessionId()))));
     }
 
+    @Override
+    public boolean supportsUserResponseContinuation() {
+        return true;
+    }
+
+    @Override
+    public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeHitlResponseRequest request) {
+        AtomicBoolean messageCompleted = new AtomicBoolean(false);
+        Flux<ChatEvent> events = hitlWithShortConnection(request, messageCompleted);
+        return events.concatWith(Mono.defer(() -> messageCompleted.get()
+                ? Mono.empty()
+                : Mono.just(MessageCompletedEvent.of(request.runId(), request.sessionId()))));
+    }
+
     private Flux<ChatEvent> queryWithShortConnection(AgentRuntimeRequest request, AtomicBoolean messageCompleted) {
         return Flux.create(sink -> {
             ShortRunExchange exchange = new ShortRunExchange(request.runId());
@@ -111,7 +127,8 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                                 .map(WebSocketMessage::getPayloadAsText)
                                 .doOnNext(frame -> validateFrameSize(frame, request.runId()));
                         Flux<ChatEvent> normalized = userMessageFrames(frames, request, exchange)
-                                .transform(frameStream -> normalizeFrames(frameStream, request, messageCompleted))
+                                .transform(frameStream -> normalizeFrames(frameStream, request.runId(),
+                                        request.sessionId(), messageCompleted))
                                 .doOnNext(sink::next)
                                 .doFinally(signal -> exchange.completeSending());
                         return Mono.when(outbound, normalized.then());
@@ -127,12 +144,42 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         }, FluxSink.OverflowStrategy.BUFFER);
     }
 
-    private Flux<ChatEvent> normalizeFrames(Flux<String> frames, AgentRuntimeRequest request,
+    private Flux<ChatEvent> hitlWithShortConnection(AgentRuntimeHitlResponseRequest request,
+                                                    AtomicBoolean messageCompleted) {
+        return Flux.create(sink -> {
+            ShortRunExchange exchange = new ShortRunExchange(request.runId());
+            registerActiveExchange(request.runId(), exchange);
+            var subscription = webSocketClient.execute(endpointUri(request.runId()), outboundHeaders(request.forwardHeaders()),
+                    session -> {
+                        Mono<Void> outbound = session.send(exchange.outbound(configMessage(request))
+                                .map(session::textMessage));
+                        Flux<String> frames = session.receive()
+                                .map(WebSocketMessage::getPayloadAsText)
+                                .doOnNext(frame -> validateFrameSize(frame, request.runId()));
+                        Flux<ChatEvent> normalized = hitlResponseFrames(frames, request, exchange)
+                                .transform(frameStream -> normalizeFrames(frameStream, request.runId(),
+                                        request.sessionId(), messageCompleted))
+                                .doOnNext(sink::next)
+                                .doFinally(signal -> exchange.completeSending());
+                        return Mono.when(outbound, normalized.then());
+                    })
+                    .doFinally(signal -> activeExchanges.remove(request.runId(), exchange))
+                    .subscribe(null, sink::error, sink::complete);
+            exchange.subscription(subscription);
+            sink.onCancel(subscription::dispose);
+            sink.onDispose(() -> {
+                activeExchanges.remove(request.runId(), exchange);
+                exchange.close(null);
+            });
+        }, FluxSink.OverflowStrategy.BUFFER);
+    }
+
+    private Flux<ChatEvent> normalizeFrames(Flux<String> frames, String runId, String sessionId,
                                             AtomicBoolean messageCompleted) {
         return frames
                 .takeUntil(this::ordinaryTerminalFrame)
                 .concatMap(frame -> Flux.fromIterable(responseNormalizer.normalize(
-                        request.runId(), request.sessionId(), frame)))
+                        runId, sessionId, frame)))
                 .takeUntil(event -> "message.completed".equals(event.type()))
                 .doOnNext(event -> emitEvent(messageCompleted, event));
     }
@@ -306,6 +353,16 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
 
     private Flux<String> userMessageFrames(Flux<String> frames, AgentRuntimeRequest request,
                                            ShortRunExchange exchange) {
+        return businessFramesAfterConfig(frames, request.runId(), exchange, userMessage(request));
+    }
+
+    private Flux<String> hitlResponseFrames(Flux<String> frames, AgentRuntimeHitlResponseRequest request,
+                                            ShortRunExchange exchange) {
+        return businessFramesAfterConfig(frames, request.runId(), exchange, approvalResponseMessage(request));
+    }
+
+    private Flux<String> businessFramesAfterConfig(Flux<String> frames, String runId,
+                                                   ShortRunExchange exchange, String initialBusinessMessage) {
         return Flux.create(sink -> {
             AtomicBoolean done = new AtomicBoolean(false);
             AtomicBoolean userMessageReleased = new AtomicBoolean(false);
@@ -355,7 +412,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     .subscribe(ignored -> {
                         if (userMessageReleased.compareAndSet(false, true)) {
                             fail.accept(new RelayRuntimeProtocolException("RELAY_WS_CONFIG_TIMEOUT: Relay WebSocket "
-                                    + "config handshake timed out. runId=" + request.runId()));
+                                    + "config handshake timed out. runId=" + runId));
                         }
                     }, fail));
             frameSubscription.set(frames.subscribe(frame -> {
@@ -380,8 +437,8 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                          */
                         sink.next(frame);
                         try {
-                            exchange.send(userMessage(request));
-                            startRunControls(new RunControlContext(exchange, request, heartbeatTimer, livenessTimer,
+                            exchange.send(initialBusinessMessage);
+                            startRunControls(new RunControlContext(exchange, runId, heartbeatTimer, livenessTimer,
                                     maxRunTimer, lastInboundNanos, fail));
                         } catch (RuntimeException ex) {
                             fail.accept(ex);
@@ -402,7 +459,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
             }, () -> {
                 if (!userMessageReleased.get()) {
                     fail.accept(new RelayRuntimeProtocolException("Relay WebSocket closed before config handshake "
-                            + "completed. runId=" + request.runId()));
+                            + "completed. runId=" + runId));
                     return;
                 }
                 if (terminalFrameSeen.get()) {
@@ -410,7 +467,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     return;
                 }
                 fail.accept(new RelayRuntimeProtocolException("RELAY_WS_CLOSED_BEFORE_TERMINAL: Relay WebSocket "
-                        + "closed before terminal session-state. runId=" + request.runId()));
+                        + "closed before terminal session-state. runId=" + runId));
             }));
             sink.onDispose(() -> {
                 done.set(true);
@@ -436,25 +493,25 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     return;
                 }
                 try {
-                    context.exchange().interrupt(context.request().runId());
+                    context.exchange().interrupt(context.runId());
                 } catch (Throwable ex) {
                     log.warn("Relay WebSocket heartbeat timeout interrupt failed. runId={}, reason={}",
-                            context.request().runId(), ex.getMessage());
+                            context.runId(), ex.getMessage());
                 }
                 context.fail().accept(new RelayRuntimeProtocolException("RELAY_WS_HEARTBEAT_RESPONSE_TIMEOUT: Relay "
-                        + "WebSocket heartbeat response timed out. runId=" + context.request().runId()
+                        + "WebSocket heartbeat response timed out. runId=" + context.runId()
                         + ", timeout=" + heartbeatResponseTimeout));
             }, context.fail()));
         }
         context.maxRunTimer().set(Mono.delay(maxRunDuration()).subscribe(ignored -> {
             try {
-                context.exchange().interrupt(context.request().runId());
+                context.exchange().interrupt(context.runId());
             } catch (Throwable ex) {
                 log.warn("Relay WebSocket max run duration interrupt failed. runId={}, reason={}",
-                        context.request().runId(), ex.getMessage());
+                        context.runId(), ex.getMessage());
             }
             context.fail().accept(new RelayRuntimeProtocolException("RELAY_WS_MAX_RUN_DURATION_EXCEEDED: Relay WebSocket "
-                    + "run exceeded max duration. runId=" + context.request().runId()
+                    + "run exceeded max duration. runId=" + context.runId()
                     + ", maxRunDuration=" + maxRunDuration()));
         }, context.fail()));
     }
@@ -509,6 +566,18 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         return toJson(Map.of("type", "config", "config", Map.copyOf(config)));
     }
 
+    private String configMessage(AgentRuntimeHitlResponseRequest request) {
+        Map<String, Object> config = new LinkedHashMap<>();
+        config.put("sessionMode", "resume");
+        config.put("sessionId", blank(request.runtimeSessionId()) ? request.sessionId() : request.runtimeSessionId());
+        config.put("uid", request.userId());
+        config.put("supports_incremental_recovery", true);
+        if (websocketProperties().getAppMode() != null && !websocketProperties().getAppMode().isBlank()) {
+            config.put("appMode", websocketProperties().getAppMode());
+        }
+        return toJson(Map.of("type", "config", "config", Map.copyOf(config)));
+    }
+
     private String userMessage(AgentRuntimeRequest request) {
         Map<String, Object> message = new LinkedHashMap<>();
         message.put("type", "user-message");
@@ -518,6 +587,46 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
             message.put("metadata", metadata);
         }
         return toJson(message);
+    }
+
+    private String approvalResponseMessage(AgentRuntimeHitlResponseRequest request) {
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("type", "approval-response");
+        message.put("request_id", request.approvalId());
+        message.put("approved", booleanValue(request.responsePayload().get("approved")));
+        message.put("scope", stringOrDefault(request.responsePayload().get("scope"), "once"));
+        Object answers = request.responsePayload().get("questionnaireAnswers");
+        if (answers instanceof Map<?, ?> answerMap) {
+            message.put("questionnaire_answers", answerMap);
+        } else {
+            message.put("questionnaire_answers", Map.of());
+        }
+        Object metadata = request.responsePayload().get("metadata");
+        if (metadata instanceof Map<?, ?> metadataMap && !metadataMap.isEmpty()) {
+            Map<String, Object> metadataCopy = new LinkedHashMap<>();
+            metadataMap.forEach((key, value) -> {
+                if (key != null) {
+                    metadataCopy.put(String.valueOf(key), value);
+                }
+            });
+            Map<String, Object> sanitized = RelayRuntimeWireRequestMapper.sanitizedMetadata(metadataCopy);
+            if (!sanitized.isEmpty()) {
+                message.put("metadata", sanitized);
+            }
+        }
+        message.put("timestamp", Instant.now().toString());
+        return toJson(message);
+    }
+
+    private boolean booleanValue(Object value) {
+        return value instanceof Boolean bool ? bool : Boolean.parseBoolean(String.valueOf(value));
+    }
+
+    private String stringOrDefault(Object value, String defaultValue) {
+        if (value == null || String.valueOf(value).isBlank()) {
+            return defaultValue;
+        }
+        return String.valueOf(value);
     }
 
     private String interruptMessage() {
@@ -754,7 +863,8 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                         "tool-structured-result",
                         "generate-response",
                         "approval-request",
-                        "approval-result" -> true;
+                        "approval-result",
+                        "approval-response" -> true;
                 default -> type.startsWith("thinking-") || type.startsWith("tool-");
             };
         } catch (JsonProcessingException ex) {
@@ -848,7 +958,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     }
 
     private record RunControlContext(ShortRunExchange exchange,
-                                     AgentRuntimeRequest request,
+                                     String runId,
                                      AtomicReference<Disposable> heartbeatTimer,
                                      AtomicReference<Disposable> livenessTimer,
                                      AtomicReference<Disposable> maxRunTimer,

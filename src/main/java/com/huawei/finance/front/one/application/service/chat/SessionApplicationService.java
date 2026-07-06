@@ -61,19 +61,31 @@ public class SessionApplicationService implements ChatSessionFacade {
     private final RuntimeBindingApplicationService runtimeBindingService;
     private final ChatShareRepository shareRepository;
     private final ObjectProvider<ChatRunStopCoordinator> stopCoordinatorProvider;
+    private final ObjectProvider<ChatHitlApplicationService> hitlServiceProvider;
 
     @Autowired
     public SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
                                      PermissionChecker permissionChecker, ChatRunApplicationService chatRunService,
                                      RuntimeBindingApplicationService runtimeBindingService,
                                      ChatShareRepository shareRepository,
-                                     ObjectProvider<ChatRunStopCoordinator> stopCoordinatorProvider) {
+                                     ObjectProvider<ChatRunStopCoordinator> stopCoordinatorProvider,
+                                     ObjectProvider<ChatHitlApplicationService> hitlServiceProvider) {
         this.sessionRepository = sessionRepository; this.messageRepository = messageRepository; this.idGenerator = idGenerator;
         this.permissionChecker = permissionChecker;
         this.chatRunService = chatRunService;
         this.runtimeBindingService = runtimeBindingService;
         this.shareRepository = shareRepository;
         this.stopCoordinatorProvider = stopCoordinatorProvider;
+        this.hitlServiceProvider = hitlServiceProvider;
+    }
+
+    SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
+                              PermissionChecker permissionChecker, ChatRunApplicationService chatRunService,
+                              RuntimeBindingApplicationService runtimeBindingService,
+                              ChatShareRepository shareRepository,
+                              ObjectProvider<ChatRunStopCoordinator> stopCoordinatorProvider) {
+        this(sessionRepository, messageRepository, idGenerator, permissionChecker, chatRunService,
+                runtimeBindingService, shareRepository, stopCoordinatorProvider, null);
     }
 
     SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
@@ -81,7 +93,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                               RuntimeBindingApplicationService runtimeBindingService,
                               ChatShareRepository shareRepository) {
         this(sessionRepository, messageRepository, idGenerator, permissionChecker, chatRunService,
-                runtimeBindingService, shareRepository, null);
+                runtimeBindingService, shareRepository, null, null);
     }
 
     SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
@@ -220,6 +232,10 @@ public class SessionApplicationService implements ChatSessionFacade {
             if (shareRepository != null) {
                 shareRepository.revokeActiveBySession(user.tenantId(), user.ownerUserId(), session.id(), Instant.now());
             }
+            ChatHitlApplicationService hitlService = hitlServiceProvider == null ? null : hitlServiceProvider.getIfAvailable();
+            if (hitlService != null) {
+                hitlService.cancelOpenBySession(user, session.id());
+            }
             deleted.add(deletedSession);
         }
         stopActiveRunsAfterDeleteCommit(user, activeRunPlans);
@@ -351,6 +367,49 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     /**
+     * 更新已有 assistant 消息，并追加本次续接产生的 parts。
+     *
+     * <p>HITL 续接不会创建新的普通 user/assistant 节点；澄清请求、用户回答和最终回答都挂在
+     * 同一条 assistant 消息下，避免历史消息路径被一次澄清拆成多轮问答。</p>
+     */
+    public ChatMessage updateAssistantMessage(AssistantMessageUpdateCommand command) {
+        ChatSession session = command.session();
+        ChatMessage existing = requireMessageInSession(session, command.messageId());
+        ensureUnlockedAssistantMessage(existing, "HITL 续接 assistant 消息");
+        Instant now = Instant.now();
+        int startOrder = existing.parts() == null ? 1 : existing.parts().size() + 1;
+        List<ChatMessagePart> parts = buildMessageParts(new MessagePartBuildContext(command.tenantId(),
+                command.userId(), session.id(), existing.id(), command.runId(), command.content(),
+                command.safePartDrafts(), now, startOrder));
+        ChatMessage updated = new ChatMessage(
+                existing.id(),
+                command.tenantId(),
+                command.userId(),
+                session.id(),
+                existing.parentMessageId(),
+                existing.nodeOrder(),
+                existing.treeDepth(),
+                existing.siblingIndex(),
+                "assistant",
+                command.content(),
+                existing.tokenCount(),
+                command.runId(),
+                existing.originType(),
+                existing.locked(),
+                existing.sourceSessionId(),
+                existing.sourceMessageId(),
+                existing.editedFromMessageId(),
+                existing.regeneratedFromMessageId(),
+                command.metadataJson(),
+                parts,
+                now
+        );
+        ChatMessage saved = messageRepository.updateAssistantMessage(updated);
+        sessionRepository.updateCurrentLeaf(command.tenantId(), command.userId(), session.id(), saved.id());
+        return saved;
+    }
+
+    /**
      * 查询某条消息的同父同角色候选版本。
      */
     public List<ChatMessage> listVariants(UserContext user, String sessionId, String messageId) {
@@ -444,7 +503,7 @@ public class SessionApplicationService implements ChatSessionFacade {
 
     private List<ChatMessagePart> buildMessageParts(MessagePartBuildContext context) {
         List<ChatMessagePart> parts = new ArrayList<>();
-        int order = 1;
+        int order = context.startOrder();
         if (context.drafts() != null) {
             for (ChatMessagePartDraft draft : context.drafts()) {
                 if (draft == null || draft.partType() == null || draft.partType().isBlank()) {

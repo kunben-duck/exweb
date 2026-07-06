@@ -21,6 +21,14 @@ public interface ChatMessageMapper {
     void insert(ChatMessageRow row);
 
     /**
+     * 更新已有 assistant 消息正文和元数据。
+     *
+     * @param row 消息更新行，id/tenantId/userId/sessionId 定位消息，content/runId/metadataJson 为新值。
+     * @return 影响行数。
+     */
+    int updateAssistant(ChatMessageRow row);
+
+    /**
      * 写入一条 assistant 消息过程片段。
      *
      * @param row part 写入行，包含消息归属、part 类型、展示语义、payload 和排序号。

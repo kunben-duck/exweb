@@ -27,6 +27,14 @@ public interface RuntimeBindingMapper {
     int update(RuntimeBindingRow row);
 
     /**
+     * 按主键查询 RuntimeBinding。
+     *
+     * @param bindingId 绑定主键。
+     * @return binding 行；不存在时为 {@code null}。
+     */
+    RuntimeBindingRow findById(@Param("bindingId") String bindingId);
+
+    /**
      * 查询指定 leaf 的 active RuntimeBinding。
      *
      * @param tenantId 租户标识。

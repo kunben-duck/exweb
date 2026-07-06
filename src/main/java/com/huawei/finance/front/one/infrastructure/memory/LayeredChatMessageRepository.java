@@ -62,6 +62,18 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
     }
 
     @Override
+    public ChatMessage updateAssistantMessage(ChatMessage message) {
+        ChatMessage previous = databaseStore.findByOwnerAndId(message.tenantId(), message.userId(), message.id())
+                .orElse(null);
+        ChatMessage updated = databaseStore.updateAssistantMessage(message);
+        if (previous != null) {
+            redisCache.remove(previous);
+        }
+        redisCache.append(updated);
+        return updated;
+    }
+
+    @Override
     public List<ChatMessage> findRecentMessages(String tenantId, String userId, String sessionId, int limit) {
         List<ChatMessage> cached = redisCache.findRecentMessages(tenantId, userId, sessionId, limit);
         if (!cached.isEmpty()) {

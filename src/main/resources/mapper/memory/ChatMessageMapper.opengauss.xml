@@ -76,6 +76,23 @@
     </insert>
 
     <!--
+      更新已有 assistant 消息正文、来源 run 和消息元数据，用于 HITL 续接完成后复用同一 assistant 节点。
+      入参: ChatMessageRow，tenantId/userId/sessionId/id 定位当前用户当前会话的 assistant 消息，
+            content/runId/metadataJson 为新值；metadataJson 允许覆盖为空以清理等待态标记。
+    -->
+    <update id="updateAssistant" parameterType="com.huawei.finance.front.one.infrastructure.memory.ChatMessageRow">
+        UPDATE fin_ex_chat_message_t
+        SET content = #{content},
+            run_id = COALESCE(#{runId}, run_id),
+            metadata_json = #{metadataJson}
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND id = #{id}
+          AND role = 'assistant'
+    </update>
+
+    <!--
       写入 assistant 过程化展示片段，如 thinking、tool、reference、card 和 answer 校验片段。
       入参: ChatMessagePartRow，id 为 part 主键，tenantId/userId/sessionId/messageId/runId 为归属与关联边界，
             partType/sourceType/contentText/title/status/channel/displayHint/visible/payloadJson/partOrder 描述展示语义。

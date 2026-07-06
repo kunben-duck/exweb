@@ -260,7 +260,10 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     }
 
     private boolean terminal(String eventType) {
-        return "run.completed".equals(eventType) || "run.failed".equals(eventType) || "run.cancelled".equals(eventType);
+        return "run.completed".equals(eventType)
+                || "run.failed".equals(eventType)
+                || "run.cancelled".equals(eventType)
+                || "run.waiting_user".equals(eventType);
     }
 
     private void completeTopic(String topicId, TopicSink sink) {
@@ -516,7 +519,10 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
         }
 
         private boolean terminal() {
-            return "run.completed".equals(eventType) || "run.failed".equals(eventType) || "run.cancelled".equals(eventType);
+            return "run.completed".equals(eventType)
+                    || "run.failed".equals(eventType)
+                    || "run.cancelled".equals(eventType)
+                    || "run.waiting_user".equals(eventType);
         }
     }
 

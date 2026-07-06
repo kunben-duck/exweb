@@ -1,9 +1,11 @@
 package com.huawei.finance.front.one.application.facade;
 
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.finance.front.one.application.service.chat.ChatHitlResponseCommand;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
+import com.huawei.finance.front.one.domain.chat.ChatHitlResponseStartResult;
 import com.huawei.finance.front.one.domain.chat.ChatRunStartResult;
 import com.huawei.finance.front.one.domain.chat.ChatRunStopResult;
 import reactor.core.publisher.Flux;
@@ -67,6 +69,19 @@ public interface FinanceChatFacade {
      * @return stop 后的 run 状态。
      */
     Mono<ChatRunStopResult> stopRun(UserContext user, String runId, RuntimeForwardHeaders forwardHeaders);
+
+    /**
+     * 提交等待用户输入的澄清/审批响应，并后台启动续接 run。
+     *
+     * @param command HITL 响应命令。
+     * @param forwardHeaders 请求入口捕获的 Runtime 转发头快照；不会持久化。
+     * @return 续接 run 创建结果。
+     */
+    default Mono<ChatHitlResponseStartResult> submitHitlResponse(
+            ChatHitlResponseCommand command,
+            RuntimeForwardHeaders forwardHeaders) {
+        return Mono.error(new UnsupportedOperationException("HITL response is not supported by this facade"));
+    }
 
     /**
      * 停止指定 run，不携带请求头透传。

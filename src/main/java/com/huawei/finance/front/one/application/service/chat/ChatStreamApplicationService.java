@@ -157,7 +157,7 @@ public class ChatStreamApplicationService {
      *
      * <p>该接口比会话级恢复更适合跨电脑续接“正在输出的当前回答”：新渲染实例应从
      * active run 的 firstSeq 之前开始补发。若 run 尚未终止，服务端会继续接入 live topic，
-     * 直到 {@code run.completed/run.failed/run.cancelled} 终态事件到达后再关闭事件恢复连接。</p>
+     * 直到 {@code run.completed/run.failed/run.cancelled/run.waiting_user} 终态事件到达后再关闭事件恢复连接。</p>
      *
      * @param user 请求入口解析出的不可变用户身份快照。
      * @param runId 需要恢复的 run 标识。
@@ -355,7 +355,8 @@ public class ChatStreamApplicationService {
     private boolean terminalEvent(ChatEvent event) {
         return event != null && ("run.completed".equals(event.type())
                 || "run.failed".equals(event.type())
-                || "run.cancelled".equals(event.type()));
+                || "run.cancelled".equals(event.type())
+                || "run.waiting_user".equals(event.type()));
     }
 
     /**

@@ -314,7 +314,12 @@ public class ChatController {
                 status.activeStreamTopicId(),
                 status.activeRunFirstSeq(),
                 status.activeRunLastSeq(),
-                status.cancellable()
+                status.cancellable(),
+                status.waitingUserInput(),
+                status.hitlRequestId(),
+                status.waitingType(),
+                status.assistantMessageId(),
+                status.expiresAt()
         );
     }
 

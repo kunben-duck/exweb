@@ -18,6 +18,7 @@ import com.huawei.finance.front.one.application.service.runtime.DomainAgentExecu
 import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingResolution;
 import com.huawei.finance.front.one.application.service.runtime.RuntimeExecutionContext;
+import com.huawei.finance.front.one.application.service.runtime.RuntimeHitlResponseContext;
 import com.huawei.finance.front.one.application.service.runtime.SubAgentExecutor;
 import com.huawei.finance.front.one.application.service.runtime.SubAgentExecutionContext;
 import com.huawei.finance.front.one.application.service.runtime.SystemResponseExecutor;
@@ -25,10 +26,13 @@ import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
+import com.huawei.finance.front.one.domain.chat.ChatHitlRequest;
+import com.huawei.finance.front.one.domain.chat.ChatHitlResponseStartResult;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus;
 import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
+import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatRunStartResult;
 import com.huawei.finance.front.one.domain.chat.ChatRunStopResult;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
@@ -36,12 +40,16 @@ import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import com.huawei.finance.front.one.domain.chat.ErrorEvent;
 import com.huawei.finance.front.one.domain.chat.RunCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
+import com.huawei.finance.front.one.domain.chat.RuntimeEvent;
 import com.huawei.finance.front.one.domain.chat.RunStartedEvent;
+import com.huawei.finance.front.one.domain.chat.RunWaitingUserEvent;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
 import com.huawei.finance.front.one.domain.routing.RouteType;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
+import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -89,6 +97,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private final LocalChatRunExecutionRegistry runExecutionRegistry;
     private final RunAdmissionControlService runAdmissionControl;
     private final ChatRunStopCoordinator stopCoordinator;
+    private final ChatHitlApplicationService chatHitlService;
+    private final ChatRunTerminalCommitService terminalCommitService;
     private final IdGenerator idGenerator;
     private final Scheduler eventIoScheduler;
 
@@ -103,6 +113,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                 ChatRunApplicationService chatRunService, ChatRunLeaseApplicationService chatRunLeaseService,
                                 ChatDeltaCoalescer chatDeltaCoalescer, LocalChatRunExecutionRegistry runExecutionRegistry,
                                 RunAdmissionControlService runAdmissionControl, ChatRunStopCoordinator stopCoordinator,
+                                ChatHitlApplicationService chatHitlService,
+                                ChatRunTerminalCommitService terminalCommitService,
                                 IdGenerator idGenerator,
                                 @Qualifier("chatStreamEventScheduler") Scheduler eventIoScheduler) {
         this.sessionService = sessionService;
@@ -122,6 +134,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
         this.runExecutionRegistry = runExecutionRegistry;
         this.runAdmissionControl = runAdmissionControl;
         this.stopCoordinator = stopCoordinator;
+        this.chatHitlService = chatHitlService;
+        this.terminalCommitService = terminalCommitService;
         this.idGenerator = idGenerator;
         this.eventIoScheduler = eventIoScheduler == null ? Schedulers.boundedElastic() : eventIoScheduler;
     }
@@ -142,7 +156,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 chatStreamService, chatRunService, chatRunLeaseService, chatDeltaCoalescer, runExecutionRegistry,
                 runAdmissionControl, new ChatRunStopCoordinator(sessionService, chatStreamService, chatRunService,
                         chatRunLeaseService, runExecutionRegistry, agentRuntimeExecutor, subAgentExecutor,
-                        domainAgentExecutor, idGenerator), idGenerator, Schedulers.boundedElastic());
+                        domainAgentExecutor, idGenerator), null, null, idGenerator, Schedulers.boundedElastic());
     }
 
     @Override
@@ -206,6 +220,135 @@ public class FinanceEXChatService implements FinanceChatFacade {
     }
 
     @Override
+    public Mono<ChatHitlResponseStartResult> submitHitlResponse(ChatHitlResponseCommand command,
+                                                                RuntimeForwardHeaders forwardHeaders) {
+        return Mono.defer(() -> {
+            RuntimeForwardHeaders headerSnapshot = normalizeForwardHeaders(forwardHeaders);
+            UserContext user = command.user();
+            RunAdmissionControlService.Permit runPermit = runAdmissionControl.acquire(user);
+            Sinks.One<ChatEvent> firstEvent = Sinks.one();
+            AtomicReference<Disposable> disposableRef = new AtomicReference<>();
+            AtomicReference<String> runIdRef = new AtomicReference<>();
+            AtomicBoolean terminal = new AtomicBoolean(false);
+            String runId = idGenerator.newId("run",
+                    IdGenerateContext.of(user.tenantId(), user.ownerUserId(), command.hitlRequestId()));
+            ChatHitlClaimResult claim;
+            try {
+                claim = chatHitlService.claimResponse(command, runId);
+            } catch (RuntimeException ex) {
+                runPermit.close();
+                return Mono.error(ex);
+            }
+            Flux<ChatEvent> runFlux;
+            try {
+                runFlux = executeHitlContinuation(user, claim, runId, headerSnapshot)
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .doOnNext(event -> {
+                            if (runIdRef.compareAndSet(null, event.runId())) {
+                                Disposable disposable = disposableRef.get();
+                                if (disposable != null && !terminal.get()) {
+                                    runExecutionRegistry.register(event.runId(), disposable);
+                                }
+                            }
+                            firstEvent.tryEmitValue(event);
+                        })
+                        .doOnComplete(() -> {
+                            if (runIdRef.get() == null) {
+                                firstEvent.tryEmitError(new IllegalStateException("hitl continuation finished before emitting any event"));
+                            }
+                        })
+                        .doFinally(signalType -> {
+                            terminal.set(true);
+                            runExecutionRegistry.complete(runIdRef.get());
+                            runPermit.close();
+                        });
+            } catch (RuntimeException ex) {
+                chatHitlService.markWaiting(claim.request());
+                runPermit.close();
+                return Mono.error(ex);
+            }
+            Disposable disposable = runFlux.subscribe(event -> {
+            }, error -> {
+                Sinks.EmitResult result = firstEvent.tryEmitError(error);
+                if (result.isFailure()) {
+                    log.warn("Background HITL continuation terminated after handoff. hitlRequestId={}, runId={}, reason={}",
+                            command.hitlRequestId(), runId, error.getMessage(), error);
+                }
+            });
+            disposableRef.set(disposable);
+            if (runIdRef.get() != null && !terminal.get()) {
+                runExecutionRegistry.register(runIdRef.get(), disposable);
+            }
+            return firstEvent.asMono()
+                    .map(event -> new ChatHitlResponseStartResult(
+                            claim.request().id(),
+                            event.runId(),
+                            event.sessionId(),
+                            claim.request().assistantMessageId(),
+                            ChatStreamTopics.runTopic(event.runId()),
+                            event.sequence(),
+                            "RESPONDING"));
+        });
+    }
+
+    private Flux<ChatEvent> executeHitlContinuation(UserContext user, ChatHitlClaimResult claim, String runId,
+                                                    RuntimeForwardHeaders forwardHeaders) {
+        ChatHitlRequest hitl = claim.request();
+        ChatSession session = sessionService.getSession(user, hitl.sessionId());
+        RuntimeBinding binding = runtimeBindingService.resumeForHitl(hitl, runId);
+        RouteTarget route = RouteTarget.agentRuntime("hitl-continuation", 1.0,
+                "continue waiting user input");
+        ChatMessage userMessage = new ChatMessage(hitl.userMessageId(), user.tenantId(), user.ownerUserId(),
+                session.id(), "user", "", null, Instant.now());
+        ChatRunMessagePlan messagePlan = new ChatRunMessagePlan(ChatRunMode.NEXT,
+                hitl.userMessageId(), userMessage, null);
+        AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>(binding);
+        AssistantAssembly assistant = new AssistantAssembly();
+        ChatRun run = chatRunService.createRunning(new CreateChatRunContext(
+                runId,
+                user,
+                session.id(),
+                route,
+                binding,
+                Map.of("hitlRequestId", hitl.id(), "waitingType", hitl.waitingType().name()),
+                ChatRunMode.NEXT,
+                hitl.userMessageId(),
+                hitl.userMessageId()
+        ));
+        RunExecutionClaim executionClaim;
+        try {
+            executionClaim = chatRunLeaseService.startRun(run);
+        } catch (RuntimeException ex) {
+            ChatEvent failed = chatStreamService.appendAndPublish(
+                    ErrorEvent.of(runId, session.id(), "RUN_EXECUTION_INIT_FAILED", ex.getMessage()));
+            chatRunService.observeEvent(failed);
+            chatHitlService.markWaiting(hitl);
+            return Flux.just(failed);
+        }
+        runExecutionRegistry.registerClaim(executionClaim);
+        Flux<ChatEvent> responsePart = Flux.just(clarificationResponseEvent(runId, session.id(), hitl, claim.responsePayload()));
+        Flux<ChatEvent> body = agentRuntimeExecutor.continueWithUserResponse(new RuntimeHitlResponseContext(
+                user,
+                session.id(),
+                runId,
+                binding.provider(),
+                binding.runtimeSessionId(),
+                hitl.id(),
+                hitl.waitingType().name(),
+                hitl.approvalId(),
+                claim.responsePayload(),
+                forwardHeaders
+        ));
+        return persistAndPublishRunEvents(
+                Flux.concat(Flux.just(RunStartedEvent.of(runId, session.id())), responsePart, body,
+                                Flux.just(RunCompletedEvent.of(runId, session.id(), runCompletedPayload(route, binding))))
+                        .onErrorResume(ex -> Flux.just(runtimeErrorEvent(runId, session.id(), ex))),
+                new RunEventPipelineContext(user, session, messagePlan, bindingRef, assistant, runId,
+                        executionClaim, new AtomicReference<>(), hitl)
+        );
+    }
+
+    @Override
     public Flux<ChatEvent> executeRun(UserContext user, ChatCommand command, RuntimeForwardHeaders forwardHeaders) {
         // defer 确保每个订阅都会生成独立 runId，避免热流复用导致事件串线。
         return Flux.defer(() -> {
@@ -220,6 +363,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
             ChatSession session = sessionService.loadOrCreate(identified);
             // 同一会话同一时刻只允许一个 active run。这里在写入用户消息前快速拒绝，
             // 避免多页签重复提交时先污染消息树；createRunning 仍会再做一次 Redis 原子声明。
+            if (chatHitlService != null) {
+                chatHitlService.rejectIfWaiting(user, session.id());
+            }
             chatRunService.rejectIfActiveRunExists(user, session.id());
 
             List<AttachmentRef> attachments = documentFacade.resolveAttachmentsForUser(user,
@@ -280,6 +426,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
             RouteTarget selectedRoute = route;
             RuntimeSessionMode selectedRuntimeSessionMode = runtimeSessionMode;
             AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>(binding);
+            AtomicReference<Map<String, Object>> pendingHitlPayloadRef = new AtomicReference<>();
             AssistantAssembly assistant = new AssistantAssembly();
             ChatRun run = chatRunService.createRunning(new CreateChatRunContext(
                     runId,
@@ -338,14 +485,14 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                         Flux.just(RunCompletedEvent.of(runId, session.id(), runCompletedPayload(selectedRoute, bindingRef.get()))))
                                 .onErrorResume(ex -> Flux.just(runtimeErrorEvent(runId, session.id(), ex))),
                         new RunEventPipelineContext(user, session, messagePlan, bindingRef, assistant, runId,
-                                executionClaim)
+                                executionClaim, pendingHitlPayloadRef, null)
                 );
             } catch (RuntimeException ex) {
                 // run 已创建后同步步骤失败时，也必须写入 run.failed 并释放 active run，避免前端看到永远 RUNNING。
                 return persistAndPublishRunEvents(
                         Flux.just(runtimeErrorEvent(runId, session.id(), ex)),
                         new RunEventPipelineContext(user, session, messagePlan, bindingRef, assistant, runId,
-                                executionClaim)
+                                executionClaim, pendingHitlPayloadRef, null)
                 );
             }
         });
@@ -396,6 +543,11 @@ public class FinanceEXChatService implements FinanceChatFacade {
                         log.info("Stop chat run event stream after guarded insert rejection. runId={}, reason={}",
                                 runId, ex.getMessage());
                         return Mono.empty();
+                    } catch (RuntimeException ex) {
+                        if ("run.failed".equals(event.type()) || terminalCommitService == null) {
+                            return Mono.error(ex);
+                        }
+                        return Mono.just(commitTerminalFailure(context, ex));
                     }
                 });
     }
@@ -407,8 +559,22 @@ public class FinanceEXChatService implements FinanceChatFacade {
         AtomicReference<RuntimeBinding> bindingRef = context.bindingRef();
         ChatRunMessagePlan messagePlan = context.messagePlan();
         UserContext user = context.user();
-        CompletionMessageTarget completionTarget = completionMessageTarget(event, assistant, user, session, runId);
-        ChatEvent eventToPersist = withCompletionFeedbackPayload(event, completionTarget);
+        CompletionMessageTarget completionTarget = completionMessageTarget(event, context);
+        ChatHitlRequest waitingRequest = waitingRequest(event, completionTarget, context);
+        ChatEvent eventToPersist = waitingRequest == null
+                ? withCompletionFeedbackPayload(event, completionTarget)
+                : withWaitingUserPayload(event, completionTarget, waitingRequest);
+        if (terminalCommitService != null && waitingRequest != null) {
+            return commitWaitingUser(eventToPersist, context, completionTarget, waitingRequest);
+        }
+        if (terminalCommitService != null && "run.completed".equals(eventToPersist.type())
+                && completionTarget.messageReady()) {
+            return commitCompleted(eventToPersist, context, completionTarget);
+        }
+        if (terminalCommitService != null && context.continuationHitlRequest() != null
+                && ("run.failed".equals(eventToPersist.type()) || "run.cancelled".equals(eventToPersist.type()))) {
+            return commitTerminalOnly(eventToPersist, context);
+        }
         /*
          * 只有 DB guarded insert 成功后，事件才算事实成立。assistant 文本累积、
          * 历史消息写入、run 状态推进和 Redis/WebSocket 发布都以该持久化结果为准，
@@ -416,12 +582,43 @@ public class FinanceEXChatService implements FinanceChatFacade {
          */
         ChatEvent stored = chatStreamService.appendWithExecutionGuard(eventToPersist, context.executionClaim());
         assistant.observe(stored);
+        rememberPendingHitlRequest(stored, context);
         /*
          * run.completed 是前端、Event Resume 和跨设备续接共同认可的“本轮回答已经闭合”信号。
          * 因此在发布该终态事件之前，必须先把完整 assistant 消息写入历史消息树，
          * 避免客户端收到 completed 后立即查询历史时只能看到 user 节点。
          */
         if ("run.completed".equals(stored.type()) && completionTarget.messageReady()) {
+            ChatMessage savedAssistant = context.continuationHitlRequest() == null
+                    ? sessionService.saveAssistantMessage(new AssistantMessageSaveCommand(
+                            user.tenantId(),
+                            user.ownerUserId(),
+                            session,
+                            assistant.finalContent(),
+                            runId,
+                            messagePlan.userMessage().id(),
+                            messagePlan.regeneratedFromMessageId(),
+                            assistant.parts(),
+                            null,
+                            completionTarget.assistantMessageId()
+                    ))
+                    : sessionService.updateAssistantMessage(new AssistantMessageUpdateCommand(
+                            user.tenantId(),
+                            user.ownerUserId(),
+                            session,
+                            context.continuationHitlRequest().assistantMessageId(),
+                            assistant.finalContent(),
+                            runId,
+                            assistant.parts(),
+                            null
+            ));
+            chatRunService.bindAssistantMessage(runId, savedAssistant.id());
+            bindingRef.set(runtimeBindingService.touchAndMoveToLeaf(bindingRef.get(), runId, savedAssistant.id()));
+            if (context.continuationHitlRequest() != null) {
+                chatHitlService.markAnswered(context.continuationHitlRequest());
+            }
+        }
+        if ("run.waiting_user".equals(stored.type()) && completionTarget.messageReady() && waitingRequest != null) {
             ChatMessage savedAssistant = sessionService.saveAssistantMessage(new AssistantMessageSaveCommand(
                     user.tenantId(),
                     user.ownerUserId(),
@@ -431,34 +628,117 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     messagePlan.userMessage().id(),
                     messagePlan.regeneratedFromMessageId(),
                     assistant.parts(),
-                    null,
+                    "{\"finishReason\":\"WAITING_USER\"}",
                     completionTarget.assistantMessageId()
             ));
             chatRunService.bindAssistantMessage(runId, savedAssistant.id());
-            bindingRef.set(runtimeBindingService.moveToLeaf(bindingRef.get(), savedAssistant.id()));
+            bindingRef.set(runtimeBindingService.touchAndMoveToLeaf(bindingRef.get(), runId, savedAssistant.id()));
+            chatHitlService.saveWaiting(waitingRequest);
+            if (context.continuationHitlRequest() != null) {
+                chatHitlService.markAnswered(context.continuationHitlRequest());
+            }
         }
         // 事件已经带有数据库持久化 seq，实时输出与断线补发看到的是同一份顺序。
         chatRunService.observeEvent(stored);
+        if (context.continuationHitlRequest() != null && ("run.failed".equals(stored.type())
+                || "run.cancelled".equals(stored.type()))) {
+            chatHitlService.markWaiting(context.continuationHitlRequest());
+        }
         markExecutionTerminalIfNeeded(stored);
         bindingRef.set(runtimeBindingService.observeEvent(bindingRef.get(), stored));
         chatStreamService.publishPersisted(stored);
         return stored;
     }
 
+    private ChatEvent commitWaitingUser(ChatEvent eventToPersist, RunEventPipelineContext context,
+                                        CompletionMessageTarget completionTarget, ChatHitlRequest waitingRequest) {
+        try {
+            ChatRunTerminalCommitService.CommitResult result = terminalCommitService.commitWaitingUser(
+                    new ChatRunTerminalCommitService.WaitingUserCommitCommand(
+                            eventToPersist,
+                            terminalCommitContext(context),
+                            terminalMessageTarget(completionTarget),
+                            waitingRequest
+                    ));
+            return publishCommitted(result, context);
+        } catch (RuntimeException ex) {
+            return commitTerminalFailure(context, ex);
+        }
+    }
+
+    private ChatEvent commitCompleted(ChatEvent eventToPersist, RunEventPipelineContext context,
+                                      CompletionMessageTarget completionTarget) {
+        try {
+            ChatRunTerminalCommitService.CommitResult result = terminalCommitService.commitCompleted(
+                    new ChatRunTerminalCommitService.CompletedCommitCommand(
+                            eventToPersist,
+                            terminalCommitContext(context),
+                            terminalMessageTarget(completionTarget)
+                    ));
+            return publishCommitted(result, context);
+        } catch (RuntimeException ex) {
+            return commitTerminalFailure(context, ex);
+        }
+    }
+
+    private ChatEvent commitTerminalOnly(ChatEvent eventToPersist, RunEventPipelineContext context) {
+        ChatRunTerminalCommitService.CommitResult result = terminalCommitService.commitTerminalOnly(
+                new ChatRunTerminalCommitService.TerminalOnlyCommitCommand(
+                        eventToPersist,
+                        terminalCommitContext(context)
+                ));
+        return publishCommitted(result, context);
+    }
+
+    private ChatEvent commitTerminalFailure(RunEventPipelineContext context, RuntimeException ex) {
+        log.warn("Chat run terminal commit failed, fallback to run.failed. runId={}, reason={}",
+                context.runId(), ex.getMessage(), ex);
+        ChatEvent failed = runtimeErrorEvent(context.runId(), context.session().id(), ex);
+        return commitTerminalOnly(failed, context);
+    }
+
+    private ChatEvent publishCommitted(ChatRunTerminalCommitService.CommitResult result,
+                                       RunEventPipelineContext context) {
+        context.bindingRef().set(result.binding());
+        chatStreamService.publishPersisted(result.event());
+        return result.event();
+    }
+
+    private ChatRunTerminalCommitService.TerminalCommitContext terminalCommitContext(RunEventPipelineContext context) {
+        return new ChatRunTerminalCommitService.TerminalCommitContext(
+                context.user(),
+                context.session(),
+                context.messagePlan(),
+                context.bindingRef(),
+                context.assistant(),
+                context.runId(),
+                context.executionClaim(),
+                context.continuationHitlRequest()
+        );
+    }
+
+    private ChatRunTerminalCommitService.MessageTarget terminalMessageTarget(CompletionMessageTarget target) {
+        return new ChatRunTerminalCommitService.MessageTarget(target.messageReady(), target.assistantMessageId());
+    }
+
     private boolean eventBelongsToCurrentRun(ChatEvent event, String runId, String sessionId) {
         return event != null && runId.equals(event.runId()) && sessionId.equals(event.sessionId());
     }
 
-    private CompletionMessageTarget completionMessageTarget(ChatEvent event, AssistantAssembly assistant,
-                                                            UserContext user, ChatSession session, String runId) {
+    private CompletionMessageTarget completionMessageTarget(ChatEvent event, RunEventPipelineContext context) {
         if (event == null || !"run.completed".equals(event.type())) {
             return CompletionMessageTarget.notRunCompleted();
         }
-        if (!assistant.shouldPersistMessage()) {
+        if (context.continuationHitlRequest() != null) {
+            // HITL 续接复用等待态 assistant，即使 Relay 只返回终态也要把同一条消息标记为可反馈。
+            return CompletionMessageTarget.ready(context.continuationHitlRequest().assistantMessageId());
+        }
+        if (!context.assistant().shouldPersistMessage()) {
             return CompletionMessageTarget.notReady();
         }
         String assistantMessageId = idGenerator.newId("msg",
-                IdGenerateContext.of(user.tenantId(), user.ownerUserId(), session.id(), runId));
+                IdGenerateContext.of(context.user().tenantId(), context.user().ownerUserId(),
+                        context.session().id(), context.runId()));
         return CompletionMessageTarget.ready(assistantMessageId);
     }
 
@@ -477,6 +757,104 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 event.createdAt(), java.util.Collections.unmodifiableMap(payload));
     }
 
+    private ChatHitlRequest waitingRequest(ChatEvent event, CompletionMessageTarget target,
+                                           RunEventPipelineContext context) {
+        if (chatHitlService == null || event == null || !"run.completed".equals(event.type())) {
+            return null;
+        }
+        Map<String, Object> requestPayload = context.pendingHitlPayloadRef().get();
+        if (requestPayload == null) {
+            return null;
+        }
+        if (!target.messageReady()) {
+            return null;
+        }
+        RuntimeBinding binding = context.bindingRef().get();
+        if (binding == null || binding.id() == null || binding.id().isBlank()) {
+            throw new IllegalStateException("HITL 等待态缺少 RuntimeBinding，无法续接 Runtime");
+        }
+        String runtimeProvider = binding == null ? null : binding.provider();
+        String runtimeSessionId = runtimeSessionId(requestPayload, binding);
+        return chatHitlService.prepareWaiting(new ChatHitlCreateContext(
+                context.user(),
+                context.session(),
+                context.runId(),
+                context.messagePlan().userMessage(),
+                target.assistantMessageId(),
+                runtimeProvider,
+                binding.id(),
+                runtimeSessionId,
+                requestPayload
+        ));
+    }
+
+    private ChatEvent withWaitingUserPayload(ChatEvent event, CompletionMessageTarget target,
+                                             ChatHitlRequest waitingRequest) {
+        Map<String, Object> payload = new LinkedHashMap<>(event.payload() == null ? Map.of() : event.payload());
+        payload.put("status", "WAITING_USER");
+        payload.put("waitingType", waitingRequest.waitingType().name());
+        payload.put("hitlRequestId", waitingRequest.id());
+        payload.put("messageReady", target.messageReady());
+        payload.put("assistantMessageId", target.assistantMessageId());
+        payload.put("feedbackTargetMessageId", target.assistantMessageId());
+        if (waitingRequest.expiresAt() != null) {
+            payload.put("expiresAt", waitingRequest.expiresAt().toString());
+        }
+        return new RunWaitingUserEvent(event.runId(), event.sessionId(), event.sequence(),
+                event.createdAt(), Map.copyOf(payload));
+    }
+
+    private void rememberPendingHitlRequest(ChatEvent stored, RunEventPipelineContext context) {
+        if (!questionnaireApprovalRequest(stored)) {
+            return;
+        }
+        RuntimeBinding binding = context.bindingRef().get();
+        String runtimeProvider = binding == null ? null : binding.provider();
+        if (!agentRuntimeExecutor.supportsWaitingUserResponse(runtimeProvider)) {
+            return;
+        }
+        context.pendingHitlPayloadRef().compareAndSet(null,
+                stored.payload() == null ? Map.of() : Map.copyOf(stored.payload()));
+    }
+
+    private boolean questionnaireApprovalRequest(ChatEvent event) {
+        if (event == null || !"runtime.card".equals(event.type()) || event.payload() == null) {
+            return false;
+        }
+        return "approval-request".equals(String.valueOf(event.payload().get("sourceType")))
+                && "questionnaire".equalsIgnoreCase(String.valueOf(event.payload().get("operation_type")));
+    }
+
+    private String runtimeSessionId(Map<String, Object> payload, RuntimeBinding binding) {
+        Object fromPayload = payload == null ? null : payload.get("runtimeSessionId");
+        if (fromPayload != null && !String.valueOf(fromPayload).isBlank()) {
+            return String.valueOf(fromPayload);
+        }
+        return binding == null ? null : binding.runtimeSessionId();
+    }
+
+    private RuntimeEvent clarificationResponseEvent(String runId, String sessionId, ChatHitlRequest hitl,
+                                                    Map<String, Object> responsePayload) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("source", "chatservice");
+        payload.put("sourceType", "clarification-response");
+        payload.put("hitlRequestId", hitl.id());
+        payload.put("waitingType", hitl.waitingType().name());
+        payload.put("approval_id", hitl.approvalId());
+        payload.put("approved", responsePayload.get("approved"));
+        payload.put("scope", responsePayload.get("scope"));
+        payload.put("questionnaireAnswers", responsePayload.get("questionnaireAnswers"));
+        Object answers = responsePayload.get("questionnaireAnswers");
+        if (answers instanceof Map<?, ?> answerMap && !answerMap.isEmpty()) {
+            payload.put("answerText", answerMap.values().stream()
+                    .findFirst()
+                    .map(String::valueOf)
+                    .orElse(""));
+        }
+        payload.put("metadata", responsePayload.get("metadata"));
+        return RuntimeEvent.card(runId, sessionId, Map.copyOf(payload));
+    }
+
     private record RunEventPipelineContext(
             UserContext user,
             ChatSession session,
@@ -484,7 +862,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
             AtomicReference<RuntimeBinding> bindingRef,
             AssistantAssembly assistant,
             String runId,
-            RunExecutionClaim executionClaim
+            RunExecutionClaim executionClaim,
+            AtomicReference<Map<String, Object>> pendingHitlPayloadRef,
+            ChatHitlRequest continuationHitlRequest
     ) {
     }
 
@@ -509,6 +889,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private void markExecutionTerminalIfNeeded(ChatEvent event) {
         ChatRunExecutionStatus terminalStatus = switch (event.type()) {
             case "run.completed" -> ChatRunExecutionStatus.COMPLETED;
+            case "run.waiting_user" -> ChatRunExecutionStatus.WAITING_USER;
             case "run.failed" -> ChatRunExecutionStatus.FAILED;
             case "run.cancelled" -> ChatRunExecutionStatus.CANCELLED;
             default -> null;

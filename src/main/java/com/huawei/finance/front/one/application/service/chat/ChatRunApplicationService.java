@@ -40,13 +40,15 @@ public class ChatRunApplicationService {
     private final SessionRepository sessionRepository;
     private final ChatRunLeaseApplicationService leaseService;
     private final ObjectProvider<ChatRunRecoveryOrchestrator> recoveryOrchestratorProvider;
+    private final ObjectProvider<ChatHitlApplicationService> hitlServiceProvider;
 
     @Autowired
     public ChatRunApplicationService(ChatRunRepository repository, ChatRunCache cache, ChatEventStore eventStore,
                                      PermissionChecker permissionChecker,
                                      SessionRepository sessionRepository,
                                      ChatRunLeaseApplicationService leaseService,
-                                     ObjectProvider<ChatRunRecoveryOrchestrator> recoveryOrchestratorProvider) {
+                                     ObjectProvider<ChatRunRecoveryOrchestrator> recoveryOrchestratorProvider,
+                                     ObjectProvider<ChatHitlApplicationService> hitlServiceProvider) {
         this.repository = repository;
         this.cache = cache;
         this.eventStore = eventStore;
@@ -54,6 +56,7 @@ public class ChatRunApplicationService {
         this.sessionRepository = sessionRepository;
         this.leaseService = leaseService;
         this.recoveryOrchestratorProvider = recoveryOrchestratorProvider;
+        this.hitlServiceProvider = hitlServiceProvider;
     }
 
     ChatRunApplicationService(ChatRunRepository repository, ChatRunCache cache, ChatEventStore eventStore,
@@ -66,6 +69,7 @@ public class ChatRunApplicationService {
         this.sessionRepository = sessionRepository;
         this.leaseService = null;
         this.recoveryOrchestratorProvider = null;
+        this.hitlServiceProvider = null;
     }
 
     /**
@@ -140,6 +144,7 @@ public class ChatRunApplicationService {
         ChatRun next = switch (event.type()) {
             case "run.started" -> run.withFirstSeq(event.sequence());
             case "run.completed" -> run.completed(event.sequence());
+            case "run.waiting_user" -> run.waitingUser(event.sequence());
             case "run.failed" -> run.failed(event.sequence());
             case "run.cancelled" -> run.cancelled(event.sequence());
             default -> run.withLastSeq(event.sequence());
@@ -255,7 +260,8 @@ public class ChatRunApplicationService {
         if (cache.cancellationSignal(event.runId()) == ChatRunCancelSignal.REQUESTED) {
             return false;
         }
-        if ("run.completed".equals(event.type()) || "run.failed".equals(event.type())) {
+        if ("run.completed".equals(event.type()) || "run.failed".equals(event.type())
+                || "run.waiting_user".equals(event.type())) {
             return repository.findById(event.runId())
                     .map(run -> run.status() == ChatRunStatus.RUNNING)
                     .orElse(false);
@@ -284,9 +290,23 @@ public class ChatRunApplicationService {
         long currentLatestSeq = latestSeq;
         return active
                 .map(run -> new ChatStreamStatus(sessionId, currentLatestSeq, run.id(), run.status(),
-                        ChatStreamTopics.runTopic(run.id()), run.firstSeq(), run.lastSeq(), run.cancellable()))
-                .orElseGet(() -> new ChatStreamStatus(sessionId, currentLatestSeq,
-                        null, null, null, null, null, false));
+                        ChatStreamTopics.runTopic(run.id()), run.firstSeq(), run.lastSeq(), run.cancellable(),
+                        false, null, null, null, null))
+                .orElseGet(() -> waitingStatus(user, sessionId, currentLatestSeq));
+    }
+
+    private ChatStreamStatus waitingStatus(UserContext user, String sessionId, long latestSeq) {
+        ChatHitlApplicationService hitlService = hitlServiceProvider == null ? null : hitlServiceProvider.getIfAvailable();
+        if (hitlService == null) {
+            return new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
+                    false, false, null, null, null, null);
+        }
+        return hitlService.findWaiting(user, sessionId)
+                .map(request -> new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
+                        false, true, request.id(), request.waitingType().name(),
+                        request.assistantMessageId(), request.expiresAt()))
+                .orElseGet(() -> new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
+                        false, false, null, null, null, null));
     }
 
     private Optional<ChatRun> findActive(String tenantId, String userId, String sessionId) {

@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.interfaces;
 
 import com.huawei.finance.front.one.domain.chat.ActiveRunExistsException;
+import com.huawei.finance.front.one.domain.chat.ChatHitlUnavailableException;
 import com.huawei.finance.front.one.domain.chat.ChatShareUnavailableException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
@@ -83,6 +84,9 @@ public class ApiExceptionHandler {
     public ResponseEntity<ApiErrorResponse> handleConflict(IllegalStateException ex, HttpServletRequest request) {
         if (ex instanceof ActiveRunExistsException) {
             return error(HttpStatus.CONFLICT, "ACTIVE_RUN_EXISTS", ex.getMessage(), requestPath(request));
+        }
+        if (ex instanceof ChatHitlUnavailableException hitlEx) {
+            return error(HttpStatus.CONFLICT, hitlEx.code(), hitlEx.getMessage(), requestPath(request));
         }
         if (ex instanceof ChatShareUnavailableException shareEx) {
             return error(HttpStatus.CONFLICT, shareEx.code(), shareEx.getMessage(), requestPath(request));

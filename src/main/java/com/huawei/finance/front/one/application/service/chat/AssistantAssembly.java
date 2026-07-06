@@ -62,7 +62,8 @@ final class AssistantAssembly {
             return false;
         }
         return switch (part.partType()) {
-            case "PROGRESS", "AGENT", "THINKING", "TOOL", "REFERENCE", "CARD" -> true;
+            case "PROGRESS", "AGENT", "THINKING", "TOOL", "REFERENCE", "CARD",
+                 "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE" -> true;
             default -> false;
         };
     }
@@ -70,10 +71,16 @@ final class AssistantAssembly {
     private static ChatMessagePartDraft runtimePart(ChatEvent event) {
         Map<String, Object> payload = event.payload() == null ? Map.of() : event.payload();
         String sourceType = stringValue(payload.get("sourceType"));
-        return new ChatMessagePartDraft(partType(event.type()), sourceType, contentText(event.type(), payload), payload);
+        return new ChatMessagePartDraft(partType(event.type(), payload), sourceType, contentText(event.type(), payload), payload);
     }
 
-    private static String partType(String eventType) {
+    private static String partType(String eventType, Map<String, Object> payload) {
+        if ("runtime.card".equals(eventType) && isQuestionnaireApprovalRequest(payload)) {
+            return "CLARIFICATION_REQUEST";
+        }
+        if ("runtime.card".equals(eventType) && isClarificationResponse(payload)) {
+            return "CLARIFICATION_RESPONSE";
+        }
         return switch (eventType) {
             case "runtime.progress" -> "PROGRESS";
             case "runtime.metadata" -> "METADATA";
@@ -117,9 +124,24 @@ final class AssistantAssembly {
             return firstText(payload, "delta", "title", "url", "referenceType", "sourceType");
         }
         if ("runtime.card".equals(eventType)) {
+            if (isQuestionnaireApprovalRequest(payload)) {
+                return firstText(payload, "title", "message", "detail", "sourceType");
+            }
+            if (isClarificationResponse(payload)) {
+                return firstText(payload, "answerText", "sourceType");
+            }
             return firstText(payload, "delta", "cardUrl", "intent", "domainAgentId", "skillId", "cardType", "sourceType");
         }
         return firstText(payload, "text", "displayText", "sourceType");
+    }
+
+    private static boolean isQuestionnaireApprovalRequest(Map<String, Object> payload) {
+        return "approval-request".equals(stringValue(payload.get("sourceType")))
+                && "questionnaire".equalsIgnoreCase(stringValue(payload.get("operation_type")));
+    }
+
+    private static boolean isClarificationResponse(Map<String, Object> payload) {
+        return "clarification-response".equals(stringValue(payload.get("sourceType")));
     }
 
     private static String firstText(Map<String, Object> payload, String... keys) {

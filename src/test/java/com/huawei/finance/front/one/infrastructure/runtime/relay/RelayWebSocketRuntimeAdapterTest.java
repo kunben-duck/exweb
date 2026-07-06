@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookieProperties;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeHitlResponseRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
@@ -641,6 +642,40 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
+    void hitlContinuationSendsApprovalResponseFrame() throws Exception {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"relay-start\",\"content\":\"continue\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"agent\",\"content\":\"已收到澄清\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.continueWithUserResponse(hitlRequest()))
+                .assertNext(this::assertSessionReadyMetadata)
+                .assertNext(event -> assertThat(event.type()).isEqualTo("runtime.progress"))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "已收到澄清"))
+                .expectNextCount(2)
+                .verifyComplete();
+
+        assertThat(client.sent()).hasSize(2);
+        JsonNode config = objectMapper.readTree(client.sent().getFirst());
+        JsonNode response = objectMapper.readTree(client.sent().get(1));
+        assertThat(config.path("config").path("sessionMode").asText()).isEqualTo("resume");
+        assertThat(config.path("config").path("sessionId").asText()).isEqualTo("relay-session-1");
+        assertThat(response.path("type").asText()).isEqualTo("approval-response");
+        assertThat(response.path("request_id").asText()).isEqualTo("approval-1");
+        assertThat(response.path("approved").asBoolean()).isTrue();
+        assertThat(response.path("scope").asText()).isEqualTo("once");
+        assertThat(response.path("questionnaire_answers").path("您对哪类 Sub-Agent 最感兴趣？").asText())
+                .isEqualTo("工具与扩展类");
+        assertThat(response.path("metadata").path("clientTraceId").asText()).isEqualTo("trace-1");
+        assertThat(response.path("metadata").has("token")).isFalse();
+        assertThat(response.path("timestamp").asText()).isNotBlank();
+        assertThat(response.has("approval_id")).isFalse();
+    }
+
+    @Test
     void shortConnectionCancelSendsInterruptFrame() {
         ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
         RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10));
@@ -869,6 +904,27 @@ class RelayWebSocketRuntimeAdapterTest {
                 "relay",
                 "USER_STOP",
                 Map.of(),
+                RuntimeForwardHeaders.empty()
+        );
+    }
+
+    private AgentRuntimeHitlResponseRequest hitlRequest() {
+        return new AgentRuntimeHitlResponseRequest(
+                "tenant1",
+                "user1",
+                "session1",
+                "run-hitl-1",
+                "relay-session-1",
+                "relay",
+                "hitl-1",
+                "CLARIFICATION",
+                "approval-1",
+                Map.of(
+                        "approved", true,
+                        "scope", "once",
+                        "questionnaireAnswers", Map.of("您对哪类 Sub-Agent 最感兴趣？", "工具与扩展类"),
+                        "metadata", Map.of("clientTraceId", "trace-1", "token", "bad")
+                ),
                 RuntimeForwardHeaders.empty()
         );
     }

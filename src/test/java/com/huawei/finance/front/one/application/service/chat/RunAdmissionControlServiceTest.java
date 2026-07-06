@@ -29,6 +29,26 @@ class RunAdmissionControlServiceTest {
         service.acquire(user).close();
     }
 
+    @Test
+    void rateLimitUsesGlobalUserIdAsOwnerWhenPresent() {
+        RunAdmissionProperties properties = new RunAdmissionProperties();
+        properties.setMaxRunsPerUserPerMinute(1);
+        RunAdmissionControlService service = new RunAdmissionControlService(
+                properties, new MutableClock(Instant.parse("2026-05-20T00:00:00Z")));
+        UserContext first = enterpriseUser("tenant1", "same-raw-user", 1001L);
+        UserContext second = enterpriseUser("tenant1", "same-raw-user", 1002L);
+
+        service.acquire(first).close();
+
+        service.acquire(second).close();
+    }
+
+    private UserContext enterpriseUser(String tenantId, String userId, Long globalUserId) {
+        return new UserContext(tenantId, userId, "User One", "account-" + userId,
+                "001", "用户一", "INTERNAL", "uuid-" + userId,
+                "user-one", "User One", "用户一", globalUserId);
+    }
+
     private static final class MutableClock extends Clock {
         private Instant instant;
 

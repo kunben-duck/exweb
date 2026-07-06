@@ -59,11 +59,11 @@ public class ChatFeedbackApplicationService {
         validateRunInMessageSession(user, message, ownedRunId);
         Instant now = Instant.now();
         String feedbackId = idGenerator.newId("feedback",
-                IdGenerateContext.of(user.tenantId(), user.userId(), message.sessionId(), message.id()));
+                IdGenerateContext.of(user.tenantId(), user.ownerUserId(), message.sessionId(), message.id()));
         ChatMessageFeedback feedback = new ChatMessageFeedback(
                 feedbackId,
                 user.tenantId(),
-                user.userId(),
+                user.ownerUserId(),
                 message.sessionId(),
                 message.id(),
                 ownedRunId,
@@ -94,11 +94,11 @@ public class ChatFeedbackApplicationService {
         String ownedRunId = blankToNull(runId);
         validateRunInMessageSession(user, message, ownedRunId);
         Instant now = Instant.now();
-        return feedbackRepository.cancel(user.tenantId(), user.userId(), message.id(), now)
+        return feedbackRepository.cancel(user.tenantId(), user.ownerUserId(), message.id(), now)
                 .orElseGet(() -> new ChatMessageFeedback(
                         null,
                         user.tenantId(),
-                        user.userId(),
+                        user.ownerUserId(),
                         message.sessionId(),
                         message.id(),
                         ownedRunId,
@@ -138,7 +138,7 @@ public class ChatFeedbackApplicationService {
             return Map.of();
         }
         Set<String> allowedIds = Set.copyOf(assistantMessageIds);
-        return feedbackRepository.findActiveByMessages(user.tenantId(), user.userId(), sessionId, assistantMessageIds)
+        return feedbackRepository.findActiveByMessages(user.tenantId(), user.ownerUserId(), sessionId, assistantMessageIds)
                 .entrySet()
                 .stream()
                 .filter(entry -> allowedIds.contains(entry.getKey()))
@@ -162,7 +162,7 @@ public class ChatFeedbackApplicationService {
 
     private ChatMessage requireFeedbackTarget(UserContext user, String messageId) {
         String normalizedMessageId = normalizeMessageId(messageId);
-        ChatMessage message = messageRepository.findByOwnerAndId(user.tenantId(), user.userId(), normalizedMessageId)
+        ChatMessage message = messageRepository.findByOwnerAndId(user.tenantId(), user.ownerUserId(), normalizedMessageId)
                 .orElseThrow(() -> new SecurityException("消息不存在或不属于当前用户"));
         if (!"assistant".equals(message.role())) {
             throw new IllegalArgumentException("只能反馈 assistant 消息");

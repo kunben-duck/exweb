@@ -50,7 +50,7 @@ public class ObjectStorageDocumentProviderAdapter implements DocumentProviderAda
         return new UploadedDocument(
                 request.documentId(),
                 request.user().tenantId(),
-                request.user().userId(),
+                request.user().ownerUserId(),
                 blankToNull(request.command().sessionId()),
                 safeFilename(request.command().originalFilename()),
                 object.bucket(),

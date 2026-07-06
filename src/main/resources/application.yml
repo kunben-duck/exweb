@@ -68,6 +68,7 @@ financeex:
   security:
     dev:
       # 本地开发态用配置模拟企业权限上下文；接口层不再接收前端传入的 tenantId/userId。
+      # 生产接入企业框架后，数据归属优先使用 UserContext.globalUserId；本地未提供时回退 user-id。
       # 身份信息不提供默认值，缺失时 AuthContextProvider 会直接拒绝请求。
       # 后续接入统一权限框架时，替换 AuthContextProvider 实现即可，业务编排不需要调整。
       tenant-id: ${FINANCEEX_DEV_TENANT_ID:}

@@ -76,7 +76,7 @@ public class HttpDocumentProviderAdapter implements DocumentProviderAdapter {
         return new UploadedDocument(
                 request.documentId(),
                 request.user().tenantId(),
-                request.user().userId(),
+                request.user().ownerUserId(),
                 blankToNull(request.command().sessionId()),
                 safeFilename(blankToDefault(providerDocument.documentName(), request.command().originalFilename())),
                 request.providerCode(),

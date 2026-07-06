@@ -93,7 +93,7 @@ Authorization: {dynamic_token}
 | --- | --- | --- | --- |
 | `accessName` | string | 是 | 意图服务访问入口标识。 |
 | `query` | string | 是 | 本次需要识别的用户问题。澄清后建议传合并后的真实问题。 |
-| `userId` | string | 是 | 当前用户标识。 |
+| `userId` | string | 是 | 当前系统归属用户标识，ChatService 侧优先取 `UserContext.globalUserId`，为空时回退 `UserContext.userId`。 |
 | `conversationContext` | object | 否 | 会话上下文，用于多轮路由、拒答重路由或澄清后识别。 |
 | `conversationContext.routeTrigger` | string | 否 | 路由触发原因，例如 `domain_reject`。 |
 | `conversationContext.lastIntentRejectReason` | object | 否 | 上一次意图或能力拒答原因。 |

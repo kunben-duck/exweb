@@ -79,7 +79,7 @@ public class ChatRunApplicationService {
         ChatRun run = new ChatRun(
                 context.runId(),
                 user.tenantId(),
-                user.userId(),
+                user.ownerUserId(),
                 context.sessionId(),
                 ChatRunStatus.RUNNING,
                 context.route() == null || context.route().type() == null ? null : context.route().type().name(),
@@ -100,14 +100,14 @@ public class ChatRunApplicationService {
                 now
         );
         if (!cache.tryClaimActive(run)) {
-            throw new ActiveRunExistsException(context.sessionId(), findActive(user.tenantId(), user.userId(), context.sessionId())
+            throw new ActiveRunExistsException(context.sessionId(), findActive(user.tenantId(), user.ownerUserId(), context.sessionId())
                     .map(ChatRun::id)
                     .orElse("unknown"));
         }
         try {
             return save(run);
         } catch (RuntimeException ex) {
-            cache.evictActive(user.tenantId(), user.userId(), context.sessionId());
+            cache.evictActive(user.tenantId(), user.ownerUserId(), context.sessionId());
             throw ex;
         }
     }
@@ -207,7 +207,7 @@ public class ChatRunApplicationService {
         if (runId == null || runId.isBlank()) {
             throw new IllegalArgumentException("runId 不能为空");
         }
-        return repository.findByTenantIdAndUserIdAndId(user.tenantId(), user.userId(), runId)
+        return repository.findByTenantIdAndUserIdAndId(user.tenantId(), user.ownerUserId(), runId)
                 .orElseThrow(() -> new SecurityException("run 不存在或不属于当前用户"));
     }
 
@@ -218,7 +218,7 @@ public class ChatRunApplicationService {
      * 真正的并发声明仍在 {@link #createRunning} 中通过 Redis set-if-absent 完成。</p>
      */
     public void rejectIfActiveRunExists(UserContext user, String sessionId) {
-        findActive(user.tenantId(), user.userId(), sessionId)
+        findActive(user.tenantId(), user.ownerUserId(), sessionId)
                 .ifPresent(active -> {
                     throw new ActiveRunExistsException(sessionId, active.id());
                 });
@@ -232,7 +232,7 @@ public class ChatRunApplicationService {
      */
     public Optional<ChatRun> findActiveRun(UserContext user, String sessionId) {
         ensureOwnedSession(user, sessionId);
-        return findActive(user.tenantId(), user.userId(), sessionId);
+        return findActive(user.tenantId(), user.ownerUserId(), sessionId);
     }
 
     /**
@@ -269,16 +269,16 @@ public class ChatRunApplicationService {
     public ChatStreamStatus streamStatus(UserContext user, String sessionId) {
         permissionChecker.checkChatPermission(user);
         ensureOwnedSession(user, sessionId);
-        long latestSeq = eventStore.findLatestSeqByOwnerAndSession(user.tenantId(), user.userId(), sessionId);
-        Optional<ChatRun> active = findActive(user.tenantId(), user.userId(), sessionId);
+        long latestSeq = eventStore.findLatestSeqByOwnerAndSession(user.tenantId(), user.ownerUserId(), sessionId);
+        Optional<ChatRun> active = findActive(user.tenantId(), user.ownerUserId(), sessionId);
         if (active.isPresent() && leaseService != null && leaseService.isLeaseExpired(active.get().id())) {
             ChatRunRecoveryOrchestrator orchestrator = recoveryOrchestratorProvider == null
                     ? null
                     : recoveryOrchestratorProvider.getIfAvailable();
             if (orchestrator != null) {
                 orchestrator.recoverExpiredRun(active.get().id());
-                latestSeq = eventStore.findLatestSeqByOwnerAndSession(user.tenantId(), user.userId(), sessionId);
-                active = findActive(user.tenantId(), user.userId(), sessionId);
+                latestSeq = eventStore.findLatestSeqByOwnerAndSession(user.tenantId(), user.ownerUserId(), sessionId);
+                active = findActive(user.tenantId(), user.ownerUserId(), sessionId);
             }
         }
         long currentLatestSeq = latestSeq;
@@ -329,7 +329,7 @@ public class ChatRunApplicationService {
         if (sessionId == null || sessionId.isBlank()) {
             throw new IllegalArgumentException("会话 ID 不能为空");
         }
-        ChatSession session = sessionRepository.findByTenantIdAndUserIdAndId(user.tenantId(), user.userId(), sessionId)
+        ChatSession session = sessionRepository.findByTenantIdAndUserIdAndId(user.tenantId(), user.ownerUserId(), sessionId)
                 .orElseThrow(() -> new SecurityException("会话不存在或不属于当前用户"));
         if (SESSION_STATUS_DELETED.equals(session.status())) {
             throw new IllegalArgumentException("会话不存在: " + sessionId);

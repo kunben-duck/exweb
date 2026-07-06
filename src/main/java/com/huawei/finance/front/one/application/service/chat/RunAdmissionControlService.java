@@ -60,7 +60,7 @@ public class RunAdmissionControlService {
     }
 
     private void enforceUserRate(UserContext user) {
-        String key = user.tenantId() + ":" + user.userId();
+        String key = user.tenantId() + ":" + user.ownerUserId();
         Instant now = Instant.now(clock);
         Deque<Instant> window = userWindows.computeIfAbsent(key, ignored -> new ArrayDeque<>());
         synchronized (window) {

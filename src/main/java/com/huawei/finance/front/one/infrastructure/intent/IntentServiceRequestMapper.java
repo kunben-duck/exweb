@@ -24,7 +24,7 @@ public class IntentServiceRequestMapper {
     public IntentRecognizeRequest toWireRequest(ChatCommand command, MemoryContext memory, UserContext user) {
         return new IntentRecognizeRequest(
                 user.tenantId(),
-                user.userId(),
+                user.ownerUserId(),
                 command.sessionId(),
                 command.message(),
                 command.attachments(),

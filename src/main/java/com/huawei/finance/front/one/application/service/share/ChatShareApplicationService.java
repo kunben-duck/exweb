@@ -70,11 +70,11 @@ public class ChatShareApplicationService {
         ensureParentQuestion(assistant, question);
         ChatShareSnapshot snapshot = buildSnapshot(user, question, assistant, now);
         String shareId = idGenerator.newId("share", IdGenerateContext.of(
-                user.tenantId(), user.userId(), assistant.sessionId(), assistant.runId()));
+                user.tenantId(), user.ownerUserId(), assistant.sessionId(), assistant.runId()));
         ChatShare share = new ChatShare(
                 shareId,
                 user.tenantId(),
-                user.userId(),
+                user.ownerUserId(),
                 assistant.sessionId(),
                 question.id(),
                 assistant.id(),
@@ -117,7 +117,7 @@ public class ChatShareApplicationService {
 
     public ChatSharePage listOwned(UserContext user, int curPage, int pageSize) {
         checkUser(user);
-        return shareRepository.pageByOwner(user.tenantId(), user.userId(), curPage, pageSize);
+        return shareRepository.pageByOwner(user.tenantId(), user.ownerUserId(), curPage, pageSize);
     }
 
     private ChatShareSnapshot buildSnapshot(UserContext user, ChatMessage question, ChatMessage assistant, Instant now) {
@@ -134,7 +134,7 @@ public class ChatShareApplicationService {
 
     private ChatShareMessageSnapshot toSnapshotMessage(UserContext user, ChatMessage message) {
         List<ChatShareAttachmentSnapshot> attachments = messageRepository
-                .findAttachments(user.tenantId(), user.userId(), message.id())
+                .findAttachments(user.tenantId(), user.ownerUserId(), message.id())
                 .stream()
                 .map(this::toAttachmentSnapshot)
                 .toList();
@@ -165,12 +165,12 @@ public class ChatShareApplicationService {
         if (messageId == null || messageId.isBlank()) {
             throw new IllegalArgumentException("messageId 不能为空");
         }
-        return messageRepository.findByOwnerAndId(user.tenantId(), user.userId(), messageId)
+        return messageRepository.findByOwnerAndId(user.tenantId(), user.ownerUserId(), messageId)
                 .orElseThrow(() -> new IllegalArgumentException("消息不存在或不属于当前用户: " + messageId));
     }
 
     private ChatSession loadOwnedSession(UserContext user, String sessionId) {
-        return sessionRepository.findByTenantIdAndUserIdAndId(user.tenantId(), user.userId(), sessionId)
+        return sessionRepository.findByTenantIdAndUserIdAndId(user.tenantId(), user.ownerUserId(), sessionId)
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在或不属于当前用户: " + sessionId));
     }
 

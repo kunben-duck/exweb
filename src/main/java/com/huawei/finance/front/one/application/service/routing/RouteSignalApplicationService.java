@@ -92,10 +92,10 @@ public class RouteSignalApplicationService {
                                             List<AttachmentRef> attachments, MemoryContext memory) {
         try {
             return useCaseLibraryClient.match(new UseCaseMatchRequest(
-                    user.tenantId(), user.userId(), session.id(), command.message(), attachments, memory, command.metadata()));
+                    user.tenantId(), user.ownerUserId(), session.id(), command.message(), attachments, memory, command.metadata()));
         } catch (RuntimeException ex) {
             log.warn("Use case route signal failed, degrading to next route stage. tenantId={}, userId={}, sessionId={}, reason={}",
-                    user.tenantId(), user.userId(), session.id(), ex.getMessage());
+                    user.tenantId(), user.ownerUserId(), session.id(), ex.getMessage());
             return UseCaseMatchResult.notMatched("use case library failed: " + ex.getMessage());
         }
     }
@@ -105,7 +105,7 @@ public class RouteSignalApplicationService {
             return intentService.recognize(command, memory, user);
         } catch (RuntimeException ex) {
             log.warn("Intent route signal failed, degrading to Relay Runtime. tenantId={}, userId={}, sessionId={}, reason={}",
-                    user.tenantId(), user.userId(), command.sessionId(), ex.getMessage());
+                    user.tenantId(), user.ownerUserId(), command.sessionId(), ex.getMessage());
             /*
              * 保留一次真实调用失败的意图决策快照，方便异步记录服务统计降级样本。
              * RoutingPolicy 会把该低置信复杂任务继续路由到 AgentRuntime。

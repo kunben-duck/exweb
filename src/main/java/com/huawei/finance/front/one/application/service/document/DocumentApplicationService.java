@@ -57,7 +57,7 @@ public class DocumentApplicationService implements DocumentFacade {
                 permissionChecker.checkChatPermission(user);
                 ensureOwnedSessionIfPresent(user, command.sessionId());
                 String documentId = idGenerator.newId("doc",
-                        IdGenerateContext.of(user.tenantId(), user.userId(), command.sessionId()));
+                        IdGenerateContext.of(user.tenantId(), user.ownerUserId(), command.sessionId()));
                 DocumentProviderAdapterRegistry.ProviderResolution provider =
                         providerRegistry.resolveForUpload(command.targetProvider());
                 UploadedDocument doc = provider.adapter().upload(new DocumentProviderUploadRequest(
@@ -76,7 +76,7 @@ public class DocumentApplicationService implements DocumentFacade {
             if (query != null) {
                 ensureOwnedSessionIfPresent(user, query.sessionId());
             }
-            return repository.listByOwner(user.tenantId(), user.userId(),
+            return repository.listByOwner(user.tenantId(), user.ownerUserId(),
                     query == null ? new DocumentLibraryQuery(null, 20, null) : query);
         }).subscribeOn(Schedulers.boundedElastic());
     }
@@ -228,7 +228,7 @@ public class DocumentApplicationService implements DocumentFacade {
         if (documentId == null || documentId.isBlank()) {
             throw new IllegalArgumentException("文档 ID 不能为空");
         }
-        UploadedDocument document = repository.findByOwnerAndId(user.tenantId(), user.userId(), documentId)
+        UploadedDocument document = repository.findByOwnerAndId(user.tenantId(), user.ownerUserId(), documentId)
                 .orElseThrow(() -> new SecurityException("文档不存在或不属于当前用户"));
         return document;
     }
@@ -237,7 +237,7 @@ public class DocumentApplicationService implements DocumentFacade {
         if (sessionId == null || sessionId.isBlank()) {
             return;
         }
-        if (sessionRepository.findByTenantIdAndUserIdAndId(user.tenantId(), user.userId(), sessionId).isEmpty()) {
+        if (sessionRepository.findByTenantIdAndUserIdAndId(user.tenantId(), user.ownerUserId(), sessionId).isEmpty()) {
             throw new SecurityException("文档不能绑定到不属于当前用户的会话");
         }
     }

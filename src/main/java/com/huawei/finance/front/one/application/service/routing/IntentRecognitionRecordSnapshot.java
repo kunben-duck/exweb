@@ -42,7 +42,7 @@ public record IntentRecognitionRecordSnapshot(
         ChatCommand command = input == null ? null : input.command();
         return new IntentRecognitionRecordSnapshot(
                 user == null ? null : user.tenantId(),
-                user == null ? null : user.userId(),
+                user == null ? null : user.ownerUserId(),
                 command == null ? null : command.sessionId(),
                 input == null ? null : input.runId(),
                 command == null ? null : command.commandId(),

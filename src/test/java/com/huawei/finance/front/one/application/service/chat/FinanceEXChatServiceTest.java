@@ -661,12 +661,12 @@ class FinanceEXChatServiceTest {
                                 InMemoryRunRepository runs, UserContext user,
                                 String runId, String sessionId, String userMessageId) {
         Instant now = Instant.parse("2026-06-11T00:00:00Z");
-        sessions.save(new ChatSession(sessionId, user.tenantId(), user.userId(), "测试会话", "ACTIVE", "web",
+        sessions.save(new ChatSession(sessionId, user.tenantId(), user.ownerUserId(), "测试会话", "ACTIVE", "web",
                 userMessageId, sessionId, null, null, 1L, null, now, now));
-        messages.save(new ChatMessage(userMessageId, user.tenantId(), user.userId(), sessionId,
+        messages.save(new ChatMessage(userMessageId, user.tenantId(), user.ownerUserId(), sessionId,
                 null, 1L, 0, 1, "user", "帮我处理一下", null, runId,
                 "NORMAL", false, null, null, null, null, null, now));
-        runs.save(new ChatRun(runId, user.tenantId(), user.userId(), sessionId, ChatRunStatus.RUNNING,
+        runs.save(new ChatRun(runId, user.tenantId(), user.ownerUserId(), sessionId, ChatRunStatus.RUNNING,
                 "AGENT_RUNTIME", null, "relay", null, ChatRunMode.NEXT, null, userMessageId,
                 null, null, null, null, now, null, Map.of(), now, now));
     }

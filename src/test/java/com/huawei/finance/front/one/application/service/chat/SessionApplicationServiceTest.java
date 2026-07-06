@@ -526,7 +526,7 @@ class SessionApplicationServiceTest {
                 return Optional.empty();
             }
             Instant now = Instant.now();
-            return Optional.of(new ChatRun("run-" + sessionId, user.tenantId(), user.userId(), sessionId,
+            return Optional.of(new ChatRun("run-" + sessionId, user.tenantId(), user.ownerUserId(), sessionId,
                     ChatRunStatus.RUNNING, "AGENT_RUNTIME", null, "relay", null, 1L,
                     null, null, now, null, Map.of(), now, now));
         }

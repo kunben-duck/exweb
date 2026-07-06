@@ -147,10 +147,10 @@ public class ChatRunStopCoordinator {
             }
             ChatSession session = sessionSnapshot == null ? sessionService.getSession(user, run.sessionId()) : sessionSnapshot;
             String assistantMessageId = idGenerator.newId("msg",
-                    IdGenerateContext.of(user.tenantId(), user.userId(), session.id(), run.id()));
+                    IdGenerateContext.of(user.tenantId(), user.ownerUserId(), session.id(), run.id()));
             ChatMessage savedAssistant = sessionService.saveAssistantMessage(new AssistantMessageSaveCommand(
                     user.tenantId(),
-                    user.userId(),
+                    user.ownerUserId(),
                     session,
                     assistant.finalContent(),
                     run.id(),

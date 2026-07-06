@@ -211,7 +211,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         return Flux.defer(() -> {
             RuntimeForwardHeaders headerSnapshot = normalizeForwardHeaders(forwardHeaders);
             // 进入 application 后统一以 UserContext 为准；原始前端请求只保留会话、消息、附件和元数据。
-            ChatCommand identified = new ChatCommand(command.commandId(), user.tenantId(), user.userId(),
+            ChatCommand identified = new ChatCommand(command.commandId(), user.tenantId(), user.ownerUserId(),
                     command.sessionId(), command.conversationId(), command.channel(), command.message(),
                     command.attachments(), command.metadata(), command.runMode(), command.parentMessageId(),
                     command.editedMessageId(), command.regeneratedMessageId());
@@ -224,11 +224,11 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
             List<AttachmentRef> attachments = documentFacade.resolveAttachmentsForUser(user,
                     identified.attachments() == null ? List.of() : identified.attachments());
-            ChatCommand normalized = new ChatCommand(identified.commandId(), user.tenantId(), user.userId(),
+            ChatCommand normalized = new ChatCommand(identified.commandId(), user.tenantId(), user.ownerUserId(),
                     session.id(), identified.conversationId(), identified.channel(), identified.message(),
                     attachments, identified.metadata(), identified.runMode(), identified.parentMessageId(),
                     identified.editedMessageId(), identified.regeneratedMessageId());
-            String runId = idGenerator.newId("run", IdGenerateContext.of(user.tenantId(), user.userId(), session.id()));
+            String runId = idGenerator.newId("run", IdGenerateContext.of(user.tenantId(), user.ownerUserId(), session.id()));
 
             // MemoryContext 是可选 SuperAgent 记忆增强。长短期记忆都关闭时这里返回空上下文，
             // 且不会查询 Redis、历史消息或长期记忆服务；当前用户输入也不会进入本轮上下文，避免重复。
@@ -249,7 +249,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 route = RouteTarget.domainAgent(selectedDomainAgentId, "front selected domain agent");
             } else {
                 var activeRuntimeBinding = runtimeBindingService.findActiveBySession(user.tenantId(),
-                        user.userId(), session.id());
+                        user.ownerUserId(), session.id());
                 if (activeRuntimeBinding.isPresent()) {
                     // Runtime 是唯一允许多轮续接的执行主体；命中 active binding 后直接继续 Relay Runtime。
                     binding = runtimeBindingService.touchForRun(activeRuntimeBinding.get(), runId);
@@ -269,7 +269,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     binding = null;
                 } else if (route.type() == RouteType.AGENT_RUNTIME) {
                     RuntimeBindingResolution resolution = runtimeBindingService.resolveForRun(user.tenantId(),
-                            user.userId(), session.id(), runId, runtimeBindingLeafId);
+                            user.ownerUserId(), session.id(), runId, runtimeBindingLeafId);
                     binding = resolution.binding();
                     runtimeSessionMode = resolution.sessionMode();
                 }
@@ -424,7 +424,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         if ("run.completed".equals(stored.type()) && completionTarget.messageReady()) {
             ChatMessage savedAssistant = sessionService.saveAssistantMessage(new AssistantMessageSaveCommand(
                     user.tenantId(),
-                    user.userId(),
+                    user.ownerUserId(),
                     session,
                     assistant.finalContent(),
                     runId,
@@ -458,7 +458,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
             return CompletionMessageTarget.notReady();
         }
         String assistantMessageId = idGenerator.newId("msg",
-                IdGenerateContext.of(user.tenantId(), user.userId(), session.id(), runId));
+                IdGenerateContext.of(user.tenantId(), user.ownerUserId(), session.id(), runId));
         return CompletionMessageTarget.ready(assistantMessageId);
     }
 

@@ -100,13 +100,13 @@ public class SessionApplicationService implements ChatSessionFacade {
     @Override
     public ChatSession createSession(UserContext user, String title, String channel) {
         checkChatUser(user);
-        return createOwnedSession(user.tenantId(), user.userId(), title, channel);
+        return createOwnedSession(user.tenantId(), user.ownerUserId(), title, channel);
     }
 
     @Override
     public ChatSession getSession(UserContext user, String sessionId) {
         checkChatUser(user);
-        return requireOwnedSession(user.tenantId(), user.userId(), sessionId);
+        return requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId);
     }
 
     @Override
@@ -117,7 +117,7 @@ public class SessionApplicationService implements ChatSessionFacade {
     @Override
     public ChatMessagePage listMessages(UserContext user, String sessionId, String leafMessageId, String cursor, int limit) {
         checkChatUser(user);
-        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
         if (leafMessageId != null && !leafMessageId.isBlank()) {
             requireMessageInSession(session, leafMessageId);
         }
@@ -128,27 +128,27 @@ public class SessionApplicationService implements ChatSessionFacade {
     @Override
     public List<ChatMessage> listMessageTree(UserContext user, String sessionId) {
         checkChatUser(user);
-        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
         return messageRepository.findAllBySession(session.tenantId(), session.userId(), session.id());
     }
 
     @Override
     public List<ChatMessage> listMessageTreeNodes(UserContext user, String sessionId) {
         checkChatUser(user);
-        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
         return messageRepository.findAllMessageNodesBySession(session.tenantId(), session.userId(), session.id());
     }
 
     @Override
     public ChatSessionPage listSessions(UserContext user, String cursor, int limit) {
         checkChatUser(user);
-        return sessionRepository.pageByTenantIdAndUserId(user.tenantId(), user.userId(), cursor, limit);
+        return sessionRepository.pageByTenantIdAndUserId(user.tenantId(), user.ownerUserId(), cursor, limit);
     }
 
     @Override
     public ChatSessionNumberPage listSessionsByPage(UserContext user, int curPage, int pageSize) {
         checkChatUser(user);
-        return sessionRepository.pageNumberByTenantIdAndUserId(user.tenantId(), user.userId(), curPage, pageSize);
+        return sessionRepository.pageNumberByTenantIdAndUserId(user.tenantId(), user.ownerUserId(), curPage, pageSize);
     }
 
     @Override
@@ -160,14 +160,14 @@ public class SessionApplicationService implements ChatSessionFacade {
         List<String> sessionIds = sessions.stream()
                 .filter(session -> session != null)
                 .filter(session -> user.tenantId().equals(session.tenantId()))
-                .filter(session -> user.userId().equals(session.userId()))
+                .filter(session -> user.ownerUserId().equals(session.userId()))
                 .map(ChatSession::id)
                 .distinct()
                 .toList();
         if (sessionIds.isEmpty()) {
             return Map.of();
         }
-        return messageRepository.findFirstAssistantMessagesBySessionIds(user.tenantId(), user.userId(), sessionIds)
+        return messageRepository.findFirstAssistantMessagesBySessionIds(user.tenantId(), user.ownerUserId(), sessionIds)
                 .entrySet()
                 .stream()
                 .filter(entry -> entry.getValue() != null)
@@ -178,7 +178,7 @@ public class SessionApplicationService implements ChatSessionFacade {
     @Override
     public ChatSession renameSession(UserContext user, String sessionId, String title) {
         checkChatUser(user);
-        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
         String safeTitle = title == null || title.isBlank() ? session.title() : title.trim();
         return saveWith(session, safeTitle, session.status());
     }
@@ -186,14 +186,14 @@ public class SessionApplicationService implements ChatSessionFacade {
     @Override
     public ChatSession archiveSession(UserContext user, String sessionId) {
         checkChatUser(user);
-        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
         return saveWith(session, session.title(), STATUS_ARCHIVED);
     }
 
     @Override
     public ChatSession restoreSession(UserContext user, String sessionId) {
         checkChatUser(user);
-        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
         return saveWith(session, session.title(), STATUS_ACTIVE);
     }
 
@@ -208,17 +208,17 @@ public class SessionApplicationService implements ChatSessionFacade {
         checkChatUser(user);
         List<String> normalizedIds = normalizeDeleteSessionIds(sessionIds);
         List<ChatSession> sessions = normalizedIds.stream()
-                .map(sessionId -> requireOwnedSession(user.tenantId(), user.userId(), sessionId, false))
+                .map(sessionId -> requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false))
                 .toList();
         List<SessionDeleteRunPlan> activeRunPlans = activeRunPlansForDelete(user, sessions);
         List<ChatSession> deleted = new ArrayList<>(sessions.size());
         for (ChatSession session : sessions) {
             ChatSession deletedSession = saveWith(session, session.title(), STATUS_DELETED);
             if (runtimeBindingService != null) {
-                runtimeBindingService.cancelActive(user.tenantId(), user.userId(), session.id());
+                runtimeBindingService.cancelActive(user.tenantId(), user.ownerUserId(), session.id());
             }
             if (shareRepository != null) {
-                shareRepository.revokeActiveBySession(user.tenantId(), user.userId(), session.id(), Instant.now());
+                shareRepository.revokeActiveBySession(user.tenantId(), user.ownerUserId(), session.id(), Instant.now());
             }
             deleted.add(deletedSession);
         }
@@ -355,9 +355,9 @@ public class SessionApplicationService implements ChatSessionFacade {
      */
     public List<ChatMessage> listVariants(UserContext user, String sessionId, String messageId) {
         checkChatUser(user);
-        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
         ChatMessage message = requireMessageInSession(session, messageId);
-        return messageRepository.findSiblings(user.tenantId(), user.userId(), session.id(),
+        return messageRepository.findSiblings(user.tenantId(), user.ownerUserId(), session.id(),
                 message.parentMessageId(), message.role());
     }
 
@@ -370,11 +370,11 @@ public class SessionApplicationService implements ChatSessionFacade {
      */
     public ChatSession selectPath(UserContext user, String sessionId, String leafMessageId) {
         checkChatUser(user);
-        ChatSession session = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
         ChatMessage selected = requireMessageInSession(session, leafMessageId);
         String effectiveLeafMessageId = effectiveLeafForPathSelection(user, session, selected);
-        sessionRepository.updateCurrentLeaf(user.tenantId(), user.userId(), session.id(), effectiveLeafMessageId);
-        return requireOwnedSession(user.tenantId(), user.userId(), session.id(), false);
+        sessionRepository.updateCurrentLeaf(user.tenantId(), user.ownerUserId(), session.id(), effectiveLeafMessageId);
+        return requireOwnedSession(user.tenantId(), user.ownerUserId(), session.id(), false);
     }
 
     /**
@@ -382,19 +382,19 @@ public class SessionApplicationService implements ChatSessionFacade {
      */
     public ChatSession createBranch(UserContext user, String sessionId, String sourceMessageId, String title) {
         checkChatUser(user);
-        ChatSession sourceSession = requireOwnedSession(user.tenantId(), user.userId(), sessionId, false);
+        ChatSession sourceSession = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
         ChatMessage sourceLeaf = requireMessageInSession(sourceSession, sourceMessageId);
-        List<ChatMessage> sourcePath = messageRepository.findPathToMessage(user.tenantId(), user.userId(),
+        List<ChatMessage> sourcePath = messageRepository.findPathToMessage(user.tenantId(), user.ownerUserId(),
                 sourceSession.id(), sourceLeaf.id());
         if (sourcePath.isEmpty()) {
             throw new IllegalArgumentException("分支来源消息不存在: " + sourceMessageId);
         }
         Instant now = Instant.now();
-        String branchId = idGenerator.newId("session", IdGenerateContext.of(user.tenantId(), user.userId()));
+        String branchId = idGenerator.newId("session", IdGenerateContext.of(user.tenantId(), user.ownerUserId()));
         ChatSession branch = sessionRepository.save(new ChatSession(
                 branchId,
                 user.tenantId(),
-                user.userId(),
+                user.ownerUserId(),
                 title == null || title.isBlank() ? "分支 · " + sourceSession.title() : title.trim(),
                 STATUS_ACTIVE,
                 sourceSession.channel(),
@@ -410,11 +410,11 @@ public class SessionApplicationService implements ChatSessionFacade {
         String previousNewMessageId = null;
         ChatMessage lastCopied = null;
         for (ChatMessage source : sourcePath) {
-            String newMessageId = idGenerator.newId("msg", IdGenerateContext.of(user.tenantId(), user.userId(), branch.id()));
+            String newMessageId = idGenerator.newId("msg", IdGenerateContext.of(user.tenantId(), user.ownerUserId(), branch.id()));
             ChatMessage copy = new ChatMessage(
                     newMessageId,
                     user.tenantId(),
-                    user.userId(),
+                    user.ownerUserId(),
                     branch.id(),
                     previousNewMessageId,
                     nextNodeOrder(branch),
@@ -438,8 +438,8 @@ public class SessionApplicationService implements ChatSessionFacade {
             copyAttachments(user, source, lastCopied);
             previousNewMessageId = lastCopied.id();
         }
-        sessionRepository.updateCurrentLeaf(user.tenantId(), user.userId(), branch.id(), previousNewMessageId);
-        return requireOwnedSession(user.tenantId(), user.userId(), branch.id(), false);
+        sessionRepository.updateCurrentLeaf(user.tenantId(), user.ownerUserId(), branch.id(), previousNewMessageId);
+        return requireOwnedSession(user.tenantId(), user.ownerUserId(), branch.id(), false);
     }
 
     private List<ChatMessagePart> buildMessageParts(MessagePartBuildContext context) {
@@ -502,9 +502,9 @@ public class SessionApplicationService implements ChatSessionFacade {
         int order = 1;
         for (ChatMessagePart sourcePart : sourceParts) {
             copies.add(new ChatMessagePart(
-                    idGenerator.newId("part", IdGenerateContext.of(user.tenantId(), user.userId(), targetSessionId)),
+                    idGenerator.newId("part", IdGenerateContext.of(user.tenantId(), user.ownerUserId(), targetSessionId)),
                     user.tenantId(),
-                    user.userId(),
+                    user.ownerUserId(),
                     targetSessionId,
                     targetMessageId,
                     sourcePart.runId(),
@@ -590,7 +590,7 @@ public class SessionApplicationService implements ChatSessionFacade {
         String parentMessageId = blankToNull(command.parentMessageId()) == null
                 ? session.currentLeafMessageId()
                 : command.parentMessageId();
-        ChatMessage message = createUserMessage(new UserMessageCreateCommand(user.tenantId(), user.userId(), session,
+        ChatMessage message = createUserMessage(new UserMessageCreateCommand(user.tenantId(), user.ownerUserId(), session,
                 command.message(), parentMessageId, ChatRunMode.NEXT, runId, null, null, attachments));
         return new ChatRunMessagePlan(ChatRunMode.NEXT, parentMessageId, message, null);
     }
@@ -599,7 +599,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                                                        String runId, List<AttachmentRef> attachments) {
         ChatMessage edited = requireMessageInSession(session, command.editedMessageId());
         ensureUnlockedUserMessage(edited, "被编辑消息");
-        ChatMessage message = createUserMessage(new UserMessageCreateCommand(user.tenantId(), user.userId(), session,
+        ChatMessage message = createUserMessage(new UserMessageCreateCommand(user.tenantId(), user.ownerUserId(), session,
                 command.message(), edited.parentMessageId(), ChatRunMode.EDIT_USER, runId, edited.id(), null,
                 attachments));
         return new ChatRunMessagePlan(ChatRunMode.EDIT_USER, edited.parentMessageId(), message, null);
@@ -615,7 +615,7 @@ public class SessionApplicationService implements ChatSessionFacade {
         if (!"user".equals(userMessage.role())) {
             throw new IllegalArgumentException("assistant 消息父节点不是 user 消息，不能重新生成");
         }
-        sessionRepository.updateCurrentLeaf(user.tenantId(), user.userId(), session.id(), userMessage.id());
+        sessionRepository.updateCurrentLeaf(user.tenantId(), user.ownerUserId(), session.id(), userMessage.id());
         return new ChatRunMessagePlan(ChatRunMode.REGENERATE_ASSISTANT, userMessage.id(), userMessage, regenerated.id());
     }
 
@@ -681,7 +681,7 @@ public class SessionApplicationService implements ChatSessionFacade {
         if (!"user".equalsIgnoreCase(selected.role())) {
             return selected.id();
         }
-        return messageRepository.findSiblings(user.tenantId(), user.userId(), session.id(), selected.id(), "assistant")
+        return messageRepository.findSiblings(user.tenantId(), user.ownerUserId(), session.id(), selected.id(), "assistant")
                 .stream()
                 .reduce((previous, current) -> current)
                 .map(ChatMessage::id)
@@ -736,11 +736,11 @@ public class SessionApplicationService implements ChatSessionFacade {
 
     private void copyAttachments(UserContext user, ChatMessage source, ChatMessage target) {
         int index = 0;
-        for (ChatMessageAttachment attachment : messageRepository.findAttachments(user.tenantId(), user.userId(), source.id())) {
+        for (ChatMessageAttachment attachment : messageRepository.findAttachments(user.tenantId(), user.ownerUserId(), source.id())) {
             messageRepository.saveAttachment(new ChatMessageAttachment(
-                    idGenerator.newId("msg_att", IdGenerateContext.of(user.tenantId(), user.userId(), target.sessionId())),
+                    idGenerator.newId("msg_att", IdGenerateContext.of(user.tenantId(), user.ownerUserId(), target.sessionId())),
                     user.tenantId(),
-                    user.userId(),
+                    user.ownerUserId(),
                     target.sessionId(),
                     target.id(),
                     attachment.documentId(),

@@ -42,12 +42,12 @@ public class LocalWebSocketConnectionRegistry {
     public synchronized ConnectionState register(String connectionId, UserContext user) {
         long currentConnections = connections.values().stream()
                 .filter(state -> state.tenantId().equals(user.tenantId()))
-                .filter(state -> state.userId().equals(user.userId()))
+                .filter(state -> state.userId().equals(user.ownerUserId()))
                 .count();
         if (currentConnections >= properties.normalizedMaxConnectionsPerUser()) {
             throw new IllegalStateException("WS_CONNECTION_LIMIT_EXCEEDED: 当前用户 WebSocket 连接数已达上限");
         }
-        ConnectionState state = new ConnectionState(connectionId, user.tenantId(), user.userId(), user.username());
+        ConnectionState state = new ConnectionState(connectionId, user.tenantId(), user.ownerUserId(), user.username());
         ConnectionState previous = connections.put(connectionId, state);
         if (previous != null) {
             // 正常情况下 WebSocket sessionId 不会复用；这里做防御性释放，避免异常重连污染 topic 订阅。

@@ -69,7 +69,7 @@ public class ChatShareDeliveryApplicationService {
         String content = chooseContent(safeCommand.content(), share);
         ChatShareProviderDeliveryRequest providerRequest = new ChatShareProviderDeliveryRequest(
                 share.tenantId(),
-                user.userId(),
+                providerUserAccount(user),
                 title,
                 linkUrl,
                 content,
@@ -83,7 +83,7 @@ public class ChatShareDeliveryApplicationService {
         Instant sentAt = Instant.now();
         ChatShareDelivery delivery = new ChatShareDelivery(
                 idGenerator.newId("share_delivery", IdGenerateContext.of(
-                        user.tenantId(), user.userId(), share.sourceSessionId(), share.id())),
+                        user.tenantId(), user.ownerUserId(), share.sourceSessionId(), share.id())),
                 share.tenantId(),
                 share.ownerUserId(),
                 share.id(),
@@ -103,6 +103,12 @@ public class ChatShareDeliveryApplicationService {
                 sentAt
         );
         return deliveryRepository.save(delivery);
+    }
+
+    private String providerUserAccount(UserContext user) {
+        return user.userAccount() == null || user.userAccount().isBlank()
+                ? user.ownerUserId()
+                : user.userAccount().trim();
     }
 
     private CreateChatShareDeliveryCommand requireCommand(CreateChatShareDeliveryCommand command) {

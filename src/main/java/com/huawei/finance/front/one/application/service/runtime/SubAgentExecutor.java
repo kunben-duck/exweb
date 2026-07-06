@@ -38,7 +38,7 @@ public class SubAgentExecutor {
         // 不暴露前端 DTO，也不让 SubAgent 直接读写本服务的会话/记忆存储。
         AgentQueryRequest request = new AgentQueryRequest(
                 user.tenantId(),
-                user.userId(),
+                user.ownerUserId(),
                 command.sessionId(),
                 context.runId(),
                 context.route().selectedAgentCode(),
@@ -60,7 +60,7 @@ public class SubAgentExecutor {
         }
         SubAgentCancelRequest request = new SubAgentCancelRequest(
                 user.tenantId(),
-                user.userId(),
+                user.ownerUserId(),
                 run.sessionId(),
                 run.id(),
                 run.agentCode(),

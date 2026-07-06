@@ -92,7 +92,7 @@ public class FinEurekaIntentService implements IntentService {
     private void applyAuthHeaders(HttpHeaders headers, UserContext user) {
         authHeaders.headers(new AuthHeaderRequest(
                 user == null ? null : user.tenantId(),
-                user == null ? null : user.userId(),
+                user == null ? null : user.ownerUserId(),
                 "intent-service",
                 "recognize",
                 properties.getBaseUrl(),

@@ -334,7 +334,7 @@ CREATE INDEX IF NOT EXISTS idx_fin_ex_runtime_binding_expires_at
 COMMENT ON TABLE fin_ex_chat_session_t IS '聊天会话表，保存前端用户可见的会话元数据和会话生命周期状态。';
 COMMENT ON COLUMN fin_ex_chat_session_t.id IS '会话主键，业务生成的 sessionId。';
 COMMENT ON COLUMN fin_ex_chat_session_t.tenant_id IS '租户标识，来自服务端身份上下文，用于多租户数据隔离。';
-COMMENT ON COLUMN fin_ex_chat_session_t.user_id IS '用户标识，来自服务端身份上下文，用于用户级数据隔离。';
+COMMENT ON COLUMN fin_ex_chat_session_t.user_id IS '系统归属用户标识，优先使用 UserContext.globalUserId，缺省回退 UserContext.userId，用于用户级数据隔离。';
 COMMENT ON COLUMN fin_ex_chat_session_t.title IS '会话标题，默认由用户首轮输入截断生成，也可由前端重命名。';
 COMMENT ON COLUMN fin_ex_chat_session_t.status IS '会话状态，例如 ACTIVE、ARCHIVED、DELETED；DELETED 表示软删除，不物理删除历史事实数据。';
 COMMENT ON COLUMN fin_ex_chat_session_t.channel IS '会话来源渠道，例如 web。';
@@ -350,7 +350,7 @@ COMMENT ON COLUMN fin_ex_chat_session_t.updated_at IS '会话最后更新时间�
 COMMENT ON TABLE fin_ex_chat_message_t IS '聊天消息历史表，保存已经完整落库的用户消息和完整 assistant 回复。流式 delta 不直接写入本表。';
 COMMENT ON COLUMN fin_ex_chat_message_t.id IS '消息主键，业务生成的 messageId。';
 COMMENT ON COLUMN fin_ex_chat_message_t.tenant_id IS '租户标识，来自服务端身份上下文。';
-COMMENT ON COLUMN fin_ex_chat_message_t.user_id IS '用户标识，来自服务端身份上下文。';
+COMMENT ON COLUMN fin_ex_chat_message_t.user_id IS '系统归属用户标识，优先使用 UserContext.globalUserId，缺省回退 UserContext.userId。';
 COMMENT ON COLUMN fin_ex_chat_message_t.session_id IS '所属聊天会话 ID，对应 fin_ex_chat_session_t.id。';
 COMMENT ON COLUMN fin_ex_chat_message_t.parent_message_id IS '消息树父节点 ID；用于编辑历史问题、重新生成和 active path 回溯。';
 COMMENT ON COLUMN fin_ex_chat_message_t.node_order IS '会话内消息节点创建序号，保证历史展示和分支复制排序稳定。';
@@ -372,7 +372,7 @@ COMMENT ON COLUMN fin_ex_chat_message_t.created_at IS '消息创建时间。';
 COMMENT ON TABLE fin_ex_chat_message_part_t IS '聊天消息结构化过程表，保存 assistant 正文快照、思考、工具调用、进度、agent 调用等历史回显信息。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.id IS '消息 part 主键，业务生成的 partId。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.tenant_id IS '租户标识，来自服务端身份上下文。';
-COMMENT ON COLUMN fin_ex_chat_message_part_t.user_id IS '用户标识，来自服务端身份上下文。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.user_id IS '系统归属用户标识，优先使用 UserContext.globalUserId，缺省回退 UserContext.userId。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.session_id IS 'part 所属聊天会话 ID。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.message_id IS 'part 所属 assistant 消息 ID，对应 fin_ex_chat_message_t.id。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.run_id IS '产生该 part 的 runId；分支快照 part 可继承来源 runId。';
@@ -391,7 +391,7 @@ COMMENT ON COLUMN fin_ex_chat_message_part_t.created_at IS 'part 创建时间。
 COMMENT ON TABLE fin_ex_chat_message_attachment_t IS '聊天消息附件引用表，保存用户消息与文档库资产的关联事实。';
 COMMENT ON COLUMN fin_ex_chat_message_attachment_t.id IS '消息附件引用主键，业务生成的 attachmentRefId。';
 COMMENT ON COLUMN fin_ex_chat_message_attachment_t.tenant_id IS '租户标识，来自服务端身份上下文。';
-COMMENT ON COLUMN fin_ex_chat_message_attachment_t.user_id IS '用户标识，来自服务端身份上下文。';
+COMMENT ON COLUMN fin_ex_chat_message_attachment_t.user_id IS '系统归属用户标识，优先使用 UserContext.globalUserId，缺省回退 UserContext.userId。';
 COMMENT ON COLUMN fin_ex_chat_message_attachment_t.session_id IS '附件引用所属聊天会话 ID。';
 COMMENT ON COLUMN fin_ex_chat_message_attachment_t.message_id IS '附件引用所属消息 ID。';
 COMMENT ON COLUMN fin_ex_chat_message_attachment_t.document_id IS '被引用的文档库资产 ID。';
@@ -405,7 +405,7 @@ COMMENT ON COLUMN fin_ex_chat_message_attachment_t.created_at IS '附件引用�
 COMMENT ON TABLE fin_ex_message_feedback_t IS '消息反馈表，保存用户对 assistant 消息的点赞、点踩和原因说明。';
 COMMENT ON COLUMN fin_ex_message_feedback_t.id IS '反馈主键，业务生成的 feedbackId。';
 COMMENT ON COLUMN fin_ex_message_feedback_t.tenant_id IS '租户标识，来自服务端身份上下文。';
-COMMENT ON COLUMN fin_ex_message_feedback_t.user_id IS '用户标识，来自服务端身份上下文。';
+COMMENT ON COLUMN fin_ex_message_feedback_t.user_id IS '系统归属用户标识，优先使用 UserContext.globalUserId，缺省回退 UserContext.userId。';
 COMMENT ON COLUMN fin_ex_message_feedback_t.session_id IS '被反馈消息所属会话 ID。';
 COMMENT ON COLUMN fin_ex_message_feedback_t.message_id IS '被反馈的 assistant 消息 ID，对应 fin_ex_chat_message_t.id。';
 COMMENT ON COLUMN fin_ex_message_feedback_t.run_id IS '反馈关联的 runId，可为空；存在时必须与消息属于同一会话。';
@@ -420,7 +420,7 @@ COMMENT ON COLUMN fin_ex_message_feedback_t.updated_at IS '反馈最后更新时
 COMMENT ON TABLE fin_ex_chat_share_t IS '单轮问答分享表，保存父 user 问题、assistant 回答和可见 parts 的固定展示快照。';
 COMMENT ON COLUMN fin_ex_chat_share_t.id IS '分享主键，业务生成的 shareId。';
 COMMENT ON COLUMN fin_ex_chat_share_t.tenant_id IS '租户标识，用于分享查看时的默认租户级隔离。';
-COMMENT ON COLUMN fin_ex_chat_share_t.owner_user_id IS '创建分享的用户标识。';
+COMMENT ON COLUMN fin_ex_chat_share_t.owner_user_id IS '创建分享的系统归属用户标识。';
 COMMENT ON COLUMN fin_ex_chat_share_t.source_session_id IS '来源聊天会话 ID。';
 COMMENT ON COLUMN fin_ex_chat_share_t.source_user_message_id IS '来源 user 问题消息 ID。';
 COMMENT ON COLUMN fin_ex_chat_share_t.source_assistant_message_id IS '来源 assistant 回答消息 ID。';
@@ -438,7 +438,7 @@ COMMENT ON COLUMN fin_ex_chat_share_t.updated_at IS '分享最后更新时间。
 COMMENT ON TABLE fin_ex_chat_share_delivery_t IS '单轮问答分享发送记录表，保存分享链接发送到 WeLink 等 provider 的请求摘要和发送结果。';
 COMMENT ON COLUMN fin_ex_chat_share_delivery_t.id IS '发送记录主键，业务生成的 deliveryId。';
 COMMENT ON COLUMN fin_ex_chat_share_delivery_t.tenant_id IS '租户标识，用于发送记录归属隔离。';
-COMMENT ON COLUMN fin_ex_chat_share_delivery_t.owner_user_id IS '分享创建者用户标识，首版默认只有创建者可发送。';
+COMMENT ON COLUMN fin_ex_chat_share_delivery_t.owner_user_id IS '分享创建者系统归属用户标识，首版默认只有创建者可发送。';
 COMMENT ON COLUMN fin_ex_chat_share_delivery_t.share_id IS '被发送的分享 ID，对应 fin_ex_chat_share_t.id。';
 COMMENT ON COLUMN fin_ex_chat_share_delivery_t.provider IS '发送 provider 编码，例如 welink。';
 COMMENT ON COLUMN fin_ex_chat_share_delivery_t.status IS '发送状态，SUCCESS 表示 provider 确认成功，FAILED 表示发送失败。';
@@ -458,7 +458,7 @@ COMMENT ON COLUMN fin_ex_chat_share_delivery_t.updated_at IS '发送记录最后
 COMMENT ON TABLE fin_ex_chat_run_t IS '单轮聊天运行表，保存一次用户提问对应的后台 run 生命周期事实。';
 COMMENT ON COLUMN fin_ex_chat_run_t.id IS 'run 主键，业务生成的 runId，用于 stop、retry、事件关联和排障。';
 COMMENT ON COLUMN fin_ex_chat_run_t.tenant_id IS '租户标识，来自服务端身份上下文。';
-COMMENT ON COLUMN fin_ex_chat_run_t.user_id IS '用户标识，来自服务端身份上下文。';
+COMMENT ON COLUMN fin_ex_chat_run_t.user_id IS '系统归属用户标识，优先使用 UserContext.globalUserId，缺省回退 UserContext.userId。';
 COMMENT ON COLUMN fin_ex_chat_run_t.session_id IS 'run 所属前端聊天会话 ID。';
 COMMENT ON COLUMN fin_ex_chat_run_t.status IS 'run 生命周期状态，包括 RUNNING、CANCELLING、CANCELLED、COMPLETED、FAILED。';
 COMMENT ON COLUMN fin_ex_chat_run_t.route_type IS '本轮路由类型，例如 SUB_AGENT、AGENT_RUNTIME、SYSTEM_RESPONSE。';
@@ -481,7 +481,7 @@ COMMENT ON COLUMN fin_ex_chat_run_t.updated_at IS 'run 记录最后更新时间�
 COMMENT ON TABLE fin_ex_intent_recognition_t IS '意图识别记录表，保存每次实际调用意图服务后的输入、识别结果和最终路由采纳结果，用于准确率统计和问题定位；该表是旁路记录，不参与聊天主链路决策。';
 COMMENT ON COLUMN fin_ex_intent_recognition_t.id IS '记录主键，业务生成的 intentrecId。';
 COMMENT ON COLUMN fin_ex_intent_recognition_t.tenant_id IS '租户标识，来自服务端身份上下文。';
-COMMENT ON COLUMN fin_ex_intent_recognition_t.user_id IS '用户标识，来自服务端身份上下文。';
+COMMENT ON COLUMN fin_ex_intent_recognition_t.user_id IS '系统归属用户标识，优先使用 UserContext.globalUserId，缺省回退 UserContext.userId。';
 COMMENT ON COLUMN fin_ex_intent_recognition_t.session_id IS '触发意图识别的聊天会话 ID。';
 COMMENT ON COLUMN fin_ex_intent_recognition_t.run_id IS '触发意图识别的 ChatService runId。';
 COMMENT ON COLUMN fin_ex_intent_recognition_t.command_id IS '前端或调用方传入的命令标识，用于幂等排障。';
@@ -510,7 +510,7 @@ COMMENT ON TABLE fin_ex_chat_run_execution_t IS '聊天 run 执行控制面表�
 COMMENT ON COLUMN fin_ex_chat_run_execution_t.id IS '执行控制面记录主键，业务生成的 executionId。';
 COMMENT ON COLUMN fin_ex_chat_run_execution_t.run_id IS '关联的业务 runId，对应 fin_ex_chat_run_t.id；唯一。';
 COMMENT ON COLUMN fin_ex_chat_run_execution_t.tenant_id IS '租户标识，冗余自 run，用于多租户扫描、排障和恢复负载治理。';
-COMMENT ON COLUMN fin_ex_chat_run_execution_t.user_id IS '用户标识，冗余自 run，用于用户级排障。';
+COMMENT ON COLUMN fin_ex_chat_run_execution_t.user_id IS '系统归属用户标识，冗余自 run，用于用户级排障。';
 COMMENT ON COLUMN fin_ex_chat_run_execution_t.session_id IS 'run 所属聊天会话 ID，冗余自 run。';
 COMMENT ON COLUMN fin_ex_chat_run_execution_t.execution_status IS '执行控制面状态，包括 RUNNING、CANCELLING、RECOVERING、COMPLETED、FAILED、CANCELLED。';
 COMMENT ON COLUMN fin_ex_chat_run_execution_t.owner_instance_id IS '当前拥有该 run 执行权的应用实例运行 ID，由 ApplicationInstanceIdProvider 提供。';
@@ -531,7 +531,7 @@ COMMENT ON SEQUENCE fin_ex_chat_event_seq IS '聊天事件恢复游标序号生�
 COMMENT ON TABLE fin_ex_chat_event_t IS '聊天事件事实表，保存 ChatService 标准事件，例如 run.started、message.delta、message.snapshot、runtime.progress、runtime.tool、runtime.reference、runtime.card、message.completed、run.completed、run.failed、run.cancelled；tenant_id/user_id/session_id/run_id 是防止多用户、多会话串线的事实边界。';
 COMMENT ON COLUMN fin_ex_chat_event_t.id IS '事件主键，业务生成的 eventId。';
 COMMENT ON COLUMN fin_ex_chat_event_t.tenant_id IS '租户标识，来自服务端身份上下文；SSE/WS 恢复查询必须携带该字段。';
-COMMENT ON COLUMN fin_ex_chat_event_t.user_id IS '用户标识，来自服务端身份上下文；SSE/WS 恢复查询必须携带该字段。';
+COMMENT ON COLUMN fin_ex_chat_event_t.user_id IS '系统归属用户标识，优先使用 UserContext.globalUserId，缺省回退 UserContext.userId；SSE/WS 恢复查询必须携带该字段。';
 COMMENT ON COLUMN fin_ex_chat_event_t.session_id IS '事件所属聊天会话 ID；写入时必须与 run 所属 session 一致。';
 COMMENT ON COLUMN fin_ex_chat_event_t.run_id IS '事件所属 runId，对应 fin_ex_chat_run_t.id；写入时必须与 session、tenant、user 归属一致。';
 COMMENT ON COLUMN fin_ex_chat_event_t.seq IS '事件恢复游标序号，由数据库 sequence 生成；同一会话内按 seq 补发。';
@@ -542,7 +542,7 @@ COMMENT ON COLUMN fin_ex_chat_event_t.created_at IS '事件创建并落库时间
 COMMENT ON TABLE fin_ex_uploaded_document_t IS '用户文档库表，保存统一 documentId、目标 provider 位置、处理状态和可引用元数据。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.id IS '文档主键，业务生成的 documentId。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.tenant_id IS '租户标识，来自服务端身份上下文。';
-COMMENT ON COLUMN fin_ex_uploaded_document_t.user_id IS '用户标识，来自服务端身份上下文。';
+COMMENT ON COLUMN fin_ex_uploaded_document_t.user_id IS '系统归属用户标识，优先使用 UserContext.globalUserId，缺省回退 UserContext.userId。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.session_id IS '文档关联的聊天会话 ID，可为空；为空表示用户文档库资产。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.original_name IS '用户上传或文档库展示的原始文件名。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.bucket IS '文档 provider 编码或对象存储 bucket；domain-agent 等 HTTP provider 使用 providerCode。';
@@ -559,7 +559,7 @@ COMMENT ON COLUMN fin_ex_uploaded_document_t.updated_at IS '文档记录最后�
 COMMENT ON TABLE fin_ex_runtime_binding_t IS 'Runtime 续接绑定表，保存会话到 Relay Runtime 内部 session 的多轮绑定关系。';
 COMMENT ON COLUMN fin_ex_runtime_binding_t.id IS '绑定主键，业务生成的 bindingId。';
 COMMENT ON COLUMN fin_ex_runtime_binding_t.tenant_id IS '租户标识，来自服务端身份上下文。';
-COMMENT ON COLUMN fin_ex_runtime_binding_t.user_id IS '用户标识，来自服务端身份上下文。';
+COMMENT ON COLUMN fin_ex_runtime_binding_t.user_id IS '系统归属用户标识，优先使用 UserContext.globalUserId，缺省回退 UserContext.userId。';
 COMMENT ON COLUMN fin_ex_runtime_binding_t.chat_session_id IS '前端聊天会话 ID，对应 fin_ex_chat_session_t.id。';
 COMMENT ON COLUMN fin_ex_runtime_binding_t.provider IS 'AgentRuntime provider 编码，例如 relay。';
 COMMENT ON COLUMN fin_ex_runtime_binding_t.leaf_message_id IS '该 Runtime 内部会话对应的前端消息树叶子，避免历史编辑后复用错误上下文。';

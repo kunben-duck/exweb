@@ -18,7 +18,7 @@ public class DefaultChatShareAccessPolicy implements ChatShareAccessPolicy {
         return user != null
                 && sourceMessage != null
                 && user.tenantId().equals(sourceMessage.tenantId())
-                && user.userId().equals(sourceMessage.userId());
+                && user.ownerUserId().equals(sourceMessage.userId());
     }
 
     @Override
@@ -33,7 +33,7 @@ public class DefaultChatShareAccessPolicy implements ChatShareAccessPolicy {
         return user != null
                 && share != null
                 && user.tenantId().equals(share.tenantId())
-                && user.userId().equals(share.ownerUserId());
+                && user.ownerUserId().equals(share.ownerUserId());
     }
 
     @Override

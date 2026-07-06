@@ -41,7 +41,7 @@ public class AgentRuntimeExecutor {
         // forwardHeaders 仅为运行期内存快照，Relay adapter 会按白名单决定是否放入出站请求头。
         AgentRuntimeRequest request = new AgentRuntimeRequest(
                 user.tenantId(),
-                user.userId(),
+                user.ownerUserId(),
                 command.sessionId(),
                 context.runId(),
                 binding == null ? null : binding.runtimeSessionId(),
@@ -66,7 +66,7 @@ public class AgentRuntimeExecutor {
         }
         AgentRuntimeCancelRequest request = new AgentRuntimeCancelRequest(
                 user.tenantId(),
-                user.userId(),
+                user.ownerUserId(),
                 run.sessionId(),
                 run.id(),
                 run.runtimeSessionId(),

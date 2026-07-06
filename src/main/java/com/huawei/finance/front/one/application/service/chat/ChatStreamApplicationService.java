@@ -115,7 +115,7 @@ public class ChatStreamApplicationService {
     public java.util.List<ChatEvent> findPersistedRunEvents(UserContext user, ChatRun run) {
         permissionChecker.checkChatPermission(user);
         long afterSeq = run.firstSeq() == null || run.firstSeq() <= 0 ? 0 : run.firstSeq() - 1;
-        return eventStore.findByOwnerAndRunAfterSeq(user.tenantId(), user.userId(), run.sessionId(), run.id(), afterSeq);
+        return eventStore.findByOwnerAndRunAfterSeq(user.tenantId(), user.ownerUserId(), run.sessionId(), run.id(), afterSeq);
     }
 
     /**
@@ -146,7 +146,7 @@ public class ChatStreamApplicationService {
         return Mono.fromCallable(() -> {
                     permissionChecker.checkChatPermission(user);
                     ensureOwnedSession(user, sessionId);
-                    return eventStore.findByOwnerAndSessionAfterSeq(user.tenantId(), user.userId(), sessionId, afterSeq);
+                    return eventStore.findByOwnerAndSessionAfterSeq(user.tenantId(), user.ownerUserId(), sessionId, afterSeq);
                 })
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMapMany(Flux::fromIterable);
@@ -167,7 +167,7 @@ public class ChatStreamApplicationService {
     public Flux<ChatEvent> resumeRun(UserContext user, String runId, long afterSeq) {
         return Mono.fromCallable(() -> {
                     permissionChecker.checkChatPermission(user);
-                    ChatRun run = runRepository.findByTenantIdAndUserIdAndId(user.tenantId(), user.userId(), runId)
+                    ChatRun run = runRepository.findByTenantIdAndUserIdAndId(user.tenantId(), user.ownerUserId(), runId)
                             .orElseThrow(() -> new SecurityException("run 不存在或不属于当前用户"));
                     ensureOwnedSession(user, run.sessionId());
                     return run;
@@ -193,7 +193,7 @@ public class ChatStreamApplicationService {
                 .flatMapMany(run -> Flux.using(
                         () -> liveBuffer(topicId, afterSeq, run.id(), run.sessionId()),
                         liveBuffer -> Mono.fromCallable(() -> eventStore.findByOwnerAndRunAfterSeq(
-                                        user.tenantId(), user.userId(), run.sessionId(), run.id(), afterSeq))
+                                        user.tenantId(), user.ownerUserId(), run.sessionId(), run.id(), afterSeq))
                                 .subscribeOn(Schedulers.boundedElastic())
                                 .flatMapMany(replay -> {
                                     long liveAfterSeq = replay.stream().mapToLong(ChatEvent::sequence).max().orElse(afterSeq);
@@ -217,7 +217,7 @@ public class ChatStreamApplicationService {
         permissionChecker.checkChatPermission(user);
         String runId = ChatStreamTopics.parseRunId(topicId)
                 .orElseThrow(() -> new IllegalArgumentException("非法 stream topic: " + topicId));
-        return runRepository.findByTenantIdAndUserIdAndId(user.tenantId(), user.userId(), runId)
+        return runRepository.findByTenantIdAndUserIdAndId(user.tenantId(), user.ownerUserId(), runId)
                 .orElseThrow(() -> new SecurityException("run 不存在或不属于当前用户"));
     }
 
@@ -227,14 +227,14 @@ public class ChatStreamApplicationService {
     public long latestSeq(UserContext user, String sessionId) {
         permissionChecker.checkChatPermission(user);
         ensureOwnedSession(user, sessionId);
-        return eventStore.findLatestSeqByOwnerAndSession(user.tenantId(), user.userId(), sessionId);
+        return eventStore.findLatestSeqByOwnerAndSession(user.tenantId(), user.ownerUserId(), sessionId);
     }
 
     private void ensureOwnedSession(UserContext user, String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
             throw new IllegalArgumentException("会话 ID 不能为空");
         }
-        if (sessionRepository.findByTenantIdAndUserIdAndId(user.tenantId(), user.userId(), sessionId).isEmpty()) {
+        if (sessionRepository.findByTenantIdAndUserIdAndId(user.tenantId(), user.ownerUserId(), sessionId).isEmpty()) {
             throw new SecurityException("会话不存在或不属于当前用户");
         }
     }

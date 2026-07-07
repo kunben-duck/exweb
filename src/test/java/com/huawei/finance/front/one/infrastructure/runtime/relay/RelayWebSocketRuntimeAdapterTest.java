@@ -76,7 +76,8 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(config.path("config").path("appMode").asText()).isEqualTo("delegate");
         assertThat(userMessage.path("type").asText()).isEqualTo("user-message");
         assertThat(userMessage.path("content").asText()).isEqualTo("hello");
-        assertThat(userMessage.has("metadata")).isFalse();
+        assertThat(userMessage.path("metadata").path("userAccount").asText()).isEqualTo("account1");
+        assertThat(userMessage.path("metadata").path("globalUserId").asLong()).isEqualTo(1001L);
     }
 
     @Test
@@ -89,7 +90,9 @@ class RelayWebSocketRuntimeAdapterTest {
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
         Map<String, Object> metadata = Map.of(
                 "clientTraceId", "trace-1",
-                "source", "web"
+                "source", "web",
+                "userAccount", "spoofed",
+                "globalUserId", "spoofed"
         );
 
         StepVerifier.create(adapter.query(request(null, RuntimeSessionMode.NEW, "run1", "hello",
@@ -101,6 +104,8 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(userMessage.path("type").asText()).isEqualTo("user-message");
         assertThat(userMessage.path("metadata").path("clientTraceId").asText()).isEqualTo("trace-1");
         assertThat(userMessage.path("metadata").path("source").asText()).isEqualTo("web");
+        assertThat(userMessage.path("metadata").path("userAccount").asText()).isEqualTo("account1");
+        assertThat(userMessage.path("metadata").path("globalUserId").asLong()).isEqualTo(1001L);
     }
 
     @Test
@@ -137,10 +142,12 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(forwardedMetadata.path("nested").path("safe").asText()).isEqualTo("ok");
         assertThat(forwardedMetadata.path("items").get(0).has("secret")).isFalse();
         assertThat(forwardedMetadata.path("items").get(0).path("name").asText()).isEqualTo("visible");
+        assertThat(forwardedMetadata.path("userAccount").asText()).isEqualTo("account1");
+        assertThat(forwardedMetadata.path("globalUserId").asLong()).isEqualTo(1001L);
     }
 
     @Test
-    void userMessageOmitsMetadataWhenAllFieldsAreSensitive() throws Exception {
+    void userMessageKeepsIdentityMetadataWhenAllClientFieldsAreSensitive() throws Exception {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"agent\",\"content\":\"你好\",\"session_id\":\"relay-session-1\"}",
@@ -155,7 +162,11 @@ class RelayWebSocketRuntimeAdapterTest {
                 .verifyComplete();
 
         JsonNode userMessage = objectMapper.readTree(client.sent().get(1));
-        assertThat(userMessage.has("metadata")).isFalse();
+        JsonNode forwardedMetadata = userMessage.path("metadata");
+        assertThat(forwardedMetadata.has("token")).isFalse();
+        assertThat(forwardedMetadata.has("authorization")).isFalse();
+        assertThat(forwardedMetadata.path("userAccount").asText()).isEqualTo("account1");
+        assertThat(forwardedMetadata.path("globalUserId").asLong()).isEqualTo(1001L);
     }
 
     @Test
@@ -721,6 +732,8 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(response.path("questionnaire_answers").path("您对哪类 Sub-Agent 最感兴趣？").asText())
                 .isEqualTo("工具与扩展类");
         assertThat(response.path("metadata").path("clientTraceId").asText()).isEqualTo("trace-1");
+        assertThat(response.path("metadata").path("userAccount").asText()).isEqualTo("account1");
+        assertThat(response.path("metadata").path("globalUserId").asLong()).isEqualTo(1001L);
         assertThat(response.path("metadata").has("token")).isFalse();
         assertThat(response.path("timestamp").asText()).isNotBlank();
         assertThat(response.has("approval_id")).isFalse();
@@ -927,6 +940,8 @@ class RelayWebSocketRuntimeAdapterTest {
         return new AgentRuntimeRequest(
                 "tenant1",
                 "user1",
+                "account1",
+                1001L,
                 "session1",
                 runId,
                 runtimeSessionId,
@@ -963,6 +978,8 @@ class RelayWebSocketRuntimeAdapterTest {
         return new AgentRuntimeHitlResponseRequest(
                 "tenant1",
                 "user1",
+                "account1",
+                1001L,
                 "session1",
                 "run-hitl-1",
                 "relay-session-1",

@@ -432,8 +432,8 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                         }
                         /*
                          * session-ready 是 config 阶段唯一完成信号，也携带 Relay 确认的 session_id。
-                         * 这里只放行这一条受控 metadata，让 run 表和 RuntimeBinding 尽早学习真实
-                         * runtimeSessionId；其他 config 初始化帧仍然隔离，避免污染用户回答流。
+                         * adapter 仅放行该受控 metadata，用于持久化 run 与 RuntimeBinding 的
+                         * runtimeSessionId；其他 config 初始化帧继续隔离，避免污染用户回答流。
                          */
                         sink.next(frame);
                         try {
@@ -582,7 +582,8 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         Map<String, Object> message = new LinkedHashMap<>();
         message.put("type", "user-message");
         message.put("content", request.message() == null ? "" : request.message());
-        Map<String, Object> metadata = RelayRuntimeWireRequestMapper.sanitizedMetadata(request.metadata());
+        Map<String, Object> metadata = RelayRuntimeWireRequestMapper.relayMetadata(
+                request.metadata(), request.userAccount(), request.globalUserId());
         if (!metadata.isEmpty()) {
             message.put("metadata", metadata);
         }
@@ -601,18 +602,19 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         } else {
             message.put("questionnaire_answers", Map.of());
         }
-        Object metadata = request.responsePayload().get("metadata");
-        if (metadata instanceof Map<?, ?> metadataMap && !metadataMap.isEmpty()) {
-            Map<String, Object> metadataCopy = new LinkedHashMap<>();
+        Map<String, Object> metadataCopy = new LinkedHashMap<>();
+        Object metadataNode = request.responsePayload().get("metadata");
+        if (metadataNode instanceof Map<?, ?> metadataMap && !metadataMap.isEmpty()) {
             metadataMap.forEach((key, value) -> {
                 if (key != null) {
                     metadataCopy.put(String.valueOf(key), value);
                 }
             });
-            Map<String, Object> sanitized = RelayRuntimeWireRequestMapper.sanitizedMetadata(metadataCopy);
-            if (!sanitized.isEmpty()) {
-                message.put("metadata", sanitized);
-            }
+        }
+        Map<String, Object> relayMetadata = RelayRuntimeWireRequestMapper.relayMetadata(
+                metadataCopy, request.userAccount(), request.globalUserId());
+        if (!relayMetadata.isEmpty()) {
+            message.put("metadata", relayMetadata);
         }
         message.put("timestamp", Instant.now().toString());
         return toJson(message);
@@ -895,8 +897,8 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
             };
         } catch (JsonProcessingException ex) {
             /*
-             * Relay 普通问答阶段理论上返回 JSON frame。若下游返回纯文本，仍按业务响应处理，避免因为缺少
-             * relay-start 而丢失答案；后续 normalizer 会按纯文本 message.delta 处理。
+             * Relay 普通问答阶段应返回 JSON frame。若下游返回纯文本，仍按业务响应处理，
+             * 避免因缺少 relay-start 丢失答案；normalizer 会按纯文本增量处理。
              */
             return true;
         }

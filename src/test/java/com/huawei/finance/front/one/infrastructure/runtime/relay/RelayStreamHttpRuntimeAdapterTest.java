@@ -57,6 +57,8 @@ class RelayStreamHttpRuntimeAdapterTest {
                 RelayRuntimeWireRequestMapper.toQueryWireRequest(request));
         assertThat(json)
                 .contains("\"query\":\"hello\"")
+                .contains("\"userAccount\":\"account1\"")
+                .contains("\"globalUserId\":1001")
                 .doesNotContain("sid=abc")
                 .doesNotContain("forwardHeaders")
                 .doesNotContain("cookieHeader")
@@ -128,6 +130,8 @@ class RelayStreamHttpRuntimeAdapterTest {
         AgentRuntimeRequest request = new AgentRuntimeRequest(
                 "tenant1",
                 "user1",
+                "account1",
+                1001L,
                 "session1",
                 "run1",
                 "runtimeSession1",
@@ -139,6 +143,8 @@ class RelayStreamHttpRuntimeAdapterTest {
                 null,
                 Map.of(
                         "source", "web",
+                        "userAccount", "spoofed",
+                        "globalUserId", "spoofed",
                         "authorization", "Bearer secret",
                         "cookie", "sid=abc",
                         "nested", Map.of("token", "nested-secret", "safe", "yes")
@@ -150,6 +156,8 @@ class RelayStreamHttpRuntimeAdapterTest {
 
         assertThat(json)
                 .contains("\"source\":\"web\"")
+                .contains("\"userAccount\":\"account1\"")
+                .contains("\"globalUserId\":1001")
                 .doesNotContain("authorization")
                 .doesNotContain("Bearer secret")
                 .doesNotContain("cookie")
@@ -299,6 +307,8 @@ class RelayStreamHttpRuntimeAdapterTest {
         return new AgentRuntimeRequest(
                 "tenant1",
                 "user1",
+                "account1",
+                1001L,
                 "session1",
                 "run1",
                 "runtimeSession1",

@@ -55,6 +55,8 @@ public class AgentRuntimeExecutor {
         AgentRuntimeRequest request = new AgentRuntimeRequest(
                 user.tenantId(),
                 user.ownerUserId(),
+                user.userAccount(),
+                user.globalUserId(),
                 command.sessionId(),
                 context.runId(),
                 binding == null ? null : binding.runtimeSessionId(),
@@ -74,6 +76,8 @@ public class AgentRuntimeExecutor {
         var request = new AgentRuntimeHitlResponseRequest(
                 context.user().tenantId(),
                 context.user().ownerUserId(),
+                context.user().userAccount(),
+                context.user().globalUserId(),
                 context.sessionId(),
                 context.runId(),
                 context.runtimeSessionId(),

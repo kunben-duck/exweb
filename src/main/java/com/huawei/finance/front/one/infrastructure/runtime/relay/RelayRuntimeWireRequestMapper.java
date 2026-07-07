@@ -24,7 +24,7 @@ final class RelayRuntimeWireRequestMapper {
                 request.runtimeSessionMode() == RuntimeSessionMode.NEW ? null : request.runtimeSessionId(),
                 request.message(),
                 request.attachments(),
-                sanitizedMetadata(request.metadata())
+                relayMetadata(request.metadata(), request.userAccount(), request.globalUserId())
         );
     }
 
@@ -48,6 +48,17 @@ final class RelayRuntimeWireRequestMapper {
                 sanitized.put(key, sanitizeValue(value));
             }
         });
+        return Map.copyOf(sanitized);
+    }
+
+    static Map<String, Object> relayMetadata(Map<String, Object> metadata, String userAccount, Long globalUserId) {
+        Map<String, Object> sanitized = new LinkedHashMap<>(sanitizedMetadata(metadata));
+        if (userAccount != null && !userAccount.isBlank()) {
+            sanitized.put("userAccount", userAccount.trim());
+        }
+        if (globalUserId != null) {
+            sanitized.put("globalUserId", globalUserId);
+        }
         return Map.copyOf(sanitized);
     }
 

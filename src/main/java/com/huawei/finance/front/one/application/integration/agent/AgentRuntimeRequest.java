@@ -16,6 +16,8 @@ import java.util.Map;
  *
  * @param tenantId 租户标识，来自应用身份上下文。
  * @param userId 用户标识，来自应用身份上下文。
+ * @param userAccount 用户账号，来自应用身份上下文。
+ * @param globalUserId 全局用户 ID，来自应用身份上下文。
  * @param sessionId 前端聊天会话标识。
  * @param runId 本轮 SuperAgent 执行追踪标识。
  * @param runtimeSessionId AgentRuntime 实际会话标识；Relay 首次调用前可为空或等于 ChatService sessionId。
@@ -31,6 +33,8 @@ import java.util.Map;
 public record AgentRuntimeRequest(
         String tenantId,
         String userId,
+        String userAccount,
+        Long globalUserId,
         String sessionId,
         String runId,
         String runtimeSessionId,

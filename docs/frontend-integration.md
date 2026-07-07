@@ -16,13 +16,7 @@
 - 前端只把 `sequence` 当作不透明数字游标，不要自行推算生成方式；服务端以事件表事实源保证同一会话内的恢复顺序。
 - 前端不要传 `tenantId`、`userId`，也不要通过 Header/Query/Body 伪造用户身份；身份由后端请求入口通过 `AuthContextProvider` 从服务端上下文解析一次，后台 run 不会再次读取请求 ThreadLocal。
 - 本文档中的 WebSocket 默认指前端到 FinanceEXChatService 的 `/api/v1/ex/chat/ws` 连接。FinanceEXChatService 到下游 RelayAgent 默认使用 streamable HTTP adapter，也可由后端配置切换为出站 Relay WebSocket 普通问答 adapter；前端不直接连接 RelayAgent，也不通过前端 WebSocket 发起 `AgentRuntime.query`。
-- 本地开发需要后端显式配置：
-
-```bash
-export FINANCEEX_DEV_TENANT_ID=tenant_dev
-export FINANCEEX_DEV_USER_ID=user_dev
-export FINANCEEX_DEV_USERNAME=developer
-```
+- 当前 `ApplicationAuthContextProvider` 直接构造完整 `UserContext`，不再通过配置文件或环境变量模拟 tenant/user；接入企业身份源时只需替换该防腐层。
 
 ## 内部旁路能力
 
@@ -1519,7 +1513,7 @@ heartbeat 和 done 使用同一个 envelope，不携带 `encodedItem`，也不�
 
 ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON chunk 或 SSE-like `data:` chunk 归一化成上表事件。下游原始响应不再单独持久化；Relay JSON frame 会作为标准事件的 `payload` 保存、推送和恢复。Relay payload 保留原始字段名和嵌套结构，后端只额外补充 `source=relay`、`sourceType=<Relay原始type>`、`runtimeSessionId`，前端可以按 Relay 接口文档解析 payload。
 
-Relay stream-http adapter 会通过 `FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 配置单个响应 frame 的 WebClient codec 上限，默认 `1MB`，用于避免 Spring 默认 256KB 限制过早拦截较大的引用或卡片响应。Relay WebSocket adapter 始终使用短连接：每个 run 新建下游 WS，先发送 `config`，首轮 `config.sessionId` 使用 ChatService `sessionId`，只以 `session-ready` 作为 config 阶段唯一完成信号。adapter 会将 `session-ready` 转成 `runtime.metadata`，payload 保留原始 `session_id/session_mode` 等字段，并补充 `runtimeSessionId` 用于回填 run/RuntimeBinding 的真实会话 ID；其他配置阶段初始化响应会被隔离。随后 adapter 再发送 `user-message`，并把 `/chat/runs.metadata` 中的非敏感业务扩展作为 `user-message.metadata` 透传给 Relay；该字段与 stream-http adapter 使用同一过滤规则，Cookie、token、Authorization、secret、password 等敏感 key 会被递归移除。本轮输出结束后释放连接；后续同会话请求会重新建连，并通过 RuntimeBinding 中的真实 `runtimeSessionId` 发送 `sessionMode=resume` 和 `supports_incremental_recovery=true`。配置阶段若收到 `error/clear-session/session-mismatch` 会直接失败，不等待握手超时。`user-message` 后会继续丢弃 `relay-start` 前的前置 `session-state=idle/completed/ready/running/agent_thinking` 和迟到 `config`，并从 `relay-start`、首个业务帧或 `session-state=waiting_user_input/paused` 开始转成前端可见标准事件。普通问答阶段按 `FINANCEEX_RELAY_WS_HEARTBEAT_INTERVAL` 定时向 Relay 发送 `{ "type": "heartbeat" }`，`heartbeat-response` 不写入事件表、不推送前端；不再把 60s 无业务 frame 直接视为失败。任意业务帧或 `heartbeat-response` 都会刷新活跃时间，若超过 `FINANCEEX_RELAY_WS_HEARTBEAT_RESPONSE_TIMEOUT` 没有任何回包，本轮会转为 `run.failed` 并尽力发送 interrupt。`FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT` 默认 `10s`，用于限制配置阶段等待时间；`FINANCEEX_RELAY_WS_MAX_RUN_DURATION` 默认 `30m`，用于限制 user-message 发出后的最大运行时间；`FINANCEEX_RELAY_WS_INTERRUPT_ACK_TIMEOUT` 默认 `5s`，用于限制跨实例 stop 临时连接发送 `interrupt` 后等待 `session-state=paused` 的时间；`FINANCEEX_RELAY_WS_IDLE_TIMEOUT` 仅用于 stop 临时控制连接等等待下一帧的场景；`FINANCEEX_RELAY_WS_MAX_FRAME_BYTES` 控制单个下游 WS 文本帧上限，默认 `1MB`。这些配置不改变前端协议，也不负责拆分超大事件；如果下游长期返回超大 `sourcesDocuments/diyCardScene/cardList`，仍需要后端后续引入 DataBuffer 流式解码和 fragment 分片治理。当前只有 Relay `approval-request(operation_type=questionnaire)` 会创建 HITL 等待态并输出 `run.waiting_user`；该帧本身会闭合当前用户轮次，即使 Relay 后续不再发送 `session-state` 也不会让 run 停留在 `RUNNING`。单独的 `session-state=waiting_user_input` 仍只作为本次下游连接终态；`session-state=paused` 仅作为 interrupt 确认。
+Relay stream-http adapter 会通过 `FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 配置单个响应 frame 的 WebClient codec 上限，默认 `1MB`，用于避免 Spring 默认 256KB 限制过早拦截较大的引用或卡片响应。Relay WebSocket adapter 始终使用短连接：每个 run 新建下游 WS，先发送 `config`，首轮 `config.sessionId` 使用 ChatService `sessionId`，只以 `session-ready` 作为 config 阶段唯一完成信号。adapter 会将 `session-ready` 转成 `runtime.metadata`，payload 保留原始 `session_id/session_mode` 等字段，并补充 `runtimeSessionId` 用于回填 run/RuntimeBinding 的真实会话 ID；其他配置阶段初始化响应会被隔离。随后 adapter 再发送 `user-message`，并把 `/chat/runs.metadata` 中的非敏感业务扩展作为 `user-message.metadata` 透传给 Relay；该字段与 stream-http adapter 使用同一过滤规则，Cookie、token、Authorization、secret、password 等敏感 key 会被递归移除。Relay 出站 metadata 会由后端补充 `globalUserId` 和 `userAccount`，来源为入口固化的 `UserContext`，前端不需要传入且同名字段会被后端身份覆盖。本轮输出结束后释放连接；后续同会话请求会重新建连，并通过 RuntimeBinding 中的真实 `runtimeSessionId` 发送 `sessionMode=resume` 和 `supports_incremental_recovery=true`。配置阶段若收到 `error/clear-session/session-mismatch` 会直接失败，不等待握手超时。`user-message` 后会继续丢弃 `relay-start` 前的前置 `session-state=idle/completed/ready/running/agent_thinking` 和迟到 `config`，并从 `relay-start`、首个业务帧或 `session-state=waiting_user_input/paused` 开始转成前端可见标准事件。普通问答阶段按 `FINANCEEX_RELAY_WS_HEARTBEAT_INTERVAL` 定时向 Relay 发送 `{ "type": "heartbeat" }`，`heartbeat-response` 不写入事件表、不推送前端；不再把 60s 无业务 frame 直接视为失败。任意业务帧或 `heartbeat-response` 都会刷新活跃时间，若超过 `FINANCEEX_RELAY_WS_HEARTBEAT_RESPONSE_TIMEOUT` 没有任何回包，本轮会转为 `run.failed` 并尽力发送 interrupt。`FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT` 默认 `10s`，用于限制配置阶段等待时间；`FINANCEEX_RELAY_WS_MAX_RUN_DURATION` 默认 `30m`，用于限制 user-message 发出后的最大运行时间；`FINANCEEX_RELAY_WS_INTERRUPT_ACK_TIMEOUT` 默认 `5s`，用于限制跨实例 stop 临时连接发送 `interrupt` 后等待 `session-state=paused` 的时间；`FINANCEEX_RELAY_WS_IDLE_TIMEOUT` 仅用于 stop 临时控制连接等等待下一帧的场景；`FINANCEEX_RELAY_WS_MAX_FRAME_BYTES` 控制单个下游 WS 文本帧上限，默认 `1MB`。这些配置不改变前端协议，也不负责拆分超大事件；如果下游长期返回超大 `sourcesDocuments/diyCardScene/cardList`，仍需要后端后续引入 DataBuffer 流式解码和 fragment 分片治理。当前只有 Relay `approval-request(operation_type=questionnaire)` 会创建 HITL 等待态并输出 `run.waiting_user`；该帧本身会闭合当前用户轮次，即使 Relay 后续不再发送 `session-state` 也不会让 run 停留在 `RUNNING`。单独的 `session-state=waiting_user_input` 仍只作为本次下游连接终态；`session-state=paused` 仅作为 interrupt 确认。
 
 等待用户输入后的续接能力由 `AgentRuntimeInteraction` 承载。当前只有 Relay WebSocket adapter 支持 questionnaire 澄清续接，提交答案时发送 Relay `approval-response`；非支持 adapter 收到 `approval-request(operation_type=questionnaire)` 时只返回可展示的 `runtime.card`，不会创建无法继续的 `WAITING_USER`。
 
@@ -2159,7 +2153,7 @@ async function stopCurrentRun() {
 
 ## 排障清单
 
-- `WS_AUTH_FAILED`：后端没有解析到有效用户身份。本地检查 `FINANCEEX_DEV_TENANT_ID`、`FINANCEEX_DEV_USER_ID`、`FINANCEEX_DEV_USERNAME`。
+- `WS_AUTH_FAILED`：后端没有解析到有效用户身份。接入企业身份源后，需检查 `ApplicationAuthContextProvider` 或替换实现是否能解析完整 `UserContext`。
 - `SUBSCRIBE_ERROR` 且提示 run 不存在或不属于当前用户：确认 `streamTopicId` 来自当前用户刚创建的 `/chat/runs` 响应，不要手写 topic。
 - WebSocket 收不到实时事件：先调用 Event Resume 看事件是否已落库；如果 Event Resume 能补发，通常是 WebSocket 连接、订阅 topic 或 Redis 跨实例 fanout 问题。run 级 Event Resume 若遇到 live source 异常，会继续按事件表轮询到终态。
 - stop 后仍看到少量 delta：前端应以 `run.cancelled` 为终态，忽略同一 run 后续迟到的非终态事件；后端也会在事件追加前检查 cancel flag。

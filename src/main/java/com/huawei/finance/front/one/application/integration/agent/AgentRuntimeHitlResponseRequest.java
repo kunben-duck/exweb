@@ -8,6 +8,8 @@ import java.util.Map;
  *
  * @param tenantId 租户标识。
  * @param userId 用户标识。
+ * @param userAccount 用户账号。
+ * @param globalUserId 全局用户 ID。
  * @param sessionId ChatService 会话标识。
  * @param runId 本次续接 run 标识。
  * @param runtimeSessionId AgentRuntime 实际会话标识。
@@ -21,6 +23,8 @@ import java.util.Map;
 public record AgentRuntimeHitlResponseRequest(
         String tenantId,
         String userId,
+        String userAccount,
+        Long globalUserId,
         String sessionId,
         String runId,
         String runtimeSessionId,

@@ -65,15 +65,6 @@ financeex:
       max-redirects: ${FINANCEEX_REDIS_CLUSTER_MAX_REDIRECTS:3}
       topology-refresh-period: ${FINANCEEX_REDIS_CLUSTER_TOPOLOGY_REFRESH_PERIOD:30s}
       adaptive-refresh-enabled: ${FINANCEEX_REDIS_CLUSTER_ADAPTIVE_REFRESH_ENABLED:true}
-  security:
-    dev:
-      # 本地开发态用配置模拟企业权限上下文；接口层不再接收前端传入的 tenantId/userId。
-      # 生产接入企业框架后，数据归属优先使用 UserContext.globalUserId；本地未提供时回退 user-id。
-      # 身份信息不提供默认值，缺失时 AuthContextProvider 会直接拒绝请求。
-      # 后续接入统一权限框架时，替换 AuthContextProvider 实现即可，业务编排不需要调整。
-      tenant-id: ${FINANCEEX_DEV_TENANT_ID:}
-      user-id: ${FINANCEEX_DEV_USER_ID:}
-      username: ${FINANCEEX_DEV_USERNAME:}
   integration-auth:
     # 集成服务鉴权请求头统一防腐层；默认关闭，不影响现有外部服务调用。
     enabled: ${FINANCEEX_INTEGRATION_AUTH_ENABLED:false}

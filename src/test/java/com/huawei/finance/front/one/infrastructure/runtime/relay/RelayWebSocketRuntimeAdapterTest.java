@@ -346,6 +346,57 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
+    void questionnaireApprovalRequestTerminatesCurrentUserTurnWithoutSessionState() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter((WebSocketClient) client, Duration.ofSeconds(10));
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
+                .assertNext(this::assertSessionReadyMetadata)
+                .then(() -> client.emit("{\"type\":\"approval-request\","
+                        + "\"approval_id\":\"approval-1\","
+                        + "\"operation_type\":\"questionnaire\","
+                        + "\"message\":\"Please answer the following questions\","
+                        + "\"questions\":[{\"question\":\"请选择方向\",\"options\":[{\"label\":\"工具与扩展类\"}]}],"
+                        + "\"session_id\":\"relay-session-1\"}"))
+                .assertNext(event -> {
+                    assertThat(event.type()).isEqualTo("runtime.card");
+                    assertThat(event.payload())
+                            .containsEntry("sourceType", "approval-request")
+                            .containsEntry("operation_type", "questionnaire")
+                            .containsEntry("approval_id", "approval-1");
+                })
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                .verifyComplete();
+    }
+
+    @Test
+    void nonQuestionnaireApprovalRequestDoesNotTerminateCurrentUserTurn() {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
+                "{\"type\":\"approval-request\","
+                        + "\"approval_id\":\"approval-1\","
+                        + "\"operation_type\":\"approval\","
+                        + "\"message\":\"Please approve\","
+                        + "\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(this::assertSessionReadyMetadata)
+                .assertNext(event -> {
+                    assertThat(event.type()).isEqualTo("runtime.card");
+                    assertThat(event.payload())
+                            .containsEntry("sourceType", "approval-request")
+                            .containsEntry("operation_type", "approval");
+                })
+                .assertNext(event -> assertThat(event.payload()).containsEntry("state", "completed"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                .verifyComplete();
+    }
+
+    @Test
     void pausedCanStartAndTerminateResponse() {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",

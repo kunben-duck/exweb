@@ -177,7 +177,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     private Flux<ChatEvent> normalizeFrames(Flux<String> frames, String runId, String sessionId,
                                             AtomicBoolean messageCompleted) {
         return frames
-                .takeUntil(this::ordinaryTerminalFrame)
+                .takeUntil(this::userTurnTerminalFrame)
                 .concatMap(frame -> Flux.fromIterable(responseNormalizer.normalize(
                         runId, sessionId, frame)))
                 .takeUntil(event -> "message.completed".equals(event.type()))
@@ -450,7 +450,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 if (!shouldEmitUserResponseFrame(frame, responseStarted)) {
                     return;
                 }
-                if (ordinaryTerminalFrame(frame) || terminalTextFrame(frame)) {
+                if (userTurnTerminalFrame(frame) || terminalTextFrame(frame)) {
                     terminalFrameSeen.set(true);
                 }
                 sink.next(frame);
@@ -801,6 +801,32 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 return false;
             }
             return ordinaryTerminalState(state);
+        } catch (JsonProcessingException ex) {
+            return false;
+        }
+    }
+
+    private boolean userTurnTerminalFrame(String frame) {
+        return ordinaryTerminalFrame(frame) || questionnaireApprovalRequestFrame(frame);
+    }
+
+    private boolean questionnaireApprovalRequestFrame(String frame) {
+        if (frame == null || frame.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(frame);
+            String type = RelayRuntimeResponseNormalizer.normalizeTypeName(text(root.path("type")));
+            if (!"approval-request".equals(type)) {
+                return false;
+            }
+            String operationType = text(root.path("operation_type"));
+            /*
+             * Relay 会在 questionnaire approval-request 后挂起等待用户输入，未必继续发送
+             * session-state=waiting_user_input。将该帧作为用户轮次终态，才能让上层补齐
+             * message.completed/run.waiting_user，并固化澄清卡片历史。
+             */
+            return "questionnaire".equalsIgnoreCase(operationType);
         } catch (JsonProcessingException ex) {
             return false;
         }

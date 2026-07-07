@@ -12,6 +12,8 @@ import com.huawei.finance.front.one.application.config.RouteSignalProperties;
 import com.huawei.finance.front.one.application.facade.DocumentFacade;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeHitlResponseRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteraction;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.agent.DomainAgentClient;
 import com.huawei.finance.front.one.application.integration.agent.DomainAgentRequest;
@@ -178,6 +180,127 @@ class FinanceEXChatServiceTest {
                 .containsExactly("TOOL", "ANSWER");
         assertThat(assistant.parts()).extracting(ChatMessagePart::contentText)
                 .containsExactly("search: 查询报销流程", "最终\nMarkdown **正文**");
+    }
+
+    @Test
+    void questionnaireApprovalRequestCompletesRunAsWaitingUser() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        InMemoryExecutionRepository executions = new InMemoryExecutionRepository();
+        InMemoryHitlRequestRepository hitlRequests = new InMemoryHitlRequestRepository();
+        CapturingRuntimeBindingRepository bindings = new CapturingRuntimeBindingRepository();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        IdGenerator ids = new FixedIdGenerator();
+        PermissionChecker permissionChecker = new PermissionChecker();
+        WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
+                new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
+        LocalChatRunExecutionRegistry executionRegistry = new LocalChatRunExecutionRegistry();
+        SessionApplicationService sessionService = new SessionApplicationService(sessions, messages, ids, permissionChecker);
+        ChatStreamApplicationService chatStreamService = new ChatStreamApplicationService(events,
+                new LocalChatEventStreamRegistry(), liveEventBus(), runs, permissionChecker, sessions,
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties());
+        ChatRunApplicationService runService = new ChatRunApplicationService(runs, new NeverCancelRunCache(), events,
+                permissionChecker, sessions);
+        ChatRunLeaseApplicationService leaseService = new ChatRunLeaseApplicationService(
+                executions,
+                (ApplicationInstanceIdProvider) () -> "instance-test",
+                new com.huawei.finance.front.one.application.config.ChatRunOperationalProperties(),
+                ids,
+                executionRegistry
+        );
+        ChatHitlApplicationService hitlService = new ChatHitlApplicationService(hitlRequests, ids,
+                permissionChecker, new ChatHitlProperties());
+        ChatRunTerminalCommitService terminalCommitService = new ChatRunTerminalCommitService(
+                chatStreamService, sessionService, runs, leaseService, bindings, hitlService, Duration.ofDays(3));
+        AgentRuntime runtime = new AgentRuntime() {
+            @Override public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                return Flux.just(RuntimeEvent.card(request.runId(), request.sessionId(), Map.of(
+                        "source", "relay",
+                        "sourceType", "approval-request",
+                        "operation_type", "questionnaire",
+                        "approval_id", "approval-1",
+                        "message", "Please answer the following questions",
+                        "runtimeSessionId", request.sessionId()
+                )));
+            }
+            @Override public Mono<Void> cancel(AgentRuntimeCancelRequest request) { return Mono.empty(); }
+        };
+        AgentRuntimeInteraction interaction = new AgentRuntimeInteraction() {
+            @Override public boolean supportsWaitingUserResponse(String runtimeProvider) {
+                return "relay".equals(runtimeProvider);
+            }
+            @Override public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeHitlResponseRequest request) {
+                return Flux.empty();
+            }
+        };
+
+        FinanceEXChatService service = new FinanceEXChatService(
+                sessionService,
+                new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
+                new RuntimeBindingApplicationService(bindings, runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
+                runtimeRouteService(),
+                intentRecordService(),
+                new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
+                    @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
+                        return Flux.empty();
+                    }
+                    @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
+                        return Mono.empty();
+                    }
+                }, limiter),
+                domainAgentExecutor(documentFacade(), limiter),
+                new SystemResponseExecutor(),
+                new AgentRuntimeExecutor(runtime, interaction, limiter),
+                documentFacade(),
+                chatStreamService,
+                runService,
+                leaseService,
+                new ChatDeltaCoalescer(new com.huawei.finance.front.one.application.config.ChatStreamProperties()),
+                executionRegistry,
+                new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
+                new ChatRunStopCoordinator(sessionService, chatStreamService, runService, leaseService,
+                        executionRegistry, new AgentRuntimeExecutor(runtime, interaction, limiter),
+                        new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
+                            @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
+                                return Flux.empty();
+                            }
+                            @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
+                                return Mono.empty();
+                            }
+                        }, limiter), domainAgentExecutor(documentFacade(), limiter), ids),
+                hitlService,
+                terminalCommitService,
+                ids,
+                reactor.core.scheduler.Schedulers.boundedElastic()
+        );
+
+        StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
+                        null, null, "web", "hello", List.of(), Map.of())))
+                .expectNextMatches(event -> "run.started".equals(event.type()))
+                .expectNextMatches(event -> "runtime.card".equals(event.type()))
+                .expectNextMatches(event -> "run.waiting_user".equals(event.type()))
+                .verifyComplete();
+
+        ChatRun run = runs.runs.values().iterator().next();
+        assertThat(run.status()).isEqualTo(ChatRunStatus.WAITING_USER);
+        assertThat(executions.findByRunId(run.id())).get()
+                .extracting(ChatRunExecution::executionStatus)
+                .isEqualTo(ChatRunExecutionStatus.WAITING_USER);
+        ChatMessage assistant = messages.messages.stream()
+                .filter(message -> "assistant".equals(message.role()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(assistant.parts()).extracting(ChatMessagePart::partType)
+                .contains("CLARIFICATION_REQUEST");
+        assertThat(hitlRequests.requests.values()).singleElement()
+                .satisfies(request -> {
+                    assertThat(request.status()).isEqualTo(ChatHitlStatus.WAITING);
+                    assertThat(request.assistantMessageId()).isEqualTo(assistant.id());
+                });
+        assertThat(events.events).extracting(ChatEvent::type)
+                .containsExactly("run.started", "runtime.card", "run.waiting_user");
     }
 
     @Test

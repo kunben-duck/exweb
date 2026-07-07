@@ -8,7 +8,7 @@ import com.huawei.finance.front.one.domain.routing.RouteTarget;
 /**
  * DomainAgent 指定调用执行上下文。
  *
- * <p>仅当前端通过 metadata.selectedDomainAgentId 指定财经领域 Agent 时使用。该路径不创建
+ * <p>仅当前端通过 targetType/targetId 指定财经领域 Agent 时使用。该路径不创建
  * RuntimeBinding，也不参与默认 AgentRuntime 多轮续接。</p>
  */
 public record DomainAgentExecutionContext(

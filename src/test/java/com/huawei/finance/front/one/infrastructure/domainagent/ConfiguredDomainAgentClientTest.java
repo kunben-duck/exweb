@@ -51,9 +51,10 @@ class ConfiguredDomainAgentClientTest {
         String body = objectMapper.writeValueAsString(mapper.toWireRequest(request));
         assertThat(body)
                 .contains("\"skillId\":\"skill-tax\"")
-                .contains("\"isThinking\":1")
-                .contains("\"qaType\":\"normalQa\"")
-                .contains("\"streamFlag\":\"stream\"")
+                .contains("\"query\":\"hello\"")
+                .doesNotContain("\"isThinking\"")
+                .doesNotContain("\"qaType\"")
+                .doesNotContain("\"streamFlag\"")
                 .doesNotContain("\"isThink\"")
                 .doesNotContain("\"queryType\"")
                 .doesNotContain("\"steamFlag\"")
@@ -125,10 +126,10 @@ class ConfiguredDomainAgentClientTest {
                 user(),
                 "session1",
                 "run1",
-                "skill-tax",
+                "skill-unlisted",
                 "hello",
                 List.of(),
-                Map.of(),
+                Map.of("skillId", "skill-tax", "query", "hello"),
                 forwardHeaders
         );
     }
@@ -142,7 +143,6 @@ class ConfiguredDomainAgentClientTest {
         properties.setEnabled(true);
         properties.setBaseUrl("http://domain.test");
         properties.setChatPath("/api/chat");
-        properties.setAllowedDomainAgentIds(List.of("skill-tax"));
         return properties;
     }
 }

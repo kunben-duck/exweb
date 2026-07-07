@@ -386,7 +386,7 @@ class FinanceEXChatServiceTest {
     }
 
     @Test
-    void selectedDomainAgentIdRoutesToDomainAgentWithoutRuntimeBinding() {
+    void explicitDomainAgentTargetRoutesToDomainAgentWithoutRuntimeBinding() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         NeverCancelRunCache runCache = new NeverCancelRunCache();
@@ -407,9 +407,11 @@ class FinanceEXChatServiceTest {
         );
         DocumentFacade documents = documentFacade();
         AtomicReference<RuntimeForwardHeaders> capturedHeaders = new AtomicReference<>();
+        AtomicReference<DomainAgentRequest> capturedRequest = new AtomicReference<>();
         DomainAgentExecutor domainAgentExecutor = new DomainAgentExecutor(new DomainAgentClient() {
             @Override public Flux<ChatEvent> query(DomainAgentRequest request) {
                 capturedHeaders.set(request.forwardHeaders());
+                capturedRequest.set(request);
                 return Flux.just(MessageDeltaEvent.of(request.runId(), request.sessionId(), "domain answer"));
             }
             @Override public Mono<Void> cancel(DomainAgentCancelRequest request) { return Mono.empty(); }
@@ -445,11 +447,13 @@ class FinanceEXChatServiceTest {
         );
 
         StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
-                        null, null, "web", "hello", List.of(), Map.of("selectedDomainAgentId", "skill-tax")),
+                        null, null, "web", "hello", List.of(), Map.of("skillId", "skill-other"),
+                        "DOMAIN_AGENT", "skill-tax", ChatRunMode.NEXT, null, null, null),
                         RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192)))
                 .expectNextMatches(event -> "run.started".equals(event.type()))
                 .expectNextMatches(event -> "runtime.metadata".equals(event.type())
-                        && "skill-tax".equals(event.payload().get("skillId"))
+                        && "DOMAIN_AGENT".equals(event.payload().get("targetType"))
+                        && "skill-tax".equals(event.payload().get("targetId"))
                         && "selected_domain_agent".equals(event.payload().get("metadataType")))
                 .expectNextMatches(event -> "message.delta".equals(event.type()))
                 .expectNextMatches(event -> "run.completed".equals(event.type()))
@@ -457,16 +461,62 @@ class FinanceEXChatServiceTest {
 
         assertThat(capturedHeaders.get()).isNotNull();
         assertThat(capturedHeaders.get().cookieHeader()).isEqualTo("sid=abc");
+        assertThat(capturedRequest.get()).isNotNull();
+        assertThat(capturedRequest.get().metadata()).containsEntry("skillId", "skill-other");
         ChatRun run = runs.runs.values().iterator().next();
         assertThat(run.routeType()).isEqualTo("DOMAIN_AGENT");
         assertThat(run.agentCode()).isEqualTo("skill-tax");
         assertThat(run.runtimeProvider()).isNull();
         assertThat(messages.parts).anySatisfy(part -> {
             assertThat(part.partType()).isEqualTo("METADATA");
-            assertThat(part.payload()).containsEntry("skillId", "skill-tax")
+            assertThat(part.payload()).containsEntry("targetId", "skill-tax")
                     .containsEntry("domainAgentId", "skill-tax")
                     .containsEntry("metadataType", "selected_domain_agent");
         });
+    }
+
+    @Test
+    void invalidTargetTypeFailsBeforeWritingUserMessageOrRun() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        FinanceEXChatService service = defaultFinanceService(sessions, messages, runs, events);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+
+        StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
+                        null, null, "web", "hello", List.of(), Map.of(),
+                        "BAD", "skill-tax", ChatRunMode.NEXT, null, null, null)))
+                .expectErrorMatches(ex -> ex instanceof IllegalArgumentException
+                        && ex.getMessage().contains("targetType 仅支持 DOMAIN_AGENT"))
+                .verify();
+
+        assertThat(sessions.sessions).isEmpty();
+        assertThat(messages.messages).isEmpty();
+        assertThat(runs.runs).isEmpty();
+        assertThat(events.events).isEmpty();
+    }
+
+    @Test
+    void domainAgentTargetWithoutTargetIdFailsBeforeWritingUserMessageOrRun() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        FinanceEXChatService service = defaultFinanceService(sessions, messages, runs, events);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+
+        StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
+                        null, null, "web", "hello", List.of(), Map.of(),
+                        "DOMAIN_AGENT", null, ChatRunMode.NEXT, null, null, null)))
+                .expectErrorMatches(ex -> ex instanceof IllegalArgumentException
+                        && ex.getMessage().contains("targetType=DOMAIN_AGENT 时 targetId 不能为空"))
+                .verify();
+
+        assertThat(sessions.sessions).isEmpty();
+        assertThat(messages.messages).isEmpty();
+        assertThat(runs.runs).isEmpty();
+        assertThat(events.events).isEmpty();
     }
 
     @Test
@@ -946,6 +996,54 @@ class FinanceEXChatServiceTest {
             @Override public Flux<ChatEvent> query(DomainAgentRequest request) { return Flux.empty(); }
             @Override public Mono<Void> cancel(DomainAgentCancelRequest request) { return Mono.empty(); }
         }, documentFacade, limiter);
+    }
+
+    private FinanceEXChatService defaultFinanceService(InMemorySessionRepository sessions,
+                                                       InMemoryMessageRepository messages,
+                                                       InMemoryRunRepository runs,
+                                                       InMemoryEventStore events) {
+        IdGenerator ids = new FixedIdGenerator();
+        PermissionChecker permissionChecker = new PermissionChecker();
+        WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
+                new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
+        LocalChatRunExecutionRegistry executionRegistry = new LocalChatRunExecutionRegistry();
+        ChatRunLeaseApplicationService leaseService = new ChatRunLeaseApplicationService(
+                new InMemoryExecutionRepository(),
+                (ApplicationInstanceIdProvider) () -> "instance-test",
+                new com.huawei.finance.front.one.application.config.ChatRunOperationalProperties(),
+                ids,
+                executionRegistry
+        );
+        DocumentFacade documents = documentFacade();
+        return new FinanceEXChatService(
+                new SessionApplicationService(sessions, messages, ids, permissionChecker),
+                new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
+                new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids,
+                        Duration.ofDays(3), "relay"),
+                runtimeRouteService(),
+                intentRecordService(),
+                new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
+                    @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
+                        return Flux.empty();
+                    }
+                    @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
+                        return Mono.empty();
+                    }
+                }, limiter),
+                domainAgentExecutor(documents, limiter),
+                new SystemResponseExecutor(),
+                new AgentRuntimeExecutor(noopRuntime(), limiter),
+                documents,
+                new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
+                        permissionChecker, sessions,
+                        new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
+                new ChatRunApplicationService(runs, new NeverCancelRunCache(), events, permissionChecker, sessions),
+                leaseService,
+                new ChatDeltaCoalescer(new com.huawei.finance.front.one.application.config.ChatStreamProperties()),
+                executionRegistry,
+                new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
+                ids
+        );
     }
 
     private AgentRuntime noopRuntime() {

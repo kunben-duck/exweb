@@ -20,6 +20,8 @@ import java.util.Map;
  * @param message 本轮用户输入文本。
  * @param attachments 本轮关联附件引用。
  * @param metadata 前端或上游传入的扩展元数据。
+ * @param targetType 显式直连目标类型；为空时走普通路由。
+ * @param targetId 显式直连目标 ID。
  * @param runMode 本轮消息树写入模式。
  * @param parentMessageId 普通继续提问时显式指定的父节点；为空时使用会话 current leaf。
  * @param editedMessageId 编辑历史 user 消息时被编辑的原消息。
@@ -35,6 +37,8 @@ public record ChatCommand(
         String message,
         List<AttachmentRef> attachments,
         Map<String, Object> metadata,
+        String targetType,
+        String targetId,
         ChatRunMode runMode,
         String parentMessageId,
         String editedMessageId,
@@ -46,12 +50,25 @@ public record ChatCommand(
     public ChatCommand(String commandId, String tenantId, String userId, String sessionId, String conversationId,
                        String channel, String message, List<AttachmentRef> attachments, Map<String, Object> metadata) {
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
+                null, null,
                 ChatRunMode.NEXT, null, null, null);
+    }
+
+    /**
+     * 兼容已有消息树写入模式调用点；显式直连目标仅由接口层新字段传入。
+     */
+    public ChatCommand(String commandId, String tenantId, String userId, String sessionId, String conversationId,
+                       String channel, String message, List<AttachmentRef> attachments, Map<String, Object> metadata,
+                       ChatRunMode runMode, String parentMessageId, String editedMessageId, String regeneratedMessageId) {
+        this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
+                null, null, runMode, parentMessageId, editedMessageId, regeneratedMessageId);
     }
 
     public ChatCommand {
         attachments = attachments == null ? List.of() : List.copyOf(attachments);
         metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+        targetType = targetType == null || targetType.isBlank() ? null : targetType.trim();
+        targetId = targetId == null || targetId.isBlank() ? null : targetId.trim();
         runMode = runMode == null ? ChatRunMode.NEXT : runMode;
     }
 }

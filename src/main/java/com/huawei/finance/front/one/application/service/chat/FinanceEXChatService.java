@@ -356,8 +356,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
             // 进入 application 后统一以 UserContext 为准；原始前端请求只保留会话、消息、附件和元数据。
             ChatCommand identified = new ChatCommand(command.commandId(), user.tenantId(), user.ownerUserId(),
                     command.sessionId(), command.conversationId(), command.channel(), command.message(),
-                    command.attachments(), command.metadata(), command.runMode(), command.parentMessageId(),
+                    command.attachments(), command.metadata(), command.targetType(), command.targetId(),
+                    command.runMode(), command.parentMessageId(),
                     command.editedMessageId(), command.regeneratedMessageId());
+            String explicitDomainAgentId = explicitDomainAgentId(identified);
 
             // 会话不存在时创建会话；历史 Memory 先排除本轮输入，避免 Runtime 再接收用户消息时重复。
             ChatSession session = sessionService.loadOrCreate(identified);
@@ -372,7 +374,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     identified.attachments() == null ? List.of() : identified.attachments());
             ChatCommand normalized = new ChatCommand(identified.commandId(), user.tenantId(), user.ownerUserId(),
                     session.id(), identified.conversationId(), identified.channel(), identified.message(),
-                    attachments, identified.metadata(), identified.runMode(), identified.parentMessageId(),
+                    attachments, identified.metadata(), identified.targetType(), identified.targetId(),
+                    identified.runMode(), identified.parentMessageId(),
                     identified.editedMessageId(), identified.regeneratedMessageId());
             String runId = idGenerator.newId("run", IdGenerateContext.of(user.tenantId(), user.ownerUserId(), session.id()));
 
@@ -388,11 +391,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
             RouteTarget route = null;
             RuntimeBinding binding = null;
             RuntimeSessionMode runtimeSessionMode = RuntimeSessionMode.RESUME;
-            String selectedDomainAgentId = selectedDomainAgentId(normalized.metadata());
-            if (selectedDomainAgentId != null) {
+            if (explicitDomainAgentId != null) {
                 // 用户显式选择 DomainAgent 时优先进入指定调用路由，不被 active RuntimeBinding 抢走。
                 // 该路径不创建 RuntimeBinding，避免把非 ChatService Runtime 契约的领域 Agent 误当成多轮 Runtime。
-                route = RouteTarget.domainAgent(selectedDomainAgentId, "front selected domain agent");
+                route = RouteTarget.domainAgent(explicitDomainAgentId, "front selected domain agent");
             } else {
                 var activeRuntimeBinding = runtimeBindingService.findActiveBySession(user.tenantId(),
                         user.ownerUserId(), session.id());
@@ -909,7 +911,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
         ChatMessage userMessage = messagePlan.userMessage();
         return new ChatCommand(normalized.commandId(), normalized.tenantId(), normalized.userId(),
                 normalized.sessionId(), normalized.conversationId(), normalized.channel(), userMessage.content(),
-                normalized.attachments(), normalized.metadata(), messagePlan.runMode(), messagePlan.parentMessageId(),
+                normalized.attachments(), normalized.metadata(), normalized.targetType(), normalized.targetId(),
+                messagePlan.runMode(), messagePlan.parentMessageId(),
                 normalized.editedMessageId(), normalized.regeneratedMessageId());
     }
 
@@ -926,13 +929,19 @@ public class FinanceEXChatService implements FinanceChatFacade {
         };
     }
 
-    private String selectedDomainAgentId(Map<String, Object> metadata) {
-        Object value = metadata == null ? null : metadata.get("selectedDomainAgentId");
-        if (value == null) {
+    private String explicitDomainAgentId(ChatCommand command) {
+        String targetType = command == null ? null : command.targetType();
+        if (targetType == null || targetType.isBlank()) {
             return null;
         }
-        String domainAgentId = String.valueOf(value).trim();
-        return domainAgentId.isBlank() ? null : domainAgentId;
+        if (!"DOMAIN_AGENT".equalsIgnoreCase(targetType)) {
+            throw new IllegalArgumentException("targetType 仅支持 DOMAIN_AGENT，当前值: " + targetType);
+        }
+        String domainAgentId = command.targetId();
+        if (domainAgentId == null || domainAgentId.isBlank()) {
+            throw new IllegalArgumentException("targetType=DOMAIN_AGENT 时 targetId 不能为空");
+        }
+        return domainAgentId.trim();
     }
 
     private RuntimeForwardHeaders normalizeForwardHeaders(RuntimeForwardHeaders forwardHeaders) {

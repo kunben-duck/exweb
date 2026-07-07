@@ -308,17 +308,12 @@ financeex:
           success-status-field: ${FINANCEEX_SHARE_WELINK_SUCCESS_STATUS_FIELD:status}
           success-status-value: ${FINANCEEX_SHARE_WELINK_SUCCESS_STATUS_VALUE:200}
   domain-agent:
-    # 仅用于前端显式选择 selectedDomainAgentId 的财经领域 DomainAgent 调用路径；默认关闭。
+    # 仅用于 targetType=DOMAIN_AGENT 的财经领域 DomainAgent 直连调用路径；默认关闭。
     enabled: ${FINANCEEX_DOMAIN_AGENT_ENABLED:false}
     base-url: ${FINANCEEX_DOMAIN_AGENT_BASE_URL:}
     chat-path: ${FINANCEEX_DOMAIN_AGENT_CHAT_PATH:/api/chat}
     stop-path: ${FINANCEEX_DOMAIN_AGENT_STOP_PATH:}
     timeout: ${FINANCEEX_DOMAIN_AGENT_TIMEOUT:120s}
-    allowed-domain-agent-ids: ${FINANCEEX_DOMAIN_AGENT_ALLOWED_IDS:}
-    default-platform: ${FINANCEEX_DOMAIN_AGENT_DEFAULT_PLATFORM:PC}
-    default-qa-type: ${FINANCEEX_DOMAIN_AGENT_DEFAULT_QA_TYPE:normalQa}
-    default-stream-flag: ${FINANCEEX_DOMAIN_AGENT_DEFAULT_STREAM_FLAG:stream}
-    default-is-thinking: ${FINANCEEX_DOMAIN_AGENT_DEFAULT_IS_THINKING:1}
     max-attachments: ${FINANCEEX_DOMAIN_AGENT_MAX_ATTACHMENTS:10}
     # 只缓存尚未完成的单个 DomainAgent frame；超过限制会输出小型诊断事件并丢弃该 frame，避免 OOM。
     max-pending-frame-bytes: ${FINANCEEX_DOMAIN_AGENT_MAX_PENDING_FRAME_BYTES:1048576}

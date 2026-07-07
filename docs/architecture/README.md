@@ -14,7 +14,7 @@ FinanceEXChatService 是前端聊天入口和 SuperAgent 主控服务。正式�
 flowchart TD
     User["用户请求"] --> Normalize["身份解析与会话归一化"]
     Normalize --> Memory["按配置加载 MemoryContext"]
-    Memory --> ExplicitSkill{"metadata.selectedDomainAgentId 存在?"}
+    Memory --> ExplicitSkill{"targetType=DOMAIN_AGENT?"}
     ExplicitSkill -- "是" --> DomainAgent["DOMAIN_AGENT：DomainAgent 指定调用"]
     ExplicitSkill -- "否" --> FindRuntime["按会话查询 RuntimeBinding"]
 
@@ -91,9 +91,9 @@ sequenceDiagram
         Memory-->>SuperAgent: "返回空 MemoryContext"
     end
 
-    alt "metadata.selectedDomainAgentId 存在"
+    alt "targetType=DOMAIN_AGENT"
         SuperAgent->>SuperAgent: "RouteTarget.DOMAIN_AGENT，不读取 RuntimeBinding"
-        SuperAgent->>RelayAgent: "DomainAgent chat(domainAgentId, query, docList)"
+        SuperAgent->>RelayAgent: "DomainAgent chat(targetId, metadata body)"
     else "未显式指定 DomainAgent"
         SuperAgent->>Binding: "findActive(sessionId)"
         Binding->>Redis: "读取 RuntimeBinding"
@@ -195,7 +195,7 @@ sequenceDiagram
         Intent-->>EX: "simple/complex/candidateSubAgentCode"
     end
 
-    alt "metadata.selectedDomainAgentId 存在"
+    alt "targetType=DOMAIN_AGENT"
         EX->>EX: "DOMAIN_AGENT：按 domainAgentId 调用 DomainAgent，简图省略下游细节"
     else "进入 Relay Runtime"
         EX->>Relay: "AgentRuntime.query(sessionId, query, attachments, Cookie snapshot)"
@@ -649,7 +649,7 @@ flowchart TB
 
 ## 路由规则
 
-- `metadata.selectedDomainAgentId` 优先级最高；存在时进入 `DOMAIN_AGENT` 路由，直接调用对应 DomainAgent，不读取或创建 RuntimeBinding。
+- `targetType=DOMAIN_AGENT,targetId=...` 优先级最高；存在时进入 `DOMAIN_AGENT` 路由，直接调用对应 DomainAgent，不读取或创建 RuntimeBinding。DomainAgent 下游 body 直接使用前端 `metadata`，后端只校验附件 `docList` 引用；`targetId` 授权和 `metadata` 业务合法性由下游 DomainAgent 校验。
 - active RuntimeBinding 优先级次之；存在时本轮按当前消息树 leaf 续接 Relay Runtime。
 - 用例库和意图服务是可选路由信号，默认关闭；关闭时不调用外部 API。
 - 用例库开启时优先匹配；命中阈值默认 `0.85`，命中并返回 `subAgentCode` 后单轮调用 SubAgent。

@@ -34,6 +34,7 @@ public class ChatRequestTranslator {
         // 这样前端无法通过 Header/Query/Body 改写租户或用户，后续接入企业权限框架也只替换身份防腐层。
         return new ChatCommand(request.commandId(), null, null, request.sessionId(), request.conversationId(), "web",
                 request.message(), toAttachmentRefs(request.attachments()), metadata,
+                request.targetType(), request.targetId(),
                 ChatRunMode.from(request.runMode()), request.parentMessageId(), request.editedMessageId(),
                 request.regeneratedMessageId());
     }

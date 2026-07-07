@@ -163,7 +163,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 切换历史版本 | 从当前消息 `versionInfo.variants` 取目标项 -> `GET /messages?leafMessageId={switchLeafMessageId}` 重渲染 -> 后台 `POST /path` 保存选择 | `versionInfo.currentIndex/total`、`switchLeafMessageId`、`currentLeafMessageId` | 先刷新展示路径，不创建 run，不调用 Runtime；`/path` 只负责持久化当前 leaf |
 | 从消息新建分支 | `POST /sessions/{sessionId}/branches(sourceMessageId)` -> 选择新 `sessionId` -> `GET /messages`、`GET /stream-status` | `sourceMessageId`、新 `sessionId`、`sourceSessionId/sourceMessageId` | 分支快照消息 `locked=true`，禁用编辑、删除和重新生成 |
 | 上传文件并作为附件提问 | `POST /documents(file, sessionId)` -> 等状态 `AVAILABLE` -> `POST /chat/runs(attachments[{documentId}])` | `documentId`、`sessionId`、`attachments[].documentId` | 附件不是消息类型；PROCESSING/FAILED/DELETED 不可作为聊天附件 |
-| 选中 DomainAgent 并带文档提问 | `POST /documents(file,metadata.skillId)` -> `POST /chat/runs(metadata.selectedDomainAgentId,attachments)` | `documentId`、`metadata.selectedDomainAgentId`、`metadata.domainAgent` | DomainAgent 路由不创建 RuntimeBinding；附件必须是 api-store 带 skillId 上传并返回 docId 的文档 |
+| 选中 DomainAgent 并带文档提问 | `POST /documents(file,metadata.skillId)` -> `POST /chat/runs(targetType=DOMAIN_AGENT,targetId,attachments,metadata)` | `documentId`、`targetId`、`metadata.sceneParam.docList` | DomainAgent 路由不创建 RuntimeBinding；metadata 是下游 body；ChatService 不校验 target 授权或 skillId/query 一致性，只校验附件 docList 的 docId/url 必须匹配 attachments 授权文档 |
 | 点赞/点踩/取消 | 历史消息中找到 assistant `messageId` -> `POST /messages/{messageId}/feedback`；再次点击已选按钮 -> `DELETE /feedback` | `messageId`、可选 `runId`、`feedback.rating/status` | 历史消息 `feedback` 非空时高亮；取消后返回 `status=CANCELLED`，历史消息再查为 `feedback=null` |
 | 会话归档/恢复/删除 | 单个：`POST /archive`、`POST /restore`、`DELETE /sessions/{sessionId}`；批量：`DELETE /sessions` body `sessionIds[]` | `sessionId`、`sessionIds[]` | 删除是软删除；有 active run 时后端会先主动取消 run |
 | 文档库管理 | `GET /documents` -> `GET /documents/{documentId}`/`status`/`preview-url`/`download`/`PATCH`/`DELETE` | `documentId`、`cursor`、`status` | 列表默认不返回 DELETED；下载和预览只允许 AVAILABLE |
@@ -232,7 +232,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/chat/runs` | 唯一提问入口，创建后台 run。 | JSON body：`commandId` 可选，`sessionId` 可选，`conversationId` 可选，`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`attachments[]`、`metadata`。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | `runMode` 默认 `NEXT`；`metadata.selectedDomainAgentId` 存在时进入 DomainAgent 路由，不读取或创建 RuntimeBinding。 |
+| `POST /api/v1/ex/chat/runs` | 唯一提问入口，创建后台 run。 | JSON body：`commandId` 可选，`sessionId` 可选，`conversationId` 可选，`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`attachments[]`、`targetType`、`targetId`、`metadata`。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | `runMode` 默认 `NEXT`；`targetType=DOMAIN_AGENT` 时进入 DomainAgent 路由，不读取或创建 RuntimeBinding。 |
 | `POST /api/v1/ex/chat/runs/{runId}/stop` | 用户点击停止回答。 | Path：`runId`。 | `ChatRunStopDto`：`runId`、`sessionId`、`status`、`latestSeq`、`stoppedAt`、`messageReady`、`assistantMessageId`、`feedbackTargetMessageId`。 | 幂等；停止语义不是关闭 WebSocket。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`；只处理 `stream-item` 中的 `encodedItem.data`。 |
 | `GET /api/v1/ex/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态，并以 `done` 闭合；live source 异常时服务端会降级按 DB 事件轮询。 |
@@ -975,7 +975,9 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
 | `editedMessageId` | string | EDIT_USER 必填 | 被编辑的未锁定 user 消息 |
 | `regeneratedMessageId` | string | REGENERATE_ASSISTANT 必填 | 被重新生成的未锁定 assistant 消息 |
 | `attachments` | array | 否 | 文档附件引用列表 |
-| `metadata` | object | 否 | 扩展字段，例如 `clientMessageId`、`selectedDomainAgentId`、`domainAgent` |
+| `targetType` | string | 否 | 显式直连目标类型；当前支持 `DOMAIN_AGENT`，为空走普通路由 |
+| `targetId` | string | `targetType=DOMAIN_AGENT` 必填 | DomainAgent 目标 ID |
+| `metadata` | object | 否 | 扩展字段；DomainAgent 直连时完整作为下游 chat body |
 
 响应：
 
@@ -1905,8 +1907,9 @@ api-store S3 文档响应示例：
 ```
 
 api-store 带 `metadata.skillId` 时，下游上传到企业 EDM，通常返回 `docId`。这种文档的 `source`
-为 `DOMAIN_AGENT_UPLOAD`，可在 `selectedDomainAgentId` run 中作为附件引用；DomainAgent `docList`
-由后端从 `metadataJson.providerDocument.docId` 可信生成。
+为 `DOMAIN_AGENT_UPLOAD`，可在 `targetType=DOMAIN_AGENT` run 中作为附件引用。前端需要把
+`metadataJson.providerDocument.docId/url` 放入 `metadata.sceneParam.docList`，后端校验这些引用和
+`attachments[]` 一致后原样透传。
 
 EDM docId 模式的 `metadataJson.providerDocument` 示例：
 
@@ -1994,41 +1997,46 @@ curl -OJ http://localhost:8080/api/v1/ex/documents/doc_xxx/download
 
 后端会按当前用户回查文档库，补齐可信的文件名、MIME、大小、来源和 tokenSize。前端传入的附件展示字段不会被当作事实源。
 
-指定 DomainAgent 调用时，`metadata.selectedDomainAgentId` 触发 `DOMAIN_AGENT` 路由。后端会用文档库中的
-`providerDocument` 可信元数据组装 DomainAgent 所需的 `sceneParam.docList`。前端可以通过
-`metadata.domainAgent.sceneParam` 传入其他业务扩展参数，但不要依赖自己传入的 `docList`；即使传了，
-后端也会用已鉴权附件生成的可信 `docList` 覆盖：
+指定 DomainAgent 调用时，`targetType=DOMAIN_AGENT` 和 `targetId` 触发 `DOMAIN_AGENT` 路由。后端不会组装
+DomainAgent body；`metadata` 会作为下游请求体透传。若携带附件，前端必须把上传返回的
+`providerDocument.docId/url` 放入 `metadata.sceneParam.docList`，且这些引用必须和 `attachments[]`
+中的已授权 `documentId` 匹配；后端只校验，不覆盖：
 
 ```json
 {
   "commandId": "cmd_domain_agent_001",
   "sessionId": "session_xxx",
   "message": "请基于附件出具税务意见",
+  "targetType": "DOMAIN_AGENT",
+  "targetId": "skill_tax_opinion",
   "attachments": [
     {
       "documentId": "doc_domain_agent_xxx"
     }
   ],
   "metadata": {
-    "selectedDomainAgentId": "skill_tax_opinion",
-    "domainAgent": {
-      "isThinking": 1,
-      "platform": "PC",
-      "qaType": "normalQa",
-      "streamFlag": "stream",
-      "supMsg": "",
-      "sceneParam": {
-        "regionCode": "CN-SZ",
-        "taxYear": "2026"
-      }
+    "skillId": "skill_tax_opinion",
+    "query": "请基于附件出具税务意见",
+    "platform": "PC",
+    "qaType": "normalQa",
+    "streamFlag": "stream",
+    "sceneParam": {
+      "regionCode": "CN-SZ",
+      "taxYear": "2026",
+      "docList": [
+        {
+          "docId": "M3T1A4768N1281393779526066372",
+          "docName": "AI辅助测试设计穿刺.pptx"
+        }
+      ]
     }
   }
 }
 ```
 
-DomainAgent 路由不会读取或创建 RuntimeBinding，也不会调用用例库/意图服务。它只用于前端明确选择 DomainAgent 的场景；如果附件不是 `api-store` 携带 `metadata.skillId` 上传并返回 `docId` 的文档，后端会拒绝本轮 run，要求前端按当前文档上传契约重新上传。
+DomainAgent 路由不会读取或创建 RuntimeBinding，也不会调用用例库/意图服务。它只用于前端明确选择 DomainAgent 的场景；如果 `metadata.sceneParam.docList` 缺失、为空，或引用了未在 `attachments[]` 中授权的 `docId/url`，后端会拒绝本轮 run。ChatService 不校验 `targetId` 是否可调用，也不要求 `metadata.skillId/query/sessionId` 与外层 `targetId/message/sessionId` 一致；这些业务合法性由下游 DomainAgent 服务负责。
 本轮显式选择的 DomainAgent 会进入 `runtime.metadata`，并在历史 assistant 的 `parts` 返回：
-`partType=METADATA`、`payload.metadataType=selected_domain_agent`、`payload.domainAgentId=payload.skillId=所选技能 ID`、
+`partType=METADATA`、`payload.metadataType=selected_domain_agent`、`payload.targetType=DOMAIN_AGENT`、`payload.targetId=所选目标 ID`、
 `payload.intentResult.source=front-selected`。前端历史页可以用该 part 展示“本轮调用技能”。
 
 ## 前端联调最小示例

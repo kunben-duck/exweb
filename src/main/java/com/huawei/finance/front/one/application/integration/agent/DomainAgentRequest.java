@@ -15,7 +15,7 @@ import java.util.Map;
  * @param domainAgentId 前端显式选择的 DomainAgent ID。
  * @param query 用户本轮输入。
  * @param documents 已校验归属和状态的文档库元数据。
- * @param metadata run metadata，用于读取 domainAgent 参数。
+ * @param metadata run metadata；DomainAgent chat 下游请求体直接使用该对象。
  * @param forwardHeaders 请求入口捕获的 Cookie 等转发头快照；仅用于出站请求头，不能进入请求体或持久化数据。
  */
 public record DomainAgentRequest(

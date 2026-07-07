@@ -170,7 +170,7 @@ FinanceEXChatService#executeRun(...)
 5. `IdGenerator#newId("run", ...)` 生成 runId。
 6. `MemoryApplicationService#loadForRun(...)` 按配置加载可选记忆。
 7. `SessionApplicationService#prepareRunMessage(...)` 写入或定位本轮 user message。
-8. 先检查 `metadata.selectedDomainAgentId`；存在时进入 `DOMAIN_AGENT` 路由，不读取 RuntimeBinding。
+8. 先检查 `targetType=DOMAIN_AGENT,targetId=...`；存在时进入 `DOMAIN_AGENT` 路由，不读取 RuntimeBinding。
 9. 未显式指定 DomainAgent 时查询或创建 RuntimeBinding。
 10. `RouteSignalApplicationService#routeInitial(...)` 调用可选用例库和意图服务。
 11. `ChatRunApplicationService#createRunning(...)` 创建业务 run。
@@ -193,7 +193,7 @@ RouteType.AGENT_RUNTIME    -> AgentRuntimeExecutor#execute(...)
 
 - 新问题没有进入 Relay：查看 `RouteSignalApplicationService#routeInitial(...)` 返回的 `RouteTarget`。
 - 意图识别已调用但统计表没有记录：确认 `financeex.intent-record.enabled=true`，再看 `IntentRecognitionRecordService#recordAsync(...)` 是否被线程池拒绝或 repository 写库失败；该链路是 best-effort，不会向前端报错。
-- DomainAgent 指定调用没有进入 DomainAgent 路由，或 chat Cookie 未透传：查看 `FinanceEXChatService#selectedDomainAgentId(...)`、`DomainAgentExecutor#execute(...)` 和 `ConfiguredDomainAgentClient#query(...)`。
+- DomainAgent 指定调用没有进入 DomainAgent 路由，或 chat Cookie 未透传：查看 `CreateChatRunRequest.targetType/targetId`、`FinanceEXChatService#explicitDomainAgentId(...)`、`DomainAgentExecutor#execute(...)` 和 `ConfiguredDomainAgentClient#query(...)`。
 - 多轮没有续接 Runtime：查看 `RuntimeBindingApplicationService#findActive(...)` 是否命中当前 `leafMessageId`。
 - 同一会话连续发两条报错：查看 `ChatRunApplicationService#rejectIfActiveRunExists(...)` 和 `ChatRunApplicationService#createRunning(...)`。
 - user message 已写入但 run 没创建：异常可能发生在 `prepareRunMessage(...)` 之后、`createRunning(...)` 之前，需要看日志和事务边界。
@@ -930,7 +930,7 @@ cancelActive(...)
 | 实例挂掉 run 不结束 | `ChatRunLeaseApplicationService#heartbeatActiveRuns(...)`、`ChatRunWatchdogScheduler`、`ChatRunRecoveryOrchestrator` |
 | 跨电脑续接缺内容 | `stream-status`、run 级事件恢复 `afterSeq`、`fin_ex_chat_event_t` |
 | assistant 历史消息没保存 | `persistAndPublishRunEvents(...)` 处理 `run.completed` 的分支、`SessionApplicationService#saveAssistantMessage(...)` |
-| 文档附件没有进 Runtime 或 DomainAgent 指定调用 | `DocumentFacade#resolveAttachmentsForUser(...)`、`DomainAgentChatRequestMapper#sceneParam(...)` / `docList(...)`、`SessionApplicationService#saveAttachments(...)`、`AgentRuntimeRequest.attachments`。DomainAgent 指定调用路径会保留 `metadata.domainAgent.sceneParam` 的扩展字段，但 `docList` 始终由后端附件元数据覆盖生成。 |
+| 文档附件没有进 Runtime 或 DomainAgent 指定调用 | `DocumentFacade#resolveAttachmentsForUser(...)`、`DomainAgentChatRequestMapper#validateDocList(...)`、`SessionApplicationService#saveAttachments(...)`、`AgentRuntimeRequest.attachments`。DomainAgent 指定调用路径会把 `metadata` 作为下游 body 透传；`metadata.sceneParam.docList` 必须和已授权 attachments 的 `providerDocument.docId/url` 匹配，后端只校验不改写。 |
 
 ## 18. 推荐调试顺序
 

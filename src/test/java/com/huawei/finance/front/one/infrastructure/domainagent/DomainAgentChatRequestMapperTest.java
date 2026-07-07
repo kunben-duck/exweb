@@ -23,63 +23,76 @@ class DomainAgentChatRequestMapperTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void preservesSceneParamExtensionFieldsAndOverridesDocListWithTrustedDocuments() {
-        DomainAgentRequest request = request(Map.of(
-                "domainAgent", Map.of(
-                        "sceneParam", Map.of(
-                                "taxYear", "2026",
-                                "regionCode", "CN-SZ",
-                                "docList", List.of(Map.of("docId", "forged-doc"))
-                        )
+    void forwardsMetadataAsBodyWithoutInjectingDefaultFields() {
+        Map<String, Object> metadata = Map.of(
+                "skillId", "skill-tax",
+                "query", "front query",
+                "platform", "MOBILE",
+                "sceneParam", Map.of(
+                        "taxYear", "2026",
+                        "docList", List.of(Map.of(
+                                "docId", "domain-doc-001",
+                                "docName", "front-name.pdf"
+                        ))
                 )
-        ), List.of(domainAgentDocument()));
+        );
 
-        Map<String, Object> wire = mapper.toWireRequest(request);
+        Map<String, Object> wire = mapper.toWireRequest(request(metadata, List.of(domainAgentDocument())));
 
         assertThat(wire)
-                .containsEntry("isThinking", 1)
-                .containsEntry("platform", "PC")
-                .containsEntry("qaType", "normalQa")
-                .containsEntry("query", "hello")
-                .containsEntry("sessionId", "session1")
                 .containsEntry("skillId", "skill-tax")
-                .containsEntry("streamFlag", "stream")
-                .containsEntry("supMsg", "");
-        assertThat(wire).doesNotContainKeys("isThink", "queryType", "steamFlag");
-
+                .containsEntry("query", "front query")
+                .containsEntry("platform", "MOBILE")
+                .doesNotContainKeys("isThinking", "qaType", "streamFlag", "supMsg", "sessionId");
         Map<String, Object> sceneParam = (Map<String, Object>) wire.get("sceneParam");
-        assertThat(sceneParam)
-                .containsEntry("taxYear", "2026")
-                .containsEntry("regionCode", "CN-SZ");
-
+        assertThat(sceneParam).containsEntry("taxYear", "2026");
         List<Map<String, Object>> docList = (List<Map<String, Object>>) sceneParam.get("docList");
-        assertThat(docList).hasSize(1);
-        assertThat(docList.get(0))
-                .containsEntry("docId", "domain-doc-001")
-                .containsEntry("docName", "invoice.pdf")
-                .containsEntry("docRelativePath", "/domain/invoice.pdf")
-                .containsEntry("docSize", 19800L)
-                .containsEntry("levelCode", "IP");
+        assertThat(docList).containsExactly(Map.of(
+                "docId", "domain-doc-001",
+                "docName", "front-name.pdf"
+        ));
     }
 
     @Test
-    void rejectsNonObjectSceneParam() {
+    void rejectsAttachmentsWithoutMetadataDocList() {
+        DomainAgentRequest request = request(Map.of("skillId", "skill-tax"), List.of(domainAgentDocument()));
+
+        assertThatThrownBy(() -> mapper.toWireRequest(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("metadata.sceneParam");
+    }
+
+    @Test
+    void rejectsForgedDocIdNotOwnedByAttachments() {
         DomainAgentRequest request = request(Map.of(
-                "domainAgent", Map.of("sceneParam", "bad-scene-param")
+                "sceneParam", Map.of("docList", List.of(Map.of("docId", "forged-doc")))
+        ), List.of(domainAgentDocument()));
+
+        assertThatThrownBy(() -> mapper.toWireRequest(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("未授权文档引用");
+    }
+
+    @Test
+    void acceptsUrlDocumentWhenMetadataUrlMatchesAuthorizedAttachment() {
+        DomainAgentRequest request = request(Map.of(
+                "sceneParam", Map.of("docList", List.of(Map.of("url", "https://domain.example/files/invoice.pdf")))
+        ), List.of(urlOnlyDocument()));
+
+        Map<String, Object> wire = mapper.toWireRequest(request);
+
+        assertThat(wire).containsKey("sceneParam");
+    }
+
+    @Test
+    void rejectsDocListWhenAttachmentReferencesAreMissing() {
+        DomainAgentRequest request = request(Map.of(
+                "sceneParam", Map.of("docList", List.of(Map.of("docId", "domain-doc-001")))
         ), List.of());
 
         assertThatThrownBy(() -> mapper.toWireRequest(request))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("domainAgent.sceneParam");
-    }
-
-    @Test
-    void rejectsUrlOnlyDomainAgentDocumentForDocList() {
-        DomainAgentRequest request = request(Map.of(), List.of(urlOnlyDomainAgentDocument()));
-
-        assertThatThrownBy(() -> mapper.toWireRequest(request))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("缺少可用于调用的 docId");
+                .hasMessageContaining("attachments");
     }
 
     private DomainAgentRequest request(Map<String, Object> metadata, List<UploadedDocument> documents) {
@@ -96,24 +109,15 @@ class DomainAgentChatRequestMapperTest {
     }
 
     private UploadedDocument domainAgentDocument() {
-        Instant now = Instant.parse("2026-06-11T00:00:00Z");
-        return new UploadedDocument(
+        return document(
                 "doc1",
-                "tenant1",
-                "user1",
-                "session1",
-                "invoice.pdf",
-                "domain-agent",
                 "domain-doc-001",
-                "application/pdf",
-                19800L,
-                DocumentStatus.AVAILABLE.name(),
                 DocumentSource.DOMAIN_AGENT_UPLOAD.name(),
-                null,
                 """
                         {
-                          "providerCode": "domain-agent",
+                          "providerCode": "api-store",
                           "providerDocument": {
+                            "providerLocatorType": "DOC_ID",
                             "docId": "domain-doc-001",
                             "docName": "invoice.pdf",
                             "docRelativePath": "/domain/invoice.pdf",
@@ -121,30 +125,18 @@ class DomainAgentChatRequestMapperTest {
                             "levelCode": "IP"
                           }
                         }
-                        """,
-                now,
-                now
+                        """
         );
     }
 
-    private UploadedDocument urlOnlyDomainAgentDocument() {
-        Instant now = Instant.parse("2026-06-11T00:00:00Z");
-        return new UploadedDocument(
+    private UploadedDocument urlOnlyDocument() {
+        return document(
                 "doc-url",
-                "tenant1",
-                "user1",
-                "session1",
-                "invoice.pdf",
-                "domain-agent",
-                "domain-agent-url:abcd",
-                "application/pdf",
-                19800L,
-                DocumentStatus.AVAILABLE.name(),
-                DocumentSource.DOMAIN_AGENT_UPLOAD.name(),
-                null,
+                "api-store-url:abcd",
+                DocumentSource.S3_UPLOAD.name(),
                 """
                         {
-                          "providerCode": "domain-agent",
+                          "providerCode": "api-store",
                           "providerDocument": {
                             "providerLocatorType": "URL",
                             "url": "https://domain.example/files/invoice.pdf",
@@ -152,7 +144,26 @@ class DomainAgentChatRequestMapperTest {
                             "docSize": 19800
                           }
                         }
-                        """,
+                        """
+        );
+    }
+
+    private UploadedDocument document(String id, String objectKey, String source, String metadataJson) {
+        Instant now = Instant.parse("2026-06-11T00:00:00Z");
+        return new UploadedDocument(
+                id,
+                "tenant1",
+                "user1",
+                "session1",
+                "invoice.pdf",
+                "api-store",
+                objectKey,
+                "application/pdf",
+                19800L,
+                DocumentStatus.AVAILABLE.name(),
+                source,
+                null,
+                metadataJson,
                 now,
                 now
         );

@@ -1,10 +1,10 @@
 package com.huawei.finance.front.one.infrastructure.domainagent;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.config.DomainAgentProperties;
 import com.huawei.finance.front.one.application.integration.agent.DomainAgentRequest;
-import com.huawei.finance.front.one.domain.document.DocumentSource;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -16,11 +16,8 @@ import org.springframework.stereotype.Component;
 /**
  * DomainAgent chat wire DTO 映射器。
  *
- * <p>ChatService 对内只使用 documentId、UploadedDocument 和 selectedDomainAgentId；下游接口需要的
- * platform、streamFlag、sceneParam 以及 sceneParam.docList 等字段集中在这里生成，避免污染主编排。</p>
- *
- * <p>sceneParam 是 DomainAgent 的业务扩展对象，可以承载前端透传的非敏感业务参数；但 docList 必须由
- * ChatService 根据已鉴权的文档库附件重新生成，不能信任前端直接传入的 docList。</p>
+ * <p>DomainAgent 的请求体由前端 {@code metadata} 完整决定，本 mapper 不再补默认字段或重组
+ * sceneParam。ChatService 只在边界处校验 docList 中的 docId/url 必须来自已鉴权附件，避免伪造文档引用。</p>
  */
 @Component
 public class DomainAgentChatRequestMapper {
@@ -33,68 +30,57 @@ public class DomainAgentChatRequestMapper {
     }
 
     public Map<String, Object> toWireRequest(DomainAgentRequest request) {
-        Map<String, Object> domainAgentOptions = domainAgentOptions(request.metadata());
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("isThinking", intOption(domainAgentOptions, "isThinking", properties.getDefaultIsThinking()));
-        body.put("platform", stringOption(domainAgentOptions, "platform", properties.getDefaultPlatform()));
-        body.put("qaType", stringOption(domainAgentOptions, "qaType", properties.getDefaultQaType()));
-        body.put("query", request.query());
-        body.put("sceneParam", sceneParam(domainAgentOptions, request.documents()));
-        body.put("sessionId", request.sessionId());
-        body.put("skillId", request.domainAgentId());
-        body.put("streamFlag", stringOption(domainAgentOptions, "streamFlag", properties.getDefaultStreamFlag()));
-        body.put("supMsg", stringOption(domainAgentOptions, "supMsg", ""));
+        Map<String, Object> body = deepCopyMap(request.metadata());
+        validateDocList(body, request.documents());
         return body;
     }
 
-    private Map<String, Object> sceneParam(Map<String, Object> domainAgentOptions, List<UploadedDocument> documents) {
-        Map<String, Object> sceneParam = new LinkedHashMap<>();
-        Object configured = domainAgentOptions.get("sceneParam");
-        if (configured instanceof Map<?, ?> map) {
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                if (entry.getKey() != null) {
-                    sceneParam.put(String.valueOf(entry.getKey()), entry.getValue());
-                }
-            }
-        } else if (configured != null) {
-            throw new IllegalArgumentException("domainAgent.sceneParam 必须是 JSON object");
-        }
-        /*
-         * docList 是 DomainAgent 文档权限与文件引用的关键字段。即使前端 metadata.sceneParam 里也传了 docList，
-         * 这里也必须使用后端从 UploadedDocument.providerDocument 中重建的可信列表覆盖它。
-         */
-        sceneParam.put("docList", docList(documents));
-        return Collections.unmodifiableMap(sceneParam);
-    }
-
-    private List<Map<String, Object>> docList(List<UploadedDocument> documents) {
+    private void validateDocList(Map<String, Object> body, List<UploadedDocument> documents) {
         if (documents == null || documents.isEmpty()) {
-            return List.of();
+            Object sceneParam = body.get("sceneParam");
+            Object docList = sceneParam instanceof Map<?, ?> sceneMap ? sceneMap.get("docList") : null;
+            if (docList instanceof List<?> list && !list.isEmpty()) {
+                throw new IllegalArgumentException("metadata.sceneParam.docList 引用了未授权文档，请同时在 attachments 中传入 documentId");
+            }
+            return;
         }
         if (documents.size() > properties.normalizedMaxAttachments()) {
             throw new IllegalArgumentException("DomainAgent 附件数量超过上限: " + properties.normalizedMaxAttachments());
         }
-        List<Map<String, Object>> result = new ArrayList<>();
-        for (UploadedDocument document : documents) {
-            if (!DocumentSource.DOMAIN_AGENT_UPLOAD.name().equals(document.source())) {
-                throw new IllegalArgumentException("DomainAgent 仅支持 api-store 携带 metadata.skillId 上传并返回 docId 的文档: "
-                        + document.id());
-            }
-            Map<String, Object> providerDocument = providerDocument(document);
-            String docId = stringValue(providerDocument.get("docId"), "");
-            if (docId.isBlank() || "URL".equals(providerDocument.get("providerLocatorType"))) {
-                throw new IllegalArgumentException("DomainAgent 文档缺少可用于调用的 docId，请在上传 metadata.skillId 后重新上传: "
-                        + document.id());
-            }
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("docId", docId);
-            item.put("docName", stringValue(providerDocument.get("docName"), document.originalName()));
-            item.put("docRelativePath", stringValue(providerDocument.get("docRelativePath"), ""));
-            item.put("docSize", longValue(providerDocument.get("docSize"), document.sizeBytes()));
-            item.put("levelCode", stringValue(providerDocument.get("levelCode"), ""));
-            result.add(Map.copyOf(item));
+        Object sceneParam = body.get("sceneParam");
+        if (!(sceneParam instanceof Map<?, ?> sceneMap)) {
+            throw new IllegalArgumentException("metadata.sceneParam 必须是 JSON object，并包含与 attachments 匹配的 docList");
         }
-        return List.copyOf(result);
+        Object docList = sceneMap.get("docList");
+        if (!(docList instanceof List<?> list) || list.isEmpty()) {
+            throw new IllegalArgumentException("metadata.sceneParam.docList 不能为空，且必须与 attachments 中的文档匹配");
+        }
+        List<Map<String, Object>> authorizedDocuments = documents.stream()
+                .map(this::providerDocument)
+                .toList();
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> itemMap)) {
+                throw new IllegalArgumentException("metadata.sceneParam.docList 每一项必须是 JSON object");
+            }
+            String docId = stringValue(itemMap.get("docId"), "");
+            String url = stringValue(itemMap.get("url"), "");
+            if (docId.isBlank() && url.isBlank()) {
+                throw new IllegalArgumentException("metadata.sceneParam.docList 每一项必须包含 docId 或 url");
+            }
+            if (authorizedDocuments.stream().anyMatch(provider -> documentReferenceMatches(provider, docId, url))) {
+                continue;
+            }
+            throw new IllegalArgumentException("metadata.sceneParam.docList 包含未授权文档引用: "
+                    + (docId.isBlank() ? url : docId));
+        }
+    }
+
+    private boolean documentReferenceMatches(Map<String, Object> provider, String docId, String url) {
+        String providerDocId = stringValue(provider.get("docId"), "");
+        String providerUrl = stringValue(provider.get("url"), "");
+        boolean docIdMatches = docId.isBlank() || (!providerDocId.isBlank() && providerDocId.equals(docId));
+        boolean urlMatches = url.isBlank() || (!providerUrl.isBlank() && providerUrl.equals(url));
+        return docIdMatches && urlMatches;
     }
 
     private Map<String, Object> providerDocument(UploadedDocument document) {
@@ -104,39 +90,12 @@ public class DomainAgentChatRequestMapper {
             if (providerDocument == null || !providerDocument.isObject()) {
                 throw new IllegalArgumentException("DomainAgent 文档缺少 providerDocument 元数据: " + document.id());
             }
-            Map<String, Object> values = new LinkedHashMap<>();
-            providerDocument.fields().forEachRemaining(entry -> values.put(entry.getKey(), jsonValue(entry.getValue())));
-            return values;
+            return objectMapper.convertValue(providerDocument, new TypeReference<Map<String, Object>>() {});
         } catch (IllegalArgumentException ex) {
             throw ex;
         } catch (Exception ex) {
             throw new IllegalArgumentException("domain-agent 文档元数据解析失败: " + document.id(), ex);
         }
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> domainAgentOptions(Map<String, Object> metadata) {
-        Object value = metadata == null ? null : metadata.get("domainAgent");
-        return value instanceof Map<?, ?> map ? (Map<String, Object>) map : Map.of();
-    }
-
-    private String stringOption(Map<String, Object> options, String key, String defaultValue) {
-        return stringValue(options.get(key), defaultValue);
-    }
-
-    private int intOption(Map<String, Object> options, String key, int defaultValue) {
-        Object value = options.get(key);
-        if (value instanceof Number number) {
-            return number.intValue();
-        }
-        if (value instanceof String text) {
-            try {
-                return Integer.parseInt(text);
-            } catch (NumberFormatException ignored) {
-                return defaultValue;
-            }
-        }
-        return defaultValue;
     }
 
     private String stringValue(Object value, String defaultValue) {
@@ -147,30 +106,34 @@ public class DomainAgentChatRequestMapper {
         return text.isBlank() ? defaultValue : text;
     }
 
-    private long longValue(Object value, long defaultValue) {
-        if (value instanceof Number number) {
-            return number.longValue();
+    private Map<String, Object> deepCopyMap(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return Map.of();
         }
-        if (value instanceof String text) {
-            try {
-                return Long.parseLong(text);
-            } catch (NumberFormatException ignored) {
-                return defaultValue;
+        Map<String, Object> copy = new LinkedHashMap<>();
+        metadata.forEach((key, value) -> {
+            if (key != null) {
+                copy.put(key, deepCopy(value));
             }
-        }
-        return defaultValue;
+        });
+        return Collections.unmodifiableMap(copy);
     }
 
-    private Object jsonValue(JsonNode node) {
-        if (node == null || node.isNull()) {
-            return null;
+    private Object deepCopy(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            map.forEach((key, nested) -> {
+                if (key != null) {
+                    copy.put(String.valueOf(key), deepCopy(nested));
+                }
+            });
+            return Collections.unmodifiableMap(copy);
         }
-        if (node.isNumber()) {
-            return node.numberValue();
+        if (value instanceof List<?> list) {
+            List<Object> copy = new ArrayList<>();
+            list.forEach(item -> copy.add(deepCopy(item)));
+            return Collections.unmodifiableList(copy);
         }
-        if (node.isBoolean()) {
-            return node.booleanValue();
-        }
-        return node.asText("");
+        return value;
     }
 }

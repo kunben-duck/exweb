@@ -28,8 +28,8 @@ import reactor.core.scheduler.Schedulers;
 /**
  * 配置化 DomainAgent HTTP adapter。
  *
- * <p>DomainAgent 是前端显式选择的财经领域 Agent。ChatService 对外使用 {@code domainAgentId}，
- * 但下游 wire contract 仍要求字段名 {@code skillId}，该差异只在本 adapter 内部转换。</p>
+ * <p>DomainAgent 是前端显式选择的财经领域 Agent。ChatService 只负责路由、鉴权和附件引用校验；
+ * 下游 chat body 使用前端 {@code metadata} 的安全副本，不在后端重组业务字段。</p>
  */
 @Component
 @EnableConfigurationProperties(DomainAgentProperties.class)
@@ -115,9 +115,6 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
         if (!properties.isEnabled()) {
             throw new IllegalStateException("DOMAIN_AGENT_DISABLED: DomainAgent 服务未启用");
         }
-        if (!properties.domainAgentAllowed(request.domainAgentId())) {
-            throw new IllegalArgumentException("非法或未授权 domainAgentId: " + request.domainAgentId());
-        }
         if (properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()) {
             throw new IllegalStateException("DOMAIN_AGENT_BASE_URL_MISSING: DomainAgent 服务地址未配置");
         }
@@ -128,8 +125,8 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
             return;
         }
         /*
-         * Cookie 只作为 DomainAgent 出站 HTTP 请求头透传。DomainAgent wire body 由
-         * DomainAgentChatRequestMapper 生成，不包含 forwardHeaders，避免企业登录态落入请求体、
+         * Cookie 只作为 DomainAgent 出站 HTTP 请求头透传。DomainAgent wire body 来自
+         * 已校验的前端 metadata，不包含 forwardHeaders，避免企业登录态落入请求体、
          * metadata、事件 payload 或日志。
          */
         headers.set(HttpHeaders.COOKIE, forwardHeaders.cookieHeader());

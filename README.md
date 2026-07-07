@@ -129,13 +129,15 @@ tenant/user。接入企业身份源时，只需替换该防腐层的身份读取
 
 同一个 ChatService 会话下 Relay 只允许首次进入 Runtime 时 `new`，后续均 `resume`；如果业务需要全新的 Relay 会话，应创建新的 ChatService 会话。
 
-`metadata.selectedDomainAgentId` 用于前端显式选择财经领域 DomainAgent 的场景。该字段存在且非空时，本轮 run 进入
-`DOMAIN_AGENT` 路由，直接调用配置化 DomainAgent chat 接口，并使用文档库中通过 `api-store`
-上传后保存的 `providerDocument.docId` 组装 `sceneParam.docList`。前端可以在 `metadata.domainAgent.sceneParam`
-传入其他业务扩展字段，但 `docList` 始终由后端可信生成并覆盖，避免伪造文档引用。该路径不会读取或创建 RuntimeBinding，
-避免把不具备稳定 ChatService 多轮契约的 DomainAgent 误当成 Relay Runtime 续接会话。
+`targetType=DOMAIN_AGENT` 用于前端显式选择财经领域 DomainAgent 的场景，`targetId` 为目标 DomainAgent ID。
+该路径会跳过意图/规划/RuntimeBinding，直接调用配置化 DomainAgent chat 接口。DomainAgent 下游请求体完整来自
+`metadata`；如果下游需要 `skillId/query/sessionId/sceneParam` 等字段，前端需要自行放入 `metadata`。
+ChatService 只校验附件引用：当请求携带 `attachments[]` 时，`metadata.sceneParam.docList` 中的 `docId/url`
+必须能匹配这些已授权文档的 `metadataJson.providerDocument.docId/url`，后端不会重写 `docList`。
+ChatService 不校验 `targetId` 是否可调用，也不要求 `metadata.skillId/query/sessionId` 与外层
+`targetId/message/sessionId` 一致；这些业务合法性由下游 DomainAgent 服务负责。
 显式选择的 DomainAgent 会作为 `runtime.metadata` 写入事件流，并在历史 assistant 的 `parts` 中返回；
-payload 同时包含 `domainAgentId`、`skillId` 和 `intentResult.source=front-selected`，用于前端回显本轮调用的技能。
+payload 包含 `targetType`、`targetId`、`domainAgentId` 和 `intentResult.source=front-selected`，用于前端回显本轮调用的技能。
 
 ## 会话与执行标识
 
@@ -469,11 +471,11 @@ Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共�
 
 服务端会在进入 Runtime 前回查文档库，补齐可信的文件名、MIME、大小、来源和 tokenSize，并校验文档归属和状态。
 
-指定 DomainAgent 时，前端应先在 `metadata.skillId` 中放入对应技能 ID 并上传文件。若后端
+指定 DomainAgent 且需要附件时，前端应先在上传请求 `metadata.skillId` 中放入对应技能 ID。若后端
 `financeex.storage.provider=api-store`，服务端会把该 `skillId` 透传给下游新文档接口，并把返回的
-`docId/docName/docSize/serverName/docVersion` 等字段保存到 `metadataJson.providerDocument`；随后
-`/chat/runs.metadata.selectedDomainAgentId` 会触发 DomainAgent chat adapter，并只允许引用带 `docId`
-的文档。普通 local/huawei-s3 文档或 api-store URL-only 文档不会被自动转传给 DomainAgent。
+`docId/url/docName/docSize/serverName/docVersion` 等字段保存到 `metadataJson.providerDocument`；随后
+`/chat/runs` 使用 `targetType=DOMAIN_AGENT,targetId=...` 触发 DomainAgent chat adapter。前端需要把已授权
+文档的 `docId/url` 放入 `metadata.sceneParam.docList`，后端只做匹配校验，不自动生成或覆盖下游 body。
 
 api-store 接入示例：
 

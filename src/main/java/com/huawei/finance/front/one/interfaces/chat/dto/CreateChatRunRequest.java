@@ -22,7 +22,9 @@ import java.util.Map;
  * @param editedMessageId EDIT_USER 模式被编辑的 user 消息。
  * @param regeneratedMessageId REGENERATE_ASSISTANT 模式被重新生成的 assistant 消息。
  * @param attachments 本轮关联附件列表。
- * @param metadata 前端扩展元数据，例如 clientMessageId、selectedDomainAgentId。
+ * @param targetType 显式直连目标类型；当前支持 DOMAIN_AGENT，为空时走普通路由。
+ * @param targetId 显式直连目标 ID；targetType=DOMAIN_AGENT 时表示 DomainAgent ID。
+ * @param metadata 前端扩展元数据；DomainAgent 直连时会作为下游请求 body 透传。
  */
 public record CreateChatRunRequest(
         @Size(max = 128, message = "commandId 长度不能超过 128")
@@ -44,6 +46,10 @@ public record CreateChatRunRequest(
         @Valid
         @Size(max = 20, message = "单次聊天最多引用 20 个附件")
         List<ChatAttachmentDto> attachments,
+        @Size(max = 32, message = "targetType 长度不能超过 32")
+        String targetType,
+        @Size(max = 128, message = "targetId 长度不能超过 128")
+        String targetId,
         @Size(max = 50, message = "metadata 最多允许 50 个字段")
         Map<String, Object> metadata
 ) {
@@ -55,7 +61,7 @@ public record CreateChatRunRequest(
      */
     public CreateChatRunRequest(String commandId, String sessionId, String conversationId, String message,
                                 List<ChatAttachmentDto> attachments, Map<String, ?> metadata) {
-        this(commandId, sessionId, conversationId, message, null, null, null, null, attachments,
+        this(commandId, sessionId, conversationId, message, null, null, null, null, attachments, null, null,
                 copyMetadata(metadata));
     }
 

@@ -1,8 +1,6 @@
 package com.huawei.finance.front.one.application.config;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -23,16 +21,6 @@ public class DomainAgentProperties {
     private String stopPath = "";
     /** DomainAgent 调用超时时间。 */
     private Duration timeout = Duration.ofSeconds(120);
-    /** 允许调用的 domainAgentId；为空表示不额外限制。 */
-    private List<String> allowedDomainAgentIds = new ArrayList<>();
-    /** DomainAgent 默认平台字段。 */
-    private String defaultPlatform = "PC";
-    /** DomainAgent 默认 qaType。 */
-    private String defaultQaType = "normalQa";
-    /** DomainAgent 默认 streamFlag。 */
-    private String defaultStreamFlag = "stream";
-    /** DomainAgent 默认思考开关。 */
-    private int defaultIsThinking = 1;
     /** 单次 DomainAgent 调用最大附件数。 */
     private int maxAttachments = 10;
     /** 单个未完成 DomainAgent 流式 frame 允许暂存的最大字节数，防止下游异常大 JSON 导致 OOM。 */
@@ -50,35 +38,12 @@ public class DomainAgentProperties {
     public void setStopPath(String stopPath) { this.stopPath = stopPath; }
     public Duration getTimeout() { return timeout; }
     public void setTimeout(Duration timeout) { this.timeout = timeout; }
-    public List<String> getAllowedDomainAgentIds() { return allowedDomainAgentIds; }
-    public void setAllowedDomainAgentIds(List<String> allowedDomainAgentIds) {
-        this.allowedDomainAgentIds = allowedDomainAgentIds == null ? List.of() : allowedDomainAgentIds.stream()
-                .filter(value -> value != null && !value.isBlank())
-                .map(String::trim)
-                .toList();
-    }
-    public String getDefaultPlatform() { return defaultPlatform; }
-    public void setDefaultPlatform(String defaultPlatform) { this.defaultPlatform = defaultPlatform; }
-    public String getDefaultQaType() { return defaultQaType; }
-    public void setDefaultQaType(String defaultQaType) { this.defaultQaType = defaultQaType; }
-    public String getDefaultStreamFlag() { return defaultStreamFlag; }
-    public void setDefaultStreamFlag(String defaultStreamFlag) { this.defaultStreamFlag = defaultStreamFlag; }
-    public int getDefaultIsThinking() { return defaultIsThinking; }
-    public void setDefaultIsThinking(int defaultIsThinking) { this.defaultIsThinking = defaultIsThinking; }
     public int getMaxAttachments() { return maxAttachments; }
     public void setMaxAttachments(int maxAttachments) { this.maxAttachments = maxAttachments; }
     public int getMaxPendingFrameBytes() { return maxPendingFrameBytes; }
     public void setMaxPendingFrameBytes(int maxPendingFrameBytes) { this.maxPendingFrameBytes = maxPendingFrameBytes; }
     public int getMaxFragmentBytes() { return maxFragmentBytes; }
     public void setMaxFragmentBytes(int maxFragmentBytes) { this.maxFragmentBytes = maxFragmentBytes; }
-
-    public boolean domainAgentAllowed(String domainAgentId) {
-        if (domainAgentId == null || domainAgentId.isBlank()) {
-            return false;
-        }
-        return allowedDomainAgentIds == null || allowedDomainAgentIds.isEmpty()
-                || allowedDomainAgentIds.contains(domainAgentId);
-    }
 
     public int normalizedMaxAttachments() {
         return maxAttachments <= 0 ? 10 : maxAttachments;

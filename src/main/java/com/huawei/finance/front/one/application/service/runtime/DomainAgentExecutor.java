@@ -20,7 +20,7 @@ import reactor.core.publisher.Mono;
 /**
  * 财经领域 DomainAgent 指定执行器。
  *
- * <p>该执行器只服务前端明确传入 selectedDomainAgentId 的 DomainAgent 路径。它不创建 RuntimeBinding，
+ * <p>该执行器只服务前端通过 targetType/targetId 明确选择的 DomainAgent 路径。它不创建 RuntimeBinding，
  * 也不参与默认复杂任务 Runtime 多轮续接。</p>
  */
 @Service
@@ -76,12 +76,9 @@ public class DomainAgentExecutor {
         payload.put("sourceType", "selectedDomainAgent");
         payload.put("metadataType", "selected_domain_agent");
         payload.put("routeType", "DOMAIN_AGENT");
+        payload.put("targetType", "DOMAIN_AGENT");
+        payload.put("targetId", domainAgentId);
         payload.put("domainAgentId", domainAgentId);
-        /*
-         * 下游 wire contract 仍叫 skillId。历史 parts 同时保留 skillId，方便前端按“技能”
-         * 文案展示，也避免调试时需要理解 adapter 内部命名转换。
-         */
-        payload.put("skillId", domainAgentId);
         payload.put("intentResult", Map.of(
                 "accepted", true,
                 "source", "front-selected",

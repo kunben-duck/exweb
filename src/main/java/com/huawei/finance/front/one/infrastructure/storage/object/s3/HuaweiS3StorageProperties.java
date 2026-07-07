@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.storage;
+package com.huawei.finance.front.one.infrastructure.storage.object.s3;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 

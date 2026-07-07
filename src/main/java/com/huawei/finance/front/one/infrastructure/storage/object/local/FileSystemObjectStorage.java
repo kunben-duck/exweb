@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.storage;
+package com.huawei.finance.front.one.infrastructure.storage.object.local;
 
 import com.huawei.finance.front.one.application.integration.document.ObjectStorage;
 import com.huawei.finance.front.one.domain.document.StoredObject;

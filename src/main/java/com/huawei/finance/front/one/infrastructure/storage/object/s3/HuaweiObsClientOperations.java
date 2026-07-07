@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.storage;
+package com.huawei.finance.front.one.infrastructure.storage.object.s3;
 
 import com.obs.services.ObsClient;
 import com.obs.services.model.ObsObject;

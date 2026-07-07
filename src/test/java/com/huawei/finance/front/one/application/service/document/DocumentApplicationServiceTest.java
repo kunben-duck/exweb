@@ -6,7 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.command.DocumentUpdateCommand;
 import com.huawei.finance.front.one.application.command.DocumentUploadCommand;
-import com.huawei.finance.front.one.application.config.DocumentProviderProperties;
+import com.huawei.finance.front.one.application.integration.document.DocumentStorage;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
 import com.huawei.finance.front.one.application.integration.document.DocumentRepository;
 import com.huawei.finance.front.one.application.integration.document.ObjectStorage;
@@ -26,7 +26,7 @@ import com.huawei.finance.front.one.domain.document.DocumentStatus;
 import com.huawei.finance.front.one.domain.document.StoredObject;
 import com.huawei.finance.front.one.domain.document.StoredObjectContent;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
-import com.huawei.finance.front.one.infrastructure.storage.ObjectStorageDocumentProviderAdapter;
+import com.huawei.finance.front.one.infrastructure.storage.object.ObjectStorageDocumentStorage;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.time.Instant;
@@ -180,18 +180,13 @@ class DocumentApplicationServiceTest {
         WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
                 new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
         ObjectMapper objectMapper = new ObjectMapper();
-        DocumentProviderProperties properties = new DocumentProviderProperties();
-        DocumentProviderAdapterRegistry registry = new DocumentProviderAdapterRegistry(
-                List.of(new ObjectStorageDocumentProviderAdapter(new RecordingObjectStorage(), limiter, objectMapper)),
-                properties,
-                objectMapper
-        );
+        DocumentStorage storage = new ObjectStorageDocumentStorage(new RecordingObjectStorage(), limiter, objectMapper);
         return new DocumentApplicationService(
                 repository,
                 new FixedSessionRepository(),
                 new FixedIdGenerator(),
                 new PermissionChecker(),
-                registry
+                storage
         );
     }
 

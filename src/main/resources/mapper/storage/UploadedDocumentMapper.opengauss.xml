@@ -2,8 +2,8 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.huawei.finance.front.one.infrastructure.storage.UploadedDocumentMapper">
-    <resultMap id="uploadedDocumentResultMap" type="com.huawei.finance.front.one.infrastructure.storage.UploadedDocumentRow">
+<mapper namespace="com.huawei.finance.front.one.infrastructure.storage.persistence.UploadedDocumentMapper">
+    <resultMap id="uploadedDocumentResultMap" type="com.huawei.finance.front.one.infrastructure.storage.persistence.UploadedDocumentRow">
         <result column="tenant_id" property="tenantId"/>
         <result column="user_id" property="userId"/>
         <result column="session_id" property="sessionId"/>
@@ -27,7 +27,7 @@
       入参: UploadedDocumentRow，id 为文档主键，tenantId/userId/sessionId 为归属边界，originalName/bucket/objectKey/
             contentType/sizeBytes/status/source/tokenSize/metadataJson/createdAt/updatedAt 为文档展示和 provider 元数据。
     -->
-    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.storage.UploadedDocumentRow">
+    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.storage.persistence.UploadedDocumentRow">
         INSERT INTO fin_ex_uploaded_document_t(
             id, tenant_id, user_id, session_id, original_name, bucket, object_key,
             content_type, size_bytes, status, source, token_size, metadata_json, created_at, updated_at
@@ -43,7 +43,7 @@
       入参: UploadedDocumentRow，id 定位文档；sessionId/originalName/bucket/objectKey/contentType/sizeBytes/
             status/source/tokenSize/metadataJson/updatedAt 为待更新字段。
     -->
-    <update id="update" parameterType="com.huawei.finance.front.one.infrastructure.storage.UploadedDocumentRow">
+    <update id="update" parameterType="com.huawei.finance.front.one.infrastructure.storage.persistence.UploadedDocumentRow">
         UPDATE fin_ex_uploaded_document_t
         SET session_id = #{sessionId},
             original_name = #{originalName},

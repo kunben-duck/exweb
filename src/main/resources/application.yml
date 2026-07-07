@@ -258,7 +258,7 @@ financeex:
     forward-cookie:
       # 仅把 /chat/runs 与 /chat/runs/{runId}/stop 入口捕获到的 Cookie 透传给可信下游：
       # Relay stream-http adapter 和 DomainAgent adapter。
-      # 文档 upload provider 的 Cookie 透传由 financeex.document 与 financeex.documents.providers.* 单独控制。
+      # 文档上传 Cookie 透传由 financeex.document 与 financeex.storage.api-store 单独控制。
       # Cookie 不写入 metadata_json、不落库、不进入事件 payload，也不会写入下游请求体。
       enabled: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ENABLED:true}
       max-length: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_MAX_LENGTH:8192}
@@ -276,9 +276,14 @@ financeex:
       max-connections: ${FINANCEEX_HUAWEI_S3_MAX_CONNECTIONS:200}
       connection-timeout-ms: ${FINANCEEX_HUAWEI_S3_CONNECTION_TIMEOUT_MS:10000}
       socket-timeout-ms: ${FINANCEEX_HUAWEI_S3_SOCKET_TIMEOUT_MS:30000}
+    api-store:
+      base-url: ${FINANCEEX_API_STORE_BASE_URL:}
+      upload-path: ${FINANCEEX_API_STORE_UPLOAD_PATH:/fina/agent/fileOperate/upload}
+      timeout: ${FINANCEEX_API_STORE_TIMEOUT:30s}
+      forward-cookie: ${FINANCEEX_API_STORE_FORWARD_COOKIE_ENABLED:false}
   document:
     max-upload-size-bytes: ${FINANCEEX_DOCUMENT_MAX_UPLOAD_SIZE_BYTES:52428800}
-    # 文档上传入口 Cookie 最大长度；只供配置 forward-cookie=true 的 HTTP provider upload 使用。
+    # 文档上传入口 Cookie 最大长度；只供配置 forward-cookie=true 的 api-store 使用。
     forward-cookie-max-length: ${FINANCEEX_DOCUMENT_FORWARD_COOKIE_MAX_LENGTH:8192}
   share:
     # 前端分享页地址前缀，发送 provider 会直接拼接 shareId，例如 https://finex.example.com/share/ + share_xxx。
@@ -302,83 +307,6 @@ financeex:
           max-retries: ${FINANCEEX_SHARE_WELINK_MAX_RETRIES:3}
           success-status-field: ${FINANCEEX_SHARE_WELINK_SUCCESS_STATUS_FIELD:status}
           success-status-value: ${FINANCEEX_SHARE_WELINK_SUCCESS_STATUS_VALUE:200}
-  documents:
-    providers:
-      # 前端统一调用 /api/v1/ex/documents；不传 targetProvider 时使用 default-storage。
-      default-provider: ${FINANCEEX_DOCUMENT_DEFAULT_PROVIDER:default-storage}
-      entries:
-        default-storage:
-          type: object-storage
-          enabled: true
-          source: LOCAL_UPLOAD
-        s3-upload:
-          type: http
-          enabled: ${FINANCEEX_S3_UPLOAD_DOCUMENT_PROVIDER_ENABLED:false}
-          source: S3_UPLOAD
-          base-url: ${FINANCEEX_S3_UPLOAD_BASE_URL:}
-          timeout: ${FINANCEEX_S3_UPLOAD_TIMEOUT:30s}
-          forward-cookie: ${FINANCEEX_S3_UPLOAD_FORWARD_COOKIE_ENABLED:false}
-          upload:
-            enabled: ${FINANCEEX_S3_UPLOAD_ENABLED:true}
-            path: ${FINANCEEX_S3_UPLOAD_PATH:/uploadFile}
-            method: POST
-            content-type: multipart
-            file-field: ${FINANCEEX_S3_UPLOAD_FILE_FIELD:file}
-          download:
-            enabled: ${FINANCEEX_S3_UPLOAD_DOWNLOAD_ENABLED:false}
-            path: ${FINANCEEX_S3_UPLOAD_DOWNLOAD_PATH:}
-            method: GET
-          status:
-            enabled: ${FINANCEEX_S3_UPLOAD_STATUS_ENABLED:false}
-            path: ${FINANCEEX_S3_UPLOAD_STATUS_PATH:}
-            method: GET
-          response-mapping:
-            data-array-path: ${FINANCEEX_S3_UPLOAD_DATA_ARRAY_PATH:data}
-            document-id-field: ${FINANCEEX_S3_UPLOAD_DOCUMENT_ID_FIELD:docId}
-            document-name-field: ${FINANCEEX_S3_UPLOAD_DOCUMENT_NAME_FIELD:docName}
-            document-size-field: ${FINANCEEX_S3_UPLOAD_DOCUMENT_SIZE_FIELD:docSize}
-            document-url-field: ${FINANCEEX_S3_UPLOAD_DOCUMENT_URL_FIELD:url}
-            metadata-fields:
-              - docRelativePath
-              - docStatus
-              - fileSize
-              - message
-              - error
-        domain-agent:
-          type: http
-          enabled: ${FINANCEEX_DOMAIN_AGENT_DOCUMENT_PROVIDER_ENABLED:false}
-          source: DOMAIN_AGENT_UPLOAD
-          base-url: ${FINANCEEX_DOMAIN_AGENT_BASE_URL:}
-          timeout: ${FINANCEEX_DOMAIN_AGENT_DOCUMENT_TIMEOUT:30s}
-          # 只把上传入口 Cookie 放入 DomainAgent upload 请求头，不进入 multipart form 或文档元数据。
-          forward-cookie: ${FINANCEEX_DOMAIN_AGENT_DOCUMENT_FORWARD_COOKIE_ENABLED:true}
-          upload:
-            enabled: ${FINANCEEX_DOMAIN_AGENT_UPLOAD_ENABLED:true}
-            path: ${FINANCEEX_DOMAIN_AGENT_UPLOAD_PATH:/api/upload}
-            method: POST
-            content-type: multipart
-            file-field: ${FINANCEEX_DOMAIN_AGENT_UPLOAD_FILE_FIELD:file}
-            extra-form-fields:
-              # 下游 upload wire contract 仍使用 skillId 字段，值来自 ChatService 的 domainAgentId。
-              skillId: "${domainAgentId}"
-          download:
-            enabled: ${FINANCEEX_DOMAIN_AGENT_DOWNLOAD_ENABLED:false}
-            path: ${FINANCEEX_DOMAIN_AGENT_DOWNLOAD_PATH:}
-            method: GET
-          status:
-            enabled: ${FINANCEEX_DOMAIN_AGENT_DOCUMENT_STATUS_ENABLED:false}
-            path: ${FINANCEEX_DOMAIN_AGENT_DOCUMENT_STATUS_PATH:}
-            method: GET
-          response-mapping:
-            data-array-path: ${FINANCEEX_DOMAIN_AGENT_UPLOAD_DATA_ARRAY_PATH:data}
-            document-id-field: ${FINANCEEX_DOMAIN_AGENT_UPLOAD_DOCUMENT_ID_FIELD:docid}
-            document-name-field: ${FINANCEEX_DOMAIN_AGENT_UPLOAD_DOCUMENT_NAME_FIELD:docname}
-            document-size-field: ${FINANCEEX_DOMAIN_AGENT_UPLOAD_DOCUMENT_SIZE_FIELD:docsize}
-            document-url-field: ${FINANCEEX_DOMAIN_AGENT_UPLOAD_DOCUMENT_URL_FIELD:url}
-            metadata-fields:
-              - levelCode
-              - serverName
-              - version
   domain-agent:
     # 仅用于前端显式选择 selectedDomainAgentId 的财经领域 DomainAgent 调用路径；默认关闭。
     enabled: ${FINANCEEX_DOMAIN_AGENT_ENABLED:false}

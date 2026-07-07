@@ -4,8 +4,9 @@ import com.huawei.finance.front.one.application.command.DocumentUpdateCommand;
 import com.huawei.finance.front.one.application.command.DocumentUploadCommand;
 import com.huawei.finance.front.one.application.facade.DocumentFacade;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
-import com.huawei.finance.front.one.application.integration.document.DocumentProviderUploadRequest;
 import com.huawei.finance.front.one.application.integration.document.DocumentRepository;
+import com.huawei.finance.front.one.application.integration.document.DocumentStorage;
+import com.huawei.finance.front.one.application.integration.document.DocumentStorageUploadRequest;
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
@@ -29,9 +30,8 @@ import reactor.core.scheduler.Schedulers;
  * 文档库应用服务。
  *
  * <p>本服务是文档能力的主控入口：接口层先解析不可变 {@link UserContext}，这里只使用显式身份
- * 校验会话归属，根据 targetProvider 选择文档 provider adapter，再把文档资产元数据持久化到
- * DocumentRepository。默认 provider 仍是对象存储；DomainAgent 和未来外部文档服务通过 provider
- * adapter 接入，不新增前端上传接口。</p>
+ * 校验会话归属，根据后端 {@code financeex.storage.provider} 选择唯一文档存储实现，再把文档资产
+ * 元数据持久化到 DocumentRepository。前端不再通过 targetProvider 选择上传目的地。</p>
  */
 @Service
 public class DocumentApplicationService implements DocumentFacade {
@@ -39,16 +39,16 @@ public class DocumentApplicationService implements DocumentFacade {
     private final SessionRepository sessionRepository;
     private final IdGenerator idGenerator;
     private final PermissionChecker permissionChecker;
-    private final DocumentProviderAdapterRegistry providerRegistry;
+    private final DocumentStorage storage;
 
     public DocumentApplicationService(DocumentRepository repository, SessionRepository sessionRepository,
                                       IdGenerator idGenerator, PermissionChecker permissionChecker,
-                                      DocumentProviderAdapterRegistry providerRegistry) {
+                                      DocumentStorage storage) {
         this.repository = repository;
         this.sessionRepository = sessionRepository;
         this.idGenerator = idGenerator;
         this.permissionChecker = permissionChecker;
-        this.providerRegistry = providerRegistry;
+        this.storage = storage;
     }
     @Override
     public Mono<UploadedDocument> upload(UserContext user, DocumentUploadCommand command) {
@@ -58,10 +58,7 @@ public class DocumentApplicationService implements DocumentFacade {
                 ensureOwnedSessionIfPresent(user, command.sessionId());
                 String documentId = idGenerator.newId("doc",
                         IdGenerateContext.of(user.tenantId(), user.ownerUserId(), command.sessionId()));
-                DocumentProviderAdapterRegistry.ProviderResolution provider =
-                        providerRegistry.resolveForUpload(command.targetProvider());
-                UploadedDocument doc = provider.adapter().upload(new DocumentProviderUploadRequest(
-                        user, documentId, provider.providerCode(), provider.provider(), command));
+                UploadedDocument doc = storage.upload(new DocumentStorageUploadRequest(user, documentId, command));
                 return repository.save(doc);
             } finally {
                 closeQuietly(command.inputStream());
@@ -153,9 +150,8 @@ public class DocumentApplicationService implements DocumentFacade {
         return Mono.fromCallable(() -> {
             permissionChecker.checkChatPermission(user);
             UploadedDocument document = loadOwnedAvailableDocument(user, documentId);
-            DocumentProviderAdapterRegistry.ProviderResolution provider = providerRegistry.resolveForDocument(document);
-            StoredObjectContent content = provider.adapter()
-                    .download(document, provider.provider())
+            StoredObjectContent content = storage
+                    .download(document)
                     .orElseThrow(() -> new IllegalStateException("DOCUMENT_CONTENT_MANAGED_BY_PROVIDER: 文档内容由下游 provider 管理"));
             return new DocumentDownload(document, content);
         }).subscribeOn(Schedulers.boundedElastic());
@@ -195,8 +191,7 @@ public class DocumentApplicationService implements DocumentFacade {
         return Mono.fromCallable(() -> {
             permissionChecker.checkChatPermission(user);
             UploadedDocument document = loadOwnedAvailableDocument(user, documentId);
-            DocumentProviderAdapterRegistry.ProviderResolution provider = providerRegistry.resolveForDocument(document);
-            if (!provider.adapter().downloadSupported(document, provider.provider())) {
+            if (!storage.downloadSupported(document)) {
                 throw new IllegalStateException("DOCUMENT_CONTENT_MANAGED_BY_PROVIDER: 文档内容由下游 provider 管理");
             }
             return document;

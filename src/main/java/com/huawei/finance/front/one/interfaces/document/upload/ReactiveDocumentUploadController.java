@@ -37,21 +37,17 @@ public class ReactiveDocumentUploadController {
      *
      * @param file multipart 中名为 {@code file} 的 WebFlux 文件分片。
      * @param sessionId 可选会话标识；传入时服务端会校验会话归属并把文档关联到该会话。
-     * @param targetProvider 目标文档 provider；为空时使用默认对象存储。
-     * @param domainAgentId 上传关联 DomainAgent 标识，可为空。
-     * @param metadata 上传扩展元数据 JSON，可为空。
+     * @param metadata 上传扩展元数据 JSON，可为空；api-store 模式下可在 metadata.skillId 中放下游技能 ID。
      * @param cookieHeader 原始 HTTP Cookie 头；仅按 provider 配置透传给可信下游 upload。
      * @return 上传完成后的文档库元数据。
      */
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Mono<UploadedDocumentDto> upload(@RequestPart("file") FilePart file,
                                             @RequestPart(value = "sessionId", required = false) String sessionId,
-                                            @RequestPart(value = "targetProvider", required = false) String targetProvider,
-                                            @RequestPart(value = "domainAgentId", required = false) String domainAgentId,
                                             @RequestPart(value = "metadata", required = false) String metadata,
                                             @RequestHeader(value = HttpHeaders.COOKIE, required = false) String cookieHeader) {
         DocumentUploadContext context = new DocumentUploadContext(
-                sessionId, targetProvider, domainAgentId, metadata, cookieHeader);
+                sessionId, metadata, cookieHeader);
         return uploadSupport.uploadFilePart(file, context)
                 .map(dtoMapper::toDto);
     }

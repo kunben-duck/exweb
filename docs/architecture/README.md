@@ -171,11 +171,11 @@ sequenceDiagram
 
     opt "上传文档"
         Frontend->>EX: "POST /api/v1/ex/documents"
-        alt "targetProvider=default-storage"
+        alt "storage.provider=local/huawei-s3"
             EX->>S3: "写入文件对象"
             S3-->>EX: "bucket/objectKey"
-        else "targetProvider=domain-agent"
-            EX->>EX: "调用配置化 HTTP DocumentProviderAdapter"
+        else "storage.provider=api-store"
+            EX->>EX: "调用新文档上传接口(file, metadata.skillId?)"
         end
         EX->>DB: "写入 fin_ex_uploaded_document_t"
         EX-->>Frontend: "documentId/status"
@@ -221,7 +221,7 @@ sequenceDiagram
 
 ## 文档库与附件使用
 
-文档能力采用“统一后端入口 + DocumentProviderAdapter 防腐层 + 文档库资产”的模式。
+文档能力采用“统一后端入口 + DocumentStorage 防腐层 + 文档库资产”的模式。
 
 ```mermaid
 sequenceDiagram
@@ -229,24 +229,24 @@ sequenceDiagram
     participant Frontend as "Frontend"
     participant DocAPI as "Document API"
     participant DocApp as "DocumentApplicationService"
-    participant Provider as "DocumentProviderAdapter"
-    participant ObjectStorage as "ObjectStorage Provider"
-    participant HttpProvider as "HTTP Provider"
+    participant Storage as "DocumentStorage"
+    participant ObjectStorage as "ObjectStorage"
+    participant ApiStore as "api-store"
     participant DB as "数据库"
     participant Chat as "FinanceEXChatService"
     participant Executor as "SubAgent / DomainAgent / AgentRuntime"
 
-    Frontend->>DocAPI: "POST /documents multipart file,targetProvider?,domainAgentId?"
+    Frontend->>DocAPI: "POST /documents multipart file,metadata?"
     DocAPI->>DocAPI: "AuthContextProvider.resolve()"
     DocAPI->>DocApp: "upload(UserContext, DocumentUploadCommand)"
     DocApp->>DocApp: "会话归属校验"
-    DocApp->>Provider: "resolve(targetProvider)"
-    alt "default-storage"
-        Provider->>ObjectStorage: "putObject(tenantId, file)"
-        ObjectStorage-->>Provider: "bucket/objectKey"
-    else "domain-agent / future domain provider"
-        Provider->>HttpProvider: "multipart upload by configured path"
-        HttpProvider-->>Provider: "provider docId/docName/docSize"
+    DocApp->>Storage: "upload by financeex.storage.provider"
+    alt "local / huawei-s3"
+        Storage->>ObjectStorage: "putObject(tenantId, file)"
+        ObjectStorage-->>Storage: "bucket/objectKey"
+    else "api-store"
+        Storage->>ApiStore: "multipart file + optional metadata.skillId"
+        ApiStore-->>Storage: "docId 或 url"
     end
     DocApp->>DB: "写 fin_ex_uploaded_document_t"
     DocApp-->>Frontend: "UploadedDocument(id,status,source)"
@@ -260,7 +260,7 @@ sequenceDiagram
 设计原则：
 
 - 前端上传仍先进入 FinanceEXChatService，方便统一鉴权、审计、限流和企业网关接入。
-- 真实文件内容由 `DocumentProviderAdapter` 决定去向：默认 provider 仍写入 local 或 huawei-s3；DomainAgent 或领域 Agent provider 可以转发自己的上传接口。
+- 真实文件内容由 `DocumentStorage` 决定去向：`local/huawei-s3` 写入本服务对象存储，`api-store` 转发新文档上传接口。
 - 聊天请求只引用 `documentId`，不携带文件正文。
 - SubAgent、DomainAgent 或 Runtime 看到的是经过文档库回查后的可信附件元数据。
 - `fin_ex_uploaded_document_t` 是文档库事实源，支持最近文档、库中文档选择和后续连接器文档扩展。
@@ -567,10 +567,10 @@ run 级 Event Resume 正常优先接入 Redis live topic；如果 live source �
 文档上传同样按启动模式做接口层适配：Servlet/MVC 注册 `MvcDocumentUploadController`
 并接收 `MultipartFile`，纯 WebFlux 注册 `ReactiveDocumentUploadController` 并接收
 `FilePart`。两种 Controller 都委托 `DocumentUploadSupport`，由它先把上传流写入临时文件，
-再通过 `DocumentFacade -> DocumentProviderAdapterRegistry` 选择 default-storage、domain-agent
-或未来领域 Agent provider。前端看到的路径、字段和响应始终是同一套
-`POST /api/v1/ex/documents` 契约。domain-agent 等 HTTP provider 可通过 `forward-cookie=true`
-允许上传入口 Cookie 作为下游 upload HTTP header 透传；普通对象存储 provider 不使用该 Cookie，
+再通过 `DocumentFacade -> DocumentStorage` 按 `financeex.storage.provider` 选择 `local`、`huawei-s3`
+或 `api-store`。前端看到的路径、字段和响应始终是同一套
+`POST /api/v1/ex/documents` 契约。api-store 可通过 `financeex.storage.api-store.forward-cookie=true`
+允许上传入口 Cookie 作为下游 upload HTTP header 透传；普通对象存储实现不使用该 Cookie，
 且 Cookie 不进入 multipart form、文档元数据或前端响应。
 
 ## 分层架构
@@ -615,8 +615,7 @@ flowchart TB
         SubAgentHttp["SubAgent HTTP Adapter"]
         RelayRuntime["RelayAgentRuntime Provider"]
         RelayHttp["RelayStreamHttpRuntimeAdapter"]
-        Storage["Local / Huawei OBS S3 ObjectStorage"]
-        HttpDocumentProvider["HTTP DocumentProviderAdapter"]
+        Storage["Local / Huawei OBS S3 / api-store DocumentStorage"]
         DomainAgentHttp["DomainAgent HTTP Adapter"]
     end
 
@@ -733,7 +732,7 @@ stop 语义：
 - Relay HTTP Streamable adapter：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`、`financeex.agent-runtime.stop-path`
 - Relay adapter 选择：`financeex.agent-runtime.relay.adapter`，默认 `relay-stream-http`；配置为 `relay-websocket` 时启用下游 Relay WebSocket 普通问答 adapter。
 - Relay WebSocket adapter：`financeex.agent-runtime.relay.websocket.url`、`app-mode`、`connect-timeout`、`config-handshake-timeout`、`max-run-duration`、`heartbeat-interval`、`interrupt-ack-timeout`、`idle-timeout`、`max-frame-bytes`
-- 下游 Cookie 透传：`financeex.agent-runtime.forward-cookie.enabled`、`max-length`、`allowed-adapters` 控制 run/stop 到 Relay Runtime 的 Cookie 透传；默认允许 `relay-stream-http` 和 `relay-websocket`。DomainAgent chat/cancel 也使用入口 Cookie 内存快照。文档 provider 上传另由 `financeex.document.forward-cookie-max-length` 与 `financeex.documents.providers.entries.{provider}.forward-cookie` 控制，默认只有 `domain-agent` 开启 upload Cookie 透传。
+- 下游 Cookie 透传：`financeex.agent-runtime.forward-cookie.enabled`、`max-length`、`allowed-adapters` 控制 run/stop 到 Relay Runtime 的 Cookie 透传；默认允许 `relay-stream-http` 和 `relay-websocket`。DomainAgent chat/cancel 也使用入口 Cookie 内存快照。文档上传另由 `financeex.document.forward-cookie-max-length` 与 `financeex.storage.api-store.forward-cookie` 控制，默认关闭 api-store upload Cookie 透传。
 - 流式事件粒度：当前生产版本不合并 `message.delta`，按下游标准事件原粒度写入事件表并推送实时通道，避免 ChatService 内部背压误中断 run。`financeex.chat-stream.delta-coalesce-*` 仅作为后续 demand-aware 合并器兼容预留；`financeex.chat-stream.turn-heartbeat-interval` 只控制传输层 heartbeat，不影响事件表。
 - Servlet WebSocket 发送治理：`financeex.websocket.servlet-send-executor-core-size`、`servlet-send-executor-max-size`、`servlet-send-queue-capacity`、`servlet-send-queue-max-bytes`、`servlet-send-use-virtual-threads`。默认使用有界平台线程池和单连接有界队列；JDK 21 虚拟线程可按企业压测结果开启。
 - DomainAgent 大对象分片：`financeex.domain-agent.max-pending-frame-bytes` 限制尚未识别完成的单个 domain-agent frame 缓冲，`financeex.domain-agent.max-fragment-bytes` 限制 `runtime.card/runtime.reference/runtime.progress` 分片 payload 的单片大小。该机制避免 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 跨网络 chunk 时被误解析为 invalid-json，也避免为了完整 JSON 解析无限占用 JVM 内存。分片状态通过 `payload.fragment/itemId/delta/complete` 表达，不新增顶层 `.delta/.completed` 事件类型。

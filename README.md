@@ -82,7 +82,7 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 仓库提供独立本地联调台 `local-test-frontend/`。联调台通过 Node 代理访问后端，支持在页面中按 Postman 风格配置 `Cookie`、`Authorization`、`X-*` 等企业鉴权请求头；代理会在 HTTP、fetch Event Resume、文件下载和 WebSocket 握手时统一注入这些请求头。浏览器自身不会、也不能直接手写 `Cookie` 请求头或 WebSocket 自定义请求头。
 
 当 `POST /api/v1/ex/chat/runs`、`POST /api/v1/ex/chat/runs/{runId}/stop` 或 `POST /api/v1/ex/documents`
-携带标准 `Cookie` 请求头时，ChatService 会在请求入口捕获一次，并只作为内存快照透传给可信下游 adapter：Relay streamable HTTP、Relay WebSocket、DomainAgent chat/cancel，以及显式配置 `forward-cookie=true` 的 DomainAgent 文档 upload provider。Cookie 不会写入 `metadata_json`、消息、事件、日志、前端响应、multipart form 或下游请求体。普通 default-storage 对象存储上传不会透传 Cookie。
+携带标准 `Cookie` 请求头时，ChatService 会在请求入口捕获一次，并只作为内存快照透传给可信下游 adapter：Relay streamable HTTP、Relay WebSocket、DomainAgent chat/cancel，以及显式配置 `financeex.storage.api-store.forward-cookie=true` 的 api-store 文档上传。Cookie 不会写入 `metadata_json`、消息、事件、日志、前端响应、multipart form 或下游请求体。普通 local/huawei-s3 对象存储上传不会透传 Cookie。
 
 外部 HTTP 服务调用还支持统一的集成服务鉴权请求头防腐层。`financeex.integration-auth.enabled=false`
 时不注入任何鉴权头；开启后，`AuthHeaderProviderRegistry` 会按 `serviceCode` 选择 provider。
@@ -130,8 +130,8 @@ tenant/user。接入企业身份源时，只需替换该防腐层的身份读取
 同一个 ChatService 会话下 Relay 只允许首次进入 Runtime 时 `new`，后续均 `resume`；如果业务需要全新的 Relay 会话，应创建新的 ChatService 会话。
 
 `metadata.selectedDomainAgentId` 用于前端显式选择财经领域 DomainAgent 的场景。该字段存在且非空时，本轮 run 进入
-`DOMAIN_AGENT` 路由，直接调用配置化 DomainAgent chat 接口，并使用文档库中 `targetProvider=domain-agent`
-上传后保存的 provider 文档元数据组装 `sceneParam.docList`。前端可以在 `metadata.domainAgent.sceneParam`
+`DOMAIN_AGENT` 路由，直接调用配置化 DomainAgent chat 接口，并使用文档库中通过 `api-store`
+上传后保存的 `providerDocument.docId` 组装 `sceneParam.docList`。前端可以在 `metadata.domainAgent.sceneParam`
 传入其他业务扩展字段，但 `docList` 始终由后端可信生成并覆盖，避免伪造文档引用。该路径不会读取或创建 RuntimeBinding，
 避免把不具备稳定 ChatService 多轮契约的 DomainAgent 误当成 Relay Runtime 续接会话。
 显式选择的 DomainAgent 会作为 `runtime.metadata` 写入事件流，并在历史 assistant 的 `parts` 中返回；
@@ -302,9 +302,9 @@ export FINANCEEX_RELAY_AGENT_STOP_PATH=/v1/agent/runs/{runId}/stop
 export FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ENABLED=true
 export FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_MAX_LENGTH=8192
 export FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ALLOWED_ADAPTERS=relay-stream-http,relay-websocket
-# domain-agent 文档 provider upload 可单独开启 Cookie 请求头透传
+# 文档上传入口 Cookie 最大长度；api-store 可单独开启 Cookie 请求头透传
 export FINANCEEX_DOCUMENT_FORWARD_COOKIE_MAX_LENGTH=8192
-export FINANCEEX_DOMAIN_AGENT_DOCUMENT_FORWARD_COOKIE_ENABLED=true
+export FINANCEEX_API_STORE_FORWARD_COOKIE_ENABLED=false
 ```
 
 ### MVC 生产治理配置
@@ -425,27 +425,25 @@ mvn spring-boot:run
 
 ## 文档存储
 
-文档能力分为“文档库资产”和“provider 托管内容”两层：前端始终把本地文件上传到
-FinanceEXChatService 统一后端，后端再根据 `targetProvider` 选择对象存储、DomainAgent 或未来领域
-Agent 的文档 provider adapter。
+文档能力分为“文档库资产”和“存储实现”两层：前端始终把本地文件上传到
+FinanceEXChatService 统一后端，后端只根据 `financeex.storage.provider` 选择 `local`、`huawei-s3`
+或 `api-store`。
 数据库的 `fin_ex_uploaded_document_t` 保存文档库元数据，聊天请求只引用 `documentId`，不会把文件正文放进消息体。
 上传接口对外只有一条 `POST /api/v1/ex/documents`，服务端会按启动模式自动选择适配器：
-Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共用同一套临时落盘和 provider 上传逻辑。
-不传 `targetProvider` 时走默认 `default-storage`，即当前 S3/OBS/local 对象存储；传
-`targetProvider=domain-agent` 时会转发 DomainAgent upload 接口，并把 DomainAgent 返回的 docId 或 url、docName、docSize
-等写入统一文档库 `metadataJson.providerDocument`。如果该 provider 配置 `forward-cookie=true`，上传入口捕获到的
-Cookie 会作为下游 upload HTTP header 透传，用于 DomainAgent 文件服务的企业鉴权；Cookie 不会进入 form 字段或文档库元数据。
-传 `targetProvider=s3-upload` 时会转发外部 `/uploadFile` multipart 接口，并把返回的
-`docId/docName/url/docSize/docRelativePath/docStatus/fileSize/message/error` 等字段写入统一文档库；该 provider
-默认关闭，可通过 `FINANCEEX_S3_UPLOAD_DOCUMENT_PROVIDER_ENABLED=true` 和 `FINANCEEX_S3_UPLOAD_BASE_URL` 启用。
+Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共用同一套临时落盘和存储逻辑。
+`local` 和 `huawei-s3` 会把文件写入本服务对象存储；`api-store` 会转发新文档上传接口
+`/fina/agent/fileOperate/upload`，固定发送 multipart `file`，并在 `metadata.skillId` 有值时额外发送
+`skillId`。下游返回的 `docId/docName/url/docSize/docRelativePath/docStatus/fileSize/serverName/docVersion/message/error`
+等字段会写入统一文档库 `metadataJson.providerDocument`。如果 `financeex.storage.api-store.forward-cookie=true`，
+上传入口捕获到的 Cookie 会作为下游 upload HTTP header 透传；Cookie 不会进入 form 字段或文档库元数据。
 文档接口响应里的 `metadataJson` 会解析为 JSON object，便于前端直接读取；数据库表字段仍保存 JSON 字符串。
-如果 DomainAgent 上传响应没有 `docId` 但返回了 `url`，文档库仍视为上传成功：`objectKey` 保存
-`domain-agent-url:{sha256(url)}` 这种短稳定定位符，完整 URL 只保存在 `metadataJson.providerDocument.url`。
-这类 URL-only 文档可用于文档库展示和下载/跳转扩展，但第一版不会自动进入 DomainAgent 指定调用 `sceneParam.docList`。
+如果 api-store 响应没有 `docId` 但返回了 `url`，文档库仍视为上传成功：`objectKey` 保存
+`api-store-url:{sha256(url)}` 这种短稳定定位符，完整 URL 只保存在 `metadataJson.providerDocument.url`。
+这类 URL-only 文档可用于文档库展示和跳转扩展，但不能进入 DomainAgent 指定调用 `sceneParam.docList`。
 
 文档接口：
 
-- `POST /api/v1/ex/documents`：上传本地文件并登记到文档库；可选 multipart 字段包括 `targetProvider`、`domainAgentId`、`metadata`。
+- `POST /api/v1/ex/documents`：上传本地文件并登记到文档库；可选 multipart 字段包括 `sessionId`、`metadata`。
 - `GET /api/v1/ex/documents?sessionId=...&limit=20&cursor=...`：分页查询当前用户文档库，`sessionId` 可选。
 - `GET /api/v1/ex/documents/{documentId}`：查询单个文档。
 - `PATCH /api/v1/ex/documents/{documentId}`：更新文档展示名或扩展元数据。
@@ -469,17 +467,18 @@ Cookie 会作为下游 upload HTTP header 透传，用于 DomainAgent 文件服�
 
 服务端会在进入 Runtime 前回查文档库，补齐可信的文件名、MIME、大小、来源和 tokenSize，并校验文档归属和状态。
 
-指定 DomainAgent 时，前端应先使用同一个上传接口并传 `targetProvider=domain-agent`。服务端会调用配置中的
-DomainAgent upload path，把返回的 `docid/docname/docsize/levelCode/serverName/version` 等 allowlist 字段
-保存到 `metadataJson.providerDocument`；随后 `/chat/runs.metadata.selectedDomainAgentId` 会触发 DomainAgent chat
-adapter，并只允许引用这些 domain-agent provider 文档。普通 default-storage 文档不会被自动转传给 DomainAgent。
+指定 DomainAgent 时，前端应先在 `metadata.skillId` 中放入对应技能 ID 并上传文件。若后端
+`financeex.storage.provider=api-store`，服务端会把该 `skillId` 透传给下游新文档接口，并把返回的
+`docId/docName/docSize/serverName/docVersion` 等字段保存到 `metadataJson.providerDocument`；随后
+`/chat/runs.metadata.selectedDomainAgentId` 会触发 DomainAgent chat adapter，并只允许引用带 `docId`
+的文档。普通 local/huawei-s3 文档或 api-store URL-only 文档不会被自动转传给 DomainAgent。
 
-外部 S3 upload API 接入示例：
+api-store 接入示例：
 
 ```bash
-export FINANCEEX_S3_UPLOAD_DOCUMENT_PROVIDER_ENABLED=true
-export FINANCEEX_S3_UPLOAD_BASE_URL=https://s3-upload.example.com
-export FINANCEEX_S3_UPLOAD_PATH=/uploadFile
+export FINANCEEX_STORAGE_PROVIDER=api-store
+export FINANCEEX_API_STORE_BASE_URL=https://gce-b7.mfg.huawei.com
+export FINANCEEX_API_STORE_UPLOAD_PATH=/fina/agent/fileOperate/upload
 ```
 
 前端上传时：
@@ -487,7 +486,7 @@ export FINANCEEX_S3_UPLOAD_PATH=/uploadFile
 ```bash
 curl -X POST http://localhost:8080/api/v1/ex/documents \
   -F "file=@./report.pdf" \
-  -F "targetProvider=s3-upload"
+  -F 'metadata={"skillId":"d3334be5e4c241ebb30b40d039919787"}'
 ```
 
 默认使用本地文件系统：

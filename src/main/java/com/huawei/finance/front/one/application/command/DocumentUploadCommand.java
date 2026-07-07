@@ -12,10 +12,8 @@ import java.io.InputStream;
  * @param contentType 文件 MIME 类型，由接口层或浏览器上传协议提供。
  * @param sizeBytes 文件字节大小。
  * @param inputStream 文件内容输入流，由应用服务负责读取并关闭。
- * @param targetProvider 目标文档 provider；为空时使用默认对象存储 provider。
- * @param domainAgentId 上传时关联的 DomainAgent 标识，可为空，仅由需要领域 Agent 上下文的 provider 使用。
  * @param metadataJson 上传扩展元数据 JSON，可为空；只用于审计和 provider adapter 参数。
- * @param forwardHeaders 请求入口捕获的 Cookie 等转发头快照；仅用于 provider 出站请求头，不能进入 form 或 metadata。
+ * @param forwardHeaders 请求入口捕获的 Cookie 等转发头快照；仅用于出站存储请求头，不能进入 form 或 metadata。
  */
 public record DocumentUploadCommand(
         String sessionId,
@@ -23,8 +21,6 @@ public record DocumentUploadCommand(
         String contentType,
         long sizeBytes,
         InputStream inputStream,
-        String targetProvider,
-        String domainAgentId,
         String metadataJson,
         @JsonIgnore RuntimeForwardHeaders forwardHeaders
 ) {
@@ -37,16 +33,16 @@ public record DocumentUploadCommand(
      */
     public DocumentUploadCommand(String sessionId, String originalFilename, String contentType, long sizeBytes,
                                  InputStream inputStream) {
-        this(sessionId, originalFilename, contentType, sizeBytes, inputStream, null, null, null,
+        this(sessionId, originalFilename, contentType, sizeBytes, inputStream, null,
                 RuntimeForwardHeaders.empty());
     }
 
     /**
-     * 兼容不需要 Cookie 透传的 provider 上传调用。
+     * 兼容不需要 Cookie 透传的上传调用。
      */
     public DocumentUploadCommand(String sessionId, String originalFilename, String contentType, long sizeBytes,
-                                 InputStream inputStream, String targetProvider, String domainAgentId, String metadataJson) {
-        this(sessionId, originalFilename, contentType, sizeBytes, inputStream, targetProvider, domainAgentId, metadataJson,
+                                 InputStream inputStream, String metadataJson) {
+        this(sessionId, originalFilename, contentType, sizeBytes, inputStream, metadataJson,
                 RuntimeForwardHeaders.empty());
     }
 }

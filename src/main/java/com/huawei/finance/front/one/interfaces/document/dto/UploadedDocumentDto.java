@@ -14,8 +14,8 @@ import java.time.Instant;
  * @param userId 文档所属用户标识。
  * @param sessionId 文档关联的会话标识，可为空。
  * @param originalName 用户可见文件名。
- * @param bucket provider 位置字段；对象存储表示 bucket，HTTP provider 表示 providerCode。
- * @param objectKey provider 稳定定位符；DomainAgent URL 上传时是 domain-agent-url:{sha256(url)}。
+ * @param bucket 存储位置字段；对象存储表示 bucket，api-store 固定为 api-store。
+ * @param objectKey 存储稳定定位符；api-store URL 上传时是 api-store-url:{sha256(url)}。
  * @param contentType 文件 MIME 类型。
  * @param sizeBytes 文件大小，单位字节。
  * @param status 文档状态，例如 AVAILABLE、PROCESSING、FAILED、DELETED。

@@ -1,8 +1,8 @@
-package com.huawei.finance.front.one.infrastructure.storage;
+package com.huawei.finance.front.one.infrastructure.storage.object;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.huawei.finance.front.one.application.integration.document.DocumentProviderAdapter;
-import com.huawei.finance.front.one.application.integration.document.DocumentProviderUploadRequest;
+import com.huawei.finance.front.one.application.integration.document.DocumentStorage;
+import com.huawei.finance.front.one.application.integration.document.DocumentStorageUploadRequest;
 import com.huawei.finance.front.one.application.integration.document.ObjectStorage;
 import com.huawei.finance.front.one.application.service.runtime.WorkloadConcurrencyLimiter;
 import com.huawei.finance.front.one.domain.document.DocumentStatus;
@@ -14,34 +14,31 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 
 /**
- * 默认对象存储文档 provider。
+ * local/huawei-s3 对象存储文档实现。
  *
- * <p>该 adapter 承接原有 S3/OBS/local object storage 上传能力。它是统一文档 provider 模型下的
- * default-storage 实现，保证前端不传 targetProvider 时行为保持不变。</p>
+ * <p>该实现承接原有对象存储上传能力。是否使用 local 或 huawei-s3 由底层
+ * {@link ObjectStorage} bean 根据 {@code financeex.storage.provider} 决定。</p>
  */
 @Component
-public class ObjectStorageDocumentProviderAdapter implements DocumentProviderAdapter {
+@ConditionalOnExpression("'${financeex.storage.provider:local}' != 'api-store'")
+public class ObjectStorageDocumentStorage implements DocumentStorage {
     private final ObjectStorage storage;
     private final WorkloadConcurrencyLimiter concurrencyLimiter;
     private final ObjectMapper objectMapper;
 
-    public ObjectStorageDocumentProviderAdapter(ObjectStorage storage, WorkloadConcurrencyLimiter concurrencyLimiter,
-                                                ObjectMapper objectMapper) {
+    public ObjectStorageDocumentStorage(ObjectStorage storage, WorkloadConcurrencyLimiter concurrencyLimiter,
+                                        ObjectMapper objectMapper) {
         this.storage = storage;
         this.concurrencyLimiter = concurrencyLimiter;
         this.objectMapper = objectMapper;
     }
 
     @Override
-    public boolean supportsType(String providerType) {
-        return "object-storage".equalsIgnoreCase(providerType);
-    }
-
-    @Override
-    public UploadedDocument upload(DocumentProviderUploadRequest request) {
+    public UploadedDocument upload(DocumentStorageUploadRequest request) {
         StoredObject object;
         try (WorkloadConcurrencyLimiter.Permit ignored = concurrencyLimiter.acquireDocumentStorage()) {
             object = putObjectClosingStream(request);
@@ -58,29 +55,27 @@ public class ObjectStorageDocumentProviderAdapter implements DocumentProviderAda
                 object.contentType(),
                 object.sizeBytes(),
                 DocumentStatus.AVAILABLE.name(),
-                request.provider().getSource(),
+                "LOCAL_UPLOAD",
                 null,
-                metadataJson(request.providerCode(), request.command().sessionId(), request.command().metadataJson()),
+                metadataJson(storage.provider(), request.command().sessionId(), request.command().metadataJson()),
                 now,
                 now
         );
     }
 
     @Override
-    public Optional<StoredObjectContent> download(UploadedDocument document,
-                                                  com.huawei.finance.front.one.application.config.DocumentProviderProperties.ProviderEntry provider) {
+    public Optional<StoredObjectContent> download(UploadedDocument document) {
         try (WorkloadConcurrencyLimiter.Permit ignored = concurrencyLimiter.acquireDocumentStorage()) {
             return Optional.of(storage.getObject(document.bucket(), document.objectKey()));
         }
     }
 
     @Override
-    public boolean downloadSupported(UploadedDocument document,
-                                     com.huawei.finance.front.one.application.config.DocumentProviderProperties.ProviderEntry provider) {
+    public boolean downloadSupported(UploadedDocument document) {
         return true;
     }
 
-    private StoredObject putObjectClosingStream(DocumentProviderUploadRequest request) {
+    private StoredObject putObjectClosingStream(DocumentStorageUploadRequest request) {
         try (InputStream inputStream = request.command().inputStream()) {
             return storage.putObject(
                     request.user().tenantId(),
@@ -94,11 +89,10 @@ public class ObjectStorageDocumentProviderAdapter implements DocumentProviderAda
         }
     }
 
-    private String metadataJson(String providerCode, String sessionId, String uploadMetadata) {
+    private String metadataJson(String storageProvider, String sessionId, String uploadMetadata) {
         try {
             Map<String, Object> metadata = new LinkedHashMap<>();
-            metadata.put("providerCode", providerCode);
-            metadata.put("targetProvider", providerCode);
+            metadata.put("storageProvider", storageProvider);
             metadata.put("sessionId", blankToNull(sessionId));
             metadata.put("capabilities", Map.of("download", true, "status", false));
             if (uploadMetadata != null && !uploadMetadata.isBlank()) {

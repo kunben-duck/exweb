@@ -26,7 +26,7 @@ import reactor.core.scheduler.Schedulers;
  *
  * <p>上传协议在不同 Spring 启动模式下不同：Servlet/MVC 使用 {@link MultipartFile}，
  * Reactive WebFlux 使用 {@link FilePart}。本组件把两种入口统一收敛为临时文件，再交给
- * {@link DocumentFacade} 根据 targetProvider 选择文档 provider，避免 Controller 分叉出两套业务逻辑。</p>
+ * {@link DocumentFacade}。具体存储方式只由后端配置选择，避免前端参与 provider 路由。</p>
  *
  * <p>用户身份只在请求入口解析一次，并在切换到 {@code boundedElastic} 执行文件和数据库阻塞操作前
  * 固化为不可变 {@link UserContext}，便于后续企业 ThreadLocal 权限框架接入。</p>
@@ -136,13 +136,13 @@ public class DocumentUploadSupport {
             }
             InputStream inputStream = Files.newInputStream(tempFile.path(), StandardOpenOption.READ);
             return new DocumentUploadCommand(context.sessionId(), tempFile.originalFilename(), tempFile.contentType(),
-                    size, inputStream, context.targetProvider(), context.domainAgentId(), context.metadataJson(),
+                    size, inputStream, context.metadataJson(),
                     tempFile.forwardHeaders());
         }).subscribeOn(Schedulers.boundedElastic()).flatMap(command -> facade.upload(user, command));
     }
 
     private DocumentUploadContext emptyContext() {
-        return new DocumentUploadContext(null, null, null, null, null);
+        return new DocumentUploadContext(null, null, null);
     }
 
     private Mono<Void> deleteTempFile(Path path) {

@@ -163,7 +163,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 切换历史版本 | 从当前消息 `versionInfo.variants` 取目标项 -> `GET /messages?leafMessageId={switchLeafMessageId}` 重渲染 -> 后台 `POST /path` 保存选择 | `versionInfo.currentIndex/total`、`switchLeafMessageId`、`currentLeafMessageId` | 先刷新展示路径，不创建 run，不调用 Runtime；`/path` 只负责持久化当前 leaf |
 | 从消息新建分支 | `POST /sessions/{sessionId}/branches(sourceMessageId)` -> 选择新 `sessionId` -> `GET /messages`、`GET /stream-status` | `sourceMessageId`、新 `sessionId`、`sourceSessionId/sourceMessageId` | 分支快照消息 `locked=true`，禁用编辑、删除和重新生成 |
 | 上传文件并作为附件提问 | `POST /documents(file, sessionId)` -> 等状态 `AVAILABLE` -> `POST /chat/runs(attachments[{documentId}])` | `documentId`、`sessionId`、`attachments[].documentId` | 附件不是消息类型；PROCESSING/FAILED/DELETED 不可作为聊天附件 |
-| 选中 DomainAgent 并带文档提问 | `POST /documents(file,targetProvider=domain-agent,domainAgentId)` -> `POST /chat/runs(metadata.selectedDomainAgentId,attachments)` | `documentId`、`metadata.selectedDomainAgentId`、`metadata.domainAgent` | DomainAgent 路由不创建 RuntimeBinding；附件必须来自 `domain-agent` provider |
+| 选中 DomainAgent 并带文档提问 | `POST /documents(file,metadata.skillId)` -> `POST /chat/runs(metadata.selectedDomainAgentId,attachments)` | `documentId`、`metadata.selectedDomainAgentId`、`metadata.domainAgent` | DomainAgent 路由不创建 RuntimeBinding；附件必须是 api-store 带 skillId 上传并返回 docId 的文档 |
 | 点赞/点踩/取消 | 历史消息中找到 assistant `messageId` -> `POST /messages/{messageId}/feedback`；再次点击已选按钮 -> `DELETE /feedback` | `messageId`、可选 `runId`、`feedback.rating/status` | 历史消息 `feedback` 非空时高亮；取消后返回 `status=CANCELLED`，历史消息再查为 `feedback=null` |
 | 会话归档/恢复/删除 | 单个：`POST /archive`、`POST /restore`、`DELETE /sessions/{sessionId}`；批量：`DELETE /sessions` body `sessionIds[]` | `sessionId`、`sessionIds[]` | 删除是软删除；有 active run 时后端会先主动取消 run |
 | 文档库管理 | `GET /documents` -> `GET /documents/{documentId}`/`status`/`preview-url`/`download`/`PATCH`/`DELETE` | `documentId`、`cursor`、`status` | 列表默认不返回 DELETED；下载和预览只允许 AVAILABLE |
@@ -258,7 +258,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`targetProvider` 可选，`domainAgentId` 可选，`metadata` 可选 JSON 字符串；Header 可带标准 `Cookie`。 | `UploadedDocumentDto`。 | 不传 `targetProvider` 使用 default-storage；`targetProvider=domain-agent` 时后端转发配置化 DomainAgent upload 接口；`targetProvider=s3-upload` 时后端转发外部 `/uploadFile` S3 上传接口。只有 provider 配置 `forward-cookie=true` 时，入口 Cookie 才会作为下游 upload HTTP header 透传。 |
+| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`metadata` 可选 JSON 字符串；Header 可带标准 `Cookie`。 | `UploadedDocumentDto`。 | 存储方式只由后端 `financeex.storage.provider=local/huawei-s3/api-store` 决定。api-store 模式下从 `metadata.skillId` 读取并透传给下游；只有 `financeex.storage.api-store.forward-cookie=true` 时入口 Cookie 才会作为下游 upload HTTP header 透传。 |
 | `GET /api/v1/ex/documents` | 文档库列表或最近文档选择器。 | Query：`sessionId` 可选，`limit` 默认 20，`cursor` 可选。 | `DocumentLibraryPageDto`：`items[]`、`nextCursor`。 | 默认不返回 `DELETED` 文档。 |
 | `GET /api/v1/ex/documents/{documentId}` | 查询文档详情。 | Path：`documentId`。 | `UploadedDocumentDto`。 | 可查看 `AVAILABLE/PROCESSING/FAILED` 等非删除状态。 |
 | `PATCH /api/v1/ex/documents/{documentId}` | 修改展示文件名或扩展元数据。 | Path：`documentId`；JSON body：`originalName`、`metadataJson`。 | `UploadedDocumentDto`。 | 空字段表示保留原值。 |
@@ -522,9 +522,9 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 | `sizeBytes` | 文件大小 |
 | `status` | `AVAILABLE`、`PROCESSING`、`FAILED`、`DELETED`；只有 `AVAILABLE` 可下载、预览和作为聊天附件 |
 | `source` | 来源，例如 `LOCAL_UPLOAD`、`LIBRARY`、`CONNECTOR`、`DOMAIN_AGENT_UPLOAD`、`S3_UPLOAD` |
-| `bucket` | provider 位置字段；default-storage 表示对象存储 bucket，HTTP provider 表示 providerCode |
-| `objectKey` | provider 稳定定位符；default-storage 表示对象 key，domain-agent 可为 DomainAgent docId 或 `domain-agent-url:{sha256(url)}` |
-| `metadataJson` | JSON object/null；provider 扩展元数据。domain-agent 文档的 `providerDocument` 是组装 DomainAgent `sceneParam.docList` 的事实源。数据库内部仍以 JSON 字符串保存，但响应会解析成对象返回 |
+| `bucket` | 存储位置字段；local/huawei-s3 表示对象存储 bucket，api-store 固定为 `api-store` |
+| `objectKey` | 存储稳定定位符；local/huawei-s3 表示对象 key，api-store 可为下游 `docId` 或 `api-store-url:{sha256(url)}` |
+| `metadataJson` | JSON object/null；存储扩展元数据。api-store 文档的 `providerDocument` 是组装 DomainAgent `sceneParam.docList` 的事实源。数据库内部仍以 JSON 字符串保存，但响应会解析成对象返回 |
 | `tokenSize` | 解析后 token 数，可为空 |
 | `createdAt` / `updatedAt` | 创建和更新时间 |
 
@@ -1820,16 +1820,15 @@ curl -X POST http://localhost:8080/api/v1/ex/documents \
 `file` 放文件内容，`sessionId` 可选；后端在 Servlet/MVC 下绑定为 `MultipartFile`，在纯
 WebFlux 下绑定为 `FilePart`，前端不需要区分。
 
-当用户在前端选择 DomainAgent 技能，并且该技能要求先把文档上传到 DomainAgent 文件服务时，仍然使用同一个
-`POST /api/v1/ex/documents` 接口，只是增加 provider 上下文字段：
+当后端配置 `financeex.storage.provider=api-store` 时，仍然使用同一个
+`POST /api/v1/ex/documents` 接口。前端不再传 `targetProvider`；如果要让下游上传到企业 EDM，
+把技能 ID 放到 `metadata.skillId`：
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/ex/documents \
   -F "file=@./invoice.pdf" \
   -F "sessionId=session_xxx" \
-  -F "targetProvider=domain-agent" \
-  -F "domainAgentId=skill_tax_opinion" \
-  -F 'metadata={"source":"skill-picker"}'
+  -F 'metadata={"skillId":"skill_tax_opinion","source":"skill-picker"}'
 ```
 
 字段说明：
@@ -1838,13 +1837,11 @@ curl -X POST http://localhost:8080/api/v1/ex/documents \
 | --- | --- | --- |
 | `file` | 是 | 用户选择的本地文件内容。 |
 | `sessionId` | 否 | 上传时关联的会话；为空时作为用户文档库资产保存。 |
-| `targetProvider` | 否 | 目标文档 provider；为空使用 `default-storage`，选中 DomainAgent 上传时使用 `domain-agent`。 |
-| `domainAgentId` | 否 | 上传时关联的 DomainAgent ID；provider adapter 可把它透传给下游上传接口或用于审计。 |
-| `metadata` | 否 | 上传上下文 JSON 字符串；不要放 Cookie、token 等敏感信息。 |
+| `metadata` | 否 | 上传上下文 JSON 字符串；api-store 模式下 `metadata.skillId` 会透传为下游 multipart `skillId`，不要放 Cookie、token 等敏感信息。 |
 
-Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解析。只有当 `targetProvider=domain-agent`
-且 provider 配置 `forward-cookie=true` 时，后端才会把该 Cookie 作为 DomainAgent upload HTTP header
-透传给下游；普通 `default-storage` 上传不会透传。Cookie 不会进入 multipart form、`metadata`、
+Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解析。只有当存储方式为 `api-store`
+且 `financeex.storage.api-store.forward-cookie=true` 时，后端才会把该 Cookie 作为 upload HTTP header
+透传给下游；普通 `local/huawei-s3` 上传不会透传。Cookie 不会进入 multipart form、`metadata`、
 `UploadedDocumentDto.metadataJson` 或响应体。
 
 响应中的 `id` 就是聊天附件的 `documentId`：
@@ -1859,7 +1856,7 @@ Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解
   "status": "AVAILABLE",
   "source": "LOCAL_UPLOAD",
   "metadataJson": {
-    "providerCode": "default-storage",
+    "storageProvider": "local",
     "capabilities": {
       "download": true,
       "status": false
@@ -1871,47 +1868,33 @@ Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解
 }
 ```
 
-`targetProvider=domain-agent` 时，响应仍然是同一个 `UploadedDocumentDto`，但 `source` 为
-`DOMAIN_AGENT_UPLOAD`，`bucket` 语义上是 providerCode。若 DomainAgent 返回 `docid`，`objectKey`
-为该 docId；若只返回 `url`，`objectKey` 为 `domain-agent-url:{sha256(url)}`，完整 URL 放在
-`metadataJson.providerDocument.url`。
-
-`targetProvider=s3-upload` 时，后端会调用配置中的外部 `/uploadFile` multipart 接口。该接口响应字段按
-`docId/docName/url/docSize/docRelativePath/docStatus/fileSize/message/error` 映射到统一文档库：
+api-store 不带 `metadata.skillId` 时，下游上传到 S3，通常返回 `url`：
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/ex/documents \
-  -F "file=@./report.pdf" \
-  -F "targetProvider=s3-upload"
+  -F "file=@./report.pdf"
 ```
 
-响应中的 `source` 为 `S3_UPLOAD`，`bucket` 为 providerCode `s3-upload`，`objectKey` 为下游返回的
-`docId`；如果下游只返回 `url`，则 `objectKey` 会保存为 `domain-agent-url:{sha256(url)}`，完整 URL 位于
-`metadataJson.providerDocument.url`。
+响应中的 `source` 为 `S3_UPLOAD`，`bucket` 为 `api-store`；如果下游只返回 `url`，则 `objectKey`
+会保存为 `api-store-url:{sha256(url)}`，完整 URL 位于 `metadataJson.providerDocument.url`。
 
-`s3-upload` 文档响应示例：
+api-store S3 文档响应示例：
 
 ```json
 {
-  "id": "doc_s3_xxx",
+  "id": "doc_api_s3_xxx",
   "originalName": "report.pdf",
   "status": "AVAILABLE",
   "source": "S3_UPLOAD",
-  "bucket": "s3-upload",
-  "objectKey": "s3-doc-1",
+  "bucket": "api-store",
+  "objectKey": "api-store-url:8c195f0a...",
   "metadataJson": {
-    "providerCode": "s3-upload",
+    "providerCode": "api-store",
+    "storageProvider": "api-store",
     "providerDocument": {
-      "providerLocatorType": "DOC_ID",
-      "docId": "s3-doc-1",
+      "providerLocatorType": "URL",
       "docName": "report.pdf",
-      "url": "https://s3.example/report.pdf",
-      "docSize": 1024,
-      "docRelativePath": "/2026/07/report.pdf",
-      "docStatus": 1,
-      "fileSize": 1024,
-      "message": "success",
-      "error": 0
+      "url": "https://s3.example/report.pdf"
     },
     "capabilities": {
       "download": false,
@@ -1921,7 +1904,11 @@ curl -X POST http://localhost:8080/api/v1/ex/documents \
 }
 ```
 
-docId 模式的 `metadataJson.providerDocument` 示例：
+api-store 带 `metadata.skillId` 时，下游上传到企业 EDM，通常返回 `docId`。这种文档的 `source`
+为 `DOMAIN_AGENT_UPLOAD`，可在 `selectedDomainAgentId` run 中作为附件引用；DomainAgent `docList`
+由后端从 `metadataJson.providerDocument.docId` 可信生成。
+
+EDM docId 模式的 `metadataJson.providerDocument` 示例：
 
 ```json
 {
@@ -1929,16 +1916,19 @@ docId 模式的 `metadataJson.providerDocument` 示例：
   "originalName": "invoice.pdf",
   "status": "AVAILABLE",
   "source": "DOMAIN_AGENT_UPLOAD",
+  "bucket": "api-store",
+  "objectKey": "domain_doc_1",
   "metadataJson": {
-    "providerCode": "domain-agent",
+    "providerCode": "api-store",
+    "storageProvider": "api-store",
+    "skillId": "skill_tax_opinion",
     "providerDocument": {
       "providerLocatorType": "DOC_ID",
       "docId": "domain_doc_1",
       "docName": "invoice.pdf",
       "docSize": 19800,
-      "levelCode": "IP",
       "serverName": "shenzhen",
-      "version": "V1"
+      "docVersion": "V1"
     },
     "capabilities": {
       "download": false,
@@ -1947,35 +1937,6 @@ docId 模式的 `metadataJson.providerDocument` 示例：
   }
 }
 ```
-
-URL 模式的 `metadataJson.providerDocument` 示例：
-
-```json
-{
-  "id": "doc_domain_agent_url_xxx",
-  "originalName": "invoice.pdf",
-  "status": "AVAILABLE",
-  "source": "DOMAIN_AGENT_UPLOAD",
-  "objectKey": "domain-agent-url:6a1b...",
-  "metadataJson": {
-    "providerCode": "domain-agent",
-    "providerDocument": {
-      "providerLocatorType": "URL",
-      "docId": null,
-      "url": "https://domain.example/files/invoice.pdf",
-      "docName": "invoice.pdf",
-      "docSize": 19800
-    },
-    "capabilities": {
-      "download": false,
-      "status": false
-    }
-  }
-}
-```
-
-URL-only 文档表示文档库上传成功，但当前不会自动作为 DomainAgent 指定调用 `sceneParam.docList` 附件使用。
-如果后续要在 `selectedDomainAgentId` run 中引用该文档，需要按对应 domainAgentId 重新上传并拿到 DomainAgent `docId`。
 
 查询文档库和文档状态：
 
@@ -2065,7 +2026,7 @@ curl -OJ http://localhost:8080/api/v1/ex/documents/doc_xxx/download
 }
 ```
 
-DomainAgent 路由不会读取或创建 RuntimeBinding，也不会调用用例库/意图服务。它只用于前端明确选择 DomainAgent 的场景；如果附件不是 `domain-agent` provider 上传的文档，后端会拒绝本轮 run，要求前端先按 domain-agent provider 重新上传。
+DomainAgent 路由不会读取或创建 RuntimeBinding，也不会调用用例库/意图服务。它只用于前端明确选择 DomainAgent 的场景；如果附件不是 `api-store` 携带 `metadata.skillId` 上传并返回 `docId` 的文档，后端会拒绝本轮 run，要求前端按当前文档上传契约重新上传。
 本轮显式选择的 DomainAgent 会进入 `runtime.metadata`，并在历史 assistant 的 `parts` 返回：
 `partType=METADATA`、`payload.metadataType=selected_domain_agent`、`payload.domainAgentId=payload.skillId=所选技能 ID`、
 `payload.intentResult.source=front-selected`。前端历史页可以用该 part 展示“本轮调用技能”。

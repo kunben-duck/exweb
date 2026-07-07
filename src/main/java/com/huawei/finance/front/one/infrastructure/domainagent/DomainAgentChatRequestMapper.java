@@ -77,12 +77,13 @@ public class DomainAgentChatRequestMapper {
         List<Map<String, Object>> result = new ArrayList<>();
         for (UploadedDocument document : documents) {
             if (!DocumentSource.DOMAIN_AGENT_UPLOAD.name().equals(document.source())) {
-                throw new IllegalArgumentException("DomainAgent 仅支持 domain-agent provider 上传的文档: " + document.id());
+                throw new IllegalArgumentException("DomainAgent 仅支持 api-store 携带 metadata.skillId 上传并返回 docId 的文档: "
+                        + document.id());
             }
             Map<String, Object> providerDocument = providerDocument(document);
             String docId = stringValue(providerDocument.get("docId"), "");
             if (docId.isBlank() || "URL".equals(providerDocument.get("providerLocatorType"))) {
-                throw new IllegalArgumentException("domain-agent 文档缺少可用于 DomainAgent 调用的 docId，请按对应 domainAgentId 重新上传: "
+                throw new IllegalArgumentException("DomainAgent 文档缺少可用于调用的 docId，请在上传 metadata.skillId 后重新上传: "
                         + document.id());
             }
             Map<String, Object> item = new LinkedHashMap<>();
@@ -99,13 +100,9 @@ public class DomainAgentChatRequestMapper {
     private Map<String, Object> providerDocument(UploadedDocument document) {
         try {
             JsonNode root = objectMapper.readTree(document.metadataJson() == null ? "{}" : document.metadataJson());
-            String providerCode = text(root, "providerCode");
-            if (!"domain-agent".equals(providerCode)) {
-                throw new IllegalArgumentException("文档 provider 不是 domain-agent: " + document.id());
-            }
             JsonNode providerDocument = root.get("providerDocument");
             if (providerDocument == null || !providerDocument.isObject()) {
-                throw new IllegalArgumentException("domain-agent 文档缺少 providerDocument 元数据: " + document.id());
+                throw new IllegalArgumentException("DomainAgent 文档缺少 providerDocument 元数据: " + document.id());
             }
             Map<String, Object> values = new LinkedHashMap<>();
             providerDocument.fields().forEachRemaining(entry -> values.put(entry.getKey(), jsonValue(entry.getValue())));
@@ -162,11 +159,6 @@ public class DomainAgentChatRequestMapper {
             }
         }
         return defaultValue;
-    }
-
-    private String text(JsonNode root, String field) {
-        JsonNode value = root == null ? null : root.get(field);
-        return value == null || value.isNull() ? null : value.asText(null);
     }
 
     private Object jsonValue(JsonNode node) {

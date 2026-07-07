@@ -79,7 +79,7 @@ class DomainAgentChatRequestMapperTest {
 
         assertThatThrownBy(() -> mapper.toWireRequest(request))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("缺少可用于 DomainAgent 调用的 docId");
+                .hasMessageContaining("缺少可用于调用的 docId");
     }
 
     private DomainAgentRequest request(Map<String, Object> metadata, List<UploadedDocument> documents) {

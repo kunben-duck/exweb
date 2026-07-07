@@ -18,8 +18,7 @@ import org.springframework.util.unit.DataSize;
 @ConfigurationProperties(prefix = "financeex.websocket")
 public class ChatWebSocketProperties {
     /** 允许建立 WebSocket 的 Origin pattern；生产必须配置企业前端域名。 */
-    private List<String> allowedOriginPatterns = new ArrayList<>(
-            List.of("http://localhost:*", "http://127.0.0.1:*", "http://[::1]:*"));
+    private List<String> allowedOriginPatterns = new ArrayList<>();
     /** 单个用户在当前 JVM 上允许同时保持的最大 WebSocket 连接数。 */
     private int maxConnectionsPerUser = 8;
     /** 单个 WebSocket 连接允许同时订阅的最大 run topic 数。 */

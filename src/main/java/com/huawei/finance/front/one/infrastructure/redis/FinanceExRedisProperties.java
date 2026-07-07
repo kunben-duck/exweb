@@ -18,7 +18,7 @@ public class FinanceExRedisProperties {
     /** Redis 部署模式：standalone 用于本地单机，cluster 用于生产 Redis Cluster。 */
     private Mode mode = Mode.STANDALONE;
     /** standalone 模式 Redis 主机。 */
-    private String host = "localhost";
+    private String host = "";
     /** standalone 模式 Redis 端口。 */
     private int port = 6379;
     /** standalone 模式数据库编号；Redis Cluster 不支持选择 database。 */

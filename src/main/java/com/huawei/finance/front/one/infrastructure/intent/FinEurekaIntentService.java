@@ -37,7 +37,9 @@ public class FinEurekaIntentService implements IntentService {
     public FinEurekaIntentService(WebClient.Builder webClientBuilder, IntentServiceHttpProperties properties,
                                   IntentServiceWireMapper wireMapper, AuthHeaderProviderRegistry authHeaders,
                                   IntentRetryPolicy retryPolicy) {
-        this.webClient = webClientBuilder.baseUrl(properties.getBaseUrl()).build();
+        this.webClient = properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()
+                ? webClientBuilder.build()
+                : webClientBuilder.baseUrl(properties.getBaseUrl().trim()).build();
         this.properties = properties;
         this.wireMapper = wireMapper;
         this.authHeaders = authHeaders;
@@ -73,6 +75,9 @@ public class FinEurekaIntentService implements IntentService {
     }
 
     private IntentDecision recognizeOnce(ChatCommand command, MemoryContext memory, UserContext user) {
+        if (properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()) {
+            return wireMapper.degraded("intent service base-url is not configured");
+        }
         try {
             return webClient.post()
                     .uri(properties.getRecognizePath())

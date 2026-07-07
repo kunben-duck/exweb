@@ -27,11 +27,13 @@ public class HttpUseCaseLibraryClient implements UseCaseLibraryClient {
     private final AuthHeaderProviderRegistry authHeaders;
 
     public HttpUseCaseLibraryClient(WebClient.Builder webClientBuilder,
-                                    @Value("${financeex.use-case-library.base-url:http://localhost:9100}") String baseUrl,
+                                    @Value("${financeex.use-case-library.base-url:}") String baseUrl,
                                     @Value("${financeex.use-case-library.match-path:/v1/use-cases/match}") String matchPath,
                                     @Value("${financeex.use-case-library.timeout:5s}") Duration timeout,
                                     AuthHeaderProviderRegistry authHeaders) {
-        this.webClient = webClientBuilder.baseUrl(baseUrl).build();
+        this.webClient = baseUrl == null || baseUrl.isBlank()
+                ? webClientBuilder.build()
+                : webClientBuilder.baseUrl(baseUrl.trim()).build();
         this.baseUrl = baseUrl;
         this.matchPath = matchPath;
         this.timeout = timeout;
@@ -40,6 +42,9 @@ public class HttpUseCaseLibraryClient implements UseCaseLibraryClient {
 
     @Override
     public UseCaseMatchResult match(UseCaseMatchRequest request) {
+        if (baseUrl == null || baseUrl.isBlank()) {
+            throw new IllegalStateException("financeex.use-case-library.base-url 不能为空");
+        }
         return webClient.post()
                 .uri(matchPath)
                 .headers(headers -> applyAuthHeaders(headers, request))

@@ -677,11 +677,18 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
 
     private URI endpointUri(String clientId) {
         String configured = websocketProperties().getUrl();
-        String base = configured == null || configured.isBlank() ? "ws://localhost:8080/ws" : configured.trim();
+        String base = requireText(configured, "financeex.agent-runtime.relay.websocket.url 不能为空");
         String uri = base.contains("{clientId}")
                 ? base.replace("{clientId}", clientId)
                 : appendPathSegment(base, clientId);
         return URI.create(uri);
+    }
+
+    private String requireText(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException(message);
+        }
+        return value.trim();
     }
 
     private String appendPathSegment(String base, String segment) {

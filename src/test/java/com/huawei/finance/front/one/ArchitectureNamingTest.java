@@ -26,7 +26,7 @@ class ArchitectureNamingTest {
     void redisPrefixesUseFinExNaming() throws Exception {
         String application = Files.readString(Path.of("src/main/resources/application.yml"));
 
-        assertThat(application).contains("mode: ${FINANCEEX_REDIS_MODE:standalone}");
+        assertThat(application).contains("mode: ${FINANCEEX_REDIS_MODE:}");
         assertThat(application).contains("nodes: ${FINANCEEX_REDIS_CLUSTER_NODES:}");
         assertThat(application).contains("redis-key-prefix: fin_ex:runtime_binding");
         assertThat(application).contains("active-key-prefix: fin_ex:chat_run:active");

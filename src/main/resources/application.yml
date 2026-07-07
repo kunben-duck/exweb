@@ -22,16 +22,16 @@ spring:
     virtual:
       enabled: true
   datasource:
-    url: ${FINANCEEX_DB_URL:jdbc:postgresql://localhost:5432/financeex?currentSchema=${FINANCEEX_DB_SCHEMA:supervisor_dev}}
-    username: ${FINANCEEX_DB_USERNAME:fin_supervisor}
-    password: ${FINANCEEX_DB_PASSWORD:kunone123}
+    url: ${FINANCEEX_DB_URL:}
+    username: ${FINANCEEX_DB_USERNAME:}
+    password: ${FINANCEEX_DB_PASSWORD:}
     driver-class-name: org.postgresql.Driver
     hikari:
       schema: ${FINANCEEX_DB_SCHEMA:supervisor_dev}
       maximum-pool-size: ${FINANCEEX_DB_MAX_POOL_SIZE:10}
       minimum-idle: ${FINANCEEX_DB_MIN_IDLE:0}
       connection-timeout: ${FINANCEEX_DB_CONNECTION_TIMEOUT:500}
-      initialization-fail-timeout: ${FINANCEEX_DB_INITIALIZATION_FAIL_TIMEOUT:-1}
+      initialization-fail-timeout: ${FINANCEEX_DB_INITIALIZATION_FAIL_TIMEOUT:1}
   sql:
     init:
       mode: never
@@ -51,12 +51,12 @@ mybatis:
 financeex:
   redis:
     # Redis 只作为热缓存、取消标记、恢复锁优化和跨实例实时 fanout，不作为事实源。
-    # standalone 用于本地开发；生产 Redis Cluster 设置 FINANCEEX_REDIS_MODE=cluster 并配置 cluster.nodes。
-    mode: ${FINANCEEX_REDIS_MODE:standalone}
-    host: ${FINANCEEX_REDIS_HOST:localhost}
+    # 生产 Redis Cluster 设置 FINANCEEX_REDIS_MODE=cluster 并配置 cluster.nodes；本地 standalone 也必须显式配置 host。
+    mode: ${FINANCEEX_REDIS_MODE:}
+    host: ${FINANCEEX_REDIS_HOST:}
     port: ${FINANCEEX_REDIS_PORT:6379}
     database: ${FINANCEEX_REDIS_DATABASE:0}
-    password: ${FINANCEEX_REDIS_PASSWORD:kunone123}
+    password: ${FINANCEEX_REDIS_PASSWORD:}
     timeout: ${FINANCEEX_REDIS_TIMEOUT:500ms}
     connect-timeout: ${FINANCEEX_REDIS_CONNECT_TIMEOUT:500ms}
     cluster:
@@ -90,7 +90,7 @@ financeex:
   intent:
     # v3 中意图服务只是可选路由信号，默认关闭；关闭时首轮请求不会调用该 HTTP API。
     enabled: ${FINANCEEX_INTENT_ENABLED:false}
-    base-url: ${FINANCEEX_INTENT_BASE_URL:http://localhost:9200}
+    base-url: ${FINANCEEX_INTENT_BASE_URL:}
     recognize-path: ${FINANCEEX_INTENT_RECOGNIZE_PATH:/v1/intents/recognize}
     # 意图服务返回 resourceInstruction.resourceId 时，只有 confidence 达到该阈值才采用对应技能。
     confidence-threshold: ${FINANCEEX_INTENT_CONFIDENCE_THRESHOLD:0.85}
@@ -110,7 +110,7 @@ financeex:
     # v3 中用例库只是可选路由信号，默认关闭；关闭时首轮请求不会调用该 HTTP API。
     enabled: ${FINANCEEX_USE_CASE_LIBRARY_ENABLED:false}
     min-score: 0.85
-    base-url: ${FINANCEEX_USE_CASE_LIBRARY_BASE_URL:http://localhost:9100}
+    base-url: ${FINANCEEX_USE_CASE_LIBRARY_BASE_URL:}
     match-path: ${FINANCEEX_USE_CASE_LIBRARY_MATCH_PATH:/v1/use-cases/match}
     timeout: 5s
   runtime-binding:
@@ -175,8 +175,8 @@ financeex:
     redis-publish-retry-attempts: ${FINANCEEX_WEBSOCKET_REDIS_PUBLISH_RETRY_ATTEMPTS:2}
     redis-publish-retry-backoff: ${FINANCEEX_WEBSOCKET_REDIS_PUBLISH_RETRY_BACKOFF:20ms}
     redis-publish-recovery-retry-interval: ${FINANCEEX_WEBSOCKET_REDIS_PUBLISH_RECOVERY_RETRY_INTERVAL:1s}
-    # 生产必须替换为企业前端域名，例如 https://finex.example.com；本地默认仅允许 localhost。
-    allowed-origin-patterns: ${FINANCEEX_WEBSOCKET_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*,http://[::1]:*}
+    # 必须显式配置企业前端域名白名单，例如 https://finex.example.com；本地联调也请在 local profile 中配置。
+    allowed-origin-patterns: ${FINANCEEX_WEBSOCKET_ALLOWED_ORIGIN_PATTERNS:}
     max-connections-per-user: ${FINANCEEX_WEBSOCKET_MAX_CONNECTIONS_PER_USER:8}
     max-subscriptions-per-connection: ${FINANCEEX_WEBSOCKET_MAX_SUBSCRIPTIONS_PER_CONNECTION:8}
     max-subscribers-per-topic: ${FINANCEEX_WEBSOCKET_MAX_SUBSCRIBERS_PER_TOPIC:128}
@@ -205,7 +205,7 @@ financeex:
     timeout: 30s
     agents:
       employee_reimbursement_agent:
-        enabled: ${FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENABLED:true}
+        enabled: ${FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENABLED:false}
         endpoint: ${FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_ENDPOINT:}
         stop-endpoint: ${FINANCEEX_EMPLOYEE_REIMBURSEMENT_AGENT_STOP_ENDPOINT:}
   memory:
@@ -228,7 +228,7 @@ financeex:
   agent-runtime:
     # AgentRuntime 防腐层类型。当前内置 relay；后续替换 Runtime 时新增 provider，不把协议写进 provider。
     provider: ${FINANCEEX_AGENT_RUNTIME_PROVIDER:relay}
-    base-url: ${FINANCEEX_RELAY_AGENT_BASE_URL:http://localhost:9000}
+    base-url: ${FINANCEEX_RELAY_AGENT_BASE_URL:}
     stream-path: ${FINANCEEX_RELAY_AGENT_STREAM_PATH:/v1/agent/runs/stream}
     stop-path: ${FINANCEEX_RELAY_AGENT_STOP_PATH:/v1/agent/runs/{runId}/stop}
     cancel-supported: ${FINANCEEX_RELAY_AGENT_CANCEL_SUPPORTED:true}
@@ -240,7 +240,7 @@ financeex:
       # Relay provider 内部 API adapter。默认保持 stream-http；relay-websocket 用于灰度接入 Relay WS 普通问答。
       adapter: ${FINANCEEX_RELAY_ADAPTER:relay-stream-http}
       websocket:
-        url: ${FINANCEEX_RELAY_WS_URL:ws://localhost:8080/ws}
+        url: ${FINANCEEX_RELAY_WS_URL:}
         app-mode: ${FINANCEEX_RELAY_WS_APP_MODE:delegate}
         connect-timeout: ${FINANCEEX_RELAY_WS_CONNECT_TIMEOUT:5s}
         config-handshake-timeout: ${FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT:10s}
@@ -264,7 +264,7 @@ financeex:
       max-length: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_MAX_LENGTH:8192}
       allowed-adapters: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ALLOWED_ADAPTERS:relay-stream-http,relay-websocket}
   storage:
-    provider: ${FINANCEEX_STORAGE_PROVIDER:local}
+    provider: ${FINANCEEX_STORAGE_PROVIDER:}
     local-path: ${java.io.tmpdir}/financeex-docs
     huawei-s3:
       bucket: ${FINANCEEX_HUAWEI_S3_BUCKET:}

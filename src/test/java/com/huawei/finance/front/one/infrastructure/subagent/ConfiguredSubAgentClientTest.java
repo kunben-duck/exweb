@@ -47,6 +47,7 @@ class ConfiguredSubAgentClientTest {
         SubAgentProperties properties = new SubAgentProperties();
         properties.setTimeout(Duration.ofSeconds(1));
         SubAgentProperties.AgentEndpoint endpoint = new SubAgentProperties.AgentEndpoint();
+        endpoint.setEnabled(true);
         endpoint.setEndpoint("http://subagent.test/query");
         properties.setAgents(Map.of("agent1", endpoint));
         return properties;

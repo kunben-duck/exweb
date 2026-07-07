@@ -14,7 +14,7 @@ public class IntentServiceHttpProperties {
     private static final int MAX_NORMALIZED_RETRIES = 10;
 
     /** 意图服务基础地址。 */
-    private String baseUrl = "http://localhost:9200";
+    private String baseUrl = "";
     /** 意图识别接口路径。 */
     private String recognizePath = "/v1/intents/recognize";
     /** 单次意图识别调用超时时间。 */

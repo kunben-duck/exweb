@@ -17,7 +17,7 @@ import org.springframework.stereotype.Component;
  * <p>用于本地开发和第一版验证；生产环境通常替换为 huawei-s3 对象存储实现。</p>
  */
 @Component
-@ConditionalOnProperty(prefix = "financeex.storage", name = "provider", havingValue = "local", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "financeex.storage", name = "provider", havingValue = "local")
 public class FileSystemObjectStorage implements ObjectStorage {
     private final Path root;
 

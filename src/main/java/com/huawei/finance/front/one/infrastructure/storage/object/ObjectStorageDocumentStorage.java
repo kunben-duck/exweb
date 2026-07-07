@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component;
  * {@link ObjectStorage} bean 根据 {@code financeex.storage.provider} 决定。</p>
  */
 @Component
-@ConditionalOnExpression("'${financeex.storage.provider:local}' != 'api-store'")
+@ConditionalOnExpression("'${financeex.storage.provider:}' == 'local' || '${financeex.storage.provider:}' == 'huawei-s3'")
 public class ObjectStorageDocumentStorage implements DocumentStorage {
     private final ObjectStorage storage;
     private final WorkloadConcurrencyLimiter concurrencyLimiter;

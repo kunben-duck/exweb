@@ -1374,8 +1374,8 @@ MVC/Servlet 模式下，后端会在 WebSocket handshake 阶段读取企业权�
 
 企业 Cookie 有两类用途：请求入口身份解析，以及在进入可信下游 adapter 时透传给 Relay、DomainAgent 或 DomainAgent 文档 upload provider。透传只发生在创建 run、stop run 和配置允许的文档上传 HTTP 入口；WebSocket subscribe、Event Resume、历史查询、文档下载等接口不会把 Cookie 继续转发给下游 Agent。
 
-生产环境必须配置 `financeex.websocket.allowed-origin-patterns` 为企业前端域名。默认值只允许
-localhost，避免 Cookie 鉴权场景下的跨站 WebSocket 滥用。服务端还会限制单用户连接数、单连接
+生产环境必须配置 `financeex.websocket.allowed-origin-patterns` 为企业前端域名，避免 Cookie
+鉴权场景下的跨站 WebSocket 滥用。服务端还会限制单用户连接数、单连接
 订阅数、单 topic 本机订阅数、控制消息大小、出站队列和空闲时间；超限时会返回明确错误并关闭
 连接或取消订阅。
 

@@ -11,9 +11,11 @@ class RelayAgentPropertiesTest {
     void relayPropertiesDefaultToStreamHttpEndpoint() {
         RelayAgentProperties properties = new RelayAgentProperties();
 
+        assertThat(properties.getBaseUrl()).isBlank();
         assertThat(properties.getStreamPath()).isEqualTo("/v1/agent/runs/stream");
         assertThat(properties.getStopPath()).isEqualTo("/v1/agent/runs/{runId}/stop");
         assertThat(properties.getMaxInMemorySize()).isEqualTo(DataSize.ofMegabytes(1));
+        assertThat(properties.getRelay().getWebsocket().getUrl()).isBlank();
     }
 
     @Test

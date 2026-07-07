@@ -64,6 +64,7 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
 
     @Override
     public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+        requireBaseUrl();
         WebClient.RequestBodySpec spec = relayWebClient()
                 .build()
                 .post()
@@ -95,6 +96,7 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
         if (!properties.isCancelSupported() || properties.getStopPath() == null || properties.getStopPath().isBlank()) {
             return Mono.empty();
         }
+        requireBaseUrl();
         String path = properties.getStopPath().replace("{runId}", request.runId() == null ? "" : request.runId());
         WebClient.RequestBodySpec spec = relayWebClient()
                 .build()
@@ -162,9 +164,18 @@ public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapte
     }
 
     private WebClient.Builder relayWebClient() {
-        return webClientBuilder.clone()
-                .baseUrl(properties.getBaseUrl())
+        WebClient.Builder builder = webClientBuilder.clone()
                 .exchangeStrategies(relayExchangeStrategies);
+        if (properties.getBaseUrl() != null && !properties.getBaseUrl().isBlank()) {
+            builder.baseUrl(properties.getBaseUrl().trim());
+        }
+        return builder;
+    }
+
+    private void requireBaseUrl() {
+        if (properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()) {
+            throw new IllegalStateException("financeex.agent-runtime.base-url 不能为空");
+        }
     }
 
     private int relayMaxInMemoryBytes() {

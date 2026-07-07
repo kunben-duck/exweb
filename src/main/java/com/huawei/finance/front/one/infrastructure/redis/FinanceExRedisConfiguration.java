@@ -58,7 +58,8 @@ public class FinanceExRedisConfiguration {
     }
 
     private LettuceConnectionFactory standaloneConnectionFactory(FinanceExRedisProperties properties) {
-        RedisStandaloneConfiguration standalone = new RedisStandaloneConfiguration(properties.getHost(), properties.getPort());
+        RedisStandaloneConfiguration standalone = new RedisStandaloneConfiguration(
+                requireText(properties.getHost(), "financeex.redis.host 不能为空"), properties.getPort());
         standalone.setDatabase(Math.max(0, properties.getDatabase()));
         applyPassword(standalone, properties.getPassword());
         return new LettuceConnectionFactory(standalone, lettuceClientConfiguration(properties, null));
@@ -121,5 +122,12 @@ public class FinanceExRedisConfiguration {
 
     private Duration nonNullDuration(Duration value, Duration fallback) {
         return value == null ? fallback : value;
+    }
+
+    private String requireText(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException(message);
+        }
+        return value.trim();
     }
 }

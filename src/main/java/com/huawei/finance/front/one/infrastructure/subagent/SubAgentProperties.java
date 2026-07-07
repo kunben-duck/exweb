@@ -36,7 +36,7 @@ public class SubAgentProperties {
 
     public static class AgentEndpoint {
         /** 该 SubAgent 是否启用。 */
-        private boolean enabled = true;
+        private boolean enabled = false;
         /** SubAgent HTTP 流式接口完整地址。 */
         private String endpoint;
         /** SubAgent HTTP stop 接口完整地址；为空表示该 SubAgent 暂不支持取消。 */

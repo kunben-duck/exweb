@@ -1,0 +1,38 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/financeex?currentSchema=supervisor_dev
+    username: fin_supervisor
+    password: local-dev-password
+    hikari:
+      schema: supervisor_dev
+
+financeex:
+  redis:
+    mode: standalone
+    host: localhost
+    port: 6379
+    database: 0
+    # 本地 Redis 无密码时保留为空；生产也必须显式配置该项或环境变量。
+    password:
+  websocket:
+    allowed-origin-patterns: http://localhost:*,http://127.0.0.1:*,http://[::1]:*
+  storage:
+    provider: local
+  agent-runtime:
+    provider: relay
+    base-url: http://localhost:9000
+    relay:
+      adapter: relay-stream-http
+      websocket:
+        url: ws://localhost:8080/ws
+  intent:
+    enabled: false
+    base-url: http://localhost:9200
+  use-case-library:
+    enabled: false
+    base-url: http://localhost:9100
+  sub-agent:
+    agents:
+      employee_reimbursement_agent:
+        enabled: false
+        endpoint:

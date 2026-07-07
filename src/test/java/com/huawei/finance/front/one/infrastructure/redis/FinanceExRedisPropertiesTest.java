@@ -7,11 +7,11 @@ import org.junit.jupiter.api.Test;
 
 class FinanceExRedisPropertiesTest {
     @Test
-    void defaultModeKeepsLocalStandaloneRedis() {
+    void defaultsDoNotPointToLocalRedis() {
         FinanceExRedisProperties properties = new FinanceExRedisProperties();
 
         assertThat(properties.getMode()).isEqualTo(FinanceExRedisProperties.Mode.STANDALONE);
-        assertThat(properties.getHost()).isEqualTo("localhost");
+        assertThat(properties.getHost()).isBlank();
         assertThat(properties.getPort()).isEqualTo(6379);
     }
 

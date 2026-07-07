@@ -16,7 +16,7 @@ public class RelayAgentProperties {
     /** 当前装配的 AgentRuntime 类型，默认 relay。 */
     private String provider = "relay";
     /** Relay Runtime 服务基础地址。 */
-    private String baseUrl = "http://localhost:9000";
+    private String baseUrl = "";
     /** Relay Runtime 流式查询接口路径。 */
     private String streamPath = "/v1/agent/runs/stream";
     /** Relay Runtime stop 接口路径，支持 {runId} 占位；为空表示下游暂不支持取消。 */
@@ -125,7 +125,7 @@ public class RelayAgentProperties {
      */
     public static class WebSocket {
         /** Relay WebSocket URL 前缀，adapter 会在后面追加 /{clientId}。 */
-        private String url = "ws://localhost:8080/ws";
+        private String url = "";
         /** Relay appMode，普通问答默认 delegate。 */
         private String appMode = "delegate";
         /** 建立下游 WebSocket 连接的超时时间。 */

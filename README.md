@@ -98,7 +98,7 @@ subscribe 和连接关闭回调只读取该身份快照，不会再次调用 `Au
 
 生产使用 MVC/Servlet 模式时，需要把长连接当作 Servlet 资源治理：Event Resume 使用
 `spring.mvc.async.request-timeout` 和 run 级 heartbeat 防止空闲断流；WebSocket 使用
-`financeex.websocket.allowed-origin-patterns` 做 Origin 白名单，默认只允许 localhost。
+`financeex.websocket.allowed-origin-patterns` 做 Origin 白名单；该配置必须显式填写企业前端域名。
 单用户连接数、单连接订阅数、单 topic 本机订阅数、出站缓冲、live buffer 和空闲超时都由
 `financeex.websocket.*` 统一配置。慢客户端或实时缓冲溢出时，服务端会返回
 `RECOVER_REQUIRED`，前端应通过 run event resume 补齐后再重新订阅。
@@ -357,7 +357,7 @@ export FINANCEEX_CHAT_STREAM_RESUME_POLL_INTERVAL=1s
 # Relay 响应映射，决定哪些下游 type/字段可成为 assistant 正文
 export FINANCEEX_RELAY_ADAPTER=relay-stream-http
 export FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE=1MB
-export FINANCEEX_RELAY_WS_URL=ws://localhost:8080/ws
+export FINANCEEX_RELAY_WS_URL=wss://relay.example.com/ws
 export FINANCEEX_RELAY_WS_APP_MODE=delegate
 export FINANCEEX_RELAY_WS_CONNECT_TIMEOUT=5s
 export FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT=10s
@@ -399,7 +399,7 @@ HTTP 错误/提示响应统一为 `{timestamp,path,status,error,code,message}`�
 
 ## 启动
 
-本地没有数据库/Redis 时，可以先启动 Docker 依赖。`docker-compose.yml` 使用 PostgreSQL 兼容容器做本地联调；生产环境可以把 `FINANCEEX_DB_URL` 指向目标数据库，DDL 统一维护在 `src/main/resources/db/schema.sql`：
+本地没有数据库/Redis 时，可以先启动 Docker 依赖。`docker-compose.yml` 使用 PostgreSQL 兼容容器做本地联调；生产环境必须显式配置数据库、Redis、WebSocket Origin、存储方式和启用集成的 endpoint，DDL 统一维护在 `src/main/resources/db/schema.sql`：
 
 ```bash
 docker compose up -d postgres redis
@@ -407,12 +407,12 @@ docker compose up -d postgres redis
 
 数据库容器会创建 `financeex` 数据库和 `supervisor_dev` schema，并执行 `src/main/resources/db/schema.sql`。
 
-Redis 默认使用本地 standalone；生产 Redis Cluster 可用以下环境变量切换：
+主配置不再内置本地 Redis 地址、默认密码或本地存储兜底。Redis standalone/cluster 都必须显式配置；生产 Redis Cluster 可用以下环境变量切换：
 
 ```bash
 export FINANCEEX_REDIS_MODE=cluster
 export FINANCEEX_REDIS_CLUSTER_NODES=10.0.0.1:6379,10.0.0.2:6379,10.0.0.3:6379
-export FINANCEEX_REDIS_PASSWORD=kunone123
+export FINANCEEX_REDIS_PASSWORD=
 export FINANCEEX_REDIS_CLUSTER_MAX_REDIRECTS=3
 ```
 
@@ -420,7 +420,9 @@ export FINANCEEX_REDIS_CLUSTER_MAX_REDIRECTS=3
 只负责热缓存、取消标记、恢复锁优化和 WebSocket 跨实例实时 fanout。
 
 ```bash
-mvn spring-boot:run
+# 本地联调可先复制 src/main/resources/application-local.yml.example 为 application-local.yml，
+# 再使用 local profile；生产环境不要依赖 local profile。
+mvn spring-boot:run -Dspring-boot.run.profiles=local
 ```
 
 ## 文档存储
@@ -489,7 +491,7 @@ curl -X POST http://localhost:8080/api/v1/ex/documents \
   -F 'metadata={"skillId":"d3334be5e4c241ebb30b40d039919787"}'
 ```
 
-默认使用本地文件系统：
+显式配置为本地文件系统：
 
 ```yaml
 financeex.storage.provider: local

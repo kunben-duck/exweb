@@ -1,6 +1,6 @@
 # FinanceEXChatService
 
-FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务。当前正式版本采用两类会话绑定：用例库、意图服务或前端显式选择命中的 `DomainAgentId` 会绑定为会话级 DomainAgent；复杂任务、低置信任务和未命中任务进入 Relay Runtime。DomainAgent 和 Relay Runtime 都拥有自己的下游会话上下文，ChatService 通过 RuntimeBinding 维护当前会话绑定。
+FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务。当前正式版本采用两类会话绑定：用例库、意图服务或前端显式选择命中的 `DomainAgentId` 会绑定为会话级 DomainAgent；复杂任务和未命中任务进入 Relay Runtime。DomainAgent 和 Relay Runtime 都拥有自己的下游会话上下文，ChatService 通过 RuntimeBinding 维护当前会话绑定。
 
 ## 核心链路
 
@@ -14,7 +14,7 @@ FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务
     -> 有 active RuntimeBinding：继续调用当前绑定的 DomainAgent 或 Relay Runtime
     -> 无 active RuntimeBinding：读取可选路由信号
         -> 前端 targetType=DOMAIN_AGENT：绑定并调用指定 DomainAgent
-        -> 用例库/意图服务命中 skillId/resourceId：绑定并调用对应 DomainAgent
+        -> 用例库/意图服务命中 DomainAgentId：绑定并调用对应 DomainAgent
         -> 两者关闭/未命中/不可用/复杂任务：创建 Relay Runtime 绑定并调用 Relay Runtime
 ```
 
@@ -258,13 +258,14 @@ export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
 
 - 短期记忆开启后，按 `recent-turns` 装配最近几轮 user/assistant 问答，优先读 Redis 热缓存，miss 后回源数据库历史消息并回填。
 - 长期记忆开启后，通过 `LongTermMemoryStore` 防腐层按当前 query 检索 topK 条相关记忆；默认 `disabled` provider 返回空结果。
-- 两者都关闭时，`MemoryContext` 为空上下文，且不会发生 memory 相关 Redis、历史消息读取或长期记忆调用。
+- 两者都关闭时，普通短期/长期 `MemoryContext` 为空上下文，且不会发生 memory 相关 Redis、历史消息读取或长期记忆调用。RouteMemory 是独立的路由事实源；只要意图服务开启，ChatService 仍会按会话加载最近成功路由和未完成意图澄清链路，用于组装意图服务 `conversationContext`。
 
 ## 外部服务接入
 
-用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。用例库返回的 `resourceId` 和意图服务返回的 `skillId/resourceId` 统一解释为 `DomainAgentId`；命中后会创建 `provider=domain-agent` 的会话级 RuntimeBinding。Relay Runtime 通过 AgentRuntime 防腐层接入，默认使用下游 Relay streamable HTTP，也可通过配置灰度切换到 Relay WebSocket 普通问答 adapter。
-意图服务当前适配 `code/data/result/items[]` 包装响应，选择最高 `confidence` 的 item，并把 `resourceInstruction.resourceId` 映射为候选 DomainAgent；只有 `confidence >= FINANCEEX_INTENT_CONFIDENCE_THRESHOLD` 时才采用该 DomainAgent，否则进入 Relay Runtime。意图服务 HTTP 入参和出参转换已收敛在 infrastructure intent mapper 中，后续下游协议变化优先修改 mapper，不影响应用层 `IntentService` 端口和路由策略。意图服务调用失败后默认最多重试 3 次，可通过 `FINANCEEX_INTENT_MAX_RETRIES` 调整；运行时最多按 10 次重试生效。
-意图识别记录是可选旁路能力，默认关闭。开启 `FINANCEEX_INTENT_RECORD_ENABLED=true` 后，仅在本轮实际调用意图服务时异步写入 `fin_ex_intent_recognition_t`，记录用户问题、候选 items、最高置信结果、最终路由是否采纳以及调用耗时，便于后续准确率统计和排障。该写入使用 Servlet/MVC 友好的专用线程池，不读取请求 ThreadLocal；线程池拒绝、序列化失败或 DB 写入失败只记录 warn，不影响 `/chat/runs` 主链路。DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会写意图记录。
+用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。用例库返回的路由目标和意图服务 `ROUTE_SINGLE.items[0].intentId` 统一解释为 `DomainAgentId/skillId`；意图响应里的 `resourceInstruction.resourceId` 只记录到诊断字段，不参与 ChatService 路由。命中后会创建 `provider=domain-agent` 的会话级 RuntimeBinding。Relay Runtime 通过 AgentRuntime 防腐层接入，默认使用下游 Relay streamable HTTP，也可通过配置灰度切换到 Relay WebSocket 普通问答 adapter。
+意图服务当前适配 `/getIntentDecision`：ChatService 以 `data.result.routeAction` 作为唯一裁决点。`ROUTE_SINGLE` 直接取唯一 `items[0].intentId` 作为 DomainAgentId/skillId 并绑定 DomainAgent；`ROUTE_MULTI` 和 `NO_MATCH` 都进入 Relay Runtime；`CLARIFY` 进入意图澄清等待态。`confidence` 只用于记录和排障，不再参与是否采用 DomainAgent 的二次判断。外部路由已进入 run pipeline：后端会先落库并推送 `run.started`，再调用用例库/意图服务；调用意图服务前会先输出 `runtime.progress(payload.sourceType=route-progress, stage=intent_calling)`，用于前端展示“正在识别问题意图”，该事件不包含 prompt、history 或意图原始响应。意图服务 HTTP 入参和出参转换已收敛在 infrastructure intent mapper 中，后续下游协议变化优先修改 mapper，不影响应用层 `IntentService` 端口和路由策略。意图服务调用失败后默认最多重试 3 次，可通过 `FINANCEEX_INTENT_MAX_RETRIES` 调整；运行时最多按 10 次重试生效。
+RouteMemory 负责为意图服务生成 `conversationContext`：普通无绑定首次路由使用 `routeTrigger=first_turn`；DomainAgent 结构化拒答后重路由使用 `routeTrigger=domain_reject` 并携带本次 `lastIntentRejectReason`；用户提交 `INTENT_CLARIFICATION` 后使用 `routeTrigger=clarify_answer`。`history` 由最近 TopK 成功 `ROUTE` 记录和当前未完成 `INTENT_CLARIFICATION` 的 `CLARIFY` 链路组成；Agent 内部澄清、审批和 DomainAgent 切换确认不会进入意图 history。澄清最终得到 `ROUTE_SINGLE` 时会在单个 best-effort 写任务中先折叠当前 clarify 链路，再新增一条 route 记录；`ROUTE_MULTI/NO_MATCH` 则只折叠澄清链路后进入 Relay Runtime。RouteMemory 读写使用独立线程池，读超时会取消后台 future 并短暂熔断，所有异常都降级为空上下文或 warn，不阻断 `/chat/runs`。
+意图识别记录是可选旁路能力，默认关闭。开启 `FINANCEEX_INTENT_RECORD_ENABLED=true` 后，仅在本轮实际调用意图服务时异步写入 `fin_ex_intent_recognition_t`，记录用户问题、routeAction、候选 items、最终路由是否采纳以及调用耗时，便于后续准确率统计和排障。该写入使用 Servlet/MVC 友好的专用线程池，不读取请求 ThreadLocal；线程池拒绝、序列化失败或 DB 写入失败只记录 warn，不影响 `/chat/runs` 主链路。DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会写意图记录。
 
 WebSocket 边界如下：
 
@@ -285,13 +286,15 @@ export FINANCEEX_USE_CASE_LIBRARY_MATCH_PATH=/v1/use-cases/match
 
 export FINANCEEX_INTENT_ENABLED=true
 export FINANCEEX_INTENT_BASE_URL=http://intent-service:9200
-export FINANCEEX_INTENT_RECOGNIZE_PATH=/v1/intents/recognize
-export FINANCEEX_INTENT_CONFIDENCE_THRESHOLD=0.85
+export FINANCEEX_INTENT_ACCESS_NAME=eureka2_260718
+export FINANCEEX_INTENT_RECOGNIZE_PATH=/intent-recognition-configuration/getIntentDecision
 # 可选：记录每次实际调用意图服务后的输入、结果和最终采纳情况；默认关闭
 export FINANCEEX_INTENT_RECORD_ENABLED=false
 export FINANCEEX_INTENT_RECORD_EXECUTOR_CORE_SIZE=1
 export FINANCEEX_INTENT_RECORD_EXECUTOR_MAX_SIZE=2
 export FINANCEEX_INTENT_RECORD_EXECUTOR_QUEUE_CAPACITY=1000
+export FINANCEEX_ROUTE_MEMORY_TOP_K=5
+export FINANCEEX_ROUTE_MEMORY_MAX_CLARIFICATION_ROUNDS=3
 
 export FINANCEEX_DOMAIN_AGENT_BASE_URL=https://domain-agent.example.com
 export FINANCEEX_DOMAIN_AGENT_CHAT_PATH=/v1/chat

@@ -5,6 +5,7 @@ import com.huawei.finance.front.one.application.integration.intent.IntentRecogni
 import com.huawei.finance.front.one.application.integration.intent.IntentService;
 import com.huawei.finance.front.one.application.integration.usecase.UseCaseLibraryClient;
 import com.huawei.finance.front.one.application.integration.usecase.UseCaseMatchRequest;
+import com.huawei.finance.front.one.application.service.memory.RouteMemoryApplicationService;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
@@ -12,16 +13,22 @@ import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.intent.TaskComplexity;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
+import com.huawei.finance.front.one.domain.memory.RouteMemoryContext;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
 import com.huawei.finance.front.one.domain.routing.RouteType;
 import com.huawei.finance.front.one.domain.routing.RoutingPolicy;
 import com.huawei.finance.front.one.domain.usecase.UseCaseMatchResult;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * 可选路由信号编排服务。
@@ -38,6 +45,7 @@ public class RouteSignalApplicationService {
     private final IntentService intentService;
     private final RoutingPolicy routingPolicy;
     private final RouteSignalProperties properties;
+    private final RouteMemoryApplicationService routeMemoryService;
 
     /**
      * 创建可选路由信号编排服务。
@@ -47,12 +55,20 @@ public class RouteSignalApplicationService {
      * @param routingPolicy 纯领域路由策略。
      * @param properties 外部路由信号开关配置。
      */
+    @Autowired
     public RouteSignalApplicationService(UseCaseLibraryClient useCaseLibraryClient, IntentService intentService,
-                                         RoutingPolicy routingPolicy, RouteSignalProperties properties) {
+                                         RoutingPolicy routingPolicy, RouteSignalProperties properties,
+                                         RouteMemoryApplicationService routeMemoryService) {
         this.useCaseLibraryClient = useCaseLibraryClient;
         this.intentService = intentService;
         this.routingPolicy = routingPolicy;
         this.properties = properties;
+        this.routeMemoryService = routeMemoryService;
+    }
+
+    public RouteSignalApplicationService(UseCaseLibraryClient useCaseLibraryClient, IntentService intentService,
+                                         RoutingPolicy routingPolicy, RouteSignalProperties properties) {
+        this(useCaseLibraryClient, intentService, routingPolicy, properties, null);
     }
 
     /**
@@ -70,40 +86,104 @@ public class RouteSignalApplicationService {
      */
     public RouteSignalResult routeInitial(UserContext user, ChatSession session, ChatCommand command,
                                           List<AttachmentRef> attachments, MemoryContext memory) {
+        return routeInitialWithProgress(user, session, command, attachments, memory)
+                .filter(RouteSignalFrame::resultFrame)
+                .map(RouteSignalFrame::result)
+                .blockLast();
+    }
+
+    /**
+     * 解析首轮路由，并在外部路由调用前先输出可落库的进度帧。
+     *
+     * <p>阻塞式 use-case/intent HTTP 调用放在 boundedElastic，避免占住 Servlet 或事件写入线程。</p>
+     */
+    public Flux<RouteSignalFrame> routeInitialWithProgress(UserContext user, ChatSession session, ChatCommand command,
+                                                           List<AttachmentRef> attachments, MemoryContext memory) {
+        return Flux.defer(() -> routeInitialFrames(user, session, command, attachments, memory));
+    }
+
+    private Flux<RouteSignalFrame> routeInitialFrames(UserContext user, ChatSession session, ChatCommand command,
+                                                      List<AttachmentRef> attachments, MemoryContext memory) {
         if (properties.useCaseLibraryEnabled()) {
-            RouteTarget useCaseRoute = routingPolicy.decideFromUseCase(matchUseCase(user, session, command, attachments, memory));
-            if (useCaseRoute.type() == RouteType.DOMAIN_AGENT) {
-                return RouteSignalResult.of(useCaseRoute);
-            }
+            return Flux.just(RouteSignalFrame.progress(progress("use_case_matching",
+                            "正在匹配可用能力", Map.of())))
+                    .concatWith(Mono.fromCallable(() -> routingPolicy.decideFromUseCase(
+                                    matchUseCase(user, session, command, attachments, memory)))
+                            .subscribeOn(Schedulers.boundedElastic())
+                            .flatMapMany(useCaseRoute -> useCaseRoute.type() == RouteType.DOMAIN_AGENT
+                                    ? Flux.just(RouteSignalFrame.result(RouteSignalResult.of(useCaseRoute)))
+                                    : intentOrFallbackFrames(user, session, command, memory)));
         }
 
+        return intentOrFallbackFrames(user, session, command, memory);
+    }
+
+    private Flux<RouteSignalFrame> intentOrFallbackFrames(UserContext user, ChatSession session, ChatCommand command,
+                                                          MemoryContext memory) {
         if (properties.intentEnabled()) {
-            long started = System.nanoTime();
-            IntentRecognitionResult result = recognizeIntent(command, memory, user);
-            long latencyMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
-            if (result.waitingClarification()) {
-                return RouteSignalResult.waitingIntentClarification(
-                        intentClarificationPayload(command, result),
-                        latencyMs,
-                        routingPolicy.intentConfidenceThreshold(),
-                        result.intentSessionId(),
-                        result.intentRequestId());
-            }
-            IntentDecision intent = result.decision();
-            if (intent != null && intent.complexity() == TaskComplexity.NEED_CLARIFICATION) {
-                return RouteSignalResult.waitingIntentClarification(
-                        intentClarificationPayload(command, result),
-                        latencyMs,
-                        routingPolicy.intentConfidenceThreshold(),
-                        result.intentSessionId(),
-                        result.intentRequestId());
-            }
-            return RouteSignalResult.ofIntent(routingPolicy.decideFromIntent(command, memory, intent, user),
-                    intent, latencyMs, routingPolicy.intentConfidenceThreshold());
+            String routeTrigger = routeTrigger(command);
+            Map<String, Object> lastRejectReason = lastIntentRejectReason(command);
+            return Flux.just(RouteSignalFrame.progress(progress("intent_calling",
+                            "正在识别问题意图", Map.of("routeTrigger", routeTrigger))))
+                    .concatWith(Mono.fromCallable(() -> routeByIntent(new IntentRouteRequest(
+                                    user, session, command, memory, routeTrigger, lastRejectReason)))
+                            .subscribeOn(Schedulers.boundedElastic())
+                            .map(RouteSignalFrame::result));
         }
 
-        return RouteSignalResult.of(RouteTarget.agentRuntime("route-signal", 0.0,
-                "use case library and intent service disabled or not matched"));
+        return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.agentRuntime("route-signal", 0.0,
+                "use case library and intent service disabled or not matched"))));
+    }
+
+    private RouteSignalResult routeByIntent(IntentRouteRequest request) {
+        long started = System.nanoTime();
+        MemoryContext intentMemory = memoryWithRouteContext(request);
+        IntentRecognitionResult result = recognizeIntent(request.command(), intentMemory, request.user());
+        long latencyMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+        if (result.waitingClarification()) {
+            if (clarificationRoundLimitReached(request)) {
+                return RouteSignalResult.of(RouteTarget.agentRuntime("intent-service", 0.0,
+                        "intent clarification max rounds exceeded"));
+            }
+            Map<String, Object> clarificationPayload = intentClarificationPayload(request.command(), result);
+            return RouteSignalResult.waitingIntentClarification(
+                    clarificationPayload,
+                    latencyMs,
+                    routingPolicy.intentConfidenceThreshold(),
+                    result.intentSessionId(),
+                    result.intentRequestId());
+        }
+        IntentDecision intent = result.decision();
+        if (intent != null && intent.complexity() == TaskComplexity.NEED_CLARIFICATION) {
+            if (clarificationRoundLimitReached(request)) {
+                return RouteSignalResult.ofIntent(RouteTarget.agentRuntime("intent-service", 0.0,
+                        "intent clarification max rounds exceeded"),
+                        intent, latencyMs, routingPolicy.intentConfidenceThreshold());
+            }
+            Map<String, Object> clarificationPayload = intentClarificationPayload(request.command(), result);
+            return RouteSignalResult.waitingIntentClarification(
+                    clarificationPayload,
+                    latencyMs,
+                    routingPolicy.intentConfidenceThreshold(),
+                result.intentSessionId(),
+                result.intentRequestId());
+        }
+        RouteTarget route = routingPolicy.decideFromIntent(request.command(), intentMemory, intent, request.user());
+        return RouteSignalResult.ofIntent(route,
+                intent, latencyMs, routingPolicy.intentConfidenceThreshold());
+    }
+
+    private boolean clarificationRoundLimitReached(IntentRouteRequest request) {
+        if (routeMemoryService == null) {
+            return false;
+        }
+        int inlineRounds = inlineClarificationHistory(request.command()).size();
+        int persistedRounds = routeMemoryService.activeClarificationCount(request.user(), request.session().id());
+        return Math.max(inlineRounds, persistedRounds) >= routeMemoryService.maxClarificationRounds();
+    }
+
+    private RouteSignalProgress progress(String stage, String message, Map<String, Object> attributes) {
+        return RouteSignalProgress.of(stage, message, attributes);
     }
 
     private UseCaseMatchResult matchUseCase(UserContext user, ChatSession session, ChatCommand command,
@@ -126,7 +206,7 @@ public class RouteSignalApplicationService {
                     user.tenantId(), user.ownerUserId(), command.sessionId(), ex.getMessage());
             /*
              * 保留一次真实调用失败的意图决策快照，方便异步记录服务统计降级样本。
-             * RoutingPolicy 会把该低置信复杂任务继续路由到 AgentRuntime。
+             * RoutingPolicy 会把该复杂任务继续路由到 AgentRuntime。
              */
             return IntentRecognitionResult.degraded(new IntentDecision(
                     "finance.runtime.degraded",
@@ -142,12 +222,79 @@ public class RouteSignalApplicationService {
         }
     }
 
+    private MemoryContext memoryWithRouteContext(IntentRouteRequest request) {
+        RouteMemoryContext context = routeMemoryService == null
+                ? new RouteMemoryContext(request.routeTrigger(), List.of(), request.lastRejectReason())
+                : routeMemoryService.loadForIntent(request.user(), request.session().id(),
+                request.routeTrigger(), request.lastRejectReason());
+        return (request.memory() == null ? MemoryContext.empty() : request.memory())
+                .withRouteMemory(mergeInlineClarificationHistory(context, request.command()));
+    }
+
+    private RouteMemoryContext mergeInlineClarificationHistory(RouteMemoryContext context, ChatCommand command) {
+        List<Map<String, Object>> inlineClarifications = inlineClarificationHistory(command);
+        if (inlineClarifications.isEmpty()) {
+            return context;
+        }
+        List<Map<String, Object>> history = new java.util.ArrayList<>();
+        if (context != null && context.history() != null) {
+            context.history().stream()
+                    .filter(item -> !"clarify".equals(String.valueOf(item.get("type"))))
+                    .forEach(history::add);
+        }
+        history.addAll(inlineClarifications);
+        return new RouteMemoryContext(
+                context == null ? RouteMemoryApplicationService.TRIGGER_CLARIFY_ANSWER : context.routeTrigger(),
+                history,
+                context == null ? Map.of() : context.lastIntentRejectReason());
+    }
+
+    private String routeTrigger(ChatCommand command) {
+        Map<String, Object> metadata = command == null || command.metadata() == null ? Map.of() : command.metadata();
+        String trigger = firstText(metadata.get("routeTrigger"),
+                map(metadata.get("conversationContext")).get("routeTrigger"));
+        if ("intent_clarification".equals(trigger)) {
+            return RouteMemoryApplicationService.TRIGGER_CLARIFY_ANSWER;
+        }
+        return trigger == null ? RouteMemoryApplicationService.TRIGGER_FIRST_TURN : trigger;
+    }
+
+    private Map<String, Object> lastIntentRejectReason(ChatCommand command) {
+        Map<String, Object> metadata = command == null || command.metadata() == null ? Map.of() : command.metadata();
+        Map<String, Object> explicit = map(metadata.get("lastIntentRejectReason"));
+        if (explicit.isEmpty()) {
+            explicit = map(map(metadata.get("conversationContext")).get("lastIntentRejectReason"));
+        }
+        if (explicit.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Object> reason = new LinkedHashMap<>();
+        String lastIntent = firstText(explicit.get("lastIntent"),
+                explicit.get("lastDomainAgentId"),
+                explicit.get("domainAgentId"));
+        String domainRejectMessage = firstText(explicit.get("domainRejectMessage"),
+                explicit.get("message"),
+                explicit.get("reason"));
+        if (lastIntent != null) {
+            reason.put("lastIntent", lastIntent);
+        }
+        if (domainRejectMessage != null) {
+            reason.put("domainRejectMessage", domainRejectMessage);
+        }
+        return reason.isEmpty() ? Map.of() : Map.copyOf(reason);
+    }
+
     private Map<String, Object> intentClarificationPayload(ChatCommand command, IntentRecognitionResult result) {
         Map<String, Object> payload = new java.util.LinkedHashMap<>(result.normalizedClarificationPayload());
         payload.putIfAbsent("source", "intent-service");
         payload.put("sourceType", "intent-clarification-request");
         payload.put("waitingType", "INTENT_CLARIFICATION");
-        payload.put("originalQuery", command == null ? "" : command.message());
+        payload.put("originalQuery", blankToDefault(originalIntentQuery(command), ""));
+        payload.put("clarifyTriggerQuery", command == null ? "" : blankToDefault(command.message(), ""));
+        List<Map<String, Object>> clarificationHistory = inlineClarificationHistory(command);
+        if (!clarificationHistory.isEmpty()) {
+            payload.put("clarificationHistory", clarificationHistory);
+        }
         if (result.intentSessionId() != null && !result.intentSessionId().isBlank()) {
             payload.put("intentSessionId", result.intentSessionId());
         }
@@ -155,6 +302,83 @@ public class RouteSignalApplicationService {
             payload.put("intentRequestId", result.intentRequestId());
         }
         return Map.copyOf(payload);
+    }
+
+    private String originalIntentQuery(ChatCommand command) {
+        Map<String, Object> intentClarification = intentClarification(command);
+        return firstText(intentClarification.get("originalQuery"), command == null ? null : command.message());
+    }
+
+    private List<Map<String, Object>> inlineClarificationHistory(ChatCommand command) {
+        Object value = intentClarification(command).get("clarificationHistory");
+        if (!(value instanceof List<?> list) || list.isEmpty()) {
+            return List.of();
+        }
+        return list.stream()
+                .filter(Map.class::isInstance)
+                .map(item -> historyClarification(map(item)))
+                .filter(item -> !item.isEmpty())
+                .toList();
+    }
+
+    private Map<String, Object> historyClarification(Map<String, Object> source) {
+        Map<String, Object> history = new LinkedHashMap<>();
+        history.put("type", "clarify");
+        String query = firstText(source.get("query"), source.get("originalQuery"), source.get("clarifyTriggerQuery"));
+        String question = firstText(source.get("clarifyQuestion"),
+                map(source.get("clarification")).get("clarifyQuestion"),
+                source.get("question"));
+        String type = firstText(source.get("clarificationType"),
+                source.get("type"),
+                map(source.get("clarification")).get("type"));
+        String answer = firstText(source.get("answer"), source.get("answerText"));
+        if (query != null) {
+            history.put("query", query);
+        }
+        if (question != null) {
+            history.put("clarifyQuestion", question);
+        }
+        if (type != null && !"clarify".equals(type)) {
+            history.put("clarificationType", type);
+        }
+        if (answer != null) {
+            history.put("answer", answer);
+        }
+        return history.size() <= 1 ? Map.of() : Map.copyOf(history);
+    }
+
+    private Map<String, Object> intentClarification(ChatCommand command) {
+        Map<String, Object> metadata = command == null || command.metadata() == null ? Map.of() : command.metadata();
+        return map(metadata.get("intentClarification"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> map(Object value) {
+        return value instanceof Map<?, ?> source ? new LinkedHashMap<>((Map<String, Object>) source) : Map.of();
+    }
+
+    private String firstText(Object... values) {
+        if (values == null) {
+            return null;
+        }
+        for (Object value : values) {
+            if (value != null && !String.valueOf(value).isBlank()) {
+                return String.valueOf(value);
+            }
+        }
+        return null;
+    }
+
+    private String blankToDefault(String value, String defaultValue) {
+        return value == null || value.isBlank() ? defaultValue : value;
+    }
+
+    private record IntentRouteRequest(UserContext user,
+                                      ChatSession session,
+                                      ChatCommand command,
+                                      MemoryContext memory,
+                                      String routeTrigger,
+                                      Map<String, Object> lastRejectReason) {
     }
 
 }

@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.infrastructure.intent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.huawei.finance.front.one.application.integration.auth.AuthHeaderRequest;
+import com.huawei.finance.front.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.finance.front.one.application.integration.intent.IntentService;
 import com.huawei.finance.front.one.application.integration.intent.IntentRetryContext;
 import com.huawei.finance.front.one.application.integration.intent.IntentRetryPolicy;
@@ -48,17 +49,27 @@ public class FinEurekaIntentService implements IntentService {
 
     @Override
     public IntentDecision recognize(ChatCommand command, MemoryContext memory, UserContext user) {
+        IntentRecognitionResult result = recognizeForRouting(command, memory, user);
+        return result.decision() == null ? wireMapper.degraded("intent response has no final decision") : result.decision();
+    }
+
+    @Override
+    public IntentRecognitionResult recognizeForRouting(ChatCommand command, MemoryContext memory, UserContext user) {
         int maxAttempts = 1 + properties.normalizedMaxRetries();
-        IntentDecision lastDecision = null;
+        IntentRecognitionResult lastResult = null;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            lastDecision = recognizeOnce(command, memory, user);
-            IntentRetryContext retryContext = new IntentRetryContext(command, memory, user, lastDecision,
+            lastResult = recognizeOnce(command, memory, user);
+            if (lastResult.waitingClarification()) {
+                return lastResult;
+            }
+            IntentDecision decision = lastResult.decision();
+            IntentRetryContext retryContext = new IntentRetryContext(command, memory, user, decision,
                     attempt, maxAttempts);
             if (!shouldRetry(retryContext)) {
-                return lastDecision;
+                return lastResult;
             }
         }
-        return lastDecision == null ? wireMapper.degraded("empty intent response") : lastDecision;
+        return lastResult == null ? IntentRecognitionResult.degraded(wireMapper.degraded("empty intent response")) : lastResult;
     }
 
     private boolean shouldRetry(IntentRetryContext context) {
@@ -74,9 +85,9 @@ public class FinEurekaIntentService implements IntentService {
         }
     }
 
-    private IntentDecision recognizeOnce(ChatCommand command, MemoryContext memory, UserContext user) {
+    private IntentRecognitionResult recognizeOnce(ChatCommand command, MemoryContext memory, UserContext user) {
         if (properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()) {
-            return wireMapper.degraded("intent service base-url is not configured");
+            return IntentRecognitionResult.degraded(wireMapper.degraded("intent service base-url is not configured"));
         }
         try {
             return webClient.post()
@@ -85,12 +96,12 @@ public class FinEurekaIntentService implements IntentService {
                     .bodyValue(wireMapper.toWireRequest(command, memory, user))
                     .retrieve()
                     .bodyToMono(JsonNode.class)
-                    .map(wireMapper::toDecision)
+                    .map(wireMapper::toRecognitionResult)
                     .timeout(properties.normalizedTimeout())
                     .blockOptional()
-                    .orElseGet(() -> wireMapper.degraded("empty intent response"));
+                    .orElseGet(() -> IntentRecognitionResult.degraded(wireMapper.degraded("empty intent response")));
         } catch (RuntimeException ex) {
-            return wireMapper.degraded("intent service failed: " + ex.getMessage());
+            return IntentRecognitionResult.degraded(wireMapper.degraded("intent service failed: " + ex.getMessage()));
         }
     }
 

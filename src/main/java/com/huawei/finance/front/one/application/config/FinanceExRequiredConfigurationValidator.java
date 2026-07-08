@@ -129,6 +129,7 @@ public class FinanceExRequiredConfigurationValidator
     private void validateOptionalIntegrations(List<String> missing) {
         if (enabled("financeex.intent.enabled")) {
             requireText(missing, "financeex.intent.base-url", "FINANCEEX_INTENT_BASE_URL");
+            requireText(missing, "financeex.intent.access-name", "FINANCEEX_INTENT_ACCESS_NAME");
         }
         if (enabled("financeex.use-case-library.enabled")) {
             requireText(missing, "financeex.use-case-library.base-url", "FINANCEEX_USE_CASE_LIBRARY_BASE_URL");

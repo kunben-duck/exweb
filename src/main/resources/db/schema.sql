@@ -269,6 +269,33 @@ CREATE INDEX IF NOT EXISTS idx_fin_ex_intent_recognition_intent_created_at
 CREATE INDEX IF NOT EXISTS idx_fin_ex_intent_recognition_resource_accepted_created_at
     ON fin_ex_intent_recognition_t(resource_id, accepted, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS fin_ex_route_memory_t (
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL,
+    user_id VARCHAR(64) NOT NULL,
+    session_id VARCHAR(64) NOT NULL,
+    item_type VARCHAR(32) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    query_text TEXT,
+    intent_id VARCHAR(128),
+    intent_name VARCHAR(256),
+    domain_agent_id VARCHAR(128),
+    route_source VARCHAR(64),
+    clarify_question TEXT,
+    clarification_type VARCHAR(128),
+    source_run_id VARCHAR(64),
+    hitl_request_id VARCHAR(64),
+    payload_json TEXT,
+    folded_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fin_ex_route_memory_owner_session_type_status_created_at
+    ON fin_ex_route_memory_t(tenant_id, user_id, session_id, item_type, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_route_memory_hitl
+    ON fin_ex_route_memory_t(hitl_request_id);
+
 CREATE TABLE IF NOT EXISTS fin_ex_chat_run_execution_t (
     id VARCHAR(64) PRIMARY KEY,
     run_id VARCHAR(64) NOT NULL,
@@ -561,6 +588,27 @@ COMMENT ON COLUMN fin_ex_intent_recognition_t.raw_response_json IS '意图服务
 COMMENT ON COLUMN fin_ex_intent_recognition_t.error_message IS '识别失败、降级或无匹配时的错误说明。';
 COMMENT ON COLUMN fin_ex_intent_recognition_t.latency_ms IS '意图服务调用耗时，单位毫秒。';
 COMMENT ON COLUMN fin_ex_intent_recognition_t.created_at IS '记录创建时间。';
+
+COMMENT ON TABLE fin_ex_route_memory_t IS '会话意图路由记忆表，保存最新成功路由摘要和未完成意图澄清链路，不参与普通语义记忆检索。';
+COMMENT ON COLUMN fin_ex_route_memory_t.id IS 'RouteMemory 主键，业务生成的 rmemId。';
+COMMENT ON COLUMN fin_ex_route_memory_t.tenant_id IS '租户标识，来自服务端身份上下文。';
+COMMENT ON COLUMN fin_ex_route_memory_t.user_id IS '系统归属用户标识，优先使用 UserContext.globalUserId，缺省回退 UserContext.userId。';
+COMMENT ON COLUMN fin_ex_route_memory_t.session_id IS '路由记忆所属聊天会话 ID。';
+COMMENT ON COLUMN fin_ex_route_memory_t.item_type IS '记忆类型：ROUTE 表示成功路由摘要，CLARIFY 表示未完成意图澄清记录。';
+COMMENT ON COLUMN fin_ex_route_memory_t.status IS '记忆状态：ACTIVE、FOLDED。';
+COMMENT ON COLUMN fin_ex_route_memory_t.query_text IS '触发该路由或澄清的用户问题。';
+COMMENT ON COLUMN fin_ex_route_memory_t.intent_id IS '意图服务返回的 intentId。';
+COMMENT ON COLUMN fin_ex_route_memory_t.intent_name IS '意图服务返回的 intentName 或展示名称。';
+COMMENT ON COLUMN fin_ex_route_memory_t.domain_agent_id IS '最终绑定或显式选择的 DomainAgentId。';
+COMMENT ON COLUMN fin_ex_route_memory_t.route_source IS '路由来源，例如 intent-service、front-selected、intent-confirmed。';
+COMMENT ON COLUMN fin_ex_route_memory_t.clarify_question IS '意图服务返回并展示给用户的澄清问题。';
+COMMENT ON COLUMN fin_ex_route_memory_t.clarification_type IS '意图服务返回的澄清类型，例如 AMBIGUOUS_ROUTE。';
+COMMENT ON COLUMN fin_ex_route_memory_t.source_run_id IS '创建该路由记忆的 runId。';
+COMMENT ON COLUMN fin_ex_route_memory_t.hitl_request_id IS '意图澄清对应的 HITL 请求 ID。';
+COMMENT ON COLUMN fin_ex_route_memory_t.payload_json IS '路由或澄清原始摘要 payload，脱敏后保存用于排障。';
+COMMENT ON COLUMN fin_ex_route_memory_t.folded_at IS '澄清链路被最终路由折叠的时间。';
+COMMENT ON COLUMN fin_ex_route_memory_t.created_at IS '记录创建时间。';
+COMMENT ON COLUMN fin_ex_route_memory_t.updated_at IS '记录更新时间。';
 
 COMMENT ON TABLE fin_ex_chat_run_execution_t IS '聊天 run 执行控制面表，保存实例归属、心跳、租约、恢复策略和 fencing token，不承载用户业务状态。';
 COMMENT ON COLUMN fin_ex_chat_run_execution_t.id IS '执行控制面记录主键，业务生成的 executionId。';

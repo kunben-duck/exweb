@@ -1,8 +1,5 @@
 package com.huawei.finance.front.one.infrastructure.intent;
 
-import com.huawei.finance.front.one.domain.chat.AttachmentRef;
-import com.huawei.finance.front.one.domain.memory.MemoryContext;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -10,20 +7,16 @@ import java.util.Map;
  *
  * <p>DTO 放在 infra 层，避免把外部 HTTP 契约反向污染 application/domain。</p>
  *
- * @param tenantId 租户标识。
- * @param userId 用户标识。
- * @param sessionId 前端聊天会话标识。
- * @param message 本轮用户输入文本。
- * @param attachments 本轮关联附件引用。
- * @param metadata 前端或上游扩展元数据。
- * @param memory SuperAgent 可选记忆上下文；长短期记忆关闭时为空上下文。
+ * @param accessName 意图服务入口名称。
+ * @param query 当前待分类用户问题；澄清回答场景填用户最新回答。
+ * @param userId 用户工号或用户标识。
+ * @param conversationContext 多轮路由上下文。
+ * @param options 调试和扩展选项。
  */
 public record IntentRecognizeRequest(
-        String tenantId,
+        String accessName,
+        String query,
         String userId,
-        String sessionId,
-        String message,
-        List<AttachmentRef> attachments,
-        Map<String, Object> metadata,
-        MemoryContext memory
+        Map<String, Object> conversationContext,
+        Map<String, Object> options
 ) {}

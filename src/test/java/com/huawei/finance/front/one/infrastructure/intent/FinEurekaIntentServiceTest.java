@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.config.IntegrationAuthProperties;
+import com.huawei.finance.front.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.finance.front.one.application.integration.intent.IntentRetryContext;
 import com.huawei.finance.front.one.application.integration.intent.IntentRetryPolicy;
 import com.huawei.finance.front.one.application.service.auth.AuthHeaderProviderRegistry;
@@ -12,6 +13,7 @@ import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.intent.TaskComplexity;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
+import com.huawei.finance.front.one.domain.memory.RouteMemoryContext;
 import com.huawei.finance.front.one.infrastructure.auth.NoopAuthHeaderProvider;
 import com.huawei.finance.front.one.infrastructure.auth.SgovAuthHeaderProvider;
 import com.sun.net.httpserver.HttpServer;
@@ -33,16 +35,41 @@ class FinEurekaIntentServiceTest {
 
     @Test
     void mapsInternalCommandToIntentWireRequest() {
-        IntentRecognizeRequest request = new IntentServiceRequestMapper()
+        IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
+        properties.setAccessName("eureka2_260718");
+        IntentRecognizeRequest request = new IntentServiceRequestMapper(properties)
                 .toWireRequest(command(), MemoryContext.empty(), user());
 
-        assertThat(request.tenantId()).isEqualTo("tenant1");
+        assertThat(request.accessName()).isEqualTo("eureka2_260718");
+        assertThat(request.query()).isEqualTo("今年库户的总利润是多少");
         assertThat(request.userId()).isEqualTo("user1");
-        assertThat(request.sessionId()).isEqualTo("session1");
-        assertThat(request.message()).isEqualTo("今年库户的总利润是多少");
-        assertThat(request.attachments()).isEmpty();
-        assertThat(request.metadata()).isEmpty();
-        assertThat(request.memory()).isEqualTo(MemoryContext.empty());
+        assertThat(request.conversationContext())
+                .containsEntry("routeTrigger", "first_turn")
+                .containsEntry("lastIntentRejectReason", Map.of())
+                .containsEntry("history", List.of());
+        assertThat(request.options()).containsEntry("trace", false);
+    }
+
+    @Test
+    void mapsRouteMemoryContextToIntentConversationContext() {
+        IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
+        properties.setAccessName("eureka2_260718");
+        RouteMemoryContext routeMemory = new RouteMemoryContext(
+                "domain_reject",
+                List.of(Map.of("type", "route", "query", "支付成功率口径", "intent", "财经知识助手"),
+                        Map.of("type", "clarify", "query", "看下方案",
+                                "clarifyQuestion", "你想看处理方案还是项目方案？",
+                                "clarificationType", "AMBIGUOUS_ROUTE")),
+                Map.of("lastIntent", "财经深度研究", "domainRejectMessage", "不属于当前领域"));
+
+        IntentRecognizeRequest request = new IntentServiceRequestMapper(properties)
+                .toWireRequest(command(), MemoryContext.empty().withRouteMemory(routeMemory), user());
+
+        assertThat(request.conversationContext())
+                .containsEntry("routeTrigger", "domain_reject")
+                .containsEntry("lastIntentRejectReason",
+                        Map.of("lastIntent", "财经深度研究", "domainRejectMessage", "不属于当前领域"));
+        assertThat((List<?>) request.conversationContext().get("history")).hasSize(2);
     }
 
     @Test
@@ -57,6 +84,7 @@ class FinEurekaIntentServiceTest {
                           "confidence": 0.95,
                           "intentId": "98989898dffd888df88789",
                           "intentName": "财经智能问答",
+                          "routeAction": "ignored-item-field",
                           "resourceInstruction": {
                             "resourceId": "FIN-SKL-88888888"
                           },
@@ -64,6 +92,7 @@ class FinEurekaIntentServiceTest {
                           "source": "llm"
                         }
                       ],
+                      "routeAction": "ROUTE_SINGLE",
                       "message": "[用户问题]使用财经智能问数的能力，查询今年库户的总利润是多少\\n[识别结果]匹配成功: 财经智能问答;\\n"
                     },
                     "message": "success",
@@ -79,15 +108,16 @@ class FinEurekaIntentServiceTest {
         assertThat(decision.complexity()).isEqualTo(TaskComplexity.SIMPLE);
         assertThat(decision.confidence()).isEqualTo(0.95);
         assertThat(decision.simpleTask()).isTrue();
-        assertThat(decision.candidateDomainAgentId()).isEqualTo("FIN-SKL-88888888");
-        assertThat(decision.slots()).containsEntry("resourceId", "FIN-SKL-88888888")
+        assertThat(decision.candidateDomainAgentId()).isEqualTo("98989898dffd888df88789");
+        assertThat(decision.slots()).containsEntry("intentId", "98989898dffd888df88789")
+                .containsEntry("resourceId", "FIN-SKL-88888888")
                 .containsEntry("source", "llm");
         assertThat(decision.raw()).containsKey("selectedItem")
                 .containsEntry("resultMessage", "[用户问题]使用财经智能问数的能力，查询今年库户的总利润是多少\n[识别结果]匹配成功: 财经智能问答;\n");
     }
 
     @Test
-    void selectsHighestConfidenceItem() throws Exception {
+    void missingRouteActionDoesNotSelectByConfidence() throws Exception {
         String response = """
                 {
                   "code": 200,
@@ -105,9 +135,93 @@ class FinEurekaIntentServiceTest {
 
         IntentDecision decision = withServer(response).recognize(command(), MemoryContext.empty(), user());
 
-        assertThat(decision.intentCode()).isEqualTo("high");
-        assertThat(decision.candidateDomainAgentId()).isEqualTo("HIGH");
-        assertThat(decision.confidence()).isEqualTo(0.91);
+        assertThat(decision.intentCode()).isEqualTo("finance.runtime.no_intent");
+        assertThat(decision.candidateDomainAgentId()).isNull();
+        assertThat(decision.confidence()).isZero();
+        assertThat(decision.raw()).containsEntry("reason", "routeAction missing");
+    }
+
+    @Test
+    void routeSingleUsesFirstItemIntentIdAsDomainAgentId() throws Exception {
+        String response = """
+                {
+                  "code": 200,
+                  "status": "success",
+                  "data": {
+                    "result": {
+                      "routeAction": "ROUTE_SINGLE",
+                      "items": [
+                        {
+                          "confidence": 0.51,
+                          "intentId": "intent_as_skill",
+                          "intentName": "指定领域能力",
+                          "resourceInstruction": {"resourceId": "legacy-resource"}
+                        }
+                      ],
+                      "clarification": null
+                    }
+                  }
+                }
+                """;
+
+        IntentDecision decision = withServer(response).recognize(command(), MemoryContext.empty(), user());
+
+        assertThat(decision.candidateDomainAgentId()).isEqualTo("intent_as_skill");
+        assertThat(decision.slots()).containsEntry("resourceId", "legacy-resource");
+    }
+
+    @Test
+    void routeMultiAndNoMatchEnterAgentRuntime() throws Exception {
+        IntentDecision routeMulti = withServer("""
+                {"code":200,"status":"success","data":{"result":{"routeAction":"ROUTE_MULTI","items":[
+                  {"confidence":0.91,"intentId":"a","intentName":"A"},
+                  {"confidence":0.89,"intentId":"b","intentName":"B"}
+                ],"clarification":null}}}
+                """).recognize(command(), MemoryContext.empty(), user());
+        IntentDecision noMatch = withServer("""
+                {"code":200,"status":"success","data":{"result":{"routeAction":"NO_MATCH","items":[],"clarification":null}}}
+                """).recognize(command(), MemoryContext.empty(), user());
+
+        assertThat(routeMulti.complexity()).isEqualTo(TaskComplexity.COMPLEX);
+        assertThat(routeMulti.candidateDomainAgentId()).isNull();
+        assertThat(routeMulti.raw()).containsEntry("reason", "routeAction=ROUTE_MULTI");
+        assertThat(noMatch.complexity()).isEqualTo(TaskComplexity.COMPLEX);
+        assertThat(noMatch.candidateDomainAgentId()).isNull();
+        assertThat(noMatch.raw()).containsEntry("reason", "routeAction=NO_MATCH");
+    }
+
+    @Test
+    void clarifyRouteActionReturnsWaitingClarification() throws Exception {
+        IntentRecognitionResult result = withServer("""
+                {
+                  "code": 200,
+                  "status": "success",
+                  "data": {
+                    "result": {
+                      "routeAction": "CLARIFY",
+                      "items": [],
+                      "intentSessionId": "intent-session-1",
+                      "intentRequestId": "intent-request-1",
+                      "clarification": {
+                        "type": "AMBIGUOUS_ROUTE",
+                        "clarifyQuestion": "你想看处理方案还是项目方案？",
+                        "candidateIntents": [
+                          {"intentId":"deep_analysis","intentName":"财经深度研究","confidence":0.72}
+                        ]
+                      }
+                    }
+                  }
+                }
+                """).recognizeForRouting(command(), MemoryContext.empty(), user());
+
+        assertThat(result.waitingClarification()).isTrue();
+        assertThat(result.intentSessionId()).isEqualTo("intent-session-1");
+        assertThat(result.intentRequestId()).isEqualTo("intent-request-1");
+        assertThat(result.clarificationPayload())
+                .containsEntry("routeAction", "CLARIFY")
+                .containsEntry("type", "AMBIGUOUS_ROUTE")
+                .containsEntry("clarifyQuestion", "你想看处理方案还是项目方案？");
+        assertThat(result.clarificationPayload()).doesNotContainKey("rawIntentResponse");
     }
 
     @Test
@@ -135,7 +249,7 @@ class FinEurekaIntentServiceTest {
                 {"code":500,"data":{"status":"failed","message":"still-down"}}
                 """,
                 """
-                {"code":200,"data":{"status":"success","result":{"items":[
+                {"code":200,"data":{"status":"success","result":{"routeAction":"ROUTE_SINGLE","items":[
                   {"confidence":0.91,"intentId":"high","intentName":"高置信","resourceInstruction":{"resourceId":"HIGH"}}
                 ]}}}
                 """);
@@ -144,7 +258,7 @@ class FinEurekaIntentServiceTest {
             IntentDecision decision = fixture.service().recognize(command(), MemoryContext.empty(), user());
 
             assertThat(decision.intentCode()).isEqualTo("high");
-            assertThat(decision.candidateDomainAgentId()).isEqualTo("HIGH");
+            assertThat(decision.candidateDomainAgentId()).isEqualTo("high");
             assertThat(attempts.get()).isEqualTo(3);
         } finally {
             fixture.close();
@@ -349,7 +463,9 @@ class FinEurekaIntentServiceTest {
     }
 
     private IntentServiceWireMapper wireMapper() {
-        return new IntentServiceWireMapper(new IntentServiceRequestMapper(),
+        IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
+        properties.setAccessName("eureka2_260718");
+        return new IntentServiceWireMapper(new IntentServiceRequestMapper(properties),
                 new IntentServiceResponseMapper(objectMapper));
     }
 

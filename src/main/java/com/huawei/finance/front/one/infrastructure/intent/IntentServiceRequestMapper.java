@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.infrastructure.intent;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
+import java.util.Map;
 import org.springframework.stereotype.Component;
 
 /**
@@ -13,6 +14,12 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class IntentServiceRequestMapper {
+    private final IntentServiceHttpProperties properties;
+
+    public IntentServiceRequestMapper(IntentServiceHttpProperties properties) {
+        this.properties = properties;
+    }
+
     /**
      * 构造下游意图识别请求体。
      *
@@ -23,13 +30,45 @@ public class IntentServiceRequestMapper {
      */
     public IntentRecognizeRequest toWireRequest(ChatCommand command, MemoryContext memory, UserContext user) {
         return new IntentRecognizeRequest(
-                user.tenantId(),
-                user.ownerUserId(),
-                command.sessionId(),
-                command.message(),
-                command.attachments(),
-                command.metadata(),
-                memory
+                normalizedAccessName(),
+                command == null ? "" : blankToDefault(command.message(), ""),
+                intentUserId(user),
+                conversationContext(memory),
+                Map.of("trace", properties.isTrace())
         );
+    }
+
+    private String normalizedAccessName() {
+        String accessName = properties.getAccessName();
+        return accessName == null ? "" : accessName.trim();
+    }
+
+    private String intentUserId(UserContext user) {
+        if (user == null) {
+            return "";
+        }
+        return firstText(user.employeeNumber(), user.userAccount(), user.ownerUserId(), user.userId());
+    }
+
+    private Map<String, Object> conversationContext(MemoryContext memory) {
+        return memory == null || memory.routeMemory() == null
+                ? com.huawei.finance.front.one.domain.memory.RouteMemoryContext.empty().toConversationContext()
+                : memory.routeMemory().toConversationContext();
+    }
+
+    private String firstText(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String blankToDefault(String value, String defaultValue) {
+        return value == null || value.isBlank() ? defaultValue : value;
     }
 }

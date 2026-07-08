@@ -171,14 +171,14 @@ FinanceEXChatService#executeRun(...)
 6. `MemoryApplicationService#loadForRun(...)` 按配置加载可选记忆。
 7. `SessionApplicationService#prepareRunMessage(...)` 写入或定位本轮 user message。
 8. 先检查 `targetType=DOMAIN_AGENT,targetId=...`；存在时进入 `DOMAIN_AGENT` 路由，不读取 RuntimeBinding。
-9. 未显式指定 DomainAgent 时查询或创建 RuntimeBinding。
-10. `RouteSignalApplicationService#routeInitial(...)` 调用可选用例库和意图服务。
-11. `ChatRunApplicationService#createRunning(...)` 创建业务 run。
-12. 如果本轮实际调用了意图服务，`IntentRecognitionRecordService#recordAsync(...)` 用当前 `UserContext`、query、`IntentDecision`、最终 `RouteTarget` 和 runId 构造不可变快照，并提交到专用 Servlet/MVC 异步线程池；写入失败不影响主链路。
-13. `ChatRunLeaseApplicationService#startRun(...)` 创建 execution lease。
-14. 根据 `RouteType` 调用 SystemResponse 或 `AgentRuntimeExecutor`；DomainAgent 作为 `provider=domain-agent` 的 AgentRuntime 执行。
-15. 外层补齐 `run.started` 和 `run.completed`。
-16. 进入 `persistAndPublishRunEvents(...)`。
+9. 未显式指定 DomainAgent 时只查询当前 active RuntimeBinding；没有绑定时先保持 route 为空。
+10. `ChatRunApplicationService#createRunning(...)` 创建业务 run。
+11. `ChatRunLeaseApplicationService#startRun(...)` 创建 execution lease。
+12. 先持久化并推送 `run.started`，让前端立即拿到首个事实事件。
+13. route 为空时进入 run pipeline 内的 `RouteSignalApplicationService#routeInitialWithProgress(...)`，先输出 `runtime.progress(sourceType=route-progress, stage=intent_calling/use_case_matching)`，再在后台执行可选用例库和意图服务。
+14. 如果本轮实际调用了意图服务，`IntentRecognitionRecordService#recordAsync(...)` 用当前 `UserContext`、query、`IntentDecision`、最终 `RouteTarget` 和 runId 构造不可变快照，并提交到专用 Servlet/MVC 异步线程池；写入失败不影响主链路。
+15. 根据最终 `RouteType` 调用 SystemResponse 或 `AgentRuntimeExecutor`；DomainAgent 作为 `provider=domain-agent` 的 AgentRuntime 执行。
+16. 外层补齐 `run.completed`，所有事件统一进入 `persistAndPublishRunEvents(...)`。
 
 关键分支：
 

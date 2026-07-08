@@ -13,7 +13,7 @@ import java.util.Map;
  * @param route 本轮最终路由结果，不能为空。
  * @param intentDecision 意图服务识别结果；未调用意图服务时为空。
  * @param intentLatencyMs 意图服务调用耗时；未调用意图服务时为空。
- * @param intentConfidenceThreshold 本次意图采纳阈值；未调用意图服务时为空。
+ * @param intentConfidenceThreshold 兼容旧统计记录的意图阈值；不再参与 routeAction 裁决。
  * @param waitingIntentClarification 是否等待意图澄清。
  * @param intentClarificationPayload 意图澄清请求 payload。
  * @param intentSessionId 意图服务澄清会话 ID。

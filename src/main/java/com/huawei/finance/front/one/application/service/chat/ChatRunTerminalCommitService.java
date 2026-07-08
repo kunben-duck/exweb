@@ -88,6 +88,9 @@ public class ChatRunTerminalCommitService {
         ));
         bindAssistantMessage(stored.runId(), savedAssistant.id());
         RuntimeBinding binding = refreshBinding(command.context(), savedAssistant.id());
+        if (command.context().continuationHitlRequest() != null) {
+            chatHitlService.markAnswered(command.context().continuationHitlRequest());
+        }
         chatHitlService.saveWaiting(command.waitingRequest());
         observeRun(stored);
         markExecutionTerminal(stored);

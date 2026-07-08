@@ -19,7 +19,9 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import reactor.test.StepVerifier;
 class RouteSignalApplicationServiceTest {
     private final UserContext user = new UserContext("tenant1", "user1", "tester");
     private final ChatSession session = new ChatSession("session1", "tenant1", "user1",
@@ -95,6 +97,33 @@ class RouteSignalApplicationServiceTest {
     }
 
     @Test
+    void routeInitialWithProgressEmitsIntentCallingBeforeRouteResult() {
+        AtomicInteger intentCalls = new AtomicInteger();
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                (command, memory, user) -> {
+                    intentCalls.incrementAndGet();
+                    return simpleDomainAgentIntent();
+                });
+
+        StepVerifier.create(service.routeInitialWithProgress(user, session, command, List.of(), memory), 1)
+                .assertNext(frame -> {
+                    assertThat(frame.progressFrame()).isTrue();
+                    assertThat(frame.progress().stage()).isEqualTo("intent_calling");
+                    assertThat(frame.progress().message()).isEqualTo("正在识别问题意图");
+                    assertThat(frame.progress().attributes()).containsEntry("routeTrigger", "first_turn");
+                })
+                .thenRequest(1)
+                .assertNext(frame -> {
+                    assertThat(frame.resultFrame()).isTrue();
+                    assertThat(frame.result().route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
+                    assertThat(frame.result().route().selectedAgentCode()).isEqualTo("employee_reimbursement_agent");
+                })
+                .verifyComplete();
+        assertThat(intentCalls).hasValue(1);
+    }
+
+    @Test
     void intentWaitingClarificationStopsAtWaitingRoute() {
         IntentService intentService = new IntentService() {
             @Override
@@ -123,6 +152,88 @@ class RouteSignalApplicationServiceTest {
                 .containsEntry("waitingType", "INTENT_CLARIFICATION")
                 .containsEntry("intentSessionId", "intent-session-1")
                 .containsEntry("intentRequestId", "intent-request-1");
+    }
+
+    @Test
+    void clarifyAnswerUsesInlineHistoryWhenRouteMemoryIsUnavailable() {
+        AtomicReference<MemoryContext> capturedMemory = new AtomicReference<>();
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                (command, memory, user) -> {
+                    capturedMemory.set(memory);
+                    return simpleDomainAgentIntent();
+                });
+        ChatCommand clarifyAnswer = new ChatCommand("cmd2", "tenant1", "user1", "session1",
+                null, "web", "处理方案", List.of(), Map.of(
+                "routeTrigger", "clarify_answer",
+                "intentClarification", Map.of(
+                        "originalQuery", "再帮我看下方案",
+                        "clarificationHistory", List.of(Map.of(
+                                "type", "clarify",
+                                "query", "再帮我看下方案",
+                                "clarifyQuestion", "你想看处理方案还是项目方案？",
+                                "clarificationType", "AMBIGUOUS_ROUTE",
+                                "answer", "处理方案"
+                        ))
+                )
+        ));
+
+        RouteSignalResult result = service.routeInitial(user, session, clarifyAnswer, List.of(), memory);
+
+        assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
+        assertThat(capturedMemory.get().routeMemory().routeTrigger()).isEqualTo("clarify_answer");
+        assertThat(capturedMemory.get().routeMemory().history()).singleElement()
+                .satisfies(item -> assertThat(item)
+                        .containsEntry("type", "clarify")
+                        .containsEntry("query", "再帮我看下方案")
+                        .containsEntry("clarifyQuestion", "你想看处理方案还是项目方案？")
+                        .containsEntry("answer", "处理方案"));
+    }
+
+    @Test
+    void followUpClarificationKeepsOriginalQueryAndPreviousHistory() {
+        IntentService intentService = new IntentService() {
+            @Override
+            public IntentDecision recognize(ChatCommand command, MemoryContext memory, UserContext user) {
+                throw new AssertionError("recognizeForRouting should be used");
+            }
+
+            @Override
+            public IntentRecognitionResult recognizeForRouting(ChatCommand command, MemoryContext memory, UserContext user) {
+                return IntentRecognitionResult.waitingClarification(Map.of(
+                        "clarifyQuestion", "你关注哪个区域？",
+                        "type", "UNCLEAR_REFERENCE"
+                ), "intent-session-2", "intent-request-2");
+            }
+        };
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                intentService);
+        ChatCommand clarifyAnswer = new ChatCommand("cmd2", "tenant1", "user1", "session1",
+                null, "web", "处理方案", List.of(), Map.of(
+                "routeTrigger", "clarify_answer",
+                "intentClarification", Map.of(
+                        "originalQuery", "再帮我看下方案",
+                        "clarificationHistory", List.of(Map.of(
+                                "type", "clarify",
+                                "query", "再帮我看下方案",
+                                "clarifyQuestion", "你想看处理方案还是项目方案？",
+                                "answer", "处理方案"
+                        ))
+                )
+        ));
+
+        RouteSignalResult result = service.routeInitial(user, session, clarifyAnswer, List.of(), memory);
+
+        assertThat(result.waitingIntentClarification()).isTrue();
+        assertThat(result.intentClarificationPayload())
+                .containsEntry("originalQuery", "再帮我看下方案")
+                .containsEntry("clarifyTriggerQuery", "处理方案");
+        assertThat((List<?>) result.intentClarificationPayload().get("clarificationHistory"))
+                .singleElement()
+                .satisfies(item -> assertThat((Map<String, Object>) item)
+                        .containsEntry("query", "再帮我看下方案")
+                        .containsEntry("answer", "处理方案"));
     }
 
     @Test

@@ -89,8 +89,10 @@ financeex:
     # v3 中意图服务只是可选路由信号，默认关闭；关闭时首轮请求不会调用该 HTTP API。
     enabled: ${FINANCEEX_INTENT_ENABLED:false}
     base-url: ${FINANCEEX_INTENT_BASE_URL:}
-    recognize-path: ${FINANCEEX_INTENT_RECOGNIZE_PATH:/v1/intents/recognize}
-    # 意图服务返回 resourceInstruction.resourceId 时，只有 confidence 达到该阈值才采用对应技能。
+    access-name: ${FINANCEEX_INTENT_ACCESS_NAME:}
+    recognize-path: ${FINANCEEX_INTENT_RECOGNIZE_PATH:/intent-recognition-configuration/getIntentDecision}
+    trace: ${FINANCEEX_INTENT_TRACE:false}
+    # confidence 仅用于记录和排障；是否进入 DomainAgent 以 routeAction=ROUTE_SINGLE 为准。
     confidence-threshold: ${FINANCEEX_INTENT_CONFIDENCE_THRESHOLD:0.85}
     timeout: ${FINANCEEX_INTENT_TIMEOUT:5s}
     # 意图服务调用失败后的最大重试次数；不包含首次调用，运行时最多按 10 次生效。
@@ -104,6 +106,28 @@ financeex:
       core-size: ${FINANCEEX_INTENT_RECORD_EXECUTOR_CORE_SIZE:1}
       max-size: ${FINANCEEX_INTENT_RECORD_EXECUTOR_MAX_SIZE:2}
       queue-capacity: ${FINANCEEX_INTENT_RECORD_EXECUTOR_QUEUE_CAPACITY:1000}
+  route-memory:
+    # RouteMemory 是意图路由上下文事实源，不受普通短期/长期 memory 开关影响。
+    top-k: ${FINANCEEX_ROUTE_MEMORY_TOP_K:5}
+    max-clarification-rounds: ${FINANCEEX_ROUTE_MEMORY_MAX_CLARIFICATION_ROUNDS:3}
+    # RouteMemory 只增强意图上下文；读取超时或写入失败均降级，不阻断 /chat/runs 主链路。
+    timeout: ${FINANCEEX_ROUTE_MEMORY_TIMEOUT:300ms}
+    read-timeout: ${FINANCEEX_ROUTE_MEMORY_READ_TIMEOUT:${FINANCEEX_ROUTE_MEMORY_TIMEOUT:300ms}}
+    executor:
+      core-size: ${FINANCEEX_ROUTE_MEMORY_EXECUTOR_CORE_SIZE:1}
+      max-size: ${FINANCEEX_ROUTE_MEMORY_EXECUTOR_MAX_SIZE:2}
+      queue-capacity: ${FINANCEEX_ROUTE_MEMORY_EXECUTOR_QUEUE_CAPACITY:1000}
+    read-executor:
+      core-size: ${FINANCEEX_ROUTE_MEMORY_READ_EXECUTOR_CORE_SIZE:1}
+      max-size: ${FINANCEEX_ROUTE_MEMORY_READ_EXECUTOR_MAX_SIZE:2}
+      queue-capacity: ${FINANCEEX_ROUTE_MEMORY_READ_EXECUTOR_QUEUE_CAPACITY:64}
+    write-executor:
+      core-size: ${FINANCEEX_ROUTE_MEMORY_WRITE_EXECUTOR_CORE_SIZE:1}
+      max-size: ${FINANCEEX_ROUTE_MEMORY_WRITE_EXECUTOR_MAX_SIZE:1}
+      queue-capacity: ${FINANCEEX_ROUTE_MEMORY_WRITE_EXECUTOR_QUEUE_CAPACITY:1000}
+    circuit-breaker:
+      failure-threshold: ${FINANCEEX_ROUTE_MEMORY_CIRCUIT_BREAKER_FAILURE_THRESHOLD:5}
+      open-duration: ${FINANCEEX_ROUTE_MEMORY_CIRCUIT_BREAKER_OPEN_DURATION:30s}
   use-case-library:
     # v3 中用例库只是可选路由信号，默认关闭；关闭时首轮请求不会调用该 HTTP API。
     enabled: ${FINANCEEX_USE_CASE_LIBRARY_ENABLED:false}

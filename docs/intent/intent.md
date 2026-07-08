@@ -1,306 +1,465 @@
-# 意图识别服务接入说明
+# 意图服务接口文档
 
-本文档说明财经意图识别服务的独立调用方式，用于后端 adapter 联调、问题排查和意图识别效果验证。
+本文整理 ChatService / Supervisor 调用意图服务的新接口约定。接口用于把用户最新问题和路由上下文提交给意图服务，由意图服务返回最终路由动作：直接路由、进入规划、无匹配或继续澄清。
 
-## 使用场景
-
-意图识别服务用于把用户问题识别为可路由的业务能力，并返回候选意图、置信度和绑定资源 ID。ChatService 可根据返回结果和置信度阈值决定是否路由到对应能力。
-
-典型场景包括：
-
-- 首轮问题识别，例如“查询今年客户的总利润是多少”。
-- DomainAgent 或其他能力拒答后，带上下文重新识别。
-- 澄清完成后，把合并后的用户真实诉求重新送入意图服务。
-- 排查意图识别效果，打开 trace 查看服务内部提示词和遍历过程。
-
-## 调用地址
-
-```text
-POST {INTENT_API_URL}
-```
-
-测试环境示例：
-
-```text
-http://kweuat.huawei.com/intent-recognition-configuration/getIntentResult
-```
-
-动态 Token 获取地址：
-
-```text
-http://kwe-beta.huawei.com/ApiCommonQuery/appToken/getRestAppDynamicToken
-```
-
-## 鉴权方式
-
-调用意图服务前，需要先通过应用 ID 和静态 Token 获取动态 Token，然后把动态 Token 放入 `Authorization` 请求头。
+## 1. 接口概览
 
 ```http
+POST {intent-base-url}/intent-recognition-configuration/getIntentDecision
 Content-Type: application/json
-Authorization: {dynamic_token}
+Authorization: {dynamicToken}
 ```
 
-注意：
+文档中简称该接口为 `/getIntentDecision`。
 
-- 不要在代码仓库中提交真实静态 Token。
-- `verify=false` 只建议用于本地或测试环境排查证书问题，生产环境应按企业证书规范处理。
-- `options.trace=true` 会返回详细链路信息，适合排障；生产常态调用建议按性能和安全要求关闭。
+调用方需要先通过企业鉴权服务获取动态 token，再把 token 放入 `Authorization` 请求头。`APP_ID`、静态 token、动态 token 获取地址由部署环境配置，不应写死在代码或文档示例中。
 
-## 请求体
+## 2. 请求结构
 
 ```json
 {
-  "accessName": "y_11112",
-  "query": "用户是想看支付成功率下降后怎么处理",
+  "accessName": "eureka2_260718",
+  "query": "对账差异识别",
+  "userId": "00859938",
+  "conversationContext": {
+    "routeTrigger": "first_turn",
+    "lastIntentRejectReason": null,
+    "history": []
+  },
+  "options": {
+    "trace": false
+  }
+}
+```
+
+### 2.1 顶层字段
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `accessName` / `intentID` / `entranceID` | string | 三选一 | 意图入口，由意图服务配置决定。当前示例使用 `accessName`。 |
+| `query` | string | 是 | 当前待分类用户问题。澄清回答场景下，填用户对澄清问题的最新回答。 |
+| `userId` | string | 否 | 用户工号或用户标识，用于画像增强、审计或日志。 |
+| `conversationContext` | object | 否 | 多轮路由上下文。首轮可为空，但建议显式传空结构。 |
+| `options.trace` | boolean | 否 | 是否返回调试 trace。生产调用建议为 `false`。 |
+
+### 2.2 conversationContext
+
+```json
+{
+  "routeTrigger": "domain_reject",
+  "lastIntentRejectReason": {
+    "lastIntent": "财经深度研究",
+    "domainRejectMessage": "深度研究无法给出支付成功率下降处理相关内容，返回主入口重新决策"
+  },
+  "history": [
+    {
+      "type": "route",
+      "query": "查一下 3 月 19 到 20 号各渠道支付成功率有没有明显下降",
+      "intent": "财经智能问数"
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `routeTrigger` | string | 否 | 触发重新分流的原因。 |
+| `lastIntentRejectReason` | object | 否 | 上一个跳出的意图及拒答原因。仅传当前这次拒答，不累计历史拒答噪音。 |
+| `history` | array | 否 | 历史成功路由记录和未完成的澄清链路，按时间从早到晚排列。 |
+
+### 2.3 routeTrigger 枚举
+
+| 枚举 | 说明 | 是否调用意图服务 |
+| --- | --- | --- |
+| `first_turn` | 首轮路由。 | 是 |
+| `domain_reject` | 当前 DomainAgent 拒答、低置信或不属于当前领域，回到 Supervisor 重新分流。 | 是 |
+| `user_correction` | 用户主动纠正路由，例如手动关闭当前领域能力后重新判断。 | 是 |
+| `clarify_answer` | 用户回答了意图服务上一轮澄清问题，需要继续分类。 | 是 |
+| `explicit_switch` | 用户通过前端显式选择目标能力。 | 否 |
+
+`explicit_switch` 不走意图服务，但建议把用户选择结果追加到在线 history，作为后续路由上下文。
+
+## 3. history 结构
+
+`conversationContext.history` 只放在线路由需要的摘要，默认取最新 TopK。完整链路、原始问题和澄清过程应保存在 ChatService 审计日志或消息历史中。
+
+### 3.1 成功路由记录
+
+```json
+{
+  "type": "route",
+  "query": "支付成功率这个指标口径是怎么算的？",
+  "intent": "财经知识助手"
+}
+```
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `type` | string | 固定为 `route`。 |
+| `query` | string | 当时成功路由的用户问题。 |
+| `intent` | string | 当时命中的意图或 DomainAgent 名称。 |
+
+### 3.2 澄清过程记录
+
+用户回答澄清问题时，用户回答放在本轮顶层 `query` 中；上一轮触发澄清的问题和澄清问题写入 `history.type=clarify`。
+
+```json
+{
+  "type": "clarify",
+  "query": "再帮我看下方案",
+  "clarifyQuestion": "你想看处理方案还是项目方案？",
+  "clarificationType": "AMBIGUOUS_ROUTE"
+}
+```
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `type` | string | 固定为 `clarify`。 |
+| `query` | string | 触发这轮澄清的用户输入。 |
+| `clarifyQuestion` | string | 意图服务上一轮返回、Supervisor 展示给用户的问题。 |
+| `clarificationType` | string | 可选。当前为 `AMBIGUOUS_ROUTE` 或 `UNCLEAR_REFERENCE`。 |
+
+多轮澄清时可以追加多条 `clarify`。澄清成功后，建议把多条澄清过程折叠成一条 `route` 记录，避免长期把完整澄清链路放入在线路由上下文。
+
+## 4. 响应结构
+
+```json
+{
+  "status": "success",
+  "code": 200,
+  "message": "success",
+  "data": {
+    "result": {
+      "routeAction": "ROUTE_SINGLE",
+      "items": [
+        {
+          "intentId": "domain_agent_finance_knowledge",
+          "intentName": "财经知识助手",
+          "confidence": 0.92,
+          "source": "llm",
+          "accessName": "eureka2_260718",
+          "resourceInstruction": {
+            "resourceId": "resource_finance_knowledge"
+          }
+        }
+      ],
+      "clarification": null
+    },
+    "trace": {}
+  }
+}
+```
+
+调用方必须优先读取 `data.result.routeAction`，不能只通过 `items.length` 判断结果。ChatService 固定把
+`ROUTE_SINGLE.items[0].intentId` 作为可调用的 `DomainAgentId/skillId`；`resourceInstruction.resourceId`
+只进入诊断字段和统计记录，不参与本服务路由，且缺少 `intentId` 时不会用 `resourceId` 兜底。
+
+### 4.1 routeAction
+
+| routeAction | items | clarification | ChatService / Supervisor 行为 |
+| --- | --- | --- | --- |
+| `ROUTE_SINGLE` | 1 个 | null | 直接路由到 `items[0]` 对应 DomainAgent。 |
+| `ROUTE_MULTI` | 多个 | null | 进入 Supervisor / Relay 规划，适合复杂任务。 |
+| `NO_MATCH` | 空 | null | 当前领域无匹配，进入兜底处理或默认 Runtime。 |
+| `CLARIFY` | 空或候选建议 | 非空 | 展示 `clarification.clarifyQuestion`，等待用户回答后再次调用意图服务。 |
+
+### 4.2 clarification
+
+```json
+{
+  "type": "AMBIGUOUS_ROUTE",
+  "clarifyQuestion": "你想看处理方案还是项目方案？",
+  "candidateIntents": [
+    {
+      "intentId": "deep_analysis",
+      "intentName": "深度分析",
+      "confidence": 0.72
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `type` | string | 澄清类型。 |
+| `clarifyQuestion` | string | 展示给用户的澄清问题，建议控制在 40 个中文字符以内。 |
+| `candidateIntents` | array | 候选意图。`AMBIGUOUS_ROUTE` 可返回 Top2-3，`UNCLEAR_REFERENCE` 通常为空。 |
+
+澄清类型：
+
+| type | 含义 | candidateIntents |
+| --- | --- | --- |
+| `AMBIGUOUS_ROUTE` | 多个领域能力都可能承接，但证据不足。 | 可返回候选意图，用于前端展示选项。 |
+| `UNCLEAR_REFERENCE` | 用户问题存在指代、附件、对象或上下文缺失。 | 通常为空。 |
+
+澄清约束：
+
+- `CLARIFY` 不是最终路由结果，不调用 DomainAgent，也不写成功 route 历史。
+- 澄清只用于完成路由判断，不采集 DomainAgent 执行业务所需的详细参数。
+- 用户回答澄清后，顶层 `query` 使用用户最新回答，`routeTrigger=clarify_answer`。
+
+## 5. 典型调用场景
+
+### 5.1 首轮路由
+
+```json
+{
+  "accessName": "eureka2_260718",
+  "query": "查一下 3 月 19 到 20 号各渠道支付成功率有没有明显下降",
+  "userId": "00859938",
+  "conversationContext": {
+    "routeTrigger": "first_turn",
+    "lastIntentRejectReason": null,
+    "history": []
+  },
+  "options": {
+    "trace": false
+  }
+}
+```
+
+预期：
+
+- `ROUTE_SINGLE`：直接绑定并调用命中的 DomainAgent。
+- `ROUTE_MULTI`：进入复杂任务规划。
+- `CLARIFY`：创建意图澄清等待态。
+- `NO_MATCH`：进入兜底 Runtime。
+
+### 5.2 DomainAgent 拒答后重新分流
+
+```json
+{
+  "accessName": "eureka2_260718",
+  "query": "支付成功率这个指标口径是怎么算的？",
   "userId": "00859938",
   "conversationContext": {
     "routeTrigger": "domain_reject",
     "lastIntentRejectReason": {
-      "lastIntent": "财经深度研究",
-      "domainRejectMessage": "深度研究无法给出支付成功率下降处理相关的内容，返回主入口重新决策选择其他能力"
+      "lastIntent": "财经智能问数",
+      "domainRejectMessage": "这是指标口径解释，不属于问数能力范围"
     },
     "history": [
       {
         "type": "route",
         "query": "查一下 3 月 19 到 20 号各渠道支付成功率有没有明显下降",
         "intent": "财经智能问数"
-      },
-      {
-        "type": "route",
-        "query": "支付成功率这个指标口径是怎么算的？",
-        "intent": "财经知识助手"
-      },
-      {
-        "type": "route",
-        "query": "那广东为什么会下降？",
-        "intent": "财经深度研究"
-      },
-      {
-        "type": "clarify",
-        "query": "用户是想看支付成功率下降后怎么处理"
       }
     ]
   },
   "options": {
-    "trace": true
+    "trace": false
   }
 }
 ```
 
-### 字段说明
+说明：
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `accessName` | string | 是 | 意图服务访问入口标识。 |
-| `query` | string | 是 | 本次需要识别的用户问题。澄清后建议传合并后的真实问题。 |
-| `userId` | string | 是 | 当前系统归属用户标识，ChatService 侧优先取 `UserContext.globalUserId`，为空时回退 `UserContext.userId`。 |
-| `conversationContext` | object | 否 | 会话上下文，用于多轮路由、拒答重路由或澄清后识别。 |
-| `conversationContext.routeTrigger` | string | 否 | 路由触发原因，例如 `domain_reject`。 |
-| `conversationContext.lastIntentRejectReason` | object | 否 | 上一次意图或能力拒答原因。 |
-| `conversationContext.history` | array | 否 | 历史路由、澄清和上下文摘要。 |
-| `options.trace` | boolean | 否 | 是否返回意图服务内部 trace 信息。 |
+- `lastIntentRejectReason` 只放当前这一次拒答。
+- 前几轮拒答不进入 `lastIntentRejectReason`，避免放大噪声。
+- 历史成功路由放入 `history.type=route`。
 
-### history 类型
+### 5.3 意图澄清回答
 
-`history` 中常见类型：
-
-| type | 说明 |
-| --- | --- |
-| `route` | 已发生的路由记录，通常包含 `query` 和 `intent`。 |
-| `clarify` | 澄清记录。可以传合并后的 `query`，也可以传 `question` 和 `answer` 保留澄清过程。 |
-
-澄清已合并时：
+上一轮意图服务返回：
 
 ```json
 {
-  "type": "clarify",
-  "query": "用户是想看支付成功率下降后怎么处理"
+  "routeAction": "CLARIFY",
+  "clarification": {
+    "type": "AMBIGUOUS_ROUTE",
+    "clarifyQuestion": "你想看处理方案还是项目方案？"
+  }
 }
 ```
 
-澄清未合并、需要保留过程时：
+用户回答“处理方案”后，再次调用：
 
 ```json
 {
-  "type": "clarify",
-  "query": "看下方案",
-  "question": "你是想继续分析支付成功率下降后的处理方案，还是查询业务/项目方案？",
-  "answer": "我是想看支付成功率下降后怎么处理"
+  "accessName": "eureka2_260718",
+  "query": "处理方案",
+  "userId": "00859938",
+  "conversationContext": {
+    "routeTrigger": "clarify_answer",
+    "lastIntentRejectReason": null,
+    "history": [
+      {
+        "type": "clarify",
+        "query": "再帮我看下方案",
+        "clarifyQuestion": "你想看处理方案还是项目方案？",
+        "clarificationType": "AMBIGUOUS_ROUTE"
+      }
+    ]
+  },
+  "options": {
+    "trace": false
+  }
 }
 ```
 
-## 响应体
+说明：
 
-成功响应示例：
+- 用户回答不写入 `history.answer`，而是作为本轮 `query`。
+- 如果仍返回 `CLARIFY`，继续追加一条 `history.type=clarify`。
+- 建议 ChatService 限制最大澄清轮数，超过后进入兜底 Runtime。
+
+### 5.4 用户纠正路由
 
 ```json
 {
-  "code": 200,
+  "accessName": "eureka2_260718",
+  "query": "我是想看支付成功率下降后怎么处理",
+  "userId": "00859938",
+  "conversationContext": {
+    "routeTrigger": "user_correction",
+    "lastIntentRejectReason": {
+      "lastIntent": "财经知识助手",
+      "domainRejectMessage": "用户手动纠正当前路由"
+    },
+    "history": [
+      {
+        "type": "route",
+        "query": "支付成功率这个指标口径是怎么算的？",
+        "intent": "财经知识助手"
+      }
+    ]
+  },
+  "options": {
+    "trace": false
+  }
+}
+```
+
+## 6. 响应示例
+
+### 6.1 单意图命中
+
+```json
+{
   "status": "success",
+  "code": 200,
   "data": {
-    "status": "success",
-    "message": "success",
     "result": {
+      "routeAction": "ROUTE_SINGLE",
       "items": [
         {
-          "confidence": 0.95,
-          "intentId": "98989898dffd888df88789",
-          "intentName": "财经智能问答",
+          "intentId": "domain_agent_finance_data_query",
+          "intentName": "财经智能问数",
+          "confidence": 0.94,
+          "source": "vector",
+          "accessName": "eureka2_260718",
           "resourceInstruction": {
-            "resourceId": "FIN-SKL-88888888"
-          },
-          "score": null,
-          "source": "llm"
+            "resourceId": "resource_finance_data_query"
+          }
         }
       ],
-      "message": "[用户问题]...\n[识别结果]匹配成功: 财经智能问答;\n"
+      "clarification": null
     }
   }
 }
 ```
 
-### 关键响应字段
+### 6.2 多意图命中
+
+```json
+{
+  "status": "success",
+  "code": 200,
+  "data": {
+    "result": {
+      "routeAction": "ROUTE_MULTI",
+      "items": [
+        {
+            "intentId": "domain_agent_finance_data_query",
+          "intentName": "财经智能问数",
+          "confidence": 0.86,
+          "resourceInstruction": {
+              "resourceId": "resource_finance_data_query"
+          }
+        },
+        {
+            "intentId": "domain_agent_finance_knowledge",
+          "intentName": "财经知识助手",
+          "confidence": 0.81,
+          "resourceInstruction": {
+              "resourceId": "resource_finance_knowledge"
+          }
+        }
+      ],
+      "clarification": null
+    }
+  }
+}
+```
+
+### 6.3 需要澄清
+
+```json
+{
+  "status": "success",
+  "code": 200,
+  "data": {
+    "result": {
+      "routeAction": "CLARIFY",
+      "items": [],
+      "clarification": {
+        "type": "AMBIGUOUS_ROUTE",
+        "clarifyQuestion": "你想看处理方案还是项目方案？",
+        "candidateIntents": [
+          {
+            "intentId": "deep_analysis",
+            "intentName": "财经深度研究",
+            "confidence": 0.72
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+### 6.4 无匹配
+
+```json
+{
+  "status": "success",
+  "code": 200,
+  "data": {
+    "result": {
+      "routeAction": "NO_MATCH",
+      "items": [],
+      "clarification": null
+    }
+  }
+}
+```
+
+## 7. trace 调试
+
+`options.trace=true` 时，响应可能包含 `data.trace`，用于排查意图决策过程。常见字段：
 
 | 字段 | 说明 |
 | --- | --- |
-| `code` | HTTP 业务状态码，`200` 表示成功。 |
-| `status` | 顶层状态，成功时为 `success`。 |
-| `data.status` | 数据层状态，成功时为 `success`。 |
-| `data.result.items[]` | 候选意图列表。 |
-| `items[].confidence` | 置信度，ChatService 应结合配置阈值判断是否采纳。 |
-| `items[].intentId` | 意图 ID。 |
-| `items[].intentName` | 意图名称。 |
-| `items[].resourceInstruction.resourceId` | 意图绑定的资源 ID，可作为路由目标。 |
-| `items[].source` | 识别来源，例如 `llm`。 |
-| `data.trace` | `options.trace=true` 时返回的调试链路信息。 |
+| `vectorSearch` | 向量检索过程、候选和耗时。 |
+| `promptExpansion` | Prompt 增强过程和耗时。 |
+| `llmTraversal.branches[].rounds[]` | LLM 多轮遍历、systemPrompt、userPrompt、rawResult 和 parsedResult。 |
+| `decision` | 中间裁决信息。 |
+| `final` | 最终裁决结果。 |
 
-## Python 调用示例
+调试建议：
 
-```python
-"""独立的“用户问题 -> 意图结果”调用示例。
+- 本地联调可打开 `trace=true` 打印 prompt 和模型原始输出。
+- 生产链路默认关闭 trace，避免响应过大和敏感上下文外泄。
+- 如果 ES 高置信命中或规则提前触发，`llmTraversal.branches` 为空是正常现象。
 
-本示例不引用项目内 Python 文件，只依赖 pyxis 和 requests。
-使用前请替换配置常量，不要提交真实静态 Token。
-"""
+## 8. ChatService 对接规则
 
-import requests
-from pyxis.authorization.his_authorization import get_dynamic_token
-
-
-TOKEN_URL = "http://kwe-beta.huawei.com/ApiCommonQuery/appToken/getRestAppDynamicToken"
-INTENT_API_URL = "http://kweuat.huawei.com/intent-recognition-configuration/getIntentResult"
-
-APP_ID = "S00000000000000000000000000000961"
-STATIC_TOKEN = "<replace-with-static-token>"
-REQUEST_TIMEOUT = 30
-
-
-def recognize_intent(access_name: str, question: str, user_id: str, conversation_context: dict) -> dict:
-    dynamic_token = get_dynamic_token(
-        url=TOKEN_URL,
-        app_id=APP_ID,
-        static_token=STATIC_TOKEN,
-    )
-
-    response = requests.post(
-        INTENT_API_URL,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": dynamic_token,
-        },
-        json={
-            "accessName": access_name,
-            "query": question,
-            "userId": user_id,
-            "conversationContext": conversation_context,
-            "options": {
-                "trace": True,
-            },
-        },
-        timeout=REQUEST_TIMEOUT,
-        verify=False,
-    )
-    response.raise_for_status()
-
-    result = response.json()
-    if result.get("code") != 200 or result.get("status") != "success":
-        raise RuntimeError(f"意图识别失败：{result}")
-    return result
-
-
-def print_trace_prompts(result: dict) -> None:
-    rounds = (
-        result.get("data", {})
-        .get("trace", {})
-        .get("llmTraversal", {})
-        .get("branches", [{}])[0]
-        .get("rounds", [])
-    )
-    for round_data in rounds:
-        print("---------------系统提示词--------------------")
-        print(round_data.get("systemPrompt", "No systemPrompt found"))
-        print("---------------用户提示词--------------------")
-        print(round_data.get("userPrompt", "No userPrompt found"))
-        print("---------------提示词结束--------------------")
-
-
-def main() -> None:
-    access_name = "y_11112"
-    question = "用户是想看支付成功率下降后怎么处理"
-    user_id = "00859938"
-    conversation_context = {
-        "routeTrigger": "domain_reject",
-        "lastIntentRejectReason": {
-            "lastIntent": "财经深度研究",
-            "domainRejectMessage": "深度研究无法给出支付成功率下降处理相关的内容，返回主入口重新决策选择其他能力",
-        },
-        "history": [
-            {
-                "type": "route",
-                "query": "查一下 3 月 19 到 20 号各渠道支付成功率有没有明显下降",
-                "intent": "财经智能问数",
-            },
-            {
-                "type": "route",
-                "query": "支付成功率这个指标口径是怎么算的？",
-                "intent": "财经知识助手",
-            },
-            {
-                "type": "route",
-                "query": "那广东为什么会下降？",
-                "intent": "财经深度研究",
-            },
-            {
-                "type": "clarify",
-                "query": "用户是想看支付成功率下降后怎么处理",
-            },
-        ],
-    }
-
-    result = recognize_intent(access_name, question, user_id, conversation_context)
-    print_trace_prompts(result)
-
-    items = result.get("data", {}).get("result", {}).get("items", [])
-    if not items:
-        print("未识别到意图")
-        return
-
-    for item in items:
-        resource_instruction = item.get("resourceInstruction") or {}
-        print(f"意图名称：{item.get('intentName')}")
-        print(f"置信度：{item.get('confidence')}")
-        print(f"识别来源：{item.get('source')}")
-        print(f"该意图绑定的资源 ID：{resource_instruction.get('resourceId')}")
-
-
-if __name__ == "__main__":
-    main()
-```
-
-## ChatService 接入建议
-
-- 意图服务调用应封装在 adapter 内，应用层只依赖标准化后的 `IntentDecision`。
-- 置信度阈值应配置化，例如 `financeex.intent.confidence-threshold`。
-- `conversationContext` 应由后端根据当前会话状态可信组装，前端只提供用户输入和必要的澄清结果。
-- trace 信息只用于排障和离线评测，不建议写入 run metadata；如需记录，应走独立的意图识别记录表并做脱敏和限长。
-- 意图服务异常、超时、低置信或空结果时，应降级到默认 Runtime 路由，不阻断主聊天链路。
+1. 必须优先读取 `data.result.routeAction`。
+2. `ROUTE_SINGLE`：读取唯一 `items[0].intentId` 作为 DomainAgentId/skillId，创建或刷新 `provider=domain-agent` 的 RuntimeBinding；`resourceInstruction.resourceId` 只记录排障，不参与路由；`confidence` 只用于记录，不参与二次裁决。
+3. `ROUTE_MULTI`：进入复杂任务规划，通常走 Relay Runtime。
+4. `NO_MATCH`：进入兜底 Runtime 或通用处理。
+5. `CLARIFY`：本轮 run 进入 `WAITING_USER`，写入 `run.waiting_user`，前端通过统一 HITL 接口提交澄清回答。
+6. 意图澄清属于路由阶段，不创建 RuntimeBinding，不调用 AgentRuntime。
+7. 用户回答意图澄清后，创建 continuation run，再次调用 `/getIntentDecision`。
+8. DomainAgent 拒答回流时，`routeTrigger=domain_reject`，只传当前这一次拒答原因。
+9. `history` 按时间顺序传最新 TopK；澄清链路未完成时，TopK 必须保留当前澄清上下文。

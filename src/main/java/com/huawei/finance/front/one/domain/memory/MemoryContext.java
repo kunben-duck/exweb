@@ -14,11 +14,17 @@ import java.util.List;
  */
 public record MemoryContext(
         List<ChatMessage> recentMessages,
-        List<LongTermMemoryItem> longTermMemories
+        List<LongTermMemoryItem> longTermMemories,
+        RouteMemoryContext routeMemory
 ) {
     public MemoryContext {
         recentMessages = recentMessages == null ? List.of() : List.copyOf(recentMessages);
         longTermMemories = longTermMemories == null ? List.of() : List.copyOf(longTermMemories);
+        routeMemory = routeMemory == null ? RouteMemoryContext.empty() : routeMemory;
+    }
+
+    public MemoryContext(List<ChatMessage> recentMessages, List<LongTermMemoryItem> longTermMemories) {
+        this(recentMessages, longTermMemories, RouteMemoryContext.empty());
     }
 
     /**
@@ -27,13 +33,22 @@ public record MemoryContext(
      * @return 不包含短期消息和长期记忆的上下文快照。
      */
     public static MemoryContext empty() {
-        return new MemoryContext(List.of(), List.of());
+        return new MemoryContext(List.of(), List.of(), RouteMemoryContext.empty());
+    }
+
+    /**
+     * @param routeMemory 本轮路由上下文。
+     * @return 替换 RouteMemory 后的新快照。
+     */
+    public MemoryContext withRouteMemory(RouteMemoryContext routeMemory) {
+        return new MemoryContext(recentMessages, longTermMemories, routeMemory);
     }
 
     /**
      * @return 当前上下文是否不包含任何记忆增强数据。
      */
     public boolean isEmpty() {
-        return recentMessages.isEmpty() && longTermMemories.isEmpty();
+        return recentMessages.isEmpty() && longTermMemories.isEmpty()
+                && (routeMemory == null || !routeMemory.hasHistory());
     }
 }

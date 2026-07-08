@@ -83,11 +83,11 @@ public class IntentRecognitionRecordService {
         Object rawResponse = firstNonNull(raw.get("response"), raw);
         Object items = nested(rawResponse, "data", "result", "items");
         Object selectedItem = raw.get("selectedItem");
-        String resourceId = firstText(intent.candidateDomainAgentId(), stringValue(intent.slots().get("resourceId")),
+        String resourceId = firstText(stringValue(intent.slots().get("resourceId")),
                 stringValue(nested(selectedItem, "resourceInstruction", "resourceId")));
         String source = firstText(stringValue(intent.slots().get("source")), stringValue(nested(selectedItem, "source")));
         String status = status(intent);
-        boolean accepted = accepted(intent, route, snapshot.confidenceThreshold(), resourceId);
+        boolean accepted = accepted(intent, route);
         String id = idGenerator.newId("intentrec", IdGenerateContext.of(
                 snapshot.tenantId(), snapshot.userId(), snapshot.sessionId(), snapshot.runId()));
         String query = truncate(snapshot.queryText(), properties.normalizedMaxQueryLength());
@@ -138,13 +138,12 @@ public class IntentRecognitionRecordService {
         return "SUCCESS";
     }
 
-    private boolean accepted(IntentDecision intent, RouteTarget route, double threshold, String resourceId) {
+    private boolean accepted(IntentDecision intent, RouteTarget route) {
         return intent != null
                 && route != null
                 && route.type() == RouteType.DOMAIN_AGENT
-                && resourceId != null
-                && resourceId.equals(route.selectedAgentCode())
-                && intent.highConfidence(threshold);
+                && intent.candidateDomainAgentId() != null
+                && intent.candidateDomainAgentId().equals(route.selectedAgentCode());
     }
 
     private String errorMessage(String status, Map<String, Object> raw) {

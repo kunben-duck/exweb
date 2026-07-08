@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huawei.finance.front.one.infrastructure.persistence.RouteMemoryMapper">
+    <resultMap id="routeMemoryResultMap" type="com.huawei.finance.front.one.infrastructure.persistence.RouteMemoryRow">
+        <id column="id" property="id"/>
+        <result column="tenant_id" property="tenantId"/>
+        <result column="user_id" property="userId"/>
+        <result column="session_id" property="sessionId"/>
+        <result column="item_type" property="itemType"/>
+        <result column="status" property="status"/>
+        <result column="query_text" property="queryText"/>
+        <result column="intent_id" property="intentId"/>
+        <result column="intent_name" property="intentName"/>
+        <result column="domain_agent_id" property="domainAgentId"/>
+        <result column="route_source" property="routeSource"/>
+        <result column="clarify_question" property="clarifyQuestion"/>
+        <result column="clarification_type" property="clarificationType"/>
+        <result column="source_run_id" property="sourceRunId"/>
+        <result column="hitl_request_id" property="hitlRequestId"/>
+        <result column="payload_json" property="payloadJson"/>
+        <result column="folded_at" property="foldedAt"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <sql id="routeMemoryColumns">
+        id, tenant_id, user_id, session_id, item_type, status, query_text, intent_id, intent_name,
+        domain_agent_id, route_source, clarify_question, clarification_type, source_run_id,
+        hitl_request_id, payload_json, folded_at, created_at, updated_at
+    </sql>
+
+    <!--
+      写入一条 RouteMemory 事实记录。
+      入参: RouteMemoryRow，tenantId/userId/sessionId 为归属边界，itemType/status 区分 ROUTE/CLARIFY
+            及在线状态，payloadJson 保存路由或澄清摘要。
+    -->
+    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.persistence.RouteMemoryRow">
+        INSERT INTO fin_ex_route_memory_t(
+            id, tenant_id, user_id, session_id, item_type, status, query_text, intent_id, intent_name,
+            domain_agent_id, route_source, clarify_question, clarification_type, source_run_id,
+            hitl_request_id, payload_json, folded_at, created_at, updated_at
+        )
+        VALUES(
+            #{id}, #{tenantId}, #{userId}, #{sessionId}, #{itemType}, #{status}, #{queryText}, #{intentId}, #{intentName},
+            #{domainAgentId}, #{routeSource}, #{clarifyQuestion}, #{clarificationType}, #{sourceRunId},
+            #{hitlRequestId}, #{payloadJson}, #{foldedAt}, #{createdAt}, #{updatedAt}
+        )
+    </insert>
+
+    <!--
+      查询会话最近成功路由摘要，供意图服务 conversationContext.history 使用。
+      入参: tenantId/userId/sessionId 为归属边界，limit 为 TopK 限制；按创建时间倒序返回。
+    -->
+    <select id="findRecentRoutes" resultMap="routeMemoryResultMap">
+        SELECT <include refid="routeMemoryColumns"/>
+        FROM fin_ex_route_memory_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND item_type = 'ROUTE'
+          AND status = 'ACTIVE'
+        ORDER BY created_at DESC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+      查询当前未折叠的意图澄清链路。
+      入参: tenantId/userId/sessionId 为归属边界；按创建时间正序返回，保持多轮澄清顺序。
+    -->
+    <select id="findActiveClarifications" resultMap="routeMemoryResultMap">
+        SELECT <include refid="routeMemoryColumns"/>
+        FROM fin_ex_route_memory_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND item_type = 'CLARIFY'
+          AND status = 'ACTIVE'
+        ORDER BY created_at ASC
+    </select>
+
+    <!--
+      将当前会话 active 的意图澄清记录标记为 FOLDED。
+      入参: tenantId/userId/sessionId 为归属边界，foldedAt 为折叠时间；用于最终路由后清理在线 clarify。
+    -->
+    <update id="foldActiveClarifications">
+        UPDATE fin_ex_route_memory_t
+        SET status = 'FOLDED',
+            folded_at = #{foldedAt},
+            updated_at = #{foldedAt}
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND item_type = 'CLARIFY'
+          AND status = 'ACTIVE'
+    </update>
+</mapper>

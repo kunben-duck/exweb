@@ -18,6 +18,7 @@ import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatStreamStatus;
 import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
+import com.huawei.finance.front.one.domain.routing.RouteTarget;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
@@ -170,6 +171,22 @@ public class ChatRunApplicationService {
     public ChatRun bindAssistantMessage(String runId, String assistantMessageId) {
         return repository.findById(runId)
                 .map(run -> save(run.withAssistantMessageId(assistantMessageId)))
+                .orElse(null);
+    }
+
+    /**
+     * 外部路由进入 run pipeline 后，run.started 会先落库；路由完成后再回填最终路由诊断字段。
+     */
+    public ChatRun bindResolvedRoute(String runId, RouteTarget route, RuntimeBinding binding) {
+        if (runId == null || runId.isBlank() || route == null) {
+            return null;
+        }
+        return repository.findById(runId)
+                .map(run -> save(run.withResolvedRoute(
+                        route.type() == null ? null : route.type().name(),
+                        route.selectedAgentCode(),
+                        binding == null ? null : binding.provider(),
+                        binding == null ? null : binding.runtimeSessionId())))
                 .orElse(null);
     }
 

@@ -16,7 +16,8 @@ public class ApplicationBeanConfig {
     /**
      * 创建路由策略。
      *
-     * <p>用例库和意图服务都只是路由信号；阈值保留在配置层，便于不同环境按模型效果调优。</p>
+     * <p>用例库和意图服务都只是路由信号；意图 confidence 阈值仅保留给统计记录兼容，
+     * DomainAgent 路由以意图服务 routeAction 为准。</p>
      */
     @Bean
     public RoutingPolicy routingPolicy(@Value("${financeex.use-case-library.min-score:0.85}") double minScore,

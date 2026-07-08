@@ -13,12 +13,12 @@ import com.huawei.finance.front.one.domain.usecase.UseCaseMatchResult;
  * <p>RoutingPolicy 只做路线裁决；Runtime 多轮续接由 RuntimeBinding 处理，用例库和意图服务只负责提供路由信号。</p>
  *
  * <p>这里故意不调用任何外部服务，也不创建 binding。它是纯领域策略，便于单元测试覆盖各种命中、
- * 低置信和 unsupported 分支。</p>
+ * unsupported 分支。</p>
  */
 public class RoutingPolicy {
     /** 用例库命中进入 DomainAgent fast path 的最低分数。 */
     private final double useCaseMinScore;
-    /** 意图服务推荐技能进入 DomainAgent fast path 的最低置信度。 */
+    /** 保留意图置信度阈值仅用于记录和兼容旧统计，不参与 DomainAgent 裁决。 */
     private final double intentConfidenceThreshold;
 
     public RoutingPolicy(double useCaseMinScore) {
@@ -53,14 +53,13 @@ public class RoutingPolicy {
             return RouteTarget.systemResponse("unsupported intent");
         }
 
-        // 意图服务只在“简单任务 + 高置信 + 明确 DomainAgent”时触发 DomainAgent。
-        // 缺少任一条件都交给 AgentRuntime，由它负责追问、规划或兜底回答。
+        // 新意图服务以 routeAction 作为最终裁决。ROUTE_SINGLE 会在 adapter 层映射为
+        // simpleTask + candidateDomainAgentId=intentId；confidence 只用于记录和排障，不再二次拦截。
         if (intent.simpleTask()
-                && intent.highConfidence(intentConfidenceThreshold)
                 && intent.candidateDomainAgentId() != null
                 && !intent.candidateDomainAgentId().isBlank()) {
             return RouteTarget.domainAgent(intent.candidateDomainAgentId(), "intent-service", intent.confidence(),
-                    "high confidence domain agent intent");
+                    "route single domain agent intent");
         }
 
         return RouteTarget.agentRuntime("intent-service", intent.confidence(), "intent requires agent runtime");

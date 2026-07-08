@@ -5,7 +5,7 @@
 FinanceEXChatService 是前端聊天入口和 SuperAgent 主控服务。正式版只保留清晰的执行边界：
 
 - DomainAgent 任务：用例库、意图服务或前端显式选择命中后，绑定会话级 DomainAgent，并由 DomainAgent 维护自己的下游会话上下文。
-- Relay Runtime 任务：复杂任务、低置信任务和未命中任务进入 Relay Runtime，并由 Relay Runtime 负责多轮、规划、上下文和压缩。
+- Relay Runtime 任务：复杂任务和未命中任务进入 Relay Runtime，并由 Relay Runtime 负责多轮、规划、上下文和压缩。
 - SuperAgent：负责身份、会话、可选记忆上下文装配、路由、事件落库和 RuntimeBinding 续接。
 
 ## 全局流程图
@@ -41,7 +41,7 @@ flowchart TD
     Intent --> IntentRoute{"意图路由结果"}
     IntentRoute -- "命中 DomainAgentId" --> BindDomainAgent
     IntentRoute -- "不支持任务" --> SystemResponse["SYSTEM_RESPONSE"]
-    IntentRoute -- "复杂/低置信/无 DomainAgentId" --> CreateRuntime
+    IntentRoute -- "ROUTE_MULTI/NO_MATCH" --> CreateRuntime
 
     BindDomainAgent --> EventStream
     DomainAgent --> EventStream
@@ -194,13 +194,15 @@ sequenceDiagram
     EX->>Redis: "写 active run / runtime binding / stream topic 热数据"
 
     opt "用例库开启"
+        EX->>DB: "append runtime.progress(route-progress/use_case_matching)"
         EX->>UseCase: "match(query, context)"
         UseCase-->>EX: "matched/domainAgentId/score 或未命中"
     end
 
     opt "意图服务开启且用例未命中"
+        EX->>DB: "append runtime.progress(route-progress/intent_calling)"
         EX->>Intent: "recognize(query, context)"
-        Intent-->>EX: "candidateDomainAgentId/置信度/复杂度"
+        Intent-->>EX: "routeAction/items/clarification"
     end
 
     alt "targetType=DOMAIN_AGENT"
@@ -658,14 +660,18 @@ flowchart TB
 - `targetType=DOMAIN_AGENT,targetId=...` 优先级最高；存在时进入 `DOMAIN_AGENT` 路由并绑定对应 DomainAgent，`routeSource=front-selected`。
 - active RuntimeBinding 优先级次之；`provider=domain-agent` 时续接当前 DomainAgent，`provider=relay` 时续接 Relay Runtime。
 - 用例库和意图服务是可选路由信号，默认关闭；关闭时不调用外部 API。
-- 用例库开启时优先匹配；命中阈值默认 `0.85`，命中并返回 `resourceId` 后绑定为 DomainAgent。
+- 用例库开启时优先匹配；命中阈值默认 `0.85`，命中并返回 DomainAgent 路由目标后绑定为 DomainAgent。
 - 用例库关闭或未命中后，只有意图服务开启才调用 `IntentService`。
-- 意图服务 adapter 的 HTTP 请求体和响应体转换由 infrastructure intent mapper 承载；当前解析 `code/data/result/items[]` 包装响应，选择最高 `confidence` 的 item，并把 `resourceInstruction.resourceId` 映射为 `candidateDomainAgentId`。
+- 外部路由在 run pipeline 内执行，`run.started` 会先落库和推送；调用用例库或意图服务前会先落 `runtime.progress(payload.sourceType=route-progress)`，避免慢路由阶段让前端长时间无反馈。
+- 意图服务 adapter 的 HTTP 请求体和响应体转换由 infrastructure intent mapper 承载；当前对接 `/getIntentDecision`，以 `data.result.routeAction` 作为唯一裁决点。
+- RouteMemory 是独立于普通短期/长期记忆的路由事实源。调用意图服务前，应用层会加载最近 TopK 成功 `ROUTE` 记录和当前未完成 `INTENT_CLARIFICATION` 的 `CLARIFY` 链路，统一组装为 `conversationContext.history`。
+- `conversationContext.routeTrigger` 由 ChatService 生成：普通无绑定首次路由为 `first_turn`，DomainAgent 结构化拒答后的重路由为 `domain_reject`，用户回答意图澄清后为 `clarify_answer`。`AGENT_CLARIFICATION` 和 `DOMAIN_AGENT_SWITCH_CONFIRMATION` 不进入意图 history。
 - 意图服务调用失败后默认最多重试 3 次；配置误设过大时运行时最多按 10 次生效，重试耗尽后仍按原有降级策略进入 Relay Runtime。
 - 意图服务返回 `WAITING_CLARIFICATION` 或兼容的 `TaskComplexity.NEED_CLARIFICATION` 时生成 `run.waiting_user(waitingType=INTENT_CLARIFICATION)`，不创建 RuntimeBinding；用户通过统一 HITL 接口提交后继续意图澄清，直到得到最终路由。
-- 意图服务返回 `confidence >= financeex.intent.confidence-threshold` 且有 `candidateDomainAgentId` 时绑定并调用 DomainAgent Runtime。
-- `financeex.intent-record.enabled=true` 时，只有实际调用过意图服务的 run 会异步写入 `fin_ex_intent_recognition_t`。记录内容包含本轮 query、候选 items、最高置信结果、最终路由是否采纳和意图服务耗时；DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会记录。
-- 两个信号均关闭、服务失败、复杂、低置信或缺少 DomainAgent 的任务进入 Relay Runtime。
+- 意图服务返回 `routeAction=ROUTE_SINGLE` 时，直接取唯一 `items[0].intentId` 作为 DomainAgentId/skillId，绑定并调用 DomainAgent Runtime；`resourceInstruction.resourceId` 只作为诊断字段记录，不参与路由也不兜底，`confidence` 只用于记录和排障，不参与二次裁决。
+- 意图澄清可能多轮连续发生。每次 `CLARIFY` 会在 `run.waiting_user` 与 HITL request 成功落库后追加一条 RouteMemory `CLARIFY` 记录；最终得到 `ROUTE_SINGLE/ROUTE_MULTI/NO_MATCH` 后折叠当前澄清链路，且只有 `ROUTE_SINGLE` 会在同一个 best-effort 写任务中执行 `fold -> appendRoute`。
+- `financeex.intent-record.enabled=true` 时，只有实际调用过意图服务的 run 会异步写入 `fin_ex_intent_recognition_t`。记录内容包含本轮 query、routeAction、候选 items、最终路由是否采纳和意图服务耗时；DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会记录。
+- `routeAction=ROUTE_MULTI` 和 `routeAction=NO_MATCH` 都进入 Relay Runtime。两个信号均关闭或服务失败时，也进入 Relay Runtime。
 - DomainAgent 绑定会一直续接，直到下游返回 `financeex.domain-agent.refusal.codes` 配置的明确拒答 code。意图/用例库绑定拒答后会在当前 run 内重新意图并自动切换；手动绑定拒答后若命中新 Agent，会生成 `DOMAIN_AGENT_SWITCH_CONFIRMATION` 等待用户确认。
 
 ## RuntimeBinding
@@ -731,8 +737,9 @@ stop 语义：
 ## 外部 API 接入
 
 - 用例库服务：`financeex.use-case-library.enabled`、`financeex.use-case-library.base-url`、`financeex.use-case-library.match-path`
-- 意图服务：`financeex.intent.enabled`、`financeex.intent.base-url`、`financeex.intent.recognize-path`、`financeex.intent.confidence-threshold`、`financeex.intent.timeout`、`financeex.intent.max-retries`
+- 意图服务：`financeex.intent.enabled`、`financeex.intent.base-url`、`financeex.intent.access-name`、`financeex.intent.recognize-path`、`financeex.intent.trace`、`financeex.intent.confidence-threshold`、`financeex.intent.timeout`、`financeex.intent.max-retries`。其中 `confidence-threshold` 仅保留给旧统计字段兼容，不参与 DomainAgent 路由裁决。
 - 意图识别记录：`financeex.intent-record.enabled`、`max-query-length`、`max-raw-json-length`、`executor.*`。默认关闭；开启后使用 Servlet/MVC 友好的专用线程池 best-effort 写库，线程池拒绝、JSON 序列化失败或数据库写入失败都只记录 warn，不阻塞 `/chat/runs`。
+- RouteMemory：`financeex.route-memory.top-k` 控制传给意图服务的最近成功 route 数量，`financeex.route-memory.max-clarification-rounds` 控制单条澄清链路的最大轮数，超过后降级 Relay Runtime，避免无限澄清。读写线程池分别由 `read-executor.*`、`write-executor.*` 控制；`read-timeout` 超时后会取消读取 future，并按 `circuit-breaker.*` 短暂熔断，熔断期间直接返回空 history。
 - DomainAgent：`financeex.domain-agent.base-url`、`financeex.domain-agent.chat-path`、`financeex.domain-agent.cancel-path`
 - DomainAgent 拒答重路由：`financeex.domain-agent.refusal.codes`、`financeex.domain-agent.max-reroutes`
 - AgentRuntime fallback provider：`financeex.agent-runtime.default-provider`，没有 active binding 时的兜底 provider，默认 `relay`

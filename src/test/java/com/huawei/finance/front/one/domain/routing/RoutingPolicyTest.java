@@ -33,14 +33,15 @@ class RoutingPolicyTest {
     }
 
     @Test
-    void intentConfidenceThresholdIsConfigurable() {
+    void intentConfidenceNoLongerBlocksRouteSingleDomainAgent() {
         RoutingPolicy strictPolicy = new RoutingPolicy(0.85, 0.96);
         IntentDecision intent = new IntentDecision("finance.office.query", "office", TaskComplexity.SIMPLE, 0.95, true,
                 "finance.office.agent", Map.of(), java.util.List.of(), Map.of());
 
         RouteTarget target = strictPolicy.decideFromIntent(null, null, intent, null);
 
-        assertThat(target.type()).isEqualTo(RouteType.AGENT_RUNTIME);
+        assertThat(target.type()).isEqualTo(RouteType.DOMAIN_AGENT);
+        assertThat(target.selectedAgentCode()).isEqualTo("finance.office.agent");
     }
 
     @Test

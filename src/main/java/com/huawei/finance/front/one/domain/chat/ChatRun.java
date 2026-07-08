@@ -113,6 +113,17 @@ public record ChatRun(
     }
 
     /**
+     * 外部路由信号在 run.started 后才执行时，用最终路由和 RuntimeBinding 回填诊断字段。
+     */
+    public ChatRun withResolvedRoute(String nextRouteType, String nextAgentCode,
+                                     String nextRuntimeProvider, String nextRuntimeSessionId) {
+        return new ChatRun(id, tenantId, userId, sessionId, status, nextRouteType, nextAgentCode,
+                nextRuntimeProvider, nextRuntimeSessionId, runMode, parentMessageId, userMessageId,
+                assistantMessageId, firstSeq, lastSeq, cancelReason, startedAt, finishedAt,
+                metadata, createdAt, Instant.now());
+    }
+
+    /**
      * 回填 run 终态后生成的 assistant 消息 ID。
      */
     public ChatRun withAssistantMessageId(String nextAssistantMessageId) {

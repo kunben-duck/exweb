@@ -3,10 +3,9 @@ package com.huawei.finance.front.one.infrastructure.intent;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.finance.front.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.intent.TaskComplexity;
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,9 +14,9 @@ import org.springframework.stereotype.Component;
 /**
  * 将意图服务 HTTP 响应转换成 ChatService 稳定领域模型。
  *
- * <p>当前下游返回结构为 {@code code -> data -> result -> items[]}，其中 item 的
- * {@code resourceInstruction.resourceId} 表示可路由技能编码。后续如果下游字段或包装层变化，
- * 只修改这里的解析逻辑；应用层仍只依赖 {@link IntentDecision}。</p>
+ * <p>当前下游返回结构为 {@code code -> data -> result}，其中 {@code routeAction}
+ * 是唯一裁决字段。ROUTE_SINGLE 时 item.intentId 表示可绑定的 DomainAgentId/skillId。
+ * 后续如果下游字段或包装层变化，只修改这里的解析逻辑；应用层仍只依赖稳定领域模型。</p>
  */
 @Component
 public class IntentServiceResponseMapper {
@@ -31,45 +30,84 @@ public class IntentServiceResponseMapper {
     }
 
     /**
-     * 解析下游响应并选择最高置信候选。
+     * 解析下游响应并返回兼容的最终意图决策。
      *
-     * <p>是否真正采用该候选由领域层 RoutingPolicy 根据配置化 confidence 阈值裁决。</p>
+     * <p>旧调用方仍可通过本方法拿到最终决策；新路由链路应优先使用
+     * {@link #toRecognitionResult(JsonNode)} 以保留 CLARIFY 等非最终态。</p>
      *
      * @param root 下游 HTTP 响应 JSON。
      * @return 应用层意图决策。
      */
     public IntentDecision toDecision(JsonNode root) {
+        IntentRecognitionResult result = toRecognitionResult(root);
+        return result.decision() == null ? degraded("intent response has no final decision") : result.decision();
+    }
+
+    /**
+     * 解析新意图决策接口响应。
+     *
+     * <p>{@code routeAction} 是 ChatService 的唯一路由裁决入口：ROUTE_SINGLE 直接取唯一
+     * item 的 {@code intentId} 作为 DomainAgentId；ROUTE_MULTI/NO_MATCH 均进入 Relay Runtime；
+     * CLARIFY 进入意图澄清等待态。confidence 仅用于记录和排障，不参与是否绑定 DomainAgent 的判断。</p>
+     */
+    public IntentRecognitionResult toRecognitionResult(JsonNode root) {
         if (root == null || root.isNull() || root.isMissingNode()) {
-            return degraded("empty intent response");
+            return IntentRecognitionResult.degraded(degraded("empty intent response"));
         }
         if (root.hasNonNull("code") && root.path("code").asInt(200) != 200) {
-            return intentError(root, "intent response code is not 200");
+            return IntentRecognitionResult.degraded(intentError(root, "intent response code is not 200"));
+        }
+        String rootStatus = text(root.path("status"));
+        if (rootStatus != null && !"success".equalsIgnoreCase(rootStatus)) {
+            return IntentRecognitionResult.degraded(intentError(root, "intent response status is not success"));
         }
         JsonNode data = root.path("data");
         String status = text(data.path("status"));
         if (status != null && !"success".equalsIgnoreCase(status)) {
-            return intentError(root, "intent response status is not success");
+            return IntentRecognitionResult.degraded(intentError(root, "intent response status is not success"));
         }
         JsonNode result = data.path("result");
-        JsonNode items = result.path("items");
-        if (!items.isArray() || items.isEmpty()) {
-            return new IntentDecision(
-                    "finance.runtime.no_intent",
-                    "未识别到可用意图",
-                    TaskComplexity.COMPLEX,
-                    0.0,
-                    false,
-                    null,
-                    Map.of(),
-                    List.of(),
-                    rawWithReason(root, "intent response has no items")
-            );
+        String routeAction = text(result.path("routeAction"));
+        if ("CLARIFY".equalsIgnoreCase(routeAction)) {
+            return IntentRecognitionResult.waitingClarification(clarificationPayload(root, result),
+                    firstText(result.path("intentSessionId"), data.path("intentSessionId")),
+                    firstText(result.path("intentRequestId"), data.path("intentRequestId")));
+        }
+        if ("ROUTE_MULTI".equalsIgnoreCase(routeAction)) {
+            return IntentRecognitionResult.finalDecision(complexDecision(root, result,
+                    "finance.runtime.route_multi", "多意图命中，进入 Relay Runtime",
+                    "routeAction=ROUTE_MULTI"));
+        }
+        if ("NO_MATCH".equalsIgnoreCase(routeAction)) {
+            return IntentRecognitionResult.finalDecision(complexDecision(root, result,
+                    "finance.runtime.no_intent", "未识别到可用意图，进入 Relay Runtime",
+                    "routeAction=NO_MATCH"));
+        }
+        if ("ROUTE_SINGLE".equalsIgnoreCase(routeAction)) {
+            return IntentRecognitionResult.finalDecision(singleRouteDecision(root, result));
         }
 
-        JsonNode selected = selectHighestConfidence(items);
+        // 新意图服务以 routeAction 作为唯一裁决字段。缺失时不再按 items/confidence 猜测 DomainAgent。
+        return IntentRecognitionResult.finalDecision(complexDecision(root, result,
+                "finance.runtime.no_intent", "未识别到可用意图，进入 Relay Runtime",
+                "routeAction missing"));
+    }
+
+    private IntentDecision singleRouteDecision(JsonNode root, JsonNode result) {
+        JsonNode items = result.path("items");
+        if (!items.isArray() || items.isEmpty()) {
+            return intentError(root, "ROUTE_SINGLE response has no item");
+        }
+        return itemToDomainAgentDecision(root, items.get(0), result, "routeAction=ROUTE_SINGLE");
+    }
+
+    private IntentDecision itemToDomainAgentDecision(JsonNode root, JsonNode selected, JsonNode result, String reason) {
+        String intentId = text(selected.path("intentId"));
         String resourceId = text(selected.path("resourceInstruction").path("resourceId"));
         double confidence = confidence(selected);
         Map<String, Object> slots = new LinkedHashMap<>();
+        putIfPresent(slots, "routeAction", text(result.path("routeAction")));
+        putIfPresent(slots, "intentId", intentId);
         putIfPresent(slots, "resourceId", resourceId);
         putIfPresent(slots, "source", text(selected.path("source")));
         if (!selected.path("score").isMissingNode() && !selected.path("score").isNull()) {
@@ -77,16 +115,44 @@ public class IntentServiceResponseMapper {
         }
 
         return new IntentDecision(
-                blankToDefault(text(selected.path("intentId")), "finance.intent.unknown"),
+                blankToDefault(intentId, "finance.intent.unknown"),
                 blankToDefault(text(selected.path("intentName")), "未知意图"),
-                resourceId == null ? TaskComplexity.COMPLEX : TaskComplexity.SIMPLE,
+                intentId == null ? TaskComplexity.COMPLEX : TaskComplexity.SIMPLE,
                 confidence,
-                resourceId != null,
-                resourceId,
+                intentId != null,
+                intentId,
                 slots,
                 List.of(),
-                rawWithSelected(root, selected, result)
+                rawWithSelected(root, selected, result, reason)
         );
+    }
+
+    private IntentDecision complexDecision(JsonNode root, JsonNode result, String code, String name, String reason) {
+        return new IntentDecision(
+                code,
+                name,
+                TaskComplexity.COMPLEX,
+                0.0,
+                false,
+                null,
+                Map.of("routeAction", text(result.path("routeAction")) == null ? "" : text(result.path("routeAction"))),
+                List.of(),
+                rawWithReason(root, reason)
+        );
+    }
+
+    private Map<String, Object> clarificationPayload(JsonNode root, JsonNode result) {
+        JsonNode clarification = result.path("clarification");
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("routeAction", "CLARIFY");
+        payload.put("clarification", nodeToObject(clarification));
+        putIfPresent(payload, "type", text(clarification.path("type")));
+        putIfPresent(payload, "clarifyQuestion", text(clarification.path("clarifyQuestion")));
+        Object candidates = nodeToObject(clarification.path("candidateIntents"));
+        if (candidates != null) {
+            payload.put("candidateIntents", candidates);
+        }
+        return Map.copyOf(payload);
     }
 
     /**
@@ -112,16 +178,10 @@ public class IntentServiceResponseMapper {
                 rawWithReason(root, reason));
     }
 
-    private JsonNode selectHighestConfidence(JsonNode items) {
-        List<JsonNode> candidates = new ArrayList<>();
-        items.forEach(candidates::add);
-        return candidates.stream()
-                .max(Comparator.comparingDouble(this::confidence))
-                .orElse(items.get(0));
-    }
-
-    private Map<String, Object> rawWithSelected(JsonNode root, JsonNode selected, JsonNode result) {
+    private Map<String, Object> rawWithSelected(JsonNode root, JsonNode selected, JsonNode result, String reason) {
         Map<String, Object> raw = rawWithReason(root, "intent response parsed");
+        raw.put("reason", reason == null ? "intent response parsed" : reason);
+        putIfPresent(raw, "routeAction", text(result.path("routeAction")));
         raw.put("selectedItem", nodeToObject(selected));
         putIfPresent(raw, "resultMessage", text(result.path("message")));
         return Map.copyOf(raw);
@@ -153,6 +213,19 @@ public class IntentServiceResponseMapper {
         }
         String value = node.asText(null);
         return value == null || value.isBlank() ? null : value;
+    }
+
+    private String firstText(JsonNode... nodes) {
+        if (nodes == null) {
+            return null;
+        }
+        for (JsonNode node : nodes) {
+            String value = text(node);
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private String blankToDefault(String value, String defaultValue) {

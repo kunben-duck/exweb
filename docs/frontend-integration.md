@@ -22,7 +22,7 @@
 
 意图识别记录不新增前端接口，也不要求前端增加请求字段。后端只有在 `financeex.intent.enabled=true`
 且本轮确实调用意图服务时，才会在 `financeex.intent-record.enabled=true` 的配置下异步记录本轮
-query、候选意图、最高置信结果、最终路由是否采纳和调用耗时。DomainAgent、RuntimeBinding 续接、用例库已命中、
+query、routeAction、候选意图、最终路由是否采纳和调用耗时。DomainAgent、RuntimeBinding 续接、用例库已命中、
 意图服务关闭或未调用时不会写记录。该记录使用专用 Servlet/MVC 线程池 best-effort 写入
 `fin_ex_intent_recognition_t`，失败只影响统计排障数据，不影响 `/chat/runs`、WebSocket 或 Event Resume。
 意图服务调用失败后后端会按 `financeex.intent.max-retries` 重试，默认最多重试 3 次，运行时最多按 10 次生效；重试耗尽后仍按
@@ -159,12 +159,12 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 停止回答 | 用户点击停止 -> `POST /runs/{runId}/stop` -> 等待 WS 或 Event Resume 收到 `run.cancelled` | `runId`、stop 前本地 `lastSeq` | stop 不是关闭 WebSocket；若 stop 前已有正文或用户可见 parts，历史消息会保存 partial assistant |
 | 编辑历史 user 消息 | 用户点击编辑 -> `POST /chat/runs(runMode=EDIT_USER, editedMessageId, message)` -> 订阅新 run -> `run.completed` 后重新 `GET /messages` | `editedMessageId`、新 user `messageId`、新 assistant `messageId`、`versionInfo` | 旧消息不覆盖；新 user sibling 进入旧 user 的 `versionInfo.variants` |
 | 重新生成 assistant | 用户点击重新生成 -> `POST /chat/runs(runMode=REGENERATE_ASSISTANT, regeneratedMessageId)` -> 订阅新 run -> `run.completed` 后重新 `GET /messages` | `regeneratedMessageId`、原父 user messageId、新 assistant messageId、`versionInfo` | 复用原 user 节点，新 assistant sibling 进入旧 assistant 的 `versionInfo.variants` |
-| 意图澄清等待 | 收到 `run.waiting_user(waitingType=INTENT_CLARIFICATION)` 或刷新后 `stream-status.waitingUserInput=true` -> 展示 `/messages` 中的 `INTENT_CLARIFICATION_REQUEST` part -> `POST /chat/hitl/{hitlRequestId}/responses` -> 订阅返回的 `streamTopicId` | `hitlRequestId`、`assistantMessageId`、`continueRunId`、`streamTopicId`、`expiresAt` | 意图澄清属于路由阶段，不创建 RuntimeBinding；提交后继续调用意图服务，可能再次等待，也可能最终路由到 DomainAgent 或 Relay |
+| 意图澄清等待 | 收到 `run.waiting_user(waitingType=INTENT_CLARIFICATION)` 或刷新后 `stream-status.waitingUserInput=true` -> 展示 `/messages` 中的 `INTENT_CLARIFICATION_REQUEST` part -> `POST /chat/hitl/{hitlRequestId}/responses` -> 订阅返回的 `streamTopicId` | `hitlRequestId`、`assistantMessageId`、`continueRunId`、`streamTopicId`、`expiresAt` | 意图澄清属于路由阶段，不创建 RuntimeBinding；提交后后端以 `routeTrigger=clarify_answer` 继续调用意图服务，可能再次等待，也可能最终路由到 DomainAgent 或 Relay |
 | Agent 澄清等待 | 收到 `run.waiting_user(waitingType=AGENT_CLARIFICATION)` 或刷新后 `stream-status.waitingUserInput=true` -> 展示 `/messages` 中的 `AGENT_CLARIFICATION_REQUEST` part -> `POST /chat/hitl/{hitlRequestId}/responses` -> 订阅返回的 `streamTopicId` | `hitlRequestId`、`assistantMessageId`、`continueRunId`、`streamTopicId`、`expiresAt` | 续接不创建新 user 消息；用户答案会作为 `AGENT_CLARIFICATION_RESPONSE` part 追加到同一 assistant，最终 `run.completed.payload.assistantMessageId` 仍是原 assistant；超过 `expiresAt` 后提交会返回 `HITL_EXPIRED` |
 | 切换历史版本 | 从当前消息 `versionInfo.variants` 取目标项 -> `GET /messages?leafMessageId={switchLeafMessageId}` 重渲染 -> 后台 `POST /path` 保存选择 | `versionInfo.currentIndex/total`、`switchLeafMessageId`、`currentLeafMessageId` | 先刷新展示路径，不创建 run，不调用 Runtime；`/path` 只负责持久化当前 leaf |
 | 从消息新建分支 | `POST /sessions/{sessionId}/branches(sourceMessageId)` -> 选择新 `sessionId` -> `GET /messages`、`GET /stream-status` | `sourceMessageId`、新 `sessionId`、`sourceSessionId/sourceMessageId` | 分支快照消息 `locked=true`，禁用编辑、删除和重新生成 |
 | 上传文件并作为附件提问 | `POST /documents(file, sessionId)` -> 等状态 `AVAILABLE` -> `POST /chat/runs(attachments[{documentId}])` | `documentId`、`sessionId`、`attachments[].documentId` | 附件不是消息类型；PROCESSING/FAILED/DELETED 不可作为聊天附件 |
-| 选中 DomainAgent 并带文档提问 | `POST /documents(file,metadata.skillId)` -> `POST /chat/runs(targetType=DOMAIN_AGENT,targetId,attachments,metadata)` | `documentId`、`targetId`、`metadata.sceneParam.docList` | DomainAgent 路由不创建 RuntimeBinding；metadata 是下游 body；ChatService 不校验 target 授权或 skillId/query 一致性，只校验附件 docList 的 docId/url 必须匹配 attachments 授权文档 |
+| 选中 DomainAgent 并带文档提问 | `POST /documents(file,metadata.skillId)` -> `POST /chat/runs(targetType=DOMAIN_AGENT,targetId,attachments,metadata)` | `documentId`、`targetId`、`metadata.sceneParam.docList` | 后端绑定 `provider=domain-agent`、`routeSource=front-selected`；metadata 作为业务扩展传给下游，但 `skillId/query/sessionId` 由服务端按绑定和本轮问题覆盖；附件 docList 的 docId/url 必须匹配 attachments 授权文档 |
 | 点赞/点踩/取消 | 历史消息中找到 assistant `messageId` -> `POST /messages/{messageId}/feedback`；再次点击已选按钮 -> `DELETE /feedback` | `messageId`、可选 `runId`、`feedback.rating/status` | 历史消息 `feedback` 非空时高亮；取消后返回 `status=CANCELLED`，历史消息再查为 `feedback=null` |
 | 会话归档/恢复/删除 | 单个：`POST /archive`、`POST /restore`、`DELETE /sessions/{sessionId}`；批量：`DELETE /sessions` body `sessionIds[]` | `sessionId`、`sessionIds[]` | 删除是软删除；有 active run 时后端会先主动取消 run |
 | 文档库管理 | `GET /documents` -> `GET /documents/{documentId}`/`status`/`preview-url`/`download`/`PATCH`/`DELETE` | `documentId`、`cursor`、`status` | 列表默认不返回 DELETED；下载和预览只允许 AVAILABLE |
@@ -233,7 +233,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/chat/runs` | 唯一提问入口，创建后台 run。 | JSON body：`commandId` 可选，`sessionId` 可选，`conversationId` 可选，`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`attachments[]`、`targetType`、`targetId`、`metadata`。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | `runMode` 默认 `NEXT`；`targetType=DOMAIN_AGENT` 时进入 DomainAgent 路由，不读取或创建 RuntimeBinding。 |
+| `POST /api/v1/ex/chat/runs` | 唯一提问入口，创建后台 run。 | JSON body：`commandId` 可选，`sessionId` 可选，`conversationId` 可选，`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`attachments[]`、`targetType`、`targetId`、`metadata`。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | `runMode` 默认 `NEXT`；`targetType=DOMAIN_AGENT` 时进入 DomainAgent 路由，并创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding。 |
 | `POST /api/v1/ex/chat/runs/{runId}/stop` | 用户点击停止回答。 | Path：`runId`。 | `ChatRunStopDto`：`runId`、`sessionId`、`status`、`latestSeq`、`stoppedAt`、`messageReady`、`assistantMessageId`、`feedbackTargetMessageId`。 | 幂等；停止语义不是关闭 WebSocket。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`；只处理 `stream-item` 中的 `encodedItem.data`。 |
 | `GET /api/v1/ex/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态，并以 `done` 闭合；live source 异常时服务端会降级按 DB 事件轮询。 |
@@ -610,8 +610,9 @@ sequenceDiagram
 ### DomainAgent 绑定与切换
 
 - 前端手动选择领域 Agent 时，调用 `/chat/runs` 传 `targetType=DOMAIN_AGENT,targetId=...`。后端会把该会话绑定到目标 DomainAgent，`stream-status` 中可通过 `bindingProvider/bindingTargetId/bindingRouteSource` 查看当前绑定。
-- 未传 target 时，后端优先续接当前 active binding；没有绑定时才调用用例库或意图服务。用例库/意图服务返回的 `resourceId/skillId` 统一解释为 `DomainAgentId`。
+- 未传 target 时，后端优先续接当前 active binding；没有绑定时才调用用例库或意图服务。意图服务 `ROUTE_SINGLE.items[0].intentId` 会被解释为 `DomainAgentId/skillId`；`resourceInstruction.resourceId` 只用于后端诊断记录，不参与路由。
 - DomainAgent 下游 body 以 `metadata` 为业务扩展，但 `skillId/query/sessionId` 由后端按当前绑定和本轮问题强制写入，前端传同名字段也不会覆盖。
+- 意图服务上下文由后端 RouteMemory 维护：首次路由传 `routeTrigger=first_turn`；DomainAgent 拒答重路由传 `domain_reject` 和本次拒答摘要；提交 `INTENT_CLARIFICATION` 后传 `clarify_answer`。`history` 包含最近 TopK 成功路由和当前未完成的意图澄清链路，Agent 内部澄清不会进入这份 history。RouteMemory 读写是 best-effort，异常或熔断只会让本轮意图少带历史，不会阻断 `/chat/runs`。
 - 如果当前绑定来自意图或用例库，DomainAgent 返回配置化拒答 code 后，后端会自动重新意图并切换到新 DomainAgent。
 - 如果当前绑定来自手动选择，拒答后命中新 DomainAgent 时，本轮会返回 `run.waiting_user`，消息 parts 中包含 `DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST`。前端调用 `POST /api/v1/ex/chat/hitl/{hitlRequestId}/responses` 提交确认；同意后后端用原问题调用新 DomainAgent，拒绝后保留原手动绑定并以拒答收口。
 
@@ -986,7 +987,7 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
 | `attachments` | array | 否 | 文档附件引用列表 |
 | `targetType` | string | 否 | 显式直连目标类型；当前支持 `DOMAIN_AGENT`，为空走普通路由 |
 | `targetId` | string | `targetType=DOMAIN_AGENT` 必填 | DomainAgent 目标 ID |
-| `metadata` | object | 否 | 扩展字段；DomainAgent 直连时完整作为下游 chat body |
+| `metadata` | object | 否 | 扩展字段；DomainAgent 路由时会作为下游业务扩展，不能覆盖服务端保留的 `skillId/query/sessionId` |
 
 响应：
 
@@ -1508,7 +1509,7 @@ heartbeat 和 done 使用同一个 envelope，不携带 `encodedItem`，也不�
 | `run.started` | run 已创建 | 可记录 run 状态为 running |
 | `message.delta` | assistant 文本增量 | 追加 `payload.delta` 到当前 assistant 消息 |
 | `message.snapshot` | assistant 最终回答快照，例如 Relay `type=agent,is_streaming=false` 或 `type=generate-response` | 使用 `payload.content` 替换当前 assistant 草稿，不要追加 |
-| `runtime.progress` | 下游 Runtime 进度文本，例如 Relay `relay-progress` | 展示到运行进度区域，不要拼入 assistant 正文 |
+| `runtime.progress` | 运行进度文本，例如 ChatService `route-progress`、Relay `relay-progress` | 展示到运行进度区域，不要拼入 assistant 正文 |
 | `runtime.metadata` | 下游 Runtime 元数据，例如 `project_home`、`available-modes` | 更新运行态面板、工作区链接或模式列表，不要拼入 assistant 正文 |
 | `runtime.agent` | 下游 agent 调用生命周期，例如 `agent-call` | 展示当前 agent、模型和任务信息 |
 | `runtime.thinking` | 下游思考过程开始/结束 | 展示思考状态或可折叠过程 |
@@ -1550,6 +1551,7 @@ Relay 映射规则：
 - `type=generate-response` 且存在 `content` 时，同样映射为 `message.snapshot`，用于以 Relay 最终完整总结覆盖前面的流式草稿；它本身不代表 run 完成，仍等待 `session-state` 或显式终态闭合。
 - 纯文本 `steam-complete`、`stream-complete`、`stream_complete`、`stream.complete`、`stream-completed`、`[DONE]` 映射为 `message.completed`。
 - `relay-start/relay-progress/relay-end/clarified-query/plan-update/subagent-plan-created/subagent-subtask/approval-result/approval-response` 映射为 `runtime.progress`；`session-ready/session-state/project-home/available-modes/self-evolution-status/token-update` 映射为 `runtime.metadata`；Relay WebSocket 普通问答的 `heartbeat-response` 在 adapter 内部过滤；`agent-call` 映射为 `runtime.agent`；`agent-reasoning/thinking-operation-*/thinking-content-update` 映射为 `runtime.thinking`；`tool-call-streaming/tool-execution/tool-structured-result` 映射为 `runtime.tool`；引用/来源类事件映射为 `runtime.reference`；`approval-request` 映射为 `runtime.card`。
+- ChatService 在调用意图服务前会先推送一条 `runtime.progress`：`payload.sourceType=route-progress`、`payload.stage=intent_calling`、`payload.message=正在识别问题意图`。该事件只用于等待态提示，不包含意图 prompt、history 或原始响应；后续仍以 `run.completed/run.waiting_user/run.failed` 判断本轮结果。
 - Relay WebSocket 中 `approval-request(operation_type=questionnaire)` 是 HITL 等待信号，adapter 会在输出对应 `runtime.card` 后闭合当前用户轮次，由应用层生成 `run.waiting_user`。
 - `tool-structured-result` 是 Relay 内部工具调用的结构化结果，本轮不再拆分 `result_data/resultData.widget.data`，统一作为 `runtime.tool` 输出。payload 完整保留 `result_data/resultData/index/total/is_last` 等原字段，前端按 Relay 文档自行解析；`result_data.is_last=true` 不表示本轮 run 完成，run 仍以 `session-state` 或 `stream-complete/[DONE]` 等显式终态闭合，WebSocket 正常关闭但缺少终态帧会被视为 Relay 协议异常。
 - domain-agent DomainAgent 指定调用响应中，`content` 的 `<think>...</think>` 片段映射为 `runtime.thinking`，不会拼入 assistant 正文；非 think 内容映射为 `message.delta`。`traceId/sessionId/messageId` 映射为 `runtime.metadata`；单独出现的 `intent/domainAgentId` 映射为 `runtime.metadata`；如果 `intent/domainAgentId` 与某个卡片字段同帧出现，则一起放入 `runtime.card`。当前 domain-agent 协议下 `cardUrl/diyCardScene/cardList/openCard` 通常不会在同一个 chunk 中同时出现，因此卡片事件会保留原始 `sourceType`，例如 `diyCardScene` 或 `openCard`；服务端仅保留 `sourceType=domain-agent-card/cardType=mixed` 作为非预期混合帧的防御兜底。`processResult` 映射为 `runtime.progress`，`searchList/sourcesDocuments` 映射为 `runtime.reference`，`endFlag=true` 映射为 `message.completed`。
@@ -2006,10 +2008,10 @@ curl -OJ http://localhost:8080/api/v1/ex/documents/doc_xxx/download
 
 后端会按当前用户回查文档库，补齐可信的文件名、MIME、大小、来源和 tokenSize。前端传入的附件展示字段不会被当作事实源。
 
-指定 DomainAgent 调用时，`targetType=DOMAIN_AGENT` 和 `targetId` 触发 `DOMAIN_AGENT` 路由。后端不会组装
-DomainAgent body；`metadata` 会作为下游请求体透传。若携带附件，前端必须把上传返回的
+指定 DomainAgent 调用时，`targetType=DOMAIN_AGENT` 和 `targetId` 触发 `DOMAIN_AGENT` 路由，并把当前会话绑定到该 DomainAgent。
+`metadata` 会作为下游业务扩展传递，但后端会按绑定和本轮问题强制写入 `skillId/query/sessionId`，前端传入同名字段也不会覆盖。若携带附件，前端必须把上传返回的
 `providerDocument.docId/url` 放入 `metadata.sceneParam.docList`，且这些引用必须和 `attachments[]`
-中的已授权 `documentId` 匹配；后端只校验，不覆盖：
+中的已授权 `documentId` 匹配：
 
 ```json
 {
@@ -2043,7 +2045,7 @@ DomainAgent body；`metadata` 会作为下游请求体透传。若携带附件�
 }
 ```
 
-DomainAgent 路由不会读取或创建 RuntimeBinding，也不会调用用例库/意图服务。它只用于前端明确选择 DomainAgent 的场景；如果 `metadata.sceneParam.docList` 缺失、为空，或引用了未在 `attachments[]` 中授权的 `docId/url`，后端会拒绝本轮 run。ChatService 不校验 `targetId` 是否可调用，也不要求 `metadata.skillId/query/sessionId` 与外层 `targetId/message/sessionId` 一致；这些业务合法性由下游 DomainAgent 服务负责。
+DomainAgent 路由会跳过用例库和意图服务，并创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding，后续未指定 target 的普通提问会优先续接该绑定。如果 `metadata.sceneParam.docList` 缺失、为空，或引用了未在 `attachments[]` 中授权的 `docId/url`，后端会拒绝本轮 run。ChatService 不校验 `targetId` 是否可调用；DomainAgent 权限由下游服务负责。
 本轮显式选择的 DomainAgent 会进入 `runtime.metadata`，并在历史 assistant 的 `parts` 返回：
 `partType=METADATA`、`payload.metadataType=selected_domain_agent`、`payload.targetType=DOMAIN_AGENT`、`payload.targetId=所选目标 ID`、
 `payload.intentResult.source=front-selected`。前端历史页可以用该 part 展示“本轮调用技能”。

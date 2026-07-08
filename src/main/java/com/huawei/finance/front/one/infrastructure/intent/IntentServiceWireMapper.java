@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.infrastructure.intent;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
+import com.huawei.finance.front.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import org.springframework.stereotype.Component;
@@ -44,6 +45,10 @@ public class IntentServiceWireMapper {
      */
     public IntentDecision toDecision(JsonNode root) {
         return responseMapper.toDecision(root);
+    }
+
+    public IntentRecognitionResult toRecognitionResult(JsonNode root) {
+        return responseMapper.toRecognitionResult(root);
     }
 
     /**

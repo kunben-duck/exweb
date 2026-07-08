@@ -9,9 +9,12 @@ import com.huawei.finance.front.one.application.integration.conversation.ChatEve
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.service.memory.MemoryApplicationService;
+import com.huawei.finance.front.one.application.service.memory.RouteMemoryApplicationService;
 import com.huawei.finance.front.one.application.service.routing.IntentRecognitionRecordService;
 import com.huawei.finance.front.one.application.service.routing.IntentRecognitionRecordSnapshot;
 import com.huawei.finance.front.one.application.service.routing.RouteSignalApplicationService;
+import com.huawei.finance.front.one.application.service.routing.RouteSignalFrame;
+import com.huawei.finance.front.one.application.service.routing.RouteSignalProgress;
 import com.huawei.finance.front.one.application.service.routing.RouteSignalResult;
 import com.huawei.finance.front.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.finance.front.one.application.service.runtime.DomainAgentBindingCommand;
@@ -102,6 +105,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private final IdGenerator idGenerator;
     private final Scheduler eventIoScheduler;
     private final DomainAgentProperties domainAgentProperties;
+    private final RouteMemoryApplicationService routeMemoryService;
 
     @Autowired
     public FinanceEXChatService(SessionApplicationService sessionService,
@@ -117,7 +121,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                 ChatRunTerminalCommitService terminalCommitService,
                                 IdGenerator idGenerator,
                                 @Qualifier("chatStreamEventScheduler") Scheduler eventIoScheduler,
-                                DomainAgentProperties domainAgentProperties) {
+                                DomainAgentProperties domainAgentProperties,
+                                RouteMemoryApplicationService routeMemoryService) {
         this.sessionService = sessionService;
         this.memoryService = memoryService;
         this.runtimeBindingService = runtimeBindingService;
@@ -138,6 +143,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         this.idGenerator = idGenerator;
         this.eventIoScheduler = eventIoScheduler == null ? Schedulers.boundedElastic() : eventIoScheduler;
         this.domainAgentProperties = domainAgentProperties == null ? new DomainAgentProperties() : domainAgentProperties;
+        this.routeMemoryService = routeMemoryService;
     }
 
     FinanceEXChatService(SessionApplicationService sessionService,
@@ -156,7 +162,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 runAdmissionControl, new ChatRunStopCoordinator(sessionService, chatStreamService, chatRunService,
                         chatRunLeaseService, runExecutionRegistry, agentRuntimeExecutor,
                         idGenerator), null, null, idGenerator, Schedulers.boundedElastic(),
-                new DomainAgentProperties());
+                new DomainAgentProperties(), null);
     }
 
     FinanceEXChatService(SessionApplicationService sessionService,
@@ -196,7 +202,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 systemResponseExecutor, legacyCompatibleExecutor(domainAgentExecutor, agentRuntimeExecutor),
                 documentFacade, chatStreamService, chatRunService,
                 chatRunLeaseService, chatDeltaCoalescer, runExecutionRegistry, runAdmissionControl, stopCoordinator,
-                chatHitlService, terminalCommitService, idGenerator, eventIoScheduler, domainAgentProperties);
+                chatHitlService, terminalCommitService, idGenerator, eventIoScheduler, domainAgentProperties, null);
     }
 
     @Override
@@ -406,49 +412,21 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 hitl.userMessageId(), userMessage, null);
 
         MemoryContext memory = MemoryContext.empty();
-        RouteSignalResult routeSignal = routeSignalService.routeInitial(user, session, command, List.of(), memory);
-        RouteTarget route = routeSignal.route();
-        IntentDecision intent = routeSignal.intentDecision();
-        RuntimeBinding binding = null;
-        RuntimeSessionMode runtimeSessionMode = RuntimeSessionMode.RESUME;
         AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>();
-        if (!routeSignal.waitingIntentClarification()) {
-            if (route.type() == RouteType.DOMAIN_AGENT) {
-                binding = runtimeBindingService.bindDomainAgentForRun(new DomainAgentBindingCommand(
-                        user.tenantId(), user.ownerUserId(), session.id(), runId,
-                        hitl.assistantMessageId(), route.selectedAgentCode(), route.routeSource(),
-                        domainAgentBindingMetadata(route, intent)));
-            } else if (route.type() == RouteType.AGENT_RUNTIME) {
-                RuntimeBindingResolution resolution = runtimeBindingService.resolveForRun(user.tenantId(),
-                        user.ownerUserId(), session.id(), runId, hitl.assistantMessageId());
-                binding = resolution.binding();
-                runtimeSessionMode = resolution.sessionMode();
-            }
-            bindingRef.set(binding);
-        }
+        AtomicReference<RouteTarget> routeRef = new AtomicReference<>();
+        AtomicReference<RuntimeSessionMode> runtimeSessionModeRef = new AtomicReference<>(RuntimeSessionMode.RESUME);
 
         ChatRun run = chatRunService.createRunning(new CreateChatRunContext(
                 runId,
                 user,
                 session.id(),
-                route,
-                binding,
+                null,
+                null,
                 Map.of("hitlRequestId", hitl.id(), "waitingType", hitl.waitingType().name()),
                 ChatRunMode.NEXT,
                 hitl.userMessageId(),
                 hitl.userMessageId()
         ));
-        if (intent != null) {
-            intentRecognitionRecordService.recordAsync(IntentRecognitionRecordSnapshot.of(
-                    new IntentRecognitionRecordSnapshot.IntentRecognitionRecordInput(
-                            user,
-                            command,
-                            run.id(),
-                            intent,
-                            route,
-                            routeSignal.intentConfidenceThreshold() == null ? 0.0 : routeSignal.intentConfidenceThreshold(),
-                            routeSignal.intentLatencyMs())));
-        }
         RunExecutionClaim executionClaim;
         try {
             executionClaim = chatRunLeaseService.startRun(run);
@@ -462,29 +440,18 @@ public class FinanceEXChatService implements FinanceChatFacade {
         runExecutionRegistry.registerClaim(executionClaim);
 
         Flux<ChatEvent> responsePart = Flux.just(clarificationResponseEvent(runId, session.id(), hitl, claim.responsePayload()));
-        Flux<ChatEvent> body;
-        if (routeSignal.waitingIntentClarification()) {
-            body = intentClarificationWaitingBody(runId, session.id(), routeSignal.intentClarificationPayload());
-        } else {
-            RuntimeBinding finalBinding = binding;
-            RuntimeSessionMode finalRuntimeSessionMode = runtimeSessionMode;
-            body = switch (route.type()) {
-                case DOMAIN_AGENT -> executeDomainAgentWithReroute(new DomainAgentRunContext(
-                        command, runId, session, memory, route, user, bindingRef, forwardHeaders,
-                        intent, List.of(), new HashSet<>(), 0));
-                case SYSTEM_RESPONSE -> systemResponseExecutor.execute(command, runId, intent, route);
-                case AGENT_RUNTIME -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
-                        command, runId, memory, intent, route, user, finalBinding,
-                        finalRuntimeSessionMode, forwardHeaders, List.of()));
-            };
-        }
-        return persistAndPublishRunEvents(
-                Flux.concat(Flux.just(RunStartedEvent.of(runId, session.id())), responsePart, body,
-                                Flux.just(RunCompletedEvent.of(runId, session.id(), runCompletedPayload(route, bindingRef.get()))))
-                        .onErrorResume(ex -> Flux.just(runtimeErrorEvent(runId, session.id(), ex))),
-                new RunEventPipelineContext(user, session, messagePlan, bindingRef, new AssistantAssembly(), runId,
-                        executionClaim, new AtomicReference<>(), hitl)
-        );
+        Flux<ChatEvent> body = Flux.concat(responsePart, routeAndExecute(new RoutePipelineRequest(
+                user, session, command, List.of(), List.of(), memory, runId, hitl.assistantMessageId(),
+                forwardHeaders, routeRef, bindingRef, runtimeSessionModeRef, run)));
+        RunEventPipelineContext context = new RunEventPipelineContext(user, session, messagePlan, bindingRef,
+                new AssistantAssembly(), runId, executionClaim, new AtomicReference<>(), hitl);
+        return persistAndPublishRunEvents(Flux.just(RunStartedEvent.of(runId, session.id())), context)
+                .concatWith(Flux.defer(() -> persistAndPublishRunEvents(
+                        Flux.concat(body,
+                                        Flux.defer(() -> Flux.just(RunCompletedEvent.of(runId, session.id(),
+                                                runCompletedPayload(routeRef.get(), bindingRef.get())))))
+                                .onErrorResume(ex -> Flux.just(runtimeErrorEvent(runId, session.id(), ex))),
+                        context)));
     }
 
     private Flux<ChatEvent> executeDomainAgentSwitchContinuation(UserContext user, ChatHitlClaimResult claim,
@@ -596,11 +563,6 @@ public class FinanceEXChatService implements FinanceChatFacade {
             ChatRunMessagePlan messagePlan = sessionService.prepareRunMessage(user, normalized, session, runId, attachments);
             ChatCommand runCommand = commandForExecution(normalized, messagePlan);
             String runtimeBindingLeafId = runtimeBindingLeafId(messagePlan);
-            IntentDecision intent = null;
-            Long intentLatencyMs = null;
-            Double intentConfidenceThreshold = null;
-            boolean waitingIntentClarification = false;
-            Map<String, Object> intentClarificationPayload = Map.of();
             RouteTarget route = null;
             RuntimeBinding binding = null;
             RuntimeSessionMode runtimeSessionMode = RuntimeSessionMode.RESUME;
@@ -626,60 +588,22 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     }
                 }
             }
-            if (route == null) {
-                // 首轮路由只读取已启用的外部路由信号。默认用例库和意图服务都关闭，
-                // 此时不会发生外部 HTTP 调用，请求直接进入 AgentRuntime。
-                RouteSignalResult routeSignal = routeSignalService.routeInitial(user, session, runCommand, attachments, memory);
-                route = routeSignal.route();
-                intent = routeSignal.intentDecision();
-                intentLatencyMs = routeSignal.intentLatencyMs();
-                intentConfidenceThreshold = routeSignal.intentConfidenceThreshold();
-                waitingIntentClarification = routeSignal.waitingIntentClarification();
-                intentClarificationPayload = routeSignal.intentClarificationPayload();
-                if (route.type() == RouteType.DOMAIN_AGENT) {
-                    binding = runtimeBindingService.bindDomainAgentForRun(new DomainAgentBindingCommand(
-                            user.tenantId(), user.ownerUserId(), session.id(), runId,
-                            runtimeBindingLeafId, route.selectedAgentCode(), route.routeSource(),
-                            domainAgentBindingMetadata(route, intent)));
-                } else if (route.type() == RouteType.AGENT_RUNTIME) {
-                    RuntimeBindingResolution resolution = runtimeBindingService.resolveForRun(user.tenantId(),
-                            user.ownerUserId(), session.id(), runId, runtimeBindingLeafId);
-                    binding = resolution.binding();
-                    runtimeSessionMode = resolution.sessionMode();
-                }
-            }
-            IntentDecision selectedIntent = intent;
-            Long selectedIntentLatencyMs = intentLatencyMs;
-            Double selectedIntentConfidenceThreshold = intentConfidenceThreshold;
-            RouteTarget selectedRoute = route;
-            boolean selectedWaitingIntentClarification = waitingIntentClarification;
-            Map<String, Object> selectedIntentClarificationPayload = intentClarificationPayload;
-            RuntimeSessionMode selectedRuntimeSessionMode = runtimeSessionMode;
             AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>(binding);
+            AtomicReference<RouteTarget> routeRef = new AtomicReference<>(route);
+            AtomicReference<RuntimeSessionMode> runtimeSessionModeRef = new AtomicReference<>(runtimeSessionMode);
             AtomicReference<Map<String, Object>> pendingHitlPayloadRef = new AtomicReference<>();
             AssistantAssembly assistant = new AssistantAssembly();
             ChatRun run = chatRunService.createRunning(new CreateChatRunContext(
                     runId,
                     user,
                     session.id(),
-                    selectedRoute,
+                    routeRef.get(),
                     bindingRef.get(),
                     normalized.metadata(),
                     messagePlan.runMode(),
                     messagePlan.parentMessageId(),
                     messagePlan.userMessage().id()
             ));
-            if (selectedIntent != null) {
-                intentRecognitionRecordService.recordAsync(IntentRecognitionRecordSnapshot.of(
-                        new IntentRecognitionRecordSnapshot.IntentRecognitionRecordInput(
-                                user,
-                                runCommand,
-                                run.id(),
-                                selectedIntent,
-                                selectedRoute,
-                                selectedIntentConfidenceThreshold == null ? 0.0 : selectedIntentConfidenceThreshold,
-                                selectedIntentLatencyMs)));
-            }
             RunExecutionClaim executionClaim;
             try {
                 executionClaim = chatRunLeaseService.startRun(run);
@@ -696,28 +620,25 @@ public class FinanceEXChatService implements FinanceChatFacade {
             }
             runExecutionRegistry.registerClaim(executionClaim);
             try {
-                // 根据路由结果选择 DomainAgent、系统响应或统一 AgentRuntime。
-                Flux<ChatEvent> body = selectedWaitingIntentClarification
-                        ? intentClarificationWaitingBody(runId, session.id(), selectedIntentClarificationPayload)
-                        : switch (selectedRoute.type()) {
-                            case DOMAIN_AGENT -> executeDomainAgentWithReroute(new DomainAgentRunContext(
-                                    runCommand, runId, session, memory, selectedRoute, user, bindingRef,
-                                    headerSnapshot, selectedIntent, documents, new HashSet<>(), 0));
-                            case SYSTEM_RESPONSE -> systemResponseExecutor.execute(runCommand, runId, selectedIntent, selectedRoute);
-                            case AGENT_RUNTIME -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
-                                    runCommand, runId, memory, selectedIntent, selectedRoute, user, bindingRef.get(),
-                                    selectedRuntimeSessionMode, headerSnapshot, documents));
-                        };
+                /*
+                 * 外部用例库/意图路由放在 run pipeline 内执行。这样 run.started 会先落库和发布，
+                 * 慢意图服务只影响后续输出，不会阻塞前端获得 runId 与首个事件。
+                 */
+                Flux<ChatEvent> body = routeAndExecute(new RoutePipelineRequest(
+                        user, session, runCommand, attachments, documents, memory, runId, runtimeBindingLeafId,
+                        headerSnapshot, routeRef, bindingRef, runtimeSessionModeRef, run));
 
                 // 外层统一补齐 run.started/run.completed，接口层只需要转发事件流。
                 // onErrorResume 必须放在持久化之前，确保运行异常转换出的 run.failed 事件也会落库。
-                return persistAndPublishRunEvents(
-                        Flux.concat(Flux.just(RunStartedEvent.of(runId, session.id())), body,
-                                        Flux.just(RunCompletedEvent.of(runId, session.id(), runCompletedPayload(selectedRoute, bindingRef.get()))))
-                                .onErrorResume(ex -> Flux.just(runtimeErrorEvent(runId, session.id(), ex))),
-                        new RunEventPipelineContext(user, session, messagePlan, bindingRef, assistant, runId,
-                                executionClaim, pendingHitlPayloadRef, null)
-                );
+                RunEventPipelineContext context = new RunEventPipelineContext(user, session, messagePlan,
+                        bindingRef, assistant, runId, executionClaim, pendingHitlPayloadRef, null);
+                return persistAndPublishRunEvents(Flux.just(RunStartedEvent.of(runId, session.id())), context)
+                        .concatWith(Flux.defer(() -> persistAndPublishRunEvents(
+                                Flux.concat(body,
+                                                Flux.defer(() -> Flux.just(RunCompletedEvent.of(runId, session.id(),
+                                                        runCompletedPayload(routeRef.get(), bindingRef.get())))))
+                                        .onErrorResume(ex -> Flux.just(runtimeErrorEvent(runId, session.id(), ex))),
+                                context)));
             } catch (RuntimeException ex) {
                 // run 已创建后同步步骤失败时，也必须写入 run.failed 并释放 active run，避免前端看到永远 RUNNING。
                 return persistAndPublishRunEvents(
@@ -769,12 +690,27 @@ public class FinanceEXChatService implements FinanceChatFacade {
         if (context.rerouteCount() >= domainAgentProperties.normalizedMaxReroutes()) {
             return Flux.just(domainAgentRerouteMetadata(context, refusal, null, "MAX_REROUTES_REACHED"));
         }
-        RouteSignalResult nextSignal = routeSignalService.routeInitial(
-                context.user(),
-                context.session(),
-                commandWithDomainRejectContext(context.command(), currentDomainAgentId, refusal),
-                context.command().attachments(),
-                context.memory());
+        ChatCommand rerouteCommand = commandWithDomainRejectContext(context.command(), currentDomainAgentId, refusal);
+        DomainAgentRerouteContext rerouteContext = new DomainAgentRerouteContext(
+                context, refusal, currentDomainAgentId, rejected);
+        return routeSignalService.routeInitialWithProgress(
+                        context.user(),
+                        context.session(),
+                        rerouteCommand,
+                        rerouteCommand.attachments(),
+                        context.memory())
+                .concatMap(frame -> {
+                    if (frame.progressFrame()) {
+                        return Flux.just(routeProgressEvent(context.runId(), context.session().id(), frame.progress()));
+                    }
+                    return continueAfterDomainAgentReroute(rerouteContext, frame.result());
+                });
+    }
+
+    private Flux<ChatEvent> continueAfterDomainAgentReroute(DomainAgentRerouteContext reroute,
+                                                            RouteSignalResult nextSignal) {
+        DomainAgentRunContext context = reroute.context();
+        DomainAgentRefusal refusal = reroute.refusal();
         if (nextSignal.waitingIntentClarification()) {
             return Flux.concat(
                     Flux.just(domainAgentRerouteMetadata(context, refusal, nextSignal.route(), "INTENT_CLARIFICATION_REQUIRED")),
@@ -784,13 +720,13 @@ public class FinanceEXChatService implements FinanceChatFacade {
         RouteTarget nextRoute = nextSignal.route();
         if (nextRoute == null || nextRoute.type() != RouteType.DOMAIN_AGENT
                 || nextRoute.selectedAgentCode() == null || nextRoute.selectedAgentCode().isBlank()
-                || rejected.contains(nextRoute.selectedAgentCode())) {
+                || reroute.rejectedDomainAgentIds().contains(nextRoute.selectedAgentCode())) {
             return Flux.just(domainAgentRerouteMetadata(context, refusal, nextRoute, "NO_AVAILABLE_DOMAIN_AGENT"));
         }
         recordIntentIfPresent(context, nextSignal.intentDecision(), nextRoute);
         String routeSource = routeSource(context.bindingRef().get());
         if ("front-selected".equals(routeSource)
-                && !currentDomainAgentId.equals(nextRoute.selectedAgentCode())) {
+                && !reroute.currentDomainAgentId().equals(nextRoute.selectedAgentCode())) {
             return Flux.just(domainAgentSwitchConfirmationRequest(context, refusal, nextSignal));
         }
         runtimeBindingService.markNotRoutable(context.bindingRef().get(), refusal.code());
@@ -815,7 +751,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 context.forwardHeaders(),
                 nextSignal.intentDecision(),
                 context.documents(),
-                rejected,
+                reroute.rejectedDomainAgentIds(),
                 context.rerouteCount() + 1);
         return Flux.concat(Flux.just(domainAgentRerouteMetadata(context, refusal, nextRoute, "AUTO_SWITCH")),
                 executeDomainAgentWithReroute(nextContext));
@@ -913,17 +849,116 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                                               String originalQuery, ChatHitlRequest hitl,
                                                               Map<String, Object> responsePayload) {
         Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("routeTrigger", "intent_clarification");
-        metadata.put("intentClarification", Map.of(
-                "hitlRequestId", hitl.id(),
-                "intentSessionId", hitl.runtimeSessionId() == null ? "" : hitl.runtimeSessionId(),
-                "intentRequestId", hitl.requestPayload().getOrDefault("intentRequestId", ""),
-                "request", hitl.requestPayload(),
-                "response", responsePayload == null ? Map.of() : responsePayload
-        ));
+        Map<String, Object> requestPayload = hitl.requestPayload() == null ? Map.of() : hitl.requestPayload();
+        String clarifyAnswer = intentClarificationAnswer(responsePayload);
+        String resolvedOriginalQuery = blankToDefault(
+                firstText(originalQuery, requestPayload.get("originalQuery"), clarifyAnswer), "");
+        List<Map<String, Object>> clarificationHistory = appendClarificationHistory(
+                requestPayload, responsePayload, clarifyAnswer, resolvedOriginalQuery);
+        Map<String, Object> intentClarification = new LinkedHashMap<>();
+        intentClarification.put("hitlRequestId", hitl.id());
+        intentClarification.put("intentSessionId", hitl.runtimeSessionId() == null ? "" : hitl.runtimeSessionId());
+        intentClarification.put("intentRequestId", requestPayload.getOrDefault("intentRequestId", ""));
+        intentClarification.put("originalQuery", resolvedOriginalQuery);
+        putNonNull(intentClarification, "clarifyQuestion", clarifyQuestion(requestPayload));
+        putNonNull(intentClarification, "clarificationType", clarificationType(requestPayload));
+        intentClarification.put("answerText", clarifyAnswer == null ? "" : clarifyAnswer);
+        intentClarification.put("clarificationHistory", clarificationHistory);
+        intentClarification.put("request", requestPayload);
+        intentClarification.put("response", responsePayload == null ? Map.of() : responsePayload);
+        metadata.put("routeTrigger", "clarify_answer");
+        metadata.put("intentClarification", Map.copyOf(intentClarification));
         return new ChatCommand(null, user.tenantId(), user.ownerUserId(), session.id(), null,
-                null, originalQuery == null ? "" : originalQuery, List.of(), Map.copyOf(metadata),
+                null, clarifyAnswer == null ? "" : clarifyAnswer, List.of(), Map.copyOf(metadata),
                 null, null, ChatRunMode.NEXT, hitl.assistantMessageId(), null, null);
+    }
+
+    private List<Map<String, Object>> appendClarificationHistory(Map<String, Object> requestPayload,
+                                                                 Map<String, Object> responsePayload,
+                                                                 String answerText,
+                                                                 String originalQuery) {
+        List<Map<String, Object>> history = new java.util.ArrayList<>(clarificationHistory(requestPayload));
+        Map<String, Object> current = new LinkedHashMap<>();
+        current.put("type", "clarify");
+        putNonNull(current, "query", firstText(requestPayload.get("clarifyTriggerQuery"),
+                requestPayload.get("originalQuery"), originalQuery));
+        String question = clarifyQuestion(requestPayload);
+        if (question != null) {
+            current.put("clarifyQuestion", question);
+        }
+        String type = clarificationType(requestPayload);
+        if (type != null) {
+            current.put("clarificationType", type);
+        }
+        if (answerText != null && !answerText.isBlank()) {
+            current.put("answer", answerText);
+        }
+        if (responsePayload != null && !responsePayload.isEmpty()) {
+            current.put("response", responsePayload);
+        }
+        if (current.size() > 1) {
+            history.add(Map.copyOf(current));
+        }
+        return List.copyOf(history);
+    }
+
+    private String intentClarificationAnswer(Map<String, Object> responsePayload) {
+        if (responsePayload == null || responsePayload.isEmpty()) {
+            return "";
+        }
+        Object answers = responsePayload.get("questionnaireAnswers");
+        if (answers instanceof Map<?, ?> answerMap && !answerMap.isEmpty()) {
+            return answerMap.values().stream()
+                    .findFirst()
+                    .map(String::valueOf)
+                    .orElse("");
+        }
+        return firstText(responsePayload.get("answerText"), responsePayload.get("answer"),
+                responsePayload.get("content"), responsePayload.get("message"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> clarificationHistory(Map<String, Object> payload) {
+        Object value = payload == null ? null : payload.get("clarificationHistory");
+        if (!(value instanceof List<?> list) || list.isEmpty()) {
+            return List.of();
+        }
+        return list.stream()
+                .filter(Map.class::isInstance)
+                .map(item -> {
+                    Map<String, Object> copy = new LinkedHashMap<>();
+                    ((Map<String, Object>) item).forEach((key, itemValue) -> {
+                        if (key != null && itemValue != null) {
+                            copy.put(key, itemValue);
+                        }
+                    });
+                    return Map.copyOf(copy);
+                })
+                .toList();
+    }
+
+    private String clarifyQuestion(Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return null;
+        }
+        Object clarification = payload.get("clarification");
+        String nested = clarification instanceof Map<?, ?> map ? firstText(map.get("clarifyQuestion")) : null;
+        return firstText(payload.get("clarifyQuestion"), payload.get("question"), nested);
+    }
+
+    private String clarificationType(Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return null;
+        }
+        Object clarification = payload.get("clarification");
+        String nested = clarification instanceof Map<?, ?> map ? firstText(map.get("type")) : null;
+        return firstText(payload.get("clarificationType"), payload.get("type"), nested);
+    }
+
+    private void putNonNull(Map<String, Object> target, String key, Object value) {
+        if (target != null && key != null && value != null) {
+            target.put(key, value);
+        }
     }
 
     private void recordIntentIfPresent(DomainAgentRunContext context, IntentDecision intent, RouteTarget route) {
@@ -982,6 +1017,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
         return null;
     }
 
+    private String blankToDefault(String value, String defaultValue) {
+        return value == null || value.isBlank() ? defaultValue : value;
+    }
+
     private Flux<ChatEvent> persistAndPublishRunEvents(Flux<ChatEvent> events, RunEventPipelineContext context) {
         AtomicBoolean writeRejected = new AtomicBoolean(false);
         String runId = context.runId();
@@ -1034,6 +1073,131 @@ public class FinanceEXChatService implements FinanceChatFacade {
                         return Mono.just(commitTerminalFailure(context, ex));
                     }
                 });
+    }
+
+    private Flux<ChatEvent> routeAndExecute(RoutePipelineRequest request) {
+        Flux<RouteSignalFrame> frames = request.routeRef().get() == null
+                ? routeSignalService.routeInitialWithProgress(request.user(), request.session(), request.runCommand(),
+                request.attachments(), request.memory())
+                : Flux.just(RouteSignalFrame.result(RouteSignalResult.of(request.routeRef().get())));
+        return frames.concatMap(frame -> {
+            if (frame.progressFrame()) {
+                return Flux.just(routeProgressEvent(request.runId(), request.session().id(), frame.progress()));
+            }
+            RouteExecutionResolution resolution = resolveRouteForRun(new RouteResolutionRequest(
+                    request.user(), request.session(), request.runCommand(), request.attachments(), request.memory(),
+                    request.runId(), request.runtimeBindingLeafId(), request.routeRef().get(),
+                    request.bindingRef().get(), request.runtimeSessionModeRef().get()), frame.result());
+            request.routeRef().set(resolution.route());
+            request.bindingRef().set(resolution.binding());
+            request.runtimeSessionModeRef().set(resolution.runtimeSessionMode());
+            bestEffortBindResolvedRoute(request.runId(), resolution.route(), resolution.binding());
+            if (resolution.intent() != null) {
+                intentRecognitionRecordService.recordAsync(IntentRecognitionRecordSnapshot.of(
+                        new IntentRecognitionRecordSnapshot.IntentRecognitionRecordInput(
+                                request.user(),
+                                request.runCommand(),
+                                request.run().id(),
+                                resolution.intent(),
+                                resolution.route(),
+                                resolution.intentConfidenceThreshold() == null ? 0.0 : resolution.intentConfidenceThreshold(),
+                                resolution.intentLatencyMs())));
+            }
+            if (resolution.waitingIntentClarification()) {
+                return intentClarificationWaitingBody(request.runId(), request.session().id(),
+                        resolution.intentClarificationPayload());
+            }
+            return switch (resolution.route().type()) {
+                case DOMAIN_AGENT -> executeDomainAgentWithReroute(new DomainAgentRunContext(
+                        request.runCommand(), request.runId(), request.session(), request.memory(),
+                        resolution.route(), request.user(), request.bindingRef(), request.forwardHeaders(),
+                        resolution.intent(), request.documents(), new HashSet<>(), 0));
+                case SYSTEM_RESPONSE -> systemResponseExecutor.execute(request.runCommand(), request.runId(),
+                        resolution.intent(), resolution.route());
+                case AGENT_RUNTIME -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
+                        request.runCommand(), request.runId(), request.memory(), resolution.intent(),
+                        resolution.route(), request.user(), request.bindingRef().get(),
+                        resolution.runtimeSessionMode(), request.forwardHeaders(), request.documents()));
+            };
+        });
+    }
+
+    private void bestEffortBindResolvedRoute(String runId, RouteTarget route, RuntimeBinding binding) {
+        try {
+            chatRunService.bindResolvedRoute(runId, route, binding);
+        } catch (RuntimeException ex) {
+            log.warn("ChatRun resolved route diagnostic update failed and was ignored. runId={}, routeType={}, agentCode={}, reason={}",
+                    runId,
+                    route == null || route.type() == null ? null : route.type().name(),
+                    route == null ? null : route.selectedAgentCode(),
+                    ex.getMessage());
+        }
+    }
+
+    private RuntimeEvent routeProgressEvent(String runId, String sessionId, RouteSignalProgress progress) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("source", "chatservice");
+        payload.put("sourceType", "route-progress");
+        payload.put("stage", progress == null ? "route_progress" : blankToDefault(progress.stage(), "route_progress"));
+        payload.put("message", progress == null ? "正在选择合适能力" : blankToDefault(progress.message(), "正在选择合适能力"));
+        if (progress != null && progress.attributes() != null) {
+            progress.attributes().forEach((key, value) -> {
+                if (key != null && value != null && !payload.containsKey(key)) {
+                    payload.put(key, value);
+                }
+            });
+        }
+        return RuntimeEvent.progress(runId, sessionId, Map.copyOf(payload));
+    }
+
+    private RouteExecutionResolution resolveRouteForRun(RouteResolutionRequest request, RouteSignalResult routeSignalResult) {
+        UserContext user = request.user();
+        ChatSession session = request.session();
+        String runId = request.runId();
+        String runtimeBindingLeafId = request.runtimeBindingLeafId();
+        RouteTarget route = request.currentRoute();
+        RuntimeBinding binding = request.currentBinding();
+        RuntimeSessionMode runtimeSessionMode = request.currentRuntimeSessionMode() == null
+                ? RuntimeSessionMode.RESUME
+                : request.currentRuntimeSessionMode();
+        IntentDecision intent = null;
+        Long intentLatencyMs = null;
+        Double intentConfidenceThreshold = null;
+        boolean waitingIntentClarification = false;
+        Map<String, Object> intentClarificationPayload = Map.of();
+
+        if (route == null) {
+            // 首轮路由只读取已启用的外部路由信号。现在该调用位于 run.started 之后，
+            // 因此慢意图服务不会阻塞前端拿到 runId 和首个事件。
+            RouteSignalResult routeSignal = routeSignalResult == null
+                    ? routeSignalService.routeInitial(user, session, request.runCommand(),
+                    request.attachments(), request.memory())
+                    : routeSignalResult;
+            route = routeSignal.route();
+            intent = routeSignal.intentDecision();
+            intentLatencyMs = routeSignal.intentLatencyMs();
+            intentConfidenceThreshold = routeSignal.intentConfidenceThreshold();
+            waitingIntentClarification = routeSignal.waitingIntentClarification();
+            intentClarificationPayload = routeSignal.intentClarificationPayload();
+            if (route == null) {
+                route = RouteTarget.agentRuntime("fallback", 0.0, "route resolution returned empty route");
+            } else if (!waitingIntentClarification && route.type() == RouteType.DOMAIN_AGENT) {
+                binding = runtimeBindingService.bindDomainAgentForRun(new DomainAgentBindingCommand(
+                        user.tenantId(), user.ownerUserId(), session.id(), runId,
+                        runtimeBindingLeafId, route.selectedAgentCode(), route.routeSource(),
+                        domainAgentBindingMetadata(route, intent)));
+            } else if (!waitingIntentClarification && route.type() == RouteType.AGENT_RUNTIME) {
+                RuntimeBindingResolution resolution = runtimeBindingService.resolveForRun(user.tenantId(),
+                        user.ownerUserId(), session.id(), runId, runtimeBindingLeafId);
+                binding = resolution.binding();
+                runtimeSessionMode = resolution.sessionMode();
+            }
+        }
+        if (route == null) {
+            route = RouteTarget.agentRuntime("fallback", 0.0, "route resolution returned empty route");
+        }
+        return new RouteExecutionResolution(route, binding, runtimeSessionMode, intent, intentLatencyMs,
+                intentConfidenceThreshold, waitingIntentClarification, intentClarificationPayload);
     }
 
     private ChatEvent persistAndPublishOneEvent(ChatEvent event, RunEventPipelineContext context) {
@@ -1131,6 +1295,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         markExecutionTerminalIfNeeded(stored);
         bindingRef.set(runtimeBindingService.observeEvent(bindingRef.get(), stored));
         chatStreamService.publishPersisted(stored);
+        recordRouteMemoryAfterCommitted(stored, context);
         return stored;
     }
 
@@ -1185,7 +1350,117 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                        RunEventPipelineContext context) {
         context.bindingRef().set(result.binding());
         chatStreamService.publishPersisted(result.event());
+        recordRouteMemoryAfterCommitted(result.event(), context);
         return result.event();
+    }
+
+    private void recordRouteMemoryAfterCommitted(ChatEvent stored, RunEventPipelineContext context) {
+        if (routeMemoryService == null || stored == null || context == null) {
+            return;
+        }
+        if ("run.waiting_user".equals(stored.type())) {
+            recordIntentClarificationAfterWaiting(stored, context);
+            return;
+        }
+        if (!"run.completed".equals(stored.type())) {
+            return;
+        }
+        /*
+         * RouteMemory 是后续意图的上下文增强。只有本轮 run 已经成功闭合后才折叠澄清链、
+         * 写入成功 route，避免 run 失败或等待确认时污染下一轮路由历史。
+         */
+        RuntimeBinding binding = context.bindingRef().get();
+        if (binding == null || !RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider())) {
+            routeMemoryService.completeWithoutRoute(context.user(), context.session().id());
+            return;
+        }
+        if (hasDomainAgentRefusalWithoutSuccessfulSwitch(context)) {
+            routeMemoryService.completeWithoutRoute(context.user(), context.session().id());
+            return;
+        }
+        String domainAgentId = domainAgentId(binding);
+        if (domainAgentId == null || domainAgentId.isBlank()) {
+            routeMemoryService.completeWithoutRoute(context.user(), context.session().id());
+            return;
+        }
+        RouteTarget route = RouteTarget.domainAgent(domainAgentId,
+                blankToDefault(routeSource(binding), "domain-agent"),
+                1.0,
+                "completed domain agent route");
+        routeMemoryService.completeRoute(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                context.user(), context.session().id(), context.runId(), routeMemoryQuery(context), null, route));
+    }
+
+    private boolean hasDomainAgentRefusalWithoutSuccessfulSwitch(RunEventPipelineContext context) {
+        if (context == null || context.assistant() == null) {
+            return false;
+        }
+        return context.assistant().parts().stream()
+                .anyMatch(part -> "DOMAIN_AGENT_REFUSAL".equals(part.partType()));
+    }
+
+    private void recordIntentClarificationAfterWaiting(ChatEvent stored, RunEventPipelineContext context) {
+        Map<String, Object> payload = stored.payload() == null ? Map.of() : stored.payload();
+        if (!ChatHitlWaitingType.INTENT_CLARIFICATION.name().equals(String.valueOf(payload.get("waitingType")))) {
+            return;
+        }
+        Map<String, Object> requestPayload = context.pendingHitlPayloadRef().get();
+        if (requestPayload == null || requestPayload.isEmpty()) {
+            requestPayload = payload;
+        }
+        Object hitlRequestId = payload.get("hitlRequestId");
+        routeMemoryService.appendClarification(context.user(), context.session().id(), stored.runId(),
+                hitlRequestId == null ? null : String.valueOf(hitlRequestId), requestPayload);
+    }
+
+    private String routeMemoryQuery(RunEventPipelineContext context) {
+        if (context == null || context.messagePlan() == null || context.messagePlan().userMessage() == null) {
+            return "";
+        }
+        if (context.continuationHitlRequest() != null
+                && context.continuationHitlRequest().waitingType() == ChatHitlWaitingType.INTENT_CLARIFICATION) {
+            String folded = foldedIntentClarificationQuery(context.continuationHitlRequest(),
+                    context.messagePlan().userMessage().content());
+            if (folded != null && !folded.isBlank()) {
+                return folded;
+            }
+        }
+        String content = context.messagePlan().userMessage().content();
+        return content == null ? "" : content;
+    }
+
+    private String foldedIntentClarificationQuery(ChatHitlRequest hitl, String fallbackAnswer) {
+        Map<String, Object> payload = hitl.requestPayload() == null ? Map.of() : hitl.requestPayload();
+        String originalQuery = firstText(payload.get("originalQuery"), fallbackAnswer);
+        List<Map<String, Object>> history = new java.util.ArrayList<>(clarificationHistory(payload));
+        Map<String, Object> current = new LinkedHashMap<>();
+        current.put("type", "clarify");
+        putNonNull(current, "query", firstText(payload.get("clarifyTriggerQuery"), payload.get("originalQuery"), originalQuery));
+        putNonNull(current, "clarifyQuestion", clarifyQuestion(payload));
+        putNonNull(current, "clarificationType", clarificationType(payload));
+        Map<String, Object> responsePayload = hitl.responsePayload() == null ? Map.of() : hitl.responsePayload();
+        String answer = firstText(responsePayload.get("answerText"), fallbackAnswer);
+        Object questionnaireAnswers = responsePayload.get("questionnaireAnswers");
+        if (questionnaireAnswers instanceof Map<?, ?> answers && !answers.isEmpty()) {
+            answer = answers.values().stream().findFirst().map(String::valueOf).orElse(answer);
+        }
+        putNonNull(current, "answer", answer);
+        if (current.size() > 1) {
+            history.add(Map.copyOf(current));
+        }
+        StringBuilder builder = new StringBuilder();
+        builder.append("user:").append(originalQuery == null ? "" : originalQuery);
+        for (Map<String, Object> item : history) {
+            String question = firstText(item.get("clarifyQuestion"), item.get("question"));
+            String itemAnswer = firstText(item.get("answer"), item.get("answerText"));
+            if (question != null) {
+                builder.append("；澄清问:").append(question);
+            }
+            if (itemAnswer != null) {
+                builder.append("；用户:").append(itemAnswer);
+            }
+        }
+        return builder.toString();
     }
 
     private ChatRunTerminalCommitService.TerminalCommitContext terminalCommitContext(RunEventPipelineContext context) {
@@ -1430,6 +1705,49 @@ public class FinanceEXChatService implements FinanceChatFacade {
     ) {
     }
 
+    private record RouteExecutionResolution(
+            RouteTarget route,
+            RuntimeBinding binding,
+            RuntimeSessionMode runtimeSessionMode,
+            IntentDecision intent,
+            Long intentLatencyMs,
+            Double intentConfidenceThreshold,
+            boolean waitingIntentClarification,
+            Map<String, Object> intentClarificationPayload
+    ) {
+    }
+
+    private record RoutePipelineRequest(
+            UserContext user,
+            ChatSession session,
+            ChatCommand runCommand,
+            List<AttachmentRef> attachments,
+            List<UploadedDocument> documents,
+            MemoryContext memory,
+            String runId,
+            String runtimeBindingLeafId,
+            RuntimeForwardHeaders forwardHeaders,
+            AtomicReference<RouteTarget> routeRef,
+            AtomicReference<RuntimeBinding> bindingRef,
+            AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
+            ChatRun run
+    ) {
+    }
+
+    private record RouteResolutionRequest(
+            UserContext user,
+            ChatSession session,
+            ChatCommand runCommand,
+            List<AttachmentRef> attachments,
+            MemoryContext memory,
+            String runId,
+            String runtimeBindingLeafId,
+            RouteTarget currentRoute,
+            RuntimeBinding currentBinding,
+            RuntimeSessionMode currentRuntimeSessionMode
+    ) {
+    }
+
     private record DomainAgentRunContext(
             ChatCommand command,
             String runId,
@@ -1443,6 +1761,14 @@ public class FinanceEXChatService implements FinanceChatFacade {
             List<UploadedDocument> documents,
             Set<String> rejectedDomainAgentIds,
             int rerouteCount
+    ) {
+    }
+
+    private record DomainAgentRerouteContext(
+            DomainAgentRunContext context,
+            DomainAgentRefusal refusal,
+            String currentDomainAgentId,
+            Set<String> rejectedDomainAgentIds
     ) {
     }
 
@@ -1584,9 +1910,13 @@ public class FinanceEXChatService implements FinanceChatFacade {
         // run.completed 带出标准 status 和 v3 路由诊断字段，方便前端展示和排障。
         Map<String, Object> base = new java.util.LinkedHashMap<>();
         base.put("status", "COMPLETED");
-        base.put("routeType", route.type().name());
-        base.put("routeSource", route.routeSource());
-        if (route.selectedAgentCode() != null) {
+        if (route != null && route.type() != null) {
+            base.put("routeType", route.type().name());
+        }
+        if (route != null && route.routeSource() != null) {
+            base.put("routeSource", route.routeSource());
+        }
+        if (route != null && route.selectedAgentCode() != null) {
             base.put("agentCode", route.selectedAgentCode());
         }
         if (binding != null) {

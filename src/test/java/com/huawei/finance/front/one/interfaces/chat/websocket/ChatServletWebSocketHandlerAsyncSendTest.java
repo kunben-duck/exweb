@@ -128,7 +128,7 @@ class ChatServletWebSocketHandlerAsyncSendTest {
 
         @Override
         public URI getUri() {
-            return URI.create("ws://localhost/api/v1/ex/chat/ws");
+            return URI.create("ws://localhost/v1/chat/ws");
         }
 
         @Override

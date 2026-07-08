@@ -178,7 +178,7 @@ sequenceDiagram
     participant S3 as "S3 / OBS"
 
     opt "上传文档"
-        Frontend->>EX: "POST /api/v1/ex/documents"
+        Frontend->>EX: "POST /v1/documents"
         alt "storage.provider=local/huawei-s3"
             EX->>S3: "写入文件对象"
             S3-->>EX: "bucket/objectKey"
@@ -189,7 +189,7 @@ sequenceDiagram
         EX-->>Frontend: "documentId/status"
     end
 
-    Frontend->>EX: "POST /api/v1/ex/chat/runs"
+    Frontend->>EX: "POST /v1/chat/runs"
     EX->>DB: "创建/读取 session，写 user message、run、run.started"
     EX->>Redis: "写 active run / runtime binding / stream topic 热数据"
 
@@ -221,7 +221,7 @@ sequenceDiagram
     end
 
     opt "停止回答"
-        Frontend->>EX: "POST /api/v1/ex/chat/runs/{runId}/stop"
+        Frontend->>EX: "POST /v1/chat/runs/{runId}/stop"
         EX->>Redis: "写 cancel flag"
         EX->>DB: "run -> CANCELLING/CANCELLED，写 run.cancelled"
         EX->>Relay: "best-effort cancel"
@@ -281,29 +281,29 @@ sequenceDiagram
 本页新创建的 run 默认通过 WebSocket topic 接实时事件；新页签、新浏览器或跨电脑恢复已经存在的 active run 时，使用 run 级事件恢复先补发历史事件，再持续接续 live 事件直到本轮 run 终态。会话级事件恢复 仍只负责有限缺失事件补发。
 
 ```text
-POST /api/v1/ex/chat/runs
-POST /api/v1/ex/chat/messages/{messageId}/feedback
-DELETE /api/v1/ex/chat/messages/{messageId}/feedback
-POST /api/v1/ex/chat/messages/{messageId}/share
-GET  /api/v1/ex/chat/shares/{shareId}
-DELETE /api/v1/ex/chat/shares/{shareId}
-GET  /api/v1/ex/chat/shares?curPage=1&pageSize=20
-POST /api/v1/ex/chat/sessions
-GET  /api/v1/ex/chat/sessions?limit=20&cursor=...
-GET  /api/v1/ex/chat/sessions/{sessionId}
-GET  /api/v1/ex/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50
-GET  /api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants
-POST /api/v1/ex/chat/sessions/{sessionId}/path
-POST /api/v1/ex/chat/sessions/{sessionId}/branches
-GET  /api/v1/ex/chat/sessions/{sessionId}/events/resume?afterSeq={lastSeq}
-GET  /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={lastSeq}
-GET  /api/v1/ex/chat/sessions/{sessionId}/stream-status
-WS   /api/v1/ex/chat/ws subscribe(topicId=streamTopicId)
-POST /api/v1/ex/chat/runs/{runId}/stop
-POST /api/v1/ex/chat/sessions/{sessionId}/archive
-POST /api/v1/ex/chat/sessions/{sessionId}/restore
-DELETE /api/v1/ex/chat/sessions/{sessionId}
-DELETE /api/v1/ex/chat/sessions
+POST /v1/chat/runs
+POST /v1/chat/messages/{messageId}/feedback
+DELETE /v1/chat/messages/{messageId}/feedback
+POST /v1/chat/messages/{messageId}/share
+GET  /v1/chat/shares/{shareId}
+DELETE /v1/chat/shares/{shareId}
+GET  /v1/chat/shares?curPage=1&pageSize=20
+POST /v1/chat/sessions
+GET  /v1/chat/sessions?limit=20&cursor=...
+GET  /v1/chat/sessions/{sessionId}
+GET  /v1/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50
+GET  /v1/chat/sessions/{sessionId}/messages/{messageId}/variants
+POST /v1/chat/sessions/{sessionId}/path
+POST /v1/chat/sessions/{sessionId}/branches
+GET  /v1/chat/sessions/{sessionId}/events/resume?afterSeq={lastSeq}
+GET  /v1/chat/runs/{runId}/events/resume?afterSeq={lastSeq}
+GET  /v1/chat/sessions/{sessionId}/stream-status
+WS   /v1/chat/ws subscribe(topicId=streamTopicId)
+POST /v1/chat/runs/{runId}/stop
+POST /v1/chat/sessions/{sessionId}/archive
+POST /v1/chat/sessions/{sessionId}/restore
+DELETE /v1/chat/sessions/{sessionId}
+DELETE /v1/chat/sessions
 ```
 
 `/chat/runs` 只返回 run 运行标识和 run 级 `streamTopicId`，不返回 WebSocket、Event Resume 或 stop URL。
@@ -323,7 +323,7 @@ stop；删除成功后应立即移除会话并取消本地订阅。
 
 `current_leaf_message_id` 表示当前会话激活路径叶子。历史消息查询默认返回 root 到 current leaf 的路径；指定 `leafMessageId` 时返回 root 到该 leaf 的路径。`/messages` 会在有多个 sibling 版本的消息上返回 `versionInfo`，包含当前版本序号、版本总数和候选版本的 `switchLeafMessageId`。前端切换版本时可以先用 `GET /messages?leafMessageId={switchLeafMessageId}` 刷新聊天区，再用 `POST /path` 持久化当前选择；`/variants` 保留为查询完整候选内容和调试的接口。
 
-复杂前端或联调排障可以调用 `GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` 读取完整可见消息树。该接口返回 `currentLeafMessageId`、`rootMessageIds` 和 `mapping`，但只包含业务可见的 user/assistant 消息，不返回 hidden system 或下游工具原始节点；普通聊天页继续使用 `/messages` active path。历史消息、tree 和 variants 返回的 `ChatMessageDto.attachments` 是消息附件展示快照，文件下载和预览仍由文档库接口独立鉴权。
+复杂前端或联调排障可以调用 `GET /v1/chat/sessions/{sessionId}/messages/tree` 读取完整可见消息树。该接口返回 `currentLeafMessageId`、`rootMessageIds` 和 `mapping`，但只包含业务可见的 user/assistant 消息，不返回 hidden system 或下游工具原始节点；普通聊天页继续使用 `/messages` active path。历史消息、tree 和 variants 返回的 `ChatMessageDto.attachments` 是消息附件展示快照，文件下载和预览仍由文档库接口独立鉴权。
 
 ```mermaid
 flowchart TD
@@ -535,7 +535,7 @@ watchdog 是分层设计：`ChatRunWatchdogScheduler` 只负责按配置延迟�
 
 当前系统只保留前端到 FinanceEXChatService 的 WebSocket：
 
-- 前端 WebSocket：`/api/v1/ex/chat/ws`，只连接 FinanceEXChatService。它是用户级连接，按 run 级 `streamTopicId` 订阅已经写入事件事实源的 ChatEvent；它不接受聊天请求，也不直接调用 RelayAgent。
+- 前端 WebSocket：`/v1/chat/ws`，只连接 FinanceEXChatService。它是用户级连接，按 run 级 `streamTopicId` 订阅已经写入事件事实源的 ChatEvent；它不接受聊天请求，也不直接调用 RelayAgent。
 
 因此架构图中的 `AgentRuntime.query` 是应用层防腐层调用，不等价于前端 WebSocket。当前 `AgentRuntime.query` 默认使用 Relay HTTP 流式 adapter；如配置 `financeex.agent-runtime.relay.adapter=relay-websocket`，可切换为 FinanceEXChatService 到 RelayAgent 的出站 WebSocket 普通问答 adapter。
 
@@ -579,7 +579,7 @@ run 级 Event Resume 正常优先接入 Redis live topic；如果 live source �
 `FilePart`。两种 Controller 都委托 `DocumentUploadSupport`，由它先把上传流写入临时文件，
 再通过 `DocumentFacade -> DocumentStorage` 按 `financeex.storage.provider` 选择 `local`、`huawei-s3`
 或 `api-store`。前端看到的路径、字段和响应始终是同一套
-`POST /api/v1/ex/documents` 契约。api-store 可通过 `financeex.storage.api-store.forward-cookie=true`
+`POST /v1/documents` 契约。api-store 可通过 `financeex.storage.api-store.forward-cookie=true`
 允许上传入口 Cookie 作为下游 upload HTTP header 透传；普通对象存储实现不使用该 Cookie，
 且 Cookie 不进入 multipart form、文档元数据或前端响应。
 

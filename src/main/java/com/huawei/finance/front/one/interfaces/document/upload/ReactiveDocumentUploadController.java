@@ -21,7 +21,7 @@ import reactor.core.publisher.Mono;
  * {@link DocumentUploadSupport}。</p>
  */
 @RestController
-@RequestMapping("/api/v1/ex/documents")
+@RequestMapping("/v1/documents")
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.REACTIVE)
 public class ReactiveDocumentUploadController {
     private final DocumentUploadSupport uploadSupport;

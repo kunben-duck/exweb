@@ -27,8 +27,8 @@ class WebSocketServerCompatibilityTest {
         String servletConfig = Files.readString(Path.of(
                 "src/main/java/com/huawei/finance/front/one/interfaces/chat/websocket/ChatServletWebSocketConfig.java"));
 
-        assertThat(reactiveConfig).contains("/api/v1/ex/chat/ws");
-        assertThat(servletConfig).contains("/api/v1/ex/chat/ws");
+        assertThat(reactiveConfig).contains("/v1/chat/ws");
+        assertThat(servletConfig).contains("/v1/chat/ws");
     }
 
     @Test

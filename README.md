@@ -34,32 +34,32 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 
 完整接口和 WebSocket 联调说明见 [前端联调文档](docs/frontend-integration.md)。
 
-- `POST /api/v1/ex/chat/runs`：唯一提问入口。创建后台 run，返回 `runId`、`sessionId`、`firstSeq` 和 `streamTopicId`。
-- `POST /api/v1/ex/chat/sessions`：显式创建会话；也可以在 `/chat/runs` 中不传 `sessionId` 由后端创建或归一化。
-- `GET /api/v1/ex/chat/sessions?limit=20&cursor=...`：游标分页查询当前用户会话列表，并返回每个会话第一条 assistant 回答 `firstAssistantAnswer`。
-- `GET /api/v1/ex/chat/sessions/page?curPage=1&pageSize=20`：页码分页查询当前用户历史会话，返回 `totalRows/totalPages` 和每个会话的 `firstAssistantAnswer`。
-- `GET /api/v1/ex/chat/sessions/{sessionId}`：查询单个会话元数据，不返回历史消息和流式状态。
-- `GET /api/v1/ex/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50`：选择会话后查询当前 active path 或指定 leaf path 的完整 user/assistant 消息；有多个版本的消息会带 `versionInfo`。
-- `GET /api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants`：查询某条消息同父节点下的候选版本完整内容；普通聊天页优先使用 `/messages` 返回的 `versionInfo`。
-- `POST /api/v1/ex/chat/sessions/{sessionId}/path`：持久化会话当前 active path leaf；UI 切换可先使用 `/messages?leafMessageId=...` 刷新展示。
-- `POST /api/v1/ex/chat/sessions/{sessionId}/branches`：从指定消息创建只读历史快照分支。
-- `POST /api/v1/ex/chat/sessions/{sessionId}/archive|restore`：会话归档和恢复。
-- `DELETE /api/v1/ex/chat/sessions/{sessionId}`：软删除会话；若存在 active run，后端会先主动取消 run。
-- `DELETE /api/v1/ex/chat/sessions`：批量软删除会话；请求体传 `sessionIds[]`，运行中会话会先取消 run 后删除。
-- `WS /api/v1/ex/chat/ws`：用户级实时输出通道。客户端使用 `{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}` 订阅本轮 run topic；MVC/Servlet 模式会在 handshake 阶段固化用户身份。服务端 `message.payload` 为 `conversation-turn-stream`，真实聊天事件在 `message.payload.payload.encodedItem.data`。
-- `GET /api/v1/ex/chat/sessions/{sessionId}/events/resume?afterSeq={seq}`：会话级事件恢复有限补发，用于补齐整个会话缺失事件；SSE data 同样是 `conversation-turn-stream`。
-- `GET /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}`：run 级事件恢复并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态；长时间无业务事件时发送 turn stream `heartbeat`，终态后发送 `done`，live tail 异常时会降级按事件表轮询补齐。
-- `GET /api/v1/ex/chat/sessions/{sessionId}/stream-status`：查询当前会话最新事件序号、active run、`activeStreamTopicId`、是否可取消、是否等待用户澄清输入，以及当前 `bindingProvider/bindingTargetId/bindingIntentName/bindingRouteSource` 等绑定摘要。
-- `POST /api/v1/ex/chat/hitl/{hitlRequestId}/responses`：提交 Relay questionnaire 澄清答案，返回续接 run 的 `continueRunId/streamTopicId/firstSeq`。
-- `POST /api/v1/ex/chat/runs/{runId}/stop`：按 runId 停止当前回答，幂等返回 run 状态。
-- `POST /api/v1/ex/chat/messages/{messageId}/feedback`：提交或切换 assistant 消息点赞/点踩。
-- `DELETE /api/v1/ex/chat/messages/{messageId}/feedback`：取消当前用户对 assistant 消息的点赞或点踩。
-- `POST /api/v1/ex/chat/messages/{messageId}/share`：为某条 assistant 消息创建单轮问答固定快照分享。
-- `POST /api/v1/ex/chat/shares/{shareId}/deliveries`：把已有分享发送到指定 provider，首版内置 `welink`。
-- `POST /api/v1/ex/chat/messages/{messageId}/share/deliveries`：一键创建分享快照并发送到指定 provider。
-- `GET /api/v1/ex/chat/shares/{shareId}`：登录后查看分享详情；默认策略允许同租户用户查看。
-- `DELETE /api/v1/ex/chat/shares/{shareId}`：撤销当前用户创建的分享。
-- `GET /api/v1/ex/chat/shares?curPage=1&pageSize=20`：分页查询当前用户创建的分享，便于管理和撤销。
+- `POST /v1/chat/runs`：唯一提问入口。创建后台 run，返回 `runId`、`sessionId`、`firstSeq` 和 `streamTopicId`。
+- `POST /v1/chat/sessions`：显式创建会话；也可以在 `/chat/runs` 中不传 `sessionId` 由后端创建或归一化。
+- `GET /v1/chat/sessions?limit=20&cursor=...`：游标分页查询当前用户会话列表，并返回每个会话第一条 assistant 回答 `firstAssistantAnswer`。
+- `GET /v1/chat/sessions/page?curPage=1&pageSize=20`：页码分页查询当前用户历史会话，返回 `totalRows/totalPages` 和每个会话的 `firstAssistantAnswer`。
+- `GET /v1/chat/sessions/{sessionId}`：查询单个会话元数据，不返回历史消息和流式状态。
+- `GET /v1/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50`：选择会话后查询当前 active path 或指定 leaf path 的完整 user/assistant 消息；有多个版本的消息会带 `versionInfo`。
+- `GET /v1/chat/sessions/{sessionId}/messages/{messageId}/variants`：查询某条消息同父节点下的候选版本完整内容；普通聊天页优先使用 `/messages` 返回的 `versionInfo`。
+- `POST /v1/chat/sessions/{sessionId}/path`：持久化会话当前 active path leaf；UI 切换可先使用 `/messages?leafMessageId=...` 刷新展示。
+- `POST /v1/chat/sessions/{sessionId}/branches`：从指定消息创建只读历史快照分支。
+- `POST /v1/chat/sessions/{sessionId}/archive|restore`：会话归档和恢复。
+- `DELETE /v1/chat/sessions/{sessionId}`：软删除会话；若存在 active run，后端会先主动取消 run。
+- `DELETE /v1/chat/sessions`：批量软删除会话；请求体传 `sessionIds[]`，运行中会话会先取消 run 后删除。
+- `WS /v1/chat/ws`：用户级实时输出通道。客户端使用 `{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}` 订阅本轮 run topic；MVC/Servlet 模式会在 handshake 阶段固化用户身份。服务端 `message.payload` 为 `conversation-turn-stream`，真实聊天事件在 `message.payload.payload.encodedItem.data`。
+- `GET /v1/chat/sessions/{sessionId}/events/resume?afterSeq={seq}`：会话级事件恢复有限补发，用于补齐整个会话缺失事件；SSE data 同样是 `conversation-turn-stream`。
+- `GET /v1/chat/runs/{runId}/events/resume?afterSeq={seq}`：run 级事件恢复并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态；长时间无业务事件时发送 turn stream `heartbeat`，终态后发送 `done`，live tail 异常时会降级按事件表轮询补齐。
+- `GET /v1/chat/sessions/{sessionId}/stream-status`：查询当前会话最新事件序号、active run、`activeStreamTopicId`、是否可取消、是否等待用户澄清输入，以及当前 `bindingProvider/bindingTargetId/bindingIntentName/bindingRouteSource` 等绑定摘要。
+- `POST /v1/chat/hitl/{hitlRequestId}/responses`：提交 Relay questionnaire 澄清答案，返回续接 run 的 `continueRunId/streamTopicId/firstSeq`。
+- `POST /v1/chat/runs/{runId}/stop`：按 runId 停止当前回答，幂等返回 run 状态。
+- `POST /v1/chat/messages/{messageId}/feedback`：提交或切换 assistant 消息点赞/点踩。
+- `DELETE /v1/chat/messages/{messageId}/feedback`：取消当前用户对 assistant 消息的点赞或点踩。
+- `POST /v1/chat/messages/{messageId}/share`：为某条 assistant 消息创建单轮问答固定快照分享。
+- `POST /v1/chat/shares/{shareId}/deliveries`：把已有分享发送到指定 provider，首版内置 `welink`。
+- `POST /v1/chat/messages/{messageId}/share/deliveries`：一键创建分享快照并发送到指定 provider。
+- `GET /v1/chat/shares/{shareId}`：登录后查看分享详情；默认策略允许同租户用户查看。
+- `DELETE /v1/chat/shares/{shareId}`：撤销当前用户创建的分享。
+- `GET /v1/chat/shares?curPage=1&pageSize=20`：分页查询当前用户创建的分享，便于管理和撤销。
 
 前端流式模式：
 
@@ -81,7 +81,7 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 
 仓库提供独立本地联调台 `local-test-frontend/`。联调台通过 Node 代理访问后端，支持在页面中按 Postman 风格配置 `Cookie`、`Authorization`、`X-*` 等企业鉴权请求头；代理会在 HTTP、fetch Event Resume、文件下载和 WebSocket 握手时统一注入这些请求头。浏览器自身不会、也不能直接手写 `Cookie` 请求头或 WebSocket 自定义请求头。
 
-当 `POST /api/v1/ex/chat/runs`、`POST /api/v1/ex/chat/runs/{runId}/stop` 或 `POST /api/v1/ex/documents`
+当 `POST /v1/chat/runs`、`POST /v1/chat/runs/{runId}/stop` 或 `POST /v1/documents`
 携带标准 `Cookie` 请求头时，ChatService 会在请求入口捕获一次，并只作为内存快照透传给可信下游 adapter：Relay streamable HTTP、Relay WebSocket、DomainAgent chat/cancel，以及显式配置 `financeex.storage.api-store.forward-cookie=true` 的 api-store 文档上传。Cookie 不会写入 `metadata_json`、消息、事件、日志、前端响应、multipart form 或下游请求体。普通 local/huawei-s3 对象存储上传不会透传 Cookie。
 
 外部 HTTP 服务调用还支持统一的集成服务鉴权请求头防腐层。`financeex.integration-auth.enabled=false`
@@ -178,14 +178,14 @@ assistant 的思考、工具、进度、agent 调用等过程信息保存到 `fi
 
 前端点赞/点踩只能针对已落库 assistant 消息。流式阶段的 `message.delta/message.snapshot/message.completed` 只用于渲染草稿；`run.completed` 和用户主动 stop 后的 `run.cancelled` 在 `payload.messageReady=true` 时会携带 `assistantMessageId` 和 `feedbackTargetMessageId`，前端应使用该 ID 绑定反馈按钮。
 
-历史消息接口分两层：`GET /api/v1/ex/chat/sessions/{sessionId}/messages` 返回当前 active path，并在有多个 sibling 版本的消息上返回 `versionInfo`，前端可直接展示 `<currentIndex/total>` 版本游标；`versionInfo.variants[].switchLeafMessageId` 是切换该版本时传给 `/messages?leafMessageId=` 和 `/path` 的 leaf。`GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` 返回完整可见消息树 `mapping/currentLeafMessageId/rootMessageIds`，用于复杂版本树和联调排障。tree 视图只包含业务可见的 user/assistant 消息，不暴露 hidden system 或下游工具原始节点。
+历史消息接口分两层：`GET /v1/chat/sessions/{sessionId}/messages` 返回当前 active path，并在有多个 sibling 版本的消息上返回 `versionInfo`，前端可直接展示 `<currentIndex/total>` 版本游标；`versionInfo.variants[].switchLeafMessageId` 是切换该版本时传给 `/messages?leafMessageId=` 和 `/path` 的 leaf。`GET /v1/chat/sessions/{sessionId}/messages/tree` 返回完整可见消息树 `mapping/currentLeafMessageId/rootMessageIds`，用于复杂版本树和联调排障。tree 视图只包含业务可见的 user/assistant 消息，不暴露 hidden system 或下游工具原始节点。
 
 从某条消息新建分支时，服务端会复制 root 到该消息的可见路径到新 session，并将复制出的历史消息标记为 `origin_type=BRANCH_SNAPSHOT`、`locked=true`。这些快照消息只能展示和继续向后提问，不能编辑、删除或重新生成；分支后续新增消息仍为 `NORMAL`，可以参与消息树版本管理。
 
 ## 单轮问答分享
 
 分享能力面向“把某一轮问答发给同租户登录用户查看”的场景。前端对某条完整 `assistant`
-消息调用 `POST /api/v1/ex/chat/messages/{messageId}/share`，服务端会固定保存该 assistant
+消息调用 `POST /v1/chat/messages/{messageId}/share`，服务端会固定保存该 assistant
 消息的直接父 `user` 问题、assistant 正文、附件展示快照，以及 `visible=true` 的 parts。分享内容是
 创建时快照，原会话后续编辑、重新生成、反馈变化、路径切换或消息树分支都不会改变已经生成的分享。
 
@@ -199,9 +199,9 @@ assistant 的思考、工具、进度、agent 调用等过程信息保存到 `fi
 名称、类型、大小和 `documentId` 展示字段，不授予文件下载权限。
 
 分享发送通过 `ChatShareDeliveryProvider` 防腐层完成。前端可先调用
-`POST /api/v1/ex/chat/messages/{messageId}/share` 创建快照，再调用
-`POST /api/v1/ex/chat/shares/{shareId}/deliveries` 发送；也可以用
-`POST /api/v1/ex/chat/messages/{messageId}/share/deliveries` 一键创建并发送。首版 `welink`
+`POST /v1/chat/messages/{messageId}/share` 创建快照，再调用
+`POST /v1/chat/shares/{shareId}/deliveries` 发送；也可以用
+`POST /v1/chat/messages/{messageId}/share/deliveries` 一键创建并发送。首版 `welink`
 provider 会把分享链接转换为 WeLink 卡片请求，`linkUrl` 由 `financeex.share.share-url-prefix + shareId`
 生成，`targetAccounts[]/groupIds[]` 会去空去重后以英文逗号拼接。WeLink 出站请求会设置
 `Referer`，默认取 `financeex.share.delivery.providers.welink.base-url`，也可通过
@@ -269,14 +269,14 @@ RouteMemory 负责为意图服务生成 `conversationContext`：普通无绑定�
 
 WebSocket 边界如下：
 
-- 前端 WebSocket：`/api/v1/ex/chat/ws`，只连接 FinanceEXChatService，用于订阅 `streamTopicId` 并接收已经落库的 ChatEvent。
+- 前端 WebSocket：`/v1/chat/ws`，只连接 FinanceEXChatService，用于订阅 `streamTopicId` 并接收已经落库的 ChatEvent。
 - 下游 Relay：默认通过 streamable HTTP 调用；如配置 `FINANCEEX_RELAY_ADAPTER=relay-websocket`，则使用 FinanceEXChatService 到 RelayAgent 的出站 WebSocket 普通问答 adapter。前端 WebSocket 不触发 `AgentRuntime.query`。
 
 前端 WebSocket 入口同时兼容两种 Spring 启动模式：纯 WebFlux 启动时使用 WebFlux
 `WebSocketHandler`；企业框架引入 `spring-boot-starter-web` 并以 MVC/Servlet 模式启动时，
 使用 Servlet WebSocket handler 注册同一路径和同一套协议。如果 Servlet 应用配置
 `server.servlet.context-path=/fin/ex`，前端最终连接地址是
-`ws://host:port/fin/ex/api/v1/ex/chat/ws`；如果是 WebFlux 应用，则使用
+`ws://host:port/fin/ex/v1/chat/ws`；如果是 WebFlux 应用，则使用
 `spring.webflux.base-path=/fin/ex`。
 
 ```bash
@@ -440,7 +440,7 @@ mvn spring-boot:run -Dspring-boot.run.profiles=local
 FinanceEXChatService 统一后端，后端只根据 `financeex.storage.provider` 选择 `local`、`huawei-s3`
 或 `api-store`。
 数据库的 `fin_ex_uploaded_document_t` 保存文档库元数据，聊天请求只引用 `documentId`，不会把文件正文放进消息体。
-上传接口对外只有一条 `POST /api/v1/ex/documents`，服务端会按启动模式自动选择适配器：
+上传接口对外只有一条 `POST /v1/documents`，服务端会按启动模式自动选择适配器：
 Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共用同一套临时落盘和存储逻辑。
 `local` 和 `huawei-s3` 会把文件写入本服务对象存储；`api-store` 会转发新文档上传接口
 `/fina/agent/fileOperate/upload`，固定发送 multipart `file`，并在 `metadata` 显式包含 `skillId` 字段时额外发送
@@ -454,14 +454,14 @@ Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共�
 
 文档接口：
 
-- `POST /api/v1/ex/documents`：上传本地文件并登记到文档库；可选 multipart 字段包括 `sessionId`、`metadata`。
-- `GET /api/v1/ex/documents?sessionId=...&limit=20&cursor=...`：分页查询当前用户文档库，`sessionId` 可选。
-- `GET /api/v1/ex/documents/{documentId}`：查询单个文档。
-- `PATCH /api/v1/ex/documents/{documentId}`：更新文档展示名或扩展元数据。
-- `GET /api/v1/ex/documents/{documentId}/status`：查询文档处理状态。
-- `GET /api/v1/ex/documents/{documentId}/preview-url`：获取后端受控预览地址。
-- `GET /api/v1/ex/documents/{documentId}/download`：下载文档对象内容；provider 未启用下载时返回 `DOCUMENT_CONTENT_MANAGED_BY_PROVIDER`。
-- `DELETE /api/v1/ex/documents/{documentId}`：软删除文档。
+- `POST /v1/documents`：上传本地文件并登记到文档库；可选 multipart 字段包括 `sessionId`、`metadata`。
+- `GET /v1/documents?sessionId=...&limit=20&cursor=...`：分页查询当前用户文档库，`sessionId` 可选。
+- `GET /v1/documents/{documentId}`：查询单个文档。
+- `PATCH /v1/documents/{documentId}`：更新文档展示名或扩展元数据。
+- `GET /v1/documents/{documentId}/status`：查询文档处理状态。
+- `GET /v1/documents/{documentId}/preview-url`：获取后端受控预览地址。
+- `GET /v1/documents/{documentId}/download`：下载文档对象内容；provider 未启用下载时返回 `DOCUMENT_CONTENT_MANAGED_BY_PROVIDER`。
+- `DELETE /v1/documents/{documentId}`：软删除文档。
 
 聊天附件应使用文档库返回的 `id`：
 
@@ -495,7 +495,7 @@ export FINANCEEX_API_STORE_UPLOAD_PATH=/fina/agent/fileOperate/upload
 前端上传时：
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/ex/documents \
+curl -X POST http://localhost:8080/v1/documents \
   -F "file=@./report.pdf" \
   -F 'metadata={"skillId":"d3334be5e4c241ebb30b40d039919787"}'
 ```

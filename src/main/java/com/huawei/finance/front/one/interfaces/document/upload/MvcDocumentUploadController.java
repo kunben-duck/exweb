@@ -19,10 +19,10 @@ import reactor.core.publisher.Mono;
  *
  * <p>企业框架引入 {@code spring-boot-starter-web} 后，Spring Boot 会默认选择 Servlet 应用类型。
  * MVC 不能把 multipart 文件绑定为 WebFlux {@code FilePart}，因此这里用 {@link MultipartFile}
- * 暴露与前端完全相同的 {@code POST /api/v1/ex/documents} 契约。</p>
+ * 暴露与前端完全相同的 {@code POST /v1/documents} 契约。</p>
  */
 @RestController
-@RequestMapping("/api/v1/ex/documents")
+@RequestMapping("/v1/documents")
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class MvcDocumentUploadController {
     private final DocumentUploadSupport uploadSupport;

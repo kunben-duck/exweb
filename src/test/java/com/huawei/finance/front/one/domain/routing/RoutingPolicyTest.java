@@ -29,7 +29,7 @@ class RoutingPolicyTest {
 
         assertThat(target.type()).isEqualTo(RouteType.DOMAIN_AGENT);
         assertThat(target.selectedAgentCode()).isEqualTo("finance.office.agent");
-        assertThat(target.routeSource()).isEqualTo("intent-service");
+        assertThat(target.routeSource()).isEqualTo("intent-agent");
     }
 
     @Test

@@ -7,7 +7,7 @@ package com.huawei.finance.front.one.domain.routing;
  *
  * @param type 路由类型。
  * @param selectedAgentCode 选中的 DomainAgent ID，仅 DOMAIN_AGENT 路由有效。
- * @param routeSource 路由信号来源，例如 use-case-library、intent-service、runtime-binding。
+ * @param routeSource 路由信号来源，例如 use-case-library、intent-agent、runtime-binding。
  * @param score 路由置信分数。
  * @param reason 路由原因或系统回复文本。
  */

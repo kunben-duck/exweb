@@ -21,7 +21,7 @@ import reactor.util.concurrent.Queues;
  * WebFlux 服务端栈下的前端 WebSocket 入口。
  *
  * <p>当应用以 Reactive WebFlux 启动时，该 handler 承载
- * {@code /api/v1/ex/chat/ws}。当企业框架引入 Spring MVC 并以 Servlet 模式启动时，
+ * {@code /v1/chat/ws}。当企业框架引入 Spring MVC 并以 Servlet 模式启动时，
  * 该 bean 不会生效，改由 {@link ChatServletWebSocketHandler} 注册同一路径。</p>
  */
 @Component

@@ -41,7 +41,7 @@ import reactor.core.publisher.Mono;
  * 启动模式专用 Controller，并统一复用 {@link DocumentUploadSupport} 完成临时文件和对象存储写入。</p>
  */
 @RestController
-@RequestMapping("/api/v1/ex/documents")
+@RequestMapping("/v1/documents")
 public class DocumentController {
     private final DocumentFacade facade;
     private final AuthContextProvider auth;
@@ -144,7 +144,7 @@ public class DocumentController {
                 .map(document -> {
                     return new DocumentAccessDto(
                             document.id(),
-                            "/api/v1/ex/documents/" + document.id() + "/download",
+                            "/v1/documents/" + document.id() + "/download",
                             "BACKEND_STREAM",
                             null
                     );

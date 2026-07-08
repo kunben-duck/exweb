@@ -7,15 +7,15 @@
 ## 基础约定
 
 - HTTP base URL：`http://localhost:8080`
-- WebSocket URL：`ws://localhost:8080/api/v1/ex/chat/ws`
+- WebSocket URL：`ws://localhost:8080/v1/chat/ws`
 - 如果后端配置了上下文根，例如 Servlet/MVC 模式下 `server.servlet.context-path=/fin/ex`
   或 WebFlux 模式下 `spring.webflux.base-path=/fin/ex`，则 WebSocket URL 也必须带上同一前缀：
-  `ws://localhost:8080/fin/ex/api/v1/ex/chat/ws`。
+  `ws://localhost:8080/fin/ex/v1/chat/ws`。
 - 所有时间字段均为 ISO-8601 字符串。
 - `seq` / `sequence` 是数据库生成的事件恢复游标，前端断点恢复只保存最后收到的最大 `sequence`。
 - 前端只把 `sequence` 当作不透明数字游标，不要自行推算生成方式；服务端以事件表事实源保证同一会话内的恢复顺序。
 - 前端不要传 `tenantId`、`userId`，也不要通过 Header/Query/Body 伪造用户身份；身份由后端请求入口通过 `AuthContextProvider` 从服务端上下文解析一次，后台 run 不会再次读取请求 ThreadLocal。
-- 本文档中的 WebSocket 默认指前端到 FinanceEXChatService 的 `/api/v1/ex/chat/ws` 连接。FinanceEXChatService 到下游 RelayAgent 默认使用 streamable HTTP adapter，也可由后端配置切换为出站 Relay WebSocket 普通问答 adapter；前端不直接连接 RelayAgent，也不通过前端 WebSocket 发起 `AgentRuntime.query`。
+- 本文档中的 WebSocket 默认指前端到 FinanceEXChatService 的 `/v1/chat/ws` 连接。FinanceEXChatService 到下游 RelayAgent 默认使用 streamable HTTP adapter，也可由后端配置切换为出站 Relay WebSocket 普通问答 adapter；前端不直接连接 RelayAgent，也不通过前端 WebSocket 发起 `AgentRuntime.query`。
 - 当前 `ApplicationAuthContextProvider` 直接构造完整 `UserContext`，不再通过配置文件或环境变量模拟 tenant/user；接入企业身份源时只需替换该防腐层。
 
 ## 内部旁路能力
@@ -32,43 +32,43 @@ query、routeAction、候选意图、最终路由是否采纳和调用耗时。D
 
 | 场景 | 方法 | 路径 | 说明 |
 | --- | --- | --- | --- |
-| 创建会话 | `POST` | `/api/v1/ex/chat/sessions` | 显式创建会话；也可以直接调用 `/chat/runs`，不传 `sessionId` 时由后端创建或归一化 |
-| 会话列表（游标） | `GET` | `/api/v1/ex/chat/sessions?limit=20&cursor=...` | 当前用户会话游标分页 |
-| 会话列表（页码） | `GET` | `/api/v1/ex/chat/sessions/page?curPage=1&pageSize=20` | 当前用户历史会话页码分页，返回 totalRows |
-| 会话详情 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}` | 查询单个会话元数据 |
-| 历史消息 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50` | 查询当前 active path 或指定 leaf path，消息带轻量 `versionInfo` 和附件快照 |
-| 消息树视图 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages/tree` | 查询完整可见消息树 mapping，用于复杂版本树或调试，节点消息同样带附件快照 |
-| 消息版本详情 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants` | 查询同父节点候选版本完整内容；普通聊天页优先使用 `/messages.versionInfo` |
-| 切换路径 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/path` | 将会话当前 leaf 切换到指定消息 |
-| 新建分支 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/branches` | 从某条消息创建只读历史快照分支 |
-| 重命名会话 | `PATCH` | `/api/v1/ex/chat/sessions/{sessionId}` | 更新会话标题 |
-| 归档/恢复会话 | `POST` | `/api/v1/ex/chat/sessions/{sessionId}/archive`、`/restore` | 会话列表管理 |
-| 删除会话 | `DELETE` | `/api/v1/ex/chat/sessions/{sessionId}` | 软删除单个会话，历史事实数据保留 |
-| 批量删除会话 | `DELETE` | `/api/v1/ex/chat/sessions` | 批量软删除会话，运行中的会话会先取消 run |
-| 创建 run | `POST` | `/api/v1/ex/chat/runs` | 唯一提问入口，返回 `streamTopicId` |
-| WebSocket | `WS` | `/api/v1/ex/chat/ws` | 用户级长连接，按 run topic 订阅实时事件 |
-| 会话事件恢复 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/events/resume?afterSeq={seq}` | 有限补发整个会话缺失事件 |
-| Run 事件恢复 | `GET` | `/api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}` | 跨页签、跨浏览器或跨电脑续接正在输出的当前回答 |
-| 流状态 | `GET` | `/api/v1/ex/chat/sessions/{sessionId}/stream-status` | 查询最新 `seq`、active run 和是否可取消 |
-| 停止回答 | `POST` | `/api/v1/ex/chat/runs/{runId}/stop` | 幂等停止当前 run |
-| 消息反馈 | `POST` / `DELETE` | `/api/v1/ex/chat/messages/{messageId}/feedback` | 对 assistant 消息点赞、点踩、切换或取消 |
-| 创建分享 | `POST` | `/api/v1/ex/chat/messages/{messageId}/share` | 对单条 assistant 消息创建固定问答快照分享 |
-| 发送分享 | `POST` | `/api/v1/ex/chat/shares/{shareId}/deliveries` | 把已有分享发送到 WeLink 等 provider |
-| 创建并发送分享 | `POST` | `/api/v1/ex/chat/messages/{messageId}/share/deliveries` | 一键创建分享快照并发送 |
-| 分享详情 | `GET` | `/api/v1/ex/chat/shares/{shareId}` | 登录后查看分享快照 |
-| 撤销分享 | `DELETE` | `/api/v1/ex/chat/shares/{shareId}` | 创建者撤销分享 |
-| 我的分享 | `GET` | `/api/v1/ex/chat/shares?curPage=1&pageSize=20` | 分页管理当前用户创建的分享 |
-| 上传文档 | `POST` | `/api/v1/ex/documents` | multipart 上传本地文件 |
-| 文档列表 | `GET` | `/api/v1/ex/documents?sessionId=...&limit=20&cursor=...` | 当前用户文档库；`sessionId` 可选，用于筛选会话关联文档 |
-| 文档详情 | `GET` | `/api/v1/ex/documents/{documentId}` | 查询单个文档 |
-| 文档更新 | `PATCH` | `/api/v1/ex/documents/{documentId}` | 更新展示名或元数据 |
-| 文档状态 | `GET` | `/api/v1/ex/documents/{documentId}/status` | 查询处理状态 |
-| 文档预览/下载 | `GET` | `/api/v1/ex/documents/{documentId}/preview-url`、`/download` | 后端受控流式访问 |
-| 文档删除 | `DELETE` | `/api/v1/ex/documents/{documentId}` | 软删除文档 |
+| 创建会话 | `POST` | `/v1/chat/sessions` | 显式创建会话；也可以直接调用 `/chat/runs`，不传 `sessionId` 时由后端创建或归一化 |
+| 会话列表（游标） | `GET` | `/v1/chat/sessions?limit=20&cursor=...` | 当前用户会话游标分页 |
+| 会话列表（页码） | `GET` | `/v1/chat/sessions/page?curPage=1&pageSize=20` | 当前用户历史会话页码分页，返回 totalRows |
+| 会话详情 | `GET` | `/v1/chat/sessions/{sessionId}` | 查询单个会话元数据 |
+| 历史消息 | `GET` | `/v1/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50` | 查询当前 active path 或指定 leaf path，消息带轻量 `versionInfo` 和附件快照 |
+| 消息树视图 | `GET` | `/v1/chat/sessions/{sessionId}/messages/tree` | 查询完整可见消息树 mapping，用于复杂版本树或调试，节点消息同样带附件快照 |
+| 消息版本详情 | `GET` | `/v1/chat/sessions/{sessionId}/messages/{messageId}/variants` | 查询同父节点候选版本完整内容；普通聊天页优先使用 `/messages.versionInfo` |
+| 切换路径 | `POST` | `/v1/chat/sessions/{sessionId}/path` | 将会话当前 leaf 切换到指定消息 |
+| 新建分支 | `POST` | `/v1/chat/sessions/{sessionId}/branches` | 从某条消息创建只读历史快照分支 |
+| 重命名会话 | `PATCH` | `/v1/chat/sessions/{sessionId}` | 更新会话标题 |
+| 归档/恢复会话 | `POST` | `/v1/chat/sessions/{sessionId}/archive`、`/restore` | 会话列表管理 |
+| 删除会话 | `DELETE` | `/v1/chat/sessions/{sessionId}` | 软删除单个会话，历史事实数据保留 |
+| 批量删除会话 | `DELETE` | `/v1/chat/sessions` | 批量软删除会话，运行中的会话会先取消 run |
+| 创建 run | `POST` | `/v1/chat/runs` | 唯一提问入口，返回 `streamTopicId` |
+| WebSocket | `WS` | `/v1/chat/ws` | 用户级长连接，按 run topic 订阅实时事件 |
+| 会话事件恢复 | `GET` | `/v1/chat/sessions/{sessionId}/events/resume?afterSeq={seq}` | 有限补发整个会话缺失事件 |
+| Run 事件恢复 | `GET` | `/v1/chat/runs/{runId}/events/resume?afterSeq={seq}` | 跨页签、跨浏览器或跨电脑续接正在输出的当前回答 |
+| 流状态 | `GET` | `/v1/chat/sessions/{sessionId}/stream-status` | 查询最新 `seq`、active run 和是否可取消 |
+| 停止回答 | `POST` | `/v1/chat/runs/{runId}/stop` | 幂等停止当前 run |
+| 消息反馈 | `POST` / `DELETE` | `/v1/chat/messages/{messageId}/feedback` | 对 assistant 消息点赞、点踩、切换或取消 |
+| 创建分享 | `POST` | `/v1/chat/messages/{messageId}/share` | 对单条 assistant 消息创建固定问答快照分享 |
+| 发送分享 | `POST` | `/v1/chat/shares/{shareId}/deliveries` | 把已有分享发送到 WeLink 等 provider |
+| 创建并发送分享 | `POST` | `/v1/chat/messages/{messageId}/share/deliveries` | 一键创建分享快照并发送 |
+| 分享详情 | `GET` | `/v1/chat/shares/{shareId}` | 登录后查看分享快照 |
+| 撤销分享 | `DELETE` | `/v1/chat/shares/{shareId}` | 创建者撤销分享 |
+| 我的分享 | `GET` | `/v1/chat/shares?curPage=1&pageSize=20` | 分页管理当前用户创建的分享 |
+| 上传文档 | `POST` | `/v1/documents` | multipart 上传本地文件 |
+| 文档列表 | `GET` | `/v1/documents?sessionId=...&limit=20&cursor=...` | 当前用户文档库；`sessionId` 可选，用于筛选会话关联文档 |
+| 文档详情 | `GET` | `/v1/documents/{documentId}` | 查询单个文档 |
+| 文档更新 | `PATCH` | `/v1/documents/{documentId}` | 更新展示名或元数据 |
+| 文档状态 | `GET` | `/v1/documents/{documentId}/status` | 查询处理状态 |
+| 文档预览/下载 | `GET` | `/v1/documents/{documentId}/preview-url`、`/download` | 后端受控流式访问 |
+| 文档删除 | `DELETE` | `/v1/documents/{documentId}` | 软删除文档 |
 
 正式版只有上表这些对外入口。前端不要再保留历史多入口聊天协议，也不要通过 WebSocket 发送聊天请求体；聊天必须先创建 run，再订阅或恢复 run 的事件。
 
-仓库中提供了一个独立本地联调台：`local-test-frontend/`。它通过本地 Node 代理访问 `/api/v1/ex/**`，可用于验证会话、消息树、文档库、run、WebSocket topic、Event Resume、stop 和跨页签续接，不会影响后端代码。
+仓库中提供了一个独立本地联调台：`local-test-frontend/`。它通过本地 Node 代理访问 `/v1/**`，可用于验证会话、消息树、文档库、run、WebSocket topic、Event Resume、stop 和跨页签续接，不会影响后端代码。
 
 本地联调台支持类似 Postman 的自定义请求头配置。由于浏览器不能直接设置 `Cookie` 请求头，也不能给原生 `WebSocket` 自定义握手 header，联调台采用本地代理 profile：页面左侧“鉴权请求头”保存 `Cookie/Authorization/X-*` 后，浏览器只携带非敏感 profileId，`server.mjs` 代理在转发 HTTP、fetch Event Resume、文件下载和 WebSocket 握手时统一注入真实请求头。该能力只用于本地调试企业鉴权框架，不属于生产前端协议。
 
@@ -79,7 +79,7 @@ HTTP 接口的错误响应结构稳定，前端可以统一解析 `code` 和 `me
 ```json
 {
   "timestamp": "2026-05-17T01:06:00Z",
-  "path": "/api/v1/ex/chat/runs",
+  "path": "/v1/chat/runs",
   "status": 409,
   "error": "Conflict",
   "code": "ACTIVE_RUN_EXISTS",
@@ -211,20 +211,20 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/chat/sessions` | 用户点击“新建会话”时显式创建。 | JSON body：`title` 可选，`channel` 可选，默认可为空。 | `ChatSessionDto`：`sessionId`、`title`、`status`、`channel`、`createdAt`、`updatedAt`。 | 前端不传租户和用户；后端从身份上下文解析。 |
-| `GET /api/v1/ex/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`limit` 可选，默认 20；`cursor` 可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每个 `ChatSessionDto` 带 `firstAssistantAnswer`。 | 返回按最近更新时间倒序排列；`nextCursor=null` 表示无下一页；`firstAssistantAnswer` 是会话第一条完整 assistant 回答，可为空。 |
-| `GET /api/v1/ex/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`curPage` 可选，默认 1；`pageSize` 可选，默认 20，最大 100。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；每个 `ChatSessionDto` 带 `firstAssistantAnswer`。 | 不返回 `DELETED` 会话；适合需要总行数的传统分页组件；旧游标分页不受影响。 |
-| `GET /api/v1/ex/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
-| `GET /api/v1/ex/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 保留。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 不传 `leafMessageId` 时返回当前 active path；传入时返回 root 到该 leaf 的路径。 |
-| `GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` | 复杂前端读取完整消息树，或联调排查版本关系。 | Path：`sessionId`。 | `ChatMessageTreeDto`。 | 只读接口；不改变当前路径，不创建 run；mapping 只包含业务可见 user/assistant 消息。 |
-| `GET /api/v1/ex/chat/sessions/{sessionId}/messages/{messageId}/variants` | 切换编辑/重新生成后的候选版本。 | Path：`sessionId`、`messageId`。 | `ChatMessageDto[]`。 | 返回同父节点、同角色的 sibling 版本。 |
-| `POST /api/v1/ex/chat/sessions/{sessionId}/path` | 用户选择某个历史版本作为当前路径。 | Path：`sessionId`；JSON body：`leafMessageId`。 | `ChatSessionDto`。 | 只切换 `currentLeafMessageId`，不创建 run。 |
-| `POST /api/v1/ex/chat/sessions/{sessionId}/branches` | 从某条消息新建只读历史快照分支。 | Path：来源 `sessionId`；JSON body：`sourceMessageId` 必填，`title` 可选。 | 新分支 `ChatSessionDto`。 | 复制 root 到来源消息路径；快照消息 locked，不可编辑/重新生成。 |
-| `PATCH /api/v1/ex/chat/sessions/{sessionId}` | 用户重命名会话。 | Path：`sessionId`；JSON body：`title`。 | `ChatSessionDto`。 | `title` 为空时保留原值。 |
-| `POST /api/v1/ex/chat/sessions/{sessionId}/archive` | 用户归档会话。 | Path：`sessionId`。 | `ChatSessionDto`。 | 归档通常用于列表隐藏，不删除历史。 |
-| `POST /api/v1/ex/chat/sessions/{sessionId}/restore` | 用户恢复归档会话。 | Path：`sessionId`。 | `ChatSessionDto`。 | 恢复后可重新出现在普通会话列表。 |
-| `DELETE /api/v1/ex/chat/sessions/{sessionId}` | 用户删除会话。 | Path：`sessionId`。 | `ChatSessionDto`，`status=DELETED`。 | 软删除，不物理删除历史事实数据；如果会话存在 active run，后端会先主动取消 run，再删除会话。 |
-| `DELETE /api/v1/ex/chat/sessions` | 用户批量删除会话。 | JSON body：`sessionIds[]`。 | `BatchDeleteChatSessionsDto`：`deletedCount`、`items[]`。 | all-or-nothing；任意会话不存在或不属于当前用户时整体失败，不做部分删除；运行中的会话会先取消 run。 |
+| `POST /v1/chat/sessions` | 用户点击“新建会话”时显式创建。 | JSON body：`title` 可选，`channel` 可选，默认可为空。 | `ChatSessionDto`：`sessionId`、`title`、`status`、`channel`、`createdAt`、`updatedAt`。 | 前端不传租户和用户；后端从身份上下文解析。 |
+| `GET /v1/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`limit` 可选，默认 20；`cursor` 可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每个 `ChatSessionDto` 带 `firstAssistantAnswer`。 | 返回按最近更新时间倒序排列；`nextCursor=null` 表示无下一页；`firstAssistantAnswer` 是会话第一条完整 assistant 回答，可为空。 |
+| `GET /v1/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`curPage` 可选，默认 1；`pageSize` 可选，默认 20，最大 100。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；每个 `ChatSessionDto` 带 `firstAssistantAnswer`。 | 不返回 `DELETED` 会话；适合需要总行数的传统分页组件；旧游标分页不受影响。 |
+| `GET /v1/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
+| `GET /v1/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 保留。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 不传 `leafMessageId` 时返回当前 active path；传入时返回 root 到该 leaf 的路径。 |
+| `GET /v1/chat/sessions/{sessionId}/messages/tree` | 复杂前端读取完整消息树，或联调排查版本关系。 | Path：`sessionId`。 | `ChatMessageTreeDto`。 | 只读接口；不改变当前路径，不创建 run；mapping 只包含业务可见 user/assistant 消息。 |
+| `GET /v1/chat/sessions/{sessionId}/messages/{messageId}/variants` | 切换编辑/重新生成后的候选版本。 | Path：`sessionId`、`messageId`。 | `ChatMessageDto[]`。 | 返回同父节点、同角色的 sibling 版本。 |
+| `POST /v1/chat/sessions/{sessionId}/path` | 用户选择某个历史版本作为当前路径。 | Path：`sessionId`；JSON body：`leafMessageId`。 | `ChatSessionDto`。 | 只切换 `currentLeafMessageId`，不创建 run。 |
+| `POST /v1/chat/sessions/{sessionId}/branches` | 从某条消息新建只读历史快照分支。 | Path：来源 `sessionId`；JSON body：`sourceMessageId` 必填，`title` 可选。 | 新分支 `ChatSessionDto`。 | 复制 root 到来源消息路径；快照消息 locked，不可编辑/重新生成。 |
+| `PATCH /v1/chat/sessions/{sessionId}` | 用户重命名会话。 | Path：`sessionId`；JSON body：`title`。 | `ChatSessionDto`。 | `title` 为空时保留原值。 |
+| `POST /v1/chat/sessions/{sessionId}/archive` | 用户归档会话。 | Path：`sessionId`。 | `ChatSessionDto`。 | 归档通常用于列表隐藏，不删除历史。 |
+| `POST /v1/chat/sessions/{sessionId}/restore` | 用户恢复归档会话。 | Path：`sessionId`。 | `ChatSessionDto`。 | 恢复后可重新出现在普通会话列表。 |
+| `DELETE /v1/chat/sessions/{sessionId}` | 用户删除会话。 | Path：`sessionId`。 | `ChatSessionDto`，`status=DELETED`。 | 软删除，不物理删除历史事实数据；如果会话存在 active run，后端会先主动取消 run，再删除会话。 |
+| `DELETE /v1/chat/sessions` | 用户批量删除会话。 | JSON body：`sessionIds[]`。 | `BatchDeleteChatSessionsDto`：`deletedCount`、`items[]`。 | all-or-nothing；任意会话不存在或不属于当前用户时整体失败，不做部分删除；运行中的会话会先取消 run。 |
 
 删除接口成功后，前端可以立即从列表和聊天区移除该会话，并主动 unsubscribe 该会话当前 topic。
 如果删除前 WebSocket 仍在订阅，随后收到该 run 的 `run.cancelled` 或 `done` 可直接忽略。
@@ -233,14 +233,14 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/chat/runs` | 唯一提问入口，创建后台 run。 | JSON body：`commandId` 可选，`sessionId` 可选，`conversationId` 可选，`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`attachments[]`、`targetType`、`targetId`、`metadata`。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | `runMode` 默认 `NEXT`；`targetType=DOMAIN_AGENT` 时进入 DomainAgent 路由，并创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding。 |
-| `POST /api/v1/ex/chat/runs/{runId}/stop` | 用户点击停止回答。 | Path：`runId`。 | `ChatRunStopDto`：`runId`、`sessionId`、`status`、`latestSeq`、`stoppedAt`、`messageReady`、`assistantMessageId`、`feedbackTargetMessageId`。 | 幂等；停止语义不是关闭 WebSocket。 |
-| `GET /api/v1/ex/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`；只处理 `stream-item` 中的 `encodedItem.data`。 |
-| `GET /api/v1/ex/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态，并以 `done` 闭合；live source 异常时服务端会降级按 DB 事件轮询。 |
-| `GET /api/v1/ex/chat/sessions/{sessionId}/stream-status` | 判断是否存在 active run、是否可停止、从哪里恢复、是否等待用户澄清输入，以及当前会话绑定的 DomainAgent/Runtime 摘要。 | Path：`sessionId`。 | `ChatStreamStatusDto`：`latestSeq`、`activeRunId`、`activeStreamTopicId`、`activeRunFirstSeq`、`activeRunLastSeq`、`cancellable`、`waitingUserInput`、`hitlRequestId`、`waitingType`、`assistantMessageId`、`expiresAt`、`bindingProvider`、`bindingTargetType`、`bindingTargetId`、`bindingIntentCode`、`bindingIntentName`、`bindingRouteSource`、`bindingUpdatedAt`。 | `latestSeq` 是服务端事实源最新位置，不是客户端已消费位置；`waitingUserInput=true` 时普通 `/chat/runs` 会返回 `WAITING_USER_INPUT_REQUIRED`。HITL 默认 24h 过期，服务端会在查询或提交时懒标记过期请求。 |
-| `POST /api/v1/ex/chat/hitl/{hitlRequestId}/responses` | 提交 Relay questionnaire 澄清答案并启动续接 run。 | Path：`hitlRequestId`；JSON body：`approved`、`scope`、`questionnaireAnswers`、`metadata`。 | `ChatHitlResponseDto`：`hitlRequestId`、`continueRunId`、`sessionId`、`assistantMessageId`、`streamTopicId`、`firstSeq`、`status=RESPONDING`。 | 续接 run 复用同一条 assistant 消息，不创建新的普通 user 消息；前端收到结果后订阅 `streamTopicId`。 |
-| `POST /api/v1/ex/chat/messages/{messageId}/feedback` | 用户对完整 assistant 消息点赞、点踩或切换反馈。 | Path：`messageId`；JSON body：`runId` 可选，`rating=LIKE/DISLIKE`，`reasonCode` 可选，`commentText` 可选，`metadata` 可选。 | `MessageFeedbackDto`：`feedbackId`、`messageId`、`runId`、`rating`、`status=ACTIVE`、`createdAt`、`updatedAt`。 | 同一用户同一消息最多一条当前反馈；重复提交表示修改当前反馈。 |
-| `DELETE /api/v1/ex/chat/messages/{messageId}/feedback` | 用户取消已点赞或已点踩状态。 | Path：`messageId`；Query：`runId` 可选。 | `MessageFeedbackDto`：`status=CANCELLED`。 | 幂等；没有历史反馈时也返回取消成功。历史消息中的 `feedback` 会返回 `null`。 |
+| `POST /v1/chat/runs` | 唯一提问入口，创建后台 run。 | JSON body：`commandId` 可选，`sessionId` 可选，`conversationId` 可选，`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`attachments[]`、`targetType`、`targetId`、`metadata`。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | `runMode` 默认 `NEXT`；`targetType=DOMAIN_AGENT` 时进入 DomainAgent 路由，并创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding。 |
+| `POST /v1/chat/runs/{runId}/stop` | 用户点击停止回答。 | Path：`runId`。 | `ChatRunStopDto`：`runId`、`sessionId`、`status`、`latestSeq`、`stoppedAt`、`messageReady`、`assistantMessageId`、`feedbackTargetMessageId`。 | 幂等；停止语义不是关闭 WebSocket。 |
+| `GET /v1/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`；只处理 `stream-item` 中的 `encodedItem.data`。 |
+| `GET /v1/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态，并以 `done` 闭合；live source 异常时服务端会降级按 DB 事件轮询。 |
+| `GET /v1/chat/sessions/{sessionId}/stream-status` | 判断是否存在 active run、是否可停止、从哪里恢复、是否等待用户澄清输入，以及当前会话绑定的 DomainAgent/Runtime 摘要。 | Path：`sessionId`。 | `ChatStreamStatusDto`：`latestSeq`、`activeRunId`、`activeStreamTopicId`、`activeRunFirstSeq`、`activeRunLastSeq`、`cancellable`、`waitingUserInput`、`hitlRequestId`、`waitingType`、`assistantMessageId`、`expiresAt`、`bindingProvider`、`bindingTargetType`、`bindingTargetId`、`bindingIntentCode`、`bindingIntentName`、`bindingRouteSource`、`bindingUpdatedAt`。 | `latestSeq` 是服务端事实源最新位置，不是客户端已消费位置；`waitingUserInput=true` 时普通 `/chat/runs` 会返回 `WAITING_USER_INPUT_REQUIRED`。HITL 默认 24h 过期，服务端会在查询或提交时懒标记过期请求。 |
+| `POST /v1/chat/hitl/{hitlRequestId}/responses` | 提交 Relay questionnaire 澄清答案并启动续接 run。 | Path：`hitlRequestId`；JSON body：`approved`、`scope`、`questionnaireAnswers`、`metadata`。 | `ChatHitlResponseDto`：`hitlRequestId`、`continueRunId`、`sessionId`、`assistantMessageId`、`streamTopicId`、`firstSeq`、`status=RESPONDING`。 | 续接 run 复用同一条 assistant 消息，不创建新的普通 user 消息；前端收到结果后订阅 `streamTopicId`。 |
+| `POST /v1/chat/messages/{messageId}/feedback` | 用户对完整 assistant 消息点赞、点踩或切换反馈。 | Path：`messageId`；JSON body：`runId` 可选，`rating=LIKE/DISLIKE`，`reasonCode` 可选，`commentText` 可选，`metadata` 可选。 | `MessageFeedbackDto`：`feedbackId`、`messageId`、`runId`、`rating`、`status=ACTIVE`、`createdAt`、`updatedAt`。 | 同一用户同一消息最多一条当前反馈；重复提交表示修改当前反馈。 |
+| `DELETE /v1/chat/messages/{messageId}/feedback` | 用户取消已点赞或已点踩状态。 | Path：`messageId`；Query：`runId` 可选。 | `MessageFeedbackDto`：`status=CANCELLED`。 | 幂等；没有历史反馈时也返回取消成功。历史消息中的 `feedback` 会返回 `null`。 |
 
 同一会话同一时间只允许一个 active run。若发送时已有 `RUNNING/CANCELLING` run，
 `POST /chat/runs` 会返回 HTTP 409，错误码 `ACTIVE_RUN_EXISTS`。前端应保持“生成中/停止”
@@ -259,14 +259,14 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`metadata` 可选 JSON 字符串；Header 可带标准 `Cookie`。 | `UploadedDocumentDto`。 | 存储方式只由后端 `financeex.storage.provider=local/huawei-s3/api-store` 决定。api-store 模式下从 `metadata.skillId` 读取并透传给下游；只要 `metadata` 显式包含 `skillId` 字段就会发送，包括 `{"skillId":""}`；只有 `financeex.storage.api-store.forward-cookie=true` 时入口 Cookie 才会作为下游 upload HTTP header 透传。 |
-| `GET /api/v1/ex/documents` | 文档库列表或最近文档选择器。 | Query：`sessionId` 可选，`limit` 默认 20，`cursor` 可选。 | `DocumentLibraryPageDto`：`items[]`、`nextCursor`。 | 默认不返回 `DELETED` 文档。 |
-| `GET /api/v1/ex/documents/{documentId}` | 查询文档详情。 | Path：`documentId`。 | `UploadedDocumentDto`。 | 可查看 `AVAILABLE/PROCESSING/FAILED` 等非删除状态。 |
-| `PATCH /api/v1/ex/documents/{documentId}` | 修改展示文件名或扩展元数据。 | Path：`documentId`；JSON body：`originalName`、`metadataJson`。 | `UploadedDocumentDto`。 | 空字段表示保留原值。 |
-| `DELETE /api/v1/ex/documents/{documentId}` | 软删除文档。 | Path：`documentId`。 | `UploadedDocumentDto`。 | 删除后不能再作为聊天附件。 |
-| `GET /api/v1/ex/documents/{documentId}/status` | 查询解析状态或失败原因扩展信息。 | Path：`documentId`。 | `DocumentStatusDto`：`documentId`、`status`、`tokenSize`。 | `PROCESSING/FAILED` 可查状态，但不能下载、预览或作为聊天附件。 |
-| `GET /api/v1/ex/documents/{documentId}/preview-url` | 获取后端受控预览地址。 | Path：`documentId`。 | `DocumentAccessDto`。 | 当前返回后端 download 地址；provider 未启用 download 时返回 `DOCUMENT_CONTENT_MANAGED_BY_PROVIDER`。 |
-| `GET /api/v1/ex/documents/{documentId}/download` | 下载文档原始内容。 | Path：`documentId`。 | 二进制流，带 `Content-Disposition`。 | 只允许 `AVAILABLE` 文档下载；provider 未启用 download 时返回 `DOCUMENT_CONTENT_MANAGED_BY_PROVIDER`。 |
+| `POST /v1/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`metadata` 可选 JSON 字符串；Header 可带标准 `Cookie`。 | `UploadedDocumentDto`。 | 存储方式只由后端 `financeex.storage.provider=local/huawei-s3/api-store` 决定。api-store 模式下从 `metadata.skillId` 读取并透传给下游；只要 `metadata` 显式包含 `skillId` 字段就会发送，包括 `{"skillId":""}`；只有 `financeex.storage.api-store.forward-cookie=true` 时入口 Cookie 才会作为下游 upload HTTP header 透传。 |
+| `GET /v1/documents` | 文档库列表或最近文档选择器。 | Query：`sessionId` 可选，`limit` 默认 20，`cursor` 可选。 | `DocumentLibraryPageDto`：`items[]`、`nextCursor`。 | 默认不返回 `DELETED` 文档。 |
+| `GET /v1/documents/{documentId}` | 查询文档详情。 | Path：`documentId`。 | `UploadedDocumentDto`。 | 可查看 `AVAILABLE/PROCESSING/FAILED` 等非删除状态。 |
+| `PATCH /v1/documents/{documentId}` | 修改展示文件名或扩展元数据。 | Path：`documentId`；JSON body：`originalName`、`metadataJson`。 | `UploadedDocumentDto`。 | 空字段表示保留原值。 |
+| `DELETE /v1/documents/{documentId}` | 软删除文档。 | Path：`documentId`。 | `UploadedDocumentDto`。 | 删除后不能再作为聊天附件。 |
+| `GET /v1/documents/{documentId}/status` | 查询解析状态或失败原因扩展信息。 | Path：`documentId`。 | `DocumentStatusDto`：`documentId`、`status`、`tokenSize`。 | `PROCESSING/FAILED` 可查状态，但不能下载、预览或作为聊天附件。 |
+| `GET /v1/documents/{documentId}/preview-url` | 获取后端受控预览地址。 | Path：`documentId`。 | `DocumentAccessDto`。 | 当前返回后端 download 地址；provider 未启用 download 时返回 `DOCUMENT_CONTENT_MANAGED_BY_PROVIDER`。 |
+| `GET /v1/documents/{documentId}/download` | 下载文档原始内容。 | Path：`documentId`。 | 二进制流，带 `Content-Disposition`。 | 只允许 `AVAILABLE` 文档下载；provider 未启用 download 时返回 `DOCUMENT_CONTENT_MANAGED_BY_PROVIDER`。 |
 
 ## 公共 DTO 字段
 
@@ -550,13 +550,13 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 前端只需要理解 FinanceEXChatService 对外协议：
 
 ```text
-POST /api/v1/ex/chat/runs
+POST /v1/chat/runs
  -> 创建后台 run，拿到 runId/sessionId/firstSeq/streamTopicId
-WS /api/v1/ex/chat/ws
+WS /v1/chat/ws
  -> connect / subscribe(streamTopicId, afterSeq)
-GET /api/v1/ex/chat/runs/{activeRunId}/events/resume?afterSeq=resumeSeq
+GET /v1/chat/runs/{activeRunId}/events/resume?afterSeq=resumeSeq
  -> active run 恢复时补发当前 run 已生成事件，并接续 live 事件直到终态
-POST /api/v1/ex/chat/runs/{runId}/stop
+POST /v1/chat/runs/{runId}/stop
  -> 停止本轮回答
 ```
 
@@ -614,14 +614,14 @@ sequenceDiagram
 - DomainAgent 下游 body 以 `metadata` 为业务扩展，但 `skillId/query/sessionId` 由后端按当前绑定和本轮问题强制写入，前端传同名字段也不会覆盖。
 - 意图服务上下文由后端 RouteMemory 维护：首次路由传 `routeTrigger=first_turn`；DomainAgent 拒答重路由传 `domain_reject` 和本次拒答摘要；提交 `INTENT_CLARIFICATION` 后传 `clarify_answer`。`history` 包含最近 TopK 成功路由和当前未完成的意图澄清链路，Agent 内部澄清不会进入这份 history。RouteMemory 读写是 best-effort，异常或熔断只会让本轮意图少带历史，不会阻断 `/chat/runs`。
 - 如果当前绑定来自意图或用例库，DomainAgent 返回配置化拒答 code 后，后端会自动重新意图并切换到新 DomainAgent。
-- 如果当前绑定来自手动选择，拒答后命中新 DomainAgent 时，本轮会返回 `run.waiting_user`，消息 parts 中包含 `DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST`。前端调用 `POST /api/v1/ex/chat/hitl/{hitlRequestId}/responses` 提交确认；同意后后端用原问题调用新 DomainAgent，拒绝后保留原手动绑定并以拒答收口。
+- 如果当前绑定来自手动选择，拒答后命中新 DomainAgent 时，本轮会返回 `run.waiting_user`，消息 parts 中包含 `DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST`。前端调用 `POST /v1/chat/hitl/{hitlRequestId}/responses` 提交确认；同意后后端用原问题调用新 DomainAgent，拒绝后保留原手动绑定并以拒答收口。
 
 ## 会话接口
 
 创建会话：
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/ex/chat/sessions \
+curl -X POST http://localhost:8080/v1/chat/sessions \
   -H 'Content-Type: application/json' \
   -d '{"title":"财经问答","channel":"web"}'
 ```
@@ -651,7 +651,7 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/sessions \
 查询会话列表，游标分页用于无限滚动：
 
 ```bash
-curl "http://localhost:8080/api/v1/ex/chat/sessions?limit=20"
+curl "http://localhost:8080/v1/chat/sessions?limit=20"
 ```
 
 响应按更新时间倒序返回：
@@ -682,7 +682,7 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions?limit=20"
 查询会话列表，页码分页用于传统分页组件：
 
 ```bash
-curl "http://localhost:8080/api/v1/ex/chat/sessions/page?curPage=1&pageSize=20"
+curl "http://localhost:8080/v1/chat/sessions/page?curPage=1&pageSize=20"
 ```
 
 页码分页响应会返回总行数：
@@ -716,9 +716,9 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions/page?curPage=1&pageSize=20"
 选择会话后推荐按职责分别查询会话元数据、历史消息和流状态：
 
 ```bash
-curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx"
-curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages?limit=50"
-curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/stream-status"
+curl "http://localhost:8080/v1/chat/sessions/session_xxx"
+curl "http://localhost:8080/v1/chat/sessions/session_xxx/messages?limit=50"
+curl "http://localhost:8080/v1/chat/sessions/session_xxx/stream-status"
 ```
 
 会话详情只返回元数据：
@@ -744,10 +744,10 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/stream-status"
 单独分页查询历史消息：
 
 ```bash
-curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages?limit=50"
+curl "http://localhost:8080/v1/chat/sessions/session_xxx/messages?limit=50"
 
 # 查询某个历史版本 leaf 的路径
-curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages?leafMessageId=msg_older_leaf&limit=50"
+curl "http://localhost:8080/v1/chat/sessions/session_xxx/messages?leafMessageId=msg_older_leaf&limit=50"
 ```
 
 响应按创建时间正序返回，适合直接渲染历史消息气泡：
@@ -820,21 +820,21 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages?leafMes
 会话管理：
 
 ```bash
-curl -X PATCH http://localhost:8080/api/v1/ex/chat/sessions/session_xxx \
+curl -X PATCH http://localhost:8080/v1/chat/sessions/session_xxx \
   -H 'Content-Type: application/json' \
   -d '{"title":"新的会话标题"}'
 
-curl -X POST http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/archive
-curl -X POST http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/restore
-curl -X DELETE http://localhost:8080/api/v1/ex/chat/sessions/session_xxx
+curl -X POST http://localhost:8080/v1/chat/sessions/session_xxx/archive
+curl -X POST http://localhost:8080/v1/chat/sessions/session_xxx/restore
+curl -X DELETE http://localhost:8080/v1/chat/sessions/session_xxx
 
-curl -X DELETE http://localhost:8080/api/v1/ex/chat/sessions \
+curl -X DELETE http://localhost:8080/v1/chat/sessions \
   -H 'Content-Type: application/json' \
   -d '{"sessionIds":["session_xxx","session_yyy"]}'
 ```
 
 历史消息接口返回的是已经完整落库的 user/assistant 消息，并会批量返回每条消息关联的 `attachments` 快照。
-附件快照只用于气泡回显，不授予文件下载权限；下载、预览和状态查询仍应使用 `/api/v1/ex/documents/{documentId}` 系列接口。
+附件快照只用于气泡回显，不授予文件下载权限；下载、预览和状态查询仍应使用 `/v1/documents/{documentId}` 系列接口。
 若所选会话仍有 active run 正在输出，前端应继续调用 `stream-status` 和 run 级事件恢复缺失事件，把正在输出的增量接到当前 assistant 草稿上。
 
 ## 消息版本与分支
@@ -845,7 +845,7 @@ curl -X DELETE http://localhost:8080/api/v1/ex/chat/sessions \
 如果前端需要展示完整版本树，或在联调时排查 parent/children 关系，使用只读 tree 接口：
 
 ```bash
-curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages/tree"
+curl "http://localhost:8080/v1/chat/sessions/session_xxx/messages/tree"
 ```
 
 响应中的 `mapping` 只包含当前用户当前会话内可见的 user/assistant 消息；不会返回 hidden system、
@@ -895,13 +895,13 @@ curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages/tree"
 用户在历史版本之间切换时，推荐先刷新展示路径，再保存当前 leaf：
 
 ```bash
-curl "http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/messages?leafMessageId=msg_a4_v1&limit=50"
+curl "http://localhost:8080/v1/chat/sessions/session_xxx/messages?leafMessageId=msg_a4_v1&limit=50"
 ```
 
 前端用返回的 `items[]` 替换聊天区后，再调用 path 接口持久化当前选择：
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/path \
+curl -X POST http://localhost:8080/v1/chat/sessions/session_xxx/path \
   -H 'Content-Type: application/json' \
   -d '{"leafMessageId":"msg_a4_v1"}'
 ```
@@ -917,7 +917,7 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/path \
 编辑历史 user：
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
+curl -X POST http://localhost:8080/v1/chat/runs \
   -H 'Content-Type: application/json' \
   -d '{"sessionId":"session_xxx","runMode":"EDIT_USER","editedMessageId":"msg_user_old","message":"新的问题"}'
 ```
@@ -925,7 +925,7 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
 重新生成 assistant：
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
+curl -X POST http://localhost:8080/v1/chat/runs \
   -H 'Content-Type: application/json' \
   -d '{"sessionId":"session_xxx","runMode":"REGENERATE_ASSISTANT","regeneratedMessageId":"msg_assistant_old"}'
 ```
@@ -936,7 +936,7 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
 ### 从某条消息新建分支
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/branches \
+curl -X POST http://localhost:8080/v1/chat/sessions/session_xxx/branches \
   -H 'Content-Type: application/json' \
   -d '{"sourceMessageId":"msg_002","title":"费用分析分支"}'
 ```
@@ -954,7 +954,7 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/branches 
 请求：
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
+curl -X POST http://localhost:8080/v1/chat/runs \
   -H 'Content-Type: application/json' \
   -d '{
     "commandId": "cmd_001",
@@ -1038,14 +1038,14 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/runs \
 
 ## 反馈
 
-重新生成回答统一使用 `POST /api/v1/ex/chat/runs`，并传入 `runMode=REGENERATE_ASSISTANT` 与
+重新生成回答统一使用 `POST /v1/chat/runs`，并传入 `runMode=REGENERATE_ASSISTANT` 与
 `regeneratedMessageId`。这样新回答会作为原 user 消息下的 assistant sibling 保存，前端可以通过
 `variants` 和 `path` 接口按版本游标切换。
 
 对 assistant 消息提交点赞或点踩：
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/ex/chat/messages/msg_002/feedback \
+curl -X POST http://localhost:8080/v1/chat/messages/msg_002/feedback \
   -H 'Content-Type: application/json' \
   -d '{
     "runId": "run_xxx",
@@ -1075,7 +1075,7 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/messages/msg_002/feedback \
 再次对同一消息提交另一个 `rating` 会切换当前反馈；点击已高亮的同一按钮时，前端应调用取消接口：
 
 ```bash
-curl -X DELETE "http://localhost:8080/api/v1/ex/chat/messages/msg_002/feedback?runId=run_xxx"
+curl -X DELETE "http://localhost:8080/v1/chat/messages/msg_002/feedback?runId=run_xxx"
 ```
 
 取消响应：
@@ -1099,7 +1099,7 @@ curl -X DELETE "http://localhost:8080/api/v1/ex/chat/messages/msg_002/feedback?r
 分享用于把某一轮问答固定成可访问快照。前端选择一条完整 `assistant` 消息，调用创建接口：
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/ex/chat/messages/msg_assistant_001/share \
+curl -X POST http://localhost:8080/v1/chat/messages/msg_assistant_001/share \
   -H 'Content-Type: application/json' \
   -d '{
     "title": "报销流程答复",
@@ -1137,7 +1137,7 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/messages/msg_assistant_001/sha
 查看分享：
 
 ```bash
-curl http://localhost:8080/api/v1/ex/chat/shares/share_xxx
+curl http://localhost:8080/v1/chat/shares/share_xxx
 ```
 
 详情响应：
@@ -1220,7 +1220,7 @@ curl http://localhost:8080/api/v1/ex/chat/shares/share_xxx
 发送已有分享到 provider：
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/ex/chat/shares/share_xxx/deliveries \
+curl -X POST http://localhost:8080/v1/chat/shares/share_xxx/deliveries \
   -H 'Content-Type: application/json' \
   -d '{
     "provider": "welink",
@@ -1277,7 +1277,7 @@ WeLink 调用失败后默认最多重试 3 次，可通过 `financeex.share.deli
 一键创建并发送：
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/ex/chat/messages/msg_assistant_001/share/deliveries \
+curl -X POST http://localhost:8080/v1/chat/messages/msg_assistant_001/share/deliveries \
   -H 'Content-Type: application/json' \
   -d '{
     "title": "报销流程答复",
@@ -1329,13 +1329,13 @@ curl -X POST http://localhost:8080/api/v1/ex/chat/messages/msg_assistant_001/sha
 撤销分享：
 
 ```bash
-curl -X DELETE http://localhost:8080/api/v1/ex/chat/shares/share_xxx
+curl -X DELETE http://localhost:8080/v1/chat/shares/share_xxx
 ```
 
 管理当前用户创建的分享：
 
 ```bash
-curl "http://localhost:8080/api/v1/ex/chat/shares?curPage=1&pageSize=20"
+curl "http://localhost:8080/v1/chat/shares?curPage=1&pageSize=20"
 ```
 
 分页响应：
@@ -1379,7 +1379,7 @@ WebSocket 是用户级长连接，切换会话时不需要重建连接，也不�
 
 后端同时支持 WebFlux 和 Servlet/MVC 两种 WebSocket 服务端入口。企业框架引入
 `spring-boot-starter-web` 后，应用通常会以 MVC/Servlet 模式启动，此时 WebSocket 仍然使用
-同一条 `/api/v1/ex/chat/ws` 协议路径，只是上下文根应来自 `server.servlet.context-path`。
+同一条 `/v1/chat/ws` 协议路径，只是上下文根应来自 `server.servlet.context-path`。
 MVC/Servlet 模式下，后端会在 WebSocket handshake 阶段读取企业权限上下文并固化用户身份；
 连接建立后的 subscribe、unsubscribe 不再读取 ThreadLocal。因此前端只需要确保握手请求
 携带企业鉴权 cookie/header，协议消息体中不要传 tenantId/userId。
@@ -1399,7 +1399,7 @@ run 级 Event Resume live tail 只消费 Redis Pub/Sub，避免本机 local sink
 ### 连接
 
 ```js
-const ws = new WebSocket("ws://localhost:8080/api/v1/ex/chat/ws");
+const ws = new WebSocket("ws://localhost:8080/v1/chat/ws");
 
 ws.onopen = () => {
   ws.send(JSON.stringify({
@@ -1637,12 +1637,12 @@ Redis Pub/Sub 只负责实时 fanout：服务端会先把事件写入数据库�
 
 Event Resume 不作为本页新建 run 的首选实时通道；新建 run 的实时输出仍由 WebSocket topic 承载。事件恢复有两种粒度：
 
-- 会话级：`GET /api/v1/ex/chat/sessions/{sessionId}/events/resume?afterSeq={seq}`，适合补齐整个会话缺失事件。
-- Run 级：`GET /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}`，适合跨页签、跨浏览器或跨电脑续接正在输出的当前回答；如果 run 尚未终止，服务端会在补发后继续 tail live 事件直到 run 终态；live source 异常时会降级从事件表轮询到终态。
+- 会话级：`GET /v1/chat/sessions/{sessionId}/events/resume?afterSeq={seq}`，适合补齐整个会话缺失事件。
+- Run 级：`GET /v1/chat/runs/{runId}/events/resume?afterSeq={seq}`，适合跨页签、跨浏览器或跨电脑续接正在输出的当前回答；如果 run 尚未终止，服务端会在补发后继续 tail live 事件直到 run 终态；live source 异常时会降级从事件表轮询到终态。
 
 ```js
 async function resumeEvents(sessionId, lastSeq) {
-  const response = await fetch(`/api/v1/ex/chat/sessions/${sessionId}/events/resume?afterSeq=${lastSeq}`);
+  const response = await fetch(`/v1/chat/sessions/${sessionId}/events/resume?afterSeq=${lastSeq}`);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -1691,7 +1691,7 @@ async function resumeEvents(sessionId, lastSeq) {
 ```js
 async function resumeActiveRun(status) {
   const resumeSeq = Math.max(0, status.activeRunFirstSeq - 1);
-  const response = await fetch(`/api/v1/ex/chat/runs/${status.activeRunId}/events/resume?afterSeq=${resumeSeq}`);
+  const response = await fetch(`/v1/chat/runs/${status.activeRunId}/events/resume?afterSeq=${resumeSeq}`);
   // 解析方式与会话级事件恢复 完全一致。
 }
 ```
@@ -1737,7 +1737,7 @@ run 级事件恢复会在无业务事件时发送 turn stream `heartbeat`，用�
 ## 流状态
 
 ```bash
-curl http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/stream-status
+curl http://localhost:8080/v1/chat/sessions/session_xxx/stream-status
 ```
 
 响应：
@@ -1770,7 +1770,7 @@ curl http://localhost:8080/api/v1/ex/chat/sessions/session_xxx/stream-status
 ## 停止回答
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/ex/chat/runs/run_xxx/stop
+curl -X POST http://localhost:8080/v1/chat/runs/run_xxx/stop
 ```
 
 响应：
@@ -1823,22 +1823,22 @@ stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可
 上传本地文件到默认文档库 provider：
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/ex/documents \
+curl -X POST http://localhost:8080/v1/documents \
   -F "file=@./demo.xlsx" \
   -F "sessionId=session_xxx"
 ```
 
 如果后端配置了上下文根，例如 `server.servlet.context-path=/fin/ex`，则上传地址同步变为
-`http://localhost:8080/fin/ex/api/v1/ex/documents`。前端始终使用标准 multipart 字段：
+`http://localhost:8080/fin/ex/v1/documents`。前端始终使用标准 multipart 字段：
 `file` 放文件内容，`sessionId` 可选；后端在 Servlet/MVC 下绑定为 `MultipartFile`，在纯
 WebFlux 下绑定为 `FilePart`，前端不需要区分。
 
 当后端配置 `financeex.storage.provider=api-store` 时，仍然使用同一个
-`POST /api/v1/ex/documents` 接口。前端不再传 `targetProvider`；如果要让下游上传到企业 EDM，
+`POST /v1/documents` 接口。前端不再传 `targetProvider`；如果要让下游上传到企业 EDM，
 把技能 ID 放到 `metadata.skillId`：
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/ex/documents \
+curl -X POST http://localhost:8080/v1/documents \
   -F "file=@./invoice.pdf" \
   -F "sessionId=session_xxx" \
   -F 'metadata={"skillId":"skill_tax_opinion","source":"skill-picker"}'
@@ -1884,7 +1884,7 @@ Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解
 api-store 不带 `metadata.skillId` 字段，或字段为 JSON `null` 时，下游不会收到 `skillId`，通常返回 `url`：
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/ex/documents \
+curl -X POST http://localhost:8080/v1/documents \
   -F "file=@./report.pdf"
 ```
 
@@ -1955,26 +1955,26 @@ EDM docId 模式的 `metadataJson.providerDocument` 示例：
 查询文档库和文档状态：
 
 ```bash
-curl "http://localhost:8080/api/v1/ex/documents?limit=20&cursor=..."
-curl http://localhost:8080/api/v1/ex/documents/doc_xxx/status
+curl "http://localhost:8080/v1/documents?limit=20&cursor=..."
+curl http://localhost:8080/v1/documents/doc_xxx/status
 ```
 
 更新展示名称或软删除：
 
 ```bash
-curl -X PATCH http://localhost:8080/api/v1/ex/documents/doc_xxx \
+curl -X PATCH http://localhost:8080/v1/documents/doc_xxx \
   -H 'Content-Type: application/json' \
   -d '{"originalName":"费用明细.xlsx"}'
 
-curl -X DELETE http://localhost:8080/api/v1/ex/documents/doc_xxx
+curl -X DELETE http://localhost:8080/v1/documents/doc_xxx
 ```
 
 预览和下载仍走后端受控流，不直接暴露对象存储临时签名。对于 `domain-agent.download.enabled=false`
 这类 provider 托管文档，预览和下载会返回 `DOCUMENT_CONTENT_MANAGED_BY_PROVIDER`，前端应提示“该文档由下游服务托管，当前不可下载”：
 
 ```bash
-curl http://localhost:8080/api/v1/ex/documents/doc_xxx/preview-url
-curl -OJ http://localhost:8080/api/v1/ex/documents/doc_xxx/download
+curl http://localhost:8080/v1/documents/doc_xxx/preview-url
+curl -OJ http://localhost:8080/v1/documents/doc_xxx/download
 ```
 
 `preview-url` 响应：
@@ -1982,7 +1982,7 @@ curl -OJ http://localhost:8080/api/v1/ex/documents/doc_xxx/download
 ```json
 {
   "documentId": "doc_xxx",
-  "accessUrl": "/api/v1/ex/documents/doc_xxx/download",
+  "accessUrl": "/v1/documents/doc_xxx/download",
   "accessType": "BACKEND_STREAM",
   "expiresAt": null
 }
@@ -2057,7 +2057,7 @@ let lastSeq = 0;
 let currentRunId = null;
 let currentTopicId = null;
 
-const ws = new WebSocket("ws://localhost:8080/api/v1/ex/chat/ws");
+const ws = new WebSocket("ws://localhost:8080/v1/chat/ws");
 
 ws.onopen = () => {
   ws.send(JSON.stringify({ id: "connect-1", type: "connect", presence: "foreground" }));
@@ -2097,7 +2097,7 @@ ws.onmessage = event => {
 
 async function ask(message, sessionId) {
   setLoading(true);
-  const response = await fetch("/api/v1/ex/chat/runs", {
+  const response = await fetch("/v1/chat/runs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -2125,7 +2125,7 @@ async function stopCurrentRun() {
   if (!currentRunId) {
     return;
   }
-  await fetch(`/api/v1/ex/chat/runs/${currentRunId}/stop`, { method: "POST" });
+  await fetch(`/v1/chat/runs/${currentRunId}/stop`, { method: "POST" });
 }
 ```
 

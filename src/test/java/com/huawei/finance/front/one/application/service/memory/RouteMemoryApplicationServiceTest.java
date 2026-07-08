@@ -35,7 +35,7 @@ class RouteMemoryApplicationServiceTest {
         service.appendRoute(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
                 user, "session1", "run1", "支付成功率口径",
                 intent("intent_a", "财经知识助手"),
-                RouteTarget.domainAgent("intent_a", "intent-service", 1.0, "accepted")));
+                RouteTarget.domainAgent("intent_a", "intent-agent", 1.0, "accepted")));
         service.appendClarification(user, "session1", "run2", "hitl1", Map.of(
                 "originalQuery", "看下方案",
                 "clarifyQuestion", "你想看处理方案还是项目方案？",
@@ -73,7 +73,7 @@ class RouteMemoryApplicationServiceTest {
         service.completeRoute(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
                 user, "session1", "run3", "用户澄清后的问题",
                 intent("intent_b", "财经问数"),
-                RouteTarget.domainAgent("intent_b", "intent-service", 1.0, "accepted")));
+                RouteTarget.domainAgent("intent_b", "intent-agent", 1.0, "accepted")));
 
         assertThat(repository.operations).containsSubsequence("fold", "save:ROUTE");
         assertThat(repository.findActiveClarifications("tenant1", "user1", "session1")).isEmpty();
@@ -136,7 +136,7 @@ class RouteMemoryApplicationServiceTest {
 
         assertThatCode(() -> failingService.appendRoute(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
                 user, "session1", "run1", "query", null,
-                RouteTarget.domainAgent("agent_a", "intent-service", 1.0, "ok"))))
+                RouteTarget.domainAgent("agent_a", "intent-agent", 1.0, "ok"))))
                 .doesNotThrowAnyException();
         assertThatCode(() -> failingService.appendClarification(user, "session1", "run2", "hitl1",
                 Map.of("originalQuery", "query", "clarifyQuestion", "question")))

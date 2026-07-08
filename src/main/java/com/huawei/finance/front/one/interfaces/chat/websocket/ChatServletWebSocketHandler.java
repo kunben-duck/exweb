@@ -29,7 +29,7 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
  *
  * <p>企业框架通常会引入 {@code spring-boot-starter-web} 并让应用以 Servlet 模式启动。
  * 在这种模式下 WebFlux 的 {@code WebSocketHandler} 不会进入请求映射链，因此需要使用
- * Spring Servlet WebSocket 注册同一个 {@code /api/v1/ex/chat/ws} 路径。</p>
+ * Spring Servlet WebSocket 注册同一个 {@code /v1/chat/ws} 路径。</p>
  */
 @Component
 @ConditionalOnClass(name = "org.springframework.web.servlet.DispatcherServlet")

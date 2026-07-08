@@ -15,6 +15,7 @@ import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import com.huawei.finance.front.one.domain.routing.RouteType;
 import com.huawei.finance.front.one.domain.routing.RoutingPolicy;
 import com.huawei.finance.front.one.domain.usecase.UseCaseMatchResult;
+import com.huawei.finance.front.one.infrastructure.runtime.intentagent.BlockingIntentAgentRuntime;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -97,7 +98,7 @@ class RouteSignalApplicationServiceTest {
     }
 
     @Test
-    void routeInitialWithProgressEmitsIntentCallingBeforeRouteResult() {
+    void routeInitialWithProgressEmitsIntentAgentEventsBeforeRouteResult() {
         AtomicInteger intentCalls = new AtomicInteger();
         RouteSignalApplicationService service = service(false, true,
                 request -> UseCaseMatchResult.notMatched("disabled"),
@@ -106,12 +107,27 @@ class RouteSignalApplicationServiceTest {
                     return simpleDomainAgentIntent();
                 });
 
-        StepVerifier.create(service.routeInitialWithProgress(user, session, command, List.of(), memory), 1)
+        StepVerifier.create(service.routeInitialWithProgress(new RouteSignalRequest(
+                        "run1", user, session, command, List.of(), memory)), 1)
                 .assertNext(frame -> {
-                    assertThat(frame.progressFrame()).isTrue();
-                    assertThat(frame.progress().stage()).isEqualTo("intent_calling");
-                    assertThat(frame.progress().message()).isEqualTo("正在识别问题意图");
-                    assertThat(frame.progress().attributes()).containsEntry("routeTrigger", "first_turn");
+                    assertThat(frame.eventFrame()).isTrue();
+                    assertThat(frame.event().type()).isEqualTo("runtime.progress");
+                    assertThat(frame.event().payload())
+                            .containsEntry("source", "intent-agent")
+                            .containsEntry("sourceType", "intent-start")
+                            .containsEntry("stage", "intent_calling")
+                            .containsEntry("routeTrigger", "first_turn");
+                })
+                .thenRequest(1)
+                .assertNext(frame -> {
+                    assertThat(frame.eventFrame()).isTrue();
+                    assertThat(frame.event().type()).isEqualTo("runtime.progress");
+                    assertThat(frame.event().payload())
+                            .containsEntry("source", "intent-agent")
+                            .containsEntry("sourceType", "intent-result")
+                            .containsEntry("routeAction", "ROUTE_SINGLE")
+                            .containsEntry("targetProvider", "domain-agent")
+                            .containsEntry("targetId", "employee_reimbursement_agent");
                 })
                 .thenRequest(1)
                 .assertNext(frame -> {
@@ -148,6 +164,7 @@ class RouteSignalApplicationServiceTest {
         assertThat(result.waitingIntentClarification()).isTrue();
         assertThat(result.route().type()).isEqualTo(RouteType.SYSTEM_RESPONSE);
         assertThat(result.intentClarificationPayload())
+                .containsEntry("source", "intent-agent")
                 .containsEntry("sourceType", "intent-clarification-request")
                 .containsEntry("waitingType", "INTENT_CLARIFICATION")
                 .containsEntry("intentSessionId", "intent-session-1")
@@ -251,14 +268,15 @@ class RouteSignalApplicationServiceTest {
         assertThat(result.route().type()).isEqualTo(RouteType.AGENT_RUNTIME);
         assertThat(result.intentDecision()).isNotNull();
         assertThat(result.intentDecision().intentCode()).isEqualTo("finance.runtime.degraded");
-        assertThat(result.intentDecision().raw()).containsEntry("source", "route-signal-intent-degraded")
+        assertThat(result.intentDecision().raw()).containsEntry("source", "intent-agent-degraded")
                 .containsEntry("reason", "intent down");
     }
 
     private RouteSignalApplicationService service(boolean useCaseEnabled, boolean intentEnabled,
                                                   UseCaseLibraryClient useCaseLibraryClient,
                                                   IntentService intentService) {
-        return new RouteSignalApplicationService(useCaseLibraryClient, intentService, new RoutingPolicy(0.85),
+        return new RouteSignalApplicationService(useCaseLibraryClient, new BlockingIntentAgentRuntime(intentService),
+                new RoutingPolicy(0.85),
                 new RouteSignalProperties(useCaseEnabled, intentEnabled));
     }
 

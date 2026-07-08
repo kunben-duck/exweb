@@ -29,6 +29,7 @@ import com.huawei.finance.front.one.application.integration.conversation.Session
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.integration.identity.ApplicationInstanceIdProvider;
+import com.huawei.finance.front.one.application.integration.intent.IntentService;
 import com.huawei.finance.front.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.finance.front.one.application.integration.memory.LongTermMemoryStore;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingCache;
@@ -37,6 +38,7 @@ import com.huawei.finance.front.one.application.service.memory.MemoryApplication
 import com.huawei.finance.front.one.application.service.routing.IntentRecognitionRecordService;
 import com.huawei.finance.front.one.application.service.routing.RouteSignalFrame;
 import com.huawei.finance.front.one.application.service.routing.RouteSignalApplicationService;
+import com.huawei.finance.front.one.application.service.routing.RouteSignalRequest;
 import com.huawei.finance.front.one.application.service.routing.RouteSignalResult;
 import com.huawei.finance.front.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.finance.front.one.application.service.runtime.DomainAgentExecutor;
@@ -78,6 +80,7 @@ import com.huawei.finance.front.one.domain.routing.RouteTarget;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBindingStatus;
 import com.huawei.finance.front.one.domain.usecase.UseCaseMatchResult;
+import com.huawei.finance.front.one.infrastructure.runtime.intentagent.BlockingIntentAgentRuntime;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -104,7 +107,7 @@ class FinanceEXChatServiceTest {
         AtomicInteger routeCalls = new AtomicInteger();
         RouteSignalApplicationService routeService = new RouteSignalApplicationService(
                 request -> UseCaseMatchResult.notMatched("disabled"),
-                (command, memory, routeUser) -> null,
+                intentAgent((command, memory, routeUser) -> null),
                 new com.huawei.finance.front.one.domain.routing.RoutingPolicy(0.85),
                 new RouteSignalProperties(false, false)) {
             @Override
@@ -116,12 +119,10 @@ class FinanceEXChatServiceTest {
             }
 
             @Override
-            public Flux<RouteSignalFrame> routeInitialWithProgress(UserContext routeUser, ChatSession session,
-                                                                   ChatCommand command,
-                                                                   List<AttachmentRef> attachments,
-                                                                   com.huawei.finance.front.one.domain.memory.MemoryContext memory) {
+            public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
                 return Flux.defer(() -> Flux.just(RouteSignalFrame.result(
-                        routeInitial(routeUser, session, command, attachments, memory))));
+                        routeInitial(request.user(), request.session(), request.command(),
+                                request.attachments(), request.memory()))));
             }
         };
         FinanceEXChatService service = defaultFinanceService(sessions, messages, runs, events, routeService);
@@ -144,7 +145,7 @@ class FinanceEXChatServiceTest {
         UserContext user = new UserContext("tenant1", "user1", "User One");
         RouteSignalApplicationService routeService = new RouteSignalApplicationService(
                 request -> UseCaseMatchResult.notMatched("disabled"),
-                (command, memory, routeUser) -> new com.huawei.finance.front.one.domain.intent.IntentDecision(
+                intentAgent((command, memory, routeUser) -> new com.huawei.finance.front.one.domain.intent.IntentDecision(
                         "domain_agent_finance_knowledge",
                         "财经知识助手",
                         com.huawei.finance.front.one.domain.intent.TaskComplexity.SIMPLE,
@@ -153,7 +154,7 @@ class FinanceEXChatServiceTest {
                         "domain_agent_finance_knowledge",
                         Map.of(),
                         List.of(),
-                        Map.of()),
+                        Map.of())),
                 new com.huawei.finance.front.one.domain.routing.RoutingPolicy(0.85),
                 new RouteSignalProperties(false, true));
         FinanceEXChatService service = defaultFinanceService(sessions, messages, runs, events, routeService);
@@ -165,10 +166,18 @@ class FinanceEXChatServiceTest {
                     assertThat(stream.getFirst().type()).isEqualTo("run.started");
                     assertThat(stream).anySatisfy(event -> {
                         assertThat(event.type()).isEqualTo("runtime.progress");
-                        assertThat(event.payload()).containsEntry("sourceType", "route-progress")
+                        assertThat(event.payload()).containsEntry("source", "intent-agent")
+                                .containsEntry("sourceType", "intent-start")
                                 .containsEntry("stage", "intent_calling");
                     });
-                    int progressIndex = indexOfEvent(stream, "runtime.progress", "route-progress");
+                    assertThat(stream).anySatisfy(event -> {
+                        assertThat(event.type()).isEqualTo("runtime.progress");
+                        assertThat(event.payload()).containsEntry("source", "intent-agent")
+                                .containsEntry("sourceType", "intent-result")
+                                .containsEntry("routeAction", "ROUTE_SINGLE")
+                                .containsEntry("targetProvider", "domain-agent");
+                    });
+                    int progressIndex = indexOfEvent(stream, "runtime.progress", "intent-start");
                     int completedIndex = indexOfEvent(stream, "run.completed", null);
                     assertThat(progressIndex).isGreaterThanOrEqualTo(0);
                     assertThat(completedIndex).isGreaterThan(progressIndex);
@@ -193,6 +202,10 @@ class FinanceEXChatServiceTest {
         return -1;
     }
 
+    private static BlockingIntentAgentRuntime intentAgent(IntentService intentService) {
+        return new BlockingIntentAgentRuntime(intentService);
+    }
+
     @Test
     void resolvedRouteDiagnosticUpdateFailureDoesNotFailStartedRun() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
@@ -202,14 +215,11 @@ class FinanceEXChatServiceTest {
         UserContext user = new UserContext("tenant1", "user1", "User One");
         RouteSignalApplicationService routeService = new RouteSignalApplicationService(
                 request -> UseCaseMatchResult.notMatched("disabled"),
-                (command, memory, routeUser) -> null,
+                intentAgent((command, memory, routeUser) -> null),
                 new com.huawei.finance.front.one.domain.routing.RoutingPolicy(0.85),
                 new RouteSignalProperties(false, false)) {
             @Override
-            public Flux<RouteSignalFrame> routeInitialWithProgress(UserContext routeUser, ChatSession session,
-                                                                   ChatCommand command,
-                                                                   List<AttachmentRef> attachments,
-                                                                   com.huawei.finance.front.one.domain.memory.MemoryContext memory) {
+            public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
                 return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.agentRuntime("relay"))));
             }
         };
@@ -234,7 +244,7 @@ class FinanceEXChatServiceTest {
         AtomicInteger routeCalls = new AtomicInteger();
         RouteSignalApplicationService routeService = new RouteSignalApplicationService(
                 request -> UseCaseMatchResult.notMatched("disabled"),
-                (command, memory, routeUser) -> null,
+                intentAgent((command, memory, routeUser) -> null),
                 new com.huawei.finance.front.one.domain.routing.RoutingPolicy(0.85),
                 new RouteSignalProperties(false, false)) {
             @Override
@@ -246,19 +256,20 @@ class FinanceEXChatServiceTest {
             }
 
             @Override
-            public Flux<RouteSignalFrame> routeInitialWithProgress(UserContext routeUser, ChatSession session,
-                                                                   ChatCommand command,
-                                                                   List<AttachmentRef> attachments,
-                                                                   com.huawei.finance.front.one.domain.memory.MemoryContext memory) {
+            public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
                 if (routeCalls.incrementAndGet() == 1) {
                     return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.domainAgent(
-                            "agent-a", "intent-service", 1.0, "initial intent route"))));
+                            "agent-a", "intent-agent", 1.0, "initial intent route"))));
                 }
                 return Flux.just(
-                        RouteSignalFrame.progress(com.huawei.finance.front.one.application.service.routing.RouteSignalProgress.of(
-                                "intent_calling", "正在识别问题意图", Map.of("routeTrigger", "domain_reject"))),
+                        RouteSignalFrame.event(RuntimeEvent.progress(request.runId(), request.session().id(), Map.of(
+                                "source", "intent-agent",
+                                "sourceType", "intent-start",
+                                "stage", "intent_calling",
+                                "message", "正在识别问题意图",
+                                "routeTrigger", "domain_reject"))),
                         RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.domainAgent(
-                                "agent-b", "intent-service", 1.0, "rerouted after refusal"))));
+                                "agent-b", "intent-agent", 1.0, "rerouted after refusal"))));
             }
         };
         AgentRuntime runtime = new AgentRuntime() {
@@ -296,7 +307,8 @@ class FinanceEXChatServiceTest {
                 .assertNext(stream -> {
                     assertThat(blockingRouteInitialCalled.get()).isFalse();
                     assertThat(stream).anySatisfy(event -> assertThat(event.payload())
-                            .containsEntry("sourceType", "route-progress"));
+                            .containsEntry("source", "intent-agent")
+                            .containsEntry("sourceType", "intent-start"));
                     assertThat(stream).extracting(ChatEvent::type)
                             .contains("message.delta", "run.completed")
                             .doesNotContain("run.failed");
@@ -1071,7 +1083,7 @@ class FinanceEXChatServiceTest {
                 "run1",
                 userMessage.id(),
                 "msg-assistant",
-                "intent-service",
+                "intent-agent",
                 null,
                 "intent-session-1",
                 null,
@@ -1115,7 +1127,7 @@ class FinanceEXChatServiceTest {
                 "run1",
                 userMessage,
                 previous.assistantMessageId(),
-                "intent-service",
+                "intent-agent",
                 null,
                 "intent-session-1",
                 Map.of("sourceType", "intent-clarification-request",
@@ -1153,7 +1165,7 @@ class FinanceEXChatServiceTest {
 
     private RouteSignalApplicationService systemRouteService() {
         return new RouteSignalApplicationService(request -> UseCaseMatchResult.notMatched("disabled"),
-                (command, memory, user) -> null, new com.huawei.finance.front.one.domain.routing.RoutingPolicy(0.85),
+                intentAgent((command, memory, user) -> null), new com.huawei.finance.front.one.domain.routing.RoutingPolicy(0.85),
                 new RouteSignalProperties(false, false)) {
             @Override
             public RouteSignalResult routeInitial(UserContext user, ChatSession session, ChatCommand command,
@@ -1163,11 +1175,9 @@ class FinanceEXChatServiceTest {
             }
 
             @Override
-            public Flux<RouteSignalFrame> routeInitialWithProgress(UserContext user, ChatSession session,
-                                                                   ChatCommand command,
-                                                                   List<AttachmentRef> attachments,
-                                                                   com.huawei.finance.front.one.domain.memory.MemoryContext memory) {
-                return Flux.just(RouteSignalFrame.result(routeInitial(user, session, command, attachments, memory)));
+            public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
+                return Flux.just(RouteSignalFrame.result(routeInitial(request.user(), request.session(),
+                        request.command(), request.attachments(), request.memory())));
             }
         };
     }
@@ -1224,7 +1234,7 @@ class FinanceEXChatServiceTest {
 
     private RouteSignalApplicationService runtimeRouteService() {
         return new RouteSignalApplicationService(request -> UseCaseMatchResult.notMatched("disabled"),
-                (command, memory, user) -> null, new com.huawei.finance.front.one.domain.routing.RoutingPolicy(0.85),
+                intentAgent((command, memory, user) -> null), new com.huawei.finance.front.one.domain.routing.RoutingPolicy(0.85),
                 new RouteSignalProperties(false, false)) {
             @Override
             public RouteSignalResult routeInitial(UserContext user, ChatSession session, ChatCommand command,
@@ -1234,11 +1244,9 @@ class FinanceEXChatServiceTest {
             }
 
             @Override
-            public Flux<RouteSignalFrame> routeInitialWithProgress(UserContext user, ChatSession session,
-                                                                   ChatCommand command,
-                                                                   List<AttachmentRef> attachments,
-                                                                   com.huawei.finance.front.one.domain.memory.MemoryContext memory) {
-                return Flux.just(RouteSignalFrame.result(routeInitial(user, session, command, attachments, memory)));
+            public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
+                return Flux.just(RouteSignalFrame.result(routeInitial(request.user(), request.session(),
+                        request.command(), request.attachments(), request.memory())));
             }
         };
     }

@@ -19,7 +19,7 @@ public interface FinanceChatFacade {
      * 执行一轮聊天 run 并产生标准事件流。
      *
      * <p>该方法供 {@code startRun} 在后台执行 run 使用，对外提问入口只暴露
-     * {@code POST /api/v1/ex/chat/runs}。</p>
+     * {@code POST /v1/chat/runs}。</p>
      *
      * @param user 请求入口解析出的不可变用户身份快照。
      * @param command 聊天命令，包含会话、用户输入、附件和 metadata；身份由应用层回填。

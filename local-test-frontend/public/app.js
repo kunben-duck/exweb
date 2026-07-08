@@ -203,7 +203,7 @@ function safeParseAuthHeaderCount() {
 
 async function createSession() {
   const title = $("newSessionTitle").value.trim() || "本地联调会话";
-  const session = await requestJson("/api/v1/ex/chat/sessions", {
+  const session = await requestJson("/v1/chat/sessions", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ title, channel: "web-local-test" })
@@ -214,7 +214,7 @@ async function createSession() {
 }
 
 async function refreshSessions() {
-  const page = await requestJson("/api/v1/ex/chat/sessions?limit=30");
+  const page = await requestJson("/v1/chat/sessions?limit=30");
   state.sessions = page.items || [];
   const visibleIds = new Set(state.sessions.map(session => session.sessionId));
   for (const sessionId of [...state.selectedSessionIds]) {
@@ -268,9 +268,9 @@ async function selectSession(sessionId) {
 async function loadSessionMessagesAndStatus(sessionId, restoreStream) {
   const encodedSessionId = encodeURIComponent(sessionId);
   const [sessionDto, messagesPage, streamStatus] = await Promise.all([
-    requestJson(`/api/v1/ex/chat/sessions/${encodedSessionId}`),
-    requestJson(`/api/v1/ex/chat/sessions/${encodedSessionId}/messages?limit=50`),
-    requestJson(`/api/v1/ex/chat/sessions/${encodedSessionId}/stream-status`)
+    requestJson(`/v1/chat/sessions/${encodedSessionId}`),
+    requestJson(`/v1/chat/sessions/${encodedSessionId}/messages?limit=50`),
+    requestJson(`/v1/chat/sessions/${encodedSessionId}/stream-status`)
   ]);
   const hasActiveRun = Boolean(restoreStream && streamStatus?.activeRunId && streamStatus?.activeStreamTopicId);
   $("currentSessionId").textContent = sessionId;
@@ -286,7 +286,7 @@ async function loadSessionMessagesAndStatus(sessionId, restoreStream) {
 
 async function refreshCurrentStreamStatus({ restoreStream = false } = {}) {
   if (!state.selectedSessionId) return;
-  const status = await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(state.selectedSessionId)}/stream-status`);
+  const status = await requestJson(`/v1/chat/sessions/${encodeURIComponent(state.selectedSessionId)}/stream-status`);
   setStreamStatus(status);
   if (restoreStream && status.activeRunId && status.activeStreamTopicId
       && !state.subscribedTopics.has(status.activeStreamTopicId)
@@ -312,14 +312,14 @@ function startActiveRunSseRestore(status, reason) {
 }
 
 async function loadMessagesOnly(sessionId) {
-  const page = await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}/messages?limit=50`);
+  const page = await requestJson(`/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages?limit=50`);
   renderHistory(page.items || []);
   replayStoredEvents(sessionId);
   log(`messages loaded session=${sessionId} count=${(page.items || []).length}`);
 }
 
 async function loadMessageTree(sessionId) {
-  const tree = await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}/messages/tree`);
+  const tree = await requestJson(`/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages/tree`);
   const mapping = tree.mapping || {};
   const summary = {
     sessionId: tree.sessionId,
@@ -369,7 +369,7 @@ function renderHistory(messages) {
 
 async function renameSession() {
   const sessionId = requireSessionId();
-  await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}`, {
+  await requestJson(`/v1/chat/sessions/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ title: $("renameTitle").value.trim() })
@@ -379,13 +379,13 @@ async function renameSession() {
 
 async function mutateSession(action) {
   const sessionId = requireSessionId();
-  await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}/${action}`, { method: "POST" });
+  await requestJson(`/v1/chat/sessions/${encodeURIComponent(sessionId)}/${action}`, { method: "POST" });
   await refreshSessions();
 }
 
 async function deleteSession() {
   const sessionId = requireSessionId();
-  await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  await requestJson(`/v1/chat/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
   state.selectedSessionIds.delete(sessionId);
   state.selectedSessionId = null;
   state.activeRun = null;
@@ -402,7 +402,7 @@ async function deleteSelectedSessions() {
   if (sessionIds.length === 0) {
     throw new Error("请先勾选要批量删除的会话");
   }
-  const result = await requestJson("/api/v1/ex/chat/sessions", {
+  const result = await requestJson("/v1/chat/sessions", {
     method: "DELETE",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ sessionIds })
@@ -475,7 +475,7 @@ async function startRunRequest(body, { optimisticUserMessage = null } = {}) {
   setActiveRunLabel();
   let run;
   try {
-    run = await requestJson("/api/v1/ex/chat/runs", {
+    run = await requestJson("/v1/chat/runs", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body)
@@ -515,7 +515,7 @@ async function stopRun() {
   setActiveRunLabel();
   let result;
   try {
-    result = await requestJson(`/api/v1/ex/chat/runs/${encodeURIComponent(state.activeRunId)}/stop`, { method: "POST" });
+    result = await requestJson(`/v1/chat/runs/${encodeURIComponent(state.activeRunId)}/stop`, { method: "POST" });
   } catch (error) {
     state.activeRunStatus = previousStatus;
     setActiveRunLabel();
@@ -531,7 +531,7 @@ async function stopRun() {
 
 async function restoreActiveRun() {
   const sessionId = requireSessionId();
-  const status = await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}/stream-status`);
+  const status = await requestJson(`/v1/chat/sessions/${encodeURIComponent(sessionId)}/stream-status`);
   setStreamStatus(status);
   if (status.activeRunId && status.activeStreamTopicId) {
     startActiveRunSseRestore(status, "manual");
@@ -674,7 +674,7 @@ function handleWsEnvelope(envelope) {
 
 async function resumeSessionEvents(sessionId, afterSeq) {
   await syncAuthProfile();
-  const response = await fetch(`${apiBase}/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}/events/resume?afterSeq=${Number(afterSeq || 0)}`,
+  const response = await fetch(`${apiBase}/v1/chat/sessions/${encodeURIComponent(sessionId)}/events/resume?afterSeq=${Number(afterSeq || 0)}`,
     withProxyProfile());
   if (!response.ok) throw new Error(`Event resume failed: ${response.status}`);
   if (!response.body) throw new Error("Event resume response body is empty");
@@ -684,7 +684,7 @@ async function resumeSessionEvents(sessionId, afterSeq) {
 
 async function resumeRunEvents(runId, afterSeq) {
   await syncAuthProfile();
-  const response = await fetch(`${apiBase}/api/v1/ex/chat/runs/${encodeURIComponent(runId)}/events/resume?afterSeq=${Number(afterSeq || 0)}`,
+  const response = await fetch(`${apiBase}/v1/chat/runs/${encodeURIComponent(runId)}/events/resume?afterSeq=${Number(afterSeq || 0)}`,
     withProxyProfile());
   if (!response.ok) throw new Error(`Run event resume failed: ${response.status}`);
   if (!response.body) throw new Error("Run event resume response body is empty");
@@ -1112,7 +1112,7 @@ function feedbackButton(message, messageId, rating, label) {
 
 async function submitFeedback(messageId, rating) {
   const commentText = prompt(`反馈 ${rating}，可输入补充说明：`) || "";
-  const feedback = await requestJson(`/api/v1/ex/chat/messages/${encodeURIComponent(messageId)}/feedback`, {
+  const feedback = await requestJson(`/v1/chat/messages/${encodeURIComponent(messageId)}/feedback`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -1128,7 +1128,7 @@ async function submitFeedback(messageId, rating) {
 }
 
 async function cancelFeedback(messageId) {
-  const feedback = await requestJson(`/api/v1/ex/chat/messages/${encodeURIComponent(messageId)}/feedback`, {
+  const feedback = await requestJson(`/v1/chat/messages/${encodeURIComponent(messageId)}/feedback`, {
     method: "DELETE"
   });
   log(`feedback cancelled message=${feedback.messageId}`);
@@ -1179,7 +1179,7 @@ async function createBranchFromMessage(message) {
   const messageId = message.messageId || message.id;
   const title = prompt("新分支标题：", `从 ${messageId.slice(0, 12)} 新建分支`);
   if (title === null) return;
-  const session = await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(requireSessionId())}/branches`, {
+  const session = await requestJson(`/v1/chat/sessions/${encodeURIComponent(requireSessionId())}/branches`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ sourceMessageId: messageId, title: title.trim() || null })
@@ -1197,10 +1197,10 @@ async function selectMessageVersion(variant) {
 
 async function selectMessagePath(leafMessageId) {
   const sessionId = requireSessionId();
-  const page = await requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}/messages?leafMessageId=${encodeURIComponent(leafMessageId)}&limit=50`);
+  const page = await requestJson(`/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages?leafMessageId=${encodeURIComponent(leafMessageId)}&limit=50`);
   renderHistory(page.items || []);
   replayStoredEvents(sessionId);
-  requestJson(`/api/v1/ex/chat/sessions/${encodeURIComponent(sessionId)}/path`, {
+  requestJson(`/v1/chat/sessions/${encodeURIComponent(sessionId)}/path`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ leafMessageId })
@@ -1212,7 +1212,7 @@ async function selectMessagePath(leafMessageId) {
 
 async function refreshDocuments() {
   const query = state.selectedSessionId ? `?limit=30&sessionId=${encodeURIComponent(state.selectedSessionId)}` : "?limit=30";
-  const page = await requestJson(`/api/v1/ex/documents${query}`);
+  const page = await requestJson(`/v1/documents${query}`);
   state.documents = page.items || [];
   renderDocuments();
 }
@@ -1233,7 +1233,7 @@ async function uploadDocument() {
   if (domainAgentId) {
     data.append("domainAgentId", domainAgentId);
   }
-  const document = await requestJson("/api/v1/ex/documents", { method: "POST", body: data });
+  const document = await requestJson("/v1/documents", { method: "POST", body: data });
   log(`document uploaded ${document.id}`);
   $("fileInput").value = "";
   await refreshDocuments();
@@ -1264,7 +1264,7 @@ function renderDocuments() {
     row.querySelector('[data-action="detail"]').addEventListener("click", () => runSafely(() => loadDocumentDetail(doc.id)));
     row.querySelector('[data-action="status"]').addEventListener("click", () => runSafely(() => loadDocumentStatus(doc.id)));
     row.querySelector('[data-action="preview"]').addEventListener("click", () => runSafely(() => previewDocument(doc.id)));
-    row.querySelector('[data-action="download"]').addEventListener("click", () => window.open(`/api/v1/ex/documents/${encodeURIComponent(doc.id)}/download`, "_blank"));
+    row.querySelector('[data-action="download"]').addEventListener("click", () => window.open(`/v1/documents/${encodeURIComponent(doc.id)}/download`, "_blank"));
     row.querySelector('[data-action="rename"]').addEventListener("click", () => runSafely(() => renameDocument(doc)));
     row.querySelector('[data-action="delete"]').addEventListener("click", () => runSafely(() => deleteDocument(doc.id)));
     list.appendChild(row);
@@ -1293,24 +1293,24 @@ function renderSelectedDocs() {
 }
 
 async function loadDocumentDetail(documentId) {
-  const doc = await requestJson(`/api/v1/ex/documents/${encodeURIComponent(documentId)}`);
+  const doc = await requestJson(`/v1/documents/${encodeURIComponent(documentId)}`);
   log(`document detail ${documentId}: ${doc.originalName}, ${doc.status}, ${formatBytes(doc.sizeBytes)}`);
 }
 
 async function loadDocumentStatus(documentId) {
-  const status = await requestJson(`/api/v1/ex/documents/${encodeURIComponent(documentId)}/status`);
+  const status = await requestJson(`/v1/documents/${encodeURIComponent(documentId)}/status`);
   log(`document status ${documentId}: ${status.status}, tokenSize=${status.tokenSize ?? "-"}`);
 }
 
 async function previewDocument(documentId) {
-  const access = await requestJson(`/api/v1/ex/documents/${encodeURIComponent(documentId)}/preview-url`);
+  const access = await requestJson(`/v1/documents/${encodeURIComponent(documentId)}/preview-url`);
   window.open(access.accessUrl, "_blank");
 }
 
 async function renameDocument(doc) {
   const originalName = prompt("请输入新的文档展示名：", doc.originalName || "");
   if (!originalName) return;
-  await requestJson(`/api/v1/ex/documents/${encodeURIComponent(doc.id)}`, {
+  await requestJson(`/v1/documents/${encodeURIComponent(doc.id)}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ originalName, metadataJson: metadataJsonForUpdate(doc.metadataJson) })
@@ -1320,7 +1320,7 @@ async function renameDocument(doc) {
 
 async function deleteDocument(documentId) {
   if (!confirm("确认删除这个文档？")) return;
-  await requestJson(`/api/v1/ex/documents/${encodeURIComponent(documentId)}`, { method: "DELETE" });
+  await requestJson(`/v1/documents/${encodeURIComponent(documentId)}`, { method: "DELETE" });
   state.selectedDocuments.delete(documentId);
   await refreshDocuments();
 }
@@ -1436,7 +1436,7 @@ function openCloneTab() {
 }
 
 async function requestJson(path, options = {}) {
-  if (path.startsWith("/api/")) {
+  if (path.startsWith("/v1/")) {
     await syncAuthProfile();
   }
   const response = await fetch(`${apiBase}${path}`, withProxyProfile(options));
@@ -1455,7 +1455,7 @@ function withProxyProfile(options = {}) {
 }
 
 function currentWsUrl() {
-  const url = new URL(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/v1/ex/chat/ws`);
+  const url = new URL(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/v1/chat/ws`);
   url.searchParams.set("proxyProfileId", state.authProfileId);
   return url.toString();
 }

@@ -36,13 +36,13 @@ public class ChatServletWebSocketConfig implements WebSocketConfigurer {
      * 注册前端 WebSocket 路径。
      *
      * <p>如果应用配置了 {@code server.servlet.context-path=/fin/ex}，最终访问路径会自然变为
-     * {@code /fin/ex/api/v1/ex/chat/ws}。</p>
+     * {@code /fin/ex/v1/chat/ws}。</p>
      *
      * @param registry Servlet WebSocket handler 注册表。
      */
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-        registry.addHandler(handler, "/api/v1/ex/chat/ws")
+        registry.addHandler(handler, "/v1/chat/ws")
                 .addInterceptors(authInterceptor)
                 .setAllowedOriginPatterns(properties.allowedOriginPatternArray());
     }

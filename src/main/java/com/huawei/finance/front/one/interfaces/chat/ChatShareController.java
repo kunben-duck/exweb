@@ -48,7 +48,7 @@ import reactor.core.scheduler.Schedulers;
  * ChatShareAccessPolicy 防腐层判断，便于后续替换为企业权限框架。</p>
  */
 @RestController
-@RequestMapping("/api/v1/ex/chat")
+@RequestMapping("/v1/chat")
 public class ChatShareController {
     private final ChatShareApplicationService shareService;
     private final ChatShareDeliveryApplicationService deliveryService;

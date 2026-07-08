@@ -27,7 +27,7 @@ public class ChatWebSocketConfig {
     @Bean
     public HandlerMapping chatWebSocketHandlerMapping(ChatWebSocketHandler handler) {
         SimpleUrlHandlerMapping mapping = new SimpleUrlHandlerMapping();
-        Map<String, WebSocketHandler> urlMap = Map.of("/api/v1/ex/chat/ws", handler);
+        Map<String, WebSocketHandler> urlMap = Map.of("/v1/chat/ws", handler);
         mapping.setUrlMap(urlMap);
         mapping.setOrder(-1);
         return mapping;

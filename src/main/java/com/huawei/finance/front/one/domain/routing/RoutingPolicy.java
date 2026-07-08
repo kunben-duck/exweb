@@ -58,10 +58,10 @@ public class RoutingPolicy {
         if (intent.simpleTask()
                 && intent.candidateDomainAgentId() != null
                 && !intent.candidateDomainAgentId().isBlank()) {
-            return RouteTarget.domainAgent(intent.candidateDomainAgentId(), "intent-service", intent.confidence(),
+            return RouteTarget.domainAgent(intent.candidateDomainAgentId(), "intent-agent", intent.confidence(),
                     "route single domain agent intent");
         }
 
-        return RouteTarget.agentRuntime("intent-service", intent.confidence(), "intent requires agent runtime");
+        return RouteTarget.agentRuntime("intent-agent", intent.confidence(), "intent requires agent runtime");
     }
 }

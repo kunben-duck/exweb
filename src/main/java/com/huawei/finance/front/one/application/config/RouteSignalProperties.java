@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 public class RouteSignalProperties {
     /** 是否启用用例库匹配信号；关闭时不会调用 UseCaseLibraryClient。 */
     private final boolean useCaseLibraryEnabled;
-    /** 是否启用意图识别信号；关闭时不会调用 IntentService。 */
+    /** 是否启用意图识别信号；关闭时不会调用 intent-agent。 */
     private final boolean intentEnabled;
 
     /**

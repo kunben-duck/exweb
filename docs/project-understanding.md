@@ -96,7 +96,7 @@ ChatController#startRun(...)
 
 职责：
 
-- 接收 `POST /api/v1/ex/chat/runs`。
+- 接收 `POST /v1/chat/runs`。
 - 解析企业身份上下文为 `UserContext`。
 - 读取 HTTP `Cookie` 请求头，生成 `RuntimeForwardHeaders`。
 - 把前端 DTO 转成 `ChatCommand`。
@@ -702,8 +702,8 @@ ChatStreamApplicationService#resumeRunWithLiveTail(...)
 两类接口：
 
 ```text
-GET /api/v1/ex/chat/sessions/{sessionId}/events/resume?afterSeq={seq}
-GET /api/v1/ex/chat/runs/{runId}/events/resume?afterSeq={seq}
+GET /v1/chat/sessions/{sessionId}/events/resume?afterSeq={seq}
+GET /v1/chat/runs/{runId}/events/resume?afterSeq={seq}
 ```
 
 区别：

@@ -41,7 +41,7 @@ const server = http.createServer(async (req, res) => {
       deleteAuthConfig(req, res);
       return;
     }
-    if (req.url?.startsWith("/api/")) {
+    if (req.url?.startsWith("/v1/")) {
       proxyHttp(req, res);
       return;
     }
@@ -53,7 +53,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.on("upgrade", (req, socket, head) => {
-  if (!req.url?.startsWith("/api/")) {
+  if (!req.url?.startsWith("/v1/")) {
     socket.destroy();
     return;
   }

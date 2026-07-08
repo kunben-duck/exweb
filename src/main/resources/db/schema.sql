@@ -600,7 +600,7 @@ COMMENT ON COLUMN fin_ex_route_memory_t.query_text IS '触发该路由或澄清�
 COMMENT ON COLUMN fin_ex_route_memory_t.intent_id IS '意图服务返回的 intentId。';
 COMMENT ON COLUMN fin_ex_route_memory_t.intent_name IS '意图服务返回的 intentName 或展示名称。';
 COMMENT ON COLUMN fin_ex_route_memory_t.domain_agent_id IS '最终绑定或显式选择的 DomainAgentId。';
-COMMENT ON COLUMN fin_ex_route_memory_t.route_source IS '路由来源，例如 intent-service、front-selected、intent-confirmed。';
+COMMENT ON COLUMN fin_ex_route_memory_t.route_source IS '路由来源，例如 intent-agent、front-selected、intent-confirmed。';
 COMMENT ON COLUMN fin_ex_route_memory_t.clarify_question IS '意图服务返回并展示给用户的澄清问题。';
 COMMENT ON COLUMN fin_ex_route_memory_t.clarification_type IS '意图服务返回的澄清类型，例如 AMBIGUOUS_ROUTE。';
 COMMENT ON COLUMN fin_ex_route_memory_t.source_run_id IS '创建该路由记忆的 runId。';

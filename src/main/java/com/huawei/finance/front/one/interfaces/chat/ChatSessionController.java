@@ -58,7 +58,7 @@ import reactor.core.scheduler.Schedulers;
  * <p>第一版提供创建、查询、列表、归档、恢复和删除能力；会话归属由 application 层通过当前 UserContext 校验。</p>
  */
 @RestController
-@RequestMapping("/api/v1/ex/chat/sessions")
+@RequestMapping("/v1/chat/sessions")
 public class ChatSessionController {
     private static final Logger log = LoggerFactory.getLogger(ChatSessionController.class);
     private static final String ASSISTANT_ROLE = "assistant";

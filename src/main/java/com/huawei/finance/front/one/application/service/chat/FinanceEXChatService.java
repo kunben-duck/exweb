@@ -15,6 +15,7 @@ import com.huawei.finance.front.one.application.service.routing.IntentRecognitio
 import com.huawei.finance.front.one.application.service.routing.RouteSignalApplicationService;
 import com.huawei.finance.front.one.application.service.routing.RouteSignalFrame;
 import com.huawei.finance.front.one.application.service.routing.RouteSignalProgress;
+import com.huawei.finance.front.one.application.service.routing.RouteSignalRequest;
 import com.huawei.finance.front.one.application.service.routing.RouteSignalResult;
 import com.huawei.finance.front.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.finance.front.one.application.service.runtime.DomainAgentBindingCommand;
@@ -693,13 +694,17 @@ public class FinanceEXChatService implements FinanceChatFacade {
         ChatCommand rerouteCommand = commandWithDomainRejectContext(context.command(), currentDomainAgentId, refusal);
         DomainAgentRerouteContext rerouteContext = new DomainAgentRerouteContext(
                 context, refusal, currentDomainAgentId, rejected);
-        return routeSignalService.routeInitialWithProgress(
+        return routeSignalService.routeInitialWithProgress(new RouteSignalRequest(
+                        context.runId(),
                         context.user(),
                         context.session(),
                         rerouteCommand,
                         rerouteCommand.attachments(),
-                        context.memory())
+                        context.memory()))
                 .concatMap(frame -> {
+                    if (frame.eventFrame()) {
+                        return Flux.just(frame.event());
+                    }
                     if (frame.progressFrame()) {
                         return Flux.just(routeProgressEvent(context.runId(), context.session().id(), frame.progress()));
                     }
@@ -786,7 +791,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private RuntimeEvent intentClarificationRequestEvent(String runId, String sessionId,
                                                          Map<String, Object> requestPayload) {
         Map<String, Object> payload = new LinkedHashMap<>(requestPayload == null ? Map.of() : requestPayload);
-        payload.put("source", "intent-service");
+        payload.put("source", "intent-agent");
         payload.put("sourceType", "intent-clarification-request");
         payload.put("waitingType", ChatHitlWaitingType.INTENT_CLARIFICATION.name());
         return RuntimeEvent.card(runId, sessionId, Map.copyOf(payload));
@@ -1077,10 +1082,13 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
     private Flux<ChatEvent> routeAndExecute(RoutePipelineRequest request) {
         Flux<RouteSignalFrame> frames = request.routeRef().get() == null
-                ? routeSignalService.routeInitialWithProgress(request.user(), request.session(), request.runCommand(),
-                request.attachments(), request.memory())
+                ? routeSignalService.routeInitialWithProgress(new RouteSignalRequest(request.runId(), request.user(),
+                        request.session(), request.runCommand(), request.attachments(), request.memory()))
                 : Flux.just(RouteSignalFrame.result(RouteSignalResult.of(request.routeRef().get())));
         return frames.concatMap(frame -> {
+            if (frame.eventFrame()) {
+                return Flux.just(frame.event());
+            }
             if (frame.progressFrame()) {
                 return Flux.just(routeProgressEvent(request.runId(), request.session().id(), frame.progress()));
             }
@@ -1534,7 +1542,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         if (!intentClarification && (binding == null || binding.id() == null || binding.id().isBlank())) {
             throw new IllegalStateException("HITL 等待态缺少 RuntimeBinding，无法续接 Runtime");
         }
-        String runtimeProvider = intentClarification ? "intent-service" : binding.provider();
+        String runtimeProvider = intentClarification ? "intent-agent" : binding.provider();
         String runtimeSessionId = runtimeSessionId(requestPayload, binding);
         return chatHitlService.prepareWaiting(new ChatHitlCreateContext(
                 context.user(),

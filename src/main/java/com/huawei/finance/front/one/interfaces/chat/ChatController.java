@@ -51,7 +51,7 @@ import reactor.core.scheduler.Schedulers;
  * 时使用 run 级事件恢复先补发历史事件，再接续 live 事件直到 run 终态。</p>
  */
 @RestController
-@RequestMapping("/api/v1/ex/chat")
+@RequestMapping("/v1/chat")
 @Validated
 public class ChatController {
     private final FinanceChatFacade chatFacade;

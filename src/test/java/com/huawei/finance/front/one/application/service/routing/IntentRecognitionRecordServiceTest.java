@@ -35,7 +35,7 @@ class IntentRecognitionRecordServiceTest {
                 properties, repository, idGenerator, objectMapper, executor);
 
         service.recordAsync(snapshot(successfulIntent(0.95),
-                RouteTarget.domainAgent("FIN-SKL-88888888", "intent-service", 0.95, "accepted"), 12L));
+                RouteTarget.domainAgent("FIN-SKL-88888888", "intent-agent", 0.95, "accepted"), 12L));
 
         assertThat(executor.count).isZero();
         assertThat(repository.records).isEmpty();
@@ -48,7 +48,7 @@ class IntentRecognitionRecordServiceTest {
                 enabledProperties(), repository, idGenerator, objectMapper, Runnable::run);
 
         service.recordAsync(snapshot(successfulIntent(0.95),
-                RouteTarget.domainAgent("FIN-SKL-88888888", "intent-service", 0.95, "accepted"), 37L));
+                RouteTarget.domainAgent("FIN-SKL-88888888", "intent-agent", 0.95, "accepted"), 37L));
 
         assertThat(repository.records).hasSize(1);
         IntentRecognitionRecord record = repository.records.get(0);
@@ -85,7 +85,7 @@ class IntentRecognitionRecordServiceTest {
                 enabledProperties(), repository, idGenerator, objectMapper, Runnable::run);
 
         service.recordAsync(snapshot(successfulIntent(0.70),
-                RouteTarget.agentRuntime("intent-service", 0.70, "low confidence"), 9L));
+                RouteTarget.agentRuntime("intent-agent", 0.70, "low confidence"), 9L));
 
         assertThat(repository.records).hasSize(1);
         IntentRecognitionRecord record = repository.records.get(0);
@@ -112,7 +112,7 @@ class IntentRecognitionRecordServiceTest {
         );
 
         service.recordAsync(snapshot(degraded,
-                RouteTarget.agentRuntime("intent-service", 0.0, "degraded"), 5L));
+                RouteTarget.agentRuntime("intent-agent", 0.0, "degraded"), 5L));
 
         assertThat(repository.records).hasSize(1);
         IntentRecognitionRecord record = repository.records.get(0);
@@ -128,7 +128,7 @@ class IntentRecognitionRecordServiceTest {
                 }, idGenerator, objectMapper, Runnable::run);
 
         assertThatCode(() -> service.recordAsync(snapshot(successfulIntent(0.95),
-                RouteTarget.domainAgent("FIN-SKL-88888888", "intent-service", 0.95, "accepted"), 12L)))
+                RouteTarget.domainAgent("FIN-SKL-88888888", "intent-agent", 0.95, "accepted"), 12L)))
                 .doesNotThrowAnyException();
     }
 
@@ -141,7 +141,7 @@ class IntentRecognitionRecordServiceTest {
                 enabledProperties(), new CapturingRepository(), idGenerator, objectMapper, rejectingExecutor);
 
         assertThatCode(() -> service.recordAsync(snapshot(successfulIntent(0.95),
-                RouteTarget.domainAgent("FIN-SKL-88888888", "intent-service", 0.95, "accepted"), 12L)))
+                RouteTarget.domainAgent("FIN-SKL-88888888", "intent-agent", 0.95, "accepted"), 12L)))
                 .doesNotThrowAnyException();
     }
 

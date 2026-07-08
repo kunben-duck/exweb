@@ -26,7 +26,7 @@ import reactor.core.publisher.Mono;
  * 应用层 Runtime 防腐层适配，避免把 Relay 私有字段泄漏到 HTTP 入口。</p>
  */
 @RestController
-@RequestMapping("/api/v1/ex/chat/hitl")
+@RequestMapping("/v1/chat/hitl")
 public class ChatHitlController {
     private final FinanceChatFacade chatFacade;
     private final AuthContextProvider auth;

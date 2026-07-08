@@ -26,7 +26,7 @@ http://localhost:5173
 ```
 
 `BACKEND_URL` 可以换成任意本地或测试环境后端地址，也可以包含后端 context root，例如
-`BACKEND_URL=http://localhost:8080/fin/ex`。前端统一请求自身的 `/api/**`，
+`BACKEND_URL=http://localhost:8080/fin/ex`。前端统一请求自身的 `/v1/**`，
 由 `server.mjs` 代理到真实后端，因此不需要额外配置 CORS。
 
 ## 企业鉴权请求头
@@ -41,10 +41,10 @@ Origin: http://localhost:8080
 Referer: http://localhost:8080/fin/ex/
 ```
 
-点击“保存请求头”后，配置会保存到浏览器 `localStorage`，并同步到本地 Node 代理内存。后续所有 `/api/v1/ex/**` HTTP 请求、fetch 方式的 Event Resume、文件上传/下载，以及 `/api/v1/ex/chat/ws` WebSocket 握手都会由本地代理自动注入这些请求头。
+点击“保存请求头”后，配置会保存到浏览器 `localStorage`，并同步到本地 Node 代理内存。后续所有 `/v1/**` HTTP 请求、fetch 方式的 Event Resume、文件上传/下载，以及 `/v1/chat/ws` WebSocket 握手都会由本地代理自动注入这些请求头。
 
-其中 `/api/v1/ex/chat/runs`、`/api/v1/ex/chat/runs/{runId}/stop` 和 `targetProvider=domain-agent`
-的 `/api/v1/ex/documents` 上传请求会被后端按配置透传给可信下游 adapter，用于本地模拟企业 Relay
+其中 `/v1/chat/runs`、`/v1/chat/runs/{runId}/stop` 和 `targetProvider=domain-agent`
+的 `/v1/documents` 上传请求会被后端按配置透传给可信下游 adapter，用于本地模拟企业 Relay
 或 DomainAgent 文件服务鉴权。Cookie 不会写入后端数据库、文档元数据或前端事件，也不会发送给未显式开启
 `forward-cookie` 的 provider。
 
@@ -77,25 +77,25 @@ Referer: http://localhost:8080/fin/ex/
 
 ## 接口映射
 
-联调台页面不会直接访问真实后端域名，而是统一访问自身同源 `/api/**`，再由 `server.mjs`
+联调台页面不会直接访问真实后端域名，而是统一访问自身同源 `/v1/**`，再由 `server.mjs`
 拼接 `BACKEND_URL` 代理到后端：
 
 | 页面功能 | 后端接口 | 说明 |
 | --- | --- | --- |
-| 新建/切换会话 | `POST /api/v1/ex/chat/sessions`、`GET /api/v1/ex/chat/sessions/{sessionId}`、`GET /api/v1/ex/chat/sessions/{sessionId}/messages`、`GET /api/v1/ex/chat/sessions/{sessionId}/stream-status` | 选择会话时分别恢复会话元数据、历史消息和 active run 状态 |
-| 消息树视图 | `GET /api/v1/ex/chat/sessions/{sessionId}/messages/tree` | 读取完整可见消息树 mapping/currentLeaf，用于版本树调试 |
-| 发送问题 | `POST /api/v1/ex/chat/runs` | 返回 `runId/sessionId/firstSeq/streamTopicId`，随后通过 WebSocket 订阅 |
-| 实时输出 | `WS /api/v1/ex/chat/ws` | 发送 `connect`、`subscribe`、`unsubscribe` 控制消息 |
-| 跨页签续接 | `GET /api/v1/ex/chat/runs/{runId}/events/resume` | active run 恢复时从 `activeRunFirstSeq - 1` 补发并 tail 到终态 |
-| 停止回答 | `POST /api/v1/ex/chat/runs/{runId}/stop` | REST 生命周期控制，不是 WebSocket command |
+| 新建/切换会话 | `POST /v1/chat/sessions`、`GET /v1/chat/sessions/{sessionId}`、`GET /v1/chat/sessions/{sessionId}/messages`、`GET /v1/chat/sessions/{sessionId}/stream-status` | 选择会话时分别恢复会话元数据、历史消息和 active run 状态 |
+| 消息树视图 | `GET /v1/chat/sessions/{sessionId}/messages/tree` | 读取完整可见消息树 mapping/currentLeaf，用于版本树调试 |
+| 发送问题 | `POST /v1/chat/runs` | 返回 `runId/sessionId/firstSeq/streamTopicId`，随后通过 WebSocket 订阅 |
+| 实时输出 | `WS /v1/chat/ws` | 发送 `connect`、`subscribe`、`unsubscribe` 控制消息 |
+| 跨页签续接 | `GET /v1/chat/runs/{runId}/events/resume` | active run 恢复时从 `activeRunFirstSeq - 1` 补发并 tail 到终态 |
+| 停止回答 | `POST /v1/chat/runs/{runId}/stop` | REST 生命周期控制，不是 WebSocket command |
 | 历史版本 | `GET /messages`、`GET /messages?leafMessageId=...`、`POST /path` | 使用 `versionInfo` 展示 `1/3` 游标，切换时先刷新目标 leaf path，再保存当前 leaf |
 | 新建分支 | `POST /branches` | 从指定消息创建只读历史快照分支 |
-| 删除会话 | `DELETE /api/v1/ex/chat/sessions/{sessionId}`、`DELETE /api/v1/ex/chat/sessions` | 单个或批量软删除会话；active run 存在时由后端自动取消 |
-| 文档库 | `/api/v1/ex/documents/**` | 上传、列表、状态、预览、下载、改名、删除 |
+| 删除会话 | `DELETE /v1/chat/sessions/{sessionId}`、`DELETE /v1/chat/sessions` | 单个或批量软删除会话；active run 存在时由后端自动取消 |
+| 文档库 | `/v1/documents/**` | 上传、列表、状态、预览、下载、改名、删除 |
 
-如果 `BACKEND_URL=http://localhost:8080/fin/ex`，页面仍然请求 `/api/v1/ex/**`；
-代理会转发为 `http://localhost:8080/fin/ex/api/v1/ex/**`。WebSocket 也同理转发到
-`/fin/ex/api/v1/ex/chat/ws`。
+如果 `BACKEND_URL=http://localhost:8080/fin/ex`，页面仍然请求 `/v1/**`；
+代理会转发为 `http://localhost:8080/fin/ex/v1/**`。WebSocket 也同理转发到
+`/fin/ex/v1/chat/ws`。
 
 ## 联调建议
 
@@ -126,6 +126,6 @@ Referer: http://localhost:8080/fin/ex/
 
 - 该前端不会传 `tenantId/userId`，身份必须由后端入口解析。
 - 自定义鉴权请求头只存在于浏览器 localStorage 和本地代理内存；代理重启后刷新页面或重新点击“保存请求头”即可重新同步。
-- WebSocket 地址固定为同源代理路径 `/api/v1/ex/chat/ws`。
+- WebSocket 地址固定为同源代理路径 `/v1/chat/ws`。
 - 本页新建 run 的实时输出走 WebSocket topic；active run 恢复走 run 级事件恢复，先补发再接续 live 到终态。
 - 本地事件缓存只用于非 active 场景的测试辅助；active run 恢复必须以服务端 run 级事件恢复为准，不是生产前端的持久化方案。

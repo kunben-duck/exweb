@@ -16,7 +16,7 @@
 | `file` | `File` | 是 | 待上传的二进制文件。 |
 | `skillId` | `String` | 否 | 技能标识。传入时文件上传到企业文档 EDM 服务；不传时文件上传到 S3。 |
 
-> ChatService 对前端仍只暴露 `POST /api/v1/ex/documents`。前端不要直接传 multipart `skillId`；
+> ChatService 对前端仍只暴露 `POST /v1/documents`。前端不要直接传 multipart `skillId`；
 > 如需让 ChatService 转发该字段，把技能 ID 放在 `metadata.skillId`。只要 `metadata` 显式包含
 > `skillId` 字段，ChatService 的 `api-store` 存储实现就会转成下游 multipart `skillId`；
 > `{"skillId":""}` 会原样透传空字符串。

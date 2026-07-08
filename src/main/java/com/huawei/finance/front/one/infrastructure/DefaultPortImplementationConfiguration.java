@@ -4,6 +4,7 @@ import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRe
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteraction;
 import com.huawei.finance.front.one.application.integration.auth.SgovTokenResolver;
 import com.huawei.finance.front.one.application.integration.identity.ApplicationInstanceIdProvider;
+import com.huawei.finance.front.one.application.integration.intent.IntentAgentRuntime;
 import com.huawei.finance.front.one.application.integration.intent.IntentRetryPolicy;
 import com.huawei.finance.front.one.application.integration.share.ChatShareAccessPolicy;
 import com.huawei.finance.front.one.infrastructure.auth.DefaultSgovTokenResolver;
@@ -11,9 +12,11 @@ import com.huawei.finance.front.one.infrastructure.id.GeneratedApplicationInstan
 import com.huawei.finance.front.one.infrastructure.intent.DefaultIntentRetryPolicy;
 import com.huawei.finance.front.one.infrastructure.runtime.UnsupportedAgentRuntimeInteraction;
 import com.huawei.finance.front.one.infrastructure.runtime.UnsupportedAgentRuntimeRecoveryPort;
+import com.huawei.finance.front.one.infrastructure.runtime.intentagent.NoopIntentAgentRuntime;
 import com.huawei.finance.front.one.infrastructure.share.DefaultChatShareAccessPolicy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -100,5 +103,18 @@ public class DefaultPortImplementationConfiguration {
     @ConditionalOnMissingBean(IntentRetryPolicy.class)
     public IntentRetryPolicy intentRetryPolicy() {
         return new DefaultIntentRetryPolicy();
+    }
+
+    /**
+     * 默认 intent-agent 兜底。
+     *
+     * <p>真实 HTTP IntentAgent 只在 financeex.intent.enabled=true 时注册；意图关闭时主流程不会调用
+     * intent-agent，此 bean 仅用于保持应用层依赖完整。</p>
+     */
+    @Bean
+    @ConditionalOnMissingBean(IntentAgentRuntime.class)
+    @ConditionalOnProperty(prefix = "financeex.intent", name = "enabled", havingValue = "false", matchIfMissing = true)
+    public IntentAgentRuntime noopIntentAgentRuntime() {
+        return new NoopIntentAgentRuntime();
     }
 }

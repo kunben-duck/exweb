@@ -484,6 +484,8 @@ public class ChatSessionController {
                 feedback.runId(),
                 feedback.rating(),
                 feedback.status(),
+                feedback.reasonCode(),
+                feedback.commentText(),
                 feedback.createdAt(),
                 feedback.updatedAt()
         );

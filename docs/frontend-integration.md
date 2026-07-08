@@ -259,7 +259,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`metadata` 可选 JSON 字符串；Header 可带标准 `Cookie`。 | `UploadedDocumentDto`。 | 存储方式只由后端 `financeex.storage.provider=local/huawei-s3/api-store` 决定。api-store 模式下从 `metadata.skillId` 读取并透传给下游；只有 `financeex.storage.api-store.forward-cookie=true` 时入口 Cookie 才会作为下游 upload HTTP header 透传。 |
+| `POST /api/v1/ex/documents` | 上传本地文件到文档库。 | multipart：`file` 必填，`sessionId` 可选，`metadata` 可选 JSON 字符串；Header 可带标准 `Cookie`。 | `UploadedDocumentDto`。 | 存储方式只由后端 `financeex.storage.provider=local/huawei-s3/api-store` 决定。api-store 模式下从 `metadata.skillId` 读取并透传给下游；只要 `metadata` 显式包含 `skillId` 字段就会发送，包括 `{"skillId":""}`；只有 `financeex.storage.api-store.forward-cookie=true` 时入口 Cookie 才会作为下游 upload HTTP header 透传。 |
 | `GET /api/v1/ex/documents` | 文档库列表或最近文档选择器。 | Query：`sessionId` 可选，`limit` 默认 20，`cursor` 可选。 | `DocumentLibraryPageDto`：`items[]`、`nextCursor`。 | 默认不返回 `DELETED` 文档。 |
 | `GET /api/v1/ex/documents/{documentId}` | 查询文档详情。 | Path：`documentId`。 | `UploadedDocumentDto`。 | 可查看 `AVAILABLE/PROCESSING/FAILED` 等非删除状态。 |
 | `PATCH /api/v1/ex/documents/{documentId}` | 修改展示文件名或扩展元数据。 | Path：`documentId`；JSON body：`originalName`、`metadataJson`。 | `UploadedDocumentDto`。 | 空字段表示保留原值。 |
@@ -1850,7 +1850,7 @@ curl -X POST http://localhost:8080/api/v1/ex/documents \
 | --- | --- | --- |
 | `file` | 是 | 用户选择的本地文件内容。 |
 | `sessionId` | 否 | 上传时关联的会话；为空时作为用户文档库资产保存。 |
-| `metadata` | 否 | 上传上下文 JSON 字符串；api-store 模式下 `metadata.skillId` 会透传为下游 multipart `skillId`，不要放 Cookie、token 等敏感信息。 |
+| `metadata` | 否 | 上传上下文 JSON 字符串；api-store 模式下显式存在的 `metadata.skillId` 会透传为下游 multipart `skillId`，包括空字符串；不要放 Cookie、token 等敏感信息。 |
 
 Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解析。只有当存储方式为 `api-store`
 且 `financeex.storage.api-store.forward-cookie=true` 时，后端才会把该 Cookie 作为 upload HTTP header
@@ -1881,7 +1881,7 @@ Cookie 说明：当前请求可以携带标准 `Cookie` 头用于后端身份解
 }
 ```
 
-api-store 不带 `metadata.skillId` 时，下游上传到 S3，通常返回 `url`：
+api-store 不带 `metadata.skillId` 字段，或字段为 JSON `null` 时，下游不会收到 `skillId`，通常返回 `url`：
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/ex/documents \

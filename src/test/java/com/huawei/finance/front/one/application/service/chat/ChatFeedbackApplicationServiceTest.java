@@ -50,6 +50,8 @@ class ChatFeedbackApplicationServiceTest {
         assertThat(feedback.rating()).isEqualTo("LIKE");
         assertThat(feedback.status()).isEqualTo("ACTIVE");
         assertThat(feedback.runId()).isNull();
+        assertThat(feedback.reasonCode()).isEqualTo("GOOD");
+        assertThat(feedback.commentText()).isEqualTo("ok");
         assertThat(feedbacks.saved).isSameAs(feedback);
     }
 

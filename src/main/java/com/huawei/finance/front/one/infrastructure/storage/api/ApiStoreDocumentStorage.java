@@ -182,8 +182,18 @@ public class ApiStoreDocumentStorage implements DocumentStorage {
         }
         try {
             JsonNode root = objectMapper.readTree(command.metadataJson());
-            return blankToNull(text(root, "skillId"));
+            JsonNode skillId = root.get("skillId");
+            if (skillId == null || skillId.isNull()) {
+                return null;
+            }
+            if (!skillId.isTextual()) {
+                throw new IllegalArgumentException("metadata.skillId 必须是字符串");
+            }
+            return skillId.asText();
         } catch (Exception ex) {
+            if (ex instanceof IllegalArgumentException illegalArgumentException) {
+                throw illegalArgumentException;
+            }
             throw new IllegalArgumentException("metadata 必须是合法 JSON 字符串", ex);
         }
     }

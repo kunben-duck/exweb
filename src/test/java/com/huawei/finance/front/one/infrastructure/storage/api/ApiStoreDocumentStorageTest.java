@@ -52,6 +52,54 @@ class ApiStoreDocumentStorageTest {
     }
 
     @Test
+    void uploadWithEmptyMetadataSkillIdStillSendsSkillIdPart() throws Exception {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+        ApiStoreDocumentStorage storage = storage(captured, """
+                {"traceId":"t2","status":"success","data":[{"docId":"M3T1","docName":"deck.pptx",
+                "docSize":"15887275","docStatus":0,"serverName":"ShenZhen","docVersion":"V1"}]}
+                """, false);
+
+        UploadedDocument document = storage.upload(request("{\"skillId\":\"\",\"clientTraceId\":\"trace-1\"}", null));
+
+        assertThat(captured.get()).isNotNull();
+        String body = capturedBody(captured.get());
+        assertThat(body).contains("name=\"file\"");
+        assertThat(body).contains("name=\"skillId\"");
+        assertThat(document.source()).isEqualTo(DocumentSource.DOMAIN_AGENT_UPLOAD.name());
+        JsonNode metadata = objectMapper.readTree(document.metadataJson());
+        assertThat(metadata.at("/skillId").asText()).isEmpty();
+        assertThat(metadata.at("/uploadMetadata/skillId").asText()).isEmpty();
+        assertThat(metadata.at("/providerDocument/docId").asText()).isEqualTo("M3T1");
+    }
+
+    @Test
+    void uploadWithMissingOrNullMetadataSkillIdDoesNotSendSkillIdPart() throws Exception {
+        AtomicReference<ClientRequest> missingCaptured = new AtomicReference<>();
+        ApiStoreDocumentStorage missingStorage = storage(missingCaptured, """
+                {"traceId":"t1","status":"success","data":[{"docName":"big-logo.png",
+                "url":"http://s3.example/big-logo.png"}]}
+                """, false);
+
+        UploadedDocument missing = missingStorage.upload(request("{\"clientTraceId\":\"trace-1\"}", null));
+
+        assertThat(capturedBody(missingCaptured.get())).doesNotContain("name=\"skillId\"");
+        assertThat(missing.source()).isEqualTo(DocumentSource.S3_UPLOAD.name());
+        assertThat(objectMapper.readTree(missing.metadataJson()).at("/skillId").isNull()).isTrue();
+
+        AtomicReference<ClientRequest> nullCaptured = new AtomicReference<>();
+        ApiStoreDocumentStorage nullStorage = storage(nullCaptured, """
+                {"traceId":"t1","status":"success","data":[{"docName":"big-logo.png",
+                "url":"http://s3.example/big-logo.png"}]}
+                """, false);
+
+        UploadedDocument nullSkillId = nullStorage.upload(request("{\"skillId\":null}", null));
+
+        assertThat(capturedBody(nullCaptured.get())).doesNotContain("name=\"skillId\"");
+        assertThat(nullSkillId.source()).isEqualTo(DocumentSource.S3_UPLOAD.name());
+        assertThat(objectMapper.readTree(nullSkillId.metadataJson()).at("/skillId").isNull()).isTrue();
+    }
+
+    @Test
     void uploadWithMetadataSkillIdSendsSkillIdAndStoresDomainAgentDocument() throws Exception {
         AtomicReference<ClientRequest> captured = new AtomicReference<>();
         ApiStoreDocumentStorage storage = storage(captured, """
@@ -78,6 +126,19 @@ class ApiStoreDocumentStorageTest {
         assertThat(metadata.at("/providerDocument/docVersion").asText()).isEqualTo("V1");
         assertThat(metadata.at("/uploadMetadata/clientTraceId").asText()).isEqualTo("trace-1");
         assertThat(document.metadataJson()).doesNotContain(COOKIE);
+    }
+
+    @Test
+    void rejectsNonStringMetadataSkillId() {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+        ApiStoreDocumentStorage storage = storage(captured, """
+                {"traceId":"t1","status":"success","data":[{"docName":"big-logo.png",
+                "url":"http://s3.example/big-logo.png"}]}
+                """, false);
+
+        assertThatThrownBy(() -> storage.upload(request("{\"skillId\":123}", null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("metadata.skillId 必须是字符串");
     }
 
     @Test

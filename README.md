@@ -443,8 +443,8 @@ FinanceEXChatService 统一后端，后端只根据 `financeex.storage.provider`
 上传接口对外只有一条 `POST /api/v1/ex/documents`，服务端会按启动模式自动选择适配器：
 Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共用同一套临时落盘和存储逻辑。
 `local` 和 `huawei-s3` 会把文件写入本服务对象存储；`api-store` 会转发新文档上传接口
-`/fina/agent/fileOperate/upload`，固定发送 multipart `file`，并在 `metadata.skillId` 有值时额外发送
-`skillId`。下游返回的 `docId/docName/url/docSize/docRelativePath/docStatus/fileSize/serverName/docVersion/message/error`
+`/fina/agent/fileOperate/upload`，固定发送 multipart `file`，并在 `metadata` 显式包含 `skillId` 字段时额外发送
+`skillId`；`{"skillId":""}` 会原样向下游透传空字符串。下游返回的 `docId/docName/url/docSize/docRelativePath/docStatus/fileSize/serverName/docVersion/message/error`
 等字段会写入统一文档库 `metadataJson.providerDocument`。如果 `financeex.storage.api-store.forward-cookie=true`，
 上传入口捕获到的 Cookie 会作为下游 upload HTTP header 透传；Cookie 不会进入 form 字段或文档库元数据。
 文档接口响应里的 `metadataJson` 会解析为 JSON object，便于前端直接读取；数据库表字段仍保存 JSON 字符串。

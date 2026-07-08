@@ -337,6 +337,8 @@ public class ChatController {
                 feedback.runId(),
                 feedback.rating(),
                 feedback.status(),
+                feedback.reasonCode(),
+                feedback.commentText(),
                 feedback.createdAt(),
                 feedback.updatedAt()
         );

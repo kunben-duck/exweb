@@ -140,7 +140,7 @@ public class MyBatisChatHitlRequestRepository implements ChatHitlRequestReposito
 
     private ChatHitlWaitingType parseWaitingType(String value) {
         if (value == null || value.isBlank()) {
-            return ChatHitlWaitingType.CLARIFICATION;
+            return ChatHitlWaitingType.AGENT_CLARIFICATION;
         }
         return ChatHitlWaitingType.valueOf(value);
     }

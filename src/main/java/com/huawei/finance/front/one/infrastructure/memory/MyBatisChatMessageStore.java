@@ -135,7 +135,7 @@ public class MyBatisChatMessageStore {
         if (tenantId == null || userId == null) {
             return List.of();
         }
-        // SQL 先从 leaf 向 root 取最近 N 条，返回给 Runtime/SubAgent 前再恢复为上下文阅读顺序。
+        // SQL 先从 leaf 向 root 取最近 N 条，返回给 Runtime/DomainAgent 前再恢复为上下文阅读顺序。
         return mapper.findRecentActivePath(tenantId, userId, sessionId, null, limit).stream()
                 .map(this::toDomain)
                 .sorted(Comparator.comparing(ChatMessage::treeDepth).thenComparing(ChatMessage::nodeOrder))

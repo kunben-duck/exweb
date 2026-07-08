@@ -4,8 +4,8 @@
 
 FinanceEXChatService 是前端聊天入口和 SuperAgent 主控服务。正式版只保留清晰的执行边界：
 
-- 简单任务：用例库或意图服务命中后，按 `agentCode` 单轮调用一个 SubAgent。
-- 复杂任务：进入 Relay Runtime，并由 Relay Runtime 负责多轮、规划、上下文和压缩。
+- DomainAgent 任务：用例库、意图服务或前端显式选择命中后，绑定会话级 DomainAgent，并由 DomainAgent 维护自己的下游会话上下文。
+- Relay Runtime 任务：复杂任务、低置信任务和未命中任务进入 Relay Runtime，并由 Relay Runtime 负责多轮、规划、上下文和压缩。
 - SuperAgent：负责身份、会话、可选记忆上下文装配、路由、事件落库和 RuntimeBinding 续接。
 
 ## 全局流程图
@@ -19,7 +19,9 @@ flowchart TD
     ExplicitSkill -- "否" --> FindRuntime["按会话查询 RuntimeBinding"]
 
     FindRuntime --> HasRuntime{"存在 active RuntimeBinding?"}
-    HasRuntime -- "是" --> TouchRuntime["刷新 RuntimeBinding"]
+    HasRuntime -- "是：domain-agent" --> BoundDomainAgent["续接绑定 DomainAgent"]
+    HasRuntime -- "是：relay" --> TouchRuntime["刷新 RuntimeBinding"]
+    BoundDomainAgent --> EventStream["输出 ChatEvent 流"]
     TouchRuntime --> RuntimeQuery["AgentRuntime.query 防腐层"]
 
     HasRuntime -- "否" --> RouteSignal["RouteSignalApplicationService"]
@@ -30,18 +32,18 @@ flowchart TD
     SignalEnabled -- "是" --> UseCaseEnabled{"用例库开启?"}
     UseCaseEnabled -- "是" --> UseCase["UseCaseLibraryClient.match"]
     UseCaseEnabled -- "否" --> IntentEnabled{"意图服务开启?"}
-    UseCase --> UseCaseHit{"命中且分数达标且有 subAgentCode?"}
-    UseCaseHit -- "是" --> SingleSubAgent["单轮 SubAgentClient.query"]
+    UseCase --> UseCaseHit{"命中且分数达标且有 DomainAgentId?"}
+    UseCaseHit -- "是" --> BindDomainAgent["绑定并调用 DomainAgent"]
     UseCaseHit -- "否" --> IntentEnabled
 
     IntentEnabled -- "是" --> Intent["IntentService.recognize"]
     IntentEnabled -- "否" --> CreateRuntime
     Intent --> IntentRoute{"意图路由结果"}
-    IntentRoute -- "简单任务且有 subAgentCode" --> SingleSubAgent
+    IntentRoute -- "命中 DomainAgentId" --> BindDomainAgent
     IntentRoute -- "不支持任务" --> SystemResponse["SYSTEM_RESPONSE"]
-    IntentRoute -- "复杂/低置信/无 subAgentCode" --> CreateRuntime
+    IntentRoute -- "复杂/低置信/无 DomainAgentId" --> CreateRuntime
 
-    SingleSubAgent --> EventStream["输出 ChatEvent 流"]
+    BindDomainAgent --> EventStream
     DomainAgent --> EventStream
     RuntimeQuery --> RelayHttp["RelayStreamHttpRuntimeAdapter"]
     RelayHttp --> EventStream
@@ -68,7 +70,7 @@ sequenceDiagram
     participant Signal as "RouteSignalApplicationService"
     participant UseCase as "UseCaseLibraryService"
     participant Intent as "IntentService"
-    participant SubAgent as "SubAgent"
+    participant DomainAgent as "DomainAgent"
     participant Runtime as "AgentRuntime Port"
     participant RelayHttp as "RelayStreamHttpRuntimeAdapter"
     participant RelayAgent as "RelayAgent Service"
@@ -92,8 +94,8 @@ sequenceDiagram
     end
 
     alt "targetType=DOMAIN_AGENT"
-        SuperAgent->>SuperAgent: "RouteTarget.DOMAIN_AGENT，不读取 RuntimeBinding"
-        SuperAgent->>RelayAgent: "DomainAgent chat(targetId, metadata body)"
+        SuperAgent->>SuperAgent: "RouteTarget.DOMAIN_AGENT，绑定 routeSource=front-selected"
+        SuperAgent->>DomainAgent: "chat(boundDomainAgentId, query, metadata)"
     else "未显式指定 DomainAgent"
         SuperAgent->>Binding: "findActive(sessionId)"
         Binding->>Redis: "读取 RuntimeBinding"
@@ -103,7 +105,11 @@ sequenceDiagram
         end
     end
 
-    alt "存在 active RuntimeBinding"
+    alt "存在 active DomainAgent RuntimeBinding"
+        SuperAgent->>Binding: "touchForRun(runId)"
+        Binding->>DB: "刷新 last_run_id 与 expires_at"
+        SuperAgent->>DomainAgent: "chat(boundDomainAgentId, query, metadata)"
+    else "存在 active Relay RuntimeBinding"
         SuperAgent->>Binding: "touchForRun(runId)"
         Binding->>DB: "刷新 last_run_id 与 expires_at"
         Binding->>Redis: "刷新 RuntimeBinding TTL"
@@ -112,11 +118,12 @@ sequenceDiagram
         RelayHttp->>RelayAgent: "HTTP POST stream-path"
     else "不存在 active RuntimeBinding"
         SuperAgent->>Signal: "routeInitial(command, memory)"
-        alt "用例库或意图服务命中简单任务"
+        alt "用例库或意图服务命中 DomainAgent"
             Signal->>UseCase: "可选 match"
             Signal->>Intent: "可选 recognize"
-            Signal-->>SuperAgent: "SUB_AGENT(agentCode)"
-            SuperAgent->>SubAgent: "query(AgentQueryRequest)"
+            Signal-->>SuperAgent: "DOMAIN_AGENT(domainAgentId)"
+            SuperAgent->>Binding: "bindDomainAgent(routeSource)"
+            SuperAgent->>DomainAgent: "chat(domainAgentId, query, metadata)"
         else "未命中/关闭/复杂任务"
             Signal-->>SuperAgent: "AGENT_RUNTIME"
             SuperAgent->>Binding: "create(runId)"
@@ -132,8 +139,8 @@ sequenceDiagram
     end
 
     loop "输出 ChatEvent"
-        alt "SubAgent route"
-            SubAgent-->>SuperAgent: "message.delta / message.snapshot / message.completed"
+        alt "DomainAgent route"
+            DomainAgent-->>SuperAgent: "message.delta / message.snapshot / runtime.* / message.completed"
         else "Explicit skill route"
             RelayAgent-->>SuperAgent: "DomainAgent eventStream -> message.delta / runtime.* / message.completed"
         else "Relay HTTP Runtime route"
@@ -155,7 +162,7 @@ sequenceDiagram
 
 ## 简化版全局时序图
 
-下面的简化图只保留核心外部参与方和事实源，适合做整体链路评审。它省略了应用层内部服务、SubAgent 细节、WebSocket/Event Resume handler 细节和 Runtime adapter 细节；前端 WebSocket 接入仍然保留，只是不在本图展开。
+下面的简化图只保留核心外部参与方和事实源，适合做整体链路评审。它省略了应用层内部服务、DomainAgent 细节、WebSocket/Event Resume handler 细节和 Runtime adapter 细节；前端 WebSocket 接入仍然保留，只是不在本图展开。
 
 ```mermaid
 sequenceDiagram
@@ -164,6 +171,7 @@ sequenceDiagram
     participant EX as "EXChatService"
     participant UseCase as "案例库"
     participant Intent as "意图服务"
+    participant DomainAgent as "下游 DomainAgent"
     participant Relay as "下游 RelayAgentRuntime"
     participant Redis as "Redis"
     participant DB as "数据库"
@@ -187,21 +195,21 @@ sequenceDiagram
 
     opt "用例库开启"
         EX->>UseCase: "match(query, context)"
-        UseCase-->>EX: "matched/subAgentCode/score 或未命中"
+        UseCase-->>EX: "matched/domainAgentId/score 或未命中"
     end
 
     opt "意图服务开启且用例未命中"
         EX->>Intent: "recognize(query, context)"
-        Intent-->>EX: "simple/complex/candidateSubAgentCode"
+        Intent-->>EX: "candidateDomainAgentId/置信度/复杂度"
     end
 
     alt "targetType=DOMAIN_AGENT"
-        EX->>EX: "DOMAIN_AGENT：按 domainAgentId 调用 DomainAgent，简图省略下游细节"
+        EX->>DomainAgent: "绑定前端指定 DomainAgent 并调用"
+    else "存在 DomainAgent 绑定或路由信号命中"
+        EX->>DomainAgent: "续接/绑定 DomainAgent"
     else "进入 Relay Runtime"
         EX->>Relay: "AgentRuntime.query(sessionId, query, attachments, Cookie snapshot)"
         Relay-->>EX: "message.delta / message.snapshot / runtime.* / message.completed"
-    else "简单任务命中"
-        EX->>EX: "按 agentCode 单轮执行，细节在简图中省略"
     end
 
     loop "流式事件"
@@ -234,7 +242,7 @@ sequenceDiagram
     participant ApiStore as "api-store"
     participant DB as "数据库"
     participant Chat as "FinanceEXChatService"
-    participant Executor as "SubAgent / DomainAgent / AgentRuntime"
+    participant Executor as "DomainAgent / AgentRuntime"
 
     Frontend->>DocAPI: "POST /documents multipart file,metadata?"
     DocAPI->>DocAPI: "AuthContextProvider.resolve()"
@@ -262,7 +270,7 @@ sequenceDiagram
 - 前端上传仍先进入 FinanceEXChatService，方便统一鉴权、审计、限流和企业网关接入。
 - 真实文件内容由 `DocumentStorage` 决定去向：`local/huawei-s3` 写入本服务对象存储，`api-store` 转发新文档上传接口。
 - 聊天请求只引用 `documentId`，不携带文件正文。
-- SubAgent、DomainAgent 或 Runtime 看到的是经过文档库回查后的可信附件元数据。
+- DomainAgent 或 Runtime 看到的是经过文档库回查后的可信附件元数据。
 - `fin_ex_uploaded_document_t` 是文档库事实源，支持最近文档、库中文档选择和后续连接器文档扩展。
 
 ## 流式响应与断点恢复
@@ -380,7 +388,7 @@ sequenceDiagram
 
 首版内置 `none` 和 `sgov` 两种 provider。`sgov` 只向出站 HTTP 请求注入 `Authorization` header，具体凭据获取由企业实现的 `SgovTokenResolver` bean 负责。本服务不会把 Authorization、服务 ID 或密钥写入请求 body、数据库、事件、metadata 或前端响应。
 
-当前只预置以下 serviceCode：`welink-share`、`intent-service`、`use-case-library`、`sub-agent`。Relay Runtime、DomainAgent 和 DomainAgent 文档 provider 默认不走该鉴权层，仍保持现有 Cookie 透传或普通调用行为；后续如需启用，只新增 `financeex.integration-auth.services.<serviceCode>.provider=sgov` 配置。
+当前只预置以下 serviceCode：`welink-share`、`intent-service`、`use-case-library`。Relay Runtime、DomainAgent 和文档存储 adapter 默认不走该鉴权层，仍保持现有 Cookie 透传或普通调用行为；后续如需启用，只新增 `financeex.integration-auth.services.<serviceCode>.provider=sgov` 配置。
 
 ```mermaid
 sequenceDiagram
@@ -480,7 +488,7 @@ sequenceDiagram
 - `fin_ex_chat_run_execution_t`：运行控制面事实源，记录当前 owner 实例、心跳、租约、恢复状态、恢复租约和 `fencing_token`。
 
 控制面初始化是 run 启动的必备步骤。若业务 run 已写入 `fin_ex_chat_run_t`，但创建
-`fin_ex_chat_run_execution_t` 失败，服务端不会继续调用 Runtime/SubAgent，而是直接追加
+`fin_ex_chat_run_execution_t` 失败，服务端不会继续调用 Runtime/DomainAgent，而是直接追加
 `run.failed` 终态事件，payload code 为 `RUN_EXECUTION_INIT_FAILED`，并释放 active run。
 此时没有可用 execution claim，因此不能绕过 fencing 继续输出。
 
@@ -589,7 +597,6 @@ flowchart TB
         RouteSignal["RouteSignalApplicationService"]
         IntentRecord["IntentRecognitionRecordService"]
         RuntimeBinding["RuntimeBindingApplicationService"]
-        SubAgentExecutor["SubAgentExecutor"]
         RuntimeExecutor["AgentRuntimeExecutor"]
         StreamService["ChatStreamApplicationService"]
         DocumentService["DocumentApplicationService"]
@@ -612,8 +619,8 @@ flowchart TB
         LiveBus["Redis Pub/Sub ChatLiveEventBus"]
         UseCaseHttp["UseCase HTTP Adapter"]
         IntentHttp["Intent HTTP Adapter"]
-        SubAgentHttp["SubAgent HTTP Adapter"]
         RelayRuntime["RelayAgentRuntime Provider"]
+        DomainAgentRuntime["DomainAgentRuntime Provider"]
         RelayHttp["RelayStreamHttpRuntimeAdapter"]
         Storage["Local / Huawei OBS S3 / api-store DocumentStorage"]
         DomainAgentHttp["DomainAgent HTTP Adapter"]
@@ -624,7 +631,6 @@ flowchart TB
     ChatService --> IntentRecord
     ChatService --> ChatRun
     ChatService --> RuntimeBinding
-    ChatService --> SubAgentExecutor
     ChatService --> RuntimeExecutor
     ChatService --> StreamService
     ChatService --> DocumentService
@@ -638,10 +644,10 @@ flowchart TB
     StreamService --> LiveBus
     RuntimeBinding --> Redis
     RuntimeBinding --> MyBatis
-    SubAgentExecutor --> SubAgentHttp
-    ChatService --> DomainAgentHttp
     RuntimeExecutor --> RelayRuntime
+    RuntimeExecutor --> DomainAgentRuntime
     RelayRuntime --> RelayHttp
+    DomainAgentRuntime --> DomainAgentHttp
     DocumentService --> Storage
     DocumentService --> HttpDocumentProvider
     Application --> Domain
@@ -649,21 +655,22 @@ flowchart TB
 
 ## 路由规则
 
-- `targetType=DOMAIN_AGENT,targetId=...` 优先级最高；存在时进入 `DOMAIN_AGENT` 路由，直接调用对应 DomainAgent，不读取或创建 RuntimeBinding。DomainAgent 下游 body 直接使用前端 `metadata`，后端只校验附件 `docList` 引用；`targetId` 授权和 `metadata` 业务合法性由下游 DomainAgent 校验。
-- active RuntimeBinding 优先级次之；存在时本轮按当前消息树 leaf 续接 Relay Runtime。
+- `targetType=DOMAIN_AGENT,targetId=...` 优先级最高；存在时进入 `DOMAIN_AGENT` 路由并绑定对应 DomainAgent，`routeSource=front-selected`。
+- active RuntimeBinding 优先级次之；`provider=domain-agent` 时续接当前 DomainAgent，`provider=relay` 时续接 Relay Runtime。
 - 用例库和意图服务是可选路由信号，默认关闭；关闭时不调用外部 API。
-- 用例库开启时优先匹配；命中阈值默认 `0.85`，命中并返回 `subAgentCode` 后单轮调用 SubAgent。
+- 用例库开启时优先匹配；命中阈值默认 `0.85`，命中并返回 `resourceId` 后绑定为 DomainAgent。
 - 用例库关闭或未命中后，只有意图服务开启才调用 `IntentService`。
-- 意图服务 adapter 的 HTTP 请求体和响应体转换由 infrastructure intent mapper 承载；当前解析 `code/data/result/items[]` 包装响应，选择最高 `confidence` 的 item，并把 `resourceInstruction.resourceId` 映射为 `candidateSubAgentCode`。
+- 意图服务 adapter 的 HTTP 请求体和响应体转换由 infrastructure intent mapper 承载；当前解析 `code/data/result/items[]` 包装响应，选择最高 `confidence` 的 item，并把 `resourceInstruction.resourceId` 映射为 `candidateDomainAgentId`。
 - 意图服务调用失败后默认最多重试 3 次；配置误设过大时运行时最多按 10 次生效，重试耗尽后仍按原有降级策略进入 Relay Runtime。
-- 意图服务返回简单任务、`confidence >= financeex.intent.confidence-threshold` 且有 `candidateSubAgentCode` 时单轮调用 SubAgent。
+- 意图服务返回 `WAITING_CLARIFICATION` 或兼容的 `TaskComplexity.NEED_CLARIFICATION` 时生成 `run.waiting_user(waitingType=INTENT_CLARIFICATION)`，不创建 RuntimeBinding；用户通过统一 HITL 接口提交后继续意图澄清，直到得到最终路由。
+- 意图服务返回 `confidence >= financeex.intent.confidence-threshold` 且有 `candidateDomainAgentId` 时绑定并调用 DomainAgent Runtime。
 - `financeex.intent-record.enabled=true` 时，只有实际调用过意图服务的 run 会异步写入 `fin_ex_intent_recognition_t`。记录内容包含本轮 query、候选 items、最高置信结果、最终路由是否采纳和意图服务耗时；DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会记录。
-- 两个信号均关闭、服务失败、复杂、低置信或缺少 SubAgent 的任务进入 Relay Runtime。
-- SubAgent 没有续接机制；如果用户下一轮继续提问，除非已经进入 Relay Runtime，否则重新走路由信号。
+- 两个信号均关闭、服务失败、复杂、低置信或缺少 DomainAgent 的任务进入 Relay Runtime。
+- DomainAgent 绑定会一直续接，直到下游返回 `financeex.domain-agent.refusal.codes` 配置的明确拒答 code。意图/用例库绑定拒答后会在当前 run 内重新意图并自动切换；手动绑定拒答后若命中新 Agent，会生成 `DOMAIN_AGENT_SWITCH_CONFIRMATION` 等待用户确认。
 
 ## RuntimeBinding
 
-RuntimeBinding 只维护前端 chat session、当前消息树 leaf 与当前 AgentRuntime provider session 的关系。当前上线默认 provider 是 `relay`。leaf 维度隔离可以避免编辑历史问题、切换版本或从历史消息新建分支时误用另一条路径的 Runtime session。
+RuntimeBinding 维护前端 chat session、当前消息树 leaf 与当前下游会话的关系。当前 provider 包括 `relay` 和 `domain-agent`。leaf 维度隔离可以避免编辑历史问题、切换版本或从历史消息新建分支时误用另一条路径的下游 session。
 
 ```text
 Redis key:
@@ -718,7 +725,7 @@ stop 语义：
 - 集群事实源优先：stop 先写 Redis cancel flag 与数据库 `CANCELLING` 状态，再发布 `run.cancelled`。
 - JVM subscription registry 只是本机资源释放加速器；即使 stop 请求与输出流落在不同实例，输出实例也必须在追加事件前读取 Redis cancel flag。非终态事件不再逐条回源 run 表，最终写入正确性由数据库 guarded insert 同时校验 run 状态、session 归属和 execution fencing。
 - 用户主动 stop 且已有 assistant 正文或用户可见 runtime parts 成功落库时，会从事件事实源重建并保存 partial assistant 历史消息，消息 metadata 标记 `partial=true`、`finishReason=USER_STOP`；只有 trace、domain-agent session 等内部 metadata 时不创建空 assistant。
-- 下游尽力取消：Relay stream-http 通过 HTTP stopPath 取消；Relay WebSocket 本机命中 active 连接时直接发送 `{"type":"interrupt"}`，跨实例或本机连接已清理时用临时 WS `resume` 到 run 中已回填的 Relay `runtimeSessionId`，收到 `session-ready` 后发送 `interrupt`；SubAgent 走各自 cancel adapter。这些下游取消失败只记录日志，不影响前端收到本服务 `run.cancelled` 终态。
+- 下游尽力取消：Relay stream-http 通过 HTTP stopPath 取消；Relay WebSocket 本机命中 active 连接时直接发送 `{"type":"interrupt"}`，跨实例或本机连接已清理时用临时 WS `resume` 到 run 中已回填的 Relay `runtimeSessionId`，收到 `session-ready` 后发送 `interrupt`；DomainAgent 走 DomainAgent cancel adapter。这些下游取消失败只记录日志，不影响前端收到本服务 `run.cancelled` 终态。
 - stop 不取消 RuntimeBinding；下一轮仍可续接 Runtime。如果需要全新的 Relay 会话，应创建新的 ChatService 会话。
 
 ## 外部 API 接入
@@ -726,9 +733,9 @@ stop 语义：
 - 用例库服务：`financeex.use-case-library.enabled`、`financeex.use-case-library.base-url`、`financeex.use-case-library.match-path`
 - 意图服务：`financeex.intent.enabled`、`financeex.intent.base-url`、`financeex.intent.recognize-path`、`financeex.intent.confidence-threshold`、`financeex.intent.timeout`、`financeex.intent.max-retries`
 - 意图识别记录：`financeex.intent-record.enabled`、`max-query-length`、`max-raw-json-length`、`executor.*`。默认关闭；开启后使用 Servlet/MVC 友好的专用线程池 best-effort 写库，线程池拒绝、JSON 序列化失败或数据库写入失败都只记录 warn，不阻塞 `/chat/runs`。
-- SubAgent：`financeex.sub-agent.agents.{agentCode}.endpoint`
-- SubAgent stop：`financeex.sub-agent.agents.{agentCode}.stop-endpoint`
-- AgentRuntime provider：`financeex.agent-runtime.provider`，表示 Runtime 类型，当前默认 `relay`
+- DomainAgent：`financeex.domain-agent.base-url`、`financeex.domain-agent.chat-path`、`financeex.domain-agent.cancel-path`
+- DomainAgent 拒答重路由：`financeex.domain-agent.refusal.codes`、`financeex.domain-agent.max-reroutes`
+- AgentRuntime fallback provider：`financeex.agent-runtime.default-provider`，没有 active binding 时的兜底 provider，默认 `relay`
 - Relay HTTP Streamable adapter：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`、`financeex.agent-runtime.stop-path`
 - Relay adapter 选择：`financeex.agent-runtime.relay.adapter`，默认 `relay-stream-http`；配置为 `relay-websocket` 时启用下游 Relay WebSocket 普通问答 adapter。
 - Relay WebSocket adapter：`financeex.agent-runtime.relay.websocket.url`、`app-mode`、`connect-timeout`、`config-handshake-timeout`、`max-run-duration`、`heartbeat-interval`、`interrupt-ack-timeout`、`idle-timeout`、`max-frame-bytes`
@@ -738,7 +745,7 @@ stop 语义：
 - DomainAgent 大对象分片：`financeex.domain-agent.max-pending-frame-bytes` 限制尚未识别完成的单个 domain-agent frame 缓冲，`financeex.domain-agent.max-fragment-bytes` 限制 `runtime.card/runtime.reference/runtime.progress` 分片 payload 的单片大小。该机制避免 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 跨网络 chunk 时被误解析为 invalid-json，也避免为了完整 JSON 解析无限占用 JVM 内存。分片状态通过 `payload.fragment/itemId/delta/complete` 表达，不新增顶层 `.delta/.completed` 事件类型。
 - Relay 响应映射：`financeex.agent-runtime.relay.answer-event-types`、`answer-content-fields`、`agent-context-as-answer`。默认把 Relay `type=agent,is_streaming=true` 的 `content/context` 映射为 assistant 正文增量 `message.delta`，把 `type=agent,is_streaming=false` 和 `type=generate-response,content非空` 映射为最终回答快照 `message.snapshot`，把 `steam-complete/stream-complete/[DONE]` 映射为 `message.completed`。
 
-SubAgent 当前只支持单轮 HTTP 文本流调用。当前上线版本内置一个 `RelayAgentRuntime` provider，并通过 `RelayRuntimeProtocolAdapter` 在 provider 内选择下游协议：`relay-stream-http` 是默认 Relay HTTP 流式协议实现，`relay-websocket` 是可选 Relay WebSocket 普通问答实现。Relay WebSocket 始终使用短连接，每个 run 都重新建立下游 WS；首轮 `new` 的 `config.sessionId` 使用 ChatService `sessionId`，收到 `session-ready.session_id` 后回填 RuntimeBinding 中的 Relay 真实 `runtimeSessionId`，后续 `resume` 使用该值续接。新增下游协议时，应新增 adapter，而不是在 `RelayAgentRuntime` 主类里堆转换分支。
+DomainAgent 当前通过 HTTP 文本流调用，并和 Relay Runtime 一样以 `AgentRuntime` provider 注册，使用 RuntimeBinding 保存下游会话 ID、绑定来源和意图摘要。DomainAgent 请求会把 `skillId/query/sessionId` 固定为服务端当前绑定和本轮问题，前端 metadata 只作为业务扩展，不能覆盖这些保留字段。当前上线版本内置 `RelayAgentRuntime` 与 `DomainAgentRuntime` 两个 provider；Relay provider 再通过 `RelayRuntimeProtocolAdapter` 选择下游协议：`relay-stream-http` 是默认 Relay HTTP 流式协议实现，`relay-websocket` 是可选 Relay WebSocket 普通问答实现。Relay WebSocket 始终使用短连接，每个 run 都重新建立下游 WS；首轮 `new` 的 `config.sessionId` 使用 ChatService `sessionId`，收到 `session-ready.session_id` 后回填 RuntimeBinding 中的 Relay 真实 `runtimeSessionId`，后续 `resume` 使用该值续接。新增下游协议时，应新增 adapter，而不是在 `RelayAgentRuntime` 主类里堆转换分支。
 
 `Cookie` 是请求入口捕获的运行期内存快照，只会在 `AgentRuntimeRequest.forwardHeaders`、`DomainAgentRequest.forwardHeaders`、`DocumentUploadCommand.forwardHeaders` 或 cancel 请求中向可信 adapter 传递；这些字段被 JSON 序列化忽略，且 adapter 会把内部请求映射为专用 wire DTO 或受控 multipart，不能进入下游请求体、form 字段、文档元数据、run metadata、事件 payload 或日志。该设计保证企业登录态不会因后台 run、Event Resume/WS 恢复、文档库管理或故障治理被持久化或回放。
 

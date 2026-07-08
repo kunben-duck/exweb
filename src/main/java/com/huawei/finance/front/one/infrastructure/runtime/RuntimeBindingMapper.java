@@ -63,4 +63,16 @@ public interface RuntimeBindingMapper {
                                                 @Param("userId") String userId,
                                                 @Param("sessionId") String sessionId,
                                                 @Param("provider") String provider);
+
+    /**
+     * 查询会话下所有 provider 的 active RuntimeBinding。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId ChatService 会话标识。
+     * @return active binding 列表，按更新时间倒序。
+     */
+    List<RuntimeBindingRow> findActiveBySessionAnyProvider(@Param("tenantId") String tenantId,
+                                                           @Param("userId") String userId,
+                                                           @Param("sessionId") String sessionId);
 }

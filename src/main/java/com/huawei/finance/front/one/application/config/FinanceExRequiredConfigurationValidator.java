@@ -3,12 +3,9 @@ package com.huawei.finance.front.one.application.config;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
-import org.springframework.boot.context.properties.bind.Bindable;
-import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.context.EnvironmentAware;
 import org.springframework.core.Ordered;
 import org.springframework.core.env.Environment;
@@ -96,21 +93,36 @@ public class FinanceExRequiredConfigurationValidator
     }
 
     private void validateAgentRuntime(List<String> missing) {
-        String provider = lower(text("financeex.agent-runtime.provider"));
-        if (provider.isBlank()) {
-            missing.add("financeex.agent-runtime.provider / FINANCEEX_AGENT_RUNTIME_PROVIDER 不能为空");
+        String defaultProvider = lower(defaultText("financeex.agent-runtime.default-provider", "relay"));
+        if (defaultProvider.isBlank()) {
+            missing.add("financeex.agent-runtime.default-provider / FINANCEEX_AGENT_RUNTIME_DEFAULT_PROVIDER 不能为空");
             return;
         }
-        if (!"relay".equals(provider)) {
-            return;
+        boolean relayEnabled = Boolean.parseBoolean(defaultText("financeex.agent-runtime.relay.enabled", "true"));
+        boolean domainAgentEnabled = enabled("financeex.domain-agent.enabled");
+        switch (defaultProvider) {
+            case "relay" -> {
+                if (!relayEnabled) {
+                    missing.add("financeex.agent-runtime.default-provider=relay 时 financeex.agent-runtime.relay.enabled 必须为 true");
+                }
+            }
+            case "domain-agent" -> {
+                if (!domainAgentEnabled) {
+                    missing.add("financeex.agent-runtime.default-provider=domain-agent 时 financeex.domain-agent.enabled 必须为 true");
+                }
+            }
+            default -> missing.add("financeex.agent-runtime.default-provider / FINANCEEX_AGENT_RUNTIME_DEFAULT_PROVIDER 不支持: "
+                    + defaultProvider);
         }
-        String adapter = lower(defaultText("financeex.agent-runtime.relay.adapter", "relay-stream-http"));
-        switch (adapter) {
-            case "relay-stream-http" -> requireText(missing, "financeex.agent-runtime.base-url",
-                    "FINANCEEX_RELAY_AGENT_BASE_URL");
-            case "relay-websocket" -> requireText(missing, "financeex.agent-runtime.relay.websocket.url",
-                    "FINANCEEX_RELAY_WS_URL");
-            default -> missing.add("financeex.agent-runtime.relay.adapter / FINANCEEX_RELAY_ADAPTER 不支持: " + adapter);
+        if (relayEnabled) {
+            String adapter = lower(defaultText("financeex.agent-runtime.relay.adapter", "relay-stream-http"));
+            switch (adapter) {
+                case "relay-stream-http" -> requireText(missing, "financeex.agent-runtime.base-url",
+                        "FINANCEEX_RELAY_AGENT_BASE_URL");
+                case "relay-websocket" -> requireText(missing, "financeex.agent-runtime.relay.websocket.url",
+                        "FINANCEEX_RELAY_WS_URL");
+                default -> missing.add("financeex.agent-runtime.relay.adapter / FINANCEEX_RELAY_ADAPTER 不支持: " + adapter);
+            }
         }
     }
 
@@ -124,7 +136,6 @@ public class FinanceExRequiredConfigurationValidator
         if (enabled("financeex.domain-agent.enabled")) {
             requireText(missing, "financeex.domain-agent.base-url", "FINANCEEX_DOMAIN_AGENT_BASE_URL");
         }
-        validateSubAgents(missing);
         if (enabled("financeex.share.delivery.providers.welink.enabled")) {
             requireText(missing, "financeex.share.share-url-prefix", "FINANCEEX_SHARE_URL_PREFIX");
             requireText(missing, "financeex.share.delivery.providers.welink.base-url",
@@ -132,24 +143,6 @@ public class FinanceExRequiredConfigurationValidator
             requireText(missing, "financeex.share.delivery.providers.welink.send-path",
                     "FINANCEEX_SHARE_WELINK_SEND_PATH");
         }
-    }
-
-    private void validateSubAgents(List<String> missing) {
-        Map<String, Object> agents = Binder.get(environment)
-                .bind("financeex.sub-agent.agents", Bindable.mapOf(String.class, Object.class))
-                .orElse(Map.of());
-        agents.forEach((agentCode, rawValues) -> {
-            Map<?, ?> values = rawValues instanceof Map<?, ?> map ? map : Map.of();
-            Object enabled = values.get("enabled");
-            if (!Boolean.parseBoolean(String.valueOf(enabled))) {
-                return;
-            }
-            Object endpoint = values.get("endpoint");
-            if (endpoint == null || String.valueOf(endpoint).isBlank()) {
-                missing.add("financeex.sub-agent.agents." + agentCode
-                        + ".endpoint / FINANCEEX_*_AGENT_ENDPOINT 不能为空，因为该 SubAgent 已启用");
-            }
-        });
     }
 
     private void requireText(List<String> missing, String property, String envName) {

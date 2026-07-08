@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.application.service.routing;
 
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
+import java.util.Map;
 
 /**
  * 首轮路由信号解析结果。
@@ -13,13 +14,25 @@ import com.huawei.finance.front.one.domain.routing.RouteTarget;
  * @param intentDecision 意图服务识别结果；未调用意图服务时为空。
  * @param intentLatencyMs 意图服务调用耗时；未调用意图服务时为空。
  * @param intentConfidenceThreshold 本次意图采纳阈值；未调用意图服务时为空。
+ * @param waitingIntentClarification 是否等待意图澄清。
+ * @param intentClarificationPayload 意图澄清请求 payload。
+ * @param intentSessionId 意图服务澄清会话 ID。
+ * @param intentRequestId 意图服务澄清请求 ID。
  */
 public record RouteSignalResult(
         RouteTarget route,
         IntentDecision intentDecision,
         Long intentLatencyMs,
-        Double intentConfidenceThreshold
+        Double intentConfidenceThreshold,
+        boolean waitingIntentClarification,
+        Map<String, Object> intentClarificationPayload,
+        String intentSessionId,
+        String intentRequestId
 ) {
+    public RouteSignalResult {
+        intentClarificationPayload = intentClarificationPayload == null ? Map.of() : Map.copyOf(intentClarificationPayload);
+    }
+
     /**
      * 创建不包含意图识别结果的路由信号结果。
      *
@@ -27,7 +40,7 @@ public record RouteSignalResult(
      * @return 路由信号结果。
      */
     public static RouteSignalResult of(RouteTarget route) {
-        return new RouteSignalResult(route, null, null, null);
+        return new RouteSignalResult(route, null, null, null, false, Map.of(), null, null);
     }
 
     /**
@@ -40,6 +53,15 @@ public record RouteSignalResult(
      */
     public static RouteSignalResult ofIntent(RouteTarget route, IntentDecision intentDecision, Long intentLatencyMs,
                                              double intentConfidenceThreshold) {
-        return new RouteSignalResult(route, intentDecision, intentLatencyMs, intentConfidenceThreshold);
+        return new RouteSignalResult(route, intentDecision, intentLatencyMs, intentConfidenceThreshold,
+                false, Map.of(), null, null);
+    }
+
+    public static RouteSignalResult waitingIntentClarification(Map<String, Object> payload, Long intentLatencyMs,
+                                                               double intentConfidenceThreshold,
+                                                               String intentSessionId,
+                                                               String intentRequestId) {
+        return new RouteSignalResult(RouteTarget.systemResponse("intent clarification required"), null,
+                intentLatencyMs, intentConfidenceThreshold, true, payload, intentSessionId, intentRequestId);
     }
 }

@@ -55,6 +55,13 @@ public class MyBatisRuntimeBindingRepository implements RuntimeBindingRepository
     }
 
     @Override
+    public List<RuntimeBinding> findActiveBySession(String tenantId, String userId, String sessionId) {
+        return mapper.findActiveBySessionAnyProvider(tenantId, userId, sessionId).stream()
+                .map(this::toDomain)
+                .toList();
+    }
+
+    @Override
     public RuntimeBinding save(RuntimeBinding binding) {
         RuntimeBindingRow row = toRow(binding);
         int updated = mapper.update(row);

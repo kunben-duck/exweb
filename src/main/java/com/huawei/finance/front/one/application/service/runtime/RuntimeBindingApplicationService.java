@@ -12,6 +12,7 @@ import com.huawei.finance.front.one.domain.runtime.RuntimeBindingStatus;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -19,15 +20,17 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
- * AgentRuntime 多轮绑定应用服务。
+ * 下游多轮绑定应用服务。
  *
- * <p>简单 SubAgent 不创建任何绑定；只有进入当前 AgentRuntime provider 的复杂任务才会在这里建立
- * 会话续接索引。状态变更先写数据库，再刷新或删除 Redis 热缓存。</p>
+ * <p>Relay Runtime 和 DomainAgent 都通过 RuntimeBinding 维持会话上下文。状态变更先写数据库，
+ * 再刷新或删除 Redis 热缓存。</p>
  */
 @Service
 public class RuntimeBindingApplicationService {
     /** 当前上线版本默认 AgentRuntime provider 编码。 */
     public static final String DEFAULT_RUNTIME_PROVIDER = "relay";
+    /** 财经领域 Agent 绑定 provider 编码。 */
+    public static final String DOMAIN_AGENT_PROVIDER = "domain-agent";
 
     private final RuntimeBindingRepository repository;
     private final RuntimeBindingCache cache;
@@ -42,12 +45,12 @@ public class RuntimeBindingApplicationService {
      * @param cache RuntimeBinding Redis 热缓存。
      * @param idGenerator 统一 ID 生成器。
      * @param ttl Runtime 绑定可续接窗口。
-     * @param runtimeProvider 当前装配的 AgentRuntime provider 编码。
+     * @param runtimeProvider 默认 AgentRuntime provider 编码。
      */
     public RuntimeBindingApplicationService(RuntimeBindingRepository repository, RuntimeBindingCache cache,
                                             IdGenerator idGenerator,
                                             @Value("${financeex.runtime-binding.ttl:3d}") Duration ttl,
-                                            @Value("${financeex.agent-runtime.provider:relay}") String runtimeProvider) {
+                                            @Value("${financeex.agent-runtime.default-provider:relay}") String runtimeProvider) {
         this.repository = repository;
         this.cache = cache;
         this.idGenerator = idGenerator;
@@ -121,9 +124,9 @@ public class RuntimeBindingApplicationService {
      */
     public Optional<RuntimeBinding> findActiveBySession(String tenantId, String userId, String sessionId) {
         Instant now = Instant.now();
-        List<RuntimeBinding> activeBindings = repository.findActiveBySession(tenantId, userId, sessionId, runtimeProvider)
+        List<RuntimeBinding> activeBindings = repository.findActiveBySession(tenantId, userId, sessionId)
                 .stream()
-                .filter(binding -> routableForCurrentProvider(binding, now))
+                .filter(binding -> binding.routableAt(now))
                 .sorted(Comparator.comparing(RuntimeBinding::updatedAt, Comparator.nullsLast(Comparator.naturalOrder()))
                         .reversed())
                 .toList();
@@ -136,6 +139,15 @@ public class RuntimeBindingApplicationService {
         return Optional.of(selected);
     }
 
+    public Optional<RuntimeBinding> findActiveDomainAgentBySession(String tenantId, String userId, String sessionId) {
+        Instant now = Instant.now();
+        return repository.findActiveBySession(tenantId, userId, sessionId, DOMAIN_AGENT_PROVIDER).stream()
+                .filter(binding -> binding.routableAt(now))
+                .sorted(Comparator.comparing(RuntimeBinding::updatedAt, Comparator.nullsLast(Comparator.naturalOrder()))
+                        .reversed())
+                .findFirst();
+    }
+
     /**
      * 为复杂任务创建新的 AgentRuntime 绑定。
      *
@@ -146,16 +158,45 @@ public class RuntimeBindingApplicationService {
      * @return 已保存的 Runtime 绑定。
      */
     public RuntimeBinding create(String tenantId, String userId, String sessionId, String runId, String leafMessageId) {
+        return create(new RuntimeBindingCreateCommand(tenantId, userId, sessionId, runtimeProvider,
+                runId, leafMessageId, sessionId, Map.of()));
+    }
+
+    private RuntimeBinding create(RuntimeBindingCreateCommand command) {
         Instant now = Instant.now();
-        String id = idGenerator.newId("runtime_binding", IdGenerateContext.of(tenantId, userId, sessionId));
-        String runtimeSessionId = sessionId;
-        RuntimeBinding binding = new RuntimeBinding(id, tenantId, userId, sessionId, runtimeProvider,
-                leafMessageId, runtimeSessionId, RuntimeBindingStatus.ACTIVE, runId, expiresAt(), now, now, Map.of());
+        String id = idGenerator.newId("runtime_binding",
+                IdGenerateContext.of(command.tenantId(), command.userId(), command.sessionId()));
+        RuntimeBinding binding = new RuntimeBinding(id, command.tenantId(), command.userId(), command.sessionId(),
+                normalizeProvider(command.provider()), command.leafMessageId(),
+                blankToDefault(command.runtimeSessionId(), command.sessionId()), RuntimeBindingStatus.ACTIVE,
+                command.runId(), expiresAt(), now, now, command.metadata());
         return save(binding);
     }
 
     public RuntimeBinding create(String tenantId, String userId, String sessionId, String runId) {
         return create(tenantId, userId, sessionId, runId, null);
+    }
+
+    public RuntimeBinding bindDomainAgentForRun(DomainAgentBindingCommand command) {
+        if (command == null || command.domainAgentId() == null || command.domainAgentId().isBlank()) {
+            throw new IllegalArgumentException("DomainAgent ID 不能为空");
+        }
+        cancelActive(command.tenantId(), command.userId(), command.sessionId());
+        Map<String, Object> metadata = domainAgentMetadata(command.domainAgentId(), command.routeSource(),
+                command.intentMetadata(), null);
+        return create(new RuntimeBindingCreateCommand(command.tenantId(), command.userId(), command.sessionId(),
+                DOMAIN_AGENT_PROVIDER, command.runId(), command.leafMessageId(), command.sessionId(), metadata));
+    }
+
+    public RuntimeBinding touchDomainAgentForRun(RuntimeBinding binding, String runId,
+                                                 String domainAgentId, String routeSource,
+                                                 Map<String, Object> intentMetadata) {
+        if (binding == null) {
+            return null;
+        }
+        Map<String, Object> metadata = domainAgentMetadata(domainAgentId, routeSource, intentMetadata,
+                binding.metadata());
+        return save(binding.withMetadata(metadata).withRun(runId, expiresAt()));
     }
 
     /**
@@ -224,9 +265,23 @@ public class RuntimeBindingApplicationService {
      * @param sessionId 前端聊天会话标识。
      */
     public void cancelActive(String tenantId, String userId, String sessionId) {
-        repository.findActiveBySession(tenantId, userId, sessionId, runtimeProvider)
-                .forEach(binding -> save(binding.withStatus(RuntimeBindingStatus.CANCELLED)));
+        List<RuntimeBinding> active = repository.findActiveBySession(tenantId, userId, sessionId);
+        if (active.isEmpty()) {
+            active = repository.findActiveBySession(tenantId, userId, sessionId, runtimeProvider);
+        }
+        active.forEach(binding -> save(binding.withStatus(RuntimeBindingStatus.CANCELLED)));
         cache.evict(tenantId, userId, sessionId);
+    }
+
+    public RuntimeBinding markNotRoutable(RuntimeBinding binding, String rejectCode) {
+        if (binding == null) {
+            return null;
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>(binding.metadata());
+        if (rejectCode != null && !rejectCode.isBlank()) {
+            metadata.put("lastRejectCode", rejectCode);
+        }
+        return save(binding.withMetadata(metadata).withStatus(RuntimeBindingStatus.CANCELLED));
     }
 
     /**
@@ -303,5 +358,24 @@ public class RuntimeBindingApplicationService {
 
     private String normalizeProvider(String provider) {
         return provider == null || provider.isBlank() ? DEFAULT_RUNTIME_PROVIDER : provider.trim();
+    }
+
+    private Map<String, Object> domainAgentMetadata(String domainAgentId, String routeSource,
+                                                    Map<String, Object> intentMetadata,
+                                                    Map<String, Object> previousMetadata) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        if (previousMetadata != null) {
+            metadata.putAll(previousMetadata);
+        }
+        metadata.put("domainAgentId", domainAgentId);
+        metadata.put("routeSource", blankToDefault(routeSource, "intent"));
+        if (intentMetadata != null && !intentMetadata.isEmpty()) {
+            metadata.putAll(intentMetadata);
+        }
+        return Map.copyOf(metadata);
+    }
+
+    private String blankToDefault(String value, String defaultValue) {
+        return value == null || value.isBlank() ? defaultValue : value;
     }
 }

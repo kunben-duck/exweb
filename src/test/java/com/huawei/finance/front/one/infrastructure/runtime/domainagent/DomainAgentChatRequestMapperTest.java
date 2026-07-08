@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.domainagent;
+package com.huawei.finance.front.one.infrastructure.runtime.domainagent;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -23,7 +23,7 @@ class DomainAgentChatRequestMapperTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void forwardsMetadataAsBodyWithoutInjectingDefaultFields() {
+    void forwardsMetadataExtensionsButOverridesReservedBindingFields() {
         Map<String, Object> metadata = Map.of(
                 "skillId", "skill-tax",
                 "query", "front query",
@@ -41,9 +41,10 @@ class DomainAgentChatRequestMapperTest {
 
         assertThat(wire)
                 .containsEntry("skillId", "skill-tax")
-                .containsEntry("query", "front query")
+                .containsEntry("query", "hello")
+                .containsEntry("sessionId", "session1")
                 .containsEntry("platform", "MOBILE")
-                .doesNotContainKeys("isThinking", "qaType", "streamFlag", "supMsg", "sessionId");
+                .doesNotContainKeys("isThinking", "qaType", "streamFlag", "supMsg");
         Map<String, Object> sceneParam = (Map<String, Object>) wire.get("sceneParam");
         assertThat(sceneParam).containsEntry("taxYear", "2026");
         List<Map<String, Object>> docList = (List<Map<String, Object>>) sceneParam.get("docList");
@@ -101,6 +102,7 @@ class DomainAgentChatRequestMapperTest {
                 "session1",
                 "run1",
                 "skill-tax",
+                "session1",
                 "hello",
                 documents,
                 metadata,

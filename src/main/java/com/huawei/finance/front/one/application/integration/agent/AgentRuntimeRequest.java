@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.application.integration.agent;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
+import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
@@ -24,6 +25,7 @@ import java.util.Map;
  * @param runtimeSessionMode 本轮 Runtime 会话协议模式，由应用层显式给出，adapter 不自行猜测。
  * @param message 本轮用户输入文本。
  * @param attachments 本轮关联附件引用。
+ * @param documents 已完成归属和状态校验的文档快照；不需要文档元数据的 provider 可忽略。
  * @param memoryContext SuperAgent 可选记忆上下文；长短期记忆关闭时为空上下文。
  * @param intentDecision 意图服务识别结果，可能为空。
  * @param routeTarget 本轮路由决策结果。
@@ -41,6 +43,7 @@ public record AgentRuntimeRequest(
         RuntimeSessionMode runtimeSessionMode,
         String message,
         List<AttachmentRef> attachments,
+        List<UploadedDocument> documents,
         MemoryContext memoryContext,
         IntentDecision intentDecision,
         RouteTarget routeTarget,
@@ -49,7 +52,20 @@ public record AgentRuntimeRequest(
 ) {
     public AgentRuntimeRequest {
         runtimeSessionMode = runtimeSessionMode == null ? RuntimeSessionMode.RESUME : runtimeSessionMode;
+        attachments = attachments == null ? List.of() : List.copyOf(attachments);
+        documents = documents == null ? List.of() : List.copyOf(documents);
         metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
         forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
+    }
+
+    public AgentRuntimeRequest(String tenantId, String userId, String userAccount, Long globalUserId,
+                               String sessionId, String runId, String runtimeSessionId,
+                               RuntimeSessionMode runtimeSessionMode, String message,
+                               List<AttachmentRef> attachments, MemoryContext memoryContext,
+                               IntentDecision intentDecision, RouteTarget routeTarget,
+                               Map<String, Object> metadata, RuntimeForwardHeaders forwardHeaders) {
+        this(tenantId, userId, userAccount, globalUserId, sessionId, runId, runtimeSessionId,
+                runtimeSessionMode, message, attachments, List.of(), memoryContext, intentDecision, routeTarget,
+                metadata, forwardHeaders);
     }
 }

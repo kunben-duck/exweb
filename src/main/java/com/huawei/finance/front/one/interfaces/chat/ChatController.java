@@ -319,7 +319,14 @@ public class ChatController {
                 status.hitlRequestId(),
                 status.waitingType(),
                 status.assistantMessageId(),
-                status.expiresAt()
+                status.expiresAt(),
+                status.bindingProvider(),
+                status.bindingTargetType(),
+                status.bindingTargetId(),
+                status.bindingIntentCode(),
+                status.bindingIntentName(),
+                status.bindingRouteSource(),
+                status.bindingUpdatedAt()
         );
     }
 

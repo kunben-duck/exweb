@@ -13,17 +13,16 @@ import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * 财经领域 DomainAgent 指定执行器。
+ * 财经领域 DomainAgent 旧执行器。
  *
- * <p>该执行器只服务前端通过 targetType/targetId 明确选择的 DomainAgent 路径。它不创建 RuntimeBinding，
- * 也不参与默认复杂任务 Runtime 多轮续接。</p>
+ * <p>生产主流程已收敛到 {@code DomainAgentRuntime}，该类保留给历史测试夹具和过渡代码使用，
+ * 不再注册为 Spring bean。</p>
  */
-@Service
+@Deprecated(forRemoval = false)
 public class DomainAgentExecutor {
     private final DomainAgentClient domainAgentClient;
     private final DocumentFacade documentFacade;
@@ -45,13 +44,14 @@ public class DomainAgentExecutor {
                 command.sessionId(),
                 context.runId(),
                 context.route().selectedAgentCode(),
+                context.binding() == null ? command.sessionId() : context.binding().runtimeSessionId(),
                 command.message(),
                 documents,
                 command.metadata(),
                 context.forwardHeaders()
         );
-        return Flux.concat(Flux.just(selectedDomainAgentEvent(request)),
-                concurrencyLimiter.protectAgentRuntime(domainAgentClient.query(request)));
+        return Flux.concat(Flux.just(selectedDomainAgentEvent(request, context.binding())),
+                concurrencyLimiter.protectDomainAgent(domainAgentClient.query(request)));
     }
 
     public Mono<Void> cancel(ChatRun run, UserContext user, RuntimeForwardHeaders forwardHeaders) {
@@ -69,8 +69,12 @@ public class DomainAgentExecutor {
         ));
     }
 
-    private ChatEvent selectedDomainAgentEvent(DomainAgentRequest request) {
+    private ChatEvent selectedDomainAgentEvent(DomainAgentRequest request,
+                                               com.huawei.finance.front.one.domain.runtime.RuntimeBinding binding) {
         String domainAgentId = request.domainAgentId() == null ? "" : request.domainAgentId();
+        String routeSource = binding == null || binding.metadata().get("routeSource") == null
+                ? "front-selected"
+                : String.valueOf(binding.metadata().get("routeSource"));
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("source", "chatservice");
         payload.put("sourceType", "selectedDomainAgent");
@@ -79,9 +83,13 @@ public class DomainAgentExecutor {
         payload.put("targetType", "DOMAIN_AGENT");
         payload.put("targetId", domainAgentId);
         payload.put("domainAgentId", domainAgentId);
+        payload.put("routeSource", routeSource);
+        payload.put("runtimeSessionId", request.runtimeSessionId() == null || request.runtimeSessionId().isBlank()
+                ? request.sessionId()
+                : request.runtimeSessionId());
         payload.put("intentResult", Map.of(
                 "accepted", true,
-                "source", "front-selected",
+                "source", routeSource,
                 "resourceId", domainAgentId
         ));
         return RuntimeEvent.metadata(request.runId(), request.sessionId(), payload);

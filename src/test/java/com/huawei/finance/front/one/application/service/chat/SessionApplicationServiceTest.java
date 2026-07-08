@@ -502,7 +502,7 @@ class SessionApplicationServiceTest {
         private final List<String> stoppedRuns = new ArrayList<>();
 
         CountingStopCoordinator() {
-            super(null, null, null, null, null, null, null, null, null);
+            super(null, null, null, null, null, null, null, null);
         }
 
         @Override

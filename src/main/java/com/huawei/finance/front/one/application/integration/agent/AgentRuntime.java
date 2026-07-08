@@ -7,12 +7,20 @@ import reactor.core.publisher.Mono;
 /**
  * 复杂任务 AgentRuntime 防腐层。
  *
- * <p>SuperAgent 主控服务只依赖这个应用层端口提交复杂任务查询，不直接依赖任何具体 Runtime
- * 的 SDK、HTTP 协议或内部会话模型。当前上线版本默认装配 Relay Runtime adapter。
- * {@code financeex.agent-runtime.provider} 表示 Runtime 类型。当前 Relay provider 固定使用
- * streamable HTTP；后续新增协议时应新增 provider 内部 adapter，而不是改动应用层端口。</p>
+ * <p>SuperAgent 主控服务只依赖这个应用层端口提交 Runtime 查询，不直接依赖任何具体 Runtime
+ * 的 SDK、HTTP 协议或内部会话模型。多个 Runtime provider 可以同时注册，应用层按
+ * RuntimeBinding.provider 或默认 provider 动态选择。</p>
  */
 public interface AgentRuntime {
+    /**
+     * Runtime provider 稳定编码，例如 relay、domain-agent。
+     *
+     * @return provider 编码。
+     */
+    default String provider() {
+        return "relay";
+    }
+
     /**
      * 向当前装配的 AgentRuntime 提交一轮查询。
      *

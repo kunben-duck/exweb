@@ -56,7 +56,7 @@ public record ChatHitlRequest(
     public ChatHitlRequest {
         requestPayload = requestPayload == null ? Map.of() : Map.copyOf(requestPayload);
         responsePayload = responsePayload == null ? Map.of() : Map.copyOf(responsePayload);
-        waitingType = waitingType == null ? ChatHitlWaitingType.CLARIFICATION : waitingType;
+        waitingType = waitingType == null ? ChatHitlWaitingType.AGENT_CLARIFICATION : waitingType;
         status = status == null ? ChatHitlStatus.WAITING : status;
         createdAt = createdAt == null ? Instant.now() : createdAt;
         updatedAt = updatedAt == null ? createdAt : updatedAt;

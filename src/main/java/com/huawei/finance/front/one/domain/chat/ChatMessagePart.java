@@ -77,6 +77,13 @@ public record ChatMessagePart(
             case "CARD" -> "卡片展示";
             case "CLARIFICATION_REQUEST" -> "澄清请求";
             case "CLARIFICATION_RESPONSE" -> "澄清回答";
+            case "AGENT_CLARIFICATION_REQUEST" -> "Agent 澄清请求";
+            case "AGENT_CLARIFICATION_RESPONSE" -> "Agent 澄清回答";
+            case "INTENT_CLARIFICATION_REQUEST" -> "意图澄清请求";
+            case "INTENT_CLARIFICATION_RESPONSE" -> "意图澄清回答";
+            case "DOMAIN_AGENT_REFUSAL" -> "领域 Agent 拒答";
+            case "DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST" -> "切换领域 Agent 确认";
+            case "DOMAIN_AGENT_SWITCH_DECLINED" -> "切换领域 Agent 已拒绝";
             default -> "运行事件";
         };
     }
@@ -105,7 +112,11 @@ public record ChatMessagePart(
         return switch (partType) {
             case "ANSWER" -> "COMPLETED";
             case "PROGRESS", "TOOL" -> "STREAMING";
-            case "REFERENCE", "CARD", "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE" -> "INFO";
+            case "REFERENCE", "CARD", "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE",
+                 "AGENT_CLARIFICATION_REQUEST", "AGENT_CLARIFICATION_RESPONSE",
+                 "INTENT_CLARIFICATION_REQUEST", "INTENT_CLARIFICATION_RESPONSE",
+                 "DOMAIN_AGENT_REFUSAL", "DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST",
+                 "DOMAIN_AGENT_SWITCH_DECLINED" -> "INFO";
             default -> "INFO";
         };
     }
@@ -120,7 +131,11 @@ public record ChatMessagePart(
             case "TOOL" -> "tool";
             case "REFERENCE" -> "reference";
             case "CARD" -> "card";
-            case "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE" -> "clarification";
+            case "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE",
+                 "AGENT_CLARIFICATION_REQUEST", "AGENT_CLARIFICATION_RESPONSE",
+                 "INTENT_CLARIFICATION_REQUEST", "INTENT_CLARIFICATION_RESPONSE" -> "clarification";
+            case "DOMAIN_AGENT_REFUSAL", "DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST",
+                 "DOMAIN_AGENT_SWITCH_DECLINED" -> "domain-agent";
             default -> "runtime";
         };
     }
@@ -131,7 +146,11 @@ public record ChatMessagePart(
             case "PROGRESS" -> "inline";
             case "RUNTIME_EVENT" -> "debug";
             case "REFERENCE" -> "collapsible";
-            case "CARD", "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE" -> "inline";
+            case "CARD", "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE",
+                 "AGENT_CLARIFICATION_REQUEST", "AGENT_CLARIFICATION_RESPONSE",
+                 "INTENT_CLARIFICATION_REQUEST", "INTENT_CLARIFICATION_RESPONSE",
+                 "DOMAIN_AGENT_REFUSAL", "DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST",
+                 "DOMAIN_AGENT_SWITCH_DECLINED" -> "inline";
             default -> "collapsible";
         };
     }

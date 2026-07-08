@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
@@ -34,7 +34,7 @@ import reactor.core.scheduler.Schedulers;
  */
 @Component
 @EnableConfigurationProperties({RelayAgentProperties.class, AgentRuntimeForwardCookieProperties.class})
-@ConditionalOnExpression("'${financeex.agent-runtime.provider:relay}' == 'relay'")
+@ConditionalOnProperty(prefix = "financeex.agent-runtime.relay", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class RelayStreamHttpRuntimeAdapter implements RelayRuntimeProtocolAdapter {
     private static final Logger log = LoggerFactory.getLogger(RelayStreamHttpRuntimeAdapter.class);
 

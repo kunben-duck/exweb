@@ -110,7 +110,7 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `targetType` | string | 否 | 建议目标：`DOMAIN_AGENT`、`SUB_AGENT`、`AGENT_RUNTIME`、`INTENT_SERVICE`。 |
+| `targetType` | string | 否 | 建议目标：`DOMAIN_AGENT`、`AGENT_RUNTIME`、`INTENT_SERVICE`。 |
 | `targetAgentId` | string | 否 | 建议目标 Agent。为空表示仅建议目标类型。 |
 | `confidence` | number | 否 | 建议置信度，范围 0 到 1。 |
 | `reason` | string | 否 | 建议原因。 |

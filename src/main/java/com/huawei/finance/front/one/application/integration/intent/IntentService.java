@@ -21,4 +21,20 @@ public interface IntentService {
      * @return 意图识别结果；服务不可用时由调用方降级到 AgentRuntime。
      */
     IntentDecision recognize(ChatCommand command, MemoryContext memory, UserContext user);
+
+    /**
+     * 识别当前输入并允许意图服务返回多轮澄清状态。
+     *
+     * <p>旧实现只需要实现 {@link #recognize(ChatCommand, MemoryContext, UserContext)}；新意图服务可覆盖
+     * 本方法返回 WAITING_CLARIFICATION。</p>
+     *
+     * @param command 当前聊天命令。
+     * @param memory SuperAgent 可选记忆上下文。
+     * @param user 当前用户身份上下文。
+     * @return 意图路由阶段结果。
+     */
+    default IntentRecognitionResult recognizeForRouting(ChatCommand command, MemoryContext memory, UserContext user) {
+        IntentDecision decision = recognize(command, memory, user);
+        return IntentRecognitionResult.finalDecision(decision);
+    }
 }

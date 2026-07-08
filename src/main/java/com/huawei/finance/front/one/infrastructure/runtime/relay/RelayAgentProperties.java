@@ -7,14 +7,14 @@ import org.springframework.util.unit.DataSize;
 /**
  * Relay Runtime adapter 配置。
  *
- * <p>{@code provider} 表示 AgentRuntime 类型，当前上线版本内置 {@code relay}。
+ * <p>Relay 是可同时注册的 AgentRuntime provider 之一。
  * Relay 下游接入通过 {@code relay.adapter} 在二级 adapter 中选择，默认仍为 streamable HTTP。
  * 新增或替换 Relay 协议时只扩展 {@link RelayRuntimeProtocolAdapter}，不改主编排。</p>
  */
 @ConfigurationProperties(prefix = "financeex.agent-runtime")
 public class RelayAgentProperties {
-    /** 当前装配的 AgentRuntime 类型，默认 relay。 */
-    private String provider = "relay";
+    /** 没有明确 provider 绑定时使用的默认 Runtime provider。 */
+    private String defaultProvider = "relay";
     /** Relay Runtime 服务基础地址。 */
     private String baseUrl = "";
     /** Relay Runtime 流式查询接口路径。 */
@@ -30,12 +30,12 @@ public class RelayAgentProperties {
     /** Relay 二级协议 adapter 配置。 */
     private Relay relay = new Relay();
 
-    public String getProvider() {
-        return provider;
+    public String getDefaultProvider() {
+        return defaultProvider;
     }
 
-    public void setProvider(String provider) {
-        this.provider = provider;
+    public void setDefaultProvider(String defaultProvider) {
+        this.defaultProvider = defaultProvider;
     }
 
     public String getBaseUrl() {
@@ -98,10 +98,20 @@ public class RelayAgentProperties {
      * Relay provider 内部 adapter 配置。
      */
     public static class Relay {
+        /** 是否启用 Relay Runtime provider。 */
+        private boolean enabled = true;
         /** 当前使用的 Relay API adapter，默认保持 stream-http 主链路。 */
         private String adapter = "relay-stream-http";
         /** WebSocket adapter 配置，仅在 adapter=relay-websocket 时使用。 */
         private WebSocket websocket = new WebSocket();
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
 
         public String getAdapter() {
             return adapter;

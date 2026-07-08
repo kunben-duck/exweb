@@ -43,7 +43,7 @@ class RelayAgentRuntimeConfigurationTest {
     void unknownConfiguredAdapterFailsFastAtStartup() {
         new ApplicationContextRunner()
                 .withUserConfiguration(RelayAgentRuntime.class)
-                .withPropertyValues("financeex.agent-runtime.provider=relay")
+                .withPropertyValues("financeex.agent-runtime.relay.enabled=true")
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
@@ -66,9 +66,9 @@ class RelayAgentRuntimeConfigurationTest {
     }
 
     @Test
-    void nonRelayProviderDoesNotCreateRelayAdapter() {
+    void disabledRelayProviderDoesNotCreateRelayAdapter() {
         contextRunner
-                .withPropertyValues("financeex.agent-runtime.provider=custom-runtime")
+                .withPropertyValues("financeex.agent-runtime.relay.enabled=false")
                 .run(context -> assertThat(context).doesNotHaveBean(AgentRuntime.class));
     }
 

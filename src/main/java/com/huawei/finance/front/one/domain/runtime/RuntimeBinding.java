@@ -4,20 +4,20 @@ import java.time.Instant;
 import java.util.Map;
 
 /**
- * SuperAgent 侧维护的 AgentRuntime 会话绑定。
+ * SuperAgent 侧维护的下游会话绑定。
  *
- * <p>RuntimeBinding 只服务复杂任务多轮会话。简单任务命中 SubAgent 后只执行一轮，不创建绑定、
- * 不续接下游会话，也不进入任务状态机。</p>
+ * <p>Relay Runtime 和财经领域 DomainAgent 都可以拥有自己的多轮上下文。该绑定是 ChatService
+ * 判断下一轮是否应续接同一个下游会话的事实源。</p>
  *
  * @param id 绑定唯一标识。
  * @param tenantId 租户标识。
  * @param userId 用户标识。
  * @param chatSessionId 前端聊天会话标识。
- * @param provider 当前装配的 AgentRuntime provider 编码。
+ * @param provider 下游 provider 编码，例如 relay 或 domain-agent。
  * @param leafMessageId 该 Runtime 内部会话对应的前端消息树叶子，避免历史编辑后复用错误上下文。
- * @param runtimeSessionId AgentRuntime 实际会话标识；Relay 首次调用前以 ChatService sessionId 兜底，
- *                         收到 session-ready 后以 Relay 返回值为准。
- * @param status 绑定状态，只用于判断是否继续路由到当前 AgentRuntime。
+ * @param runtimeSessionId 下游实际会话标识；首次调用前以 ChatService sessionId 兜底，
+ *                         收到下游返回的会话 ID 后以其为准。
+ * @param status 绑定状态，只用于判断是否继续路由到当前下游。
  * @param lastRunId 最近一次触发该绑定的 SuperAgent runId。
  * @param expiresAt 绑定可作为 active runtime route 的过期时间。
  * @param createdAt 创建时间。
@@ -112,5 +112,16 @@ public record RuntimeBinding(
     public RuntimeBinding withRuntimeSessionId(String nextRuntimeSessionId) {
         return new RuntimeBinding(id, tenantId, userId, chatSessionId, provider, leafMessageId, nextRuntimeSessionId,
                 status, lastRunId, expiresAt, createdAt, Instant.now(), metadata);
+    }
+
+    /**
+     * 更新绑定诊断元数据。
+     *
+     * @param nextMetadata 新元数据。
+     * @return 更新后的绑定。
+     */
+    public RuntimeBinding withMetadata(Map<String, Object> nextMetadata) {
+        return new RuntimeBinding(id, tenantId, userId, chatSessionId, provider, leafMessageId, runtimeSessionId,
+                status, lastRunId, expiresAt, createdAt, Instant.now(), nextMetadata);
     }
 }

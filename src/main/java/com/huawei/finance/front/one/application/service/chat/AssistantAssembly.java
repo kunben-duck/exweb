@@ -63,7 +63,11 @@ final class AssistantAssembly {
         }
         return switch (part.partType()) {
             case "PROGRESS", "AGENT", "THINKING", "TOOL", "REFERENCE", "CARD",
-                 "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE" -> true;
+                 "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE",
+                 "AGENT_CLARIFICATION_REQUEST", "AGENT_CLARIFICATION_RESPONSE",
+                 "INTENT_CLARIFICATION_REQUEST", "INTENT_CLARIFICATION_RESPONSE",
+                 "DOMAIN_AGENT_REFUSAL", "DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST",
+                 "DOMAIN_AGENT_SWITCH_DECLINED" -> true;
             default -> false;
         };
     }
@@ -76,10 +80,25 @@ final class AssistantAssembly {
 
     private static String partType(String eventType, Map<String, Object> payload) {
         if ("runtime.card".equals(eventType) && isQuestionnaireApprovalRequest(payload)) {
-            return "CLARIFICATION_REQUEST";
+            return "AGENT_CLARIFICATION_REQUEST";
         }
         if ("runtime.card".equals(eventType) && isClarificationResponse(payload)) {
-            return "CLARIFICATION_RESPONSE";
+            return agentClarificationResponse(payload) ? "AGENT_CLARIFICATION_RESPONSE" : "CLARIFICATION_RESPONSE";
+        }
+        if ("runtime.card".equals(eventType) && isIntentClarificationRequest(payload)) {
+            return "INTENT_CLARIFICATION_REQUEST";
+        }
+        if ("runtime.card".equals(eventType) && isIntentClarificationResponse(payload)) {
+            return "INTENT_CLARIFICATION_RESPONSE";
+        }
+        if ("runtime.card".equals(eventType) && isDomainAgentSwitchConfirmation(payload)) {
+            return "DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST";
+        }
+        if ("runtime.card".equals(eventType) && isDomainAgentSwitchDeclined(payload)) {
+            return "DOMAIN_AGENT_SWITCH_DECLINED";
+        }
+        if (isDomainAgentRefusal(payload)) {
+            return "DOMAIN_AGENT_REFUSAL";
         }
         return switch (eventType) {
             case "runtime.progress" -> "PROGRESS";
@@ -130,6 +149,18 @@ final class AssistantAssembly {
             if (isClarificationResponse(payload)) {
                 return firstText(payload, "answerText", "sourceType");
             }
+            if (isIntentClarificationRequest(payload)) {
+                return firstText(payload, "question", "message", "detail", "sourceType");
+            }
+            if (isIntentClarificationResponse(payload)) {
+                return firstText(payload, "answerText", "sourceType");
+            }
+            if (isDomainAgentSwitchConfirmation(payload)) {
+                return firstText(payload, "candidateIntentName", "candidateDomainAgentId", "sourceType");
+            }
+            if (isDomainAgentSwitchDeclined(payload)) {
+                return firstText(payload, "currentDomainAgentId", "sourceType");
+            }
             return firstText(payload, "delta", "cardUrl", "intent", "domainAgentId", "skillId", "cardType", "sourceType");
         }
         return firstText(payload, "text", "displayText", "sourceType");
@@ -142,6 +173,32 @@ final class AssistantAssembly {
 
     private static boolean isClarificationResponse(Map<String, Object> payload) {
         return "clarification-response".equals(stringValue(payload.get("sourceType")));
+    }
+
+    private static boolean agentClarificationResponse(Map<String, Object> payload) {
+        return "AGENT_CLARIFICATION".equals(stringValue(payload.get("waitingType")))
+                || "CLARIFICATION".equals(stringValue(payload.get("waitingType")));
+    }
+
+    private static boolean isIntentClarificationRequest(Map<String, Object> payload) {
+        return "intent-clarification-request".equals(stringValue(payload.get("sourceType")));
+    }
+
+    private static boolean isIntentClarificationResponse(Map<String, Object> payload) {
+        return "intent-clarification-response".equals(stringValue(payload.get("sourceType")));
+    }
+
+    private static boolean isDomainAgentSwitchConfirmation(Map<String, Object> payload) {
+        return "domain-agent-switch-confirmation-request".equals(stringValue(payload.get("sourceType")));
+    }
+
+    private static boolean isDomainAgentSwitchDeclined(Map<String, Object> payload) {
+        return "domain-agent-switch-declined".equals(stringValue(payload.get("sourceType")));
+    }
+
+    private static boolean isDomainAgentRefusal(Map<String, Object> payload) {
+        return "domain-agent-reroute".equals(stringValue(payload.get("sourceType")))
+                && !"AUTO_SWITCH".equals(stringValue(payload.get("action")));
     }
 
     private static String firstText(Map<String, Object> payload, String... keys) {

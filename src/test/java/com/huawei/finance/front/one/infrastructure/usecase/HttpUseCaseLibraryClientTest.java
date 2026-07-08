@@ -31,7 +31,7 @@ class HttpUseCaseLibraryClientTest {
                     return Mono.just(ClientResponse.create(HttpStatus.OK)
                             .header(HttpHeaders.CONTENT_TYPE, "application/json")
                             .body("""
-                                    {"matched":false,"score":0.0,"subAgentCode":null,"reason":"none","slots":{},"raw":{}}
+                                    {"matched":false,"score":0.0,"domainAgentId":null,"reason":"none","slots":{},"raw":{}}
                                     """)
                             .build());
                 });

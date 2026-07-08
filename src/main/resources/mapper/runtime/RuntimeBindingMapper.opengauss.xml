@@ -104,4 +104,20 @@
           AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         ORDER BY updated_at DESC
     </select>
+
+    <!--
+      查询会话下所有 provider 的 active binding。ChatService 只允许同一会话保留一个最新可路由绑定，
+      切换 DomainAgent 或 Relay 时会取消旧绑定，避免 Redis 会话级缓存串线。
+      入参: tenantId/userId/sessionId 为会话归属边界，不限制 provider。
+    -->
+    <select id="findActiveBySessionAnyProvider" resultMap="runtimeBindingResultMap">
+        SELECT <include refid="runtimeBindingColumns"/>
+        FROM fin_ex_runtime_binding_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND chat_session_id = #{sessionId}
+          AND status = 'ACTIVE'
+          AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+        ORDER BY updated_at DESC
+    </select>
 </mapper>

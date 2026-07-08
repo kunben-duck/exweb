@@ -4,8 +4,6 @@ import com.huawei.finance.front.one.application.integration.agent.RuntimeForward
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.service.runtime.AgentRuntimeExecutor;
-import com.huawei.finance.front.one.application.service.runtime.DomainAgentExecutor;
-import com.huawei.finance.front.one.application.service.runtime.SubAgentExecutor;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
@@ -15,10 +13,10 @@ import com.huawei.finance.front.one.domain.chat.ChatRunStopDecision;
 import com.huawei.finance.front.one.domain.chat.ChatRunStopResult;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.RunCancelledEvent;
-import com.huawei.finance.front.one.domain.routing.RouteType;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
@@ -43,18 +41,15 @@ public class ChatRunStopCoordinator {
     private final ChatRunLeaseApplicationService chatRunLeaseService;
     private final LocalChatRunExecutionRegistry runExecutionRegistry;
     private final AgentRuntimeExecutor agentRuntimeExecutor;
-    private final SubAgentExecutor subAgentExecutor;
-    private final DomainAgentExecutor domainAgentExecutor;
     private final IdGenerator idGenerator;
 
+    @Autowired
     public ChatRunStopCoordinator(SessionApplicationService sessionService,
                                   ChatStreamApplicationService chatStreamService,
                                   ChatRunApplicationService chatRunService,
                                   ChatRunLeaseApplicationService chatRunLeaseService,
                                   LocalChatRunExecutionRegistry runExecutionRegistry,
                                   AgentRuntimeExecutor agentRuntimeExecutor,
-                                  SubAgentExecutor subAgentExecutor,
-                                  DomainAgentExecutor domainAgentExecutor,
                                   IdGenerator idGenerator) {
         this.sessionService = sessionService;
         this.chatStreamService = chatStreamService;
@@ -62,9 +57,19 @@ public class ChatRunStopCoordinator {
         this.chatRunLeaseService = chatRunLeaseService;
         this.runExecutionRegistry = runExecutionRegistry;
         this.agentRuntimeExecutor = agentRuntimeExecutor;
-        this.subAgentExecutor = subAgentExecutor;
-        this.domainAgentExecutor = domainAgentExecutor;
         this.idGenerator = idGenerator;
+    }
+
+    public ChatRunStopCoordinator(SessionApplicationService sessionService,
+                                  ChatStreamApplicationService chatStreamService,
+                                  ChatRunApplicationService chatRunService,
+                                  ChatRunLeaseApplicationService chatRunLeaseService,
+                                  LocalChatRunExecutionRegistry runExecutionRegistry,
+                                  AgentRuntimeExecutor agentRuntimeExecutor,
+                                  com.huawei.finance.front.one.application.service.runtime.DomainAgentExecutor ignoredDomainAgentExecutor,
+                                  IdGenerator idGenerator) {
+        this(sessionService, chatStreamService, chatRunService, chatRunLeaseService,
+                runExecutionRegistry, agentRuntimeExecutor, idGenerator);
     }
 
     public Mono<ChatRunStopResult> stopRun(UserContext user, String runId, String reason,
@@ -170,19 +175,10 @@ public class ChatRunStopCoordinator {
     }
 
     private Mono<Void> cancelDownstream(ChatRun run, UserContext user, RuntimeForwardHeaders forwardHeaders) {
-        if (run == null || run.routeType() == null) {
+        if (run == null || run.runtimeProvider() == null || run.runtimeProvider().isBlank()) {
             return Mono.empty();
         }
-        if (RouteType.AGENT_RUNTIME.name().equals(run.routeType())) {
-            return agentRuntimeExecutor.cancel(run, user, forwardHeaders);
-        }
-        if (RouteType.SUB_AGENT.name().equals(run.routeType())) {
-            return subAgentExecutor.cancel(run, user);
-        }
-        if (RouteType.DOMAIN_AGENT.name().equals(run.routeType())) {
-            return domainAgentExecutor.cancel(run, user, forwardHeaders);
-        }
-        return Mono.empty();
+        return agentRuntimeExecutor.cancel(run, user, forwardHeaders);
     }
 
     private RuntimeForwardHeaders normalizeForwardHeaders(RuntimeForwardHeaders forwardHeaders) {

@@ -9,18 +9,18 @@ import reactor.core.publisher.Mono;
 /**
  * 外部慢资源并发隔离器。
  *
- * <p>该类使用当前 JVM 内的轻量 semaphore 保护 Relay Runtime、SubAgent 与对象存储调用。
+ * <p>该类使用当前 JVM 内的轻量 semaphore 保护 Relay Runtime、DomainAgent 与对象存储调用。
  * 它不是业务事实源，也不承担集群级限流；集群总容量应由网关限流和下游服务配额共同控制。</p>
  */
 @Service
 public class WorkloadConcurrencyLimiter {
     private final Semaphore agentRuntime;
-    private final Semaphore subAgent;
+    private final Semaphore domainAgent;
     private final Semaphore documentStorage;
 
     public WorkloadConcurrencyLimiter(ResourceIsolationProperties properties) {
         this.agentRuntime = new Semaphore(properties.normalizedAgentRuntimeMaxConcurrent());
-        this.subAgent = new Semaphore(properties.normalizedSubAgentMaxConcurrent());
+        this.domainAgent = new Semaphore(properties.normalizedDomainAgentMaxConcurrent());
         this.documentStorage = new Semaphore(properties.normalizedDocumentStorageMaxConcurrent());
     }
 
@@ -28,8 +28,8 @@ public class WorkloadConcurrencyLimiter {
         return protectFlux("AGENT_RUNTIME_BUSY", agentRuntime, source);
     }
 
-    public <T> Flux<T> protectSubAgent(Flux<T> source) {
-        return protectFlux("SUB_AGENT_BUSY", subAgent, source);
+    public <T> Flux<T> protectDomainAgent(Flux<T> source) {
+        return protectFlux("DOMAIN_AGENT_BUSY", domainAgent, source);
     }
 
     public <T> Mono<T> protectDocumentStorage(Mono<T> source) {

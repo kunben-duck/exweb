@@ -16,9 +16,9 @@ import com.huawei.finance.front.one.domain.usecase.UseCaseMatchResult;
  * 低置信和 unsupported 分支。</p>
  */
 public class RoutingPolicy {
-    /** 用例库命中进入 SubAgent fast path 的最低分数。 */
+    /** 用例库命中进入 DomainAgent fast path 的最低分数。 */
     private final double useCaseMinScore;
-    /** 意图服务推荐技能进入 SubAgent fast path 的最低置信度。 */
+    /** 意图服务推荐技能进入 DomainAgent fast path 的最低置信度。 */
     private final double intentConfidenceThreshold;
 
     public RoutingPolicy(double useCaseMinScore) {
@@ -35,10 +35,10 @@ public class RoutingPolicy {
     }
 
     public RouteTarget decideFromUseCase(UseCaseMatchResult match) {
-        // 用例库命中代表已有业务样例可以直接确定 SubAgent。只有同时满足 matched、分数阈值、
-        // subAgentCode 非空时才走 fast path，避免“弱命中”错误绑定到下游 Agent。
+        // 用例库命中代表已有业务样例可以直接确定 DomainAgent。只有同时满足 matched、分数阈值、
+        // domainAgentId 非空时才走 fast path，避免“弱命中”错误绑定到下游 Agent。
         if (match != null && match.accepted(useCaseMinScore)) {
-            return RouteTarget.subAgent(match.subAgentCode(), "use-case-library", match.score(), "use case matched");
+            return RouteTarget.domainAgent(match.domainAgentId(), "use-case-library", match.score(), "use case matched");
         }
         return RouteTarget.agentRuntime("use-case-library", match == null ? 0.0 : match.score(), "use case not matched");
     }
@@ -53,13 +53,14 @@ public class RoutingPolicy {
             return RouteTarget.systemResponse("unsupported intent");
         }
 
-        // 意图服务只在“简单任务 + 高置信 + 明确 SubAgent”时触发 SubAgent。
+        // 意图服务只在“简单任务 + 高置信 + 明确 DomainAgent”时触发 DomainAgent。
         // 缺少任一条件都交给 AgentRuntime，由它负责追问、规划或兜底回答。
         if (intent.simpleTask()
                 && intent.highConfidence(intentConfidenceThreshold)
-                && intent.candidateSubAgentCode() != null
-                && !intent.candidateSubAgentCode().isBlank()) {
-            return RouteTarget.subAgent(intent.candidateSubAgentCode(), "intent-service", intent.confidence(), "high confidence subagent intent");
+                && intent.candidateDomainAgentId() != null
+                && !intent.candidateDomainAgentId().isBlank()) {
+            return RouteTarget.domainAgent(intent.candidateDomainAgentId(), "intent-service", intent.confidence(),
+                    "high confidence domain agent intent");
         }
 
         return RouteTarget.agentRuntime("intent-service", intent.confidence(), "intent requires agent runtime");

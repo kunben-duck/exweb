@@ -159,7 +159,8 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 停止回答 | 用户点击停止 -> `POST /runs/{runId}/stop` -> 等待 WS 或 Event Resume 收到 `run.cancelled` | `runId`、stop 前本地 `lastSeq` | stop 不是关闭 WebSocket；若 stop 前已有正文或用户可见 parts，历史消息会保存 partial assistant |
 | 编辑历史 user 消息 | 用户点击编辑 -> `POST /chat/runs(runMode=EDIT_USER, editedMessageId, message)` -> 订阅新 run -> `run.completed` 后重新 `GET /messages` | `editedMessageId`、新 user `messageId`、新 assistant `messageId`、`versionInfo` | 旧消息不覆盖；新 user sibling 进入旧 user 的 `versionInfo.variants` |
 | 重新生成 assistant | 用户点击重新生成 -> `POST /chat/runs(runMode=REGENERATE_ASSISTANT, regeneratedMessageId)` -> 订阅新 run -> `run.completed` 后重新 `GET /messages` | `regeneratedMessageId`、原父 user messageId、新 assistant messageId、`versionInfo` | 复用原 user 节点，新 assistant sibling 进入旧 assistant 的 `versionInfo.variants` |
-| Relay 澄清等待 | 收到 `run.waiting_user` 或刷新后 `stream-status.waitingUserInput=true` -> 展示 `/messages` 中的 `CLARIFICATION_REQUEST` part -> `POST /chat/hitl/{hitlRequestId}/responses` -> 订阅返回的 `streamTopicId` | `hitlRequestId`、`assistantMessageId`、`continueRunId`、`streamTopicId`、`expiresAt` | 续接不创建新 user 消息；用户答案会作为 `CLARIFICATION_RESPONSE` part 追加到同一 assistant，最终 `run.completed.payload.assistantMessageId` 仍是原 assistant；超过 `expiresAt` 后提交会返回 `HITL_EXPIRED` |
+| 意图澄清等待 | 收到 `run.waiting_user(waitingType=INTENT_CLARIFICATION)` 或刷新后 `stream-status.waitingUserInput=true` -> 展示 `/messages` 中的 `INTENT_CLARIFICATION_REQUEST` part -> `POST /chat/hitl/{hitlRequestId}/responses` -> 订阅返回的 `streamTopicId` | `hitlRequestId`、`assistantMessageId`、`continueRunId`、`streamTopicId`、`expiresAt` | 意图澄清属于路由阶段，不创建 RuntimeBinding；提交后继续调用意图服务，可能再次等待，也可能最终路由到 DomainAgent 或 Relay |
+| Agent 澄清等待 | 收到 `run.waiting_user(waitingType=AGENT_CLARIFICATION)` 或刷新后 `stream-status.waitingUserInput=true` -> 展示 `/messages` 中的 `AGENT_CLARIFICATION_REQUEST` part -> `POST /chat/hitl/{hitlRequestId}/responses` -> 订阅返回的 `streamTopicId` | `hitlRequestId`、`assistantMessageId`、`continueRunId`、`streamTopicId`、`expiresAt` | 续接不创建新 user 消息；用户答案会作为 `AGENT_CLARIFICATION_RESPONSE` part 追加到同一 assistant，最终 `run.completed.payload.assistantMessageId` 仍是原 assistant；超过 `expiresAt` 后提交会返回 `HITL_EXPIRED` |
 | 切换历史版本 | 从当前消息 `versionInfo.variants` 取目标项 -> `GET /messages?leafMessageId={switchLeafMessageId}` 重渲染 -> 后台 `POST /path` 保存选择 | `versionInfo.currentIndex/total`、`switchLeafMessageId`、`currentLeafMessageId` | 先刷新展示路径，不创建 run，不调用 Runtime；`/path` 只负责持久化当前 leaf |
 | 从消息新建分支 | `POST /sessions/{sessionId}/branches(sourceMessageId)` -> 选择新 `sessionId` -> `GET /messages`、`GET /stream-status` | `sourceMessageId`、新 `sessionId`、`sourceSessionId/sourceMessageId` | 分支快照消息 `locked=true`，禁用编辑、删除和重新生成 |
 | 上传文件并作为附件提问 | `POST /documents(file, sessionId)` -> 等状态 `AVAILABLE` -> `POST /chat/runs(attachments[{documentId}])` | `documentId`、`sessionId`、`attachments[].documentId` | 附件不是消息类型；PROCESSING/FAILED/DELETED 不可作为聊天附件 |
@@ -236,7 +237,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `POST /api/v1/ex/chat/runs/{runId}/stop` | 用户点击停止回答。 | Path：`runId`。 | `ChatRunStopDto`：`runId`、`sessionId`、`status`、`latestSeq`、`stoppedAt`、`messageReady`、`assistantMessageId`、`feedbackTargetMessageId`。 | 幂等；停止语义不是关闭 WebSocket。 |
 | `GET /api/v1/ex/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`；只处理 `stream-item` 中的 `encodedItem.data`。 |
 | `GET /api/v1/ex/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态，并以 `done` 闭合；live source 异常时服务端会降级按 DB 事件轮询。 |
-| `GET /api/v1/ex/chat/sessions/{sessionId}/stream-status` | 判断是否存在 active run、是否可停止、从哪里恢复，以及是否等待用户澄清输入。 | Path：`sessionId`。 | `ChatStreamStatusDto`：`latestSeq`、`activeRunId`、`activeStreamTopicId`、`activeRunFirstSeq`、`activeRunLastSeq`、`cancellable`、`waitingUserInput`、`hitlRequestId`、`waitingType`、`assistantMessageId`、`expiresAt`。 | `latestSeq` 是服务端事实源最新位置，不是客户端已消费位置；`waitingUserInput=true` 时普通 `/chat/runs` 会返回 `WAITING_USER_INPUT_REQUIRED`。HITL 默认 24h 过期，服务端会在查询或提交时懒标记过期请求。 |
+| `GET /api/v1/ex/chat/sessions/{sessionId}/stream-status` | 判断是否存在 active run、是否可停止、从哪里恢复、是否等待用户澄清输入，以及当前会话绑定的 DomainAgent/Runtime 摘要。 | Path：`sessionId`。 | `ChatStreamStatusDto`：`latestSeq`、`activeRunId`、`activeStreamTopicId`、`activeRunFirstSeq`、`activeRunLastSeq`、`cancellable`、`waitingUserInput`、`hitlRequestId`、`waitingType`、`assistantMessageId`、`expiresAt`、`bindingProvider`、`bindingTargetType`、`bindingTargetId`、`bindingIntentCode`、`bindingIntentName`、`bindingRouteSource`、`bindingUpdatedAt`。 | `latestSeq` 是服务端事实源最新位置，不是客户端已消费位置；`waitingUserInput=true` 时普通 `/chat/runs` 会返回 `WAITING_USER_INPUT_REQUIRED`。HITL 默认 24h 过期，服务端会在查询或提交时懒标记过期请求。 |
 | `POST /api/v1/ex/chat/hitl/{hitlRequestId}/responses` | 提交 Relay questionnaire 澄清答案并启动续接 run。 | Path：`hitlRequestId`；JSON body：`approved`、`scope`、`questionnaireAnswers`、`metadata`。 | `ChatHitlResponseDto`：`hitlRequestId`、`continueRunId`、`sessionId`、`assistantMessageId`、`streamTopicId`、`firstSeq`、`status=RESPONDING`。 | 续接 run 复用同一条 assistant 消息，不创建新的普通 user 消息；前端收到结果后订阅 `streamTopicId`。 |
 | `POST /api/v1/ex/chat/messages/{messageId}/feedback` | 用户对完整 assistant 消息点赞、点踩或切换反馈。 | Path：`messageId`；JSON body：`runId` 可选，`rating=LIKE/DISLIKE`，`reasonCode` 可选，`commentText` 可选，`metadata` 可选。 | `MessageFeedbackDto`：`feedbackId`、`messageId`、`runId`、`rating`、`status=ACTIVE`、`createdAt`、`updatedAt`。 | 同一用户同一消息最多一条当前反馈；重复提交表示修改当前反馈。 |
 | `DELETE /api/v1/ex/chat/messages/{messageId}/feedback` | 用户取消已点赞或已点踩状态。 | Path：`messageId`；Query：`runId` 可选。 | `MessageFeedbackDto`：`status=CANCELLED`。 | 幂等；没有历史反馈时也返回取消成功。历史消息中的 `feedback` 会返回 `null`。 |
@@ -563,7 +564,7 @@ POST /api/v1/ex/chat/runs/{runId}/stop
 
 如果 `POST /chat/runs`、`POST /chat/runs/{runId}/stop` 或 `POST /documents` 请求携带标准 `Cookie` 头，后端会在入口捕获一次，并只把它透传给可信下游 adapter：Relay streamable HTTP、Relay WebSocket、DomainAgent chat/cancel，以及配置了 `forward-cookie=true` 的 DomainAgent 文档 upload provider。该 Cookie 不会出现在请求 body、multipart form、metadata、事件、历史消息、文档元数据或前端响应中。
 
-集成服务鉴权请求头由后端 `AuthHeaderProviderRegistry` 统一注入，前端不需要传 Sgov token，也不要在请求体中放服务鉴权信息。当前可配置接入的 serviceCode 包括 `welink-share`、`intent-service`、`use-case-library` 和 `sub-agent`；Relay Runtime、DomainAgent 和 DomainAgent 文档 provider 默认不走该集成服务鉴权层。
+集成服务鉴权请求头由后端 `AuthHeaderProviderRegistry` 统一注入，前端不需要传 Sgov token，也不要在请求体中放服务鉴权信息。当前可配置接入的 serviceCode 包括 `welink-share`、`intent-service` 和 `use-case-library`；Relay Runtime、DomainAgent 和文档存储 adapter 默认不走该集成服务鉴权层。
 
 ## 推荐前端流程
 
@@ -575,7 +576,7 @@ sequenceDiagram
     participant WS as "WebSocket"
 
     UI->>API: "POST /chat/runs"
-    API->>API: "服务端后台启动 run 并内部调用 Runtime/SubAgent"
+    API->>API: "服务端后台启动 run 并内部调用 DomainAgent 或 Runtime"
     API-->>UI: "runId, sessionId, firstSeq, streamTopicId"
     UI->>WS: "connect"
     WS-->>UI: "reply(connect)"
@@ -604,7 +605,15 @@ sequenceDiagram
     end
 ```
 
-注意：上图里的 WebSocket 只负责订阅 `streamTopicId` 对应的 ChatEvent。后台 run 的执行由 `POST /chat/runs` 在服务端启动，WebSocket `subscribe` 不会触发 Runtime 或 SubAgent query。
+注意：上图里的 WebSocket 只负责订阅 `streamTopicId` 对应的 ChatEvent。后台 run 的执行由 `POST /chat/runs` 在服务端启动，WebSocket `subscribe` 不会触发 DomainAgent 或 Runtime query。
+
+### DomainAgent 绑定与切换
+
+- 前端手动选择领域 Agent 时，调用 `/chat/runs` 传 `targetType=DOMAIN_AGENT,targetId=...`。后端会把该会话绑定到目标 DomainAgent，`stream-status` 中可通过 `bindingProvider/bindingTargetId/bindingRouteSource` 查看当前绑定。
+- 未传 target 时，后端优先续接当前 active binding；没有绑定时才调用用例库或意图服务。用例库/意图服务返回的 `resourceId/skillId` 统一解释为 `DomainAgentId`。
+- DomainAgent 下游 body 以 `metadata` 为业务扩展，但 `skillId/query/sessionId` 由后端按当前绑定和本轮问题强制写入，前端传同名字段也不会覆盖。
+- 如果当前绑定来自意图或用例库，DomainAgent 返回配置化拒答 code 后，后端会自动重新意图并切换到新 DomainAgent。
+- 如果当前绑定来自手动选择，拒答后命中新 DomainAgent 时，本轮会返回 `run.waiting_user`，消息 parts 中包含 `DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST`。前端调用 `POST /api/v1/ex/chat/hitl/{hitlRequestId}/responses` 提交确认；同意后后端用原问题调用新 DomainAgent，拒绝后保留原手动绑定并以拒答收口。
 
 ## 会话接口
 

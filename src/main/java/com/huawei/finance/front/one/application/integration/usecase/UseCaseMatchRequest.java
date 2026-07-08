@@ -8,7 +8,7 @@ import java.util.Map;
 /**
  * 用例库匹配请求。
  *
- * <p>用例库只负责返回业务样例命中情况和推荐 SubAgent，不直接执行任务。</p>
+ * <p>用例库只负责返回业务样例命中情况和推荐 DomainAgent，不直接执行任务。</p>
  *
  * @param tenantId 租户标识。
  * @param userId 用户标识。

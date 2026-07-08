@@ -83,7 +83,7 @@ public class IntentRecognitionRecordService {
         Object rawResponse = firstNonNull(raw.get("response"), raw);
         Object items = nested(rawResponse, "data", "result", "items");
         Object selectedItem = raw.get("selectedItem");
-        String resourceId = firstText(intent.candidateSubAgentCode(), stringValue(intent.slots().get("resourceId")),
+        String resourceId = firstText(intent.candidateDomainAgentId(), stringValue(intent.slots().get("resourceId")),
                 stringValue(nested(selectedItem, "resourceInstruction", "resourceId")));
         String source = firstText(stringValue(intent.slots().get("source")), stringValue(nested(selectedItem, "source")));
         String status = status(intent);
@@ -141,7 +141,7 @@ public class IntentRecognitionRecordService {
     private boolean accepted(IntentDecision intent, RouteTarget route, double threshold, String resourceId) {
         return intent != null
                 && route != null
-                && route.type() == RouteType.SUB_AGENT
+                && route.type() == RouteType.DOMAIN_AGENT
                 && resourceId != null
                 && resourceId.equals(route.selectedAgentCode())
                 && intent.highConfidence(threshold);

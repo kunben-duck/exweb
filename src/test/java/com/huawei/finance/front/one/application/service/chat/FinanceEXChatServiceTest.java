@@ -40,7 +40,6 @@ import com.huawei.finance.front.one.application.service.routing.RouteSignalResul
 import com.huawei.finance.front.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.finance.front.one.application.service.runtime.DomainAgentExecutor;
 import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingApplicationService;
-import com.huawei.finance.front.one.application.service.runtime.SubAgentExecutor;
 import com.huawei.finance.front.one.application.service.runtime.SystemResponseExecutor;
 import com.huawei.finance.front.one.application.service.runtime.WorkloadConcurrencyLimiter;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
@@ -132,14 +131,6 @@ class FinanceEXChatServiceTest {
                 new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
                 runtimeRouteService(),
                 intentRecordService(),
-                new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
-                    @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
-                        return Flux.empty();
-                    }
-                    @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
-                        return Mono.empty();
-                    }
-                }, limiter),
                 domainAgentExecutor(documentFacade(), limiter),
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(runtime, limiter),
@@ -242,14 +233,6 @@ class FinanceEXChatServiceTest {
                 new RuntimeBindingApplicationService(bindings, runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
                 runtimeRouteService(),
                 intentRecordService(),
-                new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
-                    @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
-                        return Flux.empty();
-                    }
-                    @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
-                        return Mono.empty();
-                    }
-                }, limiter),
                 domainAgentExecutor(documentFacade(), limiter),
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(runtime, interaction, limiter),
@@ -262,18 +245,12 @@ class FinanceEXChatServiceTest {
                 new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
                 new ChatRunStopCoordinator(sessionService, chatStreamService, runService, leaseService,
                         executionRegistry, new AgentRuntimeExecutor(runtime, interaction, limiter),
-                        new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
-                            @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
-                                return Flux.empty();
-                            }
-                            @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
-                                return Mono.empty();
-                            }
-                        }, limiter), domainAgentExecutor(documentFacade(), limiter), ids),
+                        domainAgentExecutor(documentFacade(), limiter), ids),
                 hitlService,
                 terminalCommitService,
                 ids,
-                reactor.core.scheduler.Schedulers.boundedElastic()
+                reactor.core.scheduler.Schedulers.boundedElastic(),
+                new com.huawei.finance.front.one.application.config.DomainAgentProperties()
         );
 
         StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
@@ -293,7 +270,7 @@ class FinanceEXChatServiceTest {
                 .findFirst()
                 .orElseThrow();
         assertThat(assistant.parts()).extracting(ChatMessagePart::partType)
-                .contains("CLARIFICATION_REQUEST");
+                .contains("AGENT_CLARIFICATION_REQUEST");
         assertThat(hitlRequests.requests.values()).singleElement()
                 .satisfies(request -> {
                     assertThat(request.status()).isEqualTo(ChatHitlStatus.WAITING);
@@ -340,14 +317,6 @@ class FinanceEXChatServiceTest {
                 new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
                 runtimeRouteService(),
                 intentRecordService(),
-                new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
-                    @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
-                        return Flux.empty();
-                    }
-                    @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
-                        return Mono.empty();
-                    }
-                }, limiter),
                 domainAgentExecutor(documentFacade(), limiter),
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(runtime, limiter),
@@ -386,7 +355,7 @@ class FinanceEXChatServiceTest {
     }
 
     @Test
-    void explicitDomainAgentTargetRoutesToDomainAgentWithoutRuntimeBinding() {
+    void explicitDomainAgentTargetRoutesAndBindsDomainAgent() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         NeverCancelRunCache runCache = new NeverCancelRunCache();
@@ -423,14 +392,6 @@ class FinanceEXChatServiceTest {
                 new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
                 runtimeRouteService(),
                 intentRecordService(),
-                new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
-                    @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
-                        return Flux.empty();
-                    }
-                    @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
-                        return Mono.empty();
-                    }
-                }, limiter),
                 domainAgentExecutor,
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(noopRuntime(), limiter),
@@ -466,7 +427,7 @@ class FinanceEXChatServiceTest {
         ChatRun run = runs.runs.values().iterator().next();
         assertThat(run.routeType()).isEqualTo("DOMAIN_AGENT");
         assertThat(run.agentCode()).isEqualTo("skill-tax");
-        assertThat(run.runtimeProvider()).isNull();
+        assertThat(run.runtimeProvider()).isEqualTo("domain-agent");
         assertThat(messages.parts).anySatisfy(part -> {
             assertThat(part.partType()).isEqualTo("METADATA");
             assertThat(part.payload()).containsEntry("targetId", "skill-tax")
@@ -554,14 +515,6 @@ class FinanceEXChatServiceTest {
                 new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
                 runtimeRouteService(),
                 intentRecordService(),
-                new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
-                    @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
-                        return Flux.empty();
-                    }
-                    @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
-                        return Mono.empty();
-                    }
-                }, limiter),
                 domainAgentExecutor(documentFacade(), limiter),
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(mismatchedRuntime, limiter),
@@ -618,14 +571,6 @@ class FinanceEXChatServiceTest {
                 new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
                 systemRouteService(),
                 intentRecordService(),
-                new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
-                    @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
-                        return Flux.empty();
-                    }
-                    @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
-                        return Mono.empty();
-                    }
-                }, limiter),
                 domainAgentExecutor(documentFacade(), limiter),
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(noopRuntime(), limiter),
@@ -873,7 +818,7 @@ class FinanceEXChatServiceTest {
                 .orElseThrow();
         assertThat(assistantMessage.id()).isEqualTo("msg-assistant");
         assertThat(assistantMessage.parts()).extracting(ChatMessagePart::partType)
-                .contains("CLARIFICATION_REQUEST");
+                .contains("AGENT_CLARIFICATION_REQUEST");
         ChatHitlRequest savedHitl = hitlRequests.requests.get(waitingRequest.id());
         assertThat(savedHitl.runtimeBindingId()).isEqualTo(binding.id());
         assertThat(savedHitl.status()).isEqualTo(ChatHitlStatus.WAITING);
@@ -913,14 +858,6 @@ class FinanceEXChatServiceTest {
                 new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
                 runtimeRouteService(),
                 intentRecordService(),
-                new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
-                    @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
-                        return Flux.empty();
-                    }
-                    @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
-                        return Mono.empty();
-                    }
-                }, limiter),
                 domainAgentExecutor(documentFacade(), limiter),
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(noopRuntime(), limiter),
@@ -1022,14 +959,6 @@ class FinanceEXChatServiceTest {
                         Duration.ofDays(3), "relay"),
                 runtimeRouteService(),
                 intentRecordService(),
-                new SubAgentExecutor(new com.huawei.finance.front.one.application.integration.agent.SubAgentClient() {
-                    @Override public Flux<ChatEvent> query(com.huawei.finance.front.one.domain.agent.AgentQueryRequest request) {
-                        return Flux.empty();
-                    }
-                    @Override public Mono<Void> cancel(com.huawei.finance.front.one.domain.agent.SubAgentCancelRequest request) {
-                        return Mono.empty();
-                    }
-                }, limiter),
                 domainAgentExecutor(documents, limiter),
                 new SystemResponseExecutor(),
                 new AgentRuntimeExecutor(noopRuntime(), limiter),

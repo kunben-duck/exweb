@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.domainagent;
+package com.huawei.finance.front.one.infrastructure.runtime.domainagent;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -50,7 +50,7 @@ class ConfiguredDomainAgentClientTest {
         assertThat(captured.get().headers().getFirst(HttpHeaders.COOKIE)).isEqualTo("sid=abc");
         String body = objectMapper.writeValueAsString(mapper.toWireRequest(request));
         assertThat(body)
-                .contains("\"skillId\":\"skill-tax\"")
+                .contains("\"skillId\":\"skill-unlisted\"")
                 .contains("\"query\":\"hello\"")
                 .doesNotContain("\"isThinking\"")
                 .doesNotContain("\"qaType\"")
@@ -127,6 +127,7 @@ class ConfiguredDomainAgentClientTest {
                 "session1",
                 "run1",
                 "skill-unlisted",
+                "session1",
                 "hello",
                 List.of(),
                 Map.of("skillId", "skill-tax", "query", "hello"),

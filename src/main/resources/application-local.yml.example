@@ -31,8 +31,3 @@ financeex:
   use-case-library:
     enabled: false
     base-url: http://localhost:9100
-  sub-agent:
-    agents:
-      employee_reimbursement_agent:
-        enabled: false
-        endpoint:

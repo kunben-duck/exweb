@@ -16,6 +16,13 @@ package com.huawei.finance.front.one.interfaces.chat.dto;
  * @param waitingType 等待类型。
  * @param assistantMessageId 承载等待卡片的 assistant 消息 ID。
  * @param expiresAt 等待请求过期时间。
+ * @param bindingProvider 当前会话 active binding provider。
+ * @param bindingTargetType 当前绑定目标类型。
+ * @param bindingTargetId 当前绑定目标 ID。
+ * @param bindingIntentCode 当前绑定来源意图编码。
+ * @param bindingIntentName 当前绑定来源意图名称。
+ * @param bindingRouteSource 当前绑定来源。
+ * @param bindingUpdatedAt 当前绑定更新时间。
  */
 public record ChatStreamStatusDto(
         String sessionId,
@@ -30,5 +37,12 @@ public record ChatStreamStatusDto(
         String hitlRequestId,
         String waitingType,
         String assistantMessageId,
-        java.time.Instant expiresAt
+        java.time.Instant expiresAt,
+        String bindingProvider,
+        String bindingTargetType,
+        String bindingTargetId,
+        String bindingIntentCode,
+        String bindingIntentName,
+        String bindingRouteSource,
+        java.time.Instant bindingUpdatedAt
 ) {}

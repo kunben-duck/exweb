@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.domainagent;
+package com.huawei.finance.front.one.infrastructure.runtime.domainagent;
 
 import com.huawei.finance.front.one.application.config.DomainAgentProperties;
 import com.huawei.finance.front.one.application.integration.agent.DomainAgentClient;

@@ -12,22 +12,22 @@ class RoutingPolicyTest {
     private final RoutingPolicy policy = new RoutingPolicy(0.85);
 
     @Test
-    void routesMatchedUseCaseToSubAgent() {
+    void routesMatchedUseCaseToDomainAgent() {
         RouteTarget target = policy.decideFromUseCase(new UseCaseMatchResult(true, 0.9, "finance.office.agent", "hit", Map.of(), Map.of()));
 
-        assertThat(target.type()).isEqualTo(RouteType.SUB_AGENT);
+        assertThat(target.type()).isEqualTo(RouteType.DOMAIN_AGENT);
         assertThat(target.selectedAgentCode()).isEqualTo("finance.office.agent");
         assertThat(target.routeSource()).isEqualTo("use-case-library");
     }
 
     @Test
-    void routesSimpleIntentWithSubAgentToSubAgent() {
+    void routesSimpleIntentWithDomainAgentToDomainAgent() {
         IntentDecision intent = new IntentDecision("finance.office.query", "office", TaskComplexity.SIMPLE, 0.91, true,
                 "finance.office.agent", Map.of(), java.util.List.of(), Map.of());
 
         RouteTarget target = policy.decideFromIntent(null, null, intent, null);
 
-        assertThat(target.type()).isEqualTo(RouteType.SUB_AGENT);
+        assertThat(target.type()).isEqualTo(RouteType.DOMAIN_AGENT);
         assertThat(target.selectedAgentCode()).isEqualTo("finance.office.agent");
         assertThat(target.routeSource()).isEqualTo("intent-service");
     }

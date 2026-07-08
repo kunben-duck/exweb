@@ -10,7 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Locale;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
@@ -25,8 +25,9 @@ import reactor.core.publisher.Mono;
  */
 @Component
 @EnableConfigurationProperties(RelayAgentProperties.class)
-@ConditionalOnExpression("'${financeex.agent-runtime.provider:relay}' == 'relay'")
+@ConditionalOnProperty(prefix = "financeex.agent-runtime.relay", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class RelayAgentRuntime implements AgentRuntime, AgentRuntimeInteraction {
+    public static final String PROVIDER = "relay";
     static final String STREAM_HTTP_ADAPTER = "relay-stream-http";
 
     private final Map<String, RelayRuntimeProtocolAdapter> adapters;
@@ -38,13 +39,18 @@ public class RelayAgentRuntime implements AgentRuntime, AgentRuntimeInteraction 
     }
 
     @Override
+    public String provider() {
+        return PROVIDER;
+    }
+
+    @Override
     public Flux<ChatEvent> query(AgentRuntimeRequest request) {
         return selectedAdapter.query(request);
     }
 
     @Override
     public boolean supportsWaitingUserResponse(String runtimeProvider) {
-        return "relay".equalsIgnoreCase(runtimeProvider) && selectedAdapter.supportsUserResponseContinuation();
+        return PROVIDER.equalsIgnoreCase(runtimeProvider) && selectedAdapter.supportsUserResponseContinuation();
     }
 
     @Override

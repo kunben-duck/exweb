@@ -223,7 +223,7 @@ public class ChatSessionController {
     /**
      * 切换会话当前 active path。
      *
-     * <p>该接口只改变会话当前叶子，不会创建新 run，也不会触发 Runtime/SubAgent 调用。</p>
+     * <p>该接口只改变会话当前叶子，不会创建新 run，也不会触发 Runtime/DomainAgent 调用。</p>
      *
      * @param sessionId 会话标识；服务端会校验会话归属。
      * @param request 目标叶子消息请求。

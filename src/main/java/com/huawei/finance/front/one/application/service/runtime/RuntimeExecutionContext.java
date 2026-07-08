@@ -4,10 +4,12 @@ import com.huawei.finance.front.one.application.integration.agent.RuntimeForward
 import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
+import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
+import java.util.List;
 
 /**
  * AgentRuntime 执行上下文。
@@ -25,6 +27,17 @@ public record RuntimeExecutionContext(
         UserContext user,
         RuntimeBinding binding,
         RuntimeSessionMode runtimeSessionMode,
-        RuntimeForwardHeaders forwardHeaders
+        RuntimeForwardHeaders forwardHeaders,
+        List<UploadedDocument> documents
 ) {
+    public RuntimeExecutionContext {
+        documents = documents == null ? List.of() : List.copyOf(documents);
+    }
+
+    public RuntimeExecutionContext(ChatCommand command, String runId, MemoryContext memory,
+                                   IntentDecision intent, RouteTarget route, UserContext user,
+                                   RuntimeBinding binding, RuntimeSessionMode runtimeSessionMode,
+                                   RuntimeForwardHeaders forwardHeaders) {
+        this(command, runId, memory, intent, route, user, binding, runtimeSessionMode, forwardHeaders, List.of());
+    }
 }

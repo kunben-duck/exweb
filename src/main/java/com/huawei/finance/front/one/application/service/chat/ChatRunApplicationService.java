@@ -4,6 +4,7 @@ import com.huawei.finance.front.one.application.integration.conversation.ChatEve
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunCache;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
+import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ActiveRunExistsException;
@@ -16,7 +17,9 @@ import com.huawei.finance.front.one.domain.chat.ChatRunStopResult;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatStreamStatus;
 import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
+import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,6 +44,7 @@ public class ChatRunApplicationService {
     private final ChatRunLeaseApplicationService leaseService;
     private final ObjectProvider<ChatRunRecoveryOrchestrator> recoveryOrchestratorProvider;
     private final ObjectProvider<ChatHitlApplicationService> hitlServiceProvider;
+    private final ObjectProvider<RuntimeBindingApplicationService> runtimeBindingServiceProvider;
 
     @Autowired
     public ChatRunApplicationService(ChatRunRepository repository, ChatRunCache cache, ChatEventStore eventStore,
@@ -48,7 +52,8 @@ public class ChatRunApplicationService {
                                      SessionRepository sessionRepository,
                                      ChatRunLeaseApplicationService leaseService,
                                      ObjectProvider<ChatRunRecoveryOrchestrator> recoveryOrchestratorProvider,
-                                     ObjectProvider<ChatHitlApplicationService> hitlServiceProvider) {
+                                     ObjectProvider<ChatHitlApplicationService> hitlServiceProvider,
+                                     ObjectProvider<RuntimeBindingApplicationService> runtimeBindingServiceProvider) {
         this.repository = repository;
         this.cache = cache;
         this.eventStore = eventStore;
@@ -57,6 +62,7 @@ public class ChatRunApplicationService {
         this.leaseService = leaseService;
         this.recoveryOrchestratorProvider = recoveryOrchestratorProvider;
         this.hitlServiceProvider = hitlServiceProvider;
+        this.runtimeBindingServiceProvider = runtimeBindingServiceProvider;
     }
 
     ChatRunApplicationService(ChatRunRepository repository, ChatRunCache cache, ChatEventStore eventStore,
@@ -70,6 +76,7 @@ public class ChatRunApplicationService {
         this.leaseService = null;
         this.recoveryOrchestratorProvider = null;
         this.hitlServiceProvider = null;
+        this.runtimeBindingServiceProvider = null;
     }
 
     /**
@@ -288,25 +295,77 @@ public class ChatRunApplicationService {
             }
         }
         long currentLatestSeq = latestSeq;
+        BindingSummary bindingSummary = bindingSummary(user, sessionId);
         return active
                 .map(run -> new ChatStreamStatus(sessionId, currentLatestSeq, run.id(), run.status(),
                         ChatStreamTopics.runTopic(run.id()), run.firstSeq(), run.lastSeq(), run.cancellable(),
-                        false, null, null, null, null))
-                .orElseGet(() -> waitingStatus(user, sessionId, currentLatestSeq));
+                        false, null, null, null, null,
+                        bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
+                        bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
+                        bindingSummary.updatedAt()))
+                .orElseGet(() -> waitingStatus(user, sessionId, currentLatestSeq, bindingSummary));
     }
 
-    private ChatStreamStatus waitingStatus(UserContext user, String sessionId, long latestSeq) {
+    private ChatStreamStatus waitingStatus(UserContext user, String sessionId, long latestSeq,
+                                           BindingSummary bindingSummary) {
         ChatHitlApplicationService hitlService = hitlServiceProvider == null ? null : hitlServiceProvider.getIfAvailable();
         if (hitlService == null) {
             return new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
-                    false, false, null, null, null, null);
+                    false, false, null, null, null, null,
+                    bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
+                    bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
+                    bindingSummary.updatedAt());
         }
         return hitlService.findWaiting(user, sessionId)
                 .map(request -> new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
                         false, true, request.id(), request.waitingType().name(),
-                        request.assistantMessageId(), request.expiresAt()))
+                        request.assistantMessageId(), request.expiresAt(),
+                        bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
+                        bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
+                        bindingSummary.updatedAt()))
                 .orElseGet(() -> new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
-                        false, false, null, null, null, null));
+                        false, false, null, null, null, null,
+                        bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
+                        bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
+                        bindingSummary.updatedAt()));
+    }
+
+    private BindingSummary bindingSummary(UserContext user, String sessionId) {
+        RuntimeBindingApplicationService runtimeBindingService = runtimeBindingServiceProvider == null
+                ? null
+                : runtimeBindingServiceProvider.getIfAvailable();
+        if (runtimeBindingService == null) {
+            return BindingSummary.empty();
+        }
+        return runtimeBindingService.findActiveBySession(user.tenantId(), user.ownerUserId(), sessionId)
+                .map(this::toBindingSummary)
+                .orElseGet(BindingSummary::empty);
+    }
+
+    private BindingSummary toBindingSummary(RuntimeBinding binding) {
+        Map<String, Object> metadata = binding.metadata();
+        String targetType = RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider())
+                ? "DOMAIN_AGENT"
+                : "AGENT_RUNTIME";
+        return new BindingSummary(
+                binding.provider(),
+                targetType,
+                stringValue(metadata.get("domainAgentId")),
+                stringValue(metadata.get("intentCode")),
+                stringValue(metadata.get("intentName")),
+                stringValue(metadata.get("routeSource")),
+                binding.updatedAt());
+    }
+
+    private String stringValue(Object value) {
+        return value == null || String.valueOf(value).isBlank() ? null : String.valueOf(value);
+    }
+
+    private record BindingSummary(String provider, String targetType, String targetId, String intentCode,
+                                  String intentName, String routeSource, Instant updatedAt) {
+        private static BindingSummary empty() {
+            return new BindingSummary(null, null, null, null, null, null, null);
+        }
     }
 
     private Optional<ChatRun> findActive(String tenantId, String userId, String sessionId) {

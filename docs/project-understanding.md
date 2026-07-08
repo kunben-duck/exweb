@@ -176,15 +176,14 @@ FinanceEXChatService#executeRun(...)
 11. `ChatRunApplicationService#createRunning(...)` 创建业务 run。
 12. 如果本轮实际调用了意图服务，`IntentRecognitionRecordService#recordAsync(...)` 用当前 `UserContext`、query、`IntentDecision`、最终 `RouteTarget` 和 runId 构造不可变快照，并提交到专用 Servlet/MVC 异步线程池；写入失败不影响主链路。
 13. `ChatRunLeaseApplicationService#startRun(...)` 创建 execution lease。
-14. 根据 `RouteType` 调用 DomainAgent、SubAgent、SystemResponse 或 AgentRuntime。
+14. 根据 `RouteType` 调用 SystemResponse 或 `AgentRuntimeExecutor`；DomainAgent 作为 `provider=domain-agent` 的 AgentRuntime 执行。
 15. 外层补齐 `run.started` 和 `run.completed`。
 16. 进入 `persistAndPublishRunEvents(...)`。
 
 关键分支：
 
 ```text
-RouteType.SUB_AGENT        -> SubAgentExecutor#execute(...)
-RouteType.DOMAIN_AGENT   -> DomainAgentExecutor#execute(...)
+RouteType.DOMAIN_AGENT   -> AgentRuntimeExecutor#execute(... provider=domain-agent)
 RouteType.SYSTEM_RESPONSE  -> SystemResponseExecutor#execute(...)
 RouteType.AGENT_RUNTIME    -> AgentRuntimeExecutor#execute(...)
 ```
@@ -193,7 +192,7 @@ RouteType.AGENT_RUNTIME    -> AgentRuntimeExecutor#execute(...)
 
 - 新问题没有进入 Relay：查看 `RouteSignalApplicationService#routeInitial(...)` 返回的 `RouteTarget`。
 - 意图识别已调用但统计表没有记录：确认 `financeex.intent-record.enabled=true`，再看 `IntentRecognitionRecordService#recordAsync(...)` 是否被线程池拒绝或 repository 写库失败；该链路是 best-effort，不会向前端报错。
-- DomainAgent 指定调用没有进入 DomainAgent 路由，或 chat Cookie 未透传：查看 `CreateChatRunRequest.targetType/targetId`、`FinanceEXChatService#explicitDomainAgentId(...)`、`DomainAgentExecutor#execute(...)` 和 `ConfiguredDomainAgentClient#query(...)`。
+- DomainAgent 指定调用没有进入 DomainAgent 路由，或 chat Cookie 未透传：查看 `CreateChatRunRequest.targetType/targetId`、`FinanceEXChatService#explicitDomainAgentId(...)`、`AgentRuntimeRegistry`、`DomainAgentRuntime#query(...)` 和 `ConfiguredDomainAgentClient#query(...)`。
 - 多轮没有续接 Runtime：查看 `RuntimeBindingApplicationService#findActive(...)` 是否命中当前 `leafMessageId`。
 - 同一会话连续发两条报错：查看 `ChatRunApplicationService#rejectIfActiveRunExists(...)` 和 `ChatRunApplicationService#createRunning(...)`。
 - user message 已写入但 run 没创建：异常可能发生在 `prepareRunMessage(...)` 之后、`createRunning(...)` 之前，需要看日志和事务边界。
@@ -904,7 +903,7 @@ cancelActive(...)
 
 职责：
 
-- 只有 AgentRuntime 创建绑定，SubAgent 不创建绑定。
+- AgentRuntime 和 DomainAgent 都通过 RuntimeBinding 保存下游会话绑定。
 - 绑定维度包含 tenant、user、session、provider、leafMessageId。
 - 避免编辑历史问题后误复用当前最新路径的 Runtime session。
 - 从 Runtime event payload 中观察 `runtimeSessionId` 并保存。

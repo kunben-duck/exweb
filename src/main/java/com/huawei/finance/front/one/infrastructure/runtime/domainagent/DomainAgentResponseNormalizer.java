@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.domainagent;
+package com.huawei.finance.front.one.infrastructure.runtime.domainagent;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -419,8 +419,9 @@ public class DomainAgentResponseNormalizer {
                     metadataPayload("trace", Map.of("traceId", text(root, "traceId")))));
         }
         if (root.hasNonNull("sessionId")) {
+            String domainSessionId = text(root, "sessionId");
             events.add(RuntimeEvent.metadata(runId, sessionId, metadataPayload("domain_agent_session",
-                    Map.of("domainAgentSessionId", text(root, "sessionId")))));
+                    Map.of("domainAgentSessionId", domainSessionId, "runtimeSessionId", domainSessionId))));
         }
         if (root.hasNonNull("messageId")) {
             events.add(RuntimeEvent.metadata(runId, sessionId, metadataPayload("domain_agent_message",

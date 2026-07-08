@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.application.service.routing;
 
 import com.huawei.finance.front.one.application.config.RouteSignalProperties;
+import com.huawei.finance.front.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.finance.front.one.application.integration.intent.IntentService;
 import com.huawei.finance.front.one.application.integration.usecase.UseCaseLibraryClient;
 import com.huawei.finance.front.one.application.integration.usecase.UseCaseMatchRequest;
@@ -71,15 +72,32 @@ public class RouteSignalApplicationService {
                                           List<AttachmentRef> attachments, MemoryContext memory) {
         if (properties.useCaseLibraryEnabled()) {
             RouteTarget useCaseRoute = routingPolicy.decideFromUseCase(matchUseCase(user, session, command, attachments, memory));
-            if (useCaseRoute.type() == RouteType.SUB_AGENT) {
+            if (useCaseRoute.type() == RouteType.DOMAIN_AGENT) {
                 return RouteSignalResult.of(useCaseRoute);
             }
         }
 
         if (properties.intentEnabled()) {
             long started = System.nanoTime();
-            IntentDecision intent = recognizeIntent(command, memory, user);
+            IntentRecognitionResult result = recognizeIntent(command, memory, user);
             long latencyMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+            if (result.waitingClarification()) {
+                return RouteSignalResult.waitingIntentClarification(
+                        intentClarificationPayload(command, result),
+                        latencyMs,
+                        routingPolicy.intentConfidenceThreshold(),
+                        result.intentSessionId(),
+                        result.intentRequestId());
+            }
+            IntentDecision intent = result.decision();
+            if (intent != null && intent.complexity() == TaskComplexity.NEED_CLARIFICATION) {
+                return RouteSignalResult.waitingIntentClarification(
+                        intentClarificationPayload(command, result),
+                        latencyMs,
+                        routingPolicy.intentConfidenceThreshold(),
+                        result.intentSessionId(),
+                        result.intentRequestId());
+            }
             return RouteSignalResult.ofIntent(routingPolicy.decideFromIntent(command, memory, intent, user),
                     intent, latencyMs, routingPolicy.intentConfidenceThreshold());
         }
@@ -100,9 +118,9 @@ public class RouteSignalApplicationService {
         }
     }
 
-    private IntentDecision recognizeIntent(ChatCommand command, MemoryContext memory, UserContext user) {
+    private IntentRecognitionResult recognizeIntent(ChatCommand command, MemoryContext memory, UserContext user) {
         try {
-            return intentService.recognize(command, memory, user);
+            return intentService.recognizeForRouting(command, memory, user);
         } catch (RuntimeException ex) {
             log.warn("Intent route signal failed, degrading to Relay Runtime. tenantId={}, userId={}, sessionId={}, reason={}",
                     user.tenantId(), user.ownerUserId(), command.sessionId(), ex.getMessage());
@@ -110,7 +128,7 @@ public class RouteSignalApplicationService {
              * 保留一次真实调用失败的意图决策快照，方便异步记录服务统计降级样本。
              * RoutingPolicy 会把该低置信复杂任务继续路由到 AgentRuntime。
              */
-            return new IntentDecision(
+            return IntentRecognitionResult.degraded(new IntentDecision(
                     "finance.runtime.degraded",
                     "意图服务不可用，转入 AgentRuntime",
                     TaskComplexity.COMPLEX,
@@ -120,8 +138,23 @@ public class RouteSignalApplicationService {
                     Map.of(),
                     List.of(),
                     Map.of("source", "route-signal-intent-degraded", "reason", ex.getMessage() == null ? "" : ex.getMessage())
-            );
+            ));
         }
+    }
+
+    private Map<String, Object> intentClarificationPayload(ChatCommand command, IntentRecognitionResult result) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>(result.normalizedClarificationPayload());
+        payload.putIfAbsent("source", "intent-service");
+        payload.put("sourceType", "intent-clarification-request");
+        payload.put("waitingType", "INTENT_CLARIFICATION");
+        payload.put("originalQuery", command == null ? "" : command.message());
+        if (result.intentSessionId() != null && !result.intentSessionId().isBlank()) {
+            payload.put("intentSessionId", result.intentSessionId());
+        }
+        if (result.intentRequestId() != null && !result.intentRequestId().isBlank()) {
+            payload.put("intentRequestId", result.intentRequestId());
+        }
+        return Map.copyOf(payload);
     }
 
 }

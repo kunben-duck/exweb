@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.domainagent;
+package com.huawei.finance.front.one.infrastructure.runtime.domainagent;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

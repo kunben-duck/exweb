@@ -79,7 +79,7 @@ class FinEurekaIntentServiceTest {
         assertThat(decision.complexity()).isEqualTo(TaskComplexity.SIMPLE);
         assertThat(decision.confidence()).isEqualTo(0.95);
         assertThat(decision.simpleTask()).isTrue();
-        assertThat(decision.candidateSubAgentCode()).isEqualTo("FIN-SKL-88888888");
+        assertThat(decision.candidateDomainAgentId()).isEqualTo("FIN-SKL-88888888");
         assertThat(decision.slots()).containsEntry("resourceId", "FIN-SKL-88888888")
                 .containsEntry("source", "llm");
         assertThat(decision.raw()).containsKey("selectedItem")
@@ -106,7 +106,7 @@ class FinEurekaIntentServiceTest {
         IntentDecision decision = withServer(response).recognize(command(), MemoryContext.empty(), user());
 
         assertThat(decision.intentCode()).isEqualTo("high");
-        assertThat(decision.candidateSubAgentCode()).isEqualTo("HIGH");
+        assertThat(decision.candidateDomainAgentId()).isEqualTo("HIGH");
         assertThat(decision.confidence()).isEqualTo(0.91);
     }
 
@@ -120,7 +120,7 @@ class FinEurekaIntentServiceTest {
 
         assertThat(decision.complexity()).isEqualTo(TaskComplexity.COMPLEX);
         assertThat(decision.simpleTask()).isFalse();
-        assertThat(decision.candidateSubAgentCode()).isNull();
+        assertThat(decision.candidateDomainAgentId()).isNull();
         assertThat(decision.raw()).containsEntry("reason", "intent response code is not 200");
     }
 
@@ -144,7 +144,7 @@ class FinEurekaIntentServiceTest {
             IntentDecision decision = fixture.service().recognize(command(), MemoryContext.empty(), user());
 
             assertThat(decision.intentCode()).isEqualTo("high");
-            assertThat(decision.candidateSubAgentCode()).isEqualTo("HIGH");
+            assertThat(decision.candidateDomainAgentId()).isEqualTo("HIGH");
             assertThat(attempts.get()).isEqualTo(3);
         } finally {
             fixture.close();
@@ -200,7 +200,7 @@ class FinEurekaIntentServiceTest {
             IntentDecision decision = fixture.service().recognize(command(), MemoryContext.empty(), user());
 
             assertThat(decision.intentCode()).isEqualTo("finance.runtime.no_intent");
-            assertThat(decision.candidateSubAgentCode()).isNull();
+            assertThat(decision.candidateDomainAgentId()).isNull();
             assertThat(attempts.get()).isEqualTo(1);
         } finally {
             fixture.close();

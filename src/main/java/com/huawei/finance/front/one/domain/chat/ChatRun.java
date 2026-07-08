@@ -14,8 +14,8 @@ import java.util.Map;
  * @param userId 用户标识，来自服务端身份上下文。
  * @param sessionId 前端聊天会话标识。
  * @param status run 生命周期状态。
- * @param routeType 本轮路由类型，例如 SUB_AGENT、AGENT_RUNTIME、SYSTEM_RESPONSE。
- * @param agentCode 本轮命中的 SubAgent 编码，可为空。
+ * @param routeType 本轮路由类型，例如 DOMAIN_AGENT、AGENT_RUNTIME、SYSTEM_RESPONSE。
+ * @param agentCode 本轮命中的 DomainAgent 编码，可为空。
  * @param runtimeProvider 本轮使用的 AgentRuntime provider，可为空。
  * @param runtimeSessionId AgentRuntime 实际会话标识，可为空；Relay 会在 session-ready 后回填真实值。
  * @param runMode 本轮消息树写入模式。

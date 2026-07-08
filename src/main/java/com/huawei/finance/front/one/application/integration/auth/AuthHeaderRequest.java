@@ -9,7 +9,7 @@ package com.huawei.finance.front.one.application.integration.auth;
  * @param operationCode 目标操作编码，例如 send、recognize、query。
  * @param baseUrl 目标服务基础地址或完整 endpoint。
  * @param path 目标接口路径。
- * @param providerCode 目标业务 provider 编码，例如 welink 或具体 SubAgent 编码。
+ * @param providerCode 目标业务 provider 编码，例如 welink 或具体 DomainAgent 编码。
  */
 public record AuthHeaderRequest(
         String tenantId,

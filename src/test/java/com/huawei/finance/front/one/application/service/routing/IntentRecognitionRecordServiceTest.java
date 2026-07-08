@@ -35,7 +35,7 @@ class IntentRecognitionRecordServiceTest {
                 properties, repository, idGenerator, objectMapper, executor);
 
         service.recordAsync(snapshot(successfulIntent(0.95),
-                RouteTarget.subAgent("FIN-SKL-88888888", "intent-service", 0.95, "accepted"), 12L));
+                RouteTarget.domainAgent("FIN-SKL-88888888", "intent-service", 0.95, "accepted"), 12L));
 
         assertThat(executor.count).isZero();
         assertThat(repository.records).isEmpty();
@@ -48,7 +48,7 @@ class IntentRecognitionRecordServiceTest {
                 enabledProperties(), repository, idGenerator, objectMapper, Runnable::run);
 
         service.recordAsync(snapshot(successfulIntent(0.95),
-                RouteTarget.subAgent("FIN-SKL-88888888", "intent-service", 0.95, "accepted"), 37L));
+                RouteTarget.domainAgent("FIN-SKL-88888888", "intent-service", 0.95, "accepted"), 37L));
 
         assertThat(repository.records).hasSize(1);
         IntentRecognitionRecord record = repository.records.get(0);
@@ -69,7 +69,7 @@ class IntentRecognitionRecordServiceTest {
         assertThat(record.candidateCount()).isEqualTo(1);
         assertThat(record.confidenceThreshold()).isEqualTo(0.85);
         assertThat(record.accepted()).isTrue();
-        assertThat(record.routeType()).isEqualTo("SUB_AGENT");
+        assertThat(record.routeType()).isEqualTo("DOMAIN_AGENT");
         assertThat(record.routeAgentCode()).isEqualTo("FIN-SKL-88888888");
         assertThat(record.resultMessage()).contains("匹配成功");
         assertThat(record.itemsJson()).contains("FIN-SKL-88888888");
@@ -128,7 +128,7 @@ class IntentRecognitionRecordServiceTest {
                 }, idGenerator, objectMapper, Runnable::run);
 
         assertThatCode(() -> service.recordAsync(snapshot(successfulIntent(0.95),
-                RouteTarget.subAgent("FIN-SKL-88888888", "intent-service", 0.95, "accepted"), 12L)))
+                RouteTarget.domainAgent("FIN-SKL-88888888", "intent-service", 0.95, "accepted"), 12L)))
                 .doesNotThrowAnyException();
     }
 
@@ -141,7 +141,7 @@ class IntentRecognitionRecordServiceTest {
                 enabledProperties(), new CapturingRepository(), idGenerator, objectMapper, rejectingExecutor);
 
         assertThatCode(() -> service.recordAsync(snapshot(successfulIntent(0.95),
-                RouteTarget.subAgent("FIN-SKL-88888888", "intent-service", 0.95, "accepted"), 12L)))
+                RouteTarget.domainAgent("FIN-SKL-88888888", "intent-service", 0.95, "accepted"), 12L)))
                 .doesNotThrowAnyException();
     }
 

@@ -1,4 +1,4 @@
-package com.huawei.finance.front.one.infrastructure.domainagent;
+package com.huawei.finance.front.one.infrastructure.runtime.domainagent;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -16,8 +16,9 @@ import org.springframework.stereotype.Component;
 /**
  * DomainAgent chat wire DTO 映射器。
  *
- * <p>DomainAgent 的请求体由前端 {@code metadata} 完整决定，本 mapper 不再补默认字段或重组
- * sceneParam。ChatService 只在边界处校验 docList 中的 docId/url 必须来自已鉴权附件，避免伪造文档引用。</p>
+ * <p>DomainAgent 的请求体以前端 {@code metadata} 作为业务扩展，但 {@code skillId/query/sessionId}
+ * 是会话绑定正确性的保留字段，必须由服务端按当前绑定强制覆盖。ChatService 只在边界处校验
+ * docList 中的 docId/url 必须来自已鉴权附件，避免伪造文档引用。</p>
  */
 @Component
 public class DomainAgentChatRequestMapper {
@@ -32,7 +33,17 @@ public class DomainAgentChatRequestMapper {
     public Map<String, Object> toWireRequest(DomainAgentRequest request) {
         Map<String, Object> body = deepCopyMap(request.metadata());
         validateDocList(body, request.documents());
-        return body;
+        Map<String, Object> next = new LinkedHashMap<>(body);
+        next.put("skillId", request.domainAgentId());
+        next.put("query", request.query());
+        next.put("sessionId", sessionId(request));
+        return Collections.unmodifiableMap(next);
+    }
+
+    private String sessionId(DomainAgentRequest request) {
+        return request.runtimeSessionId() == null || request.runtimeSessionId().isBlank()
+                ? request.sessionId()
+                : request.runtimeSessionId();
     }
 
     private void validateDocList(Map<String, Object> body, List<UploadedDocument> documents) {

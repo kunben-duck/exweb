@@ -15,7 +15,7 @@ class FinanceExRequiredConfigurationValidatorTest {
             "financeex.redis.host=redis.internal",
             "financeex.websocket.allowed-origin-patterns=https://finex.example.com",
             "financeex.storage.provider=local",
-            "financeex.agent-runtime.provider=relay"
+            "financeex.agent-runtime.default-provider=relay"
     };
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
@@ -104,17 +104,6 @@ class FinanceExRequiredConfigurationValidatorTest {
     }
 
     @Test
-    void enabledSubAgentRequiresEndpoint() {
-        contextWith(
-                "financeex.agent-runtime.base-url=https://relay.example.com",
-                "financeex.sub-agent.agents.employee_reimbursement_agent.enabled=true"
-        ).run(context -> {
-            assertThat(context).hasFailed();
-            assertThat(context.getStartupFailure())
-                    .hasMessageContaining("financeex.sub-agent.agents.employee_reimbursement_agent.endpoint");
-        });
-    }
-
     private ApplicationContextRunner contextWith(String... properties) {
         return contextRunner.withPropertyValues(Stream.concat(
                 Stream.of(COMMON_REQUIRED),

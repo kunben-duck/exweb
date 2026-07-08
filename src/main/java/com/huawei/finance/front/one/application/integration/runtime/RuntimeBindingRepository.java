@@ -59,6 +59,13 @@ public interface RuntimeBindingRepository {
     }
 
     /**
+     * 查询某会话下所有 provider 的 active 绑定。
+     */
+    default List<RuntimeBinding> findActiveBySession(String tenantId, String userId, String sessionId) {
+        return List.of();
+    }
+
+    /**
      * 保存 Runtime 绑定。
      *
      * @param binding Runtime 绑定。

@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.application.service.routing;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.finance.front.one.application.config.RouteSignalProperties;
+import com.huawei.finance.front.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.finance.front.one.application.integration.intent.IntentService;
 import com.huawei.finance.front.one.application.integration.usecase.UseCaseLibraryClient;
 import com.huawei.finance.front.one.domain.auth.UserContext;
@@ -50,7 +51,7 @@ class RouteSignalApplicationServiceTest {
     }
 
     @Test
-    void enabledUseCaseHitRoutesToSubAgentAndSkipsIntent() {
+    void enabledUseCaseHitRoutesToDomainAgentAndSkipsIntent() {
         AtomicInteger intentCalls = new AtomicInteger();
         RouteSignalApplicationService service = service(true, true,
                 request -> new UseCaseMatchResult(true, 0.91, "employee_reimbursement_agent",
@@ -62,7 +63,7 @@ class RouteSignalApplicationServiceTest {
 
         RouteSignalResult result = service.routeInitial(user, session, command, List.of(), memory);
 
-        assertThat(result.route().type()).isEqualTo(RouteType.SUB_AGENT);
+        assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
         assertThat(result.route().selectedAgentCode()).isEqualTo("employee_reimbursement_agent");
         assertThat(result.intentDecision()).isNull();
         assertThat(intentCalls).hasValue(0);
@@ -72,7 +73,7 @@ class RouteSignalApplicationServiceTest {
     void useCaseMissAndIntentDisabledRoutesToRuntime() {
         RouteSignalApplicationService service = service(true, false,
                 request -> UseCaseMatchResult.notMatched("no case"),
-                (command, memory, user) -> simpleSubAgentIntent());
+                (command, memory, user) -> simpleDomainAgentIntent());
 
         RouteSignalResult result = service.routeInitial(user, session, command, List.of(), memory);
 
@@ -81,16 +82,47 @@ class RouteSignalApplicationServiceTest {
     }
 
     @Test
-    void intentEnabledSimpleTaskRoutesToSubAgentWhenUseCaseDisabled() {
+    void intentEnabledSimpleTaskRoutesToDomainAgentWhenUseCaseDisabled() {
         RouteSignalApplicationService service = service(false, true,
                 request -> UseCaseMatchResult.notMatched("disabled"),
-                (command, memory, user) -> simpleSubAgentIntent());
+                (command, memory, user) -> simpleDomainAgentIntent());
 
         RouteSignalResult result = service.routeInitial(user, session, command, List.of(), memory);
 
-        assertThat(result.route().type()).isEqualTo(RouteType.SUB_AGENT);
+        assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
         assertThat(result.route().selectedAgentCode()).isEqualTo("employee_reimbursement_agent");
         assertThat(result.intentDecision()).isNotNull();
+    }
+
+    @Test
+    void intentWaitingClarificationStopsAtWaitingRoute() {
+        IntentService intentService = new IntentService() {
+            @Override
+            public IntentDecision recognize(ChatCommand command, MemoryContext memory, UserContext user) {
+                throw new AssertionError("recognizeForRouting should be used");
+            }
+
+            @Override
+            public IntentRecognitionResult recognizeForRouting(ChatCommand command, MemoryContext memory, UserContext user) {
+                return IntentRecognitionResult.waitingClarification(Map.of(
+                        "question", "请选择报销类型",
+                        "options", List.of("差旅", "采购")
+                ), "intent-session-1", "intent-request-1");
+            }
+        };
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                intentService);
+
+        RouteSignalResult result = service.routeInitial(user, session, command, List.of(), memory);
+
+        assertThat(result.waitingIntentClarification()).isTrue();
+        assertThat(result.route().type()).isEqualTo(RouteType.SYSTEM_RESPONSE);
+        assertThat(result.intentClarificationPayload())
+                .containsEntry("sourceType", "intent-clarification-request")
+                .containsEntry("waitingType", "INTENT_CLARIFICATION")
+                .containsEntry("intentSessionId", "intent-session-1")
+                .containsEntry("intentRequestId", "intent-request-1");
     }
 
     @Test
@@ -119,7 +151,7 @@ class RouteSignalApplicationServiceTest {
                 new RouteSignalProperties(useCaseEnabled, intentEnabled));
     }
 
-    private IntentDecision simpleSubAgentIntent() {
+    private IntentDecision simpleDomainAgentIntent() {
         return new IntentDecision("employee.reimbursement", "员工报销", TaskComplexity.SIMPLE, 0.92,
                 true, "employee_reimbursement_agent", Map.of(), List.of(), Map.of());
     }

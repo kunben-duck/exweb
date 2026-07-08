@@ -76,7 +76,6 @@ public class IntegrationAuthProperties {
         defaults.put("welink-share", service("sgov"));
         defaults.put("intent-service", service("sgov"));
         defaults.put("use-case-library", service("sgov"));
-        defaults.put("sub-agent", service("sgov"));
         return defaults;
     }
 

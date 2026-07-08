@@ -6,7 +6,7 @@ import org.springframework.stereotype.Component;
 /**
  * 外部资源并发隔离配置。
  *
- * <p>这些限制是当前 JVM 的 bulkhead，用于保护 Relay Runtime、SubAgent 和对象存储等慢外部系统。
+ * <p>这些限制是当前 JVM 的 bulkhead，用于保护 Relay Runtime、DomainAgent 和对象存储等慢外部系统。
  * 集群总并发需要结合实例数、网关限流和下游容量共同规划。</p>
  */
 @Component
@@ -14,8 +14,8 @@ import org.springframework.stereotype.Component;
 public class ResourceIsolationProperties {
     /** 当前 JVM 允许并发调用 AgentRuntime 的最大数量。 */
     private int agentRuntimeMaxConcurrent = 64;
-    /** 当前 JVM 允许并发调用 SubAgent 的最大数量。 */
-    private int subAgentMaxConcurrent = 64;
+    /** 当前 JVM 允许并发调用 DomainAgent 的最大数量。 */
+    private int domainAgentMaxConcurrent = 64;
     /** 当前 JVM 允许并发执行对象存储上传/下载的最大数量。 */
     private int documentStorageMaxConcurrent = 32;
 
@@ -27,12 +27,12 @@ public class ResourceIsolationProperties {
         this.agentRuntimeMaxConcurrent = agentRuntimeMaxConcurrent;
     }
 
-    public int getSubAgentMaxConcurrent() {
-        return subAgentMaxConcurrent;
+    public int getDomainAgentMaxConcurrent() {
+        return domainAgentMaxConcurrent;
     }
 
-    public void setSubAgentMaxConcurrent(int subAgentMaxConcurrent) {
-        this.subAgentMaxConcurrent = subAgentMaxConcurrent;
+    public void setDomainAgentMaxConcurrent(int domainAgentMaxConcurrent) {
+        this.domainAgentMaxConcurrent = domainAgentMaxConcurrent;
     }
 
     public int getDocumentStorageMaxConcurrent() {
@@ -47,8 +47,8 @@ public class ResourceIsolationProperties {
         return Math.max(1, agentRuntimeMaxConcurrent);
     }
 
-    public int normalizedSubAgentMaxConcurrent() {
-        return Math.max(1, subAgentMaxConcurrent);
+    public int normalizedDomainAgentMaxConcurrent() {
+        return Math.max(1, domainAgentMaxConcurrent);
     }
 
     public int normalizedDocumentStorageMaxConcurrent() {

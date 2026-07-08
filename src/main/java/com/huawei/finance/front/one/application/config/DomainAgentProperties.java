@@ -1,6 +1,9 @@
 package com.huawei.finance.front.one.application.config;
 
 import java.time.Duration;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -27,6 +30,10 @@ public class DomainAgentProperties {
     private int maxPendingFrameBytes = 1024 * 1024;
     /** 大对象 fragment 输出的单片最大字节数，避免单个 WS/Event Resume 事件体过大。 */
     private int maxFragmentBytes = 8192;
+    /** DomainAgent 明确拒答 code 列表；命中后触发重新意图。 */
+    private List<String> refusalCodes = List.of("DOMAIN_REJECT", "DOMAIN_AGENT_REJECT", "OUT_OF_DOMAIN");
+    /** 同一 run 内拒答后最多重新路由次数。 */
+    private int maxReroutes = 3;
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
@@ -44,6 +51,10 @@ public class DomainAgentProperties {
     public void setMaxPendingFrameBytes(int maxPendingFrameBytes) { this.maxPendingFrameBytes = maxPendingFrameBytes; }
     public int getMaxFragmentBytes() { return maxFragmentBytes; }
     public void setMaxFragmentBytes(int maxFragmentBytes) { this.maxFragmentBytes = maxFragmentBytes; }
+    public List<String> getRefusalCodes() { return refusalCodes; }
+    public void setRefusalCodes(List<String> refusalCodes) { this.refusalCodes = refusalCodes; }
+    public int getMaxReroutes() { return maxReroutes; }
+    public void setMaxReroutes(int maxReroutes) { this.maxReroutes = maxReroutes; }
 
     public int normalizedMaxAttachments() {
         return maxAttachments <= 0 ? 10 : maxAttachments;
@@ -55,5 +66,22 @@ public class DomainAgentProperties {
 
     public int normalizedMaxFragmentBytes() {
         return maxFragmentBytes <= 0 ? 8192 : maxFragmentBytes;
+    }
+
+    public Set<String> normalizedRefusalCodes() {
+        Set<String> codes = new LinkedHashSet<>();
+        List<String> source = refusalCodes == null || refusalCodes.isEmpty()
+                ? List.of("DOMAIN_REJECT", "DOMAIN_AGENT_REJECT", "OUT_OF_DOMAIN")
+                : refusalCodes;
+        for (String code : source) {
+            if (code != null && !code.isBlank()) {
+                codes.add(code.trim().toUpperCase(java.util.Locale.ROOT));
+            }
+        }
+        return Set.copyOf(codes);
+    }
+
+    public int normalizedMaxReroutes() {
+        return Math.max(0, Math.min(maxReroutes, 10));
     }
 }

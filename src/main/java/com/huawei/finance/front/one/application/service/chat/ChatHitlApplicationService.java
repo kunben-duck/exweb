@@ -67,7 +67,7 @@ public class ChatHitlApplicationService {
                 context.runtimeBindingId(),
                 context.runtimeSessionId(),
                 approvalId(context.requestPayload()),
-                ChatHitlWaitingType.CLARIFICATION,
+                waitingType(context.requestPayload()),
                 ChatHitlStatus.WAITING,
                 context.requestPayload(),
                 Map.of(),
@@ -144,5 +144,17 @@ public class ChatHitlApplicationService {
     private String approvalId(Map<String, Object> payload) {
         Object value = payload == null ? null : payload.get("approval_id");
         return value == null || String.valueOf(value).isBlank() ? null : String.valueOf(value);
+    }
+
+    private ChatHitlWaitingType waitingType(Map<String, Object> payload) {
+        Object value = payload == null ? null : payload.get("waitingType");
+        if (value != null && !String.valueOf(value).isBlank()) {
+            try {
+                return ChatHitlWaitingType.valueOf(String.valueOf(value).trim());
+            } catch (IllegalArgumentException ignored) {
+                // 下游 payload 不是类型事实，未知值回落到 Agent 澄清，避免保存不可续接状态。
+            }
+        }
+        return ChatHitlWaitingType.AGENT_CLARIFICATION;
     }
 }

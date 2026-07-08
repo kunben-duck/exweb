@@ -23,24 +23,31 @@ import reactor.core.publisher.Mono;
  * <p>该类只依赖 AgentRuntime 防腐层接口，不关心底层实现是 Relay、HTTP、gRPC 还是其他企业内部
  * Runtime。普通问答通过 {@link AgentRuntime}，协议级澄清/审批续接通过
  * {@link AgentRuntimeInteraction}；两者分开可以避免把可选交互能力塞进 Runtime 主接口。当前上线版本
- * 通过配置默认装配 Relay adapter；简单任务如果命中 SubAgent 会一次性执行，其他复杂、低置信或未命中的
- * 请求都会进入当前 AgentRuntime，并通过 RuntimeBinding 保持多轮会话。</p>
+ * 通过配置默认装配 Relay adapter；没有命中 DomainAgent 绑定或路由的请求会进入当前 AgentRuntime，
+ * 并通过 RuntimeBinding 保持多轮会话。</p>
  */
 @Service
 public class AgentRuntimeExecutor {
-    private final AgentRuntime runtime;
-    private final AgentRuntimeInteraction runtimeInteraction;
+    private static final String DOMAIN_AGENT_PROVIDER = "domain-agent";
+
+    private final AgentRuntimeRegistry runtimeRegistry;
     private final WorkloadConcurrencyLimiter concurrencyLimiter;
 
     public AgentRuntimeExecutor(AgentRuntime runtime, WorkloadConcurrencyLimiter concurrencyLimiter) {
-        this(runtime, unsupportedInteraction(), concurrencyLimiter);
+        this(new AgentRuntimeRegistry(runtime == null ? List.of() : List.of(runtime),
+                        runtime == null ? "relay" : runtime.provider()),
+                concurrencyLimiter);
+    }
+
+    public AgentRuntimeExecutor(AgentRuntime runtime, AgentRuntimeInteraction runtimeInteraction,
+                                WorkloadConcurrencyLimiter concurrencyLimiter) {
+        this(runtimeInteraction == null ? runtime : new RuntimeWithInteraction(runtime, runtimeInteraction),
+                concurrencyLimiter);
     }
 
     @Autowired
-    public AgentRuntimeExecutor(AgentRuntime runtime, AgentRuntimeInteraction runtimeInteraction,
-                                WorkloadConcurrencyLimiter concurrencyLimiter) {
-        this.runtime = runtime;
-        this.runtimeInteraction = runtimeInteraction;
+    public AgentRuntimeExecutor(AgentRuntimeRegistry runtimeRegistry, WorkloadConcurrencyLimiter concurrencyLimiter) {
+        this.runtimeRegistry = runtimeRegistry;
         this.concurrencyLimiter = concurrencyLimiter;
     }
 
@@ -63,13 +70,17 @@ public class AgentRuntimeExecutor {
                 context.runtimeSessionMode(),
                 command.message(),
                 attachments,
+                context.documents(),
                 context.memory(),
                 context.intent(),
                 context.route(),
                 command.metadata(),
                 context.forwardHeaders()
         );
-        return concurrencyLimiter.protectAgentRuntime(runtime.query(request));
+        AgentRuntime runtime = context.binding() == null
+                ? runtimeRegistry.defaultRuntime()
+                : runtimeRegistry.runtime(context.binding().provider());
+        return protect(runtime.provider(), runtime.query(request));
     }
 
     public Flux<ChatEvent> continueWithUserResponse(RuntimeHitlResponseContext context) {
@@ -88,11 +99,11 @@ public class AgentRuntimeExecutor {
                 context.responsePayload(),
                 context.forwardHeaders()
         );
-        return concurrencyLimiter.protectAgentRuntime(runtimeInteraction.continueWithUserResponse(request));
+        return protect(context.runtimeProvider(), runtimeRegistry.continueWithUserResponse(request));
     }
 
     public boolean supportsWaitingUserResponse(String runtimeProvider) {
-        return runtimeInteraction.supportsWaitingUserResponse(runtimeProvider);
+        return runtimeRegistry.supportsWaitingUserResponse(runtimeProvider);
     }
 
     /**
@@ -109,19 +120,45 @@ public class AgentRuntimeExecutor {
                 run.id(),
                 run.runtimeSessionId(),
                 run.runtimeProvider(),
+                run.agentCode(),
                 run.cancelReason(),
                 Map.of("routeType", run.routeType() == null ? "" : run.routeType()),
                 forwardHeaders
         );
-        return runtime.cancel(request);
+        return runtimeRegistry.runtime(run.runtimeProvider()).cancel(request);
     }
 
-    private static AgentRuntimeInteraction unsupportedInteraction() {
-        return new AgentRuntimeInteraction() {
-            @Override
-            public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeHitlResponseRequest request) {
-                return Flux.error(new UnsupportedOperationException("当前 AgentRuntime 不支持交互续接"));
-            }
-        };
+    private Flux<ChatEvent> protect(String provider, Flux<ChatEvent> source) {
+        return DOMAIN_AGENT_PROVIDER.equalsIgnoreCase(provider)
+                ? concurrencyLimiter.protectDomainAgent(source)
+                : concurrencyLimiter.protectAgentRuntime(source);
+    }
+
+    private record RuntimeWithInteraction(AgentRuntime runtime, AgentRuntimeInteraction interaction)
+            implements AgentRuntime, AgentRuntimeInteraction {
+        @Override
+        public String provider() {
+            return runtime == null ? "relay" : runtime.provider();
+        }
+
+        @Override
+        public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+            return runtime == null ? Flux.empty() : runtime.query(request);
+        }
+
+        @Override
+        public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+            return runtime == null ? Mono.empty() : runtime.cancel(request);
+        }
+
+        @Override
+        public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeHitlResponseRequest request) {
+            return interaction.continueWithUserResponse(request);
+        }
+
+        @Override
+        public boolean supportsWaitingUserResponse(String runtimeProvider) {
+            return interaction.supportsWaitingUserResponse(runtimeProvider);
+        }
     }
 }

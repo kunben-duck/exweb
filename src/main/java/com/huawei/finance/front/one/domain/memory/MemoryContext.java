@@ -6,7 +6,7 @@ import java.util.List;
 /**
  * SuperAgent 单轮运行的可选记忆上下文快照。
  *
- * <p>当短期和长期记忆均关闭时，该对象应为空上下文。下游 RouteSignal、SubAgent 和 AgentRuntime
+ * <p>当短期和长期记忆均关闭时，该对象应为空上下文。下游 RouteSignal、DomainAgent 和 AgentRuntime
  * 必须把空上下文视为合法输入，不能因为没有记忆增强而阻断主链路。</p>
  *
  * @param recentMessages 短期记忆装配的最近问答消息列表。

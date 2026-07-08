@@ -151,6 +151,22 @@ class ChatRunApplicationServiceTest {
     }
 
     @Test
+    void findOwnedRunsByIdsReturnsOnlyCurrentUsersRuns() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        ChatRunApplicationService service = service(repository, new InMemoryRunCache());
+        repository.save(run("run1", "user1", "relay"));
+        repository.save(run("run2", "user1", "domain-agent"));
+        repository.save(run("run3", "other", "relay"));
+
+        Map<String, ChatRun> runs = service.findOwnedRunsByIds(user(),
+                java.util.Arrays.asList("run1", "run2", "run3", "run1", "", null));
+
+        assertThat(runs).containsOnlyKeys("run1", "run2");
+        assertThat(runs.get("run1").runtimeProvider()).isEqualTo("relay");
+        assertThat(runs.get("run2").runtimeProvider()).isEqualTo("domain-agent");
+    }
+
+    @Test
     void createRunningRejectsWhenSessionAlreadyHasActiveRun() {
         InMemoryRunRepository repository = new InMemoryRunRepository();
         InMemoryRunCache cache = new InMemoryRunCache();
@@ -209,6 +225,13 @@ class ChatRunApplicationServiceTest {
         return new ChatRun("run1", "tenant1", "user1", "session1", ChatRunStatus.RUNNING,
                 "AGENT_RUNTIME", null, "relay", null, null, null, null,
                 now, null, Map.of(), now, now);
+    }
+
+    private ChatRun run(String runId, String userId, String runtimeProvider) {
+        Instant now = Instant.now();
+        return new ChatRun(runId, "tenant1", userId, "session1", ChatRunStatus.COMPLETED,
+                "AGENT_RUNTIME", null, runtimeProvider, null, null, null, null,
+                now, now, Map.of(), now, now);
     }
 
     private static class InMemoryRunRepository implements ChatRunRepository {

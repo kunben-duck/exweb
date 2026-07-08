@@ -8,6 +8,8 @@ import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.dao.DuplicateKeyException;
@@ -77,6 +79,16 @@ public class MyBatisChatRunRepository implements ChatRunRepository {
     @Override
     public Optional<ChatRun> findByTenantIdAndUserIdAndId(String tenantId, String userId, String runId) {
         return Optional.ofNullable(mapper.findByOwnerAndId(tenantId, userId, runId)).map(this::toDomain);
+    }
+
+    @Override
+    public List<ChatRun> findByTenantIdAndUserIdAndIds(String tenantId, String userId, Collection<String> runIds) {
+        if (runIds == null || runIds.isEmpty()) {
+            return List.of();
+        }
+        return mapper.findByOwnerAndIds(tenantId, userId, runIds).stream()
+                .map(this::toDomain)
+                .toList();
     }
 
     @Override

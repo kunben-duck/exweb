@@ -115,6 +115,21 @@
     </select>
 
     <!--
+      按租户、用户和 run ID 集合批量查询 run，供历史消息接口装配 assistantSource 使用。
+      入参: tenantId/userId 为归属边界，runIds 为待查询 run 主键集合；调用方保证集合非空。
+    -->
+    <select id="findByOwnerAndIds" resultMap="chatRunResultMap">
+        SELECT <include refid="chatRunColumns"/>
+        FROM fin_ex_chat_run_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id IN
+          <foreach collection="runIds" item="runId" open="(" separator="," close=")">
+              #{runId}
+          </foreach>
+    </select>
+
+    <!--
       查询同一会话当前 RUNNING/CANCELLING run，用于单会话 active run 保护和恢复状态展示。
       入参: tenantId/userId/sessionId 为会话归属边界。
     -->

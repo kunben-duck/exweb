@@ -19,6 +19,7 @@ import java.util.List;
  * @param content 完整消息正文。
  * @param tokenCount 消息 token 数估算值，可为空。
  * @param runId 产生该消息的 runId。
+ * @param assistantSource assistant 消息来源，例如 relay 或 domain-agent；user 消息或无法识别时为空。
  * @param originType 消息来源类型，例如 NORMAL 或 BRANCH_SNAPSHOT。
  * @param locked 是否只读。
  * @param sourceSessionId 分支快照来源会话。
@@ -42,6 +43,7 @@ public record ChatMessageDto(
         String content,
         Integer tokenCount,
         String runId,
+        String assistantSource,
         String originType,
         boolean locked,
         String sourceSessionId,

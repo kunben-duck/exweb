@@ -1,5 +1,7 @@
 package com.huawei.finance.front.one.infrastructure.persistence;
 
+import java.util.Collection;
+import java.util.List;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
@@ -43,6 +45,18 @@ public interface ChatRunMapper {
     ChatRunRow findByOwnerAndId(@Param("tenantId") String tenantId,
                                 @Param("userId") String userId,
                                 @Param("runId") String runId);
+
+    /**
+     * 按 owner 边界批量查询 run，供历史消息等只读装配批量补充 run 派生字段。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param runIds run 主键集合。
+     * @return 当前 owner 下存在的 run 行。
+     */
+    List<ChatRunRow> findByOwnerAndIds(@Param("tenantId") String tenantId,
+                                       @Param("userId") String userId,
+                                       @Param("runIds") Collection<String> runIds);
 
     /**
      * 查询指定会话当前仍处于运行中或取消中的 run。

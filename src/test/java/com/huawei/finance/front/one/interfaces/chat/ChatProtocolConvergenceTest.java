@@ -17,6 +17,7 @@ import com.huawei.finance.front.one.domain.chat.ChatRunStopResult;
 import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatAttachmentDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatEventDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessageDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatRunRequest;
 import java.time.Instant;
 import java.util.Arrays;
@@ -109,6 +110,15 @@ class ChatProtocolConvergenceTest {
                 .contains("/sessions/{sessionId}/events/resume", "/runs/{runId}/events/resume");
         assertThat(getMappings)
                 .noneMatch(path -> path.contains("/events/" + "sse"));
+    }
+
+    @Test
+    void historyMessageDtoExposesAssistantSourceAfterRunId() {
+        List<String> components = Arrays.stream(ChatMessageDto.class.getRecordComponents())
+                .map(component -> component.getName())
+                .toList();
+
+        assertThat(components).containsSubsequence("runId", "assistantSource", "originType");
     }
 
     @Test

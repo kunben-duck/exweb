@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.interfaces.chat;
 import com.huawei.finance.front.one.application.facade.ChatSessionFacade;
 import com.huawei.finance.front.one.application.integration.identity.AuthContextProvider;
 import com.huawei.finance.front.one.application.service.chat.ChatFeedbackApplicationService;
+import com.huawei.finance.front.one.application.service.chat.ChatRunApplicationService;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
@@ -10,6 +11,7 @@ import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessageFeedback;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
+import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
@@ -36,6 +38,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -56,18 +60,24 @@ import reactor.core.scheduler.Schedulers;
 @RestController
 @RequestMapping("/api/v1/ex/chat/sessions")
 public class ChatSessionController {
+    private static final Logger log = LoggerFactory.getLogger(ChatSessionController.class);
+    private static final String ASSISTANT_ROLE = "assistant";
+
     private final ChatSessionFacade facade;
     private final ChatFeedbackApplicationService feedbackService;
+    private final ChatRunApplicationService chatRunService;
     private final AuthContextProvider auth;
     private final PermissionChecker permissionChecker;
     private final ChatMessageVersionViewAssembler versionViewAssembler;
 
     public ChatSessionController(ChatSessionFacade facade, ChatFeedbackApplicationService feedbackService,
+                                 ChatRunApplicationService chatRunService,
                                  AuthContextProvider auth,
                                  PermissionChecker permissionChecker,
                                  ChatMessageVersionViewAssembler versionViewAssembler) {
         this.facade = facade;
         this.feedbackService = feedbackService;
+        this.chatRunService = chatRunService;
         this.auth = auth;
         this.permissionChecker = permissionChecker;
         this.versionViewAssembler = versionViewAssembler;
@@ -364,7 +374,9 @@ public class ChatSessionController {
     }
 
     private ChatMessageDto toMessageDto(ChatMessage message, ChatMessageFeedback feedback,
+                                        String assistantSource,
                                         ChatMessageVersionInfoDto versionInfo) {
+        String resolvedAssistantSource = ASSISTANT_ROLE.equals(message.role()) ? assistantSource : null;
         return new ChatMessageDto(
                 message.id(),
                 message.sessionId(),
@@ -376,6 +388,7 @@ public class ChatSessionController {
                 message.content(),
                 message.tokenCount(),
                 message.runId(),
+                resolvedAssistantSource,
                 message.originType(),
                 message.locked(),
                 message.sourceSessionId(),
@@ -445,6 +458,7 @@ public class ChatSessionController {
         Map<String, ChatMessageFeedback> feedbacks = feedbackService.findActiveByMessages(user, session.id(), orderedMessages);
         Map<String, ChatMessageVersionInfoDto> versionInfos =
                 versionViewAssembler.assemble(orderedMessages, orderedMessages);
+        Map<String, String> assistantSources = assistantSources(user, orderedMessages);
         Map<String, List<String>> childrenByParent = orderedMessages.stream()
                 .filter(message -> message.parentMessageId() != null && messageIds.contains(message.parentMessageId()))
                 .collect(Collectors.groupingBy(ChatMessage::parentMessageId, LinkedHashMap::new,
@@ -453,7 +467,8 @@ public class ChatSessionController {
         for (ChatMessage message : orderedMessages) {
             mapping.put(message.id(), new ChatMessageTreeNodeDto(
                     message.id(),
-                    toMessageDto(message, feedbacks.get(message.id()), versionInfos.get(message.id())),
+                    toMessageDto(message, feedbacks.get(message.id()), assistantSources.get(message.runId()),
+                            versionInfos.get(message.id())),
                     message.parentMessageId(),
                     childrenByParent.getOrDefault(message.id(), List.of())
             ));
@@ -472,9 +487,36 @@ public class ChatSessionController {
     private List<ChatMessageDto> toMessageDtos(UserContext user, String sessionId, List<ChatMessage> messages,
                                                Map<String, ChatMessageVersionInfoDto> versionInfos) {
         Map<String, ChatMessageFeedback> feedbacks = feedbackService.findActiveByMessages(user, sessionId, messages);
+        Map<String, String> assistantSources = assistantSources(user, messages);
         return messages.stream()
-                .map(message -> toMessageDto(message, feedbacks.get(message.id()), versionInfos.get(message.id())))
+                .map(message -> toMessageDto(message, feedbacks.get(message.id()), assistantSources.get(message.runId()),
+                        versionInfos.get(message.id())))
                 .toList();
+    }
+
+    private Map<String, String> assistantSources(UserContext user, List<ChatMessage> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return Map.of();
+        }
+        List<String> runIds = messages.stream()
+                .filter(message -> ASSISTANT_ROLE.equals(message.role()))
+                .map(ChatMessage::runId)
+                .filter(runId -> runId != null && !runId.isBlank())
+                .distinct()
+                .toList();
+        if (runIds.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            return chatRunService.findOwnedRunsByIds(user, runIds).values().stream()
+                    .filter(run -> run.runtimeProvider() != null && !run.runtimeProvider().isBlank())
+                    .collect(Collectors.toMap(ChatRun::id, ChatRun::runtimeProvider, (left, right) -> left,
+                            LinkedHashMap::new));
+        } catch (RuntimeException ex) {
+            log.warn("历史消息 assistantSource 查询失败，将按空来源返回。runCount={}, reason={}",
+                    runIds.size(), ex.getMessage());
+            return Map.of();
+        }
     }
 
     private MessageFeedbackDto toFeedbackDto(ChatMessageFeedback feedback) {

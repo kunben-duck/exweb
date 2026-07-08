@@ -20,6 +20,9 @@ import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.beans.factory.ObjectProvider;
@@ -238,6 +241,27 @@ public class ChatRunApplicationService {
         }
         return repository.findByTenantIdAndUserIdAndId(user.tenantId(), user.ownerUserId(), runId)
                 .orElseThrow(() -> new SecurityException("run 不存在或不属于当前用户"));
+    }
+
+    /**
+     * 批量查询当前用户拥有的 run。该方法用于历史消息装配等只读路径，避免 N+1 查询。
+     */
+    public Map<String, ChatRun> findOwnedRunsByIds(UserContext user, Collection<String> runIds) {
+        permissionChecker.checkChatPermission(user);
+        if (runIds == null || runIds.isEmpty()) {
+            return Map.of();
+        }
+        List<String> normalizedRunIds = runIds.stream()
+                .filter(runId -> runId != null && !runId.isBlank())
+                .distinct()
+                .toList();
+        if (normalizedRunIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, ChatRun> runs = new LinkedHashMap<>();
+        repository.findByTenantIdAndUserIdAndIds(user.tenantId(), user.ownerUserId(), normalizedRunIds)
+                .forEach(run -> runs.putIfAbsent(run.id(), run));
+        return Map.copyOf(runs);
     }
 
     /**

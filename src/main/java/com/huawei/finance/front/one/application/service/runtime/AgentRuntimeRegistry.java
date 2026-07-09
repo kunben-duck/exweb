@@ -1,7 +1,7 @@
 package com.huawei.finance.front.one.application.service.runtime;
 
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
-import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeHitlResponseRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteraction;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import java.util.LinkedHashMap;
@@ -56,7 +56,7 @@ public class AgentRuntimeRegistry {
                 && interaction.supportsWaitingUserResponse(runtime.provider());
     }
 
-    public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeHitlResponseRequest request) {
+    public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeInteractionResponseRequest request) {
         AgentRuntime runtime = runtime(request == null ? null : request.provider());
         if (runtime instanceof AgentRuntimeInteraction interaction
                 && interaction.supportsWaitingUserResponse(runtime.provider())) {

@@ -3,12 +3,12 @@ package com.huawei.finance.front.one.infrastructure.persistence;
 import java.time.Instant;
 
 /**
- * HITL claim 更新参数。
+ * Interaction claim 更新参数。
  */
-public class ChatHitlClaimRow {
+public class ChatInteractionClaimRow {
     private String tenantId;
     private String userId;
-    private String hitlRequestId;
+    private String interactionId;
     private String continueRunId;
     private String responsePayloadJson;
     private Instant now;
@@ -17,8 +17,8 @@ public class ChatHitlClaimRow {
     public void setTenantId(String tenantId) { this.tenantId = tenantId; }
     public String getUserId() { return userId; }
     public void setUserId(String userId) { this.userId = userId; }
-    public String getHitlRequestId() { return hitlRequestId; }
-    public void setHitlRequestId(String hitlRequestId) { this.hitlRequestId = hitlRequestId; }
+    public String getInteractionId() { return interactionId; }
+    public void setInteractionId(String interactionId) { this.interactionId = interactionId; }
     public String getContinueRunId() { return continueRunId; }
     public void setContinueRunId(String continueRunId) { this.continueRunId = continueRunId; }
     public String getResponsePayloadJson() { return responsePayloadJson; }

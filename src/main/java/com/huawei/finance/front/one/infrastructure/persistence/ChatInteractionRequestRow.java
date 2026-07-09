@@ -3,9 +3,9 @@ package com.huawei.finance.front.one.infrastructure.persistence;
 import java.time.Instant;
 
 /**
- * fin_ex_chat_hitl_request_t 表的 MyBatis 行模型。
+ * fin_ex_chat_interaction_request_t 表的 MyBatis 行模型。
  */
-public class ChatHitlRequestRow {
+public class ChatInteractionRequestRow {
     private String id;
     private String tenantId;
     private String userId;
@@ -18,7 +18,7 @@ public class ChatHitlRequestRow {
     private String runtimeBindingId;
     private String runtimeSessionId;
     private String approvalId;
-    private String waitingType;
+    private String interactionType;
     private String status;
     private String requestPayloadJson;
     private String responsePayloadJson;
@@ -52,8 +52,8 @@ public class ChatHitlRequestRow {
     public void setRuntimeSessionId(String runtimeSessionId) { this.runtimeSessionId = runtimeSessionId; }
     public String getApprovalId() { return approvalId; }
     public void setApprovalId(String approvalId) { this.approvalId = approvalId; }
-    public String getWaitingType() { return waitingType; }
-    public void setWaitingType(String waitingType) { this.waitingType = waitingType; }
+    public String getInteractionType() { return interactionType; }
+    public void setInteractionType(String interactionType) { this.interactionType = interactionType; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
     public String getRequestPayloadJson() { return requestPayloadJson; }

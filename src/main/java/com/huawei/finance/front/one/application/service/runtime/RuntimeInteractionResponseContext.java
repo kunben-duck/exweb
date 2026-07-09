@@ -7,19 +7,19 @@ import java.util.Map;
 /**
  * Runtime 等待用户输入后的续接上下文。
  */
-public record RuntimeHitlResponseContext(
+public record RuntimeInteractionResponseContext(
         UserContext user,
         String sessionId,
         String runId,
         String runtimeProvider,
         String runtimeSessionId,
-        String hitlRequestId,
-        String waitingType,
+        String interactionId,
+        String interactionType,
         String approvalId,
         Map<String, Object> responsePayload,
         RuntimeForwardHeaders forwardHeaders
 ) {
-    public RuntimeHitlResponseContext {
+    public RuntimeInteractionResponseContext {
         responsePayload = responsePayload == null ? Map.of() : Map.copyOf(responsePayload);
         forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
     }

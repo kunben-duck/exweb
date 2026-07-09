@@ -26,8 +26,8 @@ public interface AgentRuntimeInteraction {
     /**
      * 向当前装配的 AgentRuntime 提交等待用户输入后的续接响应。
      *
-     * @param request Runtime HITL 续接请求。
+     * @param request Runtime Interaction 续接请求。
      * @return 标准聊天事件流。
      */
-    Flux<ChatEvent> continueWithUserResponse(AgentRuntimeHitlResponseRequest request);
+    Flux<ChatEvent> continueWithUserResponse(AgentRuntimeInteractionResponseRequest request);
 }

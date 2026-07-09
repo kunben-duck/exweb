@@ -353,7 +353,7 @@ public class RouteSignalApplicationService {
         Map<String, Object> payload = new java.util.LinkedHashMap<>(result.normalizedClarificationPayload());
         payload.putIfAbsent("source", IntentAgentRuntime.PROVIDER);
         payload.put("sourceType", "intent-clarification-request");
-        payload.put("waitingType", "INTENT_CLARIFICATION");
+        payload.put("interactionType", "INTENT_CLARIFICATION");
         payload.put("originalQuery", blankToDefault(originalIntentQuery(command), ""));
         payload.put("clarifyTriggerQuery", command == null ? "" : blankToDefault(command.message(), ""));
         List<Map<String, Object>> clarificationHistory = inlineClarificationHistory(command);

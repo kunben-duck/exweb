@@ -6,7 +6,7 @@ import com.huawei.finance.front.one.application.integration.agent.RuntimeSession
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
-import com.huawei.finance.front.one.domain.chat.ChatHitlRequest;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionRequest;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBindingStatus;
 import java.time.Duration;
@@ -214,16 +214,16 @@ public class RuntimeBindingApplicationService {
     }
 
     /**
-     * HITL 续接必须回到创建等待态时的真实 RuntimeBinding。
+     * Interaction 续接必须回到创建等待态时的真实 RuntimeBinding。
      *
      * <p>这里不创建临时 binding，避免产生不会过期的 active 绑定；同时刷新本轮 runId、TTL、
      * leaf 和 runtimeSessionId，让续接完成后的下一轮提问仍能命中同一个 Relay 会话。</p>
      */
-    public RuntimeBinding resumeForHitl(ChatHitlRequest request, String runId) {
+    public RuntimeBinding resumeForInteraction(ChatInteractionRequest request, String runId) {
         if (request == null) {
-            throw new IllegalArgumentException("HITL 请求不能为空");
+            throw new IllegalArgumentException("Interaction 请求不能为空");
         }
-        RuntimeBinding binding = loadHitlBinding(request);
+        RuntimeBinding binding = loadInteractionBinding(request);
         RuntimeBinding next = withRuntimeSessionId(binding, request.runtimeSessionId());
         return touchAndMoveToLeaf(next, runId, request.assistantMessageId());
     }
@@ -232,7 +232,7 @@ public class RuntimeBindingApplicationService {
      * 刷新绑定活跃窗口，并移动到给定 leaf。
      *
      * <p>与 {@link #moveToLeaf(RuntimeBinding, String)} 不同，本方法即使 leaf 没变也会保存，
-     * 因为 HITL 续接完成时需要刷新 TTL 和 lastRunId。</p>
+     * 因为 Interaction 续接完成时需要刷新 TTL 和 lastRunId。</p>
      */
     public RuntimeBinding touchAndMoveToLeaf(RuntimeBinding binding, String runId, String leafMessageId) {
         if (binding == null) {
@@ -306,16 +306,16 @@ public class RuntimeBindingApplicationService {
         return binding;
     }
 
-    private RuntimeBinding loadHitlBinding(ChatHitlRequest request) {
+    private RuntimeBinding loadInteractionBinding(ChatInteractionRequest request) {
         String bindingId = request.runtimeBindingId();
         if (bindingId == null || bindingId.isBlank()) {
-            throw new IllegalStateException("HITL 请求缺少 RuntimeBinding: " + request.id());
+            throw new IllegalStateException("Interaction 请求缺少 RuntimeBinding: " + request.id());
         }
         return repository.findById(bindingId)
                 .filter(binding -> request.tenantId().equals(binding.tenantId()))
                 .filter(binding -> request.userId().equals(binding.userId()))
                 .filter(binding -> request.sessionId().equals(binding.chatSessionId()))
-                .orElseThrow(() -> new IllegalStateException("HITL RuntimeBinding 不存在或归属不匹配: " + bindingId));
+                .orElseThrow(() -> new IllegalStateException("Interaction RuntimeBinding 不存在或归属不匹配: " + bindingId));
     }
 
     private RuntimeBinding withRuntimeSessionId(RuntimeBinding binding, String runtimeSessionId) {

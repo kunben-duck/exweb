@@ -3,7 +3,7 @@ package com.huawei.finance.front.one.domain.chat;
 /**
  * 等待用户输入请求的生命周期状态。
  */
-public enum ChatHitlStatus {
+public enum ChatInteractionStatus {
     /** 已向前端发出澄清/审批请求，等待用户提交。 */
     WAITING,
     /** 用户已提交，后端正在把结果续接到 Runtime。 */

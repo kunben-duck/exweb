@@ -4,7 +4,7 @@ import com.huawei.finance.front.one.application.integration.conversation.ChatRun
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
-import com.huawei.finance.front.one.domain.chat.ChatHitlRequest;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionRequest;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus;
@@ -24,7 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>本服务只做本地事实源写入，不发布 Redis/WebSocket，也不订阅 Reactor 流。这样
  * {@code run.waiting_user} 这类前端依赖多张表的终态可以在短事务内一次提交成功，避免出现
- * event 已可恢复但 HITL 请求或 assistant part 缺失的半截状态。</p>
+ * event 已可恢复但 Interaction 请求或 assistant part 缺失的半截状态。</p>
  */
 @Service
 public class ChatRunTerminalCommitService {
@@ -35,7 +35,7 @@ public class ChatRunTerminalCommitService {
     private final ChatRunRepository runRepository;
     private final ChatRunLeaseApplicationService runLeaseService;
     private final RuntimeBindingRepository runtimeBindingRepository;
-    private final ChatHitlApplicationService chatHitlService;
+    private final ChatInteractionApplicationService chatInteractionService;
     private final Duration runtimeBindingTtl;
 
     public ChatRunTerminalCommitService(ChatStreamApplicationService chatStreamService,
@@ -43,14 +43,14 @@ public class ChatRunTerminalCommitService {
                                         ChatRunRepository runRepository,
                                         ChatRunLeaseApplicationService runLeaseService,
                                         RuntimeBindingRepository runtimeBindingRepository,
-                                        ChatHitlApplicationService chatHitlService,
+                                        ChatInteractionApplicationService chatInteractionService,
                                         @Value("${financeex.runtime-binding.ttl:3d}") Duration runtimeBindingTtl) {
         this.chatStreamService = chatStreamService;
         this.sessionService = sessionService;
         this.runRepository = runRepository;
         this.runLeaseService = runLeaseService;
         this.runtimeBindingRepository = runtimeBindingRepository;
-        this.chatHitlService = chatHitlService;
+        this.chatInteractionService = chatInteractionService;
         this.runtimeBindingTtl = runtimeBindingTtl == null ? Duration.ofDays(3) : runtimeBindingTtl;
     }
 
@@ -61,8 +61,8 @@ public class ChatRunTerminalCommitService {
         ChatMessage savedAssistant = saveCompletedAssistant(command);
         bindAssistantMessage(stored.runId(), savedAssistant.id());
         RuntimeBinding binding = refreshBinding(command.context(), savedAssistant.id());
-        if (command.context().continuationHitlRequest() != null) {
-            chatHitlService.markAnswered(command.context().continuationHitlRequest());
+        if (command.context().continuationInteractionRequest() != null) {
+            chatInteractionService.markAnswered(command.context().continuationInteractionRequest());
         }
         observeRun(stored);
         markExecutionTerminal(stored);
@@ -88,10 +88,10 @@ public class ChatRunTerminalCommitService {
         ));
         bindAssistantMessage(stored.runId(), savedAssistant.id());
         RuntimeBinding binding = refreshBinding(command.context(), savedAssistant.id());
-        if (command.context().continuationHitlRequest() != null) {
-            chatHitlService.markAnswered(command.context().continuationHitlRequest());
+        if (command.context().continuationInteractionRequest() != null) {
+            chatInteractionService.markAnswered(command.context().continuationInteractionRequest());
         }
-        chatHitlService.saveWaiting(command.waitingRequest());
+        chatInteractionService.saveInteraction(command.waitingRequest());
         observeRun(stored);
         markExecutionTerminal(stored);
         binding = observeRuntimeBindingEvent(binding, stored);
@@ -103,9 +103,9 @@ public class ChatRunTerminalCommitService {
         ChatEvent stored = append(command.event(), command.context());
         command.context().assistant().observe(stored);
         observeRun(stored);
-        if (command.context().continuationHitlRequest() != null
+        if (command.context().continuationInteractionRequest() != null
                 && ("run.failed".equals(stored.type()) || "run.cancelled".equals(stored.type()))) {
-            chatHitlService.markWaiting(command.context().continuationHitlRequest());
+            chatInteractionService.markWaiting(command.context().continuationInteractionRequest());
         }
         markExecutionTerminal(stored);
         RuntimeBinding binding = observeRuntimeBindingEvent(command.context().bindingRef().get(), stored);
@@ -119,7 +119,7 @@ public class ChatRunTerminalCommitService {
     private ChatMessage saveCompletedAssistant(CompletedCommitCommand command) {
         TerminalCommitContext context = command.context();
         UserContext user = context.user();
-        if (context.continuationHitlRequest() == null) {
+        if (context.continuationInteractionRequest() == null) {
             return sessionService.saveAssistantMessage(new AssistantMessageSaveCommand(
                     user.tenantId(),
                     user.ownerUserId(),
@@ -137,7 +137,7 @@ public class ChatRunTerminalCommitService {
                 user.tenantId(),
                 user.ownerUserId(),
                 context.session(),
-                context.continuationHitlRequest().assistantMessageId(),
+                context.continuationInteractionRequest().assistantMessageId(),
                 context.assistant().finalContent(),
                 context.runId(),
                 context.assistant().parts(),
@@ -232,7 +232,7 @@ public class ChatRunTerminalCommitService {
             AssistantAssembly assistant,
             String runId,
             RunExecutionClaim executionClaim,
-            ChatHitlRequest continuationHitlRequest
+            ChatInteractionRequest continuationInteractionRequest
     ) {
     }
 
@@ -250,7 +250,7 @@ public class ChatRunTerminalCommitService {
             ChatEvent event,
             TerminalCommitContext context,
             MessageTarget target,
-            ChatHitlRequest waitingRequest
+            ChatInteractionRequest waitingRequest
     ) {
     }
 

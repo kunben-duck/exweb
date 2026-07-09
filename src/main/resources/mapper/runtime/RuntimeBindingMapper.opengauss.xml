@@ -55,7 +55,7 @@
     </update>
 
     <!--
-      按 RuntimeBinding 主键读取绑定，HITL 续接通过它回到创建等待态时的真实绑定。
+      按 RuntimeBinding 主键读取绑定，Interaction 续接通过它回到创建等待态时的真实绑定。
       入参: bindingId 为 RuntimeBinding 主键。
     -->
     <select id="findById" resultMap="runtimeBindingResultMap">

@@ -166,7 +166,7 @@ class RouteSignalApplicationServiceTest {
         assertThat(result.intentClarificationPayload())
                 .containsEntry("source", "intent-agent")
                 .containsEntry("sourceType", "intent-clarification-request")
-                .containsEntry("waitingType", "INTENT_CLARIFICATION")
+                .containsEntry("interactionType", "INTENT_CLARIFICATION")
                 .containsEntry("intentSessionId", "intent-session-1")
                 .containsEntry("intentRequestId", "intent-request-1");
     }

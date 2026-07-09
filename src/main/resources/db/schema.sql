@@ -198,7 +198,7 @@ CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_run_owner_session_status_updated_at
 CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_run_session_last_seq
     ON fin_ex_chat_run_t(session_id, last_seq);
 
-CREATE TABLE IF NOT EXISTS fin_ex_chat_hitl_request_t (
+CREATE TABLE IF NOT EXISTS fin_ex_chat_interaction_request_t (
     id VARCHAR(64) PRIMARY KEY,
     tenant_id VARCHAR(64) NOT NULL,
     user_id VARCHAR(64) NOT NULL,
@@ -211,7 +211,7 @@ CREATE TABLE IF NOT EXISTS fin_ex_chat_hitl_request_t (
     runtime_binding_id VARCHAR(64),
     runtime_session_id VARCHAR(128),
     approval_id VARCHAR(128),
-    waiting_type VARCHAR(64) NOT NULL,
+    interaction_type VARCHAR(64) NOT NULL,
     status VARCHAR(32) NOT NULL,
     request_payload_json TEXT,
     response_payload_json TEXT,
@@ -222,14 +222,14 @@ CREATE TABLE IF NOT EXISTS fin_ex_chat_hitl_request_t (
     updated_at TIMESTAMPTZ NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_hitl_owner_session_status
-    ON fin_ex_chat_hitl_request_t(tenant_id, user_id, session_id, status, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_hitl_source_run
-    ON fin_ex_chat_hitl_request_t(source_run_id);
-CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_hitl_continue_run
-    ON fin_ex_chat_hitl_request_t(continue_run_id);
-CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_hitl_approval
-    ON fin_ex_chat_hitl_request_t(runtime_provider, runtime_session_id, approval_id);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_interaction_owner_session_status
+    ON fin_ex_chat_interaction_request_t(tenant_id, user_id, session_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_interaction_source_run
+    ON fin_ex_chat_interaction_request_t(source_run_id);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_interaction_continue_run
+    ON fin_ex_chat_interaction_request_t(continue_run_id);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_interaction_approval
+    ON fin_ex_chat_interaction_request_t(runtime_provider, runtime_session_id, approval_id);
 
 CREATE TABLE IF NOT EXISTS fin_ex_intent_recognition_t (
     id VARCHAR(64) PRIMARY KEY,
@@ -284,7 +284,7 @@ CREATE TABLE IF NOT EXISTS fin_ex_route_memory_t (
     clarify_question TEXT,
     clarification_type VARCHAR(128),
     source_run_id VARCHAR(64),
-    hitl_request_id VARCHAR(64),
+    interaction_request_id VARCHAR(64),
     payload_json TEXT,
     folded_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL,
@@ -293,8 +293,8 @@ CREATE TABLE IF NOT EXISTS fin_ex_route_memory_t (
 
 CREATE INDEX IF NOT EXISTS idx_fin_ex_route_memory_owner_session_type_status_created_at
     ON fin_ex_route_memory_t(tenant_id, user_id, session_id, item_type, status, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_fin_ex_route_memory_hitl
-    ON fin_ex_route_memory_t(hitl_request_id);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_route_memory_interaction
+    ON fin_ex_route_memory_t(interaction_request_id);
 
 CREATE TABLE IF NOT EXISTS fin_ex_chat_run_execution_t (
     id VARCHAR(64) PRIMARY KEY,
@@ -538,28 +538,28 @@ COMMENT ON COLUMN fin_ex_chat_run_t.metadata_json IS 'run 扩展诊断元数据 
 COMMENT ON COLUMN fin_ex_chat_run_t.created_at IS 'run 记录创建时间。';
 COMMENT ON COLUMN fin_ex_chat_run_t.updated_at IS 'run 记录最后更新时间。';
 
-COMMENT ON TABLE fin_ex_chat_hitl_request_t IS '聊天等待用户输入请求表，保存 Relay 澄清、审批等协议级 HITL 等待态和续接信息。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.id IS 'HITL 请求主键，业务生成的 hitlId。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.tenant_id IS '租户标识，来自服务端身份上下文。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.user_id IS '系统归属用户标识，优先使用 UserContext.globalUserId，缺省回退 UserContext.userId。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.session_id IS 'HITL 请求所属聊天会话 ID。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.source_run_id IS '触发等待态的原始 runId。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.continue_run_id IS '用户提交响应后创建的续接 runId。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.user_message_id IS '原始用户问题消息 ID；续接时不再创建新的普通 user 消息。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.assistant_message_id IS '承载澄清请求、用户回答和最终回答的 assistant 消息 ID。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.runtime_provider IS '等待请求来源 Runtime provider，例如 relay。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.runtime_binding_id IS '触发等待态时使用的 RuntimeBinding ID，续接时复用并刷新该绑定。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.runtime_session_id IS 'Runtime 实际会话 ID，用于 resume 后提交 approval-result。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.approval_id IS 'Relay approval-request 返回的 approval_id，由后端保存并用于续接，前端无需传入。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.waiting_type IS '等待类型：AGENT_CLARIFICATION、INTENT_CLARIFICATION、DOMAIN_AGENT_SWITCH_CONFIRMATION 等。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.status IS '等待请求状态：WAITING、RESPONDING、ANSWERED、CANCELLED、EXPIRED。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.request_payload_json IS 'Relay 原始澄清/审批请求 payload，脱敏后保存，用于续接和排障。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.response_payload_json IS '用户提交的澄清/审批响应 payload，脱敏后保存。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.expires_at IS '等待请求过期时间，由 financeex.chat-hitl.default-expire-duration 计算；为空表示不过期。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.answered_at IS '等待请求被成功续接并完成的时间。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.cancelled_at IS '等待请求被取消的时间。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.created_at IS '等待请求创建时间。';
-COMMENT ON COLUMN fin_ex_chat_hitl_request_t.updated_at IS '等待请求最后更新时间。';
+COMMENT ON TABLE fin_ex_chat_interaction_request_t IS '聊天等待用户输入请求表，保存 Relay 澄清、审批等协议级 Interaction 等待态和续接信息。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.id IS 'Interaction 请求主键，业务生成的 interactionId。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.tenant_id IS '租户标识，来自服务端身份上下文。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.user_id IS '系统归属用户标识，优先使用 UserContext.globalUserId，缺省回退 UserContext.userId。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.session_id IS 'Interaction 请求所属聊天会话 ID。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.source_run_id IS '触发等待态的原始 runId。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.continue_run_id IS '用户提交响应后创建的续接 runId。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.user_message_id IS '原始用户问题消息 ID；续接时不再创建新的普通 user 消息。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.assistant_message_id IS '承载澄清请求、用户回答和最终回答的 assistant 消息 ID。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.runtime_provider IS '等待请求来源 Runtime provider，例如 relay。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.runtime_binding_id IS '触发等待态时使用的 RuntimeBinding ID，续接时复用并刷新该绑定。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.runtime_session_id IS 'Runtime 实际会话 ID，用于 resume 后提交 approval-result。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.approval_id IS 'Relay approval-request 返回的 approval_id，由后端保存并用于续接，前端无需传入。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.interaction_type IS '等待类型：AGENT_CLARIFICATION、INTENT_CLARIFICATION、DOMAIN_AGENT_SWITCH_CONFIRMATION 等。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.status IS '等待请求状态：WAITING、RESPONDING、ANSWERED、CANCELLED、EXPIRED。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.request_payload_json IS 'Relay 原始澄清/审批请求 payload，脱敏后保存，用于续接和排障。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.response_payload_json IS '用户提交的澄清/审批响应 payload，脱敏后保存。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.expires_at IS '等待请求过期时间，由 financeex.chat-interaction.default-expire-duration 计算；为空表示不过期。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.answered_at IS '等待请求被成功续接并完成的时间。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.cancelled_at IS '等待请求被取消的时间。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.created_at IS '等待请求创建时间。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.updated_at IS '等待请求最后更新时间。';
 
 COMMENT ON TABLE fin_ex_intent_recognition_t IS '意图识别记录表，保存每次实际调用意图服务后的输入、识别结果和最终路由采纳结果，用于准确率统计和问题定位；该表是旁路记录，不参与聊天主链路决策。';
 COMMENT ON COLUMN fin_ex_intent_recognition_t.id IS '记录主键，业务生成的 intentrecId。';
@@ -604,7 +604,7 @@ COMMENT ON COLUMN fin_ex_route_memory_t.route_source IS '路由来源，例如 i
 COMMENT ON COLUMN fin_ex_route_memory_t.clarify_question IS '意图服务返回并展示给用户的澄清问题。';
 COMMENT ON COLUMN fin_ex_route_memory_t.clarification_type IS '意图服务返回的澄清类型，例如 AMBIGUOUS_ROUTE。';
 COMMENT ON COLUMN fin_ex_route_memory_t.source_run_id IS '创建该路由记忆的 runId。';
-COMMENT ON COLUMN fin_ex_route_memory_t.hitl_request_id IS '意图澄清对应的 HITL 请求 ID。';
+COMMENT ON COLUMN fin_ex_route_memory_t.interaction_request_id IS '意图澄清对应的 Interaction 请求 ID。';
 COMMENT ON COLUMN fin_ex_route_memory_t.payload_json IS '路由或澄清原始摘要 payload，脱敏后保存用于排障。';
 COMMENT ON COLUMN fin_ex_route_memory_t.folded_at IS '澄清链路被最终路由折叠的时间。';
 COMMENT ON COLUMN fin_ex_route_memory_t.created_at IS '记录创建时间。';

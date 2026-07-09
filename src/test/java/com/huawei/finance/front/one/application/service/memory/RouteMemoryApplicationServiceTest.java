@@ -36,7 +36,7 @@ class RouteMemoryApplicationServiceTest {
                 user, "session1", "run1", "支付成功率口径",
                 intent("intent_a", "财经知识助手"),
                 RouteTarget.domainAgent("intent_a", "intent-agent", 1.0, "accepted")));
-        service.appendClarification(user, "session1", "run2", "hitl1", Map.of(
+        service.appendClarification(user, "session1", "run2", "interaction1", Map.of(
                 "originalQuery", "看下方案",
                 "clarifyQuestion", "你想看处理方案还是项目方案？",
                 "clarificationType", "AMBIGUOUS_ROUTE"));
@@ -54,7 +54,7 @@ class RouteMemoryApplicationServiceTest {
 
     @Test
     void foldsActiveClarifications() {
-        service.appendClarification(user, "session1", "run2", "hitl1", Map.of(
+        service.appendClarification(user, "session1", "run2", "interaction1", Map.of(
                 "originalQuery", "看下方案",
                 "clarifyQuestion", "你想看处理方案还是项目方案？"));
 
@@ -66,7 +66,7 @@ class RouteMemoryApplicationServiceTest {
 
     @Test
     void completeRouteFoldsClarificationsAndAppendsRouteInOneWriteTask() {
-        service.appendClarification(user, "session1", "run2", "hitl1", Map.of(
+        service.appendClarification(user, "session1", "run2", "interaction1", Map.of(
                 "originalQuery", "看下方案",
                 "clarifyQuestion", "你想看处理方案还是项目方案？"));
 
@@ -85,7 +85,7 @@ class RouteMemoryApplicationServiceTest {
 
     @Test
     void completeWithoutRouteOnlyFoldsClarifications() {
-        service.appendClarification(user, "session1", "run2", "hitl1", Map.of(
+        service.appendClarification(user, "session1", "run2", "interaction1", Map.of(
                 "originalQuery", "看下方案",
                 "clarifyQuestion", "你想看处理方案还是项目方案？"));
 
@@ -138,7 +138,7 @@ class RouteMemoryApplicationServiceTest {
                 user, "session1", "run1", "query", null,
                 RouteTarget.domainAgent("agent_a", "intent-agent", 1.0, "ok"))))
                 .doesNotThrowAnyException();
-        assertThatCode(() -> failingService.appendClarification(user, "session1", "run2", "hitl1",
+        assertThatCode(() -> failingService.appendClarification(user, "session1", "run2", "interaction1",
                 Map.of("originalQuery", "query", "clarifyQuestion", "question")))
                 .doesNotThrowAnyException();
         assertThatCode(() -> failingService.foldActiveClarifications(user, "session1"))
@@ -204,7 +204,7 @@ class RouteMemoryApplicationServiceTest {
                     folded.add(new RouteMemoryItem(item.id(), item.tenantId(), item.userId(), item.sessionId(),
                             item.itemType(), RouteMemoryItemStatus.FOLDED, item.queryText(), item.intentId(),
                             item.intentName(), item.domainAgentId(), item.routeSource(), item.clarifyQuestion(),
-                            item.clarificationType(), item.sourceRunId(), item.hitlRequestId(), item.payload(),
+                            item.clarificationType(), item.sourceRunId(), item.interactionId(), item.payload(),
                             foldedAt, item.createdAt(), foldedAt));
                     count++;
                 } else {

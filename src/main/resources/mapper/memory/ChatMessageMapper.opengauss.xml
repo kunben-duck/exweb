@@ -76,7 +76,7 @@
     </insert>
 
     <!--
-      更新已有 assistant 消息正文、来源 run 和消息元数据，用于 HITL 续接完成后复用同一 assistant 节点。
+      更新已有 assistant 消息正文、来源 run 和消息元数据，用于 Interaction 续接完成后复用同一 assistant 节点。
       入参: ChatMessageRow，tenantId/userId/sessionId/id 定位当前用户当前会话的 assistant 消息，
             content/runId/metadataJson 为新值；metadataJson 允许覆盖为空以清理等待态标记。
     -->

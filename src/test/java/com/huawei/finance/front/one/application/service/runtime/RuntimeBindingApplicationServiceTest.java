@@ -7,9 +7,9 @@ import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingRepository;
-import com.huawei.finance.front.one.domain.chat.ChatHitlRequest;
-import com.huawei.finance.front.one.domain.chat.ChatHitlStatus;
-import com.huawei.finance.front.one.domain.chat.ChatHitlWaitingType;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionRequest;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionStatus;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionType;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBindingStatus;
@@ -192,17 +192,17 @@ class RuntimeBindingApplicationServiceTest {
     }
 
     @Test
-    void resumeForHitlRefreshesOriginalBinding() {
+    void resumeForInteractionRefreshesOriginalBinding() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
         InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
         RuntimeBinding binding = binding(RuntimeBindingStatus.ACTIVE).withRuntimeSessionId("runtime-old");
         repository.saved = binding;
         RuntimeBindingApplicationService service = service(repository, cache);
 
-        RuntimeBinding resumed = service.resumeForHitl(hitlRequest("runtime-new"), "run-hitl");
+        RuntimeBinding resumed = service.resumeForInteraction(interactionRequest("runtime-new"), "run-interaction");
 
         assertThat(resumed.id()).isEqualTo(binding.id());
-        assertThat(resumed.lastRunId()).isEqualTo("run-hitl");
+        assertThat(resumed.lastRunId()).isEqualTo("run-interaction");
         assertThat(resumed.leafMessageId()).isEqualTo("msg-assistant");
         assertThat(resumed.runtimeSessionId()).isEqualTo("runtime-new");
         assertThat(resumed.expiresAt()).isAfter(binding.expiresAt());
@@ -229,11 +229,11 @@ class RuntimeBindingApplicationServiceTest {
                 null, RuntimeBindingStatus.ACTIVE, "run", now.minus(Duration.ofMinutes(1)), now, now, Map.of());
     }
 
-    private ChatHitlRequest hitlRequest(String runtimeSessionId) {
+    private ChatInteractionRequest interactionRequest(String runtimeSessionId) {
         Instant now = Instant.now();
-        return new ChatHitlRequest("hitl1", "t", "u", "s", "run-source", null,
+        return new ChatInteractionRequest("interaction1", "t", "u", "s", "run-source", null,
                 "msg-user", "msg-assistant", "relay", "binding1", runtimeSessionId, "approval1",
-                ChatHitlWaitingType.CLARIFICATION, ChatHitlStatus.WAITING, Map.of("approval_id", "approval1"),
+                ChatInteractionType.CLARIFICATION, ChatInteractionStatus.WAITING, Map.of("approval_id", "approval1"),
                 Map.of(), null, null, null, now, now);
     }
 

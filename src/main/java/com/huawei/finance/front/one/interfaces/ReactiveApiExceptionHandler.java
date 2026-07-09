@@ -1,7 +1,7 @@
 package com.huawei.finance.front.one.interfaces;
 
 import com.huawei.finance.front.one.domain.chat.ActiveRunExistsException;
-import com.huawei.finance.front.one.domain.chat.ChatHitlUnavailableException;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionUnavailableException;
 import com.huawei.finance.front.one.domain.chat.ChatShareUnavailableException;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
@@ -81,8 +81,8 @@ public class ReactiveApiExceptionHandler {
         if (ex instanceof ActiveRunExistsException) {
             return ApiExceptionHandler.error(HttpStatus.CONFLICT, "ACTIVE_RUN_EXISTS", ex.getMessage(), requestPath(exchange));
         }
-        if (ex instanceof ChatHitlUnavailableException hitlEx) {
-            return ApiExceptionHandler.error(HttpStatus.CONFLICT, hitlEx.code(), hitlEx.getMessage(), requestPath(exchange));
+        if (ex instanceof ChatInteractionUnavailableException interactionEx) {
+            return ApiExceptionHandler.error(HttpStatus.CONFLICT, interactionEx.code(), interactionEx.getMessage(), requestPath(exchange));
         }
         if (ex instanceof ChatShareUnavailableException shareEx) {
             return ApiExceptionHandler.error(HttpStatus.CONFLICT, shareEx.code(), shareEx.getMessage(), requestPath(exchange));

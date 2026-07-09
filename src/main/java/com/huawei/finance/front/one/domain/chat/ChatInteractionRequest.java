@@ -8,7 +8,7 @@ import java.util.Map;
  *
  * <p>该对象是后端续接状态事实源，不承担前端展示；展示快照保存在 assistant message parts。</p>
  *
- * @param id HITL 请求 ID。
+ * @param id Interaction 请求 ID。
  * @param tenantId 租户标识。
  * @param userId 用户标识。
  * @param sessionId 会话标识。
@@ -20,7 +20,7 @@ import java.util.Map;
  * @param runtimeBindingId 触发等待态时使用的 RuntimeBinding，续接时必须复用并刷新它。
  * @param runtimeSessionId Runtime 实际会话 ID。
  * @param approvalId Relay approval_id。
- * @param waitingType 等待类型。
+ * @param interactionType 等待类型。
  * @param status 当前状态。
  * @param requestPayload Relay 原始澄清请求 payload。
  * @param responsePayload 用户提交的回答 payload。
@@ -30,7 +30,7 @@ import java.util.Map;
  * @param createdAt 创建时间。
  * @param updatedAt 更新时间。
  */
-public record ChatHitlRequest(
+public record ChatInteractionRequest(
         String id,
         String tenantId,
         String userId,
@@ -43,8 +43,8 @@ public record ChatHitlRequest(
         String runtimeBindingId,
         String runtimeSessionId,
         String approvalId,
-        ChatHitlWaitingType waitingType,
-        ChatHitlStatus status,
+        ChatInteractionType interactionType,
+        ChatInteractionStatus status,
         Map<String, Object> requestPayload,
         Map<String, Object> responsePayload,
         Instant expiresAt,
@@ -53,17 +53,17 @@ public record ChatHitlRequest(
         Instant createdAt,
         Instant updatedAt
 ) {
-    public ChatHitlRequest {
+    public ChatInteractionRequest {
         requestPayload = requestPayload == null ? Map.of() : Map.copyOf(requestPayload);
         responsePayload = responsePayload == null ? Map.of() : Map.copyOf(responsePayload);
-        waitingType = waitingType == null ? ChatHitlWaitingType.AGENT_CLARIFICATION : waitingType;
-        status = status == null ? ChatHitlStatus.WAITING : status;
+        interactionType = interactionType == null ? ChatInteractionType.AGENT_CLARIFICATION : interactionType;
+        status = status == null ? ChatInteractionStatus.WAITING : status;
         createdAt = createdAt == null ? Instant.now() : createdAt;
         updatedAt = updatedAt == null ? createdAt : updatedAt;
     }
 
     public boolean waiting() {
-        return status == ChatHitlStatus.WAITING;
+        return status == ChatInteractionStatus.WAITING;
     }
 
     public boolean expiredAt(Instant now) {

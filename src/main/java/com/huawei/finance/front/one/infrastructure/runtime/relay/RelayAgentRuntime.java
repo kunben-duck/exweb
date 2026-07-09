@@ -2,7 +2,7 @@ package com.huawei.finance.front.one.infrastructure.runtime.relay;
 
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
-import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeHitlResponseRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteraction;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
@@ -54,7 +54,7 @@ public class RelayAgentRuntime implements AgentRuntime, AgentRuntimeInteraction 
     }
 
     @Override
-    public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeHitlResponseRequest request) {
+    public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeInteractionResponseRequest request) {
         return selectedAdapter.continueWithUserResponse(request);
     }
 

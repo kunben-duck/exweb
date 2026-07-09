@@ -3,47 +3,47 @@ package com.huawei.finance.front.one.infrastructure.persistence;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.huawei.finance.front.one.application.integration.conversation.ChatHitlRequestRepository;
-import com.huawei.finance.front.one.domain.chat.ChatHitlRequest;
-import com.huawei.finance.front.one.domain.chat.ChatHitlStatus;
-import com.huawei.finance.front.one.domain.chat.ChatHitlWaitingType;
+import com.huawei.finance.front.one.application.integration.conversation.ChatInteractionRequestRepository;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionRequest;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionStatus;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionType;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.stereotype.Repository;
 
 /**
- * 基于 MyBatis 的 HITL 等待请求仓储。
+ * 基于 MyBatis 的 Interaction 等待请求仓储。
  */
 @Repository
-public class MyBatisChatHitlRequestRepository implements ChatHitlRequestRepository {
+public class MyBatisChatInteractionRequestRepository implements ChatInteractionRequestRepository {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
-    private final ChatHitlRequestMapper mapper;
+    private final ChatInteractionRequestMapper mapper;
     private final ObjectMapper objectMapper;
 
-    public MyBatisChatHitlRequestRepository(ChatHitlRequestMapper mapper, ObjectMapper objectMapper) {
+    public MyBatisChatInteractionRequestRepository(ChatInteractionRequestMapper mapper, ObjectMapper objectMapper) {
         this.mapper = mapper;
         this.objectMapper = objectMapper;
     }
 
     @Override
-    public ChatHitlRequest insert(ChatHitlRequest request) {
+    public ChatInteractionRequest insert(ChatInteractionRequest request) {
         mapper.insert(toRow(request));
         return request;
     }
 
     @Override
-    public Optional<ChatHitlRequest> findByOwnerAndId(String tenantId, String userId, String hitlRequestId) {
-        if (blank(tenantId) || blank(userId) || blank(hitlRequestId)) {
+    public Optional<ChatInteractionRequest> findByOwnerAndId(String tenantId, String userId, String interactionId) {
+        if (blank(tenantId) || blank(userId) || blank(interactionId)) {
             return Optional.empty();
         }
-        return Optional.ofNullable(mapper.findByOwnerAndId(tenantId, userId, hitlRequestId))
+        return Optional.ofNullable(mapper.findByOwnerAndId(tenantId, userId, interactionId))
                 .map(this::toDomain);
     }
 
     @Override
-    public Optional<ChatHitlRequest> findWaitingBySession(String tenantId, String userId, String sessionId) {
+    public Optional<ChatInteractionRequest> findWaitingBySession(String tenantId, String userId, String sessionId) {
         if (blank(tenantId) || blank(userId) || blank(sessionId)) {
             return Optional.empty();
         }
@@ -52,28 +52,28 @@ public class MyBatisChatHitlRequestRepository implements ChatHitlRequestReposito
     }
 
     @Override
-    public boolean claimForResponse(ChatHitlClaimCommand command) {
+    public boolean claimInteractionResponse(ChatInteractionClaimCommand command) {
         if (command == null) {
             return false;
         }
-        ChatHitlClaimRow row = new ChatHitlClaimRow();
+        ChatInteractionClaimRow row = new ChatInteractionClaimRow();
         row.setTenantId(command.tenantId());
         row.setUserId(command.userId());
-        row.setHitlRequestId(command.hitlRequestId());
+        row.setInteractionId(command.interactionId());
         row.setContinueRunId(command.continueRunId());
         row.setResponsePayloadJson(toJson(command.responsePayload()));
         row.setNow(command.now() == null ? Instant.now() : command.now());
-        return mapper.claimForResponse(row) == 1;
+        return mapper.claimInteractionResponse(row) == 1;
     }
 
     @Override
-    public int markAnswered(String tenantId, String userId, String hitlRequestId, Instant answeredAt) {
-        return mapper.markAnswered(tenantId, userId, hitlRequestId, answeredAt == null ? Instant.now() : answeredAt);
+    public int markAnswered(String tenantId, String userId, String interactionId, Instant answeredAt) {
+        return mapper.markAnswered(tenantId, userId, interactionId, answeredAt == null ? Instant.now() : answeredAt);
     }
 
     @Override
-    public int markWaiting(String tenantId, String userId, String hitlRequestId) {
-        return mapper.markWaiting(tenantId, userId, hitlRequestId);
+    public int markWaiting(String tenantId, String userId, String interactionId) {
+        return mapper.markWaiting(tenantId, userId, interactionId);
     }
 
     @Override
@@ -82,12 +82,12 @@ public class MyBatisChatHitlRequestRepository implements ChatHitlRequestReposito
     }
 
     @Override
-    public int markExpired(String tenantId, String userId, String hitlRequestId) {
-        return mapper.markExpired(tenantId, userId, hitlRequestId);
+    public int markExpired(String tenantId, String userId, String interactionId) {
+        return mapper.markExpired(tenantId, userId, interactionId);
     }
 
-    private ChatHitlRequestRow toRow(ChatHitlRequest request) {
-        ChatHitlRequestRow row = new ChatHitlRequestRow();
+    private ChatInteractionRequestRow toRow(ChatInteractionRequest request) {
+        ChatInteractionRequestRow row = new ChatInteractionRequestRow();
         row.setId(request.id());
         row.setTenantId(request.tenantId());
         row.setUserId(request.userId());
@@ -100,7 +100,7 @@ public class MyBatisChatHitlRequestRepository implements ChatHitlRequestReposito
         row.setRuntimeBindingId(request.runtimeBindingId());
         row.setRuntimeSessionId(request.runtimeSessionId());
         row.setApprovalId(request.approvalId());
-        row.setWaitingType(request.waitingType().name());
+        row.setInteractionType(request.interactionType().name());
         row.setStatus(request.status().name());
         row.setRequestPayloadJson(toJson(request.requestPayload()));
         row.setResponsePayloadJson(toJson(request.responsePayload()));
@@ -112,8 +112,8 @@ public class MyBatisChatHitlRequestRepository implements ChatHitlRequestReposito
         return row;
     }
 
-    private ChatHitlRequest toDomain(ChatHitlRequestRow row) {
-        return new ChatHitlRequest(
+    private ChatInteractionRequest toDomain(ChatInteractionRequestRow row) {
+        return new ChatInteractionRequest(
                 row.getId(),
                 row.getTenantId(),
                 row.getUserId(),
@@ -126,7 +126,7 @@ public class MyBatisChatHitlRequestRepository implements ChatHitlRequestReposito
                 row.getRuntimeBindingId(),
                 row.getRuntimeSessionId(),
                 row.getApprovalId(),
-                parseWaitingType(row.getWaitingType()),
+                parseInteractionType(row.getInteractionType()),
                 parseStatus(row.getStatus()),
                 fromJson(row.getRequestPayloadJson()),
                 fromJson(row.getResponsePayloadJson()),
@@ -138,25 +138,25 @@ public class MyBatisChatHitlRequestRepository implements ChatHitlRequestReposito
         );
     }
 
-    private ChatHitlWaitingType parseWaitingType(String value) {
+    private ChatInteractionType parseInteractionType(String value) {
         if (value == null || value.isBlank()) {
-            return ChatHitlWaitingType.AGENT_CLARIFICATION;
+            return ChatInteractionType.AGENT_CLARIFICATION;
         }
-        return ChatHitlWaitingType.valueOf(value);
+        return ChatInteractionType.valueOf(value);
     }
 
-    private ChatHitlStatus parseStatus(String value) {
+    private ChatInteractionStatus parseStatus(String value) {
         if (value == null || value.isBlank()) {
-            return ChatHitlStatus.WAITING;
+            return ChatInteractionStatus.WAITING;
         }
-        return ChatHitlStatus.valueOf(value);
+        return ChatInteractionStatus.valueOf(value);
     }
 
     private String toJson(Map<String, Object> payload) {
         try {
             return objectMapper.writeValueAsString(payload == null ? Map.of() : payload);
         } catch (JsonProcessingException ex) {
-            throw new IllegalArgumentException("序列化 HITL payload 失败", ex);
+            throw new IllegalArgumentException("序列化 Interaction payload 失败", ex);
         }
     }
 
@@ -167,7 +167,7 @@ public class MyBatisChatHitlRequestRepository implements ChatHitlRequestReposito
         try {
             return objectMapper.readValue(payloadJson, MAP_TYPE);
         } catch (JsonProcessingException ex) {
-            throw new IllegalArgumentException("反序列化 HITL payload 失败", ex);
+            throw new IllegalArgumentException("反序列化 Interaction payload 失败", ex);
         }
     }
 

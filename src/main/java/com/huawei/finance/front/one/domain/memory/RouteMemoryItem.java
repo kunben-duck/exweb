@@ -23,7 +23,7 @@ public record RouteMemoryItem(
         String clarifyQuestion,
         String clarificationType,
         String sourceRunId,
-        String hitlRequestId,
+        String interactionId,
         Map<String, Object> payload,
         Instant foldedAt,
         Instant createdAt,

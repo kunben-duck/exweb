@@ -8,7 +8,7 @@ import java.util.Map;
 /**
  * 创建等待用户输入请求的上下文。
  */
-record ChatHitlCreateContext(
+record ChatInteractionCreateContext(
         UserContext user,
         ChatSession session,
         String sourceRunId,

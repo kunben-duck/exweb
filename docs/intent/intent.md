@@ -458,7 +458,7 @@ Authorization: {dynamicToken}
 2. `ROUTE_SINGLE`：读取唯一 `items[0].intentId` 作为 DomainAgentId/skillId，创建或刷新 `provider=domain-agent` 的 RuntimeBinding；`resourceInstruction.resourceId` 只记录排障，不参与路由；`confidence` 只用于记录，不参与二次裁决。
 3. `ROUTE_MULTI`：进入复杂任务规划，通常走 Relay Runtime。
 4. `NO_MATCH`：进入兜底 Runtime 或通用处理。
-5. `CLARIFY`：本轮 run 进入 `WAITING_USER`，写入 `run.waiting_user`，前端通过统一 HITL 接口提交澄清回答。
+5. `CLARIFY`：本轮 run 进入 `WAITING_USER`，写入 `run.waiting_user`，前端通过 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 提交澄清回答。
 6. 意图澄清属于路由阶段，不创建 RuntimeBinding，不调用 AgentRuntime。
 7. 用户回答意图澄清后，创建 continuation run，再次调用 `/getIntentDecision`。
 8. DomainAgent 拒答回流时，`routeTrigger=domain_reject`，只传当前这一次拒答原因。

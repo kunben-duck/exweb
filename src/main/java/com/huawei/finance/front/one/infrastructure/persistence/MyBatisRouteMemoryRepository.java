@@ -78,7 +78,7 @@ public class MyBatisRouteMemoryRepository implements RouteMemoryRepository {
         row.setClarifyQuestion(item.clarifyQuestion());
         row.setClarificationType(item.clarificationType());
         row.setSourceRunId(item.sourceRunId());
-        row.setHitlRequestId(item.hitlRequestId());
+        row.setInteractionId(item.interactionId());
         row.setPayloadJson(toJson(item.payload()));
         row.setFoldedAt(item.foldedAt());
         row.setCreatedAt(item.createdAt());
@@ -102,7 +102,7 @@ public class MyBatisRouteMemoryRepository implements RouteMemoryRepository {
                 row.getClarifyQuestion(),
                 row.getClarificationType(),
                 row.getSourceRunId(),
-                row.getHitlRequestId(),
+                row.getInteractionId(),
                 fromJson(row.getPayloadJson()),
                 row.getFoldedAt(),
                 row.getCreatedAt(),

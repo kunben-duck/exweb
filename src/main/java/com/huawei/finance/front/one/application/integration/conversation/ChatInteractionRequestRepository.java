@@ -1,31 +1,31 @@
 package com.huawei.finance.front.one.application.integration.conversation;
 
-import com.huawei.finance.front.one.domain.chat.ChatHitlRequest;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionRequest;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 
 /**
- * HITL 等待用户输入请求仓储。
+ * Interaction 等待用户输入请求仓储。
  */
-public interface ChatHitlRequestRepository {
+public interface ChatInteractionRequestRepository {
     /**
      * 保存新等待请求。
      *
      * @param request 等待请求快照。
      * @return 已保存请求。
      */
-    ChatHitlRequest insert(ChatHitlRequest request);
+    ChatInteractionRequest insert(ChatInteractionRequest request);
 
     /**
      * 按 owner 和 ID 查询等待请求。
      *
      * @param tenantId 租户标识。
      * @param userId 用户标识。
-     * @param hitlRequestId HITL 请求 ID。
+     * @param interactionId Interaction 请求 ID。
      * @return 当前用户拥有的请求。
      */
-    Optional<ChatHitlRequest> findByOwnerAndId(String tenantId, String userId, String hitlRequestId);
+    Optional<ChatInteractionRequest> findByOwnerAndId(String tenantId, String userId, String interactionId);
 
     /**
      * 查询指定会话当前可提交的等待请求。
@@ -35,7 +35,7 @@ public interface ChatHitlRequestRepository {
      * @param sessionId 会话标识。
      * @return 当前 WAITING 请求。
      */
-    Optional<ChatHitlRequest> findWaitingBySession(String tenantId, String userId, String sessionId);
+    Optional<ChatInteractionRequest> findWaitingBySession(String tenantId, String userId, String sessionId);
 
     /**
      * 原子声明用户提交，避免多页签重复提交同一个等待请求。
@@ -43,31 +43,31 @@ public interface ChatHitlRequestRepository {
      * @param command 原子 claim 命令。
      * @return true 表示成功从 WAITING 切换为 RESPONDING。
      */
-    boolean claimForResponse(ChatHitlClaimCommand command);
+    boolean claimInteractionResponse(ChatInteractionClaimCommand command);
 
     /**
      * 标记续接成功。
      *
      * @param tenantId 租户标识。
      * @param userId 用户标识。
-     * @param hitlRequestId HITL 请求 ID。
+     * @param interactionId Interaction 请求 ID。
      * @param answeredAt 完成时间。
      * @return 影响行数。
      */
-    int markAnswered(String tenantId, String userId, String hitlRequestId, Instant answeredAt);
+    int markAnswered(String tenantId, String userId, String interactionId, Instant answeredAt);
 
     /**
      * 续接失败时把请求退回 WAITING，允许用户重试。
      *
      * @param tenantId 租户标识。
      * @param userId 用户标识。
-     * @param hitlRequestId HITL 请求 ID。
+     * @param interactionId Interaction 请求 ID。
      * @return 影响行数。
      */
-    int markWaiting(String tenantId, String userId, String hitlRequestId);
+    int markWaiting(String tenantId, String userId, String interactionId);
 
     /**
-     * 取消某会话下仍在等待或响应中的 HITL 请求。
+     * 取消某会话下仍在等待或响应中的 Interaction 请求。
      *
      * @param tenantId 租户标识。
      * @param userId 用户标识。
@@ -82,25 +82,25 @@ public interface ChatHitlRequestRepository {
      *
      * @param tenantId 租户标识。
      * @param userId 用户标识。
-     * @param hitlRequestId HITL 请求 ID。
+     * @param interactionId Interaction 请求 ID。
      * @return 影响行数。
      */
-    int markExpired(String tenantId, String userId, String hitlRequestId);
+    int markExpired(String tenantId, String userId, String interactionId);
 
     /**
      * 原子 claim 参数。
      *
      * @param tenantId 租户标识。
      * @param userId 用户标识。
-     * @param hitlRequestId HITL 请求 ID。
+     * @param interactionId Interaction 请求 ID。
      * @param continueRunId 续接 run ID。
      * @param responsePayload 用户提交的回答 payload。
      * @param now claim 时间。
      */
-    record ChatHitlClaimCommand(
+    record ChatInteractionClaimCommand(
             String tenantId,
             String userId,
-            String hitlRequestId,
+            String interactionId,
             String continueRunId,
             Map<String, Object> responsePayload,
             Instant now

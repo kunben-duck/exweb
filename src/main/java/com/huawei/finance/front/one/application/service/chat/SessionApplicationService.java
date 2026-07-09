@@ -61,7 +61,7 @@ public class SessionApplicationService implements ChatSessionFacade {
     private final RuntimeBindingApplicationService runtimeBindingService;
     private final ChatShareRepository shareRepository;
     private final ObjectProvider<ChatRunStopCoordinator> stopCoordinatorProvider;
-    private final ObjectProvider<ChatHitlApplicationService> hitlServiceProvider;
+    private final ObjectProvider<ChatInteractionApplicationService> interactionServiceProvider;
 
     @Autowired
     public SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
@@ -69,14 +69,14 @@ public class SessionApplicationService implements ChatSessionFacade {
                                      RuntimeBindingApplicationService runtimeBindingService,
                                      ChatShareRepository shareRepository,
                                      ObjectProvider<ChatRunStopCoordinator> stopCoordinatorProvider,
-                                     ObjectProvider<ChatHitlApplicationService> hitlServiceProvider) {
+                                     ObjectProvider<ChatInteractionApplicationService> interactionServiceProvider) {
         this.sessionRepository = sessionRepository; this.messageRepository = messageRepository; this.idGenerator = idGenerator;
         this.permissionChecker = permissionChecker;
         this.chatRunService = chatRunService;
         this.runtimeBindingService = runtimeBindingService;
         this.shareRepository = shareRepository;
         this.stopCoordinatorProvider = stopCoordinatorProvider;
-        this.hitlServiceProvider = hitlServiceProvider;
+        this.interactionServiceProvider = interactionServiceProvider;
     }
 
     SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
@@ -232,9 +232,9 @@ public class SessionApplicationService implements ChatSessionFacade {
             if (shareRepository != null) {
                 shareRepository.revokeActiveBySession(user.tenantId(), user.ownerUserId(), session.id(), Instant.now());
             }
-            ChatHitlApplicationService hitlService = hitlServiceProvider == null ? null : hitlServiceProvider.getIfAvailable();
-            if (hitlService != null) {
-                hitlService.cancelOpenBySession(user, session.id());
+            ChatInteractionApplicationService interactionService = interactionServiceProvider == null ? null : interactionServiceProvider.getIfAvailable();
+            if (interactionService != null) {
+                interactionService.cancelOpenBySession(user, session.id());
             }
             deleted.add(deletedSession);
         }
@@ -305,6 +305,8 @@ public class SessionApplicationService implements ChatSessionFacade {
             case NEXT -> createNextUserMessage(user, command, session, runId, attachments);
             case EDIT_USER -> createEditedUserMessage(user, command, session, runId, attachments);
             case REGENERATE_ASSISTANT -> resolveRegeneratePlan(user, command, session);
+            case CONTINUE_INTERACTION ->
+                    throw new IllegalArgumentException("CONTINUE_INTERACTION 不创建普通 user 消息");
         };
     }
 
@@ -369,13 +371,13 @@ public class SessionApplicationService implements ChatSessionFacade {
     /**
      * 更新已有 assistant 消息，并追加本次续接产生的 parts。
      *
-     * <p>HITL 续接不会创建新的普通 user/assistant 节点；澄清请求、用户回答和最终回答都挂在
+     * <p>Interaction 续接不会创建新的普通 user/assistant 节点；澄清请求、用户回答和最终回答都挂在
      * 同一条 assistant 消息下，避免历史消息路径被一次澄清拆成多轮问答。</p>
      */
     public ChatMessage updateAssistantMessage(AssistantMessageUpdateCommand command) {
         ChatSession session = command.session();
         ChatMessage existing = requireMessageInSession(session, command.messageId());
-        ensureUnlockedAssistantMessage(existing, "HITL 续接 assistant 消息");
+        ensureUnlockedAssistantMessage(existing, "Interaction 续接 assistant 消息");
         Instant now = Instant.now();
         int startOrder = existing.parts() == null ? 1 : existing.parts().size() + 1;
         List<ChatMessagePart> parts = buildMessageParts(new MessagePartBuildContext(command.tenantId(),

@@ -20,7 +20,7 @@ public class RouteMemoryRow {
     private String clarifyQuestion;
     private String clarificationType;
     private String sourceRunId;
-    private String hitlRequestId;
+    private String interactionId;
     private String payloadJson;
     private Instant foldedAt;
     private Instant createdAt;
@@ -54,8 +54,8 @@ public class RouteMemoryRow {
     public void setClarificationType(String clarificationType) { this.clarificationType = clarificationType; }
     public String getSourceRunId() { return sourceRunId; }
     public void setSourceRunId(String sourceRunId) { this.sourceRunId = sourceRunId; }
-    public String getHitlRequestId() { return hitlRequestId; }
-    public void setHitlRequestId(String hitlRequestId) { this.hitlRequestId = hitlRequestId; }
+    public String getInteractionId() { return interactionId; }
+    public void setInteractionId(String interactionId) { this.interactionId = interactionId; }
     public String getPayloadJson() { return payloadJson; }
     public void setPayloadJson(String payloadJson) { this.payloadJson = payloadJson; }
     public Instant getFoldedAt() { return foldedAt; }

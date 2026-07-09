@@ -2,8 +2,8 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.huawei.finance.front.one.infrastructure.persistence.ChatHitlRequestMapper">
-    <resultMap id="chatHitlRequestResultMap" type="com.huawei.finance.front.one.infrastructure.persistence.ChatHitlRequestRow">
+<mapper namespace="com.huawei.finance.front.one.infrastructure.persistence.ChatInteractionRequestMapper">
+    <resultMap id="chatInteractionRequestResultMap" type="com.huawei.finance.front.one.infrastructure.persistence.ChatInteractionRequestRow">
         <result column="tenant_id" property="tenantId"/>
         <result column="user_id" property="userId"/>
         <result column="session_id" property="sessionId"/>
@@ -15,7 +15,7 @@
         <result column="runtime_binding_id" property="runtimeBindingId"/>
         <result column="runtime_session_id" property="runtimeSessionId"/>
         <result column="approval_id" property="approvalId"/>
-        <result column="waiting_type" property="waitingType"/>
+        <result column="interaction_type" property="interactionType"/>
         <result column="status" property="status"/>
         <result column="request_payload_json" property="requestPayloadJson"/>
         <result column="response_payload_json" property="responsePayloadJson"/>
@@ -26,53 +26,53 @@
         <result column="updated_at" property="updatedAt"/>
     </resultMap>
 
-    <sql id="hitlColumns">
+    <sql id="interactionColumns">
         id, tenant_id, user_id, session_id, source_run_id, continue_run_id, user_message_id,
-        assistant_message_id, runtime_provider, runtime_binding_id, runtime_session_id, approval_id, waiting_type,
+        assistant_message_id, runtime_provider, runtime_binding_id, runtime_session_id, approval_id, interaction_type,
         status, request_payload_json, response_payload_json, expires_at, answered_at, cancelled_at,
         created_at, updated_at
     </sql>
 
     <!--
       创建协议级等待用户输入请求，供后续澄清/审批结果续接 Runtime。
-      入参: ChatHitlRequestRow，id 为 HITL 主键，tenantId/userId/sessionId 为归属边界，sourceRunId/
+      入参: ChatInteractionRequestRow，id 为 Interaction 主键，tenantId/userId/sessionId 为归属边界，sourceRunId/
             userMessageId/assistantMessageId 关联原问答，runtimeProvider/runtimeBindingId/runtimeSessionId/approvalId 用于续接，
             requestPayloadJson 保存 Relay 原始请求，expiresAt 为可提交截止时间。
     -->
-    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatHitlRequestRow">
-        INSERT INTO fin_ex_chat_hitl_request_t(
+    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatInteractionRequestRow">
+        INSERT INTO fin_ex_chat_interaction_request_t(
             id, tenant_id, user_id, session_id, source_run_id, continue_run_id, user_message_id,
-            assistant_message_id, runtime_provider, runtime_binding_id, runtime_session_id, approval_id, waiting_type,
+            assistant_message_id, runtime_provider, runtime_binding_id, runtime_session_id, approval_id, interaction_type,
             status, request_payload_json, response_payload_json, expires_at, answered_at, cancelled_at,
             created_at, updated_at
         )
         VALUES (
             #{id}, #{tenantId}, #{userId}, #{sessionId}, #{sourceRunId}, #{continueRunId}, #{userMessageId},
-            #{assistantMessageId}, #{runtimeProvider}, #{runtimeBindingId}, #{runtimeSessionId}, #{approvalId}, #{waitingType},
+            #{assistantMessageId}, #{runtimeProvider}, #{runtimeBindingId}, #{runtimeSessionId}, #{approvalId}, #{interactionType},
             #{status}, #{requestPayloadJson}, #{responsePayloadJson}, #{expiresAt}, #{answeredAt}, #{cancelledAt},
             #{createdAt}, #{updatedAt}
         )
     </insert>
 
     <!--
-      按 owner 和 HITL ID 查询请求，供提交响应和排障使用。
-      入参: tenantId/userId 为归属边界，hitlRequestId 为目标 HITL 请求。
+      按 owner 和 Interaction ID 查询请求，供提交响应和排障使用。
+      入参: tenantId/userId 为归属边界，interactionId 为目标 Interaction 请求。
     -->
-    <select id="findByOwnerAndId" resultMap="chatHitlRequestResultMap">
-        SELECT <include refid="hitlColumns"/>
-        FROM fin_ex_chat_hitl_request_t
+    <select id="findByOwnerAndId" resultMap="chatInteractionRequestResultMap">
+        SELECT <include refid="interactionColumns"/>
+        FROM fin_ex_chat_interaction_request_t
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
-          AND id = #{hitlRequestId}
+          AND id = #{interactionId}
     </select>
 
     <!--
       查询会话当前仍等待用户输入的请求，stream-status 用它生成等待摘要。
       入参: tenantId/userId/sessionId 为归属边界。
     -->
-    <select id="findWaitingBySession" resultMap="chatHitlRequestResultMap">
-        SELECT <include refid="hitlColumns"/>
-        FROM fin_ex_chat_hitl_request_t
+    <select id="findWaitingBySession" resultMap="chatInteractionRequestResultMap">
+        SELECT <include refid="interactionColumns"/>
+        FROM fin_ex_chat_interaction_request_t
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
           AND session_id = #{sessionId}
@@ -83,49 +83,49 @@
 
     <!--
       原子声明用户响应，防止多个页签对同一个澄清请求重复提交。
-      入参: ChatHitlClaimRow，tenantId/userId/hitlRequestId 为归属和目标，continueRunId 为续接 run，
+      入参: ChatInteractionClaimRow，tenantId/userId/interactionId 为归属和目标，continueRunId 为续接 run，
             responsePayloadJson 为用户回答，now 为状态更新时间。
     -->
-    <update id="claimForResponse" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatHitlClaimRow">
-        UPDATE fin_ex_chat_hitl_request_t
+    <update id="claimInteractionResponse" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatInteractionClaimRow">
+        UPDATE fin_ex_chat_interaction_request_t
         SET status = 'RESPONDING',
             continue_run_id = #{continueRunId},
             response_payload_json = #{responsePayloadJson},
             updated_at = #{now}
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
-          AND id = #{hitlRequestId}
+          AND id = #{interactionId}
           AND status = 'WAITING'
           AND (expires_at IS NULL OR expires_at &gt; #{now})
     </update>
 
     <!--
-      续接 run 正常完成后标记 HITL 已回答。
-      入参: tenantId/userId 为归属边界，hitlRequestId 为目标请求，answeredAt 为完成时间。
+      续接 run 正常完成后标记 Interaction 已回答。
+      入参: tenantId/userId 为归属边界，interactionId 为目标请求，answeredAt 为完成时间。
     -->
     <update id="markAnswered">
-        UPDATE fin_ex_chat_hitl_request_t
+        UPDATE fin_ex_chat_interaction_request_t
         SET status = 'ANSWERED',
             answered_at = #{answeredAt},
             updated_at = #{answeredAt}
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
-          AND id = #{hitlRequestId}
+          AND id = #{interactionId}
           AND status = 'RESPONDING'
     </update>
 
     <!--
       续接失败时退回等待态，允许用户重试提交同一澄清请求。
-      入参: tenantId/userId 为归属边界，hitlRequestId 为目标请求。
+      入参: tenantId/userId 为归属边界，interactionId 为目标请求。
     -->
     <update id="markWaiting">
-        UPDATE fin_ex_chat_hitl_request_t
+        UPDATE fin_ex_chat_interaction_request_t
         SET status = 'WAITING',
             continue_run_id = NULL,
             updated_at = CURRENT_TIMESTAMP
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
-          AND id = #{hitlRequestId}
+          AND id = #{interactionId}
           AND status = 'RESPONDING'
     </update>
 
@@ -134,7 +134,7 @@
       入参: tenantId/userId/sessionId 为归属边界，cancelledAt 为取消时间。
     -->
     <update id="cancelOpenBySession">
-        UPDATE fin_ex_chat_hitl_request_t
+        UPDATE fin_ex_chat_interaction_request_t
         SET status = 'CANCELLED',
             cancelled_at = #{cancelledAt},
             updated_at = #{cancelledAt}
@@ -146,15 +146,15 @@
 
     <!--
       标记等待请求已过期，避免过期后仍被续接到 Runtime。
-      入参: tenantId/userId 为归属边界，hitlRequestId 为目标请求。
+      入参: tenantId/userId 为归属边界，interactionId 为目标请求。
     -->
     <update id="markExpired">
-        UPDATE fin_ex_chat_hitl_request_t
+        UPDATE fin_ex_chat_interaction_request_t
         SET status = 'EXPIRED',
             updated_at = CURRENT_TIMESTAMP
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
-          AND id = #{hitlRequestId}
+          AND id = #{interactionId}
           AND status = 'WAITING'
     </update>
 </mapper>

@@ -12,7 +12,9 @@ public enum ChatRunMode {
     /** 编辑历史 user 消息，创建同父节点的新 user sibling，再生成新的 assistant 回复。 */
     EDIT_USER,
     /** 针对已有 assistant 回复重新生成，创建同父节点的新 assistant sibling。 */
-    REGENERATE_ASSISTANT;
+    REGENERATE_ASSISTANT,
+    /** 续接等待用户输入的 Interaction，不创建新的普通 user 消息。 */
+    CONTINUE_INTERACTION;
 
     /**
      * 将前端字符串转换为安全枚举值。

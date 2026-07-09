@@ -12,8 +12,8 @@ package com.huawei.finance.front.one.interfaces.chat.dto;
  * @param activeRunLastSeq 当前 active run 最近一个已持久化事件序号；无 active run 或尚无事件时为空。
  * @param cancellable 当前 active run 是否可取消。
  * @param waitingUserInput 当前会话是否存在等待用户输入请求。
- * @param hitlRequestId 当前等待请求 ID。
- * @param waitingType 等待类型。
+ * @param interactionId 当前等待请求 ID。
+ * @param interactionType 等待类型。
  * @param assistantMessageId 承载等待卡片的 assistant 消息 ID。
  * @param expiresAt 等待请求过期时间。
  * @param bindingProvider 当前会话 active binding provider。
@@ -34,8 +34,8 @@ public record ChatStreamStatusDto(
         Long activeRunLastSeq,
         boolean cancellable,
         boolean waitingUserInput,
-        String hitlRequestId,
-        String waitingType,
+        String interactionId,
+        String interactionType,
         String assistantMessageId,
         java.time.Instant expiresAt,
         String bindingProvider,

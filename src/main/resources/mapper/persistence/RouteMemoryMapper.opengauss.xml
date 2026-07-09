@@ -18,7 +18,7 @@
         <result column="clarify_question" property="clarifyQuestion"/>
         <result column="clarification_type" property="clarificationType"/>
         <result column="source_run_id" property="sourceRunId"/>
-        <result column="hitl_request_id" property="hitlRequestId"/>
+        <result column="interaction_request_id" property="interactionId"/>
         <result column="payload_json" property="payloadJson"/>
         <result column="folded_at" property="foldedAt"/>
         <result column="created_at" property="createdAt"/>
@@ -28,7 +28,7 @@
     <sql id="routeMemoryColumns">
         id, tenant_id, user_id, session_id, item_type, status, query_text, intent_id, intent_name,
         domain_agent_id, route_source, clarify_question, clarification_type, source_run_id,
-        hitl_request_id, payload_json, folded_at, created_at, updated_at
+        interaction_request_id, payload_json, folded_at, created_at, updated_at
     </sql>
 
     <!--
@@ -40,12 +40,12 @@
         INSERT INTO fin_ex_route_memory_t(
             id, tenant_id, user_id, session_id, item_type, status, query_text, intent_id, intent_name,
             domain_agent_id, route_source, clarify_question, clarification_type, source_run_id,
-            hitl_request_id, payload_json, folded_at, created_at, updated_at
+            interaction_request_id, payload_json, folded_at, created_at, updated_at
         )
         VALUES(
             #{id}, #{tenantId}, #{userId}, #{sessionId}, #{itemType}, #{status}, #{queryText}, #{intentId}, #{intentName},
             #{domainAgentId}, #{routeSource}, #{clarifyQuestion}, #{clarificationType}, #{sourceRunId},
-            #{hitlRequestId}, #{payloadJson}, #{foldedAt}, #{createdAt}, #{updatedAt}
+            #{interactionId}, #{payloadJson}, #{foldedAt}, #{createdAt}, #{updatedAt}
         )
     </insert>
 

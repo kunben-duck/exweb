@@ -3,7 +3,7 @@ package com.huawei.finance.front.one.domain.chat;
 /**
  * 等待用户输入类型。
  */
-public enum ChatHitlWaitingType {
+public enum ChatInteractionType {
     /** 旧澄清类型兼容值；新数据使用 AGENT_CLARIFICATION。 */
     CLARIFICATION,
     /** Runtime/Agent 执行中发起的对话澄清。 */

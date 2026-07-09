@@ -107,7 +107,8 @@ public class ChatController {
                         runStart.firstSeq(),
                         runStart.createdAt(),
                         runStart.streamTopicId()
-                ));
+                ))
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     /**
@@ -316,8 +317,8 @@ public class ChatController {
                 status.activeRunLastSeq(),
                 status.cancellable(),
                 status.waitingUserInput(),
-                status.hitlRequestId(),
-                status.waitingType(),
+                status.interactionId(),
+                status.interactionType(),
                 status.assistantMessageId(),
                 status.expiresAt(),
                 status.bindingProvider(),

@@ -36,7 +36,8 @@ public class ChatRequestTranslator {
                 request.message(), toAttachmentRefs(request.attachments()), metadata,
                 request.targetType(), request.targetId(),
                 ChatRunMode.from(request.runMode()), request.parentMessageId(), request.editedMessageId(),
-                request.regeneratedMessageId());
+                request.regeneratedMessageId(), request.interactionId(), request.approved(), request.scope(),
+                normalizeMetadata(request.questionnaireAnswers()));
     }
 
     private Map<String, Object> normalizeMetadata(Map<String, Object> metadata) {

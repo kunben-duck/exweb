@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookieProperties;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
-import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeHitlResponseRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
@@ -704,7 +704,7 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
-    void hitlContinuationSendsApprovalResponseFrame() throws Exception {
+    void interactionContinuationSendsApprovalResponseFrame() throws Exception {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}",
                 "{\"type\":\"relay-start\",\"content\":\"continue\",\"session_id\":\"relay-session-1\"}",
@@ -713,7 +713,7 @@ class RelayWebSocketRuntimeAdapterTest {
         ));
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
-        StepVerifier.create(adapter.continueWithUserResponse(hitlRequest()))
+        StepVerifier.create(adapter.continueWithUserResponse(interactionRequest()))
                 .assertNext(this::assertSessionReadyMetadata)
                 .assertNext(event -> assertThat(event.type()).isEqualTo("runtime.progress"))
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "已收到澄清"))
@@ -974,17 +974,17 @@ class RelayWebSocketRuntimeAdapterTest {
         );
     }
 
-    private AgentRuntimeHitlResponseRequest hitlRequest() {
-        return new AgentRuntimeHitlResponseRequest(
+    private AgentRuntimeInteractionResponseRequest interactionRequest() {
+        return new AgentRuntimeInteractionResponseRequest(
                 "tenant1",
                 "user1",
                 "account1",
                 1001L,
                 "session1",
-                "run-hitl-1",
+                "run-interaction-1",
                 "relay-session-1",
                 "relay",
-                "hitl-1",
+                "interaction-1",
                 "CLARIFICATION",
                 "approval-1",
                 Map.of(

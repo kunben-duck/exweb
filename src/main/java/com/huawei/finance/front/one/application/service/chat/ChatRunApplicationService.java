@@ -47,7 +47,7 @@ public class ChatRunApplicationService {
     private final SessionRepository sessionRepository;
     private final ChatRunLeaseApplicationService leaseService;
     private final ObjectProvider<ChatRunRecoveryOrchestrator> recoveryOrchestratorProvider;
-    private final ObjectProvider<ChatHitlApplicationService> hitlServiceProvider;
+    private final ObjectProvider<ChatInteractionApplicationService> interactionServiceProvider;
     private final ObjectProvider<RuntimeBindingApplicationService> runtimeBindingServiceProvider;
 
     @Autowired
@@ -56,7 +56,7 @@ public class ChatRunApplicationService {
                                      SessionRepository sessionRepository,
                                      ChatRunLeaseApplicationService leaseService,
                                      ObjectProvider<ChatRunRecoveryOrchestrator> recoveryOrchestratorProvider,
-                                     ObjectProvider<ChatHitlApplicationService> hitlServiceProvider,
+                                     ObjectProvider<ChatInteractionApplicationService> interactionServiceProvider,
                                      ObjectProvider<RuntimeBindingApplicationService> runtimeBindingServiceProvider) {
         this.repository = repository;
         this.cache = cache;
@@ -65,7 +65,7 @@ public class ChatRunApplicationService {
         this.sessionRepository = sessionRepository;
         this.leaseService = leaseService;
         this.recoveryOrchestratorProvider = recoveryOrchestratorProvider;
-        this.hitlServiceProvider = hitlServiceProvider;
+        this.interactionServiceProvider = interactionServiceProvider;
         this.runtimeBindingServiceProvider = runtimeBindingServiceProvider;
     }
 
@@ -79,7 +79,7 @@ public class ChatRunApplicationService {
         this.sessionRepository = sessionRepository;
         this.leaseService = null;
         this.recoveryOrchestratorProvider = null;
-        this.hitlServiceProvider = null;
+        this.interactionServiceProvider = null;
         this.runtimeBindingServiceProvider = null;
     }
 
@@ -349,17 +349,17 @@ public class ChatRunApplicationService {
 
     private ChatStreamStatus waitingStatus(UserContext user, String sessionId, long latestSeq,
                                            BindingSummary bindingSummary) {
-        ChatHitlApplicationService hitlService = hitlServiceProvider == null ? null : hitlServiceProvider.getIfAvailable();
-        if (hitlService == null) {
+        ChatInteractionApplicationService interactionService = interactionServiceProvider == null ? null : interactionServiceProvider.getIfAvailable();
+        if (interactionService == null) {
             return new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
                     false, false, null, null, null, null,
                     bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                     bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
                     bindingSummary.updatedAt());
         }
-        return hitlService.findWaiting(user, sessionId)
+        return interactionService.findWaiting(user, sessionId)
                 .map(request -> new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
-                        false, true, request.id(), request.waitingType().name(),
+                        false, true, request.id(), request.interactionType().name(),
                         request.assistantMessageId(), request.expiresAt(),
                         bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                         bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),

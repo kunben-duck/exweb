@@ -1,6 +1,6 @@
 package com.huawei.finance.front.one.infrastructure.runtime;
 
-import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeHitlResponseRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteraction;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import reactor.core.publisher.Flux;
@@ -18,7 +18,7 @@ public class UnsupportedAgentRuntimeInteraction implements AgentRuntimeInteracti
     }
 
     @Override
-    public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeHitlResponseRequest request) {
+    public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeInteractionResponseRequest request) {
         return Flux.error(new UnsupportedOperationException("当前 AgentRuntime 不支持交互续接"));
     }
 }

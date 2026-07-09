@@ -105,7 +105,7 @@ public class RouteMemoryApplicationService {
     }
 
     public void appendClarification(UserContext user, String sessionId, String sourceRunId,
-                                    String hitlRequestId, Map<String, Object> requestPayload) {
+                                    String interactionId, Map<String, Object> requestPayload) {
         if (user == null || blank(sessionId) || requestPayload == null || requestPayload.isEmpty()) {
             return;
         }
@@ -126,7 +126,7 @@ public class RouteMemoryApplicationService {
                     clarifyQuestion(requestPayload),
                     clarificationType(requestPayload),
                     sourceRunId,
-                    hitlRequestId,
+                    interactionId,
                     requestPayload,
                     null,
                     now,

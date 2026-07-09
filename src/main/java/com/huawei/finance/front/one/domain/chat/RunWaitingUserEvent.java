@@ -10,7 +10,7 @@ import java.util.Map;
  * @param sessionId 前端聊天会话标识。
  * @param sequence 事件持久化后的恢复游标序号，由数据库事实源生成。
  * @param createdAt 事件创建时间。
- * @param payload 等待用户输入载荷，包含 hitlRequestId、waitingType 和 assistantMessageId。
+ * @param payload 等待用户输入载荷，包含 interactionId、interactionType 和 assistantMessageId。
  */
 public record RunWaitingUserEvent(
         String runId,

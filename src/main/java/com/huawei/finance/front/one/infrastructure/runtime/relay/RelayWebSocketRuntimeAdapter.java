@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookieProperties;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
-import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeHitlResponseRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
@@ -49,7 +49,7 @@ import reactor.netty.http.client.HttpClient;
  * <p>每个 ChatService run 都建立一条短生命周期下游 WebSocket，先完成 {@code config} 阶段，再发送
  * {@code user-message}。配置阶段 frame 只用于握手判定，不进入 ChatService 标准事件流；{@code user-message}
  * 之后的下游 frame 才复用 {@link RelayRuntimeResponseNormalizer} 转为标准事件。本轮只支持普通问答；
- * {@code approval-request} 等 HITL 协议事件先按 runtime 事件透传，不进入等待用户状态。</p>
+ * {@code approval-request} 等 Interaction 协议事件先按 runtime 事件透传，不进入等待用户状态。</p>
  */
 @Component
 @EnableConfigurationProperties({RelayAgentProperties.class, AgentRuntimeForwardCookieProperties.class})
@@ -107,9 +107,9 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     }
 
     @Override
-    public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeHitlResponseRequest request) {
+    public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeInteractionResponseRequest request) {
         AtomicBoolean messageCompleted = new AtomicBoolean(false);
-        Flux<ChatEvent> events = hitlWithShortConnection(request, messageCompleted);
+        Flux<ChatEvent> events = interactionWithShortConnection(request, messageCompleted);
         return events.concatWith(Mono.defer(() -> messageCompleted.get()
                 ? Mono.empty()
                 : Mono.just(MessageCompletedEvent.of(request.runId(), request.sessionId()))));
@@ -144,7 +144,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         }, FluxSink.OverflowStrategy.BUFFER);
     }
 
-    private Flux<ChatEvent> hitlWithShortConnection(AgentRuntimeHitlResponseRequest request,
+    private Flux<ChatEvent> interactionWithShortConnection(AgentRuntimeInteractionResponseRequest request,
                                                     AtomicBoolean messageCompleted) {
         return Flux.create(sink -> {
             ShortRunExchange exchange = new ShortRunExchange(request.runId());
@@ -156,7 +156,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                         Flux<String> frames = session.receive()
                                 .map(WebSocketMessage::getPayloadAsText)
                                 .doOnNext(frame -> validateFrameSize(frame, request.runId()));
-                        Flux<ChatEvent> normalized = hitlResponseFrames(frames, request, exchange)
+                        Flux<ChatEvent> normalized = interactionResponseFrames(frames, request, exchange)
                                 .transform(frameStream -> normalizeFrames(frameStream, request.runId(),
                                         request.sessionId(), messageCompleted))
                                 .doOnNext(sink::next)
@@ -356,7 +356,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         return businessFramesAfterConfig(frames, request.runId(), exchange, userMessage(request));
     }
 
-    private Flux<String> hitlResponseFrames(Flux<String> frames, AgentRuntimeHitlResponseRequest request,
+    private Flux<String> interactionResponseFrames(Flux<String> frames, AgentRuntimeInteractionResponseRequest request,
                                             ShortRunExchange exchange) {
         return businessFramesAfterConfig(frames, request.runId(), exchange, approvalResponseMessage(request));
     }
@@ -566,7 +566,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         return toJson(Map.of("type", "config", "config", Map.copyOf(config)));
     }
 
-    private String configMessage(AgentRuntimeHitlResponseRequest request) {
+    private String configMessage(AgentRuntimeInteractionResponseRequest request) {
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("sessionMode", "resume");
         config.put("sessionId", blank(request.runtimeSessionId()) ? request.sessionId() : request.runtimeSessionId());
@@ -590,7 +590,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         return toJson(message);
     }
 
-    private String approvalResponseMessage(AgentRuntimeHitlResponseRequest request) {
+    private String approvalResponseMessage(AgentRuntimeInteractionResponseRequest request) {
         Map<String, Object> message = new LinkedHashMap<>();
         message.put("type", "approval-response");
         message.put("request_id", request.approvalId());

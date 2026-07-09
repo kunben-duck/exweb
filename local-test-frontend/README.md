@@ -43,9 +43,9 @@ Referer: http://localhost:8080/fin/ex/
 
 点击“保存请求头”后，配置会保存到浏览器 `localStorage`，并同步到本地 Node 代理内存。后续所有 `/v1/**` HTTP 请求、fetch 方式的 Event Resume、文件上传/下载，以及 `/v1/chat/ws` WebSocket 握手都会由本地代理自动注入这些请求头。
 
-其中 `/v1/chat/runs`、`/v1/chat/runs/{runId}/stop` 和 `targetProvider=domain-agent`
-的 `/v1/documents` 上传请求会被后端按配置透传给可信下游 adapter，用于本地模拟企业 Relay
-或 DomainAgent 文件服务鉴权。Cookie 不会写入后端数据库、文档元数据或前端事件，也不会发送给未显式开启
+其中 `/v1/chat/runs`、`/v1/chat/runs/{runId}/stop` 和配置为 `api-store` 的 `/v1/documents`
+上传请求会被后端按配置透传给可信下游 adapter，用于本地模拟企业 Relay、DomainAgent
+或新文档上传服务鉴权。Cookie 不会写入后端数据库、文档元数据或前端事件，也不会发送给未显式开启
 `forward-cookie` 的 provider。
 
 需要注意：浏览器出于安全限制，不允许前端 JavaScript 直接设置 `Cookie` 请求头，也不允许给原生 `WebSocket` 设置自定义请求头。因此这里采用本地代理 profile 机制：浏览器只携带非敏感的 profileId，真正的 `Cookie/Authorization/X-*` 由 `server.mjs` 转发到后端。该能力仅用于本地联调，不要把真实 Cookie 提交到仓库或日志。
@@ -67,8 +67,8 @@ Referer: http://localhost:8080/fin/ex/
 - 消息版本：历史消息直接读取 `/messages` 返回的 `versionInfo` 展示 `<1/3>` 游标，
   切换时先用 `switchLeafMessageId` 查询 `/messages?leafMessageId=...` 刷新聊天区，再后台保存 `/path`。
 - Event Resume：会话级事件恢复按 `afterSeq` 有限补发缺失事件；run 级事件恢复在 active run 恢复时补发并接续 live 事件到终态。
-- 文档库：上传本地文件、按 `targetProvider` 选择 default-storage 或 domain-agent provider、列表、详情、状态、预览地址、下载、改名、删除。
-- 附件：选择文档库中 `AVAILABLE` 文档作为聊天附件发送；指定 DomainAgent 时应先用 `targetProvider=domain-agent` 上传。
+- 文档库：上传本地文件，后端按 `financeex.storage.provider=local/huawei-s3/api-store` 选择存储方式；支持列表、详情、状态、预览地址、下载、改名、删除。
+- 附件：选择文档库中 `AVAILABLE` 文档作为聊天附件发送；指定 DomainAgent 且使用 `api-store` 上传时，可在 multipart `metadata` JSON 中传 `skillId`。
 - 跨页签续接：复制页签后通过 run 级事件恢复从 `activeRunFirstSeq - 1` 补发当前 active run 已生成事件，并继续接收 live 事件直到本轮 run 终态；active run 恢复期间不会先 replay 本地缓存，避免把同浏览器缓存误认为服务端续传结果。
 - 运行态按钮：active run 存在时发送按钮显示“生成中”并禁用，停止按钮保持可用；刷新、复制页签或切换会话后通过 `stream-status` 恢复同样状态。
 - 故障事件：支持观察 watchdog 或控制面初始化失败产生的 `run.failed`，验证前端能关闭 loading 并保留失败草稿。
@@ -88,6 +88,7 @@ Referer: http://localhost:8080/fin/ex/
 | 实时输出 | `WS /v1/chat/ws` | 发送 `connect`、`subscribe`、`unsubscribe` 控制消息 |
 | 跨页签续接 | `GET /v1/chat/runs/{runId}/events/resume` | active run 恢复时从 `activeRunFirstSeq - 1` 补发并 tail 到终态 |
 | 停止回答 | `POST /v1/chat/runs/{runId}/stop` | REST 生命周期控制，不是 WebSocket command |
+| Interaction 续接 | `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` | 提交意图澄清、Agent 澄清、审批或 DomainAgent 切换确认 |
 | 历史版本 | `GET /messages`、`GET /messages?leafMessageId=...`、`POST /path` | 使用 `versionInfo` 展示 `1/3` 游标，切换时先刷新目标 leaf path，再保存当前 leaf |
 | 新建分支 | `POST /branches` | 从指定消息创建只读历史快照分支 |
 | 删除会话 | `DELETE /v1/chat/sessions/{sessionId}`、`DELETE /v1/chat/sessions` | 单个或批量软删除会话；active run 存在时由后端自动取消 |
@@ -104,7 +105,7 @@ Referer: http://localhost:8080/fin/ex/
 3. 输出中途点击“复制页签”，新页签会读取同一 `sessionId`，先加载历史，再通过 run event resume 持续恢复到本轮 run 终态。
 4. 输出中途点击“停止回答”，观察 `run.cancelled` 是否通过 WebSocket 或 Event Resume 到达。
 5. 上传文档，选择“作为附件”，再发送消息确认 `attachments[{documentId}]` 能进入请求。
-6. 测试 DomainAgent 路径时，在上传区填写 `targetProvider=domain-agent` 和对应 `domainAgentId`，再在发送区填写同一个 `selectedDomainAgentId`；如 DomainAgent 还需要额外业务参数，可在 `domainAgent.sceneParam JSON` 中填写 JSON object。后端会进入 `DOMAIN_AGENT` 路由，不创建 RuntimeBinding，并用已选择附件生成可信 `sceneParam.docList` 覆盖前端传入的 `docList`。若企业鉴权依赖 Cookie，请先在“鉴权请求头”保存完整 Cookie/header，代理会把 Cookie 注入上传入口，后端再按 provider 配置透传给 DomainAgent upload。
+6. 测试 DomainAgent 路径时，如果后端配置 `financeex.storage.provider=api-store`，上传区可在 multipart `metadata` 中填写 `{"skillId":"skill_xxx"}`；发送区使用 `targetType=DOMAIN_AGENT,targetId=skill_xxx` 显式选择领域 Agent。如 DomainAgent 还需要额外业务参数，可在 `metadata.sceneParam` 中填写 JSON object。后端会进入 `DOMAIN_AGENT` 路由并绑定当前会话；若带附件，`metadata.sceneParam.docList` 中的 `docId/url` 必须匹配已选择附件的文档库 `providerDocument.docId/url`。若企业鉴权依赖 Cookie，请先在“鉴权请求头”保存完整 Cookie/header，代理会把 Cookie 注入上传入口，后端再按存储配置决定是否透传给 api-store。
 7. 对一条 user 消息点击编辑并重新提问，确认旧消息不变、新 user sibling 出现在版本游标中。
 8. 对一条 assistant 消息点击重新生成，确认同一 user 下出现新的 assistant sibling。
 9. 从某条历史消息创建分支，确认分支历史消息为只读，后续新增消息仍可继续编辑或重新生成。
@@ -117,7 +118,7 @@ Referer: http://localhost:8080/fin/ex/
 1. 在页签 A 中选择或创建会话，发送一条会产生较长输出的问题。
 2. 在输出尚未完成时点击“复制页签”，打开页签 B。
 3. 页签 B 会先读取历史消息和 `stream-status`，如果发现 active run，则不会 replay `localStorage` 中的未完成 run 事件，而是调用 `runs/{activeRunId}/events/resume?afterSeq=activeRunFirstSeq-1` 补齐当前回答已经生成的事件，并继续接收后续 live event 直到 run 终态。
-4. 本轮 run 恢复期间，页签 B 不会再对同一个 run 发 WebSocket `subscribe`；后续新提问仍按 `/chat/runs + WebSocket subscribe` 走实时通道。
+4. 本轮 run 恢复期间，页签 B 不会再对同一个 run 发 WebSocket `subscribe`；后续新提问仍按 `/v1/chat/runs + WebSocket subscribe` 走实时通道。
 5. 也可以手动刷新页签 B，或关闭页签 A 后在页签 B 点击“事件恢复”“恢复 active run”验证恢复链路。
 
 这里的关键点是：`stream-status.latestSeq` 只表示服务端事件事实源的最新位置，不能直接作为客户端已消费游标。active run 恢复统一从 `activeRunFirstSeq - 1` 做 run 级事件恢复 catchup，并通过 `sessionId + sequence` 去重；联调台只在本地维护每个 session 的最大 `sequence`，不会向服务端发送消费确认命令。

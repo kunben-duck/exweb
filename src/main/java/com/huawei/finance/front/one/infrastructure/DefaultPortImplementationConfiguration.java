@@ -60,7 +60,7 @@ public class DefaultPortImplementationConfiguration {
     /**
      * 默认 Runtime 交互续接能力。
      *
-     * <p>Relay WebSocket 等支持 HITL 的 Runtime 会提供自己的 {@link AgentRuntimeInteraction} bean；
+     * <p>Relay WebSocket 等支持 Interaction 的 Runtime 会提供自己的 {@link AgentRuntimeInteraction} bean；
      * 其他 Runtime 默认不进入 WAITING_USER，避免保存出无法继续的等待态。</p>
      */
     @Bean

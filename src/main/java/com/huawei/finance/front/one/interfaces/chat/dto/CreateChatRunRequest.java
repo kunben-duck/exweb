@@ -17,10 +17,14 @@ import java.util.Map;
  * @param sessionId 前端聊天会话标识。
  * @param conversationId 前端对话标识，通常与 sessionId 一致或为空。
  * @param message 用户输入文本。
- * @param runMode 消息树写入模式，默认 NEXT；可选 EDIT_USER、REGENERATE_ASSISTANT。
+ * @param runMode 消息树写入模式，默认 NEXT；可选 EDIT_USER、REGENERATE_ASSISTANT、CONTINUE_INTERACTION。
  * @param parentMessageId NEXT 模式显式父节点；为空时使用会话 current leaf。
  * @param editedMessageId EDIT_USER 模式被编辑的 user 消息。
  * @param regeneratedMessageId REGENERATE_ASSISTANT 模式被重新生成的 assistant 消息。
+ * @param interactionId CONTINUE_INTERACTION 模式续接的 Interaction 请求 ID。
+ * @param approved 审批、确认或切换确认结果；澄清类可省略。
+ * @param scope 授权或确认范围；澄清类默认 once。
+ * @param questionnaireAnswers 澄清问题答案。
  * @param attachments 本轮关联附件列表。
  * @param targetType 显式直连目标类型；当前支持 DOMAIN_AGENT，为空时走普通路由。
  * @param targetId 显式直连目标 ID；targetType=DOMAIN_AGENT 时表示 DomainAgent ID。
@@ -43,6 +47,13 @@ public record CreateChatRunRequest(
         String editedMessageId,
         @Size(max = 64, message = "regeneratedMessageId 长度不能超过 64")
         String regeneratedMessageId,
+        @Size(max = 64, message = "interactionId 长度不能超过 64")
+        String interactionId,
+        Boolean approved,
+        @Size(max = 32, message = "scope 长度不能超过 32")
+        String scope,
+        @Size(max = 50, message = "questionnaireAnswers 最多允许 50 个字段")
+        Map<String, Object> questionnaireAnswers,
         @Valid
         @Size(max = 20, message = "单次聊天最多引用 20 个附件")
         List<ChatAttachmentDto> attachments,
@@ -61,8 +72,8 @@ public record CreateChatRunRequest(
      */
     public CreateChatRunRequest(String commandId, String sessionId, String conversationId, String message,
                                 List<ChatAttachmentDto> attachments, Map<String, ?> metadata) {
-        this(commandId, sessionId, conversationId, message, null, null, null, null, attachments, null, null,
-                copyMetadata(metadata));
+        this(commandId, sessionId, conversationId, message, null, null, null, null, null, null, null, null,
+                attachments, null, null, copyMetadata(metadata));
     }
 
     private static Map<String, Object> copyMetadata(Map<String, ?> metadata) {

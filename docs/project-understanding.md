@@ -872,7 +872,7 @@ ChatRunApplicationService#streamStatus(...)
 - 查询 active run。
 - 如果 active run lease 已过期，触发一次轻量懒恢复。
 - 返回 `activeRunId`、`activeRunStatus`、`streamTopicId`、`activeRunFirstSeq`、`activeRunLastSeq`、`cancellable`。
-- 如果会话存在 Relay questionnaire 等待态，还会返回 `waitingUserInput`、`hitlRequestId`、`waitingType`、`assistantMessageId` 和 `expiresAt`，供前端刷新后继续展示澄清卡片；等待态默认 24h 过期，过期状态由查询或提交路径懒标记。
+- 如果会话存在意图澄清、Agent questionnaire 或 DomainAgent 切换确认等待态，还会返回 `waitingUserInput`、`interactionId`、`interactionType`、`assistantMessageId` 和 `expiresAt`，供前端刷新后继续展示交互卡片；续接统一调用 `POST /v1/chat/runs` 并传 `runMode=CONTINUE_INTERACTION, interactionId`。等待态默认 24h 过期，过期状态由查询或提交路径懒标记。
 
 重点排查：
 

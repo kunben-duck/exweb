@@ -176,8 +176,8 @@ final class AssistantAssembly {
     }
 
     private static boolean agentClarificationResponse(Map<String, Object> payload) {
-        return "AGENT_CLARIFICATION".equals(stringValue(payload.get("waitingType")))
-                || "CLARIFICATION".equals(stringValue(payload.get("waitingType")));
+        return "AGENT_CLARIFICATION".equals(stringValue(payload.get("interactionType")))
+                || "CLARIFICATION".equals(stringValue(payload.get("interactionType")));
     }
 
     private static boolean isIntentClarificationRequest(Map<String, Object> payload) {

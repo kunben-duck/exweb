@@ -430,7 +430,11 @@ async function sendRun() {
   if (!message) return;
 
   const attachments = [...state.selectedDocuments.values()].map(document => ({ documentId: document.id }));
-  const selectedDomainAgentId = $("selectedDomainAgentIdInput")?.value?.trim();
+  const targetDomainAgentId = $("targetDomainAgentIdInput")?.value?.trim();
+  const metadataExtra = parseOptionalJsonObject($("runMetadataInput")?.value?.trim(), "run metadata");
+  if (metadataExtra === undefined) {
+    return;
+  }
   const body = {
     commandId: `cmd_${Date.now()}`,
     sessionId: state.selectedSessionId || null,
@@ -439,24 +443,13 @@ async function sendRun() {
     attachments,
     metadata: {
       clientMessageId: `client_${Date.now()}`,
-      forceNewTask: $("forceNewTask").checked,
-      source: "local-test-frontend"
+      source: "local-test-frontend",
+      ...(metadataExtra || {})
     }
   };
-  if (selectedDomainAgentId) {
-    const sceneParam = parseOptionalJsonObject($("domainAgentSceneParamInput")?.value?.trim(), "domainAgent.sceneParam");
-    if (sceneParam === undefined) {
-      return;
-    }
-    body.metadata.selectedDomainAgentId = selectedDomainAgentId;
-    body.metadata.domainAgent = {
-      isThinking: 1,
-      platform: "PC",
-      qaType: "normalQa",
-      streamFlag: "stream",
-      supMsg: "",
-      ...(sceneParam ? { sceneParam } : {})
-    };
+  if (targetDomainAgentId) {
+    body.targetType = "DOMAIN_AGENT";
+    body.targetId = targetDomainAgentId;
   }
 
   $("messageInput").value = "";
@@ -1225,13 +1218,13 @@ async function uploadDocument() {
   if ($("uploadBindSession").checked && state.selectedSessionId) {
     data.append("sessionId", state.selectedSessionId);
   }
-  const targetProvider = $("uploadTargetProvider")?.value?.trim();
-  const domainAgentId = $("uploadDomainAgentId")?.value?.trim();
-  if (targetProvider) {
-    data.append("targetProvider", targetProvider);
-  }
-  if (domainAgentId) {
-    data.append("domainAgentId", domainAgentId);
+  const uploadMetadataText = $("uploadMetadataInput")?.value?.trim();
+  if (uploadMetadataText) {
+    const uploadMetadata = parseOptionalJsonObject(uploadMetadataText, "upload metadata");
+    if (uploadMetadata === undefined) {
+      return;
+    }
+    data.append("metadata", JSON.stringify(uploadMetadata));
   }
   const document = await requestJson("/v1/documents", { method: "POST", body: data });
   log(`document uploaded ${document.id}`);
@@ -1386,8 +1379,9 @@ function setActiveRunLabel() {
 function updateRunControls() {
   const sendButton = $("sendRunBtn");
   const stopButton = $("stopRunBtn");
-  const forceNewTask = $("forceNewTask");
-  if (!sendButton || !stopButton || !forceNewTask) return;
+  const targetInput = $("targetDomainAgentIdInput");
+  const metadataInput = $("runMetadataInput");
+  if (!sendButton || !stopButton) return;
 
   const starting = state.activeRunStatus === "STARTING";
   const running = isRunInProgressStatus(state.activeRunStatus);
@@ -1397,7 +1391,8 @@ function updateRunControls() {
   sendButton.textContent = starting ? "启动中..." : running ? "生成中..." : "发送 run";
   stopButton.disabled = !cancellable;
   stopButton.textContent = state.activeRunStatus === "CANCELLING" ? "停止中..." : "停止回答";
-  forceNewTask.disabled = starting || running;
+  if (targetInput) targetInput.disabled = starting || running;
+  if (metadataInput) metadataInput.disabled = starting || running;
 }
 
 function isRunInProgress() {

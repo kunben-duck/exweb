@@ -2,7 +2,7 @@ package com.huawei.finance.front.one.application.service.runtime;
 
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
-import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeHitlResponseRequest;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteraction;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
@@ -83,8 +83,8 @@ public class AgentRuntimeExecutor {
         return protect(runtime.provider(), runtime.query(request));
     }
 
-    public Flux<ChatEvent> continueWithUserResponse(RuntimeHitlResponseContext context) {
-        var request = new AgentRuntimeHitlResponseRequest(
+    public Flux<ChatEvent> continueWithUserResponse(RuntimeInteractionResponseContext context) {
+        var request = new AgentRuntimeInteractionResponseRequest(
                 context.user().tenantId(),
                 context.user().ownerUserId(),
                 context.user().userAccount(),
@@ -93,8 +93,8 @@ public class AgentRuntimeExecutor {
                 context.runId(),
                 context.runtimeSessionId(),
                 context.runtimeProvider(),
-                context.hitlRequestId(),
-                context.waitingType(),
+                context.interactionId(),
+                context.interactionType(),
                 context.approvalId(),
                 context.responsePayload(),
                 context.forwardHeaders()
@@ -152,7 +152,7 @@ public class AgentRuntimeExecutor {
         }
 
         @Override
-        public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeHitlResponseRequest request) {
+        public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeInteractionResponseRequest request) {
             return interaction.continueWithUserResponse(request);
         }
 

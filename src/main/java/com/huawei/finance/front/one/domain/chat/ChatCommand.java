@@ -26,6 +26,10 @@ import java.util.Map;
  * @param parentMessageId 普通继续提问时显式指定的父节点；为空时使用会话 current leaf。
  * @param editedMessageId 编辑历史 user 消息时被编辑的原消息。
  * @param regeneratedMessageId 重新生成 assistant 回复时被重新生成的原回答。
+ * @param interactionId CONTINUE_INTERACTION 模式续接的 Interaction 请求 ID。
+ * @param approved 审批、确认或切换确认结果；澄清类可省略。
+ * @param scope 授权或确认范围；澄清类默认 once。
+ * @param questionnaireAnswers 澄清问题答案。
  */
 public record ChatCommand(
         String commandId,
@@ -42,7 +46,11 @@ public record ChatCommand(
         ChatRunMode runMode,
         String parentMessageId,
         String editedMessageId,
-        String regeneratedMessageId
+        String regeneratedMessageId,
+        String interactionId,
+        Boolean approved,
+        String scope,
+        Map<String, Object> questionnaireAnswers
 ) {
     /**
      * 兼容普通继续提问的便捷构造器。
@@ -51,7 +59,7 @@ public record ChatCommand(
                        String channel, String message, List<AttachmentRef> attachments, Map<String, Object> metadata) {
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 null, null,
-                ChatRunMode.NEXT, null, null, null);
+                ChatRunMode.NEXT, null, null, null, null, null, null, null);
     }
 
     /**
@@ -61,7 +69,20 @@ public record ChatCommand(
                        String channel, String message, List<AttachmentRef> attachments, Map<String, Object> metadata,
                        ChatRunMode runMode, String parentMessageId, String editedMessageId, String regeneratedMessageId) {
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
-                null, null, runMode, parentMessageId, editedMessageId, regeneratedMessageId);
+                null, null, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
+                null, null, null, null);
+    }
+
+    /**
+     * 兼容显式直连目标和消息树写入模式的内部调用点。
+     */
+    public ChatCommand(String commandId, String tenantId, String userId, String sessionId, String conversationId,
+                       String channel, String message, List<AttachmentRef> attachments, Map<String, Object> metadata,
+                       String targetType, String targetId, ChatRunMode runMode, String parentMessageId,
+                       String editedMessageId, String regeneratedMessageId) {
+        this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
+                targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
+                null, null, null, null);
     }
 
     public ChatCommand {
@@ -70,5 +91,8 @@ public record ChatCommand(
         targetType = targetType == null || targetType.isBlank() ? null : targetType.trim();
         targetId = targetId == null || targetId.isBlank() ? null : targetId.trim();
         runMode = runMode == null ? ChatRunMode.NEXT : runMode;
+        interactionId = interactionId == null || interactionId.isBlank() ? null : interactionId.trim();
+        scope = scope == null || scope.isBlank() ? null : scope.trim();
+        questionnaireAnswers = questionnaireAnswers == null ? Map.of() : Map.copyOf(questionnaireAnswers);
     }
 }

@@ -34,6 +34,7 @@ final class AssistantAssembly {
             if (content != null) {
                 snapshot = String.valueOf(content);
             }
+            parts.add(snapshotPart(event));
             return;
         }
         if (event.type() != null && event.type().startsWith("runtime.")) {
@@ -76,6 +77,25 @@ final class AssistantAssembly {
         Map<String, Object> payload = event.payload() == null ? Map.of() : event.payload();
         String sourceType = stringValue(payload.get("sourceType"));
         return new ChatMessagePartDraft(partType(event.type(), payload), sourceType, contentText(event.type(), payload), payload);
+    }
+
+    private static ChatMessagePartDraft snapshotPart(ChatEvent event) {
+        Map<String, Object> payload = event.payload() == null ? Map.of() : event.payload();
+        String sourceType = stringValue(payload.get("sourceType"));
+        if (sourceType == null || sourceType.isBlank()) {
+            sourceType = "message.snapshot";
+        }
+        return new ChatMessagePartDraft(
+                "MESSAGE_SNAPSHOT",
+                sourceType,
+                stringValue(payload.get("content")),
+                "回答快照",
+                "INFO",
+                "answer",
+                "collapsible",
+                false,
+                payload
+        );
     }
 
     private static String partType(String eventType, Map<String, Object> payload) {

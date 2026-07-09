@@ -436,14 +436,14 @@ COMMENT ON COLUMN fin_ex_chat_message_part_t.user_id IS '系统归属用户标�
 COMMENT ON COLUMN fin_ex_chat_message_part_t.session_id IS 'part 所属聊天会话 ID。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.message_id IS 'part 所属 assistant 消息 ID，对应 fin_ex_chat_message_t.id。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.run_id IS '产生该 part 的 runId；分支快照 part 可继承来源 runId。';
-COMMENT ON COLUMN fin_ex_chat_message_part_t.part_type IS 'part 类型：ANSWER、PROGRESS、METADATA、AGENT、THINKING、TOOL、REFERENCE、CARD、AGENT_CLARIFICATION_REQUEST、AGENT_CLARIFICATION_RESPONSE、INTENT_CLARIFICATION_REQUEST、INTENT_CLARIFICATION_RESPONSE、DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST、RUNTIME_EVENT。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.part_type IS 'part 类型：ANSWER、MESSAGE_SNAPSHOT、PROGRESS、METADATA、AGENT、THINKING、TOOL、REFERENCE、CARD、AGENT_CLARIFICATION_REQUEST、AGENT_CLARIFICATION_RESPONSE、INTENT_CLARIFICATION_REQUEST、INTENT_CLARIFICATION_RESPONSE、DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST、RUNTIME_EVENT。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.source_type IS '下游原始事件类型，例如 agent、relay-progress、tool_call_streaming。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.content_text IS '可展示文本摘要，例如最终回答、进度文本、工具输入预览。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.title IS '前端展示标题，例如运行进度、思考过程或工具调用；为空时应用层按 part_type 默认生成。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.status IS '展示状态，例如 INFO、STARTED、STREAMING、COMPLETED、FAILED、UNKNOWN；为空时应用层按 part_type 和 payload 默认生成。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.channel IS '展示频道，例如 answer、progress、metadata、agent、thinking、tool、runtime。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.display_hint IS '展示建议，例如 inline、collapsible、hidden、debug。';
-COMMENT ON COLUMN fin_ex_chat_message_part_t.visible IS '是否默认展示该 part；ANSWER 和 debug 类 runtime event 默认不展示，避免和正文重复或噪音过多。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.visible IS '是否默认展示该 part；ANSWER、MESSAGE_SNAPSHOT 和 debug 类 runtime event 默认不展示，避免和正文重复或噪音过多。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.payload_json IS '结构化展示载荷 JSON，保存脱敏限长后的 ChatService 标准 payload。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.part_order IS '同一 assistant 消息内 part 展示顺序。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.created_at IS 'part 创建时间。';

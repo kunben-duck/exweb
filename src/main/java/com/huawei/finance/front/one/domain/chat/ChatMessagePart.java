@@ -15,7 +15,7 @@ import java.util.Map;
  * @param sessionId 所属会话标识。
  * @param messageId 所属 assistant 消息标识。
  * @param runId 产生该 part 的 run 标识。
- * @param partType part 类型，例如 ANSWER、THINKING、TOOL、PROGRESS、CARD。
+ * @param partType part 类型，例如 ANSWER、MESSAGE_SNAPSHOT、THINKING、TOOL、PROGRESS、CARD。
  * @param sourceType 下游原始事件类型，例如 agent、relay-progress、tool_call_streaming。
  * @param contentText 可直接展示的文本摘要。
  * @param title 前端展示标题，例如“工具调用”或“思考过程”。
@@ -68,6 +68,7 @@ public record ChatMessagePart(
     private static String defaultTitle(String partType) {
         return switch (partType) {
             case "ANSWER" -> "最终回答";
+            case "MESSAGE_SNAPSHOT" -> "回答快照";
             case "PROGRESS" -> "运行进度";
             case "METADATA" -> "运行元数据";
             case "AGENT" -> "Agent 调用";
@@ -111,6 +112,7 @@ public record ChatMessagePart(
         }
         return switch (partType) {
             case "ANSWER" -> "COMPLETED";
+            case "MESSAGE_SNAPSHOT" -> "INFO";
             case "PROGRESS", "TOOL" -> "STREAMING";
             case "REFERENCE", "CARD", "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE",
                  "AGENT_CLARIFICATION_REQUEST", "AGENT_CLARIFICATION_RESPONSE",
@@ -124,6 +126,7 @@ public record ChatMessagePart(
     private static String defaultChannel(String partType) {
         return switch (partType) {
             case "ANSWER" -> "answer";
+            case "MESSAGE_SNAPSHOT" -> "answer";
             case "PROGRESS" -> "progress";
             case "METADATA" -> "metadata";
             case "AGENT" -> "agent";
@@ -143,6 +146,7 @@ public record ChatMessagePart(
     private static String defaultDisplayHint(String partType) {
         return switch (partType) {
             case "ANSWER" -> "hidden";
+            case "MESSAGE_SNAPSHOT" -> "collapsible";
             case "PROGRESS" -> "inline";
             case "RUNTIME_EVENT" -> "debug";
             case "REFERENCE" -> "collapsible";
@@ -156,7 +160,8 @@ public record ChatMessagePart(
     }
 
     private static boolean defaultVisible(String partType) {
-        return !"ANSWER".equals(partType) && !"RUNTIME_EVENT".equals(partType);
+        return !"ANSWER".equals(partType) && !"MESSAGE_SNAPSHOT".equals(partType)
+                && !"RUNTIME_EVENT".equals(partType);
     }
 
     private static String blankToDefault(String value, String defaultValue) {

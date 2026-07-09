@@ -1726,7 +1726,7 @@ heartbeat 和 done 使用同一个 envelope，不携带 `encodedItem`，也不�
 | --- | --- | --- |
 | `run.started` | run 已创建 | 可记录 run 状态为 running |
 | `message.delta` | assistant 文本增量 | 追加 `payload.delta` 到当前 assistant 消息 |
-| `message.snapshot` | assistant 最终回答快照，例如 Relay `type=agent,is_streaming=false` 或 `type=generate-response` | 使用 `payload.content` 替换当前 assistant 草稿，不要追加 |
+| `message.snapshot` | assistant 回答快照，例如 Relay `type=agent,is_streaming=false` 或 `type=generate-response` | 使用 `payload.content` 替换当前 assistant 草稿，不要追加；历史消息会把每个 snapshot 保存为 `MESSAGE_SNAPSHOT` part |
 | `runtime.progress` | 运行进度文本，例如 ChatService `route-progress`、Relay `relay-progress` | 展示到运行进度区域，不要拼入 assistant 正文 |
 | `runtime.metadata` | 下游 Runtime 元数据，例如 `project_home`、`available-modes` | 更新运行态面板、工作区链接或模式列表，不要拼入 assistant 正文 |
 | `runtime.agent` | 下游 agent 调用生命周期，例如 `agent-call` | 展示当前 agent、模型和任务信息 |
@@ -1765,8 +1765,9 @@ Relay stream-http adapter 会通过 `FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 配置�
 Relay 映射规则：
 
 - `type=agent,is_streaming=true` 且存在 `content/context` 时，默认映射为 `message.delta`，前端追加 `payload.delta`。
-- `type=agent,is_streaming=false` 且存在 `content/context` 时，映射为 `message.snapshot`，这是更权威的最终回答快照；前端用 `payload.content` 替换当前草稿。
+- `type=agent,is_streaming=false` 且存在 `content/context` 时，映射为 `message.snapshot`，这是更权威的回答快照；前端用 `payload.content` 替换当前草稿。
 - `type=generate-response` 且存在 `content` 时，同样映射为 `message.snapshot`，用于以 Relay 最终完整总结覆盖前面的流式草稿；它本身不代表 run 完成，仍等待 `session-state` 或显式终态闭合。
+- run 结束保存历史消息时，所有 `message.snapshot` 会按接收顺序进入 `parts[]`，partType 为 `MESSAGE_SNAPSHOT` 且默认 `visible=false`；assistant `content` 和最终 `ANSWER` part 仍使用最后一个 snapshot。
 - 纯文本 `steam-complete`、`stream-complete`、`stream_complete`、`stream.complete`、`stream-completed`、`[DONE]` 映射为 `message.completed`。
 - `relay-start/relay-progress/relay-end/clarified-query/plan-update/subagent-plan-created/subagent-subtask/approval-result/approval-response` 映射为 `runtime.progress`；`session-ready/session-state/project-home/available-modes/self-evolution-status/token-update` 映射为 `runtime.metadata`；Relay WebSocket 普通问答的 `heartbeat-response` 在 adapter 内部过滤；`agent-call` 映射为 `runtime.agent`；`agent-reasoning/thinking-operation-*/thinking-content-update` 映射为 `runtime.thinking`；`tool-call-streaming/tool-execution/tool-structured-result` 映射为 `runtime.tool`；引用/来源类事件映射为 `runtime.reference`；`approval-request` 映射为 `runtime.card`。
 - ChatService 在调用意图服务前会先推送一条 `runtime.progress`：`payload.sourceType=route-progress`、`payload.stage=intent_calling`、`payload.message=正在识别问题意图`。该事件只用于等待态提示，不包含意图 prompt、history 或原始响应；后续仍以 `run.completed/run.waiting_user/run.failed` 判断本轮结果。

@@ -12,7 +12,7 @@ import java.util.Map;
  * @param partId part 标识。
  * @param messageId 所属 assistant 消息标识。
  * @param runId 产生该 part 的 run 标识。
- * @param partType part 类型，例如 ANSWER、THINKING、TOOL、PROGRESS、REFERENCE。
+ * @param partType part 类型，例如 ANSWER、MESSAGE_SNAPSHOT、THINKING、TOOL、PROGRESS、REFERENCE。
  * @param sourceType 下游原始事件类型，例如 agent、relay-progress。
  * @param contentText 可展示文本摘要。
  * @param title 前端展示标题。

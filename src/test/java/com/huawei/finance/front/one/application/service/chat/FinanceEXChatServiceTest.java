@@ -57,6 +57,7 @@ import com.huawei.finance.front.one.domain.chat.ChatInteractionType;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
+import com.huawei.finance.front.one.domain.chat.ChatMessagePartDraft;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunCancelSignal;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecution;
@@ -395,9 +396,28 @@ class FinanceEXChatServiceTest {
                 .extracting(event -> event.payload().get("assistantMessageId"))
                 .isEqualTo(assistant.id());
         assertThat(assistant.parts()).extracting(ChatMessagePart::partType)
-                .containsExactly("TOOL", "ANSWER");
+                .containsExactly("TOOL", "MESSAGE_SNAPSHOT", "ANSWER");
         assertThat(assistant.parts()).extracting(ChatMessagePart::contentText)
-                .containsExactly("search: 查询报销流程", "最终\nMarkdown **正文**");
+                .containsExactly("search: 查询报销流程", "最终\nMarkdown **正文**", "最终\nMarkdown **正文**");
+    }
+
+    @Test
+    void assistantAssemblyKeepsAllMessageSnapshotsAsParts() {
+        AssistantAssembly assistant = new AssistantAssembly();
+        assistant.observe(new MessageSnapshotEvent("run1", "session1", 0, Instant.now(), "first",
+                Map.of("content", "first", "sourceType", "agent", "isFinal", false)));
+        assistant.observe(new MessageSnapshotEvent("run1", "session1", 0, Instant.now(), "second",
+                Map.of("content", "second", "sourceType", "generate-response", "isFinal", true)));
+
+        assertThat(assistant.finalContent()).isEqualTo("second");
+        assertThat(assistant.parts()).extracting(ChatMessagePartDraft::partType)
+                .containsExactly("MESSAGE_SNAPSHOT", "MESSAGE_SNAPSHOT");
+        assertThat(assistant.parts()).extracting(ChatMessagePartDraft::sourceType)
+                .containsExactly("agent", "generate-response");
+        assertThat(assistant.parts()).extracting(ChatMessagePartDraft::contentText)
+                .containsExactly("first", "second");
+        assertThat(assistant.parts()).extracting(ChatMessagePartDraft::visible)
+                .containsExactly(false, false);
     }
 
     @Test

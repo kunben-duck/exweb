@@ -315,7 +315,7 @@ RelayStreamHttpRuntimeAdapter#applyForwardedCookie(...)
 - Relay `type=agent,is_streaming=true` 的 `content/context` 默认转成 `message.delta`；`type=agent,is_streaming=false` 和 `type=generate-response` 且 `content` 非空时转成 `message.snapshot`；`steam-complete/stream-complete/[DONE]` 转成 `message.completed`。
 - Relay JSON payload 保留原始字段名和嵌套结构，normalizer 只收敛 ChatService 顶层事件类型，并补充 `source=relay`、`sourceType=<Relay原始type>`、`runtimeSessionId`。Relay `type=tool-structured-result` 是 MCP 工具结构化结果帧，统一映射为 `runtime.tool`，完整保留 `result_data/resultData`；其中 `is_last` 只是工具分片上下文，不触发 `message.completed`。
 - Relay 和 domain-agent 过程帧按语义转成 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.card`；domain-agent 的 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 这类对象如果跨网络 chunk，会继续使用对应稳定事件类型，并在 payload 中用 `fragment/itemId/delta/complete` 表达分片状态，避免半截 JSON 被误转成 `invalid-json`。当前 domain-agent 协议下 `cardUrl/diyCardScene/cardList/openCard` 通常不会在同一个 chunk 中同时出现，`runtime.card.payload.sourceType` 会保留原始字段名，例如 `diyCardScene` 或 `openCard`；未知完整 JSON 才转成 `runtime.event`。
-- `message.delta` 代表 assistant 正文增量并参与草稿拼接；`message.snapshot` 代表下游最终回答快照，会覆盖草稿成为历史正文。
+- `message.delta` 代表 assistant 正文增量并参与草稿拼接；`message.snapshot` 代表下游回答快照，会覆盖草稿，最后一个快照成为历史正文。
 - 流结束时补 `MessageCompletedEvent`。
 
 重点排查：
@@ -360,7 +360,8 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
    - 条件不满足时抛出写入拒绝，后台流停止，不发布该事件。
 
 5. `AssistantAssembly`
-   - 累积 `message.delta` 草稿；收到 `message.snapshot` 时记录最终快照并覆盖草稿作为历史正文。
+   - 累积 `message.delta` 草稿；收到 `message.snapshot` 时记录快照并覆盖草稿，历史正文最终使用最后一个 snapshot。
+   - 每个 `message.snapshot` 同时保存为 `MESSAGE_SNAPSHOT` part，供历史消息返回所有回答快照；最终 `ANSWER` part 仍只保存最终正文。
    - `runtime.*` 只作为运行态扩展事件落库和推送，不进入 assistant 正文；run 正常完成后会保存为 `fin_ex_chat_message_part_t`，供历史消息回显思考、工具、进度、引用、卡片和 agent 调用过程，并补齐稳定展示语义。
    - 如果本轮没有正文但存在卡片、引用、思考、工具、进度等用户可见 part，仍会创建一条空正文 assistant 消息作为 parts 挂载点；纯 trace/metadata 不会创建空 assistant。
    - 注意：只有 guarded insert 成功后的事件才会进入 assembly，不写未持久化的迟到 token。

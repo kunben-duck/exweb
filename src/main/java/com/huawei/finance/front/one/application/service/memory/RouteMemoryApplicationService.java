@@ -43,6 +43,8 @@ public class RouteMemoryApplicationService {
     public static final String TRIGGER_FIRST_TURN = "first_turn";
     public static final String TRIGGER_DOMAIN_REJECT = "domain_reject";
     public static final String TRIGGER_CLARIFY_ANSWER = "clarify_answer";
+    public static final String TRIGGER_FALLBACK_FOLLOWUP = "fallback_followup";
+    public static final String TRIGGER_USER_CORRECTION = "user_correction";
 
     private final RouteMemoryRepository repository;
     private final IdGenerator idGenerator;
@@ -142,7 +144,7 @@ public class RouteMemoryApplicationService {
         UserContext user = command.user();
         String sessionId = command.sessionId();
         RouteTarget route = command.route();
-        if (user == null || blank(sessionId) || route == null || blank(route.selectedAgentCode())) {
+        if (user == null || blank(sessionId) || !recordableRoute(route)) {
             return;
         }
         writeSafely("appendRoute", user, sessionId, () -> repository.save(newRouteItem(command, Instant.now())));
@@ -160,7 +162,7 @@ public class RouteMemoryApplicationService {
         UserContext user = command.user();
         String sessionId = command.sessionId();
         RouteTarget route = command.route();
-        if (user == null || blank(sessionId) || route == null || blank(route.selectedAgentCode())) {
+        if (user == null || blank(sessionId) || !recordableRoute(route)) {
             return;
         }
         writeSafely("completeRoute", user, sessionId, () -> {
@@ -171,7 +173,8 @@ public class RouteMemoryApplicationService {
     }
 
     /**
-     * ROUTE_MULTI/NO_MATCH 或最终进入 Relay 成功闭合后，只折叠澄清链，不写成功 DomainAgent route。
+     * 无可记录路由时只折叠澄清链。Relay/no_match 正常完成应调用 {@link #completeRoute(RouteMemoryRouteCommand)}
+     * 写入 fallback route，而不是走这个方法。
      */
     public void completeWithoutRoute(UserContext user, String sessionId) {
         if (user == null || blank(sessionId)) {
@@ -179,6 +182,17 @@ public class RouteMemoryApplicationService {
         }
         writeSafely("completeWithoutRoute", user, sessionId,
                 () -> repository.foldActiveClarifications(user.tenantId(), user.ownerUserId(), sessionId, Instant.now()));
+    }
+
+    public boolean latestRouteIsRelayFallback(UserContext user, String sessionId) {
+        if (user == null || blank(sessionId)) {
+            return false;
+        }
+        return readSafely("latestRouteIsRelayFallback", user, sessionId, false,
+                () -> repository.findRecentRoutes(user.tenantId(), user.ownerUserId(), sessionId, 1).stream()
+                        .findFirst()
+                        .map(this::relayFallbackRoute)
+                        .orElse(false));
     }
 
     public void foldActiveClarifications(UserContext user, String sessionId) {
@@ -269,6 +283,12 @@ public class RouteMemoryApplicationService {
             putIfPresent(payload, "confidence", intent.confidence());
             putIfPresent(payload, "slots", intent.slots());
         }
+        if (route.type() == com.huawei.finance.front.one.domain.routing.RouteType.AGENT_RUNTIME) {
+            payload.put("targetProvider", "relay");
+            payload.put("routeAction", routeAction(intent));
+        } else if (route.type() == com.huawei.finance.front.one.domain.routing.RouteType.DOMAIN_AGENT) {
+            payload.put("targetProvider", "domain-agent");
+        }
         return new RouteMemoryItem(
                 idGenerator.newId("rmem", IdGenerateContext.of(user.tenantId(), user.ownerUserId(), sessionId)),
                 user.tenantId(),
@@ -277,9 +297,9 @@ public class RouteMemoryApplicationService {
                 RouteMemoryItemType.ROUTE,
                 RouteMemoryItemStatus.ACTIVE,
                 command.query(),
-                intent == null ? route.selectedAgentCode() : intent.intentCode(),
-                intent == null ? route.selectedAgentCode() : intent.intentName(),
-                route.selectedAgentCode(),
+                routeIntentId(intent, route),
+                routeIntentName(intent, route),
+                routeDomainAgentId(route),
                 route.routeSource(),
                 null,
                 null,
@@ -323,6 +343,62 @@ public class RouteMemoryApplicationService {
         history.put("query", blankToDefault(item.queryText(), ""));
         history.put("intent", blankToDefault(item.intentName(), blankToDefault(item.domainAgentId(), "")));
         return Map.copyOf(history);
+    }
+
+    private boolean recordableRoute(RouteTarget route) {
+        if (route == null || route.type() == null) {
+            return false;
+        }
+        return switch (route.type()) {
+            case DOMAIN_AGENT -> !blank(route.selectedAgentCode());
+            case AGENT_RUNTIME -> true;
+            case SYSTEM_RESPONSE -> false;
+        };
+    }
+
+    private String routeIntentId(IntentDecision intent, RouteTarget route) {
+        if (intent != null && !blank(intent.intentCode())) {
+            return intent.intentCode();
+        }
+        if (route != null && route.type() == com.huawei.finance.front.one.domain.routing.RouteType.AGENT_RUNTIME) {
+            return "relay";
+        }
+        return route == null ? null : route.selectedAgentCode();
+    }
+
+    private String routeIntentName(IntentDecision intent, RouteTarget route) {
+        if (intent != null && !blank(intent.intentName())) {
+            return intent.intentName();
+        }
+        if (route != null && route.type() == com.huawei.finance.front.one.domain.routing.RouteType.AGENT_RUNTIME) {
+            return "no_match";
+        }
+        return route == null ? null : route.selectedAgentCode();
+    }
+
+    private String routeDomainAgentId(RouteTarget route) {
+        return route != null && route.type() == com.huawei.finance.front.one.domain.routing.RouteType.DOMAIN_AGENT
+                ? route.selectedAgentCode()
+                : null;
+    }
+
+    private String routeAction(IntentDecision intent) {
+        Object routeAction = intent == null || intent.slots() == null ? null : intent.slots().get("routeAction");
+        return routeAction == null || String.valueOf(routeAction).isBlank() ? "NO_MATCH" : String.valueOf(routeAction);
+    }
+
+    private boolean relayFallbackRoute(RouteMemoryItem item) {
+        if (item == null || item.itemType() != RouteMemoryItemType.ROUTE || item.status() != RouteMemoryItemStatus.ACTIVE) {
+            return false;
+        }
+        if ("relay".equalsIgnoreCase(blankToDefault(item.intentId(), ""))) {
+            return true;
+        }
+        if ("no_match".equalsIgnoreCase(blankToDefault(item.intentName(), ""))) {
+            return true;
+        }
+        Object targetProvider = item.payload() == null ? null : item.payload().get("targetProvider");
+        return targetProvider != null && "relay".equalsIgnoreCase(String.valueOf(targetProvider));
     }
 
     private Map<String, Object> toHistoryClarify(RouteMemoryItem item) {

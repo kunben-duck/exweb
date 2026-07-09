@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.interfaces.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookieProperties;
 import com.huawei.finance.front.one.application.config.ChatStreamProperties;
@@ -49,6 +50,92 @@ class ChatProtocolConvergenceTest {
         assertThat(command.message()).isEqualTo("分析一下这个文档");
         assertThat(command.attachments()).hasSize(1);
         assertThat(command.metadata()).containsExactlyEntriesOf(Map.of("clientMessageId", "front1"));
+    }
+
+    @Test
+    void translatorMapsForceRerouteToUserCorrectionRouteTrigger() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1",
+                "session1",
+                "conversation1",
+                "帮我重新判断应该用哪个技能",
+                "NEXT",
+                null,
+                null,
+                null,
+                true,
+                null,
+                null,
+                null,
+                null,
+                List.of(),
+                null,
+                null,
+                Map.of("routeTrigger", "first_turn")
+        );
+
+        ChatCommand command = translator.toCommand(request);
+
+        assertThat(command.routeTrigger()).isEqualTo("user_correction");
+        assertThat(command.metadata()).containsEntry("routeTrigger", "first_turn");
+    }
+
+    @Test
+    void translatorRejectsForceRerouteWithExplicitTarget() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1",
+                "session1",
+                "conversation1",
+                "帮我重新判断应该用哪个技能",
+                "NEXT",
+                null,
+                null,
+                null,
+                true,
+                null,
+                null,
+                null,
+                null,
+                List.of(),
+                "DOMAIN_AGENT",
+                "skill-a",
+                Map.of()
+        );
+
+        assertThatThrownBy(() -> translator.toCommand(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("forceReroute=true");
+    }
+
+    @Test
+    void translatorRejectsForceRerouteForInteractionContinuation() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1",
+                "session1",
+                "conversation1",
+                null,
+                "CONTINUE_INTERACTION",
+                null,
+                null,
+                null,
+                true,
+                "interaction1",
+                null,
+                null,
+                Map.of("问题", "答案"),
+                List.of(),
+                null,
+                null,
+                Map.of()
+        );
+
+        assertThatThrownBy(() -> translator.toCommand(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("CONTINUE_INTERACTION")
+                .hasMessageContaining("forceReroute");
     }
 
     @Test

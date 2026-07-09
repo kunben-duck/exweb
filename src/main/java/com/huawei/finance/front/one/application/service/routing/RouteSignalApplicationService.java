@@ -136,7 +136,7 @@ public class RouteSignalApplicationService {
     private Flux<RouteSignalFrame> intentOrFallbackFrames(String runId, UserContext user, ChatSession session, ChatCommand command,
                                                           MemoryContext memory) {
         if (properties.intentEnabled()) {
-            String routeTrigger = routeTrigger(command);
+            String routeTrigger = routeTrigger(user, session, command);
             Map<String, Object> lastRejectReason = lastIntentRejectReason(command);
             IntentRouteRequest routeRequest = new IntentRouteRequest(
                     user, session, command, memory, routeTrigger, lastRejectReason, runId);
@@ -314,14 +314,22 @@ public class RouteSignalApplicationService {
                 context == null ? Map.of() : context.lastIntentRejectReason());
     }
 
-    private String routeTrigger(ChatCommand command) {
+    private String routeTrigger(UserContext user, ChatSession session, ChatCommand command) {
         Map<String, Object> metadata = command == null || command.metadata() == null ? Map.of() : command.metadata();
-        String trigger = firstText(metadata.get("routeTrigger"),
+        String trigger = firstText(command == null ? null : command.routeTrigger(),
+                metadata.get("routeTrigger"),
                 map(metadata.get("conversationContext")).get("routeTrigger"));
         if ("intent_clarification".equals(trigger)) {
             return RouteMemoryApplicationService.TRIGGER_CLARIFY_ANSWER;
         }
-        return trigger == null ? RouteMemoryApplicationService.TRIGGER_FIRST_TURN : trigger;
+        if (trigger != null) {
+            return trigger;
+        }
+        if (routeMemoryService != null && session != null
+                && routeMemoryService.latestRouteIsRelayFallback(user, session.id())) {
+            return RouteMemoryApplicationService.TRIGGER_FALLBACK_FOLLOWUP;
+        }
+        return RouteMemoryApplicationService.TRIGGER_FIRST_TURN;
     }
 
     private Map<String, Object> lastIntentRejectReason(ChatCommand command) {

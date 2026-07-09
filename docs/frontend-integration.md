@@ -233,7 +233,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /v1/chat/runs` | 唯一任务提交入口，创建后台 run 或续接 Interaction。 | JSON body：`commandId` 可选，`sessionId` 可选，`conversationId` 可选，`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`interactionId`、`approved`、`scope`、`questionnaireAnswers`、`attachments[]`、`targetType`、`targetId`、`metadata`。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | `runMode` 默认 `NEXT`；`runMode=CONTINUE_INTERACTION` 时必须传 `interactionId`，用 `questionnaireAnswers/approved/scope/metadata` 提交澄清、审批或确认响应；`targetType=DOMAIN_AGENT` 时进入 DomainAgent 路由，并创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding。 |
+| `POST /v1/chat/runs` | 唯一任务提交入口，创建后台 run 或续接 Interaction。 | JSON body：`commandId` 可选，`sessionId` 可选，`conversationId` 可选，`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`forceReroute`、`interactionId`、`approved`、`scope`、`questionnaireAnswers`、`attachments[]`、`targetType`、`targetId`、`metadata`。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | `runMode` 默认 `NEXT`；`runMode=CONTINUE_INTERACTION` 时必须传 `interactionId`，用 `questionnaireAnswers/approved/scope/metadata` 提交澄清、审批或确认响应，且不能传 `forceReroute=true`；普通提问可传顶层 `forceReroute=true` 表示用户主动重新路由；`targetType=DOMAIN_AGENT` 时进入 DomainAgent 路由，并创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding。 |
 | `POST /v1/chat/runs/{runId}/stop` | 用户点击停止回答。 | Path：`runId`。 | `ChatRunStopDto`：`runId`、`sessionId`、`status`、`latestSeq`、`stoppedAt`、`messageReady`、`assistantMessageId`、`feedbackTargetMessageId`。 | 幂等；停止语义不是关闭 WebSocket。 |
 | `GET /v1/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`；只处理 `stream-item` 中的 `encodedItem.data`。 |
 | `GET /v1/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态，并以 `done` 闭合；live source 异常时服务端会降级按 DB 事件轮询。 |
@@ -288,6 +288,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `DELETE /v1/chat/sessions/{sessionId}` | Path：`session_xxx`；无 body。 |
 | `DELETE /v1/chat/sessions` | Body：`{"sessionIds":["session_a","session_b"]}`。 |
 | `POST /v1/chat/runs` 普通提问 | Body：`{"sessionId":"session_xxx","runMode":"NEXT","message":"帮我分析一下费用趋势"}`；新会话首轮可不传 `sessionId`。 |
+| `POST /v1/chat/runs` 用户主动纠正路由 | Body：`{"sessionId":"session_xxx","runMode":"NEXT","message":"重新判断应该由哪个技能处理","forceReroute":true,"metadata":{"lastIntentRejectReason":{"lastIntent":"旧意图","domainRejectMessage":"用户主动重新选择"}}}`；`forceReroute` 为非必填，只有用户主动要求重新路由时传 `true`。 |
 | `POST /v1/chat/runs` 显式 DomainAgent | Body：`{"sessionId":"session_xxx","runMode":"NEXT","message":"查询支付成功率","targetType":"DOMAIN_AGENT","targetId":"skill_xxx","metadata":{}}`。 |
 | `POST /v1/chat/runs` 编辑 user | Body：`{"sessionId":"session_xxx","runMode":"EDIT_USER","editedMessageId":"msg_user_old","message":"新的问题"}`。 |
 | `POST /v1/chat/runs` 重新生成 assistant | Body：`{"sessionId":"session_xxx","runMode":"REGENERATE_ASSISTANT","regeneratedMessageId":"msg_assistant_old"}`。 |
@@ -674,7 +675,7 @@ sequenceDiagram
 - 前端手动选择领域 Agent 时，调用 `/v1/chat/runs` 传 `targetType=DOMAIN_AGENT,targetId=...`。后端会把该会话绑定到目标 DomainAgent，`stream-status` 中可通过 `bindingProvider/bindingTargetId/bindingRouteSource` 查看当前绑定。
 - 未传 target 时，后端优先续接当前 active DomainAgent binding；Relay binding 只在当前 Relay 任务未闭合或等待用户输入时续接，普通 Relay 回答正常完成后会被取消，下次提交问题重新调用用例库或意图服务。意图服务 `ROUTE_SINGLE.items[0].intentId` 会被解释为 `DomainAgentId/skillId`；`resourceInstruction.resourceId` 只用于后端诊断记录，不参与路由。
 - DomainAgent 下游 body 以 `metadata` 为业务扩展，但 `skillId/query/sessionId` 由后端按当前绑定和本轮问题强制写入，前端传同名字段也不会覆盖。
-- 意图服务上下文由后端 RouteMemory 维护：首次路由传 `routeTrigger=first_turn`；DomainAgent 拒答重路由传 `domain_reject` 和本次拒答摘要；提交 `INTENT_CLARIFICATION` 后传 `clarify_answer`。`history` 包含最近 TopK 成功路由和当前未完成的意图澄清链路，Agent 内部澄清不会进入这份 history。RouteMemory 读写是 best-effort，异常或熔断只会让本轮意图少带历史，不会阻断 `/v1/chat/runs`。
+- 意图服务上下文由后端 RouteMemory 维护：首次路由传 `routeTrigger=first_turn`；上一轮有效 route 是 Relay/no_match 时传 `fallback_followup`；DomainAgent 拒答重路由传 `domain_reject` 和本次拒答摘要；提交 `INTENT_CLARIFICATION` 后传 `clarify_answer`；前端顶层传 `forceReroute=true` 时表示用户主动纠正路由，后端会转成内部用户纠正触发原因。`history` 包含最近 TopK 成功路由和当前未完成的意图澄清链路，Agent 内部澄清不会进入这份 history。Relay 正常完成后会写入 `intent=no_match,intentCode=relay,targetProvider=relay` 的路由记录用于下一轮判断，但不会保持 Relay binding。RouteMemory 读写是 best-effort，异常或熔断只会让本轮意图少带历史，不会阻断 `/v1/chat/runs`。
 - 如果当前绑定来自意图或用例库，DomainAgent 返回配置化拒答 code 后，后端会自动重新意图并切换到新 DomainAgent。
 - 如果当前绑定来自手动选择，拒答后命中新 DomainAgent 时，本轮会返回 `run.waiting_user`，消息 parts 中包含 `DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST`。前端调用 `POST /v1/chat/runs` 并传 `runMode=CONTINUE_INTERACTION, interactionId` 提交确认；同意后后端用原问题调用新 DomainAgent，拒绝后保留原手动绑定并以拒答收口。
 
@@ -1046,6 +1047,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `parentMessageId` | string | 否 | `NEXT` 模式显式父节点；为空时使用会话 `currentLeafMessageId` |
 | `editedMessageId` | string | EDIT_USER 必填 | 被编辑的未锁定 user 消息 |
 | `regeneratedMessageId` | string | REGENERATE_ASSISTANT 必填 | 被重新生成的未锁定 assistant 消息 |
+| `forceReroute` | boolean | 否 | 非必填，默认 `false`。仅普通 run 可传；`true` 表示用户主动要求重新路由，后端会忽略当前 active DomainAgent binding 并自动组装内部用户纠正触发原因。 |
 | `interactionId` | string | CONTINUE_INTERACTION 必填 | `run.waiting_user` 或 `stream-status` 返回的 Interaction 请求 ID |
 | `approved` | boolean | 审批/确认类必填 | 澄清类可省略，服务端默认 true |
 | `scope` | string | 否 | 授权或确认范围，澄清类默认 `once` |
@@ -1112,6 +1114,24 @@ curl -X POST http://localhost:8080/v1/chat/runs \
   ],
   "metadata": {
     "clientMessageId": "msg_002"
+  }
+}
+```
+
+用户主动纠正路由。只有前端明确希望本轮重新判断能力归属时才传顶层 `forceReroute=true`；不传或传 `false` 都按默认路由规则处理：
+
+```json
+{
+  "commandId": "cmd_correction_001",
+  "sessionId": "session_xxx",
+  "message": "重新判断一下，我其实想查账务审批方案",
+  "runMode": "NEXT",
+  "forceReroute": true,
+  "metadata": {
+    "lastIntentRejectReason": {
+      "lastIntent": "旧的领域能力",
+      "domainRejectMessage": "用户主动纠正路由"
+    }
   }
 }
 ```
@@ -1228,7 +1248,7 @@ DomainAgent 手动绑定切换确认。同意切换时传 `approved=true`；拒�
 }
 ```
 
-`CONTINUE_INTERACTION` 模式只用于等待态续接：必须传 `interactionId`；不要传 `message`、`attachments`、`targetType`、`targetId`、`parentMessageId`、`editedMessageId` 或 `regeneratedMessageId`。澄清类 `approved/scope` 可省略，服务端默认 `true/once`；审批、确认和 DomainAgent 切换确认类必须显式传 `approved`。
+`CONTINUE_INTERACTION` 模式只用于等待态续接：必须传 `interactionId`；不要传 `message`、`attachments`、`targetType`、`targetId`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId` 或 `forceReroute=true`。澄清类 `approved/scope` 可省略，服务端默认 `true/once`；审批、确认和 DomainAgent 切换确认类必须显式传 `approved`。
 
 ## 反馈
 

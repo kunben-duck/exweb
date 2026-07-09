@@ -1,5 +1,3 @@
-# Supervisor 意图澄清 + 多轮会话新接口交互方案说明
-
 
 ## 3. 整体链路
 
@@ -31,12 +29,12 @@ flowchart TD
 
 `routeAction` 行为说明：
 
-| routeAction      | items        | clarification | Supervisor 行为                                |
+| routeAction      | items        | clarification | Supervisor 行为                                |
 | ---------------- | ------------ | ------------- | ---------------------------------------------- |
-| `ROUTE_SINGLE` | 1 个         | null          | 直接转发 `items[0]` 对应领域 Agent。         |
-| `ROUTE_MULTI`  | 多个         | null          | 进入 Supervisor 自身规划 React。               |
-| `NO_MATCH`     | 空           | null          | 当前配置领域无命中，进入兜底 React。           |
-| `CLARIFY`      | 空或候选建议 | 非空          | 向用户展示 `clarification.clarifyQuestion`。 |
+| `ROUTE_SINGLE` | 1 个         | null          | 直接转发 `items[0]` 对应领域 Agent。         |
+| `ROUTE_MULTI`  | 多个         | null          | 进入 Supervisor 自身规划 React。               |
+| `NO_MATCH`     | 空           | null          | 当前配置领域无命中，进入兜底 React。           |
+| `CLARIFY`      | 空或候选建议 | 非空          | 向用户展示 `clarification.clarifyQuestion`。 |
 
 注意：
 
@@ -173,7 +171,7 @@ Supervisor 每次需要重新分流时，给意图模型这些信息：
 * 当前跳出的意图：`deep_analysis`。
 * 当前拒答原因：需要重新查明细数据，不是直接研究分析。
 * 历史成功路由：
-  
+
   * U1 → `finance_data_query`
   * U3 → `finance_knowledge`
   * U4 → `deep_analysis`
@@ -319,40 +317,40 @@ user: 是解决这次成功率下降的处理措施
 
 0703 clarify类型的字段修改
 -
-
 ## 8. 字段说明
 
 ### 8.1 顶层字段
 
-| 字段                                           | 类型    | 是否必填 | 说明                                                                   |
+| 字段                                           | 类型    | 是否必填 | 说明                                                                   |
 | ---------------------------------------------- | ------- | -------: | ---------------------------------------------------------------------- |
-| `accessName` / `intentID` / `entranceID` | string  |   三选一 | 意图入口。具体取值由意图服务配置决定。                                 |
-| `query`                                      | string  |       是 | 当前待分类用户问题，即最新一轮用户输入。澄清回答场景下填用户最新回答。 |
-| `userId`                                     | string  |       否 | 用户工号，用于画像增强或日志。                                         |
-| `conversationContext`                        | object  |       否 | 多轮路由上下文。首轮可为空，但建议显式传空结构。                       |
-| `options.trace`                              | boolean |       否 | 是否返回 trace。                                                       |
+| `accessName` / `intentID` / `entranceID` | string  |   三选一 | 意图入口。具体取值由意图服务配置决定。                                 |
+| `query`                                      | string  |       是 | 当前待分类用户问题，即最新一轮用户输入。澄清回答场景下填用户最新回答。 |
+| `userId`                                     | string  |       否 | 用户工号，用于画像增强或日志。                                         |
+| `conversationContext`                        | object  |       否 | 多轮路由上下文。首轮可为空，但建议显式传空结构。                       |
+| `options.trace`                              | boolean |       否 | 是否返回 trace。                                                       |
 
 ---
 
 ### 8.2 `conversationContext` 字段
 
-| 字段                       | 类型   | 是否必填 | 说明                                                   |
+| 字段                       | 类型   | 是否必填 | 说明                                                   |
 | -------------------------- | ------ | -------: | ------------------------------------------------------ |
-| `routeTrigger`           | string |       否 | 触发 Supervisor 重新分流的原因。                       |
-| `lastIntentRejectReason` | object |       否 | 上一个跳出的意图及其拒答原因。首轮或澄清中可为空对象。 |
-| `history`                | array  |       否 | 历史成功路由记录和当前未完成澄清链路。                 |
+| `routeTrigger`           | string |       否 | 触发 Supervisor 重新分流的原因。                       |
+| `lastIntentRejectReason` | object |       否 | 上一个跳出的意图及其拒答原因。首轮或澄清中可为空对象。 |
+| `history`                | array  |       否 | 历史成功路由记录和当前未完成澄清链路。                 |
 
 ---
 
 ### 8.3 `routeTrigger` 枚举
 
-| 枚举值              | 含义                                                    | 是否调用意图服务 |
+| 枚举值              | 含义                                                    | 是否调用意图服务 |
 | ------------------- | ------------------------------------------------------- | ---------------: |
-| `first_turn`      | 首轮路由                                                |               是 |
-| `domain_reject`   | 领域 Agent 拒答或低置信，回 Supervisor 重新分流         |               是 |
-| `user_correction` | 用户纠正路由，例如手工关闭当前领域 Agent 窗口后重新判断 |               是 |
-| `clarify_answer`  | 用户回答 Supervisor 澄清问题后，需要再次分类            |               是 |
-| `explicit_switch` | 用户通过手工方式明确选择意图类别                        |               否 |
+| `first_turn`      | 首轮路由                                                |               是 |
+| `domain_reject`   | 领域 Agent 拒答或低置信，回 Supervisor 重新分流         |               是 |
+| `user_correction` | 用户纠正路由，例如手工关闭当前领域 Agent 窗口后重新判断 |               是 |
+| `clarify_answer`  | 用户回答 Supervisor 澄清问题后，需要再次分类            |               是 |
+| `fallback_followup` | NO_MATCH 后进入通用服务（relay）处理，后续用户输入走到意图服务重新判断            |               是 |
+| `explicit_switch` | 用户通过手工方式明确选择意图类别                        |               否 |
 
 说明：
 
@@ -365,26 +363,26 @@ user: 是解决这次成功率下降的处理措施
 
 ```json
 {
-  "lastIntent": "deep_analysis",
-  "domainRejectMessage": "需要重新查明细数据，不是直接研究分析。"
+  "lastIntent": "deep_analysis",
+  "domainRejectMessage": "需要重新查明细数据，不是直接研究分析。"
 }
 ```
 
 字段说明：
 
-| 字段                    | 类型          | 说明                                                                  |
+| 字段                    | 类型          | 说明                                                                  |
 | ----------------------- | ------------- | --------------------------------------------------------------------- |
-| `lastIntent`          | string / null | 当前跳出的意图。首轮或澄清阶段可为空。                                |
+| `lastIntent`          | string / null | 当前跳出的意图。首轮或澄清阶段可为空。                                |
 | `domainRejectMessage` | string / null | 当前这一次领域 Agent 的拒答或回流说明。只传当前这次，不传前几轮拒答。 |
 
 不同触发场景下取值：
 
-| routeTrigger        | lastIntent           | domainRejectMessage                                                      |
+| routeTrigger        | lastIntent           | domainRejectMessage                                                      |
 | ------------------- | -------------------- | ------------------------------------------------------------------------ |
-| `first_turn`      | null                 | null                                                                     |
-| `domain_reject`   | 当前跳出的意图       | 当前领域 Agent 拒答说明                                                  |
+| `first_turn`      | null                 | null                                                                     |
+| `domain_reject`   | 当前跳出的意图       | 当前领域 Agent 拒答说明                                                  |
 | `user_correction` | 被用户纠正的当前意图 | 填用户纠正说明，示例“用户手动选择关闭该路由结果” 0703 用户关闭时的确认 |
-| `clarify_answer`  | null                 | null                                                                     |
+| `clarify_answer`  | null                 | null                                                                     |
 
 ---
 
@@ -396,25 +394,37 @@ JSON 数组顺序是稳定的，因此可以用来表达历史顺序。
 在线 `conversationContext.history` 默认取最新 TopK，K 暂定为 5。
 在澄清期间，TopK 需要覆盖当前澄清链路，避免澄清上下文被截断。
 
+#### type = no_match
+
+表示已经成功路由，但是为匹配到任何领域agent的场景。此场景无需给意图
+
+```json
+{
+  "type": "no_match",
+  "query": "那广东为什么会下降？",
+  "intent": ""
+}
+```
+
 #### type = route
 
 表示已经成功路由过的历史锚点。
 
 ```json
 {
-  "type": "route",
-  "query": "那广东为什么会下降？",
-  "intent": "deep_analysis"
+  "type": "route",
+  "query": "那广东为什么会下降？",
+  "intent": "deep_analysis"
 }
 ```
 
 字段说明：
 
-| 字段       | 类型   | 说明                   |
+| 字段       | 类型   | 说明                   |
 | ---------- | ------ | ---------------------- |
-| `type`   | string | 固定为 `route`       |
-| `query`  | string | 当时成功路由的用户问题 |
-| `intent` | string | 当时命中的意图         |
+| `type`   | string | 固定为 `route`       |
+| `query`  | string | 当时成功路由的用户问题 |
+| `intent` | string | 当时命中的意图         |
 
 #### type = clarify
 
@@ -423,20 +433,20 @@ JSON 数组顺序是稳定的，因此可以用来表达历史顺序。
 
 ```json
 {
-  "type": "clarify",
-  "query": "再帮我看下方案",
-  "clarifyQuestion": "你是想继续分析支付成功率下降后的处理方案，还是想查询某个业务/项目方案？",
-  "clarificationType": "AMBIGUOUS_ROUTE"
+  "type": "clarify",
+  "query": "再帮我看下方案",
+  "clarifyQuestion": "你是想继续分析支付成功率下降后的处理方案，还是想查询某个业务/项目方案？",
+  "clarificationType": "AMBIGUOUS_ROUTE"
 }
 ```
 
 字段说明：
 
-| 字段                  | 类型   | 说明                                                                                |
+| 字段                  | 类型   | 说明                                                                                |
 | --------------------- | ------ | ----------------------------------------------------------------------------------- |
-| `type`              | string | 固定为 `clarify`。                                                                |
-| `query`             | string | 触发这轮澄清的用户输入。                                                            |
-| `clarifyQuestion`   | string | 意图服务返回、Supervisor 展示给用户的澄清问题。                                     |
+| `type`              | string | 固定为 `clarify`。                                                                |
+| `query`             | string | 触发这轮澄清的用户输入。                                                            |
+| `clarifyQuestion`   | string | 意图服务返回、Supervisor 展示给用户的澄清问题。                                     |
 | `clarificationType` | string | 可选。意图服务返回的澄清类型，当前为 `AMBIGUOUS_ROUTE` 或 `UNCLEAR_REFERENCE`。 |
 
 说明：
@@ -454,44 +464,44 @@ JSON 数组顺序是稳定的，因此可以用来表达历史顺序。
 
 ```json
 {
-  "status": "success",
-  "code": 200,
-  "message": "success",
-  "data": {
-    "result": {
-      "routeAction": "CLARIFY",
-      "items": [],
-      "clarification": {
-        "type": "AMBIGUOUS_ROUTE",
-        "clarifyQuestion": "你想看处理方案还是项目方案？",
-        "candidateIntents": [
-          {
-            "intentId": "deep_analysis",
-            "intentName": "深度分析",
-            "confidence": 0.72
-          }
-        ]
-      }
-    }
-  }
+  "status": "success",
+  "code": 200,
+  "message": "success",
+  "data": {
+    "result": {
+      "routeAction": "CLARIFY",
+      "items": [],
+      "clarification": {
+        "type": "AMBIGUOUS_ROUTE",
+        "clarifyQuestion": "你想看处理方案还是项目方案？",
+        "candidateIntents": [
+          {
+            "intentId": "deep_analysis",
+            "intentName": "深度分析",
+            "confidence": 0.72
+          }
+        ]
+      }
+    }
+  }
 }
 ```
 
 `routeAction` 以服务端最终裁决为准：
 
-| routeAction      | 含义               | Supervisor 行为                                                                         |
+| routeAction      | 含义               | Supervisor 行为                                                                         |
 | ---------------- | ------------------ | --------------------------------------------------------------------------------------- |
-| `ROUTE_SINGLE` | 单意图命中         | 转发 `items[0]` 对应领域 Agent。                                                      |
-| `ROUTE_MULTI`  | 多意图命中         | 进入 Supervisor 自身规划 React。                                                        |
-| `NO_MATCH`     | 当前配置领域无命中 | 进入兜底 React / 工具处理。                                                             |
-| `CLARIFY`      | 需要路由前置澄清   | 展示 `clarification.clarifyQuestion`，等待用户回答后再次调用 `/getIntentDecision`。 |
+| `ROUTE_SINGLE` | 单意图命中         | 转发 `items[0]` 对应领域 Agent。                                                      |
+| `ROUTE_MULTI`  | 多意图命中         | 进入 Supervisor 自身规划 React。                                                        |
+| `NO_MATCH`     | 当前配置领域无命中 | 进入兜底 React / 工具处理。                                                             |
+| `CLARIFY`      | 需要路由前置澄清   | 展示 `clarification.clarifyQuestion`，等待用户回答后再次调用 `/getIntentDecision`。 |
 
 `clarification.type` 当前只保留两类：
 
-| type                  | 含义                                                                 | candidateIntents                              |
+| type                  | 含义                                                                 | candidateIntents                              |
 | --------------------- | -------------------------------------------------------------------- | --------------------------------------------- |
-| `AMBIGUOUS_ROUTE`   | 多个已配置领域 Agent 都可能承接，但证据不足                          | 可返回 Top2-3 个候选，Supervisor 可展示选项。 |
-| `UNCLEAR_REFERENCE` | 用户问题存在“这个/该附件/帮我分析下”等指代、附件、对象或上下文缺失 | 通常为空，不展示领域候选。                    |
+| `AMBIGUOUS_ROUTE`   | 多个已配置领域 Agent 都可能承接，但证据不足                          | 可返回 Top2-3 个候选，Supervisor 可展示选项。 |
+| `UNCLEAR_REFERENCE` | 用户问题存在“这个/该附件/帮我分析下”等指代、附件、对象或上下文缺失 | 通常为空，不展示领域候选。                    |
 
 澄清话术约束：
 
@@ -506,7 +516,7 @@ JSON 数组顺序是稳定的，因此可以用来表达历史顺序。
 ### 9.1 成功路由时
 
 0703
-当历史消息中的意图服务有命中时(`/getIntentDecision` 返回 `routeAction=ROUTE_SINGLE`)，Supervisor 成功路由到某个意图后，向 `conversationContext.history`  追加一条：
+当历史消息中的意图服务有命中时(`/getIntentDecision` 返回 `routeAction=ROUTE_SINGLE`)，Supervisor 成功路由到某个意图后，向 `conversationContext.history`  追加一条：
 
 ```json
 {
@@ -518,13 +528,19 @@ JSON 数组顺序是稳定的，因此可以用来表达历史顺序。
 
 0703 如何存进入了react的历史？【待定】
 
-当 `/getIntentDecision` 返回 `routeAction=NO_MATCH` 时，Supervisor 进入自身规划 React。此时路由历史记录为NO_MATCH，明确不在领域范围内
+当 `/getIntentDecision` 返回 `routeAction=NO_MATCH` 时，Supervisor 进入自身规划 React。此时路由历史记录为 NO_MATCH，明确不在领域范围内。
 
-当 `/getIntentDecision` 返回 `routeAction=ROUTE_MULTI` 时，Supervisor 进入自身规划 React。
-是否写入 history 由入口 Agent 编排结果决定：
+当 `/getIntentDecision` 返回 `routeAction=ROUTE_MULTI` 时，Supervisor 进入自身规划 React。ChatService 当前实现中，ROUTE_MULTI/NO_MATCH/DEGRADED 最终由 Relay 正常完成后，会写入一条 route 记录：
 
-- 如果最终明确调用了一个或多个领域 Agent，建议写入规划后的成功路由摘要；如何确认react明确调了哪些？
-- 如果由通用 React 或工具兜底直接处理完，则如何写领域路由历史？？
+```json
+{
+  "type": "route",
+  "query": "当前用户问题",
+  "intent": "no_match"
+}
+```
+
+该记录用于下一轮生成 `conversationContext.routeTrigger=fallback_followup`，不代表 Relay 被绑定为会话长期领域。
 
 ### 9.2 领域拒答时
 
@@ -592,7 +608,7 @@ Supervisor 调用意图服务时，将拒答说明放入：
 
 ```python
 '''
-user: 再帮我看下方案 
+user: 再帮我看下方案
 assistant: 你是想继续分析支付成功率下降后的处理方案，还是想查询某个业务/项目方案？
 user: 都可以，先看跟支付相关的
 assistant: 你说的“跟支付相关的”，是指解决这次支付成功率下降的处理措施，还是查询支付业务项目方案文档？
@@ -616,7 +632,7 @@ user: 是解决这次成功率下降的处理措施
 
 ## 10. 0号内部的处理
 
-### 10.1  0号给1号返回的意图结果
+### 10.1  0号给1号返回的意图结果
 
 见前面接口出参
 

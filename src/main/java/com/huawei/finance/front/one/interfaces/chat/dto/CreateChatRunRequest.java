@@ -21,6 +21,7 @@ import java.util.Map;
  * @param parentMessageId NEXT 模式显式父节点；为空时使用会话 current leaf。
  * @param editedMessageId EDIT_USER 模式被编辑的 user 消息。
  * @param regeneratedMessageId REGENERATE_ASSISTANT 模式被重新生成的 assistant 消息。
+ * @param forceReroute 前端要求本轮强制重新路由；非必填，默认 false。
  * @param interactionId CONTINUE_INTERACTION 模式续接的 Interaction 请求 ID。
  * @param approved 审批、确认或切换确认结果；澄清类可省略。
  * @param scope 授权或确认范围；澄清类默认 once。
@@ -47,6 +48,7 @@ public record CreateChatRunRequest(
         String editedMessageId,
         @Size(max = 64, message = "regeneratedMessageId 长度不能超过 64")
         String regeneratedMessageId,
+        Boolean forceReroute,
         @Size(max = 64, message = "interactionId 长度不能超过 64")
         String interactionId,
         Boolean approved,
@@ -72,7 +74,7 @@ public record CreateChatRunRequest(
      */
     public CreateChatRunRequest(String commandId, String sessionId, String conversationId, String message,
                                 List<ChatAttachmentDto> attachments, Map<String, ?> metadata) {
-        this(commandId, sessionId, conversationId, message, null, null, null, null, null, null, null, null,
+        this(commandId, sessionId, conversationId, message, null, null, null, null, null, null, null, null, null,
                 attachments, null, null, copyMetadata(metadata));
     }
 

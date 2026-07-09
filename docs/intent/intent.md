@@ -74,10 +74,11 @@ Authorization: {dynamicToken}
 | `first_turn` | 首轮路由。 | 是 |
 | `domain_reject` | 当前 DomainAgent 拒答、低置信或不属于当前领域，回到 Supervisor 重新分流。 | 是 |
 | `user_correction` | 用户主动纠正路由，例如手动关闭当前领域能力后重新判断。 | 是 |
+| `fallback_followup` | 上一轮已进入 Relay/no_match 兜底并正常完成，本轮作为兜底后的追问重新判断。 | 是 |
 | `clarify_answer` | 用户回答了意图服务上一轮澄清问题，需要继续分类。 | 是 |
 | `explicit_switch` | 用户通过前端显式选择目标能力。 | 否 |
 
-`explicit_switch` 不走意图服务，但建议把用户选择结果追加到在线 history，作为后续路由上下文。
+`explicit_switch` 不走意图服务，但建议把用户选择结果追加到在线 history，作为后续路由上下文。ChatService 对外只允许前端通过 `/v1/chat/runs.forceReroute=true` 显式触发用户纠正；`first_turn/domain_reject/fallback_followup/clarify_answer` 都由后端根据会话状态自动生成。
 
 ## 3. history 结构
 

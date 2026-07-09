@@ -6,12 +6,14 @@ import com.huawei.finance.front.one.application.config.RouteSignalProperties;
 import com.huawei.finance.front.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.finance.front.one.application.integration.intent.IntentService;
 import com.huawei.finance.front.one.application.integration.usecase.UseCaseLibraryClient;
+import com.huawei.finance.front.one.application.service.memory.RouteMemoryApplicationService;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.intent.TaskComplexity;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
+import com.huawei.finance.front.one.domain.memory.RouteMemoryContext;
 import com.huawei.finance.front.one.domain.routing.RouteType;
 import com.huawei.finance.front.one.domain.routing.RoutingPolicy;
 import com.huawei.finance.front.one.domain.usecase.UseCaseMatchResult;
@@ -137,6 +139,72 @@ class RouteSignalApplicationServiceTest {
                 })
                 .verifyComplete();
         assertThat(intentCalls).hasValue(1);
+    }
+
+    @Test
+    void previousRelayRouteUsesFallbackFollowupTrigger() {
+        AtomicReference<MemoryContext> capturedMemory = new AtomicReference<>();
+        RouteMemoryApplicationService routeMemoryService = new RouteMemoryApplicationService(null, null, null) {
+            @Override
+            public boolean latestRouteIsRelayFallback(UserContext user, String sessionId) {
+                return true;
+            }
+
+            @Override
+            public RouteMemoryContext loadForIntent(UserContext user, String sessionId, String routeTrigger,
+                                                    Map<String, Object> lastIntentRejectReason) {
+                return new RouteMemoryContext(routeTrigger,
+                        List.of(Map.of("type", "route", "query", "上一轮复杂问题", "intent", "no_match")),
+                        lastIntentRejectReason);
+            }
+        };
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                (command, memory, user) -> {
+                    capturedMemory.set(memory);
+                    return simpleDomainAgentIntent();
+                },
+                routeMemoryService);
+
+        RouteSignalResult result = service.routeInitial(user, session, command, List.of(), memory);
+
+        assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
+        assertThat(capturedMemory.get().routeMemory().routeTrigger()).isEqualTo("fallback_followup");
+        assertThat(capturedMemory.get().routeMemory().history()).containsExactly(
+                Map.of("type", "route", "query", "上一轮复杂问题", "intent", "no_match"));
+    }
+
+    @Test
+    void topLevelUserCorrectionTriggerWinsOverMetadataAndFallback() {
+        AtomicReference<MemoryContext> capturedMemory = new AtomicReference<>();
+        RouteMemoryApplicationService routeMemoryService = new RouteMemoryApplicationService(null, null, null) {
+            @Override
+            public boolean latestRouteIsRelayFallback(UserContext user, String sessionId) {
+                return true;
+            }
+
+            @Override
+            public RouteMemoryContext loadForIntent(UserContext user, String sessionId, String routeTrigger,
+                                                    Map<String, Object> lastIntentRejectReason) {
+                return new RouteMemoryContext(routeTrigger, List.of(), lastIntentRejectReason);
+            }
+        };
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                (command, memory, user) -> {
+                    capturedMemory.set(memory);
+                    return simpleDomainAgentIntent();
+                },
+                routeMemoryService);
+        ChatCommand correction = new ChatCommand("cmd2", "tenant1", "user1", "session1",
+                null, "web", "用户主动修正路由", List.of(), Map.of("routeTrigger", "first_turn"),
+                null, null, com.huawei.finance.front.one.domain.chat.ChatRunMode.NEXT,
+                null, null, null, "user_correction");
+
+        RouteSignalResult result = service.routeInitial(user, session, correction, List.of(), memory);
+
+        assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
+        assertThat(capturedMemory.get().routeMemory().routeTrigger()).isEqualTo("user_correction");
     }
 
     @Test
@@ -275,9 +343,16 @@ class RouteSignalApplicationServiceTest {
     private RouteSignalApplicationService service(boolean useCaseEnabled, boolean intentEnabled,
                                                   UseCaseLibraryClient useCaseLibraryClient,
                                                   IntentService intentService) {
+        return service(useCaseEnabled, intentEnabled, useCaseLibraryClient, intentService, null);
+    }
+
+    private RouteSignalApplicationService service(boolean useCaseEnabled, boolean intentEnabled,
+                                                  UseCaseLibraryClient useCaseLibraryClient,
+                                                  IntentService intentService,
+                                                  RouteMemoryApplicationService routeMemoryService) {
         return new RouteSignalApplicationService(useCaseLibraryClient, new BlockingIntentAgentRuntime(intentService),
                 new RoutingPolicy(0.85),
-                new RouteSignalProperties(useCaseEnabled, intentEnabled));
+                new RouteSignalProperties(useCaseEnabled, intentEnabled), routeMemoryService);
     }
 
     private IntentDecision simpleDomainAgentIntent() {

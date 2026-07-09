@@ -35,6 +35,7 @@ import com.huawei.finance.front.one.application.integration.memory.LongTermMemor
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.finance.front.one.application.service.memory.MemoryApplicationService;
+import com.huawei.finance.front.one.application.service.memory.RouteMemoryApplicationService;
 import com.huawei.finance.front.one.application.service.routing.IntentRecognitionRecordService;
 import com.huawei.finance.front.one.application.service.routing.RouteSignalFrame;
 import com.huawei.finance.front.one.application.service.routing.RouteSignalApplicationService;
@@ -606,7 +607,7 @@ class FinanceEXChatServiceTest {
         StepVerifier.create(service.startRun(user, new ChatCommand(
                         null, null, null, "session1", null, "web", null, List.of(), Map.of(),
                         null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
-                        waiting.id(), null, null,
+                        null, waiting.id(), null, null,
                         Map.of("您提到的方案具体是指哪个方案？", "我是说账务审批的方案")),
                         RuntimeForwardHeaders.empty()))
                 .assertNext(result -> {
@@ -727,7 +728,7 @@ class FinanceEXChatServiceTest {
         StepVerifier.create(service.startRun(user, new ChatCommand(
                         null, null, null, "session1", null, "web", null, List.of(), Map.of(),
                         null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
-                        waiting.id(), null, null, Map.of("问题", "答案")),
+                        null, waiting.id(), null, null, Map.of("问题", "答案")),
                         RuntimeForwardHeaders.empty()))
                 .assertNext(result -> assertThat(result.sessionId()).isEqualTo("session1"))
                 .verifyComplete();
@@ -895,6 +896,81 @@ class FinanceEXChatServiceTest {
             assertThat(part.payload()).containsEntry("targetId", "skill-tax")
                     .containsEntry("domainAgentId", "skill-tax")
                     .containsEntry("metadataType", "selected_domain_agent");
+        });
+    }
+
+    @Test
+    void forceRerouteCancelsActiveDomainAgentBindingAndRunsRouteSignals() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        NeverCancelRunCache runCache = new NeverCancelRunCache();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        CapturingRuntimeBindingRepository bindings = new CapturingRuntimeBindingRepository();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        IdGenerator ids = new FixedIdGenerator();
+        PermissionChecker permissionChecker = new PermissionChecker();
+        WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
+                new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
+        LocalChatRunExecutionRegistry executionRegistry = new LocalChatRunExecutionRegistry();
+        ChatRunLeaseApplicationService leaseService = new ChatRunLeaseApplicationService(
+                new InMemoryExecutionRepository(),
+                (ApplicationInstanceIdProvider) () -> "instance-test",
+                new com.huawei.finance.front.one.application.config.ChatRunOperationalProperties(),
+                ids,
+                executionRegistry
+        );
+        ChatSession session = new ChatSession("session1", user.tenantId(), user.ownerUserId(),
+                "测试会话", "ACTIVE", "web", Instant.now(), Instant.now());
+        sessions.save(session);
+        bindings.save(new RuntimeBinding("binding-domain", user.tenantId(), user.ownerUserId(),
+                session.id(), RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER, null,
+                "session1", RuntimeBindingStatus.ACTIVE, "run-old", Instant.now().plus(Duration.ofDays(1)),
+                Instant.now(), Instant.now(), Map.of("domainAgentId", "skill-old")));
+        AtomicInteger routeCalls = new AtomicInteger();
+        RouteSignalApplicationService routeService = new RouteSignalApplicationService(
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                intentAgent((command, memory, routeUser) -> null),
+                new com.huawei.finance.front.one.domain.routing.RoutingPolicy(0.85),
+                new RouteSignalProperties(false, false)) {
+            @Override
+            public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
+                routeCalls.incrementAndGet();
+                return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.agentRuntime("test-runtime"))));
+            }
+        };
+        FinanceEXChatService service = new FinanceEXChatService(
+                new SessionApplicationService(sessions, messages, ids, permissionChecker),
+                new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
+                new RuntimeBindingApplicationService(bindings, runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
+                routeService,
+                intentRecordService(),
+                domainAgentExecutor(documentFacade(), limiter),
+                new SystemResponseExecutor(),
+                new AgentRuntimeExecutor(noopRuntime(), limiter),
+                documentFacade(),
+                new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
+                        permissionChecker, sessions,
+                        new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
+                new ChatRunApplicationService(runs, runCache, events, permissionChecker, sessions),
+                leaseService,
+                new ChatDeltaCoalescer(new com.huawei.finance.front.one.application.config.ChatStreamProperties()),
+                executionRegistry,
+                new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
+                ids
+        );
+
+        StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
+                        session.id(), null, "web", "重新路由", List.of(), Map.of(),
+                        null, null, ChatRunMode.NEXT, null, null, null,
+                        RouteMemoryApplicationService.TRIGGER_USER_CORRECTION)).collectList())
+                .assertNext(stream -> assertThat(stream).extracting(ChatEvent::type).contains("run.completed"))
+                .verifyComplete();
+
+        assertThat(routeCalls.get()).isEqualTo(1);
+        assertThat(bindings.savedHistory).anySatisfy(binding -> {
+            assertThat(binding.id()).isEqualTo("binding-domain");
+            assertThat(binding.status()).isEqualTo(RuntimeBindingStatus.CANCELLED);
         });
     }
 
@@ -1850,6 +1926,7 @@ class FinanceEXChatServiceTest {
 
     private static class CapturingRuntimeBindingRepository implements RuntimeBindingRepository {
         private RuntimeBinding saved;
+        private final List<RuntimeBinding> savedHistory = new CopyOnWriteArrayList<>();
 
         @Override public Optional<RuntimeBinding> findById(String bindingId) {
             return Optional.ofNullable(saved).filter(binding -> binding.id().equals(bindingId));
@@ -1859,10 +1936,25 @@ class FinanceEXChatServiceTest {
                     .filter(binding -> tenantId.equals(binding.tenantId()))
                     .filter(binding -> userId.equals(binding.userId()))
                     .filter(binding -> sessionId.equals(binding.chatSessionId()))
-                    .filter(binding -> provider.equals(binding.provider()));
+                    .filter(binding -> provider.equals(binding.provider()))
+                    .filter(binding -> binding.status() == RuntimeBindingStatus.ACTIVE);
+        }
+        @Override public List<RuntimeBinding> findActiveBySession(String tenantId, String userId, String sessionId,
+                                                                  String provider) {
+            return findActive(tenantId, userId, sessionId, provider).stream().toList();
+        }
+        @Override public List<RuntimeBinding> findActiveBySession(String tenantId, String userId, String sessionId) {
+            return Optional.ofNullable(saved)
+                    .filter(binding -> tenantId.equals(binding.tenantId()))
+                    .filter(binding -> userId.equals(binding.userId()))
+                    .filter(binding -> sessionId.equals(binding.chatSessionId()))
+                    .filter(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
+                    .stream()
+                    .toList();
         }
         @Override public RuntimeBinding save(RuntimeBinding binding) {
             saved = binding;
+            savedHistory.add(binding);
             return binding;
         }
     }

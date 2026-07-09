@@ -19,6 +19,8 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class ChatRequestTranslator {
+    private static final String USER_CORRECTION = "user_correction";
+
     /**
      * 将前端提问请求转换为应用层聊天命令。
      *
@@ -29,15 +31,31 @@ public class ChatRequestTranslator {
         if (request == null) {
             throw new IllegalArgumentException("创建 run 请求体不能为空");
         }
+        ChatRunMode runMode = ChatRunMode.from(request.runMode());
+        if (Boolean.TRUE.equals(request.forceReroute()) && runMode == ChatRunMode.CONTINUE_INTERACTION) {
+            throw new IllegalArgumentException("CONTINUE_INTERACTION 模式不支持 forceReroute");
+        }
+        if (Boolean.TRUE.equals(request.forceReroute()) && (hasText(request.targetType()) || hasText(request.targetId()))) {
+            throw new IllegalArgumentException("forceReroute=true 时不能同时指定 targetType/targetId");
+        }
         Map<String, Object> metadata = normalizeMetadata(request.metadata());
         // 身份字段留空进入 application，由 Controller 入口解析出的 UserContext 统一回填。
         // 这样前端无法通过 Header/Query/Body 改写租户或用户，后续接入企业权限框架也只替换身份防腐层。
         return new ChatCommand(request.commandId(), null, null, request.sessionId(), request.conversationId(), "web",
                 request.message(), toAttachmentRefs(request.attachments()), metadata,
                 request.targetType(), request.targetId(),
-                ChatRunMode.from(request.runMode()), request.parentMessageId(), request.editedMessageId(),
-                request.regeneratedMessageId(), request.interactionId(), request.approved(), request.scope(),
+                runMode, request.parentMessageId(), request.editedMessageId(),
+                request.regeneratedMessageId(), routeTrigger(request.forceReroute()),
+                request.interactionId(), request.approved(), request.scope(),
                 normalizeMetadata(request.questionnaireAnswers()));
+    }
+
+    private String routeTrigger(Boolean forceReroute) {
+        return Boolean.TRUE.equals(forceReroute) ? USER_CORRECTION : null;
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private Map<String, Object> normalizeMetadata(Map<String, Object> metadata) {

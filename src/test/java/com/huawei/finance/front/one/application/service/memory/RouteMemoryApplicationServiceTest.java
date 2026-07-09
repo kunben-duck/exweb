@@ -84,6 +84,34 @@ class RouteMemoryApplicationServiceTest {
     }
 
     @Test
+    void completeRouteCanRecordRelayNoMatchRoute() {
+        IntentDecision relayIntent = new IntentDecision("relay", "no_match", TaskComplexity.COMPLEX, 0.0,
+                false, null, Map.of("routeAction", "ROUTE_MULTI"), List.of(), Map.of());
+
+        service.completeRoute(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                user, "session1", "run-relay", "复杂任务问题",
+                relayIntent,
+                RouteTarget.agentRuntime("intent-agent", 0.0, "route to relay")));
+
+        RouteMemoryItem route = repository.items.stream()
+                .filter(item -> item.itemType() == RouteMemoryItemType.ROUTE)
+                .findFirst()
+                .orElseThrow();
+        assertThat(route.intentId()).isEqualTo("relay");
+        assertThat(route.intentName()).isEqualTo("no_match");
+        assertThat(route.domainAgentId()).isNull();
+        assertThat(route.payload())
+                .containsEntry("targetProvider", "relay")
+                .containsEntry("routeAction", "ROUTE_MULTI");
+        assertThat(service.latestRouteIsRelayFallback(user, "session1")).isTrue();
+
+        RouteMemoryContext context = service.loadForIntent(user, "session1",
+                "fallback_followup", Map.of());
+        assertThat(context.history()).containsExactly(
+                Map.of("type", "route", "query", "复杂任务问题", "intent", "no_match"));
+    }
+
+    @Test
     void completeWithoutRouteOnlyFoldsClarifications() {
         service.appendClarification(user, "session1", "run2", "interaction1", Map.of(
                 "originalQuery", "看下方案",

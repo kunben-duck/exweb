@@ -1330,7 +1330,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                             null
             ));
             chatRunService.bindAssistantMessage(runId, savedAssistant.id());
-            bindingRef.set(runtimeBindingService.touchAndMoveToLeaf(bindingRef.get(), runId, savedAssistant.id()));
+            bindingRef.set(completeBindingAfterRunCompleted(bindingRef.get(), runId, savedAssistant.id()));
             if (context.continuationInteractionRequest() != null) {
                 chatInteractionService.markAnswered(context.continuationInteractionRequest());
             }
@@ -1397,6 +1397,17 @@ public class FinanceEXChatService implements FinanceChatFacade {
         } catch (RuntimeException ex) {
             return commitTerminalFailure(context, ex);
         }
+    }
+
+    private RuntimeBinding completeBindingAfterRunCompleted(RuntimeBinding binding, String runId,
+                                                            String assistantMessageId) {
+        if (binding == null) {
+            return null;
+        }
+        if (!RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider())) {
+            return runtimeBindingService.markNotRoutable(binding, null);
+        }
+        return runtimeBindingService.touchAndMoveToLeaf(binding, runId, assistantMessageId);
     }
 
     private ChatEvent commitTerminalOnly(ChatEvent eventToPersist, RunEventPipelineContext context) {

@@ -86,9 +86,9 @@ public class RuntimeBindingApplicationService {
     /**
      * 解析本轮 AgentRuntime 应使用的会话绑定。
      *
-     * <p>Relay WebSocket 要求同一个 ChatService 会话只 {@code new} 一次，因此这里按会话维度复用
-     * active binding，不再因消息树 leaf 切换而创建新的下游 Runtime session。leaf 仍会保存在 binding
-     * 中用于诊断和后续消息树定位。</p>
+     * <p>这里按会话维度复用 active binding，不再因消息树 leaf 切换而创建新的下游 Runtime
+     * session。Relay 在正常 run.completed 后会取消绑定，因此这里通常只会续接 DomainAgent 或
+     * 未闭合的 Relay 等待态。</p>
      */
     public RuntimeBindingResolution resolveForRun(String tenantId, String userId, String sessionId,
                                                   String runId, String leafMessageId) {
@@ -119,8 +119,8 @@ public class RuntimeBindingApplicationService {
     /**
      * 按会话维度查询 active RuntimeBinding。
      *
-     * <p>Relay WebSocket 会话只允许首次进入时 {@code new}，因此普通继续提问优先复用会话下最新的
-     * active binding。该方法不会创建新绑定。</p>
+     * <p>普通继续提问优先复用会话下最新的 active binding。Relay 正常完成后不保留 active binding；
+     * 如果仍能查到 relay binding，说明当前 Relay 任务尚未完成或处于等待用户输入状态。</p>
      */
     public Optional<RuntimeBinding> findActiveBySession(String tenantId, String userId, String sessionId) {
         Instant now = Instant.now();

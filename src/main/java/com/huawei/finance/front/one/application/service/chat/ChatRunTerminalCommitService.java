@@ -13,6 +13,7 @@ import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
+import com.huawei.finance.front.one.domain.runtime.RuntimeBindingStatus;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.beans.factory.annotation.Value;
@@ -29,6 +30,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class ChatRunTerminalCommitService {
     private static final String WAITING_ASSISTANT_METADATA = "{\"finishReason\":\"WAITING_USER\"}";
+    private static final String DOMAIN_AGENT_PROVIDER = "domain-agent";
 
     private final ChatStreamApplicationService chatStreamService;
     private final SessionApplicationService sessionService;
@@ -60,7 +62,7 @@ public class ChatRunTerminalCommitService {
         command.context().assistant().observe(stored);
         ChatMessage savedAssistant = saveCompletedAssistant(command);
         bindAssistantMessage(stored.runId(), savedAssistant.id());
-        RuntimeBinding binding = refreshBinding(command.context(), savedAssistant.id());
+        RuntimeBinding binding = completeBinding(command.context(), savedAssistant.id());
         if (command.context().continuationInteractionRequest() != null) {
             chatInteractionService.markAnswered(command.context().continuationInteractionRequest());
         }
@@ -206,6 +208,17 @@ public class ChatRunTerminalCommitService {
             next = next.withLeafMessageId(leafMessageId);
         }
         return runtimeBindingRepository.save(next);
+    }
+
+    private RuntimeBinding completeBinding(TerminalCommitContext context, String leafMessageId) {
+        RuntimeBinding binding = context.bindingRef().get();
+        if (binding == null) {
+            return null;
+        }
+        if (!DOMAIN_AGENT_PROVIDER.equals(binding.provider())) {
+            return runtimeBindingRepository.save(binding.withStatus(RuntimeBindingStatus.CANCELLED));
+        }
+        return refreshBinding(context, leafMessageId);
     }
 
     private RuntimeBinding observeRuntimeBindingEvent(RuntimeBinding binding, ChatEvent event) {

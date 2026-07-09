@@ -68,6 +68,7 @@ import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
 import com.huawei.finance.front.one.domain.chat.MessageSnapshotEvent;
 import com.huawei.finance.front.one.domain.chat.RuntimeEvent;
+import com.huawei.finance.front.one.domain.chat.RunCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
 import com.huawei.finance.front.one.domain.chat.RunWaitingUserEvent;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
@@ -1291,6 +1292,76 @@ class FinanceEXChatServiceTest {
                 .isEqualTo(ChatRunExecutionStatus.WAITING_USER);
         assertThat(bindings.saved.leafMessageId()).isEqualTo("msg-assistant");
         assertThat(bindings.saved.runtimeSessionId()).isEqualTo("runtime-session-1");
+        assertThat(bindings.saved.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+    }
+
+    @Test
+    void terminalCommitCancelsRelayBindingAfterCompletedRun() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        InMemoryExecutionRepository executions = new InMemoryExecutionRepository();
+        InMemoryInteractionRequestRepository interactionRequests = new InMemoryInteractionRequestRepository();
+        CapturingRuntimeBindingRepository bindings = new CapturingRuntimeBindingRepository();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        PermissionChecker permissionChecker = new PermissionChecker();
+        IdGenerator ids = new FixedIdGenerator();
+        seedRunningRun(sessions, messages, runs, user, "run1", "session1", "msg-user");
+        executions.createForRun(runs.findById("run1").orElseThrow(), "exec1", "instance-test", Duration.ofMinutes(5));
+        ChatSession session = sessions.findById("session1").orElseThrow();
+        ChatMessage userMessage = messages.findByOwnerAndId(user.tenantId(), user.ownerUserId(), "msg-user")
+                .orElseThrow();
+        Instant now = Instant.now();
+        RuntimeBinding binding = new RuntimeBinding("binding1", user.tenantId(), user.ownerUserId(),
+                session.id(), "relay", userMessage.id(), "runtime-session-1", RuntimeBindingStatus.ACTIVE,
+                "run1", now.plus(Duration.ofMinutes(5)), now, now, Map.of());
+        bindings.save(binding);
+        ChatInteractionApplicationService interactionService = new ChatInteractionApplicationService(interactionRequests, ids,
+                permissionChecker, new ChatInteractionProperties());
+        ChatRunTerminalCommitService commitService = new ChatRunTerminalCommitService(
+                new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
+                        permissionChecker, sessions,
+                        new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
+                new SessionApplicationService(sessions, messages, ids, permissionChecker),
+                runs,
+                new ChatRunLeaseApplicationService(executions,
+                        (ApplicationInstanceIdProvider) () -> "instance-test",
+                        new com.huawei.finance.front.one.application.config.ChatRunOperationalProperties(),
+                        ids,
+                        new LocalChatRunExecutionRegistry()),
+                bindings,
+                interactionService,
+                Duration.ofDays(3)
+        );
+        AssistantAssembly assistant = new AssistantAssembly();
+        assistant.observe(MessageSnapshotEvent.of("run1", session.id(), "Relay answer"));
+        AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>(binding);
+        ChatRunTerminalCommitService.TerminalCommitContext commitContext =
+                new ChatRunTerminalCommitService.TerminalCommitContext(
+                        user,
+                        session,
+                        new ChatRunMessagePlan(ChatRunMode.NEXT, userMessage.id(), userMessage, null),
+                        bindingRef,
+                        assistant,
+                        "run1",
+                        new RunExecutionClaim("run1", "instance-test", 1L),
+                        null
+                );
+
+        ChatRunTerminalCommitService.CommitResult result = commitService.commitCompleted(
+                new ChatRunTerminalCommitService.CompletedCommitCommand(
+                        RunCompletedEvent.of("run1", session.id(), Map.of("status", "COMPLETED")),
+                        commitContext,
+                        new ChatRunTerminalCommitService.MessageTarget(true, "msg-assistant")
+                ));
+
+        assertThat(result.event().type()).isEqualTo("run.completed");
+        assertThat(runs.findById("run1").orElseThrow().status()).isEqualTo(ChatRunStatus.COMPLETED);
+        assertThat(runs.findById("run1").orElseThrow().assistantMessageId()).isEqualTo("msg-assistant");
+        assertThat(bindings.saved.id()).isEqualTo(binding.id());
+        assertThat(bindings.saved.status()).isEqualTo(RuntimeBindingStatus.CANCELLED);
+        assertThat(bindings.saved.leafMessageId()).isEqualTo(userMessage.id());
     }
 
     @Test

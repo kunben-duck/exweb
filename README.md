@@ -1,6 +1,6 @@
 # FinanceEXChatService
 
-FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务。当前正式版本采用两类会话绑定：用例库、意图服务或前端显式选择命中的 `DomainAgentId` 会绑定为会话级 DomainAgent；复杂任务和未命中任务进入 Relay Runtime。DomainAgent 和 Relay Runtime 都拥有自己的下游会话上下文，ChatService 通过 RuntimeBinding 维护当前会话绑定。
+FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务。当前正式版本采用 DomainAgent 会话绑定：用例库、意图服务或前端显式选择命中的 `DomainAgentId` 会绑定为会话级 DomainAgent；复杂任务和未命中任务进入 Relay Runtime。Relay 只承接当前任务，正常 `run.completed` 后会释放 Relay RuntimeBinding，下次普通提问重新路由。
 
 ## 核心链路
 
@@ -11,11 +11,12 @@ FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务
  -> 会话归一化与可选 MemoryContext 装配
  -> 按 runMode 写入或定位消息树节点
  -> 查询 RuntimeBinding
-    -> 有 active RuntimeBinding：继续调用当前绑定的 DomainAgent 或 Relay Runtime
+    -> 有 active DomainAgent RuntimeBinding：继续调用当前绑定的 DomainAgent
+    -> 有未闭合的 Relay RuntimeBinding：继续当前 Relay 任务
     -> 无 active RuntimeBinding：读取可选路由信号
         -> 前端 targetType=DOMAIN_AGENT：绑定并调用指定 DomainAgent
         -> 用例库/意图服务命中 DomainAgentId：绑定并调用对应 DomainAgent
-        -> 两者关闭/未命中/不可用/复杂任务：创建 Relay Runtime 绑定并调用 Relay Runtime
+        -> 两者关闭/未命中/不可用/复杂任务：创建一次性 Relay RuntimeBinding 并调用 Relay Runtime
 ```
 
 DomainAgent 绑定会一直续接，直到下游返回明确拒答 code。若绑定来自意图或用例库，拒答后 ChatService 会在同一轮内重新意图并自动切换到新 DomainAgent；若绑定来自前端手动选择，拒答后命中新 Agent 时会进入 Interaction 确认，用户确认后才切换并用原问题继续回答。
@@ -262,7 +263,7 @@ export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
 ## 外部服务接入
 
 用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。用例库返回的路由目标和意图服务 `ROUTE_SINGLE.items[0].intentId` 统一解释为 `DomainAgentId/skillId`；意图响应里的 `resourceInstruction.resourceId` 只记录到诊断字段，不参与 ChatService 路由。命中后会创建 `provider=domain-agent` 的会话级 RuntimeBinding。Relay Runtime 通过 AgentRuntime 防腐层接入，默认使用下游 Relay streamable HTTP，也可通过配置灰度切换到 Relay WebSocket 普通问答 adapter。
-意图服务当前适配 `/getIntentDecision`：ChatService 以 `data.result.routeAction` 作为唯一裁决点。`ROUTE_SINGLE` 直接取唯一 `items[0].intentId` 作为 DomainAgentId/skillId 并绑定 DomainAgent；`ROUTE_MULTI` 和 `NO_MATCH` 都进入 Relay Runtime；`CLARIFY` 进入意图澄清等待态。`confidence` 只用于记录和排障，不再参与是否采用 DomainAgent 的二次判断。外部路由已进入 run pipeline：后端会先落库并推送 `run.started`，再调用用例库/意图服务；调用意图服务前会先输出 `runtime.progress(payload.sourceType=route-progress, stage=intent_calling)`，用于前端展示“正在识别问题意图”，该事件不包含 prompt、history 或意图原始响应。意图服务 HTTP 入参和出参转换已收敛在 infrastructure intent mapper 中，后续下游协议变化优先修改 mapper，不影响应用层 `IntentService` 端口和路由策略。意图服务调用失败后默认最多重试 3 次，可通过 `FINANCEEX_INTENT_MAX_RETRIES` 调整；运行时最多按 10 次重试生效。
+意图服务当前适配 `/getIntentDecision`：ChatService 以 `data.result.routeAction` 作为唯一裁决点。`ROUTE_SINGLE` 直接取唯一 `items[0].intentId` 作为 DomainAgentId/skillId 并绑定 DomainAgent；`ROUTE_MULTI` 和 `NO_MATCH` 都进入 Relay Runtime，本轮正常完成后释放 Relay binding，下次普通提问重新路由；`CLARIFY` 进入意图澄清等待态。`confidence` 只用于记录和排障，不再参与是否采用 DomainAgent 的二次判断。外部路由已进入 run pipeline：后端会先落库并推送 `run.started`，再调用用例库/意图服务；调用意图服务前会先输出 `runtime.progress(payload.sourceType=route-progress, stage=intent_calling)`，用于前端展示“正在识别问题意图”，该事件不包含 prompt、history 或意图原始响应。意图服务 HTTP 入参和出参转换已收敛在 infrastructure intent mapper 中，后续下游协议变化优先修改 mapper，不影响应用层 `IntentService` 端口和路由策略。意图服务调用失败后默认最多重试 3 次，可通过 `FINANCEEX_INTENT_MAX_RETRIES` 调整；运行时最多按 10 次重试生效。
 RouteMemory 负责为意图服务生成 `conversationContext`：普通无绑定首次路由使用 `routeTrigger=first_turn`；DomainAgent 结构化拒答后重路由使用 `routeTrigger=domain_reject` 并携带本次 `lastIntentRejectReason`；用户提交 `INTENT_CLARIFICATION` 后使用 `routeTrigger=clarify_answer`。`history` 由最近 TopK 成功 `ROUTE` 记录和当前未完成 `INTENT_CLARIFICATION` 的 `CLARIFY` 链路组成；Agent 内部澄清、审批和 DomainAgent 切换确认不会进入意图 history。澄清最终得到 `ROUTE_SINGLE` 时会在单个 best-effort 写任务中先折叠当前 clarify 链路，再新增一条 route 记录；`ROUTE_MULTI/NO_MATCH` 则只折叠澄清链路后进入 Relay Runtime。RouteMemory 读写使用独立线程池，读超时会取消后台 future 并短暂熔断，所有异常都降级为空上下文或 warn，不阻断 `/v1/chat/runs`。
 意图识别记录是可选旁路能力，默认关闭。开启 `FINANCEEX_INTENT_RECORD_ENABLED=true` 后，仅在本轮实际调用意图服务时异步写入 `fin_ex_intent_recognition_t`，记录用户问题、routeAction、候选 items、最终路由是否采纳以及调用耗时，便于后续准确率统计和排障。该写入使用 Servlet/MVC 友好的专用线程池，不读取请求 ThreadLocal；线程池拒绝、序列化失败或 DB 写入失败只记录 warn，不影响 `/v1/chat/runs` 主链路。DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会写意图记录。
 
@@ -394,7 +395,7 @@ domain-agent DomainAgent 指定调用响应也遵守同一标准事件契约：`
 
 ## 上线版本边界
 
-当前上线版本支持多个 AgentRuntime provider 同时注册：`relay` 与 `domain-agent` 同级运行，`financeex.agent-runtime.default-provider` 只表示没有显式 RuntimeBinding 时的 fallback provider，默认 `relay`。复杂任务通过 Relay Runtime adapter 执行，默认 `relay.adapter=relay-stream-http`；需要灰度 Relay WebSocket 普通问答时配置 `FINANCEEX_RELAY_ADAPTER=relay-websocket`。简单任务或前端显式 `targetType=DOMAIN_AGENT,targetId=...` 会绑定并调用 `domain-agent` Runtime。
+当前上线版本支持多个 AgentRuntime provider 同时注册：`relay` 与 `domain-agent` 同级运行，`financeex.agent-runtime.default-provider` 只表示没有显式 RuntimeBinding 时的 fallback provider，默认 `relay`。复杂任务通过 Relay Runtime adapter 执行，默认 `relay.adapter=relay-stream-http`；需要灰度 Relay WebSocket 普通问答时配置 `FINANCEEX_RELAY_ADAPTER=relay-websocket`。Relay 正常完成后不保持会话绑定；简单任务或前端显式 `targetType=DOMAIN_AGENT,targetId=...` 会绑定并调用 `domain-agent` Runtime。
 
 AgentRuntime 防腐层必须保留：应用层普通问答只依赖 `AgentRuntime` 和 `AgentRuntimeRequest` 契约，协议级澄清/审批/确认续接只依赖 `AgentRuntimeInteraction` 和 `AgentRuntimeInteractionResponseRequest` 契约，不依赖 Relay 或 DomainAgent 的 wire DTO、HTTP、WebSocket 或 chunk/frame 格式。`AgentRuntime.provider()` 是稳定 provider 编码；`financeex.agent-runtime.relay.adapter` 只表示 Relay provider 内部协议。后续新增 Runtime provider 时注册新的 `AgentRuntime` 实现；后续只替换 Relay 下游协议时新增 `RelayRuntimeProtocolAdapter` 实现。
 

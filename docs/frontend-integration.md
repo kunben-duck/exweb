@@ -25,8 +25,7 @@
 query、routeAction、候选意图、最终路由是否采纳和调用耗时。DomainAgent、RuntimeBinding 续接、用例库已命中、
 意图服务关闭或未调用时不会写记录。该记录使用专用 Servlet/MVC 线程池 best-effort 写入
 `fin_ex_intent_recognition_t`，失败只影响统计排障数据，不影响 `/v1/chat/runs`、WebSocket 或 Event Resume。
-意图服务调用失败后后端会按 `financeex.intent.max-retries` 重试，默认最多重试 3 次，运行时最多按 10 次生效；重试耗尽后仍按
-原有降级策略进入 Relay Runtime，前端不需要增加任何请求字段。
+意图服务的连接、超时、HTTP/JSON 异常和协议错误会按 `financeex.intent.max-retries` 重试，默认最多重试 3 次，运行时最多按 10 次生效。重试耗尽后由后端 `financeex.intent.failure-strategy` 决定：默认 `RELAY_FALLBACK` 进入 Relay；`FAIL_RUN` 返回 `INTENT_ROUTING_FAILED` 并提示用户手动选择技能。合法的 `NO_MATCH/ROUTE_MULTI` 始终进入 Relay，不受该策略影响，前端不需要为策略增加请求字段。
 
 ## 接口总览
 
@@ -685,11 +684,43 @@ sequenceDiagram
     "targetId": "cccaaadfsfsfsf"
   }
   ```
+- 意图技术或协议失败重试耗尽后也会先返回 `intent-result`。默认 Relay 兜底示例：
+  ```json
+  {
+    "source": "intent-agent",
+    "sourceType": "intent-result",
+    "routeAction": "DEGRADED",
+    "failureStrategy": "RELAY_FALLBACK",
+    "targetProvider": "relay"
+  }
+  ```
+- 后端配置 `FAIL_RUN` 时，事件顺序为 `run.started -> intent-start -> intent-result -> run.failed`，不会调用 Relay/DomainAgent，也不会生成 assistant 历史消息。`intent-result` 和终态示例：
+  ```json
+  {
+    "source": "intent-agent",
+    "sourceType": "intent-result",
+    "routeAction": "DEGRADED",
+    "failureStrategy": "FAIL_RUN",
+    "targetProvider": "none",
+    "suggestedAction": "SELECT_DOMAIN_AGENT"
+  }
+  ```
+  ```json
+  {
+    "code": "INTENT_ROUTING_FAILED",
+    "message": "暂时无法自动识别合适的技能，请手动选择技能后重试",
+    "source": "intent-agent",
+    "failureStrategy": "FAIL_RUN",
+    "suggestedAction": "SELECT_DOMAIN_AGENT",
+    "retryable": true
+  }
+  ```
+  前端可展示技能选择入口，用户选中后重新调用 `/v1/chat/runs`，传 `targetType=DOMAIN_AGENT,targetId=<skillId>`。
 - 前端手动选择领域 Agent 时，调用 `/v1/chat/runs` 传 `targetType=DOMAIN_AGENT,targetId=...`。后端会把该会话绑定到目标 DomainAgent，`stream-status` 中可通过 `bindingProvider/bindingTargetId/bindingRouteSource` 查看当前绑定。
 - 未传 target 时，后端优先续接当前 active DomainAgent binding；Relay binding 只在当前 Relay 任务未闭合或等待用户输入时续接，普通 Relay 回答正常完成后会被取消，下次提交问题重新调用用例库或意图服务。意图服务 `ROUTE_SINGLE.items[0].accessName` 经后端可选前缀归一化后成为 `DomainAgentId/skillId`；未配置前缀时使用原始值。`intentId` 是意图编码，`resourceInstruction.resourceId` 只用于后端诊断记录，均不参与 DomainAgent 路由。
 - DomainAgent 下游 body 以 `metadata` 为业务扩展，但 `skillId/query/sessionId` 由后端按当前绑定和本轮问题强制写入，前端传同名字段也不会覆盖。
 - 意图服务上下文由后端 RouteMemory 维护：首次路由传 `routeTrigger=first_turn`；上一轮有效 route 是 Relay/no_match 时传 `fallback_followup`；DomainAgent 拒答重路由传 `domain_reject` 和本次拒答摘要；提交 `INTENT_CLARIFICATION` 后传 `clarify_answer`；前端顶层传 `forceReroute=true` 时表示用户主动纠正路由，后端会转成内部用户纠正触发原因。`history` 包含最近 TopK 成功路由和当前未完成的意图澄清链路，Agent 内部澄清不会进入这份 history。Relay 正常完成后会写入 `intent=no_match,intentCode=relay,targetProvider=relay` 的路由记录用于下一轮判断，但不会保持 Relay binding。RouteMemory 读写是 best-effort，异常或熔断只会让本轮意图少带历史，不会阻断 `/v1/chat/runs`。
-- 如果当前绑定来自意图或用例库，DomainAgent 返回配置化拒答 code 后，后端会自动重新意图并切换到新 DomainAgent。
+- 如果当前绑定来自意图或用例库，DomainAgent 返回配置化拒答 code 后，后端会重新调用 intent-agent：命中新 DomainAgent 时自动切换；合法 `NO_MATCH/ROUTE_MULTI` 或失败策略为 `RELAY_FALLBACK` 时废止已拒答 binding 并执行 Relay；失败策略为 `FAIL_RUN` 时废止已拒答 binding 后以 `INTENT_ROUTING_FAILED` 闭合。
 - 如果当前绑定来自手动选择，拒答后命中新 DomainAgent 时，本轮会返回 `run.waiting_user`，消息 parts 中包含 `DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST`。前端调用 `POST /v1/chat/runs` 并传 `runMode=CONTINUE_INTERACTION, interactionId` 提交确认；同意后后端用原问题调用新 DomainAgent，拒绝后保留原手动绑定并以拒答收口。
 
 ## 会话接口
@@ -1783,7 +1814,7 @@ Relay 映射规则：
 - run 结束保存历史消息时，所有 `message.snapshot` 会按接收顺序进入 `parts[]`，partType 为 `MESSAGE_SNAPSHOT` 且默认 `visible=false`；assistant `content` 和最终 `ANSWER` part 仍使用最后一个 snapshot。
 - 纯文本 `steam-complete`、`stream-complete`、`stream_complete`、`stream.complete`、`stream-completed`、`[DONE]` 映射为 `message.completed`。
 - `relay-start/relay-progress/relay-end/clarified-query/plan-update/subagent-plan-created/subagent-subtask/approval-result/approval-response` 映射为 `runtime.progress`；`session-ready/session-state/project-home/available-modes/self-evolution-status/token-update` 映射为 `runtime.metadata`；Relay WebSocket 普通问答的 `heartbeat-response` 在 adapter 内部过滤；`agent-call` 映射为 `runtime.agent`；`agent-reasoning/thinking-operation-*/thinking-content-update` 映射为 `runtime.thinking`；`tool-call-streaming/tool-execution/tool-structured-result` 映射为 `runtime.tool`；引用/来源类事件映射为 `runtime.reference`；`approval-request` 映射为 `runtime.card`。
-- ChatService 在调用意图服务前会先推送一条 `runtime.progress`：`payload.sourceType=route-progress`、`payload.stage=intent_calling`、`payload.message=正在识别问题意图`。该事件只用于等待态提示，不包含意图 prompt、history 或原始响应；后续仍以 `run.completed/run.waiting_user/run.failed` 判断本轮结果。
+- ChatService 在调用意图服务前会先推送一条 `runtime.progress`：`payload.source=intent-agent`、`payload.sourceType=intent-start`、`payload.stage=intent_calling`、`payload.message=正在识别问题意图`。该事件只用于等待态提示，不包含意图 prompt、history 或原始响应；随后会推送 `sourceType=intent-result`，最终仍以 `run.completed/run.waiting_user/run.failed` 判断本轮结果。
 - Relay WebSocket 中 `approval-request(operation_type=questionnaire)` 是 Interaction 等待信号，adapter 会在输出对应 `runtime.card` 后闭合当前用户轮次，由应用层生成 `run.waiting_user`。
 - `tool-structured-result` 是 Relay 内部工具调用的结构化结果，本轮不再拆分 `result_data/resultData.widget.data`，统一作为 `runtime.tool` 输出。payload 完整保留 `result_data/resultData/index/total/is_last` 等原字段，前端按 Relay 文档自行解析；`result_data.is_last=true` 不表示本轮 run 完成，run 仍以 `session-state` 或 `stream-complete/[DONE]` 等显式终态闭合，WebSocket 正常关闭但缺少终态帧会被视为 Relay 协议异常。
 - domain-agent DomainAgent 指定调用响应中，`content` 的 `<think>...</think>` 片段映射为 `runtime.thinking`，不会拼入 assistant 正文；非 think 内容映射为 `message.delta`。`traceId/sessionId/messageId` 映射为 `runtime.metadata`；单独出现的 `intent/domainAgentId` 映射为 `runtime.metadata`；如果 `intent/domainAgentId` 与某个卡片字段同帧出现，则一起放入 `runtime.card`。当前 domain-agent 协议下 `cardUrl/diyCardScene/cardList/openCard` 通常不会在同一个 chunk 中同时出现，因此卡片事件会保留原始 `sourceType`，例如 `diyCardScene` 或 `openCard`；服务端仅保留 `sourceType=domain-agent-card/cardType=mixed` 作为非预期混合帧的防御兜底。`processResult` 映射为 `runtime.progress`，`searchList/sourcesDocuments` 映射为 `runtime.reference`，`endFlag=true` 映射为 `message.completed`。

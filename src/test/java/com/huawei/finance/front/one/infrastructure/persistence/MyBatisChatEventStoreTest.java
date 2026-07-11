@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.CannotAcquireLockException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class MyBatisChatEventStoreTest {
@@ -46,8 +47,46 @@ class MyBatisChatEventStoreTest {
                 new RunExecutionClaim("run1", "instance-1", 7L));
 
         assertThat(appended.sequence()).isEqualTo(42L);
+        assertThat(mapper.lockOwnerInstanceId).isEqualTo("instance-1");
+        assertThat(mapper.lockFencingToken).isEqualTo(7L);
         assertThat(mapper.guardOwnerInstanceId).isEqualTo("instance-1");
         assertThat(mapper.guardFencingToken).isEqualTo(7L);
+    }
+
+    @Test
+    void appendWithExecutionGuardRejectsBeforeAllocatingSequenceWhenRunGateDoesNotMatch() {
+        ReturningEventMapper mapper = new ReturningEventMapper();
+        mapper.lockResult = null;
+        MyBatisChatEventStore store = new MyBatisChatEventStore(
+                mapper,
+                new ObjectMapper(),
+                (bizType, context) -> "event_1"
+        );
+
+        assertThatThrownBy(() -> store.appendWithExecutionGuard(
+                MessageDeltaEvent.of("run1", "session1", "hello"),
+                new RunExecutionClaim("run1", "instance-1", 7L)))
+                .isInstanceOf(ChatEventAppendRejectedException.class)
+                .hasMessageContaining("行栅栏拒绝");
+        assertThat(mapper.sequenceCalls).isZero();
+    }
+
+    @Test
+    void appendWithExecutionGuardConvertsNowaitConflictToRejectedEvent() {
+        ReturningEventMapper mapper = new ReturningEventMapper();
+        mapper.lockFailure = new CannotAcquireLockException("could not obtain lock");
+        MyBatisChatEventStore store = new MyBatisChatEventStore(
+                mapper,
+                new ObjectMapper(),
+                (bizType, context) -> "event_1"
+        );
+
+        assertThatThrownBy(() -> store.appendWithExecutionGuard(
+                MessageDeltaEvent.of("run1", "session1", "hello"),
+                new RunExecutionClaim("run1", "instance-1", 7L)))
+                .isInstanceOf(ChatEventAppendRejectedException.class)
+                .hasMessageContaining("终态行锁");
+        assertThat(mapper.sequenceCalls).isZero();
     }
 
     @Test
@@ -68,12 +107,29 @@ class MyBatisChatEventStoreTest {
 
     private static class ReturningEventMapper implements ChatEventMapper {
         private int guardInsertResult = 1;
+        private Integer lockResult = 1;
+        private RuntimeException lockFailure;
+        private int sequenceCalls;
+        private String lockOwnerInstanceId;
+        private long lockFencingToken;
         private String guardOwnerInstanceId;
         private long guardFencingToken;
 
         @Override
         public Long nextSeq() {
+            sequenceCalls++;
             return 42L;
+        }
+
+        @Override
+        public Integer lockRunForEventAppend(String sessionId, String runId, String ownerInstanceId,
+                                             long fencingToken) {
+            if (lockFailure != null) {
+                throw lockFailure;
+            }
+            lockOwnerInstanceId = ownerInstanceId;
+            lockFencingToken = fencingToken;
+            return lockResult;
         }
 
         @Override

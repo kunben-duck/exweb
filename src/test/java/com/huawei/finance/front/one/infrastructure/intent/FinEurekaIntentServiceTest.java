@@ -137,7 +137,7 @@ class FinEurekaIntentServiceTest {
 
         IntentDecision decision = withServer(response).recognize(command(), MemoryContext.empty(), user());
 
-        assertThat(decision.intentCode()).isEqualTo("finance.runtime.no_intent");
+        assertThat(decision.intentCode()).isEqualTo("finance.runtime.intent_error");
         assertThat(decision.candidateDomainAgentId()).isNull();
         assertThat(decision.confidence()).isZero();
         assertThat(decision.raw()).containsEntry("reason", "routeAction missing");
@@ -271,6 +271,32 @@ class FinEurekaIntentServiceTest {
     }
 
     @Test
+    void retriesProtocolFailureUntilValidRouteArrives() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        IntentServerFixture fixture = withServerSequence(attempts,
+                """
+                {"code":200,"status":"success","data":{"result":{"routeAction":"ROUTE_SINGLE","items":[
+                  {"intentId":"broken","intentName":"缺少目标"}
+                ]}}}
+                """,
+                """
+                {"code":200,"status":"success","data":{"result":{"routeAction":"ROUTE_SINGLE","items":[
+                  {"intentId":"valid","intentName":"有效目标","accessName":"valid-skill"}
+                ]}}}
+                """);
+
+        try {
+            IntentDecision decision = fixture.service().recognize(command(), MemoryContext.empty(), user());
+
+            assertThat(decision.intentCode()).isEqualTo("valid");
+            assertThat(decision.candidateDomainAgentId()).isEqualTo("valid-skill");
+            assertThat(attempts.get()).isEqualTo(2);
+        } finally {
+            fixture.close();
+        }
+    }
+
+    @Test
     void stopsAfterConfiguredIntentRetries() throws Exception {
         AtomicInteger attempts = new AtomicInteger();
         IntentServerFixture fixture = withServerSequence(attempts,
@@ -307,7 +333,7 @@ class FinEurekaIntentServiceTest {
         AtomicInteger attempts = new AtomicInteger();
         IntentServerFixture fixture = withServerSequence(attempts,
                 """
-                {"code":200,"data":{"status":"success","result":{"items":[]}}}
+                {"code":200,"data":{"status":"success","result":{"routeAction":"NO_MATCH","items":[]}}}
                 """,
                 """
                 {"code":200,"data":{"status":"success","result":{"items":[

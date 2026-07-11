@@ -15,6 +15,8 @@ import org.springframework.stereotype.Component;
 public class ChatInteractionProperties {
     /** 默认等待用户输入的有效期；配置为 0 或负数时表示不过期。 */
     private Duration defaultExpireDuration = Duration.ofHours(24);
+    /** RESPONDING claim 尚未创建完整 continuation 控制面时的后台回收宽限期。 */
+    private Duration respondingOrphanGrace = Duration.ofMinutes(2);
 
     public Duration getDefaultExpireDuration() {
         return defaultExpireDuration;
@@ -22,6 +24,20 @@ public class ChatInteractionProperties {
 
     public void setDefaultExpireDuration(Duration defaultExpireDuration) {
         this.defaultExpireDuration = defaultExpireDuration;
+    }
+
+    public Duration getRespondingOrphanGrace() {
+        return respondingOrphanGrace;
+    }
+
+    public void setRespondingOrphanGrace(Duration respondingOrphanGrace) {
+        this.respondingOrphanGrace = respondingOrphanGrace;
+    }
+
+    public Duration normalizedRespondingOrphanGrace() {
+        return respondingOrphanGrace == null || respondingOrphanGrace.isZero() || respondingOrphanGrace.isNegative()
+                ? Duration.ofMinutes(2)
+                : respondingOrphanGrace;
     }
 
     /**

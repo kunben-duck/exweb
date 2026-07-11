@@ -21,6 +21,20 @@ public interface ChatEventMapper {
     Long nextSeq();
 
     /**
+     * 在普通事件写入前获取 run 行共享锁，并同步校验 execution owner/fencing。
+     *
+     * @param sessionId 事件所属会话。
+     * @param runId 事件所属 run。
+     * @param ownerInstanceId 当前 execution owner 实例。
+     * @param fencingToken 当前 execution fencing token。
+     * @return 1 表示准入成功；无匹配行时返回 {@code null}。
+     */
+    Integer lockRunForEventAppend(@Param("sessionId") String sessionId,
+                                  @Param("runId") String runId,
+                                  @Param("ownerInstanceId") String ownerInstanceId,
+                                  @Param("fencingToken") long fencingToken);
+
+    /**
      * 追加已完成外层校验的事件，SQL 仍会通过 session/run join 做归属兜底。
      *
      * @param row 事件写入行，包含 sessionId、runId、seq、eventType、payloadJson 和 createdAt。

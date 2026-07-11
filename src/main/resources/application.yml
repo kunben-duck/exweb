@@ -99,6 +99,8 @@ financeex:
     timeout: ${FINANCEEX_INTENT_TIMEOUT:5s}
     # 意图服务调用失败后的最大重试次数；不包含首次调用，运行时最多按 10 次生效。
     max-retries: ${FINANCEEX_INTENT_MAX_RETRIES:3}
+    # 意图技术/协议失败在重试耗尽后的处理：RELAY_FALLBACK 或 FAIL_RUN。
+    failure-strategy: ${FINANCEEX_INTENT_FAILURE_STRATEGY:RELAY_FALLBACK}
   intent-record:
     # 意图识别记录是统计排障旁路，默认关闭；关闭时不会写 fin_ex_intent_recognition_t。
     enabled: ${FINANCEEX_INTENT_RECORD_ENABLED:false}
@@ -164,9 +166,17 @@ financeex:
     stale-recovery-strategies: ${FINANCEEX_CHAT_RUN_STALE_RECOVERY_STRATEGIES:MANUAL_CONFIRMATION,FAIL_FAST}
     recover-lock-enabled: ${FINANCEEX_CHAT_RUN_RECOVER_LOCK_ENABLED:true}
     recover-lock-ttl: ${FINANCEEX_CHAT_RUN_RECOVER_LOCK_TTL:30s}
+    # run 已创建但 execution 尚未落库时，允许初始化完成的最大宽限期。
+    execution-init-orphan-grace: ${FINANCEEX_CHAT_RUN_EXECUTION_INIT_ORPHAN_GRACE:2m}
+    # /runs 仅等待首个持久化事件的时限；非正数表示禁用，不限制首事件后的后台任务。
+    first-event-timeout: ${FINANCEEX_CHAT_RUN_FIRST_EVENT_TIMEOUT:30s}
+    # 限制 run 准入、事件行栅栏、stop CAS 和外部终态短事务，避免数据库锁等待长期占用工作线程。
+    external-terminal-transaction-timeout-seconds: ${FINANCEEX_CHAT_RUN_EXTERNAL_TERMINAL_TRANSACTION_TIMEOUT_SECONDS:10}
   chat-interaction:
     # Relay questionnaire 等协议级等待用户输入的默认有效期；配置为 0 或负数表示不过期。
     default-expire-duration: ${FINANCEEX_CHAT_INTERACTION_DEFAULT_EXPIRE_DURATION:24h}
+    # RESPONDING claim 尚未创建 continuation run/execution 时的 watchdog 回收宽限期。
+    responding-orphan-grace: ${FINANCEEX_CHAT_INTERACTION_RESPONDING_ORPHAN_GRACE:2m}
   chat-stream:
     # 当前生产止血版本不合并 message.delta，避免 ChatService 内部背压把任务误标记为 run.failed。
     # 以下 delta-coalesce-* 配置仅作为后续 demand-aware 合并器的兼容预留，当前不影响事件粒度。

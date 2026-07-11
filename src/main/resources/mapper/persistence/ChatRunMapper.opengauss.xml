@@ -55,14 +55,40 @@
     </insert>
 
     <!--
-      更新 run 状态和关联消息；终态保护避免 CANCELLED/WAITING_USER/FAILED 被迟到 completed 覆盖。
+      continuation run 创建栅栏：watchdog 若已把 claim 退回 WAITING，迟到实例不能再创建 run。
+      入参: row 为 run 写入数据，interactionId 为当前 Interaction 标识。
+    -->
+    <insert id="insertInteractionContinuationIfClaimed">
+        INSERT INTO fin_ex_chat_run_t(
+            id, tenant_id, user_id, session_id, status, route_type, agent_code, runtime_provider,
+            runtime_session_id, run_mode, parent_message_id, user_message_id, assistant_message_id,
+            first_seq, last_seq, cancel_reason, started_at, finished_at,
+            metadata_json, created_at, updated_at
+        )
+        SELECT
+            #{row.id}, #{row.tenantId}, #{row.userId}, #{row.sessionId}, #{row.status},
+            #{row.routeType}, #{row.agentCode}, #{row.runtimeProvider}, #{row.runtimeSessionId},
+            #{row.runMode}, #{row.parentMessageId}, #{row.userMessageId}, #{row.assistantMessageId},
+            #{row.firstSeq}, #{row.lastSeq}, #{row.cancelReason}, #{row.startedAt}, #{row.finishedAt},
+            #{row.metadataJson}, #{row.createdAt}, #{row.updatedAt}
+        FROM fin_ex_chat_interaction_request_t i
+        WHERE i.id = #{interactionId}
+          AND i.tenant_id = #{row.tenantId}
+          AND i.user_id = #{row.userId}
+          AND i.session_id = #{row.sessionId}
+          AND i.status = 'RESPONDING'
+          AND i.continue_run_id = #{row.id}
+    </insert>
+
+    <!--
+      更新 run 状态和关联消息；CANCELLING/终态保护避免取消中的 run 或已闭合 run 被迟到快照覆盖。
       入参: ChatRunWriteRow，id 定位 run；status/lastSeq/finishedAt 等字段按终态保护规则更新；
             routeType、消息 ID、metadataJson 等为空时尽量保留已有值。
     -->
     <update id="updateExisting" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatRunWriteRow">
         UPDATE fin_ex_chat_run_t
         SET status = CASE
-                WHEN status IN ('COMPLETED', 'WAITING_USER', 'FAILED', 'CANCELLED') THEN status
+                WHEN status IN ('CANCELLING', 'COMPLETED', 'WAITING_USER', 'FAILED', 'CANCELLED') THEN status
                 ELSE #{status}
             END,
             route_type = COALESCE(route_type, #{routeType}),
@@ -75,21 +101,181 @@
             assistant_message_id = COALESCE(#{assistantMessageId}, assistant_message_id),
             first_seq = COALESCE(first_seq, #{firstSeq}),
             last_seq = CASE
-                WHEN status IN ('COMPLETED', 'WAITING_USER', 'FAILED', 'CANCELLED') THEN last_seq
+                WHEN status IN ('CANCELLING', 'COMPLETED', 'WAITING_USER', 'FAILED', 'CANCELLED') THEN last_seq
                 ELSE #{lastSeq}
             END,
             cancel_reason = COALESCE(#{cancelReason}, cancel_reason),
             started_at = COALESCE(started_at, #{startedAt}),
             finished_at = CASE
-                WHEN status IN ('COMPLETED', 'WAITING_USER', 'FAILED', 'CANCELLED') THEN finished_at
+                WHEN status IN ('CANCELLING', 'COMPLETED', 'WAITING_USER', 'FAILED', 'CANCELLED') THEN finished_at
                 ELSE #{finishedAt}
             END,
             metadata_json = COALESCE(#{metadataJson}, metadata_json),
             updated_at = CASE
-                WHEN status IN ('COMPLETED', 'WAITING_USER', 'FAILED', 'CANCELLED') THEN updated_at
+                WHEN status IN ('CANCELLING', 'COMPLETED', 'WAITING_USER', 'FAILED', 'CANCELLED') THEN updated_at
                 ELSE #{updatedAt}
             END
         WHERE id = #{id}
+    </update>
+
+    <!--
+      首次 stop 的短事务 CAS。CANCELLING 重试和已终态幂等由应用层回读当前状态处理。
+      入参: runId/tenantId/userId 为归属边界，reason 为取消原因，requestedAt 为状态更新时间。
+    -->
+    <update id="markCancelling">
+        UPDATE fin_ex_chat_run_t
+        SET status = 'CANCELLING',
+            cancel_reason = #{reason},
+            updated_at = #{requestedAt}
+        WHERE id = #{runId}
+          AND tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND status = 'RUNNING'
+    </update>
+
+    <!--
+      Owner 终态事务栅栏。按 run 主键命中单行，并校验当前 execution owner/fencing；
+      UPDATE 获得的 run 行锁持有到事务结束，使 owner 与 stop/watchdog 只能有一个终态胜者。
+      入参: run 归属、当前 execution owner 实例标识和 fencing token。
+    -->
+    <update id="fenceOwnerTerminalCommit">
+        UPDATE fin_ex_chat_run_t r
+        SET updated_at = CURRENT_TIMESTAMP
+        WHERE r.id = #{runId}
+          AND r.tenant_id = #{tenantId}
+          AND r.user_id = #{userId}
+          AND r.session_id = #{sessionId}
+          AND r.status = 'RUNNING'
+          AND EXISTS (
+              SELECT 1
+              FROM fin_ex_chat_run_execution_t e
+              WHERE e.run_id = r.id
+                AND e.tenant_id = r.tenant_id
+                AND e.user_id = r.user_id
+                AND e.session_id = r.session_id
+                AND e.owner_instance_id = #{ownerInstanceId}
+                AND e.fencing_token = #{fencingToken}
+                AND e.execution_status = 'RUNNING'
+          )
+    </update>
+
+    <!--
+      stop/watchdog/orphan-reconciliation 通过 run 行条件更新竞争唯一外部终态写入权。
+      该语句只持有单个 run 行的短事务锁；失败者返回 0，禁止继续插入终态事件。
+      入参: ChatRunExternalTerminalClaimRow，包含 run 归属、目标终态和可选 recovery/orphan guard。
+    -->
+    <update id="claimExternalTerminal"
+            parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatRunExternalTerminalClaimRow">
+        UPDATE fin_ex_chat_run_t r
+        SET status = #{terminalStatus},
+            cancel_reason = COALESCE(#{cancelReason}, cancel_reason),
+            finished_at = #{finishedAt},
+            updated_at = #{finishedAt}
+        WHERE r.id = #{runId}
+          AND r.tenant_id = #{tenantId}
+          AND r.user_id = #{userId}
+          AND r.session_id = #{sessionId}
+          AND r.status IN ('RUNNING', 'CANCELLING')
+        <choose>
+            <when test='guard == "RECOVERY"'>
+                AND EXISTS (
+                    SELECT 1
+                    FROM fin_ex_chat_run_execution_t e
+                    WHERE e.run_id = r.id
+                      AND e.tenant_id = r.tenant_id
+                      AND e.user_id = r.user_id
+                      AND e.session_id = r.session_id
+                      AND e.execution_status = 'RECOVERING'
+                      AND e.recovered_by_instance_id = #{recoveredByInstanceId}
+                      AND e.fencing_token = #{fencingToken}
+                )
+            </when>
+            <when test='guard == "ORPHAN_INTERACTION"'>
+                AND r.first_seq IS NULL
+                AND r.updated_at &lt; #{orphanBefore}
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM fin_ex_chat_run_execution_t e
+                    WHERE e.run_id = r.id
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM fin_ex_chat_interaction_request_t i
+                    WHERE i.id = #{interactionId}
+                      AND i.tenant_id = r.tenant_id
+                      AND i.user_id = r.user_id
+                      AND i.session_id = r.session_id
+                      AND i.status = 'RESPONDING'
+                      AND i.continue_run_id = r.id
+                      AND i.updated_at &lt; #{orphanBefore}
+                )
+            </when>
+            <when test='guard == "EXECUTION_INIT_FAILURE"'>
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM fin_ex_chat_run_execution_t e
+                    WHERE e.run_id = r.id
+                )
+            </when>
+            <when test='guard == "ORPHAN_RUN_INIT"'>
+                AND r.first_seq IS NULL
+                AND r.updated_at &lt; #{orphanBefore}
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM fin_ex_chat_run_execution_t e
+                    WHERE e.run_id = r.id
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM fin_ex_chat_interaction_request_t i
+                    WHERE i.continue_run_id = r.id
+                      AND i.status = 'RESPONDING'
+                )
+            </when>
+            <when test='guard == "FIRST_EVENT_TIMEOUT"'>
+                AND r.status = 'RUNNING'
+                <choose>
+                    <when test="recoveredByInstanceId != null and recoveredByInstanceId != '' and fencingToken != null">
+                        AND EXISTS (
+                            SELECT 1
+                            FROM fin_ex_chat_run_execution_t e
+                            WHERE e.run_id = r.id
+                              AND e.tenant_id = r.tenant_id
+                              AND e.user_id = r.user_id
+                              AND e.session_id = r.session_id
+                              AND e.execution_status = 'RUNNING'
+                              AND e.owner_instance_id = #{recoveredByInstanceId}
+                              AND e.fencing_token = #{fencingToken}
+                        )
+                    </when>
+                    <otherwise>
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM fin_ex_chat_run_execution_t e
+                            WHERE e.run_id = r.id
+                        )
+                    </otherwise>
+                </choose>
+            </when>
+        </choose>
+    </update>
+
+    <!--
+      外部终态事件成功插入后，在同一事务中回填唯一终态事件游标。
+      入参: ChatRunExternalTerminalFinalizeRow，包含 run 归属、目标终态、seq 和结束时间。
+    -->
+    <update id="finalizeExternalTerminal"
+            parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatRunExternalTerminalFinalizeRow">
+        UPDATE fin_ex_chat_run_t
+        SET last_seq = #{sequence},
+            cancel_reason = COALESCE(#{cancelReason}, cancel_reason),
+            finished_at = #{finishedAt},
+            updated_at = #{finishedAt}
+        WHERE id = #{runId}
+          AND tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND status = #{terminalStatus}
     </update>
 
     <!--
@@ -142,5 +328,31 @@
           AND status IN ('RUNNING', 'CANCELLING')
         ORDER BY updated_at DESC
         LIMIT 1
+    </select>
+
+    <!--
+      扫描 execution 初始化阶段中断的普通 run。Interaction continuation 使用独立对账，
+      避免两个恢复链路重复处理同一个 RESPONDING claim。
+      入参: orphanBefore 为初始化宽限期截止时间，limit 为本轮最大返回数量。
+    -->
+    <select id="findExecutionInitOrphans" resultMap="chatRunResultMap">
+        SELECT <include refid="chatRunColumns"/>
+        FROM fin_ex_chat_run_t r
+        WHERE r.status IN ('RUNNING', 'CANCELLING')
+          AND r.first_seq IS NULL
+          AND r.updated_at &lt; #{orphanBefore}
+          AND NOT EXISTS (
+              SELECT 1
+              FROM fin_ex_chat_run_execution_t e
+              WHERE e.run_id = r.id
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM fin_ex_chat_interaction_request_t i
+              WHERE i.continue_run_id = r.id
+                AND i.status = 'RESPONDING'
+          )
+        ORDER BY r.updated_at ASC
+        LIMIT #{limit}
     </select>
 </mapper>

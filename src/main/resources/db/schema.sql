@@ -195,8 +195,13 @@ CREATE TABLE IF NOT EXISTS fin_ex_chat_run_t (
 
 CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_run_owner_session_status_updated_at
     ON fin_ex_chat_run_t(tenant_id, user_id, session_id, status, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_fin_ex_chat_run_active_session
+    ON fin_ex_chat_run_t(tenant_id, user_id, session_id)
+    WHERE status IN ('RUNNING', 'CANCELLING');
 CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_run_session_last_seq
     ON fin_ex_chat_run_t(session_id, last_seq);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_run_init_reconcile
+    ON fin_ex_chat_run_t(status, first_seq, updated_at, id);
 
 CREATE TABLE IF NOT EXISTS fin_ex_chat_interaction_request_t (
     id VARCHAR(64) PRIMARY KEY,
@@ -228,6 +233,8 @@ CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_interaction_source_run
     ON fin_ex_chat_interaction_request_t(source_run_id);
 CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_interaction_continue_run
     ON fin_ex_chat_interaction_request_t(continue_run_id);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_interaction_reconcile
+    ON fin_ex_chat_interaction_request_t(status, updated_at, continue_run_id);
 CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_interaction_approval
     ON fin_ex_chat_interaction_request_t(runtime_provider, runtime_session_id, approval_id);
 

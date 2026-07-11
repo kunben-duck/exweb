@@ -10,10 +10,13 @@ import com.huawei.finance.front.one.application.integration.id.IdGenerator;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 聊天事件数据库事实源。
@@ -55,9 +58,24 @@ public class MyBatisChatEventStore implements ChatEventStore {
     }
 
     @Override
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public ChatEvent appendWithExecutionGuard(ChatEvent event, RunExecutionClaim claim) {
         if (claim == null) {
             throw new ChatEventAppendRejectedException("run execution claim 为空，拒绝写入聊天事件");
+        }
+        try {
+            Integer admitted = mapper.lockRunForEventAppend(event.sessionId(), event.runId(),
+                    claim.ownerInstanceId(), claim.fencingToken());
+            if (admitted == null || admitted != 1) {
+                throw new ChatEventAppendRejectedException("聊天事件写入被 run/execution 行栅栏拒绝: runId="
+                        + event.runId() + ", sessionId=" + event.sessionId());
+            }
+        } catch (RuntimeException ex) {
+            if (lockUnavailable(ex)) {
+                throw new ChatEventAppendRejectedException("聊天事件写入发现终态行锁，拒绝迟到事件: runId="
+                        + event.runId() + ", sessionId=" + event.sessionId(), ex);
+            }
+            throw ex;
         }
         String eventId = idGenerator.newId("event",
                 IdGenerateContext.of(null, null, event.sessionId(), event.runId()));
@@ -79,6 +97,20 @@ public class MyBatisChatEventStore implements ChatEventStore {
                     + event.runId() + ", sessionId=" + event.sessionId());
         }
         return toStoredEvent(event, seq, createdAt);
+    }
+
+    private boolean lockUnavailable(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof CannotAcquireLockException) {
+                return true;
+            }
+            if (current instanceof SQLException sqlException && "55P03".equals(sqlException.getSQLState())) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     @Override

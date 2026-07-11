@@ -154,8 +154,8 @@ Authorization: {dynamicToken}
 调用方必须优先读取 `data.result.routeAction`，不能只通过 `items.length` 判断结果。ChatService 固定把
 `ROUTE_SINGLE.items[0].accessName` 经可选字面量前缀归一化后作为可调用的 `DomainAgentId/skillId`；
 未配置前缀或前缀不匹配时使用原始 `accessName`。`intentId` 保留为意图编码，
-`resourceInstruction.resourceId` 只进入诊断字段和统计记录；缺少有效 `accessName` 时进入 Relay，
-不会使用 `intentId/resourceId` 兜底。
+`resourceInstruction.resourceId` 只进入诊断字段和统计记录；缺少 item 或有效 `accessName` 时视为协议失败，
+按重试和 `financeex.intent.failure-strategy` 处理，不会使用 `intentId/resourceId` 兜底。
 
 ### 4.1 routeAction
 
@@ -458,7 +458,7 @@ Authorization: {dynamicToken}
 ## 8. ChatService 对接规则
 
 1. 必须优先读取 `data.result.routeAction`。
-2. `ROUTE_SINGLE`：读取唯一 `items[0].accessName`，按 `financeex.intent.response-access-name-prefix` 移除一次匹配的开头前缀后作为 DomainAgentId/skillId，创建或刷新 `provider=domain-agent` 的 RuntimeBinding；该配置为空时使用原始值。`intentId` 只作为意图编码，`resourceInstruction.resourceId` 只记录排障，均不参与路由；缺少有效 `accessName` 时进入 Relay；`confidence` 只用于记录，不参与二次裁决。
+2. `ROUTE_SINGLE`：读取唯一 `items[0].accessName`，按 `financeex.intent.response-access-name-prefix` 移除一次匹配的开头前缀后作为 DomainAgentId/skillId，创建或刷新 `provider=domain-agent` 的 RuntimeBinding；该配置为空时使用原始值。`intentId` 只作为意图编码，`resourceInstruction.resourceId` 只记录排障，均不参与路由；缺少 item 或有效 `accessName` 视为协议失败，按重试和 `financeex.intent.failure-strategy` 处理；`confidence` 只用于记录，不参与二次裁决。
 3. `ROUTE_MULTI`：进入复杂任务规划，通常走 Relay Runtime。
 4. `NO_MATCH`：进入兜底 Runtime 或通用处理。
 5. `CLARIFY`：本轮 run 进入 `WAITING_USER`，写入 `run.waiting_user`，前端通过 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 提交澄清回答。

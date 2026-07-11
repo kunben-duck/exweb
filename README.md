@@ -149,10 +149,10 @@ payload 包含 `targetType`、`targetId`、`domainAgentId` 和 `intentResult.sou
 - `runtimeSessionId`：当前 AgentRuntime provider 自己的会话 ID，由 Runtime 返回后保存在 RuntimeBinding 中，下一轮续接时带回。
 
 `runId` 不是长期任务会话；它是单轮执行 correlation id。事件表 `fin_ex_chat_event_t.run_id` 和绑定表 `fin_ex_runtime_binding_t.last_run_id` 都用它做运行轨迹和排障定位。
-run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。stop 只停止本轮回答，不删除 `RuntimeBinding`；如果用户主动 stop 前已经有 `message.delta`、`message.snapshot` 或卡片、引用、思考、工具、进度等用户可见 parts 成功落库，ChatService 会把截至 stop 时的内容保存为 partial assistant 历史消息，并在消息 `metadata_json` 中标记 `partial=true`、`finishReason=USER_STOP`。
-run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实例、心跳、租约、恢复状态和 `fencing_token`，不混入业务 run 表。后台执行流写入 run 事件时通过数据库 guarded insert 原子校验 execution owner 与 `fencing_token`；stop、watchdog 或未来 Runtime takeover 递增 token 后，旧实例迟到 delta/completed 会被拒绝。
+run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。`CANCELLING` 不允许被迟到的通用 run 更新恢复为 `RUNNING`。stop 只停止本轮回答，不删除 `RuntimeBinding`；如果用户主动 stop 前已经有 `message.delta`、`message.snapshot` 或卡片、引用、思考、工具、进度等用户可见 parts 成功落库，ChatService 会把截至 stop 时的内容保存为 partial assistant 历史消息，并在消息 `metadata_json` 中标记 `partial=true`、`finishReason=USER_STOP`。partial assistant 只由赢得外部终态 CAS 的实例在同一短事务中保存，CAS 失败者不会改写消息、parts 或 session leaf。
+run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实例、心跳、租约、恢复状态和 `fencing_token`，不混入业务 run 表。后台执行流写入 run 事件时通过数据库 guarded insert 原子校验 execution owner 与 `fencing_token`；stop、watchdog 或未来 Runtime takeover 递增 token 后，旧实例迟到 delta/completed 会被拒绝。路由、Runtime Interaction 和 Relay/DomainAgent 调用前还会执行少量只读 owner 检查；检查只发生在外部副作用边界，不进入普通 chunk 写入热路径。
 当前生产版本按下游标准事件原粒度写入和推送 `message.delta`，不再在 ChatService 内合并 delta，避免内部背压误中断 run；`financeex.chat-stream.delta-coalesce-*` 仅作为后续 demand-aware 合并器的兼容预留。Relay `is_streaming=false` 或 `generate-response.content` 给出的最终回答会映射为 `message.snapshot`，前端用它替换当前草稿，历史消息正文也优先使用最后一个快照。
-assistant 的思考、工具、进度、agent 调用等过程信息保存到 `fin_ex_chat_message_part_t`，并通过 `ChatMessageDto.parts` 返回；每个 `message.snapshot` 也会保存为隐藏的 `MESSAGE_SNAPSHOT` part，用于历史消息恢复所有回答快照，最终 `ANSWER` part 仍只保存最终正文。用户消息关联的文档附件保存到 `fin_ex_chat_message_attachment_t`，历史消息、tree 和 variants 会通过 `ChatMessageDto.attachments` 返回附件展示快照；下载和预览仍走文档库接口重新鉴权。parts 会提供稳定的 `title/status/channel/displayHint/visible` 展示语义，前端不需要解析 Relay 私有 payload。
+assistant 的思考、工具、进度、agent 调用等过程信息保存到 `fin_ex_chat_message_part_t`，并通过 `ChatMessageDto.parts` 返回；每个 `message.snapshot` 也会保存为隐藏的 `MESSAGE_SNAPSHOT` part，用于历史消息恢复所有回答快照，最终 `ANSWER` part 仍只保存最终正文。用户消息关联的文档附件保存到 `fin_ex_chat_message_attachment_t`，历史消息、tree 和 variants 会通过 `ChatMessageDto.attachments` 返回附件展示快照；下载和预览仍走文档库接口重新鉴权。parts 会提供稳定的 `title/status/channel/displayHint/visible` 展示语义，前端不需要解析 Relay 私有 payload。启用短期记忆缓存时，assistant 先写数据库，Redis 热缓存只在事务提交后更新，事务回滚不会留下超前于数据库的消息。
 集群部署时，取消正确性依赖 Redis cancel flag 和数据库 run 状态；实例故障治理依赖数据库 execution 条件抢占和 fencing token。JVM 内 subscription registry 只用于命中本机执行流时快速释放资源，不作为跨实例事实源。
 同一 `tenantId + userId + sessionId` 同一时间只允许一个 active run。若会话已有
 `RUNNING/CANCELLING` run，`POST /v1/chat/runs` 会返回 `ACTIVE_RUN_EXISTS`，前端应先调用 stop
@@ -162,13 +162,19 @@ assistant 的思考、工具、进度、agent 调用等过程信息保存到 `fi
 
 所有实例启动后都会运行 watchdog。watchdog 在应用 ready 后延迟启动，每轮带随机 jitter，扫描 `fin_ex_chat_run_execution_t` 中租约过期的 `RUNNING/CANCELLING` execution 和恢复租约过期的 `RECOVERING` execution。Redis recover lock 只用于减少多实例同时抢占同一 run 的 DB 冲突；即使 Redis 不可用，仍会走数据库条件更新，只有更新影响行数为 1 的实例获得恢复权。
 
+同一会话的 `RUNNING/CANCELLING` run 由数据库部分唯一索引保证唯一；用户消息、附件关系、current leaf 与 run 创建处于同一个短事务中，并发失败不会留下无 run 的消息节点。Redis active run 仅作为热缓存，不承担准入正确性。普通流式事件写入前使用 run 行 `FOR SHARE NOWAIT` 与 owner/stop/watchdog 终态串行，终态已持锁时迟到事件立即拒绝。
+
+stop 与 watchdog 写入 `run.cancelled/run.failed` 前会通过 run 行条件更新竞争唯一外部终态写入权，失败者不会再写事件或发布实时消息。stop 首次 `RUNNING -> CANCELLING` 也使用条件 CAS；终态事务失败后，`CANCELLING` run 允许再次 stop 重试。若最终由 watchdog 接管，也会按取消语义闭合为 `run.cancelled`。上述 run 协调短事务默认受 `financeex.chat-run.external-terminal-transaction-timeout-seconds=10` 限制，超时整体回滚，不长期占用数据库连接和工作线程。Interaction 提交后若实例在 continuation run/execution 创建完成前退出，watchdog 会在 `financeex.chat-interaction.responding-orphan-grace`（默认 `2m`）后回收孤儿 `RESPONDING` claim；普通 run 已创建但 execution 未创建时，则由 `financeex.chat-run.execution-init-orphan-grace`（默认 `2m`）控制回收。两类扫描均使用专用索引和既有 batch 上限，不进入普通聊天请求热路径。
+
 默认恢复策略链是 `MANUAL_CONFIRMATION,FAIL_FAST`：
 
 - `MANUAL_CONFIRMATION`：抢占 stale run 后写入 `run.failed` 终态事件，payload 包含 `RUN_EXECUTOR_LOST` 和前端可展示的恢复选项，例如重新生成回答或作为新 run 重试。
 - `FAIL_FAST`：兜底把 stale run 置为失败并释放 active run，避免会话永久卡在 `RUNNING`。
 - `RUNTIME_TAKEOVER`：预留给支持可靠断点恢复的 Runtime。当前默认 Runtime recovery port 不支持 takeover，因此会自动降级到后续策略。
 
-如果业务 run 已创建，但 `fin_ex_chat_run_execution_t` 控制面初始化失败，服务端会立即追加 `run.failed`，payload code 为 `RUN_EXECUTION_INIT_FAILED`，并释放 active run，避免前端永远停留在生成中。
+如果业务 run 已创建，但 `fin_ex_chat_run_execution_t` 控制面初始化失败，服务端会通过与 stop/watchdog 相同的 run 行 CAS 追加唯一 `run.failed`，payload code 为 `RUN_EXECUTION_INIT_FAILED`；进程恰好在该窗口退出时，watchdog 后续以 `RUN_EXECUTION_INIT_ORPHANED` 收敛并释放 active run。
+
+`POST /v1/chat/runs` 默认最多等待 `financeex.chat-run.first-event-timeout=30s` 获取首个持久化事件。该时限只保护 run 创建握手：超时会取消尚未 handoff 的本机订阅、释放 admission permit，并在后台通过终态 CAS 把已创建的 run/execution 收敛为 `run.failed(code=RUN_FIRST_EVENT_TIMEOUT)`；Interaction 尚未创建 continuation run 时则把 claim 退回 `WAITING`。首事件成功返回后的 Relay/DomainAgent 长任务不受该配置限制。配置为 `0` 或负数可禁用。
 
 恢复负载受配置保护：每轮扫描候选数、每轮最大抢占数、每租户最大抢占数、本机恢复并发和 Runtime takeover 并发分别限制，避免单个实例一次性续接或关闭大量 stale run 导致过载。
 
@@ -263,8 +269,8 @@ export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
 ## 外部服务接入
 
 用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。用例库返回的路由目标和意图服务 `ROUTE_SINGLE.items[0].accessName` 统一解释为 `DomainAgentId/skillId`；`intentId` 保留为业务意图编码，`resourceInstruction.resourceId` 只记录到诊断字段，不参与 ChatService 路由。响应 `accessName` 可通过 `FINANCEEX_INTENT_RESPONSE_ACCESS_NAME_PREFIX` 配置字面量前缀，匹配时只移除开头一次；未配置或不匹配时使用原始值。命中后会创建 `provider=domain-agent` 的会话级 RuntimeBinding。Relay Runtime 通过 AgentRuntime 防腐层接入，默认使用下游 Relay streamable HTTP，也可通过配置灰度切换到 Relay WebSocket 普通问答 adapter。
-意图服务当前适配 `/getIntentDecision`：ChatService 以 `data.result.routeAction` 作为唯一裁决点。`ROUTE_SINGLE` 直接取唯一 `items[0].accessName`，完成可选前缀归一化后绑定并调用 DomainAgent；缺少有效 `accessName` 时进入 Relay，不使用 `intentId/resourceId` 兜底。`ROUTE_MULTI` 和 `NO_MATCH` 都进入 Relay Runtime，本轮正常完成后释放 Relay binding，下次普通提问重新路由；`CLARIFY` 进入意图澄清等待态。`confidence` 只用于记录和排障，不再参与是否采用 DomainAgent 的二次判断。外部路由已进入 run pipeline：后端会先落库并推送 `run.started`，再调用用例库/意图服务；调用意图服务前会先输出 `runtime.progress(payload.sourceType=route-progress, stage=intent_calling)`，用于前端展示“正在识别问题意图”，该事件不包含 prompt、history 或意图原始响应。意图服务 HTTP 入参和出参转换已收敛在 infrastructure intent mapper 中，后续下游协议变化优先修改 mapper，不影响应用层 `IntentService` 端口和路由策略。意图服务调用失败后默认最多重试 3 次，可通过 `FINANCEEX_INTENT_MAX_RETRIES` 调整；运行时最多按 10 次重试生效。
-RouteMemory 负责为意图服务生成 `conversationContext`：普通无绑定首次路由使用 `routeTrigger=first_turn`；DomainAgent 结构化拒答后重路由使用 `routeTrigger=domain_reject` 并携带本次 `lastIntentRejectReason`；用户提交 `INTENT_CLARIFICATION` 后使用 `routeTrigger=clarify_answer`；前端顶层传 `forceReroute=true` 时由后端转成内部用户纠正触发原因，表示用户主动要求重新路由；上一轮有效 route 是 Relay/no_match 时，下一轮自动使用 `routeTrigger=fallback_followup`。`history` 由最近 TopK 成功 `ROUTE` 记录和当前未完成 `INTENT_CLARIFICATION` 的 `CLARIFY` 链路组成；Agent 内部澄清、审批和 DomainAgent 切换确认不会进入意图 history。澄清最终得到 `ROUTE_SINGLE` 时会在单个 best-effort 写任务中先折叠当前 clarify 链路，再新增一条 DomainAgent route 记录；`ROUTE_MULTI/NO_MATCH/DEGRADED` 进入 Relay Runtime 并正常完成后，也会写入一条 `intent=no_match,intentCode=relay,targetProvider=relay` 的 route 记录用于后续 `fallback_followup`，但不会绑定 Relay。RouteMemory 读写使用独立线程池，读超时会取消后台 future 并短暂熔断，所有异常都降级为空上下文或 warn，不阻断 `/v1/chat/runs`。
+意图服务当前适配 `/getIntentDecision`：ChatService 以 `data.result.routeAction` 作为唯一裁决点。`ROUTE_SINGLE` 直接取唯一 `items[0].accessName`，完成可选前缀归一化后绑定并调用 DomainAgent；缺少 item、有效 `accessName`、`routeAction` 缺失或未知均属于协议失败，不使用 `intentId/resourceId` 猜测路由。`ROUTE_MULTI` 和 `NO_MATCH` 是合法业务结果，始终进入 Relay Runtime；`CLARIFY` 进入意图澄清等待态。`confidence` 只用于记录和排障，不再参与是否采用 DomainAgent 的二次判断。外部路由已进入 run pipeline：后端会先落库并推送 `run.started`，再调用用例库/意图服务；调用意图服务前会先输出 `runtime.progress(payload.sourceType=intent-start, stage=intent_calling)`，用于前端展示“正在识别问题意图”，该事件不包含 prompt、history 或意图原始响应。意图服务 HTTP 入参和出参转换已收敛在 infrastructure intent mapper 中。技术失败和协议失败默认最多重试 3 次，可通过 `FINANCEEX_INTENT_MAX_RETRIES` 调整，运行时最多按 10 次生效；重试耗尽后由 `FINANCEEX_INTENT_FAILURE_STRATEGY=RELAY_FALLBACK|FAIL_RUN` 决定进入 Relay 或直接生成 `INTENT_ROUTING_FAILED`。默认 `RELAY_FALLBACK` 保持兼容；`FAIL_RUN` 不调用 Runtime，并提示用户手动选择技能。超过最大意图澄清轮数仍直接进入 Relay，不按服务失败处理。
+RouteMemory 负责为意图服务生成 `conversationContext`：普通无绑定首次路由使用 `routeTrigger=first_turn`；DomainAgent 结构化拒答后重路由使用 `routeTrigger=domain_reject` 并携带本次 `lastIntentRejectReason`；用户提交 `INTENT_CLARIFICATION` 后使用 `routeTrigger=clarify_answer`；前端顶层传 `forceReroute=true` 时由后端转成内部用户纠正触发原因，表示用户主动要求重新路由；上一轮有效 route 是 Relay/no_match 时，下一轮自动使用 `routeTrigger=fallback_followup`。`history` 由最近 TopK 成功 `ROUTE` 记录和当前未完成 `INTENT_CLARIFICATION` 的 `CLARIFY` 链路组成；Agent 内部澄清、审批和 DomainAgent 切换确认不会进入意图 history。澄清最终得到 `ROUTE_SINGLE` 时会在单个 best-effort 写任务中先折叠当前 clarify 链路，再新增一条 DomainAgent route 记录；`ROUTE_MULTI/NO_MATCH` 或按 `RELAY_FALLBACK` 处理的 `DEGRADED` 在 Relay 正常完成后，也会写入一条 `intent=no_match,intentCode=relay,targetProvider=relay` 的 route 记录用于后续 `fallback_followup`，但不会绑定 Relay；`FAIL_RUN` 不写成功 route。RouteMemory 读写使用独立线程池，读超时会取消后台 future 并短暂熔断，所有异常都降级为空上下文或 warn，不阻断 `/v1/chat/runs`。
 意图识别记录是可选旁路能力，默认关闭。开启 `FINANCEEX_INTENT_RECORD_ENABLED=true` 后，仅在本轮实际调用意图服务时异步写入 `fin_ex_intent_recognition_t`，记录用户问题、routeAction、候选 items、最终路由是否采纳以及调用耗时，便于后续准确率统计和排障。该写入使用 Servlet/MVC 友好的专用线程池，不读取请求 ThreadLocal；线程池拒绝、序列化失败或 DB 写入失败只记录 warn，不影响 `/v1/chat/runs` 主链路。DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会写意图记录。
 
 WebSocket 边界如下：
@@ -290,6 +296,8 @@ export FINANCEEX_INTENT_ACCESS_NAME=eureka2_260718
 # 可选：例如 accessName=ex_skill1、prefix=ex_ 时，真实 DomainAgent skillId=skill1
 export FINANCEEX_INTENT_RESPONSE_ACCESS_NAME_PREFIX=ex_
 export FINANCEEX_INTENT_RECOGNIZE_PATH=/intent-recognition-configuration/getIntentDecision
+# 可选：RELAY_FALLBACK（默认）或 FAIL_RUN
+export FINANCEEX_INTENT_FAILURE_STRATEGY=RELAY_FALLBACK
 # 可选：记录每次实际调用意图服务后的输入、结果和最终采纳情况；默认关闭
 export FINANCEEX_INTENT_RECORD_ENABLED=false
 export FINANCEEX_INTENT_RECORD_EXECUTOR_CORE_SIZE=1
@@ -352,6 +360,8 @@ export FINANCEEX_CHAT_RUN_LEASE_DURATION=90s
 export FINANCEEX_CHAT_RUN_HEARTBEAT_INTERVAL=15s
 export FINANCEEX_CHAT_RUN_WATCHDOG_ENABLED=true
 export FINANCEEX_CHAT_RUN_WATCHDOG_SCAN_INTERVAL=30s
+export FINANCEEX_CHAT_RUN_FIRST_EVENT_TIMEOUT=30s
+export FINANCEEX_CHAT_RUN_EXTERNAL_TERMINAL_TRANSACTION_TIMEOUT_SECONDS=10
 export FINANCEEX_CHAT_RUN_WATCHDOG_MAX_CLAIMS_PER_SCAN=20
 export FINANCEEX_CHAT_RUN_RECOVERY_MAX_CONCURRENCY=4
 export FINANCEEX_CHAT_RUN_TAKEOVER_MAX_CONCURRENCY=1
@@ -411,6 +421,8 @@ HTTP 错误/提示响应统一为 `{timestamp,path,status,error,code,message}`�
 ## 启动
 
 本地没有数据库/Redis 时，可以先启动 Docker 依赖。`docker-compose.yml` 使用 PostgreSQL 兼容容器做本地联调；生产环境必须显式配置数据库、Redis、WebSocket Origin、存储方式和启用集成的 endpoint，DDL 统一维护在 `src/main/resources/db/schema.sql`：
+
+主配置保持 `spring.sql.init.mode=never`，首次部署必须先完整执行 `schema.sql`。应用启动时会校验同一会话 active run 唯一索引；建库脚本遗漏或索引定义不正确时直接拒绝启动，避免生产环境在 Redis 异常或跨实例并发下产生重复 active run。
 
 ```bash
 docker compose up -d postgres redis

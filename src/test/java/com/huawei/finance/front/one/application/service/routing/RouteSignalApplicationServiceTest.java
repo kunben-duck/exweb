@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.application.service.routing;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.huawei.finance.front.one.application.config.IntentFailureStrategy;
 import com.huawei.finance.front.one.application.config.RouteSignalProperties;
 import com.huawei.finance.front.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.finance.front.one.application.integration.intent.IntentService;
@@ -340,6 +341,68 @@ class RouteSignalApplicationServiceTest {
         assertThat(result.intentDecision().intentCode()).isEqualTo("finance.runtime.degraded");
         assertThat(result.intentDecision().raw()).containsEntry("source", "intent-agent-degraded")
                 .containsEntry("reason", "intent down");
+        assertThat(result.intentFailureStrategy()).isEqualTo(IntentFailureStrategy.RELAY_FALLBACK);
+    }
+
+    @Test
+    void failRunStrategyReturnsFailureResultWithoutRuntimeRoute() {
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                (command, memory, user) -> {
+                    throw new IllegalStateException("intent down");
+                }, null, IntentFailureStrategy.FAIL_RUN);
+
+        List<RouteSignalFrame> frames = service.routeInitialWithProgress(new RouteSignalRequest(
+                "run1", user, session, command, List.of(), memory)).collectList().block();
+
+        assertThat(frames).isNotNull();
+        assertThat(frames)
+                .filteredOn(frame -> frame.eventFrame()
+                        && "intent-result".equals(frame.event().payload().get("sourceType")))
+                .singleElement()
+                .satisfies(frame -> assertThat(frame.event().payload())
+                        .containsEntry("routeAction", "DEGRADED")
+                        .containsEntry("failureStrategy", "FAIL_RUN")
+                        .containsEntry("targetProvider", "none")
+                        .containsEntry("suggestedAction", "SELECT_DOMAIN_AGENT"));
+        RouteSignalResult result = frames.getLast().result();
+        assertThat(result.failRunOnIntentFailure()).isTrue();
+        assertThat(result.route()).isNull();
+        assertThat(result.intentDecision().intentCode()).isEqualTo("finance.runtime.degraded");
+    }
+
+    @Test
+    void failRunStrategyDoesNotTreatValidNoMatchAsFailure() {
+        IntentDecision noMatch = new IntentDecision(
+                "finance.runtime.no_intent", "未识别到可用意图", TaskComplexity.COMPLEX,
+                0.0, false, null, Map.of("routeAction", "NO_MATCH"), List.of(), Map.of());
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                (command, memory, user) -> noMatch,
+                null,
+                IntentFailureStrategy.FAIL_RUN);
+
+        RouteSignalResult result = service.routeInitial(user, session, command, List.of(), memory);
+
+        assertThat(result.route().type()).isEqualTo(RouteType.AGENT_RUNTIME);
+        assertThat(result.intentFailure()).isFalse();
+        assertThat(result.failRunOnIntentFailure()).isFalse();
+    }
+
+    @Test
+    void intentAgentStreamErrorAlsoUsesConfiguredFailureStrategy() {
+        RouteSignalApplicationService service = new RouteSignalApplicationService(
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                request -> reactor.core.publisher.Flux.error(new IllegalStateException("stream down")),
+                new RoutingPolicy(0.85),
+                new RouteSignalProperties(false, true, IntentFailureStrategy.FAIL_RUN));
+
+        RouteSignalResult result = service.routeInitial(user, session, command, List.of(), memory);
+
+        assertThat(result.failRunOnIntentFailure()).isTrue();
+        assertThat(result.intentDecision()).isNotNull();
+        assertThat(result.intentDecision().intentCode()).isEqualTo("finance.runtime.degraded");
+        assertThat(result.intentFailureReason()).contains("stream down");
     }
 
     private RouteSignalApplicationService service(boolean useCaseEnabled, boolean intentEnabled,
@@ -352,9 +415,18 @@ class RouteSignalApplicationServiceTest {
                                                   UseCaseLibraryClient useCaseLibraryClient,
                                                   IntentService intentService,
                                                   RouteMemoryApplicationService routeMemoryService) {
+        return service(useCaseEnabled, intentEnabled, useCaseLibraryClient, intentService, routeMemoryService,
+                IntentFailureStrategy.RELAY_FALLBACK);
+    }
+
+    private RouteSignalApplicationService service(boolean useCaseEnabled, boolean intentEnabled,
+                                                  UseCaseLibraryClient useCaseLibraryClient,
+                                                  IntentService intentService,
+                                                  RouteMemoryApplicationService routeMemoryService,
+                                                  IntentFailureStrategy failureStrategy) {
         return new RouteSignalApplicationService(useCaseLibraryClient, new BlockingIntentAgentRuntime(intentService),
                 new RoutingPolicy(0.85),
-                new RouteSignalProperties(useCaseEnabled, intentEnabled), routeMemoryService);
+                new RouteSignalProperties(useCaseEnabled, intentEnabled, failureStrategy), routeMemoryService);
     }
 
     private IntentDecision simpleDomainAgentIntent() {

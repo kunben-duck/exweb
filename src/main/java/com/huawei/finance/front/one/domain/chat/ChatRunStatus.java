@@ -33,4 +33,11 @@ public enum ChatRunStatus {
     public boolean cancellable() {
         return this == RUNNING;
     }
+
+    /**
+     * @return stop 终态提交是否可以首次执行或在失败后重试。
+     */
+    public boolean stopRetryable() {
+        return this == RUNNING || this == CANCELLING;
+    }
 }

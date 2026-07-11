@@ -1,15 +1,15 @@
 package com.huawei.finance.front.one.application.service.recovery;
 
+import com.huawei.finance.front.one.application.service.chat.ChatRunTerminalCommitService;
 import com.huawei.finance.front.one.application.service.chat.ChatRunApplicationService;
-import com.huawei.finance.front.one.application.service.chat.ChatRunLeaseApplicationService;
 import com.huawei.finance.front.one.application.service.chat.ChatStreamApplicationService;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
-import com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus;
 import com.huawei.finance.front.one.domain.chat.ErrorEvent;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * stale run 的保底失败闭合策略。
@@ -19,18 +19,19 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class FailFastRecoveryStrategy implements StaleRunRecoveryStrategy {
+    private static final Logger log = LoggerFactory.getLogger(FailFastRecoveryStrategy.class);
     public static final String NAME = "FAIL_FAST";
 
     private final ChatStreamApplicationService streamService;
+    private final ChatRunTerminalCommitService terminalCommitService;
     private final ChatRunApplicationService runService;
-    private final ChatRunLeaseApplicationService leaseService;
 
     public FailFastRecoveryStrategy(ChatStreamApplicationService streamService,
-                                    ChatRunApplicationService runService,
-                                    ChatRunLeaseApplicationService leaseService) {
+                                    ChatRunTerminalCommitService terminalCommitService,
+                                    ChatRunApplicationService runService) {
         this.streamService = streamService;
+        this.terminalCommitService = terminalCommitService;
         this.runService = runService;
-        this.leaseService = leaseService;
     }
 
     @Override
@@ -44,7 +45,6 @@ public class FailFastRecoveryStrategy implements StaleRunRecoveryStrategy {
     }
 
     @Override
-    @Transactional
     public StaleRunRecoveryResult recover(StaleRunRecoveryContext context) {
         ChatEvent event = ErrorEvent.of(
                 context.run().id(),
@@ -53,10 +53,29 @@ public class FailFastRecoveryStrategy implements StaleRunRecoveryStrategy {
                 "执行实例心跳超时，本轮回答已失败",
                 failurePayload(context)
         );
-        ChatEvent stored = streamService.appendAndPublish(event);
-        runService.observeEvent(stored);
-        leaseService.markTerminal(context.run().id(), ChatRunExecutionStatus.FAILED);
-        return StaleRunRecoveryResult.recovered(NAME, "stale run failed fast");
+        ChatRunTerminalCommitService.ExternalTerminalCommitResult result =
+                terminalCommitService.commitExternalTerminal(
+                        ChatRunTerminalCommitService.ExternalTerminalCommitCommand.recovery(
+                                event, context.run(), context.execution(), context.instanceId()));
+        if (result.committed()) {
+            runService.synchronizeCommittedRunCache(result.run());
+            publishTerminalBestEffort(result.event());
+            return StaleRunRecoveryResult.recovered(NAME, "stale run failed fast");
+        }
+        if (result.run() != null && result.run().status().terminal()) {
+            runService.synchronizeCommittedRunCache(result.run());
+            return StaleRunRecoveryResult.recovered(NAME, "stale run already reached terminal state");
+        }
+        return StaleRunRecoveryResult.skipped(NAME, "stale run terminal claim lost to another recovery owner");
+    }
+
+    private void publishTerminalBestEffort(ChatEvent event) {
+        try {
+            streamService.publishPersisted(event);
+        } catch (RuntimeException ex) {
+            log.warn("Recovered run terminal event committed but realtime publish failed. runId={}, reason={}",
+                    event == null ? null : event.runId(), ex.getMessage(), ex);
+        }
     }
 
     private Map<String, Object> failurePayload(StaleRunRecoveryContext context) {

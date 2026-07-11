@@ -7,6 +7,7 @@ import com.huawei.finance.front.one.application.integration.conversation.ChatRun
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecution;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus;
+import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -14,6 +15,7 @@ import java.util.Map;
 import java.util.Optional;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * ChatRun 执行控制面的数据库事实源实现。
@@ -63,8 +65,24 @@ public class MyBatisChatRunExecutionRepository implements ChatRunExecutionReposi
     }
 
     @Override
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public ChatRunExecution createForInteractionRun(ChatRun run, String executionId, String ownerInstanceId,
+                                                     Duration leaseDuration, String interactionId) {
+        if (mapper.claimInteractionExecutionInitialization(run.id(), interactionId) != 1) {
+            throw new IllegalStateException("Interaction continuation execution 初始化被拒绝: runId=" + run.id());
+        }
+        return createForRun(run, executionId, ownerInstanceId, leaseDuration);
+    }
+
+    @Override
     public Optional<ChatRunExecution> findByRunId(String runId) {
         return Optional.ofNullable(mapper.findByRunId(runId)).map(this::toDomain);
+    }
+
+    @Override
+    public boolean isCurrentOwnerRunning(RunExecutionClaim claim) {
+        return claim != null && mapper.countCurrentOwnerRunning(
+                claim.runId(), claim.ownerInstanceId(), claim.fencingToken()) == 1;
     }
 
     @Override

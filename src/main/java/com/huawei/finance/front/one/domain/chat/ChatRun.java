@@ -82,6 +82,13 @@ public record ChatRun(
     }
 
     /**
+     * @return 当前 run 是否允许首次 stop 或重试尚未完成的 stop。
+     */
+    public boolean stopRetryable() {
+        return status.stopRetryable();
+    }
+
+    /**
      * 记录 run.started 的持久化序号。
      */
     public ChatRun withFirstSeq(long sequence) {

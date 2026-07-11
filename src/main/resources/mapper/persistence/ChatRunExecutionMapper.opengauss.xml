@@ -49,6 +49,28 @@
     </insert>
 
     <!--
+      Interaction execution 初始化栅栏。短更新会与 watchdog 的 run 终态 CAS 在同一 run 行串行化；
+      claim 已被回收或 run 已终态时返回 0，禁止迟到实例创建 execution。
+      入参: runId 为 continuation run，interactionId 为当前应持有该 run 的 Interaction。
+    -->
+    <update id="claimInteractionExecutionInitialization">
+        UPDATE fin_ex_chat_run_t r
+        SET updated_at = CURRENT_TIMESTAMP
+        WHERE r.id = #{runId}
+          AND r.status = 'RUNNING'
+          AND EXISTS (
+              SELECT 1
+              FROM fin_ex_chat_interaction_request_t i
+              WHERE i.id = #{interactionId}
+                AND i.tenant_id = r.tenant_id
+                AND i.user_id = r.user_id
+                AND i.session_id = r.session_id
+                AND i.status = 'RESPONDING'
+                AND i.continue_run_id = r.id
+          )
+    </update>
+
+    <!--
       按 run ID 查询执行控制面状态，用于 stop、watchdog 和故障恢复判断。
       入参: runId 为业务 run 主键。
     -->
@@ -56,6 +78,22 @@
         SELECT <include refid="executionColumns"/>
         FROM fin_ex_chat_run_execution_t
         WHERE run_id = #{runId}
+    </select>
+
+    <!--
+      外部副作用前的轻量 owner 存活检查。只读主键/唯一键，不获取显式行锁。
+      入参: runId 为 run 主键，ownerInstanceId/fencingToken 为当前执行流持有的 claim。
+    -->
+    <select id="countCurrentOwnerRunning" resultType="int">
+        SELECT COUNT(1)
+        FROM fin_ex_chat_run_t r
+        JOIN fin_ex_chat_run_execution_t e
+          ON e.run_id = r.id
+        WHERE r.id = #{runId}
+          AND r.status = 'RUNNING'
+          AND e.execution_status = 'RUNNING'
+          AND e.owner_instance_id = #{ownerInstanceId}
+          AND e.fencing_token = #{fencingToken}
     </select>
 
     <!--

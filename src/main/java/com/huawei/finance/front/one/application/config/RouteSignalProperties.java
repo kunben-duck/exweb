@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.application.config;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -16,6 +17,8 @@ public class RouteSignalProperties {
     private final boolean useCaseLibraryEnabled;
     /** 是否启用意图识别信号；关闭时不会调用 intent-agent。 */
     private final boolean intentEnabled;
+    /** 意图技术或协议失败在重试耗尽后的处理策略。 */
+    private final IntentFailureStrategy intentFailureStrategy;
 
     /**
      * 创建路由信号配置。
@@ -23,11 +26,29 @@ public class RouteSignalProperties {
      * @param useCaseLibraryEnabled true 表示允许调用用例库服务。
      * @param intentEnabled true 表示允许调用意图服务。
      */
+    @Autowired
     public RouteSignalProperties(
             @Value("${financeex.use-case-library.enabled:false}") boolean useCaseLibraryEnabled,
-            @Value("${financeex.intent.enabled:false}") boolean intentEnabled) {
+            @Value("${financeex.intent.enabled:false}") boolean intentEnabled,
+            @Value("${financeex.intent.failure-strategy:RELAY_FALLBACK}")
+            String intentFailureStrategy) {
+        this(useCaseLibraryEnabled, intentEnabled, parseFailureStrategy(intentFailureStrategy));
+    }
+
+    public RouteSignalProperties(boolean useCaseLibraryEnabled, boolean intentEnabled,
+                                 IntentFailureStrategy intentFailureStrategy) {
         this.useCaseLibraryEnabled = useCaseLibraryEnabled;
         this.intentEnabled = intentEnabled;
+        this.intentFailureStrategy = intentFailureStrategy == null
+                ? IntentFailureStrategy.RELAY_FALLBACK
+                : intentFailureStrategy;
+    }
+
+    /**
+     * 测试和纯 Java 调用兼容构造器，保持历史默认 Relay 降级语义。
+     */
+    public RouteSignalProperties(boolean useCaseLibraryEnabled, boolean intentEnabled) {
+        this(useCaseLibraryEnabled, intentEnabled, IntentFailureStrategy.RELAY_FALLBACK);
     }
 
     /**
@@ -42,6 +63,22 @@ public class RouteSignalProperties {
      */
     public boolean intentEnabled() {
         return intentEnabled;
+    }
+
+    public IntentFailureStrategy intentFailureStrategy() {
+        return intentFailureStrategy;
+    }
+
+    private static IntentFailureStrategy parseFailureStrategy(String value) {
+        if (value == null || value.isBlank()) {
+            return IntentFailureStrategy.RELAY_FALLBACK;
+        }
+        try {
+            return IntentFailureStrategy.valueOf(value.trim());
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("financeex.intent.failure-strategy 仅支持 "
+                    + "RELAY_FALLBACK 或 FAIL_RUN，当前值: " + value);
+        }
     }
 
 }

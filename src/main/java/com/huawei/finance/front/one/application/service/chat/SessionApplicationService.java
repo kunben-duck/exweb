@@ -310,6 +310,19 @@ public class SessionApplicationService implements ChatSessionFacade {
         };
     }
 
+    /**
+     * 在调用方已有事务内锁定会话消息树，统一 admission 与终态提交的锁顺序。
+     */
+    void lockForMessageMutation(String tenantId, String userId, ChatSession session) {
+        if (tenantId == null || tenantId.isBlank() || userId == null || userId.isBlank() || session == null) {
+            throw new IllegalArgumentException("会话消息写入锁参数不完整");
+        }
+        if (!tenantId.equals(session.tenantId()) || !userId.equals(session.userId())) {
+            throw new SecurityException("会话不属于当前用户");
+        }
+        sessionRepository.lockForMessageMutation(tenantId, userId, session.id());
+    }
+
     public ChatMessage saveUserMessage(ChatCommand command, ChatSession session) {
         return createUserMessage(new UserMessageCreateCommand(command.tenantId(), command.userId(), session,
                 command.message(), null, command.runMode(), null, null, null, List.of()));

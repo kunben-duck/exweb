@@ -19,12 +19,34 @@ public interface ChatRunExecutionMapper {
     int insert(ChatRunExecutionWriteRow row);
 
     /**
+     * 通过 run 行短更新串行化 Interaction execution 初始化与孤儿回收。
+     *
+     * @param runId continuation run 标识。
+     * @param interactionId 当前应持有该 run 的 Interaction 标识。
+     * @return 影响行数；1 表示仍允许创建 execution。
+     */
+    int claimInteractionExecutionInitialization(@Param("runId") String runId,
+                                                 @Param("interactionId") String interactionId);
+
+    /**
      * 查询指定 run 的执行控制面状态。
      *
      * @param runId run 主键。
      * @return execution 行；不存在时为 {@code null}。
      */
     ChatRunExecutionRow findByRunId(@Param("runId") String runId);
+
+    /**
+     * 同时校验 run 和 execution 仍由当前 claim 持有。
+     *
+     * @param runId run 主键。
+     * @param ownerInstanceId 当前执行实例 ID。
+     * @param fencingToken 当前 execution fencing token。
+     * @return 匹配记录数，通常为 0 或 1。
+     */
+    int countCurrentOwnerRunning(@Param("runId") String runId,
+                                 @Param("ownerInstanceId") String ownerInstanceId,
+                                 @Param("fencingToken") long fencingToken);
 
     /**
      * 刷新当前 owner 持有的 run 租约。

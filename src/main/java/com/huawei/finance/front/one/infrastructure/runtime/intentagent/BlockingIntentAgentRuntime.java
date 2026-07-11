@@ -55,7 +55,7 @@ public class BlockingIntentAgentRuntime implements IntentAgentRuntime {
         try {
             result = intentService.recognizeForRouting(request.command(), request.memory(), request.user());
         } catch (RuntimeException ex) {
-            log.warn("IntentAgent route failed, degrading to Relay Runtime. tenantId={}, userId={}, sessionId={}, reason={}",
+            log.warn("IntentAgent route failed, returning degraded routing result. tenantId={}, userId={}, sessionId={}, reason={}",
                     request.user() == null ? null : request.user().tenantId(),
                     request.user() == null ? null : request.user().ownerUserId(),
                     request.session() == null ? null : request.session().id(),

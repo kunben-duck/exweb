@@ -175,7 +175,7 @@ FinanceEXChatService#executeRun(...)
 10. `ChatRunApplicationService#createRunning(...)` 创建业务 run。
 11. `ChatRunLeaseApplicationService#startRun(...)` 创建 execution lease。
 12. 先持久化并推送 `run.started`，让前端立即拿到首个事实事件。
-13. route 为空时进入 run pipeline 内的 `RouteSignalApplicationService#routeInitialWithProgress(...)`，先输出 `runtime.progress(sourceType=route-progress, stage=intent_calling/use_case_matching)`，再在后台执行可选用例库和意图服务。
+13. route 为空时进入 run pipeline 内的 `RouteSignalApplicationService#routeInitialWithProgress(...)`：用例库调用前输出 `runtime.progress(sourceType=route-progress,stage=use_case_matching)`；intent-agent 调用前输出 `runtime.progress(sourceType=intent-start,stage=intent_calling)`，裁决后输出 `sourceType=intent-result`，再继续执行最终路由。
 14. 如果本轮实际调用了意图服务，`IntentRecognitionRecordService#recordAsync(...)` 用当前 `UserContext`、query、`IntentDecision`、最终 `RouteTarget` 和 runId 构造不可变快照，并提交到专用 Servlet/MVC 异步线程池；写入失败不影响主链路。
 15. 根据最终 `RouteType` 调用 SystemResponse 或 `AgentRuntimeExecutor`；DomainAgent 作为 `provider=domain-agent` 的 AgentRuntime 执行。
 16. 外层补齐 `run.completed`，所有事件统一进入 `persistAndPublishRunEvents(...)`。

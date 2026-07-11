@@ -9,6 +9,7 @@ import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus;
+import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
 import com.huawei.finance.front.one.domain.chat.ChatRunStopDecision;
 import com.huawei.finance.front.one.domain.chat.ChatRunStopResult;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
@@ -30,6 +31,8 @@ import reactor.core.publisher.Mono;
 @Service
 public class ChatRunStopCoordinator {
     private static final Logger log = LoggerFactory.getLogger(ChatRunStopCoordinator.class);
+    private static final String INTERACTION_ID_METADATA = "interactionId";
+    private static final String INTERACTION_ASSISTANT_MESSAGE_ID_METADATA = "interactionAssistantMessageId";
     private static final String USER_STOP_PARTIAL_ASSISTANT_METADATA =
             "{\"partial\":true,\"finishReason\":\"USER_STOP\",\"runStatus\":\"CANCELLED\"}";
     private static final String SESSION_DELETE_PARTIAL_ASSISTANT_METADATA =
@@ -41,6 +44,8 @@ public class ChatRunStopCoordinator {
     private final ChatRunLeaseApplicationService chatRunLeaseService;
     private final LocalChatRunExecutionRegistry runExecutionRegistry;
     private final AgentRuntimeExecutor agentRuntimeExecutor;
+    private final ChatInteractionApplicationService chatInteractionService;
+    private final ChatRunTerminalCommitService terminalCommitService;
     private final IdGenerator idGenerator;
 
     @Autowired
@@ -50,6 +55,8 @@ public class ChatRunStopCoordinator {
                                   ChatRunLeaseApplicationService chatRunLeaseService,
                                   LocalChatRunExecutionRegistry runExecutionRegistry,
                                   AgentRuntimeExecutor agentRuntimeExecutor,
+                                  ChatInteractionApplicationService chatInteractionService,
+                                  ChatRunTerminalCommitService terminalCommitService,
                                   IdGenerator idGenerator) {
         this.sessionService = sessionService;
         this.chatStreamService = chatStreamService;
@@ -57,7 +64,32 @@ public class ChatRunStopCoordinator {
         this.chatRunLeaseService = chatRunLeaseService;
         this.runExecutionRegistry = runExecutionRegistry;
         this.agentRuntimeExecutor = agentRuntimeExecutor;
+        this.chatInteractionService = chatInteractionService;
+        this.terminalCommitService = terminalCommitService;
         this.idGenerator = idGenerator;
+    }
+
+    public ChatRunStopCoordinator(SessionApplicationService sessionService,
+                                  ChatStreamApplicationService chatStreamService,
+                                  ChatRunApplicationService chatRunService,
+                                  ChatRunLeaseApplicationService chatRunLeaseService,
+                                  LocalChatRunExecutionRegistry runExecutionRegistry,
+                                  AgentRuntimeExecutor agentRuntimeExecutor,
+                                  ChatInteractionApplicationService chatInteractionService,
+                                  IdGenerator idGenerator) {
+        this(sessionService, chatStreamService, chatRunService, chatRunLeaseService,
+                runExecutionRegistry, agentRuntimeExecutor, chatInteractionService, null, idGenerator);
+    }
+
+    public ChatRunStopCoordinator(SessionApplicationService sessionService,
+                                  ChatStreamApplicationService chatStreamService,
+                                  ChatRunApplicationService chatRunService,
+                                  ChatRunLeaseApplicationService chatRunLeaseService,
+                                  LocalChatRunExecutionRegistry runExecutionRegistry,
+                                  AgentRuntimeExecutor agentRuntimeExecutor,
+                                  IdGenerator idGenerator) {
+        this(sessionService, chatStreamService, chatRunService, chatRunLeaseService,
+                runExecutionRegistry, agentRuntimeExecutor, null, null, idGenerator);
     }
 
     public ChatRunStopCoordinator(SessionApplicationService sessionService,
@@ -69,7 +101,7 @@ public class ChatRunStopCoordinator {
                                   com.huawei.finance.front.one.application.service.runtime.DomainAgentExecutor ignoredDomainAgentExecutor,
                                   IdGenerator idGenerator) {
         this(sessionService, chatStreamService, chatRunService, chatRunLeaseService,
-                runExecutionRegistry, agentRuntimeExecutor, idGenerator);
+                runExecutionRegistry, agentRuntimeExecutor, null, null, idGenerator);
     }
 
     public Mono<ChatRunStopResult> stopRun(UserContext user, String runId, String reason,
@@ -89,6 +121,7 @@ public class ChatRunStopCoordinator {
         ChatRunStopDecision decision = chatRunService.requestStop(user, runId, effectiveReason);
         ChatRun run = decision.run();
         if (!decision.appendCancelledEvent()) {
+            reconcileTerminalInteraction(run);
             return chatRunService.toStopResult(run);
         }
         /*
@@ -98,15 +131,66 @@ public class ChatRunStopCoordinator {
         cancelDownstreamBestEffort(run, user, headerSnapshot);
         runExecutionRegistry.cancel(run.id());
         if (!chatRunService.shouldAcceptEvent(RunCancelledEvent.of(run.id(), run.sessionId(), run.cancelReason()))) {
-            return chatRunService.toStopResult(run);
+            ChatRun latest = chatRunService.requireOwnedRun(user, run.id());
+            reconcileTerminalInteraction(latest);
+            return chatRunService.toStopResult(latest);
         }
-        StopMessageTarget messageTarget = persistPartialAssistant(user, run, effectiveReason, sessionSnapshot);
-        ChatEvent cancelEvent = RunCancelledEvent.of(run.id(), run.sessionId(), run.cancelReason(),
-                messageTarget.messageReady(), messageTarget.assistantMessageId());
-        ChatEvent cancelled = chatStreamService.appendAndPublish(cancelEvent);
-        ChatRun latest = chatRunService.observeEvent(cancelled);
-        chatRunLeaseService.markTerminal(run.id(), ChatRunExecutionStatus.CANCELLED);
+        StopMessageTarget messageTarget = preparePartialAssistant(user, run, effectiveReason, sessionSnapshot);
+        ChatRun latest;
+        if (terminalCommitService == null) {
+            messageTarget = persistPreparedPartialAssistant(run, messageTarget);
+            ChatEvent cancelEvent = RunCancelledEvent.of(run.id(), run.sessionId(), run.cancelReason(),
+                    messageTarget.messageReady(), messageTarget.assistantMessageId());
+            ChatEvent cancelled = chatStreamService.appendAndPublish(cancelEvent);
+            latest = chatRunService.observeEvent(cancelled);
+            chatRunLeaseService.markTerminal(run.id(), ChatRunExecutionStatus.CANCELLED);
+            releaseContinuationInteractionClaim(run);
+        } else {
+            ChatEvent cancelEvent = RunCancelledEvent.of(run.id(), run.sessionId(), run.cancelReason(),
+                    messageTarget.messageReady(), messageTarget.assistantMessageId());
+            ChatRunTerminalCommitService.ExternalTerminalCommitResult result =
+                    terminalCommitService.commitExternalTerminal(
+                            ChatRunTerminalCommitService.ExternalTerminalCommitCommand.stop(
+                                    cancelEvent, run, messageTarget.partialAssistant()));
+            latest = result.run();
+            chatRunService.synchronizeCommittedRunCache(latest);
+            if (result.committed()) {
+                publishTerminalBestEffort(result.event());
+            }
+        }
         return chatRunService.toStopResult(latest == null ? run : latest);
+    }
+
+    private void reconcileTerminalInteraction(ChatRun run) {
+        if (terminalCommitService != null) {
+            terminalCommitService.reconcileTerminalInteraction(run);
+            return;
+        }
+        if (run != null && (run.status() == ChatRunStatus.CANCELLED || run.status() == ChatRunStatus.FAILED)) {
+            releaseContinuationInteractionClaim(run);
+        }
+    }
+
+    private void publishTerminalBestEffort(ChatEvent event) {
+        try {
+            chatStreamService.publishPersisted(event);
+        } catch (RuntimeException ex) {
+            log.warn("Chat run terminal event committed but realtime publish failed. runId={}, type={}, reason={}",
+                    event == null ? null : event.runId(), event == null ? null : event.type(), ex.getMessage(), ex);
+        }
+    }
+
+    private void releaseContinuationInteractionClaim(ChatRun run) {
+        if (chatInteractionService == null || run == null || run.metadata() == null) {
+            return;
+        }
+        Object value = run.metadata().get("interactionId");
+        String interactionId = value == null ? null : String.valueOf(value).trim();
+        if (interactionId == null || interactionId.isBlank()) {
+            return;
+        }
+        chatInteractionService.markWaitingForRun(
+                run.tenantId(), run.userId(), interactionId, run.id());
     }
 
     private void cancelDownstreamBestEffort(ChatRun run, UserContext user, RuntimeForwardHeaders headerSnapshot) {
@@ -134,10 +218,17 @@ public class ChatRunStopCoordinator {
         stopRunNow(user, run.id(), "SESSION_DELETE", RuntimeForwardHeaders.empty(), sessionSnapshot);
     }
 
-    private StopMessageTarget persistPartialAssistant(UserContext user, ChatRun run, String reason,
-                                                      ChatSession sessionSnapshot) {
+    private StopMessageTarget preparePartialAssistant(UserContext user, ChatRun run, String reason,
+                                                       ChatSession sessionSnapshot) {
         if (run.assistantMessageId() != null && !run.assistantMessageId().isBlank()) {
             return StopMessageTarget.ready(run.assistantMessageId());
+        }
+        boolean interactionContinuation = interactionContinuation(run);
+        String interactionAssistantMessageId = interactionAssistantMessageId(run);
+        if (interactionContinuation && interactionAssistantMessageId == null) {
+            log.warn("Skip partial assistant persistence because Interaction continuation has no original assistant ID. runId={}",
+                    run.id());
+            return StopMessageTarget.notReady();
         }
         String parentMessageId = firstNonBlank(run.userMessageId(), run.parentMessageId());
         if (parentMessageId == null) {
@@ -151,9 +242,11 @@ public class ChatRunStopCoordinator {
                 return StopMessageTarget.notReady();
             }
             ChatSession session = sessionSnapshot == null ? sessionService.getSession(user, run.sessionId()) : sessionSnapshot;
-            String assistantMessageId = idGenerator.newId("msg",
-                    IdGenerateContext.of(user.tenantId(), user.ownerUserId(), session.id(), run.id()));
-            ChatMessage savedAssistant = sessionService.saveAssistantMessage(new AssistantMessageSaveCommand(
+            String assistantMessageId = interactionContinuation
+                    ? interactionAssistantMessageId
+                    : idGenerator.newId("msg",
+                            IdGenerateContext.of(user.tenantId(), user.ownerUserId(), session.id(), run.id()));
+            AssistantMessageSaveCommand partialAssistant = new AssistantMessageSaveCommand(
                     user.tenantId(),
                     user.ownerUserId(),
                     session,
@@ -164,14 +257,68 @@ public class ChatRunStopCoordinator {
                     assistant.parts(),
                     partialMetadata(reason),
                     assistantMessageId
-            ));
-            chatRunService.bindAssistantMessage(run.id(), savedAssistant.id());
-            return StopMessageTarget.ready(savedAssistant.id());
+            );
+            return StopMessageTarget.ready(assistantMessageId, partialAssistant);
         } catch (Exception ex) {
-            log.warn("Failed to persist partial assistant on run stop. runId={}, reason={}, error={}",
+            log.warn("Failed to prepare partial assistant on run stop. runId={}, reason={}, error={}",
                     run.id(), reason, ex.getMessage(), ex);
             return StopMessageTarget.notReady();
         }
+    }
+
+    private StopMessageTarget persistPreparedPartialAssistant(ChatRun run, StopMessageTarget target) {
+        if (target == null || target.partialAssistant() == null) {
+            return target == null ? StopMessageTarget.notReady() : target;
+        }
+        try {
+            ChatMessage savedAssistant = persistPartialAssistant(run, target.partialAssistant());
+            chatRunService.bindAssistantMessage(run.id(), savedAssistant.id());
+            return StopMessageTarget.ready(savedAssistant.id());
+        } catch (Exception ex) {
+            log.warn("Failed to persist partial assistant on legacy run stop. runId={}, error={}",
+                    run.id(), ex.getMessage(), ex);
+            return StopMessageTarget.notReady();
+        }
+    }
+
+    private ChatMessage persistPartialAssistant(ChatRun run, AssistantMessageSaveCommand command) {
+        if (!interactionContinuation(run)) {
+            return sessionService.saveAssistantMessage(command);
+        }
+        String assistantMessageId = interactionAssistantMessageId(run);
+        if (assistantMessageId == null || !assistantMessageId.equals(command.normalizedMessageId())) {
+            throw new IllegalStateException("Interaction stop partial assistant 必须复用原 assistantMessageId");
+        }
+        return sessionService.updateAssistantMessage(new AssistantMessageUpdateCommand(
+                command.tenantId(),
+                command.userId(),
+                command.session(),
+                assistantMessageId,
+                command.content(),
+                command.runId(),
+                command.safePartDrafts(),
+                command.metadataJson()
+        ));
+    }
+
+    private boolean interactionContinuation(ChatRun run) {
+        return metadataText(run, INTERACTION_ID_METADATA) != null;
+    }
+
+    private String interactionAssistantMessageId(ChatRun run) {
+        return metadataText(run, INTERACTION_ASSISTANT_MESSAGE_ID_METADATA);
+    }
+
+    private String metadataText(ChatRun run, String key) {
+        if (run == null || run.metadata() == null || key == null) {
+            return null;
+        }
+        Object value = run.metadata().get(key);
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isBlank() ? null : text;
     }
 
     private Mono<Void> cancelDownstream(ChatRun run, UserContext user, RuntimeForwardHeaders forwardHeaders) {
@@ -207,16 +354,25 @@ public class ChatRunStopCoordinator {
         return null;
     }
 
-    private record StopMessageTarget(boolean messageReady, String assistantMessageId) {
+    private record StopMessageTarget(boolean messageReady, String assistantMessageId,
+                                     AssistantMessageSaveCommand partialAssistant) {
         private static StopMessageTarget notReady() {
-            return new StopMessageTarget(false, null);
+            return new StopMessageTarget(false, null, null);
         }
 
         private static StopMessageTarget ready(String assistantMessageId) {
             if (assistantMessageId == null || assistantMessageId.isBlank()) {
                 return notReady();
             }
-            return new StopMessageTarget(true, assistantMessageId);
+            return new StopMessageTarget(true, assistantMessageId, null);
+        }
+
+        private static StopMessageTarget ready(String assistantMessageId,
+                                               AssistantMessageSaveCommand partialAssistant) {
+            if (assistantMessageId == null || assistantMessageId.isBlank() || partialAssistant == null) {
+                return notReady();
+            }
+            return new StopMessageTarget(true, assistantMessageId, partialAssistant);
         }
     }
 }

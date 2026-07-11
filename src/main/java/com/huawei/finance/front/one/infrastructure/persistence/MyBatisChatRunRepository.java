@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
+import com.huawei.finance.front.one.domain.chat.ActiveRunExistsException;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
@@ -14,6 +15,7 @@ import java.util.Map;
 import java.util.Optional;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * ChatRun 的数据库事实源实现。
@@ -21,6 +23,7 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class MyBatisChatRunRepository implements ChatRunRepository {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
+    private static final String ACTIVE_RUN_UNIQUE_INDEX = "uk_fin_ex_chat_run_active_session";
 
     private final ChatRunMapper mapper;
     private final ObjectMapper objectMapper;
@@ -43,6 +46,119 @@ public class MyBatisChatRunRepository implements ChatRunRepository {
             }
         }
         return findById(run.id()).orElse(run);
+    }
+
+    @Override
+    public ChatRun insert(ChatRun run) {
+        try {
+            mapper.insert(toRow(run));
+        } catch (DuplicateKeyException ex) {
+            throw translateInsertConflict(run, ex);
+        }
+        return findById(run.id())
+                .orElseThrow(() -> new IllegalStateException("新建 run 回读失败: " + run.id()));
+    }
+
+    @Override
+    public Optional<ChatRun> insertInteractionContinuationIfClaimed(ChatRun run, String interactionId) {
+        if (run == null || interactionId == null || interactionId.isBlank()) {
+            return Optional.empty();
+        }
+        int inserted;
+        try {
+            inserted = mapper.insertInteractionContinuationIfClaimed(toRow(run), interactionId);
+        } catch (DuplicateKeyException ex) {
+            throw translateInsertConflict(run, ex);
+        }
+        return inserted == 1 ? findById(run.id()) : Optional.empty();
+    }
+
+    private RuntimeException translateInsertConflict(ChatRun run, DuplicateKeyException exception) {
+        if (causedByConstraint(exception, ACTIVE_RUN_UNIQUE_INDEX)) {
+            return new ActiveRunExistsException(run.sessionId(), "unknown");
+        }
+        return exception;
+    }
+
+    private boolean causedByConstraint(Throwable error, String constraintName) {
+        Throwable current = error;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null && message.toLowerCase(java.util.Locale.ROOT)
+                    .contains(constraintName.toLowerCase(java.util.Locale.ROOT))) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    @Override
+    public boolean tryFenceOwnerTerminalCommit(OwnerTerminalFence fence) {
+        if (fence == null || fence.executionClaim() == null) {
+            return false;
+        }
+        return mapper.fenceOwnerTerminalCommit(
+                fence.runId(),
+                fence.tenantId(),
+                fence.userId(),
+                fence.sessionId(),
+                fence.executionClaim().ownerInstanceId(),
+                fence.executionClaim().fencingToken()
+        ) == 1;
+    }
+
+    @Override
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public boolean tryMarkCancelling(StopClaim claim) {
+        if (claim == null) {
+            return false;
+        }
+        return mapper.markCancelling(claim.runId(), claim.tenantId(), claim.userId(), claim.reason(),
+                claim.requestedAt()) == 1;
+    }
+
+    @Override
+    public boolean tryClaimExternalTerminal(ExternalTerminalClaim claim) {
+        if (claim == null || claim.guard() == null || claim.terminalStatus() == null) {
+            return false;
+        }
+        return mapper.claimExternalTerminal(new ChatRunExternalTerminalClaimRow(
+                claim.runId(),
+                claim.tenantId(),
+                claim.userId(),
+                claim.sessionId(),
+                claim.terminalStatus().name(),
+                claim.cancelReason(),
+                claim.finishedAt(),
+                claim.guard().name(),
+                claim.recoveredByInstanceId(),
+                claim.fencingToken(),
+                claim.interactionId(),
+                claim.orphanBefore()
+        )) == 1;
+    }
+
+    @Override
+    public ChatRun finalizeExternalTerminal(ExternalTerminalFinalize command) {
+        if (command == null || command.terminalStatus() == null) {
+            throw new IllegalArgumentException("外部终态回填参数不能为空");
+        }
+        int updated = mapper.finalizeExternalTerminal(new ChatRunExternalTerminalFinalizeRow(
+                command.runId(),
+                command.tenantId(),
+                command.userId(),
+                command.sessionId(),
+                command.terminalStatus().name(),
+                command.sequence(),
+                command.cancelReason(),
+                command.finishedAt()
+        ));
+        if (updated != 1) {
+            throw new IllegalStateException("外部终态事件游标回填失败: runId=" + command.runId());
+        }
+        return findById(command.runId())
+                .orElseThrow(() -> new IllegalStateException("外部终态 run 回读失败: " + command.runId()));
     }
 
     private ChatRunWriteRow toRow(ChatRun run) {
@@ -94,6 +210,16 @@ public class MyBatisChatRunRepository implements ChatRunRepository {
     @Override
     public Optional<ChatRun> findActiveBySession(String tenantId, String userId, String sessionId) {
         return Optional.ofNullable(mapper.findActiveBySession(tenantId, userId, sessionId)).map(this::toDomain);
+    }
+
+    @Override
+    public List<ChatRun> findExecutionInitOrphans(Instant orphanBefore, int limit) {
+        if (orphanBefore == null || limit <= 0) {
+            return List.of();
+        }
+        return mapper.findExecutionInitOrphans(orphanBefore, Math.max(1, limit)).stream()
+                .map(this::toDomain)
+                .toList();
     }
 
     private ChatRun toDomain(ChatRunRow row) {

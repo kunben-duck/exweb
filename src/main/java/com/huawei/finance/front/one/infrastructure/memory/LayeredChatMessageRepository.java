@@ -15,6 +15,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * 聊天历史消息组合仓储。
@@ -42,21 +44,21 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
 
     @Override
     public ChatMessage save(ChatMessage message) {
-        boolean cached = redisCache.append(message);
         if (!canUseDatabase()) {
+            updateCacheBestEffort(() -> redisCache.append(message));
             return message;
         }
         try {
-            return databaseStore.save(message);
+            ChatMessage saved = databaseStore.save(message);
+            updateCacheAfterCommit(() -> redisCache.append(saved));
+            return saved;
         } catch (RuntimeException ex) {
             // 默认要求数据库写成功，确保数据库是消息事实源；本地联调可显式关闭 databaseRequired。
             if (properties.isDatabaseRequired()) {
-                if (cached) {
-                    redisCache.remove(message);
-                }
                 throw ex;
             }
             markDatabaseFailure(ex);
+            updateCacheBestEffort(() -> redisCache.append(message));
             return message;
         }
     }
@@ -66,10 +68,12 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
         ChatMessage previous = databaseStore.findByOwnerAndId(message.tenantId(), message.userId(), message.id())
                 .orElse(null);
         ChatMessage updated = databaseStore.updateAssistantMessage(message);
-        if (previous != null) {
-            redisCache.remove(previous);
-        }
-        redisCache.append(updated);
+        updateCacheAfterCommit(() -> {
+            if (previous != null) {
+                redisCache.remove(previous);
+            }
+            redisCache.append(updated);
+        });
         return updated;
     }
 
@@ -182,5 +186,28 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
         databaseRetryAfter = Instant.now().plus(properties.getDatabaseFailureBackoff());
         log.warn("短期消息数据库暂不可用，{} 后重试；本次请求降级处理。原因：{}",
                 properties.getDatabaseFailureBackoff(), ex.getMessage());
+    }
+
+    private void updateCacheAfterCommit(Runnable cacheUpdate) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()
+                || !TransactionSynchronizationManager.isSynchronizationActive()) {
+            updateCacheBestEffort(cacheUpdate);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                updateCacheBestEffort(cacheUpdate);
+            }
+        });
+    }
+
+    private void updateCacheBestEffort(Runnable cacheUpdate) {
+        try {
+            cacheUpdate.run();
+        } catch (RuntimeException ex) {
+            log.warn("短期消息数据库事实已保存，但 Redis 热缓存更新失败；后续读取将回源数据库。原因：{}",
+                    ex.getMessage(), ex);
+        }
     }
 }

@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Optional;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -88,6 +89,15 @@ public class MyBatisSessionRepository implements SessionRepository {
             }
         }
         return session;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void lockForMessageMutation(String tenantId, String userId, String sessionId) {
+        Long current = mapper.lockNodeOrder(tenantId, userId, sessionId);
+        if (current == null) {
+            throw new IllegalArgumentException("会话不存在或不属于当前用户: " + sessionId);
+        }
     }
 
     @Override

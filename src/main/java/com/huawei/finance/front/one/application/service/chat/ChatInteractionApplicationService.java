@@ -14,6 +14,8 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
@@ -24,6 +26,8 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class ChatInteractionApplicationService {
+    private static final Logger log = LoggerFactory.getLogger(ChatInteractionApplicationService.class);
+
     private final ChatInteractionRequestRepository repository;
     private final IdGenerator idGenerator;
     private final PermissionChecker permissionChecker;
@@ -114,8 +118,67 @@ public class ChatInteractionApplicationService {
     }
 
     public void markWaiting(ChatInteractionRequest request) {
-        if (request != null) {
-            repository.markWaiting(request.tenantId(), request.userId(), request.id());
+        if (request == null || request.continueRunId() == null || request.continueRunId().isBlank()) {
+            return;
+        }
+        repository.markWaitingForRun(request.tenantId(), request.userId(), request.id(),
+                request.continueRunId());
+    }
+
+    public int markWaitingForRun(String tenantId, String userId, String interactionId, String continueRunId) {
+        if (tenantId == null || tenantId.isBlank() || userId == null || userId.isBlank()
+                || interactionId == null || interactionId.isBlank()
+                || continueRunId == null || continueRunId.isBlank()) {
+            return 0;
+        }
+        return repository.markWaitingForRun(tenantId, userId, interactionId, continueRunId);
+    }
+
+    /**
+     * 回收因进程退出或旧版本非原子终态提交而遗留的 RESPONDING claim。
+     *
+     * <p>候选只包含 continue run 已经 FAILED/CANCELLED 的 Interaction；每条更新仍携带
+     * continueRunId 条件，避免候选查询后状态变化时覆盖新的续接 claim。</p>
+     */
+    public int reconcileTerminalContinuationClaims(int limit) {
+        int released = 0;
+        for (ChatInteractionRequestRepository.ContinuationReconcileCandidate candidate
+                : findContinuationReconcileCandidates(limit)) {
+            if (candidate.state() == ChatInteractionRequestRepository.ContinuationReconcileState.MISSING_EXECUTION) {
+                continue;
+            }
+            released += releaseContinuationReconcileCandidate(candidate);
+        }
+        return released;
+    }
+
+    public java.util.List<ChatInteractionRequestRepository.ContinuationReconcileCandidate>
+            findContinuationReconcileCandidates(int limit) {
+        int normalizedLimit = Math.max(1, limit);
+        Instant orphanBefore = Instant.now().minus(properties.normalizedRespondingOrphanGrace());
+        try {
+            return repository.findRespondingReconcileCandidates(orphanBefore, normalizedLimit);
+        } catch (RuntimeException ex) {
+            log.warn("Failed to query orphan Interaction claims for reconciliation. reason={}", ex.getMessage(), ex);
+            return java.util.List.of();
+        }
+    }
+
+    public int releaseContinuationReconcileCandidate(
+            ChatInteractionRequestRepository.ContinuationReconcileCandidate candidate) {
+        if (candidate == null || candidate.request() == null
+                || candidate.state() == ChatInteractionRequestRepository.ContinuationReconcileState.MISSING_EXECUTION) {
+            return 0;
+        }
+        ChatInteractionRequest request = candidate.request();
+        try {
+            return repository.markWaitingIfContinuationOrphaned(
+                    request.tenantId(), request.userId(), request.id(), request.continueRunId(),
+                    candidate.orphanBefore());
+        } catch (RuntimeException ex) {
+            log.warn("Failed to reconcile Interaction claim. interactionId={}, continueRunId={}, state={}, reason={}",
+                    request.id(), request.continueRunId(), candidate.state(), ex.getMessage(), ex);
+            return 0;
         }
     }
 

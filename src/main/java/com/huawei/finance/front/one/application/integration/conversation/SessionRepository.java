@@ -90,6 +90,21 @@ public interface SessionRepository {
     ChatSession save(ChatSession session);
 
     /**
+     * 在当前事务内锁定会话消息树写入水位，但不递增节点序号。
+     *
+     * <p>调用方必须已经开启事务。该锁用于统一同一会话的 run admission 与终态消息写入顺序；
+     * 非数据库实现只需完成归属和存在性校验。</p>
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     */
+    default void lockForMessageMutation(String tenantId, String userId, String sessionId) {
+        findByTenantIdAndUserIdAndId(tenantId, userId, sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在或不属于当前用户: " + sessionId));
+    }
+
+    /**
      * 为会话生成下一个消息树节点序号。
      *
      * @param tenantId 租户标识。

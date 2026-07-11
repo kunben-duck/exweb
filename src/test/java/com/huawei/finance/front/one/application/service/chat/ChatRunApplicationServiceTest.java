@@ -65,6 +65,36 @@ class ChatRunApplicationServiceTest {
     }
 
     @Test
+    void stopCancellingRunRetriesTerminalSubmissionWithoutRevertingStatus() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRun cancelling = runningRun().cancelling("USER_STOP");
+        repository.save(cancelling);
+
+        var decision = service(repository, cache).requestStop(user(), "run1", "USER_STOP");
+
+        assertThat(decision.appendCancelledEvent()).isTrue();
+        assertThat(decision.run().status()).isEqualTo(ChatRunStatus.CANCELLING);
+        assertThat(cache.cancellationSignal("run1")).isEqualTo(ChatRunCancelSignal.REQUESTED);
+    }
+
+    @Test
+    void stopDatabaseFailureDoesNotWriteRedisCancellationFlag() {
+        FailingStopClaimRunRepository repository = new FailingStopClaimRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRunApplicationService service = service(repository, cache);
+        repository.save(runningRun());
+
+        assertThatThrownBy(() -> service.requestStop(user(), "run1", "USER_STOP"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("stop claim db failure");
+
+        assertThat(repository.findById("run1").orElseThrow().status()).isEqualTo(ChatRunStatus.RUNNING);
+        assertThat(cache.cancellationSignal("run1")).isEqualTo(ChatRunCancelSignal.NOT_REQUESTED);
+        assertThat(service.shouldAcceptEvent(MessageDeltaEvent.of("run1", "session1", "still running"))).isTrue();
+    }
+
+    @Test
     void stopDoesNotAppendCancelledEventWhenTerminalRaceWins() {
         TerminalRaceRunRepository repository = new TerminalRaceRunRepository();
         InMemoryRunCache cache = new InMemoryRunCache();
@@ -190,6 +220,33 @@ class ChatRunApplicationServiceTest {
     }
 
     @Test
+    void createRunningUsesDatabaseInsertInsteadOfRedisClaim() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache() {
+            @Override
+            public boolean tryClaimActive(ChatRun run) {
+                return false;
+            }
+        };
+
+        ChatRun created = service(repository, cache).createRunning(new CreateChatRunContext(
+                "run2",
+                user(),
+                "session1",
+                com.huawei.finance.front.one.domain.routing.RouteTarget.agentRuntime("test", 1.0, "test"),
+                null,
+                Map.of(),
+                com.huawei.finance.front.one.domain.chat.ChatRunMode.NEXT,
+                null,
+                null
+        ));
+
+        assertThat(created.id()).isEqualTo("run2");
+        assertThat(repository.findById("run2")).contains(created);
+        assertThat(cache.getActive("tenant1", "user1", "session1")).contains(created);
+    }
+
+    @Test
     void createRunningRejectsDeletedSessionBeforeClaimingActiveRun() {
         InMemoryRunRepository repository = new InMemoryRunRepository();
         InMemoryRunCache cache = new InMemoryRunCache();
@@ -208,6 +265,29 @@ class ChatRunApplicationServiceTest {
                 null
         ))).isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("会话不存在");
+        assertThat(cache.getActive("tenant1", "user1", "session1")).isEmpty();
+    }
+
+    @Test
+    void interactionContinuationDoesNotCreateRunAfterClaimWasReconciled() {
+        ClaimLostRunRepository repository = new ClaimLostRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRunApplicationService service = service(repository, cache);
+
+        assertThatThrownBy(() -> service.createInteractionRunning(new CreateChatRunContext(
+                "run2",
+                user(),
+                "session1",
+                com.huawei.finance.front.one.domain.routing.RouteTarget.agentRuntime("test", 1.0, "test"),
+                null,
+                Map.of("interactionId", "interaction1"),
+                com.huawei.finance.front.one.domain.chat.ChatRunMode.NEXT,
+                "msg-user",
+                "msg-user"
+        ), "interaction1"))
+                .isInstanceOf(com.huawei.finance.front.one.domain.chat.ChatInteractionUnavailableException.class);
+
+        assertThat(repository.findById("run2")).isEmpty();
         assertThat(cache.getActive("tenant1", "user1", "session1")).isEmpty();
     }
 
@@ -275,6 +355,20 @@ class ChatRunApplicationServiceTest {
                 return super.save(run.completed(9L));
             }
             return super.save(run);
+        }
+    }
+
+    private static class FailingStopClaimRunRepository extends InMemoryRunRepository {
+        @Override
+        public boolean tryMarkCancelling(StopClaim claim) {
+            throw new IllegalStateException("stop claim db failure");
+        }
+    }
+
+    private static class ClaimLostRunRepository extends InMemoryRunRepository {
+        @Override
+        public Optional<ChatRun> insertInteractionContinuationIfClaimed(ChatRun run, String interactionId) {
+            return Optional.empty();
         }
     }
 

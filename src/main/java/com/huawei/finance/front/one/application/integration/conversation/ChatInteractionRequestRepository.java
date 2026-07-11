@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.application.integration.conversation;
 
 import com.huawei.finance.front.one.domain.chat.ChatInteractionRequest;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -67,6 +68,45 @@ public interface ChatInteractionRequestRepository {
     int markWaiting(String tenantId, String userId, String interactionId);
 
     /**
+     * 仅当 Interaction 仍由指定 continuation run 持有时退回 WAITING。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param interactionId Interaction 请求 ID。
+     * @param continueRunId 当前持有响应 claim 的续接 run ID。
+     * @return 影响行数。
+     */
+    int markWaitingForRun(String tenantId, String userId, String interactionId, String continueRunId);
+
+    /**
+     * 查询 continue run 已经失败或取消、但仍持有 RESPONDING claim 的 Interaction。
+     *
+     * @param limit 最大候选数量。
+     * @return 按更新时间正序排列的孤儿 claim 候选。
+     */
+    default List<ChatInteractionRequest> findRespondingWithTerminalContinuation(int limit) {
+        return List.of();
+    }
+
+    /**
+     * 查询需要 watchdog 对账的 RESPONDING continuation。
+     */
+    default List<ContinuationReconcileCandidate> findRespondingReconcileCandidates(Instant orphanBefore, int limit) {
+        return findRespondingWithTerminalContinuation(limit).stream()
+                .map(request -> new ContinuationReconcileCandidate(
+                        request, ContinuationReconcileState.TERMINAL_RUN, orphanBefore))
+                .toList();
+    }
+
+    /**
+     * 原子复核并释放“终态 run 或超过宽限期仍不存在 run”的 Interaction claim。
+     */
+    default int markWaitingIfContinuationOrphaned(String tenantId, String userId, String interactionId,
+                                                   String continueRunId, Instant orphanBefore) {
+        return markWaitingForRun(tenantId, userId, interactionId, continueRunId);
+    }
+
+    /**
      * 取消某会话下仍在等待或响应中的 Interaction 请求。
      *
      * @param tenantId 租户标识。
@@ -104,6 +144,19 @@ public interface ChatInteractionRequestRepository {
             String continueRunId,
             Map<String, Object> responsePayload,
             Instant now
+    ) {
+    }
+
+    enum ContinuationReconcileState {
+        TERMINAL_RUN,
+        MISSING_RUN,
+        MISSING_EXECUTION
+    }
+
+    record ContinuationReconcileCandidate(
+            ChatInteractionRequest request,
+            ContinuationReconcileState state,
+            Instant orphanBefore
     ) {
     }
 }

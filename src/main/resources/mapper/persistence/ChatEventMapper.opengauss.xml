@@ -26,6 +26,28 @@
     </select>
 
     <!--
+      普通事件与 owner/stop/watchdog 终态竞争同一个 run 行锁。NOWAIT 保证终态已经持锁时
+      迟到事件立即失败，不占用事件写入线程等待终态事务结束。
+      入参: sessionId/runId 定位 run，ownerInstanceId/fencingToken 校验当前 execution 写入权。
+    -->
+    <select id="lockRunForEventAppend" resultType="int">
+        SELECT 1
+        FROM fin_ex_chat_run_t r
+        JOIN fin_ex_chat_run_execution_t e
+          ON e.run_id = r.id
+         AND e.tenant_id = r.tenant_id
+         AND e.user_id = r.user_id
+         AND e.session_id = r.session_id
+        WHERE r.id = #{runId}
+          AND r.session_id = #{sessionId}
+          AND r.status = 'RUNNING'
+          AND e.owner_instance_id = #{ownerInstanceId}
+          AND e.fencing_token = #{fencingToken}
+          AND e.execution_status = 'RUNNING'
+        FOR SHARE OF r NOWAIT
+    </select>
+
+    <!--
       追加已完成归属校验的事件，仍通过 session/run join 确保 run 与 session 归属一致。
       入参: ChatEventWriteRow，id 为事件主键，sessionId/runId 定位事件所属上下文，seq 为已预取事件游标，
             eventType/payloadJson 为标准事件内容，createdAt 为事件发生时间。

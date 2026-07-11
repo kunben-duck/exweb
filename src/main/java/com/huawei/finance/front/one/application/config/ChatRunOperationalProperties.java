@@ -41,6 +41,10 @@ public class ChatRunOperationalProperties {
     private boolean recoverLockEnabled = true;
     /** Redis recover lock TTL，仅用于减少 DB 抢占冲突，不作为正确性事实源。 */
     private Duration recoverLockTtl = Duration.ofSeconds(30);
+    /** run 已创建但 execution 尚未建立时，watchdog 开始回收的宽限期。 */
+    private Duration executionInitOrphanGrace = Duration.ofMinutes(2);
+    /** 创建 run 接口等待首个持久化事件的最长时间；非正数表示禁用。 */
+    private Duration firstEventTimeout = Duration.ofSeconds(30);
 
     public Duration getLeaseDuration() {
         return leaseDuration;
@@ -154,6 +158,22 @@ public class ChatRunOperationalProperties {
         this.recoverLockTtl = recoverLockTtl;
     }
 
+    public Duration getExecutionInitOrphanGrace() {
+        return executionInitOrphanGrace;
+    }
+
+    public void setExecutionInitOrphanGrace(Duration executionInitOrphanGrace) {
+        this.executionInitOrphanGrace = executionInitOrphanGrace;
+    }
+
+    public Duration getFirstEventTimeout() {
+        return firstEventTimeout;
+    }
+
+    public void setFirstEventTimeout(Duration firstEventTimeout) {
+        this.firstEventTimeout = firstEventTimeout;
+    }
+
     public Duration normalizedLeaseDuration() {
         return positiveOrDefault(leaseDuration, Duration.ofSeconds(90));
     }
@@ -202,6 +222,14 @@ public class ChatRunOperationalProperties {
 
     public Duration normalizedRecoverLockTtl() {
         return positiveOrDefault(recoverLockTtl, Duration.ofSeconds(30));
+    }
+
+    public Duration normalizedExecutionInitOrphanGrace() {
+        return positiveOrDefault(executionInitOrphanGrace, Duration.ofMinutes(2));
+    }
+
+    public Duration normalizedFirstEventTimeout() {
+        return firstEventTimeout == null ? Duration.ofSeconds(30) : firstEventTimeout;
     }
 
     private Duration positiveOrDefault(Duration value, Duration fallback) {

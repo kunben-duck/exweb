@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.application.integration.conversation;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecution;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus;
+import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -27,12 +28,36 @@ public interface ChatRunExecutionRepository {
     ChatRunExecution createForRun(ChatRun run, String executionId, String ownerInstanceId, Duration leaseDuration);
 
     /**
+     * 为 Interaction continuation 初始化 execution，并再次校验对应 claim 仍有效。
+     */
+    default ChatRunExecution createForInteractionRun(ChatRun run, String executionId, String ownerInstanceId,
+                                                      Duration leaseDuration, String interactionId) {
+        return createForRun(run, executionId, ownerInstanceId, leaseDuration);
+    }
+
+    /**
      * 按 runId 查询执行控制面快照。
      *
      * @param runId run 标识。
      * @return execution 快照，不存在时为空。
      */
     Optional<ChatRunExecution> findByRunId(String runId);
+
+    /**
+     * 校验当前 claim 仍拥有 RUNNING run/execution。
+     *
+     * <p>生产实现应在一条只读 SQL 中同时校验 run 状态、owner 和 fencing token。</p>
+     */
+    default boolean isCurrentOwnerRunning(RunExecutionClaim claim) {
+        if (claim == null) {
+            return false;
+        }
+        return findByRunId(claim.runId())
+                .filter(execution -> execution.executionStatus() == ChatRunExecutionStatus.RUNNING)
+                .filter(execution -> claim.ownerInstanceId().equals(execution.ownerInstanceId()))
+                .filter(execution -> claim.fencingToken() == execution.fencingToken())
+                .isPresent();
+    }
 
     /**
      * owner 实例刷新 run 租约。

@@ -87,26 +87,33 @@ public class IntentServiceResponseMapper {
                     "routeAction=NO_MATCH"));
         }
         if ("ROUTE_SINGLE".equalsIgnoreCase(routeAction)) {
-            return IntentRecognitionResult.finalDecision(singleRouteDecision(root, result));
+            return singleRouteResult(root, result);
         }
 
         // 新意图服务以 routeAction 作为唯一裁决字段。缺失时不再按 items/confidence 猜测 DomainAgent。
-        return IntentRecognitionResult.finalDecision(complexDecision(root, result,
-                "finance.runtime.no_intent", "未识别到可用意图，进入 Relay Runtime",
-                "routeAction missing"));
+        return IntentRecognitionResult.degraded(protocolError(root, result, null,
+                routeAction == null ? "routeAction missing" : "unknown routeAction: " + routeAction));
     }
 
-    private IntentDecision singleRouteDecision(JsonNode root, JsonNode result) {
+    private IntentRecognitionResult singleRouteResult(JsonNode root, JsonNode result) {
         JsonNode items = result.path("items");
         if (!items.isArray() || items.isEmpty()) {
-            return intentError(root, "ROUTE_SINGLE response has no item");
+            return IntentRecognitionResult.degraded(protocolError(root, result, null,
+                    "ROUTE_SINGLE response has no item"));
         }
-        return itemToDomainAgentDecision(root, items.get(0), result, "routeAction=ROUTE_SINGLE");
+        JsonNode selected = items.get(0);
+        String domainAgentId = normalizeDomainAgentId(text(selected.path("accessName")));
+        if (domainAgentId == null) {
+            return IntentRecognitionResult.degraded(protocolError(root, result, selected,
+                    "ROUTE_SINGLE accessName missing after normalization"));
+        }
+        return IntentRecognitionResult.finalDecision(itemToDomainAgentDecision(
+                root, selected, result, domainAgentId, "routeAction=ROUTE_SINGLE"));
     }
 
-    private IntentDecision itemToDomainAgentDecision(JsonNode root, JsonNode selected, JsonNode result, String reason) {
+    private IntentDecision itemToDomainAgentDecision(JsonNode root, JsonNode selected, JsonNode result,
+                                                     String domainAgentId, String reason) {
         String intentId = text(selected.path("intentId"));
-        String domainAgentId = normalizeDomainAgentId(text(selected.path("accessName")));
         String resourceId = text(selected.path("resourceInstruction").path("resourceId"));
         double confidence = confidence(selected);
         Map<String, Object> slots = new LinkedHashMap<>();
@@ -122,14 +129,13 @@ public class IntentServiceResponseMapper {
         return new IntentDecision(
                 blankToDefault(intentId, "finance.intent.unknown"),
                 blankToDefault(text(selected.path("intentName")), "未知意图"),
-                domainAgentId == null ? TaskComplexity.COMPLEX : TaskComplexity.SIMPLE,
+                TaskComplexity.SIMPLE,
                 confidence,
-                domainAgentId != null,
+                true,
                 domainAgentId,
                 slots,
                 List.of(),
-                rawWithSelected(root, selected, result,
-                        domainAgentId == null ? reason + "; accessName missing after normalization" : reason)
+                rawWithSelected(root, selected, result, reason)
         );
     }
 
@@ -195,6 +201,22 @@ public class IntentServiceResponseMapper {
         return new IntentDecision("finance.runtime.intent_error", "意图服务返回失败",
                 TaskComplexity.COMPLEX, 0.0, false, null, Map.of(), List.of(),
                 rawWithReason(root, reason));
+    }
+
+    private IntentDecision protocolError(JsonNode root, JsonNode result, JsonNode selected, String reason) {
+        Map<String, Object> slots = new LinkedHashMap<>();
+        putIfPresent(slots, "routeAction", text(result == null ? null : result.path("routeAction")));
+        if (selected != null && !selected.isNull() && !selected.isMissingNode()) {
+            putIfPresent(slots, "intentId", text(selected.path("intentId")));
+            putIfPresent(slots, "accessName", text(selected.path("accessName")));
+            putIfPresent(slots, "resourceId", text(selected.path("resourceInstruction").path("resourceId")));
+            putIfPresent(slots, "source", text(selected.path("source")));
+        }
+        Map<String, Object> raw = selected == null
+                ? rawWithReason(root, reason)
+                : rawWithSelected(root, selected, result, reason);
+        return new IntentDecision("finance.runtime.intent_error", "意图服务协议异常",
+                TaskComplexity.COMPLEX, 0.0, false, null, slots, List.of(), raw);
     }
 
     private Map<String, Object> rawWithSelected(JsonNode root, JsonNode selected, JsonNode result, String reason) {

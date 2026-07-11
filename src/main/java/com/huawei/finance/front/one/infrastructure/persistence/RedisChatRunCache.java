@@ -65,8 +65,9 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
             );
             return Boolean.TRUE.equals(claimed);
         } catch (RuntimeException | JsonProcessingException ex) {
-            log.warn("ChatRun active Redis 原子声明失败，将退化为数据库 active run 检查。原因：{}", ex.getMessage());
-            return true;
+            log.warn("ChatRun active Redis 原子声明失败，未获得缓存声明。数据库唯一索引仍是 active run 事实栅栏。原因：{}",
+                    ex.getMessage());
+            return false;
         }
     }
 

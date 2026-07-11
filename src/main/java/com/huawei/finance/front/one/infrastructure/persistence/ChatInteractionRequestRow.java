@@ -27,6 +27,7 @@ public class ChatInteractionRequestRow {
     private Instant cancelledAt;
     private Instant createdAt;
     private Instant updatedAt;
+    private String reconcileState;
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
@@ -70,4 +71,6 @@ public class ChatInteractionRequestRow {
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
+    public String getReconcileState() { return reconcileState; }
+    public void setReconcileState(String reconcileState) { this.reconcileState = reconcileState; }
 }

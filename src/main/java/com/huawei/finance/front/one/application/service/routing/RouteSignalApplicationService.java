@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.application.service.routing;
 
 import com.huawei.finance.front.one.application.config.RouteSignalProperties;
+import com.huawei.finance.front.one.application.config.IntentFailureStrategy;
 import com.huawei.finance.front.one.application.integration.intent.IntentAgentRouteFrame;
 import com.huawei.finance.front.one.application.integration.intent.IntentAgentRouteRequest;
 import com.huawei.finance.front.one.application.integration.intent.IntentAgentRouteResult;
@@ -143,7 +144,16 @@ public class RouteSignalApplicationService {
             MemoryContext intentMemory = memoryWithRouteContext(routeRequest);
             return intentAgentRuntime.route(new IntentAgentRouteRequest(
                             user, session, command, intentMemory, runId, routeTrigger))
-                    .concatMap(frame -> toRouteSignalFrames(routeRequest, intentMemory, frame));
+                    .concatMap(frame -> toRouteSignalFrames(routeRequest, intentMemory, frame))
+                    .onErrorResume(ex -> {
+                        String reason = "intent agent stream failed: "
+                                + (ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
+                        log.warn("IntentAgent event stream failed; applying configured failure strategy. "
+                                        + "tenantId={}, userId={}, sessionId={}, strategy={}, reason={}",
+                                user.tenantId(), user.ownerUserId(), session.id(),
+                                properties.intentFailureStrategy(), reason);
+                        return intentFailureFrames(routeRequest, degradedIntent(reason), 0L, reason);
+                    });
         }
 
         return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.agentRuntime("route-signal", 0.0,
@@ -163,9 +173,10 @@ public class RouteSignalApplicationService {
         IntentRecognitionResult result = agentResult == null ? null : agentResult.recognitionResult();
         long latencyMs = agentResult == null ? 0L : agentResult.latencyMs();
         if (result == null) {
-            RouteSignalResult routeResult = RouteSignalResult.of(RouteTarget.agentRuntime(IntentAgentRuntime.PROVIDER,
-                    0.0, "intent agent returned empty result"));
-            return intentResultAndRouteFrames(request, routeResult, null, latencyMs, "DEGRADED");
+            return intentFailureFrames(request, null, latencyMs, "intent agent returned empty result");
+        }
+        if (result.status() == IntentRecognitionResult.Status.FAILED_OR_DEGRADED) {
+            return intentFailureFrames(request, result.decision(), latencyMs, intentFailureReason(result.decision()));
         }
         if (result.waitingClarification()) {
             if (clarificationRoundLimitReached(request)) {
@@ -204,6 +215,33 @@ public class RouteSignalApplicationService {
                 routeAction(result, intent, route));
     }
 
+    private Flux<RouteSignalFrame> intentFailureFrames(IntentRouteRequest request, IntentDecision intent,
+                                                       long latencyMs, String reason) {
+        IntentDecision failureIntent = intent == null ? degradedIntent(reason) : intent;
+        IntentFailureStrategy strategy = properties.intentFailureStrategy();
+        RouteTarget route = strategy == IntentFailureStrategy.RELAY_FALLBACK
+                ? RouteTarget.agentRuntime(IntentAgentRuntime.PROVIDER, 0.0,
+                "intent routing failed, fallback to relay")
+                : null;
+        RouteSignalResult routeResult = RouteSignalResult.intentFailure(
+                route, failureIntent, latencyMs, routingPolicy.intentConfidenceThreshold(),
+                new RouteSignalResult.IntentFailure(strategy, reason));
+        return intentResultAndRouteFrames(request, routeResult, failureIntent, latencyMs, "DEGRADED");
+    }
+
+    private IntentDecision degradedIntent(String reason) {
+        return new IntentDecision(
+                "finance.runtime.degraded",
+                "意图服务不可用",
+                TaskComplexity.COMPLEX,
+                0.0,
+                false,
+                null,
+                Map.of(),
+                List.of(),
+                Map.of("source", "intent-agent-degraded", "reason", blankToDefault(reason, "intent routing failed")));
+    }
+
     private boolean clarificationRoundLimitReached(IntentRouteRequest request) {
         if (routeMemoryService == null) {
             return false;
@@ -234,7 +272,7 @@ public class RouteSignalApplicationService {
         payload.put("latencyMs", latencyMs);
         if (intent != null) {
             payload.put("intentCode", blankToDefault(intent.intentCode(), ""));
-            payload.put("intentId", blankToDefault(intent.intentCode(), ""));
+            payload.put("intentId", blankToDefault(firstText(intent.slots().get("intentId"), intent.intentCode()), ""));
             payload.put("intentName", blankToDefault(intent.intentName(), ""));
             payload.put("confidence", intent.confidence());
             if (intent.candidateDomainAgentId() != null && !intent.candidateDomainAgentId().isBlank()) {
@@ -251,6 +289,13 @@ public class RouteSignalApplicationService {
                 payload.put("targetProvider", "relay");
             } else {
                 payload.put("targetProvider", "system");
+            }
+        }
+        if (routeResult != null && routeResult.intentFailure()) {
+            payload.put("failureStrategy", routeResult.intentFailureStrategy().name());
+            if (routeResult.failRunOnIntentFailure()) {
+                payload.put("targetProvider", "none");
+                payload.put("suggestedAction", "SELECT_DOMAIN_AGENT");
             }
         }
         return RuntimeEvent.progress(request.runId(), request.session().id(), Map.copyOf(payload));
@@ -276,6 +321,14 @@ public class RouteSignalApplicationService {
             return "ROUTE_SINGLE";
         }
         return route != null && route.type() == RouteType.AGENT_RUNTIME ? "NO_MATCH" : "UNKNOWN";
+    }
+
+    private String intentFailureReason(IntentDecision intent) {
+        if (intent == null) {
+            return "intent agent returned no decision";
+        }
+        String reason = firstText(intent.raw().get("reason"), intent.raw().get("message"));
+        return blankToDefault(reason, "intent routing failed");
     }
 
     private UseCaseMatchResult matchUseCase(UserContext user, ChatSession session, ChatCommand command,

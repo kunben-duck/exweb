@@ -92,6 +92,24 @@ class ChatInteractionApplicationServiceTest {
         assertThat(repository.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
     }
 
+    @Test
+    void markWaitingForRunOnlyReleasesMatchingContinuationClaim() {
+        MutableInteractionRepository repository = new MutableInteractionRepository();
+        ChatInteractionRequest waiting = waitingRequest(ChatInteractionType.INTENT_CLARIFICATION);
+        repository.insert(waiting);
+        ChatInteractionApplicationService service = new ChatInteractionApplicationService(repository,
+                (bizType, context) -> bizType + "_fixed", new PermissionChecker(), new ChatInteractionProperties());
+        service.claimInteractionResponse(new ChatInteractionResponseCommand(
+                user(), waiting.id(), null, null, Map.of("问题", "答案"), Map.of()), "run-current");
+
+        service.markWaitingForRun(user().tenantId(), user().ownerUserId(), waiting.id(), "run-stale");
+        assertThat(repository.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.RESPONDING);
+
+        service.markWaitingForRun(user().tenantId(), user().ownerUserId(), waiting.id(), "run-current");
+        assertThat(repository.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
+        assertThat(repository.requests.get(waiting.id()).continueRunId()).isNull();
+    }
+
     private ChatInteractionApplicationService service(ChatInteractionProperties properties) {
         return new ChatInteractionApplicationService(new UnusedInteractionRepository(),
                 (bizType, context) -> bizType + "_fixed", new PermissionChecker(), properties);
@@ -172,6 +190,11 @@ class ChatInteractionApplicationServiceTest {
         }
 
         @Override
+        public int markWaitingForRun(String tenantId, String userId, String interactionId, String continueRunId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public int cancelOpenBySession(String tenantId, String userId, String sessionId, Instant cancelledAt) {
             throw new UnsupportedOperationException();
         }
@@ -227,10 +250,39 @@ class ChatInteractionApplicationServiceTest {
         @Override public int markAnswered(String tenantId, String userId, String interactionId, Instant answeredAt) {
             return 0;
         }
-        @Override public int markWaiting(String tenantId, String userId, String interactionId) { return 0; }
+        @Override public int markWaiting(String tenantId, String userId, String interactionId) {
+            ChatInteractionRequest current = requests.get(interactionId);
+            if (current == null || !tenantId.equals(current.tenantId()) || !userId.equals(current.userId())
+                    || current.status() != ChatInteractionStatus.RESPONDING) {
+                return 0;
+            }
+            requests.put(interactionId, withWaitingStatus(current));
+            return 1;
+        }
+        @Override public int markWaitingForRun(String tenantId, String userId, String interactionId,
+                                               String continueRunId) {
+            ChatInteractionRequest current = requests.get(interactionId);
+            if (current == null || !tenantId.equals(current.tenantId()) || !userId.equals(current.userId())
+                    || current.status() != ChatInteractionStatus.RESPONDING
+                    || !continueRunId.equals(current.continueRunId())) {
+                return 0;
+            }
+            requests.put(interactionId, withWaitingStatus(current));
+            return 1;
+        }
         @Override public int cancelOpenBySession(String tenantId, String userId, String sessionId, Instant cancelledAt) {
             return 0;
         }
         @Override public int markExpired(String tenantId, String userId, String interactionId) { return 0; }
+
+        private ChatInteractionRequest withWaitingStatus(ChatInteractionRequest current) {
+            return new ChatInteractionRequest(
+                    current.id(), current.tenantId(), current.userId(), current.sessionId(), current.sourceRunId(),
+                    null, current.userMessageId(), current.assistantMessageId(), current.runtimeProvider(),
+                    current.runtimeBindingId(), current.runtimeSessionId(), current.approvalId(),
+                    current.interactionType(), ChatInteractionStatus.WAITING, current.requestPayload(),
+                    current.responsePayload(), current.expiresAt(), current.answeredAt(), current.cancelledAt(),
+                    current.createdAt(), Instant.now());
+        }
     }
 }

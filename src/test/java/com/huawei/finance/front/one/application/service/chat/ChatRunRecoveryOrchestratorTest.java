@@ -2,11 +2,13 @@ package com.huawei.finance.front.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.huawei.finance.front.one.application.config.ChatInteractionProperties;
 import com.huawei.finance.front.one.application.config.ChatRunOperationalProperties;
 import com.huawei.finance.front.one.application.config.ChatWebSocketProperties;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRecoveryPort;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRecoveryRequest;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
+import com.huawei.finance.front.one.application.integration.conversation.ChatInteractionRequestRepository;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunCache;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunExecutionRepository;
@@ -22,22 +24,30 @@ import com.huawei.finance.front.one.application.service.recovery.RuntimeTakeover
 import com.huawei.finance.front.one.application.service.recovery.StaleRunRecoveryStrategy;
 import com.huawei.finance.front.one.application.service.recovery.StaleRunRecoveryStrategyRegistry;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
+import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
+import com.huawei.finance.front.one.domain.chat.ErrorEvent;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionRequest;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionStatus;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionType;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunCancelSignal;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecution;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus;
 import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
+import com.huawei.finance.front.one.domain.chat.RunCancelledEvent;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.chat.ChatSessionPage;
 import com.huawei.finance.front.one.domain.chat.StoredChatEvent;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
 class ChatRunRecoveryOrchestratorTest {
@@ -60,14 +70,19 @@ class ChatRunRecoveryOrchestratorTest {
         LocalChatRunExecutionRegistry registry = new LocalChatRunExecutionRegistry();
         ChatRunLeaseApplicationService leaseService = new ChatRunLeaseApplicationService(executions,
                 () -> "instance-b", properties, new FixedIdGenerator(), registry);
+        InMemoryInteractionRepository interactions = new InMemoryInteractionRepository();
+        ChatInteractionApplicationService interactionService = interactionService(interactions);
+        ChatRunTerminalCommitService terminalCommitService = terminalCommitService(
+                streamService, runs, leaseService, interactionService);
         List<StaleRunRecoveryStrategy> strategies = List.of(
-                new ManualConfirmationRecoveryStrategy(streamService, runService, leaseService),
-                new FailFastRecoveryStrategy(streamService, runService, leaseService),
+                new ManualConfirmationRecoveryStrategy(streamService, terminalCommitService, runService),
+                new FailFastRecoveryStrategy(streamService, terminalCommitService, runService),
                 new RuntimeTakeoverRecoveryStrategy(unsupportedRuntimeRecovery())
         );
         ChatRunRecoveryOrchestrator orchestrator = new ChatRunRecoveryOrchestrator(executions, runs,
                 new AllowingRecoverLock(), () -> "instance-b", properties, new ChatRunRecoveryCapacityLimiter(properties),
-                new StaleRunRecoveryStrategyRegistry(strategies));
+                new StaleRunRecoveryStrategyRegistry(strategies), interactionService,
+                terminalCommitService, streamService, runService);
         ChatRun run = runningRun();
         runs.save(run);
         executions.put(staleExecution(run));
@@ -83,6 +98,194 @@ class ChatRunRecoveryOrchestratorTest {
         assertThat(events.events.getFirst().type()).isEqualTo("run.failed");
         assertThat(events.events.getFirst().payload()).containsEntry("recoveryActionRequired", true);
         assertThat(cache.getActive("tenant1", "user1", "session1")).isEmpty();
+    }
+
+    @Test
+    void watchdogClosesStaleCancellingRunAsCancelled() {
+        TestFixture fixture = fixture();
+        ChatRun run = runningRun().cancelling("USER_STOP");
+        fixture.runs.save(run);
+        fixture.executions.put(staleExecution(run));
+
+        int recovered = fixture.orchestrator.recoverExpiredRuns();
+
+        assertThat(recovered).isEqualTo(1);
+        assertThat(fixture.runs.findById(run.id())).get().extracting(ChatRun::status)
+                .isEqualTo(ChatRunStatus.CANCELLED);
+        assertThat(fixture.executions.findByRunId(run.id())).get()
+                .extracting(ChatRunExecution::executionStatus)
+                .isEqualTo(ChatRunExecutionStatus.CANCELLED);
+        assertThat(fixture.events.events).extracting(ChatEvent::type).containsExactly("run.cancelled");
+        assertThat(fixture.events.events.getFirst().payload()).containsEntry("messageReady", false);
+    }
+
+    @Test
+    void watchdogFailureReleasesContinuationInteractionClaim() {
+        TestFixture fixture = fixture();
+        ChatRun run = continuationRun("run1", "interaction1");
+        fixture.runs.save(run);
+        fixture.executions.put(staleExecution(run));
+        fixture.interactions.insert(waitingInteraction("interaction1"));
+        fixture.interactionService.claimInteractionResponse(new ChatInteractionResponseCommand(
+                user(), "interaction1", null, null, Map.of("问题", "答案"), Map.of()), run.id());
+
+        int recovered = fixture.orchestrator.recoverExpiredRuns();
+
+        assertThat(recovered).isEqualTo(1);
+        ChatInteractionRequest interaction = fixture.interactions.requests.get("interaction1");
+        assertThat(interaction.status()).isEqualTo(ChatInteractionStatus.WAITING);
+        assertThat(interaction.continueRunId()).isNull();
+        assertThat(fixture.runs.findById(run.id())).get().extracting(ChatRun::status)
+                .isEqualTo(ChatRunStatus.FAILED);
+    }
+
+    @Test
+    void failFastRecoveryAlsoReleasesContinuationInteractionClaim() {
+        TestFixture fixture = fixture();
+        fixture.properties.setStaleRecoveryStrategies(List.of(FailFastRecoveryStrategy.NAME));
+        ChatRun run = continuationRun("run1", "interaction1");
+        fixture.runs.save(run);
+        fixture.executions.put(staleExecution(run));
+        fixture.interactions.insert(waitingInteraction("interaction1"));
+        fixture.interactionService.claimInteractionResponse(new ChatInteractionResponseCommand(
+                user(), "interaction1", null, null, Map.of("问题", "答案"), Map.of()), run.id());
+
+        int recovered = fixture.orchestrator.recoverExpiredRuns();
+
+        assertThat(recovered).isEqualTo(1);
+        ChatInteractionRequest interaction = fixture.interactions.requests.get("interaction1");
+        assertThat(interaction.status()).isEqualTo(ChatInteractionStatus.WAITING);
+        assertThat(interaction.continueRunId()).isNull();
+        assertThat(fixture.executions.findByRunId(run.id())).get()
+                .extracting(ChatRunExecution::executionStatus)
+                .isEqualTo(ChatRunExecutionStatus.FAILED);
+    }
+
+    @Test
+    void watchdogReconcilesOrphanClaimOnlyForCurrentTerminalContinuation() {
+        TestFixture fixture = fixture();
+        fixture.interactions.insert(waitingInteraction("interaction1"));
+        fixture.interactionService.claimInteractionResponse(new ChatInteractionResponseCommand(
+                user(), "interaction1", null, null, Map.of("问题", "答案"), Map.of()), "run-terminal");
+        fixture.interactions.terminalRunIds.add("run-terminal");
+
+        int recovered = fixture.orchestrator.recoverExpiredRuns();
+
+        assertThat(recovered).isZero();
+        ChatInteractionRequest interaction = fixture.interactions.requests.get("interaction1");
+        assertThat(interaction.status()).isEqualTo(ChatInteractionStatus.WAITING);
+        assertThat(interaction.continueRunId()).isNull();
+    }
+
+    @Test
+    void watchdogReleasesRespondingClaimWhenContinuationRunWasNeverCreated() {
+        TestFixture fixture = fixture();
+        fixture.interactions.insert(waitingInteraction("interaction1"));
+        fixture.interactionService.claimInteractionResponse(new ChatInteractionResponseCommand(
+                user(), "interaction1", null, null, Map.of("问题", "答案"), Map.of()), "run-missing");
+        fixture.interactions.missingRunIds.add("run-missing");
+
+        int recovered = fixture.orchestrator.recoverExpiredRuns();
+
+        assertThat(recovered).isZero();
+        ChatInteractionRequest interaction = fixture.interactions.requests.get("interaction1");
+        assertThat(interaction.status()).isEqualTo(ChatInteractionStatus.WAITING);
+        assertThat(interaction.continueRunId()).isNull();
+    }
+
+    @Test
+    void watchdogFailsContinuationRunThatNeverCreatedExecution() {
+        TestFixture fixture = fixture();
+        ChatRun run = continuationRun("run-orphan", "interaction1");
+        fixture.runs.save(run);
+        fixture.interactions.insert(waitingInteraction("interaction1"));
+        fixture.interactionService.claimInteractionResponse(new ChatInteractionResponseCommand(
+                user(), "interaction1", null, null, Map.of("问题", "答案"), Map.of()), run.id());
+        fixture.interactions.missingExecutionRunIds.add(run.id());
+
+        int recovered = fixture.orchestrator.recoverExpiredRuns();
+
+        assertThat(recovered).isZero();
+        assertThat(fixture.runs.findById(run.id())).get().extracting(ChatRun::status)
+                .isEqualTo(ChatRunStatus.FAILED);
+        assertThat(fixture.interactions.requests.get("interaction1").status())
+                .isEqualTo(ChatInteractionStatus.WAITING);
+        assertThat(fixture.events.events).extracting(ChatEvent::type).containsExactly("run.failed");
+    }
+
+    @Test
+    void watchdogFailsOrdinaryRunThatNeverCreatedExecution() {
+        TestFixture fixture = fixture();
+        ChatRun run = runningRun("run-orphan", "tenant1");
+        fixture.runs.save(run);
+        fixture.runs.executionInitOrphanIds.add(run.id());
+
+        int recovered = fixture.orchestrator.recoverExpiredRuns();
+
+        assertThat(recovered).isEqualTo(1);
+        assertThat(fixture.runs.findById(run.id())).get().extracting(ChatRun::status)
+                .isEqualTo(ChatRunStatus.FAILED);
+        assertThat(fixture.events.events).extracting(ChatEvent::type).containsExactly("run.failed");
+        assertThat(fixture.events.events.getFirst().payload())
+                .containsEntry("code", "RUN_EXECUTION_INIT_ORPHANED")
+                .containsEntry("source", "chat-run-watchdog");
+    }
+
+    @Test
+    void externalTerminalClaimAllowsOnlyOneConflictingTerminalEvent() throws Exception {
+        TestFixture fixture = fixture();
+        ChatRun run = runningRun();
+        fixture.runs.save(run);
+        java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(2);
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Future<ChatRunTerminalCommitService.ExternalTerminalCommitResult> cancelled =
+                    executor.submit(() -> {
+                        ready.countDown();
+                        start.await();
+                        return fixture.terminalCommitService.commitExternalTerminal(
+                                new ChatRunTerminalCommitService.ExternalTerminalCommitCommand(
+                                        RunCancelledEvent.of(run.id(), run.sessionId(), "USER_STOP"), run));
+                    });
+            java.util.concurrent.Future<ChatRunTerminalCommitService.ExternalTerminalCommitResult> failed =
+                    executor.submit(() -> {
+                        ready.countDown();
+                        start.await();
+                        return fixture.terminalCommitService.commitExternalTerminal(
+                                new ChatRunTerminalCommitService.ExternalTerminalCommitCommand(
+                                        ErrorEvent.of(run.id(), run.sessionId(),
+                                                "RUN_EXECUTOR_LOST", "执行实例失联"), run));
+                    });
+            ready.await();
+            start.countDown();
+
+            long committed = java.util.stream.Stream.of(cancelled.get(), failed.get())
+                    .filter(ChatRunTerminalCommitService.ExternalTerminalCommitResult::committed)
+                    .count();
+            assertThat(committed).isEqualTo(1);
+            assertThat(fixture.events.events).hasSize(1);
+            assertThat(fixture.runs.findById(run.id())).get().extracting(ChatRun::status)
+                    .satisfies(status -> assertThat(status).isIn(ChatRunStatus.CANCELLED, ChatRunStatus.FAILED));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void recoveryDoesNotReportSuccessWhenTerminalClaimLostButRunIsStillActive() {
+        TestFixture fixture = fixture();
+        ChatRun run = runningRun();
+        fixture.runs.save(run);
+        fixture.runs.rejectExternalTerminalClaims = true;
+        fixture.executions.put(staleExecution(run));
+
+        int recovered = fixture.orchestrator.recoverExpiredRuns();
+
+        assertThat(recovered).isZero();
+        assertThat(fixture.runs.findById(run.id())).get().extracting(ChatRun::status)
+                .isEqualTo(ChatRunStatus.RUNNING);
+        assertThat(fixture.events.events).isEmpty();
     }
 
     @Test
@@ -151,6 +354,26 @@ class ChatRunRecoveryOrchestratorTest {
                 now, null, Map.of(), now, now);
     }
 
+    private ChatRun continuationRun(String runId, String interactionId) {
+        Instant now = Instant.now();
+        return new ChatRun(runId, "tenant1", "user1", "session1", ChatRunStatus.RUNNING,
+                "AGENT_RUNTIME", null, "relay", "runtime-session", null, null, null,
+                now, null, Map.of("interactionId", interactionId), now, now);
+    }
+
+    private ChatInteractionRequest waitingInteraction(String interactionId) {
+        Instant now = Instant.now();
+        return new ChatInteractionRequest(interactionId, "tenant1", "user1", "session1", "source-run", null,
+                "msg-user", "msg-assistant", "intent-agent", null, null, null,
+                ChatInteractionType.INTENT_CLARIFICATION, ChatInteractionStatus.WAITING,
+                Map.of("originalQuery", "原问题"), Map.of(), now.plus(Duration.ofHours(1)),
+                null, null, now, now);
+    }
+
+    private UserContext user() {
+        return new UserContext("tenant1", "user1", "User One");
+    }
+
     private TestFixture fixture() {
         InMemoryRunRepository runs = new InMemoryRunRepository();
         InMemoryExecutionRepository executions = new InMemoryExecutionRepository();
@@ -170,23 +393,46 @@ class ChatRunRecoveryOrchestratorTest {
         LocalChatRunExecutionRegistry registry = new LocalChatRunExecutionRegistry();
         ChatRunLeaseApplicationService leaseService = new ChatRunLeaseApplicationService(executions,
                 () -> "instance-b", properties, new FixedIdGenerator(), registry);
+        InMemoryInteractionRepository interactions = new InMemoryInteractionRepository();
+        ChatInteractionApplicationService interactionService = interactionService(interactions);
+        ChatRunTerminalCommitService terminalCommitService = terminalCommitService(
+                streamService, runs, leaseService, interactionService);
         List<StaleRunRecoveryStrategy> strategies = List.of(
-                new ManualConfirmationRecoveryStrategy(streamService, runService, leaseService),
-                new FailFastRecoveryStrategy(streamService, runService, leaseService),
+                new ManualConfirmationRecoveryStrategy(streamService, terminalCommitService, runService),
+                new FailFastRecoveryStrategy(streamService, terminalCommitService, runService),
                 new RuntimeTakeoverRecoveryStrategy(unsupportedRuntimeRecovery())
         );
         ChatRunRecoveryCapacityLimiter capacityLimiter = new ChatRunRecoveryCapacityLimiter(properties);
         ChatRunRecoveryOrchestrator orchestrator = new ChatRunRecoveryOrchestrator(executions, runs,
                 new AllowingRecoverLock(), () -> "instance-b", properties, capacityLimiter,
-                new StaleRunRecoveryStrategyRegistry(strategies));
-        return new TestFixture(properties, runs, executions, capacityLimiter, orchestrator);
+                new StaleRunRecoveryStrategyRegistry(strategies), interactionService,
+                terminalCommitService, streamService, runService);
+        return new TestFixture(properties, runs, executions, interactions, interactionService,
+                capacityLimiter, events, terminalCommitService, orchestrator);
     }
 
     private record TestFixture(ChatRunOperationalProperties properties,
                                InMemoryRunRepository runs,
                                InMemoryExecutionRepository executions,
+                               InMemoryInteractionRepository interactions,
+                               ChatInteractionApplicationService interactionService,
                                ChatRunRecoveryCapacityLimiter capacityLimiter,
+                               InMemoryEventStore events,
+                               ChatRunTerminalCommitService terminalCommitService,
                                ChatRunRecoveryOrchestrator orchestrator) {
+    }
+
+    private ChatInteractionApplicationService interactionService(InMemoryInteractionRepository repository) {
+        return new ChatInteractionApplicationService(repository, new FixedIdGenerator(), new PermissionChecker(),
+                new ChatInteractionProperties());
+    }
+
+    private ChatRunTerminalCommitService terminalCommitService(ChatStreamApplicationService streamService,
+                                                                ChatRunRepository runs,
+                                                                ChatRunLeaseApplicationService leaseService,
+                                                                ChatInteractionApplicationService interactionService) {
+        return new ChatRunTerminalCommitService(streamService, null, runs, leaseService, null,
+                interactionService, Duration.ofDays(3));
     }
 
     private ChatRunExecution staleExecution(ChatRun run) {
@@ -205,7 +451,23 @@ class ChatRunRecoveryOrchestratorTest {
 
     private static class InMemoryRunRepository implements ChatRunRepository {
         private final Map<String, ChatRun> runs = new HashMap<>();
+        private final Set<String> executionInitOrphanIds = new HashSet<>();
+        private boolean rejectExternalTerminalClaims;
         @Override public ChatRun save(ChatRun run) { runs.put(run.id(), run); return run; }
+        @Override public synchronized boolean tryClaimExternalTerminal(ExternalTerminalClaim claim) {
+            if (rejectExternalTerminalClaims) {
+                return false;
+            }
+            ChatRun current = runs.get(claim.runId());
+            if (current == null || current.status().terminal()) {
+                return false;
+            }
+            ChatRun claimed = claim.terminalStatus() == ChatRunStatus.CANCELLED
+                    ? current.cancelled(0L)
+                    : current.failed(0L);
+            runs.put(claim.runId(), claimed);
+            return true;
+        }
         @Override public Optional<ChatRun> findById(String runId) { return Optional.ofNullable(runs.get(runId)); }
         @Override public Optional<ChatRun> findByTenantIdAndUserIdAndId(String tenantId, String userId, String runId) {
             return findById(runId).filter(run -> tenantId.equals(run.tenantId())).filter(run -> userId.equals(run.userId()));
@@ -214,6 +476,147 @@ class ChatRunRecoveryOrchestratorTest {
             return runs.values().stream().filter(run -> tenantId.equals(run.tenantId()))
                     .filter(run -> userId.equals(run.userId())).filter(run -> sessionId.equals(run.sessionId()))
                     .filter(run -> !run.status().terminal()).findFirst();
+        }
+        @Override public List<ChatRun> findExecutionInitOrphans(Instant orphanBefore, int limit) {
+            return executionInitOrphanIds.stream()
+                    .map(runs::get)
+                    .filter(java.util.Objects::nonNull)
+                    .filter(run -> !run.status().terminal())
+                    .limit(limit)
+                    .toList();
+        }
+    }
+
+    private static class InMemoryInteractionRepository implements ChatInteractionRequestRepository {
+        private final Map<String, ChatInteractionRequest> requests = new HashMap<>();
+        private final Set<String> terminalRunIds = new HashSet<>();
+        private final Set<String> missingRunIds = new HashSet<>();
+        private final Set<String> missingExecutionRunIds = new HashSet<>();
+
+        @Override
+        public ChatInteractionRequest insert(ChatInteractionRequest request) {
+            requests.put(request.id(), request);
+            return request;
+        }
+
+        @Override
+        public Optional<ChatInteractionRequest> findByOwnerAndId(String tenantId, String userId, String interactionId) {
+            return Optional.ofNullable(requests.get(interactionId))
+                    .filter(request -> tenantId.equals(request.tenantId()) && userId.equals(request.userId()));
+        }
+
+        @Override
+        public Optional<ChatInteractionRequest> findWaitingBySession(String tenantId, String userId, String sessionId) {
+            return requests.values().stream()
+                    .filter(request -> tenantId.equals(request.tenantId()) && userId.equals(request.userId()))
+                    .filter(request -> sessionId.equals(request.sessionId()))
+                    .filter(ChatInteractionRequest::waiting)
+                    .findFirst();
+        }
+
+        @Override
+        public boolean claimInteractionResponse(ChatInteractionClaimCommand command) {
+            ChatInteractionRequest current = requests.get(command.interactionId());
+            if (current == null || !current.waiting()) {
+                return false;
+            }
+            requests.put(current.id(), copy(current, command.continueRunId(), ChatInteractionStatus.RESPONDING,
+                    command.responsePayload(), null, null));
+            return true;
+        }
+
+        @Override
+        public int markAnswered(String tenantId, String userId, String interactionId, Instant answeredAt) {
+            ChatInteractionRequest current = requests.get(interactionId);
+            if (!ownedResponding(current, tenantId, userId)) {
+                return 0;
+            }
+            requests.put(current.id(), copy(current, current.continueRunId(), ChatInteractionStatus.ANSWERED,
+                    current.responsePayload(), answeredAt, current.cancelledAt()));
+            return 1;
+        }
+
+        @Override
+        public int markWaiting(String tenantId, String userId, String interactionId) {
+            ChatInteractionRequest current = requests.get(interactionId);
+            if (!ownedResponding(current, tenantId, userId)) {
+                return 0;
+            }
+            requests.put(current.id(), copy(current, null, ChatInteractionStatus.WAITING,
+                    current.responsePayload(), current.answeredAt(), current.cancelledAt()));
+            return 1;
+        }
+
+        @Override
+        public int markWaitingForRun(String tenantId, String userId, String interactionId, String continueRunId) {
+            ChatInteractionRequest current = requests.get(interactionId);
+            if (!ownedResponding(current, tenantId, userId)
+                    || !continueRunId.equals(current.continueRunId())) {
+                return 0;
+            }
+            return markWaiting(tenantId, userId, interactionId);
+        }
+
+        @Override
+        public List<ChatInteractionRequest> findRespondingWithTerminalContinuation(int limit) {
+            return requests.values().stream()
+                    .filter(request -> request.status() == ChatInteractionStatus.RESPONDING)
+                    .filter(request -> terminalRunIds.contains(request.continueRunId()))
+                    .limit(limit)
+                    .toList();
+        }
+
+        @Override
+        public List<ContinuationReconcileCandidate> findRespondingReconcileCandidates(Instant orphanBefore, int limit) {
+            return requests.values().stream()
+                    .filter(request -> request.status() == ChatInteractionStatus.RESPONDING)
+                    .map(request -> {
+                        ContinuationReconcileState state = terminalRunIds.contains(request.continueRunId())
+                                ? ContinuationReconcileState.TERMINAL_RUN
+                                : missingRunIds.contains(request.continueRunId())
+                                ? ContinuationReconcileState.MISSING_RUN
+                                : missingExecutionRunIds.contains(request.continueRunId())
+                                ? ContinuationReconcileState.MISSING_EXECUTION
+                                : null;
+                        return state == null ? null : new ContinuationReconcileCandidate(request, state, orphanBefore);
+                    })
+                    .filter(java.util.Objects::nonNull)
+                    .limit(limit)
+                    .toList();
+        }
+
+        @Override
+        public int markWaitingIfContinuationOrphaned(String tenantId, String userId, String interactionId,
+                                                      String continueRunId, Instant orphanBefore) {
+            if (!terminalRunIds.contains(continueRunId) && !missingRunIds.contains(continueRunId)) {
+                return 0;
+            }
+            return markWaitingForRun(tenantId, userId, interactionId, continueRunId);
+        }
+
+        @Override
+        public int cancelOpenBySession(String tenantId, String userId, String sessionId, Instant cancelledAt) {
+            return 0;
+        }
+
+        @Override
+        public int markExpired(String tenantId, String userId, String interactionId) {
+            return 0;
+        }
+
+        private boolean ownedResponding(ChatInteractionRequest request, String tenantId, String userId) {
+            return request != null && tenantId.equals(request.tenantId()) && userId.equals(request.userId())
+                    && request.status() == ChatInteractionStatus.RESPONDING;
+        }
+
+        private ChatInteractionRequest copy(ChatInteractionRequest current, String continueRunId,
+                                            ChatInteractionStatus status, Map<String, Object> responsePayload,
+                                            Instant answeredAt, Instant cancelledAt) {
+            return new ChatInteractionRequest(current.id(), current.tenantId(), current.userId(), current.sessionId(),
+                    current.sourceRunId(), continueRunId, current.userMessageId(), current.assistantMessageId(),
+                    current.runtimeProvider(), current.runtimeBindingId(), current.runtimeSessionId(),
+                    current.approvalId(), current.interactionType(), status, current.requestPayload(), responsePayload,
+                    current.expiresAt(), answeredAt, cancelledAt, current.createdAt(), Instant.now());
         }
     }
 

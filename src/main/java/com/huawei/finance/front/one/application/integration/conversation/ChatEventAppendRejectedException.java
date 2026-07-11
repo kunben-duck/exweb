@@ -10,4 +10,8 @@ public class ChatEventAppendRejectedException extends RuntimeException {
     public ChatEventAppendRejectedException(String message) {
         super(message);
     }
+
+    public ChatEventAppendRejectedException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }

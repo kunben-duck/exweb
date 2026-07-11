@@ -83,6 +83,7 @@ public class IntentRecognitionRecordService {
         Object rawResponse = firstNonNull(raw.get("response"), raw);
         Object items = nested(rawResponse, "data", "result", "items");
         Object selectedItem = raw.get("selectedItem");
+        String intentId = firstText(stringValue(intent.slots().get("intentId")), intent.intentCode());
         String resourceId = firstText(stringValue(intent.slots().get("resourceId")),
                 stringValue(nested(selectedItem, "resourceInstruction", "resourceId")));
         String source = firstText(stringValue(intent.slots().get("source")), stringValue(nested(selectedItem, "source")));
@@ -101,7 +102,7 @@ public class IntentRecognitionRecordService {
                 query,
                 sha256(snapshot.queryText()),
                 status,
-                intent.intentCode(),
+                intentId,
                 intent.intentName(),
                 resourceId,
                 intent.confidence(),

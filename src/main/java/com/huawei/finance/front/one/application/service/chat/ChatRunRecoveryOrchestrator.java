@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.application.service.chat;
 
 import com.huawei.finance.front.one.application.config.ChatRunOperationalProperties;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunExecutionRepository;
+import com.huawei.finance.front.one.application.integration.conversation.ChatInteractionRequestRepository;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRecoverLock;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.finance.front.one.application.integration.identity.ApplicationInstanceIdProvider;
@@ -12,6 +13,11 @@ import com.huawei.finance.front.one.application.service.recovery.StaleRunRecover
 import com.huawei.finance.front.one.application.service.recovery.StaleRunRecoveryStrategyRegistry;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecution;
+import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
+import com.huawei.finance.front.one.domain.chat.ChatEvent;
+import com.huawei.finance.front.one.domain.chat.ErrorEvent;
+import com.huawei.finance.front.one.domain.chat.RunCancelledEvent;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -20,6 +26,7 @@ import java.util.Map;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -39,6 +46,47 @@ public class ChatRunRecoveryOrchestrator {
     private final ChatRunOperationalProperties properties;
     private final ChatRunRecoveryCapacityLimiter capacityLimiter;
     private final StaleRunRecoveryStrategyRegistry strategyRegistry;
+    private final ChatInteractionApplicationService interactionService;
+    private final ChatRunTerminalCommitService terminalCommitService;
+    private final ChatStreamApplicationService streamService;
+    private final ChatRunApplicationService runService;
+
+    @Autowired
+    public ChatRunRecoveryOrchestrator(ChatRunExecutionRepository executionRepository,
+                                       ChatRunRepository runRepository,
+                                       ChatRunRecoverLock recoverLock,
+                                       ApplicationInstanceIdProvider instanceIdProvider,
+                                       ChatRunOperationalProperties properties,
+                                       ChatRunRecoveryCapacityLimiter capacityLimiter,
+                                       StaleRunRecoveryStrategyRegistry strategyRegistry,
+                                       ChatInteractionApplicationService interactionService,
+                                       ChatRunTerminalCommitService terminalCommitService,
+                                       ChatStreamApplicationService streamService,
+                                       ChatRunApplicationService runService) {
+        this.executionRepository = executionRepository;
+        this.runRepository = runRepository;
+        this.recoverLock = recoverLock;
+        this.instanceIdProvider = instanceIdProvider;
+        this.properties = properties;
+        this.capacityLimiter = capacityLimiter;
+        this.strategyRegistry = strategyRegistry;
+        this.interactionService = interactionService;
+        this.terminalCommitService = terminalCommitService;
+        this.streamService = streamService;
+        this.runService = runService;
+    }
+
+    public ChatRunRecoveryOrchestrator(ChatRunExecutionRepository executionRepository,
+                                       ChatRunRepository runRepository,
+                                       ChatRunRecoverLock recoverLock,
+                                       ApplicationInstanceIdProvider instanceIdProvider,
+                                       ChatRunOperationalProperties properties,
+                                       ChatRunRecoveryCapacityLimiter capacityLimiter,
+                                       StaleRunRecoveryStrategyRegistry strategyRegistry,
+                                       ChatInteractionApplicationService interactionService) {
+        this(executionRepository, runRepository, recoverLock, instanceIdProvider, properties,
+                capacityLimiter, strategyRegistry, interactionService, null, null, null);
+    }
 
     public ChatRunRecoveryOrchestrator(ChatRunExecutionRepository executionRepository,
                                        ChatRunRepository runRepository,
@@ -47,13 +95,8 @@ public class ChatRunRecoveryOrchestrator {
                                        ChatRunOperationalProperties properties,
                                        ChatRunRecoveryCapacityLimiter capacityLimiter,
                                        StaleRunRecoveryStrategyRegistry strategyRegistry) {
-        this.executionRepository = executionRepository;
-        this.runRepository = runRepository;
-        this.recoverLock = recoverLock;
-        this.instanceIdProvider = instanceIdProvider;
-        this.properties = properties;
-        this.capacityLimiter = capacityLimiter;
-        this.strategyRegistry = strategyRegistry;
+        this(executionRepository, runRepository, recoverLock, instanceIdProvider, properties,
+                capacityLimiter, strategyRegistry, null, null, null, null);
     }
 
     /**
@@ -63,9 +106,116 @@ public class ChatRunRecoveryOrchestrator {
      */
     public int recoverExpiredRuns() {
         int batchSize = properties.normalizedWatchdogBatchSize();
+        reconcileTerminalInteractionClaims(batchSize);
+        int maxClaims = properties.normalizedWatchdogMaxClaimsPerScan();
+        int recovered = reconcileRunExecutionInitOrphans(Math.min(batchSize, maxClaims));
+        int remainingClaims = Math.max(0, maxClaims - recovered);
+        if (remainingClaims == 0) {
+            return recovered;
+        }
         List<ChatRunExecution> candidates = new ArrayList<>(executionRepository.findLeaseExpired(batchSize));
         candidates.addAll(executionRepository.findRecoveryExpired(Math.max(1, batchSize - candidates.size())));
-        return recoverCandidates(candidates);
+        return recovered + recoverCandidates(candidates, remainingClaims);
+    }
+
+    private int reconcileRunExecutionInitOrphans(int limit) {
+        if (terminalCommitService == null || streamService == null || runService == null || limit <= 0) {
+            return 0;
+        }
+        Instant orphanBefore = Instant.now().minus(properties.normalizedExecutionInitOrphanGrace());
+        int recovered = 0;
+        for (ChatRun run : runRepository.findExecutionInitOrphans(orphanBefore, limit)) {
+            try {
+                ChatEvent event = ErrorEvent.of(
+                        run.id(),
+                        run.sessionId(),
+                        "RUN_EXECUTION_INIT_ORPHANED",
+                        "run execution 初始化中断，本轮已失败",
+                        Map.of(
+                                "code", "RUN_EXECUTION_INIT_ORPHANED",
+                                "message", "run execution 初始化中断，本轮已失败",
+                                "source", "chat-run-watchdog"
+                        )
+                );
+                ChatRunTerminalCommitService.ExternalTerminalCommitResult result =
+                        terminalCommitService.commitExternalTerminal(
+                                ChatRunTerminalCommitService.ExternalTerminalCommitCommand.orphanRunInitialization(
+                                        event, run, orphanBefore));
+                if (!result.committed()) {
+                    continue;
+                }
+                runService.synchronizeCommittedRunCache(result.run());
+                publishTerminalBestEffort(result.event());
+                recovered++;
+            } catch (RuntimeException ex) {
+                log.warn("Run execution initialization orphan reconciliation failed. runId={}, reason={}",
+                        run.id(), ex.getMessage(), ex);
+            }
+        }
+        return recovered;
+    }
+
+    private void reconcileTerminalInteractionClaims(int batchSize) {
+        if (interactionService == null) {
+            return;
+        }
+        int released = 0;
+        for (ChatInteractionRequestRepository.ContinuationReconcileCandidate candidate
+                : interactionService.findContinuationReconcileCandidates(batchSize)) {
+            if (candidate.state() == ChatInteractionRequestRepository.ContinuationReconcileState.MISSING_EXECUTION) {
+                released += reconcileMissingExecution(candidate);
+            } else {
+                released += interactionService.releaseContinuationReconcileCandidate(candidate);
+            }
+        }
+        if (released > 0) {
+            log.info("Reconciled orphan Interaction continuation claims. released={}", released);
+        }
+    }
+
+    private int reconcileMissingExecution(
+            ChatInteractionRequestRepository.ContinuationReconcileCandidate candidate) {
+        if (terminalCommitService == null || streamService == null || runService == null
+                || candidate == null || candidate.request() == null) {
+            return 0;
+        }
+        String runId = candidate.request().continueRunId();
+        Optional<ChatRun> current = runRepository.findById(runId);
+        if (current.isEmpty() || executionRepository.findByRunId(runId).isPresent()) {
+            return 0;
+        }
+        ChatRun run = current.get();
+        ChatEvent event = ErrorEvent.of(
+                run.id(),
+                run.sessionId(),
+                "RUN_EXECUTION_INIT_ORPHANED",
+                "Interaction 续接执行控制面初始化中断，本轮已失败",
+                Map.of(
+                        "code", "RUN_EXECUTION_INIT_ORPHANED",
+                        "message", "Interaction 续接执行控制面初始化中断，本轮已失败",
+                        "source", "chat-run-watchdog",
+                        "interactionId", candidate.request().id()
+                )
+        );
+        ChatRunTerminalCommitService.ExternalTerminalCommitResult result =
+                terminalCommitService.commitExternalTerminal(
+                        ChatRunTerminalCommitService.ExternalTerminalCommitCommand.orphanInteraction(
+                                event, run, candidate.request().id(), candidate.orphanBefore()));
+        if (!result.committed()) {
+            return 0;
+        }
+        runService.synchronizeCommittedRunCache(result.run());
+        publishTerminalBestEffort(result.event());
+        return 1;
+    }
+
+    private void publishTerminalBestEffort(ChatEvent event) {
+        try {
+            streamService.publishPersisted(event);
+        } catch (RuntimeException ex) {
+            log.warn("Recovered terminal event committed but realtime publish failed. runId={}, reason={}",
+                    event == null ? null : event.runId(), ex.getMessage(), ex);
+        }
     }
 
     /**
@@ -79,16 +229,15 @@ public class ChatRunRecoveryOrchestrator {
         if (execution.isEmpty() || !executionRepository.isLeaseExpired(runId, java.time.Instant.now())) {
             return true;
         }
-        return recoverCandidates(List.of(execution.get())) > 0;
+        return recoverCandidates(List.of(execution.get()), 1) > 0;
     }
 
-    private int recoverCandidates(List<ChatRunExecution> candidates) {
-        if (candidates == null || candidates.isEmpty()) {
+    private int recoverCandidates(List<ChatRunExecution> candidates, int maxClaims) {
+        if (candidates == null || candidates.isEmpty() || maxClaims <= 0) {
             return 0;
         }
         Map<String, Integer> tenantClaims = new LinkedHashMap<>();
         int recovered = 0;
-        int maxClaims = properties.normalizedWatchdogMaxClaimsPerScan();
         for (ChatRunExecution execution : candidates) {
             if (recovered >= maxClaims) {
                 break;
@@ -121,11 +270,41 @@ public class ChatRunRecoveryOrchestrator {
                     && !recoverLock.tryLock(candidate.runId(), instanceId, properties.normalizedRecoverLockTtl())) {
                 return false;
             }
+            if (run.get().status() == ChatRunStatus.CANCELLING
+                    && terminalCommitService != null && streamService != null && runService != null) {
+                return recoverCancellingRun(run.get(), candidate, instanceId);
+            }
             return recoverWithStrategyChain(run.get(), candidate, instanceId);
         } catch (RuntimeException ex) {
             log.warn("stale run recovery failed. runId={}, reason={}", candidate.runId(), ex.getMessage(), ex);
             return false;
         }
+    }
+
+    private boolean recoverCancellingRun(ChatRun run, ChatRunExecution candidate, String instanceId) {
+        Optional<ChatRunExecution> claimedExecution = executionRepository.tryClaimRecovering(
+                run.id(), instanceId, "CANCEL_PENDING", properties.normalizedLeaseDuration());
+        if (claimedExecution.isEmpty()) {
+            return false;
+        }
+        ChatEvent event = RunCancelledEvent.of(
+                run.id(), run.sessionId(), run.cancelReason(), false, null);
+        ChatRunTerminalCommitService.ExternalTerminalCommitResult result =
+                terminalCommitService.commitExternalTerminal(
+                        ChatRunTerminalCommitService.ExternalTerminalCommitCommand.recovery(
+                                event, run, claimedExecution.get(), instanceId));
+        if (result.committed()) {
+            runService.synchronizeCommittedRunCache(result.run());
+            publishTerminalBestEffort(result.event());
+            log.info("stale cancelling run closed as cancelled. runId={}, previousOwner={}",
+                    run.id(), candidate.ownerInstanceId());
+            return true;
+        }
+        if (result.run() != null && result.run().status().terminal()) {
+            runService.synchronizeCommittedRunCache(result.run());
+            return true;
+        }
+        return false;
     }
 
     private boolean recoverWithStrategyChain(ChatRun run, ChatRunExecution candidate, String instanceId) {

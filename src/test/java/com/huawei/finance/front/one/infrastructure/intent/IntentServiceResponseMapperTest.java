@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.infrastructure.intent;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.finance.front.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.intent.TaskComplexity;
 import java.util.Map;
@@ -38,19 +39,26 @@ class IntentServiceResponseMapperTest {
     }
 
     @Test
-    void routeSingleWithoutUsableAccessNameFallsBackToRelay() throws Exception {
-        IntentDecision missing = mapper("ex_").toDecision(response("intent-1", null));
-        IntentDecision prefixOnly = mapper("ex_").toDecision(response("intent-1", "ex_"));
+    void routeSingleWithoutUsableAccessNameIsProtocolFailure() throws Exception {
+        IntentRecognitionResult missingResult = mapper("ex_").toRecognitionResult(response("intent-1", null));
+        IntentRecognitionResult prefixOnlyResult = mapper("ex_").toRecognitionResult(response("intent-1", "ex_"));
+        IntentDecision missing = missingResult.decision();
+        IntentDecision prefixOnly = prefixOnlyResult.decision();
 
+        assertThat(missingResult.status()).isEqualTo(IntentRecognitionResult.Status.FAILED_OR_DEGRADED);
+        assertThat(prefixOnlyResult.status()).isEqualTo(IntentRecognitionResult.Status.FAILED_OR_DEGRADED);
+        assertThat(missing.intentCode()).isEqualTo("finance.runtime.intent_error");
         assertThat(missing.complexity()).isEqualTo(TaskComplexity.COMPLEX);
         assertThat(missing.simpleTask()).isFalse();
         assertThat(missing.candidateDomainAgentId()).isNull();
         assertThat(prefixOnly.complexity()).isEqualTo(TaskComplexity.COMPLEX);
         assertThat(prefixOnly.simpleTask()).isFalse();
         assertThat(prefixOnly.candidateDomainAgentId()).isNull();
-        assertThat(prefixOnly.slots()).doesNotContainKey("accessName");
+        assertThat(prefixOnly.slots()).containsEntry("accessName", "ex_");
         assertThat(prefixOnly.slots()).containsEntry("intentId", "intent-1")
                 .containsEntry("resourceId", "diagnostic-resource");
+        assertThat(prefixOnly.raw()).containsEntry("reason",
+                "ROUTE_SINGLE accessName missing after normalization");
     }
 
     private IntentServiceResponseMapper mapper(String prefix) {

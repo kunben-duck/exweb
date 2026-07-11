@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.infrastructure.persistence;
 
 import java.time.Instant;
+import java.util.List;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
@@ -74,6 +75,55 @@ public interface ChatInteractionRequestMapper {
     int markWaiting(@Param("tenantId") String tenantId,
                     @Param("userId") String userId,
                     @Param("interactionId") String interactionId);
+
+    /**
+     * 仅允许持有当前 continueRunId 的续接 run 释放 Interaction claim。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param interactionId Interaction 请求 ID。
+     * @param continueRunId 当前持有响应 claim 的续接 run ID。
+     * @return 影响行数。
+     */
+    int markWaitingForRun(@Param("tenantId") String tenantId,
+                          @Param("userId") String userId,
+                          @Param("interactionId") String interactionId,
+                          @Param("continueRunId") String continueRunId);
+
+    /**
+     * 查询 continue run 已 FAILED/CANCELLED 的 RESPONDING Interaction。
+     *
+     * @param limit 最大候选数量。
+     * @return 孤儿 claim 候选行。
+     */
+    List<ChatInteractionRequestRow> findRespondingWithTerminalContinuation(@Param("limit") int limit);
+
+    /**
+     * 查询终态、缺失 run 或缺失 execution 的 RESPONDING continuation。
+     *
+     * @param orphanBefore 孤儿启动宽限期截止时间。
+     * @param limit 单轮最大候选数量。
+     * @return 对账候选行。
+     */
+    List<ChatInteractionRequestRow> findRespondingReconcileCandidates(
+            @Param("orphanBefore") Instant orphanBefore,
+            @Param("limit") int limit);
+
+    /**
+     * 原子复核并释放终态或缺失 run 的 continuation claim。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param interactionId Interaction 标识。
+     * @param continueRunId 当前 claim 持有的 continuation run 标识。
+     * @param orphanBefore 孤儿启动宽限期截止时间。
+     * @return 影响行数。
+     */
+    int markWaitingIfContinuationOrphaned(@Param("tenantId") String tenantId,
+                                           @Param("userId") String userId,
+                                           @Param("interactionId") String interactionId,
+                                           @Param("continueRunId") String continueRunId,
+                                           @Param("orphanBefore") Instant orphanBefore);
 
     /**
      * 取消会话下仍开放的 Interaction 请求。

@@ -94,6 +94,20 @@ public class LocalChatRunExecutionRegistry {
         }
     }
 
+    /**
+     * 仅清理仍由指定 claim 持有的本机执行项。
+     *
+     * <p>fencing 接管后旧流可能晚于新流结束；按 runId 无条件删除会把新 owner 的 subscription
+     * 一并移除，因此后台流终止时使用 claim 条件清理。</p>
+     */
+    public void complete(RunExecutionClaim claim) {
+        if (claim == null || claim.runId() == null || claim.runId().isBlank()) {
+            return;
+        }
+        running.computeIfPresent(claim.runId(), (ignored, current) ->
+                claim.equals(current.claim()) ? null : current);
+    }
+
     private record Entry(Disposable disposable, RunExecutionClaim claim) {
     }
 }

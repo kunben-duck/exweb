@@ -8,6 +8,7 @@ import com.huawei.finance.front.one.domain.chat.ChatInteractionRequest;
 import com.huawei.finance.front.one.domain.chat.ChatInteractionStatus;
 import com.huawei.finance.front.one.domain.chat.ChatInteractionType;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.stereotype.Repository;
@@ -74,6 +75,42 @@ public class MyBatisChatInteractionRequestRepository implements ChatInteractionR
     @Override
     public int markWaiting(String tenantId, String userId, String interactionId) {
         return mapper.markWaiting(tenantId, userId, interactionId);
+    }
+
+    @Override
+    public int markWaitingForRun(String tenantId, String userId, String interactionId, String continueRunId) {
+        if (blank(continueRunId)) {
+            return 0;
+        }
+        return mapper.markWaitingForRun(tenantId, userId, interactionId, continueRunId);
+    }
+
+    @Override
+    public List<ChatInteractionRequest> findRespondingWithTerminalContinuation(int limit) {
+        return mapper.findRespondingWithTerminalContinuation(Math.max(1, limit)).stream()
+                .map(this::toDomain)
+                .toList();
+    }
+
+    @Override
+    public List<ContinuationReconcileCandidate> findRespondingReconcileCandidates(Instant orphanBefore, int limit) {
+        Instant cutoff = orphanBefore == null ? Instant.now() : orphanBefore;
+        return mapper.findRespondingReconcileCandidates(cutoff, Math.max(1, limit)).stream()
+                .map(row -> new ContinuationReconcileCandidate(
+                        toDomain(row),
+                        ContinuationReconcileState.valueOf(row.getReconcileState()),
+                        cutoff))
+                .toList();
+    }
+
+    @Override
+    public int markWaitingIfContinuationOrphaned(String tenantId, String userId, String interactionId,
+                                                  String continueRunId, Instant orphanBefore) {
+        if (blank(continueRunId) || orphanBefore == null) {
+            return 0;
+        }
+        return mapper.markWaitingIfContinuationOrphaned(
+                tenantId, userId, interactionId, continueRunId, orphanBefore);
     }
 
     @Override

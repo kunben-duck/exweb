@@ -81,9 +81,23 @@ public class ChatStreamApplicationService {
      * @return 带持久化 seq 的事件。
      */
     public ChatEvent appendAndPublish(ChatEvent event) {
-        ChatEvent persisted = eventStore.append(event);
+        ChatEvent persisted = appendWithoutPublish(event);
         publishPersisted(persisted);
         return persisted;
+    }
+
+    /**
+     * 持久化事件但不发布实时消息。
+     *
+     * <p>stop 和 watchdog 终态需要先在同一数据库事务中提交 event、run、execution 和
+     * Interaction claim。调用方必须在事务成功返回后再调用 {@link #publishPersisted(ChatEvent)}，
+     * 避免 Redis/WebSocket 观察到尚未提交或随后回滚的终态。</p>
+     *
+     * @param event 原始事件。
+     * @return 带持久化 seq 的事件。
+     */
+    public ChatEvent appendWithoutPublish(ChatEvent event) {
+        return eventStore.append(event);
     }
 
     /**

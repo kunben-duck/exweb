@@ -24,6 +24,7 @@
         <result column="cancelled_at" property="cancelledAt"/>
         <result column="created_at" property="createdAt"/>
         <result column="updated_at" property="updatedAt"/>
+        <result column="reconcile_state" property="reconcileState"/>
     </resultMap>
 
     <sql id="interactionColumns">
@@ -127,6 +128,127 @@
           AND user_id = #{userId}
           AND id = #{interactionId}
           AND status = 'RESPONDING'
+    </update>
+
+    <!--
+      stop 或失败实例只能释放自己 continue_run_id 对应的 claim，避免旧实例覆盖新 continuation。
+      入参: tenantId/userId 为归属边界，interactionId 为目标请求，continueRunId 为当前续接 run。
+    -->
+    <update id="markWaitingForRun">
+        UPDATE fin_ex_chat_interaction_request_t
+        SET status = 'WAITING',
+            continue_run_id = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{interactionId}
+          AND status = 'RESPONDING'
+          AND continue_run_id = #{continueRunId}
+    </update>
+
+    <!--
+      watchdog 对账候选：只查当前仍为 RESPONDING，且其当前 continue_run_id 对应 run 已失败或取消的请求。
+      owner/session 条件同时关联，避免异常脏数据跨租户或跨会话释放。
+      入参: limit 为单轮最大候选数量，避免 watchdog 对账形成无界扫描。
+    -->
+    <select id="findRespondingWithTerminalContinuation" resultMap="chatInteractionRequestResultMap">
+        SELECT i.id, i.tenant_id, i.user_id, i.session_id, i.source_run_id, i.continue_run_id,
+               i.user_message_id, i.assistant_message_id, i.runtime_provider, i.runtime_binding_id,
+               i.runtime_session_id, i.approval_id, i.interaction_type, i.status,
+               i.request_payload_json, i.response_payload_json, i.expires_at, i.answered_at,
+               i.cancelled_at, i.created_at, i.updated_at
+        FROM fin_ex_chat_interaction_request_t i
+        JOIN fin_ex_chat_run_t r
+          ON r.id = i.continue_run_id
+         AND r.tenant_id = i.tenant_id
+         AND r.user_id = i.user_id
+         AND r.session_id = i.session_id
+        WHERE i.status = 'RESPONDING'
+          AND r.status IN ('FAILED', 'CANCELLED')
+        ORDER BY i.updated_at ASC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+      watchdog 对账候选。终态 continuation 立即返回；缺失 run/execution 仅在超过宽限期后返回。
+      LEFT JOIN 让 claim 后尚未来得及创建 run 的记录也能被发现。
+      入参: orphanBefore 为孤儿宽限期截止时间，limit 为本轮最大候选数。
+    -->
+    <select id="findRespondingReconcileCandidates" resultMap="chatInteractionRequestResultMap">
+        SELECT i.id, i.tenant_id, i.user_id, i.session_id, i.source_run_id, i.continue_run_id,
+               i.user_message_id, i.assistant_message_id, i.runtime_provider, i.runtime_binding_id,
+               i.runtime_session_id, i.approval_id, i.interaction_type, i.status,
+               i.request_payload_json, i.response_payload_json, i.expires_at, i.answered_at,
+               i.cancelled_at, i.created_at, i.updated_at,
+               CASE
+                   WHEN r.id IS NULL THEN 'MISSING_RUN'
+                   WHEN r.status IN ('FAILED', 'CANCELLED') THEN 'TERMINAL_RUN'
+                   ELSE 'MISSING_EXECUTION'
+               END AS reconcile_state
+        FROM fin_ex_chat_interaction_request_t i
+        LEFT JOIN fin_ex_chat_run_t r
+          ON r.id = i.continue_run_id
+         AND r.tenant_id = i.tenant_id
+         AND r.user_id = i.user_id
+         AND r.session_id = i.session_id
+        LEFT JOIN fin_ex_chat_run_execution_t e
+          ON e.run_id = r.id
+         AND e.tenant_id = r.tenant_id
+         AND e.user_id = r.user_id
+         AND e.session_id = r.session_id
+        WHERE i.status = 'RESPONDING'
+          AND (
+                r.status IN ('FAILED', 'CANCELLED')
+                OR (
+                    i.updated_at &lt; #{orphanBefore}
+                    AND (
+                        r.id IS NULL
+                        OR (r.status IN ('RUNNING', 'CANCELLING') AND r.first_seq IS NULL
+                            AND r.updated_at &lt; #{orphanBefore} AND e.run_id IS NULL)
+                    )
+                )
+          )
+        ORDER BY i.updated_at ASC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+      候选查询后再次原子复核：若 continuation run 已经出现，则缺失 run 分支不会误释放。
+      terminal run 不受宽限期限制；缺失 execution 由统一终态提交器处理，不走本语句。
+      入参: tenantId/userId/interactionId/continueRunId 限定当前 claim，orphanBefore 为宽限期截止时间。
+    -->
+    <update id="markWaitingIfContinuationOrphaned">
+        UPDATE fin_ex_chat_interaction_request_t i
+        SET status = 'WAITING',
+            continue_run_id = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE i.tenant_id = #{tenantId}
+          AND i.user_id = #{userId}
+          AND i.id = #{interactionId}
+          AND i.status = 'RESPONDING'
+          AND i.continue_run_id = #{continueRunId}
+          AND (
+                EXISTS (
+                    SELECT 1
+                    FROM fin_ex_chat_run_t r
+                    WHERE r.id = i.continue_run_id
+                      AND r.tenant_id = i.tenant_id
+                      AND r.user_id = i.user_id
+                      AND r.session_id = i.session_id
+                      AND r.status IN ('FAILED', 'CANCELLED')
+                )
+                OR (
+                    i.updated_at &lt; #{orphanBefore}
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM fin_ex_chat_run_t r
+                        WHERE r.id = i.continue_run_id
+                          AND r.tenant_id = i.tenant_id
+                          AND r.user_id = i.user_id
+                          AND r.session_id = i.session_id
+                    )
+                )
+          )
     </update>
 
     <!--

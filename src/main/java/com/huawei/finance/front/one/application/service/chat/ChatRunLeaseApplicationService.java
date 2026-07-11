@@ -62,6 +62,22 @@ public class ChatRunLeaseApplicationService {
     }
 
     /**
+     * 初始化 Interaction continuation execution，并阻止已被 watchdog 回收的迟到启动。
+     */
+    public RunExecutionClaim startInteractionRun(ChatRun run, String interactionId) {
+        String executionId = idGenerator.newId("exec",
+                IdGenerateContext.of(run.tenantId(), run.userId(), run.sessionId(), run.id()));
+        ChatRunExecution execution = executionRepository.createForInteractionRun(
+                run,
+                executionId,
+                instanceIdProvider.currentInstanceId(),
+                properties.normalizedLeaseDuration(),
+                interactionId
+        );
+        return new RunExecutionClaim(run.id(), execution.ownerInstanceId(), execution.fencingToken());
+    }
+
+    /**
      * 当前 owner 主动刷新 run 租约。
      *
      * @param claim 当前执行流写入权声明。
@@ -72,6 +88,13 @@ public class ChatRunLeaseApplicationService {
             return false;
         }
         return executionRepository.heartbeat(claim.runId(), claim.ownerInstanceId(), properties.normalizedLeaseDuration());
+    }
+
+    /**
+     * 判断当前执行流是否仍可启动新的外部副作用。
+     */
+    public boolean isCurrentOwnerRunning(RunExecutionClaim claim) {
+        return executionRepository.isCurrentOwnerRunning(claim);
     }
 
     /**

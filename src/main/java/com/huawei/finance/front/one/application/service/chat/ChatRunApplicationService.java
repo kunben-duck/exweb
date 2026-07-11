@@ -9,6 +9,7 @@ import com.huawei.finance.front.one.application.service.security.PermissionCheck
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ActiveRunExistsException;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionUnavailableException;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunCancelSignal;
 import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
@@ -25,6 +26,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -37,6 +40,7 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class ChatRunApplicationService {
+    private static final Logger log = LoggerFactory.getLogger(ChatRunApplicationService.class);
     private static final String SESSION_STATUS_ACTIVE = "ACTIVE";
     private static final String SESSION_STATUS_DELETED = "DELETED";
 
@@ -90,8 +94,37 @@ public class ChatRunApplicationService {
         UserContext user = context.user();
         ensureOwnedActiveSession(user, context.sessionId());
         rejectIfActiveRunExists(user, context.sessionId());
+        ChatRun saved = insertRunning(context);
+        cache.putActive(saved);
+        return saved;
+    }
+
+    /**
+     * 只向数据库插入 RUNNING run；调用方在事务提交后再刷新 Redis active cache。
+     */
+    ChatRun insertRunning(CreateChatRunContext context) {
+        ensureOwnedActiveSession(context.user(), context.sessionId());
+        return repository.insert(newRunning(context));
+    }
+
+    /**
+     * 创建 Interaction continuation run，并在数据库 INSERT 中再次校验 claim 仍归当前 runId 所有。
+     */
+    public ChatRun createInteractionRunning(CreateChatRunContext context, String interactionId) {
+        UserContext user = context.user();
+        ensureOwnedActiveSession(user, context.sessionId());
+        rejectIfActiveRunExists(user, context.sessionId());
+        ChatRun run = newRunning(context);
+        ChatRun saved = repository.insertInteractionContinuationIfClaimed(run, interactionId)
+                .orElseThrow(() -> ChatInteractionUnavailableException.alreadyHandled(interactionId));
+        cache.putActive(saved);
+        return saved;
+    }
+
+    private ChatRun newRunning(CreateChatRunContext context) {
+        UserContext user = context.user();
         Instant now = Instant.now();
-        ChatRun run = new ChatRun(
+        return new ChatRun(
                 context.runId(),
                 user.tenantId(),
                 user.ownerUserId(),
@@ -114,17 +147,6 @@ public class ChatRunApplicationService {
                 now,
                 now
         );
-        if (!cache.tryClaimActive(run)) {
-            throw new ActiveRunExistsException(context.sessionId(), findActive(user.tenantId(), user.ownerUserId(), context.sessionId())
-                    .map(ChatRun::id)
-                    .orElse("unknown"));
-        }
-        try {
-            return save(run);
-        } catch (RuntimeException ex) {
-            cache.evictActive(user.tenantId(), user.ownerUserId(), context.sessionId());
-            throw ex;
-        }
     }
 
     /**
@@ -198,15 +220,23 @@ public class ChatRunApplicationService {
      */
     public ChatRunStopDecision requestStop(UserContext user, String runId, String reason) {
         ChatRun run = requireOwnedRun(user, runId);
-        if (!run.cancellable()) {
+        if (!run.stopRetryable()) {
             return new ChatRunStopDecision(run, false);
         }
-        cache.markCancellationRequested(runId);
-        ChatRun cancelling = save(run.cancelling(reason == null || reason.isBlank() ? "USER_STOP" : reason));
-        if (cancelling.status() != ChatRunStatus.CANCELLING) {
-            return new ChatRunStopDecision(cancelling, false);
+        if (run.status() == ChatRunStatus.CANCELLING) {
+            cache.markCancellationRequested(runId);
+            return new ChatRunStopDecision(run, true);
         }
-        return new ChatRunStopDecision(cancelling, true);
+        String effectiveReason = reason == null || reason.isBlank() ? "USER_STOP" : reason;
+        repository.tryMarkCancelling(new ChatRunRepository.StopClaim(
+                run.id(), user.tenantId(), user.ownerUserId(), effectiveReason, Instant.now()));
+        ChatRun latest = requireOwnedRun(user, runId);
+        if (latest.status() != ChatRunStatus.CANCELLING) {
+            return new ChatRunStopDecision(latest, false);
+        }
+        cache.markCancellationRequested(runId);
+        cache.putActive(latest);
+        return new ChatRunStopDecision(latest, true);
     }
 
     /**
@@ -226,6 +256,28 @@ public class ChatRunApplicationService {
                 messageReady ? assistantMessageId : null,
                 messageReady ? assistantMessageId : null
         );
+    }
+
+    /**
+     * 同步已由短事务提交的 run 快照到 active-run 热缓存。
+     *
+     * <p>终态事务直接写 run repository，提交成功后再调用本方法处理 Redis/JVM 缓存，
+     * 避免把非数据库资源纳入事务。</p>
+     */
+    public void synchronizeCommittedRunCache(ChatRun run) {
+        if (run == null) {
+            return;
+        }
+        try {
+            if (run.status().terminal()) {
+                cache.evictActive(run.tenantId(), run.userId(), run.sessionId());
+            } else {
+                cache.putActive(run);
+            }
+        } catch (RuntimeException ex) {
+            log.warn("Chat run database state committed but active-run cache synchronization failed. runId={}, status={}, reason={}",
+                    run.id(), run.status(), ex.getMessage(), ex);
+        }
     }
 
     /**

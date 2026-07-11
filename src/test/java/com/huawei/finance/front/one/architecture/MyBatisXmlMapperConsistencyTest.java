@@ -95,6 +95,45 @@ class MyBatisXmlMapperConsistencyTest {
                 .isEmpty();
     }
 
+    @Test
+    void chatRunGenericUpdateShouldKeepCancellingMonotonic() throws IOException {
+        Path mapper = MAPPER_XML_ROOT.resolve("persistence/ChatRunMapper.opengauss.xml");
+        String xml = Files.readString(mapper);
+        int start = xml.indexOf("<update id=\"updateExisting\"");
+        int end = xml.indexOf("</update>", start);
+
+        assertThat(start).isGreaterThanOrEqualTo(0);
+        assertThat(end).isGreaterThan(start);
+        String updateExisting = xml.substring(start, end);
+        assertThat(updateExisting)
+                .contains("status IN ('CANCELLING', 'COMPLETED', 'WAITING_USER', 'FAILED', 'CANCELLED')")
+                .contains("THEN last_seq")
+                .contains("THEN finished_at")
+                .contains("THEN updated_at");
+    }
+
+    @Test
+    void chatRunAdmissionAndEventTerminalGatesShouldBeDatabaseBacked() throws IOException {
+        String schema = Files.readString(Path.of("src/main/resources/db/schema.sql"));
+        assertThat(schema)
+                .contains("CREATE UNIQUE INDEX IF NOT EXISTS uk_fin_ex_chat_run_active_session")
+                .contains("WHERE status IN ('RUNNING', 'CANCELLING')")
+                .contains("CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_run_init_reconcile")
+                .contains("CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_interaction_reconcile");
+
+        String eventMapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("persistence/ChatEventMapper.opengauss.xml"));
+        assertThat(eventMapper)
+                .contains("<select id=\"lockRunForEventAppend\"")
+                .contains("FOR SHARE OF r NOWAIT");
+
+        String runMapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("persistence/ChatRunMapper.opengauss.xml"));
+        assertThat(runMapper)
+                .contains("<update id=\"markCancelling\"")
+                .contains("AND status = 'RUNNING'");
+    }
+
     private List<String> validateXmlMapper(Path xmlFile) {
         try {
             String xml = Files.readString(xmlFile);

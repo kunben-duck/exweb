@@ -72,7 +72,7 @@ class IntentRecognitionRecordServiceTest {
         assertThat(record.routeType()).isEqualTo("DOMAIN_AGENT");
         assertThat(record.routeAgentCode()).isEqualTo("FIN-SKL-88888888");
         assertThat(record.resultMessage()).contains("匹配成功");
-        assertThat(record.itemsJson()).contains("FIN-SKL-88888888");
+        assertThat(record.itemsJson()).contains("ex_FIN-SKL-88888888");
         assertThat(record.rawResponseJson()).contains("\"code\":200");
         assertThat(record.errorMessage()).isNull();
         assertThat(record.latencyMs()).isEqualTo(37L);
@@ -163,6 +163,7 @@ class IntentRecognitionRecordServiceTest {
         item.put("confidence", confidence);
         item.put("intentId", "98989898dffd888df88789");
         item.put("intentName", "财经智能问答");
+        item.put("accessName", "ex_FIN-SKL-88888888");
         item.put("resourceInstruction", Map.of("resourceId", "FIN-SKL-88888888"));
         item.put("score", null);
         item.put("source", "llm");

@@ -671,7 +671,7 @@ flowchart TB
 - `conversationContext.routeTrigger` 由 ChatService 生成：普通无绑定首次路由为 `first_turn`，上一轮有效 route 是 Relay/no_match 时为 `fallback_followup`，DomainAgent 结构化拒答后的重路由为 `domain_reject`，用户回答意图澄清后为 `clarify_answer`。前端可在 `/v1/chat/runs` 顶层传 `forceReroute=true` 表示用户主动纠正路由，后端会转成内部用户纠正触发原因；`AGENT_CLARIFICATION` 和 `DOMAIN_AGENT_SWITCH_CONFIRMATION` 不进入意图 history。
 - 意图服务调用失败后默认最多重试 3 次；配置误设过大时运行时最多按 10 次生效，重试耗尽后仍按原有降级策略进入 Relay Runtime。
 - 意图服务返回 `WAITING_CLARIFICATION` 或兼容的 `TaskComplexity.NEED_CLARIFICATION` 时生成 `run.waiting_user(interactionType=INTENT_CLARIFICATION)`，不创建 RuntimeBinding；用户通过 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 提交后继续意图澄清，直到得到最终路由。
-- 意图服务返回 `routeAction=ROUTE_SINGLE` 时，直接取唯一 `items[0].intentId` 作为 DomainAgentId/skillId，绑定并调用 DomainAgent Runtime；`resourceInstruction.resourceId` 只作为诊断字段记录，不参与路由也不兜底，`confidence` 只用于记录和排障，不参与二次裁决。
+- 意图服务返回 `routeAction=ROUTE_SINGLE` 时，取唯一 `items[0].accessName`，按可选 `response-access-name-prefix` 移除一次匹配的开头前缀后作为 DomainAgentId/skillId，绑定并调用 DomainAgent Runtime；未配置前缀或前缀不匹配时使用原始值。`intentId` 保留为意图编码，`resourceInstruction.resourceId` 只作为诊断字段记录，两者都不参与路由或兜底；缺少有效 `accessName` 时进入 Relay，`confidence` 只用于记录和排障，不参与二次裁决。
 - 意图澄清可能多轮连续发生。每次 `CLARIFY` 会在 `run.waiting_user` 与 Interaction request 成功落库后追加一条 RouteMemory `CLARIFY` 记录；最终得到 `ROUTE_SINGLE/ROUTE_MULTI/NO_MATCH` 后折叠当前澄清链路。`ROUTE_SINGLE` 正常完成后写 DomainAgent route；`ROUTE_MULTI/NO_MATCH/DEGRADED` 进入 Relay 并正常完成后写 `intent=no_match,intentCode=relay,targetProvider=relay` route，用于下一轮 `fallback_followup`，但 Relay binding 仍会在 completed 后释放。
 - `financeex.intent-record.enabled=true` 时，只有实际调用过意图服务的 run 会异步写入 `fin_ex_intent_recognition_t`。记录内容包含本轮 query、routeAction、候选 items、最终路由是否采纳和意图服务耗时；DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会记录。
 - `routeAction=ROUTE_MULTI` 和 `routeAction=NO_MATCH` 都进入 Relay Runtime。两个信号均关闭或服务失败时，也进入 Relay Runtime。
@@ -740,7 +740,7 @@ stop 语义：
 ## 外部 API 接入
 
 - 用例库服务：`financeex.use-case-library.enabled`、`financeex.use-case-library.base-url`、`financeex.use-case-library.match-path`
-- 意图服务：`financeex.intent.enabled`、`financeex.intent.base-url`、`financeex.intent.access-name`、`financeex.intent.recognize-path`、`financeex.intent.trace`、`financeex.intent.confidence-threshold`、`financeex.intent.timeout`、`financeex.intent.max-retries`。其中 `confidence-threshold` 仅保留给旧统计字段兼容，不参与 DomainAgent 路由裁决。
+- 意图服务：`financeex.intent.enabled`、`financeex.intent.base-url`、`financeex.intent.access-name`、`financeex.intent.response-access-name-prefix`、`financeex.intent.recognize-path`、`financeex.intent.trace`、`financeex.intent.confidence-threshold`、`financeex.intent.timeout`、`financeex.intent.max-retries`。其中请求侧 `access-name` 是意图入口；可选的 `response-access-name-prefix` 仅用于把响应 `items[].accessName` 归一化为真实 DomainAgent skillId；`confidence-threshold` 仅保留给旧统计字段兼容，不参与 DomainAgent 路由裁决。
 - 意图识别记录：`financeex.intent-record.enabled`、`max-query-length`、`max-raw-json-length`、`executor.*`。默认关闭；开启后使用 Servlet/MVC 友好的专用线程池 best-effort 写库，线程池拒绝、JSON 序列化失败或数据库写入失败都只记录 warn，不阻塞 `/v1/chat/runs`。
 - RouteMemory：`financeex.route-memory.top-k` 控制传给意图服务的最近成功 route 数量，`financeex.route-memory.max-clarification-rounds` 控制单条澄清链路的最大轮数，超过后降级 Relay Runtime，避免无限澄清。读写线程池分别由 `read-executor.*`、`write-executor.*` 控制；`read-timeout` 超时后会取消读取 future，并按 `circuit-breaker.*` 短暂熔断，熔断期间直接返回空 history。
 - DomainAgent：`financeex.domain-agent.base-url`、`financeex.domain-agent.chat-path`、`financeex.domain-agent.cancel-path`

@@ -234,9 +234,12 @@ public class RouteSignalApplicationService {
         payload.put("latencyMs", latencyMs);
         if (intent != null) {
             payload.put("intentCode", blankToDefault(intent.intentCode(), ""));
-            payload.put("intentId", blankToDefault(intent.candidateDomainAgentId(), intent.intentCode()));
+            payload.put("intentId", blankToDefault(intent.intentCode(), ""));
             payload.put("intentName", blankToDefault(intent.intentName(), ""));
             payload.put("confidence", intent.confidence());
+            if (intent.candidateDomainAgentId() != null && !intent.candidateDomainAgentId().isBlank()) {
+                payload.put("skillId", intent.candidateDomainAgentId());
+            }
         }
         if (route != null && route.type() != null) {
             payload.put("routeType", route.type().name());

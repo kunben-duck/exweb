@@ -128,6 +128,8 @@ class RouteSignalApplicationServiceTest {
                             .containsEntry("source", "intent-agent")
                             .containsEntry("sourceType", "intent-result")
                             .containsEntry("routeAction", "ROUTE_SINGLE")
+                            .containsEntry("intentId", "employee.reimbursement")
+                            .containsEntry("skillId", "employee_reimbursement_agent")
                             .containsEntry("targetProvider", "domain-agent")
                             .containsEntry("targetId", "employee_reimbursement_agent");
                 })

@@ -262,8 +262,8 @@ export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
 
 ## 外部服务接入
 
-用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。用例库返回的路由目标和意图服务 `ROUTE_SINGLE.items[0].intentId` 统一解释为 `DomainAgentId/skillId`；意图响应里的 `resourceInstruction.resourceId` 只记录到诊断字段，不参与 ChatService 路由。命中后会创建 `provider=domain-agent` 的会话级 RuntimeBinding。Relay Runtime 通过 AgentRuntime 防腐层接入，默认使用下游 Relay streamable HTTP，也可通过配置灰度切换到 Relay WebSocket 普通问答 adapter。
-意图服务当前适配 `/getIntentDecision`：ChatService 以 `data.result.routeAction` 作为唯一裁决点。`ROUTE_SINGLE` 直接取唯一 `items[0].intentId` 作为 DomainAgentId/skillId 并绑定 DomainAgent；`ROUTE_MULTI` 和 `NO_MATCH` 都进入 Relay Runtime，本轮正常完成后释放 Relay binding，下次普通提问重新路由；`CLARIFY` 进入意图澄清等待态。`confidence` 只用于记录和排障，不再参与是否采用 DomainAgent 的二次判断。外部路由已进入 run pipeline：后端会先落库并推送 `run.started`，再调用用例库/意图服务；调用意图服务前会先输出 `runtime.progress(payload.sourceType=route-progress, stage=intent_calling)`，用于前端展示“正在识别问题意图”，该事件不包含 prompt、history 或意图原始响应。意图服务 HTTP 入参和出参转换已收敛在 infrastructure intent mapper 中，后续下游协议变化优先修改 mapper，不影响应用层 `IntentService` 端口和路由策略。意图服务调用失败后默认最多重试 3 次，可通过 `FINANCEEX_INTENT_MAX_RETRIES` 调整；运行时最多按 10 次重试生效。
+用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。用例库返回的路由目标和意图服务 `ROUTE_SINGLE.items[0].accessName` 统一解释为 `DomainAgentId/skillId`；`intentId` 保留为业务意图编码，`resourceInstruction.resourceId` 只记录到诊断字段，不参与 ChatService 路由。响应 `accessName` 可通过 `FINANCEEX_INTENT_RESPONSE_ACCESS_NAME_PREFIX` 配置字面量前缀，匹配时只移除开头一次；未配置或不匹配时使用原始值。命中后会创建 `provider=domain-agent` 的会话级 RuntimeBinding。Relay Runtime 通过 AgentRuntime 防腐层接入，默认使用下游 Relay streamable HTTP，也可通过配置灰度切换到 Relay WebSocket 普通问答 adapter。
+意图服务当前适配 `/getIntentDecision`：ChatService 以 `data.result.routeAction` 作为唯一裁决点。`ROUTE_SINGLE` 直接取唯一 `items[0].accessName`，完成可选前缀归一化后绑定并调用 DomainAgent；缺少有效 `accessName` 时进入 Relay，不使用 `intentId/resourceId` 兜底。`ROUTE_MULTI` 和 `NO_MATCH` 都进入 Relay Runtime，本轮正常完成后释放 Relay binding，下次普通提问重新路由；`CLARIFY` 进入意图澄清等待态。`confidence` 只用于记录和排障，不再参与是否采用 DomainAgent 的二次判断。外部路由已进入 run pipeline：后端会先落库并推送 `run.started`，再调用用例库/意图服务；调用意图服务前会先输出 `runtime.progress(payload.sourceType=route-progress, stage=intent_calling)`，用于前端展示“正在识别问题意图”，该事件不包含 prompt、history 或意图原始响应。意图服务 HTTP 入参和出参转换已收敛在 infrastructure intent mapper 中，后续下游协议变化优先修改 mapper，不影响应用层 `IntentService` 端口和路由策略。意图服务调用失败后默认最多重试 3 次，可通过 `FINANCEEX_INTENT_MAX_RETRIES` 调整；运行时最多按 10 次重试生效。
 RouteMemory 负责为意图服务生成 `conversationContext`：普通无绑定首次路由使用 `routeTrigger=first_turn`；DomainAgent 结构化拒答后重路由使用 `routeTrigger=domain_reject` 并携带本次 `lastIntentRejectReason`；用户提交 `INTENT_CLARIFICATION` 后使用 `routeTrigger=clarify_answer`；前端顶层传 `forceReroute=true` 时由后端转成内部用户纠正触发原因，表示用户主动要求重新路由；上一轮有效 route 是 Relay/no_match 时，下一轮自动使用 `routeTrigger=fallback_followup`。`history` 由最近 TopK 成功 `ROUTE` 记录和当前未完成 `INTENT_CLARIFICATION` 的 `CLARIFY` 链路组成；Agent 内部澄清、审批和 DomainAgent 切换确认不会进入意图 history。澄清最终得到 `ROUTE_SINGLE` 时会在单个 best-effort 写任务中先折叠当前 clarify 链路，再新增一条 DomainAgent route 记录；`ROUTE_MULTI/NO_MATCH/DEGRADED` 进入 Relay Runtime 并正常完成后，也会写入一条 `intent=no_match,intentCode=relay,targetProvider=relay` 的 route 记录用于后续 `fallback_followup`，但不会绑定 Relay。RouteMemory 读写使用独立线程池，读超时会取消后台 future 并短暂熔断，所有异常都降级为空上下文或 warn，不阻断 `/v1/chat/runs`。
 意图识别记录是可选旁路能力，默认关闭。开启 `FINANCEEX_INTENT_RECORD_ENABLED=true` 后，仅在本轮实际调用意图服务时异步写入 `fin_ex_intent_recognition_t`，记录用户问题、routeAction、候选 items、最终路由是否采纳以及调用耗时，便于后续准确率统计和排障。该写入使用 Servlet/MVC 友好的专用线程池，不读取请求 ThreadLocal；线程池拒绝、序列化失败或 DB 写入失败只记录 warn，不影响 `/v1/chat/runs` 主链路。DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会写意图记录。
 
@@ -287,6 +287,8 @@ export FINANCEEX_USE_CASE_LIBRARY_MATCH_PATH=/v1/use-cases/match
 export FINANCEEX_INTENT_ENABLED=true
 export FINANCEEX_INTENT_BASE_URL=http://intent-service:9200
 export FINANCEEX_INTENT_ACCESS_NAME=eureka2_260718
+# 可选：例如 accessName=ex_skill1、prefix=ex_ 时，真实 DomainAgent skillId=skill1
+export FINANCEEX_INTENT_RESPONSE_ACCESS_NAME_PREFIX=ex_
 export FINANCEEX_INTENT_RECOGNIZE_PATH=/intent-recognition-configuration/getIntentDecision
 # 可选：记录每次实际调用意图服务后的输入、结果和最终采纳情况；默认关闭
 export FINANCEEX_INTENT_RECORD_ENABLED=false

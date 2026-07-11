@@ -73,14 +73,16 @@ class RouteMemoryApplicationServiceTest {
         service.completeRoute(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
                 user, "session1", "run3", "用户澄清后的问题",
                 intent("intent_b", "财经问数"),
-                RouteTarget.domainAgent("intent_b", "intent-agent", 1.0, "accepted")));
+                RouteTarget.domainAgent("skill_b", "intent-agent", 1.0, "accepted")));
 
         assertThat(repository.operations).containsSubsequence("fold", "save:ROUTE");
         assertThat(repository.findActiveClarifications("tenant1", "user1", "session1")).isEmpty();
-        assertThat(repository.items).filteredOn(item -> item.itemType() == RouteMemoryItemType.ROUTE)
-                .singleElement()
-                .extracting(RouteMemoryItem::domainAgentId)
-                .isEqualTo("intent_b");
+        RouteMemoryItem route = repository.items.stream()
+                .filter(item -> item.itemType() == RouteMemoryItemType.ROUTE)
+                .findFirst()
+                .orElseThrow();
+        assertThat(route.intentId()).isEqualTo("intent_b");
+        assertThat(route.domainAgentId()).isEqualTo("skill_b");
     }
 
     @Test

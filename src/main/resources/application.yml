@@ -90,6 +90,8 @@ financeex:
     enabled: ${FINANCEEX_INTENT_ENABLED:false}
     base-url: ${FINANCEEX_INTENT_BASE_URL:}
     access-name: ${FINANCEEX_INTENT_ACCESS_NAME:}
+    # 可选：从意图响应 items[].accessName 开头移除一次，得到真实 DomainAgent skillId。
+    response-access-name-prefix: ${FINANCEEX_INTENT_RESPONSE_ACCESS_NAME_PREFIX:}
     recognize-path: ${FINANCEEX_INTENT_RECOGNIZE_PATH:/intent-recognition-configuration/getIntentDecision}
     trace: ${FINANCEEX_INTENT_TRACE:false}
     # confidence 仅用于记录和排障；是否进入 DomainAgent 以 routeAction=ROUTE_SINGLE 为准。

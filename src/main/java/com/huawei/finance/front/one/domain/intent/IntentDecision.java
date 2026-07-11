@@ -14,7 +14,7 @@ import java.util.Map;
  * @param complexity 任务复杂度分类。
  * @param confidence 意图识别置信度，范围 0 到 1；仅用于记录和排障。
  * @param simpleTask true 表示意图服务返回 ROUTE_SINGLE。
- * @param candidateDomainAgentId ROUTE_SINGLE 时使用 item.intentId 作为 DomainAgent ID。
+ * @param candidateDomainAgentId ROUTE_SINGLE 时使用归一化后的 item.accessName 作为 DomainAgent ID。
  * @param slots 已识别槽位。
  * @param missingSlots 仍缺失的槽位名称列表。
  * @param raw 意图服务原始响应或诊断信息。

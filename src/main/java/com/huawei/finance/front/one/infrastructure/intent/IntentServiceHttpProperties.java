@@ -17,6 +17,8 @@ public class IntentServiceHttpProperties {
     private String baseUrl = "";
     /** 意图入口名称。 */
     private String accessName = "";
+    /** 意图响应 items[].accessName 转换为 DomainAgent skillId 时移除的可选前缀。 */
+    private String responseAccessNamePrefix = "";
     /** 意图识别接口路径。 */
     private String recognizePath = "/intent-recognition-configuration/getIntentDecision";
     /** 是否要求意图服务返回 trace。 */
@@ -40,6 +42,14 @@ public class IntentServiceHttpProperties {
 
     public void setAccessName(String accessName) {
         this.accessName = accessName;
+    }
+
+    public String getResponseAccessNamePrefix() {
+        return responseAccessNamePrefix;
+    }
+
+    public void setResponseAccessNamePrefix(String responseAccessNamePrefix) {
+        this.responseAccessNamePrefix = responseAccessNamePrefix;
     }
 
     public String getRecognizePath() {
@@ -83,4 +93,5 @@ public class IntentServiceHttpProperties {
     public int normalizedMaxRetries() {
         return Math.min(MAX_NORMALIZED_RETRIES, Math.max(0, maxRetries));
     }
+
 }

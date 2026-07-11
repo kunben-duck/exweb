@@ -84,6 +84,7 @@ class FinEurekaIntentServiceTest {
                           "confidence": 0.95,
                           "intentId": "98989898dffd888df88789",
                           "intentName": "财经智能问答",
+                          "accessName": "FIN-SKL-88888888",
                           "routeAction": "ignored-item-field",
                           "resourceInstruction": {
                             "resourceId": "FIN-SKL-88888888"
@@ -108,8 +109,9 @@ class FinEurekaIntentServiceTest {
         assertThat(decision.complexity()).isEqualTo(TaskComplexity.SIMPLE);
         assertThat(decision.confidence()).isEqualTo(0.95);
         assertThat(decision.simpleTask()).isTrue();
-        assertThat(decision.candidateDomainAgentId()).isEqualTo("98989898dffd888df88789");
+        assertThat(decision.candidateDomainAgentId()).isEqualTo("FIN-SKL-88888888");
         assertThat(decision.slots()).containsEntry("intentId", "98989898dffd888df88789")
+                .containsEntry("accessName", "FIN-SKL-88888888")
                 .containsEntry("resourceId", "FIN-SKL-88888888")
                 .containsEntry("source", "llm");
         assertThat(decision.raw()).containsKey("selectedItem")
@@ -142,7 +144,7 @@ class FinEurekaIntentServiceTest {
     }
 
     @Test
-    void routeSingleUsesFirstItemIntentIdAsDomainAgentId() throws Exception {
+    void routeSingleUsesFirstItemAccessNameAsDomainAgentId() throws Exception {
         String response = """
                 {
                   "code": 200,
@@ -155,6 +157,7 @@ class FinEurekaIntentServiceTest {
                           "confidence": 0.51,
                           "intentId": "intent_as_skill",
                           "intentName": "指定领域能力",
+                          "accessName": "domain_skill",
                           "resourceInstruction": {"resourceId": "legacy-resource"}
                         }
                       ],
@@ -166,8 +169,10 @@ class FinEurekaIntentServiceTest {
 
         IntentDecision decision = withServer(response).recognize(command(), MemoryContext.empty(), user());
 
-        assertThat(decision.candidateDomainAgentId()).isEqualTo("intent_as_skill");
-        assertThat(decision.slots()).containsEntry("resourceId", "legacy-resource");
+        assertThat(decision.intentCode()).isEqualTo("intent_as_skill");
+        assertThat(decision.candidateDomainAgentId()).isEqualTo("domain_skill");
+        assertThat(decision.slots()).containsEntry("accessName", "domain_skill")
+                .containsEntry("resourceId", "legacy-resource");
     }
 
     @Test
@@ -250,7 +255,7 @@ class FinEurekaIntentServiceTest {
                 """,
                 """
                 {"code":200,"data":{"status":"success","result":{"routeAction":"ROUTE_SINGLE","items":[
-                  {"confidence":0.91,"intentId":"high","intentName":"高置信","resourceInstruction":{"resourceId":"HIGH"}}
+                  {"confidence":0.91,"intentId":"high","intentName":"高置信","accessName":"high-skill","resourceInstruction":{"resourceId":"HIGH"}}
                 ]}}}
                 """);
 
@@ -258,7 +263,7 @@ class FinEurekaIntentServiceTest {
             IntentDecision decision = fixture.service().recognize(command(), MemoryContext.empty(), user());
 
             assertThat(decision.intentCode()).isEqualTo("high");
-            assertThat(decision.candidateDomainAgentId()).isEqualTo("high");
+            assertThat(decision.candidateDomainAgentId()).isEqualTo("high-skill");
             assertThat(attempts.get()).isEqualTo(3);
         } finally {
             fixture.close();
@@ -374,7 +379,7 @@ class FinEurekaIntentServiceTest {
     @Test
     void defaultRetryPolicyDoesNotRetryWhenAttemptsAreExhausted() {
         IntentRetryContext context = new IntentRetryContext(command(), MemoryContext.empty(), user(),
-                new IntentServiceResponseMapper(objectMapper).degraded("down"), 1, 1);
+                new IntentServiceResponseMapper(objectMapper, new IntentServiceHttpProperties()).degraded("down"), 1, 1);
 
         assertThat(new DefaultIntentRetryPolicy().shouldRetry(context)).isFalse();
     }
@@ -466,7 +471,7 @@ class FinEurekaIntentServiceTest {
         IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
         properties.setAccessName("eureka2_260718");
         return new IntentServiceWireMapper(new IntentServiceRequestMapper(properties),
-                new IntentServiceResponseMapper(objectMapper));
+                new IntentServiceResponseMapper(objectMapper, properties));
     }
 
     private record IntentServerFixture(FinEurekaIntentService service, HttpServer server) implements AutoCloseable {

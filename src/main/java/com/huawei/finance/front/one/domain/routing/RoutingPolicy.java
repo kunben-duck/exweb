@@ -54,7 +54,7 @@ public class RoutingPolicy {
         }
 
         // 新意图服务以 routeAction 作为最终裁决。ROUTE_SINGLE 会在 adapter 层映射为
-        // simpleTask + candidateDomainAgentId=intentId；confidence 只用于记录和排障，不再二次拦截。
+        // simpleTask + candidateDomainAgentId=normalized(accessName)；confidence 只用于记录和排障，不再二次拦截。
         if (intent.simpleTask()
                 && intent.candidateDomainAgentId() != null
                 && !intent.candidateDomainAgentId().isBlank()) {

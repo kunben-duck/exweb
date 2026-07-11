@@ -672,8 +672,21 @@ sequenceDiagram
 
 ### DomainAgent 绑定与切换
 
+- 意图服务完成 `ROUTE_SINGLE` 后会先推送 `runtime.progress(payload.sourceType=intent-result)`。其中 `intentId` 是原始意图编码，`skillId` 和 `targetId` 都是后端完成可选前缀归一化后的真实 DomainAgent skillId：
+  ```json
+  {
+    "source": "intent-agent",
+    "sourceType": "intent-result",
+    "routeAction": "ROUTE_SINGLE",
+    "intentId": "4e455fe219e64920bc5f0628ea0c6ed5",
+    "intentName": "知识问答",
+    "skillId": "cccaaadfsfsfsf",
+    "targetProvider": "domain-agent",
+    "targetId": "cccaaadfsfsfsf"
+  }
+  ```
 - 前端手动选择领域 Agent 时，调用 `/v1/chat/runs` 传 `targetType=DOMAIN_AGENT,targetId=...`。后端会把该会话绑定到目标 DomainAgent，`stream-status` 中可通过 `bindingProvider/bindingTargetId/bindingRouteSource` 查看当前绑定。
-- 未传 target 时，后端优先续接当前 active DomainAgent binding；Relay binding 只在当前 Relay 任务未闭合或等待用户输入时续接，普通 Relay 回答正常完成后会被取消，下次提交问题重新调用用例库或意图服务。意图服务 `ROUTE_SINGLE.items[0].intentId` 会被解释为 `DomainAgentId/skillId`；`resourceInstruction.resourceId` 只用于后端诊断记录，不参与路由。
+- 未传 target 时，后端优先续接当前 active DomainAgent binding；Relay binding 只在当前 Relay 任务未闭合或等待用户输入时续接，普通 Relay 回答正常完成后会被取消，下次提交问题重新调用用例库或意图服务。意图服务 `ROUTE_SINGLE.items[0].accessName` 经后端可选前缀归一化后成为 `DomainAgentId/skillId`；未配置前缀时使用原始值。`intentId` 是意图编码，`resourceInstruction.resourceId` 只用于后端诊断记录，均不参与 DomainAgent 路由。
 - DomainAgent 下游 body 以 `metadata` 为业务扩展，但 `skillId/query/sessionId` 由后端按当前绑定和本轮问题强制写入，前端传同名字段也不会覆盖。
 - 意图服务上下文由后端 RouteMemory 维护：首次路由传 `routeTrigger=first_turn`；上一轮有效 route 是 Relay/no_match 时传 `fallback_followup`；DomainAgent 拒答重路由传 `domain_reject` 和本次拒答摘要；提交 `INTENT_CLARIFICATION` 后传 `clarify_answer`；前端顶层传 `forceReroute=true` 时表示用户主动纠正路由，后端会转成内部用户纠正触发原因。`history` 包含最近 TopK 成功路由和当前未完成的意图澄清链路，Agent 内部澄清不会进入这份 history。Relay 正常完成后会写入 `intent=no_match,intentCode=relay,targetProvider=relay` 的路由记录用于下一轮判断，但不会保持 Relay binding。RouteMemory 读写是 best-effort，异常或熔断只会让本轮意图少带历史，不会阻断 `/v1/chat/runs`。
 - 如果当前绑定来自意图或用例库，DomainAgent 返回配置化拒答 code 后，后端会自动重新意图并切换到新 DomainAgent。

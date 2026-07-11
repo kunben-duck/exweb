@@ -15,7 +15,8 @@ import org.springframework.stereotype.Component;
  * 将意图服务 HTTP 响应转换成 ChatService 稳定领域模型。
  *
  * <p>当前下游返回结构为 {@code code -> data -> result}，其中 {@code routeAction}
- * 是唯一裁决字段。ROUTE_SINGLE 时 item.intentId 表示可绑定的 DomainAgentId/skillId。
+ * 是唯一裁决字段。ROUTE_SINGLE 时 item.intentId 表示业务意图编码，item.accessName 归一化后
+ * 表示可绑定的 DomainAgentId/skillId。
  * 后续如果下游字段或包装层变化，只修改这里的解析逻辑；应用层仍只依赖稳定领域模型。</p>
  */
 @Component
@@ -24,9 +25,11 @@ public class IntentServiceResponseMapper {
     };
 
     private final ObjectMapper objectMapper;
+    private final IntentServiceHttpProperties properties;
 
-    public IntentServiceResponseMapper(ObjectMapper objectMapper) {
+    public IntentServiceResponseMapper(ObjectMapper objectMapper, IntentServiceHttpProperties properties) {
         this.objectMapper = objectMapper;
+        this.properties = properties;
     }
 
     /**
@@ -47,7 +50,7 @@ public class IntentServiceResponseMapper {
      * 解析新意图决策接口响应。
      *
      * <p>{@code routeAction} 是 ChatService 的唯一路由裁决入口：ROUTE_SINGLE 直接取唯一
-     * item 的 {@code intentId} 作为 DomainAgentId；ROUTE_MULTI/NO_MATCH 均进入 Relay Runtime；
+     * item 的 {@code accessName} 归一化为 DomainAgentId；ROUTE_MULTI/NO_MATCH 均进入 Relay Runtime；
      * CLARIFY 进入意图澄清等待态。confidence 仅用于记录和排障，不参与是否绑定 DomainAgent 的判断。</p>
      */
     public IntentRecognitionResult toRecognitionResult(JsonNode root) {
@@ -103,11 +106,13 @@ public class IntentServiceResponseMapper {
 
     private IntentDecision itemToDomainAgentDecision(JsonNode root, JsonNode selected, JsonNode result, String reason) {
         String intentId = text(selected.path("intentId"));
+        String domainAgentId = normalizeDomainAgentId(text(selected.path("accessName")));
         String resourceId = text(selected.path("resourceInstruction").path("resourceId"));
         double confidence = confidence(selected);
         Map<String, Object> slots = new LinkedHashMap<>();
         putIfPresent(slots, "routeAction", text(result.path("routeAction")));
         putIfPresent(slots, "intentId", intentId);
+        putIfPresent(slots, "accessName", domainAgentId);
         putIfPresent(slots, "resourceId", resourceId);
         putIfPresent(slots, "source", text(selected.path("source")));
         if (!selected.path("score").isMissingNode() && !selected.path("score").isNull()) {
@@ -117,14 +122,28 @@ public class IntentServiceResponseMapper {
         return new IntentDecision(
                 blankToDefault(intentId, "finance.intent.unknown"),
                 blankToDefault(text(selected.path("intentName")), "未知意图"),
-                intentId == null ? TaskComplexity.COMPLEX : TaskComplexity.SIMPLE,
+                domainAgentId == null ? TaskComplexity.COMPLEX : TaskComplexity.SIMPLE,
                 confidence,
-                intentId != null,
-                intentId,
+                domainAgentId != null,
+                domainAgentId,
                 slots,
                 List.of(),
-                rawWithSelected(root, selected, result, reason)
+                rawWithSelected(root, selected, result,
+                        domainAgentId == null ? reason + "; accessName missing after normalization" : reason)
         );
+    }
+
+    private String normalizeDomainAgentId(String accessName) {
+        if (accessName == null || accessName.isBlank()) {
+            return null;
+        }
+        String normalized = accessName.trim();
+        String configuredPrefix = properties == null ? null : properties.getResponseAccessNamePrefix();
+        String prefix = configuredPrefix == null ? "" : configuredPrefix.trim();
+        if (!prefix.isEmpty() && normalized.startsWith(prefix)) {
+            normalized = normalized.substring(prefix.length()).trim();
+        }
+        return normalized.isEmpty() ? null : normalized;
     }
 
     private IntentDecision complexDecision(JsonNode root, JsonNode result, String code, String name, String reason) {

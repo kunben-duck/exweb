@@ -197,6 +197,20 @@ class ChatRunApplicationServiceTest {
     }
 
     @Test
+    void bindRuntimeProviderRecordsIntentAgentForClarificationRun() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        ChatRunApplicationService service = service(repository, new InMemoryRunCache());
+        repository.save(runningRun().withResolvedRoute("SYSTEM_RESPONSE", null, null, null));
+
+        ChatRun updated = service.bindRuntimeProvider("run1", "intent-agent");
+
+        assertThat(updated.runtimeProvider()).isEqualTo("intent-agent");
+        assertThat(repository.findById("run1")).get()
+                .extracting(ChatRun::runtimeProvider)
+                .isEqualTo("intent-agent");
+    }
+
+    @Test
     void createRunningRejectsWhenSessionAlreadyHasActiveRun() {
         InMemoryRunRepository repository = new InMemoryRunRepository();
         InMemoryRunCache cache = new InMemoryRunCache();

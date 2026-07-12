@@ -460,7 +460,11 @@ public class FinanceEXChatService implements FinanceChatFacade {
     }
 
     private void scheduleFirstEventTimeoutCompensation(RunStartAttempt startAttempt) {
-        if (startAttempt == null || !startAttempt.aborted() || !startAttempt.beginCompensation()) {
+        if (startAttempt == null || !startAttempt.aborted()) {
+            return;
+        }
+        if (!startAttempt.beginCompensation()) {
+            startAttempt.requestCompensationRetry();
             return;
         }
         Mono.defer(() -> Mono.fromCallable(() -> compensateFirstEventTimeout(startAttempt))
@@ -470,7 +474,12 @@ public class FinanceEXChatService implements FinanceChatFacade {
                         : Mono.<Void>empty())
                 .retryWhen(Retry.backoff(2, Duration.ofMillis(250))
                         .maxBackoff(Duration.ofSeconds(1)))
-                .doFinally(ignored -> startAttempt.finishCompensation())
+                .doFinally(ignored -> {
+                    startAttempt.finishCompensation();
+                    if (startAttempt.consumeCompensationRetry()) {
+                        scheduleFirstEventTimeoutCompensation(startAttempt);
+                    }
+                })
                 .subscribe(
                         ignored -> {
                         },
@@ -494,7 +503,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
             int released = chatInteractionService.markWaitingForRun(
                     startAttempt.user().tenantId(), startAttempt.user().ownerUserId(),
                     startAttempt.interactionId(), startAttempt.runId());
-            if (released > 0 || startAttempt.interactionRequest() != null) {
+            if (released > 0) {
                 return FirstEventCompensationOutcome.DONE;
             }
             return FirstEventCompensationOutcome.RETRY;
@@ -638,6 +647,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
         return Map.of(
                 "interactionId", interaction.id(),
                 "interactionType", interaction.interactionType().name(),
+                InteractionMessageStrategy.METADATA_KEY,
+                InteractionMessageStrategy.forInteraction(interaction).name(),
                 INTERACTION_ASSISTANT_MESSAGE_ID_METADATA, assistantMessageId
         );
     }
@@ -726,28 +737,22 @@ public class FinanceEXChatService implements FinanceChatFacade {
         String originalQuery = firstText(interaction.requestPayload().get("originalQuery"));
         ChatCommand command = commandWithIntentClarificationContext(user, session, originalQuery, interaction, claim.responsePayload());
         RuntimeEvent responseEvent = clarificationResponseEvent(runId, session.id(), interaction, claim.responsePayload());
-        ChatMessage userMessage = new ChatMessage(interaction.userMessageId(), user.tenantId(), user.ownerUserId(),
-                session.id(), "user", command.message(), null, Instant.now());
-        ChatRunMessagePlan messagePlan = new ChatRunMessagePlan(ChatRunMode.NEXT,
-                interaction.userMessageId(), userMessage, null);
 
         MemoryContext memory = MemoryContext.empty();
         AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>();
         AtomicReference<RouteTarget> routeRef = new AtomicReference<>();
         AtomicReference<RuntimeSessionMode> runtimeSessionModeRef = new AtomicReference<>(RuntimeSessionMode.RESUME);
 
-        ChatRun run = chatRunService.createInteractionRunning(new CreateChatRunContext(
-                runId,
-                user,
-                session.id(),
-                null,
-                null,
-                interactionRunMetadata(interaction),
-                ChatRunMode.NEXT,
-                interaction.userMessageId(),
-                interaction.userMessageId()
-        ), interaction.id());
+        ChatRunAdmissionCommitService.AdmissionResult admission = runAdmissionCommitService == null
+                ? legacyIntentClarificationAdmission(user, session, runId, interaction, command.message())
+                : runAdmissionCommitService.commitIntentClarification(
+                        new ChatRunAdmissionCommitService.IntentClarificationAdmissionCommand(
+                                user, session, runId, interaction, command.message(),
+                                interactionRunMetadata(interaction)));
+        ChatRunMessagePlan messagePlan = admission.messagePlan();
+        ChatRun run = admission.run();
         trackStartAttemptRun(startAttempt, run, "after-intent-interaction-run-create");
+        chatRunService.synchronizeCommittedRunCache(run);
         RunExecutionClaim executionClaim;
         try {
             executionClaim = chatRunLeaseService.startInteractionRun(run, interaction.id());
@@ -763,12 +768,34 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     Flux.just(responseEvent),
                     routeAndExecute(new RoutePipelineRequest(
                             user, session, command, List.of(), List.of(), memory, runId,
-                            interaction.assistantMessageId(), forwardHeaders, routeRef, bindingRef,
+                            messagePlan.parentMessageId(), forwardHeaders, routeRef, bindingRef,
                             runtimeSessionModeRef, executionClaim, run,
                             routeMemoryQuery(messagePlan, interaction)))));
         } catch (RuntimeException ex) {
             return failInteractionContinuationRun(context, ex);
         }
+    }
+
+    private ChatRunAdmissionCommitService.AdmissionResult legacyIntentClarificationAdmission(
+            UserContext user, ChatSession session, String runId, ChatInteractionRequest interaction,
+            String answerText) {
+        ChatRunMessagePlan messagePlan = sessionService.prepareIntentClarificationAnswer(
+                user, session, runId, interaction.assistantMessageId(), answerText);
+        ChatRun run = chatRunService.createInteractionRunning(new CreateChatRunContext(
+                runId,
+                user,
+                session.id(),
+                null,
+                null,
+                interactionRunMetadata(interaction),
+                ChatRunMode.NEXT,
+                messagePlan.parentMessageId(),
+                messagePlan.userMessage().id()
+        ), interaction.id());
+        if (chatInteractionService.markAnsweredForRun(interaction, runId) != 1) {
+            throw new IllegalStateException("意图澄清 Interaction 已不再由当前 continuation run 持有");
+        }
+        return new ChatRunAdmissionCommitService.AdmissionResult(messagePlan, run);
     }
 
     private Flux<ChatEvent> executeDomainAgentSwitchContinuation(UserContext user, ChatInteractionClaimResult claim,
@@ -1331,14 +1358,29 @@ public class FinanceEXChatService implements FinanceChatFacade {
         if (responsePayload == null || responsePayload.isEmpty()) {
             return "";
         }
+        String normalized = firstText(responsePayload.get("answerText"));
+        if (normalized != null) {
+            return normalized;
+        }
         Object answers = responsePayload.get("questionnaireAnswers");
         if (answers instanceof Map<?, ?> answerMap && !answerMap.isEmpty()) {
-            return answerMap.values().stream()
-                    .findFirst()
-                    .map(String::valueOf)
-                    .orElse("");
+            java.util.List<Map.Entry<String, String>> entries = answerMap.entrySet().stream()
+                    .map(entry -> Map.entry(
+                            entry.getKey() == null ? "" : String.valueOf(entry.getKey()).trim(),
+                            entry.getValue() == null ? "" : String.valueOf(entry.getValue()).trim()))
+                    .filter(entry -> !entry.getValue().isBlank())
+                    .sorted(Map.Entry.comparingByKey())
+                    .toList();
+            if (entries.size() == 1) {
+                return entries.getFirst().getValue();
+            }
+            if (!entries.isEmpty()) {
+                return entries.stream()
+                        .map(entry -> (entry.getKey().isBlank() ? "问题" : entry.getKey()) + "：" + entry.getValue())
+                        .collect(java.util.stream.Collectors.joining("\n"));
+            }
         }
-        return firstText(responsePayload.get("answerText"), responsePayload.get("answer"),
+        return firstText(responsePayload.get("answer"),
                 responsePayload.get("content"), responsePayload.get("message"));
     }
 
@@ -1641,26 +1683,41 @@ public class FinanceEXChatService implements FinanceChatFacade {
                             resolution.intentLatencyMs())));
         }
         if (resolution.waitingIntentClarification()) {
+            bestEffortBindIntentAgentProvider(request.runId());
             return intentClarificationWaitingBody(request.runId(), request.session().id(),
                     resolution.intentClarificationPayload());
         }
         MemoryContext runtimeMemory = recordAppliedRouteDecision(new AppliedRouteDecisionContext(
                 request.user(), request.session().id(), request.runId(), request.routeMemoryQuery(),
                 resolution.intent(), resolution.route(), resolution.binding(), request.memory()));
+        ChatCommand runtimeCommand = runtimeCommand(request.runCommand(), request.routeMemoryQuery());
         return requireCurrentOwnerRunning(request.executionClaim(), "before-runtime")
                 .thenMany(Flux.defer(() -> switch (resolution.route().type()) {
                     case DOMAIN_AGENT -> executeDomainAgentWithReroute(new DomainAgentRunContext(
-                            request.runCommand(), request.runId(), request.session(), runtimeMemory,
+                            runtimeCommand, request.runId(), request.session(), runtimeMemory,
                             resolution.route(), request.user(), request.routeRef(), request.bindingRef(),
                             request.executionClaim(), request.forwardHeaders(), resolution.intent(), request.documents(),
                             new HashSet<>(), 0, request.routeMemoryQuery()));
-                    case SYSTEM_RESPONSE -> systemResponseExecutor.execute(request.runCommand(), request.runId(),
+                    case SYSTEM_RESPONSE -> systemResponseExecutor.execute(runtimeCommand, request.runId(),
                             resolution.intent(), resolution.route());
                     case AGENT_RUNTIME -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
-                            request.runCommand(), request.runId(), runtimeMemory, resolution.intent(),
+                            runtimeCommand, request.runId(), runtimeMemory, resolution.intent(),
                             resolution.route(), request.user(), request.bindingRef().get(),
                             resolution.runtimeSessionMode(), request.forwardHeaders(), request.documents()));
                 }));
+    }
+
+    private ChatCommand runtimeCommand(ChatCommand command, String foldedQuery) {
+        if (command == null || command.metadata() == null
+                || !command.metadata().containsKey("intentClarification")
+                || foldedQuery == null || foldedQuery.isBlank()) {
+            return command;
+        }
+        return new ChatCommand(command.commandId(), command.tenantId(), command.userId(), command.sessionId(),
+                command.conversationId(), command.channel(), foldedQuery, command.attachments(), command.metadata(),
+                command.targetType(), command.targetId(), command.runMode(), command.parentMessageId(),
+                command.editedMessageId(), command.regeneratedMessageId(), command.routeTrigger(),
+                command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers());
     }
 
     private void bestEffortBindResolvedRoute(String runId, RouteTarget route, RuntimeBinding binding) {
@@ -1672,6 +1729,15 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     route == null || route.type() == null ? null : route.type().name(),
                     route == null ? null : route.selectedAgentCode(),
                     ex.getMessage());
+        }
+    }
+
+    private void bestEffortBindIntentAgentProvider(String runId) {
+        try {
+            chatRunService.bindRuntimeProvider(runId, "intent-agent");
+        } catch (RuntimeException ex) {
+            log.warn("ChatRun intent-agent diagnostic update failed and was ignored. runId={}, reason={}",
+                    runId, ex.getMessage());
         }
     }
 
@@ -1866,6 +1932,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
          */
         if ("run.completed".equals(stored.type()) && completionTarget.messageReady()) {
             ChatMessage savedAssistant = context.continuationInteractionRequest() == null
+                    || InteractionMessageStrategy.newTurn(context.continuationInteractionRequest())
                     ? sessionService.saveAssistantMessage(new AssistantMessageSaveCommand(
                             user.tenantId(),
                             user.ownerUserId(),
@@ -1890,7 +1957,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
             ));
             chatRunService.bindAssistantMessage(runId, savedAssistant.id());
             bindingRef.set(completeBindingAfterRunCompleted(bindingRef.get(), runId, savedAssistant.id()));
-            if (context.continuationInteractionRequest() != null) {
+            if (context.continuationInteractionRequest() != null
+                    && !InteractionMessageStrategy.newTurn(context.continuationInteractionRequest())) {
                 chatInteractionService.markAnswered(context.continuationInteractionRequest());
             }
         }
@@ -1910,13 +1978,16 @@ public class FinanceEXChatService implements FinanceChatFacade {
             chatRunService.bindAssistantMessage(runId, savedAssistant.id());
             bindingRef.set(runtimeBindingService.touchAndMoveToLeaf(bindingRef.get(), runId, savedAssistant.id()));
             chatInteractionService.saveInteraction(waitingRequest);
-            if (context.continuationInteractionRequest() != null) {
+            if (context.continuationInteractionRequest() != null
+                    && !InteractionMessageStrategy.newTurn(context.continuationInteractionRequest())) {
                 chatInteractionService.markAnswered(context.continuationInteractionRequest());
             }
         }
         // 事件已经带有数据库持久化 seq，实时输出与断线补发看到的是同一份顺序。
         chatRunService.observeEvent(stored);
-        if (context.continuationInteractionRequest() != null && ("run.failed".equals(stored.type())
+        if (context.continuationInteractionRequest() != null
+                && !InteractionMessageStrategy.newTurn(context.continuationInteractionRequest())
+                && ("run.failed".equals(stored.type())
                 || "run.cancelled".equals(stored.type()))) {
             chatInteractionService.markWaiting(context.continuationInteractionRequest());
         }
@@ -2051,10 +2122,6 @@ public class FinanceEXChatService implements FinanceChatFacade {
         putNonNull(current, "clarificationType", clarificationType(payload));
         Map<String, Object> responsePayload = interaction.responsePayload() == null ? Map.of() : interaction.responsePayload();
         String answer = firstText(responsePayload.get("answerText"), fallbackAnswer);
-        Object questionnaireAnswers = responsePayload.get("questionnaireAnswers");
-        if (questionnaireAnswers instanceof Map<?, ?> answers && !answers.isEmpty()) {
-            answer = answers.values().stream().findFirst().map(String::valueOf).orElse(answer);
-        }
         putNonNull(current, "answer", answer);
         if (current.size() > 1) {
             history.add(Map.copyOf(current));
@@ -2099,7 +2166,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
         if (event == null || !"run.completed".equals(event.type())) {
             return CompletionMessageTarget.notRunCompleted();
         }
-        if (context.continuationInteractionRequest() != null) {
+        if (context.continuationInteractionRequest() != null
+                && !InteractionMessageStrategy.newTurn(context.continuationInteractionRequest())) {
             // Interaction 续接复用等待态 assistant，即使 Relay 只返回终态也要把同一条消息标记为可反馈。
             return CompletionMessageTarget.ready(context.continuationInteractionRequest().assistantMessageId());
         }
@@ -2254,13 +2322,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         putIfNotNull(payload, "approved", responsePayload.get("approved"));
         putIfNotNull(payload, "scope", responsePayload.get("scope"));
         payload.put("questionnaireAnswers", mapOrEmpty(responsePayload.get("questionnaireAnswers")));
-        Object answers = responsePayload.get("questionnaireAnswers");
-        if (answers instanceof Map<?, ?> answerMap && !answerMap.isEmpty()) {
-            payload.put("answerText", answerMap.values().stream()
-                    .findFirst()
-                    .map(String::valueOf)
-                    .orElse(""));
-        }
+        putIfNotNull(payload, "answerText", responsePayload.get("answerText"));
         payload.put("metadata", mapOrEmpty(responsePayload.get("metadata")));
         return RuntimeEvent.card(runId, sessionId, Map.copyOf(payload));
     }
@@ -2728,6 +2790,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         private final AtomicReference<ChatInteractionRequest> interactionRequest = new AtomicReference<>();
         private final AtomicBoolean executionInitializationSkipped = new AtomicBoolean(false);
         private final AtomicBoolean compensationActive = new AtomicBoolean(false);
+        private final AtomicBoolean compensationRetryRequested = new AtomicBoolean(false);
 
         private RunStartAttempt(UserContext user, String runId, String interactionId) {
             this.user = user;
@@ -2773,6 +2836,14 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
         private void finishCompensation() {
             compensationActive.set(false);
+        }
+
+        private void requestCompensationRetry() {
+            compensationRetryRequested.set(true);
+        }
+
+        private boolean consumeCompensationRetry() {
+            return compensationRetryRequested.compareAndSet(true, false);
         }
 
         private UserContext user() {

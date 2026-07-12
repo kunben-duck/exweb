@@ -114,11 +114,19 @@ public class ChatRunApplicationService {
         UserContext user = context.user();
         ensureOwnedActiveSession(user, context.sessionId());
         rejectIfActiveRunExists(user, context.sessionId());
-        ChatRun run = newRunning(context);
-        ChatRun saved = repository.insertInteractionContinuationIfClaimed(run, interactionId)
-                .orElseThrow(() -> ChatInteractionUnavailableException.alreadyHandled(interactionId));
+        ChatRun saved = insertInteractionRunning(context, interactionId);
         cache.putActive(saved);
         return saved;
+    }
+
+    /**
+     * 只在数据库中创建 Interaction continuation run；事务提交后由编排层同步 active cache。
+     */
+    ChatRun insertInteractionRunning(CreateChatRunContext context, String interactionId) {
+        ensureOwnedActiveSession(context.user(), context.sessionId());
+        ChatRun run = newRunning(context);
+        return repository.insertInteractionContinuationIfClaimed(run, interactionId)
+                .orElseThrow(() -> ChatInteractionUnavailableException.alreadyHandled(interactionId));
     }
 
     private ChatRun newRunning(CreateChatRunContext context) {
@@ -212,6 +220,19 @@ public class ChatRunApplicationService {
                         route.selectedAgentCode(),
                         binding == null ? null : binding.provider(),
                         binding == null ? null : binding.runtimeSessionId())))
+                .orElse(null);
+    }
+
+    /**
+     * 回填不创建 RuntimeBinding 的路由阶段 provider，例如 intent-agent 澄清等待态。
+     */
+    public ChatRun bindRuntimeProvider(String runId, String runtimeProvider) {
+        if (runId == null || runId.isBlank() || runtimeProvider == null || runtimeProvider.isBlank()) {
+            return null;
+        }
+        return repository.findById(runId)
+                .map(run -> save(run.withResolvedRoute(
+                        run.routeType(), run.agentCode(), runtimeProvider.trim(), run.runtimeSessionId())))
                 .orElse(null);
     }
 

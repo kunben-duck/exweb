@@ -17,6 +17,7 @@ final class AssistantAssembly {
     private final StringBuilder deltaDraft = new StringBuilder();
     private final List<ChatMessagePartDraft> parts = new ArrayList<>();
     private String snapshot;
+    private String structuredFallbackContent;
 
     void observe(ChatEvent event) {
         if (event == null || event.payload() == null) {
@@ -38,6 +39,12 @@ final class AssistantAssembly {
             return;
         }
         if (event.type() != null && event.type().startsWith("runtime.")) {
+            if (isIntentClarificationResponse(event.payload())) {
+                return;
+            }
+            if (isIntentClarificationRequest(event.payload())) {
+                structuredFallbackContent = intentClarificationQuestion(event.payload());
+            }
             parts.add(runtimePart(event));
         }
     }
@@ -47,7 +54,13 @@ final class AssistantAssembly {
     }
 
     String finalContent() {
-        return snapshot != null ? snapshot : deltaDraft.toString();
+        if (snapshot != null) {
+            return snapshot;
+        }
+        if (!deltaDraft.isEmpty()) {
+            return deltaDraft.toString();
+        }
+        return structuredFallbackContent == null ? "" : structuredFallbackContent;
     }
 
     List<ChatMessagePartDraft> parts() {
@@ -55,7 +68,9 @@ final class AssistantAssembly {
     }
 
     private boolean hasContent() {
-        return snapshot != null && !snapshot.isEmpty() || !deltaDraft.isEmpty();
+        return snapshot != null && !snapshot.isEmpty()
+                || !deltaDraft.isEmpty()
+                || structuredFallbackContent != null && !structuredFallbackContent.isEmpty();
     }
 
     private static boolean userVisiblePart(ChatMessagePartDraft part) {
@@ -170,7 +185,7 @@ final class AssistantAssembly {
                 return firstText(payload, "answerText", "sourceType");
             }
             if (isIntentClarificationRequest(payload)) {
-                return firstText(payload, "question", "message", "detail", "sourceType");
+                return intentClarificationQuestion(payload);
             }
             if (isIntentClarificationResponse(payload)) {
                 return firstText(payload, "answerText", "sourceType");
@@ -206,6 +221,28 @@ final class AssistantAssembly {
 
     private static boolean isIntentClarificationResponse(Map<String, Object> payload) {
         return "intent-clarification-response".equals(stringValue(payload.get("sourceType")));
+    }
+
+    private static String intentClarificationQuestion(Map<String, Object> payload) {
+        String direct = firstText(payload, "clarifyQuestion", "question", "message", "detail");
+        if (direct != null) {
+            return direct;
+        }
+        Object clarification = payload == null ? null : payload.get("clarification");
+        if (clarification instanceof Map<?, ?> map) {
+            return firstText(castStringMap(map), "clarifyQuestion", "question", "message");
+        }
+        return null;
+    }
+
+    private static Map<String, Object> castStringMap(Map<?, ?> source) {
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        source.forEach((key, value) -> {
+            if (key != null) {
+                result.put(String.valueOf(key), value);
+            }
+        });
+        return result;
     }
 
     private static boolean isDomainAgentSwitchConfirmation(Map<String, Object> payload) {

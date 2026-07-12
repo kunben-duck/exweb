@@ -65,6 +65,22 @@ public interface ChatInteractionRequestMapper {
                      @Param("answeredAt") Instant answeredAt);
 
     /**
+     * 仅当 Interaction 仍由指定 continuation run 持有时标记回答已受理。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param interactionId Interaction 请求标识。
+     * @param continueRunId 当前持有 claim 的 continuation run 标识。
+     * @param answeredAt 回答受理时间。
+     * @return 影响行数。
+     */
+    int markAnsweredForRun(@Param("tenantId") String tenantId,
+                           @Param("userId") String userId,
+                           @Param("interactionId") String interactionId,
+                           @Param("continueRunId") String continueRunId,
+                           @Param("answeredAt") Instant answeredAt);
+
+    /**
      * 把 RESPONDING 请求退回 WAITING 以便用户重试。
      *
      * @param tenantId 租户标识。

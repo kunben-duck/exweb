@@ -393,8 +393,8 @@ class FinanceEXChatServiceTest {
                 "{\"finishReason\":\"WAITING_USER\"}", now));
         ChatInteractionRequest waiting = new ChatInteractionRequest(
                 "interaction1", user.tenantId(), user.ownerUserId(), session.id(), "run-source", null,
-                "msg-user", "msg-assistant", "intent-agent", null, null, null,
-                ChatInteractionType.INTENT_CLARIFICATION, ChatInteractionStatus.WAITING,
+                "msg-user", "msg-assistant", "relay", null, null, null,
+                ChatInteractionType.AGENT_CLARIFICATION, ChatInteractionStatus.WAITING,
                 Map.of("originalQuery", "原问题"), Map.of(), now.plus(Duration.ofHours(1)), null, null, now, now);
         interactions.insert(waiting);
         ChatRun run = runService.createRunning(new CreateChatRunContext(
@@ -499,6 +499,10 @@ class FinanceEXChatServiceTest {
         messages.save(new ChatMessage("msg-user", user.tenantId(), user.ownerUserId(), session.id(),
                 null, 1L, 0, 1, "user", "原问题", null, "run-source",
                 "NORMAL", false, null, null, null, null, null, now));
+        messages.save(new ChatMessage("msg-assistant", user.tenantId(), user.ownerUserId(), session.id(),
+                "msg-user", 2L, 1, 1, "assistant", "请补充范围", null, "run-source",
+                "NORMAL", false, null, null, null, null,
+                "{\"finishReason\":\"WAITING_USER\"}", now));
         ChatInteractionRequest waiting = new ChatInteractionRequest(
                 "interaction1", user.tenantId(), user.ownerUserId(), session.id(), "run-source", null,
                 "msg-user", "msg-assistant", "intent-agent", null, null, null,
@@ -518,7 +522,12 @@ class FinanceEXChatServiceTest {
 
         assertThat(routeCalls.get()).isZero();
         assertThat(events.findLatestSeqByOwnerAndSession(user.tenantId(), user.ownerUserId(), session.id())).isZero();
-        assertThat(interactions.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.RESPONDING);
+        assertThat(interactions.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.ANSWERED);
+        assertThat(messages.messages)
+                .filteredOn(message -> "user".equals(message.role()) && "账务".equals(message.content()))
+                .singleElement()
+                .extracting(ChatMessage::parentMessageId)
+                .isEqualTo("msg-assistant");
     }
 
     @Test
@@ -1231,6 +1240,27 @@ class FinanceEXChatServiceTest {
     }
 
     @Test
+    void assistantAssemblyUsesIntentClarificationQuestionAsContentAndSkipsResponsePart() {
+        AssistantAssembly assistant = new AssistantAssembly();
+        assistant.observe(RuntimeEvent.card("run1", "session1", Map.of(
+                "source", "intent-agent",
+                "sourceType", "intent-clarification-request",
+                "interactionType", "INTENT_CLARIFICATION",
+                "clarifyQuestion", "您具体指哪个方案？")));
+        assistant.observe(RuntimeEvent.card("run1", "session1", Map.of(
+                "source", "chatservice",
+                "sourceType", "intent-clarification-response",
+                "interactionType", "INTENT_CLARIFICATION",
+                "answerText", "账务审批方案")));
+
+        assertThat(assistant.finalContent()).isEqualTo("您具体指哪个方案？");
+        assertThat(assistant.parts()).extracting(ChatMessagePartDraft::partType)
+                .containsExactly("INTENT_CLARIFICATION_REQUEST");
+        assertThat(assistant.parts()).extracting(ChatMessagePartDraft::contentText)
+                .containsExactly("您具体指哪个方案？");
+    }
+
+    @Test
     void questionnaireApprovalRequestCompletesRunAsWaitingUser() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
@@ -1349,7 +1379,7 @@ class FinanceEXChatServiceTest {
         InMemoryExecutionRepository executions = new InMemoryExecutionRepository();
         InMemoryInteractionRequestRepository interactionRequests = new InMemoryInteractionRequestRepository();
         UserContext user = new UserContext("tenant1", "user1", "User One");
-        IdGenerator ids = new FixedIdGenerator();
+        IdGenerator ids = new SequentialIdGenerator();
         PermissionChecker permissionChecker = new PermissionChecker();
         WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
                 new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
@@ -1372,7 +1402,21 @@ class FinanceEXChatServiceTest {
         ChatRunTerminalCommitService terminalCommitService = new ChatRunTerminalCommitService(
                 chatStreamService, sessionService, runs, leaseService, runtimeBindingRepository(), interactionService,
                 Duration.ofDays(3));
-        RouteSignalApplicationService routeService = systemRouteService();
+        AtomicReference<String> runtimeQuery = new AtomicReference<>();
+        AgentRuntime runtime = new AgentRuntime() {
+            @Override
+            public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                runtimeQuery.set(request.message());
+                return Flux.just(MessageSnapshotEvent.of(request.runId(), request.sessionId(), "最终回答"));
+            }
+
+            @Override
+            public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        AgentRuntimeExecutor runtimeExecutor = new AgentRuntimeExecutor(runtime, limiter);
+        RouteSignalApplicationService routeService = runtimeRouteService();
         FinanceEXChatService service = new FinanceEXChatService(
                 sessionService,
                 new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
@@ -1382,7 +1426,7 @@ class FinanceEXChatServiceTest {
                 intentRecordService(),
                 domainAgentExecutor(documentFacade(), limiter),
                 new SystemResponseExecutor(),
-                new AgentRuntimeExecutor(noopRuntime(), limiter),
+                runtimeExecutor,
                 documentFacade(),
                 chatStreamService,
                 runService,
@@ -1391,7 +1435,7 @@ class FinanceEXChatServiceTest {
                 executionRegistry,
                 new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
                 new ChatRunStopCoordinator(sessionService, chatStreamService, runService, leaseService,
-                        executionRegistry, new AgentRuntimeExecutor(noopRuntime(), limiter),
+                        executionRegistry, runtimeExecutor,
                         domainAgentExecutor(documentFacade(), limiter), ids),
                 interactionService,
                 terminalCommitService,
@@ -1406,7 +1450,7 @@ class FinanceEXChatServiceTest {
                 null, 1L, 0, 1, "user", "再帮我看下方案", null, "run-source",
                 "NORMAL", false, null, null, null, null, null, now));
         messages.save(new ChatMessage("msg-assistant", user.tenantId(), user.ownerUserId(), "session1",
-                null, 2L, 1, 1, "assistant", "", null, "run-source",
+                "msg-user", 2L, 1, 1, "assistant", "您提到的方案具体是指哪个方案？", null, "run-source",
                 "NORMAL", false, null, null, null, null, null, now));
         ChatInteractionRequest waiting = new ChatInteractionRequest(
                 "interaction1",
@@ -1458,6 +1502,23 @@ class FinanceEXChatServiceTest {
                         .containsEntry("sourceType", "intent-clarification-response")
                         .doesNotContainKey("approval_id"));
         assertThat(runs.runs.values()).allSatisfy(run -> assertThat(run.status()).isNotEqualTo(ChatRunStatus.RUNNING));
+        assertThat(interactionRequests.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.ANSWERED);
+        ChatMessage answer = messages.messages.stream()
+                .filter(message -> "user".equals(message.role()))
+                .filter(message -> "我是说账务审批的方案".equals(message.content()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(answer.parentMessageId()).isEqualTo(waiting.assistantMessageId());
+        ChatMessage finalAssistant = messages.messages.stream()
+                .filter(message -> "assistant".equals(message.role()))
+                .filter(message -> answer.id().equals(message.parentMessageId()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(finalAssistant.id()).isNotEqualTo(waiting.assistantMessageId());
+        assertThat(finalAssistant.parts()).extracting(ChatMessagePart::partType)
+                .doesNotContain("INTENT_CLARIFICATION_RESPONSE");
+        assertThat(runtimeQuery).hasValue(
+                "user:再帮我看下方案；澄清问:您提到的方案具体是指哪个方案？；用户:我是说账务审批的方案");
     }
 
     @Test
@@ -1534,6 +1595,10 @@ class FinanceEXChatServiceTest {
         messages.save(new ChatMessage("msg-user", user.tenantId(), user.ownerUserId(), "session1",
                 null, 1L, 0, 1, "user", "再帮我看下方案", null, "run-source",
                 "NORMAL", false, null, null, null, null, null, now));
+        messages.save(new ChatMessage("msg-assistant", user.tenantId(), user.ownerUserId(), "session1",
+                "msg-user", 2L, 1, 1, "assistant", "请补充范围", null, "run-source",
+                "NORMAL", false, null, null, null, null,
+                "{\"finishReason\":\"WAITING_USER\"}", now));
         ChatInteractionRequest waiting = new ChatInteractionRequest(
                 "interaction1",
                 user.tenantId(),
@@ -1574,7 +1639,12 @@ class FinanceEXChatServiceTest {
         assertThat(executions.executions.values()).singleElement()
                 .extracting(ChatRunExecution::executionStatus)
                 .isEqualTo(ChatRunExecutionStatus.FAILED);
-        assertThat(interactionRequests.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
+        assertThat(interactionRequests.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.ANSWERED);
+        assertThat(messages.messages)
+                .filteredOn(message -> "user".equals(message.role()) && "答案".equals(message.content()))
+                .singleElement()
+                .extracting(ChatMessage::parentMessageId)
+                .isEqualTo("msg-assistant");
     }
 
     @Test
@@ -2342,7 +2412,7 @@ class FinanceEXChatServiceTest {
     }
 
     @Test
-    void terminalCommitWaitingUserAnswersPreviousInteractionInSameTransaction() {
+    void terminalCommitWaitingUserCreatesNextIntentClarificationAssistant() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -2377,15 +2447,19 @@ class FinanceEXChatServiceTest {
                 "intent-session-1",
                 null,
                 ChatInteractionType.INTENT_CLARIFICATION,
-                ChatInteractionStatus.RESPONDING,
+                ChatInteractionStatus.ANSWERED,
                 Map.of("sourceType", "intent-clarification-request", "originalQuery", "看下方案"),
-                Map.of("questionnaireAnswers", Map.of("方向", "规范")),
+                Map.of("questionnaireAnswers", Map.of("方向", "规范"), "answerText", "规范"),
                 now.plus(Duration.ofHours(1)),
-                null,
+                now,
                 null,
                 now,
                 now);
         interactionRequests.insert(previous);
+        ChatMessage answerMessage = messages.save(new ChatMessage(
+                "msg-answer", user.tenantId(), user.ownerUserId(), session.id(), "msg-assistant",
+                3L, 2, 1, "user", "规范", null, "run1",
+                "NORMAL", false, null, null, null, null, null, now));
         ChatInteractionApplicationService interactionService = new ChatInteractionApplicationService(interactionRequests, ids,
                 permissionChecker, new ChatInteractionProperties());
         ChatRunTerminalCommitService commitService = new ChatRunTerminalCommitService(
@@ -2414,8 +2488,8 @@ class FinanceEXChatServiceTest {
                 user,
                 session,
                 "run1",
-                userMessage,
-                previous.assistantMessageId(),
+                answerMessage,
+                "msg-assistant-next",
                 "intent-agent",
                 null,
                 "intent-session-1",
@@ -2428,7 +2502,7 @@ class FinanceEXChatServiceTest {
                 new ChatRunTerminalCommitService.TerminalCommitContext(
                         user,
                         session,
-                        new ChatRunMessagePlan(ChatRunMode.NEXT, userMessage.id(), userMessage, null),
+                        new ChatRunMessagePlan(ChatRunMode.NEXT, previous.assistantMessageId(), answerMessage, null),
                         new AtomicReference<>(),
                         assistant,
                         "run1",
@@ -2451,10 +2525,15 @@ class FinanceEXChatServiceTest {
         assertThat(interactionRequests.requests.get(previous.id()).status()).isEqualTo(ChatInteractionStatus.ANSWERED);
         assertThat(interactionRequests.requests.get(nextWaiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
         assertThat(messages.messages).filteredOn(message -> "msg-assistant".equals(message.id())).hasSize(1);
-        ChatMessage updatedAssistant = messages.findByOwnerAndId(
+        ChatMessage originalAssistant = messages.findByOwnerAndId(
                 user.tenantId(), user.ownerUserId(), "msg-assistant").orElseThrow();
-        assertThat(updatedAssistant.runId()).isEqualTo("run1");
-        assertThat(updatedAssistant.parts()).extracting(ChatMessagePart::partType)
+        assertThat(originalAssistant.runId()).isEqualTo("run-old");
+        ChatMessage nextAssistant = messages.findByOwnerAndId(
+                user.tenantId(), user.ownerUserId(), "msg-assistant-next").orElseThrow();
+        assertThat(nextAssistant.parentMessageId()).isEqualTo(answerMessage.id());
+        assertThat(nextAssistant.content()).isEqualTo("你想看哪个方向？");
+        assertThat(nextAssistant.runId()).isEqualTo("run1");
+        assertThat(nextAssistant.parts()).extracting(ChatMessagePart::partType)
                 .contains("INTENT_CLARIFICATION_REQUEST");
     }
 
@@ -3401,5 +3480,14 @@ class FinanceEXChatServiceTest {
 
     private static class FixedIdGenerator implements IdGenerator {
         @Override public String newId(String prefix, IdGenerateContext context) { return prefix + "_1"; }
+    }
+
+    private static class SequentialIdGenerator implements IdGenerator {
+        private final AtomicInteger sequence = new AtomicInteger();
+
+        @Override
+        public String newId(String prefix, IdGenerateContext context) {
+            return prefix + "_" + sequence.incrementAndGet();
+        }
     }
 }

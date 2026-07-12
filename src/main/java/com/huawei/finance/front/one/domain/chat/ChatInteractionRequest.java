@@ -14,8 +14,8 @@ import java.util.Map;
  * @param sessionId 会话标识。
  * @param sourceRunId 触发等待态的 run。
  * @param continueRunId 用户提交后续接的 run。
- * @param userMessageId 原始用户问题消息。
- * @param assistantMessageId 承载澄清卡片和后续回答的 assistant 消息。
+ * @param userMessageId 触发当前 Interaction 的用户消息；意图多轮澄清时为最近一轮回答 user。
+ * @param assistantMessageId 承载当前交互问题的 assistant 消息；意图澄清续接会在其后创建新 user/assistant。
  * @param runtimeProvider Runtime provider，例如 relay。
  * @param runtimeBindingId 触发等待态时使用的 RuntimeBinding，续接时必须复用并刷新它。
  * @param runtimeSessionId Runtime 实际会话 ID。

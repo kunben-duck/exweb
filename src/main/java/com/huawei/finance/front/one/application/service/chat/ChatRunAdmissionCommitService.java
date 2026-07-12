@@ -3,8 +3,10 @@ package com.huawei.finance.front.one.application.service.chat;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionRequest;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
+import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import java.util.List;
 import org.springframework.stereotype.Service;
@@ -20,11 +22,14 @@ import org.springframework.transaction.annotation.Transactional;
 public class ChatRunAdmissionCommitService {
     private final SessionApplicationService sessionService;
     private final ChatRunApplicationService chatRunService;
+    private final ChatInteractionApplicationService interactionService;
 
     public ChatRunAdmissionCommitService(SessionApplicationService sessionService,
-                                         ChatRunApplicationService chatRunService) {
+                                         ChatRunApplicationService chatRunService,
+                                         ChatInteractionApplicationService interactionService) {
         this.sessionService = sessionService;
         this.chatRunService = chatRunService;
+        this.interactionService = interactionService;
     }
 
     @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
@@ -44,6 +49,51 @@ public class ChatRunAdmissionCommitService {
                 messagePlan.userMessage().id()
         ));
         return new AdmissionResult(messagePlan, run);
+    }
+
+    /**
+     * 原子受理意图澄清回答：新 user 节点、continuation run 和旧 Interaction ANSWERED 同时成立。
+     */
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public AdmissionResult commitIntentClarification(IntentClarificationAdmissionCommand command) {
+        UserContext user = command.user();
+        ChatSession session = command.session();
+        String runId = command.runId();
+        ChatInteractionRequest interaction = command.interaction();
+        if (!InteractionMessageStrategy.newTurn(interaction)) {
+            throw new IllegalArgumentException("仅 INTENT_CLARIFICATION 支持独立消息 admission");
+        }
+        ChatRunMessagePlan messagePlan = sessionService.prepareIntentClarificationAnswer(
+                user, session, runId, interaction.assistantMessageId(), command.answerText());
+        ChatRun run = chatRunService.insertInteractionRunning(new CreateChatRunContext(
+                runId,
+                user,
+                session.id(),
+                null,
+                null,
+                command.runMetadata(),
+                ChatRunMode.NEXT,
+                messagePlan.parentMessageId(),
+                messagePlan.userMessage().id()
+        ), interaction.id());
+        int answered = interactionService.markAnsweredForRun(interaction, runId);
+        if (answered != 1) {
+            throw new IllegalStateException("意图澄清 Interaction 已不再由当前 continuation run 持有");
+        }
+        return new AdmissionResult(messagePlan, run);
+    }
+
+    public record IntentClarificationAdmissionCommand(
+            UserContext user,
+            ChatSession session,
+            String runId,
+            ChatInteractionRequest interaction,
+            String answerText,
+            java.util.Map<String, Object> runMetadata
+    ) {
+        public IntentClarificationAdmissionCommand {
+            runMetadata = runMetadata == null ? java.util.Map.of() : java.util.Map.copyOf(runMetadata);
+        }
     }
 
     public record AdmissionResult(ChatRunMessagePlan messagePlan, ChatRun run) {

@@ -73,6 +73,16 @@ public class MyBatisChatInteractionRequestRepository implements ChatInteractionR
     }
 
     @Override
+    public int markAnsweredForRun(String tenantId, String userId, String interactionId,
+                                  String continueRunId, Instant answeredAt) {
+        if (blank(continueRunId)) {
+            return 0;
+        }
+        return mapper.markAnsweredForRun(tenantId, userId, interactionId, continueRunId,
+                answeredAt == null ? Instant.now() : answeredAt);
+    }
+
+    @Override
     public int markWaiting(String tenantId, String userId, String interactionId) {
         return mapper.markWaiting(tenantId, userId, interactionId);
     }

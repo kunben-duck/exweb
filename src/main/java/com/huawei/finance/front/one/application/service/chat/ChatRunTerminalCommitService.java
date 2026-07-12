@@ -75,7 +75,7 @@ public class ChatRunTerminalCommitService {
         ChatMessage savedAssistant = saveCompletedAssistant(command);
         bindAssistantMessage(stored.runId(), savedAssistant.id());
         RuntimeBinding binding = completeBinding(command.context(), savedAssistant.id());
-        if (command.context().continuationInteractionRequest() != null) {
+        if (reusableInteraction(command.context())) {
             chatInteractionService.markAnswered(command.context().continuationInteractionRequest());
         }
         observeRun(stored);
@@ -93,7 +93,7 @@ public class ChatRunTerminalCommitService {
         ChatMessage savedAssistant = saveWaitingAssistant(command);
         bindAssistantMessage(stored.runId(), savedAssistant.id());
         RuntimeBinding binding = refreshBinding(command.context(), savedAssistant.id());
-        if (command.context().continuationInteractionRequest() != null) {
+        if (reusableInteraction(command.context())) {
             chatInteractionService.markAnswered(command.context().continuationInteractionRequest());
         }
         chatInteractionService.saveInteraction(command.waitingRequest());
@@ -109,7 +109,7 @@ public class ChatRunTerminalCommitService {
         ChatEvent stored = append(command.event(), command.context());
         command.context().assistant().observe(stored);
         observeRun(stored);
-        if (command.context().continuationInteractionRequest() != null
+        if (reusableInteraction(command.context())
                 && ("run.failed".equals(stored.type()) || "run.cancelled".equals(stored.type()))) {
             chatInteractionService.markWaiting(command.context().continuationInteractionRequest());
         }
@@ -183,7 +183,7 @@ public class ChatRunTerminalCommitService {
         }
         String expectedId = partialAssistant.normalizedMessageId();
         ChatMessage saved;
-        if (interactionContinuation(command.run())) {
+        if (interactionContinuation(command.run()) && !InteractionMessageStrategy.newTurn(command.run())) {
             String assistantMessageId = interactionAssistantMessageId(command.run());
             if (assistantMessageId == null || !assistantMessageId.equals(expectedId)) {
                 throw new IllegalStateException("Interaction stop partial assistant 必须复用原 assistantMessageId");
@@ -291,7 +291,7 @@ public class ChatRunTerminalCommitService {
     private ChatMessage saveCompletedAssistant(CompletedCommitCommand command) {
         TerminalCommitContext context = command.context();
         UserContext user = context.user();
-        if (context.continuationInteractionRequest() == null) {
+        if (context.continuationInteractionRequest() == null || newTurnInteraction(context)) {
             return sessionService.saveAssistantMessage(new AssistantMessageSaveCommand(
                     user.tenantId(),
                     user.ownerUserId(),
@@ -321,7 +321,10 @@ public class ChatRunTerminalCommitService {
         TerminalCommitContext context = command.context();
         UserContext user = context.user();
         ChatInteractionRequest continuation = context.continuationInteractionRequest();
-        if (continuation == null) {
+        if (continuation == null || newTurnInteraction(context)) {
+            if (continuation != null) {
+                validateNewTurnWaitingRequest(context, command);
+            }
             return sessionService.saveAssistantMessage(new AssistantMessageSaveCommand(
                     user.tenantId(),
                     user.ownerUserId(),
@@ -356,6 +359,28 @@ public class ChatRunTerminalCommitService {
         ));
     }
 
+    private void validateNewTurnWaitingRequest(TerminalCommitContext context, WaitingUserCommitCommand command) {
+        ChatInteractionRequest waiting = command.waitingRequest();
+        String expectedUserId = context.messagePlan() == null || context.messagePlan().userMessage() == null
+                ? null
+                : context.messagePlan().userMessage().id();
+        String expectedAssistantId = command.target() == null ? null : command.target().assistantMessageId();
+        if (waiting == null || expectedUserId == null || expectedAssistantId == null
+                || !expectedUserId.equals(waiting.userMessageId())
+                || !expectedAssistantId.equals(waiting.assistantMessageId())) {
+            throw new IllegalStateException("意图澄清下一轮 Interaction 必须关联本轮新 user/assistant 消息");
+        }
+    }
+
+    private boolean newTurnInteraction(TerminalCommitContext context) {
+        return context != null && InteractionMessageStrategy.newTurn(context.continuationInteractionRequest());
+    }
+
+    private boolean reusableInteraction(TerminalCommitContext context) {
+        return context != null && context.continuationInteractionRequest() != null
+                && !newTurnInteraction(context);
+    }
+
     private void bindAssistantMessage(String runId, String assistantMessageId) {
         runRepository.findById(runId)
                 .ifPresent(run -> runRepository.save(run.withAssistantMessageId(assistantMessageId)));
@@ -379,7 +404,7 @@ public class ChatRunTerminalCommitService {
     }
 
     private int releaseContinuationInteractionClaim(ChatRun run, String explicitInteractionId) {
-        if (chatInteractionService == null || run == null) {
+        if (chatInteractionService == null || run == null || InteractionMessageStrategy.newTurn(run)) {
             return 0;
         }
         Object value = run.metadata() == null ? null : run.metadata().get("interactionId");

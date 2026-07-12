@@ -58,7 +58,8 @@ class ChatInteractionApplicationServiceTest {
         assertThat(claim.responsePayload())
                 .containsEntry("approved", Boolean.TRUE)
                 .containsEntry("scope", "once")
-                .containsEntry("questionnaireAnswers", Map.of("问题", "答案"));
+                .containsEntry("questionnaireAnswers", Map.of("问题", "答案"))
+                .containsEntry("answerText", "答案");
         assertThat(repository.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.RESPONDING);
     }
 
@@ -75,6 +76,37 @@ class ChatInteractionApplicationServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("questionnaireAnswers");
         assertThat(repository.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
+    }
+
+    @Test
+    void intentClarificationResponseRejectsBlankAnswersBeforeClaim() {
+        MutableInteractionRepository repository = new MutableInteractionRepository();
+        ChatInteractionRequest waiting = waitingRequest(ChatInteractionType.INTENT_CLARIFICATION);
+        repository.insert(waiting);
+        ChatInteractionApplicationService service = new ChatInteractionApplicationService(repository,
+                (bizType, context) -> bizType + "_fixed", new PermissionChecker(), new ChatInteractionProperties());
+
+        assertThatThrownBy(() -> service.claimInteractionResponse(new ChatInteractionResponseCommand(
+                user(), waiting.id(), null, null, Map.of("问题", "  "), Map.of()), "run-continue"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("非空答案");
+        assertThat(repository.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
+    }
+
+    @Test
+    void intentClarificationResponseBuildsStableMultiAnswerText() {
+        MutableInteractionRepository repository = new MutableInteractionRepository();
+        ChatInteractionRequest waiting = waitingRequest(ChatInteractionType.INTENT_CLARIFICATION);
+        repository.insert(waiting);
+        ChatInteractionApplicationService service = new ChatInteractionApplicationService(repository,
+                (bizType, context) -> bizType + "_fixed", new PermissionChecker(), new ChatInteractionProperties());
+
+        ChatInteractionClaimResult claim = service.claimInteractionResponse(new ChatInteractionResponseCommand(
+                user(), waiting.id(), null, null,
+                Map.of("税种", "增值税", "期间", "2026年7月"), Map.of()), "run-continue");
+
+        assertThat(claim.responsePayload()).containsEntry(
+                "answerText", "期间：2026年7月\n税种：增值税");
     }
 
     @Test

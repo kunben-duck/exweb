@@ -325,7 +325,7 @@ stop；删除成功后应立即移除会话并取消本地订阅。
 - `NEXT`：在 `parentMessageId` 或会话 `current_leaf_message_id` 后追加新的 user 消息，run 完成后追加 assistant 消息。
 - `EDIT_USER`：校验 `editedMessageId` 是未锁定 user 消息，在原父节点下创建新的 user sibling，旧消息不变。
 - `REGENERATE_ASSISTANT`：校验 `regeneratedMessageId` 是未锁定 assistant 消息，复用其父 user 消息，run 完成后创建新的 assistant sibling。
-- `CONTINUE_INTERACTION`：提交 `interactionId` 对应的澄清、审批或确认响应；不创建新的普通 user 消息，续接 run 复用等待态中的 user/assistant message。
+- `CONTINUE_INTERACTION`：提交 `interactionId` 对应的澄清、审批或确认响应。`INTENT_CLARIFICATION` 使用 `NEW_TURN` 消息策略，回答生成新的 user 节点，下一轮澄清或最终回答生成新的 assistant 节点；其他 Interaction 继续复用等待态 assistant。
 
 `current_leaf_message_id` 表示当前会话激活路径叶子。历史消息查询默认返回 root 到 current leaf 的路径；指定 `leafMessageId` 时返回 root 到该 leaf 的路径。`/messages` 会在有多个 sibling 版本的消息上返回 `versionInfo`，包含当前版本序号、版本总数和候选版本的 `switchLeafMessageId`。前端切换版本时可以先用 `GET /messages?leafMessageId={switchLeafMessageId}` 刷新聊天区，再用 `POST /path` 持久化当前选择；`/variants` 保留为查询完整候选内容和调试的接口。
 
@@ -678,9 +678,19 @@ flowchart TB
 - RouteMemory 是独立于普通短期/长期记忆的路由事实源。`ROUTE` 表示最终目标已确定且 RuntimeBinding 已持久化的路由决策，不要求下游任务完成。应用层在调用 Runtime 前通过独立 write executor 异步记录；任务失败、取消或 DomainAgent 拒答不撤销该事实。调用意图服务前加载最近 TopK `ROUTE` 和当前未完成的 `CLARIFY`，统一组装为 `conversationContext.history`；已有 binding 的普通续接和 Agent Interaction 续接不新增 route。
 - `conversationContext.routeTrigger` 由 ChatService 生成：普通无绑定首次路由为 `first_turn`，上一轮有效 route 是 Relay/no_match 时为 `fallback_followup`，DomainAgent 结构化拒答后的重路由为 `domain_reject`，用户回答意图澄清后为 `clarify_answer`。前端可在 `/v1/chat/runs` 顶层传 `forceReroute=true` 表示用户主动纠正路由，后端会转成内部用户纠正触发原因；`AGENT_CLARIFICATION` 和 `DOMAIN_AGENT_SWITCH_CONFIRMATION` 不进入意图 history。
 - 意图服务的技术失败和协议失败默认最多重试 3 次；配置误设过大时运行时最多按 10 次生效。重试耗尽后读取 `financeex.intent.failure-strategy`：`RELAY_FALLBACK`（默认）创建 Relay binding 并执行原问题；`FAIL_RUN` 不创建 RuntimeBinding、不调用 Runtime，以 `INTENT_ROUTING_FAILED` 结束并提示用户手动选择技能。该策略同样覆盖意图澄清续接和 DomainAgent 拒答后的重新意图。
-- 意图服务返回 `WAITING_CLARIFICATION` 或兼容的 `TaskComplexity.NEED_CLARIFICATION` 时生成 `run.waiting_user(interactionType=INTENT_CLARIFICATION)`，不创建 RuntimeBinding；用户通过 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 提交后继续意图澄清，直到得到最终路由。
+- 意图服务返回 `WAITING_CLARIFICATION` 或兼容的 `TaskComplexity.NEED_CLARIFICATION` 时生成 `run.waiting_user(interactionType=INTENT_CLARIFICATION)`，不创建 RuntimeBinding；澄清问题以 `assistantSource=intent-agent` 的独立 assistant 消息保存。用户通过 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 提交后，后端在短事务中保存新的 user 回答、continuation run 并将旧 Interaction 标记为 `ANSWERED`，再继续意图澄清，直到得到最终路由。
 - 意图服务返回 `routeAction=ROUTE_SINGLE` 时，取唯一 `items[0].accessName`，按可选 `response-access-name-prefix` 移除一次匹配的开头前缀后作为 DomainAgentId/skillId，绑定并调用 DomainAgent Runtime；未配置前缀或前缀不匹配时使用原始值。`intentId` 保留为意图编码，`resourceInstruction.resourceId` 只作为诊断字段记录，两者都不参与路由或兜底；缺少 item 或有效 `accessName` 是协议失败，重试耗尽后应用 failure strategy。`confidence` 只用于记录和排障，不参与二次裁决。
 - 意图澄清可能多轮连续发生。每次 `CLARIFY` 会在 `run.waiting_user` 与 Interaction request 成功落库后追加一条 RouteMemory `CLARIFY`；最终目标 binding 成功后，在单个写任务中折叠 clarify 并追加 route。`ROUTE_SINGLE` 保存真实 `intentId/intentName/skillId`；`ROUTE_MULTI/NO_MATCH/RELAY_FALLBACK` 保存 `intent=no_match,intentCode=relay` 和真实 `routeAction`。最新 Relay route 只有关联的 source run 为 `COMPLETED` 才触发下一轮 `fallback_followup`，失败或取消只保留历史事实。DomainAgent 拒答后原 route 保留，自动切换成功会再记录新 route；手动候选必须确认且 binding 成功后才记录。`FAIL_RUN` 不写 route。
+- 澄清续接调用 intent-agent 时顶层 `query` 是最新回答，`history` 是原始问题和已完成澄清链；最终进入 DomainAgent/Relay 时，Runtime `query` 改为折叠后的完整问题。用户回答 admission 成功后即成为消息事实，即使后续 run 失败、取消或首事件超时也不退回旧 Interaction；admission 提交前失败才恢复 `WAITING`。
+
+```mermaid
+flowchart LR
+    U0["user 原始问题"] --> A1["assistant 意图澄清问题"]
+    A1 --> U1["user 澄清回答"]
+    U1 --> A2["assistant 下一轮澄清"]
+    A2 --> U2["user 第二轮回答"]
+    U2 --> AF["assistant DomainAgent/Relay 最终回答"]
+```
 - `financeex.intent-record.enabled=true` 时，只有实际调用过意图服务的 run 会异步写入 `fin_ex_intent_recognition_t`。记录内容包含本轮 query、routeAction、候选 items、最终路由是否采纳和意图服务耗时；DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会记录。
 - `routeAction=ROUTE_MULTI` 和 `routeAction=NO_MATCH` 都是合法业务结果，无论 failure strategy 如何配置都进入 Relay Runtime。意图关闭时仍直接进入默认 Relay；只有已启用意图的技术/协议失败才应用 failure strategy。
 - DomainAgent 绑定会一直续接，直到下游返回 `financeex.domain-agent.refusal.codes` 配置的明确拒答 code。意图/用例库绑定拒答后会在当前 run 内重新意图并自动切换；手动绑定拒答后若命中新 Agent，会生成 `DOMAIN_AGENT_SWITCH_CONFIRMATION` 等待用户确认。

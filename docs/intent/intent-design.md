@@ -187,6 +187,14 @@ Supervisor 每次需要重新分流时，给意图模型这些信息：
 
 澄清期间，每一轮 0号意图服务提供的澄清问和用户回答都经过 Supervisor 交互，因此也算在历史会话里。
 
+ChatService 将该过程保存为完整消息链，而不是反复覆盖同一条 assistant：
+
+```text
+user 原始问题 -> assistant 澄清问题 -> user 澄清回答 -> assistant 下一轮澄清/最终回答
+```
+
+澄清 assistant 的正文为 `clarifyQuestion`，并保留 `INTENT_CLARIFICATION_REQUEST` part；用户回答是独立 user 消息。`intent-clarification-response` 仍作为实时和恢复事件保留，但不重复写入 assistant parts。
+
 ```text
 ---
 【当前问题】
@@ -571,6 +579,7 @@ Supervisor 调用意图服务时，将拒答说明放入：
 - `conversationContext.lastIntentRejectReason` 可以置空，避免上一轮拒答原因在澄清链路中重复放大。
 - 上一轮触发澄清的问题、澄清问题写入一条 `history.type=clarify`；用户回答使用本轮 `query` 传入。
 - 如果 `/getIntentDecision` 继续返回 `CLARIFY`，继续追加下一条 `clarify`；建议chatservice最多澄清 3 轮，超过后由 Supervisor 兜底 React。
+- 前端每轮回答仍调用 `/v1/chat/runs` 且使用 `runMode=CONTINUE_INTERACTION`。回答 admission 成功后旧 Interaction 立即成为 `ANSWERED`，后续执行失败不会重复开放该 Interaction。
 
 ### 9.4 澄清成功后
 
@@ -615,6 +624,8 @@ assistant: 你说的“跟支付相关的”，是指解决这次支付成功率
 user: 是解决这次成功率下降的处理措施
 '''
 ```
+
+当前 ChatService 会把这条折叠文本作为最终 DomainAgent/Relay 的 `query`；再次调用意图服务时仍保持顶层 `query=最新澄清回答`，折叠前的原始问题和澄清问答通过 `conversationContext.history` 传入。
 
 下一轮再次调用 `/getIntentDecision` 时：
 
@@ -776,6 +787,6 @@ domainRejectMessage：无
 6. 拒答原因只传当前这一次，放入 `conversationContext.lastIntentRejectReason`，不传前几轮拒答。
 7. 澄清期间保留多轮 clarify；澄清成功后，将多轮 clarify 折叠为一条 route。
 8. 在线 history 只取最新 TopK，K 暂定为 5；未完成澄清链路优先保留，避免被普通历史挤掉。
-9. 完整澄清明细保留在审计日志，不进入后续在线路由上下文。
+9. 完整澄清明细保留在独立 user/assistant 消息链和 RouteMemory 澄清事实中；最终折叠后不再作为多条 clarify 进入后续在线路由上下文。
 10. `explicit_switch` 不调用意图服务，但需要写入 history，作为后续路由锚点。
 11. 给小模型时建议将 JSON 渲染为固定顺序文本模板；模型输出只作为服务端裁决输入，对外响应统一使用 `routeAction`。

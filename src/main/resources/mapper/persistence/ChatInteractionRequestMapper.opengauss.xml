@@ -116,6 +116,22 @@
     </update>
 
     <!--
+      意图澄清回答进入消息树时，只允许当前 continuation run 原子受理该回答。
+      入参: tenantId/userId/interactionId 限定归属和请求，continueRunId 校验当前 claim，answeredAt 为受理时间。
+    -->
+    <update id="markAnsweredForRun">
+        UPDATE fin_ex_chat_interaction_request_t
+        SET status = 'ANSWERED',
+            answered_at = #{answeredAt},
+            updated_at = #{answeredAt}
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{interactionId}
+          AND status = 'RESPONDING'
+          AND continue_run_id = #{continueRunId}
+    </update>
+
+    <!--
       续接失败时退回等待态，允许用户重试提交同一澄清请求。
       入参: tenantId/userId 为归属边界，interactionId 为目标请求。
     -->

@@ -58,6 +58,14 @@ public interface ChatInteractionRequestRepository {
     int markAnswered(String tenantId, String userId, String interactionId, Instant answeredAt);
 
     /**
+     * 仅当 Interaction 仍由指定 continuation run 持有时标记为已回答。
+     */
+    default int markAnsweredForRun(String tenantId, String userId, String interactionId,
+                                   String continueRunId, Instant answeredAt) {
+        return markAnswered(tenantId, userId, interactionId, answeredAt);
+    }
+
+    /**
      * 续接失败时把请求退回 WAITING，允许用户重试。
      *
      * @param tenantId 租户标识。

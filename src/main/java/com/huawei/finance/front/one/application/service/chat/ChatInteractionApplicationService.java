@@ -117,6 +117,14 @@ public class ChatInteractionApplicationService {
         }
     }
 
+    public int markAnsweredForRun(ChatInteractionRequest request, String continueRunId) {
+        if (request == null || continueRunId == null || continueRunId.isBlank()) {
+            return 0;
+        }
+        return repository.markAnsweredForRun(request.tenantId(), request.userId(), request.id(),
+                continueRunId, Instant.now());
+    }
+
     public void markWaiting(ChatInteractionRequest request) {
         if (request == null || request.continueRunId() == null || request.continueRunId().isBlank()) {
             return;
@@ -201,6 +209,9 @@ public class ChatInteractionApplicationService {
         payload.put("approved", command.approved() == null ? Boolean.TRUE : command.approved());
         payload.put("scope", command.scope() == null || command.scope().isBlank() ? "once" : command.scope().trim());
         payload.put("questionnaireAnswers", command.questionnaireAnswers());
+        if (interactionType == ChatInteractionType.INTENT_CLARIFICATION) {
+            payload.put("answerText", intentClarificationAnswer(command.questionnaireAnswers()));
+        }
         payload.put("metadata", command.metadata());
         return Map.copyOf(payload);
     }
@@ -214,6 +225,30 @@ public class ChatInteractionApplicationService {
                 || command.questionnaireAnswers().isEmpty())) {
             throw new IllegalArgumentException("questionnaireAnswers 不能为空");
         }
+        if (safeType == ChatInteractionType.INTENT_CLARIFICATION) {
+            intentClarificationAnswer(command.questionnaireAnswers());
+        }
+    }
+
+    private String intentClarificationAnswer(Map<String, Object> answers) {
+        java.util.List<Map.Entry<String, String>> normalized = answers == null
+                ? java.util.List.of()
+                : answers.entrySet().stream()
+                .map(entry -> Map.entry(
+                        entry.getKey() == null ? "" : entry.getKey().trim(),
+                        entry.getValue() == null ? "" : String.valueOf(entry.getValue()).trim()))
+                .filter(entry -> !entry.getValue().isBlank())
+                .sorted(Map.Entry.comparingByKey())
+                .toList();
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException("questionnaireAnswers 至少包含一个非空答案");
+        }
+        if (normalized.size() == 1) {
+            return normalized.getFirst().getValue();
+        }
+        return normalized.stream()
+                .map(entry -> (entry.getKey().isBlank() ? "问题" : entry.getKey()) + "：" + entry.getValue())
+                .collect(java.util.stream.Collectors.joining("\n"));
     }
 
     private boolean requiresExplicitApproval(ChatInteractionType interactionType) {

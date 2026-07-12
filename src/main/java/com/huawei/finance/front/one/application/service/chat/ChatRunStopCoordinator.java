@@ -224,8 +224,9 @@ public class ChatRunStopCoordinator {
             return StopMessageTarget.ready(run.assistantMessageId());
         }
         boolean interactionContinuation = interactionContinuation(run);
+        boolean newTurnInteraction = InteractionMessageStrategy.newTurn(run);
         String interactionAssistantMessageId = interactionAssistantMessageId(run);
-        if (interactionContinuation && interactionAssistantMessageId == null) {
+        if (interactionContinuation && !newTurnInteraction && interactionAssistantMessageId == null) {
             log.warn("Skip partial assistant persistence because Interaction continuation has no original assistant ID. runId={}",
                     run.id());
             return StopMessageTarget.notReady();
@@ -242,7 +243,7 @@ public class ChatRunStopCoordinator {
                 return StopMessageTarget.notReady();
             }
             ChatSession session = sessionSnapshot == null ? sessionService.getSession(user, run.sessionId()) : sessionSnapshot;
-            String assistantMessageId = interactionContinuation
+            String assistantMessageId = interactionContinuation && !newTurnInteraction
                     ? interactionAssistantMessageId
                     : idGenerator.newId("msg",
                             IdGenerateContext.of(user.tenantId(), user.ownerUserId(), session.id(), run.id()));
@@ -282,7 +283,7 @@ public class ChatRunStopCoordinator {
     }
 
     private ChatMessage persistPartialAssistant(ChatRun run, AssistantMessageSaveCommand command) {
-        if (!interactionContinuation(run)) {
+        if (!interactionContinuation(run) || InteractionMessageStrategy.newTurn(run)) {
             return sessionService.saveAssistantMessage(command);
         }
         String assistantMessageId = interactionAssistantMessageId(run);

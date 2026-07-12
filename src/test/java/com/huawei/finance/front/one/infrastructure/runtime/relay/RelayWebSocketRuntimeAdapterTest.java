@@ -655,10 +655,19 @@ class RelayWebSocketRuntimeAdapterTest {
 
     @Test
     void configStageClearSessionFailsBeforeSendingUserMessage() {
-        assertConfigHandshakeFails(
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"clear-session\",\"reason\":\"session_not_found\","
-                        + "\"message\":\"Session not found\"}",
-                "clear-session: Session not found");
+                        + "\"message\":\"Session not found\"}"));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(RelayRuntimeSessionUnavailableException.class)
+                        .hasMessageContaining("clear-session: Session not found"))
+                .verify();
+
+        assertThat(client.sent()).hasSize(1);
+        assertThat(client.sent().getFirst()).contains("\"type\":\"config\"");
     }
 
     @Test

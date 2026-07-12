@@ -62,6 +62,14 @@ public class MyBatisRuntimeBindingRepository implements RuntimeBindingRepository
     }
 
     @Override
+    public List<RuntimeBinding> findResumableBySession(String tenantId, String userId, String sessionId,
+                                                       String provider) {
+        return mapper.findResumableBySession(tenantId, userId, sessionId, provider).stream()
+                .map(this::toDomain)
+                .toList();
+    }
+
+    @Override
     public RuntimeBinding save(RuntimeBinding binding) {
         RuntimeBindingRow row = toRow(binding);
         int updated = mapper.update(row);

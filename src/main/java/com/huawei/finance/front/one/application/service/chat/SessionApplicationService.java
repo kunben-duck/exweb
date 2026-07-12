@@ -227,7 +227,7 @@ public class SessionApplicationService implements ChatSessionFacade {
         for (ChatSession session : sessions) {
             ChatSession deletedSession = saveWith(session, session.title(), STATUS_DELETED);
             if (runtimeBindingService != null) {
-                runtimeBindingService.cancelActive(user.tenantId(), user.ownerUserId(), session.id());
+                runtimeBindingService.cancelAllForSession(user.tenantId(), user.ownerUserId(), session.id());
             }
             if (shareRepository != null) {
                 shareRepository.revokeActiveBySession(user.tenantId(), user.ownerUserId(), session.id(), Instant.now());

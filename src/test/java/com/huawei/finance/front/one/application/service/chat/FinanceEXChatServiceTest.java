@@ -1147,11 +1147,14 @@ class FinanceEXChatServiceTest {
         );
         AgentRuntime runtime = new AgentRuntime() {
             @Override public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                Map<String, Object> toolPayload = new HashMap<>();
+                toolPayload.put("sourceType", "tool_call_streaming");
+                toolPayload.put("toolName", "search");
+                toolPayload.put("inputPreview", "查询报销流程");
+                toolPayload.put("optionalDetail", null);
                 return Flux.just(
                         MessageDeltaEvent.of(request.runId(), request.sessionId(), "草稿"),
-                        RuntimeEvent.tool(request.runId(), request.sessionId(),
-                                Map.of("sourceType", "tool_call_streaming", "toolName", "search",
-                                        "inputPreview", "查询报销流程")),
+                        RuntimeEvent.tool(request.runId(), request.sessionId(), toolPayload),
                         MessageSnapshotEvent.of(request.runId(), request.sessionId(), "最终\nMarkdown **正文**")
                 );
             }
@@ -1204,6 +1207,8 @@ class FinanceEXChatServiceTest {
                 .containsExactly("TOOL", "MESSAGE_SNAPSHOT", "ANSWER");
         assertThat(assistant.parts()).extracting(ChatMessagePart::contentText)
                 .containsExactly("search: 查询报销流程", "最终\nMarkdown **正文**", "最终\nMarkdown **正文**");
+        assertThat(assistant.parts().getFirst().payload()).containsKey("optionalDetail");
+        assertThat(assistant.parts().getFirst().payload().get("optionalDetail")).isNull();
     }
 
     @Test
@@ -1259,14 +1264,15 @@ class FinanceEXChatServiceTest {
                 chatStreamService, sessionService, runs, leaseService, bindings, interactionService, Duration.ofDays(3));
         AgentRuntime runtime = new AgentRuntime() {
             @Override public Flux<ChatEvent> query(AgentRuntimeRequest request) {
-                return Flux.just(RuntimeEvent.card(request.runId(), request.sessionId(), Map.of(
-                        "source", "relay",
-                        "sourceType", "approval-request",
-                        "operation_type", "questionnaire",
-                        "approval_id", "approval-1",
-                        "message", "Please answer the following questions",
-                        "runtimeSessionId", request.sessionId()
-                )));
+                Map<String, Object> payload = new HashMap<>();
+                payload.put("source", "relay");
+                payload.put("sourceType", "approval-request");
+                payload.put("operation_type", "questionnaire");
+                payload.put("approval_id", "approval-1");
+                payload.put("message", "Please answer the following questions");
+                payload.put("runtimeSessionId", request.sessionId());
+                payload.put("optionalDetail", null);
+                return Flux.just(RuntimeEvent.card(request.runId(), request.sessionId(), payload));
             }
             @Override public Mono<Void> cancel(AgentRuntimeCancelRequest request) { return Mono.empty(); }
         };
@@ -1327,6 +1333,8 @@ class FinanceEXChatServiceTest {
                 .satisfies(request -> {
                     assertThat(request.status()).isEqualTo(ChatInteractionStatus.WAITING);
                     assertThat(request.assistantMessageId()).isEqualTo(assistant.id());
+                    assertThat(request.requestPayload()).containsKey("optionalDetail");
+                    assertThat(request.requestPayload().get("optionalDetail")).isNull();
                 });
         assertThat(events.events).extracting(ChatEvent::type)
                 .containsExactly("run.started", "runtime.card", "run.waiting_user");
@@ -2199,10 +2207,12 @@ class FinanceEXChatServiceTest {
         assertThat(bindings.saved.leafMessageId()).isEqualTo("msg-assistant");
         assertThat(bindings.saved.runtimeSessionId()).isEqualTo("runtime-session-1");
         assertThat(bindings.saved.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(bindings.saved.expiresAt()).isNull();
+        assertThat(bindings.saved.metadata()).containsEntry("runtimeSessionEstablished", true);
     }
 
     @Test
-    void terminalCommitCancelsRelayBindingAfterCompletedRun() {
+    void terminalCommitReleasesRelayRouteButKeepsSessionResumableAfterCompletedRun() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -2266,8 +2276,11 @@ class FinanceEXChatServiceTest {
         assertThat(runs.findById("run1").orElseThrow().status()).isEqualTo(ChatRunStatus.COMPLETED);
         assertThat(runs.findById("run1").orElseThrow().assistantMessageId()).isEqualTo("msg-assistant");
         assertThat(bindings.saved.id()).isEqualTo(binding.id());
-        assertThat(bindings.saved.status()).isEqualTo(RuntimeBindingStatus.CANCELLED);
-        assertThat(bindings.saved.leafMessageId()).isEqualTo(userMessage.id());
+        assertThat(bindings.saved.status()).isEqualTo(RuntimeBindingStatus.RESUMABLE);
+        assertThat(bindings.saved.leafMessageId()).isEqualTo("msg-assistant");
+        assertThat(bindings.saved.runtimeSessionId()).isEqualTo("runtime-session-1");
+        assertThat(bindings.saved.expiresAt()).isNull();
+        assertThat(bindings.saved.metadata()).containsEntry("runtimeSessionEstablished", true);
     }
 
     @Test
@@ -3152,6 +3165,17 @@ class FinanceEXChatServiceTest {
                     .filter(binding -> userId.equals(binding.userId()))
                     .filter(binding -> sessionId.equals(binding.chatSessionId()))
                     .filter(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
+                    .stream()
+                    .toList();
+        }
+        @Override public List<RuntimeBinding> findResumableBySession(String tenantId, String userId, String sessionId,
+                                                                     String provider) {
+            return Optional.ofNullable(saved)
+                    .filter(binding -> tenantId.equals(binding.tenantId()))
+                    .filter(binding -> userId.equals(binding.userId()))
+                    .filter(binding -> sessionId.equals(binding.chatSessionId()))
+                    .filter(binding -> provider.equals(binding.provider()))
+                    .filter(binding -> binding.status() == RuntimeBindingStatus.RESUMABLE)
                     .stream()
                     .toList();
         }

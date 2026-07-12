@@ -200,13 +200,13 @@ public class RelayRuntimeResponseNormalizer {
     private ChatEvent deltaEvent(String runId, String sessionId, String delta, JsonNode root) {
         Map<String, Object> payload = relayPayload(root, firstText(root, "type", "event", "status"));
         payload.put("delta", delta);
-        return new MessageDeltaEvent(runId, sessionId, 0, Instant.now(), delta, Map.copyOf(payload));
+        return new MessageDeltaEvent(runId, sessionId, 0, Instant.now(), delta, payload);
     }
 
     private ChatEvent snapshotEvent(String runId, String sessionId, String content, JsonNode root) {
         Map<String, Object> payload = relayPayload(root, firstText(root, "type", "event", "status"));
         payload.put("content", content);
-        return new MessageSnapshotEvent(runId, sessionId, 0, Instant.now(), content, Map.copyOf(payload));
+        return new MessageSnapshotEvent(runId, sessionId, 0, Instant.now(), content, payload);
     }
 
     private Map<String, Object> completionPayload(JsonNode root) {

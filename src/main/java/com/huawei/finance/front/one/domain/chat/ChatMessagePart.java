@@ -55,7 +55,7 @@ public record ChatMessagePart(
 
     public ChatMessagePart {
         partType = blankToDefault(partType, "RUNTIME_EVENT");
-        payload = payload == null ? Map.of() : Map.copyOf(payload);
+        payload = ChatPayloadMaps.immutableCopy(payload);
         title = blankToDefault(title, defaultTitle(partType));
         status = blankToDefault(status, defaultStatus(partType, payload));
         channel = blankToDefault(channel, defaultChannel(partType));

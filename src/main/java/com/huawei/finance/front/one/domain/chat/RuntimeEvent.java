@@ -25,6 +25,10 @@ public record RuntimeEvent(
         String eventType,
         Map<String, Object> payload
 ) implements ChatEvent {
+    public RuntimeEvent {
+        payload = ChatPayloadMaps.immutableCopy(payload);
+    }
+
     public RuntimeEvent(String runId, String sessionId, long sequence, Instant createdAt, Map<String, Object> payload) {
         this(runId, sessionId, sequence, createdAt, "runtime.event", payload);
     }
@@ -87,8 +91,7 @@ public record RuntimeEvent(
     }
 
     private static RuntimeEvent typed(String eventType, String runId, String sessionId, Map<String, Object> payload) {
-        Map<String, Object> nextPayload = payload == null ? Map.of() : Map.copyOf(payload);
-        return new RuntimeEvent(runId, sessionId, 0, Instant.now(), eventType, nextPayload);
+        return new RuntimeEvent(runId, sessionId, 0, Instant.now(), eventType, payload);
     }
 
     @Override
@@ -108,6 +111,10 @@ public record RuntimeEvent(
      */
     public record FallbackPayload(String source, String sourceType, String eventKind, String channel,
                                   String displayHint, String text, Map<String, Object> sourcePayload) {
+        public FallbackPayload {
+            sourcePayload = ChatPayloadMaps.immutableCopy(sourcePayload);
+        }
+
         public static FallbackPayload empty() {
             return new FallbackPayload(null, null, null, null, null, null, Map.of());
         }

@@ -541,7 +541,7 @@ class SessionApplicationServiceTest {
         }
 
         @Override
-        public void cancelActive(String tenantId, String userId, String sessionId) {
+        public void cancelAllForSession(String tenantId, String userId, String sessionId) {
             cancellations++;
         }
     }

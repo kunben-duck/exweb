@@ -441,6 +441,30 @@ class RelayRuntimeResponseNormalizerTest {
     }
 
     @Test
+    void nullableJsonValuesArePreservedForKnownSnapshotAndFallbackEvents() {
+        ChatEvent progress = normalizer.normalize("run1", "session1",
+                "{\"type\":\"relay-progress\",\"detail\":null,\"nested\":{\"value\":null}}")
+                .getFirst();
+        ChatEvent snapshot = normalizer.normalize("run1", "session1",
+                "{\"type\":\"agent\",\"is_streaming\":false,\"content\":\"answer\",\"detail\":null}")
+                .getFirst();
+        ChatEvent fallback = normalizer.normalize("run1", "session1",
+                "{\"type\":\"future-event\",\"detail\":null}")
+                .getFirst();
+
+        assertThat(progress.type()).isEqualTo("runtime.progress");
+        assertThat(snapshot.type()).isEqualTo("message.snapshot");
+        assertThat(fallback.type()).isEqualTo("runtime.event");
+        assertThat(progress.payload()).containsKey("detail");
+        assertThat(progress.payload().get("detail")).isNull();
+        assertThat(asMap(progress.payload().get("nested")).get("value")).isNull();
+        assertThat(snapshot.payload()).containsKey("detail");
+        assertThat(snapshot.payload().get("detail")).isNull();
+        assertThat(fallback.payload()).containsKey("detail");
+        assertThat(fallback.payload().get("detail")).isNull();
+    }
+
+    @Test
     void errorFrameFailsProtocol() {
         assertThatThrownBy(() -> normalizer.normalize("run1", "session1",
                 "{\"type\":\"error\",\"message\":\"relay failed\"}"))

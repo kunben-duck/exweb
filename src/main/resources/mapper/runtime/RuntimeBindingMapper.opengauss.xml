@@ -120,4 +120,22 @@
           AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
         ORDER BY updated_at DESC
     </select>
+
+    <!--
+      查询已解除自动路由、但仍可恢复下游会话的 binding。RESUMABLE Relay session 不设置业务过期时间，
+      因此这里只校验归属、provider、状态和有效 runtimeSessionId。
+      入参: tenantId/userId/sessionId 为归属边界，provider 为 Runtime 类型。
+    -->
+    <select id="findResumableBySession" resultMap="runtimeBindingResultMap">
+        SELECT <include refid="runtimeBindingColumns"/>
+        FROM fin_ex_runtime_binding_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND chat_session_id = #{sessionId}
+          AND provider = #{provider}
+          AND status = 'RESUMABLE'
+          AND runtime_session_id IS NOT NULL
+          AND BTRIM(runtime_session_id) &lt;&gt; ''
+        ORDER BY updated_at DESC
+    </select>
 </mapper>

@@ -75,4 +75,18 @@ public interface RuntimeBindingMapper {
     List<RuntimeBindingRow> findActiveBySessionAnyProvider(@Param("tenantId") String tenantId,
                                                            @Param("userId") String userId,
                                                            @Param("sessionId") String sessionId);
+
+    /**
+     * 查询会话下指定 provider 的可恢复 RuntimeBinding，按更新时间倒序。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId ChatService 会话标识。
+     * @param provider Runtime provider。
+     * @return 可恢复 binding 列表。
+     */
+    List<RuntimeBindingRow> findResumableBySession(@Param("tenantId") String tenantId,
+                                                   @Param("userId") String userId,
+                                                   @Param("sessionId") String sessionId,
+                                                   @Param("provider") String provider);
 }

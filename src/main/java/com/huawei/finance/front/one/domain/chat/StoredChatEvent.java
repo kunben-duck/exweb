@@ -24,6 +24,10 @@ public record StoredChatEvent(
         Instant createdAt,
         Map<String, Object> payload
 ) implements ChatEvent {
+    public StoredChatEvent {
+        payload = ChatPayloadMaps.immutableCopy(payload);
+    }
+
     @Override
     public String type() {
         return eventType;

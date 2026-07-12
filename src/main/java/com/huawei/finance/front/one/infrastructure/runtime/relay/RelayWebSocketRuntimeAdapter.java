@@ -729,11 +729,24 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     && !hasErrorPayload(root)) {
                 return null;
             }
-            return new RelayRuntimeProtocolException("Relay WebSocket config handshake failed: "
-                    + configFailureMessage(root, type));
+            String failureMessage = configFailureMessage(root, type);
+            if (runtimeSessionUnavailable(type, failureMessage)) {
+                return new RelayRuntimeSessionUnavailableException(
+                        "Relay WebSocket config handshake failed: " + failureMessage);
+            }
+            return new RelayRuntimeProtocolException("Relay WebSocket config handshake failed: " + failureMessage);
         } catch (JsonProcessingException ex) {
             return null;
         }
+    }
+
+    private boolean runtimeSessionUnavailable(String type, String failureMessage) {
+        if ("clear-session".equals(type)) {
+            return true;
+        }
+        String normalized = failureMessage == null ? "" : failureMessage.toLowerCase(java.util.Locale.ROOT);
+        return normalized.contains("session")
+                && (normalized.contains("not found") || normalized.contains("corrupt"));
     }
 
     private boolean hasErrorPayload(JsonNode root) {

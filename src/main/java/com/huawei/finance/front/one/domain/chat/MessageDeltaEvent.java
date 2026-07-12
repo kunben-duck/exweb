@@ -21,6 +21,10 @@ public record MessageDeltaEvent(
         String delta,
         Map<String, Object> payload
 ) implements ChatEvent {
+    public MessageDeltaEvent {
+        payload = ChatPayloadMaps.immutableCopy(payload);
+    }
+
     public static MessageDeltaEvent of(String runId, String sessionId, String delta) {
         return new MessageDeltaEvent(runId, sessionId, 0, Instant.now(), delta, Map.of("delta", delta));
     }

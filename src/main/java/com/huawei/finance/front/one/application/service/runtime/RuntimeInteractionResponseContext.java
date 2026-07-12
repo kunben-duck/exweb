@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.application.service.runtime;
 
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.domain.auth.UserContext;
+import com.huawei.finance.front.one.domain.chat.ChatPayloadMaps;
 import java.util.Map;
 
 /**
@@ -20,7 +21,7 @@ public record RuntimeInteractionResponseContext(
         RuntimeForwardHeaders forwardHeaders
 ) {
     public RuntimeInteractionResponseContext {
-        responsePayload = responsePayload == null ? Map.of() : Map.copyOf(responsePayload);
+        responsePayload = ChatPayloadMaps.immutableCopy(responsePayload);
         forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
     }
 }

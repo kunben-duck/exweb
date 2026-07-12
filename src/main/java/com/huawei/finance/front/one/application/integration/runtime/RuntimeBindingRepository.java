@@ -66,6 +66,14 @@ public interface RuntimeBindingRepository {
     }
 
     /**
+     * 查询会话下指定 provider 可由后续路由恢复、但不参与自动路由的绑定。
+     */
+    default List<RuntimeBinding> findResumableBySession(String tenantId, String userId, String sessionId,
+                                                        String provider) {
+        return List.of();
+    }
+
+    /**
      * 保存 Runtime 绑定。
      *
      * @param binding Runtime 绑定。

@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.application.service.chat;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingRepository;
+import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingExpirationPolicy;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatInteractionRequest;
@@ -17,6 +18,8 @@ import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBindingStatus;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -33,6 +36,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class ChatRunTerminalCommitService {
     private static final String WAITING_ASSISTANT_METADATA = "{\"finishReason\":\"WAITING_USER\"}";
     private static final String DOMAIN_AGENT_PROVIDER = "domain-agent";
+    private static final String RELAY_PROVIDER = "relay";
+    private static final String RUNTIME_SESSION_ESTABLISHED = "runtimeSessionEstablished";
+    private static final String RUNTIME_SESSION_UNAVAILABLE = "RUNTIME_SESSION_UNAVAILABLE";
     private static final String INTERACTION_ID_METADATA = "interactionId";
     private static final String INTERACTION_ASSISTANT_MESSAGE_ID_METADATA = "interactionAssistantMessageId";
 
@@ -50,14 +56,14 @@ public class ChatRunTerminalCommitService {
                                         ChatRunLeaseApplicationService runLeaseService,
                                         RuntimeBindingRepository runtimeBindingRepository,
                                         ChatInteractionApplicationService chatInteractionService,
-                                        @Value("${financeex.runtime-binding.ttl:3d}") Duration runtimeBindingTtl) {
+                                        @Value("${financeex.runtime-binding.ttl:0s}") Duration runtimeBindingTtl) {
         this.chatStreamService = chatStreamService;
         this.sessionService = sessionService;
         this.runRepository = runRepository;
         this.runLeaseService = runLeaseService;
         this.runtimeBindingRepository = runtimeBindingRepository;
         this.chatInteractionService = chatInteractionService;
-        this.runtimeBindingTtl = runtimeBindingTtl == null ? Duration.ofDays(3) : runtimeBindingTtl;
+        this.runtimeBindingTtl = RuntimeBindingExpirationPolicy.normalize(runtimeBindingTtl);
     }
 
     @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
@@ -108,7 +114,8 @@ public class ChatRunTerminalCommitService {
             chatInteractionService.markWaiting(command.context().continuationInteractionRequest());
         }
         markExecutionTerminal(stored);
-        RuntimeBinding binding = observeRuntimeBindingEvent(command.context().bindingRef().get(), stored);
+        RuntimeBinding binding = invalidateUnavailableRuntimeSession(command.context().bindingRef().get(), stored);
+        binding = observeRuntimeBindingEvent(binding, stored);
         return new CommitResult(stored, binding);
     }
 
@@ -425,7 +432,11 @@ public class ChatRunTerminalCommitService {
         if (binding == null) {
             return null;
         }
-        RuntimeBinding next = binding.withRun(context.runId(), expiresAt());
+        boolean establishedRelay = RELAY_PROVIDER.equals(binding.provider());
+        RuntimeBinding next = binding.withRun(context.runId(), expiresAt(binding.provider(), establishedRelay));
+        if (establishedRelay) {
+            next = markRelaySessionEstablished(next, next.runtimeSessionId());
+        }
         if (leafMessageId != null && !leafMessageId.isBlank()
                 && !leafMessageId.equals(next.leafMessageId())) {
             next = next.withLeafMessageId(leafMessageId);
@@ -439,7 +450,13 @@ public class ChatRunTerminalCommitService {
             return null;
         }
         if (!DOMAIN_AGENT_PROVIDER.equals(binding.provider())) {
-            return runtimeBindingRepository.save(binding.withStatus(RuntimeBindingStatus.CANCELLED));
+            RuntimeBinding next = markRelaySessionEstablished(binding, binding.runtimeSessionId())
+                    .withRun(context.runId(), null);
+            if (leafMessageId != null && !leafMessageId.isBlank()
+                    && !leafMessageId.equals(next.leafMessageId())) {
+                next = next.withLeafMessageId(leafMessageId);
+            }
+            return runtimeBindingRepository.save(next.withStatus(RuntimeBindingStatus.RESUMABLE));
         }
         return refreshBinding(context, leafMessageId);
     }
@@ -449,15 +466,57 @@ public class ChatRunTerminalCommitService {
             return binding;
         }
         Object runtimeSessionId = event.payload().get("runtimeSessionId");
-        if (runtimeSessionId == null || String.valueOf(runtimeSessionId).isBlank()
-                || String.valueOf(runtimeSessionId).equals(binding.runtimeSessionId())) {
+        if (runtimeSessionId == null || String.valueOf(runtimeSessionId).isBlank()) {
             return binding;
         }
-        return runtimeBindingRepository.save(binding.withRuntimeSessionId(String.valueOf(runtimeSessionId)));
+        String nextRuntimeSessionId = String.valueOf(runtimeSessionId);
+        boolean sessionIdChanged = !nextRuntimeSessionId.equals(binding.runtimeSessionId());
+        boolean establishRelay = RELAY_PROVIDER.equals(binding.provider())
+                && (!relaySessionEstablished(binding) || binding.expiresAt() != null);
+        if (!sessionIdChanged && !establishRelay) {
+            return binding;
+        }
+        RuntimeBinding next = sessionIdChanged
+                ? binding.withRuntimeSessionId(nextRuntimeSessionId)
+                : binding;
+        next = markRelaySessionEstablished(next, nextRuntimeSessionId);
+        return runtimeBindingRepository.save(next);
     }
 
-    private java.time.Instant expiresAt() {
-        return java.time.Instant.now().plus(runtimeBindingTtl);
+    private RuntimeBinding invalidateUnavailableRuntimeSession(RuntimeBinding binding, ChatEvent event) {
+        if (binding == null || event == null || event.payload() == null
+                || !"run.failed".equals(event.type())
+                || !RUNTIME_SESSION_UNAVAILABLE.equals(String.valueOf(event.payload().get("code")))) {
+            return binding;
+        }
+        RuntimeBinding cancelled = binding.withStatus(RuntimeBindingStatus.CANCELLED);
+        return runtimeBindingRepository.save(cancelled);
+    }
+
+    private RuntimeBinding markRelaySessionEstablished(RuntimeBinding binding, String runtimeSessionId) {
+        if (binding == null || !RELAY_PROVIDER.equals(binding.provider())) {
+            return binding;
+        }
+        RuntimeBinding next = binding;
+        if (runtimeSessionId != null && !runtimeSessionId.isBlank()
+                && !runtimeSessionId.equals(next.runtimeSessionId())) {
+            next = next.withRuntimeSessionId(runtimeSessionId);
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>(next.metadata());
+        metadata.put(RUNTIME_SESSION_ESTABLISHED, true);
+        return next.withMetadata(metadata).withExpiresAt(null);
+    }
+
+    private boolean relaySessionEstablished(RuntimeBinding binding) {
+        return binding != null
+                && RELAY_PROVIDER.equals(binding.provider())
+                && (binding.status() == RuntimeBindingStatus.RESUMABLE
+                || Boolean.TRUE.equals(binding.metadata().get(RUNTIME_SESSION_ESTABLISHED)));
+    }
+
+    private java.time.Instant expiresAt(String provider, boolean relaySessionEstablished) {
+        return RuntimeBindingExpirationPolicy.expiresAt(runtimeBindingTtl,
+                RELAY_PROVIDER.equals(provider) && relaySessionEstablished);
     }
 
     public record TerminalCommitContext(

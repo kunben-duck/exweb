@@ -140,7 +140,9 @@ financeex:
     match-path: ${FINANCEEX_USE_CASE_LIBRARY_MATCH_PATH:/v1/use-cases/match}
     timeout: 5s
   runtime-binding:
-    ttl: 3d
+    # 业务 binding TTL：未配置、0 或负数表示不过期；正数仅对 DomainAgent 使用滑动过期。
+    # 已建立的 Relay session 始终不过期，直到会话删除或 Relay 明确返回 session 不存在。
+    ttl: ${FINANCEEX_RUNTIME_BINDING_TTL:0s}
     # 逻辑前缀；实际 Redis key 会自动注入 spring.profiles.active 的第一个 profile：
     # fin_ex:runtime_binding -> fin_ex:{env}:runtime_binding。
     redis-key-prefix: fin_ex:runtime_binding

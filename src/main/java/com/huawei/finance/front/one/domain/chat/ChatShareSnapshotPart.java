@@ -23,6 +23,6 @@ public record ChatShareSnapshotPart(
         Instant createdAt
 ) {
     public ChatShareSnapshotPart {
-        payload = payload == null ? Map.of() : Map.copyOf(payload);
+        payload = ChatPayloadMaps.immutableCopy(payload);
     }
 }

@@ -31,6 +31,7 @@ public class RuntimeBindingApplicationService {
     public static final String DEFAULT_RUNTIME_PROVIDER = "relay";
     /** 财经领域 Agent 绑定 provider 编码。 */
     public static final String DOMAIN_AGENT_PROVIDER = "domain-agent";
+    private static final String RUNTIME_SESSION_ESTABLISHED = "runtimeSessionEstablished";
 
     private final RuntimeBindingRepository repository;
     private final RuntimeBindingCache cache;
@@ -49,12 +50,12 @@ public class RuntimeBindingApplicationService {
      */
     public RuntimeBindingApplicationService(RuntimeBindingRepository repository, RuntimeBindingCache cache,
                                             IdGenerator idGenerator,
-                                            @Value("${financeex.runtime-binding.ttl:3d}") Duration ttl,
+                                            @Value("${financeex.runtime-binding.ttl:0s}") Duration ttl,
                                             @Value("${financeex.agent-runtime.default-provider:relay}") String runtimeProvider) {
         this.repository = repository;
         this.cache = cache;
         this.idGenerator = idGenerator;
-        this.ttl = ttl == null ? Duration.ofDays(3) : ttl;
+        this.ttl = RuntimeBindingExpirationPolicy.normalize(ttl);
         this.runtimeProvider = normalizeProvider(runtimeProvider);
     }
 
@@ -87,8 +88,8 @@ public class RuntimeBindingApplicationService {
      * 解析本轮 AgentRuntime 应使用的会话绑定。
      *
      * <p>这里按会话维度复用 active binding，不再因消息树 leaf 切换而创建新的下游 Runtime
-     * session。Relay 在正常 run.completed 后会取消绑定，因此这里通常只会续接 DomainAgent 或
-     * 未闭合的 Relay 等待态。</p>
+     * session。Relay 正常完成后只释放自动路由，并以 RESUMABLE 状态保留其真实 session；只有
+     * 路由再次选择 Relay 时才恢复该 binding。</p>
      */
     public RuntimeBindingResolution resolveForRun(String tenantId, String userId, String sessionId,
                                                   String runId, String leafMessageId) {
@@ -103,6 +104,19 @@ public class RuntimeBindingApplicationService {
             RuntimeBinding selected = touchForRun(activeBindings.getFirst(), runId);
             cancelDuplicateBindings(activeBindings, selected);
             cache.put(selected);
+            return new RuntimeBindingResolution(selected, RuntimeSessionMode.RESUME);
+        }
+        List<RuntimeBinding> resumableBindings = repository
+                .findResumableBySession(tenantId, userId, sessionId, runtimeProvider)
+                .stream()
+                .filter(this::resumableForCurrentProvider)
+                .sorted(Comparator.comparing(RuntimeBinding::updatedAt,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .reversed())
+                .toList();
+        if (!resumableBindings.isEmpty()) {
+            RuntimeBinding selected = activateResumableForRun(resumableBindings.getFirst(), runId, leafMessageId);
+            cancelDuplicateBindings(resumableBindings, selected);
             return new RuntimeBindingResolution(selected, RuntimeSessionMode.RESUME);
         }
         RuntimeBinding created = create(tenantId, userId, sessionId, runId, leafMessageId);
@@ -169,7 +183,7 @@ public class RuntimeBindingApplicationService {
         RuntimeBinding binding = new RuntimeBinding(id, command.tenantId(), command.userId(), command.sessionId(),
                 normalizeProvider(command.provider()), command.leafMessageId(),
                 blankToDefault(command.runtimeSessionId(), command.sessionId()), RuntimeBindingStatus.ACTIVE,
-                command.runId(), expiresAt(), now, now, command.metadata());
+                command.runId(), expiresAt(command.provider(), false), now, now, command.metadata());
         return save(binding);
     }
 
@@ -196,7 +210,7 @@ public class RuntimeBindingApplicationService {
         }
         Map<String, Object> metadata = domainAgentMetadata(domainAgentId, routeSource, intentMetadata,
                 binding.metadata());
-        return save(binding.withMetadata(metadata).withRun(runId, expiresAt()));
+        return save(binding.withMetadata(metadata).withRun(runId, expiresAt(binding.provider(), false)));
     }
 
     /**
@@ -210,14 +224,14 @@ public class RuntimeBindingApplicationService {
         if (binding == null) {
             return null;
         }
-        return save(binding.withRun(runId, expiresAt()));
+        return save(binding.withRun(runId, expiresAt(binding.provider(), relaySessionEstablished(binding))));
     }
 
     /**
      * Interaction 续接必须回到创建等待态时的真实 RuntimeBinding。
      *
-     * <p>这里不创建临时 binding，避免产生不会过期的 active 绑定；同时刷新本轮 runId、TTL、
-     * leaf 和 runtimeSessionId，让续接完成后的下一轮提问仍能命中同一个 Relay 会话。</p>
+     * <p>这里不创建临时 binding；同时刷新本轮 runId、leaf 和 runtimeSessionId。已经建立的 Relay
+     * session 不再设置业务过期时间。</p>
      */
     public RuntimeBinding resumeForInteraction(ChatInteractionRequest request, String runId) {
         if (request == null) {
@@ -232,18 +246,39 @@ public class RuntimeBindingApplicationService {
      * 刷新绑定活跃窗口，并移动到给定 leaf。
      *
      * <p>与 {@link #moveToLeaf(RuntimeBinding, String)} 不同，本方法即使 leaf 没变也会保存，
-     * 因为 Interaction 续接完成时需要刷新 TTL 和 lastRunId。</p>
+     * 因为 Interaction 续接完成时需要刷新绑定生命周期和 lastRunId。</p>
      */
     public RuntimeBinding touchAndMoveToLeaf(RuntimeBinding binding, String runId, String leafMessageId) {
         if (binding == null) {
             return null;
         }
-        RuntimeBinding next = binding.withRun(runId, expiresAt());
+        RuntimeBinding next = binding.withRun(runId,
+                expiresAt(binding.provider(), relaySessionEstablished(binding)));
         if (leafMessageId != null && !leafMessageId.isBlank()
                 && !leafMessageId.equals(next.leafMessageId())) {
             next = next.withLeafMessageId(leafMessageId);
         }
         return save(next);
+    }
+
+    /**
+     * Runtime 正常完成后更新绑定生命周期。DomainAgent 保持 active；Relay 只释放自动路由，
+     * 仍永久保留实际 runtimeSessionId 供后续重新路由时恢复。
+     */
+    public RuntimeBinding completeAfterRun(RuntimeBinding binding, String runId, String leafMessageId) {
+        if (binding == null) {
+            return null;
+        }
+        if (DOMAIN_AGENT_PROVIDER.equals(binding.provider())) {
+            return touchAndMoveToLeaf(binding, runId, leafMessageId);
+        }
+        RuntimeBinding next = markRelaySessionEstablished(binding, binding.runtimeSessionId())
+                .withRun(runId, null);
+        if (leafMessageId != null && !leafMessageId.isBlank()
+                && !leafMessageId.equals(next.leafMessageId())) {
+            next = next.withLeafMessageId(leafMessageId);
+        }
+        return save(next.withStatus(RuntimeBindingStatus.RESUMABLE));
     }
 
     /**
@@ -273,6 +308,19 @@ public class RuntimeBindingApplicationService {
         cache.evict(tenantId, userId, sessionId);
     }
 
+    /**
+     * 会话删除时永久取消 active 与 resumable binding，防止软删除会话仍持有下游 session 引用。
+     */
+    public void cancelAllForSession(String tenantId, String userId, String sessionId) {
+        Map<String, RuntimeBinding> bindings = new LinkedHashMap<>();
+        repository.findActiveBySession(tenantId, userId, sessionId)
+                .forEach(binding -> bindings.put(binding.id(), binding));
+        repository.findResumableBySession(tenantId, userId, sessionId, DEFAULT_RUNTIME_PROVIDER)
+                .forEach(binding -> bindings.put(binding.id(), binding));
+        bindings.values().forEach(binding -> save(binding.withStatus(RuntimeBindingStatus.CANCELLED)));
+        cache.evict(tenantId, userId, sessionId);
+    }
+
     public RuntimeBinding markNotRoutable(RuntimeBinding binding, String rejectCode) {
         if (binding == null) {
             return null;
@@ -282,6 +330,20 @@ public class RuntimeBindingApplicationService {
             metadata.put("lastRejectCode", rejectCode);
         }
         return save(binding.withMetadata(metadata).withStatus(RuntimeBindingStatus.CANCELLED));
+    }
+
+    /**
+     * 终态数据库事务提交后同步 Redis 热缓存。该方法不参与事务事实写入。
+     */
+    public void synchronizeCache(RuntimeBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        if (binding.status().routable()) {
+            cache.put(binding);
+        } else {
+            cache.evict(binding.tenantId(), binding.userId(), binding.chatSessionId());
+        }
     }
 
     /**
@@ -298,10 +360,16 @@ public class RuntimeBindingApplicationService {
         Object runtimeSessionId = event.payload().get("runtimeSessionId");
         if (runtimeSessionId != null && !String.valueOf(runtimeSessionId).isBlank()) {
             String nextRuntimeSessionId = String.valueOf(runtimeSessionId);
-            if (nextRuntimeSessionId.equals(binding.runtimeSessionId())) {
+            boolean sessionIdChanged = !nextRuntimeSessionId.equals(binding.runtimeSessionId());
+            boolean establishRelaySession = DEFAULT_RUNTIME_PROVIDER.equals(binding.provider())
+                    && (!relaySessionEstablished(binding) || binding.expiresAt() != null);
+            if (!sessionIdChanged && !establishRelaySession) {
                 return binding;
             }
-            return save(binding.withRuntimeSessionId(nextRuntimeSessionId));
+            RuntimeBinding next = sessionIdChanged
+                    ? binding.withRuntimeSessionId(nextRuntimeSessionId)
+                    : binding;
+            return save(markRelaySessionEstablished(next, nextRuntimeSessionId));
         }
         return binding;
     }
@@ -319,20 +387,18 @@ public class RuntimeBindingApplicationService {
     }
 
     private RuntimeBinding withRuntimeSessionId(RuntimeBinding binding, String runtimeSessionId) {
-        if (binding == null || runtimeSessionId == null || runtimeSessionId.isBlank()
-                || runtimeSessionId.equals(binding.runtimeSessionId())) {
+        if (binding == null || runtimeSessionId == null || runtimeSessionId.isBlank()) {
             return binding;
         }
-        return binding.withRuntimeSessionId(runtimeSessionId);
+        RuntimeBinding next = runtimeSessionId.equals(binding.runtimeSessionId())
+                ? binding
+                : binding.withRuntimeSessionId(runtimeSessionId);
+        return markRelaySessionEstablished(next, runtimeSessionId);
     }
 
     private RuntimeBinding save(RuntimeBinding binding) {
         RuntimeBinding saved = repository.save(binding);
-        if (!saved.status().routable()) {
-            cache.evict(saved.tenantId(), saved.userId(), saved.chatSessionId());
-        } else {
-            cache.put(saved);
-        }
+        synchronizeCache(saved);
         return saved;
     }
 
@@ -348,8 +414,48 @@ public class RuntimeBindingApplicationService {
         cache.put(selected);
     }
 
-    private Instant expiresAt() {
-        return Instant.now().plus(ttl);
+    private RuntimeBinding activateResumableForRun(RuntimeBinding binding, String runId, String leafMessageId) {
+        RuntimeBinding next = markRelaySessionEstablished(binding, binding.runtimeSessionId())
+                .withRun(runId, null);
+        if (leafMessageId != null && !leafMessageId.isBlank()
+                && !leafMessageId.equals(next.leafMessageId())) {
+            next = next.withLeafMessageId(leafMessageId);
+        }
+        return save(next);
+    }
+
+    private RuntimeBinding markRelaySessionEstablished(RuntimeBinding binding, String runtimeSessionId) {
+        if (binding == null || !DEFAULT_RUNTIME_PROVIDER.equals(binding.provider())) {
+            return binding;
+        }
+        RuntimeBinding next = binding;
+        if (runtimeSessionId != null && !runtimeSessionId.isBlank()
+                && !runtimeSessionId.equals(next.runtimeSessionId())) {
+            next = next.withRuntimeSessionId(runtimeSessionId);
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>(next.metadata());
+        metadata.put(RUNTIME_SESSION_ESTABLISHED, true);
+        return next.withMetadata(metadata).withExpiresAt(null);
+    }
+
+    private boolean relaySessionEstablished(RuntimeBinding binding) {
+        return binding != null
+                && DEFAULT_RUNTIME_PROVIDER.equals(binding.provider())
+                && (binding.status() == RuntimeBindingStatus.RESUMABLE
+                || Boolean.TRUE.equals(binding.metadata().get(RUNTIME_SESSION_ESTABLISHED)));
+    }
+
+    private Instant expiresAt(String provider, boolean relaySessionEstablished) {
+        return RuntimeBindingExpirationPolicy.expiresAt(ttl,
+                DEFAULT_RUNTIME_PROVIDER.equals(normalizeProvider(provider)) && relaySessionEstablished);
+    }
+
+    private boolean resumableForCurrentProvider(RuntimeBinding binding) {
+        return binding != null
+                && binding.status() == RuntimeBindingStatus.RESUMABLE
+                && runtimeProvider.equals(binding.provider())
+                && binding.runtimeSessionId() != null
+                && !binding.runtimeSessionId().isBlank();
     }
 
     private boolean routableForCurrentProvider(RuntimeBinding binding, Instant now) {

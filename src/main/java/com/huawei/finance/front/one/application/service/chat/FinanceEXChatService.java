@@ -4,6 +4,7 @@ import com.huawei.finance.front.one.application.facade.DocumentFacade;
 import com.huawei.finance.front.one.application.facade.FinanceChatFacade;
 import com.huawei.finance.front.one.application.config.DomainAgentProperties;
 import com.huawei.finance.front.one.application.config.ChatRunOperationalProperties;
+import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeSessionUnavailable;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventAppendRejectedException;
@@ -35,6 +36,7 @@ import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatInteractionRequest;
 import com.huawei.finance.front.one.domain.chat.ChatInteractionType;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.domain.chat.ChatPayloadMaps;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus;
 import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
@@ -1822,6 +1824,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 || "run.cancelled".equals(stored.type()))) {
             chatInteractionService.markWaiting(context.continuationInteractionRequest());
         }
+        if ("run.failed".equals(stored.type()) && runtimeSessionUnavailable(stored.payload())) {
+            bindingRef.set(runtimeBindingService.markNotRoutable(bindingRef.get(),
+                    "RUNTIME_SESSION_UNAVAILABLE"));
+        }
         markExecutionTerminalIfNeeded(stored);
         bindingRef.set(runtimeBindingService.observeEvent(bindingRef.get(), stored));
         chatStreamService.publishPersisted(stored);
@@ -1873,13 +1879,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
     private RuntimeBinding completeBindingAfterRunCompleted(RuntimeBinding binding, String runId,
                                                             String assistantMessageId) {
-        if (binding == null) {
-            return null;
-        }
-        if (!RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider())) {
-            return runtimeBindingService.markNotRoutable(binding, null);
-        }
-        return runtimeBindingService.touchAndMoveToLeaf(binding, runId, assistantMessageId);
+        return runtimeBindingService.completeAfterRun(binding, runId, assistantMessageId);
     }
 
     private ChatEvent commitTerminalOnly(ChatEvent eventToPersist, RunEventPipelineContext context) {
@@ -1901,6 +1901,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private ChatEvent publishCommitted(ChatRunTerminalCommitService.CommitResult result,
                                        RunEventPipelineContext context) {
         context.bindingRef().set(result.binding());
+        runtimeBindingService.synchronizeCache(result.binding());
         chatStreamService.publishPersisted(result.event());
         recordRouteMemoryAfterCommitted(result.event(), context);
         return result.event();
@@ -2156,7 +2157,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 "candidateIntentName", "rejectCode", "rejectMessage",
                 "intentSessionId", "intentRequestId", "originalQuery");
         return new RunWaitingUserEvent(event.runId(), event.sessionId(), event.sequence(),
-                event.createdAt(), Map.copyOf(payload));
+                event.createdAt(), ChatPayloadMaps.immutableCopy(payload));
     }
 
     private void copyIfPresent(Map<String, Object> from, Map<String, Object> to, String... keys) {
@@ -2183,7 +2184,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
             return;
         }
         context.pendingInteractionPayloadRef().compareAndSet(null,
-                stored.payload() == null ? Map.of() : Map.copyOf(stored.payload()));
+                ChatPayloadMaps.immutableCopy(stored.payload()));
     }
 
     private boolean questionnaireApprovalRequest(ChatEvent event) {
@@ -2597,6 +2598,12 @@ public class FinanceEXChatService implements FinanceChatFacade {
             return ErrorEvent.of(runId, sessionId, IntentRoutingFailedException.CODE,
                     IntentRoutingFailedException.USER_MESSAGE, Map.copyOf(payload));
         }
+        if (runtimeSessionUnavailable(ex)) {
+            return ErrorEvent.of(runId, sessionId, "RUNTIME_SESSION_UNAVAILABLE",
+                    ex == null || ex.getMessage() == null || ex.getMessage().isBlank()
+                            ? "Runtime session 不存在或已损坏"
+                            : ex.getMessage());
+        }
         String code = relayWebSocketConfigTimeout(ex)
                 ? "RELAY_WS_CONFIG_TIMEOUT"
                 : isTimeout(ex) ? "RUNTIME_STREAM_TIMEOUT" : "RUN_ERROR";
@@ -2604,6 +2611,22 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 ? "Runtime execution failed"
                 : ex.getMessage();
         return ErrorEvent.of(runId, sessionId, code, message);
+    }
+
+    private boolean runtimeSessionUnavailable(Throwable ex) {
+        Throwable current = ex;
+        while (current != null) {
+            if (current instanceof AgentRuntimeSessionUnavailable) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private boolean runtimeSessionUnavailable(Map<String, Object> payload) {
+        return payload != null
+                && "RUNTIME_SESSION_UNAVAILABLE".equals(String.valueOf(payload.get("code")));
     }
 
     private <T extends Throwable> T findCause(Throwable ex, Class<T> type) {

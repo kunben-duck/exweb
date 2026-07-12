@@ -19,7 +19,7 @@ import java.util.Map;
  *                         收到下游返回的会话 ID 后以其为准。
  * @param status 绑定状态，只用于判断是否继续路由到当前下游。
  * @param lastRunId 最近一次触发该绑定的 SuperAgent runId。
- * @param expiresAt 绑定可作为 active runtime route 的过期时间。
+ * @param expiresAt 绑定可作为 active runtime route 的过期时间；为空表示业务上不过期。
  * @param createdAt 创建时间。
  * @param updatedAt 最近更新时间。
  * @param metadata 扩展诊断信息。
@@ -112,6 +112,17 @@ public record RuntimeBinding(
     public RuntimeBinding withRuntimeSessionId(String nextRuntimeSessionId) {
         return new RuntimeBinding(id, tenantId, userId, chatSessionId, provider, leafMessageId, nextRuntimeSessionId,
                 status, lastRunId, expiresAt, createdAt, Instant.now(), metadata);
+    }
+
+    /**
+     * 更新绑定业务过期时间。
+     *
+     * @param nextExpiresAt 新过期时间；为空表示业务上不过期。
+     * @return 更新后的绑定。
+     */
+    public RuntimeBinding withExpiresAt(Instant nextExpiresAt) {
+        return new RuntimeBinding(id, tenantId, userId, chatSessionId, provider, leafMessageId, runtimeSessionId,
+                status, lastRunId, nextExpiresAt, createdAt, Instant.now(), metadata);
     }
 
     /**

@@ -34,6 +34,6 @@ public record ChatMessagePartDraft(
     }
 
     public ChatMessagePartDraft {
-        payload = payload == null ? Map.of() : Map.copyOf(payload);
+        payload = ChatPayloadMaps.immutableCopy(payload);
     }
 }

@@ -16,6 +16,7 @@ import com.huawei.finance.front.one.domain.runtime.RuntimeBindingStatus;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -77,6 +78,33 @@ class RuntimeBindingApplicationServiceTest {
     }
 
     @Test
+    void missingZeroOrNegativeTtlCreatesNonExpiringBinding() {
+        InMemoryRuntimeBindingRepository zeroRepository = new InMemoryRuntimeBindingRepository();
+        RuntimeBindingApplicationService zeroTtl = service(zeroRepository,
+                new InMemoryRuntimeBindingCache(), Duration.ZERO);
+        RuntimeBindingApplicationService negativeTtl = service(new InMemoryRuntimeBindingRepository(),
+                new InMemoryRuntimeBindingCache(), Duration.ofSeconds(-1));
+        RuntimeBindingApplicationService missingTtl = service(new InMemoryRuntimeBindingRepository(),
+                new InMemoryRuntimeBindingCache(), null);
+
+        assertThat(zeroTtl.create("t", "u", "s", "run-zero").expiresAt()).isNull();
+        assertThat(negativeTtl.create("t", "u", "s", "run-negative").expiresAt()).isNull();
+        assertThat(missingTtl.create("t", "u", "s", "run-missing").expiresAt()).isNull();
+    }
+
+    @Test
+    void positiveTtlKeepsDomainAgentSlidingExpiry() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache(),
+                Duration.ofDays(3));
+
+        RuntimeBinding binding = service.bindDomainAgentForRun(new DomainAgentBindingCommand(
+                "t", "u", "s", "run1", "leaf1", "skill1", "intent", Map.of()));
+
+        assertThat(binding.expiresAt()).isAfter(Instant.now().plus(Duration.ofDays(2)));
+    }
+
+    @Test
     void resolveForRunCreatesNewSessionWhenNoActiveBindingExists() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
         InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
@@ -101,6 +129,60 @@ class RuntimeBindingApplicationServiceTest {
 
         assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
         assertThat(resolution.binding().runtimeSessionId()).isEqualTo("runtime-1");
+    }
+
+    @Test
+    void resolveForRunReactivatesCompletedRelaySessionWithoutExpiry() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        Instant old = Instant.now().minus(Duration.ofDays(30));
+        repository.saved = new RuntimeBinding("binding1", "t", "u", "s", "relay",
+                "leaf1", "runtime-1", RuntimeBindingStatus.RESUMABLE, "run1",
+                null, old, old, Map.of("runtimeSessionEstablished", true));
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        RuntimeBindingResolution resolution = service.resolveForRun("t", "u", "s", "run2", "leaf2");
+
+        assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
+        assertThat(resolution.binding().id()).isEqualTo("binding1");
+        assertThat(resolution.binding().runtimeSessionId()).isEqualTo("runtime-1");
+        assertThat(resolution.binding().status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(resolution.binding().expiresAt()).isNull();
+        assertThat(resolution.binding().lastRunId()).isEqualTo("run2");
+        assertThat(resolution.binding().leafMessageId()).isEqualTo("leaf2");
+    }
+
+    @Test
+    void completedRelayBindingBecomesResumableAndKeepsActualSessionId() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        RuntimeBinding active = binding(RuntimeBindingStatus.ACTIVE).withRuntimeSessionId("runtime-1");
+        repository.saved = active;
+        cache.put(active);
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        RuntimeBinding completed = service.completeAfterRun(active, "run2", "leaf2");
+
+        assertThat(completed.status()).isEqualTo(RuntimeBindingStatus.RESUMABLE);
+        assertThat(completed.runtimeSessionId()).isEqualTo("runtime-1");
+        assertThat(completed.lastRunId()).isEqualTo("run2");
+        assertThat(completed.leafMessageId()).isEqualTo("leaf2");
+        assertThat(completed.expiresAt()).isNull();
+        assertThat(cache.get("t", "u", "s")).isEmpty();
+    }
+
+    @Test
+    void deletingSessionCancelsResumableRelayBinding() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        repository.saved = binding(RuntimeBindingStatus.RESUMABLE)
+                .withRuntimeSessionId("runtime-1")
+                .withExpiresAt(null);
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        service.cancelAllForSession("t", "u", "s");
+
+        assertThat(repository.saved.status()).isEqualTo(RuntimeBindingStatus.CANCELLED);
     }
 
     @Test
@@ -159,7 +241,7 @@ class RuntimeBindingApplicationServiceTest {
     }
 
     @Test
-    void ignoresUnchangedRuntimeSessionId() {
+    void unchangedRuntimeSessionIdStillMarksRelaySessionEstablished() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
         InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
         RuntimeBinding binding = binding(RuntimeBindingStatus.ACTIVE).withRuntimeSessionId("runtime-1");
@@ -168,8 +250,10 @@ class RuntimeBindingApplicationServiceTest {
         RuntimeBinding observed = service.observeEvent(binding,
                 MessageCompletedEvent.of("run", "s", Map.of("runtimeSessionId", "runtime-1")));
 
-        assertThat(observed).isEqualTo(binding);
-        assertThat(repository.saved).isNull();
+        assertThat(observed.runtimeSessionId()).isEqualTo("runtime-1");
+        assertThat(observed.expiresAt()).isNull();
+        assertThat(observed.metadata()).containsEntry("runtimeSessionEstablished", true);
+        assertThat(repository.saved).isEqualTo(observed);
     }
 
     @Test
@@ -205,12 +289,18 @@ class RuntimeBindingApplicationServiceTest {
         assertThat(resumed.lastRunId()).isEqualTo("run-interaction");
         assertThat(resumed.leafMessageId()).isEqualTo("msg-assistant");
         assertThat(resumed.runtimeSessionId()).isEqualTo("runtime-new");
-        assertThat(resumed.expiresAt()).isAfter(binding.expiresAt());
+        assertThat(resumed.expiresAt()).isNull();
+        assertThat(resumed.metadata()).containsEntry("runtimeSessionEstablished", true);
     }
 
     private RuntimeBindingApplicationService service(InMemoryRuntimeBindingRepository repository,
                                                     InMemoryRuntimeBindingCache cache) {
-        return new RuntimeBindingApplicationService(repository, cache, new FixedIdGenerator(), Duration.ofDays(3), "relay");
+        return service(repository, cache, Duration.ofDays(3));
+    }
+
+    private RuntimeBindingApplicationService service(InMemoryRuntimeBindingRepository repository,
+                                                      InMemoryRuntimeBindingCache cache, Duration ttl) {
+        return new RuntimeBindingApplicationService(repository, cache, new FixedIdGenerator(), ttl, "relay");
     }
 
     private RuntimeBinding binding(RuntimeBindingStatus status) {
@@ -249,7 +339,19 @@ class RuntimeBindingApplicationServiceTest {
         @Override
         public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId, String provider) {
             findActiveCalls++;
-            return Optional.ofNullable(saved).filter(binding -> provider.equals(binding.provider()));
+            return Optional.ofNullable(saved)
+                    .filter(binding -> provider.equals(binding.provider()))
+                    .filter(binding -> binding.routableAt(Instant.now()));
+        }
+
+        @Override
+        public List<RuntimeBinding> findResumableBySession(String tenantId, String userId, String sessionId,
+                                                           String provider) {
+            return Optional.ofNullable(saved)
+                    .filter(binding -> provider.equals(binding.provider()))
+                    .filter(binding -> binding.status() == RuntimeBindingStatus.RESUMABLE)
+                    .stream()
+                    .toList();
         }
 
         @Override

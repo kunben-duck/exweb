@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.config.DomainAgentProperties;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
+import com.huawei.finance.front.one.domain.chat.ChatPayloadMaps;
 import com.huawei.finance.front.one.domain.chat.MessageCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.MessageDeltaEvent;
 import com.huawei.finance.front.one.domain.chat.RuntimeEvent;
@@ -348,7 +349,7 @@ public class DomainAgentResponseNormalizer {
         payload.put("contentType", fragment.kind().contentType());
         payload.put("delta", delta);
         payload.put("complete", false);
-        return new RuntimeEvent(runId, sessionId, 0, Instant.now(), fragment.kind().eventType(), Map.copyOf(payload));
+        return new RuntimeEvent(runId, sessionId, 0, Instant.now(), fragment.kind().eventType(), payload);
     }
 
     private List<ChatEvent> completeFragment(String runId, String sessionId, DomainAgentStreamState state) {
@@ -365,7 +366,7 @@ public class DomainAgentResponseNormalizer {
         payload.put("channel", fragment.kind().channel());
         payload.put("complete", true);
         return List.of(new RuntimeEvent(runId, sessionId, 0, Instant.now(),
-                fragment.kind().eventType(), Map.copyOf(payload)));
+                fragment.kind().eventType(), payload));
     }
 
     private List<ChatEvent> normalizeFrame(String runId, String sessionId, String frame, DomainAgentStreamState state) {
@@ -449,19 +450,19 @@ public class DomainAgentResponseNormalizer {
         if ("THINKING".equals(normalized)) {
             payload.put("status", "STARTED");
             putIfPresent(payload, "text", text(root, "stateDesc"));
-            events.add(RuntimeEvent.thinking(runId, sessionId, Map.copyOf(payload)));
+            events.add(RuntimeEvent.thinking(runId, sessionId, payload));
             return;
         }
         if ("GENERATE".equals(normalized)) {
             payload.put("stage", "GENERATE");
             putIfPresent(payload, "text", text(root, "stateDesc"));
-            events.add(RuntimeEvent.progress(runId, sessionId, Map.copyOf(payload)));
+            events.add(RuntimeEvent.progress(runId, sessionId, payload));
             return;
         }
         payload.put("eventKind", "state");
         events.add(RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
                 "domain-agent", normalized, "state", "runtime", "inline", text(root, "stateDesc"),
-                Map.copyOf(payload))));
+                payload)));
     }
 
     private void addStructuredEvents(String runId, String sessionId, JsonNode root, List<ChatEvent> events) {
@@ -508,7 +509,7 @@ public class DomainAgentResponseNormalizer {
                 payload.put("text", text);
             }
         }
-        return Map.copyOf(payload);
+        return payload;
     }
 
     private Map<String, Object> referencePayload(String referenceType, String fieldName, JsonNode value) {
@@ -517,7 +518,7 @@ public class DomainAgentResponseNormalizer {
         payload.put("sourceType", fieldName);
         payload.put("referenceType", referenceType);
         payload.put("references", sanitize(value));
-        return Map.copyOf(payload);
+        return payload;
     }
 
     private Map<String, Object> cardPayload(JsonNode root) {
@@ -537,7 +538,7 @@ public class DomainAgentResponseNormalizer {
         if (root.hasNonNull("cardList")) {
             payload.put("cardList", sanitize(root.get("cardList")));
         }
-        return Map.copyOf(payload);
+        return payload;
     }
 
     private List<String> cardSources(JsonNode root) {
@@ -588,7 +589,7 @@ public class DomainAgentResponseNormalizer {
                 payload.put(key, value);
             }
         });
-        return Map.copyOf(payload);
+        return payload;
     }
 
     private String firstDynamicTitle(JsonNode dynamicResponse) {
@@ -690,7 +691,7 @@ public class DomainAgentResponseNormalizer {
         if (text != null && !text.isBlank()) {
             payload.put("text", text);
         }
-        return RuntimeEvent.thinking(runId, sessionId, Map.copyOf(payload));
+        return RuntimeEvent.thinking(runId, sessionId, payload);
     }
 
     private int indexOfIgnoreCase(String value, String target) {
@@ -721,7 +722,7 @@ public class DomainAgentResponseNormalizer {
                     map.put(entry.getKey(), value);
                 }
             });
-            return Map.copyOf(map);
+            return ChatPayloadMaps.immutableCopy(map);
         }
         if (node.isArray()) {
             List<Object> list = new ArrayList<>();

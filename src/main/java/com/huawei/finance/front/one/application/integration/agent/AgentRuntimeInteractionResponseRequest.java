@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.application.integration.agent;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.huawei.finance.front.one.domain.chat.ChatPayloadMaps;
 import java.util.Map;
 
 /**
@@ -36,7 +37,7 @@ public record AgentRuntimeInteractionResponseRequest(
         @JsonIgnore RuntimeForwardHeaders forwardHeaders
 ) {
     public AgentRuntimeInteractionResponseRequest {
-        responsePayload = responsePayload == null ? Map.of() : Map.copyOf(responsePayload);
+        responsePayload = ChatPayloadMaps.immutableCopy(responsePayload);
         forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
     }
 }

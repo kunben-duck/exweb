@@ -24,6 +24,10 @@ public record MessageSnapshotEvent(
         String content,
         Map<String, Object> payload
 ) implements ChatEvent {
+    public MessageSnapshotEvent {
+        payload = ChatPayloadMaps.immutableCopy(payload);
+    }
+
     public static MessageSnapshotEvent of(String runId, String sessionId, String content) {
         return new MessageSnapshotEvent(runId, sessionId, 0, Instant.now(), content,
                 Map.of("content", content == null ? "" : content));

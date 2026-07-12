@@ -54,8 +54,8 @@ public record ChatInteractionRequest(
         Instant updatedAt
 ) {
     public ChatInteractionRequest {
-        requestPayload = requestPayload == null ? Map.of() : Map.copyOf(requestPayload);
-        responsePayload = responsePayload == null ? Map.of() : Map.copyOf(responsePayload);
+        requestPayload = ChatPayloadMaps.immutableCopy(requestPayload);
+        responsePayload = ChatPayloadMaps.immutableCopy(responsePayload);
         interactionType = interactionType == null ? ChatInteractionType.AGENT_CLARIFICATION : interactionType;
         status = status == null ? ChatInteractionStatus.WAITING : status;
         createdAt = createdAt == null ? Instant.now() : createdAt;

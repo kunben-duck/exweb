@@ -675,7 +675,7 @@ COMMENT ON COLUMN fin_ex_runtime_binding_t.chat_session_id IS '前端聊天会�
 COMMENT ON COLUMN fin_ex_runtime_binding_t.provider IS 'AgentRuntime provider 编码，例如 relay。';
 COMMENT ON COLUMN fin_ex_runtime_binding_t.leaf_message_id IS '该 Runtime 内部会话对应的前端消息树叶子，避免历史编辑后复用错误上下文。';
 COMMENT ON COLUMN fin_ex_runtime_binding_t.runtime_session_id IS 'AgentRuntime 内部会话 ID，用于后续请求续接上下文。';
-COMMENT ON COLUMN fin_ex_runtime_binding_t.status IS '绑定状态，例如 ACTIVE、CANCELLED、EXPIRED。';
+COMMENT ON COLUMN fin_ex_runtime_binding_t.status IS '绑定状态：ACTIVE 可直接续接，RESUMABLE 仅在重新路由到同一 Runtime 时恢复，CANCELLED 不可恢复。';
 COMMENT ON COLUMN fin_ex_runtime_binding_t.last_run_id IS '最近一次使用该绑定的 runId。';
 COMMENT ON COLUMN fin_ex_runtime_binding_t.expires_at IS '绑定过期时间，超过后不再自动续接。';
 COMMENT ON COLUMN fin_ex_runtime_binding_t.metadata_json IS '绑定扩展元数据 JSON，保存 provider 诊断或运行信息。';

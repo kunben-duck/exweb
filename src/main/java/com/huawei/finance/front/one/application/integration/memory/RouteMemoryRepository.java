@@ -14,5 +14,12 @@ public interface RouteMemoryRepository {
 
     List<RouteMemoryItem> findActiveClarifications(String tenantId, String userId, String sessionId);
 
+    /**
+     * 判断当前会话最新一条路由是否为已正常完成的 Relay fallback。
+     *
+     * <p>必须先确定最新 route，再关联其 source run 状态；不能向前回退查找更早的 completed Relay。</p>
+     */
+    boolean latestRouteIsCompletedRelayFallback(String tenantId, String userId, String sessionId);
+
     int foldActiveClarifications(String tenantId, String userId, String sessionId, Instant foldedAt);
 }

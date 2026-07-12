@@ -348,8 +348,50 @@ public class RouteSignalApplicationService {
                 ? new RouteMemoryContext(request.routeTrigger(), List.of(), request.lastRejectReason())
                 : routeMemoryService.loadForIntent(request.user(), request.session().id(),
                 request.routeTrigger(), request.lastRejectReason());
+        context = mergeInlineRouteHistory(context, request.memory());
         return (request.memory() == null ? MemoryContext.empty() : request.memory())
                 .withRouteMemory(mergeInlineClarificationHistory(context, request.command()));
+    }
+
+    private RouteMemoryContext mergeInlineRouteHistory(RouteMemoryContext context, MemoryContext memory) {
+        if (memory == null || memory.routeMemory() == null || memory.routeMemory().history() == null) {
+            return context;
+        }
+        List<Map<String, Object>> inlineRoutes = memory.routeMemory().history().stream()
+                .filter(item -> "route".equals(String.valueOf(item.get("type"))))
+                .toList();
+        if (inlineRoutes.isEmpty()) {
+            return context;
+        }
+        List<Map<String, Object>> history = new java.util.ArrayList<>();
+        if (context != null && context.history() != null) {
+            history.addAll(context.history());
+        }
+        inlineRoutes.stream()
+                .filter(item -> !history.contains(item))
+                .forEach(history::add);
+        trimOldestRoutes(history);
+        return new RouteMemoryContext(
+                context == null ? RouteMemoryApplicationService.TRIGGER_FIRST_TURN : context.routeTrigger(),
+                history,
+                context == null ? Map.of() : context.lastIntentRejectReason());
+    }
+
+    private void trimOldestRoutes(List<Map<String, Object>> history) {
+        int maxRoutes = routeMemoryService == null
+                ? Integer.MAX_VALUE
+                : routeMemoryService.maxRouteHistorySize();
+        int routeCount = (int) history.stream()
+                .filter(item -> "route".equals(String.valueOf(item.get("type"))))
+                .count();
+        for (int index = 0; routeCount > maxRoutes && index < history.size();) {
+            if ("route".equals(String.valueOf(history.get(index).get("type")))) {
+                history.remove(index);
+                routeCount--;
+            } else {
+                index++;
+            }
+        }
     }
 
     private RouteMemoryContext mergeInlineClarificationHistory(RouteMemoryContext context, ChatCommand command) {

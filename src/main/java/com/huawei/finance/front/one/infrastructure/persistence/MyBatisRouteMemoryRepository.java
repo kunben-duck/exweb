@@ -54,6 +54,14 @@ public class MyBatisRouteMemoryRepository implements RouteMemoryRepository {
     }
 
     @Override
+    public boolean latestRouteIsCompletedRelayFallback(String tenantId, String userId, String sessionId) {
+        if (blank(tenantId) || blank(userId) || blank(sessionId)) {
+            return false;
+        }
+        return mapper.latestRouteIsCompletedRelayFallback(tenantId, userId, sessionId);
+    }
+
+    @Override
     public int foldActiveClarifications(String tenantId, String userId, String sessionId, Instant foldedAt) {
         if (blank(tenantId) || blank(userId) || blank(sessionId)) {
             return 0;

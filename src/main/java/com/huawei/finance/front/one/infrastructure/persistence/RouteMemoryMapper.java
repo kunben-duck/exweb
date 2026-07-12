@@ -19,7 +19,7 @@ public interface RouteMemoryMapper {
     int insert(RouteMemoryRow row);
 
     /**
-     * 查询当前会话最近成功路由摘要，用于组装意图服务 conversationContext.history。
+     * 查询当前会话最近已生效路由摘要，用于组装意图服务 conversationContext.history。
      *
      * @param tenantId 租户边界。
      * @param userId 用户边界。
@@ -43,6 +43,18 @@ public interface RouteMemoryMapper {
     List<RouteMemoryRow> findActiveClarifications(@Param("tenantId") String tenantId,
                                                   @Param("userId") String userId,
                                                   @Param("sessionId") String sessionId);
+
+    /**
+     * 判断最新 route 是否为 source run 已正常完成的 Relay fallback。
+     *
+     * @param tenantId 租户边界。
+     * @param userId 用户边界。
+     * @param sessionId 会话边界。
+     * @return 最新 route 是已完成 Relay fallback 时返回 true。
+     */
+    boolean latestRouteIsCompletedRelayFallback(@Param("tenantId") String tenantId,
+                                                 @Param("userId") String userId,
+                                                 @Param("sessionId") String sessionId);
 
     /**
      * 将当前会话未完成的意图澄清记录标记为已折叠。

@@ -1809,6 +1809,64 @@ class FinanceEXChatServiceTest {
     }
 
     @Test
+    void recordsEffectiveRelayRouteBeforeRuntimeAndKeepsItWhenRuntimeFails() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        CapturingRouteMemoryService routeMemory = new CapturingRouteMemoryService();
+        AtomicBoolean recordedBeforeRuntime = new AtomicBoolean();
+        AgentRuntime runtime = new AgentRuntime() {
+            @Override
+            public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                recordedBeforeRuntime.set(routeMemory.routeDecisions.size() == 1);
+                return Flux.error(new IllegalStateException("relay failed after route binding"));
+            }
+
+            @Override
+            public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        RouteSignalApplicationService routeService = new RouteSignalApplicationService(
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                intentAgent((command, memory, routeUser) -> null),
+                new com.huawei.finance.front.one.domain.routing.RoutingPolicy(0.85),
+                new RouteSignalProperties(false, false)) {
+            @Override
+            public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
+                var intent = new com.huawei.finance.front.one.domain.intent.IntentDecision(
+                        "multi_intent", "多意图", com.huawei.finance.front.one.domain.intent.TaskComplexity.COMPLEX,
+                        0.7, false, null, Map.of("routeAction", "ROUTE_MULTI"), List.of(), Map.of());
+                RouteTarget route = RouteTarget.agentRuntime("intent-agent", 0.7, "multiple intents");
+                return Flux.just(RouteSignalFrame.result(RouteSignalResult.ofIntent(route, intent, 5L, 0.0)));
+            }
+        };
+        FinanceEXChatService service = financeServiceWithTerminalCommit(
+                sessions, messages, runs, events, routeService, runtime,
+                new InMemoryExecutionRepository(), new ChatRunOperationalProperties(),
+                new NeverCancelRunCache(), routeMemory);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+
+        StepVerifier.create(service.executeRun(user, new ChatCommand(
+                        "cmd-route-failure", null, null, null, null, "web",
+                        "需要处理一个复杂任务", List.of(), Map.of())).collectList())
+                .assertNext(stream -> assertThat(stream).extracting(ChatEvent::type)
+                        .contains("run.started", "run.failed"))
+                .verifyComplete();
+
+        assertThat(recordedBeforeRuntime).isTrue();
+        assertThat(routeMemory.routeDecisions).singleElement().satisfies(command -> {
+            assertThat(command.query()).isEqualTo("需要处理一个复杂任务");
+            assertThat(command.intent().intentCode()).isEqualTo("relay");
+            assertThat(command.intent().intentName()).isEqualTo("no_match");
+            assertThat(command.intent().slots()).containsEntry("routeAction", "ROUTE_MULTI");
+        });
+        assertThat(runs.runs.values()).singleElement()
+                .satisfies(run -> assertThat(run.status()).isEqualTo(ChatRunStatus.FAILED));
+    }
+
+    @Test
     void invalidTargetTypeFailsBeforeWritingUserMessageOrRun() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
@@ -2748,6 +2806,20 @@ class FinanceEXChatServiceTest {
                                                                    InMemoryExecutionRepository executions,
                                                                    ChatRunOperationalProperties runProperties,
                                                                    ChatRunCache runCache) {
+        return financeServiceWithTerminalCommit(sessions, messages, runs, events, routeService, runtime,
+                executions, runProperties, runCache, null);
+    }
+
+    private FinanceEXChatService financeServiceWithTerminalCommit(InMemorySessionRepository sessions,
+                                                                   InMemoryMessageRepository messages,
+                                                                   InMemoryRunRepository runs,
+                                                                   InMemoryEventStore events,
+                                                                   RouteSignalApplicationService routeService,
+                                                                   AgentRuntime runtime,
+                                                                   InMemoryExecutionRepository executions,
+                                                                   ChatRunOperationalProperties runProperties,
+                                                                   ChatRunCache runCache,
+                                                                   RouteMemoryApplicationService routeMemoryService) {
         IdGenerator ids = new FixedIdGenerator();
         PermissionChecker permissionChecker = new PermissionChecker();
         WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
@@ -2799,7 +2871,7 @@ class FinanceEXChatServiceTest {
                 ids,
                 reactor.core.scheduler.Schedulers.boundedElastic(),
                 new com.huawei.finance.front.one.application.config.DomainAgentProperties(),
-                null,
+                routeMemoryService,
                 runProperties
         );
     }
@@ -3311,6 +3383,19 @@ class FinanceEXChatServiceTest {
                 throw new IllegalStateException("message db down");
             }
             return super.save(message);
+        }
+    }
+
+    private static final class CapturingRouteMemoryService extends RouteMemoryApplicationService {
+        private final List<RouteMemoryRouteCommand> routeDecisions = new CopyOnWriteArrayList<>();
+
+        private CapturingRouteMemoryService() {
+            super(null, null, null);
+        }
+
+        @Override
+        public void recordRouteDecision(RouteMemoryRouteCommand command) {
+            routeDecisions.add(command);
         }
     }
 

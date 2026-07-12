@@ -65,7 +65,7 @@ Authorization: {dynamicToken}
 | --- | --- | --- | --- |
 | `routeTrigger` | string | 否 | 触发重新分流的原因。 |
 | `lastIntentRejectReason` | object | 否 | 上一个跳出的意图及拒答原因。仅传当前这次拒答，不累计历史拒答噪音。 |
-| `history` | array | 否 | 历史成功路由记录和未完成的澄清链路，按时间从早到晚排列。 |
+| `history` | array | 否 | 历史已生效路由记录和未完成的澄清链路，按时间从早到晚排列。 |
 
 ### 2.3 routeTrigger 枚举
 
@@ -84,7 +84,7 @@ Authorization: {dynamicToken}
 
 `conversationContext.history` 只放在线路由需要的摘要，默认取最新 TopK。完整链路、原始问题和澄清过程应保存在 ChatService 审计日志或消息历史中。
 
-### 3.1 成功路由记录
+### 3.1 已生效路由记录
 
 ```json
 {
@@ -97,7 +97,7 @@ Authorization: {dynamicToken}
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `type` | string | 固定为 `route`。 |
-| `query` | string | 当时成功路由的用户问题。 |
+| `query` | string | 当时产生路由决策的用户问题。 |
 | `intent` | string | 当时命中的意图或 DomainAgent 名称。 |
 
 ### 3.2 澄清过程记录
@@ -259,7 +259,7 @@ Authorization: {dynamicToken}
 
 - `lastIntentRejectReason` 只放当前这一次拒答。
 - 前几轮拒答不进入 `lastIntentRejectReason`，避免放大噪声。
-- 历史成功路由放入 `history.type=route`。
+- 历史已生效路由放入 `history.type=route`。ChatService 以目标 binding 成功持久化为记录边界，不等待任务执行完成。
 
 ### 5.3 意图澄清回答
 

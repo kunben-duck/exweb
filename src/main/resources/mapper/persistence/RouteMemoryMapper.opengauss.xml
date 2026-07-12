@@ -50,7 +50,7 @@
     </insert>
 
     <!--
-      查询会话最近成功路由摘要，供意图服务 conversationContext.history 使用。
+      查询会话最近已生效路由摘要，供意图服务 conversationContext.history 使用。
       入参: tenantId/userId/sessionId 为归属边界，limit 为 TopK 限制；按创建时间倒序返回。
     -->
     <select id="findRecentRoutes" resultMap="routeMemoryResultMap">
@@ -78,6 +78,39 @@
           AND item_type = 'CLARIFY'
           AND status = 'ACTIVE'
         ORDER BY created_at ASC
+    </select>
+
+    <!--
+      先选出当前会话最新一条 route，再检查其 source run 是否正常完成且目标为 Relay。
+      不能在 WHERE 中先过滤 COMPLETED，否则会错误回退到更早的 Relay route。
+      入参: tenantId/userId/sessionId 为归属边界。
+    -->
+    <select id="latestRouteIsCompletedRelayFallback" resultType="boolean">
+        SELECT CASE WHEN EXISTS (
+            SELECT 1
+            FROM (
+                SELECT intent_id, intent_name, domain_agent_id, source_run_id
+                FROM fin_ex_route_memory_t
+                WHERE tenant_id = #{tenantId}
+                  AND user_id = #{userId}
+                  AND session_id = #{sessionId}
+                  AND item_type = 'ROUTE'
+                  AND status = 'ACTIVE'
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+            ) latest
+            JOIN fin_ex_chat_run_t r
+              ON r.id = latest.source_run_id
+             AND r.tenant_id = #{tenantId}
+             AND r.user_id = #{userId}
+             AND r.session_id = #{sessionId}
+            WHERE r.status = 'COMPLETED'
+              AND latest.domain_agent_id IS NULL
+              AND (
+                    LOWER(COALESCE(latest.intent_id, '')) = 'relay'
+                 OR LOWER(COALESCE(latest.intent_name, '')) = 'no_match'
+              )
+        ) THEN TRUE ELSE FALSE END
     </select>
 
     <!--

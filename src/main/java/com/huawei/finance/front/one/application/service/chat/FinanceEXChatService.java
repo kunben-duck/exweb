@@ -56,6 +56,7 @@ import com.huawei.finance.front.one.domain.chat.RunWaitingUserEvent;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
 import com.huawei.finance.front.one.domain.intent.TaskComplexity;
 import com.huawei.finance.front.one.domain.memory.MemoryContext;
+import com.huawei.finance.front.one.domain.memory.RouteMemoryContext;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import com.huawei.finance.front.one.domain.routing.RouteTarget;
 import com.huawei.finance.front.one.domain.routing.RouteType;
@@ -763,7 +764,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     routeAndExecute(new RoutePipelineRequest(
                             user, session, command, List.of(), List.of(), memory, runId,
                             interaction.assistantMessageId(), forwardHeaders, routeRef, bindingRef,
-                            runtimeSessionModeRef, executionClaim, run))));
+                            runtimeSessionModeRef, executionClaim, run,
+                            routeMemoryQuery(messagePlan, interaction)))));
         } catch (RuntimeException ex) {
             return failInteractionContinuationRun(context, ex);
         }
@@ -827,16 +829,22 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 bestEffortBindResolvedRoute(runId, route, binding);
                 Flux<ChatEvent> body;
                 if (approved) {
+                    IntentDecision switchIntent = domainAgentSwitchIntent(interaction, candidateDomainAgentId);
+                    MemoryContext runtimeMemory = recordAppliedRouteDecision(new AppliedRouteDecisionContext(
+                            user, session.id(), runId, routeMemoryQuery(messagePlan, interaction),
+                            switchIntent, route, binding, MemoryContext.empty()));
                     ChatCommand command = new ChatCommand(null, user.tenantId(), user.ownerUserId(), session.id(), null,
                             null, originalQuery == null ? "" : originalQuery, List.of(), Map.of(),
                             "DOMAIN_AGENT", candidateDomainAgentId, ChatRunMode.NEXT,
                             interaction.assistantMessageId(), null, null);
                     DomainAgentRunContext domainContext = new DomainAgentRunContext(
-                            command, runId, session, MemoryContext.empty(), route, user, routeRef, bindingRef,
-                            executionClaim, forwardHeaders, null, List.of(), new HashSet<>(), 0);
+                            command, runId, session, runtimeMemory, route, user, routeRef, bindingRef,
+                            executionClaim, forwardHeaders, switchIntent, List.of(), new HashSet<>(), 0,
+                            routeMemoryQuery(messagePlan, interaction));
                     body = requireCurrentOwnerRunning(executionClaim, "before-domain-agent-switch-runtime")
                             .thenMany(Flux.defer(() -> executeDomainAgentWithReroute(domainContext)));
                 } else {
+                    foldRouteClarificationsWithoutDecision(user, session.id());
                     body = Flux.just(domainAgentSwitchDeclinedEvent(runId, session.id(), interaction));
                 }
                 return Flux.concat(Flux.just(responseEvent), body);
@@ -973,7 +981,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                             routeRef, bindingRef, runtimeSessionModeRef));
                     return routeAndExecute(new RoutePipelineRequest(
                             user, session, runCommand, attachments, documents, memory, runId, runtimeBindingLeafId,
-                            headerSnapshot, routeRef, bindingRef, runtimeSessionModeRef, executionClaim, run));
+                            headerSnapshot, routeRef, bindingRef, runtimeSessionModeRef, executionClaim, run,
+                            routeMemoryQuery(messagePlan, null)));
                 });
             } catch (RuntimeException ex) {
                 // run 已创建后同步步骤失败时，也必须写入 run.failed 并释放 active run，避免前端看到永远 RUNNING。
@@ -1043,6 +1052,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         Set<String> rejected = new HashSet<>(context.rejectedDomainAgentIds());
         rejected.add(currentDomainAgentId);
         if (context.rerouteCount() >= domainAgentProperties.normalizedMaxReroutes()) {
+            foldRouteClarificationsWithoutDecision(context.user(), context.session().id());
             return Flux.just(domainAgentRerouteMetadata(context, refusal, null, "MAX_REROUTES_REACHED"));
         }
         ChatCommand rerouteCommand = commandWithDomainRejectContext(context.command(), currentDomainAgentId, refusal);
@@ -1080,6 +1090,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
             context.bindingRef().set(runtimeBindingService.markNotRoutable(
                     context.bindingRef().get(), refusal.code()));
             recordIntentIfPresent(context, nextSignal.intentDecision(), null);
+            foldRouteClarificationsWithoutDecision(context.user(), context.session().id());
             return Flux.error(new IntentRoutingFailedException(nextSignal.intentFailureReason()));
         }
         if (nextRoute != null && nextRoute.type() == RouteType.AGENT_RUNTIME) {
@@ -1095,6 +1106,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
             context.bindingRef().set(resolution.binding());
             context.routeRef().set(nextRoute);
             bestEffortBindResolvedRoute(context.runId(), nextRoute, resolution.binding());
+            MemoryContext runtimeMemory = recordAppliedRouteDecision(new AppliedRouteDecisionContext(
+                    context.user(), context.session().id(), context.runId(), context.routeMemoryQuery(),
+                    nextSignal.intentDecision(), nextRoute, resolution.binding(), context.memory()));
             String action = nextSignal.intentFailure() ? "RELAY_FALLBACK" : "ROUTE_TO_RELAY";
             return Flux.concat(
                     Flux.just(domainAgentRerouteMetadata(context, refusal, nextRoute, action)),
@@ -1102,7 +1116,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                             .thenMany(Flux.defer(() -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
                                     context.command(),
                                     context.runId(),
-                                    context.memory(),
+                                    runtimeMemory,
                                     nextSignal.intentDecision(),
                                     nextRoute,
                                     context.user(),
@@ -1114,6 +1128,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         if (nextRoute == null || nextRoute.type() != RouteType.DOMAIN_AGENT
                 || nextRoute.selectedAgentCode() == null || nextRoute.selectedAgentCode().isBlank()
                 || reroute.rejectedDomainAgentIds().contains(nextRoute.selectedAgentCode())) {
+            foldRouteClarificationsWithoutDecision(context.user(), context.session().id());
             return Flux.just(domainAgentRerouteMetadata(context, refusal, nextRoute, "NO_AVAILABLE_DOMAIN_AGENT"));
         }
         recordIntentIfPresent(context, nextSignal.intentDecision(), nextRoute);
@@ -1135,11 +1150,14 @@ public class FinanceEXChatService implements FinanceChatFacade {
         context.bindingRef().set(nextBinding);
         context.routeRef().set(nextRoute);
         bestEffortBindResolvedRoute(context.runId(), nextRoute, nextBinding);
+        MemoryContext runtimeMemory = recordAppliedRouteDecision(new AppliedRouteDecisionContext(
+                context.user(), context.session().id(), context.runId(), context.routeMemoryQuery(),
+                nextSignal.intentDecision(), nextRoute, nextBinding, context.memory()));
         DomainAgentRunContext nextContext = new DomainAgentRunContext(
                 context.command(),
                 context.runId(),
                 context.session(),
-                context.memory(),
+                runtimeMemory,
                 nextRoute,
                 context.user(),
                 context.routeRef(),
@@ -1149,7 +1167,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 nextSignal.intentDecision(),
                 context.documents(),
                 reroute.rejectedDomainAgentIds(),
-                context.rerouteCount() + 1);
+                context.rerouteCount() + 1,
+                context.routeMemoryQuery());
         return Flux.concat(
                 Flux.just(domainAgentRerouteMetadata(context, refusal, nextRoute, "AUTO_SWITCH")),
                 requireCurrentOwnerRunning(context.executionClaim(), "before-domain-agent-reroute-runtime")
@@ -1172,7 +1191,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 nextSignal.intentDecision() == null ? null : nextSignal.intentDecision().intentName());
         putIfNotNull(payload, "rejectCode", refusal.code());
         putIfNotNull(payload, "rejectMessage", refusal.message());
-        putIfNotNull(payload, "originalQuery", context.command().message());
+        putIfNotNull(payload, "originalQuery", firstText(context.routeMemoryQuery(), context.command().message()));
         payload.put("routeSource", "front-selected");
         putIfNotNull(payload, "candidateRouteSource", candidate.routeSource());
         return RuntimeEvent.card(context.runId(), context.session().id(), payload);
@@ -1599,6 +1618,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private Flux<ChatEvent> executeResolvedRoute(RoutePipelineRequest request, RouteSignalResult routeSignal) {
         if (routeSignal != null && routeSignal.failRunOnIntentFailure()) {
             recordIntentSignal(request.user(), request.runCommand(), request.run().id(), routeSignal, null);
+            foldRouteClarificationsWithoutDecision(request.user(), request.session().id());
             return Flux.error(new IntentRoutingFailedException(routeSignal.intentFailureReason()));
         }
         RouteExecutionResolution resolution = resolveRouteForRun(new RouteResolutionRequest(
@@ -1624,17 +1644,20 @@ public class FinanceEXChatService implements FinanceChatFacade {
             return intentClarificationWaitingBody(request.runId(), request.session().id(),
                     resolution.intentClarificationPayload());
         }
+        MemoryContext runtimeMemory = recordAppliedRouteDecision(new AppliedRouteDecisionContext(
+                request.user(), request.session().id(), request.runId(), request.routeMemoryQuery(),
+                resolution.intent(), resolution.route(), resolution.binding(), request.memory()));
         return requireCurrentOwnerRunning(request.executionClaim(), "before-runtime")
                 .thenMany(Flux.defer(() -> switch (resolution.route().type()) {
                     case DOMAIN_AGENT -> executeDomainAgentWithReroute(new DomainAgentRunContext(
-                            request.runCommand(), request.runId(), request.session(), request.memory(),
+                            request.runCommand(), request.runId(), request.session(), runtimeMemory,
                             resolution.route(), request.user(), request.routeRef(), request.bindingRef(),
                             request.executionClaim(), request.forwardHeaders(), resolution.intent(), request.documents(),
-                            new HashSet<>(), 0));
+                            new HashSet<>(), 0, request.routeMemoryQuery()));
                     case SYSTEM_RESPONSE -> systemResponseExecutor.execute(request.runCommand(), request.runId(),
                             resolution.intent(), resolution.route());
                     case AGENT_RUNTIME -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
-                            request.runCommand(), request.runId(), request.memory(), resolution.intent(),
+                            request.runCommand(), request.runId(), runtimeMemory, resolution.intent(),
                             resolution.route(), request.user(), request.bindingRef().get(),
                             resolution.runtimeSessionMode(), request.forwardHeaders(), request.documents()));
                 }));
@@ -1649,6 +1672,79 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     route == null || route.type() == null ? null : route.type().name(),
                     route == null ? null : route.selectedAgentCode(),
                     ex.getMessage());
+        }
+    }
+
+    private MemoryContext recordAppliedRouteDecision(AppliedRouteDecisionContext decision) {
+        MemoryContext currentMemory = decision.memory() == null ? MemoryContext.empty() : decision.memory();
+        if (routeMemoryService == null || decision.binding() == null
+                || !routeMemoryService.isNewRouteDecision(decision.route())) {
+            return currentMemory;
+        }
+        try {
+            IntentDecision routeMemoryIntent = normalizedRouteMemoryIntent(decision.intent(), decision.route());
+            RouteMemoryApplicationService.RouteMemoryRouteCommand command =
+                    new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                            decision.user(), decision.sessionId(), decision.runId(),
+                            blankToDefault(decision.query(), ""), routeMemoryIntent, decision.route());
+            routeMemoryService.recordRouteDecision(command);
+            Map<String, Object> historyItem = routeMemoryService.routeHistory(command);
+            return appendInlineRouteHistory(currentMemory, historyItem);
+        } catch (RuntimeException ex) {
+            log.warn("RouteMemory route decision scheduling failed and was ignored. runId={}, routeType={}, agentCode={}, reason={}",
+                    decision.runId(),
+                    decision.route() == null || decision.route().type() == null
+                            ? null : decision.route().type().name(),
+                    decision.route() == null ? null : decision.route().selectedAgentCode(),
+                    ex.getMessage());
+            return currentMemory;
+        }
+    }
+
+    private IntentDecision normalizedRouteMemoryIntent(IntentDecision intent, RouteTarget route) {
+        if (route == null || route.type() != RouteType.AGENT_RUNTIME) {
+            return intent;
+        }
+        String routeAction = firstText(
+                intent == null || intent.slots() == null ? null : intent.slots().get("routeAction"),
+                intent == null || intent.raw() == null ? null : intent.raw().get("routeAction"),
+                "NO_MATCH");
+        Map<String, Object> slots = Map.of("routeAction", routeAction);
+        return new IntentDecision("relay", "no_match", TaskComplexity.COMPLEX, 0.0,
+                false, null, slots, List.of(),
+                Map.of("targetProvider", "relay", "routeAction", routeAction));
+    }
+
+    private MemoryContext appendInlineRouteHistory(MemoryContext memory, Map<String, Object> historyItem) {
+        if (historyItem == null || historyItem.isEmpty()) {
+            return memory;
+        }
+        RouteMemoryContext current = memory.routeMemory() == null
+                ? RouteMemoryContext.empty()
+                : memory.routeMemory();
+        List<Map<String, Object>> history = new java.util.ArrayList<>(current.history());
+        if (!history.contains(historyItem)) {
+            history.add(historyItem);
+        }
+        return memory.withRouteMemory(new RouteMemoryContext(
+                current.routeTrigger(), history, current.lastIntentRejectReason()));
+    }
+
+    private IntentDecision domainAgentSwitchIntent(ChatInteractionRequest interaction, String domainAgentId) {
+        Map<String, Object> requestPayload = interaction == null || interaction.requestPayload() == null
+                ? Map.of()
+                : interaction.requestPayload();
+        String intentCode = firstText(requestPayload.get("candidateIntentCode"), domainAgentId);
+        String intentName = firstText(requestPayload.get("candidateIntentName"), domainAgentId);
+        return new IntentDecision(intentCode, intentName, TaskComplexity.SIMPLE, 1.0,
+                true, domainAgentId,
+                Map.of("routeAction", "ROUTE_SINGLE", "accessName", blankToDefault(domainAgentId, "")),
+                List.of(), Map.of());
+    }
+
+    private void foldRouteClarificationsWithoutDecision(UserContext user, String sessionId) {
+        if (routeMemoryService != null) {
+            routeMemoryService.completeWithoutRoute(user, sessionId);
         }
     }
 
@@ -1913,81 +2009,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         }
         if ("run.waiting_user".equals(stored.type())) {
             recordIntentClarificationAfterWaiting(stored, context);
-            return;
         }
-        if (!"run.completed".equals(stored.type())) {
-            return;
-        }
-        /*
-         * RouteMemory 是后续意图的上下文增强。只有本轮 run 已经成功闭合后才折叠澄清链、
-         * 写入成功 route，避免 run 失败或等待确认时污染下一轮路由历史。
-         */
-        RouteTarget completedRoute = context.routeRef() == null ? null : context.routeRef().get();
-        RuntimeBinding binding = context.bindingRef().get();
-        if (completedRoute != null && completedRoute.type() == RouteType.AGENT_RUNTIME) {
-            routeMemoryService.completeRoute(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
-                    context.user(), context.session().id(), context.runId(), routeMemoryQuery(context),
-                    relayRouteMemoryIntent(context),
-                    completedRoute));
-            return;
-        }
-        if (binding == null || !RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider())) {
-            if (binding != null && !RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider())) {
-                routeMemoryService.completeRoute(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
-                        context.user(), context.session().id(), context.runId(), routeMemoryQuery(context),
-                        relayRouteMemoryIntent(context),
-                        RouteTarget.agentRuntime(blankToDefault(binding.provider(), "relay"), 1.0,
-                                "completed relay route")));
-                return;
-            }
-            routeMemoryService.completeWithoutRoute(context.user(), context.session().id());
-            return;
-        }
-        if (hasDomainAgentRefusalWithoutSuccessfulSwitch(context)) {
-            routeMemoryService.completeWithoutRoute(context.user(), context.session().id());
-            return;
-        }
-        String domainAgentId = firstText(domainAgentId(binding), completedRoute == null ? null : completedRoute.selectedAgentCode());
-        if (domainAgentId == null || domainAgentId.isBlank()) {
-            routeMemoryService.completeWithoutRoute(context.user(), context.session().id());
-            return;
-        }
-        RouteTarget route = RouteTarget.domainAgent(domainAgentId,
-                blankToDefault(routeSource(binding), completedRoute == null ? "domain-agent" : completedRoute.routeSource()),
-                completedRoute == null ? 1.0 : completedRoute.score(),
-                "completed domain agent route");
-        routeMemoryService.completeRoute(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
-                context.user(), context.session().id(), context.runId(), routeMemoryQuery(context), null, route));
-    }
-
-    private IntentDecision relayRouteMemoryIntent(RunEventPipelineContext context) {
-        String routeAction = blankToDefault(latestIntentRouteAction(context), "NO_MATCH");
-        Map<String, Object> slots = Map.of("routeAction", routeAction);
-        return new IntentDecision("relay", "no_match", TaskComplexity.COMPLEX, 0.0,
-                false, null, slots, List.of(), Map.of("targetProvider", "relay", "routeAction", routeAction));
-    }
-
-    private String latestIntentRouteAction(RunEventPipelineContext context) {
-        if (context == null || context.assistant() == null) {
-            return null;
-        }
-        List<com.huawei.finance.front.one.domain.chat.ChatMessagePartDraft> parts = context.assistant().parts();
-        for (int i = parts.size() - 1; i >= 0; i--) {
-            Map<String, Object> payload = parts.get(i).payload();
-            if ("intent-agent".equals(String.valueOf(payload.get("source")))
-                    && "intent-result".equals(String.valueOf(payload.get("sourceType")))) {
-                return firstText(payload.get("routeAction"));
-            }
-        }
-        return null;
-    }
-
-    private boolean hasDomainAgentRefusalWithoutSuccessfulSwitch(RunEventPipelineContext context) {
-        if (context == null || context.assistant() == null) {
-            return false;
-        }
-        return context.assistant().parts().stream()
-                .anyMatch(part -> "DOMAIN_AGENT_REFUSAL".equals(part.partType()));
     }
 
     private void recordIntentClarificationAfterWaiting(ChatEvent stored, RunEventPipelineContext context) {
@@ -2004,19 +2026,17 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 interactionId == null ? null : String.valueOf(interactionId), requestPayload);
     }
 
-    private String routeMemoryQuery(RunEventPipelineContext context) {
-        if (context == null || context.messagePlan() == null || context.messagePlan().userMessage() == null) {
+    private String routeMemoryQuery(ChatRunMessagePlan messagePlan, ChatInteractionRequest interaction) {
+        if (messagePlan == null || messagePlan.userMessage() == null) {
             return "";
         }
-        if (context.continuationInteractionRequest() != null
-                && context.continuationInteractionRequest().interactionType() == ChatInteractionType.INTENT_CLARIFICATION) {
-            String folded = foldedIntentClarificationQuery(context.continuationInteractionRequest(),
-                    context.messagePlan().userMessage().content());
+        if (interaction != null && interaction.interactionType() == ChatInteractionType.INTENT_CLARIFICATION) {
+            String folded = foldedIntentClarificationQuery(interaction, messagePlan.userMessage().content());
             if (folded != null && !folded.isBlank()) {
                 return folded;
             }
         }
-        String content = context.messagePlan().userMessage().content();
+        String content = messagePlan.userMessage().content();
         return content == null ? "" : content;
     }
 
@@ -2368,6 +2388,18 @@ public class FinanceEXChatService implements FinanceChatFacade {
     ) {
     }
 
+    private record AppliedRouteDecisionContext(
+            UserContext user,
+            String sessionId,
+            String runId,
+            String query,
+            IntentDecision intent,
+            RouteTarget route,
+            RuntimeBinding binding,
+            MemoryContext memory
+    ) {
+    }
+
     private record RoutePipelineRequest(
             UserContext user,
             ChatSession session,
@@ -2382,7 +2414,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
             AtomicReference<RuntimeBinding> bindingRef,
             AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
             RunExecutionClaim executionClaim,
-            ChatRun run
+            ChatRun run,
+            String routeMemoryQuery
     ) {
     }
 
@@ -2414,7 +2447,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
             IntentDecision intentDecision,
             List<UploadedDocument> documents,
             Set<String> rejectedDomainAgentIds,
-            int rerouteCount
+            int rerouteCount,
+            String routeMemoryQuery
     ) {
     }
 

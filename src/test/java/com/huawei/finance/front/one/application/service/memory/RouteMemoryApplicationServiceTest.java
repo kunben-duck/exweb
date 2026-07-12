@@ -19,8 +19,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -65,12 +67,12 @@ class RouteMemoryApplicationServiceTest {
     }
 
     @Test
-    void completeRouteFoldsClarificationsAndAppendsRouteInOneWriteTask() {
+    void recordRouteDecisionFoldsClarificationsAndAppendsRouteInOneWriteTask() {
         service.appendClarification(user, "session1", "run2", "interaction1", Map.of(
                 "originalQuery", "看下方案",
                 "clarifyQuestion", "你想看处理方案还是项目方案？"));
 
-        service.completeRoute(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+        service.recordRouteDecision(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
                 user, "session1", "run3", "用户澄清后的问题",
                 intent("intent_b", "财经问数"),
                 RouteTarget.domainAgent("skill_b", "intent-agent", 1.0, "accepted")));
@@ -86,11 +88,11 @@ class RouteMemoryApplicationServiceTest {
     }
 
     @Test
-    void completeRouteCanRecordRelayNoMatchRoute() {
+    void recordRouteDecisionCanRecordRelayNoMatchRoute() {
         IntentDecision relayIntent = new IntentDecision("relay", "no_match", TaskComplexity.COMPLEX, 0.0,
                 false, null, Map.of("routeAction", "ROUTE_MULTI"), List.of(), Map.of());
 
-        service.completeRoute(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+        service.recordRouteDecision(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
                 user, "session1", "run-relay", "复杂任务问题",
                 relayIntent,
                 RouteTarget.agentRuntime("intent-agent", 0.0, "route to relay")));
@@ -105,12 +107,29 @@ class RouteMemoryApplicationServiceTest {
         assertThat(route.payload())
                 .containsEntry("targetProvider", "relay")
                 .containsEntry("routeAction", "ROUTE_MULTI");
+        assertThat(service.latestRouteIsRelayFallback(user, "session1")).isFalse();
+        repository.markRunCompleted("run-relay");
         assertThat(service.latestRouteIsRelayFallback(user, "session1")).isTrue();
 
         RouteMemoryContext context = service.loadForIntent(user, "session1",
                 "fallback_followup", Map.of());
         assertThat(context.history()).containsExactly(
                 Map.of("type", "route", "query", "复杂任务问题", "intent", "no_match"));
+    }
+
+    @Test
+    void doesNotRecordBindingOrInteractionContinuationAsNewRoutes() {
+        service.recordRouteDecision(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                user, "session1", "run-binding", "绑定后的追问", null,
+                RouteTarget.domainAgent("skill_a", "runtime-binding", 1.0,
+                        "active domain agent binding")));
+        service.recordRouteDecision(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                user, "session1", "run-interaction", "Agent 澄清回答", null,
+                RouteTarget.agentRuntime("interaction-continuation", 1.0,
+                        "continue waiting user input")));
+
+        assertThat(repository.items).noneMatch(item -> item.itemType() == RouteMemoryItemType.ROUTE);
+        assertThat(service.loadForIntent(user, "session1", "user_correction", Map.of()).history()).isEmpty();
     }
 
     @Test
@@ -124,6 +143,28 @@ class RouteMemoryApplicationServiceTest {
         assertThat(repository.operations).contains("fold");
         assertThat(repository.items).noneMatch(item -> item.itemType() == RouteMemoryItemType.ROUTE);
         assertThat(repository.findActiveClarifications("tenant1", "user1", "session1")).isEmpty();
+    }
+
+    @Test
+    void latestRelayRouteMustBelongToCompletedRun() {
+        IntentDecision relayIntent = new IntentDecision("relay", "no_match", TaskComplexity.COMPLEX, 0.0,
+                false, null, Map.of("routeAction", "NO_MATCH"), List.of(), Map.of());
+        service.recordRouteDecision(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                user, "failed-session", "run-failed", "失败的复杂任务", relayIntent,
+                RouteTarget.agentRuntime("intent-agent", 0.0, "route to relay")));
+
+        assertThat(service.latestRouteIsRelayFallback(user, "failed-session")).isFalse();
+
+        service.recordRouteDecision(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                user, "latest-session", "run-relay-completed", "先走 Relay", relayIntent,
+                RouteTarget.agentRuntime("intent-agent", 0.0, "route to relay")));
+        repository.markRunCompleted("run-relay-completed");
+        service.recordRouteDecision(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                user, "latest-session", "run-domain", "后来走技能", intent("intent_b", "财经问数"),
+                RouteTarget.domainAgent("skill_b", "intent-agent", 1.0, "route to domain")));
+        repository.markRunCompleted("run-domain");
+
+        assertThat(service.latestRouteIsRelayFallback(user, "latest-session")).isFalse();
     }
 
     @Test
@@ -168,6 +209,11 @@ class RouteMemoryApplicationServiceTest {
                 user, "session1", "run1", "query", null,
                 RouteTarget.domainAgent("agent_a", "intent-agent", 1.0, "ok"))))
                 .doesNotThrowAnyException();
+        assertThatCode(() -> failingService.recordRouteDecision(
+                new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                        user, "session1", "run1", "query", null,
+                        RouteTarget.domainAgent("agent_a", "intent-agent", 1.0, "ok"))))
+                .doesNotThrowAnyException();
         assertThatCode(() -> failingService.appendClarification(user, "session1", "run2", "interaction1",
                 Map.of("originalQuery", "query", "clarifyQuestion", "question")))
                 .doesNotThrowAnyException();
@@ -193,6 +239,7 @@ class RouteMemoryApplicationServiceTest {
     private static class InMemoryRouteMemoryRepository implements RouteMemoryRepository {
         private final List<RouteMemoryItem> items = new ArrayList<>();
         private final List<String> operations = new ArrayList<>();
+        private final Set<String> completedRunIds = new HashSet<>();
 
         @Override
         public RouteMemoryItem save(RouteMemoryItem item) {
@@ -220,6 +267,17 @@ class RouteMemoryApplicationServiceTest {
                     .filter(item -> item.status() == RouteMemoryItemStatus.ACTIVE)
                     .sorted(Comparator.comparing(RouteMemoryItem::createdAt))
                     .toList();
+        }
+
+        @Override
+        public boolean latestRouteIsCompletedRelayFallback(String tenantId, String userId, String sessionId) {
+            return findRecentRoutes(tenantId, userId, sessionId, 1).stream()
+                    .findFirst()
+                    .filter(item -> completedRunIds.contains(item.sourceRunId()))
+                    .filter(item -> item.domainAgentId() == null)
+                    .map(item -> "relay".equalsIgnoreCase(item.intentId())
+                            || "no_match".equalsIgnoreCase(item.intentName()))
+                    .orElse(false);
         }
 
         @Override
@@ -251,6 +309,10 @@ class RouteMemoryApplicationServiceTest {
                     && userId.equals(item.userId())
                     && sessionId.equals(item.sessionId());
         }
+
+        private void markRunCompleted(String runId) {
+            completedRunIds.add(runId);
+        }
     }
 
     private static class FailingRouteMemoryRepository implements RouteMemoryRepository {
@@ -266,6 +328,11 @@ class RouteMemoryApplicationServiceTest {
 
         @Override
         public List<RouteMemoryItem> findActiveClarifications(String tenantId, String userId, String sessionId) {
+            throw new IllegalStateException("route memory down");
+        }
+
+        @Override
+        public boolean latestRouteIsCompletedRelayFallback(String tenantId, String userId, String sessionId) {
             throw new IllegalStateException("route memory down");
         }
 

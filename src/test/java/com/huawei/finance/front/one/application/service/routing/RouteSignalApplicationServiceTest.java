@@ -178,6 +178,41 @@ class RouteSignalApplicationServiceTest {
     }
 
     @Test
+    void sameRunInlineRouteIsMergedWithoutWaitingForRouteMemoryWrite() {
+        Map<String, Object> appliedRoute = Map.of(
+                "type", "route",
+                "query", "原始财经问题",
+                "intent", "资金助手");
+        MemoryContext inlineMemory = memory.withRouteMemory(new RouteMemoryContext(
+                "first_turn", List.of(appliedRoute), Map.of()));
+        AtomicReference<MemoryContext> capturedMemory = new AtomicReference<>();
+        RouteMemoryApplicationService routeMemoryService = new RouteMemoryApplicationService(null, null, null) {
+            @Override
+            public boolean latestRouteIsRelayFallback(UserContext user, String sessionId) {
+                return false;
+            }
+
+            @Override
+            public RouteMemoryContext loadForIntent(UserContext user, String sessionId, String routeTrigger,
+                                                    Map<String, Object> lastIntentRejectReason) {
+                return new RouteMemoryContext(routeTrigger, List.of(appliedRoute), lastIntentRejectReason);
+            }
+        };
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                (command, memory, user) -> {
+                    capturedMemory.set(memory);
+                    return simpleDomainAgentIntent();
+                },
+                routeMemoryService);
+
+        RouteSignalResult result = service.routeInitial(user, session, command, List.of(), inlineMemory);
+
+        assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
+        assertThat(capturedMemory.get().routeMemory().history()).containsExactly(appliedRoute);
+    }
+
+    @Test
     void topLevelUserCorrectionTriggerWinsOverMetadataAndFallback() {
         AtomicReference<MemoryContext> capturedMemory = new AtomicReference<>();
         RouteMemoryApplicationService routeMemoryService = new RouteMemoryApplicationService(null, null, null) {

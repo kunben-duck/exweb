@@ -101,7 +101,7 @@ Supervisor 每次需要重新分流时，给意图模型这些信息：
 2. 顶层 `conversationContext`，承载本轮路由上下文。
 3. `conversationContext.routeTrigger`，表示触发路由的原因。
 4. `conversationContext.lastIntentRejectReason`，表示上一个跳出的意图及拒答原因。但前几轮切换路由时的拒答不需要提供，避免噪音累积。
-5. `conversationContext.history`，承载历史成功路由消息和澄清消息。只取最新 TopK 条记录给意图服务，完整细节保存在1号的Chatservice审计日志，不进入意图服务的在线路由上下文。
+5. `conversationContext.history`，承载历史已生效路由消息和澄清消息。这里的“已生效”指目标 binding 已成功持久化，不要求下游任务执行成功。只取最新 TopK 条记录给意图服务，完整细节保存在1号的Chatservice审计日志，不进入意图服务的在线路由上下文。
 
 以下为多轮中每轮需要提供的信息示例：
 
@@ -145,7 +145,7 @@ Supervisor 每次需要重新分流时，给意图模型这些信息：
 * 当前问题是 U3。
 * 当前跳出的意图是 `finance_data_query`。
 * 当前拒答原因是“这是指标口径解释，不属于问数”。
-* 历史成功路由中已有 U1 → `finance_data_query`。
+* 历史已生效路由中已有 U1 → `finance_data_query`。
 
 ---
 
@@ -170,7 +170,7 @@ Supervisor 每次需要重新分流时，给意图模型这些信息：
 * 当前用户问题：U5。
 * 当前跳出的意图：`deep_analysis`。
 * 当前拒答原因：需要重新查明细数据，不是直接研究分析。
-* 历史成功路由：
+* 历史已生效路由：
 
   * U1 → `finance_data_query`
   * U3 → `finance_knowledge`
@@ -337,7 +337,7 @@ user: 是解决这次成功率下降的处理措施
 | -------------------------- | ------ | -------: | ------------------------------------------------------ |
 | `routeTrigger`           | string |       否 | 触发 Supervisor 重新分流的原因。                       |
 | `lastIntentRejectReason` | object |       否 | 上一个跳出的意图及其拒答原因。首轮或澄清中可为空对象。 |
-| `history`                | array  |       否 | 历史成功路由记录和当前未完成澄清链路。                 |
+| `history`                | array  |       否 | 历史已生效路由记录和当前未完成澄清链路。               |
 
 ---
 
@@ -530,7 +530,7 @@ JSON 数组顺序是稳定的，因此可以用来表达历史顺序。
 
 当 `/getIntentDecision` 返回 `routeAction=NO_MATCH` 时，Supervisor 进入自身规划 React。此时路由历史记录为 NO_MATCH，明确不在领域范围内。
 
-当 `/getIntentDecision` 返回 `routeAction=ROUTE_MULTI` 时，Supervisor 进入自身规划 React。ChatService 当前实现中，ROUTE_MULTI/NO_MATCH/DEGRADED 最终由 Relay 正常完成后，会写入一条 route 记录：
+当 `/getIntentDecision` 返回 `routeAction=ROUTE_MULTI` 时，Supervisor 进入自身规划 React。ChatService 在 Relay binding 成功后、调用 Relay 前写入一条 route 记录：
 
 ```json
 {
@@ -540,11 +540,11 @@ JSON 数组顺序是稳定的，因此可以用来表达历史顺序。
 }
 ```
 
-该记录用于下一轮生成 `conversationContext.routeTrigger=fallback_followup`，不代表 Relay 被绑定为会话长期领域。
+该记录不代表 Relay 被绑定为会话长期领域。只有该记录关联的 source run 最终为 `COMPLETED`，下一轮才生成 `conversationContext.routeTrigger=fallback_followup`；任务失败或取消仍保留 route 事实，但不会触发该 trigger。
 
 ### 9.2 领域拒答时
 
-领域 Agent 拒答回流时，不将拒答信息直接写入历史 route。
+领域 Agent 拒答回流时，保留首次 binding 成功时已经写入的 route；拒答信息本身不新增 route，也不删除原记录。
 Supervisor 调用意图服务时，将拒答说明放入：
 
 ```json

@@ -106,6 +106,31 @@ public class RouteMemoryApplicationService {
         return properties.normalizedMaxClarificationRounds();
     }
 
+    public int maxRouteHistorySize() {
+        return properties.normalizedTopK();
+    }
+
+    /**
+     * 判断本轮是否产生了可写入 RouteMemory 的新路由决策。
+     *
+     * <p>已有 RuntimeBinding 的普通续接和 Agent Interaction 续接只是沿用既有路由，
+     * 不能把每轮对话重复写成新的意图路由历史。</p>
+     */
+    public boolean isNewRouteDecision(RouteTarget route) {
+        if (route == null || route.type() == null) {
+            return false;
+        }
+        String source = route.routeSource();
+        if ("runtime-binding".equals(source) || "interaction-continuation".equals(source)) {
+            return false;
+        }
+        return switch (route.type()) {
+            case DOMAIN_AGENT -> !blank(route.selectedAgentCode());
+            case AGENT_RUNTIME -> true;
+            case SYSTEM_RESPONSE -> false;
+        };
+    }
+
     public void appendClarification(UserContext user, String sessionId, String sourceRunId,
                                     String interactionId, Map<String, Object> requestPayload) {
         if (user == null || blank(sessionId) || requestPayload == null || requestPayload.isEmpty()) {
@@ -151,11 +176,12 @@ public class RouteMemoryApplicationService {
     }
 
     /**
-     * 成功路由闭合后在同一个写任务中先折叠当前澄清链，再追加 route 记录。
+     * 最终目标和 RuntimeBinding 已生效后记录路由决策。
      *
-     * <p>RouteMemory 不是聊天事实源，写失败只影响后续意图上下文质量，不能回滚 run 终态。</p>
+     * <p>同一个异步写任务先折叠当前意图澄清链，再追加 route。Runtime 后续失败、取消或拒答
+     * 不撤销已经发生的路由事实；写失败也不能阻断当前 run。</p>
      */
-    public void completeRoute(RouteMemoryRouteCommand command) {
+    public void recordRouteDecision(RouteMemoryRouteCommand command) {
         if (command == null) {
             return;
         }
@@ -165,7 +191,7 @@ public class RouteMemoryApplicationService {
         if (user == null || blank(sessionId) || !recordableRoute(route)) {
             return;
         }
-        writeSafely("completeRoute", user, sessionId, () -> {
+        writeSafely("recordRouteDecision", user, sessionId, () -> {
             Instant now = Instant.now();
             repository.foldActiveClarifications(user.tenantId(), user.ownerUserId(), sessionId, now);
             repository.save(newRouteItem(command, now));
@@ -173,8 +199,7 @@ public class RouteMemoryApplicationService {
     }
 
     /**
-     * 无可记录路由时只折叠澄清链。Relay/no_match 正常完成应调用 {@link #completeRoute(RouteMemoryRouteCommand)}
-     * 写入 fallback route，而不是走这个方法。
+     * 无可记录路由时只折叠澄清链。
      */
     public void completeWithoutRoute(UserContext user, String sessionId) {
         if (user == null || blank(sessionId)) {
@@ -189,10 +214,22 @@ public class RouteMemoryApplicationService {
             return false;
         }
         return readSafely("latestRouteIsRelayFallback", user, sessionId, false,
-                () -> repository.findRecentRoutes(user.tenantId(), user.ownerUserId(), sessionId, 1).stream()
-                        .findFirst()
-                        .map(this::relayFallbackRoute)
-                        .orElse(false));
+                () -> repository.latestRouteIsCompletedRelayFallback(
+                        user.tenantId(), user.ownerUserId(), sessionId));
+    }
+
+    /**
+     * 构造与持久化 route 相同语义的意图 history 摘要，供同一 run 内拒答重路由立即使用。
+     */
+    public Map<String, Object> routeHistory(RouteMemoryRouteCommand command) {
+        if (command == null || !recordableRoute(command.route())) {
+            return Map.of();
+        }
+        Map<String, Object> history = new LinkedHashMap<>();
+        history.put("type", "route");
+        history.put("query", blankToDefault(command.query(), ""));
+        history.put("intent", blankToDefault(routeIntentName(command.intent(), command.route()), ""));
+        return Map.copyOf(history);
     }
 
     public void foldActiveClarifications(UserContext user, String sessionId) {
@@ -346,14 +383,7 @@ public class RouteMemoryApplicationService {
     }
 
     private boolean recordableRoute(RouteTarget route) {
-        if (route == null || route.type() == null) {
-            return false;
-        }
-        return switch (route.type()) {
-            case DOMAIN_AGENT -> !blank(route.selectedAgentCode());
-            case AGENT_RUNTIME -> true;
-            case SYSTEM_RESPONSE -> false;
-        };
+        return isNewRouteDecision(route);
     }
 
     private String routeIntentId(IntentDecision intent, RouteTarget route) {
@@ -385,20 +415,6 @@ public class RouteMemoryApplicationService {
     private String routeAction(IntentDecision intent) {
         Object routeAction = intent == null || intent.slots() == null ? null : intent.slots().get("routeAction");
         return routeAction == null || String.valueOf(routeAction).isBlank() ? "NO_MATCH" : String.valueOf(routeAction);
-    }
-
-    private boolean relayFallbackRoute(RouteMemoryItem item) {
-        if (item == null || item.itemType() != RouteMemoryItemType.ROUTE || item.status() != RouteMemoryItemStatus.ACTIVE) {
-            return false;
-        }
-        if ("relay".equalsIgnoreCase(blankToDefault(item.intentId(), ""))) {
-            return true;
-        }
-        if ("no_match".equalsIgnoreCase(blankToDefault(item.intentName(), ""))) {
-            return true;
-        }
-        Object targetProvider = item.payload() == null ? null : item.payload().get("targetProvider");
-        return targetProvider != null && "relay".equalsIgnoreCase(String.valueOf(targetProvider));
     }
 
     private Map<String, Object> toHistoryClarify(RouteMemoryItem item) {

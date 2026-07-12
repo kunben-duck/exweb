@@ -56,6 +56,13 @@ class ArchitectureNamingTest {
                 .doesNotContain("FINANCEEX_RELAY_AGENT_API_ADAPTER")
                 .doesNotContain("FINANCEEX_RELAY_AGENT_WEBSOCKET_URL")
                 .doesNotContain("FINANCEEX_RELAY_AGENT_WEBSOCKET_PATH")
+                .doesNotContain("FINANCEEX_RELAY_AGENT_BASE_URL")
+                .doesNotContain("FINANCEEX_RELAY_AGENT_STREAM_PATH")
+                .doesNotContain("FINANCEEX_RELAY_AGENT_STOP_PATH")
+                .doesNotContain("FINANCEEX_RELAY_AGENT_CANCEL_SUPPORTED")
+                .doesNotContain("FINANCEEX_RELAY_ADAPTER")
+                .doesNotContain("FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE")
+                .doesNotContain("FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ALLOWED_ADAPTERS")
                 .doesNotContain("http-streamable")
                 .doesNotContain("relay-http-streamable")
                 .doesNotContain("websocket-url");

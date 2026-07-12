@@ -6,7 +6,7 @@ import reactor.core.publisher.Flux;
 /**
  * AgentRuntime 断点接管恢复端口。
  *
- * <p>当前 Relay adapter 默认不支持可靠接管，因此 {@link #supports(AgentRuntimeRecoveryRequest)}
+ * <p>当前 Relay WebSocket adapter 不支持可靠接管同一个运行中 run，因此 {@link #supports(AgentRuntimeRecoveryRequest)}
  * 返回 false。未来 Runtime 若能基于 runtimeSessionId、resumeToken 和 lastSeq 保证不重复输出，
  * 可替换该端口实现真正续接同一个 run。</p>
  */

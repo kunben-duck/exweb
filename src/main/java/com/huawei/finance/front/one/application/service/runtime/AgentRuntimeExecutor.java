@@ -23,7 +23,7 @@ import reactor.core.publisher.Mono;
  * <p>该类只依赖 AgentRuntime 防腐层接口，不关心底层实现是 Relay、HTTP、gRPC 还是其他企业内部
  * Runtime。普通问答通过 {@link AgentRuntime}，协议级澄清/审批续接通过
  * {@link AgentRuntimeInteraction}；两者分开可以避免把可选交互能力塞进 Runtime 主接口。当前上线版本
- * 通过配置默认装配 Relay adapter；没有命中 DomainAgent 绑定或路由的请求会进入当前 AgentRuntime，
+ * 通过 registry 按 provider 装配 Relay 或 DomainAgent Runtime；没有命中 DomainAgent 绑定或路由的请求会进入当前 AgentRuntime，
  * 并通过 RuntimeBinding 保持多轮会话。</p>
  */
 @Service
@@ -58,7 +58,7 @@ public class AgentRuntimeExecutor {
         List<AttachmentRef> attachments = command.attachments() == null ? List.of() : command.attachments();
         // AgentRuntimeRequest 不再携带旧能力列表。复杂 Agent 需要的外部能力编排应由 Runtime 自己管理，
         // SuperAgent 只传当前用户消息、可见上下文快照、意图/路由信号和上次 runtimeSessionId。
-        // forwardHeaders 仅为运行期内存快照，Relay adapter 会按白名单决定是否放入出站请求头。
+        // forwardHeaders 仅为运行期内存快照，可信 Runtime adapter 决定是否放入出站请求头。
         AgentRuntimeRequest request = new AgentRuntimeRequest(
                 user.tenantId(),
                 user.ownerUserId(),

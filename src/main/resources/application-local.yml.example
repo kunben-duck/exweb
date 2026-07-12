@@ -19,10 +19,9 @@ financeex:
   storage:
     provider: local
   agent-runtime:
-    provider: relay
-    base-url: http://localhost:9000
+    default-provider: relay
     relay:
-      adapter: relay-stream-http
+      enabled: true
       websocket:
         url: ws://localhost:8080/ws
   intent:
@@ -31,6 +30,11 @@ financeex:
     access-name: local-intent
     recognize-path: /intent-recognition-configuration/getIntentDecision
     failure-strategy: RELAY_FALLBACK
+  domain-agent:
+    enabled: false
+    base-url: http://localhost:9300
+    # 可省略；为空时自动使用 base-url。
+    referer: http://localhost:9300
   use-case-library:
     enabled: false
     base-url: http://localhost:9100

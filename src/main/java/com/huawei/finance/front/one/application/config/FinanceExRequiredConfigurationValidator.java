@@ -115,14 +115,7 @@ public class FinanceExRequiredConfigurationValidator
                     + defaultProvider);
         }
         if (relayEnabled) {
-            String adapter = lower(defaultText("financeex.agent-runtime.relay.adapter", "relay-stream-http"));
-            switch (adapter) {
-                case "relay-stream-http" -> requireText(missing, "financeex.agent-runtime.base-url",
-                        "FINANCEEX_RELAY_AGENT_BASE_URL");
-                case "relay-websocket" -> requireText(missing, "financeex.agent-runtime.relay.websocket.url",
-                        "FINANCEEX_RELAY_WS_URL");
-                default -> missing.add("financeex.agent-runtime.relay.adapter / FINANCEEX_RELAY_ADAPTER 不支持: " + adapter);
-            }
+            requireText(missing, "financeex.agent-runtime.relay.websocket.url", "FINANCEEX_RELAY_WS_URL");
         }
     }
 

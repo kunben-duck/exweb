@@ -125,7 +125,7 @@ public class ChatRunStopCoordinator {
             return chatRunService.toStopResult(run);
         }
         /*
-         * 先通知下游，再 dispose 本机订阅。Relay WebSocket 的 interrupt 需要命中仍存活的
+         * 先通知下游，再 dispose 本机订阅。Relay WebSocket stop 需要命中仍存活的
          * outbound exchange；取消正确性已由 requestStop 写入的 cancel flag 和 guarded insert 保证。
          */
         cancelDownstreamBestEffort(run, user, headerSnapshot);

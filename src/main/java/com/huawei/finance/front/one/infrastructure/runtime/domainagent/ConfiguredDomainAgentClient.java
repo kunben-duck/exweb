@@ -62,7 +62,7 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
                     .uri(fullUrl(properties.getChatPath()))
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.TEXT_EVENT_STREAM, MediaType.APPLICATION_NDJSON, MediaType.APPLICATION_JSON)
-                    .headers(headers -> applyForwardedCookie(headers, request.forwardHeaders()))
+                    .headers(headers -> applyOutboundHeaders(headers, request.forwardHeaders()))
                     .bodyValue(body)
                     .retrieve()
                     /*
@@ -100,7 +100,7 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
                 .post()
                 .uri(fullUrl(properties.getStopPath()))
                 .contentType(MediaType.APPLICATION_JSON)
-                .headers(headers -> applyForwardedCookie(headers, request.forwardHeaders()))
+                .headers(headers -> applyOutboundHeaders(headers, request.forwardHeaders()))
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(Void.class)
@@ -120,7 +120,11 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
         }
     }
 
-    private void applyForwardedCookie(HttpHeaders headers, RuntimeForwardHeaders forwardHeaders) {
+    private void applyOutboundHeaders(HttpHeaders headers, RuntimeForwardHeaders forwardHeaders) {
+        String referer = properties.normalizedReferer();
+        if (!referer.isBlank()) {
+            headers.set(HttpHeaders.REFERER, referer);
+        }
         if (forwardHeaders == null || !forwardHeaders.hasCookie()) {
             return;
         }

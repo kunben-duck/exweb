@@ -4,25 +4,16 @@ import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCa
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
-import java.util.Set;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * Relay Runtime 下游 API 协议 adapter。
+ * Relay Runtime WebSocket 协议防腐层。
  *
- * <p>该接口是 Relay provider 内部的二级防腐层。{@link RelayAgentRuntime} 只根据配置选择一个
- * adapter 并委托执行；每个 adapter 独立负责自己的请求体构造、鉴权、响应解析、流式事件转换和下游
- * 取消语义。这样新增新的 Relay HTTP 变体或其他企业协议时，不需要改动
- * FinanceEXChatService 主编排。当前内置 {@code relay-stream-http} 与 {@code relay-websocket}
- * 两种实现，生产默认仍使用 stream-http。</p>
+ * <p>该接口隔离 Relay WebSocket 请求体构造、鉴权、响应解析、流式事件转换和下游取消语义，
+ * 避免协议细节进入 FinanceEXChatService 主编排。</p>
  */
 public interface RelayRuntimeProtocolAdapter {
-    /**
-     * @return 当前 adapter 支持的配置名称集合，例如 {@code relay-stream-http}。
-     */
-    Set<String> adapterNames();
-
     /**
      * 调用下游 Runtime API，并转换成标准 ChatEvent 流。
      *

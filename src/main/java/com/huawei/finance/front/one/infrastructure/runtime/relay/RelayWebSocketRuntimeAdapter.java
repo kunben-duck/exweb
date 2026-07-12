@@ -18,9 +18,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -34,6 +34,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.util.unit.DataSize;
 import org.springframework.web.reactive.socket.WebSocketMessage;
+import org.springframework.web.reactive.socket.WebSocketHandler;
 import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient;
 import org.springframework.web.reactive.socket.client.WebSocketClient;
 import reactor.core.Disposable;
@@ -44,18 +45,16 @@ import reactor.core.publisher.Sinks;
 import reactor.netty.http.client.HttpClient;
 
 /**
- * Relay WebSocket 普通问答 adapter。
+ * Relay WebSocket 协议实现。
  *
  * <p>每个 ChatService run 都建立一条短生命周期下游 WebSocket，先完成 {@code config} 阶段，再发送
- * {@code user-message}。配置阶段 frame 只用于握手判定，不进入 ChatService 标准事件流；{@code user-message}
- * 之后的下游 frame 才复用 {@link RelayRuntimeResponseNormalizer} 转为标准事件。本轮只支持普通问答；
- * {@code approval-request} 等 Interaction 协议事件先按 runtime 事件透传，不进入等待用户状态。</p>
+ * {@code user-message} 或 {@code approval-response}。配置阶段 frame 只用于握手判定，不进入 ChatService
+ * 标准事件流；业务阶段 frame 复用 {@link RelayRuntimeResponseNormalizer} 转为标准事件。</p>
  */
 @Component
 @EnableConfigurationProperties({RelayAgentProperties.class, AgentRuntimeForwardCookieProperties.class})
 @ConditionalOnProperty(prefix = "financeex.agent-runtime.relay", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter {
-    static final String ADAPTER_NAME = "relay-websocket";
     private static final Logger log = LoggerFactory.getLogger(RelayWebSocketRuntimeAdapter.class);
 
     private final ObjectMapper objectMapper;
@@ -87,11 +86,6 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     }
 
     @Override
-    public Set<String> adapterNames() {
-        return Set.of(ADAPTER_NAME);
-    }
-
-    @Override
     public Flux<ChatEvent> query(AgentRuntimeRequest request) {
         AtomicBoolean messageCompleted = new AtomicBoolean(false);
         Flux<ChatEvent> events = queryWithShortConnection(request, messageCompleted);
@@ -119,7 +113,8 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         return Flux.create(sink -> {
             ShortRunExchange exchange = new ShortRunExchange(request.runId());
             registerActiveExchange(request.runId(), exchange);
-            var subscription = webSocketClient.execute(endpointUri(request), outboundHeaders(request.forwardHeaders()),
+            var subscription = executeWithOpeningHandshakeTimeout(
+                    endpointUri(request), outboundHeaders(request.forwardHeaders()), request.runId(),
                     session -> {
                         Mono<Void> outbound = session.send(exchange.outbound(configMessage(request))
                                 .map(session::textMessage));
@@ -149,7 +144,8 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         return Flux.create(sink -> {
             ShortRunExchange exchange = new ShortRunExchange(request.runId());
             registerActiveExchange(request.runId(), exchange);
-            var subscription = webSocketClient.execute(endpointUri(request.runId()), outboundHeaders(request.forwardHeaders()),
+            var subscription = executeWithOpeningHandshakeTimeout(
+                    endpointUri(request.runId()), outboundHeaders(request.forwardHeaders()), request.runId(),
                     session -> {
                         Mono<Void> outbound = session.send(exchange.outbound(configMessage(request))
                                 .map(session::textMessage));
@@ -213,7 +209,8 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         }
         String clientId = interruptClientId(request.runId());
         String relaySessionId = relaySessionIdForCancel(request);
-        return webSocketClient.execute(endpointUri(clientId), outboundHeaders(request.forwardHeaders()), session -> {
+        return executeWithOpeningHandshakeTimeout(
+                endpointUri(clientId), outboundHeaders(request.forwardHeaders()), request.runId(), session -> {
             Sinks.Many<String> outbound = Sinks.many().unicast().onBackpressureBuffer();
             Mono<Void> outboundSend = session.send(Flux.concat(Mono.just(configMessage(request)), outbound.asFlux())
                     .map(session::textMessage));
@@ -228,6 +225,25 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
             log.info("Relay WebSocket interrupt opens temporary resume connection. runId={}, runtimeSessionId={}, clientId={}",
                     request.runId(), relaySessionId, clientId);
             return Mono.when(outboundSend, releaseInterrupt);
+        });
+    }
+
+    private Mono<Void> executeWithOpeningHandshakeTimeout(URI uri, HttpHeaders headers, String runId,
+                                                           WebSocketHandler handler) {
+        return Mono.defer(() -> {
+            Sinks.One<Void> openingHandshakeCompleted = Sinks.one();
+            Mono<Void> execution = webSocketClient.execute(uri, headers, session -> {
+                openingHandshakeCompleted.tryEmitEmpty();
+                return handler.handle(session);
+            });
+            // Upgrade 成功后 guard 转为静默等待，不能先完成并取消已经建立的业务 WebSocket。
+            Mono<Void> openingHandshakeGuard = openingHandshakeCompleted.asMono()
+                    .timeout(configHandshakeTimeout())
+                    .onErrorMap(TimeoutException.class, ignored -> new RelayRuntimeProtocolException(
+                            "RELAY_WS_CONFIG_TIMEOUT: Relay WebSocket opening handshake timed out. "
+                                    + "stage=opening-handshake, runId=" + runId))
+                    .then(Mono.never());
+            return Mono.firstWithSignal(execution, openingHandshakeGuard);
         });
     }
 
@@ -336,7 +352,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     }
 
     private void emitInterrupt(Sinks.Many<String> outbound, String runId) {
-        Sinks.EmitResult result = outbound.tryEmitNext(interruptMessage());
+        Sinks.EmitResult result = outbound.tryEmitNext(stopAllAgentsMessage());
         if (result.isFailure()) {
             throw new RelayRuntimeProtocolException("Relay WebSocket interrupt outbound emit failed. runId="
                     + runId + ", result=" + result);
@@ -631,8 +647,8 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         return String.valueOf(value);
     }
 
-    private String interruptMessage() {
-        return toJson(Map.of("type", "interrupt"));
+    private String stopAllAgentsMessage() {
+        return toJson(Map.of("type", "stop_all_agents"));
     }
 
     private String heartbeatMessage() {
@@ -697,7 +713,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
 
     private HttpHeaders outboundHeaders(RuntimeForwardHeaders forwardHeaders) {
         HttpHeaders headers = new HttpHeaders();
-        if (forwardCookieProperties.isAdapterAllowed(ADAPTER_NAME)
+        if (forwardCookieProperties.isEnabled()
                 && forwardHeaders != null && forwardHeaders.hasCookie()) {
             headers.set(HttpHeaders.COOKIE, forwardHeaders.cookieHeader());
         }
@@ -1059,11 +1075,11 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 return;
             }
             /*
-             * Stop 是 best-effort：先把 Relay interrupt 控制帧送入当前 outbound，再结束本侧发送流。
+             * Stop 是 best-effort：先把 stop_all_agents 控制帧送入当前 outbound，再结束本侧发送流。
              * ChatService 的取消正确性仍由 cancel flag、DB guarded insert 与 run.cancelled 事件保证。
              */
             try {
-                send(interruptMessage());
+                send(stopAllAgentsMessage());
             } finally {
                 completeSending();
             }

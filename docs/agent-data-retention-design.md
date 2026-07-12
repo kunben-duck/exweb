@@ -166,7 +166,7 @@ flowchart TD
     RELAYDB[("Relay Session/Event Store<br/>历史 / 持久化事件 / Agent 响应")]
     SUB["A2A Agent / MCP Tool"]
     SUBDB[("Agent/Tool Store")]
-    FRAME["Relay HTTP/WS frame<br/>或 DomainAgent stream chunk"]
+    FRAME["Relay WebSocket frame<br/>或 DomainAgent stream chunk"]
     NORM["Relay/DomainAgent Normalizer<br/>标准化为 ChatEvent"]
     IO["chatStreamEventScheduler<br/>单 run concatMap 串行处理"]
     GUARD["run/session 身份 + cancel + fencing 校验"]
@@ -491,7 +491,6 @@ ChatService 在调用 AgentRuntime 前生成不可由前端覆盖的策略对象
 ### 7.2 ChatService 到 Relay
 
 - Relay WebSocket 必须在 `config` 阶段收到 retention context。只放在 `user-message.metadata` 太晚，因为 Relay 可能已经创建并保存 session。
-- Relay HTTP adapter 应在请求顶层发送 retention context，使 Relay 在解析业务 body 前完成策略判断。
 - Relay 的 `session-ready` 应回传实际生效的 `retention_mode`、`policy_id` 和 retention capability。
 - ChatService 只有在 Relay 明确确认相同或更严格模式后才能发送 `user-message`。
 - Relay 未确认、返回更弱策略或不支持时，ChatService 返回 `RETENTION_POLICY_UNSUPPORTED` 并关闭连接。

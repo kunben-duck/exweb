@@ -257,22 +257,13 @@ financeex:
   agent-runtime:
     # 没有显式 RuntimeBinding 时使用的 fallback provider；Relay 与 DomainAgent 可同时注册。
     default-provider: ${FINANCEEX_AGENT_RUNTIME_DEFAULT_PROVIDER:relay}
-    base-url: ${FINANCEEX_RELAY_AGENT_BASE_URL:}
-    stream-path: ${FINANCEEX_RELAY_AGENT_STREAM_PATH:/v1/agent/runs/stream}
-    stop-path: ${FINANCEEX_RELAY_AGENT_STOP_PATH:/v1/agent/runs/{runId}/stop}
-    cancel-supported: ${FINANCEEX_RELAY_AGENT_CANCEL_SUPPORTED:true}
-    timeout: 60s
-    # Relay 单个响应 frame 的 WebClient codec 上限；用于避免默认 256KB 过早拦截大引用/卡片响应。
-    # 这不是前端事件大小治理，持续超大对象仍应通过后续 DataBuffer 流式解码与 fragment 分片解决。
-    max-in-memory-size: ${FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE:1MB}
     relay:
       enabled: ${FINANCEEX_RELAY_RUNTIME_ENABLED:true}
-      # Relay provider 内部 API adapter。默认保持 stream-http；relay-websocket 用于灰度接入 Relay WS 普通问答。
-      adapter: ${FINANCEEX_RELAY_ADAPTER:relay-stream-http}
       websocket:
         url: ${FINANCEEX_RELAY_WS_URL:}
         app-mode: ${FINANCEEX_RELAY_WS_APP_MODE:delegate}
         connect-timeout: ${FINANCEEX_RELAY_WS_CONNECT_TIMEOUT:5s}
+        # 分别限制 HTTP Upgrade opening handshake，以及 Upgrade 成功后的 config -> session-ready 阶段。
         config-handshake-timeout: ${FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT:10s}
         interrupt-ack-timeout: ${FINANCEEX_RELAY_WS_INTERRUPT_ACK_TIMEOUT:5s}
         max-run-duration: ${FINANCEEX_RELAY_WS_MAX_RUN_DURATION:30m}
@@ -287,12 +278,11 @@ financeex:
       agent-context-as-answer: ${FINANCEEX_RELAY_AGENT_CONTEXT_AS_ANSWER:true}
     forward-cookie:
       # 仅把 /chat/runs 与 /chat/runs/{runId}/stop 入口捕获到的 Cookie 透传给可信下游：
-      # Relay stream-http adapter 和 DomainAgent adapter。
+      # Relay WebSocket 和 DomainAgent。
       # 文档上传 Cookie 透传由 financeex.document 与 financeex.storage.api-store 单独控制。
       # Cookie 不写入 metadata_json、不落库、不进入事件 payload，也不会写入下游请求体。
       enabled: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ENABLED:true}
       max-length: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_MAX_LENGTH:8192}
-      allowed-adapters: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ALLOWED_ADAPTERS:relay-stream-http,relay-websocket}
   storage:
     provider: ${FINANCEEX_STORAGE_PROVIDER:}
     local-path: ${java.io.tmpdir}/financeex-docs
@@ -341,6 +331,8 @@ financeex:
     # 仅用于 targetType=DOMAIN_AGENT 的财经领域 DomainAgent 直连调用路径；默认关闭。
     enabled: ${FINANCEEX_DOMAIN_AGENT_ENABLED:false}
     base-url: ${FINANCEEX_DOMAIN_AGENT_BASE_URL:}
+    # DomainAgent chat/stop 请求的可信服务端 Referer；为空时回退到 base-url。
+    referer: ${FINANCEEX_DOMAIN_AGENT_REFERER:${FINANCEEX_DOMAIN_AGENT_BASE_URL:}}
     chat-path: ${FINANCEEX_DOMAIN_AGENT_CHAT_PATH:/api/chat}
     stop-path: ${FINANCEEX_DOMAIN_AGENT_STOP_PATH:}
     timeout: ${FINANCEEX_DOMAIN_AGENT_TIMEOUT:120s}

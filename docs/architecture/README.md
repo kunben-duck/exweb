@@ -47,8 +47,8 @@ flowchart TD
 
     BindDomainAgent --> EventStream
     DomainAgent --> EventStream
-    RuntimeQuery --> RelayHttp["RelayStreamHttpRuntimeAdapter"]
-    RelayHttp --> EventStream
+    RuntimeQuery --> RelayWS["RelayWebSocketRuntimeAdapter"]
+    RelayWS --> EventStream
     SystemResponse --> EventStream
     EventStream --> Persist["事件写入 fin_ex_chat_event_t"]
     Persist --> Publish["发布到 run stream topic"]
@@ -74,7 +74,7 @@ sequenceDiagram
     participant Intent as "IntentService"
     participant DomainAgent as "DomainAgent"
     participant Runtime as "AgentRuntime Port"
-    participant RelayHttp as "RelayStreamHttpRuntimeAdapter"
+    participant RelayWS as "RelayWebSocketRuntimeAdapter"
     participant RelayAgent as "RelayAgent Service"
     participant Stream as "ChatStreamApplicationService"
     participant Redis as "Redis"
@@ -116,8 +116,8 @@ sequenceDiagram
         Binding->>DB: "刷新 last_run_id 与 expires_at"
         Binding->>Redis: "刷新 RuntimeBinding TTL"
         SuperAgent->>Runtime: "AgentRuntime.query(runtimeSessionId, message)"
-        Runtime->>RelayHttp: "delegate"
-        RelayHttp->>RelayAgent: "HTTP POST stream-path"
+        Runtime->>RelayWS: "delegate"
+        RelayWS->>RelayAgent: "WebSocket config(RESUME) -> user-message"
     else "不存在 active RuntimeBinding"
         SuperAgent->>Signal: "routeInitial(command, memory)"
         alt "用例库或意图服务命中 DomainAgent"
@@ -132,8 +132,8 @@ sequenceDiagram
             Binding->>DB: "写入 fin_ex_runtime_binding_t"
             Binding->>Redis: "缓存 RuntimeBinding"
             SuperAgent->>Runtime: "AgentRuntime.query(message)"
-            Runtime->>RelayHttp: "delegate"
-            RelayHttp->>RelayAgent: "HTTP POST stream-path"
+            Runtime->>RelayWS: "delegate"
+            RelayWS->>RelayAgent: "WebSocket config(NEW/RESUME) -> user-message"
         else "不支持任务"
             Signal-->>SuperAgent: "SYSTEM_RESPONSE"
             SuperAgent->>SuperAgent: "生成可控系统回复"
@@ -145,9 +145,9 @@ sequenceDiagram
             DomainAgent-->>SuperAgent: "message.delta / message.snapshot / runtime.* / message.completed"
         else "Explicit skill route"
             RelayAgent-->>SuperAgent: "DomainAgent eventStream -> message.delta / runtime.* / message.completed"
-        else "Relay HTTP Runtime route"
-            RelayAgent-->>RelayHttp: "HTTP stream delta"
-            RelayHttp-->>Runtime: "ChatEvent"
+        else "Relay WebSocket Runtime route"
+            RelayAgent-->>RelayWS: "WebSocket text frame"
+            RelayWS-->>Runtime: "ChatEvent"
             Runtime-->>SuperAgent: "message.delta / message.snapshot / runtime.* / message.completed"
         end
         SuperAgent->>EventStore: "append(event)"
@@ -543,11 +543,12 @@ owner 的 completed/waiting 终态事务只写 OpenGauss 事实；短期记忆 R
 
 ### WebSocket 边界说明
 
-当前系统只保留前端到 FinanceEXChatService 的 WebSocket：
+当前系统存在两条职责隔离的 WebSocket：
 
 - 前端 WebSocket：`/v1/chat/ws`，只连接 FinanceEXChatService。它是用户级连接，按 run 级 `streamTopicId` 订阅已经写入事件事实源的 ChatEvent；它不接受聊天请求，也不直接调用 RelayAgent。
+- 下游 Relay WebSocket：FinanceEXChatService 主动连接 Relay，承载 `config -> user-message/approval-response`、流式 frame 和 `stop_all_agents`；前端不可见。
 
-因此架构图中的 `AgentRuntime.query` 是应用层防腐层调用，不等价于前端 WebSocket。当前 `AgentRuntime.query` 默认使用 Relay HTTP 流式 adapter；如配置 `financeex.agent-runtime.relay.adapter=relay-websocket`，可切换为 FinanceEXChatService 到 RelayAgent 的出站 WebSocket 普通问答 adapter。
+因此架构图中的 `AgentRuntime.query` 是应用层防腐层调用，不等价于前端 WebSocket。Relay provider 只注册一个 `RelayRuntimeProtocolAdapter` WebSocket 实现。
 
 前端 WebSocket 的服务端入口按启动模式自动切换：
 
@@ -633,7 +634,7 @@ flowchart TB
         IntentHttp["Intent HTTP Adapter"]
         RelayRuntime["RelayAgentRuntime Provider"]
         DomainAgentRuntime["DomainAgentRuntime Provider"]
-        RelayHttp["RelayStreamHttpRuntimeAdapter"]
+        RelayWS["RelayWebSocketRuntimeAdapter"]
         Storage["Local / Huawei OBS S3 / api-store DocumentStorage"]
         DomainAgentHttp["DomainAgent HTTP Adapter"]
     end
@@ -658,7 +659,7 @@ flowchart TB
     RuntimeBinding --> MyBatis
     RuntimeExecutor --> RelayRuntime
     RuntimeExecutor --> DomainAgentRuntime
-    RelayRuntime --> RelayHttp
+    RelayRuntime --> RelayWS
     DomainAgentRuntime --> DomainAgentHttp
     DocumentService --> Storage
     DocumentService --> HttpDocumentProvider
@@ -741,7 +742,7 @@ stop 语义：
 - 集群事实源优先：stop 先写 Redis cancel flag 与数据库 `CANCELLING` 状态，再发布 `run.cancelled`。
 - JVM subscription registry 只是本机资源释放加速器；即使 stop 请求与输出流落在不同实例，输出实例也必须在追加事件前读取 Redis cancel flag。非终态事件不再逐条回源 run 表，最终写入正确性由数据库 guarded insert 同时校验 run 状态、session 归属和 execution fencing。
 - 用户主动 stop 且已有 assistant 正文或用户可见 runtime parts 成功落库时，会从事件事实源重建并保存 partial assistant 历史消息，消息 metadata 标记 `partial=true`、`finishReason=USER_STOP`；只有 trace、domain-agent session 等内部 metadata 时不创建空 assistant。
-- 下游尽力取消：Relay stream-http 通过 HTTP stopPath 取消；Relay WebSocket 本机命中 active 连接时直接发送 `{"type":"interrupt"}`，跨实例或本机连接已清理时用临时 WS `resume` 到 run 中已回填的 Relay `runtimeSessionId`，收到 `session-ready` 后发送 `interrupt`；DomainAgent 走 DomainAgent cancel adapter。这些下游取消失败只记录日志，不影响前端收到本服务 `run.cancelled` 终态。
+- 下游尽力取消：Relay 本机命中 active WebSocket 时发送 `{"type":"stop_all_agents"}`；跨实例或本机连接已清理时用临时 WS `resume` 到 run 中已回填的 Relay `runtimeSessionId`，收到 `session-ready` 后发送 `stop_all_agents`；DomainAgent 走 DomainAgent cancel adapter。这些下游取消失败只记录日志，不影响前端收到本服务 `run.cancelled` 终态。
 - stop 不取消 RuntimeBinding；下一轮仍可续接 Runtime。如果需要全新的 Relay 会话，应创建新的 ChatService 会话。
 
 ## 外部 API 接入
@@ -750,35 +751,33 @@ stop 语义：
 - 意图服务：`financeex.intent.enabled`、`financeex.intent.base-url`、`financeex.intent.access-name`、`financeex.intent.response-access-name-prefix`、`financeex.intent.recognize-path`、`financeex.intent.trace`、`financeex.intent.confidence-threshold`、`financeex.intent.timeout`、`financeex.intent.max-retries`、`financeex.intent.failure-strategy`。其中请求侧 `access-name` 是意图入口；可选的 `response-access-name-prefix` 仅用于把响应 `items[].accessName` 归一化为真实 DomainAgent skillId；`failure-strategy` 只接受 `RELAY_FALLBACK/FAIL_RUN`；`confidence-threshold` 仅保留给旧统计字段兼容，不参与 DomainAgent 路由裁决。
 - 意图识别记录：`financeex.intent-record.enabled`、`max-query-length`、`max-raw-json-length`、`executor.*`。默认关闭；开启后使用 Servlet/MVC 友好的专用线程池 best-effort 写库，线程池拒绝、JSON 序列化失败或数据库写入失败都只记录 warn，不阻塞 `/v1/chat/runs`。
 - RouteMemory：`financeex.route-memory.top-k` 控制传给意图服务的最近成功 route 数量，`financeex.route-memory.max-clarification-rounds` 控制单条澄清链路的最大轮数，超过后降级 Relay Runtime，避免无限澄清。读写线程池分别由 `read-executor.*`、`write-executor.*` 控制；`read-timeout` 超时后会取消读取 future，并按 `circuit-breaker.*` 短暂熔断，熔断期间直接返回空 history。
-- DomainAgent：`financeex.domain-agent.base-url`、`financeex.domain-agent.chat-path`、`financeex.domain-agent.cancel-path`
+- DomainAgent：`financeex.domain-agent.base-url`、`financeex.domain-agent.referer`、`financeex.domain-agent.chat-path`、`financeex.domain-agent.stop-path`。chat、绑定续接与 stop 都发送可信服务端 `Referer`；未配置时回退到 `base-url`，不允许前端覆盖，也不写入 body 或持久化数据。
 - DomainAgent 拒答重路由：`financeex.domain-agent.refusal.codes`、`financeex.domain-agent.max-reroutes`
 - AgentRuntime fallback provider：`financeex.agent-runtime.default-provider`，没有 active binding 时的兜底 provider，默认 `relay`
-- Relay HTTP Streamable adapter：`financeex.agent-runtime.base-url`、`financeex.agent-runtime.stream-path`、`financeex.agent-runtime.stop-path`
-- Relay adapter 选择：`financeex.agent-runtime.relay.adapter`，默认 `relay-stream-http`；配置为 `relay-websocket` 时启用下游 Relay WebSocket 普通问答 adapter。
-- Relay WebSocket adapter：`financeex.agent-runtime.relay.websocket.url`、`app-mode`、`connect-timeout`、`config-handshake-timeout`、`max-run-duration`、`heartbeat-interval`、`interrupt-ack-timeout`、`idle-timeout`、`max-frame-bytes`
-- 下游 Cookie 透传：`financeex.agent-runtime.forward-cookie.enabled`、`max-length`、`allowed-adapters` 控制 run/stop 到 Relay Runtime 的 Cookie 透传；默认允许 `relay-stream-http` 和 `relay-websocket`。DomainAgent chat/cancel 也使用入口 Cookie 内存快照。文档上传另由 `financeex.document.forward-cookie-max-length` 与 `financeex.storage.api-store.forward-cookie` 控制，默认关闭 api-store upload Cookie 透传。
+- Relay WebSocket：`financeex.agent-runtime.relay.websocket.url`、`app-mode`、`connect-timeout`、`config-handshake-timeout`、`max-run-duration`、`heartbeat-interval`、`heartbeat-response-timeout`、`interrupt-ack-timeout`、`idle-timeout`、`max-frame-bytes`。Relay 启用时 `url` 必填；`config-handshake-timeout` 分别约束 HTTP Upgrade opening handshake 和 Upgrade 后的 `config -> session-ready`，每个阶段独立计时。
+- 下游 Cookie 透传：`financeex.agent-runtime.forward-cookie.enabled`、`max-length` 控制 run/stop 到 Relay WebSocket 的 Cookie 透传。DomainAgent chat/cancel 也使用入口 Cookie 内存快照。文档上传另由 `financeex.document.forward-cookie-max-length` 与 `financeex.storage.api-store.forward-cookie` 控制，默认关闭 api-store upload Cookie 透传。
 - 流式事件粒度：当前生产版本不合并 `message.delta`，按下游标准事件原粒度写入事件表并推送实时通道，避免 ChatService 内部背压误中断 run。`financeex.chat-stream.delta-coalesce-*` 仅作为后续 demand-aware 合并器兼容预留；`financeex.chat-stream.turn-heartbeat-interval` 只控制传输层 heartbeat，不影响事件表。
 - Servlet WebSocket 发送治理：`financeex.websocket.servlet-send-executor-core-size`、`servlet-send-executor-max-size`、`servlet-send-queue-capacity`、`servlet-send-queue-max-bytes`、`servlet-send-use-virtual-threads`。默认使用有界平台线程池和单连接有界队列；JDK 21 虚拟线程可按企业压测结果开启。
 - DomainAgent 大对象分片：`financeex.domain-agent.max-pending-frame-bytes` 限制尚未识别完成的单个 domain-agent frame 缓冲，`financeex.domain-agent.max-fragment-bytes` 限制 `runtime.card/runtime.reference/runtime.progress` 分片 payload 的单片大小。该机制避免 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 跨网络 chunk 时被误解析为 invalid-json，也避免为了完整 JSON 解析无限占用 JVM 内存。分片状态通过 `payload.fragment/itemId/delta/complete` 表达，不新增顶层 `.delta/.completed` 事件类型。
 - Relay 响应映射：`financeex.agent-runtime.relay.answer-event-types`、`answer-content-fields`、`agent-context-as-answer`。默认把 Relay `type=agent,is_streaming=true` 的 `content/context` 映射为 assistant 正文增量 `message.delta`，把 `type=agent,is_streaming=false` 和 `type=generate-response,content非空` 映射为最终回答快照 `message.snapshot`，把 `steam-complete/stream-complete/[DONE]` 映射为 `message.completed`。
 
-DomainAgent 当前通过 HTTP 文本流调用，并和 Relay Runtime 一样以 `AgentRuntime` provider 注册，使用 RuntimeBinding 保存下游会话 ID、绑定来源和意图摘要。DomainAgent 请求会把 `skillId/query/sessionId` 固定为服务端当前绑定和本轮问题，前端 metadata 只作为业务扩展，不能覆盖这些保留字段。当前上线版本内置 `RelayAgentRuntime` 与 `DomainAgentRuntime` 两个 provider；Relay provider 再通过 `RelayRuntimeProtocolAdapter` 选择下游协议：`relay-stream-http` 是默认 Relay HTTP 流式协议实现，`relay-websocket` 是可选 Relay WebSocket 普通问答实现。Relay WebSocket 始终使用短连接，每个 run 都重新建立下游 WS；首轮 `new` 的 `config.sessionId` 使用 ChatService `sessionId`，收到 `session-ready.session_id` 后回填 RuntimeBinding 中的 Relay 真实 `runtimeSessionId`。Relay 正常 `run.completed` 后将 binding 改为 `RESUMABLE`，后续普通提问重新走用例库/意图路由；若再次选择 Relay，则使用该 binding 的真实 session ID 执行 `resume`。如果 Relay 进入 Agent 澄清等待态，则保留 active binding 供 `CONTINUE_INTERACTION` 续接。新增下游协议时，应新增 adapter，而不是在 `RelayAgentRuntime` 主类里堆转换分支。
+DomainAgent 当前通过 HTTP 文本流调用，并和 Relay Runtime 一样以 `AgentRuntime` provider 注册，使用 RuntimeBinding 保存下游会话 ID、绑定来源和意图摘要。DomainAgent 请求会把 `skillId/query/sessionId` 固定为服务端当前绑定和本轮问题，前端 metadata 只作为业务扩展，不能覆盖这些保留字段。当前上线版本内置 `RelayAgentRuntime` 与 `DomainAgentRuntime` 两个 provider；Relay provider 唯一委托 `RelayRuntimeProtocolAdapter` 的 WebSocket 实现。Relay WebSocket 始终使用短连接，每个 run 都重新建立下游 WS；首轮 `new` 的 `config.sessionId` 使用 ChatService `sessionId`，收到 `session-ready.session_id` 后回填 RuntimeBinding 中的 Relay 真实 `runtimeSessionId`。Relay 正常 `run.completed` 后将 binding 改为 `RESUMABLE`，后续普通提问重新走用例库/意图路由；若再次选择 Relay，则使用该 binding 的真实 session ID 执行 `resume`。如果 Relay 进入 Agent 澄清等待态，则保留 active binding 供 `CONTINUE_INTERACTION` 续接。
 
 `Cookie` 是请求入口捕获的运行期内存快照，只会在 `AgentRuntimeRequest.forwardHeaders`、`DomainAgentRequest.forwardHeaders`、`DocumentUploadCommand.forwardHeaders` 或 cancel 请求中向可信 adapter 传递；这些字段被 JSON 序列化忽略，且 adapter 会把内部请求映射为专用 wire DTO 或受控 multipart，不能进入下游请求体、form 字段、文档元数据、run metadata、事件 payload 或日志。该设计保证企业登录态不会因后台 run、Event Resume/WS 恢复、文档库管理或故障治理被持久化或回放。
 
-当前上线版本只保留 Relay Runtime provider，不包含其他历史 Runtime provider 分支、专用 memory 分支或专用 prompt assembler 配置。复杂任务通过 Relay Runtime adapter 执行，默认使用 `relay-stream-http`，可灰度切换 `relay-websocket` 普通问答；后续如需替换 Runtime，应新增 `AgentRuntime` provider，而不是把新协议写进主编排。
+当前上线版本同时注册 Relay 与 DomainAgent Runtime provider，不包含其他历史 Runtime provider 分支、专用 memory 分支或专用 prompt assembler 配置。复杂任务通过 Relay WebSocket Runtime 执行；后续如需新增 Runtime，应注册新的 `AgentRuntime` provider，而不是把新协议写进主编排。
 
-AgentRuntime 防腐层仍然保留。应用层普通问答只依赖 `AgentRuntime` 和 `AgentRuntimeRequest` 契约，等待用户输入后的续接只依赖 `AgentRuntimeInteraction` 和 `AgentRuntimeInteractionResponseRequest` 契约。当前 `relay` provider 是 Runtime 类型，下游 API 接入协议由 `financeex.agent-runtime.relay.adapter` 决定；后续如果替换 Runtime 实现，应新增一个实现 `AgentRuntime` 的 provider，后续如果只新增 Relay 下游协议，应新增 `RelayRuntimeProtocolAdapter`，避免改动 `FinanceEXChatService` 主编排。
+AgentRuntime 防腐层仍然保留。应用层普通问答只依赖 `AgentRuntime` 和 `AgentRuntimeRequest` 契约，等待用户输入后的续接只依赖 `AgentRuntimeInteraction` 和 `AgentRuntimeInteractionResponseRequest` 契约。当前 `relay` provider 唯一使用 WebSocket 协议防腐层；后续替换 Runtime 时应新增 `AgentRuntime` provider，Relay 协议细节继续限制在 `RelayRuntimeProtocolAdapter` 内，避免改动主编排。
 
-Relay stream-http adapter 负责请求 wire DTO 映射和响应 chunk 归一化；Relay WebSocket adapter 每个 run 都建立一条短生命周期下游连接，并把 `AgentRuntimeRequest.metadata()` 过滤后的非敏感字段放入 `user-message.metadata`，与 stream-http 使用同一套 Cookie、token、Authorization、secret、password 等敏感 key 过滤规则。应用层通过会话级 RuntimeBinding 显式传递 `runtimeSessionMode=NEW|RESUME`：同一 ChatService 会话只首次发送 `new`，此时 `config.sessionId` 使用 ChatService `sessionId`；Relay 返回 `session-ready.session_id` 后回填真实 `runtimeSessionId`，后续提问即使重新建连也全部发送 `resume`，并在 resume config 中声明 `supports_incremental_recovery=true`。
+Relay WebSocket adapter 每个 run 都建立一条短生命周期下游连接，并把 `AgentRuntimeRequest.metadata()` 过滤后的非敏感字段放入 `user-message.metadata`；Cookie、token、Authorization、secret、password 等敏感 key 会被递归移除。应用层通过会话级 RuntimeBinding 显式传递 `runtimeSessionMode=NEW|RESUME`：同一 ChatService 会话只首次发送 `new`，此时 `config.sessionId` 使用 ChatService `sessionId`；Relay 返回 `session-ready.session_id` 后回填真实 `runtimeSessionId`，后续提问即使重新建连也全部发送 `resume`，并在 resume config 中声明 `supports_incremental_recovery=true`。
 
 Relay WS 配置阶段只以 `session-ready` 作为唯一完成信号；adapter 会将 `session-ready` 映射为 `runtime.metadata`，payload 保留 Relay 原始 `session_id/session_mode` 等字段，并补充 `runtimeSessionId` 用于尽早回填真实会话 ID。其他配置阶段 frame 只用于握手判定，不会成为用户回答事件；若收到 `error/clear-session/session-mismatch` 则立即失败。`user-message` 后会丢弃 `relay-start` 前的前置 `session-state=idle/completed/ready/running/agent_thinking` 和迟到 `config`，并从 `relay-start`、首个业务帧或 `session-state=waiting_user_input/paused` 开始映射标准事件；普通问答阶段定时向 Relay 发送 `{ "type": "heartbeat" }` 保持连接活跃，`heartbeat-response` 不落库、不推送，任意业务帧或 heartbeat 回包都会刷新下游连接活跃时间。回答阶段内的 `session-state=idle/completed/waiting_user_input/paused` 会补齐 `message.completed`。普通问答不再用 `idle-timeout` 判定 60s 无业务帧失败；若超过 `heartbeat-response-timeout` 没有任何回包则失败闭合，`max-run-duration` 控制最长执行时间；`idle-timeout` 仅保留给 stop 临时控制连接等等待下一帧的场景。
 
-协议级澄清只由 Relay `approval-request(operation_type=questionnaire)` 触发，ChatService 会固化 assistant、保存 Interaction 请求并以 `run.waiting_user` 终止本轮；等待请求默认按 `financeex.chat-interaction.default-expire-duration=24h` 过期，配置为 `0` 或负数表示不过期，过期由 stream-status/提交响应路径懒标记。`responding-orphan-grace=2m` 只用于 watchdog 回收 claim 后启动中断的续接任务，不改变正常等待有效期。单独的 `waiting_user_input` 只闭合本次 Relay WS 连接，不生成 Interaction 等待状态；`paused` 只表示 Relay 对 interrupt 的确认。Interaction 续接通过 `AgentRuntimeInteraction` 防腐层，应用层发送通用响应上下文，Relay WS adapter 转换为 `approval-response`，不创建新的普通 user 消息。stop/delete 触发本地取消时，Relay WS adapter 会优先向本机 active run 对应下游短连接 best-effort 发送 `{"type":"interrupt"}`；若 stop 落到其他实例或本机连接已清理，则新建独立 clientId 的临时 WS，使用 run 中已回填的 Relay `runtimeSessionId` 发送 `config(sessionMode=resume, supports_incremental_recovery=true)`，收到 `session-ready` 后发送 `interrupt`，等待 `session-state=paused` 或 `interrupt-ack-timeout` 到期后释放临时连接。
+协议级澄清只由 Relay `approval-request(operation_type=questionnaire)` 触发，ChatService 会固化 assistant、保存 Interaction 请求并以 `run.waiting_user` 终止本轮；等待请求默认按 `financeex.chat-interaction.default-expire-duration=24h` 过期，配置为 `0` 或负数表示不过期，过期由 stream-status/提交响应路径懒标记。`responding-orphan-grace=2m` 只用于 watchdog 回收 claim 后启动中断的续接任务，不改变正常等待有效期。单独的 `waiting_user_input` 只闭合本次 Relay WS 连接，不生成 Interaction 等待状态；`paused` 只表示 Relay 对 `stop_all_agents` 的确认。Interaction 续接通过 `AgentRuntimeInteraction` 防腐层，应用层发送通用响应上下文，Relay WS adapter 转换为 `approval-response`，不创建新的普通 user 消息。stop/delete 触发本地取消时，Relay WS adapter 会优先向本机 active run 对应下游短连接 best-effort 发送 `{"type":"stop_all_agents"}`；若 stop 落到其他实例或本机连接已清理，则新建独立 clientId 的临时 WS，使用 run 中已回填的 Relay `runtimeSessionId` 发送 `config(sessionMode=resume, supports_incremental_recovery=true)`，收到 `session-ready` 后发送 `stop_all_agents`，等待 `session-state=paused` 或 `interrupt-ack-timeout` 到期后释放临时连接。
 
-前端通过 turn stream 的 `encodedItem.data` 消费 ChatService 标准顶层事件，同时可以按 Relay 文档解析 Relay payload：Relay JSON payload 保留原字段名和嵌套结构，仅额外补充 `source=relay`、`sourceType=<Relay原始type>`、`runtimeSessionId`。`FINANCEEX_RELAY_MAX_IN_MEMORY_SIZE` 只提高 Relay HTTP WebClient 单个响应 frame 的 codec 解码上限；`FINANCEEX_RELAY_WS_MAX_FRAME_BYTES` 控制 Relay WebSocket 单帧上限，二者都不承担超大事件拆分职责。`message.delta` 是 assistant 正文增量；`message.snapshot` 是回答快照，历史正文使用最后一个 snapshot，同时每个 snapshot 都会进入 `ChatMessageDto.parts` 的 `MESSAGE_SNAPSHOT` part；`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.card` 是过程、引用或卡片事件，run 完成后进入 `ChatMessageDto.parts` 回显。Relay `tool-structured-result` 统一映射为 `runtime.tool`，完整保留 `result_data/resultData`，不再拆成正文、引用、进度或卡片。Relay 或 domain-agent 未知 JSON object 才以 `runtime.event` 可控透传。不能把下游任意 `type` 直接作为 ChatService 顶层事件类型。
+前端通过 turn stream 的 `encodedItem.data` 消费 ChatService 标准顶层事件，同时可以按 Relay 文档解析 Relay payload：Relay JSON payload 保留原字段名和嵌套结构，仅额外补充 `source=relay`、`sourceType=<Relay原始type>`、`runtimeSessionId`。`FINANCEEX_RELAY_WS_MAX_FRAME_BYTES` 控制 Relay WebSocket 单帧上限，不承担超大事件拆分职责。`message.delta` 是 assistant 正文增量；`message.snapshot` 是回答快照，历史正文使用最后一个 snapshot，同时每个 snapshot 都会进入 `ChatMessageDto.parts` 的 `MESSAGE_SNAPSHOT` part；`runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.card` 是过程、引用或卡片事件，run 完成后进入 `ChatMessageDto.parts` 回显。Relay `tool-structured-result` 统一映射为 `runtime.tool`，完整保留 `result_data/resultData`，不再拆成正文、引用、进度或卡片。Relay 或 domain-agent 未知 JSON object 才以 `runtime.event` 可控透传。不能把下游任意 `type` 直接作为 ChatService 顶层事件类型。
 
-协议级等待用户输入的续接能力独立为 `AgentRuntimeInteraction`。应用层只在该接口声明支持时创建 `WAITING_USER`；当前只有 Relay WebSocket adapter 支持 questionnaire 澄清续接，续接时发送 Relay `approval-response`；非支持 adapter 只保存和推送对应 `runtime.card`。
+协议级等待用户输入的续接能力独立为 `AgentRuntimeInteraction`。Relay WebSocket 支持 questionnaire 澄清续接，续接时发送 Relay `approval-response`。
 
 ## 命名规范
 

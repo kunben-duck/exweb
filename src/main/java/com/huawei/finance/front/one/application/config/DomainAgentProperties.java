@@ -18,6 +18,8 @@ public class DomainAgentProperties {
     private boolean enabled = false;
     /** DomainAgent 服务基础地址。 */
     private String baseUrl = "";
+    /** DomainAgent HTTP 请求 Referer；为空时回退到 baseUrl。 */
+    private String referer = "";
     /** DomainAgent chat 流式接口路径。 */
     private String chatPath = "/api/chat";
     /** DomainAgent stop 接口路径；为空表示不支持下游取消。 */
@@ -39,6 +41,8 @@ public class DomainAgentProperties {
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
     public String getBaseUrl() { return baseUrl; }
     public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+    public String getReferer() { return referer; }
+    public void setReferer(String referer) { this.referer = referer; }
     public String getChatPath() { return chatPath; }
     public void setChatPath(String chatPath) { this.chatPath = chatPath; }
     public String getStopPath() { return stopPath; }
@@ -58,6 +62,14 @@ public class DomainAgentProperties {
 
     public int normalizedMaxAttachments() {
         return maxAttachments <= 0 ? 10 : maxAttachments;
+    }
+
+    public String normalizedReferer() {
+        String configured = referer == null ? "" : referer.trim();
+        if (!configured.isBlank()) {
+            return configured;
+        }
+        return baseUrl == null ? "" : baseUrl.trim();
     }
 
     public int normalizedMaxPendingFrameBytes() {

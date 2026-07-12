@@ -8,21 +8,19 @@ import org.springframework.util.unit.DataSize;
 
 class RelayAgentPropertiesTest {
     @Test
-    void relayPropertiesDefaultToStreamHttpEndpoint() {
+    void relayPropertiesContainOnlyWebSocketTransportDefaults() {
         RelayAgentProperties properties = new RelayAgentProperties();
 
-        assertThat(properties.getBaseUrl()).isBlank();
-        assertThat(properties.getStreamPath()).isEqualTo("/v1/agent/runs/stream");
-        assertThat(properties.getStopPath()).isEqualTo("/v1/agent/runs/{runId}/stop");
-        assertThat(properties.getMaxInMemorySize()).isEqualTo(DataSize.ofMegabytes(1));
+        assertThat(properties.getRelay().isEnabled()).isTrue();
         assertThat(properties.getRelay().getWebsocket().getUrl()).isBlank();
+        assertThat(properties.getRelay().getWebsocket().getMaxFrameBytes()).isEqualTo(DataSize.ofMegabytes(1));
     }
 
     @Test
-    void forwardCookieOnlyAllowsConfiguredRelayAdapters() {
+    void forwardCookieDefaultsToEnabledWithBoundedLength() {
         AgentRuntimeForwardCookieProperties properties = new AgentRuntimeForwardCookieProperties();
 
-        assertThat(properties.isAdapterAllowed("relay-stream-http")).isTrue();
-        assertThat(properties.isAdapterAllowed("third-party-adapter")).isFalse();
+        assertThat(properties.isEnabled()).isTrue();
+        assertThat(properties.normalizedMaxLength()).isEqualTo(8192);
     }
 }

@@ -16,6 +16,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.reactivestreams.Publisher;
 import org.springframework.core.io.buffer.DataBuffer;
@@ -508,6 +509,39 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
+    void openingHandshakeTimeoutCancelsPendingQueryUpgrade() {
+        NeverOpeningWebSocketClient client = new NeverOpeningWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofMillis(5));
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(RelayRuntimeProtocolException.class)
+                        .hasMessageContaining("RELAY_WS_CONFIG_TIMEOUT")
+                        .hasMessageContaining("stage=opening-handshake"))
+                .verify(Duration.ofSeconds(1));
+
+        assertThat(client.executeCount()).isEqualTo(1);
+        assertThat(client.cancelled()).isTrue();
+    }
+
+    @Test
+    void openingHandshakeGuardStopsAfterUpgradeCompletes() {
+        FakeWebSocketClient client = new FakeWebSocketClient(Flux.concat(
+                Mono.just("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"),
+                Flux.never()));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofMillis(5));
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(this::assertSessionReadyMetadata)
+                .thenAwait(Duration.ofMillis(25))
+                .thenCancel()
+                .verify(Duration.ofSeconds(1));
+
+        assertThat(client.sent()).hasSizeGreaterThanOrEqualTo(2);
+        assertThat(client.sent().get(1)).contains("\"type\":\"user-message\"");
+    }
+
+    @Test
     void userMessageStageKeepsWaitingAcrossIdleGapAndSendsHeartbeat() {
         ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
         RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10), Duration.ofSeconds(5),
@@ -608,7 +642,7 @@ class RelayWebSocketRuntimeAdapterTest {
                         .hasMessageContaining("RELAY_WS_HEARTBEAT_RESPONSE_TIMEOUT"))
                 .verify();
 
-        assertThat(client.sent()).contains("{\"type\":\"interrupt\"}");
+        assertThat(client.sent()).contains("{\"type\":\"stop_all_agents\"}");
     }
 
     @Test
@@ -643,7 +677,7 @@ class RelayWebSocketRuntimeAdapterTest {
                         .hasMessageContaining("RELAY_WS_MAX_RUN_DURATION_EXCEEDED"))
                 .verify();
 
-        assertThat(client.sent()).contains("{\"type\":\"interrupt\"}");
+        assertThat(client.sent()).contains("{\"type\":\"stop_all_agents\"}");
     }
 
     @Test
@@ -749,6 +783,22 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
+    void openingHandshakeTimeoutCancelsPendingInteractionUpgrade() {
+        NeverOpeningWebSocketClient client = new NeverOpeningWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofMillis(5));
+
+        StepVerifier.create(adapter.continueWithUserResponse(interactionRequest()))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(RelayRuntimeProtocolException.class)
+                        .hasMessageContaining("RELAY_WS_CONFIG_TIMEOUT")
+                        .hasMessageContaining("stage=opening-handshake"))
+                .verify(Duration.ofSeconds(1));
+
+        assertThat(client.executeCount()).isEqualTo(1);
+        assertThat(client.cancelled()).isTrue();
+    }
+
+    @Test
     void shortConnectionCancelSendsInterruptFrame() {
         ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
         RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10));
@@ -762,7 +812,7 @@ class RelayWebSocketRuntimeAdapterTest {
 
         assertThat(client.executeCount()).isEqualTo(1);
         assertThat(client.sent().get(0)).contains("\"type\":\"config\"");
-        assertThat(client.sent()).contains("{\"type\":\"interrupt\"}");
+        assertThat(client.sent()).contains("{\"type\":\"stop_all_agents\"}");
     }
 
     @Test
@@ -785,7 +835,7 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(config.path("config").path("sessionId").asText()).isEqualTo("relay-session-1");
         assertThat(config.path("config").path("uid").asText()).isEqualTo("user1");
         assertThat(config.path("config").path("supports_incremental_recovery").asBoolean()).isTrue();
-        assertThat(client.sent().get(1)).isEqualTo("{\"type\":\"interrupt\"}");
+        assertThat(client.sent().get(1)).isEqualTo("{\"type\":\"stop_all_agents\"}");
     }
 
     @Test
@@ -800,7 +850,7 @@ class RelayWebSocketRuntimeAdapterTest {
 
         assertThat(client.sent()).hasSize(2);
         assertThat(client.sent().getFirst()).contains("\"type\":\"config\"");
-        assertThat(client.sent().get(1)).isEqualTo("{\"type\":\"interrupt\"}");
+        assertThat(client.sent().get(1)).isEqualTo("{\"type\":\"stop_all_agents\"}");
     }
 
     @Test
@@ -818,7 +868,7 @@ class RelayWebSocketRuntimeAdapterTest {
         JsonNode config = objectMapper.readTree(client.sent().getFirst());
         assertThat(config.path("config").path("sessionMode").asText()).isEqualTo("resume");
         assertThat(config.path("config").path("sessionId").asText()).isEqualTo("session1");
-        assertThat(client.sent().get(1)).isEqualTo("{\"type\":\"interrupt\"}");
+        assertThat(client.sent().get(1)).isEqualTo("{\"type\":\"stop_all_agents\"}");
     }
 
     @Test
@@ -841,10 +891,24 @@ class RelayWebSocketRuntimeAdapterTest {
         RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofMillis(5));
 
         StepVerifier.create(adapter.cancel(cancelRequest("run1")))
-                .verifyComplete();
+                .expectComplete()
+                .verify(Duration.ofSeconds(1));
 
         assertThat(client.sent()).hasSize(1);
         assertThat(client.sent().getFirst()).contains("\"type\":\"config\"");
+    }
+
+    @Test
+    void temporaryInterruptOpeningHandshakeTimeoutCancelsPendingUpgrade() {
+        NeverOpeningWebSocketClient client = new NeverOpeningWebSocketClient();
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofMillis(5));
+
+        StepVerifier.create(adapter.cancel(cancelRequest("run1")))
+                .expectComplete()
+                .verify(Duration.ofSeconds(1));
+
+        assertThat(client.executeCount()).isEqualTo(1);
+        assertThat(client.cancelled()).isTrue();
     }
 
     private void assertConfigHandshakeFails(String configFrame, String expectedMessage) {
@@ -1004,6 +1068,30 @@ class RelayWebSocketRuntimeAdapterTest {
                 ),
                 RuntimeForwardHeaders.empty()
         );
+    }
+
+    private static final class NeverOpeningWebSocketClient implements WebSocketClient {
+        private final AtomicBoolean cancelled = new AtomicBoolean(false);
+        private int executeCount;
+
+        @Override
+        public Mono<Void> execute(URI url, WebSocketHandler handler) {
+            return execute(url, new HttpHeaders(), handler);
+        }
+
+        @Override
+        public Mono<Void> execute(URI url, HttpHeaders requestHeaders, WebSocketHandler handler) {
+            executeCount++;
+            return Mono.<Void>never().doOnCancel(() -> cancelled.set(true));
+        }
+
+        private int executeCount() {
+            return executeCount;
+        }
+
+        private boolean cancelled() {
+            return cancelled.get();
+        }
     }
 
     private static final class ReusableFakeWebSocketClient implements WebSocketClient {

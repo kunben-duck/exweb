@@ -15,7 +15,8 @@ class FinanceExRequiredConfigurationValidatorTest {
             "financeex.redis.host=redis.internal",
             "financeex.websocket.allowed-origin-patterns=https://finex.example.com",
             "financeex.storage.provider=local",
-            "financeex.agent-runtime.default-provider=relay"
+            "financeex.agent-runtime.default-provider=relay",
+            "financeex.agent-runtime.relay.websocket.url=wss://relay.example.com/ws"
     };
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
@@ -33,15 +34,13 @@ class FinanceExRequiredConfigurationValidatorTest {
     }
 
     @Test
-    void completeStreamHttpConfigurationStarts() {
-        contextWith("financeex.agent-runtime.base-url=https://relay.example.com")
-                .run(context -> assertThat(context).hasNotFailed());
+    void completeWebSocketConfigurationStarts() {
+        contextWith().run(context -> assertThat(context).hasNotFailed());
     }
 
     @Test
     void optionalIntegrationsDoNotRequireUrlsWhenDisabled() {
         contextWith(
-                "financeex.agent-runtime.base-url=https://relay.example.com",
                 "financeex.intent.enabled=false",
                 "financeex.use-case-library.enabled=false",
                 "financeex.domain-agent.enabled=false",
@@ -52,7 +51,6 @@ class FinanceExRequiredConfigurationValidatorTest {
     @Test
     void enabledOptionalIntegrationsRequireOwnBaseUrls() {
         contextWith(
-                "financeex.agent-runtime.base-url=https://relay.example.com",
                 "financeex.intent.enabled=true",
                 "financeex.use-case-library.enabled=true",
                 "financeex.domain-agent.enabled=true",
@@ -71,7 +69,6 @@ class FinanceExRequiredConfigurationValidatorTest {
     @Test
     void huaweiS3StorageRequiresObjectStorageConfiguration() {
         contextWith(
-                "financeex.agent-runtime.base-url=https://relay.example.com",
                 "financeex.storage.provider=huawei-s3"
         ).run(context -> {
             assertThat(context).hasFailed();
@@ -86,7 +83,6 @@ class FinanceExRequiredConfigurationValidatorTest {
     @Test
     void apiStoreStorageRequiresBaseUrl() {
         contextWith(
-                "financeex.agent-runtime.base-url=https://relay.example.com",
                 "financeex.storage.provider=api-store"
         ).run(context -> {
             assertThat(context).hasFailed();
@@ -96,17 +92,36 @@ class FinanceExRequiredConfigurationValidatorTest {
     }
 
     @Test
-    void relayWebSocketAdapterRequiresOnlyWebSocketUrl() {
-        contextWith(
-                "financeex.agent-runtime.relay.adapter=relay-websocket",
-                "financeex.agent-runtime.relay.websocket.url=wss://relay.example.com/ws"
-        ).run(context -> assertThat(context).hasNotFailed());
+    void enabledRelayRequiresWebSocketUrl() {
+        contextWithoutRelayUrl().run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(context.getStartupFailure())
+                    .hasMessageContaining("financeex.agent-runtime.relay.websocket.url")
+                    .hasMessageContaining("FINANCEEX_RELAY_WS_URL");
+        });
     }
 
     @Test
+    void disabledRelayDoesNotRequireWebSocketUrl() {
+        contextWithoutRelayUrl(
+                "financeex.agent-runtime.relay.enabled=false",
+                "financeex.agent-runtime.default-provider=domain-agent",
+                "financeex.domain-agent.enabled=true",
+                "financeex.domain-agent.base-url=https://domain-agent.example.com"
+        ).run(context -> assertThat(context).hasNotFailed());
+    }
+
     private ApplicationContextRunner contextWith(String... properties) {
         return contextRunner.withPropertyValues(Stream.concat(
                 Stream.of(COMMON_REQUIRED),
+                Stream.of(properties)
+        ).toArray(String[]::new));
+    }
+
+    private ApplicationContextRunner contextWithoutRelayUrl(String... properties) {
+        return contextRunner.withPropertyValues(Stream.concat(
+                Stream.of(COMMON_REQUIRED)
+                        .filter(property -> !property.startsWith("financeex.agent-runtime.relay.websocket.url=")),
                 Stream.of(properties)
         ).toArray(String[]::new));
     }

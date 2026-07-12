@@ -262,11 +262,11 @@ AgentRuntimeExecutor#execute(...)
 
 重点排查：
 
-- Relay 请求缺少 sessionId/query：先看这里构造的 `AgentRuntimeRequest`，再看 Relay adapter 是否正确映射为下游 wire DTO。
+- Relay 请求缺少 sessionId/query：先看这里构造的 `AgentRuntimeRequest`，再看 WebSocket adapter 是否正确映射为 `config/user-message`。
 - Cookie 没透传：先确认 `forwardHeaders` 没有在这里丢失。
 - Runtime 并发满：查看 `WorkloadConcurrencyLimiter` 和 `financeex.resource-isolation.agent-runtime-max-concurrent`。
 
-### 6.2 Relay provider 选择 adapter
+### 6.2 Relay provider
 
 文件：
 
@@ -278,51 +278,55 @@ src/main/java/com/huawei/finance/front/one/infrastructure/runtime/relay/RelayAge
 
 ```text
 RelayAgentRuntime#query(...)
-RelayAgentRuntime#selectedAdapter(...)
+RelayAgentRuntime#continueWithUserResponse(...)
+RelayAgentRuntime#cancel(...)
 ```
 
 职责：
 
 - application 层只看到 `AgentRuntime`。
-- Relay provider 当前固定委托 streamable HTTP adapter；不再暴露下游协议选择配置。
+- Relay provider 固定委托唯一的 `RelayRuntimeProtocolAdapter` WebSocket 实现。
+- 普通问答、Interaction 续接与 stop 共用同一协议边界。
 
-当前 adapter：
+当前 transport：
 
-- `relay-stream-http`
+- `RelayWebSocketRuntimeAdapter`
 
-### 6.3 streamable HTTP adapter
+### 6.3 Relay WebSocket adapter
 
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/infrastructure/runtime/relay/RelayStreamHttpRuntimeAdapter.java
+src/main/java/com/huawei/finance/front/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java
 ```
 
 方法：
 
 ```text
-RelayStreamHttpRuntimeAdapter#query(...)
-RelayStreamHttpRuntimeAdapter#applyForwardedCookie(...)
+RelayWebSocketRuntimeAdapter#query(...)
+RelayWebSocketRuntimeAdapter#continueWithUserResponse(...)
+RelayWebSocketRuntimeAdapter#cancel(...)
 ```
 
 职责：
 
-- 通过 WebClient POST 到 Relay。
-- 请求体由 `AgentRuntimeRequest` 映射为 Relay 专用 `RelayRuntimeQueryRequest`，只包含下游需要的 allowlist 字段。
-- 可选透传 Cookie 到 HTTP header。
-- 使用 `bodyToFlux(String.class)` 接收下游响应。
-- 通过 `RelayRuntimeResponseNormalizer` 把 plain text、JSON chunk、SSE-like `data:` chunk 转成标准 ChatEvent。
+- 每个 run 建立短生命周期下游 WebSocket，先发送 `config(NEW|RESUME)`，收到 `session-ready` 后发送 `user-message`。
+- `config-handshake-timeout` 分别限制 HTTP Upgrade opening handshake 和 Upgrade 后的 `config -> session-ready`；opening 超时会取消底层 execute subscription，避免 run 与 Runtime 并发许可永久占用。
+- Interaction 续接建立 `RESUME` 连接并发送 `approval-response`，不会再发送普通 user message。
+- 可选把入口 Cookie 放入 WebSocket 握手 Header；业务 metadata 经过敏感字段过滤并注入服务端身份。
+- 通过 `RelayRuntimeResponseNormalizer` 把 Relay 文本 frame 转成标准 ChatEvent。
 - Relay `type=agent,is_streaming=true` 的 `content/context` 默认转成 `message.delta`；`type=agent,is_streaming=false` 和 `type=generate-response` 且 `content` 非空时转成 `message.snapshot`；`steam-complete/stream-complete/[DONE]` 转成 `message.completed`。
 - Relay JSON payload 保留原始字段名和嵌套结构，normalizer 只收敛 ChatService 顶层事件类型，并补充 `source=relay`、`sourceType=<Relay原始type>`、`runtimeSessionId`。Relay `type=tool-structured-result` 是 MCP 工具结构化结果帧，统一映射为 `runtime.tool`，完整保留 `result_data/resultData`；其中 `is_last` 只是工具分片上下文，不触发 `message.completed`。
 - Relay 和 domain-agent 过程帧按语义转成 `runtime.progress/runtime.metadata/runtime.agent/runtime.thinking/runtime.tool/runtime.reference/runtime.card`；domain-agent 的 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 这类对象如果跨网络 chunk，会继续使用对应稳定事件类型，并在 payload 中用 `fragment/itemId/delta/complete` 表达分片状态，避免半截 JSON 被误转成 `invalid-json`。当前 domain-agent 协议下 `cardUrl/diyCardScene/cardList/openCard` 通常不会在同一个 chunk 中同时出现，`runtime.card.payload.sourceType` 会保留原始字段名，例如 `diyCardScene` 或 `openCard`；未知完整 JSON 才转成 `runtime.event`。
 - `message.delta` 代表 assistant 正文增量并参与草稿拼接；`message.snapshot` 代表下游回答快照，会覆盖草稿，最后一个快照成为历史正文。
 - 流结束时补 `MessageCompletedEvent`。
+- stop 优先向本机 active 连接发送 `{"type":"stop_all_agents"}`；跨实例时建立临时 `RESUME` 连接发送同一控制帧并等待 `paused`。
 
 重点排查：
 
 - Relay 返回了数据但前端没看到：先确认这里是否产生了 `MessageDeltaEvent` 或 `RuntimeEvent`。
 - Relay 响应格式不是纯字符串片段：先看 `RelayRuntimeResponseNormalizer` 是否把正文转为 `message.delta/message.snapshot`，或把非正文扩展帧转为对应 `runtime.*`。不要把 Relay 原始 JSON 作为 ChatService 顶层事件透传。
-- 第三方 Cookie 泄漏风险：确认只有可信 Relay adapter、DomainAgent adapter 和配置 `forward-cookie=true` 的 HTTP 文档 provider upload 调用 `applyForwardedCookie(...)`，且 Cookie 没有进入请求体、multipart form 或元数据。
+- 第三方 Cookie 泄漏风险：确认只有可信 Relay WebSocket、DomainAgent adapter 和配置 `forward-cookie=true` 的 HTTP 文档 provider upload 使用入口 Cookie，且 Cookie 没有进入请求体、multipart form 或元数据。
 
 ## 7. Relay 事件如何变成可恢复事件流
 
@@ -760,7 +764,7 @@ ChatStreamApplicationService#appendAndPublish(...)
 
 - stop 后还出 delta：查 `ChatRunApplicationService#shouldAcceptEvent(...)` 是否拦截。
 - stop 没有通知前端：查 `run.cancelled` 是否写入 `fin_ex_chat_event_t`。
-- 下游 Relay 没停：查对应 adapter 的 `cancel(...)` 和 `financeex.agent-runtime.stop-path`。
+- 下游 Relay 没停：查 `RelayWebSocketRuntimeAdapter#cancel(...)`、active exchange 或临时 RESUME stop 连接。
 - 删除会话后仍收到终态事件：这是取消链路的正常异步收尾，前端已删除该会话时应忽略；若仍收到 delta，再查 cancel flag 和 guarded insert。
 
 ## 14. 后台任务与故障治理
@@ -941,7 +945,7 @@ cancelActive(...)
 3. `FinanceEXChatService#executeRun(...)`：session、message、route、run、execution 是否创建。
 4. `SessionApplicationService#prepareRunMessage(...)`：user message 是否入库。
 5. `AgentRuntimeExecutor#execute(...)`：Runtime 请求是否构造正确。
-6. `RelayStreamHttpRuntimeAdapter#query(...)`：下游是否返回。
+6. `RelayWebSocketRuntimeAdapter#query(...)`：config 握手、user-message 和下游 frame 是否正常。
 7. `FinanceEXChatService#persistAndPublishRunEvents(...)`：事件是否被拦截。
 8. `MyBatisChatEventStore#appendWithExecutionGuard(...)`：事件是否写入数据库并生成 seq，owner/fencing 是否匹配。
 9. `ChatStreamApplicationService#publishPersisted(...)`：是否本机发布和 Redis 发布。

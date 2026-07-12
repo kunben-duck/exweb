@@ -25,7 +25,7 @@ class ConfiguredDomainAgentClientTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
-    void queryForwardsCookieOnlyAsDomainAgentHttpHeader() throws Exception {
+    void queryUsesTrimmedConfiguredRefererAndForwardsCookieAsHttpHeaders() throws Exception {
         AtomicReference<ClientRequest> captured = new AtomicReference<>();
         WebClient.Builder builder = WebClient.builder()
                 .exchangeFunction(request -> {
@@ -36,6 +36,7 @@ class ConfiguredDomainAgentClientTest {
                             .build());
                 });
         DomainAgentProperties properties = properties();
+        properties.setReferer("  https://portal.example.com/domain-agent  ");
         DomainAgentChatRequestMapper mapper = new DomainAgentChatRequestMapper(objectMapper, properties);
         ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
                 builder, properties, mapper, new DomainAgentResponseNormalizer(objectMapper));
@@ -47,6 +48,8 @@ class ConfiguredDomainAgentClientTest {
                 .verifyComplete();
 
         assertThat(captured.get()).isNotNull();
+        assertThat(captured.get().headers().getFirst(HttpHeaders.REFERER))
+                .isEqualTo("https://portal.example.com/domain-agent");
         assertThat(captured.get().headers().getFirst(HttpHeaders.COOKIE)).isEqualTo("sid=abc");
         String body = objectMapper.writeValueAsString(mapper.toWireRequest(request));
         assertThat(body)
@@ -59,12 +62,13 @@ class ConfiguredDomainAgentClientTest {
                 .doesNotContain("\"queryType\"")
                 .doesNotContain("\"steamFlag\"")
                 .doesNotContain("sid=abc")
+                .doesNotContain("https://portal.example.com/domain-agent")
                 .doesNotContain("forwardHeaders")
                 .doesNotContain("cookieHeader");
     }
 
     @Test
-    void cancelForwardsCookieOnlyAsDomainAgentHttpHeader() {
+    void cancelUsesTrimmedConfiguredRefererAndForwardsCookieAsHttpHeaders() {
         AtomicReference<ClientRequest> captured = new AtomicReference<>();
         WebClient.Builder builder = WebClient.builder()
                 .exchangeFunction(request -> {
@@ -73,6 +77,7 @@ class ConfiguredDomainAgentClientTest {
                 });
         DomainAgentProperties properties = properties();
         properties.setStopPath("/api/stop");
+        properties.setReferer("  https://portal.example.com/domain-agent  ");
         ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
                 builder,
                 properties,
@@ -91,7 +96,70 @@ class ConfiguredDomainAgentClientTest {
                 .verifyComplete();
 
         assertThat(captured.get()).isNotNull();
+        assertThat(captured.get().headers().getFirst(HttpHeaders.REFERER))
+                .isEqualTo("https://portal.example.com/domain-agent");
         assertThat(captured.get().headers().getFirst(HttpHeaders.COOKIE)).isEqualTo("sid=abc");
+    }
+
+    @Test
+    void queryFallsBackToBaseUrlRefererWhenRefererIsBlank() {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> {
+                    captured.set(request);
+                    return Mono.just(ClientResponse.create(HttpStatus.OK)
+                            .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_EVENT_STREAM_VALUE)
+                            .body("message: {\"endFlag\":true}\n\n")
+                            .build());
+                });
+        DomainAgentProperties properties = properties();
+        properties.setBaseUrl("  http://domain.test  ");
+        properties.setReferer("  ");
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
+                builder,
+                properties,
+                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentResponseNormalizer(objectMapper));
+
+        StepVerifier.create(client.query(queryRequest(RuntimeForwardHeaders.empty())))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                .verifyComplete();
+
+        assertThat(captured.get()).isNotNull();
+        assertThat(captured.get().headers().getFirst(HttpHeaders.REFERER)).isEqualTo("http://domain.test");
+    }
+
+    @Test
+    void cancelFallsBackToBaseUrlRefererWhenRefererIsBlank() {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> {
+                    captured.set(request);
+                    return Mono.just(ClientResponse.create(HttpStatus.OK).build());
+                });
+        DomainAgentProperties properties = properties();
+        properties.setBaseUrl("  http://domain.test  ");
+        properties.setReferer(null);
+        properties.setStopPath("/api/stop");
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
+                builder,
+                properties,
+                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentResponseNormalizer(objectMapper));
+
+        StepVerifier.create(client.cancel(new DomainAgentCancelRequest(
+                        user(),
+                        "session1",
+                        "run1",
+                        "skill-tax",
+                        "USER_STOP",
+                        Map.of(),
+                        RuntimeForwardHeaders.empty()
+                )))
+                .verifyComplete();
+
+        assertThat(captured.get()).isNotNull();
+        assertThat(captured.get().headers().getFirst(HttpHeaders.REFERER)).isEqualTo("http://domain.test");
     }
 
     @Test

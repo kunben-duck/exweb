@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.application.service.chat;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePartDraft;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -89,13 +90,13 @@ final class AssistantAssembly {
     }
 
     private static ChatMessagePartDraft runtimePart(ChatEvent event) {
-        Map<String, Object> payload = event.payload() == null ? Map.of() : event.payload();
+        Map<String, Object> payload = eventPartPayload(event);
         String sourceType = stringValue(payload.get("sourceType"));
         return new ChatMessagePartDraft(partType(event.type(), payload), sourceType, contentText(event.type(), payload), payload);
     }
 
     private static ChatMessagePartDraft snapshotPart(ChatEvent event) {
-        Map<String, Object> payload = event.payload() == null ? Map.of() : event.payload();
+        Map<String, Object> payload = eventPartPayload(event);
         String sourceType = stringValue(payload.get("sourceType"));
         if (sourceType == null || sourceType.isBlank()) {
             sourceType = "message.snapshot";
@@ -111,6 +112,15 @@ final class AssistantAssembly {
                 false,
                 payload
         );
+    }
+
+    private static Map<String, Object> eventPartPayload(ChatEvent event) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        if (event.payload() != null) {
+            payload.putAll(event.payload());
+        }
+        payload.put("serverTimestampMs", event.createdAt().toEpochMilli());
+        return payload;
     }
 
     private static String partType(String eventType, Map<String, Object> payload) {

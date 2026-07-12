@@ -1218,6 +1218,7 @@ class FinanceEXChatServiceTest {
                 .containsExactly("search: 查询报销流程", "最终\nMarkdown **正文**", "最终\nMarkdown **正文**");
         assertThat(assistant.parts().getFirst().payload()).containsKey("optionalDetail");
         assertThat(assistant.parts().getFirst().payload().get("optionalDetail")).isNull();
+        assertThat(assistant.parts().getLast().payload()).doesNotContainKey("serverTimestampMs");
     }
 
     @Test
@@ -1237,6 +1238,40 @@ class FinanceEXChatServiceTest {
                 .containsExactly("first", "second");
         assertThat(assistant.parts()).extracting(ChatMessagePartDraft::visible)
                 .containsExactly(false, false);
+    }
+
+    @Test
+    void assistantAssemblyAddsServerTimestampToEventPartPayloads() {
+        Instant createdAt = Instant.parse("2026-07-12T08:00:00Z");
+        Map<String, Object> thinkingPayload = new HashMap<>();
+        thinkingPayload.put("sourceType", "thinking-operation-start");
+        thinkingPayload.put("status", "STARTED");
+        thinkingPayload.put("optionalDetail", null);
+        thinkingPayload.put("serverTimestampMs", -1L);
+        List<ChatEvent> events = List.of(
+                new RuntimeEvent("run1", "session1", 0, createdAt,
+                        "runtime.thinking", thinkingPayload),
+                new RuntimeEvent("run1", "session1", 0, createdAt.plusMillis(10),
+                        "runtime.progress", Map.of("sourceType", "relay-progress", "message", "处理中")),
+                new RuntimeEvent("run1", "session1", 0, createdAt.plusMillis(20),
+                        "runtime.tool", Map.of("sourceType", "tool-execution", "toolName", "search")),
+                new RuntimeEvent("run1", "session1", 0, createdAt.plusMillis(30),
+                        "runtime.card", Map.of("sourceType", "cardList")),
+                new MessageSnapshotEvent("run1", "session1", 0, createdAt.plusMillis(40), "answer",
+                        Map.of("content", "answer", "sourceType", "generate-response"))
+        );
+        AssistantAssembly assistant = new AssistantAssembly();
+
+        events.forEach(assistant::observe);
+
+        assertThat(assistant.parts()).extracting(ChatMessagePartDraft::partType)
+                .containsExactly("THINKING", "PROGRESS", "TOOL", "CARD", "MESSAGE_SNAPSHOT");
+        assertThat(assistant.parts()).extracting(part -> part.payload().get("serverTimestampMs"))
+                .containsExactly(createdAt.toEpochMilli(), createdAt.plusMillis(10).toEpochMilli(),
+                        createdAt.plusMillis(20).toEpochMilli(), createdAt.plusMillis(30).toEpochMilli(),
+                        createdAt.plusMillis(40).toEpochMilli());
+        assertThat(assistant.parts().getFirst().payload()).containsEntry("optionalDetail", null);
+        assertThat(thinkingPayload).containsEntry("serverTimestampMs", -1L);
     }
 
     @Test

@@ -83,8 +83,9 @@ public record ChatMessagePart(
             case "INTENT_CLARIFICATION_REQUEST" -> "意图澄清请求";
             case "INTENT_CLARIFICATION_RESPONSE" -> "意图澄清回答";
             case "DOMAIN_AGENT_REFUSAL" -> "领域 Agent 拒答";
-            case "DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST" -> "切换领域 Agent 确认";
-            case "DOMAIN_AGENT_SWITCH_DECLINED" -> "切换领域 Agent 已拒绝";
+            case "ROUTE_SWITCH_CONFIRMATION_REQUEST" -> "路由切换确认";
+            case "ROUTE_SWITCH_CONFIRMATION_RESPONSE" -> "路由切换确认结果";
+            case "ROUTE_SWITCH_DECLINED" -> "路由切换已拒绝";
             default -> "运行事件";
         };
     }
@@ -117,8 +118,8 @@ public record ChatMessagePart(
             case "REFERENCE", "CARD", "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE",
                  "AGENT_CLARIFICATION_REQUEST", "AGENT_CLARIFICATION_RESPONSE",
                  "INTENT_CLARIFICATION_REQUEST", "INTENT_CLARIFICATION_RESPONSE",
-                 "DOMAIN_AGENT_REFUSAL", "DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST",
-                 "DOMAIN_AGENT_SWITCH_DECLINED" -> "INFO";
+                 "DOMAIN_AGENT_REFUSAL", "ROUTE_SWITCH_CONFIRMATION_REQUEST",
+                 "ROUTE_SWITCH_CONFIRMATION_RESPONSE", "ROUTE_SWITCH_DECLINED" -> "INFO";
             default -> "INFO";
         };
     }
@@ -137,8 +138,9 @@ public record ChatMessagePart(
             case "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE",
                  "AGENT_CLARIFICATION_REQUEST", "AGENT_CLARIFICATION_RESPONSE",
                  "INTENT_CLARIFICATION_REQUEST", "INTENT_CLARIFICATION_RESPONSE" -> "clarification";
-            case "DOMAIN_AGENT_REFUSAL", "DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST",
-                 "DOMAIN_AGENT_SWITCH_DECLINED" -> "domain-agent";
+            case "DOMAIN_AGENT_REFUSAL" -> "domain-agent";
+            case "ROUTE_SWITCH_CONFIRMATION_REQUEST", "ROUTE_SWITCH_CONFIRMATION_RESPONSE",
+                 "ROUTE_SWITCH_DECLINED" -> "routing";
             default -> "runtime";
         };
     }
@@ -153,8 +155,8 @@ public record ChatMessagePart(
             case "CARD", "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE",
                  "AGENT_CLARIFICATION_REQUEST", "AGENT_CLARIFICATION_RESPONSE",
                  "INTENT_CLARIFICATION_REQUEST", "INTENT_CLARIFICATION_RESPONSE",
-                 "DOMAIN_AGENT_REFUSAL", "DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST",
-                 "DOMAIN_AGENT_SWITCH_DECLINED" -> "inline";
+                 "DOMAIN_AGENT_REFUSAL", "ROUTE_SWITCH_CONFIRMATION_REQUEST",
+                 "ROUTE_SWITCH_CONFIRMATION_RESPONSE", "ROUTE_SWITCH_DECLINED" -> "inline";
             default -> "collapsible";
         };
     }

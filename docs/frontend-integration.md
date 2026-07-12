@@ -540,7 +540,7 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 | `cancellable` | 当前 active run 是否允许调用 stop。 |
 | `waitingUserInput` | 当前会话是否停在等待用户交互输入状态。 |
 | `interactionId` | `waitingUserInput=true` 时返回，后续用 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 续接。 |
-| `interactionType` | 等待交互类型，例如 `INTENT_CLARIFICATION`、`AGENT_CLARIFICATION`、`DOMAIN_AGENT_SWITCH_CONFIRMATION`。 |
+| `interactionType` | 等待交互类型，例如 `INTENT_CLARIFICATION`、`AGENT_CLARIFICATION`、`ROUTE_SWITCH_CONFIRMATION`。 |
 | `assistantMessageId` | 等待卡片挂载的 assistant 消息 ID，刷新后用于定位历史消息中的 request part。 |
 | `expiresAt` | Interaction 过期时间；为空表示不过期。 |
 | `bindingProvider` | 当前会话绑定 provider，例如 `domain-agent` 或 `relay`。 |
@@ -722,8 +722,31 @@ sequenceDiagram
 - 未传 target 时，后端优先续接当前 active DomainAgent binding。普通 Relay 回答正常完成后把 binding 改为 `RESUMABLE`，因此下次提交问题仍调用用例库或意图服务；如果结果再次进入 Relay，则使用原 `runtimeSessionId` 执行 `resume`，不会再次发送 `new`。意图服务 `ROUTE_SINGLE.items[0].accessName` 经后端可选前缀归一化后成为 `DomainAgentId/skillId`；未配置前缀时使用原始值。`intentId` 是意图编码，`resourceInstruction.resourceId` 只用于后端诊断记录，均不参与 DomainAgent 路由。
 - DomainAgent 下游 body 以 `metadata` 为业务扩展，但 `skillId/query/sessionId` 由后端按当前绑定和本轮问题强制写入，前端传同名字段也不会覆盖。
 - 意图服务上下文由后端 RouteMemory 维护：首次路由传 `routeTrigger=first_turn`；最新 Relay/no_match route 的来源 run 正常完成时传 `fallback_followup`；DomainAgent 拒答重路由传 `domain_reject` 和本次拒答摘要；提交意图澄清后传 `clarify_answer`；前端 `forceReroute=true` 由后端转换为用户纠正触发原因。目标 binding 成功后、调用 Runtime 前即异步记录 `ROUTE`，所以后续任务失败、取消或拒答仍会保留本次路由；但已有 binding 的普通追问和 Agent Interaction 续接不新增 route。Relay route 固定保存为 `intent=no_match,intentCode=relay,targetProvider=relay`，只有正常完成才影响下一轮 trigger。手动 Agent 拒答后的候选在用户确认并成功绑定前不会记录。RouteMemory 始终 best-effort，不阻断 `/v1/chat/runs`。
-- 如果当前绑定来自意图或用例库，DomainAgent 返回配置化拒答 code 后，后端会重新调用 intent-agent：命中新 DomainAgent 时自动切换；合法 `NO_MATCH/ROUTE_MULTI` 或失败策略为 `RELAY_FALLBACK` 时废止已拒答 binding 并执行 Relay；失败策略为 `FAIL_RUN` 时废止已拒答 binding 后以 `INTENT_ROUTING_FAILED` 闭合。
-- 如果当前绑定来自手动选择，拒答后命中新 DomainAgent 时，本轮会返回 `run.waiting_user`，消息 parts 中包含 `DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST`。前端调用 `POST /v1/chat/runs` 并传 `runMode=CONTINUE_INTERACTION, interactionId` 提交确认；同意后后端用原问题调用新 DomainAgent，拒绝后保留原手动绑定并以拒答收口。
+- DomainAgent 流式返回 `type=agent.refusal,code=FN-EX-CAHT-BIZ-DAG-001` 后，后端立即终止旧 Agent 流并以 `routeTrigger=domain_reject` 重新调用 intent-agent。旧拒答编码和单独的 `reasonCode` 不再触发重路由。
+- 如果当前绑定来自意图或用例库，后端自动切换到新 DomainAgent；合法 `NO_MATCH/ROUTE_MULTI` 或失败策略为 `RELAY_FALLBACK` 时执行 Relay。若当前绑定来源为 `front-selected/user-confirmed`，候选 DomainAgent 或 Relay 都会先返回 `run.waiting_user`，消息 parts 包含 `DOMAIN_AGENT_REFUSAL` 和 `ROUTE_SWITCH_CONFIRMATION_REQUEST`。同意后使用原问题调用候选 Runtime，拒绝后保留原绑定。等待确认阶段不生成 `ANSWER`，最终回答、拒答与确认过程复用同一个 assistantMessageId。
+
+路由切换等待事件的关键字段示例：
+
+```json
+{
+  "type": "run.waiting_user",
+  "payload": {
+    "interactionType": "ROUTE_SWITCH_CONFIRMATION",
+    "interactionId": "interaction_xxx",
+    "assistantMessageId": "msg_xxx",
+    "currentProvider": "domain-agent",
+    "currentTargetId": "tax-agent",
+    "currentRouteSource": "front-selected",
+    "candidateProvider": "domain-agent",
+    "candidateTargetId": "accounting-agent",
+    "candidateIntentName": "账务问答",
+    "refusalCode": "FN-EX-CAHT-BIZ-DAG-001",
+    "refusalReasonCode": "OUT_OF_DOMAIN",
+    "refusalRecoverable": false,
+    "originalQuery": "原始用户问题"
+  }
+}
+```
 
 ## 会话接口
 
@@ -1270,7 +1293,7 @@ Agent 对话澄清续接。Relay questionnaire 等 Runtime 内部澄清同样使
 }
 ```
 
-DomainAgent 手动绑定切换确认。同意切换时传 `approved=true`；拒绝切换时传 `approved=false`，后端不会调用候选 DomainAgent，并保留原手动绑定：
+受保护路由切换确认。同意切换时传 `approved=true`；拒绝切换时传 `approved=false`，后端不会调用候选 DomainAgent/Relay，并保留原手动绑定：
 
 ```json
 {
@@ -1280,7 +1303,7 @@ DomainAgent 手动绑定切换确认。同意切换时传 `approved=true`；拒�
   "approved": true,
   "scope": "once",
   "metadata": {
-    "clientAction": "confirm-domain-agent-switch"
+    "clientAction": "confirm-route-switch"
   }
 }
 ```
@@ -1293,12 +1316,12 @@ DomainAgent 手动绑定切换确认。同意切换时传 `approved=true`；拒�
   "approved": false,
   "scope": "once",
   "metadata": {
-    "clientAction": "decline-domain-agent-switch"
+    "clientAction": "decline-route-switch"
   }
 }
 ```
 
-`CONTINUE_INTERACTION` 模式只用于等待态续接：必须传 `interactionId`；不要传 `message`、`attachments`、`targetType`、`targetId`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId` 或 `forceReroute=true`。澄清类 `approved/scope` 可省略，服务端默认 `true/once`；审批、确认和 DomainAgent 切换确认类必须显式传 `approved`。
+`CONTINUE_INTERACTION` 模式只用于等待态续接：必须传 `interactionId`；不要传 `message`、`attachments`、`targetType`、`targetId`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId` 或 `forceReroute=true`。澄清类 `approved/scope` 可省略，服务端默认 `true/once`；审批、确认和路由切换确认类必须显式传 `approved`。
 
 ## 反馈
 
@@ -1787,7 +1810,7 @@ heartbeat 和 done 使用同一个 envelope，不携带 `encodedItem`，也不�
 | `runtime.event` | 未识别但合法的下游 Runtime JSON 事件 | 按 `payload.channel/displayHint/sourceType` 兜底展示，不要拼入 assistant 正文 |
 | `message.completed` | assistant 消息结束 | 可停止当前消息输入光标 |
 | `run.completed` | 本轮 run 正常结束；若 `payload.messageReady=true`，`payload.assistantMessageId` 即可作为点赞/点踩目标 | 关闭 loading，保存 latestSeq，并用 `assistantMessageId` 绑定当前回答的反馈按钮 |
-| `run.waiting_user` | 本轮进入等待用户交互状态，可能是意图澄清、Agent questionnaire、审批/确认或 DomainAgent 切换确认 | 关闭当前 loading，展示对应卡片；后续调用 `POST /v1/chat/runs(runMode=CONTINUE_INTERACTION, interactionId)` 续接 |
+| `run.waiting_user` | 本轮进入等待用户交互状态，可能是意图澄清、Agent questionnaire、审批/确认或路由切换确认 | 关闭当前 loading，展示对应卡片；后续调用 `POST /v1/chat/runs(runMode=CONTINUE_INTERACTION, interactionId)` 续接 |
 | `run.failed` | 本轮 run 失败 | 展示错误信息，关闭 loading |
 | `run.cancelled` | 用户停止本轮回答；若 `payload.messageReady=true`，`payload.assistantMessageId` 即为 partial assistant 反馈目标 | 展示已停止，关闭 loading，并在有反馈目标时启用点赞/点踩 |
 
@@ -1795,7 +1818,7 @@ ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON c
 
 Relay WebSocket 始终使用短连接：每个 run 新建下游 WS，先发送 `config`，首轮 `config.sessionId` 使用 ChatService `sessionId`，只以 `session-ready` 作为 config 阶段唯一完成信号。adapter 会将 `session-ready` 转成 `runtime.metadata`，payload 保留原始 `session_id/session_mode` 等字段，并补充 `runtimeSessionId` 用于回填 run/RuntimeBinding 的真实会话 ID；其他配置阶段初始化响应会被隔离。随后 adapter 发送 `user-message`，并把 `/v1/chat/runs.metadata` 中的非敏感业务扩展作为 `user-message.metadata` 透传给 Relay；Cookie、token、Authorization、secret、password 等敏感 key 会被递归移除。Relay 出站 metadata 会由后端补充 `globalUserId` 和 `userAccount`，来源为入口固化的 `UserContext`，前端不需要传入且同名字段会被后端身份覆盖。本轮输出结束后释放物理连接；如果本轮正常 `run.completed`，ChatService 将 Relay RuntimeBinding 改为 `RESUMABLE`，下次普通提问重新路由；如果再次进入 Relay，则使用原真实 session ID 发送 `resume`。如果本轮进入 `AGENT_CLARIFICATION` 等待态，则保留 active RuntimeBinding，后续 `CONTINUE_INTERACTION` 新建短连接并发送 `config(RESUME) -> approval-response`。配置阶段若收到 `clear-session` 或明确的 session not found/corrupted，会永久取消该 binding 并让本轮失败；普通 `error/session-mismatch` 仍直接失败但不会在同一 run 内自动改发 `new`。`user-message` 后会丢弃 `relay-start` 前的前置 `session-state=idle/completed/ready/running/agent_thinking` 和迟到 `config`，并从 `relay-start`、首个业务帧或 `session-state=waiting_user_input/paused` 开始转成前端可见标准事件。普通问答阶段按 `FINANCEEX_RELAY_WS_HEARTBEAT_INTERVAL` 定时发送 `{ "type": "heartbeat" }`，`heartbeat-response` 不写入事件表、不推送前端；任意业务帧或 `heartbeat-response` 都会刷新活跃时间，超过 `FINANCEEX_RELAY_WS_HEARTBEAT_RESPONSE_TIMEOUT` 无回包时，本轮转为 `run.failed` 并尽力发送 `stop_all_agents`。`FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT` 分别约束 HTTP Upgrade opening handshake 和 Upgrade 后的 `config -> session-ready`，每个阶段独立计时；opening 超时会取消待升级连接并以 `RELAY_WS_CONFIG_TIMEOUT` 结束普通或 Interaction run。其他 WS 配置继续分别约束最长运行、stop ack、控制连接空闲和单帧大小。这些配置不改变前端协议，也不负责拆分超大事件。Relay `approval-request(operation_type=questionnaire)` 会创建 `AGENT_CLARIFICATION` Interaction 等待态并输出 `run.waiting_user`；该帧本身会闭合当前用户轮次。单独的 `session-state=waiting_user_input` 仍只作为本次下游连接终态；`session-state=paused` 仅作为 stop 确认。
 
-等待用户输入后的续接统一从 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 进入。`INTENT_CLARIFICATION` 属于路由阶段，会把回答保存为独立 user 消息并继续调用 intent-agent，下一轮问题或最终回答也保存为新的 assistant；`AGENT_CLARIFICATION` 属于 Runtime 执行阶段，由 `AgentRuntimeInteraction` 承载并继续复用原 assistant，当前 Relay WebSocket adapter 会发送 Relay `approval-response`；`DOMAIN_AGENT_SWITCH_CONFIRMATION` 属于 ChatService 路由确认，用户同意后才切换到候选 DomainAgent。
+等待用户输入后的续接统一从 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 进入。`INTENT_CLARIFICATION` 属于路由阶段，会把回答保存为独立 user 消息并继续调用 intent-agent，下一轮问题或最终回答也保存为新的 assistant；`AGENT_CLARIFICATION` 属于 Runtime 执行阶段，由 `AgentRuntimeInteraction` 承载并继续复用原 assistant，当前 Relay WebSocket adapter 会发送 Relay `approval-response`；`ROUTE_SWITCH_CONFIRMATION` 属于 ChatService 路由确认，用户同意后才切换到候选 DomainAgent 或 Relay。
 
 | 事件类型 | 标准 payload |
 | --- | --- |

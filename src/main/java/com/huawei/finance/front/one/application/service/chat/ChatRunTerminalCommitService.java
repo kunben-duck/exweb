@@ -7,6 +7,7 @@ import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingEx
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatInteractionRequest;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionType;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunExecutionStatus;
@@ -20,6 +21,7 @@ import com.huawei.finance.front.one.domain.runtime.RuntimeBindingStatus;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -64,6 +66,35 @@ public class ChatRunTerminalCommitService {
         this.runtimeBindingRepository = runtimeBindingRepository;
         this.chatInteractionService = chatInteractionService;
         this.runtimeBindingTtl = RuntimeBindingExpirationPolicy.normalize(runtimeBindingTtl);
+    }
+
+    /**
+     * 原子提交自动 DomainAgent 拒答事实及 binding 失效状态。
+     *
+     * <p>事件写入先获取 run/execution guard，再更新 RuntimeBinding，保持与 owner 终态一致的
+     * {@code run -> runtime_binding} 锁顺序。Redis 与实时发布必须在事务提交后由调用方处理。</p>
+     */
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public CommitResult commitDomainAgentRefusal(DomainAgentRefusalCommitCommand command) {
+        if (command == null || command.event() == null || command.executionClaim() == null) {
+            throw new IllegalArgumentException("DomainAgent 拒答提交参数不能为空");
+        }
+        RuntimeBinding binding = command.binding();
+        if (binding == null || !DOMAIN_AGENT_PROVIDER.equals(binding.provider())
+                || binding.status() != RuntimeBindingStatus.ACTIVE) {
+            throw new IllegalStateException("DomainAgent 拒答提交缺少 ACTIVE binding");
+        }
+        if (!Objects.equals(command.event().sessionId(), binding.chatSessionId())) {
+            throw new IllegalStateException("DomainAgent 拒答 event 与 binding 会话不一致");
+        }
+        ChatEvent stored = chatStreamService.appendWithExecutionGuard(command.event(), command.executionClaim());
+        Map<String, Object> metadata = new LinkedHashMap<>(binding.metadata());
+        if (command.rejectCode() != null && !command.rejectCode().isBlank()) {
+            metadata.put("lastRejectCode", command.rejectCode());
+        }
+        RuntimeBinding cancelled = runtimeBindingRepository.save(
+                binding.withMetadata(metadata).withStatus(RuntimeBindingStatus.CANCELLED));
+        return new CommitResult(stored, cancelled);
     }
 
     @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
@@ -335,7 +366,8 @@ public class ChatRunTerminalCommitService {
                     context.messagePlan().regeneratedFromMessageId(),
                     context.assistant().parts(),
                     WAITING_ASSISTANT_METADATA,
-                    command.target().assistantMessageId()
+                    command.target().assistantMessageId(),
+                    appendWaitingAnswer(command.waitingRequest())
             ));
         }
         String existingAssistantId = continuation.assistantMessageId();
@@ -355,8 +387,14 @@ public class ChatRunTerminalCommitService {
                 context.assistant().finalContent(),
                 context.runId(),
                 context.assistant().parts(),
-                WAITING_ASSISTANT_METADATA
+                WAITING_ASSISTANT_METADATA,
+                appendWaitingAnswer(command.waitingRequest())
         ));
+    }
+
+    private boolean appendWaitingAnswer(ChatInteractionRequest waitingRequest) {
+        return waitingRequest == null
+                || waitingRequest.interactionType() != ChatInteractionType.ROUTE_SWITCH_CONFIRMATION;
     }
 
     private void validateNewTurnWaitingRequest(TerminalCommitContext context, WaitingUserCommitCommand command) {
@@ -456,6 +494,9 @@ public class ChatRunTerminalCommitService {
         RuntimeBinding binding = context.bindingRef().get();
         if (binding == null) {
             return null;
+        }
+        if (binding.status() != RuntimeBindingStatus.ACTIVE) {
+            return binding;
         }
         boolean establishedRelay = RELAY_PROVIDER.equals(binding.provider());
         RuntimeBinding next = binding.withRun(context.runId(), expiresAt(binding.provider(), establishedRelay));
@@ -577,6 +618,14 @@ public class ChatRunTerminalCommitService {
     public record TerminalOnlyCommitCommand(
             ChatEvent event,
             TerminalCommitContext context
+    ) {
+    }
+
+    public record DomainAgentRefusalCommitCommand(
+            ChatEvent event,
+            RunExecutionClaim executionClaim,
+            RuntimeBinding binding,
+            String rejectCode
     ) {
     }
 

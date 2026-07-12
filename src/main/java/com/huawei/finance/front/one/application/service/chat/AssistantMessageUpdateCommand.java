@@ -15,6 +15,7 @@ import java.util.List;
  * @param runId 产生本次续接输出的 run ID。
  * @param partDrafts 本次续接新增的 parts。
  * @param metadataJson 覆盖后的消息元数据 JSON；可为空以清理等待态标记。
+ * @param appendAnswerPart 是否追加合成 ANSWER part。
  */
 public record AssistantMessageUpdateCommand(
         String tenantId,
@@ -24,8 +25,15 @@ public record AssistantMessageUpdateCommand(
         String content,
         String runId,
         List<ChatMessagePartDraft> partDrafts,
-        String metadataJson
+        String metadataJson,
+        boolean appendAnswerPart
 ) {
+    public AssistantMessageUpdateCommand(String tenantId, String userId, ChatSession session, String messageId,
+                                         String content, String runId, List<ChatMessagePartDraft> partDrafts,
+                                         String metadataJson) {
+        this(tenantId, userId, session, messageId, content, runId, partDrafts, metadataJson, true);
+    }
+
     public List<ChatMessagePartDraft> safePartDrafts() {
         return partDrafts == null ? List.of() : partDrafts;
     }

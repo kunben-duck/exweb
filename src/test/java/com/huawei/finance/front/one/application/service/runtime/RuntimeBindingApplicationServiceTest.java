@@ -293,6 +293,42 @@ class RuntimeBindingApplicationServiceTest {
         assertThat(resumed.metadata()).containsEntry("runtimeSessionEstablished", true);
     }
 
+    @Test
+    void loadsCancelledExpiredDomainAgentBindingForRefusalRerouteWithoutReactivatingIt() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        Instant now = Instant.now();
+        RuntimeBinding binding = new RuntimeBinding("binding1", "t", "u", "s", "domain-agent",
+                "leaf1", "domain-session-1", RuntimeBindingStatus.CANCELLED, "run1",
+                now.minus(Duration.ofMinutes(1)), now.minus(Duration.ofDays(1)), now,
+                Map.of("domainAgentId", "agent-a", "routeSource", "intent-agent"));
+        repository.saved = binding;
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        RuntimeBinding loaded = service.loadDomainAgentForReroute(
+                "t", "u", "s", "binding1", "agent-a");
+
+        assertThat(loaded).isEqualTo(binding);
+        assertThat(loaded.status()).isEqualTo(RuntimeBindingStatus.CANCELLED);
+        assertThat(loaded.expiresAt()).isBefore(Instant.now());
+        assertThat(cache.get("t", "u", "s")).isEmpty();
+        assertThat(repository.saved).isEqualTo(binding);
+    }
+
+    @Test
+    void rejectsRefusalRerouteBindingFromDifferentDomainAgent() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        RuntimeBinding binding = binding("domain-agent", RuntimeBindingStatus.CANCELLED)
+                .withMetadata(Map.of("domainAgentId", "agent-a", "routeSource", "intent-agent"));
+        repository.saved = binding;
+        RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.loadDomainAgentForReroute(
+                        "t", "u", "s", "binding1", "agent-b"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Agent 已变化");
+    }
+
     private RuntimeBindingApplicationService service(InMemoryRuntimeBindingRepository repository,
                                                     InMemoryRuntimeBindingCache cache) {
         return service(repository, cache, Duration.ofDays(3));

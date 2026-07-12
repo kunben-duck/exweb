@@ -163,6 +163,32 @@ public class RuntimeBindingApplicationService {
     }
 
     /**
+     * 加载拒答重路由所引用的历史 DomainAgent binding。
+     *
+     * <p>该 binding 只用于恢复拒答时的 Agent、routeSource 和会话上下文，不代表仍可路由。
+     * 因此这里按 ID 和归属读取数据库事实，允许 ACTIVE/CANCELLED，也不检查 expiresAt、访问缓存或刷新状态。</p>
+     */
+    public RuntimeBinding loadDomainAgentForReroute(String tenantId, String userId, String sessionId,
+                                                     String bindingId, String expectedDomainAgentId) {
+        if (bindingId == null || bindingId.isBlank()) {
+            throw new IllegalStateException("拒答重路由上下文缺少 RuntimeBinding ID");
+        }
+        if (expectedDomainAgentId == null || expectedDomainAgentId.isBlank()) {
+            throw new IllegalStateException("拒答重路由上下文缺少 DomainAgent ID");
+        }
+        return repository.findById(bindingId)
+                .filter(binding -> tenantId.equals(binding.tenantId()))
+                .filter(binding -> userId.equals(binding.userId()))
+                .filter(binding -> sessionId.equals(binding.chatSessionId()))
+                .filter(binding -> DOMAIN_AGENT_PROVIDER.equals(binding.provider()))
+                .filter(binding -> binding.status() == RuntimeBindingStatus.ACTIVE
+                        || binding.status() == RuntimeBindingStatus.CANCELLED)
+                .filter(binding -> expectedDomainAgentId.equals(metadataText(binding, "domainAgentId")))
+                .orElseThrow(() -> new IllegalStateException(
+                        "拒答重路由 RuntimeBinding 不存在、归属不匹配或 Agent 已变化: " + bindingId));
+    }
+
+    /**
      * 为复杂任务创建新的 AgentRuntime 绑定。
      *
      * @param tenantId 租户标识。
@@ -394,6 +420,11 @@ public class RuntimeBindingApplicationService {
                 ? binding
                 : binding.withRuntimeSessionId(runtimeSessionId);
         return markRelaySessionEstablished(next, runtimeSessionId);
+    }
+
+    private String metadataText(RuntimeBinding binding, String key) {
+        Object value = binding == null || binding.metadata() == null ? null : binding.metadata().get(key);
+        return value == null || String.valueOf(value).isBlank() ? null : String.valueOf(value);
     }
 
     private RuntimeBinding save(RuntimeBinding binding) {

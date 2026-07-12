@@ -110,9 +110,9 @@ class ChatInteractionApplicationServiceTest {
     }
 
     @Test
-    void domainAgentSwitchConfirmationStillRequiresApproved() {
+    void routeSwitchConfirmationStillRequiresApproved() {
         MutableInteractionRepository repository = new MutableInteractionRepository();
-        ChatInteractionRequest waiting = waitingRequest(ChatInteractionType.DOMAIN_AGENT_SWITCH_CONFIRMATION);
+        ChatInteractionRequest waiting = waitingRequest(ChatInteractionType.ROUTE_SWITCH_CONFIRMATION);
         repository.insert(waiting);
         ChatInteractionApplicationService service = new ChatInteractionApplicationService(repository,
                 (bizType, context) -> bizType + "_fixed", new PermissionChecker(), new ChatInteractionProperties());

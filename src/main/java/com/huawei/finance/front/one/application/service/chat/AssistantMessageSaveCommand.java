@@ -20,6 +20,7 @@ import java.util.List;
  * @param partDrafts thinking/tool/card/reference 等过程信息草稿。
  * @param metadataJson 消息级元数据 JSON，例如用户 stop 固化 partial assistant 标记。
  * @param messageId 可选的预分配 assistant 消息 ID；用于在 run.completed 事件入库前确定反馈目标。
+ * @param appendAnswerPart 是否追加合成 ANSWER part；等待路由切换确认时为 false。
  */
 public record AssistantMessageSaveCommand(
         String tenantId,
@@ -31,13 +32,21 @@ public record AssistantMessageSaveCommand(
         String regeneratedFromMessageId,
         List<ChatMessagePartDraft> partDrafts,
         String metadataJson,
-        String messageId
+        String messageId,
+        boolean appendAnswerPart
 ) {
+    public AssistantMessageSaveCommand(String tenantId, String userId, ChatSession session, String content,
+                                       String runId, String parentMessageId, String regeneratedFromMessageId,
+                                       List<ChatMessagePartDraft> partDrafts, String metadataJson, String messageId) {
+        this(tenantId, userId, session, content, runId, parentMessageId, regeneratedFromMessageId,
+                partDrafts, metadataJson, messageId, true);
+    }
+
     public AssistantMessageSaveCommand(String tenantId, String userId, ChatSession session, String content,
                                        String runId, String parentMessageId, String regeneratedFromMessageId,
                                        List<ChatMessagePartDraft> partDrafts, String metadataJson) {
         this(tenantId, userId, session, content, runId, parentMessageId, regeneratedFromMessageId,
-                partDrafts, metadataJson, null);
+                partDrafts, metadataJson, null, true);
     }
 
     public List<ChatMessagePartDraft> safePartDrafts() {

@@ -14,6 +14,6 @@ public enum ChatInteractionType {
     APPROVAL,
     /** 普通确认，首版暂不启用。 */
     CONFIRMATION,
-    /** 手动选择的 DomainAgent 拒答后，确认是否切换到意图命中的新 DomainAgent。 */
-    DOMAIN_AGENT_SWITCH_CONFIRMATION
+    /** 受保护的 DomainAgent 拒答后，确认是否切换到新的 DomainAgent 或 Relay。 */
+    ROUTE_SWITCH_CONFIRMATION
 }

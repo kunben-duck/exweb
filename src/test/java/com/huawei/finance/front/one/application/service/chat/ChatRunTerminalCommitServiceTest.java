@@ -4,10 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventAppendRejectedException;
+import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
 import com.huawei.finance.front.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
+import com.huawei.finance.front.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
+import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatRunStatus;
@@ -17,7 +20,10 @@ import com.huawei.finance.front.one.domain.chat.RunCancelledEvent;
 import com.huawei.finance.front.one.domain.chat.RunCompletedEvent;
 import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
 import com.huawei.finance.front.one.domain.chat.RunWaitingUserEvent;
+import com.huawei.finance.front.one.domain.chat.RuntimeEvent;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
+import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
+import com.huawei.finance.front.one.domain.runtime.RuntimeBindingStatus;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -30,6 +36,80 @@ import org.junit.jupiter.api.Test;
 import org.springframework.transaction.annotation.Transactional;
 
 class ChatRunTerminalCommitServiceTest {
+    @Test
+    void domainAgentRefusalCommitHasBoundedTransactionTimeout() throws Exception {
+        Transactional transactional = ChatRunTerminalCommitService.class
+                .getMethod("commitDomainAgentRefusal",
+                        ChatRunTerminalCommitService.DomainAgentRefusalCommitCommand.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.timeoutString())
+                .isEqualTo("${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}");
+    }
+
+    @Test
+    void domainAgentRefusalCommitAppendsEventBeforeCancellingBinding() {
+        List<String> operations = new ArrayList<>();
+        RecordingEventStore eventStore = new RecordingEventStore(operations);
+        RecordingRuntimeBindingRepository bindingRepository = new RecordingRuntimeBindingRepository(operations);
+        ChatStreamApplicationService streamService = new ChatStreamApplicationService(
+                eventStore, null, null, null, null, null, null);
+        ChatRunTerminalCommitService service = new ChatRunTerminalCommitService(
+                streamService, null, null, null, bindingRepository, null, Duration.ZERO);
+        Instant now = Instant.now();
+        RuntimeBinding binding = new RuntimeBinding(
+                "binding1", "tenant1", "user1", "session1", "domain-agent", "msg-user",
+                "session1", RuntimeBindingStatus.ACTIVE, "run1", null, now, now,
+                Map.of("domainAgentId", "agent-a", "routeSource", "intent-agent"));
+        RuntimeEvent refusal = RuntimeEvent.metadata("run1", "session1", Map.of(
+                "sourceType", "agent.refusal",
+                "code", "FN-EX-CAHT-BIZ-DAG-001"));
+
+        ChatRunTerminalCommitService.CommitResult result = service.commitDomainAgentRefusal(
+                new ChatRunTerminalCommitService.DomainAgentRefusalCommitCommand(
+                        refusal, new RunExecutionClaim("run1", "instance-test", 1L), binding,
+                        "FN-EX-CAHT-BIZ-DAG-001"));
+
+        assertThat(operations).containsExactly("event", "binding");
+        assertThat(result.event().sequence()).isEqualTo(1L);
+        assertThat(result.binding().status()).isEqualTo(RuntimeBindingStatus.CANCELLED);
+        assertThat(result.binding().metadata())
+                .containsEntry("lastRejectCode", "FN-EX-CAHT-BIZ-DAG-001");
+    }
+
+    @Test
+    void domainAgentRefusalGuardRejectionDoesNotUpdateBinding() {
+        List<String> operations = new ArrayList<>();
+        RecordingRuntimeBindingRepository bindingRepository = new RecordingRuntimeBindingRepository(operations);
+        ChatEventStore rejectingStore = new RecordingEventStore(operations) {
+            @Override
+            public ChatEvent appendWithExecutionGuard(ChatEvent event, RunExecutionClaim claim) {
+                operations.add("event-rejected");
+                throw new ChatEventAppendRejectedException("fencing rejected refusal");
+            }
+        };
+        ChatRunTerminalCommitService service = new ChatRunTerminalCommitService(
+                new ChatStreamApplicationService(rejectingStore, null, null, null, null, null, null),
+                null, null, null, bindingRepository, null, Duration.ZERO);
+        Instant now = Instant.now();
+        RuntimeBinding binding = new RuntimeBinding(
+                "binding1", "tenant1", "user1", "session1", "domain-agent", "msg-user",
+                "session1", RuntimeBindingStatus.ACTIVE, "run1", null, now, now,
+                Map.of("domainAgentId", "agent-a", "routeSource", "intent-agent"));
+
+        assertThatThrownBy(() -> service.commitDomainAgentRefusal(
+                new ChatRunTerminalCommitService.DomainAgentRefusalCommitCommand(
+                        RuntimeEvent.metadata("run1", "session1", Map.of(
+                                "sourceType", "agent.refusal",
+                                "code", "FN-EX-CAHT-BIZ-DAG-001")),
+                        new RunExecutionClaim("run1", "instance-test", 1L), binding,
+                        "FN-EX-CAHT-BIZ-DAG-001")))
+                .isInstanceOf(ChatEventAppendRejectedException.class);
+
+        assertThat(operations).containsExactly("event-rejected");
+    }
+
     @Test
     void externalTerminalCommitHasBoundedTransactionTimeout() throws Exception {
         Transactional transactional = ChatRunTerminalCommitService.class
@@ -289,6 +369,68 @@ class ChatRunTerminalCommitServiceTest {
         @Override
         public Optional<ChatRun> findActiveBySession(String tenantId, String userId, String sessionId) {
             return Optional.of(run);
+        }
+    }
+
+    private static class RecordingEventStore implements ChatEventStore {
+        private final List<String> operations;
+
+        private RecordingEventStore(List<String> operations) {
+            this.operations = operations;
+        }
+
+        @Override
+        public ChatEvent append(ChatEvent event) {
+            throw new AssertionError("refusal commit must use execution guard");
+        }
+
+        @Override
+        public ChatEvent appendWithExecutionGuard(ChatEvent event, RunExecutionClaim claim) {
+            operations.add("event");
+            return new RuntimeEvent(event.runId(), event.sessionId(), 1L, Instant.now(),
+                    event.type(), event.payload());
+        }
+
+        @Override
+        public List<ChatEvent> findByOwnerAndSessionAfterSeq(String tenantId, String userId,
+                                                             String sessionId, long afterSeq) {
+            return List.of();
+        }
+
+        @Override
+        public List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId,
+                                                         String runId, long afterSeq) {
+            return List.of();
+        }
+
+        @Override
+        public long findLatestSeqByOwnerAndSession(String tenantId, String userId, String sessionId) {
+            return 0;
+        }
+    }
+
+    private static final class RecordingRuntimeBindingRepository implements RuntimeBindingRepository {
+        private final List<String> operations;
+
+        private RecordingRuntimeBindingRepository(List<String> operations) {
+            this.operations = operations;
+        }
+
+        @Override
+        public Optional<RuntimeBinding> findById(String bindingId) {
+            return Optional.empty();
+        }
+
+        @Override
+        public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId,
+                                                   String provider) {
+            return Optional.empty();
+        }
+
+        @Override
+        public RuntimeBinding save(RuntimeBinding binding) {
+            operations.add("binding");
+            return binding;
         }
     }
 }

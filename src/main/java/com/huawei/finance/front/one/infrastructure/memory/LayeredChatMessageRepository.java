@@ -68,13 +68,27 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
         ChatMessage previous = databaseStore.findByOwnerAndId(message.tenantId(), message.userId(), message.id())
                 .orElse(null);
         ChatMessage updated = databaseStore.updateAssistantMessage(message);
+        ChatMessage cacheValue = mergeParts(previous, updated);
         updateCacheAfterCommit(() -> {
             if (previous != null) {
                 redisCache.remove(previous);
             }
-            redisCache.append(updated);
+            redisCache.append(cacheValue);
         });
-        return updated;
+        return cacheValue;
+    }
+
+    private ChatMessage mergeParts(ChatMessage previous, ChatMessage updated) {
+        if (previous == null || previous.parts() == null || previous.parts().isEmpty()) {
+            return updated;
+        }
+        java.util.Map<String, com.huawei.finance.front.one.domain.chat.ChatMessagePart> merged =
+                new java.util.LinkedHashMap<>();
+        previous.parts().forEach(part -> merged.put(part.id(), part));
+        if (updated.parts() != null) {
+            updated.parts().forEach(part -> merged.put(part.id(), part));
+        }
+        return updated.withParts(java.util.List.copyOf(merged.values()));
     }
 
     @Override

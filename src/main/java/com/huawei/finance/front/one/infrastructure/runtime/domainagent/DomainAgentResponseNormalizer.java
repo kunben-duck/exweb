@@ -28,6 +28,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class DomainAgentResponseNormalizer {
     private final ObjectMapper objectMapper;
+    private final DomainAgentControlEventMapper controlEventMapper;
     private final int maxPendingFrameBytes;
     private final int maxFragmentBytes;
 
@@ -38,6 +39,7 @@ public class DomainAgentResponseNormalizer {
     @Autowired
     public DomainAgentResponseNormalizer(ObjectMapper objectMapper, DomainAgentProperties properties) {
         this.objectMapper = objectMapper;
+        this.controlEventMapper = new DomainAgentControlEventMapper();
         DomainAgentProperties nextProperties = properties == null ? new DomainAgentProperties() : properties;
         this.maxPendingFrameBytes = nextProperties.normalizedMaxPendingFrameBytes();
         this.maxFragmentBytes = nextProperties.normalizedMaxFragmentBytes();
@@ -391,6 +393,16 @@ public class DomainAgentResponseNormalizer {
                     Map.of("value", truncate(root.asText(""))))));
         }
         List<ChatEvent> events = new ArrayList<>();
+        DomainAgentControlEventMapper.ControlEvent controlEvent = controlEventMapper.map(root).orElse(null);
+        if (controlEvent != null) {
+            if (controlEvent.reroute()) {
+                events.addAll(flushPendingContent(runId, sessionId, state));
+            }
+            events.add(RuntimeEvent.metadata(runId, sessionId, controlEvent.payload()));
+            if (controlEvent.reroute()) {
+                return List.copyOf(events);
+            }
+        }
         addMetadataEvents(runId, sessionId, root, events);
         addStateEvent(runId, sessionId, root, events);
         addStructuredEvents(runId, sessionId, root, events);

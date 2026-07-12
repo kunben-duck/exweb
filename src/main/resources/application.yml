@@ -341,3 +341,6 @@ financeex:
     max-pending-frame-bytes: ${FINANCEEX_DOMAIN_AGENT_MAX_PENDING_FRAME_BYTES:1048576}
     # diyCardScene/searchList/sourcesDocuments/processResult 等大对象按 fragment payload 输出时的单片大小。
     max-fragment-bytes: ${FINANCEEX_DOMAIN_AGENT_MAX_FRAGMENT_BYTES:8192}
+    # 结构化拒答 event + binding 原子提交及提交后缓存同步使用独立 IO 池，不占用主事件落库线程。
+    control-io-executor-max-size: ${FINANCEEX_DOMAIN_AGENT_CONTROL_IO_EXECUTOR_MAX_SIZE:2}
+    control-io-executor-queue-capacity: ${FINANCEEX_DOMAIN_AGENT_CONTROL_IO_EXECUTOR_QUEUE_CAPACITY:128}

@@ -3,7 +3,10 @@ package com.huawei.finance.front.one.infrastructure.memory;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
@@ -50,6 +53,23 @@ class LayeredChatMessageRepositoryTest {
         assertThat(cache.appendCalls).hasValue(0);
     }
 
+    @Test
+    void assistantUpdateKeepsPreviousAndNewPartsInRedisProjection() {
+        FakeRedisCache cache = new FakeRedisCache();
+        FakeDatabaseStore database = new FakeDatabaseStore();
+        LayeredChatMessageRepository repository = repository(cache, database);
+        ChatMessagePart refusal = part("part1", "DOMAIN_AGENT_REFUSAL", 1);
+        ChatMessagePart answer = part("part2", "ANSWER", 2);
+        database.saved = message().withParts(List.of(refusal));
+
+        ChatMessage updated = repository.updateAssistantMessage(message().withParts(List.of(answer)));
+
+        assertThat(updated.parts()).extracting(ChatMessagePart::partType)
+                .containsExactly("DOMAIN_AGENT_REFUSAL", "ANSWER");
+        assertThat(cache.appended.parts()).extracting(ChatMessagePart::partType)
+                .containsExactly("DOMAIN_AGENT_REFUSAL", "ANSWER");
+    }
+
     private LayeredChatMessageRepository repository(FakeRedisCache cache, FakeDatabaseStore database) {
         ShortTermMemoryStorageProperties properties = new ShortTermMemoryStorageProperties();
         properties.setDatabaseRequired(true);
@@ -59,6 +79,11 @@ class LayeredChatMessageRepositoryTest {
     private ChatMessage message() {
         return new ChatMessage("msg1", "tenant1", "user1", "session1",
                 "assistant", "answer", null, Instant.now());
+    }
+
+    private ChatMessagePart part(String id, String type, int order) {
+        return new ChatMessagePart(id, "tenant1", "user1", "session1", "msg1", "run1",
+                type, "test", type, Map.of(), order, Instant.now());
     }
 
     private void beginTransactionSynchronization() {
@@ -73,6 +98,7 @@ class LayeredChatMessageRepositoryTest {
 
     private static final class FakeRedisCache extends RedisShortTermMemoryCache {
         private final AtomicInteger appendCalls = new AtomicInteger();
+        private ChatMessage appended;
 
         private FakeRedisCache() {
             super(null, null, new ShortTermMemoryRedisProperties(), null);
@@ -81,6 +107,7 @@ class LayeredChatMessageRepositoryTest {
         @Override
         public boolean append(ChatMessage message) {
             appendCalls.incrementAndGet();
+            appended = message;
             return true;
         }
 
@@ -100,6 +127,12 @@ class LayeredChatMessageRepositoryTest {
         @Override
         public ChatMessage save(ChatMessage message) {
             saveCalls.incrementAndGet();
+            saved = message;
+            return message;
+        }
+
+        @Override
+        public ChatMessage updateAssistantMessage(ChatMessage message) {
             saved = message;
             return message;
         }

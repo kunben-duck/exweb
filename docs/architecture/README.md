@@ -676,7 +676,7 @@ flowchart TB
 - 外部路由在 run pipeline 内执行，`run.started` 会先落库和推送；调用用例库前输出 `runtime.progress(sourceType=route-progress,stage=use_case_matching)`，调用 intent-agent 前输出 `runtime.progress(sourceType=intent-start,stage=intent_calling)`，意图裁决后再输出 `sourceType=intent-result`，避免慢路由阶段让前端长时间无反馈。
 - 意图服务 adapter 的 HTTP 请求体和响应体转换由 infrastructure intent mapper 承载；当前对接 `/getIntentDecision`，以 `data.result.routeAction` 作为唯一裁决点。
 - RouteMemory 是独立于普通短期/长期记忆的路由事实源。`ROUTE` 表示最终目标已确定且 RuntimeBinding 已持久化的路由决策，不要求下游任务完成。应用层在调用 Runtime 前通过独立 write executor 异步记录；任务失败、取消或 DomainAgent 拒答不撤销该事实。调用意图服务前加载最近 TopK `ROUTE` 和当前未完成的 `CLARIFY`，统一组装为 `conversationContext.history`；已有 binding 的普通续接和 Agent Interaction 续接不新增 route。
-- `conversationContext.routeTrigger` 由 ChatService 生成：普通无绑定首次路由为 `first_turn`，上一轮有效 route 是 Relay/no_match 时为 `fallback_followup`，DomainAgent 结构化拒答后的重路由为 `domain_reject`，用户回答意图澄清后为 `clarify_answer`。前端可在 `/v1/chat/runs` 顶层传 `forceReroute=true` 表示用户主动纠正路由，后端会转成内部用户纠正触发原因；`AGENT_CLARIFICATION` 和 `DOMAIN_AGENT_SWITCH_CONFIRMATION` 不进入意图 history。
+- `conversationContext.routeTrigger` 由 ChatService 生成：普通无绑定首次路由为 `first_turn`，上一轮有效 route 是 Relay/no_match 时为 `fallback_followup`，DomainAgent 结构化拒答后的重路由为 `domain_reject`，用户回答意图澄清后为 `clarify_answer`。前端可在 `/v1/chat/runs` 顶层传 `forceReroute=true` 表示用户主动纠正路由，后端会转成内部用户纠正触发原因；`AGENT_CLARIFICATION` 和 `ROUTE_SWITCH_CONFIRMATION` 不进入意图 history。
 - 意图服务的技术失败和协议失败默认最多重试 3 次；配置误设过大时运行时最多按 10 次生效。重试耗尽后读取 `financeex.intent.failure-strategy`：`RELAY_FALLBACK`（默认）创建 Relay binding 并执行原问题；`FAIL_RUN` 不创建 RuntimeBinding、不调用 Runtime，以 `INTENT_ROUTING_FAILED` 结束并提示用户手动选择技能。该策略同样覆盖意图澄清续接和 DomainAgent 拒答后的重新意图。
 - 意图服务返回 `WAITING_CLARIFICATION` 或兼容的 `TaskComplexity.NEED_CLARIFICATION` 时生成 `run.waiting_user(interactionType=INTENT_CLARIFICATION)`，不创建 RuntimeBinding；澄清问题以 `assistantSource=intent-agent` 的独立 assistant 消息保存。用户通过 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 提交后，后端在短事务中保存新的 user 回答、continuation run 并将旧 Interaction 标记为 `ANSWERED`，再继续意图澄清，直到得到最终路由。
 - 意图服务返回 `routeAction=ROUTE_SINGLE` 时，取唯一 `items[0].accessName`，按可选 `response-access-name-prefix` 移除一次匹配的开头前缀后作为 DomainAgentId/skillId，绑定并调用 DomainAgent Runtime；未配置前缀或前缀不匹配时使用原始值。`intentId` 保留为意图编码，`resourceInstruction.resourceId` 只作为诊断字段记录，两者都不参与路由或兜底；缺少 item 或有效 `accessName` 是协议失败，重试耗尽后应用 failure strategy。`confidence` 只用于记录和排障，不参与二次裁决。
@@ -693,7 +693,7 @@ flowchart LR
 ```
 - `financeex.intent-record.enabled=true` 时，只有实际调用过意图服务的 run 会异步写入 `fin_ex_intent_recognition_t`。记录内容包含本轮 query、routeAction、候选 items、最终路由是否采纳和意图服务耗时；DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会记录。
 - `routeAction=ROUTE_MULTI` 和 `routeAction=NO_MATCH` 都是合法业务结果，无论 failure strategy 如何配置都进入 Relay Runtime。意图关闭时仍直接进入默认 Relay；只有已启用意图的技术/协议失败才应用 failure strategy。
-- DomainAgent 绑定会一直续接，直到下游返回 `financeex.domain-agent.refusal.codes` 配置的明确拒答 code。意图/用例库绑定拒答后会在当前 run 内重新意图并自动切换；手动绑定拒答后若命中新 Agent，会生成 `DOMAIN_AGENT_SWITCH_CONFIRMATION` 等待用户确认。
+- DomainAgent 绑定会一直续接，直到下游流式返回 `type=agent.refusal,code=FN-EX-CAHT-BIZ-DAG-001`。ChatService 通过控制事件防腐层归一化并立即取消旧流：意图/用例库绑定自动切换，`front-selected/user-confirmed` 绑定则生成 `ROUTE_SWITCH_CONFIRMATION`，候选 DomainAgent 或 Relay 均需用户确认。
 
 ## RuntimeBinding
 
@@ -762,7 +762,7 @@ stop 语义：
 - 意图识别记录：`financeex.intent-record.enabled`、`max-query-length`、`max-raw-json-length`、`executor.*`。默认关闭；开启后使用 Servlet/MVC 友好的专用线程池 best-effort 写库，线程池拒绝、JSON 序列化失败或数据库写入失败都只记录 warn，不阻塞 `/v1/chat/runs`。
 - RouteMemory：`financeex.route-memory.top-k` 控制传给意图服务的最近成功 route 数量，`financeex.route-memory.max-clarification-rounds` 控制单条澄清链路的最大轮数，超过后降级 Relay Runtime，避免无限澄清。读写线程池分别由 `read-executor.*`、`write-executor.*` 控制；`read-timeout` 超时后会取消读取 future，并按 `circuit-breaker.*` 短暂熔断，熔断期间直接返回空 history。
 - DomainAgent：`financeex.domain-agent.base-url`、`financeex.domain-agent.referer`、`financeex.domain-agent.chat-path`、`financeex.domain-agent.stop-path`。chat、绑定续接与 stop 都发送可信服务端 `Referer`；未配置时回退到 `base-url`，不允许前端覆盖，也不写入 body 或持久化数据。
-- DomainAgent 拒答重路由：`financeex.domain-agent.refusal.codes`、`financeex.domain-agent.max-reroutes`
+- DomainAgent 拒答重路由：固定控制编码 `FN-EX-CAHT-BIZ-DAG-001`、`financeex.domain-agent.max-reroutes`。自动来源拒答的 event 与 binding 取消在有超时的短事务中原子提交，并由独立 control IO scheduler 承接阻塞数据库操作；事务提交后先发布事件和放行重意图，Redis binding 缓存仅异步 best-effort 同步。
 - AgentRuntime fallback provider：`financeex.agent-runtime.default-provider`，没有 active binding 时的兜底 provider，默认 `relay`
 - Relay WebSocket：`financeex.agent-runtime.relay.websocket.url`、`app-mode`、`connect-timeout`、`config-handshake-timeout`、`max-run-duration`、`heartbeat-interval`、`heartbeat-response-timeout`、`interrupt-ack-timeout`、`idle-timeout`、`max-frame-bytes`。Relay 启用时 `url` 必填；`config-handshake-timeout` 分别约束 HTTP Upgrade opening handshake 和 Upgrade 后的 `config -> session-ready`，每个阶段独立计时。
 - 下游 Cookie 透传：`financeex.agent-runtime.forward-cookie.enabled`、`max-length` 控制 run/stop 到 Relay WebSocket 的 Cookie 透传。DomainAgent chat/cancel 也使用入口 Cookie 内存快照。文档上传另由 `financeex.document.forward-cookie-max-length` 与 `financeex.storage.api-store.forward-cookie` 控制，默认关闭 api-store upload Cookie 透传。

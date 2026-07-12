@@ -372,7 +372,7 @@ public class SessionApplicationService implements ChatSessionFacade {
         Instant now = Instant.now();
         List<ChatMessagePart> parts = buildMessageParts(new MessagePartBuildContext(command.tenantId(),
                 command.userId(), session.id(), messageId, command.runId(), command.content(),
-                command.safePartDrafts(), now));
+                command.safePartDrafts(), now, command.appendAnswerPart()));
         ChatMessage message = new ChatMessage(
                 messageId,
                 command.tenantId(),
@@ -415,7 +415,7 @@ public class SessionApplicationService implements ChatSessionFacade {
         int startOrder = existing.parts() == null ? 1 : existing.parts().size() + 1;
         List<ChatMessagePart> parts = buildMessageParts(new MessagePartBuildContext(command.tenantId(),
                 command.userId(), session.id(), existing.id(), command.runId(), command.content(),
-                command.safePartDrafts(), now, startOrder));
+                command.safePartDrafts(), now, startOrder, command.appendAnswerPart()));
         ChatMessage updated = new ChatMessage(
                 existing.id(),
                 command.tenantId(),
@@ -565,25 +565,27 @@ public class SessionApplicationService implements ChatSessionFacade {
                 ));
             }
         }
-        parts.add(new ChatMessagePart(
-                idGenerator.newId("part", IdGenerateContext.of(context.tenantId(), context.userId(), context.sessionId())),
-                context.tenantId(),
-                context.userId(),
-                context.sessionId(),
-                context.messageId(),
-                context.runId(),
-                "ANSWER",
-                "message.snapshot",
-                context.content(),
-                null,
-                null,
-                null,
-                null,
-                null,
-                Map.of("content", context.content() == null ? "" : context.content()),
-                order,
-                context.now()
-        ));
+        if (context.appendAnswerPart()) {
+            parts.add(new ChatMessagePart(
+                    idGenerator.newId("part", IdGenerateContext.of(context.tenantId(), context.userId(), context.sessionId())),
+                    context.tenantId(),
+                    context.userId(),
+                    context.sessionId(),
+                    context.messageId(),
+                    context.runId(),
+                    "ANSWER",
+                    "message.snapshot",
+                    context.content(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    Map.of("content", context.content() == null ? "" : context.content()),
+                    order,
+                    context.now()
+            ));
+        }
         return List.copyOf(parts);
     }
 

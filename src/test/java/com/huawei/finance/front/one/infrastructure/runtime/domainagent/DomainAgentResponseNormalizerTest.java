@@ -11,6 +11,43 @@ class DomainAgentResponseNormalizerTest {
     private final DomainAgentResponseNormalizer normalizer = new DomainAgentResponseNormalizer(new ObjectMapper());
 
     @Test
+    void mapsOutOfDomainRefusalToStableControlEventAndPreservesNullValues() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                message: {"type":"agent.refusal","code":"FN-EX-CAHT-BIZ-DAG-001",\
+                "agentId":"tax-agent","reasonCode":"OUT_OF_DOMAIN","recoverable":false,\
+                "reason":null,"metadata":{"goal":null},"endFlag":true}
+                """);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("runtime.metadata");
+        assertThat(events.getFirst().payload())
+                .containsEntry("source", "domain-agent")
+                .containsEntry("sourceType", "agent.refusal")
+                .containsEntry("metadataType", "domain_agent_control")
+                .containsEntry("supervisorAction", "REROUTE")
+                .containsEntry("code", "FN-EX-CAHT-BIZ-DAG-001")
+                .containsEntry("reasonCode", "OUT_OF_DOMAIN")
+                .containsEntry("recoverable", false)
+                .containsKey("reason");
+        assertThat(events.getFirst().payload().get("reason")).isNull();
+        assertThat(events.getFirst().payload().get("metadata")).isInstanceOfSatisfying(
+                java.util.Map.class,
+                metadata -> assertThat(metadata).containsKey("goal"));
+    }
+
+    @Test
+    void keepsUnknownRefusalAsUnhandledControlEventWithoutTriggeringKnownAction() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                message: {"type":"agent.refusal","code":"FN-EX-CAHT-BIZ-DAG-999",\
+                "reasonCode":"OTHER","recoverable":false,"endFlag":true}
+                """);
+
+        assertThat(events).extracting(ChatEvent::type)
+                .containsExactly("runtime.metadata", "message.completed");
+        assertThat(events.getFirst().payload()).containsEntry("supervisorAction", "UNHANDLED");
+    }
+
+    @Test
     void mapsDomainAgentEventStreamFramesToChatServiceEvents() {
         String chunk = """
                 message: {"traceId":"trace-1"}

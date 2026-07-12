@@ -443,7 +443,7 @@ COMMENT ON COLUMN fin_ex_chat_message_part_t.user_id IS '系统归属用户标�
 COMMENT ON COLUMN fin_ex_chat_message_part_t.session_id IS 'part 所属聊天会话 ID。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.message_id IS 'part 所属 assistant 消息 ID，对应 fin_ex_chat_message_t.id。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.run_id IS '产生该 part 的 runId；分支快照 part 可继承来源 runId。';
-COMMENT ON COLUMN fin_ex_chat_message_part_t.part_type IS 'part 类型：ANSWER、MESSAGE_SNAPSHOT、PROGRESS、METADATA、AGENT、THINKING、TOOL、REFERENCE、CARD、AGENT_CLARIFICATION_REQUEST、AGENT_CLARIFICATION_RESPONSE、INTENT_CLARIFICATION_REQUEST、INTENT_CLARIFICATION_RESPONSE、DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST、RUNTIME_EVENT。';
+COMMENT ON COLUMN fin_ex_chat_message_part_t.part_type IS 'part 类型：ANSWER、MESSAGE_SNAPSHOT、PROGRESS、METADATA、AGENT、THINKING、TOOL、REFERENCE、CARD、AGENT_CLARIFICATION_REQUEST、AGENT_CLARIFICATION_RESPONSE、INTENT_CLARIFICATION_REQUEST、INTENT_CLARIFICATION_RESPONSE、DOMAIN_AGENT_REFUSAL、ROUTE_SWITCH_CONFIRMATION_REQUEST、ROUTE_SWITCH_CONFIRMATION_RESPONSE、ROUTE_SWITCH_DECLINED、RUNTIME_EVENT。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.source_type IS '下游原始事件类型，例如 agent、relay-progress、tool_call_streaming。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.content_text IS '可展示文本摘要，例如最终回答、进度文本、工具输入预览。';
 COMMENT ON COLUMN fin_ex_chat_message_part_t.title IS '前端展示标题，例如运行进度、思考过程或工具调用；为空时应用层按 part_type 默认生成。';
@@ -558,7 +558,7 @@ COMMENT ON COLUMN fin_ex_chat_interaction_request_t.runtime_provider IS '等待�
 COMMENT ON COLUMN fin_ex_chat_interaction_request_t.runtime_binding_id IS '触发等待态时使用的 RuntimeBinding ID，续接时复用并刷新该绑定。';
 COMMENT ON COLUMN fin_ex_chat_interaction_request_t.runtime_session_id IS 'Runtime 实际会话 ID，用于 resume 后提交 approval-result。';
 COMMENT ON COLUMN fin_ex_chat_interaction_request_t.approval_id IS 'Relay approval-request 返回的 approval_id，由后端保存并用于续接，前端无需传入。';
-COMMENT ON COLUMN fin_ex_chat_interaction_request_t.interaction_type IS '等待类型：AGENT_CLARIFICATION、INTENT_CLARIFICATION、DOMAIN_AGENT_SWITCH_CONFIRMATION 等。';
+COMMENT ON COLUMN fin_ex_chat_interaction_request_t.interaction_type IS '等待类型：AGENT_CLARIFICATION、INTENT_CLARIFICATION、ROUTE_SWITCH_CONFIRMATION 等。';
 COMMENT ON COLUMN fin_ex_chat_interaction_request_t.status IS '等待请求状态：WAITING、RESPONDING、ANSWERED、CANCELLED、EXPIRED。';
 COMMENT ON COLUMN fin_ex_chat_interaction_request_t.request_payload_json IS 'Relay 原始澄清/审批请求 payload，脱敏后保存，用于续接和排障。';
 COMMENT ON COLUMN fin_ex_chat_interaction_request_t.response_payload_json IS '用户提交的澄清/审批响应 payload，脱敏后保存。';
@@ -607,7 +607,7 @@ COMMENT ON COLUMN fin_ex_route_memory_t.query_text IS '触发该路由或澄清�
 COMMENT ON COLUMN fin_ex_route_memory_t.intent_id IS '意图服务返回的 intentId。';
 COMMENT ON COLUMN fin_ex_route_memory_t.intent_name IS '意图服务返回的 intentName 或展示名称。';
 COMMENT ON COLUMN fin_ex_route_memory_t.domain_agent_id IS '最终绑定或显式选择的 DomainAgentId。';
-COMMENT ON COLUMN fin_ex_route_memory_t.route_source IS '路由来源，例如 intent-agent、front-selected、intent-confirmed。';
+COMMENT ON COLUMN fin_ex_route_memory_t.route_source IS '路由来源，例如 intent-agent、front-selected、user-confirmed。';
 COMMENT ON COLUMN fin_ex_route_memory_t.clarify_question IS '意图服务返回并展示给用户的澄清问题。';
 COMMENT ON COLUMN fin_ex_route_memory_t.clarification_type IS '意图服务返回的澄清类型，例如 AMBIGUOUS_ROUTE。';
 COMMENT ON COLUMN fin_ex_route_memory_t.source_run_id IS '创建该路由记忆的 runId。';

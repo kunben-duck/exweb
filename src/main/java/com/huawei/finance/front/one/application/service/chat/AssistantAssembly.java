@@ -43,8 +43,23 @@ final class AssistantAssembly {
             if (isIntentClarificationResponse(event.payload())) {
                 return;
             }
+            if (isDomainAgentRefusal(event.payload())) {
+                // 拒答前已经输出的正文只作为 MESSAGE_SNAPSHOT/过程 part 保留，不能与新 Agent
+                // 的回答拼成最终 content。
+                snapshot = null;
+                deltaDraft.setLength(0);
+                structuredFallbackContent = firstText(event.payload(),
+                        "reason", "userMessage", "reasonCode", "code");
+            }
             if (isIntentClarificationRequest(event.payload())) {
                 structuredFallbackContent = intentClarificationQuestion(event.payload());
+            }
+            if (isRouteSwitchConfirmationRequest(event.payload()) || isRouteSwitchDeclined(event.payload())) {
+                if (isRouteSwitchConfirmationRequest(event.payload())) {
+                    snapshot = null;
+                    deltaDraft.setLength(0);
+                }
+                structuredFallbackContent = firstText(event.payload(), "message", "reason", "sourceType");
             }
             parts.add(runtimePart(event));
         }
@@ -83,8 +98,8 @@ final class AssistantAssembly {
                  "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE",
                  "AGENT_CLARIFICATION_REQUEST", "AGENT_CLARIFICATION_RESPONSE",
                  "INTENT_CLARIFICATION_REQUEST", "INTENT_CLARIFICATION_RESPONSE",
-                 "DOMAIN_AGENT_REFUSAL", "DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST",
-                 "DOMAIN_AGENT_SWITCH_DECLINED" -> true;
+                 "DOMAIN_AGENT_REFUSAL", "ROUTE_SWITCH_CONFIRMATION_REQUEST",
+                 "ROUTE_SWITCH_CONFIRMATION_RESPONSE", "ROUTE_SWITCH_DECLINED" -> true;
             default -> false;
         };
     }
@@ -136,11 +151,14 @@ final class AssistantAssembly {
         if ("runtime.card".equals(eventType) && isIntentClarificationResponse(payload)) {
             return "INTENT_CLARIFICATION_RESPONSE";
         }
-        if ("runtime.card".equals(eventType) && isDomainAgentSwitchConfirmation(payload)) {
-            return "DOMAIN_AGENT_SWITCH_CONFIRMATION_REQUEST";
+        if ("runtime.card".equals(eventType) && isRouteSwitchConfirmationRequest(payload)) {
+            return "ROUTE_SWITCH_CONFIRMATION_REQUEST";
         }
-        if ("runtime.card".equals(eventType) && isDomainAgentSwitchDeclined(payload)) {
-            return "DOMAIN_AGENT_SWITCH_DECLINED";
+        if ("runtime.card".equals(eventType) && isRouteSwitchConfirmationResponse(payload)) {
+            return "ROUTE_SWITCH_CONFIRMATION_RESPONSE";
+        }
+        if ("runtime.card".equals(eventType) && isRouteSwitchDeclined(payload)) {
+            return "ROUTE_SWITCH_DECLINED";
         }
         if (isDomainAgentRefusal(payload)) {
             return "DOMAIN_AGENT_REFUSAL";
@@ -182,6 +200,9 @@ final class AssistantAssembly {
             return operationId == null ? status : status + ": " + operationId;
         }
         if ("runtime.metadata".equals(eventType)) {
+            if (isDomainAgentRefusal(payload)) {
+                return firstText(payload, "reason", "userMessage", "reasonCode", "code");
+            }
             return firstText(payload, "projectHome", "metadataType");
         }
         if ("runtime.reference".equals(eventType)) {
@@ -200,11 +221,14 @@ final class AssistantAssembly {
             if (isIntentClarificationResponse(payload)) {
                 return firstText(payload, "answerText", "sourceType");
             }
-            if (isDomainAgentSwitchConfirmation(payload)) {
-                return firstText(payload, "candidateIntentName", "candidateDomainAgentId", "sourceType");
+            if (isRouteSwitchConfirmationRequest(payload)) {
+                return firstText(payload, "message", "candidateIntentName", "candidateTargetId", "sourceType");
             }
-            if (isDomainAgentSwitchDeclined(payload)) {
-                return firstText(payload, "currentDomainAgentId", "sourceType");
+            if (isRouteSwitchConfirmationResponse(payload)) {
+                return firstText(payload, "message", "candidateTargetId", "sourceType");
+            }
+            if (isRouteSwitchDeclined(payload)) {
+                return firstText(payload, "message", "currentTargetId", "sourceType");
             }
             return firstText(payload, "delta", "cardUrl", "intent", "domainAgentId", "skillId", "cardType", "sourceType");
         }
@@ -255,17 +279,22 @@ final class AssistantAssembly {
         return result;
     }
 
-    private static boolean isDomainAgentSwitchConfirmation(Map<String, Object> payload) {
-        return "domain-agent-switch-confirmation-request".equals(stringValue(payload.get("sourceType")));
+    private static boolean isRouteSwitchConfirmationRequest(Map<String, Object> payload) {
+        return "route-switch-confirmation-request".equals(stringValue(payload.get("sourceType")));
     }
 
-    private static boolean isDomainAgentSwitchDeclined(Map<String, Object> payload) {
-        return "domain-agent-switch-declined".equals(stringValue(payload.get("sourceType")));
+    private static boolean isRouteSwitchConfirmationResponse(Map<String, Object> payload) {
+        return "route-switch-confirmation-response".equals(stringValue(payload.get("sourceType")));
+    }
+
+    private static boolean isRouteSwitchDeclined(Map<String, Object> payload) {
+        return "route-switch-declined".equals(stringValue(payload.get("sourceType")));
     }
 
     private static boolean isDomainAgentRefusal(Map<String, Object> payload) {
-        return "domain-agent-reroute".equals(stringValue(payload.get("sourceType")))
-                && !"AUTO_SWITCH".equals(stringValue(payload.get("action")));
+        return "agent.refusal".equals(stringValue(payload.get("sourceType")))
+                && "domain_agent_control".equals(stringValue(payload.get("metadataType")))
+                && "REROUTE".equals(stringValue(payload.get("supervisorAction")));
     }
 
     private static String firstText(Map<String, Object> payload, String... keys) {

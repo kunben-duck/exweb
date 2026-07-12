@@ -252,7 +252,7 @@ public class ChatInteractionApplicationService {
     }
 
     private boolean requiresExplicitApproval(ChatInteractionType interactionType) {
-        return interactionType == ChatInteractionType.DOMAIN_AGENT_SWITCH_CONFIRMATION
+        return interactionType == ChatInteractionType.ROUTE_SWITCH_CONFIRMATION
                 || interactionType == ChatInteractionType.APPROVAL
                 || interactionType == ChatInteractionType.CONFIRMATION;
     }

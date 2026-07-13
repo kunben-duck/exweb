@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS fin_ex_chat_message_part_t (
     session_id VARCHAR(64) NOT NULL,
     message_id VARCHAR(64) NOT NULL,
     run_id VARCHAR(64),
-    part_type VARCHAR(32) NOT NULL,
+    part_type VARCHAR(64) NOT NULL,
     source_type VARCHAR(128),
     content_text TEXT,
     title VARCHAR(256),

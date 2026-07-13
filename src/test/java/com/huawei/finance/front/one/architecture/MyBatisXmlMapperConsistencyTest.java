@@ -27,6 +27,30 @@ class MyBatisXmlMapperConsistencyTest {
     private static final Pattern STATEMENT_ID = Pattern.compile("<(?:select|insert|update|delete)\\s+id=\"([^\"]+)\"");
     private static final Pattern STATEMENT_LINE = Pattern.compile("^\\s*<(select|insert|update|delete)\\s+id=\"([^\"]+)\".*");
     private static final Pattern SQL_ANNOTATION = Pattern.compile("@(?:Select|Insert|Update|Delete|Results|ResultMap|Result)\\b");
+    private static final Pattern MESSAGE_PART_TYPE_COLUMN = Pattern.compile(
+            "(?m)^\\s*part_type\\s+VARCHAR\\((\\d+)\\)\\s+NOT NULL");
+    private static final List<String> CHAT_MESSAGE_PART_TYPES = List.of(
+            "ANSWER",
+            "MESSAGE_SNAPSHOT",
+            "PROGRESS",
+            "METADATA",
+            "AGENT",
+            "THINKING",
+            "TOOL",
+            "REFERENCE",
+            "CARD",
+            "CLARIFICATION_REQUEST",
+            "CLARIFICATION_RESPONSE",
+            "AGENT_CLARIFICATION_REQUEST",
+            "AGENT_CLARIFICATION_RESPONSE",
+            "INTENT_CLARIFICATION_REQUEST",
+            "INTENT_CLARIFICATION_RESPONSE",
+            "DOMAIN_AGENT_REFUSAL",
+            "ROUTE_SWITCH_CONFIRMATION_REQUEST",
+            "ROUTE_SWITCH_CONFIRMATION_RESPONSE",
+            "ROUTE_SWITCH_DECLINED",
+            "RUNTIME_EVENT"
+    );
 
     @Test
     void mapperXmlStatementsShouldMatchJavaMapperMethods() throws IOException {
@@ -132,6 +156,25 @@ class MyBatisXmlMapperConsistencyTest {
         assertThat(runMapper)
                 .contains("<update id=\"markCancelling\"")
                 .contains("AND status = 'RUNNING'");
+    }
+
+    @Test
+    void chatMessagePartTypesShouldFitSchemaColumn() throws IOException {
+        String schema = Files.readString(Path.of("src/main/resources/db/schema.sql"));
+        Matcher columnMatcher = MESSAGE_PART_TYPE_COLUMN.matcher(schema);
+
+        assertThat(columnMatcher.find())
+                .as("fin_ex_chat_message_part_t.part_type column must be declared in schema.sql")
+                .isTrue();
+        int columnLength = Integer.parseInt(columnMatcher.group(1));
+        List<String> oversizedTypes = CHAT_MESSAGE_PART_TYPES.stream()
+                .filter(partType -> partType.length() > columnLength)
+                .map(partType -> partType + "(" + partType.length() + ")")
+                .toList();
+
+        assertThat(oversizedTypes)
+                .as("Chat message part types must fit VARCHAR(%s): %s", columnLength, oversizedTypes)
+                .isEmpty();
     }
 
     private List<String> validateXmlMapper(Path xmlFile) {

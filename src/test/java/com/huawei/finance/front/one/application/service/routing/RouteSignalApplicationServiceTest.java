@@ -4,9 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.finance.front.one.application.config.IntentFailureStrategy;
 import com.huawei.finance.front.one.application.config.RouteSignalProperties;
+import com.huawei.finance.front.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.finance.front.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.finance.front.one.application.integration.intent.IntentService;
 import com.huawei.finance.front.one.application.integration.usecase.UseCaseLibraryClient;
+import com.huawei.finance.front.one.application.integration.usecase.UseCaseMatchRequest;
 import com.huawei.finance.front.one.application.service.memory.RouteMemoryApplicationService;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
@@ -85,6 +87,26 @@ class RouteSignalApplicationServiceTest {
 
         assertThat(result.route().type()).isEqualTo(RouteType.AGENT_RUNTIME);
         assertThat(result.intentDecision()).isNull();
+    }
+
+    @Test
+    void selectedIntentPresentationMetadataIsNotSentToUseCaseLibrary() {
+        AtomicReference<UseCaseMatchRequest> capturedRequest = new AtomicReference<>();
+        ChatCommand selectedCommand = new ChatCommand("cmd-selected", "tenant1", "user1", "session1",
+                null, "web", "查询资金情况", List.of(), SelectedIntentContext.attach(
+                Map.of("scene", "fund"), "fund_management", "资金管理"));
+        RouteSignalApplicationService service = service(true, false,
+                request -> {
+                    capturedRequest.set(request);
+                    return UseCaseMatchResult.notMatched("no case");
+                },
+                (command, memory, user) -> simpleDomainAgentIntent());
+
+        RouteSignalResult result = service.routeInitial(user, session, selectedCommand, List.of(), memory);
+
+        assertThat(result.route().type()).isEqualTo(RouteType.AGENT_RUNTIME);
+        assertThat(capturedRequest.get()).isNotNull();
+        assertThat(capturedRequest.get().metadata()).containsExactlyEntriesOf(Map.of("scene", "fund"));
     }
 
     @Test

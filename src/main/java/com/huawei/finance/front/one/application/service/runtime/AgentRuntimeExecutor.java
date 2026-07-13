@@ -6,6 +6,7 @@ import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeIn
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteraction;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.finance.front.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
@@ -74,7 +75,8 @@ public class AgentRuntimeExecutor {
                 context.memory(),
                 context.intent(),
                 context.route(),
-                command.metadata(),
+                SelectedIntentContext.removeReserved(command.metadata()),
+                binding == null ? Map.of() : binding.metadata(),
                 context.forwardHeaders()
         );
         AgentRuntime runtime = context.binding() == null

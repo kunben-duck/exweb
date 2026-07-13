@@ -30,6 +30,7 @@ import java.util.Map;
  * @param intentDecision 意图服务识别结果，可能为空。
  * @param routeTarget 本轮路由决策结果。
  * @param metadata 前端或上游传入的扩展元数据。
+ * @param bindingMetadata 当前 RuntimeBinding 的服务端元数据，仅供 Runtime adapter 生成事件，不向下游透传。
  * @param forwardHeaders 仅在内存中传递给 Runtime adapter 的入口请求头快照；必须被 JSON 序列化忽略。
  */
 public record AgentRuntimeRequest(
@@ -48,6 +49,7 @@ public record AgentRuntimeRequest(
         IntentDecision intentDecision,
         RouteTarget routeTarget,
         Map<String, Object> metadata,
+        @JsonIgnore Map<String, Object> bindingMetadata,
         @JsonIgnore RuntimeForwardHeaders forwardHeaders
 ) {
     public AgentRuntimeRequest {
@@ -55,6 +57,7 @@ public record AgentRuntimeRequest(
         attachments = attachments == null ? List.of() : List.copyOf(attachments);
         documents = documents == null ? List.of() : List.copyOf(documents);
         metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+        bindingMetadata = bindingMetadata == null ? Map.of() : Map.copyOf(bindingMetadata);
         forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
     }
 
@@ -66,6 +69,6 @@ public record AgentRuntimeRequest(
                                Map<String, Object> metadata, RuntimeForwardHeaders forwardHeaders) {
         this(tenantId, userId, userAccount, globalUserId, sessionId, runId, runtimeSessionId,
                 runtimeSessionMode, message, attachments, List.of(), memoryContext, intentDecision, routeTarget,
-                metadata, forwardHeaders);
+                metadata, Map.of(), forwardHeaders);
     }
 }

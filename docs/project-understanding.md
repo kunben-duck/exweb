@@ -170,7 +170,7 @@ FinanceEXChatService#executeRun(...)
 5. `IdGenerator#newId("run", ...)` 生成 runId。
 6. `MemoryApplicationService#loadForRun(...)` 按配置加载可选记忆。
 7. `SessionApplicationService#prepareRunMessage(...)` 写入或定位本轮 user message。
-8. 先检查 `targetType=DOMAIN_AGENT,targetId=...`；存在时进入 `DOMAIN_AGENT` 路由，不读取 RuntimeBinding。
+8. 先检查 `targetType=DOMAIN_AGENT,targetId=...`；存在时进入 `DOMAIN_AGENT` 路由，不读取 RuntimeBinding。可选 `selectedIntent` 只保存为 binding 展示摘要，不参与目标选择或 DomainAgent 请求。
 9. 未显式指定 DomainAgent 时只查询当前 active RuntimeBinding；没有绑定时先保持 route 为空。
 10. `ChatRunApplicationService#createRunning(...)` 创建业务 run。
 11. `ChatRunLeaseApplicationService#startRun(...)` 创建 execution lease。

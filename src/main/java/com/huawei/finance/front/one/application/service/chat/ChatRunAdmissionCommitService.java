@@ -1,5 +1,6 @@
 package com.huawei.finance.front.one.application.service.chat;
 
+import com.huawei.finance.front.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
@@ -43,7 +44,7 @@ public class ChatRunAdmissionCommitService {
                 session.id(),
                 null,
                 null,
-                command.metadata(),
+                SelectedIntentContext.removeReserved(command.metadata()),
                 messagePlan.runMode(),
                 messagePlan.parentMessageId(),
                 messagePlan.userMessage().id()

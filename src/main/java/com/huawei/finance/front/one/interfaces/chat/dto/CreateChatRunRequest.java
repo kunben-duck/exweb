@@ -29,6 +29,7 @@ import java.util.Map;
  * @param attachments 本轮关联附件列表。
  * @param targetType 显式直连目标类型；当前支持 DOMAIN_AGENT，为空时走普通路由。
  * @param targetId 显式直连目标 ID；targetType=DOMAIN_AGENT 时表示 DomainAgent ID。
+ * @param selectedIntent 前端显式选择 DomainAgent 时提供的展示用意图摘要；不参与路由判断。
  * @param metadata 前端扩展元数据；DomainAgent 直连时会作为下游请求 body 透传。
  */
 public record CreateChatRunRequest(
@@ -63,6 +64,8 @@ public record CreateChatRunRequest(
         String targetType,
         @Size(max = 128, message = "targetId 长度不能超过 128")
         String targetId,
+        @Valid
+        ChatSelectedIntentDto selectedIntent,
         @Size(max = 50, message = "metadata 最多允许 50 个字段")
         Map<String, Object> metadata
 ) {
@@ -75,7 +78,7 @@ public record CreateChatRunRequest(
     public CreateChatRunRequest(String commandId, String sessionId, String conversationId, String message,
                                 List<ChatAttachmentDto> attachments, Map<String, ?> metadata) {
         this(commandId, sessionId, conversationId, message, null, null, null, null, null, null, null, null, null,
-                attachments, null, null, copyMetadata(metadata));
+                attachments, null, null, null, copyMetadata(metadata));
     }
 
     private static Map<String, Object> copyMetadata(Map<String, ?> metadata) {

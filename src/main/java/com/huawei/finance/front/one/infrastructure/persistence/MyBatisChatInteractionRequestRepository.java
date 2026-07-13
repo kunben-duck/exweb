@@ -189,6 +189,9 @@ public class MyBatisChatInteractionRequestRepository implements ChatInteractionR
         if (value == null || value.isBlank()) {
             return ChatInteractionType.AGENT_CLARIFICATION;
         }
+        if ("DOMAIN_AGENT_SWITCH_CONFIRMATION".equals(value)) {
+            return ChatInteractionType.ROUTE_SWITCH_CONFIRMATION;
+        }
         return ChatInteractionType.valueOf(value);
     }
 

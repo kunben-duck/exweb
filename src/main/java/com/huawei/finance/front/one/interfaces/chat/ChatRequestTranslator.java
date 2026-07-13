@@ -1,9 +1,11 @@
 package com.huawei.finance.front.one.interfaces.chat;
 
+import com.huawei.finance.front.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatAttachmentDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.ChatSelectedIntentDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatRunRequest;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -39,6 +41,12 @@ public class ChatRequestTranslator {
             throw new IllegalArgumentException("forceReroute=true 时不能同时指定 targetType/targetId");
         }
         Map<String, Object> metadata = normalizeMetadata(request.metadata());
+        metadata = SelectedIntentContext.removeReserved(metadata);
+        if (request.selectedIntent() != null) {
+            validateSelectedIntent(request.selectedIntent(), runMode, request.targetType(), request.targetId());
+            metadata = SelectedIntentContext.attach(metadata,
+                    request.selectedIntent().intentId(), request.selectedIntent().intentName());
+        }
         // 身份字段留空进入 application，由 Controller 入口解析出的 UserContext 统一回填。
         // 这样前端无法通过 Header/Query/Body 改写租户或用户，后续接入企业权限框架也只替换身份防腐层。
         return new ChatCommand(request.commandId(), null, null, request.sessionId(), request.conversationId(), "web",
@@ -56,6 +64,19 @@ public class ChatRequestTranslator {
 
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private void validateSelectedIntent(ChatSelectedIntentDto selectedIntent, ChatRunMode runMode,
+                                        String targetType, String targetId) {
+        if (runMode == ChatRunMode.CONTINUE_INTERACTION) {
+            throw new IllegalArgumentException("CONTINUE_INTERACTION 模式不支持 selectedIntent");
+        }
+        if (!"DOMAIN_AGENT".equalsIgnoreCase(targetType) || !hasText(targetId)) {
+            throw new IllegalArgumentException("selectedIntent 仅允许与 targetType=DOMAIN_AGENT 和有效 targetId 同时使用");
+        }
+        if (!hasText(selectedIntent.intentName())) {
+            throw new IllegalArgumentException("selectedIntent.intentName 不能为空");
+        }
     }
 
     private Map<String, Object> normalizeMetadata(Map<String, Object> metadata) {

@@ -7,6 +7,7 @@ import com.huawei.finance.front.one.application.config.ChatRunOperationalPropert
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeSessionUnavailable;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
+import com.huawei.finance.front.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.finance.front.one.application.integration.id.IdGenerateContext;
 import com.huawei.finance.front.one.application.integration.id.IdGenerator;
@@ -1055,7 +1056,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                         startAttempt);
                 return executeAfterRunStarted(context, () -> {
                     prepareInitialRouteAndBinding(new InitialRoutePreparation(
-                            user, session, runId, runtimeBindingLeafId, explicitDomainAgentId, forceReroute,
+                            user, session, runId, runtimeBindingLeafId, runCommand,
+                            explicitDomainAgentId, forceReroute,
                             routeRef, bindingRef, runtimeSessionModeRef));
                     return routeAndExecute(new RoutePipelineRequest(
                             user, session, runCommand, attachments, documents, memory, runId, runtimeBindingLeafId,
@@ -1084,7 +1086,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 session.id(),
                 null,
                 null,
-                command.metadata(),
+                SelectedIntentContext.removeReserved(command.metadata()),
                 messagePlan.runMode(),
                 messagePlan.parentMessageId(),
                 messagePlan.userMessage().id()
@@ -1417,7 +1419,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
     private ChatCommand commandWithDomainRejectContext(ChatCommand command, String domainAgentId,
                                                        DomainAgentRefusal refusal) {
-        Map<String, Object> metadata = new LinkedHashMap<>(command.metadata() == null ? Map.of() : command.metadata());
+        Map<String, Object> metadata = new LinkedHashMap<>(
+                SelectedIntentContext.removeReserved(command.metadata()));
         metadata.put("routeTrigger", "domain_reject");
         metadata.put("lastIntentRejectReason", Map.of(
                 "lastDomainAgentId", domainAgentId,
@@ -1585,6 +1588,11 @@ public class FinanceEXChatService implements FinanceChatFacade {
     }
 
     private Map<String, Object> domainAgentBindingMetadata(RouteTarget route, IntentDecision intent) {
+        return domainAgentBindingMetadata(route, intent, Map.of());
+    }
+
+    private Map<String, Object> domainAgentBindingMetadata(RouteTarget route, IntentDecision intent,
+                                                            Map<String, Object> commandMetadata) {
         Map<String, Object> metadata = new LinkedHashMap<>();
         if (route != null) {
             metadata.put("domainAgentId", route.selectedAgentCode());
@@ -1594,6 +1602,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
             metadata.put("intentCode", intent.intentCode());
             metadata.put("intentName", intent.intentName());
             metadata.put("intentConfidence", intent.confidence());
+        } else {
+            putIfNotNull(metadata, "intentCode", SelectedIntentContext.intentId(commandMetadata));
+            putIfNotNull(metadata, "intentName", SelectedIntentContext.intentName(commandMetadata));
         }
         return Map.copyOf(metadata);
     }
@@ -1779,7 +1790,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     preparation.user().tenantId(), preparation.user().ownerUserId(), preparation.session().id(),
                     preparation.runId(), preparation.runtimeBindingLeafId(), preparation.explicitDomainAgentId(),
                     "front-selected",
-                    domainAgentBindingMetadata(route, null)));
+                    domainAgentBindingMetadata(route, null,
+                            preparation.command() == null ? Map.of() : preparation.command().metadata())));
             preparation.routeRef().set(route);
             preparation.bindingRef().set(binding);
             preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
@@ -2836,6 +2848,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
             ChatSession session,
             String runId,
             String runtimeBindingLeafId,
+            ChatCommand command,
             String explicitDomainAgentId,
             boolean forceReroute,
             AtomicReference<RouteTarget> routeRef,

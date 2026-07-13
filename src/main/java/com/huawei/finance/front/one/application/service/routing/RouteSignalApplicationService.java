@@ -1,7 +1,8 @@
 package com.huawei.finance.front.one.application.service.routing;
 
-import com.huawei.finance.front.one.application.config.RouteSignalProperties;
 import com.huawei.finance.front.one.application.config.IntentFailureStrategy;
+import com.huawei.finance.front.one.application.config.RouteSignalProperties;
+import com.huawei.finance.front.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.finance.front.one.application.integration.intent.IntentAgentRouteFrame;
 import com.huawei.finance.front.one.application.integration.intent.IntentAgentRouteRequest;
 import com.huawei.finance.front.one.application.integration.intent.IntentAgentRouteResult;
@@ -335,7 +336,8 @@ public class RouteSignalApplicationService {
                                             List<AttachmentRef> attachments, MemoryContext memory) {
         try {
             return useCaseLibraryClient.match(new UseCaseMatchRequest(
-                    user.tenantId(), user.ownerUserId(), session.id(), command.message(), attachments, memory, command.metadata()));
+                    user.tenantId(), user.ownerUserId(), session.id(), command.message(), attachments, memory,
+                    SelectedIntentContext.removeReserved(command.metadata())));
         } catch (RuntimeException ex) {
             log.warn("Use case route signal failed, degrading to next route stage. tenantId={}, userId={}, sessionId={}, reason={}",
                     user.tenantId(), user.ownerUserId(), session.id(), ex.getMessage());

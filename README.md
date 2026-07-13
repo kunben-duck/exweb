@@ -131,13 +131,18 @@ tenant/user。接入企业身份源时，只需替换该防腐层的身份读取
 
 `targetType=DOMAIN_AGENT` 用于前端显式选择财经领域 DomainAgent 的场景，`targetId` 为目标 DomainAgent ID。
 该路径会跳过用例库和意图服务，创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding，并调用 DomainAgent Runtime。
+前端可选传 `selectedIntent={intentId?,intentName}` 作为历史展示摘要；对象存在时 `intentName` 必填，且只能与
+`targetType=DOMAIN_AGENT,targetId=...` 同时使用。该摘要会写入 RuntimeBinding，并在后续自动续接该 binding 时继续返回，
+但不参与路由、鉴权、RouteMemory 或意图统计，也不会进入 run metadata、用例库、IntentAgent 或 Runtime 请求。
 DomainAgent 下游请求体会把 `metadata` 作为业务扩展，但服务端保留字段 `skillId/query/sessionId`
 始终以绑定的 DomainAgentId、本轮用户问题和 RuntimeBinding.runtimeSessionId 为准，前端传同名字段也不会覆盖。
 ChatService 只校验附件引用：当请求携带 `attachments[]` 时，`metadata.sceneParam.docList` 中的 `docId/url`
 必须能匹配这些已授权文档的 `metadataJson.providerDocument.docId/url`，后端不会重写 `docList` 中其他业务字段。
 ChatService 不校验 `targetId` 是否可调用；DomainAgent 权限和 body 业务合法性由下游服务负责。
 显式选择的 DomainAgent 会作为 `runtime.metadata` 写入事件流，并在历史 assistant 的 `parts` 中返回；
-payload 包含 `targetType`、`targetId`、`domainAgentId` 和 `intentResult.source=front-selected`，用于前端回显本轮调用的技能。
+payload 包含 `targetType`、`targetId`、`domainAgentId`、可选 `intentId/intentName` 和
+`intentResult.source=front-selected`，用于前端回显本轮调用的技能。后续复用 binding 时前端无需再次传
+`selectedIntent`，历史 part 会从 binding metadata 恢复同一意图摘要。
 
 ## 会话与执行标识
 

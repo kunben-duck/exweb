@@ -23,6 +23,7 @@ import com.huawei.finance.front.one.application.integration.agent.DomainAgentReq
 import com.huawei.finance.front.one.application.integration.agent.DomainAgentCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeSessionMode;
+import com.huawei.finance.front.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.finance.front.one.application.integration.conversation.ChatInteractionRequestRepository;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
@@ -789,6 +790,16 @@ class FinanceEXChatServiceTest {
 
         assertThat(events.events).extracting(ChatEvent::type)
                 .containsSubsequence("run.started", "runtime.progress", "run.completed");
+        assertThat(messages.parts).anySatisfy(part -> {
+            assertThat(part.partType()).isEqualTo("METADATA");
+            assertThat(part.payload()).containsEntry("metadataType", "selected_domain_agent")
+                    .containsEntry("intentId", "domain_agent_finance_knowledge")
+                    .containsEntry("intentName", "财经知识助手");
+            assertThat(part.payload().get("intentResult")).isInstanceOfSatisfying(Map.class,
+                    intentResult -> assertThat(intentResult)
+                            .containsEntry("intentId", "domain_agent_finance_knowledge")
+                            .containsEntry("intentName", "财经知识助手"));
+        });
     }
 
     @Test
@@ -1684,6 +1695,7 @@ class FinanceEXChatServiceTest {
         RuntimeBindingApplicationService bindingService = new RuntimeBindingApplicationService(
                 bindings, runtimeBindingCache(), ids, Duration.ZERO, "relay");
         AtomicInteger rerouteDecisions = new AtomicInteger();
+        AtomicReference<Map<String, Object>> rerouteMetadata = new AtomicReference<>();
         RouteSignalApplicationService routeService = new RouteSignalApplicationService(
                 request -> UseCaseMatchResult.notMatched("disabled"),
                 intentAgent((command, memory, routeUser) -> null),
@@ -1691,6 +1703,7 @@ class FinanceEXChatServiceTest {
                 new RouteSignalProperties(false, false)) {
             @Override
             public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
+                rerouteMetadata.set(request.command().metadata());
                 if (rerouteDecisions.incrementAndGet() == 1) {
                     return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.domainAgent(
                             "agent-b", "intent-agent", 1.0, "rerouted after refusal"))));
@@ -1769,7 +1782,8 @@ class FinanceEXChatServiceTest {
                 new com.huawei.finance.front.one.application.config.DomainAgentProperties());
 
         StepVerifier.create(service.startRun(user, new ChatCommand(
-                        null, null, null, null, null, "web", "原问题", List.of(), Map.of(),
+                        null, null, null, null, null, "web", "原问题", List.of(),
+                        SelectedIntentContext.attach(Map.of("scene", "manual"), "intent-a", "领域 A"),
                         "DOMAIN_AGENT", "agent-a", ChatRunMode.NEXT, null, null, null),
                         RuntimeForwardHeaders.empty()))
                 .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
@@ -1800,6 +1814,12 @@ class FinanceEXChatServiceTest {
                         .containsEntry("code", "FN-EX-CAHT-BIZ-DAG-001"));
         assertThat(agentACalls).hasValue(1);
         assertThat(agentBCalls).hasValue(0);
+        assertThat(rerouteMetadata.get())
+                .containsEntry("scene", "manual")
+                .containsEntry("routeTrigger", "domain_reject")
+                .containsKey("lastIntentRejectReason");
+        assertThat(SelectedIntentContext.intentId(rerouteMetadata.get())).isNull();
+        assertThat(SelectedIntentContext.intentName(rerouteMetadata.get())).isNull();
 
         StepVerifier.create(service.startRun(user, new ChatCommand(
                         null, null, null, waiting.sessionId(), null, "web", null, List.of(), Map.of(),
@@ -2521,7 +2541,8 @@ class FinanceEXChatServiceTest {
         InMemoryRunRepository runs = new InMemoryRunRepository();
         InMemoryEventStore events = new InMemoryEventStore();
         UserContext user = new UserContext("tenant1", "user1", "User One");
-        IdGenerator ids = new FixedIdGenerator();
+        IdGenerator ids = new SequentialIdGenerator();
+        CapturingRuntimeBindingRepository bindings = new CapturingRuntimeBindingRepository();
         PermissionChecker permissionChecker = new PermissionChecker();
         WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
                 new com.huawei.finance.front.one.application.config.ResourceIsolationProperties());
@@ -2544,11 +2565,15 @@ class FinanceEXChatServiceTest {
             }
             @Override public Mono<Void> cancel(DomainAgentCancelRequest request) { return Mono.empty(); }
         }, documents, limiter);
+        SessionApplicationService sessionService =
+                new SessionApplicationService(sessions, messages, ids, permissionChecker);
+        ChatRunApplicationService runService =
+                new ChatRunApplicationService(runs, runCache, events, permissionChecker, sessions);
 
         FinanceEXChatService service = new FinanceEXChatService(
-                new SessionApplicationService(sessions, messages, ids, permissionChecker),
+                sessionService,
                 new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
-                new RuntimeBindingApplicationService(runtimeBindingRepository(), runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
+                new RuntimeBindingApplicationService(bindings, runtimeBindingCache(), ids, Duration.ofDays(3), "relay"),
                 runtimeRouteService(),
                 intentRecordService(),
                 domainAgentExecutor,
@@ -2558,23 +2583,28 @@ class FinanceEXChatServiceTest {
                 new ChatStreamApplicationService(events, new LocalChatEventStreamRegistry(), liveEventBus(), runs,
                         permissionChecker, sessions,
                         new com.huawei.finance.front.one.application.config.ChatWebSocketProperties()),
-                new ChatRunApplicationService(runs, runCache, events, permissionChecker, sessions),
+                runService,
                 leaseService,
                 new ChatDeltaCoalescer(new com.huawei.finance.front.one.application.config.ChatStreamProperties()),
                 executionRegistry,
                 new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
                 ids
         );
+        service.setRunAdmissionCommitService(new ChatRunAdmissionCommitService(sessionService, runService, null));
 
+        Map<String, Object> selectedMetadata = SelectedIntentContext.attach(
+                Map.of("skillId", "skill-other"), "fund_management", "资金管理");
         StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
-                        null, null, "web", "hello", List.of(), Map.of("skillId", "skill-other"),
+                        null, null, "web", "hello", List.of(), selectedMetadata,
                         "DOMAIN_AGENT", "skill-tax", ChatRunMode.NEXT, null, null, null),
                         RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192)))
                 .expectNextMatches(event -> "run.started".equals(event.type()))
                 .expectNextMatches(event -> "runtime.metadata".equals(event.type())
                         && "DOMAIN_AGENT".equals(event.payload().get("targetType"))
                         && "skill-tax".equals(event.payload().get("targetId"))
-                        && "selected_domain_agent".equals(event.payload().get("metadataType")))
+                        && "selected_domain_agent".equals(event.payload().get("metadataType"))
+                        && "fund_management".equals(event.payload().get("intentId"))
+                        && "资金管理".equals(event.payload().get("intentName")))
                 .expectNextMatches(event -> "message.delta".equals(event.type()))
                 .expectNextMatches(event -> "run.completed".equals(event.type()))
                 .verifyComplete();
@@ -2582,17 +2612,43 @@ class FinanceEXChatServiceTest {
         assertThat(capturedHeaders.get()).isNotNull();
         assertThat(capturedHeaders.get().cookieHeader()).isEqualTo("sid=abc");
         assertThat(capturedRequest.get()).isNotNull();
-        assertThat(capturedRequest.get().metadata()).containsEntry("skillId", "skill-other");
-        ChatRun run = runs.runs.values().iterator().next();
+        assertThat(capturedRequest.get().metadata())
+                .containsExactlyEntriesOf(Map.of("skillId", "skill-other"));
+        assertThat(bindings.saved.metadata()).containsEntry("intentCode", "fund_management")
+                .containsEntry("intentName", "资金管理");
+        ChatRun run = runs.runs.values().stream().findFirst().orElseThrow();
         assertThat(run.routeType()).isEqualTo("DOMAIN_AGENT");
         assertThat(run.agentCode()).isEqualTo("skill-tax");
         assertThat(run.runtimeProvider()).isEqualTo("domain-agent");
+        assertThat(run.metadata()).containsExactlyEntriesOf(Map.of("skillId", "skill-other"));
         assertThat(messages.parts).anySatisfy(part -> {
             assertThat(part.partType()).isEqualTo("METADATA");
             assertThat(part.payload()).containsEntry("targetId", "skill-tax")
                     .containsEntry("domainAgentId", "skill-tax")
-                    .containsEntry("metadataType", "selected_domain_agent");
+                    .containsEntry("metadataType", "selected_domain_agent")
+                    .containsEntry("intentId", "fund_management")
+                    .containsEntry("intentName", "资金管理");
         });
+
+        String sessionId = run.sessionId();
+        StepVerifier.create(service.executeRun(user, new ChatCommand("cmd2", null, null,
+                        sessionId, null, "web", "continue", List.of(), Map.of())))
+                .expectNextMatches(event -> "run.started".equals(event.type()))
+                .expectNextMatches(event -> "runtime.metadata".equals(event.type())
+                        && "runtime-binding".equals(event.payload().get("routeSource"))
+                        && "fund_management".equals(event.payload().get("intentId"))
+                        && "资金管理".equals(event.payload().get("intentName")))
+                .expectNextMatches(event -> "message.delta".equals(event.type()))
+                .expectNextMatches(event -> "run.completed".equals(event.type()))
+                .verifyComplete();
+
+        assertThat(messages.parts.stream()
+                .filter(part -> "METADATA".equals(part.partType()))
+                .filter(part -> "selected_domain_agent".equals(part.payload().get("metadataType"))))
+                .hasSize(2)
+                .allSatisfy(part -> assertThat(part.payload())
+                        .containsEntry("intentId", "fund_management")
+                        .containsEntry("intentName", "资金管理"));
     }
 
     @Test

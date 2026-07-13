@@ -7,6 +7,7 @@ import com.huawei.finance.front.one.application.config.AgentRuntimeForwardCookie
 import com.huawei.finance.front.one.application.config.ChatStreamProperties;
 import com.huawei.finance.front.one.application.facade.FinanceChatFacade;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.finance.front.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.finance.front.one.application.service.chat.ChatStreamApplicationService;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
@@ -19,6 +20,7 @@ import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatAttachmentDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatEventDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessageDto;
+import com.huawei.finance.front.one.interfaces.chat.dto.ChatSelectedIntentDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatRunRequest;
 import java.time.Instant;
 import java.util.Arrays;
@@ -72,6 +74,7 @@ class ChatProtocolConvergenceTest {
                 List.of(),
                 null,
                 null,
+                null,
                 Map.of("routeTrigger", "first_turn")
         );
 
@@ -101,6 +104,7 @@ class ChatProtocolConvergenceTest {
                 List.of(),
                 "DOMAIN_AGENT",
                 "skill-a",
+                null,
                 Map.of()
         );
 
@@ -129,6 +133,7 @@ class ChatProtocolConvergenceTest {
                 List.of(),
                 null,
                 null,
+                null,
                 Map.of()
         );
 
@@ -136,6 +141,37 @@ class ChatProtocolConvergenceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("CONTINUE_INTERACTION")
                 .hasMessageContaining("forceReroute");
+    }
+
+    @Test
+    void translatorCarriesSelectedIntentOnlyInInternalCommandContext() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1", "session1", "conversation1", "查询资金情况", "NEXT",
+                null, null, null, null, null, null, null, null, List.of(),
+                "DOMAIN_AGENT", "fund-agent",
+                new ChatSelectedIntentDto(" fund_management ", " 资金管理 "),
+                Map.of("scene", "fund"));
+
+        ChatCommand command = translator.toCommand(request);
+
+        assertThat(SelectedIntentContext.intentId(command.metadata())).isEqualTo("fund_management");
+        assertThat(SelectedIntentContext.intentName(command.metadata())).isEqualTo("资金管理");
+        assertThat(SelectedIntentContext.removeReserved(command.metadata()))
+                .containsExactlyEntriesOf(Map.of("scene", "fund"));
+    }
+
+    @Test
+    void translatorRejectsSelectedIntentWithoutExplicitDomainAgent() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1", "session1", "conversation1", "查询资金情况", "NEXT",
+                null, null, null, null, null, null, null, null, List.of(),
+                null, null, new ChatSelectedIntentDto(null, "资金管理"), Map.of());
+
+        assertThatThrownBy(() -> translator.toCommand(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("targetType=DOMAIN_AGENT");
     }
 
     @Test

@@ -6,11 +6,10 @@ import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeRe
 import com.huawei.finance.front.one.application.integration.agent.DomainAgentCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.DomainAgentClient;
 import com.huawei.finance.front.one.application.integration.agent.DomainAgentRequest;
+import com.huawei.finance.front.one.application.integration.agent.DomainAgentSelectionPayload;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.RuntimeEvent;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
@@ -97,21 +96,9 @@ public class DomainAgentRuntime implements AgentRuntime {
         String routeSource = runtimeRequest.routeTarget() == null || runtimeRequest.routeTarget().routeSource() == null
                 ? "runtime-binding"
                 : runtimeRequest.routeTarget().routeSource();
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("source", "chatservice");
-        payload.put("sourceType", "selectedDomainAgent");
-        payload.put("metadataType", "selected_domain_agent");
-        payload.put("routeType", "DOMAIN_AGENT");
-        payload.put("targetType", "DOMAIN_AGENT");
-        payload.put("targetId", request.domainAgentId());
-        payload.put("domainAgentId", request.domainAgentId());
-        payload.put("routeSource", routeSource);
-        payload.put("runtimeSessionId", runtimeSessionId(runtimeRequest));
-        payload.put("intentResult", Map.of(
-                "accepted", true,
-                "source", routeSource,
-                "resourceId", request.domainAgentId()
-        ));
-        return RuntimeEvent.metadata(request.runId(), request.sessionId(), payload);
+        return RuntimeEvent.metadata(request.runId(), request.sessionId(),
+                DomainAgentSelectionPayload.create(request.domainAgentId(), routeSource,
+                        runtimeSessionId(runtimeRequest), runtimeRequest.intentDecision(),
+                        runtimeRequest.bindingMetadata()));
     }
 }

@@ -232,7 +232,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /v1/chat/runs` | 唯一任务提交入口，创建后台 run 或续接 Interaction。 | JSON body：`commandId` 可选，`sessionId` 可选，`conversationId` 可选，`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`forceReroute`、`interactionId`、`approved`、`scope`、`questionnaireAnswers`、`attachments[]`、`targetType`、`targetId`、`metadata`。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | `runMode` 默认 `NEXT`；`runMode=CONTINUE_INTERACTION` 时必须传 `interactionId`，用 `questionnaireAnswers/approved/scope/metadata` 提交澄清、审批或确认响应，且不能传 `forceReroute=true`；普通提问可传顶层 `forceReroute=true` 表示用户主动重新路由；`targetType=DOMAIN_AGENT` 时进入 DomainAgent 路由，并创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding。 |
+| `POST /v1/chat/runs` | 唯一任务提交入口，创建后台 run 或续接 Interaction。 | JSON body：`commandId` 可选，`sessionId` 可选，`conversationId` 可选，`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`forceReroute`、`interactionId`、`approved`、`scope`、`questionnaireAnswers`、`attachments[]`、`targetType`、`targetId`、`selectedIntent`、`metadata`。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | `runMode` 默认 `NEXT`；`runMode=CONTINUE_INTERACTION` 时必须传 `interactionId`，用 `questionnaireAnswers/approved/scope/metadata` 提交澄清、审批或确认响应，且不能传 `forceReroute=true`；普通提问可传顶层 `forceReroute=true` 表示用户主动重新路由；`targetType=DOMAIN_AGENT` 时进入 DomainAgent 路由，并创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding。`selectedIntent` 仅用于显式 DomainAgent 的历史展示。 |
 | `POST /v1/chat/runs/{runId}/stop` | 用户点击停止回答。 | Path：`runId`。 | `ChatRunStopDto`：`runId`、`sessionId`、`status`、`latestSeq`、`stoppedAt`、`messageReady`、`assistantMessageId`、`feedbackTargetMessageId`。 | 幂等；停止语义不是关闭 WebSocket。 |
 | `GET /v1/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`；只处理 `stream-item` 中的 `encodedItem.data`。 |
 | `GET /v1/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态，并以 `done` 闭合；live source 异常时服务端会降级按 DB 事件轮询。 |
@@ -288,7 +288,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `DELETE /v1/chat/sessions` | Body：`{"sessionIds":["session_a","session_b"]}`。 |
 | `POST /v1/chat/runs` 普通提问 | Body：`{"sessionId":"session_xxx","runMode":"NEXT","message":"帮我分析一下费用趋势"}`；新会话首轮可不传 `sessionId`。 |
 | `POST /v1/chat/runs` 用户主动纠正路由 | Body：`{"sessionId":"session_xxx","runMode":"NEXT","message":"重新判断应该由哪个技能处理","forceReroute":true,"metadata":{"lastIntentRejectReason":{"lastIntent":"旧意图","domainRejectMessage":"用户主动重新选择"}}}`；`forceReroute` 为非必填，只有用户主动要求重新路由时传 `true`。 |
-| `POST /v1/chat/runs` 显式 DomainAgent | Body：`{"sessionId":"session_xxx","runMode":"NEXT","message":"查询支付成功率","targetType":"DOMAIN_AGENT","targetId":"skill_xxx","metadata":{}}`。 |
+| `POST /v1/chat/runs` 显式 DomainAgent | Body：`{"sessionId":"session_xxx","runMode":"NEXT","message":"查询支付成功率","targetType":"DOMAIN_AGENT","targetId":"skill_xxx","selectedIntent":{"intentId":"payment_success","intentName":"支付成功率"},"metadata":{}}`；`selectedIntent` 可整体省略。 |
 | `POST /v1/chat/runs` 编辑 user | Body：`{"sessionId":"session_xxx","runMode":"EDIT_USER","editedMessageId":"msg_user_old","message":"新的问题"}`。 |
 | `POST /v1/chat/runs` 重新生成 assistant | Body：`{"sessionId":"session_xxx","runMode":"REGENERATE_ASSISTANT","regeneratedMessageId":"msg_assistant_old"}`。 |
 | `POST /v1/chat/runs` 续接 Interaction | Body：`{"sessionId":"session_xxx","runMode":"CONTINUE_INTERACTION","interactionId":"interaction_xxx","questionnaireAnswers":{"问题":"答案"}}`；确认类再传 `approved=true/false`。 |
@@ -1124,6 +1124,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `attachments` | array | 否 | 文档附件引用列表 |
 | `targetType` | string | 否 | 显式直连目标类型；当前支持 `DOMAIN_AGENT`，为空走普通路由 |
 | `targetId` | string | `targetType=DOMAIN_AGENT` 必填 | DomainAgent 目标 ID |
+| `selectedIntent` | object | 否 | 显式选择 DomainAgent 时的展示摘要，只允许与 `targetType=DOMAIN_AGENT,targetId` 同时使用；`intentId` 可选且最长 128，`intentName` 必填且最长 256；仅在当前请求内用于生成 binding 展示信息，不写 run metadata，也不发送给用例库、IntentAgent 或 Runtime |
 | `metadata` | object | 否 | 扩展字段；DomainAgent 路由时会作为下游业务扩展，不能覆盖服务端保留的 `skillId/query/sessionId` |
 
 响应：
@@ -1215,6 +1216,10 @@ curl -X POST http://localhost:8080/v1/chat/runs \
   "runMode": "NEXT",
   "targetType": "DOMAIN_AGENT",
   "targetId": "skill_tax_opinion",
+  "selectedIntent": {
+    "intentId": "tax_opinion",
+    "intentName": "税务意见"
+  },
   "attachments": [
     {
       "documentId": "doc_domain_agent_xxx"
@@ -2312,6 +2317,10 @@ curl -OJ http://localhost:8080/v1/documents/doc_xxx/download
   "message": "请基于附件出具税务意见",
   "targetType": "DOMAIN_AGENT",
   "targetId": "skill_tax_opinion",
+  "selectedIntent": {
+    "intentId": "tax_opinion",
+    "intentName": "税务意见"
+  },
   "attachments": [
     {
       "documentId": "doc_domain_agent_xxx"
@@ -2337,10 +2346,34 @@ curl -OJ http://localhost:8080/v1/documents/doc_xxx/download
 }
 ```
 
-DomainAgent 路由会跳过用例库和意图服务，并创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding，后续未指定 target 的普通提问会优先续接该绑定。如果 `metadata.sceneParam.docList` 缺失、为空，或引用了未在 `attachments[]` 中授权的 `docId/url`，后端会拒绝本轮 run。ChatService 不校验 `targetId` 是否可调用；DomainAgent 权限由下游服务负责。
+DomainAgent 路由会跳过用例库和意图服务，并创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding，后续未指定 target 的普通提问会优先续接该绑定。`selectedIntent` 可整体省略；传入时只作为可信度较低的展示摘要保存到 binding，第二轮续接无需再次传入。如果 `metadata.sceneParam.docList` 缺失、为空，或引用了未在 `attachments[]` 中授权的 `docId/url`，后端会拒绝本轮 run。ChatService 不校验 `targetId` 是否可调用；DomainAgent 权限由下游服务负责。
 本轮显式选择的 DomainAgent 会进入 `runtime.metadata`，并在历史 assistant 的 `parts` 返回：
 `partType=METADATA`、`payload.metadataType=selected_domain_agent`、`payload.targetType=DOMAIN_AGENT`、`payload.targetId=所选目标 ID`、
-`payload.intentResult.source=front-selected`。前端历史页可以用该 part 展示“本轮调用技能”。
+`payload.intentId/payload.intentName` 和 `payload.intentResult.intentId/intentName`（有展示摘要时）、
+`payload.intentResult.source=front-selected`。前端历史页可以用该 part 展示“本轮调用技能”。自动意图路由会填入真实意图；
+后续复用 active binding 时从 binding metadata 恢复相同字段，前端无需重传。
+
+```json
+{
+  "partType": "METADATA",
+  "sourceType": "selectedDomainAgent",
+  "payload": {
+    "metadataType": "selected_domain_agent",
+    "targetId": "skill_tax_opinion",
+    "routeSource": "front-selected",
+    "intentId": "tax_opinion",
+    "intentName": "税务意见",
+    "intentResult": {
+      "accepted": true,
+      "source": "front-selected",
+      "intentId": "tax_opinion",
+      "intentName": "税务意见",
+      "skillId": "skill_tax_opinion",
+      "resourceId": "skill_tax_opinion"
+    }
+  }
+}
+```
 
 ## 前端联调最小示例
 

@@ -3,14 +3,15 @@ package com.huawei.finance.front.one.application.service.runtime;
 import com.huawei.finance.front.one.application.facade.DocumentFacade;
 import com.huawei.finance.front.one.application.integration.agent.DomainAgentClient;
 import com.huawei.finance.front.one.application.integration.agent.DomainAgentRequest;
+import com.huawei.finance.front.one.application.integration.agent.DomainAgentSelectionPayload;
 import com.huawei.finance.front.one.application.integration.agent.DomainAgentCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.finance.front.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.RuntimeEvent;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import reactor.core.publisher.Flux;
@@ -47,10 +48,10 @@ public class DomainAgentExecutor {
                 context.binding() == null ? command.sessionId() : context.binding().runtimeSessionId(),
                 command.message(),
                 documents,
-                command.metadata(),
+                SelectedIntentContext.removeReserved(command.metadata()),
                 context.forwardHeaders()
         );
-        return Flux.concat(Flux.just(selectedDomainAgentEvent(request, context.binding())),
+        return Flux.concat(Flux.just(selectedDomainAgentEvent(request, context)),
                 concurrencyLimiter.protectDomainAgent(domainAgentClient.query(request)));
     }
 
@@ -69,29 +70,23 @@ public class DomainAgentExecutor {
         ));
     }
 
-    private ChatEvent selectedDomainAgentEvent(DomainAgentRequest request,
-                                               com.huawei.finance.front.one.domain.runtime.RuntimeBinding binding) {
+    private ChatEvent selectedDomainAgentEvent(DomainAgentRequest request, DomainAgentExecutionContext context) {
+        com.huawei.finance.front.one.domain.runtime.RuntimeBinding binding = context.binding();
         String domainAgentId = request.domainAgentId() == null ? "" : request.domainAgentId();
-        String routeSource = binding == null || binding.metadata().get("routeSource") == null
+        String routeSource = context.route() == null || context.route().routeSource() == null
+                ? bindingRouteSource(binding)
+                : context.route().routeSource();
+        String runtimeSessionId = request.runtimeSessionId() == null || request.runtimeSessionId().isBlank()
+                ? request.sessionId()
+                : request.runtimeSessionId();
+        return RuntimeEvent.metadata(request.runId(), request.sessionId(),
+                DomainAgentSelectionPayload.create(domainAgentId, routeSource, runtimeSessionId, null,
+                        binding == null ? Map.of() : binding.metadata()));
+    }
+
+    private String bindingRouteSource(com.huawei.finance.front.one.domain.runtime.RuntimeBinding binding) {
+        return binding == null || binding.metadata().get("routeSource") == null
                 ? "front-selected"
                 : String.valueOf(binding.metadata().get("routeSource"));
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("source", "chatservice");
-        payload.put("sourceType", "selectedDomainAgent");
-        payload.put("metadataType", "selected_domain_agent");
-        payload.put("routeType", "DOMAIN_AGENT");
-        payload.put("targetType", "DOMAIN_AGENT");
-        payload.put("targetId", domainAgentId);
-        payload.put("domainAgentId", domainAgentId);
-        payload.put("routeSource", routeSource);
-        payload.put("runtimeSessionId", request.runtimeSessionId() == null || request.runtimeSessionId().isBlank()
-                ? request.sessionId()
-                : request.runtimeSessionId());
-        payload.put("intentResult", Map.of(
-                "accepted", true,
-                "source", routeSource,
-                "resourceId", domainAgentId
-        ));
-        return RuntimeEvent.metadata(request.runId(), request.sessionId(), payload);
     }
 }

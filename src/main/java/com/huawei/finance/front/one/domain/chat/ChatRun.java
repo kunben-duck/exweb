@@ -92,9 +92,11 @@ public record ChatRun(
      * 记录 run.started 的持久化序号。
      */
     public ChatRun withFirstSeq(long sequence) {
+        Long persistedSequence = Long.valueOf(sequence);
         return new ChatRun(id, tenantId, userId, sessionId, status, routeType, agentCode, runtimeProvider,
                 runtimeSessionId, runMode, parentMessageId, userMessageId, assistantMessageId,
-                firstSeq == null ? sequence : firstSeq, sequence, cancelReason, startedAt, finishedAt,
+                firstSeq == null ? persistedSequence : firstSeq, persistedSequence,
+                cancelReason, startedAt, finishedAt,
                 metadata, createdAt, Instant.now());
     }
 

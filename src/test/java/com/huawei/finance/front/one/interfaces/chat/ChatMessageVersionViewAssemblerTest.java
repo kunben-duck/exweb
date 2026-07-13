@@ -7,6 +7,7 @@ import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessageVersionInfoDt
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatMessageVersionItemDto;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -63,6 +64,23 @@ class ChatMessageVersionViewAssemblerTest {
                 .containsExactly("a1", "a2");
         assertThat(info.variants()).extracting(ChatMessageVersionItemDto::switchLeafMessageId)
                 .containsExactly("a1", "a3");
+    }
+
+    @Test
+    void roleGroupingDoesNotDependOnDefaultLocale() {
+        Locale previousLocale = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+            ChatMessage first = message("a1", "q1", 1, 1, 1, "ASSISTANT");
+            ChatMessage second = message("a2", "q1", 2, 1, 2, "assistant");
+
+            Map<String, ChatMessageVersionInfoDto> result = assembler.assemble(
+                    List.of(second), List.of(first, second));
+
+            assertThat(result.get("a2").total()).isEqualTo(2);
+        } finally {
+            Locale.setDefault(previousLocale);
+        }
     }
 
     private ChatMessage message(String id, String parentId, long nodeOrder, int depth, int siblingIndex, String role) {

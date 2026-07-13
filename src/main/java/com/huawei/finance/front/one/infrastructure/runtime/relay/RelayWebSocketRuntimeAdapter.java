@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -391,26 +392,11 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
             AtomicReference<Disposable> maxRunTimer = new AtomicReference<>();
             AtomicLong lastInboundNanos = new AtomicLong(System.nanoTime());
             Runnable cleanup = () -> {
-                Disposable handshake = handshakeTimeout.getAndSet(null);
-                if (handshake != null) {
-                    handshake.dispose();
-                }
-                Disposable heartbeat = heartbeatTimer.getAndSet(null);
-                if (heartbeat != null) {
-                    heartbeat.dispose();
-                }
-                Disposable liveness = livenessTimer.getAndSet(null);
-                if (liveness != null) {
-                    liveness.dispose();
-                }
-                Disposable maxRun = maxRunTimer.getAndSet(null);
-                if (maxRun != null) {
-                    maxRun.dispose();
-                }
-                Disposable subscription = frameSubscription.getAndSet(null);
-                if (subscription != null) {
-                    subscription.dispose();
-                }
+                disposeAndClear(handshakeTimeout);
+                disposeAndClear(heartbeatTimer);
+                disposeAndClear(livenessTimer);
+                disposeAndClear(maxRunTimer);
+                disposeAndClear(frameSubscription);
             };
             Consumer<Throwable> fail = error -> {
                 if (done.compareAndSet(false, true)) {
@@ -490,6 +476,13 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 cleanup.run();
             });
         }, FluxSink.OverflowStrategy.BUFFER);
+    }
+
+    private void disposeAndClear(AtomicReference<Disposable> disposableReference) {
+        Disposable disposable = disposableReference.getAndSet(null);
+        if (disposable != null) {
+            disposable.dispose();
+        }
     }
 
     private void startRunControls(RunControlContext context) {
@@ -874,7 +867,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         if (frame == null) {
             return false;
         }
-        String normalized = frame.trim().toLowerCase();
+        String normalized = frame.trim().toLowerCase(Locale.ROOT);
         return "[done]".equals(normalized)
                 || "done".equals(normalized)
                 || "message.completed".equals(normalized)

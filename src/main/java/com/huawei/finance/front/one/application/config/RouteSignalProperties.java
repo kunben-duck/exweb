@@ -73,12 +73,12 @@ public class RouteSignalProperties {
         if (value == null || value.isBlank()) {
             return IntentFailureStrategy.RELAY_FALLBACK;
         }
-        try {
-            return IntentFailureStrategy.valueOf(value.trim());
-        } catch (IllegalArgumentException ex) {
-            throw new IllegalArgumentException("financeex.intent.failure-strategy 仅支持 "
+        return switch (value.trim()) {
+            case "RELAY_FALLBACK" -> IntentFailureStrategy.RELAY_FALLBACK;
+            case "FAIL_RUN" -> IntentFailureStrategy.FAIL_RUN;
+            default -> throw new IllegalArgumentException("financeex.intent.failure-strategy 仅支持 "
                     + "RELAY_FALLBACK 或 FAIL_RUN，当前值: " + value);
-        }
+        };
     }
 
 }

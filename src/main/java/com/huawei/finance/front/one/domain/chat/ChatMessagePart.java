@@ -46,6 +46,29 @@ public record ChatMessagePart(
         Integer partOrder,
         Instant createdAt
 ) {
+    private static final String FALLBACK_TITLE = "运行事件";
+    private static final Map<String, String> DEFAULT_TITLES = Map.ofEntries(
+            Map.entry("ANSWER", "最终回答"),
+            Map.entry("MESSAGE_SNAPSHOT", "回答快照"),
+            Map.entry("PROGRESS", "运行进度"),
+            Map.entry("METADATA", "运行元数据"),
+            Map.entry("AGENT", "Agent 调用"),
+            Map.entry("THINKING", "思考过程"),
+            Map.entry("TOOL", "工具调用"),
+            Map.entry("REFERENCE", "引用来源"),
+            Map.entry("CARD", "卡片展示"),
+            Map.entry("CLARIFICATION_REQUEST", "澄清请求"),
+            Map.entry("CLARIFICATION_RESPONSE", "澄清回答"),
+            Map.entry("AGENT_CLARIFICATION_REQUEST", "Agent 澄清请求"),
+            Map.entry("AGENT_CLARIFICATION_RESPONSE", "Agent 澄清回答"),
+            Map.entry("INTENT_CLARIFICATION_REQUEST", "意图澄清请求"),
+            Map.entry("INTENT_CLARIFICATION_RESPONSE", "意图澄清回答"),
+            Map.entry("DOMAIN_AGENT_REFUSAL", "领域 Agent 拒答"),
+            Map.entry("ROUTE_SWITCH_CONFIRMATION_REQUEST", "路由切换确认"),
+            Map.entry("ROUTE_SWITCH_CONFIRMATION_RESPONSE", "路由切换确认结果"),
+            Map.entry("ROUTE_SWITCH_DECLINED", "路由切换已拒绝")
+    );
+
     public ChatMessagePart(String id, String tenantId, String userId, String sessionId, String messageId,
                            String runId, String partType, String sourceType, String contentText,
                            Map<String, Object> payload, Integer partOrder, Instant createdAt) {
@@ -66,28 +89,7 @@ public record ChatMessagePart(
     }
 
     private static String defaultTitle(String partType) {
-        return switch (partType) {
-            case "ANSWER" -> "最终回答";
-            case "MESSAGE_SNAPSHOT" -> "回答快照";
-            case "PROGRESS" -> "运行进度";
-            case "METADATA" -> "运行元数据";
-            case "AGENT" -> "Agent 调用";
-            case "THINKING" -> "思考过程";
-            case "TOOL" -> "工具调用";
-            case "REFERENCE" -> "引用来源";
-            case "CARD" -> "卡片展示";
-            case "CLARIFICATION_REQUEST" -> "澄清请求";
-            case "CLARIFICATION_RESPONSE" -> "澄清回答";
-            case "AGENT_CLARIFICATION_REQUEST" -> "Agent 澄清请求";
-            case "AGENT_CLARIFICATION_RESPONSE" -> "Agent 澄清回答";
-            case "INTENT_CLARIFICATION_REQUEST" -> "意图澄清请求";
-            case "INTENT_CLARIFICATION_RESPONSE" -> "意图澄清回答";
-            case "DOMAIN_AGENT_REFUSAL" -> "领域 Agent 拒答";
-            case "ROUTE_SWITCH_CONFIRMATION_REQUEST" -> "路由切换确认";
-            case "ROUTE_SWITCH_CONFIRMATION_RESPONSE" -> "路由切换确认结果";
-            case "ROUTE_SWITCH_DECLINED" -> "路由切换已拒绝";
-            default -> "运行事件";
-        };
+        return DEFAULT_TITLES.getOrDefault(partType, FALLBACK_TITLE);
     }
 
     private static String defaultStatus(String partType, Map<String, Object> payload) {

@@ -1,5 +1,7 @@
 package com.huawei.finance.front.one.domain.chat;
 
+import java.util.Locale;
+
 /**
  * 单轮 run 的消息树写入模式。
  *
@@ -27,7 +29,7 @@ public enum ChatRunMode {
             return NEXT;
         }
         try {
-            return ChatRunMode.valueOf(value.trim().toUpperCase());
+            return ChatRunMode.valueOf(value.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException ex) {
             return NEXT;
         }

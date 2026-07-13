@@ -14,6 +14,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import org.springframework.beans.factory.ObjectProvider;
@@ -143,6 +144,10 @@ public class RelayRuntimeResponseNormalizer {
         if (!root.isObject()) {
             throw new RelayRuntimeProtocolException("Unsupported Relay runtime frame shape");
         }
+        return normalizeObjectFrame(runId, sessionId, root);
+    }
+
+    private List<ChatEvent> normalizeObjectFrame(String runId, String sessionId, JsonNode root) {
         String type = firstText(root, "type", "event", "status");
         String normalizedType = normalizeTypeName(type);
         if (isHeartbeat(type, root)) {
@@ -189,7 +194,7 @@ public class RelayRuntimeResponseNormalizer {
     }
 
     private boolean isMetadataOnlyDelta(JsonNode root, String type) {
-        if (type != null && "message.delta".equals(type.trim().toLowerCase())) {
+        if (type != null && "message.delta".equals(type.trim().toLowerCase(Locale.ROOT))) {
             return true;
         }
         JsonNode choice = firstChoice(root);
@@ -326,13 +331,8 @@ public class RelayRuntimeResponseNormalizer {
                     "self-evolution-status", "token-update", "heartbeat-response" ->
                     RuntimeEvent.metadata(runId, sessionId, relayPayload(root, sourceType));
             case "agent-call" -> RuntimeEvent.agent(runId, sessionId, relayPayload(root, sourceType));
-            case "agent-reasoning" -> RuntimeEvent.thinking(runId, sessionId,
-                    relayPayload(root, sourceType));
-            case "thinking-operation-start", "thinkink-operation-start" ->
-                    RuntimeEvent.thinking(runId, sessionId, relayPayload(root, sourceType));
-            case "thinking-content-update" -> RuntimeEvent.thinking(runId, sessionId,
-                    relayPayload(root, sourceType));
-            case "thinking-operation-end", "thinking-operation-finish" ->
+            case "agent-reasoning", "thinking-operation-start", "thinkink-operation-start",
+                    "thinking-content-update", "thinking-operation-end", "thinking-operation-finish" ->
                     RuntimeEvent.thinking(runId, sessionId, relayPayload(root, sourceType));
             case "tool-call-streaming", "tool-execution", "tool-structured-result" ->
                     RuntimeEvent.tool(runId, sessionId, relayPayload(root, sourceType));
@@ -409,7 +409,7 @@ public class RelayRuntimeResponseNormalizer {
         if (fieldName == null || fieldName.isBlank()) {
             return false;
         }
-        String normalized = fieldName.trim().toLowerCase();
+        String normalized = fieldName.trim().toLowerCase(Locale.ROOT);
         return normalized.contains("cookie")
                 || normalized.contains("authorization")
                 || normalized.equals("auth")
@@ -472,7 +472,7 @@ public class RelayRuntimeResponseNormalizer {
         if (type == null) {
             return false;
         }
-        String normalized = type.trim().toLowerCase();
+        String normalized = type.trim().toLowerCase(Locale.ROOT);
         normalized = normalizeTypeName(normalized);
         return "message.completed".equals(normalized)
                 || "run.completed".equals(normalized)
@@ -489,7 +489,7 @@ public class RelayRuntimeResponseNormalizer {
         if (type == null) {
             return false;
         }
-        String normalized = type.trim().toLowerCase();
+        String normalized = type.trim().toLowerCase(Locale.ROOT);
         return "run.failed".equals(normalized)
                 || "message.failed".equals(normalized)
                 || "error".equals(normalized)
@@ -498,7 +498,7 @@ public class RelayRuntimeResponseNormalizer {
 
     private boolean isHeartbeat(String type, JsonNode root) {
         if (type != null) {
-            String normalized = type.trim().toLowerCase();
+            String normalized = type.trim().toLowerCase(Locale.ROOT);
             if ("heartbeat".equals(normalized) || "ping".equals(normalized) || "keepalive".equals(normalized)) {
                 return true;
             }
@@ -545,7 +545,7 @@ public class RelayRuntimeResponseNormalizer {
             return "";
         }
         return value.trim()
-                .toLowerCase()
+                .toLowerCase(Locale.ROOT)
                 .replace('—', '-')
                 .replace('_', '-');
     }

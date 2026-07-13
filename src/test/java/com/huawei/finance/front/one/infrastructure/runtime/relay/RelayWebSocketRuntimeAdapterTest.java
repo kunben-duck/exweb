@@ -15,6 +15,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
@@ -36,6 +37,28 @@ import reactor.test.StepVerifier;
 
 class RelayWebSocketRuntimeAdapterTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Test
+    void uppercaseTerminalTextDoesNotDependOnDefaultLocale() {
+        Locale previousLocale = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+            FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                    "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
+                    "{\"type\":\"relay-start\",\"content\":\"processing\",\"session_id\":\"relay-session-1\"}",
+                    "STREAM-COMPLETE"
+            ));
+            RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+            StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                    .assertNext(this::assertSessionReadyMetadata)
+                    .assertNext(event -> assertThat(event.type()).isEqualTo("runtime.progress"))
+                    .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                    .verifyComplete();
+        } finally {
+            Locale.setDefault(previousLocale);
+        }
+    }
 
     @Test
     void newRuntimeSessionSendsConfigThenUserMessageAndCompletesOnIdleState() throws Exception {

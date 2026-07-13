@@ -6,11 +6,33 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class RelayRuntimeResponseNormalizerTest {
     private final RelayRuntimeResponseNormalizer normalizer = new RelayRuntimeResponseNormalizer(new ObjectMapper());
+
+    @Test
+    void protocolNormalizationAndSensitiveFieldsDoNotDependOnDefaultLocale() {
+        Locale previousLocale = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+
+            List<ChatEvent> events = normalizer.normalize("run1", "session1",
+                    "{\"type\":\"THINKING_CONTENT_UPDATE\",\"content\":\"analysis\","
+                            + "\"AUTHORIZATION\":\"secret\"}");
+
+            assertThat(events).singleElement().satisfies(event -> {
+                assertThat(event.type()).isEqualTo("runtime.thinking");
+                assertThat(event.payload())
+                        .containsEntry("sourceType", "THINKING_CONTENT_UPDATE")
+                        .containsEntry("AUTHORIZATION", "[REDACTED]");
+            });
+        } finally {
+            Locale.setDefault(previousLocale);
+        }
+    }
 
     @Test
     void plainTextChunkIsTranslatedToDeltaEvent() {
@@ -19,6 +41,21 @@ class RelayRuntimeResponseNormalizerTest {
         assertThat(events).hasSize(1);
         assertThat(events.getFirst().type()).isEqualTo("message.delta");
         assertThat(events.getFirst().payload()).containsEntry("delta", "hello");
+    }
+
+    @Test
+    void jsonNodeShapesKeepExistingNormalizationSemantics() {
+        assertThat(normalizer.normalize("run1", "session1", "null")).isEmpty();
+
+        List<ChatEvent> textualEvents = normalizer.normalize("run1", "session1", "\"hello\"");
+        assertThat(textualEvents).singleElement().satisfies(event -> {
+            assertThat(event.type()).isEqualTo("message.delta");
+            assertThat(event.payload()).containsEntry("delta", "hello");
+        });
+
+        assertThatThrownBy(() -> normalizer.normalize("run1", "session1", "[]"))
+                .isInstanceOf(RelayRuntimeProtocolException.class)
+                .hasMessageContaining("Unsupported Relay runtime frame shape");
     }
 
     @Test
@@ -243,6 +280,25 @@ class RelayRuntimeResponseNormalizerTest {
                 .containsEntry("is_start", false)
                 .containsEntry("result_summary", "完成")
                 .doesNotContainKey("toolName");
+    }
+
+    @Test
+    void allRelayThinkingAliasesBecomeRuntimeThinkingEvents() {
+        for (String sourceType : List.of(
+                "agent-reasoning",
+                "thinking-operation-start",
+                "thinkink-operation-start",
+                "thinking-content-update",
+                "thinking-operation-end",
+                "thinking-operation-finish")) {
+            List<ChatEvent> events = normalizer.normalize("run1", "session1",
+                    "{\"type\":\"" + sourceType + "\",\"content\":\"thinking\"}");
+
+            assertThat(events).singleElement().satisfies(event -> {
+                assertThat(event.type()).isEqualTo("runtime.thinking");
+                assertThat(event.payload()).containsEntry("sourceType", sourceType);
+            });
+        }
     }
 
     @Test

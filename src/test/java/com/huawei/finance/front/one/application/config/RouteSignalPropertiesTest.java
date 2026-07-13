@@ -16,6 +16,19 @@ class RouteSignalPropertiesTest {
     }
 
     @Test
+    void acceptsSupportedIntentFailureStrategiesAndTrimsValue() {
+        contextRunner
+                .withPropertyValues("financeex.intent.failure-strategy=RELAY_FALLBACK")
+                .run(context -> assertThat(context.getBean(RouteSignalProperties.class)
+                        .intentFailureStrategy()).isEqualTo(IntentFailureStrategy.RELAY_FALLBACK));
+
+        contextRunner
+                .withPropertyValues("financeex.intent.failure-strategy=  FAIL_RUN  ")
+                .run(context -> assertThat(context.getBean(RouteSignalProperties.class)
+                        .intentFailureStrategy()).isEqualTo(IntentFailureStrategy.FAIL_RUN));
+    }
+
+    @Test
     void invalidIntentFailureStrategyFailsFast() {
         contextRunner
                 .withPropertyValues("financeex.intent.failure-strategy=UNKNOWN")

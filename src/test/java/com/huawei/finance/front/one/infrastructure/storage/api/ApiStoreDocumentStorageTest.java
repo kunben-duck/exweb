@@ -3,6 +3,7 @@ package com.huawei.finance.front.one.infrastructure.storage.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.command.DocumentUploadCommand;
@@ -139,6 +140,17 @@ class ApiStoreDocumentStorageTest {
         assertThatThrownBy(() -> storage.upload(request("{\"skillId\":123}", null)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("metadata.skillId 必须是字符串");
+    }
+
+    @Test
+    void rejectsInvalidMetadataJsonAndPreservesParsingCause() {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+        ApiStoreDocumentStorage storage = storage(captured, "{}", false);
+
+        assertThatThrownBy(() -> storage.upload(request("{", null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("metadata 必须是合法 JSON 字符串")
+                .hasCauseInstanceOf(JsonProcessingException.class);
     }
 
     @Test

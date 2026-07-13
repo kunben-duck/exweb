@@ -10,6 +10,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -163,7 +164,7 @@ public class ChatMessageVersionViewAssembler {
     }
 
     private String normalizeRole(String role) {
-        return role == null ? "" : role.toLowerCase();
+        return role == null ? "" : role.toLowerCase(Locale.ROOT);
     }
 
     private record SiblingGroupKey(String parentMessageId, String role) {}

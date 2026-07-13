@@ -2,6 +2,7 @@ package com.huawei.finance.front.one.infrastructure.runtime.relay;
 
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -57,7 +58,7 @@ final class RelayRuntimeWireRequestMapper {
     }
 
     private static boolean isSensitiveKey(String key) {
-        String normalized = key.trim().toLowerCase();
+        String normalized = key.trim().toLowerCase(Locale.ROOT);
         return normalized.contains("cookie")
                 || normalized.contains("token")
                 || normalized.contains("authorization")

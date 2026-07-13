@@ -1,5 +1,6 @@
 package com.huawei.finance.front.one.infrastructure.storage.api;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.command.DocumentUploadCommand;
@@ -180,22 +181,20 @@ public class ApiStoreDocumentStorage implements DocumentStorage {
         if (command.metadataJson() == null || command.metadataJson().isBlank()) {
             return null;
         }
+        JsonNode root;
         try {
-            JsonNode root = objectMapper.readTree(command.metadataJson());
-            JsonNode skillId = root.get("skillId");
-            if (skillId == null || skillId.isNull()) {
-                return null;
-            }
-            if (!skillId.isTextual()) {
-                throw new IllegalArgumentException("metadata.skillId 必须是字符串");
-            }
-            return skillId.asText();
-        } catch (Exception ex) {
-            if (ex instanceof IllegalArgumentException illegalArgumentException) {
-                throw illegalArgumentException;
-            }
+            root = objectMapper.readTree(command.metadataJson());
+        } catch (JsonProcessingException ex) {
             throw new IllegalArgumentException("metadata 必须是合法 JSON 字符串", ex);
         }
+        JsonNode skillId = root.get("skillId");
+        if (skillId == null || skillId.isNull()) {
+            return null;
+        }
+        if (!skillId.isTextual()) {
+            throw new IllegalArgumentException("metadata.skillId 必须是字符串");
+        }
+        return skillId.asText();
     }
 
     private byte[] readAllBytes(DocumentUploadCommand command) {

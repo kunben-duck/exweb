@@ -136,11 +136,35 @@ public class MyBatisSessionRepository implements SessionRepository {
         }
     }
 
+    @Override
+    public void advanceLatestMessageSeq(String tenantId, String userId, String sessionId, long messageSeq) {
+        if (messageSeq < 0L) {
+            throw new IllegalArgumentException("messageSeq 不能小于 0");
+        }
+        if (mapper.advanceLatestMessageSeq(tenantId, userId, sessionId, messageSeq) == 0) {
+            throw new IllegalArgumentException("会话不存在或不属于当前用户: " + sessionId);
+        }
+    }
+
+    @Override
+    public ChatSession markReadThrough(String tenantId, String userId, String sessionId, long readThroughSeq) {
+        if (readThroughSeq < 0L) {
+            throw new IllegalArgumentException("readThroughSeq 不能小于 0");
+        }
+        if (mapper.markReadThrough(tenantId, userId, sessionId, readThroughSeq) == 0) {
+            throw new IllegalArgumentException("会话不存在或不属于当前用户: " + sessionId);
+        }
+        return findByTenantIdAndUserIdAndId(tenantId, userId, sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在或不属于当前用户: " + sessionId));
+    }
+
     private ChatSession toDomain(ChatSessionRow row) {
         return new ChatSession(row.getId(), row.getTenantId(), row.getUserId(), row.getTitle(), row.getStatus(),
                 row.getChannel(), row.getAppId(), row.getAppName(), row.getCurrentLeafMessageId(), row.getRootSessionId(),
                 row.getBranchSourceSessionId(), row.getBranchSourceMessageId(), row.getLastNodeOrder(),
-                row.getMetadataJson(), row.getCreatedAt() == null ? Instant.EPOCH : row.getCreatedAt(),
+                row.getLatestMessageSeq() == null ? 0L : row.getLatestMessageSeq(),
+                row.getLastReadSeq() == null ? 0L : row.getLastReadSeq(), row.getMetadataJson(),
+                row.getCreatedAt() == null ? Instant.EPOCH : row.getCreatedAt(),
                 row.getUpdatedAt() == null ? Instant.EPOCH : row.getUpdatedAt());
     }
 
@@ -159,6 +183,8 @@ public class MyBatisSessionRepository implements SessionRepository {
         row.setBranchSourceSessionId(session.branchSourceSessionId());
         row.setBranchSourceMessageId(session.branchSourceMessageId());
         row.setLastNodeOrder(session.lastNodeOrder());
+        row.setLatestMessageSeq(session.latestMessageSeq());
+        row.setLastReadSeq(session.lastReadSeq());
         row.setMetadataJson(session.metadataJson());
         row.setCreatedAt(session.createdAt());
         row.setUpdatedAt(session.updatedAt());

@@ -75,6 +75,35 @@ class SessionApplicationServiceTest {
     }
 
     @Test
+    void messageReadWatermarksAreMonotonicClampedAndDoNotReorderSession() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        Instant createdAt = Instant.parse("2026-07-14T01:00:00Z");
+        Instant updatedAt = Instant.parse("2026-07-14T02:00:00Z");
+        ChatSession session = sessions.save(new ChatSession(
+                "session1", "tenant1", "user1", "title", "ACTIVE", "web",
+                null, null, null, "session1", null, null, 0L,
+                12L, 4L, null, createdAt, updatedAt));
+        SessionApplicationService service = service(sessions, messages);
+
+        ChatSession readEight = service.markSessionRead(user(), session.id(), 8L);
+        ChatSession staleRead = service.markSessionRead(user(), session.id(), 6L);
+        service.advanceLatestMessageSeq(user(), staleRead, 20L);
+        ChatSession oversizedRead = service.markSessionRead(user(), session.id(), 999L);
+
+        assertThat(readEight.lastReadSeq()).isEqualTo(8L);
+        assertThat(readEight.hasUnread()).isTrue();
+        assertThat(staleRead.lastReadSeq()).isEqualTo(8L);
+        assertThat(oversizedRead.latestMessageSeq()).isEqualTo(20L);
+        assertThat(oversizedRead.lastReadSeq()).isEqualTo(20L);
+        assertThat(oversizedRead.hasUnread()).isFalse();
+        assertThat(oversizedRead.updatedAt()).isEqualTo(updatedAt);
+        assertThatThrownBy(() -> service.markSessionRead(user(), session.id(), -1L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("readThroughSeq");
+    }
+
+    @Test
     void appIdFiltersCursorAndNumberPages() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
@@ -539,7 +568,8 @@ class SessionApplicationServiceTest {
             sessions.put(sessionId, new ChatSession(session.id(), session.tenantId(), session.userId(), session.title(),
                     session.status(), session.channel(), session.appId(), session.appName(),
                     session.currentLeafMessageId(), session.rootSessionId(),
-                    session.branchSourceSessionId(), session.branchSourceMessageId(), next, session.metadataJson(),
+                    session.branchSourceSessionId(), session.branchSourceMessageId(), next,
+                    session.latestMessageSeq(), session.lastReadSeq(), session.metadataJson(),
                     session.createdAt(), Instant.now()));
             return next;
         }
@@ -551,7 +581,8 @@ class SessionApplicationServiceTest {
                     session.status(), session.channel(), session.appId(), session.appName(),
                     leafMessageId, session.rootSessionId(),
                     session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
-                    session.metadataJson(), session.createdAt(), Instant.now()));
+                    session.latestMessageSeq(), session.lastReadSeq(), session.metadataJson(),
+                    session.createdAt(), Instant.now()));
         }
     }
 

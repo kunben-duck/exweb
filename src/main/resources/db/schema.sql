@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS fin_ex_chat_session_t (
     branch_source_session_id VARCHAR(64),
     branch_source_message_id VARCHAR(64),
     last_node_order BIGINT NOT NULL DEFAULT 0,
+    latest_message_seq BIGINT NOT NULL DEFAULT 0,
+    last_read_seq BIGINT NOT NULL DEFAULT 0,
     metadata_json TEXT,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
@@ -417,6 +419,8 @@ COMMENT ON COLUMN fin_ex_chat_session_t.root_session_id IS '分支族根会话 I
 COMMENT ON COLUMN fin_ex_chat_session_t.branch_source_session_id IS '当前会话从哪个源会话分支而来；普通会话为空。';
 COMMENT ON COLUMN fin_ex_chat_session_t.branch_source_message_id IS '当前会话从源会话哪条消息分支而来；普通会话为空。';
 COMMENT ON COLUMN fin_ex_chat_session_t.last_node_order IS '当前会话内最大消息节点序号，写入新消息时递增生成 node_order。';
+COMMENT ON COLUMN fin_ex_chat_session_t.latest_message_seq IS '当前会话最新需要用户查看的 assistant 消息终态事件 sequence；仅在消息可见后单调推进。';
+COMMENT ON COLUMN fin_ex_chat_session_t.last_read_seq IS '当前用户已确认展示的消息事件 sequence；只允许单调推进且不能超过 latest_message_seq。';
 COMMENT ON COLUMN fin_ex_chat_session_t.metadata_json IS '会话扩展元数据 JSON，保存分支、展示或诊断扩展信息。';
 COMMENT ON COLUMN fin_ex_chat_session_t.created_at IS '会话创建时间。';
 COMMENT ON COLUMN fin_ex_chat_session_t.updated_at IS '会话最后更新时间，列表排序和最近访问使用。';

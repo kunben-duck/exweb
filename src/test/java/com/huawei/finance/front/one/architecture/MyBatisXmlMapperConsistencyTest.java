@@ -177,6 +177,33 @@ class MyBatisXmlMapperConsistencyTest {
                 .isEmpty();
     }
 
+    @Test
+    void chatSessionUnreadWatermarksShouldUseDedicatedUpdates() throws IOException {
+        String schema = Files.readString(Path.of("src/main/resources/db/schema.sql"));
+        assertThat(schema)
+                .contains("latest_message_seq BIGINT NOT NULL DEFAULT 0")
+                .contains("last_read_seq BIGINT NOT NULL DEFAULT 0");
+
+        String mapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("session/ChatSessionMapper.opengauss.xml"));
+        String genericUpdate = mapper.substring(
+                mapper.indexOf("<update id=\"update\""), mapper.indexOf("</update>", mapper.indexOf("<update id=\"update\"")));
+        assertThat(genericUpdate)
+                .doesNotContain("latest_message_seq")
+                .doesNotContain("last_read_seq");
+        assertThat(mapper)
+                .contains("SET latest_message_seq = GREATEST(latest_message_seq, #{messageSeq})")
+                .contains("SET last_read_seq = GREATEST(last_read_seq, LEAST(#{readThroughSeq}, latest_message_seq))");
+        String advanceWatermark = mapper.substring(
+                mapper.indexOf("<update id=\"advanceLatestMessageSeq\""),
+                mapper.indexOf("</update>", mapper.indexOf("<update id=\"advanceLatestMessageSeq\"")));
+        String markRead = mapper.substring(
+                mapper.indexOf("<update id=\"markReadThrough\""),
+                mapper.indexOf("</update>", mapper.indexOf("<update id=\"markReadThrough\"")));
+        assertThat(advanceWatermark).doesNotContain("updated_at");
+        assertThat(markRead).doesNotContain("updated_at");
+    }
+
     private List<String> validateXmlMapper(Path xmlFile) {
         try {
             String xml = Files.readString(xmlFile);

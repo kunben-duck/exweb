@@ -40,6 +40,7 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `GET /v1/chat/sessions?appId=fund-app&limit=20&cursor=...`：游标分页查询当前用户会话列表；`appId` 可选，并返回每个会话第一条 assistant 回答 `firstAssistantAnswer`。
 - `GET /v1/chat/sessions/page?appId=fund-app&curPage=1&pageSize=20`：页码分页查询当前用户历史会话；`appId` 可选，返回 `totalRows/totalPages` 和每个会话的 `firstAssistantAnswer`。
 - `GET /v1/chat/sessions/{sessionId}`：查询单个会话元数据，不返回历史消息和流式状态。
+- `POST /v1/chat/sessions/{sessionId}/read`：提交前端已经实际展示到的 `readThroughSeq`，原子推进会话已读水位；不会改变会话列表排序。
 - `GET /v1/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50`：选择会话后查询当前 active path 或指定 leaf path 的完整 user/assistant 消息；有多个版本的消息会带 `versionInfo`。
 - `GET /v1/chat/sessions/{sessionId}/messages/{messageId}/variants`：查询某条消息同父节点下的候选版本完整内容；普通聊天页优先使用 `/messages` 返回的 `versionInfo`。
 - `POST /v1/chat/sessions/{sessionId}/path`：持久化会话当前 active path leaf；UI 切换可先使用 `/messages?leafMessageId=...` 刷新展示。
@@ -80,6 +81,8 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 `/v1/chat/runs` 支持消息树写入模式：`runMode=NEXT` 表示沿当前 leaf 继续提问；`EDIT_USER` 表示编辑历史 user 消息并创建新的 user sibling；`REGENERATE_ASSISTANT` 表示复用原 user 消息重新生成新的 assistant sibling；`CONTINUE_INTERACTION` 表示提交等待态澄清、审批或确认响应并启动续接 run。意图澄清采用完整消息链，每个澄清问题和回答分别保存为 assistant/user 节点；Agent 澄清、审批和 DomainAgent 切换确认仍复用原等待态 assistant。历史版本不会被覆盖，前端通过 `/messages.versionInfo` 展示版本游标，并通过 `leafMessageId/path` 切换和保存展示路径。
 
 会话 App Tag 仅用于产品分组和可选列表过滤，不替代 `tenantId + userId` 归属校验。`appId/appName` 均可省略；`appName` 不能脱离 `appId` 单独传入，空字符串按未传处理。已有会话中显式传入的 tag 必须与创建快照完全一致，分支会话继承源 tag，重命名、归档和恢复不会修改它。tag 不进入 run metadata、RouteMemory、IntentAgent、Relay 或 DomainAgent 请求。
+
+会话列表和详情通过 `hasUnread/latestMessageSeq/lastReadSeq` 返回未读状态。只有成功保存 assistant 的 `run.completed` 和产生用户交互内容的 `run.waiting_user` 会推进最新消息水位；失败、取消和没有 assistant 的完成态不会产生未读。前端应在对应历史消息或实时终态实际展示后调用 `/read`，并提交当时观察到的 sequence；服务端会单调推进且截断超前值，避免旧页签清除后来到达的新消息。
 
 仓库提供独立本地联调台 `local-test-frontend/`。联调台通过 Node 代理访问后端，支持在页面中按 Postman 风格配置 `Cookie`、`Authorization`、`X-*` 等企业鉴权请求头；代理会在 HTTP、fetch Event Resume、文件下载和 WebSocket 握手时统一注入这些请求头。浏览器自身不会、也不能直接手写 `Cookie` 请求头或 WebSocket 自定义请求头。
 

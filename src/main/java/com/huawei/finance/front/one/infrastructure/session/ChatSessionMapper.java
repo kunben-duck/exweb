@@ -144,4 +144,32 @@ public interface ChatSessionMapper {
                           @Param("sessionId") String sessionId,
                           @Param("leafMessageId") String leafMessageId,
                           @Param("updatedAt") Instant updatedAt);
+
+    /**
+     * 推进最新可见消息水位，不修改会话 updated_at。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param messageSeq 最新可见 assistant 消息对应的事件 sequence。
+     * @return 影响行数。
+     */
+    int advanceLatestMessageSeq(@Param("tenantId") String tenantId,
+                                @Param("userId") String userId,
+                                @Param("sessionId") String sessionId,
+                                @Param("messageSeq") long messageSeq);
+
+    /**
+     * 原子推进已读水位，并限制其不能超过当前最新消息水位。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param readThroughSeq 前端已经实际展示到的事件 sequence。
+     * @return 影响行数。
+     */
+    int markReadThrough(@Param("tenantId") String tenantId,
+                        @Param("userId") String userId,
+                        @Param("sessionId") String sessionId,
+                        @Param("readThroughSeq") long readThroughSeq);
 }

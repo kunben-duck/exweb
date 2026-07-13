@@ -35,6 +35,7 @@ query、routeAction、候选意图、最终路由是否采纳和调用耗时。D
 | 会话列表（游标） | `GET` | `/v1/chat/sessions?limit=20&cursor=...` | 当前用户会话游标分页 |
 | 会话列表（页码） | `GET` | `/v1/chat/sessions/page?curPage=1&pageSize=20` | 当前用户历史会话页码分页，返回 totalRows |
 | 会话详情 | `GET` | `/v1/chat/sessions/{sessionId}` | 查询单个会话元数据 |
+| 标记会话已读 | `POST` | `/v1/chat/sessions/{sessionId}/read` | 提交已经实际展示到的 `readThroughSeq`，返回最新会话水位 |
 | 历史消息 | `GET` | `/v1/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50` | 查询当前 active path 或指定 leaf path，消息带轻量 `versionInfo` 和附件快照 |
 | 消息树视图 | `GET` | `/v1/chat/sessions/{sessionId}/messages/tree` | 查询完整可见消息树 mapping，用于复杂版本树或调试，节点消息同样带附件快照 |
 | 消息版本详情 | `GET` | `/v1/chat/sessions/{sessionId}/messages/{messageId}/variants` | 查询同父节点候选版本完整内容；普通聊天页优先使用 `/messages.versionInfo` |
@@ -150,7 +151,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 场景 | 调用顺序 | 关键关联字段 | 前端状态处理 |
 | --- | --- | --- | --- |
-| 首次打开应用 | `GET /chat/sessions?limit=20` -> 用户选择会话后 `GET /chat/sessions/{sessionId}`、`GET /chat/sessions/{sessionId}/messages`、`GET /chat/sessions/{sessionId}/stream-status` -> 可选连接 WS `connect` | `sessionId`、`currentLeafMessageId`、`streamStatus.activeRunId` | 左侧列表使用 `firstAssistantAnswer` 做摘要；主面板用 messages 渲染历史，用 stream-status 恢复运行态 |
+| 首次打开应用 | `GET /chat/sessions?limit=20` -> 用户选择会话后记录 `latestMessageSeq` -> `GET /chat/sessions/{sessionId}/messages`、`GET /chat/sessions/{sessionId}/stream-status` -> 最新历史真正渲染后 `POST /chat/sessions/{sessionId}/read` -> 可选连接 WS `connect` | `sessionId`、`latestMessageSeq`、`currentLeafMessageId`、`streamStatus.activeRunId` | 左侧列表用 `hasUnread` 展示红点；只提交打开时实际观察到的水位，新到达消息仍保持未读；仅翻看旧 leaf/旧分页不清除当前会话未读 |
 | 新会话首轮提问 | 可选 `POST /v1/chat/sessions`，或直接 `POST /v1/chat/runs` 不传 `sessionId` -> WS `subscribe(streamTopicId, firstSeq)` | `runId`、`sessionId`、`firstSeq`、`streamTopicId` | 乐观渲染 user 消息；收到 `message.delta` 创建/追加 assistant 草稿，收到 `message.snapshot` 替换草稿；终态后关闭 loading |
 | 已有会话继续提问 | `GET /v1/chat/sessions/{sessionId}/stream-status` 确认无 active run -> `POST /v1/chat/runs(sessionId, runMode=NEXT)` -> WS subscribe | `sessionId`、`parentMessageId` 可选、`streamTopicId` | 同一 session 存在 active run 时不要再次发送；遇到 409 使用 stop 或等待终态 |
 | 当前页短暂断线重连 | 本地保存 `lastSeq` -> 重建 WS -> `subscribe(topicId, afterSeq=lastSeq)`；如果收到 `RECOVER_REQUIRED`，先 Event Resume 再重新 subscribe | `topicId`、`lastSeq`、`sequence` | 以 `sessionId + sequence` 去重；不要重复追加同一 delta |
@@ -176,6 +177,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `GET /chat/sessions` | Query：`limit` 页大小；`cursor` 上一页游标 | `items[]`、`nextCursor`；item 带 `firstAssistantAnswer` | 游标分页；`nextCursor` 查下一页；`sessionId` 用于会话详情、历史消息和 stream-status |
 | `GET /chat/sessions/page` | Query：`curPage` 当前页，默认 1；`pageSize` 页大小，默认 20 | `items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；item 带 `firstAssistantAnswer` | 页码分页；适合传统分页组件，旧游标接口保持不变 |
 | `GET /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto` | 只拿元数据，不返回历史和流状态 |
+| `POST /chat/sessions/{sessionId}/read` | Path：`sessionId`；Body：`readThroughSeq` 必填且不小于 0 | 更新后的 `ChatSessionDto` | 历史消息或实时终态实际展示后提交；服务端不允许回退或越过最新水位 |
 | `GET /chat/sessions/{sessionId}/messages` | Path：`sessionId`；Query：`leafMessageId` 可选，`cursor` 保留，`limit` | `ChatMessagePageDto.items[]`、`nextCursor`；item 可能带 `versionInfo` | 普通聊天页主接口；用 `messageId` 做反馈、分支和重新生成，用 `versionInfo.variants[].switchLeafMessageId` 切换版本 |
 | `GET /chat/sessions/{sessionId}/messages/tree` | Path：`sessionId` | `ChatMessageTreeDto`：`sessionId`、`currentLeafMessageId`、`rootMessageIds[]`、`mapping` | 读取完整可见消息树；不返回 hidden system 或下游工具原始节点 |
 | `GET /chat/sessions/{sessionId}/messages/{messageId}/variants` | Path：`sessionId`、`messageId` | `ChatMessageDto[]` | 查询完整候选内容和排障；普通聊天页优先使用 `/messages` 的 `versionInfo` |
@@ -214,6 +216,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `GET /v1/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`appId` 可选；`limit` 默认 20；`cursor` 可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每项含 `appId/appName/firstAssistantAnswer`。 | `appId` 区分大小写；后续页必须沿用生成 cursor 时相同的 `appId`，否则返回参数错误。 |
 | `GET /v1/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`appId` 可选；`curPage` 默认 1；`pageSize` 默认 20，最大 100。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`。 | `totalRows/totalPages` 按同一 `appId` 过滤条件计算；不返回 `DELETED` 会话。 |
 | `GET /v1/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
+| `POST /v1/chat/sessions/{sessionId}/read` | 最新历史消息或实时 assistant 终态已经展示。 | Path：`sessionId`；JSON body：`readThroughSeq` 必填、最小为 0。 | 更新后的 `ChatSessionDto`。 | 提交列表/详情中观察到的 `latestMessageSeq`，或实时 `run.completed/run.waiting_user` 的 sequence；不会更新会话 `updatedAt`。 |
 | `GET /v1/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 保留。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 不传 `leafMessageId` 时返回当前 active path；传入时返回 root 到该 leaf 的路径。 |
 | `GET /v1/chat/sessions/{sessionId}/messages/tree` | 复杂前端读取完整消息树，或联调排查版本关系。 | Path：`sessionId`。 | `ChatMessageTreeDto`。 | 只读接口；不改变当前路径，不创建 run；mapping 只包含业务可见 user/assistant 消息。 |
 | `GET /v1/chat/sessions/{sessionId}/messages/{messageId}/variants` | 切换编辑/重新生成后的候选版本。 | Path：`sessionId`、`messageId`。 | `ChatMessageDto[]`。 | 返回同父节点、同角色的 sibling 版本。 |
@@ -276,6 +279,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `GET /v1/chat/sessions` | Query：`?appId=fund-app&limit=20&cursor=cursor_xxx`；`appId/cursor` 均可省略，同一 cursor 不得切换 appId。 |
 | `GET /v1/chat/sessions/page` | Query：`?appId=fund-app&curPage=1&pageSize=20`；`appId` 可省略。 |
 | `GET /v1/chat/sessions/{sessionId}` | Path：`session_xxx`。 |
+| `POST /v1/chat/sessions/{sessionId}/read` | Body：`{"readThroughSeq":63252}`；使用已经实际展示的会话水位或实时终态 sequence。 |
 | `GET /v1/chat/sessions/{sessionId}/messages` | Query：`?limit=50`；查看指定版本路径时传 `?leafMessageId=msg_xxx&limit=50`。 |
 | `GET /v1/chat/sessions/{sessionId}/messages/tree` | Path：`session_xxx`。 |
 | `GET /v1/chat/sessions/{sessionId}/messages/{messageId}/variants` | Path：`session_xxx`、`msg_xxx`。 |
@@ -336,6 +340,9 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `rootSessionId` | 分支族根会话 ID |
 | `branchSourceSessionId` | 当前会话从哪个源会话分支而来，普通会话为空 |
 | `branchSourceMessageId` | 当前会话从源会话哪条消息分支而来，普通会话为空 |
+| `hasUnread` | 是否存在尚未确认展示的 assistant 消息，等价于 `latestMessageSeq > lastReadSeq` |
+| `latestMessageSeq` | 当前会话最新可见 assistant 消息水位；来自已保存消息对应的终态事件 sequence |
+| `lastReadSeq` | 前端已确认展示的消息水位；服务端保证单调递增且不超过 `latestMessageSeq` |
 | `firstAssistantAnswer` | 会话第一条 assistant 完整回答，仅会话分页列表保证装配；创建、详情、state 等非列表场景可为空 |
 | `createdAt` / `updatedAt` | 创建和最后更新时间 |
 
@@ -778,6 +785,9 @@ curl -X POST http://localhost:8080/v1/chat/sessions \
   "rootSessionId": "session_xxx",
   "branchSourceSessionId": null,
   "branchSourceMessageId": null,
+  "hasUnread": false,
+  "latestMessageSeq": 0,
+  "lastReadSeq": 0,
   "firstAssistantAnswer": null,
   "createdAt": "2026-05-17T01:00:00Z",
   "updatedAt": "2026-05-17T01:00:00Z"
@@ -810,6 +820,9 @@ curl "http://localhost:8080/v1/chat/sessions?appId=fund-app&limit=20"
       "rootSessionId": "session_xxx",
       "branchSourceSessionId": null,
       "branchSourceMessageId": null,
+      "hasUnread": true,
+      "latestMessageSeq": 63252,
+      "lastReadSeq": 63180,
       "firstAssistantAnswer": "从趋势看，差旅费在三月出现明显上升...",
       "createdAt": "2026-05-17T01:00:00Z",
       "updatedAt": "2026-05-17T01:10:00Z"
@@ -843,6 +856,9 @@ curl "http://localhost:8080/v1/chat/sessions/page?appId=fund-app&curPage=1&pageS
       "rootSessionId": "session_xxx",
       "branchSourceSessionId": null,
       "branchSourceMessageId": null,
+      "hasUnread": true,
+      "latestMessageSeq": 63252,
+      "lastReadSeq": 63180,
       "firstAssistantAnswer": "从趋势看，差旅费在三月出现明显上升...",
       "createdAt": "2026-05-17T01:00:00Z",
       "updatedAt": "2026-05-17T01:10:00Z"
@@ -877,11 +893,24 @@ curl "http://localhost:8080/v1/chat/sessions/session_xxx/stream-status"
   "rootSessionId": "session_xxx",
   "branchSourceSessionId": null,
   "branchSourceMessageId": null,
+  "hasUnread": true,
+  "latestMessageSeq": 63252,
+  "lastReadSeq": 63180,
   "firstAssistantAnswer": null,
   "createdAt": "2026-05-17T01:00:00Z",
   "updatedAt": "2026-05-17T01:10:00Z"
 }
 ```
+
+最新历史消息渲染完成后，使用打开会话时观察到的水位标记已读：
+
+```bash
+curl -X POST "http://localhost:8080/v1/chat/sessions/session_xxx/read" \
+  -H 'Content-Type: application/json' \
+  -d '{"readThroughSeq":63252}'
+```
+
+服务端执行 `lastReadSeq=max(lastReadSeq,min(readThroughSeq,latestMessageSeq))`。如果加载期间又产生了 `sequence=63260` 的新回答，提交 `63252` 后仍返回 `hasUnread=true`；前端不得为了清红点临时重查最新水位后直接提交尚未展示的值。
 
 单独分页查询历史消息：
 

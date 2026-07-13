@@ -46,6 +46,11 @@ public interface ChatSessionFacade {
     ChatSession getSession(UserContext user, String sessionId);
 
     /**
+     * 将会话已读水位推进到前端实际展示的服务端消息 sequence。
+     */
+    ChatSession markSessionRead(UserContext user, String sessionId, long readThroughSeq);
+
+    /**
      * 查询当前用户的会话列表。
      *
      * @param user 请求入口解析出的不可变用户身份快照。

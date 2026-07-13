@@ -18,6 +18,8 @@ import java.time.Instant;
  * @param branchSourceSessionId 当前会话由哪个源会话分支而来。
  * @param branchSourceMessageId 当前会话从源会话哪条消息分支而来。
  * @param lastNodeOrder 当前会话内最大消息节点序号。
+ * @param latestMessageSeq 当前会话最新需要用户查看的 assistant 消息事件水位。
+ * @param lastReadSeq 当前用户已确认展示的消息事件水位。
  * @param metadataJson 会话扩展元数据 JSON。
  * @param createdAt 创建时间。
  * @param updatedAt 最近更新时间。
@@ -36,6 +38,8 @@ public record ChatSession(
         String branchSourceSessionId,
         String branchSourceMessageId,
         Long lastNodeOrder,
+        long latestMessageSeq,
+        long lastReadSeq,
         String metadataJson,
         Instant createdAt,
         Instant updatedAt
@@ -46,7 +50,7 @@ public record ChatSession(
     public ChatSession(String id, String tenantId, String userId, String title, String status, String channel,
                        Instant createdAt, Instant updatedAt) {
         this(id, tenantId, userId, title, status, channel, null, null,
-                null, id, null, null, 0L, null, createdAt, updatedAt);
+                null, id, null, null, 0L, 0L, 0L, null, createdAt, updatedAt);
     }
 
     /**
@@ -58,7 +62,19 @@ public record ChatSession(
                        Instant createdAt, Instant updatedAt) {
         this(id, tenantId, userId, title, status, channel, null, null,
                 currentLeafMessageId, rootSessionId, branchSourceSessionId, branchSourceMessageId,
-                lastNodeOrder, metadataJson, createdAt, updatedAt);
+                lastNodeOrder, 0L, 0L, metadataJson, createdAt, updatedAt);
+    }
+
+    /**
+     * 兼容尚未携带消息已读水位的完整会话快照构造器。
+     */
+    public ChatSession(String id, String tenantId, String userId, String title, String status, String channel,
+                       String appId, String appName, String currentLeafMessageId, String rootSessionId,
+                       String branchSourceSessionId, String branchSourceMessageId, Long lastNodeOrder,
+                       String metadataJson, Instant createdAt, Instant updatedAt) {
+        this(id, tenantId, userId, title, status, channel, appId, appName, currentLeafMessageId, rootSessionId,
+                branchSourceSessionId, branchSourceMessageId, lastNodeOrder, 0L, 0L,
+                metadataJson, createdAt, updatedAt);
     }
 
     public ChatSession {
@@ -74,7 +90,19 @@ public record ChatSession(
             throw new IllegalArgumentException("appName 长度不能超过 256");
         }
         lastNodeOrder = lastNodeOrder == null ? 0L : lastNodeOrder;
+        latestMessageSeq = Math.max(0L, latestMessageSeq);
+        lastReadSeq = Math.max(0L, Math.min(lastReadSeq, latestMessageSeq));
         rootSessionId = rootSessionId == null || rootSessionId.isBlank() ? id : rootSessionId;
+    }
+
+    public boolean hasUnread() {
+        return latestMessageSeq > lastReadSeq;
+    }
+
+    public ChatSession withMessageWatermarks(long latestSeq, long readSeq) {
+        return new ChatSession(id, tenantId, userId, title, status, channel, appId, appName,
+                currentLeafMessageId, rootSessionId, branchSourceSessionId, branchSourceMessageId,
+                lastNodeOrder, latestSeq, readSeq, metadataJson, createdAt, updatedAt);
     }
 
     private static String normalize(String value) {

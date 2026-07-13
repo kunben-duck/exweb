@@ -2295,6 +2295,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                             assistant.parts(),
                             null
             ));
+            sessionService.advanceLatestMessageSeq(user, session, stored.sequence());
             chatRunService.bindAssistantMessage(runId, savedAssistant.id());
             bindingRef.set(completeBindingAfterRunCompleted(bindingRef.get(), runId, savedAssistant.id()));
             if (context.continuationInteractionRequest() != null
@@ -2316,6 +2317,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     completionTarget.assistantMessageId(),
                     waitingRequest.interactionType() != ChatInteractionType.ROUTE_SWITCH_CONFIRMATION
             ));
+            sessionService.advanceLatestMessageSeq(user, session, stored.sequence());
             chatRunService.bindAssistantMessage(runId, savedAssistant.id());
             bindingRef.set(runtimeBindingService.touchAndMoveToLeaf(bindingRef.get(), runId, savedAssistant.id()));
             chatInteractionService.saveInteraction(waitingRequest);

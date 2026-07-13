@@ -32,6 +32,10 @@ public class ChatSessionRow {
     private String branchSourceMessageId;
     /** 当前会话最大消息节点序号。 */
     private Long lastNodeOrder;
+    /** 当前会话最新可见 assistant 消息事件水位。 */
+    private Long latestMessageSeq;
+    /** 当前用户已读消息事件水位。 */
+    private Long lastReadSeq;
     /** 会话扩展元数据 JSON。 */
     private String metadataJson;
     /** 创建时间。 */
@@ -65,6 +69,10 @@ public class ChatSessionRow {
     public void setBranchSourceMessageId(String branchSourceMessageId) { this.branchSourceMessageId = branchSourceMessageId; }
     public Long getLastNodeOrder() { return lastNodeOrder; }
     public void setLastNodeOrder(Long lastNodeOrder) { this.lastNodeOrder = lastNodeOrder; }
+    public Long getLatestMessageSeq() { return latestMessageSeq; }
+    public void setLatestMessageSeq(Long latestMessageSeq) { this.latestMessageSeq = latestMessageSeq; }
+    public Long getLastReadSeq() { return lastReadSeq; }
+    public void setLastReadSeq(Long lastReadSeq) { this.lastReadSeq = lastReadSeq; }
     public String getMetadataJson() { return metadataJson; }
     public void setMetadataJson(String metadataJson) { this.metadataJson = metadataJson; }
     public Instant getCreatedAt() { return createdAt; }

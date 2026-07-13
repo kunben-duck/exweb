@@ -104,6 +104,7 @@ public class ChatRunTerminalCommitService {
         ChatEvent stored = append(command.event(), command.context());
         command.context().assistant().observe(stored);
         ChatMessage savedAssistant = saveCompletedAssistant(command);
+        advanceLatestMessageSeq(command.context(), stored);
         bindAssistantMessage(stored.runId(), savedAssistant.id());
         RuntimeBinding binding = completeBinding(command.context(), savedAssistant.id());
         if (reusableInteraction(command.context())) {
@@ -122,6 +123,7 @@ public class ChatRunTerminalCommitService {
         ChatEvent stored = append(command.event(), command.context());
         command.context().assistant().observe(stored);
         ChatMessage savedAssistant = saveWaitingAssistant(command);
+        advanceLatestMessageSeq(command.context(), stored);
         bindAssistantMessage(stored.runId(), savedAssistant.id());
         RuntimeBinding binding = refreshBinding(command.context(), savedAssistant.id());
         if (reusableInteraction(command.context())) {
@@ -422,6 +424,10 @@ public class ChatRunTerminalCommitService {
     private void bindAssistantMessage(String runId, String assistantMessageId) {
         runRepository.findById(runId)
                 .ifPresent(run -> runRepository.save(run.withAssistantMessageId(assistantMessageId)));
+    }
+
+    private void advanceLatestMessageSeq(TerminalCommitContext context, ChatEvent stored) {
+        sessionService.advanceLatestMessageSeq(context.user(), context.session(), stored.sequence());
     }
 
     private ChatRun observeRun(ChatEvent event) {

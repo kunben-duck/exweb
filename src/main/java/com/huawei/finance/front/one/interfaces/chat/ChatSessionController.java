@@ -29,6 +29,7 @@ import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionNumberPageDto
 import com.huawei.finance.front.one.interfaces.chat.dto.ChatSessionPageDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatBranchRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatSessionRequest;
+import com.huawei.finance.front.one.interfaces.chat.dto.MarkChatSessionReadRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.MessageFeedbackDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.SelectChatPathRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.UpdateChatSessionRequest;
@@ -176,6 +177,18 @@ public class ChatSessionController {
     public Mono<ChatSessionDto> get(@PathVariable("sessionId") String sessionId) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> toDto(facade.getSession(user, sessionId)))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * 将会话已读水位推进到前端已经实际展示的消息 sequence。
+     */
+    @PostMapping("/{sessionId}/read")
+    public Mono<ChatSessionDto> markRead(@PathVariable("sessionId") String sessionId,
+                                         @Valid @RequestBody MarkChatSessionReadRequest request) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> toDto(
+                        facade.markSessionRead(user, sessionId, request.readThroughSeq())))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -380,6 +393,9 @@ public class ChatSessionController {
                 session.rootSessionId(),
                 session.branchSourceSessionId(),
                 session.branchSourceMessageId(),
+                session.hasUnread(),
+                session.latestMessageSeq(),
+                session.lastReadSeq(),
                 firstAssistantAnswer,
                 session.createdAt(),
                 session.updatedAt()

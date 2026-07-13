@@ -347,6 +347,11 @@ class FinanceEXChatServiceTest {
 
         assertThat(runs.ownerTerminalFenceAttempts).hasValue(1);
         assertThat(messages.messages).noneMatch(message -> "assistant".equals(message.role()));
+        assertThat(sessions.sessions.values()).singleElement()
+                .satisfies(session -> {
+                    assertThat(session.latestMessageSeq()).isZero();
+                    assertThat(session.hasUnread()).isFalse();
+                });
         assertThat(runs.runs.values()).singleElement()
                 .extracting(ChatRun::status)
                 .isEqualTo(ChatRunStatus.COMPLETED);
@@ -847,6 +852,16 @@ class FinanceEXChatServiceTest {
                             .containsEntry("intentId", "domain_agent_finance_knowledge")
                             .containsEntry("intentName", "财经知识助手"));
         });
+        ChatEvent completed = events.events.stream()
+                .filter(event -> "run.completed".equals(event.type()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(sessions.sessions.values()).singleElement()
+                .satisfies(session -> {
+                    assertThat(session.latestMessageSeq()).isEqualTo(completed.sequence());
+                    assertThat(session.lastReadSeq()).isZero();
+                    assertThat(session.hasUnread()).isTrue();
+                });
     }
 
     @Test
@@ -2227,6 +2242,15 @@ class FinanceEXChatServiceTest {
                 });
         assertThat(events.events).extracting(ChatEvent::type)
                 .containsExactly("run.started", "runtime.card", "run.waiting_user");
+        ChatEvent waitingUser = events.events.stream()
+                .filter(event -> "run.waiting_user".equals(event.type()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(sessions.sessions.get(run.sessionId()))
+                .satisfies(session -> {
+                    assertThat(session.latestMessageSeq()).isEqualTo(waitingUser.sequence());
+                    assertThat(session.hasUnread()).isTrue();
+                });
     }
 
     @Test

@@ -13,6 +13,8 @@
         <result column="branch_source_session_id" property="branchSourceSessionId"/>
         <result column="branch_source_message_id" property="branchSourceMessageId"/>
         <result column="last_node_order" property="lastNodeOrder"/>
+        <result column="latest_message_seq" property="latestMessageSeq"/>
+        <result column="last_read_seq" property="lastReadSeq"/>
         <result column="metadata_json" property="metadataJson"/>
         <result column="created_at" property="createdAt"/>
         <result column="updated_at" property="updatedAt"/>
@@ -21,7 +23,7 @@
     <sql id="sessionColumns">
         id, tenant_id, user_id, title, status, channel, app_id, app_name, current_leaf_message_id,
         root_session_id, branch_source_session_id, branch_source_message_id,
-        last_node_order, metadata_json, created_at, updated_at
+        last_node_order, latest_message_seq, last_read_seq, metadata_json, created_at, updated_at
     </sql>
 
     <!--
@@ -34,12 +36,12 @@
         INSERT INTO fin_ex_chat_session_t(
             id, tenant_id, user_id, title, status, channel, app_id, app_name, current_leaf_message_id,
             root_session_id, branch_source_session_id, branch_source_message_id,
-            last_node_order, metadata_json, created_at, updated_at
+            last_node_order, latest_message_seq, last_read_seq, metadata_json, created_at, updated_at
         )
         VALUES (
             #{id}, #{tenantId}, #{userId}, #{title}, #{status}, #{channel}, #{appId}, #{appName}, #{currentLeafMessageId},
             #{rootSessionId}, #{branchSourceSessionId}, #{branchSourceMessageId},
-            #{lastNodeOrder}, #{metadataJson}, #{createdAt}, #{updatedAt}
+            #{lastNodeOrder}, #{latestMessageSeq}, #{lastReadSeq}, #{metadataJson}, #{createdAt}, #{updatedAt}
         )
     </insert>
 
@@ -190,6 +192,30 @@
         UPDATE fin_ex_chat_session_t
         SET current_leaf_message_id = #{leafMessageId},
             updated_at = #{updatedAt}
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{sessionId}
+    </update>
+
+    <!--
+      推进最新可见 assistant 消息水位；使用 GREATEST 保证并发终态只能单调前进，且不更新 updated_at。
+      入参: tenantId/userId/sessionId 定位所属会话；messageSeq 为已保存 assistant 对应的终态事件 sequence。
+    -->
+    <update id="advanceLatestMessageSeq">
+        UPDATE fin_ex_chat_session_t
+        SET latest_message_seq = GREATEST(latest_message_seq, #{messageSeq})
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{sessionId}
+    </update>
+
+    <!--
+      原子推进当前用户已读水位；较旧页签不能回退水位，超前值不能越过当前最新消息水位。
+      入参: tenantId/userId/sessionId 定位所属会话；readThroughSeq 为前端已经实际展示到的事件 sequence。
+    -->
+    <update id="markReadThrough">
+        UPDATE fin_ex_chat_session_t
+        SET last_read_seq = GREATEST(last_read_seq, LEAST(#{readThroughSeq}, latest_message_seq))
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
           AND id = #{sessionId}

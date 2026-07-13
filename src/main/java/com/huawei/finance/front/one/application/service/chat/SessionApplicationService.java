@@ -131,6 +131,17 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     @Override
+    public ChatSession markSessionRead(UserContext user, String sessionId, long readThroughSeq) {
+        checkChatUser(user);
+        if (readThroughSeq < 0L) {
+            throw new IllegalArgumentException("readThroughSeq 不能小于 0");
+        }
+        ChatSession session = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
+        return sessionRepository.markReadThrough(
+                session.tenantId(), session.userId(), session.id(), readThroughSeq);
+    }
+
+    @Override
     public ChatMessagePage listMessages(UserContext user, String sessionId, String cursor, int limit) {
         return listMessages(user, sessionId, null, cursor, limit);
     }
@@ -362,6 +373,15 @@ public class SessionApplicationService implements ChatSessionFacade {
             throw new SecurityException("会话不属于当前用户");
         }
         sessionRepository.lockForMessageMutation(tenantId, userId, session.id());
+    }
+
+    /** 在当前终态事务内推进最新可见 assistant 消息水位。 */
+    void advanceLatestMessageSeq(UserContext user, ChatSession session, long messageSeq) {
+        if (user == null || session == null || messageSeq < 0L) {
+            throw new IllegalArgumentException("会话消息水位参数不合法");
+        }
+        sessionRepository.advanceLatestMessageSeq(
+                user.tenantId(), user.ownerUserId(), session.id(), messageSeq);
     }
 
     public ChatMessage saveUserMessage(ChatCommand command, ChatSession session) {
@@ -697,7 +717,8 @@ public class SessionApplicationService implements ChatSessionFacade {
                 session.status(), session.channel(), session.appId(), session.appName(),
                 session.currentLeafMessageId(), session.rootSessionId(),
                 session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
-                session.metadataJson(), session.createdAt(), Instant.now());
+                session.latestMessageSeq(), session.lastReadSeq(), session.metadataJson(),
+                session.createdAt(), Instant.now());
         return sessionRepository.save(touched);
     }
 
@@ -705,7 +726,8 @@ public class SessionApplicationService implements ChatSessionFacade {
         ChatSession updated = new ChatSession(session.id(), session.tenantId(), session.userId(), title, status,
                 session.channel(), session.appId(), session.appName(), session.currentLeafMessageId(), session.rootSessionId(),
                 session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
-                session.metadataJson(), session.createdAt(), Instant.now());
+                session.latestMessageSeq(), session.lastReadSeq(), session.metadataJson(),
+                session.createdAt(), Instant.now());
         return sessionRepository.save(updated);
     }
 

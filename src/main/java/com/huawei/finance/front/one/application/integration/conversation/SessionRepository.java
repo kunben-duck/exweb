@@ -123,6 +123,27 @@ public interface SessionRepository {
     ChatSession save(ChatSession session);
 
     /**
+     * 推进会话最新可见 assistant 消息水位，不改变会话列表排序时间。
+     */
+    default void advanceLatestMessageSeq(String tenantId, String userId, String sessionId, long messageSeq) {
+        ChatSession session = findByTenantIdAndUserIdAndId(tenantId, userId, sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在或不属于当前用户: " + sessionId));
+        save(session.withMessageWatermarks(
+                Math.max(session.latestMessageSeq(), messageSeq), session.lastReadSeq()));
+    }
+
+    /**
+     * 将当前用户的已读水位原子推进到实际展示位置，不能越过服务端最新消息水位。
+     */
+    default ChatSession markReadThrough(String tenantId, String userId, String sessionId, long readThroughSeq) {
+        ChatSession session = findByTenantIdAndUserIdAndId(tenantId, userId, sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在或不属于当前用户: " + sessionId));
+        long nextReadSeq = Math.max(session.lastReadSeq(),
+                Math.min(Math.max(0L, readThroughSeq), session.latestMessageSeq()));
+        return save(session.withMessageWatermarks(session.latestMessageSeq(), nextReadSeq));
+    }
+
+    /**
      * 在当前事务内锁定会话消息树写入水位，但不递增节点序号。
      *
      * <p>调用方必须已经开启事务。该锁用于统一同一会话的 run admission 与终态消息写入顺序；
@@ -165,7 +186,8 @@ public interface SessionRepository {
                         session.status(), session.channel(), session.appId(), session.appName(),
                         leafMessageId, session.rootSessionId(),
                         session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
-                        session.metadataJson(), session.createdAt(), java.time.Instant.now()))
+                        session.latestMessageSeq(), session.lastReadSeq(), session.metadataJson(),
+                        session.createdAt(), java.time.Instant.now()))
                 .ifPresent(this::save);
     }
 }

@@ -36,9 +36,9 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 完整接口和 WebSocket 联调说明见 [前端联调文档](docs/frontend-integration.md)。其中“逐接口最小入参示例”和“`/v1/chat/runs` 不同场景请求体示例”是前端请求体样例的维护入口。
 
 - `POST /v1/chat/runs`：唯一任务提交入口。普通提问创建后台 run；`runMode=CONTINUE_INTERACTION` 时提交澄清/审批/确认响应并启动续接 run；返回 `runId`、`sessionId`、`firstSeq` 和 `streamTopicId`。
-- `POST /v1/chat/sessions`：显式创建会话；也可以在 `/v1/chat/runs` 中不传 `sessionId` 由后端创建或归一化。
-- `GET /v1/chat/sessions?limit=20&cursor=...`：游标分页查询当前用户会话列表，并返回每个会话第一条 assistant 回答 `firstAssistantAnswer`。
-- `GET /v1/chat/sessions/page?curPage=1&pageSize=20`：页码分页查询当前用户历史会话，返回 `totalRows/totalPages` 和每个会话的 `firstAssistantAnswer`。
+- `POST /v1/chat/sessions`：显式创建会话；可选传 `appId/appName` 作为不可变分组标识和名称快照。也可以在 `/v1/chat/runs` 中不传 `sessionId`，由后端使用相同字段自动创建会话。
+- `GET /v1/chat/sessions?appId=fund-app&limit=20&cursor=...`：游标分页查询当前用户会话列表；`appId` 可选，并返回每个会话第一条 assistant 回答 `firstAssistantAnswer`。
+- `GET /v1/chat/sessions/page?appId=fund-app&curPage=1&pageSize=20`：页码分页查询当前用户历史会话；`appId` 可选，返回 `totalRows/totalPages` 和每个会话的 `firstAssistantAnswer`。
 - `GET /v1/chat/sessions/{sessionId}`：查询单个会话元数据，不返回历史消息和流式状态。
 - `GET /v1/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50`：选择会话后查询当前 active path 或指定 leaf path 的完整 user/assistant 消息；有多个版本的消息会带 `versionInfo`。
 - `GET /v1/chat/sessions/{sessionId}/messages/{messageId}/variants`：查询某条消息同父节点下的候选版本完整内容；普通聊天页优先使用 `/messages` 返回的 `versionInfo`。
@@ -78,6 +78,8 @@ POST /v1/chat/runs
 WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，不随 `/v1/chat/runs` 响应返回。
 
 `/v1/chat/runs` 支持消息树写入模式：`runMode=NEXT` 表示沿当前 leaf 继续提问；`EDIT_USER` 表示编辑历史 user 消息并创建新的 user sibling；`REGENERATE_ASSISTANT` 表示复用原 user 消息重新生成新的 assistant sibling；`CONTINUE_INTERACTION` 表示提交等待态澄清、审批或确认响应并启动续接 run。意图澄清采用完整消息链，每个澄清问题和回答分别保存为 assistant/user 节点；Agent 澄清、审批和 DomainAgent 切换确认仍复用原等待态 assistant。历史版本不会被覆盖，前端通过 `/messages.versionInfo` 展示版本游标，并通过 `leafMessageId/path` 切换和保存展示路径。
+
+会话 App Tag 仅用于产品分组和可选列表过滤，不替代 `tenantId + userId` 归属校验。`appId/appName` 均可省略；`appName` 不能脱离 `appId` 单独传入，空字符串按未传处理。已有会话中显式传入的 tag 必须与创建快照完全一致，分支会话继承源 tag，重命名、归档和恢复不会修改它。tag 不进入 run metadata、RouteMemory、IntentAgent、Relay 或 DomainAgent 请求。
 
 仓库提供独立本地联调台 `local-test-frontend/`。联调台通过 Node 代理访问后端，支持在页面中按 Postman 风格配置 `Cookie`、`Authorization`、`X-*` 等企业鉴权请求头；代理会在 HTTP、fetch Event Resume、文件下载和 WebSocket 握手时统一注入这些请求头。浏览器自身不会、也不能直接手写 `Cookie` 请求头或 WebSocket 自定义请求头。
 

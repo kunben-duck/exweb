@@ -6,6 +6,8 @@
     <resultMap id="chatSessionResultMap" type="com.huawei.finance.front.one.infrastructure.session.ChatSessionRow">
         <result column="tenant_id" property="tenantId"/>
         <result column="user_id" property="userId"/>
+        <result column="app_id" property="appId"/>
+        <result column="app_name" property="appName"/>
         <result column="current_leaf_message_id" property="currentLeafMessageId"/>
         <result column="root_session_id" property="rootSessionId"/>
         <result column="branch_source_session_id" property="branchSourceSessionId"/>
@@ -17,7 +19,7 @@
     </resultMap>
 
     <sql id="sessionColumns">
-        id, tenant_id, user_id, title, status, channel, current_leaf_message_id,
+        id, tenant_id, user_id, title, status, channel, app_id, app_name, current_leaf_message_id,
         root_session_id, branch_source_session_id, branch_source_message_id,
         last_node_order, metadata_json, created_at, updated_at
     </sql>
@@ -30,12 +32,12 @@
     -->
     <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.session.ChatSessionRow">
         INSERT INTO fin_ex_chat_session_t(
-            id, tenant_id, user_id, title, status, channel, current_leaf_message_id,
+            id, tenant_id, user_id, title, status, channel, app_id, app_name, current_leaf_message_id,
             root_session_id, branch_source_session_id, branch_source_message_id,
             last_node_order, metadata_json, created_at, updated_at
         )
         VALUES (
-            #{id}, #{tenantId}, #{userId}, #{title}, #{status}, #{channel}, #{currentLeafMessageId},
+            #{id}, #{tenantId}, #{userId}, #{title}, #{status}, #{channel}, #{appId}, #{appName}, #{currentLeafMessageId},
             #{rootSessionId}, #{branchSourceSessionId}, #{branchSourceMessageId},
             #{lastNodeOrder}, #{metadataJson}, #{createdAt}, #{updatedAt}
         )
@@ -108,6 +110,9 @@
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
           AND status &lt;&gt; 'DELETED'
+          <if test="appId != null and appId != ''">
+          AND app_id = #{appId}
+          </if>
           <if test="cursorUpdatedAt != null">
           AND (
                 updated_at &lt; #{cursorUpdatedAt}
@@ -128,6 +133,9 @@
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
           AND status &lt;&gt; 'DELETED'
+          <if test="appId != null and appId != ''">
+          AND app_id = #{appId}
+          </if>
     </select>
 
     <!--
@@ -140,6 +148,9 @@
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
           AND status &lt;&gt; 'DELETED'
+          <if test="appId != null and appId != ''">
+          AND app_id = #{appId}
+          </if>
         ORDER BY updated_at DESC, id DESC
         LIMIT #{limit}
         OFFSET #{offset}

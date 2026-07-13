@@ -18,6 +18,10 @@ public class ChatSessionRow {
     private String status;
     /** 会话来源渠道。 */
     private String channel;
+    /** 会话所属应用标识。 */
+    private String appId;
+    /** 会话所属应用名称快照。 */
+    private String appName;
     /** 当前 active path 叶子消息。 */
     private String currentLeafMessageId;
     /** 分支族根会话。 */
@@ -47,6 +51,10 @@ public class ChatSessionRow {
     public void setStatus(String status) { this.status = status; }
     public String getChannel() { return channel; }
     public void setChannel(String channel) { this.channel = channel; }
+    public String getAppId() { return appId; }
+    public void setAppId(String appId) { this.appId = appId; }
+    public String getAppName() { return appName; }
+    public void setAppName(String appName) { this.appName = appName; }
     public String getCurrentLeafMessageId() { return currentLeafMessageId; }
     public void setCurrentLeafMessageId(String currentLeafMessageId) { this.currentLeafMessageId = currentLeafMessageId; }
     public String getRootSessionId() { return rootSessionId; }

@@ -104,15 +104,24 @@ public class SessionApplicationService implements ChatSessionFacade {
     public ChatSession loadOrCreate(ChatCommand command) {
         // 聊天主编排会先把 UserContext 回填到 ChatCommand；这里只根据已识别身份维护会话归属。
         if (command.sessionId() == null || command.sessionId().isBlank()) {
-            return createOwnedSession(command.tenantId(), command.userId(), shortTitle(command.message()), command.channel());
+            return createOwnedSession(command.tenantId(), command.userId(), shortTitle(command.message()),
+                    command.channel(), new SessionAppTag(command.appId(), command.appName()));
         }
-        return touch(requireOwnedSession(command.tenantId(), command.userId(), command.sessionId()));
+        ChatSession session = requireOwnedSession(command.tenantId(), command.userId(), command.sessionId());
+        validateAppTag(session, command.appId(), command.appName());
+        return touch(session);
     }
 
     @Override
     public ChatSession createSession(UserContext user, String title, String channel) {
+        return createSession(user, title, channel, null, null);
+    }
+
+    @Override
+    public ChatSession createSession(UserContext user, String title, String channel, String appId, String appName) {
         checkChatUser(user);
-        return createOwnedSession(user.tenantId(), user.ownerUserId(), title, channel);
+        return createOwnedSession(user.tenantId(), user.ownerUserId(), title, channel,
+                new SessionAppTag(appId, appName));
     }
 
     @Override
@@ -153,14 +162,26 @@ public class SessionApplicationService implements ChatSessionFacade {
 
     @Override
     public ChatSessionPage listSessions(UserContext user, String cursor, int limit) {
+        return listSessions(user, null, cursor, limit);
+    }
+
+    @Override
+    public ChatSessionPage listSessions(UserContext user, String appId, String cursor, int limit) {
         checkChatUser(user);
-        return sessionRepository.pageByTenantIdAndUserId(user.tenantId(), user.ownerUserId(), cursor, limit);
+        return sessionRepository.pageByTenantIdAndUserId(
+                user.tenantId(), user.ownerUserId(), normalizeTag(appId), cursor, limit);
     }
 
     @Override
     public ChatSessionNumberPage listSessionsByPage(UserContext user, int curPage, int pageSize) {
+        return listSessionsByPage(user, null, curPage, pageSize);
+    }
+
+    @Override
+    public ChatSessionNumberPage listSessionsByPage(UserContext user, String appId, int curPage, int pageSize) {
         checkChatUser(user);
-        return sessionRepository.pageNumberByTenantIdAndUserId(user.tenantId(), user.ownerUserId(), curPage, pageSize);
+        return sessionRepository.pageNumberByTenantIdAndUserId(
+                user.tenantId(), user.ownerUserId(), normalizeTag(appId), curPage, pageSize);
     }
 
     @Override
@@ -492,6 +513,8 @@ public class SessionApplicationService implements ChatSessionFacade {
                 title == null || title.isBlank() ? "分支 · " + sourceSession.title() : title.trim(),
                 STATUS_ACTIVE,
                 sourceSession.channel(),
+                sourceSession.appId(),
+                sourceSession.appName(),
                 null,
                 sourceSession.rootSessionId() == null ? sourceSession.id() : sourceSession.rootSessionId(),
                 sourceSession.id(),
@@ -626,13 +649,17 @@ public class SessionApplicationService implements ChatSessionFacade {
         permissionChecker.checkChatPermission(user);
     }
 
-    private ChatSession createOwnedSession(String tenantId, String userId, String title, String channel) {
+    private ChatSession createOwnedSession(String tenantId, String userId, String title, String channel,
+                                           SessionAppTag appTag) {
         Instant now = Instant.now();
         String sessionId = idGenerator.newId("session", IdGenerateContext.of(tenantId, userId));
         String safeTitle = title == null || title.isBlank() ? "新会话" : title;
         String safeChannel = channel == null || channel.isBlank() ? "web" : channel;
         return sessionRepository.save(new ChatSession(sessionId, tenantId, userId, safeTitle, STATUS_ACTIVE, safeChannel,
-                null, sessionId, null, null, 0L, null, now, now));
+                appTag.appId(), appTag.appName(), null, sessionId, null, null, 0L, null, now, now));
+    }
+
+    private record SessionAppTag(String appId, String appName) {
     }
 
     private ChatSession requireOwnedSession(String tenantId, String userId, String sessionId) {
@@ -667,7 +694,8 @@ public class SessionApplicationService implements ChatSessionFacade {
 
     private ChatSession touch(ChatSession session) {
         ChatSession touched = new ChatSession(session.id(), session.tenantId(), session.userId(), session.title(),
-                session.status(), session.channel(), session.currentLeafMessageId(), session.rootSessionId(),
+                session.status(), session.channel(), session.appId(), session.appName(),
+                session.currentLeafMessageId(), session.rootSessionId(),
                 session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
                 session.metadataJson(), session.createdAt(), Instant.now());
         return sessionRepository.save(touched);
@@ -675,10 +703,34 @@ public class SessionApplicationService implements ChatSessionFacade {
 
     private ChatSession saveWith(ChatSession session, String title, String status) {
         ChatSession updated = new ChatSession(session.id(), session.tenantId(), session.userId(), title, status,
-                session.channel(), session.currentLeafMessageId(), session.rootSessionId(),
+                session.channel(), session.appId(), session.appName(), session.currentLeafMessageId(), session.rootSessionId(),
                 session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
                 session.metadataJson(), session.createdAt(), Instant.now());
         return sessionRepository.save(updated);
+    }
+
+    /** 校验请求显式携带的 App Tag 与已有会话一致；未携带字段不参与比较。 */
+    public void validateAppTag(UserContext user, String sessionId, String appId, String appName) {
+        checkChatUser(user);
+        validateAppTag(requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId), appId, appName);
+    }
+
+    private void validateAppTag(ChatSession session, String appId, String appName) {
+        String normalizedAppId = normalizeTag(appId);
+        String normalizedAppName = normalizeTag(appName);
+        if (normalizedAppId == null && normalizedAppName != null) {
+            throw new IllegalArgumentException("appName 不能脱离 appId 单独使用");
+        }
+        if (normalizedAppId != null && !normalizedAppId.equals(session.appId())) {
+            throw new IllegalArgumentException("appId 与已有会话不一致");
+        }
+        if (normalizedAppName != null && !normalizedAppName.equals(session.appName())) {
+            throw new IllegalArgumentException("appName 与已有会话不一致");
+        }
+    }
+
+    private String normalizeTag(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private ChatRunMessagePlan createNextUserMessage(UserContext user, ChatCommand command, ChatSession session,

@@ -42,6 +42,77 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 class SessionApplicationServiceTest {
     @Test
+    void appTagIsNormalizedCreatedAndValidatedForExistingSession() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        SessionApplicationService service = service(sessions, messages);
+
+        ChatSession created = service.createSession(user(), "资金分析", "web", " fund-app ", " 资金助手 ");
+
+        assertThat(created.appId()).isEqualTo("fund-app");
+        assertThat(created.appName()).isEqualTo("资金助手");
+        ChatCommand matching = new ChatCommand("cmd", "tenant1", "user1", created.id(), null, "web",
+                "继续提问", List.of(), Map.of(), null, null, ChatRunMode.NEXT, null, null, null,
+                null, null, null, null, Map.of(), "fund-app", null);
+        assertThat(service.loadOrCreate(matching).id()).isEqualTo(created.id());
+
+        ChatCommand mismatched = new ChatCommand("cmd", "tenant1", "user1", created.id(), null, "web",
+                "错误分组", List.of(), Map.of(), null, null, ChatRunMode.NEXT, null, null, null,
+                null, null, null, null, Map.of(), "tax-app", "税务助手");
+        assertThatThrownBy(() -> service.loadOrCreate(mismatched))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("appId 与已有会话不一致");
+        assertThat(messages.messages).isEmpty();
+    }
+
+    @Test
+    void appNameWithoutAppIdIsRejected() {
+        SessionApplicationService service = service(new InMemorySessionRepository(), new InMemoryMessageRepository());
+
+        assertThatThrownBy(() -> service.createSession(user(), "资金分析", "web", null, "资金助手"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("appName 不能脱离 appId");
+    }
+
+    @Test
+    void appIdFiltersCursorAndNumberPages() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        Instant now = Instant.now();
+        sessions.save(taggedSession("fund-1", "fund-app", "资金助手", now.plusSeconds(1)));
+        sessions.save(taggedSession("tax-1", "tax-app", "税务助手", now.plusSeconds(2)));
+        sessions.save(new ChatSession("plain-1", "tenant1", "user1", "plain", "ACTIVE", "web", now, now));
+        SessionApplicationService service = service(sessions, messages);
+
+        assertThat(service.listSessions(user(), "fund-app", null, 20).items())
+                .extracting(ChatSession::id)
+                .containsExactly("fund-1");
+        ChatSessionNumberPage page = service.listSessionsByPage(user(), "tax-app", 1, 20);
+        assertThat(page.items()).extracting(ChatSession::id).containsExactly("tax-1");
+        assertThat(page.totalRows()).isEqualTo(1);
+        assertThat(service.listSessions(user(), null, 20).items())
+                .extracting(ChatSession::id)
+                .containsExactlyInAnyOrder("fund-1", "tax-1", "plain-1");
+    }
+
+    @Test
+    void branchAndSessionLifecyclePreserveAppTag() {
+        TestFixture fixture = fixture("fund-app", "资金助手");
+        MessagePair original = completeTurn(fixture, "资金问题", "资金回答", "run1");
+
+        ChatSession branch = fixture.service.createBranch(
+                user(), fixture.session.id(), original.assistant().id(), "资金分支");
+        ChatSession renamed = fixture.service.renameSession(user(), branch.id(), "重命名分支");
+        ChatSession archived = fixture.service.archiveSession(user(), branch.id());
+        ChatSession restored = fixture.service.restoreSession(user(), branch.id());
+
+        assertThat(List.of(branch, renamed, archived, restored)).allSatisfy(session -> {
+            assertThat(session.appId()).isEqualTo("fund-app");
+            assertThat(session.appName()).isEqualTo("资金助手");
+        });
+    }
+
+    @Test
     void listMessagesReturnsOwnedSessionHistoryInChronologicalOrder() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
@@ -357,11 +428,20 @@ class SessionApplicationServiceTest {
     }
 
     private TestFixture fixture() {
+        return fixture(null, null);
+    }
+
+    private TestFixture fixture(String appId, String appName) {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         ChatSession session = sessions.save(new ChatSession("session1", "tenant1", "user1", "title", "ACTIVE", "web",
-                null, "session1", null, null, 0L, null, Instant.now(), Instant.now()));
+                appId, appName, null, "session1", null, null, 0L, null, Instant.now(), Instant.now()));
         return new TestFixture(service(sessions, messages), sessions, session);
+    }
+
+    private ChatSession taggedSession(String id, String appId, String appName, Instant updatedAt) {
+        return new ChatSession(id, "tenant1", "user1", id, "ACTIVE", "web", appId, appName,
+                null, id, null, null, 0L, null, updatedAt.minusSeconds(1), updatedAt);
     }
 
     private SessionApplicationService service(InMemorySessionRepository sessions, InMemoryMessageRepository messages) {
@@ -457,7 +537,8 @@ class SessionApplicationServiceTest {
             ChatSession session = findByTenantIdAndUserIdAndId(tenantId, userId, sessionId).orElseThrow();
             long next = (session.lastNodeOrder() == null ? 0L : session.lastNodeOrder()) + 1;
             sessions.put(sessionId, new ChatSession(session.id(), session.tenantId(), session.userId(), session.title(),
-                    session.status(), session.channel(), session.currentLeafMessageId(), session.rootSessionId(),
+                    session.status(), session.channel(), session.appId(), session.appName(),
+                    session.currentLeafMessageId(), session.rootSessionId(),
                     session.branchSourceSessionId(), session.branchSourceMessageId(), next, session.metadataJson(),
                     session.createdAt(), Instant.now()));
             return next;
@@ -467,7 +548,8 @@ class SessionApplicationServiceTest {
         public void updateCurrentLeaf(String tenantId, String userId, String sessionId, String leafMessageId) {
             ChatSession session = findByTenantIdAndUserIdAndId(tenantId, userId, sessionId).orElseThrow();
             sessions.put(sessionId, new ChatSession(session.id(), session.tenantId(), session.userId(), session.title(),
-                    session.status(), session.channel(), leafMessageId, session.rootSessionId(),
+                    session.status(), session.channel(), session.appId(), session.appName(),
+                    leafMessageId, session.rootSessionId(),
                     session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
                     session.metadataJson(), session.createdAt(), Instant.now()));
         }

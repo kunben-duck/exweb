@@ -31,6 +31,8 @@ import java.util.Map;
  * @param approved 审批、确认或切换确认结果；澄清类可省略。
  * @param scope 授权或确认范围；澄清类默认 once。
  * @param questionnaireAnswers 澄清问题答案。
+ * @param appId 会话所属应用标识，只用于会话创建和一致性校验。
+ * @param appName 会话所属应用名称快照，只用于会话创建和一致性校验。
  */
 public record ChatCommand(
         String commandId,
@@ -52,8 +54,22 @@ public record ChatCommand(
         String interactionId,
         Boolean approved,
         String scope,
-        Map<String, Object> questionnaireAnswers
+        Map<String, Object> questionnaireAnswers,
+        String appId,
+        String appName
 ) {
+    /** 兼容尚未携带 App Tag 的完整命令构造器。 */
+    public ChatCommand(
+            String commandId, String tenantId, String userId, String sessionId, String conversationId,
+            String channel, String message, List<AttachmentRef> attachments, Map<String, Object> metadata,
+            String targetType, String targetId, ChatRunMode runMode, String parentMessageId,
+            String editedMessageId, String regeneratedMessageId, String routeTrigger, String interactionId,
+            Boolean approved, String scope, Map<String, Object> questionnaireAnswers) {
+        this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
+                targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
+                routeTrigger, interactionId, approved, scope, questionnaireAnswers, null, null);
+    }
+
     /**
      * 兼容普通继续提问的便捷构造器。
      */
@@ -109,5 +125,20 @@ public record ChatCommand(
         interactionId = interactionId == null || interactionId.isBlank() ? null : interactionId.trim();
         scope = scope == null || scope.isBlank() ? null : scope.trim();
         questionnaireAnswers = questionnaireAnswers == null ? Map.of() : Map.copyOf(questionnaireAnswers);
+        appId = normalizeTag(appId);
+        appName = normalizeTag(appName);
+        if (appId == null && appName != null) {
+            throw new IllegalArgumentException("appName 不能脱离 appId 单独使用");
+        }
+        if (appId != null && appId.length() > 128) {
+            throw new IllegalArgumentException("appId 长度不能超过 128");
+        }
+        if (appName != null && appName.length() > 256) {
+            throw new IllegalArgumentException("appName 长度不能超过 256");
+        }
+    }
+
+    private static String normalizeTag(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 }

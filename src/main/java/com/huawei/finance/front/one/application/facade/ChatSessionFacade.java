@@ -27,6 +27,16 @@ public interface ChatSessionFacade {
     ChatSession createSession(UserContext user, String title, String channel);
 
     /**
+     * 创建带可选 App Tag 的会话。
+     */
+    default ChatSession createSession(UserContext user, String title, String channel, String appId, String appName) {
+        if ((appId != null && !appId.isBlank()) || (appName != null && !appName.isBlank())) {
+            throw new UnsupportedOperationException("当前会话实现不支持 App Tag");
+        }
+        return createSession(user, title, channel);
+    }
+
+    /**
      * 查询当前用户可见的单个会话。
      *
      * @param user 请求入口解析出的不可变用户身份快照。
@@ -44,6 +54,14 @@ public interface ChatSessionFacade {
      * @return 会话分页结果。
      */
     ChatSessionPage listSessions(UserContext user, String cursor, int limit);
+
+    /** 按可选 appId 查询当前用户的会话列表。 */
+    default ChatSessionPage listSessions(UserContext user, String appId, String cursor, int limit) {
+        if (appId != null && !appId.isBlank()) {
+            throw new UnsupportedOperationException("当前会话实现不支持 appId 过滤");
+        }
+        return listSessions(user, cursor, limit);
+    }
 
     /**
      * 按页码查询当前用户的会话列表。
@@ -63,6 +81,14 @@ public interface ChatSessionFacade {
         long totalRows = page.items().size();
         long totalPages = totalRows == 0 ? 0 : 1;
         return new ChatSessionNumberPage(page.items(), normalizedPage, normalizedSize, totalRows, totalPages);
+    }
+
+    /** 按可选 appId 执行页码分页查询。 */
+    default ChatSessionNumberPage listSessionsByPage(UserContext user, String appId, int curPage, int pageSize) {
+        if (appId != null && !appId.isBlank()) {
+            throw new UnsupportedOperationException("当前会话实现不支持 appId 过滤");
+        }
+        return listSessionsByPage(user, curPage, pageSize);
     }
 
     /**

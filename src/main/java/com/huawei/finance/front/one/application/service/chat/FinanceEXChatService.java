@@ -273,7 +273,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
     @Override
     public Mono<ChatRunStartResult> startRun(UserContext user, ChatCommand command, RuntimeForwardHeaders forwardHeaders) {
         if (command != null && command.runMode() == ChatRunMode.CONTINUE_INTERACTION) {
-            return Mono.defer(() -> startInteractionContinuation(user, interactionResponseCommand(user, command), forwardHeaders));
+            return Mono.defer(() -> startInteractionContinuation(
+                    user, interactionResponseCommand(user, command), forwardHeaders));
         }
         return Mono.defer(() -> {
             validateStandardRunCommand(command);
@@ -356,7 +357,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     IdGenerateContext.of(user.tenantId(), user.ownerUserId(), command.interactionId()));
             RunStartAttempt startAttempt = new RunStartAttempt(user, runId, command.interactionId());
             Flux<ChatEvent> runFlux = Flux.defer(() -> {
-                        ChatInteractionClaimResult claim = chatInteractionService.claimInteractionResponse(command, runId);
+                        ChatInteractionClaimResult claim = chatInteractionService.claimInteractionResponse(
+                                command, runId,
+                                interaction -> validateInteractionSessionContext(user, command, interaction));
                         startAttempt.recordInteraction(claim.request());
                         if (startAttempt.aborted()) {
                             chatInteractionService.markWaiting(claim.request());
@@ -636,7 +639,21 @@ public class FinanceEXChatService implements FinanceChatFacade {
             throw new IllegalArgumentException("CONTINUE_INTERACTION 模式不支持普通 run 路由或消息树字段");
         }
         return new ChatInteractionResponseCommand(user, command.interactionId(), command.approved(), command.scope(),
-                command.questionnaireAnswers(), command.metadata());
+                command.questionnaireAnswers(), command.metadata(), command.sessionId(), command.appId(), command.appName());
+    }
+
+    private void validateInteractionSessionContext(UserContext user, ChatInteractionResponseCommand command,
+                                                   ChatInteractionRequest interaction) {
+        if (hasText(command.sessionId()) && !command.sessionId().equals(interaction.sessionId())) {
+            throw new IllegalArgumentException("sessionId 与 Interaction 所属会话不一致");
+        }
+        if (command.appId() == null && command.appName() == null) {
+            return;
+        }
+        if (!hasText(command.sessionId())) {
+            throw new IllegalArgumentException("CONTINUE_INTERACTION 携带 App Tag 时 sessionId 不能为空");
+        }
+        sessionService.validateAppTag(user, interaction.sessionId(), command.appId(), command.appName());
     }
 
     private void validateStandardRunCommand(ChatCommand command) {
@@ -987,7 +1004,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     command.sessionId(), command.conversationId(), command.channel(), command.message(),
                     command.attachments(), command.metadata(), command.targetType(), command.targetId(),
                     command.runMode(), command.parentMessageId(),
-                    command.editedMessageId(), command.regeneratedMessageId(), command.routeTrigger());
+                    command.editedMessageId(), command.regeneratedMessageId(), command.routeTrigger(),
+                    command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers(),
+                    command.appId(), command.appName());
             String explicitDomainAgentId = explicitDomainAgentId(identified);
             boolean forceReroute = forceReroute(identified);
             if (forceReroute && explicitDomainAgentId != null) {
@@ -1014,7 +1033,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     session.id(), identified.conversationId(), identified.channel(), identified.message(),
                     attachments, identified.metadata(), identified.targetType(), identified.targetId(),
                     identified.runMode(), identified.parentMessageId(),
-                    identified.editedMessageId(), identified.regeneratedMessageId(), identified.routeTrigger());
+                    identified.editedMessageId(), identified.regeneratedMessageId(), identified.routeTrigger(),
+                    identified.interactionId(), identified.approved(), identified.scope(),
+                    identified.questionnaireAnswers(), identified.appId(), identified.appName());
             String runId = startAttempt == null
                     ? idGenerator.newId("run", IdGenerateContext.of(user.tenantId(), user.ownerUserId(), session.id()))
                     : startAttempt.runId();
@@ -1430,7 +1451,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
         return new ChatCommand(command.commandId(), command.tenantId(), command.userId(), command.sessionId(),
                 command.conversationId(), command.channel(), command.message(), command.attachments(), metadata,
                 command.targetType(), command.targetId(), command.runMode(), command.parentMessageId(),
-                command.editedMessageId(), command.regeneratedMessageId(), "domain_reject");
+                command.editedMessageId(), command.regeneratedMessageId(), "domain_reject",
+                command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers(),
+                command.appId(), command.appName());
     }
 
     private boolean forceReroute(ChatCommand command) {
@@ -1936,7 +1959,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 command.conversationId(), command.channel(), command.message(), command.attachments(), metadata,
                 command.targetType(), command.targetId(), command.runMode(), command.parentMessageId(),
                 command.editedMessageId(), command.regeneratedMessageId(), command.routeTrigger(),
-                command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers());
+                command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers(),
+                command.appId(), command.appName());
     }
 
     private DomainAgentRerouteState domainAgentRerouteState(ChatCommand command) {
@@ -2006,7 +2030,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 command.conversationId(), command.channel(), foldedQuery, command.attachments(), command.metadata(),
                 command.targetType(), command.targetId(), command.runMode(), command.parentMessageId(),
                 command.editedMessageId(), command.regeneratedMessageId(), command.routeTrigger(),
-                command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers());
+                command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers(),
+                command.appId(), command.appName());
     }
 
     private void bestEffortBindResolvedRoute(String runId, RouteTarget route, RuntimeBinding binding) {
@@ -3097,7 +3122,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 normalized.sessionId(), normalized.conversationId(), normalized.channel(), userMessage.content(),
                 normalized.attachments(), normalized.metadata(), normalized.targetType(), normalized.targetId(),
                 messagePlan.runMode(), messagePlan.parentMessageId(),
-                normalized.editedMessageId(), normalized.regeneratedMessageId(), normalized.routeTrigger());
+                normalized.editedMessageId(), normalized.regeneratedMessageId(), normalized.routeTrigger(),
+                normalized.interactionId(), normalized.approved(), normalized.scope(),
+                normalized.questionnaireAnswers(), normalized.appId(), normalized.appName());
     }
 
     /**

@@ -164,7 +164,7 @@ FinanceEXChatService#executeRun(...)
 执行顺序：
 
 1. 用入口传入的 `UserContext` 重建 `ChatCommand`，覆盖前端 tenant/user。
-2. `SessionApplicationService#loadOrCreate(...)` 加载或创建会话。
+2. `SessionApplicationService#loadOrCreate(...)` 加载或创建会话；无 `sessionId` 时保存可选 `appId/appName`，已有会话中显式 tag 不一致会在写 user message/run 前失败。
 3. `ChatRunApplicationService#rejectIfActiveRunExists(...)` 快速拒绝同一 session 的并发 run。
 4. `DocumentFacade#resolveAttachmentsForUser(...)` 解析附件引用。
 5. `IdGenerator#newId("run", ...)` 生成 runId。
@@ -179,6 +179,8 @@ FinanceEXChatService#executeRun(...)
 14. 如果本轮实际调用了意图服务，`IntentRecognitionRecordService#recordAsync(...)` 用当前 `UserContext`、query、`IntentDecision`、最终 `RouteTarget` 和 runId 构造不可变快照，并提交到专用 Servlet/MVC 异步线程池；写入失败不影响主链路。
 15. 根据最终 `RouteType` 调用 SystemResponse 或 `AgentRuntimeExecutor`；DomainAgent 作为 `provider=domain-agent` 的 AgentRuntime 执行。
 16. 外层补齐 `run.completed`，所有事件统一进入 `persistAndPublishRunEvents(...)`。
+
+会话 `appId/appName` 是独立列而不是 metadata：前者用于当前 owner 会话列表分组和可选过滤，后者是创建时名称快照。tag 创建后不可变，分支继承；它不进入 run metadata、Memory、RouteMemory、IntentAgent、Relay 或 DomainAgent。游标分页把过滤条件编码进 cursor，调用方不能用一个 app 分组的 cursor 查询另一个分组。
 
 关键分支：
 

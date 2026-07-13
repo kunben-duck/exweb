@@ -32,6 +32,8 @@ import com.huawei.finance.front.one.interfaces.chat.dto.CreateChatSessionRequest
 import com.huawei.finance.front.one.interfaces.chat.dto.MessageFeedbackDto;
 import com.huawei.finance.front.one.interfaces.chat.dto.SelectChatPathRequest;
 import com.huawei.finance.front.one.interfaces.chat.dto.UpdateChatSessionRequest;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Size;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -49,6 +51,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.validation.annotation.Validated;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -59,6 +62,7 @@ import reactor.core.scheduler.Schedulers;
  */
 @RestController
 @RequestMapping("/v1/chat/sessions")
+@Validated
 public class ChatSessionController {
     private static final Logger log = LoggerFactory.getLogger(ChatSessionController.class);
     private static final String ASSISTANT_ROLE = "assistant";
@@ -90,12 +94,14 @@ public class ChatSessionController {
      * @return 新建会话元数据。
      */
     @PostMapping
-    public Mono<ChatSessionDto> create(@RequestBody(required = false) CreateChatSessionRequest request) {
+    public Mono<ChatSessionDto> create(@Valid @RequestBody(required = false) CreateChatSessionRequest request) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> {
                     String title = request == null ? null : request.title();
                     String channel = request == null ? null : request.channel();
-                    return toDto(facade.createSession(user, title, channel));
+                    String appId = request == null ? null : request.appId();
+                    String appName = request == null ? null : request.appName();
+                    return toDto(facade.createSession(user, title, channel, appId, appName));
                 })
                 .subscribeOn(Schedulers.boundedElastic());
     }
@@ -108,11 +114,14 @@ public class ChatSessionController {
      * @return 会话分页结果，按最近更新时间倒序排列。
      */
     @GetMapping
-    public Mono<ChatSessionPageDto> list(@RequestParam(value = "cursor", required = false) String cursor,
+    public Mono<ChatSessionPageDto> list(
+                                              @Size(max = 128, message = "appId 长度不能超过 128")
+                                              @RequestParam(value = "appId", required = false) String appId,
+                                              @RequestParam(value = "cursor", required = false) String cursor,
                                               @RequestParam(value = "limit", defaultValue = "20") int limit) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> {
-                    ChatSessionPage page = facade.listSessions(user, cursor, limit);
+                    ChatSessionPage page = facade.listSessions(user, appId, cursor, limit);
                     Map<String, String> firstAnswers = facade.findFirstAssistantAnswers(user, page.items());
                     return new ChatSessionPageDto(
                             page.items().stream()
@@ -136,11 +145,13 @@ public class ChatSessionController {
      */
     @GetMapping("/page")
     public Mono<ChatSessionNumberPageDto> listByPage(
+            @Size(max = 128, message = "appId 长度不能超过 128")
+            @RequestParam(value = "appId", required = false) String appId,
             @RequestParam(value = "curPage", defaultValue = "1") int curPage,
             @RequestParam(value = "pageSize", defaultValue = "20") int pageSize) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> {
-                    ChatSessionNumberPage page = facade.listSessionsByPage(user, curPage, pageSize);
+                    ChatSessionNumberPage page = facade.listSessionsByPage(user, appId, curPage, pageSize);
                     Map<String, String> firstAnswers = facade.findFirstAssistantAnswers(user, page.items());
                     return new ChatSessionNumberPageDto(
                             page.items().stream()
@@ -363,6 +374,8 @@ public class ChatSessionController {
                 session.title(),
                 session.status(),
                 session.channel(),
+                session.appId(),
+                session.appName(),
                 session.currentLeafMessageId(),
                 session.rootSessionId(),
                 session.branchSourceSessionId(),

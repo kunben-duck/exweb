@@ -44,11 +44,19 @@ public class MyBatisSessionRepository implements SessionRepository {
 
     @Override
     public ChatSessionPage pageByTenantIdAndUserId(String tenantId, String userId, String cursor, int limit) {
-        Cursor decoded = decodeCursor(cursor);
+        return pageByTenantIdAndUserId(tenantId, userId, null, cursor, limit);
+    }
+
+    @Override
+    public ChatSessionPage pageByTenantIdAndUserId(String tenantId, String userId, String appId,
+                                                   String cursor, int limit) {
+        String normalizedAppId = normalize(appId);
+        Cursor decoded = decodeCursor(cursor, normalizedAppId);
         int pageSize = Math.max(1, Math.min(limit <= 0 ? 20 : limit, 100));
         List<ChatSession> rows = mapper.findPageByOwner(
                         tenantId,
                         userId,
+                        normalizedAppId,
                         decoded.updatedAt(),
                         decoded.id(),
                         pageSize + 1
@@ -57,20 +65,28 @@ public class MyBatisSessionRepository implements SessionRepository {
                 .toList();
         boolean hasMore = rows.size() > pageSize;
         List<ChatSession> items = hasMore ? rows.subList(0, pageSize) : rows;
-        String nextCursor = hasMore ? encodeCursor(items.get(items.size() - 1)) : null;
+        String nextCursor = hasMore ? encodeCursor(items.get(items.size() - 1), normalizedAppId) : null;
         return new ChatSessionPage(items, nextCursor);
     }
 
     @Override
-    public ChatSessionNumberPage pageNumberByTenantIdAndUserId(String tenantId, String userId, int curPage, int pageSize) {
+    public ChatSessionNumberPage pageNumberByTenantIdAndUserId(String tenantId, String userId,
+                                                               int curPage, int pageSize) {
+        return pageNumberByTenantIdAndUserId(tenantId, userId, null, curPage, pageSize);
+    }
+
+    @Override
+    public ChatSessionNumberPage pageNumberByTenantIdAndUserId(String tenantId, String userId, String appId,
+                                                               int curPage, int pageSize) {
         int normalizedPage = Math.max(1, curPage);
         int normalizedSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 100));
-        long totalRows = mapper.countPageByOwner(tenantId, userId);
+        String normalizedAppId = normalize(appId);
+        long totalRows = mapper.countPageByOwner(tenantId, userId, normalizedAppId);
         long totalPages = totalRows == 0 ? 0 : (totalRows + normalizedSize - 1) / normalizedSize;
         long offset = (long) (normalizedPage - 1) * normalizedSize;
         List<ChatSession> items = totalRows == 0 || offset >= totalRows
                 ? List.of()
-                : mapper.findNumberPageByOwner(tenantId, userId, normalizedSize, offset).stream()
+                : mapper.findNumberPageByOwner(tenantId, userId, normalizedAppId, normalizedSize, offset).stream()
                 .map(this::toDomain)
                 .toList();
         return new ChatSessionNumberPage(items, normalizedPage, normalizedSize, totalRows, totalPages);
@@ -122,7 +138,7 @@ public class MyBatisSessionRepository implements SessionRepository {
 
     private ChatSession toDomain(ChatSessionRow row) {
         return new ChatSession(row.getId(), row.getTenantId(), row.getUserId(), row.getTitle(), row.getStatus(),
-                row.getChannel(), row.getCurrentLeafMessageId(), row.getRootSessionId(),
+                row.getChannel(), row.getAppId(), row.getAppName(), row.getCurrentLeafMessageId(), row.getRootSessionId(),
                 row.getBranchSourceSessionId(), row.getBranchSourceMessageId(), row.getLastNodeOrder(),
                 row.getMetadataJson(), row.getCreatedAt() == null ? Instant.EPOCH : row.getCreatedAt(),
                 row.getUpdatedAt() == null ? Instant.EPOCH : row.getUpdatedAt());
@@ -136,6 +152,8 @@ public class MyBatisSessionRepository implements SessionRepository {
         row.setTitle(session.title());
         row.setStatus(session.status());
         row.setChannel(session.channel());
+        row.setAppId(session.appId());
+        row.setAppName(session.appName());
         row.setCurrentLeafMessageId(session.currentLeafMessageId());
         row.setRootSessionId(session.rootSessionId());
         row.setBranchSourceSessionId(session.branchSourceSessionId());
@@ -147,25 +165,42 @@ public class MyBatisSessionRepository implements SessionRepository {
         return row;
     }
 
-    private String encodeCursor(ChatSession session) {
-        String raw = session.updatedAt().toString() + CURSOR_SEPARATOR + session.id();
+    private String encodeCursor(ChatSession session, String appId) {
+        String encodedAppId = appId == null ? "" : Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(appId.getBytes(StandardCharsets.UTF_8));
+        String raw = "v2" + CURSOR_SEPARATOR + encodedAppId + CURSOR_SEPARATOR
+                + session.updatedAt() + CURSOR_SEPARATOR + session.id();
         return Base64.getUrlEncoder().encodeToString(raw.getBytes(StandardCharsets.UTF_8));
     }
 
-    private Cursor decodeCursor(String cursor) {
+    private Cursor decodeCursor(String cursor, String expectedAppId) {
         if (cursor == null || cursor.isBlank()) {
             return Cursor.empty();
         }
         try {
             String raw = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
-            int separator = raw.indexOf(CURSOR_SEPARATOR);
-            if (separator <= 0 || separator == raw.length() - 1) {
+            String[] parts = raw.split("\\|", 4);
+            if (parts.length != 4 || !"v2".equals(parts[0])) {
                 return Cursor.empty();
             }
-            return new Cursor(Instant.parse(raw.substring(0, separator)), raw.substring(separator + 1));
+            String cursorAppId = parts[1].isEmpty() ? null : new String(
+                    Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
+            if (!java.util.Objects.equals(expectedAppId, cursorAppId)) {
+                throw new IllegalArgumentException("cursor 与当前 appId 过滤条件不一致");
+            }
+            return new Cursor(Instant.parse(parts[2]), parts[3]);
+        } catch (IllegalArgumentException ex) {
+            if (ex.getMessage() != null && ex.getMessage().contains("appId 过滤条件不一致")) {
+                throw ex;
+            }
+            return Cursor.empty();
         } catch (RuntimeException ex) {
             return Cursor.empty();
         }
+    }
+
+    private String normalize(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private record Cursor(Instant updatedAt, String id) {

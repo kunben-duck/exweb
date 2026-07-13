@@ -94,6 +94,31 @@ class ChatInteractionApplicationServiceTest {
     }
 
     @Test
+    void preClaimValidationFailureDoesNotClaimAndAllowsImmediateRetry() {
+        MutableInteractionRepository repository = new MutableInteractionRepository();
+        ChatInteractionRequest waiting = waitingRequest(ChatInteractionType.INTENT_CLARIFICATION);
+        repository.insert(waiting);
+        ChatInteractionApplicationService service = new ChatInteractionApplicationService(repository,
+                (bizType, context) -> bizType + "_fixed", new PermissionChecker(), new ChatInteractionProperties());
+        ChatInteractionResponseCommand command = new ChatInteractionResponseCommand(
+                user(), waiting.id(), null, null, Map.of("问题", "答案"), Map.of());
+
+        assertThatThrownBy(() -> service.claimInteractionResponse(command, "run-invalid", request -> {
+            throw new IllegalArgumentException("appId 与已有会话不一致");
+        }))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("appId");
+        assertThat(repository.claimCalls).isZero();
+        assertThat(repository.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
+
+        ChatInteractionClaimResult claim = service.claimInteractionResponse(command, "run-valid", request -> { });
+
+        assertThat(repository.claimCalls).isEqualTo(1);
+        assertThat(claim.request().status()).isEqualTo(ChatInteractionStatus.RESPONDING);
+        assertThat(claim.request().continueRunId()).isEqualTo("run-valid");
+    }
+
+    @Test
     void intentClarificationResponseBuildsStableMultiAnswerText() {
         MutableInteractionRepository repository = new MutableInteractionRepository();
         ChatInteractionRequest waiting = waitingRequest(ChatInteractionType.INTENT_CLARIFICATION);
@@ -239,6 +264,7 @@ class ChatInteractionApplicationServiceTest {
 
     private static class MutableInteractionRepository implements ChatInteractionRequestRepository {
         private final Map<String, ChatInteractionRequest> requests = new java.util.HashMap<>();
+        private int claimCalls;
 
         @Override
         public ChatInteractionRequest insert(ChatInteractionRequest request) {
@@ -265,6 +291,7 @@ class ChatInteractionApplicationServiceTest {
 
         @Override
         public boolean claimInteractionResponse(ChatInteractionClaimCommand command) {
+            claimCalls++;
             ChatInteractionRequest current = requests.get(command.interactionId());
             if (current == null || !current.waiting()) {
                 return false;

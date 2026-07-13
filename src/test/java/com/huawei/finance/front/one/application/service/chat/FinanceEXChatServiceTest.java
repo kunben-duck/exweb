@@ -533,6 +533,53 @@ class FinanceEXChatServiceTest {
     }
 
     @Test
+    void interactionAppTagMismatchIsRejectedBeforeClaim() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        InMemoryInteractionRequestRepository interactions = new InMemoryInteractionRequestRepository();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        Instant now = Instant.now();
+        ChatSession session = sessions.save(new ChatSession(
+                "session1", user.tenantId(), user.ownerUserId(), "测试会话", "ACTIVE", "web",
+                "fund-app", "资金助手", null, "session1", null, null, 0L, null, now, now));
+        ChatInteractionRequest waiting = new ChatInteractionRequest(
+                "interaction1", user.tenantId(), user.ownerUserId(), session.id(), "run-source", null,
+                "msg-user", "msg-assistant", "intent-agent", null, null, null,
+                ChatInteractionType.INTENT_CLARIFICATION, ChatInteractionStatus.WAITING,
+                Map.of("originalQuery", "原问题", "clarifyQuestion", "请补充范围"), Map.of(),
+                now.plus(Duration.ofHours(1)), null, null, now, now);
+        interactions.insert(waiting);
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions, messages, runs, events, runtimeRouteService(), refusingDomainAgentClient(),
+                noopRuntime(), runtimeBindingRepository(),
+                new com.huawei.finance.front.one.application.config.DomainAgentProperties(), liveEventBus(),
+                interactions);
+
+        assertThatThrownBy(() -> service.startRun(user, new ChatCommand(
+                        null, null, null, "another-session", null, "web", null, List.of(), Map.of(),
+                        null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
+                        null, waiting.id(), null, null, Map.of("请补充范围", "账务")),
+                        RuntimeForwardHeaders.empty()).block())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("sessionId 与 Interaction 所属会话不一致");
+
+        assertThatThrownBy(() -> service.startRun(user, new ChatCommand(
+                        null, null, null, session.id(), null, "web", null, List.of(), Map.of(),
+                        null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
+                        null, waiting.id(), null, null, Map.of("请补充范围", "账务"),
+                        "tax-app", "税务助手"), RuntimeForwardHeaders.empty()).block())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("appId 与已有会话不一致");
+
+        assertThat(interactions.claimCalls).hasValue(0);
+        assertThat(interactions.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
+        assertThat(runs.runs).isEmpty();
+        assertThat(events.events).isEmpty();
+    }
+
+    @Test
     void runStartedIsEmittedBeforeExternalRouteSignalsAreRead() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
@@ -2596,7 +2643,8 @@ class FinanceEXChatServiceTest {
                 Map.of("skillId", "skill-other"), "fund_management", "资金管理");
         StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
                         null, null, "web", "hello", List.of(), selectedMetadata,
-                        "DOMAIN_AGENT", "skill-tax", ChatRunMode.NEXT, null, null, null),
+                        "DOMAIN_AGENT", "skill-tax", ChatRunMode.NEXT, null, null, null,
+                        null, null, null, null, Map.of(), "fund-app", "资金助手"),
                         RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192)))
                 .expectNextMatches(event -> "run.started".equals(event.type()))
                 .expectNextMatches(event -> "runtime.metadata".equals(event.type())
@@ -2621,6 +2669,9 @@ class FinanceEXChatServiceTest {
         assertThat(run.agentCode()).isEqualTo("skill-tax");
         assertThat(run.runtimeProvider()).isEqualTo("domain-agent");
         assertThat(run.metadata()).containsExactlyEntriesOf(Map.of("skillId", "skill-other"));
+        ChatSession taggedSession = sessions.findById(run.sessionId()).orElseThrow();
+        assertThat(taggedSession.appId()).isEqualTo("fund-app");
+        assertThat(taggedSession.appName()).isEqualTo("资金助手");
         assertThat(messages.parts).anySatisfy(part -> {
             assertThat(part.partType()).isEqualTo("METADATA");
             assertThat(part.payload()).containsEntry("targetId", "skill-tax")
@@ -4527,6 +4578,7 @@ class FinanceEXChatServiceTest {
     private static class InMemoryInteractionRequestRepository implements ChatInteractionRequestRepository {
         private final Map<String, ChatInteractionRequest> requests = new java.util.concurrent.ConcurrentHashMap<>();
         private final AtomicInteger markWaitingForRunCalls = new AtomicInteger();
+        private final AtomicInteger claimCalls = new AtomicInteger();
 
         @Override public ChatInteractionRequest insert(ChatInteractionRequest request) {
             requests.put(request.id(), request);
@@ -4546,6 +4598,7 @@ class FinanceEXChatServiceTest {
                     .findFirst();
         }
         @Override public boolean claimInteractionResponse(ChatInteractionClaimCommand command) {
+            claimCalls.incrementAndGet();
             ChatInteractionRequest current = requests.get(command.interactionId());
             if (current == null || !command.tenantId().equals(current.tenantId())
                     || !command.userId().equals(current.userId()) || !current.waiting()) {

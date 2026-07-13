@@ -55,7 +55,7 @@ public class ChatRequestTranslator {
                 runMode, request.parentMessageId(), request.editedMessageId(),
                 request.regeneratedMessageId(), routeTrigger(request.forceReroute()),
                 request.interactionId(), request.approved(), request.scope(),
-                normalizeMetadata(request.questionnaireAnswers()));
+                normalizeMetadata(request.questionnaireAnswers()), request.appId(), request.appName());
     }
 
     private String routeTrigger(Boolean forceReroute) {

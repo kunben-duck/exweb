@@ -55,6 +55,35 @@ class ChatProtocolConvergenceTest {
     }
 
     @Test
+    void translatorCarriesAppTagOutsideMetadata() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1", null, null, "分析资金情况", "NEXT", null, null, null,
+                null, null, null, null, null, List.of(), null, null, null,
+                Map.of("scene", "fund"), " fund-app ", " 资金助手 ");
+
+        ChatCommand command = translator.toCommand(request);
+
+        assertThat(command.appId()).isEqualTo("fund-app");
+        assertThat(command.appName()).isEqualTo("资金助手");
+        assertThat(command.metadata()).containsExactlyEntriesOf(Map.of("scene", "fund"));
+        assertThat(command.metadata()).doesNotContainKeys("appId", "appName");
+    }
+
+    @Test
+    void translatorRejectsAppNameWithoutAppId() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1", null, null, "分析资金情况", "NEXT", null, null, null,
+                null, null, null, null, null, List.of(), null, null, null,
+                Map.of(), null, "资金助手");
+
+        assertThatThrownBy(() -> translator.toCommand(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("appName 不能脱离 appId");
+    }
+
+    @Test
     void translatorMapsForceRerouteToUserCorrectionRouteTrigger() {
         ChatRequestTranslator translator = new ChatRequestTranslator();
         CreateChatRunRequest request = new CreateChatRunRequest(

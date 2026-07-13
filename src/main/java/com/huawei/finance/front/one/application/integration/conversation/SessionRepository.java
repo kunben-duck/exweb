@@ -52,6 +52,25 @@ public interface SessionRepository {
     ChatSessionPage pageByTenantIdAndUserId(String tenantId, String userId, String cursor, int limit);
 
     /**
+     * 按可选应用标识分页查询当前用户会话。
+     */
+    default ChatSessionPage pageByTenantIdAndUserId(
+            String tenantId, String userId, String appId, String cursor, int limit) {
+        if (appId == null || appId.isBlank()) {
+            return pageByTenantIdAndUserId(tenantId, userId, cursor, limit);
+        }
+        int pageSize = Math.max(1, Math.min(limit <= 0 ? 20 : limit, 100));
+        List<ChatSession> items = findByTenantIdAndUserId(tenantId, userId).stream()
+                .filter(session -> !"DELETED".equals(session.status()))
+                .filter(session -> appId.trim().equals(session.appId()))
+                .sorted(Comparator.comparing(ChatSession::updatedAt).reversed()
+                        .thenComparing(ChatSession::id, Comparator.reverseOrder()))
+                .limit(pageSize)
+                .toList();
+        return new ChatSessionPage(items, null);
+    }
+
+    /**
      * 基于页码分页查询当前用户会话。
      *
      * <p>默认实现仅服务测试和非数据库替代仓储，生产数据库实现会使用 count + offset SQL。
@@ -65,10 +84,24 @@ public interface SessionRepository {
      */
     default ChatSessionNumberPage pageNumberByTenantIdAndUserId(
             String tenantId, String userId, int curPage, int pageSize) {
+        return pageNumberFromSessions(findByTenantIdAndUserId(tenantId, userId), null, curPage, pageSize);
+    }
+
+    /**
+     * 按可选应用标识执行页码分页查询。
+     */
+    default ChatSessionNumberPage pageNumberByTenantIdAndUserId(
+            String tenantId, String userId, String appId, int curPage, int pageSize) {
+        return pageNumberFromSessions(findByTenantIdAndUserId(tenantId, userId), appId, curPage, pageSize);
+    }
+
+    private static ChatSessionNumberPage pageNumberFromSessions(
+            List<ChatSession> sessions, String appId, int curPage, int pageSize) {
         int normalizedPage = Math.max(1, curPage);
         int normalizedSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 100));
-        List<ChatSession> all = findByTenantIdAndUserId(tenantId, userId).stream()
+        List<ChatSession> all = sessions.stream()
                 .filter(session -> !"DELETED".equals(session.status()))
+                .filter(session -> appId == null || appId.isBlank() || appId.trim().equals(session.appId()))
                 .sorted(Comparator.comparing(ChatSession::updatedAt).reversed()
                         .thenComparing(ChatSession::id, Comparator.reverseOrder()))
                 .toList();
@@ -129,7 +162,8 @@ public interface SessionRepository {
     default void updateCurrentLeaf(String tenantId, String userId, String sessionId, String leafMessageId) {
         findByTenantIdAndUserIdAndId(tenantId, userId, sessionId)
                 .map(session -> new ChatSession(session.id(), session.tenantId(), session.userId(), session.title(),
-                        session.status(), session.channel(), leafMessageId, session.rootSessionId(),
+                        session.status(), session.channel(), session.appId(), session.appName(),
+                        leafMessageId, session.rootSessionId(),
                         session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
                         session.metadataJson(), session.createdAt(), java.time.Instant.now()))
                 .ifPresent(this::save);

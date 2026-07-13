@@ -31,6 +31,8 @@ import java.util.Map;
  * @param targetId 显式直连目标 ID；targetType=DOMAIN_AGENT 时表示 DomainAgent ID。
  * @param selectedIntent 前端显式选择 DomainAgent 时提供的展示用意图摘要；不参与路由判断。
  * @param metadata 前端扩展元数据；DomainAgent 直连时会作为下游请求 body 透传。
+ * @param appId 自动创建会话时保存的应用标识；已有会话中若传入必须与原值一致。
+ * @param appName 自动创建会话时保存的应用名称快照；存在时必须同时提供 appId。
  */
 public record CreateChatRunRequest(
         @Size(max = 128, message = "commandId 长度不能超过 128")
@@ -67,8 +69,24 @@ public record CreateChatRunRequest(
         @Valid
         ChatSelectedIntentDto selectedIntent,
         @Size(max = 50, message = "metadata 最多允许 50 个字段")
-        Map<String, Object> metadata
+        Map<String, Object> metadata,
+        @Size(max = 128, message = "appId 长度不能超过 128")
+        String appId,
+        @Size(max = 256, message = "appName 长度不能超过 256")
+        String appName
 ) {
+    /** 兼容尚未携带 App Tag 的完整请求构造器。 */
+    public CreateChatRunRequest(
+            String commandId, String sessionId, String conversationId, String message, String runMode,
+            String parentMessageId, String editedMessageId, String regeneratedMessageId, Boolean forceReroute,
+            String interactionId, Boolean approved, String scope, Map<String, Object> questionnaireAnswers,
+            List<ChatAttachmentDto> attachments, String targetType, String targetId,
+            ChatSelectedIntentDto selectedIntent, Map<String, Object> metadata) {
+        this(commandId, sessionId, conversationId, message, runMode, parentMessageId, editedMessageId,
+                regeneratedMessageId, forceReroute, interactionId, approved, scope, questionnaireAnswers,
+                attachments, targetType, targetId, selectedIntent, metadata, null, null);
+    }
+
     /**
      * 创建普通继续提问请求。
      *
@@ -78,7 +96,7 @@ public record CreateChatRunRequest(
     public CreateChatRunRequest(String commandId, String sessionId, String conversationId, String message,
                                 List<ChatAttachmentDto> attachments, Map<String, ?> metadata) {
         this(commandId, sessionId, conversationId, message, null, null, null, null, null, null, null, null, null,
-                attachments, null, null, null, copyMetadata(metadata));
+                attachments, null, null, null, copyMetadata(metadata), null, null);
     }
 
     private static Map<String, Object> copyMetadata(Map<String, ?> metadata) {

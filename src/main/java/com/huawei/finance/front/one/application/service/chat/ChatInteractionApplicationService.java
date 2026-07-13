@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -88,6 +89,12 @@ public class ChatInteractionApplicationService {
     }
 
     public ChatInteractionClaimResult claimInteractionResponse(ChatInteractionResponseCommand command, String continueRunId) {
+        return claimInteractionResponse(command, continueRunId, request -> { });
+    }
+
+    ChatInteractionClaimResult claimInteractionResponse(ChatInteractionResponseCommand command,
+                                                         String continueRunId,
+                                                         Consumer<ChatInteractionRequest> preClaimValidator) {
         UserContext user = command.user();
         permissionChecker.checkChatPermission(user);
         Instant now = Instant.now();
@@ -100,6 +107,9 @@ public class ChatInteractionApplicationService {
             throw ChatInteractionUnavailableException.alreadyHandled(command.interactionId());
         }
         Map<String, Object> responsePayload = responsePayload(command, request.interactionType());
+        if (preClaimValidator != null) {
+            preClaimValidator.accept(request);
+        }
         boolean claimed = repository.claimInteractionResponse(new ChatInteractionRequestRepository.ChatInteractionClaimCommand(
                 user.tenantId(), user.ownerUserId(), command.interactionId(), continueRunId, responsePayload, now));
         if (!claimed) {

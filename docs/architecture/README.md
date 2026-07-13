@@ -292,7 +292,8 @@ GET  /v1/chat/shares/{shareId}
 DELETE /v1/chat/shares/{shareId}
 GET  /v1/chat/shares?curPage=1&pageSize=20
 POST /v1/chat/sessions
-GET  /v1/chat/sessions?limit=20&cursor=...
+GET  /v1/chat/sessions?appId=...&limit=20&cursor=...
+GET  /v1/chat/sessions/page?appId=...&curPage=1&pageSize=20
 GET  /v1/chat/sessions/{sessionId}
 GET  /v1/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50
 GET  /v1/chat/sessions/{sessionId}/messages/{messageId}/variants
@@ -327,6 +328,8 @@ stop；删除成功后应立即移除会话并取消本地订阅。
 - `REGENERATE_ASSISTANT`：校验 `regeneratedMessageId` 是未锁定 assistant 消息，复用其父 user 消息，run 完成后创建新的 assistant sibling。
 - `CONTINUE_INTERACTION`：提交 `interactionId` 对应的澄清、审批或确认响应。`INTENT_CLARIFICATION` 使用 `NEW_TURN` 消息策略，回答生成新的 user 节点，下一轮澄清或最终回答生成新的 assistant 节点；其他 Interaction 继续复用等待态 assistant。
 
+会话表以显式 `app_id/app_name` 保存产品分组标签：`appId` 是大小写敏感的稳定查询键，`appName` 是创建时展示快照。两者不参与身份隔离，所有读取仍必须带 `tenantId + userId`；列表可按 `appId` 过滤并使用 `(tenant_id,user_id,app_id,updated_at,id)` 索引。已有会话只接受与快照一致的显式 tag，分支继承源 tag，其他会话更新不修改 tag。字段保留在会话边界，不进入 run metadata、RouteMemory 或 Agent 请求，也不增加主流程外部调用。
+
 `current_leaf_message_id` 表示当前会话激活路径叶子。历史消息查询默认返回 root 到 current leaf 的路径；指定 `leafMessageId` 时返回 root 到该 leaf 的路径。`/messages` 会在有多个 sibling 版本的消息上返回 `versionInfo`，包含当前版本序号、版本总数和候选版本的 `switchLeafMessageId`。前端切换版本时可以先用 `GET /messages?leafMessageId={switchLeafMessageId}` 刷新聊天区，再用 `POST /path` 持久化当前选择；`/variants` 保留为查询完整候选内容和调试的接口。
 
 复杂前端或联调排障可以调用 `GET /v1/chat/sessions/{sessionId}/messages/tree` 读取完整可见消息树。该接口返回 `currentLeafMessageId`、`rootMessageIds` 和 `mapping`，但只包含业务可见的 user/assistant 消息，不返回 hidden system 或下游工具原始节点；普通聊天页继续使用 `/messages` active path。历史消息、tree 和 variants 返回的 `ChatMessageDto.attachments` 是消息附件展示快照，文件下载和预览仍由文档库接口独立鉴权。
@@ -339,7 +342,7 @@ flowchart TD
     RootUser -. "same parent sibling" .- RootUserEdit
 ```
 
-从某条消息新建会话分支时，服务端使用只读物化快照方案：沿 `parent_message_id` 回溯 root，复制该路径到新 session，复制出的消息写入 `source_session_id/source_message_id`，并设置 `origin_type=BRANCH_SNAPSHOT`、`locked=true`。快照消息不能编辑、删除或重新生成；分支后续新增的 `NORMAL` 消息可以继续参与消息树版本管理。分支不继承源会话 RuntimeBinding，避免把源会话 Runtime session 错接到新分支。
+从某条消息新建会话分支时，服务端使用只读物化快照方案：沿 `parent_message_id` 回溯 root，复制该路径到新 session，并继承源会话 `appId/appName`；复制出的消息写入 `source_session_id/source_message_id`，并设置 `origin_type=BRANCH_SNAPSHOT`、`locked=true`。快照消息不能编辑、删除或重新生成；分支后续新增的 `NORMAL` 消息可以继续参与消息树版本管理。分支不继承源会话 RuntimeBinding，避免把源会话 Runtime session 错接到新分支。
 
 ## 单轮问答分享
 

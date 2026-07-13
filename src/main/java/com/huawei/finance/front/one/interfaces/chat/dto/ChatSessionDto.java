@@ -11,6 +11,8 @@ import java.time.Instant;
  * @param title 会话标题。
  * @param status 会话状态。
  * @param channel 会话来源渠道。
+ * @param appId 会话所属应用标识。
+ * @param appName 会话所属应用名称快照。
  * @param currentLeafMessageId 当前会话激活路径叶子消息。
  * @param rootSessionId 分支族根会话。
  * @param branchSourceSessionId 分支来源会话。
@@ -26,6 +28,8 @@ public record ChatSessionDto(
         String title,
         String status,
         String channel,
+        String appId,
+        String appName,
         String currentLeafMessageId,
         String rootSessionId,
         String branchSourceSessionId,

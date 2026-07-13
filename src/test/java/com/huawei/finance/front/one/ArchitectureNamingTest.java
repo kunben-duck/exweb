@@ -23,6 +23,17 @@ class ArchitectureNamingTest {
     }
 
     @Test
+    void sessionSchemaDeclaresAppTagColumnsAndListIndex() throws Exception {
+        String schema = Files.readString(Path.of("src/main/resources/db/schema.sql"));
+
+        assertThat(schema)
+                .contains("app_id VARCHAR(128)")
+                .contains("app_name VARCHAR(256)")
+                .contains("idx_fin_ex_chat_session_owner_app_updated")
+                .contains("tenant_id, user_id, app_id, updated_at, id");
+    }
+
+    @Test
     void redisPrefixesUseFinExNaming() throws Exception {
         String application = Files.readString(Path.of("src/main/resources/application.yml"));
 

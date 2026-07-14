@@ -402,13 +402,13 @@ JSON 数组顺序是稳定的，因此可以用来表达历史顺序。
 在线 `conversationContext.history` 默认取最新 TopK，K 暂定为 5。
 在澄清期间，TopK 需要覆盖当前澄清链路，避免澄清上下文被截断。
 
-#### type = no_match
+#### type = NO_MATCH
 
 表示已经成功路由，但是为匹配到任何领域agent的场景。此场景无需给意图
 
 ```json
 {
-  "type": "no_match",
+  "type": "NO_MATCH",
   "query": "那广东为什么会下降？",
   "intent": ""
 }
@@ -537,6 +537,14 @@ JSON 数组顺序是稳定的，因此可以用来表达历史顺序。
 0703 如何存进入了react的历史？【待定】
 
 当 `/getIntentDecision` 返回 `routeAction=NO_MATCH` 时，Supervisor 进入自身规划 React。此时路由历史记录为 NO_MATCH，明确不在领域范围内。
+
+```json
+{
+  "type": "NO_MATCH",
+  "query": "当前用户问题",
+  "intent": ""
+}
+```
 
 当 `/getIntentDecision` 返回 `routeAction=ROUTE_MULTI` 时，Supervisor 进入自身规划 React。ChatService 在 Relay binding 成功后、调用 Relay 前写入一条 route 记录：
 

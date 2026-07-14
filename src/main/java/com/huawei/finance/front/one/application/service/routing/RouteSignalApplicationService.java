@@ -360,7 +360,7 @@ public class RouteSignalApplicationService {
             return context;
         }
         List<Map<String, Object>> inlineRoutes = memory.routeMemory().history().stream()
-                .filter(item -> "route".equals(String.valueOf(item.get("type"))))
+                .filter(this::isRouteHistoryItem)
                 .toList();
         if (inlineRoutes.isEmpty()) {
             return context;
@@ -384,16 +384,21 @@ public class RouteSignalApplicationService {
                 ? Integer.MAX_VALUE
                 : routeMemoryService.maxRouteHistorySize();
         int routeCount = (int) history.stream()
-                .filter(item -> "route".equals(String.valueOf(item.get("type"))))
+                .filter(this::isRouteHistoryItem)
                 .count();
         for (int index = 0; routeCount > maxRoutes && index < history.size();) {
-            if ("route".equals(String.valueOf(history.get(index).get("type")))) {
+            if (isRouteHistoryItem(history.get(index))) {
                 history.remove(index);
                 routeCount--;
             } else {
                 index++;
             }
         }
+    }
+
+    private boolean isRouteHistoryItem(Map<String, Object> item) {
+        String type = item == null ? "" : String.valueOf(item.get("type"));
+        return "route".equals(type) || "NO_MATCH".equals(type);
     }
 
     private RouteMemoryContext mergeInlineClarificationHistory(RouteMemoryContext context, ChatCommand command) {

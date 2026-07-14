@@ -118,6 +118,27 @@ class RouteMemoryApplicationServiceTest {
     }
 
     @Test
+    void noMatchRouteUsesDedicatedIntentHistoryShape() {
+        IntentDecision noMatchIntent = new IntentDecision("relay", "no_match", TaskComplexity.COMPLEX, 0.0,
+                false, null, Map.of("routeAction", "NO_MATCH"), List.of(), Map.of());
+        RouteMemoryApplicationService.RouteMemoryRouteCommand command =
+                new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                        user, "no-match-session", "run-no-match", "上一轮未命中的问题",
+                        noMatchIntent,
+                        RouteTarget.agentRuntime("intent-agent", 0.0, "route to relay"));
+
+        service.recordRouteDecision(command);
+
+        assertThat(service.routeHistory(command)).containsExactlyInAnyOrderEntriesOf(
+                Map.of("type", "NO_MATCH", "query", "上一轮未命中的问题", "intent", ""));
+        assertThat(service.loadForIntent(user, "no-match-session", "fallback_followup", Map.of()).history())
+                .containsExactly(Map.of(
+                        "type", "NO_MATCH",
+                        "query", "上一轮未命中的问题",
+                        "intent", ""));
+    }
+
+    @Test
     void doesNotRecordBindingOrInteractionContinuationAsNewRoutes() {
         service.recordRouteDecision(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
                 user, "session1", "run-binding", "绑定后的追问", null,

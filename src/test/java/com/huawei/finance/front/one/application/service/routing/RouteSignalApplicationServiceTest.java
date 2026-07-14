@@ -179,7 +179,7 @@ class RouteSignalApplicationServiceTest {
             public RouteMemoryContext loadForIntent(UserContext user, String sessionId, String routeTrigger,
                                                     Map<String, Object> lastIntentRejectReason) {
                 return new RouteMemoryContext(routeTrigger,
-                        List.of(Map.of("type", "route", "query", "上一轮复杂问题", "intent", "no_match")),
+                        List.of(Map.of("type", "NO_MATCH", "query", "上一轮复杂问题", "intent", "")),
                         lastIntentRejectReason);
             }
         };
@@ -196,7 +196,7 @@ class RouteSignalApplicationServiceTest {
         assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
         assertThat(capturedMemory.get().routeMemory().routeTrigger()).isEqualTo("fallback_followup");
         assertThat(capturedMemory.get().routeMemory().history()).containsExactly(
-                Map.of("type", "route", "query", "上一轮复杂问题", "intent", "no_match"));
+                Map.of("type", "NO_MATCH", "query", "上一轮复杂问题", "intent", ""));
     }
 
     @Test
@@ -217,7 +217,7 @@ class RouteSignalApplicationServiceTest {
             @Override
             public RouteMemoryContext loadForIntent(UserContext user, String sessionId, String routeTrigger,
                                                     Map<String, Object> lastIntentRejectReason) {
-                return new RouteMemoryContext(routeTrigger, List.of(appliedRoute), lastIntentRejectReason);
+                return new RouteMemoryContext(routeTrigger, List.of(), lastIntentRejectReason);
             }
         };
         RouteSignalApplicationService service = service(false, true,
@@ -232,6 +232,41 @@ class RouteSignalApplicationServiceTest {
 
         assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
         assertThat(capturedMemory.get().routeMemory().history()).containsExactly(appliedRoute);
+    }
+
+    @Test
+    void sameRunInlineNoMatchIsMergedAsRouteHistory() {
+        Map<String, Object> noMatch = Map.of(
+                "type", "NO_MATCH",
+                "query", "上一轮未命中的问题",
+                "intent", "");
+        MemoryContext inlineMemory = memory.withRouteMemory(new RouteMemoryContext(
+                "fallback_followup", List.of(noMatch), Map.of()));
+        AtomicReference<MemoryContext> capturedMemory = new AtomicReference<>();
+        RouteMemoryApplicationService routeMemoryService = new RouteMemoryApplicationService(null, null, null) {
+            @Override
+            public boolean latestRouteIsRelayFallback(UserContext user, String sessionId) {
+                return true;
+            }
+
+            @Override
+            public RouteMemoryContext loadForIntent(UserContext user, String sessionId, String routeTrigger,
+                                                    Map<String, Object> lastIntentRejectReason) {
+                return new RouteMemoryContext(routeTrigger, List.of(), lastIntentRejectReason);
+            }
+        };
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                (command, memory, user) -> {
+                    capturedMemory.set(memory);
+                    return simpleDomainAgentIntent();
+                },
+                routeMemoryService);
+
+        RouteSignalResult result = service.routeInitial(user, session, command, List.of(), inlineMemory);
+
+        assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
+        assertThat(capturedMemory.get().routeMemory().history()).containsExactly(noMatch);
     }
 
     @Test

@@ -225,6 +225,9 @@ public class RouteMemoryApplicationService {
         if (command == null || !recordableRoute(command.route())) {
             return Map.of();
         }
+        if (isNoMatchRoute(command.intent(), command.route())) {
+            return noMatchHistory(command.query());
+        }
         Map<String, Object> history = new LinkedHashMap<>();
         history.put("type", "route");
         history.put("query", blankToDefault(command.query(), ""));
@@ -375,11 +378,43 @@ public class RouteMemoryApplicationService {
     }
 
     private Map<String, Object> toHistoryRoute(RouteMemoryItem item) {
+        if (isNoMatchRoute(item)) {
+            return noMatchHistory(item.queryText());
+        }
         Map<String, Object> history = new LinkedHashMap<>();
         history.put("type", "route");
         history.put("query", blankToDefault(item.queryText(), ""));
         history.put("intent", blankToDefault(item.intentName(), blankToDefault(item.domainAgentId(), "")));
         return Map.copyOf(history);
+    }
+
+    private Map<String, Object> noMatchHistory(String query) {
+        return Map.of(
+                "type", "NO_MATCH",
+                "query", blankToDefault(query, ""),
+                "intent", ""
+        );
+    }
+
+    private boolean isNoMatchRoute(RouteMemoryItem item) {
+        Object routeAction = item == null || item.payload() == null
+                ? null
+                : item.payload().get("routeAction");
+        return isNoMatchRouteAction(routeAction);
+    }
+
+    private boolean isNoMatchRoute(IntentDecision intent, RouteTarget route) {
+        if (route == null || route.type() != com.huawei.finance.front.one.domain.routing.RouteType.AGENT_RUNTIME) {
+            return false;
+        }
+        Object routeAction = intent == null || intent.slots() == null
+                ? null
+                : intent.slots().get("routeAction");
+        return isNoMatchRouteAction(routeAction);
+    }
+
+    private boolean isNoMatchRouteAction(Object routeAction) {
+        return routeAction != null && "NO_MATCH".equalsIgnoreCase(String.valueOf(routeAction).trim());
     }
 
     private boolean recordableRoute(RouteTarget route) {

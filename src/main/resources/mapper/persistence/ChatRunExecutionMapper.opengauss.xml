@@ -51,6 +51,8 @@
     <!--
       Interaction execution 初始化栅栏。短更新会与 watchdog 的 run 终态 CAS 在同一 run 行串行化；
       claim 已被回收或 run 已终态时返回 0，禁止迟到实例创建 execution。
+      INTENT_CLARIFICATION 的回答会与 user 消息和 continuation run 原子受理，并在本栅栏前标记为
+      ANSWERED；该状态只表示回答已成为消息事实，不表示 continuation run 已执行完成。
       入参: runId 为 continuation run，interactionId 为当前应持有该 run 的 Interaction。
     -->
     <update id="claimInteractionExecutionInitialization">
@@ -65,7 +67,13 @@
                 AND i.tenant_id = r.tenant_id
                 AND i.user_id = r.user_id
                 AND i.session_id = r.session_id
-                AND i.status = 'RESPONDING'
+                AND (
+                      i.status = 'RESPONDING'
+                      OR (
+                           i.status = 'ANSWERED'
+                           AND i.interaction_type = 'INTENT_CLARIFICATION'
+                      )
+                )
                 AND i.continue_run_id = r.id
           )
     </update>

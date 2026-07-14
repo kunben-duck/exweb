@@ -159,6 +159,27 @@ class MyBatisXmlMapperConsistencyTest {
     }
 
     @Test
+    void interactionExecutionGateShouldAcceptAnsweredIntentClarificationOnly() throws IOException {
+        String mapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("persistence/ChatRunExecutionMapper.opengauss.xml"));
+        int start = mapper.indexOf("<update id=\"claimInteractionExecutionInitialization\"");
+        int end = mapper.indexOf("</update>", start);
+
+        assertThat(start).isGreaterThanOrEqualTo(0);
+        assertThat(end).isGreaterThan(start);
+        String initializationGate = mapper.substring(start, end);
+        assertThat(initializationGate)
+                .contains("r.status = 'RUNNING'")
+                .contains("i.tenant_id = r.tenant_id")
+                .contains("i.user_id = r.user_id")
+                .contains("i.session_id = r.session_id")
+                .contains("i.status = 'RESPONDING'")
+                .contains("i.status = 'ANSWERED'")
+                .contains("i.interaction_type = 'INTENT_CLARIFICATION'")
+                .contains("i.continue_run_id = r.id");
+    }
+
+    @Test
     void chatMessagePartTypesShouldFitSchemaColumn() throws IOException {
         String schema = Files.readString(Path.of("src/main/resources/db/schema.sql"));
         Matcher columnMatcher = MESSAGE_PART_TYPE_COLUMN.matcher(schema);

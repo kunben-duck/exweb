@@ -100,6 +100,16 @@ Authorization: {dynamicToken}
 | `query` | string | 当时产生路由决策的用户问题。 |
 | `intent` | string | 当时命中的意图或 DomainAgent 名称。 |
 
+上一轮意图结果为 `NO_MATCH` 时使用独立摘要，不把 Relay 或 `no_match` 伪装成命中意图：
+
+```json
+{
+  "type": "NO_MATCH",
+  "query": "上一轮未命中的用户问题",
+  "intent": ""
+}
+```
+
 ### 3.2 澄清过程记录
 
 用户回答澄清问题时，用户回答放在本轮顶层 `query` 中；上一轮触发澄清的问题和澄清问题写入 `history.type=clarify`。

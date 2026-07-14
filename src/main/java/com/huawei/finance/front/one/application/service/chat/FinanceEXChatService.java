@@ -103,6 +103,18 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private static final String INTERACTION_ASSISTANT_MESSAGE_ID_METADATA = "interactionAssistantMessageId";
     private static final String DOMAIN_AGENT_REROUTE_CONTEXT_METADATA = "domainAgentRerouteContext";
     private static final String INTENT_CLARIFICATION_DOCUMENT_IDS = "_intentClarificationDocumentIds";
+    private static final Set<String> BATCHABLE_RUNTIME_EVENT_TYPES = Set.of(
+            "message.delta",
+            "message.snapshot",
+            "runtime.progress",
+            "runtime.metadata",
+            "runtime.agent",
+            "runtime.thinking",
+            "runtime.tool",
+            "runtime.reference",
+            "runtime.card",
+            "runtime.event"
+    );
 
     private final SessionApplicationService sessionService;
     private final MemoryApplicationService memoryService;
@@ -128,6 +140,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
     private final RouteMemoryApplicationService routeMemoryService;
     private final ChatRunOperationalProperties runOperationalProperties;
     private ChatRunAdmissionCommitService runAdmissionCommitService;
+    private ChatEventBatcher chatEventBatcher;
 
     @Autowired
     void setRunAdmissionCommitService(ChatRunAdmissionCommitService runAdmissionCommitService) {
@@ -140,6 +153,11 @@ public class FinanceEXChatService implements FinanceChatFacade {
         if (domainAgentControlIoScheduler != null) {
             this.domainAgentControlIoScheduler = domainAgentControlIoScheduler;
         }
+    }
+
+    @Autowired
+    void setChatEventBatcher(ChatEventBatcher chatEventBatcher) {
+        this.chatEventBatcher = chatEventBatcher;
     }
 
     @Autowired
@@ -1834,11 +1852,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         AtomicBoolean writeRejected = new AtomicBoolean(false);
         String runId = context.runId();
         ChatSession session = context.session();
-        AssistantAssembly assistant = context.assistant();
-        AtomicReference<RuntimeBinding> bindingRef = context.bindingRef();
-        ChatRunMessagePlan messagePlan = context.messagePlan();
-        UserContext user = context.user();
-        return chatDeltaCoalescer.coalesce(events)
+        Flux<ChatEvent> acceptedEvents = chatDeltaCoalescer.coalesce(events)
                 .publishOn(eventIoScheduler)
                 .<ChatEvent>handle((event, sink) -> {
                     if (writeRejected.get()) {
@@ -1870,22 +1884,120 @@ public class FinanceEXChatService implements FinanceChatFacade {
                         return;
                     }
                     sink.next(event);
-                })
-                .concatMap(event -> persistAndPublishOneEventAsync(event, context)
-                    .onErrorResume(ChatEventAppendRejectedException.class, ex -> {
-                        rejectPersistenceAcknowledgement(event, ex);
-                        writeRejected.set(true);
-                        log.info("Stop chat run event stream after guarded insert rejection. runId={}, reason={}",
-                                runId, ex.getMessage());
-                        return Mono.empty();
-                    })
-                    .onErrorResume(RuntimeException.class, ex -> {
-                        rejectPersistenceAcknowledgement(event, ex);
-                        if ("run.failed".equals(event.type()) || terminalCommitService == null) {
-                            return Mono.error(ex);
-                        }
-                        return Mono.just(commitTerminalFailure(context, ex));
-                    }));
+                });
+        Flux<ChatEventBatcher.Batch> batches = chatEventBatcher == null
+                ? acceptedEvents.map(event -> ChatEventBatcher.Batch.single(event, false))
+                : chatEventBatcher.batch(acceptedEvents, event -> batchableRuntimeEvent(event, context));
+        return batches
+                .publishOn(eventIoScheduler)
+                .concatMap(batch -> {
+                    if (writeRejected.get()) {
+                        rejectPersistenceAcknowledgements(batch.events(), new ChatEventAppendRejectedException(
+                                "run 已停止接受后续事件: runId=" + runId));
+                        return Flux.empty();
+                    }
+                    return persistAndPublishEventBatchAsync(batch, context)
+                            .onErrorResume(ChatEventAppendRejectedException.class, ex -> {
+                                rejectPersistenceAcknowledgements(batch.events(), ex);
+                                writeRejected.set(true);
+                                log.info("Stop chat run event stream after guarded insert rejection. runId={}, reason={}",
+                                        runId, ex.getMessage());
+                                return Flux.empty();
+                            })
+                            .onErrorResume(RuntimeException.class, ex -> {
+                                rejectPersistenceAcknowledgements(batch.events(), ex);
+                                if (containsEventType(batch.events(), "run.failed") || terminalCommitService == null) {
+                                    return Flux.error(ex);
+                                }
+                                ChatEvent failed = commitTerminalFailure(context, ex);
+                                writeRejected.set(true);
+                                return Flux.just(failed);
+                            });
+                }, 0);
+    }
+
+    private Flux<ChatEvent> persistAndPublishEventBatchAsync(ChatEventBatcher.Batch batch,
+                                                             RunEventPipelineContext context) {
+        if (batch == null || batch.events().isEmpty()) {
+            return Flux.empty();
+        }
+        if (!batch.databaseBatch()) {
+            return persistAndPublishOneEventAsync(batch.events().getFirst(), context).flux();
+        }
+        return Mono.fromCallable(() -> persistAndPublishOrdinaryEventBatch(batch.events(), context))
+                .subscribeOn(eventIoScheduler)
+                .flatMapMany(Flux::fromIterable);
+    }
+
+    private List<ChatEvent> persistAndPublishOrdinaryEventBatch(List<ChatEvent> events,
+                                                                RunEventPipelineContext context) {
+        List<ChatEvent> storedEvents = chatStreamService.appendBatchWithExecutionGuard(
+                events, context.executionClaim());
+        if (storedEvents.size() != events.size()) {
+            throw new IllegalStateException("聊天事件批量写入结果数量不一致: expected=" + events.size()
+                    + ", actual=" + storedEvents.size());
+        }
+        for (int index = 0; index < storedEvents.size(); index++) {
+            ChatEvent source = events.get(index);
+            ChatEvent stored = storedEvents.get(index);
+            context.assistant().observe(stored);
+            rememberPendingInteractionRequest(stored, context);
+            chatRunService.observeEvent(stored);
+            context.bindingRef().set(runtimeBindingService.observeEvent(context.bindingRef().get(), stored));
+            chatStreamService.publishPersisted(stored);
+            recordRouteMemoryAfterCommitted(stored, context);
+            acknowledgePersistence(source);
+        }
+        return storedEvents;
+    }
+
+    private boolean batchableRuntimeEvent(ChatEvent event, RunEventPipelineContext context) {
+        if (event == null || event instanceof PersistenceAcknowledgedEvent
+                || !BATCHABLE_RUNTIME_EVENT_TYPES.contains(event.type())
+                || domainAgentRefusal(event) != null
+                || interactionControlEvent(event)) {
+            return false;
+        }
+        String source = firstText(event.payload() == null ? null : event.payload().get("source"));
+        if (source != null) {
+            return RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(source)
+                    || RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(source);
+        }
+        RuntimeBinding binding = context == null ? null : context.bindingRef().get();
+        return binding != null
+                && (RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(binding.provider())
+                || RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider()));
+    }
+
+    private boolean interactionControlEvent(ChatEvent event) {
+        if (event == null || event.payload() == null) {
+            return false;
+        }
+        String sourceType = firstText(event.payload().get("sourceType"));
+        if (event.payload().containsKey("interactionId")) {
+            return true;
+        }
+        if (sourceType == null) {
+            return false;
+        }
+        String normalized = sourceType.toLowerCase(java.util.Locale.ROOT);
+        return "agent.refusal".equals(normalized)
+                || normalized.contains("approval")
+                || normalized.contains("clarification")
+                || normalized.contains("confirmation")
+                || normalized.startsWith("route-switch");
+    }
+
+    private boolean containsEventType(List<ChatEvent> events, String eventType) {
+        return events != null && events.stream()
+                .anyMatch(event -> event != null && eventType.equals(event.type()));
+    }
+
+    private void rejectPersistenceAcknowledgements(List<ChatEvent> events, Throwable failure) {
+        if (events == null) {
+            return;
+        }
+        events.forEach(event -> rejectPersistenceAcknowledgement(event, failure));
     }
 
     private Mono<ChatEvent> persistAndPublishOneEventAsync(ChatEvent event, RunEventPipelineContext context) {

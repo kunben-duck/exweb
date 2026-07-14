@@ -631,7 +631,10 @@ public class SessionApplicationService implements ChatSessionFacade {
                     null,
                     null,
                     null,
-                    Map.of("content", context.content() == null ? "" : context.content()),
+                    Map.of(
+                            "content", context.content() == null ? "" : context.content(),
+                            "serverTimestampMs", context.now().toEpochMilli()
+                    ),
                     order,
                     context.now()
             ));

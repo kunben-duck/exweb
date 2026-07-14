@@ -199,7 +199,12 @@ class MyBatisXmlMapperConsistencyTest {
                 MAPPER_XML_ROOT.resolve("persistence/ChatEventMapper.opengauss.xml"));
         assertThat(eventMapper)
                 .contains("<select id=\"lockRunForEventAppend\"")
-                .contains("FOR SHARE OF r NOWAIT");
+                .contains("FOR SHARE OF r NOWAIT")
+                .contains("<select id=\"nextSeqs\"")
+                .contains("<insert id=\"insertBatchFromSessionWithExecutionGuard\"")
+                .contains("collection=\"rows\"")
+                .contains("e.owner_instance_id = #{ownerInstanceId}")
+                .contains("e.fencing_token = #{fencingToken}");
 
         String runMapper = Files.readString(
                 MAPPER_XML_ROOT.resolve("persistence/ChatRunMapper.opengauss.xml"));

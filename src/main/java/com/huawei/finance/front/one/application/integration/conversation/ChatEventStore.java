@@ -33,6 +33,23 @@ public interface ChatEventStore {
     ChatEvent appendWithExecutionGuard(ChatEvent event, RunExecutionClaim claim);
 
     /**
+     * 在同一个 execution 写入权保护下批量追加同一 run 的普通运行事件。
+     *
+     * <p>默认实现保持兼容，逐条调用单事件方法；生产数据库实现应覆盖该方法，使用一个短事务
+     * 完成一次 run 栅栏、一次序号分配和一次批量写入。</p>
+     *
+     * @param events 同一 run、同一 session 的有序事件。
+     * @param claim 当前 execution 写入权声明。
+     * @return 按输入顺序返回带持久化 seq 的事件。
+     */
+    default List<ChatEvent> appendBatchWithExecutionGuard(List<ChatEvent> events, RunExecutionClaim claim) {
+        if (events == null || events.isEmpty()) {
+            return List.of();
+        }
+        return events.stream().map(event -> appendWithExecutionGuard(event, claim)).toList();
+    }
+
+    /**
      * 按用户归属查询指定会话在某个序号之后的事件。
      *
      * <p>事件补发接口必须直接在事实源查询中携带 owner 条件，不能只依赖上层先校验 session

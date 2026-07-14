@@ -21,6 +21,14 @@ public interface ChatEventMapper {
     Long nextSeq();
 
     /**
+     * 一次预取多个全局事件序号。
+     *
+     * @param count 需要分配的序号数量。
+     * @return 按生成顺序排列的事件序号。
+     */
+    List<Long> nextSeqs(@Param("count") int count);
+
+    /**
      * 在普通事件写入前获取 run 行共享锁，并同步校验 execution owner/fencing。
      *
      * @param sessionId 事件所属会话。
@@ -49,6 +57,18 @@ public interface ChatEventMapper {
      * @return 影响行数；为 0 表示 run 已非 RUNNING、owner 失效或 fencing token 失效。
      */
     int insertFromSessionWithExecutionGuard(ChatEventWriteRow row);
+
+    /**
+     * 在一条 SQL 中批量追加同一 run 的流式事件，并再次校验 execution owner/fencing。
+     *
+     * @param rows 已分配主键、序号及序列化 payload 的有序事件行。
+     * @param ownerInstanceId 当前 execution owner 实例。
+     * @param fencingToken 当前 execution fencing token。
+     * @return 实际插入行数，必须与 rows 数量一致。
+     */
+    int insertBatchFromSessionWithExecutionGuard(@Param("rows") List<ChatEventWriteRow> rows,
+                                                 @Param("ownerInstanceId") String ownerInstanceId,
+                                                 @Param("fencingToken") long fencingToken);
 
     /**
      * 查询指定会话在某个事件游标之后的事件，用于 session 级 Event Resume。

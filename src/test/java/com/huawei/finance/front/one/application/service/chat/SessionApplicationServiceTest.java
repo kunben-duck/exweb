@@ -374,6 +374,9 @@ class SessionApplicationServiceTest {
                 .containsExactly("inline", "collapsible", "collapsible", "hidden");
         assertThat(assistant.parts()).extracting(ChatMessagePart::visible)
                 .containsExactly(true, true, true, false);
+        ChatMessagePart answerPart = assistant.parts().getLast();
+        assertThat(answerPart.payload()).containsEntry(
+                "serverTimestampMs", answerPart.createdAt().toEpochMilli());
     }
 
     @Test

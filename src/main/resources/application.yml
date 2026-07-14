@@ -180,6 +180,11 @@ financeex:
     # RESPONDING claim 尚未创建 continuation run/execution 时的 watchdog 回收宽限期。
     responding-orphan-grace: ${FINANCEEX_CHAT_INTERACTION_RESPONDING_ORPHAN_GRACE:2m}
   chat-stream:
+    # Relay/DomainAgent 普通运行事件按同一 run 批量落库；任一条数、等待时间或字节阈值命中即提交。
+    event-batch-enabled: ${FINANCEEX_CHAT_STREAM_EVENT_BATCH_ENABLED:true}
+    event-batch-max-size: ${FINANCEEX_CHAT_STREAM_EVENT_BATCH_MAX_SIZE:16}
+    event-batch-max-wait: ${FINANCEEX_CHAT_STREAM_EVENT_BATCH_MAX_WAIT:20ms}
+    event-batch-max-bytes: ${FINANCEEX_CHAT_STREAM_EVENT_BATCH_MAX_BYTES:256KB}
     # 当前生产止血版本不合并 message.delta，避免 ChatService 内部背压把任务误标记为 run.failed。
     # 以下 delta-coalesce-* 配置仅作为后续 demand-aware 合并器的兼容预留，当前不影响事件粒度。
     delta-coalesce-enabled: ${FINANCEEX_CHAT_STREAM_DELTA_COALESCE_ENABLED:false}

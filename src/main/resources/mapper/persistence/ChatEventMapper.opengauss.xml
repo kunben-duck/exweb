@@ -26,6 +26,16 @@
     </select>
 
     <!--
+      一次预取事件批次所需的连续 sequence 调用结果，减少逐事件数据库往返。
+      入参: count 为本批次事件数量；结果按生成序号正序返回并与输入事件顺序配对。
+    -->
+    <select id="nextSeqs" resultType="long">
+        SELECT nextval('fin_ex_chat_event_seq') AS seq
+        FROM generate_series(1, #{count}) AS generated(event_order)
+        ORDER BY generated.event_order
+    </select>
+
+    <!--
       普通事件与 owner/stop/watchdog 终态竞争同一个 run 行锁。NOWAIT 保证终态已经持锁时
       迟到事件立即失败，不占用事件写入线程等待终态事务结束。
       入参: sessionId/runId 定位 run，ownerInstanceId/fencingToken 校验当前 execution 写入权。
@@ -91,6 +101,41 @@
          AND e.fencing_token = #{fencingToken}
          AND e.execution_status = 'RUNNING'
         WHERE s.id = #{sessionId}
+    </insert>
+
+    <!--
+      批量流式事件 guarded insert：批次限定为同一 run/session，并在一条 SQL 中统一校验
+      run 状态、session 归属、execution owner 和 fencing token。
+      入参: rows 为按原始事件顺序排列的写入行；ownerInstanceId/fencingToken 为当前 execution 写入权。
+    -->
+    <insert id="insertBatchFromSessionWithExecutionGuard">
+        INSERT INTO fin_ex_chat_event_t(
+            id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
+        )
+        SELECT v.id, s.tenant_id, s.user_id, s.id, r.id, v.seq, v.event_type, v.payload_json, v.created_at
+        FROM (
+            VALUES
+            <foreach collection="rows" item="row" separator=",">
+                (#{row.id}, #{row.sessionId}, #{row.runId}, #{row.seq}, #{row.eventType},
+                 #{row.payloadJson}, #{row.createdAt})
+            </foreach>
+        ) AS v(id, session_id, run_id, seq, event_type, payload_json, created_at)
+        JOIN fin_ex_chat_session_t s
+          ON s.id = v.session_id
+        JOIN fin_ex_chat_run_t r
+          ON r.id = v.run_id
+         AND r.session_id = s.id
+         AND r.tenant_id = s.tenant_id
+         AND r.user_id = s.user_id
+         AND r.status = 'RUNNING'
+        JOIN fin_ex_chat_run_execution_t e
+          ON e.run_id = r.id
+         AND e.tenant_id = r.tenant_id
+         AND e.user_id = r.user_id
+         AND e.session_id = r.session_id
+         AND e.owner_instance_id = #{ownerInstanceId}
+         AND e.fencing_token = #{fencingToken}
+         AND e.execution_status = 'RUNNING'
     </insert>
 
     <!--

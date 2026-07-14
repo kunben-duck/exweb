@@ -360,8 +360,10 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
    - 运行中的 `message.delta/message.completed` 不再逐条查 run 表；最终写入正确性由 guarded insert 的 run 状态与 execution fencing 条件保证。
 
 4. `ChatStreamApplicationService#appendWithExecutionGuard(...)`
-   - 进入 `MyBatisChatEventStore#appendWithExecutionGuard(...)`。
-   - Mapper 使用 `INSERT ... SELECT ... JOIN fin_ex_chat_session_t + fin_ex_chat_run_t + fin_ex_chat_run_execution_t`。
+   - Relay/DomainAgent 普通事件先由 `ChatEventBatcher` 按同 run 的 `16 条 / 20ms / 256KB` 三重阈值组批，其他事件保持单条。
+   - 单条进入 `MyBatisChatEventStore#appendWithExecutionGuard(...)`；批次进入 `appendBatchWithExecutionGuard(...)`。
+   - 批次只获取一次 run 行栅栏、一次分配多个 sequence，并执行一次 guarded batch insert。
+   - Mapper 仍通过 `fin_ex_chat_session_t + fin_ex_chat_run_t + fin_ex_chat_run_execution_t` 校验写入权。
    - 同一条 SQL 校验 run/session/tenant/user 归属、run 状态、execution owner 和 fencing token。
    - 条件不满足时抛出写入拒绝，后台流停止，不发布该事件。
 
@@ -440,6 +442,7 @@ src/main/java/com/huawei/finance/front/one/infrastructure/persistence/MyBatisCha
 ```text
 MyBatisChatEventStore#append(...)
 MyBatisChatEventStore#appendWithExecutionGuard(...)
+MyBatisChatEventStore#appendBatchWithExecutionGuard(...)
 ```
 
 写入步骤：
@@ -448,7 +451,8 @@ MyBatisChatEventStore#appendWithExecutionGuard(...)
 2. 调 `ChatEventMapper#nextSeq()` 获取数据库 sequence。
 3. 普通恢复/取消/系统补偿事件调用 `ChatEventMapper#insertFromSession(...)`。
 4. 后台 run 流式事件调用 `ChatEventMapper#insertFromSessionWithExecutionGuard(...)`，在一条 SQL 内校验 run/session/tenant/user、run 状态、execution owner 和 fencing token。
-5. insert 成功后直接用已知 seq/createdAt/payload 构造 `StoredChatEvent`，不再回读 `findById(...)`。
+5. Relay/DomainAgent 普通事件批次调用 `nextSeqs(...)` 和 `insertBatchFromSessionWithExecutionGuard(...)`；批次内任一 guard 失败会整体回滚。
+6. insert 成功后直接用已知 seq/createdAt/payload 构造 `StoredChatEvent`，不再回读 `findById(...)`；批次提交后仍按输入顺序逐条组装 assistant 和发布。
 
 重点排查：
 

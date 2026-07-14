@@ -15,6 +15,7 @@ import com.huawei.finance.front.one.domain.chat.ChatStreamTopics;
 import com.huawei.finance.front.one.domain.chat.RunExecutionClaim;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -112,6 +113,17 @@ public class ChatStreamApplicationService {
      */
     public ChatEvent appendWithExecutionGuard(ChatEvent event, RunExecutionClaim claim) {
         return eventStore.appendWithExecutionGuard(event, claim);
+    }
+
+    /**
+     * 在同一个 execution 写入权下批量持久化同一 run 的普通 Runtime 事件，暂不发布。
+     *
+     * @param events 同一 run 的有序事件。
+     * @param claim 当前 execution 写入权声明。
+     * @return 按输入顺序返回带持久化 seq 的事件。
+     */
+    public List<ChatEvent> appendBatchWithExecutionGuard(List<ChatEvent> events, RunExecutionClaim claim) {
+        return eventStore.appendBatchWithExecutionGuard(events, claim);
     }
 
     /**

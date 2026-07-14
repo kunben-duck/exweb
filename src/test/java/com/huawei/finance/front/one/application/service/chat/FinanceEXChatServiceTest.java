@@ -2154,7 +2154,9 @@ class FinanceEXChatServiceTest {
                 .containsExactly("search: 查询报销流程", "最终\nMarkdown **正文**", "最终\nMarkdown **正文**");
         assertThat(assistant.parts().getFirst().payload()).containsKey("optionalDetail");
         assertThat(assistant.parts().getFirst().payload().get("optionalDetail")).isNull();
-        assertThat(assistant.parts().getLast().payload()).doesNotContainKey("serverTimestampMs");
+        ChatMessagePart answerPart = assistant.parts().getLast();
+        assertThat(answerPart.payload()).containsEntry(
+                "serverTimestampMs", answerPart.createdAt().toEpochMilli());
     }
 
     @Test

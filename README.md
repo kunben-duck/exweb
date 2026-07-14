@@ -129,6 +129,14 @@ topic 需要恢复，恢复控制消息按较慢间隔重试，远端前端通�
 事件写入也会校验 run 与 session 的 tenant/user 归属一致，避免下游 Runtime/DomainAgent 返回错误
 `runId/sessionId` 时污染事件事实源。
 
+Relay 和 DomainAgent 的普通运行事件默认按同一 run 批量落库，批次在条数、等待时间或序列化
+字节数任一阈值命中时提交；默认值分别为
+`financeex.chat-stream.event-batch-max-size=16`、`event-batch-max-wait=20ms` 和
+`event-batch-max-bytes=256KB`。`run.started`、IntentAgent 路由事件、Interaction、DomainAgent
+拒答、`message.completed` 和 run 终态仍立即单条提交，并会先刷新待处理普通事件。批量事务提交后
+仍按原事件顺序逐条发布，前端事件数量、payload、sequence 和 Event Resume 协议不变；通过
+`event-batch-enabled=false` 可恢复逐事件落库。
+
 当前 `ApplicationAuthContextProvider` 直接构造完整 `UserContext`，不再通过配置文件或环境变量模拟
 tenant/user。接入企业身份源时，只需替换该防腐层的身份读取逻辑。
 
@@ -169,7 +177,11 @@ payload 包含 `targetType`、`targetId`、`domainAgentId`、可选 `intentId/in
 `runId` 不是长期任务会话；它是单轮执行 correlation id。事件表 `fin_ex_chat_event_t.run_id` 和绑定表 `fin_ex_runtime_binding_t.last_run_id` 都用它做运行轨迹和排障定位。
 run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。`CANCELLING` 不允许被迟到的通用 run 更新恢复为 `RUNNING`。stop 只停止本轮回答，不删除 `RuntimeBinding`；如果用户主动 stop 前已经有 `message.delta`、`message.snapshot` 或卡片、引用、思考、工具、进度等用户可见 parts 成功落库，ChatService 会把截至 stop 时的内容保存为 partial assistant 历史消息，并在消息 `metadata_json` 中标记 `partial=true`、`finishReason=USER_STOP`。partial assistant 只由赢得外部终态 CAS 的实例在同一短事务中保存，CAS 失败者不会改写消息、parts 或 session leaf。
 run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实例、心跳、租约、恢复状态和 `fencing_token`，不混入业务 run 表。后台执行流写入 run 事件时通过数据库 guarded insert 原子校验 execution owner 与 `fencing_token`；stop、watchdog 或未来 Runtime takeover 递增 token 后，旧实例迟到 delta/completed 会被拒绝。路由、Runtime Interaction 和 Relay/DomainAgent 调用前还会执行少量只读 owner 检查；检查只发生在外部副作用边界，不进入普通 chunk 写入热路径。
-当前生产版本按下游标准事件原粒度写入和推送 `message.delta`，不再在 ChatService 内合并 delta，避免内部背压误中断 run；`financeex.chat-stream.delta-coalesce-*` 仅作为后续 demand-aware 合并器的兼容预留。Relay `is_streaming=false` 或 `generate-response.content` 给出的最终回答会映射为 `message.snapshot`，前端用它替换当前草稿，历史消息正文也优先使用最后一个快照。
+当前生产版本保持下游标准事件原粒度，不在 ChatService 内合并 `message.delta`；普通 Relay/DomainAgent
+事件只在数据库提交层按三重阈值组批，提交后仍逐条写入事件表并逐条推送。这样减少事务和 SQL 往返，
+同时不改变前端事件及历史容量。`financeex.chat-stream.delta-coalesce-*` 仅作为事件内容合并的兼容预留。
+Relay `is_streaming=false` 或 `generate-response.content` 给出的最终回答会映射为 `message.snapshot`，
+前端用它替换当前草稿，历史消息正文也优先使用最后一个快照。
 assistant 的思考、工具、进度、agent 调用等过程信息保存到 `fin_ex_chat_message_part_t`，并通过 `ChatMessageDto.parts` 返回；每个 `message.snapshot` 也会保存为隐藏的 `MESSAGE_SNAPSHOT` part，用于历史消息恢复所有回答快照，最终 `ANSWER` part 仍只保存最终正文。用户消息关联的文档附件保存到 `fin_ex_chat_message_attachment_t`，历史消息、tree 和 variants 会通过 `ChatMessageDto.attachments` 返回附件展示快照；下载和预览仍走文档库接口重新鉴权。parts 会提供稳定的 `title/status/channel/displayHint/visible` 展示语义，前端不需要解析 Relay 私有 payload。启用短期记忆缓存时，assistant 先写数据库，Redis 热缓存只在事务提交后更新，事务回滚不会留下超前于数据库的消息。
 集群部署时，取消正确性依赖 Redis cancel flag 和数据库 run 状态；实例故障治理依赖数据库 execution 条件抢占和 fencing token。JVM 内 subscription registry 只用于命中本机执行流时快速释放资源，不作为跨实例事实源。
 同一 `tenantId + userId + sessionId` 同一时间只允许一个 active run。若会话已有

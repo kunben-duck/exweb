@@ -1,8 +1,11 @@
 package com.huawei.finance.front.one.application.config;
 
+import jakarta.validation.constraints.AssertTrue;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
+import org.springframework.util.unit.DataSize;
+import org.springframework.validation.annotation.Validated;
 
 /**
  * 聊天事件流传输配置。
@@ -11,6 +14,7 @@ import org.springframework.stereotype.Component;
  * 后续只有在实现 demand-aware 合并器并完成压测后才会重新生效。</p>
  */
 @Component
+@Validated
 @ConfigurationProperties(prefix = "financeex.chat-stream")
 public class ChatStreamProperties {
     /** 历史 delta 合并开关；当前止血版本忽略该配置，事件按原粒度写入和推送。 */
@@ -36,6 +40,14 @@ public class ChatStreamProperties {
     private int eventIoExecutorMaxSize = 16;
     /** 流式事件 IO 线程池队列容量；队列满时上游 run 会失败而不是阻塞 Reactor timer/Servlet 线程。 */
     private int eventIoExecutorQueueCapacity = 10_000;
+    /** 是否对 Relay/DomainAgent 普通运行事件启用同 run 批量落库。 */
+    private boolean eventBatchEnabled = true;
+    /** 单个事件批次最大事件数，达到后立即落库。 */
+    private int eventBatchMaxSize = 16;
+    /** 单个事件批次最大等待时间，达到后立即落库。 */
+    private Duration eventBatchMaxWait = Duration.ofMillis(20);
+    /** 单个事件批次最大序列化字节数，达到后立即落库。 */
+    private DataSize eventBatchMaxBytes = DataSize.ofKilobytes(256);
 
     public boolean isDeltaCoalesceEnabled() {
         return deltaCoalesceEnabled;
@@ -160,6 +172,69 @@ public class ChatStreamProperties {
 
     public int normalizedEventIoExecutorQueueCapacity() {
         return Math.max(128, eventIoExecutorQueueCapacity);
+    }
+
+    public boolean isEventBatchEnabled() {
+        return eventBatchEnabled;
+    }
+
+    public void setEventBatchEnabled(boolean eventBatchEnabled) {
+        this.eventBatchEnabled = eventBatchEnabled;
+    }
+
+    public int getEventBatchMaxSize() {
+        return eventBatchMaxSize;
+    }
+
+    public void setEventBatchMaxSize(int eventBatchMaxSize) {
+        this.eventBatchMaxSize = eventBatchMaxSize;
+    }
+
+    public Duration getEventBatchMaxWait() {
+        return eventBatchMaxWait;
+    }
+
+    public void setEventBatchMaxWait(Duration eventBatchMaxWait) {
+        this.eventBatchMaxWait = eventBatchMaxWait;
+    }
+
+    public DataSize getEventBatchMaxBytes() {
+        return eventBatchMaxBytes;
+    }
+
+    public void setEventBatchMaxBytes(DataSize eventBatchMaxBytes) {
+        this.eventBatchMaxBytes = eventBatchMaxBytes;
+    }
+
+    public int requiredEventBatchMaxSize() {
+        if (eventBatchMaxSize <= 0) {
+            throw new IllegalArgumentException("financeex.chat-stream.event-batch-max-size 必须大于 0");
+        }
+        return eventBatchMaxSize;
+    }
+
+    public Duration requiredEventBatchMaxWait() {
+        if (eventBatchMaxWait == null || eventBatchMaxWait.isZero() || eventBatchMaxWait.isNegative()) {
+            throw new IllegalArgumentException("financeex.chat-stream.event-batch-max-wait 必须大于 0");
+        }
+        return eventBatchMaxWait;
+    }
+
+    public long requiredEventBatchMaxBytes() {
+        if (eventBatchMaxBytes == null || eventBatchMaxBytes.toBytes() <= 0) {
+            throw new IllegalArgumentException("financeex.chat-stream.event-batch-max-bytes 必须大于 0");
+        }
+        return eventBatchMaxBytes.toBytes();
+    }
+
+    @AssertTrue(message = "financeex.chat-stream event batch thresholds must all be greater than 0")
+    public boolean isEventBatchConfigurationValid() {
+        return eventBatchMaxSize > 0
+                && eventBatchMaxWait != null
+                && !eventBatchMaxWait.isZero()
+                && !eventBatchMaxWait.isNegative()
+                && eventBatchMaxBytes != null
+                && eventBatchMaxBytes.toBytes() > 0;
     }
 
     public enum LiveSourceMode {

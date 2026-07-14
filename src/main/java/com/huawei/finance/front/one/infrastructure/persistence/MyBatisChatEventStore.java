@@ -99,6 +99,89 @@ public class MyBatisChatEventStore implements ChatEventStore {
         return toStoredEvent(event, seq, createdAt);
     }
 
+    @Override
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public List<ChatEvent> appendBatchWithExecutionGuard(List<ChatEvent> events, RunExecutionClaim claim) {
+        if (events == null || events.isEmpty()) {
+            return List.of();
+        }
+        if (events.size() == 1) {
+            return List.of(appendWithExecutionGuard(events.getFirst(), claim));
+        }
+        validateBatch(events, claim);
+        ChatEvent first = events.getFirst();
+        List<PreparedBatchEvent> preparedEvents = prepareBatchEvents(events);
+        try {
+            Integer admitted = mapper.lockRunForEventAppend(first.sessionId(), first.runId(),
+                    claim.ownerInstanceId(), claim.fencingToken());
+            if (admitted == null || admitted != 1) {
+                throw new ChatEventAppendRejectedException("聊天事件批量写入被 run/execution 行栅栏拒绝: runId="
+                        + first.runId() + ", sessionId=" + first.sessionId());
+            }
+        } catch (RuntimeException ex) {
+            if (lockUnavailable(ex)) {
+                throw new ChatEventAppendRejectedException("聊天事件批量写入发现终态行锁，拒绝迟到事件: runId="
+                        + first.runId() + ", sessionId=" + first.sessionId(), ex);
+            }
+            throw ex;
+        }
+
+        List<Long> sequences = mapper.nextSeqs(events.size());
+        if (sequences == null || sequences.size() != events.size()
+                || sequences.stream().anyMatch(java.util.Objects::isNull)) {
+            throw new IllegalStateException("聊天事件批量序号生成失败: expected=" + events.size()
+                    + ", actual=" + (sequences == null ? 0 : sequences.size()));
+        }
+        List<ChatEventWriteRow> rows = new java.util.ArrayList<>(events.size());
+        for (int index = 0; index < preparedEvents.size(); index++) {
+            PreparedBatchEvent prepared = preparedEvents.get(index);
+            ChatEvent event = prepared.event();
+            rows.add(new ChatEventWriteRow(
+                    prepared.eventId(), event.sessionId(), event.runId(), sequences.get(index), event.type(),
+                    prepared.payloadJson(), prepared.createdAt(), claim.ownerInstanceId(), claim.fencingToken()));
+        }
+        int inserted = mapper.insertBatchFromSessionWithExecutionGuard(rows,
+                claim.ownerInstanceId(), claim.fencingToken());
+        if (inserted != events.size()) {
+            throw new ChatEventAppendRejectedException("聊天事件批量写入被 execution guard 拒绝: runId="
+                    + first.runId() + ", sessionId=" + first.sessionId()
+                    + ", expected=" + events.size() + ", actual=" + inserted);
+        }
+        List<ChatEvent> stored = new java.util.ArrayList<>(events.size());
+        for (int index = 0; index < events.size(); index++) {
+            stored.add(toStoredEvent(events.get(index), sequences.get(index), preparedEvents.get(index).createdAt()));
+        }
+        return List.copyOf(stored);
+    }
+
+    private List<PreparedBatchEvent> prepareBatchEvents(List<ChatEvent> events) {
+        List<PreparedBatchEvent> prepared = new java.util.ArrayList<>(events.size());
+        for (ChatEvent event : events) {
+            Instant createdAt = event.createdAt() == null ? Instant.now() : event.createdAt();
+            String eventId = idGenerator.newId("event",
+                    IdGenerateContext.of(null, null, event.sessionId(), event.runId()));
+            prepared.add(new PreparedBatchEvent(event, eventId, createdAt, toJson(event.payload())));
+        }
+        return List.copyOf(prepared);
+    }
+
+    private void validateBatch(List<ChatEvent> events, RunExecutionClaim claim) {
+        if (claim == null) {
+            throw new ChatEventAppendRejectedException("run execution claim 为空，拒绝批量写入聊天事件");
+        }
+        ChatEvent first = events.getFirst();
+        if (first == null || first.runId() == null || first.sessionId() == null
+                || !first.runId().equals(claim.runId())) {
+            throw new ChatEventAppendRejectedException("聊天事件批次与 execution claim 不匹配");
+        }
+        for (ChatEvent event : events) {
+            if (event == null || !first.runId().equals(event.runId())
+                    || !first.sessionId().equals(event.sessionId())) {
+                throw new IllegalArgumentException("聊天事件批次只能包含同一 run/session 的事件");
+            }
+        }
+    }
+
     private boolean lockUnavailable(Throwable error) {
         Throwable current = error;
         while (current != null) {
@@ -175,5 +258,8 @@ public class MyBatisChatEventStore implements ChatEventStore {
         } catch (JsonProcessingException ex) {
             return Map.of("raw", payloadJson);
         }
+    }
+
+    private record PreparedBatchEvent(ChatEvent event, String eventId, Instant createdAt, String payloadJson) {
     }
 }

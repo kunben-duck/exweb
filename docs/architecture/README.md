@@ -580,6 +580,10 @@ MVC/Servlet 生产模式增加了长连接治理层：`financeex.websocket.allow
 出现慢客户端、发送队列溢出或乱序时关闭当前连接或返回 `RECOVER_REQUIRED`，可靠恢复仍走数据库事件 + Event Resume。
 流式事件合并后的落库、run 状态推进和实时发布统一切到 `financeex.chat-stream.event-io-executor-*`
 专用调度器，避免阻塞式 DB/Redis 调用占用 Reactor `parallel-*` timer 或 Servlet 请求线程。
+Relay/DomainAgent 普通运行事件在该调度器上按同一 run 批量落库，默认以 `16 条 / 20ms / 256KB`
+三重阈值中最先命中的条件提交。每个批次只获取一次 run 共享栅栏、分配一次 sequence 集合并执行
+一次 guarded insert；控制事件和终态事件会先刷新批次再沿用原单事件事务。批量提交后事件仍按 seq
+逐条发布，不跨 run 组批，也不改变 IntentAgent、Interaction、拒答和 owner 终态事务。
 Redis Pub/Sub 是默认实时 fanout 通道，跨实例发布使用 `financeex.websocket.redis-publish-*` 有界后台队列；同一 run topic
 串行发布并做短重试，发布缺口会通过恢复控制消息转成 `RECOVER_REQUIRED`。
 实时消费侧默认用 `financeex.chat-stream.live-reorder-window=20ms` 和
@@ -772,7 +776,7 @@ stop 语义：
 - AgentRuntime fallback provider：`financeex.agent-runtime.default-provider`，没有 active binding 时的兜底 provider，默认 `relay`
 - Relay WebSocket：`financeex.agent-runtime.relay.websocket.url`、`app-mode`、`connect-timeout`、`config-handshake-timeout`、`max-run-duration`、`heartbeat-interval`、`heartbeat-response-timeout`、`interrupt-ack-timeout`、`idle-timeout`、`max-frame-bytes`。Relay 启用时 `url` 必填；`config-handshake-timeout` 分别约束 HTTP Upgrade opening handshake 和 Upgrade 后的 `config -> session-ready`，每个阶段独立计时。
 - 下游 Cookie 透传：`financeex.agent-runtime.forward-cookie.enabled`、`max-length` 控制 run/stop 到 Relay WebSocket 的 Cookie 透传。DomainAgent chat/cancel 也使用入口 Cookie 内存快照。文档上传另由 `financeex.document.forward-cookie-max-length` 与 `financeex.storage.api-store.forward-cookie` 控制，默认关闭 api-store upload Cookie 透传。
-- 流式事件粒度：当前生产版本不合并 `message.delta`，按下游标准事件原粒度写入事件表并推送实时通道，避免 ChatService 内部背压误中断 run。`financeex.chat-stream.delta-coalesce-*` 仅作为后续 demand-aware 合并器兼容预留；`financeex.chat-stream.turn-heartbeat-interval` 只控制传输层 heartbeat，不影响事件表。
+- 流式事件粒度：当前生产版本不合并 `message.delta`，事件仍按下游标准粒度写入事件表并推送实时通道。Relay/DomainAgent 普通事件仅在提交层由 `financeex.chat-stream.event-batch-*` 按同 run 组批，默认 `16 条 / 20ms / 256KB`，关闭开关后恢复逐事件事务；IntentAgent、Interaction、拒答和终态不参与批量。`delta-coalesce-*` 仅作为内容合并兼容预留，`turn-heartbeat-interval` 只控制传输层 heartbeat。
 - Servlet WebSocket 发送治理：`financeex.websocket.servlet-send-executor-core-size`、`servlet-send-executor-max-size`、`servlet-send-queue-capacity`、`servlet-send-queue-max-bytes`、`servlet-send-use-virtual-threads`。默认使用有界平台线程池和单连接有界队列；JDK 21 虚拟线程可按企业压测结果开启。
 - DomainAgent 大对象分片：`financeex.domain-agent.max-pending-frame-bytes` 限制尚未识别完成的单个 domain-agent frame 缓冲，`financeex.domain-agent.max-fragment-bytes` 限制 `runtime.card/runtime.reference/runtime.progress` 分片 payload 的单片大小。该机制避免 `diyCardScene/openCard/searchList/sourcesDocuments/processResult` 跨网络 chunk 时被误解析为 invalid-json，也避免为了完整 JSON 解析无限占用 JVM 内存。分片状态通过 `payload.fragment/itemId/delta/complete` 表达，不新增顶层 `.delta/.completed` 事件类型。
 - Relay 响应映射：`financeex.agent-runtime.relay.answer-event-types`、`answer-content-fields`、`agent-context-as-answer`。默认把 Relay `type=agent,is_streaming=true` 的 `content/context` 映射为 assistant 正文增量 `message.delta`，把 `type=agent,is_streaming=false` 和 `type=generate-response,content非空` 映射为最终回答快照 `message.snapshot`，把 `steam-complete/stream-complete/[DONE]` 映射为 `message.completed`。

@@ -135,7 +135,7 @@
           AND provider = #{provider}
           AND status = 'RESUMABLE'
           AND runtime_session_id IS NOT NULL
-          AND BTRIM(runtime_session_id) &lt;&gt; ''
+          AND runtime_session_id &lt;&gt; ''
         ORDER BY updated_at DESC
     </select>
 </mapper>

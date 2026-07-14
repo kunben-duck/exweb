@@ -3,9 +3,9 @@ package com.huawei.finance.front.one.architecture;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -27,6 +27,24 @@ class MyBatisXmlMapperConsistencyTest {
     private static final Pattern STATEMENT_ID = Pattern.compile("<(?:select|insert|update|delete)\\s+id=\"([^\"]+)\"");
     private static final Pattern STATEMENT_LINE = Pattern.compile("^\\s*<(select|insert|update|delete)\\s+id=\"([^\"]+)\".*");
     private static final Pattern SQL_ANNOTATION = Pattern.compile("@(?:Select|Insert|Update|Delete|Results|ResultMap|Result)\\b");
+    private static final Pattern SELECT_WILDCARD_PROJECTION = Pattern.compile(
+            "(?is)\\bSELECT\\s+(?:[A-Za-z_][A-Za-z0-9_]*\\.)?\\*");
+    private static final Pattern STATEMENT_BLOCK = Pattern.compile(
+            "(?is)<(select|insert|update|delete)\\s+id=\"([^\"]+)\"[^>]*>(.*?)</\\1>");
+    private static final Pattern PREDICATE_CLAUSE = Pattern.compile(
+            "(?is)\\b(?:WHERE|ON|HAVING)\\b(.*?)(?=\\b(?:WHERE|ON|HAVING|GROUP\\s+BY|ORDER\\s+BY|"
+                    + "LIMIT|OFFSET|RETURNING|UNION(?:\\s+ALL)?|SET|VALUES)\\b|$)");
+    private static final Pattern PREDICATE_COLUMN_FUNCTION = Pattern.compile(
+            "(?i)\\b(?:LOWER|UPPER|TRIM|BTRIM|LTRIM|RTRIM|COALESCE|CAST|DATE_TRUNC|TO_CHAR|TO_DATE|"
+                    + "SUBSTRING|LENGTH|ABS|ROUND|CEIL|FLOOR)\\s*\\(");
+    private static final Pattern PREDICATE_COLUMN_ARITHMETIC = Pattern.compile(
+            "(?i)(?:\\b(?:[A-Za-z_][A-Za-z0-9_]*\\.)?[A-Za-z_][A-Za-z0-9_]*\\b|\\?)\\s*"
+                    + "(?:\\+|-|\\*|/|%)\\s*(?:\\b(?:[A-Za-z_][A-Za-z0-9_]*\\.)?"
+                    + "[A-Za-z_][A-Za-z0-9_]*\\b|\\?|\\d+)");
+    private static final Pattern XML_COMMENT = Pattern.compile("(?s)<!--.*?-->");
+    private static final Pattern XML_TAG = Pattern.compile("(?s)<[^>]+>");
+    private static final Pattern SQL_STRING_LITERAL = Pattern.compile("'(?:''|[^'])*'");
+    private static final Pattern MYBATIS_PARAMETER = Pattern.compile("[#\\$]\\{[^}]+}");
     private static final Pattern MESSAGE_PART_TYPE_COLUMN = Pattern.compile(
             "(?m)^\\s*part_type\\s+VARCHAR\\((\\d+)\\)\\s+NOT NULL");
     private static final List<String> CHAT_MESSAGE_PART_TYPES = List.of(
@@ -81,6 +99,38 @@ class MyBatisXmlMapperConsistencyTest {
 
         assertThat(violations)
                 .as("MyBatis SQL should be kept in XML, not Java annotations:%n%s",
+                        String.join(System.lineSeparator(), violations))
+                .isEmpty();
+    }
+
+    @Test
+    void mapperSelectsShouldUseExplicitColumnLists() throws IOException {
+        List<String> violations;
+        try (var files = Files.walk(MAPPER_XML_ROOT)) {
+            violations = files.filter(path -> path.toString().endsWith(ACTIVE_DIALECT_MAPPER_SUFFIX))
+                    .filter(this::containsSelectWildcardProjection)
+                    .map(MAPPER_XML_ROOT::relativize)
+                    .map(Path::toString)
+                    .toList();
+        }
+
+        assertThat(violations)
+                .as("MyBatis SELECT projections must list columns explicitly:%n%s",
+                        String.join(System.lineSeparator(), violations))
+                .isEmpty();
+    }
+
+    @Test
+    void mapperPredicatesShouldNotTransformOrCalculateColumns() throws IOException {
+        List<String> violations;
+        try (var files = Files.walk(MAPPER_XML_ROOT)) {
+            violations = files.filter(path -> path.toString().endsWith(ACTIVE_DIALECT_MAPPER_SUFFIX))
+                    .flatMap(path -> findPredicateExpressionViolations(path).stream())
+                    .toList();
+        }
+
+        assertThat(violations)
+                .as("MyBatis WHERE/ON/HAVING clauses must not transform or calculate columns:%n%s",
                         String.join(System.lineSeparator(), violations))
                 .isEmpty();
     }
@@ -319,6 +369,42 @@ class MyBatisXmlMapperConsistencyTest {
             return SQL_ANNOTATION.matcher(Files.readString(path)).find();
         } catch (IOException ex) {
             throw new IllegalStateException("Failed to inspect Java source: " + path, ex);
+        }
+    }
+
+    private boolean containsSelectWildcardProjection(Path path) {
+        try {
+            return SELECT_WILDCARD_PROJECTION.matcher(Files.readString(path)).find();
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to inspect MyBatis SELECT projection: " + path, ex);
+        }
+    }
+
+    private List<String> findPredicateExpressionViolations(Path path) {
+        try {
+            String xml = XML_COMMENT.matcher(Files.readString(path)).replaceAll(" ");
+            List<String> violations = new ArrayList<>();
+            Matcher statementMatcher = STATEMENT_BLOCK.matcher(xml);
+            while (statementMatcher.find()) {
+                String statementId = statementMatcher.group(2);
+                String sql = XML_TAG.matcher(statementMatcher.group(3)).replaceAll(" ");
+                Matcher predicateMatcher = PREDICATE_CLAUSE.matcher(sql);
+                while (predicateMatcher.find()) {
+                    String predicate = SQL_STRING_LITERAL.matcher(predicateMatcher.group(1)).replaceAll("''");
+                    predicate = MYBATIS_PARAMETER.matcher(predicate).replaceAll("?");
+                    if (PREDICATE_COLUMN_FUNCTION.matcher(predicate).find()) {
+                        violations.add(MAPPER_XML_ROOT.relativize(path) + "#" + statementId
+                                + " uses a column transformation function in a predicate");
+                    }
+                    if (PREDICATE_COLUMN_ARITHMETIC.matcher(predicate).find()) {
+                        violations.add(MAPPER_XML_ROOT.relativize(path) + "#" + statementId
+                                + " uses column arithmetic in a predicate");
+                    }
+                }
+            }
+            return List.copyOf(new LinkedHashSet<>(violations));
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to inspect MyBatis predicate expressions: " + path, ex);
         }
     }
 

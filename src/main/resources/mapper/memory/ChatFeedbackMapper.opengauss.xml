@@ -16,6 +16,11 @@
         <result column="updated_at" property="updatedAt"/>
     </resultMap>
 
+    <sql id="chatMessageFeedbackColumns">
+        id, tenant_id, user_id, session_id, message_id, run_id,
+        rating, status, reason_code, comment_text, metadata_json, created_at, updated_at
+    </sql>
+
     <!--
       创建当前用户对 assistant 消息的反馈记录，唯一性由 tenant/user/message 约束保证。
       入参: ChatMessageFeedbackRow，id 为反馈主键，tenantId/userId/sessionId/messageId/runId 为归属和关联边界，
@@ -70,7 +75,8 @@
       入参: tenantId/userId 为归属边界，messageId 为目标消息。
     -->
     <select id="findByMessage" resultMap="chatMessageFeedbackResultMap">
-        SELECT *
+        SELECT
+        <include refid="chatMessageFeedbackColumns"/>
         FROM fin_ex_message_feedback_t
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
@@ -82,7 +88,8 @@
       入参: tenantId/userId/sessionId 为归属边界；messageIds 为待装配反馈的消息 ID 集合，空集合返回空结果。
     -->
     <select id="findActiveByMessages" resultMap="chatMessageFeedbackResultMap">
-        SELECT *
+        SELECT
+        <include refid="chatMessageFeedbackColumns"/>
         FROM fin_ex_message_feedback_t
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}

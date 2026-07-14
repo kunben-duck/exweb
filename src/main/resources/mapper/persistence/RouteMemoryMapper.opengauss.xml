@@ -107,8 +107,8 @@
             WHERE r.status = 'COMPLETED'
               AND latest.domain_agent_id IS NULL
               AND (
-                    LOWER(COALESCE(latest.intent_id, '')) = 'relay'
-                 OR LOWER(COALESCE(latest.intent_name, '')) = 'no_match'
+                    latest.intent_id = 'relay'
+                 OR latest.intent_name = 'no_match'
               )
         ) THEN TRUE ELSE FALSE END
     </select>

@@ -54,6 +54,30 @@
         <result column="created_at" property="createdAt"/>
     </resultMap>
 
+    <sql id="chatMessageColumns">
+        id, tenant_id, user_id, session_id, parent_message_id, node_order, tree_depth,
+        sibling_index, role, content, token_count, run_id, origin_type, locked,
+        source_session_id, source_message_id, edited_from_message_id,
+        regenerated_from_message_id, metadata_json, created_at
+    </sql>
+
+    <sql id="chatMessageColumnsWithAlias">
+        m.id, m.tenant_id, m.user_id, m.session_id, m.parent_message_id, m.node_order, m.tree_depth,
+        m.sibling_index, m.role, m.content, m.token_count, m.run_id, m.origin_type, m.locked,
+        m.source_session_id, m.source_message_id, m.edited_from_message_id,
+        m.regenerated_from_message_id, m.metadata_json, m.created_at
+    </sql>
+
+    <sql id="chatMessageAttachmentColumns">
+        id, tenant_id, user_id, session_id, message_id, document_id, attachment_order,
+        name, content_type, size_bytes, source_attachment_id, created_at
+    </sql>
+
+    <sql id="chatMessagePartColumns">
+        id, tenant_id, user_id, session_id, message_id, run_id, part_type, source_type,
+        content_text, title, status, channel, display_hint, visible, payload_json, part_order, created_at
+    </sql>
+
     <!--
       写入用户或 assistant 可见消息节点，承载消息树父子关系、版本来源和锁定状态。
       入参: ChatMessageRow，id 为消息主键，tenantId/userId/sessionId 为归属边界，parentMessageId/nodeOrder/
@@ -133,22 +157,33 @@
     -->
     <select id="findRecentActivePath" resultMap="chatMessageResultMap">
         WITH RECURSIVE active_path AS (
-            SELECT m.*
+            SELECT
+            <include refid="chatMessageColumnsWithAlias"/>
             FROM fin_ex_chat_message_t m
             JOIN fin_ex_chat_session_t s ON s.id = m.session_id
             WHERE m.tenant_id = #{tenantId}
               AND m.user_id = #{userId}
               AND m.session_id = #{sessionId}
-              AND m.id = COALESCE(#{leafMessageId}, s.current_leaf_message_id)
+            <choose>
+                <when test="leafMessageId != null">
+              AND m.id = #{leafMessageId}
+                </when>
+                <otherwise>
+              AND m.id = s.current_leaf_message_id
+                </otherwise>
+            </choose>
             UNION ALL
-            SELECT p.*
-            FROM fin_ex_chat_message_t p
-            JOIN active_path child ON child.parent_message_id = p.id
-            WHERE p.tenant_id = #{tenantId}
-              AND p.user_id = #{userId}
-              AND p.session_id = #{sessionId}
+            SELECT
+            <include refid="chatMessageColumnsWithAlias"/>
+            FROM fin_ex_chat_message_t m
+            JOIN active_path child ON child.parent_message_id = m.id
+            WHERE m.tenant_id = #{tenantId}
+              AND m.user_id = #{userId}
+              AND m.session_id = #{sessionId}
         )
-        SELECT * FROM active_path
+        SELECT
+        <include refid="chatMessageColumns"/>
+        FROM active_path
         ORDER BY tree_depth DESC, node_order DESC
         LIMIT #{limit}
     </select>
@@ -159,22 +194,33 @@
     -->
     <select id="findActivePath" resultMap="chatMessageResultMap">
         WITH RECURSIVE active_path AS (
-            SELECT m.*
+            SELECT
+            <include refid="chatMessageColumnsWithAlias"/>
             FROM fin_ex_chat_message_t m
             JOIN fin_ex_chat_session_t s ON s.id = m.session_id
             WHERE m.tenant_id = #{tenantId}
               AND m.user_id = #{userId}
               AND m.session_id = #{sessionId}
-              AND m.id = COALESCE(#{leafMessageId}, s.current_leaf_message_id)
+            <choose>
+                <when test="leafMessageId != null">
+              AND m.id = #{leafMessageId}
+                </when>
+                <otherwise>
+              AND m.id = s.current_leaf_message_id
+                </otherwise>
+            </choose>
             UNION ALL
-            SELECT p.*
-            FROM fin_ex_chat_message_t p
-            JOIN active_path child ON child.parent_message_id = p.id
-            WHERE p.tenant_id = #{tenantId}
-              AND p.user_id = #{userId}
-              AND p.session_id = #{sessionId}
+            SELECT
+            <include refid="chatMessageColumnsWithAlias"/>
+            FROM fin_ex_chat_message_t m
+            JOIN active_path child ON child.parent_message_id = m.id
+            WHERE m.tenant_id = #{tenantId}
+              AND m.user_id = #{userId}
+              AND m.session_id = #{sessionId}
         )
-        SELECT * FROM active_path
+        SELECT
+        <include refid="chatMessageColumns"/>
+        FROM active_path
         ORDER BY tree_depth ASC, node_order ASC
     </select>
 
@@ -183,7 +229,8 @@
       入参: tenantId/userId/sessionId 为归属边界。
     -->
     <select id="findAllBySession" resultMap="chatMessageResultMap">
-        SELECT *
+        SELECT
+        <include refid="chatMessageColumns"/>
         FROM fin_ex_chat_message_t
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
@@ -197,9 +244,11 @@
       入参: tenantId/userId 为归属边界；sessionIds 为待装配摘要的会话 ID 集合，空集合返回空结果。
     -->
     <select id="findFirstAssistantBySessions" resultMap="chatMessageResultMap">
-        SELECT *
+        SELECT
+        <include refid="chatMessageColumns"/>
         FROM (
-            SELECT m.*,
+            SELECT
+                   <include refid="chatMessageColumnsWithAlias"/>,
                    ROW_NUMBER() OVER (
                        PARTITION BY m.session_id
                        ORDER BY m.node_order ASC, m.created_at ASC, m.id ASC
@@ -233,7 +282,8 @@
       入参: tenantId/userId 为归属边界，messageId 为目标消息。
     -->
     <select id="findByOwnerAndId" resultMap="chatMessageResultMap">
-        SELECT *
+        SELECT
+        <include refid="chatMessageColumns"/>
         FROM fin_ex_chat_message_t
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
@@ -246,7 +296,8 @@
             role 为 user 或 assistant。
     -->
     <select id="findSiblings" resultMap="chatMessageResultMap">
-        SELECT *
+        SELECT
+        <include refid="chatMessageColumns"/>
         FROM fin_ex_chat_message_t
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
@@ -290,7 +341,8 @@
       入参: tenantId/userId 为归属边界，messageId 为目标消息。
     -->
     <select id="findAttachmentsByMessage" resultMap="chatMessageAttachmentResultMap">
-        SELECT *
+        SELECT
+        <include refid="chatMessageAttachmentColumns"/>
         FROM fin_ex_chat_message_attachment_t
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
@@ -303,7 +355,8 @@
       入参: tenantId/userId/sessionId 为归属边界；messageIds 为待装配附件的消息 ID 集合，空集合返回空结果。
     -->
     <select id="findAttachmentsByMessages" resultMap="chatMessageAttachmentResultMap">
-        SELECT *
+        SELECT
+        <include refid="chatMessageAttachmentColumns"/>
         FROM fin_ex_chat_message_attachment_t
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
@@ -327,7 +380,8 @@
       入参: tenantId/userId/sessionId 为归属边界；messageIds 为待装配 part 的消息 ID 集合，空集合返回空结果。
     -->
     <select id="findPartsByMessages" resultMap="chatMessagePartResultMap">
-        SELECT *
+        SELECT
+        <include refid="chatMessagePartColumns"/>
         FROM fin_ex_chat_message_part_t
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}

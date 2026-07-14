@@ -11,6 +11,7 @@ import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import com.huawei.finance.front.one.domain.runtime.RuntimeBindingStatus;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -18,6 +19,8 @@ import java.util.Map;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 下游多轮绑定应用服务。
@@ -332,6 +335,32 @@ public class RuntimeBindingApplicationService {
         }
         active.forEach(binding -> save(binding.withStatus(RuntimeBindingStatus.CANCELLED)));
         cache.evict(tenantId, userId, sessionId);
+    }
+
+    /**
+     * 在 DomainAgent 直连 admission 事务内取消会话当前 ACTIVE binding。
+     *
+     * <p>该方法只更新数据库事实，不访问 Redis；调用方必须在事务提交后异步同步返回的 binding
+     * 快照。RESUMABLE Relay 不在查询范围内，因此会继续保留。</p>
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public List<RuntimeBinding> cancelActiveForAdmission(String tenantId, String userId, String sessionId) {
+        Map<String, RuntimeBinding> active = new LinkedHashMap<>();
+        repository.findActiveBySession(tenantId, userId, sessionId)
+                .forEach(binding -> active.putIfAbsent(binding.id(), binding));
+        if (active.isEmpty()) {
+            repository.findActiveBySession(tenantId, userId, sessionId, DEFAULT_RUNTIME_PROVIDER)
+                    .forEach(binding -> active.putIfAbsent(binding.id(), binding));
+            repository.findActiveBySession(tenantId, userId, sessionId, DOMAIN_AGENT_PROVIDER)
+                    .forEach(binding -> active.putIfAbsent(binding.id(), binding));
+        }
+        List<RuntimeBinding> cancelled = new ArrayList<>();
+        for (RuntimeBinding binding : active.values()) {
+            if (binding.status() == RuntimeBindingStatus.ACTIVE) {
+                cancelled.add(repository.save(binding.withStatus(RuntimeBindingStatus.CANCELLED)));
+            }
+        }
+        return List.copyOf(cancelled);
     }
 
     /**

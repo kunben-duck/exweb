@@ -600,6 +600,11 @@ class ChatRunRecoveryOrchestratorTest {
         }
 
         @Override
+        public int cancelWaitingById(String tenantId, String userId, String interactionId, Instant cancelledAt) {
+            return 0;
+        }
+
+        @Override
         public int markExpired(String tenantId, String userId, String interactionId) {
             return 0;
         }

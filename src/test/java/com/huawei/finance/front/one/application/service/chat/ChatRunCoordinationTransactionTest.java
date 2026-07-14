@@ -2,6 +2,8 @@ package com.huawei.finance.front.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.huawei.finance.front.one.application.service.document.DocumentApplicationService;
+import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatRun;
@@ -33,6 +35,17 @@ class ChatRunCoordinationTransactionTest {
     }
 
     @Test
+    void directDomainAgentAdmissionUsesBoundedTransaction() throws Exception {
+        Transactional transactional = ChatRunAdmissionCommitService.class
+                .getMethod("commitDirectDomainAgent", UserContext.class, ChatCommand.class, ChatSession.class,
+                        String.class, List.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.timeoutString()).isEqualTo(TIMEOUT);
+    }
+
+    @Test
     void intentClarificationAdmissionUsesBoundedTransaction() throws Exception {
         Transactional transactional = ChatRunAdmissionCommitService.class
                 .getMethod("commitIntentClarification",
@@ -41,6 +54,34 @@ class ChatRunCoordinationTransactionTest {
 
         assertThat(transactional).isNotNull();
         assertThat(transactional.timeoutString()).isEqualTo(TIMEOUT);
+    }
+
+    @Test
+    void documentResolutionUsesReadOnlyBoundedTransactions() throws Exception {
+        assertDocumentResolutionTimeout("resolveAttachmentsForUser");
+        assertDocumentResolutionTimeout("resolveDocumentsForUser");
+        assertDocumentResolutionTimeout("resolveChatAttachmentsForUser");
+    }
+
+    @Test
+    void unavailableAttachmentCancellationUsesBoundedTransaction() throws Exception {
+        Transactional transactional = ChatInteractionApplicationService.class
+                .getMethod("cancelWaitingForUnavailableAttachment",
+                        com.huawei.finance.front.one.domain.chat.ChatInteractionRequest.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.timeoutString()).isEqualTo(TIMEOUT);
+    }
+
+    @Test
+    void directAdmissionBindingCancellationRequiresExistingTransaction() throws Exception {
+        Transactional transactional = RuntimeBindingApplicationService.class
+                .getMethod("cancelActiveForAdmission", String.class, String.class, String.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.propagation()).isEqualTo(Propagation.MANDATORY);
     }
 
     @Test
@@ -109,6 +150,16 @@ class ChatRunCoordinationTransactionTest {
                 .getAnnotation(Transactional.class);
 
         assertThat(transactional).isNotNull();
+        assertThat(transactional.timeoutString()).isEqualTo(TIMEOUT);
+    }
+
+    private void assertDocumentResolutionTimeout(String methodName) throws Exception {
+        Transactional transactional = DocumentApplicationService.class
+                .getMethod(methodName, UserContext.class, List.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.readOnly()).isTrue();
         assertThat(transactional.timeoutString()).isEqualTo(TIMEOUT);
     }
 }

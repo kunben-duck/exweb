@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.command.DocumentUpdateCommand;
 import com.huawei.finance.front.one.application.command.DocumentUploadCommand;
+import com.huawei.finance.front.one.application.facade.ResolvedChatAttachments;
 import com.huawei.finance.front.one.application.integration.document.DocumentStorage;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
 import com.huawei.finance.front.one.application.integration.document.DocumentRepository;
@@ -88,6 +89,63 @@ class DocumentApplicationServiceTest {
                 new AttachmentRef("doc1", "invoice.pdf", "application/pdf", 128L)
         ))).isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("文档当前不可用于聊天");
+    }
+
+    @Test
+    void resolveChatAttachmentsLoadsEachUniqueDocumentOnceAndIgnoresForgedFields() {
+        InMemoryDocumentRepository repository = new InMemoryDocumentRepository();
+        UploadedDocument stored = document("doc1", DocumentStatus.AVAILABLE);
+        repository.saved.put(stored.id(), stored);
+        DocumentApplicationService service = service(repository);
+
+        ResolvedChatAttachments resolved = service.resolveChatAttachmentsForUser(user(), List.of(
+                new AttachmentRef("doc1", "forged-a.txt", "text/plain", 1L),
+                new AttachmentRef("doc1", "forged-b.txt", "text/plain", 2L)));
+
+        assertThat(repository.findCalls).isEqualTo(1);
+        assertThat(resolved.attachments()).extracting(AttachmentRef::name)
+                .containsExactly("invoice.pdf", "invoice.pdf");
+        assertThat(resolved.documents()).containsExactly(stored, stored);
+    }
+
+    @Test
+    void replaceRuntimeDocumentMetadataPreservesSceneFieldsAndUsesTrustedReferences() {
+        InMemoryDocumentRepository repository = new InMemoryDocumentRepository();
+        DocumentApplicationService service = service(repository);
+        UploadedDocument byDocId = documentWithMetadata(
+                "doc1", "{\"providerDocument\":{\"docId\":\"provider-1\",\"url\":\"https://ignored\"}}");
+        UploadedDocument byUrl = documentWithMetadata(
+                "doc2", "{\"providerDocument\":{\"url\":\"https://files.example/doc2\"}}");
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("language", "zh_CN");
+        metadata.put("sceneParam", new HashMap<>(Map.of(
+                "region", "CN",
+                "docList", List.of(Map.of("docId", "forged")))));
+
+        Map<String, Object> result = service.replaceRuntimeDocumentMetadata(
+                metadata, List.of(byDocId, byUrl));
+
+        assertThat(result).containsEntry("language", "zh_CN");
+        Map<?, ?> sceneParam = (Map<?, ?>) result.get("sceneParam");
+        assertThat(sceneParam.get("region")).isEqualTo("CN");
+        assertThat(sceneParam.get("docList")).isEqualTo(List.of(
+                Map.of("docId", "provider-1"),
+                Map.of("url", "https://files.example/doc2")));
+        assertThat(((Map<?, ?>) metadata.get("sceneParam")).get("docList"))
+                .isEqualTo(List.of(Map.of("docId", "forged")));
+    }
+
+    @Test
+    void replaceRuntimeDocumentMetadataRemovesUntrustedDocListWhenNoDocuments() {
+        DocumentApplicationService service = service(new InMemoryDocumentRepository());
+
+        Map<String, Object> result = service.replaceRuntimeDocumentMetadata(
+                Map.of("sceneParam", Map.of("region", "CN", "docList", List.of(Map.of("docId", "forged")))),
+                List.of());
+
+        Map<?, ?> sceneParam = (Map<?, ?>) result.get("sceneParam");
+        assertThat(sceneParam.get("region")).isEqualTo("CN");
+        assertThat(sceneParam.containsKey("docList")).isFalse();
     }
 
     @Test
@@ -186,7 +244,8 @@ class DocumentApplicationServiceTest {
                 new FixedSessionRepository(),
                 new FixedIdGenerator(),
                 new PermissionChecker(),
-                storage
+                storage,
+                objectMapper
         );
     }
 
@@ -215,6 +274,13 @@ class DocumentApplicationServiceTest {
         );
     }
 
+    private UploadedDocument documentWithMetadata(String id, String metadataJson) {
+        UploadedDocument base = document(id, DocumentStatus.AVAILABLE);
+        return new UploadedDocument(base.id(), base.tenantId(), base.userId(), base.sessionId(),
+                base.originalName(), base.bucket(), base.objectKey(), base.contentType(), base.sizeBytes(),
+                base.status(), base.source(), base.tokenSize(), metadataJson, base.createdAt(), base.updatedAt());
+    }
+
     private static class RecordingObjectStorage implements ObjectStorage {
         @Override
         public StoredObject putObject(String tenantId, String originalFilename, String contentType, long sizeBytes, InputStream inputStream) {
@@ -235,6 +301,7 @@ class DocumentApplicationServiceTest {
 
     private static class InMemoryDocumentRepository implements DocumentRepository {
         private final Map<String, UploadedDocument> saved = new HashMap<>();
+        private int findCalls;
 
         @Override
         public UploadedDocument save(UploadedDocument document) {
@@ -244,6 +311,7 @@ class DocumentApplicationServiceTest {
 
         @Override
         public Optional<UploadedDocument> findByOwnerAndId(String tenantId, String userId, String documentId) {
+            findCalls++;
             return Optional.ofNullable(saved.get(documentId))
                     .filter(document -> tenantId.equals(document.tenantId()) && userId.equals(document.userId()));
         }

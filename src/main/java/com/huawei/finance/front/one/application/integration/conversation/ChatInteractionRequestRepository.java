@@ -126,6 +126,15 @@ public interface ChatInteractionRequestRepository {
     int cancelOpenBySession(String tenantId, String userId, String sessionId, Instant cancelledAt);
 
     /**
+     * 历史澄清附件失效时，仅取消仍处于 WAITING 的指定 Interaction。
+     *
+     * <p>条件更新用于避免附件校验与并发 claim 之间覆盖已经进入 RESPONDING 的请求。</p>
+     *
+     * @return 影响行数。
+     */
+    int cancelWaitingById(String tenantId, String userId, String interactionId, Instant cancelledAt);
+
+    /**
      * 标记等待请求过期。
      *
      * @param tenantId 租户标识。

@@ -15,9 +15,11 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Interaction 等待用户输入应用服务。
@@ -95,6 +97,19 @@ public class ChatInteractionApplicationService {
     ChatInteractionClaimResult claimInteractionResponse(ChatInteractionResponseCommand command,
                                                          String continueRunId,
                                                          Consumer<ChatInteractionRequest> preClaimValidator) {
+        return claimPreparedInteractionResponse(command, continueRunId, request -> {
+            Map<String, Object> responsePayload = prepareResponsePayload(command, request.interactionType(), null);
+            if (preClaimValidator != null) {
+                preClaimValidator.accept(request);
+            }
+            return responsePayload;
+        });
+    }
+
+    ChatInteractionClaimResult claimPreparedInteractionResponse(
+            ChatInteractionResponseCommand command,
+            String continueRunId,
+            Function<ChatInteractionRequest, Map<String, Object>> preClaimResponsePreparer) {
         UserContext user = command.user();
         permissionChecker.checkChatPermission(user);
         Instant now = Instant.now();
@@ -106,10 +121,10 @@ public class ChatInteractionApplicationService {
         if (!request.waiting()) {
             throw ChatInteractionUnavailableException.alreadyHandled(command.interactionId());
         }
-        Map<String, Object> responsePayload = responsePayload(command, request.interactionType());
-        if (preClaimValidator != null) {
-            preClaimValidator.accept(request);
+        if (preClaimResponsePreparer == null) {
+            throw new IllegalArgumentException("Interaction response preparer 不能为空");
         }
+        Map<String, Object> responsePayload = preClaimResponsePreparer.apply(request);
         boolean claimed = repository.claimInteractionResponse(new ChatInteractionRequestRepository.ChatInteractionClaimCommand(
                 user.tenantId(), user.ownerUserId(), command.interactionId(), continueRunId, responsePayload, now));
         if (!claimed) {
@@ -205,6 +220,20 @@ public class ChatInteractionApplicationService {
         repository.cancelOpenBySession(user.tenantId(), user.ownerUserId(), sessionId, Instant.now());
     }
 
+    /**
+     * 历史累计附件失效时取消尚未被 claim 的 Interaction。
+     *
+     * <p>本方法只提交状态变更，不在事务内抛出最终业务异常，避免取消操作随异常回滚。</p>
+     */
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public boolean cancelWaitingForUnavailableAttachment(ChatInteractionRequest request) {
+        if (request == null) {
+            return false;
+        }
+        return repository.cancelWaitingById(
+                request.tenantId(), request.userId(), request.id(), Instant.now()) == 1;
+    }
+
     private boolean expireIfNeeded(ChatInteractionRequest request, Instant now) {
         if (request.expiredAt(now)) {
             repository.markExpired(request.tenantId(), request.userId(), request.id());
@@ -213,34 +242,50 @@ public class ChatInteractionApplicationService {
         return false;
     }
 
-    private Map<String, Object> responsePayload(ChatInteractionResponseCommand command, ChatInteractionType interactionType) {
-        validateResponse(command, interactionType);
+    Map<String, Object> prepareResponsePayload(ChatInteractionResponseCommand command,
+                                               ChatInteractionType interactionType,
+                                               String intentAnswerOverride) {
+        String intentAnswer = interactionType == ChatInteractionType.INTENT_CLARIFICATION
+                ? firstNonBlank(intentAnswerOverride, optionalIntentClarificationAnswer(command.questionnaireAnswers()))
+                : null;
+        validateResponse(command, interactionType, intentAnswer);
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("approved", command.approved() == null ? Boolean.TRUE : command.approved());
         payload.put("scope", command.scope() == null || command.scope().isBlank() ? "once" : command.scope().trim());
         payload.put("questionnaireAnswers", command.questionnaireAnswers());
         if (interactionType == ChatInteractionType.INTENT_CLARIFICATION) {
-            payload.put("answerText", intentClarificationAnswer(command.questionnaireAnswers()));
+            payload.put("answerText", intentAnswer);
         }
         payload.put("metadata", command.metadata());
         return Map.copyOf(payload);
     }
 
-    private void validateResponse(ChatInteractionResponseCommand command, ChatInteractionType interactionType) {
+    private void validateResponse(ChatInteractionResponseCommand command, ChatInteractionType interactionType,
+                                  String intentAnswer) {
         ChatInteractionType safeType = interactionType == null ? ChatInteractionType.AGENT_CLARIFICATION : interactionType;
         if (requiresExplicitApproval(safeType) && command.approved() == null) {
             throw new IllegalArgumentException("approved 不能为空");
         }
-        if (requiresQuestionnaireAnswer(safeType) && (command.questionnaireAnswers() == null
+        if (requiresQuestionnaireAnswer(safeType) && safeType != ChatInteractionType.INTENT_CLARIFICATION
+                && (command.questionnaireAnswers() == null
                 || command.questionnaireAnswers().isEmpty())) {
             throw new IllegalArgumentException("questionnaireAnswers 不能为空");
         }
         if (safeType == ChatInteractionType.INTENT_CLARIFICATION) {
-            intentClarificationAnswer(command.questionnaireAnswers());
+            if (intentAnswer == null || intentAnswer.isBlank()) {
+                if ((command.questionnaireAnswers() == null || command.questionnaireAnswers().isEmpty())
+                        && command.attachments().isEmpty()) {
+                    throw new IllegalArgumentException("questionnaireAnswers 或 attachments 不能为空");
+                }
+                if (command.attachments().isEmpty()) {
+                    throw new IllegalArgumentException("questionnaireAnswers 至少包含一个非空答案");
+                }
+                throw new IllegalArgumentException("意图澄清附件尚未完成服务端校验");
+            }
         }
     }
 
-    private String intentClarificationAnswer(Map<String, Object> answers) {
+    String optionalIntentClarificationAnswer(Map<String, Object> answers) {
         java.util.List<Map.Entry<String, String>> normalized = answers == null
                 ? java.util.List.of()
                 : answers.entrySet().stream()
@@ -251,7 +296,7 @@ public class ChatInteractionApplicationService {
                 .sorted(Map.Entry.comparingByKey())
                 .toList();
         if (normalized.isEmpty()) {
-            throw new IllegalArgumentException("questionnaireAnswers 至少包含一个非空答案");
+            return null;
         }
         if (normalized.size() == 1) {
             return normalized.getFirst().getValue();
@@ -259,6 +304,13 @@ public class ChatInteractionApplicationService {
         return normalized.stream()
                 .map(entry -> (entry.getKey().isBlank() ? "问题" : entry.getKey()) + "：" + entry.getValue())
                 .collect(java.util.stream.Collectors.joining("\n"));
+    }
+
+    private String firstNonBlank(String first, String second) {
+        if (first != null && !first.isBlank()) {
+            return first.trim();
+        }
+        return second == null || second.isBlank() ? null : second.trim();
     }
 
     private boolean requiresExplicitApproval(ChatInteractionType interactionType) {

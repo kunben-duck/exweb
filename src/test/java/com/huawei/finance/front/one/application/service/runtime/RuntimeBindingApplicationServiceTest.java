@@ -64,6 +64,36 @@ class RuntimeBindingApplicationServiceTest {
     }
 
     @Test
+    void admissionCancellationUpdatesDatabaseWithoutTouchingCache() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        RuntimeBinding active = binding(RuntimeBindingStatus.ACTIVE);
+        repository.saved = active;
+        cache.put(active);
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        List<RuntimeBinding> cancelled = service.cancelActiveForAdmission("t", "u", "s");
+
+        assertThat(cancelled).singleElement()
+                .extracting(RuntimeBinding::status)
+                .isEqualTo(RuntimeBindingStatus.CANCELLED);
+        assertThat(repository.saved.status()).isEqualTo(RuntimeBindingStatus.CANCELLED);
+        assertThat(cache.get("t", "u", "s")).contains(active);
+    }
+
+    @Test
+    void admissionCancellationPreservesResumableRelayBinding() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        RuntimeBinding resumable = binding(RuntimeBindingStatus.RESUMABLE);
+        repository.saved = resumable;
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        assertThat(service.cancelActiveForAdmission("t", "u", "s")).isEmpty();
+        assertThat(repository.saved).isSameAs(resumable);
+    }
+
+    @Test
     void createsRelayRuntimeBinding() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
         InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();

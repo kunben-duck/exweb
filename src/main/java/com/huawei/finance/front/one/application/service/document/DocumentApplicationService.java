@@ -1,8 +1,12 @@
 package com.huawei.finance.front.one.application.service.document;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.finance.front.one.application.command.DocumentUpdateCommand;
 import com.huawei.finance.front.one.application.command.DocumentUploadCommand;
 import com.huawei.finance.front.one.application.facade.DocumentFacade;
+import com.huawei.finance.front.one.application.facade.ResolvedChatAttachments;
 import com.huawei.finance.front.one.application.integration.conversation.SessionRepository;
 import com.huawei.finance.front.one.application.integration.document.DocumentRepository;
 import com.huawei.finance.front.one.application.integration.document.DocumentStorage;
@@ -20,9 +24,14 @@ import com.huawei.finance.front.one.domain.document.StoredObjectContent;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import java.io.InputStream;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -40,15 +49,17 @@ public class DocumentApplicationService implements DocumentFacade {
     private final IdGenerator idGenerator;
     private final PermissionChecker permissionChecker;
     private final DocumentStorage storage;
+    private final ObjectMapper objectMapper;
 
     public DocumentApplicationService(DocumentRepository repository, SessionRepository sessionRepository,
                                       IdGenerator idGenerator, PermissionChecker permissionChecker,
-                                      DocumentStorage storage) {
+                                      DocumentStorage storage, ObjectMapper objectMapper) {
         this.repository = repository;
         this.sessionRepository = sessionRepository;
         this.idGenerator = idGenerator;
         this.permissionChecker = permissionChecker;
         this.storage = storage;
+        this.objectMapper = objectMapper;
     }
     @Override
     public Mono<UploadedDocument> upload(UserContext user, DocumentUploadCommand command) {
@@ -163,27 +174,76 @@ public class DocumentApplicationService implements DocumentFacade {
     }
 
     @Override
+    @Transactional(
+            readOnly = true,
+            timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}"
+    )
     public List<AttachmentRef> resolveAttachmentsForUser(UserContext user, List<AttachmentRef> attachments) {
-        if (attachments == null || attachments.isEmpty()) {
-            return List.of();
-        }
-        permissionChecker.checkChatPermission(user);
-        return attachments.stream()
-                .filter(Objects::nonNull)
-                .map(attachment -> toTrustedAttachment(user, attachment))
-                .toList();
+        return resolveChatAttachmentsForUser(user, attachments).attachments();
     }
 
     @Override
+    @Transactional(
+            readOnly = true,
+            timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}"
+    )
     public List<UploadedDocument> resolveDocumentsForUser(UserContext user, List<AttachmentRef> attachments) {
+        return resolveChatAttachmentsForUser(user, attachments).documents();
+    }
+
+    @Override
+    @Transactional(
+            readOnly = true,
+            timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}"
+    )
+    public ResolvedChatAttachments resolveChatAttachmentsForUser(UserContext user,
+                                                                 List<AttachmentRef> attachments) {
         if (attachments == null || attachments.isEmpty()) {
-            return List.of();
+            return ResolvedChatAttachments.empty();
         }
         permissionChecker.checkChatPermission(user);
-        return attachments.stream()
+        Map<String, UploadedDocument> documentsById = new LinkedHashMap<>();
+        List<AttachmentRef> trustedAttachments = new ArrayList<>();
+        List<UploadedDocument> trustedDocuments = new ArrayList<>();
+        for (AttachmentRef attachment : attachments) {
+            if (attachment == null) {
+                continue;
+            }
+            String documentId = normalizeDocumentId(attachment.documentId());
+            UploadedDocument document = documentsById.computeIfAbsent(documentId,
+                    ignored -> loadOwnedAvailableDocument(user, documentId));
+            trustedAttachments.add(toTrustedAttachment(document));
+            trustedDocuments.add(document);
+        }
+        return new ResolvedChatAttachments(trustedAttachments, trustedDocuments);
+    }
+
+    @Override
+    public Map<String, Object> replaceRuntimeDocumentMetadata(Map<String, Object> metadata,
+                                                               List<UploadedDocument> documents) {
+        Map<String, Object> result = mutableDeepCopy(metadata);
+        Object sceneValue = result.get("sceneParam");
+        if (documents == null || documents.isEmpty()) {
+            if (sceneValue instanceof Map<?, ?> sceneMap) {
+                Map<String, Object> sceneCopy = mutableMap(sceneMap);
+                sceneCopy.remove("docList");
+                result.put("sceneParam", sceneCopy);
+            }
+            return immutableDeepCopy(result);
+        }
+        if (sceneValue != null && !(sceneValue instanceof Map<?, ?>)) {
+            throw new IllegalArgumentException("metadata.sceneParam 必须是 JSON object");
+        }
+        Map<String, Object> scene = sceneValue instanceof Map<?, ?> sceneMap
+                ? mutableMap(sceneMap)
+                : new LinkedHashMap<>();
+        List<Map<String, Object>> docList = documents.stream()
                 .filter(Objects::nonNull)
-                .map(attachment -> loadOwnedAvailableDocument(user, attachment.documentId()))
+                .map(this::providerDocumentReference)
                 .toList();
+        scene.put("docList", docList);
+        result.put("sceneParam", scene);
+        return immutableDeepCopy(result);
     }
 
     @Override
@@ -198,8 +258,7 @@ public class DocumentApplicationService implements DocumentFacade {
         }).subscribeOn(Schedulers.boundedElastic());
     }
 
-    private AttachmentRef toTrustedAttachment(UserContext user, AttachmentRef attachment) {
-        UploadedDocument document = loadOwnedAvailableDocument(user, attachment.documentId());
+    private AttachmentRef toTrustedAttachment(UploadedDocument document) {
         // 前端传入的附件名称、MIME 和大小只用于展示草稿。进入 Runtime 前必须以文档库事实数据为准。
         return new AttachmentRef(
                 document.id(),
@@ -209,6 +268,100 @@ public class DocumentApplicationService implements DocumentFacade {
                 document.tokenSize(),
                 document.source()
         );
+    }
+
+    private String normalizeDocumentId(String documentId) {
+        if (documentId == null || documentId.isBlank()) {
+            throw new IllegalArgumentException("文档 ID 不能为空");
+        }
+        return documentId.trim();
+    }
+
+    private Map<String, Object> providerDocumentReference(UploadedDocument document) {
+        try {
+            JsonNode root = objectMapper.readTree(document.metadataJson() == null ? "{}" : document.metadataJson());
+            JsonNode providerDocument = root == null ? null : root.get("providerDocument");
+            if (providerDocument == null || !providerDocument.isObject()) {
+                throw new IllegalArgumentException("文档缺少 providerDocument 元数据: " + document.id());
+            }
+            String docId = textValue(providerDocument.get("docId"));
+            if (docId != null) {
+                return Map.of("docId", docId);
+            }
+            String url = textValue(providerDocument.get("url"));
+            if (url != null) {
+                return Map.of("url", url);
+            }
+            throw new IllegalArgumentException("文档 providerDocument 必须包含 docId 或 url: " + document.id());
+        } catch (JsonProcessingException ex) {
+            throw new IllegalArgumentException("文档 providerDocument 元数据解析失败: " + document.id(), ex);
+        }
+    }
+
+    private String textValue(JsonNode value) {
+        if (value == null || value.isNull() || !value.isValueNode()) {
+            return null;
+        }
+        String text = value.asText();
+        return text == null || text.isBlank() ? null : text.trim();
+    }
+
+    private Map<String, Object> mutableDeepCopy(Map<String, Object> source) {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        if (source != null) {
+            source.forEach((key, value) -> {
+                if (key != null) {
+                    copy.put(key, mutableDeepCopyValue(value));
+                }
+            });
+        }
+        return copy;
+    }
+
+    private Map<String, Object> mutableMap(Map<?, ?> source) {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        source.forEach((key, value) -> {
+            if (key != null) {
+                copy.put(String.valueOf(key), mutableDeepCopyValue(value));
+            }
+        });
+        return copy;
+    }
+
+    private Object mutableDeepCopyValue(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            return mutableMap(map);
+        }
+        if (value instanceof List<?> list) {
+            List<Object> copy = new ArrayList<>();
+            list.forEach(item -> copy.add(mutableDeepCopyValue(item)));
+            return copy;
+        }
+        return value;
+    }
+
+    private Map<String, Object> immutableDeepCopy(Map<String, Object> source) {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        source.forEach((key, value) -> copy.put(key, immutableDeepCopyValue(value)));
+        return Collections.unmodifiableMap(copy);
+    }
+
+    private Object immutableDeepCopyValue(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            map.forEach((key, nested) -> {
+                if (key != null) {
+                    copy.put(String.valueOf(key), immutableDeepCopyValue(nested));
+                }
+            });
+            return Collections.unmodifiableMap(copy);
+        }
+        if (value instanceof List<?> list) {
+            List<Object> copy = new ArrayList<>();
+            list.forEach(item -> copy.add(immutableDeepCopyValue(item)));
+            return Collections.unmodifiableList(copy);
+        }
+        return value;
     }
 
     private UploadedDocument loadOwnedAvailableDocument(UserContext user, String documentId) {

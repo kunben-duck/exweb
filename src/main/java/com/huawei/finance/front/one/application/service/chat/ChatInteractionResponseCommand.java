@@ -1,6 +1,8 @@
 package com.huawei.finance.front.one.application.service.chat;
 
 import com.huawei.finance.front.one.domain.auth.UserContext;
+import com.huawei.finance.front.one.domain.chat.AttachmentRef;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -15,12 +17,21 @@ public record ChatInteractionResponseCommand(
         Map<String, Object> metadata,
         String sessionId,
         String appId,
-        String appName
+        String appName,
+        List<AttachmentRef> attachments
 ) {
     /** 兼容不携带会话 App Tag 的内部调用。 */
     public ChatInteractionResponseCommand(UserContext user, String interactionId, Boolean approved, String scope,
                                           Map<String, Object> questionnaireAnswers, Map<String, Object> metadata) {
-        this(user, interactionId, approved, scope, questionnaireAnswers, metadata, null, null, null);
+        this(user, interactionId, approved, scope, questionnaireAnswers, metadata, null, null, null, List.of());
+    }
+
+    /** 兼容不携带附件的 App Tag 续接调用。 */
+    public ChatInteractionResponseCommand(UserContext user, String interactionId, Boolean approved, String scope,
+                                          Map<String, Object> questionnaireAnswers, Map<String, Object> metadata,
+                                          String sessionId, String appId, String appName) {
+        this(user, interactionId, approved, scope, questionnaireAnswers, metadata,
+                sessionId, appId, appName, List.of());
     }
 
     public ChatInteractionResponseCommand {
@@ -29,6 +40,7 @@ public record ChatInteractionResponseCommand(
         sessionId = normalize(sessionId);
         appId = normalize(appId);
         appName = normalize(appName);
+        attachments = attachments == null ? List.of() : List.copyOf(attachments);
     }
 
     private static String normalize(String value) {

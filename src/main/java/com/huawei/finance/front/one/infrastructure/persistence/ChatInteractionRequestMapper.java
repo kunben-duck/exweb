@@ -156,6 +156,20 @@ public interface ChatInteractionRequestMapper {
                             @Param("cancelledAt") Instant cancelledAt);
 
     /**
+     * 仅当指定 Interaction 仍为 WAITING 时取消。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param interactionId Interaction 标识。
+     * @param cancelledAt 取消时间。
+     * @return 影响行数。
+     */
+    int cancelWaitingById(@Param("tenantId") String tenantId,
+                          @Param("userId") String userId,
+                          @Param("interactionId") String interactionId,
+                          @Param("cancelledAt") Instant cancelledAt);
+
+    /**
      * 标记等待请求已过期。
      *
      * @param tenantId 租户标识。

@@ -283,6 +283,21 @@
     </update>
 
     <!--
+      历史澄清附件失效时，仅取消尚未被并发请求 claim 的 WAITING Interaction。
+      入参: tenantId/userId 为归属边界，interactionId 为目标请求，cancelledAt 为取消时间。
+    -->
+    <update id="cancelWaitingById">
+        UPDATE fin_ex_chat_interaction_request_t
+        SET status = 'CANCELLED',
+            cancelled_at = #{cancelledAt},
+            updated_at = #{cancelledAt}
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{interactionId}
+          AND status = 'WAITING'
+    </update>
+
+    <!--
       标记等待请求已过期，避免过期后仍被续接到 Runtime。
       入参: tenantId/userId 为归属边界，interactionId 为目标请求。
     -->

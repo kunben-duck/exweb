@@ -129,6 +129,12 @@ public class MyBatisChatInteractionRequestRepository implements ChatInteractionR
     }
 
     @Override
+    public int cancelWaitingById(String tenantId, String userId, String interactionId, Instant cancelledAt) {
+        return mapper.cancelWaitingById(
+                tenantId, userId, interactionId, cancelledAt == null ? Instant.now() : cancelledAt);
+    }
+
+    @Override
     public int markExpired(String tenantId, String userId, String interactionId) {
         return mapper.markExpired(tenantId, userId, interactionId);
     }

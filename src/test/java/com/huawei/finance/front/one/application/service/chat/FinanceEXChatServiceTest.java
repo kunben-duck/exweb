@@ -13,6 +13,7 @@ import com.huawei.finance.front.one.application.config.IntentFailureStrategy;
 import com.huawei.finance.front.one.application.config.MemoryProperties;
 import com.huawei.finance.front.one.application.config.RouteSignalProperties;
 import com.huawei.finance.front.one.application.facade.DocumentFacade;
+import com.huawei.finance.front.one.application.facade.ResolvedChatAttachments;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntime;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeCancelRequest;
 import com.huawei.finance.front.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
@@ -60,7 +61,9 @@ import com.huawei.finance.front.one.domain.chat.ChatEvent;
 import com.huawei.finance.front.one.domain.chat.ChatInteractionRequest;
 import com.huawei.finance.front.one.domain.chat.ChatInteractionStatus;
 import com.huawei.finance.front.one.domain.chat.ChatInteractionType;
+import com.huawei.finance.front.one.domain.chat.ChatInteractionUnavailableException;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
+import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePage;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePart;
 import com.huawei.finance.front.one.domain.chat.ChatMessagePartDraft;
@@ -98,6 +101,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -110,6 +114,18 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 class FinanceEXChatServiceTest {
+    @Test
+    void clarificationAnswerUsesTrustedAttachmentNamesForTextAndAttachmentOnlyTurns() {
+        List<AttachmentRef> attachments = List.of(
+                new AttachmentRef("doc1", "方案.pdf", "application/pdf", 1L),
+                new AttachmentRef("doc2", "测算.xls", "application/vnd.ms-excel", 2L));
+
+        assertThat(FinanceEXChatService.clarificationAnswerWithAttachments(null, attachments))
+                .isEqualTo("[用户上传文档] 方案.pdf，测算.xls");
+        assertThat(FinanceEXChatService.clarificationAnswerWithAttachments("帮我看下这个文档", attachments))
+                .isEqualTo("帮我看下这个文档 [用户上传文档] 方案.pdf，测算.xls");
+    }
+
     @Test
     void guardedRunStartedRejectionDoesNotSubscribeRouteOrRuntime() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
@@ -582,6 +598,87 @@ class FinanceEXChatServiceTest {
         assertThat(interactions.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
         assertThat(runs.runs).isEmpty();
         assertThat(events.events).isEmpty();
+    }
+
+    @Test
+    void currentAttachmentFailureKeepsWaitingButHistoricalFailureCancelsInteraction() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        InMemoryInteractionRequestRepository interactions = new InMemoryInteractionRequestRepository();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        Instant now = Instant.now();
+        ChatSession session = sessions.save(new ChatSession(
+                "session1", user.tenantId(), user.ownerUserId(), "测试会话", "ACTIVE", "web", now, now));
+        ChatInteractionRequest waiting = new ChatInteractionRequest(
+                "interaction1", user.tenantId(), user.ownerUserId(), session.id(), "run-source", null,
+                "msg-user", "msg-assistant", "intent-agent", null, null, null,
+                ChatInteractionType.INTENT_CLARIFICATION, ChatInteractionStatus.WAITING,
+                Map.of("originalQuery", "原问题", "clarifyQuestion", "请上传文档"), Map.of(),
+                now.plus(Duration.ofHours(1)), null, null, now, now);
+        interactions.insert(waiting);
+        DocumentFacade unavailableDocuments = documentFacade((routeUser, attachments) -> {
+            String documentId = attachments.getFirst().documentId();
+            if ("doc-transient".equals(documentId)) {
+                throw new org.springframework.dao.DataAccessResourceFailureException("document database timeout");
+            }
+            throw new SecurityException("文档不存在或不属于当前用户: " + documentId);
+        });
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions, messages, runs, events, runtimeRouteService(), refusingDomainAgentClient(),
+                noopRuntime(), runtimeBindingRepository(),
+                new com.huawei.finance.front.one.application.config.DomainAgentProperties(), liveEventBus(),
+                interactions, runtimeBindingCache(), null, unavailableDocuments);
+
+        assertThatThrownBy(() -> service.startRun(user, new ChatCommand(
+                        null, null, null, session.id(), null, "web", null,
+                        List.of(new AttachmentRef("doc-current", "forged.pdf", "application/pdf", 1L)), Map.of(),
+                        null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
+                        null, waiting.id(), null, null, Map.of("请上传文档", "当前附件")),
+                        RuntimeForwardHeaders.empty()).block())
+                .isInstanceOf(SecurityException.class);
+        assertThat(interactions.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
+
+        ChatInteractionRequest withTransientHistoricalAttachment = new ChatInteractionRequest(
+                waiting.id(), waiting.tenantId(), waiting.userId(), waiting.sessionId(), waiting.sourceRunId(),
+                null, waiting.userMessageId(), waiting.assistantMessageId(), waiting.runtimeProvider(),
+                waiting.runtimeBindingId(), waiting.runtimeSessionId(), waiting.approvalId(),
+                waiting.interactionType(), ChatInteractionStatus.WAITING,
+                Map.of("originalQuery", "原问题", "clarifyQuestion", "请继续补充",
+                        "_intentClarificationDocumentIds", List.of("doc-transient")),
+                Map.of(), waiting.expiresAt(), null, null, waiting.createdAt(), Instant.now());
+        interactions.insert(withTransientHistoricalAttachment);
+        assertThatThrownBy(() -> service.startRun(user, new ChatCommand(
+                        null, null, null, session.id(), null, "web", null, List.of(), Map.of(),
+                        null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
+                        null, waiting.id(), null, null, Map.of("请继续补充", "继续")),
+                        RuntimeForwardHeaders.empty()).block())
+                .isInstanceOf(org.springframework.dao.DataAccessResourceFailureException.class);
+        assertThat(interactions.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
+
+        ChatInteractionRequest withHistoricalAttachment = new ChatInteractionRequest(
+                waiting.id(), waiting.tenantId(), waiting.userId(), waiting.sessionId(), waiting.sourceRunId(),
+                null, waiting.userMessageId(), waiting.assistantMessageId(), waiting.runtimeProvider(),
+                waiting.runtimeBindingId(), waiting.runtimeSessionId(), waiting.approvalId(),
+                waiting.interactionType(), ChatInteractionStatus.WAITING,
+                Map.of("originalQuery", "原问题", "clarifyQuestion", "请继续补充",
+                        "_intentClarificationDocumentIds", List.of("doc-history")),
+                Map.of(), waiting.expiresAt(), null, null, waiting.createdAt(), Instant.now());
+        interactions.insert(withHistoricalAttachment);
+
+        assertThatThrownBy(() -> service.startRun(user, new ChatCommand(
+                        null, null, null, session.id(), null, "web", null, List.of(), Map.of(),
+                        null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
+                        null, waiting.id(), null, null, Map.of("请继续补充", "继续")),
+                        RuntimeForwardHeaders.empty()).block())
+                .isInstanceOfSatisfying(ChatInteractionUnavailableException.class,
+                        ex -> assertThat(ex.code()).isEqualTo("INTERACTION_ATTACHMENT_UNAVAILABLE"));
+
+        assertThat(interactions.claimCalls).hasValue(0);
+        assertThat(interactions.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.CANCELLED);
+        assertThat(runs.runs).isEmpty();
+        assertThat(messages.messages).isEmpty();
     }
 
     @Test
@@ -2286,10 +2383,16 @@ class FinanceEXChatServiceTest {
                 chatStreamService, sessionService, runs, leaseService, runtimeBindingRepository(), interactionService,
                 Duration.ofDays(3));
         AtomicReference<String> runtimeQuery = new AtomicReference<>();
+        AtomicReference<Map<String, Object>> runtimeMetadata = new AtomicReference<>();
+        AtomicReference<List<AttachmentRef>> runtimeAttachments = new AtomicReference<>();
+        AtomicReference<List<UploadedDocument>> runtimeDocuments = new AtomicReference<>();
         AgentRuntime runtime = new AgentRuntime() {
             @Override
             public Flux<ChatEvent> query(AgentRuntimeRequest request) {
                 runtimeQuery.set(request.message());
+                runtimeMetadata.set(request.metadata());
+                runtimeAttachments.set(request.attachments());
+                runtimeDocuments.set(request.documents());
                 return Flux.just(MessageSnapshotEvent.of(request.runId(), request.sessionId(), "最终回答"));
             }
 
@@ -2300,6 +2403,7 @@ class FinanceEXChatServiceTest {
         };
         AgentRuntimeExecutor runtimeExecutor = new AgentRuntimeExecutor(runtime, limiter);
         RouteSignalApplicationService routeService = runtimeRouteService();
+        DocumentFacade documentsFacade = documentFacade();
         FinanceEXChatService service = new FinanceEXChatService(
                 sessionService,
                 new MemoryApplicationService(messages, longTermMemory(), new MemoryProperties()),
@@ -2307,10 +2411,10 @@ class FinanceEXChatServiceTest {
                         Duration.ofDays(3), "relay"),
                 routeService,
                 intentRecordService(),
-                domainAgentExecutor(documentFacade(), limiter),
+                domainAgentExecutor(documentsFacade, limiter),
                 new SystemResponseExecutor(),
                 runtimeExecutor,
-                documentFacade(),
+                documentsFacade,
                 chatStreamService,
                 runService,
                 leaseService,
@@ -2319,7 +2423,7 @@ class FinanceEXChatServiceTest {
                 new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
                 new ChatRunStopCoordinator(sessionService, chatStreamService, runService, leaseService,
                         executionRegistry, runtimeExecutor,
-                        domainAgentExecutor(documentFacade(), limiter), ids),
+                        domainAgentExecutor(documentsFacade, limiter), ids),
                 interactionService,
                 terminalCommitService,
                 ids,
@@ -2365,7 +2469,13 @@ class FinanceEXChatServiceTest {
         interactionRequests.insert(waiting);
 
         StepVerifier.create(service.startRun(user, new ChatCommand(
-                        null, null, null, "session1", null, "web", null, List.of(), Map.of(),
+                        null, null, null, "session1", null, "web", null,
+                        List.of(new AttachmentRef("doc1", "forged-name.txt", "text/plain", 1L)),
+                        Map.of(
+                                "language", "zh_CN",
+                                "sceneParam", Map.of(
+                                        "region", "CN",
+                                        "docList", List.of(Map.of("docId", "forged")))),
                         null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
                         null, waiting.id(), null, null,
                         Map.of("您提到的方案具体是指哪个方案？", "我是说账务审批的方案")),
@@ -2388,10 +2498,15 @@ class FinanceEXChatServiceTest {
         assertThat(interactionRequests.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.ANSWERED);
         ChatMessage answer = messages.messages.stream()
                 .filter(message -> "user".equals(message.role()))
-                .filter(message -> "我是说账务审批的方案".equals(message.content()))
+                .filter(message -> "我是说账务审批的方案 [用户上传文档] invoice.pdf".equals(message.content()))
                 .findFirst()
                 .orElseThrow();
         assertThat(answer.parentMessageId()).isEqualTo(waiting.assistantMessageId());
+        assertThat(messages.attachments).singleElement().satisfies(attachment -> {
+            assertThat(attachment.messageId()).isEqualTo(answer.id());
+            assertThat(attachment.documentId()).isEqualTo("doc1");
+            assertThat(attachment.name()).isEqualTo("invoice.pdf");
+        });
         ChatMessage finalAssistant = messages.messages.stream()
                 .filter(message -> "assistant".equals(message.role()))
                 .filter(message -> answer.id().equals(message.parentMessageId()))
@@ -2401,7 +2516,14 @@ class FinanceEXChatServiceTest {
         assertThat(finalAssistant.parts()).extracting(ChatMessagePart::partType)
                 .doesNotContain("INTENT_CLARIFICATION_RESPONSE");
         assertThat(runtimeQuery).hasValue(
-                "user:再帮我看下方案；澄清问:您提到的方案具体是指哪个方案？；用户:我是说账务审批的方案");
+                "user:再帮我看下方案；澄清问:您提到的方案具体是指哪个方案？；用户:我是说账务审批的方案 [用户上传文档] invoice.pdf");
+        assertThat(runtimeAttachments.get()).extracting(AttachmentRef::name).containsExactly("invoice.pdf");
+        assertThat(runtimeDocuments.get()).extracting(UploadedDocument::id).containsExactly("doc1");
+        assertThat(runtimeMetadata.get()).containsEntry("language", "zh_CN");
+        Map<?, ?> runtimeSceneParam = (Map<?, ?>) runtimeMetadata.get().get("sceneParam");
+        assertThat(runtimeSceneParam.get("region")).isEqualTo("CN");
+        assertThat(runtimeSceneParam.get("docList"))
+                .isEqualTo(List.of(Map.of("docId", "provider-doc1")));
     }
 
     @Test
@@ -2661,8 +2783,6 @@ class FinanceEXChatServiceTest {
                 new RunAdmissionControlService(new com.huawei.finance.front.one.application.config.RunAdmissionProperties()),
                 ids
         );
-        service.setRunAdmissionCommitService(new ChatRunAdmissionCommitService(sessionService, runService, null));
-
         Map<String, Object> selectedMetadata = SelectedIntentContext.attach(
                 Map.of("skillId", "skill-other"), "fund_management", "资金管理");
         StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
@@ -2724,6 +2844,110 @@ class FinanceEXChatServiceTest {
                 .allSatisfy(part -> assertThat(part.payload())
                         .containsEntry("intentId", "fund_management")
                         .containsEntry("intentName", "资金管理"));
+    }
+
+    @Test
+    void explicitDomainAgentNextCancelsWaitingInteractionAndUsesCurrentRequest() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        InMemoryInteractionRequestRepository interactions = new InMemoryInteractionRequestRepository();
+        MultiBindingRuntimeBindingRepository bindings = new MultiBindingRuntimeBindingRepository();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        Instant now = Instant.now();
+        ChatSession session = sessions.save(new ChatSession(
+                "session-direct", user.tenantId(), user.ownerUserId(), "测试会话", "ACTIVE", "web",
+                "msg-wait-assistant", "session-direct", null, null, 2L, null, now, now));
+        messages.save(new ChatMessage(
+                "msg-old-user", user.tenantId(), user.ownerUserId(), session.id(), null,
+                1L, 0, 1, "user", "旧问题", null, "run-wait", "NORMAL", false,
+                null, null, null, null, null, now));
+        messages.save(new ChatMessage(
+                "msg-wait-assistant", user.tenantId(), user.ownerUserId(), session.id(), "msg-old-user",
+                2L, 1, 1, "assistant", "请补充信息", null, "run-wait", "NORMAL", false,
+                null, null, null, null, "{\"finishReason\":\"WAITING_USER\"}", now));
+        ChatRun waitingRun = new ChatRun(
+                "run-wait", user.tenantId(), user.ownerUserId(), session.id(), ChatRunStatus.WAITING_USER,
+                "AGENT_RUNTIME", null, "relay", "relay-active-session", ChatRunMode.NEXT,
+                null, "msg-old-user", "msg-wait-assistant", 1L, 2L, null, now, now,
+                Map.of(), now, now);
+        runs.save(waitingRun);
+        ChatInteractionRequest waiting = new ChatInteractionRequest(
+                "interaction-wait", user.tenantId(), user.ownerUserId(), session.id(), waitingRun.id(), null,
+                "msg-old-user", "msg-wait-assistant", "relay", "binding-relay-active",
+                "relay-active-session", null, ChatInteractionType.AGENT_CLARIFICATION,
+                ChatInteractionStatus.WAITING, Map.of("clarifyQuestion", "请补充信息"), Map.of(),
+                now.plus(Duration.ofHours(1)), null, null, now, now);
+        interactions.insert(waiting);
+        bindings.save(new RuntimeBinding(
+                "binding-relay-history", user.tenantId(), user.ownerUserId(), session.id(), "relay",
+                "msg-old-user", "relay-history-session", RuntimeBindingStatus.RESUMABLE, "run-history",
+                null, now.minus(Duration.ofDays(1)), now.minus(Duration.ofDays(1)),
+                Map.of("runtimeSessionEstablished", true)));
+        bindings.save(new RuntimeBinding(
+                "binding-relay-active", user.tenantId(), user.ownerUserId(), session.id(), "relay",
+                "msg-wait-assistant", "relay-active-session", RuntimeBindingStatus.ACTIVE, waitingRun.id(),
+                null, now, now, Map.of("runtimeSessionEstablished", true)));
+
+        AtomicInteger routeCalls = new AtomicInteger();
+        AtomicReference<DomainAgentRequest> capturedRequest = new AtomicReference<>();
+        DomainAgentClient domainClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                capturedRequest.set(request);
+                return Flux.just(MessageSnapshotEvent.of(request.runId(), request.sessionId(), "直连回答"));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions, messages, runs, events, countingRuntimeRouteService(routeCalls), domainClient,
+                noopRuntime(), bindings, new com.huawei.finance.front.one.application.config.DomainAgentProperties(),
+                liveEventBus(), interactions);
+
+        StepVerifier.create(service.executeRun(user, new ChatCommand(
+                        "cmd-ordinary", null, null, session.id(), null, "web", "普通追问",
+                        List.of(), Map.of())))
+                .expectError(ChatInteractionUnavailableException.class)
+                .verify();
+        assertThat(interactions.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);
+        assertThat(messages.messages).hasSize(2);
+
+        StepVerifier.create(service.executeRun(user, new ChatCommand(
+                                "cmd-direct", null, null, session.id(), null, "web", "本轮直连问题",
+                                List.of(), Map.of("scene", "current"), "DOMAIN_AGENT", "fund-agent",
+                                ChatRunMode.NEXT, null, null, null))
+                        .collectList())
+                .assertNext(stream -> assertThat(stream).extracting(ChatEvent::type)
+                        .containsExactly("run.started", "runtime.metadata", "message.snapshot", "run.completed"))
+                .verifyComplete();
+
+        assertThat(routeCalls).hasValue(0);
+        assertThat(interactions.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.CANCELLED);
+        assertThat(runs.runs.get(waitingRun.id()).status()).isEqualTo(ChatRunStatus.WAITING_USER);
+        assertThat(capturedRequest.get()).isNotNull();
+        assertThat(capturedRequest.get().query()).isEqualTo("本轮直连问题");
+        assertThat(capturedRequest.get().domainAgentId()).isEqualTo("fund-agent");
+        assertThat(capturedRequest.get().metadata()).containsExactlyEntriesOf(Map.of("scene", "current"));
+        assertThat(messages.messages).filteredOn(message -> "user".equals(message.role()))
+                .filteredOn(message -> "本轮直连问题".equals(message.content()))
+                .singleElement()
+                .extracting(ChatMessage::parentMessageId)
+                .isEqualTo("msg-wait-assistant");
+        assertThat(bindings.bindingsForProvider("relay"))
+                .extracting(RuntimeBinding::status)
+                .containsExactlyInAnyOrder(RuntimeBindingStatus.RESUMABLE, RuntimeBindingStatus.CANCELLED);
+        assertThat(bindings.bindingsForProvider("domain-agent"))
+                .singleElement()
+                .satisfies(binding -> {
+                    assertThat(binding.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+                    assertThat(binding.metadata()).containsEntry("routeSource", "front-selected")
+                            .containsEntry("domainAgentId", "fund-agent");
+                });
     }
 
     @Test
@@ -3574,6 +3798,11 @@ class FinanceEXChatServiceTest {
     }
 
     private DocumentFacade documentFacade() {
+        return documentFacade(null);
+    }
+
+    private DocumentFacade documentFacade(
+            java.util.function.BiFunction<UserContext, List<AttachmentRef>, ResolvedChatAttachments> resolver) {
         return new DocumentFacade() {
             @Override public Mono<UploadedDocument> upload(UserContext user, DocumentUploadCommand command) { return Mono.empty(); }
             @Override public Mono<DocumentLibraryPage> list(UserContext user, DocumentLibraryQuery query) { return Mono.empty(); }
@@ -3583,8 +3812,50 @@ class FinanceEXChatServiceTest {
             @Override public Mono<com.huawei.finance.front.one.domain.document.DocumentDownload> prepareDownload(UserContext user, String documentId) { return Mono.empty(); }
             @Override public Mono<UploadedDocument> prepareAccess(UserContext user, String documentId) { return Mono.empty(); }
             @Override public Mono<StoredObjectContent> download(UserContext user, String documentId) { return Mono.empty(); }
-            @Override public List<AttachmentRef> resolveAttachmentsForUser(UserContext user, List<AttachmentRef> attachments) { return List.of(); }
-            @Override public List<UploadedDocument> resolveDocumentsForUser(UserContext user, List<AttachmentRef> attachments) { return List.of(); }
+            @Override public List<AttachmentRef> resolveAttachmentsForUser(UserContext user, List<AttachmentRef> attachments) {
+                return resolveChatAttachmentsForUser(user, attachments).attachments();
+            }
+            @Override public List<UploadedDocument> resolveDocumentsForUser(UserContext user, List<AttachmentRef> attachments) {
+                return resolveChatAttachmentsForUser(user, attachments).documents();
+            }
+            @Override public ResolvedChatAttachments resolveChatAttachmentsForUser(UserContext user, List<AttachmentRef> attachments) {
+                if (resolver != null) {
+                    return resolver.apply(user, attachments);
+                }
+                if (attachments == null || attachments.isEmpty()) {
+                    return ResolvedChatAttachments.empty();
+                }
+                Instant now = Instant.now();
+                List<AttachmentRef> trusted = attachments.stream()
+                        .map(attachment -> new AttachmentRef(
+                                attachment.documentId(), "invoice.pdf", "application/pdf", 128L, 32L, "LOCAL_UPLOAD"))
+                        .toList();
+                List<UploadedDocument> documents = trusted.stream()
+                        .map(attachment -> new UploadedDocument(
+                                attachment.documentId(), user.tenantId(), user.ownerUserId(), null,
+                                attachment.name(), "api-store", attachment.documentId(), attachment.contentType(),
+                                attachment.sizeBytes(), "AVAILABLE", attachment.source(), attachment.tokenSize(),
+                                "{\"providerDocument\":{\"docId\":\"provider-" + attachment.documentId() + "\"}}",
+                                now, now))
+                        .toList();
+                return new ResolvedChatAttachments(trusted, documents);
+            }
+            @Override public Map<String, Object> replaceRuntimeDocumentMetadata(Map<String, Object> metadata, List<UploadedDocument> documents) {
+                Map<String, Object> copy = new LinkedHashMap<>(metadata == null ? Map.of() : metadata);
+                Map<String, Object> scene = copy.get("sceneParam") instanceof Map<?, ?> value
+                        ? new LinkedHashMap<>((Map<String, Object>) value)
+                        : new LinkedHashMap<>();
+                scene.remove("docList");
+                if (documents != null && !documents.isEmpty()) {
+                    scene.put("docList", documents.stream()
+                            .map(document -> Map.<String, Object>of("docId", "provider-" + document.id()))
+                            .toList());
+                }
+                if (!scene.isEmpty() || copy.containsKey("sceneParam")) {
+                    copy.put("sceneParam", scene);
+                }
+                return Map.copyOf(copy);
+            }
         };
     }
 
@@ -4043,6 +4314,27 @@ class FinanceEXChatServiceTest {
             InMemoryInteractionRequestRepository interactions,
             RuntimeBindingCache bindingCache,
             reactor.core.scheduler.Scheduler domainAgentControlIoScheduler) {
+        return financeServiceWithDomainClientAndBindings(
+                sessions, messages, runs, events, routeService, domainClient, relayRuntime, bindings,
+                domainAgentProperties, eventBus, interactions, bindingCache, domainAgentControlIoScheduler,
+                documentFacade());
+    }
+
+    private FinanceEXChatService financeServiceWithDomainClientAndBindings(
+            InMemorySessionRepository sessions,
+            InMemoryMessageRepository messages,
+            InMemoryRunRepository runs,
+            InMemoryEventStore events,
+            RouteSignalApplicationService routeService,
+            DomainAgentClient domainClient,
+            AgentRuntime relayRuntime,
+            RuntimeBindingRepository bindings,
+            com.huawei.finance.front.one.application.config.DomainAgentProperties domainAgentProperties,
+            ChatLiveEventBus eventBus,
+            InMemoryInteractionRequestRepository interactions,
+            RuntimeBindingCache bindingCache,
+            reactor.core.scheduler.Scheduler domainAgentControlIoScheduler,
+            DocumentFacade documents) {
         IdGenerator ids = new SequentialIdGenerator();
         PermissionChecker permissionChecker = new PermissionChecker();
         WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
@@ -4066,7 +4358,6 @@ class FinanceEXChatServiceTest {
                 streamService, sessionService, runs, leaseService, bindings, interactionService, Duration.ZERO);
         RuntimeBindingApplicationService bindingService = new RuntimeBindingApplicationService(
                 bindings, bindingCache, ids, Duration.ZERO, "relay");
-        DocumentFacade documents = documentFacade();
         DomainAgentExecutor domainExecutor = new DomainAgentExecutor(domainClient, documents, limiter);
         AgentRuntimeExecutor relayExecutor = new AgentRuntimeExecutor(relayRuntime, limiter);
         ChatRunStopCoordinator stopCoordinator = new ChatRunStopCoordinator(
@@ -4098,6 +4389,8 @@ class FinanceEXChatServiceTest {
         if (domainAgentControlIoScheduler != null) {
             service.setDomainAgentControlIoScheduler(domainAgentControlIoScheduler);
         }
+        service.setRunAdmissionCommitService(
+                new ChatRunAdmissionCommitService(sessionService, runService, interactionService, bindingService));
         return service;
     }
 
@@ -4673,13 +4966,50 @@ class FinanceEXChatServiceTest {
             }
             return markWaiting(tenantId, userId, interactionId);
         }
-        @Override public int cancelOpenBySession(String tenantId, String userId, String sessionId, Instant cancelledAt) { return 0; }
+        @Override
+        public int cancelOpenBySession(String tenantId, String userId, String sessionId, Instant cancelledAt) {
+            int cancelled = 0;
+            for (ChatInteractionRequest current : List.copyOf(requests.values())) {
+                if (!tenantId.equals(current.tenantId()) || !userId.equals(current.userId())
+                        || !sessionId.equals(current.sessionId())
+                        || (current.status() != ChatInteractionStatus.WAITING
+                        && current.status() != ChatInteractionStatus.RESPONDING)) {
+                    continue;
+                }
+                requests.put(current.id(), new ChatInteractionRequest(
+                        current.id(), current.tenantId(), current.userId(), current.sessionId(),
+                        current.sourceRunId(), current.continueRunId(), current.userMessageId(),
+                        current.assistantMessageId(), current.runtimeProvider(), current.runtimeBindingId(),
+                        current.runtimeSessionId(), current.approvalId(), current.interactionType(),
+                        ChatInteractionStatus.CANCELLED, current.requestPayload(), current.responsePayload(),
+                        current.expiresAt(), current.answeredAt(), cancelledAt, current.createdAt(), cancelledAt));
+                cancelled++;
+            }
+            return cancelled;
+        }
+        @Override
+        public int cancelWaitingById(String tenantId, String userId, String interactionId, Instant cancelledAt) {
+            ChatInteractionRequest current = requests.get(interactionId);
+            if (current == null || !tenantId.equals(current.tenantId()) || !userId.equals(current.userId())
+                    || current.status() != ChatInteractionStatus.WAITING) {
+                return 0;
+            }
+            requests.put(current.id(), new ChatInteractionRequest(
+                    current.id(), current.tenantId(), current.userId(), current.sessionId(),
+                    current.sourceRunId(), current.continueRunId(), current.userMessageId(),
+                    current.assistantMessageId(), current.runtimeProvider(), current.runtimeBindingId(),
+                    current.runtimeSessionId(), current.approvalId(), current.interactionType(),
+                    ChatInteractionStatus.CANCELLED, current.requestPayload(), current.responsePayload(),
+                    current.expiresAt(), current.answeredAt(), cancelledAt, current.createdAt(), cancelledAt));
+            return 1;
+        }
         @Override public int markExpired(String tenantId, String userId, String interactionId) { return 0; }
     }
 
     private static class InMemoryMessageRepository implements ChatMessageRepository {
         private final List<ChatMessage> messages = new ArrayList<>();
         private final List<ChatMessagePart> parts = new ArrayList<>();
+        private final List<ChatMessageAttachment> attachments = new ArrayList<>();
         @Override public ChatMessage save(ChatMessage message) {
             messages.add(message);
             if (message.parts() != null) {
@@ -4714,6 +5044,13 @@ class FinanceEXChatServiceTest {
         }
         @Override public Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId) {
             return messages.stream().filter(message -> messageId.equals(message.id())).findFirst();
+        }
+        @Override public ChatMessageAttachment saveAttachment(ChatMessageAttachment attachment) {
+            attachments.add(attachment);
+            return attachment;
+        }
+        @Override public List<ChatMessageAttachment> findAttachments(String tenantId, String userId, String messageId) {
+            return attachments.stream().filter(attachment -> messageId.equals(attachment.messageId())).toList();
         }
     }
 

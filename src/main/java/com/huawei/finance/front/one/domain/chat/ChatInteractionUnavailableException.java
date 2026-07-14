@@ -29,4 +29,9 @@ public class ChatInteractionUnavailableException extends IllegalStateException {
     public static ChatInteractionUnavailableException expired(String interactionId) {
         return new ChatInteractionUnavailableException("INTERACTION_EXPIRED", "等待请求已过期: " + interactionId);
     }
+
+    public static ChatInteractionUnavailableException attachmentUnavailable(String interactionId) {
+        return new ChatInteractionUnavailableException("INTERACTION_ATTACHMENT_UNAVAILABLE",
+                "历史澄清附件已不存在、无权限或不可用于聊天，请重新发起任务并重新选择附件: " + interactionId);
+    }
 }

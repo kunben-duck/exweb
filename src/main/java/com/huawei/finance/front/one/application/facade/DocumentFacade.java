@@ -10,6 +10,7 @@ import com.huawei.finance.front.one.domain.document.DocumentLibraryQuery;
 import com.huawei.finance.front.one.domain.document.StoredObjectContent;
 import com.huawei.finance.front.one.domain.document.UploadedDocument;
 import java.util.List;
+import java.util.Map;
 import reactor.core.publisher.Mono;
 
 /**
@@ -123,4 +124,18 @@ public interface DocumentFacade {
      * @return 已完成归属和状态校验的文档元数据。
      */
     List<UploadedDocument> resolveDocumentsForUser(UserContext user, List<AttachmentRef> attachments);
+
+    /**
+     * 通过一次文档事实解析同时生成可信消息附件和 Runtime 文档元数据。
+     *
+     * <p>实现必须忽略前端提交的名称、MIME、大小和来源，并保证同一批次中重复的
+     * documentId 不会触发重复事实查询。</p>
+     */
+    ResolvedChatAttachments resolveChatAttachmentsForUser(UserContext user, List<AttachmentRef> attachments);
+
+    /**
+     * 深复制本轮业务 metadata，并使用可信文档覆盖 {@code sceneParam.docList}。
+     */
+    Map<String, Object> replaceRuntimeDocumentMetadata(Map<String, Object> metadata,
+                                                       List<UploadedDocument> documents);
 }

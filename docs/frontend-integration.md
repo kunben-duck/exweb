@@ -159,7 +159,8 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 停止回答 | 用户点击停止 -> `POST /runs/{runId}/stop` -> 等待 WS 或 Event Resume 收到 `run.cancelled` | `runId`、stop 前本地 `lastSeq` | stop 不是关闭 WebSocket；若 stop 前已有正文或用户可见 parts，历史消息会保存 partial assistant |
 | 编辑历史 user 消息 | 用户点击编辑 -> `POST /v1/chat/runs(runMode=EDIT_USER, editedMessageId, message)` -> 订阅新 run -> `run.completed` 后重新 `GET /v1/chat/sessions/{sessionId}/messages` | `editedMessageId`、新 user `messageId`、新 assistant `messageId`、`versionInfo` | 旧消息不覆盖；新 user sibling 进入旧 user 的 `versionInfo.variants` |
 | 重新生成 assistant | 用户点击重新生成 -> `POST /v1/chat/runs(runMode=REGENERATE_ASSISTANT, regeneratedMessageId)` -> 订阅新 run -> `run.completed` 后重新 `GET /v1/chat/sessions/{sessionId}/messages` | `regeneratedMessageId`、原父 user messageId、新 assistant messageId、`versionInfo` | 复用原 user 节点，新 assistant sibling 进入旧 assistant 的 `versionInfo.variants` |
-| 意图澄清等待 | 收到 `run.waiting_user(interactionType=INTENT_CLARIFICATION)` 或刷新后 `stream-status.waitingUserInput=true` -> 展示 `/messages` 中的澄清 assistant 与 `INTENT_CLARIFICATION_REQUEST` part -> `POST /v1/chat/runs(runMode=CONTINUE_INTERACTION, interactionId)` -> 订阅返回的 `streamTopicId` | `interactionId`、`assistantMessageId`、`runId`、`streamTopicId`、`expiresAt` | 意图澄清属于路由阶段，不创建 RuntimeBinding；每次提交生成新的 user 回答节点，下一轮澄清或最终 Agent 回答生成新的 assistant 节点；后端以 `routeTrigger=clarify_answer` 继续意图服务 |
+| 意图澄清等待 | 收到 `run.waiting_user(interactionType=INTENT_CLARIFICATION)` 或刷新后 `stream-status.waitingUserInput=true` -> 展示 `/messages` 中的澄清 assistant 与 `INTENT_CLARIFICATION_REQUEST` part -> `POST /v1/chat/runs(runMode=CONTINUE_INTERACTION, interactionId)`，可提交答案、`attachments` 和本轮 `metadata` -> 订阅返回的 `streamTopicId` | `interactionId`、`assistantMessageId`、`runId`、`streamTopicId`、`expiresAt` | 意图澄清属于路由阶段，不创建 RuntimeBinding；每次提交生成新的 user 回答节点并保存可信附件，下一轮澄清或最终 Agent 回答生成新的 assistant 节点；后端以 `routeTrigger=clarify_answer` 继续意图服务 |
+| 等待态主动直连 DomainAgent | `POST /v1/chat/runs(runMode=NEXT,targetType=DOMAIN_AGENT,targetId,message,metadata,attachments)` -> 订阅返回的 `streamTopicId` | 当前 `sessionId`、新 `runId`、所选 `targetId` | 优先于意图、Relay 和开放 Interaction；服务端原子取消该会话的 `WAITING/RESPONDING` Interaction，并把新 user 节点挂到等待 assistant 后。仅使用本轮请求参数，不合并旧澄清上下文；真正存在 `RUNNING/CANCELLING` run 时仍返回 active-run 冲突 |
 | Agent 澄清等待 | 收到 `run.waiting_user(interactionType=AGENT_CLARIFICATION)` 或刷新后 `stream-status.waitingUserInput=true` -> 展示 `/messages` 中的 `AGENT_CLARIFICATION_REQUEST` part -> `POST /v1/chat/runs(runMode=CONTINUE_INTERACTION, interactionId)` -> 订阅返回的 `streamTopicId` | `interactionId`、`assistantMessageId`、`runId`、`streamTopicId`、`expiresAt` | 续接不创建新 user 消息；用户答案会作为 `AGENT_CLARIFICATION_RESPONSE` part 追加到同一 assistant，最终 `run.completed.payload.assistantMessageId` 仍是原 assistant；超过 `expiresAt` 后提交会返回 `INTERACTION_EXPIRED` |
 | 切换历史版本 | 从当前消息 `versionInfo.variants` 取目标项 -> `GET /messages?leafMessageId={switchLeafMessageId}` 重渲染 -> 后台 `POST /path` 保存选择 | `versionInfo.currentIndex/total`、`switchLeafMessageId`、`currentLeafMessageId` | 先刷新展示路径，不创建 run，不调用 Runtime；`/path` 只负责持久化当前 leaf |
 | 从消息新建分支 | `POST /sessions/{sessionId}/branches(sourceMessageId)` -> 选择新 `sessionId` -> `GET /messages`、`GET /stream-status` | `sourceMessageId`、新 `sessionId`、`sourceSessionId/sourceMessageId` | 分支快照消息 `locked=true`，禁用编辑、删除和重新生成 |
@@ -239,7 +240,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `POST /v1/chat/runs/{runId}/stop` | 用户点击停止回答。 | Path：`runId`。 | `ChatRunStopDto`：`runId`、`sessionId`、`status`、`latestSeq`、`stoppedAt`、`messageReady`、`assistantMessageId`、`feedbackTargetMessageId`。 | 幂等；停止语义不是关闭 WebSocket。 |
 | `GET /v1/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`；只处理 `stream-item` 中的 `encodedItem.data`。 |
 | `GET /v1/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态，并以 `done` 闭合；live source 异常时服务端会降级按 DB 事件轮询。 |
-| `GET /v1/chat/sessions/{sessionId}/stream-status` | 判断是否存在 active run、是否可停止、从哪里恢复、是否等待用户澄清输入，以及当前会话绑定的 DomainAgent/Runtime 摘要。 | Path：`sessionId`。 | `ChatStreamStatusDto`：`latestSeq`、`activeRunId`、`activeStreamTopicId`、`activeRunFirstSeq`、`activeRunLastSeq`、`cancellable`、`waitingUserInput`、`interactionId`、`interactionType`、`assistantMessageId`、`expiresAt`、`bindingProvider`、`bindingTargetType`、`bindingTargetId`、`bindingIntentCode`、`bindingIntentName`、`bindingRouteSource`、`bindingUpdatedAt`。 | `latestSeq` 是服务端事实源最新位置，不是客户端已消费位置；`waitingUserInput=true` 时普通 `/v1/chat/runs` 会返回 `WAITING_USER_INPUT_REQUIRED`。Interaction 默认 24h 过期，服务端会在查询或提交时懒标记过期请求。 |
+| `GET /v1/chat/sessions/{sessionId}/stream-status` | 判断是否存在 active run、是否可停止、从哪里恢复、是否等待用户澄清输入，以及当前会话绑定的 DomainAgent/Runtime 摘要。 | Path：`sessionId`。 | `ChatStreamStatusDto`：`latestSeq`、`activeRunId`、`activeStreamTopicId`、`activeRunFirstSeq`、`activeRunLastSeq`、`cancellable`、`waitingUserInput`、`interactionId`、`interactionType`、`assistantMessageId`、`expiresAt`、`bindingProvider`、`bindingTargetType`、`bindingTargetId`、`bindingIntentCode`、`bindingIntentName`、`bindingRouteSource`、`bindingUpdatedAt`。 | `latestSeq` 是服务端事实源最新位置，不是客户端已消费位置；`waitingUserInput=true` 时普通 `/v1/chat/runs` 会返回 `WAITING_USER_INPUT_REQUIRED`，但 `NEXT + targetType=DOMAIN_AGENT + targetId` 可显式放弃等待并直连。Interaction 默认 24h 过期，服务端会在查询或提交时懒标记过期请求。 |
 | `POST /v1/chat/messages/{messageId}/feedback` | 用户对完整 assistant 消息点赞、点踩或切换反馈。 | Path：`messageId`；JSON body：`runId` 可选，`rating=LIKE/DISLIKE`，`reasonCode` 可选，`commentText` 可选，`metadata` 可选。 | `MessageFeedbackDto`：`feedbackId`、`messageId`、`runId`、`rating`、`status=ACTIVE`、`reasonCode`、`commentText`、`createdAt`、`updatedAt`。 | 同一用户同一消息最多一条当前反馈；重复提交表示修改当前反馈。 |
 | `DELETE /v1/chat/messages/{messageId}/feedback` | 用户取消已点赞或已点踩状态。 | Path：`messageId`；Query：`runId` 可选。 | `MessageFeedbackDto`：`status=CANCELLED`。 | 幂等；没有历史反馈时也返回取消成功。历史消息中的 `feedback` 会返回 `null`。 |
 
@@ -1159,8 +1160,8 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `interactionId` | string | CONTINUE_INTERACTION 必填 | `run.waiting_user` 或 `stream-status` 返回的 Interaction 请求 ID |
 | `approved` | boolean | 审批/确认类必填 | 澄清类可省略，服务端默认 true |
 | `scope` | string | 否 | 授权或确认范围，澄清类默认 `once` |
-| `questionnaireAnswers` | object | 澄清类必填 | 澄清问题答案；key 为服务端下发的问题文案 |
-| `attachments` | array | 否 | 文档附件引用列表 |
+| `questionnaireAnswers` | object | 澄清类通常必填 | 澄清问题答案；key 为服务端下发的问题文案。`INTENT_CLARIFICATION` 可用有效附件代替文本答案 |
+| `attachments` | array | 否 | 文档附件引用列表；Interaction 续接中仅 `INTENT_CLARIFICATION` 支持 |
 | `targetType` | string | 否 | 显式直连目标类型；当前支持 `DOMAIN_AGENT`，为空走普通路由 |
 | `targetId` | string | `targetType=DOMAIN_AGENT` 必填 | DomainAgent 目标 ID |
 | `selectedIntent` | object | 否 | 显式选择 DomainAgent 时的展示摘要，只允许与 `targetType=DOMAIN_AGENT,targetId` 同时使用；`intentId` 可选且最长 128，`intentName` 必填且最长 256；仅在当前请求内用于生成 binding 展示信息，不写 run metadata，也不发送给用例库、IntentAgent 或 Runtime |
@@ -1323,7 +1324,49 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 
 提交成功后，`questionnaireAnswers` 不会作为旧 assistant 的 response part 保存。服务端会把答案保存为新的普通 user 消息，父节点是本轮 `run.waiting_user.payload.assistantMessageId`；如果 intent-agent 再次返回 `CLARIFY`，新的澄清 assistant 挂在该 user 下并返回新的 `interactionId/assistantMessageId`。如果最终返回 `ROUTE_SINGLE/ROUTE_MULTI/NO_MATCH`，DomainAgent/Relay 的最终 assistant 同样挂在最近的回答 user 下。前端每一轮仍使用 `runMode=CONTINUE_INTERACTION`，不要改用 `NEXT`。
 
-单个答案直接保存答案值；多个答案按问题名稳定排序并保存为多行 `问题：答案`。所有答案为空会返回参数错误，Interaction 仍保持 `WAITING`。
+附件-only 的意图澄清请求：
+
+```json
+{
+  "sessionId": "session_xxx",
+  "runMode": "CONTINUE_INTERACTION",
+  "interactionId": "interaction_xxx",
+  "attachments": [
+    { "documentId": "doc_xxx", "name": "前端展示名.pdf" }
+  ],
+  "metadata": {
+    "language": "zh_CN",
+    "sceneParam": { "region": "CN" }
+  }
+}
+```
+
+服务端回查真实文件名后，发送给 intent-agent 的本轮 query 类似 `[用户上传文档] 真实文件名.pdf`。前端的 `name/contentType/sizeBytes/source` 只用于提交前展示，不作为历史或下游事实。
+
+文本加多附件的意图澄清请求：
+
+```json
+{
+  "sessionId": "session_xxx",
+  "runMode": "CONTINUE_INTERACTION",
+  "interactionId": "interaction_xxx",
+  "questionnaireAnswers": {
+    "请补充分析范围": "帮我看下这个方案"
+  },
+  "attachments": [
+    { "documentId": "doc_pdf" },
+    { "documentId": "doc_xls" }
+  ],
+  "metadata": {
+    "language": "zh_CN",
+    "sceneParam": { "region": "CN", "docList": [{ "docId": "untrusted" }] }
+  }
+}
+```
+
+本轮 query 类似 `帮我看下这个方案 [用户上传文档] 方案.pdf，测算.xls`。多轮澄清按首次出现的 `documentId` 累计附件；metadata 不累计，最终 DomainAgent/Relay 只使用命中路由这一轮的 metadata。服务端保留 `sceneParam` 其他字段，并用累计文档的可信 `providerDocument.docId`（无 docId 时使用 `url`）覆盖 `docList`；累计附件为空时移除前端传入的 `docList`。IntentAgent 始终只接收文本 query/history，不接收文档 ID、URL 或完整 metadata。澄清 user 消息的历史 `attachments[]` 与普通 user 消息格式一致。
+
+单个答案直接保存答案值；多个答案按问题名稳定排序并保存为多行 `问题：答案`。文本答案和附件都为空会返回参数错误，Interaction 仍保持 `WAITING`。
 
 Agent 对话澄清续接。Relay questionnaire 等 Runtime 内部澄清同样使用 `CONTINUE_INTERACTION`，不创建新的普通 user 消息：
 
@@ -1369,7 +1412,7 @@ Agent 对话澄清续接。Relay questionnaire 等 Runtime 内部澄清同样使
 }
 ```
 
-`CONTINUE_INTERACTION` 模式只用于等待态续接：必须传 `interactionId`；不要传 `message`、`attachments`、`targetType`、`targetId`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId` 或 `forceReroute=true`。澄清类 `approved/scope` 可省略，服务端默认 `true/once`；审批、确认和路由切换确认类必须显式传 `approved`。
+`CONTINUE_INTERACTION` 模式只用于等待态续接：必须传 `interactionId`；不要传 `message`、`targetType`、`targetId`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId` 或 `forceReroute=true`。只有 `INTENT_CLARIFICATION` 可以携带 `attachments`；Agent 澄清、审批、确认和路由切换确认携带附件会在 claim 前返回参数错误。澄清类 `approved/scope` 可省略，服务端默认 `true/once`；审批、确认和路由切换确认类必须显式传 `approved`。
 
 ## 反馈
 
@@ -2260,7 +2303,8 @@ api-store S3 文档响应示例：
 api-store 带 `metadata.skillId` 时，下游上传到企业 EDM，通常返回 `docId`。这种文档的 `source`
 为 `DOMAIN_AGENT_UPLOAD`，可在 `targetType=DOMAIN_AGENT` run 中作为附件引用。前端需要把
 `metadataJson.providerDocument.docId/url` 放入 `metadata.sceneParam.docList`，后端校验这些引用和
-`attachments[]` 一致后原样透传。
+`attachments[]` 一致后原样透传。该规则适用于普通提问和显式 DomainAgent 直连；意图澄清续接由服务端
+根据累计可信附件覆盖最终轮 metadata 的 `docList`。
 
 EDM docId 模式的 `metadataJson.providerDocument` 示例：
 
@@ -2390,6 +2434,8 @@ curl -OJ http://localhost:8080/v1/documents/doc_xxx/download
 ```
 
 DomainAgent 路由会跳过用例库和意图服务，并创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding，后续未指定 target 的普通提问会优先续接该绑定。`selectedIntent` 可整体省略；传入时只作为可信度较低的展示摘要保存到 binding，第二轮续接无需再次传入。如果 `metadata.sceneParam.docList` 缺失、为空，或引用了未在 `attachments[]` 中授权的 `docId/url`，后端会拒绝本轮 run。ChatService 不校验 `targetId` 是否可调用；DomainAgent 权限由下游服务负责。
+
+该显式路径只有 `runMode=NEXT` 可以绕过等待态。若会话存在意图澄清、Relay/Agent 澄清、审批、确认或路由切换确认，服务端会在消息/run admission 的同一短事务中取消所有开放 Interaction，然后以当前请求的 `message/metadata/attachments` 调用指定 DomainAgent；旧澄清答案和 `questionnaireAnswers` 不会进入下游。旧等待 run 保留为历史，新 user 消息接在等待 assistant 后。当前 ACTIVE Relay/DomainAgent binding 会被取消并替换为 `routeSource=front-selected` 的目标 binding，历史 `RESUMABLE` Relay binding 不删除。该能力不会抢占 `RUNNING/CANCELLING` run。
 本轮显式选择的 DomainAgent 会进入 `runtime.metadata`，并在历史 assistant 的 `parts` 返回：
 `partType=METADATA`、`payload.metadataType=selected_domain_agent`、`payload.targetType=DOMAIN_AGENT`、`payload.targetId=所选目标 ID`、
 `payload.intentId/payload.intentName` 和 `payload.intentResult.intentId/intentName`（有展示摘要时）、

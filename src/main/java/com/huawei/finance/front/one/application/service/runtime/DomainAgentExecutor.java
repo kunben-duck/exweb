@@ -39,7 +39,9 @@ public class DomainAgentExecutor {
     public Flux<ChatEvent> execute(DomainAgentExecutionContext context) {
         var command = context.command();
         UserContext user = context.user();
-        List<UploadedDocument> documents = documentFacade.resolveDocumentsForUser(user, command.attachments());
+        List<UploadedDocument> documents = command.attachments().isEmpty()
+                ? List.of()
+                : documentFacade.resolveDocumentsForUser(user, command.attachments());
         DomainAgentRequest request = new DomainAgentRequest(
                 user,
                 command.sessionId(),

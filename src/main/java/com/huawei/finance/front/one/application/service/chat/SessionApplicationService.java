@@ -348,7 +348,8 @@ public class SessionApplicationService implements ChatSessionFacade {
      * <p>调用方必须把本方法与 continuation run 插入、旧 Interaction ANSWERED 更新放在同一事务中。</p>
      */
     ChatRunMessagePlan prepareIntentClarificationAnswer(UserContext user, ChatSession session, String runId,
-                                                        String parentAssistantMessageId, String answerText) {
+                                                        String parentAssistantMessageId, String answerText,
+                                                        List<AttachmentRef> attachments) {
         if (user == null || session == null) {
             throw new IllegalArgumentException("意图澄清回答缺少用户或会话上下文");
         }
@@ -358,8 +359,14 @@ public class SessionApplicationService implements ChatSessionFacade {
         }
         ChatMessage answer = createUserMessage(new UserMessageCreateCommand(
                 user.tenantId(), user.ownerUserId(), session, answerText, parent.id(), ChatRunMode.NEXT,
-                runId, null, null, List.of()));
+                runId, null, null, attachments == null ? List.of() : attachments));
         return new ChatRunMessagePlan(ChatRunMode.NEXT, parent.id(), answer, null);
+    }
+
+    ChatRunMessagePlan prepareIntentClarificationAnswer(UserContext user, ChatSession session, String runId,
+                                                        String parentAssistantMessageId, String answerText) {
+        return prepareIntentClarificationAnswer(
+                user, session, runId, parentAssistantMessageId, answerText, List.of());
     }
 
     /**

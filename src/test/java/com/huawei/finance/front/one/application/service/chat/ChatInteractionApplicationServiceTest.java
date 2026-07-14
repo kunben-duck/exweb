@@ -7,6 +7,7 @@ import com.huawei.finance.front.one.application.config.ChatInteractionProperties
 import com.huawei.finance.front.one.application.integration.conversation.ChatInteractionRequestRepository;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
+import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatInteractionRequest;
 import com.huawei.finance.front.one.domain.chat.ChatInteractionStatus;
 import com.huawei.finance.front.one.domain.chat.ChatInteractionType;
@@ -14,6 +15,7 @@ import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -132,6 +134,40 @@ class ChatInteractionApplicationServiceTest {
 
         assertThat(claim.responsePayload()).containsEntry(
                 "answerText", "期间：2026年7月\n税种：增值税");
+    }
+
+    @Test
+    void intentClarificationAllowsPreparedAttachmentOnlyAnswerBeforeClaim() {
+        MutableInteractionRepository repository = new MutableInteractionRepository();
+        ChatInteractionRequest waiting = waitingRequest(ChatInteractionType.INTENT_CLARIFICATION);
+        repository.insert(waiting);
+        ChatInteractionApplicationService service = new ChatInteractionApplicationService(repository,
+                (bizType, context) -> bizType + "_fixed", new PermissionChecker(), new ChatInteractionProperties());
+        ChatInteractionResponseCommand command = new ChatInteractionResponseCommand(
+                user(), waiting.id(), null, null, Map.of(), Map.of(), waiting.sessionId(), null, null,
+                List.of(new AttachmentRef("doc1", "forged.pdf", "application/pdf", 1L)));
+
+        ChatInteractionClaimResult claim = service.claimPreparedInteractionResponse(
+                command, "run-continue", request -> service.prepareResponsePayload(
+                        command, request.interactionType(), "[用户上传文档] invoice.pdf"));
+
+        assertThat(claim.responsePayload())
+                .containsEntry("questionnaireAnswers", Map.of())
+                .containsEntry("answerText", "[用户上传文档] invoice.pdf");
+        assertThat(repository.claimCalls).isEqualTo(1);
+    }
+
+    @Test
+    void unavailableHistoricalAttachmentCancelsOnlyWaitingInteraction() {
+        MutableInteractionRepository repository = new MutableInteractionRepository();
+        ChatInteractionRequest waiting = waitingRequest(ChatInteractionType.INTENT_CLARIFICATION);
+        repository.insert(waiting);
+        ChatInteractionApplicationService service = new ChatInteractionApplicationService(repository,
+                (bizType, context) -> bizType + "_fixed", new PermissionChecker(), new ChatInteractionProperties());
+
+        assertThat(service.cancelWaitingForUnavailableAttachment(waiting)).isTrue();
+        assertThat(repository.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.CANCELLED);
+        assertThat(service.cancelWaitingForUnavailableAttachment(waiting)).isFalse();
     }
 
     @Test
@@ -257,6 +293,11 @@ class ChatInteractionApplicationServiceTest {
         }
 
         @Override
+        public int cancelWaitingById(String tenantId, String userId, String interactionId, Instant cancelledAt) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public int markExpired(String tenantId, String userId, String interactionId) {
             throw new UnsupportedOperationException();
         }
@@ -331,6 +372,22 @@ class ChatInteractionApplicationServiceTest {
         }
         @Override public int cancelOpenBySession(String tenantId, String userId, String sessionId, Instant cancelledAt) {
             return 0;
+        }
+        @Override
+        public int cancelWaitingById(String tenantId, String userId, String interactionId, Instant cancelledAt) {
+            ChatInteractionRequest current = requests.get(interactionId);
+            if (current == null || !tenantId.equals(current.tenantId()) || !userId.equals(current.userId())
+                    || current.status() != ChatInteractionStatus.WAITING) {
+                return 0;
+            }
+            requests.put(interactionId, new ChatInteractionRequest(
+                    current.id(), current.tenantId(), current.userId(), current.sessionId(), current.sourceRunId(),
+                    current.continueRunId(), current.userMessageId(), current.assistantMessageId(),
+                    current.runtimeProvider(), current.runtimeBindingId(), current.runtimeSessionId(),
+                    current.approvalId(), current.interactionType(), ChatInteractionStatus.CANCELLED,
+                    current.requestPayload(), current.responsePayload(), current.expiresAt(), current.answeredAt(),
+                    cancelledAt, current.createdAt(), cancelledAt));
+            return 1;
         }
         @Override public int markExpired(String tenantId, String userId, String interactionId) { return 0; }
 

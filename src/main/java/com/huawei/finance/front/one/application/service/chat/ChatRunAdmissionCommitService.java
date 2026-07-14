@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.application.service.chat;
 
 import com.huawei.finance.front.one.application.integration.agent.SelectedIntentContext;
+import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.finance.front.one.domain.auth.UserContext;
 import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
@@ -9,6 +10,7 @@ import com.huawei.finance.front.one.domain.chat.ChatRun;
 import com.huawei.finance.front.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.finance.front.one.domain.chat.ChatRunMode;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
+import com.huawei.finance.front.one.domain.runtime.RuntimeBinding;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,18 +26,46 @@ public class ChatRunAdmissionCommitService {
     private final SessionApplicationService sessionService;
     private final ChatRunApplicationService chatRunService;
     private final ChatInteractionApplicationService interactionService;
+    private final RuntimeBindingApplicationService runtimeBindingService;
 
     public ChatRunAdmissionCommitService(SessionApplicationService sessionService,
                                          ChatRunApplicationService chatRunService,
-                                         ChatInteractionApplicationService interactionService) {
+                                         ChatInteractionApplicationService interactionService,
+                                         RuntimeBindingApplicationService runtimeBindingService) {
         this.sessionService = sessionService;
         this.chatRunService = chatRunService;
         this.interactionService = interactionService;
+        this.runtimeBindingService = runtimeBindingService;
     }
 
     @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public AdmissionResult commit(UserContext user, ChatCommand command, ChatSession session,
                                   String runId, List<AttachmentRef> attachments) {
+        return commitRun(user, command, session, runId, attachments);
+    }
+
+    /**
+     * 原子受理前端直连 DomainAgent：提交当前 user 消息和 RUNNING run 后，再取消等待态与旧绑定。
+     */
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public AdmissionResult commitDirectDomainAgent(UserContext user, ChatCommand command, ChatSession session,
+                                                   String runId, List<AttachmentRef> attachments) {
+        if (interactionService == null) {
+            throw new IllegalStateException("DomainAgent 直连 admission 缺少 Interaction 服务");
+        }
+        if (runtimeBindingService == null) {
+            throw new IllegalStateException("DomainAgent 直连 admission 缺少 RuntimeBinding 服务");
+        }
+        sessionService.lockForMessageMutation(user.tenantId(), user.ownerUserId(), session);
+        AdmissionResult admission = commitRun(user, command, session, runId, attachments);
+        interactionService.cancelOpenBySession(user, session.id());
+        List<RuntimeBinding> cancelledBindings = runtimeBindingService.cancelActiveForAdmission(
+                user.tenantId(), user.ownerUserId(), session.id());
+        return new AdmissionResult(admission.messagePlan(), admission.run(), cancelledBindings);
+    }
+
+    private AdmissionResult commitRun(UserContext user, ChatCommand command, ChatSession session,
+                                      String runId, List<AttachmentRef> attachments) {
         ChatRunMessagePlan messagePlan = sessionService.prepareRunMessage(
                 user, command, session, runId, attachments);
         ChatRun run = chatRunService.insertRunning(new CreateChatRunContext(
@@ -65,7 +95,7 @@ public class ChatRunAdmissionCommitService {
             throw new IllegalArgumentException("仅 INTENT_CLARIFICATION 支持独立消息 admission");
         }
         ChatRunMessagePlan messagePlan = sessionService.prepareIntentClarificationAnswer(
-                user, session, runId, interaction.assistantMessageId(), command.answerText());
+                user, session, runId, interaction.assistantMessageId(), command.answerText(), command.attachments());
         ChatRun run = chatRunService.insertInteractionRunning(new CreateChatRunContext(
                 runId,
                 user,
@@ -90,13 +120,29 @@ public class ChatRunAdmissionCommitService {
             String runId,
             ChatInteractionRequest interaction,
             String answerText,
+            List<AttachmentRef> attachments,
             java.util.Map<String, Object> runMetadata
     ) {
         public IntentClarificationAdmissionCommand {
+            attachments = attachments == null ? List.of() : List.copyOf(attachments);
             runMetadata = runMetadata == null ? java.util.Map.of() : java.util.Map.copyOf(runMetadata);
+        }
+
+        public IntentClarificationAdmissionCommand(UserContext user, ChatSession session, String runId,
+                                                   ChatInteractionRequest interaction, String answerText,
+                                                   java.util.Map<String, Object> runMetadata) {
+            this(user, session, runId, interaction, answerText, List.of(), runMetadata);
         }
     }
 
-    public record AdmissionResult(ChatRunMessagePlan messagePlan, ChatRun run) {
+    public record AdmissionResult(ChatRunMessagePlan messagePlan, ChatRun run,
+                                  List<RuntimeBinding> cancelledBindings) {
+        public AdmissionResult {
+            cancelledBindings = cancelledBindings == null ? List.of() : List.copyOf(cancelledBindings);
+        }
+
+        public AdmissionResult(ChatRunMessagePlan messagePlan, ChatRun run) {
+            this(messagePlan, run, List.of());
+        }
     }
 }

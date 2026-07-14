@@ -136,6 +136,12 @@ tenant/user。接入企业身份源时，只需替换该防腐层的身份读取
 
 `targetType=DOMAIN_AGENT` 用于前端显式选择财经领域 DomainAgent 的场景，`targetId` 为目标 DomainAgent ID。
 该路径会跳过用例库和意图服务，创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding，并调用 DomainAgent Runtime。
+当请求为 `runMode=NEXT` 时，该直连路径也可以从 `WAITING_USER` 会话直接发起：后端在同一个 admission
+短事务中取消会话下所有 `WAITING/RESPONDING` Interaction，再保存本轮 user 消息与 RUNNING run。旧的
+`WAITING_USER` run 和消息历史保持不变，新 user 消息挂在当前等待 assistant 后；已存在真正执行中的
+`RUNNING/CANCELLING` run 时仍拒绝直连，不会自动 stop。直连只使用本轮 `message/metadata/attachments`，
+不会携带旧澄清答案，也不会通知或续接旧 Relay；当前 ACTIVE binding 会被替换为 `front-selected`
+DomainAgent binding，历史 `RESUMABLE` Relay session 保留。
 前端可选传 `selectedIntent={intentId?,intentName}` 作为历史展示摘要；对象存在时 `intentName` 必填，且只能与
 `targetType=DOMAIN_AGENT,targetId=...` 同时使用。该摘要会写入 RuntimeBinding，并在后续自动续接该 binding 时继续返回，
 但不参与路由、鉴权、RouteMemory 或意图统计，也不会进入 run metadata、用例库、IntentAgent 或 Runtime 请求。
@@ -143,6 +149,8 @@ DomainAgent 下游请求体会把 `metadata` 作为业务扩展，但服务端�
 始终以绑定的 DomainAgentId、本轮用户问题和 RuntimeBinding.runtimeSessionId 为准，前端传同名字段也不会覆盖。
 ChatService 只校验附件引用：当请求携带 `attachments[]` 时，`metadata.sceneParam.docList` 中的 `docId/url`
 必须能匹配这些已授权文档的 `metadataJson.providerDocument.docId/url`，后端不会重写 `docList` 中其他业务字段。
+意图澄清续接是例外：服务端会累计该澄清链已验证的附件，并用文档事实中的 `providerDocument.docId/url`
+覆盖最终轮 metadata 的 `sceneParam.docList`，避免前端文件名或文档引用进入最终 Runtime。
 ChatService 不校验 `targetId` 是否可调用；DomainAgent 权限和 body 业务合法性由下游服务负责。
 显式选择的 DomainAgent 会作为 `runtime.metadata` 写入事件流，并在历史 assistant 的 `parts` 中返回；
 payload 包含 `targetType`、`targetId`、`domainAgentId`、可选 `intentId/intentName` 和
@@ -283,7 +291,7 @@ export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
 RouteMemory 负责为意图服务生成 `conversationContext`：普通无绑定首次路由使用 `routeTrigger=first_turn`；DomainAgent 结构化拒答后重路由使用 `routeTrigger=domain_reject` 并携带本次 `lastIntentRejectReason`；用户提交 `INTENT_CLARIFICATION` 后使用 `routeTrigger=clarify_answer`；前端顶层传 `forceReroute=true` 时由后端转成内部用户纠正触发原因；最新 Relay/no_match 路由的来源 run 正常完成时，下一轮自动使用 `routeTrigger=fallback_followup`。`ROUTE` 表示最终目标已确定且 RuntimeBinding 已成功持久化的路由决策，不要求 Runtime 任务执行成功：后端会在调用 Relay/DomainAgent 前异步写入，后续失败、取消或 DomainAgent 拒答不会删除该事实。`history` 由最近 TopK `ROUTE` 和当前未完成 `INTENT_CLARIFICATION` 的 `CLARIFY` 链组成；精确 `NO_MATCH` 在意图请求中投影为 `type=NO_MATCH,intent=""`，不会伪装为命中意图；已有 binding 的普通续接和 Agent Interaction 续接没有产生新路由，因此不会写入 history。澄清得到最终目标时会在同一 best-effort 写任务中先折叠 clarify，再写 route；Relay 路由在数据库中仍统一记录为 `intentName=no_match,intentId=relay,targetProvider=relay` 并保留真实 `routeAction`。Relay 执行失败或取消时该 route 仍保留，但不会触发下一轮 `fallback_followup`；Relay 正常完成后仍只保留 `RESUMABLE` session，不保留 active 路由。`FAIL_RUN`、未确认候选和用户拒绝切换不写 route。RouteMemory 读写使用独立线程池，异常只降级上下文质量，不阻断 `/v1/chat/runs`。
 意图识别记录是可选旁路能力，默认关闭。开启 `FINANCEEX_INTENT_RECORD_ENABLED=true` 后，仅在本轮实际调用意图服务时异步写入 `fin_ex_intent_recognition_t`，记录用户问题、routeAction、候选 items、最终路由是否采纳以及调用耗时，便于后续准确率统计和排障。该写入使用 Servlet/MVC 友好的专用线程池，不读取请求 ThreadLocal；线程池拒绝、序列化失败或 DB 写入失败只记录 warn，不影响 `/v1/chat/runs` 主链路。DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会写意图记录。
 
-意图澄清续接时，intent-agent 顶层 `query` 是本轮最新回答，`history` 携带原始问题与已完成澄清问答；最终目标确定后，DomainAgent/Relay 收到 `user:原问题；澄清问:...；用户:...` 形式的完整折叠问题。每轮澄清 user/assistant 消息属于消息树事实，不单独写 RouteMemory `ROUTE`；最终 binding 成功后才折叠澄清链并记录一次路由。
+意图澄清续接时允许提交答案、附件和 metadata。附件在 Interaction claim 前按 `documentId` 校验归属、状态和真实文件名；附件-only 的 query 为 `[用户上传文档] xxx.pdf`，文本加附件为 `答案 [用户上传文档] xxx.pdf，xxx.xls`。intent-agent 只接收该文本 query 和澄清 history，不接收文档 ID、URL 或完整业务 metadata。最终目标确定后，DomainAgent/Relay 收到 `user:原问题；澄清问:...；用户:...` 形式的完整折叠问题，并使用最终一轮 metadata；服务端以整条澄清链累计的可信文档覆盖 `sceneParam.docList`。每轮澄清 user/assistant 消息属于消息树事实，user 消息的标准 `attachments` 会进入历史接口，但不会单独写 RouteMemory `ROUTE`；最终 binding 成功后才折叠澄清链并记录一次路由。
 
 WebSocket 边界如下：
 
@@ -406,7 +414,7 @@ export FINANCEEX_RELAY_AGENT_CONTEXT_AS_ANSWER=true
 
 DomainAgent endpoint 是完整 HTTP 地址。DomainAgent chat、绑定续接和 stop 都会发送服务端配置的标准 `Referer` 请求头；`FINANCEEX_DOMAIN_AGENT_REFERER` 未配置或为空时回退到 `FINANCEEX_DOMAIN_AGENT_BASE_URL`，前端 metadata 和 Cookie 不能覆盖该请求头，配置值也不会进入请求 body 或持久化数据。`/v1/chat/runs` 显式传 `targetType=DOMAIN_AGENT,targetId=...` 时会手动绑定该 DomainAgent，`routeSource=front-selected`；未显式传 target 时，当前 active `provider=domain-agent` 绑定优先续接。DomainAgent 下游 body 会以前端 `metadata` 为业务扩展，但服务端保留字段 `skillId/query/sessionId` 始终以绑定的 DomainAgentId、本轮用户问题和 RuntimeBinding.runtimeSessionId 为准，metadata 不能覆盖。没有 active binding 时会先走可选用例库和多轮意图服务：意图服务若返回 `WAITING_CLARIFICATION` 或兼容的 `TaskComplexity.NEED_CLARIFICATION`，本轮生成 `run.waiting_user`，`interactionType=INTENT_CLARIFICATION`，不创建 RuntimeBinding；用户通过 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 提交回答后继续调用意图服务，直到最终路由到 `domain-agent` 或 `relay`。DomainAgent 流式返回 `type=agent.refusal,code=FN-EX-CAHT-BIZ-DAG-001` 时，ChatService 会立即取消旧 Agent 流并以 `routeTrigger=domain_reject` 重新意图；自动路由来源直接切换，`front-selected/user-confirmed` 来源则生成 `ROUTE_SWITCH_CONFIRMATION` Interaction，候选 DomainAgent 或 Relay 均须确认。拒答、确认和新 Runtime 输出复用同一 assistant，并通过有序 parts 保留过程，等待确认阶段不生成最终 `ANSWER`。Relay Runtime 唯一使用 WebSocket 短连接：每个 ChatService run 都新建一条下游 WebSocket，先发送 `config`，握手成功后发送 `user-message`，本轮输出结束、stop、异常或超出最大运行时长后立即释放物理连接。`FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT` 会分别限制 HTTP Upgrade opening handshake 和 Upgrade 后的 `config -> session-ready`，两个阶段独立计时；opening 超时会取消待升级连接并以 `RELAY_WS_CONFIG_TIMEOUT` 结束本轮。Relay 会话语义由应用层传入的 `runtimeSessionMode=NEW|RESUME` 和 `RuntimeBinding.runtimeSessionId` 控制：同一个 ChatService 会话下第一次进入 Relay Runtime 发送 `sessionMode=new`，`config.sessionId` 使用 ChatService 自身 `sessionId`；收到 `session-ready.session_id` 后回填 run 和 RuntimeBinding 的真实 `runtimeSessionId`。后续提问即使重新建连也发送 `sessionMode=resume`，并携带回填后的 `runtimeSessionId` 和 `supports_incremental_recovery=true`。Relay WS 只以 `session-ready` 作为 config 阶段唯一完成信号；adapter 会将 `session-ready` 作为 `runtime.metadata` 输出，payload 保留 Relay 原始 `session_id/session_mode` 等字段，并补充 `runtimeSessionId` 用于跨实例 stop resume。其他配置阶段响应只用于握手判定，不作为用户回答事件；若收到 `error/clear-session/session-mismatch` 会立即失败。`user-message` 后、`relay-start` 前的前置 `session-state=idle/completed/ready/running/agent_thinking` 和迟到 `config` 会被丢弃，只有 `relay-start`、业务帧或 `session-state=waiting_user_input/paused` 会打开回答阶段。普通问答阶段按 `FINANCEEX_RELAY_WS_HEARTBEAT_INTERVAL` 发送 `{ "type": "heartbeat" }` 保活；任意业务帧或 `heartbeat-response` 都会刷新连接活跃时间，超过 `FINANCEEX_RELAY_WS_HEARTBEAT_RESPONSE_TIMEOUT` 仍无回包时转 `run.failed`。`session-state=idle/completed/waiting_user_input/paused` 会正常闭合本轮，`FINANCEEX_RELAY_WS_MAX_RUN_DURATION` 作为最长运行时间兜底。Agent 对话澄清由 Relay `approval-request(operation_type=questionnaire)` 触发：该帧本身会闭合当前用户轮次并生成 `run.waiting_user`、`AGENT_CLARIFICATION_REQUEST` part 和 Interaction 请求；等待请求默认按 `FINANCEEX_CHAT_INTERACTION_DEFAULT_EXPIRE_DURATION=24h` 过期，配置为 `0` 或负数表示不过期。单独的 `session-state=waiting_user_input` 仅闭合本次 Relay WS，不创建等待态；`paused` 仅表示 Relay 对 stop 的确认。
 
-`INTENT_CLARIFICATION` 的澄清问题会保存为独立 `assistantSource=intent-agent` 消息。前端使用 `CONTINUE_INTERACTION` 提交后，答案与 continuation run 原子保存为新的 user 消息；下一轮澄清或最终 DomainAgent/Relay 回答挂在该 user 下。回答一旦受理，即使后续 run 失败、取消或首事件超时也不会重新开放旧 Interaction，避免重复答案节点。
+`INTENT_CLARIFICATION` 的澄清问题会保存为独立 `assistantSource=intent-agent` 消息。前端使用 `CONTINUE_INTERACTION` 提交后，答案、可信附件关系与 continuation run 原子保存为新的 user 消息；下一轮澄清或最终 DomainAgent/Relay 回答挂在该 user 下。回答一旦受理，即使后续 run 失败、取消或首事件超时也不会重新开放旧 Interaction，避免重复答案节点。澄清附件只接受 `documentId` 作为事实引用，前端传入的名称、MIME、大小和来源不会被信任。
 
 Cookie 透传适用于 Relay WebSocket、DomainAgent chat/cancel，以及 `forward-cookie=true`
 的 HTTP 文档 provider upload 会把入口 Cookie 放入下游 HTTP 请求头。`AgentRuntimeRequest.forwardHeaders`、
@@ -509,7 +517,8 @@ Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共�
 `financeex.storage.provider=api-store`，服务端会把该 `skillId` 透传给下游新文档接口，并把返回的
 `docId/url/docName/docSize/serverName/docVersion` 等字段保存到 `metadataJson.providerDocument`；随后
 `/v1/chat/runs` 使用 `targetType=DOMAIN_AGENT,targetId=...` 触发 DomainAgent chat adapter。前端需要把已授权
-文档的 `docId/url` 放入 `metadata.sceneParam.docList`，后端只做匹配校验，不自动生成或覆盖下游 body。
+文档的 `docId/url` 放入 `metadata.sceneParam.docList`；普通提问和显式 DomainAgent 直连只做匹配校验，
+不自动生成或覆盖下游 body。`INTENT_CLARIFICATION` 续接按前述规则由服务端使用累计可信附件覆盖该字段。
 
 api-store 接入示例：
 

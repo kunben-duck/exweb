@@ -124,6 +124,16 @@ class FinanceEXChatServiceTest {
                 .isEqualTo("[用户上传文档] 方案.pdf，测算.xls");
         assertThat(FinanceEXChatService.clarificationAnswerWithAttachments("帮我看下这个文档", attachments))
                 .isEqualTo("帮我看下这个文档 [用户上传文档] 方案.pdf，测算.xls");
+        assertThat(FinanceEXChatService.nextMessageWithAttachments(ChatRunMode.NEXT, null, attachments))
+                .isEqualTo("[用户上传文档] 方案.pdf，测算.xls");
+        assertThat(FinanceEXChatService.nextMessageWithAttachments(ChatRunMode.NEXT, "  ", attachments))
+                .isEqualTo("[用户上传文档] 方案.pdf，测算.xls");
+        assertThat(FinanceEXChatService.nextMessageWithAttachments(ChatRunMode.NEXT, "分析文档", attachments))
+                .isEqualTo("分析文档");
+        assertThat(FinanceEXChatService.nextMessageWithAttachments(ChatRunMode.EDIT_USER, null, attachments))
+                .isNull();
+        assertThat(FinanceEXChatService.nextMessageWithAttachments(ChatRunMode.NEXT, null, List.of()))
+                .isNull();
     }
 
     @Test
@@ -2788,6 +2798,85 @@ class FinanceEXChatServiceTest {
     }
 
     @Test
+    void attachmentOnlyNextUsesTrustedFileNameForRoutingRuntimeAndHistory() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        AtomicReference<ChatCommand> routedCommand = new AtomicReference<>();
+        AtomicReference<AgentRuntimeRequest> runtimeRequest = new AtomicReference<>();
+        RouteSignalApplicationService routeService = new RouteSignalApplicationService(
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                intentAgent((command, memory, routeUser) -> null),
+                new com.huawei.finance.front.one.domain.routing.RoutingPolicy(0.85),
+                new RouteSignalProperties(false, false)) {
+            @Override
+            public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
+                routedCommand.set(request.command());
+                return Flux.just(RouteSignalFrame.result(
+                        RouteSignalResult.of(RouteTarget.agentRuntime("test-runtime"))));
+            }
+        };
+        AgentRuntime runtime = new AgentRuntime() {
+            @Override
+            public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                runtimeRequest.set(request);
+                return Flux.just(MessageSnapshotEvent.of(request.runId(), request.sessionId(), "文档回答"));
+            }
+
+            @Override
+            public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        DomainAgentClient domainClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions, messages, runs, events, routeService, domainClient, runtime,
+                new CapturingRuntimeBindingRepository(),
+                new com.huawei.finance.front.one.application.config.DomainAgentProperties(),
+                liveEventBus());
+
+        StepVerifier.create(service.executeRun(user, new ChatCommand(
+                                "cmd-attachment-only", null, null, null, null, "web", null,
+                                List.of(new AttachmentRef("doc1", "forged-name.txt", "text/plain", 1L)),
+                                Map.of()))
+                        .collectList())
+                .assertNext(stream -> assertThat(stream).extracting(ChatEvent::type)
+                        .containsExactly("run.started", "message.snapshot", "run.completed"))
+                .verifyComplete();
+
+        assertThat(routedCommand.get()).isNotNull();
+        assertThat(routedCommand.get().message()).isEqualTo("[用户上传文档] invoice.pdf");
+        assertThat(runtimeRequest.get()).isNotNull();
+        assertThat(runtimeRequest.get().message()).isEqualTo("[用户上传文档] invoice.pdf");
+        assertThat(runtimeRequest.get().attachments()).extracting(AttachmentRef::name)
+                .containsExactly("invoice.pdf");
+        assertThat(messages.messages).filteredOn(message -> "user".equals(message.role()))
+                .singleElement()
+                .satisfies(message -> {
+                    assertThat(message.content()).isEqualTo("[用户上传文档] invoice.pdf");
+                    assertThat(messages.attachments.stream()
+                            .filter(attachment -> message.id().equals(attachment.messageId())))
+                            .singleElement()
+                            .satisfies(attachment -> {
+                                assertThat(attachment.documentId()).isEqualTo("doc1");
+                                assertThat(attachment.name()).isEqualTo("invoice.pdf");
+                            });
+                });
+    }
+
+    @Test
     void explicitDomainAgentTargetRoutesAndBindsDomainAgent() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
@@ -2847,7 +2936,8 @@ class FinanceEXChatServiceTest {
         Map<String, Object> selectedMetadata = SelectedIntentContext.attach(
                 Map.of("skillId", "skill-other"), "fund_management", "资金管理");
         StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
-                        null, null, "web", "hello", List.of(), selectedMetadata,
+                        null, null, "web", null,
+                        List.of(new AttachmentRef("doc1", "forged-name.txt", "text/plain", 1L)), selectedMetadata,
                         "DOMAIN_AGENT", "skill-tax", ChatRunMode.NEXT, null, null, null,
                         null, null, null, null, Map.of(), "fund-app", "资金助手"),
                         RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192)))
@@ -2865,6 +2955,8 @@ class FinanceEXChatServiceTest {
         assertThat(capturedHeaders.get()).isNotNull();
         assertThat(capturedHeaders.get().cookieHeader()).isEqualTo("sid=abc");
         assertThat(capturedRequest.get()).isNotNull();
+        assertThat(capturedRequest.get().query()).isEqualTo("[用户上传文档] invoice.pdf");
+        assertThat(capturedRequest.get().documents()).extracting(UploadedDocument::id).containsExactly("doc1");
         assertThat(capturedRequest.get().metadata())
                 .containsExactlyEntriesOf(Map.of("skillId", "skill-other"));
         assertThat(bindings.saved.metadata()).containsEntry("intentCode", "fund_management")
@@ -2877,6 +2969,18 @@ class FinanceEXChatServiceTest {
         ChatSession taggedSession = sessions.findById(run.sessionId()).orElseThrow();
         assertThat(taggedSession.appId()).isEqualTo("fund-app");
         assertThat(taggedSession.appName()).isEqualTo("资金助手");
+        assertThat(messages.messages).filteredOn(message -> "user".equals(message.role()))
+                .singleElement()
+                .satisfies(message -> {
+                    assertThat(message.content()).isEqualTo("[用户上传文档] invoice.pdf");
+                    assertThat(messages.attachments.stream()
+                            .filter(attachment -> message.id().equals(attachment.messageId())))
+                            .singleElement()
+                            .satisfies(attachment -> {
+                                assertThat(attachment.documentId()).isEqualTo("doc1");
+                                assertThat(attachment.name()).isEqualTo("invoice.pdf");
+                            });
+                });
         assertThat(messages.parts).anySatisfy(part -> {
             assertThat(part.partType()).isEqualTo("METADATA");
             assertThat(part.payload()).containsEntry("targetId", "skill-tax")
@@ -2888,7 +2992,8 @@ class FinanceEXChatServiceTest {
 
         String sessionId = run.sessionId();
         StepVerifier.create(service.executeRun(user, new ChatCommand("cmd2", null, null,
-                        sessionId, null, "web", "continue", List.of(), Map.of())))
+                        sessionId, null, "web", null,
+                        List.of(new AttachmentRef("doc2", "another-forged-name.txt", "text/plain", 1L)), Map.of())))
                 .expectNextMatches(event -> "run.started".equals(event.type()))
                 .expectNextMatches(event -> "runtime.metadata".equals(event.type())
                         && "runtime-binding".equals(event.payload().get("routeSource"))
@@ -2898,6 +3003,8 @@ class FinanceEXChatServiceTest {
                 .expectNextMatches(event -> "run.completed".equals(event.type()))
                 .verifyComplete();
 
+        assertThat(capturedRequest.get().query()).isEqualTo("[用户上传文档] invoice.pdf");
+        assertThat(capturedRequest.get().documents()).extracting(UploadedDocument::id).containsExactly("doc2");
         assertThat(messages.parts.stream()
                 .filter(part -> "METADATA".equals(part.partType()))
                 .filter(part -> "selected_domain_agent".equals(part.payload().get("metadataType"))))

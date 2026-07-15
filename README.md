@@ -144,6 +144,11 @@ tenant/user。接入企业身份源时，只需替换该防腐层的身份读取
 
 `targetType=DOMAIN_AGENT` 用于前端显式选择财经领域 DomainAgent 的场景，`targetId` 为目标 DomainAgent ID。
 该路径会跳过用例库和意图服务，创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding，并调用 DomainAgent Runtime。
+所有 `runMode=NEXT` 请求都支持附件-only：当 `message` 为空或仅包含空白且至少有一个有效附件时，
+ChatService 会在附件归属和状态校验后使用可信文件名生成
+`[用户上传文档] xxx.pdf，xxx.xls`，并将该文本统一用于历史 user 消息、意图路由、RouteMemory 和
+Relay/DomainAgent query。前端传入的附件名称不参与生成；`message` 非空时保持原文，不自动追加文件名。
+空 message 且没有有效附件仍返回“用户消息不能为空”，`EDIT_USER` 也仍要求提供文本。
 当请求为 `runMode=NEXT` 时，该直连路径也可以从 `WAITING_USER` 会话直接发起：后端在同一个 admission
 短事务中取消会话下所有 `WAITING/RESPONDING` Interaction，再保存本轮 user 消息与 RUNNING run。旧的
 `WAITING_USER` run 和消息历史保持不变，新 user 消息挂在当前等待 assistant 后；已存在真正执行中的

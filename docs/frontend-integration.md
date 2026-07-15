@@ -1151,7 +1151,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `commandId` | string | 否 | 前端命令 ID，用于排障和幂等扩展 |
 | `sessionId` | string | 否 | 聊天会话 ID；为空时后端会创建或归一化 |
 | `conversationId` | string | 否 | 前端对话 ID，通常与 `sessionId` 一致 |
-| `message` | string | NEXT/EDIT_USER 必填 | 用户本轮输入；`REGENERATE_ASSISTANT` 和 `CONTINUE_INTERACTION` 可为空 |
+| `message` | string | 条件必填 | `EDIT_USER` 必填；`NEXT` 必须提供非空 message 或至少一个有效附件。附件-only 时服务端使用可信文件名生成 `[用户上传文档] xxx.pdf，xxx.xls`；`REGENERATE_ASSISTANT` 和 `CONTINUE_INTERACTION` 可为空 |
 | `runMode` | string | 否 | 消息树写入模式：`NEXT`、`EDIT_USER`、`REGENERATE_ASSISTANT`、`CONTINUE_INTERACTION`，默认 `NEXT` |
 | `parentMessageId` | string | 否 | `NEXT` 模式显式父节点；为空时使用会话 `currentLeafMessageId` |
 | `editedMessageId` | string | EDIT_USER 必填 | 被编辑的未锁定 user 消息 |
@@ -1232,6 +1232,24 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 }
 ```
 
+普通附件-only 提问。`message` 可以省略、传 `null` 或空字符串；附件校验成功后，服务端使用真实文件名
+生成 user 消息和路由 query，前端传入的附件名称不会被采用：
+
+```json
+{
+  "commandId": "cmd_attachment_only_001",
+  "sessionId": "session_xxx",
+  "runMode": "NEXT",
+  "message": null,
+  "attachments": [
+    {
+      "documentId": "doc_xxx"
+    }
+  ],
+  "metadata": {}
+}
+```
+
 用户主动纠正路由。只有前端明确希望本轮重新判断能力归属时才传顶层 `forceReroute=true`；不传或传 `false` 都按默认路由规则处理：
 
 ```json
@@ -1278,6 +1296,34 @@ curl -X POST http://localhost:8080/v1/chat/runs \
         {
           "docId": "M3T1A4768N1281393779526066372",
           "docName": "AI辅助测试设计穿刺.pptx"
+        }
+      ]
+    }
+  }
+}
+```
+
+附件-only 直连 DomainAgent。历史 user 消息和下游 `query` 均使用服务端生成的可信文件名文本，
+其他附件 metadata 及授权规则与带文本的直连请求一致：
+
+```json
+{
+  "commandId": "cmd_domain_agent_attachment_only_001",
+  "sessionId": "session_xxx",
+  "runMode": "NEXT",
+  "message": null,
+  "targetType": "DOMAIN_AGENT",
+  "targetId": "skill_tax_opinion",
+  "attachments": [
+    {
+      "documentId": "doc_domain_agent_xxx"
+    }
+  ],
+  "metadata": {
+    "sceneParam": {
+      "docList": [
+        {
+          "docId": "M3T1A4768N1281393779526066372"
         }
       ]
     }

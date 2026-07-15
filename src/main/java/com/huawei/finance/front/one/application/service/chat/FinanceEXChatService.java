@@ -784,15 +784,27 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
     static String clarificationAnswerWithAttachments(String answerText, List<AttachmentRef> attachments) {
         String normalizedAnswer = answerText == null || answerText.isBlank() ? null : answerText.trim();
-        String fileText = attachments == null || attachments.isEmpty()
-                ? null
-                : "[用户上传文档] " + attachments.stream()
-                .map(AttachmentRef::name)
-                .collect(java.util.stream.Collectors.joining("，"));
+        String fileText = uploadedDocumentText(attachments);
         if (normalizedAnswer == null) {
             return fileText;
         }
         return fileText == null ? normalizedAnswer : normalizedAnswer + " " + fileText;
+    }
+
+    static String nextMessageWithAttachments(ChatRunMode runMode, String message,
+                                             List<AttachmentRef> attachments) {
+        if (runMode != ChatRunMode.NEXT || (message != null && !message.isBlank())) {
+            return message;
+        }
+        return uploadedDocumentText(attachments);
+    }
+
+    private static String uploadedDocumentText(List<AttachmentRef> attachments) {
+        return attachments == null || attachments.isEmpty()
+                ? null
+                : "[用户上传文档] " + attachments.stream()
+                .map(AttachmentRef::name)
+                .collect(java.util.stream.Collectors.joining("，"));
     }
 
     private void validateInteractionSessionContext(UserContext user, ChatInteractionResponseCommand command,
@@ -1197,8 +1209,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
             List<AttachmentRef> attachments = resolvedAttachments.attachments();
             List<UploadedDocument> documents = resolvedAttachments.documents();
             ensureStartAttemptActive(startAttempt, "after-document-resolve");
+            String effectiveMessage = nextMessageWithAttachments(
+                    identified.runMode(), identified.message(), attachments);
             ChatCommand normalized = new ChatCommand(identified.commandId(), user.tenantId(), user.ownerUserId(),
-                    session.id(), identified.conversationId(), identified.channel(), identified.message(),
+                    session.id(), identified.conversationId(), identified.channel(), effectiveMessage,
                     attachments, identified.metadata(), identified.targetType(), identified.targetId(),
                     identified.runMode(), identified.parentMessageId(),
                     identified.editedMessageId(), identified.regeneratedMessageId(), identified.routeTrigger(),

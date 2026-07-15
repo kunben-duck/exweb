@@ -12,8 +12,8 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferUtils;
@@ -34,7 +34,7 @@ import reactor.core.scheduler.Schedulers;
 @Component
 @EnableConfigurationProperties(DomainAgentProperties.class)
 public class ConfiguredDomainAgentClient implements DomainAgentClient {
-    private static final Logger log = LoggerFactory.getLogger(ConfiguredDomainAgentClient.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(ConfiguredDomainAgentClient.class);
 
     private final WebClient.Builder webClientBuilder;
     private final DomainAgentProperties properties;

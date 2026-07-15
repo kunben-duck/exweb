@@ -29,8 +29,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -45,7 +45,7 @@ import reactor.core.scheduler.Schedulers;
  */
 @Service
 public class RouteSignalApplicationService {
-    private static final Logger log = LoggerFactory.getLogger(RouteSignalApplicationService.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(RouteSignalApplicationService.class);
 
     private final UseCaseLibraryClient useCaseLibraryClient;
     private final IntentAgentRuntime intentAgentRuntime;

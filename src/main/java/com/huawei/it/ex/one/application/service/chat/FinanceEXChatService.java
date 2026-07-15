@@ -79,8 +79,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.stereotype.Service;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
@@ -99,7 +99,7 @@ import reactor.util.retry.Retry;
  */
 @Service
 public class FinanceEXChatService implements FinanceChatFacade {
-    private static final Logger log = LoggerFactory.getLogger(FinanceEXChatService.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(FinanceEXChatService.class);
     private static final String INTERACTION_ASSISTANT_MESSAGE_ID_METADATA = "interactionAssistantMessageId";
     private static final String DOMAIN_AGENT_REROUTE_CONTEXT_METADATA = "domainAgentRerouteContext";
     private static final String INTENT_CLARIFICATION_DOCUMENT_IDS = "_intentClarificationDocumentIds";

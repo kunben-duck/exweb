@@ -5,8 +5,8 @@ import com.huawei.it.ex.one.domain.chat.ChatStreamTopics;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
@@ -20,7 +20,7 @@ import reactor.util.concurrent.Queues;
  */
 @Component
 public class LocalChatEventStreamRegistry {
-    private static final Logger log = LoggerFactory.getLogger(LocalChatEventStreamRegistry.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(LocalChatEventStreamRegistry.class);
 
     private final Map<String, TopicSink> topicSinks = new ConcurrentHashMap<>();
 

@@ -17,8 +17,8 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
@@ -30,7 +30,7 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class IntentRecognitionRecordService {
-    private static final Logger log = LoggerFactory.getLogger(IntentRecognitionRecordService.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(IntentRecognitionRecordService.class);
 
     private final IntentRecordProperties properties;
     private final IntentRecognitionRecordRepository repository;

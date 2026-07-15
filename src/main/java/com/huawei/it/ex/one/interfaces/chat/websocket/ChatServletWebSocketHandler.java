@@ -12,8 +12,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -35,7 +35,7 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 @ConditionalOnClass(name = "org.springframework.web.servlet.DispatcherServlet")
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class ChatServletWebSocketHandler extends TextWebSocketHandler {
-    private static final Logger log = LoggerFactory.getLogger(ChatServletWebSocketHandler.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(ChatServletWebSocketHandler.class);
 
     private final ChatWebSocketProtocolService protocolService;
     private final ObjectMapper objectMapper;

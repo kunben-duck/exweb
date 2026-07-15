@@ -32,8 +32,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.ObjectProvider;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -47,7 +47,7 @@ import reactor.core.scheduler.Schedulers;
  */
 @Service
 public class SessionApplicationService implements ChatSessionFacade {
-    private static final Logger log = LoggerFactory.getLogger(SessionApplicationService.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(SessionApplicationService.class);
     private static final String STATUS_ACTIVE = "ACTIVE";
     private static final String STATUS_ARCHIVED = "ARCHIVED";
     private static final String STATUS_DELETED = "DELETED";

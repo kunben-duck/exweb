@@ -8,8 +8,8 @@ import com.huawei.it.ex.one.domain.chat.ErrorEvent;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
@@ -20,7 +20,7 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class ManualConfirmationRecoveryStrategy implements StaleRunRecoveryStrategy {
-    private static final Logger log = LoggerFactory.getLogger(ManualConfirmationRecoveryStrategy.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(ManualConfirmationRecoveryStrategy.class);
     public static final String NAME = "MANUAL_CONFIRMATION";
     static final String RUN_EXECUTOR_LOST = "RUN_EXECUTOR_LOST";
 

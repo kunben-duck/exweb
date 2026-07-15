@@ -25,8 +25,8 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
@@ -38,7 +38,7 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class RouteMemoryApplicationService {
-    private static final Logger log = LoggerFactory.getLogger(RouteMemoryApplicationService.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(RouteMemoryApplicationService.class);
 
     public static final String TRIGGER_FIRST_TURN = "first_turn";
     public static final String TRIGGER_DOMAIN_REJECT = "domain_reject";

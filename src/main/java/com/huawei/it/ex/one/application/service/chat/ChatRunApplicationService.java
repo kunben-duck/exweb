@@ -26,8 +26,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -40,7 +40,7 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class ChatRunApplicationService {
-    private static final Logger log = LoggerFactory.getLogger(ChatRunApplicationService.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(ChatRunApplicationService.class);
     private static final String SESSION_STATUS_ACTIVE = "ACTIVE";
     private static final String SESSION_STATUS_DELETED = "DELETED";
 

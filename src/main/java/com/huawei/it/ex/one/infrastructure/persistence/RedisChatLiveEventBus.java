@@ -23,8 +23,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.connection.Message;
@@ -47,7 +47,7 @@ import reactor.util.concurrent.Queues;
  */
 @Component
 public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener {
-    private static final Logger log = LoggerFactory.getLogger(RedisChatLiveEventBus.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(RedisChatLiveEventBus.class);
 
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;

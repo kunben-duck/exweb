@@ -10,8 +10,8 @@ import com.huawei.it.ex.one.domain.chat.ChatRunExecution;
 import com.huawei.it.ex.one.domain.chat.ChatRunExecutionStatus;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import java.time.Instant;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -23,7 +23,7 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class ChatRunLeaseApplicationService {
-    private static final Logger log = LoggerFactory.getLogger(ChatRunLeaseApplicationService.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(ChatRunLeaseApplicationService.class);
 
     private final ChatRunExecutionRepository executionRepository;
     private final ApplicationInstanceIdProvider instanceIdProvider;

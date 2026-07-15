@@ -26,8 +26,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -56,7 +56,7 @@ import reactor.netty.http.client.HttpClient;
 @EnableConfigurationProperties({RelayAgentProperties.class, AgentRuntimeForwardCookieProperties.class})
 @ConditionalOnProperty(prefix = "financeex.agent-runtime.relay", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter {
-    private static final Logger log = LoggerFactory.getLogger(RelayWebSocketRuntimeAdapter.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(RelayWebSocketRuntimeAdapter.class);
 
     private final ObjectMapper objectMapper;
     private final RelayAgentProperties properties;

@@ -10,8 +10,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Repository;
@@ -28,7 +28,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 @Repository
 @EnableConfigurationProperties(ShortTermMemoryStorageProperties.class)
 public class LayeredChatMessageRepository implements ChatMessageRepository {
-    private static final Logger log = LoggerFactory.getLogger(LayeredChatMessageRepository.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(LayeredChatMessageRepository.class);
 
     private final RedisShortTermMemoryCache redisCache;
     private final MyBatisChatMessageStore databaseStore;

@@ -15,8 +15,8 @@ import com.huawei.it.ex.one.domain.chat.ChatRunStopResult;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
 import java.util.Optional;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
@@ -30,7 +30,7 @@ import reactor.core.publisher.Mono;
  */
 @Service
 public class ChatRunStopCoordinator {
-    private static final Logger log = LoggerFactory.getLogger(ChatRunStopCoordinator.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(ChatRunStopCoordinator.class);
     private static final String INTERACTION_ID_METADATA = "interactionId";
     private static final String INTERACTION_ASSISTANT_MESSAGE_ID_METADATA = "interactionAssistantMessageId";
     private static final String USER_STOP_PARTIAL_ASSISTANT_METADATA =

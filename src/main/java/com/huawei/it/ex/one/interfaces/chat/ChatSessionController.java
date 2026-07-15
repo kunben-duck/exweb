@@ -41,8 +41,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -65,7 +65,7 @@ import reactor.core.scheduler.Schedulers;
 @RequestMapping("/v1/chat/sessions")
 @Validated
 public class ChatSessionController {
-    private static final Logger log = LoggerFactory.getLogger(ChatSessionController.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(ChatSessionController.class);
     private static final String ASSISTANT_ROLE = "assistant";
 
     private final ChatSessionFacade facade;

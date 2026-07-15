@@ -5,8 +5,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -19,7 +19,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class ChatRunWatchdogScheduler {
-    private static final Logger log = LoggerFactory.getLogger(ChatRunWatchdogScheduler.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(ChatRunWatchdogScheduler.class);
 
     private final ChatRunOperationalProperties properties;
     private final ChatRunRecoveryOrchestrator recoveryOrchestrator;

@@ -16,8 +16,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,7 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class ChatInteractionApplicationService {
-    private static final Logger log = LoggerFactory.getLogger(ChatInteractionApplicationService.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(ChatInteractionApplicationService.class);
 
     private final ChatInteractionRequestRepository repository;
     private final IdGenerator idGenerator;

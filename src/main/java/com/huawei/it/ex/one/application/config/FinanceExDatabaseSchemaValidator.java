@@ -6,8 +6,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -20,7 +20,7 @@ public class FinanceExDatabaseSchemaValidator implements SmartInitializingSingle
     static final String ACTIVE_RUN_TABLE = "fin_ex_chat_run_t";
     static final String ACTIVE_RUN_INDEX = "uk_fin_ex_chat_run_active_session";
 
-    private static final Logger log = LoggerFactory.getLogger(FinanceExDatabaseSchemaValidator.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(FinanceExDatabaseSchemaValidator.class);
     private static final Pattern ACTIVE_RUN_COLUMNS = Pattern.compile(
             "\\(\\s*tenant_id\\s*,\\s*user_id\\s*,\\s*session_id\\s*\\)", Pattern.CASE_INSENSITIVE);
     private static final Pattern QUOTED_LITERAL = Pattern.compile("'([^']*)'");

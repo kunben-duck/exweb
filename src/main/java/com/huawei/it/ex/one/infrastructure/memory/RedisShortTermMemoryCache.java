@@ -8,8 +8,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.RedisSystemException;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -23,7 +23,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class RedisShortTermMemoryCache {
-    private static final Logger log = LoggerFactory.getLogger(RedisShortTermMemoryCache.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(RedisShortTermMemoryCache.class);
 
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;

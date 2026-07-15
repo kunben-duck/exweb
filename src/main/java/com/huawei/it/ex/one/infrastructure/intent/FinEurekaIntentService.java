@@ -11,8 +11,8 @@ import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
@@ -27,7 +27,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 @Component
 @EnableConfigurationProperties(IntentServiceHttpProperties.class)
 public class FinEurekaIntentService implements IntentService {
-    private static final Logger log = LoggerFactory.getLogger(FinEurekaIntentService.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(FinEurekaIntentService.class);
 
     private final WebClient webClient;
     private final IntentServiceHttpProperties properties;

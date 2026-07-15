@@ -13,8 +13,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
@@ -30,7 +30,7 @@ import reactor.core.scheduler.Schedulers;
 @Component
 @ConditionalOnProperty(prefix = "financeex.intent", name = "enabled", havingValue = "true")
 public class BlockingIntentAgentRuntime implements IntentAgentRuntime {
-    private static final Logger log = LoggerFactory.getLogger(BlockingIntentAgentRuntime.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(BlockingIntentAgentRuntime.class);
 
     private final IntentService intentService;
 

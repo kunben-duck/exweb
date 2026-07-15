@@ -7,8 +7,8 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.infrastructure.redis.FinanceExRedisKeyBuilder;
 import java.util.Optional;
 import java.util.Set;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -23,7 +23,7 @@ import org.springframework.stereotype.Component;
 @Component
 @EnableConfigurationProperties(RuntimeBindingProperties.class)
 public class RedisRuntimeBindingCache implements RuntimeBindingCache {
-    private static final Logger log = LoggerFactory.getLogger(RedisRuntimeBindingCache.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(RedisRuntimeBindingCache.class);
 
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;

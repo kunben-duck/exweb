@@ -9,8 +9,8 @@ import com.huawei.it.ex.one.domain.chat.ChatRunCancelSignal;
 import com.huawei.it.ex.one.infrastructure.redis.FinanceExRedisKeyBuilder;
 import java.time.Duration;
 import java.util.Optional;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -23,7 +23,7 @@ import org.springframework.stereotype.Component;
 @Component
 @EnableConfigurationProperties(ChatRunCacheProperties.class)
 public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
-    private static final Logger log = LoggerFactory.getLogger(RedisChatRunCache.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(RedisChatRunCache.class);
 
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;

@@ -24,8 +24,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -37,7 +37,7 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class ChatRunRecoveryOrchestrator {
-    private static final Logger log = LoggerFactory.getLogger(ChatRunRecoveryOrchestrator.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(ChatRunRecoveryOrchestrator.class);
 
     private final ChatRunExecutionRepository executionRepository;
     private final ChatRunRepository runRepository;

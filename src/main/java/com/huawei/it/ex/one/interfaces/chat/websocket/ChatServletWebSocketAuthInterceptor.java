@@ -4,8 +4,8 @@ import com.huawei.it.ex.one.application.integration.identity.AuthContextProvider
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import java.util.Map;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.http.HttpStatus;
@@ -26,7 +26,7 @@ import org.springframework.web.socket.server.HandshakeInterceptor;
 @ConditionalOnClass(name = "org.springframework.web.servlet.DispatcherServlet")
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class ChatServletWebSocketAuthInterceptor implements HandshakeInterceptor {
-    private static final Logger log = LoggerFactory.getLogger(ChatServletWebSocketAuthInterceptor.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(ChatServletWebSocketAuthInterceptor.class);
 
     private final AuthContextProvider auth;
     private final PermissionChecker permissionChecker;

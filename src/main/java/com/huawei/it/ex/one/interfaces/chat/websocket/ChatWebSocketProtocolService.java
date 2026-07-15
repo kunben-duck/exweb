@@ -15,8 +15,8 @@ import com.huawei.it.ex.one.interfaces.chat.dto.ChatWebSocketEnvelopeDto;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
@@ -33,7 +33,7 @@ import reactor.core.scheduler.Schedulers;
  */
 @Component
 public class ChatWebSocketProtocolService {
-    private static final Logger log = LoggerFactory.getLogger(ChatWebSocketProtocolService.class);
+    private static final AppLogger log = AppLoggerFactory.getLogger(ChatWebSocketProtocolService.class);
 
     private final PermissionChecker permissionChecker;
     private final ChatStreamApplicationService chatStreamService;

@@ -118,6 +118,30 @@ class RouteMemoryApplicationServiceTest {
     }
 
     @Test
+    void relayRouteCanonicalizesRawIntentValuesAtPersistenceBoundary() {
+        IntentDecision rawRelayIntent = new IntentDecision("RELAY", "NO_MATCH", TaskComplexity.COMPLEX, 0.0,
+                false, null, Map.of("routeAction", "NO_MATCH"), List.of(), Map.of());
+
+        service.recordRouteDecision(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                user, "session-uppercase", "run-uppercase", "未命中的问题",
+                rawRelayIntent,
+                RouteTarget.agentRuntime("intent-agent", 0.0, "route to relay")));
+
+        RouteMemoryItem route = repository.items.stream()
+                .filter(item -> item.itemType() == RouteMemoryItemType.ROUTE)
+                .findFirst()
+                .orElseThrow();
+        assertThat(route.intentId()).isEqualTo("relay");
+        assertThat(route.intentName()).isEqualTo("no_match");
+        assertThat(route.payload())
+                .containsEntry("intentCode", "RELAY")
+                .containsEntry("intentName", "NO_MATCH");
+
+        repository.markRunCompleted("run-uppercase");
+        assertThat(service.latestRouteIsRelayFallback(user, "session-uppercase")).isTrue();
+    }
+
+    @Test
     void noMatchRouteUsesDedicatedIntentHistoryShape() {
         IntentDecision noMatchIntent = new IntentDecision("relay", "no_match", TaskComplexity.COMPLEX, 0.0,
                 false, null, Map.of("routeAction", "NO_MATCH"), List.of(), Map.of());
@@ -296,8 +320,8 @@ class RouteMemoryApplicationServiceTest {
                     .findFirst()
                     .filter(item -> completedRunIds.contains(item.sourceRunId()))
                     .filter(item -> item.domainAgentId() == null)
-                    .map(item -> "relay".equalsIgnoreCase(item.intentId())
-                            || "no_match".equalsIgnoreCase(item.intentName()))
+                    .map(item -> "relay".equals(item.intentId())
+                            || "no_match".equals(item.intentName()))
                     .orElse(false);
         }
 

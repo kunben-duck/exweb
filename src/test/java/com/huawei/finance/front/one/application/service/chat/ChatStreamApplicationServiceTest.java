@@ -1,6 +1,7 @@
 package com.huawei.finance.front.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.finance.front.one.application.integration.conversation.ChatEventStore;
 import com.huawei.finance.front.one.application.integration.conversation.ChatLiveEventBus;
@@ -24,9 +25,67 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 class ChatStreamApplicationServiceTest {
+    @Test
+    void publishPersistedStillAttemptsLiveBusWhenLocalPublishThrows() {
+        AtomicInteger liveCalls = new AtomicInteger();
+        LocalChatEventStreamRegistry failingRegistry = new LocalChatEventStreamRegistry() {
+            @Override
+            public void publish(ChatEvent event) {
+                throw new IllegalStateException("local publish down");
+            }
+        };
+        ChatLiveEventBus liveBus = new ChatLiveEventBus() {
+            @Override
+            public void publish(String topicId, ChatEvent event) {
+                liveCalls.incrementAndGet();
+            }
+
+            @Override
+            public Flux<ChatEvent> subscribe(String topicId) {
+                return Flux.never();
+            }
+        };
+        ChatStreamApplicationService service = service(failingRegistry, liveBus);
+
+        assertThatThrownBy(() -> service.publishPersisted(stored(1L, "hello")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("本机聊天事件发布失败");
+        assertThat(liveCalls).hasValue(1);
+    }
+
+    @Test
+    void publishPersistedAttemptsLocalBeforePropagatingLiveBusFailure() {
+        AtomicInteger localCalls = new AtomicInteger();
+        LocalChatEventStreamRegistry registry = new LocalChatEventStreamRegistry() {
+            @Override
+            public void publish(ChatEvent event) {
+                localCalls.incrementAndGet();
+            }
+        };
+        ChatLiveEventBus failingLiveBus = new ChatLiveEventBus() {
+            @Override
+            public void publish(String topicId, ChatEvent event) {
+                throw new IllegalStateException("live publish down");
+            }
+
+            @Override
+            public Flux<ChatEvent> subscribe(String topicId) {
+                return Flux.never();
+            }
+        };
+        ChatStreamApplicationService service = service(registry, failingLiveBus);
+
+        assertThatThrownBy(() -> service.publishPersisted(stored(1L, "hello")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("跨实例聊天事件发布失败");
+        assertThat(localCalls).hasValue(1);
+    }
+
     @Test
     void appendAssignsSeqAndResumeSessionReplaysOnlyPersistedEvents() {
         InMemoryChatEventStore store = new InMemoryChatEventStore();
@@ -503,6 +562,18 @@ class ChatStreamApplicationServiceTest {
         return new ChatRun(runId, tenantId, userId, "session1", ChatRunStatus.RUNNING,
                 "AGENT_RUNTIME", null, "relay", null, null, null, null,
                 now, null, Map.of(), now, now);
+    }
+
+    private ChatStreamApplicationService service(LocalChatEventStreamRegistry registry,
+                                                 ChatLiveEventBus liveEventBus) {
+        return new ChatStreamApplicationService(
+                new InMemoryChatEventStore(),
+                registry,
+                liveEventBus,
+                new InMemoryRunRepository(),
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                new com.huawei.finance.front.one.application.config.ChatWebSocketProperties());
     }
 
     private UserContext user() {

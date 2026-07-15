@@ -962,6 +962,65 @@ class FinanceEXChatServiceTest {
     }
 
     @Test
+    void committedBatchPublishesEveryStoredEventBeforePostProcessingFailureClosesRun() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        FailingSecondStreamingObservationRunRepository runs =
+                new FailingSecondStreamingObservationRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        AgentRuntime runtime = new AgentRuntime() {
+            @Override
+            public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                return Flux.just(
+                        RuntimeEvent.progress(request.runId(), request.sessionId(), Map.of(
+                                "source", "relay", "sourceType", "progress-1", "message", "one")),
+                        RuntimeEvent.progress(request.runId(), request.sessionId(), Map.of(
+                                "source", "relay", "sourceType", "progress-2", "message", "two")),
+                        RuntimeEvent.progress(request.runId(), request.sessionId(), Map.of(
+                                "source", "relay", "sourceType", "progress-3", "message", "three")),
+                        com.huawei.finance.front.one.domain.chat.MessageCompletedEvent.of(
+                                request.runId(), request.sessionId()));
+            }
+
+            @Override
+            public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = financeServiceWithTerminalCommit(
+                sessions, messages, runs, events, runtimeRouteService(), runtime);
+        com.huawei.finance.front.one.application.config.ChatStreamProperties batchProperties =
+                new com.huawei.finance.front.one.application.config.ChatStreamProperties();
+        service.setChatEventBatcher(new ChatEventBatcher(batchProperties, new ObjectMapper()));
+
+        StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
+                        null, null, "web", "hello", List.of(), Map.of())).collectList())
+                .assertNext(stream -> {
+                    assertThat(stream).extracting(ChatEvent::type)
+                            .containsSubsequence("run.started", "runtime.progress", "runtime.progress",
+                                    "runtime.progress", "run.failed")
+                            .doesNotContain("run.completed");
+                    assertThat(stream).filteredOn(event -> "runtime.progress".equals(event.type()))
+                            .extracting(event -> event.payload().get("sourceType"))
+                            .contains("progress-1", "progress-2", "progress-3");
+                })
+                .verifyComplete();
+
+        assertThat(events.events).filteredOn(event -> "runtime.progress".equals(event.type()))
+                .extracting(event -> event.payload().get("sourceType"))
+                .contains("progress-1", "progress-2", "progress-3");
+        String failedRunId = events.events.stream()
+                .filter(event -> "run.failed".equals(event.type()))
+                .map(ChatEvent::runId)
+                .findFirst()
+                .orElseThrow();
+        assertThat(runs.findById(failedRunId)).get()
+                .extracting(ChatRun::status)
+                .isEqualTo(ChatRunStatus.FAILED);
+    }
+
+    @Test
     void intentFailureStrategyFailRunEndsWithoutCallingRuntimeOrSavingAssistant() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
@@ -4557,6 +4616,21 @@ class FinanceEXChatServiceTest {
             if (run != null && run.status() == ChatRunStatus.RUNNING && run.routeType() != null
                     && run.firstSeq() != null) {
                 throw new IllegalStateException("route diagnostic db down");
+            }
+            return super.save(run);
+        }
+    }
+
+    private static final class FailingSecondStreamingObservationRunRepository extends InMemoryRunRepository {
+        private final AtomicInteger streamingObservationSaves = new AtomicInteger();
+
+        @Override
+        public ChatRun save(ChatRun run) {
+            if (run != null && run.status() == ChatRunStatus.RUNNING
+                    && run.firstSeq() != null && run.lastSeq() != null
+                    && run.lastSeq() > run.firstSeq()
+                    && streamingObservationSaves.incrementAndGet() == 2) {
+                throw new IllegalStateException("run observation db down");
             }
             return super.save(run);
         }

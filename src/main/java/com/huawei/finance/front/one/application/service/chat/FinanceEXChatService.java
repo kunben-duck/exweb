@@ -1904,6 +1904,16 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                         runId, ex.getMessage());
                                 return Flux.empty();
                             })
+                            .onErrorResume(CommittedBatchPostProcessingException.class, ex -> {
+                                log.warn("Committed chat event batch post-processing failed. runId={}, reason={}",
+                                        runId, ex.getMessage());
+                                if (terminalCommitService == null) {
+                                    return Flux.error(ex);
+                                }
+                                ChatEvent failed = commitTerminalFailure(context, ex);
+                                writeRejected.set(true);
+                                return Flux.just(failed);
+                            })
                             .onErrorResume(RuntimeException.class, ex -> {
                                 rejectPersistenceAcknowledgements(batch.events(), ex);
                                 if (containsEventType(batch.events(), "run.failed") || terminalCommitService == null) {
@@ -1926,29 +1936,59 @@ public class FinanceEXChatService implements FinanceChatFacade {
         }
         return Mono.fromCallable(() -> persistAndPublishOrdinaryEventBatch(batch.events(), context))
                 .subscribeOn(eventIoScheduler)
-                .flatMapMany(Flux::fromIterable);
+                .flatMapMany(result -> {
+                    Flux<ChatEvent> persisted = Flux.fromIterable(result.events());
+                    return result.failure() == null
+                            ? persisted
+                            : persisted.concatWith(Mono.error(result.failure()));
+                });
     }
 
-    private List<ChatEvent> persistAndPublishOrdinaryEventBatch(List<ChatEvent> events,
-                                                                RunEventPipelineContext context) {
+    private CommittedEventBatch persistAndPublishOrdinaryEventBatch(List<ChatEvent> events,
+                                                                    RunEventPipelineContext context) {
         List<ChatEvent> storedEvents = chatStreamService.appendBatchWithExecutionGuard(
                 events, context.executionClaim());
         if (storedEvents.size() != events.size()) {
             throw new IllegalStateException("聊天事件批量写入结果数量不一致: expected=" + events.size()
                     + ", actual=" + storedEvents.size());
         }
+        events.forEach(this::acknowledgePersistence);
+        CommittedBatchPostProcessingException failure = null;
         for (int index = 0; index < storedEvents.size(); index++) {
-            ChatEvent source = events.get(index);
             ChatEvent stored = storedEvents.get(index);
-            context.assistant().observe(stored);
-            rememberPendingInteractionRequest(stored, context);
-            chatRunService.observeEvent(stored);
-            context.bindingRef().set(runtimeBindingService.observeEvent(context.bindingRef().get(), stored));
-            chatStreamService.publishPersisted(stored);
-            recordRouteMemoryAfterCommitted(stored, context);
-            acknowledgePersistence(source);
+            failure = attemptCommittedBatchOperation(failure, "assistant.observe", stored,
+                    () -> context.assistant().observe(stored));
+            failure = attemptCommittedBatchOperation(failure, "interaction.observe", stored,
+                    () -> rememberPendingInteractionRequest(stored, context));
+            failure = attemptCommittedBatchOperation(failure, "run.observe", stored,
+                    () -> chatRunService.observeEvent(stored));
+            failure = attemptCommittedBatchOperation(failure, "binding.observe", stored, () ->
+                    context.bindingRef().set(runtimeBindingService.observeEvent(context.bindingRef().get(), stored)));
+            failure = attemptCommittedBatchOperation(failure, "route-memory.observe", stored,
+                    () -> recordRouteMemoryAfterCommitted(stored, context));
+            failure = attemptCommittedBatchOperation(failure, "stream.publish", stored,
+                    () -> chatStreamService.publishPersisted(stored));
         }
-        return storedEvents;
+        return new CommittedEventBatch(storedEvents, failure);
+    }
+
+    private CommittedBatchPostProcessingException attemptCommittedBatchOperation(
+            CommittedBatchPostProcessingException failure,
+            String operation,
+            ChatEvent event,
+            Runnable action) {
+        try {
+            action.run();
+            return failure;
+        } catch (RuntimeException ex) {
+            log.warn("Committed chat event post-processing step failed. runId={}, sequence={}, type={}, operation={}, reason={}",
+                    event.runId(), event.sequence(), event.type(), operation, ex.getMessage());
+            if (failure == null) {
+                return new CommittedBatchPostProcessingException(event, operation, ex);
+            }
+            failure.addSuppressed(ex);
+            return failure;
+        }
     }
 
     private boolean batchableRuntimeEvent(ChatEvent event, RunEventPipelineContext context) {
@@ -3356,6 +3396,26 @@ public class FinanceEXChatService implements FinanceChatFacade {
             RuntimeBinding binding,
             DomainAgentRefusal refusal
     ) {
+    }
+
+    private record CommittedEventBatch(
+            List<ChatEvent> events,
+            CommittedBatchPostProcessingException failure
+    ) {
+        private CommittedEventBatch {
+            events = events == null ? List.of() : List.copyOf(events);
+        }
+    }
+
+    private static final class CommittedBatchPostProcessingException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        private CommittedBatchPostProcessingException(ChatEvent event, String operation, RuntimeException cause) {
+            super("聊天事件批次已落库，但提交后处理失败: runId=" + event.runId()
+                    + ", sequence=" + event.sequence()
+                    + ", type=" + event.type()
+                    + ", operation=" + operation, cause);
+        }
     }
 
     private record PersistenceAcknowledgedEvent(

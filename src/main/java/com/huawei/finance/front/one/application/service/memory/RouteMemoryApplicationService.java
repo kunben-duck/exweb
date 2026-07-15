@@ -422,21 +422,21 @@ public class RouteMemoryApplicationService {
     }
 
     private String routeIntentId(IntentDecision intent, RouteTarget route) {
-        if (intent != null && !blank(intent.intentCode())) {
-            return intent.intentCode();
-        }
         if (route != null && route.type() == com.huawei.finance.front.one.domain.routing.RouteType.AGENT_RUNTIME) {
             return "relay";
+        }
+        if (intent != null && !blank(intent.intentCode())) {
+            return intent.intentCode();
         }
         return route == null ? null : route.selectedAgentCode();
     }
 
     private String routeIntentName(IntentDecision intent, RouteTarget route) {
-        if (intent != null && !blank(intent.intentName())) {
-            return intent.intentName();
-        }
         if (route != null && route.type() == com.huawei.finance.front.one.domain.routing.RouteType.AGENT_RUNTIME) {
             return "no_match";
+        }
+        if (intent != null && !blank(intent.intentName())) {
+            return intent.intentName();
         }
         return route == null ? null : route.selectedAgentCode();
     }

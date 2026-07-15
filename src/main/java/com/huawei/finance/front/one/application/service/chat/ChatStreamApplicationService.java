@@ -154,9 +154,31 @@ public class ChatStreamApplicationService {
      * @param persisted 已持久化并带有 seq 的事件。
      */
     public void publishPersisted(ChatEvent persisted) {
-        registry.publish(persisted);
+        RuntimeException publishFailure = null;
+        try {
+            registry.publish(persisted);
+        } catch (RuntimeException ex) {
+            publishFailure = new IllegalStateException("本机聊天事件发布失败: runId=" + persisted.runId()
+                    + ", sequence=" + persisted.sequence(), ex);
+            log.warn("Local persisted chat event publish failed. runId={}, sessionId={}, sequence={}, reason={}",
+                    persisted.runId(), persisted.sessionId(), persisted.sequence(), ex.getMessage());
+        }
         if (persisted.runId() != null && !persisted.runId().isBlank()) {
-            liveEventBus.publish(ChatStreamTopics.runTopic(persisted.runId()), persisted);
+            try {
+                liveEventBus.publish(ChatStreamTopics.runTopic(persisted.runId()), persisted);
+            } catch (RuntimeException ex) {
+                log.warn("Live bus persisted chat event publish failed. runId={}, sessionId={}, sequence={}, reason={}",
+                        persisted.runId(), persisted.sessionId(), persisted.sequence(), ex.getMessage());
+                if (publishFailure == null) {
+                    publishFailure = new IllegalStateException("跨实例聊天事件发布失败: runId=" + persisted.runId()
+                            + ", sequence=" + persisted.sequence(), ex);
+                } else {
+                    publishFailure.addSuppressed(ex);
+                }
+            }
+        }
+        if (publishFailure != null) {
+            throw publishFailure;
         }
     }
 

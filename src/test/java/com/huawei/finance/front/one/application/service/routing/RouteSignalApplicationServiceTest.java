@@ -11,6 +11,7 @@ import com.huawei.finance.front.one.application.integration.usecase.UseCaseLibra
 import com.huawei.finance.front.one.application.integration.usecase.UseCaseMatchRequest;
 import com.huawei.finance.front.one.application.service.memory.RouteMemoryApplicationService;
 import com.huawei.finance.front.one.domain.auth.UserContext;
+import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatSession;
 import com.huawei.finance.front.one.domain.intent.IntentDecision;
@@ -120,6 +121,34 @@ class RouteSignalApplicationServiceTest {
         assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
         assertThat(result.route().selectedAgentCode()).isEqualTo("employee_reimbursement_agent");
         assertThat(result.intentDecision()).isNotNull();
+    }
+
+    @Test
+    void intentQueryOverridesOnlyIntentCommandMessage() {
+        AtomicReference<ChatCommand> capturedIntentCommand = new AtomicReference<>();
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                (intentCommand, intentMemory, routeUser) -> {
+                    capturedIntentCommand.set(intentCommand);
+                    return simpleDomainAgentIntent();
+                });
+        ChatCommand original = new ChatCommand("cmd-doc", "tenant1", "user1", "session1",
+                null, "web", "帮我分析这个文档。",
+                List.of(new AttachmentRef("doc1", "财务报表.pdf", "application/pdf", 1L)), Map.of());
+
+        RouteSignalResult result = service.routeInitialWithProgress(new RouteSignalRequest(
+                        "run-doc", user, session, original, original.attachments(), memory,
+                        "帮我分析这个文档。 [用户上传文档] 财务报表.pdf"))
+                .filter(RouteSignalFrame::resultFrame)
+                .map(RouteSignalFrame::result)
+                .blockLast();
+
+        assertThat(result).isNotNull();
+        assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
+        assertThat(capturedIntentCommand.get()).isNotNull();
+        assertThat(capturedIntentCommand.get().message())
+                .isEqualTo("帮我分析这个文档。 [用户上传文档] 财务报表.pdf");
+        assertThat(original.message()).isEqualTo("帮我分析这个文档。");
     }
 
     @Test

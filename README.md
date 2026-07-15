@@ -145,9 +145,12 @@ tenant/user。接入企业身份源时，只需替换该防腐层的身份读取
 `targetType=DOMAIN_AGENT` 用于前端显式选择财经领域 DomainAgent 的场景，`targetId` 为目标 DomainAgent ID。
 该路径会跳过用例库和意图服务，创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding，并调用 DomainAgent Runtime。
 所有 `runMode=NEXT` 请求都支持附件-only：当 `message` 为空或仅包含空白且至少有一个有效附件时，
-ChatService 会在附件归属和状态校验后使用可信文件名生成
-`[用户上传文档] xxx.pdf，xxx.xls`，并将该文本统一用于历史 user 消息、意图路由、RouteMemory 和
-Relay/DomainAgent query。前端传入的附件名称不参与生成；`message` 非空时保持原文，不自动追加文件名。
+ChatService 将历史 user 消息正文保存为 `""`，附件仍通过标准 `attachments[]` 返回。只有实际调用
+IntentAgent 时，服务端才使用可信文件名派生临时 query：附件-only 为
+`[用户上传文档] xxx.pdf，xxx.xls`，文本加附件为 `用户原文 [用户上传文档] xxx.pdf，xxx.xls`。
+该临时 query 不覆盖消息正文或 run metadata；DomainAgent 直连、active binding 续接以及最终
+Relay/DomainAgent 请求仍使用用户原文，附件-only 时 query 为 `""`。由 IntentAgent 形成的
+RouteMemory 使用临时 Intent query，前端直选路由仍使用用户原文。前端传入的附件名称不参与生成。
 空 message 且没有有效附件仍返回“用户消息不能为空”，`EDIT_USER` 也仍要求提供文本。
 当请求为 `runMode=NEXT` 时，该直连路径也可以从 `WAITING_USER` 会话直接发起：后端在同一个 admission
 短事务中取消会话下所有 `WAITING/RESPONDING` Interaction，再保存本轮 user 消息与 RUNNING run。旧的
@@ -308,7 +311,7 @@ export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
 RouteMemory 负责为意图服务生成 `conversationContext`：普通无绑定首次路由使用 `routeTrigger=first_turn`；DomainAgent 结构化拒答后重路由使用 `routeTrigger=domain_reject` 并携带本次 `lastIntentRejectReason`；用户提交 `INTENT_CLARIFICATION` 后使用 `routeTrigger=clarify_answer`；前端顶层传 `forceReroute=true` 时由后端转成内部用户纠正触发原因；最新 Relay/no_match 路由的来源 run 正常完成时，下一轮自动使用 `routeTrigger=fallback_followup`。`ROUTE` 表示最终目标已确定且 RuntimeBinding 已成功持久化的路由决策，不要求 Runtime 任务执行成功：后端会在调用 Relay/DomainAgent 前异步写入，后续失败、取消或 DomainAgent 拒答不会删除该事实。`history` 由最近 TopK `ROUTE` 和当前未完成 `INTENT_CLARIFICATION` 的 `CLARIFY` 链组成；精确 `NO_MATCH` 在意图请求中投影为 `type=NO_MATCH,intent=""`，不会伪装为命中意图；已有 binding 的普通续接和 Agent Interaction 续接没有产生新路由，因此不会写入 history。澄清得到最终目标时会在同一 best-effort 写任务中先折叠 clarify，再写 route；Relay 路由在数据库中仍统一记录为 `intentName=no_match,intentId=relay,targetProvider=relay` 并保留真实 `routeAction`。Relay 执行失败或取消时该 route 仍保留，但不会触发下一轮 `fallback_followup`；Relay 正常完成后仍只保留 `RESUMABLE` session，不保留 active 路由。`FAIL_RUN`、未确认候选和用户拒绝切换不写 route。RouteMemory 读写使用独立线程池，异常只降级上下文质量，不阻断 `/v1/chat/runs`。
 意图识别记录是可选旁路能力，默认关闭。开启 `FINANCEEX_INTENT_RECORD_ENABLED=true` 后，仅在本轮实际调用意图服务时异步写入 `fin_ex_intent_recognition_t`，记录用户问题、routeAction、候选 items、最终路由是否采纳以及调用耗时，便于后续准确率统计和排障。该写入使用 Servlet/MVC 友好的专用线程池，不读取请求 ThreadLocal；线程池拒绝、序列化失败或 DB 写入失败只记录 warn，不影响 `/v1/chat/runs` 主链路。DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会写意图记录。
 
-意图澄清续接时允许提交答案、附件和 metadata。附件在 Interaction claim 前按 `documentId` 校验归属、状态和真实文件名；附件-only 的 query 为 `[用户上传文档] xxx.pdf`，文本加附件为 `答案 [用户上传文档] xxx.pdf，xxx.xls`。intent-agent 只接收该文本 query 和澄清 history，不接收文档 ID、URL 或完整业务 metadata。最终目标确定后，DomainAgent/Relay 收到 `user:原问题；澄清问:...；用户:...` 形式的完整折叠问题，并使用最终一轮 metadata；服务端以整条澄清链累计的可信文档覆盖 `sceneParam.docList`。每轮澄清 user/assistant 消息属于消息树事实，user 消息的标准 `attachments` 会进入历史接口，但不会单独写 RouteMemory `ROUTE`；最终 binding 成功后才折叠澄清链并记录一次路由。
+意图澄清续接时允许提交答案、附件和 metadata。附件在 Interaction claim 前按 `documentId` 校验归属、状态和真实文件名；历史 user 消息只保存用户真实回答，附件-only 时正文为 `""`，附件通过标准 `attachments[]` 返回。仅发送给 IntentAgent 的本轮 query 会追加文件名：附件-only 为 `[用户上传文档] xxx.pdf`，文本加附件为 `答案 [用户上传文档] xxx.pdf，xxx.xls`。IntentAgent 不接收文档 ID、URL 或完整业务 metadata。最终目标确定后，DomainAgent/Relay 收到 `user:原问题；澄清问:...；用户:...` 形式的完整折叠问题，其中各轮附件以可信文件名体现，并使用最终一轮 metadata；服务端以整条澄清链累计的可信文档覆盖 `sceneParam.docList`。每轮澄清 user/assistant 消息属于消息树事实，但不会单独写 RouteMemory `ROUTE`；最终 binding 成功后才折叠澄清链并记录一次路由。
 
 WebSocket 边界如下：
 

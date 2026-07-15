@@ -12,6 +12,7 @@ import com.huawei.finance.front.one.application.integration.share.ChatShareRepos
 import com.huawei.finance.front.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.finance.front.one.application.service.security.PermissionChecker;
 import com.huawei.finance.front.one.domain.auth.UserContext;
+import com.huawei.finance.front.one.domain.chat.AttachmentRef;
 import com.huawei.finance.front.one.domain.chat.ChatCommand;
 import com.huawei.finance.front.one.domain.chat.ChatMessage;
 import com.huawei.finance.front.one.domain.chat.ChatMessageAttachment;
@@ -192,6 +193,33 @@ class SessionApplicationServiceTest {
         assertThat(activePath).extracting(ChatMessage::role).containsExactly("user", "assistant");
         assertThat(fixture.sessions.findById(fixture.session.id()).orElseThrow().currentLeafMessageId())
                 .isEqualTo(assistant.id());
+    }
+
+    @Test
+    void attachmentOnlyNextStoresEmptyUserContent() {
+        TestFixture fixture = fixture();
+        AttachmentRef attachment = new AttachmentRef("doc1", "财务报表.pdf", "application/pdf", 1L);
+        ChatCommand command = new ChatCommand("cmd", "tenant1", "user1", "session1", null, "web", "",
+                List.of(attachment), Map.of(), ChatRunMode.NEXT, null, null, null);
+
+        ChatRunMessagePlan plan = fixture.service.prepareRunMessage(
+                user(), command, fixture.session, "run1", List.of(attachment));
+
+        assertThat(plan.userMessage().content()).isEmpty();
+    }
+
+    @Test
+    void attachmentOnlyEditStillRequiresText() {
+        TestFixture fixture = fixture();
+        MessagePair original = completeTurn(fixture, "原始问题", "原始回答", "run1");
+        AttachmentRef attachment = new AttachmentRef("doc1", "财务报表.pdf", "application/pdf", 1L);
+        ChatCommand command = new ChatCommand("cmd", "tenant1", "user1", "session1", null, "web", "",
+                List.of(attachment), Map.of(), ChatRunMode.EDIT_USER, null, original.user().id(), null);
+
+        assertThatThrownBy(() -> fixture.service.prepareRunMessage(
+                user(), command, fixture.session, "run2", List.of(attachment)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("用户消息不能为空");
     }
 
     @Test

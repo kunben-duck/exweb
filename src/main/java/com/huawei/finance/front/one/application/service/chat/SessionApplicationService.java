@@ -800,9 +800,12 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     private ChatMessage createUserMessage(UserMessageCreateCommand command) {
-        if (command.content() == null || command.content().isBlank()) {
+        List<AttachmentRef> attachments = command.safeAttachments();
+        boolean attachmentOnlyNext = command.mode() == ChatRunMode.NEXT && !attachments.isEmpty();
+        if ((command.content() == null || command.content().isBlank()) && !attachmentOnlyNext) {
             throw new IllegalArgumentException("用户消息不能为空");
         }
+        String content = command.content() == null || command.content().isBlank() ? "" : command.content();
         ChatSession session = command.session();
         ChatMessage parent = command.parentMessageId() == null ? null : requireMessageInSession(session, command.parentMessageId());
         String messageId = idGenerator.newId("msg", IdGenerateContext.of(command.tenantId(), command.userId(), session.id()));
@@ -816,7 +819,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                 parent == null ? 0 : parent.treeDepth() + 1,
                 nextSiblingIndex(command.tenantId(), command.userId(), session.id(), command.parentMessageId(), "user"),
                 "user",
-                command.content(),
+                content,
                 null,
                 command.runId(),
                 "NORMAL",
@@ -829,7 +832,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                 Instant.now()
         );
         ChatMessage saved = messageRepository.save(message);
-        saveAttachments(saved, command.safeAttachments());
+        saveAttachments(saved, attachments);
         sessionRepository.updateCurrentLeaf(command.tenantId(), command.userId(), session.id(), saved.id());
         return saved;
     }

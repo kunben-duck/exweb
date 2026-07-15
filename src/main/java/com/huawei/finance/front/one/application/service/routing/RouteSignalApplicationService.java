@@ -27,6 +27,7 @@ import com.huawei.finance.front.one.domain.usecase.UseCaseMatchResult;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -115,7 +116,6 @@ public class RouteSignalApplicationService {
     }
 
     private Flux<RouteSignalFrame> routeInitialFrames(RouteSignalRequest request) {
-        String runId = request.runId();
         UserContext user = request.user();
         ChatSession session = request.session();
         ChatCommand command = request.command();
@@ -129,22 +129,27 @@ public class RouteSignalApplicationService {
                             .subscribeOn(Schedulers.boundedElastic())
                             .flatMapMany(useCaseRoute -> useCaseRoute.type() == RouteType.DOMAIN_AGENT
                                     ? Flux.just(RouteSignalFrame.result(RouteSignalResult.of(useCaseRoute)))
-                                    : intentOrFallbackFrames(runId, user, session, command, memory)));
+                                    : intentOrFallbackFrames(request)));
         }
 
-        return intentOrFallbackFrames(runId, user, session, command, memory);
+        return intentOrFallbackFrames(request);
     }
 
-    private Flux<RouteSignalFrame> intentOrFallbackFrames(String runId, UserContext user, ChatSession session, ChatCommand command,
-                                                          MemoryContext memory) {
+    private Flux<RouteSignalFrame> intentOrFallbackFrames(RouteSignalRequest request) {
+        String runId = request.runId();
+        UserContext user = request.user();
+        ChatSession session = request.session();
+        ChatCommand command = request.command();
+        MemoryContext memory = request.memory();
         if (properties.intentEnabled()) {
-            String routeTrigger = routeTrigger(user, session, command);
-            Map<String, Object> lastRejectReason = lastIntentRejectReason(command);
+            ChatCommand intentCommand = commandWithMessage(command, request.intentQuery());
+            String routeTrigger = routeTrigger(user, session, intentCommand);
+            Map<String, Object> lastRejectReason = lastIntentRejectReason(intentCommand);
             IntentRouteRequest routeRequest = new IntentRouteRequest(
-                    user, session, command, memory, routeTrigger, lastRejectReason, runId);
+                    user, session, intentCommand, memory, routeTrigger, lastRejectReason, runId);
             MemoryContext intentMemory = memoryWithRouteContext(routeRequest);
             return intentAgentRuntime.route(new IntentAgentRouteRequest(
-                            user, session, command, intentMemory, runId, routeTrigger))
+                            user, session, intentCommand, intentMemory, runId, routeTrigger))
                     .concatMap(frame -> toRouteSignalFrames(routeRequest, intentMemory, frame))
                     .onErrorResume(ex -> {
                         String reason = "intent agent stream failed: "
@@ -159,6 +164,18 @@ public class RouteSignalApplicationService {
 
         return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.agentRuntime("route-signal", 0.0,
                 "use case library and intent service disabled or not matched"))));
+    }
+
+    private ChatCommand commandWithMessage(ChatCommand command, String message) {
+        if (command == null || Objects.equals(command.message(), message)) {
+            return command;
+        }
+        return new ChatCommand(command.commandId(), command.tenantId(), command.userId(), command.sessionId(),
+                command.conversationId(), command.channel(), message, command.attachments(), command.metadata(),
+                command.targetType(), command.targetId(), command.runMode(), command.parentMessageId(),
+                command.editedMessageId(), command.regeneratedMessageId(), command.routeTrigger(),
+                command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers(),
+                command.appId(), command.appName());
     }
 
     private Flux<RouteSignalFrame> toRouteSignalFrames(IntentRouteRequest request, MemoryContext intentMemory,

@@ -125,9 +125,9 @@ class FinanceEXChatServiceTest {
         assertThat(FinanceEXChatService.clarificationAnswerWithAttachments("帮我看下这个文档", attachments))
                 .isEqualTo("帮我看下这个文档 [用户上传文档] 方案.pdf，测算.xls");
         assertThat(FinanceEXChatService.nextMessageWithAttachments(ChatRunMode.NEXT, null, attachments))
-                .isEqualTo("[用户上传文档] 方案.pdf，测算.xls");
+                .isEmpty();
         assertThat(FinanceEXChatService.nextMessageWithAttachments(ChatRunMode.NEXT, "  ", attachments))
-                .isEqualTo("[用户上传文档] 方案.pdf，测算.xls");
+                .isEmpty();
         assertThat(FinanceEXChatService.nextMessageWithAttachments(ChatRunMode.NEXT, "分析文档", attachments))
                 .isEqualTo("分析文档");
         assertThat(FinanceEXChatService.nextMessageWithAttachments(ChatRunMode.EDIT_USER, null, attachments))
@@ -2564,12 +2564,13 @@ class FinanceEXChatServiceTest {
         assertThat(events.events).filteredOn(event -> "runtime.card".equals(event.type()))
                 .anySatisfy(event -> assertThat(event.payload())
                         .containsEntry("sourceType", "intent-clarification-response")
+                        .containsEntry("answerText", "我是说账务审批的方案")
                         .doesNotContainKey("approval_id"));
         assertThat(runs.runs.values()).allSatisfy(run -> assertThat(run.status()).isNotEqualTo(ChatRunStatus.RUNNING));
         assertThat(interactionRequests.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.ANSWERED);
         ChatMessage answer = messages.messages.stream()
                 .filter(message -> "user".equals(message.role()))
-                .filter(message -> "我是说账务审批的方案 [用户上传文档] invoice.pdf".equals(message.content()))
+                .filter(message -> "我是说账务审批的方案".equals(message.content()))
                 .findFirst()
                 .orElseThrow();
         assertThat(answer.parentMessageId()).isEqualTo(waiting.assistantMessageId());
@@ -2798,13 +2799,14 @@ class FinanceEXChatServiceTest {
     }
 
     @Test
-    void attachmentOnlyNextUsesTrustedFileNameForRoutingRuntimeAndHistory() {
+    void attachmentOnlyNextUsesTrustedFileNameOnlyForIntentQuery() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
         InMemoryEventStore events = new InMemoryEventStore();
         UserContext user = new UserContext("tenant1", "user1", "User One");
         AtomicReference<ChatCommand> routedCommand = new AtomicReference<>();
+        AtomicReference<String> intentQuery = new AtomicReference<>();
         AtomicReference<AgentRuntimeRequest> runtimeRequest = new AtomicReference<>();
         RouteSignalApplicationService routeService = new RouteSignalApplicationService(
                 request -> UseCaseMatchResult.notMatched("disabled"),
@@ -2814,6 +2816,7 @@ class FinanceEXChatServiceTest {
             @Override
             public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
                 routedCommand.set(request.command());
+                intentQuery.set(request.intentQuery());
                 return Flux.just(RouteSignalFrame.result(
                         RouteSignalResult.of(RouteTarget.agentRuntime("test-runtime"))));
             }
@@ -2857,15 +2860,16 @@ class FinanceEXChatServiceTest {
                 .verifyComplete();
 
         assertThat(routedCommand.get()).isNotNull();
-        assertThat(routedCommand.get().message()).isEqualTo("[用户上传文档] invoice.pdf");
+        assertThat(routedCommand.get().message()).isEmpty();
+        assertThat(intentQuery).hasValue("[用户上传文档] invoice.pdf");
         assertThat(runtimeRequest.get()).isNotNull();
-        assertThat(runtimeRequest.get().message()).isEqualTo("[用户上传文档] invoice.pdf");
+        assertThat(runtimeRequest.get().message()).isEmpty();
         assertThat(runtimeRequest.get().attachments()).extracting(AttachmentRef::name)
                 .containsExactly("invoice.pdf");
         assertThat(messages.messages).filteredOn(message -> "user".equals(message.role()))
                 .singleElement()
                 .satisfies(message -> {
-                    assertThat(message.content()).isEqualTo("[用户上传文档] invoice.pdf");
+                    assertThat(message.content()).isEmpty();
                     assertThat(messages.attachments.stream()
                             .filter(attachment -> message.id().equals(attachment.messageId())))
                             .singleElement()
@@ -2955,7 +2959,7 @@ class FinanceEXChatServiceTest {
         assertThat(capturedHeaders.get()).isNotNull();
         assertThat(capturedHeaders.get().cookieHeader()).isEqualTo("sid=abc");
         assertThat(capturedRequest.get()).isNotNull();
-        assertThat(capturedRequest.get().query()).isEqualTo("[用户上传文档] invoice.pdf");
+        assertThat(capturedRequest.get().query()).isEmpty();
         assertThat(capturedRequest.get().documents()).extracting(UploadedDocument::id).containsExactly("doc1");
         assertThat(capturedRequest.get().metadata())
                 .containsExactlyEntriesOf(Map.of("skillId", "skill-other"));
@@ -2972,7 +2976,7 @@ class FinanceEXChatServiceTest {
         assertThat(messages.messages).filteredOn(message -> "user".equals(message.role()))
                 .singleElement()
                 .satisfies(message -> {
-                    assertThat(message.content()).isEqualTo("[用户上传文档] invoice.pdf");
+                    assertThat(message.content()).isEmpty();
                     assertThat(messages.attachments.stream()
                             .filter(attachment -> message.id().equals(attachment.messageId())))
                             .singleElement()
@@ -3003,7 +3007,7 @@ class FinanceEXChatServiceTest {
                 .expectNextMatches(event -> "run.completed".equals(event.type()))
                 .verifyComplete();
 
-        assertThat(capturedRequest.get().query()).isEqualTo("[用户上传文档] invoice.pdf");
+        assertThat(capturedRequest.get().query()).isEmpty();
         assertThat(capturedRequest.get().documents()).extracting(UploadedDocument::id).containsExactly("doc2");
         assertThat(messages.parts.stream()
                 .filter(part -> "METADATA".equals(part.partType()))
@@ -3201,9 +3205,11 @@ class FinanceEXChatServiceTest {
         InMemoryEventStore events = new InMemoryEventStore();
         CapturingRouteMemoryService routeMemory = new CapturingRouteMemoryService();
         AtomicBoolean recordedBeforeRuntime = new AtomicBoolean();
+        AtomicReference<AgentRuntimeRequest> runtimeRequest = new AtomicReference<>();
         AgentRuntime runtime = new AgentRuntime() {
             @Override
             public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                runtimeRequest.set(request);
                 recordedBeforeRuntime.set(routeMemory.routeDecisions.size() == 1);
                 return Flux.error(new IllegalStateException("relay failed after route binding"));
             }
@@ -3235,18 +3241,29 @@ class FinanceEXChatServiceTest {
 
         StepVerifier.create(service.executeRun(user, new ChatCommand(
                         "cmd-route-failure", null, null, null, null, "web",
-                        "需要处理一个复杂任务", List.of(), Map.of())).collectList())
+                        "需要处理一个复杂任务",
+                        List.of(new AttachmentRef("doc1", "forged-name.txt", "text/plain", 1L)),
+                        Map.of())).collectList())
                 .assertNext(stream -> assertThat(stream).extracting(ChatEvent::type)
                         .contains("run.started", "run.failed"))
                 .verifyComplete();
 
         assertThat(recordedBeforeRuntime).isTrue();
+        assertThat(runtimeRequest.get().message()).isEqualTo("需要处理一个复杂任务");
         assertThat(routeMemory.routeDecisions).singleElement().satisfies(command -> {
-            assertThat(command.query()).isEqualTo("需要处理一个复杂任务");
+            assertThat(command.query())
+                    .isEqualTo("需要处理一个复杂任务 [用户上传文档] invoice.pdf");
             assertThat(command.intent().intentCode()).isEqualTo("relay");
             assertThat(command.intent().intentName()).isEqualTo("no_match");
             assertThat(command.intent().slots()).containsEntry("routeAction", "ROUTE_MULTI");
         });
+        assertThat(messages.messages).filteredOn(message -> "user".equals(message.role()))
+                .singleElement()
+                .satisfies(message -> {
+                    assertThat(message.content()).isEqualTo("需要处理一个复杂任务");
+                    assertThat(messages.attachments).singleElement()
+                            .satisfies(attachment -> assertThat(attachment.name()).isEqualTo("invoice.pdf"));
+                });
         assertThat(runs.runs.values()).singleElement()
                 .satisfies(run -> assertThat(run.status()).isEqualTo(ChatRunStatus.FAILED));
     }

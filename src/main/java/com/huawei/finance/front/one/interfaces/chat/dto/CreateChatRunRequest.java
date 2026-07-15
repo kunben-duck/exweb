@@ -16,7 +16,7 @@ import java.util.Map;
  * @param commandId 前端命令标识，用于幂等和排障。
  * @param sessionId 前端聊天会话标识。
  * @param conversationId 前端对话标识，通常与 sessionId 一致或为空。
- * @param message 用户输入文本；NEXT 模式携带有效附件时可为空，服务端会使用可信文件名生成正文。
+ * @param message 用户输入文本；NEXT 模式携带有效附件时可为空，历史正文保持为空，仅 IntentAgent query 会追加可信文件名。
  * @param runMode 消息树写入模式，默认 NEXT；可选 EDIT_USER、REGENERATE_ASSISTANT、CONTINUE_INTERACTION。
  * @param parentMessageId NEXT 模式显式父节点；为空时使用会话 current leaf。
  * @param editedMessageId EDIT_USER 模式被编辑的 user 消息。

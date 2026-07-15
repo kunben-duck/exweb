@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 class ArchitectureNamingTest {
     @Test
     void schemaTablesUseFinExNaming() throws Exception {
-        String schema = Files.readString(Path.of("src/main/resources/db/schema.sql"));
+        String schema = Files.readString(Path.of("src/main/resources/db/init-20260718.sql"));
         Matcher matcher = Pattern.compile("CREATE TABLE IF NOT EXISTS\\s+([a-zA-Z0-9_]+)").matcher(schema);
         int count = 0;
         while (matcher.find()) {
@@ -24,7 +24,7 @@ class ArchitectureNamingTest {
 
     @Test
     void sessionSchemaDeclaresAppTagColumnsAndListIndex() throws Exception {
-        String schema = Files.readString(Path.of("src/main/resources/db/schema.sql"));
+        String schema = Files.readString(Path.of("src/main/resources/db/init-20260718.sql"));
 
         assertThat(schema)
                 .contains("app_id VARCHAR(128)")

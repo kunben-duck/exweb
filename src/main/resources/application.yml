@@ -35,7 +35,7 @@ spring:
   sql:
     init:
       mode: never
-      schema-locations: classpath:db/schema.sql
+      schema-locations: classpath:db/init-20260718.sql
 management:
   health:
     db:

@@ -29,7 +29,7 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `application.integration`：应用层出站集成抽象，定义对 Relay Runtime、DomainAgent、IntentService、用例库、会话、记忆、文档、ID 和身份能力的依赖边界。
 - `domain`：聊天事件、意图结果、路由结果、RuntimeBinding、用例匹配结果等核心模型。
 - `infrastructure`：Redis、数据库/MyBatis、用例库 HTTP、DomainAgent HTTP、Relay Runtime WebSocket、DocumentProvider 和对象存储等适配。
-- MyBatis Mapper 接口只保留方法签名，当前 openGauss SQL 统一维护在 `src/main/resources/mapper/**/*.opengauss.xml`；`db/schema.sql` 只保留 DDL。后续适配其他数据库时，通过切换 `mybatis.mapper-locations` 选择对应方言 XML。
+- MyBatis Mapper 接口只保留方法签名，当前 openGauss SQL 统一维护在 `src/main/resources/mapper/**/*.opengauss.xml`；`db/init-20260718.sql` 只保留 DDL。后续适配其他数据库时，通过切换 `mybatis.mapper-locations` 选择对应方言 XML。
 
 ## 前端接入协议
 
@@ -461,15 +461,15 @@ HTTP 错误/提示响应统一为 `{timestamp,path,status,error,code,message}`�
 
 ## 启动
 
-本地没有数据库/Redis 时，可以先启动 Docker 依赖。`docker-compose.yml` 使用 PostgreSQL 兼容容器做本地联调；生产环境必须显式配置数据库、Redis、WebSocket Origin、存储方式和启用集成的 endpoint，DDL 统一维护在 `src/main/resources/db/schema.sql`：
+本地没有数据库/Redis 时，可以先启动 Docker 依赖。`docker-compose.yml` 使用 PostgreSQL 兼容容器做本地联调；生产环境必须显式配置数据库、Redis、WebSocket Origin、存储方式和启用集成的 endpoint，DDL 统一维护在 `src/main/resources/db/init-20260718.sql`：
 
-主配置保持 `spring.sql.init.mode=never`，首次部署必须先完整执行 `schema.sql`。应用启动时会校验同一会话 active run 唯一索引；建库脚本遗漏或索引定义不正确时直接拒绝启动，避免生产环境在 Redis 异常或跨实例并发下产生重复 active run。
+主配置保持 `spring.sql.init.mode=never`，首次部署必须先完整执行 `init-20260718.sql`。应用启动时会校验同一会话 active run 唯一索引；建库脚本遗漏或索引定义不正确时直接拒绝启动，避免生产环境在 Redis 异常或跨实例并发下产生重复 active run。
 
 ```bash
 docker compose up -d postgres redis
 ```
 
-数据库容器会创建 `financeex` 数据库和 `supervisor_dev` schema，并执行 `src/main/resources/db/schema.sql`。
+数据库容器会创建 `financeex` 数据库和 `supervisor_dev` schema，并执行 `src/main/resources/db/init-20260718.sql`。
 
 主配置不再内置本地 Redis 地址、默认密码或本地存储兜底。Redis standalone/cluster 都必须显式配置；生产 Redis Cluster 可用以下环境变量切换：
 

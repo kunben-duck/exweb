@@ -94,7 +94,7 @@ public class FinanceExDatabaseSchemaValidator implements SmartInitializingSingle
 
     private static IllegalStateException invalidSchema(String detail, RuntimeException cause) {
         String message = "FinanceEX 首次建库 schema 未完整执行: " + detail
-                + "。请使用 src/main/resources/db/schema.sql 完成建库后再启动";
+                + "。请使用 src/main/resources/db/init-20260718.sql 完成建库后再启动";
         return cause == null ? new IllegalStateException(message) : new IllegalStateException(message, cause);
     }
 }

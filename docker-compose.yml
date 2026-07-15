@@ -11,7 +11,7 @@ services:
     volumes:
       - financeex-postgres-data:/var/lib/postgresql/data
       - ./docker/postgres/init/001-init.sh:/docker-entrypoint-initdb.d/001-init.sh:ro
-      - ./src/main/resources/db/schema.sql:/schema.sql:ro
+      - ./src/main/resources/db/init-20260718.sql:/init-20260718.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U fin_supervisor -d financeex"]
       interval: 5s

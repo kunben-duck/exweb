@@ -205,7 +205,7 @@ class MyBatisXmlMapperConsistencyTest {
 
     @Test
     void chatRunAdmissionAndEventTerminalGatesShouldBeDatabaseBacked() throws IOException {
-        String schema = Files.readString(Path.of("src/main/resources/db/schema.sql"));
+        String schema = Files.readString(Path.of("src/main/resources/db/init-20260718.sql"));
         assertThat(schema)
                 .contains("CREATE UNIQUE INDEX IF NOT EXISTS uk_fin_ex_chat_run_active_session")
                 .contains("WHERE status IN ('RUNNING', 'CANCELLING')")
@@ -270,11 +270,11 @@ class MyBatisXmlMapperConsistencyTest {
 
     @Test
     void chatMessagePartTypesShouldFitSchemaColumn() throws IOException {
-        String schema = Files.readString(Path.of("src/main/resources/db/schema.sql"));
+        String schema = Files.readString(Path.of("src/main/resources/db/init-20260718.sql"));
         Matcher columnMatcher = MESSAGE_PART_TYPE_COLUMN.matcher(schema);
 
         assertThat(columnMatcher.find())
-                .as("fin_ex_chat_message_part_t.part_type column must be declared in schema.sql")
+                .as("fin_ex_chat_message_part_t.part_type column must be declared in init-20260718.sql")
                 .isTrue();
         int columnLength = Integer.parseInt(columnMatcher.group(1));
         List<String> oversizedTypes = CHAT_MESSAGE_PART_TYPES.stream()
@@ -289,7 +289,7 @@ class MyBatisXmlMapperConsistencyTest {
 
     @Test
     void chatSessionUnreadWatermarksShouldUseDedicatedUpdates() throws IOException {
-        String schema = Files.readString(Path.of("src/main/resources/db/schema.sql"));
+        String schema = Files.readString(Path.of("src/main/resources/db/init-20260718.sql"));
         assertThat(schema)
                 .contains("latest_message_seq BIGINT NOT NULL DEFAULT 0")
                 .contains("last_read_seq BIGINT NOT NULL DEFAULT 0");

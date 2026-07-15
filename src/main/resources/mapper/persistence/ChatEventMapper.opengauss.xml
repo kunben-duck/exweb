@@ -117,7 +117,8 @@
             VALUES
             <foreach collection="rows" item="row" separator=",">
                 (#{row.id}, #{row.sessionId}, #{row.runId}, #{row.seq}, #{row.eventType},
-                 #{row.payloadJson}, #{row.createdAt})
+                 #{row.payloadJson},
+                 CAST(#{row.createdAt, javaType=java.time.Instant, jdbcType=TIMESTAMP} AS TIMESTAMPTZ))
             </foreach>
         ) AS v(id, session_id, run_id, seq, event_type, payload_json, created_at)
         JOIN fin_ex_chat_session_t s

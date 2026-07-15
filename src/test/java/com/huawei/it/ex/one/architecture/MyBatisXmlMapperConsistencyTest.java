@@ -203,6 +203,7 @@ class MyBatisXmlMapperConsistencyTest {
                 .contains("<select id=\"nextSeqs\"")
                 .contains("<insert id=\"insertBatchFromSessionWithExecutionGuard\"")
                 .contains("collection=\"rows\"")
+                .contains("CAST(#{row.createdAt, javaType=java.time.Instant, jdbcType=TIMESTAMP} AS TIMESTAMPTZ)")
                 .contains("e.owner_instance_id = #{ownerInstanceId}")
                 .contains("e.fencing_token = #{fencingToken}");
 

@@ -49,8 +49,8 @@ class MyBatisChatEventStoreTest {
         assertThat(appended.sequence()).isEqualTo(42L);
         assertThat(mapper.lockOwnerInstanceId).isEqualTo("instance-1");
         assertThat(mapper.lockFencingToken).isEqualTo(7L);
-        assertThat(mapper.guardOwnerInstanceId).isEqualTo("instance-1");
-        assertThat(mapper.guardFencingToken).isEqualTo(7L);
+        assertThat(mapper.singleRow.tenantId()).isEqualTo("tenant1");
+        assertThat(mapper.singleRow.userId()).isEqualTo("user1");
     }
 
     @Test
@@ -158,17 +158,17 @@ class MyBatisChatEventStoreTest {
 
     private static class ReturningEventMapper implements ChatEventMapper {
         private int guardInsertResult = 1;
-        private Integer lockResult = 1;
+        private ChatEventAppendContextRow lockResult =
+                new ChatEventAppendContextRow("tenant1", "user1", "session1", "run1");
         private RuntimeException lockFailure;
         private int sequenceCalls;
         private int batchSequenceCalls;
         private int batchInsertCalls;
         private int lockCalls;
         private List<ChatEventWriteRow> batchRows = List.of();
+        private ChatEventWriteRow singleRow;
         private String lockOwnerInstanceId;
         private long lockFencingToken;
-        private String guardOwnerInstanceId;
-        private long guardFencingToken;
 
         @Override
         public Long nextSeq() {
@@ -183,8 +183,13 @@ class MyBatisChatEventStoreTest {
         }
 
         @Override
-        public Integer lockRunForEventAppend(String sessionId, String runId, String ownerInstanceId,
-                                             long fencingToken) {
+        public ChatEventAppendContextRow findEventAppendContext(String sessionId, String runId) {
+            return new ChatEventAppendContextRow("tenant1", "user1", sessionId, runId);
+        }
+
+        @Override
+        public ChatEventAppendContextRow lockRunForEventAppend(String sessionId, String runId,
+                                                               String ownerInstanceId, long fencingToken) {
             lockCalls++;
             if (lockFailure != null) {
                 throw lockFailure;
@@ -195,29 +200,22 @@ class MyBatisChatEventStoreTest {
         }
 
         @Override
-        public int insertFromSession(ChatEventWriteRow row) {
+        public int insert(ChatEventWriteRow row) {
+            singleRow = row;
             assertThat(row.id()).isEqualTo("event_1");
+            assertThat(row.tenantId()).isEqualTo("tenant1");
+            assertThat(row.userId()).isEqualTo("user1");
             assertThat(row.sessionId()).isEqualTo("session1");
             assertThat(row.runId()).isEqualTo("run1");
             assertThat(row.seq()).isEqualTo(42L);
             assertThat(row.eventType()).isEqualTo("message.delta");
-            return 1;
-        }
-
-        @Override
-        public int insertFromSessionWithExecutionGuard(ChatEventWriteRow row) {
-            guardOwnerInstanceId = row.ownerInstanceId();
-            guardFencingToken = row.fencingToken();
             return guardInsertResult;
         }
 
         @Override
-        public int insertBatchFromSessionWithExecutionGuard(List<ChatEventWriteRow> rows,
-                                                            String ownerInstanceId, long fencingToken) {
+        public int insertBatch(List<ChatEventWriteRow> rows) {
             batchInsertCalls++;
             batchRows = List.copyOf(rows);
-            guardOwnerInstanceId = ownerInstanceId;
-            guardFencingToken = fencingToken;
             return guardInsertResult == 0 ? 0 : rows.size();
         }
 

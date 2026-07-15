@@ -55,30 +55,33 @@
     </insert>
 
     <!--
-      continuation run 创建栅栏：watchdog 若已把 claim 退回 WAITING，迟到实例不能再创建 run。
-      入参: row 为 run 写入数据，interactionId 为当前 Interaction 标识。
+      continuation admission 先锁定会话行，统一与直连 admission 的消息树锁顺序。
+      入参: tenantId/userId/sessionId 为会话归属边界。
     -->
-    <insert id="insertInteractionContinuationIfClaimed">
-        INSERT INTO fin_ex_chat_run_t(
-            id, tenant_id, user_id, session_id, status, route_type, agent_code, runtime_provider,
-            runtime_session_id, run_mode, parent_message_id, user_message_id, assistant_message_id,
-            first_seq, last_seq, cancel_reason, started_at, finished_at,
-            metadata_json, created_at, updated_at
-        )
-        SELECT
-            #{row.id}, #{row.tenantId}, #{row.userId}, #{row.sessionId}, #{row.status},
-            #{row.routeType}, #{row.agentCode}, #{row.runtimeProvider}, #{row.runtimeSessionId},
-            #{row.runMode}, #{row.parentMessageId}, #{row.userMessageId}, #{row.assistantMessageId},
-            #{row.firstSeq}, #{row.lastSeq}, #{row.cancelReason}, #{row.startedAt}, #{row.finishedAt},
-            #{row.metadataJson}, #{row.createdAt}, #{row.updatedAt}
-        FROM fin_ex_chat_interaction_request_t i
-        WHERE i.id = #{interactionId}
-          AND i.tenant_id = #{row.tenantId}
-          AND i.user_id = #{row.userId}
-          AND i.session_id = #{row.sessionId}
-          AND i.status = 'RESPONDING'
-          AND i.continue_run_id = #{row.id}
-    </insert>
+    <select id="lockSessionForInteractionContinuation" resultType="int">
+        SELECT 1
+        FROM fin_ex_chat_session_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{sessionId}
+        FOR UPDATE
+    </select>
+
+    <!--
+      continuation run 创建栅栏：锁定并校验 Interaction claim，watchdog 回收后迟到实例不能创建 run。
+      入参: interactionId 和 tenantId/userId/sessionId 定位 Interaction，continueRunId 校验当前 claim。
+    -->
+    <select id="lockInteractionContinuationClaim" resultType="int">
+        SELECT 1
+        FROM fin_ex_chat_interaction_request_t
+        WHERE id = #{interactionId}
+          AND tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND status = 'RESPONDING'
+          AND continue_run_id = #{continueRunId}
+        FOR UPDATE
+    </select>
 
     <!--
       更新 run 状态和关联消息；CANCELLING/终态保护避免取消中的 run 或已闭合 run 被迟到快照覆盖。

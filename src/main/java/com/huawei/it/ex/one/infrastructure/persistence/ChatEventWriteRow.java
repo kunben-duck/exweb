@@ -7,13 +7,13 @@ import java.time.Instant;
  */
 record ChatEventWriteRow(
         String id,
+        String tenantId,
+        String userId,
         String sessionId,
         String runId,
         long seq,
         String eventType,
         String payloadJson,
-        Instant createdAt,
-        String ownerInstanceId,
-        long fencingToken
+        Instant createdAt
 ) {
 }

@@ -357,14 +357,14 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
 3. `ChatRunApplicationService#shouldAcceptEvent(...)`
    - 先看 Redis cancel flag。
    - `run.cancelled` 和 run 终态会回源 run 表做幂等状态判断。
-   - 运行中的 `message.delta/message.completed` 不再逐条查 run 表；最终写入正确性由 guarded insert 的 run 状态与 execution fencing 条件保证。
+   - 运行中的 `message.delta/message.completed` 由事件仓储的 run/execution 共享行栅栏校验状态与 fencing，栅栏持有到后续 `VALUES` 写入提交。
 
 4. `ChatStreamApplicationService#appendWithExecutionGuard(...)`
    - Relay/DomainAgent 普通事件先由 `ChatEventBatcher` 按同 run 的 `16 条 / 20ms / 256KB` 三重阈值组批，其他事件保持单条。
    - 单条进入 `MyBatisChatEventStore#appendWithExecutionGuard(...)`；批次进入 `appendBatchWithExecutionGuard(...)`。
-   - 批次只获取一次 run 行栅栏、一次分配多个 sequence，并执行一次 guarded batch insert。
-   - Mapper 仍通过 `fin_ex_chat_session_t + fin_ex_chat_run_t + fin_ex_chat_run_execution_t` 校验写入权。
-   - 同一条 SQL 校验 run/session/tenant/user 归属、run 状态、execution owner 和 fencing token。
+   - 批次只获取一次 run/execution 行栅栏、一次分配多个 sequence，并执行一次批量 `INSERT ... VALUES`。
+   - Mapper 在独立栅栏查询中通过 `fin_ex_chat_session_t + fin_ex_chat_run_t + fin_ex_chat_run_execution_t` 校验写入权并返回可信归属。
+   - run/execution 共享锁保持到 `VALUES` 写入提交，期间终态和 fencing 不能越过栅栏。
    - 条件不满足时抛出写入拒绝，后台流停止，不发布该事件。
 
 5. `AssistantAssembly`
@@ -372,7 +372,7 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
    - 每个 `message.snapshot` 同时保存为 `MESSAGE_SNAPSHOT` part，供历史消息返回所有回答快照；最终 `ANSWER` part 仍只保存最终正文。
    - `runtime.*` 只作为运行态扩展事件落库和推送，不进入 assistant 正文；run 正常完成后会保存为 `fin_ex_chat_message_part_t`，供历史消息回显思考、工具、进度、引用、卡片和 agent 调用过程，并补齐稳定展示语义。
    - 如果本轮没有正文但存在卡片、引用、思考、工具、进度等用户可见 part，仍会创建一条空正文 assistant 消息作为 parts 挂载点；纯 trace/metadata 不会创建空 assistant。
-   - 注意：只有 guarded insert 成功后的事件才会进入 assembly，不写未持久化的迟到 token。
+   - 注意：只有行栅栏校验及 `VALUES` 写入都成功后的事件才会进入 assembly，不写未持久化的迟到 token。
 
 6. run 完成前保存完整 assistant message
    - 当事件类型是 `run.completed` 且 assistant buffer 非空或存在用户可见 runtime parts 时：
@@ -394,7 +394,7 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
 
 重点排查：
 
-- Relay delta 到了但 event 表没有：查 `eventBelongsToCurrentRun(...)`、`ChatRunApplicationService#shouldAcceptEvent(...)` 和 guarded insert 条件。
+- Relay delta 到了但 event 表没有：查 `eventBelongsToCurrentRun(...)`、`ChatRunApplicationService#shouldAcceptEvent(...)` 和事件行栅栏条件。
 - stop 后还在写 token：查 `ChatRunApplicationService#shouldAcceptEvent(...)` 是否识别 Redis cancel flag。
 - completed 到了但历史消息没有 assistant：查 `run.completed` 前的 `SessionApplicationService#saveAssistantMessage(...)`。
 - Runtime 多轮没有 runtimeSessionId：查 `RuntimeBindingApplicationService#observeEvent(...)` 和 event payload。
@@ -771,7 +771,7 @@ ChatStreamApplicationService#appendAndPublish(...)
 - stop 后还出 delta：查 `ChatRunApplicationService#shouldAcceptEvent(...)` 是否拦截。
 - stop 没有通知前端：查 `run.cancelled` 是否写入 `fin_ex_chat_event_t`。
 - 下游 Relay 没停：查 `RelayWebSocketRuntimeAdapter#cancel(...)`、active exchange 或临时 RESUME stop 连接。
-- 删除会话后仍收到终态事件：这是取消链路的正常异步收尾，前端已删除该会话时应忽略；若仍收到 delta，再查 cancel flag 和 guarded insert。
+- 删除会话后仍收到终态事件：这是取消链路的正常异步收尾，前端已删除该会话时应忽略；若仍收到 delta，再查 cancel flag 和事件行栅栏。
 
 ## 14. 后台任务与故障治理
 
@@ -825,14 +825,14 @@ heartbeatActiveRuns(...)
 
 - run 创建后写 `fin_ex_chat_run_execution_t`。
 - 定时刷新本机 active run heartbeat。
-- 事件写入权不再先单独查询 execution；由 `MyBatisChatEventStore#appendWithExecutionGuard(...)`
-  在事件插入 SQL 中原子校验 owner 和 fencing token。
+- `MyBatisChatEventStore#appendWithExecutionGuard(...)` 先通过单次共享行栅栏查询校验 owner 和 fencing token，
+  再在同一短事务内以 `INSERT ... VALUES` 写入事件。
 - run 终态后把 execution 置为终态。
 
 重点排查：
 
 - 实例挂了 run 一直 RUNNING：查 watchdog 是否开启，以及 `lease_until` 是否过期。
-- 旧实例恢复后继续写事件：查 guarded insert 是否因 owner/fencing token 不匹配而拒绝写入。
+- 旧实例恢复后继续写事件：查事件行栅栏是否因 owner/fencing token 不匹配而拒绝写入。
 
 ### 14.3 watchdog 和恢复策略
 

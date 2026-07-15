@@ -60,17 +60,27 @@ public class MyBatisChatRunRepository implements ChatRunRepository {
     }
 
     @Override
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public Optional<ChatRun> insertInteractionContinuationIfClaimed(ChatRun run, String interactionId) {
         if (run == null || interactionId == null || interactionId.isBlank()) {
             return Optional.empty();
         }
-        int inserted;
+        Integer sessionLocked = mapper.lockSessionForInteractionContinuation(
+                run.tenantId(), run.userId(), run.sessionId());
+        if (sessionLocked == null || sessionLocked != 1) {
+            throw new IllegalArgumentException("会话不存在或不属于当前用户: " + run.sessionId());
+        }
+        Integer claimLocked = mapper.lockInteractionContinuationClaim(
+                interactionId, run.tenantId(), run.userId(), run.sessionId(), run.id());
+        if (claimLocked == null || claimLocked != 1) {
+            return Optional.empty();
+        }
         try {
-            inserted = mapper.insertInteractionContinuationIfClaimed(toRow(run), interactionId);
+            mapper.insert(toRow(run));
         } catch (DuplicateKeyException ex) {
             throw translateInsertConflict(run, ex);
         }
-        return inserted == 1 ? findById(run.id()) : Optional.empty();
+        return findById(run.id());
     }
 
     private RuntimeException translateInsertConflict(ChatRun run, DuplicateKeyException exception) {

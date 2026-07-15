@@ -437,7 +437,7 @@ sequenceDiagram
         Runtime-->>SuperAgent: "标准 ChatEvent(message.delta/message.snapshot/runtime.*)"
         SuperAgent->>SuperAgent: "原粒度透传标准事件"
         SuperAgent->>EventStore: "guarded append(delta)"
-        EventStore->>DB: "INSERT...SELECT 校验 run/session/execution 并生成 seq"
+        EventStore->>DB: "行栅栏校验 run/session/execution，分配 seq 后以 VALUES 写入"
         SuperAgent->>Live: "publish persisted delta"
         SuperAgent->>RedisBus: "publish persisted delta"
         SuperAgent->>DB: "run.completed 后保存完整 assistant message 并更新 current leaf"
@@ -539,7 +539,7 @@ sequenceDiagram
 
 watchdog 是分层设计：`ChatRunWatchdogScheduler` 只负责按配置延迟、jitter 和周期触发；`ChatRunRecoveryOrchestrator` 负责候选拉取、容量检查、策略选择和指标日志；`ChatRunExecutionRepository` 负责数据库条件抢占；`StaleRunRecoveryStrategy` 负责具体恢复动作。默认策略链为 `MANUAL_CONFIRMATION,FAIL_FAST`，`RUNTIME_TAKEOVER` 仅在 Runtime 明确支持可靠恢复并提供 resume token 时使用。
 
-stop/watchdog/execution 初始化失败使用 run 行 CAS 作为唯一外部终态写入准入：只有成功把 `RUNNING/CANCELLING` 条件更新为目标终态的调用方才能在同一短事务中写终态事件、释放 Interaction claim 并更新 execution；失败者不发布事件。`CANCELLING` 允许 stop 重试，stale `CANCELLING` 由 watchdog 闭合为 `run.cancelled`。外部终态事务默认限制为 10 秒，超时整体回滚。Interaction continuation 与普通 run 在 run 已创建但 execution 未创建时，分别由对应的默认 `2m` 宽限期 watchdog 扫描收敛；首事件握手超时还会主动异步提交 `RUN_FIRST_EVENT_TIMEOUT` 或释放尚未创建 run 的 Interaction claim。run.started 后的路由和 Runtime 外部调用边界会通过 run/execution 主键只读校验 owner 与 fencing token，普通流式事件仍只使用原 guarded insert，不增加额外行锁。
+stop/watchdog/execution 初始化失败使用 run 行 CAS 作为唯一外部终态写入准入：只有成功把 `RUNNING/CANCELLING` 条件更新为目标终态的调用方才能在同一短事务中写终态事件、释放 Interaction claim 并更新 execution；失败者不发布事件。`CANCELLING` 允许 stop 重试，stale `CANCELLING` 由 watchdog 闭合为 `run.cancelled`。外部终态事务默认限制为 10 秒，超时整体回滚。Interaction continuation 与普通 run 在 run 已创建但 execution 未创建时，分别由对应的默认 `2m` 宽限期 watchdog 扫描收敛；首事件握手超时还会主动异步提交 `RUN_FIRST_EVENT_TIMEOUT` 或释放尚未创建 run 的 Interaction claim。run.started 后的路由和 Runtime 外部调用边界会通过 run/execution 主键只读校验 owner 与 fencing token；普通流式事件在短事务中获取 run/execution 共享行栅栏，再以 `INSERT ... VALUES` 写入。
 
 owner 的 completed/waiting 终态事务只写 OpenGauss 事实；短期记忆 Redis 缓存通过 Spring transaction synchronization 在提交后刷新。Redis 失败只影响热缓存，不能回滚或改写已提交的 run 终态。
 
@@ -581,8 +581,8 @@ MVC/Servlet 生产模式增加了长连接治理层：`financeex.websocket.allow
 流式事件合并后的落库、run 状态推进和实时发布统一切到 `financeex.chat-stream.event-io-executor-*`
 专用调度器，避免阻塞式 DB/Redis 调用占用 Reactor `parallel-*` timer 或 Servlet 请求线程。
 Relay/DomainAgent 普通运行事件在该调度器上按同一 run 批量落库，默认以 `16 条 / 20ms / 256KB`
-三重阈值中最先命中的条件提交。每个批次只获取一次 run 共享栅栏、分配一次 sequence 集合并执行
-一次 guarded insert；控制事件和终态事件会先刷新批次再沿用原单事件事务。批量提交后事件仍按 seq
+三重阈值中最先命中的条件提交。每个批次只获取一次 run/execution 共享栅栏、分配一次 sequence 集合并执行
+一次批量 `INSERT ... VALUES`；控制事件和终态事件会先刷新批次再沿用原单事件事务。批量提交后事件仍按 seq
 逐条发布，不跨 run 组批，也不改变 IntentAgent、Interaction、拒答和 owner 终态事务。
 Redis Pub/Sub 是默认实时 fanout 通道，跨实例发布使用 `financeex.websocket.redis-publish-*` 有界后台队列；同一 run topic
 串行发布并做短重试，发布缺口会通过恢复控制消息转成 `RECOVER_REQUIRED`。
@@ -760,7 +760,7 @@ stateDiagram-v2
 stop 语义：
 
 - 集群事实源优先：stop 先写 Redis cancel flag 与数据库 `CANCELLING` 状态，再发布 `run.cancelled`。
-- JVM subscription registry 只是本机资源释放加速器；即使 stop 请求与输出流落在不同实例，输出实例也必须在追加事件前读取 Redis cancel flag。非终态事件不再逐条回源 run 表，最终写入正确性由数据库 guarded insert 同时校验 run 状态、session 归属和 execution fencing。
+- JVM subscription registry 只是本机资源释放加速器；即使 stop 请求与输出流落在不同实例，输出实例也必须在追加事件前读取 Redis cancel flag。非终态事件通过数据库行栅栏同时校验 run 状态、session 归属和 execution fencing，栅栏持有到后续 `VALUES` 写入提交。
 - 用户主动 stop 且已有 assistant 正文或用户可见 runtime parts 成功落库时，会从事件事实源重建并保存 partial assistant 历史消息，消息 metadata 标记 `partial=true`、`finishReason=USER_STOP`；只有 trace、domain-agent session 等内部 metadata 时不创建空 assistant。
 - 下游尽力取消：Relay 本机命中 active WebSocket 时发送 `{"type":"stop_all_agents"}`；跨实例或本机连接已清理时用临时 WS `resume` 到 run 中已回填的 Relay `runtimeSessionId`，收到 `session-ready` 后发送 `stop_all_agents`；DomainAgent 走 DomainAgent cancel adapter。这些下游取消失败只记录日志，不影响前端收到本服务 `run.cancelled` 终态。
 - stop 不取消 RuntimeBinding；下一轮仍可续接 Runtime。如果需要全新的 Relay 会话，应创建新的 ChatService 会话。

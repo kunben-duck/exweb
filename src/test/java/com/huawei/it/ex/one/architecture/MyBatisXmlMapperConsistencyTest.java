@@ -29,6 +29,8 @@ class MyBatisXmlMapperConsistencyTest {
     private static final Pattern SQL_ANNOTATION = Pattern.compile("@(?:Select|Insert|Update|Delete|Results|ResultMap|Result)\\b");
     private static final Pattern SELECT_WILDCARD_PROJECTION = Pattern.compile(
             "(?is)\\bSELECT\\s+(?:[A-Za-z_][A-Za-z0-9_]*\\.)?\\*");
+    private static final Pattern INSERT_SELECT = Pattern.compile(
+            "(?is)\\bINSERT\\s+INTO\\b.*\\bSELECT\\b");
     private static final Pattern STATEMENT_BLOCK = Pattern.compile(
             "(?is)<(select|insert|update|delete)\\s+id=\"([^\"]+)\"[^>]*>(.*?)</\\1>");
     private static final Pattern PREDICATE_CLAUSE = Pattern.compile(
@@ -121,6 +123,21 @@ class MyBatisXmlMapperConsistencyTest {
     }
 
     @Test
+    void mapperInsertsShouldUseValuesInsteadOfSelect() throws IOException {
+        List<String> violations;
+        try (var files = Files.walk(MAPPER_XML_ROOT)) {
+            violations = files.filter(path -> path.toString().endsWith(ACTIVE_DIALECT_MAPPER_SUFFIX))
+                    .flatMap(path -> findInsertSelectViolations(path).stream())
+                    .toList();
+        }
+
+        assertThat(violations)
+                .as("MyBatis INSERT statements must use VALUES instead of SELECT:%n%s",
+                        String.join(System.lineSeparator(), violations))
+                .isEmpty();
+    }
+
+    @Test
     void mapperPredicatesShouldNotTransformOrCalculateColumns() throws IOException {
         List<String> violations;
         try (var files = Files.walk(MAPPER_XML_ROOT)) {
@@ -198,20 +215,36 @@ class MyBatisXmlMapperConsistencyTest {
         String eventMapper = Files.readString(
                 MAPPER_XML_ROOT.resolve("persistence/ChatEventMapper.opengauss.xml"));
         assertThat(eventMapper)
+                .contains("<select id=\"findEventAppendContext\"")
                 .contains("<select id=\"lockRunForEventAppend\"")
                 .contains("FOR SHARE OF r NOWAIT")
+                .contains("FOR SHARE OF e")
                 .contains("<select id=\"nextSeqs\"")
-                .contains("<insert id=\"insertBatchFromSessionWithExecutionGuard\"")
+                .contains("<insert id=\"insert\"")
+                .contains("<insert id=\"insertBatch\"")
                 .contains("collection=\"rows\"")
-                .contains("CAST(#{row.createdAt, javaType=java.time.Instant, jdbcType=TIMESTAMP} AS TIMESTAMPTZ)")
+                .contains("#{row.tenantId}")
+                .contains("#{row.userId}")
+                .contains("#{row.createdAt, javaType=java.time.Instant, jdbcType=TIMESTAMP}")
                 .contains("e.owner_instance_id = #{ownerInstanceId}")
                 .contains("e.fencing_token = #{fencingToken}");
 
         String runMapper = Files.readString(
                 MAPPER_XML_ROOT.resolve("persistence/ChatRunMapper.opengauss.xml"));
         assertThat(runMapper)
+                .contains("<select id=\"lockSessionForInteractionContinuation\"")
+                .contains("<select id=\"lockInteractionContinuationClaim\"")
                 .contains("<update id=\"markCancelling\"")
                 .contains("AND status = 'RUNNING'");
+
+        String runRepository = Files.readString(Path.of(
+                "src/main/java/com/huawei/it/ex/one/infrastructure/persistence/MyBatisChatRunRepository.java"));
+        int sessionLock = runRepository.indexOf("mapper.lockSessionForInteractionContinuation(");
+        int interactionLock = runRepository.indexOf("mapper.lockInteractionContinuationClaim(");
+        int runInsert = runRepository.indexOf("mapper.insert(toRow(run));", interactionLock);
+        assertThat(sessionLock).isGreaterThanOrEqualTo(0);
+        assertThat(interactionLock).isGreaterThan(sessionLock);
+        assertThat(runInsert).isGreaterThan(interactionLock);
     }
 
     @Test
@@ -383,6 +416,27 @@ class MyBatisXmlMapperConsistencyTest {
             return SELECT_WILDCARD_PROJECTION.matcher(Files.readString(path)).find();
         } catch (IOException ex) {
             throw new IllegalStateException("Failed to inspect MyBatis SELECT projection: " + path, ex);
+        }
+    }
+
+    private List<String> findInsertSelectViolations(Path path) {
+        try {
+            String xml = XML_COMMENT.matcher(Files.readString(path)).replaceAll(" ");
+            List<String> violations = new ArrayList<>();
+            Matcher statementMatcher = STATEMENT_BLOCK.matcher(xml);
+            while (statementMatcher.find()) {
+                if (!"insert".equalsIgnoreCase(statementMatcher.group(1))) {
+                    continue;
+                }
+                String sql = XML_TAG.matcher(statementMatcher.group(3)).replaceAll(" ");
+                sql = SQL_STRING_LITERAL.matcher(sql).replaceAll("''");
+                if (INSERT_SELECT.matcher(sql).find()) {
+                    violations.add(MAPPER_XML_ROOT.relativize(path) + "#" + statementMatcher.group(2));
+                }
+            }
+            return List.copyOf(violations);
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to inspect MyBatis INSERT statements: " + path, ex);
         }
     }
 

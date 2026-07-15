@@ -17,6 +17,16 @@
         id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
     </sql>
 
+    <resultMap id="chatEventAppendContextResultMap"
+               type="com.huawei.it.ex.one.infrastructure.persistence.ChatEventAppendContextRow">
+        <constructor>
+            <arg column="tenant_id" javaType="java.lang.String"/>
+            <arg column="user_id" javaType="java.lang.String"/>
+            <arg column="session_id" javaType="java.lang.String"/>
+            <arg column="run_id" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
     <!--
       从 openGauss sequence 预取事件 seq，作为 Event Resume 的事实游标。
       入参: 无。
@@ -36,13 +46,32 @@
     </select>
 
     <!--
-      普通事件与 owner/stop/watchdog 终态竞争同一个 run 行锁。NOWAIT 保证终态已经持锁时
-      迟到事件立即失败，不占用事件写入线程等待终态事务结束。
+      查询无 execution claim 事件的可信归属，避免由调用方或 payload 提供 tenant/user 字段。
+      入参: sessionId/runId 定位并校验同一 owner 下的会话与 run。
+    -->
+    <select id="findEventAppendContext" resultMap="chatEventAppendContextResultMap">
+        SELECT r.tenant_id, r.user_id, r.session_id, r.id AS run_id
+        FROM fin_ex_chat_run_t r
+        JOIN fin_ex_chat_session_t s
+          ON s.id = r.session_id
+         AND s.tenant_id = r.tenant_id
+         AND s.user_id = r.user_id
+        WHERE r.id = #{runId}
+          AND r.session_id = #{sessionId}
+    </select>
+
+    <!--
+      普通事件与 owner/stop/watchdog 终态竞争同一个 run 行锁，并锁定 execution 防止 fencing 漂移。
+      run NOWAIT 保证终态已经持锁时迟到事件立即失败；execution 等待受事件短事务超时限制。
       入参: sessionId/runId 定位 run，ownerInstanceId/fencingToken 校验当前 execution 写入权。
     -->
-    <select id="lockRunForEventAppend" resultType="int">
-        SELECT 1
+    <select id="lockRunForEventAppend" resultMap="chatEventAppendContextResultMap">
+        SELECT r.tenant_id, r.user_id, r.session_id, r.id AS run_id
         FROM fin_ex_chat_run_t r
+        JOIN fin_ex_chat_session_t s
+          ON s.id = r.session_id
+         AND s.tenant_id = r.tenant_id
+         AND s.user_id = r.user_id
         JOIN fin_ex_chat_run_execution_t e
           ON e.run_id = r.id
          AND e.tenant_id = r.tenant_id
@@ -55,88 +84,37 @@
           AND e.fencing_token = #{fencingToken}
           AND e.execution_status = 'RUNNING'
         FOR SHARE OF r NOWAIT
+        FOR SHARE OF e
     </select>
 
     <!--
-      追加已完成归属校验的事件，仍通过 session/run join 确保 run 与 session 归属一致。
-      入参: ChatEventWriteRow，id 为事件主键，sessionId/runId 定位事件所属上下文，seq 为已预取事件游标，
-            eventType/payloadJson 为标准事件内容，createdAt 为事件发生时间。
+      使用独立查询得到的可信归属追加单条事件，不再通过 INSERT SELECT 隐式执行条件查询。
+      入参: ChatEventWriteRow，tenantId/userId/sessionId/runId 为可信归属，其他字段为标准事件内容。
     -->
-    <insert id="insertFromSession" parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatEventWriteRow">
+    <insert id="insert" parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatEventWriteRow">
         INSERT INTO fin_ex_chat_event_t(
             id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
         )
-        SELECT #{id}, s.tenant_id, s.user_id, s.id, r.id, #{seq}, #{eventType}, #{payloadJson}, #{createdAt}
-        FROM fin_ex_chat_session_t s
-        JOIN fin_ex_chat_run_t r
-          ON r.id = #{runId}
-         AND r.session_id = s.id
-         AND r.tenant_id = s.tenant_id
-         AND r.user_id = s.user_id
-        WHERE s.id = #{sessionId}
+        VALUES (
+            #{id}, #{tenantId}, #{userId}, #{sessionId}, #{runId}, #{seq}, #{eventType}, #{payloadJson},
+            #{createdAt, javaType=java.time.Instant, jdbcType=TIMESTAMP}
+        )
     </insert>
 
     <!--
-      流式事件 guarded insert：同时校验 run 状态、session 归属、execution owner 和 fencing token。
-      入参: ChatEventWriteRow，除普通事件字段外，ownerInstanceId 和 fencingToken 用于阻断旧实例迟到写入。
+      使用行栅栏已校验的可信归属批量写入事件；批次限定为同一 run/session 并保持输入顺序。
+      入参: rows 为按原始事件顺序排列且已分配主键、seq 和 createdAt 的可信写入行。
     -->
-    <insert id="insertFromSessionWithExecutionGuard" parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatEventWriteRow">
+    <insert id="insertBatch">
         INSERT INTO fin_ex_chat_event_t(
             id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
         )
-        SELECT #{id}, s.tenant_id, s.user_id, s.id, r.id, #{seq}, #{eventType}, #{payloadJson}, #{createdAt}
-        FROM fin_ex_chat_session_t s
-        JOIN fin_ex_chat_run_t r
-          ON r.id = #{runId}
-         AND r.session_id = s.id
-         AND r.tenant_id = s.tenant_id
-         AND r.user_id = s.user_id
-         AND r.status = 'RUNNING'
-        JOIN fin_ex_chat_run_execution_t e
-          ON e.run_id = r.id
-         AND e.tenant_id = r.tenant_id
-         AND e.user_id = r.user_id
-         AND e.session_id = r.session_id
-         AND e.owner_instance_id = #{ownerInstanceId}
-         AND e.fencing_token = #{fencingToken}
-         AND e.execution_status = 'RUNNING'
-        WHERE s.id = #{sessionId}
-    </insert>
-
-    <!--
-      批量流式事件 guarded insert：批次限定为同一 run/session，并在一条 SQL 中统一校验
-      run 状态、session 归属、execution owner 和 fencing token。
-      入参: rows 为按原始事件顺序排列的写入行；ownerInstanceId/fencingToken 为当前 execution 写入权。
-    -->
-    <insert id="insertBatchFromSessionWithExecutionGuard">
-        INSERT INTO fin_ex_chat_event_t(
-            id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
-        )
-        SELECT v.id, s.tenant_id, s.user_id, s.id, r.id, v.seq, v.event_type, v.payload_json, v.created_at
-        FROM (
-            VALUES
-            <foreach collection="rows" item="row" separator=",">
-                (#{row.id}, #{row.sessionId}, #{row.runId}, #{row.seq}, #{row.eventType},
-                 #{row.payloadJson},
-                 CAST(#{row.createdAt, javaType=java.time.Instant, jdbcType=TIMESTAMP} AS TIMESTAMPTZ))
-            </foreach>
-        ) AS v(id, session_id, run_id, seq, event_type, payload_json, created_at)
-        JOIN fin_ex_chat_session_t s
-          ON s.id = v.session_id
-        JOIN fin_ex_chat_run_t r
-          ON r.id = v.run_id
-         AND r.session_id = s.id
-         AND r.tenant_id = s.tenant_id
-         AND r.user_id = s.user_id
-         AND r.status = 'RUNNING'
-        JOIN fin_ex_chat_run_execution_t e
-          ON e.run_id = r.id
-         AND e.tenant_id = r.tenant_id
-         AND e.user_id = r.user_id
-         AND e.session_id = r.session_id
-         AND e.owner_instance_id = #{ownerInstanceId}
-         AND e.fencing_token = #{fencingToken}
-         AND e.execution_status = 'RUNNING'
+        VALUES
+        <foreach collection="rows" item="row" separator=",">
+            (#{row.id}, #{row.tenantId}, #{row.userId}, #{row.sessionId}, #{row.runId}, #{row.seq},
+             #{row.eventType}, #{row.payloadJson},
+             #{row.createdAt, javaType=java.time.Instant, jdbcType=TIMESTAMP})
+        </foreach>
     </insert>
 
     <!--

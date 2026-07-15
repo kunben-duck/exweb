@@ -29,46 +29,44 @@ public interface ChatEventMapper {
     List<Long> nextSeqs(@Param("count") int count);
 
     /**
-     * 在普通事件写入前获取 run 行共享锁，并同步校验 execution owner/fencing。
+     * 查询事件所属 run/session 的可信归属，供无 execution claim 的控制事件写入使用。
+     *
+     * @param sessionId 事件所属会话。
+     * @param runId 事件所属 run。
+     * @return 可信归属上下文；归属不匹配时返回 {@code null}。
+     */
+    ChatEventAppendContextRow findEventAppendContext(@Param("sessionId") String sessionId,
+                                                     @Param("runId") String runId);
+
+    /**
+     * 在普通事件写入前获取 run/execution 行共享锁，并同步校验 execution owner/fencing。
      *
      * @param sessionId 事件所属会话。
      * @param runId 事件所属 run。
      * @param ownerInstanceId 当前 execution owner 实例。
      * @param fencingToken 当前 execution fencing token。
-     * @return 1 表示准入成功；无匹配行时返回 {@code null}。
+     * @return 可信归属上下文；无匹配行时返回 {@code null}。
      */
-    Integer lockRunForEventAppend(@Param("sessionId") String sessionId,
-                                  @Param("runId") String runId,
-                                  @Param("ownerInstanceId") String ownerInstanceId,
-                                  @Param("fencingToken") long fencingToken);
+    ChatEventAppendContextRow lockRunForEventAppend(@Param("sessionId") String sessionId,
+                                                    @Param("runId") String runId,
+                                                    @Param("ownerInstanceId") String ownerInstanceId,
+                                                    @Param("fencingToken") long fencingToken);
 
     /**
-     * 追加已完成外层校验的事件，SQL 仍会通过 session/run join 做归属兜底。
+     * 使用已经过数据库栅栏校验的可信归属追加单条事件。
      *
-     * @param row 事件写入行，包含 sessionId、runId、seq、eventType、payloadJson 和 createdAt。
-     * @return 影响行数；为 0 表示 run/session 归属不匹配。
+     * @param row 事件写入行，包含可信 tenant/user/session/run 归属及标准事件字段。
+     * @return 影响行数。
      */
-    int insertFromSession(ChatEventWriteRow row);
+    int insert(ChatEventWriteRow row);
 
     /**
-     * 追加流式事件，并在同一条 SQL 内校验 execution owner 和 fencing token。
-     *
-     * @param row 事件写入行，除事件字段外还包含 ownerInstanceId 和 fencingToken。
-     * @return 影响行数；为 0 表示 run 已非 RUNNING、owner 失效或 fencing token 失效。
-     */
-    int insertFromSessionWithExecutionGuard(ChatEventWriteRow row);
-
-    /**
-     * 在一条 SQL 中批量追加同一 run 的流式事件，并再次校验 execution owner/fencing。
+     * 使用已经过数据库栅栏校验的可信归属批量追加同一 run 的流式事件。
      *
      * @param rows 已分配主键、序号及序列化 payload 的有序事件行。
-     * @param ownerInstanceId 当前 execution owner 实例。
-     * @param fencingToken 当前 execution fencing token。
      * @return 实际插入行数，必须与 rows 数量一致。
      */
-    int insertBatchFromSessionWithExecutionGuard(@Param("rows") List<ChatEventWriteRow> rows,
-                                                 @Param("ownerInstanceId") String ownerInstanceId,
-                                                 @Param("fencingToken") long fencingToken);
+    int insertBatch(@Param("rows") List<ChatEventWriteRow> rows);
 
     /**
      * 查询指定会话在某个事件游标之后的事件，用于 session 级 Event Resume。

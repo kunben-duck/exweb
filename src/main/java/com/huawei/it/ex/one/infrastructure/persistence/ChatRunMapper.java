@@ -19,14 +19,32 @@ public interface ChatRunMapper {
     int insert(ChatRunWriteRow row);
 
     /**
-     * 仅在 Interaction claim 仍匹配时创建 continuation run。
+     * 锁定 continuation run 所属会话，固定 admission 的 session -> interaction -> run 锁顺序。
      *
-     * @param row continuation run 写入数据。
-     * @param interactionId 当前 Interaction 标识。
-     * @return 影响行数；1 表示创建成功。
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @return 1 表示会话存在且归属匹配；无匹配行时返回 {@code null}。
      */
-    int insertInteractionContinuationIfClaimed(@Param("row") ChatRunWriteRow row,
-                                                @Param("interactionId") String interactionId);
+    Integer lockSessionForInteractionContinuation(@Param("tenantId") String tenantId,
+                                                   @Param("userId") String userId,
+                                                   @Param("sessionId") String sessionId);
+
+    /**
+     * 锁定并校验当前 Interaction claim，防止 watchdog 回收后迟到实例创建 run。
+     *
+     * @param interactionId 当前 Interaction 标识。
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param continueRunId claim 对应的 continuation run 标识。
+     * @return 1 表示 claim 仍由当前 run 持有；无匹配行时返回 {@code null}。
+     */
+    Integer lockInteractionContinuationClaim(@Param("interactionId") String interactionId,
+                                              @Param("tenantId") String tenantId,
+                                              @Param("userId") String userId,
+                                              @Param("sessionId") String sessionId,
+                                              @Param("continueRunId") String continueRunId);
 
     /**
      * 更新 run 状态和关联消息，SQL 层会保护已有终态不被迟到事件覆盖。

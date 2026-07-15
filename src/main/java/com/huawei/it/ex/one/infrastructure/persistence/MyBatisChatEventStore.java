@@ -39,7 +39,14 @@ public class MyBatisChatEventStore implements ChatEventStore {
     }
 
     @Override
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public ChatEvent append(ChatEvent event) {
+        ChatEventAppendContextRow context = mapper.findEventAppendContext(event.sessionId(), event.runId());
+        if (context == null) {
+            throw new IllegalStateException("聊天事件无法落库，run 与 session 归属不一致或不存在: runId="
+                    + event.runId() + ", sessionId=" + event.sessionId());
+        }
+        validateAppendContext(context, event);
         String eventId = idGenerator.newId("event",
                 IdGenerateContext.of(null, null, event.sessionId(), event.runId()));
         Instant createdAt = event.createdAt() == null ? Instant.now() : event.createdAt();
@@ -48,10 +55,10 @@ public class MyBatisChatEventStore implements ChatEventStore {
             throw new IllegalStateException("聊天事件序号生成失败");
         }
         // seq 是前端恢复游标，必须由数据库 sequence 生成，避免多实例本地生成导致 afterSeq 歧义。
-        int inserted = mapper.insertFromSession(new ChatEventWriteRow(eventId, event.sessionId(), event.runId(),
-                seq, event.type(), toJson(event.payload()), createdAt, null, 0L));
+        int inserted = mapper.insert(new ChatEventWriteRow(eventId, context.tenantId(), context.userId(),
+                context.sessionId(), context.runId(), seq, event.type(), toJson(event.payload()), createdAt));
         if (inserted == 0) {
-            throw new IllegalStateException("聊天事件无法落库，run 与 session 归属不一致或不存在: runId="
+            throw new IllegalStateException("聊天事件 INSERT VALUES 未写入数据: runId="
                     + event.runId() + ", sessionId=" + event.sessionId());
         }
         return toStoredEvent(event, seq, createdAt);
@@ -63,10 +70,11 @@ public class MyBatisChatEventStore implements ChatEventStore {
         if (claim == null) {
             throw new ChatEventAppendRejectedException("run execution claim 为空，拒绝写入聊天事件");
         }
+        ChatEventAppendContextRow context;
         try {
-            Integer admitted = mapper.lockRunForEventAppend(event.sessionId(), event.runId(),
+            context = mapper.lockRunForEventAppend(event.sessionId(), event.runId(),
                     claim.ownerInstanceId(), claim.fencingToken());
-            if (admitted == null || admitted != 1) {
+            if (context == null) {
                 throw new ChatEventAppendRejectedException("聊天事件写入被 run/execution 行栅栏拒绝: runId="
                         + event.runId() + ", sessionId=" + event.sessionId());
             }
@@ -77,6 +85,7 @@ public class MyBatisChatEventStore implements ChatEventStore {
             }
             throw ex;
         }
+        validateAppendContext(context, event);
         String eventId = idGenerator.newId("event",
                 IdGenerateContext.of(null, null, event.sessionId(), event.runId()));
         Instant createdAt = event.createdAt() == null ? Instant.now() : event.createdAt();
@@ -84,14 +93,9 @@ public class MyBatisChatEventStore implements ChatEventStore {
         if (seq == null) {
             throw new IllegalStateException("聊天事件序号生成失败");
         }
-        /*
-         * guarded insert 是流式输出的最终写入栅栏：同一条 SQL 同时校验 run/session 归属、
-         * run 业务状态、execution owner 与 fencing token。这样避免每个 delta 先查 execution
-         * 再插入事件的两次 DB 往返，也能挡住 stop/watchdog 后的迟到 token。
-         */
-        int inserted = mapper.insertFromSessionWithExecutionGuard(new ChatEventWriteRow(eventId, event.sessionId(),
-                event.runId(), seq, event.type(), toJson(event.payload()), createdAt, claim.ownerInstanceId(),
-                claim.fencingToken()));
+        // run/execution 共享锁持续到本事务提交，后续 VALUES 写入期间 owner/fencing 不会漂移。
+        int inserted = mapper.insert(new ChatEventWriteRow(eventId, context.tenantId(), context.userId(),
+                context.sessionId(), context.runId(), seq, event.type(), toJson(event.payload()), createdAt));
         if (inserted == 0) {
             throw new ChatEventAppendRejectedException("聊天事件写入被 execution guard 拒绝: runId="
                     + event.runId() + ", sessionId=" + event.sessionId());
@@ -111,10 +115,11 @@ public class MyBatisChatEventStore implements ChatEventStore {
         validateBatch(events, claim);
         ChatEvent first = events.getFirst();
         List<PreparedBatchEvent> preparedEvents = prepareBatchEvents(events);
+        ChatEventAppendContextRow context;
         try {
-            Integer admitted = mapper.lockRunForEventAppend(first.sessionId(), first.runId(),
+            context = mapper.lockRunForEventAppend(first.sessionId(), first.runId(),
                     claim.ownerInstanceId(), claim.fencingToken());
-            if (admitted == null || admitted != 1) {
+            if (context == null) {
                 throw new ChatEventAppendRejectedException("聊天事件批量写入被 run/execution 行栅栏拒绝: runId="
                         + first.runId() + ", sessionId=" + first.sessionId());
             }
@@ -125,6 +130,7 @@ public class MyBatisChatEventStore implements ChatEventStore {
             }
             throw ex;
         }
+        validateAppendContext(context, first);
 
         List<Long> sequences = mapper.nextSeqs(events.size());
         if (sequences == null || sequences.size() != events.size()
@@ -137,11 +143,10 @@ public class MyBatisChatEventStore implements ChatEventStore {
             PreparedBatchEvent prepared = preparedEvents.get(index);
             ChatEvent event = prepared.event();
             rows.add(new ChatEventWriteRow(
-                    prepared.eventId(), event.sessionId(), event.runId(), sequences.get(index), event.type(),
-                    prepared.payloadJson(), prepared.createdAt(), claim.ownerInstanceId(), claim.fencingToken()));
+                    prepared.eventId(), context.tenantId(), context.userId(), context.sessionId(), context.runId(),
+                    sequences.get(index), event.type(), prepared.payloadJson(), prepared.createdAt()));
         }
-        int inserted = mapper.insertBatchFromSessionWithExecutionGuard(rows,
-                claim.ownerInstanceId(), claim.fencingToken());
+        int inserted = mapper.insertBatch(rows);
         if (inserted != events.size()) {
             throw new ChatEventAppendRejectedException("聊天事件批量写入被 execution guard 拒绝: runId="
                     + first.runId() + ", sessionId=" + first.sessionId()
@@ -152,6 +157,15 @@ public class MyBatisChatEventStore implements ChatEventStore {
             stored.add(toStoredEvent(events.get(index), sequences.get(index), preparedEvents.get(index).createdAt()));
         }
         return List.copyOf(stored);
+    }
+
+    private void validateAppendContext(ChatEventAppendContextRow context, ChatEvent event) {
+        if (context.tenantId() == null || context.userId() == null
+                || !event.sessionId().equals(context.sessionId())
+                || !event.runId().equals(context.runId())) {
+            throw new IllegalStateException("聊天事件数据库归属上下文不完整或与事件不匹配: runId="
+                    + event.runId() + ", sessionId=" + event.sessionId());
+        }
     }
 
     private List<PreparedBatchEvent> prepareBatchEvents(List<ChatEvent> events) {

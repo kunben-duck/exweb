@@ -2,8 +2,8 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.huawei.finance.front.one.infrastructure.persistence.ChatRunMapper">
-    <resultMap id="chatRunResultMap" type="com.huawei.finance.front.one.infrastructure.persistence.ChatRunRow">
+<mapper namespace="com.huawei.it.ex.one.infrastructure.persistence.ChatRunMapper">
+    <resultMap id="chatRunResultMap" type="com.huawei.it.ex.one.infrastructure.persistence.ChatRunRow">
         <result column="tenant_id" property="tenantId"/>
         <result column="user_id" property="userId"/>
         <result column="session_id" property="sessionId"/>
@@ -39,7 +39,7 @@
             assistantMessageId 关联消息树，firstSeq/lastSeq 为事件游标，cancelReason/startedAt/finishedAt/
             metadataJson/createdAt/updatedAt 为状态、审计和扩展信息。
     -->
-    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatRunWriteRow">
+    <insert id="insert" parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatRunWriteRow">
         INSERT INTO fin_ex_chat_run_t(
             id, tenant_id, user_id, session_id, status, route_type, agent_code, runtime_provider,
             runtime_session_id, run_mode, parent_message_id, user_message_id, assistant_message_id,
@@ -85,7 +85,7 @@
       入参: ChatRunWriteRow，id 定位 run；status/lastSeq/finishedAt 等字段按终态保护规则更新；
             routeType、消息 ID、metadataJson 等为空时尽量保留已有值。
     -->
-    <update id="updateExisting" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatRunWriteRow">
+    <update id="updateExisting" parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatRunWriteRow">
         UPDATE fin_ex_chat_run_t
         SET status = CASE
                 WHEN status IN ('CANCELLING', 'COMPLETED', 'WAITING_USER', 'FAILED', 'CANCELLED') THEN status
@@ -165,7 +165,7 @@
       入参: ChatRunExternalTerminalClaimRow，包含 run 归属、目标终态和可选 recovery/orphan guard。
     -->
     <update id="claimExternalTerminal"
-            parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatRunExternalTerminalClaimRow">
+            parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatRunExternalTerminalClaimRow">
         UPDATE fin_ex_chat_run_t r
         SET status = #{terminalStatus},
             cancel_reason = COALESCE(#{cancelReason}, cancel_reason),
@@ -265,7 +265,7 @@
       入参: ChatRunExternalTerminalFinalizeRow，包含 run 归属、目标终态、seq 和结束时间。
     -->
     <update id="finalizeExternalTerminal"
-            parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatRunExternalTerminalFinalizeRow">
+            parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatRunExternalTerminalFinalizeRow">
         UPDATE fin_ex_chat_run_t
         SET last_seq = #{sequence},
             cancel_reason = COALESCE(#{cancelReason}, cancel_reason),

@@ -10,7 +10,7 @@
         <relativePath/>
     </parent>
 
-    <groupId>com.huawei.finance.front.one</groupId>
+    <groupId>com.huawei.it.ex.one</groupId>
     <artifactId>FinanceEXChatService</artifactId>
     <version>1.0.0-RELEASE</version>
     <packaging>jar</packaging>

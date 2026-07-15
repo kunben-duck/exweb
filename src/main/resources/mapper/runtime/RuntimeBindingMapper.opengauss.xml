@@ -2,8 +2,8 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.huawei.finance.front.one.infrastructure.runtime.RuntimeBindingMapper">
-    <resultMap id="runtimeBindingResultMap" type="com.huawei.finance.front.one.infrastructure.runtime.RuntimeBindingRow">
+<mapper namespace="com.huawei.it.ex.one.infrastructure.runtime.RuntimeBindingMapper">
+    <resultMap id="runtimeBindingResultMap" type="com.huawei.it.ex.one.infrastructure.runtime.RuntimeBindingRow">
         <result column="tenant_id" property="tenantId"/>
         <result column="user_id" property="userId"/>
         <result column="chat_session_id" property="chatSessionId"/>
@@ -26,7 +26,7 @@
       入参: RuntimeBindingRow，id 为绑定主键，tenantId/userId/chatSessionId 为归属边界，provider 标识 Runtime，
             leafMessageId/runtimeSessionId/status/lastRunId/expiresAt/metadataJson 描述绑定状态和续接信息。
     -->
-    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.runtime.RuntimeBindingRow">
+    <insert id="insert" parameterType="com.huawei.it.ex.one.infrastructure.runtime.RuntimeBindingRow">
         INSERT INTO fin_ex_runtime_binding_t(
             id, tenant_id, user_id, chat_session_id, provider, leaf_message_id, runtime_session_id,
             status, last_run_id, expires_at, metadata_json, created_at, updated_at
@@ -42,7 +42,7 @@
       入参: RuntimeBindingRow，id 定位绑定；leafMessageId/runtimeSessionId/status/lastRunId/expiresAt/
             metadataJson/updatedAt 为待更新字段。
     -->
-    <update id="update" parameterType="com.huawei.finance.front.one.infrastructure.runtime.RuntimeBindingRow">
+    <update id="update" parameterType="com.huawei.it.ex.one.infrastructure.runtime.RuntimeBindingRow">
         UPDATE fin_ex_runtime_binding_t
         SET leaf_message_id = #{leafMessageId},
             runtime_session_id = #{runtimeSessionId},

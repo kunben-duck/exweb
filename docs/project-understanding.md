@@ -7,7 +7,7 @@
 为避免后续代码调整导致行号漂移，本文档以“文件路径 + 类名 + 方法名”为定位方式。需要精确行号时，建议在本地使用：
 
 ```bash
-rg -n "methodName|className" src/main/java/com/huawei/finance/front/one
+rg -n "methodName|className" src/main/java/com/huawei/it/ex/one
 ```
 
 ## 2. 先区分三个容易混淆的对象
@@ -85,7 +85,7 @@ rg -n "methodName|className" src/main/java/com/huawei/finance/front/one
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/interfaces/chat/ChatController.java
+src/main/java/com/huawei/it/ex/one/interfaces/chat/ChatController.java
 ```
 
 方法：
@@ -115,7 +115,7 @@ ChatController#startRun(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/application/service/chat/FinanceEXChatService.java
+src/main/java/com/huawei/it/ex/one/application/service/chat/FinanceEXChatService.java
 ```
 
 方法：
@@ -152,7 +152,7 @@ executeRun(user, command, headerSnapshot)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/application/service/chat/FinanceEXChatService.java
+src/main/java/com/huawei/it/ex/one/application/service/chat/FinanceEXChatService.java
 ```
 
 方法：
@@ -204,7 +204,7 @@ RouteType.AGENT_RUNTIME    -> AgentRuntimeExecutor#execute(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/application/service/chat/SessionApplicationService.java
+src/main/java/com/huawei/it/ex/one/application/service/chat/SessionApplicationService.java
 ```
 
 入口方法：
@@ -246,7 +246,7 @@ SessionApplicationService#createUserMessage(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/application/service/runtime/AgentRuntimeExecutor.java
+src/main/java/com/huawei/it/ex/one/application/service/runtime/AgentRuntimeExecutor.java
 ```
 
 方法：
@@ -273,7 +273,7 @@ AgentRuntimeExecutor#execute(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/infrastructure/runtime/relay/RelayAgentRuntime.java
+src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayAgentRuntime.java
 ```
 
 方法：
@@ -299,7 +299,7 @@ RelayAgentRuntime#cancel(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java
+src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java
 ```
 
 方法：
@@ -335,7 +335,7 @@ RelayWebSocketRuntimeAdapter#cancel(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/application/service/chat/FinanceEXChatService.java
+src/main/java/com/huawei/it/ex/one/application/service/chat/FinanceEXChatService.java
 ```
 
 方法：
@@ -406,7 +406,7 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/application/service/chat/ChatStreamApplicationService.java
+src/main/java/com/huawei/it/ex/one/application/service/chat/ChatStreamApplicationService.java
 ```
 
 方法：
@@ -434,7 +434,7 @@ liveEventBus.publish(chat-run-{runId}, persisted)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/infrastructure/persistence/MyBatisChatEventStore.java
+src/main/java/com/huawei/it/ex/one/infrastructure/persistence/MyBatisChatEventStore.java
 ```
 
 方法：
@@ -467,7 +467,7 @@ MyBatisChatEventStore#appendBatchWithExecutionGuard(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/application/service/LocalChatEventStreamRegistry.java
+src/main/java/com/huawei/it/ex/one/application/service/LocalChatEventStreamRegistry.java
 ```
 
 方法：
@@ -497,7 +497,7 @@ LocalChatEventStreamRegistry#subscribeRunTopic(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/infrastructure/persistence/RedisChatLiveEventBus.java
+src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java
 ```
 
 方法：
@@ -539,9 +539,9 @@ RedisChatLiveEventBus#onMessage(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/interfaces/chat/websocket/ChatServletWebSocketAuthInterceptor.java
-src/main/java/com/huawei/finance/front/one/interfaces/chat/websocket/ChatServletWebSocketHandler.java
-src/main/java/com/huawei/finance/front/one/interfaces/chat/websocket/ChatServletWebSocketConfig.java
+src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatServletWebSocketAuthInterceptor.java
+src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatServletWebSocketHandler.java
+src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatServletWebSocketConfig.java
 ```
 
 关键方法：
@@ -571,7 +571,7 @@ ChatServletWebSocketHandler#emit(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/interfaces/chat/websocket/ChatWebSocketProtocolService.java
+src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatWebSocketProtocolService.java
 ```
 
 关键方法：
@@ -615,7 +615,7 @@ ChatWebSocketProtocolService#close(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java
+src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java
 ```
 
 关键方法：
@@ -645,7 +645,7 @@ LocalWebSocketConnectionRegistry#unregister(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/application/service/chat/ChatStreamApplicationService.java
+src/main/java/com/huawei/it/ex/one/application/service/chat/ChatStreamApplicationService.java
 ```
 
 方法：
@@ -692,7 +692,7 @@ local-only: LocalChatEventStreamRegistry#subscribeRunTopic(...)
 HTTP 入口文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/interfaces/chat/ChatController.java
+src/main/java/com/huawei/it/ex/one/interfaces/chat/ChatController.java
 ```
 
 入口方法：
@@ -780,7 +780,7 @@ ChatStreamApplicationService#appendAndPublish(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/application/service/LocalChatRunExecutionRegistry.java
+src/main/java/com/huawei/it/ex/one/application/service/LocalChatRunExecutionRegistry.java
 ```
 
 关键方法：
@@ -809,7 +809,7 @@ activeClaims(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/application/service/chat/ChatRunLeaseApplicationService.java
+src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunLeaseApplicationService.java
 ```
 
 关键方法：
@@ -839,11 +839,11 @@ heartbeatActiveRuns(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/application/service/chat/ChatRunWatchdogScheduler.java
-src/main/java/com/huawei/finance/front/one/application/service/chat/ChatRunRecoveryOrchestrator.java
-src/main/java/com/huawei/finance/front/one/application/service/ManualConfirmationRecoveryStrategy.java
-src/main/java/com/huawei/finance/front/one/application/service/FailFastRecoveryStrategy.java
-src/main/java/com/huawei/finance/front/one/application/service/RuntimeTakeoverRecoveryStrategy.java
+src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunWatchdogScheduler.java
+src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunRecoveryOrchestrator.java
+src/main/java/com/huawei/it/ex/one/application/service/ManualConfirmationRecoveryStrategy.java
+src/main/java/com/huawei/it/ex/one/application/service/FailFastRecoveryStrategy.java
+src/main/java/com/huawei/it/ex/one/application/service/RuntimeTakeoverRecoveryStrategy.java
 ```
 
 职责：
@@ -896,7 +896,7 @@ ChatRunApplicationService#streamStatus(...)
 文件：
 
 ```text
-src/main/java/com/huawei/finance/front/one/application/service/runtime/RuntimeBindingApplicationService.java
+src/main/java/com/huawei/it/ex/one/application/service/runtime/RuntimeBindingApplicationService.java
 ```
 
 关键方法：

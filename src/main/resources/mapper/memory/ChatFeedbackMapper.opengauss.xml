@@ -2,8 +2,8 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.huawei.finance.front.one.infrastructure.memory.ChatFeedbackMapper">
-    <resultMap id="chatMessageFeedbackResultMap" type="com.huawei.finance.front.one.infrastructure.memory.ChatMessageFeedbackRow">
+<mapper namespace="com.huawei.it.ex.one.infrastructure.memory.ChatFeedbackMapper">
+    <resultMap id="chatMessageFeedbackResultMap" type="com.huawei.it.ex.one.infrastructure.memory.ChatMessageFeedbackRow">
         <result column="tenant_id" property="tenantId"/>
         <result column="user_id" property="userId"/>
         <result column="session_id" property="sessionId"/>
@@ -26,7 +26,7 @@
       入参: ChatMessageFeedbackRow，id 为反馈主键，tenantId/userId/sessionId/messageId/runId 为归属和关联边界，
             rating/status/reasonCode/commentText/metadataJson 为反馈内容，createdAt/updatedAt 为审计时间。
     -->
-    <insert id="insert" parameterType="com.huawei.finance.front.one.infrastructure.memory.ChatMessageFeedbackRow">
+    <insert id="insert" parameterType="com.huawei.it.ex.one.infrastructure.memory.ChatMessageFeedbackRow">
         INSERT INTO fin_ex_message_feedback_t(
             id, tenant_id, user_id, session_id, message_id, run_id,
             rating, status, reason_code, comment_text, metadata_json, created_at, updated_at
@@ -42,7 +42,7 @@
       入参: ChatMessageFeedbackRow，id/tenantId/userId/messageId 定位现有反馈；runId/rating/status/reasonCode/
             commentText/metadataJson/updatedAt 为待更新内容。
     -->
-    <update id="update" parameterType="com.huawei.finance.front.one.infrastructure.memory.ChatMessageFeedbackRow">
+    <update id="update" parameterType="com.huawei.it.ex.one.infrastructure.memory.ChatMessageFeedbackRow">
         UPDATE fin_ex_message_feedback_t
         SET run_id = #{runId},
             rating = #{rating},

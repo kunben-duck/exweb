@@ -2,8 +2,8 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.huawei.finance.front.one.infrastructure.persistence.ChatEventMapper">
-    <resultMap id="chatEventResultMap" type="com.huawei.finance.front.one.infrastructure.persistence.ChatEventRow">
+<mapper namespace="com.huawei.it.ex.one.infrastructure.persistence.ChatEventMapper">
+    <resultMap id="chatEventResultMap" type="com.huawei.it.ex.one.infrastructure.persistence.ChatEventRow">
         <result column="tenant_id" property="tenantId"/>
         <result column="user_id" property="userId"/>
         <result column="session_id" property="sessionId"/>
@@ -62,7 +62,7 @@
       入参: ChatEventWriteRow，id 为事件主键，sessionId/runId 定位事件所属上下文，seq 为已预取事件游标，
             eventType/payloadJson 为标准事件内容，createdAt 为事件发生时间。
     -->
-    <insert id="insertFromSession" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatEventWriteRow">
+    <insert id="insertFromSession" parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatEventWriteRow">
         INSERT INTO fin_ex_chat_event_t(
             id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
         )
@@ -80,7 +80,7 @@
       流式事件 guarded insert：同时校验 run 状态、session 归属、execution owner 和 fencing token。
       入参: ChatEventWriteRow，除普通事件字段外，ownerInstanceId 和 fencingToken 用于阻断旧实例迟到写入。
     -->
-    <insert id="insertFromSessionWithExecutionGuard" parameterType="com.huawei.finance.front.one.infrastructure.persistence.ChatEventWriteRow">
+    <insert id="insertFromSessionWithExecutionGuard" parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatEventWriteRow">
         INSERT INTO fin_ex_chat_event_t(
             id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
         )

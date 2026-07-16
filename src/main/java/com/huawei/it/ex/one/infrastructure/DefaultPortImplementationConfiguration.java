@@ -7,6 +7,7 @@ import com.huawei.it.ex.one.application.integration.identity.ApplicationInstance
 import com.huawei.it.ex.one.application.integration.intent.IntentAgentRuntime;
 import com.huawei.it.ex.one.application.integration.intent.IntentRetryPolicy;
 import com.huawei.it.ex.one.application.integration.share.ChatShareAccessPolicy;
+import com.huawei.it.ex.one.application.integration.trace.TraceContextProvider;
 import com.huawei.it.ex.one.infrastructure.auth.DefaultSgovTokenResolver;
 import com.huawei.it.ex.one.infrastructure.id.GeneratedApplicationInstanceIdProvider;
 import com.huawei.it.ex.one.infrastructure.intent.DefaultIntentRetryPolicy;
@@ -14,6 +15,7 @@ import com.huawei.it.ex.one.infrastructure.runtime.UnsupportedAgentRuntimeIntera
 import com.huawei.it.ex.one.infrastructure.runtime.UnsupportedAgentRuntimeRecoveryPort;
 import com.huawei.it.ex.one.infrastructure.runtime.intentagent.NoopIntentAgentRuntime;
 import com.huawei.it.ex.one.infrastructure.share.DefaultChatShareAccessPolicy;
+import com.huawei.it.ex.one.infrastructure.trace.JalorTraceContextProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -30,6 +32,19 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration(proxyBeanMethods = false)
 public class DefaultPortImplementationConfiguration {
+    /**
+     * 默认链路追踪上下文 Provider。
+     *
+     * <p>当前 Jalor 取值方法使用安全空占位；接入企业 SDK 后只需替换 Provider 内部取值表达式。</p>
+     *
+     * @return 默认 Jalor TraceContext Provider。
+     */
+    @Bean
+    @ConditionalOnMissingBean(TraceContextProvider.class)
+    public TraceContextProvider traceContextProvider() {
+        return new JalorTraceContextProvider();
+    }
+
     /**
      * 默认应用实例 ID provider。
      *

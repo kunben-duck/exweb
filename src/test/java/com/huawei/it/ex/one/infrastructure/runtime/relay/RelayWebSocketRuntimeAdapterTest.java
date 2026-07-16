@@ -10,6 +10,7 @@ import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractio
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
+import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import java.net.URI;
 import java.time.Duration;
@@ -74,7 +75,8 @@ class RelayWebSocketRuntimeAdapterTest {
         ));
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
-        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+        StepVerifier.create(adapter.query(request(null, RuntimeSessionMode.NEW, "run1", "hello", Map.of(),
+                        RuntimeForwardHeaders.empty(), new TraceContext(" relay-trace-1 "))))
                 .assertNext(this::assertSessionReadyMetadata)
                 .assertNext(event -> {
                     assertThat(event.type()).isEqualTo("message.delta");
@@ -98,10 +100,31 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(config.path("config").path("sessionId").asText()).isEqualTo("session1");
         assertThat(config.path("config").path("uid").asText()).isEqualTo("user1");
         assertThat(config.path("config").path("appMode").asText()).isEqualTo("delegate");
+        assertThat(config.path("config").path("traceId").asText()).isEqualTo("relay-trace-1");
         assertThat(userMessage.path("type").asText()).isEqualTo("user-message");
         assertThat(userMessage.path("content").asText()).isEqualTo("hello");
+        assertThat(userMessage.path("traceId").asText()).isEqualTo("relay-trace-1");
         assertThat(userMessage.path("metadata").path("userAccount").asText()).isEqualTo("account1");
         assertThat(userMessage.path("metadata").path("globalUserId").asLong()).isEqualTo(1001L);
+    }
+
+    @Test
+    void missingTraceContextOmitsTraceIdFromRelayFrames() throws Exception {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
+                "{\"type\":\"agent\",\"content\":\"你好\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .expectNextCount(4)
+                .verifyComplete();
+
+        JsonNode config = objectMapper.readTree(client.sent().get(0));
+        JsonNode userMessage = objectMapper.readTree(client.sent().get(1));
+        assertThat(config.path("config").has("traceId")).isFalse();
+        assertThat(userMessage.has("traceId")).isFalse();
     }
 
     @Test
@@ -114,19 +137,22 @@ class RelayWebSocketRuntimeAdapterTest {
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
         Map<String, Object> metadata = Map.of(
                 "clientTraceId", "trace-1",
+                "traceId", "spoofed-trace",
                 "source", "web",
                 "userAccount", "spoofed",
                 "globalUserId", "spoofed"
         );
 
         StepVerifier.create(adapter.query(request(null, RuntimeSessionMode.NEW, "run1", "hello",
-                        metadata, RuntimeForwardHeaders.empty())))
+                        metadata, RuntimeForwardHeaders.empty(), new TraceContext("system-trace-1"))))
                 .expectNextCount(4)
                 .verifyComplete();
 
         JsonNode userMessage = objectMapper.readTree(client.sent().get(1));
         assertThat(userMessage.path("type").asText()).isEqualTo("user-message");
+        assertThat(userMessage.path("traceId").asText()).isEqualTo("system-trace-1");
         assertThat(userMessage.path("metadata").path("clientTraceId").asText()).isEqualTo("trace-1");
+        assertThat(userMessage.path("metadata").has("traceId")).isFalse();
         assertThat(userMessage.path("metadata").path("source").asText()).isEqualTo("web");
         assertThat(userMessage.path("metadata").path("userAccount").asText()).isEqualTo("account1");
         assertThat(userMessage.path("metadata").path("globalUserId").asLong()).isEqualTo(1001L);
@@ -791,7 +817,9 @@ class RelayWebSocketRuntimeAdapterTest {
         JsonNode response = objectMapper.readTree(client.sent().get(1));
         assertThat(config.path("config").path("sessionMode").asText()).isEqualTo("resume");
         assertThat(config.path("config").path("sessionId").asText()).isEqualTo("relay-session-1");
+        assertThat(config.path("config").path("traceId").asText()).isEqualTo("interaction-trace-1");
         assertThat(response.path("type").asText()).isEqualTo("approval-response");
+        assertThat(response.has("traceId")).isFalse();
         assertThat(response.path("request_id").asText()).isEqualTo("approval-1");
         assertThat(response.path("approved").asBoolean()).isTrue();
         assertThat(response.path("scope").asText()).isEqualTo("once");
@@ -846,7 +874,8 @@ class RelayWebSocketRuntimeAdapterTest {
         ));
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
-        StepVerifier.create(adapter.cancel(cancelRequest("run1")))
+        StepVerifier.create(adapter.cancel(cancelRequest(
+                        "run1", "relay-session-1", new TraceContext("stop-trace-1"))))
                 .verifyComplete();
 
         assertThat(client.uri().toString()).isNotEqualTo("ws://relay.test/ws/run1");
@@ -857,6 +886,7 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(config.path("config").path("sessionMode").asText()).isEqualTo("resume");
         assertThat(config.path("config").path("sessionId").asText()).isEqualTo("relay-session-1");
         assertThat(config.path("config").path("uid").asText()).isEqualTo("user1");
+        assertThat(config.path("config").path("traceId").asText()).isEqualTo("stop-trace-1");
         assertThat(config.path("config").path("supports_incremental_recovery").asBoolean()).isTrue();
         assertThat(client.sent().get(1)).isEqualTo("{\"type\":\"stop_all_agents\"}");
     }
@@ -1033,6 +1063,12 @@ class RelayWebSocketRuntimeAdapterTest {
     private AgentRuntimeRequest request(String runtimeSessionId, RuntimeSessionMode sessionMode, String runId,
                                         String message, Map<String, Object> metadata,
                                         RuntimeForwardHeaders forwardHeaders) {
+        return request(runtimeSessionId, sessionMode, runId, message, metadata, forwardHeaders, TraceContext.empty());
+    }
+
+    private AgentRuntimeRequest request(String runtimeSessionId, RuntimeSessionMode sessionMode, String runId,
+                                        String message, Map<String, Object> metadata,
+                                        RuntimeForwardHeaders forwardHeaders, TraceContext traceContext) {
         return new AgentRuntimeRequest(
                 "tenant1",
                 "user1",
@@ -1044,11 +1080,14 @@ class RelayWebSocketRuntimeAdapterTest {
                 sessionMode,
                 message,
                 List.of(),
+                List.of(),
                 MemoryContext.empty(),
                 null,
                 null,
                 metadata,
-                forwardHeaders
+                Map.of(),
+                forwardHeaders,
+                traceContext
         );
     }
 
@@ -1057,6 +1096,10 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     private AgentRuntimeCancelRequest cancelRequest(String runId, String runtimeSessionId) {
+        return cancelRequest(runId, runtimeSessionId, TraceContext.empty());
+    }
+
+    private AgentRuntimeCancelRequest cancelRequest(String runId, String runtimeSessionId, TraceContext traceContext) {
         return new AgentRuntimeCancelRequest(
                 "tenant1",
                 "user1",
@@ -1064,9 +1107,11 @@ class RelayWebSocketRuntimeAdapterTest {
                 runId,
                 runtimeSessionId,
                 "relay",
+                null,
                 "USER_STOP",
                 Map.of(),
-                RuntimeForwardHeaders.empty()
+                RuntimeForwardHeaders.empty(),
+                traceContext
         );
     }
 
@@ -1089,7 +1134,8 @@ class RelayWebSocketRuntimeAdapterTest {
                         "questionnaireAnswers", Map.of("您对哪类 Sub-Agent 最感兴趣？", "工具与扩展类"),
                         "metadata", Map.of("clientTraceId", "trace-1", "token", "bad")
                 ),
-                RuntimeForwardHeaders.empty()
+                RuntimeForwardHeaders.empty(),
+                new TraceContext("interaction-trace-1")
         );
     }
 

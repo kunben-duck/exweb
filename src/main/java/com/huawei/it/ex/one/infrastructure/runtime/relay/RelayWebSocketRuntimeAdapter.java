@@ -9,6 +9,7 @@ import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractio
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
+import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.MessageCompletedEvent;
 import io.netty.channel.ChannelOption;
@@ -554,6 +555,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         config.put("sessionMode", request.runtimeSessionMode() == RuntimeSessionMode.NEW ? "new" : "resume");
         config.put("sessionId", relaySessionId);
         config.put("uid", request.userId());
+        putTraceId(config, request.traceContext());
         if (request.runtimeSessionMode() == RuntimeSessionMode.RESUME) {
             config.put("supports_incremental_recovery", true);
         }
@@ -568,6 +570,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         config.put("sessionMode", "resume");
         config.put("sessionId", relaySessionIdForCancel(request));
         config.put("uid", request.userId());
+        putTraceId(config, request.traceContext());
         config.put("supports_incremental_recovery", true);
         if (websocketProperties().getAppMode() != null && !websocketProperties().getAppMode().isBlank()) {
             config.put("appMode", websocketProperties().getAppMode());
@@ -580,6 +583,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         config.put("sessionMode", "resume");
         config.put("sessionId", blank(request.runtimeSessionId()) ? request.sessionId() : request.runtimeSessionId());
         config.put("uid", request.userId());
+        putTraceId(config, request.traceContext());
         config.put("supports_incremental_recovery", true);
         if (websocketProperties().getAppMode() != null && !websocketProperties().getAppMode().isBlank()) {
             config.put("appMode", websocketProperties().getAppMode());
@@ -591,12 +595,19 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         Map<String, Object> message = new LinkedHashMap<>();
         message.put("type", "user-message");
         message.put("content", request.message() == null ? "" : request.message());
+        putTraceId(message, request.traceContext());
         Map<String, Object> metadata = RelayRuntimeWireRequestMapper.relayMetadata(
                 request.metadata(), request.userAccount(), request.globalUserId());
         if (!metadata.isEmpty()) {
             message.put("metadata", metadata);
         }
         return toJson(message);
+    }
+
+    private void putTraceId(Map<String, Object> target, TraceContext traceContext) {
+        if (target != null && traceContext != null && traceContext.hasTraceId()) {
+            target.put("traceId", traceContext.traceId());
+        }
     }
 
     private String approvalResponseMessage(AgentRuntimeInteractionResponseRequest request) {

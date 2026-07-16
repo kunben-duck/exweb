@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.application.service.runtime;
 
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
+import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
@@ -28,16 +29,27 @@ public record RuntimeExecutionContext(
         RuntimeBinding binding,
         RuntimeSessionMode runtimeSessionMode,
         RuntimeForwardHeaders forwardHeaders,
-        List<UploadedDocument> documents
+        List<UploadedDocument> documents,
+        TraceContext traceContext
 ) {
     public RuntimeExecutionContext {
         documents = documents == null ? List.of() : List.copyOf(documents);
+        traceContext = traceContext == null ? TraceContext.empty() : traceContext;
+    }
+
+    public RuntimeExecutionContext(ChatCommand command, String runId, MemoryContext memory,
+                                   IntentDecision intent, RouteTarget route, UserContext user,
+                                   RuntimeBinding binding, RuntimeSessionMode runtimeSessionMode,
+                                   RuntimeForwardHeaders forwardHeaders, List<UploadedDocument> documents) {
+        this(command, runId, memory, intent, route, user, binding, runtimeSessionMode, forwardHeaders, documents,
+                TraceContext.empty());
     }
 
     public RuntimeExecutionContext(ChatCommand command, String runId, MemoryContext memory,
                                    IntentDecision intent, RouteTarget route, UserContext user,
                                    RuntimeBinding binding, RuntimeSessionMode runtimeSessionMode,
                                    RuntimeForwardHeaders forwardHeaders) {
-        this(command, runId, memory, intent, route, user, binding, runtimeSessionMode, forwardHeaders, List.of());
+        this(command, runId, memory, intent, route, user, binding, runtimeSessionMode, forwardHeaders, List.of(),
+                TraceContext.empty());
     }
 }

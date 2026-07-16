@@ -98,6 +98,27 @@ class ArchitectureNamingTest {
     }
 
     @Test
+    void asynchronousApplicationAndRuntimeLayersDoNotResolveTraceContextProvider() throws Exception {
+        for (String sourceRoot : new String[]{
+                "src/main/java/com/huawei/it/ex/one/application/service",
+                "src/main/java/com/huawei/it/ex/one/infrastructure/runtime"
+        }) {
+            try (Stream<Path> files = Files.walk(Path.of(sourceRoot))) {
+                files.filter(path -> path.toString().endsWith(".java"))
+                        .forEach(path -> {
+                            try {
+                                assertThat(Files.readString(path))
+                                        .as(path + " must receive the entry-captured TraceContext value")
+                                        .doesNotContain("TraceContextProvider");
+                            } catch (Exception ex) {
+                                throw new IllegalStateException(ex);
+                            }
+                        });
+            }
+        }
+    }
+
+    @Test
     void infrastructurePackagesDoNotKeepRedundantTechnologySubpackages() throws Exception {
         String sourceRoot = "src/main/java/com/huawei/it/ex/one/infrastructure";
         try (Stream<Path> files = Files.walk(Path.of(sourceRoot))) {

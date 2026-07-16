@@ -21,7 +21,7 @@ final class RelayRuntimeWireRequestMapper {
         }
         Map<String, Object> sanitized = new LinkedHashMap<>();
         metadata.forEach((key, value) -> {
-            if (key != null && value != null && !isSensitiveKey(key)) {
+            if (allowedMetadataKey(key) && value != null) {
                 sanitized.put(key, sanitizeValue(value));
             }
         });
@@ -43,7 +43,8 @@ final class RelayRuntimeWireRequestMapper {
         if (value instanceof Map<?, ?> map) {
             Map<String, Object> nested = new LinkedHashMap<>();
             map.forEach((key, nestedValue) -> {
-                if (key != null && nestedValue != null && !isSensitiveKey(String.valueOf(key))) {
+                String textKey = key == null ? null : String.valueOf(key);
+                if (allowedMetadataKey(textKey) && nestedValue != null) {
                     nested.put(String.valueOf(key), sanitizeValue(nestedValue));
                 }
             });
@@ -64,5 +65,9 @@ final class RelayRuntimeWireRequestMapper {
                 || normalized.contains("authorization")
                 || normalized.contains("secret")
                 || normalized.contains("password");
+    }
+
+    private static boolean allowedMetadataKey(String key) {
+        return key != null && !"traceid".equals(key.trim().toLowerCase(Locale.ROOT)) && !isSensitiveKey(key);
     }
 }

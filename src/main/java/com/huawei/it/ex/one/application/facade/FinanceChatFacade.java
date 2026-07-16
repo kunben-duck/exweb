@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.facade;
 
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
@@ -27,6 +28,17 @@ public interface FinanceChatFacade {
     Flux<ChatEvent> executeRun(UserContext user, ChatCommand command, RuntimeForwardHeaders forwardHeaders);
 
     /**
+     * 使用入口捕获的链路追踪快照执行聊天 run。
+     *
+     * <p>默认实现保持内部调用方兼容；正式 HTTP 入口调用该重载，具体实现负责把 trace 上下文传到
+     * 可能被路由到的 Relay，不得在异步线程重新解析 Provider。</p>
+     */
+    default Flux<ChatEvent> executeRun(UserContext user, TraceContext traceContext, ChatCommand command,
+                                       RuntimeForwardHeaders forwardHeaders) {
+        return executeRun(user, command, forwardHeaders);
+    }
+
+    /**
      * 兼容内部测试和非 HTTP 调用方的默认执行入口，不携带请求头透传。
      *
      * @param user 请求入口解析出的不可变用户身份快照。
@@ -48,6 +60,14 @@ public interface FinanceChatFacade {
     Mono<ChatRunStartResult> startRun(UserContext user, ChatCommand command, RuntimeForwardHeaders forwardHeaders);
 
     /**
+     * 使用入口捕获的链路追踪快照启动后台 run。
+     */
+    default Mono<ChatRunStartResult> startRun(UserContext user, TraceContext traceContext, ChatCommand command,
+                                              RuntimeForwardHeaders forwardHeaders) {
+        return startRun(user, command, forwardHeaders);
+    }
+
+    /**
      * 后台启动一轮聊天运行，不携带请求头透传。
      *
      * @param user 请求入口解析出的不可变用户身份快照。
@@ -67,6 +87,14 @@ public interface FinanceChatFacade {
      * @return stop 后的 run 状态。
      */
     Mono<ChatRunStopResult> stopRun(UserContext user, String runId, RuntimeForwardHeaders forwardHeaders);
+
+    /**
+     * 使用 stop 请求入口捕获的链路追踪快照取消 run。
+     */
+    default Mono<ChatRunStopResult> stopRun(UserContext user, TraceContext traceContext, String runId,
+                                            RuntimeForwardHeaders forwardHeaders) {
+        return stopRun(user, runId, forwardHeaders);
+    }
 
     /**
      * 停止指定 run，不携带请求头透传。

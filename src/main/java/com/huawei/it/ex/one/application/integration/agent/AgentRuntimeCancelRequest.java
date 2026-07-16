@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.integration.agent;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.huawei.it.ex.one.common.trace.TraceContext;
 import java.util.Map;
 
 /**
@@ -16,6 +17,7 @@ import java.util.Map;
  * @param reason 取消原因。
  * @param metadata 扩展诊断元数据。
  * @param forwardHeaders stop 请求入口捕获的请求头快照；仅用于可信 Runtime adapter 的出站请求头。
+ * @param traceContext stop 请求入口捕获的链路追踪快照。
  */
 public record AgentRuntimeCancelRequest(
         String tenantId,
@@ -27,17 +29,27 @@ public record AgentRuntimeCancelRequest(
         String runtimeTargetId,
         String reason,
         Map<String, Object> metadata,
-        @JsonIgnore RuntimeForwardHeaders forwardHeaders
+        @JsonIgnore RuntimeForwardHeaders forwardHeaders,
+        @JsonIgnore TraceContext traceContext
 ) {
     public AgentRuntimeCancelRequest(String tenantId, String userId, String sessionId, String runId,
                                      String runtimeSessionId, String provider, String reason,
                                      Map<String, Object> metadata,
                                      RuntimeForwardHeaders forwardHeaders) {
-        this(tenantId, userId, sessionId, runId, runtimeSessionId, provider, null, reason, metadata, forwardHeaders);
+        this(tenantId, userId, sessionId, runId, runtimeSessionId, provider, null, reason, metadata, forwardHeaders,
+                TraceContext.empty());
+    }
+
+    public AgentRuntimeCancelRequest(String tenantId, String userId, String sessionId, String runId,
+                                     String runtimeSessionId, String provider, String runtimeTargetId, String reason,
+                                     Map<String, Object> metadata, RuntimeForwardHeaders forwardHeaders) {
+        this(tenantId, userId, sessionId, runId, runtimeSessionId, provider, runtimeTargetId, reason, metadata,
+                forwardHeaders, TraceContext.empty());
     }
 
     public AgentRuntimeCancelRequest {
         metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
         forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
+        traceContext = traceContext == null ? TraceContext.empty() : traceContext;
     }
 }

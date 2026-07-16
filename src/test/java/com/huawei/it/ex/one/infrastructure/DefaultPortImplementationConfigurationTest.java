@@ -8,11 +8,14 @@ import com.huawei.it.ex.one.application.integration.auth.AuthHeaderRequest;
 import com.huawei.it.ex.one.application.integration.auth.SgovTokenResolver;
 import com.huawei.it.ex.one.application.integration.identity.ApplicationInstanceIdProvider;
 import com.huawei.it.ex.one.application.integration.intent.IntentRetryPolicy;
+import com.huawei.it.ex.one.application.integration.trace.TraceContextProvider;
+import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.infrastructure.auth.DefaultSgovTokenResolver;
 import com.huawei.it.ex.one.infrastructure.id.GeneratedApplicationInstanceIdProvider;
 import com.huawei.it.ex.one.infrastructure.intent.DefaultIntentRetryPolicy;
 import com.huawei.it.ex.one.infrastructure.runtime.UnsupportedAgentRuntimeRecoveryPort;
+import com.huawei.it.ex.one.infrastructure.trace.JalorTraceContextProvider;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -37,6 +40,10 @@ class DefaultPortImplementationConfigurationTest {
             assertThat(context).hasSingleBean(IntentRetryPolicy.class);
             assertThat(context.getBean(IntentRetryPolicy.class))
                     .isInstanceOf(DefaultIntentRetryPolicy.class);
+            assertThat(context).hasSingleBean(TraceContextProvider.class);
+            assertThat(context.getBean(TraceContextProvider.class))
+                    .isInstanceOf(JalorTraceContextProvider.class);
+            assertThat(context.getBean(TraceContextProvider.class).resolve()).isEqualTo(TraceContext.empty());
         });
     }
 
@@ -108,6 +115,18 @@ class DefaultPortImplementationConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasSingleBean(IntentRetryPolicy.class);
                     assertThat(context.getBean(IntentRetryPolicy.class)).isSameAs(custom);
+                });
+    }
+
+    @Test
+    void customTraceContextProviderOverridesDefaultPortImplementation() {
+        TraceContextProvider custom = () -> new TraceContext("jalor-trace-1");
+
+        contextRunner
+                .withBean(TraceContextProvider.class, () -> custom)
+                .run(context -> {
+                    assertThat(context).hasSingleBean(TraceContextProvider.class);
+                    assertThat(context.getBean(TraceContextProvider.class)).isSameAs(custom);
                 });
     }
 }

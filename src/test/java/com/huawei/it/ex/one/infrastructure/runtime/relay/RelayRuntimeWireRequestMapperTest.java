@@ -17,13 +17,16 @@ class RelayRuntimeWireRequestMapperTest {
                     "AUTHORIZATION", "secret",
                     "COOKIE", "secret",
                     "TOKEN", "secret",
+                    "traceId", "spoofed",
+                    "clientTraceId", "client-visible",
                     "safe", "visible"
             ));
 
             assertThat(result)
-                    .hasSize(1)
+                    .hasSize(2)
                     .containsEntry("safe", "visible")
-                    .doesNotContainKeys("AUTHORIZATION", "COOKIE", "TOKEN");
+                    .containsEntry("clientTraceId", "client-visible")
+                    .doesNotContainKeys("AUTHORIZATION", "COOKIE", "TOKEN", "traceId");
         } finally {
             Locale.setDefault(previousLocale);
         }

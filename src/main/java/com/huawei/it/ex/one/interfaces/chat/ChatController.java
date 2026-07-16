@@ -4,12 +4,16 @@ import com.huawei.it.ex.one.application.config.ChatStreamProperties;
 import com.huawei.it.ex.one.application.facade.FinanceChatFacade;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.identity.AuthContextProvider;
+import com.huawei.it.ex.one.application.integration.trace.TraceContextProvider;
 import com.huawei.it.ex.one.application.service.chat.MessageFeedbackCommand;
 import com.huawei.it.ex.one.application.service.chat.ChatFeedbackApplicationService;
 import com.huawei.it.ex.one.application.service.chat.ChatRunApplicationService;
 import com.huawei.it.ex.one.application.service.chat.ChatStreamApplicationService;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
+import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.chat.ChatMessageFeedback;
 import com.huawei.it.ex.one.domain.chat.ChatRunStopResult;
 import com.huawei.it.ex.one.domain.chat.ChatStreamStatus;
@@ -54,11 +58,14 @@ import reactor.core.scheduler.Schedulers;
 @RequestMapping("/v1/chat")
 @Validated
 public class ChatController {
+    private static final AppLogger log = AppLoggerFactory.getLogger(ChatController.class);
+
     private final FinanceChatFacade chatFacade;
     private final ChatStreamApplicationService chatStreamService;
     private final ChatRunApplicationService chatRunService;
     private final ChatFeedbackApplicationService feedbackService;
     private final AuthContextProvider auth;
+    private final TraceContextProvider traceContextProvider;
     private final PermissionChecker permissionChecker;
     private final ChatRequestTranslator requestTranslator;
     private final ChatEventTranslator eventTranslator;
@@ -67,7 +74,8 @@ public class ChatController {
     private final ChatStreamProperties chatStreamProperties;
     public ChatController(FinanceChatFacade chatFacade, ChatStreamApplicationService chatStreamService,
                           ChatRunApplicationService chatRunService, ChatFeedbackApplicationService feedbackService,
-                          AuthContextProvider auth, PermissionChecker permissionChecker,
+                          AuthContextProvider auth, TraceContextProvider traceContextProvider,
+                          PermissionChecker permissionChecker,
                           ChatRequestTranslator requestTranslator, ChatEventTranslator eventTranslator,
                           ChatTurnStreamTranslator turnStreamTranslator,
                           RuntimeForwardHeaderExtractor forwardHeaderExtractor,
@@ -77,6 +85,7 @@ public class ChatController {
         this.chatRunService = chatRunService;
         this.feedbackService = feedbackService;
         this.auth = auth;
+        this.traceContextProvider = traceContextProvider;
         this.permissionChecker = permissionChecker;
         this.requestTranslator = requestTranslator;
         this.eventTranslator = eventTranslator;
@@ -99,8 +108,9 @@ public class ChatController {
     public Mono<ChatRunStartDto> startRun(@Valid @RequestBody CreateChatRunRequest request,
                                           @RequestHeader(value = HttpHeaders.COOKIE, required = false) String cookieHeader) {
         UserContext user = resolveChatUser();
+        TraceContext traceContext = resolveTraceContext();
         RuntimeForwardHeaders forwardHeaders = forwardHeaderExtractor.fromCookieHeader(cookieHeader);
-        return chatFacade.startRun(user, requestTranslator.toCommand(request), forwardHeaders)
+        return chatFacade.startRun(user, traceContext, requestTranslator.toCommand(request), forwardHeaders)
                 .map(runStart -> new ChatRunStartDto(
                         runStart.runId(),
                         runStart.sessionId(),
@@ -122,8 +132,9 @@ public class ChatController {
     public Mono<ChatRunStopDto> stopRun(@PathVariable("runId") String runId,
                                         @RequestHeader(value = HttpHeaders.COOKIE, required = false) String cookieHeader) {
         UserContext user = resolveChatUser();
+        TraceContext traceContext = resolveTraceContext();
         RuntimeForwardHeaders forwardHeaders = forwardHeaderExtractor.fromCookieHeader(cookieHeader);
-        return chatFacade.stopRun(user, runId, forwardHeaders)
+        return chatFacade.stopRun(user, traceContext, runId, forwardHeaders)
                 .map(this::toStopDto)
                 .subscribeOn(Schedulers.boundedElastic());
     }
@@ -230,6 +241,17 @@ public class ChatController {
         UserContext user = auth.resolve();
         permissionChecker.checkChatPermission(user);
         return user;
+    }
+
+    private TraceContext resolveTraceContext() {
+        try {
+            TraceContext context = traceContextProvider == null ? null : traceContextProvider.resolve();
+            return context == null ? TraceContext.empty() : context;
+        } catch (RuntimeException ex) {
+            log.warn("TraceContext provider failed at request entry; continue without traceId. reason={}",
+                    ex.getMessage(), ex);
+            return TraceContext.empty();
+        }
     }
 
     private ResponseEntity<Flux<ServerSentEvent<ConversationTurnStreamDto>>> sseResponse(

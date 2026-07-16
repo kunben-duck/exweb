@@ -31,6 +31,7 @@ import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingResolution
 import com.huawei.it.ex.one.application.service.runtime.RuntimeExecutionContext;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeInteractionResponseContext;
 import com.huawei.it.ex.one.application.service.runtime.SystemResponseExecutor;
+import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
@@ -294,9 +295,16 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
     @Override
     public Mono<ChatRunStartResult> startRun(UserContext user, ChatCommand command, RuntimeForwardHeaders forwardHeaders) {
+        return startRun(user, TraceContext.empty(), command, forwardHeaders);
+    }
+
+    @Override
+    public Mono<ChatRunStartResult> startRun(UserContext user, TraceContext traceContext, ChatCommand command,
+                                             RuntimeForwardHeaders forwardHeaders) {
+        TraceContext traceSnapshot = normalizeTraceContext(traceContext);
         if (command != null && command.runMode() == ChatRunMode.CONTINUE_INTERACTION) {
             return Mono.defer(() -> startInteractionContinuation(
-                    user, interactionResponseCommand(user, command), forwardHeaders));
+                    user, traceSnapshot, interactionResponseCommand(user, command), forwardHeaders));
         }
         return Mono.defer(() -> {
             validateStandardRunCommand(command);
@@ -309,7 +317,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
             AtomicReference<Disposable> disposableRef = new AtomicReference<>();
             AtomicReference<String> runIdRef = new AtomicReference<>();
             AtomicBoolean terminal = new AtomicBoolean(false);
-            Flux<ChatEvent> runFlux = executeRun(user, command, headerSnapshot, startAttempt)
+            Flux<ChatEvent> runFlux = executeRun(user, traceSnapshot, command, headerSnapshot, startAttempt)
                     .subscribeOn(Schedulers.boundedElastic())
                     .doOnNext(event -> {
                         if (!startAttempt.beginFirstEventHandoff()) {
@@ -362,10 +370,16 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
     @Override
     public Mono<ChatRunStopResult> stopRun(UserContext user, String runId, RuntimeForwardHeaders forwardHeaders) {
-        return stopCoordinator.stopRun(user, runId, "USER_STOP", forwardHeaders);
+        return stopRun(user, TraceContext.empty(), runId, forwardHeaders);
     }
 
-    private Mono<ChatRunStartResult> startInteractionContinuation(UserContext user,
+    @Override
+    public Mono<ChatRunStopResult> stopRun(UserContext user, TraceContext traceContext, String runId,
+                                           RuntimeForwardHeaders forwardHeaders) {
+        return stopCoordinator.stopRun(user, normalizeTraceContext(traceContext), runId, "USER_STOP", forwardHeaders);
+    }
+
+    private Mono<ChatRunStartResult> startInteractionContinuation(UserContext user, TraceContext traceContext,
                                                                   ChatInteractionResponseCommand command,
                                                                   RuntimeForwardHeaders forwardHeaders) {
         return Mono.defer(() -> {
@@ -391,7 +405,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                         try {
                             return executeInteractionContinuation(
                                     user, claim, runId,
-                                    new InteractionContinuationOptions(headerSnapshot, startAttempt, null),
+                                    new InteractionContinuationOptions(
+                                            headerSnapshot, traceContext, startAttempt, null),
                                     clarificationInputRef.get());
                         } catch (RuntimeException ex) {
                             chatInteractionService.markWaiting(claim.request());
@@ -924,7 +939,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                                 interaction.interactionType().name(),
                                                 interaction.approvalId(),
                                                 claim.responsePayload(),
-                                                forwardHeaders
+                                                forwardHeaders,
+                                                options.traceContext()
                                         ))))
                 );
             });
@@ -978,7 +994,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     Flux.just(responseEvent),
                     routeAndExecute(new RoutePipelineRequest(
                             user, session, command, input.cumulativeAttachments(), input.cumulativeDocuments(), memory, runId,
-                            messagePlan.parentMessageId(), forwardHeaders, routeRef, bindingRef,
+                            messagePlan.parentMessageId(), forwardHeaders, options.traceContext(), routeRef, bindingRef,
                             runtimeSessionModeRef, executionClaim, run,
                             foldedRouteQuery, input.intentQuery(), foldedRouteQuery,
                             input.runtimeMetadata()))));
@@ -1110,8 +1126,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     if (route.type() == RouteType.DOMAIN_AGENT) {
                         DomainAgentRunContext domainContext = new DomainAgentRunContext(
                                 command, runId, session, runtimeMemory, route, user, routeRef, bindingRef,
-                                executionClaim, forwardHeaders, switchIntent, List.of(), new HashSet<>(), 0,
-                                candidateRouteQuery);
+                                executionClaim, forwardHeaders, options.traceContext(), switchIntent, List.of(),
+                                new HashSet<>(), 0, candidateRouteQuery);
                         body = requireCurrentOwnerRunning(executionClaim, "before-route-switch-domain-agent")
                                 .thenMany(Flux.defer(() -> executeDomainAgentWithReroute(domainContext)));
                     } else {
@@ -1119,7 +1135,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                         body = requireCurrentOwnerRunning(executionClaim, "before-route-switch-relay")
                                 .thenMany(Flux.defer(() -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
                                         command, runId, runtimeMemory, switchIntent, route, user, binding,
-                                        selectedMode, forwardHeaders, List.of()))));
+                                        selectedMode, forwardHeaders, List.of(), options.traceContext()))));
                     }
                     body = Flux.concat(Flux.just(routeSwitchAppliedEvent(
                             runId, session.id(), interaction, route, binding)), body);
@@ -1174,11 +1190,17 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
     @Override
     public Flux<ChatEvent> executeRun(UserContext user, ChatCommand command, RuntimeForwardHeaders forwardHeaders) {
-        return executeRun(user, command, forwardHeaders, null);
+        return executeRun(user, TraceContext.empty(), command, forwardHeaders);
     }
 
-    private Flux<ChatEvent> executeRun(UserContext user, ChatCommand command, RuntimeForwardHeaders forwardHeaders,
-                                       RunStartAttempt startAttempt) {
+    @Override
+    public Flux<ChatEvent> executeRun(UserContext user, TraceContext traceContext, ChatCommand command,
+                                      RuntimeForwardHeaders forwardHeaders) {
+        return executeRun(user, normalizeTraceContext(traceContext), command, forwardHeaders, null);
+    }
+
+    private Flux<ChatEvent> executeRun(UserContext user, TraceContext traceContext, ChatCommand command,
+                                       RuntimeForwardHeaders forwardHeaders, RunStartAttempt startAttempt) {
         // defer 确保每个订阅都会生成独立 runId，避免热流复用导致事件串线。
         return Flux.defer(() -> {
             ensureStartAttemptActive(startAttempt, "before-run-prepare");
@@ -1282,7 +1304,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                             routeRef, bindingRef, runtimeSessionModeRef));
                     return routeAndExecute(new RoutePipelineRequest(
                             user, session, runCommand, attachments, documents, memory, runId, runtimeBindingLeafId,
-                            headerSnapshot, routeRef, bindingRef, runtimeSessionModeRef, executionClaim, run,
+                            headerSnapshot, traceContext, routeRef, bindingRef, runtimeSessionModeRef, executionClaim, run,
                             currentRouteQuery, intentQuery, intentQuery, null));
                 });
             } catch (RuntimeException ex) {
@@ -1332,7 +1354,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                         context.bindingRef().get(),
                         RuntimeSessionMode.RESUME,
                         context.forwardHeaders(),
-                        context.documents()))
+                        context.documents(),
+                        context.traceContext()))
                 .map(event -> enrichDomainAgentControlEvent(event, context.route().selectedAgentCode()))
                 .map(event -> {
                     DomainAgentRefusal refusal = domainAgentRefusal(event);
@@ -1455,7 +1478,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                     resolution.binding(),
                                     resolution.sessionMode(),
                                     context.forwardHeaders(),
-                                    context.documents())))));
+                                    context.documents(),
+                                    context.traceContext())))));
         }
         if (nextRoute == null || nextRoute.type() != RouteType.DOMAIN_AGENT
                 || nextRoute.selectedAgentCode() == null || nextRoute.selectedAgentCode().isBlank()
@@ -1496,6 +1520,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 context.bindingRef(),
                 context.executionClaim(),
                 context.forwardHeaders(),
+                context.traceContext(),
                 nextSignal.intentDecision(),
                 context.documents(),
                 reroute.rejectedDomainAgentIds(),
@@ -2253,14 +2278,16 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     case DOMAIN_AGENT -> executeDomainAgentWithReroute(new DomainAgentRunContext(
                             runtimeCommand, request.runId(), request.session(), runtimeMemory,
                             resolution.route(), request.user(), request.routeRef(), request.bindingRef(),
-                            request.executionClaim(), request.forwardHeaders(), resolution.intent(), request.documents(),
-                            new HashSet<>(), 0, request.routeMemoryQuery()));
+                            request.executionClaim(), request.forwardHeaders(), request.traceContext(),
+                            resolution.intent(), request.documents(), new HashSet<>(), 0,
+                            request.routeMemoryQuery()));
                     case SYSTEM_RESPONSE -> systemResponseExecutor.execute(runtimeCommand, request.runId(),
                             resolution.intent(), resolution.route());
                     case AGENT_RUNTIME -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
                             runtimeCommand, request.runId(), runtimeMemory, resolution.intent(),
                             resolution.route(), request.user(), request.bindingRef().get(),
-                            resolution.runtimeSessionMode(), request.forwardHeaders(), request.documents()));
+                            resolution.runtimeSessionMode(), request.forwardHeaders(), request.documents(),
+                            request.traceContext()));
                 }));
     }
 
@@ -2289,6 +2316,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 request.bindingRef(),
                 request.executionClaim(),
                 request.forwardHeaders(),
+                request.traceContext(),
                 null,
                 request.documents(),
                 state.rejectedDomainAgentIds(),
@@ -3273,11 +3301,16 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
     private record InteractionContinuationOptions(
             RuntimeForwardHeaders forwardHeaders,
+            TraceContext traceContext,
             RunStartAttempt startAttempt,
             ChatSession session
     ) {
+        private InteractionContinuationOptions {
+            traceContext = traceContext == null ? TraceContext.empty() : traceContext;
+        }
+
         private InteractionContinuationOptions withSession(ChatSession value) {
-            return new InteractionContinuationOptions(forwardHeaders, startAttempt, value);
+            return new InteractionContinuationOptions(forwardHeaders, traceContext, startAttempt, value);
         }
     }
 
@@ -3349,6 +3382,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
             String runId,
             String runtimeBindingLeafId,
             RuntimeForwardHeaders forwardHeaders,
+            TraceContext traceContext,
             AtomicReference<RouteTarget> routeRef,
             AtomicReference<RuntimeBinding> bindingRef,
             AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
@@ -3406,6 +3440,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
             AtomicReference<RuntimeBinding> bindingRef,
             RunExecutionClaim executionClaim,
             RuntimeForwardHeaders forwardHeaders,
+            TraceContext traceContext,
             IntentDecision intentDecision,
             List<UploadedDocument> documents,
             Set<String> rejectedDomainAgentIds,
@@ -3636,6 +3671,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
     private RuntimeForwardHeaders normalizeForwardHeaders(RuntimeForwardHeaders forwardHeaders) {
         return forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
+    }
+
+    private TraceContext normalizeTraceContext(TraceContext traceContext) {
+        return traceContext == null ? TraceContext.empty() : traceContext;
     }
 
     private Map<String, Object> runCompletedPayload(RouteTarget route, RuntimeBinding binding) {

@@ -8,9 +8,11 @@ import com.huawei.it.ex.one.application.config.ChatStreamProperties;
 import com.huawei.it.ex.one.application.facade.FinanceChatFacade;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
+import com.huawei.it.ex.one.application.integration.trace.TraceContextProvider;
 import com.huawei.it.ex.one.application.service.chat.ChatStreamApplicationService;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatRunStartResult;
@@ -27,6 +29,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.bind.annotation.GetMapping;
 import reactor.core.publisher.Flux;
@@ -207,13 +210,23 @@ class ChatProtocolConvergenceTest {
     void runsEndpointReturnsRunIdentifiersWithoutProtocolUrls() {
         AtomicReference<RuntimeForwardHeaders> startHeaders = new AtomicReference<>();
         AtomicReference<RuntimeForwardHeaders> stopHeaders = new AtomicReference<>();
+        AtomicReference<TraceContext> startTrace = new AtomicReference<>();
+        AtomicReference<TraceContext> stopTrace = new AtomicReference<>();
+        AtomicInteger traceResolutions = new AtomicInteger();
+        ThreadLocal<String> entryTrace = new ThreadLocal<>();
+        TraceContextProvider traceProvider = () -> {
+            traceResolutions.incrementAndGet();
+            return new TraceContext(entryTrace.get());
+        };
         FinanceChatFacade chatFacade = new RunStartOnlyChatFacade(
                 new ChatRunStartResult("run1", "session1", 10L, Instant.parse("2026-05-16T00:00:00Z"),
                         ChatStreamTopics.runTopic("run1")),
                 new ChatRunStopResult("run1", "session1", ChatRunStatus.CANCELLED, 12L,
                         Instant.parse("2026-05-16T00:00:01Z")),
                 startHeaders,
-                stopHeaders
+                stopHeaders,
+                startTrace,
+                stopTrace
         );
         ChatStreamApplicationService streamService = null;
         ChatController controller = new ChatController(
@@ -222,6 +235,7 @@ class ChatProtocolConvergenceTest {
                 null,
                 null,
                 () -> user(),
+                traceProvider,
                 new PermissionChecker(),
                 new ChatRequestTranslator(),
                 new ChatEventTranslator(),
@@ -231,6 +245,7 @@ class ChatProtocolConvergenceTest {
         );
         CreateChatRunRequest request = new CreateChatRunRequest("cmd1", "session1", null, "你好", List.of(), Map.of());
 
+        entryTrace.set("run-trace-1");
         var runStart = controller.startRun(request, "finex_proxy_profile=profile1").block();
 
         assertThat(runStart).isNotNull();
@@ -240,7 +255,9 @@ class ChatProtocolConvergenceTest {
         assertThat(runStart.streamTopicId()).isEqualTo("chat-run-run1");
         assertThat(startHeaders.get()).isNotNull();
         assertThat(startHeaders.get().cookieHeader()).isEqualTo("finex_proxy_profile=profile1");
+        assertThat(startTrace.get()).isEqualTo(new TraceContext("run-trace-1"));
 
+        entryTrace.set("stop-trace-1");
         var stopResult = controller.stopRun("run1", "finex_proxy_profile=profile1").block();
 
         assertThat(stopResult).isNotNull();
@@ -248,6 +265,43 @@ class ChatProtocolConvergenceTest {
         assertThat(stopResult.latestSeq()).isEqualTo(12L);
         assertThat(stopHeaders.get()).isNotNull();
         assertThat(stopHeaders.get().cookieHeader()).isEqualTo("finex_proxy_profile=profile1");
+        assertThat(stopTrace.get()).isEqualTo(new TraceContext("stop-trace-1"));
+        assertThat(traceResolutions).hasValue(2);
+        entryTrace.remove();
+    }
+
+    @Test
+    void traceProviderFailureFallsBackToEmptyContextAtEntry() {
+        AtomicReference<TraceContext> startTrace = new AtomicReference<>();
+        FinanceChatFacade chatFacade = new RunStartOnlyChatFacade(
+                new ChatRunStartResult("run1", "session1", 10L, Instant.parse("2026-05-16T00:00:00Z"),
+                        ChatStreamTopics.runTopic("run1")),
+                new ChatRunStopResult("run1", "session1", ChatRunStatus.CANCELLED, 12L,
+                        Instant.parse("2026-05-16T00:00:01Z")),
+                new AtomicReference<>(), new AtomicReference<>(), startTrace, new AtomicReference<>()
+        );
+        ChatController controller = new ChatController(
+                chatFacade,
+                null,
+                null,
+                null,
+                () -> user(),
+                () -> {
+                    throw new IllegalStateException("jalor context unavailable");
+                },
+                new PermissionChecker(),
+                new ChatRequestTranslator(),
+                new ChatEventTranslator(),
+                new ChatTurnStreamTranslator(),
+                new RuntimeForwardHeaderExtractor(new AgentRuntimeForwardCookieProperties()),
+                new ChatStreamProperties()
+        );
+
+        var result = controller.startRun(
+                new CreateChatRunRequest("cmd1", "session1", null, "你好", List.of(), Map.of()), null).block();
+
+        assertThat(result).isNotNull();
+        assertThat(startTrace.get()).isEqualTo(TraceContext.empty());
     }
 
     @Test
@@ -306,7 +360,9 @@ class ChatProtocolConvergenceTest {
     private record RunStartOnlyChatFacade(ChatRunStartResult runStart,
                                           ChatRunStopResult stopResult,
                                           AtomicReference<RuntimeForwardHeaders> startHeaders,
-                                          AtomicReference<RuntimeForwardHeaders> stopHeaders) implements FinanceChatFacade {
+                                          AtomicReference<RuntimeForwardHeaders> stopHeaders,
+                                          AtomicReference<TraceContext> startTrace,
+                                          AtomicReference<TraceContext> stopTrace) implements FinanceChatFacade {
         @Override
         public Flux<ChatEvent> executeRun(UserContext user, ChatCommand command, RuntimeForwardHeaders forwardHeaders) {
             return Flux.error(new UnsupportedOperationException("executeRun is not used by this test"));
@@ -319,9 +375,23 @@ class ChatProtocolConvergenceTest {
         }
 
         @Override
+        public Mono<ChatRunStartResult> startRun(UserContext user, TraceContext traceContext, ChatCommand command,
+                                                 RuntimeForwardHeaders forwardHeaders) {
+            startTrace.set(traceContext);
+            return startRun(user, command, forwardHeaders);
+        }
+
+        @Override
         public Mono<ChatRunStopResult> stopRun(UserContext user, String runId, RuntimeForwardHeaders forwardHeaders) {
             stopHeaders.set(forwardHeaders);
             return Mono.just(stopResult);
+        }
+
+        @Override
+        public Mono<ChatRunStopResult> stopRun(UserContext user, TraceContext traceContext, String runId,
+                                               RuntimeForwardHeaders forwardHeaders) {
+            stopTrace.set(traceContext);
+            return stopRun(user, runId, forwardHeaders);
         }
     }
 

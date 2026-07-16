@@ -6,6 +6,7 @@ import com.huawei.it.ex.one.domain.document.UploadedDocument;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
+import com.huawei.it.ex.one.common.trace.TraceContext;
 import java.util.List;
 import java.util.Map;
 
@@ -32,6 +33,7 @@ import java.util.Map;
  * @param metadata 前端或上游传入的扩展元数据。
  * @param bindingMetadata 当前 RuntimeBinding 的服务端元数据，仅供 Runtime adapter 生成事件，不向下游透传。
  * @param forwardHeaders 仅在内存中传递给 Runtime adapter 的入口请求头快照；必须被 JSON 序列化忽略。
+ * @param traceContext 请求入口捕获的链路追踪快照；仅由需要的可信 Runtime adapter 使用。
  */
 public record AgentRuntimeRequest(
         String tenantId,
@@ -50,7 +52,8 @@ public record AgentRuntimeRequest(
         RouteTarget routeTarget,
         Map<String, Object> metadata,
         @JsonIgnore Map<String, Object> bindingMetadata,
-        @JsonIgnore RuntimeForwardHeaders forwardHeaders
+        @JsonIgnore RuntimeForwardHeaders forwardHeaders,
+        @JsonIgnore TraceContext traceContext
 ) {
     public AgentRuntimeRequest {
         runtimeSessionMode = runtimeSessionMode == null ? RuntimeSessionMode.RESUME : runtimeSessionMode;
@@ -59,6 +62,19 @@ public record AgentRuntimeRequest(
         metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
         bindingMetadata = bindingMetadata == null ? Map.of() : Map.copyOf(bindingMetadata);
         forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
+        traceContext = traceContext == null ? TraceContext.empty() : traceContext;
+    }
+
+    public AgentRuntimeRequest(String tenantId, String userId, String userAccount, Long globalUserId,
+                               String sessionId, String runId, String runtimeSessionId,
+                               RuntimeSessionMode runtimeSessionMode, String message,
+                               List<AttachmentRef> attachments, List<UploadedDocument> documents,
+                               MemoryContext memoryContext, IntentDecision intentDecision, RouteTarget routeTarget,
+                               Map<String, Object> metadata, Map<String, Object> bindingMetadata,
+                               RuntimeForwardHeaders forwardHeaders) {
+        this(tenantId, userId, userAccount, globalUserId, sessionId, runId, runtimeSessionId,
+                runtimeSessionMode, message, attachments, documents, memoryContext, intentDecision, routeTarget,
+                metadata, bindingMetadata, forwardHeaders, TraceContext.empty());
     }
 
     public AgentRuntimeRequest(String tenantId, String userId, String userAccount, Long globalUserId,
@@ -69,6 +85,6 @@ public record AgentRuntimeRequest(
                                Map<String, Object> metadata, RuntimeForwardHeaders forwardHeaders) {
         this(tenantId, userId, userAccount, globalUserId, sessionId, runId, runtimeSessionId,
                 runtimeSessionMode, message, attachments, List.of(), memoryContext, intentDecision, routeTarget,
-                metadata, Map.of(), forwardHeaders);
+                metadata, Map.of(), forwardHeaders, TraceContext.empty());
     }
 }

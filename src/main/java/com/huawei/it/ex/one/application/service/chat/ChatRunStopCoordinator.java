@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
@@ -106,18 +107,29 @@ public class ChatRunStopCoordinator {
 
     public Mono<ChatRunStopResult> stopRun(UserContext user, String runId, String reason,
                                            RuntimeForwardHeaders forwardHeaders) {
-        return Mono.defer(() -> Mono.just(stopRunNow(user, runId, reason, forwardHeaders)));
+        return stopRun(user, TraceContext.empty(), runId, reason, forwardHeaders);
+    }
+
+    public Mono<ChatRunStopResult> stopRun(UserContext user, TraceContext traceContext, String runId, String reason,
+                                           RuntimeForwardHeaders forwardHeaders) {
+        return Mono.defer(() -> Mono.just(stopRunNow(user, traceContext, runId, reason, forwardHeaders)));
     }
 
     public ChatRunStopResult stopRunNow(UserContext user, String runId, String reason,
                                         RuntimeForwardHeaders forwardHeaders) {
-        return stopRunNow(user, runId, reason, forwardHeaders, null);
+        return stopRunNow(user, TraceContext.empty(), runId, reason, forwardHeaders);
+    }
+
+    public ChatRunStopResult stopRunNow(UserContext user, TraceContext traceContext, String runId, String reason,
+                                        RuntimeForwardHeaders forwardHeaders) {
+        return stopRunNow(user, runId, reason,
+                new StopRunContext(traceContext, forwardHeaders, null));
     }
 
     private ChatRunStopResult stopRunNow(UserContext user, String runId, String reason,
-                                         RuntimeForwardHeaders forwardHeaders, ChatSession sessionSnapshot) {
+                                         StopRunContext stopContext) {
         String effectiveReason = normalizeReason(reason);
-        RuntimeForwardHeaders headerSnapshot = normalizeForwardHeaders(forwardHeaders);
+        RuntimeForwardHeaders headerSnapshot = stopContext.forwardHeaders();
         ChatRunStopDecision decision = chatRunService.requestStop(user, runId, effectiveReason);
         ChatRun run = decision.run();
         if (!decision.appendCancelledEvent()) {
@@ -128,14 +140,15 @@ public class ChatRunStopCoordinator {
          * 先通知下游，再 dispose 本机订阅。Relay WebSocket stop 需要命中仍存活的
          * outbound exchange；取消正确性已由 requestStop 写入的 cancel flag 和 guarded insert 保证。
          */
-        cancelDownstreamBestEffort(run, user, headerSnapshot);
+        cancelDownstreamBestEffort(run, user, stopContext.traceContext(), headerSnapshot);
         runExecutionRegistry.cancel(run.id());
         if (!chatRunService.shouldAcceptEvent(RunCancelledEvent.of(run.id(), run.sessionId(), run.cancelReason()))) {
             ChatRun latest = chatRunService.requireOwnedRun(user, run.id());
             reconcileTerminalInteraction(latest);
             return chatRunService.toStopResult(latest);
         }
-        StopMessageTarget messageTarget = preparePartialAssistant(user, run, effectiveReason, sessionSnapshot);
+        StopMessageTarget messageTarget = preparePartialAssistant(
+                user, run, effectiveReason, stopContext.sessionSnapshot());
         ChatRun latest;
         if (terminalCommitService == null) {
             messageTarget = persistPreparedPartialAssistant(run, messageTarget);
@@ -193,9 +206,10 @@ public class ChatRunStopCoordinator {
                 run.tenantId(), run.userId(), interactionId, run.id());
     }
 
-    private void cancelDownstreamBestEffort(ChatRun run, UserContext user, RuntimeForwardHeaders headerSnapshot) {
+    private void cancelDownstreamBestEffort(ChatRun run, UserContext user, TraceContext traceContext,
+                                            RuntimeForwardHeaders headerSnapshot) {
         try {
-            cancelDownstream(run, user, headerSnapshot)
+            cancelDownstream(run, user, traceContext, headerSnapshot)
                     .onErrorResume(ex -> {
                         log.warn("Downstream run cancel failed. runId={}, reason={}", run.id(), ex.getMessage());
                         return Mono.empty();
@@ -215,7 +229,8 @@ public class ChatRunStopCoordinator {
         if (run == null) {
             return;
         }
-        stopRunNow(user, run.id(), "SESSION_DELETE", RuntimeForwardHeaders.empty(), sessionSnapshot);
+        stopRunNow(user, run.id(), "SESSION_DELETE",
+                new StopRunContext(TraceContext.empty(), RuntimeForwardHeaders.empty(), sessionSnapshot));
     }
 
     private StopMessageTarget preparePartialAssistant(UserContext user, ChatRun run, String reason,
@@ -322,15 +337,12 @@ public class ChatRunStopCoordinator {
         return text.isBlank() ? null : text;
     }
 
-    private Mono<Void> cancelDownstream(ChatRun run, UserContext user, RuntimeForwardHeaders forwardHeaders) {
+    private Mono<Void> cancelDownstream(ChatRun run, UserContext user, TraceContext traceContext,
+                                        RuntimeForwardHeaders forwardHeaders) {
         if (run == null || run.runtimeProvider() == null || run.runtimeProvider().isBlank()) {
             return Mono.empty();
         }
-        return agentRuntimeExecutor.cancel(run, user, forwardHeaders);
-    }
-
-    private RuntimeForwardHeaders normalizeForwardHeaders(RuntimeForwardHeaders forwardHeaders) {
-        return forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
+        return agentRuntimeExecutor.cancel(run, user, traceContext, forwardHeaders);
     }
 
     private String normalizeReason(String reason) {
@@ -374,6 +386,14 @@ public class ChatRunStopCoordinator {
                 return notReady();
             }
             return new StopMessageTarget(true, assistantMessageId, partialAssistant);
+        }
+    }
+
+    private record StopRunContext(TraceContext traceContext, RuntimeForwardHeaders forwardHeaders,
+                                  ChatSession sessionSnapshot) {
+        private StopRunContext {
+            traceContext = traceContext == null ? TraceContext.empty() : traceContext;
+            forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
         }
     }
 }

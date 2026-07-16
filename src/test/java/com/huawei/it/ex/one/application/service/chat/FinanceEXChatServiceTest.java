@@ -23,6 +23,7 @@ import com.huawei.it.ex.one.application.integration.agent.DomainAgentClient;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentCancelRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.application.integration.conversation.ChatInteractionRequestRepository;
@@ -1332,11 +1333,13 @@ class FinanceEXChatServiceTest {
         };
         AtomicInteger relayCalls = new AtomicInteger();
         AtomicReference<RuntimeSessionMode> relaySessionMode = new AtomicReference<>();
+        AtomicReference<TraceContext> relayTraceContext = new AtomicReference<>();
         AgentRuntime relay = new AgentRuntime() {
             @Override
             public Flux<ChatEvent> query(AgentRuntimeRequest request) {
                 relayCalls.incrementAndGet();
                 relaySessionMode.set(request.runtimeSessionMode());
+                relayTraceContext.set(request.traceContext());
                 return Flux.just(
                         MessageDeltaEvent.of(request.runId(), request.sessionId(), "relay answer"),
                         com.huawei.it.ex.one.domain.chat.MessageCompletedEvent.of(
@@ -1351,8 +1354,9 @@ class FinanceEXChatServiceTest {
         FinanceEXChatService service = financeServiceWithDomainClient(
                 sessions, messages, runs, events, routeService, domainClient, relay);
 
-        StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
-                        null, null, "web", "hello", List.of(), Map.of())).collectList())
+        StepVerifier.create(service.executeRun(user, new TraceContext("refusal-reroute-trace"),
+                        new ChatCommand("cmd1", null, null, null, null, "web", "hello", List.of(), Map.of()),
+                        RuntimeForwardHeaders.empty()).collectList())
                 .assertNext(stream -> {
                     assertThat(stream).anySatisfy(event -> assertThat(event.payload())
                             .containsEntry("sourceType", "domain-agent-reroute")
@@ -1365,6 +1369,7 @@ class FinanceEXChatServiceTest {
 
         assertThat(relayCalls).hasValue(1);
         assertThat(relaySessionMode).hasValue(RuntimeSessionMode.NEW);
+        assertThat(relayTraceContext).hasValue(new TraceContext("refusal-reroute-trace"));
         assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role()))
                 .singleElement()
                 .extracting(ChatMessage::content)
@@ -2850,10 +2855,10 @@ class FinanceEXChatServiceTest {
                 new com.huawei.it.ex.one.application.config.DomainAgentProperties(),
                 liveEventBus());
 
-        StepVerifier.create(service.executeRun(user, new ChatCommand(
+        StepVerifier.create(service.executeRun(user, new TraceContext("relay-trace-attachment"), new ChatCommand(
                                 "cmd-attachment-only", null, null, null, null, "web", null,
                                 List.of(new AttachmentRef("doc1", "forged-name.txt", "text/plain", 1L)),
-                                Map.of()))
+                                Map.of()), RuntimeForwardHeaders.empty())
                         .collectList())
                 .assertNext(stream -> assertThat(stream).extracting(ChatEvent::type)
                         .containsExactly("run.started", "message.snapshot", "run.completed"))
@@ -2863,6 +2868,7 @@ class FinanceEXChatServiceTest {
         assertThat(routedCommand.get().message()).isEmpty();
         assertThat(intentQuery).hasValue("[用户上传文档] invoice.pdf");
         assertThat(runtimeRequest.get()).isNotNull();
+        assertThat(runtimeRequest.get().traceContext().traceId()).isEqualTo("relay-trace-attachment");
         assertThat(runtimeRequest.get().message()).isEmpty();
         assertThat(runtimeRequest.get().attachments()).extracting(AttachmentRef::name)
                 .containsExactly("invoice.pdf");

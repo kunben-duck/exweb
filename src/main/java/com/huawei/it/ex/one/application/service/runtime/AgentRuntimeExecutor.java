@@ -7,6 +7,7 @@ import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractio
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
+import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
@@ -77,7 +78,8 @@ public class AgentRuntimeExecutor {
                 context.route(),
                 SelectedIntentContext.removeReserved(command.metadata()),
                 binding == null ? Map.of() : binding.metadata(),
-                context.forwardHeaders()
+                context.forwardHeaders(),
+                context.traceContext()
         );
         AgentRuntime runtime = context.binding() == null
                 ? runtimeRegistry.defaultRuntime()
@@ -99,7 +101,8 @@ public class AgentRuntimeExecutor {
                 context.interactionType(),
                 context.approvalId(),
                 context.responsePayload(),
-                context.forwardHeaders()
+                context.forwardHeaders(),
+                context.traceContext()
         );
         return protect(context.runtimeProvider(), runtimeRegistry.continueWithUserResponse(request));
     }
@@ -112,6 +115,12 @@ public class AgentRuntimeExecutor {
      * 尽力取消当前 Runtime run。
      */
     public Mono<Void> cancel(ChatRun run, UserContext user, RuntimeForwardHeaders forwardHeaders) {
+        return cancel(run, user, TraceContext.empty(), forwardHeaders);
+    }
+
+    public Mono<Void> cancel(ChatRun run, UserContext user,
+                             TraceContext traceContext,
+                             RuntimeForwardHeaders forwardHeaders) {
         if (run == null) {
             return Mono.empty();
         }
@@ -125,7 +134,8 @@ public class AgentRuntimeExecutor {
                 run.agentCode(),
                 run.cancelReason(),
                 Map.of("routeType", run.routeType() == null ? "" : run.routeType()),
-                forwardHeaders
+                forwardHeaders,
+                traceContext
         );
         return runtimeRegistry.runtime(run.runtimeProvider()).cancel(request);
     }

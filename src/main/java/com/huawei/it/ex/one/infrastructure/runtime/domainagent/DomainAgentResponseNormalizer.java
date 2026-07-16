@@ -30,7 +30,6 @@ public class DomainAgentResponseNormalizer {
     private final ObjectMapper objectMapper;
     private final DomainAgentControlEventMapper controlEventMapper;
     private final int maxPendingFrameBytes;
-    private final int maxFragmentBytes;
 
     public DomainAgentResponseNormalizer(ObjectMapper objectMapper) {
         this(objectMapper, new DomainAgentProperties());
@@ -42,7 +41,6 @@ public class DomainAgentResponseNormalizer {
         this.controlEventMapper = new DomainAgentControlEventMapper();
         DomainAgentProperties nextProperties = properties == null ? new DomainAgentProperties() : properties;
         this.maxPendingFrameBytes = nextProperties.normalizedMaxPendingFrameBytes();
-        this.maxFragmentBytes = nextProperties.normalizedMaxFragmentBytes();
     }
 
     public List<ChatEvent> normalize(String runId, String sessionId, String chunk) {
@@ -62,17 +60,17 @@ public class DomainAgentResponseNormalizer {
     }
 
     public List<ChatEvent> normalize(String runId, String sessionId, String chunk, DomainAgentStreamState state) {
-        if (chunk == null || chunk.isBlank()) {
+        if (chunk == null || chunk.isEmpty()) {
             return List.of();
         }
         DomainAgentStreamState streamState = state == null ? newStreamState() : state;
         List<ChatEvent> events = new ArrayList<>();
-        if (streamState.activeFragment != null) {
-            events.addAll(continueFragment(runId, sessionId, chunk, streamState));
+        if (streamState.pendingFrame != null) {
+            events.addAll(continuePendingFrame(runId, sessionId, chunk, streamState));
             return List.copyOf(events);
         }
         streamState.frameBuffer.append(chunk);
-        while (streamState.activeFragment == null) {
+        while (true) {
             FrameExtraction extraction = extractCompleteFrame(streamState.frameBuffer);
             if (extraction == null) {
                 break;
@@ -81,16 +79,14 @@ public class DomainAgentResponseNormalizer {
                 events.addAll(normalizeFrame(runId, sessionId, extraction.frame(), streamState));
             }
         }
-        if (streamState.activeFragment == null && !streamState.frameBuffer.isEmpty()) {
-            DomainAgentFragmentKind fragmentKind = detectFragmentKind(stripLeadingFramePrefix(streamState.frameBuffer.toString()));
-            if (fragmentKind != null) {
-                events.addAll(startFragment(runId, sessionId, streamState, fragmentKind));
-            } else if (utf8Length(streamState.frameBuffer) > maxPendingFrameBytes) {
-                String sourcePayload = truncate(streamState.frameBuffer.toString());
+        if (!streamState.frameBuffer.isEmpty()) {
+            String pending = stripLeadingFramePrefix(streamState.frameBuffer.toString());
+            int jsonStart = firstJsonStart(pending);
+            if (jsonStart >= 0) {
                 streamState.frameBuffer.setLength(0);
-                events.add(RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
-                        "domain-agent", "domain-agent-frame-too-large", "event", "runtime", "debug", null,
-                        Map.of("maxPendingFrameBytes", maxPendingFrameBytes, "raw", sourcePayload))));
+                startPendingFrame(streamState, pending.substring(jsonStart));
+            } else {
+                validateFrameSize(pending);
             }
         }
         return List.copyOf(events);
@@ -107,17 +103,13 @@ public class DomainAgentResponseNormalizer {
             return List.of();
         }
         List<ChatEvent> events = new ArrayList<>();
-        if (state.activeFragment != null) {
-            if (state.activeFragment.scanner().isComplete()) {
-                events.addAll(completeFragment(runId, sessionId, state));
-            } else {
-                DomainAgentActiveFragment fragment = state.activeFragment;
-                state.activeFragment = null;
-                events.add(RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
-                        "domain-agent", "invalid-json", "event", "runtime", "debug", null,
-                        Map.of("itemId", fragment.itemId(), "sourceType", fragment.kind().sourceType(),
-                                "reason", "domain-agent stream ended before current frame was closed"))));
-            }
+        if (state.pendingFrame != null) {
+            String remaining = state.pendingFrame.content().toString();
+            state.pendingFrame = null;
+            events.add(RuntimeEvent.fallback(runId, sessionId, new RuntimeEvent.FallbackPayload(
+                    "domain-agent", "invalid-json", "event", "runtime", "debug", null,
+                    Map.of("raw", truncate(remaining),
+                            "reason", "domain-agent stream ended before current frame was closed"))));
         }
         if (!state.frameBuffer.isEmpty()) {
             String remaining = stripLeadingFramePrefix(state.frameBuffer.toString());
@@ -268,110 +260,47 @@ public class DomainAgentResponseNormalizer {
     }
 
     private int completeJsonEnd(String value, int start) {
-        JsonFragmentScanner scanner = new JsonFragmentScanner();
+        JsonBoundaryScanner scanner = new JsonBoundaryScanner();
         return scanner.accept(value, start);
     }
 
-    private DomainAgentFragmentKind detectFragmentKind(String payload) {
-        String sourceType = firstPresentSourceType(payload,
-                "diyCardScene", "cardList", "cardUrl", "openCard",
-                "searchList", "SearchList",
-                "sourcesDocuments", "sourceDocuments", "SourceDocuments", "SourceDocuemts",
-                "processResult");
-        if (sourceType == null) {
-            return null;
-        }
-        if ("diyCardScene".equals(sourceType) || "cardList".equals(sourceType)
-                || "cardUrl".equals(sourceType) || "openCard".equals(sourceType)) {
-            return new DomainAgentFragmentKind(sourceType, "runtime.card",
-                    "card", "application/json");
-        }
-        if ("processResult".equals(sourceType)) {
-            return new DomainAgentFragmentKind(sourceType, "runtime.progress",
-                    "progress", "application/json");
-        }
-        return new DomainAgentFragmentKind(sourceType, "runtime.reference",
-                "reference", "application/json");
+    private void startPendingFrame(DomainAgentStreamState state, String payload) {
+        validateFrameSize(payload);
+        state.pendingFrame = new DomainAgentPendingFrame(payload);
     }
 
-    private String firstPresentSourceType(String payload, String... candidates) {
-        if (payload == null || payload.isBlank()) {
-            return null;
-        }
-        for (String candidate : candidates) {
-            if (payload.contains("\"" + candidate + "\"")) {
-                return candidate;
-            }
-        }
-        return null;
-    }
-
-    private List<ChatEvent> startFragment(String runId, String sessionId, DomainAgentStreamState state,
-                                          DomainAgentFragmentKind kind) {
-        String payload = stripLeadingFramePrefix(state.frameBuffer.toString());
-        state.frameBuffer.setLength(0);
-        state.activeFragment = new DomainAgentActiveFragment(kind, state.nextItemId(kind.sourceType()));
-        return emitFragmentDelta(runId, sessionId, state, payload);
-    }
-
-    private List<ChatEvent> continueFragment(String runId, String sessionId, String chunk,
-                                             DomainAgentStreamState state) {
-        return emitFragmentDelta(runId, sessionId, state, stripLeadingFramePrefix(chunk));
-    }
-
-    private List<ChatEvent> emitFragmentDelta(String runId, String sessionId, DomainAgentStreamState state,
-                                              String text) {
-        if (state.activeFragment == null || text == null || text.isEmpty()) {
+    private List<ChatEvent> continuePendingFrame(String runId, String sessionId, String chunk,
+                                                 DomainAgentStreamState state) {
+        DomainAgentPendingFrame pending = state.pendingFrame;
+        if (pending == null || chunk == null || chunk.isEmpty()) {
             return List.of();
         }
-        DomainAgentActiveFragment fragment = state.activeFragment;
-        List<ChatEvent> events = new ArrayList<>();
-        int completeIndex = fragment.scanner().accept(text, 0);
-        String effective = completeIndex >= 0 ? text.substring(0, completeIndex + 1) : text;
-        for (String part : splitByUtf8Bytes(effective, maxFragmentBytes)) {
-            events.add(fragmentDelta(runId, sessionId, fragment, part));
+        int completeIndex = pending.scanner().accept(chunk, 0);
+        String effective = completeIndex >= 0 ? chunk.substring(0, completeIndex + 1) : chunk;
+        int actualBytes = pending.append(effective);
+        try {
+            validateFrameSize(actualBytes);
+        } catch (DomainAgentProtocolException ex) {
+            pending.content().setLength(0);
+            state.pendingFrame = null;
+            throw ex;
         }
-        if (completeIndex >= 0) {
-            events.addAll(completeFragment(runId, sessionId, state));
-            String tail = text.substring(completeIndex + 1).trim();
-            if (!tail.isEmpty()) {
-                events.addAll(normalize(runId, sessionId, tail, state));
-            }
-        }
-        return events;
-    }
-
-    private RuntimeEvent fragmentDelta(String runId, String sessionId, DomainAgentActiveFragment fragment, String delta) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("source", "domain-agent");
-        payload.put("sourceType", fragment.kind().sourceType());
-        payload.put("itemId", fragment.itemId());
-        payload.put("fragment", true);
-        payload.put("channel", fragment.kind().channel());
-        payload.put("contentType", fragment.kind().contentType());
-        payload.put("delta", delta);
-        payload.put("complete", false);
-        return new RuntimeEvent(runId, sessionId, 0, Instant.now(), fragment.kind().eventType(), payload);
-    }
-
-    private List<ChatEvent> completeFragment(String runId, String sessionId, DomainAgentStreamState state) {
-        if (state.activeFragment == null) {
+        if (completeIndex < 0) {
             return List.of();
         }
-        DomainAgentActiveFragment fragment = state.activeFragment;
-        state.activeFragment = null;
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("source", "domain-agent");
-        payload.put("sourceType", fragment.kind().sourceType());
-        payload.put("itemId", fragment.itemId());
-        payload.put("fragment", true);
-        payload.put("channel", fragment.kind().channel());
-        payload.put("complete", true);
-        return List.of(new RuntimeEvent(runId, sessionId, 0, Instant.now(),
-                fragment.kind().eventType(), payload));
+        String frame = pending.content().toString();
+        pending.content().setLength(0);
+        state.pendingFrame = null;
+        List<ChatEvent> events = new ArrayList<>(normalizeFrame(runId, sessionId, frame, state));
+        String tail = chunk.substring(completeIndex + 1).trim();
+        if (!tail.isEmpty()) {
+            events.addAll(normalize(runId, sessionId, tail, state));
+        }
+        return List.copyOf(events);
     }
 
     private List<ChatEvent> normalizeFrame(String runId, String sessionId, String frame, DomainAgentStreamState state) {
+        validateFrameSize(frame);
         try {
             JsonNode root = objectMapper.readTree(frame);
             return normalizeJson(runId, sessionId, root, state);
@@ -422,7 +351,7 @@ public class DomainAgentResponseNormalizer {
         }
         RuntimeEvent.FallbackPayload payload = new RuntimeEvent.FallbackPayload(
                 "domain-agent", "unknown", "event", "runtime", "debug", null,
-                Map.of("sourcePayload", sanitize(root)));
+                Map.of("sourcePayload", sanitizeDiagnostic(root)));
         return List.of(RuntimeEvent.fallback(runId, sessionId, payload));
     }
 
@@ -511,11 +440,11 @@ public class DomainAgentResponseNormalizer {
         payload.put("sourceType", "processResult");
         payload.put("status", "STREAMING");
         payload.put("title", "思考过程");
-        payload.put("processResult", sanitize(root.get("processResult")));
+        payload.put("processResult", sanitizeBusiness(root.get("processResult")));
         JsonNode processResult = root.get("processResult");
         JsonNode dynamicResponse = processResult == null ? null : processResult.get("dynamicResponse");
         if (dynamicResponse != null && dynamicResponse.isArray()) {
-            payload.put("dynamicResponse", sanitize(dynamicResponse));
+            payload.put("dynamicResponse", sanitizeBusiness(dynamicResponse));
             String text = firstDynamicTitle(dynamicResponse);
             if (text != null) {
                 payload.put("text", text);
@@ -529,7 +458,7 @@ public class DomainAgentResponseNormalizer {
         payload.put("source", "domain-agent");
         payload.put("sourceType", fieldName);
         payload.put("referenceType", referenceType);
-        payload.put("references", sanitize(value));
+        payload.put("references", sanitizeBusiness(value));
         return payload;
     }
 
@@ -545,10 +474,10 @@ public class DomainAgentResponseNormalizer {
         putIfPresent(payload, "intent", text(root, "intent"));
         putIfPresent(payload, "domainAgentId", text(root, "skillId"));
         if (root.hasNonNull("diyCardScene")) {
-            payload.put("diyCardScene", sanitize(root.get("diyCardScene")));
+            payload.put("diyCardScene", sanitizeBusiness(root.get("diyCardScene")));
         }
         if (root.hasNonNull("cardList")) {
-            payload.put("cardList", sanitize(root.get("cardList")));
+            payload.put("cardList", sanitizeBusiness(root.get("cardList")));
         }
         return payload;
     }
@@ -722,14 +651,56 @@ public class DomainAgentResponseNormalizer {
         return 0;
     }
 
-    private Object sanitize(JsonNode node) {
+    private Object sanitizeBusiness(JsonNode node) {
         if (node == null || node.isNull()) {
             return null;
         }
         if (node.isObject()) {
             Map<String, Object> map = new LinkedHashMap<>();
             node.fields().forEachRemaining(entry -> {
-                Object value = sanitize(entry.getKey(), entry.getValue());
+                Object value = sanitizeBusiness(entry.getKey(), entry.getValue());
+                if (value != null) {
+                    map.put(entry.getKey(), value);
+                }
+            });
+            return ChatPayloadMaps.immutableCopy(map);
+        }
+        if (node.isArray()) {
+            List<Object> list = new ArrayList<>();
+            for (JsonNode child : node) {
+                Object value = sanitizeBusiness(child);
+                if (value != null) {
+                    list.add(value);
+                }
+            }
+            return List.copyOf(list);
+        }
+        if (node.isNumber()) {
+            return node.numberValue();
+        }
+        if (node.isBoolean()) {
+            return node.booleanValue();
+        }
+        return node.asText("");
+    }
+
+    private Object sanitizeBusiness(String field, JsonNode node) {
+        if (isSensitiveField(field)) {
+            return "[REDACTED]";
+        }
+        return sanitizeBusiness(node);
+    }
+
+    private Object sanitizeDiagnostic(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (node.isObject()) {
+            Map<String, Object> map = new LinkedHashMap<>();
+            node.fields().forEachRemaining(entry -> {
+                Object value = isSensitiveField(entry.getKey())
+                        ? "[REDACTED]"
+                        : sanitizeDiagnostic(entry.getValue());
                 if (value != null) {
                     map.put(entry.getKey(), value);
                 }
@@ -744,7 +715,7 @@ public class DomainAgentResponseNormalizer {
                     list.add("[TRUNCATED]");
                     break;
                 }
-                Object value = sanitize(child);
+                Object value = sanitizeDiagnostic(child);
                 if (value != null) {
                     list.add(value);
                 }
@@ -760,17 +731,15 @@ public class DomainAgentResponseNormalizer {
         return truncate(node.asText(""));
     }
 
-    private Object sanitize(String field, JsonNode node) {
-        if (field != null) {
-            String normalized = field.toLowerCase(java.util.Locale.ROOT);
-            if (normalized.contains("cookie") || normalized.contains("authorization") || normalized.contains("token")
-                    || normalized.contains("secret") || normalized.contains("password")
-                    || normalized.contains("credential") || normalized.contains("apikey")
-                    || normalized.contains("api_key") || normalized.contains("access_key")) {
-                return "[REDACTED]";
-            }
+    private boolean isSensitiveField(String field) {
+        if (field == null) {
+            return false;
         }
-        return sanitize(node);
+        String normalized = field.toLowerCase(Locale.ROOT);
+        return normalized.contains("cookie") || normalized.contains("authorization") || normalized.contains("token")
+                || normalized.contains("secret") || normalized.contains("password")
+                || normalized.contains("credential") || normalized.contains("apikey")
+                || normalized.contains("api_key") || normalized.contains("access_key");
     }
 
     private void putIfPresent(Map<String, Object> map, String key, Object value) {
@@ -801,35 +770,18 @@ public class DomainAgentResponseNormalizer {
         return value.substring(0, 2048);
     }
 
-    private int utf8Length(CharSequence value) {
+    private static int utf8Length(CharSequence value) {
         return value == null ? 0 : value.toString().getBytes(StandardCharsets.UTF_8).length;
     }
 
-    private List<String> splitByUtf8Bytes(String value, int maxBytes) {
-        if (value == null || value.isEmpty()) {
-            return List.of();
+    private void validateFrameSize(CharSequence frame) {
+        validateFrameSize(utf8Length(frame));
+    }
+
+    private void validateFrameSize(int actualBytes) {
+        if (actualBytes > maxPendingFrameBytes) {
+            throw DomainAgentProtocolException.frameTooLarge(actualBytes, maxPendingFrameBytes);
         }
-        int limit = Math.max(1, maxBytes);
-        List<String> parts = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        int currentBytes = 0;
-        for (int i = 0; i < value.length();) {
-            int codePoint = value.codePointAt(i);
-            String next = new String(Character.toChars(codePoint));
-            int nextBytes = next.getBytes(StandardCharsets.UTF_8).length;
-            if (!current.isEmpty() && currentBytes + nextBytes > limit) {
-                parts.add(current.toString());
-                current.setLength(0);
-                currentBytes = 0;
-            }
-            current.append(next);
-            currentBytes += nextBytes;
-            i += Character.charCount(codePoint);
-        }
-        if (!current.isEmpty()) {
-            parts.add(current.toString());
-        }
-        return List.copyOf(parts);
     }
 
     private record FrameExtraction(String frame) {
@@ -838,36 +790,47 @@ public class DomainAgentResponseNormalizer {
     private record EventDelimiter(int index, int length) {
     }
 
-    private record DomainAgentFragmentKind(
-            String sourceType,
-            String eventType,
-            String channel,
-            String contentType
-    ) {
-    }
+    private static final class DomainAgentPendingFrame {
+        private final StringBuilder content;
+        private final JsonBoundaryScanner scanner;
+        private int utf8Bytes;
 
-    private record DomainAgentActiveFragment(
-            DomainAgentFragmentKind kind,
-            String itemId,
-            JsonFragmentScanner scanner
-    ) {
-        private DomainAgentActiveFragment(DomainAgentFragmentKind kind, String itemId) {
-            this(kind, itemId, new JsonFragmentScanner());
+        private DomainAgentPendingFrame(String initialContent) {
+            this.content = new StringBuilder(initialContent);
+            this.scanner = new JsonBoundaryScanner();
+            this.utf8Bytes = utf8Length(initialContent);
+            scanner.accept(initialContent, 0);
+        }
+
+        private StringBuilder content() {
+            return content;
+        }
+
+        private JsonBoundaryScanner scanner() {
+            return scanner;
+        }
+
+        private int append(String value) {
+            content.append(value);
+            int additionalBytes = utf8Length(value);
+            utf8Bytes = additionalBytes > Integer.MAX_VALUE - utf8Bytes
+                    ? Integer.MAX_VALUE
+                    : utf8Bytes + additionalBytes;
+            return utf8Bytes;
         }
     }
 
     /**
      * 增量 JSON 边界扫描器。
      *
-     * <p>它只判断当前 frame 的顶层 JSON 值是否闭合，不把完整对象缓存在内存中。字符串和转义
-     * 状态会跨 chunk 保留，因此 JSON 字符串里的花括号不会误触发完成。</p>
+     * <p>它只判断当前 frame 的顶层 JSON 值是否闭合。字符串和转义状态会跨 chunk 保留，
+     * 因此 JSON 字符串里的花括号不会误触发完成。</p>
      */
-    private static final class JsonFragmentScanner {
+    private static final class JsonBoundaryScanner {
         private boolean started;
         private boolean inString;
         private boolean escaping;
         private int depth;
-        private boolean complete;
 
         private int accept(String value, int offset) {
             if (value == null || value.isEmpty()) {
@@ -899,7 +862,6 @@ public class DomainAgentResponseNormalizer {
                 } else if (c == '}' || c == ']') {
                     depth--;
                     if (depth == 0) {
-                        complete = true;
                         return i;
                     }
                 }
@@ -907,9 +869,6 @@ public class DomainAgentResponseNormalizer {
             return -1;
         }
 
-        private boolean isComplete() {
-            return complete;
-        }
     }
 
     /**
@@ -919,14 +878,6 @@ public class DomainAgentResponseNormalizer {
         private boolean inThinking;
         private String pending = "";
         private final StringBuilder frameBuffer = new StringBuilder();
-        private DomainAgentActiveFragment activeFragment;
-        private int itemSequence;
-
-        private String nextItemId(String sourceType) {
-            String normalized = sourceType == null || sourceType.isBlank()
-                    ? "domainAgent"
-                    : sourceType.replaceAll("[^A-Za-z0-9_-]", "_");
-            return normalized + "_" + (++itemSequence);
-        }
+        private DomainAgentPendingFrame pendingFrame;
     }
 }

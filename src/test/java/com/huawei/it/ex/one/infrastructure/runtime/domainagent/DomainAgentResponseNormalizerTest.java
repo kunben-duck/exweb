@@ -1,14 +1,31 @@
 package com.huawei.it.ex.one.infrastructure.runtime.domainagent;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class DomainAgentResponseNormalizerTest {
-    private final DomainAgentResponseNormalizer normalizer = new DomainAgentResponseNormalizer(new ObjectMapper());
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final DomainAgentResponseNormalizer normalizer = new DomainAgentResponseNormalizer(objectMapper);
+
+    @Test
+    void defaultsStructuredFrameLimitTo256KiB() {
+        DomainAgentProperties properties = new DomainAgentProperties();
+
+        assertThat(properties.getMaxPendingFrameBytes()).isEqualTo(256 * 1024);
+        assertThat(properties.normalizedMaxPendingFrameBytes()).isEqualTo(256 * 1024);
+
+        properties.setMaxPendingFrameBytes(0);
+        assertThat(properties.normalizedMaxPendingFrameBytes()).isEqualTo(256 * 1024);
+    }
 
     @Test
     void mapsOutOfDomainRefusalToStableControlEventAndPreservesNullValues() {
@@ -164,7 +181,7 @@ class DomainAgentResponseNormalizerTest {
     }
 
     @Test
-    void streamsSplitDiyCardSceneWithoutInvalidJson() {
+    void buffersSplitDiyCardSceneAndEmitsOneCompleteEvent() {
         DomainAgentResponseNormalizer.DomainAgentStreamState state = normalizer.newStreamState();
 
         List<ChatEvent> first = normalizer.normalize("run1", "session1",
@@ -172,20 +189,17 @@ class DomainAgentResponseNormalizerTest {
         List<ChatEvent> second = normalizer.normalize("run1", "session1",
                 "意见\",\"items\":[{\"name\":\"A\"}]}}", state);
 
-        assertThat(first).extracting(ChatEvent::type).containsExactly("runtime.card");
-        assertThat(second).extracting(ChatEvent::type).containsExactly("runtime.card", "runtime.card");
-        assertThat(first.getFirst().payload()).containsEntry("sourceType", "diyCardScene")
-                .containsEntry("contentType", "application/json")
-                .containsEntry("fragment", true)
-                .containsEntry("complete", false);
-        assertThat(second.getLast().payload()).containsEntry("sourceType", "diyCardScene")
-                .containsEntry("fragment", true)
-                .containsEntry("complete", true);
+        assertThat(first).isEmpty();
+        assertThat(second).extracting(ChatEvent::type).containsExactly("runtime.card");
+        assertThat(second.getFirst().payload()).containsEntry("sourceType", "diyCardScene")
+                .doesNotContainKeys("fragment", "itemId", "delta", "complete");
+        assertThat(second.getFirst().payload().get("diyCardScene")).asString()
+                .contains("税务意见", "items");
         assertThat(second).extracting(ChatEvent::type).doesNotContain("runtime.event");
     }
 
     @Test
-    void streamsSplitReferencesWithoutRequiringFieldNameInLaterChunks() {
+    void buffersSplitReferencesWithoutRequiringFieldNameInLaterChunks() {
         DomainAgentResponseNormalizer.DomainAgentStreamState state = normalizer.newStreamState();
 
         List<ChatEvent> first = normalizer.normalize("run1", "session1",
@@ -193,20 +207,16 @@ class DomainAgentResponseNormalizerTest {
         List<ChatEvent> second = normalizer.normalize("run1", "session1",
                 "文件\",\"url\":\"https://example.com/a.pdf\"}]}", state);
 
-        assertThat(first).extracting(ChatEvent::type).containsExactly("runtime.reference");
-        assertThat(second).extracting(ChatEvent::type)
-                .containsExactly("runtime.reference", "runtime.reference");
-        assertThat(first.getFirst().payload()).containsEntry("sourceType", "sourcesDocuments")
-                .containsEntry("fragment", true)
-                .containsEntry("complete", false);
-        assertThat(second.getFirst().payload()).containsEntry("sourceType", "sourcesDocuments");
-        assertThat(second.getLast().payload()).containsEntry("sourceType", "sourcesDocuments")
-                .containsEntry("fragment", true)
-                .containsEntry("complete", true);
+        assertThat(first).isEmpty();
+        assertThat(second).extracting(ChatEvent::type).containsExactly("runtime.reference");
+        assertThat(second.getFirst().payload()).containsEntry("sourceType", "sourcesDocuments")
+                .doesNotContainKeys("fragment", "itemId", "delta", "complete");
+        assertThat(second.getFirst().payload().get("references")).asString()
+                .contains("制度文件", "https://example.com/a.pdf");
     }
 
     @Test
-    void streamsSplitSearchListWithoutInvalidJson() {
+    void buffersSplitSearchListWithoutInvalidJson() {
         DomainAgentResponseNormalizer.DomainAgentStreamState state = normalizer.newStreamState();
 
         List<ChatEvent> first = normalizer.normalize("run1", "session1",
@@ -214,17 +224,16 @@ class DomainAgentResponseNormalizerTest {
         List<ChatEvent> second = normalizer.normalize("run1", "session1",
                 "资料\",\"url\":\"https://example.com\"}]}", state);
 
-        assertThat(first).extracting(ChatEvent::type).containsExactly("runtime.reference");
-        assertThat(second).extracting(ChatEvent::type)
-                .containsExactly("runtime.reference", "runtime.reference");
-        assertThat(first.getFirst().payload()).containsEntry("sourceType", "searchList");
-        assertThat(second.getLast().payload()).containsEntry("sourceType", "searchList")
-                .containsEntry("fragment", true)
-                .containsEntry("complete", true);
+        assertThat(first).isEmpty();
+        assertThat(second).extracting(ChatEvent::type).containsExactly("runtime.reference");
+        assertThat(second.getFirst().payload()).containsEntry("sourceType", "searchList")
+                .doesNotContainKeys("fragment", "itemId", "delta", "complete");
+        assertThat(second.getFirst().payload().get("references")).asString()
+                .contains("网页资料", "https://example.com");
     }
 
     @Test
-    void streamsSplitProcessResultAsProgressFragments() {
+    void buffersSplitProcessResultAndEmitsOneCompleteProgressEvent() {
         DomainAgentResponseNormalizer.DomainAgentStreamState state = normalizer.newStreamState();
 
         List<ChatEvent> first = normalizer.normalize("run1", "session1",
@@ -232,15 +241,114 @@ class DomainAgentResponseNormalizerTest {
         List<ChatEvent> second = normalizer.normalize("run1", "session1",
                 "调用\",\"type\":\"str\"}]}}", state);
 
-        assertThat(first).extracting(ChatEvent::type).containsExactly("runtime.progress");
-        assertThat(second).extracting(ChatEvent::type)
-                .containsExactly("runtime.progress", "runtime.progress");
-        assertThat(first.getFirst().payload()).containsEntry("sourceType", "processResult")
-                .containsEntry("fragment", true)
-                .containsEntry("complete", false);
-        assertThat(second.getLast().payload()).containsEntry("sourceType", "processResult")
-                .containsEntry("fragment", true)
-                .containsEntry("complete", true);
+        assertThat(first).isEmpty();
+        assertThat(second).extracting(ChatEvent::type).containsExactly("runtime.progress");
+        assertThat(second.getFirst().payload()).containsEntry("sourceType", "processResult")
+                .doesNotContainKeys("fragment", "itemId", "delta", "complete");
+        assertThat(second.getFirst().payload().get("processResult")).asString()
+                .contains("工具调用", "dynamicResponse");
+    }
+
+    @Test
+    void preservesWhitespaceOnlyChunkInsideStructuredString() {
+        DomainAgentResponseNormalizer.DomainAgentStreamState state = normalizer.newStreamState();
+
+        assertThat(normalizer.normalize("run1", "session1",
+                "message: {\"processResult\":{\"fixedResponse\":\"left", state)).isEmpty();
+        assertThat(normalizer.normalize("run1", "session1", "   ", state)).isEmpty();
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", "right\"}}", state);
+
+        Map<?, ?> processResult = asMap(events.getFirst().payload().get("processResult"));
+        assertThat(processResult.get("fixedResponse")).isEqualTo("left   right");
+    }
+
+    @Test
+    void preservesCompleteLongBusinessPayloadAndRedactsSensitiveFields() throws Exception {
+        String fixedResponse = "<svg>" + "x".repeat(4079) + "</svg>";
+        ObjectNode root = objectMapper.createObjectNode();
+        ObjectNode processResult = root.putObject("processResult");
+        processResult.put("fixedResponse", fixedResponse);
+        processResult.put("accessToken", "secret-token");
+
+        List<ChatEvent> events = normalizer.normalize(
+                "run1", "session1", "message: " + objectMapper.writeValueAsString(root));
+
+        assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.progress");
+        Map<?, ?> normalized = asMap(events.getFirst().payload().get("processResult"));
+        assertThat(normalized.get("fixedResponse")).isEqualTo(fixedResponse);
+        assertThat(normalized.get("accessToken")).isEqualTo("[REDACTED]");
+    }
+
+    @Test
+    void acceptsCompleteStructuredFrameNearDefault256KiBLimit() throws Exception {
+        String fixedResponse = "x".repeat(240_000);
+        ObjectNode root = objectMapper.createObjectNode();
+        root.putObject("processResult").put("fixedResponse", fixedResponse);
+
+        List<ChatEvent> events = normalizer.normalize(
+                "run1", "session1", "message: " + objectMapper.writeValueAsString(root));
+
+        Map<?, ?> normalized = asMap(events.getFirst().payload().get("processResult"));
+        assertThat(normalized.get("fixedResponse")).isEqualTo(fixedResponse);
+    }
+
+    @Test
+    void preservesAllBusinessArrayItemsBeyondFormerLimit() throws Exception {
+        ObjectNode root = objectMapper.createObjectNode();
+        ArrayNode dynamicResponse = root.putObject("processResult").putArray("dynamicResponse");
+        for (int i = 0; i < 75; i++) {
+            dynamicResponse.addObject().put("title", "item-" + i).put("type", "str");
+        }
+
+        List<ChatEvent> events = normalizer.normalize(
+                "run1", "session1", "message: " + objectMapper.writeValueAsString(root));
+
+        Map<?, ?> processResult = asMap(events.getFirst().payload().get("processResult"));
+        assertThat((List<?>) processResult.get("dynamicResponse"))
+                .hasSize(75)
+                .noneMatch("[TRUNCATED]"::equals);
+    }
+
+    @Test
+    void rejectsCompleteFrameAboveConfiguredByteLimit() throws Exception {
+        DomainAgentProperties properties = new DomainAgentProperties();
+        properties.setMaxPendingFrameBytes(128);
+        DomainAgentResponseNormalizer limited = new DomainAgentResponseNormalizer(objectMapper, properties);
+        ObjectNode root = objectMapper.createObjectNode();
+        root.putObject("processResult").put("fixedResponse", "x".repeat(200));
+
+        assertThatThrownBy(() -> limited.normalize(
+                "run1", "session1", "message: " + objectMapper.writeValueAsString(root)))
+                .isInstanceOf(DomainAgentProtocolException.class)
+                .hasMessageContaining("DOMAIN_AGENT_FRAME_TOO_LARGE")
+                .hasMessageContaining("maxBytes=128");
+    }
+
+    @Test
+    void rejectsIncompleteFrameAsSoonAsConfiguredByteLimitIsExceeded() {
+        DomainAgentProperties properties = new DomainAgentProperties();
+        properties.setMaxPendingFrameBytes(128);
+        DomainAgentResponseNormalizer limited = new DomainAgentResponseNormalizer(objectMapper, properties);
+        DomainAgentResponseNormalizer.DomainAgentStreamState state = limited.newStreamState();
+
+        assertThat(limited.normalize("run1", "session1",
+                "message: {\"processResult\":{\"fixedResponse\":\"", state)).isEmpty();
+        assertThatThrownBy(() -> limited.normalize("run1", "session1", "x".repeat(200), state))
+                .isInstanceOf(DomainAgentProtocolException.class)
+                .hasMessageContaining("DOMAIN_AGENT_FRAME_TOO_LARGE");
+    }
+
+    @Test
+    void keepsDiagnosticTextBounded() throws Exception {
+        ObjectNode root = objectMapper.createObjectNode();
+        root.put("unknownField", "x".repeat(3000));
+
+        List<ChatEvent> events = normalizer.normalize(
+                "run1", "session1", "message: " + objectMapper.writeValueAsString(root));
+
+        Map<?, ?> sourcePayload = asMap(events.getFirst().payload().get("sourcePayload"));
+        Map<?, ?> diagnostic = asMap(sourcePayload.get("sourcePayload"));
+        assertThat(String.valueOf(diagnostic.get("unknownField"))).hasSize(2048);
     }
 
     @Test
@@ -310,7 +418,7 @@ class DomainAgentResponseNormalizerTest {
     }
 
     @Test
-    void streamsSplitOpenCardWithoutInvalidJson() {
+    void buffersSplitOpenCardWithoutInvalidJson() {
         DomainAgentResponseNormalizer.DomainAgentStreamState state = normalizer.newStreamState();
 
         List<ChatEvent> first = normalizer.normalize("run1", "session1",
@@ -318,14 +426,11 @@ class DomainAgentResponseNormalizerTest {
         List<ChatEvent> second = normalizer.normalize("run1", "session1",
                 "N\"}", state);
 
-        assertThat(first).extracting(ChatEvent::type).containsExactly("runtime.card");
-        assertThat(second).extracting(ChatEvent::type).containsExactly("runtime.card", "runtime.card");
-        assertThat(first.getFirst().payload()).containsEntry("sourceType", "openCard")
-                .containsEntry("fragment", true)
-                .containsEntry("complete", false);
-        assertThat(second.getLast().payload()).containsEntry("sourceType", "openCard")
-                .containsEntry("fragment", true)
-                .containsEntry("complete", true);
+        assertThat(first).isEmpty();
+        assertThat(second).extracting(ChatEvent::type).containsExactly("runtime.card");
+        assertThat(second.getFirst().payload()).containsEntry("sourceType", "openCard")
+                .containsEntry("openCard", "N")
+                .doesNotContainKeys("fragment", "itemId", "delta", "complete");
     }
 
     @Test
@@ -362,5 +467,10 @@ class DomainAgentResponseNormalizerTest {
         assertThat(first.get(1).payload()).containsEntry("text", "分析");
         assertThat(second.get(0).payload()).containsEntry("text", "过程");
         assertThat(second.get(2).payload()).containsEntry("delta", "答案");
+    }
+
+    private Map<?, ?> asMap(Object value) {
+        assertThat(value).isInstanceOf(Map.class);
+        return (Map<?, ?>) value;
     }
 }

@@ -8,16 +8,20 @@ import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentCancelRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.buffer.DefaultDataBufferFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.ClientRequest;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -187,6 +191,55 @@ class ConfiguredDomainAgentClientTest {
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "ok"))
                 .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
                 .verifyComplete();
+    }
+
+    @Test
+    void queryPreservesUtf8CharacterSplitAcrossRawDataBuffers() {
+        String response = "message: {\"content\":\"分析结果\"}\n\nmessage: {\"endFlag\":true}\n\n";
+        byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+        int split = "message: {\"content\":\"".getBytes(StandardCharsets.UTF_8).length + 1;
+        DefaultDataBufferFactory buffers = new DefaultDataBufferFactory();
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_EVENT_STREAM_VALUE)
+                        .body(Flux.just(
+                                buffers.wrap(Arrays.copyOfRange(bytes, 0, split)),
+                                buffers.wrap(Arrays.copyOfRange(bytes, split, bytes.length))))
+                        .build()));
+        DomainAgentProperties properties = properties();
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
+                builder,
+                properties,
+                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentResponseNormalizer(objectMapper, properties));
+
+        StepVerifier.create(client.query(queryRequest(RuntimeForwardHeaders.empty())))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "分析结果"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                .verifyComplete();
+    }
+
+    @Test
+    void queryFailsWithoutPublishingPartialEventWhenFrameExceedsLimit() {
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_EVENT_STREAM_VALUE)
+                        .body("message: {\"processResult\":{\"fixedResponse\":\""
+                                + "x".repeat(200) + "\"}}\n\n")
+                        .build()));
+        DomainAgentProperties properties = properties();
+        properties.setMaxPendingFrameBytes(128);
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
+                builder,
+                properties,
+                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentResponseNormalizer(objectMapper, properties));
+
+        StepVerifier.create(client.query(queryRequest(RuntimeForwardHeaders.empty())))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(DomainAgentProtocolException.class)
+                        .hasMessageContaining("DOMAIN_AGENT_FRAME_TOO_LARGE"))
+                .verify();
     }
 
     private DomainAgentRequest queryRequest(RuntimeForwardHeaders forwardHeaders) {

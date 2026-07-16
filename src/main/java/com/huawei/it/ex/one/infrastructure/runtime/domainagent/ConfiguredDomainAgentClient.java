@@ -7,18 +7,16 @@ import com.huawei.it.ex.one.application.integration.agent.DomainAgentCancelReque
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import com.huawei.it.ex.one.common.logging.AppLogger;
-import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.core.io.buffer.DataBuffer;
-import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -62,6 +60,7 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
         Map<String, Object> body = requestMapper.toWireRequest(request);
         Flux<ChatEvent> source = Flux.defer(() -> {
             DomainAgentResponseNormalizer.DomainAgentStreamState streamState = responseNormalizer.newStreamState();
+            DomainAgentUtf8StreamDecoder utf8Decoder = new DomainAgentUtf8StreamDecoder();
             return webClientBuilder.build()
                     .post()
                     .uri(fullUrl(properties.getChatPath()))
@@ -76,7 +75,8 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
                      * 因此这里读取原始 DataBuffer，再交给 DomainAgentResponseNormalizer 兼容 message/data/plain JSON。
                      */
                     .bodyToFlux(DataBuffer.class)
-                    .map(this::readUtf8)
+                    .map(utf8Decoder::decode)
+                    .concatWith(Mono.fromSupplier(utf8Decoder::finish))
                     .timeout(properties.getTimeout())
                     .flatMapIterable(chunk -> responseNormalizer.normalize(
                             request.runId(), request.sessionId(), chunk, streamState))
@@ -168,16 +168,6 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
         return baseUrl + nextPath;
     }
 
-    private String readUtf8(DataBuffer buffer) {
-        try {
-            byte[] bytes = new byte[buffer.readableByteCount()];
-            buffer.read(bytes);
-            return new String(bytes, StandardCharsets.UTF_8);
-        } finally {
-            DataBufferUtils.release(buffer);
-        }
-    }
-
     private Flux<ChatEvent> enforceDomainAgentDeadline(Flux<ChatEvent> source) {
         Duration timeout = properties.getTimeout();
         if (timeout == null || timeout.isZero() || timeout.isNegative()) {
@@ -220,6 +210,9 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
         Throwable cause = Exceptions.unwrap(failure);
         if (cause instanceof TimeoutException) {
             return SystemErrorCode.DOMAIN_AGENT_TIMEOUT;
+        }
+        if (cause instanceof DomainAgentProtocolException) {
+            return SystemErrorCode.PROTOCOL_INVALID;
         }
         if (cause instanceof WebClientResponseException response) {
             if (response.getStatusCode().value() == 429) {

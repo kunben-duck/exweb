@@ -342,9 +342,9 @@ financeex:
     stop-path: ${FINANCEEX_DOMAIN_AGENT_STOP_PATH:}
     timeout: ${FINANCEEX_DOMAIN_AGENT_TIMEOUT:120s}
     max-attachments: ${FINANCEEX_DOMAIN_AGENT_MAX_ATTACHMENTS:10}
-    # 只缓存尚未完成的单个 DomainAgent frame；超过限制会输出小型诊断事件并丢弃该 frame，避免 OOM。
-    max-pending-frame-bytes: ${FINANCEEX_DOMAIN_AGENT_MAX_PENDING_FRAME_BYTES:1048576}
-    # diyCardScene/searchList/sourcesDocuments/processResult 等大对象按 fragment payload 输出时的单片大小。
+    # 单个 DomainAgent frame 的硬上限，默认 256KB；完整或未完成 frame 超限都会失败，禁止输出残缺业务事件。
+    max-pending-frame-bytes: ${FINANCEEX_DOMAIN_AGENT_MAX_PENDING_FRAME_BYTES:262144}
+    # 兼容旧部署配置保留；DomainAgent 结构化响应当前不再对外分片。
     max-fragment-bytes: ${FINANCEEX_DOMAIN_AGENT_MAX_FRAGMENT_BYTES:8192}
     # 结构化拒答 event + binding 原子提交及提交后缓存同步使用独立 IO 池，不占用主事件落库线程。
     control-io-executor-max-size: ${FINANCEEX_DOMAIN_AGENT_CONTROL_IO_EXECUTOR_MAX_SIZE:2}

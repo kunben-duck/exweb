@@ -11,6 +11,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = "financeex.domain-agent")
 public class DomainAgentProperties {
+    private static final int DEFAULT_MAX_PENDING_FRAME_BYTES = 256 * 1024;
+
     /** 是否启用 DomainAgent 指定调用能力。 */
     private boolean enabled = false;
     /** DomainAgent 服务基础地址。 */
@@ -25,9 +27,14 @@ public class DomainAgentProperties {
     private Duration timeout = Duration.ofSeconds(120);
     /** 单次 DomainAgent 调用最大附件数。 */
     private int maxAttachments = 10;
-    /** 单个未完成 DomainAgent 流式 frame 允许暂存的最大字节数，防止下游异常大 JSON 导致 OOM。 */
-    private int maxPendingFrameBytes = 1024 * 1024;
-    /** 大对象 fragment 输出的单片最大字节数，避免单个 WS/Event Resume 事件体过大。 */
+    /** 单个完整或未完成 DomainAgent 流式 frame 的最大字节数，防止下游异常大 JSON 导致 OOM。 */
+    private int maxPendingFrameBytes = DEFAULT_MAX_PENDING_FRAME_BYTES;
+    /**
+     * 兼容旧配置保留；DomainAgent 结构化响应现统一在单帧上限内完整输出。
+     *
+     * @deprecated 不再用于 DomainAgent 对外事件分片。
+     */
+    @Deprecated(since = "1.0.0", forRemoval = false)
     private int maxFragmentBytes = 8192;
     /** 同一 run 内拒答后最多重新路由次数。 */
     private int maxReroutes = 3;
@@ -52,7 +59,9 @@ public class DomainAgentProperties {
     public void setMaxAttachments(int maxAttachments) { this.maxAttachments = maxAttachments; }
     public int getMaxPendingFrameBytes() { return maxPendingFrameBytes; }
     public void setMaxPendingFrameBytes(int maxPendingFrameBytes) { this.maxPendingFrameBytes = maxPendingFrameBytes; }
+    @Deprecated(since = "1.0.0", forRemoval = false)
     public int getMaxFragmentBytes() { return maxFragmentBytes; }
+    @Deprecated(since = "1.0.0", forRemoval = false)
     public void setMaxFragmentBytes(int maxFragmentBytes) { this.maxFragmentBytes = maxFragmentBytes; }
     public int getMaxReroutes() { return maxReroutes; }
     public void setMaxReroutes(int maxReroutes) { this.maxReroutes = maxReroutes; }
@@ -78,9 +87,10 @@ public class DomainAgentProperties {
     }
 
     public int normalizedMaxPendingFrameBytes() {
-        return maxPendingFrameBytes <= 0 ? 1024 * 1024 : maxPendingFrameBytes;
+        return maxPendingFrameBytes <= 0 ? DEFAULT_MAX_PENDING_FRAME_BYTES : maxPendingFrameBytes;
     }
 
+    @Deprecated(since = "1.0.0", forRemoval = false)
     public int normalizedMaxFragmentBytes() {
         return maxFragmentBytes <= 0 ? 8192 : maxFragmentBytes;
     }

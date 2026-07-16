@@ -1334,12 +1334,14 @@ class FinanceEXChatServiceTest {
         AtomicInteger relayCalls = new AtomicInteger();
         AtomicReference<RuntimeSessionMode> relaySessionMode = new AtomicReference<>();
         AtomicReference<TraceContext> relayTraceContext = new AtomicReference<>();
+        AtomicReference<Map<String, Object>> relayMetadata = new AtomicReference<>();
         AgentRuntime relay = new AgentRuntime() {
             @Override
             public Flux<ChatEvent> query(AgentRuntimeRequest request) {
                 relayCalls.incrementAndGet();
                 relaySessionMode.set(request.runtimeSessionMode());
                 relayTraceContext.set(request.traceContext());
+                relayMetadata.set(request.metadata());
                 return Flux.just(
                         MessageDeltaEvent.of(request.runId(), request.sessionId(), "relay answer"),
                         com.huawei.it.ex.one.domain.chat.MessageCompletedEvent.of(
@@ -1355,7 +1357,11 @@ class FinanceEXChatServiceTest {
                 sessions, messages, runs, events, routeService, domainClient, relay);
 
         StepVerifier.create(service.executeRun(user, new TraceContext("refusal-reroute-trace"),
-                        new ChatCommand("cmd1", null, null, null, null, "web", "hello", List.of(), Map.of()),
+                        new ChatCommand("cmd1", null, null, null, null, "web", "hello",
+                                List.of(new AttachmentRef("doc1", "forged-name.txt", "text/plain", 1L)),
+                                Map.of("sceneParam", Map.of(
+                                        "region", "CN",
+                                        "docList", List.of(Map.of("docId", "forged"))))),
                         RuntimeForwardHeaders.empty()).collectList())
                 .assertNext(stream -> {
                     assertThat(stream).anySatisfy(event -> assertThat(event.payload())
@@ -1370,6 +1376,15 @@ class FinanceEXChatServiceTest {
         assertThat(relayCalls).hasValue(1);
         assertThat(relaySessionMode).hasValue(RuntimeSessionMode.NEW);
         assertThat(relayTraceContext).hasValue(new TraceContext("refusal-reroute-trace"));
+        assertThat(relayMetadata.get().get("sceneParam")).isInstanceOfSatisfying(Map.class,
+                sceneParam -> {
+                    assertThat(sceneParam).containsEntry("region", "CN");
+                    assertThat(sceneParam.get("docList")).isEqualTo(List.of(Map.of(
+                            "providerLocatorType", "DOC_ID",
+                            "docId", "provider-doc1",
+                            "docName", "invoice.pdf",
+                            "docSize", 128L)));
+                });
         assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role()))
                 .singleElement()
                 .extracting(ChatMessage::content)
@@ -2600,7 +2615,11 @@ class FinanceEXChatServiceTest {
         Map<?, ?> runtimeSceneParam = (Map<?, ?>) runtimeMetadata.get().get("sceneParam");
         assertThat(runtimeSceneParam.get("region")).isEqualTo("CN");
         assertThat(runtimeSceneParam.get("docList"))
-                .isEqualTo(List.of(Map.of("docId", "provider-doc1")));
+                .isEqualTo(List.of(Map.of(
+                        "providerLocatorType", "DOC_ID",
+                        "docId", "provider-doc1",
+                        "docName", "invoice.pdf",
+                        "docSize", 128L)));
     }
 
     @Test
@@ -2822,8 +2841,12 @@ class FinanceEXChatServiceTest {
             public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
                 routedCommand.set(request.command());
                 intentQuery.set(request.intentQuery());
-                return Flux.just(RouteSignalFrame.result(
-                        RouteSignalResult.of(RouteTarget.agentRuntime("test-runtime"))));
+                var noMatch = new com.huawei.it.ex.one.domain.intent.IntentDecision(
+                        "relay", "no_match", com.huawei.it.ex.one.domain.intent.TaskComplexity.COMPLEX,
+                        0.0, false, null, Map.of("routeAction", "NO_MATCH"), List.of(), Map.of());
+                return Flux.just(RouteSignalFrame.result(RouteSignalResult.ofIntent(
+                        RouteTarget.agentRuntime("intent-agent", 0.0, "no match routes to relay"),
+                        noMatch, 1L, 0.85)));
             }
         };
         AgentRuntime runtime = new AgentRuntime() {
@@ -2858,7 +2881,12 @@ class FinanceEXChatServiceTest {
         StepVerifier.create(service.executeRun(user, new TraceContext("relay-trace-attachment"), new ChatCommand(
                                 "cmd-attachment-only", null, null, null, null, "web", null,
                                 List.of(new AttachmentRef("doc1", "forged-name.txt", "text/plain", 1L)),
-                                Map.of()), RuntimeForwardHeaders.empty())
+                                Map.of(
+                                        "language", "zh_CN",
+                                        "sceneParam", Map.of(
+                                                "region", "CN",
+                                                "docList", List.of(Map.of("docId", "forged"))))),
+                                RuntimeForwardHeaders.empty())
                         .collectList())
                 .assertNext(stream -> assertThat(stream).extracting(ChatEvent::type)
                         .containsExactly("run.started", "message.snapshot", "run.completed"))
@@ -2872,6 +2900,16 @@ class FinanceEXChatServiceTest {
         assertThat(runtimeRequest.get().message()).isEmpty();
         assertThat(runtimeRequest.get().attachments()).extracting(AttachmentRef::name)
                 .containsExactly("invoice.pdf");
+        assertThat(runtimeRequest.get().metadata()).containsEntry("language", "zh_CN");
+        assertThat(runtimeRequest.get().metadata().get("sceneParam")).isInstanceOfSatisfying(Map.class,
+                sceneParam -> {
+                    assertThat(sceneParam).containsEntry("region", "CN");
+                    assertThat(sceneParam.get("docList")).isEqualTo(List.of(Map.of(
+                            "providerLocatorType", "DOC_ID",
+                            "docId", "provider-doc1",
+                            "docName", "invoice.pdf",
+                            "docSize", 128L)));
+                });
         assertThat(messages.messages).filteredOn(message -> "user".equals(message.role()))
                 .singleElement()
                 .satisfies(message -> {
@@ -2883,6 +2921,68 @@ class FinanceEXChatServiceTest {
                                 assertThat(attachment.documentId()).isEqualTo("doc1");
                                 assertThat(attachment.name()).isEqualTo("invoice.pdf");
                             });
+                });
+    }
+
+    @Test
+    void firstIntentDomainAgentRouteBuildsTrustedProviderDocumentMetadata() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        var intent = new com.huawei.it.ex.one.domain.intent.IntentDecision(
+                "finance.document", "文档分析", com.huawei.it.ex.one.domain.intent.TaskComplexity.SIMPLE,
+                0.95, true, "skill-document", Map.of("routeAction", "ROUTE_SINGLE"), List.of(), Map.of());
+        RouteSignalApplicationService routeService = new RouteSignalApplicationService(
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                intentAgent((command, memory, routeUser) -> null),
+                new com.huawei.it.ex.one.domain.routing.RoutingPolicy(0.85),
+                new RouteSignalProperties(false, false)) {
+            @Override
+            public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
+                return Flux.just(RouteSignalFrame.result(RouteSignalResult.ofIntent(
+                        RouteTarget.domainAgent("skill-document", "intent-agent", 0.95, "intent matched"),
+                        intent, 1L, 0.85)));
+            }
+        };
+        AtomicReference<DomainAgentRequest> captured = new AtomicReference<>();
+        DomainAgentClient domainClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                captured.set(request);
+                return Flux.just(MessageSnapshotEvent.of(request.runId(), request.sessionId(), "图片分析结果"));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions, messages, runs, events, routeService, domainClient, noopRuntime(),
+                new CapturingRuntimeBindingRepository(),
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties());
+
+        StepVerifier.create(service.executeRun(user, new ChatCommand(
+                                "cmd-intent-document", null, null, null, null, "web", "分析这张图片",
+                                List.of(new AttachmentRef("doc1", "forged.png", "image/png", 1L)),
+                                Map.of("sceneParam", Map.of("region", "CN"))))
+                        .collectList())
+                .assertNext(stream -> assertThat(stream).extracting(ChatEvent::type)
+                        .contains("run.started", "message.snapshot", "run.completed"))
+                .verifyComplete();
+
+        assertThat(captured.get()).isNotNull();
+        assertThat(captured.get().query()).isEqualTo("分析这张图片");
+        assertThat(captured.get().metadata().get("sceneParam")).isInstanceOfSatisfying(Map.class,
+                sceneParam -> {
+                    assertThat(sceneParam).containsEntry("region", "CN");
+                    assertThat(sceneParam.get("docList")).isEqualTo(List.of(Map.of(
+                            "providerLocatorType", "DOC_ID",
+                            "docId", "provider-doc1",
+                            "docName", "invoice.pdf",
+                            "docSize", 128L)));
                 });
     }
 
@@ -4031,7 +4131,9 @@ class FinanceEXChatServiceTest {
                                 attachment.documentId(), user.tenantId(), user.ownerUserId(), null,
                                 attachment.name(), "api-store", attachment.documentId(), attachment.contentType(),
                                 attachment.sizeBytes(), "AVAILABLE", attachment.source(), attachment.tokenSize(),
-                                "{\"providerDocument\":{\"docId\":\"provider-" + attachment.documentId() + "\"}}",
+                                "{\"providerDocument\":{\"providerLocatorType\":\"DOC_ID\","
+                                        + "\"docId\":\"provider-" + attachment.documentId() + "\","
+                                        + "\"docName\":\"" + attachment.name() + "\",\"docSize\":128}}",
                                 now, now))
                         .toList();
                 return new ResolvedChatAttachments(trusted, documents);
@@ -4044,7 +4146,11 @@ class FinanceEXChatServiceTest {
                 scene.remove("docList");
                 if (documents != null && !documents.isEmpty()) {
                     scene.put("docList", documents.stream()
-                            .map(document -> Map.<String, Object>of("docId", "provider-" + document.id()))
+                            .map(document -> Map.<String, Object>of(
+                                    "providerLocatorType", "DOC_ID",
+                                    "docId", "provider-" + document.id(),
+                                    "docName", document.originalName(),
+                                    "docSize", document.sizeBytes()))
                             .toList());
                 }
                 if (!scene.isEmpty() || copy.containsKey("sceneParam")) {

@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.service.document;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.it.ex.one.application.command.DocumentUpdateCommand;
@@ -285,14 +286,13 @@ public class DocumentApplicationService implements DocumentFacade {
                 throw new IllegalArgumentException("文档缺少 providerDocument 元数据: " + document.id());
             }
             String docId = textValue(providerDocument.get("docId"));
-            if (docId != null) {
-                return Map.of("docId", docId);
-            }
             String url = textValue(providerDocument.get("url"));
-            if (url != null) {
-                return Map.of("url", url);
+            if (docId == null && url == null) {
+                throw new IllegalArgumentException("文档 providerDocument 必须包含 docId 或 url: " + document.id());
             }
-            throw new IllegalArgumentException("文档 providerDocument 必须包含 docId 或 url: " + document.id());
+            Map<String, Object> reference = objectMapper.convertValue(
+                    providerDocument, new TypeReference<Map<String, Object>>() { });
+            return immutableDeepCopy(reference);
         } catch (JsonProcessingException ex) {
             throw new IllegalArgumentException("文档 providerDocument 元数据解析失败: " + document.id(), ex);
         }

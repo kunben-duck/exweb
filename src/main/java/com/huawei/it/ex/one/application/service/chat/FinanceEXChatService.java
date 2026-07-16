@@ -1494,12 +1494,14 @@ public class FinanceEXChatService implements FinanceChatFacade {
             MemoryContext runtimeMemory = recordAppliedRouteDecision(new AppliedRouteDecisionContext(
                     context.user(), context.session().id(), context.runId(), reroute.intentQuery(),
                     nextSignal.intentDecision(), nextRoute, resolution.binding(), context.memory()));
+            ChatCommand runtimeCommand = runtimeCommandWithIntentDocuments(
+                    context.command(), context.documents(), nextRoute, nextSignal.intentDecision(), null);
             String action = nextSignal.intentFailure() ? "RELAY_FALLBACK" : "ROUTE_TO_RELAY";
             return Flux.concat(
                     Flux.just(domainAgentRerouteMetadata(context, refusal, nextRoute, action)),
                     requireCurrentOwnerRunning(context.executionClaim(), "before-relay-reroute-runtime")
                             .thenMany(Flux.defer(() -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
-                                    context.command(),
+                                    runtimeCommand,
                                     context.runId(),
                                     runtimeMemory,
                                     nextSignal.intentDecision(),
@@ -1539,8 +1541,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
         MemoryContext runtimeMemory = recordAppliedRouteDecision(new AppliedRouteDecisionContext(
                 context.user(), context.session().id(), context.runId(), reroute.intentQuery(),
                 nextSignal.intentDecision(), nextRoute, nextBinding, context.memory()));
+        ChatCommand runtimeCommand = runtimeCommandWithIntentDocuments(
+                context.command(), context.documents(), nextRoute, nextSignal.intentDecision(), null);
         DomainAgentRunContext nextContext = new DomainAgentRunContext(
-                context.command(),
+                runtimeCommand,
                 context.runId(),
                 context.session(),
                 runtimeMemory,
@@ -2316,7 +2320,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
         MemoryContext runtimeMemory = recordAppliedRouteDecision(new AppliedRouteDecisionContext(
                 request.user(), request.session().id(), request.runId(), appliedRouteQuery,
                 resolution.intent(), resolution.route(), resolution.binding(), request.memory()));
-        ChatCommand runtimeCommand = runtimeCommandForResolvedRoute(request);
+        ChatCommand runtimeCommand = runtimeCommandForResolvedRoute(
+                request, resolution.route(), resolution.intent());
         return requireCurrentOwnerRunning(request.executionClaim(), "before-runtime")
                 .thenMany(Flux.defer(() -> switch (resolution.route().type()) {
                     case DOMAIN_AGENT -> executeDomainAgentWithReroute(new DomainAgentRunContext(
@@ -2348,7 +2353,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 "domain agent refusal clarification continuation");
         request.routeRef().set(currentRoute);
         ChatCommand runtimeCommand = withoutDomainAgentRerouteContext(
-                runtimeCommandForResolvedRoute(request));
+                runtimeCommandForResolvedRoute(request,
+                        routeSignal == null ? null : routeSignal.route(),
+                        routeSignal == null ? null : routeSignal.intentDecision()));
         DomainAgentRunContext context = new DomainAgentRunContext(
                 runtimeCommand,
                 request.runId(),
@@ -2458,19 +2465,40 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 command.appId(), command.appName());
     }
 
-    private ChatCommand runtimeCommandForResolvedRoute(RoutePipelineRequest request) {
+    private ChatCommand runtimeCommandForResolvedRoute(RoutePipelineRequest request,
+                                                       RouteTarget resolvedRoute,
+                                                       IntentDecision resolvedIntent) {
         ChatCommand command = runtimeCommand(request.runCommand(), request.routeMemoryQuery());
-        if (request.runtimeMetadataOverride() == null) {
+        return runtimeCommandWithIntentDocuments(command, request.documents(), resolvedRoute, resolvedIntent,
+                request.runtimeMetadataOverride());
+    }
+
+    private ChatCommand runtimeCommandWithIntentDocuments(ChatCommand command,
+                                                          List<UploadedDocument> documents,
+                                                          RouteTarget resolvedRoute,
+                                                          IntentDecision resolvedIntent,
+                                                          Map<String, Object> metadataOverride) {
+        if (command == null || !runtimeRoute(resolvedRoute)) {
+            return command;
+        }
+        Map<String, Object> metadataSource = metadataOverride != null
+                ? metadataOverride
+                : resolvedIntent == null ? null : command.metadata();
+        if (metadataSource == null) {
             return command;
         }
         Map<String, Object> runtimeMetadata = documentFacade.replaceRuntimeDocumentMetadata(
-                request.runtimeMetadataOverride(), request.documents());
+                metadataSource, documents);
         return new ChatCommand(command.commandId(), command.tenantId(), command.userId(), command.sessionId(),
                 command.conversationId(), command.channel(), command.message(), command.attachments(), runtimeMetadata,
                 command.targetType(), command.targetId(), command.runMode(), command.parentMessageId(),
                 command.editedMessageId(), command.regeneratedMessageId(), command.routeTrigger(),
                 command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers(),
                 command.appId(), command.appName());
+    }
+
+    private boolean runtimeRoute(RouteTarget route) {
+        return route != null && (route.type() == RouteType.DOMAIN_AGENT || route.type() == RouteType.AGENT_RUNTIME);
     }
 
     private void bestEffortBindResolvedRoute(String runId, RouteTarget route, RuntimeBinding binding) {

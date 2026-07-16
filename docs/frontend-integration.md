@@ -1416,8 +1416,9 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 发送给 IntentAgent 的本轮 query 类似 `帮我看下这个方案 [用户上传文档] 方案.pdf，测算.xls`，但历史
 user 消息正文仍为 `帮我看下这个方案`。多轮澄清按首次出现的 `documentId` 累计附件；metadata 不累计，
 最终 DomainAgent/Relay 只使用命中路由这一轮的 metadata，并接收包含各轮可信文件名的完整折叠 query。
-服务端保留 `sceneParam` 其他字段，并用累计文档的可信 `providerDocument.docId`（无 docId 时使用 `url`）
-覆盖 `docList`；累计附件为空时移除前端传入的 `docList`。IntentAgent 始终只接收文本 query/history，
+服务端保留 `sceneParam` 其他字段，并用累计文档已保存的完整 `providerDocument` 对象覆盖 `docList`；
+对象包含上传响应中的 `docId/url/docName/docSize/serverName/docVersion` 等受控字段。累计附件为空时移除前端
+传入的 `docList`。IntentAgent 始终只接收文本 query/history，
 不接收文档 ID、URL 或完整 metadata。澄清 user 消息的历史 `attachments[]` 与普通 user 消息格式一致。
 
 单个答案直接保存答案值；多个答案按问题名稳定排序并保存为多行 `问题：答案`。文本答案和附件都为空会返回参数错误，Interaction 仍保持 `WAITING`。
@@ -2357,10 +2358,10 @@ api-store S3 文档响应示例：
 ```
 
 api-store 带 `metadata.skillId` 时，下游通常上传到企业 EDM 并返回 `docId`。这类实际返回 `docId`
-的文档 `source` 为 `EDM_UPLOAD`，可在 `targetType=DOMAIN_AGENT` run 中作为附件引用。前端需要把
-`metadataJson.providerDocument.docId/url` 放入 `metadata.sceneParam.docList`，后端校验这些引用和
-`attachments[]` 一致后原样透传。该规则适用于普通提问和显式 DomainAgent 直连；意图澄清续接由服务端
-根据累计可信附件覆盖最终轮 metadata 的 `docList`。
+的文档 `source` 为 `EDM_UPLOAD`，可作为聊天附件引用。普通提问实际调用 IntentAgent 后，前端只需传
+`attachments[].documentId`，服务端在意图确定 DomainAgent/Relay 后把已保存的完整 `providerDocument`
+覆盖到 `metadata.sceneParam.docList`。显式 DomainAgent 直连和 active binding 续接仍要求前端提供
+匹配已授权附件 `providerDocument.docId/url` 的 `docList`；意图澄清续接则使用累计可信附件由服务端覆盖。
 
 EDM docId 模式的 `metadataJson.providerDocument` 示例：
 

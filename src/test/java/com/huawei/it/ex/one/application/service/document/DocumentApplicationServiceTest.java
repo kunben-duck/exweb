@@ -113,9 +113,15 @@ class DocumentApplicationServiceTest {
         InMemoryDocumentRepository repository = new InMemoryDocumentRepository();
         DocumentApplicationService service = service(repository);
         UploadedDocument byDocId = documentWithMetadata(
-                "doc1", "{\"providerDocument\":{\"docId\":\"provider-1\",\"url\":\"https://ignored\"}}");
+                "doc1", """
+                        {"providerDocument":{"providerLocatorType":"DOC_ID","docId":"provider-1",
+                        "url":"https://files.example/doc1","docName":"invoice.pdf","docSize":19800}}
+                        """);
         UploadedDocument byUrl = documentWithMetadata(
-                "doc2", "{\"providerDocument\":{\"url\":\"https://files.example/doc2\"}}");
+                "doc2", """
+                        {"providerDocument":{"providerLocatorType":"URL","url":"https://files.example/doc2",
+                        "docName":"chart.png","serverName":"shenzhen"}}
+                        """);
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("language", "zh_CN");
         metadata.put("sceneParam", new HashMap<>(Map.of(
@@ -129,8 +135,17 @@ class DocumentApplicationServiceTest {
         Map<?, ?> sceneParam = (Map<?, ?>) result.get("sceneParam");
         assertThat(sceneParam.get("region")).isEqualTo("CN");
         assertThat(sceneParam.get("docList")).isEqualTo(List.of(
-                Map.of("docId", "provider-1"),
-                Map.of("url", "https://files.example/doc2")));
+                Map.of(
+                        "providerLocatorType", "DOC_ID",
+                        "docId", "provider-1",
+                        "url", "https://files.example/doc1",
+                        "docName", "invoice.pdf",
+                        "docSize", 19800),
+                Map.of(
+                        "providerLocatorType", "URL",
+                        "url", "https://files.example/doc2",
+                        "docName", "chart.png",
+                        "serverName", "shenzhen")));
         assertThat(((Map<?, ?>) metadata.get("sceneParam")).get("docList"))
                 .isEqualTo(List.of(Map.of("docId", "forged")));
     }

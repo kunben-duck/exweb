@@ -163,10 +163,10 @@ DomainAgent binding，历史 `RESUMABLE` Relay session 保留。
 但不参与路由、鉴权、RouteMemory 或意图统计，也不会进入 run metadata、用例库、IntentAgent 或 Runtime 请求。
 DomainAgent 下游请求体会把 `metadata` 作为业务扩展，但服务端保留字段 `skillId/query/sessionId`
 始终以绑定的 DomainAgentId、本轮用户问题和 RuntimeBinding.runtimeSessionId 为准，前端传同名字段也不会覆盖。
-ChatService 只校验附件引用：当请求携带 `attachments[]` 时，`metadata.sceneParam.docList` 中的 `docId/url`
-必须能匹配这些已授权文档的 `metadataJson.providerDocument.docId/url`，后端不会重写 `docList` 中其他业务字段。
-意图澄清续接是例外：服务端会累计该澄清链已验证的附件，并用文档事实中的 `providerDocument.docId/url`
-覆盖最终轮 metadata 的 `sceneParam.docList`，避免前端文件名或文档引用进入最终 Runtime。
+显式 DomainAgent 直连和 active binding 续接仍只校验附件引用：`metadata.sceneParam.docList` 中的 `docId/url`
+必须能匹配已授权文档的 `metadataJson.providerDocument.docId/url`。实际调用过 IntentAgent 的路由由服务端生成
+可信 `docList`：首轮使用本轮附件，意图澄清使用整条澄清链累计附件，并将每个文档已保存的完整
+`providerDocument` 覆盖到 Runtime metadata 中；前端传入的 `docList` 不参与这些意图路由。
 ChatService 不校验 `targetId` 是否可调用；DomainAgent 权限和 body 业务合法性由下游服务负责。
 显式选择的 DomainAgent 会作为 `runtime.metadata` 写入事件流，并在历史 assistant 的 `parts` 中返回；
 payload 包含 `targetType`、`targetId`、`domainAgentId`、可选 `intentId/intentName` 和
@@ -507,7 +507,7 @@ Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共�
 `api-store-url:{sha256(url)}` 这种短稳定定位符，完整 URL 只保存在 `metadataJson.providerDocument.url`。
 API Store 文档的 `source` 按实际响应定位符确定：有效 `docId` 表示 `EDM_UPLOAD`，仅有 `url` 表示
 `S3_UPLOAD`；该字段不依赖请求是否携带 `metadata.skillId`。
-这类 URL-only 文档可用于文档库展示和跳转扩展，但不能进入 DomainAgent 指定调用 `sceneParam.docList`。
+这类 URL-only 文档可以通过 `providerDocument.url` 进入 `sceneParam.docList`，并继续接受附件归属校验。
 
 文档接口：
 
@@ -539,8 +539,9 @@ API Store 文档的 `source` 按实际响应定位符确定：有效 `docId` 表
 `financeex.storage.provider=api-store`，服务端会把该 `skillId` 透传给下游新文档接口，并把返回的
 `docId/url/docName/docSize/serverName/docVersion` 等字段保存到 `metadataJson.providerDocument`；随后
 `/v1/chat/runs` 使用 `targetType=DOMAIN_AGENT,targetId=...` 触发 DomainAgent chat adapter。前端需要把已授权
-文档的 `docId/url` 放入 `metadata.sceneParam.docList`；普通提问和显式 DomainAgent 直连只做匹配校验，
-不自动生成或覆盖下游 body。`INTENT_CLARIFICATION` 续接按前述规则由服务端使用累计可信附件覆盖该字段。
+文档的 `docId/url` 放入 `metadata.sceneParam.docList`；显式 DomainAgent 直连和 active binding 续接只做匹配校验。
+普通提问实际进入 IntentAgent 后，服务端会在路由确定时用可信附件的完整 `providerDocument` 覆盖该字段；
+`INTENT_CLARIFICATION` 续接使用整条澄清链累计的可信附件执行同样覆盖。
 
 api-store 接入示例：
 

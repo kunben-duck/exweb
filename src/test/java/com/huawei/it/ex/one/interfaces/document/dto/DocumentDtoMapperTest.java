@@ -24,7 +24,7 @@ class DocumentDtoMapperTest {
                 "application/pdf",
                 19800L,
                 DocumentStatus.AVAILABLE.name(),
-                "DOMAIN_AGENT_UPLOAD",
+                "EDM_UPLOAD",
                 null,
                 """
                         {
@@ -41,6 +41,7 @@ class DocumentDtoMapperTest {
 
         UploadedDocumentDto dto = mapper.toDto(document);
 
+        assertThat(dto.source()).isEqualTo("EDM_UPLOAD");
         assertThat(dto.metadataJson().get("providerCode").asText()).isEqualTo("domain-agent");
         assertThat(dto.metadataJson().get("providerDocument").get("docId").asText()).isEqualTo("domain-doc-001");
         assertThat(dto.metadataJson().get("providerDocument").get("levelCode").asText()).isEqualTo("IP");

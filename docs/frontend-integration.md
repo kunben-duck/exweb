@@ -596,7 +596,7 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 | `contentType` | MIME 类型 |
 | `sizeBytes` | 文件大小 |
 | `status` | `AVAILABLE`、`PROCESSING`、`FAILED`、`DELETED`；只有 `AVAILABLE` 可下载、预览和作为聊天附件 |
-| `source` | 来源，例如 `LOCAL_UPLOAD`、`LIBRARY`、`CONNECTOR`、`DOMAIN_AGENT_UPLOAD`、`S3_UPLOAD` |
+| `source` | 来源，例如 `LOCAL_UPLOAD`、`LIBRARY`、`CONNECTOR`、`EDM_UPLOAD`、`S3_UPLOAD` |
 | `bucket` | 存储位置字段；local/huawei-s3 表示对象存储 bucket，api-store 固定为 `api-store` |
 | `objectKey` | 存储稳定定位符；local/huawei-s3 表示对象 key，api-store 可为下游 `docId` 或 `api-store-url:{sha256(url)}` |
 | `metadataJson` | JSON object/null；存储扩展元数据。api-store 文档的 `providerDocument` 是组装 DomainAgent `sceneParam.docList` 的事实源。数据库内部仍以 JSON 字符串保存，但响应会解析成对象返回 |
@@ -2327,6 +2327,8 @@ curl -X POST http://localhost:8080/v1/documents \
 
 响应中的 `source` 为 `S3_UPLOAD`，`bucket` 为 `api-store`；如果下游只返回 `url`，则 `objectKey`
 会保存为 `api-store-url:{sha256(url)}`，完整 URL 位于 `metadataJson.providerDocument.url`。
+`source` 最终以实际响应为准：返回有效 `docId` 时为 `EDM_UPLOAD`，仅返回 `url` 时为 `S3_UPLOAD`，
+与上传请求是否携带 `metadata.skillId` 无关；如果同时返回两者，以 `docId/EDM_UPLOAD` 为准。
 
 api-store S3 文档响应示例：
 
@@ -2354,8 +2356,8 @@ api-store S3 文档响应示例：
 }
 ```
 
-api-store 带 `metadata.skillId` 时，下游上传到企业 EDM，通常返回 `docId`。这种文档的 `source`
-为 `DOMAIN_AGENT_UPLOAD`，可在 `targetType=DOMAIN_AGENT` run 中作为附件引用。前端需要把
+api-store 带 `metadata.skillId` 时，下游通常上传到企业 EDM 并返回 `docId`。这类实际返回 `docId`
+的文档 `source` 为 `EDM_UPLOAD`，可在 `targetType=DOMAIN_AGENT` run 中作为附件引用。前端需要把
 `metadataJson.providerDocument.docId/url` 放入 `metadata.sceneParam.docList`，后端校验这些引用和
 `attachments[]` 一致后原样透传。该规则适用于普通提问和显式 DomainAgent 直连；意图澄清续接由服务端
 根据累计可信附件覆盖最终轮 metadata 的 `docList`。
@@ -2367,7 +2369,7 @@ EDM docId 模式的 `metadataJson.providerDocument` 示例：
   "id": "doc_domain_agent_xxx",
   "originalName": "invoice.pdf",
   "status": "AVAILABLE",
-  "source": "DOMAIN_AGENT_UPLOAD",
+  "source": "EDM_UPLOAD",
   "bucket": "api-store",
   "objectKey": "domain_doc_1",
   "metadataJson": {

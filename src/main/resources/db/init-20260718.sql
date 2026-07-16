@@ -672,7 +672,7 @@ COMMENT ON COLUMN fin_ex_uploaded_document_t.object_key IS 'provider 内部稳�
 COMMENT ON COLUMN fin_ex_uploaded_document_t.content_type IS '文档 MIME 类型。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.size_bytes IS '文档字节大小。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.status IS '文档状态，例如 AVAILABLE、PROCESSING、FAILED、DELETED。只有 AVAILABLE 可作为聊天附件。';
-COMMENT ON COLUMN fin_ex_uploaded_document_t.source IS '文档来源，例如 LOCAL_UPLOAD、LIBRARY、CONNECTOR、DOMAIN_AGENT_UPLOAD。';
+COMMENT ON COLUMN fin_ex_uploaded_document_t.source IS '文档来源，例如 LOCAL_UPLOAD、LIBRARY、CONNECTOR、EDM_UPLOAD、S3_UPLOAD。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.token_size IS '文档解析后的 token 数量，供上下文预算和检索使用。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.metadata_json IS '文档扩展元数据 JSON，例如 providerCode、providerDocument、capabilities、上传上下文或处理诊断。';
 COMMENT ON COLUMN fin_ex_uploaded_document_t.created_at IS '文档记录创建时间。';

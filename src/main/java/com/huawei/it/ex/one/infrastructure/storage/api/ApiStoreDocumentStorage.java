@@ -172,8 +172,8 @@ public class ApiStoreDocumentStorage implements DocumentStorage {
     }
 
     private String source(ProviderDocument providerDocument) {
-        return providerDocument.docId() != null && providerDocument.skillId() != null
-                ? DocumentSource.DOMAIN_AGENT_UPLOAD.name()
+        return providerDocument.docId() != null
+                ? DocumentSource.EDM_UPLOAD.name()
                 : DocumentSource.S3_UPLOAD.name();
     }
 

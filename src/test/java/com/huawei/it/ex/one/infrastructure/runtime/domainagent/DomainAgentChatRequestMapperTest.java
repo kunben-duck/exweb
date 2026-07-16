@@ -114,7 +114,7 @@ class DomainAgentChatRequestMapperTest {
         return document(
                 "doc1",
                 "domain-doc-001",
-                DocumentSource.DOMAIN_AGENT_UPLOAD.name(),
+                DocumentSource.EDM_UPLOAD.name(),
                 """
                         {
                           "providerCode": "api-store",

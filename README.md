@@ -505,6 +505,8 @@ Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共�
 文档接口响应里的 `metadataJson` 会解析为 JSON object，便于前端直接读取；数据库表字段仍保存 JSON 字符串。
 如果 api-store 响应没有 `docId` 但返回了 `url`，文档库仍视为上传成功：`objectKey` 保存
 `api-store-url:{sha256(url)}` 这种短稳定定位符，完整 URL 只保存在 `metadataJson.providerDocument.url`。
+API Store 文档的 `source` 按实际响应定位符确定：有效 `docId` 表示 `EDM_UPLOAD`，仅有 `url` 表示
+`S3_UPLOAD`；该字段不依赖请求是否携带 `metadata.skillId`。
 这类 URL-only 文档可用于文档库展示和跳转扩展，但不能进入 DomainAgent 指定调用 `sceneParam.docList`。
 
 文档接口：

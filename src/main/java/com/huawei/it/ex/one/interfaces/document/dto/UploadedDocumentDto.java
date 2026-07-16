@@ -19,7 +19,7 @@ import java.time.Instant;
  * @param contentType 文件 MIME 类型。
  * @param sizeBytes 文件大小，单位字节。
  * @param status 文档状态，例如 AVAILABLE、PROCESSING、FAILED、DELETED。
- * @param source 文档来源，例如 LOCAL_UPLOAD、DOMAIN_AGENT_UPLOAD。
+ * @param source 文档来源，例如 LOCAL_UPLOAD、EDM_UPLOAD、S3_UPLOAD。
  * @param metadataJson 文档扩展元数据 JSON 对象；为空表示没有扩展元数据。
  * @param tokenSize 文档解析后的 token 数量，可为空。
  * @param createdAt 创建时间。

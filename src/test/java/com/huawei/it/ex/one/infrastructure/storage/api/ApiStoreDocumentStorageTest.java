@@ -66,7 +66,7 @@ class ApiStoreDocumentStorageTest {
         String body = capturedBody(captured.get());
         assertThat(body).contains("name=\"file\"");
         assertThat(body).contains("name=\"skillId\"");
-        assertThat(document.source()).isEqualTo(DocumentSource.DOMAIN_AGENT_UPLOAD.name());
+        assertThat(document.source()).isEqualTo(DocumentSource.EDM_UPLOAD.name());
         JsonNode metadata = objectMapper.readTree(document.metadataJson());
         assertThat(metadata.at("/skillId").asText()).isEmpty();
         assertThat(metadata.at("/uploadMetadata/skillId").asText()).isEmpty();
@@ -101,7 +101,57 @@ class ApiStoreDocumentStorageTest {
     }
 
     @Test
-    void uploadWithMetadataSkillIdSendsSkillIdAndStoresDomainAgentDocument() throws Exception {
+    void storesEdmSourceFromDocIdWithoutDependingOnSkillId() throws Exception {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+        ApiStoreDocumentStorage storage = storage(captured, """
+                {"status":"success","data":[{"docId":"EDM-001","docName":"deck.pptx"}]}
+                """, false);
+
+        UploadedDocument document = storage.upload(request(null, null));
+
+        assertThat(capturedBody(captured.get())).doesNotContain("name=\"skillId\"");
+        assertThat(document.source()).isEqualTo(DocumentSource.EDM_UPLOAD.name());
+        assertThat(document.objectKey()).isEqualTo("EDM-001");
+        JsonNode metadata = objectMapper.readTree(document.metadataJson());
+        assertThat(metadata.at("/providerDocument/providerLocatorType").asText()).isEqualTo("DOC_ID");
+    }
+
+    @Test
+    void storesS3SourceWhenResponseUsesUrlEvenIfSkillIdWasSent() throws Exception {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+        ApiStoreDocumentStorage storage = storage(captured, """
+                {"status":"success","data":[{"url":"https://s3.example/deck.pptx","docName":"deck.pptx"}]}
+                """, false);
+
+        UploadedDocument document = storage.upload(request("{\"skillId\":\"skill-1\"}", null));
+
+        assertThat(capturedBody(captured.get())).contains("name=\"skillId\"");
+        assertThat(document.source()).isEqualTo(DocumentSource.S3_UPLOAD.name());
+        assertThat(document.objectKey()).startsWith("api-store-url:");
+        JsonNode metadata = objectMapper.readTree(document.metadataJson());
+        assertThat(metadata.at("/providerDocument/providerLocatorType").asText()).isEqualTo("URL");
+    }
+
+    @Test
+    void prefersEdmSourceAndDocIdWhenResponseContainsDocIdAndUrl() throws Exception {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+        ApiStoreDocumentStorage storage = storage(captured, """
+                {"status":"success","data":[{"docId":"EDM-002","url":"https://s3.example/deck.pptx",
+                "docName":"deck.pptx"}]}
+                """, false);
+
+        UploadedDocument document = storage.upload(request(null, null));
+
+        assertThat(document.source()).isEqualTo(DocumentSource.EDM_UPLOAD.name());
+        assertThat(document.objectKey()).isEqualTo("EDM-002");
+        JsonNode metadata = objectMapper.readTree(document.metadataJson());
+        assertThat(metadata.at("/providerDocument/providerLocatorType").asText()).isEqualTo("DOC_ID");
+        assertThat(metadata.at("/providerDocument/docId").asText()).isEqualTo("EDM-002");
+        assertThat(metadata.at("/providerDocument/url").asText()).isEqualTo("https://s3.example/deck.pptx");
+    }
+
+    @Test
+    void uploadWithMetadataSkillIdSendsSkillIdAndStoresEdmDocument() throws Exception {
         AtomicReference<ClientRequest> captured = new AtomicReference<>();
         ApiStoreDocumentStorage storage = storage(captured, """
                 {"traceId":"t2","status":"success","data":[{"docId":"M3T1","docName":"deck.pptx",
@@ -119,7 +169,7 @@ class ApiStoreDocumentStorageTest {
         assertThat(document.objectKey()).isEqualTo("M3T1");
         assertThat(document.originalName()).isEqualTo("deck.pptx");
         assertThat(document.sizeBytes()).isEqualTo(15887275L);
-        assertThat(document.source()).isEqualTo(DocumentSource.DOMAIN_AGENT_UPLOAD.name());
+        assertThat(document.source()).isEqualTo(DocumentSource.EDM_UPLOAD.name());
         JsonNode metadata = objectMapper.readTree(document.metadataJson());
         assertThat(metadata.at("/skillId").asText()).isEqualTo("skill-1");
         assertThat(metadata.at("/providerDocument/docId").asText()).isEqualTo("M3T1");

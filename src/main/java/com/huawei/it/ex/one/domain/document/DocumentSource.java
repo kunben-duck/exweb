@@ -13,8 +13,8 @@ public enum DocumentSource {
     LIBRARY,
     /** 用户从外部连接器导入的云端文档。 */
     CONNECTOR,
-    /** 文档由 api-store 通过 skillId 上传到下游 EDM，本服务仅保存统一文档库元数据。 */
-    DOMAIN_AGENT_UPLOAD,
+    /** 文档由 api-store 上传到下游 EDM，本服务仅保存统一文档库元数据。 */
+    EDM_UPLOAD,
     /** 文档由 api-store 上传到下游 S3，本服务保存统一文档库元数据。 */
     S3_UPLOAD
 }

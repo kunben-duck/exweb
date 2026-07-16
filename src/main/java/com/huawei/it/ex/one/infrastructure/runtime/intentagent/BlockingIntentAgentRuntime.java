@@ -6,6 +6,8 @@ import com.huawei.it.ex.one.application.integration.intent.IntentAgentRouteResul
 import com.huawei.it.ex.one.application.integration.intent.IntentAgentRuntime;
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.it.ex.one.application.integration.intent.IntentService;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
@@ -55,11 +57,11 @@ public class BlockingIntentAgentRuntime implements IntentAgentRuntime {
         try {
             result = intentService.recognizeForRouting(request.command(), request.memory(), request.user());
         } catch (RuntimeException ex) {
-            log.warn("IntentAgent route failed, returning degraded routing result. tenantId={}, userId={}, sessionId={}, reason={}",
-                    request.user() == null ? null : request.user().tenantId(),
-                    request.user() == null ? null : request.user().ownerUserId(),
-                    request.session() == null ? null : request.session().id(),
-                    ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTENT_DECISION_STREAM_FAILED,
+                            "IntentDecision routing failed; returning the configured degraded result")
+                    .sessionId(request.session() == null ? null : request.session().id())
+                    .operation("intent.route")
+                    .build(), ex);
             result = IntentRecognitionResult.degraded(new IntentDecision(
                     "finance.runtime.degraded",
                     "意图服务不可用，转入 AgentRuntime",

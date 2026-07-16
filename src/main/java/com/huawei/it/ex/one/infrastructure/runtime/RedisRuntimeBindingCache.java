@@ -3,6 +3,8 @@ package com.huawei.it.ex.one.infrastructure.runtime;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingCache;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.infrastructure.redis.FinanceExRedisKeyBuilder;
 import java.util.Optional;
@@ -48,7 +50,14 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
             }
             return Optional.of(objectMapper.readValue(value, RuntimeBinding.class));
         } catch (RuntimeException | JsonProcessingException ex) {
-            log.warn("RuntimeBinding Redis 读取失败，本轮回源数据库。原因：{}", ex.getMessage());
+            SystemErrorCode code = ex instanceof JsonProcessingException
+                    ? SystemErrorCode.REDIS_DESERIALIZATION_FAILED
+                    : SystemErrorCode.REDIS_READ_FAILED;
+            log.warn(SystemErrorLogEntry.builder(code,
+                            "RuntimeBinding Redis read failed; falling back to database")
+                    .operation("runtime-binding.cache.read")
+                    .sessionId(sessionId)
+                    .build(), ex);
             return Optional.empty();
         }
     }
@@ -72,7 +81,15 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
             redis.opsForSet().add(indexKey, key);
             redis.expire(indexKey, properties.getRedisTtl());
         } catch (RuntimeException | JsonProcessingException ex) {
-            log.warn("RuntimeBinding Redis 写入失败，数据库仍作为事实源。原因：{}", ex.getMessage());
+            SystemErrorCode code = ex instanceof JsonProcessingException
+                    ? SystemErrorCode.REDIS_SERIALIZATION_FAILED
+                    : SystemErrorCode.REDIS_WRITE_FAILED;
+            log.warn(SystemErrorLogEntry.builder(code,
+                            "RuntimeBinding Redis write failed; database remains authoritative")
+                    .operation("runtime-binding.cache.write")
+                    .sessionId(binding.chatSessionId())
+                    .attribute("bindingId", binding.id())
+                    .build(), ex);
         }
     }
 
@@ -86,7 +103,11 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
             }
             redis.delete(indexKey);
         } catch (RuntimeException ex) {
-            log.warn("RuntimeBinding Redis 删除失败。原因：{}", ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_WRITE_FAILED,
+                            "RuntimeBinding Redis eviction failed")
+                    .operation("runtime-binding.cache.evict")
+                    .sessionId(sessionId)
+                    .build(), ex);
         }
     }
 

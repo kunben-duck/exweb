@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunCache;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRecoverLock;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunCancelSignal;
 import com.huawei.it.ex.one.infrastructure.redis.FinanceExRedisKeyBuilder;
@@ -47,7 +49,14 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
             }
             return Optional.of(objectMapper.readValue(value, ChatRun.class));
         } catch (RuntimeException | JsonProcessingException ex) {
-            log.warn("ChatRun active Redis 读取失败，本轮回源数据库。原因：{}", ex.getMessage());
+            SystemErrorCode code = ex instanceof JsonProcessingException
+                    ? SystemErrorCode.REDIS_DESERIALIZATION_FAILED
+                    : SystemErrorCode.REDIS_READ_FAILED;
+            log.warn(SystemErrorLogEntry.builder(code,
+                            "Active ChatRun Redis read failed; falling back to database")
+                    .operation("chat-run.cache.read")
+                    .sessionId(sessionId)
+                    .build(), ex);
             return Optional.empty();
         }
     }
@@ -65,8 +74,15 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
             );
             return Boolean.TRUE.equals(claimed);
         } catch (RuntimeException | JsonProcessingException ex) {
-            log.warn("ChatRun active Redis 原子声明失败，未获得缓存声明。数据库唯一索引仍是 active run 事实栅栏。原因：{}",
-                    ex.getMessage());
+            SystemErrorCode code = ex instanceof JsonProcessingException
+                    ? SystemErrorCode.REDIS_SERIALIZATION_FAILED
+                    : SystemErrorCode.REDIS_WRITE_FAILED;
+            log.warn(SystemErrorLogEntry.builder(code,
+                            "Active ChatRun Redis claim failed; database admission guard remains authoritative")
+                    .operation("chat-run.cache.claim")
+                    .runId(run.id())
+                    .sessionId(run.sessionId())
+                    .build(), ex);
             return false;
         }
     }
@@ -80,7 +96,15 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
             redis.opsForValue().set(redisKeys.activeRun(run.tenantId(), run.userId(), run.sessionId()),
                     objectMapper.writeValueAsString(run), properties.getActiveTtl());
         } catch (RuntimeException | JsonProcessingException ex) {
-            log.warn("ChatRun active Redis 写入失败，数据库仍作为事实源。原因：{}", ex.getMessage());
+            SystemErrorCode code = ex instanceof JsonProcessingException
+                    ? SystemErrorCode.REDIS_SERIALIZATION_FAILED
+                    : SystemErrorCode.REDIS_WRITE_FAILED;
+            log.warn(SystemErrorLogEntry.builder(code,
+                            "Active ChatRun Redis write failed; database remains authoritative")
+                    .operation("chat-run.cache.write")
+                    .runId(run.id())
+                    .sessionId(run.sessionId())
+                    .build(), ex);
         }
     }
 
@@ -89,7 +113,11 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
         try {
             redis.delete(redisKeys.activeRun(tenantId, userId, sessionId));
         } catch (RuntimeException ex) {
-            log.warn("ChatRun active Redis 删除失败。原因：{}", ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_WRITE_FAILED,
+                            "Active ChatRun Redis eviction failed")
+                    .operation("chat-run.cache.evict")
+                    .sessionId(sessionId)
+                    .build(), ex);
         }
     }
 
@@ -101,7 +129,11 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
         try {
             redis.opsForValue().set(redisKeys.cancelFlag(runId), "1", properties.getCancelTtl());
         } catch (RuntimeException ex) {
-            log.warn("ChatRun cancel Redis 写入失败，将依赖数据库 CANCELLING 状态兜底阻断迟到事件。原因：{}", ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_WRITE_FAILED,
+                            "ChatRun cancellation cache write failed; database state remains authoritative")
+                    .operation("chat-run.cancel-cache.write")
+                    .runId(runId)
+                    .build(), ex);
         }
     }
 
@@ -115,7 +147,11 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
                     ? ChatRunCancelSignal.REQUESTED
                     : ChatRunCancelSignal.NOT_REQUESTED;
         } catch (RuntimeException ex) {
-            log.warn("ChatRun cancel Redis 读取失败。原因：{}", ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_READ_FAILED,
+                            "ChatRun cancellation cache read failed")
+                    .operation("chat-run.cancel-cache.read")
+                    .runId(runId)
+                    .build(), ex);
             return ChatRunCancelSignal.UNKNOWN;
         }
     }
@@ -133,8 +169,11 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
             );
             return Boolean.TRUE.equals(locked);
         } catch (RuntimeException ex) {
-            log.warn("ChatRun recover Redis 锁获取失败，将继续依赖数据库条件抢占。runId={}, reason={}",
-                    runId, ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_LOCK_FAILED,
+                            "ChatRun recovery Redis lock failed; relying on database fencing")
+                    .operation("chat-run.recovery-lock.acquire")
+                    .runId(runId)
+                    .build(), ex);
             return true;
         }
     }

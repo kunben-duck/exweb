@@ -1,5 +1,7 @@
 package com.huawei.it.ex.one.common.logging;
 
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
+
 /**
  * Application logging facade that keeps business code independent from the logging backend.
  */
@@ -53,6 +55,10 @@ public interface AppLogger {
 
     void warn(String message, Throwable throwable);
 
+    void warn(SystemErrorLogEntry event);
+
+    void warn(SystemErrorLogEntry event, Throwable throwable);
+
     boolean isErrorEnabled();
 
     void error(String message);
@@ -64,4 +70,8 @@ public interface AppLogger {
     void error(String format, Object... arguments);
 
     void error(String message, Throwable throwable);
+
+    void error(SystemErrorLogEntry event);
+
+    void error(SystemErrorLogEntry event, Throwable throwable);
 }

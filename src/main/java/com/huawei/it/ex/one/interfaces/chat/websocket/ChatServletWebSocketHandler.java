@@ -3,6 +3,8 @@ package com.huawei.it.ex.one.interfaces.chat.websocket;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.it.ex.one.application.config.ChatWebSocketProperties;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatWebSocketEnvelopeDto;
 import java.io.IOException;
@@ -107,7 +109,11 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) {
-        log.warn("Servlet WebSocket transport error, connectionId={}, reason={}", session.getId(), exception.getMessage());
+        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_TRANSPORT_ERROR,
+                        "Servlet WebSocket transport failed")
+                .operation("websocket.transport")
+                .attribute("connectionId", session.getId())
+                .build(), exception);
         ServletConnection connection = connections.remove(session.getId());
         if (connection != null) {
             connection.outbound().close();
@@ -136,8 +142,12 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
         try {
             message = toOutboundMessage(envelope);
         } catch (Exception ex) {
-            log.warn("Servlet WebSocket envelope serialization failed, connectionId={}, reason={}",
-                    connectionId, ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_SERIALIZATION_FAILED,
+                            "Servlet WebSocket envelope serialization failed")
+                    .operation("websocket.envelope.serialize")
+                    .attribute("connectionId", connectionId)
+                    .legacyCode("WS_SERIALIZATION_FAILED")
+                    .build(), ex);
             closeConnection(connectionId, connection, "WS_SERIALIZATION_FAILED", CloseStatus.SERVER_ERROR);
             return;
         }
@@ -149,9 +159,18 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
                     connectionId, message.topicId(), message.offset());
         } else if (result == ServletWebSocketOutboundQueue.OfferResult.OVERFLOW) {
             ServletWebSocketOutboundQueue.Snapshot snapshot = connection.outbound().snapshot();
-            log.warn("Servlet WebSocket outbound overflow, connectionId={}, topicId={}, offset={}, envelopeType={}, messageBytes={}, queueSize={}, queuedBytes={}",
-                    connectionId, message.topicId(), message.offset(), message.envelopeType(), message.bytes(),
-                    snapshot.queueSize(), snapshot.queuedBytes());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_OUTBOUND_OVERFLOW,
+                            "Servlet WebSocket outbound queue exceeded its configured limit")
+                    .operation("websocket.outbound.enqueue")
+                    .legacyCode("WS_OUTBOUND_OVERFLOW")
+                    .attribute("connectionId", connectionId)
+                    .attribute("topicId", message.topicId())
+                    .attribute("offset", message.offset())
+                    .attribute("envelopeType", message.envelopeType())
+                    .attribute("messageBytes", message.bytes())
+                    .attribute("queueSize", snapshot.queueSize())
+                    .attribute("queuedBytes", snapshot.queuedBytes())
+                    .build());
             closeConnection(connectionId, connection, "WS_OUTBOUND_OVERFLOW", CloseStatus.SERVICE_OVERLOAD);
         } else {
             log.debug("Drop WebSocket envelope because connection is closing, connectionId={}, envelopeType={}, topicId={}",
@@ -166,8 +185,12 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
         try {
             sendExecutor.execute(() -> drainOutbound(connectionId, connection));
         } catch (RejectedExecutionException ex) {
-            log.warn("Servlet WebSocket send executor rejected drain task, connectionId={}, reason={}",
-                    connectionId, ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_EXECUTOR_REJECTED,
+                            "Servlet WebSocket send executor rejected a drain task")
+                    .operation("websocket.outbound.schedule")
+                    .legacyCode("WS_SEND_EXECUTOR_REJECTED")
+                    .attribute("connectionId", connectionId)
+                    .build(), ex);
             closeConnection(connectionId, connection, "WS_SEND_EXECUTOR_REJECTED", CloseStatus.SERVICE_OVERLOAD);
         }
     }
@@ -187,10 +210,18 @@ public class ChatServletWebSocketHandler extends TextWebSocketHandler {
                 Thread.currentThread().interrupt();
             }
             ServletWebSocketOutboundQueue.Snapshot snapshot = connection.outbound().snapshot();
-            log.warn("Servlet WebSocket async send failed, connectionId={}, topicId={}, offset={}, envelopeType={}, messageBytes={}, queueSize={}, queuedBytes={}, reason={}",
-                    connectionId, current == null ? null : current.topicId(), current == null ? null : current.offset(),
-                    current == null ? null : current.envelopeType(), current == null ? 0 : current.bytes(),
-                    snapshot.queueSize(), snapshot.queuedBytes(), ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_SEND_FAILED,
+                            "Servlet WebSocket asynchronous send failed")
+                    .operation("websocket.outbound.send")
+                    .legacyCode("WS_SEND_FAILED")
+                    .attribute("connectionId", connectionId)
+                    .attribute("topicId", current == null ? null : current.topicId())
+                    .attribute("offset", current == null ? null : current.offset())
+                    .attribute("envelopeType", current == null ? null : current.envelopeType())
+                    .attribute("messageBytes", current == null ? 0 : current.bytes())
+                    .attribute("queueSize", snapshot.queueSize())
+                    .attribute("queuedBytes", snapshot.queuedBytes())
+                    .build(), ex);
             closeConnection(connectionId, connection, "WS_SEND_FAILED", CloseStatus.SESSION_NOT_RELIABLE);
             return;
         } finally {

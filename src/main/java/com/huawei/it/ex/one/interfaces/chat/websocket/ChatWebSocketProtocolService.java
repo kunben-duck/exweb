@@ -6,6 +6,8 @@ import com.huawei.it.ex.one.application.config.ChatStreamProperties;
 import com.huawei.it.ex.one.application.service.chat.ChatStreamApplicationService;
 import com.huawei.it.ex.one.application.service.chat.StreamRecoveryRequiredException;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.interfaces.chat.ChatEventTranslator;
@@ -211,9 +213,17 @@ public class ChatWebSocketProtocolService {
             long lastSentSeq = context.lastSeq().get();
             long recoveryAfterSeq = Math.max(recovery.afterSeq(), lastSentSeq);
             long actualSeq = recovery.actualSeq() > 0 ? recovery.actualSeq() : recoveryAfterSeq;
-            log.warn("WebSocket topic requires recovery. connectionId={}, topicId={}, reason={}, subscribeAfterSeq={}, recoveryAfterSeq={}, actualSeq={}, lastSentSeq={}, message={}",
-                    context.connectionId(), context.topicId(), recovery.reason(), context.afterSeq(),
-                    recoveryAfterSeq, actualSeq, lastSentSeq, recovery.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_RECOVERY_FAILED,
+                            "WebSocket topic subscription requires Event Resume recovery")
+                    .operation("websocket.topic.resume")
+                    .attribute("connectionId", context.connectionId())
+                    .attribute("topicId", context.topicId())
+                    .attribute("recoveryReason", recovery.reason())
+                    .attribute("subscribeAfterSeq", context.afterSeq())
+                    .attribute("recoveryAfterSeq", recoveryAfterSeq)
+                    .attribute("actualSeq", actualSeq)
+                    .attribute("lastSentSeq", lastSentSeq)
+                    .build(), recovery);
             context.outbound().emit(ChatWebSocketEnvelopeDto.recoverRequired(
                     context.topicId(), recoveryAfterSeq, actualSeq,
                     Map.of(
@@ -245,7 +255,11 @@ public class ChatWebSocketProtocolService {
                                 turnStreamTranslator.heartbeat(run.sessionId(), run.id(), lastSeq.get()),
                                 null
                         )),
-                        ex -> log.warn("WebSocket turn heartbeat 发送失败，topicId={}, reason={}", topicId, ex.getMessage())
+                        ex -> log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_SEND_FAILED,
+                                        "WebSocket turn heartbeat send failed")
+                                .operation("websocket.heartbeat.send")
+                                .attribute("topicId", topicId)
+                                .build(), ex)
                 );
     }
 
@@ -259,8 +273,16 @@ public class ChatWebSocketProtocolService {
              * topicId、runId、sessionId 三者必须同时匹配。出现不匹配说明 live source 或 Redis fanout
              * 发生了错误投递；这里直接丢弃，避免跨会话实时消息串到当前连接。
              */
-            log.warn("Dropped mismatched WebSocket event. topicId={}, expectedRunId={}, actualRunId={}, expectedSessionId={}, actualSessionId={}, seq={}",
-                    context.topicId(), run.id(), dto.runId(), run.sessionId(), dto.sessionId(), dto.sequence());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_SEQUENCE_MISMATCH,
+                            "Dropped a WebSocket event whose run or session identity did not match the topic")
+                    .runId(run.id())
+                    .sessionId(run.sessionId())
+                    .operation("websocket.topic.deliver")
+                    .attribute("topicId", context.topicId())
+                    .attribute("actualRunId", dto.runId())
+                    .attribute("actualSessionId", dto.sessionId())
+                    .attribute("sequence", dto.sequence())
+                    .build());
             return;
         }
         LocalWebSocketConnectionRegistry.DeliveryDecision decision =
@@ -283,10 +305,19 @@ public class ChatWebSocketProtocolService {
             }
         } else if (decision.action() == LocalWebSocketConnectionRegistry.Action.RECOVER_REQUIRED) {
             long lastSentSeq = context.lastSeq().get();
-            log.warn("WebSocket event sequence rollback requires recovery. connectionId={}, topicId={}, runId={}, sessionId={}, subscribeAfterSeq={}, recoveryAfterSeq={}, actualSeq={}, highestDeliveredSeq={}, lastSentSeq={}",
-                    context.connectionId(), context.topicId(), run.id(), run.sessionId(),
-                    decision.resumeAfterSeq(), decision.recoveryAfterSeq(), decision.actualSeq(),
-                    decision.highestDeliveredSeq(), lastSentSeq);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_SEQUENCE_MISMATCH,
+                            "WebSocket event sequence rollback requires recovery")
+                    .runId(run.id())
+                    .sessionId(run.sessionId())
+                    .operation("websocket.topic.deliver")
+                    .attribute("connectionId", context.connectionId())
+                    .attribute("topicId", context.topicId())
+                    .attribute("subscribeAfterSeq", decision.resumeAfterSeq())
+                    .attribute("recoveryAfterSeq", decision.recoveryAfterSeq())
+                    .attribute("actualSeq", decision.actualSeq())
+                    .attribute("highestDeliveredSeq", decision.highestDeliveredSeq())
+                    .attribute("lastSentSeq", lastSentSeq)
+                    .build());
             context.outbound().emit(ChatWebSocketEnvelopeDto.recoverRequired(
                     context.topicId(), decision.recoveryAfterSeq(), decision.actualSeq(),
                     Map.of(

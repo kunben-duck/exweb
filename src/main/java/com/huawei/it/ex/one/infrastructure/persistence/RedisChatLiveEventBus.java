@@ -8,6 +8,8 @@ import com.huawei.it.ex.one.application.config.ChatStreamProperties;
 import com.huawei.it.ex.one.application.integration.conversation.ChatLiveEventBus;
 import com.huawei.it.ex.one.application.integration.conversation.ChatLiveRecoveryRequiredException;
 import com.huawei.it.ex.one.application.integration.identity.ApplicationInstanceIdProvider;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
 import com.huawei.it.ex.one.infrastructure.redis.FinanceExRedisKeyBuilder;
@@ -103,7 +105,10 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
             listenerContainer.afterPropertiesSet();
             listenerContainer.start();
         } catch (RuntimeException ex) {
-            log.warn("Redis ChatLiveEventBus 启动失败，跨实例 WebSocket 实时推送将降级。原因：{}", ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_UNAVAILABLE,
+                            "Redis live event listener failed to start; cross-instance delivery is degraded")
+                    .operation("chat-live-bus.start")
+                    .build(), ex);
         }
     }
 
@@ -116,7 +121,11 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
             listenerContainer.stop();
             listenerContainer.destroy();
         } catch (Exception ex) {
-            log.warn("Redis ChatLiveEventBus 关闭失败。原因：{}", ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_SUBSCRIBE_FAILED,
+                            "Redis live event listener failed to stop cleanly")
+                    .operation("chat-live-bus.stop")
+                    .retryable(false)
+                    .build(), ex);
         } finally {
             topicPublishers.clear();
         }
@@ -140,9 +149,19 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
             }
             scheduleDrain(publisher);
         } catch (RuntimeException | JsonProcessingException ex) {
-            log.warn("Redis ChatLiveEventBus 发布入队失败，topicId={}, runId={}, sessionId={}, seq={}, thread={}, interrupted={}, reason={}",
-                    topicId, event.runId(), event.sessionId(), event.sequence(),
-                    Thread.currentThread().getName(), Thread.currentThread().isInterrupted(), ex.getMessage());
+            SystemErrorCode code = ex instanceof JsonProcessingException
+                    ? SystemErrorCode.REDIS_SERIALIZATION_FAILED
+                    : SystemErrorCode.REDIS_PUBLISH_FAILED;
+            log.warn(SystemErrorLogEntry.builder(code,
+                            "Redis live event publish could not be queued")
+                    .runId(event.runId())
+                    .sessionId(event.sessionId())
+                    .operation("chat-live-bus.publish.enqueue")
+                    .attribute("topicId", topicId)
+                    .attribute("sequence", event.sequence())
+                    .attribute("thread", Thread.currentThread().getName())
+                    .attribute("interrupted", Thread.currentThread().isInterrupted())
+                    .build(), ex);
         }
     }
 
@@ -200,7 +219,11 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
                 completeTopic(topicId, sink);
             }
         } catch (RuntimeException | JsonProcessingException ex) {
-            log.warn("Redis ChatLiveEventBus 消息解析失败，topicId={}, reason={}", topicId, ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_DESERIALIZATION_FAILED,
+                            "Redis live event message parsing failed")
+                    .operation("chat-live-bus.message.parse")
+                    .attribute("topicId", topicId)
+                    .build(), ex);
         }
     }
 
@@ -216,8 +239,15 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
         long recoveryAfterSeq = Math.max(0L, root.path("recoveryAfterSeq").asLong(0L));
         long actualSeq = Math.max(0L, root.path("actualSeq").asLong(recoveryAfterSeq));
         String reason = root.path("reason").asText("REDIS_PUBLISH_DEGRADED");
-        log.warn("Redis ChatLiveEventBus 收到恢复控制消息，topicId={}, recoveryAfterSeq={}, actualSeq={}, reason={}, thread={}",
-                topicId, recoveryAfterSeq, actualSeq, reason, Thread.currentThread().getName());
+        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_PUBLISH_FAILED,
+                        "Redis live event bus received a recovery-required control message")
+                .operation("chat-live-bus.recovery-control")
+                .attribute("topicId", topicId)
+                .attribute("recoveryAfterSeq", recoveryAfterSeq)
+                .attribute("actualSeq", actualSeq)
+                .attribute("recoveryReason", reason)
+                .attribute("thread", Thread.currentThread().getName())
+                .build());
         sink.emitError(new ChatLiveRecoveryRequiredException(topicId, recoveryAfterSeq, actualSeq,
                 reason, "Redis live topic requires Event Resume from afterSeq=" + recoveryAfterSeq));
     }
@@ -232,8 +262,11 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
         try {
             listenerContainer.addMessageListener(this, redisTopic);
         } catch (RuntimeException ex) {
-            log.warn("Redis ChatLiveEventBus 订阅失败，topicId={}，跨实例实时推送将依赖 Event Resume。原因：{}",
-                    topicId, ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_SUBSCRIBE_FAILED,
+                            "Redis live topic subscription failed; Event Resume is required")
+                    .operation("chat-live-bus.subscribe")
+                    .attribute("topicId", topicId)
+                    .build(), ex);
             topic.markRegistrationFailed(ex.getMessage());
         }
         return topic;
@@ -247,7 +280,11 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
             listenerContainer.removeMessageListener(this, topic.redisTopic());
             topic.markUnregistered();
         } catch (RuntimeException ex) {
-            log.warn("Redis ChatLiveEventBus 取消订阅失败，topicId={}，原因：{}", topicId, ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_SUBSCRIBE_FAILED,
+                            "Redis live topic unsubscription failed")
+                    .operation("chat-live-bus.unsubscribe")
+                    .attribute("topicId", topicId)
+                    .build(), ex);
         }
     }
 
@@ -300,9 +337,17 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
                     reason, topicId, event == null ? null : event.sequence(), result, threadName);
             return;
         }
-        log.warn("Redis ChatLiveEventBus 投递失败，reason={}, topicId={}, runId={}, sessionId={}, seq={}, result={}, thread={}",
-                reason, topicId, event == null ? null : event.runId(), event == null ? null : event.sessionId(),
-                event == null ? null : event.sequence(), result, threadName);
+        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_SUBSCRIBE_FAILED,
+                        "Redis live event delivery to the local subscriber failed")
+                .runId(event == null ? null : event.runId())
+                .sessionId(event == null ? null : event.sessionId())
+                .operation("chat-live-bus.deliver")
+                .attribute("failureReason", reason)
+                .attribute("topicId", topicId)
+                .attribute("sequence", event == null ? null : event.sequence())
+                .attribute("emitResult", result)
+                .attribute("thread", threadName)
+                .build());
     }
 
     private boolean isPublishedByCurrentInstance(ChatLiveEventPayload payload) {
@@ -329,9 +374,14 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
         } catch (RuntimeException ex) {
             publisher.stopDraining();
             RecoveryMarker marker = publisher.markDegraded(publisher.peek(), "REDIS_PUBLISH_EXECUTOR_REJECTED");
-            log.warn("Redis ChatLiveEventBus 发布任务提交失败，topicId={}, recoveryAfterSeq={}, thread={}, interrupted={}, reason={}",
-                    publisher.topicId(), marker.recoveryAfterSeq(), Thread.currentThread().getName(),
-                    Thread.currentThread().isInterrupted(), ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.TASK_REJECTED,
+                            "Redis live event publish executor rejected a task")
+                    .operation("chat-live-bus.publish.schedule")
+                    .attribute("topicId", publisher.topicId())
+                    .attribute("recoveryAfterSeq", marker.recoveryAfterSeq())
+                    .attribute("thread", Thread.currentThread().getName())
+                    .attribute("interrupted", Thread.currentThread().isInterrupted())
+                    .build(), ex);
         }
     }
 
@@ -350,9 +400,13 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
                     });
         } catch (RuntimeException ex) {
             publisher.clearRecoveryRetryScheduled();
-            log.warn("Redis ChatLiveEventBus 发布延迟重试提交失败，topicId={}, thread={}, interrupted={}, reason={}",
-                    publisher.topicId(), Thread.currentThread().getName(),
-                    Thread.currentThread().isInterrupted(), ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.TASK_REJECTED,
+                            "Redis live event delayed retry executor rejected a task")
+                    .operation("chat-live-bus.publish.retry-schedule")
+                    .attribute("topicId", publisher.topicId())
+                    .attribute("thread", Thread.currentThread().getName())
+                    .attribute("interrupted", Thread.currentThread().isInterrupted())
+                    .build(), ex);
         }
     }
 
@@ -453,17 +507,24 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
 
     private void logPublishFailure(String reason, PendingPublish pending, RuntimeException ex,
                                    RecoveryMarker marker, int retryCount) {
-        log.warn("Redis ChatLiveEventBus 发布失败，reason={}, topicId={}, runId={}, sessionId={}, seq={}, recoveryAfterSeq={}, retryCount={}, thread={}, interrupted={}, cause={}",
-                reason,
-                pending == null ? marker.topicId() : pending.topicId(),
-                pending == null ? null : pending.runId(),
-                pending == null ? null : pending.sessionId(),
-                pending == null ? marker.actualSeq() : pending.sequence(),
-                marker.recoveryAfterSeq(),
-                retryCount,
-                Thread.currentThread().getName(),
-                Thread.currentThread().isInterrupted(),
-                ex == null ? null : ex.getMessage());
+        SystemErrorLogEntry event = SystemErrorLogEntry.builder(SystemErrorCode.REDIS_PUBLISH_FAILED,
+                        "Redis live event publish failed; subscribers must recover from the database event log")
+                .runId(pending == null ? null : pending.runId())
+                .sessionId(pending == null ? null : pending.sessionId())
+                .operation("chat-live-bus.publish")
+                .attribute("failureReason", reason)
+                .attribute("topicId", pending == null ? marker.topicId() : pending.topicId())
+                .attribute("sequence", pending == null ? marker.actualSeq() : pending.sequence())
+                .attribute("recoveryAfterSeq", marker.recoveryAfterSeq())
+                .attribute("retryCount", retryCount)
+                .attribute("thread", Thread.currentThread().getName())
+                .attribute("interrupted", Thread.currentThread().isInterrupted())
+                .build();
+        if (ex == null) {
+            log.warn(event);
+        } else {
+            log.warn(event, ex);
+        }
     }
 
     /**

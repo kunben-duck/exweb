@@ -10,6 +10,8 @@ import com.huawei.it.ex.one.application.integration.intent.IntentAgentRuntime;
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.it.ex.one.application.integration.usecase.UseCaseLibraryClient;
 import com.huawei.it.ex.one.application.integration.usecase.UseCaseMatchRequest;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.application.service.memory.RouteMemoryApplicationService;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
@@ -154,10 +156,12 @@ public class RouteSignalApplicationService {
                     .onErrorResume(ex -> {
                         String reason = "intent agent stream failed: "
                                 + (ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
-                        log.warn("IntentAgent event stream failed; applying configured failure strategy. "
-                                        + "tenantId={}, userId={}, sessionId={}, strategy={}, reason={}",
-                                user.tenantId(), user.ownerUserId(), session.id(),
-                                properties.intentFailureStrategy(), reason);
+                        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTENT_DECISION_STREAM_FAILED,
+                                        "IntentDecision event stream failed; applying configured failure strategy")
+                                .sessionId(session.id())
+                                .operation("intent.stream")
+                                .attribute("failureStrategy", properties.intentFailureStrategy())
+                                .build(), ex);
                         return intentFailureFrames(routeRequest, degradedIntent(reason), 0L, reason);
                     });
         }
@@ -356,8 +360,11 @@ public class RouteSignalApplicationService {
                     user.tenantId(), user.ownerUserId(), session.id(), command.message(), attachments, memory,
                     SelectedIntentContext.removeReserved(command.metadata())));
         } catch (RuntimeException ex) {
-            log.warn("Use case route signal failed, degrading to next route stage. tenantId={}, userId={}, sessionId={}, reason={}",
-                    user.tenantId(), user.ownerUserId(), session.id(), ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                            "Use case route signal failed; degrading to the next route stage")
+                    .sessionId(session.id())
+                    .operation("use-case.route")
+                    .build(), ex);
             return UseCaseMatchResult.notMatched("use case library failed: " + ex.getMessage());
         }
     }

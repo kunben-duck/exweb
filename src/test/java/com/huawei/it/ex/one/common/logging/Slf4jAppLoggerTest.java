@@ -6,6 +6,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 
@@ -48,6 +50,35 @@ class Slf4jAppLoggerTest {
 
         verify(delegate).warn("plain failure", failure);
         verify(delegate).error("runId={}, operation={}", "run_1", "relay", failure);
+    }
+
+    @Test
+    void rendersSystemErrorLogFieldsInStableOrderAndPreservesThrowable() {
+        Logger delegate = mock(Logger.class);
+        AppLogger logger = new Slf4jAppLogger(delegate);
+        IllegalStateException failure = new IllegalStateException("failed");
+        SystemErrorLogEntry event = SystemErrorLogEntry.builder(
+                        SystemErrorCode.INTENT_DECISION_TIMEOUT, "IntentDecision request timed out\nretrying")
+                .retryable(false)
+                .traceId("trace_1")
+                .runId("run_1")
+                .sessionId("session_1")
+                .operation("intent.route")
+                .durationMs(3000L)
+                .legacyCode("INTENT_ROUTING_FAILED")
+                .attribute("attempt", 3)
+                .build();
+
+        logger.error(event, failure);
+
+        verify(delegate).error(
+                "errorCode=\"FN-EX-CHAT-SYS-ITD-002\" reasonCode=\"INTENT_DECISION_TIMEOUT\" "
+                        + "message=\"IntentDecision request timed out\\nretrying\" component=\"chatservice\" "
+                        + "origin=\"ITD\" retryable=false traceId=\"trace_1\" runId=\"run_1\" "
+                        + "sessionId=\"session_1\" operation=\"intent.route\" durationMs=3000 "
+                        + "legacyCode=\"INTENT_ROUTING_FAILED\" exceptionClass=\"java.lang.IllegalStateException\" "
+                        + "attempt=3",
+                failure);
     }
 
     @Test

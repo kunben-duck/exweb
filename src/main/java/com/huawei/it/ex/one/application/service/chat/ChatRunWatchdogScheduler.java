@@ -1,5 +1,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
 import java.time.Duration;
 import java.time.Instant;
@@ -56,7 +58,10 @@ public class ChatRunWatchdogScheduler {
             taskScheduler.schedule(this::runScanSafely, Instant.now().plusMillis(nextJitterMillis()));
         } catch (RuntimeException ex) {
             scanScheduledOrRunning.set(false);
-            log.warn("ChatRun watchdog scan schedule failed. reason={}", ex.getMessage(), ex);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.TASK_REJECTED,
+                            "ChatRun watchdog scan scheduling failed")
+                    .operation("run-watchdog.schedule")
+                    .build(), ex);
         }
     }
 
@@ -70,7 +75,10 @@ public class ChatRunWatchdogScheduler {
                 log.info("ChatRun watchdog recovered stale runs. count={}", recovered);
             }
         } catch (RuntimeException ex) {
-            log.warn("ChatRun watchdog scan failed. reason={}", ex.getMessage(), ex);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_READ_FAILED,
+                            "ChatRun watchdog scan failed")
+                    .operation("run-watchdog.scan")
+                    .build(), ex);
         } finally {
             scanScheduledOrRunning.set(false);
         }

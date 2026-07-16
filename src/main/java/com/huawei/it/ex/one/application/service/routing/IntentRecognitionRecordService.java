@@ -6,6 +6,8 @@ import com.huawei.it.ex.one.application.config.IntentRecordProperties;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionRecordRepository;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.IntentRecognitionRecord;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
@@ -62,8 +64,11 @@ public class IntentRecognitionRecordService {
         try {
             executor.execute(() -> writeSafely(snapshot));
         } catch (RuntimeException ex) {
-            log.warn("Intent recognition record dropped before async write. runId={}, reason={}",
-                    snapshot.runId(), ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.TASK_REJECTED,
+                            "Intent recognition record task was rejected before persistence")
+                    .runId(snapshot.runId())
+                    .operation("intent-record.schedule")
+                    .build(), ex);
         }
     }
 
@@ -71,8 +76,11 @@ public class IntentRecognitionRecordService {
         try {
             repository.save(toRecord(snapshot));
         } catch (RuntimeException ex) {
-            log.warn("Intent recognition record write failed. runId={}, reason={}",
-                    snapshot.runId(), ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_WRITE_FAILED,
+                            "Intent recognition record persistence failed")
+                    .runId(snapshot.runId())
+                    .operation("intent-record.write")
+                    .build(), ex);
         }
     }
 

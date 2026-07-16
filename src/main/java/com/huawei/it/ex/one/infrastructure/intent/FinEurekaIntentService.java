@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.infrastructure.intent;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.huawei.it.ex.one.application.integration.auth.AuthHeaderRequest;
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
@@ -7,6 +8,8 @@ import com.huawei.it.ex.one.application.integration.intent.IntentService;
 import com.huawei.it.ex.one.application.integration.intent.IntentRetryContext;
 import com.huawei.it.ex.one.application.integration.intent.IntentRetryPolicy;
 import com.huawei.it.ex.one.application.service.auth.AuthHeaderProviderRegistry;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
@@ -15,8 +18,14 @@ import com.huawei.it.ex.one.common.logging.AppLogger;
 import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.http.HttpHeaders;
+import org.springframework.core.codec.DecodingException;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.Exceptions;
+
+import java.util.concurrent.TimeoutException;
 
 /**
  * 财经 Eureka 意图服务 HTTP 适配器。
@@ -78,9 +87,13 @@ public class FinEurekaIntentService implements IntentService {
         } catch (RuntimeException ex) {
             // Retry policy is an enterprise-replaceable extension point. A strategy bug should not fail
             // the chat run; return the current decision and let normal routing degrade if needed.
-            log.warn("Intent retry policy failed; skip remaining retries. sessionId={}, attempt={}, reason={}",
-                    context.command() == null ? null : context.command().sessionId(),
-                    context.attempt(), ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                            "IntentDecision retry policy failed; skipping remaining retries")
+                    .sessionId(context.command() == null ? null : context.command().sessionId())
+                    .operation("intent.retry-policy")
+                    .attribute("attempt", context.attempt())
+                    .retryable(false)
+                    .build(), ex);
             return false;
         }
     }
@@ -90,7 +103,7 @@ public class FinEurekaIntentService implements IntentService {
             return IntentRecognitionResult.degraded(wireMapper.degraded("intent service base-url is not configured"));
         }
         try {
-            return webClient.post()
+            IntentRecognitionResult result = webClient.post()
                     .uri(properties.getRecognizePath())
                     .headers(headers -> applyAuthHeaders(headers, user))
                     .bodyValue(wireMapper.toWireRequest(command, memory, user))
@@ -99,10 +112,81 @@ public class FinEurekaIntentService implements IntentService {
                     .map(wireMapper::toRecognitionResult)
                     .timeout(properties.normalizedTimeout())
                     .blockOptional()
-                    .orElseGet(() -> IntentRecognitionResult.degraded(wireMapper.degraded("empty intent response")));
+                    .orElse(null);
+            if (result == null) {
+                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTENT_DECISION_EMPTY_RESPONSE,
+                                "IntentDecision returned an empty response")
+                        .sessionId(command == null ? null : command.sessionId())
+                        .operation("intent.recognize")
+                        .build());
+                return IntentRecognitionResult.degraded(wireMapper.degraded("empty intent response"));
+            }
+            if (result.status() == IntentRecognitionResult.Status.FAILED_OR_DEGRADED) {
+                log.warn(SystemErrorLogEntry.builder(classifyIntentResult(result),
+                                "IntentDecision returned a non-executable result")
+                        .sessionId(command == null ? null : command.sessionId())
+                        .operation("intent.recognize")
+                        .build());
+            }
+            return result;
         } catch (RuntimeException ex) {
+            log.warn(SystemErrorLogEntry.builder(classifyIntentFailure(ex),
+                            "IntentDecision request failed; returning a degraded result")
+                    .sessionId(command == null ? null : command.sessionId())
+                    .operation("intent.recognize")
+                    .build(), ex);
             return IntentRecognitionResult.degraded(wireMapper.degraded("intent service failed: " + ex.getMessage()));
         }
+    }
+
+    private SystemErrorCode classifyIntentFailure(RuntimeException failure) {
+        Throwable cause = Exceptions.unwrap(failure);
+        if (cause instanceof TimeoutException) {
+            return SystemErrorCode.INTENT_DECISION_TIMEOUT;
+        }
+        if (cause instanceof WebClientResponseException response) {
+            if (response.getStatusCode().value() == 429) {
+                return SystemErrorCode.INTENT_DECISION_RATE_LIMITED;
+            }
+            return response.getStatusCode().is5xxServerError()
+                    ? SystemErrorCode.INTENT_DECISION_HTTP_SERVER_ERROR
+                    : SystemErrorCode.INTENT_DECISION_HTTP_CLIENT_ERROR;
+        }
+        if (cause instanceof WebClientRequestException) {
+            return SystemErrorCode.INTENT_DECISION_UNAVAILABLE;
+        }
+        if (hasCause(cause, JsonProcessingException.class) || hasCause(cause, DecodingException.class)) {
+            return SystemErrorCode.INTENT_DECISION_RESPONSE_PARSE_FAILED;
+        }
+        return SystemErrorCode.INTENT_DECISION_ERROR;
+    }
+
+    private SystemErrorCode classifyIntentResult(IntentRecognitionResult result) {
+        if (result == null || result.decision() == null) {
+            return SystemErrorCode.INTENT_DECISION_PROTOCOL_INVALID;
+        }
+        String reason = result.decision().raw() == null
+                ? ""
+                : String.valueOf(result.decision().raw().getOrDefault("reason", ""));
+        if ("意图服务协议异常".equals(result.decision().intentName())
+                || reason.contains("routeAction") || reason.contains("ROUTE_SINGLE")) {
+            return SystemErrorCode.INTENT_DECISION_PROTOCOL_INVALID;
+        }
+        if (reason.contains("empty intent response")) {
+            return SystemErrorCode.INTENT_DECISION_EMPTY_RESPONSE;
+        }
+        return SystemErrorCode.INTENT_DECISION_STATUS_FAILED;
+    }
+
+    private boolean hasCause(Throwable failure, Class<? extends Throwable> expectedType) {
+        Throwable current = failure;
+        while (current != null) {
+            if (expectedType.isInstance(current)) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private void applyAuthHeaders(HttpHeaders headers, UserContext user) {

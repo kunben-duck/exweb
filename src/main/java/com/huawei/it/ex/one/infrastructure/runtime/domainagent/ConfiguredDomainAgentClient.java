@@ -5,6 +5,8 @@ import com.huawei.it.ex.one.application.integration.agent.DomainAgentClient;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentCancelRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -21,6 +23,9 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+import reactor.core.Exceptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -55,7 +60,7 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
     public Flux<ChatEvent> query(DomainAgentRequest request) {
         validate(request);
         Map<String, Object> body = requestMapper.toWireRequest(request);
-        return enforceDomainAgentDeadline(Flux.defer(() -> {
+        Flux<ChatEvent> source = Flux.defer(() -> {
             DomainAgentResponseNormalizer.DomainAgentStreamState streamState = responseNormalizer.newStreamState();
             return webClientBuilder.build()
                     .post()
@@ -82,7 +87,14 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
                      * 避免下游 HTTP 连接未关闭时持续占用本机 bulkhead 和 WebClient 资源。
                      */
                     .takeUntil(event -> "message.completed".equals(event.type()));
-        }));
+        });
+        return enforceDomainAgentDeadline(source)
+                .doOnError(ex -> log.warn(SystemErrorLogEntry.builder(classifyDomainAgentFailure(ex),
+                                "DomainAgent response stream failed")
+                        .runId(request.runId())
+                        .sessionId(request.sessionId())
+                        .operation("domain-agent.query")
+                        .build(), ex));
     }
 
     @Override
@@ -106,7 +118,12 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
                 .bodyToMono(Void.class)
                 .timeout(properties.getTimeout())
                 .onErrorResume(ex -> {
-                    log.warn("DomainAgent cancel failed. runId={}, reason={}", request.runId(), ex.getMessage());
+                    log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DOMAIN_AGENT_CANCEL_FAILED,
+                                    "DomainAgent cancellation request failed")
+                            .runId(request.runId())
+                            .sessionId(request.sessionId())
+                            .operation("domain-agent.cancel")
+                            .build(), ex);
                     return Mono.empty();
                 });
     }
@@ -197,5 +214,24 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
                 upstream.dispose();
             });
         });
+    }
+
+    private SystemErrorCode classifyDomainAgentFailure(Throwable failure) {
+        Throwable cause = Exceptions.unwrap(failure);
+        if (cause instanceof TimeoutException) {
+            return SystemErrorCode.DOMAIN_AGENT_TIMEOUT;
+        }
+        if (cause instanceof WebClientResponseException response) {
+            if (response.getStatusCode().value() == 429) {
+                return SystemErrorCode.DOMAIN_AGENT_RATE_LIMITED;
+            }
+            return response.getStatusCode().is5xxServerError()
+                    ? SystemErrorCode.DOMAIN_AGENT_HTTP_SERVER_ERROR
+                    : SystemErrorCode.DOMAIN_AGENT_HTTP_CLIENT_ERROR;
+        }
+        if (cause instanceof WebClientRequestException) {
+            return SystemErrorCode.DOMAIN_AGENT_UNAVAILABLE;
+        }
+        return SystemErrorCode.DOMAIN_AGENT_STREAM_FAILED;
     }
 }

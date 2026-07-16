@@ -8,6 +8,8 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatLiveRecover
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
@@ -160,15 +162,25 @@ public class ChatStreamApplicationService {
         } catch (RuntimeException ex) {
             publishFailure = new IllegalStateException("本机聊天事件发布失败: runId=" + persisted.runId()
                     + ", sequence=" + persisted.sequence(), ex);
-            log.warn("Local persisted chat event publish failed. runId={}, sessionId={}, sequence={}, reason={}",
-                    persisted.runId(), persisted.sessionId(), persisted.sequence(), ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_SEND_FAILED,
+                            "Persisted chat event publication to the local live stream failed")
+                    .runId(persisted.runId())
+                    .sessionId(persisted.sessionId())
+                    .operation("chat-event.publish.local")
+                    .attribute("sequence", persisted.sequence())
+                    .build(), ex);
         }
         if (persisted.runId() != null && !persisted.runId().isBlank()) {
             try {
                 liveEventBus.publish(ChatStreamTopics.runTopic(persisted.runId()), persisted);
             } catch (RuntimeException ex) {
-                log.warn("Live bus persisted chat event publish failed. runId={}, sessionId={}, sequence={}, reason={}",
-                        persisted.runId(), persisted.sessionId(), persisted.sequence(), ex.getMessage());
+                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_PUBLISH_FAILED,
+                                "Persisted chat event publication to the cross-instance live bus failed")
+                        .runId(persisted.runId())
+                        .sessionId(persisted.sessionId())
+                        .operation("chat-event.publish.live-bus")
+                        .attribute("sequence", persisted.sequence())
+                        .build(), ex);
                 if (publishFailure == null) {
                     publishFailure = new IllegalStateException("跨实例聊天事件发布失败: runId=" + persisted.runId()
                             + ", sequence=" + persisted.sequence(), ex);
@@ -388,9 +400,15 @@ public class ChatStreamApplicationService {
                                             replayFlux,
                                             liveBuffer.events().filter(event -> event.sequence() > liveAfterSeq)
                                                     .onErrorResume(StreamRecoveryRequiredException.class, ex -> {
-                                                        log.warn("Run Event Resume live tail requires recovery. runId={}, sessionId={}, afterSeq={}, reason={}, message={}",
-                                                                run.id(), run.sessionId(), liveAfterSeq,
-                                                                ex.reason(), ex.getMessage());
+                                                        log.warn(SystemErrorLogEntry.builder(
+                                                                        SystemErrorCode.WEBSOCKET_RECOVERY_FAILED,
+                                                                        "Run Event Resume live tail requires database recovery")
+                                                                .runId(run.id())
+                                                                .sessionId(run.sessionId())
+                                                                .operation("chat-event.resume.live-tail")
+                                                                .attribute("afterSeq", liveAfterSeq)
+                                                                .attribute("recoveryReason", ex.reason())
+                                                                .build(), ex);
                                                         return Flux.empty();
                                                     })
                                     )

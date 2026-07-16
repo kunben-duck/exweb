@@ -1,5 +1,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatStreamTopics;
 import java.util.Map;
@@ -101,8 +103,16 @@ public class LocalChatEventStreamRegistry {
                     reason, topicId, event.sequence(), result);
             return;
         }
-        log.warn("本机 run topic 事件投递失败，reason={}, topicId={}, runId={}, sessionId={}, seq={}, result={}",
-                reason, topicId, event.runId(), event.sessionId(), event.sequence(), result);
+        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_SEND_FAILED,
+                        "Local run topic event delivery failed")
+                .runId(event.runId())
+                .sessionId(event.sessionId())
+                .operation("chat-event.publish.local-topic")
+                .attribute("failureReason", reason)
+                .attribute("topicId", topicId)
+                .attribute("sequence", event.sequence())
+                .attribute("emitResult", result)
+                .build());
     }
 
     private boolean terminal(ChatEvent event) {

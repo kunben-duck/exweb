@@ -1,5 +1,7 @@
 package com.huawei.it.ex.one.application.service.recovery;
 
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.application.service.chat.ChatRunTerminalCommitService;
 import com.huawei.it.ex.one.application.service.chat.ChatRunApplicationService;
 import com.huawei.it.ex.one.application.service.chat.ChatStreamApplicationService;
@@ -75,8 +77,11 @@ public class ManualConfirmationRecoveryStrategy implements StaleRunRecoveryStrat
         try {
             streamService.publishPersisted(event);
         } catch (RuntimeException ex) {
-            log.warn("Recovered run terminal event committed but realtime publish failed. runId={}, reason={}",
-                    event == null ? null : event.runId(), ex.getMessage(), ex);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_SEND_FAILED,
+                            "Recovered run terminal event was committed but realtime publication failed")
+                    .runId(event == null ? null : event.runId())
+                    .operation("run-recovery.terminal.publish")
+                    .build());
         }
     }
 

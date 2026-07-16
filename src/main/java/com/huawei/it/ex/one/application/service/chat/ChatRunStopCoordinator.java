@@ -1,6 +1,8 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
@@ -188,8 +190,12 @@ public class ChatRunStopCoordinator {
         try {
             chatStreamService.publishPersisted(event);
         } catch (RuntimeException ex) {
-            log.warn("Chat run terminal event committed but realtime publish failed. runId={}, type={}, reason={}",
-                    event == null ? null : event.runId(), event == null ? null : event.type(), ex.getMessage(), ex);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_SEND_FAILED,
+                            "ChatRun terminal event was committed but realtime publication failed")
+                    .runId(event == null ? null : event.runId())
+                    .operation("chat-run.stop.terminal-publish")
+                    .attribute("eventType", event == null ? null : event.type())
+                    .build());
         }
     }
 
@@ -211,12 +217,24 @@ public class ChatRunStopCoordinator {
         try {
             cancelDownstream(run, user, traceContext, headerSnapshot)
                     .onErrorResume(ex -> {
-                        log.warn("Downstream run cancel failed. runId={}, reason={}", run.id(), ex.getMessage());
+                        log.warn(SystemErrorLogEntry.builder(cancelErrorCode(run),
+                                        "Downstream run cancellation failed")
+                                .runId(run.id())
+                                .sessionId(run.sessionId())
+                                .operation("chat-run.stop.downstream-cancel")
+                                .attribute("runtimeProvider", run.runtimeProvider())
+                                .build(), ex);
                         return Mono.empty();
                     })
                     .subscribe();
         } catch (Exception ex) {
-            log.warn("Downstream run cancel invocation failed. runId={}, reason={}", run.id(), ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(cancelErrorCode(run),
+                            "Downstream run cancellation invocation failed")
+                    .runId(run.id())
+                    .sessionId(run.sessionId())
+                    .operation("chat-run.stop.downstream-cancel")
+                    .attribute("runtimeProvider", run.runtimeProvider())
+                    .build(), ex);
         }
     }
 
@@ -242,13 +260,24 @@ public class ChatRunStopCoordinator {
         boolean newTurnInteraction = InteractionMessageStrategy.newTurn(run);
         String interactionAssistantMessageId = interactionAssistantMessageId(run);
         if (interactionContinuation && !newTurnInteraction && interactionAssistantMessageId == null) {
-            log.warn("Skip partial assistant persistence because Interaction continuation has no original assistant ID. runId={}",
-                    run.id());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                            "Interaction continuation has no assistant ID; partial assistant persistence was skipped")
+                    .runId(run.id())
+                    .sessionId(run.sessionId())
+                    .operation("chat-run.stop.partial-assistant.prepare")
+                    .retryable(false)
+                    .build());
             return StopMessageTarget.notReady();
         }
         String parentMessageId = firstNonBlank(run.userMessageId(), run.parentMessageId());
         if (parentMessageId == null) {
-            log.warn("Skip partial assistant persistence because run has no parent user message. runId={}", run.id());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                            "ChatRun has no parent user message; partial assistant persistence was skipped")
+                    .runId(run.id())
+                    .sessionId(run.sessionId())
+                    .operation("chat-run.stop.partial-assistant.prepare")
+                    .retryable(false)
+                    .build());
             return StopMessageTarget.notReady();
         }
         try {
@@ -276,8 +305,13 @@ public class ChatRunStopCoordinator {
             );
             return StopMessageTarget.ready(assistantMessageId, partialAssistant);
         } catch (Exception ex) {
-            log.warn("Failed to prepare partial assistant on run stop. runId={}, reason={}, error={}",
-                    run.id(), reason, ex.getMessage(), ex);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                            "Partial assistant preparation failed during ChatRun stop")
+                    .runId(run.id())
+                    .sessionId(run.sessionId())
+                    .operation("chat-run.stop.partial-assistant.prepare")
+                    .attribute("stopReason", reason)
+                    .build(), ex);
             return StopMessageTarget.notReady();
         }
     }
@@ -291,8 +325,12 @@ public class ChatRunStopCoordinator {
             chatRunService.bindAssistantMessage(run.id(), savedAssistant.id());
             return StopMessageTarget.ready(savedAssistant.id());
         } catch (Exception ex) {
-            log.warn("Failed to persist partial assistant on legacy run stop. runId={}, error={}",
-                    run.id(), ex.getMessage(), ex);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_TRANSACTION_FAILED,
+                            "Legacy partial assistant persistence failed during ChatRun stop")
+                    .runId(run.id())
+                    .sessionId(run.sessionId())
+                    .operation("chat-run.stop.partial-assistant.persist")
+                    .build(), ex);
             return StopMessageTarget.notReady();
         }
     }
@@ -343,6 +381,16 @@ public class ChatRunStopCoordinator {
             return Mono.empty();
         }
         return agentRuntimeExecutor.cancel(run, user, traceContext, forwardHeaders);
+    }
+
+    private SystemErrorCode cancelErrorCode(ChatRun run) {
+        if (run != null && "relay".equalsIgnoreCase(run.runtimeProvider())) {
+            return SystemErrorCode.RELAY_INTERRUPT_FAILED;
+        }
+        if (run != null && "domain-agent".equalsIgnoreCase(run.runtimeProvider())) {
+            return SystemErrorCode.DOMAIN_AGENT_CANCEL_FAILED;
+        }
+        return SystemErrorCode.INTERNAL_EXECUTION_FAILED;
     }
 
     private String normalizeReason(String reason) {

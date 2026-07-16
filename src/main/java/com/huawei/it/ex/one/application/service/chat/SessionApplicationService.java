@@ -9,6 +9,8 @@ import com.huawei.it.ex.one.application.integration.memory.ChatMessagePageQuery;
 import com.huawei.it.ex.one.application.integration.share.ChatShareRepository;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
@@ -301,8 +303,12 @@ public class SessionApplicationService implements ChatSessionFacade {
             try {
                 stopCoordinator.stopRunForSessionDelete(user, plan.run(), plan.session());
             } catch (Exception ex) {
-                log.warn("Failed to stop active run after session delete. sessionId={}, runId={}, error={}",
-                        plan.session().id(), plan.run().id(), ex.getMessage(), ex);
+                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                                "Active run stop failed after session deletion committed")
+                        .runId(plan.run().id())
+                        .sessionId(plan.session().id())
+                        .operation("chat-session.delete.stop-run")
+                        .build(), ex);
             }
         });
         if (TransactionSynchronizationManager.isSynchronizationActive()) {

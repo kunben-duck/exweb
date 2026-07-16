@@ -6,6 +6,8 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatRunReposito
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
@@ -296,8 +298,13 @@ public class ChatRunApplicationService {
                 cache.putActive(run);
             }
         } catch (RuntimeException ex) {
-            log.warn("Chat run database state committed but active-run cache synchronization failed. runId={}, status={}, reason={}",
-                    run.id(), run.status(), ex.getMessage(), ex);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_CACHE_SYNC_FAILED,
+                            "ChatRun database state committed but active-run cache synchronization failed")
+                    .runId(run.id())
+                    .sessionId(run.sessionId())
+                    .operation("chat-run.cache.after-commit")
+                    .attribute("runStatus", run.status())
+                    .build(), ex);
         }
     }
 

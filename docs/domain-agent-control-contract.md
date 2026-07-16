@@ -1,6 +1,6 @@
 # DomainAgent 拒答、澄清、审批与异常编码握手规范
 
-版本：`v1.0`
+版本：`v1.1`
 适用范围：DomainAgent 与 ChatService/Supervisor 之间的控制事件握手、拒答编码、澄清编码、审批编码、异常编码、敏感信息与数据安全拦截编码。
 
 ---
@@ -18,6 +18,8 @@ DomainAgent 返回的字段格式
 DomainAgent 如何表达拒答、澄清、审批和异常
 Supervisor 如何基于编码消费事件
 ```
+
+ChatService 自身技术错误日志不属于本协议，统一遵循 [ChatService System 错误日志编码规范](chatservice-system-error-code-spec.md)。
 
 ## 2. 核心原则
 
@@ -45,31 +47,31 @@ FN-{应用简称}-{功能模块}-{错误码类型}-{来源对象}-{码号}
 当前 ChatService / DomainAgent 场景固定为：
 
 ```text
-FN-EX-CAHT-{错误码类型}-{来源对象}-{NNN}
+FN-EX-CHAT-{错误码类型}-{来源对象}-{NNN}
 ```
 
 示例：
 
 ```text
-FN-EX-CAHT-BIZ-DAG-001
-FN-EX-CAHT-VAL-DAG-003
-FN-EX-CAHT-AUTH-DAG-002
-FN-EX-CAHT-DATA-DAG-006
-FN-EX-CAHT-SAFE-DAG-002
-FN-EX-CAHT-SYS-DAG-001
-FN-EX-CAHT-SYS-MQS-001
+FN-EX-CHAT-BIZ-DAG-001
+FN-EX-CHAT-VAL-DAG-003
+FN-EX-CHAT-AUTH-DAG-002
+FN-EX-CHAT-DATA-DAG-006
+FN-EX-CHAT-SAFE-DAG-002
+FN-EX-CHAT-SYS-DAG-001
+FN-EX-CHAT-SYS-MQS-001
 ```
 
 字段说明：
 
-| 段位    | 示例            | 含义                               |
+| 段位    | 示例            | 含义                               |
 | ----- | ------------- | -------------------------------- |
-| `FN`  | `FN`          | 固定前缀                             |
-| 应用简称  | `EX`          | 应用简称                             |
-| 功能模块  | `CAHT`        | ChatService / Chat 模块简称          |
-| 错误码类型 | `SYS`         | 错误或控制事件类型                        |
-| 来源对象  | `DAG` / `MQS` | DomainAgent、Supervisor 或具体外部系统简称 |
-| 码号    | `001`         | 三位数字编码                           |
+| `FN`  | `FN`          | 固定前缀                             |
+| 应用简称  | `EX`          | 应用简称                             |
+| 功能模块  | `CHAT`        | ChatService / Chat 模块简称          |
+| 错误码类型 | `SYS`         | 错误或控制事件类型                        |
+| 来源对象  | `DAG` / `MQS` | DomainAgent、Supervisor 或具体外部系统简称 |
+| 码号    | `001`         | 三位数字编码                           |
 
 说明：
 
@@ -78,18 +80,30 @@ DomainAgent 自身返回的拒答、澄清、审批、数据安全事实，来�
 外部依赖异常使用具体外部系统简称，例如 MQS、LLM、MCP、A2A、EDM。
 ```
 
+### 3.1 CHAT 与历史 CAHT 兼容
+
+`CHAT` 是 ChatService 模块的唯一标准简称；`CAHT` 是历史拼写，不再分配新编码。ChatService 新增技术日志编码直接使用 `CHAT`，具体规则见 [ChatService System 错误日志编码规范](chatservice-system-error-code-spec.md)。
+
+既有 DomainAgent 控制事件从 `CAHT` 切换到 `CHAT` 属于外部协议变更，必须按以下顺序发布：
+
+1. ChatService 先支持同时识别 `CAHT` 和 `CHAT`，并在内部归一化为 `CHAT`。
+2. ChatService 双读版本部署完成后，下游 DomainAgent 再切换为发送 `CHAT`。
+3. 持续观测 `CAHT` 命中量，确认所有下游和历史重放数据完成迁移后再移除兼容。
+
+在 ChatService 双读版本上线前，下游 DomainAgent 不得单独切换为 `CHAT`，否则基于完整编码精确匹配的拒答重路由可能失效。
+
 ---
 
 ## 4. 错误码类型
 
-| 错误码类型  | 含义         | 适用场景                            |
+| 错误码类型  | 含义         | 适用场景                            |
 | ------ | ---------- | ------------------------------- |
-| `BIZ`  | 业务拒答类      | 领域不匹配、能力未开放、业务条件不满足             |
-| `VAL`  | 输入校验 / 澄清类 | 意图不清、上下文不足、缺少必填参数、参数格式错误        |
-| `AUTH` | 认证授权类      | 未认证、无权限、权限范围过大、审批过期             |
-| `DATA` | 数据访问类      | 数据不存在、数据越权、敏感字段、个人数据、批量导出、数据最小化 |
-| `SAFE` | 安全合规类      | 敏感凭据、内部上下文、Prompt、工具配置、数据外传风险   |
-| `SYS`  | 系统技术类      | 超时、过载、限流、依赖不可用、协议错误、解析失败        |
+| `BIZ`  | 业务拒答类      | 领域不匹配、能力未开放、业务条件不满足             |
+| `VAL`  | 输入校验 / 澄清类 | 意图不清、上下文不足、缺少必填参数、参数格式错误        |
+| `AUTH` | 认证授权类      | 未认证、无权限、权限范围过大、审批过期             |
+| `DATA` | 数据访问类      | 数据不存在、数据越权、敏感字段、个人数据、批量导出、数据最小化 |
+| `SAFE` | 安全合规类      | 敏感凭据、内部上下文、Prompt、工具配置、数据外传风险   |
+| `SYS`  | 系统技术类      | 超时、过载、限流、依赖不可用、协议错误、解析失败        |
 
 ---
 
@@ -97,23 +111,23 @@ DomainAgent 自身返回的拒答、澄清、审批、数据安全事实，来�
 
 来源对象表示错误、拒答、澄清、审批或异常事实的来源。
 
-| 来源对象  | 含义                          | 示例                       |
+| 来源对象  | 含义                          | 示例                       |
 | ----- | --------------------------- | ------------------------ |
-| `DAG` | DomainAgent，下游领域 Agent      | `FN-EX-CAHT-BIZ-DAG-001` |
-| `SUP` | Supervisor / ChatService 主控 | `FN-EX-CAHT-SYS-SUP-001` |
-| `ITD` | IntentDecision 意图决策服务       | `FN-EX-CAHT-SYS-ITD-001` |
-| `MQS` | MQS 外部系统或消息服务               | `FN-EX-CAHT-SYS-MQS-001` |
-| `MCP` | MCP 网关或 MCP 服务              | `FN-EX-CAHT-SYS-MCP-001` |
-| `A2A` | A2A 网关或领域 Agent 调用通道        | `FN-EX-CAHT-SYS-A2A-001` |
-| `LLM` | 大模型服务                       | `FN-EX-CAHT-SYS-LLM-001` |
-| `EDM` | 文档服务                        | `FN-EX-CAHT-SYS-EDM-001` |
-| `LTM` | 长期记忆服务                      | `FN-EX-CAHT-SYS-LTM-001` |
+| `DAG` | DomainAgent，下游领域 Agent      | `FN-EX-CHAT-BIZ-DAG-001` |
+| `ITD` | IntentDecision 意图决策服务       | `FN-EX-CHAT-SYS-ITD-001` |
+| `MQS` | MQS 外部系统或消息服务               | `FN-EX-CHAT-SYS-MQS-001` |
+| `MCP` | MCP 网关或 MCP 服务              | `FN-EX-CHAT-SYS-MCP-001` |
+| `A2A` | A2A 网关或领域 Agent 调用通道        | `FN-EX-CHAT-SYS-A2A-001` |
+| `LLM` | 大模型服务                       | `FN-EX-CHAT-SYS-LLM-001` |
+| `EDM` | 外部文档服务或 API Store           | `FN-EX-CHAT-SYS-EDM-001` |
+| `LTM` | 长期记忆服务                      | `FN-EX-CHAT-SYS-LTM-001` |
 
 说明：
 
 ```text
 DAG 表示 DomainAgent 自身返回的处理事实。
-MQS、MCP、A2A、LLM、EDM、LTM 等表示具体依赖系统异常。
+MQS、MCP、A2A、LLM、EDM、LTM 等表示 DomainAgent 已识别的具体依赖系统异常。
+来源对象使用 2-4 位大写字母或数字，必须先在本表登记后使用。
 不得继续使用 AGENT 作为编码主干段位。
 ```
 
@@ -129,29 +143,29 @@ MQS、MCP、A2A、LLM、EDM、LTM 等表示具体依赖系统异常。
 
 推荐规则：
 
-| 码号范围      | 用途                                 |
+| 码号范围      | 用途                                 |
 | --------- | ---------------------------------- |
-| `000`     | 兜底、未知或未分类场景，原则上不由 DomainAgent 主动返回 |
-| `001-899` | 业务、校验、授权、数据、安全、系统异常正式编码            |
-| `900-999` | 预留扩展、灰度或专项场景                       |
+| `000`     | 兜底、未知或未分类场景，原则上不由 DomainAgent 主动返回 |
+| `001-899` | 业务、校验、授权、数据、安全、系统异常正式编码            |
+| `900-999` | 预留扩展、灰度或专项场景                       |
 
 ---
 
 # 第二部分：DomainAgent 事件规范
 
-## 7. 事件类型 /todo 待定
+## 7. 事件类型
 
 DomainAgent 只返回 `agent.*` 事件。
 
-| type                      | 含义                  | 当前 DomainAgent 是否可继续 |
+| type                      | 含义                  | 当前 DomainAgent 是否可继续 |
 | ------------------------- | ------------------- | -------------------- |
-| `agent.delta`             | 正常回答增量              | 是                    |
-| `agent.snapshot`          | 当前 Agent 回答快照       | 是                    |
-| `agent.completed`         | 当前 Agent 输出完成       | 否                    |
-| `agent.refusal`           | 当前 Agent 明确不能处理当前请求 | 通常否                  |
-| `agent.input_required`    | 当前 Agent 需要用户补充信息   | 是                    |
-| `agent.approval_required` | 当前 Agent 需要授权、审批或确认 | 是                    |
-| `agent.error`             | 当前 Agent 技术异常       | 按 `recoverable` 判断   |
+| `agent.delta`             | 正常回答增量              | 是                    |
+| `agent.snapshot`          | 当前 Agent 回答快照       | 是                    |
+| `agent.completed`         | 当前 Agent 输出完成       | 否                    |
+| `agent.refusal`           | 当前 Agent 明确不能处理当前请求 | 通常否                  |
+| `agent.input_required`    | 当前 Agent 需要用户补充信息   | 是                    |
+| `agent.approval_required` | 当前 Agent 需要授权、审批或确认 | 是                    |
+| `agent.error`             | 当前 Agent 技术异常       | 按 `recoverable` 判断   |
 
 DomainAgent 不直接返回：
 
@@ -169,21 +183,21 @@ run.*
 
 控制类事件必以下字段：
 
-| 字段                | 类型      | 必填   | 说明                             |
+| 字段                | 类型      | 必填   | 说明                             |
 | ----------------- | ------- | ---- | ------------------------------ |
-| `type`            | string  | 是    | 事件类型，例如 `agent.refusal`        |
-| `code`            | string  | 是    | DomainAgent 标准编码               |
-| `agentId`         | string  | 是    | 当前领域 Agent 标识                  |
-| `reasonCode`      | string  | 是    | 当前 Agent 返回的机器可读原因码            |
-| `recoverable`     | boolean | 是    | 当前事件是否可在当前 DomainAgent 内继续恢复处理 |
-| `eventId`         | string  | 否    | 下游事件 ID，用于排障和幂等                |
-| `traceId`         | string  | 否    | 链路追踪 ID                        |
-| `timestamp`       | string  | 否    | ISO-8601 时间                    |
-| `reason`          | string  | 否    | 面向排障的简短原因，不得包含敏感数据             |
-| `metadata`        | object  | 否    | 非敏感扩展信息                        |
-| `userMessage`     | string  | 否    | 候选展示文案，Supervisor 可统一覆盖        |
-| `inputRequest`    | object  | 条件必填 | `agent.input_required` 必填      |
-| `approvalRequest` | object  | 条件必填 | `agent.approval_required` 必填   |
+| `type`            | string  | 是    | 事件类型，例如 `agent.refusal`        |
+| `code`            | string  | 是    | DomainAgent 标准编码               |
+| `agentId`         | string  | 是    | 当前领域 Agent 标识                  |
+| `reasonCode`      | string  | 是    | 当前 Agent 返回的机器可读原因码            |
+| `recoverable`     | boolean | 是    | 当前事件是否可在当前 DomainAgent 内继续恢复处理 |
+| `eventId`         | string  | 否    | 下游事件 ID，用于排障和幂等                |
+| `traceId`         | string  | 否    | 链路追踪 ID                        |
+| `timestamp`       | string  | 否    | ISO-8601 时间                    |
+| `reason`          | string  | 否    | 面向排障的简短原因，不得包含敏感数据             |
+| `metadata`        | object  | 否    | 非敏感扩展信息                        |
+| `userMessage`     | string  | 否    | 候选展示文案，Supervisor 可统一覆盖        |
+| `inputRequest`    | object  | 条件必填 | `agent.input_required` 必填      |
+| `approvalRequest` | object  | 条件必填 | `agent.approval_required` 必填   |
 
 ---
 
@@ -208,30 +222,30 @@ recoverable = 当前 DomainAgent 是否可以在补充信息、授权确认或�
 
 表示当前 DomainAgent 可以在后续条件满足后继续处理。
 
-| 场景                | 事件类型                      | recoverable |
+| 场景                | 事件类型                      | recoverable |
 | ----------------- | ------------------------- | ----------- |
-| 缺少必填参数            | `agent.input_required`    | true        |
-| 用户意图不明确           | `agent.input_required`    | true        |
-| 缺少查询时间范围          | `agent.input_required`    | true        |
-| 数据范围过大，需要缩小范围     | `agent.input_required`    | true        |
-| 需要授权确认            | `agent.approval_required` | true        |
-| 需要审批确认            | `agent.approval_required` | true        |
-| 当前 Agent 临时超时且可重试 | `agent.error`             | true        |
+| 缺少必填参数            | `agent.input_required`    | true        |
+| 用户意图不明确           | `agent.input_required`    | true        |
+| 缺少查询时间范围          | `agent.input_required`    | true        |
+| 数据范围过大，需要缩小范围     | `agent.input_required`    | true        |
+| 需要授权确认            | `agent.approval_required` | true        |
+| 需要审批确认            | `agent.approval_required` | true        |
+| 当前 Agent 临时超时且可重试 | `agent.error`             | true        |
 
 ### 9.2 recoverable=false
 
 表示当前 DomainAgent 无法在自身范围内继续处理。
 
-| 场景                   | 事件类型            | recoverable |
+| 场景                   | 事件类型            | recoverable |
 | -------------------- | --------------- | ----------- |
-| 当前请求不在该 Agent 领域范围内  | `agent.refusal` | false       |
-| 当前 Agent 未开放该能力      | `agent.refusal` | false       |
-| 当前用户无权限              | `agent.refusal` | false       |
-| 请求敏感凭据               | `agent.refusal` | false       |
-| 请求内部 Prompt 或工具配置    | `agent.refusal` | false       |
-| 请求跨租户或跨组织数据          | `agent.refusal` | false       |
-| 请求批量导出受限数据           | `agent.refusal` | false       |
-| 当前 Agent 响应协议不符合契约要求 | `agent.error`   | false       |
+| 当前请求不在该 Agent 领域范围内  | `agent.refusal` | false       |
+| 当前 Agent 未开放该能力      | `agent.refusal` | false       |
+| 当前用户无权限              | `agent.refusal` | false       |
+| 请求敏感凭据               | `agent.refusal` | false       |
+| 请求内部 Prompt 或工具配置    | `agent.refusal` | false       |
+| 请求跨租户或跨组织数据          | `agent.refusal` | false       |
+| 请求批量导出受限数据           | `agent.refusal` | false       |
+| 当前 Agent 响应协议不符合契约要求 | `agent.error`   | false       |
 
 注意：
 
@@ -246,10 +260,10 @@ Supervisor 仍可基于 code 判断系统后续动作。
 
 ## 10. 业务拒答类 BIZ
 
-| code                     | reasonCode               | type            | recoverable | 标准展示文案                 |
+| code                     | reasonCode               | type            | recoverable | 标准展示文案                 |
 | ------------------------ | ------------------------ | --------------- | ----------- | ---------------------- |
-| `FN-EX-CAHT-BIZ-DAG-001` | `OUT_OF_DOMAIN`          | `agent.refusal` | false       | 当前请求不在该领域 Agent 处理范围内。 |
-| `FN-EX-CAHT-BIZ-DAG-002` | `UNSUPPORTED_CAPABILITY` | `agent.refusal` | false       | 当前领域 Agent 未开放该处理能力。   |
+| `FN-EX-CHAT-BIZ-DAG-001` | `OUT_OF_DOMAIN`          | `agent.refusal` | false       | 当前请求不在该领域 Agent 处理范围内。 |
+| `FN-EX-CHAT-BIZ-DAG-002` | `UNSUPPORTED_CAPABILITY` | `agent.refusal` | false       | 当前领域 Agent 未开放该处理能力。   |
 
 说明：
 
@@ -263,12 +277,12 @@ DomainAgent 不返回路由目标，不返回路由动作。
 
 ## 11. 输入校验 / 澄清类 VAL
 
-| code                     | reasonCode              | type                   | recoverable | 标准展示文案              |
+| code                     | reasonCode              | type                   | recoverable | 标准展示文案              |
 | ------------------------ | ----------------------- | ---------------------- | ----------- | ------------------- |
-| `FN-EX-CAHT-VAL-DAG-001` | `AMBIGUOUS_INTENT`      | `agent.input_required` | true        | 当前请求意图不明确，需要补充处理目标。 |
-| `FN-EX-CAHT-VAL-DAG-002` | `MISSING_CONTEXT`       | `agent.input_required` | true        | 当前请求缺少必要上下文。        |
-| `FN-EX-CAHT-VAL-DAG-003` | `MISSING_REQUIRED_SLOT` | `agent.input_required` | true        | 当前请求缺少必填业务参数。       |
-| `FN-EX-CAHT-VAL-DAG-004` | `INVALID_INPUT_FORMAT`  | `agent.input_required` | true        | 当前请求参数格式不符合处理要求。    |
+| `FN-EX-CHAT-VAL-DAG-001` | `AMBIGUOUS_INTENT`      | `agent.input_required` | true        | 当前请求意图不明确，需要补充处理目标。 |
+| `FN-EX-CHAT-VAL-DAG-002` | `MISSING_CONTEXT`       | `agent.input_required` | true        | 当前请求缺少必要上下文。        |
+| `FN-EX-CHAT-VAL-DAG-003` | `MISSING_REQUIRED_SLOT` | `agent.input_required` | true        | 当前请求缺少必填业务参数。       |
+| `FN-EX-CHAT-VAL-DAG-004` | `INVALID_INPUT_FORMAT`  | `agent.input_required` | true        | 当前请求参数格式不符合处理要求。    |
 
 说明：
 
@@ -281,13 +295,13 @@ Supervisor 不应将其理解为当前领域失败。
 
 ## 12. 认证、授权与审批类 AUTH
 
-| code                      | reasonCode             | type                      | recoverable | 标准展示文案               |
+| code                      | reasonCode             | type                      | recoverable | 标准展示文案               |
 | ------------------------- | ---------------------- | ------------------------- | ----------- | -------------------- |
-| `FN-EX-CAHT-AUTH-DAG-001` | `AUTH_REQUIRED`        | `agent.approval_required` | true        | 当前会话未完成身份认证或授权状态已失效。 |
-| `FN-EX-CAHT-AUTH-DAG-002` | `PERMISSION_DENIED`    | `agent.refusal`           | false       | 当前用户不具备该操作权限。        |
-| `FN-EX-CAHT-AUTH-DAG-003` | `PERMISSION_TOO_BROAD` | `agent.approval_required` | true        | 请求范围超过当前默认授权范围。      |
-| `FN-EX-CAHT-AUTH-DAG-004` | `APPROVAL_REQUIRED`    | `agent.approval_required` | true        | 当前操作需要完成授权确认。        |
-| `FN-EX-CAHT-AUTH-DAG-005` | `APPROVAL_EXPIRED`     | `agent.approval_required` | true        | 当前授权确认已过期。           |
+| `FN-EX-CHAT-AUTH-DAG-001` | `AUTH_REQUIRED`        | `agent.approval_required` | true        | 当前会话未完成身份认证或授权状态已失效。 |
+| `FN-EX-CHAT-AUTH-DAG-002` | `PERMISSION_DENIED`    | `agent.refusal`           | false       | 当前用户不具备该操作权限。        |
+| `FN-EX-CHAT-AUTH-DAG-003` | `PERMISSION_TOO_BROAD` | `agent.approval_required` | true        | 请求范围超过当前默认授权范围。      |
+| `FN-EX-CHAT-AUTH-DAG-004` | `APPROVAL_REQUIRED`    | `agent.approval_required` | true        | 当前操作需要完成授权确认。        |
+| `FN-EX-CHAT-AUTH-DAG-005` | `APPROVAL_EXPIRED`     | `agent.approval_required` | true        | 当前授权确认已过期。           |
 
 说明：
 
@@ -301,15 +315,15 @@ PERMISSION_DENIED 表示当前用户不具备权限，DomainAgent 不继续处�
 
 ## 13. 数据访问类 DATA
 
-| code                      | reasonCode                   | type                                        | recoverable  | 标准展示文案                |
+| code                      | reasonCode                   | type                                        | recoverable  | 标准展示文案                |
 | ------------------------- | ---------------------------- | ------------------------------------------- | ------------ | --------------------- |
-| `FN-EX-CAHT-DATA-DAG-001` | `DATA_NOT_FOUND`             | `agent.refusal` / `agent.input_required`    | false / true | 未查询到符合条件的数据。          |
-| `FN-EX-CAHT-DATA-DAG-002` | `DATA_SCOPE_VIOLATION`       | `agent.refusal`                             | false        | 请求的数据范围超出当前用户授权范围。    |
-| `FN-EX-CAHT-DATA-DAG-003` | `SENSITIVE_FIELD_RESTRICTED` | `agent.refusal` / `agent.approval_required` | false / true | 请求包含受限敏感字段。           |
-| `FN-EX-CAHT-DATA-DAG-004` | `PERSONAL_DATA_RESTRICTED`   | `agent.refusal` / `agent.approval_required` | false / true | 请求包含受限个人数据。           |
-| `FN-EX-CAHT-DATA-DAG-005` | `BULK_EXPORT_RESTRICTED`     | `agent.refusal`                             | false        | 当前请求触发批量数据导出限制。       |
-| `FN-EX-CAHT-DATA-DAG-006` | `DATA_MINIMIZATION_REQUIRED` | `agent.input_required`                      | true         | 当前请求的数据范围过大，需要明确查询范围。 |
-| `FN-EX-CAHT-DATA-DAG-007` | `CROSS_TENANT_DATA_ACCESS`   | `agent.refusal`                             | false        | 请求涉及跨租户或跨组织数据访问。      |
+| `FN-EX-CHAT-DATA-DAG-001` | `DATA_NOT_FOUND`             | `agent.refusal` / `agent.input_required`    | false / true | 未查询到符合条件的数据。          |
+| `FN-EX-CHAT-DATA-DAG-002` | `DATA_SCOPE_VIOLATION`       | `agent.refusal`                             | false        | 请求的数据范围超出当前用户授权范围。    |
+| `FN-EX-CHAT-DATA-DAG-003` | `SENSITIVE_FIELD_RESTRICTED` | `agent.refusal` / `agent.approval_required` | false / true | 请求包含受限敏感字段。           |
+| `FN-EX-CHAT-DATA-DAG-004` | `PERSONAL_DATA_RESTRICTED`   | `agent.refusal` / `agent.approval_required` | false / true | 请求包含受限个人数据。           |
+| `FN-EX-CHAT-DATA-DAG-005` | `BULK_EXPORT_RESTRICTED`     | `agent.refusal`                             | false        | 当前请求触发批量数据导出限制。       |
+| `FN-EX-CHAT-DATA-DAG-006` | `DATA_MINIMIZATION_REQUIRED` | `agent.input_required`                      | true         | 当前请求的数据范围过大，需要明确查询范围。 |
+| `FN-EX-CHAT-DATA-DAG-007` | `CROSS_TENANT_DATA_ACCESS`   | `agent.refusal`                             | false        | 请求涉及跨租户或跨组织数据访问。      |
 
 说明：
 
@@ -324,14 +338,14 @@ DATA_MINIMIZATION_REQUIRED 可通过补充范围继续当前 DomainAgent。
 
 ## 14. 安全合规类 SAFE
 
-| code                      | reasonCode                        | type            | recoverable | 标准展示文案                       |
+| code                      | reasonCode                        | type            | recoverable | 标准展示文案                       |
 | ------------------------- | --------------------------------- | --------------- | ----------- | ---------------------------- |
-| `FN-EX-CAHT-SAFE-DAG-001` | `POLICY_RESTRICTED`               | `agent.refusal` | false       | 当前请求未通过安全合规校验。               |
-| `FN-EX-CAHT-SAFE-DAG-002` | `SENSITIVE_INFO_REQUESTED`        | `agent.refusal` | false       | 请求涉及凭据或敏感认证信息，已拒绝处理。         |
-| `FN-EX-CAHT-SAFE-DAG-003` | `INTERNAL_CONTEXT_REQUESTED`      | `agent.refusal` | false       | 请求涉及内部上下文或系统配置信息，已拒绝处理。      |
-| `FN-EX-CAHT-SAFE-DAG-004` | `PROMPT_OR_TOOL_CONFIG_REQUESTED` | `agent.refusal` | false       | 请求涉及系统提示词、工具配置或内部执行参数，已拒绝处理。 |
-| `FN-EX-CAHT-SAFE-DAG-005` | `DATA_EXFILTRATION_RISK`          | `agent.refusal` | false       | 当前请求存在数据外传风险，已拒绝处理。          |
-| `FN-EX-CAHT-SAFE-DAG-006` | `UNSAFE_INSTRUCTION`              | `agent.refusal` | false       | 当前请求未通过指令安全校验。               |
+| `FN-EX-CHAT-SAFE-DAG-001` | `POLICY_RESTRICTED`               | `agent.refusal` | false       | 当前请求未通过安全合规校验。               |
+| `FN-EX-CHAT-SAFE-DAG-002` | `SENSITIVE_INFO_REQUESTED`        | `agent.refusal` | false       | 请求涉及凭据或敏感认证信息，已拒绝处理。         |
+| `FN-EX-CHAT-SAFE-DAG-003` | `INTERNAL_CONTEXT_REQUESTED`      | `agent.refusal` | false       | 请求涉及内部上下文或系统配置信息，已拒绝处理。      |
+| `FN-EX-CHAT-SAFE-DAG-004` | `PROMPT_OR_TOOL_CONFIG_REQUESTED` | `agent.refusal` | false       | 请求涉及系统提示词、工具配置或内部执行参数，已拒绝处理。 |
+| `FN-EX-CHAT-SAFE-DAG-005` | `DATA_EXFILTRATION_RISK`          | `agent.refusal` | false       | 当前请求存在数据外传风险，已拒绝处理。          |
+| `FN-EX-CHAT-SAFE-DAG-006` | `UNSAFE_INSTRUCTION`              | `agent.refusal` | false       | 当前请求未通过指令安全校验。               |
 
 说明：
 
@@ -345,14 +359,14 @@ Supervisor 基于该类编码执行统一安全处置。
 
 ## 15. 系统技术类 SYS：DomainAgent 自身
 
-| code                     | reasonCode                      | type          | recoverable | 标准展示文案                        |
+| code                     | reasonCode                      | type          | recoverable | 标准展示文案                        |
 | ------------------------ | ------------------------------- | ------------- | ----------- | ----------------------------- |
-| `FN-EX-CAHT-SYS-DAG-001` | `AGENT_OVERLOADED`              | `agent.error` | true        | 领域 Agent 处理资源过载，本次请求未完成。稍后重试。 |
-| `FN-EX-CAHT-SYS-DAG-002` | `DOMAIN_AGENT_TIMEOUT`          | `agent.error` | true        | 领域 Agent 处理超时，本次请求未完成。稍后重试。   |
-| `FN-EX-CAHT-SYS-DAG-003` | `DOMAIN_AGENT_RATE_LIMITED`     | `agent.error` | true        | 当前请求触发领域 Agent 限流控制。稍后重试。     |
-| `FN-EX-CAHT-SYS-DAG-004` | `DOMAIN_AGENT_EXECUTION_FAILED` | `agent.error` | true        | 领域 Agent 执行异常，本次请求未完成。        |
-| `FN-EX-CAHT-SYS-DAG-005` | `PROTOCOL_INVALID`              | `agent.error` | false       | 领域 Agent 响应协议不符合契约要求。         |
-| `FN-EX-CAHT-SYS-DAG-006` | `RESPONSE_PARSE_FAILED`         | `agent.error` | false       | 领域 Agent 响应解析失败。              |
+| `FN-EX-CHAT-SYS-DAG-001` | `AGENT_OVERLOADED`              | `agent.error` | true        | 领域 Agent 处理资源过载，本次请求未完成。稍后重试。 |
+| `FN-EX-CHAT-SYS-DAG-002` | `DOMAIN_AGENT_TIMEOUT`          | `agent.error` | true        | 领域 Agent 处理超时，本次请求未完成。稍后重试。   |
+| `FN-EX-CHAT-SYS-DAG-003` | `DOMAIN_AGENT_RATE_LIMITED`     | `agent.error` | true        | 当前请求触发领域 Agent 限流控制。稍后重试。     |
+| `FN-EX-CHAT-SYS-DAG-004` | `DOMAIN_AGENT_EXECUTION_FAILED` | `agent.error` | true        | 领域 Agent 执行异常，本次请求未完成。        |
+| `FN-EX-CHAT-SYS-DAG-005` | `PROTOCOL_INVALID`              | `agent.error` | false       | 领域 Agent 响应协议不符合契约要求。         |
+| `FN-EX-CHAT-SYS-DAG-006` | `RESPONSE_PARSE_FAILED`         | `agent.error` | false       | 领域 Agent 响应解析失败。              |
 
 说明：
 
@@ -367,44 +381,45 @@ SYS-DAG 类编码表示 DomainAgent 自身技术异常。
 
 ### 16.1 MQS
 
-| code                     | reasonCode             | type          | recoverable | 标准展示文案                   |
+| code                     | reasonCode             | type          | recoverable | 标准展示文案                   |
 | ------------------------ | ---------------------- | ------------- | ----------- | ------------------------ |
-| `FN-EX-CAHT-SYS-MQS-001` | `MQS_UNAVAILABLE`      | `agent.error` | true        | MQS 服务不可用，本次请求未完成。稍后重试。  |
-| `FN-EX-CAHT-SYS-MQS-002` | `MQS_TIMEOUT`          | `agent.error` | true        | MQS 服务调用超时，本次请求未完成。稍后重试。 |
-| `FN-EX-CAHT-SYS-MQS-003` | `MQS_RATE_LIMITED`     | `agent.error` | true        | 当前请求触发 MQS 服务限流控制。稍后重试。  |
-| `FN-EX-CAHT-SYS-MQS-004` | `MQS_RESPONSE_INVALID` | `agent.error` | false       | MQS 服务响应不符合处理要求。         |
+| `FN-EX-CHAT-SYS-MQS-001` | `MQS_UNAVAILABLE`      | `agent.error` | true        | MQS 服务不可用，本次请求未完成。稍后重试。  |
+| `FN-EX-CHAT-SYS-MQS-002` | `MQS_TIMEOUT`          | `agent.error` | true        | MQS 服务调用超时，本次请求未完成。稍后重试。 |
+| `FN-EX-CHAT-SYS-MQS-003` | `MQS_RATE_LIMITED`     | `agent.error` | true        | 当前请求触发 MQS 服务限流控制。稍后重试。  |
+| `FN-EX-CHAT-SYS-MQS-004` | `MQS_RESPONSE_INVALID` | `agent.error` | false       | MQS 服务响应不符合处理要求。         |
 
 ### 16.2 LLM
 
-| code                     | reasonCode             | type          | recoverable | 标准展示文案                  |
+| code                     | reasonCode             | type          | recoverable | 标准展示文案                  |
 | ------------------------ | ---------------------- | ------------- | ----------- | ----------------------- |
-| `FN-EX-CAHT-SYS-LLM-001` | `LLM_UNAVAILABLE`      | `agent.error` | true        | 大模型服务不可用，本次请求未完成。稍后重试。  |
-| `FN-EX-CAHT-SYS-LLM-002` | `LLM_TIMEOUT`          | `agent.error` | true        | 大模型服务调用超时，本次请求未完成。稍后重试。 |
-| `FN-EX-CAHT-SYS-LLM-003` | `LLM_CONTEXT_EXCEEDED` | `agent.error` | false       | 当前请求上下文长度超出处理限制。        |
+| `FN-EX-CHAT-SYS-LLM-001` | `LLM_UNAVAILABLE`      | `agent.error` | true        | 大模型服务不可用，本次请求未完成。稍后重试。  |
+| `FN-EX-CHAT-SYS-LLM-002` | `LLM_TIMEOUT`          | `agent.error` | true        | 大模型服务调用超时，本次请求未完成。稍后重试。 |
+| `FN-EX-CHAT-SYS-LLM-003` | `LLM_CONTEXT_EXCEEDED` | `agent.error` | false       | 当前请求上下文长度超出处理限制。        |
 
 ### 16.3 MCP
 
-| code                     | reasonCode        | type          | recoverable | 标准展示文案                   |
+| code                     | reasonCode        | type          | recoverable | 标准展示文案                   |
 | ------------------------ | ----------------- | ------------- | ----------- | ------------------------ |
-| `FN-EX-CAHT-SYS-MCP-001` | `MCP_UNAVAILABLE` | `agent.error` | true        | MCP 服务不可用，本次请求未完成。稍后重试。  |
-| `FN-EX-CAHT-SYS-MCP-002` | `MCP_TIMEOUT`     | `agent.error` | true        | MCP 服务调用超时，本次请求未完成。稍后重试。 |
-| `FN-EX-CAHT-SYS-MCP-003` | `MCP_TOOL_FAILED` | `agent.error` | true        | MCP 工具执行异常，本次请求未完成。      |
+| `FN-EX-CHAT-SYS-MCP-001` | `MCP_UNAVAILABLE` | `agent.error` | true        | MCP 服务不可用，本次请求未完成。稍后重试。  |
+| `FN-EX-CHAT-SYS-MCP-002` | `MCP_TIMEOUT`     | `agent.error` | true        | MCP 服务调用超时，本次请求未完成。稍后重试。 |
+| `FN-EX-CHAT-SYS-MCP-003` | `MCP_TOOL_FAILED` | `agent.error` | true        | MCP 工具执行异常，本次请求未完成。      |
 
 ### 16.4 A2A
 
-| code                     | reasonCode             | type          | recoverable | 标准展示文案                   |
+| code                     | reasonCode             | type          | recoverable | 标准展示文案                   |
 | ------------------------ | ---------------------- | ------------- | ----------- | ------------------------ |
-| `FN-EX-CAHT-SYS-A2A-001` | `A2A_UNAVAILABLE`      | `agent.error` | true        | A2A 服务不可用，本次请求未完成。稍后重试。  |
-| `FN-EX-CAHT-SYS-A2A-002` | `A2A_TIMEOUT`          | `agent.error` | true        | A2A 服务调用超时，本次请求未完成。稍后重试。 |
-| `FN-EX-CAHT-SYS-A2A-003` | `A2A_RESPONSE_INVALID` | `agent.error` | false       | A2A 服务响应不符合处理要求。         |
+| `FN-EX-CHAT-SYS-A2A-001` | `A2A_UNAVAILABLE`      | `agent.error` | true        | A2A 服务不可用，本次请求未完成。稍后重试。  |
+| `FN-EX-CHAT-SYS-A2A-002` | `A2A_TIMEOUT`          | `agent.error` | true        | A2A 服务调用超时，本次请求未完成。稍后重试。 |
+| `FN-EX-CHAT-SYS-A2A-003` | `A2A_RESPONSE_INVALID` | `agent.error` | false       | A2A 服务响应不符合处理要求。         |
 
 ### 16.5 EDM
 
-| code                     | reasonCode               | type          | recoverable | 标准展示文案                     |
+| code                     | reasonCode               | type          | recoverable | 标准展示文案                     |
 | ------------------------ | ------------------------ | ------------- | ----------- | -------------------------- |
-| `FN-EX-CAHT-SYS-EDM-001` | `EDM_UNAVAILABLE`        | `agent.error` | true        | EDM 文档服务不可用，本次请求未完成。稍后重试。  |
-| `FN-EX-CAHT-SYS-EDM-002` | `EDM_TIMEOUT`            | `agent.error` | true        | EDM 文档服务调用超时，本次请求未完成。稍后重试。 |
-| `FN-EX-CAHT-SYS-EDM-003` | `EDM_DOCUMENT_NOT_FOUND` | `agent.error` | false       | 未查询到指定文档。                  |
+| `FN-EX-CHAT-SYS-EDM-001` | `EDM_UNAVAILABLE`        | `agent.error` | true        | EDM 文档服务不可用，本次请求未完成。稍后重试。  |
+| `FN-EX-CHAT-SYS-EDM-002` | `EDM_TIMEOUT`            | `agent.error` | true        | EDM 文档服务调用超时，本次请求未完成。稍后重试。 |
+| `FN-EX-CHAT-SYS-EDM-003` | `EDM_DOCUMENT_NOT_FOUND` | `agent.error` | false       | 未查询到指定文档。                  |
+| `FN-EX-CHAT-SYS-EDM-004` | `EDM_RESPONSE_INVALID`   | `agent.error` | false       | EDM 文档服务响应无法解析或字段不完整。        |
 
 ---
 
@@ -418,13 +433,13 @@ SYS-DAG 类编码表示 DomainAgent 自身技术异常。
 
 ```json
 {
-  "type": "agent.refusal",
-  "code": "FN-EX-CAHT-BIZ-DAG-001",
-  "agentId": "tax-agent",
-  "traceId": "trace_xxx",
-  "reasonCode": "OUT_OF_DOMAIN",
-  "reason": "request outside current domain agent",
-  "recoverable": false
+  "type": "agent.refusal",
+  "code": "FN-EX-CHAT-BIZ-DAG-001",
+  "agentId": "tax-agent",
+  "traceId": "trace_xxx",
+  "reasonCode": "OUT_OF_DOMAIN",
+  "reason": "request outside current domain agent",
+  "recoverable": false
 }
 ```
 
@@ -457,32 +472,32 @@ agent.refusal 只表示当前 DomainAgent 拒绝处理。
 
 ```json
 {
-  "type": "agent.input_required",
-  "code": "FN-EX-CAHT-VAL-DAG-003",
-  "agentId": "expense-agent",
-  "traceId": "trace_xxx",
-  "reasonCode": "MISSING_REQUIRED_SLOT",
-  "reason": "missing expenseNo or period",
-  "recoverable": true,
-  "inputRequest": {
-    "inputType": "MISSING_SLOT",
-    "missingSlots": ["expenseNo", "period"],
-    "minRequired": 1,
-    "questions": [
-      {
-        "id": "expenseNo",
-        "label": "报销单号",
-        "type": "text",
-        "required": false
-      },
-      {
-        "id": "period",
-        "label": "报销时间范围",
-        "type": "date_range",
-        "required": false
-      }
-    ]
-  }
+  "type": "agent.input_required",
+  "code": "FN-EX-CHAT-VAL-DAG-003",
+  "agentId": "expense-agent",
+  "traceId": "trace_xxx",
+  "reasonCode": "MISSING_REQUIRED_SLOT",
+  "reason": "missing expenseNo or period",
+  "recoverable": true,
+  "inputRequest": {
+    "inputType": "MISSING_SLOT",
+    "missingSlots": ["expenseNo", "period"],
+    "minRequired": 1,
+    "questions": [
+      {
+        "id": "expenseNo",
+        "label": "报销单号",
+        "type": "text",
+        "required": false
+      },
+      {
+        "id": "period",
+        "label": "报销时间范围",
+        "type": "date_range",
+        "required": false
+      }
+    ]
+  }
 }
 ```
 
@@ -496,33 +511,33 @@ Supervisor 可以将其转换为澄清交互。
 
 ### 18.1 inputRequest 字段
 
-| 字段             | 类型     | 必填 | 说明          |
+| 字段             | 类型     | 必填 | 说明          |
 | -------------- | ------ | -- | ----------- |
-| `inputType`    | string | 是  | 输入类型        |
-| `missingSlots` | array  | 否  | 缺失槽位编码      |
-| `minRequired`  | number | 否  | 至少需要补充的字段数量 |
-| `questions`    | array  | 是  | 澄清问题列表      |
+| `inputType`    | string | 是  | 输入类型        |
+| `missingSlots` | array  | 否  | 缺失槽位编码      |
+| `minRequired`  | number | 否  | 至少需要补充的字段数量 |
+| `questions`    | array  | 是  | 澄清问题列表      |
 
 `inputType` 枚举：
 
-| inputType           | 含义       |
+| inputType           | 含义       |
 | ------------------- | -------- |
-| `CLARIFICATION`     | 普通澄清     |
-| `MISSING_SLOT`      | 缺少业务槽位   |
-| `SCOPE_REFINEMENT`  | 需要缩小查询范围 |
+| `CLARIFICATION`     | 普通澄清     |
+| `MISSING_SLOT`      | 缺少业务槽位   |
+| `SCOPE_REFINEMENT`  | 需要缩小查询范围 |
 | `FORMAT_CORRECTION` | 需要修正输入格式 |
 
 ### 18.2 questions[] 字段
 
-| 字段             | 类型      | 必填 | 说明       |
+| 字段             | 类型      | 必填 | 说明       |
 | -------------- | ------- | -- | -------- |
-| `id`           | string  | 是  | 问题或槽位 ID |
-| `label`        | string  | 是  | 展示给用户的问题 |
-| `type`         | string  | 是  | 输入类型     |
-| `required`     | boolean | 是  | 是否必填     |
-| `options`      | array   | 否  | 选择项      |
-| `defaultValue` | any     | 否  | 默认值      |
-| `placeholder`  | string  | 否  | 输入提示     |
+| `id`           | string  | 是  | 问题或槽位 ID |
+| `label`        | string  | 是  | 展示给用户的问题 |
+| `type`         | string  | 是  | 输入类型     |
+| `required`     | boolean | 是  | 是否必填     |
+| `options`      | array   | 否  | 选择项      |
+| `defaultValue` | any     | 否  | 默认值      |
+| `placeholder`  | string  | 否  | 输入提示     |
 
 `questions[].type` 枚举：
 
@@ -546,23 +561,23 @@ boolean
 
 ```json
 {
-  "type": "agent.approval_required",
-  "code": "FN-EX-CAHT-AUTH-DAG-003",
-  "agentId": "finance-data-agent",
-  "traceId": "trace_xxx",
-  "reasonCode": "PERMISSION_TOO_BROAD",
-  "reason": "requested department data scope exceeds default personal scope",
-  "recoverable": true,
-  "approvalRequest": {
-    "approvalType": "DATA_SCOPE",
-    "scope": {
-      "resource": "finance_records",
-      "operation": "read",
-      "range": "department"
-    },
-    "riskLevel": "MEDIUM",
-    "expiresInSeconds": 300
-  }
+  "type": "agent.approval_required",
+  "code": "FN-EX-CHAT-AUTH-DAG-003",
+  "agentId": "finance-data-agent",
+  "traceId": "trace_xxx",
+  "reasonCode": "PERMISSION_TOO_BROAD",
+  "reason": "requested department data scope exceeds default personal scope",
+  "recoverable": true,
+  "approvalRequest": {
+    "approvalType": "DATA_SCOPE",
+    "scope": {
+      "resource": "finance_records",
+      "operation": "read",
+      "range": "department"
+    },
+    "riskLevel": "MEDIUM",
+    "expiresInSeconds": 300
+  }
 }
 ```
 
@@ -576,23 +591,23 @@ Supervisor 可以将其转换为授权或审批交互。
 
 ### 19.1 approvalRequest 字段
 
-| 字段                 | 类型     | 必填 | 说明            |
+| 字段                 | 类型     | 必填 | 说明            |
 | ------------------ | ------ | -- | ------------- |
-| `approvalType`     | string | 是  | 审批类型          |
-| `scope`            | object | 是  | 请求授权的资源、动作和范围 |
-| `riskLevel`        | string | 是  | 风险等级          |
-| `expiresInSeconds` | number | 否  | 授权请求有效期       |
-| `approvalId`       | string | 否  | 审批请求 ID       |
+| `approvalType`     | string | 是  | 审批类型          |
+| `scope`            | object | 是  | 请求授权的资源、动作和范围 |
+| `riskLevel`        | string | 是  | 风险等级          |
+| `expiresInSeconds` | number | 否  | 授权请求有效期       |
+| `approvalId`       | string | 否  | 审批请求 ID       |
 
 `approvalType` 枚举：
 
-| approvalType          | 含义           |
+| approvalType          | 含义           |
 | --------------------- | ------------ |
-| `DATA_SCOPE`          | 扩大数据范围       |
-| `SENSITIVE_FIELD`     | 访问敏感字段       |
-| `EXTERNAL_ACTION`     | 调用外部系统动作     |
-| `WRITE_OPERATION`     | 写入、修改或提交业务数据 |
-| `HIGH_RISK_OPERATION` | 高风险操作        |
+| `DATA_SCOPE`          | 扩大数据范围       |
+| `SENSITIVE_FIELD`     | 访问敏感字段       |
+| `EXTERNAL_ACTION`     | 调用外部系统动作     |
+| `WRITE_OPERATION`     | 写入、修改或提交业务数据 |
+| `HIGH_RISK_OPERATION` | 高风险操作        |
 
 `riskLevel` 枚举：
 
@@ -613,13 +628,13 @@ CRITICAL
 
 ```json
 {
-  "type": "agent.error",
-  "code": "FN-EX-CAHT-SYS-DAG-001",
-  "agentId": "tax-agent",
-  "traceId": "trace_xxx",
-  "reasonCode": "AGENT_OVERLOADED",
-  "reason": "agent resource overloaded",
-  "recoverable": true
+  "type": "agent.error",
+  "code": "FN-EX-CHAT-SYS-DAG-001",
+  "agentId": "tax-agent",
+  "traceId": "trace_xxx",
+  "reasonCode": "AGENT_OVERLOADED",
+  "reason": "agent resource overloaded",
+  "recoverable": true
 }
 ```
 
@@ -627,13 +642,13 @@ CRITICAL
 
 ```json
 {
-  "type": "agent.error",
-  "code": "FN-EX-CAHT-SYS-MQS-001",
-  "agentId": "finance-data-agent",
-  "traceId": "trace_xxx",
-  "reasonCode": "MQS_UNAVAILABLE",
-  "reason": "mqs dependency unavailable",
-  "recoverable": true
+  "type": "agent.error",
+  "code": "FN-EX-CHAT-SYS-MQS-001",
+  "agentId": "finance-data-agent",
+  "traceId": "trace_xxx",
+  "reasonCode": "MQS_UNAVAILABLE",
+  "reason": "mqs dependency unavailable",
+  "recoverable": true
 }
 ```
 

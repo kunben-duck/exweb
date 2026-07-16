@@ -1,5 +1,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunExecutionRepository;
 import com.huawei.it.ex.one.application.integration.conversation.ChatInteractionRequestRepository;
@@ -148,8 +150,11 @@ public class ChatRunRecoveryOrchestrator {
                 publishTerminalBestEffort(result.event());
                 recovered++;
             } catch (RuntimeException ex) {
-                log.warn("Run execution initialization orphan reconciliation failed. runId={}, reason={}",
-                        run.id(), ex.getMessage(), ex);
+                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_TRANSACTION_FAILED,
+                                "Run execution initialization orphan reconciliation failed")
+                        .runId(run.id())
+                        .operation("run-recovery.execution-init-orphan")
+                        .build(), ex);
             }
         }
         return recovered;
@@ -213,8 +218,11 @@ public class ChatRunRecoveryOrchestrator {
         try {
             streamService.publishPersisted(event);
         } catch (RuntimeException ex) {
-            log.warn("Recovered terminal event committed but realtime publish failed. runId={}, reason={}",
-                    event == null ? null : event.runId(), ex.getMessage(), ex);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_SEND_FAILED,
+                            "Recovered terminal event was committed but realtime publication failed")
+                    .runId(event == null ? null : event.runId())
+                    .operation("run-recovery.terminal.publish")
+                    .build());
         }
     }
 
@@ -276,7 +284,11 @@ public class ChatRunRecoveryOrchestrator {
             }
             return recoverWithStrategyChain(run.get(), candidate, instanceId);
         } catch (RuntimeException ex) {
-            log.warn("stale run recovery failed. runId={}, reason={}", candidate.runId(), ex.getMessage(), ex);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_TRANSACTION_FAILED,
+                            "Stale run recovery failed")
+                    .runId(candidate.runId())
+                    .operation("run-recovery.execute")
+                    .build(), ex);
             return false;
         }
     }

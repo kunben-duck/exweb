@@ -5,6 +5,8 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatRunExecutio
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.integration.identity.ApplicationInstanceIdProvider;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunExecution;
 import com.huawei.it.ex.one.domain.chat.ChatRunExecutionStatus;
@@ -135,7 +137,11 @@ public class ChatRunLeaseApplicationService {
                             claim.runId(), claim.ownerInstanceId(), claim.fencingToken());
                 }
             } catch (RuntimeException ex) {
-                log.warn("ChatRun heartbeat failed. runId={}, reason={}", claim.runId(), ex.getMessage());
+                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_WRITE_FAILED,
+                                "ChatRun execution lease heartbeat failed")
+                        .runId(claim.runId())
+                        .operation("run-execution.heartbeat")
+                        .build(), ex);
             }
         }
     }

@@ -2,6 +2,8 @@ package com.huawei.it.ex.one.infrastructure.memory;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.infrastructure.redis.FinanceExRedisKeyBuilder;
 import java.time.Instant;
@@ -123,7 +125,11 @@ public class RedisShortTermMemoryCache {
     private void markRedisFailure(RuntimeException ex) {
         if (isRedisConnectionProblem(ex)) {
             retryAfter = Instant.now().plus(properties.getFailureBackoff());
-            log.warn("短期记忆 Redis 暂不可用，{} 后重试；本次请求将回退数据库。", properties.getFailureBackoff());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_UNAVAILABLE,
+                            "Short-term memory Redis is unavailable; falling back to database")
+                    .operation("short-term-memory.cache.access")
+                    .attribute("failureBackoff", properties.getFailureBackoff())
+                    .build(), ex);
             return;
         }
         throw ex;
@@ -147,7 +153,10 @@ public class RedisShortTermMemoryCache {
         try {
             return objectMapper.readValue(value, ChatMessage.class);
         } catch (JsonProcessingException ex) {
-            log.warn("忽略无法反序列化的 Redis 短期记忆消息。");
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_DESERIALIZATION_FAILED,
+                            "Ignoring an invalid short-term memory Redis entry")
+                    .operation("short-term-memory.cache.deserialize")
+                    .build(), ex);
             return null;
         }
     }

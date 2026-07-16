@@ -5,6 +5,8 @@ import com.huawei.it.ex.one.application.integration.identity.AuthContextProvider
 import com.huawei.it.ex.one.application.service.chat.ChatFeedbackApplicationService;
 import com.huawei.it.ex.one.application.service.chat.ChatRunApplicationService;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessageAttachment;
@@ -542,8 +544,11 @@ public class ChatSessionController {
                     .collect(Collectors.toMap(ChatRun::id, ChatRun::runtimeProvider, (left, right) -> left,
                             LinkedHashMap::new));
         } catch (RuntimeException ex) {
-            log.warn("历史消息 assistantSource 查询失败，将按空来源返回。runCount={}, reason={}",
-                    runIds.size(), ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_READ_FAILED,
+                            "Assistant source lookup failed; returning history without source metadata")
+                    .operation("chat-history.assistant-source.read")
+                    .attribute("runCount", runIds.size())
+                    .build(), ex);
             return Map.of();
         }
     }

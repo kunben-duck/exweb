@@ -10,6 +10,8 @@ import com.huawei.it.ex.one.application.service.chat.ChatFeedbackApplicationServ
 import com.huawei.it.ex.one.application.service.chat.ChatRunApplicationService;
 import com.huawei.it.ex.one.application.service.chat.ChatStreamApplicationService;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.common.logging.AppLogger;
 import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
@@ -248,8 +250,11 @@ public class ChatController {
             TraceContext context = traceContextProvider == null ? null : traceContextProvider.resolve();
             return context == null ? TraceContext.empty() : context;
         } catch (RuntimeException ex) {
-            log.warn("TraceContext provider failed at request entry; continue without traceId. reason={}",
-                    ex.getMessage(), ex);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                            "TraceContext provider failed at request entry; continuing without traceId")
+                    .operation("trace.resolve")
+                    .retryable(false)
+                    .build(), ex);
             return TraceContext.empty();
         }
     }

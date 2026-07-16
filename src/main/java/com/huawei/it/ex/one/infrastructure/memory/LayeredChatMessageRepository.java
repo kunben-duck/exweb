@@ -1,6 +1,8 @@
 package com.huawei.it.ex.one.infrastructure.memory;
 
 import com.huawei.it.ex.one.application.integration.memory.ChatMessageRepository;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.application.integration.memory.ChatMessagePageQuery;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessageAttachment;
@@ -198,8 +200,11 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
 
     private void markDatabaseFailure(RuntimeException ex) {
         databaseRetryAfter = Instant.now().plus(properties.getDatabaseFailureBackoff());
-        log.warn("短期消息数据库暂不可用，{} 后重试；本次请求降级处理。原因：{}",
-                properties.getDatabaseFailureBackoff(), ex.getMessage());
+        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_UNAVAILABLE,
+                        "Short-term message database is unavailable; using configured degradation")
+                .operation("chat-message.database.access")
+                .attribute("failureBackoff", properties.getDatabaseFailureBackoff())
+                .build(), ex);
     }
 
     private void updateCacheAfterCommit(Runnable cacheUpdate) {
@@ -220,8 +225,10 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
         try {
             cacheUpdate.run();
         } catch (RuntimeException ex) {
-            log.warn("短期消息数据库事实已保存，但 Redis 热缓存更新失败；后续读取将回源数据库。原因：{}",
-                    ex.getMessage(), ex);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_CACHE_SYNC_FAILED,
+                            "Message database commit succeeded but Redis cache synchronization failed")
+                    .operation("chat-message.cache.after-commit")
+                    .build(), ex);
         }
     }
 }

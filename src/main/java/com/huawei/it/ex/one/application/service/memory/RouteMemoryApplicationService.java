@@ -4,6 +4,8 @@ import com.huawei.it.ex.one.application.config.RouteMemoryProperties;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.integration.memory.RouteMemoryRepository;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryContext;
@@ -267,26 +269,39 @@ public class RouteMemoryApplicationService {
             Thread.currentThread().interrupt();
             cancelFuture(future);
             recordReadFailure();
-            log.warn("RouteMemory read interrupted, fallback to empty context. operation={}, tenantId={}, userId={}, sessionId={}",
-                    operation, user.tenantId(), user.ownerUserId(), sessionId);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_READ_FAILED,
+                            "RouteMemory read was interrupted; falling back to an empty context")
+                    .sessionId(sessionId)
+                    .operation(operation)
+                    .build(), ex);
             return fallback;
         } catch (TimeoutException ex) {
             cancelFuture(future);
             recordReadFailure();
-            log.warn("RouteMemory read timed out, fallback to empty context. operation={}, tenantId={}, userId={}, sessionId={}, timeout={}",
-                    operation, user.tenantId(), user.ownerUserId(), sessionId, properties.normalizedReadTimeout());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_QUERY_TIMEOUT,
+                            "RouteMemory read timed out; falling back to an empty context")
+                    .sessionId(sessionId)
+                    .operation(operation)
+                    .attribute("timeout", properties.normalizedReadTimeout())
+                    .build(), ex);
             return fallback;
         } catch (RuntimeException ex) {
             cancelFuture(future);
             recordReadFailure();
-            log.warn("RouteMemory read failed, fallback to empty context. operation={}, tenantId={}, userId={}, sessionId={}, reason={}",
-                    operation, user.tenantId(), user.ownerUserId(), sessionId, ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_READ_FAILED,
+                            "RouteMemory read failed; falling back to an empty context")
+                    .sessionId(sessionId)
+                    .operation(operation)
+                    .build(), ex);
             return fallback;
         } catch (Exception ex) {
             cancelFuture(future);
             recordReadFailure();
-            log.warn("RouteMemory read timed out or failed, fallback to empty context. operation={}, tenantId={}, userId={}, sessionId={}, reason={}",
-                    operation, user.tenantId(), user.ownerUserId(), sessionId, ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_READ_FAILED,
+                            "RouteMemory read failed; falling back to an empty context")
+                    .sessionId(sessionId)
+                    .operation(operation)
+                    .build(), ex);
             return fallback;
         }
     }
@@ -297,16 +312,25 @@ public class RouteMemoryApplicationService {
                 try {
                     task.run();
                 } catch (RuntimeException ex) {
-                    log.warn("RouteMemory write failed and was ignored. operation={}, tenantId={}, userId={}, sessionId={}, reason={}",
-                            operation, user.tenantId(), user.ownerUserId(), sessionId, ex.getMessage());
+                    log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_WRITE_FAILED,
+                                    "RouteMemory write failed and was ignored")
+                            .sessionId(sessionId)
+                            .operation(operation)
+                            .build(), ex);
                 }
             });
         } catch (RejectedExecutionException ex) {
-            log.warn("RouteMemory write queue rejected task and was ignored. operation={}, tenantId={}, userId={}, sessionId={}, reason={}",
-                    operation, user.tenantId(), user.ownerUserId(), sessionId, ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.TASK_REJECTED,
+                            "RouteMemory write queue rejected a task")
+                    .sessionId(sessionId)
+                    .operation(operation)
+                    .build(), ex);
         } catch (RuntimeException ex) {
-            log.warn("RouteMemory write scheduling failed and was ignored. operation={}, tenantId={}, userId={}, sessionId={}, reason={}",
-                    operation, user.tenantId(), user.ownerUserId(), sessionId, ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.TASK_REJECTED,
+                            "RouteMemory write scheduling failed")
+                    .sessionId(sessionId)
+                    .operation(operation)
+                    .build(), ex);
         }
     }
 
@@ -377,10 +401,13 @@ public class RouteMemoryApplicationService {
         Instant openUntil = Instant.now().plus(properties.normalizedCircuitBreakerOpenDuration());
         readCircuitOpenUntil.set(openUntil);
         consecutiveReadFailures.set(0);
-        log.warn("RouteMemory read circuit opened. failureThreshold={}, openDuration={}, openUntil={}",
-                properties.normalizedCircuitBreakerFailureThreshold(),
-                properties.normalizedCircuitBreakerOpenDuration(),
-                openUntil);
+        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_UNAVAILABLE,
+                        "RouteMemory read circuit opened after repeated failures")
+                .operation("route-memory.read-circuit.open")
+                .attribute("failureThreshold", properties.normalizedCircuitBreakerFailureThreshold())
+                .attribute("openDuration", properties.normalizedCircuitBreakerOpenDuration())
+                .attribute("openUntil", openUntil)
+                .build());
     }
 
     private Map<String, Object> toHistoryRoute(RouteMemoryItem item) {

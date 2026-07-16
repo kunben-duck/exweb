@@ -9,6 +9,8 @@ import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractio
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.MessageCompletedEvent;
@@ -39,6 +41,7 @@ import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.WebSocketHandler;
 import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient;
 import org.springframework.web.reactive.socket.client.WebSocketClient;
+import reactor.core.Exceptions;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
@@ -93,8 +96,10 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         Flux<ChatEvent> events = queryWithShortConnection(request, messageCompleted);
 
         return events.concatWith(Mono.defer(() -> messageCompleted.get()
-                ? Mono.empty()
-                : Mono.just(MessageCompletedEvent.of(request.runId(), request.sessionId()))));
+                        ? Mono.empty()
+                        : Mono.just(MessageCompletedEvent.of(request.runId(), request.sessionId()))))
+                .doOnError(ex -> logRelayFailure(
+                        request.runId(), request.sessionId(), request.traceContext(), "relay.query", ex));
     }
 
     @Override
@@ -107,8 +112,57 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         AtomicBoolean messageCompleted = new AtomicBoolean(false);
         Flux<ChatEvent> events = interactionWithShortConnection(request, messageCompleted);
         return events.concatWith(Mono.defer(() -> messageCompleted.get()
-                ? Mono.empty()
-                : Mono.just(MessageCompletedEvent.of(request.runId(), request.sessionId()))));
+                        ? Mono.empty()
+                        : Mono.just(MessageCompletedEvent.of(request.runId(), request.sessionId()))))
+                .doOnError(ex -> logRelayFailure(
+                        request.runId(), request.sessionId(), request.traceContext(), "relay.interaction", ex));
+    }
+
+    private void logRelayFailure(String runId, String sessionId, TraceContext traceContext,
+                                 String operation, Throwable failure) {
+        log.warn(SystemErrorLogEntry.builder(classifyRelayFailure(failure), "Relay WebSocket operation failed")
+                .traceId(traceContext == null ? null : traceContext.traceId())
+                .runId(runId)
+                .sessionId(sessionId)
+                .operation(operation)
+                .build(), failure);
+    }
+
+    private SystemErrorCode classifyRelayFailure(Throwable failure) {
+        Throwable cause = Exceptions.unwrap(failure);
+        String message = cause == null || cause.getMessage() == null
+                ? ""
+                : cause.getMessage().toLowerCase(Locale.ROOT);
+        String className = cause == null ? "" : cause.getClass().getSimpleName().toLowerCase(Locale.ROOT);
+        if (cause instanceof TimeoutException || message.contains("timeout") || message.contains("timed out")) {
+            if (message.contains("heartbeat")) {
+                return SystemErrorCode.RELAY_HEARTBEAT_TIMEOUT;
+            }
+            if (message.contains("max run") || message.contains("max_run")
+                    || message.contains("run duration")) {
+                return SystemErrorCode.RELAY_RUN_TIMEOUT;
+            }
+            if (className.contains("connect") || message.contains("connect timeout")) {
+                return SystemErrorCode.RELAY_CONNECT_TIMEOUT;
+            }
+            return SystemErrorCode.RELAY_CONFIG_TIMEOUT;
+        }
+        if (cause instanceof RelayRuntimeSessionUnavailableException) {
+            return SystemErrorCode.RELAY_SESSION_UNAVAILABLE;
+        }
+        if (message.contains("closed")) {
+            return SystemErrorCode.RELAY_UNEXPECTED_CLOSED;
+        }
+        if (message.contains("handshake")) {
+            return SystemErrorCode.RELAY_CONFIG_HANDSHAKE_FAILED;
+        }
+        if (message.contains("serialize") || message.contains("outbound") || message.contains("emit failed")) {
+            return SystemErrorCode.RELAY_OUTBOUND_FAILED;
+        }
+        if (cause instanceof RelayRuntimeProtocolException) {
+            return SystemErrorCode.RELAY_PROTOCOL_INVALID;
+        }
+        return SystemErrorCode.RELAY_ERROR;
     }
 
     private Flux<ChatEvent> queryWithShortConnection(AgentRuntimeRequest request, AtomicBoolean messageCompleted) {
@@ -197,7 +251,11 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 })
                 .onErrorResume(ex -> {
                     String runId = request == null ? null : request.runId();
-                    log.warn("Relay WebSocket interrupt failed, runId={}, reason={}", runId, ex.getMessage());
+                    log.warn(SystemErrorLogEntry.builder(SystemErrorCode.RELAY_INTERRUPT_FAILED,
+                                    "Relay WebSocket interrupt failed")
+                            .runId(runId)
+                            .operation("relay.interrupt")
+                            .build(), ex);
                     return Mono.empty();
                 })
                 .then();
@@ -312,9 +370,14 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                             ackTimeout.set(Mono.delay(interruptAckTimeout()).subscribe(ignored -> {
                                 if (done.compareAndSet(false, true)) {
                                     cleanup.run();
-                                    log.warn("Relay WebSocket interrupt paused ack timed out. runId={}, runtimeSessionId={}, "
-                                                    + "clientId={}, interruptSent=true, pausedAck=false",
-                                            request.runId(), relaySessionId, clientId);
+                                    log.warn(SystemErrorLogEntry.builder(SystemErrorCode.RELAY_INTERRUPT_FAILED,
+                                                    "Relay WebSocket interrupt acknowledgement timed out")
+                                            .runId(request.runId())
+                                            .sessionId(request.sessionId())
+                                            .operation("relay.interrupt.ack")
+                                            .attribute("runtimeSessionId", relaySessionId)
+                                            .attribute("clientId", clientId)
+                                            .build());
                                     sink.success();
                                 }
                             }, fail));
@@ -344,9 +407,15 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                             + "handshake completed. runId=" + request.runId()));
                     return;
                 }
-                log.warn("Relay WebSocket interrupt connection closed before paused ack. runId={}, runtimeSessionId={}, "
-                                + "clientId={}, interruptSent={}, pausedAck=false",
-                        request.runId(), relaySessionId, clientId, interruptSent.get());
+                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.RELAY_UNEXPECTED_CLOSED,
+                                "Relay WebSocket interrupt connection closed before acknowledgement")
+                        .runId(request.runId())
+                        .sessionId(request.sessionId())
+                        .operation("relay.interrupt.ack")
+                        .attribute("runtimeSessionId", relaySessionId)
+                        .attribute("clientId", clientId)
+                        .attribute("interruptSent", interruptSent.get())
+                        .build());
                 complete.run();
             }));
             sink.onDispose(cleanup::run);
@@ -505,8 +574,11 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 try {
                     context.exchange().interrupt(context.runId());
                 } catch (Throwable ex) {
-                    log.warn("Relay WebSocket heartbeat timeout interrupt failed. runId={}, reason={}",
-                            context.runId(), ex.getMessage());
+                    log.warn(SystemErrorLogEntry.builder(SystemErrorCode.RELAY_INTERRUPT_FAILED,
+                                    "Relay interrupt failed after heartbeat timeout")
+                            .runId(context.runId())
+                            .operation("relay.heartbeat-timeout.interrupt")
+                            .build(), ex);
                 }
                 context.fail().accept(new RelayRuntimeProtocolException("RELAY_WS_HEARTBEAT_RESPONSE_TIMEOUT: Relay "
                         + "WebSocket heartbeat response timed out. runId=" + context.runId()
@@ -517,8 +589,11 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
             try {
                 context.exchange().interrupt(context.runId());
             } catch (Throwable ex) {
-                log.warn("Relay WebSocket max run duration interrupt failed. runId={}, reason={}",
-                        context.runId(), ex.getMessage());
+                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.RELAY_INTERRUPT_FAILED,
+                                "Relay interrupt failed after maximum run duration")
+                        .runId(context.runId())
+                        .operation("relay.max-duration.interrupt")
+                        .build(), ex);
             }
             context.fail().accept(new RelayRuntimeProtocolException("RELAY_WS_MAX_RUN_DURATION_EXCEEDED: Relay WebSocket "
                     + "run exceeded max duration. runId=" + context.runId()

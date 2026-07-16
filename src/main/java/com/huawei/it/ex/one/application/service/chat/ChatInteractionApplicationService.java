@@ -5,6 +5,8 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatInteraction
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
@@ -192,7 +194,10 @@ public class ChatInteractionApplicationService {
         try {
             return repository.findRespondingReconcileCandidates(orphanBefore, normalizedLimit);
         } catch (RuntimeException ex) {
-            log.warn("Failed to query orphan Interaction claims for reconciliation. reason={}", ex.getMessage(), ex);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_READ_FAILED,
+                            "Interaction orphan reconciliation query failed")
+                    .operation("interaction-orphan.scan")
+                    .build(), ex);
             return java.util.List.of();
         }
     }
@@ -209,8 +214,13 @@ public class ChatInteractionApplicationService {
                     request.tenantId(), request.userId(), request.id(), request.continueRunId(),
                     candidate.orphanBefore());
         } catch (RuntimeException ex) {
-            log.warn("Failed to reconcile Interaction claim. interactionId={}, continueRunId={}, state={}, reason={}",
-                    request.id(), request.continueRunId(), candidate.state(), ex.getMessage(), ex);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_WRITE_FAILED,
+                            "Interaction orphan claim reconciliation failed")
+                    .runId(request.continueRunId())
+                    .operation("interaction-orphan.release")
+                    .attribute("interactionId", request.id())
+                    .attribute("state", candidate.state())
+                    .build(), ex);
             return 0;
         }
     }

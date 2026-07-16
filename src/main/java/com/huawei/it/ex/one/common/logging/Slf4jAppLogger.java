@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.common.logging;
 
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import java.util.Objects;
 import org.slf4j.Logger;
 
@@ -135,6 +136,16 @@ final class Slf4jAppLogger implements AppLogger {
     }
 
     @Override
+    public void warn(SystemErrorLogEntry event) {
+        delegate.warn(SystemErrorLogFormatter.format(Objects.requireNonNull(event, "event"), null));
+    }
+
+    @Override
+    public void warn(SystemErrorLogEntry event, Throwable throwable) {
+        delegate.warn(SystemErrorLogFormatter.format(Objects.requireNonNull(event, "event"), throwable), throwable);
+    }
+
+    @Override
     public boolean isErrorEnabled() {
         return delegate.isErrorEnabled();
     }
@@ -162,5 +173,15 @@ final class Slf4jAppLogger implements AppLogger {
     @Override
     public void error(String message, Throwable throwable) {
         delegate.error(message, throwable);
+    }
+
+    @Override
+    public void error(SystemErrorLogEntry event) {
+        delegate.error(SystemErrorLogFormatter.format(Objects.requireNonNull(event, "event"), null));
+    }
+
+    @Override
+    public void error(SystemErrorLogEntry event, Throwable throwable) {
+        delegate.error(SystemErrorLogFormatter.format(Objects.requireNonNull(event, "event"), throwable), throwable);
     }
 }

@@ -31,6 +31,8 @@ import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingResolution
 import com.huawei.it.ex.one.application.service.runtime.RuntimeExecutionContext;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeInteractionResponseContext;
 import com.huawei.it.ex.one.application.service.runtime.SystemResponseExecutor;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
@@ -353,8 +355,12 @@ public class FinanceEXChatService implements FinanceChatFacade {
                             error -> {
                                 Sinks.EmitResult result = firstEvent.tryEmitError(error);
                                 if (result.isFailure() && runIdRef.get() != null) {
-                                    log.warn("Background chat run terminated after handoff. runId={}, reason={}",
-                                            runIdRef.get(), error.getMessage(), error);
+                                    log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                                                    "Background chat run terminated after first-event handoff")
+                                            .traceId(traceSnapshot.traceId())
+                                            .runId(runIdRef.get())
+                                            .operation("chat-run.background")
+                                            .build(), error);
                                 }
                             }
                     );
@@ -444,8 +450,13 @@ public class FinanceEXChatService implements FinanceChatFacade {
             }, error -> {
                 Sinks.EmitResult result = firstEvent.tryEmitError(error);
                 if (result.isFailure()) {
-                    log.warn("Background Interaction continuation terminated after handoff. interactionId={}, runId={}, reason={}",
-                            command.interactionId(), runId, error.getMessage(), error);
+                    log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                                    "Background Interaction continuation terminated after first-event handoff")
+                            .traceId(traceContext.traceId())
+                            .runId(runId)
+                            .operation("interaction.background")
+                            .attribute("interactionId", command.interactionId())
+                            .build(), error);
                 }
             });
             disposableRef.set(disposable);
@@ -541,8 +552,12 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 .subscribe(
                         ignored -> {
                         },
-                        error -> log.error("First-event timeout compensation did not converge. runId={}, interactionId={}, reason={}",
-                                startAttempt.runId(), startAttempt.interactionId(), error.getMessage(), error)
+                        error -> log.error(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_TRANSACTION_FAILED,
+                                        "First-event timeout compensation did not converge")
+                                .runId(startAttempt.runId())
+                                .operation("chat-run.first-event-timeout-compensation")
+                                .attribute("interactionId", startAttempt.interactionId())
+                                .build(), error)
                 );
     }
 
@@ -576,8 +591,11 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 chatInteractionService.markWaitingForRun(
                         interaction.tenantId(), interaction.userId(), interaction.id(), startAttempt.runId());
             }
-            log.error("ChatRunTerminalCommitService is unavailable for first-event timeout compensation. runId={}",
-                    startAttempt.runId());
+            log.error(SystemErrorLogEntry.builder(SystemErrorCode.CONFIGURATION_INVALID,
+                            "Terminal commit service is unavailable for first-event timeout compensation")
+                    .runId(startAttempt.runId())
+                    .operation("chat-run.first-event-timeout-compensation")
+                    .build());
             return FirstEventCompensationOutcome.DONE;
         }
         String message = "等待首个持久化事件超时，本轮执行已终止";
@@ -608,8 +626,12 @@ public class FinanceEXChatService implements FinanceChatFacade {
         try {
             chatStreamService.publishPersisted(result.event());
         } catch (RuntimeException ex) {
-            log.warn("First-event timeout terminal committed but realtime publish failed. runId={}, reason={}",
-                    run.id(), ex.getMessage(), ex);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_SEND_FAILED,
+                            "First-event timeout terminal committed but realtime publish failed")
+                    .runId(run.id())
+                    .sessionId(run.sessionId())
+                    .operation("chat-run.first-event-timeout-publish")
+                    .build());
         }
         completeStartAttemptExecution(startAttempt);
         return FirstEventCompensationOutcome.DONE;
@@ -1151,10 +1173,14 @@ public class FinanceEXChatService implements FinanceChatFacade {
     }
 
     private Flux<ChatEvent> failInteractionContinuationRun(RunEventPipelineContext context, RuntimeException ex) {
-        log.warn("Interaction continuation failed after run creation, fallback to run.failed. runId={}, interactionId={}, reason={}",
-                context.runId(),
-                context.continuationInteractionRequest() == null ? null : context.continuationInteractionRequest().id(),
-                ex.getMessage(), ex);
+        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                        "Interaction continuation failed after run creation; falling back to run.failed")
+                .runId(context.runId())
+                .sessionId(context.session().id())
+                .operation("interaction.continue")
+                .attribute("interactionId", context.continuationInteractionRequest() == null
+                        ? null : context.continuationInteractionRequest().id())
+                .build(), ex);
         return persistAndPublishRunEvents(Flux.just(runtimeErrorEvent(context.runId(), context.session().id(), ex)),
                 context).doFinally(ignored -> runExecutionRegistry.complete(context.executionClaim()));
     }
@@ -1182,8 +1208,12 @@ public class FinanceEXChatService implements FinanceChatFacade {
         try {
             chatStreamService.publishPersisted(result.event());
         } catch (RuntimeException ex) {
-            log.warn("Run execution initialization failure committed but realtime publish failed. runId={}, reason={}",
-                    run.id(), ex.getMessage(), ex);
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_SEND_FAILED,
+                            "Run execution initialization failure committed but realtime publish failed")
+                    .runId(run.id())
+                    .sessionId(run.sessionId())
+                    .operation("chat-run.execution-init-failure-publish")
+                    .build());
         }
         return Flux.just(result.event());
     }
@@ -1919,12 +1949,15 @@ public class FinanceEXChatService implements FinanceChatFacade {
                          * 下游 Runtime/DomainAgent 的输出不是身份事实。任何 runId/sessionId 不匹配的事件
                          * 都必须在落库前阻断，否则会污染数据库事件事实源并经由 Event Resume/WS 串到其他会话。
                          */
-                        log.error("Dropped mismatched chat event before persistence. expectedRunId={}, actualRunId={}, expectedSessionId={}, actualSessionId={}, type={}",
-                                runId,
-                                event == null ? null : event.runId(),
-                                session.id(),
-                                event == null ? null : event.sessionId(),
-                                event == null ? null : event.type());
+                        log.error(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                                        "Dropped mismatched chat event before persistence")
+                                .runId(runId)
+                                .sessionId(session.id())
+                                .operation("chat-event.identity-guard")
+                                .attribute("actualRunId", event == null ? null : event.runId())
+                                .attribute("actualSessionId", event == null ? null : event.sessionId())
+                                .attribute("eventType", event == null ? null : event.type())
+                                .build());
                         rejectPersistenceAcknowledgement(event, new ChatEventAppendRejectedException(
                                 "下游返回的事件身份与当前 run/session 不一致"));
                         sink.next(ErrorEvent.of(runId, session.id(), "RUN_EVENT_IDENTITY_MISMATCH",
@@ -1960,8 +1993,12 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                 return Flux.empty();
                             })
                             .onErrorResume(CommittedBatchPostProcessingException.class, ex -> {
-                                log.warn("Committed chat event batch post-processing failed. runId={}, reason={}",
-                                        runId, ex.getMessage());
+                                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                                                "Committed chat event batch post-processing failed")
+                                        .runId(runId)
+                                        .sessionId(session.id())
+                                        .operation("chat-event.batch-post-processing")
+                                        .build());
                                 if (terminalCommitService == null) {
                                     return Flux.error(ex);
                                 }
@@ -2036,8 +2073,15 @@ public class FinanceEXChatService implements FinanceChatFacade {
             action.run();
             return failure;
         } catch (RuntimeException ex) {
-            log.warn("Committed chat event post-processing step failed. runId={}, sequence={}, type={}, operation={}, reason={}",
-                    event.runId(), event.sequence(), event.type(), operation, ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                            "Committed chat event post-processing step failed")
+                    .runId(event.runId())
+                    .sessionId(event.sessionId())
+                    .operation("chat-event.post-processing")
+                    .attribute("sequence", event.sequence())
+                    .attribute("eventType", event.type())
+                    .attribute("failedOperation", operation)
+                    .build());
             if (failure == null) {
                 return new CommittedBatchPostProcessingException(event, operation, ex);
             }
@@ -2433,11 +2477,13 @@ public class FinanceEXChatService implements FinanceChatFacade {
         try {
             chatRunService.bindResolvedRoute(runId, route, binding);
         } catch (RuntimeException ex) {
-            log.warn("ChatRun resolved route diagnostic update failed and was ignored. runId={}, routeType={}, agentCode={}, reason={}",
-                    runId,
-                    route == null || route.type() == null ? null : route.type().name(),
-                    route == null ? null : route.selectedAgentCode(),
-                    ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_WRITE_FAILED,
+                            "ChatRun resolved route diagnostic update failed and was ignored")
+                    .runId(runId)
+                    .operation("chat-run.bind-resolved-route")
+                    .attribute("routeType", route == null || route.type() == null ? null : route.type().name())
+                    .attribute("agentCode", route == null ? null : route.selectedAgentCode())
+                    .build(), ex);
         }
     }
 
@@ -2445,8 +2491,11 @@ public class FinanceEXChatService implements FinanceChatFacade {
         try {
             chatRunService.bindRuntimeProvider(runId, "intent-agent");
         } catch (RuntimeException ex) {
-            log.warn("ChatRun intent-agent diagnostic update failed and was ignored. runId={}, reason={}",
-                    runId, ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_WRITE_FAILED,
+                            "ChatRun intent-agent diagnostic update failed and was ignored")
+                    .runId(runId)
+                    .operation("chat-run.bind-intent-provider")
+                    .build(), ex);
         }
     }
 
@@ -2466,12 +2515,16 @@ public class FinanceEXChatService implements FinanceChatFacade {
             Map<String, Object> historyItem = routeMemoryService.routeHistory(command);
             return appendInlineRouteHistory(currentMemory, historyItem);
         } catch (RuntimeException ex) {
-            log.warn("RouteMemory route decision scheduling failed and was ignored. runId={}, routeType={}, agentCode={}, reason={}",
-                    decision.runId(),
-                    decision.route() == null || decision.route().type() == null
-                            ? null : decision.route().type().name(),
-                    decision.route() == null ? null : decision.route().selectedAgentCode(),
-                    ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.TASK_REJECTED,
+                            "RouteMemory route decision scheduling failed and was ignored")
+                    .runId(decision.runId())
+                    .sessionId(decision.sessionId())
+                    .operation("route-memory.schedule")
+                    .attribute("routeType", decision.route() == null || decision.route().type() == null
+                            ? null : decision.route().type().name())
+                    .attribute("agentCode", decision.route() == null
+                            ? null : decision.route().selectedAgentCode())
+                    .build(), ex);
             return currentMemory;
         }
     }
@@ -2796,13 +2849,21 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 try {
                     runtimeBindingService.synchronizeCache(binding);
                 } catch (RuntimeException ex) {
-                    log.warn("RuntimeBinding cache sync failed after database commit. bindingId={}, reason={}",
-                            binding.id(), ex.getMessage());
+                    log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_CACHE_SYNC_FAILED,
+                                    "RuntimeBinding cache sync failed after database commit")
+                            .sessionId(binding.chatSessionId())
+                            .operation("runtime-binding.cache-sync")
+                            .attribute("bindingId", binding.id())
+                            .build(), ex);
                 }
             });
         } catch (RuntimeException ex) {
-            log.warn("RuntimeBinding cache sync was dropped after database commit. bindingId={}, reason={}",
-                    binding.id(), ex.getMessage());
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.TASK_REJECTED,
+                            "RuntimeBinding cache sync task was rejected after database commit")
+                    .sessionId(binding.chatSessionId())
+                    .operation("runtime-binding.cache-sync-schedule")
+                    .attribute("bindingId", binding.id())
+                    .build(), ex);
         }
     }
 
@@ -2877,8 +2938,12 @@ public class FinanceEXChatService implements FinanceChatFacade {
     }
 
     private ChatEvent commitTerminalFailure(RunEventPipelineContext context, RuntimeException ex) {
-        log.warn("Chat run terminal commit failed, fallback to run.failed. runId={}, reason={}",
-                context.runId(), ex.getMessage(), ex);
+        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_TRANSACTION_FAILED,
+                        "Chat run terminal processing failed; falling back to run.failed")
+                .runId(context.runId())
+                .sessionId(context.session().id())
+                .operation("chat-run.terminal-commit")
+                .build(), ex);
         ChatEvent failed = runtimeErrorEvent(context.runId(), context.session().id(), ex);
         return commitTerminalOnly(failed, context);
     }

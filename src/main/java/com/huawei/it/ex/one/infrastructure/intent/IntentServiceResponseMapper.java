@@ -7,6 +7,7 @@ import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResu
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Component;
@@ -153,6 +154,15 @@ public class IntentServiceResponseMapper {
     }
 
     private IntentDecision complexDecision(JsonNode root, JsonNode result, String code, String name, String reason) {
+        String routeAction = text(result.path("routeAction"));
+        Map<String, Object> slots = new LinkedHashMap<>();
+        slots.put("routeAction", routeAction == null ? "" : routeAction);
+        if ("ROUTE_MULTI".equalsIgnoreCase(routeAction)) {
+            List<String> candidateIntentNames = candidateIntentNames(result.path("items"));
+            if (!candidateIntentNames.isEmpty()) {
+                slots.put("candidateIntentNames", candidateIntentNames);
+            }
+        }
         return new IntentDecision(
                 code,
                 name,
@@ -160,10 +170,24 @@ public class IntentServiceResponseMapper {
                 0.0,
                 false,
                 null,
-                Map.of("routeAction", text(result.path("routeAction")) == null ? "" : text(result.path("routeAction"))),
+                slots,
                 List.of(),
                 rawWithReason(root, reason)
         );
+    }
+
+    private List<String> candidateIntentNames(JsonNode items) {
+        if (items == null || !items.isArray() || items.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        for (JsonNode item : items) {
+            String name = text(item.path("intentName"));
+            if (name != null) {
+                names.add(name.trim());
+            }
+        }
+        return List.copyOf(names);
     }
 
     private Map<String, Object> clarificationPayload(JsonNode root, JsonNode result) {

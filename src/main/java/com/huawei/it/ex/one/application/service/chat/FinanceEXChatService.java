@@ -2456,7 +2456,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 intent == null || intent.slots() == null ? null : intent.slots().get("routeAction"),
                 intent == null || intent.raw() == null ? null : intent.raw().get("routeAction"),
                 "NO_MATCH");
-        Map<String, Object> slots = Map.of("routeAction", routeAction);
+        Map<String, Object> slots = intent == null || intent.slots() == null
+                ? new LinkedHashMap<>()
+                : new LinkedHashMap<>(intent.slots());
+        slots.put("routeAction", routeAction);
         return new IntentDecision("relay", "no_match", TaskComplexity.COMPLEX, 0.0,
                 false, null, slots, List.of(),
                 Map.of("targetProvider", "relay", "routeAction", routeAction));

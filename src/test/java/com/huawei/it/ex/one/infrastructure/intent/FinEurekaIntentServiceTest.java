@@ -56,7 +56,8 @@ class FinEurekaIntentServiceTest {
         properties.setAccessName("eureka2_260718");
         RouteMemoryContext routeMemory = new RouteMemoryContext(
                 "domain_reject",
-                List.of(Map.of("type", "route", "query", "支付成功率口径", "intent", "财经知识助手"),
+                List.of(Map.of("type", "route", "query", "支付成功率口径",
+                                "intent", "财经智能问数;财经知识助手"),
                         Map.of("type", "clarify", "query", "看下方案",
                                 "clarifyQuestion", "你想看处理方案还是项目方案？",
                                 "clarificationType", "AMBIGUOUS_ROUTE")),
@@ -69,7 +70,7 @@ class FinEurekaIntentServiceTest {
                 .containsEntry("routeTrigger", "domain_reject")
                 .containsEntry("lastIntentRejectReason",
                         Map.of("lastIntent", "财经深度研究", "domainRejectMessage", "不属于当前领域"));
-        assertThat((List<?>) request.conversationContext().get("history")).hasSize(2);
+        assertThat(request.conversationContext().get("history")).isEqualTo(routeMemory.history());
     }
 
     @Test
@@ -189,6 +190,9 @@ class FinEurekaIntentServiceTest {
 
         assertThat(routeMulti.complexity()).isEqualTo(TaskComplexity.COMPLEX);
         assertThat(routeMulti.candidateDomainAgentId()).isNull();
+        assertThat(routeMulti.slots())
+                .containsEntry("routeAction", "ROUTE_MULTI")
+                .containsEntry("candidateIntentNames", List.of("A", "B"));
         assertThat(routeMulti.raw()).containsEntry("reason", "routeAction=ROUTE_MULTI");
         assertThat(noMatch.complexity()).isEqualTo(TaskComplexity.COMPLEX);
         assertThat(noMatch.candidateDomainAgentId()).isNull();

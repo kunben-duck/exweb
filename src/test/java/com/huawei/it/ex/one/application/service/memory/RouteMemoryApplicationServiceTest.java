@@ -90,7 +90,10 @@ class RouteMemoryApplicationServiceTest {
     @Test
     void recordRouteDecisionCanRecordRelayNoMatchRoute() {
         IntentDecision relayIntent = new IntentDecision("relay", "no_match", TaskComplexity.COMPLEX, 0.0,
-                false, null, Map.of("routeAction", "ROUTE_MULTI"), List.of(), Map.of());
+                false, null, Map.of(
+                        "routeAction", "ROUTE_MULTI",
+                        "candidateIntentNames", List.of("财经智能问数", "财经知识助手")),
+                List.of(), Map.of());
 
         service.recordRouteDecision(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
                 user, "session1", "run-relay", "复杂任务问题",
@@ -106,15 +109,42 @@ class RouteMemoryApplicationServiceTest {
         assertThat(route.domainAgentId()).isNull();
         assertThat(route.payload())
                 .containsEntry("targetProvider", "relay")
-                .containsEntry("routeAction", "ROUTE_MULTI");
+                .containsEntry("routeAction", "ROUTE_MULTI")
+                .containsEntry("candidateIntentNames", List.of("财经智能问数", "财经知识助手"));
         assertThat(service.latestRouteIsRelayFallback(user, "session1")).isFalse();
         repository.markRunCompleted("run-relay");
         assertThat(service.latestRouteIsRelayFallback(user, "session1")).isTrue();
 
+        assertThat(service.routeHistory(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                user, "session1", "run-relay", "复杂任务问题", relayIntent,
+                RouteTarget.agentRuntime("intent-agent", 0.0, "route to relay"))))
+                .containsExactlyInAnyOrderEntriesOf(Map.of(
+                        "type", "route",
+                        "query", "复杂任务问题",
+                        "intent", "财经智能问数;财经知识助手"));
         RouteMemoryContext context = service.loadForIntent(user, "session1",
                 "fallback_followup", Map.of());
         assertThat(context.history()).containsExactly(
-                Map.of("type", "route", "query", "复杂任务问题", "intent", "no_match"));
+                Map.of("type", "route", "query", "复杂任务问题",
+                        "intent", "财经智能问数;财经知识助手"));
+    }
+
+    @Test
+    void routeMultiWithoutCandidateNamesFallsBackToNoMatchHistory() {
+        IntentDecision relayIntent = new IntentDecision("relay", "no_match", TaskComplexity.COMPLEX, 0.0,
+                false, null, Map.of("routeAction", "ROUTE_MULTI"), List.of(), Map.of());
+        RouteMemoryApplicationService.RouteMemoryRouteCommand command =
+                new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                        user, "route-multi-empty", "run-route-multi-empty", "复杂任务问题",
+                        relayIntent, RouteTarget.agentRuntime("intent-agent", 0.0, "route to relay"));
+
+        service.recordRouteDecision(command);
+
+        assertThat(service.routeHistory(command)).containsExactlyInAnyOrderEntriesOf(Map.of(
+                "type", "route", "query", "复杂任务问题", "intent", "no_match"));
+        assertThat(service.loadForIntent(user, "route-multi-empty", "first_turn", Map.of()).history())
+                .containsExactly(Map.of(
+                        "type", "route", "query", "复杂任务问题", "intent", "no_match"));
     }
 
     @Test

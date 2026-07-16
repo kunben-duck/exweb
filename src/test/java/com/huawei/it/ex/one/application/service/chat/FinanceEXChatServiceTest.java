@@ -3228,7 +3228,10 @@ class FinanceEXChatServiceTest {
             public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
                 var intent = new com.huawei.it.ex.one.domain.intent.IntentDecision(
                         "multi_intent", "多意图", com.huawei.it.ex.one.domain.intent.TaskComplexity.COMPLEX,
-                        0.7, false, null, Map.of("routeAction", "ROUTE_MULTI"), List.of(), Map.of());
+                        0.7, false, null, Map.of(
+                                "routeAction", "ROUTE_MULTI",
+                                "candidateIntentNames", List.of("财经智能问数", "财经知识助手")),
+                        List.of(), Map.of());
                 RouteTarget route = RouteTarget.agentRuntime("intent-agent", 0.7, "multiple intents");
                 return Flux.just(RouteSignalFrame.result(RouteSignalResult.ofIntent(route, intent, 5L, 0.0)));
             }
@@ -3255,7 +3258,9 @@ class FinanceEXChatServiceTest {
                     .isEqualTo("需要处理一个复杂任务 [用户上传文档] invoice.pdf");
             assertThat(command.intent().intentCode()).isEqualTo("relay");
             assertThat(command.intent().intentName()).isEqualTo("no_match");
-            assertThat(command.intent().slots()).containsEntry("routeAction", "ROUTE_MULTI");
+            assertThat(command.intent().slots())
+                    .containsEntry("routeAction", "ROUTE_MULTI")
+                    .containsEntry("candidateIntentNames", List.of("财经智能问数", "财经知识助手"));
         });
         assertThat(messages.messages).filteredOn(message -> "user".equals(message.role()))
                 .singleElement()

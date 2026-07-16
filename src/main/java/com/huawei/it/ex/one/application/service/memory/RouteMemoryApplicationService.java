@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -39,6 +40,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class RouteMemoryApplicationService {
     private static final AppLogger log = AppLoggerFactory.getLogger(RouteMemoryApplicationService.class);
+    private static final String CANDIDATE_INTENT_NAMES = "candidateIntentNames";
 
     public static final String TRIGGER_FIRST_TURN = "first_turn";
     public static final String TRIGGER_DOMAIN_REJECT = "domain_reject";
@@ -231,7 +233,7 @@ public class RouteMemoryApplicationService {
         Map<String, Object> history = new LinkedHashMap<>();
         history.put("type", "route");
         history.put("query", blankToDefault(command.query(), ""));
-        history.put("intent", blankToDefault(routeIntentName(command.intent(), command.route()), ""));
+        history.put("intent", routeHistoryIntent(command.intent(), command.route()));
         return Map.copyOf(history);
     }
 
@@ -326,6 +328,10 @@ public class RouteMemoryApplicationService {
         if (route.type() == com.huawei.it.ex.one.domain.routing.RouteType.AGENT_RUNTIME) {
             payload.put("targetProvider", "relay");
             payload.put("routeAction", routeAction(intent));
+            List<String> candidateIntentNames = candidateIntentNames(intent);
+            if (isRouteMultiRoute(intent, route) && !candidateIntentNames.isEmpty()) {
+                payload.put(CANDIDATE_INTENT_NAMES, candidateIntentNames);
+            }
         } else if (route.type() == com.huawei.it.ex.one.domain.routing.RouteType.DOMAIN_AGENT) {
             payload.put("targetProvider", "domain-agent");
         }
@@ -384,7 +390,7 @@ public class RouteMemoryApplicationService {
         Map<String, Object> history = new LinkedHashMap<>();
         history.put("type", "route");
         history.put("query", blankToDefault(item.queryText(), ""));
-        history.put("intent", blankToDefault(item.intentName(), blankToDefault(item.domainAgentId(), "")));
+        history.put("intent", routeHistoryIntent(item));
         return Map.copyOf(history);
     }
 
@@ -415,6 +421,78 @@ public class RouteMemoryApplicationService {
 
     private boolean isNoMatchRouteAction(Object routeAction) {
         return routeAction != null && "NO_MATCH".equalsIgnoreCase(String.valueOf(routeAction).trim());
+    }
+
+    private boolean isRouteMultiRoute(IntentDecision intent, RouteTarget route) {
+        if (route == null || route.type() != com.huawei.it.ex.one.domain.routing.RouteType.AGENT_RUNTIME) {
+            return false;
+        }
+        Object routeAction = intent == null || intent.slots() == null
+                ? null
+                : intent.slots().get("routeAction");
+        return isRouteMultiRouteAction(routeAction);
+    }
+
+    private boolean isRouteMultiRoute(RouteMemoryItem item) {
+        Object routeAction = item == null || item.payload() == null
+                ? null
+                : item.payload().get("routeAction");
+        return isRouteMultiRouteAction(routeAction);
+    }
+
+    private boolean isRouteMultiRouteAction(Object routeAction) {
+        return routeAction != null && "ROUTE_MULTI".equalsIgnoreCase(String.valueOf(routeAction).trim());
+    }
+
+    private String routeHistoryIntent(IntentDecision intent, RouteTarget route) {
+        if (isRouteMultiRoute(intent, route)) {
+            String candidateNames = String.join(";", candidateIntentNames(intent));
+            if (!blank(candidateNames)) {
+                return candidateNames;
+            }
+        }
+        return blankToDefault(routeIntentName(intent, route), "");
+    }
+
+    private String routeHistoryIntent(RouteMemoryItem item) {
+        if (isRouteMultiRoute(item)) {
+            String candidateNames = String.join(";", candidateIntentNames(item));
+            if (!blank(candidateNames)) {
+                return candidateNames;
+            }
+        }
+        return blankToDefault(item == null ? null : item.intentName(),
+                blankToDefault(item == null ? null : item.domainAgentId(), ""));
+    }
+
+    private List<String> candidateIntentNames(IntentDecision intent) {
+        Object value = intent == null || intent.slots() == null
+                ? null
+                : intent.slots().get(CANDIDATE_INTENT_NAMES);
+        return normalizedCandidateIntentNames(value);
+    }
+
+    private List<String> candidateIntentNames(RouteMemoryItem item) {
+        Map<String, Object> payload = item == null || item.payload() == null ? Map.of() : item.payload();
+        Object value = payload.get(CANDIDATE_INTENT_NAMES);
+        if (value == null) {
+            value = map(payload.get("slots")).get(CANDIDATE_INTENT_NAMES);
+        }
+        return normalizedCandidateIntentNames(value);
+    }
+
+    private List<String> normalizedCandidateIntentNames(Object value) {
+        if (!(value instanceof Iterable<?> values)) {
+            return List.of();
+        }
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        for (Object candidate : values) {
+            String name = text(candidate);
+            if (!blank(name)) {
+                names.add(name.trim());
+            }
+        }
+        return List.copyOf(names);
     }
 
     private boolean recordableRoute(RouteTarget route) {

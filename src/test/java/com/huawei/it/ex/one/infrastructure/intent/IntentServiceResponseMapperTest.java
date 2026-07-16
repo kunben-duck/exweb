@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -59,6 +60,34 @@ class IntentServiceResponseMapperTest {
                 .containsEntry("resourceId", "diagnostic-resource");
         assertThat(prefixOnly.raw()).containsEntry("reason",
                 "ROUTE_SINGLE accessName missing after normalization");
+    }
+
+    @Test
+    void routeMultiPreservesOrderedDistinctCandidateIntentNames() throws Exception {
+        IntentRecognitionResult result = mapper("").toRecognitionResult(objectMapper.readTree("""
+                {
+                  "code": 200,
+                  "status": "success",
+                  "data": {
+                    "result": {
+                      "routeAction": "ROUTE_MULTI",
+                      "items": [
+                        {"intentName": "  财经智能问数  "},
+                        {"intentName": ""},
+                        {"intentName": "财经智能问数"},
+                        {"intentName": null},
+                        {"intentName": "财经知识助手"}
+                      ]
+                    }
+                  }
+                }
+                """));
+
+        assertThat(result.status()).isEqualTo(IntentRecognitionResult.Status.FINAL);
+        assertThat(result.decision().intentName()).isEqualTo("多意图命中，进入 Relay Runtime");
+        assertThat(result.decision().slots())
+                .containsEntry("routeAction", "ROUTE_MULTI")
+                .containsEntry("candidateIntentNames", List.of("财经智能问数", "财经知识助手"));
     }
 
     private IntentServiceResponseMapper mapper(String prefix) {

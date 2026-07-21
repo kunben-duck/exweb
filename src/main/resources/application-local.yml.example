@@ -14,6 +14,17 @@ financeex:
     database: 0
     # 本地 Redis 无密码时保留为空；生产也必须显式配置该项或环境变量。
     password:
+  regional-access:
+    # 企业数据字典读取统一收口在 EnterpriseRegionalAccessDictionaryProvider 的 TODO 方法中。
+    enabled: true
+    ip-header-name: X-Real-IP
+    lookup-timeout: 5s
+    cache-ttl: 1d
+    cache-maximum-size: 10000
+    max-concurrent-lookups: 16
+    hr-base-url:
+    hr-app-id:
+    ip-base-url:
   websocket:
     allowed-origin-patterns: http://localhost:*,http://127.0.0.1:*,http://[::1]:*
   storage:

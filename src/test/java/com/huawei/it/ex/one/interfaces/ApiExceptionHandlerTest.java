@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.interfaces;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.huawei.it.ex.one.application.service.security.RegionalAccessDeniedException;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -80,6 +81,27 @@ class ApiExceptionHandlerTest {
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().code()).isEqualTo("ACCESS_DENIED");
         assertThat(response.getBody().path()).isEqualTo("/v1/chat/runs/run1/events/resume");
+    }
+
+    @Test
+    void mapsRegionalRestrictionToHttp451InBothWebStacks() {
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> servletResponse = handler.handleRegionalAccess(
+                new RegionalAccessDeniedException(), servletRequest("/v1/chat/runs"));
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> reactiveResponse = reactiveHandler.handleRegionalAccess(
+                new RegionalAccessDeniedException(), exchange("/v1/chat/runs"));
+
+        assertRegionalRestriction(servletResponse);
+        assertRegionalRestriction(reactiveResponse);
+    }
+
+    private void assertRegionalRestriction(ResponseEntity<ApiExceptionHandler.ApiErrorResponse> response) {
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAVAILABLE_FOR_LEGAL_REASONS);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(451);
+        assertThat(response.getBody().error()).isEqualTo("Unavailable For Legal Reasons");
+        assertThat(response.getBody().code()).isEqualTo("SERVICE_REGION_RESTRICTED");
+        assertThat(response.getBody().message())
+                .isEqualTo("根据服务可用地区政策，您所在地区暂不支持使用本服务。");
     }
 
     private MockHttpServletRequest servletRequest(String path) {

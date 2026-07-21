@@ -8,6 +8,8 @@ import com.huawei.it.ex.one.application.integration.auth.AuthHeaderRequest;
 import com.huawei.it.ex.one.application.integration.auth.SgovTokenResolver;
 import com.huawei.it.ex.one.application.integration.identity.ApplicationInstanceIdProvider;
 import com.huawei.it.ex.one.application.integration.intent.IntentRetryPolicy;
+import com.huawei.it.ex.one.application.integration.security.RegionalAccessDictionaryProvider;
+import com.huawei.it.ex.one.application.integration.security.RegionalAccessDictionarySnapshot;
 import com.huawei.it.ex.one.application.integration.trace.TraceContextProvider;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
@@ -15,8 +17,10 @@ import com.huawei.it.ex.one.infrastructure.auth.DefaultSgovTokenResolver;
 import com.huawei.it.ex.one.infrastructure.id.GeneratedApplicationInstanceIdProvider;
 import com.huawei.it.ex.one.infrastructure.intent.DefaultIntentRetryPolicy;
 import com.huawei.it.ex.one.infrastructure.runtime.UnsupportedAgentRuntimeRecoveryPort;
+import com.huawei.it.ex.one.infrastructure.security.EnterpriseRegionalAccessDictionaryProvider;
 import com.huawei.it.ex.one.infrastructure.trace.JalorTraceContextProvider;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import reactor.core.publisher.Flux;
@@ -44,6 +48,11 @@ class DefaultPortImplementationConfigurationTest {
             assertThat(context.getBean(TraceContextProvider.class))
                     .isInstanceOf(JalorTraceContextProvider.class);
             assertThat(context.getBean(TraceContextProvider.class).resolve()).isEqualTo(TraceContext.empty());
+            assertThat(context).hasSingleBean(RegionalAccessDictionaryProvider.class);
+            assertThat(context.getBean(RegionalAccessDictionaryProvider.class))
+                    .isInstanceOf(EnterpriseRegionalAccessDictionaryProvider.class);
+            assertThat(context.getBean(RegionalAccessDictionaryProvider.class).currentSnapshot())
+                    .isEqualTo(RegionalAccessDictionarySnapshot.empty());
         });
     }
 
@@ -127,6 +136,19 @@ class DefaultPortImplementationConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasSingleBean(TraceContextProvider.class);
                     assertThat(context.getBean(TraceContextProvider.class)).isSameAs(custom);
+                });
+    }
+
+    @Test
+    void customRegionalDictionaryProviderOverridesDefaultPortImplementation() {
+        RegionalAccessDictionaryProvider custom = () -> new RegionalAccessDictionarySnapshot(
+                Set.of("employee1"), Set.of("France"));
+
+        contextRunner
+                .withBean(RegionalAccessDictionaryProvider.class, () -> custom)
+                .run(context -> {
+                    assertThat(context).hasSingleBean(RegionalAccessDictionaryProvider.class);
+                    assertThat(context.getBean(RegionalAccessDictionaryProvider.class)).isSameAs(custom);
                 });
     }
 }

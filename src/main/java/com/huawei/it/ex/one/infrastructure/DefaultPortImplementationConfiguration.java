@@ -7,6 +7,7 @@ import com.huawei.it.ex.one.application.integration.identity.ApplicationInstance
 import com.huawei.it.ex.one.application.integration.intent.IntentAgentRuntime;
 import com.huawei.it.ex.one.application.integration.intent.IntentRetryPolicy;
 import com.huawei.it.ex.one.application.integration.share.ChatShareAccessPolicy;
+import com.huawei.it.ex.one.application.integration.security.RegionalAccessDictionaryProvider;
 import com.huawei.it.ex.one.application.integration.trace.TraceContextProvider;
 import com.huawei.it.ex.one.infrastructure.auth.DefaultSgovTokenResolver;
 import com.huawei.it.ex.one.infrastructure.id.GeneratedApplicationInstanceIdProvider;
@@ -15,6 +16,7 @@ import com.huawei.it.ex.one.infrastructure.runtime.UnsupportedAgentRuntimeIntera
 import com.huawei.it.ex.one.infrastructure.runtime.UnsupportedAgentRuntimeRecoveryPort;
 import com.huawei.it.ex.one.infrastructure.runtime.intentagent.NoopIntentAgentRuntime;
 import com.huawei.it.ex.one.infrastructure.share.DefaultChatShareAccessPolicy;
+import com.huawei.it.ex.one.infrastructure.security.EnterpriseRegionalAccessDictionaryProvider;
 import com.huawei.it.ex.one.infrastructure.trace.JalorTraceContextProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -106,6 +108,20 @@ public class DefaultPortImplementationConfiguration {
     @ConditionalOnMissingBean(SgovTokenResolver.class)
     public SgovTokenResolver sgovTokenResolver() {
         return new DefaultSgovTokenResolver();
+    }
+
+    /**
+     * 企业地域准入数据字典 Provider。
+     *
+     * <p>企业数据字典框架的读取逻辑统一由 {@link EnterpriseRegionalAccessDictionaryProvider}
+     * 承载，应用层不直接依赖企业 SDK。</p>
+     *
+     * @return 企业地域准入数据字典 Provider。
+     */
+    @Bean
+    @ConditionalOnMissingBean(RegionalAccessDictionaryProvider.class)
+    public RegionalAccessDictionaryProvider regionalAccessDictionaryProvider() {
+        return new EnterpriseRegionalAccessDictionaryProvider();
     }
 
     /**

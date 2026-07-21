@@ -2,8 +2,8 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.huawei.it.ex.one.infrastructure.persistence.ChatShareMapper">
-    <resultMap id="chatShareResultMap" type="com.huawei.it.ex.one.infrastructure.persistence.ChatShareRow">
+<mapper namespace="com.huawei.it.ex.one.share.infrastructure.persistence.ChatShareMapper">
+    <resultMap id="chatShareResultMap" type="com.huawei.it.ex.one.share.infrastructure.persistence.ChatShareRow">
         <result column="tenant_id" property="tenantId"/>
         <result column="owner_user_id" property="ownerUserId"/>
         <result column="source_session_id" property="sourceSessionId"/>
@@ -29,7 +29,7 @@
             sourceAssistantMessageId/sourceRunId 记录来源，title/scope/visibility/status/expiresAt/revokedAt/
             snapshotJson/createdAt/updatedAt 为分享展示、生命周期和审计信息。
     -->
-    <insert id="insert" parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatShareRow">
+    <insert id="insert" parameterType="com.huawei.it.ex.one.share.infrastructure.persistence.ChatShareRow">
         INSERT INTO fin_ex_chat_share_t(
             id, tenant_id, owner_user_id, source_session_id, source_user_message_id,
             source_assistant_message_id, source_run_id, title, scope, visibility,
@@ -47,7 +47,7 @@
       入参: ChatShareRow，id/tenantId/ownerUserId 定位分享；title/visibility/status/expiresAt/revokedAt/
             snapshotJson/updatedAt 为待更新字段。
     -->
-    <update id="update" parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatShareRow">
+    <update id="update" parameterType="com.huawei.it.ex.one.share.infrastructure.persistence.ChatShareRow">
         UPDATE fin_ex_chat_share_t
         SET title = #{title},
             visibility = #{visibility},

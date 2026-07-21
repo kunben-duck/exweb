@@ -598,7 +598,7 @@ run 级 Event Resume 正常优先接入 Redis live topic；如果 live source �
 文档上传同样按启动模式做接口层适配：Servlet/MVC 注册 `MvcDocumentUploadController`
 并接收 `MultipartFile`，纯 WebFlux 注册 `ReactiveDocumentUploadController` 并接收
 `FilePart`。两种 Controller 都委托 `DocumentUploadSupport`，由它先把上传流写入临时文件，
-再通过 `DocumentFacade -> DocumentStorage` 按 `financeex.storage.provider` 选择 `local`、`huawei-s3`
+再通过 `DocumentService -> DocumentStorage` 按 `financeex.storage.provider` 选择 `local`、`huawei-s3`
 或 `api-store`。前端看到的路径、字段和响应始终是同一套
 `POST /v1/documents` 契约。api-store 可通过 `financeex.storage.api-store.forward-cookie=true`
 允许上传入口 Cookie 作为下游 upload HTTP header 透传；普通对象存储实现不使用该 Cookie，

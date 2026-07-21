@@ -2,8 +2,8 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.huawei.it.ex.one.infrastructure.session.ChatSessionMapper">
-    <resultMap id="chatSessionResultMap" type="com.huawei.it.ex.one.infrastructure.session.ChatSessionRow">
+<mapper namespace="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatSessionMapper">
+    <resultMap id="chatSessionResultMap" type="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatSessionRow">
         <result column="tenant_id" property="tenantId"/>
         <result column="user_id" property="userId"/>
         <result column="app_id" property="appId"/>
@@ -32,7 +32,7 @@
             currentLeafMessageId/rootSessionId/branchSource* 维护消息树和分支关系，lastNodeOrder 为节点序号水位，
             metadataJson 为扩展元数据，createdAt/updatedAt 为审计时间。
     -->
-    <insert id="insert" parameterType="com.huawei.it.ex.one.infrastructure.session.ChatSessionRow">
+    <insert id="insert" parameterType="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatSessionRow">
         INSERT INTO fin_ex_chat_session_t(
             id, tenant_id, user_id, title, status, channel, app_id, app_name, current_leaf_message_id,
             root_session_id, branch_source_session_id, branch_source_message_id,
@@ -50,7 +50,7 @@
       入参: ChatSessionRow，id/tenantId/userId 定位并校验归属；title/status/channel/currentLeafMessageId/rootSessionId/
             branchSource*/lastNodeOrder/metadataJson 为待更新业务字段；updatedAt 为更新时间。
     -->
-    <update id="update" parameterType="com.huawei.it.ex.one.infrastructure.session.ChatSessionRow">
+    <update id="update" parameterType="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatSessionRow">
         UPDATE fin_ex_chat_session_t
         SET title = #{title},
             status = #{status},

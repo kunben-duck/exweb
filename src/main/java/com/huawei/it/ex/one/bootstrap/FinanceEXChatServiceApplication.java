@@ -15,11 +15,11 @@ import org.springframework.context.annotation.ComponentScan;
 @SpringBootApplication
 @ComponentScan(basePackages = "com.huawei.it.ex.one")
 @MapperScan(annotationClass = Mapper.class, basePackages = {
-        "com.huawei.it.ex.one.infrastructure.memory",
-        "com.huawei.it.ex.one.infrastructure.persistence",
-        "com.huawei.it.ex.one.infrastructure.runtime",
-        "com.huawei.it.ex.one.infrastructure.session",
-        "com.huawei.it.ex.one.infrastructure.storage"
+        "com.huawei.it.ex.one.chat.infrastructure.persistence",
+        "com.huawei.it.ex.one.document.infrastructure.storage.persistence",
+        "com.huawei.it.ex.one.intent.infrastructure.persistence",
+        "com.huawei.it.ex.one.runtime.infrastructure",
+        "com.huawei.it.ex.one.share.infrastructure.persistence"
 })
 public class FinanceEXChatServiceApplication {
     public static void main(String[] args) {

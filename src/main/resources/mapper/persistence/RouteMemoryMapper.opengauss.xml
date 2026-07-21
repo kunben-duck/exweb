@@ -2,8 +2,8 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.huawei.it.ex.one.infrastructure.persistence.RouteMemoryMapper">
-    <resultMap id="routeMemoryResultMap" type="com.huawei.it.ex.one.infrastructure.persistence.RouteMemoryRow">
+<mapper namespace="com.huawei.it.ex.one.intent.infrastructure.persistence.RouteMemoryMapper">
+    <resultMap id="routeMemoryResultMap" type="com.huawei.it.ex.one.intent.infrastructure.persistence.RouteMemoryRow">
         <id column="id" property="id"/>
         <result column="tenant_id" property="tenantId"/>
         <result column="user_id" property="userId"/>
@@ -36,7 +36,7 @@
       入参: RouteMemoryRow，tenantId/userId/sessionId 为归属边界，itemType/status 区分 ROUTE/CLARIFY
             及在线状态，payloadJson 保存路由或澄清摘要。
     -->
-    <insert id="insert" parameterType="com.huawei.it.ex.one.infrastructure.persistence.RouteMemoryRow">
+    <insert id="insert" parameterType="com.huawei.it.ex.one.intent.infrastructure.persistence.RouteMemoryRow">
         INSERT INTO fin_ex_route_memory_t(
             id, tenant_id, user_id, session_id, item_type, status, query_text, intent_id, intent_name,
             domain_agent_id, route_source, clarify_question, clarification_type, source_run_id,

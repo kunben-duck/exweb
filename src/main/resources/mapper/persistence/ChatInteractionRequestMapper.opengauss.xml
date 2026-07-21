@@ -2,8 +2,8 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.huawei.it.ex.one.infrastructure.persistence.ChatInteractionRequestMapper">
-    <resultMap id="chatInteractionRequestResultMap" type="com.huawei.it.ex.one.infrastructure.persistence.ChatInteractionRequestRow">
+<mapper namespace="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatInteractionRequestMapper">
+    <resultMap id="chatInteractionRequestResultMap" type="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatInteractionRequestRow">
         <result column="tenant_id" property="tenantId"/>
         <result column="user_id" property="userId"/>
         <result column="session_id" property="sessionId"/>
@@ -40,7 +40,7 @@
             userMessageId/assistantMessageId 关联原问答，runtimeProvider/runtimeBindingId/runtimeSessionId/approvalId 用于续接，
             requestPayloadJson 保存 Relay 原始请求，expiresAt 为可提交截止时间。
     -->
-    <insert id="insert" parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatInteractionRequestRow">
+    <insert id="insert" parameterType="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatInteractionRequestRow">
         INSERT INTO fin_ex_chat_interaction_request_t(
             id, tenant_id, user_id, session_id, source_run_id, continue_run_id, user_message_id,
             assistant_message_id, runtime_provider, runtime_binding_id, runtime_session_id, approval_id, interaction_type,
@@ -87,7 +87,7 @@
       入参: ChatInteractionClaimRow，tenantId/userId/interactionId 为归属和目标，continueRunId 为续接 run，
             responsePayloadJson 为用户回答，now 为状态更新时间。
     -->
-    <update id="claimInteractionResponse" parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatInteractionClaimRow">
+    <update id="claimInteractionResponse" parameterType="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatInteractionClaimRow">
         UPDATE fin_ex_chat_interaction_request_t
         SET status = 'RESPONDING',
             continue_run_id = #{continueRunId},

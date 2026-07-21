@@ -1,0 +1,16 @@
+package com.huawei.it.ex.one.share.application.repository;
+
+import com.huawei.it.ex.one.share.domain.ChatShareDelivery;
+
+/**
+ * 分享发送记录仓储端口。
+ */
+public interface ChatShareDeliveryRepository {
+    /**
+     * 保存分享发送审计记录。
+     *
+     * @param delivery 发送记录。
+     * @return 已保存发送记录。
+     */
+    ChatShareDelivery save(ChatShareDelivery delivery);
+}

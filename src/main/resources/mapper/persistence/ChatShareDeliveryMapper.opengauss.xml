@@ -2,7 +2,7 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.huawei.it.ex.one.infrastructure.persistence.ChatShareDeliveryMapper">
+<mapper namespace="com.huawei.it.ex.one.share.infrastructure.persistence.ChatShareDeliveryMapper">
     <!--
       插入分享发送记录，用于审计、排障和后续重试依据。
       入参: ChatShareDeliveryRow，id 为发送记录主键，tenantId/ownerUserId/shareId 为分享归属，
@@ -10,7 +10,7 @@
             providerResponseJson/errorCode/errorMessage/sentAt 表示 provider 发送结果，
             createdAt/updatedAt 为审计时间。
     -->
-    <insert id="insert" parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatShareDeliveryRow">
+    <insert id="insert" parameterType="com.huawei.it.ex.one.share.infrastructure.persistence.ChatShareDeliveryRow">
         INSERT INTO fin_ex_chat_share_delivery_t(
             id, tenant_id, owner_user_id, share_id, provider, status,
             target_accounts_json, group_ids_json, title, content, language, link_url,

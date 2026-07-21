@@ -10,6 +10,27 @@
 rg -n "methodName|className" src/main/java/com/huawei/it/ex/one
 ```
 
+### 1.1 当前 DDD 上下文定位
+
+生产代码按业务上下文组织，排查时先进入对应目录：
+
+```text
+chat/       会话、消息、run、Interaction、事件持久化与实时发布
+intent/     IntentAgent 调用、意图决策、识别记录及兼容案例库
+runtime/    RuntimeBinding、execution、Relay 和 DomainAgent
+document/   文档上传、授权、元数据与存储适配
+share/      分享快照与外部投递
+common/     无业务归属的日志、错误码和 TraceContext
+bootstrap/  Spring Boot 启动入口
+```
+
+主链路只从 `chat.interfaces` 进入 `chat.application`。跨上下文调用通过 intent/runtime/document/share
+的 application service、client 或中立 model 完成；application 不直接依赖其他上下文的 infrastructure。
+`FinanceEXChatService` 是兼容门面，真正的流程入口是 `FinanceChatOrchestrator`，不要再向兼容门面堆叠业务分支。
+
+根目录下现存的 `application.config/facade`、身份鉴权、Memory 和 recovery 类型属于共享或兼容边界；
+新业务代码应优先落入上述明确上下文，不再扩展旧的 layer-first 包。
+
 ## 2. 先区分三个容易混淆的对象
 
 ### 2.1 ChatMessage：完整历史消息
@@ -25,9 +46,9 @@ rg -n "methodName|className" src/main/java/com/huawei/it/ex/one
 
 关键代码：
 
-- `application/service/chat/SessionApplicationService.java`
+- `chat/application/service/SessionApplicationService.java`
 - `SessionApplicationService#prepareRunMessage(...)`
-- `SessionApplicationService#createUserMessage(...)`
+- `SessionMessageMutationService#createUserMessage(...)`
 - `SessionApplicationService#saveAssistantMessage(...)`
 
 ### 2.2 ChatEvent：流式事件事实
@@ -50,10 +71,10 @@ rg -n "methodName|className" src/main/java/com/huawei/it/ex/one
 
 关键代码：
 
-- `application/service/chat/ChatStreamApplicationService.java`
+- `chat/application/service/ChatStreamApplicationService.java`
 - `ChatStreamApplicationService#appendAndPublish(...)`
 - `ChatStreamApplicationService#appendWithExecutionGuard(...)`
-- `infrastructure/persistence/MyBatisChatEventStore.java`
+- `chat/infrastructure/persistence/MyBatisChatEventStore.java`
 - `MyBatisChatEventStore#appendWithExecutionGuard(...)`
 
 ### 2.3 ChatRun：一次后台回答
@@ -71,10 +92,10 @@ rg -n "methodName|className" src/main/java/com/huawei/it/ex/one
 
 关键代码：
 
-- `application/service/chat/ChatRunApplicationService.java`
+- `chat/application/service/ChatRunApplicationService.java`
 - `ChatRunApplicationService#createRunning(...)`
 - `ChatRunApplicationService#observeEvent(...)`
-- `application/service/chat/ChatRunLeaseApplicationService.java`
+- `chat/application/service/ChatRunLeaseApplicationService.java`
 - `ChatRunLeaseApplicationService#startRun(...)`
 - `MyBatisChatEventStore#appendWithExecutionGuard(...)`
 
@@ -85,7 +106,7 @@ rg -n "methodName|className" src/main/java/com/huawei/it/ex/one
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/interfaces/chat/ChatController.java
+src/main/java/com/huawei/it/ex/one/chat/interfaces/http/ChatController.java
 ```
 
 方法：
@@ -100,7 +121,7 @@ ChatController#startRun(...)
 - 解析企业身份上下文为 `UserContext`。
 - 读取 HTTP `Cookie` 请求头，生成 `RuntimeForwardHeaders`。
 - 把前端 DTO 转成 `ChatCommand`。
-- 调用 `FinanceEXChatService#startRun(...)`。
+- 调用 `ChatApplicationService#startRun(...)`；当前实现是 `FinanceEXChatService`。
 
 重点排查：
 
@@ -112,16 +133,20 @@ ChatController#startRun(...)
 
 ### 3.2 创建后台 run
 
-文件：
+入口委托与后台启动分别位于：
 
 ```text
-src/main/java/com/huawei/it/ex/one/application/service/chat/FinanceEXChatService.java
+src/main/java/com/huawei/it/ex/one/chat/application/coordinator/ChatEventPipeline.java
+src/main/java/com/huawei/it/ex/one/chat/application/coordinator/FinanceChatOrchestrator.java
+src/main/java/com/huawei/it/ex/one/chat/application/coordinator/ChatRunStartCoordinator.java
 ```
 
 方法：
 
 ```text
 FinanceEXChatService#startRun(...)
+FinanceChatOrchestrator#startRun(...)
+ChatRunStartCoordinator#startStandard(...)
 ```
 
 核心代码行为：
@@ -143,42 +168,49 @@ executeRun(user, command, headerSnapshot)
 
 重点排查：
 
-- `/runs` 长时间不返回：通常说明第一个事件没有成功进入 `persistAndPublishRunEvents(...)`，要继续查 `executeRun(...)` 和事件落库。
+- `/runs` 长时间不返回：通常说明第一个事件没有成功进入
+  `ChatEventPersistenceCoordinator#persistAndPublish(...)`，要继续查 `ChatRunExecutionCoordinator#execute(...)` 和事件落库。
 - stop 无法立即中断本机执行：检查 `LocalChatRunExecutionRegistry#register(...)` 是否拿到了 runId 和 `Disposable`。
 - run 返回后浏览器关闭但后台仍在跑：这是设计目标，后台 run 生命周期不依赖浏览器连接。
 
 ## 4. executeRun 主编排路径
 
-文件：
+`FinanceEXChatService` 只保留兼容门面；主编排按职责拆分为：
 
 ```text
-src/main/java/com/huawei/it/ex/one/application/service/chat/FinanceEXChatService.java
+src/main/java/com/huawei/it/ex/one/chat/application/service/FinanceEXChatService.java
+src/main/java/com/huawei/it/ex/one/chat/application/coordinator/FinanceChatOrchestrator.java
+src/main/java/com/huawei/it/ex/one/chat/application/coordinator/ChatRunExecutionCoordinator.java
+src/main/java/com/huawei/it/ex/one/chat/application/coordinator/StandardRunInputPreparer.java
+src/main/java/com/huawei/it/ex/one/chat/application/coordinator/StandardRunAdmissionCoordinator.java
+src/main/java/com/huawei/it/ex/one/chat/application/coordinator/StandardRunRuntimeCoordinator.java
+src/main/java/com/huawei/it/ex/one/chat/application/coordinator/ChatEventPersistenceCoordinator.java
 ```
 
 方法：
 
 ```text
-FinanceEXChatService#executeRun(...)
+FinanceChatOrchestrator#executeRun(...)
+ChatRunExecutionCoordinator#execute(...)
 ```
 
 执行顺序：
 
-1. 用入口传入的 `UserContext` 重建 `ChatCommand`，覆盖前端 tenant/user。
-2. `SessionApplicationService#loadOrCreate(...)` 加载或创建会话；无 `sessionId` 时保存可选 `appId/appName`，已有会话中显式 tag 不一致会在写 user message/run 前失败。
-3. `ChatRunApplicationService#rejectIfActiveRunExists(...)` 快速拒绝同一 session 的并发 run。
-4. `DocumentFacade#resolveAttachmentsForUser(...)` 解析附件引用。
-5. `IdGenerator#newId("run", ...)` 生成 runId。
-6. `MemoryApplicationService#loadForRun(...)` 按配置加载可选记忆。
-7. `SessionApplicationService#prepareRunMessage(...)` 写入或定位本轮 user message。
-8. 先检查 `targetType=DOMAIN_AGENT,targetId=...`；存在时进入 `DOMAIN_AGENT` 路由，不读取 RuntimeBinding。可选 `selectedIntent` 只保存为 binding 展示摘要，不参与目标选择或 DomainAgent 请求。
-9. 未显式指定 DomainAgent 时只查询当前 active RuntimeBinding；没有绑定时先保持 route 为空。
-10. `ChatRunApplicationService#createRunning(...)` 创建业务 run。
-11. `ChatRunLeaseApplicationService#startRun(...)` 创建 execution lease。
-12. 先持久化并推送 `run.started`，让前端立即拿到首个事实事件。
-13. route 为空时进入 run pipeline 内的 `RouteSignalApplicationService#routeInitialWithProgress(...)`：用例库调用前输出 `runtime.progress(sourceType=route-progress,stage=use_case_matching)`；intent-agent 调用前输出 `runtime.progress(sourceType=intent-start,stage=intent_calling)`，裁决后输出 `sourceType=intent-result`，再继续执行最终路由。
-14. 如果本轮实际调用了意图服务，`IntentRecognitionRecordService#recordAsync(...)` 用当前 `UserContext`、query、`IntentDecision`、最终 `RouteTarget` 和 runId 构造不可变快照，并提交到专用 Servlet/MVC 异步线程池；写入失败不影响主链路。
-15. 根据最终 `RouteType` 调用 SystemResponse 或 `AgentRuntimeExecutor`；DomainAgent 作为 `provider=domain-agent` 的 AgentRuntime 执行。
-16. 外层补齐 `run.completed`，所有事件统一进入 `persistAndPublishRunEvents(...)`。
+1. `FinanceChatOrchestrator` 校验普通 run 与 Interaction 字段边界，并把入口快照交给 `ChatRunExecutionCoordinator`。
+2. `StandardRunInputPreparer` 用入口传入的 `UserContext` 重建 `ChatCommand`，覆盖前端 tenant/user。
+3. `SessionApplicationService#loadOrCreate(...)` 加载或创建会话；无 `sessionId` 时保存可选 `appId/appName`，已有会话中显式 tag 不一致会在写 user message/run 前失败。
+4. `ChatRunApplicationService#rejectIfActiveRunExists(...)` 快速拒绝同一 session 的并发 run。
+5. `ChatDocumentService#resolveChatAttachmentsForUser(...)` 通过 Document 上下文解析可信附件与文档事实。
+6. `IdGenerator#newId("run", ...)` 生成 runId。
+7. `MemoryApplicationService#loadForRun(...)` 按配置加载可选记忆。
+8. `StandardRunAdmissionCoordinator` 调用原有 admission 服务，写入或定位 user message 并创建业务 run。
+9. `ChatRunLeaseApplicationService#startRun(...)` 创建 execution lease。
+10. `ChatEventPersistenceCoordinator` 先持久化并推送 `run.started`，让前端立即拿到首个事实事件。
+11. `StandardRunRuntimeCoordinator` 先检查 `targetType=DOMAIN_AGENT,targetId=...` 和 active RuntimeBinding，再把未决路由交给 `IntentFlowCoordinator`。
+12. route 为空时，`RouteSignalApplicationService#routeInitialWithProgress(...)` 按原顺序输出 route/intent progress 和 intent result，再继续最终路由。
+13. 如果本轮实际调用了意图服务，`IntentRecognitionRecordService#recordAsync(...)` 仍按原线程池与 best-effort 语义保存识别记录。
+14. 根据最终 `RouteType` 调用 SystemResponse 或 `AgentRuntimeExecutor`；DomainAgent 作为 `provider=domain-agent` 的 AgentRuntime 执行。
+15. `ChatRunCompletionCoordinator` 补齐原有终态，所有事件由 `ChatEventPipeline` 和 `ChatEventPersistenceCoordinator` 按原顺序落库、观察并发布。
 
 会话 `appId/appName` 是独立列而不是 metadata：前者用于当前 owner 会话列表分组和可选过滤，后者是创建时名称快照。tag 创建后不可变，分支继承；它不进入 run metadata、Memory、RouteMemory、IntentAgent、Relay 或 DomainAgent。游标分页把过滤条件编码进 cursor，调用方不能用一个 app 分组的 cursor 查询另一个分组。
 
@@ -192,9 +224,9 @@ RouteType.AGENT_RUNTIME    -> AgentRuntimeExecutor#execute(...)
 
 重点排查：
 
-- 新问题没有进入 Relay：查看 `RouteSignalApplicationService#routeInitial(...)` 返回的 `RouteTarget`。
+- 新问题没有进入 Relay：查看 `RouteSignalApplicationService#routeInitialWithProgress(...)` 的最终路由帧。
 - 意图识别已调用但统计表没有记录：确认 `financeex.intent-record.enabled=true`，再看 `IntentRecognitionRecordService#recordAsync(...)` 是否被线程池拒绝或 repository 写库失败；该链路是 best-effort，不会向前端报错。
-- DomainAgent 指定调用没有进入 DomainAgent 路由，或 chat Cookie 未透传：查看 `CreateChatRunRequest.targetType/targetId`、`FinanceEXChatService#explicitDomainAgentId(...)`、`AgentRuntimeRegistry`、`DomainAgentRuntime#query(...)` 和 `ConfiguredDomainAgentClient#query(...)`。
+- DomainAgent 指定调用没有进入 DomainAgent 路由，或 chat Cookie 未透传：查看 `CreateChatRunRequest.targetType/targetId`、`StandardRunInputPreparer`、`RouteResolutionCoordinator`、`AgentRuntimeRegistry`、`DomainAgentRuntime#query(...)` 和 `ConfiguredDomainAgentClient#query(...)`。
 - 多轮没有续接 Runtime：查看 `RuntimeBindingApplicationService#findActive(...)` 是否命中当前 `leafMessageId`。
 - 同一会话连续发两条报错：查看 `ChatRunApplicationService#rejectIfActiveRunExists(...)` 和 `ChatRunApplicationService#createRunning(...)`。
 - user message 已写入但 run 没创建：异常可能发生在 `prepareRunMessage(...)` 之后、`createRunning(...)` 之前，需要看日志和事务边界。
@@ -204,7 +236,7 @@ RouteType.AGENT_RUNTIME    -> AgentRuntimeExecutor#execute(...)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/application/service/chat/SessionApplicationService.java
+src/main/java/com/huawei/it/ex/one/chat/application/service/SessionApplicationService.java
 ```
 
 入口方法：
@@ -222,7 +254,7 @@ SessionApplicationService#prepareRunMessage(...)
 真正写 user message 的方法：
 
 ```text
-SessionApplicationService#createUserMessage(...)
+SessionMessageMutationService#createUserMessage(...)
 ```
 
 写入动作：
@@ -246,7 +278,7 @@ SessionApplicationService#createUserMessage(...)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/application/service/runtime/AgentRuntimeExecutor.java
+src/main/java/com/huawei/it/ex/one/runtime/application/service/AgentRuntimeExecutor.java
 ```
 
 方法：
@@ -273,7 +305,7 @@ AgentRuntimeExecutor#execute(...)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayAgentRuntime.java
+src/main/java/com/huawei/it/ex/one/runtime/infrastructure/relay/RelayAgentRuntime.java
 ```
 
 方法：
@@ -299,7 +331,7 @@ RelayAgentRuntime#cancel(...)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java
+src/main/java/com/huawei/it/ex/one/runtime/infrastructure/relay/RelayWebSocketRuntimeAdapter.java
 ```
 
 方法：
@@ -335,13 +367,13 @@ RelayWebSocketRuntimeAdapter#cancel(...)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/application/service/chat/FinanceEXChatService.java
+src/main/java/com/huawei/it/ex/one/chat/application/service/FinanceEXChatService.java
 ```
 
 方法：
 
 ```text
-FinanceEXChatService#persistAndPublishRunEvents(...)
+ChatEventPipeline#persistAndPublish(...)
 ```
 
 处理步骤：
@@ -406,7 +438,7 @@ FinanceEXChatService#persistAndPublishRunEvents(...)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/application/service/chat/ChatStreamApplicationService.java
+src/main/java/com/huawei/it/ex/one/chat/application/service/ChatStreamApplicationService.java
 ```
 
 方法：
@@ -434,7 +466,7 @@ liveEventBus.publish(chat-run-{runId}, persisted)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/infrastructure/persistence/MyBatisChatEventStore.java
+src/main/java/com/huawei/it/ex/one/chat/infrastructure/persistence/MyBatisChatEventStore.java
 ```
 
 方法：
@@ -449,15 +481,15 @@ MyBatisChatEventStore#appendBatchWithExecutionGuard(...)
 
 1. 生成 eventId。
 2. 调 `ChatEventMapper#nextSeq()` 获取数据库 sequence。
-3. 普通恢复/取消/系统补偿事件调用 `ChatEventMapper#insertFromSession(...)`。
-4. 后台 run 流式事件调用 `ChatEventMapper#insertFromSessionWithExecutionGuard(...)`，在一条 SQL 内校验 run/session/tenant/user、run 状态、execution owner 和 fencing token。
-5. Relay/DomainAgent 普通事件批次调用 `nextSeqs(...)` 和 `insertBatchFromSessionWithExecutionGuard(...)`；批次内任一 guard 失败会整体回滚。
+3. 普通恢复/取消/系统补偿事件先调用 `ChatEventMapper#findEventAppendContext(...)` 取得可信归属，再调用 `insert(...)` 写入。
+4. 后台 run 流式事件先调用 `ChatEventMapper#lockRunForEventAppend(...)`，在短事务内校验并共享锁定 run/execution，再调用 `insert(...)` 写入。
+5. Relay/DomainAgent 普通事件批次调用一次 `lockRunForEventAppend(...)`、`nextSeqs(...)` 和 `insertBatch(...)`；批次内任一步失败会整体回滚。
 6. insert 成功后直接用已知 seq/createdAt/payload 构造 `StoredChatEvent`，不再回读 `findById(...)`；批次提交后仍按输入顺序逐条组装 assistant 和发布。
 
 重点排查：
 
 - `seq` 乱序或重复：查 `fin_ex_chat_event_seq` 和 `ChatEventMapper#nextSeq()`。
-- 插入返回 0：通常是 run/session/tenant/user 归属不一致，查 `insertFromSession(...)` SQL。
+- 栅栏查询无结果：通常是 run/session/tenant/user 归属不一致或 execution owner/fencing 已失效，查 `findEventAppendContext(...)` 与 `lockRunForEventAppend(...)` SQL。
 - 事件恢复缺事件：先直接查 `fin_ex_chat_event_t` 是否存在对应 `run_id/session_id/seq`。
 
 ## 9. 事件如何发布
@@ -467,7 +499,7 @@ MyBatisChatEventStore#appendBatchWithExecutionGuard(...)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/application/service/LocalChatEventStreamRegistry.java
+src/main/java/com/huawei/it/ex/one/chat/application/service/LocalChatEventStreamRegistry.java
 ```
 
 方法：
@@ -497,7 +529,7 @@ LocalChatEventStreamRegistry#subscribeRunTopic(...)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/infrastructure/persistence/RedisChatLiveEventBus.java
+src/main/java/com/huawei/it/ex/one/chat/infrastructure/live/RedisChatLiveEventBus.java
 ```
 
 方法：
@@ -539,9 +571,9 @@ RedisChatLiveEventBus#onMessage(...)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatServletWebSocketAuthInterceptor.java
-src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatServletWebSocketHandler.java
-src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatServletWebSocketConfig.java
+src/main/java/com/huawei/it/ex/one/chat/interfaces/websocket/ChatServletWebSocketAuthInterceptor.java
+src/main/java/com/huawei/it/ex/one/chat/interfaces/websocket/ChatServletWebSocketHandler.java
+src/main/java/com/huawei/it/ex/one/chat/interfaces/websocket/ChatServletWebSocketConfig.java
 ```
 
 关键方法：
@@ -571,7 +603,7 @@ ChatServletWebSocketHandler#emit(...)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/ChatWebSocketProtocolService.java
+src/main/java/com/huawei/it/ex/one/chat/interfaces/websocket/ChatWebSocketProtocolService.java
 ```
 
 关键方法：
@@ -615,7 +647,7 @@ ChatWebSocketProtocolService#close(...)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java
+src/main/java/com/huawei/it/ex/one/chat/interfaces/websocket/LocalWebSocketConnectionRegistry.java
 ```
 
 关键方法：
@@ -645,15 +677,15 @@ LocalWebSocketConnectionRegistry#unregister(...)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/application/service/chat/ChatStreamApplicationService.java
+src/main/java/com/huawei/it/ex/one/chat/application/service/ChatEventResumeFlow.java
 ```
 
 方法：
 
 ```text
 ChatStreamApplicationService#resumeRunTopic(...)
-ChatStreamApplicationService#liveBuffer(...)
-ChatStreamApplicationService#deduplicate(...)
+ChatEventResumeFlow#liveBuffer(...)
+ChatEventResumeFlow#deduplicate(...)
 ```
 
 执行顺序：
@@ -692,14 +724,14 @@ local-only: LocalChatEventStreamRegistry#subscribeRunTopic(...)
 HTTP 入口文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/interfaces/chat/ChatController.java
+src/main/java/com/huawei/it/ex/one/chat/interfaces/http/ChatEventStreamController.java
 ```
 
 入口方法：
 
 ```text
-ChatController#resumeSessionEvents(...)
-ChatController#resumeRunEvents(...)
+ChatEventStreamController#resumeSessionEvents(...)
+ChatEventStreamController#resumeRunEvents(...)
 ```
 
 应用层方法：
@@ -707,7 +739,7 @@ ChatController#resumeRunEvents(...)
 ```text
 ChatStreamApplicationService#resumeSession(...)
 ChatStreamApplicationService#resumeRun(...)
-ChatStreamApplicationService#resumeRunWithLiveTail(...)
+ChatEventResumeFlow#resumeRunWithLiveTail(...)
 ```
 
 两类接口：
@@ -780,7 +812,7 @@ ChatStreamApplicationService#appendAndPublish(...)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/application/service/LocalChatRunExecutionRegistry.java
+src/main/java/com/huawei/it/ex/one/chat/application/service/LocalChatRunExecutionRegistry.java
 ```
 
 关键方法：
@@ -809,7 +841,7 @@ activeClaims(...)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunLeaseApplicationService.java
+src/main/java/com/huawei/it/ex/one/chat/application/service/ChatRunLeaseApplicationService.java
 ```
 
 关键方法：
@@ -839,11 +871,11 @@ heartbeatActiveRuns(...)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunWatchdogScheduler.java
-src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunRecoveryOrchestrator.java
-src/main/java/com/huawei/it/ex/one/application/service/ManualConfirmationRecoveryStrategy.java
-src/main/java/com/huawei/it/ex/one/application/service/FailFastRecoveryStrategy.java
-src/main/java/com/huawei/it/ex/one/application/service/RuntimeTakeoverRecoveryStrategy.java
+src/main/java/com/huawei/it/ex/one/chat/application/service/ChatRunWatchdogScheduler.java
+src/main/java/com/huawei/it/ex/one/chat/application/service/ChatRunRecoveryOrchestrator.java
+src/main/java/com/huawei/it/ex/one/chat/application/recovery/ManualConfirmationRecoveryStrategy.java
+src/main/java/com/huawei/it/ex/one/chat/application/recovery/FailFastRecoveryStrategy.java
+src/main/java/com/huawei/it/ex/one/chat/application/recovery/RuntimeTakeoverRecoveryStrategy.java
 ```
 
 职责：
@@ -868,7 +900,7 @@ src/main/java/com/huawei/it/ex/one/application/service/RuntimeTakeoverRecoverySt
 入口：
 
 ```text
-ChatController#streamStatus(...)
+ChatEventStreamController#streamStatus(...)
 ```
 
 应用层：
@@ -896,7 +928,7 @@ ChatRunApplicationService#streamStatus(...)
 文件：
 
 ```text
-src/main/java/com/huawei/it/ex/one/application/service/runtime/RuntimeBindingApplicationService.java
+src/main/java/com/huawei/it/ex/one/runtime/application/service/RuntimeBindingApplicationService.java
 ```
 
 关键方法：
@@ -929,18 +961,18 @@ cancelActive(...)
 
 | 问题 | 优先查看 |
 | --- | --- |
-| `/runs` 不返回 | `FinanceEXChatService#startRun(...)`、`executeRun(...)`、`persistAndPublishRunEvents(...)` |
+| `/runs` 不返回 | `FinanceEXChatService#startRun(...)`、`FinanceChatOrchestrator#startRun(...)`、`ChatEventPipeline#persistAndPublish(...)` |
 | 用户消息入库但没有回答 | `AgentRuntimeExecutor#execute(...)`、Relay adapter、`persistAndPublishRunEvents(...)` |
 | Relay 有响应但前端没有 | `ChatStreamApplicationService#appendWithExecutionGuard(...)`、`ChatStreamApplicationService#publishPersisted(...)`、`LocalChatEventStreamRegistry#publish(...)`、`RedisChatLiveEventBus#publish(...)`、`ChatWebSocketProtocolService#emitTopicEvent(...)` |
-| event 表没有 delta | `FinanceEXChatService#eventBelongsToCurrentRun(...)`、`ChatRunApplicationService#shouldAcceptEvent(...)`、`MyBatisChatEventStore#appendWithExecutionGuard(...)` |
+| event 表没有 delta | `ChatEventPipeline#eventBelongsToCurrentRun(...)`、`ChatRunApplicationService#shouldAcceptEvent(...)`、`MyBatisChatEventStore#appendWithExecutionGuard(...)` |
 | WebSocket 收不到实时消息 | `ChatWebSocketProtocolService#subscribe(...)`、`ChatStreamApplicationService#resumeRunTopic(...)`、`liveBuffer(...)` |
-| 事件恢复没有补发 | `ChatController#resumeRunEvents(...)`、`ChatStreamApplicationService#resumeRun(...)`、`MyBatisChatEventStore#findByOwnerAndRunAfterSeq(...)` |
+| 事件恢复没有补发 | `ChatEventStreamController#resumeRunEvents(...)`、`ChatStreamApplicationService#resumeRun(...)`、`MyBatisChatEventStore#findByOwnerAndRunAfterSeq(...)` |
 | 多会话串显示 | `emitTopicEvent(...)` 的 run/session 校验、前端按 `payload.sessionId` 分发 |
 | stop 后还在输出 | `ChatRunApplicationService#requestStop(...)`、`shouldAcceptEvent(...)`、`LocalChatRunExecutionRegistry#cancel(...)` |
 | 实例挂掉 run 不结束 | `ChatRunLeaseApplicationService#heartbeatActiveRuns(...)`、`ChatRunWatchdogScheduler`、`ChatRunRecoveryOrchestrator` |
 | 跨电脑续接缺内容 | `stream-status`、run 级事件恢复 `afterSeq`、`fin_ex_chat_event_t` |
 | assistant 历史消息没保存 | `persistAndPublishRunEvents(...)` 处理 `run.completed` 的分支、`SessionApplicationService#saveAssistantMessage(...)` |
-| 文档附件没有进 Runtime 或 DomainAgent 指定调用 | `DocumentFacade#resolveChatAttachmentsForUser(...)`、`replaceRuntimeDocumentMetadata(...)`、`DomainAgentChatRequestMapper#validateDocList(...)`、`AgentRuntimeRequest.documents`。实际调用 IntentAgent 的路由会用可信文档的完整 `providerDocument` 覆盖 `sceneParam.docList`；显式直连和 active binding 续接仍只校验前端 `docList` 与已授权附件的 `docId/url` 是否匹配。 |
+| 文档附件没有进 Runtime 或 DomainAgent 指定调用 | `ChatDocumentService#resolveChatAttachmentsForUser(...)`、`DocumentService#replaceRuntimeDocumentMetadata(...)`、`DomainAgentChatRequestMapper#validateDocList(...)`、`AgentRuntimeRequest.documents`。实际调用 IntentAgent 的路由会用可信文档的完整 `providerDocument` 覆盖 `sceneParam.docList`；显式直连和 active binding 续接仍只校验前端 `docList` 与已授权附件的 `docId/url` 是否匹配。 |
 
 ## 18. 推荐调试顺序
 
@@ -948,11 +980,11 @@ cancelActive(...)
 
 1. `ChatController#startRun(...)`：入口身份、Cookie、DTO 转换。
 2. `FinanceEXChatService#startRun(...)`：后台 run 是否启动。
-3. `FinanceEXChatService#executeRun(...)`：session、message、route、run、execution 是否创建。
+3. `ChatRunExecutionCoordinator#execute(...)`：session、message、route、run、execution 是否创建。
 4. `SessionApplicationService#prepareRunMessage(...)`：user message 是否入库。
 5. `AgentRuntimeExecutor#execute(...)`：Runtime 请求是否构造正确。
 6. `RelayWebSocketRuntimeAdapter#query(...)`：config 握手、user-message 和下游 frame 是否正常。
-7. `FinanceEXChatService#persistAndPublishRunEvents(...)`：事件是否被拦截。
+7. `ChatEventPipeline#persistAndPublish(...)`：事件是否被拦截。
 8. `MyBatisChatEventStore#appendWithExecutionGuard(...)`：事件是否写入数据库并生成 seq，owner/fencing 是否匹配。
 9. `ChatStreamApplicationService#publishPersisted(...)`：是否本机发布和 Redis 发布。
 10. `ChatWebSocketProtocolService#subscribe(...)`：前端是否订阅正确 topic。

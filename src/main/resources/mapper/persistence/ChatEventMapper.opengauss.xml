@@ -2,8 +2,8 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.huawei.it.ex.one.infrastructure.persistence.ChatEventMapper">
-    <resultMap id="chatEventResultMap" type="com.huawei.it.ex.one.infrastructure.persistence.ChatEventRow">
+<mapper namespace="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatEventMapper">
+    <resultMap id="chatEventResultMap" type="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatEventRow">
         <result column="tenant_id" property="tenantId"/>
         <result column="user_id" property="userId"/>
         <result column="session_id" property="sessionId"/>
@@ -18,7 +18,7 @@
     </sql>
 
     <resultMap id="chatEventAppendContextResultMap"
-               type="com.huawei.it.ex.one.infrastructure.persistence.ChatEventAppendContextRow">
+               type="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatEventAppendContextRow">
         <constructor>
             <arg column="tenant_id" javaType="java.lang.String"/>
             <arg column="user_id" javaType="java.lang.String"/>
@@ -91,7 +91,7 @@
       使用独立查询得到的可信归属追加单条事件，不再通过 INSERT SELECT 隐式执行条件查询。
       入参: ChatEventWriteRow，tenantId/userId/sessionId/runId 为可信归属，其他字段为标准事件内容。
     -->
-    <insert id="insert" parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatEventWriteRow">
+    <insert id="insert" parameterType="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatEventWriteRow">
         INSERT INTO fin_ex_chat_event_t(
             id, tenant_id, user_id, session_id, run_id, seq, event_type, payload_json, created_at
         )

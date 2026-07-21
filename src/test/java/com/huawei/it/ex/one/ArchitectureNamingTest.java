@@ -10,6 +10,15 @@ import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
 class ArchitectureNamingTest {
+    private static final Path JAVA_ROOT = Path.of("src/main/java/com/huawei/it/ex/one");
+    private static final String[] APPLICATION_ROOTS = {
+            "chat/application",
+            "intent/application",
+            "runtime/application",
+            "document/application",
+            "share/application"
+    };
+
     @Test
     void schemaTablesUseFinExNaming() throws Exception {
         String schema = Files.readString(Path.of("src/main/resources/db/init-20260718.sql"));
@@ -50,7 +59,7 @@ class ArchitectureNamingTest {
     @Test
     void runtimeBindingCacheDoesNotUseRedisKeysCommand() throws Exception {
         String source = Files.readString(Path.of(
-                "src/main/java/com/huawei/it/ex/one/infrastructure/runtime/RedisRuntimeBindingCache.java"
+                "src/main/java/com/huawei/it/ex/one/runtime/infrastructure/RedisRuntimeBindingCache.java"
         ));
 
         assertThat(source)
@@ -81,48 +90,28 @@ class ArchitectureNamingTest {
 
     @Test
     void applicationServicesDoNotResolveAuthContextDirectly() throws Exception {
-        try (Stream<Path> files = Files.walk(Path.of("src/main/java/com/huawei/it/ex/one/application/service"))) {
-            files.filter(path -> path.toString().endsWith(".java"))
-                    .forEach(path -> {
-                        try {
-                            String source = Files.readString(path);
-                            assertThat(source)
-                                    .as(path + " must receive UserContext from interface entrypoints")
-                                    .doesNotContain("AuthContextProvider")
-                                    .doesNotContain("auth.resolve()");
-                        } catch (Exception ex) {
-                            throw new IllegalStateException(ex);
-                        }
-                    });
+        for (String applicationRoot : APPLICATION_ROOTS) {
+            assertSourcesDoNotContain(JAVA_ROOT.resolve(applicationRoot),
+                    " must receive UserContext from interface entrypoints",
+                    "AuthContextProvider", "auth.resolve()");
         }
     }
 
     @Test
     void asynchronousApplicationAndRuntimeLayersDoNotResolveTraceContextProvider() throws Exception {
-        for (String sourceRoot : new String[]{
-                "src/main/java/com/huawei/it/ex/one/application/service",
-                "src/main/java/com/huawei/it/ex/one/infrastructure/runtime"
-        }) {
-            try (Stream<Path> files = Files.walk(Path.of(sourceRoot))) {
-                files.filter(path -> path.toString().endsWith(".java"))
-                        .forEach(path -> {
-                            try {
-                                assertThat(Files.readString(path))
-                                        .as(path + " must receive the entry-captured TraceContext value")
-                                        .doesNotContain("TraceContextProvider");
-                            } catch (Exception ex) {
-                                throw new IllegalStateException(ex);
-                            }
-                        });
-            }
+        for (String applicationRoot : APPLICATION_ROOTS) {
+            assertSourcesDoNotContain(JAVA_ROOT.resolve(applicationRoot),
+                    " must receive the entry-captured TraceContext value", "TraceContextProvider");
         }
+        assertSourcesDoNotContain(JAVA_ROOT.resolve("runtime/infrastructure"),
+                " must receive the entry-captured TraceContext value", "TraceContextProvider");
     }
 
     @Test
     void infrastructurePackagesDoNotKeepRedundantTechnologySubpackages() throws Exception {
-        String sourceRoot = "src/main/java/com/huawei/it/ex/one/infrastructure";
-        try (Stream<Path> files = Files.walk(Path.of(sourceRoot))) {
+        try (Stream<Path> files = Files.walk(JAVA_ROOT)) {
             files.filter(path -> path.toString().endsWith(".java"))
+                    .filter(path -> path.toString().replace('\\', '/').contains("/infrastructure/"))
                     .forEach(path -> {
                         String normalized = path.toString().replace('\\', '/');
                         assertThat(normalized)
@@ -132,6 +121,22 @@ class ArchitectureNamingTest {
                                 .doesNotContain("/session/persistence/")
                                 .doesNotContain("/agent/runtime/");
                     });
+        }
+    }
+
+    private void assertSourcesDoNotContain(Path sourceRoot, String description, String... fragments)
+            throws Exception {
+        try (Stream<Path> files = Files.walk(sourceRoot)) {
+            files.filter(path -> path.toString().endsWith(".java"))
+                    .forEach(path -> assertSourceDoesNotContain(path, description, fragments));
+        }
+    }
+
+    private void assertSourceDoesNotContain(Path path, String description, String... fragments) {
+        try {
+            assertThat(Files.readString(path)).as(path + description).doesNotContain(fragments);
+        } catch (Exception ex) {
+            throw new IllegalStateException(ex);
         }
     }
 }

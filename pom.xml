@@ -21,6 +21,8 @@
     <properties>
         <java.version>21</java.version>
         <huawei.obs.sdk.version>3.25.10</huawei.obs.sdk.version>
+        <archunit.version>1.4.1</archunit.version>
+        <maven-pmd-plugin.version>3.28.0</maven-pmd-plugin.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     </properties>
@@ -75,6 +77,12 @@
             <artifactId>reactor-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>${archunit.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -89,6 +97,36 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-pmd-plugin</artifactId>
+                <version>${maven-pmd-plugin.version}</version>
+                <configuration>
+                    <targetJdk>21</targetJdk>
+                    <linkXRef>false</linkXRef>
+                    <printFailingErrors>true</printFailingErrors>
+                    <failOnViolation>true</failOnViolation>
+                    <rulesets>
+                        <ruleset>config/pmd/refactor-ruleset.xml</ruleset>
+                    </rulesets>
+                    <includes>
+                        <include>**/com/huawei/it/ex/one/chat/**/*.java</include>
+                        <include>**/com/huawei/it/ex/one/intent/**/*.java</include>
+                        <include>**/com/huawei/it/ex/one/runtime/**/*.java</include>
+                        <include>**/com/huawei/it/ex/one/document/**/*.java</include>
+                        <include>**/com/huawei/it/ex/one/share/**/*.java</include>
+                    </includes>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>ddd-refactor-complexity</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

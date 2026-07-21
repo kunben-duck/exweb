@@ -89,10 +89,11 @@ class MyBatisXmlMapperConsistencyTest {
 
     @Test
     void infrastructureMyBatisMappersShouldNotUseSqlAnnotations() throws IOException {
-        Path infrastructureRoot = MAIN_SOURCE_ROOT.resolve("com/huawei/it/ex/one/infrastructure");
+        Path boundedContextRoot = MAIN_SOURCE_ROOT.resolve("com/huawei/it/ex/one");
         List<String> violations;
-        try (var files = Files.walk(infrastructureRoot)) {
+        try (var files = Files.walk(boundedContextRoot)) {
             violations = files.filter(path -> path.toString().endsWith(".java"))
+                    .filter(path -> path.toString().replace('\\', '/').contains("/infrastructure/"))
                     .filter(this::containsForbiddenSqlAnnotation)
                     .map(MAIN_SOURCE_ROOT::relativize)
                     .map(Path::toString)
@@ -238,7 +239,7 @@ class MyBatisXmlMapperConsistencyTest {
                 .contains("AND status = 'RUNNING'");
 
         String runRepository = Files.readString(Path.of(
-                "src/main/java/com/huawei/it/ex/one/infrastructure/persistence/MyBatisChatRunRepository.java"));
+                "src/main/java/com/huawei/it/ex/one/chat/infrastructure/persistence/MyBatisChatRunRepository.java"));
         int sessionLock = runRepository.indexOf("mapper.lockSessionForInteractionContinuation(");
         int interactionLock = runRepository.indexOf("mapper.lockInteractionContinuationClaim(");
         int runInsert = runRepository.indexOf("mapper.insert(toRow(run));", interactionLock);

@@ -1,0 +1,20 @@
+package com.huawei.it.ex.one.chat.interfaces.dto;
+
+import java.util.Map;
+
+/**
+ * 前端聊天事件 DTO。
+ *
+ * @param runId 本轮执行追踪标识。
+ * @param sessionId 前端聊天会话标识。
+ * @param sequence 事件持久化后的恢复游标序号，前端用作 WebSocket offset 和 Event Resume afterSeq。
+ * @param type 事件类型，例如 run.started、message.delta。
+ * @param payload 事件载荷。
+ */
+public record ChatEventDto(
+        String runId,
+        String sessionId,
+        long sequence,
+        String type,
+        Map<String, Object> payload
+) {}

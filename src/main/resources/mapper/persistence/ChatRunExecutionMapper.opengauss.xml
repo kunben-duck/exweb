@@ -2,8 +2,8 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.huawei.it.ex.one.infrastructure.persistence.ChatRunExecutionMapper">
-    <resultMap id="chatRunExecutionResultMap" type="com.huawei.it.ex.one.infrastructure.persistence.ChatRunExecutionRow">
+<mapper namespace="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatRunExecutionMapper">
+    <resultMap id="chatRunExecutionResultMap" type="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatRunExecutionRow">
         <result column="run_id" property="runId"/>
         <result column="tenant_id" property="tenantId"/>
         <result column="user_id" property="userId"/>
@@ -35,7 +35,7 @@
             executionStatus/ownerInstanceId/heartbeatAt/leaseUntil/fencingToken 为运行租约，
             recovery* 与 runtimeResumeToken/metadataJson 为故障恢复扩展字段。
     -->
-    <insert id="insert" parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatRunExecutionWriteRow">
+    <insert id="insert" parameterType="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatRunExecutionWriteRow">
         INSERT INTO fin_ex_chat_run_execution_t(
             id, run_id, tenant_id, user_id, session_id, execution_status, owner_instance_id,
             heartbeat_at, lease_until, fencing_token, recovery_strategy, recovered_by_instance_id,

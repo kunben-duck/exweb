@@ -2,8 +2,8 @@
 <!DOCTYPE mapper
         PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.huawei.it.ex.one.infrastructure.memory.ChatMessageMapper">
-    <resultMap id="chatMessageResultMap" type="com.huawei.it.ex.one.infrastructure.memory.ChatMessageRow">
+<mapper namespace="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatMessageMapper">
+    <resultMap id="chatMessageResultMap" type="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatMessageRow">
         <result column="tenant_id" property="tenantId"/>
         <result column="user_id" property="userId"/>
         <result column="session_id" property="sessionId"/>
@@ -22,7 +22,7 @@
         <result column="created_at" property="createdAt"/>
     </resultMap>
 
-    <resultMap id="chatMessageAttachmentResultMap" type="com.huawei.it.ex.one.infrastructure.memory.ChatMessageAttachmentRow">
+    <resultMap id="chatMessageAttachmentResultMap" type="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatMessageAttachmentRow">
         <result column="tenant_id" property="tenantId"/>
         <result column="user_id" property="userId"/>
         <result column="session_id" property="sessionId"/>
@@ -35,7 +35,7 @@
         <result column="created_at" property="createdAt"/>
     </resultMap>
 
-    <resultMap id="chatMessagePartResultMap" type="com.huawei.it.ex.one.infrastructure.memory.ChatMessagePartRow">
+    <resultMap id="chatMessagePartResultMap" type="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatMessagePartRow">
         <result column="tenant_id" property="tenantId"/>
         <result column="user_id" property="userId"/>
         <result column="session_id" property="sessionId"/>
@@ -84,7 +84,7 @@
             treeDepth/siblingIndex 维护消息树，role/content/tokenCount 为展示内容，runId 关联来源 run，
             originType/locked/source*/editedFrom*/regeneratedFrom* 记录分支、编辑和重生成来源。
     -->
-    <insert id="insert" parameterType="com.huawei.it.ex.one.infrastructure.memory.ChatMessageRow">
+    <insert id="insert" parameterType="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatMessageRow">
         INSERT INTO fin_ex_chat_message_t(
             id, tenant_id, user_id, session_id, parent_message_id, node_order, tree_depth,
             sibling_index, role, content, token_count, run_id, origin_type, locked,
@@ -104,7 +104,7 @@
       入参: ChatMessageRow，tenantId/userId/sessionId/id 定位当前用户当前会话的 assistant 消息，
             content/runId/metadataJson 为新值；metadataJson 允许覆盖为空以清理等待态标记。
     -->
-    <update id="updateAssistant" parameterType="com.huawei.it.ex.one.infrastructure.memory.ChatMessageRow">
+    <update id="updateAssistant" parameterType="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatMessageRow">
         UPDATE fin_ex_chat_message_t
         SET content = #{content},
             run_id = COALESCE(#{runId}, run_id),
@@ -121,7 +121,7 @@
       入参: ChatMessagePartRow，id 为 part 主键，tenantId/userId/sessionId/messageId/runId 为归属与关联边界，
             partType/sourceType/contentText/title/status/channel/displayHint/visible/payloadJson/partOrder 描述展示语义。
     -->
-    <insert id="insertPart" parameterType="com.huawei.it.ex.one.infrastructure.memory.ChatMessagePartRow">
+    <insert id="insertPart" parameterType="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatMessagePartRow">
         INSERT INTO fin_ex_chat_message_part_t(
             id, tenant_id, user_id, session_id, message_id, run_id, part_type,
             source_type, content_text, title, status, channel, display_hint, visible,
@@ -139,7 +139,7 @@
       入参: ChatMessageAttachmentRow，id 为附件引用主键，tenantId/userId/sessionId/messageId 为归属边界，
             documentId 指向统一文档库，attachmentOrder/name/contentType/sizeBytes/sourceAttachmentId 为展示快照。
     -->
-    <insert id="insertAttachment" parameterType="com.huawei.it.ex.one.infrastructure.memory.ChatMessageAttachmentRow">
+    <insert id="insertAttachment" parameterType="com.huawei.it.ex.one.chat.infrastructure.persistence.ChatMessageAttachmentRow">
         INSERT INTO fin_ex_chat_message_attachment_t(
             id, tenant_id, user_id, session_id, message_id, document_id, attachment_order,
             name, content_type, size_bytes, source_attachment_id, created_at

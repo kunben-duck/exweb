@@ -52,7 +52,7 @@ public class MyBatisSessionRepository implements SessionRepository {
                                                    String cursor, int limit) {
         String normalizedAppId = normalize(appId);
         Cursor decoded = decodeCursor(cursor, normalizedAppId);
-        int pageSize = Math.max(1, Math.min(limit <= 0 ? 20 : limit, 100));
+        int pageSize = Math.max(1, Math.min(limit <= 0 ? 20 : limit, 200));
         List<ChatSession> rows = mapper.findPageByOwner(
                         tenantId,
                         userId,
@@ -79,7 +79,7 @@ public class MyBatisSessionRepository implements SessionRepository {
     public ChatSessionNumberPage pageNumberByTenantIdAndUserId(String tenantId, String userId, String appId,
                                                                int curPage, int pageSize) {
         int normalizedPage = Math.max(1, curPage);
-        int normalizedSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 100));
+        int normalizedSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 200));
         String normalizedAppId = normalize(appId);
         long totalRows = mapper.countPageByOwner(tenantId, userId, normalizedAppId);
         long totalPages = totalRows == 0 ? 0 : (totalRows + normalizedSize - 1) / normalizedSize;

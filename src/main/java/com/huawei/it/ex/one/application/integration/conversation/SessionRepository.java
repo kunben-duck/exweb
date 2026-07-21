@@ -59,7 +59,7 @@ public interface SessionRepository {
         if (appId == null || appId.isBlank()) {
             return pageByTenantIdAndUserId(tenantId, userId, cursor, limit);
         }
-        int pageSize = Math.max(1, Math.min(limit <= 0 ? 20 : limit, 100));
+        int pageSize = Math.max(1, Math.min(limit <= 0 ? 20 : limit, 200));
         List<ChatSession> items = findByTenantIdAndUserId(tenantId, userId).stream()
                 .filter(session -> !"DELETED".equals(session.status()))
                 .filter(session -> appId.trim().equals(session.appId()))
@@ -79,7 +79,7 @@ public interface SessionRepository {
      * @param tenantId 租户标识。
      * @param userId 用户标识。
      * @param curPage 当前页码，从 1 开始；非法值按 1 处理。
-     * @param pageSize 每页条数；非法值按 20 处理，上限 100。
+     * @param pageSize 每页条数；非法值按 20 处理，上限 200。
      * @return 页码分页结果。
      */
     default ChatSessionNumberPage pageNumberByTenantIdAndUserId(
@@ -98,7 +98,7 @@ public interface SessionRepository {
     private static ChatSessionNumberPage pageNumberFromSessions(
             List<ChatSession> sessions, String appId, int curPage, int pageSize) {
         int normalizedPage = Math.max(1, curPage);
-        int normalizedSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 100));
+        int normalizedSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 200));
         List<ChatSession> all = sessions.stream()
                 .filter(session -> !"DELETED".equals(session.status()))
                 .filter(session -> appId == null || appId.isBlank() || appId.trim().equals(session.appId()))

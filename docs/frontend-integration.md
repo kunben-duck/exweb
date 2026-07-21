@@ -218,7 +218,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | --- | --- | --- | --- | --- |
 | `POST /v1/chat/sessions` | 用户点击“新建会话”时显式创建。 | JSON body：`title/channel/appId/appName` 均可选。 | `ChatSessionDto`：包含 `appId/appName`。 | `appName` 不能脱离 `appId`；前端不传租户和用户。 |
 | `GET /v1/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`appId` 可选；`limit` 默认 20；`cursor` 可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每项含 `appId/appName/firstAssistantAnswer`。 | `appId` 区分大小写；后续页必须沿用生成 cursor 时相同的 `appId`，否则返回参数错误。 |
-| `GET /v1/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`appId` 可选；`curPage` 默认 1；`pageSize` 默认 20，最大 100。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`。 | `totalRows/totalPages` 按同一 `appId` 过滤条件计算；不返回 `DELETED` 会话。 |
+| `GET /v1/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`appId` 可选；`curPage` 默认 1；`pageSize` 默认 20，最大 200。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`。 | `totalRows/totalPages` 按同一 `appId` 过滤条件计算；不返回 `DELETED` 会话。 |
 | `GET /v1/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
 | `POST /v1/chat/sessions/{sessionId}/read` | 最新历史消息或实时 assistant 终态已经展示。 | Path：`sessionId`；JSON body：`readThroughSeq` 必填、最小为 0。 | 更新后的 `ChatSessionDto`。 | 提交列表/详情中观察到的 `latestMessageSeq`，或实时 `run.completed/run.waiting_user` 的 sequence；不会更新会话 `updatedAt`。 |
 | `GET /v1/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 保留。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 不传 `leafMessageId` 时返回当前 active path；传入时返回 root 到该 leaf 的路径。 |

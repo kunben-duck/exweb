@@ -81,7 +81,7 @@ public interface ChatSessionFacade {
      */
     default ChatSessionNumberPage listSessionsByPage(UserContext user, int curPage, int pageSize) {
         int normalizedPage = Math.max(1, curPage);
-        int normalizedSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 100));
+        int normalizedSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 200));
         ChatSessionPage page = listSessions(user, null, normalizedSize);
         long totalRows = page.items().size();
         long totalPages = totalRows == 0 ? 0 : 1;

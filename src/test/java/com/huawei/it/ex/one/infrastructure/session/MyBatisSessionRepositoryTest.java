@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
 import java.time.Instant;
 import java.util.List;
@@ -49,6 +50,22 @@ class MyBatisSessionRepositoryTest {
         assertThat(marked.hasUnread()).isFalse();
     }
 
+    @Test
+    void sessionPaginationCapsRequestedPageSizeAtTwoHundred() {
+        RecordingMapper mapper = new RecordingMapper();
+        mapper.totalRows = 1_000;
+        MyBatisSessionRepository repository = new MyBatisSessionRepository(mapper);
+
+        repository.pageByTenantIdAndUserId("tenant1", "user1", null, 1_000);
+        ChatSessionNumberPage numberPage = repository.pageNumberByTenantIdAndUserId(
+                "tenant1", "user1", 1, 1_000);
+
+        assertThat(mapper.lastCursorLimit).isEqualTo(201);
+        assertThat(mapper.lastNumberPageLimit).isEqualTo(200);
+        assertThat(numberPage.pageSize()).isEqualTo(200);
+        assertThat(numberPage.totalPages()).isEqualTo(5);
+    }
+
     private static ChatSessionRow row(String id, String appId, Instant updatedAt) {
         ChatSessionRow row = new ChatSessionRow();
         row.setId(id);
@@ -69,6 +86,9 @@ class MyBatisSessionRepositoryTest {
     private static final class RecordingMapper implements ChatSessionMapper {
         private List<ChatSessionRow> pageRows = List.of();
         private String lastAppId;
+        private int lastCursorLimit;
+        private int lastNumberPageLimit;
+        private long totalRows;
         private ChatSessionRow ownerRow;
         private long lastReadThroughSeq;
 
@@ -82,12 +102,16 @@ class MyBatisSessionRepositoryTest {
         public List<ChatSessionRow> findPageByOwner(String tenantId, String userId, String appId,
                                                     Instant cursorUpdatedAt, String cursorId, int limit) {
             lastAppId = appId;
+            lastCursorLimit = limit;
             return pageRows;
         }
 
-        @Override public long countPageByOwner(String tenantId, String userId, String appId) { return 0; }
+        @Override public long countPageByOwner(String tenantId, String userId, String appId) { return totalRows; }
         @Override public List<ChatSessionRow> findNumberPageByOwner(
-                String tenantId, String userId, String appId, int limit, long offset) { return List.of(); }
+                String tenantId, String userId, String appId, int limit, long offset) {
+            lastNumberPageLimit = limit;
+            return List.of();
+        }
         @Override public Long lockNodeOrder(String tenantId, String userId, String sessionId) { return 0L; }
         @Override public int updateNodeOrder(
                 String tenantId, String userId, String sessionId, long lastNodeOrder, Instant updatedAt) { return 1; }

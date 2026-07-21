@@ -2,6 +2,9 @@
 
 本文档面向 Web 前端联调，覆盖会话、文档上传、创建 run、WebSocket 实时订阅、Event Resume 断点恢复、停止回答和常见排障。当前正式版采用“后台 run + 实时订阅 + 事件恢复”的单一对话流协议：HTTP 负责创建和控制后台 run；WebSocket 负责当前页面新建 run 的实时订阅；Event Resume 负责恢复链路，其中会话级事件恢复是有限补发，run 级事件恢复在 active run 场景会先补发再接续 live 事件直到 run 终态。
 
+流式事件的事实源、批量落库、Redis 跨实例扇出、WebSocket 队列及跨浏览器恢复原理，参见
+[Chat 流式输出、断点续传与跨浏览器恢复设计](architecture/chat-streaming-and-resume.md)。
+
 本文档以 FinanceEXChatService 的正式接口为准，采用系统自身的设计术语描述接口边界、调用顺序和错误处理；下游 Runtime、domain-agent 或浏览器实现细节只作为内部 adapter 行为说明，不作为前端协议依赖。
 
 ## 基础约定
@@ -239,7 +242,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `POST /v1/chat/runs` | 唯一任务提交入口，创建后台 run 或续接 Interaction。 | JSON body：`commandId`、`sessionId`、`conversationId`、`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`forceReroute`、`interactionId`、`approved`、`scope`、`questionnaireAnswers`、`attachments[]`、`targetType`、`targetId`、`selectedIntent`、`metadata`、`appId`、`appName`，各字段是否必填见后文矩阵。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | 不传 `sessionId` 时使用 tag 自动建会话；已有会话中显式传入的 tag 必须与会话快照一致，不一致时不会创建消息或 run。tag 不进入 metadata 或任何 Agent 请求。其他 runMode 约束不变。 |
 | `POST /v1/chat/runs/{runId}/stop` | 用户点击停止回答。 | Path：`runId`。 | `ChatRunStopDto`：`runId`、`sessionId`、`status`、`latestSeq`、`stoppedAt`、`messageReady`、`assistantMessageId`、`feedbackTargetMessageId`。 | 幂等；停止语义不是关闭 WebSocket。 |
 | `GET /v1/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`；只处理 `stream-item` 中的 `encodedItem.data`。 |
-| `GET /v1/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态，并以 `done` 闭合；live source 异常时服务端会降级按 DB 事件轮询。 |
+| `GET /v1/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态，并以 `done` 闭合。live source 异常时当前 tail 会结束且不会自动轮询数据库，前端应使用已处理的最大 `sequence` 重新请求。 |
 | `GET /v1/chat/sessions/{sessionId}/stream-status` | 判断是否存在 active run、是否可停止、从哪里恢复、是否等待用户澄清输入，以及当前会话绑定的 DomainAgent/Runtime 摘要。 | Path：`sessionId`。 | `ChatStreamStatusDto`：`latestSeq`、`activeRunId`、`activeStreamTopicId`、`activeRunFirstSeq`、`activeRunLastSeq`、`cancellable`、`waitingUserInput`、`interactionId`、`interactionType`、`assistantMessageId`、`expiresAt`、`bindingProvider`、`bindingTargetType`、`bindingTargetId`、`bindingIntentCode`、`bindingIntentName`、`bindingRouteSource`、`bindingUpdatedAt`。 | `latestSeq` 是服务端事实源最新位置，不是客户端已消费位置；`waitingUserInput=true` 时普通 `/v1/chat/runs` 会返回 `WAITING_USER_INPUT_REQUIRED`，但 `NEXT + targetType=DOMAIN_AGENT + targetId` 可显式放弃等待并直连。Interaction 默认 24h 过期，服务端会在查询或提交时懒标记过期请求。 |
 | `POST /v1/chat/messages/{messageId}/feedback` | 用户对完整 assistant 消息点赞、点踩或切换反馈。 | Path：`messageId`；JSON body：`runId` 可选，`rating=LIKE/DISLIKE`，`reasonCode` 可选，`commentText` 可选，`metadata` 可选。 | `MessageFeedbackDto`：`feedbackId`、`messageId`、`runId`、`rating`、`status=ACTIVE`、`reasonCode`、`commentText`、`createdAt`、`updatedAt`。 | 同一用户同一消息最多一条当前反馈；重复提交表示修改当前反馈。 |
 | `DELETE /v1/chat/messages/{messageId}/feedback` | 用户取消已点赞或已点踩状态。 | Path：`messageId`；Query：`runId` 可选。 | `MessageFeedbackDto`：`status=CANCELLED`。 | 幂等；没有历史反馈时也返回取消成功。历史消息中的 `feedback` 会返回 `null`。 |
@@ -2050,13 +2053,14 @@ WebSocket 不接受 `{"type":"chat"}` 或旧 `CreateChatRunRequest`。发送旧�
 }
 ```
 
-收到 `RECOVER_REQUIRED` 后，前端应暂停该 topic 的实时拼接，使用本地最近成功处理的 `lastSeq`
-调用 Event Resume 补发，然后再按新的 `lastSeq` 重新 subscribe。
+收到 `RECOVER_REQUIRED` 后，前端应暂停该 topic 的实时拼接。错误详情存在 `recoveryAfterSeq` 时直接使用
+该值调用 Event Resume；字段缺失时才回退本地最近成功处理的 `lastSeq`。补发期间继续按
+`sessionId + sequence` 去重，完成后再按新的 `lastSeq` 重新 subscribe。
 
 `sequence` 是数据库事件游标，不是 run topic 内连续序号；同一个 topic 出现 `19 -> 21` 并不一定是缺口，
 可能是其他会话或其他 run 使用了 `20`。前端只需要按 `sessionId + sequence` 去重，不要用
-`expectedNextSeq` 做连续性校验。`RECOVER_REQUIRED.details.recoveryAfterSeq` 是服务端建议的最小补发起点；
-旧前端也可以继续使用本地 `lastSeq`。
+`expectedNextSeq` 做连续性校验。`RECOVER_REQUIRED.details.recoveryAfterSeq` 是服务端建议的最小补发起点。
+它可能小于本地最高 `lastSeq`，用于覆盖迟到的低序号事件，因此不能取两者最大值；否则会跳过触发回退的事件。
 
 服务端会在 WebSocket 和 run 级 Event Resume live tail 的实时源后做短窗口排序，默认配置为
 `financeex.chat-stream.live-reorder-enabled=true`、`live-reorder-window=20ms`、
@@ -2076,7 +2080,7 @@ Redis Pub/Sub 只负责实时 fanout：服务端会先把事件写入数据库�
 Event Resume 不作为本页新建 run 的首选实时通道；新建 run 的实时输出仍由 WebSocket topic 承载。事件恢复有两种粒度：
 
 - 会话级：`GET /v1/chat/sessions/{sessionId}/events/resume?afterSeq={seq}`，适合补齐整个会话缺失事件。
-- Run 级：`GET /v1/chat/runs/{runId}/events/resume?afterSeq={seq}`，适合跨页签、跨浏览器或跨电脑续接正在输出的当前回答；如果 run 尚未终止，服务端会在补发后继续 tail live 事件直到 run 终态；live source 异常时会降级从事件表轮询到终态。
+- Run 级：`GET /v1/chat/runs/{runId}/events/resume?afterSeq={seq}`，适合跨页签、跨浏览器或跨电脑续接正在输出的当前回答；如果 run 尚未终止，服务端会在补发后继续 tail live 事件直到 run 终态。live source 异常时当前 SSE 会结束且不会自动轮询数据库；前端应退避后从最后实际处理成功的 `sequence` 再次恢复。
 
 ```js
 async function resumeEvents(sessionId, lastSeq) {
@@ -2606,7 +2610,7 @@ async function stopCurrentRun() {
 
 - `WS_AUTH_FAILED`：后端没有解析到有效用户身份。接入企业身份源后，需检查 `ApplicationAuthContextProvider` 或替换实现是否能解析完整 `UserContext`。
 - `SUBSCRIBE_ERROR` 且提示 run 不存在或不属于当前用户：确认 `streamTopicId` 来自当前用户刚创建的 `/v1/chat/runs` 响应，不要手写 topic。
-- WebSocket 收不到实时事件：先调用 Event Resume 看事件是否已落库；如果 Event Resume 能补发，通常是 WebSocket 连接、订阅 topic 或 Redis 跨实例 fanout 问题。run 级 Event Resume 若遇到 live source 异常，会继续按事件表轮询到终态。
+- WebSocket 收不到实时事件：先调用 Event Resume 看事件是否已落库；如果 Event Resume 能补发，通常是 WebSocket 连接、订阅 topic 或 Redis 跨实例 fanout 问题。run 级 Event Resume 若遇到 live source 异常会结束当前连接，不会自动按事件表轮询；前端应使用最后已处理的 `sequence` 重新请求。
 - stop 后仍看到少量 delta：前端应以 `run.cancelled` 为终态，忽略同一 run 后续迟到的非终态事件；后端也会在事件追加前检查 cancel flag。
 - 上传后聊天提示文档不可用：确认文档 `status=AVAILABLE`，并且上传文档和聊天请求使用同一个后端用户上下文。
 - 复制页签后重复显示文本：前端需要按 `sessionId + sequence` 去重。active run 恢复会刻意从 `activeRunFirstSeq - 1` 补发，重复事件是可预期的，不能只依赖“是否大于本地 lastSeq”来判断是否渲染。

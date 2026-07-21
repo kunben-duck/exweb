@@ -1,5 +1,8 @@
 # FinanceEXChatService 正式版架构设计
 
+流式事件落库、Redis/WebSocket 实时扇出、Event Resume、跨浏览器恢复及实例故障边界的完整实现说明，
+参见 [Chat 流式输出、断点续传与跨浏览器恢复设计](chat-streaming-and-resume.md)。
+
 ## 架构目标
 
 FinanceEXChatService 是前端聊天入口和 SuperAgent 主控服务。正式版只保留清晰的执行边界：

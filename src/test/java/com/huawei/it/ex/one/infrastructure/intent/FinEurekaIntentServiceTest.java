@@ -195,7 +195,11 @@ class FinEurekaIntentServiceTest {
                 .containsEntry("candidateIntentNames", List.of("A", "B"));
         assertThat(routeMulti.raw()).containsEntry("reason", "routeAction=ROUTE_MULTI");
         assertThat(noMatch.complexity()).isEqualTo(TaskComplexity.COMPLEX);
+        assertThat(noMatch.intentCode()).isEqualTo("finance.runtime.no_intent");
+        assertThat(noMatch.intentName())
+                .isEqualTo("未识别到可用意图，进入 FIN Supervisor Agent");
         assertThat(noMatch.candidateDomainAgentId()).isNull();
+        assertThat(noMatch.slots()).containsEntry("routeAction", "NO_MATCH");
         assertThat(noMatch.raw()).containsEntry("reason", "routeAction=NO_MATCH");
     }
 

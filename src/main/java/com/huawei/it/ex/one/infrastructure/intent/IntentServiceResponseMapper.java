@@ -84,7 +84,8 @@ public class IntentServiceResponseMapper {
         }
         if ("NO_MATCH".equalsIgnoreCase(routeAction)) {
             return IntentRecognitionResult.finalDecision(complexDecision(root, result,
-                    "finance.runtime.no_intent", "未识别到可用意图，进入 Relay Runtime",
+                    "finance.runtime.no_intent",
+                    "未识别到可用意图，进入 " + properties.normalizedNoMatchAgentName(),
                     "routeAction=NO_MATCH"));
         }
         if ("ROUTE_SINGLE".equalsIgnoreCase(routeAction)) {

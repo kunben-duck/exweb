@@ -12,6 +12,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "financeex.intent")
 public class IntentServiceHttpProperties {
     private static final int MAX_NORMALIZED_RETRIES = 10;
+    private static final String DEFAULT_NO_MATCH_AGENT_NAME = "FIN Supervisor Agent";
 
     /** 意图服务基础地址。 */
     private String baseUrl = "";
@@ -19,6 +20,8 @@ public class IntentServiceHttpProperties {
     private String accessName = "";
     /** 意图响应 items[].accessName 转换为 DomainAgent skillId 时移除的可选前缀。 */
     private String responseAccessNamePrefix = "";
+    /** NO_MATCH 进入 Relay 时向用户展示的目标 Agent 名称。 */
+    private String noMatchAgentName = DEFAULT_NO_MATCH_AGENT_NAME;
     /** 意图识别接口路径。 */
     private String recognizePath = "/intent-recognition-configuration/getIntentDecision";
     /** 是否要求意图服务返回 trace。 */
@@ -50,6 +53,14 @@ public class IntentServiceHttpProperties {
 
     public void setResponseAccessNamePrefix(String responseAccessNamePrefix) {
         this.responseAccessNamePrefix = responseAccessNamePrefix;
+    }
+
+    public String getNoMatchAgentName() {
+        return noMatchAgentName;
+    }
+
+    public void setNoMatchAgentName(String noMatchAgentName) {
+        this.noMatchAgentName = noMatchAgentName;
     }
 
     public String getRecognizePath() {
@@ -92,6 +103,11 @@ public class IntentServiceHttpProperties {
 
     public int normalizedMaxRetries() {
         return Math.min(MAX_NORMALIZED_RETRIES, Math.max(0, maxRetries));
+    }
+
+    public String normalizedNoMatchAgentName() {
+        String normalized = noMatchAgentName == null ? "" : noMatchAgentName.strip();
+        return normalized.isEmpty() ? DEFAULT_NO_MATCH_AGENT_NAME : normalized;
     }
 
 }

@@ -26,4 +26,23 @@ class AssistantAssemblyTest {
             assertThat(processResult.get("fixedResponse")).isEqualTo(fixedResponse);
         });
     }
+
+    @Test
+    void preservesNoMatchAgentDisplayNameInHistoricalPart() {
+        AssistantAssembly assembly = new AssistantAssembly();
+        assembly.observe(RuntimeEvent.progress("run1", "session1", Map.of(
+                "source", "intent-agent",
+                "sourceType", "intent-result",
+                "message", "已完成意图识别",
+                "routeAction", "NO_MATCH",
+                "intentName", "未识别到可用意图，进入 FIN Supervisor Agent"
+        )));
+
+        assertThat(assembly.parts()).singleElement().satisfies(part -> {
+            assertThat(part.partType()).isEqualTo("PROGRESS");
+            assertThat(part.payload())
+                    .containsEntry("sourceType", "intent-result")
+                    .containsEntry("intentName", "未识别到可用意图，进入 FIN Supervisor Agent");
+        });
+    }
 }

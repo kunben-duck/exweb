@@ -28,7 +28,7 @@
 query、routeAction、候选意图、最终路由是否采纳和调用耗时。DomainAgent、RuntimeBinding 续接、用例库已命中、
 意图服务关闭或未调用时不会写记录。该记录使用专用 Servlet/MVC 线程池 best-effort 写入
 `fin_ex_intent_recognition_t`，失败只影响统计排障数据，不影响 `/v1/chat/runs`、WebSocket 或 Event Resume。
-意图服务的连接、超时、HTTP/JSON 异常和协议错误会按 `financeex.intent.max-retries` 重试，默认最多重试 3 次，运行时最多按 10 次生效。重试耗尽后由后端 `financeex.intent.failure-strategy` 决定：默认 `RELAY_FALLBACK` 进入 Relay；`FAIL_RUN` 返回 `INTENT_ROUTING_FAILED` 并提示用户手动选择技能。合法的 `NO_MATCH/ROUTE_MULTI` 始终进入 Relay，不受该策略影响，前端不需要为策略增加请求字段。
+意图服务的连接、超时、HTTP/JSON 异常和协议错误会按 `financeex.intent.max-retries` 重试，默认最多重试 3 次，运行时最多按 10 次生效。重试耗尽后由后端 `financeex.intent.failure-strategy` 决定：默认 `RELAY_FALLBACK` 进入 Relay；`FAIL_RUN` 返回 `INTENT_ROUTING_FAILED` 并提示用户手动选择技能。合法的 `NO_MATCH/ROUTE_MULTI` 始终进入 Relay，不受该策略影响，前端不需要为策略增加请求字段。`NO_MATCH` 的 `intent-result.payload.intentName` 由服务端组装，默认是“未识别到可用意图，进入 FIN Supervisor Agent”；部署可通过 `FINANCEEX_INTENT_NO_MATCH_AGENT_NAME` 修改其中的 Agent 展示名称，历史已落库事件不会回写。
 
 ## 接口总览
 

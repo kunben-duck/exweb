@@ -90,10 +90,64 @@ class IntentServiceResponseMapperTest {
                 .containsEntry("candidateIntentNames", List.of("财经智能问数", "财经知识助手"));
     }
 
+    @Test
+    void noMatchUsesDefaultAgentDisplayName() throws Exception {
+        IntentDecision decision = mapper("").toDecision(noMatchResponse());
+
+        assertThat(decision.intentCode()).isEqualTo("finance.runtime.no_intent");
+        assertThat(decision.intentName())
+                .isEqualTo("未识别到可用意图，进入 FIN Supervisor Agent");
+        assertThat(decision.slots()).containsEntry("routeAction", "NO_MATCH");
+        assertThat(decision.candidateDomainAgentId()).isNull();
+    }
+
+    @Test
+    void noMatchUsesTrimmedConfiguredAgentDisplayName() throws Exception {
+        IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
+        properties.setNoMatchAgentName("  财务总控 Agent  ");
+
+        IntentDecision decision = mapper(properties).toDecision(noMatchResponse());
+
+        assertThat(decision.intentName()).isEqualTo("未识别到可用意图，进入 财务总控 Agent");
+    }
+
+    @Test
+    void noMatchFallsBackToDefaultAgentDisplayNameForMissingOrBlankConfiguration() throws Exception {
+        for (String configuredName : new String[]{null, "", "   "}) {
+            IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
+            properties.setNoMatchAgentName(configuredName);
+
+            IntentDecision decision = mapper(properties).toDecision(noMatchResponse());
+
+            assertThat(decision.intentName())
+                    .isEqualTo("未识别到可用意图，进入 FIN Supervisor Agent");
+        }
+    }
+
     private IntentServiceResponseMapper mapper(String prefix) {
         IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
         properties.setResponseAccessNamePrefix(prefix);
+        return mapper(properties);
+    }
+
+    private IntentServiceResponseMapper mapper(IntentServiceHttpProperties properties) {
         return new IntentServiceResponseMapper(objectMapper, properties);
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode noMatchResponse() throws Exception {
+        return objectMapper.readTree("""
+                {
+                  "code": 200,
+                  "status": "success",
+                  "data": {
+                    "result": {
+                      "routeAction": "NO_MATCH",
+                      "items": [],
+                      "clarification": null
+                    }
+                  }
+                }
+                """);
     }
 
     private com.fasterxml.jackson.databind.JsonNode response(String intentId, String accessName) {

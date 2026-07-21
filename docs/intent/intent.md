@@ -173,7 +173,7 @@ Authorization: {dynamicToken}
 | --- | --- | --- | --- |
 | `ROUTE_SINGLE` | 1 个 | null | 直接路由到 `items[0]` 对应 DomainAgent。 |
 | `ROUTE_MULTI` | 多个 | null | 进入 Supervisor / Relay 规划，适合复杂任务。 |
-| `NO_MATCH` | 空 | null | 当前领域无匹配，进入兜底处理或默认 Runtime。 |
+| `NO_MATCH` | 空 | null | 当前领域无匹配，进入 Relay；`intentName` 展示目标由 `financeex.intent.no-match-agent-name` 配置。 |
 | `CLARIFY` | 空或候选建议 | 非空 | 展示 `clarification.clarifyQuestion`，等待用户回答后再次调用意图服务。 |
 
 ### 4.2 clarification
@@ -470,7 +470,7 @@ Authorization: {dynamicToken}
 1. 必须优先读取 `data.result.routeAction`。
 2. `ROUTE_SINGLE`：读取唯一 `items[0].accessName`，按 `financeex.intent.response-access-name-prefix` 移除一次匹配的开头前缀后作为 DomainAgentId/skillId，创建或刷新 `provider=domain-agent` 的 RuntimeBinding；该配置为空时使用原始值。`intentId` 只作为意图编码，`resourceInstruction.resourceId` 只记录排障，均不参与路由；缺少 item 或有效 `accessName` 视为协议失败，按重试和 `financeex.intent.failure-strategy` 处理；`confidence` 只用于记录，不参与二次裁决。
 3. `ROUTE_MULTI`：进入复杂任务规划，通常走 Relay Runtime。
-4. `NO_MATCH`：进入兜底 Runtime 或通用处理。
+4. `NO_MATCH`：进入 Relay Runtime；`intentName` 固定组装为“未识别到可用意图，进入 {Agent 名称}”，名称由 `financeex.intent.no-match-agent-name` 配置，默认 `FIN Supervisor Agent`。该配置仅影响展示，不改变 `intentCode=finance.runtime.no_intent`、路由或 RouteMemory。
 5. `CLARIFY`：本轮 run 进入 `WAITING_USER`，写入 `run.waiting_user`，前端通过 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 提交澄清回答。
 6. 意图澄清属于路由阶段，不创建 RuntimeBinding，不调用 AgentRuntime。
 7. 用户回答意图澄清后，创建 continuation run，再次调用 `/getIntentDecision`。

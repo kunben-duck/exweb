@@ -495,7 +495,8 @@ class RouteSignalApplicationServiceTest {
     @Test
     void failRunStrategyDoesNotTreatValidNoMatchAsFailure() {
         IntentDecision noMatch = new IntentDecision(
-                "finance.runtime.no_intent", "未识别到可用意图", TaskComplexity.COMPLEX,
+                "finance.runtime.no_intent", "未识别到可用意图，进入 FIN Supervisor Agent",
+                TaskComplexity.COMPLEX,
                 0.0, false, null, Map.of("routeAction", "NO_MATCH"), List.of(), Map.of());
         RouteSignalApplicationService service = service(false, true,
                 request -> UseCaseMatchResult.notMatched("disabled"),
@@ -508,6 +509,33 @@ class RouteSignalApplicationServiceTest {
         assertThat(result.route().type()).isEqualTo(RouteType.AGENT_RUNTIME);
         assertThat(result.intentFailure()).isFalse();
         assertThat(result.failRunOnIntentFailure()).isFalse();
+    }
+
+    @Test
+    void noMatchDisplayNameFlowsToIntentResultWithoutChangingRelayRoute() {
+        IntentDecision noMatch = new IntentDecision(
+                "finance.runtime.no_intent", "未识别到可用意图，进入 FIN Supervisor Agent",
+                TaskComplexity.COMPLEX, 0.0, false, null,
+                Map.of("routeAction", "NO_MATCH"), List.of(), Map.of());
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                (command, memory, user) -> noMatch);
+
+        List<RouteSignalFrame> frames = service.routeInitialWithProgress(new RouteSignalRequest(
+                "run1", user, session, command, List.of(), memory)).collectList().block();
+
+        assertThat(frames).isNotNull();
+        assertThat(frames)
+                .filteredOn(frame -> frame.eventFrame()
+                        && "intent-result".equals(frame.event().payload().get("sourceType")))
+                .singleElement()
+                .satisfies(frame -> assertThat(frame.event().payload())
+                        .containsEntry("message", "已完成意图识别")
+                        .containsEntry("intentCode", "finance.runtime.no_intent")
+                        .containsEntry("intentName", "未识别到可用意图，进入 FIN Supervisor Agent")
+                        .containsEntry("routeAction", "NO_MATCH")
+                        .containsEntry("targetProvider", "relay"));
+        assertThat(frames.getLast().result().route().type()).isEqualTo(RouteType.AGENT_RUNTIME);
     }
 
     @Test

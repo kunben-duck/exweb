@@ -92,6 +92,8 @@ financeex:
     access-name: ${FINANCEEX_INTENT_ACCESS_NAME:}
     # 可选：从意图响应 items[].accessName 开头移除一次，得到真实 DomainAgent skillId。
     response-access-name-prefix: ${FINANCEEX_INTENT_RESPONSE_ACCESS_NAME_PREFIX:}
+    # NO_MATCH 仍进入 Relay；该配置只控制 intent-result 中展示的目标 Agent 名称。
+    no-match-agent-name: ${FINANCEEX_INTENT_NO_MATCH_AGENT_NAME:FIN Supervisor Agent}
     recognize-path: ${FINANCEEX_INTENT_RECOGNIZE_PATH:/intent-recognition-configuration/getIntentDecision}
     trace: ${FINANCEEX_INTENT_TRACE:false}
     # confidence 仅用于记录和排障；是否进入 DomainAgent 以 routeAction=ROUTE_SINGLE 为准。

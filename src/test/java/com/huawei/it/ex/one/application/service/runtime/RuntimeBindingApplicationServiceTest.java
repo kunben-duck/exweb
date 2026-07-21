@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
+import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
@@ -12,6 +13,8 @@ import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
 import com.huawei.it.ex.one.domain.chat.MessageCompletedEvent;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
+import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
+import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import java.time.Duration;
 import java.time.Instant;
@@ -21,6 +24,42 @@ import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 class RuntimeBindingApplicationServiceTest {
+    @Test
+    void relayBindingRecordsReplacesAndClearsAgentModeSnapshot() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache());
+        AgentModeProfile initial = mode("thinking", "deep");
+
+        RuntimeBinding created = service.resolveForRun(new RuntimeBindingResolutionCommand(
+                "t", "u", "s", "run1", "leaf1", initial)).binding();
+        RuntimeBinding inherited = service.resolveForRun(new RuntimeBindingResolutionCommand(
+                "t", "u", "s", "run2", "leaf2", null)).binding();
+        RuntimeBinding replaced = service.resolveForRun(new RuntimeBindingResolutionCommand(
+                "t", "u", "s", "run3", "leaf3", mode("execution", "long_task"))).binding();
+        RuntimeBinding cleared = service.resolveForRun(new RuntimeBindingResolutionCommand(
+                "t", "u", "s", "run4", "leaf4", AgentModeProfile.empty())).binding();
+
+        assertThat(AgentModeBindingContext.fromBinding(created)).isEqualTo(initial);
+        assertThat(AgentModeBindingContext.fromBinding(inherited)).isEqualTo(initial);
+        assertThat(AgentModeBindingContext.fromBinding(replaced))
+                .isEqualTo(mode("execution", "long_task"));
+        assertThat(cleared.metadata()).doesNotContainKey("agentMode");
+    }
+
+    @Test
+    void newDomainAgentBindingInheritsModeFromCancelledActiveBinding() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        RuntimeBinding active = binding(RuntimeBindingStatus.ACTIVE).withMetadata(
+                AgentModeBindingContext.apply(Map.of(), mode("thinking_level", "3")));
+        repository.saved = active;
+        RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache());
+
+        RuntimeBinding selected = service.bindDomainAgentForRun(new DomainAgentBindingCommand(
+                "t", "u", "s", "run2", "leaf2", "fund-agent", "intent", Map.of()));
+
+        assertThat(selected.provider()).isEqualTo(RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER);
+        assertThat(AgentModeBindingContext.fromBinding(selected)).isEqualTo(mode("thinking_level", "3"));
+    }
     @Test
     void readsCacheBeforeRepository() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
@@ -324,6 +363,24 @@ class RuntimeBindingApplicationServiceTest {
     }
 
     @Test
+    void resumeForInteractionAppliesExplicitAgentModeSnapshot() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        RuntimeBinding binding = binding(RuntimeBindingStatus.ACTIVE).withMetadata(
+                AgentModeBindingContext.apply(Map.of(), mode("thinking", "fast")));
+        repository.saved = binding;
+        RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache());
+
+        RuntimeBinding replaced = service.resumeForInteraction(
+                interactionRequest(binding.runtimeSessionId()), "run-replaced", mode("execution", "long_task"));
+        RuntimeBinding cleared = service.resumeForInteraction(
+                interactionRequest(binding.runtimeSessionId()), "run-cleared", AgentModeProfile.empty());
+
+        assertThat(AgentModeBindingContext.fromBinding(replaced))
+                .isEqualTo(mode("execution", "long_task"));
+        assertThat(cleared.metadata()).doesNotContainKey("agentMode");
+    }
+
+    @Test
     void loadsCancelledExpiredDomainAgentBindingForRefusalRerouteWithoutReactivatingIt() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
         InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
@@ -362,6 +419,10 @@ class RuntimeBindingApplicationServiceTest {
     private RuntimeBindingApplicationService service(InMemoryRuntimeBindingRepository repository,
                                                     InMemoryRuntimeBindingCache cache) {
         return service(repository, cache, Duration.ofDays(3));
+    }
+
+    private AgentModeProfile mode(String scheme, String code) {
+        return new AgentModeProfile(List.of(new AgentModeSelection(scheme, code, null)));
     }
 
     private RuntimeBindingApplicationService service(InMemoryRuntimeBindingRepository repository,

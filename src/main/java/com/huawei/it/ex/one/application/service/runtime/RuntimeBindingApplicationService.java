@@ -1,12 +1,14 @@
 package com.huawei.it.ex.one.application.service.runtime;
 
+import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
+import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
-import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
+import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import java.time.Duration;
@@ -96,6 +98,17 @@ public class RuntimeBindingApplicationService {
      */
     public RuntimeBindingResolution resolveForRun(String tenantId, String userId, String sessionId,
                                                   String runId, String leafMessageId) {
+        return resolveForRun(new RuntimeBindingResolutionCommand(
+                tenantId, userId, sessionId, runId, leafMessageId, null));
+    }
+
+    public RuntimeBindingResolution resolveForRun(RuntimeBindingResolutionCommand command) {
+        String tenantId = command.tenantId();
+        String userId = command.userId();
+        String sessionId = command.sessionId();
+        String runId = command.runId();
+        String leafMessageId = command.leafMessageId();
+        AgentModeProfile agentMode = command.agentMode();
         Instant now = Instant.now();
         List<RuntimeBinding> activeBindings = repository.findActiveBySession(tenantId, userId, sessionId, runtimeProvider)
                 .stream()
@@ -104,7 +117,7 @@ public class RuntimeBindingApplicationService {
                         .reversed())
                 .toList();
         if (!activeBindings.isEmpty()) {
-            RuntimeBinding selected = touchForRun(activeBindings.getFirst(), runId);
+            RuntimeBinding selected = touchForRun(activeBindings.getFirst(), runId, agentMode);
             cancelDuplicateBindings(activeBindings, selected);
             cache.put(selected);
             return new RuntimeBindingResolution(selected, RuntimeSessionMode.RESUME);
@@ -118,11 +131,12 @@ public class RuntimeBindingApplicationService {
                         .reversed())
                 .toList();
         if (!resumableBindings.isEmpty()) {
-            RuntimeBinding selected = activateResumableForRun(resumableBindings.getFirst(), runId, leafMessageId);
+            RuntimeBinding selected = activateResumableForRun(
+                    resumableBindings.getFirst(), runId, leafMessageId, agentMode);
             cancelDuplicateBindings(resumableBindings, selected);
             return new RuntimeBindingResolution(selected, RuntimeSessionMode.RESUME);
         }
-        RuntimeBinding created = create(tenantId, userId, sessionId, runId, leafMessageId);
+        RuntimeBinding created = create(command);
         return new RuntimeBindingResolution(created, RuntimeSessionMode.NEW);
     }
 
@@ -201,8 +215,15 @@ public class RuntimeBindingApplicationService {
      * @return 已保存的 Runtime 绑定。
      */
     public RuntimeBinding create(String tenantId, String userId, String sessionId, String runId, String leafMessageId) {
-        return create(new RuntimeBindingCreateCommand(tenantId, userId, sessionId, runtimeProvider,
-                runId, leafMessageId, sessionId, Map.of()));
+        return create(new RuntimeBindingResolutionCommand(
+                tenantId, userId, sessionId, runId, leafMessageId, null));
+    }
+
+    private RuntimeBinding create(RuntimeBindingResolutionCommand command) {
+        return create(new RuntimeBindingCreateCommand(
+                command.tenantId(), command.userId(), command.sessionId(), runtimeProvider,
+                command.runId(), command.leafMessageId(), command.sessionId(),
+                AgentModeBindingContext.apply(Map.of(), command.agentMode())));
     }
 
     private RuntimeBinding create(RuntimeBindingCreateCommand command) {
@@ -224,9 +245,10 @@ public class RuntimeBindingApplicationService {
         if (command == null || command.domainAgentId() == null || command.domainAgentId().isBlank()) {
             throw new IllegalArgumentException("DomainAgent ID 不能为空");
         }
-        cancelActive(command.tenantId(), command.userId(), command.sessionId());
+        List<RuntimeBinding> cancelled = cancelActive(command.tenantId(), command.userId(), command.sessionId());
+        AgentModeProfile effectiveMode = AgentModeBindingContext.resolve(command.agentMode(), cancelled);
         Map<String, Object> metadata = domainAgentMetadata(command.domainAgentId(), command.routeSource(),
-                command.intentMetadata(), null);
+                command.intentMetadata(), null, effectiveMode);
         return create(new RuntimeBindingCreateCommand(command.tenantId(), command.userId(), command.sessionId(),
                 DOMAIN_AGENT_PROVIDER, command.runId(), command.leafMessageId(), command.sessionId(), metadata));
     }
@@ -238,7 +260,7 @@ public class RuntimeBindingApplicationService {
             return null;
         }
         Map<String, Object> metadata = domainAgentMetadata(domainAgentId, routeSource, intentMetadata,
-                binding.metadata());
+                binding.metadata(), null);
         return save(binding.withMetadata(metadata).withRun(runId, expiresAt(binding.provider(), false)));
     }
 
@@ -250,10 +272,15 @@ public class RuntimeBindingApplicationService {
      * @return 续期后的 Runtime 绑定。
      */
     public RuntimeBinding touchForRun(RuntimeBinding binding, String runId) {
+        return touchForRun(binding, runId, null);
+    }
+
+    public RuntimeBinding touchForRun(RuntimeBinding binding, String runId, AgentModeProfile agentMode) {
         if (binding == null) {
             return null;
         }
-        return save(binding.withRun(runId, expiresAt(binding.provider(), relaySessionEstablished(binding))));
+        RuntimeBinding next = binding.withRun(runId, expiresAt(binding.provider(), relaySessionEstablished(binding)));
+        return save(next.withMetadata(AgentModeBindingContext.apply(next.metadata(), agentMode)));
     }
 
     /**
@@ -263,12 +290,18 @@ public class RuntimeBindingApplicationService {
      * session 不再设置业务过期时间。</p>
      */
     public RuntimeBinding resumeForInteraction(ChatInteractionRequest request, String runId) {
+        return resumeForInteraction(request, runId, null);
+    }
+
+    public RuntimeBinding resumeForInteraction(ChatInteractionRequest request, String runId,
+                                               AgentModeProfile agentMode) {
         if (request == null) {
             throw new IllegalArgumentException("Interaction 请求不能为空");
         }
         RuntimeBinding binding = loadInteractionBinding(request);
         RuntimeBinding next = withRuntimeSessionId(binding, request.runtimeSessionId());
-        return touchAndMoveToLeaf(next, runId, request.assistantMessageId());
+        RuntimeBinding updated = next.withMetadata(AgentModeBindingContext.apply(next.metadata(), agentMode));
+        return touchAndMoveToLeaf(updated, runId, request.assistantMessageId());
     }
 
     /**
@@ -328,13 +361,16 @@ public class RuntimeBindingApplicationService {
      * @param userId 用户标识。
      * @param sessionId 前端聊天会话标识。
      */
-    public void cancelActive(String tenantId, String userId, String sessionId) {
+    public List<RuntimeBinding> cancelActive(String tenantId, String userId, String sessionId) {
         List<RuntimeBinding> active = repository.findActiveBySession(tenantId, userId, sessionId);
         if (active.isEmpty()) {
             active = repository.findActiveBySession(tenantId, userId, sessionId, runtimeProvider);
         }
-        active.forEach(binding -> save(binding.withStatus(RuntimeBindingStatus.CANCELLED)));
+        List<RuntimeBinding> cancelled = active.stream()
+                .map(binding -> save(binding.withStatus(RuntimeBindingStatus.CANCELLED)))
+                .toList();
         cache.evict(tenantId, userId, sessionId);
+        return cancelled;
     }
 
     /**
@@ -474,14 +510,15 @@ public class RuntimeBindingApplicationService {
         cache.put(selected);
     }
 
-    private RuntimeBinding activateResumableForRun(RuntimeBinding binding, String runId, String leafMessageId) {
+    private RuntimeBinding activateResumableForRun(RuntimeBinding binding, String runId, String leafMessageId,
+                                                   AgentModeProfile agentMode) {
         RuntimeBinding next = markRelaySessionEstablished(binding, binding.runtimeSessionId())
                 .withRun(runId, null);
         if (leafMessageId != null && !leafMessageId.isBlank()
                 && !leafMessageId.equals(next.leafMessageId())) {
             next = next.withLeafMessageId(leafMessageId);
         }
-        return save(next);
+        return save(next.withMetadata(AgentModeBindingContext.apply(next.metadata(), agentMode)));
     }
 
     private RuntimeBinding markRelaySessionEstablished(RuntimeBinding binding, String runtimeSessionId) {
@@ -528,7 +565,8 @@ public class RuntimeBindingApplicationService {
 
     private Map<String, Object> domainAgentMetadata(String domainAgentId, String routeSource,
                                                     Map<String, Object> intentMetadata,
-                                                    Map<String, Object> previousMetadata) {
+                                                    Map<String, Object> previousMetadata,
+                                                    AgentModeProfile agentMode) {
         Map<String, Object> metadata = new LinkedHashMap<>();
         if (previousMetadata != null) {
             metadata.putAll(previousMetadata);
@@ -538,7 +576,7 @@ public class RuntimeBindingApplicationService {
         if (intentMetadata != null && !intentMetadata.isEmpty()) {
             metadata.putAll(intentMetadata);
         }
-        return Map.copyOf(metadata);
+        return AgentModeBindingContext.apply(metadata, agentMode);
     }
 
     private String blankToDefault(String value, String defaultValue) {

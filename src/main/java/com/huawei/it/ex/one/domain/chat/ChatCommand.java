@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.domain.chat;
 
+import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import java.util.List;
 import java.util.Map;
 
@@ -33,6 +34,7 @@ import java.util.Map;
  * @param questionnaireAnswers 澄清问题答案。
  * @param appId 会话所属应用标识，只用于会话创建和一致性校验。
  * @param appName 会话所属应用名称快照，只用于会话创建和一致性校验。
+ * @param agentMode 可选 Agent 模式完整快照；null 表示本轮未提交，空 selections 表示显式清除。
  */
 public record ChatCommand(
         String commandId,
@@ -56,8 +58,21 @@ public record ChatCommand(
         String scope,
         Map<String, Object> questionnaireAnswers,
         String appId,
-        String appName
+        String appName,
+        AgentModeProfile agentMode
 ) {
+    /** 兼容尚未携带 Agent 模式的完整命令构造器。 */
+    public ChatCommand(
+            String commandId, String tenantId, String userId, String sessionId, String conversationId,
+            String channel, String message, List<AttachmentRef> attachments, Map<String, Object> metadata,
+            String targetType, String targetId, ChatRunMode runMode, String parentMessageId,
+            String editedMessageId, String regeneratedMessageId, String routeTrigger, String interactionId,
+            Boolean approved, String scope, Map<String, Object> questionnaireAnswers, String appId, String appName) {
+        this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
+                targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
+                routeTrigger, interactionId, approved, scope, questionnaireAnswers, appId, appName, null);
+    }
+
     /** 兼容尚未携带 App Tag 的完整命令构造器。 */
     public ChatCommand(
             String commandId, String tenantId, String userId, String sessionId, String conversationId,
@@ -67,7 +82,7 @@ public record ChatCommand(
             Boolean approved, String scope, Map<String, Object> questionnaireAnswers) {
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
-                routeTrigger, interactionId, approved, scope, questionnaireAnswers, null, null);
+                routeTrigger, interactionId, approved, scope, questionnaireAnswers, null, null, null);
     }
 
     /**

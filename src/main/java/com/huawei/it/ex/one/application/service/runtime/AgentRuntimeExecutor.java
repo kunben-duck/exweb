@@ -5,6 +5,8 @@ import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeCancelRequ
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteraction;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
+import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
+import com.huawei.it.ex.one.application.integration.agent.AgentModeOutboundParameters;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.common.trace.TraceContext;
@@ -34,11 +36,12 @@ public class AgentRuntimeExecutor {
 
     private final AgentRuntimeRegistry runtimeRegistry;
     private final WorkloadConcurrencyLimiter concurrencyLimiter;
+    private final AgentModeAdapterRegistry agentModeAdapterRegistry;
 
     public AgentRuntimeExecutor(AgentRuntime runtime, WorkloadConcurrencyLimiter concurrencyLimiter) {
         this(new AgentRuntimeRegistry(runtime == null ? List.of() : List.of(runtime),
                         runtime == null ? "relay" : runtime.provider()),
-                concurrencyLimiter);
+                concurrencyLimiter, new AgentModeAdapterRegistry(List.of()));
     }
 
     public AgentRuntimeExecutor(AgentRuntime runtime, AgentRuntimeInteraction runtimeInteraction,
@@ -48,9 +51,13 @@ public class AgentRuntimeExecutor {
     }
 
     @Autowired
-    public AgentRuntimeExecutor(AgentRuntimeRegistry runtimeRegistry, WorkloadConcurrencyLimiter concurrencyLimiter) {
+    public AgentRuntimeExecutor(AgentRuntimeRegistry runtimeRegistry, WorkloadConcurrencyLimiter concurrencyLimiter,
+                                AgentModeAdapterRegistry agentModeAdapterRegistry) {
         this.runtimeRegistry = runtimeRegistry;
         this.concurrencyLimiter = concurrencyLimiter;
+        this.agentModeAdapterRegistry = agentModeAdapterRegistry == null
+                ? new AgentModeAdapterRegistry(List.of())
+                : agentModeAdapterRegistry;
     }
 
     public Flux<ChatEvent> execute(RuntimeExecutionContext context) {
@@ -61,6 +68,12 @@ public class AgentRuntimeExecutor {
         // AgentRuntimeRequest 不再携带旧能力列表。复杂 Agent 需要的外部能力编排应由 Runtime 自己管理，
         // SuperAgent 只传当前用户消息、可见上下文快照、意图/路由信号和上次 runtimeSessionId。
         // forwardHeaders 仅为运行期内存快照，可信 Runtime adapter 决定是否放入出站请求头。
+        AgentRuntime runtime = context.binding() == null
+                ? runtimeRegistry.defaultRuntime()
+                : runtimeRegistry.runtime(context.binding().provider());
+        String targetId = context.route() == null ? null : context.route().selectedAgentCode();
+        AgentModeOutboundParameters modeParameters = agentModeAdapterRegistry.adapt(
+                AgentModeBindingContext.fromBinding(binding), runtime.provider(), targetId);
         AgentRuntimeRequest request = new AgentRuntimeRequest(
                 user.tenantId(),
                 user.ownerUserId(),
@@ -79,15 +92,15 @@ public class AgentRuntimeExecutor {
                 SelectedIntentContext.removeReserved(command.metadata()),
                 binding == null ? Map.of() : binding.metadata(),
                 context.forwardHeaders(),
-                context.traceContext()
+                context.traceContext(),
+                modeParameters
         );
-        AgentRuntime runtime = context.binding() == null
-                ? runtimeRegistry.defaultRuntime()
-                : runtimeRegistry.runtime(context.binding().provider());
         return protect(runtime.provider(), runtime.query(request));
     }
 
     public Flux<ChatEvent> continueWithUserResponse(RuntimeInteractionResponseContext context) {
+        AgentModeOutboundParameters modeParameters = agentModeAdapterRegistry.adapt(
+                context.agentMode(), context.runtimeProvider(), context.targetId());
         var request = new AgentRuntimeInteractionResponseRequest(
                 context.user().tenantId(),
                 context.user().ownerUserId(),
@@ -102,7 +115,8 @@ public class AgentRuntimeExecutor {
                 context.approvalId(),
                 context.responsePayload(),
                 context.forwardHeaders(),
-                context.traceContext()
+                context.traceContext(),
+                modeParameters
         );
         return protect(context.runtimeProvider(), runtimeRegistry.continueWithUserResponse(request));
     }

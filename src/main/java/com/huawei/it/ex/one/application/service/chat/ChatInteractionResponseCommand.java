@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
+import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import java.util.List;
 import java.util.Map;
 
@@ -18,12 +19,22 @@ public record ChatInteractionResponseCommand(
         String sessionId,
         String appId,
         String appName,
-        List<AttachmentRef> attachments
+        List<AttachmentRef> attachments,
+        AgentModeProfile agentMode
 ) {
+    public ChatInteractionResponseCommand(
+            UserContext user, String interactionId, Boolean approved, String scope,
+            Map<String, Object> questionnaireAnswers, Map<String, Object> metadata,
+            String sessionId, String appId, String appName, List<AttachmentRef> attachments) {
+        this(user, interactionId, approved, scope, questionnaireAnswers, metadata,
+                sessionId, appId, appName, attachments, null);
+    }
+
     /** 兼容不携带会话 App Tag 的内部调用。 */
     public ChatInteractionResponseCommand(UserContext user, String interactionId, Boolean approved, String scope,
                                           Map<String, Object> questionnaireAnswers, Map<String, Object> metadata) {
-        this(user, interactionId, approved, scope, questionnaireAnswers, metadata, null, null, null, List.of());
+        this(user, interactionId, approved, scope, questionnaireAnswers, metadata,
+                null, null, null, List.of(), null);
     }
 
     /** 兼容不携带附件的 App Tag 续接调用。 */
@@ -31,7 +42,7 @@ public record ChatInteractionResponseCommand(
                                           Map<String, Object> questionnaireAnswers, Map<String, Object> metadata,
                                           String sessionId, String appId, String appName) {
         this(user, interactionId, approved, scope, questionnaireAnswers, metadata,
-                sessionId, appId, appName, List.of());
+                sessionId, appId, appName, List.of(), null);
     }
 
     public ChatInteractionResponseCommand {

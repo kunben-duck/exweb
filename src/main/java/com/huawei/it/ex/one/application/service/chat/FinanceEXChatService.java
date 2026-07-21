@@ -1,10 +1,11 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
+import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
 import com.huawei.it.ex.one.application.facade.FinanceChatFacade;
 import com.huawei.it.ex.one.application.facade.ResolvedChatAttachments;
-import com.huawei.it.ex.one.application.config.DomainAgentProperties;
-import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
+import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeSessionUnavailable;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
@@ -28,11 +29,14 @@ import com.huawei.it.ex.one.application.service.runtime.DomainAgentExecutionCont
 import com.huawei.it.ex.one.application.service.runtime.DomainAgentExecutor;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingResolution;
+import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingResolutionCommand;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeExecutionContext;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeInteractionResponseContext;
 import com.huawei.it.ex.one.application.service.runtime.SystemResponseExecutor;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
@@ -59,20 +63,21 @@ import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.chat.RunStartedEvent;
 import com.huawei.it.ex.one.domain.chat.RunWaitingUserEvent;
+import com.huawei.it.ex.one.domain.document.UploadedDocument;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryContext;
-import com.huawei.it.ex.one.domain.document.UploadedDocument;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RouteType;
+import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import com.huawei.it.ex.one.infrastructure.runtime.domainagent.DomainAgentControlEventMapper;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.HashSet;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -82,8 +87,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import com.huawei.it.ex.one.common.logging.AppLogger;
-import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.stereotype.Service;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
@@ -412,7 +415,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                             return executeInteractionContinuation(
                                     user, claim, runId,
                                     new InteractionContinuationOptions(
-                                            headerSnapshot, traceContext, startAttempt, null),
+                                            headerSnapshot, traceContext, startAttempt, null, command.agentMode()),
                                     clarificationInputRef.get());
                         } catch (RuntimeException ex) {
                             chatInteractionService.markWaiting(claim.request());
@@ -703,7 +706,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         }
         return new ChatInteractionResponseCommand(user, command.interactionId(), command.approved(), command.scope(),
                 command.questionnaireAnswers(), command.metadata(), command.sessionId(), command.appId(), command.appName(),
-                command.attachments());
+                command.attachments(), command.agentMode());
     }
 
     private Map<String, Object> prepareInteractionResponse(
@@ -793,6 +796,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 command.questionnaireAnswers());
         String messageText = textAnswer == null ? "" : textAnswer;
         String intentQuery = clarificationAnswerWithAttachments(textAnswer, currentAttachments);
+        AgentModeProfile agentMode = command.agentMode() != null
+                ? command.agentMode()
+                : AgentModeBindingContext.fromInteraction(interaction.requestPayload());
         return new IntentClarificationContinuationInput(
                 messageText,
                 intentQuery,
@@ -800,7 +806,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 cumulativeAttachments,
                 cumulativeDocuments,
                 List.copyOf(cumulativeOrder.keySet()),
-                command.metadata());
+                command.metadata(),
+                agentMode);
     }
 
     private Map<String, AttachmentRef> attachmentsByDocumentId(List<AttachmentRef> attachments) {
@@ -919,6 +926,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
         ChatRunMessagePlan messagePlan = new ChatRunMessagePlan(ChatRunMode.NEXT,
                 interaction.userMessageId(), userMessage, null);
         AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>();
+        AtomicReference<AgentModeProfile> agentModeRef = new AtomicReference<>(
+                options.agentMode() != null
+                        ? options.agentMode()
+                        : AgentModeBindingContext.fromInteraction(interaction.requestPayload()));
         AssistantAssembly assistant = new AssistantAssembly();
         ChatRun run = chatRunService.createInteractionRunning(new CreateChatRunContext(
                 runId,
@@ -941,11 +952,15 @@ public class FinanceEXChatService implements FinanceChatFacade {
         trackStartAttemptExecution(startAttempt, executionClaim, "after-interaction-execution-create");
         RunEventPipelineContext context = new RunEventPipelineContext(user, session, messagePlan,
                 new AtomicReference<>(route), bindingRef, assistant, runId, executionClaim, new AtomicReference<>(),
-                interaction, startAttempt, List.of());
+                interaction, startAttempt, List.of(), agentModeRef);
         try {
             return executeAfterRunStarted(context, () -> {
-                RuntimeBinding binding = runtimeBindingService.resumeForInteraction(interaction, runId);
+                RuntimeBinding binding = runtimeBindingService.resumeForInteraction(
+                        interaction, runId, agentModeRef.get());
                 bindingRef.set(binding);
+                if (agentModeRef.get() == null) {
+                    agentModeRef.set(AgentModeBindingContext.fromBinding(binding));
+                }
                 bestEffortBindResolvedRoute(runId, route, binding);
                 return Flux.concat(
                         Flux.just(responseEvent),
@@ -962,7 +977,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                                 interaction.approvalId(),
                                                 claim.responsePayload(),
                                                 forwardHeaders,
-                                                options.traceContext()
+                                                options.traceContext(),
+                                                agentModeRef.get(),
+                                                RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(
+                                                        binding.provider()) ? domainAgentId(binding) : null
                                         ))))
                 );
             });
@@ -985,6 +1003,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         MemoryContext memory = MemoryContext.empty();
         AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>();
         AtomicReference<RouteTarget> routeRef = new AtomicReference<>();
+        AtomicReference<AgentModeProfile> agentModeRef = new AtomicReference<>(input.agentMode());
         AtomicReference<RuntimeSessionMode> runtimeSessionModeRef = new AtomicReference<>(RuntimeSessionMode.RESUME);
 
         ChatRunAdmissionCommitService.AdmissionResult admission = runAdmissionCommitService == null
@@ -1009,7 +1028,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
         RunEventPipelineContext context = new RunEventPipelineContext(user, session, messagePlan, routeRef, bindingRef,
                 new AssistantAssembly(), runId, executionClaim, new AtomicReference<>(), interaction, startAttempt,
-                input.cumulativeDocumentIds());
+                input.cumulativeDocumentIds(), agentModeRef);
         String foldedRouteQuery = routeMemoryQuery(messagePlan, interaction, input.intentQuery());
         try {
             return executeAfterRunStarted(context, () -> Flux.concat(
@@ -1019,7 +1038,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                             messagePlan.parentMessageId(), forwardHeaders, options.traceContext(), routeRef, bindingRef,
                             runtimeSessionModeRef, executionClaim, run,
                             foldedRouteQuery, input.intentQuery(), foldedRouteQuery,
-                            input.runtimeMetadata()))));
+                            input.runtimeMetadata(), agentModeRef))));
         } catch (RuntimeException ex) {
             return failInteractionContinuationRun(context, ex);
         }
@@ -1082,6 +1101,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
         ChatRunMessagePlan messagePlan = new ChatRunMessagePlan(ChatRunMode.NEXT,
                 interaction.userMessageId(), userMessage, null);
         AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>();
+        AtomicReference<AgentModeProfile> agentModeRef = new AtomicReference<>(
+                options.agentMode() != null
+                        ? options.agentMode()
+                        : AgentModeBindingContext.fromInteraction(interaction.requestPayload()));
         AssistantAssembly assistant = new AssistantAssembly();
         ChatRun run = chatRunService.createInteractionRunning(new CreateChatRunContext(
                 runId,
@@ -1105,32 +1128,46 @@ public class FinanceEXChatService implements FinanceChatFacade {
         AtomicReference<RouteTarget> routeRef = new AtomicReference<>(route);
         RunEventPipelineContext context = new RunEventPipelineContext(user, session, messagePlan,
                 routeRef, bindingRef, assistant, runId, executionClaim, new AtomicReference<>(),
-                interaction, startAttempt, List.of());
+                interaction, startAttempt, List.of(), agentModeRef);
         try {
             return executeAfterRunStarted(context, () -> {
                 RuntimeSessionMode runtimeSessionMode = RuntimeSessionMode.RESUME;
                 RuntimeBinding binding;
                 if (!approved) {
-                    binding = runtimeBindingService.resumeForInteraction(interaction, runId);
+                    binding = runtimeBindingService.resumeForInteraction(interaction, runId, agentModeRef.get());
                 } else if (RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(candidateProvider)) {
+                    RuntimeBinding currentBinding = runtimeBindingService.resumeForInteraction(
+                            interaction, runId, agentModeRef.get());
+                    if (agentModeRef.get() == null) {
+                        agentModeRef.set(AgentModeBindingContext.fromBinding(currentBinding));
+                    }
                     runtimeBindingService.markNotRoutable(
-                            runtimeBindingService.resumeForInteraction(interaction, runId),
+                            currentBinding,
                             firstText(interaction.requestPayload().get("refusalCode")));
                     binding = runtimeBindingService.bindDomainAgentForRun(new DomainAgentBindingCommand(
                             user.tenantId(), user.ownerUserId(), session.id(), runId,
                             interaction.assistantMessageId(), candidateTargetId,
-                            "user-confirmed", routeSwitchBindingMetadata(interaction)));
+                            "user-confirmed", routeSwitchBindingMetadata(interaction), agentModeRef.get()));
                 } else if (RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(candidateProvider)) {
+                    RuntimeBinding currentBinding = runtimeBindingService.resumeForInteraction(
+                            interaction, runId, agentModeRef.get());
+                    if (agentModeRef.get() == null) {
+                        agentModeRef.set(AgentModeBindingContext.fromBinding(currentBinding));
+                    }
                     runtimeBindingService.markNotRoutable(
-                            runtimeBindingService.resumeForInteraction(interaction, runId),
+                            currentBinding,
                             firstText(interaction.requestPayload().get("refusalCode")));
                     RuntimeBindingResolution resolution = runtimeBindingService.resolveForRun(
-                            user.tenantId(), user.ownerUserId(), session.id(), runId,
-                            interaction.assistantMessageId());
+                            new RuntimeBindingResolutionCommand(
+                                    user.tenantId(), user.ownerUserId(), session.id(), runId,
+                                    interaction.assistantMessageId(), agentModeRef.get()));
                     binding = resolution.binding();
                     runtimeSessionMode = resolution.sessionMode();
                 } else {
                     throw new IllegalArgumentException("不支持的候选 Runtime provider: " + candidateProvider);
+                }
+                if (agentModeRef.get() == null) {
+                    agentModeRef.set(AgentModeBindingContext.fromBinding(binding));
                 }
                 bindingRef.set(binding);
                 bestEffortBindResolvedRoute(runId, route, binding);
@@ -1144,7 +1181,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                             null, originalQuery == null ? "" : originalQuery, List.of(), Map.of(),
                             route.type() == RouteType.DOMAIN_AGENT ? "DOMAIN_AGENT" : null,
                             route.type() == RouteType.DOMAIN_AGENT ? candidateTargetId : null, ChatRunMode.NEXT,
-                            interaction.assistantMessageId(), null, null);
+                            interaction.assistantMessageId(), null, null, null, null, null, null, null,
+                            null, null, agentModeRef.get());
                     if (route.type() == RouteType.DOMAIN_AGENT) {
                         DomainAgentRunContext domainContext = new DomainAgentRunContext(
                                 command, runId, session, runtimeMemory, route, user, routeRef, bindingRef,
@@ -1242,7 +1280,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     command.runMode(), command.parentMessageId(),
                     command.editedMessageId(), command.regeneratedMessageId(), command.routeTrigger(),
                     command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers(),
-                    command.appId(), command.appName());
+                    command.appId(), command.appName(), command.agentMode());
             String explicitDomainAgentId = explicitDomainAgentId(identified);
             boolean directDomainAgentWaitBypass = runAdmissionCommitService != null
                     && directDomainAgentWaitBypass(identified, explicitDomainAgentId);
@@ -1254,6 +1292,12 @@ public class FinanceEXChatService implements FinanceChatFacade {
             // 会话不存在时创建会话；历史 Memory 先排除本轮输入，避免 Runtime 再接收用户消息时重复。
             ChatSession session = sessionService.loadOrCreate(identified);
             ensureStartAttemptActive(startAttempt, "after-session-load");
+            AgentModeProfile pendingInteractionMode = directDomainAgentWaitBypass && chatInteractionService != null
+                    ? chatInteractionService.findWaiting(user, session.id())
+                    .map(ChatInteractionRequest::requestPayload)
+                    .map(AgentModeBindingContext::fromInteraction)
+                    .orElse(null)
+                    : null;
             // 同一会话同一时刻只允许一个 active run。这里在写入用户消息前快速拒绝，
             // 避免多页签重复提交时先污染消息树；createRunning 仍会再做一次 Redis 原子声明。
             if (chatInteractionService != null && !directDomainAgentWaitBypass) {
@@ -1278,7 +1322,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     identified.runMode(), identified.parentMessageId(),
                     identified.editedMessageId(), identified.regeneratedMessageId(), identified.routeTrigger(),
                     identified.interactionId(), identified.approved(), identified.scope(),
-                    identified.questionnaireAnswers(), identified.appId(), identified.appName());
+                    identified.questionnaireAnswers(), identified.appId(), identified.appName(),
+                    identified.agentMode());
             String runId = startAttempt == null
                     ? idGenerator.newId("run", IdGenerateContext.of(user.tenantId(), user.ownerUserId(), session.id()))
                     : startAttempt.runId();
@@ -1299,6 +1344,12 @@ public class FinanceEXChatService implements FinanceChatFacade {
             ChatRunMessagePlan messagePlan = admission.messagePlan();
             ChatRun run = admission.run();
             admission.cancelledBindings().forEach(this::scheduleRuntimeBindingCacheSync);
+            AgentModeProfile requestedMode = normalized.agentMode() != null
+                    ? normalized.agentMode()
+                    : pendingInteractionMode;
+            AgentModeProfile initialAgentMode = AgentModeBindingContext.resolve(
+                    requestedMode, admission.cancelledBindings());
+            AtomicReference<AgentModeProfile> agentModeRef = new AtomicReference<>(initialAgentMode);
             trackStartAttemptRun(startAttempt, run, "after-run-admission");
             chatRunService.synchronizeCommittedRunCache(run);
             ensureStartAttemptActive(startAttempt, "after-run-cache-sync");
@@ -1326,23 +1377,24 @@ public class FinanceEXChatService implements FinanceChatFacade {
                  */
                 RunEventPipelineContext context = new RunEventPipelineContext(user, session, messagePlan,
                         routeRef, bindingRef, assistant, runId, executionClaim, pendingInteractionPayloadRef, null,
-                        startAttempt, documentIds(documents));
+                        startAttempt, documentIds(documents), agentModeRef);
                 return executeAfterRunStarted(context, () -> {
                     prepareInitialRouteAndBinding(new InitialRoutePreparation(
                             user, session, runId, runtimeBindingLeafId, runCommand,
                             explicitDomainAgentId, forceReroute,
-                            routeRef, bindingRef, runtimeSessionModeRef));
+                            routeRef, bindingRef, runtimeSessionModeRef, agentModeRef));
                     return routeAndExecute(new RoutePipelineRequest(
                             user, session, runCommand, attachments, documents, memory, runId, runtimeBindingLeafId,
                             headerSnapshot, traceContext, routeRef, bindingRef, runtimeSessionModeRef, executionClaim, run,
-                            currentRouteQuery, intentQuery, intentQuery, null));
+                            currentRouteQuery, intentQuery, intentQuery, null, agentModeRef));
                 });
             } catch (RuntimeException ex) {
                 // run 已创建后同步步骤失败时，也必须写入 run.failed 并释放 active run，避免前端看到永远 RUNNING。
                 return persistAndPublishRunEvents(
                         Flux.just(runtimeErrorEvent(runId, session.id(), ex)),
                         new RunEventPipelineContext(user, session, messagePlan, routeRef, bindingRef, assistant, runId,
-                                executionClaim, pendingInteractionPayloadRef, null, startAttempt, documentIds(documents))
+                                executionClaim, pendingInteractionPayloadRef, null, startAttempt,
+                                documentIds(documents), agentModeRef)
                 ).doFinally(ignored -> runExecutionRegistry.complete(executionClaim));
             }
         });
@@ -1482,12 +1534,12 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 return Flux.just(routeSwitchConfirmationRequest(reroute, nextSignal));
             }
             context.bindingRef().set(markRejectedBindingNotRoutable(context.bindingRef().get(), refusal));
+            AgentModeProfile rerouteMode = AgentModeBindingContext.resolve(
+                    context.command().agentMode(), context.bindingRef().get());
             RuntimeBindingResolution resolution = runtimeBindingService.resolveForRun(
-                    context.user().tenantId(),
-                    context.user().ownerUserId(),
-                    context.session().id(),
-                    context.runId(),
-                    runtimeBindingLeafIdForCommand(context.command()));
+                    new RuntimeBindingResolutionCommand(
+                            context.user().tenantId(), context.user().ownerUserId(), context.session().id(),
+                            context.runId(), runtimeBindingLeafIdForCommand(context.command()), rerouteMode));
             context.bindingRef().set(resolution.binding());
             context.routeRef().set(nextRoute);
             bestEffortBindResolvedRoute(context.runId(), nextRoute, resolution.binding());
@@ -1526,6 +1578,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
             return Flux.just(routeSwitchConfirmationRequest(reroute, nextSignal));
         }
         context.bindingRef().set(markRejectedBindingNotRoutable(context.bindingRef().get(), refusal));
+        AgentModeProfile rerouteMode = AgentModeBindingContext.resolve(
+                context.command().agentMode(), context.bindingRef().get());
         RuntimeBinding nextBinding = runtimeBindingService.bindDomainAgentForRun(new DomainAgentBindingCommand(
                 context.user().tenantId(),
                 context.user().ownerUserId(),
@@ -1534,7 +1588,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 runtimeBindingLeafIdForCommand(context.command()),
                 nextRoute.selectedAgentCode(),
                 nextRoute.routeSource(),
-                domainAgentBindingMetadata(nextRoute, nextSignal.intentDecision())));
+                domainAgentBindingMetadata(nextRoute, nextSignal.intentDecision()),
+                rerouteMode));
         context.bindingRef().set(nextBinding);
         context.routeRef().set(nextRoute);
         bestEffortBindResolvedRoute(context.runId(), nextRoute, nextBinding);
@@ -1717,7 +1772,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 command.targetType(), command.targetId(), command.runMode(), command.parentMessageId(),
                 command.editedMessageId(), command.regeneratedMessageId(), "domain_reject",
                 command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers(),
-                command.appId(), command.appName());
+                command.appId(), command.appName(), command.agentMode());
     }
 
     private boolean forceReroute(ChatCommand command) {
@@ -1737,7 +1792,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                                                               IntentClarificationContinuationInput input) {
         Map<String, Object> metadata = new LinkedHashMap<>();
         Map<String, Object> requestPayload = interaction.requestPayload() == null ? Map.of() : interaction.requestPayload();
-        Map<String, Object> publicRequestPayload = withoutIntentClarificationDocumentIds(requestPayload);
+        Map<String, Object> publicRequestPayload = AgentModeBindingContext.removeInteractionPrivate(
+                withoutIntentClarificationDocumentIds(requestPayload));
         String clarifyAnswer = blankToDefault(input.intentQuery(), intentClarificationAnswer(responsePayload));
         String resolvedOriginalQuery = blankToDefault(
                 firstText(requestPayload.get("originalQuery"), clarifyAnswer), "");
@@ -1763,7 +1819,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
         return new ChatCommand(null, user.tenantId(), user.ownerUserId(), session.id(), null,
                 null, clarifyAnswer == null ? "" : clarifyAnswer,
                 input.cumulativeAttachments(), Map.copyOf(metadata),
-                null, null, ChatRunMode.NEXT, interaction.assistantMessageId(), null, null, "clarify_answer");
+                null, null, ChatRunMode.NEXT, interaction.assistantMessageId(), null, null, "clarify_answer",
+                null, null, null, Map.of(), null, null, input.agentMode());
     }
 
     private List<Map<String, Object>> appendClarificationHistory(Map<String, Object> requestPayload,
@@ -2235,21 +2292,30 @@ public class FinanceEXChatService implements FinanceChatFacade {
                     preparation.runId(), preparation.runtimeBindingLeafId(), preparation.explicitDomainAgentId(),
                     "front-selected",
                     domainAgentBindingMetadata(route, null,
-                            preparation.command() == null ? Map.of() : preparation.command().metadata())));
+                            preparation.command() == null ? Map.of() : preparation.command().metadata()),
+                    preparation.agentModeRef().get()));
+            preparation.agentModeRef().set(AgentModeBindingContext.fromBinding(binding));
             preparation.routeRef().set(route);
             preparation.bindingRef().set(binding);
             preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
             return;
         }
         if (preparation.forceReroute()) {
-            runtimeBindingService.cancelActive(preparation.user().tenantId(), preparation.user().ownerUserId(),
-                    preparation.session().id());
+            List<RuntimeBinding> cancelled = runtimeBindingService.cancelActive(
+                    preparation.user().tenantId(), preparation.user().ownerUserId(), preparation.session().id());
+            if (preparation.agentModeRef().get() == null) {
+                preparation.agentModeRef().set(AgentModeBindingContext.resolve(null, cancelled));
+            }
             return;
         }
         runtimeBindingService.findActiveBySession(preparation.user().tenantId(), preparation.user().ownerUserId(),
                         preparation.session().id())
                 .ifPresent(active -> {
-                    RuntimeBinding binding = runtimeBindingService.touchForRun(active, preparation.runId());
+                    AgentModeProfile effectiveMode = AgentModeBindingContext.resolve(
+                            preparation.agentModeRef().get(), active);
+                    preparation.agentModeRef().set(effectiveMode);
+                    RuntimeBinding binding = runtimeBindingService.touchForRun(
+                            active, preparation.runId(), effectiveMode);
                     RouteTarget route = RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider())
                             ? RouteTarget.domainAgent(domainAgentId(binding), "runtime-binding", 1.0,
                             "active domain agent binding")
@@ -2293,7 +2359,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         RouteExecutionResolution resolution = resolveRouteForRun(new RouteResolutionRequest(
                 request.user(), request.session(), request.runCommand(), request.attachments(), request.memory(),
                 request.runId(), request.runtimeBindingLeafId(), request.routeRef().get(),
-                request.bindingRef().get(), request.runtimeSessionModeRef().get()), routeSignal);
+                request.bindingRef().get(), request.runtimeSessionModeRef().get(), request.agentModeRef()), routeSignal);
         request.routeRef().set(resolution.route());
         request.bindingRef().set(resolution.binding());
         request.runtimeSessionModeRef().set(resolution.runtimeSessionMode());
@@ -2348,6 +2414,9 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 request.user().tenantId(), request.user().ownerUserId(), request.session().id(),
                 state.currentBindingId(), state.currentTargetId());
         request.bindingRef().set(currentBinding);
+        if (request.agentModeRef().get() == null) {
+            request.agentModeRef().set(AgentModeBindingContext.fromBinding(currentBinding));
+        }
         RouteTarget currentRoute = RouteTarget.domainAgent(
                 state.currentTargetId(), state.currentRouteSource(), 1.0,
                 "domain agent refusal clarification continuation");
@@ -2391,7 +2460,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 command.targetType(), command.targetId(), command.runMode(), command.parentMessageId(),
                 command.editedMessageId(), command.regeneratedMessageId(), command.routeTrigger(),
                 command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers(),
-                command.appId(), command.appName());
+                command.appId(), command.appName(), command.agentMode());
     }
 
     private DomainAgentRerouteState domainAgentRerouteState(ChatCommand command) {
@@ -2462,7 +2531,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 command.targetType(), command.targetId(), command.runMode(), command.parentMessageId(),
                 command.editedMessageId(), command.regeneratedMessageId(), command.routeTrigger(),
                 command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers(),
-                command.appId(), command.appName());
+                command.appId(), command.appName(), command.agentMode());
     }
 
     private ChatCommand runtimeCommandForResolvedRoute(RoutePipelineRequest request,
@@ -2494,7 +2563,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 command.targetType(), command.targetId(), command.runMode(), command.parentMessageId(),
                 command.editedMessageId(), command.regeneratedMessageId(), command.routeTrigger(),
                 command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers(),
-                command.appId(), command.appName());
+                command.appId(), command.appName(), command.agentMode());
     }
 
     private boolean runtimeRoute(RouteTarget route) {
@@ -2699,12 +2768,16 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 binding = runtimeBindingService.bindDomainAgentForRun(new DomainAgentBindingCommand(
                         user.tenantId(), user.ownerUserId(), session.id(), runId,
                         runtimeBindingLeafId, route.selectedAgentCode(), route.routeSource(),
-                        domainAgentBindingMetadata(route, intent)));
+                        domainAgentBindingMetadata(route, intent), request.agentModeRef().get()));
+                request.agentModeRef().set(AgentModeBindingContext.fromBinding(binding));
             } else if (!waitingIntentClarification && route.type() == RouteType.AGENT_RUNTIME) {
-                RuntimeBindingResolution resolution = runtimeBindingService.resolveForRun(user.tenantId(),
-                        user.ownerUserId(), session.id(), runId, runtimeBindingLeafId);
+                RuntimeBindingResolution resolution = runtimeBindingService.resolveForRun(
+                        new RuntimeBindingResolutionCommand(
+                                user.tenantId(), user.ownerUserId(), session.id(), runId,
+                                runtimeBindingLeafId, request.agentModeRef().get()));
                 binding = resolution.binding();
                 runtimeSessionMode = resolution.sessionMode();
+                request.agentModeRef().set(AgentModeBindingContext.fromBinding(binding));
             }
         }
         if (route == null) {
@@ -3132,7 +3205,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
             Map<String, Object> internalPayload = new LinkedHashMap<>(requestPayload);
             internalPayload.put(INTENT_CLARIFICATION_DOCUMENT_IDS,
                     context.intentClarificationDocumentIds());
-            interactionRequestPayload = ChatPayloadMaps.immutableCopy(internalPayload);
+            interactionRequestPayload = AgentModeBindingContext.attachInteractionPrivate(
+                    internalPayload, context.agentModeRef().get());
         }
         RuntimeBinding binding = context.bindingRef().get();
         if (!intentClarification && (binding == null || binding.id() == null || binding.id().isBlank())) {
@@ -3383,12 +3457,14 @@ public class FinanceEXChatService implements FinanceChatFacade {
             AtomicReference<Map<String, Object>> pendingInteractionPayloadRef,
             ChatInteractionRequest continuationInteractionRequest,
             RunStartAttempt startAttempt,
-            List<String> intentClarificationDocumentIds
+            List<String> intentClarificationDocumentIds,
+            AtomicReference<AgentModeProfile> agentModeRef
     ) {
         private RunEventPipelineContext {
             intentClarificationDocumentIds = intentClarificationDocumentIds == null
                     ? List.of()
                     : List.copyOf(intentClarificationDocumentIds);
+            agentModeRef = agentModeRef == null ? new AtomicReference<>() : agentModeRef;
         }
     }
 
@@ -3396,14 +3472,15 @@ public class FinanceEXChatService implements FinanceChatFacade {
             RuntimeForwardHeaders forwardHeaders,
             TraceContext traceContext,
             RunStartAttempt startAttempt,
-            ChatSession session
+            ChatSession session,
+            AgentModeProfile agentMode
     ) {
         private InteractionContinuationOptions {
             traceContext = traceContext == null ? TraceContext.empty() : traceContext;
         }
 
         private InteractionContinuationOptions withSession(ChatSession value) {
-            return new InteractionContinuationOptions(forwardHeaders, traceContext, startAttempt, value);
+            return new InteractionContinuationOptions(forwardHeaders, traceContext, startAttempt, value, agentMode);
         }
     }
 
@@ -3437,7 +3514,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
             boolean forceReroute,
             AtomicReference<RouteTarget> routeRef,
             AtomicReference<RuntimeBinding> bindingRef,
-            AtomicReference<RuntimeSessionMode> runtimeSessionModeRef
+            AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
+            AtomicReference<AgentModeProfile> agentModeRef
     ) {
     }
 
@@ -3484,7 +3562,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
             String routeMemoryQuery,
             String intentQuery,
             String intentRouteMemoryQuery,
-            Map<String, Object> runtimeMetadataOverride
+            Map<String, Object> runtimeMetadataOverride,
+            AtomicReference<AgentModeProfile> agentModeRef
     ) {
     }
 
@@ -3495,7 +3574,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
             List<AttachmentRef> cumulativeAttachments,
             List<UploadedDocument> cumulativeDocuments,
             List<String> cumulativeDocumentIds,
-            Map<String, Object> runtimeMetadata
+            Map<String, Object> runtimeMetadata,
+            AgentModeProfile agentMode
     ) {
         private IntentClarificationContinuationInput {
             messageText = messageText == null ? "" : messageText;
@@ -3518,8 +3598,12 @@ public class FinanceEXChatService implements FinanceChatFacade {
             String runtimeBindingLeafId,
             RouteTarget currentRoute,
             RuntimeBinding currentBinding,
-            RuntimeSessionMode currentRuntimeSessionMode
+            RuntimeSessionMode currentRuntimeSessionMode,
+            AtomicReference<AgentModeProfile> agentModeRef
     ) {
+        private RouteResolutionRequest {
+            agentModeRef = agentModeRef == null ? new AtomicReference<>() : agentModeRef;
+        }
     }
 
     private record DomainAgentRunContext(
@@ -3729,7 +3813,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 messagePlan.runMode(), messagePlan.parentMessageId(),
                 normalized.editedMessageId(), normalized.regeneratedMessageId(), normalized.routeTrigger(),
                 normalized.interactionId(), normalized.approved(), normalized.scope(),
-                normalized.questionnaireAnswers(), normalized.appId(), normalized.appName());
+                normalized.questionnaireAnswers(), normalized.appId(), normalized.appName(),
+                normalized.agentMode());
     }
 
     /**

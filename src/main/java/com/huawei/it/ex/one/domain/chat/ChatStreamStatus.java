@@ -1,5 +1,8 @@
 package com.huawei.it.ex.one.domain.chat;
 
+import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
+import java.time.Instant;
+
 /**
  * 前端页面初始化时读取的会话流状态。
  *
@@ -23,6 +26,7 @@ package com.huawei.it.ex.one.domain.chat;
  * @param bindingIntentName 当前绑定来源意图名称。
  * @param bindingRouteSource 当前绑定来源。
  * @param bindingUpdatedAt 当前绑定更新时间。
+ * @param bindingAgentMode 当前绑定记录的 Agent 模式完整快照；未设置时为空。
  */
 public record ChatStreamStatus(
         String sessionId,
@@ -37,12 +41,26 @@ public record ChatStreamStatus(
         String interactionId,
         String interactionType,
         String assistantMessageId,
-        java.time.Instant expiresAt,
+        Instant expiresAt,
         String bindingProvider,
         String bindingTargetType,
         String bindingTargetId,
         String bindingIntentCode,
         String bindingIntentName,
         String bindingRouteSource,
-        java.time.Instant bindingUpdatedAt
-) {}
+        Instant bindingUpdatedAt,
+        AgentModeProfile bindingAgentMode
+) {
+    /** 兼容尚未返回 Agent 模式的内部构造调用。 */
+    public ChatStreamStatus(
+            String sessionId, long latestSeq, String activeRunId, ChatRunStatus activeRunStatus,
+            String activeStreamTopicId, Long activeRunFirstSeq, Long activeRunLastSeq, boolean cancellable,
+            boolean waitingUserInput, String interactionId, String interactionType, String assistantMessageId,
+            Instant expiresAt, String bindingProvider, String bindingTargetType, String bindingTargetId,
+            String bindingIntentCode, String bindingIntentName, String bindingRouteSource, Instant bindingUpdatedAt) {
+        this(sessionId, latestSeq, activeRunId, activeRunStatus, activeStreamTopicId, activeRunFirstSeq,
+                activeRunLastSeq, cancellable, waitingUserInput, interactionId, interactionType,
+                assistantMessageId, expiresAt, bindingProvider, bindingTargetType, bindingTargetId,
+                bindingIntentCode, bindingIntentName, bindingRouteSource, bindingUpdatedAt, null);
+    }
+}

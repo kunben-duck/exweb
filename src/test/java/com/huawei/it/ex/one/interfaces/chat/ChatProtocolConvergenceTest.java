@@ -20,6 +20,8 @@ import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatRunStopResult;
 import com.huawei.it.ex.one.domain.chat.ChatStreamTopics;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAttachmentDto;
+import com.huawei.it.ex.one.interfaces.chat.dto.ChatAgentModeDto;
+import com.huawei.it.ex.one.interfaces.chat.dto.ChatAgentModeSelectionDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatEventDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSelectedIntentDto;
@@ -35,6 +37,58 @@ import org.springframework.web.bind.annotation.GetMapping;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 class ChatProtocolConvergenceTest {
+
+    @Test
+    void translatorCarriesMultiDimensionalAgentModeOutsideMetadata() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1", "session1", null, "分析资金情况", "NEXT", null, null, null,
+                null, null, null, null, null, List.of(), null, null, null,
+                Map.of("scene", "fund"), null, null,
+                new ChatAgentModeDto(List.of(
+                        new ChatAgentModeSelectionDto(" thinking ", " deep ", " 深度思考 "),
+                        new ChatAgentModeSelectionDto("execution", "long_task", "长任务执行"))));
+
+        ChatCommand command = translator.toCommand(request);
+
+        assertThat(command.agentMode().selections())
+                .extracting("scheme", "code", "displayName")
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("thinking", "deep", "深度思考"),
+                        org.assertj.core.groups.Tuple.tuple("execution", "long_task", "长任务执行"));
+        assertThat(command.metadata()).containsExactlyEntriesOf(Map.of("scene", "fund"));
+        assertThat(command.metadata()).doesNotContainKey("agentMode");
+    }
+
+    @Test
+    void translatorPreservesExplicitEmptyAgentModeSnapshot() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1", "session1", null, "分析资金情况", "NEXT", null, null, null,
+                null, null, null, null, null, List.of(), null, null, null,
+                Map.of(), null, null, new ChatAgentModeDto(List.of()));
+
+        ChatCommand command = translator.toCommand(request);
+
+        assertThat(command.agentMode()).isNotNull();
+        assertThat(command.agentMode().emptyProfile()).isTrue();
+    }
+
+    @Test
+    void translatorRejectsDuplicateAgentModeScheme() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1", "session1", null, "分析资金情况", "NEXT", null, null, null,
+                null, null, null, null, null, List.of(), null, null, null,
+                Map.of(), null, null,
+                new ChatAgentModeDto(List.of(
+                        new ChatAgentModeSelectionDto("thinking", "fast", null),
+                        new ChatAgentModeSelectionDto("thinking", "deep", null))));
+
+        assertThatThrownBy(() -> translator.toCommand(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("重复 scheme");
+    }
 
     @Test
     void translatorKeepsOnlyConversationMessageAndAttachments() {

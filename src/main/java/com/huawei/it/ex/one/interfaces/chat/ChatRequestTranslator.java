@@ -4,6 +4,8 @@ import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
+import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
+import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAttachmentDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSelectedIntentDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.CreateChatRunRequest;
@@ -55,7 +57,8 @@ public class ChatRequestTranslator {
                 runMode, request.parentMessageId(), request.editedMessageId(),
                 request.regeneratedMessageId(), routeTrigger(request.forceReroute()),
                 request.interactionId(), request.approved(), request.scope(),
-                normalizeMetadata(request.questionnaireAnswers()), request.appId(), request.appName());
+                normalizeMetadata(request.questionnaireAnswers()), request.appId(), request.appName(),
+                toAgentMode(request.agentMode()));
     }
 
     private String routeTrigger(Boolean forceReroute) {
@@ -103,5 +106,23 @@ public class ChatRequestTranslator {
                         attachment.source()
                 ))
                 .toList();
+    }
+
+    private AgentModeProfile toAgentMode(com.huawei.it.ex.one.interfaces.chat.dto.ChatAgentModeDto agentMode) {
+        if (agentMode == null) {
+            return null;
+        }
+        if (agentMode.selections() == null) {
+            throw new IllegalArgumentException("agentMode.selections 不能为空");
+        }
+        return new AgentModeProfile(agentMode.selections().stream()
+                .map(selection -> {
+                    if (selection == null) {
+                        throw new IllegalArgumentException("agentMode.selections 不能包含 null");
+                    }
+                    return new AgentModeSelection(
+                            selection.scheme(), selection.code(), selection.displayName());
+                })
+                .toList());
     }
 }

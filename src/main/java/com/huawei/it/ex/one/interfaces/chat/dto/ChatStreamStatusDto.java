@@ -23,6 +23,7 @@ package com.huawei.it.ex.one.interfaces.chat.dto;
  * @param bindingIntentName 当前绑定来源意图名称。
  * @param bindingRouteSource 当前绑定来源。
  * @param bindingUpdatedAt 当前绑定更新时间。
+ * @param bindingAgentMode 当前绑定记录的 Agent 模式完整快照；未设置时为空。
  */
 public record ChatStreamStatusDto(
         String sessionId,
@@ -44,5 +45,20 @@ public record ChatStreamStatusDto(
         String bindingIntentCode,
         String bindingIntentName,
         String bindingRouteSource,
-        java.time.Instant bindingUpdatedAt
-) {}
+        java.time.Instant bindingUpdatedAt,
+        ChatAgentModeDto bindingAgentMode
+) {
+    /** 兼容尚未返回 Agent 模式的接口装配调用。 */
+    public ChatStreamStatusDto(
+            String sessionId, long latestSeq, String activeRunId, String activeRunStatus,
+            String activeStreamTopicId, Long activeRunFirstSeq, Long activeRunLastSeq, boolean cancellable,
+            boolean waitingUserInput, String interactionId, String interactionType, String assistantMessageId,
+            java.time.Instant expiresAt, String bindingProvider, String bindingTargetType, String bindingTargetId,
+            String bindingIntentCode, String bindingIntentName, String bindingRouteSource,
+            java.time.Instant bindingUpdatedAt) {
+        this(sessionId, latestSeq, activeRunId, activeRunStatus, activeStreamTopicId, activeRunFirstSeq,
+                activeRunLastSeq, cancellable, waitingUserInput, interactionId, interactionType,
+                assistantMessageId, expiresAt, bindingProvider, bindingTargetType, bindingTargetId,
+                bindingIntentCode, bindingIntentName, bindingRouteSource, bindingUpdatedAt, null);
+    }
+}

@@ -19,6 +19,8 @@ import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.chat.ChatMessageFeedback;
 import com.huawei.it.ex.one.domain.chat.ChatRunStopResult;
 import com.huawei.it.ex.one.domain.chat.ChatStreamStatus;
+import com.huawei.it.ex.one.interfaces.chat.dto.ChatAgentModeDto;
+import com.huawei.it.ex.one.interfaces.chat.dto.ChatAgentModeSelectionDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatEventDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatRunStartDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatRunStopDto;
@@ -354,8 +356,19 @@ public class ChatController {
                 status.bindingIntentCode(),
                 status.bindingIntentName(),
                 status.bindingRouteSource(),
-                status.bindingUpdatedAt()
+                status.bindingUpdatedAt(),
+                toAgentModeDto(status.bindingAgentMode())
         );
+    }
+
+    private ChatAgentModeDto toAgentModeDto(com.huawei.it.ex.one.domain.runtime.AgentModeProfile profile) {
+        if (profile == null) {
+            return null;
+        }
+        return new ChatAgentModeDto(profile.selections().stream()
+                .map(selection -> new ChatAgentModeSelectionDto(
+                        selection.scheme(), selection.code(), selection.displayName()))
+                .toList());
     }
 
     private MessageFeedbackDto toFeedbackDto(ChatMessageFeedback feedback) {

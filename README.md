@@ -173,6 +173,28 @@ payload 包含 `targetType`、`targetId`、`domainAgentId`、可选 `intentId/in
 `intentResult.source=front-selected`，用于前端回显本轮调用的技能。后续复用 binding 时前端无需再次传
 `selectedIntent`，历史 part 会从 binding metadata 恢复同一意图摘要。
 
+`agentMode` 是非必填的多维 Agent 模式完整快照。前端可同时提交思考模式、执行模式或未来新增的
+任意维度，服务端不维护枚举目录：
+
+```json
+{
+  "agentMode": {
+    "selections": [
+      {"scheme":"thinking","code":"deep","displayName":"深度思考"},
+      {"scheme":"execution","code":"long_task","displayName":"长任务执行"}
+    ]
+  }
+}
+```
+
+对象缺失或为 `null` 时继承当前 Binding/意图澄清上下文，显式 `selections=[]` 时清除已有模式；
+对象存在时整体替换，不按 `scheme` 合并。`selections` 最多 16 项，同一请求内 `scheme` 不可重复，
+`scheme/code` 必填，`displayName` 可选。模式只在最终选中 DomainAgent 或 Relay 并创建/刷新
+RuntimeBinding 后记录，不进入 run metadata、RouteMemory 或 IntentAgent 请求。当前默认
+`NoopAgentModeAdapter` 不转换也不透传任何下游参数，因此既有 DomainAgent/Relay wire JSON 保持不变；
+未来可按 provider 增加 adapter，将模式转换为服务端可信 metadata 或 Relay config。
+`stream-status.bindingAgentMode` 和 `selectedDomainAgent` 历史 METADATA part 会返回当前完整快照。
+
 ## 会话与执行标识
 
 - `sessionId`：前端聊天会话 ID，一次聊天会话内可以包含多轮用户请求。

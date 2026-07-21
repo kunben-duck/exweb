@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunCache;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
@@ -8,6 +9,8 @@ import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicatio
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
@@ -20,16 +23,15 @@ import com.huawei.it.ex.one.domain.chat.ChatRunStopResult;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatStreamStatus;
 import com.huawei.it.ex.one.domain.chat.ChatStreamTopics;
-import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
+import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
+import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import com.huawei.it.ex.one.common.logging.AppLogger;
-import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -423,7 +425,7 @@ public class ChatRunApplicationService {
                         false, null, null, null, null,
                         bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                         bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
-                        bindingSummary.updatedAt()))
+                        bindingSummary.updatedAt(), bindingSummary.agentMode()))
                 .orElseGet(() -> waitingStatus(user, sessionId, currentLatestSeq, bindingSummary));
     }
 
@@ -435,7 +437,7 @@ public class ChatRunApplicationService {
                     false, false, null, null, null, null,
                     bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                     bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
-                    bindingSummary.updatedAt());
+                    bindingSummary.updatedAt(), bindingSummary.agentMode());
         }
         return interactionService.findWaiting(user, sessionId)
                 .map(request -> new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
@@ -443,12 +445,12 @@ public class ChatRunApplicationService {
                         request.assistantMessageId(), request.expiresAt(),
                         bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                         bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
-                        bindingSummary.updatedAt()))
+                        bindingSummary.updatedAt(), bindingSummary.agentMode()))
                 .orElseGet(() -> new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
                         false, false, null, null, null, null,
                         bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                         bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
-                        bindingSummary.updatedAt()));
+                        bindingSummary.updatedAt(), bindingSummary.agentMode()));
     }
 
     private BindingSummary bindingSummary(UserContext user, String sessionId) {
@@ -475,7 +477,8 @@ public class ChatRunApplicationService {
                 stringValue(metadata.get("intentCode")),
                 stringValue(metadata.get("intentName")),
                 stringValue(metadata.get("routeSource")),
-                binding.updatedAt());
+                binding.updatedAt(),
+                AgentModeBindingContext.fromBinding(binding));
     }
 
     private String stringValue(Object value) {
@@ -483,9 +486,10 @@ public class ChatRunApplicationService {
     }
 
     private record BindingSummary(String provider, String targetType, String targetId, String intentCode,
-                                  String intentName, String routeSource, Instant updatedAt) {
+                                  String intentName, String routeSource, Instant updatedAt,
+                                  AgentModeProfile agentMode) {
         private static BindingSummary empty() {
-            return new BindingSummary(null, null, null, null, null, null, null);
+            return new BindingSummary(null, null, null, null, null, null, null, null);
         }
     }
 

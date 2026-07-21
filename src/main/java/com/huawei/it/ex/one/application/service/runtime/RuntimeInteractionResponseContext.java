@@ -4,6 +4,7 @@ import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatPayloadMaps;
+import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import java.util.Map;
 
 /**
@@ -20,12 +21,22 @@ public record RuntimeInteractionResponseContext(
         String approvalId,
         Map<String, Object> responsePayload,
         RuntimeForwardHeaders forwardHeaders,
-        TraceContext traceContext
+        TraceContext traceContext,
+        AgentModeProfile agentMode,
+        String targetId
 ) {
     public RuntimeInteractionResponseContext {
         responsePayload = ChatPayloadMaps.immutableCopy(responsePayload);
         forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
         traceContext = traceContext == null ? TraceContext.empty() : traceContext;
+    }
+
+    public RuntimeInteractionResponseContext(
+            UserContext user, String sessionId, String runId, String runtimeProvider,
+            String runtimeSessionId, String interactionId, String interactionType, String approvalId,
+            Map<String, Object> responsePayload, RuntimeForwardHeaders forwardHeaders, TraceContext traceContext) {
+        this(user, sessionId, runId, runtimeProvider, runtimeSessionId, interactionId, interactionType, approvalId,
+                responsePayload, forwardHeaders, traceContext, null, null);
     }
 
     public RuntimeInteractionResponseContext(UserContext user, String sessionId, String runId,
@@ -34,6 +45,6 @@ public record RuntimeInteractionResponseContext(
                                              Map<String, Object> responsePayload,
                                              RuntimeForwardHeaders forwardHeaders) {
         this(user, sessionId, runId, runtimeProvider, runtimeSessionId, interactionId, interactionType, approvalId,
-                responsePayload, forwardHeaders, TraceContext.empty());
+                responsePayload, forwardHeaders, TraceContext.empty(), null, null);
     }
 }

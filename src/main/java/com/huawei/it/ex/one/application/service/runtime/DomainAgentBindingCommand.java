@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.application.service.runtime;
 
+import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import java.util.Map;
 
 /**
@@ -16,9 +17,16 @@ public record DomainAgentBindingCommand(
         String leafMessageId,
         String domainAgentId,
         String routeSource,
-        Map<String, Object> intentMetadata
+        Map<String, Object> intentMetadata,
+        AgentModeProfile agentMode
 ) {
     public DomainAgentBindingCommand {
         intentMetadata = intentMetadata == null ? Map.of() : Map.copyOf(intentMetadata);
+    }
+
+    public DomainAgentBindingCommand(
+            String tenantId, String userId, String sessionId, String runId, String leafMessageId,
+            String domainAgentId, String routeSource, Map<String, Object> intentMetadata) {
+        this(tenantId, userId, sessionId, runId, leafMessageId, domainAgentId, routeSource, intentMetadata, null);
     }
 }

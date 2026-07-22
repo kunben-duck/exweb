@@ -49,11 +49,15 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
                 return Optional.empty();
             }
             return Optional.of(objectMapper.readValue(value, RuntimeBinding.class));
-        } catch (RuntimeException | JsonProcessingException ex) {
-            SystemErrorCode code = ex instanceof JsonProcessingException
-                    ? SystemErrorCode.REDIS_DESERIALIZATION_FAILED
-                    : SystemErrorCode.REDIS_READ_FAILED;
-            log.warn(SystemErrorLogEntry.builder(code,
+        } catch (JsonProcessingException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_DESERIALIZATION_FAILED,
+                            "RuntimeBinding Redis read failed; falling back to database")
+                    .operation("runtime-binding.cache.read")
+                    .sessionId(sessionId)
+                    .build(), ex);
+            return Optional.empty();
+        } catch (RuntimeException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_READ_FAILED,
                             "RuntimeBinding Redis read failed; falling back to database")
                     .operation("runtime-binding.cache.read")
                     .sessionId(sessionId)
@@ -80,11 +84,15 @@ public class RedisRuntimeBindingCache implements RuntimeBindingCache {
             redis.opsForValue().set(key, objectMapper.writeValueAsString(binding), properties.getRedisTtl());
             redis.opsForSet().add(indexKey, key);
             redis.expire(indexKey, properties.getRedisTtl());
-        } catch (RuntimeException | JsonProcessingException ex) {
-            SystemErrorCode code = ex instanceof JsonProcessingException
-                    ? SystemErrorCode.REDIS_SERIALIZATION_FAILED
-                    : SystemErrorCode.REDIS_WRITE_FAILED;
-            log.warn(SystemErrorLogEntry.builder(code,
+        } catch (JsonProcessingException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_SERIALIZATION_FAILED,
+                            "RuntimeBinding Redis write failed; database remains authoritative")
+                    .operation("runtime-binding.cache.write")
+                    .sessionId(binding.chatSessionId())
+                    .attribute("bindingId", binding.id())
+                    .build(), ex);
+        } catch (RuntimeException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_WRITE_FAILED,
                             "RuntimeBinding Redis write failed; database remains authoritative")
                     .operation("runtime-binding.cache.write")
                     .sessionId(binding.chatSessionId())

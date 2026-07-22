@@ -99,7 +99,7 @@ public class LocalChatEventStreamRegistry {
 
     private void logEmitFailure(String reason, String topicId, ChatEvent event, Sinks.EmitResult result) {
         if (result == Sinks.EmitResult.FAIL_TERMINATED || result == Sinks.EmitResult.FAIL_CANCELLED) {
-            log.debug("本机 run topic 已结束，reason={}, topicId={}, seq={}, result={}",
+            log.debug("Local run topic is already terminated. reason={}, topicId={}, seq={}, result={}",
                     reason, topicId, event.sequence(), result);
             return;
         }

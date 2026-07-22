@@ -48,11 +48,15 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
                 return Optional.empty();
             }
             return Optional.of(objectMapper.readValue(value, ChatRun.class));
-        } catch (RuntimeException | JsonProcessingException ex) {
-            SystemErrorCode code = ex instanceof JsonProcessingException
-                    ? SystemErrorCode.REDIS_DESERIALIZATION_FAILED
-                    : SystemErrorCode.REDIS_READ_FAILED;
-            log.warn(SystemErrorLogEntry.builder(code,
+        } catch (JsonProcessingException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_DESERIALIZATION_FAILED,
+                            "Active ChatRun Redis read failed; falling back to database")
+                    .operation("chat-run.cache.read")
+                    .sessionId(sessionId)
+                    .build(), ex);
+            return Optional.empty();
+        } catch (RuntimeException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_READ_FAILED,
                             "Active ChatRun Redis read failed; falling back to database")
                     .operation("chat-run.cache.read")
                     .sessionId(sessionId)
@@ -73,11 +77,16 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
                     properties.getActiveTtl()
             );
             return Boolean.TRUE.equals(claimed);
-        } catch (RuntimeException | JsonProcessingException ex) {
-            SystemErrorCode code = ex instanceof JsonProcessingException
-                    ? SystemErrorCode.REDIS_SERIALIZATION_FAILED
-                    : SystemErrorCode.REDIS_WRITE_FAILED;
-            log.warn(SystemErrorLogEntry.builder(code,
+        } catch (JsonProcessingException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_SERIALIZATION_FAILED,
+                            "Active ChatRun Redis claim failed; database admission guard remains authoritative")
+                    .operation("chat-run.cache.claim")
+                    .runId(run.id())
+                    .sessionId(run.sessionId())
+                    .build(), ex);
+            return false;
+        } catch (RuntimeException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_WRITE_FAILED,
                             "Active ChatRun Redis claim failed; database admission guard remains authoritative")
                     .operation("chat-run.cache.claim")
                     .runId(run.id())
@@ -95,11 +104,15 @@ public class RedisChatRunCache implements ChatRunCache, ChatRunRecoverLock {
         try {
             redis.opsForValue().set(redisKeys.activeRun(run.tenantId(), run.userId(), run.sessionId()),
                     objectMapper.writeValueAsString(run), properties.getActiveTtl());
-        } catch (RuntimeException | JsonProcessingException ex) {
-            SystemErrorCode code = ex instanceof JsonProcessingException
-                    ? SystemErrorCode.REDIS_SERIALIZATION_FAILED
-                    : SystemErrorCode.REDIS_WRITE_FAILED;
-            log.warn(SystemErrorLogEntry.builder(code,
+        } catch (JsonProcessingException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_SERIALIZATION_FAILED,
+                            "Active ChatRun Redis write failed; database remains authoritative")
+                    .operation("chat-run.cache.write")
+                    .runId(run.id())
+                    .sessionId(run.sessionId())
+                    .build(), ex);
+        } catch (RuntimeException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_WRITE_FAILED,
                             "Active ChatRun Redis write failed; database remains authoritative")
                     .operation("chat-run.cache.write")
                     .runId(run.id())

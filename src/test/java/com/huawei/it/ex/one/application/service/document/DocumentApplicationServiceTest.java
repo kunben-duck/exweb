@@ -164,6 +164,32 @@ class DocumentApplicationServiceTest {
     }
 
     @Test
+    void replaceRuntimeDocumentMetadataCreatesSceneParamWhenMissing() {
+        DocumentApplicationService service = service(new InMemoryDocumentRepository());
+        UploadedDocument document = documentWithMetadata(
+                "doc1", """
+                        {"providerDocument":{"providerLocatorType":"DOC_ID","docId":"provider-1"}}
+                        """);
+
+        Map<String, Object> result = service.replaceRuntimeDocumentMetadata(Map.of(), List.of(document));
+
+        Map<?, ?> sceneParam = (Map<?, ?>) result.get("sceneParam");
+        assertThat(sceneParam.get("docList")).isEqualTo(List.of(Map.of(
+                        "providerLocatorType", "DOC_ID",
+                        "docId", "provider-1")));
+    }
+
+    @Test
+    void replaceRuntimeDocumentMetadataRejectsNonObjectSceneParam() {
+        DocumentApplicationService service = service(new InMemoryDocumentRepository());
+
+        assertThatThrownBy(() -> service.replaceRuntimeDocumentMetadata(
+                Map.of("sceneParam", "invalid"), List.of(document("doc1", DocumentStatus.AVAILABLE))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("metadata.sceneParam 必须是 JSON object");
+    }
+
+    @Test
     void updateChangesDocumentDisplayMetadata() {
         InMemoryDocumentRepository repository = new InMemoryDocumentRepository();
         UploadedDocument stored = document("doc1", DocumentStatus.AVAILABLE);

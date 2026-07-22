@@ -332,6 +332,27 @@ class RelayRuntimeResponseNormalizerTest {
     }
 
     @Test
+    void allRelayReferenceAliasesBecomeRuntimeReferenceEvents() {
+        for (String sourceType : List.of(
+                "url-moderation",
+                "url-moderation-result",
+                "search-result-groups",
+                "content-references",
+                "citations",
+                "sources",
+                "references",
+                "safe-urls")) {
+            List<ChatEvent> events = normalizer.normalize("run1", "session1",
+                    "{\"type\":\"" + sourceType + "\",\"content\":\"reference\"}");
+
+            assertThat(events).singleElement().satisfies(event -> {
+                assertThat(event.type()).isEqualTo("runtime.reference");
+                assertThat(event.payload()).containsEntry("sourceType", sourceType);
+            });
+        }
+    }
+
+    @Test
     void toolStructuredResultBecomesRuntimeToolWithRawPayload() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1",
                 "{\"type\":\"tool-structured-result\",\"agent_name\":\"delegate_agent\","

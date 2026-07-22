@@ -148,11 +148,19 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
                 return;
             }
             scheduleDrain(publisher);
-        } catch (RuntimeException | JsonProcessingException ex) {
-            SystemErrorCode code = ex instanceof JsonProcessingException
-                    ? SystemErrorCode.REDIS_SERIALIZATION_FAILED
-                    : SystemErrorCode.REDIS_PUBLISH_FAILED;
-            log.warn(SystemErrorLogEntry.builder(code,
+        } catch (JsonProcessingException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_SERIALIZATION_FAILED,
+                            "Redis live event publish could not be queued")
+                    .runId(event.runId())
+                    .sessionId(event.sessionId())
+                    .operation("chat-live-bus.publish.enqueue")
+                    .attribute("topicId", topicId)
+                    .attribute("sequence", event.sequence())
+                    .attribute("thread", Thread.currentThread().getName())
+                    .attribute("interrupted", Thread.currentThread().isInterrupted())
+                    .build(), ex);
+        } catch (RuntimeException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_PUBLISH_FAILED,
                             "Redis live event publish could not be queued")
                     .runId(event.runId())
                     .sessionId(event.sessionId())
@@ -202,7 +210,7 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
             }
             ChatLiveEventPayload payload = objectMapper.treeToValue(root, ChatLiveEventPayload.class);
             if (isPublishedByCurrentInstance(payload)) {
-                log.debug("Redis ChatLiveEventBus 丢弃本实例回声，topicId={}, seq={}, instanceId={}",
+                log.debug("Redis ChatLiveEventBus dropped a self-published echo. topicId={}, seq={}, instanceId={}",
                         topicId, payload.sequence(), payload.publisherInstanceId());
                 if (terminal(payload.eventType())) {
                     completeTopic(topicId, sink);
@@ -333,7 +341,8 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     private void logEmitFailure(String reason, String topicId, ChatEvent event, Sinks.EmitResult result) {
         String threadName = Thread.currentThread().getName();
         if (result == Sinks.EmitResult.FAIL_TERMINATED || result == Sinks.EmitResult.FAIL_CANCELLED) {
-            log.debug("Redis ChatLiveEventBus 投递已结束 topic，reason={}, topicId={}, seq={}, result={}, thread={}",
+            log.debug("Redis ChatLiveEventBus delivery reached a terminated topic. "
+                            + "reason={}, topicId={}, seq={}, result={}, thread={}",
                     reason, topicId, event == null ? null : event.sequence(), result, threadName);
             return;
         }
@@ -473,7 +482,8 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
             try {
                 redis.convertAndSend(pending.channel(), pending.body());
                 if (attempt > 0) {
-                    log.info("Redis ChatLiveEventBus 发布重试成功，topicId={}, seq={}, retryCount={}, thread={}",
+                    log.info("Redis ChatLiveEventBus publish retry succeeded. "
+                                    + "topicId={}, seq={}, retryCount={}, thread={}",
                             pending.topicId(), pending.sequence(), attempt, Thread.currentThread().getName());
                 }
                 return true;

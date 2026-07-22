@@ -232,12 +232,14 @@ public class DocumentApplicationService implements DocumentFacade {
             }
             return immutableDeepCopy(result);
         }
-        if (sceneValue != null && !(sceneValue instanceof Map<?, ?>)) {
+        Map<String, Object> scene;
+        if (sceneValue == null) {
+            scene = new LinkedHashMap<>();
+        } else if (sceneValue instanceof Map<?, ?> sceneMap) {
+            scene = mutableMap(sceneMap);
+        } else {
             throw new IllegalArgumentException("metadata.sceneParam 必须是 JSON object");
         }
-        Map<String, Object> scene = sceneValue instanceof Map<?, ?> sceneMap
-                ? mutableMap(sceneMap)
-                : new LinkedHashMap<>();
         List<Map<String, Object>> docList = documents.stream()
                 .filter(Objects::nonNull)
                 .map(this::providerDocumentReference)

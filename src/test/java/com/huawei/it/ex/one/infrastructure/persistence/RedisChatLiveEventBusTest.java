@@ -1,5 +1,11 @@
 package com.huawei.it.ex.one.infrastructure.persistence;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.it.ex.one.application.config.ChatStreamProperties;
@@ -80,6 +86,25 @@ class RedisChatLiveEventBusTest {
         org.assertj.core.api.Assertions.assertThat(redis.channel).isEqualTo(redisKeys.chatStreamChannel("chat-run-run1"));
         JsonNode body = objectMapper.readTree(redis.message);
         org.assertj.core.api.Assertions.assertThat(body.path("sequence").asLong()).isEqualTo(1L);
+    }
+
+    @Test
+    void publishSuppressesJsonSerializationFailure() throws Exception {
+        ObjectMapper failingObjectMapper = mock(ObjectMapper.class);
+        when(failingObjectMapper.writeValueAsString(any())).thenThrow(jsonFailure());
+        RedisChatLiveEventBus bus = newBus(new CapturingStringRedisTemplate(), failingObjectMapper, Runnable::run);
+
+        assertThatCode(() -> bus.publish("chat-run-run1", event(1L))).doesNotThrowAnyException();
+    }
+
+    @Test
+    void publishSuppressesRuntimeFailure() {
+        Executor failingExecutor = command -> {
+            throw new IllegalStateException("Executor unavailable");
+        };
+        RedisChatLiveEventBus bus = newBus(new CapturingStringRedisTemplate(), objectMapper, failingExecutor);
+
+        assertThatCode(() -> bus.publish("chat-run-run1", event(1L))).doesNotThrowAnyException();
     }
 
     @Test
@@ -265,7 +290,17 @@ class RedisChatLiveEventBusTest {
 
     private RedisChatLiveEventBus newBus(StringRedisTemplate redis, ChatLiveEventBusProperties properties,
                                          Executor executor, ChatStreamProperties streamProperties) {
-        RedisChatLiveEventBus bus = new RedisChatLiveEventBus(redis, objectMapper, new UnsupportedRedisConnectionFactory(), redisKeys,
+        return newBus(redis, objectMapper, properties, executor, streamProperties);
+    }
+
+    private RedisChatLiveEventBus newBus(StringRedisTemplate redis, ObjectMapper mapper, Executor executor) {
+        return newBus(redis, mapper, new ChatLiveEventBusProperties(), executor, new ChatStreamProperties());
+    }
+
+    private RedisChatLiveEventBus newBus(StringRedisTemplate redis, ObjectMapper mapper,
+                                         ChatLiveEventBusProperties properties, Executor executor,
+                                         ChatStreamProperties streamProperties) {
+        RedisChatLiveEventBus bus = new RedisChatLiveEventBus(redis, mapper, new UnsupportedRedisConnectionFactory(), redisKeys,
                 instanceIdProvider, properties, executor);
         bus.setChatStreamProperties(streamProperties);
         return bus;
@@ -304,6 +339,11 @@ class RedisChatLiveEventBusTest {
         } catch (Exception ex) {
             throw new IllegalStateException(ex);
         }
+    }
+
+    private JsonProcessingException jsonFailure() {
+        return new JsonProcessingException("JSON failure") {
+        };
     }
 
     private static class CapturingStringRedisTemplate extends StringRedisTemplate {

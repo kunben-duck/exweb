@@ -3,6 +3,9 @@
 流式事件落库、Redis/WebSocket 实时扇出、Event Resume、跨浏览器恢复及实例故障边界的完整实现说明，
 参见 [Chat 流式输出、断点续传与跨浏览器恢复设计](chat-streaming-and-resume.md)。
 
+单实例 `4C4G` 的容量验证、配置寻优和生产限流取值流程，参见
+[FinanceEXChatService 单实例压测指导](../performance-testing-guide.md)。
+
 DomainAgent 模式的请求语义、RuntimeBinding 记录规则和下游协议隔离边界，参见
 [AgentMode 仅记录技术设计](agent-mode-recording.md)。
 

@@ -35,6 +35,10 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 
 完整接口和 WebSocket 联调说明见 [前端联调文档](docs/frontend-integration.md)。其中“逐接口最小入参示例”和“`/v1/chat/runs` 不同场景请求体示例”是前端请求体样例的维护入口。
 
+单实例 `4C4G` 的流式任务、文档上传、普通查询、WebSocket 和 Event Resume 容量测试流程，参见
+[单实例压测指导](docs/performance-testing-guide.md)。该文档包含环境准备、测试数据、负载阶梯、停止条件、
+一致性检查和容量报告模板。
+
 - `POST /v1/chat/runs`：唯一任务提交入口。普通提问创建后台 run；`runMode=CONTINUE_INTERACTION` 时提交澄清/审批/确认响应并启动续接 run；返回 `runId`、`sessionId`、`firstSeq` 和 `streamTopicId`。
 - `POST /v1/chat/sessions`：显式创建会话；可选传 `appId/appName` 作为不可变分组标识和名称快照。也可以在 `/v1/chat/runs` 中不传 `sessionId`，由后端使用相同字段自动创建会话。
 - `GET /v1/chat/sessions?appId=fund-app&limit=20&cursor=...`：游标分页查询当前用户会话列表；`appId` 可选，并返回每个会话第一条 assistant 回答 `firstAssistantAnswer`。

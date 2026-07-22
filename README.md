@@ -91,21 +91,9 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 
 外部 HTTP 服务调用还支持统一的集成服务鉴权请求头防腐层。`financeex.integration-auth.enabled=false`
 时不注入任何鉴权头；开启后，`AuthHeaderProviderRegistry` 会按 `serviceCode` 选择 provider。
-首版预置 `welink-share`、`intent-service`、`use-case-library`、`regional-hr-location`
-和 `regional-ip-location` 可配置为 `sgov`，
+首版预置 `welink-share`、`intent-service`、`use-case-library` 可配置为 `sgov`，
 并由企业实现的 `SgovTokenResolver` 提供 `Authorization` 值。Relay Runtime、DomainAgent
 和 DomainAgent 文档 provider 默认不接入该鉴权头，仍保持现有 Cookie/普通调用行为。
-
-`financeex.regional-access` 提供欧盟地区入口准入。Servlet 模式在 `/v1/**` Controller 前检查，
-WebFlux 使用等价的有序 Filter；两种模式均排除 `/v1/chat/ws`，WebSocket Upgrade 不执行地域鉴权。
-企业身份 Filter 或 Interceptor
-必须先建立 `UserContext`；网关必须删除客户端伪造值并重写可信 `X-Real-IP`。每次请求优先检查
-员工白名单，非白名单用户才查询 HR 和 IP 归属地。明确命中欧盟及明确非欧盟结果缓存在当前 JVM，
-默认 TTL 为一天；超时、鉴权头不可用、非法响应和并发许可耗尽均失败放行且不缓存。
-默认注册 `EnterpriseRegionalAccessDictionaryProvider`。当前仅其
-`loadRegionalAccessDictionary()` 方法保留企业数据字典接入 `TODO` 并返回空快照；后续只需替换该
-方法的字典读取实现，无需修改入口鉴权、缓存或业务编排。
-阻断响应为 HTTP `451` 和稳定错误码 `SERVICE_REGION_RESTRICTED`。
 
 租户和用户身份不从前端 Header/Query/Body 透传，统一由请求入口通过 `AuthContextProvider` 从服务端身份上下文解析一次，并以不可变 `UserContext` 传入应用层。系统内部 `user_id/owner_user_id` 写入值统一来自 `UserContext.ownerUserId()`，优先使用企业 `globalUserId`，缺省回退本地开发态 `userId`。应用层、后台 run 和 `boundedElastic` 阻塞线程不会再次读取请求 ThreadLocal。当前 `ApplicationAuthContextProvider` 直接构造完整 `UserContext`，接入企业身份源时替换该防腐层即可。
 

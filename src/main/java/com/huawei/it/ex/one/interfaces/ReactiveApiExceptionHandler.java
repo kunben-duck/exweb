@@ -1,6 +1,5 @@
 package com.huawei.it.ex.one.interfaces;
 
-import com.huawei.it.ex.one.application.service.security.RegionalAccessDeniedException;
 import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ChatShareUnavailableException;
@@ -23,13 +22,6 @@ import org.springframework.web.server.ServerWebExchange;
 @RestControllerAdvice(basePackages = "com.huawei.it.ex.one.interfaces")
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.REACTIVE)
 public class ReactiveApiExceptionHandler {
-    @ExceptionHandler(RegionalAccessDeniedException.class)
-    public ResponseEntity<ApiExceptionHandler.ApiErrorResponse> handleRegionalAccess(
-            RegionalAccessDeniedException ex, ServerWebExchange exchange) {
-        return ApiExceptionHandler.error(HttpStatus.UNAVAILABLE_FOR_LEGAL_REASONS,
-                RegionalAccessDeniedException.CODE, ex.getMessage(), requestPath(exchange));
-    }
-
     /**
      * 处理身份缺失和越权访问。
      *

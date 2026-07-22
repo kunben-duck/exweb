@@ -405,26 +405,7 @@ sequenceDiagram
 
 首版内置 `none` 和 `sgov` 两种 provider。`sgov` 只向出站 HTTP 请求注入 `Authorization` header，具体凭据获取由企业实现的 `SgovTokenResolver` bean 负责。本服务不会把 Authorization、服务 ID 或密钥写入请求 body、数据库、事件、metadata 或前端响应。
 
-当前预置以下 serviceCode：`welink-share`、`intent-service`、`use-case-library`、`regional-hr-location` 和 `regional-ip-location`。Relay Runtime、DomainAgent 和文档存储 adapter 默认不走该鉴权层，仍保持现有 Cookie 透传或普通调用行为；后续如需启用，只新增 `financeex.integration-auth.services.<serviceCode>.provider=sgov` 配置。
-
-## 地域准入
-
-地域准入位于企业身份上下文初始化之后、业务 Controller 之前，不进入 `PermissionChecker`、Chat 编排、事件流水线或数据库事务。Servlet 的 `RegionalAccessInterceptor` 覆盖 `/v1/**` 业务 HTTP 请求，WebFlux 使用等价的 `RegionalAccessWebFilter`。两种 Web 栈均排除 `/v1/chat/ws`，WebSocket Upgrade 不执行地域鉴权；`ChatServletWebSocketAuthInterceptor` 只保留身份快照和原有权限检查。`OPTIONS` 和非 `/v1/**` 路径也不执行地域检查；Servlet 异步 dispatch 通过 request attribute 避免重复查询。
-
-检查顺序固定为：员工白名单、当前 JVM Caffeine 缓存、HR 与 IP 并行查询。缓存键由数据归属用户 ID、工号和规范化 IP 组成。白名单每次请求直接读取当前字典快照，不受缓存影响；欧盟国家名称按 `trim + Locale.ROOT` 规范化后精确匹配。HR 或 IP 任一明确命中欧盟即阻断；所有适用查询均成功且都为非欧盟时缓存放行。查询超时、接口异常、服务鉴权不可用、非法响应及并发许可耗尽均失败放行，且不写缓存。
-
-默认注册 `EnterpriseRegionalAccessDictionaryProvider`。企业数据字典读取只在
-`loadRegionalAccessDictionary()` 方法内保留一个明确的 `TODO`；当前返回空白名单和空欧盟国家集合，
-因此直接放行且不调用 HR/IP。生产启用阻断前只需替换该方法的字典读取实现，并确保身份初始化组件的
-执行顺序小于 `financeex.regional-access.interceptor-order`。`X-Real-IP` 只在网关删除客户端输入并覆盖
-可信值后才能作为归属地依据。
-
-```text
-employee whitelist
-  -> cache(ownerUserId, employeeNumber, normalizedIp)
-  -> HR location + IP location (parallel, bounded, fail-open)
-  -> ALLOW or HTTP 451 SERVICE_REGION_RESTRICTED
-```
+当前只预置以下 serviceCode：`welink-share`、`intent-service`、`use-case-library`。Relay Runtime、DomainAgent 和文档存储 adapter 默认不走该鉴权层，仍保持现有 Cookie 透传或普通调用行为；后续如需启用，只新增 `financeex.integration-auth.services.<serviceCode>.provider=sgov` 配置。
 
 ```mermaid
 sequenceDiagram

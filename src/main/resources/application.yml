@@ -79,23 +79,6 @@ financeex:
         provider: ${FINANCEEX_INTENT_SERVICE_AUTH_PROVIDER:sgov}
       use-case-library:
         provider: ${FINANCEEX_USE_CASE_LIBRARY_AUTH_PROVIDER:sgov}
-      regional-hr-location:
-        provider: ${FINANCEEX_REGIONAL_HR_AUTH_PROVIDER:sgov}
-      regional-ip-location:
-        provider: ${FINANCEEX_REGIONAL_IP_AUTH_PROVIDER:sgov}
-  regional-access:
-    # 企业身份 Filter/Interceptor 完成上下文初始化后，在 Controller 前执行地域准入。
-    enabled: ${FINANCEEX_REGIONAL_ACCESS_ENABLED:true}
-    interceptor-order: ${FINANCEEX_REGIONAL_ACCESS_INTERCEPTOR_ORDER:2147483647}
-    # 只信任企业网关覆盖后的 X-Real-IP；不会读取 X-Forwarded-For 或前端 metadata。
-    ip-header-name: ${FINANCEEX_REGIONAL_ACCESS_IP_HEADER_NAME:X-Real-IP}
-    lookup-timeout: ${FINANCEEX_REGIONAL_ACCESS_LOOKUP_TIMEOUT:5s}
-    cache-ttl: ${FINANCEEX_REGIONAL_ACCESS_CACHE_TTL:1d}
-    cache-maximum-size: ${FINANCEEX_REGIONAL_ACCESS_CACHE_MAXIMUM_SIZE:10000}
-    max-concurrent-lookups: ${FINANCEEX_REGIONAL_ACCESS_MAX_CONCURRENT_LOOKUPS:16}
-    hr-base-url: ${FINANCEEX_REGIONAL_ACCESS_HR_BASE_URL:}
-    hr-app-id: ${FINANCEEX_REGIONAL_ACCESS_HR_APP_ID:}
-    ip-base-url: ${FINANCEEX_REGIONAL_ACCESS_IP_BASE_URL:}
   # 可选覆盖当前进程运行实例 ID；为空时由 GeneratedApplicationInstanceIdProvider 生成。
   # 后续如需从注册中心获取实例 ID，直接提供新的 ApplicationInstanceIdProvider bean。
   instance-id: ${FINANCEEX_INSTANCE_ID:}

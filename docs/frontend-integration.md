@@ -644,20 +644,7 @@ POST /v1/chat/runs/{runId}/stop
 
 DomainAgent chat、绑定续接和 stop 会统一发送后端配置的标准 `Referer` 请求头。该值来自 `FINANCEEX_DOMAIN_AGENT_REFERER`，未配置或为空时回退到 `FINANCEEX_DOMAIN_AGENT_BASE_URL`；前端无需也不能通过 metadata 或 Cookie 覆盖，Referer 配置值不会进入下游 body、ChatEvent 或历史数据。
 
-集成服务鉴权请求头由后端 `AuthHeaderProviderRegistry` 统一注入，前端不需要传 Sgov token，也不要在请求体中放服务鉴权信息。当前可配置接入的 serviceCode 包括 `welink-share`、`intent-service`、`use-case-library`、`regional-hr-location` 和 `regional-ip-location`；Relay Runtime、DomainAgent 和文档存储 adapter 默认不走该集成服务鉴权层。
-
-欧盟地区限制由入口层统一执行，覆盖 `/v1/**` 业务 HTTP 请求和 SSE Resume，但明确排除 `/v1/chat/ws`，WebSocket Upgrade 不执行该地域检查。前端不提交员工号、国家或 IP；员工身份来自企业上下文，IP 只接受网关覆盖后的 `X-Real-IP`。命中限制时后端返回：
-
-```json
-{
-  "status": 451,
-  "error": "Unavailable For Legal Reasons",
-  "code": "SERVICE_REGION_RESTRICTED",
-  "message": "根据服务可用地区政策，您所在地区暂不支持使用本服务。"
-}
-```
-
-该响应产生在业务 Controller 之前，不会创建 session、run、message 或 event。已经建立的 WebSocket 和已经启动的 run 不被主动中断；后续业务 HTTP 请求会重新检查，WebSocket 重连仍只执行原有身份与连接权限校验。
+集成服务鉴权请求头由后端 `AuthHeaderProviderRegistry` 统一注入，前端不需要传 Sgov token，也不要在请求体中放服务鉴权信息。当前可配置接入的 serviceCode 包括 `welink-share`、`intent-service` 和 `use-case-library`；Relay Runtime、DomainAgent 和文档存储 adapter 默认不走该集成服务鉴权层。
 
 ## 推荐前端流程
 

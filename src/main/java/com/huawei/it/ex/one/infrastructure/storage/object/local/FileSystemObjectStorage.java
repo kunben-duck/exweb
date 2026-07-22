@@ -3,13 +3,15 @@ package com.huawei.it.ex.one.infrastructure.storage.object.local;
 import com.huawei.it.ex.one.application.integration.document.ObjectStorage;
 import com.huawei.it.ex.one.domain.document.StoredObject;
 import com.huawei.it.ex.one.domain.document.StoredObjectContent;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
+
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
 
 /**
  * 文件系统对象存储实现。

@@ -1,18 +1,20 @@
 package com.huawei.it.ex.one.application.service.recovery;
 
+import com.huawei.it.ex.one.application.service.chat.ChatRunApplicationService;
+import com.huawei.it.ex.one.application.service.chat.ChatRunTerminalCommitService;
+import com.huawei.it.ex.one.application.service.chat.ChatStreamApplicationService;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
-import com.huawei.it.ex.one.application.service.chat.ChatRunTerminalCommitService;
-import com.huawei.it.ex.one.application.service.chat.ChatRunApplicationService;
-import com.huawei.it.ex.one.application.service.chat.ChatStreamApplicationService;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ErrorEvent;
+
+import org.springframework.stereotype.Service;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import com.huawei.it.ex.one.common.logging.AppLogger;
-import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
-import org.springframework.stereotype.Service;
 
 /**
  * stale run 的默认人工确认恢复策略。

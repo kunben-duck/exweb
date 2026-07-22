@@ -1,8 +1,9 @@
 package com.huawei.it.ex.one.infrastructure.persistence;
 
-import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.util.unit.DataSize;
+
+import java.time.Duration;
 
 /**
  * WebSocket 跨实例实时事件总线配置。

@@ -16,7 +16,9 @@ import com.huawei.it.ex.one.interfaces.document.dto.DocumentStatusDto;
 import com.huawei.it.ex.one.interfaces.document.dto.UpdateDocumentRequest;
 import com.huawei.it.ex.one.interfaces.document.dto.UploadedDocumentDto;
 import com.huawei.it.ex.one.interfaces.document.upload.DocumentUploadSupport;
-import java.io.InputStream;
+
+import reactor.core.publisher.Mono;
+
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
@@ -31,7 +33,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import reactor.core.publisher.Mono;
+
+import java.io.InputStream;
 
 /**
  * 文档库接口。

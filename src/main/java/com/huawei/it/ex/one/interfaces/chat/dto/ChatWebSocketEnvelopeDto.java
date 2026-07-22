@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.interfaces.chat.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+
 import java.util.Map;
 
 /**

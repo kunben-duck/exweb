@@ -1,12 +1,13 @@
 package com.huawei.it.ex.one.application.config;
 
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 import org.springframework.util.PatternMatchUtils;
 import org.springframework.util.unit.DataSize;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 前端 WebSocket 连接治理配置。

@@ -1,9 +1,5 @@
 package com.huawei.it.ex.one.application.service.document;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.it.ex.one.application.command.DocumentUpdateCommand;
 import com.huawei.it.ex.one.application.command.DocumentUploadCommand;
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
@@ -23,6 +19,18 @@ import com.huawei.it.ex.one.domain.document.DocumentLibraryQuery;
 import com.huawei.it.ex.one.domain.document.DocumentStatus;
 import com.huawei.it.ex.one.domain.document.StoredObjectContent;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
 import java.io.InputStream;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -31,10 +39,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 /**
  * 文档库应用服务。

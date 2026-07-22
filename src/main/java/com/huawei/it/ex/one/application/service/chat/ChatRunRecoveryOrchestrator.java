@@ -1,10 +1,8 @@
 package com.huawei.it.ex.one.application.service.chat;
 
-import com.huawei.it.ex.one.common.error.SystemErrorCode;
-import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
-import com.huawei.it.ex.one.application.integration.conversation.ChatRunExecutionRepository;
 import com.huawei.it.ex.one.application.integration.conversation.ChatInteractionRequestRepository;
+import com.huawei.it.ex.one.application.integration.conversation.ChatRunExecutionRepository;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRecoverLock;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.identity.ApplicationInstanceIdProvider;
@@ -13,12 +11,20 @@ import com.huawei.it.ex.one.application.service.recovery.StaleRunRecoveryContext
 import com.huawei.it.ex.one.application.service.recovery.StaleRunRecoveryResult;
 import com.huawei.it.ex.one.application.service.recovery.StaleRunRecoveryStrategy;
 import com.huawei.it.ex.one.application.service.recovery.StaleRunRecoveryStrategyRegistry;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
+import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunExecution;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
-import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ErrorEvent;
 import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -26,10 +32,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import com.huawei.it.ex.one.common.logging.AppLogger;
-import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
 
 /**
  * stale run 恢复编排服务。

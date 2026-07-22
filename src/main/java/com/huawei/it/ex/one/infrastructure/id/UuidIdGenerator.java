@@ -2,8 +2,10 @@ package com.huawei.it.ex.one.infrastructure.id;
 
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
-import java.util.UUID;
+
 import org.springframework.stereotype.Component;
+
+import java.util.UUID;
 
 /**
  * 默认 ID 生成器。

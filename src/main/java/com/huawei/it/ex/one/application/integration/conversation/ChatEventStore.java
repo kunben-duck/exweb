@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.application.integration.conversation;
 
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+
 import java.util.List;
 
 /**

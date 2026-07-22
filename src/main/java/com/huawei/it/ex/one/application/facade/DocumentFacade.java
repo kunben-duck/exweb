@@ -2,16 +2,18 @@ package com.huawei.it.ex.one.application.facade;
 
 import com.huawei.it.ex.one.application.command.DocumentUpdateCommand;
 import com.huawei.it.ex.one.application.command.DocumentUploadCommand;
-import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.document.DocumentDownload;
 import com.huawei.it.ex.one.domain.document.DocumentLibraryPage;
 import com.huawei.it.ex.one.domain.document.DocumentLibraryQuery;
 import com.huawei.it.ex.one.domain.document.StoredObjectContent;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
+
+import reactor.core.publisher.Mono;
+
 import java.util.List;
 import java.util.Map;
-import reactor.core.publisher.Mono;
 
 /**
  * 文档库应用门面。

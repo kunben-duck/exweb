@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.integration.intent;
 
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
+
 import java.util.List;
 import java.util.Map;
 

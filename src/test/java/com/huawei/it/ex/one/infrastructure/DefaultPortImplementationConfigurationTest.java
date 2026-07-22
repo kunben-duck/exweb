@@ -16,10 +16,13 @@ import com.huawei.it.ex.one.infrastructure.id.GeneratedApplicationInstanceIdProv
 import com.huawei.it.ex.one.infrastructure.intent.DefaultIntentRetryPolicy;
 import com.huawei.it.ex.one.infrastructure.runtime.UnsupportedAgentRuntimeRecoveryPort;
 import com.huawei.it.ex.one.infrastructure.trace.JalorTraceContextProvider;
-import java.util.Optional;
+
+import reactor.core.publisher.Flux;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import reactor.core.publisher.Flux;
+
+import java.util.Optional;
 
 class DefaultPortImplementationConfigurationTest {
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()

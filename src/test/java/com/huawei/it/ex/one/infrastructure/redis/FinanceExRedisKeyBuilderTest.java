@@ -7,6 +7,7 @@ import com.huawei.it.ex.one.infrastructure.memory.ShortTermMemoryRedisProperties
 import com.huawei.it.ex.one.infrastructure.persistence.ChatLiveEventBusProperties;
 import com.huawei.it.ex.one.infrastructure.persistence.ChatRunCacheProperties;
 import com.huawei.it.ex.one.infrastructure.runtime.RuntimeBindingProperties;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.env.MockEnvironment;
 

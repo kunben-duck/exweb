@@ -2,9 +2,10 @@ package com.huawei.it.ex.one.common.error;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.Test;
+
 import java.util.Arrays;
 import java.util.regex.Pattern;
-import org.junit.jupiter.api.Test;
 
 class SystemErrorCodeTest {
     private static final Pattern CODE_PATTERN =

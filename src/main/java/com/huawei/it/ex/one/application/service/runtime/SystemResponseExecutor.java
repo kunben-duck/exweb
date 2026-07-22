@@ -6,8 +6,10 @@ import com.huawei.it.ex.one.domain.chat.MessageCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
-import org.springframework.stereotype.Service;
+
 import reactor.core.publisher.Flux;
+
+import org.springframework.stereotype.Service;
 /**
  * 系统可控回复执行器。
  *

@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
+
 import java.util.Map;
 
 /**

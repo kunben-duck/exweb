@@ -2,10 +2,10 @@ package com.huawei.it.ex.one.interfaces.chat.websocket;
 
 import com.huawei.it.ex.one.application.integration.identity.AuthContextProvider;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
-import com.huawei.it.ex.one.domain.auth.UserContext;
-import java.util.Map;
 import com.huawei.it.ex.one.common.logging.AppLogger;
 import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
+import com.huawei.it.ex.one.domain.auth.UserContext;
+
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.http.HttpStatus;
@@ -14,6 +14,8 @@ import org.springframework.http.server.ServerHttpResponse;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.server.HandshakeInterceptor;
+
+import java.util.Map;
 
 /**
  * Servlet/MVC WebSocket 握手鉴权拦截器。

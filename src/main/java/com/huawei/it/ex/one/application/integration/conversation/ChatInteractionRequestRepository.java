@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.integration.conversation;
 
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
+
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;

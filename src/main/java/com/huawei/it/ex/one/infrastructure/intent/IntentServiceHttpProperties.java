@@ -1,7 +1,8 @@
 package com.huawei.it.ex.one.infrastructure.intent;
 
-import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import java.time.Duration;
 
 /**
  * 意图服务 HTTP adapter 配置。

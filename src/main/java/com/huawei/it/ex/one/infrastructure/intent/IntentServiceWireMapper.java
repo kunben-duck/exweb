@@ -1,11 +1,13 @@
 package com.huawei.it.ex.one.infrastructure.intent;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
-import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
 import org.springframework.stereotype.Component;
 
 /**

@@ -3,6 +3,7 @@ package com.huawei.it.ex.one.application.service.chat;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
+
 import java.util.List;
 import java.util.Map;
 

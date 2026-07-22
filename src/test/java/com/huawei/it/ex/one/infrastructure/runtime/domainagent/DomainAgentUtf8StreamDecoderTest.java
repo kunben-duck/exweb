@@ -3,10 +3,11 @@ package com.huawei.it.ex.one.infrastructure.runtime.domainagent;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 class DomainAgentUtf8StreamDecoderTest {
     private final DefaultDataBufferFactory buffers = new DefaultDataBufferFactory();

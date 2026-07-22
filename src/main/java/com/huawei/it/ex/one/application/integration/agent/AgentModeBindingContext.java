@@ -3,6 +3,7 @@ package com.huawei.it.ex.one.application.integration.agent;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;

@@ -1,5 +1,8 @@
 package com.huawei.it.ex.one.infrastructure.runtime.domainagent;
 
+import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.core.io.buffer.DataBufferUtils;
+
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
 import java.nio.charset.CharacterCodingException;
@@ -8,8 +11,6 @@ import java.nio.charset.CoderResult;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import org.springframework.core.io.buffer.DataBuffer;
-import org.springframework.core.io.buffer.DataBufferUtils;
 
 /** 单次 DomainAgent 响应流使用的增量 UTF-8 解码器。 */
 final class DomainAgentUtf8StreamDecoder {

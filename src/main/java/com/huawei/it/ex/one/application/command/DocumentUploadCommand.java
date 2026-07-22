@@ -1,7 +1,9 @@
 package com.huawei.it.ex.one.application.command;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import java.io.InputStream;
 
 /**

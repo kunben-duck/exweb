@@ -2,9 +2,10 @@ package com.huawei.it.ex.one.application.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+
+import java.util.stream.Stream;
 
 class FinanceExRequiredConfigurationValidatorTest {
     private static final String[] COMMON_REQUIRED = {

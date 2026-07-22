@@ -1,10 +1,11 @@
 package com.huawei.it.ex.one.application.service.recovery;
 
+import org.springframework.stereotype.Service;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import org.springframework.stereotype.Service;
 
 /**
  * stale run 恢复策略注册表。

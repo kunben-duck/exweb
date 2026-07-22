@@ -1,8 +1,10 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
-import java.util.concurrent.Semaphore;
+
 import org.springframework.stereotype.Service;
+
+import java.util.concurrent.Semaphore;
 
 /**
  * stale run 恢复的本机并发治理器。

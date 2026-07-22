@@ -1,7 +1,7 @@
 package com.huawei.it.ex.one.infrastructure;
 
-import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRecoveryPort;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteraction;
+import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRecoveryPort;
 import com.huawei.it.ex.one.application.integration.auth.SgovTokenResolver;
 import com.huawei.it.ex.one.application.integration.identity.ApplicationInstanceIdProvider;
 import com.huawei.it.ex.one.application.integration.intent.IntentAgentRuntime;
@@ -16,6 +16,7 @@ import com.huawei.it.ex.one.infrastructure.runtime.UnsupportedAgentRuntimeRecove
 import com.huawei.it.ex.one.infrastructure.runtime.intentagent.NoopIntentAgentRuntime;
 import com.huawei.it.ex.one.infrastructure.share.DefaultChatShareAccessPolicy;
 import com.huawei.it.ex.one.infrastructure.trace.JalorTraceContextProvider;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;

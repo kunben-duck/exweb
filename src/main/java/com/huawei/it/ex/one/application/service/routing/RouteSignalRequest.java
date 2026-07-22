@@ -5,6 +5,7 @@ import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
+
 import java.util.List;
 
 /**

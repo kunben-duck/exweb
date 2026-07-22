@@ -22,13 +22,15 @@ import com.huawei.it.ex.one.domain.chat.ChatRunCancelSignal;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
+
+import org.junit.jupiter.api.Test;
+
 import java.time.Instant;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import org.junit.jupiter.api.Test;
 class ChatFeedbackApplicationServiceTest {
     @Test
     void submitFeedbackRequiresOwnedAssistantMessage() {

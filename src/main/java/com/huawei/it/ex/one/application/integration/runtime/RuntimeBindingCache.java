@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.integration.runtime;
 
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
+
 import java.util.Optional;
 
 /**

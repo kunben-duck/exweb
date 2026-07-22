@@ -5,11 +5,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageVersionInfoDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageVersionItemDto;
+
+import org.junit.jupiter.api.Test;
+
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import org.junit.jupiter.api.Test;
 
 class ChatMessageVersionViewAssemblerTest {
     private final ChatMessageVersionViewAssembler assembler = new ChatMessageVersionViewAssembler();

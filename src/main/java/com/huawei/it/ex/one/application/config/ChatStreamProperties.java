@@ -1,11 +1,13 @@
 package com.huawei.it.ex.one.application.config;
 
 import jakarta.validation.constraints.AssertTrue;
-import java.time.Duration;
+
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 import org.springframework.util.unit.DataSize;
 import org.springframework.validation.annotation.Validated;
+
+import java.time.Duration;
 
 /**
  * 聊天事件流传输配置。

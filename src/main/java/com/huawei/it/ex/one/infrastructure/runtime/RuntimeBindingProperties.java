@@ -1,7 +1,8 @@
 package com.huawei.it.ex.one.infrastructure.runtime;
 
-import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import java.time.Duration;
 
 /**
  * RuntimeBinding Redis 热缓存配置。

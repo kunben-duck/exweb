@@ -2,9 +2,10 @@ package com.huawei.it.ex.one.infrastructure.runtime.relay;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.Test;
+
 import java.util.Locale;
 import java.util.Map;
-import org.junit.jupiter.api.Test;
 
 class RelayRuntimeWireRequestMapperTest {
     @Test

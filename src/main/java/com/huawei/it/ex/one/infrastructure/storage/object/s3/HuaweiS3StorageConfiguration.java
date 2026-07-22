@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.infrastructure.storage.object.s3;
 
 import com.obs.services.ObsClient;
 import com.obs.services.ObsConfiguration;
+
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;

@@ -1,10 +1,11 @@
 package com.huawei.it.ex.one.infrastructure.runtime.relay;
 
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.stereotype.Component;
+
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.stereotype.Component;
 
 /**
  * Relay 响应到 ChatService 标准事件的映射配置。

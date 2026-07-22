@@ -3,14 +3,17 @@ package com.huawei.it.ex.one.infrastructure.runtime.domainagent;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.huawei.it.ex.one.application.config.DomainAgentProperties;
+import com.huawei.it.ex.one.domain.chat.ChatEvent;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.huawei.it.ex.one.application.config.DomainAgentProperties;
-import com.huawei.it.ex.one.domain.chat.ChatEvent;
+
+import org.junit.jupiter.api.Test;
+
 import java.util.List;
 import java.util.Map;
-import org.junit.jupiter.api.Test;
 
 class DomainAgentResponseNormalizerTest {
     private final ObjectMapper objectMapper = new ObjectMapper();

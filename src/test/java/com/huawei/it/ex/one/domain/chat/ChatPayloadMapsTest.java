@@ -3,10 +3,11 @@ package com.huawei.it.ex.one.domain.chat;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import org.junit.jupiter.api.Test;
+
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import org.junit.jupiter.api.Test;
 
 class ChatPayloadMapsTest {
 

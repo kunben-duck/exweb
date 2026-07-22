@@ -14,13 +14,15 @@ import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatShare;
 import com.huawei.it.ex.one.domain.chat.ChatShareDelivery;
 import com.huawei.it.ex.one.domain.chat.ChatShareUnavailableException;
+
+import org.springframework.stereotype.Service;
+
 import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Semaphore;
-import org.springframework.stereotype.Service;
 
 /**
  * 分享发送应用服务。

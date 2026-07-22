@@ -13,11 +13,13 @@ import com.huawei.it.ex.one.infrastructure.persistence.MyBatisChatEventStore;
 import com.huawei.it.ex.one.infrastructure.persistence.MyBatisChatRunExecutionRepository;
 import com.huawei.it.ex.one.infrastructure.persistence.MyBatisChatRunRepository;
 import com.huawei.it.ex.one.infrastructure.session.MyBatisSessionRepository;
-import java.time.Duration;
-import java.util.List;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.time.Duration;
+import java.util.List;
 
 class ChatRunCoordinationTransactionTest {
     private static final String TIMEOUT =

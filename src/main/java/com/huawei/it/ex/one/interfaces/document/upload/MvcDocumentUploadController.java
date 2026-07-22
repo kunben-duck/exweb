@@ -2,6 +2,9 @@ package com.huawei.it.ex.one.interfaces.document.upload;
 
 import com.huawei.it.ex.one.interfaces.document.dto.DocumentDtoMapper;
 import com.huawei.it.ex.one.interfaces.document.dto.UploadedDocumentDto;
+
+import reactor.core.publisher.Mono;
+
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -12,7 +15,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
-import reactor.core.publisher.Mono;
 
 /**
  * Servlet/MVC 启动模式下的文档上传入口。

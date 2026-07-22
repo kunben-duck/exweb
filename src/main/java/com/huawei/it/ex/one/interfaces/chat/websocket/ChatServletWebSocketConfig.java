@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.interfaces.chat.websocket;
 
 import com.huawei.it.ex.one.application.config.ChatWebSocketProperties;
+
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Configuration;

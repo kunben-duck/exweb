@@ -3,8 +3,10 @@ package com.huawei.it.ex.one.infrastructure.intent;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
-import java.util.Map;
+
 import org.springframework.stereotype.Component;
+
+import java.util.Map;
 
 /**
  * 将 ChatService 内部请求映射为意图服务 HTTP 请求体。

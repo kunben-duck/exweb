@@ -7,11 +7,14 @@ import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.MessageCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
+
+import reactor.core.publisher.Flux;
+
+import org.junit.jupiter.api.Test;
+
 import java.util.List;
 import java.util.Map;
 import java.util.stream.IntStream;
-import org.junit.jupiter.api.Test;
-import reactor.core.publisher.Flux;
 
 class ChatDeltaCoalescerTest {
     @Test

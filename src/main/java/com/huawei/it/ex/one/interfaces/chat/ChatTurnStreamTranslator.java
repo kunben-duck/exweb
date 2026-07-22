@@ -4,8 +4,10 @@ import com.huawei.it.ex.one.interfaces.chat.dto.ChatEventDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ConversationTurnStreamDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ConversationTurnStreamPayloadDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.EncodedChatEventItemDto;
-import java.time.Instant;
+
 import org.springframework.stereotype.Component;
+
+import java.time.Instant;
 
 /**
  * ChatService 标准事件到前端 turn stream 传输结构的翻译器。

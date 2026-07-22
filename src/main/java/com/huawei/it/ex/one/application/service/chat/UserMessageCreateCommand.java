@@ -3,6 +3,7 @@ package com.huawei.it.ex.one.application.service.chat;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+
 import java.util.List;
 
 /**

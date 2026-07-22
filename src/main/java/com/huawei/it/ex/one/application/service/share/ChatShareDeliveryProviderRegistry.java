@@ -1,12 +1,14 @@
 package com.huawei.it.ex.one.application.service.share;
 
 import com.huawei.it.ex.one.application.integration.share.ChatShareDeliveryProvider;
+
+import org.springframework.stereotype.Component;
+
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import org.springframework.stereotype.Component;
 
 /**
  * 分享发送 provider 注册表。

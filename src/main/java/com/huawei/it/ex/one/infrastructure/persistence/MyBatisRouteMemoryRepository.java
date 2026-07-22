@@ -1,16 +1,19 @@
 package com.huawei.it.ex.one.infrastructure.persistence;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.it.ex.one.application.integration.memory.RouteMemoryRepository;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryItem;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryItemStatus;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryItemType;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.springframework.stereotype.Repository;
+
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import org.springframework.stereotype.Repository;
 
 /**
  * RouteMemory 数据库事实源实现。

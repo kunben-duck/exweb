@@ -1,7 +1,8 @@
 package com.huawei.it.ex.one.application.config;
 
-import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import java.time.Duration;
 
 /**
  * 财经领域 DomainAgent 指定调用配置。

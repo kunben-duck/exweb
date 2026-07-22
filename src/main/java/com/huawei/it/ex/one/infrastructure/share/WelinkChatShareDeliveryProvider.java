@@ -1,21 +1,24 @@
 package com.huawei.it.ex.one.infrastructure.share;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.it.ex.one.application.config.ChatShareDeliveryProperties;
 import com.huawei.it.ex.one.application.integration.auth.AuthHeaderRequest;
 import com.huawei.it.ex.one.application.integration.share.ChatShareDeliveryProvider;
 import com.huawei.it.ex.one.application.integration.share.ChatShareProviderDeliveryRequest;
 import com.huawei.it.ex.one.application.integration.share.ChatShareProviderDeliveryResult;
 import com.huawei.it.ex.one.application.service.auth.AuthHeaderProviderRegistry;
-import java.time.Duration;
-import java.util.LinkedHashMap;
-import java.util.Map;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+
+import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * WeLink 分享发送 provider。

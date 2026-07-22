@@ -1,8 +1,9 @@
 package com.huawei.it.ex.one.infrastructure.memory;
 
-import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
+
+import java.time.Duration;
 
 /**
  * 短期记忆 Redis 缓存配置。

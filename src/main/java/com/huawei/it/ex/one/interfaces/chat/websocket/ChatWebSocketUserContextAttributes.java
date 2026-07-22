@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.interfaces.chat.websocket;
 
 import com.huawei.it.ex.one.domain.auth.UserContext;
+
 import java.util.Map;
 
 /**

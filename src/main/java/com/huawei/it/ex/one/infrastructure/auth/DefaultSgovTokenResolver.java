@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.infrastructure.auth;
 
 import com.huawei.it.ex.one.application.integration.auth.AuthHeaderRequest;
 import com.huawei.it.ex.one.application.integration.auth.SgovTokenResolver;
+
 import java.util.Optional;
 
 /**

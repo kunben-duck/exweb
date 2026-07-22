@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.infrastructure.security;
 
 import com.huawei.it.ex.one.application.integration.identity.AuthContextProvider;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+
 import org.springframework.stereotype.Component;
 
 /**

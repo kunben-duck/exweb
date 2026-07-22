@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.interfaces.chat;
 
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatEventDto;
+
 import org.springframework.stereotype.Component;
 
 /**

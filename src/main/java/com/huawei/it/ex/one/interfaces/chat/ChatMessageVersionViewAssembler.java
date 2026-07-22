@@ -3,6 +3,9 @@ package com.huawei.it.ex.one.interfaces.chat;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageVersionInfoDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageVersionItemDto;
+
+import org.springframework.stereotype.Component;
+
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -16,7 +19,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
-import org.springframework.stereotype.Component;
 
 /**
  * 为历史消息 DTO 装配版本游标信息。

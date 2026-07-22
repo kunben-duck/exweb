@@ -1,7 +1,8 @@
 package com.huawei.it.ex.one.infrastructure.memory;
 
-import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import java.time.Duration;
 
 /**
  * 短期消息存储降级配置。

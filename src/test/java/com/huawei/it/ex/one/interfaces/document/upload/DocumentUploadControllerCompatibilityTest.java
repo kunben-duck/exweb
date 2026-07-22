@@ -2,10 +2,11 @@ package com.huawei.it.ex.one.interfaces.document.upload;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.lang.reflect.Method;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.web.bind.annotation.PostMapping;
+
+import java.lang.reflect.Method;
 class DocumentUploadControllerCompatibilityTest {
     @Test
     void servletUploadControllerIsOnlyRegisteredForMvcRuntime() {

@@ -6,9 +6,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
+
+import org.junit.jupiter.api.Test;
+
 import java.time.Instant;
 import java.util.List;
-import org.junit.jupiter.api.Test;
 
 class MyBatisSessionRepositoryTest {
     @Test

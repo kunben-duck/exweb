@@ -1,7 +1,9 @@
 package com.huawei.it.ex.one.application.integration.agent;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import java.util.Map;
 
 /**

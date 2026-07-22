@@ -1,8 +1,10 @@
 package com.huawei.it.ex.one.application.integration.agent;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.huawei.it.ex.one.domain.chat.ChatPayloadMaps;
 import com.huawei.it.ex.one.common.trace.TraceContext;
+import com.huawei.it.ex.one.domain.chat.ChatPayloadMaps;
+
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import java.util.Map;
 
 /**

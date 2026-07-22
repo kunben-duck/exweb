@@ -9,11 +9,13 @@ import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePage;
 import com.huawei.it.ex.one.domain.memory.LongTermMemoryItem;
+
+import org.junit.jupiter.api.Test;
+
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import org.junit.jupiter.api.Test;
 class MemoryApplicationServiceTest {
     private final ChatCommand command = new ChatCommand("cmd1", "tenant1", "user1", "session1",
             null, "web", "帮我分析预算", List.of(), Map.of());

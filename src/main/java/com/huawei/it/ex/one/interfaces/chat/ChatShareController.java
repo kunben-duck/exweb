@@ -19,15 +19,18 @@ import com.huawei.it.ex.one.domain.chat.ChatShareSnapshotPart;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessagePartDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatShareAndDeliveryDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatShareAttachmentSnapshotDto;
-import com.huawei.it.ex.one.interfaces.chat.dto.ChatShareDetailDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatShareDeliveryDto;
+import com.huawei.it.ex.one.interfaces.chat.dto.ChatShareDetailDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatShareDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSharePageDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatShareSnapshotMessageDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.CreateChatShareAndDeliveryRequest;
 import com.huawei.it.ex.one.interfaces.chat.dto.CreateChatShareDeliveryRequest;
 import com.huawei.it.ex.one.interfaces.chat.dto.CreateChatShareRequest;
-import java.util.List;
+
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
+
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -38,8 +41,8 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
+
+import java.util.List;
 
 /**
  * 单轮问答分享接口。

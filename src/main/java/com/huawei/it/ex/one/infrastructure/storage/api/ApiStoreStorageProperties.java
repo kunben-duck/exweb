@@ -1,9 +1,10 @@
 package com.huawei.it.ex.one.infrastructure.storage.api;
 
-import java.time.Duration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
+
+import java.time.Duration;
 
 /**
  * api-store 文档上传配置。

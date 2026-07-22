@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.common.logging;
 
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
+
 import java.util.Map;
 
 /**

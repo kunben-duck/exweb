@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.application.integration.share;
 
 import com.huawei.it.ex.one.domain.chat.ChatShare;
 import com.huawei.it.ex.one.domain.chat.ChatSharePage;
+
 import java.time.Instant;
 import java.util.Optional;
 

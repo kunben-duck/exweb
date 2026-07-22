@@ -3,8 +3,10 @@ package com.huawei.it.ex.one.application.service.chat;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
-import java.util.Map;
+
 import org.junit.jupiter.api.Test;
+
+import java.util.Map;
 
 class AssistantAssemblyTest {
 

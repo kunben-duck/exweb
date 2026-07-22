@@ -1,7 +1,8 @@
 package com.huawei.it.ex.one.application.integration.share;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+
+import com.fasterxml.jackson.annotation.JsonIgnore;
 
 /**
  * 分享 provider 发送请求。

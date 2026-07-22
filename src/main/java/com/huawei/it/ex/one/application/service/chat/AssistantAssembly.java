@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePartDraft;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;

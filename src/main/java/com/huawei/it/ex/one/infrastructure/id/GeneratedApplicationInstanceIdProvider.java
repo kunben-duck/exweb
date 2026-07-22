@@ -1,10 +1,12 @@
 package com.huawei.it.ex.one.infrastructure.id;
 
 import com.huawei.it.ex.one.application.integration.identity.ApplicationInstanceIdProvider;
-import java.lang.management.ManagementFactory;
+
 import java.net.InetAddress;
 import java.util.Locale;
 import java.util.UUID;
+
+import java.lang.management.ManagementFactory;
 
 /**
  * 默认应用实例 ID 提供者。

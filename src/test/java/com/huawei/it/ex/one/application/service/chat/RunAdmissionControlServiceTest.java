@@ -4,11 +4,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.application.config.RunAdmissionProperties;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+
+import org.junit.jupiter.api.Test;
+
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
-import org.junit.jupiter.api.Test;
 class RunAdmissionControlServiceTest {
     @Test
     void rateWindowIsCleanedAfterItExpires() {

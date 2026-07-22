@@ -2,8 +2,10 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.config.ChatStreamProperties;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
-import org.springframework.stereotype.Service;
+
 import reactor.core.publisher.Flux;
+
+import org.springframework.stereotype.Service;
 
 /**
  * 流式事件合并扩展点。

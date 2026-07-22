@@ -2,9 +2,11 @@ package com.huawei.it.ex.one.infrastructure.runtime.relay;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.it.ex.one.application.config.AgentRuntimeForwardCookieProperties;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntime;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 

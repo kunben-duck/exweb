@@ -1,8 +1,9 @@
 package com.huawei.it.ex.one.infrastructure.runtime;
 
-import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteraction;
+import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
+
 import reactor.core.publisher.Flux;
 
 /**

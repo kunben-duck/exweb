@@ -1,7 +1,9 @@
 package com.huawei.it.ex.one.infrastructure.runtime.domainagent;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.huawei.it.ex.one.domain.chat.ChatPayloadMaps;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;

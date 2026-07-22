@@ -7,8 +7,10 @@ import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.memory.LongTermMemoryItem;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
-import java.util.List;
+
 import org.springframework.stereotype.Service;
+
+import java.util.List;
 
 /**
  * 可选 SuperAgent 记忆上下文装配服务。

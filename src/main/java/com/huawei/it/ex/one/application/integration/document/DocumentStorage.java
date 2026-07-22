@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.application.integration.document;
 
 import com.huawei.it.ex.one.domain.document.StoredObjectContent;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
+
 import java.util.Optional;
 
 /**

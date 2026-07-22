@@ -23,6 +23,9 @@ import com.huawei.it.ex.one.domain.chat.ChatShare;
 import com.huawei.it.ex.one.domain.chat.ChatSharePage;
 import com.huawei.it.ex.one.domain.chat.ChatShareUnavailableException;
 import com.huawei.it.ex.one.infrastructure.share.DefaultChatShareAccessPolicy;
+
+import org.junit.jupiter.api.Test;
+
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -31,7 +34,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.Test;
 
 class ChatShareApplicationServiceTest {
     @Test

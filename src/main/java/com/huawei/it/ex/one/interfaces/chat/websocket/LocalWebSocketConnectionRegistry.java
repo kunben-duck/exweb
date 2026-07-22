@@ -2,15 +2,18 @@ package com.huawei.it.ex.one.interfaces.chat.websocket;
 
 import com.huawei.it.ex.one.application.config.ChatWebSocketProperties;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+
+import reactor.core.Disposable;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.Optional;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
-import reactor.core.Disposable;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 当前服务实例内的 WebSocket 连接注册表。

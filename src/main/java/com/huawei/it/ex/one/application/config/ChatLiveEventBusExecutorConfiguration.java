@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.config;
 
 import com.huawei.it.ex.one.infrastructure.persistence.ChatLiveEventBusProperties;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;

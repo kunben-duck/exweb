@@ -1,9 +1,10 @@
 package com.huawei.it.ex.one.application.config;
 
-import java.time.Duration;
-import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
+
+import java.time.Duration;
+import java.util.List;
 
 /**
  * Chat run 运行控制面配置。

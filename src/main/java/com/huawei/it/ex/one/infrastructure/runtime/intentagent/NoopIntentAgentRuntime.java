@@ -7,9 +7,11 @@ import com.huawei.it.ex.one.application.integration.intent.IntentAgentRuntime;
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
+
+import reactor.core.publisher.Flux;
+
 import java.util.List;
 import java.util.Map;
-import reactor.core.publisher.Flux;
 
 /**
  * intent-agent 缺省实现。

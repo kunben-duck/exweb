@@ -2,10 +2,11 @@ package com.huawei.it.ex.one.application.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.Test;
+
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import org.junit.jupiter.api.Test;
 
 class ChatServletWebSocketSendExecutorConfigurationTest {
     private final ChatServletWebSocketSendExecutorConfiguration configuration =

@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.domain.memory;
 
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
+
 import java.util.List;
 
 /**

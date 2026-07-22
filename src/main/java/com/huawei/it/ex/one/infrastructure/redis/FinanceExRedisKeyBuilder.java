@@ -4,11 +4,13 @@ import com.huawei.it.ex.one.infrastructure.memory.ShortTermMemoryRedisProperties
 import com.huawei.it.ex.one.infrastructure.persistence.ChatLiveEventBusProperties;
 import com.huawei.it.ex.one.infrastructure.persistence.ChatRunCacheProperties;
 import com.huawei.it.ex.one.infrastructure.runtime.RuntimeBindingProperties;
-import java.util.Locale;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
+
+import java.util.Locale;
 
 /**
  * FinanceEX Redis key 构建器。

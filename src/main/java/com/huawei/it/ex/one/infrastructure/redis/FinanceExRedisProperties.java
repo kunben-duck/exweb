@@ -1,10 +1,10 @@
 package com.huawei.it.ex.one.infrastructure.redis;
 
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
-
-import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
  * FinanceEX Redis 连接配置。

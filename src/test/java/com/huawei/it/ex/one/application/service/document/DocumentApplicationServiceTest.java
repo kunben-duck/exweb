@@ -3,13 +3,12 @@ package com.huawei.it.ex.one.application.service.document;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.it.ex.one.application.command.DocumentUpdateCommand;
 import com.huawei.it.ex.one.application.command.DocumentUploadCommand;
 import com.huawei.it.ex.one.application.facade.ResolvedChatAttachments;
-import com.huawei.it.ex.one.application.integration.document.DocumentStorage;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.integration.document.DocumentRepository;
+import com.huawei.it.ex.one.application.integration.document.DocumentStorage;
 import com.huawei.it.ex.one.application.integration.document.ObjectStorage;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
@@ -28,6 +27,11 @@ import com.huawei.it.ex.one.domain.document.StoredObject;
 import com.huawei.it.ex.one.domain.document.StoredObjectContent;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
 import com.huawei.it.ex.one.infrastructure.storage.object.ObjectStorageDocumentStorage;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.junit.jupiter.api.Test;
+
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.time.Instant;
@@ -35,7 +39,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import org.junit.jupiter.api.Test;
 class DocumentApplicationServiceTest {
     @Test
     void uploadStoresObjectAndCreatesAvailableLibraryDocument() {

@@ -2,11 +2,14 @@ package com.huawei.it.ex.one.interfaces.document.dto;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.it.ex.one.domain.document.DocumentStatus;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
-import java.time.Instant;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.junit.jupiter.api.Test;
+
+import java.time.Instant;
 
 class DocumentDtoMapperTest {
     private final DocumentDtoMapper mapper = new DocumentDtoMapper(new ObjectMapper());

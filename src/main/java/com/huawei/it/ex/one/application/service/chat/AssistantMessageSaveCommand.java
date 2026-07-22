@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.domain.chat.ChatMessagePartDraft;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+
 import java.util.List;
 
 /**

@@ -1,19 +1,22 @@
 package com.huawei.it.ex.one.infrastructure.storage.object.s3;
 
-import com.obs.services.model.ObjectMetadata;
-import com.obs.services.model.ObsObject;
-import com.obs.services.model.PutObjectRequest;
 import com.huawei.it.ex.one.application.integration.document.ObjectStorage;
 import com.huawei.it.ex.one.domain.document.StoredObject;
 import com.huawei.it.ex.one.domain.document.StoredObjectContent;
+
+import com.obs.services.model.ObjectMetadata;
+import com.obs.services.model.ObsObject;
+import com.obs.services.model.PutObjectRequest;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
+
 import java.io.InputStream;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.UUID;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Component;
 
 /**
  * 华为 OBS S3 对象存储实现。

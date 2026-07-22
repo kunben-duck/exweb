@@ -1,8 +1,10 @@
 package com.huawei.it.ex.one.common.logging;
 
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
-import java.util.Objects;
+
 import org.slf4j.Logger;
+
+import java.util.Objects;
 
 /**
  * SLF4J-backed implementation of the application logging facade.

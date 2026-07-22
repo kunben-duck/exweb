@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.application.integration.conversation;
 
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunCancelSignal;
+
 import java.util.Optional;
 
 /**

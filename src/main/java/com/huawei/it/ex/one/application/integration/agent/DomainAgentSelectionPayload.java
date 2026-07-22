@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.integration.agent;
 
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 

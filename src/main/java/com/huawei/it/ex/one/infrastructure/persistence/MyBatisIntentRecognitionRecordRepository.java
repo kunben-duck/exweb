@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.infrastructure.persistence;
 
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionRecordRepository;
 import com.huawei.it.ex.one.domain.intent.IntentRecognitionRecord;
+
 import org.springframework.stereotype.Repository;
 
 /**

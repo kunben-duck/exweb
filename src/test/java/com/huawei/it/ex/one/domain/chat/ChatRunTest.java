@@ -2,10 +2,11 @@ package com.huawei.it.ex.one.domain.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.Test;
+
 import java.time.Instant;
 import java.util.Locale;
 import java.util.Map;
-import org.junit.jupiter.api.Test;
 
 class ChatRunTest {
     @Test

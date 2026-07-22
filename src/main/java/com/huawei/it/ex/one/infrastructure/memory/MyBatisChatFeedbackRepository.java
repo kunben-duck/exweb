@@ -1,18 +1,21 @@
 package com.huawei.it.ex.one.infrastructure.memory;
 
+import com.huawei.it.ex.one.application.integration.memory.ChatFeedbackRepository;
+import com.huawei.it.ex.one.domain.chat.ChatMessageFeedback;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.huawei.it.ex.one.application.integration.memory.ChatFeedbackRepository;
-import com.huawei.it.ex.one.domain.chat.ChatMessageFeedback;
+
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.stereotype.Repository;
+
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
-import org.springframework.dao.DuplicateKeyException;
-import org.springframework.stereotype.Repository;
 
 /**
  * 消息反馈数据库事实源实现。

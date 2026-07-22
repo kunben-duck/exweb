@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.interfaces.chat;
 
 import com.huawei.it.ex.one.application.config.AgentRuntimeForwardCookieProperties;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 

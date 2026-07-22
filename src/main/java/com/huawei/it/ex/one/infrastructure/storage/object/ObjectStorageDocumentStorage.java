@@ -1,6 +1,5 @@
 package com.huawei.it.ex.one.infrastructure.storage.object;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.it.ex.one.application.integration.document.DocumentStorage;
 import com.huawei.it.ex.one.application.integration.document.DocumentStorageUploadRequest;
 import com.huawei.it.ex.one.application.integration.document.ObjectStorage;
@@ -9,13 +8,17 @@ import com.huawei.it.ex.one.domain.document.DocumentStatus;
 import com.huawei.it.ex.one.domain.document.StoredObject;
 import com.huawei.it.ex.one.domain.document.StoredObjectContent;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
+import org.springframework.stereotype.Component;
+
 import java.io.InputStream;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
-import org.springframework.stereotype.Component;
 
 /**
  * local/huawei-s3 对象存储文档实现。

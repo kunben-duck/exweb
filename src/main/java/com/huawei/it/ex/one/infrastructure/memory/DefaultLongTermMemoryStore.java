@@ -2,9 +2,11 @@ package com.huawei.it.ex.one.infrastructure.memory;
 
 import com.huawei.it.ex.one.application.integration.memory.LongTermMemoryStore;
 import com.huawei.it.ex.one.domain.memory.LongTermMemoryItem;
-import java.util.List;
+
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
+
+import java.util.List;
 
 /**
  * 默认长期记忆适配实现。

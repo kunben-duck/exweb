@@ -1,10 +1,11 @@
 package com.huawei.it.ex.one.infrastructure.storage.persistence;
 
+import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
+
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
-import org.apache.ibatis.annotations.Mapper;
-import org.apache.ibatis.annotations.Param;
 
 /**
  * fin_ex_uploaded_document_t 的 MyBatis Mapper。

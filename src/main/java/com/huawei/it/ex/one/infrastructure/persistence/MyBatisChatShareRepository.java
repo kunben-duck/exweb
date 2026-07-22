@@ -1,16 +1,19 @@
 package com.huawei.it.ex.one.infrastructure.persistence;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.it.ex.one.application.integration.share.ChatShareRepository;
 import com.huawei.it.ex.one.domain.chat.ChatShare;
 import com.huawei.it.ex.one.domain.chat.ChatSharePage;
 import com.huawei.it.ex.one.domain.chat.ChatShareSnapshot;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.stereotype.Repository;
+
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
-import org.springframework.dao.DuplicateKeyException;
-import org.springframework.stereotype.Repository;
 
 /**
  * 单轮问答分享数据库仓储实现。

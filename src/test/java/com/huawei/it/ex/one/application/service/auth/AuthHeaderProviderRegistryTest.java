@@ -7,11 +7,13 @@ import com.huawei.it.ex.one.application.config.IntegrationAuthProperties;
 import com.huawei.it.ex.one.application.integration.auth.AuthHeaderRequest;
 import com.huawei.it.ex.one.infrastructure.auth.NoopAuthHeaderProvider;
 import com.huawei.it.ex.one.infrastructure.auth.SgovAuthHeaderProvider;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpHeaders;
 
 class AuthHeaderProviderRegistryTest {
     @Test

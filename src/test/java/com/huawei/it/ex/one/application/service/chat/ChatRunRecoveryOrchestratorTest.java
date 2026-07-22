@@ -26,7 +26,6 @@ import com.huawei.it.ex.one.application.service.recovery.StaleRunRecoveryStrateg
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
-import com.huawei.it.ex.one.domain.chat.ErrorEvent;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
@@ -35,21 +34,25 @@ import com.huawei.it.ex.one.domain.chat.ChatRunCancelSignal;
 import com.huawei.it.ex.one.domain.chat.ChatRunExecution;
 import com.huawei.it.ex.one.domain.chat.ChatRunExecutionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
-import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
+import com.huawei.it.ex.one.domain.chat.ErrorEvent;
+import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
+
+import reactor.core.publisher.Flux;
+
+import org.junit.jupiter.api.Test;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import org.junit.jupiter.api.Test;
-import reactor.core.publisher.Flux;
 class ChatRunRecoveryOrchestratorTest {
     @Test
     void manualConfirmationClosesStaleRunAndWritesSingleFailedEvent() {

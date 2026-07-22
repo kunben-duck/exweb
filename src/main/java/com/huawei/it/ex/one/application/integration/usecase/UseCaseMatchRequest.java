@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.application.integration.usecase;
 
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
+
 import java.util.List;
 import java.util.Map;
 

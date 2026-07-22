@@ -3,8 +3,10 @@ package com.huawei.it.ex.one.interfaces.chat.websocket;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.it.ex.one.domain.auth.UserContext;
-import org.junit.jupiter.api.Test;
+
 import reactor.core.Disposable;
+
+import org.junit.jupiter.api.Test;
 class LocalWebSocketConnectionRegistryTest {
     @Test
     void connectionKeepsIndependentTopicSubscriptionsAndDeduplicatesSeq() {

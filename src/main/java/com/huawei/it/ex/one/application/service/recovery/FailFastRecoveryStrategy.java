@@ -1,17 +1,19 @@
 package com.huawei.it.ex.one.application.service.recovery;
 
+import com.huawei.it.ex.one.application.service.chat.ChatRunApplicationService;
+import com.huawei.it.ex.one.application.service.chat.ChatRunTerminalCommitService;
+import com.huawei.it.ex.one.application.service.chat.ChatStreamApplicationService;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
-import com.huawei.it.ex.one.application.service.chat.ChatRunTerminalCommitService;
-import com.huawei.it.ex.one.application.service.chat.ChatRunApplicationService;
-import com.huawei.it.ex.one.application.service.chat.ChatStreamApplicationService;
-import com.huawei.it.ex.one.domain.chat.ChatEvent;
-import com.huawei.it.ex.one.domain.chat.ErrorEvent;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import com.huawei.it.ex.one.common.logging.AppLogger;
 import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
+import com.huawei.it.ex.one.domain.chat.ChatEvent;
+import com.huawei.it.ex.one.domain.chat.ErrorEvent;
+
 import org.springframework.stereotype.Service;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * stale run 的保底失败闭合策略。

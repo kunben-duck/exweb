@@ -4,9 +4,11 @@ import com.huawei.it.ex.one.application.config.IntegrationAuthProperties;
 import com.huawei.it.ex.one.application.integration.auth.AuthHeaderProvider;
 import com.huawei.it.ex.one.application.integration.auth.AuthHeaderRequest;
 import com.huawei.it.ex.one.application.integration.auth.SgovTokenResolver;
-import java.util.Map;
+
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
+
+import java.util.Map;
 
 /**
  * Sgov 集成服务鉴权 provider。

@@ -2,14 +2,16 @@ package com.huawei.it.ex.one.infrastructure.runtime.relay;
 
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntime;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeCancelRequest;
-import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteraction;
+import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Component;
+
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
 
 /**
  * RelayAgent Runtime 防腐层实现。

@@ -1,7 +1,8 @@
 package com.huawei.it.ex.one.common.logging;
 
-import java.util.Objects;
 import org.slf4j.LoggerFactory;
+
+import java.util.Objects;
 
 /**
  * Single application entry point for creating loggers.

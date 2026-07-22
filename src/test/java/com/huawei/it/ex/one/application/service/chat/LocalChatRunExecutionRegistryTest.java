@@ -3,6 +3,7 @@ package com.huawei.it.ex.one.application.service.chat;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+
 import org.junit.jupiter.api.Test;
 
 class LocalChatRunExecutionRegistryTest {

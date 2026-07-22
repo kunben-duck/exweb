@@ -2,8 +2,10 @@ package com.huawei.it.ex.one.infrastructure.auth;
 
 import com.huawei.it.ex.one.application.integration.auth.AuthHeaderProvider;
 import com.huawei.it.ex.one.application.integration.auth.AuthHeaderRequest;
-import java.util.Map;
+
 import org.springframework.stereotype.Component;
+
+import java.util.Map;
 
 /**
  * 不添加任何集成服务鉴权头的 provider。

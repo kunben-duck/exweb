@@ -1,16 +1,19 @@
 package com.huawei.it.ex.one.application.service.runtime;
 
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntime;
-import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteraction;
+import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
+
+import reactor.core.publisher.Flux;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
-import reactor.core.publisher.Flux;
 
 /**
  * AgentRuntime provider 注册表。

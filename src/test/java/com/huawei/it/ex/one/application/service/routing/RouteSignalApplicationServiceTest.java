@@ -22,13 +22,16 @@ import com.huawei.it.ex.one.domain.routing.RouteType;
 import com.huawei.it.ex.one.domain.routing.RoutingPolicy;
 import com.huawei.it.ex.one.domain.usecase.UseCaseMatchResult;
 import com.huawei.it.ex.one.infrastructure.runtime.intentagent.BlockingIntentAgentRuntime;
+
+import reactor.test.StepVerifier;
+
+import org.junit.jupiter.api.Test;
+
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import org.junit.jupiter.api.Test;
-import reactor.test.StepVerifier;
 class RouteSignalApplicationServiceTest {
     private final UserContext user = new UserContext("tenant1", "user1", "tester");
     private final ChatSession session = new ChatSession("session1", "tenant1", "user1",

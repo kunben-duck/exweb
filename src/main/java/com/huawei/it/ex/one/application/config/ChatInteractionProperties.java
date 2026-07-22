@@ -1,9 +1,10 @@
 package com.huawei.it.ex.one.application.config;
 
-import java.time.Duration;
-import java.time.Instant;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
+
+import java.time.Duration;
+import java.time.Instant;
 
 /**
  * Interaction 等待用户输入配置。

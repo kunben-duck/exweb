@@ -1,8 +1,9 @@
 package com.huawei.it.ex.one.infrastructure.runtime.relay;
 
-import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.util.unit.DataSize;
+
+import java.time.Duration;
 
 /**
  * Relay Runtime WebSocket 配置。

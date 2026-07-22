@@ -1,10 +1,13 @@
 package com.huawei.it.ex.one.application.service.runtime;
 
 import com.huawei.it.ex.one.application.config.ResourceIsolationProperties;
-import java.util.concurrent.Semaphore;
-import org.springframework.stereotype.Service;
+
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+
+import org.springframework.stereotype.Service;
+
+import java.util.concurrent.Semaphore;
 
 /**
  * 外部慢资源并发隔离器。

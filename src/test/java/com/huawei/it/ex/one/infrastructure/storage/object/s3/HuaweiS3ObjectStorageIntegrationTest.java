@@ -3,12 +3,15 @@ package com.huawei.it.ex.one.infrastructure.storage.object.s3;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.it.ex.one.domain.document.StoredObject;
+
 import com.obs.services.ObsClient;
+
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Test;
+
 import java.io.ByteArrayInputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import org.junit.jupiter.api.Assumptions;
-import org.junit.jupiter.api.Test;
 
 /**
  * 华为 OBS S3 集成测试。

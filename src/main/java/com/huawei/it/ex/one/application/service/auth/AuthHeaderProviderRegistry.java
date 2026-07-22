@@ -3,12 +3,14 @@ package com.huawei.it.ex.one.application.service.auth;
 import com.huawei.it.ex.one.application.config.IntegrationAuthProperties;
 import com.huawei.it.ex.one.application.integration.auth.AuthHeaderProvider;
 import com.huawei.it.ex.one.application.integration.auth.AuthHeaderRequest;
+
+import org.springframework.stereotype.Component;
+
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import org.springframework.stereotype.Component;
 
 /**
  * 集成服务鉴权请求头 provider 注册表。

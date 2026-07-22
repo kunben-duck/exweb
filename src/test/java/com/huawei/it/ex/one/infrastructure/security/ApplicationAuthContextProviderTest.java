@@ -3,6 +3,7 @@ package com.huawei.it.ex.one.infrastructure.security;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.it.ex.one.domain.auth.UserContext;
+
 import org.junit.jupiter.api.Test;
 
 class ApplicationAuthContextProviderTest {

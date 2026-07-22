@@ -2,9 +2,10 @@ package com.huawei.it.ex.one.domain.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.junit.jupiter.api.Test;
+
 import java.time.Instant;
 import java.util.Map;
-import org.junit.jupiter.api.Test;
 
 class ChatMessagePartTest {
     private static final Map<String, String> EXPECTED_TITLES = Map.ofEntries(

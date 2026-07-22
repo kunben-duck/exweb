@@ -20,6 +20,9 @@ import com.huawei.it.ex.one.domain.chat.ChatShareMessageSnapshot;
 import com.huawei.it.ex.one.domain.chat.ChatSharePage;
 import com.huawei.it.ex.one.domain.chat.ChatShareSnapshot;
 import com.huawei.it.ex.one.infrastructure.share.DefaultChatShareAccessPolicy;
+
+import org.junit.jupiter.api.Test;
+
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -30,7 +33,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
-import org.junit.jupiter.api.Test;
 
 class ChatShareDeliveryApplicationServiceTest {
     @Test

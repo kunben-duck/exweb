@@ -19,10 +19,12 @@ import com.huawei.it.ex.one.domain.chat.ChatSharePage;
 import com.huawei.it.ex.one.domain.chat.ChatShareSnapshot;
 import com.huawei.it.ex.one.domain.chat.ChatShareSnapshotPart;
 import com.huawei.it.ex.one.domain.chat.ChatShareUnavailableException;
-import java.time.Instant;
-import java.util.List;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.time.Instant;
+import java.util.List;
 
 /**
  * 单轮问答分享应用服务。

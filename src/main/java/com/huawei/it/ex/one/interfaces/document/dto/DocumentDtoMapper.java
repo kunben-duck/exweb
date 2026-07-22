@@ -1,12 +1,15 @@
 package com.huawei.it.ex.one.interfaces.document.dto;
 
+import com.huawei.it.ex.one.domain.document.DocumentLibraryPage;
+import com.huawei.it.ex.one.domain.document.UploadedDocument;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.TextNode;
-import com.huawei.it.ex.one.domain.document.DocumentLibraryPage;
-import com.huawei.it.ex.one.domain.document.UploadedDocument;
-import java.util.List;
+
 import org.springframework.stereotype.Component;
+
+import java.util.List;
 
 /**
  * 文档接口 DTO 转换器。

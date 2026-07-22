@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.domain.chat;
 
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
+
 import java.time.Instant;
 
 /**

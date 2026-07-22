@@ -6,13 +6,15 @@ import com.huawei.it.ex.one.domain.document.DocumentLibraryQuery;
 import com.huawei.it.ex.one.domain.document.DocumentSource;
 import com.huawei.it.ex.one.domain.document.DocumentStatus;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
+
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.stereotype.Repository;
+
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
-import org.springframework.dao.DuplicateKeyException;
-import org.springframework.stereotype.Repository;
 
 /**
  * 文档元数据数据库仓储。

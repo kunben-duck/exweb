@@ -3,13 +3,16 @@ package com.huawei.it.ex.one.infrastructure.storage.object.s3;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.it.ex.one.domain.document.StoredObject;
+
 import com.obs.services.model.ObjectMetadata;
 import com.obs.services.model.ObsObject;
 import com.obs.services.model.PutObjectRequest;
 import com.obs.services.model.PutObjectResult;
+
+import org.junit.jupiter.api.Test;
+
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
-import org.junit.jupiter.api.Test;
 
 class HuaweiS3ObjectStorageTest {
     @Test

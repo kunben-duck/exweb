@@ -1,9 +1,10 @@
 package com.huawei.it.ex.one.infrastructure.memory;
 
-import java.util.List;
-import java.util.Optional;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+
+import java.util.List;
+import java.util.Optional;
 
 /**
  * fin_ex_chat_message_t、fin_ex_chat_message_part_t 与 fin_ex_chat_message_attachment_t 的 MyBatis Mapper。

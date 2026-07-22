@@ -182,6 +182,12 @@ FinanceEXChatService#executeRun(...)
 
 会话 `appId/appName` 是独立列而不是 metadata：前者用于当前 owner 会话列表分组和可选过滤，后者是创建时名称快照。tag 创建后不可变，分支继承；它不进入 run metadata、Memory、RouteMemory、IntentAgent、Relay 或 DomainAgent。游标分页把过滤条件编码进 cursor，调用方不能用一个 app 分组的 cursor 查询另一个分组。
 
+`agentMode` 是本轮请求的可选记录快照。最终目标为 DomainAgent 时，编排层将本轮显式值交给
+`RuntimeBindingApplicationService` 写入、替换或清除 Binding metadata；复用同一个 active DomainAgent
+且未传时不更新。创建新 Binding 时不从旧 Binding、Relay 或 Interaction 恢复。该字段不进入 Runtime 请求、
+IntentAgent、RouteMemory、run metadata、事件或历史 parts。完整规则参见
+[AgentMode 仅记录技术设计](architecture/agent-mode-recording.md)。
+
 关键分支：
 
 ```text
@@ -884,6 +890,7 @@ ChatRunApplicationService#streamStatus(...)
 - 如果 active run lease 已过期，触发一次轻量懒恢复。
 - 返回 `activeRunId`、`activeRunStatus`、`streamTopicId`、`activeRunFirstSeq`、`activeRunLastSeq`、`cancellable`。
 - 如果会话存在意图澄清、Agent questionnaire 或 DomainAgent 切换确认等待态，还会返回 `waitingUserInput`、`interactionId`、`interactionType`、`assistantMessageId` 和 `expiresAt`，供前端刷新后继续展示交互卡片；续接统一调用 `POST /v1/chat/runs` 并传 `runMode=CONTINUE_INTERACTION, interactionId`。等待态默认 24h 过期，过期状态由查询或提交路径懒标记。
+- `bindingAgentMode` 只从当前 active DomainAgent Binding 读取；Relay、无 active DomainAgent、未记录或 metadata 非法时返回 `null`。该字段不是 ChatEvent，不参与 Event Resume。
 
 重点排查：
 
@@ -918,12 +925,14 @@ cancelActive(...)
 - 绑定维度包含 tenant、user、session、provider、leafMessageId。
 - 避免编辑历史问题后误复用当前最新路径的 Runtime session。
 - 从 Runtime event payload 中观察 `runtimeSessionId` 并保存。
+- DomainAgent Binding 可以保存本轮显式提交的 `agentMode`；`AgentModeBindingContext` 只负责 metadata 编解码，不负责继承或下游转换。
 
 重点排查：
 
 - 多轮没有上下文：查会话级 RuntimeBinding 是否存在，以及下游是否回传/接受 `runtimeSessionId`。
 - 编辑历史问题串到最新上下文：查 active path、`leafMessageId` 和 Relay 自身 session 上下文是否符合业务预期。
 - 需要全新 Relay 会话：创建新的 ChatService 会话。
+- 模式展示与预期不符：确认当前 active provider 是 `domain-agent`，再查 Binding 的 `metadata_json.agentMode` 和本轮请求是否显式提交；不要从事件或历史 part 排查该字段。
 
 ## 17. 常见问题定位速查
 

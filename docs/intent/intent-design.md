@@ -103,6 +103,10 @@ Supervisor 每次需要重新分流时，给意图模型这些信息：
 4. `conversationContext.lastIntentRejectReason`，表示上一个跳出的意图及拒答原因。但前几轮切换路由时的拒答不需要提供，避免噪音累积。
 5. `conversationContext.history`，承载历史已生效路由消息和澄清消息。这里的“已生效”指目标 binding 已成功持久化，不要求下游任务执行成功。只取最新 TopK 条记录给意图服务，完整细节保存在1号的Chatservice审计日志，不进入意图服务的在线路由上下文。
 
+前端可选提交的 `agentMode` 不属于意图判断上下文，不进入 query、`conversationContext`、history 或 options。
+意图澄清期间也不暂存该字段；最终路由为 DomainAgent 时，只由 ChatService 在 Binding 中记录最终请求
+显式携带的模式。参见 [AgentMode 仅记录技术设计](../architecture/agent-mode-recording.md)。
+
 以下为多轮中每轮需要提供的信息示例：
 
 ### 5.1 首轮路由
@@ -798,3 +802,4 @@ domainRejectMessage：无
 9. 完整澄清明细保留在独立 user/assistant 消息链和 RouteMemory 澄清事实中；最终折叠后不再作为多条 clarify 进入后续在线路由上下文。
 10. `explicit_switch` 不调用意图服务，但需要写入 history，作为后续路由锚点。
 11. 给小模型时建议将 JSON 渲染为固定顺序文本模板；模型输出只作为服务端裁决输入，对外响应统一使用 `routeAction`。
+12. `agentMode` 不发送给意图服务，也不参与候选选择、置信度、澄清或 history 维护。

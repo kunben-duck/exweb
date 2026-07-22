@@ -3,6 +3,9 @@
 流式事件落库、Redis/WebSocket 实时扇出、Event Resume、跨浏览器恢复及实例故障边界的完整实现说明，
 参见 [Chat 流式输出、断点续传与跨浏览器恢复设计](chat-streaming-and-resume.md)。
 
+DomainAgent 模式的请求语义、RuntimeBinding 记录规则和下游协议隔离边界，参见
+[AgentMode 仅记录技术设计](agent-mode-recording.md)。
+
 ## 架构目标
 
 FinanceEXChatService 是前端聊天入口和 SuperAgent 主控服务。正式版只保留清晰的执行边界：
@@ -738,6 +741,13 @@ metadata_json
 created_at
 updated_at
 ```
+
+DomainAgent Binding 的 `metadata_json` 可以保存前端本轮显式提交的 `agentMode` 完整快照。该记录不跨
+DomainAgent、Relay 或 Interaction 继承，也不转换或透传到 IntentAgent、DomainAgent、Relay。复用同一个
+active DomainAgent 时，未传模式表示不更新、非空快照表示完整替换、空 `selections` 表示清除；创建新
+DomainAgent Binding 且未传模式时不记录。Relay Binding 始终不记录。查询端只通过
+`stream-status.bindingAgentMode` 返回当前 active DomainAgent 的记录，实时事件和历史 parts 不携带该字段。
+完整规则参见 [AgentMode 仅记录技术设计](agent-mode-recording.md)。
 
 ## ChatRun 与 Stop
 

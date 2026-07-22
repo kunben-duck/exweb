@@ -476,3 +476,8 @@ Authorization: {dynamicToken}
 7. 用户回答意图澄清后，创建 continuation run，再次调用 `/getIntentDecision`。
 8. DomainAgent 拒答回流时，`routeTrigger=domain_reject`，只传当前这一次拒答原因。
 9. `history` 按时间顺序传最新 TopK；澄清链路未完成时，TopK 必须保留当前澄清上下文。
+10. 前端 `agentMode` 不进入 `/getIntentDecision` 请求。`CLARIFY` 期间不暂存模式；最终
+    `ROUTE_SINGLE` 创建 DomainAgent Binding 时，只记录最终请求显式携带的模式。该字段不参与意图判断。
+
+AgentMode 的完整记录语义参见
+[AgentMode 仅记录技术设计](../architecture/agent-mode-recording.md)。

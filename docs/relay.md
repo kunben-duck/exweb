@@ -80,6 +80,11 @@ ws://{host}:{port}/ws/{client_id}
 
 > **注意**：`app_mode` 无需传入，后端默认使用 `delegate` 模式。
 
+> **ChatService 集成边界**：前端 `/v1/chat/runs.agentMode` 仅记录在 active DomainAgent Binding，
+> 不写入 Relay Binding，也不映射到 Relay `config`、`user-message.metadata` 或 `approval-response`。
+> `config.appMode` 是 Relay 自身运行配置，与前端 `agentMode` 无关。完整规则参见
+> [AgentMode 仅记录技术设计](architecture/agent-mode-recording.md)。
+
 ### 2.3 approval-result — 回复审批/澄清问
 
 当收到 `approval-request` 事件后，通过此消息回复用户选择。
@@ -1274,7 +1279,7 @@ session-state(state="waiting_user_input")  ← handle_user_message 返回后广
 ```python
 class TurnState:
     """用户轮次状态跟踪器"""
-  �
+
     TERMINAL_STATES = {"idle", "waiting_user_input", "completed", "paused"}
     # 非终态，收到这些不应改变轮次状态
     NON_TERMINAL_STATES = {"ready", "running", "agent_thinking", "waiting_approval"}
@@ -1283,17 +1288,17 @@ class TurnState:
         "self-evolution-status", "token-update",
         # 后台 Agent 事件（agent_name 非根 Agent 的 thinking/agent 事件）
     }
-  �
+
     def __init__(self):
         self.turn_active = False       # 当前轮次是否在进行中
         self.user_message_sent = False  # 是否已发送过 user-message（区分初始化阶段的 session-state）
         self.root_instance_id = None    # 根 Agent 的 instance_id
-  �
+
     def on_send_user_message(self):
         """客户端发送 user-message 时调用"""
         self.turn_active = True
         self.user_message_sent = True
-  �
+
     def on_event(self, event: dict) -> str:
         """
         处理收到的 WebSocket 事件。
@@ -1303,30 +1308,30 @@ class TurnState:
           "background"     - 后台异步事件，不影响轮次状态
         """
         event_type = event.get("type")
-      �
+
         # --- 信号1（主）：session-state ---
         if event_type == "session-state":
             state = event.get("state")
-          �
+
             # 初始化阶段的 session-state，忽略
             if not self.user_message_sent:
                 return "background"
-          �
+
             if state in self.TERMINAL_STATES:
                 self.turn_active = False
                 return "turn_ended"
-          �
+
             if state in self.NON_TERMINAL_STATES:
                 # waiting_approval 等非终态，轮次仍在进行（只是需要用户回复审批）
                 return "turn_active"
-      �
+
         # --- 信号2（辅助）：根 Agent 的 agent-call(end) ---
         if event_type == "agent-call":
             if event.get("is_start") is True:
                 parent_id = event.get("parent_id")
                 if parent_id in (None, "relay-system-root"):
                     self.root_instance_id = event.get("instance_id")
-          �
+
             elif event.get("is_start") is False:
                 instance_id = event.get("instance_id")
                 if instance_id == self.root_instance_id:
@@ -1334,11 +1339,11 @@ class TurnState:
                     # 可提前做 UI 准备（如显示"生成完成"），但不应启用输入框
                     # 因为 session-state 才是权威的轮次结束信号
                     return "turn_active"
-      �
+
         # --- 后台异步事件：终态后忽略 ---
         if not self.turn_active and event_type in self.BACKGROUND_EVENT_TYPES:
             return "background"
-      �
+
         return "turn_active"
 ```
 

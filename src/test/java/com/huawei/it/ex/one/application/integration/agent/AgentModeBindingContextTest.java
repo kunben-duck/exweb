@@ -24,29 +24,19 @@ class AgentModeBindingContextTest {
     }
 
     @Test
-    void nullUpdateInheritsAndExplicitEmptySnapshotClears() {
+    void nullUpdateLeavesExistingRecordAndExplicitEmptySnapshotClears() {
         AgentModeProfile profile = profile(new AgentModeSelection("thinking", "fast", "快速"));
         Map<String, Object> existing = AgentModeBindingContext.apply(Map.of("routeSource", "intent"), profile);
 
-        Map<String, Object> inherited = AgentModeBindingContext.apply(existing, null);
+        Map<String, Object> unchanged = AgentModeBindingContext.apply(existing, null);
         Map<String, Object> cleared = AgentModeBindingContext.apply(existing, AgentModeProfile.empty());
 
-        assertThat(AgentModeBindingContext.fromMetadata(inherited)).isEqualTo(profile);
+        assertThat(AgentModeBindingContext.fromMetadata(unchanged)).isEqualTo(profile);
         assertThat(cleared).containsEntry("routeSource", "intent").doesNotContainKey("agentMode");
     }
 
     @Test
-    void interactionPrivateSnapshotSupportsEmptySelectionAndCanBeRemoved() {
-        Map<String, Object> payload = AgentModeBindingContext.attachInteractionPrivate(
-                Map.of("interactionType", "INTENT_CLARIFICATION"), AgentModeProfile.empty());
-
-        assertThat(AgentModeBindingContext.fromInteraction(payload)).isEqualTo(AgentModeProfile.empty());
-        assertThat(AgentModeBindingContext.removeInteractionPrivate(payload))
-                .containsOnlyKeys("interactionType");
-    }
-
-    @Test
-    void selectedDomainAgentPayloadExposesBindingModeSnapshot() {
+    void selectedDomainAgentPayloadDoesNotExposeBindingModeSnapshot() {
         AgentModeProfile profile = profile(
                 new AgentModeSelection("thinking", "deep", "深度思考"),
                 new AgentModeSelection("execution", "long_task", null));
@@ -56,7 +46,7 @@ class AgentModeBindingContextTest {
         Map<String, Object> payload = DomainAgentSelectionPayload.create(
                 "fund-agent", "front-selected", "session1", null, bindingMetadata);
 
-        assertThat(payload).containsEntry("agentMode", AgentModeBindingContext.toPayload(profile));
+        assertThat(payload).doesNotContainKey("agentMode");
     }
 
     @Test

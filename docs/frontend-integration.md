@@ -563,7 +563,7 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 | `bindingIntentCode` / `bindingIntentName` | 当前绑定对应的意图编码和名称；无意图来源时为空。 |
 | `bindingRouteSource` | 绑定来源，例如 `front-selected`、`intent-agent`、`use-case-library`。 |
 | `bindingUpdatedAt` | 当前绑定最近更新时间。 |
-| `bindingAgentMode` | 当前 active binding 的 Agent 模式完整快照；未设置或当前无 active binding 时为 `null`。 |
+| `bindingAgentMode` | 当前 active DomainAgent binding 的 Agent 模式记录；Relay、未设置或当前无 active DomainAgent 时为 `null`。 |
 
 ### `MessageFeedbackDto`
 
@@ -1169,7 +1169,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `targetType` | string | 否 | 显式直连目标类型；当前支持 `DOMAIN_AGENT`，为空走普通路由 |
 | `targetId` | string | `targetType=DOMAIN_AGENT` 必填 | DomainAgent 目标 ID |
 | `selectedIntent` | object | 否 | 显式选择 DomainAgent 时的展示摘要，只允许与 `targetType=DOMAIN_AGENT,targetId` 同时使用；`intentId` 可选且最长 128，`intentName` 必填且最长 256；仅在当前请求内用于生成 binding 展示信息，不写 run metadata，也不发送给用例库、IntentAgent 或 Runtime |
-| `agentMode` | object | 否 | Agent 模式完整快照。`selections` 最多 16 项；每项 `scheme`、`code` 必填，`displayName` 可选，同一请求不允许重复 `scheme`。缺失或 `null` 表示继承，`selections=[]` 表示清除；当前只记录到 RuntimeBinding，不进入 IntentAgent 或下游请求 |
+| `agentMode` | object | 否 | Agent 模式完整快照。`selections` 最多 16 项；每项 `scheme`、`code` 必填，`displayName` 可选，同一请求不允许重复 `scheme`。缺失或 `null` 对同一 active DomainAgent 表示不更新，新 Binding 不继承；`selections=[]` 表示清除。仅记录到 DomainAgent RuntimeBinding，不进入 IntentAgent、Relay 或 DomainAgent 请求。澄清及切换确认的最终请求需要重新提交 |
 | `metadata` | object | 否 | 扩展字段；DomainAgent 路由时会作为下游业务扩展，不能覆盖服务端保留的 `skillId/query/sessionId` |
 | `appId` | string | 否 | 会话分组键，最大 128；无 `sessionId` 时保存到新会话，已有会话中显式传入时必须与原值完全一致 |
 | `appName` | string | 否 | 会话分组展示名称快照，最大 256；不能脱离 `appId`，已有会话中显式传入时必须与原值完全一致 |
@@ -2504,8 +2504,11 @@ DomainAgent 路由会跳过用例库和意图服务，并创建或覆盖当前�
 `payload.intentId/payload.intentName` 和 `payload.intentResult.intentId/intentName`（有展示摘要时）、
 `payload.intentResult.source=front-selected`。前端历史页可以用该 part 展示“本轮调用技能”。自动意图路由会填入真实意图；
 后续复用 active binding 时从 binding metadata 恢复相同字段，前端无需重传。
-若本轮或已有 binding 记录了 `agentMode`，同一个 `selectedDomainAgent` part 的 payload 还会包含完整
-`agentMode.selections[]`。当前该字段只用于展示和后续继承，不会直接进入 DomainAgent 请求。
+`agentMode` 不写入 `selectedDomainAgent` 实时事件或历史 part。前端需要展示当前记录时，读取
+`GET /v1/chat/sessions/{sessionId}/stream-status` 的 `bindingAgentMode`；该字段只对当前 active
+DomainAgent binding 返回值。
+服务端写入场景及非继承边界参见
+[AgentMode 仅记录技术设计](architecture/agent-mode-recording.md)。
 
 ```json
 {

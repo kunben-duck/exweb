@@ -8,18 +8,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Agent 模式在 RuntimeBinding 与 Interaction 私有上下文之间的稳定编解码边界。
- */
+/** Agent 模式在 RuntimeBinding metadata 中的稳定编解码边界。 */
 public final class AgentModeBindingContext {
     public static final String BINDING_METADATA_KEY = "agentMode";
-    public static final String INTERACTION_PRIVATE_KEY = "_agentMode";
     private static final String SELECTIONS = "selections";
 
     private AgentModeBindingContext() {
     }
 
-    /** null update 表示继承，空 profile 表示显式清除。 */
+    /** null 表示不更新，空 profile 表示显式清除，非空 profile 表示完整替换。 */
     public static Map<String, Object> apply(Map<String, Object> metadata, AgentModeProfile update) {
         Map<String, Object> next = mutableCopy(metadata);
         if (update == null) {
@@ -27,7 +24,7 @@ public final class AgentModeBindingContext {
         }
         next.remove(BINDING_METADATA_KEY);
         if (!update.emptyProfile()) {
-            next.put(BINDING_METADATA_KEY, toPayload(update));
+            next.put(BINDING_METADATA_KEY, encode(update));
         }
         return immutableOrEmpty(next);
     }
@@ -40,62 +37,7 @@ public final class AgentModeBindingContext {
         return parse(metadata == null ? null : metadata.get(BINDING_METADATA_KEY));
     }
 
-    public static AgentModeProfile fromInteraction(Map<String, Object> requestPayload) {
-        return parse(requestPayload == null ? null : requestPayload.get(INTERACTION_PRIVATE_KEY));
-    }
-
-    public static Map<String, Object> attachInteractionPrivate(
-            Map<String, Object> requestPayload, AgentModeProfile profile) {
-        Map<String, Object> next = mutableCopy(requestPayload);
-        next.remove(INTERACTION_PRIVATE_KEY);
-        if (profile != null) {
-            next.put(INTERACTION_PRIVATE_KEY, toPayload(profile));
-        }
-        return immutableOrEmpty(next);
-    }
-
-    public static Map<String, Object> removeInteractionPrivate(Map<String, Object> requestPayload) {
-        Map<String, Object> next = mutableCopy(requestPayload);
-        next.remove(INTERACTION_PRIVATE_KEY);
-        return immutableOrEmpty(next);
-    }
-
-    public static AgentModeProfile resolve(AgentModeProfile requested, RuntimeBinding... inheritedBindings) {
-        if (requested != null) {
-            return requested;
-        }
-        if (inheritedBindings == null) {
-            return null;
-        }
-        for (RuntimeBinding binding : inheritedBindings) {
-            AgentModeProfile inherited = fromBinding(binding);
-            if (inherited != null) {
-                return inherited;
-            }
-        }
-        return null;
-    }
-
-    public static AgentModeProfile resolve(AgentModeProfile requested, Iterable<RuntimeBinding> inheritedBindings) {
-        if (requested != null) {
-            return requested;
-        }
-        if (inheritedBindings == null) {
-            return null;
-        }
-        for (RuntimeBinding binding : inheritedBindings) {
-            AgentModeProfile inherited = fromBinding(binding);
-            if (inherited != null) {
-                return inherited;
-            }
-        }
-        return null;
-    }
-
-    public static Map<String, Object> toPayload(AgentModeProfile profile) {
-        if (profile == null) {
-            return Map.of();
-        }
+    private static Map<String, Object> encode(AgentModeProfile profile) {
         List<Map<String, Object>> selections = profile.selections().stream()
                 .map(AgentModeBindingContext::selectionPayload)
                 .toList();

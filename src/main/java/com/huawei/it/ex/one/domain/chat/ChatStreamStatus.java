@@ -26,7 +26,7 @@ import java.time.Instant;
  * @param bindingIntentName 当前绑定来源意图名称。
  * @param bindingRouteSource 当前绑定来源。
  * @param bindingUpdatedAt 当前绑定更新时间。
- * @param bindingAgentMode 当前绑定记录的 Agent 模式完整快照；未设置时为空。
+ * @param bindingAgentMode 当前 active DomainAgent binding 记录的模式快照；其他情况为空。
  */
 public record ChatStreamStatus(
         String sessionId,

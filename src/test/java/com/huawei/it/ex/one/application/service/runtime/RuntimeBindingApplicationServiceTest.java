@@ -25,29 +25,18 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 class RuntimeBindingApplicationServiceTest {
     @Test
-    void relayBindingRecordsReplacesAndClearsAgentModeSnapshot() {
+    void relayBindingDoesNotRecordAgentMode() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
         RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache());
-        AgentModeProfile initial = mode("thinking", "deep");
 
-        RuntimeBinding created = service.resolveForRun(new RuntimeBindingResolutionCommand(
-                "t", "u", "s", "run1", "leaf1", initial)).binding();
-        RuntimeBinding inherited = service.resolveForRun(new RuntimeBindingResolutionCommand(
-                "t", "u", "s", "run2", "leaf2", null)).binding();
-        RuntimeBinding replaced = service.resolveForRun(new RuntimeBindingResolutionCommand(
-                "t", "u", "s", "run3", "leaf3", mode("execution", "long_task"))).binding();
-        RuntimeBinding cleared = service.resolveForRun(new RuntimeBindingResolutionCommand(
-                "t", "u", "s", "run4", "leaf4", AgentModeProfile.empty())).binding();
+        RuntimeBinding created = service.resolveForRun("t", "u", "s", "run1", "leaf1").binding();
 
-        assertThat(AgentModeBindingContext.fromBinding(created)).isEqualTo(initial);
-        assertThat(AgentModeBindingContext.fromBinding(inherited)).isEqualTo(initial);
-        assertThat(AgentModeBindingContext.fromBinding(replaced))
-                .isEqualTo(mode("execution", "long_task"));
-        assertThat(cleared.metadata()).doesNotContainKey("agentMode");
+        assertThat(created.provider()).isEqualTo(RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER);
+        assertThat(created.metadata()).doesNotContainKey("agentMode");
     }
 
     @Test
-    void newDomainAgentBindingInheritsModeFromCancelledActiveBinding() {
+    void newDomainAgentBindingDoesNotInheritModeFromCancelledActiveBinding() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
         RuntimeBinding active = binding(RuntimeBindingStatus.ACTIVE).withMetadata(
                 AgentModeBindingContext.apply(Map.of(), mode("thinking_level", "3")));
@@ -58,7 +47,26 @@ class RuntimeBindingApplicationServiceTest {
                 "t", "u", "s", "run2", "leaf2", "fund-agent", "intent", Map.of()));
 
         assertThat(selected.provider()).isEqualTo(RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER);
-        assertThat(AgentModeBindingContext.fromBinding(selected)).isEqualTo(mode("thinking_level", "3"));
+        assertThat(AgentModeBindingContext.fromBinding(selected)).isNull();
+    }
+
+    @Test
+    void domainAgentBindingRecordsExplicitModeAndActiveBindingSupportsReplaceAndClear() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache());
+
+        RuntimeBinding created = service.bindDomainAgentForRun(new DomainAgentBindingCommand(
+                "t", "u", "s", "run1", "leaf1", "fund-agent", "intent", Map.of(),
+                mode("thinking", "deep")));
+        RuntimeBinding unchanged = service.touchDomainAgentForRun(created, "run2", null);
+        RuntimeBinding replaced = service.touchDomainAgentForRun(
+                unchanged, "run3", mode("execution", "long_task"));
+        RuntimeBinding cleared = service.touchDomainAgentForRun(replaced, "run4", AgentModeProfile.empty());
+
+        assertThat(AgentModeBindingContext.fromBinding(created)).isEqualTo(mode("thinking", "deep"));
+        assertThat(AgentModeBindingContext.fromBinding(unchanged)).isEqualTo(mode("thinking", "deep"));
+        assertThat(AgentModeBindingContext.fromBinding(replaced)).isEqualTo(mode("execution", "long_task"));
+        assertThat(cleared.metadata()).doesNotContainKey("agentMode");
     }
     @Test
     void readsCacheBeforeRepository() {
@@ -365,7 +373,7 @@ class RuntimeBindingApplicationServiceTest {
     @Test
     void resumeForInteractionAppliesExplicitAgentModeSnapshot() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
-        RuntimeBinding binding = binding(RuntimeBindingStatus.ACTIVE).withMetadata(
+        RuntimeBinding binding = binding("domain-agent", RuntimeBindingStatus.ACTIVE).withMetadata(
                 AgentModeBindingContext.apply(Map.of(), mode("thinking", "fast")));
         repository.saved = binding;
         RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache());
@@ -378,6 +386,19 @@ class RuntimeBindingApplicationServiceTest {
         assertThat(AgentModeBindingContext.fromBinding(replaced))
                 .isEqualTo(mode("execution", "long_task"));
         assertThat(cleared.metadata()).doesNotContainKey("agentMode");
+    }
+
+    @Test
+    void relayInteractionIgnoresExplicitAgentModeSnapshot() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        RuntimeBinding binding = binding(RuntimeBindingStatus.ACTIVE);
+        repository.saved = binding;
+        RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache());
+
+        RuntimeBinding resumed = service.resumeForInteraction(
+                interactionRequest(binding.runtimeSessionId()), "run-interaction", mode("thinking", "deep"));
+
+        assertThat(resumed.metadata()).doesNotContainKey("agentMode");
     }
 
     @Test

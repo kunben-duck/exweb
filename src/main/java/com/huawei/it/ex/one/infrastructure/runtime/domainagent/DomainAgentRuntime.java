@@ -49,7 +49,7 @@ public class DomainAgentRuntime implements AgentRuntime {
                 runtimeSessionId(request),
                 request.message(),
                 request.documents(),
-                request.agentModeParameters().mergeRequestMetadata(request.metadata()),
+                request.metadata(),
                 request.forwardHeaders()
         );
         return Flux.concat(Flux.just(selectedDomainAgentEvent(domainRequest, request)), client.query(domainRequest));

@@ -187,13 +187,15 @@ payload 包含 `targetType`、`targetId`、`domainAgentId`、可选 `intentId/in
 }
 ```
 
-对象缺失或为 `null` 时继承当前 Binding/意图澄清上下文，显式 `selections=[]` 时清除已有模式；
-对象存在时整体替换，不按 `scheme` 合并。`selections` 最多 16 项，同一请求内 `scheme` 不可重复，
-`scheme/code` 必填，`displayName` 可选。模式只在最终选中 DomainAgent 或 Relay 并创建/刷新
-RuntimeBinding 后记录，不进入 run metadata、RouteMemory 或 IntentAgent 请求。当前默认
-`NoopAgentModeAdapter` 不转换也不透传任何下游参数，因此既有 DomainAgent/Relay wire JSON 保持不变；
-未来可按 provider 增加 adapter，将模式转换为服务端可信 metadata 或 Relay config。
-`stream-status.bindingAgentMode` 和 `selectedDomainAgent` 历史 METADATA part 会返回当前完整快照。
+对象存在时整体替换，不按 `scheme` 合并；显式 `selections=[]` 时清除当前 DomainAgent Binding
+已有记录。对象缺失或为 `null` 时，仅在复用同一个 active DomainAgent Binding 的请求中表示“不更新”；
+创建新 Binding 时不会从旧 DomainAgent、Relay 或 Interaction 继承。`selections` 最多 16 项，
+同一请求内 `scheme` 不可重复，`scheme/code` 必填，`displayName` 可选。模式只记录在当前
+DomainAgent RuntimeBinding metadata，不进入 Relay Binding、run metadata、RouteMemory、IntentAgent、
+DomainAgent/Relay 请求或事件。意图澄清和路由切换确认不会暂存模式，最终请求需要由前端重新提交。
+`stream-status.bindingAgentMode` 仅在当前 active binding 为 DomainAgent 且已记录模式时返回完整快照。
+完整写入场景、数据流和下游隔离边界参见
+[AgentMode 仅记录技术设计](docs/architecture/agent-mode-recording.md)。
 
 ## 会话与执行标识
 

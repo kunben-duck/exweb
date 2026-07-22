@@ -19,6 +19,7 @@ import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeCancelRequ
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteraction;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
+import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentClient;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentCancelRequest;
@@ -93,6 +94,8 @@ import com.huawei.it.ex.one.domain.document.StoredObjectContent;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
 import com.huawei.it.ex.one.domain.memory.LongTermMemoryItem;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
+import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
+import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import com.huawei.it.ex.one.domain.usecase.UseCaseMatchResult;
@@ -1747,11 +1750,15 @@ class FinanceEXChatServiceTest {
         messages.save(new ChatMessage("msg-assistant", user.tenantId(), user.ownerUserId(), "session1",
                 "msg-user", 2L, 1, 1, "assistant", "请补充具体场景", null, "run-source",
                 "NORMAL", false, null, null, null, null, null, now));
+        AgentModeProfile rejectedMode = new AgentModeProfile(List.of(
+                new AgentModeSelection("thinking", "deep", "深度思考")));
         bindings.save(new RuntimeBinding("binding-domain-a", user.tenantId(), user.ownerUserId(), "session1",
                 "domain-agent", "msg-assistant", "domain-session-a", RuntimeBindingStatus.CANCELLED, "run-source",
                 now.minus(Duration.ofMinutes(1)), now.minus(Duration.ofDays(1)), now,
-                Map.of("domainAgentId", "agent-a", "routeSource", "intent-agent",
-                        "lastRejectCode", "FN-EX-CAHT-BIZ-DAG-001")));
+                AgentModeBindingContext.apply(Map.of(
+                        "domainAgentId", "agent-a",
+                        "routeSource", "intent-agent",
+                        "lastRejectCode", "FN-EX-CAHT-BIZ-DAG-001"), rejectedMode)));
         Map<String, Object> rerouteContext = Map.ofEntries(
                 Map.entry("currentProvider", "domain-agent"),
                 Map.entry("currentTargetId", "agent-a"),
@@ -1828,8 +1835,10 @@ class FinanceEXChatServiceTest {
         assertThat(bindings.bindingsForProvider("domain-agent"))
                 .filteredOn(binding -> "agent-b".equals(binding.metadata().get("domainAgentId")))
                 .singleElement()
-                .extracting(RuntimeBinding::status)
-                .isEqualTo(RuntimeBindingStatus.ACTIVE);
+                .satisfies(binding -> {
+                    assertThat(binding.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+                    assertThat(AgentModeBindingContext.fromBinding(binding)).isNull();
+                });
     }
 
     @Test
@@ -3186,6 +3195,8 @@ class FinanceEXChatServiceTest {
                 sessions, messages, runs, events, countingRuntimeRouteService(routeCalls), domainClient,
                 noopRuntime(), bindings, new com.huawei.it.ex.one.application.config.DomainAgentProperties(),
                 liveEventBus(), interactions);
+        AgentModeProfile requestedMode = new AgentModeProfile(List.of(
+                new AgentModeSelection("thinking", "deep", "深度思考")));
 
         StepVerifier.create(service.executeRun(user, new ChatCommand(
                         "cmd-ordinary", null, null, session.id(), null, "web", "普通追问",
@@ -3198,10 +3209,16 @@ class FinanceEXChatServiceTest {
         StepVerifier.create(service.executeRun(user, new ChatCommand(
                                 "cmd-direct", null, null, session.id(), null, "web", "本轮直连问题",
                                 List.of(), Map.of("scene", "current"), "DOMAIN_AGENT", "fund-agent",
-                                ChatRunMode.NEXT, null, null, null))
+                                ChatRunMode.NEXT, null, null, null,
+                                null, null, null, null, Map.of(), null, null, requestedMode))
                         .collectList())
-                .assertNext(stream -> assertThat(stream).extracting(ChatEvent::type)
-                        .containsExactly("run.started", "runtime.metadata", "message.snapshot", "run.completed"))
+                .assertNext(stream -> {
+                    assertThat(stream).extracting(ChatEvent::type)
+                            .containsExactly("run.started", "runtime.metadata", "message.snapshot", "run.completed");
+                    assertThat(stream).filteredOn(event -> "selected_domain_agent".equals(
+                                    event.payload().get("metadataType")))
+                            .allSatisfy(event -> assertThat(event.payload()).doesNotContainKey("agentMode"));
+                })
                 .verifyComplete();
 
         assertThat(routeCalls).hasValue(0);
@@ -3225,6 +3242,7 @@ class FinanceEXChatServiceTest {
                     assertThat(binding.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
                     assertThat(binding.metadata()).containsEntry("routeSource", "front-selected")
                             .containsEntry("domainAgentId", "fund-agent");
+                    assertThat(AgentModeBindingContext.fromBinding(binding)).isEqualTo(requestedMode);
                 });
     }
 

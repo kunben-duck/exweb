@@ -2,12 +2,16 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunCache;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
+import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
@@ -20,12 +24,17 @@ import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
 import com.huawei.it.ex.one.domain.chat.RunCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
+import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
+import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
+import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
+import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 class ChatRunApplicationServiceTest {
     @Test
     void stopRunningRunMarksCancelAndCancelledEventClosesRun() {
@@ -178,6 +187,37 @@ class ChatRunApplicationServiceTest {
         assertThat(status.activeRunFirstSeq()).isEqualTo(1L);
         assertThat(status.activeRunLastSeq()).isEqualTo(3L);
         assertThat(status.cancellable()).isTrue();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void streamStatusReturnsModeOnlyForActiveDomainAgentBinding() {
+        RuntimeBindingApplicationService bindingService = mock(RuntimeBindingApplicationService.class);
+        ObjectProvider<RuntimeBindingApplicationService> bindingProvider = mock(ObjectProvider.class);
+        when(bindingProvider.getIfAvailable()).thenReturn(bindingService);
+        AgentModeProfile mode = new AgentModeProfile(List.of(
+                new AgentModeSelection("thinking", "deep", "深度思考")));
+        Instant now = Instant.now();
+        RuntimeBinding domainBinding = new RuntimeBinding(
+                "binding1", "tenant1", "user1", "session1", "domain-agent", "runtime1",
+                RuntimeBindingStatus.ACTIVE, "run1", null, now, now,
+                AgentModeBindingContext.apply(Map.of("domainAgentId", "fund-agent"), mode));
+        when(bindingService.findActiveBySession("tenant1", "user1", "session1"))
+                .thenReturn(Optional.of(domainBinding));
+        ChatRunApplicationService service = new ChatRunApplicationService(
+                new InMemoryRunRepository(), new InMemoryRunCache(), new InMemoryEventStore(0L),
+                new PermissionChecker(), new FixedSessionRepository(), null, null, null, bindingProvider);
+
+        assertThat(service.streamStatus(user(), "session1").bindingAgentMode()).isEqualTo(mode);
+
+        RuntimeBinding relayBinding = new RuntimeBinding(
+                "binding2", "tenant1", "user1", "session1", "relay", "runtime2",
+                RuntimeBindingStatus.ACTIVE, "run2", null, now, now,
+                AgentModeBindingContext.apply(Map.of(), mode));
+        when(bindingService.findActiveBySession("tenant1", "user1", "session1"))
+                .thenReturn(Optional.of(relayBinding));
+
+        assertThat(service.streamStatus(user(), "session1").bindingAgentMode()).isNull();
     }
 
     @Test

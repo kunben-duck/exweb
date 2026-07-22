@@ -927,6 +927,7 @@ waitingUserInput / interactionId / interactionType
 assistantMessageId / expiresAt
 bindingProvider / bindingTargetType / bindingTargetId
 bindingIntentCode / bindingIntentName / bindingRouteSource / bindingUpdatedAt
+bindingAgentMode
 ```
 
 `latestSeq` 直接查询事件表最大 sequence。为避免 run 表成为每个 delta 的热点，`message.delta`、snapshot 和
@@ -934,6 +935,10 @@ bindingIntentCode / bindingIntentName / bindingRouteSource / bindingUpdatedAt
 恢复事实位置以 `latestSeq` 和事件表为准。
 
 查询时如果发现 active execution lease 已过期，会触发一次轻量懒恢复，然后重新读取 latestSeq 和 active run。
+
+`bindingAgentMode` 只返回当前 active DomainAgent Binding 中显式记录的模式；当前为 Relay、未记录或没有
+active DomainAgent 时为 `null`。它是 stream-status 的状态快照，不属于 ChatEvent，不参与 WebSocket 或
+Event Resume 的事件拼接。详细规则参见 [AgentMode 仅记录技术设计](agent-mode-recording.md)。
 
 ## 14. 故障与降级矩阵
 

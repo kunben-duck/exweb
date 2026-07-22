@@ -637,7 +637,6 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         if (websocketProperties().getAppMode() != null && !websocketProperties().getAppMode().isBlank()) {
             config.put("appMode", websocketProperties().getAppMode());
         }
-        config.putAll(request.agentModeParameters().relayConfig());
         return toJson(Map.of("type", "config", "config", Map.copyOf(config)));
     }
 
@@ -664,7 +663,6 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         if (websocketProperties().getAppMode() != null && !websocketProperties().getAppMode().isBlank()) {
             config.put("appMode", websocketProperties().getAppMode());
         }
-        config.putAll(request.agentModeParameters().relayConfig());
         return toJson(Map.of("type", "config", "config", Map.copyOf(config)));
     }
 
@@ -674,8 +672,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         message.put("content", request.message() == null ? "" : request.message());
         putTraceId(message, request.traceContext());
         Map<String, Object> metadata = RelayRuntimeWireRequestMapper.relayMetadata(
-                request.agentModeParameters().mergeRequestMetadata(request.metadata()),
-                request.userAccount(), request.globalUserId());
+                request.metadata(), request.userAccount(), request.globalUserId());
         if (!metadata.isEmpty()) {
             message.put("metadata", metadata);
         }
@@ -710,8 +707,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
             });
         }
         Map<String, Object> relayMetadata = RelayRuntimeWireRequestMapper.relayMetadata(
-                request.agentModeParameters().mergeRequestMetadata(metadataCopy),
-                request.userAccount(), request.globalUserId());
+                metadataCopy, request.userAccount(), request.globalUserId());
         if (!relayMetadata.isEmpty()) {
             message.put("metadata", relayMetadata);
         }

@@ -1,7 +1,6 @@
 package com.huawei.it.ex.one.application.integration.agent;
 
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
-import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -42,10 +41,6 @@ public final class DomainAgentSelectionPayload {
         payload.put("runtimeSessionId", blankToDefault(runtimeSessionId, ""));
         putIfPresent(payload, "intentId", intentId);
         putIfPresent(payload, "intentName", intentName);
-        AgentModeProfile agentMode = AgentModeBindingContext.fromMetadata(bindingMetadata);
-        if (agentMode != null) {
-            payload.put("agentMode", AgentModeBindingContext.toPayload(agentMode));
-        }
         payload.put("intentResult", Map.copyOf(intentResult));
         return Map.copyOf(payload);
     }

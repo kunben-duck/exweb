@@ -98,17 +98,6 @@ public class RuntimeBindingApplicationService {
      */
     public RuntimeBindingResolution resolveForRun(String tenantId, String userId, String sessionId,
                                                   String runId, String leafMessageId) {
-        return resolveForRun(new RuntimeBindingResolutionCommand(
-                tenantId, userId, sessionId, runId, leafMessageId, null));
-    }
-
-    public RuntimeBindingResolution resolveForRun(RuntimeBindingResolutionCommand command) {
-        String tenantId = command.tenantId();
-        String userId = command.userId();
-        String sessionId = command.sessionId();
-        String runId = command.runId();
-        String leafMessageId = command.leafMessageId();
-        AgentModeProfile agentMode = command.agentMode();
         Instant now = Instant.now();
         List<RuntimeBinding> activeBindings = repository.findActiveBySession(tenantId, userId, sessionId, runtimeProvider)
                 .stream()
@@ -117,7 +106,7 @@ public class RuntimeBindingApplicationService {
                         .reversed())
                 .toList();
         if (!activeBindings.isEmpty()) {
-            RuntimeBinding selected = touchForRun(activeBindings.getFirst(), runId, agentMode);
+            RuntimeBinding selected = touchForRun(activeBindings.getFirst(), runId);
             cancelDuplicateBindings(activeBindings, selected);
             cache.put(selected);
             return new RuntimeBindingResolution(selected, RuntimeSessionMode.RESUME);
@@ -132,11 +121,11 @@ public class RuntimeBindingApplicationService {
                 .toList();
         if (!resumableBindings.isEmpty()) {
             RuntimeBinding selected = activateResumableForRun(
-                    resumableBindings.getFirst(), runId, leafMessageId, agentMode);
+                    resumableBindings.getFirst(), runId, leafMessageId);
             cancelDuplicateBindings(resumableBindings, selected);
             return new RuntimeBindingResolution(selected, RuntimeSessionMode.RESUME);
         }
-        RuntimeBinding created = create(command);
+        RuntimeBinding created = create(tenantId, userId, sessionId, runId, leafMessageId);
         return new RuntimeBindingResolution(created, RuntimeSessionMode.NEW);
     }
 
@@ -215,15 +204,8 @@ public class RuntimeBindingApplicationService {
      * @return 已保存的 Runtime 绑定。
      */
     public RuntimeBinding create(String tenantId, String userId, String sessionId, String runId, String leafMessageId) {
-        return create(new RuntimeBindingResolutionCommand(
-                tenantId, userId, sessionId, runId, leafMessageId, null));
-    }
-
-    private RuntimeBinding create(RuntimeBindingResolutionCommand command) {
         return create(new RuntimeBindingCreateCommand(
-                command.tenantId(), command.userId(), command.sessionId(), runtimeProvider,
-                command.runId(), command.leafMessageId(), command.sessionId(),
-                AgentModeBindingContext.apply(Map.of(), command.agentMode())));
+                tenantId, userId, sessionId, runtimeProvider, runId, leafMessageId, sessionId, Map.of()));
     }
 
     private RuntimeBinding create(RuntimeBindingCreateCommand command) {
@@ -245,10 +227,9 @@ public class RuntimeBindingApplicationService {
         if (command == null || command.domainAgentId() == null || command.domainAgentId().isBlank()) {
             throw new IllegalArgumentException("DomainAgent ID 不能为空");
         }
-        List<RuntimeBinding> cancelled = cancelActive(command.tenantId(), command.userId(), command.sessionId());
-        AgentModeProfile effectiveMode = AgentModeBindingContext.resolve(command.agentMode(), cancelled);
+        cancelActive(command.tenantId(), command.userId(), command.sessionId());
         Map<String, Object> metadata = domainAgentMetadata(command.domainAgentId(), command.routeSource(),
-                command.intentMetadata(), null, effectiveMode);
+                command.intentMetadata(), null, command.agentMode());
         return create(new RuntimeBindingCreateCommand(command.tenantId(), command.userId(), command.sessionId(),
                 DOMAIN_AGENT_PROVIDER, command.runId(), command.leafMessageId(), command.sessionId(), metadata));
     }
@@ -264,6 +245,19 @@ public class RuntimeBindingApplicationService {
         return save(binding.withMetadata(metadata).withRun(runId, expiresAt(binding.provider(), false)));
     }
 
+    /** 在复用当前 DomainAgent binding 时，仅按本次显式请求更新模式记录。 */
+    public RuntimeBinding touchDomainAgentForRun(RuntimeBinding binding, String runId,
+                                                 AgentModeProfile agentMode) {
+        if (binding == null) {
+            return null;
+        }
+        if (!DOMAIN_AGENT_PROVIDER.equals(binding.provider())) {
+            return touchForRun(binding, runId);
+        }
+        RuntimeBinding next = binding.withRun(runId, expiresAt(binding.provider(), false));
+        return save(next.withMetadata(AgentModeBindingContext.apply(next.metadata(), agentMode)));
+    }
+
     /**
      * 刷新 Runtime 绑定活跃窗口。
      *
@@ -272,15 +266,11 @@ public class RuntimeBindingApplicationService {
      * @return 续期后的 Runtime 绑定。
      */
     public RuntimeBinding touchForRun(RuntimeBinding binding, String runId) {
-        return touchForRun(binding, runId, null);
-    }
-
-    public RuntimeBinding touchForRun(RuntimeBinding binding, String runId, AgentModeProfile agentMode) {
         if (binding == null) {
             return null;
         }
         RuntimeBinding next = binding.withRun(runId, expiresAt(binding.provider(), relaySessionEstablished(binding)));
-        return save(next.withMetadata(AgentModeBindingContext.apply(next.metadata(), agentMode)));
+        return save(next);
     }
 
     /**
@@ -300,7 +290,9 @@ public class RuntimeBindingApplicationService {
         }
         RuntimeBinding binding = loadInteractionBinding(request);
         RuntimeBinding next = withRuntimeSessionId(binding, request.runtimeSessionId());
-        RuntimeBinding updated = next.withMetadata(AgentModeBindingContext.apply(next.metadata(), agentMode));
+        RuntimeBinding updated = DOMAIN_AGENT_PROVIDER.equals(next.provider())
+                ? next.withMetadata(AgentModeBindingContext.apply(next.metadata(), agentMode))
+                : next;
         return touchAndMoveToLeaf(updated, runId, request.assistantMessageId());
     }
 
@@ -361,16 +353,13 @@ public class RuntimeBindingApplicationService {
      * @param userId 用户标识。
      * @param sessionId 前端聊天会话标识。
      */
-    public List<RuntimeBinding> cancelActive(String tenantId, String userId, String sessionId) {
+    public void cancelActive(String tenantId, String userId, String sessionId) {
         List<RuntimeBinding> active = repository.findActiveBySession(tenantId, userId, sessionId);
         if (active.isEmpty()) {
             active = repository.findActiveBySession(tenantId, userId, sessionId, runtimeProvider);
         }
-        List<RuntimeBinding> cancelled = active.stream()
-                .map(binding -> save(binding.withStatus(RuntimeBindingStatus.CANCELLED)))
-                .toList();
+        active.forEach(binding -> save(binding.withStatus(RuntimeBindingStatus.CANCELLED)));
         cache.evict(tenantId, userId, sessionId);
-        return cancelled;
     }
 
     /**
@@ -510,15 +499,14 @@ public class RuntimeBindingApplicationService {
         cache.put(selected);
     }
 
-    private RuntimeBinding activateResumableForRun(RuntimeBinding binding, String runId, String leafMessageId,
-                                                   AgentModeProfile agentMode) {
+    private RuntimeBinding activateResumableForRun(RuntimeBinding binding, String runId, String leafMessageId) {
         RuntimeBinding next = markRelaySessionEstablished(binding, binding.runtimeSessionId())
                 .withRun(runId, null);
         if (leafMessageId != null && !leafMessageId.isBlank()
                 && !leafMessageId.equals(next.leafMessageId())) {
             next = next.withLeafMessageId(leafMessageId);
         }
-        return save(next.withMetadata(AgentModeBindingContext.apply(next.metadata(), agentMode)));
+        return save(next);
     }
 
     private RuntimeBinding markRelaySessionEstablished(RuntimeBinding binding, String runtimeSessionId) {

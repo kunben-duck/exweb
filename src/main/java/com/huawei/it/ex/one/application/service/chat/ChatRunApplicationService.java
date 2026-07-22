@@ -478,7 +478,9 @@ public class ChatRunApplicationService {
                 stringValue(metadata.get("intentName")),
                 stringValue(metadata.get("routeSource")),
                 binding.updatedAt(),
-                AgentModeBindingContext.fromBinding(binding));
+                RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider())
+                        ? AgentModeBindingContext.fromBinding(binding)
+                        : null);
     }
 
     private String stringValue(Object value) {

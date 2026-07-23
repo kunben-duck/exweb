@@ -101,7 +101,7 @@ Supervisor 每次需要重新分流时，给意图模型这些信息：
 2. 顶层 `conversationContext`，承载本轮路由上下文。
 3. `conversationContext.routeTrigger`，表示触发路由的原因。
 4. `conversationContext.lastIntentRejectReason`，表示上一个跳出的意图及拒答原因。但前几轮切换路由时的拒答不需要提供，避免噪音累积。
-5. `conversationContext.history`，承载历史已生效路由消息和澄清消息。这里的“已生效”指目标 binding 已成功持久化，不要求下游任务执行成功。只取最新 TopK 条记录给意图服务，完整细节保存在1号的Chatservice审计日志，不进入意图服务的在线路由上下文。
+5. `conversationContext.history`，承载历史已生效且对 IntentAgent 可见的路由消息和澄清消息。这里的“已生效”指目标 binding 已成功持久化，不要求下游任务执行成功。`routeSource=front-selected` 的前端直选仍保存为路由事实，但在 TopK 限制前排除；`user-confirmed` 和 `intent-agent` 路由保持可见。完整细节保存在1号的Chatservice审计日志，不进入意图服务的在线路由上下文。
 
 前端可选提交的 `agentMode` 不属于意图判断上下文，不进入 query、`conversationContext`、history 或 options。
 意图澄清期间也不暂存该字段；最终路由为 DomainAgent 时，只由 ChatService 在 Binding 中记录最终请求
@@ -367,7 +367,7 @@ user: 是解决这次成功率下降的处理措施
 说明：
 
 * `explicit_switch` 不走意图服务。
-* 但如果发生 `explicit_switch`，仍需要将该次选择结果追加到在线 history，作为后续路由上下文。
+* 发生 `explicit_switch` 时仍保留前端直选的路由事实，但不追加到发送给 IntentAgent 的在线 history。
 
 ---
 
@@ -375,7 +375,7 @@ user: 是解决这次成功率下降的处理措施
 
 ```json
 {
-  "lastIntent": "deep_analysis",
+  "lastIntent": "财经深度研究",
   "domainRejectMessage": "需要重新查明细数据，不是直接研究分析。"
 }
 ```
@@ -384,7 +384,7 @@ user: 是解决这次成功率下降的处理措施
 
 | 字段                    | 类型          | 说明                                                                  |
 | ----------------------- | ------------- | --------------------------------------------------------------------- |
-| `lastIntent`          | string / null | 当前跳出的意图。首轮或澄清阶段可为空。                                |
+| `lastIntent`          | string / null | 当前跳出的意图名称，不传意图 ID 或 DomainAgent targetId。首轮或澄清阶段可为空。 |
 | `domainRejectMessage` | string / null | 当前这一次领域 Agent 的拒答或回流说明。只传当前这次，不传前几轮拒答。 |
 
 不同触发场景下取值：
@@ -620,7 +620,7 @@ Supervisor 调用意图服务时，将拒答说明放入：
 ```json
 {
   "type": "route",
-  "query": "user:原始触发澄清问题；澄清问：xxx ....用户：用户最后一次澄清回答",
+  "query": "用户:原始触发澄清问题；系统追问:xxx；用户:用户最后一次澄清回答",
   "intent": "命中的意图"
 }
 ```
@@ -629,11 +629,11 @@ Supervisor 调用意图服务时，将拒答说明放入：
 
 ```python
 '''
-user: 再帮我看下方案
-assistant: 你是想继续分析支付成功率下降后的处理方案，还是想查询某个业务/项目方案？
-user: 都可以，先看跟支付相关的
-assistant: 你说的“跟支付相关的”，是指解决这次支付成功率下降的处理措施，还是查询支付业务项目方案文档？
-user: 是解决这次成功率下降的处理措施
+用户:再帮我看下方案
+系统追问:你是想继续分析支付成功率下降后的处理方案，还是想查询某个业务/项目方案？
+用户:都可以，先看跟支付相关的
+系统追问:你说的“跟支付相关的”，是指解决这次支付成功率下降的处理措施，还是查询支付业务项目方案文档？
+用户:是解决这次成功率下降的处理措施
 '''
 ```
 
@@ -800,6 +800,6 @@ domainRejectMessage：无
 7. 澄清期间保留多轮 clarify；澄清成功后，将多轮 clarify 折叠为一条 route。
 8. 在线 history 只取最新 TopK，K 暂定为 5；未完成澄清链路优先保留，避免被普通历史挤掉。
 9. 完整澄清明细保留在独立 user/assistant 消息链和 RouteMemory 澄清事实中；最终折叠后不再作为多条 clarify 进入后续在线路由上下文。
-10. `explicit_switch` 不调用意图服务，但需要写入 history，作为后续路由锚点。
+10. `explicit_switch` 不调用意图服务；前端直选结果保留为路由事实，但不写入发送给 IntentAgent 的 history。
 11. 给小模型时建议将 JSON 渲染为固定顺序文本模板；模型输出只作为服务端裁决输入，对外响应统一使用 `routeAction`。
 12. `agentMode` 不发送给意图服务，也不参与候选选择、置信度、澄清或 history 维护。

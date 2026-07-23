@@ -11,6 +11,11 @@ import java.util.List;
 public interface RouteMemoryRepository {
     RouteMemoryItem save(RouteMemoryItem item);
 
+    /**
+     * 查询可发送给意图服务的最近路由记录，不包含前端直选路由。
+     *
+     * <p>过滤必须发生在 TopK 限制之前，避免前端直选事实占用意图 history 配额。</p>
+     */
     List<RouteMemoryItem> findRecentRoutes(String tenantId, String userId, String sessionId, int limit);
 
     List<RouteMemoryItem> findActiveClarifications(String tenantId, String userId, String sessionId);

@@ -1159,6 +1159,7 @@ class FinanceEXChatServiceTest {
         AtomicBoolean blockingRouteInitialCalled = new AtomicBoolean(false);
         AtomicInteger routeCalls = new AtomicInteger();
         AtomicInteger oldAgentTailSubscriptions = new AtomicInteger();
+        AtomicReference<Map<String, Object>> rerouteMetadata = new AtomicReference<>();
         RouteSignalApplicationService routeService = new RouteSignalApplicationService(
                 request -> UseCaseMatchResult.notMatched("disabled"),
                 intentAgent((command, memory, routeUser) -> null),
@@ -1175,9 +1176,15 @@ class FinanceEXChatServiceTest {
             @Override
             public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
                 if (routeCalls.incrementAndGet() == 1) {
-                    return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.domainAgent(
-                            "agent-a", "intent-agent", 1.0, "initial intent route"))));
+                    var initialIntent = new com.huawei.it.ex.one.domain.intent.IntentDecision(
+                            "intent-a", "财经知识问答",
+                            com.huawei.it.ex.one.domain.intent.TaskComplexity.SIMPLE,
+                            1.0, true, "agent-a", Map.of("routeAction", "ROUTE_SINGLE"), List.of(), Map.of());
+                    return Flux.just(RouteSignalFrame.result(RouteSignalResult.ofIntent(RouteTarget.domainAgent(
+                            "agent-a", "intent-agent", 1.0, "initial intent route"),
+                            initialIntent, 1L, 0.85)));
                 }
+                rerouteMetadata.set(request.command().metadata());
                 assertThat(events.events).anySatisfy(event -> assertThat(event.payload())
                         .containsEntry("sourceType", "agent.refusal")
                         .containsEntry("code", "FN-EX-CAHT-BIZ-DAG-001"));
@@ -1239,6 +1246,9 @@ class FinanceEXChatServiceTest {
                 .verifyComplete();
 
         assertThat(oldAgentTailSubscriptions).hasValue(0);
+        assertThat(rerouteMetadata.get().get("lastIntentRejectReason")).isEqualTo(Map.of(
+                "lastIntent", "财经知识问答",
+                "domainRejectMessage", "cannot answer this domain"));
         assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role()))
                 .singleElement()
                 .satisfies(message -> {
@@ -1304,6 +1314,7 @@ class FinanceEXChatServiceTest {
         InMemoryEventStore events = new InMemoryEventStore();
         UserContext user = new UserContext("tenant1", "user1", "User One");
         AtomicInteger routeCalls = new AtomicInteger();
+        AtomicReference<Map<String, Object>> rerouteMetadata = new AtomicReference<>();
         RouteSignalApplicationService routeService = new RouteSignalApplicationService(
                 request -> UseCaseMatchResult.notMatched("disabled"),
                 intentAgent((command, memory, routeUser) -> null),
@@ -1315,6 +1326,7 @@ class FinanceEXChatServiceTest {
                     return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.domainAgent(
                             "agent-a", "intent-agent", 1.0, "initial intent route"))));
                 }
+                rerouteMetadata.set(request.command().metadata());
                 var noMatch = new com.huawei.it.ex.one.domain.intent.IntentDecision(
                         "finance.runtime.no_intent", "未识别到可用意图",
                         com.huawei.it.ex.one.domain.intent.TaskComplexity.COMPLEX,
@@ -1381,6 +1393,9 @@ class FinanceEXChatServiceTest {
                 .verifyComplete();
 
         assertThat(relayCalls).hasValue(1);
+        assertThat(rerouteMetadata.get().get("lastIntentRejectReason")).isEqualTo(Map.of(
+                "lastIntent", "未知意图",
+                "domainRejectMessage", "cannot answer this domain"));
         assertThat(relaySessionMode).hasValue(RuntimeSessionMode.NEW);
         assertThat(relayTraceContext).hasValue(new TraceContext("refusal-reroute-trace"));
         assertThat(relayMetadata.get().get("sceneParam")).isInstanceOfSatisfying(Map.class,
@@ -1415,12 +1430,14 @@ class FinanceEXChatServiceTest {
         bindings.save(new RuntimeBinding("domain-binding", user.tenantId(), user.ownerUserId(), "session1",
                 "domain-agent", "domain-leaf", "domain-session-a", RuntimeBindingStatus.ACTIVE, "old-domain-run",
                 null, now.minus(Duration.ofDays(1)), now.minus(Duration.ofDays(1)),
-                Map.of("domainAgentId", "agent-a", "routeSource", "user-confirmed")));
+                Map.of("domainAgentId", "agent-a", "routeSource", "user-confirmed",
+                        "intentName", "财经知识问答")));
         bindings.save(new RuntimeBinding("relay-binding", user.tenantId(), user.ownerUserId(), "session1",
                 "relay", "relay-leaf", "relay-session-1", RuntimeBindingStatus.RESUMABLE, "old-run",
                 null, now.minus(Duration.ofDays(30)), now.minus(Duration.ofDays(30)),
                 Map.of("runtimeSessionEstablished", true)));
         AtomicInteger routeCalls = new AtomicInteger();
+        AtomicReference<Map<String, Object>> rerouteMetadata = new AtomicReference<>();
         RouteSignalApplicationService routeService = new RouteSignalApplicationService(
                 request -> UseCaseMatchResult.notMatched("disabled"),
                 intentAgent((command, memory, routeUser) -> null),
@@ -1429,6 +1446,7 @@ class FinanceEXChatServiceTest {
             @Override
             public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
                 routeCalls.incrementAndGet();
+                rerouteMetadata.set(request.command().metadata());
                 var noMatch = new com.huawei.it.ex.one.domain.intent.IntentDecision(
                         "finance.runtime.no_intent", "未识别到可用意图",
                         com.huawei.it.ex.one.domain.intent.TaskComplexity.COMPLEX,
@@ -1469,6 +1487,9 @@ class FinanceEXChatServiceTest {
 
         awaitEvent(events, "run.completed");
         assertThat(routeCalls).hasValue(1);
+        assertThat(rerouteMetadata.get().get("lastIntentRejectReason")).isEqualTo(Map.of(
+                "lastIntent", "财经知识问答",
+                "domainRejectMessage", "cannot answer this domain"));
         assertThat(events.events).extracting(ChatEvent::type).doesNotContain("run.waiting_user");
         assertThat(relaySessionMode).hasValue(RuntimeSessionMode.RESUME);
         assertThat(relayRuntimeSessionId).hasValue("relay-session-1");
@@ -2233,6 +2254,9 @@ class FinanceEXChatServiceTest {
                 .containsEntry("scene", "manual")
                 .containsEntry("routeTrigger", "domain_reject")
                 .containsKey("lastIntentRejectReason");
+        assertThat(rerouteMetadata.get().get("lastIntentRejectReason")).isEqualTo(Map.of(
+                "lastIntent", "领域 A",
+                "domainRejectMessage", "cannot answer this domain"));
         assertThat(SelectedIntentContext.intentId(rerouteMetadata.get())).isNull();
         assertThat(SelectedIntentContext.intentName(rerouteMetadata.get())).isNull();
 
@@ -2717,6 +2741,12 @@ class FinanceEXChatServiceTest {
                         "sourceType", "intent-clarification-request",
                         "interactionType", "INTENT_CLARIFICATION",
                         "originalQuery", "再帮我看下方案",
+                        "clarifyTriggerQuery", "账务相关",
+                        "clarificationHistory", List.of(Map.of(
+                                "type", "clarify",
+                                "query", "再帮我看下方案",
+                                "clarifyQuestion", "您是想看支付方案还是账务方案？",
+                                "answer", "账务相关")),
                         "clarifyQuestion", "您提到的方案具体是指哪个方案？"),
                 Map.of(),
                 now.plus(Duration.ofHours(1)),
@@ -2775,7 +2805,9 @@ class FinanceEXChatServiceTest {
         assertThat(finalAssistant.parts()).extracting(ChatMessagePart::partType)
                 .doesNotContain("INTENT_CLARIFICATION_RESPONSE");
         assertThat(runtimeQuery).hasValue(
-                "user:再帮我看下方案；澄清问:您提到的方案具体是指哪个方案？；用户:我是说账务审批的方案 [用户上传文档] invoice.pdf");
+                "用户:再帮我看下方案；系统追问:您是想看支付方案还是账务方案？；用户:账务相关"
+                        + "；系统追问:您提到的方案具体是指哪个方案？"
+                        + "；用户:我是说账务审批的方案 [用户上传文档] invoice.pdf");
         assertThat(runtimeAttachments.get()).extracting(AttachmentRef::name).containsExactly("invoice.pdf");
         assertThat(runtimeDocuments.get()).extracting(UploadedDocument::id).containsExactly("doc1");
         assertThat(runtimeMetadata.get()).containsEntry("language", "zh_CN");

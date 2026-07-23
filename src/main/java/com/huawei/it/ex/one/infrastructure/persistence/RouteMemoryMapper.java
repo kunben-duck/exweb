@@ -20,13 +20,13 @@ public interface RouteMemoryMapper {
     int insert(RouteMemoryRow row);
 
     /**
-     * 查询当前会话最近已生效路由摘要，用于组装意图服务 conversationContext.history。
+     * 查询当前会话最近可发送给意图服务的路由摘要，不包含前端直选路由。
      *
      * @param tenantId 租户边界。
      * @param userId 用户边界。
      * @param sessionId 会话边界。
      * @param limit 最大返回条数。
-     * @return 最近成功路由记录，按创建时间倒序返回。
+     * @return 最近可见路由记录，按创建时间倒序返回。
      */
     List<RouteMemoryRow> findRecentRoutes(@Param("tenantId") String tenantId,
                                           @Param("userId") String userId,

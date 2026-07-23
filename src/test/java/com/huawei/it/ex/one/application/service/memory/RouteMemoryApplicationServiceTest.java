@@ -57,6 +57,72 @@ class RouteMemoryApplicationServiceTest {
     }
 
     @Test
+    void frontSelectedRouteIsStoredButExcludedFromIntentHistory() {
+        RouteMemoryApplicationService.RouteMemoryRouteCommand command =
+                new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                        user, "manual-session", "run-manual", "前端直选问题", null,
+                        RouteTarget.domainAgent("skill_manual", "front-selected", 1.0, "front selected"));
+
+        service.recordRouteDecision(command);
+
+        assertThat(repository.items)
+                .filteredOn(item -> item.itemType() == RouteMemoryItemType.ROUTE)
+                .singleElement()
+                .satisfies(item -> {
+                    assertThat(item.routeSource()).isEqualTo("front-selected");
+                    assertThat(item.domainAgentId()).isEqualTo("skill_manual");
+                });
+        assertThat(service.routeHistory(command)).isEmpty();
+        assertThat(service.loadForIntent(user, "manual-session", "user_correction", Map.of()).history()).isEmpty();
+    }
+
+    @Test
+    void userConfirmedRouteRemainsVisibleToIntentHistory() {
+        RouteMemoryApplicationService.RouteMemoryRouteCommand command =
+                new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                        user, "confirmed-session", "run-confirmed", "用户确认切换问题",
+                        intent("intent_b", "财经知识问答"),
+                        RouteTarget.domainAgent("skill_b", "user-confirmed", 1.0, "user confirmed"));
+
+        service.recordRouteDecision(command);
+
+        Map<String, Object> expected = Map.of(
+                "type", "route",
+                "query", "用户确认切换问题",
+                "intent", "财经知识问答");
+        assertThat(service.routeHistory(command)).containsExactlyInAnyOrderEntriesOf(expected);
+        assertThat(service.loadForIntent(user, "confirmed-session", "domain_reject", Map.of()).history())
+                .containsExactly(expected);
+    }
+
+    @Test
+    void frontSelectedRoutesDoNotConsumeIntentHistoryTopK() {
+        RouteMemoryProperties properties = new RouteMemoryProperties();
+        properties.setTopK(2);
+        RouteMemoryApplicationService topKService = new RouteMemoryApplicationService(
+                repository, new FixedIdGenerator(), properties);
+        topKService.recordRouteDecision(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                user, "top-k-session", "run-intent-a", "意图问题 A",
+                intent("intent_a", "意图 A"),
+                RouteTarget.domainAgent("skill_a", "intent-agent", 1.0, "intent route")));
+        topKService.recordRouteDecision(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                user, "top-k-session", "run-intent-b", "意图问题 B",
+                intent("intent_b", "意图 B"),
+                RouteTarget.domainAgent("skill_b", "intent-agent", 1.0, "intent route")));
+        for (int index = 0; index < 3; index++) {
+            topKService.recordRouteDecision(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                    user, "top-k-session", "run-manual-" + index, "前端直选问题 " + index, null,
+                    RouteTarget.domainAgent("skill_manual_" + index,
+                            "front-selected", 1.0, "front selected")));
+        }
+
+        assertThat(topKService.loadForIntent(user, "top-k-session", "user_correction", Map.of()).history())
+                .containsExactly(
+                        Map.of("type", "route", "query", "意图问题 A", "intent", "意图 A"),
+                        Map.of("type", "route", "query", "意图问题 B", "intent", "意图 B"));
+    }
+
+    @Test
     void foldsActiveClarifications() {
         service.appendClarification(user, "session1", "run2", "interaction1", Map.of(
                 "originalQuery", "看下方案",
@@ -245,6 +311,27 @@ class RouteMemoryApplicationServiceTest {
     }
 
     @Test
+    void frontSelectedRouteRemainsLatestRouteForFallbackDecision() {
+        IntentDecision relayIntent = new IntentDecision("relay", "no_match", TaskComplexity.COMPLEX, 0.0,
+                false, null, Map.of("routeAction", "NO_MATCH"), List.of(), Map.of());
+        service.recordRouteDecision(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                user, "manual-after-relay", "run-relay", "先走 Relay", relayIntent,
+                RouteTarget.agentRuntime("intent-agent", 0.0, "route to relay")));
+        repository.markRunCompleted("run-relay");
+        service.recordRouteDecision(new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                user, "manual-after-relay", "run-manual", "后来前端直选", null,
+                RouteTarget.domainAgent("skill_manual", "front-selected", 1.0, "front selected")));
+        repository.markRunCompleted("run-manual");
+
+        assertThat(service.latestRouteIsRelayFallback(user, "manual-after-relay")).isFalse();
+        assertThat(service.loadForIntent(user, "manual-after-relay", "first_turn", Map.of()).history())
+                .containsExactly(Map.of(
+                        "type", "NO_MATCH",
+                        "query", "先走 Relay",
+                        "intent", ""));
+    }
+
+    @Test
     void readFailuresFallbackToEmptyContext() {
         RouteMemoryApplicationService failingService = new RouteMemoryApplicationService(
                 new FailingRouteMemoryRepository(), new FixedIdGenerator(), new RouteMemoryProperties());
@@ -327,12 +414,18 @@ class RouteMemoryApplicationServiceTest {
 
         @Override
         public List<RouteMemoryItem> findRecentRoutes(String tenantId, String userId, String sessionId, int limit) {
+            return findRecentRouteFacts(tenantId, userId, sessionId).stream()
+                    .filter(item -> !"front-selected".equals(item.routeSource()))
+                    .limit(limit)
+                    .toList();
+        }
+
+        private List<RouteMemoryItem> findRecentRouteFacts(String tenantId, String userId, String sessionId) {
             return items.stream()
                     .filter(item -> ownerMatches(item, tenantId, userId, sessionId))
                     .filter(item -> item.itemType() == RouteMemoryItemType.ROUTE)
                     .filter(item -> item.status() == RouteMemoryItemStatus.ACTIVE)
                     .sorted(Comparator.comparing(RouteMemoryItem::createdAt).reversed())
-                    .limit(limit)
                     .toList();
         }
 
@@ -348,7 +441,7 @@ class RouteMemoryApplicationServiceTest {
 
         @Override
         public boolean latestRouteIsCompletedRelayFallback(String tenantId, String userId, String sessionId) {
-            return findRecentRoutes(tenantId, userId, sessionId, 1).stream()
+            return findRecentRouteFacts(tenantId, userId, sessionId).stream()
                     .findFirst()
                     .filter(item -> completedRunIds.contains(item.sourceRunId()))
                     .filter(item -> item.domainAgentId() == null)

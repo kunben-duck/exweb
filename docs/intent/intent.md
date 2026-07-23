@@ -78,11 +78,11 @@ Authorization: {dynamicToken}
 | `clarify_answer` | 用户回答了意图服务上一轮澄清问题，需要继续分类。 | 是 |
 | `explicit_switch` | 用户通过前端显式选择目标能力。 | 否 |
 
-`explicit_switch` 不走意图服务，但建议把用户选择结果追加到在线 history，作为后续路由上下文。ChatService 对外只允许前端通过 `/v1/chat/runs.forceReroute=true` 显式触发用户纠正；`first_turn/domain_reject/fallback_followup/clarify_answer` 都由后端根据会话状态自动生成。
+`explicit_switch` 不走意图服务。ChatService 会保留前端直选的路由事实，但不把该结果追加到在线 history；前端展示用的 `selectedIntent` 也不参与意图上下文。ChatService 对外只允许前端通过 `/v1/chat/runs.forceReroute=true` 显式触发用户纠正；`first_turn/domain_reject/fallback_followup/clarify_answer` 都由后端根据会话状态自动生成。
 
 ## 3. history 结构
 
-`conversationContext.history` 只放在线路由需要的摘要，默认取最新 TopK。完整链路、原始问题和澄清过程应保存在 ChatService 审计日志或消息历史中。
+`conversationContext.history` 只放在线路由需要的摘要，默认取最新 TopK。`routeSource=front-selected` 的路由事实在 TopK 前排除；`user-confirmed` 和 `intent-agent` 路由保持可见。完整链路、原始问题和澄清过程应保存在 ChatService 审计日志或消息历史中。
 
 ### 3.1 已生效路由记录
 

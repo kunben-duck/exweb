@@ -11,7 +11,7 @@ import java.time.Duration;
 @Component
 @ConfigurationProperties(prefix = "financeex.route-memory")
 public class RouteMemoryProperties {
-    /** 传给意图服务的最近成功路由记录条数。 */
+    /** 传给意图服务的最近可见路由记录条数。 */
     private int topK = 5;
     /** 意图澄清最多允许连续轮数，超过后降级到 Relay Runtime。 */
     private int maxClarificationRounds = 3;

@@ -45,6 +45,7 @@ import java.util.function.Supplier;
 public class RouteMemoryApplicationService {
     private static final AppLogger log = AppLoggerFactory.getLogger(RouteMemoryApplicationService.class);
     private static final String CANDIDATE_INTENT_NAMES = "candidateIntentNames";
+    private static final String FRONT_SELECTED_ROUTE_SOURCE = "front-selected";
 
     public static final String TRIGGER_FIRST_TURN = "first_turn";
     public static final String TRIGGER_DOMAIN_REJECT = "domain_reject";
@@ -90,6 +91,7 @@ public class RouteMemoryApplicationService {
                             user.ownerUserId(), sessionId, properties.normalizedTopK()));
                     Collections.reverse(routes);
                     routes.stream()
+                            .filter(this::visibleInIntentHistory)
                             .map(this::toHistoryRoute)
                             .forEach(history::add);
                     repository.findActiveClarifications(user.tenantId(), user.ownerUserId(), sessionId).stream()
@@ -225,10 +227,11 @@ public class RouteMemoryApplicationService {
     }
 
     /**
-     * 构造与持久化 route 相同语义的意图 history 摘要，供同一 run 内拒答重路由立即使用。
+     * 构造可发送给意图服务的 route history 摘要，供同一 run 内拒答重路由立即使用。
      */
     public Map<String, Object> routeHistory(RouteMemoryRouteCommand command) {
-        if (command == null || !recordableRoute(command.route())) {
+        if (command == null || !recordableRoute(command.route())
+                || !visibleInIntentHistory(command.route())) {
             return Map.of();
         }
         if (isNoMatchRoute(command.intent(), command.route())) {
@@ -526,6 +529,18 @@ public class RouteMemoryApplicationService {
 
     private boolean recordableRoute(RouteTarget route) {
         return isNewRouteDecision(route);
+    }
+
+    private boolean visibleInIntentHistory(RouteTarget route) {
+        return route != null && visibleInIntentHistory(route.routeSource());
+    }
+
+    private boolean visibleInIntentHistory(RouteMemoryItem item) {
+        return item != null && visibleInIntentHistory(item.routeSource());
+    }
+
+    private boolean visibleInIntentHistory(String routeSource) {
+        return !FRONT_SELECTED_ROUTE_SOURCE.equals(routeSource);
     }
 
     private String routeIntentId(IntentDecision intent, RouteTarget route) {

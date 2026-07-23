@@ -1447,7 +1447,8 @@ public class FinanceEXChatService implements FinanceChatFacade {
             foldRouteClarificationsWithoutDecision(context.user(), context.session().id());
             return Flux.just(domainAgentRerouteMetadata(context, refusal, null, "MAX_REROUTES_REACHED"));
         }
-        ChatCommand rerouteCommand = commandWithDomainRejectContext(context.command(), currentDomainAgentId, refusal);
+        ChatCommand rerouteCommand = commandWithDomainRejectContext(
+                context.command(), rejectedIntentName(context), refusal);
         String rerouteIntentQuery = rerouteCommand.metadata().containsKey("intentClarification")
                 ? blankToDefault(context.routeMemoryQuery(), rerouteCommand.message())
                 : clarificationAnswerWithAttachments(rerouteCommand.message(), rerouteCommand.attachments());
@@ -1714,14 +1715,13 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 .orElse(null);
     }
 
-    private ChatCommand commandWithDomainRejectContext(ChatCommand command, String domainAgentId,
+    private ChatCommand commandWithDomainRejectContext(ChatCommand command, String intentName,
                                                        DomainAgentRefusal refusal) {
         Map<String, Object> metadata = new LinkedHashMap<>(
                 SelectedIntentContext.removeReserved(command.metadata()));
         metadata.put("routeTrigger", "domain_reject");
         metadata.put("lastIntentRejectReason", Map.of(
-                "lastDomainAgentId", domainAgentId,
-                "domainRejectCode", refusal.code(),
+                "lastIntent", intentName,
                 "domainRejectMessage", refusal.message() == null ? "" : refusal.message()
         ));
         return new ChatCommand(command.commandId(), command.tenantId(), command.userId(), command.sessionId(),
@@ -1730,6 +1730,18 @@ public class FinanceEXChatService implements FinanceChatFacade {
                 command.editedMessageId(), command.regeneratedMessageId(), "domain_reject",
                 command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers(),
                 command.appId(), command.appName(), command.agentMode());
+    }
+
+    private String rejectedIntentName(DomainAgentRunContext context) {
+        RuntimeBinding binding = context == null || context.bindingRef() == null
+                ? null
+                : context.bindingRef().get();
+        Object bindingIntentName = binding == null || binding.metadata() == null
+                ? null
+                : binding.metadata().get("intentName");
+        IntentDecision intent = context == null ? null : context.intentDecision();
+        String decisionIntentName = intent == null ? null : intent.intentName();
+        return blankToDefault(firstText(bindingIntentName, decisionIntentName), "未知意图");
     }
 
     private boolean forceReroute(ChatCommand command) {
@@ -3063,12 +3075,12 @@ public class FinanceEXChatService implements FinanceChatFacade {
             history.add(Map.copyOf(current));
         }
         StringBuilder builder = new StringBuilder();
-        builder.append("user:").append(originalQuery == null ? "" : originalQuery);
+        builder.append("用户:").append(originalQuery == null ? "" : originalQuery);
         for (Map<String, Object> item : history) {
             String question = firstText(item.get("clarifyQuestion"), item.get("question"));
             String itemAnswer = firstText(item.get("answer"), item.get("answerText"));
             if (question != null) {
-                builder.append("；澄清问:").append(question);
+                builder.append("；系统追问:").append(question);
             }
             if (itemAnswer != null) {
                 builder.append("；用户:").append(itemAnswer);

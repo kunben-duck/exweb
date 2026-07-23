@@ -315,6 +315,27 @@ class MyBatisXmlMapperConsistencyTest {
         assertThat(markRead).doesNotContain("updated_at");
     }
 
+    @Test
+    void routeMemoryIntentHistoryShouldExcludeFrontSelectedBeforeTopK() throws IOException {
+        String mapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("persistence/RouteMemoryMapper.opengauss.xml"));
+        int historyStart = mapper.indexOf("<select id=\"findRecentRoutes\"");
+        int historyEnd = mapper.indexOf("</select>", historyStart);
+        String historyQuery = mapper.substring(historyStart, historyEnd);
+        int sourceFilter = historyQuery.indexOf(
+                "AND (route_source IS NULL OR route_source &lt;&gt; 'front-selected')");
+        int orderBy = historyQuery.indexOf("ORDER BY created_at DESC");
+        int limit = historyQuery.indexOf("LIMIT #{limit}");
+
+        assertThat(sourceFilter).isGreaterThanOrEqualTo(0).isLessThan(orderBy);
+        assertThat(orderBy).isLessThan(limit);
+
+        int fallbackStart = mapper.indexOf("<select id=\"latestRouteIsCompletedRelayFallback\"");
+        int fallbackEnd = mapper.indexOf("</select>", fallbackStart);
+        assertThat(mapper.substring(fallbackStart, fallbackEnd))
+                .doesNotContain("route_source &lt;&gt; 'front-selected'");
+    }
+
     private List<String> validateXmlMapper(Path xmlFile) {
         try {
             String xml = Files.readString(xmlFile);

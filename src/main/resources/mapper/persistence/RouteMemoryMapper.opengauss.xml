@@ -50,8 +50,8 @@
     </insert>
 
     <!--
-      查询会话最近已生效路由摘要，供意图服务 conversationContext.history 使用。
-      入参: tenantId/userId/sessionId 为归属边界，limit 为 TopK 限制；按创建时间倒序返回。
+      查询会话最近可发送给意图服务的路由摘要，排除 route_source=front-selected 的前端直选事实。
+      入参: tenantId/userId/sessionId 为归属边界，limit 为 TopK 限制；过滤后按创建时间倒序返回。
     -->
     <select id="findRecentRoutes" resultMap="routeMemoryResultMap">
         SELECT <include refid="routeMemoryColumns"/>
@@ -61,6 +61,7 @@
           AND session_id = #{sessionId}
           AND item_type = 'ROUTE'
           AND status = 'ACTIVE'
+          AND (route_source IS NULL OR route_source &lt;&gt; 'front-selected')
         ORDER BY created_at DESC
         LIMIT #{limit}
     </select>

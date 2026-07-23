@@ -1402,7 +1402,7 @@ class FinanceEXChatServiceTest {
     }
 
     @Test
-    void domainAgentRefusalNoMatchResumesHistoricalRelaySession() {
+    void userConfirmedRefusalAutoSwitchesToHistoricalRelaySessionWhenEnabled() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -1412,6 +1412,10 @@ class FinanceEXChatServiceTest {
         Instant now = Instant.now();
         sessions.save(new ChatSession("session1", user.tenantId(), user.ownerUserId(),
                 "test", "ACTIVE", "web", now, now));
+        bindings.save(new RuntimeBinding("domain-binding", user.tenantId(), user.ownerUserId(), "session1",
+                "domain-agent", "domain-leaf", "domain-session-a", RuntimeBindingStatus.ACTIVE, "old-domain-run",
+                null, now.minus(Duration.ofDays(1)), now.minus(Duration.ofDays(1)),
+                Map.of("domainAgentId", "agent-a", "routeSource", "user-confirmed")));
         bindings.save(new RuntimeBinding("relay-binding", user.tenantId(), user.ownerUserId(), "session1",
                 "relay", "relay-leaf", "relay-session-1", RuntimeBindingStatus.RESUMABLE, "old-run",
                 null, now.minus(Duration.ofDays(30)), now.minus(Duration.ofDays(30)),
@@ -1424,10 +1428,7 @@ class FinanceEXChatServiceTest {
                 new RouteSignalProperties(false, false)) {
             @Override
             public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
-                if (routeCalls.incrementAndGet() == 1) {
-                    return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.domainAgent(
-                            "agent-a", "intent-agent", 1.0, "initial intent route"))));
-                }
+                routeCalls.incrementAndGet();
                 var noMatch = new com.huawei.it.ex.one.domain.intent.IntentDecision(
                         "finance.runtime.no_intent", "未识别到可用意图",
                         com.huawei.it.ex.one.domain.intent.TaskComplexity.COMPLEX,
@@ -1453,19 +1454,32 @@ class FinanceEXChatServiceTest {
                 return Mono.empty();
             }
         };
+        com.huawei.it.ex.one.application.config.DomainAgentProperties properties =
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties();
+        properties.setRefusalAutoSwitchEnabled(true);
         FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
                 sessions, messages, runs, events, routeService, domainClient, relay, bindings,
-                new com.huawei.it.ex.one.application.config.DomainAgentProperties());
+                properties);
 
-        StepVerifier.create(service.startRun(user, new ChatCommand("cmd1", null, null,
-                        "session1", null, "web", "hello", List.of(), Map.of()),
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                        "cmd1", null, null, "session1", null, "web", "hello", List.of(), Map.of()),
                         RuntimeForwardHeaders.empty()))
                 .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
                 .verifyComplete();
 
         awaitEvent(events, "run.completed");
+        assertThat(routeCalls).hasValue(1);
+        assertThat(events.events).extracting(ChatEvent::type).doesNotContain("run.waiting_user");
         assertThat(relaySessionMode).hasValue(RuntimeSessionMode.RESUME);
         assertThat(relayRuntimeSessionId).hasValue("relay-session-1");
+        assertThat(bindings.bindingsForProvider("domain-agent"))
+                .singleElement()
+                .satisfies(binding -> {
+                    assertThat(binding.status()).isEqualTo(RuntimeBindingStatus.CANCELLED);
+                    assertThat(binding.metadata())
+                            .containsEntry("routeSource", "user-confirmed")
+                            .containsEntry("lastRejectCode", "FN-EX-CAHT-BIZ-DAG-001");
+                });
         assertThat(bindings.bindingsForProvider("relay"))
                 .singleElement()
                 .satisfies(binding -> {
@@ -1520,7 +1534,7 @@ class FinanceEXChatServiceTest {
     }
 
     @Test
-    void automaticDomainAgentRefusalAtRerouteLimitCancelsBindingButManualSelectionKeepsIt() {
+    void refusalAtRerouteLimitUsesConfiguredManualBindingLifecycle() {
         com.huawei.it.ex.one.application.config.DomainAgentProperties properties =
                 new com.huawei.it.ex.one.application.config.DomainAgentProperties();
         properties.setMaxReroutes(0);
@@ -1564,6 +1578,34 @@ class FinanceEXChatServiceTest {
                 .satisfies(binding -> {
                     assertThat(binding.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
                     assertThat(binding.metadata()).containsEntry("routeSource", "front-selected");
+                });
+
+        com.huawei.it.ex.one.application.config.DomainAgentProperties autoSwitchProperties =
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties();
+        autoSwitchProperties.setMaxReroutes(0);
+        autoSwitchProperties.setRefusalAutoSwitchEnabled(true);
+        MultiBindingRuntimeBindingRepository autoSwitchBindings = new MultiBindingRuntimeBindingRepository();
+        InMemoryEventStore autoSwitchEvents = new InMemoryEventStore();
+        FinanceEXChatService autoSwitchService = financeServiceWithDomainClientAndBindings(
+                new InMemorySessionRepository(), new InMemoryMessageRepository(), new InMemoryRunRepository(),
+                autoSwitchEvents, repeatedDomainAgentRouteService(new AtomicInteger(), "unused"),
+                refusingDomainAgentClient(), noopRuntime(), autoSwitchBindings, autoSwitchProperties);
+
+        StepVerifier.create(autoSwitchService.startRun(user, new ChatCommand(
+                        "cmd3", null, null, null, null, "web", "hello", List.of(), Map.of(),
+                        "DOMAIN_AGENT", "agent-a", ChatRunMode.NEXT, null, null, null),
+                        RuntimeForwardHeaders.empty()))
+                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .verifyComplete();
+        awaitEvent(autoSwitchEvents, "run.completed");
+
+        assertThat(autoSwitchBindings.bindingsForProvider("domain-agent"))
+                .singleElement()
+                .satisfies(binding -> {
+                    assertThat(binding.status()).isEqualTo(RuntimeBindingStatus.CANCELLED);
+                    assertThat(binding.metadata())
+                            .containsEntry("routeSource", "front-selected")
+                            .containsEntry("lastRejectCode", "FN-EX-CAHT-BIZ-DAG-001");
                 });
     }
 
@@ -1737,7 +1779,7 @@ class FinanceEXChatServiceTest {
     }
 
     @Test
-    void refusalIntentClarificationLoadsCancelledExpiredBindingById() {
+    void refusalIntentClarificationAutoSwitchLoadsCancelledExpiredFrontSelectedBindingById() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -1761,13 +1803,13 @@ class FinanceEXChatServiceTest {
                 now.minus(Duration.ofMinutes(1)), now.minus(Duration.ofDays(1)), now,
                 AgentModeBindingContext.apply(Map.of(
                         "domainAgentId", "agent-a",
-                        "routeSource", "intent-agent",
+                        "routeSource", "front-selected",
                         "lastRejectCode", "FN-EX-CAHT-BIZ-DAG-001"), rejectedMode)));
         Map<String, Object> rerouteContext = Map.ofEntries(
                 Map.entry("currentProvider", "domain-agent"),
                 Map.entry("currentTargetId", "agent-a"),
                 Map.entry("currentBindingId", "binding-domain-a"),
-                Map.entry("currentRouteSource", "intent-agent"),
+                Map.entry("currentRouteSource", "front-selected"),
                 Map.entry("refusalCode", "FN-EX-CAHT-BIZ-DAG-001"),
                 Map.entry("refusalReasonCode", "OUT_OF_DOMAIN"),
                 Map.entry("refusalRecoverable", false),
@@ -1815,10 +1857,12 @@ class FinanceEXChatServiceTest {
                 return Mono.empty();
             }
         };
+        com.huawei.it.ex.one.application.config.DomainAgentProperties properties =
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties();
+        properties.setRefusalAutoSwitchEnabled(true);
         FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
                 sessions, messages, runs, events, routeService, domainClient, noopRuntime(), bindings,
-                new com.huawei.it.ex.one.application.config.DomainAgentProperties(), liveEventBus(),
-                interactions);
+                properties, liveEventBus(), interactions);
 
         StepVerifier.create(service.startRun(user, new ChatCommand(
                         null, null, null, "session1", null, "web", null, List.of(), Map.of(),
@@ -1830,6 +1874,9 @@ class FinanceEXChatServiceTest {
         awaitEvent(events, "run.completed");
 
         assertThat(events.events).extracting(ChatEvent::type).doesNotContain("run.failed");
+        assertThat(events.events).extracting(ChatEvent::type).doesNotContain("run.waiting_user");
+        assertThat(interactions.requests.values())
+                .noneMatch(request -> request.interactionType() == ChatInteractionType.ROUTE_SWITCH_CONFIRMATION);
         assertThat(agentBCalls).hasValue(1);
         assertThat(bindings.bindingsForProvider("domain-agent"))
                 .filteredOn(binding -> "agent-a".equals(binding.metadata().get("domainAgentId")))
@@ -1922,6 +1969,113 @@ class FinanceEXChatServiceTest {
 
         assertThat(relayCalls).hasValue(0);
         assertThat(messages.messages).extracting(ChatMessage::role).containsExactly("user");
+    }
+
+    @Test
+    void frontSelectedRefusalAutoSwitchesToIntentDomainAgentWhenEnabled() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        InMemoryInteractionRequestRepository interactions = new InMemoryInteractionRequestRepository();
+        MultiBindingRuntimeBindingRepository bindings = new MultiBindingRuntimeBindingRepository();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        AtomicInteger routeCalls = new AtomicInteger();
+        RouteSignalApplicationService routeService = new RouteSignalApplicationService(
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                intentAgent((command, memory, routeUser) -> null),
+                new com.huawei.it.ex.one.domain.routing.RoutingPolicy(0.85),
+                new RouteSignalProperties(false, false)) {
+            @Override
+            public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
+                routeCalls.incrementAndGet();
+                return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.domainAgent(
+                        "agent-b", "intent-agent", 1.0, "rerouted after refusal"))));
+            }
+        };
+        AtomicInteger agentACalls = new AtomicInteger();
+        AtomicInteger agentBCalls = new AtomicInteger();
+        DomainAgentClient domainClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                if ("agent-a".equals(request.domainAgentId())) {
+                    agentACalls.incrementAndGet();
+                    return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
+                }
+                agentBCalls.incrementAndGet();
+                return Flux.just(MessageSnapshotEvent.of(
+                        request.runId(), request.sessionId(), "agent-b answer"));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        AtomicReference<RuntimeBindingStatus> bindingStatusAtRefusalPublish = new AtomicReference<>();
+        ChatLiveEventBus eventBus = new ChatLiveEventBus() {
+            @Override
+            public void publish(String topicId, ChatEvent event) {
+                if (event != null && event.payload() != null
+                        && "agent.refusal".equals(event.payload().get("sourceType"))) {
+                    bindings.bindingsForProvider("domain-agent").stream()
+                            .filter(binding -> "agent-a".equals(binding.metadata().get("domainAgentId")))
+                            .findFirst()
+                            .map(RuntimeBinding::status)
+                            .ifPresent(bindingStatusAtRefusalPublish::set);
+                }
+            }
+
+            @Override
+            public Flux<ChatEvent> subscribe(String topicId) {
+                return Flux.never();
+            }
+        };
+        com.huawei.it.ex.one.application.config.DomainAgentProperties properties =
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties();
+        properties.setRefusalAutoSwitchEnabled(true);
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions, messages, runs, events, routeService, domainClient, noopRuntime(), bindings,
+                properties, eventBus, interactions);
+
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                        "cmd1", null, null, null, null, "web", "hello", List.of(), Map.of(),
+                        "DOMAIN_AGENT", "agent-a", ChatRunMode.NEXT, null, null, null),
+                        RuntimeForwardHeaders.empty()))
+                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .verifyComplete();
+
+        awaitEvent(events, "run.completed");
+        awaitValue(bindingStatusAtRefusalPublish, RuntimeBindingStatus.CANCELLED,
+                "front-selected refusal binding status at publish");
+        assertThat(routeCalls).hasValue(1);
+        assertThat(agentACalls).hasValue(1);
+        assertThat(agentBCalls).hasValue(1);
+        assertThat(events.events).extracting(ChatEvent::type).doesNotContain("run.waiting_user");
+        assertThat(interactions.requests.values())
+                .noneMatch(request -> request.interactionType() == ChatInteractionType.ROUTE_SWITCH_CONFIRMATION);
+        assertThat(bindings.bindingsForProvider("domain-agent"))
+                .filteredOn(binding -> "agent-a".equals(binding.metadata().get("domainAgentId")))
+                .singleElement()
+                .satisfies(binding -> {
+                    assertThat(binding.status()).isEqualTo(RuntimeBindingStatus.CANCELLED);
+                    assertThat(binding.metadata())
+                            .containsEntry("routeSource", "front-selected")
+                            .containsEntry("lastRejectCode", "FN-EX-CAHT-BIZ-DAG-001");
+                });
+        assertThat(bindings.bindingsForProvider("domain-agent"))
+                .filteredOn(binding -> "agent-b".equals(binding.metadata().get("domainAgentId")))
+                .singleElement()
+                .satisfies(binding -> {
+                    assertThat(binding.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+                    assertThat(binding.metadata()).containsEntry("routeSource", "intent-agent");
+                });
+        assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role()))
+                .singleElement()
+                .satisfies(message -> assertThat(message.parts()).extracting(ChatMessagePart::partType)
+                        .contains("DOMAIN_AGENT_REFUSAL", "MESSAGE_SNAPSHOT", "ANSWER")
+                        .doesNotContain("ROUTE_SWITCH_CONFIRMATION_REQUEST",
+                                "ROUTE_SWITCH_CONFIRMATION_RESPONSE"));
     }
 
     @Test

@@ -35,6 +35,8 @@ financeex:
     base-url: http://localhost:9300
     # 可省略；为空时自动使用 base-url。
     referer: http://localhost:9300
+    # 默认保留手动 DomainAgent 拒答后的用户切换确认。
+    refusal-auto-switch-enabled: false
   use-case-library:
     enabled: false
     base-url: http://localhost:9100

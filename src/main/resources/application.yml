@@ -348,6 +348,8 @@ financeex:
     max-pending-frame-bytes: ${FINANCEEX_DOMAIN_AGENT_MAX_PENDING_FRAME_BYTES:262144}
     # 兼容旧部署配置保留；DomainAgent 结构化响应当前不再对外分片。
     max-fragment-bytes: ${FINANCEEX_DOMAIN_AGENT_MAX_FRAGMENT_BYTES:8192}
+    # 默认保留手动 DomainAgent 拒答后的用户切换确认；开启后直接切换到重意图得到的 DomainAgent 或 Relay。
+    refusal-auto-switch-enabled: ${FINANCEEX_DOMAIN_AGENT_REFUSAL_AUTO_SWITCH_ENABLED:false}
     # 结构化拒答 event + binding 原子提交及提交后缓存同步使用独立 IO 池，不占用主事件落库线程。
     control-io-executor-max-size: ${FINANCEEX_DOMAIN_AGENT_CONTROL_IO_EXECUTOR_MAX_SIZE:2}
     control-io-executor-queue-capacity: ${FINANCEEX_DOMAIN_AGENT_CONTROL_IO_EXECUTOR_QUEUE_CAPACITY:128}

@@ -39,6 +39,8 @@ public class DomainAgentProperties {
     private int maxFragmentBytes = 8192;
     /** 同一 run 内拒答后最多重新路由次数。 */
     private int maxReroutes = 3;
+    /** 手动来源 DomainAgent 拒答后是否跳过用户确认并自动切换到重意图目标。 */
+    private boolean refusalAutoSwitchEnabled = false;
     /** DomainAgent 控制事件数据库与缓存 IO 的隔离线程数。 */
     private int controlIoExecutorMaxSize = 2;
     /** DomainAgent 控制事件 IO 调度器队列容量。 */
@@ -66,6 +68,10 @@ public class DomainAgentProperties {
     public void setMaxFragmentBytes(int maxFragmentBytes) { this.maxFragmentBytes = maxFragmentBytes; }
     public int getMaxReroutes() { return maxReroutes; }
     public void setMaxReroutes(int maxReroutes) { this.maxReroutes = maxReroutes; }
+    public boolean isRefusalAutoSwitchEnabled() { return refusalAutoSwitchEnabled; }
+    public void setRefusalAutoSwitchEnabled(boolean refusalAutoSwitchEnabled) {
+        this.refusalAutoSwitchEnabled = refusalAutoSwitchEnabled;
+    }
     public int getControlIoExecutorMaxSize() { return controlIoExecutorMaxSize; }
     public void setControlIoExecutorMaxSize(int controlIoExecutorMaxSize) {
         this.controlIoExecutorMaxSize = controlIoExecutorMaxSize;

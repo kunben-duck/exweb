@@ -1489,7 +1489,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         }
         if (nextRoute != null && nextRoute.type() == RouteType.AGENT_RUNTIME) {
             recordIntentIfPresent(context, nextSignal.intentDecision(), nextRoute);
-            if (protectedRouteSource(routeSource(context.bindingRef().get()))) {
+            if (requiresRouteSwitchConfirmation(routeSource(context.bindingRef().get()))) {
                 return Flux.just(routeSwitchConfirmationRequest(reroute, nextSignal));
             }
             context.bindingRef().set(markRejectedBindingNotRoutable(context.bindingRef().get(), refusal));
@@ -1529,7 +1529,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         }
         recordIntentIfPresent(context, nextSignal.intentDecision(), nextRoute);
         String routeSource = routeSource(context.bindingRef().get());
-        if (protectedRouteSource(routeSource)
+        if (requiresRouteSwitchConfirmation(routeSource)
                 && !reroute.currentDomainAgentId().equals(nextRoute.selectedAgentCode())) {
             return Flux.just(routeSwitchConfirmationRequest(reroute, nextSignal));
         }
@@ -1615,6 +1615,10 @@ public class FinanceEXChatService implements FinanceChatFacade {
         return "front-selected".equals(routeSource) || "user-confirmed".equals(routeSource);
     }
 
+    private boolean requiresRouteSwitchConfirmation(String routeSource) {
+        return protectedRouteSource(routeSource) && !domainAgentProperties.isRefusalAutoSwitchEnabled();
+    }
+
     private void markRejectedAutomaticBindingNotRoutable(DomainAgentRunContext context,
                                                           DomainAgentRefusal refusal) {
         context.bindingRef().set(markRejectedAutomaticBindingNotRoutable(context.bindingRef().get(), refusal));
@@ -1622,7 +1626,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
 
     private RuntimeBinding markRejectedAutomaticBindingNotRoutable(RuntimeBinding binding,
                                                                     DomainAgentRefusal refusal) {
-        if (binding == null || protectedRouteSource(routeSource(binding))) {
+        if (binding == null || requiresRouteSwitchConfirmation(routeSource(binding))) {
             return binding;
         }
         return markRejectedBindingNotRoutable(binding, refusal);
@@ -2857,7 +2861,7 @@ public class FinanceEXChatService implements FinanceChatFacade {
         if (refusal == null || binding == null
                 || !RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider())
                 || binding.status() != RuntimeBindingStatus.ACTIVE
-                || protectedRouteSource(routeSource(binding))) {
+                || requiresRouteSwitchConfirmation(routeSource(binding))) {
             return null;
         }
         return new AutomaticDomainAgentRefusalCommit(binding, refusal);

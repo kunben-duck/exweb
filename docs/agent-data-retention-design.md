@@ -319,7 +319,7 @@ Relay 原始 frame 不直接作为 ChatService 顶层事件。adapter 先收敛�
 | `state=GENERATE` | `runtime.progress` | 保存 | 展示生成进度 | `PROGRESS` part |
 | `processResult` | `runtime.progress` | 保存结构化 payload | 展示处理结果 | `PROGRESS` part |
 | `searchList`、`sourcesDocuments/sourceDocuments` | `runtime.reference` | 保存 | 展示引用与来源 | `REFERENCE` part |
-| `cardUrl/diyCardScene/cardList/openCard` | `runtime.card` | 保存 | 展示业务卡片 | `CARD` part |
+| `cardUrl/diyCardScene/cardList/openCard/specificSceneInfo` | `runtime.card` | 保存完整业务卡片；`specificSceneInfo` 保留授权业务字段并脱敏真实凭据 | 展示业务卡片 | `CARD` part，默认可见并进入新创建的分享快照 |
 | 下游 `sessionId` | `runtime.metadata` | 保存 `domainAgentSessionId/runtimeSessionId` | 可用于状态或调试展示 | `METADATA` part |
 | `traceId/messageId/intent/skillId` | `runtime.metadata` | 保存 | 可用于状态或调试展示 | `METADATA` part |
 | `endFlag=true` | `message.completed` | 保存 | 闭合正文阶段 | 不产生 part |

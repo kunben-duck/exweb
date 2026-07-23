@@ -49,7 +49,10 @@ class ChatShareApplicationServiceTest {
         assertThat(share.snapshot().answer().content()).isEqualTo("请先提交发票和审批单");
         assertThat(share.snapshot().question().attachments()).hasSize(1);
         assertThat(share.snapshot().parts()).extracting(part -> part.partType())
-                .containsExactly("PROGRESS");
+                .containsExactly("PROGRESS", "CARD");
+        assertThat(share.snapshot().parts().get(1).payload())
+                .containsEntry("sourceType", "specificSceneInfo")
+                .containsKey("specificSceneInfo");
         assertThat(fixture.shares.findById(share.id())).contains(share);
     }
 
@@ -144,6 +147,7 @@ class ChatShareApplicationServiceTest {
                 false, null, null, null, null, null,
                 List.of(
                         part("part_visible", true, "PROGRESS"),
+                        specificSceneInfoPart(),
                         part("part_hidden", false, "RUNTIME_EVENT")
                 ), now.plusSeconds(1)));
         messages.saveAttachment(new ChatMessageAttachment("att1", "tenant1", "user1", "session1",
@@ -157,6 +161,18 @@ class ChatShareApplicationServiceTest {
         return new ChatMessagePart(id, "tenant1", "user1", "session1", "msg_assistant", "run1",
                 partType, "source", partType + " text", partType, "INFO", "runtime",
                 visible ? "inline" : "debug", visible, Map.of("value", partType), 1, Instant.now());
+    }
+
+    private ChatMessagePart specificSceneInfoPart() {
+        return new ChatMessagePart("part_specific_scene", "tenant1", "user1", "session1",
+                "msg_assistant", "run1", "CARD", "specificSceneInfo", "specificSceneInfo",
+                "卡片展示", "INFO", "card", "inline", true, Map.of(
+                        "source", "domain-agent",
+                        "sourceType", "specificSceneInfo",
+                        "cardType", "specificSceneInfo",
+                        "cardSources", List.of("specificSceneInfo"),
+                        "specificSceneInfo", List.of(Map.of("type", "authorization"))
+                ), 2, Instant.now());
     }
 
     private UserContext user() {

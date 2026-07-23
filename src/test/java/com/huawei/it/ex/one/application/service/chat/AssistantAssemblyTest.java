@@ -6,6 +6,7 @@ import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 
 class AssistantAssemblyTest {
@@ -45,6 +46,27 @@ class AssistantAssemblyTest {
             assertThat(part.payload())
                     .containsEntry("sourceType", "intent-result")
                     .containsEntry("intentName", "未识别到可用意图，进入 FIN Supervisor Agent");
+        });
+    }
+
+    @Test
+    void mapsSpecificSceneInfoCardToUserVisibleHistoricalPart() {
+        AssistantAssembly assembly = new AssistantAssembly();
+        assembly.observe(RuntimeEvent.card("run1", "session1", Map.of(
+                "source", "domain-agent",
+                "sourceType", "specificSceneInfo",
+                "cardType", "specificSceneInfo",
+                "cardSources", List.of("specificSceneInfo"),
+                "specificSceneInfo", List.of(Map.of("type", "authorization"))
+        )));
+
+        assertThat(assembly.shouldPersistMessage()).isTrue();
+        assertThat(assembly.parts()).singleElement().satisfies(part -> {
+            assertThat(part.partType()).isEqualTo("CARD");
+            assertThat(part.sourceType()).isEqualTo("specificSceneInfo");
+            assertThat(part.payload())
+                    .containsEntry("cardType", "specificSceneInfo")
+                    .containsKey("serverTimestampMs");
         });
     }
 }

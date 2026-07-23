@@ -380,6 +380,64 @@ class DomainAgentResponseNormalizerTest {
     }
 
     @Test
+    void mapsSpecificSceneInfoToCompleteCardAndPreservesAuthorizationBusinessFields() throws Exception {
+        ObjectNode root = objectMapper.createObjectNode();
+        ObjectNode scene = root.putArray("specificSceneInfo").addObject();
+        scene.put("index", 1);
+        scene.put("type", "authorization");
+        ObjectNode authority = scene.putArray("data").addObject();
+        authority.put("authorityZhName", "审批税审项目关闭");
+        authority.put("authorizationAllowedFlag", "K");
+        authority.put("authorizationPathStr", "税务/税审与问询");
+        authority.put("accessToken", "secret-token");
+        ArrayNode scenarios = authority.putArray("scenarioList");
+        for (int i = 0; i < 75; i++) {
+            scenarios.addObject()
+                    .put("displaySeq", i + 1)
+                    .put("scenarioZhName", "场景-" + i)
+                    .put("documentUrl", "https://example.com/document/" + i);
+        }
+
+        List<ChatEvent> events = normalizer.normalize(
+                "run1", "session1", "message: " + objectMapper.writeValueAsString(root));
+
+        assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.card");
+        assertThat(events.getFirst().payload())
+                .containsEntry("source", "domain-agent")
+                .containsEntry("sourceType", "specificSceneInfo")
+                .containsEntry("cardType", "specificSceneInfo")
+                .containsEntry("cardSources", List.of("specificSceneInfo"));
+        List<?> normalizedScenes = (List<?>) events.getFirst().payload().get("specificSceneInfo");
+        Map<?, ?> normalizedScene = asMap(normalizedScenes.getFirst());
+        Map<?, ?> normalizedAuthority = asMap(((List<?>) normalizedScene.get("data")).getFirst());
+        assertThat(normalizedAuthority.get("authorizationAllowedFlag")).isEqualTo("K");
+        assertThat(normalizedAuthority.get("authorizationPathStr")).isEqualTo("税务/税审与问询");
+        assertThat(normalizedAuthority.get("accessToken")).isEqualTo("[REDACTED]");
+        assertThat((List<?>) normalizedAuthority.get("scenarioList"))
+                .hasSize(75)
+                .noneMatch("[TRUNCATED]"::equals);
+    }
+
+    @Test
+    void buffersSplitSpecificSceneInfoAndEmitsOneCompleteCard() {
+        DomainAgentResponseNormalizer.DomainAgentStreamState state = normalizer.newStreamState();
+
+        List<ChatEvent> first = normalizer.normalize("run1", "session1",
+                "message: {\"specificSceneInfo\":[{\"type\":\"author", state);
+        List<ChatEvent> second = normalizer.normalize("run1", "session1",
+                "ization\",\"data\":[{\"authorityZhName\":\"税审审批\"}]}]}", state);
+
+        assertThat(first).isEmpty();
+        assertThat(second).extracting(ChatEvent::type).containsExactly("runtime.card");
+        assertThat(second.getFirst().payload())
+                .containsEntry("sourceType", "specificSceneInfo")
+                .containsEntry("cardType", "specificSceneInfo")
+                .doesNotContainKeys("fragment", "itemId", "delta", "complete");
+        assertThat(second.getFirst().payload().get("specificSceneInfo")).asString()
+                .contains("authorization", "税审审批");
+    }
+
+    @Test
     void mapsOpenCardToRuntimeCard() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1", """
                 message: {"openCard":"N","intent":"CreditSales","skillId":"skill-credit"}
@@ -409,15 +467,16 @@ class DomainAgentResponseNormalizerTest {
     @Test
     void keepsDefensiveMixedCardMappingWhenOpenCardCombinesWithOtherCardFields() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1", """
-                message: {"cardUrl":"https://card","openCard":"N"}
+                message: {"cardUrl":"https://card","openCard":"N","specificSceneInfo":[]}
                 """);
 
         assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.card");
         assertThat(events.getFirst().payload()).containsEntry("sourceType", "domain-agent-card")
                 .containsEntry("cardType", "mixed")
-                .containsEntry("cardSources", List.of("cardUrl", "openCard"))
+                .containsEntry("cardSources", List.of("cardUrl", "openCard", "specificSceneInfo"))
                 .containsEntry("cardUrl", "https://card")
-                .containsEntry("openCard", "N");
+                .containsEntry("openCard", "N")
+                .containsEntry("specificSceneInfo", List.of());
     }
 
     @Test

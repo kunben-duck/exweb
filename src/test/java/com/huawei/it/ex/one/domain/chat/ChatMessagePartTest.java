@@ -45,6 +45,14 @@ class ChatMessagePartTest {
         assertThat(part("FUTURE_EVENT").title()).isEqualTo("运行事件");
     }
 
+    @Test
+    void cardPartsAreVisibleWhileRuntimeEventsRemainHidden() {
+        assertThat(part("CARD").visible()).isTrue();
+        assertThat(part("CARD").displayHint()).isEqualTo("inline");
+        assertThat(part("RUNTIME_EVENT").visible()).isFalse();
+        assertThat(part("RUNTIME_EVENT").displayHint()).isEqualTo("debug");
+    }
+
     private ChatMessagePart part(String partType) {
         return new ChatMessagePart(
                 "part1", "tenant1", "user1", "session1", "message1", "run1",

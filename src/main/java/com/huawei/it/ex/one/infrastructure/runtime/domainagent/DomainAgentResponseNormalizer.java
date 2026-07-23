@@ -434,7 +434,8 @@ public class DomainAgentResponseNormalizer {
         return root.hasNonNull("cardUrl")
                 || root.hasNonNull("diyCardScene")
                 || root.hasNonNull("cardList")
-                || root.hasNonNull("openCard");
+                || root.hasNonNull("openCard")
+                || root.hasNonNull("specificSceneInfo");
     }
 
     private Map<String, Object> processPayload(JsonNode root) {
@@ -482,11 +483,14 @@ public class DomainAgentResponseNormalizer {
         if (root.hasNonNull("cardList")) {
             payload.put("cardList", sanitizeBusiness(root.get("cardList")));
         }
+        if (root.hasNonNull("specificSceneInfo")) {
+            payload.put("specificSceneInfo", sanitizeSpecificSceneInfo(root.get("specificSceneInfo")));
+        }
         return payload;
     }
 
     private List<String> cardSources(JsonNode root) {
-        List<String> sources = new ArrayList<>(4);
+        List<String> sources = new ArrayList<>(5);
         if (root.hasNonNull("cardUrl")) {
             sources.add("cardUrl");
         }
@@ -498,6 +502,9 @@ public class DomainAgentResponseNormalizer {
         }
         if (root.hasNonNull("openCard")) {
             sources.add("openCard");
+        }
+        if (root.hasNonNull("specificSceneInfo")) {
+            sources.add("specificSceneInfo");
         }
         return List.copyOf(sources);
     }
@@ -519,6 +526,7 @@ public class DomainAgentResponseNormalizer {
             case "diyCardScene" -> "diyCardScene";
             case "cardList" -> "cardList";
             case "openCard" -> "openCard";
+            case "specificSceneInfo" -> "specificSceneInfo";
             default -> "domain-agent-card";
         };
     }
@@ -655,13 +663,22 @@ public class DomainAgentResponseNormalizer {
     }
 
     private Object sanitizeBusiness(JsonNode node) {
+        return sanitizeBusiness(node, false);
+    }
+
+    private Object sanitizeSpecificSceneInfo(JsonNode node) {
+        return sanitizeBusiness(node, true);
+    }
+
+    private Object sanitizeBusiness(JsonNode node, boolean preserveAuthorizationBusinessFields) {
         if (node == null || node.isNull()) {
             return null;
         }
         if (node.isObject()) {
             Map<String, Object> map = new LinkedHashMap<>();
             node.fields().forEachRemaining(entry -> {
-                Object value = sanitizeBusiness(entry.getKey(), entry.getValue());
+                Object value = sanitizeBusiness(
+                        entry.getKey(), entry.getValue(), preserveAuthorizationBusinessFields);
                 if (value != null) {
                     map.put(entry.getKey(), value);
                 }
@@ -671,7 +688,7 @@ public class DomainAgentResponseNormalizer {
         if (node.isArray()) {
             List<Object> list = new ArrayList<>();
             for (JsonNode child : node) {
-                Object value = sanitizeBusiness(child);
+                Object value = sanitizeBusiness(child, preserveAuthorizationBusinessFields);
                 if (value != null) {
                     list.add(value);
                 }
@@ -687,11 +704,21 @@ public class DomainAgentResponseNormalizer {
         return node.asText("");
     }
 
-    private Object sanitizeBusiness(String field, JsonNode node) {
-        if (isSensitiveField(field)) {
+    private Object sanitizeBusiness(String field, JsonNode node, boolean preserveAuthorizationBusinessFields) {
+        if (isSensitiveField(field)
+                && !(preserveAuthorizationBusinessFields && authorizationBusinessField(field))) {
             return "[REDACTED]";
         }
-        return sanitizeBusiness(node);
+        return sanitizeBusiness(node, preserveAuthorizationBusinessFields);
+    }
+
+    private boolean authorizationBusinessField(String field) {
+        if (field == null) {
+            return false;
+        }
+        String normalized = field.toLowerCase(Locale.ROOT);
+        return "authorizationallowedflag".equals(normalized)
+                || "authorizationpathstr".equals(normalized);
     }
 
     private Object sanitizeDiagnostic(JsonNode node) {

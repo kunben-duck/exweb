@@ -1,0 +1,45 @@
+package com.huawei.it.ex.one.application.service.chat;
+
+import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
+import com.huawei.it.ex.one.common.trace.TraceContext;
+import com.huawei.it.ex.one.domain.auth.UserContext;
+import com.huawei.it.ex.one.domain.chat.AttachmentRef;
+import com.huawei.it.ex.one.domain.chat.ChatCommand;
+import com.huawei.it.ex.one.domain.chat.ChatRun;
+import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+import com.huawei.it.ex.one.domain.document.UploadedDocument;
+import com.huawei.it.ex.one.domain.memory.MemoryContext;
+import com.huawei.it.ex.one.domain.routing.RouteTarget;
+import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
+import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
+
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+
+/** Immutable inputs for one Intent route and Runtime dispatch pass. */
+record RoutePipelineRequest(
+        UserContext user,
+        ChatSession session,
+        ChatCommand runCommand,
+        List<AttachmentRef> attachments,
+        List<UploadedDocument> documents,
+        MemoryContext memory,
+        String runId,
+        String runtimeBindingLeafId,
+        RuntimeForwardHeaders forwardHeaders,
+        TraceContext traceContext,
+        AtomicReference<RouteTarget> routeRef,
+        AtomicReference<RuntimeBinding> bindingRef,
+        AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
+        RunExecutionClaim executionClaim,
+        ChatRun run,
+        String routeMemoryQuery,
+        String intentQuery,
+        String intentRouteMemoryQuery,
+        Map<String, Object> runtimeMetadataOverride,
+        AgentModeProfile agentMode
+) {
+}

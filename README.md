@@ -24,6 +24,8 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 
 ## 分层边界
 
+新开发人员建议先阅读 [开发导读](docs/onboarding.md)，再按具体需求进入下述分层。
+
 - `interfaces`：`/v1/chat/runs`、WebSocket run topic subscribe、Event Resume、会话和文档上传协议适配。
 - `application`：聊天主编排、会话、记忆、RuntimeBinding、DomainAgent 会话绑定调用和 Relay Runtime 调用。
 - `application.integration`：应用层出站集成抽象，定义对 Relay Runtime、DomainAgent、IntentService、用例库、会话、记忆、文档、ID 和身份能力的依赖边界。

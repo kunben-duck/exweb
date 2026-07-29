@@ -10,7 +10,19 @@ Content-Type: application/json
 Authorization: {dynamicToken}
 ```
 
-文档中简称该接口为 `/getIntentDecision`。
+ChatService 默认使用上述阻塞接口。部署显式配置
+`financeex.intent.invocation-mode=STREAMING` 时，改为调用：
+
+```http
+POST {intent-base-url}/intent-recognition-configuration/getIntentDecisionStream
+Content-Type: application/json
+Accept: text/event-stream
+Authorization: {dynamicToken}
+```
+
+两种接口请求体逐字段一致，流式 `result` 事件 data 是阻塞接口的完整响应。ChatService
+不会根据响应 Content-Type 自动改调另一接口；完整 SSE 协议见
+[意图识别流式接口方案](intent-stream.md)。
 
 调用方需要先通过企业鉴权服务获取动态 token，再把 token 放入 `Authorization` 请求头。`APP_ID`、静态 token、动态 token 获取地址由部署环境配置，不应写死在代码或文档示例中。
 
@@ -473,7 +485,7 @@ Authorization: {dynamicToken}
 4. `NO_MATCH`：进入 Relay Runtime；`intentName` 固定组装为“未识别到可用意图，进入 {Agent 名称}”，名称由 `financeex.intent.no-match-agent-name` 配置，默认 `FIN Supervisor Agent`。该配置仅影响展示，不改变 `intentCode=finance.runtime.no_intent`、路由或 RouteMemory。
 5. `CLARIFY`：本轮 run 进入 `WAITING_USER`，写入 `run.waiting_user`，前端通过 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 提交澄清回答。
 6. 意图澄清属于路由阶段，不创建 RuntimeBinding，不调用 AgentRuntime。
-7. 用户回答意图澄清后，创建 continuation run，再次调用 `/getIntentDecision`。
+7. 用户回答意图澄清后，创建 continuation run，再次调用当前配置模式对应的意图决策接口。
 8. DomainAgent 拒答回流时，`routeTrigger=domain_reject`，只传当前这一次拒答原因。
 9. `history` 按时间顺序传最新 TopK；澄清链路未完成时，TopK 必须保留当前澄清上下文。
 10. 前端 `agentMode` 不进入 `/getIntentDecision` 请求。`CLARIFY` 期间不暂存模式；最终

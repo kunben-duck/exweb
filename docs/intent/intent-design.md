@@ -5,9 +5,14 @@
 
 ```text
 POST /getIntentDecision
+POST /getIntentDecisionStream
 ```
 
-本文统一使用 `/getIntentDecision` 作为“获取意图决策”接口。Supervisor 必须优先读取 `data.result.routeAction`，不能再只通过 `items.length` 判断路由结果。
+本文统一使用“获取意图决策”表示当前部署选择的接口。ChatService 默认调用阻塞式
+`/getIntentDecision`；配置 `financeex.intent.invocation-mode=STREAMING` 后只调用 SSE
+`/getIntentDecisionStream`。两种请求和最终完整结果一致，Supervisor 必须优先读取
+`data.result.routeAction`，不能再只通过 `items.length` 判断路由结果。流式过程中的
+`progress/delta` 只用于历史与实时展示，不参与路由裁决。
 0703
 
 ```mermaid
@@ -464,7 +469,7 @@ JSON 数组顺序是稳定的，因此可以用来表达历史顺序。
 说明：
 
 * 不单独设计 `pending_clarify`。
-* `clarify` 一条记录表达用户“触发澄清的问题 + Supervisor 澄清问题”；用户回答作为本轮再次调用 `/getIntentDecision` 的 `query` 传入，不在 `clarify` 记录中重复保存。
+* `clarify` 一条记录表达用户“触发澄清的问题 + Supervisor 澄清问题”；用户回答作为本轮再次调用当前配置的意图决策接口的 `query` 传入，不在 `clarify` 记录中重复保存。
 * 多轮澄清时追加多条 `clarify`。
 * 澄清成功后，将多条 `clarify` 折叠成一条 `route`。
 
@@ -506,7 +511,7 @@ JSON 数组顺序是稳定的，因此可以用来表达历史顺序。
 | `ROUTE_SINGLE` | 单意图命中         | 转发 `items[0]` 对应领域 Agent。                                                      |
 | `ROUTE_MULTI`  | 多意图命中         | 进入 Supervisor 自身规划 React。                                                        |
 | `NO_MATCH`     | 当前配置领域无命中 | 进入兜底 React / 工具处理。                                                             |
-| `CLARIFY`      | 需要路由前置澄清   | 展示 `clarification.clarifyQuestion`，等待用户回答后再次调用 `/getIntentDecision`。 |
+| `CLARIFY`      | 需要路由前置澄清   | 展示 `clarification.clarifyQuestion`，等待用户回答后再次调用当前配置的意图决策接口。 |
 
 `clarification.type` 当前只保留两类：
 
@@ -580,7 +585,7 @@ Supervisor 调用意图服务时，将拒答说明放入：
 ### 9.3 澄清中
 
 如果还在澄清中未路由（ 上一轮 `/getIntentDecision` 返回 `routeAction=CLARIFY`），Supervisor 向用户澄清。
-用户回答后，再次调用 `/getIntentDecision` 时，将触发澄清的问题和澄清问题作为 `clarify` 写入 history；用户回答放在本轮 `query` 中。
+用户回答后，再次调用当前配置的意图决策接口时，将触发澄清的问题和澄清问题作为 `clarify` 写入 history；用户回答放在本轮 `query` 中。
 
 多轮澄清期间，保留多条 clarify。
 
@@ -639,7 +644,7 @@ Supervisor 调用意图服务时，将拒答说明放入：
 
 当前 ChatService 会把这条折叠文本作为最终 DomainAgent/Relay 的 `query`；再次调用意图服务时仍保持顶层 `query=最新澄清回答`，折叠前的原始问题和澄清问答通过 `conversationContext.history` 传入。
 
-下一轮再次调用 `/getIntentDecision` 时：
+下一轮再次调用当前配置的意图决策接口时：
 
 - `query` 只传当前用户最新输入。
 - `conversationContext.history` 只传折叠后的 `route`，不要继续传旧的多条 `clarify` 明细。

@@ -25,10 +25,20 @@ public class IntentServiceHttpProperties {
     private String noMatchAgentName = DEFAULT_NO_MATCH_AGENT_NAME;
     /** 意图识别接口路径。 */
     private String recognizePath = "/intent-recognition-configuration/getIntentDecision";
+    /** 意图识别流式接口路径。 */
+    private String recognizeStreamPath = "/intent-recognition-configuration/getIntentDecisionStream";
+    /** 意图识别调用协议，默认保持阻塞模式。 */
+    private IntentInvocationMode invocationMode = IntentInvocationMode.BLOCKING;
     /** 是否要求意图服务返回 trace。 */
     private boolean trace = false;
     /** 单次意图识别调用超时时间。 */
     private Duration timeout = Duration.ofSeconds(5);
+    /** 流式调用等待首个业务事件的最长时间。 */
+    private Duration streamFirstEventTimeout = Duration.ofSeconds(5);
+    /** 流式调用相邻网络帧之间的最长空闲时间。 */
+    private Duration streamIdleTimeout = Duration.ofSeconds(30);
+    /** 单次流式调用尝试的最长总时间。 */
+    private Duration streamTotalTimeout = Duration.ofSeconds(120);
     /** 意图服务调用失败后的最大重试次数；不包含首次调用，运行时会限制到安全上限。 */
     private int maxRetries = 3;
 
@@ -72,6 +82,22 @@ public class IntentServiceHttpProperties {
         this.recognizePath = recognizePath;
     }
 
+    public String getRecognizeStreamPath() {
+        return recognizeStreamPath;
+    }
+
+    public void setRecognizeStreamPath(String recognizeStreamPath) {
+        this.recognizeStreamPath = recognizeStreamPath;
+    }
+
+    public IntentInvocationMode getInvocationMode() {
+        return invocationMode;
+    }
+
+    public void setInvocationMode(IntentInvocationMode invocationMode) {
+        this.invocationMode = invocationMode;
+    }
+
     public boolean isTrace() {
         return trace;
     }
@@ -86,6 +112,30 @@ public class IntentServiceHttpProperties {
 
     public void setTimeout(Duration timeout) {
         this.timeout = timeout;
+    }
+
+    public Duration getStreamFirstEventTimeout() {
+        return streamFirstEventTimeout;
+    }
+
+    public void setStreamFirstEventTimeout(Duration streamFirstEventTimeout) {
+        this.streamFirstEventTimeout = streamFirstEventTimeout;
+    }
+
+    public Duration getStreamIdleTimeout() {
+        return streamIdleTimeout;
+    }
+
+    public void setStreamIdleTimeout(Duration streamIdleTimeout) {
+        this.streamIdleTimeout = streamIdleTimeout;
+    }
+
+    public Duration getStreamTotalTimeout() {
+        return streamTotalTimeout;
+    }
+
+    public void setStreamTotalTimeout(Duration streamTotalTimeout) {
+        this.streamTotalTimeout = streamTotalTimeout;
     }
 
     public int getMaxRetries() {
@@ -106,9 +156,24 @@ public class IntentServiceHttpProperties {
         return Math.min(MAX_NORMALIZED_RETRIES, Math.max(0, maxRetries));
     }
 
+    public Duration normalizedStreamFirstEventTimeout() {
+        return positiveOrDefault(streamFirstEventTimeout, Duration.ofSeconds(5));
+    }
+
+    public Duration normalizedStreamIdleTimeout() {
+        return positiveOrDefault(streamIdleTimeout, Duration.ofSeconds(30));
+    }
+
+    public Duration normalizedStreamTotalTimeout() {
+        return positiveOrDefault(streamTotalTimeout, Duration.ofSeconds(120));
+    }
+
     public String normalizedNoMatchAgentName() {
         String normalized = noMatchAgentName == null ? "" : noMatchAgentName.strip();
         return normalized.isEmpty() ? DEFAULT_NO_MATCH_AGENT_NAME : normalized;
     }
 
+    private Duration positiveOrDefault(Duration value, Duration fallback) {
+        return value == null || value.isZero() || value.isNegative() ? fallback : value;
+    }
 }

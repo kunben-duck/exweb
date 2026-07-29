@@ -94,11 +94,17 @@ financeex:
     response-access-name-prefix: ${FINANCEEX_INTENT_RESPONSE_ACCESS_NAME_PREFIX:}
     # NO_MATCH 仍进入 Relay；该配置只控制 intent-result 中展示的目标 Agent 名称。
     no-match-agent-name: ${FINANCEEX_INTENT_NO_MATCH_AGENT_NAME:FIN Supervisor Agent}
+    # 默认保持原阻塞调用；切换为 STREAMING 后才调用 SSE 接口。
+    invocation-mode: ${FINANCEEX_INTENT_INVOCATION_MODE:BLOCKING}
     recognize-path: ${FINANCEEX_INTENT_RECOGNIZE_PATH:/intent-recognition-configuration/getIntentDecision}
+    recognize-stream-path: ${FINANCEEX_INTENT_RECOGNIZE_STREAM_PATH:/intent-recognition-configuration/getIntentDecisionStream}
     trace: ${FINANCEEX_INTENT_TRACE:false}
     # confidence 仅用于记录和排障；是否进入 DomainAgent 以 routeAction=ROUTE_SINGLE 为准。
     confidence-threshold: ${FINANCEEX_INTENT_CONFIDENCE_THRESHOLD:0.85}
     timeout: ${FINANCEEX_INTENT_TIMEOUT:5s}
+    stream-first-event-timeout: ${FINANCEEX_INTENT_STREAM_FIRST_EVENT_TIMEOUT:5s}
+    stream-idle-timeout: ${FINANCEEX_INTENT_STREAM_IDLE_TIMEOUT:30s}
+    stream-total-timeout: ${FINANCEEX_INTENT_STREAM_TOTAL_TIMEOUT:120s}
     # 意图服务调用失败后的最大重试次数；不包含首次调用，运行时最多按 10 次生效。
     max-retries: ${FINANCEEX_INTENT_MAX_RETRIES:3}
     # 意图技术/协议失败在重试耗尽后的处理：RELAY_FALLBACK 或 FAIL_RUN。

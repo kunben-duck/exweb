@@ -18,9 +18,6 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Component;
-
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,8 +29,6 @@ import java.util.concurrent.TimeUnit;
  * <p>这里把同步意图调用转换为 agent-like 事件流；后续意图服务改成流式协议时，
  * 只需要替换本 adapter，ChatService 主编排仍消费同一组 IntentAgent 帧。</p>
  */
-@Component
-@ConditionalOnProperty(prefix = "financeex.intent", name = "enabled", havingValue = "true")
 public class BlockingIntentAgentRuntime implements IntentAgentRuntime {
     private static final AppLogger log = AppLoggerFactory.getLogger(BlockingIntentAgentRuntime.class);
 

@@ -106,7 +106,8 @@
 
     <!--
       仅允许当前 owner 刷新运行租约，防止非 owner 实例误续约。
-      入参: runId 定位 execution，ownerInstanceId 必须匹配当前 owner，leaseUntil 为新的租约截止时间。
+      入参: runId 定位 execution，ownerInstanceId/fencingToken 必须匹配当前 owner，
+      leaseUntil 为新的租约截止时间。
     -->
     <update id="heartbeat">
         UPDATE fin_ex_chat_run_execution_t
@@ -115,8 +116,39 @@
             updated_at = CURRENT_TIMESTAMP
         WHERE run_id = #{runId}
           AND owner_instance_id = #{ownerInstanceId}
+          AND fencing_token = #{fencingToken}
           AND execution_status IN ('RUNNING', 'CANCELLING')
     </update>
+
+    <!--
+      使用完整 claim 元组批量刷新租约。任一 claim 的 owner 或 fencing token 失效时不会被续租。
+      入参: claims 为同一 heartbeat 批次，leaseUntil 为本批统一的新租约截止时间。
+    -->
+    <update id="heartbeatBatch">
+        UPDATE fin_ex_chat_run_execution_t
+        SET heartbeat_at = CURRENT_TIMESTAMP,
+            lease_until = #{leaseUntil},
+            updated_at = CURRENT_TIMESTAMP
+        WHERE execution_status IN ('RUNNING', 'CANCELLING')
+          AND (run_id, owner_instance_id, fencing_token) IN
+          <foreach collection="claims" item="claim" open="(" separator="," close=")">
+              (#{claim.runId}, #{claim.ownerInstanceId}, #{claim.fencingToken})
+          </foreach>
+    </update>
+
+    <!--
+      批量续租部分命中时回读仍有效的完整 claim，调用方仅取消数据库明确拒绝的旧执行流。
+      入参: claims 与 heartbeatBatch 相同。
+    -->
+    <select id="findHeartbeatEligibleClaims" resultMap="chatRunExecutionResultMap">
+        SELECT <include refid="executionColumns"/>
+        FROM fin_ex_chat_run_execution_t
+        WHERE execution_status IN ('RUNNING', 'CANCELLING')
+          AND (run_id, owner_instance_id, fencing_token) IN
+          <foreach collection="claims" item="claim" open="(" separator="," close=")">
+              (#{claim.runId}, #{claim.ownerInstanceId}, #{claim.fencingToken})
+          </foreach>
+    </select>
 
     <!--
       标记 execution 终态，避免 watchdog 再次抢占已完成 run。

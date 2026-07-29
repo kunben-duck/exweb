@@ -50,6 +50,10 @@ public class ChatStreamProperties {
     private Duration eventBatchMaxWait = Duration.ofMillis(20);
     /** 单个事件批次最大序列化字节数，达到后立即落库。 */
     private DataSize eventBatchMaxBytes = DataSize.ofKilobytes(256);
+    /** 终态 assistant parts 单次批量写入最大条数。 */
+    private int assistantPartBatchMaxSize = 100;
+    /** 终态 assistant parts 单次批量写入最大 UTF-8 字节数。 */
+    private DataSize assistantPartBatchMaxBytes = DataSize.ofMegabytes(1);
 
     public boolean isDeltaCoalesceEnabled() {
         return deltaCoalesceEnabled;
@@ -229,6 +233,36 @@ public class ChatStreamProperties {
         return eventBatchMaxBytes.toBytes();
     }
 
+    public int getAssistantPartBatchMaxSize() {
+        return assistantPartBatchMaxSize;
+    }
+
+    public void setAssistantPartBatchMaxSize(int assistantPartBatchMaxSize) {
+        this.assistantPartBatchMaxSize = assistantPartBatchMaxSize;
+    }
+
+    public DataSize getAssistantPartBatchMaxBytes() {
+        return assistantPartBatchMaxBytes;
+    }
+
+    public void setAssistantPartBatchMaxBytes(DataSize assistantPartBatchMaxBytes) {
+        this.assistantPartBatchMaxBytes = assistantPartBatchMaxBytes;
+    }
+
+    public int requiredAssistantPartBatchMaxSize() {
+        if (assistantPartBatchMaxSize <= 0) {
+            throw new IllegalArgumentException("financeex.chat-stream.assistant-part-batch-max-size 必须大于 0");
+        }
+        return assistantPartBatchMaxSize;
+    }
+
+    public long requiredAssistantPartBatchMaxBytes() {
+        if (assistantPartBatchMaxBytes == null || assistantPartBatchMaxBytes.toBytes() <= 0) {
+            throw new IllegalArgumentException("financeex.chat-stream.assistant-part-batch-max-bytes 必须大于 0");
+        }
+        return assistantPartBatchMaxBytes.toBytes();
+    }
+
     @AssertTrue(message = "financeex.chat-stream event batch thresholds must all be greater than 0")
     public boolean isEventBatchConfigurationValid() {
         return eventBatchMaxSize > 0
@@ -237,6 +271,13 @@ public class ChatStreamProperties {
                 && !eventBatchMaxWait.isNegative()
                 && eventBatchMaxBytes != null
                 && eventBatchMaxBytes.toBytes() > 0;
+    }
+
+    @AssertTrue(message = "financeex.chat-stream assistant part batch thresholds must all be greater than 0")
+    public boolean isAssistantPartBatchConfigurationValid() {
+        return assistantPartBatchMaxSize > 0
+                && assistantPartBatchMaxBytes != null
+                && assistantPartBatchMaxBytes.toBytes() > 0;
     }
 
     public enum LiveSourceMode {

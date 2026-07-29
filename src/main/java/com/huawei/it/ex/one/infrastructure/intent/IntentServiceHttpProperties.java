@@ -27,8 +27,8 @@ public class IntentServiceHttpProperties {
     private String recognizePath = "/intent-recognition-configuration/getIntentDecision";
     /** 意图识别流式接口路径。 */
     private String recognizeStreamPath = "/intent-recognition-configuration/getIntentDecisionStream";
-    /** 意图识别调用协议，默认保持阻塞模式。 */
-    private IntentInvocationMode invocationMode = IntentInvocationMode.BLOCKING;
+    /** 意图识别调用协议，默认使用流式模式。 */
+    private IntentInvocationMode invocationMode = IntentInvocationMode.STREAMING;
     /** 是否要求意图服务返回 trace。 */
     private boolean trace = false;
     /** 单次意图识别调用超时时间。 */
@@ -39,6 +39,12 @@ public class IntentServiceHttpProperties {
     private Duration streamIdleTimeout = Duration.ofSeconds(30);
     /** 单次流式调用尝试的最长总时间。 */
     private Duration streamTotalTimeout = Duration.ofSeconds(120);
+    /** 流式调用获取企业鉴权请求头的最长时间。 */
+    private Duration streamAuthTimeout = Duration.ofSeconds(5);
+    /** 流式鉴权阻塞 IO 调度器最大线程数。 */
+    private int streamAuthIoMaxSize = 4;
+    /** 流式鉴权阻塞 IO 调度器队列容量。 */
+    private int streamAuthIoQueueCapacity = 128;
     /** 意图服务调用失败后的最大重试次数；不包含首次调用，运行时会限制到安全上限。 */
     private int maxRetries = 3;
 
@@ -138,6 +144,30 @@ public class IntentServiceHttpProperties {
         this.streamTotalTimeout = streamTotalTimeout;
     }
 
+    public Duration getStreamAuthTimeout() {
+        return streamAuthTimeout;
+    }
+
+    public void setStreamAuthTimeout(Duration streamAuthTimeout) {
+        this.streamAuthTimeout = streamAuthTimeout;
+    }
+
+    public int getStreamAuthIoMaxSize() {
+        return streamAuthIoMaxSize;
+    }
+
+    public void setStreamAuthIoMaxSize(int streamAuthIoMaxSize) {
+        this.streamAuthIoMaxSize = streamAuthIoMaxSize;
+    }
+
+    public int getStreamAuthIoQueueCapacity() {
+        return streamAuthIoQueueCapacity;
+    }
+
+    public void setStreamAuthIoQueueCapacity(int streamAuthIoQueueCapacity) {
+        this.streamAuthIoQueueCapacity = streamAuthIoQueueCapacity;
+    }
+
     public int getMaxRetries() {
         return maxRetries;
     }
@@ -166,6 +196,18 @@ public class IntentServiceHttpProperties {
 
     public Duration normalizedStreamTotalTimeout() {
         return positiveOrDefault(streamTotalTimeout, Duration.ofSeconds(120));
+    }
+
+    public Duration normalizedStreamAuthTimeout() {
+        return positiveOrDefault(streamAuthTimeout, Duration.ofSeconds(5));
+    }
+
+    public int normalizedStreamAuthIoMaxSize() {
+        return Math.max(1, streamAuthIoMaxSize);
+    }
+
+    public int normalizedStreamAuthIoQueueCapacity() {
+        return Math.max(1, streamAuthIoQueueCapacity);
     }
 
     public String normalizedNoMatchAgentName() {

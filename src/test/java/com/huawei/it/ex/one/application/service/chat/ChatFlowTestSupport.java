@@ -1135,7 +1135,8 @@ abstract class ChatFlowTestSupport {
         @Override public boolean isCurrentOwnerRunning(RunExecutionClaim claim) {
             return !rejectOwnerRunningChecks && ChatRunExecutionRepository.super.isCurrentOwnerRunning(claim);
         }
-        @Override public boolean heartbeat(String runId, String ownerInstanceId, Duration leaseDuration) { return true; }
+        @Override public boolean heartbeat(String runId, String ownerInstanceId, long fencingToken,
+                                           Duration leaseDuration) { return true; }
         @Override public boolean markTerminal(String runId, ChatRunExecutionStatus terminalStatus) {
             ChatRunExecution current = executions.get(runId);
             if (current == null || terminalStatus == null) {

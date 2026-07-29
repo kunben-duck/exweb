@@ -28,13 +28,16 @@ financeex:
     enabled: false
     base-url: http://localhost:9200
     access-name: local-intent
-    invocation-mode: BLOCKING
+    invocation-mode: STREAMING
     recognize-path: /intent-recognition-configuration/getIntentDecision
     recognize-stream-path: /intent-recognition-configuration/getIntentDecisionStream
     timeout: 5s
     stream-first-event-timeout: 5s
     stream-idle-timeout: 30s
     stream-total-timeout: 120s
+    stream-auth-timeout: 5s
+    stream-auth-io-max-size: 4
+    stream-auth-io-queue-capacity: 128
     failure-strategy: RELAY_FALLBACK
   domain-agent:
     enabled: false

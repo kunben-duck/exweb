@@ -27,26 +27,26 @@ class IntentAgentRuntimeConfigurationTest {
             IntentDecisionStreamFrame.result(IntentRecognitionResult.finalDecision(decision), 1, 1));
 
     @Test
-    void selectsBlockingRuntimeByDefault() {
+    void selectsStreamingRuntimeByDefault() {
         contextRunner()
                 .withPropertyValues("financeex.intent.enabled=true")
                 .run(context -> {
                     assertThat(context).hasSingleBean(IntentAgentRuntime.class);
                     assertThat(context.getBean(IntentAgentRuntime.class))
-                            .isInstanceOf(BlockingIntentAgentRuntime.class);
+                            .isInstanceOf(StreamingIntentAgentRuntime.class);
                 });
     }
 
     @Test
-    void selectsStreamingRuntimeExplicitly() {
+    void selectsBlockingRuntimeExplicitly() {
         contextRunner()
                 .withPropertyValues(
                         "financeex.intent.enabled=true",
-                        "financeex.intent.invocation-mode=STREAMING")
+                        "financeex.intent.invocation-mode=BLOCKING")
                 .run(context -> {
                     assertThat(context).hasSingleBean(IntentAgentRuntime.class);
                     assertThat(context.getBean(IntentAgentRuntime.class))
-                            .isInstanceOf(StreamingIntentAgentRuntime.class);
+                            .isInstanceOf(BlockingIntentAgentRuntime.class);
                 });
     }
 

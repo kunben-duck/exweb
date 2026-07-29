@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.infrastructure.memory;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.huawei.it.ex.one.application.config.ChatStreamProperties;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePart;
 
@@ -123,7 +124,7 @@ class LayeredChatMessageRepositoryTest {
         private ChatMessage saved;
 
         private FakeDatabaseStore() {
-            super(null, null);
+            super(null, null, new ChatStreamProperties());
         }
 
         @Override

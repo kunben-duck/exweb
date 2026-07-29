@@ -18,6 +18,8 @@ public class ChatRunOperationalProperties {
     private Duration leaseDuration = Duration.ofSeconds(90);
     /** 当前 owner 刷新 run 租约的心跳间隔。 */
     private Duration heartbeatInterval = Duration.ofSeconds(15);
+    /** 单条 heartbeat SQL 中最多续租的 execution claim 数量。 */
+    private int heartbeatBatchSize = 50;
     /** 是否启用后台 watchdog 巡检。 */
     private boolean watchdogEnabled = true;
     /** 应用 ready 后首次启动 watchdog 的延迟时间。 */
@@ -61,6 +63,14 @@ public class ChatRunOperationalProperties {
 
     public void setHeartbeatInterval(Duration heartbeatInterval) {
         this.heartbeatInterval = heartbeatInterval;
+    }
+
+    public int getHeartbeatBatchSize() {
+        return heartbeatBatchSize;
+    }
+
+    public void setHeartbeatBatchSize(int heartbeatBatchSize) {
+        this.heartbeatBatchSize = heartbeatBatchSize;
     }
 
     public boolean isWatchdogEnabled() {
@@ -181,6 +191,10 @@ public class ChatRunOperationalProperties {
 
     public Duration normalizedHeartbeatInterval() {
         return positiveOrDefault(heartbeatInterval, Duration.ofSeconds(15));
+    }
+
+    public int normalizedHeartbeatBatchSize() {
+        return Math.max(1, heartbeatBatchSize);
     }
 
     public Duration normalizedWatchdogInitialDelay() {

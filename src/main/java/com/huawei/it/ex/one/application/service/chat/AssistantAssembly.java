@@ -41,6 +41,9 @@ final class AssistantAssembly {
             return;
         }
         if (event.type() != null && event.type().startsWith("runtime.")) {
+            if (isTransientIntentProcessEvent(event.payload())) {
+                return;
+            }
             if (isIntentClarificationResponse(event.payload())) {
                 return;
             }
@@ -256,6 +259,16 @@ final class AssistantAssembly {
 
     private static boolean isIntentClarificationResponse(Map<String, Object> payload) {
         return "intent-clarification-response".equals(stringValue(payload.get("sourceType")));
+    }
+
+    private static boolean isTransientIntentProcessEvent(Map<String, Object> payload) {
+        if (!"intent-agent".equals(stringValue(payload.get("source")))) {
+            return false;
+        }
+        String sourceType = stringValue(payload.get("sourceType"));
+        return "intent-start".equals(sourceType)
+                || "intent-progress".equals(sourceType)
+                || "intent-delta".equals(sourceType);
     }
 
     private static String intentClarificationQuestion(Map<String, Object> payload) {

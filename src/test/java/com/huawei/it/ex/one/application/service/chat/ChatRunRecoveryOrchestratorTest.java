@@ -633,7 +633,8 @@ class ChatRunRecoveryOrchestratorTest {
         void put(ChatRunExecution execution) { executions.put(execution.runId(), execution); }
         @Override public ChatRunExecution createForRun(ChatRun run, String executionId, String ownerInstanceId, Duration leaseDuration) { throw new UnsupportedOperationException(); }
         @Override public Optional<ChatRunExecution> findByRunId(String runId) { return Optional.ofNullable(executions.get(runId)); }
-        @Override public boolean heartbeat(String runId, String ownerInstanceId, Duration leaseDuration) { return false; }
+        @Override public boolean heartbeat(String runId, String ownerInstanceId, long fencingToken,
+                                           Duration leaseDuration) { return false; }
         @Override public boolean markTerminal(String runId, ChatRunExecutionStatus terminalStatus) {
             ChatRunExecution current = executions.get(runId);
             if (current == null) { return false; }

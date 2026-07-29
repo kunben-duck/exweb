@@ -83,6 +83,8 @@ starts_per_minute = starts_per_second * 60
 | 事件批次条数 | `financeex.chat-stream.event-batch-max-size` | 16 |
 | 事件批次等待 | `financeex.chat-stream.event-batch-max-wait` | 20 ms |
 | 事件批次字节 | `financeex.chat-stream.event-batch-max-bytes` | 256 KB |
+| assistant part 批次条数 | `financeex.chat-stream.assistant-part-batch-max-size` | 100 |
+| assistant part 批次字节 | `financeex.chat-stream.assistant-part-batch-max-bytes` | 1 MB |
 | Relay 并发许可 | `financeex.resource-isolation.agent-runtime-max-concurrent` | 64 |
 | DomainAgent 并发许可 | `financeex.resource-isolation.domain-agent-max-concurrent` | 64 |
 | 文档存储并发许可 | `financeex.resource-isolation.document-storage-max-concurrent` | 32 |
@@ -103,7 +105,7 @@ starts_per_minute = starts_per_second * 60
 3. 流式事件先写入 `fin_ex_chat_event_t`，成功后才进入状态观察、Redis 和前端发布。
 4. Relay 和 DomainAgent 普通事件按同一 run 组批；控制事件、拒答、Interaction 和终态立即写入。
 5. assistant 内容和用户可见 parts 在 run 期间保存在内存，终态时再保存完整 assistant。
-6. 当前 message parts 在终态事务内逐条插入。超长任务可能长期占用数据库连接并触发终态事务超时。
+6. message parts 在终态事务内按默认 `100 条 / 1MB` 分批执行多行 INSERT；超长任务仍需测量终态事务耗时。
 7. API Store 上传会把整个文件读取为 `byte[]` 后再构造下游 multipart 请求，大文件并发必须单独测量。
 8. WebSocket 空闲连接容量与活跃流式订阅容量是不同指标，不能互相替代。
 
@@ -705,7 +707,7 @@ message.snapshot     3%
 runtime.card         2%
 ```
 
-每个 run 最后发送明确 `message.completed` 和 run 终态。Heavy 模型用于暴露 parts 内存和终态逐条写入压力，
+每个 run 最后发送明确 `message.completed` 和 run 终态。Heavy 模型用于暴露 parts 内存和终态批量写入压力，
 不能用 Light 结果代替。
 
 ### 14.2 路由矩阵

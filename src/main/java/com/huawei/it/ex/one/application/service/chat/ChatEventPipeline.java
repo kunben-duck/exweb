@@ -239,6 +239,9 @@ final class ChatEventPipeline {
         }
         String source = firstText(event.payload() == null ? null : event.payload().get("source"));
         if (source != null) {
+            if ("intent-agent".equals(source)) {
+                return batchableIntentProcessEvent(event);
+            }
             return RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(source)
                     || RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(source);
         }
@@ -246,6 +249,15 @@ final class ChatEventPipeline {
         return binding != null
                 && (RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(binding.provider())
                 || RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider()));
+    }
+
+    static boolean batchableIntentProcessEvent(ChatEvent event) {
+        if (event == null || event.payload() == null
+                || !"intent-agent".equals(firstText(event.payload().get("source")))) {
+            return false;
+        }
+        String sourceType = firstText(event.payload().get("sourceType"));
+        return "intent-progress".equals(sourceType) || "intent-delta".equals(sourceType);
     }
 
     private boolean interactionControlEvent(ChatEvent event) {
@@ -288,7 +300,7 @@ final class ChatEventPipeline {
                 .anyMatch(event -> event != null && eventType.equals(event.type()));
     }
 
-    private String firstText(Object value) {
+    private static String firstText(Object value) {
         return value == null || String.valueOf(value).isBlank() ? null : String.valueOf(value);
     }
 

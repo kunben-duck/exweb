@@ -16,13 +16,14 @@ import org.springframework.context.annotation.Configuration;
 public class IntentAgentRuntimeConfiguration {
     @Bean
     @ConditionalOnProperty(prefix = "financeex.intent", name = "invocation-mode",
-            havingValue = "BLOCKING", matchIfMissing = true)
+            havingValue = "BLOCKING")
     public IntentAgentRuntime blockingIntentAgentRuntime(IntentService intentService) {
         return new BlockingIntentAgentRuntime(intentService);
     }
 
     @Bean
-    @ConditionalOnProperty(prefix = "financeex.intent", name = "invocation-mode", havingValue = "STREAMING")
+    @ConditionalOnProperty(prefix = "financeex.intent", name = "invocation-mode",
+            havingValue = "STREAMING", matchIfMissing = true)
     public IntentAgentRuntime streamingIntentAgentRuntime(IntentDecisionStreamClient streamClient) {
         return new StreamingIntentAgentRuntime(streamClient);
     }

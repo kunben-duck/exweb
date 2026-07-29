@@ -270,6 +270,45 @@ class MyBatisXmlMapperConsistencyTest {
     }
 
     @Test
+    void executionHeartbeatShouldBeGuardedByOwnerAndFencingToken() throws IOException {
+        String mapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("persistence/ChatRunExecutionMapper.opengauss.xml"));
+        int start = mapper.indexOf("<update id=\"heartbeat\"");
+        int end = mapper.indexOf("</update>", start);
+
+        assertThat(start).isGreaterThanOrEqualTo(0);
+        assertThat(end).isGreaterThan(start);
+        assertThat(mapper.substring(start, end))
+                .contains("owner_instance_id = #{ownerInstanceId}")
+                .contains("fencing_token = #{fencingToken}")
+                .contains("execution_status IN ('RUNNING', 'CANCELLING')");
+    }
+
+    @Test
+    void executionHeartbeatBatchShouldPreserveCompleteClaimGuard() throws IOException {
+        String mapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("persistence/ChatRunExecutionMapper.opengauss.xml"));
+        int updateStart = mapper.indexOf("<update id=\"heartbeatBatch\"");
+        int updateEnd = mapper.indexOf("</update>", updateStart);
+        int readStart = mapper.indexOf("<select id=\"findHeartbeatEligibleClaims\"");
+        int readEnd = mapper.indexOf("</select>", readStart);
+
+        assertThat(updateStart).isGreaterThanOrEqualTo(0);
+        assertThat(updateEnd).isGreaterThan(updateStart);
+        assertThat(readStart).isGreaterThan(updateEnd);
+        assertThat(readEnd).isGreaterThan(readStart);
+        assertThat(mapper.substring(updateStart, updateEnd))
+                .contains("execution_status IN ('RUNNING', 'CANCELLING')")
+                .contains("(run_id, owner_instance_id, fencing_token) IN")
+                .contains("#{claim.runId}")
+                .contains("#{claim.ownerInstanceId}")
+                .contains("#{claim.fencingToken}");
+        assertThat(mapper.substring(readStart, readEnd))
+                .contains("execution_status IN ('RUNNING', 'CANCELLING')")
+                .contains("(run_id, owner_instance_id, fencing_token) IN");
+    }
+
+    @Test
     void chatMessagePartTypesShouldFitSchemaColumn() throws IOException {
         String schema = Files.readString(Path.of("src/main/resources/db/init-20260718.sql"));
         Matcher columnMatcher = MESSAGE_PART_TYPE_COLUMN.matcher(schema);

@@ -7,6 +7,7 @@ import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -65,10 +66,34 @@ public interface ChatRunExecutionRepository {
      *
      * @param runId run 标识。
      * @param ownerInstanceId 当前 owner 实例 ID。
+     * @param fencingToken 当前 execution fencing token。
      * @param leaseDuration 新租约时长。
      * @return 是否刷新成功。
      */
-    boolean heartbeat(String runId, String ownerInstanceId, Duration leaseDuration);
+    boolean heartbeat(String runId, String ownerInstanceId, long fencingToken, Duration leaseDuration);
+
+    /**
+     * 批量刷新当前 owner 持有的 run 租约。
+     *
+     * <p>默认实现保持测试替身和兼容实现可用；生产数据库实现应使用单条批量 UPDATE。</p>
+     *
+     * @param claims 本批 execution 写入权声明。
+     * @param leaseDuration 新租约时长。
+     * @return 数据库确认仍有效并完成续租的 claim。
+     */
+    default List<RunExecutionClaim> heartbeatBatch(List<RunExecutionClaim> claims, Duration leaseDuration) {
+        if (claims == null || claims.isEmpty()) {
+            return List.of();
+        }
+        List<RunExecutionClaim> renewed = new ArrayList<>(claims.size());
+        for (RunExecutionClaim claim : claims) {
+            if (claim != null && heartbeat(
+                    claim.runId(), claim.ownerInstanceId(), claim.fencingToken(), leaseDuration)) {
+                renewed.add(claim);
+            }
+        }
+        return List.copyOf(renewed);
+    }
 
     /**
      * 将 execution 同步到 run 终态。

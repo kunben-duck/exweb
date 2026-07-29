@@ -304,16 +304,19 @@ ChatService 保留阻塞和流式两套调用实现，由启动配置选择：
 
 | 配置 | 默认值 | 说明 |
 | --- | --- | --- |
-| `financeex.intent.invocation-mode` | `BLOCKING` | 只允许 `BLOCKING` 或 `STREAMING`。 |
+| `financeex.intent.invocation-mode` | `STREAMING` | 只允许 `BLOCKING` 或 `STREAMING`。 |
 | `financeex.intent.recognize-path` | `/intent-recognition-configuration/getIntentDecision` | 阻塞接口路径。 |
 | `financeex.intent.recognize-stream-path` | `/intent-recognition-configuration/getIntentDecisionStream` | SSE 接口路径。 |
 | `financeex.intent.timeout` | `5s` | 阻塞接口单次调用超时。 |
 | `financeex.intent.stream-first-event-timeout` | `5s` | SSE 等待首个业务事件的最长时间；ping 不刷新该超时。 |
 | `financeex.intent.stream-idle-timeout` | `30s` | 相邻 SSE 网络帧的最长间隔；ping 会刷新该超时。 |
 | `financeex.intent.stream-total-timeout` | `120s` | 单次 SSE 尝试的总时限；任何事件均不延长。 |
+| `financeex.intent.stream-auth-timeout` | `5s` | 获取企业鉴权 Header 的最长时间。 |
+| `financeex.intent.stream-auth-io-max-size` | `4` | 鉴权阻塞 IO 专用调度器最大线程数。 |
+| `financeex.intent.stream-auth-io-queue-capacity` | `128` | 鉴权阻塞 IO 专用调度器队列容量。 |
 
-默认模式为 `BLOCKING`，升级后继续调用原接口。`STREAMING` 模式只调用
-`getIntentDecisionStream`。ChatService 不根据 Content-Type 改调另一接口；响应类型与配置不匹配时，
+默认模式为 `STREAMING` 并只调用 `getIntentDecisionStream`；显式配置 `BLOCKING` 时调用
+`getIntentDecision`。ChatService 不根据 Content-Type 改调另一接口；响应类型与配置不匹配时，
 本次尝试按协议失败处理。
 
 两种调用实现共享请求 mapper、结果 mapper、鉴权 Header 和重试策略。流式模式只消费
@@ -327,6 +330,9 @@ ChatService 保留阻塞和流式两套调用实现，由启动配置选择：
 - 未知过程事件以及结构错误的 `progress/delta` 被忽略，不参与路由。
 
 过程事件携带 `attempt/maxAttempts`，并按接收顺序进入 ChatEvent 的持久化与实时发布链路。
+`intent-start/intent-progress/intent-delta` 不进入历史 message parts 或分享快照；
+`intent-result` 继续写入历史 part。`intent-progress/intent-delta` 参与同 run 的
+`16 条 / 20ms / 256KB` 事件批量落库，`intent-result` 到达时先刷新待处理批次，再执行路由。
 一次 SSE 连接对应一次尝试；重试会新建连接，已经落库的过程事件不撤回。HTTP 错误、SSE error、
 首事件超时、空闲超时、总超时、异常断流、空流及非法终态都使用现有
 `financeex.intent.max-retries`。重试耗尽后仍由
@@ -334,4 +340,5 @@ ChatService 保留阻塞和流式两套调用实现，由启动配置选择：
 
 `ROUTE_SINGLE`、`ROUTE_MULTI`、`NO_MATCH` 和 `CLARIFY` 的业务处理、RouteMemory、
 RuntimeBinding、DomainAgent 拒答重路由及 Interaction 状态机不区分调用模式。
+合法 `CLARIFY` 立即返回且不进入重试；`FINAL` 结果缺少 decision 属于协议失败。
 `getIntentResultStream` 不属于 ChatService 调用范围。

@@ -28,6 +28,8 @@ class ChatStreamPropertiesTest {
             assertThat(properties.requiredEventBatchMaxSize()).isEqualTo(16);
             assertThat(properties.requiredEventBatchMaxWait()).isEqualTo(Duration.ofMillis(20));
             assertThat(properties.requiredEventBatchMaxBytes()).isEqualTo(DataSize.ofKilobytes(256).toBytes());
+            assertThat(properties.requiredAssistantPartBatchMaxSize()).isEqualTo(100);
+            assertThat(properties.requiredAssistantPartBatchMaxBytes()).isEqualTo(DataSize.ofMegabytes(1).toBytes());
         });
     }
 
@@ -37,13 +39,18 @@ class ChatStreamPropertiesTest {
                         "financeex.chat-stream.event-batch-enabled=false",
                         "financeex.chat-stream.event-batch-max-size=8",
                         "financeex.chat-stream.event-batch-max-wait=40ms",
-                        "financeex.chat-stream.event-batch-max-bytes=64KB")
+                        "financeex.chat-stream.event-batch-max-bytes=64KB",
+                        "financeex.chat-stream.assistant-part-batch-max-size=25",
+                        "financeex.chat-stream.assistant-part-batch-max-bytes=128KB")
                 .run(context -> {
                     ChatStreamProperties properties = context.getBean(ChatStreamProperties.class);
                     assertThat(properties.isEventBatchEnabled()).isFalse();
                     assertThat(properties.requiredEventBatchMaxSize()).isEqualTo(8);
                     assertThat(properties.requiredEventBatchMaxWait()).isEqualTo(Duration.ofMillis(40));
                     assertThat(properties.requiredEventBatchMaxBytes()).isEqualTo(DataSize.ofKilobytes(64).toBytes());
+                    assertThat(properties.requiredAssistantPartBatchMaxSize()).isEqualTo(25);
+                    assertThat(properties.requiredAssistantPartBatchMaxBytes())
+                            .isEqualTo(DataSize.ofKilobytes(128).toBytes());
                 });
     }
 
@@ -54,6 +61,16 @@ class ChatStreamPropertiesTest {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure()).rootCause()
                             .hasMessageContaining("event batch thresholds");
+                });
+    }
+
+    @Test
+    void rejectsNonPositiveAssistantPartBatchThresholdsAtStartup() {
+        contextRunner.withPropertyValues("financeex.chat-stream.assistant-part-batch-max-bytes=0B")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure()).rootCause()
+                            .hasMessageContaining("assistant part batch thresholds");
                 });
     }
 

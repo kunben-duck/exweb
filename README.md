@@ -216,8 +216,12 @@ DomainAgent/Relay 请求或事件。意图澄清和路由切换确认不会暂�
 run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。`CANCELLING` 不允许被迟到的通用 run 更新恢复为 `RUNNING`。stop 只停止本轮回答，不删除 `RuntimeBinding`；如果用户主动 stop 前已经有 `message.delta`、`message.snapshot` 或卡片、引用、思考、工具、进度等用户可见 parts 成功落库，ChatService 会把截至 stop 时的内容保存为 partial assistant 历史消息，并在消息 `metadata_json` 中标记 `partial=true`、`finishReason=USER_STOP`。partial assistant 只由赢得外部终态 CAS 的实例在同一短事务中保存，CAS 失败者不会改写消息、parts 或 session leaf。
 run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实例、心跳、租约、恢复状态和 `fencing_token`，不混入业务 run 表。后台执行流写入 run 事件时通过数据库 guarded insert 原子校验 execution owner 与 `fencing_token`；stop、watchdog 或未来 Runtime takeover 递增 token 后，旧实例迟到 delta/completed 会被拒绝。路由、Runtime Interaction 和 Relay/DomainAgent 调用前还会执行少量只读 owner 检查；检查只发生在外部副作用边界，不进入普通 chunk 写入热路径。
 当前生产版本保持下游标准事件原粒度，不在 ChatService 内合并 `message.delta`；普通 Relay/DomainAgent
-事件只在数据库提交层按三重阈值组批，提交后仍逐条写入事件表并逐条推送。这样减少事务和 SQL 往返，
+事件以及 IntentAgent 的 `intent-progress/intent-delta` 只在数据库提交层按三重阈值组批，
+提交后仍逐条写入事件表并逐条推送。这样减少事务和 SQL 往返，
 同时不改变前端事件及历史容量。`financeex.chat-stream.delta-coalesce-*` 仅作为事件内容合并的兼容预留。
+assistant 终态保存时，message parts 使用多行 `INSERT ... VALUES` 分批写入，默认以
+`assistant-part-batch-max-size=100` 或 `assistant-part-batch-max-bytes=1MB` 中先达到的阈值拆批；
+单个超限 part 独立成批，parts 顺序及终态事务范围不变。
 Relay `is_streaming=false` 或 `generate-response.content` 给出的最终回答会映射为 `message.snapshot`，
 前端用它替换当前草稿，历史消息正文也优先使用最后一个快照。
 assistant 的思考、工具、进度、agent 调用等过程信息保存到 `fin_ex_chat_message_part_t`，并通过 `ChatMessageDto.parts` 返回；每个 `message.snapshot` 也会保存为隐藏的 `MESSAGE_SNAPSHOT` part，用于历史消息恢复所有回答快照，最终 `ANSWER` part 仍只保存最终正文。用户消息关联的文档附件保存到 `fin_ex_chat_message_attachment_t`，历史消息、tree 和 variants 会通过 `ChatMessageDto.attachments` 返回附件展示快照；下载和预览仍走文档库接口重新鉴权。parts 会提供稳定的 `title/status/channel/displayHint/visible` 展示语义，前端不需要解析 Relay 私有 payload。启用短期记忆缓存时，assistant 先写数据库，Redis 热缓存只在事务提交后更新，事务回滚不会留下超前于数据库的消息。
@@ -337,7 +341,7 @@ export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
 ## 外部服务接入
 
 用例库和意图服务是可选路由信号，默认关闭；关闭时不会发生外部 HTTP 调用。用例库返回的路由目标和意图服务 `ROUTE_SINGLE.items[0].accessName` 统一解释为 `DomainAgentId/skillId`；`intentId` 保留为业务意图编码，`resourceInstruction.resourceId` 只记录到诊断字段，不参与 ChatService 路由。响应 `accessName` 可通过 `FINANCEEX_INTENT_RESPONSE_ACCESS_NAME_PREFIX` 配置字面量前缀，匹配时只移除开头一次；未配置或不匹配时使用原始值。命中后会创建 `provider=domain-agent` 的会话级 RuntimeBinding。Relay Runtime 通过 AgentRuntime 防腐层接入，唯一通信方式为下游 Relay WebSocket。
-意图服务支持阻塞和 SSE 流式两种调用模式。`FINANCEEX_INTENT_INVOCATION_MODE=BLOCKING|STREAMING` 默认取 `BLOCKING`：阻塞模式调用 `/getIntentDecision`，流式模式调用 `/getIntentDecisionStream`，不会根据响应 Content-Type 自动改调另一接口。两种模式使用逐字段相同的请求，并把最终完整响应交给同一个结果 mapper；ChatService 始终以 `data.result.routeAction` 作为唯一裁决点。`ROUTE_SINGLE` 直接取唯一 `items[0].accessName`，完成可选前缀归一化后绑定并调用 DomainAgent；缺少 item、有效 `accessName`、`routeAction` 缺失或未知均属于协议失败，不使用 `intentId/resourceId` 猜测路由。`ROUTE_MULTI` 和 `NO_MATCH` 是合法业务结果，始终进入 Relay Runtime；`NO_MATCH` 的 `intentName` 展示为“未识别到可用意图，进入 {Agent 名称}”，Agent 名称由 `FINANCEEX_INTENT_NO_MATCH_AGENT_NAME` 配置，默认 `FIN Supervisor Agent`，该配置不改变路由目标。`CLARIFY` 进入意图澄清等待态。`confidence` 只用于记录和排障，不再参与是否采用 DomainAgent 的二次判断。外部路由已进入 run pipeline：后端会先落库并推送 `run.started`，再调用用例库/意图服务；调用意图服务前会先输出 `runtime.progress(payload.sourceType=intent-start, stage=intent_calling)`，用于前端展示“正在识别问题意图”，该事件不包含 prompt、history 或意图原始响应。流式模式还会把 `progress` 映射为 `runtime.progress(sourceType=intent-progress)`、把 `delta` 映射为 `runtime.thinking(sourceType=intent-delta)`；这些过程事件按原顺序进入现有事件落库和实时推送，只有 `result` 驱动路由。SSE 注释 ping 不生成 ChatEvent。意图服务 HTTP 入参和出参转换已收敛在 infrastructure intent mapper 中。技术失败和协议失败默认最多重试 3 次，可通过 `FINANCEEX_INTENT_MAX_RETRIES` 调整，运行时最多按 10 次生效；每次流式重试都会新建一条 SSE 连接，已落库的过程事件不撤回，并通过 `attempt/maxAttempts` 区分。重试耗尽后由 `FINANCEEX_INTENT_FAILURE_STRATEGY=RELAY_FALLBACK|FAIL_RUN` 决定进入 Relay 或直接生成 `INTENT_ROUTING_FAILED`。默认 `RELAY_FALLBACK` 保持兼容；`FAIL_RUN` 不调用 Runtime，并提示用户手动选择技能。超过最大意图澄清轮数仍直接进入 Relay，不按服务失败处理。
+意图服务支持阻塞和 SSE 流式两种调用模式。`FINANCEEX_INTENT_INVOCATION_MODE=BLOCKING|STREAMING` 默认取 `STREAMING`：流式模式调用 `/getIntentDecisionStream`，显式配置 `BLOCKING` 时调用 `/getIntentDecision`，不会根据响应 Content-Type 自动改调另一接口。两种模式使用逐字段相同的请求，并把最终完整响应交给同一个结果 mapper；ChatService 始终以 `data.result.routeAction` 作为唯一裁决点。`ROUTE_SINGLE` 直接取唯一 `items[0].accessName`，完成可选前缀归一化后绑定并调用 DomainAgent；缺少 item、有效 `accessName`、`routeAction` 缺失或未知均属于协议失败，不使用 `intentId/resourceId` 猜测路由。`ROUTE_MULTI` 和 `NO_MATCH` 是合法业务结果，始终进入 Relay Runtime；`NO_MATCH` 的 `intentName` 展示为“未识别到可用意图，进入 {Agent 名称}”，Agent 名称由 `FINANCEEX_INTENT_NO_MATCH_AGENT_NAME` 配置，默认 `FIN Supervisor Agent`，该配置不改变路由目标。`CLARIFY` 进入意图澄清等待态且不会重试。`confidence` 只用于记录和排障，不再参与是否采用 DomainAgent 的二次判断。外部路由已进入 run pipeline：后端会先落库并推送 `run.started`，再调用用例库/意图服务；调用意图服务前会先输出 `runtime.progress(payload.sourceType=intent-start, stage=intent_calling)`，用于前端展示“正在识别问题意图”，该事件不包含 prompt、history 或意图原始响应。流式模式还会把 `progress` 映射为 `runtime.progress(sourceType=intent-progress)`、把 `delta` 映射为 `runtime.thinking(sourceType=intent-delta)`；三类临时 Intent 事件均写入事件表并实时推送，但不进入历史 parts 或分享。`intent-progress/intent-delta` 使用普通事件批量阈值，`intent-result` 会先刷新待处理批次并继续保存为历史 part；只有完整 `result` 驱动路由。SSE 注释 ping 不生成 ChatEvent。企业鉴权 Header 在独立有界调度器获取，超时或队列拒绝进入现有重试和降级流程。意图服务 HTTP 入参和出参转换已收敛在 infrastructure intent mapper 中。技术失败和协议失败默认最多重试 3 次，可通过 `FINANCEEX_INTENT_MAX_RETRIES` 调整，运行时最多按 10 次生效；每次流式重试都会新建一条 SSE 连接，已落库的过程事件不撤回，并通过 `attempt/maxAttempts` 区分。重试耗尽后由 `FINANCEEX_INTENT_FAILURE_STRATEGY=RELAY_FALLBACK|FAIL_RUN` 决定进入 Relay 或直接生成 `INTENT_ROUTING_FAILED`。默认 `RELAY_FALLBACK` 保持兼容；`FAIL_RUN` 不调用 Runtime，并提示用户手动选择技能。超过最大意图澄清轮数仍直接进入 Relay，不按服务失败处理。
 RouteMemory 负责为意图服务生成 `conversationContext`：普通无绑定首次路由使用 `routeTrigger=first_turn`；DomainAgent 结构化拒答后重路由使用 `routeTrigger=domain_reject` 并携带本次 `lastIntentRejectReason`；用户提交 `INTENT_CLARIFICATION` 后使用 `routeTrigger=clarify_answer`；前端顶层传 `forceReroute=true` 时由后端转成内部用户纠正触发原因；最新 Relay/no_match 路由的来源 run 正常完成时，下一轮自动使用 `routeTrigger=fallback_followup`。`ROUTE` 表示最终目标已确定且 RuntimeBinding 已成功持久化的路由决策，不要求 Runtime 任务执行成功：后端会在调用 Relay/DomainAgent 前异步写入，后续失败、取消或 DomainAgent 拒答不会删除该事实。`history` 由最近 TopK 可见 `ROUTE` 和当前未完成 `INTENT_CLARIFICATION` 的 `CLARIFY` 链组成；`routeSource=front-selected` 的前端直选仍保存为路由事实并参与最新路由判断，但在 TopK 限制前排除，不发送给 IntentAgent；`user-confirmed` 和 `intent-agent` 路由保持可见。精确 `NO_MATCH` 在意图请求中投影为 `type=NO_MATCH,intent=""`，不会伪装为命中意图；已有 binding 的普通续接和 Agent Interaction 续接没有产生新路由，因此不会写入 history。澄清得到最终目标时会在同一 best-effort 写任务中先折叠 clarify，再写 route；Relay 路由在数据库中仍统一记录为 `intentName=no_match,intentId=relay,targetProvider=relay` 并保留真实 `routeAction`。Relay 执行失败或取消时该 route 仍保留，但不会触发下一轮 `fallback_followup`；Relay 正常完成后仍只保留 `RESUMABLE` session，不保留 active 路由。`FAIL_RUN`、未确认候选和用户拒绝切换不写 route。RouteMemory 读写使用独立线程池，异常只降级上下文质量，不阻断 `/v1/chat/runs`。
 意图识别记录是可选旁路能力，默认关闭。开启 `FINANCEEX_INTENT_RECORD_ENABLED=true` 后，仅在本轮实际调用意图服务时异步写入 `fin_ex_intent_recognition_t`，记录用户问题、routeAction、候选 items、最终路由是否采纳以及调用耗时，便于后续准确率统计和排障。该写入使用 Servlet/MVC 友好的专用线程池，不读取请求 ThreadLocal；线程池拒绝、序列化失败或 DB 写入失败只记录 warn，不影响 `/v1/chat/runs` 主链路。DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会写意图记录。
 
@@ -367,12 +371,15 @@ export FINANCEEX_INTENT_ACCESS_NAME=eureka2_260718
 export FINANCEEX_INTENT_RESPONSE_ACCESS_NAME_PREFIX=ex_
 # 可选：NO_MATCH 的展示目标名称；仍固定路由到 Relay
 export FINANCEEX_INTENT_NO_MATCH_AGENT_NAME="FIN Supervisor Agent"
-export FINANCEEX_INTENT_INVOCATION_MODE=BLOCKING
+export FINANCEEX_INTENT_INVOCATION_MODE=STREAMING
 export FINANCEEX_INTENT_RECOGNIZE_PATH=/intent-recognition-configuration/getIntentDecision
 export FINANCEEX_INTENT_RECOGNIZE_STREAM_PATH=/intent-recognition-configuration/getIntentDecisionStream
 export FINANCEEX_INTENT_STREAM_FIRST_EVENT_TIMEOUT=5s
 export FINANCEEX_INTENT_STREAM_IDLE_TIMEOUT=30s
 export FINANCEEX_INTENT_STREAM_TOTAL_TIMEOUT=120s
+export FINANCEEX_INTENT_STREAM_AUTH_TIMEOUT=5s
+export FINANCEEX_INTENT_STREAM_AUTH_IO_MAX_SIZE=4
+export FINANCEEX_INTENT_STREAM_AUTH_IO_QUEUE_CAPACITY=128
 # 可选：RELAY_FALLBACK（默认）或 FAIL_RUN
 export FINANCEEX_INTENT_FAILURE_STRATEGY=RELAY_FALLBACK
 # 可选：记录每次实际调用意图服务后的输入、结果和最终采纳情况；默认关闭
@@ -438,6 +445,8 @@ export FINANCEEX_INSTANCE_ID=
 export FINANCEEX_SCHEDULER_POOL_SIZE=4
 export FINANCEEX_CHAT_RUN_LEASE_DURATION=90s
 export FINANCEEX_CHAT_RUN_HEARTBEAT_INTERVAL=15s
+export FINANCEEX_CHAT_RUN_HEARTBEAT_BATCH_SIZE=50
+export FINANCEEX_CHAT_RUN_HEARTBEAT_TRANSACTION_TIMEOUT_SECONDS=2
 export FINANCEEX_CHAT_RUN_WATCHDOG_ENABLED=true
 export FINANCEEX_CHAT_RUN_WATCHDOG_SCAN_INTERVAL=30s
 export FINANCEEX_CHAT_RUN_FIRST_EVENT_TIMEOUT=30s

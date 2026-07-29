@@ -198,6 +198,9 @@ runtime.card
 runtime.event
 ```
 
+IntentAgent 的 `intent-progress` 和 `intent-delta` 也使用相同的三重阈值批量落库。
+`intent-start` 与 `intent-result` 不参与批量，并在处理前刷新待提交过程事件。
+
 以下事件保持立即处理，并在自身处理前刷新已缓存的普通事件：
 
 ```text
@@ -329,11 +332,13 @@ stop 只有赢得 external-terminal CAS 的事务才能保存 partial assistant�
 
 - `message.delta` 追加到 `StringBuilder` 草稿。
 - 最后一个 `message.snapshot` 作为更权威的最终正文。
-- `runtime.*` 和 snapshot 转换为有序 `ChatMessagePartDraft`。
+- 除 Intent 临时过程事件外，`runtime.*` 和 snapshot 转换为有序 `ChatMessagePartDraft`。
 - 终态事务统一保存 assistant 和全部 parts。
 
 因此 ChatEvent 在流式过程中持续落库，但 assistant 与历史 parts 通常在 `run.completed/run.waiting_user` 时一次性保存；
 stop partial 由 stop 终态事务从已落库事件重建。Event Resume 不依赖 assistant 是否已经生成。
+`intent-start/intent-progress/intent-delta` 只保留在 ChatEvent 与实时/恢复流中，不进入历史 parts 或分享；
+`intent-result` 继续生成历史 part。仅产生这三类临时事件时不会单独创建 assistant 历史消息。
 
 ### 7.3 三类时间戳
 
@@ -956,6 +961,8 @@ Event Resume 的事件拼接。详细规则参见 [AgentMode 仅记录技术设�
 | 普通事件 DB 写入失败 | 该批事务回滚，不实时发布 | 尝试收口 run.failed；DB 持续异常由 watchdog/运维处理 |
 | 终态事务失败 | 整笔回滚，不发布伪终态 | stop 可重试；watchdog 最终闭合 |
 | stop 与 owner 竞争 | run 行 CAS/fence 只允许一个终态 | 以数据库终态为准 |
+| execution heartbeat 明确拒绝当前 claim | 按 owner 与 fencing token 条件取消本机后台订阅；Intent 阶段会关闭对应 SSE | 由当前 owner 或 watchdog 继续收口 |
+| execution heartbeat 查询异常或超时 | 只记录日志，不取消本机订阅 | 后续 heartbeat 或事件写入栅栏继续校验 |
 | producer 实例宕机 | execution heartbeat 停止 | lease 过期后 watchdog 写入失败终态 |
 
 ## 15. 单实例故障与 watchdog
@@ -1033,6 +1040,8 @@ assistant 汇总连续和 execution fencing 正确，因此当前不能视为实
 | `financeex.chat-run.cancel-ttl` | `1h` | Redis cancel 快速标记 TTL |
 | `financeex.chat-run.lease-duration` | `90s` | execution 租约 |
 | `financeex.chat-run.heartbeat-interval` | `15s` | execution 心跳 |
+| `financeex.chat-run.heartbeat-batch-size` | `50` | 单条 SQL 批量续租的最大 claim 数量 |
+| `financeex.chat-run.heartbeat-transaction-timeout-seconds` | `2` | 单批续租事务超时 |
 | `financeex.chat-run.watchdog-enabled` | `true` | 是否启用失联收敛 |
 | `financeex.chat-run.watchdog-initial-delay` | `30s` | 首次扫描延迟 |
 | `financeex.chat-run.watchdog-scan-interval` | `30s` | watchdog 扫描间隔 |
@@ -1057,6 +1066,8 @@ assistant 汇总连续和 execution fencing 正确，因此当前不能视为实
 | `financeex.chat-stream.event-batch-max-size` | `16` |
 | `financeex.chat-stream.event-batch-max-wait` | `20ms` |
 | `financeex.chat-stream.event-batch-max-bytes` | `256KB` |
+| `financeex.chat-stream.assistant-part-batch-max-size` | `100` |
+| `financeex.chat-stream.assistant-part-batch-max-bytes` | `1MB` |
 | `financeex.chat-stream.delta-coalesce-enabled` | `false`，当前兼容预留 |
 | `financeex.chat-stream.delta-coalesce-window` | `50ms`，当前兼容预留 |
 | `financeex.chat-stream.delta-coalesce-max-chars` | `512`，当前兼容预留 |
@@ -1125,7 +1136,8 @@ assistant 汇总连续和 execution fencing 正确，因此当前不能视为实
 4. run SSE 的 heartbeat 要在该连接先观察到一个事件后才具备 session/run 标识。跨设备从 firstSeq 前恢复通常会先收到 replay；
    从最新 sequence 恢复且 run 暂时无事件时，连接可能在下一事件前保持静默。
 5. WebSocket 去重窗口和 live buffer 都是有限内存结构，不能替代客户端持久游标和数据库恢复。
-6. assistant 草稿和 parts 在正常终态前保存在 run 内存中；大量 runtime parts 会增加单 run 内存使用，但不改变事件恢复事实源。
+6. assistant 草稿和非临时 parts 在正常终态前保存在 run 内存中；Intent 临时过程事件不进入 parts，
+   但大量 Relay/DomainAgent runtime parts 仍会增加单 run 内存使用，且不改变事件恢复事实源。
 7. `ChatRunStartDto` 不携带首事件 payload。正常契约把 `firstSeq` 作为 `run.started` 交接位置；客户端仍应以
    `stream-status`、终态事件和数据库恢复结果作为生命周期事实。
 8. 当前本地联调台的 `RECOVER_REQUIRED` 兼容处理仍以本地 lastSeq 发起恢复；生产前端应使用错误详情中的

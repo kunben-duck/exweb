@@ -117,21 +117,26 @@
     </update>
 
     <!--
-      写入 assistant 过程化展示片段，如 thinking、tool、reference、card 和 answer 校验片段。
-      入参: ChatMessagePartRow，id 为 part 主键，tenantId/userId/sessionId/messageId/runId 为归属与关联边界，
+      批量写入 assistant 过程化展示片段，如 thinking、tool、reference、card 和 answer 校验片段。
+      入参: rows 为 ChatMessagePartRow 列表，每行的 id 为 part 主键，
+            tenantId/userId/sessionId/messageId/runId 为归属与关联边界，
             partType/sourceType/contentText/title/status/channel/displayHint/visible/payloadJson/partOrder 描述展示语义。
     -->
-    <insert id="insertPart" parameterType="com.huawei.it.ex.one.infrastructure.memory.ChatMessagePartRow">
+    <insert id="insertParts">
         INSERT INTO fin_ex_chat_message_part_t(
             id, tenant_id, user_id, session_id, message_id, run_id, part_type,
             source_type, content_text, title, status, channel, display_hint, visible,
             payload_json, part_order, created_at
         )
-        VALUES (
-            #{id}, #{tenantId}, #{userId}, #{sessionId}, #{messageId}, #{runId}, #{partType},
-            #{sourceType}, #{contentText}, #{title}, #{status}, #{channel}, #{displayHint}, #{visible},
-            #{payloadJson}, #{partOrder}, #{createdAt}
-        )
+        VALUES
+        <foreach collection="rows" item="row" separator=",">
+            (
+                #{row.id}, #{row.tenantId}, #{row.userId}, #{row.sessionId}, #{row.messageId},
+                #{row.runId}, #{row.partType}, #{row.sourceType}, #{row.contentText}, #{row.title},
+                #{row.status}, #{row.channel}, #{row.displayHint}, #{row.visible}, #{row.payloadJson},
+                #{row.partOrder}, #{row.createdAt}
+            )
+        </foreach>
     </insert>
 
     <!--

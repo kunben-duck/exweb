@@ -342,7 +342,8 @@ Relay 自身的保存与 ChatService event 表是两套独立事实源：
 
 1. `message.delta`：读取 `payload.delta`，按事件顺序追加到 `deltaDraft`。
 2. `message.snapshot`：读取 `payload.content` 覆盖当前 `snapshot`，并为每个 snapshot 追加一个 `MESSAGE_SNAPSHOT` part draft。
-3. `runtime.*`：不拼入正文，而是转换为对应的结构化 part draft。
+3. `runtime.*`：不拼入正文，而是转换为对应的结构化 part draft；其中
+   `intent-start/intent-progress/intent-delta` 仅保留为 ChatEvent，不生成历史 part。
 4. 最终正文：存在 snapshot 时使用最后一个 snapshot；没有 snapshot 时使用全部 delta 拼接结果。
 5. 即使正文为空，只要存在进度、Agent、思考、工具、引用、卡片、澄清或拒答等用户可见 part，也会创建一条空正文 assistant 作为 parts 挂载点。
 6. 只有 metadata 或默认隐藏的 runtime event、且没有正文时，不创建空 assistant 消息。
@@ -356,7 +357,8 @@ run 正常完成或进入 `WAITING_USER` 时，`SessionApplicationService` 将 p
 - 所有 `MESSAGE_SNAPSHOT` 都会保存，默认 `visible=false`、`displayHint=collapsible`。
 - 在所有过程 parts 末尾始终追加一个 `ANSWER` part，内容等于最终 assistant content，默认隐藏，供兼容和完整性校验使用。
 - 普通完成创建新的 assistant 消息；Interaction 续接更新原 assistant 消息，并从已有 parts 之后继续追加顺序。
-- assistant message 与每个 part 当前由 MyBatis 逐条写入；终态提交由外层短事务保证本地数据库一致性。
+- assistant message 先写入，parts 再由 MyBatis 使用多行 `INSERT ... VALUES` 按条数或字节阈值分批写入；
+  终态提交仍由外层短事务保证本地数据库一致性。
 
 ### 4.7 不同终态下的历史保存
 
@@ -367,6 +369,9 @@ run 正常完成或进入 `WAITING_USER` 时，`SessionApplicationService` 将 p
 | `run.cancelled` | stop 会从已经落库的 event 重建 partial assistant；存在正文或用户可见 parts 时保存，否则只保存取消终态 |
 | `run.failed` | 默认不保存半截 assistant，只保留已落库事件和失败终态 |
 | Interaction continuation completed | 复用原 assistantMessageId，更新正文并追加新的 response/runtime parts |
+
+Intent 的 `intent-start/intent-progress/intent-delta` 可通过实时流和 Event Resume 获取，但不进入历史消息或分享；
+`intent-result` 仍按普通历史 part 保存。
 
 ### 4.8 前端实时与历史展示的数据来源
 

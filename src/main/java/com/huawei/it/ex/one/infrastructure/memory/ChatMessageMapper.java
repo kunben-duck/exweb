@@ -30,11 +30,12 @@ public interface ChatMessageMapper {
     int updateAssistant(ChatMessageRow row);
 
     /**
-     * 写入一条 assistant 消息过程片段。
+     * 批量写入 assistant 消息过程片段。
      *
-     * @param row part 写入行，包含消息归属、part 类型、展示语义、payload 和排序号。
+     * @param rows part 写入行，包含消息归属、part 类型、展示语义、payload 和排序号。
+     * @return 实际插入行数。
      */
-    void insertPart(ChatMessagePartRow row);
+    int insertParts(@Param("rows") List<ChatMessagePartRow> rows);
 
     /**
      * 写入消息与文档附件的引用关系。

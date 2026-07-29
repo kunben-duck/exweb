@@ -30,11 +30,11 @@ class IntentServiceHttpPropertiesTest {
     }
 
     @Test
-    void defaultsToBlockingInvocationAndStreamTimeouts() {
+    void defaultsToStreamingInvocationAndBoundedStreamResources() {
         contextRunner.run(context -> {
             IntentServiceHttpProperties properties = context.getBean(IntentServiceHttpProperties.class);
 
-            assertThat(properties.getInvocationMode()).isEqualTo(IntentInvocationMode.BLOCKING);
+            assertThat(properties.getInvocationMode()).isEqualTo(IntentInvocationMode.STREAMING);
             assertThat(properties.getRecognizePath())
                     .isEqualTo("/intent-recognition-configuration/getIntentDecision");
             assertThat(properties.getRecognizeStreamPath())
@@ -42,6 +42,9 @@ class IntentServiceHttpPropertiesTest {
             assertThat(properties.normalizedStreamFirstEventTimeout()).isEqualTo(Duration.ofSeconds(5));
             assertThat(properties.normalizedStreamIdleTimeout()).isEqualTo(Duration.ofSeconds(30));
             assertThat(properties.normalizedStreamTotalTimeout()).isEqualTo(Duration.ofSeconds(120));
+            assertThat(properties.normalizedStreamAuthTimeout()).isEqualTo(Duration.ofSeconds(5));
+            assertThat(properties.normalizedStreamAuthIoMaxSize()).isEqualTo(4);
+            assertThat(properties.normalizedStreamAuthIoQueueCapacity()).isEqualTo(128);
         });
     }
 
@@ -52,7 +55,10 @@ class IntentServiceHttpPropertiesTest {
                         "financeex.intent.recognize-stream-path=/stream",
                         "financeex.intent.stream-first-event-timeout=2s",
                         "financeex.intent.stream-idle-timeout=12s",
-                        "financeex.intent.stream-total-timeout=90s")
+                        "financeex.intent.stream-total-timeout=90s",
+                        "financeex.intent.stream-auth-timeout=3s",
+                        "financeex.intent.stream-auth-io-max-size=6",
+                        "financeex.intent.stream-auth-io-queue-capacity=256")
                 .run(context -> {
                     IntentServiceHttpProperties properties = context.getBean(IntentServiceHttpProperties.class);
 
@@ -61,6 +67,9 @@ class IntentServiceHttpPropertiesTest {
                     assertThat(properties.normalizedStreamFirstEventTimeout()).isEqualTo(Duration.ofSeconds(2));
                     assertThat(properties.normalizedStreamIdleTimeout()).isEqualTo(Duration.ofSeconds(12));
                     assertThat(properties.normalizedStreamTotalTimeout()).isEqualTo(Duration.ofSeconds(90));
+                    assertThat(properties.normalizedStreamAuthTimeout()).isEqualTo(Duration.ofSeconds(3));
+                    assertThat(properties.normalizedStreamAuthIoMaxSize()).isEqualTo(6);
+                    assertThat(properties.normalizedStreamAuthIoQueueCapacity()).isEqualTo(256);
                 });
     }
 

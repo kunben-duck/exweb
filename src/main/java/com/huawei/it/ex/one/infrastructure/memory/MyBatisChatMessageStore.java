@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.infrastructure.memory;
 
+import com.huawei.it.ex.one.application.config.ChatStreamProperties;
 import com.huawei.it.ex.one.application.integration.memory.ChatMessagePageQuery;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessageAttachment;
@@ -12,7 +13,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.springframework.stereotype.Repository;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -32,17 +35,20 @@ public class MyBatisChatMessageStore {
 
     private final ChatMessageMapper mapper;
     private final ObjectMapper objectMapper;
+    private final int partBatchMaxSize;
+    private final long partBatchMaxBytes;
 
-    public MyBatisChatMessageStore(ChatMessageMapper mapper, ObjectMapper objectMapper) {
+    public MyBatisChatMessageStore(ChatMessageMapper mapper, ObjectMapper objectMapper,
+                                   ChatStreamProperties chatStreamProperties) {
         this.mapper = mapper;
         this.objectMapper = objectMapper;
+        this.partBatchMaxSize = chatStreamProperties.requiredAssistantPartBatchMaxSize();
+        this.partBatchMaxBytes = chatStreamProperties.requiredAssistantPartBatchMaxBytes();
     }
 
     public ChatMessage save(ChatMessage message) {
         mapper.insert(toRow(message));
-        if (message.parts() != null) {
-            message.parts().forEach(this::savePart);
-        }
+        saveParts(message.parts());
         return message;
     }
 
@@ -51,15 +57,78 @@ public class MyBatisChatMessageStore {
         if (updated != 1) {
             throw new IllegalArgumentException("assistant 消息不存在或不属于当前用户: " + message.id());
         }
-        if (message.parts() != null) {
-            message.parts().forEach(this::savePart);
-        }
+        saveParts(message.parts());
         return message;
     }
 
     public ChatMessagePart savePart(ChatMessagePart part) {
-        mapper.insertPart(toRow(part));
+        insertPartBatch(List.of(toRow(part)));
         return part;
+    }
+
+    private void saveParts(List<ChatMessagePart> parts) {
+        if (parts == null || parts.isEmpty()) {
+            return;
+        }
+        List<ChatMessagePartRow> batch = new ArrayList<>(Math.min(partBatchMaxSize, parts.size()));
+        long batchBytes = 0L;
+        for (ChatMessagePart part : parts) {
+            ChatMessagePartRow row = toRow(part);
+            long rowBytes = estimatedUtf8Bytes(row);
+            if (!batch.isEmpty() && (batch.size() >= partBatchMaxSize
+                    || saturatedAdd(batchBytes, rowBytes) > partBatchMaxBytes)) {
+                insertPartBatch(batch);
+                batch = new ArrayList<>(Math.min(partBatchMaxSize, parts.size()));
+                batchBytes = 0L;
+            }
+            batch.add(row);
+            batchBytes = saturatedAdd(batchBytes, rowBytes);
+            if (batch.size() >= partBatchMaxSize || batchBytes >= partBatchMaxBytes) {
+                insertPartBatch(batch);
+                batch = new ArrayList<>(Math.min(partBatchMaxSize, parts.size()));
+                batchBytes = 0L;
+            }
+        }
+        insertPartBatch(batch);
+    }
+
+    private void insertPartBatch(List<ChatMessagePartRow> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return;
+        }
+        List<ChatMessagePartRow> immutableRows = List.copyOf(rows);
+        int inserted = mapper.insertParts(immutableRows);
+        if (inserted != immutableRows.size()) {
+            throw new IllegalStateException("assistant parts 批量写入结果数量不一致: expected="
+                    + immutableRows.size() + ", actual=" + inserted);
+        }
+    }
+
+    private long estimatedUtf8Bytes(ChatMessagePartRow row) {
+        long bytes = Integer.BYTES + 1L;
+        bytes = saturatedAdd(bytes, utf8Bytes(row.getId()));
+        bytes = saturatedAdd(bytes, utf8Bytes(row.getTenantId()));
+        bytes = saturatedAdd(bytes, utf8Bytes(row.getUserId()));
+        bytes = saturatedAdd(bytes, utf8Bytes(row.getSessionId()));
+        bytes = saturatedAdd(bytes, utf8Bytes(row.getMessageId()));
+        bytes = saturatedAdd(bytes, utf8Bytes(row.getRunId()));
+        bytes = saturatedAdd(bytes, utf8Bytes(row.getPartType()));
+        bytes = saturatedAdd(bytes, utf8Bytes(row.getSourceType()));
+        bytes = saturatedAdd(bytes, utf8Bytes(row.getContentText()));
+        bytes = saturatedAdd(bytes, utf8Bytes(row.getTitle()));
+        bytes = saturatedAdd(bytes, utf8Bytes(row.getStatus()));
+        bytes = saturatedAdd(bytes, utf8Bytes(row.getChannel()));
+        bytes = saturatedAdd(bytes, utf8Bytes(row.getDisplayHint()));
+        bytes = saturatedAdd(bytes, utf8Bytes(row.getPayloadJson()));
+        return saturatedAdd(bytes, row.getCreatedAt() == null ? 0L : utf8Bytes(row.getCreatedAt().toString()));
+    }
+
+    private long utf8Bytes(String value) {
+        return value == null ? 0L : value.getBytes(StandardCharsets.UTF_8).length;
+    }
+
+    private long saturatedAdd(long left, long right) {
+        return left > Long.MAX_VALUE - right ? Long.MAX_VALUE : left + right;
     }
 
     public ChatMessageAttachment saveAttachment(ChatMessageAttachment attachment) {

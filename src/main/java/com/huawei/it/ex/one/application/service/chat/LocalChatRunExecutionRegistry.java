@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 当前服务实例内正在执行的后台 run 订阅注册表。
@@ -73,6 +74,35 @@ public class LocalChatRunExecutionRegistry {
             return false;
         }
         entry.disposable().dispose();
+        return true;
+    }
+
+    /**
+     * 仅取消仍由指定 claim 持有的当前 JVM 执行订阅。
+     *
+     * <p>heartbeat 拒绝旧 claim 时，新 owner 可能已经在同一 JVM 注册。条件删除可避免旧 owner
+     * 取消新执行流。subscription 尚未登记时保留 claim，下一次 heartbeat 会再次检查。</p>
+     *
+     * @param claim 已被数据库拒绝的执行 claim。
+     * @return 是否命中并取消了对应本机 subscription。
+     */
+    public boolean cancel(RunExecutionClaim claim) {
+        if (claim == null || claim.runId() == null || claim.runId().isBlank()) {
+            return false;
+        }
+        AtomicReference<Disposable> cancelled = new AtomicReference<>();
+        running.computeIfPresent(claim.runId(), (ignored, current) -> {
+            if (!claim.equals(current.claim()) || current.disposable() == null) {
+                return current;
+            }
+            cancelled.set(current.disposable());
+            return null;
+        });
+        Disposable disposable = cancelled.get();
+        if (disposable == null) {
+            return false;
+        }
+        disposable.dispose();
         return true;
     }
 

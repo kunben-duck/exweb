@@ -83,15 +83,38 @@ public class MyBatisChatRunExecutionRepository implements ChatRunExecutionReposi
     }
 
     @Override
+    @Transactional(
+            readOnly = true,
+            timeoutString = "${financeex.chat-run.execution-owner-query-timeout-seconds:2}")
     public boolean isCurrentOwnerRunning(RunExecutionClaim claim) {
         return claim != null && mapper.countCurrentOwnerRunning(
                 claim.runId(), claim.ownerInstanceId(), claim.fencingToken()) == 1;
     }
 
     @Override
-    public boolean heartbeat(String runId, String ownerInstanceId, Duration leaseDuration) {
+    public boolean heartbeat(String runId, String ownerInstanceId, long fencingToken, Duration leaseDuration) {
         Instant leaseUntil = Instant.now().plus(normalizeLease(leaseDuration));
-        return mapper.heartbeat(runId, ownerInstanceId, leaseUntil) > 0;
+        return mapper.heartbeat(runId, ownerInstanceId, fencingToken, leaseUntil) > 0;
+    }
+
+    @Override
+    @Transactional(timeoutString = "${financeex.chat-run.heartbeat-transaction-timeout-seconds:2}")
+    public List<RunExecutionClaim> heartbeatBatch(List<RunExecutionClaim> claims, Duration leaseDuration) {
+        if (claims == null || claims.isEmpty()) {
+            return List.of();
+        }
+        List<RunExecutionClaim> batch = List.copyOf(claims);
+        Instant leaseUntil = Instant.now().plus(normalizeLease(leaseDuration));
+        if (mapper.heartbeatBatch(batch, leaseUntil) == batch.size()) {
+            return batch;
+        }
+        // UPDATE 未全部命中时在同一事务内回读，避免仅凭影响行数误取消仍有效的执行流。
+        return mapper.findHeartbeatEligibleClaims(batch).stream()
+                .map(row -> new RunExecutionClaim(
+                        row.getRunId(),
+                        row.getOwnerInstanceId(),
+                        row.getFencingToken() == null ? 1L : row.getFencingToken()))
+                .toList();
     }
 
     @Override

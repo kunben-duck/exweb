@@ -6,6 +6,7 @@ import com.huawei.it.ex.one.application.config.ChatStreamProperties;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.MessageCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
+import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.util.unit.DataSize;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 class ChatEventBatcherTest {
@@ -100,6 +102,28 @@ class ChatEventBatcherTest {
     }
 
     @Test
+    void batchesIntentProcessEventsAndFlushesBeforeIntentResult() {
+        VirtualTimeScheduler timer = VirtualTimeScheduler.create();
+        ChatEventBatcher batcher = batcher(16, Duration.ofSeconds(1), DataSize.ofMegabytes(1), timer);
+        ChatEvent progress = intentProcessEvent("intent-progress", false);
+        ChatEvent delta = intentProcessEvent("intent-delta", true);
+        ChatEvent result = intentProcessEvent("intent-result", false);
+
+        StepVerifier.create(batcher.batch(
+                                Flux.concat(Flux.just(progress, delta, result), Mono.never()),
+                                ChatEventPipeline::batchableIntentProcessEvent).take(2))
+                .assertNext(batch -> {
+                    assertThat(batch.databaseBatch()).isTrue();
+                    assertThat(batch.events()).containsExactly(progress, delta);
+                })
+                .assertNext(batch -> {
+                    assertThat(batch.databaseBatch()).isFalse();
+                    assertThat(batch.events()).containsExactly(result);
+                })
+                .verifyComplete();
+    }
+
+    @Test
     void disabledBatchingPreservesSingleEventPersistenceUnits() {
         ChatStreamProperties properties = properties(16, Duration.ofMillis(20), DataSize.ofKilobytes(256));
         properties.setEventBatchEnabled(false);
@@ -149,6 +173,16 @@ class ChatEventBatcherTest {
 
     private ChatEvent delta(String value) {
         return MessageDeltaEvent.of("run1", "session1", value);
+    }
+
+    private ChatEvent intentProcessEvent(String sourceType, boolean thinking) {
+        Map<String, Object> payload = Map.of(
+                "source", "intent-agent",
+                "sourceType", sourceType,
+                thinking ? "text" : "message", sourceType);
+        return thinking
+                ? RuntimeEvent.thinking("run1", "session1", payload)
+                : RuntimeEvent.progress("run1", "session1", payload);
     }
 
     private boolean isDelta(ChatEvent event) {

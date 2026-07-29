@@ -3,7 +3,10 @@ package com.huawei.it.ex.one.infrastructure.intent;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.it.ex.one.application.config.IntegrationAuthProperties;
+import com.huawei.it.ex.one.application.integration.auth.AuthHeaderProvider;
+import com.huawei.it.ex.one.application.integration.auth.AuthHeaderRequest;
 import com.huawei.it.ex.one.application.integration.intent.IntentDecisionStreamFrame;
+import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.it.ex.one.application.service.auth.AuthHeaderProviderRegistry;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
@@ -11,9 +14,13 @@ import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.infrastructure.auth.NoopAuthHeaderProvider;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+
+import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
@@ -26,6 +33,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -212,6 +220,209 @@ class FinEurekaIntentStreamClientTest {
     }
 
     @Test
+    void doesNotRetryValidClarificationResult() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        try (StreamServerFixture fixture = server(null, null, exchange -> {
+            attempts.incrementAndGet();
+            write(exchange, CLARIFY_RESULT);
+        })) {
+            IntentDecisionStreamFrame result = client(fixture, properties(3))
+                    .recognize(command(), MemoryContext.empty(), user())
+                    .blockLast();
+
+            assertThat(attempts.get()).isEqualTo(1);
+            assertThat(result.recognitionResult().waitingClarification()).isTrue();
+        }
+    }
+
+    @Test
+    void retriesFinalResultWithoutDecisionAsProtocolFailure() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        IntentServiceHttpProperties properties = properties(1);
+        try (StreamServerFixture fixture = server(null, null, exchange -> {
+            attempts.incrementAndGet();
+            write(exchange, ROUTE_SINGLE_RESULT);
+        })) {
+            properties.setBaseUrl(fixture.baseUrl());
+            properties.setRecognizeStreamPath("/stream");
+            ObjectMapper objectMapper = new ObjectMapper();
+            IntentServiceWireMapper wireMapper = new IntentServiceWireMapper(
+                    new IntentServiceRequestMapper(properties),
+                    new IntentServiceResponseMapper(objectMapper, properties)) {
+                @Override
+                public IntentRecognitionResult toRecognitionResult(JsonNode root) {
+                    return IntentRecognitionResult.finalDecision(null);
+                }
+            };
+            FinEurekaIntentStreamClient client = client(
+                    properties,
+                    objectMapper,
+                    wireMapper,
+                    noopAuthHeaders(),
+                    Schedulers.boundedElastic());
+
+            IntentDecisionStreamFrame result = client
+                    .recognize(command(), MemoryContext.empty(), user())
+                    .blockLast();
+
+            assertThat(attempts.get()).isEqualTo(2);
+            assertThat(result.recognitionResult().status())
+                    .isEqualTo(IntentRecognitionResult.Status.FAILED_OR_DEGRADED);
+            assertThat(result.recognitionResult().decision().intentCode())
+                    .isEqualTo("finance.runtime.degraded");
+        }
+    }
+
+    @Test
+    void boundsBlockingAuthenticationOnDedicatedScheduler() throws Exception {
+        AtomicInteger downstreamCalls = new AtomicInteger();
+        AtomicReference<String> authThread = new AtomicReference<>();
+        CountDownLatch releaseAuth = new CountDownLatch(1);
+        IntentServiceHttpProperties properties = properties(0);
+        properties.setStreamAuthTimeout(Duration.ofMillis(100));
+        Scheduler scheduler = Schedulers.newBoundedElastic(1, 1, "test-intent-auth-io");
+        try (StreamServerFixture fixture = server(null, null, exchange -> {
+            downstreamCalls.incrementAndGet();
+            write(exchange, ROUTE_SINGLE_RESULT);
+        })) {
+            properties.setBaseUrl(fixture.baseUrl());
+            properties.setRecognizeStreamPath("/stream");
+            IntegrationAuthProperties authProperties = new IntegrationAuthProperties();
+            authProperties.setEnabled(true);
+            IntegrationAuthProperties.Service service = new IntegrationAuthProperties.Service();
+            service.setProvider("blocking");
+            authProperties.setServices(Map.of("intent-service", service));
+            AuthHeaderProvider blockingProvider = new AuthHeaderProvider() {
+                @Override
+                public String providerCode() {
+                    return "blocking";
+                }
+
+                @Override
+                public Map<String, String> headers(AuthHeaderRequest request) {
+                    authThread.set(Thread.currentThread().getName());
+                    try {
+                        releaseAuth.await();
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("authentication interrupted", ex);
+                    }
+                    return Map.of();
+                }
+            };
+            AuthHeaderProviderRegistry authHeaders =
+                    new AuthHeaderProviderRegistry(authProperties, List.of(blockingProvider));
+            ObjectMapper objectMapper = new ObjectMapper();
+            IntentServiceWireMapper wireMapper = new IntentServiceWireMapper(
+                    new IntentServiceRequestMapper(properties),
+                    new IntentServiceResponseMapper(objectMapper, properties));
+            FinEurekaIntentStreamClient client =
+                    client(properties, objectMapper, wireMapper, authHeaders, scheduler);
+
+            IntentDecisionStreamFrame result = client
+                    .recognize(command(), MemoryContext.empty(), user())
+                    .blockLast(Duration.ofSeconds(2));
+
+            assertThat(result.recognitionResult().decision().intentCode())
+                    .isEqualTo("finance.runtime.degraded");
+            assertThat(authThread.get()).startsWith("test-intent-auth-io-");
+            assertThat(downstreamCalls.get()).isZero();
+        } finally {
+            releaseAuth.countDown();
+            scheduler.dispose();
+        }
+    }
+
+    @Test
+    void startsFirstEventTimeoutAfterAuthenticationCompletes() throws Exception {
+        IntentServiceHttpProperties properties = properties(0);
+        properties.setStreamAuthTimeout(Duration.ofSeconds(1));
+        properties.setStreamFirstEventTimeout(Duration.ofMillis(50));
+        Scheduler scheduler = Schedulers.newBoundedElastic(1, 1, "test-intent-auth-before-request");
+        try (StreamServerFixture fixture = server(null, null, exchange -> write(exchange, ROUTE_SINGLE_RESULT))) {
+            properties.setBaseUrl(fixture.baseUrl());
+            properties.setRecognizeStreamPath("/stream");
+            IntegrationAuthProperties authProperties = new IntegrationAuthProperties();
+            authProperties.setEnabled(true);
+            IntegrationAuthProperties.Service service = new IntegrationAuthProperties.Service();
+            service.setProvider("slow");
+            authProperties.setServices(Map.of("intent-service", service));
+            AuthHeaderProvider slowProvider = new AuthHeaderProvider() {
+                @Override
+                public String providerCode() {
+                    return "slow";
+                }
+
+                @Override
+                public Map<String, String> headers(AuthHeaderRequest request) {
+                    sleep(Duration.ofMillis(150));
+                    return Map.of();
+                }
+            };
+            AuthHeaderProviderRegistry authHeaders =
+                    new AuthHeaderProviderRegistry(authProperties, List.of(slowProvider));
+            ObjectMapper objectMapper = new ObjectMapper();
+            IntentServiceWireMapper wireMapper = new IntentServiceWireMapper(
+                    new IntentServiceRequestMapper(properties),
+                    new IntentServiceResponseMapper(objectMapper, properties));
+            FinEurekaIntentStreamClient client =
+                    client(properties, objectMapper, wireMapper, authHeaders, scheduler);
+
+            IntentDecisionStreamFrame result = client
+                    .recognize(command(), MemoryContext.empty(), user())
+                    .blockLast(Duration.ofSeconds(2));
+
+            assertThat(result.recognitionResult().decision().intentCode()).isEqualTo("knowledge");
+        } finally {
+            scheduler.dispose();
+        }
+    }
+
+    @Test
+    void degradesWithoutCallingDownstreamWhenAuthSchedulerQueueIsFull() throws Exception {
+        AtomicInteger downstreamCalls = new AtomicInteger();
+        CountDownLatch workerStarted = new CountDownLatch(1);
+        CountDownLatch releaseWorker = new CountDownLatch(1);
+        Scheduler scheduler = Schedulers.newBoundedElastic(1, 1, "test-intent-auth-full");
+        scheduler.schedule(() -> {
+            workerStarted.countDown();
+            try {
+                releaseWorker.await();
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        workerStarted.await();
+        scheduler.schedule(() -> {
+        });
+        IntentServiceHttpProperties properties = properties(0);
+        try (StreamServerFixture fixture = server(null, null, exchange -> {
+            downstreamCalls.incrementAndGet();
+            write(exchange, ROUTE_SINGLE_RESULT);
+        })) {
+            properties.setBaseUrl(fixture.baseUrl());
+            properties.setRecognizeStreamPath("/stream");
+            ObjectMapper objectMapper = new ObjectMapper();
+            IntentServiceWireMapper wireMapper = new IntentServiceWireMapper(
+                    new IntentServiceRequestMapper(properties),
+                    new IntentServiceResponseMapper(objectMapper, properties));
+            FinEurekaIntentStreamClient client =
+                    client(properties, objectMapper, wireMapper, noopAuthHeaders(), scheduler);
+
+            IntentDecisionStreamFrame result = client
+                    .recognize(command(), MemoryContext.empty(), user())
+                    .blockLast(Duration.ofSeconds(2));
+
+            assertThat(result.recognitionResult().decision().intentCode())
+                    .isEqualTo("finance.runtime.degraded");
+            assertThat(downstreamCalls.get()).isZero();
+        } finally {
+            releaseWorker.countDown();
+            scheduler.dispose();
+        }
+    }
+
+    @Test
     void degradesWhenSuccessfulResponseIsNotSse() throws Exception {
         try (StreamServerFixture fixture = server(null, null, exchange -> {
             byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
@@ -393,11 +604,22 @@ class FinEurekaIntentStreamClientTest {
         IntentServiceWireMapper wireMapper = new IntentServiceWireMapper(
                 new IntentServiceRequestMapper(properties),
                 new IntentServiceResponseMapper(objectMapper, properties));
-        AuthHeaderProviderRegistry authHeaders = new AuthHeaderProviderRegistry(
-                new IntegrationAuthProperties(), List.of(new NoopAuthHeaderProvider()));
+        return client(properties, objectMapper, wireMapper, noopAuthHeaders(), Schedulers.boundedElastic());
+    }
+
+    private FinEurekaIntentStreamClient client(IntentServiceHttpProperties properties,
+                                                ObjectMapper objectMapper,
+                                                IntentServiceWireMapper wireMapper,
+                                                AuthHeaderProviderRegistry authHeaders,
+                                                Scheduler scheduler) {
         return new FinEurekaIntentStreamClient(
                 WebClient.builder(), objectMapper, properties, wireMapper, authHeaders,
-                new DefaultIntentRetryPolicy());
+                new DefaultIntentRetryPolicy(), scheduler);
+    }
+
+    private AuthHeaderProviderRegistry noopAuthHeaders() {
+        return new AuthHeaderProviderRegistry(
+                new IntegrationAuthProperties(), List.of(new NoopAuthHeaderProvider()));
     }
 
     private IntentServiceHttpProperties properties(int maxRetries) {

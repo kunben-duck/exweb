@@ -1,5 +1,7 @@
 package com.huawei.it.ex.one.infrastructure.persistence;
 
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
@@ -54,12 +56,32 @@ public interface ChatRunExecutionMapper {
      *
      * @param runId run 主键。
      * @param ownerInstanceId 当前执行实例 ID，必须与数据库 owner 匹配。
+     * @param fencingToken 当前 execution fencing token。
      * @param leaseUntil 新的租约截止时间。
      * @return 影响行数；为 0 表示 owner 失效或 execution 不在可续约状态。
      */
     int heartbeat(@Param("runId") String runId,
                   @Param("ownerInstanceId") String ownerInstanceId,
+                  @Param("fencingToken") long fencingToken,
                   @Param("leaseUntil") Instant leaseUntil);
+
+    /**
+     * 使用完整 claim 条件批量刷新 execution 租约。
+     *
+     * @param claims 本批 claim。
+     * @param leaseUntil 新的租约截止时间。
+     * @return 完成续租的 execution 数量。
+     */
+    int heartbeatBatch(@Param("claims") List<RunExecutionClaim> claims,
+                       @Param("leaseUntil") Instant leaseUntil);
+
+    /**
+     * 查询一批 claim 中仍可续租的 execution，用于识别批量更新中的失效 claim。
+     *
+     * @param claims 本批 claim。
+     * @return 仍匹配 owner、fencing token 和运行状态的 execution。
+     */
+    List<ChatRunExecutionRow> findHeartbeatEligibleClaims(@Param("claims") List<RunExecutionClaim> claims);
 
     /**
      * 将 execution 标记为终态。

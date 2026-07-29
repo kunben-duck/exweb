@@ -22,11 +22,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import reactor.core.Exceptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.codec.DecodingException;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Component;
@@ -60,13 +61,15 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
     private final IntentServiceWireMapper wireMapper;
     private final AuthHeaderProviderRegistry authHeaders;
     private final IntentRetryPolicy retryPolicy;
+    private final Scheduler authIoScheduler;
 
     public FinEurekaIntentStreamClient(WebClient.Builder webClientBuilder,
                                       ObjectMapper objectMapper,
                                       IntentServiceHttpProperties properties,
                                       IntentServiceWireMapper wireMapper,
                                       AuthHeaderProviderRegistry authHeaders,
-                                      IntentRetryPolicy retryPolicy) {
+                                      IntentRetryPolicy retryPolicy,
+                                      @Qualifier("intentStreamAuthScheduler") Scheduler authIoScheduler) {
         this.webClient = properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()
                 ? webClientBuilder.build()
                 : webClientBuilder.baseUrl(properties.getBaseUrl().trim()).build();
@@ -75,6 +78,7 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
         this.wireMapper = wireMapper;
         this.authHeaders = authHeaders;
         this.retryPolicy = retryPolicy;
+        this.authIoScheduler = authIoScheduler;
     }
 
     @Override
@@ -92,15 +96,30 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
         if (properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()) {
             return Flux.error(new IntentStreamProtocolException("IntentDecision base URL is not configured"));
         }
+        return resolveAuthHeaders(context)
+                .flatMapMany(headers -> requestStream(context, headers));
+    }
+
+    private Flux<IntentDecisionStreamFrame> requestStream(StreamAttemptContext context,
+                                                          Map<String, String> resolvedAuthHeaders) {
         Flux<IntentDecisionStreamFrame> responseFrames = webClient.post()
                 .uri(properties.getRecognizeStreamPath())
                 .accept(MediaType.TEXT_EVENT_STREAM)
-                .headers(headers -> applyAuthHeaders(headers, context.user()))
+                .headers(headers -> resolvedAuthHeaders.forEach(headers::set))
                 .bodyValue(wireMapper.toWireRequest(context.command(), context.memory(), context.user()))
                 .exchangeToFlux(response -> responseFrames(response, context));
         Flux<IntentDecisionStreamFrame> firstEventBound = responseFrames.timeout(
                 Mono.delay(properties.normalizedStreamFirstEventTimeout()), ignored -> Mono.never());
         return withTotalTimeout(firstEventBound);
+    }
+
+    private Mono<Map<String, String>> resolveAuthHeaders(StreamAttemptContext context) {
+        return Mono.fromCallable(() -> authHeaders.headers(authHeaderRequest(context.user())))
+                .map(headers -> headers == null ? Map.<String, String>of() : Map.copyOf(headers))
+                .subscribeOn(authIoScheduler)
+                .timeout(properties.normalizedStreamAuthTimeout(),
+                        Mono.error(new IntentStreamTimeoutException(
+                                "IntentDecision stream authentication timeout")));
     }
 
     private Flux<IntentDecisionStreamFrame> responseFrames(ClientResponse response,
@@ -206,6 +225,14 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
             if (result == null) {
                 return Flux.error(new IntentStreamProtocolException(
                         "IntentDecision result event did not produce a recognition result"));
+            }
+            if (result.waitingClarification()) {
+                return Flux.just(IntentDecisionStreamFrame.result(
+                        result, context.attempt(), context.maxAttempts()));
+            }
+            if (result.status() == IntentRecognitionResult.Status.FINAL && result.decision() == null) {
+                return Flux.error(new IntentStreamProtocolException(
+                        "IntentDecision final result does not contain a decision"));
             }
             IntentRetryContext retryContext = new IntentRetryContext(
                     context.command(), context.memory(), context.user(),
@@ -399,8 +426,8 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
         return false;
     }
 
-    private void applyAuthHeaders(HttpHeaders headers, UserContext user) {
-        authHeaders.headers(new AuthHeaderRequest(
+    private AuthHeaderRequest authHeaderRequest(UserContext user) {
+        return new AuthHeaderRequest(
                 user == null ? null : user.tenantId(),
                 user == null ? null : user.ownerUserId(),
                 "intent-service",
@@ -408,7 +435,7 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
                 properties.getBaseUrl(),
                 properties.getRecognizeStreamPath(),
                 null
-        )).forEach(headers::set);
+        );
     }
 
     private record StreamAttemptContext(

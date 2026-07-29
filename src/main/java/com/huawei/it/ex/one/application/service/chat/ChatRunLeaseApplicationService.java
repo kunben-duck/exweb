@@ -18,6 +18,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 
 /**
  * Chat run 租约应用服务。
@@ -91,7 +96,11 @@ public class ChatRunLeaseApplicationService {
         if (claim == null) {
             return false;
         }
-        return executionRepository.heartbeat(claim.runId(), claim.ownerInstanceId(), properties.normalizedLeaseDuration());
+        return executionRepository.heartbeat(
+                claim.runId(),
+                claim.ownerInstanceId(),
+                claim.fencingToken(),
+                properties.normalizedLeaseDuration());
     }
 
     /**
@@ -127,24 +136,44 @@ public class ChatRunLeaseApplicationService {
     /**
      * 定期刷新本 JVM 正在执行的 run 租约。
      *
-     * <p>使用本机 registry 的 claim 快照执行 heartbeat。刷新失败通常说明 run 已终态、被 stop、
-     * 被 watchdog 抢占，或当前实例已经不再拥有写入权；失败只记录日志，后续事件写入栅栏会负责阻断。</p>
+     * <p>使用本机 registry 的 claim 快照执行 heartbeat。数据库明确拒绝当前完整 claim 时，
+     * 条件取消对应的本机后台订阅；数据库异常只记录日志，保留订阅并由后续 heartbeat 或事件写入栅栏处理。</p>
      */
     @Scheduled(fixedDelayString = "#{@chatRunOperationalProperties.normalizedHeartbeatInterval().toMillis()}")
     void heartbeatActiveRuns() {
-        for (RunExecutionClaim claim : executionRegistry.activeClaims()) {
-            try {
-                if (!heartbeat(claim)) {
+        // 固定批次顺序，避免多行更新在不同轮次采用不稳定的锁访问顺序。
+        List<RunExecutionClaim> claims = executionRegistry.activeClaims().stream()
+                .sorted(Comparator.comparing(RunExecutionClaim::runId))
+                .toList();
+        int batchSize = properties.normalizedHeartbeatBatchSize();
+        for (int from = 0; from < claims.size(); from += batchSize) {
+            int to = Math.min(from + batchSize, claims.size());
+            // 每批由仓储开启独立短事务；单批失败后仍可继续续租后续批次。
+            renewHeartbeatBatch(List.copyOf(claims.subList(from, to)));
+        }
+    }
+
+    private void renewHeartbeatBatch(List<RunExecutionClaim> claims) {
+        try {
+            List<RunExecutionClaim> renewedClaims = Objects.requireNonNull(
+                    executionRepository.heartbeatBatch(claims, properties.normalizedLeaseDuration()),
+                    "heartbeatBatch result");
+            Set<RunExecutionClaim> renewed = new HashSet<>(renewedClaims);
+            for (RunExecutionClaim claim : claims) {
+                // 只有数据库明确未返回的完整 claim 才能取消，数据库异常不能视为 owner 失效。
+                if (!renewed.contains(claim)) {
                     log.debug("ChatRun heartbeat skipped or rejected. runId={}, owner={}, token={}",
                             claim.runId(), claim.ownerInstanceId(), claim.fencingToken());
+                    executionRegistry.cancel(claim);
                 }
-            } catch (RuntimeException ex) {
-                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_WRITE_FAILED,
-                                "ChatRun execution lease heartbeat failed")
-                        .runId(claim.runId())
-                        .operation("run-execution.heartbeat")
-                        .build(), ex);
             }
+        } catch (RuntimeException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_WRITE_FAILED,
+                            "ChatRun execution lease heartbeat batch failed")
+                    .operation("run-execution.heartbeat.batch")
+                    .attribute("batchSize", claims.size())
+                    .attribute("firstRunId", claims.getFirst().runId())
+                    .build(), ex);
         }
     }
 }

@@ -12,6 +12,30 @@ import java.util.Map;
 class AssistantAssemblyTest {
 
     @Test
+    void keepsIntentProcessEventsOutOfHistoricalParts() {
+        AssistantAssembly assembly = new AssistantAssembly();
+
+        assembly.observe(RuntimeEvent.progress("run1", "session1", Map.of(
+                "source", "intent-agent",
+                "sourceType", "intent-start",
+                "message", "正在识别问题意图"
+        )));
+        assembly.observe(RuntimeEvent.progress("run1", "session1", Map.of(
+                "source", "intent-agent",
+                "sourceType", "intent-progress",
+                "message", "ES检索中"
+        )));
+        assembly.observe(RuntimeEvent.thinking("run1", "session1", Map.of(
+                "source", "intent-agent",
+                "sourceType", "intent-delta",
+                "text", "处理中"
+        )));
+
+        assertThat(assembly.parts()).isEmpty();
+        assertThat(assembly.shouldPersistMessage()).isFalse();
+    }
+
+    @Test
     void preservesCompleteDomainAgentProcessResultInHistoricalPart() {
         String fixedResponse = "<svg>" + "x".repeat(4079) + "</svg>";
         AssistantAssembly assembly = new AssistantAssembly();

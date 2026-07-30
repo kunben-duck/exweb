@@ -71,6 +71,7 @@ Referer: http://localhost:8080/fin/ex/
 - 附件：选择文档库中 `AVAILABLE` 文档作为聊天附件发送；指定 DomainAgent 且使用 `api-store` 上传时，可在 multipart `metadata` JSON 中传 `skillId`。
 - 跨页签续接：复制页签后通过 run 级事件恢复从 `activeRunFirstSeq - 1` 补发当前 active run 已生成事件，并继续接收 live 事件直到本轮 run 终态；active run 恢复期间不会先 replay 本地缓存，避免把同浏览器缓存误认为服务端续传结果。
 - 运行态按钮：active run 存在时发送按钮显示“生成中”并禁用，停止按钮保持可用；刷新、复制页签或切换会话后通过 `stream-status` 恢复同样状态。
+- 歧义路由代选：`AMBIGUOUS_ROUTE` 等待事件或 `stream-status` 返回 `autoSelectAt` 后，联调台在页面端到期提交 `CONTINUE_INTERACTION + AUTO_SELECT`；刷新和页面重新可见时会重建检查，多页签冲突通过后端 Interaction CAS 恢复 run-B。
 - 故障事件：支持观察 watchdog 或控制面初始化失败产生的 `run.failed`，验证前端能关闭 loading 并保留失败草稿。
 - 反馈：历史 assistant 消息支持 LIKE/DISLIKE 反馈提交、切换和再次点击取消。
 - 企业鉴权联调：通过本地代理为 HTTP/Event Resume/WebSocket 统一注入自定义请求头和 Cookie。

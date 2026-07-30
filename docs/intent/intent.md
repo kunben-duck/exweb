@@ -124,7 +124,7 @@ Authorization: {dynamicToken}
 
 ### 3.2 澄清过程记录
 
-普通澄清，或 `AMBIGUOUS_ROUTE` 选择“其他”时，用户回答放在本轮顶层 `query` 中；上一轮触发澄清的问题和澄清问题写入 `history.type=clarify`。直接选择候选、点击“代为选择”或超时自动选择会跳过 IntentAgent，不生成这次调用参数。
+普通澄清，或 `AMBIGUOUS_ROUTE` 选择“其他”时，用户回答放在本轮顶层 `query` 中；上一轮触发澄清的问题和澄清问题写入 `history.type=clarify`。直接选择候选、点击“代为选择”或前端到达 `autoSelectAt` 后提交代选会跳过 IntentAgent，不生成这次调用参数。
 
 ```json
 {
@@ -226,7 +226,7 @@ Authorization: {dynamicToken}
 - `CLARIFY` 不是最终路由结果，不调用 DomainAgent，也不写成功 route 历史。
 - 澄清只用于完成路由判断，不采集 DomainAgent 执行业务所需的详细参数。
 - 普通澄清或 `AMBIGUOUS_ROUTE` 的“其他”回答后，顶层 `query` 使用用户最新回答，`routeTrigger=clarify_answer`。
-- `AMBIGUOUS_ROUTE` 指定候选、代为选择和超时自动选择不再次调用 IntentAgent。
+- `AMBIGUOUS_ROUTE` 指定候选和前端代为选择不再次调用 IntentAgent。
 
 ## 5. 典型调用场景
 

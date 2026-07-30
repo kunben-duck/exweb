@@ -25,17 +25,12 @@ record AmbiguousRouteContinuationPlan(
     }
 
     static AmbiguousRouteContinuationPlan autoSelected(
-            AmbiguousRouteSelectionResolver.Candidate candidate,
-            boolean timeout) {
+            AmbiguousRouteSelectionResolver.Candidate candidate) {
         return new AmbiguousRouteContinuationPlan(
                 Mode.AUTO_SELECT,
                 candidate,
-                timeout
-                        ? "intent-timeout-auto-selected"
-                        : "user-delegated-auto-selected",
-                timeout
-                        ? AmbiguousRouteSupport.SELECTION_SOURCE_TIMEOUT
-                        : AmbiguousRouteSupport.SELECTION_SOURCE_DELEGATED);
+                "user-delegated-auto-selected",
+                AmbiguousRouteSupport.SELECTION_SOURCE_DELEGATED);
     }
 
     static AmbiguousRouteContinuationPlan other() {

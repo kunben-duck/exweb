@@ -20,8 +20,8 @@ import java.time.Instant;
  * @param interactionType 等待类型。
  * @param assistantMessageId 承载等待卡片的 assistant 消息 ID。
  * @param expiresAt 等待请求过期时间。
- * @param autoSelectAt AMBIGUOUS_ROUTE 自动代选时间；其他等待类型为空。
- * @param autoSelectTimeoutMs AMBIGUOUS_ROUTE 自动代选等待毫秒数；其他等待类型为空。
+ * @param autoSelectAt AMBIGUOUS_ROUTE 前端提交代选的截止时间；其他等待类型为空。
+ * @param autoSelectTimeoutMs AMBIGUOUS_ROUTE 前端建议等待毫秒数；其他等待类型为空。
  * @param bindingProvider 当前会话 active binding provider。
  * @param bindingTargetType 当前绑定目标类型。
  * @param bindingTargetId 当前绑定目标 ID。

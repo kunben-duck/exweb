@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 在 AMBIGUOUS_ROUTE 等待卡片落库前补齐动作和自动选择截止时间。
+ * 在 AMBIGUOUS_ROUTE 等待卡片落库前补齐动作和前端代选截止时间。
  */
 final class AmbiguousRouteWaitPolicy {
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);

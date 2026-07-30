@@ -923,8 +923,9 @@ run-A: Intent -> candidate card -> run.waiting_user
 run-B: candidate response -> selectedDomainAgent -> DomainAgent events -> terminal
 ```
 
-run-A 在 `run.waiting_user` 后已经终止，不会重新打开。用户选择候选、点击“代为选择”、输入“其他”或本机
-超时任务获胜后，会创建新的 run-B。两个 run 复用同一条 assistant 消息，但事件事实仍严格按 runId 隔离：
+run-A 在 `run.waiting_user` 后已经终止，不会重新打开。用户选择候选、点击“代为选择”、输入“其他”或
+前端在 `autoSelectAt` 到达后提交代选，都会创建新的 run-B。两个 run 复用同一条 assistant 消息，但事件
+事实仍严格按 runId 隔离：
 
 - run-A 的 topic 和 run Resume 只包含 run-A 事件。
 - run-B 的 topic 和 run Resume 只包含 run-B 事件。
@@ -932,20 +933,21 @@ run-A 在 `run.waiting_user` 后已经终止，不会重新打开。用户选择
 - run-B 的 `intent-clarification-response` 携带 `interactionId/assistantMessageId/sourceRunId/selectionSource`，
   前端据此把后续输出接到 run-A 等待卡片所在 assistant。
 
-`autoSelectAt` 到达后，刷新页或新浏览器固定执行：
+`autoSelectAt` 是客户端触发截止时间。首次收到等待事件、刷新页或新浏览器固定执行：
 
-1. 查询 `stream-status`。
-2. 已有 `activeRunId` 时，以 `activeRunFirstSeq - 1` 打开该 run-B 的 Resume。
-3. 仍返回同一 WAITING Interaction 时，每隔 1 秒重试状态，最多 5 次，覆盖本机定时任务调度和 admission
-   的短窗口。
-4. Interaction 已结束且没有 active run 时，重新查询消息历史。
+1. 收到等待事件时按 `autoSelectAt` 注册页面定时器；页面恢复可见状态时重新比较截止时间。
+2. 到期后提交 `CONTINUE_INTERACTION + interactionAction=AUTO_SELECT`。
+3. 刷新后先查询 `stream-status`；仍是同一 WAITING Interaction 且已到期时立即提交代选。
+4. 收到 `INTERACTION_ALREADY_HANDLED` 后重新查询状态；已有 `activeRunId` 时，以
+   `activeRunFirstSeq - 1` 打开该 run-B 的 Resume。
+5. Interaction 已结束且没有 active run 时，重新查询消息历史。
 
-人工提交和超时任务竞争同一个 `WAITING -> RESPONDING` 条件更新。人工请求先获胜时，原实例上的定时任务
-随后退出；超时任务先获胜时，人工请求返回 `INTERACTION_ALREADY_HANDLED`，前端改用 stream-status 找到
-run-B。页面恢复期间同一 run-B 仍只能选择 WebSocket 或 run SSE 一条消费链。
+多个页签、人工选择和到期代选请求竞争同一个 `WAITING -> RESPONDING` 条件更新。成功请求创建run-B；
+其他请求收到 `INTERACTION_ALREADY_HANDLED` 后通过 stream-status 找到run-B。页面恢复期间同一run-B
+仍只能选择WebSocket或run SSE一条消费链。
 
-自动选择任务仅存在于创建 WAITING Interaction 的实例内存中。实例重启不会由其他实例接管定时器，此时
-Interaction 仍保持可人工续接；这与 run-B 已经启动后的 Event Resume 是两个不同问题。
+后端不注册自动选择定时任务，也不持久化 Cookie 或入口 metadata。没有在线前端时 Interaction 保持
+WAITING；重新打开会话后，前端根据 stream-status 中已经到期的 `autoSelectAt` 立即提交代选。
 
 ## 13. stream-status 的作用
 
@@ -1095,7 +1097,7 @@ assistant 汇总连续和 execution fencing 正确，因此当前不能视为实
 | `financeex.chat-run.execution-init-orphan-grace` | `2m` | execution 初始化孤儿宽限期 |
 | `financeex.chat-run.first-event-timeout` | `30s` | `/runs` 首持久化事件等待上限 |
 | `financeex.chat-run.external-terminal-transaction-timeout-seconds` | `10` | 准入/栅栏/终态短事务上限 |
-| `financeex.intent.ambiguous-route-wait-timeout` | `30s` | 歧义路由候选等待后，本机自动选择最高 confidence 候选的时间 |
+| `financeex.intent.ambiguous-route-wait-timeout` | `30s` | 服务端生成前端代选截止时间的等待时长 |
 
 ### 16.2 事件流水线
 
@@ -1203,7 +1205,7 @@ assistant 汇总连续和 execution fencing 正确，因此当前不能视为实
 | 连接、订阅与 sequence 判定 | [`LocalWebSocketConnectionRegistry`](../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java) |
 | 前端统一 envelope | [`ChatTurnStreamTranslator`](../../src/main/java/com/huawei/it/ex/one/interfaces/chat/ChatTurnStreamTranslator.java) |
 | stream-status 与 active run | [`ChatRunApplicationService`](../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunApplicationService.java) |
-| 歧义路由候选选择与本机超时 | [`AmbiguousRouteSelectionResolver`](../../src/main/java/com/huawei/it/ex/one/application/service/chat/AmbiguousRouteSelectionResolver.java)、[`AmbiguousRouteTimeoutScheduler`](../../src/main/java/com/huawei/it/ex/one/application/service/chat/AmbiguousRouteTimeoutScheduler.java) |
+| 歧义路由候选选择与截止时间 | [`AmbiguousRouteSelectionResolver`](../../src/main/java/com/huawei/it/ex/one/application/service/chat/AmbiguousRouteSelectionResolver.java)、[`AmbiguousRouteWaitPolicy`](../../src/main/java/com/huawei/it/ex/one/application/service/chat/AmbiguousRouteWaitPolicy.java) |
 | execution 心跳与失联收敛 | [`ChatRunWatchdogScheduler`](../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunWatchdogScheduler.java)、[`ChatRunRecoveryOrchestrator`](../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunRecoveryOrchestrator.java) |
 
 ## 19. 前端实现检查表

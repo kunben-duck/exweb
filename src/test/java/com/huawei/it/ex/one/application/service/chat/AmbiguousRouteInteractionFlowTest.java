@@ -372,7 +372,7 @@ class AmbiguousRouteInteractionFlowTest extends ChatFlowTestSupport {
             InMemoryMessageRepository messages,
             InMemoryInteractionRequestRepository interactions,
             UserContext user) {
-        Instant now = Instant.parse("2026-07-30T10:00:00Z");
+        Instant now = Instant.now();
         sessions.save(new ChatSession(
                 "session-1",
                 user.tenantId(),

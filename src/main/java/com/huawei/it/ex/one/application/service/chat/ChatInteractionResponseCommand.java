@@ -24,8 +24,7 @@ public record ChatInteractionResponseCommand(
         AgentModeProfile agentMode,
         String targetType,
         String targetId,
-        String interactionAction,
-        String selectionSource
+        String interactionAction
 ) {
     /** 兼容尚未携带 AMBIGUOUS_ROUTE 选择字段的完整内部命令。 */
     public ChatInteractionResponseCommand(
@@ -34,7 +33,7 @@ public record ChatInteractionResponseCommand(
             String sessionId, String appId, String appName, List<AttachmentRef> attachments,
             AgentModeProfile agentMode) {
         this(user, interactionId, approved, scope, questionnaireAnswers, metadata,
-                sessionId, appId, appName, attachments, agentMode, null, null, null, null);
+                sessionId, appId, appName, attachments, agentMode, null, null, null);
     }
 
     public ChatInteractionResponseCommand(
@@ -42,14 +41,14 @@ public record ChatInteractionResponseCommand(
             Map<String, Object> questionnaireAnswers, Map<String, Object> metadata,
             String sessionId, String appId, String appName, List<AttachmentRef> attachments) {
         this(user, interactionId, approved, scope, questionnaireAnswers, metadata,
-                sessionId, appId, appName, attachments, null, null, null, null, null);
+                sessionId, appId, appName, attachments, null, null, null, null);
     }
 
     /** 兼容不携带会话 App Tag 的内部调用。 */
     public ChatInteractionResponseCommand(UserContext user, String interactionId, Boolean approved, String scope,
                                           Map<String, Object> questionnaireAnswers, Map<String, Object> metadata) {
         this(user, interactionId, approved, scope, questionnaireAnswers, metadata,
-                null, null, null, List.of(), null, null, null, null, null);
+                null, null, null, List.of(), null, null, null, null);
     }
 
     /** 兼容不携带附件的 App Tag 续接调用。 */
@@ -57,7 +56,7 @@ public record ChatInteractionResponseCommand(
                                           Map<String, Object> questionnaireAnswers, Map<String, Object> metadata,
                                           String sessionId, String appId, String appName) {
         this(user, interactionId, approved, scope, questionnaireAnswers, metadata,
-                sessionId, appId, appName, List.of(), null, null, null, null, null);
+                sessionId, appId, appName, List.of(), null, null, null, null);
     }
 
     public ChatInteractionResponseCommand {
@@ -70,7 +69,6 @@ public record ChatInteractionResponseCommand(
         targetType = normalize(targetType);
         targetId = normalize(targetId);
         interactionAction = normalize(interactionAction);
-        selectionSource = normalize(selectionSource);
     }
 
     private static String normalize(String value) {

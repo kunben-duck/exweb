@@ -205,8 +205,9 @@ user 原始问题 -> assistant 澄清问题 -> user 澄清回答 -> assistant �
 澄清 assistant 的正文为 `clarifyQuestion`，并保留 `INTENT_CLARIFICATION_REQUEST` part；用户回答是独立 user 消息。`intent-clarification-response` 仍作为实时和恢复事件保留，但不重复写入 assistant parts。
 
 `AMBIGUOUS_ROUTE` 是消息策略例外。候选卡片、候选选择响应和最终 DomainAgent 结果复用同一条
-assistant；run-A 负责等待，run-B 负责选择后执行。指定候选、用户点击“代为选择”和超时自动选择均跳过
-IntentAgent；只有用户输入“其他”文本或附件时，才按普通澄清规则再次调用 IntentAgent。
+assistant；run-A 负责等待，run-B 负责选择后执行。指定候选、用户点击“代为选择”和前端到达
+`autoSelectAt` 后提交代选均跳过 IntentAgent；只有用户输入“其他”文本或附件时，才按普通澄清规则再次
+调用 IntentAgent。
 
 ```text
 ---
@@ -474,7 +475,7 @@ JSON 数组顺序是稳定的，因此可以用来表达历史顺序。
 
 * 不单独设计 `pending_clarify`。
 * `clarify` 一条记录表达用户“触发澄清的问题 + Supervisor 澄清问题”；普通回答或 `AMBIGUOUS_ROUTE` 的“其他”输入作为本轮再次调用当前配置的意图决策接口的 `query` 传入，不在 `clarify` 记录中重复保存。
-* `AMBIGUOUS_ROUTE` 直接选择、代为选择和超时自动选择不再次调用意图服务。
+* `AMBIGUOUS_ROUTE` 直接选择和前端代为选择不再次调用意图服务。
 * 多轮澄清时追加多条 `clarify`。
 * 澄清成功后，将多条 `clarify` 折叠成一条 `route`。
 
@@ -594,7 +595,7 @@ Supervisor 调用意图服务时，将拒答说明放入：
 ### 9.3 澄清中
 
 如果还在澄清中未路由（上一轮 `/getIntentDecision` 返回 `routeAction=CLARIFY`），Supervisor 向用户澄清。
-普通回答或 `AMBIGUOUS_ROUTE` 的“其他”输入会再次调用当前配置的意图决策接口，并将触发澄清的问题和澄清问题作为 `clarify` 写入 history；用户回答放在本轮 `query` 中。指定候选、代为选择和超时自动选择不调用意图接口。
+普通回答或 `AMBIGUOUS_ROUTE` 的“其他”输入会再次调用当前配置的意图决策接口，并将触发澄清的问题和澄清问题作为 `clarify` 写入 history；用户回答放在本轮 `query` 中。指定候选和前端代为选择不调用意图接口。
 
 多轮澄清期间，保留多条 clarify。
 

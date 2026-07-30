@@ -18,7 +18,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.convert.DurationStyle;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.scheduling.TaskScheduler;
 
 /** Declares stateless context, admission and run-start workflow components. */
 @Configuration(proxyBeanMethods = false)
@@ -37,15 +36,6 @@ class ChatFlowFoundationConfiguration {
                 selectionResolver,
                 interactionPropertiesProvider.getIfAvailable(),
                 DurationStyle.detectAndParse(timeout));
-    }
-
-    @Bean
-    AmbiguousRouteTimeoutScheduler ambiguousRouteTimeoutScheduler(
-            @Qualifier("finExTaskScheduler") ObjectProvider<TaskScheduler> taskSchedulerProvider,
-            ObjectProvider<FinanceChatOrchestrator> orchestratorProvider) {
-        return new AmbiguousRouteTimeoutScheduler(
-                taskSchedulerProvider.getIfAvailable(),
-                orchestratorProvider);
     }
 
     @Bean
@@ -109,15 +99,13 @@ class ChatFlowFoundationConfiguration {
             RunAdmissionControlService admissionControl,
             LocalChatRunExecutionRegistry executionRegistry,
             ChatRunOperationalProperties operationalProperties,
-            FirstEventTimeoutCompensator timeoutCompensator,
-            AmbiguousRouteTimeoutScheduler ambiguousRouteTimeoutScheduler) {
+            FirstEventTimeoutCompensator timeoutCompensator) {
         return new ChatRunStartCoordinator(
                 idGenerator,
                 admissionControl,
                 executionRegistry,
                 operationalProperties,
-                timeoutCompensator,
-                ambiguousRouteTimeoutScheduler);
+                timeoutCompensator);
     }
 
     @Bean
@@ -127,16 +115,14 @@ class ChatFlowFoundationConfiguration {
             SessionApplicationService sessionService,
             DocumentFacade documentFacade,
             IntentClarificationContextAssembler clarificationAssembler,
-            AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver,
-            AmbiguousRouteTimeoutScheduler ambiguousRouteTimeoutScheduler) {
+            AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver) {
         return new InteractionContinuationCoordinator(
                 runStartCoordinator,
                 interactionService,
                 sessionService,
                 documentFacade,
                 clarificationAssembler,
-                ambiguousRouteSelectionResolver,
-                ambiguousRouteTimeoutScheduler);
+                ambiguousRouteSelectionResolver);
     }
 
     @Bean

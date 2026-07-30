@@ -1,7 +1,9 @@
 const apiBase = "";
-const terminalRunEvents = new Set(["run.completed", "run.failed", "run.cancelled"]);
+const terminalRunEvents = new Set(["run.completed", "run.failed", "run.cancelled", "run.waiting_user"]);
 const authHeadersStorageKey = "finex:test:authHeadersText";
 const authProfileStorageKey = "finex:test:authProfileId";
+const ambiguousAutoSelectRetryDelayMs = 1000;
+const ambiguousAutoSelectMaxAttempts = 5;
 
 const state = {
   sessions: [],
@@ -22,6 +24,7 @@ const state = {
   pendingDeltaByRun: new Map(),
   deltaFlushScheduled: false,
   restoringRunIds: new Set(),
+  ambiguousAutoSelectTasks: new Map(),
   authProfileId: localStorage.getItem(authProfileStorageKey) || newAuthProfileId(),
   authHeadersText: localStorage.getItem(authHeadersStorageKey) || "",
   authProfileSynced: false,
@@ -257,6 +260,7 @@ function renderSessions() {
 }
 
 async function selectSession(sessionId) {
+  clearAmbiguousAutoSelectTasks();
   state.selectedSessionId = sessionId;
   localStorage.setItem("finex:test:lastSessionId", sessionId);
   history.replaceState(null, "", `?sessionId=${encodeURIComponent(sessionId)}`);
@@ -815,6 +819,21 @@ function handleChatEvent(event, source = "event", options = {}) {
   if (event.type === "message.completed") {
     return true;
   }
+  if (event.type === "run.waiting_user") {
+    flushPendingDeltas(event.runId);
+    state.activeRunId = null;
+    state.activeTopicId = null;
+    state.activeRunStatus = "WAITING_USER";
+    setActiveRunLabel();
+    scheduleAmbiguousAutoSelect({
+      sessionId: event.sessionId,
+      waitingUserInput: true,
+      interactionId: event.payload?.interactionId,
+      autoSelectAt: event.payload?.autoSelectAt
+    });
+    appendMessage("system", `${event.type} ${event.runId}`);
+    return true;
+  }
   if (event.type?.startsWith("runtime.")) {
     flushPendingDeltas(event.runId);
     appendMessage("system", runtimeEventLabel(event.type, event.payload || {}));
@@ -1359,6 +1378,144 @@ function setStreamStatus(status) {
   state.activeTopicId = status.activeStreamTopicId || null;
   state.activeRunStatus = status.activeRunStatus || null;
   setActiveRunLabel();
+  scheduleAmbiguousAutoSelect(status);
+}
+
+function scheduleAmbiguousAutoSelect(status) {
+  const sessionId = status?.sessionId || state.selectedSessionId;
+  if (!sessionId || sessionId !== state.selectedSessionId) {
+    return;
+  }
+  const interactionId = status?.waitingUserInput ? status.interactionId : null;
+  const autoSelectAt = status?.autoSelectAt;
+  if (!interactionId || !autoSelectAt) {
+    clearAmbiguousAutoSelectTasks();
+    return;
+  }
+  const deadlineMs = Date.parse(autoSelectAt);
+  if (!Number.isFinite(deadlineMs)) {
+    log(`ambiguous auto-select ignored invalid deadline interaction=${interactionId}`);
+    return;
+  }
+  const existing = state.ambiguousAutoSelectTasks.get(interactionId);
+  if (existing?.autoSelectAt === autoSelectAt) {
+    return;
+  }
+  clearAmbiguousAutoSelectTasks();
+  const task = {
+    sessionId,
+    interactionId,
+    autoSelectAt,
+    commandId: `cmd_ambiguous_auto_${interactionId}_${Date.now()}`,
+    attempts: 0,
+    inFlight: false,
+    timerId: null
+  };
+  state.ambiguousAutoSelectTasks.set(interactionId, task);
+  armAmbiguousAutoSelect(task, Math.max(0, deadlineMs - Date.now()));
+}
+
+function armAmbiguousAutoSelect(task, delayMs) {
+  task.timerId = window.setTimeout(
+    () => triggerAmbiguousAutoSelect(task),
+    Math.max(0, delayMs));
+}
+
+async function triggerAmbiguousAutoSelect(task) {
+  if (state.ambiguousAutoSelectTasks.get(task.interactionId) !== task || task.inFlight) {
+    return;
+  }
+  task.inFlight = true;
+  task.attempts += 1;
+  try {
+    await startRunRequest({
+      commandId: task.commandId,
+      sessionId: task.sessionId,
+      conversationId: task.sessionId,
+      runMode: "CONTINUE_INTERACTION",
+      interactionId: task.interactionId,
+      interactionAction: "AUTO_SELECT",
+      metadata: currentRunMetadataSnapshot()
+    });
+    state.ambiguousAutoSelectTasks.delete(task.interactionId);
+    log(`ambiguous auto-select started interaction=${task.interactionId}`);
+  } catch (error) {
+    if (error.code === "INTERACTION_ALREADY_HANDLED") {
+      state.ambiguousAutoSelectTasks.delete(task.interactionId);
+      try {
+        await recoverHandledAmbiguousSelection(task.sessionId, task.interactionId);
+      } catch (recoveryError) {
+        log(`ambiguous auto-select race recovery failed interaction=${task.interactionId}: `
+          + recoveryError.message);
+      }
+      return;
+    }
+    if (retryableAutoSelectError(error) && task.attempts < ambiguousAutoSelectMaxAttempts) {
+      task.inFlight = false;
+      armAmbiguousAutoSelect(task, ambiguousAutoSelectRetryDelayMs);
+      log(`ambiguous auto-select retry interaction=${task.interactionId} attempt=${task.attempts + 1}`);
+      return;
+    }
+    state.ambiguousAutoSelectTasks.delete(task.interactionId);
+    log(`ambiguous auto-select stopped interaction=${task.interactionId}: ${error.message}`);
+  } finally {
+    task.inFlight = false;
+  }
+}
+
+async function recoverHandledAmbiguousSelection(sessionId, interactionId) {
+  for (let attempt = 1; attempt <= ambiguousAutoSelectMaxAttempts; attempt += 1) {
+    const status = await requestJson(
+      `/v1/chat/sessions/${encodeURIComponent(sessionId)}/stream-status`);
+    if (sessionId === state.selectedSessionId) {
+      state.activeRunId = status.activeRunId || null;
+      state.activeTopicId = status.activeStreamTopicId || null;
+      state.activeRunStatus = status.activeRunStatus || null;
+      setActiveRunLabel();
+    }
+    if (status.activeRunId && status.activeStreamTopicId) {
+      startActiveRunSseRestore(status, "ambiguous-auto-select-race");
+      return;
+    }
+    if (!status.waitingUserInput || status.interactionId !== interactionId) {
+      if (sessionId === state.selectedSessionId) {
+        await loadMessagesOnly(sessionId);
+      }
+      return;
+    }
+    await delay(ambiguousAutoSelectRetryDelayMs);
+  }
+  log(`ambiguous auto-select race recovery timed out interaction=${interactionId}`);
+}
+
+function retryableAutoSelectError(error) {
+  return !error.status || error.status >= 500;
+}
+
+function currentRunMetadataSnapshot() {
+  const text = $("runMetadataInput")?.value?.trim();
+  if (!text) {
+    return {};
+  }
+  try {
+    const value = JSON.parse(text);
+    return value && !Array.isArray(value) && typeof value === "object" ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function clearAmbiguousAutoSelectTasks() {
+  for (const task of state.ambiguousAutoSelectTasks.values()) {
+    if (task.timerId !== null) {
+      window.clearTimeout(task.timerId);
+    }
+  }
+  state.ambiguousAutoSelectTasks.clear();
+}
+
+function delay(durationMs) {
+  return new Promise(resolve => window.setTimeout(resolve, durationMs));
 }
 
 function activeRunCatchupSeq(status) {
@@ -1438,7 +1595,11 @@ async function requestJson(path, options = {}) {
   const text = await response.text();
   const body = parseJsonBody(text);
   if (!response.ok) {
-    throw new Error(body?.message || body?.error || body?.code || `${response.status} ${response.statusText}`);
+    const error = new Error(
+      body?.message || body?.error || body?.code || `${response.status} ${response.statusText}`);
+    error.code = body?.code || null;
+    error.status = response.status;
+    throw error;
   }
   return body;
 }

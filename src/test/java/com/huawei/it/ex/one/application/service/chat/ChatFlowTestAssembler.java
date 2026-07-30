@@ -109,8 +109,7 @@ final class ChatFlowTestAssembler {
                         sessionService,
                         documentFacade,
                         clarificationAssembler,
-                        ambiguousRouteSelectionResolver,
-                        null);
+                        ambiguousRouteSelectionResolver);
         this.admissionCoordinator = new ChatRunAdmissionCoordinator(
                 sessionService, chatRunService, chatInteractionService);
         ChatRunCompletionCoordinator completionCoordinator =

@@ -32,22 +32,19 @@ final class InteractionContinuationCoordinator {
     private final DocumentFacade documentFacade;
     private final IntentClarificationContextAssembler clarificationAssembler;
     private final AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver;
-    private final AmbiguousRouteTimeoutScheduler ambiguousRouteTimeoutScheduler;
 
     InteractionContinuationCoordinator(ChatRunStartCoordinator runStartCoordinator,
                                        ChatInteractionApplicationService interactionService,
                                        SessionApplicationService sessionService,
                                        DocumentFacade documentFacade,
                                        IntentClarificationContextAssembler clarificationAssembler,
-                                       AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver,
-                                       AmbiguousRouteTimeoutScheduler ambiguousRouteTimeoutScheduler) {
+                                       AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver) {
         this.runStartCoordinator = runStartCoordinator;
         this.interactionService = interactionService;
         this.sessionService = sessionService;
         this.documentFacade = documentFacade;
         this.clarificationAssembler = clarificationAssembler;
         this.ambiguousRouteSelectionResolver = ambiguousRouteSelectionResolver;
-        this.ambiguousRouteTimeoutScheduler = ambiguousRouteTimeoutScheduler;
     }
 
     InteractionContinuationCoordinator(ChatRunStartCoordinator runStartCoordinator,
@@ -56,7 +53,7 @@ final class InteractionContinuationCoordinator {
                                        DocumentFacade documentFacade,
                                        IntentClarificationContextAssembler clarificationAssembler) {
         this(runStartCoordinator, interactionService, sessionService, documentFacade,
-                clarificationAssembler, new AmbiguousRouteSelectionResolver(), null);
+                clarificationAssembler, new AmbiguousRouteSelectionResolver());
     }
 
     Mono<ChatRunStartResult> start(
@@ -80,11 +77,6 @@ final class InteractionContinuationCoordinator {
                 user,
                 traceContext,
                 command.interactionId(),
-                new AmbiguousRouteTimeoutScheduler.InvocationContext(
-                        user,
-                        traceContext,
-                        headerSnapshot,
-                        command.metadata()),
                 (runId, startAttempt) -> executeClaimedContinuation(context, runId, startAttempt));
     }
 
@@ -115,8 +107,7 @@ final class InteractionContinuationCoordinator {
                 command.agentMode(),
                 command.targetType(),
                 command.targetId(),
-                command.interactionAction(),
-                null);
+                command.interactionAction());
     }
 
     private Flux<ChatEvent> executeClaimedContinuation(ContinuationStartContext context,
@@ -132,9 +123,6 @@ final class InteractionContinuationCoordinator {
                             interaction,
                             context.inputRef(),
                             context.ambiguousPlanRef()));
-            if (ambiguousRouteTimeoutScheduler != null) {
-                ambiguousRouteTimeoutScheduler.cancel(claim.request().id());
-            }
             startAttempt.recordInteraction(claim.request());
             if (startAttempt.aborted()) {
                 interactionService.markWaiting(claim.request());
@@ -235,9 +223,7 @@ final class InteractionContinuationCoordinator {
                     ambiguousRouteSelectionResolver.autoSelect(interaction)
                             .orElseThrow(() -> new IllegalArgumentException(
                                     "当前 AMBIGUOUS_ROUTE 没有可自动选择的候选技能"));
-            boolean timeout = AmbiguousRouteSupport.SELECTION_SOURCE_TIMEOUT.equals(
-                    command.selectionSource());
-            return AmbiguousRouteContinuationPlan.autoSelected(candidate, timeout);
+            return AmbiguousRouteContinuationPlan.autoSelected(candidate);
         }
         return AmbiguousRouteContinuationPlan.other();
     }
@@ -253,8 +239,7 @@ final class InteractionContinuationCoordinator {
 
     private void rejectAmbiguousRouteFields(ChatInteractionResponseCommand command) {
         if (hasText(command.targetType()) || hasText(command.targetId())
-                || hasText(command.interactionAction())
-                || hasText(command.selectionSource())) {
+                || hasText(command.interactionAction())) {
             throw new IllegalArgumentException(
                     "targetType/targetId/interactionAction 仅支持 AMBIGUOUS_ROUTE");
         }
@@ -298,7 +283,6 @@ final class InteractionContinuationCoordinator {
                 : candidate.intentName();
         return switch (selectionSource) {
             case AmbiguousRouteSupport.SELECTION_SOURCE_DELEGATED -> "代为选择：" + name;
-            case AmbiguousRouteSupport.SELECTION_SOURCE_TIMEOUT -> "超时自动选择：" + name;
             default -> name;
         };
     }

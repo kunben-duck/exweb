@@ -13,7 +13,6 @@ final class AmbiguousRouteSupport {
     static final String ACTION_OTHER = "OTHER";
     static final String SELECTION_SOURCE_USER = "USER";
     static final String SELECTION_SOURCE_DELEGATED = "DELEGATED";
-    static final String SELECTION_SOURCE_TIMEOUT = "TIMEOUT";
 
     private AmbiguousRouteSupport() {
     }

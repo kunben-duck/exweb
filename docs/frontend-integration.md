@@ -145,7 +145,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `sequence` / `seq` | WebSocket `payload.sequence`、Event Resume 事件 | Event Resume `afterSeq`、本地去重 | 每个 session 保存已处理最大值；渲染事件前按 `sessionId + sequence` 去重 |
 | `firstSeq` | `POST /v1/chat/runs` | 新建 run 后首次 WebSocket subscribe 的 `afterSeq` | 创建 run 后立即保存；通常 `subscribe.afterSeq=firstSeq` |
 | `activeRunFirstSeq` | `stream-status` | 新页签、新浏览器、跨电脑恢复 active run | 恢复 active run 时用 `activeRunFirstSeq - 1`，不要直接用 `latestSeq` |
-| `interactionId` | `run.waiting_user`、`stream-status` | `CONTINUE_INTERACTION` 续接 | 只对当前等待请求有效；用户提交和超时自动选择竞争同一 Interaction |
+| `interactionId` | `run.waiting_user`、`stream-status` | `CONTINUE_INTERACTION` 续接 | 只对当前等待请求有效；多页签提交通过同一 Interaction CAS 去重 |
 | `assistantMessageId` | `run.waiting_user`、`stream-status`、Interaction 响应事件 | 定位等待卡片及跨 run 合并的 assistant | `AMBIGUOUS_ROUTE` 的 run-A/run-B 复用该消息 ID |
 | `messageId` | 历史消息接口、run completed 后的 assistant 消息 | variants、path、branch、feedback、编辑/重新生成入参 | 作为消息树节点 ID 保存到消息状态 |
 | `leafMessageId` | 历史消息、variants、会话 `currentLeafMessageId` | `GET /messages?leafMessageId=...`、`POST /path` | 切换历史版本时保存当前选中的 leaf |
@@ -166,7 +166,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 编辑历史 user 消息 | 用户点击编辑 -> `POST /v1/chat/runs(runMode=EDIT_USER, editedMessageId, message)` -> 订阅新 run -> `run.completed` 后重新 `GET /v1/chat/sessions/{sessionId}/messages` | `editedMessageId`、新 user `messageId`、新 assistant `messageId`、`versionInfo` | 旧消息不覆盖；新 user sibling 进入旧 user 的 `versionInfo.variants` |
 | 重新生成 assistant | 用户点击重新生成 -> `POST /v1/chat/runs(runMode=REGENERATE_ASSISTANT, regeneratedMessageId)` -> 订阅新 run -> `run.completed` 后重新 `GET /v1/chat/sessions/{sessionId}/messages` | `regeneratedMessageId`、原父 user messageId、新 assistant messageId、`versionInfo` | 复用原 user 节点，新 assistant sibling 进入旧 assistant 的 `versionInfo.variants` |
 | 普通意图澄清等待 | 收到 `run.waiting_user(interactionType=INTENT_CLARIFICATION)` 且 `clarificationType` 不是 `AMBIGUOUS_ROUTE` -> 展示澄清 assistant -> `POST /v1/chat/runs(runMode=CONTINUE_INTERACTION, interactionId)` 提交答案、附件和本轮 metadata -> 订阅新 topic | `interactionId`、`assistantMessageId`、新 `runId/streamTopicId`、`expiresAt` | 使用 `NEW_TURN`：每次提交生成新的 user 回答节点，下一轮澄清或最终 Agent 回答生成新的 assistant 节点；后端以 `routeTrigger=clarify_answer` 继续意图服务 |
-| 歧义路由候选等待 | 收到 `run.waiting_user(clarificationType=AMBIGUOUS_ROUTE)` -> 展示 `candidateIntents/actions` -> 指定候选、代为选择或提交“其他” -> 订阅 run-B topic | run-A `assistantMessageId`、`interactionId`、`autoSelectAt`、run-B `runId/streamTopicId` | 使用 `REUSE_ASSISTANT`：run-A 和 run-B 是不同 run，但复用同一 user/assistant；指定候选或代选跳过 Intent，其他文本/附件重新调用 Intent；超时任务与人工提交竞争同一 CAS |
+| 歧义路由候选等待 | 收到 `run.waiting_user(clarificationType=AMBIGUOUS_ROUTE)` -> 展示 `candidateIntents/actions` -> 按 `autoSelectAt` 建立前端定时器 -> 指定候选、到期代选或提交“其他” -> 订阅 run-B topic | run-A `assistantMessageId`、`interactionId`、`autoSelectAt`、run-B `runId/streamTopicId` | 使用 `REUSE_ASSISTANT`：run-A 和 run-B 是不同 run，但复用同一 user/assistant；指定候选或代选跳过 Intent，其他文本/附件重新调用 Intent；页面恢复时通过 stream-status 重建定时器 |
 | 等待态主动直连 DomainAgent | `POST /v1/chat/runs(runMode=NEXT,targetType=DOMAIN_AGENT,targetId,message,metadata,attachments)` -> 订阅返回的 `streamTopicId` | 当前 `sessionId`、新 `runId`、所选 `targetId` | 优先于意图、Relay 和开放 Interaction；服务端原子取消该会话的 `WAITING/RESPONDING` Interaction，并把新 user 节点挂到等待 assistant 后。仅使用本轮请求参数，不合并旧澄清上下文；真正存在 `RUNNING/CANCELLING` run 时仍返回 active-run 冲突 |
 | Agent 澄清等待 | 收到 `run.waiting_user(interactionType=AGENT_CLARIFICATION)` 或刷新后 `stream-status.waitingUserInput=true` -> 展示 `/messages` 中的 `AGENT_CLARIFICATION_REQUEST` part -> `POST /v1/chat/runs(runMode=CONTINUE_INTERACTION, interactionId)` -> 订阅返回的 `streamTopicId` | `interactionId`、`assistantMessageId`、`runId`、`streamTopicId`、`expiresAt` | 续接不创建新 user 消息；用户答案会作为 `AGENT_CLARIFICATION_RESPONSE` part 追加到同一 assistant，最终 `run.completed.payload.assistantMessageId` 仍是原 assistant；超过 `expiresAt` 后提交会返回 `INTERACTION_EXPIRED` |
 | 切换历史版本 | 从当前消息 `versionInfo.variants` 取目标项 -> `GET /messages?leafMessageId={switchLeafMessageId}` 重渲染 -> 后台 `POST /path` 保存选择 | `versionInfo.currentIndex/total`、`switchLeafMessageId`、`currentLeafMessageId` | 先刷新展示路径，不创建 run，不调用 Runtime；`/path` 只负责持久化当前 leaf |
@@ -562,8 +562,8 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 | `interactionType` | 等待交互类型，例如 `INTENT_CLARIFICATION`、`AGENT_CLARIFICATION`、`ROUTE_SWITCH_CONFIRMATION`。 |
 | `assistantMessageId` | 等待卡片挂载的 assistant 消息 ID，刷新后用于定位历史消息中的 request part。 |
 | `expiresAt` | Interaction 过期时间；为空表示不过期。 |
-| `autoSelectAt` | `AMBIGUOUS_ROUTE` 自动选择候选的计划时间；其他 Interaction 为 `null`。 |
-| `autoSelectTimeoutMs` | `AMBIGUOUS_ROUTE` 自动选择等待毫秒数；其他 Interaction 为 `null`。 |
+| `autoSelectAt` | `AMBIGUOUS_ROUTE` 前端提交代为选择的服务端截止时间；其他 Interaction 为 `null`。 |
+| `autoSelectTimeoutMs` | `AMBIGUOUS_ROUTE` 前端建议等待毫秒数；其他 Interaction 为 `null`。 |
 | `bindingProvider` | 当前会话绑定 provider，例如 `domain-agent` 或 `relay`。 |
 | `bindingTargetType` / `bindingTargetId` | 当前绑定目标类型和目标 ID；DomainAgent 绑定时目标 ID 通常是 DomainAgentId/skillId。 |
 | `bindingIntentCode` / `bindingIntentName` | 当前绑定对应的意图编码和名称；无意图来源时为空。 |
@@ -1481,7 +1481,7 @@ user 消息正文仍为 `帮我看下这个方案`。多轮澄清按首次出现
 }
 ```
 
-只有存在有效 `skillId` 时才返回 `AUTO_SELECT` 和自动选择时间；`OTHER` 始终返回。随后
+只有存在有效 `skillId` 时才返回 `AUTO_SELECT` 和前端代选截止时间；`OTHER` 始终返回。随后
 `run.waiting_user.payload` 会返回同一组 `candidateIntents/actions/autoSelectAt/autoSelectTimeoutMs`，
 并补充：
 
@@ -1580,16 +1580,15 @@ IntentAgent：
 }
 ```
 
-用户点击“代为选择”时 `selectionSource=DELEGATED` 且
-`interactionAction=AUTO_SELECT`；超时自动选择时 `selectionSource=TIMEOUT`。该关联事件用于把 run-B
-的后续事件追加到 run-A 候选卡片所在的 assistant。随后仍会输出现有 `selectedDomainAgent` 及
-DomainAgent 运行事件。
+用户点击“代为选择”以及前端到达 `autoSelectAt` 后自动提交时，均使用
+`selectionSource=DELEGATED` 和 `interactionAction=AUTO_SELECT`。该关联事件用于把 run-B 的后续事件
+追加到 run-A 候选卡片所在的 assistant。随后仍会输出现有 `selectedDomainAgent` 及 DomainAgent 运行事件。
 
 提交候选选择或代选时，不得同时提交 `approved/scope/questionnaireAnswers/attachments`，也不得同时提交
 `targetType/targetId` 和 `interactionAction`。非 `AMBIGUOUS_ROUTE` Interaction 携带这些选择字段、
 候选 `targetId` 不在服务端列表中、或不存在可自动选择候选时，服务端会在 claim 前返回参数错误，
-Interaction 保持 `WAITING`。用户提交与超时任务竞争同一 `WAITING -> RESPONDING` CAS；失败方收到
-`INTERACTION_ALREADY_HANDLED`，不会产生第二个 run。
+Interaction 保持 `WAITING`。多个页签或人工操作与到期代选请求竞争同一
+`WAITING -> RESPONDING` CAS；失败方收到 `INTERACTION_ALREADY_HANDLED`，不会产生第二个 run。
 
 run-A 和 run-B 使用不同 runId，但消息展示仍是一轮：
 
@@ -1607,18 +1606,20 @@ run-B 不创建新的可见 user 或 assistant 消息，最终更新原 assistan
 `attachments[]`；若再次得到 `AMBIGUOUS_ROUTE`，新候选卡片继续复用该 assistant。普通
 `UNCLEAR_REFERENCE` 等 Intent 澄清仍采用 `NEW_TURN`，不能按此规则合并。
 
-用户主动提交时，Cookie 只通过本次 HTTP 请求头进入下游；禁止放入 `metadata`。超时自动选择使用 run-A
-入口捕获的 Cookie、TraceContext 和原始 metadata 的内存快照，这些信息不写入数据库、Redis、Event、
-Interaction payload 或日志。自动选择任务为当前实例 best-effort，实例重启后不会接管，用户仍可提交
-Interaction。
+Cookie 只通过本次 `CONTINUE_INTERACTION` HTTP 请求头进入下游，禁止放入 `metadata`。后端不保留
+run-A 入口 Cookie、TraceContext 或 metadata，也不注册本机自动选择任务。前端到期提交时应携带当前
+metadata 和可选 agentMode；刷新后使用当前页面状态重新组装，请求敏感头仍由浏览器会话或企业网关提供。
 
-到达 `autoSelectAt` 后，页面刷新或跨页签恢复按以下顺序处理：
+`autoSelectAt` 是服务端给出的前端触发截止时间。前端处理顺序：
 
-1. 查询 `GET /v1/chat/sessions/{sessionId}/stream-status`。
-2. 存在 `activeRunId` 时，仅对该 run-B 调用
+1. 首次收到 `run.waiting_user` 时按 `autoSelectAt` 注册页面定时器；页面恢复可见状态时重新比较当前时间。
+2. 到期后提交现有 `CONTINUE_INTERACTION + interactionAction=AUTO_SELECT`，网络或服务端瞬时错误每隔
+   1秒重试，最多5次；失败后保留候选卡片供用户操作。
+3. 页面刷新或跨页签打开时查询 `GET /v1/chat/sessions/{sessionId}/stream-status`；若仍是同一
+   `WAITING` Interaction 且截止时间已到，立即提交代选。
+4. 收到 `INTERACTION_ALREADY_HANDLED` 后查询 stream-status；存在 `activeRunId` 时，仅对该 run-B 调用
    `GET /v1/chat/runs/{activeRunId}/events/resume?afterSeq={activeRunFirstSeq-1}`。
-3. 仍返回同一 `WAITING` Interaction 时，每隔 1 秒重试 stream-status，最多 5 次。
-4. Interaction 已结束且没有 active run 时，刷新历史消息。
+5. Interaction 已结束且没有 active run 时刷新历史消息。没有在线前端时服务端不会主动创建run-B。
 
 run 级 Resume 只返回 URL 中指定的一个 runId，不会把 run-A 和 run-B 混在同一条流中。会话级 Resume
 可能补发多个 run 的已落库事件，但没有实时 tail。恢复 run-B 时，前端通过 response 事件中的

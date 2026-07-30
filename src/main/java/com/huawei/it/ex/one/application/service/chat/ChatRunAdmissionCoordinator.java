@@ -63,6 +63,17 @@ final class ChatRunAdmissionCoordinator {
         if (service == null) {
             return legacyIntentClarificationAdmission(request);
         }
+        if (!InteractionMessageStrategy.newTurn(request.interaction())) {
+            return service.commitReusableIntentClarification(
+                    new ChatRunAdmissionCommitService.IntentClarificationAdmissionCommand(
+                            request.user(),
+                            request.session(),
+                            request.runId(),
+                            request.interaction(),
+                            request.messageText(),
+                            request.attachments(),
+                            request.runMetadata()));
+        }
         return service.commitIntentClarification(
                 new ChatRunAdmissionCommitService.IntentClarificationAdmissionCommand(
                         request.user(),
@@ -97,6 +108,29 @@ final class ChatRunAdmissionCoordinator {
 
     private ChatRunAdmissionCommitService.AdmissionResult legacyIntentClarificationAdmission(
             IntentClarificationAdmission request) {
+        if (!InteractionMessageStrategy.newTurn(request.interaction())) {
+            sessionService.lockForMessageMutation(
+                    request.user().tenantId(),
+                    request.user().ownerUserId(),
+                    request.session());
+            ChatRunMessagePlan messagePlan = sessionService.prepareReusableIntentClarification(
+                    request.user(),
+                    request.session(),
+                    request.runId(),
+                    request.interaction(),
+                    request.attachments());
+            ChatRun run = chatRunService.createInteractionRunning(new CreateChatRunContext(
+                    request.runId(),
+                    request.user(),
+                    request.session().id(),
+                    null,
+                    null,
+                    request.runMetadata(),
+                    com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT,
+                    messagePlan.parentMessageId(),
+                    messagePlan.userMessage().id()), request.interaction().id());
+            return new ChatRunAdmissionCommitService.AdmissionResult(messagePlan, run);
+        }
         ChatRunMessagePlan messagePlan = sessionService.prepareIntentClarificationAnswer(
                 request.user(),
                 request.session(),

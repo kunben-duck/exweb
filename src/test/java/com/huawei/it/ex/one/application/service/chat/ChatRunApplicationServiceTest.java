@@ -14,6 +14,9 @@ import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicatio
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
+import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
+import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
+import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunCancelSignal;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
@@ -189,6 +192,61 @@ class ChatRunApplicationServiceTest {
         assertThat(status.activeRunFirstSeq()).isEqualTo(1L);
         assertThat(status.activeRunLastSeq()).isEqualTo(3L);
         assertThat(status.cancellable()).isTrue();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void streamStatusReturnsAmbiguousRouteAutoSelectionDeadline() {
+        ChatInteractionApplicationService interactionService =
+                mock(ChatInteractionApplicationService.class);
+        ObjectProvider<ChatInteractionApplicationService> interactionProvider =
+                mock(ObjectProvider.class);
+        when(interactionProvider.getIfAvailable()).thenReturn(interactionService);
+        Instant now = Instant.parse("2026-07-30T10:00:00Z");
+        ChatInteractionRequest waiting = new ChatInteractionRequest(
+                "interaction-1",
+                "tenant1",
+                "user1",
+                "session1",
+                "run-a",
+                null,
+                "message-user",
+                "message-assistant",
+                "intent-agent",
+                null,
+                null,
+                null,
+                ChatInteractionType.INTENT_CLARIFICATION,
+                ChatInteractionStatus.WAITING,
+                Map.of(
+                        "clarificationType", "AMBIGUOUS_ROUTE",
+                        "autoSelectAt", "2026-07-30T10:00:30Z",
+                        "autoSelectTimeoutMs", 30_000L),
+                Map.of(),
+                now.plusSeconds(3600),
+                null,
+                null,
+                now,
+                now);
+        when(interactionService.findWaiting(user(), "session1"))
+                .thenReturn(Optional.of(waiting));
+        ChatRunApplicationService service = new ChatRunApplicationService(
+                new InMemoryRunRepository(),
+                new InMemoryRunCache(),
+                new InMemoryEventStore(12L),
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                null,
+                null,
+                interactionProvider,
+                null);
+
+        var status = service.streamStatus(user(), "session1");
+
+        assertThat(status.waitingUserInput()).isTrue();
+        assertThat(status.interactionId()).isEqualTo("interaction-1");
+        assertThat(status.autoSelectAt()).isEqualTo(Instant.parse("2026-07-30T10:00:30Z"));
+        assertThat(status.autoSelectTimeoutMs()).isEqualTo(30_000L);
     }
 
     @Test

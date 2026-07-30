@@ -108,6 +108,8 @@ financeex:
     stream-auth-timeout: ${FINANCEEX_INTENT_STREAM_AUTH_TIMEOUT:5s}
     stream-auth-io-max-size: ${FINANCEEX_INTENT_STREAM_AUTH_IO_MAX_SIZE:4}
     stream-auth-io-queue-capacity: ${FINANCEEX_INTENT_STREAM_AUTH_IO_QUEUE_CAPACITY:128}
+    # AMBIGUOUS_ROUTE 等待用户选择的时间；到期后由当前实例尽力选择最高置信度技能。
+    ambiguous-route-wait-timeout: ${FINANCEEX_INTENT_AMBIGUOUS_ROUTE_WAIT_TIMEOUT:30s}
     # 意图服务调用失败后的最大重试次数；不包含首次调用，运行时最多按 10 次生效。
     max-retries: ${FINANCEEX_INTENT_MAX_RETRIES:3}
     # 意图技术/协议失败在重试耗尽后的处理：RELAY_FALLBACK 或 FAIL_RUN。

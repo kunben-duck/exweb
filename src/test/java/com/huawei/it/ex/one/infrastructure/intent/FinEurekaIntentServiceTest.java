@@ -222,7 +222,12 @@ class FinEurekaIntentServiceTest {
                         "type": "AMBIGUOUS_ROUTE",
                         "clarifyQuestion": "你想看处理方案还是项目方案？",
                         "candidateIntents": [
-                          {"intentId":"deep_analysis","intentName":"财经深度研究","confidence":0.72}
+                          {
+                            "intentId":"deep_analysis",
+                            "intentName":"财经深度研究",
+                            "confidence":0.72,
+                            "accessName":"domain_agent_deep_analysis"
+                          }
                         ]
                       }
                     }
@@ -237,6 +242,13 @@ class FinEurekaIntentServiceTest {
                 .containsEntry("routeAction", "CLARIFY")
                 .containsEntry("type", "AMBIGUOUS_ROUTE")
                 .containsEntry("clarifyQuestion", "你想看处理方案还是项目方案？");
+        assertThat(result.clarificationPayload().get("candidateIntents"))
+                .isEqualTo(List.of(Map.of(
+                        "intentId", "deep_analysis",
+                        "intentName", "财经深度研究",
+                        "confidence", 0.72,
+                        "accessName", "domain_agent_deep_analysis",
+                        "skillId", "domain_agent_deep_analysis")));
         assertThat(result.clarificationPayload()).doesNotContainKey("rawIntentResponse");
     }
 

@@ -78,6 +78,38 @@ final class IntentClarificationContextAssembler {
                 null, null, null, Map.of(), null, null, input.agentMode());
     }
 
+    ChatCommand selectionCommand(
+            UserContext user,
+            ChatSession session,
+            ChatInteractionRequest interaction,
+            ContinuationInput input,
+            String foldedQuery) {
+        return new ChatCommand(
+                null,
+                user.tenantId(),
+                user.ownerUserId(),
+                session.id(),
+                null,
+                null,
+                foldedQuery == null ? "" : foldedQuery,
+                input.cumulativeAttachments(),
+                Map.of(),
+                null,
+                null,
+                ChatRunMode.NEXT,
+                interaction.assistantMessageId(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                Map.of(),
+                null,
+                null,
+                input.agentMode());
+    }
+
     String routeMemoryQuery(ChatRunMessagePlan messagePlan, ChatInteractionRequest interaction) {
         return routeMemoryQuery(messagePlan, interaction, null);
     }
@@ -95,6 +127,31 @@ final class IntentClarificationContextAssembler {
         }
         String content = messagePlan.userMessage().content();
         return content == null ? "" : content;
+    }
+
+    String routeMemoryQueryForSelection(ChatInteractionRequest interaction) {
+        if (interaction == null) {
+            return "";
+        }
+        Map<String, Object> payload = interaction.requestPayload() == null
+                ? Map.of()
+                : interaction.requestPayload();
+        String originalQuery = firstText(payload.get("originalQuery"));
+        StringBuilder builder = new StringBuilder();
+        builder.append("用户:").append(originalQuery == null ? "" : originalQuery);
+        for (Map<String, Object> item : history(payload)) {
+            String clarificationQuestion = firstText(
+                    item.get("clarifyQuestion"), item.get("question"));
+            String clarificationAnswer = firstText(
+                    item.get("answer"), item.get("answerText"));
+            if (clarificationQuestion != null) {
+                builder.append("；系统追问:").append(clarificationQuestion);
+            }
+            if (clarificationAnswer != null) {
+                builder.append("；用户:").append(clarificationAnswer);
+            }
+        }
+        return builder.toString();
     }
 
     List<String> documentIds(Map<String, Object> payload) {

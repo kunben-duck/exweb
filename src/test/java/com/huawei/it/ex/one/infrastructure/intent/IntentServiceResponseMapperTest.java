@@ -66,6 +66,43 @@ class IntentServiceResponseMapperTest {
     }
 
     @Test
+    void ambiguousRouteCandidatesUseConfiguredAccessNameNormalization() throws Exception {
+        IntentRecognitionResult result = mapper("domain_agent_").toRecognitionResult(objectMapper.readTree("""
+                {
+                  "code": 200,
+                  "status": "success",
+                  "data": {
+                    "result": {
+                      "routeAction": "CLARIFY",
+                      "items": [],
+                      "clarification": {
+                        "type": "AMBIGUOUS_ROUTE",
+                        "clarifyQuestion": "请选择技能",
+                        "candidateIntents": [
+                          {
+                            "intentId": "deep-analysis",
+                            "intentName": "深度分析",
+                            "confidence": 0.91,
+                            "accessName": "domain_agent_deep_analysis"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+                """));
+
+        assertThat(result.waitingClarification()).isTrue();
+        assertThat(result.clarificationPayload().get("candidateIntents"))
+                .isEqualTo(List.of(Map.of(
+                        "intentId", "deep-analysis",
+                        "intentName", "深度分析",
+                        "confidence", 0.91,
+                        "accessName", "domain_agent_deep_analysis",
+                        "skillId", "deep_analysis")));
+    }
+
+    @Test
     void routeMultiPreservesOrderedDistinctCandidateIntentNames() throws Exception {
         IntentRecognitionResult result = mapper("").toRecognitionResult(objectMapper.readTree("""
                 {

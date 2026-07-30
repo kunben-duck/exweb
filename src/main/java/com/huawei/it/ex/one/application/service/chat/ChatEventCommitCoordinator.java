@@ -16,6 +16,7 @@ final class ChatEventCommitCoordinator {
     private final ChatRunCompletionCoordinator completionCoordinator;
     private final DomainAgentRefusalCoordinator refusalCoordinator;
     private final CommittedChatEventObserver committedEventObserver;
+    private final AmbiguousRouteWaitPolicy ambiguousRouteWaitPolicy;
     private final ChatRunFailureMapper runFailureMapper = new ChatRunFailureMapper();
 
     ChatEventCommitCoordinator(SessionApplicationService sessionService,
@@ -25,7 +26,8 @@ final class ChatEventCommitCoordinator {
                                RuntimeBindingApplicationService runtimeBindingService,
                                ChatRunCompletionCoordinator completionCoordinator,
                                DomainAgentRefusalCoordinator refusalCoordinator,
-                               CommittedChatEventObserver committedEventObserver) {
+                               CommittedChatEventObserver committedEventObserver,
+                               AmbiguousRouteWaitPolicy ambiguousRouteWaitPolicy) {
         this.sessionService = sessionService;
         this.chatRunService = chatRunService;
         this.chatStreamService = chatStreamService;
@@ -34,10 +36,28 @@ final class ChatEventCommitCoordinator {
         this.completionCoordinator = completionCoordinator;
         this.refusalCoordinator = refusalCoordinator;
         this.committedEventObserver = committedEventObserver;
+        this.ambiguousRouteWaitPolicy = ambiguousRouteWaitPolicy;
+    }
+
+    ChatEventCommitCoordinator(SessionApplicationService sessionService,
+                               ChatRunApplicationService chatRunService,
+                               ChatStreamApplicationService chatStreamService,
+                               ChatInteractionApplicationService chatInteractionService,
+                               RuntimeBindingApplicationService runtimeBindingService,
+                               ChatRunCompletionCoordinator completionCoordinator,
+                               DomainAgentRefusalCoordinator refusalCoordinator,
+                               CommittedChatEventObserver committedEventObserver) {
+        this(sessionService, chatRunService, chatStreamService, chatInteractionService,
+                runtimeBindingService, completionCoordinator, refusalCoordinator,
+                committedEventObserver, null);
     }
 
     ChatEvent commit(ChatEvent event, RunEventPipelineContext context) {
-        ChatRunCompletionCoordinator.CompletionPlan completion = completionCoordinator.prepare(event, context);
+        ChatEvent preparedEvent = ambiguousRouteWaitPolicy == null
+                ? event
+                : ambiguousRouteWaitPolicy.decorate(event);
+        ChatRunCompletionCoordinator.CompletionPlan completion =
+                completionCoordinator.prepare(preparedEvent, context);
         ChatRunCompletionCoordinator.CompletionMessageTarget target = completion.target();
         ChatInteractionRequest waitingRequest = completion.waitingRequest();
         ChatEvent eventToPersist = completion.eventToPersist();

@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.springframework.stereotype.Component;
 
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -198,14 +199,60 @@ public class IntentServiceResponseMapper {
         JsonNode clarification = result.path("clarification");
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("routeAction", "CLARIFY");
-        payload.put("clarification", nodeToObject(clarification));
-        putIfPresent(payload, "type", text(clarification.path("type")));
+        String clarificationType = text(clarification.path("type"));
+        List<Map<String, Object>> candidates = normalizedCandidates(
+                clarification.path("candidateIntents"));
+        payload.put("clarification", normalizedClarification(clarification, candidates));
+        putIfPresent(payload, "type", clarificationType);
+        putIfPresent(payload, "clarificationType", clarificationType);
         putIfPresent(payload, "clarifyQuestion", text(clarification.path("clarifyQuestion")));
-        Object candidates = nodeToObject(clarification.path("candidateIntents"));
-        if (candidates != null) {
+        if (!candidates.isEmpty()) {
             payload.put("candidateIntents", candidates);
         }
         return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> normalizedClarification(
+            JsonNode clarification,
+            List<Map<String, Object>> candidates) {
+        Object raw = nodeToObject(clarification);
+        Map<String, Object> normalized = new LinkedHashMap<>();
+        if (raw instanceof Map<?, ?> map) {
+            map.forEach((key, value) -> {
+                if (key != null) {
+                    normalized.put(String.valueOf(key), value);
+                }
+            });
+        }
+        if (!candidates.isEmpty()) {
+            normalized.put("candidateIntents", candidates);
+        }
+        return Collections.unmodifiableMap(normalized);
+    }
+
+    private List<Map<String, Object>> normalizedCandidates(JsonNode candidates) {
+        if (candidates == null || !candidates.isArray() || candidates.isEmpty()) {
+            return List.of();
+        }
+        java.util.ArrayList<Map<String, Object>> normalized = new java.util.ArrayList<>();
+        for (JsonNode candidate : candidates) {
+            Object raw = nodeToObject(candidate);
+            if (!(raw instanceof Map<?, ?> map)) {
+                continue;
+            }
+            Map<String, Object> item = new LinkedHashMap<>();
+            map.forEach((key, value) -> {
+                if (key != null) {
+                    item.put(String.valueOf(key), value);
+                }
+            });
+            String skillId = normalizeDomainAgentId(text(candidate.path("accessName")));
+            if (skillId != null) {
+                item.put("skillId", skillId);
+            }
+            normalized.add(Collections.unmodifiableMap(item));
+        }
+        return List.copyOf(normalized);
     }
 
     /**

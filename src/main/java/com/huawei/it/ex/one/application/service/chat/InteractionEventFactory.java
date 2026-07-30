@@ -63,6 +63,23 @@ final class InteractionEventFactory {
                 : "clarification-response");
         payload.put("interactionId", interaction.id());
         payload.put("interactionType", interaction.interactionType().name());
+        if (AmbiguousRouteSupport.isAmbiguous(interaction)
+                || AmbiguousRouteSupport.isAmbiguous(responsePayload)) {
+            putIfNotNull(payload, "clarificationType", AmbiguousRouteSupport.CLARIFICATION_TYPE);
+            putIfNotNull(payload, "assistantMessageId",
+                    AmbiguousRouteSupport.firstText(
+                            responsePayload.get("assistantMessageId"),
+                            interaction.assistantMessageId()));
+            putIfNotNull(payload, "sourceRunId",
+                    AmbiguousRouteSupport.firstText(
+                            responsePayload.get("sourceRunId"),
+                            interaction.sourceRunId()));
+            putIfNotNull(payload, "selectionSource", responsePayload.get("selectionSource"));
+            putIfNotNull(payload, "interactionAction", responsePayload.get("interactionAction"));
+            putIfNotNull(payload, "selectedSkillId", responsePayload.get("selectedSkillId"));
+            putIfNotNull(payload, "selectedIntentId", responsePayload.get("selectedIntentId"));
+            putIfNotNull(payload, "selectedIntentName", responsePayload.get("selectedIntentName"));
+        }
         putIfNotNull(payload, "approval_id", interaction.approvalId());
         putIfNotNull(payload, "approved", responsePayload.get("approved"));
         putIfNotNull(payload, "scope", responsePayload.get("scope"));

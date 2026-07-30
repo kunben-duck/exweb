@@ -424,7 +424,7 @@ public class ChatRunApplicationService {
         return active
                 .map(run -> new ChatStreamStatus(sessionId, currentLatestSeq, run.id(), run.status(),
                         ChatStreamTopics.runTopic(run.id()), run.firstSeq(), run.lastSeq(), run.cancellable(),
-                        false, null, null, null, null,
+                        false, null, null, null, null, null, null,
                         bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                         bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
                         bindingSummary.updatedAt(), bindingSummary.agentMode()))
@@ -436,7 +436,7 @@ public class ChatRunApplicationService {
         ChatInteractionApplicationService interactionService = interactionServiceProvider == null ? null : interactionServiceProvider.getIfAvailable();
         if (interactionService == null) {
             return new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
-                    false, false, null, null, null, null,
+                    false, false, null, null, null, null, null, null,
                     bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                     bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
                     bindingSummary.updatedAt(), bindingSummary.agentMode());
@@ -445,14 +445,46 @@ public class ChatRunApplicationService {
                 .map(request -> new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
                         false, true, request.id(), request.interactionType().name(),
                         request.assistantMessageId(), request.expiresAt(),
+                        autoSelectAt(request), autoSelectTimeoutMs(request),
                         bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                         bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
                         bindingSummary.updatedAt(), bindingSummary.agentMode()))
                 .orElseGet(() -> new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
-                        false, false, null, null, null, null,
+                        false, false, null, null, null, null, null, null,
                         bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                         bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
                         bindingSummary.updatedAt(), bindingSummary.agentMode()));
+    }
+
+    private Instant autoSelectAt(com.huawei.it.ex.one.domain.chat.ChatInteractionRequest request) {
+        Object value = request == null || request.requestPayload() == null
+                ? null
+                : request.requestPayload().get("autoSelectAt");
+        if (value == null || String.valueOf(value).isBlank()) {
+            return null;
+        }
+        try {
+            return Instant.parse(String.valueOf(value));
+        } catch (java.time.format.DateTimeParseException ignored) {
+            return null;
+        }
+    }
+
+    private Long autoSelectTimeoutMs(com.huawei.it.ex.one.domain.chat.ChatInteractionRequest request) {
+        Object value = request == null || request.requestPayload() == null
+                ? null
+                : request.requestPayload().get("autoSelectTimeoutMs");
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value == null || String.valueOf(value).isBlank()) {
+            return null;
+        }
+        try {
+            return Long.valueOf(String.valueOf(value));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private BindingSummary bindingSummary(UserContext user, String sessionId) {

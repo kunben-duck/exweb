@@ -36,6 +36,32 @@ class AssistantAssemblyTest {
     }
 
     @Test
+    void keepsAmbiguousRouteSelectionResponseInHistoricalParts() {
+        AssistantAssembly assembly = new AssistantAssembly();
+
+        assembly.observe(RuntimeEvent.card("run-b", "session1", Map.of(
+                "source", "chatservice",
+                "sourceType", "intent-clarification-response",
+                "interactionType", "INTENT_CLARIFICATION",
+                "clarificationType", "AMBIGUOUS_ROUTE",
+                "interactionId", "interaction-1",
+                "assistantMessageId", "message-assistant",
+                "sourceRunId", "run-a",
+                "selectionSource", "USER",
+                "answerText", "财经知识助手"
+        )));
+
+        assertThat(assembly.parts()).singleElement().satisfies(part -> {
+            assertThat(part.partType()).isEqualTo("INTENT_CLARIFICATION_RESPONSE");
+            assertThat(part.contentText()).isEqualTo("财经知识助手");
+            assertThat(part.payload())
+                    .containsEntry("assistantMessageId", "message-assistant")
+                    .containsEntry("sourceRunId", "run-a")
+                    .containsEntry("selectionSource", "USER");
+        });
+    }
+
+    @Test
     void preservesCompleteDomainAgentProcessResultInHistoricalPart() {
         String fixedResponse = "<svg>" + "x".repeat(4079) + "</svg>";
         AssistantAssembly assembly = new AssistantAssembly();

@@ -60,7 +60,7 @@ public class ChatRequestTranslator {
                 request.regeneratedMessageId(), routeTrigger(request.forceReroute()),
                 request.interactionId(), request.approved(), request.scope(),
                 normalizeMetadata(request.questionnaireAnswers()), request.appId(), request.appName(),
-                toAgentMode(request.agentMode()));
+                toAgentMode(request.agentMode()), request.interactionAction());
     }
 
     private String routeTrigger(Boolean forceReroute) {

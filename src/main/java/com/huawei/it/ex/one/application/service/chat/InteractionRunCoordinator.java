@@ -16,6 +16,7 @@ final class InteractionRunCoordinator {
     private final SessionApplicationService sessionService;
     private final ChatInteractionApplicationService interactionService;
     private final IntentClarificationRunCoordinator intentClarificationCoordinator;
+    private final AmbiguousRouteContinuationCoordinator ambiguousRouteCoordinator;
     private final RouteSwitchContinuationCoordinator routeSwitchCoordinator;
     private final RuntimeInteractionContinuationCoordinator runtimeInteractionCoordinator;
 
@@ -23,13 +24,25 @@ final class InteractionRunCoordinator {
             SessionApplicationService sessionService,
             ChatInteractionApplicationService interactionService,
             IntentClarificationRunCoordinator intentClarificationCoordinator,
+            AmbiguousRouteContinuationCoordinator ambiguousRouteCoordinator,
             RouteSwitchContinuationCoordinator routeSwitchCoordinator,
             RuntimeInteractionContinuationCoordinator runtimeInteractionCoordinator) {
         this.sessionService = sessionService;
         this.interactionService = interactionService;
         this.intentClarificationCoordinator = intentClarificationCoordinator;
+        this.ambiguousRouteCoordinator = ambiguousRouteCoordinator;
         this.routeSwitchCoordinator = routeSwitchCoordinator;
         this.runtimeInteractionCoordinator = runtimeInteractionCoordinator;
+    }
+
+    InteractionRunCoordinator(
+            SessionApplicationService sessionService,
+            ChatInteractionApplicationService interactionService,
+            IntentClarificationRunCoordinator intentClarificationCoordinator,
+            RouteSwitchContinuationCoordinator routeSwitchCoordinator,
+            RuntimeInteractionContinuationCoordinator runtimeInteractionCoordinator) {
+        this(sessionService, interactionService, intentClarificationCoordinator, null,
+                routeSwitchCoordinator, runtimeInteractionCoordinator);
     }
 
     Flux<ChatEvent> execute(Request request) {
@@ -44,6 +57,24 @@ final class InteractionRunCoordinator {
             if (request.clarificationInput() == null) {
                 throw new IllegalStateException(
                         "意图澄清 continuation 缺少可信附件解析结果");
+            }
+            if (request.ambiguousRoutePlan() != null
+                    && request.ambiguousRoutePlan().selectedCandidate()) {
+                if (ambiguousRouteCoordinator == null) {
+                    throw new IllegalStateException(
+                            "AMBIGUOUS_ROUTE continuation 协调器未配置");
+                }
+                return ambiguousRouteCoordinator.execute(
+                        new AmbiguousRouteContinuationCoordinator.Request(
+                                request.user(),
+                                request.claim(),
+                                request.runId(),
+                                session,
+                                request.forwardHeaders(),
+                                request.traceContext(),
+                                request.startAttempt(),
+                                request.clarificationInput(),
+                                request.ambiguousRoutePlan()));
             }
             return intentClarificationCoordinator.execute(
                     new IntentClarificationRunCoordinator.Request(
@@ -89,7 +120,20 @@ final class InteractionRunCoordinator {
             TraceContext traceContext,
             RunStartAttempt startAttempt,
             IntentClarificationContextAssembler.ContinuationInput clarificationInput,
-            AgentModeProfile agentMode
+            AgentModeProfile agentMode,
+            AmbiguousRouteContinuationPlan ambiguousRoutePlan
     ) {
+        Request(
+                UserContext user,
+                ChatInteractionClaimResult claim,
+                String runId,
+                RuntimeForwardHeaders forwardHeaders,
+                TraceContext traceContext,
+                RunStartAttempt startAttempt,
+                IntentClarificationContextAssembler.ContinuationInput clarificationInput,
+                AgentModeProfile agentMode) {
+            this(user, claim, runId, forwardHeaders, traceContext, startAttempt,
+                    clarificationInput, agentMode, null);
+        }
     }
 }

@@ -914,6 +914,39 @@ Event Resume。stop HTTP 响应中的 `latestSeq` 只能用于诊断，不能直
 - 一个浏览器断开不会影响其他浏览器或后台 run。
 - 每个连接仍执行相同的用户权限和 topic 归属校验。
 
+### 12.8 AMBIGUOUS_ROUTE 的 run-A/run-B 恢复
+
+歧义路由等待和最终执行使用两个 run：
+
+```text
+run-A: Intent -> candidate card -> run.waiting_user
+run-B: candidate response -> selectedDomainAgent -> DomainAgent events -> terminal
+```
+
+run-A 在 `run.waiting_user` 后已经终止，不会重新打开。用户选择候选、点击“代为选择”、输入“其他”或本机
+超时任务获胜后，会创建新的 run-B。两个 run 复用同一条 assistant 消息，但事件事实仍严格按 runId 隔离：
+
+- run-A 的 topic 和 run Resume 只包含 run-A 事件。
+- run-B 的 topic 和 run Resume 只包含 run-B 事件。
+- session Resume 可能有限补发 run-A 与 run-B 的已落库事件，但不建立 live tail。
+- run-B 的 `intent-clarification-response` 携带 `interactionId/assistantMessageId/sourceRunId/selectionSource`，
+  前端据此把后续输出接到 run-A 等待卡片所在 assistant。
+
+`autoSelectAt` 到达后，刷新页或新浏览器固定执行：
+
+1. 查询 `stream-status`。
+2. 已有 `activeRunId` 时，以 `activeRunFirstSeq - 1` 打开该 run-B 的 Resume。
+3. 仍返回同一 WAITING Interaction 时，每隔 1 秒重试状态，最多 5 次，覆盖本机定时任务调度和 admission
+   的短窗口。
+4. Interaction 已结束且没有 active run 时，重新查询消息历史。
+
+人工提交和超时任务竞争同一个 `WAITING -> RESPONDING` 条件更新。人工请求先获胜时，原实例上的定时任务
+随后退出；超时任务先获胜时，人工请求返回 `INTERACTION_ALREADY_HANDLED`，前端改用 stream-status 找到
+run-B。页面恢复期间同一 run-B 仍只能选择 WebSocket 或 run SSE 一条消费链。
+
+自动选择任务仅存在于创建 WAITING Interaction 的实例内存中。实例重启不会由其他实例接管定时器，此时
+Interaction 仍保持可人工续接；这与 run-B 已经启动后的 Event Resume 是两个不同问题。
+
 ## 13. stream-status 的作用
 
 ```http
@@ -930,6 +963,7 @@ activeRunFirstSeq / activeRunLastSeq
 cancellable
 waitingUserInput / interactionId / interactionType
 assistantMessageId / expiresAt
+autoSelectAt / autoSelectTimeoutMs
 bindingProvider / bindingTargetType / bindingTargetId
 bindingIntentCode / bindingIntentName / bindingRouteSource / bindingUpdatedAt
 bindingAgentMode
@@ -944,6 +978,10 @@ bindingAgentMode
 `bindingAgentMode` 只返回当前 active DomainAgent Binding 中显式记录的模式；当前为 Relay、未记录或没有
 active DomainAgent 时为 `null`。它是 stream-status 的状态快照，不属于 ChatEvent，不参与 WebSocket 或
 Event Resume 的事件拼接。详细规则参见 [AgentMode 仅记录技术设计](agent-mode-recording.md)。
+
+`autoSelectAt/autoSelectTimeoutMs` 只在当前 WAITING Interaction 为可自动选择的
+`AMBIGUOUS_ROUTE` 时返回。它们是等待状态快照，不是新的事件游标；前端不能用其替代
+`activeRunFirstSeq/sequence`。
 
 ## 14. 故障与降级矩阵
 
@@ -1057,6 +1095,7 @@ assistant 汇总连续和 execution fencing 正确，因此当前不能视为实
 | `financeex.chat-run.execution-init-orphan-grace` | `2m` | execution 初始化孤儿宽限期 |
 | `financeex.chat-run.first-event-timeout` | `30s` | `/runs` 首持久化事件等待上限 |
 | `financeex.chat-run.external-terminal-transaction-timeout-seconds` | `10` | 准入/栅栏/终态短事务上限 |
+| `financeex.intent.ambiguous-route-wait-timeout` | `30s` | 歧义路由候选等待后，本机自动选择最高 confidence 候选的时间 |
 
 ### 16.2 事件流水线
 
@@ -1164,6 +1203,7 @@ assistant 汇总连续和 execution fencing 正确，因此当前不能视为实
 | 连接、订阅与 sequence 判定 | [`LocalWebSocketConnectionRegistry`](../../src/main/java/com/huawei/it/ex/one/interfaces/chat/websocket/LocalWebSocketConnectionRegistry.java) |
 | 前端统一 envelope | [`ChatTurnStreamTranslator`](../../src/main/java/com/huawei/it/ex/one/interfaces/chat/ChatTurnStreamTranslator.java) |
 | stream-status 与 active run | [`ChatRunApplicationService`](../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunApplicationService.java) |
+| 歧义路由候选选择与本机超时 | [`AmbiguousRouteSelectionResolver`](../../src/main/java/com/huawei/it/ex/one/application/service/chat/AmbiguousRouteSelectionResolver.java)、[`AmbiguousRouteTimeoutScheduler`](../../src/main/java/com/huawei/it/ex/one/application/service/chat/AmbiguousRouteTimeoutScheduler.java) |
 | execution 心跳与失联收敛 | [`ChatRunWatchdogScheduler`](../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunWatchdogScheduler.java)、[`ChatRunRecoveryOrchestrator`](../../src/main/java/com/huawei/it/ex/one/application/service/chat/ChatRunRecoveryOrchestrator.java) |
 
 ## 19. 前端实现检查表
@@ -1176,6 +1216,8 @@ assistant 汇总连续和 execution fencing 正确，因此当前不能视为实
 - 使用 `(sessionId, sequence)` 去重。
 - heartbeat、done、reply 和 error 不推进游标。
 - stop 后等待 `run.cancelled`，断线时从 stop 前游标恢复。
+- `AMBIGUOUS_ROUTE` 保存 `interactionId/assistantMessageId/autoSelectAt`，run-B 通过关联事件合并到原 assistant。
+- 到达 `autoSelectAt` 后先查询 stream-status，只对当前 `activeRunId` 建立一条 run Resume。
 - 新浏览器先查询消息和 stream-status，再从 activeRunFirstSeq 前恢复。
 - 同一 run 不同时开启 WebSocket 和 run SSE 两条渲染链。
 - 收到 `RECOVER_REQUIRED` 或无 done 的 run SSE EOF 时，退避后再次 Event Resume。

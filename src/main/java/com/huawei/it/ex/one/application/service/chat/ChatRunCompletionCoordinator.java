@@ -286,7 +286,9 @@ final class ChatRunCompletionCoordinator {
                 "candidateProvider", "candidateTargetId", "candidateRouteSource",
                 "candidateIntentCode", "candidateIntentName", "routeAction",
                 "refusalCode", "refusalReasonCode", "refusalRecoverable", "refusalReason",
-                "intentSessionId", "intentRequestId", "originalQuery");
+                "intentSessionId", "intentRequestId", "originalQuery",
+                "clarificationType", "candidateIntents", "actions",
+                "autoSelectAt", "autoSelectTimeoutMs");
         return new RunWaitingUserEvent(event.runId(), event.sessionId(), event.sequence(),
                 event.createdAt(), ChatPayloadMaps.immutableCopy(payload));
     }

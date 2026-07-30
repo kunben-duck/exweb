@@ -88,7 +88,8 @@ class ChatEventCoordinatorConfiguration {
             RuntimeBindingApplicationService runtimeBindingService,
             ChatRunCompletionCoordinator completionCoordinator,
             DomainAgentRefusalCoordinator refusalCoordinator,
-            CommittedChatEventObserver committedEventObserver) {
+            CommittedChatEventObserver committedEventObserver,
+            AmbiguousRouteWaitPolicy ambiguousRouteWaitPolicy) {
         return new ChatEventCommitCoordinator(
                 sessionService,
                 chatRunService,
@@ -97,7 +98,8 @@ class ChatEventCoordinatorConfiguration {
                 runtimeBindingService,
                 completionCoordinator,
                 refusalCoordinator,
-                committedEventObserver);
+                committedEventObserver,
+                ambiguousRouteWaitPolicy);
     }
 
     @Bean

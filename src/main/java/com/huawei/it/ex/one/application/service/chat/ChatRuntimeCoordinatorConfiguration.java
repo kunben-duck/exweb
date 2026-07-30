@@ -90,6 +90,25 @@ class ChatRuntimeCoordinatorConfiguration {
     }
 
     @Bean
+    AmbiguousRouteContinuationCoordinator ambiguousRouteContinuationCoordinator(
+            AmbiguousRouteSelectionResolver selectionResolver,
+            IntentClarificationContextAssembler clarificationAssembler,
+            InteractionEventFactory eventFactory,
+            InteractionRunLifecycle lifecycle,
+            ChatRuntimeDispatchCoordinator runtimeDispatchCoordinator,
+            ChatEventPersistenceCoordinator persistenceCoordinator,
+            ChatRunAdmissionCoordinator admissionCoordinator) {
+        return new AmbiguousRouteContinuationCoordinator(
+                selectionResolver,
+                clarificationAssembler,
+                eventFactory,
+                lifecycle,
+                runtimeDispatchCoordinator,
+                persistenceCoordinator,
+                admissionCoordinator);
+    }
+
+    @Bean
     RouteSwitchContinuationCoordinator routeSwitchContinuationCoordinator(
             RuntimeBindingApplicationService runtimeBindingService,
             InteractionRunLifecycle lifecycle,
@@ -130,12 +149,14 @@ class ChatRuntimeCoordinatorConfiguration {
             SessionApplicationService sessionService,
             ChatInteractionApplicationService interactionService,
             IntentClarificationRunCoordinator clarificationRunCoordinator,
+            AmbiguousRouteContinuationCoordinator ambiguousRouteCoordinator,
             RouteSwitchContinuationCoordinator routeSwitchCoordinator,
             RuntimeInteractionContinuationCoordinator runtimeInteractionCoordinator) {
         return new InteractionRunCoordinator(
                 sessionService,
                 interactionService,
                 clarificationRunCoordinator,
+                ambiguousRouteCoordinator,
                 routeSwitchCoordinator,
                 runtimeInteractionCoordinator);
     }

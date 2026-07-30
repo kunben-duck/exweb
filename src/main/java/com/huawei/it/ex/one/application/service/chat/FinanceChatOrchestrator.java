@@ -54,6 +54,7 @@ final class FinanceChatOrchestrator {
                     user,
                     traceSnapshot,
                     command,
+                    headers,
                     startAttempt -> runExecutionCoordinator.execute(
                             new ChatRunExecutionCoordinator.Request(
                                     user,
@@ -110,7 +111,37 @@ final class FinanceChatOrchestrator {
                                 request.traceContext(),
                                 request.startAttempt(),
                                 request.clarificationInput(),
-                                request.agentMode())));
+                                request.agentMode(),
+                                request.ambiguousRoutePlan())));
+    }
+
+    Mono<ChatRunStartResult> startAmbiguousRouteTimeout(
+            UserContext user,
+            TraceContext traceContext,
+            String interactionId,
+            java.util.Map<String, Object> metadata,
+            RuntimeForwardHeaders forwardHeaders) {
+        ChatInteractionResponseCommand command = new ChatInteractionResponseCommand(
+                user,
+                interactionId,
+                null,
+                null,
+                java.util.Map.of(),
+                metadata,
+                null,
+                null,
+                null,
+                java.util.List.of(),
+                null,
+                null,
+                null,
+                AmbiguousRouteSupport.ACTION_AUTO_SELECT,
+                AmbiguousRouteSupport.SELECTION_SOURCE_TIMEOUT);
+        return startInteractionContinuation(
+                user,
+                normalizeTraceContext(traceContext),
+                command,
+                normalizeForwardHeaders(forwardHeaders));
     }
 
     private void validateStandardRunCommand(ChatCommand command) {
@@ -120,7 +151,8 @@ final class FinanceChatOrchestrator {
         if (command.interactionId() != null
                 || command.approved() != null
                 || command.scope() != null
-                || !command.questionnaireAnswers().isEmpty()) {
+                || !command.questionnaireAnswers().isEmpty()
+                || command.interactionAction() != null) {
             throw new IllegalArgumentException(
                     "Interaction 续接字段仅支持 runMode=CONTINUE_INTERACTION");
         }

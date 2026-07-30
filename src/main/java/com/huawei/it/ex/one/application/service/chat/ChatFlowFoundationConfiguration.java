@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.config.ChatInteractionProperties;
 import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
@@ -11,13 +12,42 @@ import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicatio
 
 import reactor.core.scheduler.Scheduler;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.convert.DurationStyle;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.TaskScheduler;
 
 /** Declares stateless context, admission and run-start workflow components. */
 @Configuration(proxyBeanMethods = false)
 class ChatFlowFoundationConfiguration {
+    @Bean
+    AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver() {
+        return new AmbiguousRouteSelectionResolver();
+    }
+
+    @Bean
+    AmbiguousRouteWaitPolicy ambiguousRouteWaitPolicy(
+            AmbiguousRouteSelectionResolver selectionResolver,
+            ObjectProvider<ChatInteractionProperties> interactionPropertiesProvider,
+            @Value("${financeex.intent.ambiguous-route-wait-timeout:30s}") String timeout) {
+        return new AmbiguousRouteWaitPolicy(
+                selectionResolver,
+                interactionPropertiesProvider.getIfAvailable(),
+                DurationStyle.detectAndParse(timeout));
+    }
+
+    @Bean
+    AmbiguousRouteTimeoutScheduler ambiguousRouteTimeoutScheduler(
+            @Qualifier("finExTaskScheduler") ObjectProvider<TaskScheduler> taskSchedulerProvider,
+            ObjectProvider<FinanceChatOrchestrator> orchestratorProvider) {
+        return new AmbiguousRouteTimeoutScheduler(
+                taskSchedulerProvider.getIfAvailable(),
+                orchestratorProvider);
+    }
+
     @Bean
     RunMemoryContextAssembler runMemoryContextAssembler(
             MemoryApplicationService memoryService) {
@@ -79,13 +109,15 @@ class ChatFlowFoundationConfiguration {
             RunAdmissionControlService admissionControl,
             LocalChatRunExecutionRegistry executionRegistry,
             ChatRunOperationalProperties operationalProperties,
-            FirstEventTimeoutCompensator timeoutCompensator) {
+            FirstEventTimeoutCompensator timeoutCompensator,
+            AmbiguousRouteTimeoutScheduler ambiguousRouteTimeoutScheduler) {
         return new ChatRunStartCoordinator(
                 idGenerator,
                 admissionControl,
                 executionRegistry,
                 operationalProperties,
-                timeoutCompensator);
+                timeoutCompensator,
+                ambiguousRouteTimeoutScheduler);
     }
 
     @Bean
@@ -94,13 +126,17 @@ class ChatFlowFoundationConfiguration {
             ChatInteractionApplicationService interactionService,
             SessionApplicationService sessionService,
             DocumentFacade documentFacade,
-            IntentClarificationContextAssembler clarificationAssembler) {
+            IntentClarificationContextAssembler clarificationAssembler,
+            AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver,
+            AmbiguousRouteTimeoutScheduler ambiguousRouteTimeoutScheduler) {
         return new InteractionContinuationCoordinator(
                 runStartCoordinator,
                 interactionService,
                 sessionService,
                 documentFacade,
-                clarificationAssembler);
+                clarificationAssembler,
+                ambiguousRouteSelectionResolver,
+                ambiguousRouteTimeoutScheduler);
     }
 
     @Bean

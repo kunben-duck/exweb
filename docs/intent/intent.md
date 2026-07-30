@@ -124,7 +124,7 @@ Authorization: {dynamicToken}
 
 ### 3.2 澄清过程记录
 
-用户回答澄清问题时，用户回答放在本轮顶层 `query` 中；上一轮触发澄清的问题和澄清问题写入 `history.type=clarify`。
+普通澄清，或 `AMBIGUOUS_ROUTE` 选择“其他”时，用户回答放在本轮顶层 `query` 中；上一轮触发澄清的问题和澄清问题写入 `history.type=clarify`。直接选择候选、点击“代为选择”或超时自动选择会跳过 IntentAgent，不生成这次调用参数。
 
 ```json
 {
@@ -186,7 +186,7 @@ Authorization: {dynamicToken}
 | `ROUTE_SINGLE` | 1 个 | null | 直接路由到 `items[0]` 对应 DomainAgent。 |
 | `ROUTE_MULTI` | 多个 | null | 进入 Supervisor / Relay 规划，适合复杂任务。 |
 | `NO_MATCH` | 空 | null | 当前领域无匹配，进入 Relay；`intentName` 展示目标由 `financeex.intent.no-match-agent-name` 配置。 |
-| `CLARIFY` | 空或候选建议 | 非空 | 展示 `clarification.clarifyQuestion`，等待用户回答后再次调用意图服务。 |
+| `CLARIFY` | 空或候选建议 | 非空 | 展示 `clarification.clarifyQuestion` 并进入等待态；普通澄清提交回答后再次调用意图服务，`AMBIGUOUS_ROUTE` 可直接选择候选。 |
 
 ### 4.2 clarification
 
@@ -198,7 +198,11 @@ Authorization: {dynamicToken}
     {
       "intentId": "deep_analysis",
       "intentName": "深度分析",
-      "confidence": 0.72
+      "confidence": 0.72,
+      "accessName": "domain_agent_deep_analysis",
+      "resourceInstruction": {
+        "resourceId": "resource_deep_analysis"
+      }
     }
   ]
 }
@@ -208,20 +212,21 @@ Authorization: {dynamicToken}
 | --- | --- | --- |
 | `type` | string | 澄清类型。 |
 | `clarifyQuestion` | string | 展示给用户的澄清问题，建议控制在 40 个中文字符以内。 |
-| `candidateIntents` | array | 候选意图。`AMBIGUOUS_ROUTE` 可返回 Top2-3，`UNCLEAR_REFERENCE` 通常为空。 |
+| `candidateIntents` | array | 候选意图。`AMBIGUOUS_ROUTE` 可返回 Top2-3，且可执行候选应提供 `accessName`；`UNCLEAR_REFERENCE` 通常为空。 |
 
 澄清类型：
 
 | type | 含义 | candidateIntents |
 | --- | --- | --- |
-| `AMBIGUOUS_ROUTE` | 多个领域能力都可能承接，但证据不足。 | 可返回候选意图，用于前端展示选项。 |
+| `AMBIGUOUS_ROUTE` | 多个领域能力都可能承接，但证据不足。 | 返回候选意图；ChatService 将 `accessName` 规范化为 `skillId`，用于选择和自动选择。 |
 | `UNCLEAR_REFERENCE` | 用户问题存在指代、附件、对象或上下文缺失。 | 通常为空。 |
 
 澄清约束：
 
 - `CLARIFY` 不是最终路由结果，不调用 DomainAgent，也不写成功 route 历史。
 - 澄清只用于完成路由判断，不采集 DomainAgent 执行业务所需的详细参数。
-- 用户回答澄清后，顶层 `query` 使用用户最新回答，`routeTrigger=clarify_answer`。
+- 普通澄清或 `AMBIGUOUS_ROUTE` 的“其他”回答后，顶层 `query` 使用用户最新回答，`routeTrigger=clarify_answer`。
+- `AMBIGUOUS_ROUTE` 指定候选、代为选择和超时自动选择不再次调用 IntentAgent。
 
 ## 5. 典型调用场景
 
@@ -483,12 +488,13 @@ Authorization: {dynamicToken}
 2. `ROUTE_SINGLE`：读取唯一 `items[0].accessName`，按 `financeex.intent.response-access-name-prefix` 移除一次匹配的开头前缀后作为 DomainAgentId/skillId，创建或刷新 `provider=domain-agent` 的 RuntimeBinding；该配置为空时使用原始值。`intentId` 只作为意图编码，`resourceInstruction.resourceId` 只记录排障，均不参与路由；缺少 item 或有效 `accessName` 视为协议失败，按重试和 `financeex.intent.failure-strategy` 处理；`confidence` 只用于记录，不参与二次裁决。
 3. `ROUTE_MULTI`：进入复杂任务规划，通常走 Relay Runtime。
 4. `NO_MATCH`：进入 Relay Runtime；`intentName` 固定组装为“未识别到可用意图，进入 {Agent 名称}”，名称由 `financeex.intent.no-match-agent-name` 配置，默认 `FIN Supervisor Agent`。该配置仅影响展示，不改变 `intentCode=finance.runtime.no_intent`、路由或 RouteMemory。
-5. `CLARIFY`：本轮 run 进入 `WAITING_USER`，写入 `run.waiting_user`，前端通过 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 提交澄清回答。
+5. `CLARIFY`：本轮 run 进入 `WAITING_USER`，写入 `run.waiting_user`，前端通过 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 提交澄清回答或候选选择。
 6. 意图澄清属于路由阶段，不创建 RuntimeBinding，不调用 AgentRuntime。
-7. 用户回答意图澄清后，创建 continuation run，再次调用当前配置模式对应的意图决策接口。
-8. DomainAgent 拒答回流时，`routeTrigger=domain_reject`，只传当前这一次拒答原因。
-9. `history` 按时间顺序传最新 TopK；澄清链路未完成时，TopK 必须保留当前澄清上下文。
-10. 前端 `agentMode` 不进入 `/getIntentDecision` 请求。`CLARIFY` 期间不暂存模式；最终
+7. 普通澄清以及 `AMBIGUOUS_ROUTE` 的“其他”输入创建 continuation run，并再次调用当前配置模式对应的意图决策接口。
+8. `AMBIGUOUS_ROUTE` 候选中的 `accessName` 使用与 `ROUTE_SINGLE` 相同的前缀规则生成 `skillId`。指定候选、点击“代为选择”或等待超时后，创建新的 continuation run，跳过 IntentAgent 并直接调用所选 DomainAgent；最高 confidence 相同时按候选响应顺序。
+9. DomainAgent 拒答回流时，`routeTrigger=domain_reject`，只传当前这一次拒答原因。
+10. `history` 按时间顺序传最新 TopK；澄清链路未完成时，TopK 必须保留当前澄清上下文。
+11. 前端 `agentMode` 不进入 `/getIntentDecision` 请求。`CLARIFY` 期间不暂存模式；最终
     `ROUTE_SINGLE` 创建 DomainAgent Binding 时，只记录最终请求显式携带的模式。该字段不参与意图判断。
 
 AgentMode 的完整记录语义参见

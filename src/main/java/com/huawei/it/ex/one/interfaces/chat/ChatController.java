@@ -353,6 +353,8 @@ public class ChatController {
                 status.interactionType(),
                 status.assistantMessageId(),
                 status.expiresAt(),
+                status.autoSelectAt(),
+                status.autoSelectTimeoutMs(),
                 status.bindingProvider(),
                 status.bindingTargetType(),
                 status.bindingTargetId(),

@@ -116,6 +116,40 @@ public class ChatRunAdmissionCommitService {
         return new AdmissionResult(messagePlan, run);
     }
 
+    /**
+     * 原子受理 AMBIGUOUS_ROUTE 续接：复用原消息、追加附件并创建 continuation run。
+     */
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public AdmissionResult commitReusableIntentClarification(IntentClarificationAdmissionCommand command) {
+        UserContext user = command.user();
+        ChatSession session = command.session();
+        String runId = command.runId();
+        ChatInteractionRequest interaction = command.interaction();
+        if (InteractionMessageStrategy.newTurn(interaction)) {
+            throw new IllegalArgumentException("普通 INTENT_CLARIFICATION 不能复用 assistant 消息");
+        }
+        sessionService.lockForMessageMutation(
+                user.tenantId(), user.ownerUserId(), session);
+        ChatRunMessagePlan messagePlan = sessionService.prepareReusableIntentClarification(
+                user,
+                session,
+                runId,
+                interaction,
+                command.attachments());
+        ChatRun run = chatRunService.insertInteractionRunning(new CreateChatRunContext(
+                runId,
+                user,
+                session.id(),
+                null,
+                null,
+                command.runMetadata(),
+                ChatRunMode.NEXT,
+                messagePlan.parentMessageId(),
+                messagePlan.userMessage().id()
+        ), interaction.id());
+        return new AdmissionResult(messagePlan, run);
+    }
+
     public record IntentClarificationAdmissionCommand(
             UserContext user,
             ChatSession session,

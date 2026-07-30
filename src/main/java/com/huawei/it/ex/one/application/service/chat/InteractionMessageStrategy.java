@@ -14,9 +14,12 @@ enum InteractionMessageStrategy {
     static final String METADATA_KEY = "interactionMessageStrategy";
 
     static InteractionMessageStrategy forInteraction(ChatInteractionRequest interaction) {
-        return interaction != null && interaction.interactionType() == ChatInteractionType.INTENT_CLARIFICATION
-                ? NEW_TURN
-                : REUSE_ASSISTANT;
+        if (interaction == null || interaction.interactionType() != ChatInteractionType.INTENT_CLARIFICATION) {
+            return REUSE_ASSISTANT;
+        }
+        return AmbiguousRouteSupport.isAmbiguous(interaction)
+                ? REUSE_ASSISTANT
+                : NEW_TURN;
     }
 
     static InteractionMessageStrategy fromRun(ChatRun run) {

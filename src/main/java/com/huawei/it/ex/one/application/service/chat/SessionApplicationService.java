@@ -16,6 +16,7 @@ import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
+import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessageAttachment;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePage;
@@ -376,6 +377,32 @@ public class SessionApplicationService implements ChatSessionFacade {
                                                         String parentAssistantMessageId, String answerText) {
         return prepareIntentClarificationAnswer(
                 user, session, runId, parentAssistantMessageId, answerText, List.of());
+    }
+
+    /**
+     * 复用原始问答消息承载 AMBIGUOUS_ROUTE 选择和后续执行结果。
+     *
+     * <p>当前轮附件只追加到原 user 消息；不创建新的可见 user/assistant 节点。</p>
+     */
+    ChatRunMessagePlan prepareReusableIntentClarification(
+            UserContext user,
+            ChatSession session,
+            String runId,
+            ChatInteractionRequest interaction,
+            List<AttachmentRef> attachments) {
+        if (user == null || session == null || interaction == null) {
+            throw new IllegalArgumentException("复用意图澄清消息缺少用户、会话或 Interaction");
+        }
+        ChatMessage userMessage = requireMessageInSession(session, interaction.userMessageId());
+        if (!"user".equalsIgnoreCase(userMessage.role())) {
+            throw new IllegalArgumentException("AMBIGUOUS_ROUTE 关联消息必须是 user 消息");
+        }
+        appendAttachments(userMessage, attachments);
+        return new ChatRunMessagePlan(
+                ChatRunMode.NEXT,
+                userMessage.id(),
+                userMessage,
+                null);
     }
 
     /**
@@ -911,6 +938,44 @@ public class SessionApplicationService implements ChatSessionFacade {
             }
             messageRepository.saveAttachment(new ChatMessageAttachment(
                     idGenerator.newId("msg_att", IdGenerateContext.of(message.tenantId(), message.userId(), message.sessionId())),
+                    message.tenantId(),
+                    message.userId(),
+                    message.sessionId(),
+                    message.id(),
+                    attachment.documentId(),
+                    ++index,
+                    attachment.name(),
+                    attachment.contentType(),
+                    attachment.sizeBytes(),
+                    null,
+                    Instant.now()
+            ));
+        }
+    }
+
+    private void appendAttachments(ChatMessage message, List<AttachmentRef> attachments) {
+        if (attachments == null || attachments.isEmpty()) {
+            return;
+        }
+        List<ChatMessageAttachment> existing = messageRepository.findAttachments(
+                message.tenantId(), message.userId(), message.id());
+        Set<String> existingDocumentIds = existing.stream()
+                .map(ChatMessageAttachment::documentId)
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        int index = existing.stream()
+                .mapToInt(ChatMessageAttachment::attachmentOrder)
+                .max()
+                .orElse(0);
+        for (AttachmentRef attachment : attachments) {
+            if (attachment == null || attachment.documentId() == null
+                    || attachment.documentId().isBlank()
+                    || !existingDocumentIds.add(attachment.documentId())) {
+                continue;
+            }
+            messageRepository.saveAttachment(new ChatMessageAttachment(
+                    idGenerator.newId("msg_att",
+                            IdGenerateContext.of(message.tenantId(), message.userId(), message.sessionId())),
                     message.tenantId(),
                     message.userId(),
                     message.sessionId(),

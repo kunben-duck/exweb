@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.config.ChatInteractionProperties;
 import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
 import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
@@ -14,6 +15,8 @@ import com.huawei.it.ex.one.application.service.runtime.SystemResponseExecutor;
 
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
+
+import java.time.Duration;
 
 /** Assembles the extracted coordinators for characterization tests. */
 final class ChatFlowTestAssembler {
@@ -60,6 +63,13 @@ final class ChatFlowTestAssembler {
                 new RunMemoryContextAssembler(memoryService);
         IntentClarificationContextAssembler clarificationAssembler =
                 new IntentClarificationContextAssembler();
+        AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver =
+                new AmbiguousRouteSelectionResolver();
+        AmbiguousRouteWaitPolicy ambiguousRouteWaitPolicy =
+                new AmbiguousRouteWaitPolicy(
+                        ambiguousRouteSelectionResolver,
+                        new ChatInteractionProperties(),
+                        Duration.ofSeconds(30));
         InteractionEventFactory interactionEventFactory =
                 new InteractionEventFactory();
         AppliedRouteRecorder routeRecorder = new AppliedRouteRecorder(
@@ -98,7 +108,9 @@ final class ChatFlowTestAssembler {
                         chatInteractionService,
                         sessionService,
                         documentFacade,
-                        clarificationAssembler);
+                        clarificationAssembler,
+                        ambiguousRouteSelectionResolver,
+                        null);
         this.admissionCoordinator = new ChatRunAdmissionCoordinator(
                 sessionService, chatRunService, chatInteractionService);
         ChatRunCompletionCoordinator completionCoordinator =
@@ -137,7 +149,8 @@ final class ChatFlowTestAssembler {
                         runtimeBindingService,
                         completionCoordinator,
                         refusalCoordinator,
-                        committedEventObserver);
+                        committedEventObserver,
+                        ambiguousRouteWaitPolicy);
         this.refusalCommitCoordinator =
                 new DomainAgentRefusalCommitCoordinator(
                         terminalCommitService,
@@ -193,7 +206,8 @@ final class ChatFlowTestAssembler {
                         runtimeDispatchCoordinator,
                         eventPersistenceCoordinator,
                         routeRecorder,
-                        refusalCoordinator));
+                        refusalCoordinator,
+                        ambiguousRouteSelectionResolver));
         ChatRunExecutionCoordinator runExecutionCoordinator =
                 standardRunCoordinator(new StandardRunAssembly(
                         sessionService,
@@ -268,6 +282,15 @@ final class ChatFlowTestAssembler {
                         inputs.runtimeDispatchCoordinator(),
                         inputs.persistenceCoordinator(),
                         admissionCoordinator);
+        AmbiguousRouteContinuationCoordinator ambiguousRouteCoordinator =
+                new AmbiguousRouteContinuationCoordinator(
+                        inputs.ambiguousRouteSelectionResolver(),
+                        inputs.clarificationAssembler(),
+                        inputs.eventFactory(),
+                        lifecycle,
+                        inputs.runtimeDispatchCoordinator(),
+                        inputs.persistenceCoordinator(),
+                        admissionCoordinator);
         RouteSwitchContinuationCoordinator routeSwitchCoordinator =
                 new RouteSwitchContinuationCoordinator(
                         inputs.runtimeBindingService(),
@@ -289,6 +312,7 @@ final class ChatFlowTestAssembler {
                 inputs.sessionService(),
                 inputs.interactionService(),
                 clarificationRunCoordinator,
+                ambiguousRouteCoordinator,
                 routeSwitchCoordinator,
                 runtimeInteractionCoordinator);
     }
@@ -341,7 +365,8 @@ final class ChatFlowTestAssembler {
             ChatRuntimeDispatchCoordinator runtimeDispatchCoordinator,
             ChatEventPersistenceCoordinator persistenceCoordinator,
             AppliedRouteRecorder routeRecorder,
-            DomainAgentRefusalCoordinator refusalCoordinator
+            DomainAgentRefusalCoordinator refusalCoordinator,
+            AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver
     ) {
     }
 

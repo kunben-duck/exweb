@@ -45,7 +45,9 @@ final class AssistantAssembly {
                 return;
             }
             if (isIntentClarificationResponse(event.payload())) {
-                return;
+                if (!AmbiguousRouteSupport.isAmbiguous(event.payload())) {
+                    return;
+                }
             }
             if (isDomainAgentRefusal(event.payload())) {
                 // 拒答前已经输出的正文只作为 MESSAGE_SNAPSHOT/过程 part 保留，不能与新 Agent

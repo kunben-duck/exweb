@@ -64,6 +64,16 @@ final class ChatRuntimeDispatchCoordinator {
         return frames.concatMap(frame -> executeFrame(request, frame));
     }
 
+    Flux<ChatEvent> executeResolved(
+            RoutePipelineRequest request,
+            RouteSignalResult routeSignal) {
+        return eventPersistenceCoordinator.requireCurrentOwnerRunning(
+                        request.executionClaim(), "before-route")
+                .then(eventPersistenceCoordinator.requireCurrentOwnerRunning(
+                        request.executionClaim(), "after-route"))
+                .thenMany(Flux.defer(() -> executeResolvedRoute(request, routeSignal, false)));
+    }
+
     private Flux<ChatEvent> executeFrame(RoutePipelineRequest request,
                                          RouteSignalFrame frame) {
         if (frame.eventFrame()) {
@@ -75,11 +85,12 @@ final class ChatRuntimeDispatchCoordinator {
         }
         return eventPersistenceCoordinator.requireCurrentOwnerRunning(
                         request.executionClaim(), "after-route")
-                .thenMany(Flux.defer(() -> executeResolvedRoute(request, frame.result())));
+                .thenMany(Flux.defer(() -> executeResolvedRoute(request, frame.result(), true)));
     }
 
     private Flux<ChatEvent> executeResolvedRoute(RoutePipelineRequest request,
-                                                 RouteSignalResult routeSignal) {
+                                                 RouteSignalResult routeSignal,
+                                                 boolean recordIntentRecognition) {
         DomainAgentRerouteState rerouteState =
                 domainAgentRefusalCoordinator.rerouteState(request.runCommand());
         if (rerouteState != null) {
@@ -92,7 +103,7 @@ final class ChatRuntimeDispatchCoordinator {
             return Flux.error(new IntentRoutingFailedException(routeSignal.intentFailureReason()));
         }
         RouteResolutionCoordinator.RouteExecutionResolution resolution =
-                resolveRoute(request, routeSignal);
+                resolveRoute(request, routeSignal, recordIntentRecognition);
         if (resolution.waitingIntentClarification()) {
             appliedRouteRecorder.bindIntentAgentProvider(request.runId());
             return interactionEventFactory.intentClarificationWaitingBody(
@@ -105,7 +116,8 @@ final class ChatRuntimeDispatchCoordinator {
 
     private RouteResolutionCoordinator.RouteExecutionResolution resolveRoute(
             RoutePipelineRequest request,
-            RouteSignalResult routeSignal) {
+            RouteSignalResult routeSignal,
+            boolean recordIntentRecognition) {
         RouteResolutionCoordinator.RouteExecutionResolution resolution =
                 routeResolutionCoordinator.resolve(
                         new RouteResolutionCoordinator.RouteResolutionRequest(
@@ -126,7 +138,7 @@ final class ChatRuntimeDispatchCoordinator {
         request.runtimeSessionModeRef().set(resolution.runtimeSessionMode());
         appliedRouteRecorder.bindResolvedRoute(
                 request.runId(), resolution.route(), resolution.binding());
-        if (resolution.intent() != null) {
+        if (recordIntentRecognition && resolution.intent() != null) {
             appliedRouteRecorder.recordIntent(
                     request.user(),
                     request.runCommand(),

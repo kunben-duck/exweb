@@ -20,6 +20,8 @@ import java.time.Instant;
  * @param interactionType 等待类型。
  * @param assistantMessageId 承载等待卡片的 assistant 消息 ID。
  * @param expiresAt 等待请求过期时间。
+ * @param autoSelectAt AMBIGUOUS_ROUTE 自动代选时间；其他等待类型为空。
+ * @param autoSelectTimeoutMs AMBIGUOUS_ROUTE 自动代选等待毫秒数；其他等待类型为空。
  * @param bindingProvider 当前会话 active binding provider。
  * @param bindingTargetType 当前绑定目标类型。
  * @param bindingTargetId 当前绑定目标 ID。
@@ -43,6 +45,8 @@ public record ChatStreamStatus(
         String interactionType,
         String assistantMessageId,
         Instant expiresAt,
+        Instant autoSelectAt,
+        Long autoSelectTimeoutMs,
         String bindingProvider,
         String bindingTargetType,
         String bindingTargetId,
@@ -61,7 +65,21 @@ public record ChatStreamStatus(
             String bindingIntentCode, String bindingIntentName, String bindingRouteSource, Instant bindingUpdatedAt) {
         this(sessionId, latestSeq, activeRunId, activeRunStatus, activeStreamTopicId, activeRunFirstSeq,
                 activeRunLastSeq, cancellable, waitingUserInput, interactionId, interactionType,
-                assistantMessageId, expiresAt, bindingProvider, bindingTargetType, bindingTargetId,
+                assistantMessageId, expiresAt, null, null, bindingProvider, bindingTargetType, bindingTargetId,
                 bindingIntentCode, bindingIntentName, bindingRouteSource, bindingUpdatedAt, null);
+    }
+
+    /** 兼容尚未返回自动选择字段但已经返回 Agent 模式的内部构造调用。 */
+    public ChatStreamStatus(
+            String sessionId, long latestSeq, String activeRunId, ChatRunStatus activeRunStatus,
+            String activeStreamTopicId, Long activeRunFirstSeq, Long activeRunLastSeq, boolean cancellable,
+            boolean waitingUserInput, String interactionId, String interactionType, String assistantMessageId,
+            Instant expiresAt, String bindingProvider, String bindingTargetType, String bindingTargetId,
+            String bindingIntentCode, String bindingIntentName, String bindingRouteSource, Instant bindingUpdatedAt,
+            AgentModeProfile bindingAgentMode) {
+        this(sessionId, latestSeq, activeRunId, activeRunStatus, activeStreamTopicId, activeRunFirstSeq,
+                activeRunLastSeq, cancellable, waitingUserInput, interactionId, interactionType,
+                assistantMessageId, expiresAt, null, null, bindingProvider, bindingTargetType, bindingTargetId,
+                bindingIntentCode, bindingIntentName, bindingRouteSource, bindingUpdatedAt, bindingAgentMode);
     }
 }

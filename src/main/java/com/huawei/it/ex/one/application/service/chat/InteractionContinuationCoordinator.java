@@ -31,17 +31,32 @@ final class InteractionContinuationCoordinator {
     private final SessionApplicationService sessionService;
     private final DocumentFacade documentFacade;
     private final IntentClarificationContextAssembler clarificationAssembler;
+    private final AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver;
+    private final AmbiguousRouteTimeoutScheduler ambiguousRouteTimeoutScheduler;
+
+    InteractionContinuationCoordinator(ChatRunStartCoordinator runStartCoordinator,
+                                       ChatInteractionApplicationService interactionService,
+                                       SessionApplicationService sessionService,
+                                       DocumentFacade documentFacade,
+                                       IntentClarificationContextAssembler clarificationAssembler,
+                                       AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver,
+                                       AmbiguousRouteTimeoutScheduler ambiguousRouteTimeoutScheduler) {
+        this.runStartCoordinator = runStartCoordinator;
+        this.interactionService = interactionService;
+        this.sessionService = sessionService;
+        this.documentFacade = documentFacade;
+        this.clarificationAssembler = clarificationAssembler;
+        this.ambiguousRouteSelectionResolver = ambiguousRouteSelectionResolver;
+        this.ambiguousRouteTimeoutScheduler = ambiguousRouteTimeoutScheduler;
+    }
 
     InteractionContinuationCoordinator(ChatRunStartCoordinator runStartCoordinator,
                                        ChatInteractionApplicationService interactionService,
                                        SessionApplicationService sessionService,
                                        DocumentFacade documentFacade,
                                        IntentClarificationContextAssembler clarificationAssembler) {
-        this.runStartCoordinator = runStartCoordinator;
-        this.interactionService = interactionService;
-        this.sessionService = sessionService;
-        this.documentFacade = documentFacade;
-        this.clarificationAssembler = clarificationAssembler;
+        this(runStartCoordinator, interactionService, sessionService, documentFacade,
+                clarificationAssembler, new AmbiguousRouteSelectionResolver(), null);
     }
 
     Mono<ChatRunStartResult> start(
@@ -59,11 +74,17 @@ final class InteractionContinuationCoordinator {
                 command,
                 headerSnapshot,
                 execution,
+                new AtomicReference<>(),
                 new AtomicReference<>());
         return runStartCoordinator.startInteraction(
                 user,
                 traceContext,
                 command.interactionId(),
+                new AmbiguousRouteTimeoutScheduler.InvocationContext(
+                        user,
+                        traceContext,
+                        headerSnapshot,
+                        command.metadata()),
                 (runId, startAttempt) -> executeClaimedContinuation(context, runId, startAttempt));
     }
 
@@ -91,7 +112,11 @@ final class InteractionContinuationCoordinator {
                 command.appId(),
                 command.appName(),
                 command.attachments(),
-                command.agentMode());
+                command.agentMode(),
+                command.targetType(),
+                command.targetId(),
+                command.interactionAction(),
+                null);
     }
 
     private Flux<ChatEvent> executeClaimedContinuation(ContinuationStartContext context,
@@ -105,7 +130,11 @@ final class InteractionContinuationCoordinator {
                             context.user(),
                             context.command(),
                             interaction,
-                            context.inputRef()));
+                            context.inputRef(),
+                            context.ambiguousPlanRef()));
+            if (ambiguousRouteTimeoutScheduler != null) {
+                ambiguousRouteTimeoutScheduler.cancel(claim.request().id());
+            }
             startAttempt.recordInteraction(claim.request());
             if (startAttempt.aborted()) {
                 interactionService.markWaiting(claim.request());
@@ -120,7 +149,8 @@ final class InteractionContinuationCoordinator {
                         context.traceContext(),
                         startAttempt,
                         context.inputRef().get(),
-                        context.command().agentMode()));
+                        context.command().agentMode(),
+                        context.ambiguousPlanRef().get()));
             } catch (RuntimeException ex) {
                 interactionService.markWaiting(claim.request());
                 return Flux.error(ex);
@@ -132,14 +162,38 @@ final class InteractionContinuationCoordinator {
             UserContext user,
             ChatInteractionResponseCommand command,
             ChatInteractionRequest interaction,
-            AtomicReference<IntentClarificationContextAssembler.ContinuationInput> inputRef) {
+            AtomicReference<IntentClarificationContextAssembler.ContinuationInput> inputRef,
+            AtomicReference<AmbiguousRouteContinuationPlan> ambiguousPlanRef) {
         validateSessionContext(user, command, interaction);
         if (interaction.interactionType() != ChatInteractionType.INTENT_CLARIFICATION) {
+            rejectAmbiguousRouteFields(command);
             if (!command.attachments().isEmpty()) {
                 throw new IllegalArgumentException("仅 INTENT_CLARIFICATION 支持在续接时提交附件");
             }
             return interactionService.prepareResponsePayload(command, interaction.interactionType(), null);
         }
+        if (AmbiguousRouteSupport.isAmbiguous(interaction)) {
+            AmbiguousRouteContinuationPlan plan = ambiguousPlan(command, interaction);
+            ambiguousPlanRef.set(plan);
+            if (plan.selectedCandidate()) {
+                IntentClarificationContextAssembler.ContinuationInput input =
+                        prepareAmbiguousSelectionInput(user, command, interaction);
+                inputRef.set(input);
+                return selectedCandidateResponse(command, interaction, plan);
+            }
+            IntentClarificationContextAssembler.ContinuationInput input =
+                    prepareIntentClarificationInput(user, command, interaction);
+            inputRef.set(input);
+            Map<String, Object> response = new LinkedHashMap<>(interactionService.prepareResponsePayload(
+                    command,
+                    interaction.interactionType(),
+                    input.intentQuery()));
+            response.put("answerText", input.messageText());
+            response.put("selectionSource", plan.selectionSource());
+            response.put("interactionAction", AmbiguousRouteSupport.ACTION_OTHER);
+            return Map.copyOf(response);
+        }
+        rejectAmbiguousRouteFields(command);
         IntentClarificationContextAssembler.ContinuationInput input =
                 prepareIntentClarificationInput(user, command, interaction);
         inputRef.set(input);
@@ -149,6 +203,132 @@ final class InteractionContinuationCoordinator {
                 input.intentQuery()));
         payload.put("answerText", input.messageText());
         return Map.copyOf(payload);
+    }
+
+    private AmbiguousRouteContinuationPlan ambiguousPlan(
+            ChatInteractionResponseCommand command,
+            ChatInteractionRequest interaction) {
+        boolean targetPresent = hasText(command.targetType()) || hasText(command.targetId());
+        boolean actionPresent = hasText(command.interactionAction());
+        if (targetPresent && actionPresent) {
+            throw new IllegalArgumentException("指定候选技能时不能同时提交 interactionAction");
+        }
+        if (targetPresent) {
+            validateSelectionOnlyFields(command);
+            if (!"DOMAIN_AGENT".equalsIgnoreCase(command.targetType()) || !hasText(command.targetId())) {
+                throw new IllegalArgumentException(
+                        "AMBIGUOUS_ROUTE 指定候选时 targetType 必须为 DOMAIN_AGENT 且 targetId 不能为空");
+            }
+            AmbiguousRouteSelectionResolver.Candidate candidate =
+                    ambiguousRouteSelectionResolver.select(interaction, command.targetId())
+                            .orElseThrow(() -> new IllegalArgumentException(
+                                    "targetId 不属于当前 AMBIGUOUS_ROUTE 候选技能"));
+            return AmbiguousRouteContinuationPlan.selected(candidate);
+        }
+        if (actionPresent) {
+            validateSelectionOnlyFields(command);
+            if (!AmbiguousRouteSupport.ACTION_AUTO_SELECT.equals(command.interactionAction())) {
+                throw new IllegalArgumentException(
+                        "AMBIGUOUS_ROUTE interactionAction 仅支持 AUTO_SELECT");
+            }
+            AmbiguousRouteSelectionResolver.Candidate candidate =
+                    ambiguousRouteSelectionResolver.autoSelect(interaction)
+                            .orElseThrow(() -> new IllegalArgumentException(
+                                    "当前 AMBIGUOUS_ROUTE 没有可自动选择的候选技能"));
+            boolean timeout = AmbiguousRouteSupport.SELECTION_SOURCE_TIMEOUT.equals(
+                    command.selectionSource());
+            return AmbiguousRouteContinuationPlan.autoSelected(candidate, timeout);
+        }
+        return AmbiguousRouteContinuationPlan.other();
+    }
+
+    private void validateSelectionOnlyFields(ChatInteractionResponseCommand command) {
+        if (command.approved() != null || hasText(command.scope())
+                || !command.questionnaireAnswers().isEmpty()
+                || !command.attachments().isEmpty()) {
+            throw new IllegalArgumentException(
+                    "候选技能选择或代为选择不能同时提交 approved/scope/questionnaireAnswers/attachments");
+        }
+    }
+
+    private void rejectAmbiguousRouteFields(ChatInteractionResponseCommand command) {
+        if (hasText(command.targetType()) || hasText(command.targetId())
+                || hasText(command.interactionAction())
+                || hasText(command.selectionSource())) {
+            throw new IllegalArgumentException(
+                    "targetType/targetId/interactionAction 仅支持 AMBIGUOUS_ROUTE");
+        }
+    }
+
+    private Map<String, Object> selectedCandidateResponse(
+            ChatInteractionResponseCommand command,
+            ChatInteractionRequest interaction,
+            AmbiguousRouteContinuationPlan plan) {
+        AmbiguousRouteSelectionResolver.Candidate candidate = plan.candidate();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("approved", Boolean.TRUE);
+        payload.put("scope", "once");
+        payload.put("questionnaireAnswers", Map.of());
+        payload.put("metadata", command.metadata());
+        payload.put("answerText", selectionDisplayText(candidate, plan.selectionSource()));
+        payload.put("selectionSource", plan.selectionSource());
+        payload.put("interactionAction", plan.mode() == AmbiguousRouteContinuationPlan.Mode.AUTO_SELECT
+                ? AmbiguousRouteSupport.ACTION_AUTO_SELECT
+                : "SELECT_CANDIDATE");
+        payload.put("selectedSkillId", candidate.skillId());
+        payload.put("selectedIntentId", candidate.intentId() == null ? "" : candidate.intentId());
+        payload.put("selectedIntentName", candidate.intentName() == null ? "" : candidate.intentName());
+        payload.put("clarificationType", AmbiguousRouteSupport.CLARIFICATION_TYPE);
+        putIfPresent(payload, "assistantMessageId", interaction.assistantMessageId());
+        putIfPresent(payload, "sourceRunId", interaction.sourceRunId());
+        return Map.copyOf(payload);
+    }
+
+    private void putIfPresent(Map<String, Object> target, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            target.put(key, value);
+        }
+    }
+
+    private String selectionDisplayText(
+            AmbiguousRouteSelectionResolver.Candidate candidate,
+            String selectionSource) {
+        String name = candidate.intentName() == null
+                ? candidate.skillId()
+                : candidate.intentName();
+        return switch (selectionSource) {
+            case AmbiguousRouteSupport.SELECTION_SOURCE_DELEGATED -> "代为选择：" + name;
+            case AmbiguousRouteSupport.SELECTION_SOURCE_TIMEOUT -> "超时自动选择：" + name;
+            default -> name;
+        };
+    }
+
+    private IntentClarificationContextAssembler.ContinuationInput prepareAmbiguousSelectionInput(
+            UserContext user,
+            ChatInteractionResponseCommand command,
+            ChatInteractionRequest interaction) {
+        List<String> previousDocumentIds = clarificationAssembler.documentIds(
+                interaction.requestPayload());
+        LinkedHashMap<String, AttachmentRef> noCurrentAttachments = new LinkedHashMap<>();
+        ResolvedChatAttachments historical = resolveHistorical(
+                user,
+                interaction,
+                previousDocumentIds,
+                noCurrentAttachments);
+        CumulativeDocuments cumulative = mergeDocuments(
+                previousDocumentIds,
+                noCurrentAttachments,
+                ResolvedChatAttachments.empty(),
+                historical);
+        return new IntentClarificationContextAssembler.ContinuationInput(
+                "",
+                "",
+                List.of(),
+                cumulative.attachments(),
+                cumulative.documents(),
+                cumulative.documentIds(),
+                command.metadata(),
+                command.agentMode());
     }
 
     private IntentClarificationContextAssembler.ContinuationInput prepareIntentClarificationInput(
@@ -301,9 +481,7 @@ final class InteractionContinuationCoordinator {
     }
 
     private boolean unsupportedInteractionFields(ChatCommand command) {
-        return command.targetType() != null
-                || command.targetId() != null
-                || command.parentMessageId() != null
+        return command.parentMessageId() != null
                 || command.editedMessageId() != null
                 || command.regeneratedMessageId() != null
                 || command.routeTrigger() != null;
@@ -326,7 +504,8 @@ final class InteractionContinuationCoordinator {
             TraceContext traceContext,
             RunStartAttempt startAttempt,
             IntentClarificationContextAssembler.ContinuationInput clarificationInput,
-            AgentModeProfile agentMode
+            AgentModeProfile agentMode,
+            AmbiguousRouteContinuationPlan ambiguousRoutePlan
     ) {
     }
 
@@ -336,7 +515,8 @@ final class InteractionContinuationCoordinator {
             ChatInteractionResponseCommand command,
             RuntimeForwardHeaders forwardHeaders,
             ContinuationExecution execution,
-            AtomicReference<IntentClarificationContextAssembler.ContinuationInput> inputRef
+            AtomicReference<IntentClarificationContextAssembler.ContinuationInput> inputRef,
+            AtomicReference<AmbiguousRouteContinuationPlan> ambiguousPlanRef
     ) {
     }
 

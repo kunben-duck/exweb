@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
+import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
@@ -23,6 +24,7 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -35,12 +37,14 @@ final class ChatRunStartCoordinator {
     private final LocalChatRunExecutionRegistry executionRegistry;
     private final ChatRunOperationalProperties operationalProperties;
     private final FirstEventTimeoutCompensator timeoutCompensator;
+    private final AmbiguousRouteTimeoutScheduler ambiguousRouteTimeoutScheduler;
 
     ChatRunStartCoordinator(IdGenerator idGenerator,
                             RunAdmissionControlService admissionControl,
                             LocalChatRunExecutionRegistry executionRegistry,
                             ChatRunOperationalProperties operationalProperties,
-                            FirstEventTimeoutCompensator timeoutCompensator) {
+                            FirstEventTimeoutCompensator timeoutCompensator,
+                            AmbiguousRouteTimeoutScheduler ambiguousRouteTimeoutScheduler) {
         this.idGenerator = idGenerator;
         this.admissionControl = admissionControl;
         this.executionRegistry = executionRegistry;
@@ -48,20 +52,49 @@ final class ChatRunStartCoordinator {
                 ? new ChatRunOperationalProperties()
                 : operationalProperties;
         this.timeoutCompensator = timeoutCompensator;
+        this.ambiguousRouteTimeoutScheduler = ambiguousRouteTimeoutScheduler;
+    }
+
+    ChatRunStartCoordinator(IdGenerator idGenerator,
+                            RunAdmissionControlService admissionControl,
+                            LocalChatRunExecutionRegistry executionRegistry,
+                            ChatRunOperationalProperties operationalProperties,
+                            FirstEventTimeoutCompensator timeoutCompensator) {
+        this(idGenerator, admissionControl, executionRegistry, operationalProperties,
+                timeoutCompensator, null);
     }
 
     Mono<ChatRunStartResult> startStandard(UserContext user,
                                            TraceContext traceContext,
                                            ChatCommand command,
                                            StandardRunFactory runFactory) {
+        return startStandard(
+                user,
+                traceContext,
+                command,
+                RuntimeForwardHeaders.empty(),
+                runFactory);
+    }
+
+    Mono<ChatRunStartResult> startStandard(UserContext user,
+                                           TraceContext traceContext,
+                                           ChatCommand command,
+                                           RuntimeForwardHeaders forwardHeaders,
+                                           StandardRunFactory runFactory) {
         return Mono.defer(() -> {
             String runId = idGenerator.newId("run",
                     IdGenerateContext.of(user.tenantId(), user.ownerUserId(), command.sessionId()));
             RunStartAttempt attempt = new RunStartAttempt(user, runId, null);
             BackgroundStartState state = newState(user, attempt);
+            AmbiguousRouteTimeoutScheduler.InvocationContext timeoutContext =
+                    timeoutContext(
+                            user,
+                            traceContext,
+                            forwardHeaders,
+                            command == null ? null : command.metadata());
             Flux<ChatEvent> runFlux = runFactory.create(attempt)
                     .subscribeOn(Schedulers.boundedElastic())
-                    .doOnNext(event -> onEvent(event, state, "chat run"))
+                    .doOnNext(event -> onEvent(event, state, "chat run", timeoutContext))
                     .doOnComplete(() -> onComplete(
                             state, "chat run finished before emitting any persisted event"))
                     .doFinally(ignored -> finish(state));
@@ -74,6 +107,24 @@ final class ChatRunStartCoordinator {
                                               TraceContext traceContext,
                                               String interactionId,
                                               InteractionRunFactory runFactory) {
+        return startInteraction(
+                user,
+                traceContext,
+                interactionId,
+                timeoutContext(
+                        user,
+                        traceContext,
+                        RuntimeForwardHeaders.empty(),
+                        Map.of()),
+                runFactory);
+    }
+
+    Mono<ChatRunStartResult> startInteraction(
+            UserContext user,
+            TraceContext traceContext,
+            String interactionId,
+            AmbiguousRouteTimeoutScheduler.InvocationContext timeoutContext,
+            InteractionRunFactory runFactory) {
         return Mono.defer(() -> {
             String runId = idGenerator.newId("run",
                     IdGenerateContext.of(user.tenantId(), user.ownerUserId(), interactionId));
@@ -81,7 +132,11 @@ final class ChatRunStartCoordinator {
             BackgroundStartState state = newState(user, attempt);
             Flux<ChatEvent> runFlux = runFactory.create(runId, attempt)
                     .subscribeOn(Schedulers.boundedElastic())
-                    .doOnNext(event -> onEvent(event, state, "interaction continuation"))
+                    .doOnNext(event -> onEvent(
+                            event,
+                            state,
+                            "interaction continuation",
+                            timeoutContext))
                     .doOnComplete(() -> onComplete(
                             state, "interaction continuation finished before emitting any event"))
                     .doFinally(ignored -> finish(state));
@@ -100,7 +155,14 @@ final class ChatRunStartCoordinator {
                 new AtomicBoolean(false));
     }
 
-    private void onEvent(ChatEvent event, BackgroundStartState state, String operation) {
+    private void onEvent(
+            ChatEvent event,
+            BackgroundStartState state,
+            String operation,
+            AmbiguousRouteTimeoutScheduler.InvocationContext timeoutContext) {
+        if (ambiguousRouteTimeoutScheduler != null) {
+            ambiguousRouteTimeoutScheduler.observe(event, timeoutContext);
+        }
         RunStartAttempt attempt = state.attempt();
         if (!attempt.beginFirstEventHandoff()) {
             return;
@@ -123,6 +185,18 @@ final class ChatRunStartCoordinator {
     private void finish(BackgroundStartState state) {
         state.terminal().set(true);
         state.permit().close();
+    }
+
+    private AmbiguousRouteTimeoutScheduler.InvocationContext timeoutContext(
+            UserContext user,
+            TraceContext traceContext,
+            RuntimeForwardHeaders forwardHeaders,
+            Map<String, Object> metadata) {
+        return new AmbiguousRouteTimeoutScheduler.InvocationContext(
+                user,
+                traceContext,
+                forwardHeaders,
+                metadata);
     }
 
     private void subscribeStandard(Flux<ChatEvent> runFlux,

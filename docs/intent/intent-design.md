@@ -196,13 +196,17 @@ Supervisor 每次需要重新分流时，给意图模型这些信息：
 
 澄清期间，每一轮 0号意图服务提供的澄清问和用户回答都经过 Supervisor 交互，因此也算在历史会话里。
 
-ChatService 将该过程保存为完整消息链，而不是反复覆盖同一条 assistant：
+普通意图澄清将该过程保存为完整消息链，而不是反复覆盖同一条 assistant：
 
 ```text
 user 原始问题 -> assistant 澄清问题 -> user 澄清回答 -> assistant 下一轮澄清/最终回答
 ```
 
 澄清 assistant 的正文为 `clarifyQuestion`，并保留 `INTENT_CLARIFICATION_REQUEST` part；用户回答是独立 user 消息。`intent-clarification-response` 仍作为实时和恢复事件保留，但不重复写入 assistant parts。
+
+`AMBIGUOUS_ROUTE` 是消息策略例外。候选卡片、候选选择响应和最终 DomainAgent 结果复用同一条
+assistant；run-A 负责等待，run-B 负责选择后执行。指定候选、用户点击“代为选择”和超时自动选择均跳过
+IntentAgent；只有用户输入“其他”文本或附件时，才按普通澄清规则再次调用 IntentAgent。
 
 ```text
 ---
@@ -469,7 +473,8 @@ JSON 数组顺序是稳定的，因此可以用来表达历史顺序。
 说明：
 
 * 不单独设计 `pending_clarify`。
-* `clarify` 一条记录表达用户“触发澄清的问题 + Supervisor 澄清问题”；用户回答作为本轮再次调用当前配置的意图决策接口的 `query` 传入，不在 `clarify` 记录中重复保存。
+* `clarify` 一条记录表达用户“触发澄清的问题 + Supervisor 澄清问题”；普通回答或 `AMBIGUOUS_ROUTE` 的“其他”输入作为本轮再次调用当前配置的意图决策接口的 `query` 传入，不在 `clarify` 记录中重复保存。
+* `AMBIGUOUS_ROUTE` 直接选择、代为选择和超时自动选择不再次调用意图服务。
 * 多轮澄清时追加多条 `clarify`。
 * 澄清成功后，将多条 `clarify` 折叠成一条 `route`。
 
@@ -495,7 +500,11 @@ JSON 数组顺序是稳定的，因此可以用来表达历史顺序。
           {
             "intentId": "deep_analysis",
             "intentName": "深度分析",
-            "confidence": 0.72
+            "confidence": 0.72,
+            "accessName": "domain_agent_deep_analysis",
+            "resourceInstruction": {
+              "resourceId": "resource_deep_analysis"
+            }
           }
         ]
       }
@@ -511,13 +520,13 @@ JSON 数组顺序是稳定的，因此可以用来表达历史顺序。
 | `ROUTE_SINGLE` | 单意图命中         | 转发 `items[0]` 对应领域 Agent。                                                      |
 | `ROUTE_MULTI`  | 多意图命中         | 进入 Supervisor 自身规划 React。                                                        |
 | `NO_MATCH`     | 当前配置领域无命中 | 进入兜底 React / 工具处理。                                                             |
-| `CLARIFY`      | 需要路由前置澄清   | 展示 `clarification.clarifyQuestion`，等待用户回答后再次调用当前配置的意图决策接口。 |
+| `CLARIFY`      | 需要路由前置澄清   | 展示 `clarification.clarifyQuestion` 并等待；普通回答再次调用意图接口，`AMBIGUOUS_ROUTE` 可直接选择候选。 |
 
 `clarification.type` 当前只保留两类：
 
 | type                  | 含义                                                                 | candidateIntents                              |
 | --------------------- | -------------------------------------------------------------------- | --------------------------------------------- |
-| `AMBIGUOUS_ROUTE`   | 多个已配置领域 Agent 都可能承接，但证据不足                          | 可返回 Top2-3 个候选，Supervisor 可展示选项。 |
+| `AMBIGUOUS_ROUTE`   | 多个已配置领域 Agent 都可能承接，但证据不足                          | 返回 Top2-3 个候选；可执行候选提供 `accessName`，ChatService 规范化为 `skillId`。 |
 | `UNCLEAR_REFERENCE` | 用户问题存在“这个/该附件/帮我分析下”等指代、附件、对象或上下文缺失 | 通常为空，不展示领域候选。                    |
 
 澄清话术约束：
@@ -584,8 +593,8 @@ Supervisor 调用意图服务时，将拒答说明放入：
 
 ### 9.3 澄清中
 
-如果还在澄清中未路由（ 上一轮 `/getIntentDecision` 返回 `routeAction=CLARIFY`），Supervisor 向用户澄清。
-用户回答后，再次调用当前配置的意图决策接口时，将触发澄清的问题和澄清问题作为 `clarify` 写入 history；用户回答放在本轮 `query` 中。
+如果还在澄清中未路由（上一轮 `/getIntentDecision` 返回 `routeAction=CLARIFY`），Supervisor 向用户澄清。
+普通回答或 `AMBIGUOUS_ROUTE` 的“其他”输入会再次调用当前配置的意图决策接口，并将触发澄清的问题和澄清问题作为 `clarify` 写入 history；用户回答放在本轮 `query` 中。指定候选、代为选择和超时自动选择不调用意图接口。
 
 多轮澄清期间，保留多条 clarify。
 
@@ -596,7 +605,7 @@ Supervisor 调用意图服务时，将拒答说明放入：
 - `conversationContext.lastIntentRejectReason` 可以置空，避免上一轮拒答原因在澄清链路中重复放大。
 - 上一轮触发澄清的问题、澄清问题写入一条 `history.type=clarify`；用户回答使用本轮 `query` 传入。
 - 如果 `/getIntentDecision` 继续返回 `CLARIFY`，继续追加下一条 `clarify`；建议chatservice最多澄清 3 轮，超过后由 Supervisor 兜底 React。
-- 前端每轮回答仍调用 `/v1/chat/runs` 且使用 `runMode=CONTINUE_INTERACTION`。回答 admission 成功后旧 Interaction 立即成为 `ANSWERED`，后续执行失败不会重复开放该 Interaction。
+- 前端每轮回答仍调用 `/v1/chat/runs` 且使用 `runMode=CONTINUE_INTERACTION`。普通澄清回答 admission 成功后旧 Interaction 立即成为 `ANSWERED`，后续执行失败不会重复开放该 Interaction。`AMBIGUOUS_ROUTE` 选择流程在 continuation 终态成功时成为 `ANSWERED`；初始化或执行失败时按现有补偿恢复 `WAITING`。
 
 ### 9.4 澄清成功后
 

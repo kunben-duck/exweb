@@ -26,7 +26,8 @@ class ChatRuntimeCoordinatorConfiguration {
             AppliedRouteRecorder appliedRouteRecorder,
             RouteResolutionCoordinator routeResolutionCoordinator,
             ChatRunLeaseApplicationService chatRunLeaseService,
-            @Qualifier("chatStreamEventScheduler") Scheduler eventIoScheduler) {
+            @Qualifier("chatStreamEventScheduler") Scheduler eventIoScheduler,
+            @Qualifier("domainAgentControlIoScheduler") Scheduler controlIoScheduler) {
         return new DomainAgentRefusalCoordinator(
                 agentRuntimeExecutor,
                 routeSignalService,
@@ -35,7 +36,8 @@ class ChatRuntimeCoordinatorConfiguration {
                 appliedRouteRecorder,
                 routeResolutionCoordinator,
                 chatRunLeaseService,
-                eventIoScheduler);
+                eventIoScheduler,
+                controlIoScheduler);
     }
 
     @Bean

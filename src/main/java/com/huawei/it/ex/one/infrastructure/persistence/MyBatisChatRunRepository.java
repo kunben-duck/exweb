@@ -52,6 +52,16 @@ public class MyBatisChatRunRepository implements ChatRunRepository {
     }
 
     @Override
+    public ChatRun updateResolvedRoute(ChatRun run) {
+        int updated = mapper.updateResolvedRoute(toRow(run));
+        if (updated != 1) {
+            throw new IllegalStateException("run 已停止、进入终态或归属不匹配，无法更新最终路由: " + run.id());
+        }
+        return findById(run.id())
+                .orElseThrow(() -> new IllegalStateException("最终路由更新后 run 回读失败: " + run.id()));
+    }
+
+    @Override
     public ChatRun insert(ChatRun run) {
         try {
             mapper.insert(toRow(run));

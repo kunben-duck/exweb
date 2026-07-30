@@ -198,10 +198,35 @@ class MyBatisXmlMapperConsistencyTest {
         assertThat(end).isGreaterThan(start);
         String updateExisting = xml.substring(start, end);
         assertThat(updateExisting)
+                .contains("route_type = COALESCE(route_type, #{routeType})")
+                .contains("agent_code = COALESCE(agent_code, #{agentCode})")
+                .contains("runtime_provider = COALESCE(runtime_provider, #{runtimeProvider})")
                 .contains("status IN ('CANCELLING', 'COMPLETED', 'WAITING_USER', 'FAILED', 'CANCELLED')")
                 .contains("THEN last_seq")
                 .contains("THEN finished_at")
                 .contains("THEN updated_at");
+    }
+
+    @Test
+    void chatRunResolvedRouteUpdateShouldOverwriteCurrentRuntimeWhileRunning() throws IOException {
+        Path mapper = MAPPER_XML_ROOT.resolve("persistence/ChatRunMapper.opengauss.xml");
+        String xml = Files.readString(mapper);
+        int start = xml.indexOf("<update id=\"updateResolvedRoute\"");
+        int end = xml.indexOf("</update>", start);
+
+        assertThat(start).isGreaterThanOrEqualTo(0);
+        assertThat(end).isGreaterThan(start);
+        String updateResolvedRoute = xml.substring(start, end);
+        assertThat(updateResolvedRoute)
+                .contains("route_type = #{routeType}")
+                .contains("agent_code = #{agentCode}")
+                .contains("runtime_provider = #{runtimeProvider}")
+                .contains("runtime_session_id = #{runtimeSessionId}")
+                .contains("AND tenant_id = #{tenantId}")
+                .contains("AND user_id = #{userId}")
+                .contains("AND session_id = #{sessionId}")
+                .contains("AND status = 'RUNNING'")
+                .doesNotContain("COALESCE");
     }
 
     @Test

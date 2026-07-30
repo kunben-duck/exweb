@@ -385,8 +385,10 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 .extracting(ChatMessage::content)
                 .isEqualTo("relay answer");
         assertThat(runs.runs.values()).singleElement()
-                .extracting(ChatRun::runtimeProvider)
-                .isEqualTo("relay");
+                .satisfies(run -> {
+                    assertThat(run.runtimeProvider()).isEqualTo("relay");
+                    assertThat(run.agentCode()).isNull();
+                });
     }
 
     @Test
@@ -451,11 +453,12 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
         FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
                 sessions, messages, runs, events, routeService, domainClient, relay, bindings,
                 properties);
+        AtomicReference<ChatRunStartResult> started = new AtomicReference<>();
 
         StepVerifier.create(service.startRun(user, new ChatCommand(
                         "cmd1", null, null, "session1", null, "web", "hello", List.of(), Map.of()),
                         RuntimeForwardHeaders.empty()))
-                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .assertNext(started::set)
                 .verifyComplete();
 
         awaitEvent(events, "run.completed");
@@ -481,10 +484,16 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                     assertThat(binding.runtimeSessionId()).isEqualTo("relay-session-1");
                     assertThat(binding.status()).isEqualTo(RuntimeBindingStatus.RESUMABLE);
                 });
+        assertThat(runs.findById(started.get().runId()))
+                .hasValueSatisfying(run -> {
+                    assertThat(run.runtimeProvider()).isEqualTo("relay");
+                    assertThat(run.agentCode()).isNull();
+                    assertThat(run.runtimeSessionId()).isEqualTo("relay-session-1");
+                });
     }
 
     @Test
-    void automaticDomainAgentRefusalRepeatedCandidateCancelsBinding() {
+    void automaticDomainAgentRefusalRepeatedCandidateUsesIntentResultUntilRerouteLimit() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -493,6 +502,19 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
         UserContext user = new UserContext("tenant1", "user1", "User One");
         AtomicInteger routeCalls = new AtomicInteger();
         RouteSignalApplicationService routeService = repeatedDomainAgentRouteService(routeCalls, "agent-a");
+        AtomicInteger domainAgentCalls = new AtomicInteger();
+        DomainAgentClient domainAgentClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                domainAgentCalls.incrementAndGet();
+                return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
         AtomicInteger relayCalls = new AtomicInteger();
         AgentRuntime relay = new AgentRuntime() {
             @Override
@@ -507,7 +529,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
             }
         };
         FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
-                sessions, messages, runs, events, routeService, refusingDomainAgentClient(), relay, bindings,
+                sessions, messages, runs, events, routeService, domainAgentClient, relay, bindings,
                 new com.huawei.it.ex.one.application.config.DomainAgentProperties());
 
         StepVerifier.create(service.startRun(user, new ChatCommand("cmd1", null, null,
@@ -516,14 +538,336 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 .verifyComplete();
 
         awaitEvent(events, "run.completed");
-        assertThat(routeCalls).hasValue(2);
+        assertThat(routeCalls).hasValue(4);
+        assertThat(domainAgentCalls).hasValue(4);
         assertThat(relayCalls).hasValue(0);
+        assertThat(events.events).noneSatisfy(event -> assertThat(event.payload())
+                .containsEntry("action", "NO_AVAILABLE_DOMAIN_AGENT"));
+        assertThat(events.events).anySatisfy(event -> assertThat(event.payload())
+                .containsEntry("action", "MAX_REROUTES_REACHED"));
         assertThat(bindings.bindingsForProvider("domain-agent"))
-                .singleElement()
-                .satisfies(binding -> {
+                .hasSize(4)
+                .allSatisfy(binding -> {
                     assertThat(binding.status()).isEqualTo(RuntimeBindingStatus.CANCELLED);
                     assertThat(binding.metadata())
                             .containsEntry("lastRejectCode", "FN-EX-CAHT-BIZ-DAG-001");
+                });
+    }
+
+    @Test
+    void frontSelectedRefusalUsesSameIntentCandidateWithoutSwitchConfirmation() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        InMemoryInteractionRequestRepository interactions = new InMemoryInteractionRequestRepository();
+        MultiBindingRuntimeBindingRepository bindings = new MultiBindingRuntimeBindingRepository();
+        AtomicInteger routeCalls = new AtomicInteger();
+        RouteSignalApplicationService routeService = repeatedDomainAgentRouteService(routeCalls, "agent-a");
+        AtomicInteger domainAgentCalls = new AtomicInteger();
+        DomainAgentClient domainAgentClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                if (domainAgentCalls.incrementAndGet() == 1) {
+                    return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
+                }
+                return Flux.just(MessageSnapshotEvent.of(
+                        request.runId(), request.sessionId(), "same agent answer"));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions,
+                messages,
+                runs,
+                events,
+                routeService,
+                domainAgentClient,
+                noopRuntime(),
+                bindings,
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties(),
+                liveEventBus(),
+                interactions);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                                "cmd1", null, null, null, null, "web", "hello", List.of(), Map.of(),
+                                "DOMAIN_AGENT", "agent-a", ChatRunMode.NEXT, null, null, null),
+                        RuntimeForwardHeaders.empty()))
+                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .verifyComplete();
+
+        awaitEvent(events, "run.completed");
+        assertThat(routeCalls).hasValue(1);
+        assertThat(domainAgentCalls).hasValue(2);
+        assertThat(events.events).extracting(ChatEvent::type).doesNotContain("run.waiting_user", "run.failed");
+        assertThat(interactions.requests).isEmpty();
+        assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role()))
+                .singleElement()
+                .extracting(ChatMessage::content)
+                .isEqualTo("same agent answer");
+    }
+
+    @Test
+    void ownerLossAfterReplacementBindingCreationCancelsUnstartedBinding() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        InMemoryExecutionRepository executions = new InMemoryExecutionRepository();
+        OwnerRejectingReplacementBindingRepository bindings =
+                new OwnerRejectingReplacementBindingRepository(executions);
+        AtomicInteger routeCalls = new AtomicInteger();
+        AtomicInteger domainAgentCalls = new AtomicInteger();
+        DomainAgentClient domainAgentClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                if (domainAgentCalls.incrementAndGet() == 1) {
+                    return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
+                }
+                return Flux.just(MessageSnapshotEvent.of(
+                        request.runId(), request.sessionId(), "must not be called"));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions,
+                messages,
+                runs,
+                events,
+                repeatedDomainAgentRouteService(routeCalls, "agent-a"),
+                domainAgentClient,
+                noopRuntime(),
+                bindings,
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties(),
+                liveEventBus(),
+                new InMemoryInteractionRequestRepository(),
+                runtimeBindingCache(),
+                null,
+                documentFacade(),
+                executions);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                                "cmd1", null, null, null, null, "web", "hello", List.of(), Map.of(),
+                                null, null, ChatRunMode.NEXT, null, null, null),
+                        RuntimeForwardHeaders.empty()))
+                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .verifyComplete();
+
+        awaitValue(bindings.replacementStatus, RuntimeBindingStatus.CANCELLED,
+                "unstarted replacement binding cancellation");
+        assertThat(routeCalls).hasValue(2);
+        assertThat(domainAgentCalls).hasValue(1);
+        assertThat(bindings.bindingsForProvider("domain-agent"))
+                .hasSize(2)
+                .allSatisfy(binding -> assertThat(binding.status())
+                        .isEqualTo(RuntimeBindingStatus.CANCELLED));
+    }
+
+    @Test
+    void guardedRerouteEventRejectionCancelsBindingBeforeRuntimeSubscription() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        RejectingAutoSwitchEventStore events = new RejectingAutoSwitchEventStore();
+        TrackingReplacementBindingRepository bindings = new TrackingReplacementBindingRepository();
+        AtomicInteger routeCalls = new AtomicInteger();
+        AtomicInteger domainAgentCalls = new AtomicInteger();
+        DomainAgentClient domainAgentClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                if (domainAgentCalls.incrementAndGet() == 1) {
+                    return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
+                }
+                return Flux.just(MessageSnapshotEvent.of(
+                        request.runId(), request.sessionId(), "must not be called"));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions,
+                messages,
+                runs,
+                events,
+                repeatedDomainAgentRouteService(routeCalls, "agent-a"),
+                domainAgentClient,
+                noopRuntime(),
+                bindings,
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties());
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                                "cmd1", null, null, null, null, "web", "hello", List.of(), Map.of(),
+                                null, null, ChatRunMode.NEXT, null, null, null),
+                        RuntimeForwardHeaders.empty()))
+                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .verifyComplete();
+
+        awaitValue(bindings.replacementStatus, RuntimeBindingStatus.CANCELLED,
+                "rejected reroute event binding cancellation");
+        assertThat(routeCalls).hasValue(2);
+        assertThat(domainAgentCalls).hasValue(1);
+    }
+
+    @Test
+    void retriesTransientReplacementBindingCleanupFailure() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        RejectingAutoSwitchEventStore events = new RejectingAutoSwitchEventStore();
+        RetryOnceReplacementBindingRepository bindings = new RetryOnceReplacementBindingRepository();
+        AtomicInteger routeCalls = new AtomicInteger();
+        AtomicInteger domainAgentCalls = new AtomicInteger();
+        DomainAgentClient domainAgentClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                if (domainAgentCalls.incrementAndGet() == 1) {
+                    return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
+                }
+                return Flux.just(MessageSnapshotEvent.of(
+                        request.runId(), request.sessionId(), "must not be called"));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        com.huawei.it.ex.one.application.config.DomainAgentProperties properties =
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties();
+        properties.setBindingCompensationMaxAttempts(2);
+        properties.setBindingCompensationRetryBackoff(Duration.ofMillis(1));
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions,
+                messages,
+                runs,
+                events,
+                repeatedDomainAgentRouteService(routeCalls, "agent-a"),
+                domainAgentClient,
+                noopRuntime(),
+                bindings,
+                properties);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                                "cmd1", null, null, null, null, "web", "hello", List.of(), Map.of(),
+                                null, null, ChatRunMode.NEXT, null, null, null),
+                        RuntimeForwardHeaders.empty()))
+                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .verifyComplete();
+
+        awaitValue(bindings.replacementStatus, RuntimeBindingStatus.CANCELLED,
+                "retried replacement binding cancellation");
+        assertThat(bindings.cancellationAttempts).hasValue(2);
+        assertThat(domainAgentCalls).hasValue(1);
+    }
+
+    @Test
+    void stopAfterReplacementRuntimeSubscriptionKeepsExistingBindingSemantics() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        MultiBindingRuntimeBindingRepository bindings = new MultiBindingRuntimeBindingRepository();
+        AtomicInteger routeCalls = new AtomicInteger();
+        AtomicInteger domainAgentCalls = new AtomicInteger();
+        AtomicReference<AgentRuntimeCancelRequest> cancelRequest = new AtomicReference<>();
+        RouteSignalApplicationService routeService = new RouteSignalApplicationService(
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                intentAgent((command, memory, routeUser) -> null),
+                new com.huawei.it.ex.one.domain.routing.RoutingPolicy(0.85),
+                new RouteSignalProperties(false, false)) {
+            @Override
+            public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
+                String domainAgentId = routeCalls.incrementAndGet() == 1 ? "agent-a" : "agent-b";
+                return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.domainAgent(
+                        domainAgentId, "intent-agent", 1.0, "test intent route"))));
+            }
+        };
+        DomainAgentClient domainAgentClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                if (domainAgentCalls.incrementAndGet() == 1) {
+                    return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
+                }
+                return Flux.never();
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        AgentRuntime cancellationRuntime = new AgentRuntime() {
+            @Override
+            public String provider() {
+                return "domain-agent";
+            }
+
+            @Override
+            public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+                cancelRequest.set(request);
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions,
+                messages,
+                runs,
+                events,
+                routeService,
+                domainAgentClient,
+                cancellationRuntime,
+                bindings,
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties());
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        AtomicReference<ChatRunStartResult> started = new AtomicReference<>();
+
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                                "cmd1", null, null, null, null, "web", "hello", List.of(), Map.of(),
+                                null, null, ChatRunMode.NEXT, null, null, null),
+                        RuntimeForwardHeaders.empty()))
+                .assertNext(started::set)
+                .verifyComplete();
+        awaitAtomicValue(domainAgentCalls, 2, "replacement DomainAgent subscription");
+
+        StepVerifier.create(service.stopRun(
+                        user, started.get().runId(), RuntimeForwardHeaders.empty()))
+                .expectNextCount(1)
+                .verifyComplete();
+        awaitEvent(events, "run.cancelled");
+
+        assertThat(cancelRequest.get()).isNotNull();
+        assertThat(cancelRequest.get().runtimeTargetId()).isEqualTo("agent-b");
+        assertThat(runs.findById(started.get().runId()))
+                .hasValueSatisfying(run -> {
+                    assertThat(run.runtimeProvider()).isEqualTo("domain-agent");
+                    assertThat(run.agentCode()).isEqualTo("agent-b");
+                });
+        assertThat(bindings.bindingsForProvider("domain-agent"))
+                .filteredOn(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
+                .singleElement()
+                .satisfies(binding -> {
+                    assertThat(binding.lastRunId()).isEqualTo(started.get().runId());
+                    assertThat(binding.metadata()).containsEntry("domainAgentId", "agent-b");
                 });
     }
 
@@ -808,6 +1152,9 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 Map.entry("refusalReasonCode", "OUT_OF_DOMAIN"),
                 Map.entry("refusalRecoverable", false),
                 Map.entry("refusalReason", "当前请求不在该领域 Agent 处理范围内"),
+                Map.entry("lastIntentRejectReason", Map.of(
+                        "lastIntent", "领域 A",
+                        "domainRejectMessage", "当前请求不在该领域 Agent 处理范围内")),
                 Map.entry("rerouteCount", 0),
                 Map.entry("rejectedDomainAgentIds", List.of("agent-a")),
                 Map.entry("originalQuery", "原始问题"));
@@ -823,6 +1170,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                         "domainAgentRerouteContext", rerouteContext),
                 Map.of(), now.plus(Duration.ofHours(1)), null, null, now, now);
         interactions.insert(waiting);
+        AtomicReference<Map<String, Object>> clarificationMetadata = new AtomicReference<>();
         RouteSignalApplicationService routeService = new RouteSignalApplicationService(
                 request -> UseCaseMatchResult.notMatched("disabled"),
                 intentAgent((command, memory, routeUser) -> null),
@@ -830,16 +1178,19 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 new RouteSignalProperties(false, false)) {
             @Override
             public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
+                clarificationMetadata.set(request.command().metadata());
                 return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.domainAgent(
                         "agent-b", "intent-agent", 1.0, "clarification resolved"))));
             }
         };
         AtomicInteger agentBCalls = new AtomicInteger();
+        AtomicReference<Map<String, Object>> agentBMetadata = new AtomicReference<>();
         DomainAgentClient domainClient = new DomainAgentClient() {
             @Override
             public Flux<ChatEvent> query(DomainAgentRequest request) {
                 if ("agent-b".equals(request.domainAgentId())) {
                     agentBCalls.incrementAndGet();
+                    agentBMetadata.set(request.metadata());
                     return Flux.just(MessageSnapshotEvent.of(
                             request.runId(), request.sessionId(), "agent-b answer"));
                 }
@@ -869,9 +1220,16 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
 
         assertThat(events.events).extracting(ChatEvent::type).doesNotContain("run.failed");
         assertThat(events.events).extracting(ChatEvent::type).doesNotContain("run.waiting_user");
+        assertThat(clarificationMetadata.get())
+                .containsEntry("routeTrigger", "clarify_answer")
+                .containsEntry("lastIntentRejectReason", Map.of(
+                        "lastIntent", "领域 A",
+                        "domainRejectMessage", "当前请求不在该领域 Agent 处理范围内"));
         assertThat(interactions.requests.values())
                 .noneMatch(request -> request.interactionType() == ChatInteractionType.ROUTE_SWITCH_CONFIRMATION);
         assertThat(agentBCalls).hasValue(1);
+        assertThat(agentBMetadata.get())
+                .doesNotContainKeys("domainAgentRerouteContext", "lastIntentRejectReason");
         assertThat(bindings.bindingsForProvider("domain-agent"))
                 .filteredOn(binding -> "agent-a".equals(binding.metadata().get("domainAgentId")))
                 .singleElement()
@@ -1031,12 +1389,13 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
         FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
                 sessions, messages, runs, events, routeService, domainClient, noopRuntime(), bindings,
                 properties, eventBus, interactions);
+        AtomicReference<ChatRunStartResult> started = new AtomicReference<>();
 
         StepVerifier.create(service.startRun(user, new ChatCommand(
                         "cmd1", null, null, null, null, "web", "hello", List.of(), Map.of(),
                         "DOMAIN_AGENT", "agent-a", ChatRunMode.NEXT, null, null, null),
                         RuntimeForwardHeaders.empty()))
-                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .assertNext(started::set)
                 .verifyComplete();
 
         awaitEvent(events, "run.completed");
@@ -1064,12 +1423,80 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                     assertThat(binding.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
                     assertThat(binding.metadata()).containsEntry("routeSource", "intent-agent");
                 });
+        assertThat(runs.findById(started.get().runId()))
+                .hasValueSatisfying(run -> {
+                    assertThat(run.runtimeProvider()).isEqualTo("domain-agent");
+                    assertThat(run.agentCode()).isEqualTo("agent-b");
+                });
         assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role()))
                 .singleElement()
                 .satisfies(message -> assertThat(message.parts()).extracting(ChatMessagePart::partType)
                         .contains("DOMAIN_AGENT_REFUSAL", "MESSAGE_SNAPSHOT", "ANSWER")
                         .doesNotContain("ROUTE_SWITCH_CONFIRMATION_REQUEST",
                                 "ROUTE_SWITCH_CONFIRMATION_RESPONSE"));
+    }
+
+    @Test
+    void replacementResolvedRouteFailureDoesNotStartNewDomainAgent() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        FailingResolvedRouteRunRepository runs = new FailingResolvedRouteRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        MultiBindingRuntimeBindingRepository bindings = new MultiBindingRuntimeBindingRepository();
+        AtomicInteger agentACalls = new AtomicInteger();
+        AtomicInteger agentBCalls = new AtomicInteger();
+        RouteSignalApplicationService routeService = new RouteSignalApplicationService(
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                intentAgent((command, memory, routeUser) -> null),
+                new com.huawei.it.ex.one.domain.routing.RoutingPolicy(0.85),
+                new RouteSignalProperties(false, false)) {
+            @Override
+            public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
+                return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.domainAgent(
+                        "agent-b", "intent-agent", 1.0, "rerouted after refusal"))));
+            }
+        };
+        DomainAgentClient domainClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                if ("agent-a".equals(request.domainAgentId())) {
+                    agentACalls.incrementAndGet();
+                    return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
+                }
+                agentBCalls.incrementAndGet();
+                return Flux.just(MessageSnapshotEvent.of(
+                        request.runId(), request.sessionId(), "must not be called"));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        com.huawei.it.ex.one.application.config.DomainAgentProperties properties =
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties();
+        properties.setRefusalAutoSwitchEnabled(true);
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions, messages, runs, events, routeService, domainClient, noopRuntime(), bindings,
+                properties);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                                "cmd1", null, null, null, null, "web", "hello", List.of(), Map.of(),
+                                "DOMAIN_AGENT", "agent-a", ChatRunMode.NEXT, null, null, null),
+                        RuntimeForwardHeaders.empty()))
+                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .verifyComplete();
+
+        awaitEvent(events, "run.failed");
+        assertThat(agentACalls).hasValue(1);
+        assertThat(agentBCalls).hasValue(0);
+        assertThat(bindings.bindingsForProvider("domain-agent"))
+                .allSatisfy(binding -> assertThat(binding.status())
+                        .isEqualTo(RuntimeBindingStatus.CANCELLED));
+        assertThat(events.events).extracting(ChatEvent::type)
+                .contains("run.failed")
+                .doesNotContain("run.completed");
     }
 
     @Test

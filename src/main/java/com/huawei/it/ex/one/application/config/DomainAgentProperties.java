@@ -45,6 +45,10 @@ public class DomainAgentProperties {
     private int controlIoExecutorMaxSize = 2;
     /** DomainAgent 控制事件 IO 调度器队列容量。 */
     private int controlIoExecutorQueueCapacity = 128;
+    /** 拒答重路由 Binding 补偿的最大尝试次数，包含首次调用。 */
+    private int bindingCompensationMaxAttempts = 2;
+    /** 拒答重路由 Binding 补偿的重试间隔。 */
+    private Duration bindingCompensationRetryBackoff = Duration.ofMillis(50);
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
@@ -80,6 +84,14 @@ public class DomainAgentProperties {
     public void setControlIoExecutorQueueCapacity(int controlIoExecutorQueueCapacity) {
         this.controlIoExecutorQueueCapacity = controlIoExecutorQueueCapacity;
     }
+    public int getBindingCompensationMaxAttempts() { return bindingCompensationMaxAttempts; }
+    public void setBindingCompensationMaxAttempts(int bindingCompensationMaxAttempts) {
+        this.bindingCompensationMaxAttempts = bindingCompensationMaxAttempts;
+    }
+    public Duration getBindingCompensationRetryBackoff() { return bindingCompensationRetryBackoff; }
+    public void setBindingCompensationRetryBackoff(Duration bindingCompensationRetryBackoff) {
+        this.bindingCompensationRetryBackoff = bindingCompensationRetryBackoff;
+    }
 
     public int normalizedMaxAttachments() {
         return maxAttachments <= 0 ? 10 : maxAttachments;
@@ -112,5 +124,18 @@ public class DomainAgentProperties {
 
     public int normalizedControlIoExecutorQueueCapacity() {
         return Math.max(16, controlIoExecutorQueueCapacity);
+    }
+
+    public int normalizedBindingCompensationMaxAttempts() {
+        return Math.max(1, Math.min(bindingCompensationMaxAttempts, 3));
+    }
+
+    public Duration normalizedBindingCompensationRetryBackoff() {
+        if (bindingCompensationRetryBackoff == null || bindingCompensationRetryBackoff.isNegative()) {
+            return Duration.ofMillis(50);
+        }
+        return bindingCompensationRetryBackoff.compareTo(Duration.ofSeconds(1)) > 0
+                ? Duration.ofSeconds(1)
+                : bindingCompensationRetryBackoff;
     }
 }

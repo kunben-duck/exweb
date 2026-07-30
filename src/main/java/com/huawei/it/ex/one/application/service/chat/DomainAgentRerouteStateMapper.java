@@ -34,6 +34,7 @@ final class DomainAgentRerouteStateMapper {
                 firstText(state.get("currentBindingId")),
                 blankToDefault(firstText(state.get("currentRouteSource")), "intent-agent"),
                 refusal,
+                DomainAgentRejectReason.fromRerouteState(state),
                 Set.copyOf(rejected),
                 intValue(state.get("rerouteCount"), 0));
     }

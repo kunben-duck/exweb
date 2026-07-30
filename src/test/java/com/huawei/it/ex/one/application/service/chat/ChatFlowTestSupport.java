@@ -811,12 +811,33 @@ abstract class ChatFlowTestSupport {
             RuntimeBindingCache bindingCache,
             reactor.core.scheduler.Scheduler domainAgentControlIoScheduler,
             DocumentFacade documents) {
+        return financeServiceWithDomainClientAndBindings(
+                sessions, messages, runs, events, routeService, domainClient, relayRuntime, bindings,
+                domainAgentProperties, eventBus, interactions, bindingCache, domainAgentControlIoScheduler,
+                documents, new InMemoryExecutionRepository());
+    }
+
+    FinanceEXChatService financeServiceWithDomainClientAndBindings(
+            InMemorySessionRepository sessions,
+            InMemoryMessageRepository messages,
+            InMemoryRunRepository runs,
+            InMemoryEventStore events,
+            RouteSignalApplicationService routeService,
+            DomainAgentClient domainClient,
+            AgentRuntime relayRuntime,
+            RuntimeBindingRepository bindings,
+            com.huawei.it.ex.one.application.config.DomainAgentProperties domainAgentProperties,
+            ChatLiveEventBus eventBus,
+            InMemoryInteractionRequestRepository interactions,
+            RuntimeBindingCache bindingCache,
+            reactor.core.scheduler.Scheduler domainAgentControlIoScheduler,
+            DocumentFacade documents,
+            InMemoryExecutionRepository executions) {
         IdGenerator ids = new SequentialIdGenerator();
         PermissionChecker permissionChecker = new PermissionChecker();
         WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
                 new com.huawei.it.ex.one.application.config.ResourceIsolationProperties());
         LocalChatRunExecutionRegistry executionRegistry = new LocalChatRunExecutionRegistry();
-        InMemoryExecutionRepository executions = new InMemoryExecutionRepository();
         ChatRunOperationalProperties runProperties = new ChatRunOperationalProperties();
         SessionApplicationService sessionService = new SessionApplicationService(
                 sessions, messages, ids, permissionChecker);
@@ -1117,6 +1138,17 @@ abstract class ChatFlowTestSupport {
         }
     }
 
+    static final class RejectingAutoSwitchEventStore extends InMemoryEventStore {
+        @Override
+        public ChatEvent appendWithExecutionGuard(ChatEvent event, RunExecutionClaim claim) {
+            if (event != null && event.payload() != null
+                    && "AUTO_SWITCH".equals(event.payload().get("action"))) {
+                throw new ChatEventAppendRejectedException("test auto-switch fencing rejection");
+            }
+            return super.appendWithExecutionGuard(event, claim);
+        }
+    }
+
     static class InMemoryExecutionRepository implements ChatRunExecutionRepository {
         final Map<String, ChatRunExecution> executions = new HashMap<>();
         volatile boolean rejectOwnerRunningChecks;
@@ -1318,6 +1350,85 @@ abstract class ChatFlowTestSupport {
                     .filter(binding -> userId.equals(binding.userId()))
                     .filter(binding -> sessionId.equals(binding.chatSessionId()))
                     .toList();
+        }
+    }
+
+    static final class OwnerRejectingReplacementBindingRepository
+            extends MultiBindingRuntimeBindingRepository {
+        private final InMemoryExecutionRepository executions;
+        private final AtomicInteger activeDomainAgentSaves = new AtomicInteger();
+        final AtomicReference<RuntimeBindingStatus> replacementStatus = new AtomicReference<>();
+        private volatile String replacementBindingId;
+
+        OwnerRejectingReplacementBindingRepository(InMemoryExecutionRepository executions) {
+            this.executions = executions;
+        }
+
+        @Override
+        public RuntimeBinding save(RuntimeBinding binding) {
+            RuntimeBinding saved = super.save(binding);
+            if ("domain-agent".equals(binding.provider())
+                    && binding.status() == RuntimeBindingStatus.ACTIVE
+                    && activeDomainAgentSaves.incrementAndGet() == 2) {
+                replacementBindingId = binding.id();
+                replacementStatus.set(binding.status());
+                executions.rejectOwnerRunningChecks = true;
+            } else if (binding.id().equals(replacementBindingId)) {
+                replacementStatus.set(binding.status());
+            }
+            return saved;
+        }
+    }
+
+    static final class TrackingReplacementBindingRepository
+            extends MultiBindingRuntimeBindingRepository {
+        private final AtomicInteger activeDomainAgentSaves = new AtomicInteger();
+        final AtomicReference<RuntimeBindingStatus> replacementStatus = new AtomicReference<>();
+        private volatile String replacementBindingId;
+
+        @Override
+        public RuntimeBinding save(RuntimeBinding binding) {
+            RuntimeBinding saved = super.save(binding);
+            if ("domain-agent".equals(binding.provider())
+                    && binding.status() == RuntimeBindingStatus.ACTIVE
+                    && activeDomainAgentSaves.incrementAndGet() == 2) {
+                replacementBindingId = binding.id();
+                replacementStatus.set(binding.status());
+            } else if (binding.id().equals(replacementBindingId)) {
+                replacementStatus.set(binding.status());
+            }
+            return saved;
+        }
+    }
+
+    static final class RetryOnceReplacementBindingRepository
+            extends MultiBindingRuntimeBindingRepository {
+        private final AtomicInteger activeDomainAgentSaves = new AtomicInteger();
+        final AtomicInteger cancellationAttempts = new AtomicInteger();
+        final AtomicReference<RuntimeBindingStatus> replacementStatus = new AtomicReference<>();
+        private volatile String replacementBindingId;
+
+        @Override
+        public RuntimeBinding save(RuntimeBinding binding) {
+            RuntimeBinding saved = super.save(binding);
+            if ("domain-agent".equals(binding.provider())
+                    && binding.status() == RuntimeBindingStatus.ACTIVE
+                    && activeDomainAgentSaves.incrementAndGet() == 2) {
+                replacementBindingId = binding.id();
+                replacementStatus.set(binding.status());
+            } else if (binding.id().equals(replacementBindingId)) {
+                replacementStatus.set(binding.status());
+            }
+            return saved;
+        }
+
+        @Override
+        public boolean cancelActiveForRun(String bindingId, String runId) {
+            if (bindingId.equals(replacementBindingId)
+                    && cancellationAttempts.incrementAndGet() == 1) {
+                throw new IllegalStateException("test transient binding cleanup failure");
+            }
+            return super.cancelActiveForRun(bindingId, runId);
         }
     }
 

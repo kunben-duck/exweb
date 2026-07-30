@@ -140,7 +140,9 @@ final class RouteResolutionCoordinator {
             return command;
         }
         Map<String, Object> metadata = new LinkedHashMap<>(command.metadata());
+        // 拒答重路由上下文仅供 Intent 使用，目标确定后不得透传给 Runtime。
         metadata.remove(DOMAIN_AGENT_REROUTE_CONTEXT_METADATA);
+        metadata.remove(DomainAgentRejectReason.METADATA_KEY);
         return copyCommand(command, command.message(), metadata);
     }
 

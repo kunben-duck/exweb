@@ -55,6 +55,26 @@ final class DomainAgentRefusalCoordinator {
                                   RouteResolutionCoordinator routeResolutionCoordinator,
                                   ChatRunLeaseApplicationService chatRunLeaseService,
                                   Scheduler eventIoScheduler) {
+        this(agentRuntimeExecutor,
+                routeSignalService,
+                runtimeBindingService,
+                domainAgentProperties,
+                appliedRouteRecorder,
+                routeResolutionCoordinator,
+                chatRunLeaseService,
+                eventIoScheduler,
+                eventIoScheduler);
+    }
+
+    DomainAgentRefusalCoordinator(AgentRuntimeExecutor agentRuntimeExecutor,
+                                  RouteSignalApplicationService routeSignalService,
+                                  RuntimeBindingApplicationService runtimeBindingService,
+                                  DomainAgentProperties domainAgentProperties,
+                                  AppliedRouteRecorder appliedRouteRecorder,
+                                  RouteResolutionCoordinator routeResolutionCoordinator,
+                                  ChatRunLeaseApplicationService chatRunLeaseService,
+                                  Scheduler eventIoScheduler,
+                                  Scheduler controlIoScheduler) {
         this.agentRuntimeExecutor = agentRuntimeExecutor;
         this.routeSignalService = routeSignalService;
         this.runtimeBindingService = runtimeBindingService;
@@ -72,7 +92,9 @@ final class DomainAgentRefusalCoordinator {
                 bindingPolicy,
                 eventFactory,
                 chatRunLeaseService,
-                eventIoScheduler);
+                eventIoScheduler,
+                controlIoScheduler,
+                domainAgentProperties);
     }
 
     Flux<ChatEvent> execute(DomainAgentRunContext context) {
@@ -128,6 +150,7 @@ final class DomainAgentRefusalCoordinator {
         DomainAgentRerouteContext reroute = new DomainAgentRerouteContext(
                 context,
                 state.refusal(),
+                state.lastIntentRejectReason(),
                 state.currentTargetId(),
                 state.rejectedDomainAgentIds(),
                 blankToDefault(request.intentRouteMemoryQuery(), request.context().routeMemoryQuery()),
@@ -197,10 +220,12 @@ final class DomainAgentRefusalCoordinator {
                     null,
                     "MAX_REROUTES_REACHED"));
         }
-        ChatCommand rerouteCommand = eventFactory.commandWithDomainRejectContext(
-                context.command(),
+        DomainAgentRejectReason rejectReason = DomainAgentRejectReason.from(
                 rejectedIntentName(context),
                 refusal);
+        ChatCommand rerouteCommand = eventFactory.commandWithDomainRejectContext(
+                context.command(),
+                rejectReason);
         String rerouteIntentQuery = rerouteCommand.metadata().containsKey("intentClarification")
                 ? blankToDefault(context.routeMemoryQuery(), rerouteCommand.message())
                 : IntentClarificationContextAssembler.answerWithAttachments(
@@ -209,6 +234,7 @@ final class DomainAgentRefusalCoordinator {
         DomainAgentRerouteContext reroute = new DomainAgentRerouteContext(
                 context,
                 refusal,
+                rejectReason,
                 currentDomainAgentId,
                 rejected,
                 rerouteIntentQuery,
@@ -264,7 +290,7 @@ final class DomainAgentRefusalCoordinator {
         if (nextRoute != null && nextRoute.type() == RouteType.AGENT_RUNTIME) {
             return replacementExecutor.continueWithRelay(reroute, nextSignal, nextRoute);
         }
-        if (unavailableDomainAgent(reroute, nextRoute)) {
+        if (invalidDomainAgentRoute(nextRoute)) {
             appliedRouteRecorder.completeWithoutRoute(context.user(), context.session().id());
             return Flux.just(eventFactory.rerouteMetadata(
                     context,
@@ -319,13 +345,11 @@ final class DomainAgentRefusalCoordinator {
                 source.routeMemoryQuery());
     }
 
-    private boolean unavailableDomainAgent(DomainAgentRerouteContext reroute,
-                                           RouteTarget route) {
+    private boolean invalidDomainAgentRoute(RouteTarget route) {
         return route == null
                 || route.type() != RouteType.DOMAIN_AGENT
                 || route.selectedAgentCode() == null
-                || route.selectedAgentCode().isBlank()
-                || reroute.rejectedDomainAgentIds().contains(route.selectedAgentCode());
+                || route.selectedAgentCode().isBlank();
     }
 
     private String rejectedIntentName(DomainAgentRunContext context) {

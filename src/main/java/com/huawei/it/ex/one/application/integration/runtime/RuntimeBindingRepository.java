@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.integration.runtime;
 
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
+import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 
 import java.util.List;
 import java.util.Optional;
@@ -81,4 +82,28 @@ public interface RuntimeBindingRepository {
      * @return 已保存的 Runtime 绑定。
      */
     RuntimeBinding save(RuntimeBinding binding);
+
+    /**
+     * 仅当绑定仍由指定 run 持有且保持 ACTIVE 时取消绑定。
+     *
+     * <p>生产数据库实现必须使用单条条件更新，避免迟到补偿覆盖后续 run 已刷新的绑定。
+     * 默认实现仅用于测试替身和兼容仓储。</p>
+     *
+     * @param bindingId RuntimeBinding 主键。
+     * @param runId 创建或刷新该绑定的 run 标识。
+     * @return true 表示本次条件取消成功。
+     */
+    default boolean cancelActiveForRun(String bindingId, String runId) {
+        if (bindingId == null || bindingId.isBlank() || runId == null || runId.isBlank()) {
+            return false;
+        }
+        return findById(bindingId)
+                .filter(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
+                .filter(binding -> runId.equals(binding.lastRunId()))
+                .map(binding -> {
+                    save(binding.withStatus(RuntimeBindingStatus.CANCELLED));
+                    return true;
+                })
+                .orElse(false);
+    }
 }

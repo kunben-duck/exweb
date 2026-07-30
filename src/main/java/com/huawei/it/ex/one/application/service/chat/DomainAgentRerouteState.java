@@ -8,6 +8,7 @@ record DomainAgentRerouteState(
         String currentBindingId,
         String currentRouteSource,
         DomainAgentRefusal refusal,
+        DomainAgentRejectReason lastIntentRejectReason,
         Set<String> rejectedDomainAgentIds,
         int rerouteCount
 ) {

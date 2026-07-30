@@ -287,6 +287,7 @@ Authorization: {dynamicToken}
 - `lastIntentRejectReason` 只放当前这一次拒答。
 - 前几轮拒答不进入 `lastIntentRejectReason`，避免放大噪声。
 - 历史已生效路由放入 `history.type=route`。ChatService 以目标 binding 成功持久化为记录边界，不等待任务执行完成。
+- ChatService 直接采用本次意图结果；即使返回当前或曾拒答的技能，也会重新创建 Binding 并调用，现有 `max-reroutes` 是唯一循环保护。
 
 ### 5.3 意图澄清回答
 
@@ -330,6 +331,9 @@ Authorization: {dynamicToken}
 说明：
 
 - 用户回答不写入 `history.answer`，而是作为本轮 `query`。
+- 普通澄清的 `lastIntentRejectReason` 为空；若澄清由 DomainAgent 拒答触发，每轮仍使用
+  `routeTrigger=clarify_answer`，并携带触发当前澄清链的同一份 `lastIntentRejectReason`。
+- 拒答原因不写入 `history`，也不累计更早的拒答。
 - 如果仍返回 `CLARIFY`，继续追加一条 `history.type=clarify`。
 - 建议 ChatService 限制最大澄清轮数，超过后进入兜底 Runtime。
 

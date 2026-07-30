@@ -55,6 +55,20 @@
     </update>
 
     <!--
+      拒答重路由在 Runtime 订阅前被 stop 时，条件取消本轮刚创建的 ACTIVE binding。
+      bindingId、lastRunId 和 ACTIVE 状态必须同时匹配，避免迟到补偿覆盖后续 run 已刷新的绑定。
+      入参: bindingId 为待补偿绑定主键，runId 为创建该绑定的拒答重路由 run 标识。
+    -->
+    <update id="cancelActiveForRun">
+        UPDATE fin_ex_runtime_binding_t
+        SET status = 'CANCELLED',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = #{bindingId}
+          AND last_run_id = #{runId}
+          AND status = 'ACTIVE'
+    </update>
+
+    <!--
       按 RuntimeBinding 主键读取绑定，Interaction 续接通过它回到创建等待态时的真实绑定。
       入参: bindingId 为 RuntimeBinding 主键。
     -->

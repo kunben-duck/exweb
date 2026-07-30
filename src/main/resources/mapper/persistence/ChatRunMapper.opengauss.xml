@@ -122,6 +122,26 @@
     </update>
 
     <!--
+      覆盖同一 run 拒答重路由后的最终执行目标。这里不能使用 COALESCE 保留旧值，否则 Agent A
+      切换到 Agent B 或 Relay 后，stop 会继续读取并取消旧目标。
+      入参: id/tenantId/userId/sessionId 限定当前 RUNNING run，其余字段为最终执行目标。
+    -->
+    <update id="updateResolvedRoute"
+            parameterType="com.huawei.it.ex.one.infrastructure.persistence.ChatRunWriteRow">
+        UPDATE fin_ex_chat_run_t
+        SET route_type = #{routeType},
+            agent_code = #{agentCode},
+            runtime_provider = #{runtimeProvider},
+            runtime_session_id = #{runtimeSessionId},
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND status = 'RUNNING'
+    </update>
+
+    <!--
       首次 stop 的短事务 CAS。CANCELLING 重试和已终态幂等由应用层回读当前状态处理。
       入参: runId/tenantId/userId 为归属边界，reason 为取消原因，requestedAt 为状态更新时间。
     -->

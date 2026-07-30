@@ -221,7 +221,7 @@ public class ChatRunApplicationService {
             return null;
         }
         return repository.findById(runId)
-                .map(run -> save(run.withResolvedRoute(
+                .map(run -> updateResolvedRoute(run.withResolvedRoute(
                         route.type() == null ? null : route.type().name(),
                         route.selectedAgentCode(),
                         binding == null ? null : binding.provider(),
@@ -546,12 +546,22 @@ public class ChatRunApplicationService {
 
     private ChatRun save(ChatRun run) {
         ChatRun saved = repository.save(run);
+        synchronizeActiveRunCache(saved);
+        return saved;
+    }
+
+    private ChatRun updateResolvedRoute(ChatRun run) {
+        ChatRun saved = repository.updateResolvedRoute(run);
+        synchronizeActiveRunCache(saved);
+        return saved;
+    }
+
+    private void synchronizeActiveRunCache(ChatRun saved) {
         if (saved.status().terminal()) {
             cache.evictActive(saved.tenantId(), saved.userId(), saved.sessionId());
         } else {
             cache.putActive(saved);
         }
-        return saved;
     }
 
     private void ensureOwnedSession(UserContext user, String sessionId) {

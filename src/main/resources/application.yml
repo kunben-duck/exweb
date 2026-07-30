@@ -370,3 +370,7 @@ financeex:
     # 结构化拒答 event + binding 原子提交及提交后缓存同步使用独立 IO 池，不占用主事件落库线程。
     control-io-executor-max-size: ${FINANCEEX_DOMAIN_AGENT_CONTROL_IO_EXECUTOR_MAX_SIZE:2}
     control-io-executor-queue-capacity: ${FINANCEEX_DOMAIN_AGENT_CONTROL_IO_EXECUTOR_QUEUE_CAPACITY:128}
+    # 拒答重路由在 Runtime 订阅前失败时，Binding 条件补偿使用独立短事务并执行有限重试。
+    binding-compensation-transaction-timeout-seconds: ${FINANCEEX_DOMAIN_AGENT_BINDING_COMPENSATION_TRANSACTION_TIMEOUT_SECONDS:2}
+    binding-compensation-max-attempts: ${FINANCEEX_DOMAIN_AGENT_BINDING_COMPENSATION_MAX_ATTEMPTS:2}
+    binding-compensation-retry-backoff: ${FINANCEEX_DOMAIN_AGENT_BINDING_COMPENSATION_RETRY_BACKOFF:50ms}

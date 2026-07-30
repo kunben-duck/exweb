@@ -415,6 +415,22 @@ public class RuntimeBindingApplicationService {
     }
 
     /**
+     * 补偿取消仍由指定 run 持有的 ACTIVE binding。
+     *
+     * <p>数据库条件更新失败表示绑定已变化，此时不得清理可能属于后续 run 的缓存。</p>
+     */
+    public boolean cancelActiveForRun(RuntimeBinding binding, String runId) {
+        if (binding == null || runId == null || runId.isBlank()) {
+            return false;
+        }
+        boolean cancelled = repository.cancelActiveForRun(binding.id(), runId);
+        if (cancelled) {
+            cache.evict(binding.tenantId(), binding.userId(), binding.chatSessionId());
+        }
+        return cancelled;
+    }
+
+    /**
      * 终态数据库事务提交后同步 Redis 热缓存。该方法不参与事务事实写入。
      */
     public void synchronizeCache(RuntimeBinding binding) {

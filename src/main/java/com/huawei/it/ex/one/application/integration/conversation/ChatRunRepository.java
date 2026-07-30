@@ -24,6 +24,19 @@ public interface ChatRunRepository {
     ChatRun save(ChatRun run);
 
     /**
+     * 覆盖当前 RUNNING run 的最终路由和 Runtime 信息。
+     *
+     * <p>通用保存会保留首次写入的路由字段；同一 run 发生拒答重路由时必须使用该入口覆盖为
+     * 实际执行目标。默认实现保持测试仓储兼容，生产数据库实现应提供条件更新。</p>
+     *
+     * @param run 包含最终路由信息的 run 快照。
+     * @return 数据库中的最新 run。
+     */
+    default ChatRun updateResolvedRoute(ChatRun run) {
+        return save(run);
+    }
+
+    /**
      * 严格插入一个新 run，不执行 upsert。
      *
      * <p>生产实现依赖 active-run 部分唯一索引完成跨实例并发准入。</p>

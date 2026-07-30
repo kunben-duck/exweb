@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalResult;
@@ -8,6 +9,10 @@ import com.huawei.it.ex.one.application.service.runtime.DomainAgentBindingComman
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingResolution;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeExecutionContext;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
@@ -15,15 +20,21 @@ import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
+import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Scheduler;
+import reactor.util.retry.Retry;
 
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 /** Applies a resolved replacement Runtime after a DomainAgent refusal. */
 final class DomainAgentReplacementExecutor {
+    private static final AppLogger log = AppLoggerFactory.getLogger(DomainAgentReplacementExecutor.class);
+
     private final AgentRuntimeExecutor agentRuntimeExecutor;
     private final RuntimeBindingApplicationService runtimeBindingService;
     private final AppliedRouteRecorder appliedRouteRecorder;
@@ -32,6 +43,8 @@ final class DomainAgentReplacementExecutor {
     private final DomainAgentRefusalEventFactory eventFactory;
     private final ChatRunLeaseApplicationService chatRunLeaseService;
     private final Scheduler eventIoScheduler;
+    private final Scheduler controlIoScheduler;
+    private final DomainAgentProperties domainAgentProperties;
 
     DomainAgentReplacementExecutor(AgentRuntimeExecutor agentRuntimeExecutor,
                                    RuntimeBindingApplicationService runtimeBindingService,
@@ -40,7 +53,9 @@ final class DomainAgentReplacementExecutor {
                                    DomainAgentBindingPolicy bindingPolicy,
                                    DomainAgentRefusalEventFactory eventFactory,
                                    ChatRunLeaseApplicationService chatRunLeaseService,
-                                   Scheduler eventIoScheduler) {
+                                   Scheduler eventIoScheduler,
+                                   Scheduler controlIoScheduler,
+                                   DomainAgentProperties domainAgentProperties) {
         this.agentRuntimeExecutor = agentRuntimeExecutor;
         this.runtimeBindingService = runtimeBindingService;
         this.appliedRouteRecorder = appliedRouteRecorder;
@@ -49,6 +64,10 @@ final class DomainAgentReplacementExecutor {
         this.eventFactory = eventFactory;
         this.chatRunLeaseService = chatRunLeaseService;
         this.eventIoScheduler = eventIoScheduler;
+        this.controlIoScheduler = controlIoScheduler == null ? eventIoScheduler : controlIoScheduler;
+        this.domainAgentProperties = domainAgentProperties == null
+                ? new DomainAgentProperties()
+                : domainAgentProperties;
     }
 
     Flux<ChatEvent> continueWithRelay(DomainAgentRerouteContext reroute,
@@ -72,7 +91,7 @@ final class DomainAgentReplacementExecutor {
                 bindingPolicy.runtimeBindingLeafId(context.command()));
         context.bindingRef().set(resolution.binding());
         context.routeRef().set(nextRoute);
-        appliedRouteRecorder.bindResolvedRoute(context.runId(), nextRoute, resolution.binding());
+        appliedRouteRecorder.bindResolvedRouteRequired(context.runId(), nextRoute, resolution.binding());
         MemoryContext runtimeMemory = recordAppliedRoute(reroute, signal, nextRoute, resolution.binding());
         ChatCommand runtimeCommand = runtimeCommand(context, nextRoute, signal.intentDecision());
         String action = signal.intentFailure() ? "RELAY_FALLBACK" : "ROUTE_TO_RELAY";
@@ -108,25 +127,121 @@ final class DomainAgentReplacementExecutor {
                     signal,
                     currentRouteSource));
         }
-        context.bindingRef().set(bindingPolicy.markRejected(context.bindingRef().get(), reroute.refusal()));
-        RuntimeBinding nextBinding = bindDomainAgent(reroute, signal, nextRoute);
-        context.bindingRef().set(nextBinding);
-        context.routeRef().set(nextRoute);
-        appliedRouteRecorder.bindResolvedRoute(context.runId(), nextRoute, nextBinding);
-        MemoryContext runtimeMemory = recordAppliedRoute(reroute, signal, nextRoute, nextBinding);
-        ChatCommand runtimeCommand = runtimeCommand(context, nextRoute, signal.intentDecision());
-        DomainAgentRunContext nextContext = nextRunContext(
-                context,
-                reroute,
-                new ReplacementExecution(signal, nextRoute, runtimeMemory, runtimeCommand));
-        return Flux.concat(
-                Flux.just(eventFactory.rerouteMetadata(
-                        context,
-                        reroute.refusal(),
-                        nextRoute,
-                        "AUTO_SWITCH")),
-                requireCurrentOwnerRunning(context.executionClaim(), "before-domain-agent-reroute-runtime")
-                        .thenMany(Flux.defer(() -> continuation.apply(nextContext))));
+        return requireCurrentOwnerRunning(
+                context.executionClaim(), "before-domain-agent-reroute-binding")
+                .thenMany(Flux.usingWhen(
+                        Mono.fromCallable(() -> prepareDomainAgentReplacement(reroute, signal, nextRoute))
+                                .subscribeOn(eventIoScheduler),
+                        replacement -> executeDomainAgentReplacement(
+                                reroute, signal, nextRoute, continuation, replacement),
+                        replacement -> cleanupUnstartedReplacement(
+                                context, replacement, "complete"),
+                        (replacement, failure) -> cleanupUnstartedReplacement(
+                                context, replacement, "error"),
+                        replacement -> cleanupUnstartedReplacement(
+                                context, replacement, "cancel")));
+    }
+
+    private ReplacementBindingLifecycle prepareDomainAgentReplacement(
+            DomainAgentRerouteContext reroute,
+            RouteSignalResult signal,
+            RouteTarget nextRoute) {
+        DomainAgentRunContext context = reroute.context();
+        context.bindingRef().set(bindingPolicy.markRejected(
+                context.bindingRef().get(), reroute.refusal()));
+        return new ReplacementBindingLifecycle(bindDomainAgent(reroute, signal, nextRoute));
+    }
+
+    private Flux<ChatEvent> executeDomainAgentReplacement(
+            DomainAgentRerouteContext reroute,
+            RouteSignalResult signal,
+            RouteTarget nextRoute,
+            Function<DomainAgentRunContext, Flux<ChatEvent>> continuation,
+            ReplacementBindingLifecycle replacement) {
+        DomainAgentRunContext context = reroute.context();
+        return requireCurrentOwnerRunning(
+                context.executionClaim(), "before-domain-agent-reroute-runtime")
+                .thenMany(Flux.defer(() -> {
+                    RuntimeBinding nextBinding = replacement.binding();
+                    context.bindingRef().set(nextBinding);
+                    context.routeRef().set(nextRoute);
+                    appliedRouteRecorder.bindResolvedRouteRequired(context.runId(), nextRoute, nextBinding);
+                    MemoryContext runtimeMemory = recordAppliedRoute(reroute, signal, nextRoute, nextBinding);
+                    ChatCommand runtimeCommand = runtimeCommand(context, nextRoute, signal.intentDecision());
+                    DomainAgentRunContext nextContext = nextRunContext(
+                            context,
+                            reroute,
+                            new ReplacementExecution(signal, nextRoute, runtimeMemory, runtimeCommand));
+                    Sinks.One<Void> reroutePersisted = Sinks.one();
+                    ChatEvent rerouteEvent = new PersistenceAcknowledgedEvent(
+                            eventFactory.rerouteMetadata(
+                                    context,
+                                    reroute.refusal(),
+                                    nextRoute,
+                                    "AUTO_SWITCH"),
+                            reroutePersisted);
+                    // 新 Runtime 只能在重路由事件确认落库后订阅，写入拒绝会触发未启动 Binding 补偿。
+                    return Flux.concat(
+                            Flux.just(rerouteEvent),
+                            reroutePersisted.asMono()
+                                    .publishOn(eventIoScheduler)
+                                    .thenMany(replacementRuntime(continuation, nextContext, replacement)));
+                }));
+    }
+
+    private Flux<ChatEvent> replacementRuntime(
+            Function<DomainAgentRunContext, Flux<ChatEvent>> continuation,
+            DomainAgentRunContext context,
+            ReplacementBindingLifecycle replacement) {
+        return Flux.defer(() -> {
+            Flux<ChatEvent> runtimeEvents = continuation.apply(context);
+            if (runtimeEvents == null) {
+                return Flux.error(new IllegalStateException(
+                        "DomainAgent replacement continuation returned null"));
+            }
+            return runtimeEvents.doOnSubscribe(ignored -> replacement.markRuntimeSubscribed());
+        });
+    }
+
+    private Mono<Void> cleanupUnstartedReplacement(
+            DomainAgentRunContext context,
+            ReplacementBindingLifecycle replacement,
+            String terminationSignal) {
+        if (replacement.runtimeSubscribed()) {
+            return Mono.empty();
+        }
+        Mono<Void> cleanup = Mono.<Void>fromRunnable(() -> {
+                    RuntimeBinding binding = replacement.binding();
+                    boolean cancelled = runtimeBindingService.cancelActiveForRun(
+                            binding, context.runId());
+                    if (cancelled) {
+                        context.bindingRef().compareAndSet(
+                                binding, binding.withStatus(RuntimeBindingStatus.CANCELLED));
+                    }
+                })
+                .subscribeOn(controlIoScheduler);
+        int maxAttempts = domainAgentProperties.normalizedBindingCompensationMaxAttempts();
+        if (maxAttempts > 1) {
+            cleanup = cleanup.retryWhen(Retry.fixedDelay(
+                            maxAttempts - 1L,
+                            domainAgentProperties.normalizedBindingCompensationRetryBackoff())
+                    .filter(RuntimeException.class::isInstance)
+                    .onRetryExhaustedThrow((spec, signal) -> signal.failure()));
+        }
+        return cleanup
+                .onErrorResume(ex -> {
+                    log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_WRITE_FAILED,
+                                    "Unstarted DomainAgent replacement binding cleanup failed")
+                            .runId(context.runId())
+                            .sessionId(context.session().id())
+                            .operation("domain-agent.reroute.binding-cleanup")
+                            .attribute("bindingId", replacement.binding().id())
+                            .attribute("terminationSignal", terminationSignal)
+                            .attribute("maxAttempts", maxAttempts)
+                            .build(), ex);
+                    return Mono.empty();
+                })
+                .then();
     }
 
     private RuntimeBinding bindDomainAgent(DomainAgentRerouteContext reroute,
@@ -229,5 +344,26 @@ final class DomainAgentReplacementExecutor {
             MemoryContext runtimeMemory,
             ChatCommand runtimeCommand
     ) {
+    }
+
+    private static final class ReplacementBindingLifecycle {
+        private final RuntimeBinding binding;
+        private final AtomicBoolean runtimeSubscribed = new AtomicBoolean(false);
+
+        private ReplacementBindingLifecycle(RuntimeBinding binding) {
+            this.binding = binding;
+        }
+
+        private RuntimeBinding binding() {
+            return binding;
+        }
+
+        private boolean runtimeSubscribed() {
+            return runtimeSubscribed.get();
+        }
+
+        private void markRuntimeSubscribed() {
+            runtimeSubscribed.set(true);
+        }
     }
 }

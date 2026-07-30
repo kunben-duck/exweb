@@ -3,6 +3,7 @@ package com.huawei.it.ex.one.infrastructure.persistence;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -71,6 +72,43 @@ class MyBatisChatRunRepositoryTest {
         verify(mapper, never()).insert(any(ChatRunWriteRow.class));
     }
 
+    @Test
+    void resolvedRouteUsesDedicatedUpdateAndReturnsPersistedTarget() {
+        ChatRunMapper mapper = mock(ChatRunMapper.class);
+        ChatRun rerouted = runningRun().withResolvedRoute(
+                "AGENT_RUNTIME", null, "relay", "relay-session-1");
+        when(mapper.updateResolvedRoute(any(ChatRunWriteRow.class))).thenReturn(1);
+        when(mapper.findById("run1")).thenReturn(toRow(rerouted));
+        MyBatisChatRunRepository repository = new MyBatisChatRunRepository(mapper, new ObjectMapper());
+
+        ChatRun saved = repository.updateResolvedRoute(rerouted);
+
+        assertThat(saved)
+                .returns("AGENT_RUNTIME", ChatRun::routeType)
+                .returns((String) null, ChatRun::agentCode)
+                .returns("relay", ChatRun::runtimeProvider)
+                .returns("relay-session-1", ChatRun::runtimeSessionId);
+        verify(mapper).updateResolvedRoute(argThat(row ->
+                "AGENT_RUNTIME".equals(row.routeType())
+                        && row.agentCode() == null
+                        && "relay".equals(row.runtimeProvider())
+                        && "relay-session-1".equals(row.runtimeSessionId())));
+        verify(mapper, never()).updateExisting(any(ChatRunWriteRow.class));
+    }
+
+    @Test
+    void resolvedRouteRejectsWhenRunIsNoLongerRunning() {
+        ChatRunMapper mapper = mock(ChatRunMapper.class);
+        when(mapper.updateResolvedRoute(any(ChatRunWriteRow.class))).thenReturn(0);
+        MyBatisChatRunRepository repository = new MyBatisChatRunRepository(mapper, new ObjectMapper());
+
+        assertThatThrownBy(() -> repository.updateResolvedRoute(runningRun()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("无法更新最终路由");
+
+        verify(mapper, never()).findById(any());
+    }
+
     private ChatRun runningRun() {
         Instant now = Instant.parse("2026-07-16T00:00:00Z");
         return new ChatRun(
@@ -87,6 +125,10 @@ class MyBatisChatRunRepositoryTest {
         row.setUserId(run.userId());
         row.setSessionId(run.sessionId());
         row.setStatus(run.status().name());
+        row.setRouteType(run.routeType());
+        row.setAgentCode(run.agentCode());
+        row.setRuntimeProvider(run.runtimeProvider());
+        row.setRuntimeSessionId(run.runtimeSessionId());
         row.setRunMode(run.runMode().name());
         row.setParentMessageId(run.parentMessageId());
         row.setUserMessageId(run.userMessageId());

@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -85,6 +86,13 @@ public class MyBatisRuntimeBindingRepository implements RuntimeBindingRepository
             }
         }
         return binding;
+    }
+
+    @Override
+    @Transactional(timeoutString =
+            "${financeex.domain-agent.binding-compensation-transaction-timeout-seconds:2}")
+    public boolean cancelActiveForRun(String bindingId, String runId) {
+        return mapper.cancelActiveForRun(bindingId, runId) == 1;
     }
 
     private RuntimeBindingRow toRow(RuntimeBinding binding) {

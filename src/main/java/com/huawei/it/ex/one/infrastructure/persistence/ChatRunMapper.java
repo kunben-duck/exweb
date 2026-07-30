@@ -56,6 +56,14 @@ public interface ChatRunMapper {
     int updateExisting(ChatRunWriteRow row);
 
     /**
+     * 覆盖 RUNNING run 的最终路由和 Runtime 字段。
+     *
+     * @param row 包含 run 归属和最终路由信息的写入行。
+     * @return 影响行数；1 表示最终路由更新成功。
+     */
+    int updateResolvedRoute(ChatRunWriteRow row);
+
+    /**
      * 首次 stop 条件更新，只允许 RUNNING 进入 CANCELLING。
      *
      * @param runId run 主键。

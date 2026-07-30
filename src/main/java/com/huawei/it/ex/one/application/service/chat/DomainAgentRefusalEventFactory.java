@@ -40,15 +40,11 @@ final class DomainAgentRefusalEventFactory {
     }
 
     ChatCommand commandWithDomainRejectContext(ChatCommand command,
-                                               String intentName,
-                                               DomainAgentRefusal refusal) {
+                                               DomainAgentRejectReason rejectReason) {
         Map<String, Object> metadata = new LinkedHashMap<>(
                 SelectedIntentContext.removeReserved(command.metadata()));
         metadata.put("routeTrigger", "domain_reject");
-        metadata.put("lastIntentRejectReason", Map.of(
-                "lastIntent", intentName,
-                "domainRejectMessage", refusal.message() == null ? "" : refusal.message()
-        ));
+        metadata.put(DomainAgentRejectReason.METADATA_KEY, rejectReason.toMap());
         return new ChatCommand(
                 command.commandId(),
                 command.tenantId(),
@@ -130,6 +126,7 @@ final class DomainAgentRefusalEventFactory {
         putIfNotNull(rerouteState, "refusalRecoverable", reroute.refusal().recoverable());
         putIfNotNull(rerouteState, "refusalReason", reroute.refusal().message());
         putIfNotNull(rerouteState, "refusalAgentId", reroute.refusal().agentId());
+        rerouteState.put(DomainAgentRejectReason.METADATA_KEY, reroute.lastIntentRejectReason().toMap());
         rerouteState.put("rerouteCount", context.rerouteCount());
         rerouteState.put("rejectedDomainAgentIds", List.copyOf(reroute.rejectedDomainAgentIds()));
         putIfNotNull(rerouteState, "originalQuery",

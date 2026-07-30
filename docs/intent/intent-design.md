@@ -603,7 +603,7 @@ Supervisor 调用意图服务时，将拒答说明放入：
 
 - `query` 使用用户对澄清问题的最新回答。
 - `conversationContext.routeTrigger` 使用 `clarify_answer`。
-- `conversationContext.lastIntentRejectReason` 可以置空，避免上一轮拒答原因在澄清链路中重复放大。
+- 普通澄清的 `conversationContext.lastIntentRejectReason` 为空；由 DomainAgent 拒答触发的澄清链每轮均携带触发当前链路的同一份当前拒答原因。
 - 上一轮触发澄清的问题、澄清问题写入一条 `history.type=clarify`；用户回答使用本轮 `query` 传入。
 - 如果 `/getIntentDecision` 继续返回 `CLARIFY`，继续追加下一条 `clarify`；建议chatservice最多澄清 3 轮，超过后由 Supervisor 兜底 React。
 - 前端每轮回答仍调用 `/v1/chat/runs` 且使用 `runMode=CONTINUE_INTERACTION`。普通澄清回答 admission 成功后旧 Interaction 立即成为 `ANSWERED`，后续执行失败不会重复开放该 Interaction。`AMBIGUOUS_ROUTE` 选择流程在 continuation 终态成功时成为 `ANSWERED`；初始化或执行失败时按现有补偿恢复 `WAITING`。
@@ -811,7 +811,7 @@ domainRejectMessage：无
 3. `CLARIFY` 只做路由前置澄清，不调用领域 Agent，不写成功 route。
 4. 用户回答澄清后，`query` 使用用户最新回答，`conversationContext.routeTrigger` 使用 `clarify_answer`。
 5. `conversationContext.history` 数组按时间顺序排列，类型包括 `route` 和 `clarify`。
-6. 拒答原因只传当前这一次，放入 `conversationContext.lastIntentRejectReason`，不传前几轮拒答。
+6. 拒答原因只传当前这一次，放入 `conversationContext.lastIntentRejectReason`，不传前几轮拒答；若本次拒答进入多轮澄清，则每轮继续携带该原因。
 7. 澄清期间保留多轮 clarify；澄清成功后，将多轮 clarify 折叠为一条 route。
 8. 在线 history 只取最新 TopK，K 暂定为 5；未完成澄清链路优先保留，避免被普通历史挤掉。
 9. 完整澄清明细保留在独立 user/assistant 消息链和 RouteMemory 澄清事实中；最终折叠后不再作为多条 clarify 进入后续在线路由上下文。

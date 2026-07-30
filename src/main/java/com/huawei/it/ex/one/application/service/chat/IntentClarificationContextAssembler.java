@@ -69,7 +69,10 @@ final class IntentClarificationContextAssembler {
         metadata.put("intentClarification", Map.copyOf(clarification));
         Object rerouteContext = requestPayload.get(DOMAIN_AGENT_REROUTE_CONTEXT);
         if (rerouteContext instanceof Map<?, ?> map) {
-            metadata.put(DOMAIN_AGENT_REROUTE_CONTEXT, mapOrEmpty(map));
+            Map<String, Object> rerouteState = mapOrEmpty(map);
+            metadata.put(DOMAIN_AGENT_REROUTE_CONTEXT, rerouteState);
+            metadata.put(DomainAgentRejectReason.METADATA_KEY,
+                    DomainAgentRejectReason.fromRerouteState(rerouteState).toMap());
         }
         return new ChatCommand(null, user.tenantId(), user.ownerUserId(), session.id(), null,
                 null, clarifyAnswer == null ? "" : clarifyAnswer,

@@ -8,6 +8,7 @@ import java.util.Set;
 record DomainAgentRerouteContext(
         DomainAgentRunContext context,
         DomainAgentRefusal refusal,
+        DomainAgentRejectReason lastIntentRejectReason,
         String currentDomainAgentId,
         Set<String> rejectedDomainAgentIds,
         String intentQuery,

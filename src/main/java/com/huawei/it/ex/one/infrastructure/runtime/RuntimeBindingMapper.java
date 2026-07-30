@@ -28,6 +28,16 @@ public interface RuntimeBindingMapper {
     int update(RuntimeBindingRow row);
 
     /**
+     * 条件取消仍由指定 run 持有的 ACTIVE RuntimeBinding。
+     *
+     * @param bindingId RuntimeBinding 主键。
+     * @param runId 当前绑定记录的最近 run 标识。
+     * @return 影响行数。
+     */
+    int cancelActiveForRun(@Param("bindingId") String bindingId,
+                           @Param("runId") String runId);
+
+    /**
      * 按主键查询 RuntimeBinding。
      *
      * @param bindingId 绑定主键。

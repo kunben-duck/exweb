@@ -143,6 +143,40 @@ class RuntimeBindingApplicationServiceTest {
     }
 
     @Test
+    void replacementCompensationCancelsMatchingActiveBindingAndEvictsCache() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        RuntimeBinding active = binding("domain-agent", RuntimeBindingStatus.ACTIVE);
+        repository.saved = active;
+        cache.put(active);
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        boolean cancelled = service.cancelActiveForRun(active, "run");
+
+        assertThat(cancelled).isTrue();
+        assertThat(repository.saved.status()).isEqualTo(RuntimeBindingStatus.CANCELLED);
+        assertThat(cache.get("t", "u", "s")).isEmpty();
+    }
+
+    @Test
+    void replacementCompensationDoesNotCancelBindingOwnedByNewerRun() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        RuntimeBinding active = binding("domain-agent", RuntimeBindingStatus.ACTIVE)
+                .withRun("run-new", Instant.now().plus(Duration.ofDays(1)));
+        repository.saved = active;
+        cache.put(active);
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        boolean cancelled = service.cancelActiveForRun(active, "run-old");
+
+        assertThat(cancelled).isFalse();
+        assertThat(repository.saved.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(repository.saved.lastRunId()).isEqualTo("run-new");
+        assertThat(cache.get("t", "u", "s")).contains(active);
+    }
+
+    @Test
     void createsRelayRuntimeBinding() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
         InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();

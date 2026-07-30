@@ -67,7 +67,7 @@ final class AppliedRouteRecorder {
 
     void bindResolvedRoute(String runId, RouteTarget route, RuntimeBinding binding) {
         try {
-            chatRunService.bindResolvedRoute(runId, route, binding);
+            bindResolvedRouteRequired(runId, route, binding);
         } catch (RuntimeException ex) {
             log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_WRITE_FAILED,
                             "ChatRun resolved route diagnostic update failed and was ignored")
@@ -76,6 +76,15 @@ final class AppliedRouteRecorder {
                     .attribute("routeType", route == null || route.type() == null ? null : route.type().name())
                     .attribute("agentCode", route == null ? null : route.selectedAgentCode())
                     .build(), ex);
+        }
+    }
+
+    /**
+     * 拒答重路由必须先保存最终 Runtime，避免 stop 继续取消旧 Agent。
+     */
+    void bindResolvedRouteRequired(String runId, RouteTarget route, RuntimeBinding binding) {
+        if (chatRunService.bindResolvedRoute(runId, route, binding) == null) {
+            throw new IllegalStateException("ChatRun resolved route update found no run: " + runId);
         }
     }
 

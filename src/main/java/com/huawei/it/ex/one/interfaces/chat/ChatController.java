@@ -334,7 +334,12 @@ public class ChatController {
                 result.stoppedAt(),
                 result.messageReady(),
                 result.assistantMessageId(),
-                result.feedbackTargetMessageId()
+                result.feedbackTargetMessageId(),
+                result.waitingUserInput(),
+                result.interactionId(),
+                result.interactionStatus(),
+                result.interactionCancelledAt(),
+                result.effectiveRunId()
         );
     }
 
@@ -349,12 +354,16 @@ public class ChatController {
                 status.activeRunLastSeq(),
                 status.cancellable(),
                 status.waitingUserInput(),
+                status.waitingSourceRunId(),
                 status.interactionId(),
                 status.interactionType(),
                 status.assistantMessageId(),
                 status.expiresAt(),
                 status.autoSelectAt(),
                 status.autoSelectTimeoutMs(),
+                status.autoActionAt(),
+                status.autoActionTimeoutMs(),
+                status.autoActionType(),
                 status.bindingProvider(),
                 status.bindingTargetType(),
                 status.bindingTargetId(),

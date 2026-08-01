@@ -39,6 +39,15 @@ class ChatFlowFoundationConfiguration {
     }
 
     @Bean
+    RelayQuestionnaireWaitPolicy relayQuestionnaireWaitPolicy(
+            ObjectProvider<ChatInteractionProperties> interactionPropertiesProvider,
+            @Value("${financeex.relay.questionnaire-wait-timeout:0s}") String timeout) {
+        return new RelayQuestionnaireWaitPolicy(
+                interactionPropertiesProvider.getIfAvailable(),
+                DurationStyle.detectAndParse(timeout));
+    }
+
+    @Bean
     RunMemoryContextAssembler runMemoryContextAssembler(
             MemoryApplicationService memoryService) {
         return new RunMemoryContextAssembler(memoryService);

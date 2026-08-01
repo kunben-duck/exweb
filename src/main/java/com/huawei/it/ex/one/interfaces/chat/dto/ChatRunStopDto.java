@@ -15,6 +15,11 @@ import java.time.Instant;
  * @param messageReady 是否已有可反馈的 assistant 消息。
  * @param assistantMessageId stop 后可见的 assistant 消息 ID；没有可保存内容时为空。
  * @param feedbackTargetMessageId 前端点赞/点踩应使用的消息 ID。
+ * @param waitingUserInput stop 后是否仍在等待用户输入。
+ * @param interactionId 本次等待态 stop 对应的 Interaction ID。
+ * @param interactionStatus stop 后的 Interaction 状态。
+ * @param interactionCancelledAt Interaction 取消时间。
+ * @param effectiveRunId 请求历史等待 run 时实际被停止的 continuation run。
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ChatRunStopDto(
@@ -25,5 +30,10 @@ public record ChatRunStopDto(
         Instant stoppedAt,
         boolean messageReady,
         String assistantMessageId,
-        String feedbackTargetMessageId
+        String feedbackTargetMessageId,
+        boolean waitingUserInput,
+        String interactionId,
+        String interactionStatus,
+        Instant interactionCancelledAt,
+        String effectiveRunId
 ) {}

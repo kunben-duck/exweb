@@ -1,5 +1,7 @@
 package com.huawei.it.ex.one.infrastructure.persistence;
 
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
@@ -62,6 +64,34 @@ public interface ChatRunMapper {
      * @return 影响行数；1 表示最终路由更新成功。
      */
     int updateResolvedRoute(ChatRunWriteRow row);
+
+    /**
+     * 在最终路由更新前锁定 RUNNING run，固定 run -> execution 的锁顺序。
+     *
+     * @param row 包含 run 归属信息的写入行。
+     * @return 1 表示 run 仍可更新；无匹配行时返回 {@code null}。
+     */
+    Integer lockResolvedRouteRun(@Param("row") ChatRunWriteRow row);
+
+    /**
+     * 在 run 行锁之后锁定并校验 execution owner/fencing。
+     *
+     * @param row 包含 run 归属信息的写入行。
+     * @param claim 当前 execution 写入权声明。
+     * @return 1 表示 claim 仍有效；无匹配行时返回 {@code null}。
+     */
+    Integer lockResolvedRouteExecution(@Param("row") ChatRunWriteRow row,
+                                       @Param("claim") RunExecutionClaim claim);
+
+    /**
+     * 在 execution owner/fencing 保护下覆盖 RUNNING run 的最终路由。
+     *
+     * @param row 包含 run 归属和最终路由信息的写入行。
+     * @param claim 当前 execution 写入权声明。
+     * @return 影响行数；1 表示最终路由更新成功。
+     */
+    int updateResolvedRouteWithExecutionGuard(@Param("row") ChatRunWriteRow row,
+                                              @Param("claim") RunExecutionClaim claim);
 
     /**
      * 首次 stop 条件更新，只允许 RUNNING 进入 CANCELLING。
@@ -132,6 +162,18 @@ public interface ChatRunMapper {
     ChatRunRow findByOwnerAndId(@Param("tenantId") String tenantId,
                                 @Param("userId") String userId,
                                 @Param("runId") String runId);
+
+    /**
+     * 在等待态 stop 短事务内锁定 continuation run。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param runId continuation run 标识。
+     * @return 已锁定的 run；不存在时为 {@code null}。
+     */
+    ChatRunRow findByOwnerAndIdForUpdate(@Param("tenantId") String tenantId,
+                                         @Param("userId") String userId,
+                                         @Param("runId") String runId);
 
     /**
      * 按 owner 边界批量查询 run，供历史消息等只读装配批量补充 run 派生字段。

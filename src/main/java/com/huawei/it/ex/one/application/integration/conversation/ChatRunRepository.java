@@ -37,6 +37,20 @@ public interface ChatRunRepository {
     }
 
     /**
+     * 在 execution 写入权保护下覆盖当前 RUNNING run 的最终路由和 Runtime 信息。
+     *
+     * <p>生产实现必须同时校验 owner 与 fencing token，防止租约失效实例覆盖新 owner 的执行目标。
+     * 默认实现仅用于测试替身兼容。</p>
+     *
+     * @param run 包含最终路由信息的 run 快照。
+     * @param claim 当前后台执行流持有的写入权声明。
+     * @return 数据库中的最新 run。
+     */
+    default ChatRun updateResolvedRouteWithExecutionGuard(ChatRun run, RunExecutionClaim claim) {
+        return updateResolvedRoute(run);
+    }
+
+    /**
      * 严格插入一个新 run，不执行 upsert。
      *
      * <p>生产实现依赖 active-run 部分唯一索引完成跨实例并发准入。</p>
@@ -69,6 +83,17 @@ public interface ChatRunRepository {
      * @return 当前用户拥有的 run；不存在或不属于当前用户时为空。
      */
     Optional<ChatRun> findByTenantIdAndUserIdAndId(String tenantId, String userId, String runId);
+
+    /**
+     * 在调用方短事务内按归属锁定 run。
+     *
+     * <p>等待态 stop 使用该入口固定 {@code session -> continuation run -> interaction} 锁顺序。
+     * 默认实现供测试替身兼容；生产仓储使用 {@code SELECT ... FOR UPDATE}。</p>
+     */
+    default Optional<ChatRun> findByTenantIdAndUserIdAndIdForUpdate(
+            String tenantId, String userId, String runId) {
+        return findByTenantIdAndUserIdAndId(tenantId, userId, runId);
+    }
 
     /**
      * 按用户归属批量查询 run，用于历史消息装配等只读场景，避免逐条查询。

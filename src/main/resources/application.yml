@@ -123,6 +123,9 @@ financeex:
       core-size: ${FINANCEEX_INTENT_RECORD_EXECUTOR_CORE_SIZE:1}
       max-size: ${FINANCEEX_INTENT_RECORD_EXECUTOR_MAX_SIZE:2}
       queue-capacity: ${FINANCEEX_INTENT_RECORD_EXECUTOR_QUEUE_CAPACITY:1000}
+  relay:
+    # Relay 问卷由前端在截止时间到达后提交 ignore；0s 表示永久等待，不启动后端定时任务。
+    questionnaire-wait-timeout: ${FINANCEEX_RELAY_QUESTIONNAIRE_WAIT_TIMEOUT:0s}
   route-memory:
     # RouteMemory 是意图路由上下文事实源，不受普通短期/长期 memory 开关影响。
     top-k: ${FINANCEEX_ROUTE_MEMORY_TOP_K:5}
@@ -156,6 +159,8 @@ financeex:
     # 业务 binding TTL：未配置、0 或负数表示不过期；正数仅对 DomainAgent 使用滑动过期。
     # 已建立的 Relay session 始终不过期，直到会话删除或 Relay 明确返回 session 不存在。
     ttl: ${FINANCEEX_RUNTIME_BINDING_TTL:0s}
+    # Interaction continuation 刷新 Relay Binding 时的 run/execution 栅栏事务超时。
+    interaction-resume-transaction-timeout-seconds: ${FINANCEEX_RUNTIME_BINDING_INTERACTION_RESUME_TRANSACTION_TIMEOUT_SECONDS:2}
     # 逻辑前缀；实际 Redis key 会自动注入 spring.profiles.active 的第一个 profile：
     # fin_ex:runtime_binding -> fin_ex:{env}:runtime_binding。
     redis-key-prefix: fin_ex:runtime_binding

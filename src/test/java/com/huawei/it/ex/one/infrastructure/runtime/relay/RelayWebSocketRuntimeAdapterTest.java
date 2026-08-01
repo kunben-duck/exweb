@@ -7,6 +7,7 @@ import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeCancelRequ
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDispatchState;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
@@ -824,25 +825,73 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(config.path("config").path("traceId").asText()).isEqualTo("interaction-trace-1");
         assertThat(response.path("type").asText()).isEqualTo("approval-response");
         assertThat(response.has("traceId")).isFalse();
-        assertThat(response.path("request_id").asText()).isEqualTo("approval-1");
+        assertThat(response.path("approval_id").asText()).isEqualTo("approval-1");
         assertThat(response.path("approved").asBoolean()).isTrue();
         assertThat(response.path("scope").asText()).isEqualTo("once");
-        assertThat(response.path("questionnaire_answers").path("您对哪类 Sub-Agent 最感兴趣？").asText())
+        assertThat(response.path("questionnaire_answers").path("label")
+                .path("您对哪类 Sub-Agent 最感兴趣？").asText())
                 .isEqualTo("工具与扩展类");
-        assertThat(response.path("metadata").path("clientTraceId").asText()).isEqualTo("trace-1");
-        assertThat(response.path("metadata").path("userAccount").asText()).isEqualTo("account1");
-        assertThat(response.path("metadata").path("globalUserId").asLong()).isEqualTo(1001L);
-        assertThat(response.path("metadata").has("token")).isFalse();
-        assertThat(response.path("timestamp").asText()).isNotBlank();
-        assertThat(response.has("approval_id")).isFalse();
+        assertThat(response.has("request_id")).isFalse();
+        assertThat(response.has("metadata")).isFalse();
+        assertThat(response.has("timestamp")).isFalse();
+    }
+
+    @Test
+    void interactionDispatchIsMarkedAfterApprovalResponseEntersOutbound() {
+        RuntimeInteractionDispatchState dispatchState = RuntimeInteractionDispatchState.tracked();
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.continueWithUserResponse(interactionRequest(
+                        true,
+                        Map.of("label", Map.of("请选择技术方案", "方案A")),
+                        dispatchState)))
+                .assertNext(this::assertSessionReadyMetadata)
+                .expectError(RelayRuntimeProtocolException.class)
+                .verify();
+
+        assertThat(dispatchState.responseDispatched()).isTrue();
+        assertThat(client.sent()).hasSize(2);
+        assertThat(client.sent().get(1)).contains("\"type\":\"approval-response\"");
+    }
+
+    @Test
+    void interactionContinuationSendsQuestionnaireIgnoreFrame() throws Exception {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"relay-start\",\"content\":\"continue\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"agent\",\"content\":\"questionnaire ignored\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.continueWithUserResponse(interactionRequest(
+                        false, Map.of("ignore", true))))
+                .assertNext(this::assertSessionReadyMetadata)
+                .assertNext(event -> assertThat(event.type()).isEqualTo("runtime.progress"))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "questionnaire ignored"))
+                .expectNextCount(2)
+                .verifyComplete();
+
+        JsonNode response = objectMapper.readTree(client.sent().get(1));
+        assertThat(response.path("approval_id").asText()).isEqualTo("approval-1");
+        assertThat(response.path("approved").asBoolean()).isFalse();
+        assertThat(response.path("scope").asText()).isEqualTo("once");
+        assertThat(response.path("questionnaire_answers").path("ignore").asBoolean()).isTrue();
     }
 
     @Test
     void openingHandshakeTimeoutCancelsPendingInteractionUpgrade() {
         NeverOpeningWebSocketClient client = new NeverOpeningWebSocketClient();
         RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofMillis(5));
+        RuntimeInteractionDispatchState dispatchState = RuntimeInteractionDispatchState.tracked();
 
-        StepVerifier.create(adapter.continueWithUserResponse(interactionRequest()))
+        StepVerifier.create(adapter.continueWithUserResponse(interactionRequest(
+                        true,
+                        Map.of("label", Map.of("请选择技术方案", "方案A")),
+                        dispatchState)))
                 .expectErrorSatisfies(error -> assertThat(error)
                         .isInstanceOf(RelayRuntimeProtocolException.class)
                         .hasMessageContaining("RELAY_WS_CONFIG_TIMEOUT")
@@ -851,6 +900,7 @@ class RelayWebSocketRuntimeAdapterTest {
 
         assertThat(client.executeCount()).isEqualTo(1);
         assertThat(client.cancelled()).isTrue();
+        assertThat(dispatchState.responseDispatched()).isFalse();
     }
 
     @Test
@@ -1120,6 +1170,20 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     private AgentRuntimeInteractionResponseRequest interactionRequest() {
+        return interactionRequest(true, Map.of(
+                "label", Map.of("您对哪类 Sub-Agent 最感兴趣？", "工具与扩展类")));
+    }
+
+    private AgentRuntimeInteractionResponseRequest interactionRequest(
+            boolean approved,
+            Map<String, Object> questionnaireAnswers) {
+        return interactionRequest(approved, questionnaireAnswers, RuntimeInteractionDispatchState.untracked());
+    }
+
+    private AgentRuntimeInteractionResponseRequest interactionRequest(
+            boolean approved,
+            Map<String, Object> questionnaireAnswers,
+            RuntimeInteractionDispatchState dispatchState) {
         return new AgentRuntimeInteractionResponseRequest(
                 "tenant1",
                 "user1",
@@ -1133,13 +1197,14 @@ class RelayWebSocketRuntimeAdapterTest {
                 "CLARIFICATION",
                 "approval-1",
                 Map.of(
-                        "approved", true,
+                        "approved", approved,
                         "scope", "once",
-                        "questionnaireAnswers", Map.of("您对哪类 Sub-Agent 最感兴趣？", "工具与扩展类"),
+                        "questionnaireAnswers", questionnaireAnswers,
                         "metadata", Map.of("clientTraceId", "trace-1", "token", "bad")
                 ),
                 RuntimeForwardHeaders.empty(),
-                new TraceContext("interaction-trace-1")
+                new TraceContext("interaction-trace-1"),
+                dispatchState
         );
     }
 

@@ -61,7 +61,8 @@ final class StandardRunRuntimeCoordinator {
                 new AtomicReference<>(),
                 new AtomicReference<>(RuntimeSessionMode.RESUME),
                 new AtomicReference<>(),
-                new AssistantAssembly());
+                new AssistantAssembly(),
+                new RuntimeBindingDispatchLifecycle());
     }
 
     Flux<ChatEvent> execute(RuntimePlan plan, RunExecutionClaim executionClaim) {
@@ -69,20 +70,7 @@ final class StandardRunRuntimeCoordinator {
         try {
             RunEventPipelineContext context = pipelineContext(plan, executionClaim);
             return eventPersistenceCoordinator.executeAfterRunStarted(context, () -> {
-                routeResolutionCoordinator.prepareInitial(
-                        new RouteResolutionCoordinator.InitialRoutePreparation(
-                                prepared.user(),
-                                prepared.session(),
-                                prepared.runId(),
-                                plan.runtimeBindingLeafId(),
-                                plan.runCommand(),
-                                prepared.explicitDomainAgentId(),
-                                prepared.forceReroute(),
-                                plan.routeRef(),
-                                plan.bindingRef(),
-                                plan.runtimeSessionModeRef(),
-                                prepared.command().agentMode()));
-                return runtimeDispatchCoordinator.execute(new RoutePipelineRequest(
+                RoutePipelineRequest request = new RoutePipelineRequest(
                         prepared.user(),
                         prepared.session(),
                         plan.runCommand(),
@@ -102,7 +90,22 @@ final class StandardRunRuntimeCoordinator {
                         plan.intentQuery(),
                         plan.intentQuery(),
                         null,
-                        prepared.command().agentMode()));
+                        prepared.command().agentMode(),
+                        plan.bindingLifecycle());
+                return runtimeDispatchCoordinator.execute(request, () -> routeResolutionCoordinator.prepareInitial(
+                        new RouteResolutionCoordinator.InitialRoutePreparation(
+                                prepared.user(),
+                                prepared.session(),
+                                prepared.runId(),
+                                plan.runtimeBindingLeafId(),
+                                plan.runCommand(),
+                                prepared.explicitDomainAgentId(),
+                                prepared.forceReroute(),
+                                plan.routeRef(),
+                                plan.bindingRef(),
+                                plan.runtimeSessionModeRef(),
+                                prepared.command().agentMode(),
+                                plan.bindingLifecycle())));
             });
         } catch (RuntimeException ex) {
             RunEventPipelineContext context = pipelineContext(plan, executionClaim);
@@ -200,7 +203,8 @@ final class StandardRunRuntimeCoordinator {
             AtomicReference<RouteTarget> routeRef,
             AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
             AtomicReference<Map<String, Object>> pendingInteractionPayloadRef,
-            AssistantAssembly assistant
+            AssistantAssembly assistant,
+            RuntimeBindingDispatchLifecycle bindingLifecycle
     ) {
     }
 }

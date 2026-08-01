@@ -1027,6 +1027,30 @@ abstract class ChatFlowTestSupport {
         final AtomicInteger ownerTerminalFenceAttempts = new AtomicInteger();
         boolean rejectOwnerTerminalFences;
         @Override public synchronized ChatRun save(ChatRun run) { runs.put(run.id(), run); return run; }
+        @Override
+        public synchronized ChatRun updateResolvedRoute(ChatRun run) {
+            ChatRun current = runs.get(run.id());
+            if (current == null || current.status() != ChatRunStatus.RUNNING) {
+                throw new IllegalStateException("run route update rejected");
+            }
+            // 与生产专用 SQL 保持一致：仅覆盖路由字段，不回退已写入的事件序号和运行状态。
+            ChatRun updated = current.withResolvedRoute(
+                    run.routeType(),
+                    run.agentCode(),
+                    run.runtimeProvider(),
+                    run.runtimeSessionId());
+            runs.put(updated.id(), updated);
+            return updated;
+        }
+        @Override
+        public synchronized ChatRun updateResolvedRouteWithExecutionGuard(
+                ChatRun run,
+                RunExecutionClaim claim) {
+            if (claim == null || !run.id().equals(claim.runId())) {
+                throw new IllegalStateException("run execution owner mismatch");
+            }
+            return updateResolvedRoute(run);
+        }
         @Override public synchronized boolean tryFenceOwnerTerminalCommit(OwnerTerminalFence fence) {
             ownerTerminalFenceAttempts.incrementAndGet();
             ChatRun current = runs.get(fence.runId());
@@ -1047,13 +1071,25 @@ abstract class ChatFlowTestSupport {
     }
 
     static class FailingResolvedRouteRunRepository extends InMemoryRunRepository {
+        private final AtomicInteger guardedUpdates = new AtomicInteger();
+        private final int failOnUpdate;
+
+        FailingResolvedRouteRunRepository() {
+            this(1);
+        }
+
+        FailingResolvedRouteRunRepository(int failOnUpdate) {
+            this.failOnUpdate = failOnUpdate;
+        }
+
         @Override
-        public ChatRun save(ChatRun run) {
-            if (run != null && run.status() == ChatRunStatus.RUNNING && run.routeType() != null
-                    && run.firstSeq() != null) {
+        public ChatRun updateResolvedRouteWithExecutionGuard(
+                ChatRun run,
+                RunExecutionClaim claim) {
+            if (guardedUpdates.incrementAndGet() == failOnUpdate) {
                 throw new IllegalStateException("route diagnostic db down");
             }
-            return super.save(run);
+            return super.updateResolvedRouteWithExecutionGuard(run, claim);
         }
     }
 
@@ -1142,7 +1178,8 @@ abstract class ChatFlowTestSupport {
         @Override
         public ChatEvent appendWithExecutionGuard(ChatEvent event, RunExecutionClaim claim) {
             if (event != null && event.payload() != null
-                    && "AUTO_SWITCH".equals(event.payload().get("action"))) {
+                    && ("AUTO_SWITCH".equals(event.payload().get("action"))
+                    || "ROUTE_TO_RELAY".equals(event.payload().get("action")))) {
                 throw new ChatEventAppendRejectedException("test auto-switch fencing rejection");
             }
             return super.appendWithExecutionGuard(event, claim);
@@ -1380,6 +1417,56 @@ abstract class ChatFlowTestSupport {
         }
     }
 
+    static final class OwnerRejectingBindingActivationRepository
+            extends MultiBindingRuntimeBindingRepository {
+        private final InMemoryExecutionRepository executions;
+        private final String provider;
+        final AtomicReference<RuntimeBindingStatus> activatedStatus = new AtomicReference<>();
+        private volatile String activatedBindingId;
+
+        OwnerRejectingBindingActivationRepository(
+                InMemoryExecutionRepository executions,
+                String provider) {
+            this.executions = executions;
+            this.provider = provider;
+        }
+
+        @Override
+        public RuntimeBinding save(RuntimeBinding binding) {
+            RuntimeBinding saved = super.save(binding);
+            if (activatedBindingId == null
+                    && provider.equals(binding.provider())
+                    && binding.status() == RuntimeBindingStatus.ACTIVE) {
+                activatedBindingId = binding.id();
+                activatedStatus.set(binding.status());
+                executions.rejectOwnerRunningChecks = true;
+            } else if (binding.id().equals(activatedBindingId)) {
+                activatedStatus.set(binding.status());
+            }
+            return saved;
+        }
+    }
+
+    static final class TrackingRelayBindingActivationRepository
+            extends MultiBindingRuntimeBindingRepository {
+        final AtomicReference<RuntimeBindingStatus> activatedStatus = new AtomicReference<>();
+        private volatile String activatedBindingId;
+
+        @Override
+        public RuntimeBinding save(RuntimeBinding binding) {
+            RuntimeBinding saved = super.save(binding);
+            if (activatedBindingId == null
+                    && "relay".equals(binding.provider())
+                    && binding.status() == RuntimeBindingStatus.ACTIVE) {
+                activatedBindingId = binding.id();
+                activatedStatus.set(binding.status());
+            } else if (binding.id().equals(activatedBindingId)) {
+                activatedStatus.set(binding.status());
+            }
+            return saved;
+        }
+    }
+
     static final class TrackingReplacementBindingRepository
             extends MultiBindingRuntimeBindingRepository {
         private final AtomicInteger activeDomainAgentSaves = new AtomicInteger();
@@ -1517,6 +1604,15 @@ abstract class ChatFlowTestSupport {
                     .filter(ChatInteractionRequest::waiting)
                     .findFirst();
         }
+        @Override public Optional<ChatInteractionRequest> findLatestBySourceRun(
+                String tenantId, String userId, String sessionId, String sourceRunId) {
+            return requests.values().stream()
+                    .filter(request -> tenantId.equals(request.tenantId()))
+                    .filter(request -> userId.equals(request.userId()))
+                    .filter(request -> sessionId.equals(request.sessionId()))
+                    .filter(request -> sourceRunId.equals(request.sourceRunId()))
+                    .max(java.util.Comparator.comparing(ChatInteractionRequest::createdAt));
+        }
         @Override public boolean claimInteractionResponse(ChatInteractionClaimCommand command) {
             claimCalls.incrementAndGet();
             ChatInteractionRequest current = requests.get(command.interactionId());
@@ -1595,6 +1691,24 @@ abstract class ChatFlowTestSupport {
             ChatInteractionRequest current = requests.get(interactionId);
             if (current == null || !tenantId.equals(current.tenantId()) || !userId.equals(current.userId())
                     || current.status() != ChatInteractionStatus.WAITING) {
+                return 0;
+            }
+            requests.put(current.id(), new ChatInteractionRequest(
+                    current.id(), current.tenantId(), current.userId(), current.sessionId(),
+                    current.sourceRunId(), current.continueRunId(), current.userMessageId(),
+                    current.assistantMessageId(), current.runtimeProvider(), current.runtimeBindingId(),
+                    current.runtimeSessionId(), current.approvalId(), current.interactionType(),
+                    ChatInteractionStatus.CANCELLED, current.requestPayload(), current.responsePayload(),
+                    current.expiresAt(), current.answeredAt(), cancelledAt, current.createdAt(), cancelledAt));
+            return 1;
+        }
+        @Override
+        public int cancelRespondingForRun(String tenantId, String userId, String interactionId,
+                                          String continueRunId, Instant cancelledAt) {
+            ChatInteractionRequest current = requests.get(interactionId);
+            if (current == null || !tenantId.equals(current.tenantId()) || !userId.equals(current.userId())
+                    || current.status() != ChatInteractionStatus.RESPONDING
+                    || !continueRunId.equals(current.continueRunId())) {
                 return 0;
             }
             requests.put(current.id(), new ChatInteractionRequest(

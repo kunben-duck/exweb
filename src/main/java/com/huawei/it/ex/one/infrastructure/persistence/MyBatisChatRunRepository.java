@@ -5,6 +5,7 @@ import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -56,6 +57,30 @@ public class MyBatisChatRunRepository implements ChatRunRepository {
         int updated = mapper.updateResolvedRoute(toRow(run));
         if (updated != 1) {
             throw new IllegalStateException("run 已停止、进入终态或归属不匹配，无法更新最终路由: " + run.id());
+        }
+        return findById(run.id())
+                .orElseThrow(() -> new IllegalStateException("最终路由更新后 run 回读失败: " + run.id()));
+    }
+
+    @Override
+    @Transactional(timeoutString =
+            "${financeex.runtime-binding.interaction-resume-transaction-timeout-seconds:2}")
+    public ChatRun updateResolvedRouteWithExecutionGuard(ChatRun run, RunExecutionClaim claim) {
+        if (run == null || claim == null || !run.id().equals(claim.runId())) {
+            throw new IllegalArgumentException("最终路由更新缺少匹配的 execution claim");
+        }
+        ChatRunWriteRow row = toRow(run);
+        Integer runLocked = mapper.lockResolvedRouteRun(row);
+        if (runLocked == null || runLocked != 1) {
+            throw new IllegalStateException("run 已停止，无法更新最终路由: " + run.id());
+        }
+        Integer executionLocked = mapper.lockResolvedRouteExecution(row, claim);
+        if (executionLocked == null || executionLocked != 1) {
+            throw new IllegalStateException("execution owner 已失效，无法更新最终路由: " + run.id());
+        }
+        int updated = mapper.updateResolvedRouteWithExecutionGuard(row, claim);
+        if (updated != 1) {
+            throw new IllegalStateException("run 已停止或 execution owner 已失效，无法更新最终路由: " + run.id());
         }
         return findById(run.id())
                 .orElseThrow(() -> new IllegalStateException("最终路由更新后 run 回读失败: " + run.id()));
@@ -218,6 +243,13 @@ public class MyBatisChatRunRepository implements ChatRunRepository {
     @Override
     public Optional<ChatRun> findByTenantIdAndUserIdAndId(String tenantId, String userId, String runId) {
         return Optional.ofNullable(mapper.findByOwnerAndId(tenantId, userId, runId)).map(this::toDomain);
+    }
+
+    @Override
+    public Optional<ChatRun> findByTenantIdAndUserIdAndIdForUpdate(
+            String tenantId, String userId, String runId) {
+        return Optional.ofNullable(mapper.findByOwnerAndIdForUpdate(tenantId, userId, runId))
+                .map(this::toDomain);
     }
 
     @Override

@@ -1,9 +1,11 @@
 package com.huawei.it.ex.one.application.service.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
+import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingCache;
@@ -12,6 +14,7 @@ import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
 import com.huawei.it.ex.one.domain.chat.MessageCompletedEvent;
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
@@ -226,6 +229,7 @@ class RuntimeBindingApplicationServiceTest {
         RuntimeBindingResolution resolution = service.resolveForRun("t", "u", "s", "run1", "leaf1");
 
         assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.NEW);
+        assertThat(resolution.previousBinding()).isNull();
         assertThat(resolution.binding().runtimeSessionId()).isEqualTo("s");
         assertThat(resolution.binding().leafMessageId()).isEqualTo("leaf1");
     }
@@ -241,6 +245,7 @@ class RuntimeBindingApplicationServiceTest {
         RuntimeBindingResolution resolution = service.resolveForRun("t", "u", "s", "run2", "leaf2");
 
         assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
+        assertThat(resolution.previousBinding()).isEqualTo(existing);
         assertThat(resolution.binding().runtimeSessionId()).isEqualTo("runtime-1");
     }
 
@@ -257,12 +262,31 @@ class RuntimeBindingApplicationServiceTest {
         RuntimeBindingResolution resolution = service.resolveForRun("t", "u", "s", "run2", "leaf2");
 
         assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
+        assertThat(resolution.previousBinding()).isNotNull();
+        assertThat(resolution.previousBinding().status()).isEqualTo(RuntimeBindingStatus.RESUMABLE);
         assertThat(resolution.binding().id()).isEqualTo("binding1");
         assertThat(resolution.binding().runtimeSessionId()).isEqualTo("runtime-1");
         assertThat(resolution.binding().status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
         assertThat(resolution.binding().expiresAt()).isNull();
         assertThat(resolution.binding().lastRunId()).isEqualTo("run2");
         assertThat(resolution.binding().leafMessageId()).isEqualTo("leaf2");
+    }
+
+    @Test
+    void restoresUnstartedRelaySnapshotAndSynchronizesCache() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        RuntimeBinding previous = binding(RuntimeBindingStatus.RESUMABLE)
+                .withRuntimeSessionId("runtime-1")
+                .withExpiresAt(null);
+        repository.saved = previous.withRun("run-new", null);
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        boolean restored = service.restoreUnstartedForRun(previous, "run-new");
+
+        assertThat(restored).isTrue();
+        assertThat(repository.saved).isEqualTo(previous);
+        assertThat(cache.get("t", "u", "s")).isEmpty();
     }
 
     @Test
@@ -438,6 +462,87 @@ class RuntimeBindingApplicationServiceTest {
     }
 
     @Test
+    void relayQuestionnaireResumeUsesOriginalEstablishedSessionAndExecutionGuard() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        RuntimeBinding binding = establishedRelayQuestionnaireBinding(RuntimeBindingStatus.ACTIVE);
+        repository.saved = binding;
+        RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache());
+        RunExecutionClaim claim = new RunExecutionClaim("run-b", "instance-1", 7L);
+
+        RuntimeBinding resumed = service.resumeRelayForInteraction(
+                relayQuestionnaireRequest("relay-session-1"), "run-b", claim);
+
+        assertThat(resumed.id()).isEqualTo(binding.id());
+        assertThat(resumed.runtimeSessionId()).isEqualTo("relay-session-1");
+        assertThat(resumed.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(resumed.lastRunId()).isEqualTo("run-b");
+        assertThat(resumed.leafMessageId()).isEqualTo("msg-assistant");
+        assertThat(repository.resumeClaim).isEqualTo(claim);
+        assertThat(repository.resumeExpectedLastRunId).isEqualTo("run-source");
+    }
+
+    @Test
+    void relayQuestionnaireResumeRejectsCancelledOrUnestablishedBinding() {
+        InMemoryRuntimeBindingRepository cancelledRepository = new InMemoryRuntimeBindingRepository();
+        cancelledRepository.saved = establishedRelayQuestionnaireBinding(RuntimeBindingStatus.CANCELLED);
+        RuntimeBindingApplicationService cancelled = service(
+                cancelledRepository, new InMemoryRuntimeBindingCache());
+
+        assertThatThrownBy(() -> cancelled.resumeRelayForInteraction(
+                        relayQuestionnaireRequest("relay-session-1"),
+                        "run-b",
+                        new RunExecutionClaim("run-b", "instance-1", 7L)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("不再是 ACTIVE");
+
+        InMemoryRuntimeBindingRepository unestablishedRepository = new InMemoryRuntimeBindingRepository();
+        unestablishedRepository.saved = establishedRelayQuestionnaireBinding(RuntimeBindingStatus.ACTIVE)
+                .withMetadata(Map.of());
+        RuntimeBindingApplicationService unestablished = service(
+                unestablishedRepository, new InMemoryRuntimeBindingCache());
+
+        assertThatThrownBy(() -> unestablished.resumeRelayForInteraction(
+                        relayQuestionnaireRequest("relay-session-1"),
+                        "run-b",
+                        new RunExecutionClaim("run-b", "instance-1", 7L)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("session 尚未建立");
+    }
+
+    @Test
+    void relayQuestionnaireResumeRejectsLostExecutionClaim() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        repository.saved = establishedRelayQuestionnaireBinding(RuntimeBindingStatus.ACTIVE);
+        repository.resumeGuardAccepted = false;
+        RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache());
+
+        assertThatThrownBy(() -> service.resumeRelayForInteraction(
+                        relayQuestionnaireRequest("relay-session-1"),
+                        "run-b",
+                        new RunExecutionClaim("run-b", "instance-old", 3L)))
+                .isInstanceOf(ChatEventAppendRejectedException.class)
+                .hasMessageContaining("run/execution 栅栏拒绝");
+        assertThat(repository.saved.lastRunId()).isEqualTo("run-source");
+    }
+
+    @Test
+    void unstartedRelayQuestionnaireRestoreKeepsActiveRuntimeSession() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        repository.saved = establishedRelayQuestionnaireBinding(RuntimeBindingStatus.ACTIVE)
+                .withRun("run-b", null);
+        RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache());
+
+        boolean restored = service.restoreUnstartedRelayInteraction(
+                repository.saved, "run-b", "run-source");
+
+        assertThat(restored).isTrue();
+        assertThat(repository.saved.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(repository.saved.lastRunId()).isEqualTo("run-source");
+        assertThat(repository.saved.runtimeSessionId()).isEqualTo("relay-session-1");
+        assertThat(repository.saved.metadata()).containsEntry("runtimeSessionEstablished", true);
+    }
+
+    @Test
     void loadsCancelledExpiredDomainAgentBindingForRefusalRerouteWithoutReactivatingIt() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
         InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
@@ -511,9 +616,59 @@ class RuntimeBindingApplicationServiceTest {
                 Map.of(), null, null, null, now, now);
     }
 
+    private ChatInteractionRequest relayQuestionnaireRequest(String runtimeSessionId) {
+        Instant now = Instant.now();
+        return new ChatInteractionRequest(
+                "interaction-questionnaire",
+                "t",
+                "u",
+                "s",
+                "run-source",
+                null,
+                "msg-user",
+                "msg-assistant",
+                "relay",
+                "binding1",
+                runtimeSessionId,
+                "approval1",
+                ChatInteractionType.AGENT_CLARIFICATION,
+                ChatInteractionStatus.WAITING,
+                Map.of(
+                        "sourceType", "approval-request",
+                        "operation_type", "questionnaire",
+                        "approval_id", "approval1"),
+                Map.of(),
+                now.plusSeconds(3600),
+                null,
+                null,
+                now,
+                now);
+    }
+
+    private RuntimeBinding establishedRelayQuestionnaireBinding(RuntimeBindingStatus status) {
+        Instant now = Instant.now();
+        return new RuntimeBinding(
+                "binding1",
+                "t",
+                "u",
+                "s",
+                "relay",
+                "msg-assistant",
+                "relay-session-1",
+                status,
+                "run-source",
+                null,
+                now,
+                now,
+                Map.of("runtimeSessionEstablished", true));
+    }
+
     private static class InMemoryRuntimeBindingRepository implements RuntimeBindingRepository {
         private RuntimeBinding saved;
         private int findActiveCalls;
+        private boolean resumeGuardAccepted = true;
+        private String resumeExpectedLastRunId;
+        private RunExecutionClaim resumeClaim;
 
         @Override
         public Optional<RuntimeBinding> findById(String bindingId) {
@@ -542,6 +697,19 @@ class RuntimeBindingApplicationServiceTest {
         public RuntimeBinding save(RuntimeBinding binding) {
             saved = binding;
             return binding;
+        }
+
+        @Override
+        public Optional<RuntimeBinding> resumeInteractionWithExecutionGuard(
+                RuntimeBinding binding,
+                String expectedLastRunId,
+                RunExecutionClaim claim) {
+            resumeExpectedLastRunId = expectedLastRunId;
+            resumeClaim = claim;
+            return resumeGuardAccepted
+                    ? RuntimeBindingRepository.super.resumeInteractionWithExecutionGuard(
+                            binding, expectedLastRunId, claim)
+                    : Optional.empty();
         }
     }
 

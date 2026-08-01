@@ -142,6 +142,67 @@
     </update>
 
     <!--
+      最终路由更新先锁定 RUNNING run，固定 run -> execution 的锁顺序并与 stop/终态串行。
+      入参: row 提供 run 主键和可信归属。
+    -->
+    <select id="lockResolvedRouteRun" resultType="java.lang.Integer">
+        SELECT 1
+        FROM fin_ex_chat_run_t
+        WHERE id = #{row.id}
+          AND tenant_id = #{row.tenantId}
+          AND user_id = #{row.userId}
+          AND session_id = #{row.sessionId}
+          AND status = 'RUNNING'
+        FOR UPDATE
+    </select>
+
+    <!--
+      run 行锁持有后再锁定 execution，防止 watchdog 在最终路由更新期间递增 fencing token。
+      入参: row 提供可信归属，claim 提供 ownerInstanceId/fencingToken。
+    -->
+    <select id="lockResolvedRouteExecution" resultType="java.lang.Integer">
+        SELECT 1
+        FROM fin_ex_chat_run_execution_t
+        WHERE run_id = #{row.id}
+          AND tenant_id = #{row.tenantId}
+          AND user_id = #{row.userId}
+          AND session_id = #{row.sessionId}
+          AND owner_instance_id = #{claim.ownerInstanceId}
+          AND fencing_token = #{claim.fencingToken}
+          AND execution_status = 'RUNNING'
+        FOR SHARE
+    </select>
+
+    <!--
+      Interaction 续接在已锁定 run/execution 后覆盖最终执行目标，并保留 owner/fencing 二次校验。
+      入参: row 提供 run 归属和路由字段，claim 提供 ownerInstanceId/fencingToken。
+    -->
+    <update id="updateResolvedRouteWithExecutionGuard">
+        UPDATE fin_ex_chat_run_t r
+        SET route_type = #{row.routeType},
+            agent_code = #{row.agentCode},
+            runtime_provider = #{row.runtimeProvider},
+            runtime_session_id = #{row.runtimeSessionId},
+            updated_at = #{row.updatedAt}
+        WHERE r.id = #{row.id}
+          AND r.tenant_id = #{row.tenantId}
+          AND r.user_id = #{row.userId}
+          AND r.session_id = #{row.sessionId}
+          AND r.status = 'RUNNING'
+          AND EXISTS (
+              SELECT 1
+              FROM fin_ex_chat_run_execution_t e
+              WHERE e.run_id = r.id
+                AND e.tenant_id = r.tenant_id
+                AND e.user_id = r.user_id
+                AND e.session_id = r.session_id
+                AND e.owner_instance_id = #{claim.ownerInstanceId}
+                AND e.fencing_token = #{claim.fencingToken}
+                AND e.execution_status = 'RUNNING'
+          )
+    </update>
+
+    <!--
       首次 stop 的短事务 CAS。CANCELLING 重试和已终态幂等由应用层回读当前状态处理。
       入参: runId/tenantId/userId 为归属边界，reason 为取消原因，requestedAt 为状态更新时间。
     -->
@@ -321,6 +382,19 @@
         WHERE tenant_id = #{tenantId}
           AND user_id = #{userId}
           AND id = #{runId}
+    </select>
+
+    <!--
+      等待态 stop 在短事务内锁定 continuation run，确保其状态与后续 Interaction 取消一致。
+      入参: tenantId/userId 为归属边界，runId 为 Interaction 当前 continue_run_id。
+    -->
+    <select id="findByOwnerAndIdForUpdate" resultMap="chatRunResultMap">
+        SELECT <include refid="chatRunColumns"/>
+        FROM fin_ex_chat_run_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{runId}
+        FOR UPDATE
     </select>
 
     <!--

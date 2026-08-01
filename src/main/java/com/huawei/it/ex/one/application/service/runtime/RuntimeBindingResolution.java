@@ -8,9 +8,14 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
  *
  * @param binding 本轮应使用的 RuntimeBinding。
  * @param sessionMode 下游 Runtime 会话协议模式。
+ * @param previousBinding 本轮激活前的 Binding 快照；新建 Binding 时为空。
  */
 public record RuntimeBindingResolution(
         RuntimeBinding binding,
-        RuntimeSessionMode sessionMode
+        RuntimeSessionMode sessionMode,
+        RuntimeBinding previousBinding
 ) {
+    public RuntimeBindingResolution(RuntimeBinding binding, RuntimeSessionMode sessionMode) {
+        this(binding, sessionMode, null);
+    }
 }

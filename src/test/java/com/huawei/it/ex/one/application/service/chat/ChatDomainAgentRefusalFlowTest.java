@@ -493,6 +493,92 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
     }
 
     @Test
+    void ownerLossBeforeRelayReplacementRestoresHistoricalResumableBinding() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        InMemoryExecutionRepository executions = new InMemoryExecutionRepository();
+        OwnerRejectingBindingActivationRepository bindings =
+                new OwnerRejectingBindingActivationRepository(executions, "relay");
+        Instant now = Instant.now();
+        RuntimeBinding previous = new RuntimeBinding(
+                "relay-binding",
+                "tenant1",
+                "user1",
+                "session_2",
+                "relay",
+                "relay-leaf",
+                "relay-session-1",
+                RuntimeBindingStatus.RESUMABLE,
+                "old-run",
+                null,
+                now,
+                now,
+                Map.of("runtimeSessionEstablished", true));
+        bindings.save(previous);
+        RouteSignalApplicationService routeService = runtimeRouteService();
+        AtomicInteger relayCalls = new AtomicInteger();
+        AgentRuntime relay = new AgentRuntime() {
+            @Override
+            public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                relayCalls.incrementAndGet();
+                return Flux.just(MessageSnapshotEvent.of(
+                        request.runId(), request.sessionId(), "must not be called"));
+            }
+
+            @Override
+            public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        DomainAgentClient domainClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        com.huawei.it.ex.one.application.config.DomainAgentProperties properties =
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties();
+        properties.setRefusalAutoSwitchEnabled(true);
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions,
+                messages,
+                runs,
+                events,
+                routeService,
+                domainClient,
+                relay,
+                bindings,
+                properties,
+                liveEventBus(),
+                new InMemoryInteractionRequestRepository(),
+                runtimeBindingCache(),
+                null,
+                documentFacade(),
+                executions);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                                "cmd1", null, null, null, null, "web", "hello", List.of(), Map.of(),
+                                "DOMAIN_AGENT", "agent-a", ChatRunMode.NEXT, null, null, null),
+                        RuntimeForwardHeaders.empty()))
+                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .verifyComplete();
+
+        awaitValue(bindings.activatedStatus, RuntimeBindingStatus.RESUMABLE,
+                "historical Relay binding restoration");
+        assertThat(relayCalls).hasValue(0);
+        assertThat(bindings.findById("relay-binding"))
+                .contains(previous);
+    }
+
+    @Test
     void automaticDomainAgentRefusalRepeatedCandidateUsesIntentResultUntilRerouteLimit() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
@@ -720,6 +806,58 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 "rejected reroute event binding cancellation");
         assertThat(routeCalls).hasValue(2);
         assertThat(domainAgentCalls).hasValue(1);
+    }
+
+    @Test
+    void guardedRelayRerouteEventRejectionCancelsBindingBeforeRuntimeSubscription() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        RejectingAutoSwitchEventStore events = new RejectingAutoSwitchEventStore();
+        TrackingRelayBindingActivationRepository bindings = new TrackingRelayBindingActivationRepository();
+        AtomicInteger relayCalls = new AtomicInteger();
+        AgentRuntime relay = new AgentRuntime() {
+            @Override
+            public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                relayCalls.incrementAndGet();
+                return Flux.just(MessageSnapshotEvent.of(
+                        request.runId(), request.sessionId(), "must not be called"));
+            }
+
+            @Override
+            public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        com.huawei.it.ex.one.application.config.DomainAgentProperties properties =
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties();
+        properties.setRefusalAutoSwitchEnabled(true);
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions,
+                messages,
+                runs,
+                events,
+                runtimeRouteService(),
+                refusingDomainAgentClient(),
+                relay,
+                bindings,
+                properties);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                                "cmd1", null, null, null, null, "web", "hello", List.of(), Map.of(),
+                                "DOMAIN_AGENT", "agent-a", ChatRunMode.NEXT, null, null, null),
+                        RuntimeForwardHeaders.empty()))
+                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .verifyComplete();
+
+        awaitValue(bindings.activatedStatus, RuntimeBindingStatus.CANCELLED,
+                "rejected Relay reroute event binding cancellation");
+        assertThat(relayCalls).hasValue(0);
+        assertThat(bindings.bindingsForProvider("relay"))
+                .singleElement()
+                .satisfies(binding -> assertThat(binding.status())
+                        .isEqualTo(RuntimeBindingStatus.CANCELLED));
     }
 
     @Test
@@ -1440,7 +1578,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
     void replacementResolvedRouteFailureDoesNotStartNewDomainAgent() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
-        FailingResolvedRouteRunRepository runs = new FailingResolvedRouteRunRepository();
+        FailingResolvedRouteRunRepository runs = new FailingResolvedRouteRunRepository(2);
         InMemoryEventStore events = new InMemoryEventStore();
         MultiBindingRuntimeBindingRepository bindings = new MultiBindingRuntimeBindingRepository();
         AtomicInteger agentACalls = new AtomicInteger();

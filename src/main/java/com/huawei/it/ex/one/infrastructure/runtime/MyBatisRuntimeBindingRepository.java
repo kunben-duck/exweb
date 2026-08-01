@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.infrastructure.runtime;
 
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 
@@ -90,9 +91,55 @@ public class MyBatisRuntimeBindingRepository implements RuntimeBindingRepository
 
     @Override
     @Transactional(timeoutString =
+            "${financeex.runtime-binding.interaction-resume-transaction-timeout-seconds:2}")
+    public Optional<RuntimeBinding> resumeInteractionWithExecutionGuard(
+            RuntimeBinding binding,
+            String expectedLastRunId,
+            RunExecutionClaim claim) {
+        if (binding == null || expectedLastRunId == null || expectedLastRunId.isBlank() || claim == null) {
+            return Optional.empty();
+        }
+        RuntimeBindingRow row = toRow(binding);
+        Integer executionLocked = mapper.lockInteractionResumeExecution(row, claim);
+        if (executionLocked == null || executionLocked != 1) {
+            return Optional.empty();
+        }
+        return mapper.updateInteractionResume(row, expectedLastRunId) == 1
+                ? Optional.of(binding)
+                : Optional.empty();
+    }
+
+    @Override
+    @Transactional(timeoutString =
+            "${financeex.runtime-binding.interaction-resume-transaction-timeout-seconds:2}")
+    public boolean restoreInteractionResume(String bindingId, String continueRunId, String sourceRunId) {
+        return mapper.restoreInteractionResume(bindingId, continueRunId, sourceRunId) == 1;
+    }
+
+    @Override
+    @Transactional(timeoutString =
+            "${financeex.domain-agent.binding-compensation-transaction-timeout-seconds:2}")
+    public boolean restoreUnstartedForRun(RuntimeBinding previousBinding, String currentRunId) {
+        if (previousBinding == null || currentRunId == null || currentRunId.isBlank()) {
+            return false;
+        }
+        return mapper.restoreUnstartedForRun(toRow(previousBinding), currentRunId) == 1;
+    }
+
+    @Override
+    @Transactional(timeoutString =
             "${financeex.domain-agent.binding-compensation-transaction-timeout-seconds:2}")
     public boolean cancelActiveForRun(String bindingId, String runId) {
         return mapper.cancelActiveForRun(bindingId, runId) == 1;
+    }
+
+    @Override
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public boolean cancelActiveForInteraction(
+            RuntimeBinding binding,
+            String sourceRunId,
+            String continueRunId) {
+        return mapper.cancelActiveForInteraction(toRow(binding), sourceRunId, continueRunId) == 1;
     }
 
     private RuntimeBindingRow toRow(RuntimeBinding binding) {

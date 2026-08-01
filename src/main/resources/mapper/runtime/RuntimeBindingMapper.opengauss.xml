@@ -55,6 +55,93 @@
     </update>
 
     <!--
+      Interaction run 在刷新 Relay Binding 前锁定 run/execution，确保 owner 和 fencing token 在本事务内不漂移。
+      入参: row 提供 tenant/user/session 可信归属，claim 提供 runId/ownerInstanceId/fencingToken。
+    -->
+    <select id="lockInteractionResumeExecution" resultType="java.lang.Integer">
+        SELECT 1
+        FROM fin_ex_chat_run_t r
+        JOIN fin_ex_chat_session_t s
+          ON s.id = r.session_id
+         AND s.tenant_id = r.tenant_id
+         AND s.user_id = r.user_id
+        JOIN fin_ex_chat_run_execution_t e
+          ON e.run_id = r.id
+         AND e.tenant_id = r.tenant_id
+         AND e.user_id = r.user_id
+         AND e.session_id = r.session_id
+        WHERE r.id = #{claim.runId}
+          AND r.tenant_id = #{row.tenantId}
+          AND r.user_id = #{row.userId}
+          AND r.session_id = #{row.chatSessionId}
+          AND r.status = 'RUNNING'
+          AND e.owner_instance_id = #{claim.ownerInstanceId}
+          AND e.fencing_token = #{claim.fencingToken}
+          AND e.execution_status = 'RUNNING'
+        FOR SHARE OF r
+        FOR SHARE OF e
+    </select>
+
+    <!--
+      只刷新仍由 source run 持有的 ACTIVE Relay Binding；不创建新 Binding，也不改变 Relay session。
+      入参: row 提供 Binding 主键、可信归属和待刷新状态，expectedLastRunId 为等待态来源 run 标识。
+    -->
+    <update id="updateInteractionResume">
+        UPDATE fin_ex_runtime_binding_t
+        SET leaf_message_id = #{row.leafMessageId},
+            runtime_session_id = #{row.runtimeSessionId},
+            status = 'ACTIVE',
+            last_run_id = #{row.lastRunId},
+            expires_at = #{row.expiresAt},
+            metadata_json = #{row.metadataJson},
+            updated_at = #{row.updatedAt}
+        WHERE id = #{row.id}
+          AND tenant_id = #{row.tenantId}
+          AND user_id = #{row.userId}
+          AND chat_session_id = #{row.chatSessionId}
+          AND provider = 'relay'
+          AND status = 'ACTIVE'
+          AND last_run_id = #{expectedLastRunId}
+    </update>
+
+    <!--
+      run-B 尚未订阅 Relay 时只恢复 last_run_id，保留真实 runtimeSessionId 和 ACTIVE 等待状态。
+      入参: bindingId 为绑定主键，continueRunId 为 run-B，sourceRunId 为等待态来源 run-A。
+    -->
+    <update id="restoreInteractionResume">
+        UPDATE fin_ex_runtime_binding_t
+        SET last_run_id = #{sourceRunId},
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = #{bindingId}
+          AND provider = 'relay'
+          AND status = 'ACTIVE'
+          AND last_run_id = #{continueRunId}
+    </update>
+
+    <!--
+      普通路由在 Runtime 订阅前终止时，将复用 Binding 条件恢复为激活前完整快照。
+      当前记录必须仍为 ACTIVE 且由 currentRunId 持有，防止迟到补偿覆盖后续 run。
+      入参: row 为激活前快照，currentRunId 为本轮尚未启动 Runtime 的 run 标识。
+    -->
+    <update id="restoreUnstartedForRun">
+        UPDATE fin_ex_runtime_binding_t
+        SET leaf_message_id = #{row.leafMessageId},
+            runtime_session_id = #{row.runtimeSessionId},
+            status = #{row.status},
+            last_run_id = #{row.lastRunId},
+            expires_at = #{row.expiresAt},
+            metadata_json = #{row.metadataJson},
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = #{row.id}
+          AND tenant_id = #{row.tenantId}
+          AND user_id = #{row.userId}
+          AND chat_session_id = #{row.chatSessionId}
+          AND provider = #{row.provider}
+          AND status = 'ACTIVE'
+          AND last_run_id = #{currentRunId}
+    </update>
+
+    <!--
       拒答重路由在 Runtime 订阅前被 stop 时，条件取消本轮刚创建的 ACTIVE binding。
       bindingId、lastRunId 和 ACTIVE 状态必须同时匹配，避免迟到补偿覆盖后续 run 已刷新的绑定。
       入参: bindingId 为待补偿绑定主键，runId 为创建该绑定的拒答重路由 run 标识。
@@ -66,6 +153,28 @@
         WHERE id = #{bindingId}
           AND last_run_id = #{runId}
           AND status = 'ACTIVE'
+    </update>
+
+    <!--
+      等待态 stop 仅取消 Interaction 引用、归属匹配且仍由 source/continue run 持有的 ACTIVE binding。
+      RESUMABLE Relay binding 和已经被后续 run 刷新的 binding 均不会被覆盖。
+      入参: row 提供 Binding 主键和可信归属，sourceRunId/continueRunId 限定当前等待链。
+    -->
+    <update id="cancelActiveForInteraction">
+        UPDATE fin_ex_runtime_binding_t
+        SET status = 'CANCELLED',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = #{row.id}
+          AND tenant_id = #{row.tenantId}
+          AND user_id = #{row.userId}
+          AND chat_session_id = #{row.chatSessionId}
+          AND status = 'ACTIVE'
+          AND (
+                last_run_id = #{sourceRunId}
+                <if test="continueRunId != null and continueRunId != ''">
+                  OR last_run_id = #{continueRunId}
+                </if>
+          )
     </update>
 
     <!--

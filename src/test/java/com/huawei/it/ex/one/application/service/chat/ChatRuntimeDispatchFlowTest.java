@@ -123,6 +123,59 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
     @Test
+    void ownerLossAfterDirectBindingCreationCancelsUnstartedBinding() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        InMemoryExecutionRepository executions = new InMemoryExecutionRepository();
+        OwnerRejectingBindingActivationRepository bindings =
+                new OwnerRejectingBindingActivationRepository(executions, "domain-agent");
+        AtomicInteger domainAgentCalls = new AtomicInteger();
+        DomainAgentClient domainClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                domainAgentCalls.incrementAndGet();
+                return Flux.just(MessageDeltaEvent.of(
+                        request.runId(), request.sessionId(), "must not be called"));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions,
+                messages,
+                runs,
+                events,
+                runtimeRouteService(),
+                domainClient,
+                noopRuntime(),
+                bindings,
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties(),
+                liveEventBus(),
+                new InMemoryInteractionRequestRepository(),
+                runtimeBindingCache(),
+                null,
+                documentFacade(),
+                executions);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                                "cmd1", null, null, null, null, "web", "hello", List.of(), Map.of(),
+                                "DOMAIN_AGENT", "agent-a", ChatRunMode.NEXT, null, null, null),
+                        RuntimeForwardHeaders.empty()))
+                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .verifyComplete();
+
+        awaitValue(bindings.activatedStatus, RuntimeBindingStatus.CANCELLED,
+                "unstarted direct binding cancellation");
+        assertThat(domainAgentCalls).hasValue(0);
+    }
+
+    @Test
     void explicitDomainAgentTargetRoutesAndBindsDomainAgent() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();

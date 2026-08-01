@@ -172,6 +172,21 @@ public class ChatInteractionApplicationService {
     }
 
     /**
+     * 用户主动 stop continuation run 时取消其 Interaction，不再恢复为 WAITING。
+     */
+    public int cancelRespondingForRun(String tenantId, String userId, String interactionId,
+                                      String continueRunId, Instant cancelledAt) {
+        if (tenantId == null || tenantId.isBlank() || userId == null || userId.isBlank()
+                || interactionId == null || interactionId.isBlank()
+                || continueRunId == null || continueRunId.isBlank()) {
+            return 0;
+        }
+        return repository.cancelRespondingForRun(
+                tenantId, userId, interactionId, continueRunId,
+                cancelledAt == null ? Instant.now() : cancelledAt);
+    }
+
+    /**
      * 回收因进程退出或旧版本非原子终态提交而遗留的 RESPONDING claim。
      *
      * <p>候选只包含 continue run 已经 FAILED/CANCELLED 的 Interaction；每条更新仍携带

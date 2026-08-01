@@ -1,5 +1,7 @@
 package com.huawei.it.ex.one.infrastructure.runtime;
 
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
@@ -28,6 +30,48 @@ public interface RuntimeBindingMapper {
     int update(RuntimeBindingRow row);
 
     /**
+     * 锁定并校验 Interaction continuation 的 run/execution 写入权。
+     *
+     * @param row 待更新 Binding 的可信归属。
+     * @param claim 当前 execution 写入权。
+     * @return 1 表示 run/execution 仍由当前 claim 持有，否则为空。
+     */
+    Integer lockInteractionResumeExecution(@Param("row") RuntimeBindingRow row,
+                                           @Param("claim") RunExecutionClaim claim);
+
+    /**
+     * 条件刷新仍由等待态来源 run 持有的 ACTIVE Relay Binding。
+     *
+     * @param row 待刷新 Binding 的可信字段。
+     * @param expectedLastRunId 等待态来源 run 标识。
+     * @return 影响行数。
+     */
+    int updateInteractionResume(@Param("row") RuntimeBindingRow row,
+                                @Param("expectedLastRunId") String expectedLastRunId);
+
+    /**
+     * run-B 未启动 Runtime 时条件恢复等待态来源 run。
+     *
+     * @param bindingId RuntimeBinding 主键。
+     * @param continueRunId 尚未启动 Runtime 的 continuation run 标识。
+     * @param sourceRunId 等待态来源 run 标识。
+     * @return 影响行数。
+     */
+    int restoreInteractionResume(@Param("bindingId") String bindingId,
+                                 @Param("continueRunId") String continueRunId,
+                                 @Param("sourceRunId") String sourceRunId);
+
+    /**
+     * Runtime 尚未订阅时条件恢复激活前的 Binding 快照。
+     *
+     * @param row 激活前的完整 Binding 快照。
+     * @param currentRunId 尚未启动 Runtime 的当前 run 标识。
+     * @return 影响行数。
+     */
+    int restoreUnstartedForRun(@Param("row") RuntimeBindingRow row,
+                               @Param("currentRunId") String currentRunId);
+
+    /**
      * 条件取消仍由指定 run 持有的 ACTIVE RuntimeBinding。
      *
      * @param bindingId RuntimeBinding 主键。
@@ -36,6 +80,18 @@ public interface RuntimeBindingMapper {
      */
     int cancelActiveForRun(@Param("bindingId") String bindingId,
                            @Param("runId") String runId);
+
+    /**
+     * 条件取消 Interaction 引用且仍由来源或 continuation run 持有的 ACTIVE binding。
+     *
+     * @param row Binding 主键及可信归属字段。
+     * @param sourceRunId 等待态来源 run 标识。
+     * @param continueRunId 当前 continuation run 标识，可为空。
+     * @return 影响行数。
+     */
+    int cancelActiveForInteraction(@Param("row") RuntimeBindingRow row,
+                                   @Param("sourceRunId") String sourceRunId,
+                                   @Param("continueRunId") String continueRunId);
 
     /**
      * 按主键查询 RuntimeBinding。

@@ -883,7 +883,7 @@ stop 是 REST 生命周期操作，不是 WebSocket command：
 POST /v1/chat/runs/{runId}/stop
 ```
 
-服务端执行顺序如下：
+运行态 run 的执行顺序如下：
 
 1. 校验 run 归属。首次 stop 通过带 10 秒事务超时的条件更新把 `RUNNING` 改为 `CANCELLING`；对已经处于
    `CANCELLING` 的 run 直接进入幂等重试。
@@ -904,6 +904,18 @@ POST /v1/chat/runs/{runId}/stop
 
 前端调用 stop 后继续等待当前通道中的 `run.cancelled`。如果连接已断开，使用 stop 前最后消费的 sequence 调用
 Event Resume。stop HTTP 响应中的 `latestSeq` 只能用于诊断，不能直接宣告当前页面已经消费到该位置。
+
+当请求的 run 已经是 `WAITING_USER` 时，runId 作为 source run-A 定位键。服务端在同一个 10 秒短事务中按
+`session -> active continuation run -> Interaction -> RuntimeBinding` 的顺序加锁或条件更新：取消仍为
+`WAITING/RESPONDING` 的 Interaction，将已创建的 run-B 标记为 `CANCELLING`，取消 Interaction 精确引用且仍由
+run-A/run-B 持有的 ACTIVE Binding，并折叠对应澄清上下文。run-A 保留 `WAITING_USER`，不新增 `run.cancelled`
+事件。事务提交后再 best-effort 调用真实下游取消；Relay 可用保存的真实 runtimeSessionId 建立临时
+`RESUME` 连接发送 `stop_all_agents`，DomainAgent 调用现有 cancel 接口。下游失败不恢复 Interaction 或 Binding。
+
+`stream-status.waitingSourceRunId` 是等待态 stop 的唯一前端定位值。用户回答与 stop 竞争同一 Interaction CAS：stop
+先成功时 continuation admission 的数据库 claim 校验会拒绝创建 run-B；run-B 先创建时 stop 会转而停止 run-B。
+用户主动停止的 continuation 最终由本机或 watchdog 闭合为 `run.cancelled` 时，Interaction 保持 `CANCELLED`；只有
+普通执行失败和首事件超时等非用户 stop 场景才恢复为 `WAITING`。
 
 ### 12.7 多浏览器并发观看
 
@@ -949,6 +961,45 @@ run-A 在 `run.waiting_user` 后已经终止，不会重新打开。用户选择
 后端不注册自动选择定时任务，也不持久化 Cookie 或入口 metadata。没有在线前端时 Interaction 保持
 WAITING；重新打开会话后，前端根据 stream-status 中已经到期的 `autoSelectAt` 立即提交代选。
 
+### 12.9 Relay 问卷的 run-A/run-B 恢复
+
+Relay 问卷同样采用两个 run，但不重新执行 Intent：
+
+```text
+run-A: Relay NEW/RESUME -> approval-request -> run.waiting_user
+run-B: Relay RESUME -> session-ready -> approval-response -> remaining events -> terminal
+```
+
+run-A 终态事务原子保存问卷卡片、assistant parts、WAITING Interaction 和 ACTIVE Relay Binding。Binding
+保留 Relay 返回的真实 `runtimeSessionId` 以及 session-established 标记；物理 WebSocket 在 run-A 结束后关闭。
+run-B 创建后，在同一短事务内校验 execution owner/fencing，并仅刷新仍由 run-A 持有的同一个 ACTIVE
+Binding。provider、tenant、user、session、bindingId、runtimeSessionId 和 approvalId 任一不匹配时，不发送
+Relay 请求。刷新 Binding 后，服务端还必须在调用 Relay 前通过 run、归属、execution owner 和 fencing token
+条件更新持久化 run-B 的最终 Runtime 路由。该更新与 Binding 刷新、未发送补偿均复用 `2s` 事务超时；更新
+失败时不输出回答确认事件、不建立 Relay 连接，并条件恢复 Binding 的 `lastRunId`。
+
+Relay 续接失败按 `approval-response` 是否已经进入 WebSocket outbound 分阶段收口：
+
+- config 握手、`session-ready` 等发送前失败时，Binding 从 run-B 条件恢复到 run-A，run-B 记为 `FAILED`，
+  Interaction 从 `RESPONDING` 恢复为 `WAITING`，前端可使用同一个 interactionId 再次提交。
+- `approval-response` 进入 outbound 后发生断连、超时或协议失败时，Relay 是否已处理答案不可判定。服务端不
+  自动重发，而是在 run-B 的失败终态事务中取消 Interaction，并条件取消仍由 run-B 持有的 ACTIVE Binding；
+  前端需要发起新的 `NEXT`。
+- Binding 恢复失败或 `RUNTIME_SESSION_UNAVAILABLE` 不暴露可重试状态，同样取消 Interaction 和关联 Binding。
+
+上述发送阶段状态只在当前请求内存中传递，不进入 API、Event、Redis 或数据库。Binding 的恢复或取消均携带
+run 条件，迟到补偿不能覆盖已经被后续 run 更新的 Binding。
+
+两个 run 的恢复规则与歧义路由一致：历史消息恢复 run-A 的问卷卡片，run-B 的 run Resume 只补发并 tail
+run-B 事件，最终回答和全部 parts 更新到原 `assistantMessageId`。前端不能用 run-B Resume 期待获得 run-A
+事件。需要同时恢复时，先查询 `/messages`，再查询 `stream-status` 并恢复当前 active run。
+
+`autoActionAt/autoActionTimeoutMs/autoActionType=IGNORE_QUESTIONNAIRE` 仅是前端倒计时事实。配置为 `0s`
+时字段为空并永久等待；配置为正数时，在线页面到期后提交
+`CONTINUE_INTERACTION + approved=false + questionnaireAnswers.ignore=true`。后端没有定时任务，无在线页面时
+Interaction 继续 WAITING，页面恢复后根据绝对截止时间立即补交。多页签仍由 Interaction CAS 保证最多一个
+run-B。
+
 ## 13. stream-status 的作用
 
 ```http
@@ -966,6 +1017,7 @@ cancellable
 waitingUserInput / interactionId / interactionType
 assistantMessageId / expiresAt
 autoSelectAt / autoSelectTimeoutMs
+autoActionAt / autoActionTimeoutMs / autoActionType
 bindingProvider / bindingTargetType / bindingTargetId
 bindingIntentCode / bindingIntentName / bindingRouteSource / bindingUpdatedAt
 bindingAgentMode
@@ -984,6 +1036,9 @@ Event Resume 的事件拼接。详细规则参见 [AgentMode 仅记录技术设�
 `autoSelectAt/autoSelectTimeoutMs` 只在当前 WAITING Interaction 为可自动选择的
 `AMBIGUOUS_ROUTE` 时返回。它们是等待状态快照，不是新的事件游标；前端不能用其替代
 `activeRunFirstSeq/sequence`。
+
+`autoActionAt/autoActionTimeoutMs/autoActionType` 当前只用于 Relay 问卷等待。它们同样不是事件游标；
+前端必须先确认 `waitingUserInput=true` 且 `interactionId` 仍匹配，再触发忽略请求。
 
 ## 14. 故障与降级矩阵
 
@@ -1098,6 +1153,8 @@ assistant 汇总连续和 execution fencing 正确，因此当前不能视为实
 | `financeex.chat-run.first-event-timeout` | `30s` | `/runs` 首持久化事件等待上限 |
 | `financeex.chat-run.external-terminal-transaction-timeout-seconds` | `10` | 准入/栅栏/终态短事务上限 |
 | `financeex.intent.ambiguous-route-wait-timeout` | `30s` | 服务端生成前端代选截止时间的等待时长 |
+| `financeex.relay.questionnaire-wait-timeout` | `0s` | Relay 问卷前端忽略截止时间；`0s` 表示永久等待 |
+| `financeex.runtime-binding.interaction-resume-transaction-timeout-seconds` | `2` | Relay 问卷续接 Binding owner/fencing 刷新与补偿事务超时 |
 
 ### 16.2 事件流水线
 

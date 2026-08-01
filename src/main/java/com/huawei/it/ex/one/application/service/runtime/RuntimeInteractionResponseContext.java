@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.service.runtime;
 
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDispatchState;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatPayloadMaps;
@@ -21,12 +22,24 @@ public record RuntimeInteractionResponseContext(
         String approvalId,
         Map<String, Object> responsePayload,
         RuntimeForwardHeaders forwardHeaders,
-        TraceContext traceContext
+        TraceContext traceContext,
+        RuntimeInteractionDispatchState dispatchState
 ) {
     public RuntimeInteractionResponseContext {
         responsePayload = ChatPayloadMaps.immutableCopy(responsePayload);
         forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
         traceContext = traceContext == null ? TraceContext.empty() : traceContext;
+        dispatchState = dispatchState == null ? RuntimeInteractionDispatchState.untracked() : dispatchState;
+    }
+
+    public RuntimeInteractionResponseContext(UserContext user, String sessionId, String runId,
+                                             String runtimeProvider, String runtimeSessionId,
+                                             String interactionId, String interactionType, String approvalId,
+                                             Map<String, Object> responsePayload,
+                                             RuntimeForwardHeaders forwardHeaders,
+                                             TraceContext traceContext) {
+        this(user, sessionId, runId, runtimeProvider, runtimeSessionId, interactionId, interactionType, approvalId,
+                responsePayload, forwardHeaders, traceContext, RuntimeInteractionDispatchState.untracked());
     }
 
     public RuntimeInteractionResponseContext(UserContext user, String sessionId, String runId,
@@ -35,6 +48,6 @@ public record RuntimeInteractionResponseContext(
                                              Map<String, Object> responsePayload,
                                              RuntimeForwardHeaders forwardHeaders) {
         this(user, sessionId, runId, runtimeProvider, runtimeSessionId, interactionId, interactionType, approvalId,
-                responsePayload, forwardHeaders, TraceContext.empty());
+                responsePayload, forwardHeaders, TraceContext.empty(), RuntimeInteractionDispatchState.untracked());
     }
 }

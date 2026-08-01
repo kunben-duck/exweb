@@ -13,6 +13,11 @@ import java.time.Instant;
  * @param messageReady 是否已有可反馈的 assistant 消息。
  * @param assistantMessageId stop 后可见的 assistant 消息 ID；没有可保存内容时为空。
  * @param feedbackTargetMessageId 前端点赞/点踩应使用的消息 ID；当前等同 assistantMessageId。
+ * @param waitingUserInput stop 后当前请求是否仍在等待用户输入。
+ * @param interactionId 本次等待态 stop 定位到的 Interaction ID。
+ * @param interactionStatus stop 后的 Interaction 状态。
+ * @param interactionCancelledAt Interaction 取消时间。
+ * @param effectiveRunId 请求历史 run-A 时实际被停止的 continuation run-B。
  */
 public record ChatRunStopResult(
         String runId,
@@ -22,10 +27,34 @@ public record ChatRunStopResult(
         Instant stoppedAt,
         boolean messageReady,
         String assistantMessageId,
-        String feedbackTargetMessageId
+        String feedbackTargetMessageId,
+        boolean waitingUserInput,
+        String interactionId,
+        String interactionStatus,
+        Instant interactionCancelledAt,
+        String effectiveRunId
 ) {
+    public ChatRunStopResult(String runId, String sessionId, ChatRunStatus status,
+                             long latestSeq, Instant stoppedAt, boolean messageReady,
+                             String assistantMessageId, String feedbackTargetMessageId) {
+        this(runId, sessionId, status, latestSeq, stoppedAt, messageReady,
+                assistantMessageId, feedbackTargetMessageId, false, null, null, null, null);
+    }
+
     public ChatRunStopResult(String runId, String sessionId, ChatRunStatus status,
                              long latestSeq, Instant stoppedAt) {
         this(runId, sessionId, status, latestSeq, stoppedAt, false, null, null);
+    }
+
+    /** 使用请求中的 source run 保持兼容，同时附加等待态取消结果。 */
+    public ChatRunStopResult withWaitingInteraction(
+            String nextInteractionId,
+            String nextInteractionStatus,
+            Instant nextInteractionCancelledAt,
+            String nextEffectiveRunId) {
+        return new ChatRunStopResult(
+                runId, sessionId, status, latestSeq, stoppedAt, messageReady,
+                assistantMessageId, feedbackTargetMessageId, false,
+                nextInteractionId, nextInteractionStatus, nextInteractionCancelledAt, nextEffectiveRunId);
     }
 }

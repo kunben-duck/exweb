@@ -5,6 +5,11 @@
 流式事件的事实源、批量落库、Redis 跨实例扇出、WebSocket 队列及跨浏览器恢复原理，参见
 [Chat 流式输出、断点续传与跨浏览器恢复设计](architecture/chat-streaming-and-resume.md)。
 
+全部公开接口的 OpenAPI 3.0.3 定义见
+[FinanceEX ChatService OpenAPI](openapi/financeex-chatservice-v1.yaml)。Swagger 文档中的命名 examples
+覆盖普通请求、全部 Interaction WAIT、前端触发超时动作、页面恢复和等待态 stop；本联调文档继续说明
+前端状态组织与调用顺序。
+
 本文档以 FinanceEXChatService 的正式接口为准，采用系统自身的设计术语描述接口边界、调用顺序和错误处理；下游 Runtime、domain-agent 或浏览器实现细节只作为内部 adapter 行为说明，不作为前端协议依赖。
 
 ## 基础约定
@@ -146,7 +151,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `firstSeq` | `POST /v1/chat/runs` | 新建 run 后首次 WebSocket subscribe 的 `afterSeq` | 创建 run 后立即保存；通常 `subscribe.afterSeq=firstSeq` |
 | `activeRunFirstSeq` | `stream-status` | 新页签、新浏览器、跨电脑恢复 active run | 恢复 active run 时用 `activeRunFirstSeq - 1`，不要直接用 `latestSeq` |
 | `interactionId` | `run.waiting_user`、`stream-status` | `CONTINUE_INTERACTION` 续接 | 只对当前等待请求有效；多页签提交通过同一 Interaction CAS 去重 |
-| `assistantMessageId` | `run.waiting_user`、`stream-status`、Interaction 响应事件 | 定位等待卡片及跨 run 合并的 assistant | `AMBIGUOUS_ROUTE` 的 run-A/run-B 复用该消息 ID |
+| `assistantMessageId` | `run.waiting_user`、`stream-status`、Interaction 响应事件 | 定位等待卡片及跨 run 合并的 assistant | `AMBIGUOUS_ROUTE` 和 Relay 问卷的 run-A/run-B 复用该消息 ID |
 | `messageId` | 历史消息接口、run completed 后的 assistant 消息 | variants、path、branch、feedback、编辑/重新生成入参 | 作为消息树节点 ID 保存到消息状态 |
 | `leafMessageId` | 历史消息、variants、会话 `currentLeafMessageId` | `GET /messages?leafMessageId=...`、`POST /path` | 切换历史版本时保存当前选中的 leaf |
 | `documentId` | 文档上传或文档列表 | `attachments[].documentId`、文档详情/状态/下载/删除 | 文档库资产 ID；只有 `AVAILABLE` 文档可作为附件 |
@@ -167,6 +172,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 重新生成 assistant | 用户点击重新生成 -> `POST /v1/chat/runs(runMode=REGENERATE_ASSISTANT, regeneratedMessageId)` -> 订阅新 run -> `run.completed` 后重新 `GET /v1/chat/sessions/{sessionId}/messages` | `regeneratedMessageId`、原父 user messageId、新 assistant messageId、`versionInfo` | 复用原 user 节点，新 assistant sibling 进入旧 assistant 的 `versionInfo.variants` |
 | 普通意图澄清等待 | 收到 `run.waiting_user(interactionType=INTENT_CLARIFICATION)` 且 `clarificationType` 不是 `AMBIGUOUS_ROUTE` -> 展示澄清 assistant -> `POST /v1/chat/runs(runMode=CONTINUE_INTERACTION, interactionId)` 提交答案、附件和本轮 metadata -> 订阅新 topic | `interactionId`、`assistantMessageId`、新 `runId/streamTopicId`、`expiresAt` | 使用 `NEW_TURN`：每次提交生成新的 user 回答节点，下一轮澄清或最终 Agent 回答生成新的 assistant 节点；后端以 `routeTrigger=clarify_answer` 继续意图服务 |
 | 歧义路由候选等待 | 收到 `run.waiting_user(clarificationType=AMBIGUOUS_ROUTE)` -> 展示 `candidateIntents/actions` -> 按 `autoSelectAt` 建立前端定时器 -> 指定候选、到期代选或提交“其他” -> 订阅 run-B topic | run-A `assistantMessageId`、`interactionId`、`autoSelectAt`、run-B `runId/streamTopicId` | 使用 `REUSE_ASSISTANT`：run-A 和 run-B 是不同 run，但复用同一 user/assistant；指定候选或代选跳过 Intent，其他文本/附件重新调用 Intent；页面恢复时通过 stream-status 重建定时器 |
+| Relay 问卷等待 | 收到 `run.waiting_user(interactionType=AGENT_CLARIFICATION)` -> 从历史 `AGENT_CLARIFICATION_REQUEST` part 渲染问卷 -> 手动提交答案，或在 `autoActionAt` 到达后提交忽略 -> 订阅 run-B topic | run-A `assistantMessageId`、`interactionId`、`autoActionAt`、run-B `runId/streamTopicId` | run-A 关闭下游连接但保留 ACTIVE Relay Binding；run-B 跳过 Intent，以同一 Relay session 执行 `RESUME + approval-response`，并把结果追加到原 assistant |
 | 等待态主动直连 DomainAgent | `POST /v1/chat/runs(runMode=NEXT,targetType=DOMAIN_AGENT,targetId,message,metadata,attachments)` -> 订阅返回的 `streamTopicId` | 当前 `sessionId`、新 `runId`、所选 `targetId` | 优先于意图、Relay 和开放 Interaction；服务端原子取消该会话的 `WAITING/RESPONDING` Interaction，并把新 user 节点挂到等待 assistant 后。仅使用本轮请求参数，不合并旧澄清上下文；真正存在 `RUNNING/CANCELLING` run 时仍返回 active-run 冲突 |
 | Agent 澄清等待 | 收到 `run.waiting_user(interactionType=AGENT_CLARIFICATION)` 或刷新后 `stream-status.waitingUserInput=true` -> 展示 `/messages` 中的 `AGENT_CLARIFICATION_REQUEST` part -> `POST /v1/chat/runs(runMode=CONTINUE_INTERACTION, interactionId)` -> 订阅返回的 `streamTopicId` | `interactionId`、`assistantMessageId`、`runId`、`streamTopicId`、`expiresAt` | 续接不创建新 user 消息；用户答案会作为 `AGENT_CLARIFICATION_RESPONSE` part 追加到同一 assistant，最终 `run.completed.payload.assistantMessageId` 仍是原 assistant；超过 `expiresAt` 后提交会返回 `INTERACTION_EXPIRED` |
 | 切换历史版本 | 从当前消息 `versionInfo.variants` 取目标项 -> `GET /messages?leafMessageId={switchLeafMessageId}` 重渲染 -> 后台 `POST /path` 保存选择 | `versionInfo.currentIndex/total`、`switchLeafMessageId`、`currentLeafMessageId` | 先刷新展示路径，不创建 run，不调用 Runtime；`/path` 只负责持久化当前 leaf |
@@ -197,7 +203,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `DELETE /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto(status=DELETED)` | 删除后清理本地当前会话状态和订阅 |
 | `DELETE /chat/sessions` | Body：`sessionIds[]` | `deletedCount`、`items[]` | 批量删除成功后从列表移除这些 session |
 | `POST /v1/chat/runs` | Body：`commandId`、`sessionId`、`conversationId`、`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`interactionId`、`approved`、`scope`、`questionnaireAnswers`、`attachments[]`、`targetType`、`targetId`、`metadata` | `runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId` | 用 `streamTopicId` 订阅；用 `runId` stop/恢复/反馈 |
-| `POST /v1/chat/runs/{runId}/stop` | Path：`runId`；Header：可选 Cookie | `runId`、`sessionId`、`status`、`latestSeq`、`stoppedAt`、`messageReady`、`assistantMessageId`、`feedbackTargetMessageId` | 用 Event Resume 补齐 `run.cancelled`；有 partial assistant 时可直接拿反馈目标 |
+| `POST /v1/chat/runs/{runId}/stop` | Path：运行态传 `activeRunId`，等待态传 `waitingSourceRunId`；Header：可选 Cookie | 原有 run 字段，以及可选 `interactionId/interactionStatus/interactionCancelledAt/effectiveRunId` | 运行态用 Event Resume 补齐 `run.cancelled`；等待态不新增事件，stop 后重新查询 `stream-status` |
 | `GET /chat/sessions/{sessionId}/events/resume` | Path：`sessionId`；Query：`afterSeq` | SSE data：`ConversationTurnStreamDto` | 补会话缺失事件；`ConversationTurnStreamDto.payload.encodedItem.data` 中的 ChatEvent 更新本地 `lastSeq` |
 | `GET /chat/runs/{runId}/events/resume` | Path：`runId`；Query：`afterSeq` | SSE data：`ConversationTurnStreamDto`，active run 会持续到终态 | 新页签/跨设备恢复 active run 首选；会额外发送 heartbeat/done |
 | `GET /chat/sessions/{sessionId}/stream-status` | Path：`sessionId` | `ChatStreamStatusDto` | 判断 active run、stop 按钮、恢复起点 |
@@ -244,10 +250,10 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
 | `POST /v1/chat/runs` | 唯一任务提交入口，创建后台 run 或续接 Interaction。 | JSON body：`commandId`、`sessionId`、`conversationId`、`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`forceReroute`、`interactionId`、`interactionAction`、`approved`、`scope`、`questionnaireAnswers`、`attachments[]`、`targetType`、`targetId`、`selectedIntent`、`agentMode`、`metadata`、`appId`、`appName`，各字段是否必填见后文矩阵。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | 不传 `sessionId` 时使用 tag 自动建会话；已有会话中显式传入的 tag 必须与会话快照一致，不一致时不会创建消息或 run。tag 不进入 metadata 或任何 Agent 请求。其他 runMode 约束不变。 |
-| `POST /v1/chat/runs/{runId}/stop` | 用户点击停止回答。 | Path：`runId`。 | `ChatRunStopDto`：`runId`、`sessionId`、`status`、`latestSeq`、`stoppedAt`、`messageReady`、`assistantMessageId`、`feedbackTargetMessageId`。 | 幂等；停止语义不是关闭 WebSocket。 |
+| `POST /v1/chat/runs/{runId}/stop` | 用户停止运行中的回答，或取消当前会话的等待输入。 | Path：运行态传 `activeRunId`；等待态传 `waitingSourceRunId`。 | `ChatRunStopDto`：原有字段，以及 `waitingUserInput`、`interactionId`、`interactionStatus`、`interactionCancelledAt`、`effectiveRunId`。 | 幂等；停止语义不是关闭 WebSocket。等待态历史 run-A 不改写为 `CANCELLED`。 |
 | `GET /v1/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`；只处理 `stream-item` 中的 `encodedItem.data`。 |
 | `GET /v1/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态，并以 `done` 闭合。live source 异常时当前 tail 会结束且不会自动轮询数据库，前端应使用已处理的最大 `sequence` 重新请求。 |
-| `GET /v1/chat/sessions/{sessionId}/stream-status` | 判断是否存在 active run、是否可停止、从哪里恢复、是否等待用户澄清输入，以及当前会话绑定的 DomainAgent/Runtime 摘要。 | Path：`sessionId`。 | `ChatStreamStatusDto`：`latestSeq`、`activeRunId`、`activeStreamTopicId`、`activeRunFirstSeq`、`activeRunLastSeq`、`cancellable`、`waitingUserInput`、`interactionId`、`interactionType`、`assistantMessageId`、`expiresAt`、`autoSelectAt`、`autoSelectTimeoutMs`、`bindingProvider`、`bindingTargetType`、`bindingTargetId`、`bindingIntentCode`、`bindingIntentName`、`bindingRouteSource`、`bindingUpdatedAt`、`bindingAgentMode`。 | `latestSeq` 是服务端事实源最新位置，不是客户端已消费位置；`waitingUserInput=true` 时普通 `/v1/chat/runs` 会返回 `WAITING_USER_INPUT_REQUIRED`，但 `NEXT + targetType=DOMAIN_AGENT + targetId` 可显式放弃等待并直连。Interaction 默认 24h 过期，且必须长于歧义路由自动选择等待时间。 |
+| `GET /v1/chat/sessions/{sessionId}/stream-status` | 判断是否存在 active run、是否可停止、从哪里恢复、是否等待用户澄清输入，以及当前会话绑定的 DomainAgent/Runtime 摘要。 | Path：`sessionId`。 | `ChatStreamStatusDto`：`latestSeq`、`activeRunId`、`activeStreamTopicId`、`activeRunFirstSeq`、`activeRunLastSeq`、`cancellable`、`waitingUserInput`、`waitingSourceRunId`、`interactionId`、`interactionType`、`assistantMessageId`、`expiresAt`、`autoSelectAt`、`autoSelectTimeoutMs`、`autoActionAt`、`autoActionTimeoutMs`、`autoActionType`、`bindingProvider`、`bindingTargetType`、`bindingTargetId`、`bindingIntentCode`、`bindingIntentName`、`bindingRouteSource`、`bindingUpdatedAt`、`bindingAgentMode`。 | `latestSeq` 是服务端事实源最新位置，不是客户端已消费位置；等待态 stop 必须使用服务端返回的 `waitingSourceRunId`。Interaction 默认 24h 过期，且必须长于已配置的前端自动动作等待时间。 |
 | `POST /v1/chat/messages/{messageId}/feedback` | 用户对完整 assistant 消息点赞、点踩或切换反馈。 | Path：`messageId`；JSON body：`runId` 可选，`rating=LIKE/DISLIKE`，`reasonCode` 可选，`commentText` 可选，`metadata` 可选。 | `MessageFeedbackDto`：`feedbackId`、`messageId`、`runId`、`rating`、`status=ACTIVE`、`reasonCode`、`commentText`、`createdAt`、`updatedAt`。 | 同一用户同一消息最多一条当前反馈；重复提交表示修改当前反馈。 |
 | `DELETE /v1/chat/messages/{messageId}/feedback` | 用户取消已点赞或已点踩状态。 | Path：`messageId`；Query：`runId` 可选。 | `MessageFeedbackDto`：`status=CANCELLED`。 | 幂等；没有历史反馈时也返回取消成功。历史消息中的 `feedback` 会返回 `null`。 |
 
@@ -303,7 +309,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `POST /v1/chat/runs` 显式 DomainAgent | Body：`{"sessionId":"session_xxx","runMode":"NEXT","message":"查询支付成功率","targetType":"DOMAIN_AGENT","targetId":"skill_xxx","selectedIntent":{"intentId":"payment_success","intentName":"支付成功率"},"metadata":{}}`；`selectedIntent` 可整体省略。 |
 | `POST /v1/chat/runs` 编辑 user | Body：`{"sessionId":"session_xxx","runMode":"EDIT_USER","editedMessageId":"msg_user_old","message":"新的问题"}`。 |
 | `POST /v1/chat/runs` 重新生成 assistant | Body：`{"sessionId":"session_xxx","runMode":"REGENERATE_ASSISTANT","regeneratedMessageId":"msg_assistant_old"}`。 |
-| `POST /v1/chat/runs` 续接 Interaction | Body：`{"sessionId":"session_xxx","runMode":"CONTINUE_INTERACTION","interactionId":"interaction_xxx","questionnaireAnswers":{"问题":"答案"}}`；确认类再传 `approved=true/false`。 |
+| `POST /v1/chat/runs` 续接 Interaction | 普通澄清：`{"sessionId":"session_xxx","runMode":"CONTINUE_INTERACTION","interactionId":"interaction_xxx","questionnaireAnswers":{"问题":"答案"}}`。Relay 问卷必须使用 `{"label":{"问题":"答案"}}` 或 `{"ignore":true}`，详见后文。 |
 | `POST /v1/chat/runs/{runId}/stop` | Path：`run_xxx`；无 body。 |
 | `GET /v1/chat/sessions/{sessionId}/events/resume` | Query：`?afterSeq=12000`；首次补齐可传 `?afterSeq=0`。 |
 | `GET /v1/chat/runs/{runId}/events/resume` | Query：`?afterSeq={activeRunFirstSeq - 1}`。 |
@@ -544,6 +550,11 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 | `messageReady` | stop 后是否已经固化出可反馈的 assistant 消息。 |
 | `assistantMessageId` | `messageReady=true` 时返回，表示 partial assistant 消息 ID。 |
 | `feedbackTargetMessageId` | `messageReady=true` 时返回，前端点赞/点踩使用该 ID。 |
+| `waitingUserInput` | stop 完成后是否仍在等待输入；当前成功取消等待时固定为 `false`。 |
+| `interactionId` | 等待态 stop 实际定位到的 Interaction。普通运行态 stop 时为空。 |
+| `interactionStatus` | stop 后 Interaction 状态；成功取消时为 `CANCELLED`。 |
+| `interactionCancelledAt` | Interaction 的服务端取消时间。 |
+| `effectiveRunId` | run-A 正在切换到 continuation run-B 时，实际被停止的 run-B；否则为空。 |
 
 ### `ChatStreamStatusDto`
 
@@ -558,12 +569,16 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 | `activeRunLastSeq` | active run 最近一个已持久化事件序号。 |
 | `cancellable` | 当前 active run 是否允许调用 stop。 |
 | `waitingUserInput` | 当前会话是否停在等待用户交互输入状态。 |
+| `waitingSourceRunId` | 当前等待请求的来源 run-A；取消等待时必须将该值作为 stop 路径中的 `runId`。 |
 | `interactionId` | `waitingUserInput=true` 时返回，后续用 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 续接。 |
 | `interactionType` | 等待交互类型，例如 `INTENT_CLARIFICATION`、`AGENT_CLARIFICATION`、`ROUTE_SWITCH_CONFIRMATION`。 |
 | `assistantMessageId` | 等待卡片挂载的 assistant 消息 ID，刷新后用于定位历史消息中的 request part。 |
 | `expiresAt` | Interaction 过期时间；为空表示不过期。 |
 | `autoSelectAt` | `AMBIGUOUS_ROUTE` 前端提交代为选择的服务端截止时间；其他 Interaction 为 `null`。 |
 | `autoSelectTimeoutMs` | `AMBIGUOUS_ROUTE` 前端建议等待毫秒数；其他 Interaction 为 `null`。 |
+| `autoActionAt` | Relay 问卷前端提交自动动作的绝对截止时间；未配置时为 `null`。 |
+| `autoActionTimeoutMs` | Relay 问卷前端建议等待毫秒数；未配置时为 `null`。 |
+| `autoActionType` | 当前固定为 `IGNORE_QUESTIONNAIRE`；未配置时为 `null`。 |
 | `bindingProvider` | 当前会话绑定 provider，例如 `domain-agent` 或 `relay`。 |
 | `bindingTargetType` / `bindingTargetId` | 当前绑定目标类型和目标 ID；DomainAgent 绑定时目标 ID 通常是 DomainAgentId/skillId。 |
 | `bindingIntentCode` / `bindingIntentName` | 当前绑定对应的意图编码和名称；无意图来源时为空。 |
@@ -1171,7 +1186,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `interactionAction` | string | 否 | 仅 `AMBIGUOUS_ROUTE + CONTINUE_INTERACTION` 支持 `AUTO_SELECT`，表示立即由服务端选择最高 confidence 的有效候选；不能与 `targetType/targetId`、答案或附件同时提交 |
 | `approved` | boolean | 审批/确认类必填 | 澄清类可省略，服务端默认 true |
 | `scope` | string | 否 | 授权或确认范围，澄清类默认 `once` |
-| `questionnaireAnswers` | object | 澄清类通常必填 | 澄清问题答案；key 为服务端下发的问题文案。`INTENT_CLARIFICATION` 可用有效附件代替文本答案 |
+| `questionnaireAnswers` | object | 澄清类通常必填 | 普通意图澄清以问题文案为 key；Relay 问卷严格使用 `label` 嵌套对象或 `ignore=true`；`INTENT_CLARIFICATION` 可用有效附件代替文本答案 |
 | `attachments` | array | 否 | 文档附件引用列表；Interaction 续接中仅 `INTENT_CLARIFICATION` 支持 |
 | `targetType` | string | 否 | 显式直连目标类型；普通 run 和 `AMBIGUOUS_ROUTE` 候选选择支持 `DOMAIN_AGENT` |
 | `targetId` | string | `targetType=DOMAIN_AGENT` 必填 | 普通直连时为 DomainAgent 目标 ID；歧义路由选择时必须精确等于等待卡片中的可信候选 `skillId` |
@@ -1436,6 +1451,100 @@ user 消息正文仍为 `帮我看下这个方案`。多轮澄清按首次出现
 不接收文档 ID、URL 或完整 metadata。澄清 user 消息的历史 `attachments[]` 与普通 user 消息格式一致。
 
 单个答案直接保存答案值；多个答案按问题名稳定排序并保存为多行 `问题：答案`。文本答案和附件都为空会返回参数错误，Interaction 仍保持 `WAITING`。
+
+### Relay 问卷续接
+
+Relay 返回 `approval-request(operation_type=questionnaire)` 时，run-A 保存完整卡片和
+`AGENT_CLARIFICATION_REQUEST` part，然后以 `run.waiting_user` 结束。下游 WebSocket 随 run-A 关闭，
+但 Interaction 会保存 `runtimeBindingId/runtimeSessionId/approvalId/assistantMessageId`，对应 Relay Binding
+保持 `ACTIVE`。前端不直接连接 Relay。
+
+等待事件的关键字段如下；`financeex.relay.questionnaire-wait-timeout=0s` 时三个 `autoAction*` 字段为空：
+
+```json
+{
+  "type": "run.waiting_user",
+  "payload": {
+    "interactionType": "AGENT_CLARIFICATION",
+    "interactionId": "interaction_xxx",
+    "assistantMessageId": "msg_assistant_xxx",
+    "expiresAt": "2026-08-02T10:00:00Z",
+    "autoActionAt": "2026-08-01T10:00:30Z",
+    "autoActionTimeoutMs": 30000,
+    "autoActionType": "IGNORE_QUESTIONNAIRE"
+  }
+}
+```
+
+单选、多选和自定义文本统一放在 `questionnaireAnswers.label` 中。key 必须与卡片中的问题文本一致；
+单选值为非空字符串，多选值为非空字符串数组：
+
+```json
+{
+  "sessionId": "session_xxx",
+  "runMode": "CONTINUE_INTERACTION",
+  "interactionId": "interaction_xxx",
+  "approved": true,
+  "scope": "once",
+  "questionnaireAnswers": {
+    "label": {
+      "请选择技术方案": "方案A",
+      "请选择部署环境": ["开发环境", "测试环境"]
+    }
+  },
+  "metadata": {}
+}
+```
+
+到达 `autoActionAt` 后，前端使用同一个接口提交忽略。后端不注册定时任务；页面关闭时不会自行执行，
+再次打开后应查询 `stream-status`，若截止时间已过则立即提交：
+
+```json
+{
+  "sessionId": "session_xxx",
+  "runMode": "CONTINUE_INTERACTION",
+  "interactionId": "interaction_xxx",
+  "approved": false,
+  "scope": "once",
+  "questionnaireAnswers": {
+    "ignore": true
+  },
+  "metadata": {}
+}
+```
+
+`label` 与 `ignore` 互斥；旧扁平答案、未知问题、单选数组、多选字符串以及
+`approved=true + ignore=true` 会在 Interaction claim 前返回参数错误，原 Interaction 仍为 `WAITING`。
+续接请求不支持附件。Cookie 只使用本次 HTTP 请求头，不得写入 metadata。
+
+提交成功返回新的 `ChatRunStartDto`：
+
+```json
+{
+  "runId": "run_B",
+  "sessionId": "session_xxx",
+  "firstSeq": 4201,
+  "createdAt": "2026-08-01T10:00:31Z",
+  "streamTopicId": "chat-run-run_B"
+}
+```
+
+前端使用 `firstSeq` 订阅 run-B。ChatService 不调用 IntentAgent，而是校验 run-A 保存的 ACTIVE Relay
+Binding 和 execution owner/fencing，建立新的下游短连接，发送 `config(sessionMode=resume)`；收到
+`session-ready` 后再发送严格的 `approval-response`。run-A 与 run-B 的事件按 runId 分开，但复用同一个
+assistant。刷新页面时先用 `/messages` 恢复 run-A 卡片，再通过 `stream-status.activeRunId` 和 run 级 Resume
+追加 run-B；最终 `run.completed` 后重新读取历史即可得到同一 assistant 的完整 parts 和正文。
+
+run-B 启动 Relay 前会先以 execution owner/fencing 条件持久化本轮最终 Runtime 路由。路由写入失败或
+`approval-response` 发送前发生 config 握手、`session-ready` 等错误时，Relay 不会收到答案；run-B 返回
+`run.failed`，Interaction 恢复为 `WAITING`，前端可以保留问卷卡片并使用同一 `interactionId` 重试。
+如果答案已进入 WebSocket outbound 后才断连、超时或协议失败，Relay 处理结果无法判定，后端会将
+Interaction 和仍由 run-B 持有的 ACTIVE Binding 取消。此时前端应禁用原卡片并发起新的 `NEXT`，不得自动
+重发同一个 `approval_id`。`RUNTIME_SESSION_UNAVAILABLE` 以及 Binding 条件恢复失败也按不可重试处理。
+
+多页签提交竞争同一 Interaction CAS。收到 `INTERACTION_ALREADY_HANDLED` 的页签应重新查询
+`stream-status`；若存在 active run，使用 `activeRunFirstSeq - 1` 打开 run 级 Resume。run-B 再次收到问卷时，
+后端会保存新的 WAITING Interaction，并重复相同流程。
 
 ### AMBIGUOUS_ROUTE 候选选择
 
@@ -2428,11 +2537,34 @@ curl -X POST http://localhost:8080/v1/chat/runs/run_xxx/stop
 
 stop 是 REST 生命周期接口，不是 WebSocket command。重复 stop 是幂等的：如果 run 已经 `COMPLETED`、`FAILED` 或 `CANCELLED`，会返回当前状态，不再追加新的取消事件。
 
+前端必须先读取 `stream-status` 决定 stop 目标：存在 `activeRunId` 时停止该运行态 run；不存在 active run 且
+`waitingUserInput=true` 时，使用 `waitingSourceRunId` 取消等待。等待态 stop 不追加新的 ChatEvent，也不把历史
+run-A 从 `WAITING_USER` 改成 `CANCELLED`；它会把 Interaction 改为 `CANCELLED`，使同一会话可以立即提交新的
+`NEXT`。如果 Interaction 已经创建 run-B，响应的 `effectiveRunId` 表示实际被停止的 run-B。stop 完成后应重新查询
+`stream-status` 并刷新历史消息，保留原等待卡片但禁用其提交操作。
+
+等待态响应示例：
+
+```json
+{
+  "runId": "run-A",
+  "sessionId": "session_xxx",
+  "status": "WAITING_USER",
+  "latestSeq": 12006,
+  "stoppedAt": "2026-08-01T10:00:00Z",
+  "waitingUserInput": false,
+  "interactionId": "interaction_xxx",
+  "interactionStatus": "CANCELLED",
+  "interactionCancelledAt": "2026-08-01T10:00:00Z",
+  "effectiveRunId": "run-B"
+}
+```
+
 用户主动 stop 时，如果该 run 已经有 `message.delta`、`message.snapshot` 或用户可见的 `runtime.progress/runtime.tool/runtime.thinking/runtime.reference/runtime.card` 成功落库，后端会把截至 stop 时的内容保存为一条 assistant 历史消息。该消息的 `metadataJson` 会包含 `partial=true`、`finishReason=USER_STOP`、`runStatus=CANCELLED`。如果 stop 时只有 trace、domain-agent session 等内部 `runtime.metadata`，则不会创建空 assistant 消息；这些内部事件仍可通过 Event Resume 或事件表排障。
 
 前端点击停止后，不应把关闭 WebSocket 当作取消语义。推荐流程是：保存当前本地 `lastSeq`，调用 stop，随后继续通过 WebSocket 等待 `run.cancelled`；如果页面已经断线或没有收到终态事件，则用 stop 前保存的 `lastSeq` 调 Event Resume 补齐 `run.cancelled`。当 stop 前已有正文或用户可见 parts 时，`run.cancelled.payload.messageReady=true`，并携带 `assistantMessageId/feedbackTargetMessageId`；HTTP stop 响应也会返回同样的反馈目标作为兜底。stop 响应里的 `latestSeq` 是服务端事实源位置，不代表当前页签已经消费到该事件。
 
-stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可信 Relay WebSocket 或 DomainAgent cancel adapter，用于下游企业权限校验。Relay 优先在本机 active WS 上发送 `{"type":"stop_all_agents"}`。如果 stop 请求落到其他实例或本机连接已清理，后端会新建临时 Relay WS，使用 run 中已回填的 Relay `runtimeSessionId` 发送 `config(sessionMode=resume, supports_incremental_recovery=true)`，收到 `session-ready` 后再发送 `stop_all_agents`，然后等待 `session-state=paused` 或 ack 超时后释放临时连接。下一轮提问会重新建立 Relay WS，并通过已有 runtime session 发送 `sessionMode=resume`。即使下游 cancel 失败，本服务仍以本地 `run.cancelled` 终态为准。
+stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可信 Relay WebSocket 或 DomainAgent cancel adapter，用于下游企业权限校验。Relay 优先在本机 active WS 上发送 `{"type":"stop_all_agents"}`。如果 stop 请求落到其他实例、本机连接已清理或处于 Relay 问卷等待，后端会新建临时 Relay WS，使用可信 `runtimeSessionId` 发送 `config(sessionMode=resume, supports_incremental_recovery=true)`，收到 `session-ready` 后再发送 `stop_all_agents`，然后等待 `session-state=paused` 或 ack 超时后释放临时连接。DomainAgent 等待链使用 source/effective run 的真实技能标识调用现有 cancel 接口。等待态本地事务会先取消 Interaction 及其精确关联的 ACTIVE Binding；即使下游 cancel 失败，也不会恢复等待，不阻止用户提交下一条问题。无关的 `RESUMABLE` Relay Binding 不会被取消。
 
 ## Run 故障恢复事件
 

@@ -444,16 +444,18 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
 
     private Flux<String> userMessageFrames(Flux<String> frames, AgentRuntimeRequest request,
                                            ShortRunExchange exchange) {
-        return businessFramesAfterConfig(frames, request.runId(), exchange, userMessage(request));
+        return businessFramesAfterConfig(frames, request.runId(), exchange, userMessage(request), () -> { });
     }
 
     private Flux<String> interactionResponseFrames(Flux<String> frames, AgentRuntimeInteractionResponseRequest request,
                                             ShortRunExchange exchange) {
-        return businessFramesAfterConfig(frames, request.runId(), exchange, approvalResponseMessage(request));
+        return businessFramesAfterConfig(frames, request.runId(), exchange, approvalResponseMessage(request),
+                request.dispatchState()::markResponseDispatched);
     }
 
     private Flux<String> businessFramesAfterConfig(Flux<String> frames, String runId,
-                                                   ShortRunExchange exchange, String initialBusinessMessage) {
+                                                   ShortRunExchange exchange, String initialBusinessMessage,
+                                                   Runnable initialBusinessMessageDispatched) {
         return Flux.create(sink -> {
             AtomicBoolean done = new AtomicBoolean(false);
             AtomicBoolean userMessageReleased = new AtomicBoolean(false);
@@ -514,6 +516,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                         sink.next(frame);
                         try {
                             exchange.send(initialBusinessMessage);
+                            initialBusinessMessageDispatched.run();
                             startRunControls(new RunControlContext(exchange, runId, heartbeatTimer, livenessTimer,
                                     maxRunTimer, lastInboundNanos, fail));
                         } catch (RuntimeException ex) {
@@ -575,6 +578,8 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 if (elapsedNanos < durationToNanos(heartbeatResponseTimeout)) {
                     return;
                 }
+                // 已确认心跳响应超时后先停止周期发送，避免 stop 关闭 outbound 后旧心跳覆盖真实超时原因。
+                disposeAndClear(context.heartbeatTimer());
                 try {
                     context.exchange().interrupt(context.runId());
                 } catch (Throwable ex) {
@@ -692,7 +697,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     private String approvalResponseMessage(AgentRuntimeInteractionResponseRequest request) {
         Map<String, Object> message = new LinkedHashMap<>();
         message.put("type", "approval-response");
-        message.put("request_id", request.approvalId());
+        message.put("approval_id", request.approvalId());
         message.put("approved", booleanValue(request.responsePayload().get("approved")));
         message.put("scope", stringOrDefault(request.responsePayload().get("scope"), "once"));
         Object answers = request.responsePayload().get("questionnaireAnswers");
@@ -701,21 +706,6 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         } else {
             message.put("questionnaire_answers", Map.of());
         }
-        Map<String, Object> metadataCopy = new LinkedHashMap<>();
-        Object metadataNode = request.responsePayload().get("metadata");
-        if (metadataNode instanceof Map<?, ?> metadataMap && !metadataMap.isEmpty()) {
-            metadataMap.forEach((key, value) -> {
-                if (key != null) {
-                    metadataCopy.put(String.valueOf(key), value);
-                }
-            });
-        }
-        Map<String, Object> relayMetadata = RelayRuntimeWireRequestMapper.relayMetadata(
-                metadataCopy, request.userAccount(), request.globalUserId());
-        if (!relayMetadata.isEmpty()) {
-            message.put("metadata", relayMetadata);
-        }
-        message.put("timestamp", Instant.now().toString());
         return toJson(message);
     }
 

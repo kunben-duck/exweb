@@ -44,6 +44,32 @@ public interface ChatInteractionRequestMapper {
                                             @Param("sessionId") String sessionId);
 
     /**
+     * 按来源 run 查询最新 Interaction，供等待态 stop 精确定位。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param sourceRunId 产生等待态的来源 run 标识。
+     * @return 最新 Interaction；不存在时为 {@code null}。
+     */
+    ChatInteractionRequestRow findLatestBySourceRun(@Param("tenantId") String tenantId,
+                                                    @Param("userId") String userId,
+                                                    @Param("sessionId") String sessionId,
+                                                    @Param("sourceRunId") String sourceRunId);
+
+    /**
+     * 在 stop 短事务内锁定 Interaction，避免与用户回答 claim 相互覆盖。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param interactionId Interaction 标识。
+     * @return 已锁定的 Interaction；不存在时为 {@code null}。
+     */
+    ChatInteractionRequestRow findByOwnerAndIdForUpdate(@Param("tenantId") String tenantId,
+                                                        @Param("userId") String userId,
+                                                        @Param("interactionId") String interactionId);
+
+    /**
      * 原子声明用户响应，只有 WAITING 状态会成功切换到 RESPONDING。
      *
      * @param row claim 更新行，包含 owner、interactionId、continueRunId 和响应 payload。
@@ -169,6 +195,22 @@ public interface ChatInteractionRequestMapper {
                           @Param("userId") String userId,
                           @Param("interactionId") String interactionId,
                           @Param("cancelledAt") Instant cancelledAt);
+
+    /**
+     * 仅取消仍由指定 continuation run 持有的 RESPONDING Interaction。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param interactionId Interaction 标识。
+     * @param continueRunId 当前持有响应 claim 的 continuation run 标识。
+     * @param cancelledAt 取消时间。
+     * @return 影响行数。
+     */
+    int cancelRespondingForRun(@Param("tenantId") String tenantId,
+                               @Param("userId") String userId,
+                               @Param("interactionId") String interactionId,
+                               @Param("continueRunId") String continueRunId,
+                               @Param("cancelledAt") Instant cancelledAt);
 
     /**
      * 标记等待请求已过期。

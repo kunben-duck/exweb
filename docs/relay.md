@@ -85,29 +85,49 @@ ws://{host}:{port}/ws/{client_id}
 > `config.appMode` 是 Relay 自身运行配置，与前端 `agentMode` 无关。完整规则参见
 > [AgentMode 仅记录技术设计](architecture/agent-mode-recording.md)。
 
-### 2.3 approval-result — 回复审批/澄清问
+### 2.3 approval-response — 回复问卷
 
-当收到 `approval-request` 事件后，通过此消息回复用户选择。
+收到 `approval-request(operation_type=questionnaire)` 后，通过此消息提交单选、多选或自定义文本。
 
 ```json
 {
-  "type": "approval-result",
+  "type": "approval-response",
   "approval_id": "c95ceb53-f66f-4da2-a3ba-2a190aec5d6f",
   "approved": true,
   "scope": "once",
   "questionnaire_answers": {
-    "问题文本": "用户选择的选项"
+    "label": {
+      "请选择技术方案": "方案A",
+      "请选择部署环境": ["开发环境", "测试环境"]
+    }
+  }
+}
+```
+
+忽略问卷：
+
+```json
+{
+  "type": "approval-response",
+  "approval_id": "c95ceb53-f66f-4da2-a3ba-2a190aec5d6f",
+  "approved": false,
+  "scope": "once",
+  "questionnaire_answers": {
+    "ignore": true
   }
 }
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| type | string | 是 | 固定值 `"approval-result"` |
+| type | string | 是 | 固定值 `"approval-response"` |
 | approval_id | string | 是 | 对应 `approval-request` 中的 `approval_id` |
 | approved | bool | 是 | 是否批准 |
-| scope | string | 否 | `"once"` 单次 |
-| questionnaire_answers | object | 否 | 澄清问的答案，key 为问题文本，value 为选项 |
+| scope | string | 是 | 当前固定为 `"once"` |
+| questionnaire_answers | object | 是 | 只能包含 `label` 或 `ignore`；问题文本位于 `label` 内层 |
+
+> ChatService 不发送旧 `request_id`、扁平答案、`metadata` 或 `timestamp`。完整问卷协议以
+> [ask_user 交互文档](relay-clarify.md)为准。
 
 ### 2.4 interrupt / pause — 中断当前轮次
 
@@ -786,13 +806,13 @@ MCP 工具返回 `structuredContent` 时，除 `tool-execution` 外还会推送�
 
 #### approval-result — 审批结果（服务端确认）
 
-客户端发送 `approval-result` 入参后，服务端也会推送此事件确认。
+客户端发送 `approval-response` 后，Relay 可推送 `approval-result` 事件确认。该事件是 Relay 出参，
+不是 ChatService 发送的问卷回答帧。
 
 ```json
 {
   "type": "approval-result",
   "approval_id": "c95ceb53-f66f-4da2-a3ba-2a190aec5d6f",
-  "request_id": "c95ceb53-f66f-4da2-a3ba-2a190aec5d6f",
   "approved": true,
   "scope": "once",
   "timestamp": "...",
@@ -1069,7 +1089,7 @@ Resume 时，若客户端传入的 `project_home` 与存储值不一致，后端
   │←─── tool-execution (start) ──│
   │←─── approval-request ────────│  ★ 澄清问，需用户回复
   │                               │
-  │──── approval-result ────────→│  ★ 用户回复选择
+  │──── approval-response ──────→│  ★ 用户回复选择
   │←─── session-state (agent_thinking) ──│
   │←─── approval-result ────────│  (服务端确认)
   │←─── tool-execution (end) ────│

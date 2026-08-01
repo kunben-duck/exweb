@@ -247,7 +247,7 @@ class ChatIntentFlowTest extends ChatFlowTestSupport {
     }
 
     @Test
-    void resolvedRouteDiagnosticUpdateFailureDoesNotFailStartedRun() {
+    void resolvedRouteUpdateFailureDoesNotStartRuntime() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         FailingResolvedRouteRunRepository runs = new FailingResolvedRouteRunRepository();
@@ -263,14 +263,30 @@ class ChatIntentFlowTest extends ChatFlowTestSupport {
                 return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.agentRuntime("relay"))));
             }
         };
-        FinanceEXChatService service = defaultFinanceService(sessions, messages, runs, events, routeService);
+        AtomicInteger runtimeCalls = new AtomicInteger();
+        AgentRuntime runtime = new AgentRuntime() {
+            @Override
+            public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                runtimeCalls.incrementAndGet();
+                return Flux.just(MessageSnapshotEvent.of(request.runId(), request.sessionId(), "unexpected"));
+            }
+
+            @Override
+            public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = defaultFinanceService(
+                sessions, messages, runs, events, routeService, runtime);
 
         StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
                         null, null, "web", "hello", List.of(), Map.of())).collectList())
                 .assertNext(stream -> assertThat(stream).extracting(ChatEvent::type)
-                        .containsSubsequence("run.started", "run.completed")
-                        .doesNotContain("run.failed"))
+                        .contains("run.started", "run.failed")
+                        .doesNotContain("run.completed"))
                 .verifyComplete();
+
+        assertThat(runtimeCalls).hasValue(0);
     }
 
     @Test

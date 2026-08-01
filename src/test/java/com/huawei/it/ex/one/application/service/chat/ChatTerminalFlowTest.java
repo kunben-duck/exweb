@@ -403,6 +403,9 @@ class ChatTerminalFlowTest extends ChatFlowTestSupport {
                 .contains("AGENT_CLARIFICATION_REQUEST");
         ChatInteractionRequest savedInteraction = interactionRequests.requests.get(waitingRequest.id());
         assertThat(savedInteraction.runtimeBindingId()).isEqualTo(binding.id());
+        assertThat(savedInteraction.runtimeSessionId()).isEqualTo(binding.runtimeSessionId());
+        assertThat(savedInteraction.approvalId()).isEqualTo("approval-1");
+        assertThat(savedInteraction.assistantMessageId()).isEqualTo("msg-assistant");
         assertThat(savedInteraction.status()).isEqualTo(ChatInteractionStatus.WAITING);
         assertThat(savedInteraction.expiresAt()).isNotNull();
         assertThat(runs.findById("run1").orElseThrow().status()).isEqualTo(ChatRunStatus.WAITING_USER);

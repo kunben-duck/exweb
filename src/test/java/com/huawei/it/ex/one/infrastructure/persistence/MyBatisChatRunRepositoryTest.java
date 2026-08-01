@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -13,11 +14,13 @@ import static org.mockito.Mockito.when;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Map;
@@ -107,6 +110,82 @@ class MyBatisChatRunRepositoryTest {
                 .hasMessageContaining("无法更新最终路由");
 
         verify(mapper, never()).findById(any());
+    }
+
+    @Test
+    void guardedResolvedRouteUsesExecutionClaimAndReturnsPersistedTarget() {
+        ChatRunMapper mapper = mock(ChatRunMapper.class);
+        ChatRun rerouted = runningRun().withResolvedRoute(
+                "AGENT_RUNTIME", null, "relay", "relay-session-1");
+        RunExecutionClaim claim = new RunExecutionClaim("run1", "instance-1", 7L);
+        when(mapper.lockResolvedRouteRun(any(ChatRunWriteRow.class))).thenReturn(1);
+        when(mapper.lockResolvedRouteExecution(any(ChatRunWriteRow.class), eq(claim))).thenReturn(1);
+        when(mapper.updateResolvedRouteWithExecutionGuard(any(ChatRunWriteRow.class), eq(claim)))
+                .thenReturn(1);
+        when(mapper.findById("run1")).thenReturn(toRow(rerouted));
+        MyBatisChatRunRepository repository = new MyBatisChatRunRepository(mapper, new ObjectMapper());
+
+        ChatRun saved = repository.updateResolvedRouteWithExecutionGuard(rerouted, claim);
+
+        assertThat(saved)
+                .returns("relay", ChatRun::runtimeProvider)
+                .returns("relay-session-1", ChatRun::runtimeSessionId);
+        InOrder order = inOrder(mapper);
+        order.verify(mapper).lockResolvedRouteRun(argThat(row ->
+                "run1".equals(row.id())
+                        && "tenant1".equals(row.tenantId())
+                        && "user1".equals(row.userId())
+                        && "session1".equals(row.sessionId())));
+        order.verify(mapper).lockResolvedRouteExecution(any(ChatRunWriteRow.class), eq(claim));
+        order.verify(mapper).updateResolvedRouteWithExecutionGuard(argThat(row ->
+                "run1".equals(row.id())
+                        && "tenant1".equals(row.tenantId())
+                        && "user1".equals(row.userId())
+                        && "session1".equals(row.sessionId())), eq(claim));
+        order.verify(mapper).findById("run1");
+        verify(mapper, never()).updateResolvedRoute(any(ChatRunWriteRow.class));
+        verify(mapper, never()).updateExisting(any(ChatRunWriteRow.class));
+    }
+
+    @Test
+    void guardedResolvedRouteRejectsBeforeExecutionLockWhenRunIsNoLongerRunning() {
+        ChatRunMapper mapper = mock(ChatRunMapper.class);
+        RunExecutionClaim claim = new RunExecutionClaim("run1", "instance-old", 6L);
+        MyBatisChatRunRepository repository = new MyBatisChatRunRepository(mapper, new ObjectMapper());
+
+        assertThatThrownBy(() -> repository.updateResolvedRouteWithExecutionGuard(runningRun(), claim))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("run 已停止");
+
+        verify(mapper, never()).lockResolvedRouteExecution(any(), any());
+        verify(mapper, never()).updateResolvedRouteWithExecutionGuard(any(), any());
+        verify(mapper, never()).findById(any());
+    }
+
+    @Test
+    void guardedResolvedRouteRejectsWhenExecutionClaimNoLongerMatches() {
+        ChatRunMapper mapper = mock(ChatRunMapper.class);
+        RunExecutionClaim claim = new RunExecutionClaim("run1", "instance-old", 6L);
+        when(mapper.lockResolvedRouteRun(any(ChatRunWriteRow.class))).thenReturn(1);
+        MyBatisChatRunRepository repository = new MyBatisChatRunRepository(mapper, new ObjectMapper());
+
+        assertThatThrownBy(() -> repository.updateResolvedRouteWithExecutionGuard(runningRun(), claim))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("execution owner");
+
+        verify(mapper, never()).updateResolvedRouteWithExecutionGuard(any(), any());
+        verify(mapper, never()).findById(any());
+    }
+
+    @Test
+    void guardedResolvedRouteUsesInteractionResumeTransactionTimeout() throws Exception {
+        Transactional transactional = MyBatisChatRunRepository.class
+                .getMethod("updateResolvedRouteWithExecutionGuard", ChatRun.class, RunExecutionClaim.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.timeoutString())
+                .isEqualTo("${financeex.runtime-binding.interaction-resume-transaction-timeout-seconds:2}");
     }
 
     private ChatRun runningRun() {

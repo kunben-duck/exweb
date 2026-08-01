@@ -78,6 +78,15 @@
           AND session_id = #{sessionId}
           AND item_type = 'CLARIFY'
           AND status = 'ACTIVE'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM fin_ex_chat_interaction_request_t i
+              WHERE i.id = fin_ex_route_memory_t.interaction_request_id
+                AND i.tenant_id = fin_ex_route_memory_t.tenant_id
+                AND i.user_id = fin_ex_route_memory_t.user_id
+                AND i.session_id = fin_ex_route_memory_t.session_id
+                AND i.status IN ('CANCELLED', 'EXPIRED')
+          )
         ORDER BY created_at ASC
     </select>
 

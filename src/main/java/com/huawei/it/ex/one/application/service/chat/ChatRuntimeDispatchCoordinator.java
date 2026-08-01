@@ -15,6 +15,7 @@ import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.routing.RouteType;
 
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.util.HashSet;
 
@@ -28,6 +29,7 @@ final class ChatRuntimeDispatchCoordinator {
     private final DomainAgentRefusalCoordinator domainAgentRefusalCoordinator;
     private final SystemResponseExecutor systemResponseExecutor;
     private final AgentRuntimeExecutor agentRuntimeExecutor;
+    private final RuntimeBindingDispatchCompensator bindingCompensator;
 
     ChatRuntimeDispatchCoordinator(RouteSignalApplicationService routeSignalService,
                                    ChatEventPersistenceCoordinator eventPersistenceCoordinator,
@@ -36,7 +38,8 @@ final class ChatRuntimeDispatchCoordinator {
                                    RouteResolutionCoordinator routeResolutionCoordinator,
                                    DomainAgentRefusalCoordinator domainAgentRefusalCoordinator,
                                    SystemResponseExecutor systemResponseExecutor,
-                                   AgentRuntimeExecutor agentRuntimeExecutor) {
+                                   AgentRuntimeExecutor agentRuntimeExecutor,
+                                   RuntimeBindingDispatchCompensator bindingCompensator) {
         this.routeSignalService = routeSignalService;
         this.eventPersistenceCoordinator = eventPersistenceCoordinator;
         this.interactionEventFactory = interactionEventFactory;
@@ -45,9 +48,26 @@ final class ChatRuntimeDispatchCoordinator {
         this.domainAgentRefusalCoordinator = domainAgentRefusalCoordinator;
         this.systemResponseExecutor = systemResponseExecutor;
         this.agentRuntimeExecutor = agentRuntimeExecutor;
+        this.bindingCompensator = bindingCompensator;
     }
 
     Flux<ChatEvent> execute(RoutePipelineRequest request) {
+        return execute(request, () -> { });
+    }
+
+    Flux<ChatEvent> execute(RoutePipelineRequest request, Runnable initialPreparation) {
+        return Flux.usingWhen(
+                Mono.just(request.bindingLifecycle()),
+                ignored -> Flux.defer(() -> {
+                    initialPreparation.run();
+                    return executeRouteFrames(request);
+                }),
+                ignored -> cleanupUnstartedBinding(request, "complete"),
+                (ignored, failure) -> cleanupUnstartedBinding(request, "error"),
+                ignored -> cleanupUnstartedBinding(request, "cancel"));
+    }
+
+    private Flux<ChatEvent> executeRouteFrames(RoutePipelineRequest request) {
         Flux<RouteSignalFrame> frames = eventPersistenceCoordinator.requireCurrentOwnerRunning(
                         request.executionClaim(), "before-route")
                 .thenMany(Flux.defer(() -> request.routeRef().get() == null
@@ -67,11 +87,16 @@ final class ChatRuntimeDispatchCoordinator {
     Flux<ChatEvent> executeResolved(
             RoutePipelineRequest request,
             RouteSignalResult routeSignal) {
-        return eventPersistenceCoordinator.requireCurrentOwnerRunning(
-                        request.executionClaim(), "before-route")
-                .then(eventPersistenceCoordinator.requireCurrentOwnerRunning(
-                        request.executionClaim(), "after-route"))
-                .thenMany(Flux.defer(() -> executeResolvedRoute(request, routeSignal, false)));
+        return Flux.usingWhen(
+                Mono.just(request.bindingLifecycle()),
+                ignored -> eventPersistenceCoordinator.requireCurrentOwnerRunning(
+                                request.executionClaim(), "before-route")
+                        .then(eventPersistenceCoordinator.requireCurrentOwnerRunning(
+                                request.executionClaim(), "after-route"))
+                        .thenMany(Flux.defer(() -> executeResolvedRoute(request, routeSignal, false))),
+                ignored -> cleanupUnstartedBinding(request, "complete"),
+                (ignored, failure) -> cleanupUnstartedBinding(request, "error"),
+                ignored -> cleanupUnstartedBinding(request, "cancel"));
     }
 
     private Flux<ChatEvent> executeFrame(RoutePipelineRequest request,
@@ -131,13 +156,14 @@ final class ChatRuntimeDispatchCoordinator {
                                 request.routeRef().get(),
                                 request.bindingRef().get(),
                                 request.runtimeSessionModeRef().get(),
-                                request.agentMode()),
+                                request.agentMode(),
+                                request.bindingLifecycle()),
                         routeSignal);
         request.routeRef().set(resolution.route());
         request.bindingRef().set(resolution.binding());
         request.runtimeSessionModeRef().set(resolution.runtimeSessionMode());
-        appliedRouteRecorder.bindResolvedRoute(
-                request.runId(), resolution.route(), resolution.binding());
+        appliedRouteRecorder.bindResolvedRouteRequired(
+                request.run(), resolution.route(), resolution.binding(), request.executionClaim());
         if (recordIntentRecognition && resolution.intent() != null) {
             appliedRouteRecorder.recordIntent(
                     request.user(),
@@ -189,7 +215,7 @@ final class ChatRuntimeDispatchCoordinator {
             RouteResolutionCoordinator.RouteExecutionResolution resolution,
             ChatCommand runtimeCommand,
             MemoryContext runtimeMemory) {
-        return switch (resolution.route().type()) {
+        Flux<ChatEvent> runtimeEvents = switch (resolution.route().type()) {
             case DOMAIN_AGENT -> domainAgentRefusalCoordinator.execute(new DomainAgentRunContext(
                     runtimeCommand,
                     request.runId(),
@@ -222,6 +248,19 @@ final class ChatRuntimeDispatchCoordinator {
                     request.documents(),
                     request.traceContext()));
         };
+        if (resolution.route().type() == RouteType.SYSTEM_RESPONSE) {
+            return runtimeEvents;
+        }
+        return runtimeEvents.doOnSubscribe(ignored -> request.bindingLifecycle().markRuntimeSubscribed());
+    }
+
+    private Mono<Void> cleanupUnstartedBinding(RoutePipelineRequest request, String terminationSignal) {
+        return bindingCompensator.cleanup(
+                request.bindingLifecycle(),
+                request.runId(),
+                request.session().id(),
+                request.bindingRef(),
+                terminationSignal);
     }
 
     private Flux<ChatEvent> continueAfterClarifiedDomainAgentRefusal(

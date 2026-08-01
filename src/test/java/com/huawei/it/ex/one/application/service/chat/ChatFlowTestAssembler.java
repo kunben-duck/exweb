@@ -77,6 +77,9 @@ final class ChatFlowTestAssembler {
         RouteResolutionCoordinator routeResolutionCoordinator =
                 new RouteResolutionCoordinator(
                         runtimeBindingService, routeSignalService, documentFacade);
+        RuntimeBindingDispatchCompensator bindingCompensator =
+                new RuntimeBindingDispatchCompensator(
+                        runtimeBindingService, eventScheduler, agentProperties);
         DomainAgentRefusalCoordinator refusalCoordinator =
                 new DomainAgentRefusalCoordinator(
                         agentRuntimeExecutor,
@@ -86,7 +89,9 @@ final class ChatFlowTestAssembler {
                         routeRecorder,
                         routeResolutionCoordinator,
                         chatRunLeaseService,
-                        eventScheduler);
+                        eventScheduler,
+                        eventScheduler,
+                        bindingCompensator);
         FirstEventTimeoutCompensator timeoutCompensator =
                 new FirstEventTimeoutCompensator(
                         chatInteractionService,
@@ -189,7 +194,8 @@ final class ChatFlowTestAssembler {
                         routeResolutionCoordinator,
                         refusalCoordinator,
                         systemResponseExecutor,
-                        agentRuntimeExecutor);
+                        agentRuntimeExecutor,
+                        bindingCompensator);
         InteractionRunCoordinator interactionRunCoordinator =
                 interactionRunCoordinator(new InteractionAssembly(
                         sessionService,
@@ -206,7 +212,8 @@ final class ChatFlowTestAssembler {
                         eventPersistenceCoordinator,
                         routeRecorder,
                         refusalCoordinator,
-                        ambiguousRouteSelectionResolver));
+                        ambiguousRouteSelectionResolver,
+                        eventScheduler));
         ChatRunExecutionCoordinator runExecutionCoordinator =
                 standardRunCoordinator(new StandardRunAssembly(
                         sessionService,
@@ -306,7 +313,8 @@ final class ChatFlowTestAssembler {
                         inputs.routeRecorder(),
                         inputs.eventFactory(),
                         lifecycle,
-                        inputs.persistenceCoordinator());
+                        inputs.persistenceCoordinator(),
+                        inputs.eventScheduler());
         return new InteractionRunCoordinator(
                 inputs.sessionService(),
                 inputs.interactionService(),
@@ -365,7 +373,8 @@ final class ChatFlowTestAssembler {
             ChatEventPersistenceCoordinator persistenceCoordinator,
             AppliedRouteRecorder routeRecorder,
             DomainAgentRefusalCoordinator refusalCoordinator,
-            AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver
+            AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver,
+            Scheduler eventScheduler
     ) {
     }
 

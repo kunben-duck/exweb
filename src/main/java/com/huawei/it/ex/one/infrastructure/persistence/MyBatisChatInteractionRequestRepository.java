@@ -56,6 +56,26 @@ public class MyBatisChatInteractionRequestRepository implements ChatInteractionR
     }
 
     @Override
+    public Optional<ChatInteractionRequest> findLatestBySourceRun(
+            String tenantId, String userId, String sessionId, String sourceRunId) {
+        if (blank(tenantId) || blank(userId) || blank(sessionId) || blank(sourceRunId)) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(mapper.findLatestBySourceRun(tenantId, userId, sessionId, sourceRunId))
+                .map(this::toDomain);
+    }
+
+    @Override
+    public Optional<ChatInteractionRequest> findByOwnerAndIdForUpdate(
+            String tenantId, String userId, String interactionId) {
+        if (blank(tenantId) || blank(userId) || blank(interactionId)) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(mapper.findByOwnerAndIdForUpdate(tenantId, userId, interactionId))
+                .map(this::toDomain);
+    }
+
+    @Override
     public boolean claimInteractionResponse(ChatInteractionClaimCommand command) {
         if (command == null) {
             return false;
@@ -135,6 +155,17 @@ public class MyBatisChatInteractionRequestRepository implements ChatInteractionR
     public int cancelWaitingById(String tenantId, String userId, String interactionId, Instant cancelledAt) {
         return mapper.cancelWaitingById(
                 tenantId, userId, interactionId, cancelledAt == null ? Instant.now() : cancelledAt);
+    }
+
+    @Override
+    public int cancelRespondingForRun(String tenantId, String userId, String interactionId,
+                                      String continueRunId, Instant cancelledAt) {
+        if (blank(continueRunId)) {
+            return 0;
+        }
+        return mapper.cancelRespondingForRun(
+                tenantId, userId, interactionId, continueRunId,
+                cancelledAt == null ? Instant.now() : cancelledAt);
     }
 
     @Override

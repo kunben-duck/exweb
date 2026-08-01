@@ -37,6 +37,10 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 
 完整接口和 WebSocket 联调说明见 [前端联调文档](docs/frontend-integration.md)。其中“逐接口最小入参示例”和“`/v1/chat/runs` 不同场景请求体示例”是前端请求体样例的维护入口。
 
+可由 Swagger UI、Redoc 或代码生成工具直接读取的 OpenAPI 3.0.3 定义见
+[FinanceEX ChatService OpenAPI](docs/openapi/financeex-chatservice-v1.yaml)。该定义覆盖全部公开业务接口，
+并为普通澄清、歧义路由选择、拒答切换确认、Relay 问卷、等待态 stop 和恢复流程提供命名示例。
+
 单实例 `4C4G` 的流式任务、文档上传、普通查询、WebSocket 和 Event Resume 容量测试流程，参见
 [单实例压测指导](docs/performance-testing-guide.md)。该文档包含环境准备、测试数据、负载阶梯、停止条件、
 一致性检查和容量报告模板。
@@ -57,8 +61,8 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 - `WS /v1/chat/ws`：用户级实时输出通道。客户端使用 `{"type":"subscribe","topicId":"chat-run-{runId}","afterSeq":0}` 订阅本轮 run topic；MVC/Servlet 模式会在 handshake 阶段固化用户身份。服务端 `message.payload` 为 `conversation-turn-stream`，真实聊天事件在 `message.payload.payload.encodedItem.data`。
 - `GET /v1/chat/sessions/{sessionId}/events/resume?afterSeq={seq}`：会话级事件恢复有限补发，用于补齐整个会话缺失事件；SSE data 同样是 `conversation-turn-stream`。
 - `GET /v1/chat/runs/{runId}/events/resume?afterSeq={seq}`：run 级事件恢复并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态；长时间无业务事件时发送 turn stream `heartbeat`，终态后发送 `done`。live tail 异常时当前连接结束，前端从最后成功处理的 sequence 重新恢复。
-- `GET /v1/chat/sessions/{sessionId}/stream-status`：查询当前会话最新事件序号、active run、`activeStreamTopicId`、是否可取消、是否等待用户澄清输入，以及当前 `bindingProvider/bindingTargetId/bindingIntentName/bindingRouteSource` 等绑定摘要。`AMBIGUOUS_ROUTE` 等待态还会返回 `autoSelectAt/autoSelectTimeoutMs`。
-- `POST /v1/chat/runs/{runId}/stop`：按 runId 停止当前回答，幂等返回 run 状态。
+- `GET /v1/chat/sessions/{sessionId}/stream-status`：查询当前会话最新事件序号、active run、`activeStreamTopicId`、是否可取消、是否等待用户澄清输入，以及当前 `bindingProvider/bindingTargetId/bindingIntentName/bindingRouteSource` 等绑定摘要。等待态返回 `waitingSourceRunId`，供前端调用统一 stop；`AMBIGUOUS_ROUTE` 等待态还会返回 `autoSelectAt/autoSelectTimeoutMs`。
+- `POST /v1/chat/runs/{runId}/stop`：运行态传 active runId；等待态传 `waitingSourceRunId`。等待态 stop 取消当前 Interaction，并对其关联的 Relay/DomainAgent 执行 best-effort 真实取消；历史 run-A 仍保留 `WAITING_USER`。
 - `POST /v1/chat/messages/{messageId}/feedback`：提交或切换 assistant 消息点赞/点踩。
 - `DELETE /v1/chat/messages/{messageId}/feedback`：取消当前用户对 assistant 消息的点赞或点踩。
 - `POST /v1/chat/messages/{messageId}/share`：为某条 assistant 消息创建单轮问答固定快照分享。
@@ -213,7 +217,7 @@ DomainAgent/Relay 请求或事件。意图澄清和路由切换确认不会暂�
 - `runtimeSessionId`：当前 AgentRuntime provider 自己的会话 ID，由 Runtime 返回后保存在 RuntimeBinding 中，下一轮续接时带回。
 
 `runId` 不是长期任务会话；它是单轮执行 correlation id。事件表 `fin_ex_chat_event_t.run_id` 和绑定表 `fin_ex_runtime_binding_t.last_run_id` 都用它做运行轨迹和排障定位。
-run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。`CANCELLING` 不允许被迟到的通用 run 更新恢复为 `RUNNING`。stop 只停止本轮回答，不删除 `RuntimeBinding`；如果用户主动 stop 前已经有 `message.delta`、`message.snapshot` 或卡片、引用、思考、工具、进度等用户可见 parts 成功落库，ChatService 会把截至 stop 时的内容保存为 partial assistant 历史消息，并在消息 `metadata_json` 中标记 `partial=true`、`finishReason=USER_STOP`。partial assistant 只由赢得外部终态 CAS 的实例在同一短事务中保存，CAS 失败者不会改写消息、parts 或 session leaf。
+run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。`CANCELLING` 不允许被迟到的通用 run 更新恢复为 `RUNNING`。运行态 stop 保持 RuntimeBinding 的既有生命周期；等待态 stop 会取消 Interaction 精确引用、仍属于该等待链的 `ACTIVE` Binding，不影响无关的历史 `RESUMABLE` Relay Binding。历史 run-A 仍保留 `WAITING_USER`，以保持事件和消息历史不变。如果用户主动 stop 前已经有 `message.delta`、`message.snapshot` 或卡片、引用、思考、工具、进度等用户可见 parts 成功落库，ChatService 会把截至 stop 时的内容保存为 partial assistant 历史消息，并在消息 `metadata_json` 中标记 `partial=true`、`finishReason=USER_STOP`。partial assistant 只由赢得外部终态 CAS 的实例在同一短事务中保存，CAS 失败者不会改写消息、parts 或 session leaf。
 run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实例、心跳、租约、恢复状态和 `fencing_token`，不混入业务 run 表。后台执行流写入 run 事件时通过数据库 guarded insert 原子校验 execution owner 与 `fencing_token`；stop、watchdog 或未来 Runtime takeover 递增 token 后，旧实例迟到 delta/completed 会被拒绝。路由、Runtime Interaction 和 Relay/DomainAgent 调用前还会执行少量只读 owner 检查；检查只发生在外部副作用边界，不进入普通 chunk 写入热路径。
 当前生产版本保持下游标准事件原粒度，不在 ChatService 内合并 `message.delta`；普通 Relay/DomainAgent
 事件以及 IntentAgent 的 `intent-progress/intent-delta` 只在数据库提交层按三重阈值组批，
@@ -487,6 +491,10 @@ export FINANCEEX_RELAY_AGENT_CONTEXT_AS_ANSWER=true
 ```
 
 DomainAgent endpoint 是完整 HTTP 地址。DomainAgent chat、绑定续接和 stop 都会发送服务端配置的标准 `Referer` 请求头；`FINANCEEX_DOMAIN_AGENT_REFERER` 未配置或为空时回退到 `FINANCEEX_DOMAIN_AGENT_BASE_URL`，前端 metadata 和 Cookie 不能覆盖该请求头，配置值也不会进入请求 body 或持久化数据。`/v1/chat/runs` 显式传 `targetType=DOMAIN_AGENT,targetId=...` 时会手动绑定该 DomainAgent，`routeSource=front-selected`；未显式传 target 时，当前 active `provider=domain-agent` 绑定优先续接。DomainAgent 下游 body 会以前端 `metadata` 为业务扩展，但服务端保留字段 `skillId/query/sessionId` 始终以绑定的 DomainAgentId、本轮用户问题和 RuntimeBinding.runtimeSessionId 为准，metadata 不能覆盖。没有 active binding 时会先走可选用例库和多轮意图服务：意图服务若返回 `WAITING_CLARIFICATION` 或兼容的 `TaskComplexity.NEED_CLARIFICATION`，本轮生成 `run.waiting_user`，`interactionType=INTENT_CLARIFICATION`，不创建 RuntimeBinding；用户通过 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 提交回答后继续调用意图服务，直到最终路由到 `domain-agent` 或 `relay`。DomainAgent 流式返回 `type=agent.refusal,code=FN-EX-CAHT-BIZ-DAG-001` 时，ChatService 会立即取消旧 Agent 流并以 `routeTrigger=domain_reject` 重新意图；自动路由来源直接切换。`front-selected/user-confirmed` 来源默认生成 `ROUTE_SWITCH_CONFIRMATION` Interaction，候选 DomainAgent 或 Relay 均须确认；配置 `FINANCEEX_DOMAIN_AGENT_REFUSAL_AUTO_SWITCH_ENABLED=true` 后，这两类来源也会在拒答事件落库时取消旧 Binding，并直接调用重意图得到的新 DomainAgent 或 Relay。拒答、确认和新 Runtime 输出复用同一 assistant，并通过有序 parts 保留过程，等待确认阶段不生成最终 `ANSWER`。Relay Runtime 唯一使用 WebSocket 短连接：每个 ChatService run 都新建一条下游 WebSocket，先发送 `config`，握手成功后发送 `user-message`，本轮输出结束、stop、异常或超出最大运行时长后立即释放物理连接。`FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT` 会分别限制 HTTP Upgrade opening handshake 和 Upgrade 后的 `config -> session-ready`，两个阶段独立计时；opening 超时会取消待升级连接并以 `RELAY_WS_CONFIG_TIMEOUT` 结束本轮。Relay 会话语义由应用层传入的 `runtimeSessionMode=NEW|RESUME` 和 `RuntimeBinding.runtimeSessionId` 控制：同一个 ChatService 会话下第一次进入 Relay Runtime 发送 `sessionMode=new`，`config.sessionId` 使用 ChatService 自身 `sessionId`；收到 `session-ready.session_id` 后回填 run 和 RuntimeBinding 的真实 `runtimeSessionId`。后续提问即使重新建连也发送 `sessionMode=resume`，并携带回填后的 `runtimeSessionId` 和 `supports_incremental_recovery=true`。Relay WS 只以 `session-ready` 作为 config 阶段唯一完成信号；adapter 会将 `session-ready` 作为 `runtime.metadata` 输出，payload 保留 Relay 原始 `session_id/session_mode` 等字段，并补充 `runtimeSessionId` 用于跨实例 stop resume。其他配置阶段响应只用于握手判定，不作为用户回答事件；若收到 `error/clear-session/session-mismatch` 会立即失败。`user-message` 后、`relay-start` 前的前置 `session-state=idle/completed/ready/running/agent_thinking` 和迟到 `config` 会被丢弃，只有 `relay-start`、业务帧或 `session-state=waiting_user_input/paused` 会打开回答阶段。普通问答阶段按 `FINANCEEX_RELAY_WS_HEARTBEAT_INTERVAL` 发送 `{ "type": "heartbeat" }` 保活；任意业务帧或 `heartbeat-response` 都会刷新连接活跃时间，超过 `FINANCEEX_RELAY_WS_HEARTBEAT_RESPONSE_TIMEOUT` 仍无回包时转 `run.failed`。`session-state=idle/completed/waiting_user_input/paused` 会正常闭合本轮，`FINANCEEX_RELAY_WS_MAX_RUN_DURATION` 作为最长运行时间兜底。Agent 对话澄清由 Relay `approval-request(operation_type=questionnaire)` 触发：该帧本身会闭合当前用户轮次并生成 `run.waiting_user`、`AGENT_CLARIFICATION_REQUEST` part 和 Interaction 请求；等待请求默认按 `FINANCEEX_CHAT_INTERACTION_DEFAULT_EXPIRE_DURATION=24h` 过期，配置为 `0` 或负数表示不过期。单独的 `session-state=waiting_user_input` 仅闭合本次 Relay WS，不创建等待态；`paused` 仅表示 Relay 对 stop 的确认。
+
+Relay 问卷等待继续使用 `WAITING_USER + CONTINUE_INTERACTION`。run-A 关闭物理 WebSocket，但保留真实 `runtimeSessionId` 和 ACTIVE Relay Binding；run-B 跳过 Intent，在 owner/fencing 栅栏内使用同一会话执行 `RESUME + approval-response`。出站响应只包含 `approval_id/approved/scope/questionnaire_answers`，答案必须使用 `{"label":{"问题":"答案"}}` 或 `{"ignore":true}`，不再兼容旧 `request_id` 和扁平答案。`FINANCEEX_RELAY_QUESTIONNAIRE_WAIT_TIMEOUT` 默认 `0s`，表示永久等待；配置正数时只生成 `autoActionAt/autoActionTimeoutMs/autoActionType=IGNORE_QUESTIONNAIRE` 供前端倒计时，不启动后端任务。页面到期、刷新或重新打开后，由前端提交忽略请求；run-A/run-B 使用不同 topic，但复用同一 assistant 消息。
+
+Relay 问卷续接在建立下游连接前，必须先用 execution owner/fencing 条件保存 run-B 的最终 Runtime 路由。`approval-response` 进入 outbound 前失败时，Binding 条件恢复到 run-A，Interaction 恢复 `WAITING`，允许复用同一 interactionId；进入 outbound 后再失败时结果不可判定，服务端取消 Interaction 和仍由 run-B 持有的 ACTIVE Binding，不自动重发，前端需发起新的 `NEXT`。`RUNTIME_SESSION_UNAVAILABLE` 或 Binding 恢复失败同样按不可重试处理。
 
 普通 `INTENT_CLARIFICATION` 的澄清问题会保存为独立 `assistantSource=intent-agent` 消息。前端使用 `CONTINUE_INTERACTION` 提交后，答案、可信附件关系与 continuation run 原子保存为新的 user 消息；下一轮澄清或最终 DomainAgent/Relay 回答挂在该 user 下。回答一旦受理，即使后续 run 失败、取消或首事件超时也不会重新开放旧 Interaction，避免重复答案节点。澄清附件只接受 `documentId` 作为事实引用，前端传入的名称、MIME、大小和来源不会被信任。
 

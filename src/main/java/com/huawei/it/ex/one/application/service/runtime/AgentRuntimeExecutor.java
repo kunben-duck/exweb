@@ -105,7 +105,8 @@ public class AgentRuntimeExecutor {
                 context.approvalId(),
                 context.responsePayload(),
                 context.forwardHeaders(),
-                context.traceContext()
+                context.traceContext(),
+                context.dispatchState()
         );
         return protect(context.runtimeProvider(), runtimeRegistry.continueWithUserResponse(request));
     }
@@ -140,7 +141,20 @@ public class AgentRuntimeExecutor {
                 forwardHeaders,
                 traceContext
         );
-        return runtimeRegistry.runtime(run.runtimeProvider()).cancel(request);
+        return cancel(request);
+    }
+
+    /**
+     * 使用已完成归属校验的取消请求调用指定 Runtime。
+     *
+     * <p>该入口供历史 {@code WAITING_USER} run 使用；它可能需要通过 Interaction 中保存的
+     * runtimeSessionId 恢复 Relay 临时连接，而不能伪造或改写历史 ChatRun。</p>
+     */
+    public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+        if (request == null || request.provider() == null || request.provider().isBlank()) {
+            return Mono.empty();
+        }
+        return runtimeRegistry.runtime(request.provider()).cancel(request);
     }
 
     private Flux<ChatEvent> protect(String provider, Flux<ChatEvent> source) {

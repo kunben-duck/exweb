@@ -129,7 +129,8 @@ final class IntentClarificationRunCoordinator {
                                     request.input().intentQuery(),
                                     foldedRouteQuery,
                                     request.input().runtimeMetadata(),
-                                    request.input().agentMode()))));
+                                    request.input().agentMode(),
+                                    new RuntimeBindingDispatchLifecycle()))));
         } catch (RuntimeException ex) {
             return lifecycle.failContinuation(context, ex);
         }

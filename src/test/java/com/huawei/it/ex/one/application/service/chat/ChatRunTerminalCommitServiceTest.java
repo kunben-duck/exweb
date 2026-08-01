@@ -2,7 +2,14 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDispatchState;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
@@ -11,6 +18,9 @@ import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingReposi
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
+import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
+import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
+import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
@@ -220,6 +230,122 @@ class ChatRunTerminalCommitServiceTest {
     }
 
     @Test
+    void watchdogClosingUserStoppedContinuationKeepsInteractionCancelled() {
+        ChatStreamApplicationService streamService = mock(ChatStreamApplicationService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRunLeaseApplicationService leaseService = mock(ChatRunLeaseApplicationService.class);
+        ChatInteractionApplicationService interactionService = mock(ChatInteractionApplicationService.class);
+        ChatRunTerminalCommitService service = new ChatRunTerminalCommitService(
+                streamService, null, runRepository, leaseService, null, interactionService, Duration.ZERO);
+        Instant now = Instant.now();
+        ChatRun run = new ChatRun(
+                "run1", "tenant1", "user1", "session1", ChatRunStatus.CANCELLING,
+                "AGENT_RUNTIME", null, "relay", null, ChatRunMode.CONTINUE_INTERACTION,
+                null, "msg-user", null, null, null, "USER_STOP", now, null,
+                Map.of("interactionId", "interaction1"), now, now);
+        ChatRun committedRun = run.cancelled(5L);
+        ChatEvent event = RunCancelledEvent.of(run.id(), run.sessionId(), "USER_STOP", false, null);
+        ChatEvent stored = new RunCancelledEvent(
+                run.id(), run.sessionId(), 5L, now, event.payload());
+        when(runRepository.tryClaimExternalTerminal(any(ChatRunRepository.ExternalTerminalClaim.class)))
+                .thenReturn(true);
+        when(streamService.appendWithoutPublish(event)).thenReturn(stored);
+        when(runRepository.finalizeExternalTerminal(any(ChatRunRepository.ExternalTerminalFinalize.class)))
+                .thenReturn(committedRun);
+
+        ChatRunTerminalCommitService.ExternalTerminalCommitResult result = service.commitExternalTerminal(
+                new ChatRunTerminalCommitService.ExternalTerminalCommitCommand(
+                        event,
+                        run,
+                        ChatRunRepository.ExternalTerminalGuard.RECOVERY,
+                        "instance-recovery",
+                        2L,
+                        null,
+                        null,
+                        null));
+
+        assertThat(result.committed()).isTrue();
+        verify(interactionService).cancelRespondingForRun(
+                eq("tenant1"), eq("user1"), eq("interaction1"), eq("run1"), any(Instant.class));
+        verify(interactionService, never()).markWaitingForRun(any(), any(), any(), any());
+    }
+
+    @Test
+    void relayFailureBeforeResponseDispatchRestoresWaitingInteraction() {
+        TerminalTestFixture fixture = terminalTestFixture();
+        RuntimeInteractionDispatchState dispatchState = RuntimeInteractionDispatchState.tracked();
+        dispatchState.markBindingRestored();
+
+        ChatRunTerminalCommitService.CommitResult result = fixture.service().commitTerminalOnly(
+                new ChatRunTerminalCommitService.TerminalOnlyCommitCommand(
+                        fixture.failureEvent(), fixture.context(dispatchState)));
+
+        verify(fixture.interactionService()).markWaiting(fixture.interaction());
+        verify(fixture.interactionService(), never()).cancelRespondingForRun(
+                any(), any(), any(), any(), any());
+        verify(fixture.bindingRepository(), never()).cancelActiveForRun(any(), any());
+        assertThat(result.binding().status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+    }
+
+    @Test
+    void relayFailureAfterResponseDispatchCancelsInteractionAndBinding() {
+        TerminalTestFixture fixture = terminalTestFixture();
+        RuntimeInteractionDispatchState dispatchState = RuntimeInteractionDispatchState.tracked();
+        dispatchState.markResponseDispatched();
+        when(fixture.bindingRepository().cancelActiveForRun("binding1", "run1")).thenReturn(true);
+
+        ChatRunTerminalCommitService.CommitResult result = fixture.service().commitTerminalOnly(
+                new ChatRunTerminalCommitService.TerminalOnlyCommitCommand(
+                        fixture.failureEvent(), fixture.context(dispatchState)));
+
+        verify(fixture.interactionService()).cancelRespondingForRun(
+                eq("tenant1"), eq("user1"), eq("interaction1"), eq("run1"), any(Instant.class));
+        verify(fixture.interactionService(), never()).markWaiting(any());
+        verify(fixture.bindingRepository()).cancelActiveForRun("binding1", "run1");
+        assertThat(result.binding().status()).isEqualTo(RuntimeBindingStatus.CANCELLED);
+    }
+
+    @Test
+    void unavailableRelaySessionCancelsInteractionEvenBeforeResponseDispatch() {
+        TerminalTestFixture fixture = terminalTestFixture();
+        RuntimeInteractionDispatchState dispatchState = RuntimeInteractionDispatchState.tracked();
+        ErrorEvent unavailable = ErrorEvent.of(
+                "run1", "session1", "RUNTIME_SESSION_UNAVAILABLE", "runtime session unavailable");
+        ErrorEvent stored = new ErrorEvent(
+                "run1", "session1", 9L, Instant.now(), unavailable.code(), unavailable.message(), unavailable.payload());
+        when(fixture.streamService().appendWithExecutionGuard(unavailable, fixture.claim())).thenReturn(stored);
+        RuntimeBinding sourceBinding = fixture.binding().withRun("run-a", null);
+        when(fixture.bindingRepository().findById("binding1")).thenReturn(Optional.of(sourceBinding));
+        when(fixture.bindingRepository().cancelActiveForInteraction(sourceBinding, "run-a", "run1"))
+                .thenReturn(true);
+
+        ChatRunTerminalCommitService.CommitResult result = fixture.service().commitTerminalOnly(
+                new ChatRunTerminalCommitService.TerminalOnlyCommitCommand(
+                        unavailable, fixture.context(dispatchState, null)));
+
+        verify(fixture.interactionService()).cancelRespondingForRun(
+                eq("tenant1"), eq("user1"), eq("interaction1"), eq("run1"), any(Instant.class));
+        verify(fixture.interactionService(), never()).markWaiting(any());
+        verify(fixture.bindingRepository()).cancelActiveForInteraction(sourceBinding, "run-a", "run1");
+        assertThat(result.binding().status()).isEqualTo(RuntimeBindingStatus.CANCELLED);
+    }
+
+    @Test
+    void failedBindingRestoreCancelsInteractionInsteadOfExposingRetry() {
+        TerminalTestFixture fixture = terminalTestFixture();
+        RuntimeInteractionDispatchState dispatchState = RuntimeInteractionDispatchState.tracked();
+        dispatchState.markBindingRestoreFailed();
+        when(fixture.bindingRepository().cancelActiveForRun("binding1", "run1")).thenReturn(true);
+
+        fixture.service().commitTerminalOnly(new ChatRunTerminalCommitService.TerminalOnlyCommitCommand(
+                fixture.failureEvent(), fixture.context(dispatchState)));
+
+        verify(fixture.interactionService()).cancelRespondingForRun(
+                eq("tenant1"), eq("user1"), eq("interaction1"), eq("run1"), any(Instant.class));
+        verify(fixture.interactionService(), never()).markWaiting(any());
+    }
+
+    @Test
     void interactionPartialAssistantWithoutOriginalIdCannotFallbackToInsert() {
         Instant now = Instant.now();
         ChatRun run = new ChatRun("run1", "tenant1", "user1", "session1", ChatRunStatus.CANCELLING,
@@ -259,6 +385,73 @@ class ChatRunTerminalCommitServiceTest {
                 new RunExecutionClaim("run1", "instance-test", 1L),
                 null
         );
+    }
+
+    private TerminalTestFixture terminalTestFixture() {
+        ChatStreamApplicationService streamService = mock(ChatStreamApplicationService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRunLeaseApplicationService leaseService = mock(ChatRunLeaseApplicationService.class);
+        RuntimeBindingRepository bindingRepository = mock(RuntimeBindingRepository.class);
+        ChatInteractionApplicationService interactionService = mock(ChatInteractionApplicationService.class);
+        ChatRunTerminalCommitService service = new ChatRunTerminalCommitService(
+                streamService, null, runRepository, leaseService, bindingRepository, interactionService,
+                Duration.ZERO);
+        RunExecutionClaim claim = new RunExecutionClaim("run1", "instance-test", 1L);
+        ChatInteractionRequest interaction = respondingRelayInteraction();
+        RuntimeBinding binding = activeRelayBinding();
+        ErrorEvent failure = ErrorEvent.of("run1", "session1", "RELAY_ERROR", "relay failed");
+        ErrorEvent stored = new ErrorEvent(
+                "run1", "session1", 8L, Instant.now(), failure.code(), failure.message(), failure.payload());
+        when(runRepository.tryFenceOwnerTerminalCommit(any(ChatRunRepository.OwnerTerminalFence.class)))
+                .thenReturn(true);
+        when(runRepository.findById("run1")).thenReturn(Optional.empty());
+        when(streamService.appendWithExecutionGuard(failure, claim)).thenReturn(stored);
+        return new TerminalTestFixture(
+                service, streamService, bindingRepository, interactionService, interaction, binding, claim, failure);
+    }
+
+    private ChatInteractionRequest respondingRelayInteraction() {
+        Instant now = Instant.now();
+        return new ChatInteractionRequest(
+                "interaction1", "tenant1", "user1", "session1", "run-a", "run1",
+                "msg-user", "msg-assistant", "relay", "binding1", "relay-session-1",
+                "approval-1", ChatInteractionType.AGENT_CLARIFICATION, ChatInteractionStatus.RESPONDING,
+                Map.of(), Map.of(), now.plus(Duration.ofHours(1)), null, null, now, now);
+    }
+
+    private RuntimeBinding activeRelayBinding() {
+        Instant now = Instant.now();
+        return new RuntimeBinding(
+                "binding1", "tenant1", "user1", "session1", "relay", "msg-assistant",
+                "relay-session-1", RuntimeBindingStatus.ACTIVE, "run1", null, now, now,
+                Map.of("runtimeSessionEstablished", true));
+    }
+
+    private record TerminalTestFixture(
+            ChatRunTerminalCommitService service,
+            ChatStreamApplicationService streamService,
+            RuntimeBindingRepository bindingRepository,
+            ChatInteractionApplicationService interactionService,
+            ChatInteractionRequest interaction,
+            RuntimeBinding binding,
+            RunExecutionClaim claim,
+            ErrorEvent failureEvent
+    ) {
+        private ChatRunTerminalCommitService.TerminalCommitContext context(
+                RuntimeInteractionDispatchState dispatchState) {
+            return context(dispatchState, binding);
+        }
+
+        private ChatRunTerminalCommitService.TerminalCommitContext context(
+                RuntimeInteractionDispatchState dispatchState,
+                RuntimeBinding currentBinding) {
+            UserContext user = new UserContext("tenant1", "user1", "User One");
+            ChatSession session = new ChatSession(
+                    "session1", "tenant1", "user1", "test", "ACTIVE", "web", Instant.now(), Instant.now());
+            return new ChatRunTerminalCommitService.TerminalCommitContext(
+                    user, session, null, new AtomicReference<>(currentBinding), new AssistantAssembly(), "run1",
+                    claim, interaction, dispatchState);
+        }
     }
 
     private SessionApplicationService recordingSessionService(List<String> operations) {

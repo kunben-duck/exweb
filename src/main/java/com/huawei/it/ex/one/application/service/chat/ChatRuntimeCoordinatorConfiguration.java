@@ -18,6 +18,17 @@ import org.springframework.context.annotation.Configuration;
 @Configuration(proxyBeanMethods = false)
 class ChatRuntimeCoordinatorConfiguration {
     @Bean
+    RuntimeBindingDispatchCompensator runtimeBindingDispatchCompensator(
+            RuntimeBindingApplicationService runtimeBindingService,
+            DomainAgentProperties domainAgentProperties,
+            @Qualifier("domainAgentControlIoScheduler") Scheduler controlIoScheduler) {
+        return new RuntimeBindingDispatchCompensator(
+                runtimeBindingService,
+                controlIoScheduler,
+                domainAgentProperties);
+    }
+
+    @Bean
     DomainAgentRefusalCoordinator domainAgentRefusalCoordinator(
             AgentRuntimeExecutor agentRuntimeExecutor,
             RouteSignalApplicationService routeSignalService,
@@ -27,7 +38,8 @@ class ChatRuntimeCoordinatorConfiguration {
             RouteResolutionCoordinator routeResolutionCoordinator,
             ChatRunLeaseApplicationService chatRunLeaseService,
             @Qualifier("chatStreamEventScheduler") Scheduler eventIoScheduler,
-            @Qualifier("domainAgentControlIoScheduler") Scheduler controlIoScheduler) {
+            @Qualifier("domainAgentControlIoScheduler") Scheduler controlIoScheduler,
+            RuntimeBindingDispatchCompensator bindingCompensator) {
         return new DomainAgentRefusalCoordinator(
                 agentRuntimeExecutor,
                 routeSignalService,
@@ -37,7 +49,8 @@ class ChatRuntimeCoordinatorConfiguration {
                 routeResolutionCoordinator,
                 chatRunLeaseService,
                 eventIoScheduler,
-                controlIoScheduler);
+                controlIoScheduler,
+                bindingCompensator);
     }
 
     @Bean
@@ -49,7 +62,8 @@ class ChatRuntimeCoordinatorConfiguration {
             RouteResolutionCoordinator routeResolutionCoordinator,
             DomainAgentRefusalCoordinator refusalCoordinator,
             SystemResponseExecutor systemResponseExecutor,
-            AgentRuntimeExecutor agentRuntimeExecutor) {
+            AgentRuntimeExecutor agentRuntimeExecutor,
+            RuntimeBindingDispatchCompensator bindingCompensator) {
         return new ChatRuntimeDispatchCoordinator(
                 routeSignalService,
                 eventPersistenceCoordinator,
@@ -58,7 +72,8 @@ class ChatRuntimeCoordinatorConfiguration {
                 routeResolutionCoordinator,
                 refusalCoordinator,
                 systemResponseExecutor,
-                agentRuntimeExecutor);
+                agentRuntimeExecutor,
+                bindingCompensator);
     }
 
     @Bean
@@ -136,14 +151,16 @@ class ChatRuntimeCoordinatorConfiguration {
             AppliedRouteRecorder routeRecorder,
             InteractionEventFactory eventFactory,
             InteractionRunLifecycle lifecycle,
-            ChatEventPersistenceCoordinator persistenceCoordinator) {
+            ChatEventPersistenceCoordinator persistenceCoordinator,
+            @Qualifier("chatStreamEventScheduler") Scheduler eventIoScheduler) {
         return new RuntimeInteractionContinuationCoordinator(
                 runtimeBindingService,
                 runtimeExecutor,
                 routeRecorder,
                 eventFactory,
                 lifecycle,
-                persistenceCoordinator);
+                persistenceCoordinator,
+                eventIoScheduler);
     }
 
     @Bean

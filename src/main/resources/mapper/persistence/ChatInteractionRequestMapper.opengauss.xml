@@ -83,6 +83,34 @@
     </select>
 
     <!--
+      按 source run 精确查询其产生的最新 Interaction。stop 旧 run 时不得回退到会话中的更新等待。
+      入参: tenantId/userId/sessionId 为归属边界，sourceRunId 为请求 stop 的历史 WAITING_USER run。
+    -->
+    <select id="findLatestBySourceRun" resultMap="chatInteractionRequestResultMap">
+        SELECT <include refid="interactionColumns"/>
+        FROM fin_ex_chat_interaction_request_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND source_run_id = #{sourceRunId}
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+    </select>
+
+    <!--
+      等待态 stop 在短事务内锁定 Interaction，串行化用户回答 claim 与取消更新。
+      入参: tenantId/userId 为归属边界，interactionId 为已按 source run 定位的 Interaction。
+    -->
+    <select id="findByOwnerAndIdForUpdate" resultMap="chatInteractionRequestResultMap">
+        SELECT <include refid="interactionColumns"/>
+        FROM fin_ex_chat_interaction_request_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{interactionId}
+        FOR UPDATE
+    </select>
+
+    <!--
       原子声明用户响应，防止多个页签对同一个澄清请求重复提交。
       入参: ChatInteractionClaimRow，tenantId/userId/interactionId 为归属和目标，continueRunId 为续接 run，
             responsePayloadJson 为用户回答，now 为状态更新时间。
@@ -295,6 +323,23 @@
           AND user_id = #{userId}
           AND id = #{interactionId}
           AND status = 'WAITING'
+    </update>
+
+    <!--
+      用户 stop 只取消仍由当前 continuation run 持有的 RESPONDING Interaction。
+      continueRunId 条件防止迟到 stop 覆盖另一次续接。
+      入参: tenantId/userId/interactionId 为归属和目标，continueRunId 为当前 claim，cancelledAt 为取消时间。
+    -->
+    <update id="cancelRespondingForRun">
+        UPDATE fin_ex_chat_interaction_request_t
+        SET status = 'CANCELLED',
+            cancelled_at = #{cancelledAt},
+            updated_at = #{cancelledAt}
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{interactionId}
+          AND status = 'RESPONDING'
+          AND continue_run_id = #{continueRunId}
     </update>
 
     <!--

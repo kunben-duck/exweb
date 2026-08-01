@@ -59,6 +59,7 @@ final class RouteResolutionCoordinator {
             preparation.routeRef().set(route);
             preparation.bindingRef().set(binding);
             preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
+            preparation.bindingLifecycle().trackCreated(binding);
             return;
         }
         if (preparation.forceReroute()) {
@@ -198,6 +199,7 @@ final class RouteResolutionCoordinator {
         preparation.bindingRef().set(binding);
         preparation.routeRef().set(route);
         preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
+        preparation.bindingLifecycle().trackReused(binding, active);
     }
 
     private BindingResolution bindResolvedRoute(RouteResolutionRequest request,
@@ -223,6 +225,7 @@ final class RouteResolutionCoordinator {
                     route.routeSource(),
                     domainAgentBindingMetadata(route, intent),
                     request.agentMode()));
+            request.bindingLifecycle().trackCreated(binding);
             return new BindingResolution(route, binding, normalizedMode(request.currentRuntimeSessionMode()));
         }
         if (route.type() == RouteType.AGENT_RUNTIME) {
@@ -232,6 +235,12 @@ final class RouteResolutionCoordinator {
                     request.session().id(),
                     request.runId(),
                     request.runtimeBindingLeafId());
+            if (resolution.previousBinding() == null) {
+                request.bindingLifecycle().trackCreated(resolution.binding());
+            } else {
+                request.bindingLifecycle().trackReused(
+                        resolution.binding(), resolution.previousBinding());
+            }
             return new BindingResolution(route, resolution.binding(), resolution.sessionMode());
         }
         return new BindingResolution(route, request.currentBinding(),
@@ -324,7 +333,8 @@ final class RouteResolutionCoordinator {
             AtomicReference<RouteTarget> routeRef,
             AtomicReference<RuntimeBinding> bindingRef,
             AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
-            AgentModeProfile agentMode
+            AgentModeProfile agentMode,
+            RuntimeBindingDispatchLifecycle bindingLifecycle
     ) {
     }
 
@@ -339,7 +349,8 @@ final class RouteResolutionCoordinator {
             RouteTarget currentRoute,
             RuntimeBinding currentBinding,
             RuntimeSessionMode currentRuntimeSessionMode,
-            AgentModeProfile agentMode
+            AgentModeProfile agentMode,
+            RuntimeBindingDispatchLifecycle bindingLifecycle
     ) {
     }
 

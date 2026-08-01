@@ -145,7 +145,7 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
     }
 
     @Test
-    void stoppingInteractionContinuationReleasesMatchingClaim() {
+    void stoppingInteractionContinuationCancelsMatchingClaim() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -209,8 +209,8 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
                 user, run.id(), "USER_STOP", RuntimeForwardHeaders.empty()).block();
 
         ChatInteractionRequest released = interactions.requests.get(waiting.id());
-        assertThat(released.status()).isEqualTo(ChatInteractionStatus.WAITING);
-        assertThat(released.continueRunId()).isNull();
+        assertThat(released.status()).isEqualTo(ChatInteractionStatus.CANCELLED);
+        assertThat(released.continueRunId()).isEqualTo(run.id());
         assertThat(runs.runs.get(run.id()).status()).isEqualTo(ChatRunStatus.CANCELLED);
         assertThat(events.events).extracting(ChatEvent::type).containsExactly("message.delta", "run.cancelled");
         assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role())).hasSize(1);
@@ -226,14 +226,20 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
         assertThat(stopResult.messageReady()).isTrue();
         assertThat(stopResult.assistantMessageId()).isEqualTo(waiting.assistantMessageId());
 
-        // 模拟旧版本或异常窗口遗留的 CANCELLED + RESPONDING，再次 stop 只修复 claim，不重复写终态。
-        interactionService.claimInteractionResponse(new ChatInteractionResponseCommand(
-                user, waiting.id(), null, null, Map.of("问题", "重试答案"), Map.of()), run.id());
+        // 模拟旧版本或异常窗口遗留的 CANCELLED run + RESPONDING Interaction。
+        ChatInteractionRequest responding = new ChatInteractionRequest(
+                released.id(), released.tenantId(), released.userId(), released.sessionId(),
+                released.sourceRunId(), run.id(), released.userMessageId(), released.assistantMessageId(),
+                released.runtimeProvider(), released.runtimeBindingId(), released.runtimeSessionId(),
+                released.approvalId(), released.interactionType(), ChatInteractionStatus.RESPONDING,
+                released.requestPayload(), Map.of("问题", "重试答案"), released.expiresAt(),
+                released.answeredAt(), null, released.createdAt(), Instant.now());
+        interactions.requests.put(responding.id(), responding);
         coordinator.stopRun(user, run.id(), "USER_STOP", RuntimeForwardHeaders.empty()).block();
 
         ChatInteractionRequest reconciled = interactions.requests.get(waiting.id());
-        assertThat(reconciled.status()).isEqualTo(ChatInteractionStatus.WAITING);
-        assertThat(reconciled.continueRunId()).isNull();
+        assertThat(reconciled.status()).isEqualTo(ChatInteractionStatus.CANCELLED);
+        assertThat(reconciled.continueRunId()).isEqualTo(run.id());
         assertThat(events.events).extracting(ChatEvent::type).containsExactly("message.delta", "run.cancelled");
     }
 
@@ -568,6 +574,10 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
                 payload.put("operation_type", "questionnaire");
                 payload.put("approval_id", "approval-1");
                 payload.put("message", "Please answer the following questions");
+                payload.put("questions", List.of(Map.of(
+                        "question", "请选择技术方案",
+                        "options", List.of(Map.of("label", "方案A")),
+                        "multi_select", false)));
                 payload.put("runtimeSessionId", request.sessionId());
                 payload.put("optionalDetail", null);
                 return Flux.just(RuntimeEvent.card(request.runId(), request.sessionId(), payload));
@@ -631,6 +641,9 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
                 .satisfies(request -> {
                     assertThat(request.status()).isEqualTo(ChatInteractionStatus.WAITING);
                     assertThat(request.assistantMessageId()).isEqualTo(assistant.id());
+                    assertThat(request.runtimeBindingId()).isEqualTo(bindings.saved.id());
+                    assertThat(request.runtimeSessionId()).isEqualTo(bindings.saved.runtimeSessionId());
+                    assertThat(request.approvalId()).isEqualTo("approval-1");
                     assertThat(request.requestPayload()).containsKey("optionalDetail");
                     assertThat(request.requestPayload().get("optionalDetail")).isNull();
                 });

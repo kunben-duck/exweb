@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeCancelRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
@@ -25,6 +26,7 @@ import reactor.core.publisher.Mono;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -53,6 +55,7 @@ public class ChatRunStopCoordinator {
     private final ChatInteractionApplicationService chatInteractionService;
     private final ChatRunTerminalCommitService terminalCommitService;
     private final IdGenerator idGenerator;
+    private ChatWaitingStopCommitService waitingStopCommitService;
 
     @Autowired
     public ChatRunStopCoordinator(SessionApplicationService sessionService,
@@ -98,6 +101,12 @@ public class ChatRunStopCoordinator {
                 runExecutionRegistry, agentRuntimeExecutor, null, null, idGenerator);
     }
 
+    /** 测试兼容构造器无需感知等待态 stop；生产 Spring 上下文会注入该提交器。 */
+    @Autowired(required = false)
+    void setWaitingStopCommitService(ChatWaitingStopCommitService waitingStopCommitService) {
+        this.waitingStopCommitService = waitingStopCommitService;
+    }
+
     public ChatRunStopCoordinator(SessionApplicationService sessionService,
                                   ChatStreamApplicationService chatStreamService,
                                   ChatRunApplicationService chatRunService,
@@ -133,9 +142,18 @@ public class ChatRunStopCoordinator {
 
     private ChatRunStopResult stopRunNow(UserContext user, String runId, String reason,
                                          StopRunContext stopContext) {
+        ChatRun requestedRun = chatRunService.requireOwnedRun(user, runId);
+        if (requestedRun.status() == ChatRunStatus.WAITING_USER && waitingStopCommitService != null) {
+            return stopWaitingRun(user, requestedRun, reason, stopContext);
+        }
+        return stopActiveRun(user, requestedRun, reason, stopContext);
+    }
+
+    private ChatRunStopResult stopActiveRun(UserContext user, ChatRun requestedRun, String reason,
+                                            StopRunContext stopContext) {
         String effectiveReason = normalizeReason(reason);
         RuntimeForwardHeaders headerSnapshot = stopContext.forwardHeaders();
-        ChatRunStopDecision decision = chatRunService.requestStop(user, runId, effectiveReason);
+        ChatRunStopDecision decision = chatRunService.requestStop(user, requestedRun, effectiveReason);
         ChatRun run = decision.run();
         if (!decision.appendCancelledEvent()) {
             reconcileTerminalInteraction(run);
@@ -162,7 +180,7 @@ public class ChatRunStopCoordinator {
             ChatEvent cancelled = chatStreamService.appendAndPublish(cancelEvent);
             latest = chatRunService.observeEvent(cancelled);
             chatRunLeaseService.markTerminal(run.id(), ChatRunExecutionStatus.CANCELLED);
-            releaseContinuationInteractionClaim(run);
+            cancelContinuationInteractionClaim(run);
         } else {
             ChatEvent cancelEvent = RunCancelledEvent.of(run.id(), run.sessionId(), run.cancelReason(),
                     messageTarget.messageReady(), messageTarget.assistantMessageId());
@@ -179,12 +197,90 @@ public class ChatRunStopCoordinator {
         return chatRunService.toStopResult(latest == null ? run : latest);
     }
 
+    private ChatRunStopResult stopWaitingRun(UserContext user, ChatRun sourceRun, String reason,
+                                             StopRunContext stopContext) {
+        String effectiveReason = normalizeReason(reason);
+        ChatWaitingStopCommitService.WaitingStopCommitResult waiting =
+                waitingStopCommitService.cancelWaiting(user, sourceRun, effectiveReason);
+        ChatRun effectiveRun = waiting.effectiveRun();
+        if (effectiveRun != null) {
+            if ((effectiveRun.runtimeProvider() == null || effectiveRun.runtimeProvider().isBlank())
+                    && waiting.runtimeTarget() != null) {
+                cancelWaitingRuntimeBestEffort(
+                        waiting.runtimeTarget(), user, effectiveReason, stopContext);
+            }
+            stopActiveRun(user, effectiveRun, effectiveReason, stopContext);
+        } else if (waiting.interactionCancelled() && waiting.runtimeTarget() != null) {
+            cancelWaitingRuntimeBestEffort(waiting.runtimeTarget(), user, effectiveReason, stopContext);
+        }
+
+        ChatRunStopResult sourceResult = chatRunService.toStopResult(sourceRun);
+        if (waiting.interaction() == null) {
+            return sourceResult;
+        }
+        String interactionStatus = waiting.interactionCancelled()
+                ? "CANCELLED"
+                : waiting.interaction().status().name();
+        return sourceResult.withWaitingInteraction(
+                waiting.interaction().id(),
+                interactionStatus,
+                waiting.interactionCancelledAt() == null
+                        ? waiting.interaction().cancelledAt()
+                        : waiting.interactionCancelledAt(),
+                effectiveRun == null ? null : effectiveRun.id());
+    }
+
+    private void cancelWaitingRuntimeBestEffort(
+            ChatWaitingStopCommitService.WaitingRuntimeTarget target,
+            UserContext user,
+            String reason,
+            StopRunContext stopContext) {
+        AgentRuntimeCancelRequest request = new AgentRuntimeCancelRequest(
+                user.tenantId(),
+                user.ownerUserId(),
+                target == null ? null : target.sessionId(),
+                target == null ? null : target.runId(),
+                target == null ? null : target.runtimeSessionId(),
+                target == null ? null : target.provider(),
+                target == null ? null : target.runtimeTargetId(),
+                reason,
+                target == null || target.routeType() == null
+                        ? Map.of()
+                        : Map.of("routeType", target.routeType()),
+                stopContext.forwardHeaders(),
+                stopContext.traceContext());
+        try {
+            agentRuntimeExecutor.cancel(request)
+                    .onErrorResume(ex -> {
+                        log.warn(SystemErrorLogEntry.builder(cancelErrorCode(request.provider()),
+                                        "Waiting Runtime cancellation failed")
+                                .runId(request.runId())
+                                .sessionId(request.sessionId())
+                                .operation("chat-run.stop.waiting-runtime-cancel")
+                                .attribute("runtimeProvider", request.provider())
+                                .build(), ex);
+                        return Mono.empty();
+                    })
+                    .subscribe();
+        } catch (RuntimeException ex) {
+            log.warn(SystemErrorLogEntry.builder(cancelErrorCode(request.provider()),
+                            "Waiting Runtime cancellation invocation failed")
+                    .runId(request.runId())
+                    .sessionId(request.sessionId())
+                    .operation("chat-run.stop.waiting-runtime-cancel")
+                    .attribute("runtimeProvider", request.provider())
+                    .build(), ex);
+        }
+    }
+
     private void reconcileTerminalInteraction(ChatRun run) {
         if (terminalCommitService != null) {
             terminalCommitService.reconcileTerminalInteraction(run);
             return;
         }
-        if (run != null && (run.status() == ChatRunStatus.CANCELLED || run.status() == ChatRunStatus.FAILED)) {
+        if (run != null && run.status() == ChatRunStatus.CANCELLED) {
+            cancelContinuationInteractionClaim(run);
+        } else if (run != null && run.status() == ChatRunStatus.FAILED) {
             releaseContinuationInteractionClaim(run);
         }
     }
@@ -202,11 +298,24 @@ public class ChatRunStopCoordinator {
         }
     }
 
-    private void releaseContinuationInteractionClaim(ChatRun run) {
+    private void cancelContinuationInteractionClaim(ChatRun run) {
         if (chatInteractionService == null || run == null || run.metadata() == null) {
             return;
         }
         Object value = run.metadata().get("interactionId");
+        String interactionId = value == null ? null : String.valueOf(value).trim();
+        if (interactionId == null || interactionId.isBlank()) {
+            return;
+        }
+        chatInteractionService.cancelRespondingForRun(
+                run.tenantId(), run.userId(), interactionId, run.id(), java.time.Instant.now());
+    }
+
+    private void releaseContinuationInteractionClaim(ChatRun run) {
+        if (chatInteractionService == null || run == null || run.metadata() == null) {
+            return;
+        }
+        Object value = run.metadata().get(INTERACTION_ID_METADATA);
         String interactionId = value == null ? null : String.valueOf(value).trim();
         if (interactionId == null || interactionId.isBlank()) {
             return;
@@ -387,10 +496,14 @@ public class ChatRunStopCoordinator {
     }
 
     private SystemErrorCode cancelErrorCode(ChatRun run) {
-        if (run != null && "relay".equalsIgnoreCase(run.runtimeProvider())) {
+        return cancelErrorCode(run == null ? null : run.runtimeProvider());
+    }
+
+    private SystemErrorCode cancelErrorCode(String provider) {
+        if ("relay".equalsIgnoreCase(provider)) {
             return SystemErrorCode.RELAY_INTERRUPT_FAILED;
         }
-        if (run != null && "domain-agent".equalsIgnoreCase(run.runtimeProvider())) {
+        if ("domain-agent".equalsIgnoreCase(provider)) {
             return SystemErrorCode.DOMAIN_AGENT_CANCEL_FAILED;
         }
         return SystemErrorCode.INTERNAL_EXECUTION_FAILED;

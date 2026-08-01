@@ -40,6 +40,27 @@ public interface ChatInteractionRequestRepository {
     Optional<ChatInteractionRequest> findWaitingBySession(String tenantId, String userId, String sessionId);
 
     /**
+     * 按来源 run 查询该轮产生的最新 Interaction。
+     *
+     * <p>该查询用于 {@code WAITING_USER} run 的 stop 定位，不能退化为“取消会话全部等待”，
+     * 否则迟到的旧 run stop 可能误取消会话中更新的 Interaction。</p>
+     */
+    default Optional<ChatInteractionRequest> findLatestBySourceRun(
+            String tenantId, String userId, String sessionId, String sourceRunId) {
+        return Optional.empty();
+    }
+
+    /**
+     * 在调用方短事务内锁定指定 Interaction。
+     *
+     * <p>默认实现供测试替身兼容；生产仓储使用 {@code SELECT ... FOR UPDATE}。</p>
+     */
+    default Optional<ChatInteractionRequest> findByOwnerAndIdForUpdate(
+            String tenantId, String userId, String interactionId) {
+        return findByOwnerAndId(tenantId, userId, interactionId);
+    }
+
+    /**
      * 原子声明用户提交，避免多页签重复提交同一个等待请求。
      *
      * @param command 原子 claim 命令。
@@ -134,6 +155,14 @@ public interface ChatInteractionRequestRepository {
      * @return 影响行数。
      */
     int cancelWaitingById(String tenantId, String userId, String interactionId, Instant cancelledAt);
+
+    /**
+     * 用户 stop 时，仅取消仍由指定 continuation run 持有的 RESPONDING Interaction。
+     */
+    default int cancelRespondingForRun(String tenantId, String userId, String interactionId,
+                                       String continueRunId, Instant cancelledAt) {
+        return 0;
+    }
 
     /**
      * 标记等待请求过期。

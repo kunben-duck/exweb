@@ -251,6 +251,66 @@ class ChatRunApplicationServiceTest {
 
     @Test
     @SuppressWarnings("unchecked")
+    void streamStatusReturnsRelayQuestionnaireAutoActionDeadline() {
+        ChatInteractionApplicationService interactionService =
+                mock(ChatInteractionApplicationService.class);
+        ObjectProvider<ChatInteractionApplicationService> interactionProvider =
+                mock(ObjectProvider.class);
+        when(interactionProvider.getIfAvailable()).thenReturn(interactionService);
+        Instant now = Instant.parse("2026-08-01T10:00:00Z");
+        ChatInteractionRequest waiting = new ChatInteractionRequest(
+                "interaction-relay",
+                "tenant1",
+                "user1",
+                "session1",
+                "run-a",
+                null,
+                "message-user",
+                "message-assistant",
+                "relay",
+                "binding-relay",
+                "relay-session-1",
+                "approval-1",
+                ChatInteractionType.AGENT_CLARIFICATION,
+                ChatInteractionStatus.WAITING,
+                Map.of(
+                        "sourceType", "approval-request",
+                        "operation_type", "questionnaire",
+                        "autoActionAt", "2026-08-01T10:00:30Z",
+                        "autoActionTimeoutMs", 30_000L,
+                        "autoActionType", "IGNORE_QUESTIONNAIRE"),
+                Map.of(),
+                now.plusSeconds(3600),
+                null,
+                null,
+                now,
+                now);
+        when(interactionService.findWaiting(user(), "session1"))
+                .thenReturn(Optional.of(waiting));
+        ChatRunApplicationService service = new ChatRunApplicationService(
+                new InMemoryRunRepository(),
+                new InMemoryRunCache(),
+                new InMemoryEventStore(12L),
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                null,
+                null,
+                interactionProvider,
+                null);
+
+        var status = service.streamStatus(user(), "session1");
+
+        assertThat(status.waitingUserInput()).isTrue();
+        assertThat(status.waitingSourceRunId()).isEqualTo("run-a");
+        assertThat(status.interactionId()).isEqualTo("interaction-relay");
+        assertThat(status.autoActionAt()).isEqualTo(Instant.parse("2026-08-01T10:00:30Z"));
+        assertThat(status.autoActionTimeoutMs()).isEqualTo(30_000L);
+        assertThat(status.autoActionType()).isEqualTo("IGNORE_QUESTIONNAIRE");
+        assertThat(status.autoSelectAt()).isNull();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
     void streamStatusReturnsModeOnlyForActiveDomainAgentBinding() {
         RuntimeBindingApplicationService bindingService = mock(RuntimeBindingApplicationService.class);
         ObjectProvider<RuntimeBindingApplicationService> bindingProvider = mock(ObjectProvider.class);

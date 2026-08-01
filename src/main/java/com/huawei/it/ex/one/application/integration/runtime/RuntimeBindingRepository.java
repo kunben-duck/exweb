@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.application.integration.runtime;
 
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 
@@ -84,6 +85,73 @@ public interface RuntimeBindingRepository {
     RuntimeBinding save(RuntimeBinding binding);
 
     /**
+     * 在 run/execution 写入权保护下刷新等待态 Relay Binding。
+     *
+     * <p>生产数据库实现必须在同一短事务内锁定并校验 run/execution，再条件更新仍由
+     * {@code expectedLastRunId} 持有的 ACTIVE binding。</p>
+     */
+    default Optional<RuntimeBinding> resumeInteractionWithExecutionGuard(
+            RuntimeBinding binding,
+            String expectedLastRunId,
+            RunExecutionClaim claim) {
+        if (binding == null || expectedLastRunId == null || expectedLastRunId.isBlank()
+                || claim == null || !claim.runId().equals(binding.lastRunId())) {
+            return Optional.empty();
+        }
+        return findById(binding.id())
+                .filter(current -> current.status() == RuntimeBindingStatus.ACTIVE)
+                .filter(current -> expectedLastRunId.equals(current.lastRunId()))
+                .filter(current -> binding.provider().equals(current.provider()))
+                .map(ignored -> save(binding));
+    }
+
+    /**
+     * run-B 尚未订阅 Runtime 时，把 Binding 的最近 run 条件恢复为等待态来源 run。
+     */
+    default boolean restoreInteractionResume(String bindingId, String continueRunId, String sourceRunId) {
+        if (bindingId == null || bindingId.isBlank() || continueRunId == null || continueRunId.isBlank()
+                || sourceRunId == null || sourceRunId.isBlank()) {
+            return false;
+        }
+        return findById(bindingId)
+                .filter(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
+                .filter(binding -> continueRunId.equals(binding.lastRunId()))
+                .map(binding -> {
+                    save(binding.withRun(sourceRunId, binding.expiresAt()));
+                    return true;
+                })
+                .orElse(false);
+    }
+
+    /**
+     * Runtime 尚未订阅时，将本轮激活的 Binding 条件恢复为激活前快照。
+     *
+     * <p>生产数据库实现必须同时匹配 Binding 归属、ACTIVE 状态和当前 run，避免迟到补偿
+     * 覆盖后续 run 已经刷新过的 Binding。</p>
+     *
+     * @param previousBinding 激活前的完整 Binding 快照。
+     * @param currentRunId 尚未启动 Runtime 的当前 run 标识。
+     * @return true 表示恢复成功。
+     */
+    default boolean restoreUnstartedForRun(RuntimeBinding previousBinding, String currentRunId) {
+        if (previousBinding == null || currentRunId == null || currentRunId.isBlank()) {
+            return false;
+        }
+        return findById(previousBinding.id())
+                .filter(current -> current.status() == RuntimeBindingStatus.ACTIVE)
+                .filter(current -> currentRunId.equals(current.lastRunId()))
+                .filter(current -> previousBinding.tenantId().equals(current.tenantId()))
+                .filter(current -> previousBinding.userId().equals(current.userId()))
+                .filter(current -> previousBinding.chatSessionId().equals(current.chatSessionId()))
+                .filter(current -> previousBinding.provider().equals(current.provider()))
+                .map(current -> {
+                    save(previousBinding);
+                    return true;
+                })
+                .orElse(false);
+    }
+
+    /**
      * 仅当绑定仍由指定 run 持有且保持 ACTIVE 时取消绑定。
      *
      * <p>生产数据库实现必须使用单条条件更新，避免迟到补偿覆盖后续 run 已刷新的绑定。
@@ -102,6 +170,38 @@ public interface RuntimeBindingRepository {
                 .filter(binding -> runId.equals(binding.lastRunId()))
                 .map(binding -> {
                     save(binding.withStatus(RuntimeBindingStatus.CANCELLED));
+                    return true;
+                })
+                .orElse(false);
+    }
+
+    /**
+     * 条件取消指定 Interaction 引用、且仍由来源或 continuation run 持有的 ACTIVE binding。
+     *
+     * <p>完整归属和 lastRunId 条件用于防止旧等待态 stop 误取消后续 run 已经刷新的 binding；
+     * RESUMABLE binding 不在该更新范围内。</p>
+     */
+    default boolean cancelActiveForInteraction(
+            RuntimeBinding binding,
+            String sourceRunId,
+            String continueRunId) {
+        if (binding == null || binding.id() == null || binding.id().isBlank()
+                || binding.tenantId() == null || binding.tenantId().isBlank()
+                || binding.userId() == null || binding.userId().isBlank()
+                || binding.chatSessionId() == null || binding.chatSessionId().isBlank()
+                || sourceRunId == null || sourceRunId.isBlank()) {
+            return false;
+        }
+        return findById(binding.id())
+                .filter(current -> current.status() == RuntimeBindingStatus.ACTIVE)
+                .filter(current -> binding.tenantId().equals(current.tenantId()))
+                .filter(current -> binding.userId().equals(current.userId()))
+                .filter(current -> binding.chatSessionId().equals(current.chatSessionId()))
+                .filter(current -> sourceRunId.equals(current.lastRunId())
+                        || (continueRunId != null && !continueRunId.isBlank()
+                        && continueRunId.equals(current.lastRunId())))
+                .map(current -> {
+                    save(current.withStatus(RuntimeBindingStatus.CANCELLED));
                     return true;
                 })
                 .orElse(false);

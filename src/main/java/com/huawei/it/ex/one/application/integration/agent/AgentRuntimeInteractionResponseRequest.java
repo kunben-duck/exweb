@@ -24,6 +24,7 @@ import java.util.Map;
  * @param responsePayload 用户提交的回答 payload。
  * @param forwardHeaders 入口请求头快照，仅在内存中传递给可信 adapter。
  * @param traceContext 当前 Interaction HTTP 入口捕获的链路追踪快照。
+ * @param dispatchState Runtime Interaction 回答的请求内发送状态。
  */
 public record AgentRuntimeInteractionResponseRequest(
         String tenantId,
@@ -39,12 +40,26 @@ public record AgentRuntimeInteractionResponseRequest(
         String approvalId,
         Map<String, Object> responsePayload,
         @JsonIgnore RuntimeForwardHeaders forwardHeaders,
-        @JsonIgnore TraceContext traceContext
+        @JsonIgnore TraceContext traceContext,
+        @JsonIgnore RuntimeInteractionDispatchState dispatchState
 ) {
     public AgentRuntimeInteractionResponseRequest {
         responsePayload = ChatPayloadMaps.immutableCopy(responsePayload);
         forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
         traceContext = traceContext == null ? TraceContext.empty() : traceContext;
+        dispatchState = dispatchState == null ? RuntimeInteractionDispatchState.untracked() : dispatchState;
+    }
+
+    public AgentRuntimeInteractionResponseRequest(String tenantId, String userId, String userAccount,
+                                                  Long globalUserId, String sessionId, String runId,
+                                                  String runtimeSessionId, String provider, String interactionId,
+                                                  String interactionType, String approvalId,
+                                                  Map<String, Object> responsePayload,
+                                                  RuntimeForwardHeaders forwardHeaders,
+                                                  TraceContext traceContext) {
+        this(tenantId, userId, userAccount, globalUserId, sessionId, runId, runtimeSessionId, provider,
+                interactionId, interactionType, approvalId, responsePayload, forwardHeaders, traceContext,
+                RuntimeInteractionDispatchState.untracked());
     }
 
     public AgentRuntimeInteractionResponseRequest(String tenantId, String userId, String userAccount,
@@ -54,6 +69,7 @@ public record AgentRuntimeInteractionResponseRequest(
                                                   Map<String, Object> responsePayload,
                                                   RuntimeForwardHeaders forwardHeaders) {
         this(tenantId, userId, userAccount, globalUserId, sessionId, runId, runtimeSessionId, provider,
-                interactionId, interactionType, approvalId, responsePayload, forwardHeaders, TraceContext.empty());
+                interactionId, interactionType, approvalId, responsePayload, forwardHeaders, TraceContext.empty(),
+                RuntimeInteractionDispatchState.untracked());
     }
 }

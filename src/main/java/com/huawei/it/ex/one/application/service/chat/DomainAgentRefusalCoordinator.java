@@ -63,7 +63,11 @@ final class DomainAgentRefusalCoordinator {
                 routeResolutionCoordinator,
                 chatRunLeaseService,
                 eventIoScheduler,
-                eventIoScheduler);
+                eventIoScheduler,
+                new RuntimeBindingDispatchCompensator(
+                        runtimeBindingService,
+                        eventIoScheduler,
+                        domainAgentProperties));
     }
 
     DomainAgentRefusalCoordinator(AgentRuntimeExecutor agentRuntimeExecutor,
@@ -75,6 +79,31 @@ final class DomainAgentRefusalCoordinator {
                                   ChatRunLeaseApplicationService chatRunLeaseService,
                                   Scheduler eventIoScheduler,
                                   Scheduler controlIoScheduler) {
+        this(agentRuntimeExecutor,
+                routeSignalService,
+                runtimeBindingService,
+                domainAgentProperties,
+                appliedRouteRecorder,
+                routeResolutionCoordinator,
+                chatRunLeaseService,
+                eventIoScheduler,
+                controlIoScheduler,
+                new RuntimeBindingDispatchCompensator(
+                        runtimeBindingService,
+                        controlIoScheduler == null ? eventIoScheduler : controlIoScheduler,
+                        domainAgentProperties));
+    }
+
+    DomainAgentRefusalCoordinator(AgentRuntimeExecutor agentRuntimeExecutor,
+                                  RouteSignalApplicationService routeSignalService,
+                                  RuntimeBindingApplicationService runtimeBindingService,
+                                  DomainAgentProperties domainAgentProperties,
+                                  AppliedRouteRecorder appliedRouteRecorder,
+                                  RouteResolutionCoordinator routeResolutionCoordinator,
+                                  ChatRunLeaseApplicationService chatRunLeaseService,
+                                  Scheduler eventIoScheduler,
+                                  Scheduler controlIoScheduler,
+                                  RuntimeBindingDispatchCompensator bindingCompensator) {
         this.agentRuntimeExecutor = agentRuntimeExecutor;
         this.routeSignalService = routeSignalService;
         this.runtimeBindingService = runtimeBindingService;
@@ -94,7 +123,8 @@ final class DomainAgentRefusalCoordinator {
                 chatRunLeaseService,
                 eventIoScheduler,
                 controlIoScheduler,
-                domainAgentProperties);
+                domainAgentProperties,
+                bindingCompensator);
     }
 
     Flux<ChatEvent> execute(DomainAgentRunContext context) {

@@ -1,0 +1,3398 @@
+openapi: 3.0.3
+info:
+  title: FinanceEX ChatService API
+  version: 1.0.0
+  description: |
+    FinanceEX ChatService 当前公开业务接口的 OpenAPI 3.0.3 定义。
+
+    本文档以当前代码实现为准，覆盖聊天 Run、会话与消息、流式恢复、反馈、分享、文档和
+    WebSocket 实时订阅。Actuator 以及 IntentAgent、DomainAgent、Relay 的内部服务接口不属于
+    公开 API。
+
+    所有接口依赖企业网关或企业框架在服务端建立身份上下文。本文档不约定或虚构固定的身份
+    Header。资源不存在或不属于当前用户时，当前实现可能返回 HTTP 200 和
+    `ApiErrorResponse.code=ACCESS_DENIED`，调用方必须同时检查响应体结构。
+
+    `Cookie` 仅在标注的入口作为请求头内存透传给可信下游。不得把 Cookie、Token 或其他凭据
+    放入请求 body、metadata、事件、URL 或日志。
+servers:
+  - url: /
+    description: 当前部署根路径；可由网关 context path 统一前置
+security: []
+tags:
+  - name: Chat Runs & Streaming
+    description: Run 创建、停止、WAIT 续接、SSE 恢复和实时状态
+  - name: Chat Sessions & Messages
+    description: 会话生命周期、消息历史、消息树和分支
+  - name: Feedback
+    description: Assistant 消息反馈
+  - name: Sharing
+    description: 单轮问答快照分享及发送
+  - name: Documents
+    description: 文档上传、文档库、预览和下载
+  - name: Realtime WebSocket
+    description: Run topic 的实时订阅协议
+
+x-enterprise-authentication:
+  description: |
+    身份由企业网关或企业框架在进入 Controller 前建立。请求体不得提交 tenantId、userId 或
+    employeeNumber。身份上下文缺失返回 401/AUTH_CONTEXT_MISSING；资源越权按当前兼容语义
+    可能返回 HTTP 200/ACCESS_DENIED。
+x-sequence-rules:
+  description: |
+    ChatEvent.sequence 是数据库生成的全局 BIGINT 序号，单调但不保证连续。客户端只能记录
+    已成功处理的最大 sequence，并以 `(sessionId, sequence)` 去重；不得用 `seq + 1` 判断丢包。
+x-wait-time-semantics:
+  expiresAt: >-
+    Interaction 的业务有效期，由 financeex.chat-interaction.default-expire-duration 配置，当前默认 24 小时；
+    访问时检查，并非后台定时任务。
+  autoSelectAt: >-
+    AMBIGUOUS_ROUTE 的前端建议代选时间，由 financeex.intent.ambiguous-route-wait-timeout 配置，当前默认
+    30 秒；由前端触发 AUTO_SELECT，后端不注册定时任务。
+  autoActionAt: >-
+    Relay 问卷的前端建议忽略时间，由 financeex.relay.questionnaire-wait-timeout 配置；默认 0s 表示
+    永久等待且不返回 autoActionAt，正数仅生成前端时间事实，后端不注册定时任务。
+  routeSwitchConfirmation: ROUTE_SWITCH_CONFIRMATION 当前没有独立自动确认超时。
+x-websocket:
+  url: /v1/chat/ws
+  tag: Realtime WebSocket
+  description: |
+    WebSocket 仅承载实时扇出和订阅控制，不是事件事实源。连接建立后先发送 `connect`，再按
+    `streamTopicId` 发送 `subscribe`。服务端 `message.payload` 与 SSE 的
+    `ConversationTurnStream` 完全一致。真实持久化事件仅位于
+    `payload.payload.encodedItem.data`；heartbeat 和 done 不推进 afterSeq。
+
+    Redis 或本机 live buffer 无法保证继续实时交付时，服务端返回 `RECOVER_REQUIRED`。客户端
+    应停止当前订阅，使用 `details.recoveryAfterSeq` 调用 run 级 Event Resume，再选择一条实时
+    消费链继续处理。同一 run 不应同时消费 WebSocket 和 run 级 SSE。
+  identityContext: 复用 WebSocket Upgrade 时企业框架建立的身份上下文和现有 Origin 校验。
+  clientMessages:
+    connect:
+      $ref: '#/components/schemas/WebSocketConnectCommand'
+    presence:
+      $ref: '#/components/schemas/WebSocketPresenceCommand'
+    subscribe:
+      $ref: '#/components/schemas/WebSocketSubscribeCommand'
+    unsubscribe:
+      $ref: '#/components/schemas/WebSocketUnsubscribeCommand'
+  serverMessages:
+    reply:
+      $ref: '#/components/schemas/ChatWebSocketEnvelope'
+    message:
+      $ref: '#/components/schemas/ChatWebSocketEnvelope'
+    error:
+      $ref: '#/components/schemas/ChatWebSocketEnvelope'
+  errors:
+    - WS_AUTH_FAILED
+    - WS_ORIGIN_FORBIDDEN
+    - WS_MESSAGE_TOO_LARGE
+    - BAD_WS_MESSAGE
+    - SUBSCRIBE_ERROR
+    - NOT_SUBSCRIBED
+    - RECOVER_REQUIRED
+
+paths:
+  /v1/chat/runs:
+    post:
+      tags: [Chat Runs & Streaming]
+      operationId: createChatRun
+      summary: 创建聊天 Run 或续接 Interaction
+      description: |
+        唯一的提问和 Interaction 续接入口。普通请求通常使用 `runMode=NEXT`；WAIT 场景使用
+        `runMode=CONTINUE_INTERACTION` 和服务端返回的 `interactionId`。
+
+        接口只等待首个已经持久化的 ChatEvent，然后返回 runId、firstSeq 和 streamTopicId。
+        后台 Run 不依赖浏览器连接继续执行。首次消费时将 `firstSeq` 视为已处理，然后使用
+        WebSocket `subscribe(afterSeq=firstSeq)`；页面恢复 active run 时优先调用 run 级 Resume。
+
+        WAIT 场景摘要：
+        - 普通 Intent 澄清：提交 `questionnaireAnswers` 或有效附件；每轮使用新的消息 turn。
+        - AMBIGUOUS_ROUTE 指定候选：提交 `targetType=DOMAIN_AGENT + targetId=skillId`。
+        - AMBIGUOUS_ROUTE 代选：提交 `interactionAction=AUTO_SELECT`。
+        - AMBIGUOUS_ROUTE 其他：提交答案或附件，重新调用 Intent。
+        - 拒答切换确认：提交 `approved=true/false`；没有独立自动确认超时。
+        - Relay 问卷：严格使用 `questionnaireAnswers.label`，忽略使用 `ignore=true`。
+
+        `Cookie` 只作为内存请求头快照透传给可信 Runtime，不得出现在 body 或 metadata。
+      parameters:
+        - $ref: '#/components/parameters/OptionalCookie'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateChatRunRequest'
+            examples:
+              nextText:
+                summary: 普通 NEXT 文本提问
+                value:
+                  commandId: cmd_001
+                  sessionId: session_001
+                  runMode: NEXT
+                  message: 帮我分析本季度利润变化
+                  metadata: {}
+              nextAttachmentOnly:
+                summary: 普通 NEXT 附件-only；历史 user content 保存为空
+                value:
+                  commandId: cmd_002
+                  sessionId: session_001
+                  runMode: NEXT
+                  message: null
+                  attachments:
+                    - documentId: doc_001
+                  metadata: {}
+              directDomainAgent:
+                summary: 显式直连 DomainAgent
+                value:
+                  commandId: cmd_003
+                  sessionId: session_001
+                  runMode: NEXT
+                  message: 分析这份经营报告
+                  targetType: DOMAIN_AGENT
+                  targetId: finance_analysis_agent
+                  selectedIntent:
+                    intentId: finance.analysis
+                    intentName: 财务分析
+                  attachments:
+                    - documentId: doc_001
+                  agentMode:
+                    selections:
+                      - scheme: thinking
+                        code: deep
+                        displayName: 深度思考
+                  metadata: {}
+              editUser:
+                summary: 编辑历史 user 消息
+                value:
+                  commandId: cmd_004
+                  sessionId: session_001
+                  runMode: EDIT_USER
+                  editedMessageId: msg_user_001
+                  message: 请改为分析同比利润变化
+                  metadata: {}
+              regenerateAssistant:
+                summary: 重新生成历史 assistant 回答
+                value:
+                  commandId: cmd_005
+                  sessionId: session_001
+                  runMode: REGENERATE_ASSISTANT
+                  regeneratedMessageId: msg_assistant_001
+                  metadata: {}
+              forceReroute:
+                summary: 用户纠偏并强制重新意图
+                description: 当前实现直接采用新的 Intent 结果；只有结果为 CLARIFY 时才进入 WAIT。
+                value:
+                  commandId: cmd_006
+                  sessionId: session_001
+                  runMode: NEXT
+                  forceReroute: true
+                  message: 重新判断，我要使用财经知识问答
+                  metadata:
+                    lastIntentRejectReason:
+                      lastIntent: 智能文档
+                      domainRejectMessage: 用户主动要求重新路由
+              intentClarificationAnswer:
+                summary: 普通 Intent 澄清回答
+                value:
+                  commandId: cmd_007
+                  sessionId: session_001
+                  runMode: CONTINUE_INTERACTION
+                  interactionId: interaction_intent_001
+                  questionnaireAnswers:
+                    需要分析哪个指标: 利润变化
+                  metadata: {}
+              intentClarificationAttachmentOnly:
+                summary: 普通 Intent 澄清附件-only
+                value:
+                  commandId: cmd_008
+                  sessionId: session_001
+                  runMode: CONTINUE_INTERACTION
+                  interactionId: interaction_intent_001
+                  attachments:
+                    - documentId: doc_002
+                  metadata: {}
+              ambiguousSelectCandidate:
+                summary: AMBIGUOUS_ROUTE 指定候选技能
+                value:
+                  commandId: cmd_009
+                  sessionId: session_001
+                  runMode: CONTINUE_INTERACTION
+                  interactionId: interaction_ambiguous_001
+                  targetType: DOMAIN_AGENT
+                  targetId: finance_data_query
+                  metadata: {}
+              ambiguousAutoSelect:
+                summary: 点击代为选择或前端到达 autoSelectAt 后代选
+                value:
+                  commandId: cmd_010
+                  sessionId: session_001
+                  runMode: CONTINUE_INTERACTION
+                  interactionId: interaction_ambiguous_001
+                  interactionAction: AUTO_SELECT
+                  metadata: {}
+              ambiguousOtherText:
+                summary: AMBIGUOUS_ROUTE 选择“其他”并重新意图
+                value:
+                  commandId: cmd_011
+                  sessionId: session_001
+                  runMode: CONTINUE_INTERACTION
+                  interactionId: interaction_ambiguous_001
+                  questionnaireAnswers:
+                    其他: 我需要查询基金净值
+                  metadata: {}
+              ambiguousOtherAttachment:
+                summary: AMBIGUOUS_ROUTE 选择“其他”并只上传附件
+                value:
+                  commandId: cmd_012
+                  sessionId: session_001
+                  runMode: CONTINUE_INTERACTION
+                  interactionId: interaction_ambiguous_001
+                  attachments:
+                    - documentId: doc_003
+                  metadata: {}
+              refusalSwitchApprove:
+                summary: DomainAgent 拒答后确认切换到新目标
+                value:
+                  commandId: cmd_013
+                  sessionId: session_001
+                  runMode: CONTINUE_INTERACTION
+                  interactionId: interaction_switch_001
+                  approved: true
+                  scope: once
+                  metadata: {}
+              refusalSwitchDecline:
+                summary: DomainAgent 拒答后拒绝切换
+                value:
+                  commandId: cmd_014
+                  sessionId: session_001
+                  runMode: CONTINUE_INTERACTION
+                  interactionId: interaction_switch_001
+                  approved: false
+                  scope: once
+                  metadata: {}
+              relayQuestionnaireAnswer:
+                summary: Relay 问卷单选、多选和自定义文本回答
+                value:
+                  commandId: cmd_015
+                  sessionId: session_001
+                  runMode: CONTINUE_INTERACTION
+                  interactionId: interaction_relay_001
+                  approved: true
+                  scope: once
+                  questionnaireAnswers:
+                    label:
+                      请选择技术方案: 方案A
+                      请选择部署环境:
+                        - 开发环境
+                        - 测试环境
+                      请补充说明: 优先保证稳定性
+                  metadata: {}
+              relayQuestionnaireIgnore:
+                summary: 用户点击忽略或前端到达 autoActionAt 后忽略 Relay 问卷
+                value:
+                  commandId: cmd_016
+                  sessionId: session_001
+                  runMode: CONTINUE_INTERACTION
+                  interactionId: interaction_relay_001
+                  approved: false
+                  scope: once
+                  questionnaireAnswers:
+                    ignore: true
+                  metadata: {}
+      responses:
+        '200':
+          description: Run 已创建，首个事件已经持久化
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatRunStart'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                created:
+                  value:
+                    runId: run_002
+                    sessionId: session_001
+                    firstSeq: 1042
+                    createdAt: '2026-08-01T10:00:00Z'
+                    streamTopicId: chat-run-run_002
+                accessDenied:
+                  $ref: '#/components/examples/AccessDenied'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /v1/chat/runs/{runId}/stop:
+    post:
+      tags: [Chat Runs & Streaming]
+      operationId: stopChatRun
+      summary: 统一停止运行态 Run 或取消等待态 Interaction
+      description: |
+        运行态使用 `activeRunId`；等待态使用 `stream-status.waitingSourceRunId`。请求无 body。
+
+        - RUNNING/CANCELLING：调用当前 Runtime 的真实取消能力并按既有流程保存 partial assistant。
+        - Intent 澄清或 AMBIGUOUS_ROUTE：取消本地 Interaction；没有实际 Runtime 时不调用下游。
+        - Relay 问卷：取消精确 ACTIVE Binding，并尽力执行 `RESUME + stop_all_agents`。
+        - DomainAgent 等待：调用实际 DomainAgent cancel。
+
+        等待源 run-A 的历史状态仍保持 WAITING_USER，但 Interaction 变为 CANCELLED，随后允许新的 NEXT。
+        若 run-B 已经创建，`effectiveRunId` 返回实际被停止的 continuation run。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/OptionalCookie'
+      responses:
+        '200':
+          description: Stop 已幂等处理；也可能是 ACCESS_DENIED 提示
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatRunStop'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                runningStopped:
+                  value:
+                    runId: run_002
+                    sessionId: session_001
+                    status: CANCELLED
+                    latestSeq: 1102
+                    stoppedAt: '2026-08-01T10:00:20Z'
+                    messageReady: true
+                    assistantMessageId: msg_assistant_001
+                    feedbackTargetMessageId: msg_assistant_001
+                    waitingUserInput: false
+                waitingCancelled:
+                  value:
+                    runId: run_A
+                    sessionId: session_001
+                    status: WAITING_USER
+                    latestSeq: 1205
+                    stoppedAt: '2026-08-01T10:01:00Z'
+                    messageReady: true
+                    assistantMessageId: msg_assistant_wait_001
+                    feedbackTargetMessageId: msg_assistant_wait_001
+                    waitingUserInput: false
+                    interactionId: interaction_ambiguous_001
+                    interactionStatus: CANCELLED
+                    interactionCancelledAt: '2026-08-01T10:01:00Z'
+                    effectiveRunId: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /v1/chat/sessions/{sessionId}/events/resume:
+    get:
+      tags: [Chat Runs & Streaming]
+      operationId: resumeSessionEvents
+      summary: 补发会话已落库事件
+      description: |
+        只读取当前会话中 `sequence > afterSeq` 的有限数据库事件，不提供 active run 的持续 live tail。
+        适合补齐会话级缺口，不用于恢复某个 active run 的实时输出。SSE event name 固定为
+        `conversation-turn-stream`。
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/AfterSeq'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConversationTurnStreamResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/chat/runs/{runId}/events/resume:
+    get:
+      tags: [Chat Runs & Streaming]
+      operationId: resumeRunEvents
+      summary: 补发指定 Run 并接续实时尾流
+      description: |
+        实现先订阅 live buffer，再查询数据库，以覆盖查询与实时订阅之间的窗口；随后按 sequence 去重并
+        输出 `sequence > afterSeq` 的事件。active run 会继续输出 live tail，直到持久化终态后发送 done。
+
+        页面重新打开时，若 `stream-status.activeRunId` 存在，建议以
+        `activeRunFirstSeq - 1` 为 afterSeq 恢复完整当前 run。收到 `RECOVER_REQUIRED` 后，以服务端建议
+        水位重新调用本接口。同一 run 恢复期间只使用本 SSE 或 WebSocket 其中之一。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/AfterSeq'
+      responses:
+        '200':
+          $ref: '#/components/responses/ConversationTurnStreamResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/chat/sessions/{sessionId}/stream-status:
+    get:
+      tags: [Chat Runs & Streaming]
+      operationId: getChatStreamStatus
+      summary: 查询会话当前 Run、WAIT 和 Binding 状态
+      description: |
+        页面刷新、跨页签或跨浏览器恢复的入口。先查询历史消息以恢复已保存的等待卡片，再读取本接口：
+        - 有 activeRunId：使用 run 级 Resume。
+        - waitingUserInput=true：使用 waitingSourceRunId 执行 stop，或使用 interactionId 续接。
+        - AMBIGUOUS_ROUTE 的 autoSelectAt 已到：前端提交 AUTO_SELECT。
+        - Relay 的 autoActionAt 已到：前端提交 ignore=true。
+
+        run-A 与续接 run-B 使用不同 runId，但 AMBIGUOUS_ROUTE 和 Relay 问卷会复用同一个 assistant。
+        run-B 事件中的 assistantMessageId/sourceRunId 用于合并实时展示。
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: 会话流式状态；也可能是 ACCESS_DENIED 提示
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatStreamStatus'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                activeRun:
+                  value:
+                    sessionId: session_001
+                    latestSeq: 1300
+                    activeRunId: run_B
+                    activeRunStatus: RUNNING
+                    activeStreamTopicId: chat-run-run_B
+                    activeRunFirstSeq: 1280
+                    activeRunLastSeq: 1300
+                    cancellable: true
+                    waitingUserInput: false
+                ambiguousWaiting:
+                  value:
+                    sessionId: session_001
+                    latestSeq: 1205
+                    activeRunId: null
+                    activeRunStatus: null
+                    activeStreamTopicId: null
+                    activeRunFirstSeq: null
+                    activeRunLastSeq: null
+                    cancellable: false
+                    waitingUserInput: true
+                    waitingSourceRunId: run_A
+                    interactionId: interaction_ambiguous_001
+                    interactionType: INTENT_CLARIFICATION
+                    assistantMessageId: msg_assistant_wait_001
+                    expiresAt: '2026-08-02T10:00:00Z'
+                    autoSelectAt: '2026-08-01T10:00:30Z'
+                    autoSelectTimeoutMs: 30000
+                relayWaiting:
+                  value:
+                    sessionId: session_001
+                    latestSeq: 1405
+                    activeRunId: null
+                    activeRunStatus: null
+                    activeStreamTopicId: null
+                    cancellable: false
+                    waitingUserInput: true
+                    waitingSourceRunId: run_relay_A
+                    interactionId: interaction_relay_001
+                    interactionType: AGENT_CLARIFICATION
+                    assistantMessageId: msg_assistant_relay_001
+                    expiresAt: '2026-08-02T10:00:00Z'
+                    autoActionAt: '2026-08-01T10:01:00Z'
+                    autoActionTimeoutMs: 60000
+                    autoActionType: IGNORE_QUESTIONNAIRE
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/chat/messages/{messageId}/feedback:
+    post:
+      tags: [Feedback]
+      operationId: submitMessageFeedback
+      summary: 提交或更新 Assistant 消息反馈
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageFeedbackRequest'
+            example:
+              runId: run_002
+              rating: LIKE
+              reasonCode: ACCURATE
+              commentText: 回答清晰
+              metadata: {}
+      responses:
+        '200':
+          description: 当前反馈状态
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/MessageFeedback'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [Feedback]
+      operationId: cancelMessageFeedback
+      summary: 取消当前用户的消息反馈
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+        - name: runId
+          in: query
+          required: false
+          description: 可选关联 run；存在时必须与消息属于同一会话
+          schema:
+            type: string
+      responses:
+        '200':
+          description: CANCELLED 反馈状态
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/MessageFeedback'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/chat/sessions:
+    post:
+      tags: [Chat Sessions & Messages]
+      operationId: createChatSession
+      summary: 创建空会话
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateChatSessionRequest'
+            example:
+              title: 财务分析
+              channel: WEB
+              appId: finance-web
+              appName: 财经助手
+      responses:
+        '200':
+          $ref: '#/components/responses/ChatSessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    get:
+      tags: [Chat Sessions & Messages]
+      operationId: listChatSessionsByCursor
+      summary: 游标分页查询会话
+      parameters:
+        - $ref: '#/components/parameters/AppIdQuery'
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: 会话游标页；也可能是 ACCESS_DENIED 提示
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatSessionPage'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      tags: [Chat Sessions & Messages]
+      operationId: deleteChatSessions
+      summary: 批量软删除会话
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchDeleteChatSessionsRequest'
+      responses:
+        '200':
+          description: 批量删除结果
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/BatchDeleteChatSessions'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /v1/chat/sessions/page:
+    get:
+      tags: [Chat Sessions & Messages]
+      operationId: listChatSessionsByPage
+      summary: 页码分页查询会话
+      parameters:
+        - $ref: '#/components/parameters/AppIdQuery'
+        - name: curPage
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: 会话页码页
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatSessionNumberPage'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/chat/sessions/{sessionId}:
+    get:
+      tags: [Chat Sessions & Messages]
+      operationId: getChatSession
+      summary: 查询会话详情
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          $ref: '#/components/responses/ChatSessionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      tags: [Chat Sessions & Messages]
+      operationId: updateChatSession
+      summary: 更新会话标题
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateChatSessionRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/ChatSessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [Chat Sessions & Messages]
+      operationId: deleteChatSession
+      summary: 软删除会话
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          $ref: '#/components/responses/ChatSessionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /v1/chat/sessions/{sessionId}/read:
+    post:
+      tags: [Chat Sessions & Messages]
+      operationId: markChatSessionRead
+      summary: 提交已读事件水位
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MarkChatSessionReadRequest'
+            example:
+              readThroughSeq: 1300
+      responses:
+        '200':
+          $ref: '#/components/responses/ChatSessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/chat/sessions/{sessionId}/messages:
+    get:
+      tags: [Chat Sessions & Messages]
+      operationId: listChatMessages
+      summary: 查询会话 active path 历史消息
+      description: |
+        返回 user/assistant 消息、附件和已保存 Parts。等待态 assistant 即使正文为空，只要存在已保存
+        卡片 Parts 也会返回，页面可据此恢复 WAIT 卡片。Intent 的 intent-start/progress/delta 仅保存在
+        ChatEvent，不进入历史 Parts；intent-result 仍进入 Parts。
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - name: leafMessageId
+          in: query
+          required: false
+          description: 指定需要读取的消息树叶子；为空使用会话 current leaf
+          schema:
+            type: string
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: 历史消息页
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatMessagePage'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/chat/sessions/{sessionId}/messages/tree:
+    get:
+      tags: [Chat Sessions & Messages]
+      operationId: getChatMessageTree
+      summary: 查询完整可见消息树
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: 消息树
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatMessageTree'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/chat/sessions/{sessionId}/messages/{messageId}/variants:
+    get:
+      tags: [Chat Sessions & Messages]
+      operationId: listChatMessageVariants
+      summary: 查询同父同角色消息候选版本
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/MessageId'
+      responses:
+        '200':
+          description: 完整候选消息列表
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items:
+                      $ref: '#/components/schemas/ChatMessage'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/chat/sessions/{sessionId}/path:
+    post:
+      tags: [Chat Sessions & Messages]
+      operationId: selectChatMessagePath
+      summary: 切换会话 active path
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectChatPathRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/ChatSessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /v1/chat/sessions/{sessionId}/branches:
+    post:
+      tags: [Chat Sessions & Messages]
+      operationId: createChatSessionBranch
+      summary: 从指定消息创建只读历史快照分支
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateChatBranchRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/ChatSessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /v1/chat/sessions/{sessionId}/archive:
+    post:
+      tags: [Chat Sessions & Messages]
+      operationId: archiveChatSession
+      summary: 归档会话
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          $ref: '#/components/responses/ChatSessionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /v1/chat/sessions/{sessionId}/restore:
+    post:
+      tags: [Chat Sessions & Messages]
+      operationId: restoreChatSession
+      summary: 恢复已归档会话
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          $ref: '#/components/responses/ChatSessionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /v1/chat/messages/{messageId}/share:
+    post:
+      tags: [Sharing]
+      operationId: createChatShare
+      summary: 创建单轮问答分享快照
+      description: |
+        当前仅允许选择一个 assistant 消息。服务端固定快照该 assistant、其父 user、附件展示信息和
+        默认可见 Parts。分享读取固定快照，不会随原会话后续修改而变化，也不会授予附件下载权限。
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateChatShareRequest'
+            example:
+              title: 本季度利润分析
+              expiresAt: '2026-09-01T00:00:00Z'
+      responses:
+        '200':
+          description: 分享元数据；也可能是 ACCESS_DENIED 提示
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatShare'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /v1/chat/messages/{messageId}/share/deliveries:
+    post:
+      tags: [Sharing]
+      operationId: createAndDeliverChatShare
+      summary: 创建单轮分享并立即发送
+      description: Cookie 仅按 provider 配置透传给可信发送适配器。
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+        - $ref: '#/components/parameters/OptionalCookie'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateChatShareAndDeliveryRequest'
+            example:
+              title: 本季度利润分析
+              expiresAt: '2026-09-01T00:00:00Z'
+              provider: welink
+              targetAccounts: [u001, u002]
+              groupIds: []
+              content: 请查收分析结果
+              language: zh-CN
+      responses:
+        '200':
+          description: 分享及发送结果
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatShareAndDelivery'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /v1/chat/shares:
+    get:
+      tags: [Sharing]
+      operationId: listChatShares
+      summary: 查询当前用户创建的分享
+      parameters:
+        - name: curPage
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: 分享页码页
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatSharePage'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/chat/shares/{shareId}:
+    get:
+      tags: [Sharing]
+      operationId: getChatShare
+      summary: 查询分享固定快照
+      parameters:
+        - $ref: '#/components/parameters/ShareId'
+      responses:
+        '200':
+          description: 单轮分享详情；也可能是 ACCESS_DENIED 提示
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatShareDetail'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [Sharing]
+      operationId: revokeChatShare
+      summary: 撤销分享
+      parameters:
+        - $ref: '#/components/parameters/ShareId'
+      responses:
+        '200':
+          description: REVOKED 分享元数据
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatShare'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /v1/chat/shares/{shareId}/deliveries:
+    post:
+      tags: [Sharing]
+      operationId: deliverChatShare
+      summary: 发送已有分享
+      parameters:
+        - $ref: '#/components/parameters/ShareId'
+        - $ref: '#/components/parameters/OptionalCookie'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateChatShareDeliveryRequest'
+            example:
+              provider: welink
+              targetAccounts: [u001]
+              groupIds: [group_001]
+              title: 财务分析结果
+              content: 请查收
+              language: zh-CN
+      responses:
+        '200':
+          description: Provider 发送结果
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatShareDelivery'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /v1/documents:
+    post:
+      tags: [Documents]
+      operationId: uploadDocument
+      summary: 上传文件并登记文档资产
+      description: |
+        Servlet 与 WebFlux 启动模式提供相同外部契约。`metadata` 是 multipart 中的 JSON 字符串，
+        不是独立 application/json body。Cookie 仅按 provider 配置透传给可信上传服务。
+      parameters:
+        - $ref: '#/components/parameters/OptionalCookie'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                sessionId:
+                  type: string
+                  description: 可选关联会话；服务端校验归属
+                metadata:
+                  type: string
+                  description: JSON object 字符串；api-store 可使用 metadata.skillId 控制上传请求
+                  example: '{"skillId":"finance_analysis","source":"chat"}'
+      responses:
+        '200':
+          description: 已登记文档元数据
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/UploadedDocument'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    get:
+      tags: [Documents]
+      operationId: listDocuments
+      summary: 游标分页查询当前用户文档库
+      parameters:
+        - name: sessionId
+          in: query
+          required: false
+          description: 只查询关联到指定会话的文档
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 文档库游标页
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/DocumentLibraryPage'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/documents/{documentId}:
+    get:
+      tags: [Documents]
+      operationId: getDocument
+      summary: 查询文档元数据
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+      responses:
+        '200':
+          $ref: '#/components/responses/UploadedDocumentResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      tags: [Documents]
+      operationId: updateDocument
+      summary: 更新文档展示名称或扩展元数据
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDocumentRequest'
+            example:
+              originalName: 经营分析报告.pdf
+              metadataJson: '{"category":"finance"}'
+      responses:
+        '200':
+          $ref: '#/components/responses/UploadedDocumentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [Documents]
+      operationId: deleteDocument
+      summary: 软删除文档
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+      responses:
+        '200':
+          $ref: '#/components/responses/UploadedDocumentResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /v1/documents/{documentId}/status:
+    get:
+      tags: [Documents]
+      operationId: getDocumentStatus
+      summary: 查询文档处理状态
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+      responses:
+        '200':
+          description: 文档状态
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/DocumentStatus'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/documents/{documentId}/preview-url:
+    get:
+      tags: [Documents]
+      operationId: getDocumentPreviewUrl
+      summary: 获取后端受控预览地址
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+      responses:
+        '200':
+          description: 当前实现返回 BACKEND_STREAM 地址
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/DocumentAccess'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/documents/{documentId}/download:
+    get:
+      tags: [Documents]
+      operationId: downloadDocument
+      summary: 鉴权并流式下载文档
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+      responses:
+        '200':
+          description: 文档二进制内容；Content-Disposition 为 attachment
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              description: 带服务端可信文件名的 attachment 响应头
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+  parameters:
+    OptionalCookie:
+      name: Cookie
+      in: header
+      required: false
+      description: |
+        可选的原始 Cookie 请求头，仅作为内存快照透传给可信下游。不得复制到 body、metadata、
+        URL、事件或日志。身份认证方式仍由企业网关或企业框架决定。
+      schema:
+        type: string
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema:
+        type: string
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+    MessageId:
+      name: messageId
+      in: path
+      required: true
+      schema:
+        type: string
+    ShareId:
+      name: shareId
+      in: path
+      required: true
+      schema:
+        type: string
+    DocumentId:
+      name: documentId
+      in: path
+      required: true
+      schema:
+        type: string
+    AfterSeq:
+      name: afterSeq
+      in: query
+      required: false
+      description: 已实际处理成功的最大 ChatEvent.sequence；只返回大于该值的事件
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+        default: 0
+    AppIdQuery:
+      name: appId
+      in: query
+      required: false
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: 参数错误或 Bean Validation 失败
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiErrorResponse'
+          examples:
+            badRequest:
+              value:
+                timestamp: '2026-08-01T10:00:00Z'
+                path: /v1/chat/runs
+                status: 400
+                error: Bad Request
+                code: BAD_REQUEST
+                message: 用户消息不能为空
+            validationFailed:
+              value:
+                timestamp: '2026-08-01T10:00:00Z'
+                path: /v1/chat/runs
+                status: 400
+                error: Bad Request
+                code: VALIDATION_FAILED
+                message: 'message: message 长度不能超过 20000'
+    Unauthorized:
+      description: 企业身份上下文缺失
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiErrorResponse'
+          example:
+            timestamp: '2026-08-01T10:00:00Z'
+            path: /v1/chat/runs
+            status: 401
+            error: Unauthorized
+            code: AUTH_CONTEXT_MISSING
+            message: 用户身份上下文缺失
+    Conflict:
+      description: |
+        资源状态冲突。常见 code 包括 ACTIVE_RUN_EXISTS、INTERACTION_ALREADY_HANDLED、
+        INTERACTION_EXPIRED、CONFLICT 以及分享状态冲突码。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiErrorResponse'
+          examples:
+            activeRun:
+              value:
+                timestamp: '2026-08-01T10:00:00Z'
+                path: /v1/chat/runs
+                status: 409
+                error: Conflict
+                code: ACTIVE_RUN_EXISTS
+                message: 当前会话已有运行中的任务
+            interactionHandled:
+              value:
+                timestamp: '2026-08-01T10:00:00Z'
+                path: /v1/chat/runs
+                status: 409
+                error: Conflict
+                code: INTERACTION_ALREADY_HANDLED
+                message: 当前交互已被处理
+    ConversationTurnStreamResponse:
+      description: |
+        SSE event name 固定为 `conversation-turn-stream`。每个 data 是 ConversationTurnStream；
+        只有 `payload.type=stream-item` 携带持久化 ChatEvent。heartbeat/done 不推进 afterSeq。
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            example: no-cache
+        X-Accel-Buffering:
+          schema:
+            type: string
+            example: 'no'
+      content:
+        text/event-stream:
+          schema:
+            $ref: '#/components/schemas/ConversationTurnStream'
+          examples:
+            streamItem:
+              value:
+                type: conversation-turn-stream
+                payload:
+                  type: stream-item
+                  conversationId: session_001
+                  turnId: run_002
+                  streamItemId: seq-1043
+                  serverTimestampMs: 1785578400000
+                  encodedItem:
+                    encoding: chat-event-json-v1
+                    event: message.delta
+                    data:
+                      runId: run_002
+                      sessionId: session_001
+                      sequence: 1043
+                      type: message.delta
+                      payload:
+                        delta: 本季度
+            intentClarificationWaiting:
+              $ref: '#/components/examples/IntentClarificationWaitingEvent'
+            ambiguousRouteCard:
+              $ref: '#/components/examples/AmbiguousRouteCardEvent'
+            routeSwitchConfirmation:
+              $ref: '#/components/examples/RouteSwitchConfirmationEvent'
+            relayQuestionnaireCard:
+              $ref: '#/components/examples/RelayQuestionnaireCardEvent'
+    ChatSessionResponse:
+      description: 会话快照；也可能是 HTTP 200/ACCESS_DENIED 提示
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/ChatSession'
+              - $ref: '#/components/schemas/ApiErrorResponse'
+    UploadedDocumentResponse:
+      description: 文档元数据；也可能是 HTTP 200/ACCESS_DENIED 提示
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/UploadedDocument'
+              - $ref: '#/components/schemas/ApiErrorResponse'
+
+  examples:
+    AccessDenied:
+      summary: 当前实现的资源不可访问兼容响应
+      value:
+        timestamp: '2026-08-01T10:00:00Z'
+        path: /v1/chat/runs
+        status: 200
+        error: OK
+        code: ACCESS_DENIED
+        message: 当前数据不可访问或已不存在
+    IntentClarificationWaitingEvent:
+      summary: 普通 Intent 澄清进入 WAITING_USER
+      value:
+        type: conversation-turn-stream
+        payload:
+          type: stream-item
+          conversationId: session_001
+          turnId: run_A
+          streamItemId: seq-2001
+          encodedItem:
+            encoding: chat-event-json-v1
+            event: run.waiting_user
+            data:
+              runId: run_A
+              sessionId: session_001
+              sequence: 2001
+              type: run.waiting_user
+              payload:
+                status: WAITING_USER
+                interactionType: INTENT_CLARIFICATION
+                interactionId: interaction_intent_001
+                assistantMessageId: msg_assistant_clarify_001
+                feedbackTargetMessageId: msg_assistant_clarify_001
+                messageReady: true
+                expiresAt: '2026-08-02T10:00:00Z'
+    AmbiguousRouteCardEvent:
+      summary: AMBIGUOUS_ROUTE 候选卡片
+      value:
+        type: conversation-turn-stream
+        payload:
+          type: stream-item
+          conversationId: session_001
+          turnId: run_A
+          streamItemId: seq-2010
+          encodedItem:
+            encoding: chat-event-json-v1
+            event: runtime.card
+            data:
+              runId: run_A
+              sessionId: session_001
+              sequence: 2010
+              type: runtime.card
+              payload:
+                source: intent-agent
+                sourceType: intent-clarification-request
+                routeAction: CLARIFY
+                clarificationType: AMBIGUOUS_ROUTE
+                clarifyQuestion: 请选择要使用的技能
+                candidateIntents:
+                  - intentId: domain_agent_finance_data_query
+                    intentName: 财经智能问数
+                    confidence: 0.86
+                    accessName: domain_agent_finance_data_query
+                    skillId: finance_data_query
+                    resourceInstruction:
+                      resourceId: resource_finance_data_query
+                  - intentId: domain_agent_finance_knowledge
+                    intentName: 财经知识助手
+                    confidence: 0.81
+                    accessName: domain_agent_finance_knowledge
+                    skillId: finance_knowledge
+                    resourceInstruction:
+                      resourceId: resource_finance_knowledge
+                actions:
+                  - type: AUTO_SELECT
+                    displayName: 代为选择
+                  - type: OTHER
+                    displayName: 其他
+                autoSelectAt: '2026-08-01T10:00:30Z'
+                autoSelectTimeoutMs: 30000
+    RouteSwitchConfirmationEvent:
+      summary: DomainAgent 拒答后请求确认切换
+      value:
+        type: conversation-turn-stream
+        payload:
+          type: stream-item
+          conversationId: session_001
+          turnId: run_A
+          streamItemId: seq-2020
+          encodedItem:
+            encoding: chat-event-json-v1
+            event: runtime.card
+            data:
+              runId: run_A
+              sessionId: session_001
+              sequence: 2020
+              type: runtime.card
+              payload:
+                source: chatservice
+                sourceType: route-switch-confirmation-request
+                interactionType: ROUTE_SWITCH_CONFIRMATION
+                currentProvider: domain-agent
+                currentTargetId: document_agent
+                currentRouteSource: front-selected
+                candidateProvider: domain-agent
+                candidateTargetId: finance_knowledge
+                candidateIntentName: 财经知识助手
+                refusalCode: FN-EX-CHAT-BIZ-DAG-001
+                refusalReason: 当前请求不属于该技能处理范围
+                originalQuery: 帮我解释这个财经指标
+    RelayQuestionnaireCardEvent:
+      summary: Relay 返回单选和多选问卷卡片
+      value:
+        type: conversation-turn-stream
+        payload:
+          type: stream-item
+          conversationId: session_001
+          turnId: run_relay_A
+          streamItemId: seq-2030
+          encodedItem:
+            encoding: chat-event-json-v1
+            event: runtime.card
+            data:
+              runId: run_relay_A
+              sessionId: session_001
+              sequence: 2030
+              type: runtime.card
+              payload:
+                source: relay
+                sourceType: approval-request
+                approval_id: approval_001
+                operation_type: questionnaire
+                mode: questionnaire
+                message: Please answer the following questions
+                risk_level: LOW
+                parent_instance_id: relay_session_001
+                questions:
+                  - question: 请选择技术方案
+                    options:
+                      - label: 方案A
+                        description: 使用 REST API
+                      - label: 方案B
+                        description: 使用 GraphQL
+                    multi_select: false
+                  - question: 请选择部署环境
+                    options:
+                      - label: 开发环境
+                      - label: 测试环境
+                    multi_select: true
+                autoActionAt: '2026-08-01T10:01:00Z'
+                autoActionTimeoutMs: 60000
+                autoActionType: IGNORE_QUESTIONNAIRE
+
+  schemas:
+    ApiErrorResponse:
+      type: object
+      required: [timestamp, status, error, code, message]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        path:
+          type: string
+          nullable: true
+        status:
+          type: integer
+          format: int32
+        error:
+          type: string
+        code:
+          type: string
+        message:
+          type: string
+
+    CreateChatRunRequest:
+      type: object
+      description: |
+        统一 Run 请求。字段组合由 runMode 和 Interaction 类型共同约束；OpenAPI 结构保留全部可选字段，
+        具体组合必须遵循 operation examples 和下方 x-interaction-rules。
+      properties:
+        commandId:
+          type: string
+          maxLength: 128
+          nullable: true
+        sessionId:
+          type: string
+          maxLength: 64
+          nullable: true
+          description: 可为空以由服务端创建会话
+        conversationId:
+          type: string
+          maxLength: 64
+          nullable: true
+        message:
+          type: string
+          maxLength: 20000
+          nullable: true
+          description: NEXT 有有效附件时可为空；EDIT_USER 仍要求非空
+        runMode:
+          type: string
+          maxLength: 32
+          nullable: true
+          default: NEXT
+          enum: [NEXT, EDIT_USER, REGENERATE_ASSISTANT, CONTINUE_INTERACTION]
+        parentMessageId:
+          type: string
+          maxLength: 64
+          nullable: true
+        editedMessageId:
+          type: string
+          maxLength: 64
+          nullable: true
+        regeneratedMessageId:
+          type: string
+          maxLength: 64
+          nullable: true
+        forceReroute:
+          type: boolean
+          nullable: true
+          default: false
+          description: 仅 NEXT 使用；直接重新调用 Intent，不自动产生二次确认
+        interactionId:
+          type: string
+          maxLength: 64
+          nullable: true
+        approved:
+          type: boolean
+          nullable: true
+        scope:
+          type: string
+          maxLength: 32
+          nullable: true
+          example: once
+        questionnaireAnswers:
+          type: object
+          nullable: true
+          maxProperties: 50
+          additionalProperties: true
+        attachments:
+          type: array
+          nullable: true
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/ChatAttachment'
+        targetType:
+          type: string
+          maxLength: 32
+          nullable: true
+          enum: [DOMAIN_AGENT]
+        targetId:
+          type: string
+          maxLength: 128
+          nullable: true
+        selectedIntent:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/ChatSelectedIntent'
+          nullable: true
+        metadata:
+          type: object
+          nullable: true
+          maxProperties: 50
+          additionalProperties: true
+          description: 不得包含 Cookie、Token、traceId 或其他凭据
+        appId:
+          type: string
+          maxLength: 128
+          nullable: true
+        appName:
+          type: string
+          maxLength: 256
+          nullable: true
+          description: 存在时必须同时提交 appId
+        agentMode:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/ChatAgentMode'
+          nullable: true
+          description: 仅记录到当前 DomainAgent Binding；不继承、不转换、不传给下游
+        interactionAction:
+          type: string
+          maxLength: 32
+          nullable: true
+          enum: [AUTO_SELECT]
+      x-interaction-rules:
+        ordinaryIntentClarification: questionnaireAnswers 或有效 attachments；不得提交 message。
+        ambiguousCandidate: targetType=DOMAIN_AGENT 且 targetId 必须精确匹配服务端候选 skillId。
+        ambiguousAutoSelect: interactionAction=AUTO_SELECT，不能同时提交 target、答案或附件。
+        ambiguousOther: questionnaireAnswers 或有效 attachments，重新调用 Intent。
+        routeSwitchConfirmation: approved=true/false，不提交 target、答案、附件或 interactionAction。
+        relayQuestionnaire: questionnaireAnswers.label 或 questionnaireAnswers.ignore=true，二者互斥。
+
+    ChatAttachment:
+      type: object
+      properties:
+        documentId:
+          type: string
+          maxLength: 64
+          nullable: true
+          description: 服务端唯一信任并重新校验的文档资产 ID
+        name:
+          type: string
+          maxLength: 255
+          nullable: true
+          description: 前端展示值；不作为可信文件名
+        contentType:
+          type: string
+          maxLength: 128
+          nullable: true
+        sizeBytes:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+        tokenSize:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+        source:
+          type: string
+          maxLength: 64
+          nullable: true
+
+    ChatSelectedIntent:
+      type: object
+      required: [intentName]
+      properties:
+        intentId:
+          type: string
+          maxLength: 128
+          nullable: true
+        intentName:
+          type: string
+          minLength: 1
+          maxLength: 256
+      description: 仅用于显式直连 DomainAgent 的展示摘要，不参与服务端路由判断。
+
+    ChatAgentMode:
+      type: object
+      required: [selections]
+      properties:
+        selections:
+          type: array
+          maxItems: 16
+          items:
+            $ref: '#/components/schemas/ChatAgentModeSelection'
+      description: 空 selections 表示显式清除当前 DomainAgent Binding 中的记录。
+
+    ChatAgentModeSelection:
+      type: object
+      required: [scheme, code]
+      properties:
+        scheme:
+          type: string
+          minLength: 1
+          maxLength: 64
+        code:
+          type: string
+          minLength: 1
+          maxLength: 128
+        displayName:
+          type: string
+          maxLength: 256
+          nullable: true
+
+    ChatRunStart:
+      type: object
+      required: [runId, sessionId, firstSeq, createdAt, streamTopicId]
+      properties:
+        runId:
+          type: string
+        sessionId:
+          type: string
+        firstSeq:
+          type: integer
+          format: int64
+          description: 已由创建请求消费的首个持久化事件 sequence
+        createdAt:
+          type: string
+          format: date-time
+        streamTopicId:
+          type: string
+          description: WebSocket subscribe 使用的 topic，当前格式为 chat-run-{runId}
+
+    ChatRunStop:
+      type: object
+      required:
+        - runId
+        - sessionId
+        - status
+        - latestSeq
+        - stoppedAt
+        - messageReady
+        - waitingUserInput
+      properties:
+        runId:
+          type: string
+          description: 请求 URL 中的 runId；等待态下通常为 source run-A
+        sessionId:
+          type: string
+        status:
+          type: string
+          description: 运行态通常为 CANCELLED；等待源 run-A 保持 WAITING_USER
+        latestSeq:
+          type: integer
+          format: int64
+        stoppedAt:
+          type: string
+          format: date-time
+        messageReady:
+          type: boolean
+        assistantMessageId:
+          type: string
+          nullable: true
+        feedbackTargetMessageId:
+          type: string
+          nullable: true
+        waitingUserInput:
+          type: boolean
+        interactionId:
+          type: string
+          nullable: true
+        interactionStatus:
+          type: string
+          nullable: true
+          enum: [WAITING, RESPONDING, ANSWERED, CANCELLED, EXPIRED]
+        interactionCancelledAt:
+          type: string
+          format: date-time
+          nullable: true
+        effectiveRunId:
+          type: string
+          nullable: true
+          description: 等待正在切换到 continuation run 时实际停止的 run-B
+
+    ChatStreamStatus:
+      type: object
+      required: [sessionId, latestSeq, cancellable, waitingUserInput]
+      properties:
+        sessionId:
+          type: string
+        latestSeq:
+          type: integer
+          format: int64
+        activeRunId:
+          type: string
+          nullable: true
+        activeRunStatus:
+          type: string
+          nullable: true
+        activeStreamTopicId:
+          type: string
+          nullable: true
+        activeRunFirstSeq:
+          type: integer
+          format: int64
+          nullable: true
+        activeRunLastSeq:
+          type: integer
+          format: int64
+          nullable: true
+        cancellable:
+          type: boolean
+        waitingUserInput:
+          type: boolean
+        waitingSourceRunId:
+          type: string
+          nullable: true
+          description: 等待态统一 stop 使用的 source run-A
+        interactionId:
+          type: string
+          nullable: true
+        interactionType:
+          type: string
+          nullable: true
+          enum:
+            - CLARIFICATION
+            - AGENT_CLARIFICATION
+            - INTENT_CLARIFICATION
+            - APPROVAL
+            - CONFIRMATION
+            - ROUTE_SWITCH_CONFIRMATION
+        assistantMessageId:
+          type: string
+          nullable: true
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Interaction 有效期，访问时检查；默认约 24 小时
+        autoSelectAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: AMBIGUOUS_ROUTE 前端触发 AUTO_SELECT 的建议绝对时间
+        autoSelectTimeoutMs:
+          type: integer
+          format: int64
+          nullable: true
+        autoActionAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Relay 问卷前端触发忽略的建议绝对时间
+        autoActionTimeoutMs:
+          type: integer
+          format: int64
+          nullable: true
+        autoActionType:
+          type: string
+          nullable: true
+          enum: [IGNORE_QUESTIONNAIRE]
+        bindingProvider:
+          type: string
+          nullable: true
+        bindingTargetType:
+          type: string
+          nullable: true
+        bindingTargetId:
+          type: string
+          nullable: true
+        bindingIntentCode:
+          type: string
+          nullable: true
+        bindingIntentName:
+          type: string
+          nullable: true
+        bindingRouteSource:
+          type: string
+          nullable: true
+        bindingUpdatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        bindingAgentMode:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/ChatAgentMode'
+          nullable: true
+          description: 仅当前 active DomainAgent Binding 有合法记录时返回
+
+    ConversationTurnStream:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          enum: [conversation-turn-stream]
+        payload:
+          $ref: '#/components/schemas/ConversationTurnStreamPayload'
+
+    ConversationTurnStreamPayload:
+      type: object
+      required: [type, conversationId, turnId]
+      properties:
+        type:
+          type: string
+          enum: [stream-item, heartbeat, done]
+        conversationId:
+          type: string
+          description: 当前等于 sessionId
+        turnId:
+          type: string
+          description: 当前等于 runId
+        streamItemId:
+          type: string
+          nullable: true
+        serverTimestampMs:
+          type: integer
+          format: int64
+          nullable: true
+          description: 传输片段生成时间；不是 ChatEvent.createdAt
+        encodedItem:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/EncodedChatEventItem'
+          nullable: true
+          description: 仅 stream-item 存在
+        lastSeq:
+          type: integer
+          format: int64
+          nullable: true
+          description: heartbeat/done 看到的最近持久化 sequence；不推进客户端游标
+        terminalEventType:
+          type: string
+          nullable: true
+          description: done 对应的 run.completed/run.failed/run.cancelled 等终态
+
+    EncodedChatEventItem:
+      type: object
+      required: [encoding, event, data]
+      properties:
+        encoding:
+          type: string
+          enum: [chat-event-json-v1]
+        event:
+          type: string
+          description: 与 data.type 相同
+        data:
+          $ref: '#/components/schemas/ChatEvent'
+
+    ChatEvent:
+      type: object
+      required: [runId, sessionId, sequence, type, payload]
+      properties:
+        runId:
+          type: string
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+        type:
+          type: string
+          example: message.delta
+        payload:
+          anyOf:
+            - $ref: '#/components/schemas/RunWaitingUserPayload'
+            - $ref: '#/components/schemas/AmbiguousRouteCardPayload'
+            - $ref: '#/components/schemas/RouteSwitchConfirmationPayload'
+            - $ref: '#/components/schemas/RelayQuestionnaireCardPayload'
+            - type: object
+              additionalProperties: true
+      description: |
+        数据库事实事件。payload 由 type 决定；WAIT 相关主要 payload schema 见本定义的
+        RunWaitingUserPayload、AmbiguousRouteCardPayload、RouteSwitchConfirmationPayload 和
+        RelayQuestionnaireCardPayload。
+
+    RunWaitingUserPayload:
+      type: object
+      required: [status, interactionId, assistantMessageId, interactionType, expiresAt]
+      properties:
+        status:
+          type: string
+          enum: [WAITING_USER]
+        interactionId:
+          type: string
+        assistantMessageId:
+          type: string
+        feedbackTargetMessageId:
+          type: string
+          nullable: true
+        messageReady:
+          type: boolean
+        interactionType:
+          type: string
+          enum:
+            - CLARIFICATION
+            - AGENT_CLARIFICATION
+            - INTENT_CLARIFICATION
+            - APPROVAL
+            - CONFIRMATION
+            - ROUTE_SWITCH_CONFIRMATION
+        clarificationType:
+          type: string
+          nullable: true
+          example: AMBIGUOUS_ROUTE
+        expiresAt:
+          type: string
+          format: date-time
+        autoSelectAt:
+          type: string
+          format: date-time
+          nullable: true
+        autoSelectTimeoutMs:
+          type: integer
+          format: int64
+          nullable: true
+        autoActionAt:
+          type: string
+          format: date-time
+          nullable: true
+        autoActionTimeoutMs:
+          type: integer
+          format: int64
+          nullable: true
+        autoActionType:
+          type: string
+          nullable: true
+          enum: [IGNORE_QUESTIONNAIRE]
+
+    IntentCandidate:
+      type: object
+      properties:
+        intentId:
+          type: string
+          nullable: true
+        intentName:
+          type: string
+          nullable: true
+        confidence:
+          type: number
+          format: double
+          nullable: true
+        accessName:
+          type: string
+          nullable: true
+        skillId:
+          type: string
+          nullable: true
+          description: 指定候选时提交为 targetId 的服务端规范化技能 ID
+        resourceInstruction:
+          type: object
+          nullable: true
+          additionalProperties: true
+
+    AmbiguousRouteAction:
+      type: object
+      required: [type, displayName]
+      properties:
+        type:
+          type: string
+          enum: [AUTO_SELECT, OTHER]
+        displayName:
+          type: string
+
+    AmbiguousRouteCardPayload:
+      type: object
+      required:
+        - source
+        - sourceType
+        - routeAction
+        - clarificationType
+        - candidateIntents
+        - actions
+      properties:
+        source:
+          type: string
+          enum: [intent-agent]
+        sourceType:
+          type: string
+          enum: [intent-clarification-request]
+        routeAction:
+          type: string
+          enum: [CLARIFY]
+        clarificationType:
+          type: string
+          enum: [AMBIGUOUS_ROUTE]
+        clarifyQuestion:
+          type: string
+          nullable: true
+        candidateIntents:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntentCandidate'
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AmbiguousRouteAction'
+        autoSelectAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 仅存在至少一个有效 skillId、能够自动选择时返回
+        autoSelectTimeoutMs:
+          type: integer
+          format: int64
+          nullable: true
+      example:
+        source: intent-agent
+        sourceType: intent-clarification-request
+        routeAction: CLARIFY
+        clarificationType: AMBIGUOUS_ROUTE
+        clarifyQuestion: 请选择要使用的技能
+        candidateIntents:
+          - intentId: domain_agent_finance_data_query
+            intentName: 财经智能问数
+            confidence: 0.86
+            accessName: domain_agent_finance_data_query
+            skillId: finance_data_query
+            resourceInstruction:
+              resourceId: resource_finance_data_query
+          - intentId: domain_agent_finance_knowledge
+            intentName: 财经知识助手
+            confidence: 0.81
+            accessName: domain_agent_finance_knowledge
+            skillId: finance_knowledge
+            resourceInstruction:
+              resourceId: resource_finance_knowledge
+        actions:
+          - type: AUTO_SELECT
+            displayName: 代为选择
+          - type: OTHER
+            displayName: 其他
+        autoSelectAt: '2026-08-01T10:00:30Z'
+        autoSelectTimeoutMs: 30000
+
+    RouteSwitchConfirmationPayload:
+      type: object
+      required:
+        - interactionType
+        - currentProvider
+        - currentTargetId
+        - candidateProvider
+        - candidateTargetId
+      properties:
+        interactionType:
+          type: string
+          enum: [ROUTE_SWITCH_CONFIRMATION]
+        interactionId:
+          type: string
+          nullable: true
+          description: 在 run.waiting_user 中由服务端补齐；原始 runtime.card 可没有
+        assistantMessageId:
+          type: string
+          nullable: true
+          description: 在 run.waiting_user 中由服务端补齐；原始 runtime.card 可没有
+        currentProvider:
+          type: string
+        currentTargetId:
+          type: string
+        currentRouteSource:
+          type: string
+          nullable: true
+        candidateProvider:
+          type: string
+        candidateTargetId:
+          type: string
+        candidateIntentName:
+          type: string
+          nullable: true
+        refusalCode:
+          type: string
+          nullable: true
+        refusalReasonCode:
+          type: string
+          nullable: true
+        refusalRecoverable:
+          type: boolean
+          nullable: true
+        refusalReason:
+          type: string
+          nullable: true
+        originalQuery:
+          type: string
+          nullable: true
+      description: |
+        手动来源的 DomainAgent 拒答后，候选目标发生变化且自动切换配置关闭时生成。同一技能、
+        自动来源或开启 refusal-auto-switch-enabled 时不生成。该 WAIT 没有独立自动确认截止时间。
+
+    RelayQuestionnaireCardPayload:
+      type: object
+      required: [sourceType, approval_id, operation_type, questions]
+      properties:
+        source:
+          type: string
+          nullable: true
+          example: relay
+        sourceType:
+          type: string
+          enum: [approval-request]
+        interactionType:
+          type: string
+          enum: [AGENT_CLARIFICATION]
+          nullable: true
+          description: run.waiting_user 中返回；原始 runtime.card 依赖 sourceType/operation_type
+        interactionId:
+          type: string
+          nullable: true
+          description: run.waiting_user 中由服务端生成
+        assistantMessageId:
+          type: string
+          nullable: true
+        approval_id:
+          type: string
+        operation_type:
+          type: string
+          enum: [questionnaire]
+        mode:
+          type: string
+          nullable: true
+          enum: [questionnaire]
+        message:
+          type: string
+          nullable: true
+        risk_level:
+          type: string
+          nullable: true
+        agent_name:
+          type: string
+          nullable: true
+        parent_instance_id:
+          type: string
+          nullable: true
+        timestamp:
+          type: string
+          nullable: true
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/RelayQuestionnaireQuestion'
+        metadata:
+          type: object
+          nullable: true
+          additionalProperties: true
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        autoActionAt:
+          type: string
+          format: date-time
+          nullable: true
+        autoActionTimeoutMs:
+          type: integer
+          format: int64
+          nullable: true
+        autoActionType:
+          type: string
+          nullable: true
+          enum: [IGNORE_QUESTIONNAIRE]
+      x-internal-relay-forwarding:
+        answer:
+          type: approval-response
+          approval_id: approval_xxx
+          approved: true
+          scope: once
+          questionnaire_answers:
+            label:
+              请选择技术方案: 方案A
+              请选择部署环境: [开发环境, 测试环境]
+        ignore:
+          type: approval-response
+          approval_id: approval_xxx
+          approved: false
+          scope: once
+          questionnaire_answers:
+            ignore: true
+        notes: |
+          run-B 跳过 Intent，使用原 Relay runtimeSessionId 执行 RESUME，等待 session-ready 后发送
+          approval-response。当前协议不发送 request_id、metadata 或 timestamp。
+
+    RelayQuestionnaireQuestion:
+      type: object
+      required: [question, options]
+      properties:
+        question:
+          type: string
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/RelayQuestionnaireOption'
+        multi_select:
+          type: boolean
+          default: false
+
+    RelayQuestionnaireOption:
+      type: object
+      required: [label]
+      properties:
+        label:
+          type: string
+        description:
+          type: string
+          nullable: true
+        input_prompt:
+          type: string
+          nullable: true
+
+    CreateChatSessionRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          nullable: true
+        channel:
+          type: string
+          nullable: true
+        appId:
+          type: string
+          maxLength: 128
+          nullable: true
+        appName:
+          type: string
+          maxLength: 256
+          nullable: true
+
+    UpdateChatSessionRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          nullable: true
+
+    MarkChatSessionReadRequest:
+      type: object
+      required: [readThroughSeq]
+      properties:
+        readThroughSeq:
+          type: integer
+          format: int64
+          minimum: 0
+
+    SelectChatPathRequest:
+      type: object
+      required: [leafMessageId]
+      properties:
+        leafMessageId:
+          type: string
+
+    CreateChatBranchRequest:
+      type: object
+      required: [sourceMessageId]
+      properties:
+        sourceMessageId:
+          type: string
+        title:
+          type: string
+          nullable: true
+
+    BatchDeleteChatSessionsRequest:
+      type: object
+      properties:
+        sessionIds:
+          type: array
+          nullable: true
+          items:
+            type: string
+
+    BatchDeleteChatSessions:
+      type: object
+      required: [deletedCount, items]
+      properties:
+        deletedCount:
+          type: integer
+          format: int32
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatSession'
+
+    ChatSession:
+      type: object
+      required:
+        - sessionId
+        - tenantId
+        - userId
+        - status
+        - hasUnread
+        - latestMessageSeq
+        - lastReadSeq
+        - createdAt
+        - updatedAt
+      properties:
+        sessionId:
+          type: string
+        tenantId:
+          type: string
+        userId:
+          type: string
+        title:
+          type: string
+          nullable: true
+        status:
+          type: string
+          example: ACTIVE
+        channel:
+          type: string
+          nullable: true
+        appId:
+          type: string
+          nullable: true
+        appName:
+          type: string
+          nullable: true
+        currentLeafMessageId:
+          type: string
+          nullable: true
+        rootSessionId:
+          type: string
+          nullable: true
+        branchSourceSessionId:
+          type: string
+          nullable: true
+        branchSourceMessageId:
+          type: string
+          nullable: true
+        hasUnread:
+          type: boolean
+        latestMessageSeq:
+          type: integer
+          format: int64
+        lastReadSeq:
+          type: integer
+          format: int64
+        firstAssistantAnswer:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ChatSessionPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatSession'
+        nextCursor:
+          type: string
+          nullable: true
+
+    ChatSessionNumberPage:
+      type: object
+      required: [items, curPage, pageSize, totalRows, totalPages]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatSession'
+        curPage:
+          type: integer
+        pageSize:
+          type: integer
+        totalRows:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+          format: int64
+
+    ChatMessagePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+        nextCursor:
+          type: string
+          nullable: true
+
+    ChatMessage:
+      type: object
+      required:
+        - messageId
+        - sessionId
+        - role
+        - content
+        - locked
+        - parts
+        - attachments
+        - createdAt
+      properties:
+        messageId:
+          type: string
+        sessionId:
+          type: string
+        parentMessageId:
+          type: string
+          nullable: true
+        nodeOrder:
+          type: integer
+          format: int64
+          nullable: true
+        treeDepth:
+          type: integer
+          nullable: true
+        siblingIndex:
+          type: integer
+          nullable: true
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+          description: WAIT assistant 可为空，卡片由 parts 恢复
+        tokenCount:
+          type: integer
+          nullable: true
+        runId:
+          type: string
+          nullable: true
+        assistantSource:
+          type: string
+          nullable: true
+        originType:
+          type: string
+          nullable: true
+          example: NORMAL
+        locked:
+          type: boolean
+        sourceSessionId:
+          type: string
+          nullable: true
+        sourceMessageId:
+          type: string
+          nullable: true
+        editedFromMessageId:
+          type: string
+          nullable: true
+        regeneratedFromMessageId:
+          type: string
+          nullable: true
+        parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessagePart'
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessageAttachment'
+        feedback:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/MessageFeedback'
+          nullable: true
+        versionInfo:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/ChatMessageVersionInfo'
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    ChatMessagePart:
+      type: object
+      required: [partId, messageId, partType, payload, createdAt]
+      properties:
+        partId:
+          type: string
+        messageId:
+          type: string
+        runId:
+          type: string
+          nullable: true
+          description: 同一 assistant 可包含 run-A 与 run-B 产生的 Parts
+        partType:
+          type: string
+          example: CARD
+        sourceType:
+          type: string
+          nullable: true
+        contentText:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+        channel:
+          type: string
+          nullable: true
+        displayHint:
+          type: string
+          nullable: true
+        visible:
+          type: boolean
+          nullable: true
+        payload:
+          type: object
+          additionalProperties: true
+        partOrder:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    ChatMessageAttachment:
+      type: object
+      required: [attachmentId, documentId, attachmentOrder, createdAt]
+      properties:
+        attachmentId:
+          type: string
+        documentId:
+          type: string
+        attachmentOrder:
+          type: integer
+        name:
+          type: string
+          nullable: true
+        contentType:
+          type: string
+          nullable: true
+        sizeBytes:
+          type: integer
+          format: int64
+          nullable: true
+        sourceAttachmentId:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    ChatMessageVersionInfo:
+      type: object
+      required: [role, currentMessageId, currentIndex, total, variants]
+      properties:
+        role:
+          type: string
+        currentMessageId:
+          type: string
+        currentIndex:
+          type: integer
+          minimum: 1
+        total:
+          type: integer
+          minimum: 1
+        variants:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessageVersionItem'
+
+    ChatMessageVersionItem:
+      type: object
+      required: [messageId, index, selected, locked, createdAt]
+      properties:
+        messageId:
+          type: string
+        index:
+          type: integer
+          minimum: 1
+        selected:
+          type: boolean
+        switchLeafMessageId:
+          type: string
+          nullable: true
+        locked:
+          type: boolean
+        originType:
+          type: string
+          nullable: true
+        editedFromMessageId:
+          type: string
+          nullable: true
+        regeneratedFromMessageId:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    ChatMessageTree:
+      type: object
+      required: [sessionId, rootMessageIds, mapping]
+      properties:
+        sessionId:
+          type: string
+        currentLeafMessageId:
+          type: string
+          nullable: true
+        rootMessageIds:
+          type: array
+          items:
+            type: string
+        mapping:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ChatMessageTreeNode'
+
+    ChatMessageTreeNode:
+      type: object
+      required: [id, message, children]
+      properties:
+        id:
+          type: string
+        message:
+          $ref: '#/components/schemas/ChatMessage'
+        parentMessageId:
+          type: string
+          nullable: true
+        children:
+          type: array
+          items:
+            type: string
+
+    MessageFeedbackRequest:
+      type: object
+      properties:
+        runId:
+          type: string
+          nullable: true
+        rating:
+          type: string
+          nullable: true
+          example: LIKE
+        reasonCode:
+          type: string
+          nullable: true
+        commentText:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          nullable: true
+          additionalProperties: true
+
+    MessageFeedback:
+      type: object
+      required: [feedbackId, messageId, status, createdAt, updatedAt]
+      properties:
+        feedbackId:
+          type: string
+        messageId:
+          type: string
+        runId:
+          type: string
+          nullable: true
+        rating:
+          type: string
+          nullable: true
+          enum: [LIKE, DISLIKE]
+        status:
+          type: string
+          enum: [ACTIVE, CANCELLED]
+        reasonCode:
+          type: string
+          nullable: true
+        commentText:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateChatShareRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          nullable: true
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 为空表示不过期；存在时必须晚于当前时间
+
+    CreateChatShareAndDeliveryRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          nullable: true
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        provider:
+          type: string
+          nullable: true
+          example: welink
+        targetAccounts:
+          type: array
+          nullable: true
+          items:
+            type: string
+        groupIds:
+          type: array
+          nullable: true
+          items:
+            type: string
+        content:
+          type: string
+          nullable: true
+        language:
+          type: string
+          nullable: true
+
+    CreateChatShareDeliveryRequest:
+      type: object
+      properties:
+        provider:
+          type: string
+          nullable: true
+          example: welink
+        targetAccounts:
+          type: array
+          nullable: true
+          items:
+            type: string
+        groupIds:
+          type: array
+          nullable: true
+          items:
+            type: string
+        title:
+          type: string
+          nullable: true
+        content:
+          type: string
+          nullable: true
+        language:
+          type: string
+          nullable: true
+
+    ChatShare:
+      type: object
+      required:
+        - shareId
+        - title
+        - scope
+        - visibility
+        - status
+        - sourceSessionId
+        - sourceUserMessageId
+        - sourceAssistantMessageId
+        - sourceRunId
+        - createdAt
+        - updatedAt
+      properties:
+        shareId:
+          type: string
+        title:
+          type: string
+        scope:
+          type: string
+          enum: [SINGLE_TURN]
+        visibility:
+          type: string
+          enum: [INTERNAL]
+        status:
+          type: string
+          enum: [ACTIVE, REVOKED]
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        sourceSessionId:
+          type: string
+        sourceUserMessageId:
+          type: string
+        sourceAssistantMessageId:
+          type: string
+        sourceRunId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ChatSharePage:
+      type: object
+      required: [items, curPage, pageSize, totalRows, totalPages]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatShare'
+        curPage:
+          type: integer
+        pageSize:
+          type: integer
+        totalRows:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+          format: int64
+
+    ChatShareAttachmentSnapshot:
+      type: object
+      properties:
+        documentId:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+        contentType:
+          type: string
+          nullable: true
+        sizeBytes:
+          type: integer
+          format: int64
+          nullable: true
+      description: 仅用于展示，不授予下载或预览权限。
+
+    ChatShareSnapshotMessage:
+      type: object
+      required: [messageId, sessionId, role, content, attachments, createdAt]
+      properties:
+        messageId:
+          type: string
+        sessionId:
+          type: string
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+        runId:
+          type: string
+          nullable: true
+        metadataJson:
+          type: string
+          nullable: true
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatShareAttachmentSnapshot'
+        createdAt:
+          type: string
+          format: date-time
+
+    ChatShareDetail:
+      type: object
+      required: [share, question, answer, parts]
+      properties:
+        share:
+          $ref: '#/components/schemas/ChatShare'
+        question:
+          $ref: '#/components/schemas/ChatShareSnapshotMessage'
+        answer:
+          $ref: '#/components/schemas/ChatShareSnapshotMessage'
+        parts:
+          type: array
+          description: 创建快照时默认可见的 assistant Parts
+          items:
+            $ref: '#/components/schemas/ChatMessagePart'
+
+    ChatShareDelivery:
+      type: object
+      required: [deliveryId, shareId, provider, status, createdAt, updatedAt]
+      properties:
+        deliveryId:
+          type: string
+        shareId:
+          type: string
+        provider:
+          type: string
+        status:
+          type: string
+          enum: [SUCCESS, FAILED]
+        linkUrl:
+          type: string
+          nullable: true
+        errorCode:
+          type: string
+          nullable: true
+        errorMessage:
+          type: string
+          nullable: true
+        sentAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ChatShareAndDelivery:
+      type: object
+      required: [share, delivery]
+      properties:
+        share:
+          $ref: '#/components/schemas/ChatShare'
+        delivery:
+          $ref: '#/components/schemas/ChatShareDelivery'
+
+    UploadedDocument:
+      type: object
+      required:
+        - id
+        - tenantId
+        - userId
+        - originalName
+        - bucket
+        - objectKey
+        - contentType
+        - sizeBytes
+        - status
+        - source
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+        tenantId:
+          type: string
+        userId:
+          type: string
+        sessionId:
+          type: string
+          nullable: true
+        originalName:
+          type: string
+        bucket:
+          type: string
+        objectKey:
+          type: string
+        contentType:
+          type: string
+        sizeBytes:
+          type: integer
+          format: int64
+        status:
+          type: string
+          example: AVAILABLE
+        source:
+          type: string
+          enum: [LOCAL_UPLOAD, EDM_UPLOAD, S3_UPLOAD]
+        metadataJson:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: 已解析的 JSON 对象，可能包含 providerDocument 和 capabilities
+        tokenSize:
+          type: integer
+          format: int64
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    DocumentLibraryPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/UploadedDocument'
+        nextCursor:
+          type: string
+          nullable: true
+
+    UpdateDocumentRequest:
+      type: object
+      properties:
+        originalName:
+          type: string
+          nullable: true
+        metadataJson:
+          type: string
+          nullable: true
+          description: 新扩展元数据 JSON 字符串；为空保留原值
+
+    DocumentStatus:
+      type: object
+      required: [documentId, status]
+      properties:
+        documentId:
+          type: string
+        status:
+          type: string
+        tokenSize:
+          type: integer
+          format: int64
+          nullable: true
+
+    DocumentAccess:
+      type: object
+      required: [documentId, accessUrl, accessType]
+      properties:
+        documentId:
+          type: string
+        accessUrl:
+          type: string
+        accessType:
+          type: string
+          enum: [BACKEND_STREAM]
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    WebSocketConnectCommand:
+      type: object
+      required: [id, type]
+      properties:
+        id:
+          type: string
+          description: 客户端命令 ID，reply/error 原样返回
+        type:
+          type: string
+          enum: [connect]
+        presence:
+          type: string
+          enum: [foreground, background]
+          default: foreground
+      example:
+        id: ws_cmd_001
+        type: connect
+        presence: foreground
+
+    WebSocketPresenceCommand:
+      type: object
+      required: [id, type, presence]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [presence]
+        presence:
+          type: string
+          enum: [foreground, background]
+      example:
+        id: ws_cmd_002
+        type: presence
+        presence: background
+
+    WebSocketSubscribeCommand:
+      type: object
+      required: [id, type, topicId]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [subscribe]
+        topicId:
+          type: string
+          example: chat-run-run_002
+        afterSeq:
+          type: integer
+          format: int64
+          minimum: 0
+          default: 0
+          description: 已实际处理成功的最大 sequence；新 run 通常使用 ChatRunStart.firstSeq
+      example:
+        id: ws_cmd_003
+        type: subscribe
+        topicId: chat-run-run_002
+        afterSeq: 1042
+
+    WebSocketUnsubscribeCommand:
+      type: object
+      required: [id, type, topicId]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [unsubscribe]
+        topicId:
+          type: string
+      example:
+        id: ws_cmd_004
+        type: unsubscribe
+        topicId: chat-run-run_002
+
+    ChatWebSocketEnvelope:
+      type: object
+      required: [type]
+      properties:
+        id:
+          type: string
+          nullable: true
+        type:
+          type: string
+          enum: [reply, message, error]
+        topicId:
+          type: string
+          nullable: true
+        offset:
+          type: string
+          nullable: true
+          description: stream-item 的持久化 sequence 字符串；heartbeat/done 不推进 offset
+        payload:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/ConversationTurnStream'
+          nullable: true
+        reply:
+          type: object
+          nullable: true
+          additionalProperties: true
+        code:
+          type: string
+          nullable: true
+        message:
+          type: string
+          nullable: true
+        details:
+          type: object
+          nullable: true
+          additionalProperties: true
+      example:
+        type: message
+        topicId: chat-run-run_002
+        offset: '1043'
+        payload:
+          type: conversation-turn-stream
+          payload:
+            type: stream-item
+            conversationId: session_001
+            turnId: run_002
+            streamItemId: seq-1043
+            encodedItem:
+              encoding: chat-event-json-v1
+              event: message.delta
+              data:
+                runId: run_002
+                sessionId: session_001
+                sequence: 1043
+                type: message.delta
+                payload:
+                  delta: 本季度
+      x-recover-required-example:
+        type: error
+        topicId: chat-run-run_002
+        offset: '1050'
+        code: RECOVER_REQUIRED
+        message: 实时事件需要恢复，请使用 Event Resume 补齐
+        details:
+          reason: LIVE_BUFFER_OVERFLOW
+          topicId: chat-run-run_002
+          recoveryAfterSeq: 1049
+          actualSeq: 1050

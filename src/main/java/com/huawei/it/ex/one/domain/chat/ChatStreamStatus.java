@@ -16,12 +16,16 @@ import java.time.Instant;
  * @param activeRunLastSeq 当前 active run 最近一个已持久化事件序号；无 active run 或尚无事件时为空。
  * @param cancellable 当前 active run 是否可通过 stop 接口取消。
  * @param waitingUserInput 当前会话是否存在等待用户输入请求。
+ * @param waitingSourceRunId 当前等待请求的来源 run；前端使用该值调用统一 stop 接口。
  * @param interactionId 当前等待请求 ID。
  * @param interactionType 等待类型。
  * @param assistantMessageId 承载等待卡片的 assistant 消息 ID。
  * @param expiresAt 等待请求过期时间。
  * @param autoSelectAt AMBIGUOUS_ROUTE 前端提交代选的截止时间；其他等待类型为空。
  * @param autoSelectTimeoutMs AMBIGUOUS_ROUTE 前端建议等待毫秒数；其他等待类型为空。
+ * @param autoActionAt 通用前端自动动作截止时间；未配置自动动作时为空。
+ * @param autoActionTimeoutMs 通用前端自动动作建议等待毫秒数；未配置时为空。
+ * @param autoActionType 通用前端自动动作类型；当前 Relay 问卷使用 IGNORE_QUESTIONNAIRE。
  * @param bindingProvider 当前会话 active binding provider。
  * @param bindingTargetType 当前绑定目标类型。
  * @param bindingTargetId 当前绑定目标 ID。
@@ -41,12 +45,16 @@ public record ChatStreamStatus(
         Long activeRunLastSeq,
         boolean cancellable,
         boolean waitingUserInput,
+        String waitingSourceRunId,
         String interactionId,
         String interactionType,
         String assistantMessageId,
         Instant expiresAt,
         Instant autoSelectAt,
         Long autoSelectTimeoutMs,
+        Instant autoActionAt,
+        Long autoActionTimeoutMs,
+        String autoActionType,
         String bindingProvider,
         String bindingTargetType,
         String bindingTargetId,
@@ -64,8 +72,9 @@ public record ChatStreamStatus(
             Instant expiresAt, String bindingProvider, String bindingTargetType, String bindingTargetId,
             String bindingIntentCode, String bindingIntentName, String bindingRouteSource, Instant bindingUpdatedAt) {
         this(sessionId, latestSeq, activeRunId, activeRunStatus, activeStreamTopicId, activeRunFirstSeq,
-                activeRunLastSeq, cancellable, waitingUserInput, interactionId, interactionType,
-                assistantMessageId, expiresAt, null, null, bindingProvider, bindingTargetType, bindingTargetId,
+                activeRunLastSeq, cancellable, waitingUserInput, null, interactionId, interactionType,
+                assistantMessageId, expiresAt, null, null, null, null, null,
+                bindingProvider, bindingTargetType, bindingTargetId,
                 bindingIntentCode, bindingIntentName, bindingRouteSource, bindingUpdatedAt, null);
     }
 
@@ -78,8 +87,9 @@ public record ChatStreamStatus(
             String bindingIntentCode, String bindingIntentName, String bindingRouteSource, Instant bindingUpdatedAt,
             AgentModeProfile bindingAgentMode) {
         this(sessionId, latestSeq, activeRunId, activeRunStatus, activeStreamTopicId, activeRunFirstSeq,
-                activeRunLastSeq, cancellable, waitingUserInput, interactionId, interactionType,
-                assistantMessageId, expiresAt, null, null, bindingProvider, bindingTargetType, bindingTargetId,
+                activeRunLastSeq, cancellable, waitingUserInput, null, interactionId, interactionType,
+                assistantMessageId, expiresAt, null, null, null, null, null,
+                bindingProvider, bindingTargetType, bindingTargetId,
                 bindingIntentCode, bindingIntentName, bindingRouteSource, bindingUpdatedAt, bindingAgentMode);
     }
 }

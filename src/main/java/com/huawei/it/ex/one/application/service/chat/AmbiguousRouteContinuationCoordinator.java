@@ -169,7 +169,8 @@ final class AmbiguousRouteContinuationCoordinator {
                 "",
                 routeQuery,
                 request.input().runtimeMetadata(),
-                request.input().agentMode());
+                request.input().agentMode(),
+                new RuntimeBindingDispatchLifecycle());
     }
 
     record Request(

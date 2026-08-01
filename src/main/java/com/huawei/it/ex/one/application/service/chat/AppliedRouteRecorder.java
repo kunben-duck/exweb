@@ -11,6 +11,8 @@ import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
+import com.huawei.it.ex.one.domain.chat.ChatRun;
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
@@ -85,6 +87,25 @@ final class AppliedRouteRecorder {
     void bindResolvedRouteRequired(String runId, RouteTarget route, RuntimeBinding binding) {
         if (chatRunService.bindResolvedRoute(runId, route, binding) == null) {
             throw new IllegalStateException("ChatRun resolved route update found no run: " + runId);
+        }
+    }
+
+    /**
+     * Interaction 续接必须在 execution 写入权保护下保存最终 Runtime，失败时禁止调用下游。
+     */
+    void bindResolvedRouteRequired(ChatRun run, RouteTarget route, RuntimeBinding binding,
+                                   RunExecutionClaim claim) {
+        if (chatRunService.bindResolvedRoute(run, route, binding, claim) == null) {
+            throw new IllegalStateException("ChatRun guarded resolved route update found no run: "
+                    + (run == null ? null : run.id()));
+        }
+    }
+
+    /** 拒答重路由按 runId 使用 execution guard 保存最终 Runtime。 */
+    void bindResolvedRouteRequired(String runId, RouteTarget route, RuntimeBinding binding,
+                                   RunExecutionClaim claim) {
+        if (chatRunService.bindResolvedRoute(runId, route, binding, claim) == null) {
+            throw new IllegalStateException("ChatRun guarded resolved route update found no run: " + runId);
         }
     }
 

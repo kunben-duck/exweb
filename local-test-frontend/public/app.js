@@ -2,8 +2,8 @@ const apiBase = "";
 const terminalRunEvents = new Set(["run.completed", "run.failed", "run.cancelled", "run.waiting_user"]);
 const authHeadersStorageKey = "finex:test:authHeadersText";
 const authProfileStorageKey = "finex:test:authProfileId";
-const ambiguousAutoSelectRetryDelayMs = 1000;
-const ambiguousAutoSelectMaxAttempts = 5;
+const interactionAutoActionRetryDelayMs = 1000;
+const interactionAutoActionMaxAttempts = 5;
 
 const state = {
   sessions: [],
@@ -14,6 +14,7 @@ const state = {
   ws: null,
   commandSeq: 1,
   activeRunId: null,
+  waitingSourceRunId: null,
   activeTopicId: null,
   activeRunStatus: null,
   sessionSeq: new Map(),
@@ -24,7 +25,7 @@ const state = {
   pendingDeltaByRun: new Map(),
   deltaFlushScheduled: false,
   restoringRunIds: new Set(),
-  ambiguousAutoSelectTasks: new Map(),
+  interactionAutoActionTasks: new Map(),
   authProfileId: localStorage.getItem(authProfileStorageKey) || newAuthProfileId(),
   authHeadersText: localStorage.getItem(authHeadersStorageKey) || "",
   authProfileSynced: false,
@@ -260,7 +261,7 @@ function renderSessions() {
 }
 
 async function selectSession(sessionId) {
-  clearAmbiguousAutoSelectTasks();
+  clearInteractionAutoActionTasks();
   state.selectedSessionId = sessionId;
   localStorage.setItem("finex:test:lastSessionId", sessionId);
   history.replaceState(null, "", `?sessionId=${encodeURIComponent(sessionId)}`);
@@ -486,6 +487,7 @@ async function startRunRequest(body, { optimisticUserMessage = null } = {}) {
   }
 
   state.activeRunId = run.runId;
+  state.waitingSourceRunId = null;
   state.activeTopicId = run.streamTopicId;
   state.activeRunStatus = "RUNNING";
   setActiveRunLabel();
@@ -504,24 +506,33 @@ async function startRunRequest(body, { optimisticUserMessage = null } = {}) {
 }
 
 async function stopRun() {
-  if (!state.activeRunId) return alert("没有 active run");
-  if (!isRunInProgress()) return alert("当前 run 已经不在运行中");
+  const stopRunId = state.activeRunId || state.waitingSourceRunId;
+  if (!stopRunId) return alert("当前会话没有可停止的 run 或等待请求");
+  if (state.activeRunId && !isRunInProgress()) return alert("当前 run 已经不在运行中");
   const resumeAfterSeq = state.selectedSessionId ? lastSeq(state.selectedSessionId) : 0;
   const previousStatus = state.activeRunStatus;
   state.activeRunStatus = "CANCELLING";
   setActiveRunLabel();
   let result;
   try {
-    result = await requestJson(`/v1/chat/runs/${encodeURIComponent(state.activeRunId)}/stop`, { method: "POST" });
+    result = await requestJson(`/v1/chat/runs/${encodeURIComponent(stopRunId)}/stop`, { method: "POST" });
   } catch (error) {
     state.activeRunStatus = previousStatus;
     setActiveRunLabel();
     throw error;
   }
   state.activeRunStatus = result.status;
+  if (result.waitingUserInput === false) {
+    state.waitingSourceRunId = null;
+    clearInteractionAutoActionTasks();
+  }
   setActiveRunLabel();
   if (result.sessionId) {
     await resumeSessionEvents(result.sessionId, resumeAfterSeq);
+  }
+  await refreshCurrentStreamStatus({ restoreStream: true });
+  if (result.interactionStatus === "CANCELLED" && result.sessionId) {
+    await loadMessagesOnly(result.sessionId);
   }
   log(`stop ${result.runId} -> ${result.status}`);
 }
@@ -804,6 +815,7 @@ function handleChatEvent(event, source = "event", options = {}) {
 
   if (event.type === "run.started") {
     state.activeRunId = event.runId;
+    state.waitingSourceRunId = null;
     state.activeRunStatus = "RUNNING";
     setActiveRunLabel();
     return true;
@@ -824,12 +836,15 @@ function handleChatEvent(event, source = "event", options = {}) {
     state.activeRunId = null;
     state.activeTopicId = null;
     state.activeRunStatus = "WAITING_USER";
+    state.waitingSourceRunId = event.runId;
     setActiveRunLabel();
-    scheduleAmbiguousAutoSelect({
+    scheduleInteractionAutoAction({
       sessionId: event.sessionId,
       waitingUserInput: true,
       interactionId: event.payload?.interactionId,
-      autoSelectAt: event.payload?.autoSelectAt
+      autoSelectAt: event.payload?.autoSelectAt,
+      autoActionAt: event.payload?.autoActionAt,
+      autoActionType: event.payload?.autoActionType
     });
     appendMessage("system", `${event.type} ${event.runId}`);
     return true;
@@ -1377,94 +1392,107 @@ function setStreamStatus(status) {
   state.activeRunId = status.activeRunId || null;
   state.activeTopicId = status.activeStreamTopicId || null;
   state.activeRunStatus = status.activeRunStatus || null;
+  state.waitingSourceRunId = status.waitingUserInput ? (status.waitingSourceRunId || null) : null;
   setActiveRunLabel();
-  scheduleAmbiguousAutoSelect(status);
+  scheduleInteractionAutoAction(status);
 }
 
-function scheduleAmbiguousAutoSelect(status) {
+function scheduleInteractionAutoAction(status) {
   const sessionId = status?.sessionId || state.selectedSessionId;
   if (!sessionId || sessionId !== state.selectedSessionId) {
     return;
   }
   const interactionId = status?.waitingUserInput ? status.interactionId : null;
-  const autoSelectAt = status?.autoSelectAt;
-  if (!interactionId || !autoSelectAt) {
-    clearAmbiguousAutoSelectTasks();
+  const autoActionAt = status?.autoActionAt || status?.autoSelectAt;
+  const autoActionType = status?.autoActionType || (status?.autoSelectAt ? "AUTO_SELECT" : null);
+  if (!interactionId || !autoActionAt || !autoActionType) {
+    clearInteractionAutoActionTasks();
     return;
   }
-  const deadlineMs = Date.parse(autoSelectAt);
+  const deadlineMs = Date.parse(autoActionAt);
   if (!Number.isFinite(deadlineMs)) {
-    log(`ambiguous auto-select ignored invalid deadline interaction=${interactionId}`);
+    log(`interaction auto-action ignored invalid deadline interaction=${interactionId}`);
     return;
   }
-  const existing = state.ambiguousAutoSelectTasks.get(interactionId);
-  if (existing?.autoSelectAt === autoSelectAt) {
+  const existing = state.interactionAutoActionTasks.get(interactionId);
+  if (existing?.autoActionAt === autoActionAt && existing?.autoActionType === autoActionType) {
     return;
   }
-  clearAmbiguousAutoSelectTasks();
+  clearInteractionAutoActionTasks();
   const task = {
     sessionId,
     interactionId,
-    autoSelectAt,
-    commandId: `cmd_ambiguous_auto_${interactionId}_${Date.now()}`,
+    autoActionAt,
+    autoActionType,
+    commandId: `cmd_interaction_auto_${interactionId}_${Date.now()}`,
     attempts: 0,
     inFlight: false,
     timerId: null
   };
-  state.ambiguousAutoSelectTasks.set(interactionId, task);
-  armAmbiguousAutoSelect(task, Math.max(0, deadlineMs - Date.now()));
+  state.interactionAutoActionTasks.set(interactionId, task);
+  armInteractionAutoAction(task, Math.max(0, deadlineMs - Date.now()));
 }
 
-function armAmbiguousAutoSelect(task, delayMs) {
+function armInteractionAutoAction(task, delayMs) {
   task.timerId = window.setTimeout(
-    () => triggerAmbiguousAutoSelect(task),
+    () => triggerInteractionAutoAction(task),
     Math.max(0, delayMs));
 }
 
-async function triggerAmbiguousAutoSelect(task) {
-  if (state.ambiguousAutoSelectTasks.get(task.interactionId) !== task || task.inFlight) {
+async function triggerInteractionAutoAction(task) {
+  if (state.interactionAutoActionTasks.get(task.interactionId) !== task || task.inFlight) {
     return;
   }
   task.inFlight = true;
   task.attempts += 1;
   try {
-    await startRunRequest({
+    const request = {
       commandId: task.commandId,
       sessionId: task.sessionId,
       conversationId: task.sessionId,
       runMode: "CONTINUE_INTERACTION",
       interactionId: task.interactionId,
-      interactionAction: "AUTO_SELECT",
       metadata: currentRunMetadataSnapshot()
-    });
-    state.ambiguousAutoSelectTasks.delete(task.interactionId);
-    log(`ambiguous auto-select started interaction=${task.interactionId}`);
+    };
+    if (task.autoActionType === "AUTO_SELECT") {
+      request.interactionAction = "AUTO_SELECT";
+    } else if (task.autoActionType === "IGNORE_QUESTIONNAIRE") {
+      request.approved = false;
+      request.scope = "once";
+      request.questionnaireAnswers = { ignore: true };
+    } else {
+      throw new Error(`unsupported interaction auto-action: ${task.autoActionType}`);
+    }
+    await startRunRequest(request);
+    state.interactionAutoActionTasks.delete(task.interactionId);
+    log(`interaction auto-action started interaction=${task.interactionId} type=${task.autoActionType}`);
   } catch (error) {
     if (error.code === "INTERACTION_ALREADY_HANDLED") {
-      state.ambiguousAutoSelectTasks.delete(task.interactionId);
+      state.interactionAutoActionTasks.delete(task.interactionId);
       try {
-        await recoverHandledAmbiguousSelection(task.sessionId, task.interactionId);
+        await recoverHandledInteraction(task.sessionId, task.interactionId);
       } catch (recoveryError) {
-        log(`ambiguous auto-select race recovery failed interaction=${task.interactionId}: `
+        log(`interaction auto-action race recovery failed interaction=${task.interactionId}: `
           + recoveryError.message);
       }
       return;
     }
-    if (retryableAutoSelectError(error) && task.attempts < ambiguousAutoSelectMaxAttempts) {
+    if (retryableInteractionAutoActionError(error)
+        && task.attempts < interactionAutoActionMaxAttempts) {
       task.inFlight = false;
-      armAmbiguousAutoSelect(task, ambiguousAutoSelectRetryDelayMs);
-      log(`ambiguous auto-select retry interaction=${task.interactionId} attempt=${task.attempts + 1}`);
+      armInteractionAutoAction(task, interactionAutoActionRetryDelayMs);
+      log(`interaction auto-action retry interaction=${task.interactionId} attempt=${task.attempts + 1}`);
       return;
     }
-    state.ambiguousAutoSelectTasks.delete(task.interactionId);
-    log(`ambiguous auto-select stopped interaction=${task.interactionId}: ${error.message}`);
+    state.interactionAutoActionTasks.delete(task.interactionId);
+    log(`interaction auto-action stopped interaction=${task.interactionId}: ${error.message}`);
   } finally {
     task.inFlight = false;
   }
 }
 
-async function recoverHandledAmbiguousSelection(sessionId, interactionId) {
-  for (let attempt = 1; attempt <= ambiguousAutoSelectMaxAttempts; attempt += 1) {
+async function recoverHandledInteraction(sessionId, interactionId) {
+  for (let attempt = 1; attempt <= interactionAutoActionMaxAttempts; attempt += 1) {
     const status = await requestJson(
       `/v1/chat/sessions/${encodeURIComponent(sessionId)}/stream-status`);
     if (sessionId === state.selectedSessionId) {
@@ -1474,7 +1502,7 @@ async function recoverHandledAmbiguousSelection(sessionId, interactionId) {
       setActiveRunLabel();
     }
     if (status.activeRunId && status.activeStreamTopicId) {
-      startActiveRunSseRestore(status, "ambiguous-auto-select-race");
+      startActiveRunSseRestore(status, "interaction-auto-action-race");
       return;
     }
     if (!status.waitingUserInput || status.interactionId !== interactionId) {
@@ -1483,12 +1511,12 @@ async function recoverHandledAmbiguousSelection(sessionId, interactionId) {
       }
       return;
     }
-    await delay(ambiguousAutoSelectRetryDelayMs);
+    await delay(interactionAutoActionRetryDelayMs);
   }
-  log(`ambiguous auto-select race recovery timed out interaction=${interactionId}`);
+  log(`interaction auto-action race recovery timed out interaction=${interactionId}`);
 }
 
-function retryableAutoSelectError(error) {
+function retryableInteractionAutoActionError(error) {
   return !error.status || error.status >= 500;
 }
 
@@ -1505,13 +1533,13 @@ function currentRunMetadataSnapshot() {
   }
 }
 
-function clearAmbiguousAutoSelectTasks() {
-  for (const task of state.ambiguousAutoSelectTasks.values()) {
+function clearInteractionAutoActionTasks() {
+  for (const task of state.interactionAutoActionTasks.values()) {
     if (task.timerId !== null) {
       window.clearTimeout(task.timerId);
     }
   }
-  state.ambiguousAutoSelectTasks.clear();
+  state.interactionAutoActionTasks.clear();
 }
 
 function delay(durationMs) {
@@ -1529,7 +1557,10 @@ function parseRunId(topicId) {
 }
 
 function setActiveRunLabel() {
-  $("activeRun").textContent = state.activeRunId ? `${state.activeRunId} (${state.activeRunStatus || "-"})` : "-";
+  const displayedRunId = state.activeRunId || state.waitingSourceRunId;
+  $("activeRun").textContent = displayedRunId
+    ? `${displayedRunId} (${state.activeRunStatus || (state.waitingSourceRunId ? "WAITING_USER" : "-")})`
+    : "-";
   updateRunControls();
 }
 
@@ -1542,10 +1573,11 @@ function updateRunControls() {
 
   const starting = state.activeRunStatus === "STARTING";
   const running = isRunInProgressStatus(state.activeRunStatus);
-  const cancellable = Boolean(state.activeRunId && running && state.activeRunStatus !== "CANCELLING");
+  const waiting = Boolean(state.waitingSourceRunId);
+  const cancellable = Boolean((state.activeRunId && running && state.activeRunStatus !== "CANCELLING") || waiting);
 
-  sendButton.disabled = starting || running;
-  sendButton.textContent = starting ? "启动中..." : running ? "生成中..." : "发送 run";
+  sendButton.disabled = starting || running || waiting;
+  sendButton.textContent = starting ? "启动中..." : running ? "生成中..." : waiting ? "等待确认" : "发送 run";
   stopButton.disabled = !cancellable;
   stopButton.textContent = state.activeRunStatus === "CANCELLING" ? "停止中..." : "停止回答";
   if (targetInput) targetInput.disabled = starting || running;

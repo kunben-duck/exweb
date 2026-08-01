@@ -45,6 +45,7 @@ final class DomainAgentReplacementExecutor {
     private final Scheduler eventIoScheduler;
     private final Scheduler controlIoScheduler;
     private final DomainAgentProperties domainAgentProperties;
+    private final RuntimeBindingDispatchCompensator bindingCompensator;
 
     DomainAgentReplacementExecutor(AgentRuntimeExecutor agentRuntimeExecutor,
                                    RuntimeBindingApplicationService runtimeBindingService,
@@ -55,7 +56,8 @@ final class DomainAgentReplacementExecutor {
                                    ChatRunLeaseApplicationService chatRunLeaseService,
                                    Scheduler eventIoScheduler,
                                    Scheduler controlIoScheduler,
-                                   DomainAgentProperties domainAgentProperties) {
+                                   DomainAgentProperties domainAgentProperties,
+                                   RuntimeBindingDispatchCompensator bindingCompensator) {
         this.agentRuntimeExecutor = agentRuntimeExecutor;
         this.runtimeBindingService = runtimeBindingService;
         this.appliedRouteRecorder = appliedRouteRecorder;
@@ -68,6 +70,7 @@ final class DomainAgentReplacementExecutor {
         this.domainAgentProperties = domainAgentProperties == null
                 ? new DomainAgentProperties()
                 : domainAgentProperties;
+        this.bindingCompensator = bindingCompensator;
     }
 
     Flux<ChatEvent> continueWithRelay(DomainAgentRerouteContext reroute,
@@ -82,34 +85,102 @@ final class DomainAgentReplacementExecutor {
                     signal,
                     currentRouteSource));
         }
-        context.bindingRef().set(bindingPolicy.markRejected(context.bindingRef().get(), reroute.refusal()));
+        RuntimeBindingDispatchLifecycle lifecycle = new RuntimeBindingDispatchLifecycle();
+        return requireCurrentOwnerRunning(
+                context.executionClaim(), "before-relay-reroute-binding")
+                .thenMany(Flux.usingWhen(
+                        Mono.just(lifecycle),
+                        ignored -> Flux.defer(() -> executeRelayReplacement(
+                                reroute, signal, nextRoute, lifecycle)),
+                        ignored -> cleanupUnstartedRelay(context, lifecycle, "complete"),
+                        (ignored, failure) -> cleanupUnstartedRelay(context, lifecycle, "error"),
+                        ignored -> cleanupUnstartedRelay(context, lifecycle, "cancel")));
+    }
+
+    private Flux<ChatEvent> executeRelayReplacement(
+            DomainAgentRerouteContext reroute,
+            RouteSignalResult signal,
+            RouteTarget nextRoute,
+            RuntimeBindingDispatchLifecycle lifecycle) {
+        DomainAgentRunContext context = reroute.context();
+        context.bindingRef().set(bindingPolicy.markRejected(
+                context.bindingRef().get(), reroute.refusal()));
         RuntimeBindingResolution resolution = runtimeBindingService.resolveForRun(
                 context.user().tenantId(),
                 context.user().ownerUserId(),
                 context.session().id(),
                 context.runId(),
                 bindingPolicy.runtimeBindingLeafId(context.command()));
+        trackRelayBinding(lifecycle, resolution);
         context.bindingRef().set(resolution.binding());
         context.routeRef().set(nextRoute);
-        appliedRouteRecorder.bindResolvedRouteRequired(context.runId(), nextRoute, resolution.binding());
+        appliedRouteRecorder.bindResolvedRouteRequired(
+                context.runId(), nextRoute, resolution.binding(), context.executionClaim());
         MemoryContext runtimeMemory = recordAppliedRoute(reroute, signal, nextRoute, resolution.binding());
         ChatCommand runtimeCommand = runtimeCommand(context, nextRoute, signal.intentDecision());
         String action = signal.intentFailure() ? "RELAY_FALLBACK" : "ROUTE_TO_RELAY";
-        return Flux.concat(
-                Flux.just(eventFactory.rerouteMetadata(context, reroute.refusal(), nextRoute, action)),
-                requireCurrentOwnerRunning(context.executionClaim(), "before-relay-reroute-runtime")
-                        .thenMany(Flux.defer(() -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
-                                runtimeCommand,
-                                context.runId(),
-                                runtimeMemory,
-                                signal.intentDecision(),
-                                nextRoute,
-                                context.user(),
-                                resolution.binding(),
-                                resolution.sessionMode(),
-                                context.forwardHeaders(),
-                                context.documents(),
-                                context.traceContext())))));
+        Sinks.One<Void> reroutePersisted = Sinks.one();
+        ChatEvent rerouteEvent = new PersistenceAcknowledgedEvent(
+                eventFactory.rerouteMetadata(context, reroute.refusal(), nextRoute, action),
+                reroutePersisted);
+        RelayReplacementExecution execution = new RelayReplacementExecution(
+                signal,
+                nextRoute,
+                resolution,
+                runtimeCommand,
+                runtimeMemory);
+        return requireCurrentOwnerRunning(
+                context.executionClaim(), "before-relay-reroute-runtime")
+                .thenMany(Flux.concat(
+                        Flux.just(rerouteEvent),
+                        // Relay 只能在重路由事件确认落库后订阅，写入拒绝时恢复或取消本轮 Binding。
+                        reroutePersisted.asMono()
+                                .publishOn(eventIoScheduler)
+                                .thenMany(relayReplacementRuntime(
+                                        context,
+                                        execution,
+                                        lifecycle))));
+    }
+
+    private Flux<ChatEvent> relayReplacementRuntime(
+            DomainAgentRunContext context,
+            RelayReplacementExecution execution,
+            RuntimeBindingDispatchLifecycle lifecycle) {
+        return Flux.defer(() -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
+                        execution.runtimeCommand(),
+                        context.runId(),
+                        execution.runtimeMemory(),
+                        execution.signal().intentDecision(),
+                        execution.nextRoute(),
+                        context.user(),
+                        execution.resolution().binding(),
+                        execution.resolution().sessionMode(),
+                        context.forwardHeaders(),
+                        context.documents(),
+                        context.traceContext())))
+                .doOnSubscribe(ignored -> lifecycle.markRuntimeSubscribed());
+    }
+
+    private void trackRelayBinding(
+            RuntimeBindingDispatchLifecycle lifecycle,
+            RuntimeBindingResolution resolution) {
+        if (resolution.previousBinding() == null) {
+            lifecycle.trackCreated(resolution.binding());
+        } else {
+            lifecycle.trackReused(resolution.binding(), resolution.previousBinding());
+        }
+    }
+
+    private Mono<Void> cleanupUnstartedRelay(
+            DomainAgentRunContext context,
+            RuntimeBindingDispatchLifecycle lifecycle,
+            String terminationSignal) {
+        return bindingCompensator.cleanup(
+                lifecycle,
+                context.runId(),
+                context.session().id(),
+                context.bindingRef(),
+                terminationSignal);
     }
 
     Flux<ChatEvent> continueWithDomainAgent(
@@ -165,7 +236,8 @@ final class DomainAgentReplacementExecutor {
                     RuntimeBinding nextBinding = replacement.binding();
                     context.bindingRef().set(nextBinding);
                     context.routeRef().set(nextRoute);
-                    appliedRouteRecorder.bindResolvedRouteRequired(context.runId(), nextRoute, nextBinding);
+                    appliedRouteRecorder.bindResolvedRouteRequired(
+                            context.runId(), nextRoute, nextBinding, context.executionClaim());
                     MemoryContext runtimeMemory = recordAppliedRoute(reroute, signal, nextRoute, nextBinding);
                     ChatCommand runtimeCommand = runtimeCommand(context, nextRoute, signal.intentDecision());
                     DomainAgentRunContext nextContext = nextRunContext(
@@ -343,6 +415,15 @@ final class DomainAgentReplacementExecutor {
             RouteTarget nextRoute,
             MemoryContext runtimeMemory,
             ChatCommand runtimeCommand
+    ) {
+    }
+
+    private record RelayReplacementExecution(
+            RouteSignalResult signal,
+            RouteTarget nextRoute,
+            RuntimeBindingResolution resolution,
+            ChatCommand runtimeCommand,
+            MemoryContext runtimeMemory
     ) {
     }
 

@@ -1,591 +1,211 @@
-----
-文档包含两个模块：
-approval-response 回复用户出参文档
-用户回复 approval-response 入参文档
-----
+# WebSocket 接口文档 - ask_user 交互
 
+## 二、WebSocket 出参（后端→前端）
 
+### 消息类型：approval-request
 
-# approval-response 回复用户出参文档
-
-## 1. 概述
-
-`approval-response` 是前端发送给服务端的用户回复消息。服务端处理后会：
-
-1. **返回给 Agent** - 通过 ask_user 工具返回值
-2. **返回给前端** - 通过 `approval-result` 事件确认
-
-本文档描述服务端返回给**前端**的出参（`approval-result` 事件）。
-
-## 2. approval-result 事件格式
-
-### 2.1 基本结构
-
+**场景1：标准问卷**
 ```json
 {
-  "type": "approval-result",
+  "type": "approval-request",
   "approval_id": "uuid-string",
-  "request_id": "uuid-string",
-  "approved": true,
-  "scope": "once",
-  "timestamp": "2026-07-30T12:00:00Z",
-  "auto_approved": false,
-  "resolved_by": "user",
-  "resolved_at": "2026-07-30T12:00:05Z"
-}
-```
-
-### 2.2 字段说明
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| type | string | 固定值 "approval-result" |
-| approval_id | string | 审批请求ID，对应 approval-request 的 approval_id |
-| request_id | string | 同 approval_id（前端路由需要） |
-| approved | boolean | 是否批准 |
-| scope | string | 批准范围（"once" / "always"） |
-| timestamp | string | 结果时间戳（ISO 8601） |
-| auto_approved | boolean | 是否自动批准（预授权） |
-| resolved_by | string | 解决者（"user" / "im" / "auto"） |
-| resolved_at | string | 解决时间（ISO 8601） |
-
-## 3. ask_user 问卷场景出参
-
-### 3.1 正常回答出参
-
-**前端发送**：
-```json
-{
-  "type": "approval-response",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440000",
-  "approved": true,
-  "questionnaire_answers": {
-    "label": {
-      "请选择技术方案": ["方案A"]
+  "operation_type": "questionnaire",
+  "mode": "questionnaire",
+  "message": "Please answer the following questions",
+  "risk_level": "LOW",
+  "agent_name": "agent-name",
+  "parent_instance_id": "session_xxx",
+  "timestamp": "2026-07-31T10:00:00",
+  "questions": [
+    {
+      "question": "请选择技术方案",
+      "options": [
+        {"label": "方案A（推荐）", "description": "使用REST API"},
+        {"label": "方案B", "description": "使用GraphQL"},
+        {"label": "方案C", "description": "使用gRPC"}
+      ],
+      "multi_select": false
     },
-    "ignore": false
-  }
+    {
+      "question": "请选择部署环境",
+      "options": [
+        {"label": "开发环境"},
+        {"label": "测试环境"},
+        {"label": "生产环境"}
+      ],
+      "multi_select": true
+    }
+  ]
 }
 ```
 
-**服务端返回（approval-result）**：
-```json
-{
-  "type": "approval-result",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440000",
-  "request_id": "550e8400-e29b-41d4-a716-446655440000",
-  "approved": true,
-  "scope": "once",
-  "timestamp": "2026-07-30T12:00:05.123Z",
-  "auto_approved": false,
-  "resolved_by": "user",
-  "resolved_at": "2026-07-30T12:00:05.123Z",
-  "questionnaire_answers": {
-    "label": {
-      "请选择技术方案": ["方案A"]
-    },
-    "ignore": false
-  }
-}
-```
 
-### 3.2 用户忽略出参
+### 参数说明
 
-**前端发送**：
-```json
-{
-  "type": "approval-response",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440001",
-  "approved": true,
-  "questionnaire_answers": {
-    "label": {},
-    "ignore": true
-  }
-}
-```
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| type | string | 是 | 固定值 "approval-request" |
+| approval_id | string | 是 | 请求唯一标识，用于响应时匹配 |
+| operation_type | string | 是 | 固定值 "questionnaire" |
+| mode | string | 是 | 固定值 "questionnaire" |
+| message | string | 是 | 描述文本 |
+| risk_level | string | 是 | 风险等级，固定值 "LOW" |
+| agent_name | string | 否 | 触发问卷的Agent名称 |
+| parent_instance_id | string | 是 | 父实例ID，用于前端路由 |
+| timestamp | string | 是 | 时间戳 ISO格式 |
+| questions | array | 是 | 问题列表（1-4个） |
+| metadata | object | 是 | 元数据，包含confirmation_type、questions、file_path、file_content |
 
-**服务端返回（approval-result）**：
-```json
-{
-  "type": "approval-result",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440001",
-  "request_id": "550e8400-e29b-41d4-a716-446655440001",
-  "approved": true,
-  "scope": "once",
-  "timestamp": "2026-07-30T12:01:00.456Z",
-  "auto_approved": false,
-  "resolved_by": "user",
-  "resolved_at": "2026-07-30T12:01:00.456Z",
-  "questionnaire_answers": {
-    "label": {},
-    "ignore": true
-  }
-}
-```
+**questions[i] 参数说明**
 
-**注意**：
-- `approved` 仍为 `true`（用户已响应）
-- `questionnaire_answers.ignore` 为 `true` 表示用户选择忽略
-- ask_user 工具会返回 `{"error": "User ignored the questionnaire", "failed": true}` 给 Agent
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| question | string | 是 | 问题文本 |
+| options | array | 是 | 选项列表（2-6个） |
+| multi_select | boolean | 否 | 是否多选，默认false |
 
-### 3.3 多问题回答出参
+**options[i] 参数说明**
 
-**前端发送**：
-```json
-{
-  "type": "approval-response",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440002",
-  "approved": true,
-  "questionnaire_answers": {
-    "label": {
-      "选择编程语言": ["Python"],
-      "是否需要单元测试": ["是"],
-      "代码风格": ["简洁"]
-    },
-    "ignore": false
-  }
-}
-```
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| label | string | 是 | 选项标签 |
+| description | string | 否 | 选项说明 |
+| input_prompt | string | 否 | 输入提示，选中后需用户输入额外内容 |
 
-**服务端返回（approval-result）**：
-```json
-{
-  "type": "approval-result",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440002",
-  "request_id": "550e8400-e29b-41d4-a716-446655440002",
-  "approved": true,
-  "scope": "once",
-  "timestamp": "2026-07-30T12:02:15.789Z",
-  "questionnaire_answers": {
-    "label": {
-      "选择编程语言": ["Python"],
-      "是否需要单元测试": ["是"],
-      "代码风格": ["简洁"]
-    },
-    "ignore": false
-  }
-}
-```
+## 三、WebSocket 入参（前端→后端）
 
-### 3.4 带 file_path 的问卷出参
+### 消息类型：approval-response
 
-**前端发送**：
-```json
-{
-  "type": "approval-response",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440003",
-  "approved": true,
-  "questionnaire_answers": {
-    "label": {
-      "这个方案是否合适？": ["合适，执行"]
-    },
-    "ignore": false
-  }
-}
-```
-
-**服务端返回（approval-result）**：
-```json
-{
-  "type": "approval-result",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440003",
-  "request_id": "550e8400-e29b-41d4-a716-446655440003",
-  "approved": true,
-  "scope": "once",
-  "timestamp": "2026-07-30T12:03:30.123Z",
-  "questionnaire_answers": {
-    "label": {
-      "这个方案是否合适？": ["合适，执行"]
-    },
-    "ignore": false
-  },
-  "file_path": "/project/plan.md",
-  "file_content": "# 实施方案\n\n## 概述\n..."
-}
-```
-
-**注意**：
-- `file_path` 和 `file_content` 会从原始 approval-request 中透传
-- 仅用于前端渲染，不影响工具返回给 Agent 的值
-
-## 4. 其他确认类型出参（非 ask_user）
-
-### 4.1 FILE_WRITE 确认
-
-**前端发送**：
-```json
-{
-  "type": "approval-response",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440004",
-  "approved": true,
-  "scope": "once"
-}
-```
-
-**服务端返回**：
-```json
-{
-  "type": "approval-result",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440004",
-  "request_id": "550e8400-e29b-41d4-a716-446655440004",
-  "approved": true,
-  "scope": "once",
-  "timestamp": "2026-07-30T12:04:00.000Z"
-}
-```
-
-### 4.2 COMMAND_EXECUTION 确认
-
-**前端发送**：
-```json
-{
-  "type": "approval-response",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440005",
-  "approved": false,
-  "scope": "once"
-}
-```
-
-**服务端返回**：
-```json
-{
-  "type": "approval-result",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440005",
-  "request_id": "550e8400-e29b-41d4-a716-446655440005",
-  "approved": false,
-  "scope": "once",
-  "timestamp": "2026-07-30T12:05:00.000Z"
-}
-```
-
-### 4.3 自动批准（预授权）
-
-**服务端返回**：
-```json
-{
-  "type": "approval-result",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440006",
-  "request_id": "550e8400-e29b-41d4-a716-446655440006",
-  "approved": true,
-  "scope": "once",
-  "timestamp": "2026-07-30T12:06:00.000Z",
-  "auto_approved": true,
-  "resolved_by": "auto",
-  "resolved_at": "2026-07-30T12:06:00.000Z"
-}
-```
-
-**注意**：
-- `auto_approved: true` 表示自动批准，前端可显示绿色徽章
-- `resolved_by: "auto"` 表示自动批准而非用户操作
-
-### 4.4 IM 远程批准（竞争）
-
-**服务端返回**：
-```json
-{
-  "type": "approval-result",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440007",
-  "request_id": "550e8400-e29b-41d4-a716-446655440007",
-  "approved": true,
-  "scope": "once",
-  "timestamp": "2026-07-30T12:07:00.000Z",
-  "auto_approved": false,
-  "resolved_by": "im",
-  "resolved_at": "2026-07-30T12:07:00.000Z"
-}
-```
-
-**场景**：
-- IM（即时消息）渠道和 Web 渠道同时处理同一审批
-- IM 先响应，Web 收到竞争结果通知
-- 前端可关闭弹窗并显示提示
-
-## 5. 完整流程示例
-
-### 5.1 正常问卷流程
-
-```
-1. Agent 调用 ask_user 工具
-   ↓
-2. 服务端发送 approval-request
-   {
-     "type": "approval-request",
-     "approval_id": "xxx",
-     "mode": "questionnaire",
-     "questions": [...]
-   }
-   ↓
-3. 前端显示问卷 UI
-   ↓
-4. 用户选择答案并提交
-   前端发送 approval-response
-   {
-     "type": "approval-response",
-     "approval_id": "xxx",
-     "approved": true,
-     "questionnaire_answers": {
-       "label": {"问题": ["答案"]},
-       "ignore": false
-     }
-   }
-   ↓
-5. 服务端处理
-   - 更新 ConfirmationResponse
-   - 触发 asyncio.Event 唤醒 Agent
-   - 持久化 approval-result 到 chat_history
-   - 广播 approval-result 给前端
-   ↓
-6. 前端收到 approval-result
-   {
-     "type": "approval-result",
-     "approval_id": "xxx",
-     "approved": true,
-     "questionnaire_answers": {...}
-   }
-   ↓
-7. Agent 继续执行（收到工具返回值）
-   ask_user 返回: '{"问题": "答案"}'
-```
-
-### 5.2 用户忽略流程
-
-```
-1-3. 同上
-   ↓
-4. 用户点击"忽略"按钮
-   前端发送 approval-response
-   {
-     "type": "approval-response",
-     "approval_id": "xxx",
-     "approved": true,
-     "questionnaire_answers": {
-       "label": {},
-       "ignore": true
-     }
-   }
-   ↓
-5. 服务端处理
-   - 检测到 ignore=true
-   - 设置 response.metadata["ignore"] = True
-   - 唤醒 Agent
-   ↓
-6. 前端收到 approval-result
-   {
-     "type": "approval-result",
-     "approval_id": "xxx",
-     "approved": true,
-     "questionnaire_answers": {
-       "label": {},
-       "ignore": true
-     }
-   }
-   ↓
-7. Agent 收到失败返回
-   ask_user 返回: '{"error": "User ignored the questionnaire", "failed": true}'
-   ↓
-8. Agent 重新规划执行路径
-```
-
-### 5.3 超时流程
-
-```
-1-3. 同上
-   ↓
-4. 用户 60 秒内未响应
-   ↓
-5. 服务端超时处理（plugin.py:225）
-   - asyncio.wait_for 超时
-   - 自动返回失败给 Agent
-   ↓
-6. Agent 收到失败返回
-   ask_user 返回: '{"error": "Questionnaire timed out after 60 seconds", "failed": true}'
-   
-注意：超时不会发送 approval-result 给前端（因为用户未响应）
-```
-
----
-
-# 用户回复 approval-response 入参文档
-
-## 1. 基本格式
-
-用户通过 WebSocket 回复 approval-request 的完整入参格式：
-
+**场景1：单选/多选问卷响应**
 ```json
 {
   "type": "approval-response",
   "approval_id": "uuid-string",
   "approved": true,
+  "scope": "once",
   "questionnaire_answers": {
     "label": {
-      "问题文本1": ["选中的答案1"],
-      "问题文本2": ["选中的答案2"]
-    },
-    "ignore": false
+      "请选择技术方案": "方案A（推荐）",
+      "请选择部署环境": ["开发环境", "测试环境"]
+    }
   }
 }
 ```
 
-## 2. 字段说明
+**场景3：忽略问卷**
+```json
+{
+  "type": "approval-response",
+  "approval_id": "uuid-string",
+  "approved": false,
+  "scope": "once",
+  "questionnaire_answers": {
+    "ignore": true
+  }
+}
+```
 
-### 2.1 顶层字段
+**场景4：选择Other自定义文本**
+```json
+{
+  "type": "approval-response",
+  "approval_id": "uuid-string",
+  "approved": true,
+  "scope": "once",
+  "questionnaire_answers": {
+    "label": {
+      "请选择技术方案": "用户自定义答案"
+    }
+  }
+}
+```
 
-| 字段 | 类型 | 必填 | 说明 |
+### 参数说明
+
+| 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | type | string | 是 | 固定值 "approval-response" |
-| approval_id | string | 是 | 审批请求ID，对应 approval-request 事件中的 approval_id |
-| approved | boolean | 是 | 是否批准（对于 ask_user 工具通常为 true） |
-| questionnaire_answers | object | 是 | ask_user 问卷答案（仅用于 questionnaire 类型） |
+| approval_id | string | 是 | 匹配approval-request的approval_id |
+| approved | boolean | 是 | 是否批准/响应 |
+| scope | string | 是 | 作用域，固定值 "once" |
+| questionnaire_answers | object | 是 | 问卷答案对象 |
 
-### 2.2 questionnaire_answers 字段
+**questionnaire_answers 参数说明**
 
-| 字段 | 类型 | 必填 | 说明 |
+| 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| label | object | 是* | 实际的问答内容，key 为问题文本，value 为答案数组 |
-| ignore | boolean | 否 | 是否忽略此问卷，默认 false |
+| label | object | 否 | 答案对象，key为问题文本，value为答案（单选为字符串，多选为数组） |
+| ignore | boolean | 否 | 是否忽略问卷，为true时工具返回失败 |
 
-**注意**：
-- 如果 `ignore=true`，工具调用将失败，返回 `{"error": "User ignored the questionnaire", "failed": true}`
-- 如果 `ignore=false` 或未提供，则从 `label` 字段提取实际答案
 
-## 3. 使用场景示例
+## 五、超时处理
 
-### 3.1 正常回答问卷
+后端设置60秒超时：
+- Agent调用ask_user时设置timeout_seconds=60
+- 60秒内前端未响应 → 后端返回 `{"error": "Questionnaire timed out after 60 seconds", "failed": true}`
+- Agent可根据failed字段判断失败原因并重试或使用默认方案
 
-```json
-{
-  "type": "approval-response",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440000",
-  "approved": true,
-  "questionnaire_answers": {
-    "label": {
-      "请选择实现方案": ["方案A: 使用Redis缓存"],
-      "是否需要添加日志": ["是"]
-    },
-    "ignore": false
-  }
-}
-```
+## 测试示例
 
-### 3.2 多选题回答
-
-```json
-{
-  "type": "approval-response",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440001",
-  "approved": true,
-  "questionnaire_answers": {
-    "label": {
-      "选择需要的功能": ["用户认证", "数据缓存", "日志记录"]
-    },
-    "ignore": false
-  }
-}
-```
-
-### 3.3 用户忽略问卷
-
-```json
-{
-  "type": "approval-response",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440002",
-  "approved": true,
-  "questionnaire_answers": {
-    "label": {},
-    "ignore": true
-  }
-}
-```
-
-**返回结果**（给 Agent）：
-```json
-{
-  "error": "User ignored the questionnaire",
-  "failed": true
-}
-```
-
-### 3.4 用户选择"Other"自定义输入
-
-```json
-{
-  "type": "approval-response",
-  "approval_id": "550e8400-e29b-41d4-a716-446655440003",
-  "approved": true,
-  "questionnaire_answers": {
-    "label": {
-      "请选择编程语言": ["Other: Rust"]
-    },
-    "ignore": false
-  }
-}
-```
-
-## 4. 其他确认类型的简化格式
-
-ask_user 工具只使用 QUESTIONNAIRE 类型。其他确认类型（FILE_WRITE、COMMAND_EXECUTION 等）的 approval-response 格式：
-
-```json
-{
-  "type": "approval-response",
-  "approval_id": "uuid-string",
-  "approved": true,
-  "scope": "once",
-  "answer": "选项值",
-  "text": "文本输入值"
-}
-```
-
-## 5. WebSocket 发送示例
-
-```javascript
-// 前端通过 WebSocket 发送 approval-response
-const ws = new WebSocket('ws://localhost:8000/ws');
-
-ws.send(JSON.stringify({
-  type: 'approval-response',
-  approval_id: '550e8400-e29b-41d4-a716-446655440000',
-  approved: true,
-  questionnaire_answers: {
-    label: {
-      '选择技术方案': ['使用 REST API']
-    },
-    ignore: false
-  }
-}));
-```
-
-## 6. 超时处理
-
-如果用户在 60 秒内未回复，系统会自动触发超时：
-
-- 服务端自动返回给 Agent：
-  ```json
-  {
-    "error": "Questionnaire timed out after 60 seconds",
-    "failed": true
-  }
-  ```
-
-- Agent 收到此错误后会重新规划执行路径
-
-## 7. 处理流程
 
 ```
-前端发送 approval-response
-  ↓
-WebSocket message_router 接收 (message_router.py:259)
-  ↓
-handle_approval_response 处理 (message_handlers.py:598)
-  ↓
-WebConfirmationStrategy.handle_approval_response (web_strategy.py:299)
-  ↓
-提取 questionnaire_answers
-  ├─ ignore=true → response_metadata["ignore"] = True
-  └─ ignore=false → response_metadata["answers"] = questionnaire_answers["label"]
-  ↓
-ConfirmationRequest 完成等待
-  ↓
-ask_user 工具返回结果给 Agent
+生成一个调查问卷{
+      "问题文本1": "单选答案",
+      "问题文本2": [
+        "多选答案1",
+        "多选答案2"
+      ]
+    }
 ```
+
+## 六、ChatService 集成约束
+
+FinanceEXChatService 收到 `approval-request(operation_type=questionnaire)` 后，不保持当前下游 WebSocket：
+
+```text
+run-A 保存 runtime.card 和 AGENT_CLARIFICATION_REQUEST part
+-> 原子保存 WAITING Interaction 和 ACTIVE Relay Binding
+-> 输出 run.waiting_user
+-> 关闭 run-A 下游连接
+```
+
+前端通过 `/v1/chat/runs` 提交 `CONTINUE_INTERACTION`。ChatService 创建 run-B，校验 Interaction 保存的
+`runtimeBindingId/runtimeSessionId/approvalId` 及 execution owner/fencing 后，重新连接 Relay：
+
+```text
+config(sessionMode=resume, sessionId=<真实 Relay session>)
+-> session-ready
+-> approval-response
+-> 剩余业务事件
+```
+
+ChatService 只发送本文件定义的 `approval_id/approved/scope/questionnaire_answers`，不发送旧
+`request_id`、扁平答案、metadata 或 timestamp。Relay 必须在物理连接关闭后保留 pending questionnaire，
+并允许同一 `runtimeSessionId + approval_id` 恢复；Relay 自身问卷超时应关闭，或大于前端等待和重连时间。
+因此，上述 60 秒 Relay 内部超时不能直接作为 ChatService 集成环境的默认值，除非前端截止时间及重连窗口
+明确小于该值。
+
+ChatService 在连接 Relay 前先以 run/execution owner/fencing 条件持久化 run-B 的最终 Runtime 路由。
+更新失败时不会输出回答确认事件，也不会建立 Relay 连接。续接失败按发送边界处理：
+
+- `approval-response` 进入 WebSocket outbound 前失败：条件恢复 Binding 到 run-A，Interaction 恢复
+  `WAITING`，允许使用同一 `interactionId` 重试。
+- `approval-response` 进入 outbound 后失败：结果视为未知，不自动重发；Interaction 和仍由 run-B 持有的
+  ACTIVE Binding 均取消，前端必须发起新的 `NEXT`。
+- `RUNTIME_SESSION_UNAVAILABLE` 或 Binding 恢复失败：按不可重试处理并取消 Interaction 与 Binding。
+
+发送阶段只在当前 JVM 请求链内记录，不写入 Relay 请求、ChatEvent、Redis 或数据库。
+
+可选配置 `financeex.relay.questionnaire-wait-timeout` 默认 `0s`。零值表示永久等待；正数只生成供前端使用的
+`autoActionAt/autoActionTimeoutMs/autoActionType=IGNORE_QUESTIONNAIRE`，ChatService 不启动后台定时任务。
+
+等待期间取消统一使用 run stop 接口。前端从 `stream-status.waitingSourceRunId` 取得 run-A：
+
+```http
+POST /v1/chat/runs/{waitingSourceRunId}/stop
+```
+
+ChatService 原子取消 Interaction 和其引用的 ACTIVE Relay Binding；run-A 仍保留 `WAITING_USER` 历史状态。
+物理问卷连接已经关闭时，ChatService 使用 Interaction 保存的真实 `runtimeSessionId` 建立临时连接，完成
+`config(sessionMode=resume) -> session-ready -> stop_all_agents` 后释放连接。下游停止失败不会恢复本地等待，
+用户仍可立即发起新的 `NEXT` 请求。

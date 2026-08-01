@@ -179,7 +179,8 @@ final class ChatRunCompletionCoordinator {
                 context.assistant(),
                 context.runId(),
                 context.executionClaim(),
-                context.continuationInteractionRequest()
+                context.continuationInteractionRequest(),
+                context.interactionDispatchState()
         );
     }
 
@@ -288,7 +289,8 @@ final class ChatRunCompletionCoordinator {
                 "refusalCode", "refusalReasonCode", "refusalRecoverable", "refusalReason",
                 "intentSessionId", "intentRequestId", "originalQuery",
                 "clarificationType", "candidateIntents", "actions",
-                "autoSelectAt", "autoSelectTimeoutMs");
+                "autoSelectAt", "autoSelectTimeoutMs",
+                "autoActionAt", "autoActionTimeoutMs", "autoActionType");
         return new RunWaitingUserEvent(event.runId(), event.sessionId(), event.sequence(),
                 event.createdAt(), ChatPayloadMaps.immutableCopy(payload));
     }

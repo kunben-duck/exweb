@@ -23,6 +23,7 @@ import com.huawei.it.ex.one.domain.chat.ChatRunStopResult;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatStreamStatus;
 import com.huawei.it.ex.one.domain.chat.ChatStreamTopics;
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
@@ -30,6 +31,7 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Collection;
@@ -230,6 +232,45 @@ public class ChatRunApplicationService {
     }
 
     /**
+     * 在当前 execution 写入权保护下回填最终 Runtime 路由。
+     */
+    public ChatRun bindResolvedRoute(ChatRun run, RouteTarget route, RuntimeBinding binding,
+                                     RunExecutionClaim claim) {
+        if (run == null || run.id() == null || run.id().isBlank() || route == null || claim == null
+                || !run.id().equals(claim.runId())) {
+            return null;
+        }
+        // 使用 admission 已持有的 run 快照，避免 guarded UPDATE 前再执行一次无超时查询。
+        return updateResolvedRouteWithExecutionGuard(run.withResolvedRoute(
+                route.type() == null ? null : route.type().name(),
+                route.selectedAgentCode(),
+                binding == null ? null : binding.provider(),
+                binding == null ? null : binding.runtimeSessionId()), claim);
+    }
+
+    /**
+     * 按 runId 在 execution 写入权保护下回填最终 Runtime 路由。
+     *
+     * <p>用于拒答重路由等没有 admission run 快照的流程；查询、加锁和更新共享同一短事务。</p>
+     */
+    @Transactional(timeoutString =
+            "${financeex.runtime-binding.interaction-resume-transaction-timeout-seconds:2}")
+    public ChatRun bindResolvedRoute(String runId, RouteTarget route, RuntimeBinding binding,
+                                     RunExecutionClaim claim) {
+        if (runId == null || runId.isBlank() || route == null || claim == null
+                || !runId.equals(claim.runId())) {
+            return null;
+        }
+        return repository.findById(runId)
+                .map(run -> updateResolvedRouteWithExecutionGuard(run.withResolvedRoute(
+                        route.type() == null ? null : route.type().name(),
+                        route.selectedAgentCode(),
+                        binding == null ? null : binding.provider(),
+                        binding == null ? null : binding.runtimeSessionId()), claim))
+                .orElse(null);
+    }
+
+    /**
      * 回填不创建 RuntimeBinding 的路由阶段 provider，例如 intent-agent 澄清等待态。
      */
     public ChatRun bindRuntimeProvider(String runId, String runtimeProvider) {
@@ -246,22 +287,31 @@ public class ChatRunApplicationService {
      * 接收 stop 请求并写入取消标记。
      */
     public ChatRunStopDecision requestStop(UserContext user, String runId, String reason) {
-        ChatRun run = requireOwnedRun(user, runId);
+        return requestStop(user, requireOwnedRun(user, runId), reason);
+    }
+
+    /** 使用已完成归属校验的 run 接收 stop，避免协调器分流等待态时重复首查。 */
+    public ChatRunStopDecision requestStop(UserContext user, ChatRun run, String reason) {
+        if (user == null || run == null
+                || !user.tenantId().equals(run.tenantId())
+                || !user.ownerUserId().equals(run.userId())) {
+            throw new SecurityException("run 不存在或不属于当前用户");
+        }
         if (!run.stopRetryable()) {
             return new ChatRunStopDecision(run, false);
         }
         if (run.status() == ChatRunStatus.CANCELLING) {
-            cache.markCancellationRequested(runId);
+            cache.markCancellationRequested(run.id());
             return new ChatRunStopDecision(run, true);
         }
         String effectiveReason = reason == null || reason.isBlank() ? "USER_STOP" : reason;
         repository.tryMarkCancelling(new ChatRunRepository.StopClaim(
                 run.id(), user.tenantId(), user.ownerUserId(), effectiveReason, Instant.now()));
-        ChatRun latest = requireOwnedRun(user, runId);
+        ChatRun latest = requireOwnedRun(user, run.id());
         if (latest.status() != ChatRunStatus.CANCELLING) {
             return new ChatRunStopDecision(latest, false);
         }
-        cache.markCancellationRequested(runId);
+        cache.markCancellationRequested(run.id());
         cache.putActive(latest);
         return new ChatRunStopDecision(latest, true);
     }
@@ -424,7 +474,7 @@ public class ChatRunApplicationService {
         return active
                 .map(run -> new ChatStreamStatus(sessionId, currentLatestSeq, run.id(), run.status(),
                         ChatStreamTopics.runTopic(run.id()), run.firstSeq(), run.lastSeq(), run.cancellable(),
-                        false, null, null, null, null, null, null,
+                        false, null, null, null, null, null, null, null, null, null, null,
                         bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                         bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
                         bindingSummary.updatedAt(), bindingSummary.agentMode()))
@@ -436,30 +486,36 @@ public class ChatRunApplicationService {
         ChatInteractionApplicationService interactionService = interactionServiceProvider == null ? null : interactionServiceProvider.getIfAvailable();
         if (interactionService == null) {
             return new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
-                    false, false, null, null, null, null, null, null,
+                    false, false, null, null, null, null, null, null, null, null, null, null,
                     bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                     bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
                     bindingSummary.updatedAt(), bindingSummary.agentMode());
         }
         return interactionService.findWaiting(user, sessionId)
                 .map(request -> new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
-                        false, true, request.id(), request.interactionType().name(),
+                        false, true, request.sourceRunId(), request.id(), request.interactionType().name(),
                         request.assistantMessageId(), request.expiresAt(),
                         autoSelectAt(request), autoSelectTimeoutMs(request),
+                        payloadInstant(request, "autoActionAt"),
+                        payloadLong(request, "autoActionTimeoutMs"),
+                        payloadText(request, "autoActionType"),
                         bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                         bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
                         bindingSummary.updatedAt(), bindingSummary.agentMode()))
                 .orElseGet(() -> new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
-                        false, false, null, null, null, null, null, null,
+                        false, false, null, null, null, null, null, null, null, null, null, null,
                         bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                         bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
                         bindingSummary.updatedAt(), bindingSummary.agentMode()));
     }
 
     private Instant autoSelectAt(com.huawei.it.ex.one.domain.chat.ChatInteractionRequest request) {
-        Object value = request == null || request.requestPayload() == null
-                ? null
-                : request.requestPayload().get("autoSelectAt");
+        return payloadInstant(request, "autoSelectAt");
+    }
+
+    private Instant payloadInstant(com.huawei.it.ex.one.domain.chat.ChatInteractionRequest request,
+                                   String key) {
+        Object value = payloadValue(request, key);
         if (value == null || String.valueOf(value).isBlank()) {
             return null;
         }
@@ -471,9 +527,12 @@ public class ChatRunApplicationService {
     }
 
     private Long autoSelectTimeoutMs(com.huawei.it.ex.one.domain.chat.ChatInteractionRequest request) {
-        Object value = request == null || request.requestPayload() == null
-                ? null
-                : request.requestPayload().get("autoSelectTimeoutMs");
+        return payloadLong(request, "autoSelectTimeoutMs");
+    }
+
+    private Long payloadLong(com.huawei.it.ex.one.domain.chat.ChatInteractionRequest request,
+                             String key) {
+        Object value = payloadValue(request, key);
         if (value instanceof Number number) {
             return number.longValue();
         }
@@ -485,6 +544,17 @@ public class ChatRunApplicationService {
         } catch (NumberFormatException ignored) {
             return null;
         }
+    }
+
+    private String payloadText(com.huawei.it.ex.one.domain.chat.ChatInteractionRequest request,
+                               String key) {
+        Object value = payloadValue(request, key);
+        return value == null || String.valueOf(value).isBlank() ? null : String.valueOf(value);
+    }
+
+    private Object payloadValue(com.huawei.it.ex.one.domain.chat.ChatInteractionRequest request,
+                                String key) {
+        return request == null || request.requestPayload() == null ? null : request.requestPayload().get(key);
     }
 
     private BindingSummary bindingSummary(UserContext user, String sessionId) {
@@ -552,6 +622,12 @@ public class ChatRunApplicationService {
 
     private ChatRun updateResolvedRoute(ChatRun run) {
         ChatRun saved = repository.updateResolvedRoute(run);
+        synchronizeActiveRunCache(saved);
+        return saved;
+    }
+
+    private ChatRun updateResolvedRouteWithExecutionGuard(ChatRun run, RunExecutionClaim claim) {
+        ChatRun saved = repository.updateResolvedRouteWithExecutionGuard(run, claim);
         synchronizeActiveRunCache(saved);
         return saved;
     }

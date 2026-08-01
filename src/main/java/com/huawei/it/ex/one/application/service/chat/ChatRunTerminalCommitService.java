@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDispatchState;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
@@ -144,12 +145,28 @@ public class ChatRunTerminalCommitService {
         ChatEvent stored = append(command.event(), command.context());
         command.context().assistant().observe(stored);
         observeRun(stored);
-        if (reusableInteraction(command.context())
-                && ("run.failed".equals(stored.type()) || "run.cancelled".equals(stored.type()))) {
+        boolean cancelFailedRelayInteraction = cancelFailedRelayInteraction(command.context(), stored);
+        if (cancelFailedRelayInteraction) {
+            ChatInteractionRequest request = command.context().continuationInteractionRequest();
+            chatInteractionService.cancelRespondingForRun(
+                    request.tenantId(), request.userId(), request.id(), command.context().runId(),
+                    java.time.Instant.now());
+        } else if (reusableInteraction(command.context()) && "run.failed".equals(stored.type())) {
             chatInteractionService.markWaiting(command.context().continuationInteractionRequest());
+        } else if (reusableInteraction(command.context()) && "run.cancelled".equals(stored.type())) {
+            ChatInteractionRequest request = command.context().continuationInteractionRequest();
+            chatInteractionService.cancelRespondingForRun(
+                    request.tenantId(), request.userId(), request.id(), command.context().runId(),
+                    java.time.Instant.now());
+        }
+        RuntimeBinding binding = command.context().bindingRef().get();
+        if (cancelFailedRelayInteraction) {
+            binding = cancelFailedRelayInteractionBinding(binding, command.context());
         }
         markExecutionTerminal(stored);
-        RuntimeBinding binding = invalidateUnavailableRuntimeSession(command.context().bindingRef().get(), stored);
+        if (!cancelFailedRelayInteraction) {
+            binding = invalidateUnavailableRuntimeSession(binding, stored);
+        }
         binding = observeRuntimeBindingEvent(binding, stored);
         return new CommitResult(stored, binding);
     }
@@ -206,7 +223,12 @@ public class ChatRunTerminalCommitService {
                         command.run().cancelReason(),
                         finishedAt
                 ));
-        releaseContinuationInteractionClaim(committedRun, command.interactionId());
+        // run.cancelled 表示用户 stop 已经取得控制权；watchdog 只负责闭合终态，不能恢复等待。
+        if (terminalStatus == ChatRunStatus.CANCELLED) {
+            cancelContinuationInteractionClaim(committedRun, command.interactionId());
+        } else {
+            releaseContinuationInteractionClaim(committedRun, command.interactionId());
+        }
         markExecutionTerminal(stored);
         return new ExternalTerminalCommitResult(stored, committedRun, true);
     }
@@ -270,7 +292,9 @@ public class ChatRunTerminalCommitService {
         if (run == null || (run.status() != ChatRunStatus.CANCELLED && run.status() != ChatRunStatus.FAILED)) {
             return 0;
         }
-        return releaseContinuationInteractionClaim(run);
+        return run.status() == ChatRunStatus.CANCELLED
+                ? cancelContinuationInteractionClaim(run, null)
+                : releaseContinuationInteractionClaim(run);
     }
 
     private ChatEvent append(ChatEvent event, TerminalCommitContext context) {
@@ -423,6 +447,46 @@ public class ChatRunTerminalCommitService {
                 && !newTurnInteraction(context);
     }
 
+    private boolean cancelFailedRelayInteraction(TerminalCommitContext context, ChatEvent event) {
+        if (!reusableInteraction(context) || event == null || !"run.failed".equals(event.type())) {
+            return false;
+        }
+        RuntimeInteractionDispatchState dispatchState = context.interactionDispatchState();
+        if (dispatchState == null || !dispatchState.trackedInteraction()) {
+            return false;
+        }
+        Map<String, Object> payload = event.payload() == null ? Map.of() : event.payload();
+        return dispatchState.cancelInteractionAfterFailure()
+                || RUNTIME_SESSION_UNAVAILABLE.equals(String.valueOf(payload.get("code")));
+    }
+
+    /**
+     * 回答可能已送达 Relay 时，只取消仍由当前 continuation run 持有的 ACTIVE Binding。
+     */
+    private RuntimeBinding cancelFailedRelayInteractionBinding(
+            RuntimeBinding binding,
+            TerminalCommitContext context) {
+        ChatInteractionRequest interaction = context.continuationInteractionRequest();
+        RuntimeBinding candidate = binding;
+        if (candidate == null && interaction != null
+                && interaction.runtimeBindingId() != null && !interaction.runtimeBindingId().isBlank()) {
+            candidate = runtimeBindingRepository.findById(interaction.runtimeBindingId()).orElse(null);
+        }
+        if (candidate == null || interaction == null) {
+            return candidate;
+        }
+        boolean cancelled = context.runId().equals(candidate.lastRunId())
+                ? runtimeBindingRepository.cancelActiveForRun(candidate.id(), context.runId())
+                : runtimeBindingRepository.cancelActiveForInteraction(
+                        candidate, interaction.sourceRunId(), context.runId());
+        if (cancelled) {
+            return candidate.withStatus(RuntimeBindingStatus.CANCELLED);
+        }
+        RuntimeBinding fallback = candidate;
+        return runtimeBindingRepository.findById(candidate.id())
+                .orElse(fallback.withStatus(RuntimeBindingStatus.CANCELLED));
+    }
+
     private void bindAssistantMessage(String runId, String assistantMessageId) {
         runRepository.findById(runId)
                 .ifPresent(run -> runRepository.save(run.withAssistantMessageId(assistantMessageId)));
@@ -462,6 +526,26 @@ public class ChatRunTerminalCommitService {
         }
         return chatInteractionService.markWaitingForRun(
                 run.tenantId(), run.userId(), interactionId, run.id());
+    }
+
+    private int cancelContinuationInteractionClaim(ChatRun run, String explicitInteractionId) {
+        if (chatInteractionService == null || run == null || InteractionMessageStrategy.newTurn(run)) {
+            return 0;
+        }
+        String interactionId = continuationInteractionId(run, explicitInteractionId);
+        if (interactionId == null) {
+            return 0;
+        }
+        return chatInteractionService.cancelRespondingForRun(
+                run.tenantId(), run.userId(), interactionId, run.id(), java.time.Instant.now());
+    }
+
+    private String continuationInteractionId(ChatRun run, String explicitInteractionId) {
+        Object value = run.metadata() == null ? null : run.metadata().get(INTERACTION_ID_METADATA);
+        String interactionId = explicitInteractionId == null || explicitInteractionId.isBlank()
+                ? (value == null ? null : String.valueOf(value).trim())
+                : explicitInteractionId.trim();
+        return interactionId == null || interactionId.isBlank() ? null : interactionId;
     }
 
     private ChatRun saveObservedRun(ChatRun run, ChatEvent event) {
@@ -601,8 +685,21 @@ public class ChatRunTerminalCommitService {
             AssistantAssembly assistant,
             String runId,
             RunExecutionClaim executionClaim,
-            ChatInteractionRequest continuationInteractionRequest
+            ChatInteractionRequest continuationInteractionRequest,
+            RuntimeInteractionDispatchState interactionDispatchState
     ) {
+        public TerminalCommitContext(
+                UserContext user,
+                ChatSession session,
+                ChatRunMessagePlan messagePlan,
+                AtomicReference<RuntimeBinding> bindingRef,
+                AssistantAssembly assistant,
+                String runId,
+                RunExecutionClaim executionClaim,
+                ChatInteractionRequest continuationInteractionRequest) {
+            this(user, session, messagePlan, bindingRef, assistant, runId, executionClaim,
+                    continuationInteractionRequest, RuntimeInteractionDispatchState.untracked());
+        }
     }
 
     public record MessageTarget(boolean messageReady, String assistantMessageId) {

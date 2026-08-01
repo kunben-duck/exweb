@@ -2,12 +2,14 @@ package com.huawei.it.ex.one.application.service.runtime;
 
 import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
+import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
@@ -24,6 +26,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -108,10 +111,11 @@ public class RuntimeBindingApplicationService {
                         .reversed())
                 .toList();
         if (!activeBindings.isEmpty()) {
-            RuntimeBinding selected = touchForRun(activeBindings.getFirst(), runId);
+            RuntimeBinding previous = activeBindings.getFirst();
+            RuntimeBinding selected = touchForRun(previous, runId);
             cancelDuplicateBindings(activeBindings, selected);
             cache.put(selected);
-            return new RuntimeBindingResolution(selected, RuntimeSessionMode.RESUME);
+            return new RuntimeBindingResolution(selected, RuntimeSessionMode.RESUME, previous);
         }
         List<RuntimeBinding> resumableBindings = repository
                 .findResumableBySession(tenantId, userId, sessionId, runtimeProvider)
@@ -122,10 +126,11 @@ public class RuntimeBindingApplicationService {
                         .reversed())
                 .toList();
         if (!resumableBindings.isEmpty()) {
+            RuntimeBinding previous = resumableBindings.getFirst();
             RuntimeBinding selected = activateResumableForRun(
-                    resumableBindings.getFirst(), runId, leafMessageId);
+                    previous, runId, leafMessageId);
             cancelDuplicateBindings(resumableBindings, selected);
-            return new RuntimeBindingResolution(selected, RuntimeSessionMode.RESUME);
+            return new RuntimeBindingResolution(selected, RuntimeSessionMode.RESUME, previous);
         }
         RuntimeBinding created = create(tenantId, userId, sessionId, runId, leafMessageId);
         return new RuntimeBindingResolution(created, RuntimeSessionMode.NEW);
@@ -299,6 +304,51 @@ public class RuntimeBindingApplicationService {
     }
 
     /**
+     * 在当前 execution 写入权保护下恢复等待态 Relay Binding。
+     *
+     * <p>该路径只接受 run-A 保存的 ACTIVE Relay Binding，不允许把 CANCELLED Binding
+     * 或其他 provider 重新激活。</p>
+     */
+    public RuntimeBinding resumeRelayForInteraction(ChatInteractionRequest request,
+                                                    String runId,
+                                                    RunExecutionClaim claim) {
+        if (request == null || runId == null || runId.isBlank() || claim == null
+                || !runId.equals(claim.runId())) {
+            throw new IllegalArgumentException("Relay Interaction Binding 续接参数不完整");
+        }
+        RuntimeBinding binding = loadInteractionBinding(request);
+        validateRelayInteractionBinding(request, binding);
+        RuntimeBinding next = binding.withRun(runId, null);
+        if (request.assistantMessageId() != null && !request.assistantMessageId().isBlank()
+                && !request.assistantMessageId().equals(next.leafMessageId())) {
+            next = next.withLeafMessageId(request.assistantMessageId());
+        }
+        RuntimeBinding resumed = repository.resumeInteractionWithExecutionGuard(
+                        next, request.sourceRunId(), claim)
+                .orElseThrow(() -> new ChatEventAppendRejectedException(
+                        "Relay Interaction Binding 被 run/execution 栅栏拒绝: runId=" + runId));
+        synchronizeCache(resumed);
+        return resumed;
+    }
+
+    /**
+     * run-B 尚未订阅 Relay 时只回退 Binding 的 lastRunId，不销毁可恢复的 Relay session。
+     */
+    public boolean restoreUnstartedRelayInteraction(RuntimeBinding binding,
+                                                    String continueRunId,
+                                                    String sourceRunId) {
+        if (binding == null || continueRunId == null || continueRunId.isBlank()
+                || sourceRunId == null || sourceRunId.isBlank()) {
+            return false;
+        }
+        boolean restored = repository.restoreInteractionResume(binding.id(), continueRunId, sourceRunId);
+        if (restored) {
+            cache.evict(binding.tenantId(), binding.userId(), binding.chatSessionId());
+        }
+        return restored;
+    }
+
+    /**
      * 刷新绑定活跃窗口，并移动到给定 leaf。
      *
      * <p>与 {@link #moveToLeaf(RuntimeBinding, String)} 不同，本方法即使 leaf 没变也会保存，
@@ -431,6 +481,22 @@ public class RuntimeBindingApplicationService {
     }
 
     /**
+     * Runtime 尚未订阅时，条件恢复本轮激活前的 Binding 快照。
+     *
+     * <p>恢复成功后按旧状态同步 Redis；条件不匹配表示 Binding 已由后续流程更新。</p>
+     */
+    public boolean restoreUnstartedForRun(RuntimeBinding previousBinding, String currentRunId) {
+        if (previousBinding == null || currentRunId == null || currentRunId.isBlank()) {
+            return false;
+        }
+        boolean restored = repository.restoreUnstartedForRun(previousBinding, currentRunId);
+        if (restored) {
+            synchronizeCache(previousBinding);
+        }
+        return restored;
+    }
+
+    /**
      * 终态数据库事务提交后同步 Redis 热缓存。该方法不参与事务事实写入。
      */
     public void synchronizeCache(RuntimeBinding binding) {
@@ -482,6 +548,31 @@ public class RuntimeBindingApplicationService {
                 .filter(binding -> request.userId().equals(binding.userId()))
                 .filter(binding -> request.sessionId().equals(binding.chatSessionId()))
                 .orElseThrow(() -> new IllegalStateException("Interaction RuntimeBinding 不存在或归属不匹配: " + bindingId));
+    }
+
+    private void validateRelayInteractionBinding(ChatInteractionRequest request, RuntimeBinding binding) {
+        if (!DEFAULT_RUNTIME_PROVIDER.equals(request.runtimeProvider())
+                || !DEFAULT_RUNTIME_PROVIDER.equals(binding.provider())) {
+            throw new IllegalStateException("Interaction RuntimeBinding 不是 Relay: " + binding.id());
+        }
+        if (binding.status() != RuntimeBindingStatus.ACTIVE) {
+            throw new IllegalStateException("Interaction Relay Binding 不再是 ACTIVE: " + binding.id());
+        }
+        if (request.sourceRunId() == null || request.sourceRunId().isBlank()
+                || !request.sourceRunId().equals(binding.lastRunId())) {
+            throw new IllegalStateException("Interaction Relay Binding 已被其他 run 刷新: " + binding.id());
+        }
+        if (request.approvalId() == null || request.approvalId().isBlank()) {
+            throw new IllegalStateException("Interaction 请求缺少 Relay approval_id: " + request.id());
+        }
+        if (request.runtimeSessionId() == null || request.runtimeSessionId().isBlank()
+                || binding.runtimeSessionId() == null || binding.runtimeSessionId().isBlank()
+                || !Objects.equals(request.runtimeSessionId(), binding.runtimeSessionId())) {
+            throw new IllegalStateException("Interaction Relay runtimeSessionId 不可用或不匹配: " + binding.id());
+        }
+        if (!relaySessionEstablished(binding)) {
+            throw new IllegalStateException("Interaction Relay session 尚未建立: " + binding.id());
+        }
     }
 
     private RuntimeBinding withRuntimeSessionId(RuntimeBinding binding, String runtimeSessionId) {

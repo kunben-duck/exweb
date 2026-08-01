@@ -40,6 +40,7 @@ record RoutePipelineRequest(
         String intentQuery,
         String intentRouteMemoryQuery,
         Map<String, Object> runtimeMetadataOverride,
-        AgentModeProfile agentMode
+        AgentModeProfile agentMode,
+        RuntimeBindingDispatchLifecycle bindingLifecycle
 ) {
 }

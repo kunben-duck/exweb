@@ -32,6 +32,7 @@ final class InteractionContinuationCoordinator {
     private final DocumentFacade documentFacade;
     private final IntentClarificationContextAssembler clarificationAssembler;
     private final AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver;
+    private final RelayQuestionnaireAnswerValidator relayQuestionnaireAnswerValidator;
 
     InteractionContinuationCoordinator(ChatRunStartCoordinator runStartCoordinator,
                                        ChatInteractionApplicationService interactionService,
@@ -45,6 +46,7 @@ final class InteractionContinuationCoordinator {
         this.documentFacade = documentFacade;
         this.clarificationAssembler = clarificationAssembler;
         this.ambiguousRouteSelectionResolver = ambiguousRouteSelectionResolver;
+        this.relayQuestionnaireAnswerValidator = new RelayQuestionnaireAnswerValidator();
     }
 
     InteractionContinuationCoordinator(ChatRunStartCoordinator runStartCoordinator,
@@ -158,6 +160,7 @@ final class InteractionContinuationCoordinator {
             if (!command.attachments().isEmpty()) {
                 throw new IllegalArgumentException("仅 INTENT_CLARIFICATION 支持在续接时提交附件");
             }
+            relayQuestionnaireAnswerValidator.validate(command, interaction);
             return interactionService.prepareResponsePayload(command, interaction.interactionType(), null);
         }
         if (AmbiguousRouteSupport.isAmbiguous(interaction)) {

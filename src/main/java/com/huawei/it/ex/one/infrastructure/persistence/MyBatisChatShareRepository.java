@@ -4,6 +4,7 @@ import com.huawei.it.ex.one.application.integration.share.ChatShareRepository;
 import com.huawei.it.ex.one.domain.chat.ChatShare;
 import com.huawei.it.ex.one.domain.chat.ChatSharePage;
 import com.huawei.it.ex.one.domain.chat.ChatShareSnapshot;
+import com.huawei.it.ex.one.domain.chat.ChatShareSummary;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -16,7 +17,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 单轮问答分享数据库仓储实现。
+ * 聊天消息分享数据库仓储实现。
  */
 @Repository
 public class MyBatisChatShareRepository implements ChatShareRepository {
@@ -57,10 +58,10 @@ public class MyBatisChatShareRepository implements ChatShareRepository {
         long totalRows = mapper.countByOwner(tenantId, ownerUserId);
         long totalPages = totalRows == 0 ? 0 : (totalRows + normalizedSize - 1) / normalizedSize;
         long offset = (long) (normalizedPage - 1) * normalizedSize;
-        List<ChatShare> items = totalRows == 0 || offset >= totalRows
+        List<ChatShareSummary> items = totalRows == 0 || offset >= totalRows
                 ? List.of()
                 : mapper.findPageByOwner(tenantId, ownerUserId, normalizedSize, offset).stream()
-                .map(this::toDomain)
+                .map(this::toSummary)
                 .toList();
         return new ChatSharePage(items, normalizedPage, normalizedSize, totalRows, totalPages);
     }
@@ -108,6 +109,23 @@ public class MyBatisChatShareRepository implements ChatShareRepository {
                 row.getExpiresAt(),
                 row.getRevokedAt(),
                 fromJson(row.getSnapshotJson()),
+                row.getCreatedAt(),
+                row.getUpdatedAt()
+        );
+    }
+
+    private ChatShareSummary toSummary(ChatShareRow row) {
+        return new ChatShareSummary(
+                row.getId(),
+                row.getTitle(),
+                row.getScope(),
+                row.getVisibility(),
+                row.getStatus(),
+                row.getExpiresAt(),
+                row.getSourceSessionId(),
+                row.getSourceUserMessageId(),
+                row.getSourceAssistantMessageId(),
+                row.getSourceRunId(),
                 row.getCreatedAt(),
                 row.getUpdatedAt()
         );

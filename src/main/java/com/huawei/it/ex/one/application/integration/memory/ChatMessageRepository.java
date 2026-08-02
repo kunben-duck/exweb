@@ -124,6 +124,25 @@ public interface ChatMessageRepository {
     Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId);
 
     /**
+     * 按归属、会话和消息 ID 集合批量读取消息节点，不装配附件与 parts。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param messageIds 消息 ID 集合。
+     * @return 当前用户当前会话内命中的消息节点。
+     */
+    default List<ChatMessage> findByOwnerAndSessionAndIds(
+            String tenantId, String userId, String sessionId, List<String> messageIds) {
+        if (messageIds == null || messageIds.isEmpty()) {
+            return List.of();
+        }
+        return findAllMessageNodesBySession(tenantId, userId, sessionId).stream()
+                .filter(message -> messageIds.contains(message.id()))
+                .toList();
+    }
+
+    /**
      * 查询同一父节点下同角色的候选消息。
      */
     default List<ChatMessage> findSiblings(String tenantId, String userId, String sessionId,
@@ -144,6 +163,16 @@ public interface ChatMessageRepository {
     default List<ChatMessage> findPathToMessage(String tenantId, String userId, String sessionId, String leafMessageId) {
         return pageMessages(new ChatMessagePageQuery(tenantId, userId, sessionId, leafMessageId, null,
                 Integer.MAX_VALUE)).items();
+    }
+
+    /**
+     * 查询 root 到指定消息的节点路径，不装配附件与 parts。
+     *
+     * <p>多消息分享只使用该路径验证分支归属，避免读取未选中消息的大量展示数据。</p>
+     */
+    default List<ChatMessage> findPathNodesToMessage(
+            String tenantId, String userId, String sessionId, String leafMessageId) {
+        return findPathToMessage(tenantId, userId, sessionId, leafMessageId);
     }
 
     /**

@@ -6,7 +6,7 @@ import java.util.List;
  * 当前用户创建的分享页码分页结果。
  */
 public record ChatSharePage(
-        List<ChatShare> items,
+        List<ChatShareSummary> items,
         int curPage,
         int pageSize,
         long totalRows,

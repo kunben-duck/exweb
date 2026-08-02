@@ -62,6 +62,7 @@ query、routeAction、候选意图、最终路由是否采纳和调用耗时。D
 | 停止回答 | `POST` | `/v1/chat/runs/{runId}/stop` | 幂等停止当前 run |
 | 消息反馈 | `POST` / `DELETE` | `/v1/chat/messages/{messageId}/feedback` | 对 assistant 消息点赞、点踩、切换或取消 |
 | 创建分享 | `POST` | `/v1/chat/messages/{messageId}/share` | 对单条 assistant 消息创建固定问答快照分享 |
+| 创建多消息分享 | `POST` | `/v1/chat/shares` | 对同一分支中明确选择的 user/assistant 消息创建固定快照 |
 | 发送分享 | `POST` | `/v1/chat/shares/{shareId}/deliveries` | 把已有分享发送到 WeLink 等 provider |
 | 创建并发送分享 | `POST` | `/v1/chat/messages/{messageId}/share/deliveries` | 一键创建分享快照并发送 |
 | 分享详情 | `GET` | `/v1/chat/shares/{shareId}` | 登录后查看分享快照 |
@@ -210,9 +211,10 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `POST /chat/messages/{messageId}/feedback` | Path：`messageId`；Body：`runId`、`rating`、`reasonCode`、`commentText`、`metadata` | `MessageFeedbackDto(status=ACTIVE)` | 更新历史消息按钮高亮 |
 | `DELETE /chat/messages/{messageId}/feedback` | Path：`messageId`；Query：`runId` 可选 | `MessageFeedbackDto(status=CANCELLED)` | 取消按钮高亮 |
 | `POST /chat/messages/{messageId}/share` | Path：assistant `messageId`；Body：`title`、`expiresAt` 可选 | `ChatShareDto(status=ACTIVE)` | 用 `shareId` 拼接分享页路由 |
-| `GET /chat/shares/{shareId}` | Path：`shareId` | `ChatShareDetailDto`：`share`、`question`、`answer`、`parts` | 登录后访问；过期/撤销返回稳定错误码 |
+| `POST /chat/shares` | Body：`sessionId`、`messageIds[]` 必填；`title`、`expiresAt` 可选 | `ChatShareDto(scope=SELECTED_MESSAGES)` | 只保存明确选择且位于同一分支的消息 |
+| `GET /chat/shares/{shareId}` | Path：`shareId` | 单轮返回 `question/answer/parts`；多消息增加 `messages[]` | 登录后访问；过期/撤销返回稳定错误码 |
 | `DELETE /chat/shares/{shareId}` | Path：`shareId` | `ChatShareDto(status=REVOKED)` | 默认仅创建者可撤销 |
-| `GET /chat/shares` | Query：`curPage`、`pageSize` | `ChatSharePageDto` | 分享管理页使用 |
+| `GET /chat/shares` | Query：`curPage`、`pageSize`，默认20、最大100 | `ChatSharePageDto` | 只返回分享元数据，不加载固定快照 |
 | `POST /documents` | multipart：`file`；`sessionId` 可选 | `UploadedDocumentDto` | 用返回 `id` 作为 `attachments[].documentId` |
 | `GET /documents` | Query：`sessionId` 可选，`limit`，`cursor` | `DocumentLibraryPageDto.items[]`、`nextCursor` | 文档选择器和最近文档列表 |
 | `GET /documents/{documentId}` | Path：`documentId` | `UploadedDocumentDto` | 详情弹窗 |
@@ -317,6 +319,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `POST /v1/chat/messages/{messageId}/feedback` | Body：`{"runId":"run_xxx","rating":"DISLIKE","reasonCode":"INACCURATE","commentText":"金额不准确"}`。 |
 | `DELETE /v1/chat/messages/{messageId}/feedback` | Query：`?runId=run_xxx`；`runId` 可选。 |
 | `POST /v1/chat/messages/{messageId}/share` | Body：`{"title":"报销流程答复","expiresAt":"2026-06-30T10:00:00Z"}`；两个字段都可省略。 |
+| `POST /v1/chat/shares` | Body：`{"sessionId":"session_xxx","messageIds":["msg_user_1","msg_assistant_2"]}`。 |
 | `GET /v1/chat/shares/{shareId}` | Path：`share_xxx`。 |
 | `POST /v1/chat/shares/{shareId}/deliveries` | Body：`{"provider":"welink","targetAccounts":["u001"],"groupIds":[],"content":"请查看这条问答分享"}`。 |
 | `POST /v1/chat/messages/{messageId}/share/deliveries` | Body：`{"provider":"welink","targetAccounts":["u001"],"title":"报销流程答复"}`。 |
@@ -1850,7 +1853,9 @@ curl -X DELETE "http://localhost:8080/v1/chat/messages/msg_002/feedback?runId=ru
 
 历史消息接口会在 `ChatMessageDto.feedback` 返回当前用户的有效反馈状态。`feedback=null` 表示该消息没有当前反馈，或者反馈已取消。
 
-## 单轮问答分享
+## 聊天消息分享
+
+### 单轮问答分享
 
 分享用于把某一轮问答固定成可访问快照。前端选择一条完整 `assistant` 消息，调用创建接口：
 
@@ -1964,11 +1969,130 @@ curl http://localhost:8080/v1/chat/shares/share_xxx
 }
 ```
 
+### 多消息可选分享
+
+前端可以从同一会话的一条消息分支中选择任意 user/assistant 消息。允许只选 user、只选 assistant
+或混合选择，因此失败后没有 assistant 的 user 消息也可以单独分享：
+
+```bash
+curl -X POST http://localhost:8080/v1/chat/shares \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "sessionId": "session_xxx",
+    "messageIds": ["msg_user_001", "msg_assistant_002"],
+    "title": "财务分析摘录",
+    "expiresAt": "2026-09-01T00:00:00Z"
+  }'
+```
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `sessionId` | 是 | 所选消息共同所属的会话。 |
+| `messageIds` | 是 | 原始数组最多50项；服务端 trim、过滤空项并有序去重，结果至少一项。 |
+| `title` | 否 | 默认取第一条非空 user 正文；没有 user 时取第一条非空选中消息。 |
+| `expiresAt` | 否 | 为空表示不过期；存在时必须晚于当前时间。 |
+
+服务端会校验所有消息属于当前用户、指定会话及同一条 root-to-leaf 分支，然后按真实消息路径排序。
+只保存 `messageIds` 明确选择的节点，不会自动补入其父消息、子消息或两个选择之间的消息。序列化后的
+固定快照默认最多 5MiB，超限请求返回400且不会创建分享。
+
+纯 user 分享的创建响应示例：
+
+```json
+{
+  "shareId": "share_failed_user",
+  "title": "本轮执行失败",
+  "scope": "SELECTED_MESSAGES",
+  "visibility": "INTERNAL",
+  "status": "ACTIVE",
+  "expiresAt": null,
+  "sourceSessionId": "session_xxx",
+  "sourceUserMessageId": "msg_failed_user",
+  "sourceAssistantMessageId": null,
+  "sourceRunId": null,
+  "createdAt": "2026-08-02T10:00:00Z",
+  "updatedAt": "2026-08-02T10:00:00Z"
+}
+```
+
+多消息分享详情继续使用 `GET /v1/chat/shares/{shareId}`：
+
+```json
+{
+  "share": {
+    "shareId": "share_selected",
+    "title": "财务分析摘录",
+    "scope": "SELECTED_MESSAGES",
+    "visibility": "INTERNAL",
+    "status": "ACTIVE",
+    "expiresAt": null,
+    "sourceSessionId": "session_xxx",
+    "sourceUserMessageId": "msg_user_001",
+    "sourceAssistantMessageId": "msg_assistant_002",
+    "sourceRunId": null,
+    "createdAt": "2026-08-02T10:00:00Z",
+    "updatedAt": "2026-08-02T10:00:00Z"
+  },
+  "question": null,
+  "answer": null,
+  "parts": [],
+  "messages": [
+    {
+      "messageId": "msg_user_001",
+      "sessionId": "session_xxx",
+      "parentMessageId": null,
+      "nodeOrder": 1,
+      "role": "user",
+      "content": "分析利润变化",
+      "runId": "run_001",
+      "metadataJson": null,
+      "attachments": [],
+      "parts": [],
+      "createdAt": "2026-08-02T09:59:50Z"
+    },
+    {
+      "messageId": "msg_assistant_002",
+      "sessionId": "session_xxx",
+      "parentMessageId": "msg_user_002",
+      "nodeOrder": 4,
+      "role": "assistant",
+      "content": "利润同比增长12%。",
+      "runId": "run_002",
+      "metadataJson": null,
+      "attachments": [],
+      "parts": [
+        {
+          "partId": "part_card_001",
+          "messageId": "msg_assistant_002",
+          "runId": "run_002",
+          "partType": "CARD",
+          "sourceType": "specificSceneInfo",
+          "contentText": "授权信息",
+          "title": "卡片展示",
+          "status": "INFO",
+          "channel": "card",
+          "displayHint": "inline",
+          "visible": true,
+          "payload": {},
+          "partOrder": 1,
+          "createdAt": "2026-08-02T10:00:00Z"
+        }
+      ],
+      "createdAt": "2026-08-02T10:00:00Z"
+    }
+  ]
+}
+```
+
+`messages[].parts` 只包含创建分享时 `visible=true` 的 Parts，并按 `partOrder` 排序。单轮分享详情保持
+原有 `question/answer/parts` 结构，响应中不会出现空的 `messages` 字段。多消息分享创建后仍使用
+`POST /v1/chat/shares/{shareId}/deliveries` 发送，不提供新的创建并发送快捷接口。
+
 分享规则：
 
 - 分享必须登录后访问；默认实现允许同租户登录用户查看，后续企业权限由后端 `ChatShareAccessPolicy` 替换。
 - 分享是固定快照；原会话后续编辑、重新生成、切换版本、反馈变化不会改变分享内容。
-- 快照只包含父 user 问题、assistant 正文、问题附件展示快照和 `visible=true` 的 parts。
+- 单轮快照包含父 user 问题、assistant 正文、问题附件展示快照和 `visible=true` 的 parts；多消息快照按消息保存相同展示数据。
 - 快照不包含 feedback、下游原始响应、隐藏/debug parts、Cookie、Authorization 或企业鉴权信息。
 - 附件只用于展示名称、类型、大小和 `documentId`，不授予下载权限。
 - 会话软删除时，当前用户创建的该会话 ACTIVE 分享会被同步撤销。
@@ -1996,7 +2120,7 @@ curl -X POST http://localhost:8080/v1/chat/shares/share_xxx/deliveries \
 | `targetAccounts` | 否 | 被分享人账号列表，服务端会去空、去重，并转为 WeLink `targetAccount="u001,u002"`。 |
 | `groupIds` | 否 | 被分享群组 ID 列表，服务端会去空、去重，并转为 WeLink `groupID="g001"`。 |
 | `title` | 否 | 分享卡片标题；为空时使用 `share.title`。 |
-| `content` | 否 | 分享卡片正文；为空时从分享回答正文生成摘要，默认最多 200 字符。 |
+| `content` | 否 | 分享卡片正文；为空时，单轮分享依次使用 answer、question 正文，多消息分享优先使用首条非空 assistant 正文，否则使用首条非空选中消息；默认最多 200 字符。 |
 | `language` | 否 | 前端透传给 provider。 |
 
 `targetAccounts` 和 `groupIds` 至少需要一个非空目标。WeLink 发送时，后端会用
@@ -2093,6 +2217,9 @@ curl -X DELETE http://localhost:8080/v1/chat/shares/share_xxx
 ```bash
 curl "http://localhost:8080/v1/chat/shares?curPage=1&pageSize=20"
 ```
+
+`pageSize` 默认20、最大100。该接口只读取分享元数据，不返回 `snapshot_json` 对应的
+`question/answer/parts/messages`；需要查看固定快照时调用分享详情接口。
 
 分页响应：
 

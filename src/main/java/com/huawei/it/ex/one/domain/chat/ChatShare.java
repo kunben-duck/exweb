@@ -3,7 +3,7 @@ package com.huawei.it.ex.one.domain.chat;
 import java.time.Instant;
 
 /**
- * 单轮问答分享记录。
+ * 聊天消息分享记录。
  *
  * <p>分享记录保存固定展示快照，访问时不再回源读取原会话消息，避免原消息编辑、删除或版本切换影响
  * 已经发出的分享链接。</p>
@@ -12,11 +12,11 @@ import java.time.Instant;
  * @param tenantId 租户标识，用于企业登录后的租户级隔离。
  * @param ownerUserId 创建分享的用户标识。
  * @param sourceSessionId 来源会话 ID。
- * @param sourceUserMessageId 来源 user 问题消息 ID。
- * @param sourceAssistantMessageId 来源 assistant 回答消息 ID。
+ * @param sourceUserMessageId 首条来源 user 消息 ID；纯 assistant 分享时为空。
+ * @param sourceAssistantMessageId 首条来源 assistant 消息 ID；纯 user 分享时为空。
  * @param sourceRunId 来源 runId。
  * @param title 分享标题。
- * @param scope 分享范围，首版固定为 SINGLE_TURN。
+ * @param scope 分享范围，SINGLE_TURN 或 SELECTED_MESSAGES。
  * @param visibility 访问模型，首版固定为 INTERNAL。
  * @param status 分享状态，ACTIVE 或 REVOKED。
  * @param expiresAt 过期时间；为空表示不过期。

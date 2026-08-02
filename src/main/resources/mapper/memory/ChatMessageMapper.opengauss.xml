@@ -296,6 +296,31 @@
     </select>
 
     <!--
+      按 owner、会话和消息 ID 集合批量查询消息节点，供多消息分享做归属与分支校验。
+      入参: tenantId/userId/sessionId 为归属边界；messageIds 为待查询消息 ID，空集合返回空结果。
+    -->
+    <select id="findByOwnerSessionAndIds" resultMap="chatMessageResultMap">
+        SELECT
+        <include refid="chatMessageColumns"/>
+        FROM fin_ex_chat_message_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          <choose>
+            <when test="messageIds != null and messageIds.size() > 0">
+          AND id IN
+              <foreach collection="messageIds" item="messageId" open="(" separator="," close=")">
+                  #{messageId}
+              </foreach>
+            </when>
+            <otherwise>
+          AND 1 = 0
+            </otherwise>
+          </choose>
+        ORDER BY node_order ASC, created_at ASC, id ASC
+    </select>
+
+    <!--
       查询同父节点同角色的 sibling 版本，用于问题编辑、回答重生成后的版本切换。
       入参: tenantId/userId/sessionId 为归属边界；parentMessageId 为父消息，为空表示根节点；
             role 为 user 或 assistant。

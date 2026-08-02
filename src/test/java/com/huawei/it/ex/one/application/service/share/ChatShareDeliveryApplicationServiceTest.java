@@ -18,7 +18,9 @@ import com.huawei.it.ex.one.domain.chat.ChatShare;
 import com.huawei.it.ex.one.domain.chat.ChatShareDelivery;
 import com.huawei.it.ex.one.domain.chat.ChatShareMessageSnapshot;
 import com.huawei.it.ex.one.domain.chat.ChatSharePage;
+import com.huawei.it.ex.one.domain.chat.ChatShareSelectedMessageSnapshot;
 import com.huawei.it.ex.one.domain.chat.ChatShareSnapshot;
+import com.huawei.it.ex.one.domain.chat.ChatShareSummary;
 import com.huawei.it.ex.one.infrastructure.share.DefaultChatShareAccessPolicy;
 
 import org.junit.jupiter.api.Test;
@@ -131,6 +133,26 @@ class ChatShareDeliveryApplicationServiceTest {
                 .hasMessageContaining("至少需要一个");
     }
 
+    @Test
+    void selectedMessagesPreferAssistantContentAndFallbackToUserContent() {
+        Fixture fixture = fixture(providerResult(true));
+        fixture.shares.save(selectedShare("share_selected", List.of(
+                selectedMessage("msg_user", "user", "选中的问题"),
+                selectedMessage("msg_assistant", "assistant", "选中的回答"))));
+        fixture.shares.save(selectedShare("share_user_only", List.of(
+                selectedMessage("msg_failed_user", "user", "失败轮次问题"))));
+
+        ChatShareDelivery assistantDelivery = fixture.service.deliver(user(), new CreateChatShareDeliveryCommand(
+                "share_selected", "welink", List.of("a"), List.of(), null, null, null,
+                RuntimeForwardHeaders.empty()));
+        ChatShareDelivery userDelivery = fixture.service.deliver(user(), new CreateChatShareDeliveryCommand(
+                "share_user_only", "welink", List.of("a"), List.of(), null, null, null,
+                RuntimeForwardHeaders.empty()));
+
+        assertThat(assistantDelivery.content()).isEqualTo("选中的回答");
+        assertThat(userDelivery.content()).isEqualTo("失败轮次问题");
+    }
+
     private Fixture fixture(ChatShareProviderDeliveryResult providerResult) {
         return fixture(new CapturingProvider(providerResult));
     }
@@ -173,6 +195,28 @@ class ChatShareDeliveryApplicationServiceTest {
         return new ChatShare("share1", "tenant1", "user1", "session1", "msg_user",
                 "msg_assistant", "run1", "分享标题", "SINGLE_TURN", "INTERNAL", "ACTIVE",
                 null, null, new ChatShareSnapshot(question, answer, List.of(), now), now, now);
+    }
+
+    private ChatShare selectedShare(String shareId, List<ChatShareSelectedMessageSnapshot> messages) {
+        Instant now = Instant.now();
+        String userMessageId = messages.stream()
+                .filter(message -> "user".equals(message.role()))
+                .map(ChatShareSelectedMessageSnapshot::messageId)
+                .findFirst()
+                .orElse(null);
+        String assistantMessageId = messages.stream()
+                .filter(message -> "assistant".equals(message.role()))
+                .map(ChatShareSelectedMessageSnapshot::messageId)
+                .findFirst()
+                .orElse(null);
+        return new ChatShare(shareId, "tenant1", "user1", "session1", userMessageId,
+                assistantMessageId, null, "多消息分享", "SELECTED_MESSAGES", "INTERNAL", "ACTIVE",
+                null, null, new ChatShareSnapshot(null, null, List.of(), messages, now), now, now);
+    }
+
+    private ChatShareSelectedMessageSnapshot selectedMessage(String messageId, String role, String content) {
+        return new ChatShareSelectedMessageSnapshot(messageId, "session1", null, 1L, role, content,
+                "run1", null, List.of(), List.of(), Instant.now());
     }
 
     private UserContext user() {
@@ -252,9 +296,10 @@ class ChatShareDeliveryApplicationServiceTest {
 
         @Override
         public ChatSharePage pageByOwner(String tenantId, String ownerUserId, int curPage, int pageSize) {
-            List<ChatShare> items = shares.values().stream()
+            List<ChatShareSummary> items = shares.values().stream()
                     .filter(share -> tenantId.equals(share.tenantId()))
                     .filter(share -> ownerUserId.equals(share.ownerUserId()))
+                    .map(ChatShareSummary::from)
                     .toList();
             return new ChatSharePage(items, curPage, pageSize, items.size(), items.isEmpty() ? 0 : 1);
         }

@@ -274,6 +274,23 @@ public class MyBatisChatMessageStore {
                 .map(message -> attachMessageChildren(tenantId, userId, message.sessionId(), List.of(message)).getFirst());
     }
 
+    public List<ChatMessage> findByOwnerAndSessionAndIds(
+            String tenantId, String userId, String sessionId, List<String> messageIds) {
+        if (tenantId == null || userId == null || sessionId == null || messageIds == null || messageIds.isEmpty()) {
+            return List.of();
+        }
+        List<String> normalizedIds = messageIds.stream()
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
+        if (normalizedIds.isEmpty()) {
+            return List.of();
+        }
+        return mapper.findByOwnerSessionAndIds(tenantId, userId, sessionId, normalizedIds).stream()
+                .map(this::toDomain)
+                .toList();
+    }
+
     public List<ChatMessage> findSiblings(String tenantId, String userId, String sessionId, String parentMessageId, String role) {
         List<ChatMessage> messages = mapper.findSiblings(tenantId, userId, sessionId, parentMessageId, role).stream()
                 .map(this::toDomain)
@@ -290,6 +307,17 @@ public class MyBatisChatMessageStore {
                 .map(this::toDomain)
                 .toList();
         return attachMessageChildren(tenantId, userId, sessionId, messages);
+    }
+
+    public List<ChatMessage> findPathNodesToMessage(
+            String tenantId, String userId, String sessionId, String leafMessageId) {
+        if (tenantId == null || userId == null || sessionId == null
+                || leafMessageId == null || leafMessageId.isBlank()) {
+            return List.of();
+        }
+        return mapper.findActivePath(tenantId, userId, sessionId, leafMessageId).stream()
+                .map(this::toDomain)
+                .toList();
     }
 
     public List<ChatMessageAttachment> findAttachments(String tenantId, String userId, String messageId) {

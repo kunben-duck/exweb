@@ -267,6 +267,35 @@ class MyBatisXmlMapperConsistencyTest {
     }
 
     @Test
+    void chatShareOwnerPageShouldUseMetadataProjectionWithoutSnapshot() throws IOException {
+        String mapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("persistence/ChatShareMapper.opengauss.xml"));
+        int columnsStart = mapper.indexOf("<sql id=\"chatShareSummaryColumns\"");
+        int columnsEnd = mapper.indexOf("</sql>", columnsStart);
+        int pageStart = mapper.indexOf("<select id=\"findPageByOwner\"");
+        int pageEnd = mapper.indexOf("</select>", pageStart);
+        int detailStart = mapper.indexOf("<select id=\"findById\"");
+        int detailEnd = mapper.indexOf("</select>", detailStart);
+
+        assertThat(columnsStart).isGreaterThanOrEqualTo(0);
+        assertThat(columnsEnd).isGreaterThan(columnsStart);
+        assertThat(pageStart).isGreaterThanOrEqualTo(0);
+        assertThat(pageEnd).isGreaterThan(pageStart);
+        assertThat(detailStart).isGreaterThanOrEqualTo(0);
+        assertThat(detailEnd).isGreaterThan(detailStart);
+        assertThat(mapper.substring(columnsStart, columnsEnd))
+                .contains("id, source_session_id, source_user_message_id, source_assistant_message_id")
+                .contains("source_run_id, title, scope, visibility, status, expires_at, created_at, updated_at")
+                .doesNotContain("snapshot_json", "tenant_id", "owner_user_id", "revoked_at");
+        assertThat(mapper.substring(pageStart, pageEnd))
+                .contains("resultMap=\"chatShareSummaryResultMap\"")
+                .contains("<include refid=\"chatShareSummaryColumns\"/>")
+                .doesNotContain("<include refid=\"chatShareColumns\"/>", "snapshot_json");
+        assertThat(mapper.substring(detailStart, detailEnd))
+                .contains("<include refid=\"chatShareColumns\"/>");
+    }
+
+    @Test
     void runtimeBindingResumableCleanupShouldBeScopedAndIdempotent() throws IOException {
         String cleanup = Files.readString(
                 DATABASE_SCRIPT_ROOT.resolve("incremental-20260802-runtime-binding-resumable-cleanup.sql"));

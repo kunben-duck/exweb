@@ -200,6 +200,21 @@ public class ChatShareDeliveryApplicationService {
         if (content == null && share.snapshot() != null && share.snapshot().question() != null) {
             content = blankToNull(share.snapshot().question().content());
         }
+        if (content == null && share.snapshot() != null && !share.snapshot().messages().isEmpty()) {
+            content = share.snapshot().messages().stream()
+                    .filter(message -> "assistant".equals(message.role()))
+                    .map(message -> blankToNull(message.content()))
+                    .filter(value -> value != null)
+                    .findFirst()
+                    .orElse(null);
+        }
+        if (content == null && share.snapshot() != null && !share.snapshot().messages().isEmpty()) {
+            content = share.snapshot().messages().stream()
+                    .map(message -> blankToNull(message.content()))
+                    .filter(value -> value != null)
+                    .findFirst()
+                    .orElse(null);
+        }
         return truncate(singleLine(content == null ? "" : content), properties.normalizedContentMaxLength());
     }
 

@@ -17,14 +17,34 @@
         <result column="updated_at" property="updatedAt"/>
     </resultMap>
 
+    <resultMap id="chatShareSummaryResultMap" type="com.huawei.it.ex.one.infrastructure.persistence.ChatShareRow">
+        <id column="id" property="id"/>
+        <result column="source_session_id" property="sourceSessionId"/>
+        <result column="source_user_message_id" property="sourceUserMessageId"/>
+        <result column="source_assistant_message_id" property="sourceAssistantMessageId"/>
+        <result column="source_run_id" property="sourceRunId"/>
+        <result column="title" property="title"/>
+        <result column="scope" property="scope"/>
+        <result column="visibility" property="visibility"/>
+        <result column="status" property="status"/>
+        <result column="expires_at" property="expiresAt"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
     <sql id="chatShareColumns">
         id, tenant_id, owner_user_id, source_session_id, source_user_message_id,
         source_assistant_message_id, source_run_id, title, scope, visibility,
         status, expires_at, revoked_at, snapshot_json, created_at, updated_at
     </sql>
 
+    <sql id="chatShareSummaryColumns">
+        id, source_session_id, source_user_message_id, source_assistant_message_id,
+        source_run_id, title, scope, visibility, status, expires_at, created_at, updated_at
+    </sql>
+
     <!--
-      创建单轮问答分享快照，保存来源消息和固定展示内容。
+      创建聊天消息分享快照，保存来源消息和固定展示内容。
       入参: ChatShareRow，id 为分享主键，tenantId/ownerUserId 为归属边界，sourceSessionId/sourceUserMessageId/
             sourceAssistantMessageId/sourceRunId 记录来源，title/scope/visibility/status/expiresAt/revokedAt/
             snapshotJson/createdAt/updatedAt 为分享展示、生命周期和审计信息。
@@ -83,11 +103,11 @@
     </select>
 
     <!--
-      页码式查询当前用户创建的分享列表，按创建时间倒序展示。
+      页码式查询当前用户创建的分享元数据，按创建时间倒序展示；不读取固定快照。
       入参: tenantId 为租户边界，ownerUserId 为分享创建者，limit 为 pageSize，offset 为分页偏移。
     -->
-    <select id="findPageByOwner" resultMap="chatShareResultMap">
-        SELECT <include refid="chatShareColumns"/>
+    <select id="findPageByOwner" resultMap="chatShareSummaryResultMap">
+        SELECT <include refid="chatShareSummaryColumns"/>
         FROM fin_ex_chat_share_t
         WHERE tenant_id = #{tenantId}
           AND owner_user_id = #{ownerUserId}

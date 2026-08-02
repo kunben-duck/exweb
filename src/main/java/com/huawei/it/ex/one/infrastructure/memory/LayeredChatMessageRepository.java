@@ -154,6 +154,12 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
     }
 
     @Override
+    public List<ChatMessage> findByOwnerAndSessionAndIds(
+            String tenantId, String userId, String sessionId, List<String> messageIds) {
+        return databaseStore.findByOwnerAndSessionAndIds(tenantId, userId, sessionId, messageIds);
+    }
+
+    @Override
     public List<ChatMessage> findSiblings(String tenantId, String userId, String sessionId,
                                           String parentMessageId, String role) {
         return databaseStore.findSiblings(tenantId, userId, sessionId, parentMessageId, role);
@@ -167,6 +173,12 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
     @Override
     public List<ChatMessage> findPathToMessage(String tenantId, String userId, String sessionId, String leafMessageId) {
         return databaseStore.findPathToMessage(tenantId, userId, sessionId, leafMessageId);
+    }
+
+    @Override
+    public List<ChatMessage> findPathNodesToMessage(
+            String tenantId, String userId, String sessionId, String leafMessageId) {
+        return databaseStore.findPathNodesToMessage(tenantId, userId, sessionId, leafMessageId);
     }
 
     @Override

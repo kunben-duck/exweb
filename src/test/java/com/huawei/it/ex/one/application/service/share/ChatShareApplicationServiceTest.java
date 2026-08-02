@@ -21,6 +21,7 @@ import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
 import com.huawei.it.ex.one.domain.chat.ChatShare;
 import com.huawei.it.ex.one.domain.chat.ChatSharePage;
+import com.huawei.it.ex.one.domain.chat.ChatShareSummary;
 import com.huawei.it.ex.one.domain.chat.ChatShareUnavailableException;
 import com.huawei.it.ex.one.infrastructure.share.DefaultChatShareAccessPolicy;
 
@@ -197,9 +198,10 @@ class ChatShareApplicationServiceTest {
 
         @Override
         public ChatSharePage pageByOwner(String tenantId, String ownerUserId, int curPage, int pageSize) {
-            List<ChatShare> items = shares.values().stream()
+            List<ChatShareSummary> items = shares.values().stream()
                     .filter(share -> tenantId.equals(share.tenantId()))
                     .filter(share -> ownerUserId.equals(share.ownerUserId()))
+                    .map(ChatShareSummary::from)
                     .toList();
             return new ChatSharePage(items, curPage, pageSize, items.size(), items.isEmpty() ? 0 : 1);
         }

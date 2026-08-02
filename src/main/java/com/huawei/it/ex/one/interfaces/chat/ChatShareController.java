@@ -9,13 +9,17 @@ import com.huawei.it.ex.one.application.service.share.ChatShareDeliveryApplicati
 import com.huawei.it.ex.one.application.service.share.CreateChatShareAndDeliveryCommand;
 import com.huawei.it.ex.one.application.service.share.CreateChatShareCommand;
 import com.huawei.it.ex.one.application.service.share.CreateChatShareDeliveryCommand;
+import com.huawei.it.ex.one.application.service.share.CreateSelectedChatShareCommand;
+import com.huawei.it.ex.one.application.service.share.SelectedChatShareApplicationService;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatShare;
 import com.huawei.it.ex.one.domain.chat.ChatShareAttachmentSnapshot;
 import com.huawei.it.ex.one.domain.chat.ChatShareDelivery;
 import com.huawei.it.ex.one.domain.chat.ChatShareMessageSnapshot;
 import com.huawei.it.ex.one.domain.chat.ChatSharePage;
+import com.huawei.it.ex.one.domain.chat.ChatShareSelectedMessageSnapshot;
 import com.huawei.it.ex.one.domain.chat.ChatShareSnapshotPart;
+import com.huawei.it.ex.one.domain.chat.ChatShareSummary;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessagePartDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatShareAndDeliveryDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatShareAttachmentSnapshotDto;
@@ -23,10 +27,12 @@ import com.huawei.it.ex.one.interfaces.chat.dto.ChatShareDeliveryDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatShareDetailDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatShareDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSharePageDto;
+import com.huawei.it.ex.one.interfaces.chat.dto.ChatShareSelectedMessageDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatShareSnapshotMessageDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.CreateChatShareAndDeliveryRequest;
 import com.huawei.it.ex.one.interfaces.chat.dto.CreateChatShareDeliveryRequest;
 import com.huawei.it.ex.one.interfaces.chat.dto.CreateChatShareRequest;
+import com.huawei.it.ex.one.interfaces.chat.dto.CreateSelectedChatShareRequest;
 
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -45,7 +51,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 /**
- * 单轮问答分享接口。
+ * 聊天消息分享接口。
  *
  * <p>Controller 只在请求入口解析用户身份；分享 ACL 由 application 层通过
  * ChatShareAccessPolicy 防腐层判断，便于后续替换为企业权限框架。</p>
@@ -54,17 +60,20 @@ import java.util.List;
 @RequestMapping("/v1/chat")
 public class ChatShareController {
     private final ChatShareApplicationService shareService;
+    private final SelectedChatShareApplicationService selectedShareService;
     private final ChatShareDeliveryApplicationService deliveryService;
     private final AuthContextProvider auth;
     private final PermissionChecker permissionChecker;
     private final ChatShareDeliveryProperties shareDeliveryProperties;
 
     public ChatShareController(ChatShareApplicationService shareService,
+                               SelectedChatShareApplicationService selectedShareService,
                                ChatShareDeliveryApplicationService deliveryService,
                                AuthContextProvider auth,
                                PermissionChecker permissionChecker,
                                ChatShareDeliveryProperties shareDeliveryProperties) {
         this.shareService = shareService;
+        this.selectedShareService = selectedShareService;
         this.deliveryService = deliveryService;
         this.auth = auth;
         this.permissionChecker = permissionChecker;
@@ -90,6 +99,24 @@ public class ChatShareController {
                     );
                     return toDto(shareService.create(user, command));
                 })
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * 为当前会话同一消息分支中明确选择的消息创建固定快照分享。
+     *
+     * @param request 会话、消息 ID、标题和过期时间。
+     * @return 分享元数据。
+     */
+    @PostMapping("/shares")
+    public Mono<ChatShareDto> createSelected(@RequestBody CreateSelectedChatShareRequest request) {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> toDto(selectedShareService.create(user,
+                        new CreateSelectedChatShareCommand(
+                                request == null ? null : request.sessionId(),
+                                request == null ? null : request.messageIds(),
+                                request == null ? null : request.title(),
+                                request == null ? null : request.expiresAt()))))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -248,11 +275,29 @@ public class ChatShareController {
                 toDto(share),
                 toMessageDto(share.snapshot().question()),
                 toMessageDto(share.snapshot().answer()),
-                toPartDtos(share.snapshot().parts())
+                toPartDtos(share.snapshot().parts()),
+                toSelectedMessageDtos(share.snapshot().messages())
         );
     }
 
     private ChatShareDto toDto(ChatShare share) {
+        return new ChatShareDto(
+                share.id(),
+                share.title(),
+                share.scope(),
+                share.visibility(),
+                share.status(),
+                share.expiresAt(),
+                share.sourceSessionId(),
+                share.sourceUserMessageId(),
+                share.sourceAssistantMessageId(),
+                share.sourceRunId(),
+                share.createdAt(),
+                share.updatedAt()
+        );
+    }
+
+    private ChatShareDto toDto(ChatShareSummary share) {
         return new ChatShareDto(
                 share.id(),
                 share.title(),
@@ -285,6 +330,9 @@ public class ChatShareController {
     }
 
     private ChatShareSnapshotMessageDto toMessageDto(ChatShareMessageSnapshot message) {
+        if (message == null) {
+            return null;
+        }
         return new ChatShareSnapshotMessageDto(
                 message.messageId(),
                 message.sessionId(),
@@ -295,6 +343,25 @@ public class ChatShareController {
                 toAttachmentDtos(message.attachments()),
                 message.createdAt()
         );
+    }
+
+    private List<ChatShareSelectedMessageDto> toSelectedMessageDtos(
+            List<ChatShareSelectedMessageSnapshot> messages) {
+        return messages == null ? List.of() : messages.stream()
+                .map(message -> new ChatShareSelectedMessageDto(
+                        message.messageId(),
+                        message.sessionId(),
+                        message.parentMessageId(),
+                        message.nodeOrder(),
+                        message.role(),
+                        message.content(),
+                        message.runId(),
+                        message.metadataJson(),
+                        toAttachmentDtos(message.attachments()),
+                        toPartDtos(message.parts()),
+                        message.createdAt()
+                ))
+                .toList();
     }
 
     private List<ChatShareAttachmentSnapshotDto> toAttachmentDtos(List<ChatShareAttachmentSnapshot> attachments) {

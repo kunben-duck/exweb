@@ -69,6 +69,7 @@ DomainAgent `isSaveSession` 对 assistant 历史投影的控制边界、企业�
 - `POST /v1/chat/messages/{messageId}/feedback`：提交或切换 assistant 消息点赞/点踩。
 - `DELETE /v1/chat/messages/{messageId}/feedback`：取消当前用户对 assistant 消息的点赞或点踩。
 - `POST /v1/chat/messages/{messageId}/share`：为某条 assistant 消息创建单轮问答固定快照分享。
+- `POST /v1/chat/shares`：为同一会话分支中明确选择的 user/assistant 消息创建多消息固定快照分享。
 - `POST /v1/chat/shares/{shareId}/deliveries`：把已有分享发送到指定 provider，首版内置 `welink`。
 - `POST /v1/chat/messages/{messageId}/share/deliveries`：一键创建分享快照并发送到指定 provider。
 - `GET /v1/chat/shares/{shareId}`：登录后查看分享详情；默认策略允许同租户用户查看。
@@ -274,21 +275,31 @@ stop 与 watchdog 写入 `run.cancelled/run.failed` 前会通过 run 行条件�
 
 从某条消息新建分支时，服务端会复制 root 到该消息的可见路径到新 session，并将复制出的历史消息标记为 `origin_type=BRANCH_SNAPSHOT`、`locked=true`。这些快照消息只能展示和继续向后提问，不能编辑、删除或重新生成；分支后续新增消息仍为 `NORMAL`，可以参与消息树版本管理。
 
-## 单轮问答分享
+## 聊天消息分享
 
-分享能力面向“把某一轮问答发给同租户登录用户查看”的场景。前端对某条完整 `assistant`
+原有单轮分享面向“把某一轮问答发给同租户登录用户查看”的场景。前端对某条完整 `assistant`
 消息调用 `POST /v1/chat/messages/{messageId}/share`，服务端会固定保存该 assistant
 消息的直接父 `user` 问题、assistant 正文、附件展示快照，以及 `visible=true` 的 parts。分享内容是
 创建时快照，原会话后续编辑、重新生成、反馈变化、路径切换或消息树分支都不会改变已经生成的分享。
 
+多消息分享调用 `POST /v1/chat/shares`，请求携带 `sessionId` 和 `messageIds[]`。消息可以全部为 user、
+全部为 assistant，或混合选择，因此运行失败后只有 user 消息的轮次也可以单独分享。服务端要求全部消息
+属于当前用户、指定会话和同一条 root-to-leaf 分支，只保存明确选择的节点，并按消息路径排序；不会自动
+补齐问答对或中间消息。多消息快照使用 `scope=SELECTED_MESSAGES`，详情在 `messages[]` 中按消息分别返回
+附件和 `visible=true` 的 parts。单轮分享继续使用 `scope=SINGLE_TURN` 和原有
+`question/answer/parts` 响应，且不增加空的 `messages` 字段。
+
 分享访问仍要求登录，但权限判断不写死在 Controller 或业务编排里，而是通过
-`ChatShareAccessPolicy` 防腐层完成。默认策略是：创建者必须拥有来源 assistant 消息；同租户登录用户
+`ChatShareAccessPolicy` 防腐层完成。默认策略是：创建者必须拥有每一条来源消息；同租户登录用户
 可查看；只有创建者可撤销。后续接企业 ACL、部门权限或外部授权服务时，只需要提供新的
 `ChatShareAccessPolicy` bean 覆盖默认实现。
 
 分享支持 `expiresAt` 过期和创建者撤销。会话软删除时，当前用户创建的该会话 `ACTIVE` 分享会被同步撤销。
 分享快照只用于展示，不保存 feedback、下游原始响应、隐藏/debug parts、Cookie 或鉴权信息；附件只保存
 名称、类型、大小和 `documentId` 展示字段，不授予文件下载权限。
+多消息请求默认最多包含 50 个原始 `messageIds`，固定快照序列化后默认不超过 5MiB，分别由
+`financeex.share.selected-messages.max-messages` 和 `max-snapshot-bytes` 配置。大小限制只在应用层执行，
+数据库不增加快照大小 CHECK。
 
 分享发送通过 `ChatShareDeliveryProvider` 防腐层完成。前端可先调用
 `POST /v1/chat/messages/{messageId}/share` 创建快照，再调用
@@ -316,7 +327,7 @@ WeLink 调用失败后默认最多重试 3 次，可通过 `financeex.share.deli
 - `fin_ex_intent_recognition_t`：保存实际调用意图服务后的输入、识别结果和最终路由采纳结果；旁路异步写入，不参与主链路决策。
 - `fin_ex_uploaded_document_t`
 - `fin_ex_message_feedback_t`：保存当前用户对 assistant 消息的点赞/点踩状态；`status=CANCELLED` 表示已取消当前反馈。
-- `fin_ex_chat_share_t`：保存单轮问答分享固定快照；访问权限由 `ChatShareAccessPolicy` 防腐层判断。
+- `fin_ex_chat_share_t`：保存单轮问答或多消息分享固定快照；访问权限由 `ChatShareAccessPolicy` 防腐层判断。
 - `fin_ex_chat_share_delivery_t`：保存分享发送到 WeLink 等 provider 的请求摘要和发送结果。
 - `fin_ex_runtime_binding_t`
 

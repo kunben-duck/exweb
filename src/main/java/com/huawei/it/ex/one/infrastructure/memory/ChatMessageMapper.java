@@ -121,6 +121,22 @@ public interface ChatMessageMapper {
     );
 
     /**
+     * 按 owner、会话和消息 ID 集合批量查询消息节点。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param messageIds 待查询消息 ID 集合。
+     * @return 当前用户当前会话内命中的消息节点。
+     */
+    List<ChatMessageRow> findByOwnerSessionAndIds(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionId") String sessionId,
+            @Param("messageIds") List<String> messageIds
+    );
+
+    /**
      * 查询同父节点、同角色下的候选版本。
      *
      * @param tenantId 租户标识。

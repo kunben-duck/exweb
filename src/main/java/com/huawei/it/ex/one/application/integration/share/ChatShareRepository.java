@@ -7,7 +7,7 @@ import java.time.Instant;
 import java.util.Optional;
 
 /**
- * 单轮问答分享仓储端口。
+ * 聊天消息分享仓储端口。
  */
 public interface ChatShareRepository {
     ChatShare save(ChatShare share);

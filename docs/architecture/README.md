@@ -307,6 +307,7 @@ POST /v1/chat/runs
 POST /v1/chat/messages/{messageId}/feedback
 DELETE /v1/chat/messages/{messageId}/feedback
 POST /v1/chat/messages/{messageId}/share
+POST /v1/chat/shares
 GET  /v1/chat/shares/{shareId}
 DELETE /v1/chat/shares/{shareId}
 GET  /v1/chat/shares?curPage=1&pageSize=20
@@ -366,7 +367,7 @@ flowchart TD
 
 从某条消息新建会话分支时，服务端使用只读物化快照方案：沿 `parent_message_id` 回溯 root，复制该路径到新 session，并继承源会话 `appId/appName`；复制出的消息写入 `source_session_id/source_message_id`，并设置 `origin_type=BRANCH_SNAPSHOT`、`locked=true`。快照消息不能编辑、删除或重新生成；分支后续新增的 `NORMAL` 消息可以继续参与消息树版本管理。分支不继承源会话 RuntimeBinding，避免把源会话 Runtime session 错接到新分支。
 
-## 单轮问答分享
+## 聊天消息分享
 
 分享功能不复用实时 event，也不在访问时回源读取原始会话路径，而是在创建时生成固定展示快照：
 
@@ -375,7 +376,7 @@ sequenceDiagram
     autonumber
     participant Frontend as "Frontend"
     participant ShareAPI as "ChatShareController"
-    participant ShareApp as "ChatShareApplicationService"
+    participant ShareApp as "ChatShare application services"
     participant Policy as "ChatShareAccessPolicy"
     participant Msg as "ChatMessageRepository"
     participant ShareRepo as "ChatShareRepository"
@@ -389,6 +390,14 @@ sequenceDiagram
     Policy-->>ShareApp: "允许或拒绝"
     ShareApp->>ShareRepo: "保存 ChatShare snapshot"
     ShareRepo->>DB: "写 fin_ex_chat_share_t"
+    ShareApp-->>Frontend: "ChatShareDto"
+
+    Frontend->>ShareAPI: "POST /chat/shares(sessionId, messageIds[])"
+    ShareAPI->>ShareApp: "create selected messages"
+    ShareApp->>Msg: "批量读取消息节点、路径、附件和 parts"
+    ShareApp->>Policy: "逐条 canCreate(user, message)"
+    ShareApp->>ShareRepo: "保存 SELECTED_MESSAGES snapshot"
+    ShareRepo->>DB: "写同一 fin_ex_chat_share_t"
     ShareApp-->>Frontend: "ChatShareDto"
 
     Frontend->>ShareAPI: "GET /chat/shares/{shareId}"
@@ -409,7 +418,24 @@ sequenceDiagram
 
 `ChatShareAccessPolicy` 是分享鉴权防腐层，默认规则为同租户可查看、仅创建者可撤销和发送。后续如果企业权限框架需要按组织、部门、用户白名单或外部 ACL 判断分享访问，只替换该 port 的 Spring bean，不修改 Controller、分享表或快照构造逻辑。
 
-`snapshot_json` 只保存父 user 问题、assistant 回答、问题附件展示快照和 `visible=true` 的 parts；不保存 feedback、下游原始响应、隐藏/debug parts、Cookie、Authorization 或企业鉴权信息。附件快照只用于展示，不授予下载/预览权限。原会话后续编辑、重新生成、切换 path 或反馈变化都不会影响已经创建的分享。
+`SINGLE_TURN` 快照保存父 user 问题、assistant 回答、附件展示快照和 `visible=true` 的 parts。
+`SELECTED_MESSAGES` 快照允许纯 user、纯 assistant 或混合消息，只保存前端明确选择且位于同一条
+root-to-leaf 路径的节点，并按服务端路径排序；不会补齐中间消息。每条消息分别保存附件展示快照及
+`visible=true` 的 parts。两种快照都不保存 feedback、隐藏/debug parts、Cookie、Authorization 或企业
+鉴权信息，附件快照不授予下载/预览权限。原会话后续编辑、重新生成、切换 path 或反馈变化都不会影响
+已经创建的分享。
+
+多消息请求默认最多接收 50 个原始 ID，序列化后的 `snapshot_json` 默认限制为 5MiB。应用使用与持久化
+相同的 Jackson 配置在写库前计算 UTF-8 字节数；数据库不设置大小 CHECK。查询路径使用一条批量消息
+查询、一条 root-to-leaf 递归查询，以及附件和 parts 各一条批量查询，不按消息产生 N+1。纯 user 或纯
+assistant 分享分别允许对应来源列为空，多消息 `source_run_id` 为空，避免用单个 run 表达跨 run 快照。
+已部署环境必须先执行 `incremental-20260802-chat-share-selected-messages.sql` 再灰度新版后端；该脚本在结构上
+只移除两个来源消息列的 NOT NULL，并同步分享相关数据库注释，不回填或修改存量分享。灰度期间新分享链接
+需要固定路由到新版后端，旧实例仍可在放宽约束后的表上正常创建和读取原有 `SINGLE_TURN` 分享。
+
+分享管理列表 `GET /v1/chat/shares` 使用独立的元数据投影，不查询 `snapshot_json`，也不在应用内构造或
+反序列化固定快照。只有分享详情、分享发送及单条撤销等确实需要完整分享记录的链路才按 ID 加载快照，
+避免单页多条大快照占用数据库传输、连接和 JVM 堆内存。分页响应字段和最大100条的后端限制保持不变。
 
 分享发送通过 `ChatShareDeliveryProvider` 防腐层完成，首版 provider 为 `welink`。应用层只生成稳定的发送请求：分享人、标题、分享 URL、摘要、目标用户和目标群组；WeLink wire 字段如 `targetAccount/groupID` 只存在于 provider 实现中。WeLink 出站请求会设置 `Referer`，默认取 provider `base-url`，也可用 `financeex.share.delivery.providers.welink.referer` 覆盖；分享发送入口捕获到的标准 `Cookie` 请求头只作为出站 header 透传，不进入 wire body、发送记录或快照。发送失败不会回滚分享快照，只在 `fin_ex_chat_share_delivery_t` 中记录 `FAILED`、错误码和 provider 安全响应摘要，前端可按同一个 `shareId` 重试。分享发送使用 `financeex.share.delivery.max-concurrency` 做当前 JVM 内并发隔离，防止外部 provider 抖动时占满异步工作线程；WeLink provider 失败后默认最多重试 3 次，运行时最多按 10 次重试生效。
 
@@ -849,7 +875,7 @@ Relay WS 配置阶段只以 `session-ready` 作为唯一完成信号；adapter �
 - `fin_ex_chat_event_t`
 - `fin_ex_uploaded_document_t`
 - `fin_ex_message_feedback_t`：当前用户对 assistant 消息的点赞/点踩状态，支持 ACTIVE/CANCELLED。
-- `fin_ex_chat_share_t`：单轮问答分享固定快照，支持 ACTIVE/REVOKED、过期和创建者撤销。
+- `fin_ex_chat_share_t`：单轮问答或多消息分享固定快照，支持 ACTIVE/REVOKED、过期和创建者撤销。
 - `fin_ex_chat_share_delivery_t`：分享发送记录，保存发送 provider、目标、分享链接和 SUCCESS/FAILED 结果。
 - `fin_ex_runtime_binding_t`
 

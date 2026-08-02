@@ -12,7 +12,7 @@ import java.util.List;
 @Mapper
 public interface ChatShareMapper {
     /**
-     * 创建单轮问答分享快照。
+     * 创建聊天消息分享快照。
      *
      * @param row 分享写入行，包含来源消息、分享状态、过期时间和 snapshotJson。
      * @return 影响行数。
@@ -46,13 +46,13 @@ public interface ChatShareMapper {
                       @Param("ownerUserId") String ownerUserId);
 
     /**
-     * 页码式查询当前用户创建的分享列表。
+     * 页码式查询当前用户创建的分享元数据，不读取固定快照。
      *
      * @param tenantId 租户标识。
      * @param ownerUserId 分享创建者用户标识。
      * @param limit 本页最大返回数量。
      * @param offset 分页偏移量。
-     * @return 分享列表。
+     * @return 不包含 snapshotJson 的分享元数据行列表。
      */
     List<ChatShareRow> findPageByOwner(@Param("tenantId") String tenantId,
                                        @Param("ownerUserId") String ownerUserId,

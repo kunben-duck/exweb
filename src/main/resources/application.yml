@@ -346,6 +346,11 @@ financeex:
   share:
     # 前端分享页地址前缀，发送 provider 会直接拼接 shareId，例如 https://finex.example.com/share/ + share_xxx。
     share-url-prefix: ${FINANCEEX_SHARE_URL_PREFIX:}
+    selected-messages:
+      # 原始 messageIds 请求项上限；空值过滤和去重在此限制之后执行。
+      max-messages: ${FINANCEEX_SHARE_SELECTED_MESSAGES_MAX_MESSAGES:50}
+      # 固定快照序列化后的 UTF-8 字节上限，仅由应用校验，不在数据库增加 CHECK 约束。
+      max-snapshot-bytes: ${FINANCEEX_SHARE_SELECTED_MESSAGES_MAX_SNAPSHOT_BYTES:5242880}
     delivery:
       content-max-length: ${FINANCEEX_SHARE_DELIVERY_CONTENT_MAX_LENGTH:200}
       max-targets: ${FINANCEEX_SHARE_DELIVERY_MAX_TARGETS:100}

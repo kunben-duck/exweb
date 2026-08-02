@@ -987,10 +987,55 @@ paths:
           $ref: '#/components/responses/Conflict'
 
   /v1/chat/shares:
+    post:
+      tags: [Sharing]
+      operationId: createSelectedMessagesChatShare
+      summary: 创建多消息固定快照分享
+      description: |
+        只保存 messageIds 明确选择的 user/assistant 消息，不自动补齐问答对或中间消息。
+        所有消息必须属于当前用户、指定会话及同一条 root-to-leaf 分支；响应快照按服务端消息路径排序。
+        允许纯 user、纯 assistant 或混合选择，适用于失败后只有 user 消息的轮次。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSelectedChatShareRequest'
+            examples:
+              selectedMessages:
+                summary: 选择同一分支上的两条消息
+                value:
+                  sessionId: session_xxx
+                  messageIds: [msg_user_1, msg_assistant_2]
+                  title: 财务分析摘录
+                  expiresAt: '2026-09-01T00:00:00Z'
+              failedUserOnly:
+                summary: 分享失败后没有 assistant 的 user 消息
+                value:
+                  sessionId: session_xxx
+                  messageIds: [msg_failed_user]
+      responses:
+        '200':
+          description: scope=SELECTED_MESSAGES 的分享元数据
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatShare'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
     get:
       tags: [Sharing]
       operationId: listChatShares
       summary: 查询当前用户创建的分享
+      description: |
+        仅返回分享元数据，不返回或反序列化固定快照。pageSize 默认20，后端最大限制为100。
+        分享详情和发送链路才会按 shareId 读取完整快照。
       parameters:
         - name: curPage
           in: query
@@ -1006,7 +1051,7 @@ paths:
             type: integer
             default: 20
             minimum: 1
-            maximum: 200
+            maximum: 100
       responses:
         '200':
           description: 分享页码页
@@ -1030,7 +1075,7 @@ paths:
         - $ref: '#/components/parameters/ShareId'
       responses:
         '200':
-          description: 单轮分享详情；也可能是 ACCESS_DENIED 提示
+          description: 单轮或多消息分享详情；也可能是 ACCESS_DENIED 提示
           content:
             application/json:
               schema:
@@ -2915,6 +2960,32 @@ components:
           nullable: true
           description: 为空表示不过期；存在时必须晚于当前时间
 
+    CreateSelectedChatShareRequest:
+      type: object
+      required: [sessionId, messageIds]
+      properties:
+        sessionId:
+          type: string
+          description: 所选消息共同所属的会话 ID
+        messageIds:
+          type: array
+          minItems: 1
+          maxItems: 50
+          description: |
+            前端明确选择的消息 ID。服务端 trim、有序去重并按真实消息路径重新排序；
+            空项会被忽略，但原始数组仍受50项限制。
+          items:
+            type: string
+            nullable: true
+        title:
+          type: string
+          nullable: true
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 为空表示不过期；存在时必须晚于当前时间
+
     CreateChatShareAndDeliveryRequest:
       type: object
       properties:
@@ -2942,6 +3013,7 @@ components:
         content:
           type: string
           nullable: true
+          description: 分享卡片正文；为空时依次使用单轮分享的 answer、question 正文。
         language:
           type: string
           nullable: true
@@ -2969,6 +3041,9 @@ components:
         content:
           type: string
           nullable: true
+          description: |
+            分享卡片正文。为空时，单轮分享依次使用 answer、question 正文；多消息分享优先使用
+            第一条非空 assistant 正文，没有 assistant 正文时使用第一条非空选中消息正文。
         language:
           type: string
           nullable: true
@@ -2994,7 +3069,7 @@ components:
           type: string
         scope:
           type: string
-          enum: [SINGLE_TURN]
+          enum: [SINGLE_TURN, SELECTED_MESSAGES]
         visibility:
           type: string
           enum: [INTERNAL]
@@ -3009,10 +3084,16 @@ components:
           type: string
         sourceUserMessageId:
           type: string
+          nullable: true
+          description: 首条来源 user 消息；纯 assistant 多消息分享时为空
         sourceAssistantMessageId:
           type: string
+          nullable: true
+          description: 首条来源 assistant 消息；纯 user 多消息分享时为空
         sourceRunId:
           type: string
+          nullable: true
+          description: 单轮分享的来源 run；可能跨 run 的多消息分享为空
         createdAt:
           type: string
           format: date-time
@@ -3084,6 +3165,52 @@ components:
           type: string
           format: date-time
 
+    ChatShareSelectedMessage:
+      type: object
+      required:
+        - messageId
+        - sessionId
+        - nodeOrder
+        - role
+        - content
+        - attachments
+        - parts
+        - createdAt
+      properties:
+        messageId:
+          type: string
+        sessionId:
+          type: string
+        parentMessageId:
+          type: string
+          nullable: true
+        nodeOrder:
+          type: integer
+          format: int64
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+        runId:
+          type: string
+          nullable: true
+        metadataJson:
+          type: string
+          nullable: true
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatShareAttachmentSnapshot'
+        parts:
+          type: array
+          description: 创建快照时该消息 visible=true 的 Parts，按 partOrder 排序
+          items:
+            $ref: '#/components/schemas/ChatMessagePart'
+        createdAt:
+          type: string
+          format: date-time
+
     ChatShareDetail:
       type: object
       required: [share, question, answer, parts]
@@ -3091,14 +3218,25 @@ components:
         share:
           $ref: '#/components/schemas/ChatShare'
         question:
-          $ref: '#/components/schemas/ChatShareSnapshotMessage'
+          type: object
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/ChatShareSnapshotMessage'
         answer:
-          $ref: '#/components/schemas/ChatShareSnapshotMessage'
+          type: object
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/ChatShareSnapshotMessage'
         parts:
           type: array
           description: 创建快照时默认可见的 assistant Parts
           items:
             $ref: '#/components/schemas/ChatMessagePart'
+        messages:
+          type: array
+          description: SELECTED_MESSAGES 分享的明确选择消息；SINGLE_TURN 响应省略该字段
+          items:
+            $ref: '#/components/schemas/ChatShareSelectedMessage'
 
     ChatShareDelivery:
       type: object

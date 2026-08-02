@@ -127,8 +127,8 @@ CREATE TABLE IF NOT EXISTS fin_ex_chat_share_t (
     tenant_id VARCHAR(64) NOT NULL,
     owner_user_id VARCHAR(64) NOT NULL,
     source_session_id VARCHAR(64) NOT NULL,
-    source_user_message_id VARCHAR(64) NOT NULL,
-    source_assistant_message_id VARCHAR(64) NOT NULL,
+    source_user_message_id VARCHAR(64),
+    source_assistant_message_id VARCHAR(64),
     source_run_id VARCHAR(64),
     title VARCHAR(256),
     scope VARCHAR(32) NOT NULL DEFAULT 'SINGLE_TURN',
@@ -495,25 +495,25 @@ COMMENT ON COLUMN fin_ex_message_feedback_t.metadata_json IS '反馈扩展元数
 COMMENT ON COLUMN fin_ex_message_feedback_t.created_at IS '反馈创建时间。';
 COMMENT ON COLUMN fin_ex_message_feedback_t.updated_at IS '反馈最后更新时间。';
 
-COMMENT ON TABLE fin_ex_chat_share_t IS '单轮问答分享表，保存父 user 问题、assistant 回答和可见 parts 的固定展示快照。';
+COMMENT ON TABLE fin_ex_chat_share_t IS '聊天分享表，保存单轮问答或用户明确选择消息的固定展示快照。';
 COMMENT ON COLUMN fin_ex_chat_share_t.id IS '分享主键，业务生成的 shareId。';
 COMMENT ON COLUMN fin_ex_chat_share_t.tenant_id IS '租户标识，用于分享查看时的默认租户级隔离。';
 COMMENT ON COLUMN fin_ex_chat_share_t.owner_user_id IS '创建分享的系统归属用户标识。';
 COMMENT ON COLUMN fin_ex_chat_share_t.source_session_id IS '来源聊天会话 ID。';
-COMMENT ON COLUMN fin_ex_chat_share_t.source_user_message_id IS '来源 user 问题消息 ID。';
-COMMENT ON COLUMN fin_ex_chat_share_t.source_assistant_message_id IS '来源 assistant 回答消息 ID。';
-COMMENT ON COLUMN fin_ex_chat_share_t.source_run_id IS '来源 runId，用于排障和分享来源追踪。';
-COMMENT ON COLUMN fin_ex_chat_share_t.title IS '分享标题；为空时由应用层使用父 user 问题生成。';
-COMMENT ON COLUMN fin_ex_chat_share_t.scope IS '分享范围，首版固定 SINGLE_TURN。';
+COMMENT ON COLUMN fin_ex_chat_share_t.source_user_message_id IS '首条来源 user 消息 ID；纯 assistant 多消息分享时为空。';
+COMMENT ON COLUMN fin_ex_chat_share_t.source_assistant_message_id IS '首条来源 assistant 消息 ID；纯 user 多消息分享时为空。';
+COMMENT ON COLUMN fin_ex_chat_share_t.source_run_id IS '单轮分享的来源 runId；多消息分享可能跨多个 run，因此为空。';
+COMMENT ON COLUMN fin_ex_chat_share_t.title IS '分享标题；为空时由应用层根据首条非空来源消息生成。';
+COMMENT ON COLUMN fin_ex_chat_share_t.scope IS '分享范围，SINGLE_TURN 或 SELECTED_MESSAGES。';
 COMMENT ON COLUMN fin_ex_chat_share_t.visibility IS '访问模型，首版固定 INTERNAL，具体权限由 ChatShareAccessPolicy 判断。';
 COMMENT ON COLUMN fin_ex_chat_share_t.status IS '分享状态，ACTIVE 表示可访问，REVOKED 表示创建者或删除会话后撤销。';
 COMMENT ON COLUMN fin_ex_chat_share_t.expires_at IS '分享过期时间；为空表示不过期。';
 COMMENT ON COLUMN fin_ex_chat_share_t.revoked_at IS '分享撤销时间；未撤销为空。';
-COMMENT ON COLUMN fin_ex_chat_share_t.snapshot_json IS '固定展示快照 JSON，只保存 question、answer、visible=true 的 parts 和附件展示信息；不保存反馈、下游原始响应、Cookie 或鉴权信息。';
+COMMENT ON COLUMN fin_ex_chat_share_t.snapshot_json IS '固定展示快照 JSON，保存单轮问答或明确选中的消息、visible=true 的 parts 和附件展示信息；不保存反馈、Cookie 或鉴权信息。';
 COMMENT ON COLUMN fin_ex_chat_share_t.created_at IS '分享创建时间。';
 COMMENT ON COLUMN fin_ex_chat_share_t.updated_at IS '分享最后更新时间。';
 
-COMMENT ON TABLE fin_ex_chat_share_delivery_t IS '单轮问答分享发送记录表，保存分享链接发送到 WeLink 等 provider 的请求摘要和发送结果。';
+COMMENT ON TABLE fin_ex_chat_share_delivery_t IS '聊天消息分享发送记录表，保存分享链接发送到 WeLink 等 provider 的请求摘要和发送结果。';
 COMMENT ON COLUMN fin_ex_chat_share_delivery_t.id IS '发送记录主键，业务生成的 deliveryId。';
 COMMENT ON COLUMN fin_ex_chat_share_delivery_t.tenant_id IS '租户标识，用于发送记录归属隔离。';
 COMMENT ON COLUMN fin_ex_chat_share_delivery_t.owner_user_id IS '分享创建者系统归属用户标识，首版默认只有创建者可发送。';

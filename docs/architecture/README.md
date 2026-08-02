@@ -312,8 +312,9 @@ GET  /v1/chat/shares/{shareId}
 DELETE /v1/chat/shares/{shareId}
 GET  /v1/chat/shares?curPage=1&pageSize=20
 POST /v1/chat/sessions
-GET  /v1/chat/sessions?appId=...&limit=20&cursor=...
-GET  /v1/chat/sessions/page?appId=...&curPage=1&pageSize=20
+GET  /v1/chat/sessions/apps
+GET  /v1/chat/sessions?appId=...&title=...&limit=20&cursor=...
+GET  /v1/chat/sessions/page?appId=...&title=...&curPage=1&pageSize=20
 GET  /v1/chat/sessions/{sessionId}
 POST /v1/chat/sessions/{sessionId}/read
 GET  /v1/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50
@@ -349,7 +350,7 @@ stop；删除成功后应立即移除会话并取消本地订阅。
 - `REGENERATE_ASSISTANT`：校验 `regeneratedMessageId` 是未锁定 assistant 消息，复用其父 user 消息，run 完成后创建新的 assistant sibling。
 - `CONTINUE_INTERACTION`：提交 `interactionId` 对应的澄清、审批或确认响应。普通 `INTENT_CLARIFICATION` 使用 `NEW_TURN` 消息策略，回答生成新的 user 节点，下一轮澄清或最终回答生成新的 assistant 节点；`AMBIGUOUS_ROUTE` 和其他 Interaction 使用 `REUSE_ASSISTANT`，在不同 continuation run 中追加 parts 并更新原等待态 assistant。
 
-会话表以显式 `app_id/app_name` 保存产品分组标签：`appId` 是大小写敏感的稳定查询键，`appName` 是创建时展示快照。两者不参与身份隔离，所有读取仍必须带 `tenantId + userId`；列表可按 `appId` 过滤并使用 `(tenant_id,user_id,app_id,updated_at,id)` 索引。已有会话只接受与快照一致的显式 tag，分支继承源 tag，其他会话更新不修改 tag。字段保留在会话边界，不进入 run metadata、RouteMemory 或 Agent 请求，也不增加主流程外部调用。
+会话表以显式 `app_id/app_name` 保存产品分组标签：`appId` 是大小写敏感的稳定查询键，`appName` 是创建时展示快照。两者不参与身份隔离，所有读取仍必须带 `tenantId + userId`；`/sessions/apps` 使用单条轻量窗口查询返回非删除会话中的去重分类，名称取最近非空快照，排序使用各分类最新会话时间，不读取消息或完整会话字段。列表可按 `appId` 精确过滤，并按 `title` 执行大小写不敏感的包含搜索，两个条件同时存在时使用 `AND`。游标绑定规范化后的过滤条件，不能在后续页切换 `appId/title`；不带 title 的既有 v2 游标继续兼容，title 搜索使用 v3 游标。`%/_/!` 在应用层转义为普通字符，SQL 使用参数化 `ILIKE ... ESCAPE '!'`，不拼接用户输入。现有 `(tenant_id,user_id,app_id,updated_at,id)` 索引继续用于归属、分类和 appId 范围收敛，不增加 DDL。已有会话只接受与快照一致的显式 tag，分支继承源 tag，其他会话更新不修改 tag。字段保留在会话边界，不进入 run metadata、RouteMemory 或 Agent 请求，也不增加主流程外部调用。
 
 会话未读状态采用服务端水位：`latest_message_seq` 是最新已保存、需要用户查看的 assistant 消息终态事件 sequence，`last_read_seq` 是前端确认展示到的位置，`latest > last_read` 即未读。两个水位由专用 SQL 单调更新，通用 session save 不覆盖；`run.completed(messageReady=true)` 和 `run.waiting_user` 在保存 assistant 的同一短事务内推进最新水位。`POST /sessions/{sessionId}/read` 原子执行 `max(lastRead,min(readThrough,latest))` 且不修改 `updated_at`，因此多页签不会回退或越过水位，也不会因阅读操作改变列表顺序。
 

@@ -131,6 +131,76 @@ class SessionApplicationServiceTest {
     }
 
     @Test
+    void titleSearchSupportsCaseInsensitiveContainsAndAppIdCombination() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        Instant now = Instant.now();
+        sessions.save(taggedSession(
+                "fund-cn", "季度利润分析", "ACTIVE", "fund-app", "资金助手", now.plusSeconds(1)));
+        sessions.save(taggedSession(
+                "fund-en", "PROFIT Forecast", "ARCHIVED", "fund-app", "资金助手", now.plusSeconds(2)));
+        sessions.save(taggedSession(
+                "tax-en", "Profit Tax", "ACTIVE", "tax-app", "税务助手", now.plusSeconds(3)));
+        sessions.save(taggedSession(
+                "fund-special", "100%_Complete!", "ACTIVE", "fund-app", "资金助手", now.plusSeconds(4)));
+        sessions.save(taggedSession(
+                "fund-deleted", "利润历史", "DELETED", "fund-app", "资金助手", now.plusSeconds(5)));
+        SessionApplicationService service = service(sessions, messages);
+
+        assertThat(service.listSessions(user(), "fund-app", " 利润 ", null, 20).items())
+                .extracting(ChatSession::id)
+                .containsExactly("fund-cn");
+        assertThat(service.listSessions(user(), null, "profit", null, 20).items())
+                .extracting(ChatSession::id)
+                .containsExactly("tax-en", "fund-en");
+        ChatSessionNumberPage page = service.listSessionsByPage(user(), "fund-app", "PrOfIt", 1, 20);
+        assertThat(page.items()).extracting(ChatSession::id).containsExactly("fund-en");
+        assertThat(page.totalRows()).isEqualTo(1);
+        assertThat(service.listSessions(user(), "fund-app", "%_complete!", null, 20).items())
+                .extracting(ChatSession::id)
+                .containsExactly("fund-special");
+        assertThat(service.listSessions(user(), "fund-app", "   ", null, 20).items())
+                .extracting(ChatSession::id)
+                .containsExactly("fund-special", "fund-en", "fund-cn");
+    }
+
+    @Test
+    void appCategoriesAreOwnerScopedDeduplicatedAndSortedByLatestActivity() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        Instant now = Instant.now();
+        sessions.save(taggedSession(
+                "fund-old", "旧资金会话", "ACTIVE", "fund-app", "资金助手", now.plusSeconds(1)));
+        sessions.save(taggedSession(
+                "fund-latest", "最新资金会话", "ARCHIVED", "fund-app", null, now.plusSeconds(6)));
+        sessions.save(taggedSession(
+                "tax", "税务会话", "ARCHIVED", "tax-app", "税务助手", now.plusSeconds(5)));
+        sessions.save(taggedSession(
+                "upper", "大写分类", "ACTIVE", "A-app", "大写应用", now.plusSeconds(4)));
+        sessions.save(taggedSession(
+                "lower", "小写分类", "ACTIVE", "a-app", null, now.plusSeconds(4)));
+        sessions.save(taggedSession(
+                "deleted", "已删除分类", "DELETED", "deleted-app", "已删除应用", now.plusSeconds(20)));
+        sessions.save(new ChatSession(
+                "plain", "tenant1", "user1", "未分类", "ACTIVE", "web", now, now.plusSeconds(30)));
+        sessions.save(new ChatSession(
+                "outside", "tenant2", "user1", "其他租户", "ACTIVE", "web",
+                "outside-app", "其他应用", null, "outside", null, null, 0L, null,
+                now, now.plusSeconds(40)));
+        SessionApplicationService service = service(sessions, messages);
+
+        assertThat(service.listSessionApps(user()))
+                .extracting(app -> app.appId() + "|" + app.appName())
+                .containsExactly(
+                        "fund-app|资金助手",
+                        "tax-app|税务助手",
+                        "A-app|大写应用",
+                        "a-app|null");
+        assertThat(service.listSessionApps(new UserContext("tenant1", "missing-user", "Missing User")))
+                .isEmpty();
+    }
+
+    @Test
     void branchAndSessionLifecyclePreserveAppTag() {
         TestFixture fixture = fixture("fund-app", "资金助手");
         MessagePair original = completeTurn(fixture, "资金问题", "资金回答", "run1");
@@ -568,7 +638,12 @@ class SessionApplicationServiceTest {
     }
 
     private ChatSession taggedSession(String id, String appId, String appName, Instant updatedAt) {
-        return new ChatSession(id, "tenant1", "user1", id, "ACTIVE", "web", appId, appName,
+        return taggedSession(id, id, "ACTIVE", appId, appName, updatedAt);
+    }
+
+    private ChatSession taggedSession(
+            String id, String title, String status, String appId, String appName, Instant updatedAt) {
+        return new ChatSession(id, "tenant1", "user1", title, status, "web", appId, appName,
                 null, id, null, null, 0L, null, updatedAt.minusSeconds(1), updatedAt);
     }
 

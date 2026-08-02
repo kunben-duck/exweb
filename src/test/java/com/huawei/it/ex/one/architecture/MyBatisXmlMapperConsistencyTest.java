@@ -296,6 +296,37 @@ class MyBatisXmlMapperConsistencyTest {
     }
 
     @Test
+    void sessionPagesShouldUseTheSameEscapedTitleFilter() throws IOException {
+        String mapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("session/ChatSessionMapper.opengauss.xml"));
+
+        assertSessionTitleFilter(mapper, "findPageByOwner");
+        assertSessionTitleFilter(mapper, "countPageByOwner");
+        assertSessionTitleFilter(mapper, "findNumberPageByOwner");
+    }
+
+    @Test
+    void sessionAppCategoriesShouldUseOneLightweightOwnerScopedQuery() throws IOException {
+        String mapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("session/ChatSessionMapper.opengauss.xml"));
+        int start = mapper.indexOf("<select id=\"findAppsByOwner\"");
+        int end = mapper.indexOf("</select>", start);
+
+        assertThat(start).isGreaterThanOrEqualTo(0);
+        assertThat(end).isGreaterThan(start);
+        assertThat(mapper.substring(start, end))
+                .contains("SELECT app_id, app_name, latest_activity_at")
+                .contains("MAX(updated_at) OVER (PARTITION BY app_id)")
+                .contains("ROW_NUMBER() OVER (")
+                .contains("WHERE tenant_id = #{tenantId}")
+                .contains("AND user_id = #{userId}")
+                .contains("AND status &lt;&gt; 'DELETED'")
+                .contains("AND app_id IS NOT NULL")
+                .contains("ORDER BY latest_activity_at DESC, app_id ASC")
+                .doesNotContain("sessionColumns", "metadata_json", "SELECT *");
+    }
+
+    @Test
     void runtimeBindingResumableCleanupShouldBeScopedAndIdempotent() throws IOException {
         String cleanup = Files.readString(
                 DATABASE_SCRIPT_ROOT.resolve("incremental-20260802-runtime-binding-resumable-cleanup.sql"));
@@ -309,6 +340,18 @@ class MyBatisXmlMapperConsistencyTest {
                 .contains("AND provider = 'relay'")
                 .contains("AND status = 'RESUMABLE'")
                 .doesNotContain("DELETE FROM fin_ex_runtime_binding_t");
+    }
+
+    private void assertSessionTitleFilter(String mapper, String statementId) {
+        int start = mapper.indexOf("id=\"" + statementId + "\"");
+        int end = mapper.indexOf("</select>", start);
+
+        assertThat(start).isGreaterThanOrEqualTo(0);
+        assertThat(end).isGreaterThan(start);
+        assertThat(mapper.substring(start, end))
+                .contains("<if test=\"titlePattern != null\">")
+                .contains("AND title ILIKE #{titlePattern} ESCAPE '!'")
+                .doesNotContain("${titlePattern}");
     }
 
     @Test

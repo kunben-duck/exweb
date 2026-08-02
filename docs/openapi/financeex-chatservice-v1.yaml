@@ -591,11 +591,16 @@ paths:
       tags: [Chat Sessions & Messages]
       operationId: listChatSessionsByCursor
       summary: 游标分页查询会话
+      description: >-
+        appId 使用区分大小写的精确匹配；title 使用不区分大小写的包含匹配，两个条件同时存在时取交集。
+        不使用 title 时继续生成兼容的 v2 游标；使用 title 时生成同时绑定 appId 和规范化标题的 v3 游标。
       parameters:
         - $ref: '#/components/parameters/AppIdQuery'
+        - $ref: '#/components/parameters/SessionTitleQuery'
         - name: cursor
           in: query
           required: false
+          description: 上一页游标；必须继续使用生成该游标时相同的 appId 和 title 条件
           schema:
             type: string
         - name: limit
@@ -650,8 +655,10 @@ paths:
       tags: [Chat Sessions & Messages]
       operationId: listChatSessionsByPage
       summary: 页码分页查询会话
+      description: appId 使用区分大小写的精确匹配；title 使用不区分大小写的包含匹配，两个条件同时存在时取交集。
       parameters:
         - $ref: '#/components/parameters/AppIdQuery'
+        - $ref: '#/components/parameters/SessionTitleQuery'
         - name: curPage
           in: query
           required: false
@@ -678,6 +685,30 @@ paths:
                   - $ref: '#/components/schemas/ApiErrorResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/chat/sessions/apps:
+    get:
+      tags: [Chat Sessions & Messages]
+      operationId: listChatSessionApps
+      summary: 查询会话应用分类
+      description: >-
+        返回当前用户 ACTIVE 和 ARCHIVED 会话中的全部应用分类，排除 DELETED 和未设置 appId 的会话。
+        相同 appId 合并，appName 取最近更新会话中的非空快照，并按分类最近活动时间倒序返回。
+      responses:
+        '200':
+          description: 当前用户的会话应用分类
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatSessionAppList'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+              example:
+                items:
+                  - appId: fund-app
+                    appName: 资金助手
         '401':
           $ref: '#/components/responses/Unauthorized'
 
@@ -1391,8 +1422,20 @@ components:
       name: appId
       in: query
       required: false
+      description: 应用标识；trim 后为空表示不筛选，使用区分大小写的精确匹配
       schema:
         type: string
+        maxLength: 128
+        example: fund-app
+    SessionTitleQuery:
+      name: title
+      in: query
+      required: false
+      description: 会话标题包含搜索；trim 后为空表示不筛选，英文大小写不敏感，%/_/! 按普通字符处理
+      schema:
+        type: string
+        maxLength: 256
+        example: 利润
 
   responses:
     BadRequest:
@@ -2625,6 +2668,30 @@ components:
         nextCursor:
           type: string
           nullable: true
+
+    ChatSessionApp:
+      type: object
+      required: [appId]
+      properties:
+        appId:
+          type: string
+          description: 区分大小写的应用分类标识
+          example: fund-app
+        appName:
+          type: string
+          nullable: true
+          description: 该 appId 最近更新会话中的非空展示名称快照
+          example: 资金助手
+
+    ChatSessionAppList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          description: 按各分类最近会话活动时间倒序排列；时间相同时按 appId 升序
+          items:
+            $ref: '#/components/schemas/ChatSessionApp'
 
     ChatSessionNumberPage:
       type: object

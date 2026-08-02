@@ -1,6 +1,8 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.facade.ChatSessionFacade;
+import com.huawei.it.ex.one.application.integration.conversation.SessionAppCategory;
+import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
@@ -182,26 +184,46 @@ public class SessionApplicationService implements ChatSessionFacade {
 
     @Override
     public ChatSessionPage listSessions(UserContext user, String cursor, int limit) {
-        return listSessions(user, null, cursor, limit);
+        return listSessions(user, null, null, cursor, limit);
     }
 
     @Override
     public ChatSessionPage listSessions(UserContext user, String appId, String cursor, int limit) {
+        return listSessions(user, appId, null, cursor, limit);
+    }
+
+    @Override
+    public ChatSessionPage listSessions(
+            UserContext user, String appId, String title, String cursor, int limit) {
         checkChatUser(user);
         return sessionRepository.pageByTenantIdAndUserId(
-                user.tenantId(), user.ownerUserId(), normalizeTag(appId), cursor, limit);
+                user.tenantId(), user.ownerUserId(),
+                new SessionListFilter(normalizeTag(appId), normalizeTag(title)), cursor, limit);
     }
 
     @Override
     public ChatSessionNumberPage listSessionsByPage(UserContext user, int curPage, int pageSize) {
-        return listSessionsByPage(user, null, curPage, pageSize);
+        return listSessionsByPage(user, null, null, curPage, pageSize);
     }
 
     @Override
     public ChatSessionNumberPage listSessionsByPage(UserContext user, String appId, int curPage, int pageSize) {
+        return listSessionsByPage(user, appId, null, curPage, pageSize);
+    }
+
+    @Override
+    public ChatSessionNumberPage listSessionsByPage(
+            UserContext user, String appId, String title, int curPage, int pageSize) {
         checkChatUser(user);
         return sessionRepository.pageNumberByTenantIdAndUserId(
-                user.tenantId(), user.ownerUserId(), normalizeTag(appId), curPage, pageSize);
+                user.tenantId(), user.ownerUserId(),
+                new SessionListFilter(normalizeTag(appId), normalizeTag(title)), curPage, pageSize);
+    }
+
+    @Override
+    public List<SessionAppCategory> listSessionApps(UserContext user) {
+        checkChatUser(user);
+        return sessionRepository.findAppsByTenantIdAndUserId(user.tenantId(), user.ownerUserId());
     }
 
     @Override

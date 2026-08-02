@@ -20,6 +20,12 @@
         <result column="updated_at" property="updatedAt"/>
     </resultMap>
 
+    <resultMap id="chatSessionAppResultMap" type="com.huawei.it.ex.one.infrastructure.session.ChatSessionAppRow">
+        <result column="app_id" property="appId"/>
+        <result column="app_name" property="appName"/>
+        <result column="latest_activity_at" property="latestActivityAt"/>
+    </resultMap>
+
     <sql id="sessionColumns">
         id, tenant_id, user_id, title, status, channel, app_id, app_name, current_leaf_message_id,
         root_session_id, branch_source_session_id, branch_source_message_id,
@@ -102,9 +108,36 @@
     </select>
 
     <!--
+      查询当前用户非删除会话中的应用分类。窗口函数分别计算分类最新活动时间和最近非空名称快照，
+      最终每个 app_id 只返回一行，并按最新活动时间倒序排列。
+      入参: tenantId 为租户边界，userId 为用户边界。
+    -->
+    <select id="findAppsByOwner" resultMap="chatSessionAppResultMap">
+        SELECT app_id, app_name, latest_activity_at
+        FROM (
+            SELECT app_id,
+                   app_name,
+                   MAX(updated_at) OVER (PARTITION BY app_id) AS latest_activity_at,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY app_id
+                       ORDER BY CASE WHEN app_name IS NULL THEN 1 ELSE 0 END,
+                                updated_at DESC,
+                                id DESC
+                   ) AS app_name_rank
+            FROM fin_ex_chat_session_t
+            WHERE tenant_id = #{tenantId}
+              AND user_id = #{userId}
+              AND status &lt;&gt; 'DELETED'
+              AND app_id IS NOT NULL
+        ) ranked_apps
+        WHERE app_name_rank = 1
+        ORDER BY latest_activity_at DESC, app_id ASC
+    </select>
+
+    <!--
       游标分页查询当前用户未删除会话列表，按更新时间和 ID 稳定排序。
-      入参: tenantId/userId 为归属边界；cursorUpdatedAt/cursorId 为上一页最后一条游标，可为空；
-            limit 为本次最多返回条数。
+      入参: tenantId/userId 为归属边界；appId 为可选应用标识；titlePattern 为可选、已转义的标题匹配参数；
+            cursorUpdatedAt/cursorId 为上一页最后一条游标，可为空；limit 为本次最多返回条数。
     -->
     <select id="findPageByOwner" resultMap="chatSessionResultMap">
         SELECT <include refid="sessionColumns"/>
@@ -114,6 +147,9 @@
           AND status &lt;&gt; 'DELETED'
           <if test="appId != null and appId != ''">
           AND app_id = #{appId}
+          </if>
+          <if test="titlePattern != null">
+          AND title ILIKE #{titlePattern} ESCAPE '!'
           </if>
           <if test="cursorUpdatedAt != null">
           AND (
@@ -127,7 +163,7 @@
 
     <!--
       统计当前用户未删除会话总数，用于页码式分页返回 totalRows。
-      入参: tenantId 为租户边界，userId 为用户边界。
+      入参: tenantId/userId 为归属边界；appId 为可选应用标识；titlePattern 为可选、已转义的标题匹配参数。
     -->
     <select id="countPageByOwner" resultType="long">
         SELECT COUNT(1)
@@ -138,11 +174,15 @@
           <if test="appId != null and appId != ''">
           AND app_id = #{appId}
           </if>
+          <if test="titlePattern != null">
+          AND title ILIKE #{titlePattern} ESCAPE '!'
+          </if>
     </select>
 
     <!--
       页码式分页查询当前用户未删除会话列表，兼容企业前端 curPage/pageSize 模式。
-      入参: tenantId/userId 为归属边界；limit 为 pageSize；offset 为 (curPage - 1) * pageSize。
+      入参: tenantId/userId 为归属边界；appId 为可选应用标识；titlePattern 为可选、已转义的标题匹配参数；
+            limit 为 pageSize；offset 为 (curPage - 1) * pageSize。
     -->
     <select id="findNumberPageByOwner" resultMap="chatSessionResultMap">
         SELECT <include refid="sessionColumns"/>
@@ -152,6 +192,9 @@
           AND status &lt;&gt; 'DELETED'
           <if test="appId != null and appId != ''">
           AND app_id = #{appId}
+          </if>
+          <if test="titlePattern != null">
+          AND title ILIKE #{titlePattern} ESCAPE '!'
           </if>
         ORDER BY updated_at DESC, id DESC
         LIMIT #{limit}

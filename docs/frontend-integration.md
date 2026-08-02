@@ -229,8 +229,9 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
 | `POST /v1/chat/sessions` | 用户点击“新建会话”时显式创建。 | JSON body：`title/channel/appId/appName` 均可选。 | `ChatSessionDto`：包含 `appId/appName`。 | `appName` 不能脱离 `appId`；前端不传租户和用户。 |
-| `GET /v1/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`appId` 可选；`limit` 默认 20；`cursor` 可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每项含 `appId/appName/firstAssistantAnswer`。 | `appId` 区分大小写；后续页必须沿用生成 cursor 时相同的 `appId`，否则返回参数错误。 |
-| `GET /v1/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`appId` 可选；`curPage` 默认 1；`pageSize` 默认 20，最大 200。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`。 | `totalRows/totalPages` 按同一 `appId` 过滤条件计算；不返回 `DELETED` 会话。 |
+| `GET /v1/chat/sessions/apps` | 初始化会话分类栏。 | 无。 | `ChatSessionAppListDto`：`items[].appId/appName`。 | 只返回当前用户非删除会话中的分类；不包含未分类项，不分页。 |
+| `GET /v1/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`appId/title` 可选；`limit` 默认 20；`cursor` 可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每项含 `appId/appName/firstAssistantAnswer`。 | `appId` 区分大小写并精确匹配；`title` 大小写不敏感并执行包含搜索；后续页必须沿用相同过滤条件。 |
+| `GET /v1/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`appId/title` 可选；`curPage` 默认 1；`pageSize` 默认 20，最大 200。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`。 | `totalRows/totalPages` 按相同 `appId + title` 条件计算；不返回 `DELETED` 会话。 |
 | `GET /v1/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
 | `POST /v1/chat/sessions/{sessionId}/read` | 最新历史消息或实时 assistant 终态已经展示。 | Path：`sessionId`；JSON body：`readThroughSeq` 必填、最小为 0。 | 更新后的 `ChatSessionDto`。 | 提交列表/详情中观察到的 `latestMessageSeq`，或实时 `run.completed/run.waiting_user` 的 sequence；不会更新会话 `updatedAt`。 |
 | `GET /v1/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 保留。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 不传 `leafMessageId` 时返回当前 active path；传入时返回 root 到该 leaf 的路径。 |
@@ -292,8 +293,9 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 接口 | 最小入参示例 |
 | --- | --- |
 | `POST /v1/chat/sessions` | Body：`{"title":"资金分析","channel":"web","appId":"fund-app","appName":"资金助手"}`；四个字段都可省略，但 `appName` 不能单独出现。 |
-| `GET /v1/chat/sessions` | Query：`?appId=fund-app&limit=20&cursor=cursor_xxx`；`appId/cursor` 均可省略，同一 cursor 不得切换 appId。 |
-| `GET /v1/chat/sessions/page` | Query：`?appId=fund-app&curPage=1&pageSize=20`；`appId` 可省略。 |
+| `GET /v1/chat/sessions/apps` | 无 Query 和 body；返回当前用户全部非删除会话分类。 |
+| `GET /v1/chat/sessions` | Query：`?appId=fund-app&title=利润&limit=20&cursor=cursor_xxx`；过滤条件均可省略，同一 cursor 不得切换 appId 或 title。 |
+| `GET /v1/chat/sessions/page` | Query：`?appId=fund-app&title=利润&curPage=1&pageSize=20`；`appId/title` 均可省略。 |
 | `GET /v1/chat/sessions/{sessionId}` | Path：`session_xxx`。 |
 | `POST /v1/chat/sessions/{sessionId}/read` | Body：`{"readThroughSeq":63252}`；使用已经实际展示的会话水位或实时终态 sequence。 |
 | `GET /v1/chat/sessions/{sessionId}/messages` | Query：`?limit=50`；查看指定版本路径时传 `?leafMessageId=msg_xxx&limit=50`。 |
@@ -833,10 +835,35 @@ curl -X POST http://localhost:8080/v1/chat/sessions \
 
 前端展示可以使用 `sessionId` 作为会话路由参数，并按 `appId` 分组、用 `appName` 展示分组名称。tag 创建后不可变；分支会话自动继承。租户和用户字段只用于调试展示，不应回传给聊天接口。
 
+初始化分类栏时查询：
+
+```bash
+curl "http://localhost:8080/v1/chat/sessions/apps"
+```
+
+```json
+{
+  "items": [
+    {
+      "appId": "fund-app",
+      "appName": "资金助手"
+    },
+    {
+      "appId": "tax-app",
+      "appName": null
+    }
+  ]
+}
+```
+
+分类按各 `appId` 最近一条非删除会话的活动时间倒序返回；时间相同时按 `appId` 升序。同一 `appId`
+只返回一次，`appName` 使用最近更新会话中的非空快照。接口包含 `ACTIVE/ARCHIVED` 会话，排除
+`DELETED` 和未设置 `appId` 的会话；“全部”和“未分类”入口由前端自行增加。
+
 查询会话列表，游标分页用于无限滚动：
 
 ```bash
-curl "http://localhost:8080/v1/chat/sessions?appId=fund-app&limit=20"
+curl "http://localhost:8080/v1/chat/sessions?appId=fund-app&title=%E5%88%A9%E6%B6%A6&limit=20"
 ```
 
 响应按更新时间倒序返回：
@@ -869,10 +896,14 @@ curl "http://localhost:8080/v1/chat/sessions?appId=fund-app&limit=20"
 }
 ```
 
+`title` 最大256字符，服务端 trim 后执行大小写不敏感的包含搜索；空白值等同未传，`%`、`_` 和 `!`
+按普通标题字符匹配。`appId` 与 `title` 同时存在时取交集。后续游标页必须继续提交生成游标时相同的
+`appId/title`；切换搜索条件时应丢弃旧 `cursor` 并从第一页重新查询。
+
 查询会话列表，页码分页用于传统分页组件：
 
 ```bash
-curl "http://localhost:8080/v1/chat/sessions/page?appId=fund-app&curPage=1&pageSize=20"
+curl "http://localhost:8080/v1/chat/sessions/page?appId=fund-app&title=%E5%88%A9%E6%B6%A6&curPage=1&pageSize=20"
 ```
 
 页码分页响应会返回总行数：

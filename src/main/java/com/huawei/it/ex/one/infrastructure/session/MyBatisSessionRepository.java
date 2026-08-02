@@ -1,5 +1,7 @@
 package com.huawei.it.ex.one.infrastructure.session;
 
+import com.huawei.it.ex.one.application.integration.conversation.SessionAppCategory;
+import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
@@ -14,6 +16,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -22,6 +26,10 @@ import java.util.Optional;
 @Repository
 public class MyBatisSessionRepository implements SessionRepository {
     private static final String CURSOR_SEPARATOR = "|";
+    private static final String CURSOR_VERSION_V2 = "v2";
+    private static final String CURSOR_VERSION_V3 = "v3";
+    private static final String APP_ID_FILTER_MISMATCH = "cursor 与当前 appId 过滤条件不一致";
+    private static final String TITLE_FILTER_MISMATCH = "cursor 与当前 title 过滤条件不一致";
 
     private final ChatSessionMapper mapper;
 
@@ -45,20 +53,38 @@ public class MyBatisSessionRepository implements SessionRepository {
     }
 
     @Override
+    public List<SessionAppCategory> findAppsByTenantIdAndUserId(String tenantId, String userId) {
+        return mapper.findAppsByOwner(tenantId, userId).stream()
+                .map(row -> new SessionAppCategory(row.getAppId(), row.getAppName()))
+                .toList();
+    }
+
+    @Override
     public ChatSessionPage pageByTenantIdAndUserId(String tenantId, String userId, String cursor, int limit) {
-        return pageByTenantIdAndUserId(tenantId, userId, null, cursor, limit);
+        return pageByTenantIdAndUserId(tenantId, userId, SessionListFilter.empty(), cursor, limit);
     }
 
     @Override
     public ChatSessionPage pageByTenantIdAndUserId(String tenantId, String userId, String appId,
                                                    String cursor, int limit) {
+        return pageByTenantIdAndUserId(
+                tenantId, userId, new SessionListFilter(appId, null), cursor, limit);
+    }
+
+    @Override
+    public ChatSessionPage pageByTenantIdAndUserId(
+            String tenantId, String userId, SessionListFilter filter, String cursor, int limit) {
+        String appId = filter == null ? null : filter.appId();
+        String title = filter == null ? null : filter.title();
         String normalizedAppId = normalize(appId);
-        Cursor decoded = decodeCursor(cursor, normalizedAppId);
+        String normalizedTitle = normalizeTitle(title);
+        Cursor decoded = decodeCursor(cursor, normalizedAppId, normalizedTitle);
         int pageSize = Math.max(1, Math.min(limit <= 0 ? 20 : limit, 200));
         List<ChatSession> rows = mapper.findPageByOwner(
                         tenantId,
                         userId,
                         normalizedAppId,
+                        titlePattern(normalizedTitle),
                         decoded.updatedAt(),
                         decoded.id(),
                         pageSize + 1
@@ -67,28 +93,43 @@ public class MyBatisSessionRepository implements SessionRepository {
                 .toList();
         boolean hasMore = rows.size() > pageSize;
         List<ChatSession> items = hasMore ? rows.subList(0, pageSize) : rows;
-        String nextCursor = hasMore ? encodeCursor(items.get(items.size() - 1), normalizedAppId) : null;
+        String nextCursor = hasMore
+                ? encodeCursor(items.get(items.size() - 1), normalizedAppId, normalizedTitle)
+                : null;
         return new ChatSessionPage(items, nextCursor);
     }
 
     @Override
     public ChatSessionNumberPage pageNumberByTenantIdAndUserId(String tenantId, String userId,
                                                                int curPage, int pageSize) {
-        return pageNumberByTenantIdAndUserId(tenantId, userId, null, curPage, pageSize);
+        return pageNumberByTenantIdAndUserId(
+                tenantId, userId, SessionListFilter.empty(), curPage, pageSize);
     }
 
     @Override
     public ChatSessionNumberPage pageNumberByTenantIdAndUserId(String tenantId, String userId, String appId,
                                                                int curPage, int pageSize) {
+        return pageNumberByTenantIdAndUserId(
+                tenantId, userId, new SessionListFilter(appId, null), curPage, pageSize);
+    }
+
+    @Override
+    public ChatSessionNumberPage pageNumberByTenantIdAndUserId(
+            String tenantId, String userId, SessionListFilter filter, int curPage, int pageSize) {
+        String appId = filter == null ? null : filter.appId();
+        String title = filter == null ? null : filter.title();
         int normalizedPage = Math.max(1, curPage);
         int normalizedSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 200));
         String normalizedAppId = normalize(appId);
-        long totalRows = mapper.countPageByOwner(tenantId, userId, normalizedAppId);
+        String normalizedTitle = normalizeTitle(title);
+        String titlePattern = titlePattern(normalizedTitle);
+        long totalRows = mapper.countPageByOwner(tenantId, userId, normalizedAppId, titlePattern);
         long totalPages = totalRows == 0 ? 0 : (totalRows + normalizedSize - 1) / normalizedSize;
         long offset = (long) (normalizedPage - 1) * normalizedSize;
         List<ChatSession> items = totalRows == 0 || offset >= totalRows
                 ? List.of()
-                : mapper.findNumberPageByOwner(tenantId, userId, normalizedAppId, normalizedSize, offset).stream()
+                : mapper.findNumberPageByOwner(
+                        tenantId, userId, normalizedAppId, titlePattern, normalizedSize, offset).stream()
                 .map(this::toDomain)
                 .toList();
         return new ChatSessionNumberPage(items, normalizedPage, normalizedSize, totalRows, totalPages);
@@ -193,32 +234,27 @@ public class MyBatisSessionRepository implements SessionRepository {
         return row;
     }
 
-    private String encodeCursor(ChatSession session, String appId) {
-        String encodedAppId = appId == null ? "" : Base64.getUrlEncoder().withoutPadding()
-                .encodeToString(appId.getBytes(StandardCharsets.UTF_8));
-        String raw = "v2" + CURSOR_SEPARATOR + encodedAppId + CURSOR_SEPARATOR
-                + session.updatedAt() + CURSOR_SEPARATOR + session.id();
+    private String encodeCursor(ChatSession session, String appId, String title) {
+        String raw;
+        if (title == null) {
+            raw = CURSOR_VERSION_V2 + CURSOR_SEPARATOR + encodeFilter(appId) + CURSOR_SEPARATOR
+                    + session.updatedAt() + CURSOR_SEPARATOR + session.id();
+        } else {
+            raw = CURSOR_VERSION_V3 + CURSOR_SEPARATOR + encodeFilter(appId) + CURSOR_SEPARATOR
+                    + encodeFilter(title) + CURSOR_SEPARATOR + session.updatedAt() + CURSOR_SEPARATOR + session.id();
+        }
         return Base64.getUrlEncoder().encodeToString(raw.getBytes(StandardCharsets.UTF_8));
     }
 
-    private Cursor decodeCursor(String cursor, String expectedAppId) {
+    private Cursor decodeCursor(String cursor, String expectedAppId, String expectedTitle) {
         if (cursor == null || cursor.isBlank()) {
             return Cursor.empty();
         }
         try {
             String raw = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
-            String[] parts = raw.split("\\|", 4);
-            if (parts.length != 4 || !"v2".equals(parts[0])) {
-                return Cursor.empty();
-            }
-            String cursorAppId = parts[1].isEmpty() ? null : new String(
-                    Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
-            if (!java.util.Objects.equals(expectedAppId, cursorAppId)) {
-                throw new IllegalArgumentException("cursor 与当前 appId 过滤条件不一致");
-            }
-            return new Cursor(Instant.parse(parts[2]), parts[3]);
+            return decodeCursorValue(raw, expectedAppId, expectedTitle);
         } catch (IllegalArgumentException ex) {
-            if (ex.getMessage() != null && ex.getMessage().contains("appId 过滤条件不一致")) {
+            if (APP_ID_FILTER_MISMATCH.equals(ex.getMessage()) || TITLE_FILTER_MISMATCH.equals(ex.getMessage())) {
                 throw ex;
             }
             return Cursor.empty();
@@ -227,8 +263,55 @@ public class MyBatisSessionRepository implements SessionRepository {
         }
     }
 
+    private Cursor decodeCursorValue(String raw, String expectedAppId, String expectedTitle) {
+        String[] parts = raw.split("\\|", -1);
+        if (parts.length == 4 && CURSOR_VERSION_V2.equals(parts[0])) {
+            validateFilter(expectedAppId, decodeFilter(parts[1]), APP_ID_FILTER_MISMATCH);
+            validateFilter(expectedTitle, null, TITLE_FILTER_MISMATCH);
+            return new Cursor(Instant.parse(parts[2]), parts[3]);
+        }
+        if (parts.length == 5 && CURSOR_VERSION_V3.equals(parts[0])) {
+            validateFilter(expectedAppId, decodeFilter(parts[1]), APP_ID_FILTER_MISMATCH);
+            validateFilter(expectedTitle, decodeFilter(parts[2]), TITLE_FILTER_MISMATCH);
+            return new Cursor(Instant.parse(parts[3]), parts[4]);
+        }
+        return Cursor.empty();
+    }
+
+    private void validateFilter(String expected, String actual, String message) {
+        if (!Objects.equals(expected, actual)) {
+            throw new IllegalArgumentException(message);
+        }
+    }
+
+    private String encodeFilter(String value) {
+        return value == null ? "" : Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private String decodeFilter(String value) {
+        return value.isEmpty() ? null : new String(
+                Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8);
+    }
+
+    private String titlePattern(String normalizedTitle) {
+        if (normalizedTitle == null) {
+            return null;
+        }
+        String escaped = normalizedTitle
+                .replace("!", "!!")
+                .replace("%", "!%")
+                .replace("_", "!_");
+        return "%" + escaped + "%";
+    }
+
     private String normalize(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private String normalizeTitle(String value) {
+        String normalized = normalize(value);
+        return normalized == null ? null : normalized.toLowerCase(Locale.ROOT);
     }
 
     private record Cursor(Instant updatedAt, String id) {

@@ -28,6 +28,8 @@ import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessagePartDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageTreeDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageTreeNodeDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageVersionInfoDto;
+import com.huawei.it.ex.one.interfaces.chat.dto.ChatSessionAppDto;
+import com.huawei.it.ex.one.interfaces.chat.dto.ChatSessionAppListDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSessionDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSessionNumberPageDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSessionPageDto;
@@ -113,21 +115,40 @@ public class ChatSessionController {
     }
 
     /**
+     * 查询当前用户非删除会话中的全部应用分类。
+     *
+     * @return 按最近会话活动时间倒序排列的应用分类。
+     */
+    @GetMapping("/apps")
+    public Mono<ChatSessionAppListDto> apps() {
+        UserContext user = resolveChatUser();
+        return Mono.fromCallable(() -> new ChatSessionAppListDto(
+                        facade.listSessionApps(user).stream()
+                                .map(app -> new ChatSessionAppDto(app.appId(), app.appName()))
+                                .toList()))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
      * 分页查询当前用户会话列表。
      *
+     * @param appId 可选应用标识精确过滤条件。
+     * @param title 可选会话标题包含过滤条件。
      * @param cursor 上一页返回的游标；为空时查询第一页。
      * @param limit 最大返回条数，应用层会做上限保护。
      * @return 会话分页结果，按最近更新时间倒序排列。
      */
     @GetMapping
     public Mono<ChatSessionPageDto> list(
-                                              @Size(max = 128, message = "appId 长度不能超过 128")
-                                              @RequestParam(value = "appId", required = false) String appId,
-                                              @RequestParam(value = "cursor", required = false) String cursor,
-                                              @RequestParam(value = "limit", defaultValue = "20") int limit) {
+            @Size(max = 128, message = "appId 长度不能超过 128")
+            @RequestParam(value = "appId", required = false) String appId,
+            @Size(max = 256, message = "title 长度不能超过 256")
+            @RequestParam(value = "title", required = false) String title,
+            @RequestParam(value = "cursor", required = false) String cursor,
+            @RequestParam(value = "limit", defaultValue = "20") int limit) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> {
-                    ChatSessionPage page = facade.listSessions(user, appId, cursor, limit);
+                    ChatSessionPage page = facade.listSessions(user, appId, title, cursor, limit);
                     Map<String, String> firstAnswers = facade.findFirstAssistantAnswers(user, page.items());
                     return new ChatSessionPageDto(
                             page.items().stream()
@@ -145,6 +166,8 @@ public class ChatSessionController {
      * <p>该接口用于需要 {@code curPage/pageSize/totalRows} 的传统分页 UI；现有 cursor 分页接口
      * 保持不变。返回项会批量装配首条 assistant 完整回答，避免列表页逐会话查询历史消息。</p>
      *
+     * @param appId 可选应用标识精确过滤条件。
+     * @param title 可选会话标题包含过滤条件。
      * @param curPage 当前页码，从 1 开始；非法值由应用层归一化。
      * @param pageSize 每页条数；应用层会限制最大值。
      * @return 会话页码分页结果。
@@ -153,11 +176,13 @@ public class ChatSessionController {
     public Mono<ChatSessionNumberPageDto> listByPage(
             @Size(max = 128, message = "appId 长度不能超过 128")
             @RequestParam(value = "appId", required = false) String appId,
+            @Size(max = 256, message = "title 长度不能超过 256")
+            @RequestParam(value = "title", required = false) String title,
             @RequestParam(value = "curPage", defaultValue = "1") int curPage,
             @RequestParam(value = "pageSize", defaultValue = "20") int pageSize) {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> {
-                    ChatSessionNumberPage page = facade.listSessionsByPage(user, appId, curPage, pageSize);
+                    ChatSessionNumberPage page = facade.listSessionsByPage(user, appId, title, curPage, pageSize);
                     Map<String, String> firstAnswers = facade.findFirstAssistantAnswers(user, page.items());
                     return new ChatSessionNumberPageDto(
                             page.items().stream()

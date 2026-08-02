@@ -124,8 +124,9 @@ final class ChatEventCommitCoordinator {
                         context.messagePlan().userMessage().id(),
                         context.messagePlan().regeneratedFromMessageId(),
                         context.assistant().parts(),
-                        null,
-                        target.assistantMessageId()))
+                        context.assistant().assistantMetadata(null),
+                        target.assistantMessageId(),
+                        context.assistant().appendAnswerPart()))
                 : sessionService.updateAssistantMessage(new AssistantMessageUpdateCommand(
                         context.user().tenantId(),
                         context.user().ownerUserId(),
@@ -134,7 +135,8 @@ final class ChatEventCommitCoordinator {
                         context.assistant().finalContent(),
                         context.runId(),
                         context.assistant().parts(),
-                        null));
+                        context.assistant().assistantMetadata(null),
+                        context.assistant().appendAnswerPart()));
         sessionService.advanceLatestMessageSeq(context.user(), context.session(), stored.sequence());
         chatRunService.bindAssistantMessage(context.runId(), savedAssistant.id());
         context.bindingRef().set(runtimeBindingService.completeAfterRun(
@@ -161,9 +163,10 @@ final class ChatEventCommitCoordinator {
                 context.messagePlan().userMessage().id(),
                 context.messagePlan().regeneratedFromMessageId(),
                 context.assistant().parts(),
-                "{\"finishReason\":\"WAITING_USER\"}",
+                context.assistant().assistantMetadata("{\"finishReason\":\"WAITING_USER\"}"),
                 target.assistantMessageId(),
-                waitingRequest.interactionType() != ChatInteractionType.ROUTE_SWITCH_CONFIRMATION));
+                context.assistant().appendAnswerPart()
+                        && waitingRequest.interactionType() != ChatInteractionType.ROUTE_SWITCH_CONFIRMATION));
         sessionService.advanceLatestMessageSeq(context.user(), context.session(), stored.sequence());
         chatRunService.bindAssistantMessage(context.runId(), savedAssistant.id());
         context.bindingRef().set(runtimeBindingService.touchAndMoveToLeaf(

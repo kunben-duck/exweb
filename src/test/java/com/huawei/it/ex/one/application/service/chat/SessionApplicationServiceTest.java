@@ -9,6 +9,9 @@ import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.integration.memory.ChatMessagePageQuery;
 import com.huawei.it.ex.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.it.ex.one.application.integration.share.ChatShareRepository;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistencePolicy;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.domain.auth.UserContext;
@@ -407,6 +410,69 @@ class SessionApplicationServiceTest {
         ChatMessagePart answerPart = assistant.parts().getLast();
         assertThat(answerPart.payload()).containsEntry(
                 "serverTimestampMs", answerPart.createdAt().toEpochMilli());
+    }
+
+    @Test
+    void placeholderAssistantDropsRuntimeContentAtTheMessagePersistenceBoundary() {
+        TestFixture fixture = fixture();
+        ChatRunMessagePlan plan = fixture.service.prepareRunMessage(user(), command("hello", ChatRunMode.NEXT,
+                null, null, null), fixture.session, "run1", List.of());
+        AgentDataPersistenceState state = new AgentDataPersistenceState("回答已按策略隐藏")
+                .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
+
+        ChatMessage assistant = fixture.service.saveAssistantMessage(new AssistantMessageSaveCommand(
+                "tenant1", "user1", fixture.session, "真实回答", "run1", plan.userMessage().id(), null,
+                List.of(
+                        new ChatMessagePartDraft("THINKING", "thinking", "真实思考", Map.of()),
+                        new ChatMessagePartDraft("CARD", "card", "真实卡片", Map.of()),
+                        new ChatMessagePartDraft("INTENT_CLARIFICATION_REQUEST", "intent-clarification",
+                                "请选择技能", Map.of("clarifyQuestion", "请选择技能"))
+                ), AgentDataPersistenceMetadata.mergeAssistantMetadata(null, state), null, true));
+
+        assertThat(assistant.content()).isEqualTo("回答已按策略隐藏");
+        assertThat(assistant.parts()).extracting(ChatMessagePart::partType)
+                .containsExactly("INTENT_CLARIFICATION_REQUEST");
+        assertThat(AgentDataPersistenceMetadata.placeholderAssistant(assistant.metadataJson())).isTrue();
+    }
+
+    @Test
+    void aNewRunFullPolicyDoesNotInheritThePreviousRunPlaceholderMarker() {
+        TestFixture fixture = fixture();
+        ChatRunMessagePlan plan = fixture.service.prepareRunMessage(user(), command("hello", ChatRunMode.NEXT,
+                null, null, null), fixture.session, "run1", List.of());
+        AgentDataPersistenceState state = new AgentDataPersistenceState("回答已按策略隐藏")
+                .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
+        ChatMessage placeholder = fixture.service.saveAssistantMessage(new AssistantMessageSaveCommand(
+                "tenant1", "user1", fixture.session, "真实回答", "run1", plan.userMessage().id(), null,
+                List.of(), AgentDataPersistenceMetadata.mergeAssistantMetadata(null, state), null, true));
+
+        ChatMessage updated = fixture.service.updateAssistantMessage(new AssistantMessageUpdateCommand(
+                "tenant1", "user1", fixture.session, placeholder.id(), "新 run 可保存的回答", "run2",
+                List.of(new ChatMessagePartDraft("THINKING", "thinking", "可保存思考", Map.of())),
+                null, true));
+
+        assertThat(updated.content()).isEqualTo("新 run 可保存的回答");
+        assertThat(AgentDataPersistenceMetadata.placeholderAssistant(updated.metadataJson())).isFalse();
+        assertThat(updated.parts()).extracting(ChatMessagePart::partType)
+                .containsExactly("THINKING", "ANSWER");
+    }
+
+    @Test
+    void placeholderMarkerWithoutContentNeverFallsBackToRealAnswer() {
+        TestFixture fixture = fixture();
+        ChatRunMessagePlan plan = fixture.service.prepareRunMessage(user(), command("hello", ChatRunMode.NEXT,
+                null, null, null), fixture.session, "run1", List.of());
+
+        ChatMessage assistant = fixture.service.saveAssistantMessage(new AssistantMessageSaveCommand(
+                "tenant1", "user1", fixture.session, "真实回答不得落库", "run1",
+                plan.userMessage().id(), null, List.of(),
+                "{\"agentDataPersistence\":{\"policy\":\"ASSISTANT_PLACEHOLDER\"}}",
+                null, true));
+
+        assertThat(assistant.content())
+                .isEqualTo("根据数据留存策略，本次回答不在消息历史中展示。");
+        assertThat(assistant.content()).doesNotContain("真实回答");
+        assertThat(assistant.parts()).isEmpty();
     }
 
     @Test

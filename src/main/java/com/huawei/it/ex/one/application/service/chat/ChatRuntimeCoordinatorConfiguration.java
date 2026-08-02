@@ -3,6 +3,7 @@ package com.huawei.it.ex.one.application.service.chat;
 import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceGate;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
@@ -39,7 +40,8 @@ class ChatRuntimeCoordinatorConfiguration {
             ChatRunLeaseApplicationService chatRunLeaseService,
             @Qualifier("chatStreamEventScheduler") Scheduler eventIoScheduler,
             @Qualifier("domainAgentControlIoScheduler") Scheduler controlIoScheduler,
-            RuntimeBindingDispatchCompensator bindingCompensator) {
+            RuntimeBindingDispatchCompensator bindingCompensator,
+            AgentDataPersistenceGate persistenceGate) {
         return new DomainAgentRefusalCoordinator(
                 agentRuntimeExecutor,
                 routeSignalService,
@@ -50,7 +52,8 @@ class ChatRuntimeCoordinatorConfiguration {
                 chatRunLeaseService,
                 eventIoScheduler,
                 controlIoScheduler,
-                bindingCompensator);
+                bindingCompensator,
+                persistenceGate);
     }
 
     @Bean
@@ -63,7 +66,8 @@ class ChatRuntimeCoordinatorConfiguration {
             DomainAgentRefusalCoordinator refusalCoordinator,
             SystemResponseExecutor systemResponseExecutor,
             AgentRuntimeExecutor agentRuntimeExecutor,
-            RuntimeBindingDispatchCompensator bindingCompensator) {
+            RuntimeBindingDispatchCompensator bindingCompensator,
+            AgentDataPersistenceGate persistenceGate) {
         return new ChatRuntimeDispatchCoordinator(
                 routeSignalService,
                 eventPersistenceCoordinator,
@@ -73,7 +77,8 @@ class ChatRuntimeCoordinatorConfiguration {
                 refusalCoordinator,
                 systemResponseExecutor,
                 agentRuntimeExecutor,
-                bindingCompensator);
+                bindingCompensator,
+                persistenceGate);
     }
 
     @Bean
@@ -133,7 +138,8 @@ class ChatRuntimeCoordinatorConfiguration {
             InteractionEventFactory eventFactory,
             ChatEventPersistenceCoordinator persistenceCoordinator,
             DomainAgentRefusalCoordinator refusalCoordinator,
-            AgentRuntimeExecutor runtimeExecutor) {
+            AgentRuntimeExecutor runtimeExecutor,
+            AgentDataPersistenceGate persistenceGate) {
         return new RouteSwitchContinuationCoordinator(
                 runtimeBindingService,
                 lifecycle,
@@ -141,7 +147,8 @@ class ChatRuntimeCoordinatorConfiguration {
                 eventFactory,
                 persistenceCoordinator,
                 refusalCoordinator,
-                runtimeExecutor);
+                runtimeExecutor,
+                persistenceGate);
     }
 
     @Bean

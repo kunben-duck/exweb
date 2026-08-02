@@ -39,6 +39,13 @@ financeex:
     stream-auth-io-max-size: 4
     stream-auth-io-queue-capacity: 128
     failure-strategy: RELAY_FALLBACK
+  # 启用 agent-data-persistence 前，必须接入企业技能配置 Client 并主动配置调用超时。
+  # domain-agent-skill-config:
+  #   timeout: 2s
+  agent-data-persistence:
+    enabled: false
+    cache-ttl: 10m
+    placeholder-content: 根据数据留存策略，本次回答不在消息历史中展示。
   domain-agent:
     enabled: false
     base-url: http://localhost:9300

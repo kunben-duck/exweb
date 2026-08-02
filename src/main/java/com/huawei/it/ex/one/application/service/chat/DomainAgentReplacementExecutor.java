@@ -1,8 +1,8 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.config.DomainAgentProperties;
-import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceGate;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalResult;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.application.service.runtime.DomainAgentBindingCommand;
@@ -46,6 +46,7 @@ final class DomainAgentReplacementExecutor {
     private final Scheduler controlIoScheduler;
     private final DomainAgentProperties domainAgentProperties;
     private final RuntimeBindingDispatchCompensator bindingCompensator;
+    private final AgentDataPersistenceGate persistenceGate;
 
     DomainAgentReplacementExecutor(AgentRuntimeExecutor agentRuntimeExecutor,
                                    RuntimeBindingApplicationService runtimeBindingService,
@@ -57,7 +58,8 @@ final class DomainAgentReplacementExecutor {
                                    Scheduler eventIoScheduler,
                                    Scheduler controlIoScheduler,
                                    DomainAgentProperties domainAgentProperties,
-                                   RuntimeBindingDispatchCompensator bindingCompensator) {
+                                   RuntimeBindingDispatchCompensator bindingCompensator,
+                                   AgentDataPersistenceGate persistenceGate) {
         this.agentRuntimeExecutor = agentRuntimeExecutor;
         this.runtimeBindingService = runtimeBindingService;
         this.appliedRouteRecorder = appliedRouteRecorder;
@@ -71,6 +73,7 @@ final class DomainAgentReplacementExecutor {
                 ? new DomainAgentProperties()
                 : domainAgentProperties;
         this.bindingCompensator = bindingCompensator;
+        this.persistenceGate = persistenceGate;
     }
 
     Flux<ChatEvent> continueWithRelay(DomainAgentRerouteContext reroute,
@@ -115,7 +118,8 @@ final class DomainAgentReplacementExecutor {
         context.bindingRef().set(resolution.binding());
         context.routeRef().set(nextRoute);
         appliedRouteRecorder.bindResolvedRouteRequired(
-                context.runId(), nextRoute, resolution.binding(), context.executionClaim());
+                context.runId(), nextRoute, resolution.binding(), context.executionClaim(),
+                context.persistenceState());
         MemoryContext runtimeMemory = recordAppliedRoute(reroute, signal, nextRoute, resolution.binding());
         ChatCommand runtimeCommand = runtimeCommand(context, nextRoute, signal.intentDecision());
         String action = signal.intentFailure() ? "RELAY_FALLBACK" : "ROUTE_TO_RELAY";
@@ -198,8 +202,11 @@ final class DomainAgentReplacementExecutor {
                     signal,
                     currentRouteSource));
         }
-        return requireCurrentOwnerRunning(
-                context.executionClaim(), "before-domain-agent-reroute-binding")
+        Mono<?> policyResolution = persistenceGate == null
+                ? Mono.just(context.persistenceState())
+                : persistenceGate.resolve(context.user(), nextRoute, context.persistenceState());
+        return policyResolution.then(requireCurrentOwnerRunning(
+                context.executionClaim(), "before-domain-agent-reroute-binding"))
                 .thenMany(Flux.usingWhen(
                         Mono.fromCallable(() -> prepareDomainAgentReplacement(reroute, signal, nextRoute))
                                 .subscribeOn(eventIoScheduler),
@@ -237,7 +244,8 @@ final class DomainAgentReplacementExecutor {
                     context.bindingRef().set(nextBinding);
                     context.routeRef().set(nextRoute);
                     appliedRouteRecorder.bindResolvedRouteRequired(
-                            context.runId(), nextRoute, nextBinding, context.executionClaim());
+                            context.runId(), nextRoute, nextBinding, context.executionClaim(),
+                            context.persistenceState());
                     MemoryContext runtimeMemory = recordAppliedRoute(reroute, signal, nextRoute, nextBinding);
                     ChatCommand runtimeCommand = runtimeCommand(context, nextRoute, signal.intentDecision());
                     DomainAgentRunContext nextContext = nextRunContext(
@@ -394,7 +402,8 @@ final class DomainAgentReplacementExecutor {
                 context.documents(),
                 reroute.rejectedDomainAgentIds(),
                 context.rerouteCount() + 1,
-                context.routeMemoryQuery());
+                context.routeMemoryQuery(),
+                context.persistenceState());
     }
 
     private Mono<Void> requireCurrentOwnerRunning(RunExecutionClaim claim, String stage) {

@@ -2,9 +2,13 @@ package com.huawei.it.ex.one.application.service.memory;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.huawei.it.ex.one.application.config.AgentDataPersistenceProperties;
 import com.huawei.it.ex.one.application.config.MemoryProperties;
 import com.huawei.it.ex.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.it.ex.one.application.integration.memory.LongTermMemoryStore;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistencePolicy;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePage;
@@ -16,6 +20,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+
 class MemoryApplicationServiceTest {
     private final ChatCommand command = new ChatCommand("cmd1", "tenant1", "user1", "session1",
             null, "web", "帮我分析预算", List.of(), Map.of());
@@ -67,8 +72,56 @@ class MemoryApplicationServiceTest {
         assertThat(context.longTermMemories()).hasSize(1);
     }
 
+    @Test
+    void shortTermMemoryExcludesPlaceholderAssistant() {
+        MemoryProperties properties = new MemoryProperties();
+        properties.getShortTerm().setEnabled(true);
+        RecordingMessageRepository messages = new RecordingMessageRepository();
+        AgentDataPersistenceState state = new AgentDataPersistenceState("回答已隐藏")
+                .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
+        messages.recentMessages = List.of(
+                message("m1", "user"),
+                message("m2", "assistant", AgentDataPersistenceMetadata.mergeAssistantMetadata(null, state)),
+                message("m3", "assistant"));
+
+        var context = new MemoryApplicationService(
+                messages, new RecordingLongTermMemoryStore(), properties).loadForRun(command);
+
+        assertThat(context.recentMessages())
+                .extracting(ChatMessage::id)
+                .containsExactly("m1", "m3");
+    }
+
+    @Test
+    void longTermMemoryExcludesConfiguredPlaceholderContent() {
+        MemoryProperties properties = new MemoryProperties();
+        properties.getLongTerm().setEnabled(true);
+        AgentDataPersistenceProperties persistenceProperties = new AgentDataPersistenceProperties();
+        persistenceProperties.setPlaceholderContent("回答已隐藏");
+        RecordingLongTermMemoryStore longTermMemory = new RecordingLongTermMemoryStore();
+        longTermMemory.items = List.of(
+                new LongTermMemoryItem("mem1", "tenant1", "user1", "assistant",
+                        "回答已隐藏", 1.0, Instant.now()),
+                new LongTermMemoryItem("mem2", "tenant1", "user1", "business_fact",
+                        "预算口径按集团规则", 0.9, Instant.now()));
+
+        var context = new MemoryApplicationService(
+                new RecordingMessageRepository(), longTermMemory, properties, persistenceProperties)
+                .loadForRun(command);
+
+        assertThat(context.longTermMemories())
+                .extracting(LongTermMemoryItem::id)
+                .containsExactly("mem2");
+    }
+
     private ChatMessage message(String id, String role) {
         return new ChatMessage(id, "tenant1", "user1", "session1", role, role + " content", null, Instant.now());
+    }
+
+    private ChatMessage message(String id, String role, String metadataJson) {
+        return new ChatMessage(id, "tenant1", "user1", "session1", null, 1L, 0, 0,
+                role, role + " content", null, null, "NORMAL", false, null, null, null,
+                null, metadataJson, Instant.now());
     }
 
     private static class RecordingMessageRepository implements ChatMessageRepository {

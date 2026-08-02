@@ -665,7 +665,15 @@ POST /v1/chat/runs/{runId}/stop
 
 DomainAgent chat、绑定续接和 stop 会统一发送后端配置的标准 `Referer` 请求头。该值来自 `FINANCEEX_DOMAIN_AGENT_REFERER`，未配置或为空时回退到 `FINANCEEX_DOMAIN_AGENT_BASE_URL`；前端无需也不能通过 metadata 或 Cookie 覆盖，Referer 配置值不会进入下游 body、ChatEvent 或历史数据。
 
-集成服务鉴权请求头由后端 `AuthHeaderProviderRegistry` 统一注入，前端不需要传 Sgov token，也不要在请求体中放服务鉴权信息。当前可配置接入的 serviceCode 包括 `welink-share`、`intent-service` 和 `use-case-library`；Relay Runtime、DomainAgent 和文档存储 adapter 默认不走该集成服务鉴权层。
+集成服务鉴权请求头由后端 `AuthHeaderProviderRegistry` 统一注入，前端不需要传 Sgov token，也不要在请求体中放服务鉴权信息。当前可配置接入的 serviceCode 包括 `welink-share`、`intent-service` 和 `use-case-library`；Relay Runtime、DomainAgent、技能配置查询和文档存储 adapter 默认不走该集成服务鉴权层。技能配置查询使用独立企业 Client 防腐接口；生产部署必须完成默认Client实现并配置调用超时，前端无需提供任何配置查询参数或鉴权信息。
+
+DomainAgent 技能配置可能要求 assistant 历史使用占位投影。该策略不增加任何前端请求字段或 ChatEvent 字段：
+
+- WebSocket 和 Event Resume 仍返回完整 ChatEvent，实时渲染逻辑不变；
+- 历史消息中的 assistant `content` 返回服务端配置的占位文案；
+- 历史 `parts` 不包含真实回答、思考、工具、引用或普通卡片，只保留完成 WAIT 流程所需的控制 Parts；
+- 分享和反馈仍引用原 assistant messageId，但分享内容同样是占位投影；
+- 前端不得根据历史占位文案推断 Event Resume 已被禁用，事件恢复能力仍然存在。
 
 ## 推荐前端流程
 

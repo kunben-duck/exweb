@@ -5,6 +5,10 @@
 > 适用范围：FinanceEXChatService、直接调用的 DomainAgent Runtime、Relay Runtime、Relay 通过 A2A/MCP 调用的下游 Agent 与工具
 > 结论：ChatService 与本轮实际经过的 Runtime/Agent/Tool 必须逐层执行 `NO_STORE`，才能称为端到端零留存
 
+> 当前实现说明：本仓库第一版只实现 DomainAgent `isSaveSession=N` 对应的 assistant 占位历史。
+> ChatEvent、Event Resume、用户消息和下游存储仍保留，因此不属于本文的 `NO_STORE`。
+> 当前实现见 `docs/architecture/domain-agent-assistant-persistence.md`；本文其余内容仍是端到端增强提案。
+
 ## 1. 背景
 
 FinanceEX 的 Supervisor Agent、DomainAgent 以及 Relay 编排的下游 Agent 都可能处理资金、账务、税务、审批、金额、企业文档等敏感信息。敏感内容不只存在于最终回答中，还可能出现在用户问题、意图结果、思考过程、工具参数、工具结果、澄清问题、异常信息和附件引用中。

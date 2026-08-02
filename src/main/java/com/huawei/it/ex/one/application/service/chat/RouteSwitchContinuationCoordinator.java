@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceGate;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeExecutionContext;
@@ -24,6 +25,7 @@ import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.time.Instant;
 import java.util.HashSet;
@@ -40,6 +42,7 @@ final class RouteSwitchContinuationCoordinator {
     private final ChatEventPersistenceCoordinator eventPersistenceCoordinator;
     private final DomainAgentRefusalCoordinator refusalCoordinator;
     private final AgentRuntimeExecutor runtimeExecutor;
+    private final AgentDataPersistenceGate persistenceGate;
 
     RouteSwitchContinuationCoordinator(
             RuntimeBindingApplicationService runtimeBindingService,
@@ -49,6 +52,19 @@ final class RouteSwitchContinuationCoordinator {
             ChatEventPersistenceCoordinator eventPersistenceCoordinator,
             DomainAgentRefusalCoordinator refusalCoordinator,
             AgentRuntimeExecutor runtimeExecutor) {
+        this(runtimeBindingService, lifecycle, appliedRouteRecorder, interactionEventFactory,
+                eventPersistenceCoordinator, refusalCoordinator, runtimeExecutor, null);
+    }
+
+    RouteSwitchContinuationCoordinator(
+            RuntimeBindingApplicationService runtimeBindingService,
+            InteractionRunLifecycle lifecycle,
+            AppliedRouteRecorder appliedRouteRecorder,
+            InteractionEventFactory interactionEventFactory,
+            ChatEventPersistenceCoordinator eventPersistenceCoordinator,
+            DomainAgentRefusalCoordinator refusalCoordinator,
+            AgentRuntimeExecutor runtimeExecutor,
+            AgentDataPersistenceGate persistenceGate) {
         this.contextResolver = new RouteSwitchContextResolver(runtimeBindingService);
         this.lifecycle = lifecycle;
         this.appliedRouteRecorder = appliedRouteRecorder;
@@ -56,6 +72,7 @@ final class RouteSwitchContinuationCoordinator {
         this.eventPersistenceCoordinator = eventPersistenceCoordinator;
         this.refusalCoordinator = refusalCoordinator;
         this.runtimeExecutor = runtimeExecutor;
+        this.persistenceGate = persistenceGate;
     }
 
     Flux<ChatEvent> execute(Request request) {
@@ -106,13 +123,14 @@ final class RouteSwitchContinuationCoordinator {
                 executionClaim,
                 "after-domain-switch-execution-create");
         AtomicReference<RouteTarget> routeRef = new AtomicReference<>(route);
+        AssistantAssembly assistant = new AssistantAssembly();
         RunEventPipelineContext pipelineContext = new RunEventPipelineContext(
                 request.user(),
                 request.session(),
                 messagePlan,
                 routeRef,
                 bindingRef,
-                new AssistantAssembly(),
+                assistant,
                 request.runId(),
                 executionClaim,
                 new AtomicReference<>(),
@@ -127,7 +145,8 @@ final class RouteSwitchContinuationCoordinator {
                 responseEvent,
                 executionClaim,
                 routeRef,
-                bindingRef);
+                bindingRef,
+                assistant);
         try {
             return eventPersistenceCoordinator.executeAfterRunStarted(
                     pipelineContext, () -> executeAfterStart(context));
@@ -137,6 +156,16 @@ final class RouteSwitchContinuationCoordinator {
     }
 
     private Flux<ChatEvent> executeAfterStart(StartedSwitchContext context) {
+        Mono<?> policyResolution = !context.input().approved() || persistenceGate == null
+                ? Mono.just(context.assistant().persistenceState())
+                : persistenceGate.resolve(
+                        context.request().user(),
+                        context.route(),
+                        context.assistant().persistenceState());
+        return policyResolution.thenMany(Flux.defer(() -> executeAfterPolicy(context)));
+    }
+
+    private Flux<ChatEvent> executeAfterPolicy(StartedSwitchContext context) {
         Request request = context.request();
         RouteSwitchBindingSelection selection = contextResolver.selectBinding(
                 context.interaction(),
@@ -148,8 +177,15 @@ final class RouteSwitchContinuationCoordinator {
                         request.agentMode()));
         RuntimeBinding binding = selection.binding();
         context.bindingRef().set(binding);
-        appliedRouteRecorder.bindResolvedRoute(
-                context.request().runId(), context.route(), binding);
+        if (context.input().approved()) {
+            appliedRouteRecorder.bindResolvedRouteRequired(
+                    context.request().runId(), context.route(), binding, context.executionClaim(),
+                    context.assistant().persistenceState());
+        } else {
+            // 拒绝切换不会启动下游，保留原有 best-effort 诊断更新语义。
+            appliedRouteRecorder.bindResolvedRoute(
+                    context.request().runId(), context.route(), binding);
+        }
         Flux<ChatEvent> body = context.input().approved()
                 ? approvedBody(context, selection)
                 : declinedBody(context.request(), context.interaction());
@@ -240,7 +276,8 @@ final class RouteSwitchContinuationCoordinator {
                 List.of(),
                 new HashSet<>(),
                 0,
-                context.input().candidateRouteQuery());
+                context.input().candidateRouteQuery(),
+                context.assistant().persistenceState());
         return eventPersistenceCoordinator.requireCurrentOwnerRunning(
                         context.executionClaim(), "before-route-switch-domain-agent")
                 .thenMany(Flux.defer(() -> refusalCoordinator.execute(domainContext)));
@@ -295,7 +332,8 @@ final class RouteSwitchContinuationCoordinator {
             RuntimeEvent responseEvent,
             RunExecutionClaim executionClaim,
             AtomicReference<RouteTarget> routeRef,
-            AtomicReference<RuntimeBinding> bindingRef
+            AtomicReference<RuntimeBinding> bindingRef,
+            AssistantAssembly assistant
     ) {
     }
 

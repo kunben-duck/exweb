@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
@@ -41,6 +42,40 @@ record RoutePipelineRequest(
         String intentRouteMemoryQuery,
         Map<String, Object> runtimeMetadataOverride,
         AgentModeProfile agentMode,
-        RuntimeBindingDispatchLifecycle bindingLifecycle
+        RuntimeBindingDispatchLifecycle bindingLifecycle,
+        AgentDataPersistenceState persistenceState
 ) {
+    RoutePipelineRequest {
+        persistenceState = persistenceState == null
+                ? AgentDataPersistenceState.full()
+                : persistenceState;
+    }
+
+    RoutePipelineRequest(
+            UserContext user,
+            ChatSession session,
+            ChatCommand runCommand,
+            List<AttachmentRef> attachments,
+            List<UploadedDocument> documents,
+            MemoryContext memory,
+            String runId,
+            String runtimeBindingLeafId,
+            RuntimeForwardHeaders forwardHeaders,
+            TraceContext traceContext,
+            AtomicReference<RouteTarget> routeRef,
+            AtomicReference<RuntimeBinding> bindingRef,
+            AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
+            RunExecutionClaim executionClaim,
+            ChatRun run,
+            String routeMemoryQuery,
+            String intentQuery,
+            String intentRouteMemoryQuery,
+            Map<String, Object> runtimeMetadataOverride,
+            AgentModeProfile agentMode,
+            RuntimeBindingDispatchLifecycle bindingLifecycle) {
+        this(user, session, runCommand, attachments, documents, memory, runId, runtimeBindingLeafId,
+                forwardHeaders, traceContext, routeRef, bindingRef, runtimeSessionModeRef, executionClaim,
+                run, routeMemoryQuery, intentQuery, intentRouteMemoryQuery, runtimeMetadataOverride,
+                agentMode, bindingLifecycle, AgentDataPersistenceState.full());
+    }
 }

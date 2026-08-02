@@ -89,13 +89,14 @@ final class IntentClarificationRunCoordinator {
                 request.startAttempt(),
                 executionClaim,
                 "after-intent-interaction-execution-create");
+        AssistantAssembly assistant = new AssistantAssembly();
         RunEventPipelineContext context = new RunEventPipelineContext(
                 request.user(),
                 request.session(),
                 messagePlan,
                 routeRef,
                 bindingRef,
-                new AssistantAssembly(),
+                assistant,
                 request.runId(),
                 executionClaim,
                 new AtomicReference<>(),
@@ -130,7 +131,8 @@ final class IntentClarificationRunCoordinator {
                                     foldedRouteQuery,
                                     request.input().runtimeMetadata(),
                                     request.input().agentMode(),
-                                    new RuntimeBindingDispatchLifecycle()))));
+                                    new RuntimeBindingDispatchLifecycle(),
+                                    assistant.persistenceState()))));
         } catch (RuntimeException ex) {
             return lifecycle.failContinuation(context, ex);
         }

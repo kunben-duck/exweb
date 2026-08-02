@@ -7,6 +7,9 @@ import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.integration.memory.ChatMessagePageQuery;
 import com.huawei.it.ex.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.it.ex.one.application.integration.share.ChatShareRepository;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistencePolicy;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
@@ -448,6 +451,11 @@ public class SessionApplicationService implements ChatSessionFacade {
     public ChatMessage saveAssistantMessage(AssistantMessageSaveCommand command) {
         // 助手消息在事件流结束后保存完整文本，避免保存大量碎片 delta。
         ChatSession session = command.session();
+        AssistantPersistenceProjection projection = projectAssistantPersistence(
+                command.content(),
+                command.safePartDrafts(),
+                command.metadataJson(),
+                command.appendAnswerPart());
         String messageId = command.normalizedMessageId();
         if (messageId == null) {
             messageId = idGenerator.newId("msg", IdGenerateContext.of(command.tenantId(), command.userId(), session.id()));
@@ -455,8 +463,8 @@ public class SessionApplicationService implements ChatSessionFacade {
         ChatMessage parent = command.parentMessageId() == null ? null : requireMessageInSession(session, command.parentMessageId());
         Instant now = Instant.now();
         List<ChatMessagePart> parts = buildMessageParts(new MessagePartBuildContext(command.tenantId(),
-                command.userId(), session.id(), messageId, command.runId(), command.content(),
-                command.safePartDrafts(), now, command.appendAnswerPart()));
+                command.userId(), session.id(), messageId, command.runId(), projection.content(),
+                projection.partDrafts(), now, projection.appendAnswerPart()));
         ChatMessage message = new ChatMessage(
                 messageId,
                 command.tenantId(),
@@ -467,7 +475,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                 parent == null ? 0 : parent.treeDepth() + 1,
                 nextSiblingIndex(command.tenantId(), command.userId(), session.id(), command.parentMessageId(), "assistant"),
                 "assistant",
-                command.content(),
+                projection.content(),
                 null,
                 command.runId(),
                 "NORMAL",
@@ -476,7 +484,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                 null,
                 null,
                 command.regeneratedFromMessageId(),
-                command.metadataJson(),
+                projection.metadataJson(),
                 parts,
                 now
         );
@@ -495,11 +503,16 @@ public class SessionApplicationService implements ChatSessionFacade {
         ChatSession session = command.session();
         ChatMessage existing = requireMessageInSession(session, command.messageId());
         ensureUnlockedAssistantMessage(existing, "Interaction 续接 assistant 消息");
+        AssistantPersistenceProjection projection = projectAssistantPersistence(
+                command.content(),
+                command.safePartDrafts(),
+                command.metadataJson(),
+                command.appendAnswerPart());
         Instant now = Instant.now();
         int startOrder = existing.parts() == null ? 1 : existing.parts().size() + 1;
         List<ChatMessagePart> parts = buildMessageParts(new MessagePartBuildContext(command.tenantId(),
-                command.userId(), session.id(), existing.id(), command.runId(), command.content(),
-                command.safePartDrafts(), now, startOrder, command.appendAnswerPart()));
+                command.userId(), session.id(), existing.id(), command.runId(), projection.content(),
+                projection.partDrafts(), now, startOrder, projection.appendAnswerPart()));
         ChatMessage updated = new ChatMessage(
                 existing.id(),
                 command.tenantId(),
@@ -510,7 +523,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                 existing.treeDepth(),
                 existing.siblingIndex(),
                 "assistant",
-                command.content(),
+                projection.content(),
                 existing.tokenCount(),
                 command.runId(),
                 existing.originType(),
@@ -519,13 +532,33 @@ public class SessionApplicationService implements ChatSessionFacade {
                 existing.sourceMessageId(),
                 existing.editedFromMessageId(),
                 existing.regeneratedFromMessageId(),
-                command.metadataJson(),
+                projection.metadataJson(),
                 parts,
                 now
         );
         ChatMessage saved = messageRepository.updateAssistantMessage(updated);
         sessionRepository.updateCurrentLeaf(command.tenantId(), command.userId(), session.id(), saved.id());
         return saved;
+    }
+
+    private AssistantPersistenceProjection projectAssistantPersistence(
+            String content,
+            List<ChatMessagePartDraft> partDrafts,
+            String metadataJson,
+            boolean appendAnswerPart) {
+        if (!AgentDataPersistenceMetadata.placeholderAssistant(metadataJson)) {
+            return new AssistantPersistenceProjection(
+                    content, partDrafts, metadataJson, appendAnswerPart);
+        }
+        String placeholderContent = AgentDataPersistenceMetadata.assistantPlaceholderContent(
+                metadataJson, null);
+        AgentDataPersistenceState state = new AgentDataPersistenceState(placeholderContent)
+                .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
+        return new AssistantPersistenceProjection(
+                state.placeholderContent(),
+                AssistantAssembly.controlParts(partDrafts),
+                AgentDataPersistenceMetadata.mergeAssistantMetadata(metadataJson, state),
+                false);
     }
 
     /**
@@ -1033,5 +1066,13 @@ public class SessionApplicationService implements ChatSessionFacade {
             throw new IllegalArgumentException("单次最多删除 " + MAX_BATCH_DELETE_SIZE + " 个会话");
         }
         return List.copyOf(normalized);
+    }
+
+    private record AssistantPersistenceProjection(
+            String content,
+            List<ChatMessagePartDraft> partDrafts,
+            String metadataJson,
+            boolean appendAnswerPart
+    ) {
     }
 }

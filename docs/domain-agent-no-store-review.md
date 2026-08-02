@@ -2,14 +2,19 @@
 
 | 文档属性 | 内容 |
 |---|---|
-| 文档状态 | 简化评审稿 |
+| 文档状态 | 历史扩展评审稿 |
 | 版本 | v1.1 |
 | 日期 | 2026-07-22 |
 | 适用范围 | FinanceEXChatService |
 | 业务数据库 | openGauss |
 | 策略粒度 | Runtime Provider + DomainAgent SkillId |
-| 实施状态 | 设计方案，当前代码尚未实现 |
+| 实施状态 | 三档扩展策略未实施；当前第一版仅实现 assistant 占位历史 |
 | 关联文档 | `docs/agent-data-retention-design.md` |
+
+> 当前实现边界：`isSaveSession=N` 只启用 `ASSISTANT_PLACEHOLDER`，完整 ChatEvent 仍落库并支持
+> Event Resume，用户消息、Run、Binding 和下游存储保持原行为。该能力不是下文定义的
+> `NO_MESSAGE_HISTORY` 或 `LIVE_ONLY`。实际实现见
+> `docs/architecture/domain-agent-assistant-persistence.md`；本文其余内容保留为后续扩展评审材料。
 
 ## 1. 方案摘要
 

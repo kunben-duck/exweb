@@ -8,6 +8,7 @@ import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
 import com.huawei.it.ex.one.application.facade.FinanceChatFacade;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceGate;
 import com.huawei.it.ex.one.application.service.memory.MemoryApplicationService;
 import com.huawei.it.ex.one.application.service.memory.RouteMemoryApplicationService;
 import com.huawei.it.ex.one.application.service.routing.IntentRecognitionRecordService;
@@ -72,6 +73,8 @@ class ChatCoordinatorConfigurationTest {
                     .withBean(ChatRunOperationalProperties.class,
                             ChatRunOperationalProperties::new)
                     .withBean(DomainAgentProperties.class, DomainAgentProperties::new)
+                    .withBean(AgentDataPersistenceGate.class,
+                            () -> mock(AgentDataPersistenceGate.class))
                     .withBean(
                             "chatStreamEventScheduler",
                             Scheduler.class,

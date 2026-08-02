@@ -15,6 +15,9 @@
 DomainAgent 模式的请求语义、RuntimeBinding 记录规则和下游协议隔离边界，参见
 [AgentMode 仅记录技术设计](agent-mode-recording.md)。
 
+DomainAgent 技能配置防腐层、Redis 策略缓存及 assistant 占位历史投影，参见
+[DomainAgent Assistant 留存控制设计](domain-agent-assistant-persistence.md)。
+
 ## 架构目标
 
 FinanceEXChatService 是前端聊天入口和 SuperAgent 主控服务。正式版只保留清晰的执行边界：
@@ -22,6 +25,7 @@ FinanceEXChatService 是前端聊天入口和 SuperAgent 主控服务。正式�
 - DomainAgent 任务：用例库、意图服务或前端显式选择命中后，绑定会话级 DomainAgent，并由 DomainAgent 维护自己的下游会话上下文。
 - Relay Runtime 任务：复杂任务和未命中任务进入 Relay Runtime，并由 Relay Runtime 负责多轮、规划、上下文和压缩。
 - SuperAgent：负责身份、会话、可选记忆上下文装配、路由、事件落库和 RuntimeBinding 续接。
+- DomainAgent 留存栅栏：功能开启时在 Runtime 调用前按可信 skillId 解析策略；Relay 不查询该配置。
 
 ## 全局流程图
 

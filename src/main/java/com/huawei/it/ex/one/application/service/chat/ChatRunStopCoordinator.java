@@ -4,6 +4,7 @@ import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeCancelRequ
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
@@ -393,7 +394,9 @@ public class ChatRunStopCoordinator {
             return StopMessageTarget.notReady();
         }
         try {
-            AssistantAssembly assistant = new AssistantAssembly();
+            AgentDataPersistenceState persistenceState =
+                    AgentDataPersistenceState.fromRunMetadata(run.metadata(), null);
+            AssistantAssembly assistant = new AssistantAssembly(persistenceState);
             chatStreamService.findPersistedRunEvents(user, run).forEach(assistant::observe);
             if (!assistant.shouldPersistMessage()) {
                 return StopMessageTarget.notReady();
@@ -412,8 +415,9 @@ public class ChatRunStopCoordinator {
                     parentMessageId,
                     null,
                     assistant.parts(),
-                    partialMetadata(reason),
-                    assistantMessageId
+                    assistant.assistantMetadata(partialMetadata(reason)),
+                    assistantMessageId,
+                    assistant.appendAnswerPart()
             );
             return StopMessageTarget.ready(assistantMessageId, partialAssistant);
         } catch (Exception ex) {
@@ -463,7 +467,8 @@ public class ChatRunStopCoordinator {
                 command.content(),
                 command.runId(),
                 command.safePartDrafts(),
-                command.metadataJson()
+                command.metadataJson(),
+                command.appendAnswerPart()
         ));
     }
 

@@ -96,14 +96,15 @@ final class AmbiguousRouteContinuationCoordinator {
         RuntimeReferences runtimeReferences = new RuntimeReferences(
                 routeRef,
                 bindingRef,
-                runtimeSessionModeRef);
+                runtimeSessionModeRef,
+                new AssistantAssembly());
         RunEventPipelineContext context = new RunEventPipelineContext(
                 request.user(),
                 request.session(),
                 started.messagePlan(),
                 routeRef,
                 bindingRef,
-                new AssistantAssembly(),
+                runtimeReferences.assistant(),
                 request.runId(),
                 started.executionClaim(),
                 new AtomicReference<>(),
@@ -170,7 +171,8 @@ final class AmbiguousRouteContinuationCoordinator {
                 routeQuery,
                 request.input().runtimeMetadata(),
                 request.input().agentMode(),
-                new RuntimeBindingDispatchLifecycle());
+                new RuntimeBindingDispatchLifecycle(),
+                runtimeReferences.assistant().persistenceState());
     }
 
     record Request(
@@ -198,7 +200,8 @@ final class AmbiguousRouteContinuationCoordinator {
     private record RuntimeReferences(
             AtomicReference<RouteTarget> routeRef,
             AtomicReference<RuntimeBinding> bindingRef,
-            AtomicReference<RuntimeSessionMode> runtimeSessionModeRef
+            AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
+            AssistantAssembly assistant
     ) {
     }
 }

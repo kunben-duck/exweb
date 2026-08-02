@@ -134,6 +134,17 @@ public class FinanceExRedisKeyBuilder {
     }
 
     /**
+     * @return DomainAgent assistant 留存策略缓存 key。
+     */
+    public String agentDataPersistencePolicy(String logicalPrefix, String runtimeProvider, String skillId) {
+        return prefix(logicalPrefix)
+                + ":"
+                + normalize(runtimeProvider)
+                + ":"
+                + normalize(skillId);
+    }
+
+    /**
      * @return WebSocket run topic 对应的 Redis Pub/Sub channel。
      */
     public String chatStreamChannel(String streamTopicId) {

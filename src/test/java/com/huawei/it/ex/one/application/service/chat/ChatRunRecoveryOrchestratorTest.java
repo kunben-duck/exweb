@@ -17,7 +17,6 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatRunReposito
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
-import com.huawei.it.ex.one.application.integration.identity.ApplicationInstanceIdProvider;
 import com.huawei.it.ex.one.application.service.recovery.FailFastRecoveryStrategy;
 import com.huawei.it.ex.one.application.service.recovery.ManualConfirmationRecoveryStrategy;
 import com.huawei.it.ex.one.application.service.recovery.RuntimeTakeoverRecoveryStrategy;

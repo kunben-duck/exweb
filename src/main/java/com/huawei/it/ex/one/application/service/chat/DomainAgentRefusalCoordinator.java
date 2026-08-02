@@ -3,22 +3,20 @@ package com.huawei.it.ex.one.application.service.chat;
 import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceGate;
 import com.huawei.it.ex.one.application.service.routing.IntentRoutingFailedException;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalApplicationService;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalFrame;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalRequest;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalResult;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
-import com.huawei.it.ex.one.application.service.runtime.DomainAgentBindingCommand;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
-import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingResolution;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeExecutionContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.MessageCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
-import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RouteType;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
@@ -104,6 +102,22 @@ final class DomainAgentRefusalCoordinator {
                                   Scheduler eventIoScheduler,
                                   Scheduler controlIoScheduler,
                                   RuntimeBindingDispatchCompensator bindingCompensator) {
+        this(agentRuntimeExecutor, routeSignalService, runtimeBindingService, domainAgentProperties,
+                appliedRouteRecorder, routeResolutionCoordinator, chatRunLeaseService, eventIoScheduler,
+                controlIoScheduler, bindingCompensator, null);
+    }
+
+    DomainAgentRefusalCoordinator(AgentRuntimeExecutor agentRuntimeExecutor,
+                                  RouteSignalApplicationService routeSignalService,
+                                  RuntimeBindingApplicationService runtimeBindingService,
+                                  DomainAgentProperties domainAgentProperties,
+                                  AppliedRouteRecorder appliedRouteRecorder,
+                                  RouteResolutionCoordinator routeResolutionCoordinator,
+                                  ChatRunLeaseApplicationService chatRunLeaseService,
+                                  Scheduler eventIoScheduler,
+                                  Scheduler controlIoScheduler,
+                                  RuntimeBindingDispatchCompensator bindingCompensator,
+                                  AgentDataPersistenceGate persistenceGate) {
         this.agentRuntimeExecutor = agentRuntimeExecutor;
         this.routeSignalService = routeSignalService;
         this.runtimeBindingService = runtimeBindingService;
@@ -124,7 +138,8 @@ final class DomainAgentRefusalCoordinator {
                 eventIoScheduler,
                 controlIoScheduler,
                 domainAgentProperties,
-                bindingCompensator);
+                bindingCompensator,
+                persistenceGate);
     }
 
     Flux<ChatEvent> execute(DomainAgentRunContext context) {
@@ -372,7 +387,8 @@ final class DomainAgentRefusalCoordinator {
                 source.documents(),
                 state.rejectedDomainAgentIds(),
                 state.rerouteCount(),
-                source.routeMemoryQuery());
+                source.routeMemoryQuery(),
+                source.persistenceState());
     }
 
     private boolean invalidDomainAgentRoute(RouteTarget route) {

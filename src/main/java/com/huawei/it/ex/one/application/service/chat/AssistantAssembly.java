@@ -1,5 +1,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePartDraft;
 
@@ -18,11 +20,27 @@ import java.util.Map;
 final class AssistantAssembly {
     private final StringBuilder deltaDraft = new StringBuilder();
     private final List<ChatMessagePartDraft> parts = new ArrayList<>();
+    private final AgentDataPersistenceState persistenceState;
     private String snapshot;
     private String structuredFallbackContent;
+    private boolean persistableOutputObserved;
+
+    AssistantAssembly() {
+        this(AgentDataPersistenceState.full());
+    }
+
+    AssistantAssembly(AgentDataPersistenceState persistenceState) {
+        this.persistenceState = persistenceState == null
+                ? AgentDataPersistenceState.full()
+                : persistenceState;
+    }
 
     void observe(ChatEvent event) {
         if (event == null || event.payload() == null) {
+            return;
+        }
+        persistableOutputObserved = persistableOutputObserved || persistableOutput(event);
+        if (persistenceState.placeholderMode() && !controlEvent(event)) {
             return;
         }
         if ("message.delta".equals(event.type())) {
@@ -72,10 +90,17 @@ final class AssistantAssembly {
     }
 
     boolean shouldPersistMessage() {
-        return hasContent() || parts.stream().anyMatch(AssistantAssembly::userVisiblePart);
+        if (persistenceState.placeholderMode()) {
+            return persistableOutputObserved
+                    || persistedParts().stream().anyMatch(AssistantAssembly::userVisiblePart);
+        }
+        return hasContent() || persistedParts().stream().anyMatch(AssistantAssembly::userVisiblePart);
     }
 
     String finalContent() {
+        if (persistenceState.placeholderMode()) {
+            return persistenceState.placeholderContent();
+        }
         if (snapshot != null) {
             return snapshot;
         }
@@ -86,7 +111,35 @@ final class AssistantAssembly {
     }
 
     List<ChatMessagePartDraft> parts() {
-        return List.copyOf(parts);
+        return List.copyOf(persistedParts());
+    }
+
+    boolean appendAnswerPart() {
+        return !persistenceState.placeholderMode();
+    }
+
+    String assistantMetadata(String metadataJson) {
+        return AgentDataPersistenceMetadata.mergeAssistantMetadata(metadataJson, persistenceState);
+    }
+
+    AgentDataPersistenceState persistenceState() {
+        return persistenceState;
+    }
+
+    static List<ChatMessagePartDraft> controlParts(List<ChatMessagePartDraft> drafts) {
+        if (drafts == null || drafts.isEmpty()) {
+            return List.of();
+        }
+        return drafts.stream().filter(AssistantAssembly::controlPart).toList();
+    }
+
+    private List<ChatMessagePartDraft> persistedParts() {
+        if (!persistenceState.placeholderMode()) {
+            return parts;
+        }
+        return parts.stream()
+                .filter(AssistantAssembly::controlPart)
+                .toList();
     }
 
     private boolean hasContent() {
@@ -108,6 +161,44 @@ final class AssistantAssembly {
                  "ROUTE_SWITCH_CONFIRMATION_RESPONSE", "ROUTE_SWITCH_DECLINED" -> true;
             default -> false;
         };
+    }
+
+    private static boolean controlPart(ChatMessagePartDraft part) {
+        if (part == null || part.partType() == null) {
+            return false;
+        }
+        return switch (part.partType()) {
+            case "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE",
+                 "AGENT_CLARIFICATION_REQUEST", "AGENT_CLARIFICATION_RESPONSE",
+                 "INTENT_CLARIFICATION_REQUEST", "INTENT_CLARIFICATION_RESPONSE",
+                 "ROUTE_SWITCH_CONFIRMATION_REQUEST", "ROUTE_SWITCH_CONFIRMATION_RESPONSE",
+                 "ROUTE_SWITCH_DECLINED" -> true;
+            default -> false;
+        };
+    }
+
+    private static boolean controlEvent(ChatEvent event) {
+        if (event == null || event.type() == null || !event.type().startsWith("runtime.")) {
+            return false;
+        }
+        return controlPart(runtimePart(event));
+    }
+
+    private static boolean persistableOutput(ChatEvent event) {
+        if ("message.delta".equals(event.type())) {
+            return nonEmpty(event.payload().get("delta"));
+        }
+        if ("message.snapshot".equals(event.type())) {
+            return nonEmpty(event.payload().get("content"));
+        }
+        return event.type() != null
+                && event.type().startsWith("runtime.")
+                && !isTransientIntentProcessEvent(event.payload())
+                && userVisiblePart(runtimePart(event));
+    }
+
+    private static boolean nonEmpty(Object value) {
+        return value != null && !String.valueOf(value).isEmpty();
     }
 
     private static ChatMessagePartDraft runtimePart(ChatEvent event) {

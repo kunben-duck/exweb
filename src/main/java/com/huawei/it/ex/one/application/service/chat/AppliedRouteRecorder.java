@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
 import com.huawei.it.ex.one.application.service.memory.RouteMemoryApplicationService;
 import com.huawei.it.ex.one.application.service.routing.IntentRecognitionRecordService;
 import com.huawei.it.ex.one.application.service.routing.IntentRecognitionRecordSnapshot;
@@ -95,7 +96,15 @@ final class AppliedRouteRecorder {
      */
     void bindResolvedRouteRequired(ChatRun run, RouteTarget route, RuntimeBinding binding,
                                    RunExecutionClaim claim) {
-        if (chatRunService.bindResolvedRoute(run, route, binding, claim) == null) {
+        bindResolvedRouteRequired(run, route, binding, claim, null);
+    }
+
+    void bindResolvedRouteRequired(ChatRun run, RouteTarget route, RuntimeBinding binding,
+                                   RunExecutionClaim claim, AgentDataPersistenceState persistenceState) {
+        Map<String, Object> metadata = persistenceState == null
+                ? Map.of()
+                : persistenceState.runMetadataOverlay();
+        if (chatRunService.bindResolvedRoute(run, route, binding, claim, metadata) == null) {
             throw new IllegalStateException("ChatRun guarded resolved route update found no run: "
                     + (run == null ? null : run.id()));
         }
@@ -104,7 +113,15 @@ final class AppliedRouteRecorder {
     /** 拒答重路由按 runId 使用 execution guard 保存最终 Runtime。 */
     void bindResolvedRouteRequired(String runId, RouteTarget route, RuntimeBinding binding,
                                    RunExecutionClaim claim) {
-        if (chatRunService.bindResolvedRoute(runId, route, binding, claim) == null) {
+        bindResolvedRouteRequired(runId, route, binding, claim, null);
+    }
+
+    void bindResolvedRouteRequired(String runId, RouteTarget route, RuntimeBinding binding,
+                                   RunExecutionClaim claim, AgentDataPersistenceState persistenceState) {
+        Map<String, Object> metadata = persistenceState == null
+                ? Map.of()
+                : persistenceState.runMetadataOverlay();
+        if (chatRunService.bindResolvedRoute(runId, route, binding, claim, metadata) == null) {
             throw new IllegalStateException("ChatRun guarded resolved route update found no run: " + runId);
         }
     }

@@ -10,6 +10,7 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunCache;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.domain.auth.UserContext;
@@ -418,6 +419,31 @@ class ChatRunApplicationServiceTest {
         assertThat(created.id()).isEqualTo("run2");
         assertThat(repository.findById("run2")).contains(created);
         assertThat(cache.getActive("tenant1", "user1", "session1")).contains(created);
+    }
+
+    @Test
+    void createRunningRemovesClientSuppliedPersistencePolicy() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("businessKey", "businessValue");
+        metadata.put(AgentDataPersistenceMetadata.RUN_METADATA_KEY,
+                Map.of("policy", "ASSISTANT_PLACEHOLDER"));
+
+        ChatRun created = service(repository, cache).createRunning(new CreateChatRunContext(
+                "run2",
+                user(),
+                "session1",
+                com.huawei.it.ex.one.domain.routing.RouteTarget.agentRuntime("test", 1.0, "test"),
+                null,
+                metadata,
+                com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT,
+                null,
+                null
+        ));
+
+        assertThat(created.metadata()).containsEntry("businessKey", "businessValue")
+                .doesNotContainKey(AgentDataPersistenceMetadata.RUN_METADATA_KEY);
     }
 
     @Test

@@ -360,8 +360,9 @@ public class ChatRunTerminalCommitService {
                     context.messagePlan().userMessage().id(),
                     context.messagePlan().regeneratedFromMessageId(),
                     context.assistant().parts(),
-                    null,
-                    command.target().assistantMessageId()
+                    context.assistant().assistantMetadata(null),
+                    command.target().assistantMessageId(),
+                    context.assistant().appendAnswerPart()
             ));
         }
         return sessionService.updateAssistantMessage(new AssistantMessageUpdateCommand(
@@ -372,7 +373,8 @@ public class ChatRunTerminalCommitService {
                 context.assistant().finalContent(),
                 context.runId(),
                 context.assistant().parts(),
-                null
+                context.assistant().assistantMetadata(null),
+                context.assistant().appendAnswerPart()
         ));
     }
 
@@ -393,9 +395,10 @@ public class ChatRunTerminalCommitService {
                     context.messagePlan().userMessage().id(),
                     context.messagePlan().regeneratedFromMessageId(),
                     context.assistant().parts(),
-                    WAITING_ASSISTANT_METADATA,
+                    context.assistant().assistantMetadata(WAITING_ASSISTANT_METADATA),
                     command.target().assistantMessageId(),
-                    appendWaitingAnswer(command.waitingRequest())
+                    context.assistant().appendAnswerPart()
+                            && appendWaitingAnswer(command.waitingRequest())
             ));
         }
         String existingAssistantId = continuation.assistantMessageId();
@@ -415,8 +418,9 @@ public class ChatRunTerminalCommitService {
                 context.assistant().finalContent(),
                 context.runId(),
                 context.assistant().parts(),
-                WAITING_ASSISTANT_METADATA,
-                appendWaitingAnswer(command.waitingRequest())
+                context.assistant().assistantMetadata(WAITING_ASSISTANT_METADATA),
+                context.assistant().appendAnswerPart()
+                        && appendWaitingAnswer(command.waitingRequest())
         ));
     }
 

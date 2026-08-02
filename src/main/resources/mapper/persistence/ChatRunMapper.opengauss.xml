@@ -133,6 +133,7 @@
             agent_code = #{agentCode},
             runtime_provider = #{runtimeProvider},
             runtime_session_id = #{runtimeSessionId},
+            metadata_json = #{metadataJson},
             updated_at = #{updatedAt}
         WHERE id = #{id}
           AND tenant_id = #{tenantId}
@@ -183,6 +184,7 @@
             agent_code = #{row.agentCode},
             runtime_provider = #{row.runtimeProvider},
             runtime_session_id = #{row.runtimeSessionId},
+            metadata_json = #{row.metadataJson},
             updated_at = #{row.updatedAt}
         WHERE r.id = #{row.id}
           AND r.tenant_id = #{row.tenantId}

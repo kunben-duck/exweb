@@ -45,6 +45,9 @@ ChatService 的长短期记忆是可选 SuperAgent 增强能力，默认关闭�
 [单实例压测指导](docs/performance-testing-guide.md)。该文档包含环境准备、测试数据、负载阶梯、停止条件、
 一致性检查和容量报告模板。
 
+DomainAgent `isSaveSession` 对 assistant 历史投影的控制边界、企业技能配置防腐层和 Redis 缓存规则，参见
+[DomainAgent Assistant 留存控制设计](docs/architecture/domain-agent-assistant-persistence.md)。
+
 - `POST /v1/chat/runs`：唯一任务提交入口。普通提问创建后台 run；`runMode=CONTINUE_INTERACTION` 时提交澄清/审批/确认响应并启动续接 run；返回 `runId`、`sessionId`、`firstSeq` 和 `streamTopicId`。
 - `POST /v1/chat/sessions`：显式创建会话；可选传 `appId/appName` 作为不可变分组标识和名称快照。也可以在 `/v1/chat/runs` 中不传 `sessionId`，由后端使用相同字段自动创建会话。
 - `GET /v1/chat/sessions?appId=fund-app&limit=20&cursor=...`：游标分页查询当前用户会话列表；`appId` 可选，并返回每个会话第一条 assistant 回答 `firstAssistantAnswer`。
@@ -101,9 +104,16 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 
 外部 HTTP 服务调用还支持统一的集成服务鉴权请求头防腐层。`financeex.integration-auth.enabled=false`
 时不注入任何鉴权头；开启后，`AuthHeaderProviderRegistry` 会按 `serviceCode` 选择 provider。
-首版预置 `welink-share`、`intent-service`、`use-case-library` 可配置为 `sgov`，
-并由企业实现的 `SgovTokenResolver` 提供 `Authorization` 值。Relay Runtime、DomainAgent
+首版预置 `welink-share`、`intent-service`、`use-case-library` 可配置为 `sgov`，并由企业实现的
+`SgovTokenResolver` 提供 `Authorization` 值。Relay Runtime、DomainAgent
 和 DomainAgent 文档 provider 默认不接入该鉴权头，仍保持现有 Cookie/普通调用行为。
+
+`FINANCEEX_AGENT_DATA_PERSISTENCE_ENABLED=true` 时，DomainAgent 调用前使用可信 `skillId` 查询技能配置。
+仅明确返回 `isSaveSession=N` 时，ChatEvent 和实时输出保持完整，但 assistant 历史只保存配置化占位文案和
+必要的交互控制 Parts；`Y`、空值、`null` 或未配置均使用原有 `FULL` 行为。策略按环境和 skillId 在 Redis
+缓存 10 分钟。无有效缓存且配置查询失败时禁止调用 DomainAgent，不降级为 `FULL`。默认技能配置 Provider
+使用企业内部同步 Client，阻塞调用由有界调度器隔离。默认 Client 是必须完成的企业集成点；当前源码中的
+调用体仅用于无企业依赖时编译，生产部署前必须替换，并显式配置调用 timeout。应用不额外探测Client接入状态。
 
 租户和用户身份不从前端 Header/Query/Body 透传，统一由请求入口通过 `AuthContextProvider` 从服务端身份上下文解析一次，并以不可变 `UserContext` 传入应用层。系统内部 `user_id/owner_user_id` 写入值统一来自 `UserContext.ownerUserId()`，优先使用企业 `globalUserId`，缺省回退本地开发态 `userId`。应用层、后台 run 和 `boundedElastic` 阻塞线程不会再次读取请求 ThreadLocal。当前 `ApplicationAuthContextProvider` 直接构造完整 `UserContext`，接入企业身份源时替换该防腐层即可。
 

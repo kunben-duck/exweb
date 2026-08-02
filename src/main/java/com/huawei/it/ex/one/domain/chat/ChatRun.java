@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.domain.chat;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -130,6 +131,20 @@ public record ChatRun(
                 nextRuntimeProvider, nextRuntimeSessionId, runMode, parentMessageId, userMessageId,
                 assistantMessageId, firstSeq, lastSeq, cancelReason, startedAt, finishedAt,
                 metadata, createdAt, Instant.now());
+    }
+
+    /**
+     * 合并服务端内部 run metadata；调用方必须只传入可信字段。
+     */
+    public ChatRun withMetadata(Map<String, Object> metadataOverlay) {
+        if (metadataOverlay == null || metadataOverlay.isEmpty()) {
+            return this;
+        }
+        Map<String, Object> merged = new LinkedHashMap<>(metadata);
+        merged.putAll(metadataOverlay);
+        return new ChatRun(id, tenantId, userId, sessionId, status, routeType, agentCode, runtimeProvider,
+                runtimeSessionId, runMode, parentMessageId, userMessageId, assistantMessageId,
+                firstSeq, lastSeq, cancelReason, startedAt, finishedAt, merged, createdAt, Instant.now());
     }
 
     /**

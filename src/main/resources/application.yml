@@ -79,6 +79,15 @@ financeex:
         provider: ${FINANCEEX_INTENT_SERVICE_AUTH_PROVIDER:sgov}
       use-case-library:
         provider: ${FINANCEEX_USE_CASE_LIBRARY_AUTH_PROVIDER:sgov}
+  domain-agent-skill-config:
+    # 无默认值；启用 assistant 留存控制时必须接入企业 Client 并显式配置调用超时。
+    timeout: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_TIMEOUT:}
+  agent-data-persistence:
+    # 默认关闭，开启后仅 isSaveSession=N 的 DomainAgent 使用 assistant 占位历史。
+    enabled: ${FINANCEEX_AGENT_DATA_PERSISTENCE_ENABLED:false}
+    cache-ttl: ${FINANCEEX_AGENT_DATA_PERSISTENCE_CACHE_TTL:10m}
+    cache-key-prefix: fin_ex:agent_data_persistence
+    placeholder-content: ${FINANCEEX_AGENT_DATA_PERSISTENCE_PLACEHOLDER:根据数据留存策略，本次回答不在消息历史中展示。}
   # 可选覆盖当前进程运行实例 ID；为空时由 GeneratedApplicationInstanceIdProvider 生成。
   # 后续如需从注册中心获取实例 ID，直接提供新的 ApplicationInstanceIdProvider bean。
   instance-id: ${FINANCEEX_INSTANCE_ID:}

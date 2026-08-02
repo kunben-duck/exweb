@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceGate;
 import com.huawei.it.ex.one.application.service.routing.IntentRoutingFailedException;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalApplicationService;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalFrame;
@@ -10,7 +11,6 @@ import com.huawei.it.ex.one.application.service.runtime.RuntimeExecutionContext;
 import com.huawei.it.ex.one.application.service.runtime.SystemResponseExecutor;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
-import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.routing.RouteType;
 
@@ -30,6 +30,7 @@ final class ChatRuntimeDispatchCoordinator {
     private final SystemResponseExecutor systemResponseExecutor;
     private final AgentRuntimeExecutor agentRuntimeExecutor;
     private final RuntimeBindingDispatchCompensator bindingCompensator;
+    private final AgentDataPersistenceGate persistenceGate;
 
     ChatRuntimeDispatchCoordinator(RouteSignalApplicationService routeSignalService,
                                    ChatEventPersistenceCoordinator eventPersistenceCoordinator,
@@ -40,6 +41,21 @@ final class ChatRuntimeDispatchCoordinator {
                                    SystemResponseExecutor systemResponseExecutor,
                                    AgentRuntimeExecutor agentRuntimeExecutor,
                                    RuntimeBindingDispatchCompensator bindingCompensator) {
+        this(routeSignalService, eventPersistenceCoordinator, interactionEventFactory,
+                appliedRouteRecorder, routeResolutionCoordinator, domainAgentRefusalCoordinator,
+                systemResponseExecutor, agentRuntimeExecutor, bindingCompensator, null);
+    }
+
+    ChatRuntimeDispatchCoordinator(RouteSignalApplicationService routeSignalService,
+                                   ChatEventPersistenceCoordinator eventPersistenceCoordinator,
+                                   InteractionEventFactory interactionEventFactory,
+                                   AppliedRouteRecorder appliedRouteRecorder,
+                                   RouteResolutionCoordinator routeResolutionCoordinator,
+                                   DomainAgentRefusalCoordinator domainAgentRefusalCoordinator,
+                                   SystemResponseExecutor systemResponseExecutor,
+                                   AgentRuntimeExecutor agentRuntimeExecutor,
+                                   RuntimeBindingDispatchCompensator bindingCompensator,
+                                   AgentDataPersistenceGate persistenceGate) {
         this.routeSignalService = routeSignalService;
         this.eventPersistenceCoordinator = eventPersistenceCoordinator;
         this.interactionEventFactory = interactionEventFactory;
@@ -49,6 +65,7 @@ final class ChatRuntimeDispatchCoordinator {
         this.systemResponseExecutor = systemResponseExecutor;
         this.agentRuntimeExecutor = agentRuntimeExecutor;
         this.bindingCompensator = bindingCompensator;
+        this.persistenceGate = persistenceGate;
     }
 
     Flux<ChatEvent> execute(RoutePipelineRequest request) {
@@ -136,7 +153,7 @@ final class ChatRuntimeDispatchCoordinator {
                     request.session().id(),
                     resolution.intentClarificationPayload());
         }
-        return dispatchResolvedRuntime(request, resolution);
+        return dispatchResolvedRuntime(request, resolution, recordIntentRecognition);
     }
 
     private RouteResolutionCoordinator.RouteExecutionResolution resolveRoute(
@@ -162,24 +179,24 @@ final class ChatRuntimeDispatchCoordinator {
         request.routeRef().set(resolution.route());
         request.bindingRef().set(resolution.binding());
         request.runtimeSessionModeRef().set(resolution.runtimeSessionMode());
-        appliedRouteRecorder.bindResolvedRouteRequired(
-                request.run(), resolution.route(), resolution.binding(), request.executionClaim());
-        if (recordIntentRecognition && resolution.intent() != null) {
-            appliedRouteRecorder.recordIntent(
-                    request.user(),
-                    request.runCommand(),
-                    request.run().id(),
-                    resolution.intent(),
-                    resolution.route(),
-                    resolution.intentConfidenceThreshold() == null
-                            ? 0.0
-                            : resolution.intentConfidenceThreshold(),
-                    resolution.intentLatencyMs());
-        }
         return resolution;
     }
 
     private Flux<ChatEvent> dispatchResolvedRuntime(
+            RoutePipelineRequest request,
+            RouteResolutionCoordinator.RouteExecutionResolution resolution,
+            boolean recordIntentRecognition) {
+        Mono<?> policyResolution = persistenceGate == null
+                ? Mono.just(request.persistenceState())
+                : persistenceGate.resolve(
+                        request.user(), resolution.route(), request.persistenceState());
+        return policyResolution.thenMany(Flux.defer(() -> {
+            persistResolvedRoute(request, resolution, recordIntentRecognition);
+            return dispatchPersistedRuntime(request, resolution);
+        }));
+    }
+
+    private Flux<ChatEvent> dispatchPersistedRuntime(
             RoutePipelineRequest request,
             RouteResolutionCoordinator.RouteExecutionResolution resolution) {
         String appliedRouteQuery = resolution.intent() == null
@@ -210,6 +227,27 @@ final class ChatRuntimeDispatchCoordinator {
                         request, resolution, runtimeCommand, runtimeMemory)));
     }
 
+    private void persistResolvedRoute(
+            RoutePipelineRequest request,
+            RouteResolutionCoordinator.RouteExecutionResolution resolution,
+            boolean recordIntentRecognition) {
+        appliedRouteRecorder.bindResolvedRouteRequired(
+                request.run(), resolution.route(), resolution.binding(), request.executionClaim(),
+                request.persistenceState());
+        if (recordIntentRecognition && resolution.intent() != null) {
+            appliedRouteRecorder.recordIntent(
+                    request.user(),
+                    request.runCommand(),
+                    request.run().id(),
+                    resolution.intent(),
+                    resolution.route(),
+                    resolution.intentConfidenceThreshold() == null
+                            ? 0.0
+                            : resolution.intentConfidenceThreshold(),
+                    resolution.intentLatencyMs());
+        }
+    }
+
     private Flux<ChatEvent> executeRuntime(
             RoutePipelineRequest request,
             RouteResolutionCoordinator.RouteExecutionResolution resolution,
@@ -232,7 +270,8 @@ final class ChatRuntimeDispatchCoordinator {
                     request.documents(),
                     new HashSet<>(),
                     0,
-                    request.routeMemoryQuery()));
+                    request.routeMemoryQuery(),
+                    request.persistenceState()));
             case SYSTEM_RESPONSE -> systemResponseExecutor.execute(
                     runtimeCommand, request.runId(), resolution.intent(), resolution.route());
             case AGENT_RUNTIME -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
@@ -283,7 +322,8 @@ final class ChatRuntimeDispatchCoordinator {
                 request.documents(),
                 state.rejectedDomainAgentIds(),
                 state.rerouteCount(),
-                request.routeMemoryQuery());
+                request.routeMemoryQuery(),
+                request.persistenceState());
         return domainAgentRefusalCoordinator.continueAfterClarification(
                 new DomainAgentRefusalCoordinator.ClarifiedContinuation(
                         context,

@@ -1,13 +1,16 @@
 package com.huawei.it.ex.one.application.service.memory;
 
+import com.huawei.it.ex.one.application.config.AgentDataPersistenceProperties;
 import com.huawei.it.ex.one.application.config.MemoryProperties;
 import com.huawei.it.ex.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.it.ex.one.application.integration.memory.LongTermMemoryStore;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.memory.LongTermMemoryItem;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -24,12 +27,21 @@ public class MemoryApplicationService {
     private final ChatMessageRepository messages;
     private final LongTermMemoryStore longTermMemory;
     private final MemoryProperties properties;
+    private final AgentDataPersistenceProperties persistenceProperties;
 
+    @Autowired
     public MemoryApplicationService(ChatMessageRepository messages, LongTermMemoryStore longTermMemory,
-                                    MemoryProperties properties) {
+                                    MemoryProperties properties,
+                                    AgentDataPersistenceProperties persistenceProperties) {
         this.messages = messages;
         this.longTermMemory = longTermMemory;
         this.properties = properties;
+        this.persistenceProperties = persistenceProperties;
+    }
+
+    public MemoryApplicationService(ChatMessageRepository messages, LongTermMemoryStore longTermMemory,
+                                    MemoryProperties properties) {
+        this(messages, longTermMemory, properties, new AgentDataPersistenceProperties());
     }
 
     /**
@@ -44,12 +56,27 @@ public class MemoryApplicationService {
         }
         List<ChatMessage> recentMessages = properties.getShortTerm().isEnabled()
                 ? messages.findRecentMessages(command.tenantId(), command.userId(), command.sessionId(),
-                        properties.getShortTerm().recentMessageLimit())
+                        properties.getShortTerm().recentMessageLimit()).stream()
+                        .filter(message -> !placeholderAssistant(message))
+                        .toList()
                 : List.of();
         List<LongTermMemoryItem> longTermMemories = properties.getLongTerm().isEnabled()
                 ? longTermMemory.searchRelevant(command.tenantId(), command.userId(), command.message(),
-                        properties.getLongTerm().normalizedTopK())
+                        properties.getLongTerm().normalizedTopK()).stream()
+                        .filter(memory -> !placeholderMemory(memory))
+                        .toList()
                 : List.of();
         return new MemoryContext(recentMessages, longTermMemories);
+    }
+
+    private boolean placeholderAssistant(ChatMessage message) {
+        return message != null
+                && "assistant".equalsIgnoreCase(message.role())
+                && AgentDataPersistenceMetadata.placeholderAssistant(message.metadataJson());
+    }
+
+    private boolean placeholderMemory(LongTermMemoryItem memory) {
+        return memory != null
+                && persistenceProperties.normalizedPlaceholderContent().equals(memory.content());
     }
 }

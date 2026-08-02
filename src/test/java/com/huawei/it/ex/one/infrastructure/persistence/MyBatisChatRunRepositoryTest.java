@@ -116,7 +116,9 @@ class MyBatisChatRunRepositoryTest {
     void guardedResolvedRouteUsesExecutionClaimAndReturnsPersistedTarget() {
         ChatRunMapper mapper = mock(ChatRunMapper.class);
         ChatRun rerouted = runningRun().withResolvedRoute(
-                "AGENT_RUNTIME", null, "relay", "relay-session-1");
+                "AGENT_RUNTIME", null, "relay", "relay-session-1")
+                .withMetadata(Map.of("_agentDataPersistence", Map.of(
+                        "policy", "ASSISTANT_PLACEHOLDER")));
         RunExecutionClaim claim = new RunExecutionClaim("run1", "instance-1", 7L);
         when(mapper.lockResolvedRouteRun(any(ChatRunWriteRow.class))).thenReturn(1);
         when(mapper.lockResolvedRouteExecution(any(ChatRunWriteRow.class), eq(claim))).thenReturn(1);
@@ -141,7 +143,8 @@ class MyBatisChatRunRepositoryTest {
                 "run1".equals(row.id())
                         && "tenant1".equals(row.tenantId())
                         && "user1".equals(row.userId())
-                        && "session1".equals(row.sessionId())), eq(claim));
+                        && "session1".equals(row.sessionId())
+                        && row.metadataJson().contains("ASSISTANT_PLACEHOLDER")), eq(claim));
         order.verify(mapper).findById("run1");
         verify(mapper, never()).updateResolvedRoute(any(ChatRunWriteRow.class));
         verify(mapper, never()).updateExisting(any(ChatRunWriteRow.class));

@@ -177,8 +177,9 @@ FinanceEXChatService#executeRun(...)
 12. 先持久化并推送 `run.started`，让前端立即拿到首个事实事件。
 13. route 为空时进入 run pipeline 内的 `RouteSignalApplicationService#routeInitialWithProgress(...)`：用例库调用前输出 `runtime.progress(sourceType=route-progress,stage=use_case_matching)`；intent-agent 调用前输出 `runtime.progress(sourceType=intent-start,stage=intent_calling)`，裁决后输出 `sourceType=intent-result`，再继续执行最终路由。
 14. 如果本轮实际调用了意图服务，`IntentRecognitionRecordService#recordAsync(...)` 用当前 `UserContext`、query、`IntentDecision`、最终 `RouteTarget` 和 runId 构造不可变快照，并提交到专用 Servlet/MVC 异步线程池；写入失败不影响主链路。
-15. 根据最终 `RouteType` 调用 SystemResponse 或 `AgentRuntimeExecutor`；DomainAgent 作为 `provider=domain-agent` 的 AgentRuntime 执行。
-16. 外层补齐 `run.completed`，所有事件统一进入 `persistAndPublishRunEvents(...)`。
+15. 功能开启时，`AgentDataPersistenceGate` 在调用 DomainAgent 前按可信 skillId 查询配置并解析 assistant 留存策略；Relay 不查询。策略和最终路由在 owner/fencing 保护下写入 run metadata。
+16. 根据最终 `RouteType` 调用 SystemResponse 或 `AgentRuntimeExecutor`；DomainAgent 作为 `provider=domain-agent` 的 AgentRuntime 执行。
+17. 外层补齐 `run.completed`，所有事件统一进入 `persistAndPublishRunEvents(...)`。
 
 会话 `appId/appName` 是独立列而不是 metadata：前者用于当前 owner 会话列表分组和可选过滤，后者是创建时名称快照。tag 创建后不可变，分支继承；它不进入 run metadata、Memory、RouteMemory、IntentAgent、Relay 或 DomainAgent。游标分页把过滤条件编码进 cursor，调用方不能用一个 app 分组的 cursor 查询另一个分组。
 
@@ -187,6 +188,13 @@ FinanceEXChatService#executeRun(...)
 且未传时不更新。创建新 Binding 时不从旧 Binding、Relay 或 Interaction 恢复。该字段不进入 Runtime 请求、
 IntentAgent、RouteMemory、run metadata、事件或历史 parts。完整规则参见
 [AgentMode 仅记录技术设计](architecture/agent-mode-recording.md)。
+
+DomainAgent assistant 留存策略与 `agentMode` 无关。仅外部技能配置明确返回 `isSaveSession=N` 时，本轮使用
+占位历史：完整事件继续落库和实时推送，assistant 只保存占位正文及必要控制 Parts。每个新 run 重新解析，
+同一 run 内重路由只能收紧策略。默认配置 Provider 通过有界调度器调用企业同步 Client；当前 Client 为
+无企业依赖时的编译占位，生产部署前必须完成默认实现。应用启动时校验调用超时，但不额外探测Client接入
+状态。实现与运维边界参见
+[DomainAgent Assistant 留存控制设计](architecture/domain-agent-assistant-persistence.md)。
 
 关键分支：
 

@@ -2,6 +2,9 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistencePolicy;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 
 import org.junit.jupiter.api.Test;
@@ -118,5 +121,49 @@ class AssistantAssemblyTest {
                     .containsEntry("cardType", "specificSceneInfo")
                     .containsKey("serverTimestampMs");
         });
+    }
+
+    @Test
+    void placeholderPolicyDropsBusinessContentAndKeepsInteractionControls() {
+        AgentDataPersistenceState state = new AgentDataPersistenceState("回答已隐藏")
+                .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
+        AssistantAssembly assembly = new AssistantAssembly(state);
+
+        assembly.observe(com.huawei.it.ex.one.domain.chat.MessageDeltaEvent.of(
+                "run1", "session1", "真实回答"));
+        assembly.observe(RuntimeEvent.thinking("run1", "session1", Map.of(
+                "source", "domain-agent",
+                "sourceType", "thinking",
+                "text", "真实思考过程"
+        )));
+        assembly.observe(RuntimeEvent.card("run1", "session1", Map.of(
+                "source", "chatservice",
+                "sourceType", "intent-clarification-request",
+                "clarifyQuestion", "请选择技能"
+        )));
+
+        assertThat(assembly.shouldPersistMessage()).isTrue();
+        assertThat(assembly.finalContent()).isEqualTo("回答已隐藏");
+        assertThat(assembly.appendAnswerPart()).isFalse();
+        assertThat(assembly.parts()).singleElement()
+                .extracting(part -> part.partType())
+                .isEqualTo("INTENT_CLARIFICATION_REQUEST");
+        assertThat(AgentDataPersistenceMetadata.placeholderAssistant(
+                assembly.assistantMetadata(null))).isTrue();
+    }
+
+    @Test
+    void placeholderPolicyDoesNotCreateAssistantWithoutPersistableOutput() {
+        AgentDataPersistenceState state = new AgentDataPersistenceState("回答已隐藏")
+                .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
+        AssistantAssembly assembly = new AssistantAssembly(state);
+
+        assembly.observe(RuntimeEvent.metadata("run1", "session1", Map.of(
+                "source", "domain-agent",
+                "sourceType", "session-ready"
+        )));
+
+        assertThat(assembly.shouldPersistMessage()).isFalse();
+        assertThat(assembly.parts()).isEmpty();
     }
 }

@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
@@ -33,6 +34,34 @@ record DomainAgentRunContext(
         List<UploadedDocument> documents,
         Set<String> rejectedDomainAgentIds,
         int rerouteCount,
-        String routeMemoryQuery
+        String routeMemoryQuery,
+        AgentDataPersistenceState persistenceState
 ) {
+    DomainAgentRunContext {
+        persistenceState = persistenceState == null
+                ? AgentDataPersistenceState.full()
+                : persistenceState;
+    }
+
+    DomainAgentRunContext(
+            ChatCommand command,
+            String runId,
+            ChatSession session,
+            MemoryContext memory,
+            RouteTarget route,
+            UserContext user,
+            AtomicReference<RouteTarget> routeRef,
+            AtomicReference<RuntimeBinding> bindingRef,
+            RunExecutionClaim executionClaim,
+            RuntimeForwardHeaders forwardHeaders,
+            TraceContext traceContext,
+            IntentDecision intentDecision,
+            List<UploadedDocument> documents,
+            Set<String> rejectedDomainAgentIds,
+            int rerouteCount,
+            String routeMemoryQuery) {
+        this(command, runId, session, memory, route, user, routeRef, bindingRef, executionClaim,
+                forwardHeaders, traceContext, intentDecision, documents, rejectedDomainAgentIds,
+                rerouteCount, routeMemoryQuery, AgentDataPersistenceState.full());
+    }
 }

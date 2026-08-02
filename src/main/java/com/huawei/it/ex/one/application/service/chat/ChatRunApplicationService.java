@@ -5,6 +5,7 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunCache;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
@@ -159,7 +160,7 @@ public class ChatRunApplicationService {
                 null,
                 now,
                 null,
-                context.safeMetadata(),
+                AgentDataPersistenceMetadata.removeRunPolicy(context.safeMetadata()),
                 now,
                 now
         );
@@ -236,12 +237,20 @@ public class ChatRunApplicationService {
      */
     public ChatRun bindResolvedRoute(ChatRun run, RouteTarget route, RuntimeBinding binding,
                                      RunExecutionClaim claim) {
+        return bindResolvedRoute(run, route, binding, claim, Map.of());
+    }
+
+    /**
+     * 在 execution 写入权保护下同时固化最终路由和服务端内部 metadata。
+     */
+    public ChatRun bindResolvedRoute(ChatRun run, RouteTarget route, RuntimeBinding binding,
+                                     RunExecutionClaim claim, Map<String, Object> metadataOverlay) {
         if (run == null || run.id() == null || run.id().isBlank() || route == null || claim == null
                 || !run.id().equals(claim.runId())) {
             return null;
         }
         // 使用 admission 已持有的 run 快照，避免 guarded UPDATE 前再执行一次无超时查询。
-        return updateResolvedRouteWithExecutionGuard(run.withResolvedRoute(
+        return updateResolvedRouteWithExecutionGuard(run.withMetadata(metadataOverlay).withResolvedRoute(
                 route.type() == null ? null : route.type().name(),
                 route.selectedAgentCode(),
                 binding == null ? null : binding.provider(),
@@ -257,12 +266,22 @@ public class ChatRunApplicationService {
             "${financeex.runtime-binding.interaction-resume-transaction-timeout-seconds:2}")
     public ChatRun bindResolvedRoute(String runId, RouteTarget route, RuntimeBinding binding,
                                      RunExecutionClaim claim) {
+        return bindResolvedRoute(runId, route, binding, claim, Map.of());
+    }
+
+    /**
+     * 按 runId 在 execution 写入权保护下同时固化最终路由和服务端内部 metadata。
+     */
+    @Transactional(timeoutString =
+            "${financeex.runtime-binding.interaction-resume-transaction-timeout-seconds:2}")
+    public ChatRun bindResolvedRoute(String runId, RouteTarget route, RuntimeBinding binding,
+                                     RunExecutionClaim claim, Map<String, Object> metadataOverlay) {
         if (runId == null || runId.isBlank() || route == null || claim == null
                 || !runId.equals(claim.runId())) {
             return null;
         }
         return repository.findById(runId)
-                .map(run -> updateResolvedRouteWithExecutionGuard(run.withResolvedRoute(
+                .map(run -> updateResolvedRouteWithExecutionGuard(run.withMetadata(metadataOverlay).withResolvedRoute(
                         route.type() == null ? null : route.type().name(),
                         route.selectedAgentCode(),
                         binding == null ? null : binding.provider(),

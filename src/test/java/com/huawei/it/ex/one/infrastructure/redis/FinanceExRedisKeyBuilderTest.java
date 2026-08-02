@@ -57,6 +57,9 @@ class FinanceExRedisKeyBuilderTest {
         assertThat(redisKeys.recoverLock("run1")).isEqualTo("fin_ex:dev:chat_run:recover_lock:run1");
         assertThat(redisKeys.shortTermMemoryMessages("tenant1", "user1", "session1"))
                 .isEqualTo("fin_ex:dev:memory:short_term:messages:tenant1:user1:session1");
+        assertThat(redisKeys.agentDataPersistencePolicy(
+                "fin_ex:agent_data_persistence", "domain-agent", "skill1"))
+                .isEqualTo("fin_ex:dev:agent_data_persistence:domain-agent:skill1");
     }
 
     @Test

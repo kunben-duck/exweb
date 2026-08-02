@@ -76,6 +76,7 @@ public class IntegrationAuthProperties {
         Map<String, Service> defaults = new LinkedHashMap<>();
         defaults.put("welink-share", service("sgov"));
         defaults.put("intent-service", service("sgov"));
+        defaults.put("session-title", service("sgov"));
         defaults.put("use-case-library", service("sgov"));
         return defaults;
     }

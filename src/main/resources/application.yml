@@ -77,8 +77,20 @@ financeex:
         provider: ${FINANCEEX_WELINK_SHARE_AUTH_PROVIDER:sgov}
       intent-service:
         provider: ${FINANCEEX_INTENT_SERVICE_AUTH_PROVIDER:sgov}
+      session-title:
+        provider: ${FINANCEEX_SESSION_TITLE_AUTH_PROVIDER:sgov}
       use-case-library:
         provider: ${FINANCEEX_USE_CASE_LIBRARY_AUTH_PROVIDER:sgov}
+  session-title:
+    # 默认关闭；开启时base-url、timeout及集成鉴权必须显式配置并在启动阶段通过校验。
+    enabled: ${FINANCEEX_SESSION_TITLE_ENABLED:false}
+    base-url: ${FINANCEEX_SESSION_TITLE_BASE_URL:}
+    path: ${FINANCEEX_SESSION_TITLE_PATH:/session_title}
+    timeout: ${FINANCEEX_SESSION_TITLE_TIMEOUT:}
+    # 单实例标题服务在途请求上限；达到上限时跳过本次旁路总结，不阻塞聊天主流程。
+    max-concurrent-requests: ${FINANCEEX_SESSION_TITLE_MAX_CONCURRENT_REQUESTS:8}
+    default-language: ${FINANCEEX_SESSION_TITLE_DEFAULT_LANGUAGE:zh-CN}
+    max-title-length: ${FINANCEEX_SESSION_TITLE_MAX_LENGTH:50}
   domain-agent-skill-config:
     # 无默认值；启用 assistant 留存控制时必须接入企业 Client 并显式配置调用超时。
     timeout: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_TIMEOUT:}

@@ -73,6 +73,7 @@ public class SessionApplicationService implements ChatSessionFacade {
     private final ChatShareRepository shareRepository;
     private final ObjectProvider<ChatRunStopCoordinator> stopCoordinatorProvider;
     private final ObjectProvider<ChatInteractionApplicationService> interactionServiceProvider;
+    private final ObjectProvider<SessionTitleMetadata> sessionTitleMetadataProvider;
 
     @Autowired
     public SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
@@ -80,7 +81,8 @@ public class SessionApplicationService implements ChatSessionFacade {
                                      RuntimeBindingApplicationService runtimeBindingService,
                                      ChatShareRepository shareRepository,
                                      ObjectProvider<ChatRunStopCoordinator> stopCoordinatorProvider,
-                                     ObjectProvider<ChatInteractionApplicationService> interactionServiceProvider) {
+                                     ObjectProvider<ChatInteractionApplicationService> interactionServiceProvider,
+                                     ObjectProvider<SessionTitleMetadata> sessionTitleMetadataProvider) {
         this.sessionRepository = sessionRepository; this.messageRepository = messageRepository; this.idGenerator = idGenerator;
         this.permissionChecker = permissionChecker;
         this.chatRunService = chatRunService;
@@ -88,6 +90,18 @@ public class SessionApplicationService implements ChatSessionFacade {
         this.shareRepository = shareRepository;
         this.stopCoordinatorProvider = stopCoordinatorProvider;
         this.interactionServiceProvider = interactionServiceProvider;
+        this.sessionTitleMetadataProvider = sessionTitleMetadataProvider;
+    }
+
+    SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository,
+                              IdGenerator idGenerator, PermissionChecker permissionChecker,
+                              ChatRunApplicationService chatRunService,
+                              RuntimeBindingApplicationService runtimeBindingService,
+                              ChatShareRepository shareRepository,
+                              ObjectProvider<ChatRunStopCoordinator> stopCoordinatorProvider,
+                              ObjectProvider<ChatInteractionApplicationService> interactionServiceProvider) {
+        this(sessionRepository, messageRepository, idGenerator, permissionChecker, chatRunService,
+                runtimeBindingService, shareRepository, stopCoordinatorProvider, interactionServiceProvider, null);
     }
 
     SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
@@ -96,7 +110,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                               ChatShareRepository shareRepository,
                               ObjectProvider<ChatRunStopCoordinator> stopCoordinatorProvider) {
         this(sessionRepository, messageRepository, idGenerator, permissionChecker, chatRunService,
-                runtimeBindingService, shareRepository, stopCoordinatorProvider, null);
+                runtimeBindingService, shareRepository, stopCoordinatorProvider, null, null);
     }
 
     SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
@@ -104,19 +118,23 @@ public class SessionApplicationService implements ChatSessionFacade {
                               RuntimeBindingApplicationService runtimeBindingService,
                               ChatShareRepository shareRepository) {
         this(sessionRepository, messageRepository, idGenerator, permissionChecker, chatRunService,
-                runtimeBindingService, shareRepository, null, null);
+                runtimeBindingService, shareRepository, null, null, null);
     }
 
     SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
                               PermissionChecker permissionChecker) {
-        this(sessionRepository, messageRepository, idGenerator, permissionChecker, null, null, null);
+        this(sessionRepository, messageRepository, idGenerator, permissionChecker, null, null, null,
+                null, null, null);
     }
 
     public ChatSession loadOrCreate(ChatCommand command) {
         // 聊天主编排会先把 UserContext 回填到 ChatCommand；这里只根据已识别身份维护会话归属。
         if (command.sessionId() == null || command.sessionId().isBlank()) {
-            return createOwnedSession(command.tenantId(), command.userId(), shortTitle(command.message()),
-                    command.channel(), new SessionAppTag(command.appId(), command.appName()));
+            return createOwnedSession(command.tenantId(), command.userId(), new SessionCreationSpec(
+                    shortTitle(command.message()),
+                    command.channel(),
+                    new SessionAppTag(command.appId(), command.appName()),
+                    hasText(command.message()) ? SessionTitleSummarySource.AUTO : SessionTitleSummarySource.DEFAULT));
         }
         ChatSession session = requireOwnedSession(command.tenantId(), command.userId(), command.sessionId());
         validateAppTag(session, command.appId(), command.appName());
@@ -131,8 +149,11 @@ public class SessionApplicationService implements ChatSessionFacade {
     @Override
     public ChatSession createSession(UserContext user, String title, String channel, String appId, String appName) {
         checkChatUser(user);
-        return createOwnedSession(user.tenantId(), user.ownerUserId(), title, channel,
-                new SessionAppTag(appId, appName));
+        return createOwnedSession(user.tenantId(), user.ownerUserId(), new SessionCreationSpec(
+                title,
+                channel,
+                new SessionAppTag(appId, appName),
+                hasText(title) ? SessionTitleSummarySource.USER : SessionTitleSummarySource.DEFAULT));
     }
 
     @Override
@@ -255,7 +276,10 @@ public class SessionApplicationService implements ChatSessionFacade {
         checkChatUser(user);
         ChatSession session = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
         String safeTitle = title == null || title.isBlank() ? session.title() : title.trim();
-        return saveWith(session, safeTitle, session.status());
+        String metadataJson = title == null || title.isBlank()
+                ? session.metadataJson()
+                : markUserTitle(session.metadataJson());
+        return saveWith(session, safeTitle, session.status(), metadataJson);
     }
 
     @Override
@@ -638,7 +662,7 @@ public class SessionApplicationService implements ChatSessionFacade {
                 sourceSession.id(),
                 sourceLeaf.id(),
                 0L,
-                null,
+                initializeTitleMetadata(null, SessionTitleSummarySource.LOCKED),
                 now,
                 now
         ));
@@ -770,14 +794,25 @@ public class SessionApplicationService implements ChatSessionFacade {
         permissionChecker.checkChatPermission(user);
     }
 
-    private ChatSession createOwnedSession(String tenantId, String userId, String title, String channel,
-                                           SessionAppTag appTag) {
+    private ChatSession createOwnedSession(String tenantId, String userId, SessionCreationSpec creation) {
         Instant now = Instant.now();
         String sessionId = idGenerator.newId("session", IdGenerateContext.of(tenantId, userId));
-        String safeTitle = title == null || title.isBlank() ? "新会话" : title;
-        String safeChannel = channel == null || channel.isBlank() ? "web" : channel;
+        String safeTitle = creation.title() == null || creation.title().isBlank() ? "新会话" : creation.title();
+        String safeChannel = creation.channel() == null || creation.channel().isBlank()
+                ? "web"
+                : creation.channel();
+        String metadataJson = initializeTitleMetadata(null, creation.titleSource());
         return sessionRepository.save(new ChatSession(sessionId, tenantId, userId, safeTitle, STATUS_ACTIVE, safeChannel,
-                appTag.appId(), appTag.appName(), null, sessionId, null, null, 0L, null, now, now));
+                creation.appTag().appId(), creation.appTag().appName(), null, sessionId, null, null, 0L,
+                metadataJson, now, now));
+    }
+
+    private record SessionCreationSpec(
+            String title,
+            String channel,
+            SessionAppTag appTag,
+            SessionTitleSummarySource titleSource
+    ) {
     }
 
     private record SessionAppTag(String appId, String appName) {
@@ -814,22 +849,38 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     private ChatSession touch(ChatSession session) {
-        ChatSession touched = new ChatSession(session.id(), session.tenantId(), session.userId(), session.title(),
-                session.status(), session.channel(), session.appId(), session.appName(),
-                session.currentLeafMessageId(), session.rootSessionId(),
-                session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
-                session.latestMessageSeq(), session.lastReadSeq(), session.metadataJson(),
-                session.createdAt(), Instant.now());
-        return sessionRepository.save(touched);
+        return sessionRepository.touch(session, Instant.now());
     }
 
     private ChatSession saveWith(ChatSession session, String title, String status) {
+        return saveWith(session, title, status, session.metadataJson());
+    }
+
+    private ChatSession saveWith(ChatSession session, String title, String status, String metadataJson) {
         ChatSession updated = new ChatSession(session.id(), session.tenantId(), session.userId(), title, status,
                 session.channel(), session.appId(), session.appName(), session.currentLeafMessageId(), session.rootSessionId(),
                 session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
-                session.latestMessageSeq(), session.lastReadSeq(), session.metadataJson(),
+                session.latestMessageSeq(), session.lastReadSeq(), metadataJson,
                 session.createdAt(), Instant.now());
         return sessionRepository.save(updated);
+    }
+
+    private String initializeTitleMetadata(String metadataJson, SessionTitleSummarySource source) {
+        SessionTitleMetadata titleMetadata = sessionTitleMetadata();
+        return titleMetadata == null ? metadataJson : titleMetadata.initialize(metadataJson, source);
+    }
+
+    private String markUserTitle(String metadataJson) {
+        SessionTitleMetadata titleMetadata = sessionTitleMetadata();
+        return titleMetadata == null ? metadataJson : titleMetadata.markUser(metadataJson);
+    }
+
+    private SessionTitleMetadata sessionTitleMetadata() {
+        return sessionTitleMetadataProvider == null ? null : sessionTitleMetadataProvider.getIfAvailable();
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     /** 校验请求显式携带的 App Tag 与已有会话一致；未携带字段不参与比较。 */

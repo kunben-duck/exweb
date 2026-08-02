@@ -4,6 +4,7 @@ import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
 
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
@@ -215,6 +216,32 @@ public interface SessionRepository {
      * @return 已保存的会话。
      */
     ChatSession save(ChatSession session);
+
+    /**
+     * 仅推进会话活动时间，避免用调用方持有的旧快照覆盖标题或私有元数据。
+     */
+    default ChatSession touch(ChatSession session, Instant updatedAt) {
+        ChatSession touched = new ChatSession(
+                session.id(), session.tenantId(), session.userId(), session.title(), session.status(),
+                session.channel(), session.appId(), session.appName(), session.currentLeafMessageId(),
+                session.rootSessionId(), session.branchSourceSessionId(), session.branchSourceMessageId(),
+                session.lastNodeOrder(), session.latestMessageSeq(), session.lastReadSeq(), session.metadataJson(),
+                session.createdAt(), updatedAt);
+        return save(touched);
+    }
+
+    /**
+     * 更新自动生成的标题和私有元数据，但不改变会话列表活动时间。
+     */
+    default ChatSession updateTitleWithoutTouch(ChatSession session, String title, String metadataJson) {
+        ChatSession updated = new ChatSession(
+                session.id(), session.tenantId(), session.userId(), title, session.status(),
+                session.channel(), session.appId(), session.appName(), session.currentLeafMessageId(),
+                session.rootSessionId(), session.branchSourceSessionId(), session.branchSourceMessageId(),
+                session.lastNodeOrder(), session.latestMessageSeq(), session.lastReadSeq(), metadataJson,
+                session.createdAt(), session.updatedAt());
+        return save(updated);
+    }
 
     /**
      * 推进会话最新可见 assistant 消息水位，不改变会话列表排序时间。

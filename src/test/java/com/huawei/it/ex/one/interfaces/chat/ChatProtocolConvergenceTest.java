@@ -42,6 +42,21 @@ import java.util.concurrent.atomic.AtomicReference;
 class ChatProtocolConvergenceTest {
 
     @Test
+    void translatorKeepsSessionTitleLanguageOutsideMetadata() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1", "session1", null, "分析资金情况", "NEXT", null, null, null,
+                null, null, null, null, null, List.of(), null, null, null,
+                Map.of("scene", "fund"), null, null, null, null, " en-US ");
+
+        ChatCommand command = translator.toCommand(request);
+
+        assertThat(command.language()).isEqualTo("en-US");
+        assertThat(command.metadata()).containsExactlyEntriesOf(Map.of("scene", "fund"));
+        assertThat(command.metadata()).doesNotContainKey("language");
+    }
+
+    @Test
     void translatorCarriesMultiDimensionalAgentModeOutsideMetadata() {
         ChatRequestTranslator translator = new ChatRequestTranslator();
         CreateChatRunRequest request = new CreateChatRunRequest(

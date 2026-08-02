@@ -133,7 +133,9 @@ final class StandardRunInputPreparer {
                 command.questionnaireAnswers(),
                 command.appId(),
                 command.appName(),
-                command.agentMode());
+                command.agentMode(),
+                command.interactionAction(),
+                command.language());
     }
 
     private ChatCommand normalizedCommand(
@@ -165,7 +167,9 @@ final class StandardRunInputPreparer {
                 identified.questionnaireAnswers(),
                 identified.appId(),
                 identified.appName(),
-                identified.agentMode());
+                identified.agentMode(),
+                identified.interactionAction(),
+                identified.language());
     }
 
     private String nextMessageWithAttachments(

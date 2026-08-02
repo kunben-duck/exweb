@@ -252,7 +252,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /v1/chat/runs` | 唯一任务提交入口，创建后台 run 或续接 Interaction。 | JSON body：`commandId`、`sessionId`、`conversationId`、`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`forceReroute`、`interactionId`、`interactionAction`、`approved`、`scope`、`questionnaireAnswers`、`attachments[]`、`targetType`、`targetId`、`selectedIntent`、`agentMode`、`metadata`、`appId`、`appName`，各字段是否必填见后文矩阵。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | 不传 `sessionId` 时使用 tag 自动建会话；已有会话中显式传入的 tag 必须与会话快照一致，不一致时不会创建消息或 run。tag 不进入 metadata 或任何 Agent 请求。其他 runMode 约束不变。 |
+| `POST /v1/chat/runs` | 唯一任务提交入口，创建后台 run 或续接 Interaction。 | JSON body：`commandId`、`sessionId`、`conversationId`、`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`forceReroute`、`interactionId`、`interactionAction`、`approved`、`scope`、`questionnaireAnswers`、`attachments[]`、`targetType`、`targetId`、`selectedIntent`、`agentMode`、`metadata`、`appId`、`appName`、`language`，各字段是否必填见后文矩阵。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | 不传 `sessionId` 时使用 tag 自动建会话；已有会话中显式传入的 tag 必须与会话快照一致，不一致时不会创建消息或 run。tag 和 `language` 均不进入 metadata 或任何 Agent 请求。其他 runMode 约束不变。 |
 | `POST /v1/chat/runs/{runId}/stop` | 用户停止运行中的回答，或取消当前会话的等待输入。 | Path：运行态传 `activeRunId`；等待态传 `waitingSourceRunId`。 | `ChatRunStopDto`：原有字段，以及 `waitingUserInput`、`interactionId`、`interactionStatus`、`interactionCancelledAt`、`effectiveRunId`。 | 幂等；停止语义不是关闭 WebSocket。等待态历史 run-A 不改写为 `CANCELLED`。 |
 | `GET /v1/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`；只处理 `stream-item` 中的 `encodedItem.data`。 |
 | `GET /v1/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态，并以 `done` 闭合。live source 异常时当前 tail 会结束且不会自动轮询数据库，前端应使用已处理的最大 `sequence` 重新请求。 |
@@ -1201,6 +1201,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
     "conversationId": "session_xxx",
     "message": "帮我分析一下这个费用趋势",
     "runMode": "NEXT",
+    "language": "zh-CN",
     "parentMessageId": null,
     "editedMessageId": null,
     "regeneratedMessageId": null,
@@ -1237,6 +1238,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `metadata` | object | 否 | 扩展字段；DomainAgent 路由时会作为下游业务扩展，不能覆盖服务端保留的 `skillId/query/sessionId` |
 | `appId` | string | 否 | 会话分组键，最大 128；无 `sessionId` 时保存到新会话，已有会话中显式传入时必须与原值完全一致 |
 | `appName` | string | 否 | 会话分组展示名称快照，最大 256；不能脱离 `appId`，已有会话中显式传入时必须与原值完全一致 |
+| `language` | string | 否 | 会话标题总结语言，最大32字符；trim后为空使用服务端默认 `zh-CN`。不进入 metadata、IntentAgent、DomainAgent 或 Relay 请求，不改变本轮路由和回答 |
 
 响应：
 
@@ -1261,6 +1263,18 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `streamTopicId` | WebSocket 订阅 topic，只能由当前用户订阅 |
 
 前端不需要后端返回 WebSocket/Event Resume/stop URL，这些 URL 应由前端环境配置或网关配置管理。
+
+#### 会话标题自动总结
+
+服务端启用标题总结后，会在有效 `NEXT` 或 `EDIT_USER` 用户消息提交后异步调用标题服务。当前消息路径中的
+第1、2、3个有效业务问题会分别触发一次调用，`queries` 按路径顺序累计并保留重复值；普通意图澄清回答、
+`AMBIGUOUS_ROUTE` 选择、Relay问卷、拒答确认、重新生成和分支快照消息不参与统计。如果完整前三问总结尚未成功，
+第4个及后续有效问题会继续触发补偿，但`queries`仍只包含前三问；完整总结成功后不再触发。
+
+标题更新不阻塞 `/runs` 首事件、Intent或Runtime调用，也不会产生WebSocket/SSE事件。前端无需轮询专用接口，
+在下一次查询会话列表或详情时读取新的 `title` 即可。显式创建标题、用户手动重命名、只读分支和没有标题状态
+标记的存量会话不会被自动覆盖。每实例默认最多执行8个在途标题请求，容量不足或调用超过30秒时仅保留当前标题，
+不影响本轮聊天。`language`只传递给标题服务，不能放入`metadata`代替该字段。
 
 ### `/v1/chat/runs` 不同场景请求体示例
 

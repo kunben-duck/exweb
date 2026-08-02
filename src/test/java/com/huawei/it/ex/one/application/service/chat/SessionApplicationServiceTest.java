@@ -3,6 +3,7 @@ package com.huawei.it.ex.one.application.service.chat;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.huawei.it.ex.one.application.config.SessionTitleProperties;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
@@ -32,6 +33,8 @@ import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
 import com.huawei.it.ex.one.domain.chat.ChatShare;
 import com.huawei.it.ex.one.domain.chat.ChatSharePage;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 
@@ -47,6 +50,33 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 class SessionApplicationServiceTest {
+    @Test
+    void newAndRenamedSessionsPersistProtectedTitleSourcesWhenFeatureIsEnabled() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        SessionTitleProperties properties = new SessionTitleProperties();
+        properties.setEnabled(true);
+        SessionTitleMetadata metadata = new SessionTitleMetadata(new ObjectMapper(), properties);
+        SessionApplicationService service = new SessionApplicationService(
+                sessions, messages, new IncrementingIdGenerator(), new PermissionChecker(),
+                null, null, null, null, null, singletonProvider(metadata));
+
+        ChatSession defaultTitle = service.createSession(user(), null, "web");
+        ChatSession explicitTitle = service.createSession(user(), "人工标题", "web");
+        ChatSession automaticTitle = service.loadOrCreate(new ChatCommand(
+                "command", "tenant1", "user1", null, null, "web", "第一问", List.of(), Map.of()));
+        ChatSession renamed = service.renameSession(user(), defaultTitle.id(), "修改后的标题");
+
+        assertThat(metadata.read(defaultTitle.metadataJson()).orElseThrow().source())
+                .isEqualTo(SessionTitleSummarySource.DEFAULT);
+        assertThat(metadata.read(explicitTitle.metadataJson()).orElseThrow().source())
+                .isEqualTo(SessionTitleSummarySource.USER);
+        assertThat(metadata.read(automaticTitle.metadataJson()).orElseThrow().source())
+                .isEqualTo(SessionTitleSummarySource.AUTO);
+        assertThat(metadata.read(renamed.metadataJson()).orElseThrow().source())
+                .isEqualTo(SessionTitleSummarySource.USER);
+    }
+
     @Test
     void appTagIsNormalizedCreatedAndValidatedForExistingSession() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
@@ -780,6 +810,35 @@ class SessionApplicationServiceTest {
             @Override
             public ChatRunStopCoordinator getObject() {
                 return coordinator;
+            }
+        };
+    }
+
+    private ObjectProvider<SessionTitleMetadata> singletonProvider(SessionTitleMetadata metadata) {
+        return new ObjectProvider<>() {
+            @Override
+            public SessionTitleMetadata getObject(Object... args) {
+                return metadata;
+            }
+
+            @Override
+            public SessionTitleMetadata getIfAvailable() {
+                return metadata;
+            }
+
+            @Override
+            public SessionTitleMetadata getIfUnique() {
+                return metadata;
+            }
+
+            @Override
+            public SessionTitleMetadata getObject() {
+                return metadata;
+            }
+
+            @Override
+            public java.util.Iterator<SessionTitleMetadata> iterator() {
+                return List.of(metadata).iterator();
             }
         };
     }

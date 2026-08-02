@@ -238,6 +238,10 @@ class MyBatisSessionRepositoryTest {
                 String tenantId, String userId, String sessionId, long lastNodeOrder, Instant updatedAt) { return 1; }
         @Override public int updateCurrentLeaf(
                 String tenantId, String userId, String sessionId, String leafMessageId, Instant updatedAt) { return 1; }
+        @Override public int touch(
+                String tenantId, String userId, String sessionId, Instant updatedAt) { return 1; }
+        @Override public int updateTitleWithoutTouch(
+                String tenantId, String userId, String sessionId, String title, String metadataJson) { return 1; }
         @Override public int advanceLatestMessageSeq(
                 String tenantId, String userId, String sessionId, long messageSeq) {
             ownerRow.setLatestMessageSeq(Math.max(ownerRow.getLatestMessageSeq(), messageSeq));

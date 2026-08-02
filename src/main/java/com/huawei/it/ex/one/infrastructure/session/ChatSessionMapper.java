@@ -163,6 +163,36 @@ public interface ChatSessionMapper {
                           @Param("updatedAt") Instant updatedAt);
 
     /**
+     * 仅更新会话活动时间。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param updatedAt 新的活动时间。
+     * @return 影响行数。
+     */
+    int touch(@Param("tenantId") String tenantId,
+              @Param("userId") String userId,
+              @Param("sessionId") String sessionId,
+              @Param("updatedAt") Instant updatedAt);
+
+    /**
+     * 更新标题及标题总结状态，不推进会话活动时间。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param title 自动生成的标题。
+     * @param metadataJson 包含标题总结版本的会话元数据。
+     * @return 影响行数。
+     */
+    int updateTitleWithoutTouch(@Param("tenantId") String tenantId,
+                                @Param("userId") String userId,
+                                @Param("sessionId") String sessionId,
+                                @Param("title") String title,
+                                @Param("metadataJson") String metadataJson);
+
+    /**
      * 推进最新可见消息水位，不修改会话 updated_at。
      *
      * @param tenantId 租户标识。

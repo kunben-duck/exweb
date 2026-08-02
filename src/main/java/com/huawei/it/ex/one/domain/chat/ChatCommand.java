@@ -37,6 +37,7 @@ import java.util.Map;
  * @param appName 会话所属应用名称快照，只用于会话创建和一致性校验。
  * @param agentMode 可选 Agent 模式完整快照；null 表示本轮未提交，空 selections 表示显式清除。
  * @param interactionAction Interaction 专用动作；当前仅 AMBIGUOUS_ROUTE 支持 AUTO_SELECT。
+ * @param language 会话标题总结语言；不进入metadata、IntentAgent或Runtime请求。
  */
 public record ChatCommand(
         String commandId,
@@ -62,8 +63,23 @@ public record ChatCommand(
         String appId,
         String appName,
         AgentModeProfile agentMode,
-        String interactionAction
+        String interactionAction,
+        String language
 ) {
+    /** 兼容尚未携带标题总结语言的完整命令构造器。 */
+    public ChatCommand(
+            String commandId, String tenantId, String userId, String sessionId, String conversationId,
+            String channel, String message, List<AttachmentRef> attachments, Map<String, Object> metadata,
+            String targetType, String targetId, ChatRunMode runMode, String parentMessageId,
+            String editedMessageId, String regeneratedMessageId, String routeTrigger, String interactionId,
+            Boolean approved, String scope, Map<String, Object> questionnaireAnswers, String appId, String appName,
+            AgentModeProfile agentMode, String interactionAction) {
+        this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
+                targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
+                routeTrigger, interactionId, approved, scope, questionnaireAnswers, appId, appName, agentMode,
+                interactionAction, null);
+    }
+
     /** 兼容尚未携带 Interaction 动作的完整命令构造器。 */
     public ChatCommand(
             String commandId, String tenantId, String userId, String sessionId, String conversationId,
@@ -74,7 +90,8 @@ public record ChatCommand(
             AgentModeProfile agentMode) {
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
-                routeTrigger, interactionId, approved, scope, questionnaireAnswers, appId, appName, agentMode, null);
+                routeTrigger, interactionId, approved, scope, questionnaireAnswers, appId, appName, agentMode,
+                null, null);
     }
 
     /** 兼容尚未携带 Agent 模式的完整命令构造器。 */
@@ -86,7 +103,7 @@ public record ChatCommand(
             Boolean approved, String scope, Map<String, Object> questionnaireAnswers, String appId, String appName) {
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
-                routeTrigger, interactionId, approved, scope, questionnaireAnswers, appId, appName, null, null);
+                routeTrigger, interactionId, approved, scope, questionnaireAnswers, appId, appName, null, null, null);
     }
 
     /** 兼容尚未携带 App Tag 的完整命令构造器。 */
@@ -98,7 +115,7 @@ public record ChatCommand(
             Boolean approved, String scope, Map<String, Object> questionnaireAnswers) {
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
-                routeTrigger, interactionId, approved, scope, questionnaireAnswers, null, null, null, null);
+                routeTrigger, interactionId, approved, scope, questionnaireAnswers, null, null, null, null, null);
     }
 
     /**
@@ -108,7 +125,7 @@ public record ChatCommand(
                        String channel, String message, List<AttachmentRef> attachments, Map<String, Object> metadata) {
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 null, null,
-                ChatRunMode.NEXT, null, null, null, null, null, null, null, null, null, null, null, null);
+                ChatRunMode.NEXT, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -119,7 +136,7 @@ public record ChatCommand(
                        ChatRunMode runMode, String parentMessageId, String editedMessageId, String regeneratedMessageId) {
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 null, null, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
-                null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -131,7 +148,7 @@ public record ChatCommand(
                        String editedMessageId, String regeneratedMessageId) {
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
-                null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -143,7 +160,7 @@ public record ChatCommand(
                        String editedMessageId, String regeneratedMessageId, String routeTrigger) {
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
-                routeTrigger, null, null, null, null, null, null, null, null);
+                routeTrigger, null, null, null, null, null, null, null, null, null);
     }
 
     public ChatCommand {
@@ -157,6 +174,10 @@ public record ChatCommand(
         interactionAction = interactionAction == null || interactionAction.isBlank()
                 ? null
                 : interactionAction.trim();
+        language = language == null || language.isBlank() ? null : language.trim();
+        if (language != null && language.length() > 32) {
+            throw new IllegalArgumentException("language 长度不能超过 32");
+        }
         scope = scope == null || scope.isBlank() ? null : scope.trim();
         questionnaireAnswers = questionnaireAnswers == null ? Map.of() : Map.copyOf(questionnaireAnswers);
         appId = normalizeTag(appId);

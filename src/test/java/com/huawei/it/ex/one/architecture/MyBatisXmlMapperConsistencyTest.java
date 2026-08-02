@@ -327,6 +327,23 @@ class MyBatisXmlMapperConsistencyTest {
     }
 
     @Test
+    void sessionTitleUpdatesShouldNotOverwriteSnapshotsOrChangeActivityOrder() throws IOException {
+        String mapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("session/ChatSessionMapper.opengauss.xml"));
+        String touch = statement(mapper, "update", "touch");
+        String titleUpdate = statement(mapper, "update", "updateTitleWithoutTouch");
+
+        assertThat(touch)
+                .contains("SET updated_at = #{updatedAt}")
+                .doesNotContain("title =", "metadata_json =");
+        assertThat(titleUpdate)
+                .contains("SET title = #{title}")
+                .contains("metadata_json = #{metadataJson}")
+                .contains("AND status = 'ACTIVE'")
+                .doesNotContain("updated_at");
+    }
+
+    @Test
     void runtimeBindingResumableCleanupShouldBeScopedAndIdempotent() throws IOException {
         String cleanup = Files.readString(
                 DATABASE_SCRIPT_ROOT.resolve("incremental-20260802-runtime-binding-resumable-cleanup.sql"));
@@ -817,6 +834,16 @@ class MyBatisXmlMapperConsistencyTest {
             }
         }
         return names;
+    }
+
+    private String statement(String mapper, String element, String id) {
+        String opening = "<" + element + " id=\"" + id + "\"";
+        String closing = "</" + element + ">";
+        int start = mapper.indexOf(opening);
+        int end = mapper.indexOf(closing, start);
+        assertThat(start).isGreaterThanOrEqualTo(0);
+        assertThat(end).isGreaterThan(start);
+        return mapper.substring(start, end);
     }
 
     private List<String> splitParameters(String arguments) {

@@ -11,6 +11,7 @@ import com.huawei.it.ex.one.application.service.runtime.SystemResponseExecutor;
 
 import reactor.core.scheduler.Scheduler;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -213,12 +214,14 @@ class ChatRuntimeCoordinatorConfiguration {
             ChatRunApplicationService chatRunService,
             ChatRunStartCoordinator runStartCoordinator,
             RuntimeBindingCacheSynchronizer cacheSynchronizer,
-            ChatRunAdmissionCoordinator admissionCoordinator) {
+            ChatRunAdmissionCoordinator admissionCoordinator,
+            ObjectProvider<SessionTitleApplicationService> sessionTitleServiceProvider) {
         return new StandardRunAdmissionCoordinator(
                 chatRunService,
                 runStartCoordinator,
                 cacheSynchronizer,
-                admissionCoordinator);
+                admissionCoordinator,
+                sessionTitleServiceProvider.getIfAvailable());
     }
 
     @Bean

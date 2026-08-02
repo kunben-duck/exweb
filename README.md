@@ -97,6 +97,8 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 
 会话 App Tag 仅用于产品分组和可选列表过滤，不替代 `tenantId + userId` 归属校验。`appId/appName` 均可省略；`appName` 不能脱离 `appId` 单独传入，空字符串按未传处理。已有会话中显式传入的 tag 必须与创建快照完全一致，分支会话继承源 tag，重命名、归档和恢复不会修改它。`/sessions/apps` 排除已删除和未分类会话，相同 `appId` 只返回一次，展示名称取最近的非空 `appName` 快照。tag 不进入 run metadata、RouteMemory、IntentAgent、Relay 或 DomainAgent 请求。
 
+启用 `financeex.session-title.enabled=true` 后，服务端会在有效 `NEXT/EDIT_USER` 用户消息提交后异步使用当前路径前三个业务问题总结会话标题。前三问完整总结尚未成功时，第四轮及后续有效问题会继续触发补偿调用，但请求内容仍固定为前三问；成功提交后不再因普通后续轮次调用。标题调用不阻塞首事件、Intent或Runtime，不产生实时事件；前端在后续会话列表或详情查询中读取结果。请求可选字段 `language` 最大32字符，空白时使用 `financeex.session-title.default-language`，且不进入 metadata 或 Agent 请求。自动结果只覆盖服务端默认或自动标题，显式标题、手动重命名、只读分支及没有私有状态标记的存量会话均受保护。开启功能时必须显式配置 `base-url`、正数且不超过30秒的 `timeout` 和有效的 `session-title` 鉴权 provider；默认路径为 `/session_title`，默认最大标题长度为50个Unicode码点。每实例默认最多保留8个在途标题请求，可通过 `max-concurrent-requests` 在1到64之间调整；容量已满时仅跳过本次标题总结，不阻塞或中止聊天主流程。
+
 会话列表和详情通过 `hasUnread/latestMessageSeq/lastReadSeq` 返回未读状态。只有成功保存 assistant 的 `run.completed` 和产生用户交互内容的 `run.waiting_user` 会推进最新消息水位；失败、取消和没有 assistant 的完成态不会产生未读。前端应在对应历史消息或实时终态实际展示后调用 `/read`，并提交当时观察到的 sequence；服务端会单调推进且截断超前值，避免旧页签清除后来到达的新消息。
 
 仓库提供独立本地联调台 `local-test-frontend/`。联调台通过 Node 代理访问后端，支持在页面中按 Postman 风格配置 `Cookie`、`Authorization`、`X-*` 等企业鉴权请求头；代理会在 HTTP、fetch Event Resume、文件下载和 WebSocket 握手时统一注入这些请求头。浏览器自身不会、也不能直接手写 `Cookie` 请求头或 WebSocket 自定义请求头。
@@ -106,7 +108,7 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 
 外部 HTTP 服务调用还支持统一的集成服务鉴权请求头防腐层。`financeex.integration-auth.enabled=false`
 时不注入任何鉴权头；开启后，`AuthHeaderProviderRegistry` 会按 `serviceCode` 选择 provider。
-首版预置 `welink-share`、`intent-service`、`use-case-library` 可配置为 `sgov`，并由企业实现的
+首版预置 `welink-share`、`intent-service`、`session-title`、`use-case-library` 可配置为 `sgov`，并由企业实现的
 `SgovTokenResolver` 提供 `Authorization` 值。Relay Runtime、DomainAgent
 和 DomainAgent 文档 provider 默认不接入该鉴权头，仍保持现有 Cookie/普通调用行为。
 

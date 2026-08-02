@@ -164,7 +164,9 @@ final class StandardRunRuntimeCoordinator {
                 normalized.questionnaireAnswers(),
                 normalized.appId(),
                 normalized.appName(),
-                normalized.agentMode());
+                normalized.agentMode(),
+                normalized.interactionAction(),
+                normalized.language());
     }
 
     private String runtimeBindingLeafId(ChatRunMessagePlan messagePlan) {

@@ -130,6 +130,7 @@ paths:
                   sessionId: session_001
                   runMode: NEXT
                   message: 帮我分析本季度利润变化
+                  language: zh-CN
                   metadata: {}
               nextAttachmentOnly:
                 summary: 普通 NEXT 附件-only；历史 user content 保存为空
@@ -1845,6 +1846,14 @@ components:
           maxLength: 32
           nullable: true
           enum: [AUTO_SELECT]
+        language:
+          type: string
+          maxLength: 32
+          nullable: true
+          default: zh-CN
+          description: |
+            会话标题总结语言。服务端 trim 后为空时使用配置的默认语言；该字段不进入 metadata、
+            IntentAgent、DomainAgent 或 Relay 请求，也不影响本轮路由和回答。
       x-interaction-rules:
         ordinaryIntentClarification: questionnaireAnswers 或有效 attachments；不得提交 message。
         ambiguousCandidate: targetType=DOMAIN_AGENT 且 targetId 必须精确匹配服务端候选 skillId。

@@ -9,16 +9,27 @@ final class StandardRunAdmissionCoordinator {
     private final ChatRunStartCoordinator runStartCoordinator;
     private final RuntimeBindingCacheSynchronizer cacheSynchronizer;
     private final ChatRunAdmissionCoordinator admissionCoordinator;
+    private final SessionTitleApplicationService sessionTitleService;
+
+    StandardRunAdmissionCoordinator(
+            ChatRunApplicationService chatRunService,
+            ChatRunStartCoordinator runStartCoordinator,
+            RuntimeBindingCacheSynchronizer cacheSynchronizer,
+            ChatRunAdmissionCoordinator admissionCoordinator,
+            SessionTitleApplicationService sessionTitleService) {
+        this.chatRunService = chatRunService;
+        this.runStartCoordinator = runStartCoordinator;
+        this.cacheSynchronizer = cacheSynchronizer;
+        this.admissionCoordinator = admissionCoordinator;
+        this.sessionTitleService = sessionTitleService;
+    }
 
     StandardRunAdmissionCoordinator(
             ChatRunApplicationService chatRunService,
             ChatRunStartCoordinator runStartCoordinator,
             RuntimeBindingCacheSynchronizer cacheSynchronizer,
             ChatRunAdmissionCoordinator admissionCoordinator) {
-        this.chatRunService = chatRunService;
-        this.runStartCoordinator = runStartCoordinator;
-        this.cacheSynchronizer = cacheSynchronizer;
-        this.admissionCoordinator = admissionCoordinator;
+        this(chatRunService, runStartCoordinator, cacheSynchronizer, admissionCoordinator, null);
     }
 
     Admission admit(StandardRunInputPreparer.PreparedRun prepared) {
@@ -39,6 +50,10 @@ final class StandardRunAdmissionCoordinator {
         chatRunService.synchronizeCommittedRunCache(run);
         runStartCoordinator.ensureActive(
                 prepared.startAttempt(), "after-run-cache-sync");
+        if (sessionTitleService != null) {
+            sessionTitleService.schedule(
+                    prepared.user(), prepared.command(), prepared.session(), messagePlan, run);
+        }
         return new Admission(messagePlan, run);
     }
 

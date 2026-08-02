@@ -241,6 +241,34 @@
     </update>
 
     <!--
+      仅推进会话活动时间，避免并发run使用旧会话快照覆盖标题或私有元数据。
+      入参: tenantId/userId/sessionId定位会话；updatedAt为新的活动时间。
+    -->
+    <update id="touch">
+        UPDATE fin_ex_chat_session_t
+        SET updated_at = #{updatedAt}
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{sessionId}
+          AND status = 'ACTIVE'
+    </update>
+
+    <!--
+      写入自动总结标题及其私有状态，不更新updated_at，避免后台结果改变会话列表活动排序。
+      调用方在短事务内先锁定会话行，并且只允许ACTIVE会话执行该更新。
+      入参: tenantId/userId/sessionId定位会话；title/metadataJson为自动总结标题及其版本状态。
+    -->
+    <update id="updateTitleWithoutTouch">
+        UPDATE fin_ex_chat_session_t
+        SET title = #{title},
+            metadata_json = #{metadataJson}
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{sessionId}
+          AND status = 'ACTIVE'
+    </update>
+
+    <!--
       推进最新可见 assistant 消息水位；使用 GREATEST 保证并发终态只能单调前进，且不更新 updated_at。
       入参: tenantId/userId/sessionId 定位所属会话；messageSeq 为已保存 assistant 对应的终态事件 sequence。
     -->

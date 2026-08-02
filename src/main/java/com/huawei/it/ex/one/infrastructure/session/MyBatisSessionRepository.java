@@ -151,6 +151,25 @@ public class MyBatisSessionRepository implements SessionRepository {
     }
 
     @Override
+    public ChatSession touch(ChatSession session, Instant updatedAt) {
+        int updated = mapper.touch(session.tenantId(), session.userId(), session.id(), updatedAt);
+        if (updated != 1) {
+            throw new IllegalArgumentException("会话不存在或不属于当前用户: " + session.id());
+        }
+        return copySession(session, session.title(), session.metadataJson(), updatedAt);
+    }
+
+    @Override
+    public ChatSession updateTitleWithoutTouch(ChatSession session, String title, String metadataJson) {
+        int updated = mapper.updateTitleWithoutTouch(
+                session.tenantId(), session.userId(), session.id(), title, metadataJson);
+        if (updated != 1) {
+            throw new IllegalStateException("会话标题更新条件不再满足: " + session.id());
+        }
+        return copySession(session, title, metadataJson, session.updatedAt());
+    }
+
+    @Override
     @Transactional(propagation = Propagation.MANDATORY)
     public void lockForMessageMutation(String tenantId, String userId, String sessionId) {
         Long current = mapper.lockNodeOrder(tenantId, userId, sessionId);
@@ -232,6 +251,15 @@ public class MyBatisSessionRepository implements SessionRepository {
         row.setCreatedAt(session.createdAt());
         row.setUpdatedAt(session.updatedAt());
         return row;
+    }
+
+    private ChatSession copySession(
+            ChatSession session, String title, String metadataJson, Instant updatedAt) {
+        return new ChatSession(
+                session.id(), session.tenantId(), session.userId(), title, session.status(), session.channel(),
+                session.appId(), session.appName(), session.currentLeafMessageId(), session.rootSessionId(),
+                session.branchSourceSessionId(), session.branchSourceMessageId(), session.lastNodeOrder(),
+                session.latestMessageSeq(), session.lastReadSeq(), metadataJson, session.createdAt(), updatedAt);
     }
 
     private String encodeCursor(ChatSession session, String appId, String title) {

@@ -258,7 +258,6 @@
           AND provider = #{provider}
           AND status = 'RESUMABLE'
           AND runtime_session_id IS NOT NULL
-          AND runtime_session_id &lt;&gt; ''
         ORDER BY updated_at DESC
     </select>
 </mapper>

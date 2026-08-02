@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -270,6 +271,53 @@ class RuntimeBindingApplicationServiceTest {
         assertThat(resolution.binding().expiresAt()).isNull();
         assertThat(resolution.binding().lastRunId()).isEqualTo("run2");
         assertThat(resolution.binding().leafMessageId()).isEqualTo("leaf2");
+    }
+
+    @Test
+    void resolveForRunIgnoresResumableRelayBindingWithoutUsableSessionId() {
+        for (String runtimeSessionId : new String[] {null, "", "   "}) {
+            InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+            InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+            Instant now = Instant.now();
+            repository.saved = new RuntimeBinding("invalid-binding", "t", "u", "s", "relay",
+                    "leaf1", runtimeSessionId, RuntimeBindingStatus.RESUMABLE, "run1",
+                    null, now, now, Map.of("runtimeSessionEstablished", true));
+            RuntimeBindingApplicationService service = service(repository, cache);
+
+            RuntimeBindingResolution resolution = service.resolveForRun("t", "u", "s", "run2", "leaf2");
+
+            assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.NEW);
+            assertThat(resolution.previousBinding()).isNull();
+            assertThat(resolution.binding().id()).isEqualTo("runtime_binding_1");
+        }
+    }
+
+    @Test
+    void resolveForRunKeepsNewestResumableRelayBindingAndCancelsDuplicates() {
+        Instant now = Instant.now();
+        RuntimeBinding older = new RuntimeBinding("binding-old", "t", "u", "s", "relay",
+                "leaf-old", "runtime-old", RuntimeBindingStatus.RESUMABLE, "run-old",
+                null, now.minusSeconds(10), now.minusSeconds(10), Map.of("runtimeSessionEstablished", true));
+        RuntimeBinding newer = new RuntimeBinding("binding-new", "t", "u", "s", "relay",
+                "leaf-new", "runtime-new", RuntimeBindingStatus.RESUMABLE, "run-new",
+                null, now, now, Map.of("runtimeSessionEstablished", true));
+        MultiBindingRepository repository = new MultiBindingRepository(List.of(older, newer));
+        RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(
+                repository, new InMemoryRuntimeBindingCache(), new FixedIdGenerator(), Duration.ofDays(3), "relay");
+
+        RuntimeBindingResolution resolution = service.resolveForRun("t", "u", "s", "run2", "leaf2");
+
+        assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
+        assertThat(resolution.binding().id()).isEqualTo("binding-new");
+        assertThat(resolution.binding().runtimeSessionId()).isEqualTo("runtime-new");
+        assertThat(repository.findById("binding-new"))
+                .get()
+                .extracting(RuntimeBinding::status)
+                .isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(repository.findById("binding-old"))
+                .get()
+                .extracting(RuntimeBinding::status)
+                .isEqualTo(RuntimeBindingStatus.CANCELLED);
     }
 
     @Test
@@ -710,6 +758,42 @@ class RuntimeBindingApplicationServiceTest {
                     ? RuntimeBindingRepository.super.resumeInteractionWithExecutionGuard(
                             binding, expectedLastRunId, claim)
                     : Optional.empty();
+        }
+    }
+
+    private static class MultiBindingRepository implements RuntimeBindingRepository {
+        private final Map<String, RuntimeBinding> bindings = new LinkedHashMap<>();
+
+        private MultiBindingRepository(List<RuntimeBinding> initialBindings) {
+            initialBindings.forEach(binding -> bindings.put(binding.id(), binding));
+        }
+
+        @Override
+        public Optional<RuntimeBinding> findById(String bindingId) {
+            return Optional.ofNullable(bindings.get(bindingId));
+        }
+
+        @Override
+        public Optional<RuntimeBinding> findActive(String tenantId, String userId, String sessionId, String provider) {
+            return bindings.values().stream()
+                    .filter(binding -> provider.equals(binding.provider()))
+                    .filter(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
+                    .findFirst();
+        }
+
+        @Override
+        public List<RuntimeBinding> findResumableBySession(String tenantId, String userId, String sessionId,
+                                                           String provider) {
+            return bindings.values().stream()
+                    .filter(binding -> provider.equals(binding.provider()))
+                    .filter(binding -> binding.status() == RuntimeBindingStatus.RESUMABLE)
+                    .toList();
+        }
+
+        @Override
+        public RuntimeBinding save(RuntimeBinding binding) {
+            bindings.put(binding.id(), binding);
+            return binding;
         }
     }
 

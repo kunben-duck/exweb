@@ -23,6 +23,7 @@ import java.util.regex.Pattern;
 class MyBatisXmlMapperConsistencyTest {
     private static final Path MAIN_SOURCE_ROOT = Path.of("src/main/java");
     private static final Path MAPPER_XML_ROOT = Path.of("src/main/resources/mapper");
+    private static final Path DATABASE_SCRIPT_ROOT = Path.of("src/main/resources/db");
     private static final String ACTIVE_DIALECT_MAPPER_SUFFIX = ".opengauss.xml";
     private static final Pattern NAMESPACE = Pattern.compile("<mapper\\s+namespace=\"([^\"]+)\"");
     private static final Pattern STATEMENT_ID = Pattern.compile("<(?:select|insert|update|delete)\\s+id=\"([^\"]+)\"");
@@ -46,6 +47,8 @@ class MyBatisXmlMapperConsistencyTest {
                     + "[A-Za-z_][A-Za-z0-9_]*\\b|\\?|\\d+)");
     private static final Pattern XML_COMMENT = Pattern.compile("(?s)<!--.*?-->");
     private static final Pattern XML_TAG = Pattern.compile("(?s)<[^>]+>");
+    private static final Pattern SQL_BLOCK_COMMENT = Pattern.compile("(?s)/\\*.*?\\*/");
+    private static final Pattern SQL_LINE_COMMENT = Pattern.compile("(?m)--.*$");
     private static final Pattern SQL_STRING_LITERAL = Pattern.compile("'(?:''|[^'])*'");
     private static final Pattern MYBATIS_PARAMETER = Pattern.compile("[#\\$]\\{[^}]+}");
     private static final Pattern MESSAGE_PART_TYPE_COLUMN = Pattern.compile(
@@ -154,6 +157,26 @@ class MyBatisXmlMapperConsistencyTest {
     }
 
     @Test
+    void openGaussSqlShouldNotUseEmptyStringLiterals() throws IOException {
+        List<String> violations = new ArrayList<>();
+        try (var files = Files.walk(MAPPER_XML_ROOT)) {
+            files.filter(path -> path.toString().endsWith(ACTIVE_DIALECT_MAPPER_SUFFIX))
+                    .flatMap(path -> findEmptyStringLiteralViolations(path).stream())
+                    .forEach(violations::add);
+        }
+        try (var files = Files.walk(DATABASE_SCRIPT_ROOT)) {
+            files.filter(path -> path.toString().endsWith(".sql"))
+                    .flatMap(path -> findEmptyStringLiteralViolationsInScript(path).stream())
+                    .forEach(violations::add);
+        }
+
+        assertThat(violations)
+                .as("openGauss SQL must use NULL semantics instead of empty string literals:%n%s",
+                        String.join(System.lineSeparator(), violations))
+                .isEmpty();
+    }
+
+    @Test
     void mapperXmlStatementsShouldHaveBusinessComments() throws IOException {
         List<String> violations;
         try (var files = Files.walk(MAPPER_XML_ROOT)) {
@@ -227,6 +250,36 @@ class MyBatisXmlMapperConsistencyTest {
                 .contains("AND session_id = #{sessionId}")
                 .contains("AND status = 'RUNNING'")
                 .doesNotContain("COALESCE");
+    }
+
+    @Test
+    void runtimeBindingResumableLookupShouldUseOpenGaussNullSemantics() throws IOException {
+        String mapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("runtime/RuntimeBindingMapper.opengauss.xml"));
+        int start = mapper.indexOf("<select id=\"findResumableBySession\"");
+        int end = mapper.indexOf("</select>", start);
+
+        assertThat(start).isGreaterThanOrEqualTo(0);
+        assertThat(end).isGreaterThan(start);
+        assertThat(mapper.substring(start, end))
+                .contains("runtime_session_id IS NOT NULL")
+                .doesNotContain("runtime_session_id &lt;&gt; ''");
+    }
+
+    @Test
+    void runtimeBindingResumableCleanupShouldBeScopedAndIdempotent() throws IOException {
+        String cleanup = Files.readString(
+                DATABASE_SCRIPT_ROOT.resolve("incremental-20260802-runtime-binding-resumable-cleanup.sql"));
+
+        assertThat(cleanup)
+                .contains("PARTITION BY tenant_id, user_id, chat_session_id, provider")
+                .contains("ORDER BY updated_at DESC, created_at DESC, id DESC")
+                .contains("runtime_session_id IS NOT NULL")
+                .contains("runtime_session_id IS NULL")
+                .contains("SET status = 'CANCELLED'")
+                .contains("AND provider = 'relay'")
+                .contains("AND status = 'RESUMABLE'")
+                .doesNotContain("DELETE FROM fin_ex_runtime_binding_t");
     }
 
     @Test
@@ -552,6 +605,45 @@ class MyBatisXmlMapperConsistencyTest {
         } catch (IOException ex) {
             throw new IllegalStateException("Failed to inspect MyBatis predicate expressions: " + path, ex);
         }
+    }
+
+    private List<String> findEmptyStringLiteralViolations(Path path) {
+        try {
+            String xml = XML_COMMENT.matcher(Files.readString(path)).replaceAll(" ");
+            List<String> violations = new ArrayList<>();
+            Matcher statementMatcher = STATEMENT_BLOCK.matcher(xml);
+            while (statementMatcher.find()) {
+                String sql = XML_TAG.matcher(statementMatcher.group(3)).replaceAll(" ");
+                if (containsEmptyStringLiteral(sql)) {
+                    violations.add(MAPPER_XML_ROOT.relativize(path) + "#" + statementMatcher.group(2));
+                }
+            }
+            return List.copyOf(violations);
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to inspect MyBatis string literals: " + path, ex);
+        }
+    }
+
+    private List<String> findEmptyStringLiteralViolationsInScript(Path path) {
+        try {
+            String sql = SQL_BLOCK_COMMENT.matcher(Files.readString(path)).replaceAll(" ");
+            sql = SQL_LINE_COMMENT.matcher(sql).replaceAll(" ");
+            return containsEmptyStringLiteral(sql)
+                    ? List.of(DATABASE_SCRIPT_ROOT.relativize(path).toString())
+                    : List.of();
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to inspect database script string literals: " + path, ex);
+        }
+    }
+
+    private boolean containsEmptyStringLiteral(String sql) {
+        Matcher matcher = SQL_STRING_LITERAL.matcher(sql);
+        while (matcher.find()) {
+            if ("''".equals(matcher.group())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private List<String> findStatementsWithoutBusinessComment(Path xmlFile) {

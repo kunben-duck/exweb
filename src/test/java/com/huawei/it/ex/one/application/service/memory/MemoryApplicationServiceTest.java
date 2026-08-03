@@ -12,6 +12,7 @@ import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPe
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePage;
+import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
 import com.huawei.it.ex.one.domain.memory.LongTermMemoryItem;
 
 import org.junit.jupiter.api.Test;
@@ -41,7 +42,8 @@ class MemoryApplicationServiceTest {
     void shortTermMemoryUsesConfiguredRecentTurnsAsMessageLimit() {
         MemoryProperties properties = new MemoryProperties();
         properties.getShortTerm().setEnabled(true);
-        properties.getShortTerm().setRecentTurns(3);
+        properties.getShortTerm().getAgentRuntime().setRecentTurns(3);
+        properties.getShortTerm().getIntent().setRecentTurns(3);
         RecordingMessageRepository messages = new RecordingMessageRepository();
         messages.recentMessages = List.of(message("m1", "user"), message("m2", "assistant"));
 
@@ -52,6 +54,87 @@ class MemoryApplicationServiceTest {
         assertThat(messages.lastLimit).isEqualTo(6);
         assertThat(context.recentMessages()).hasSize(2);
         assertThat(context.longTermMemories()).isEmpty();
+    }
+
+    @Test
+    void shortTermMemoryUsesDefaultFiveTurnWindow() {
+        MemoryProperties properties = new MemoryProperties();
+        properties.getShortTerm().setEnabled(true);
+        RecordingMessageRepository messages = new RecordingMessageRepository();
+
+        new MemoryApplicationService(messages, new RecordingLongTermMemoryStore(), properties).loadForRun(command);
+
+        assertThat(messages.lastLimit).isEqualTo(10);
+    }
+
+    @Test
+    void shortTermMemoryNormalizesNonPositiveTurnsToOneTurn() {
+        for (int recentTurns : List.of(0, -3)) {
+            MemoryProperties properties = new MemoryProperties();
+            properties.getShortTerm().setEnabled(true);
+            properties.getShortTerm().getAgentRuntime().setRecentTurns(recentTurns);
+            properties.getShortTerm().getIntent().setRecentTurns(recentTurns);
+            RecordingMessageRepository messages = new RecordingMessageRepository();
+
+            new MemoryApplicationService(messages, new RecordingLongTermMemoryStore(), properties)
+                    .loadForRun(command);
+
+            assertThat(messages.lastLimit).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void independentLargestWindowLoadsActivePathAndExcludesCurrentInteractionMessage() {
+        MemoryProperties properties = new MemoryProperties();
+        properties.getShortTerm().setEnabled(true);
+        properties.getShortTerm().getAgentRuntime().setRecentTurns(2);
+        properties.getShortTerm().getIntent().setRecentTurns(7);
+        RecordingMessageRepository messages = new RecordingMessageRepository();
+        messages.recentMessages = List.of(
+                message("m1", "user"),
+                message("m2", "assistant"),
+                message("m-current", "user"));
+        ShortTermMemoryContextAssembler assembler = new ShortTermMemoryContextAssembler(
+                properties,
+                values -> values.stream().mapToInt(value -> value.content().length()).sum());
+
+        var context = new MemoryApplicationService(
+                messages,
+                new RecordingLongTermMemoryStore(),
+                properties,
+                new AgentDataPersistenceProperties(),
+                assembler).loadForRun(command, "leaf-message", "m-current");
+
+        assertThat(messages.lastLimit).isEqualTo(14);
+        assertThat(messages.lastLeafMessageId).isEqualTo("leaf-message");
+        assertThat(context.shortTermEnabled()).isTrue();
+        assertThat(context.agentRuntimeMessages()).containsExactly(
+                new ConversationMemoryMessage("user", "user content"),
+                new ConversationMemoryMessage("assistant", "assistant content"));
+        assertThat(context.recentMessages()).extracting(ChatMessage::id)
+                .containsExactly("m1", "m2");
+    }
+
+    @Test
+    void explicitlyEmptyBranchPathSkipsShortTermReadButKeepsMemoryEnabled() {
+        MemoryProperties properties = new MemoryProperties();
+        properties.getShortTerm().setEnabled(true);
+        RecordingMessageRepository messages = new RecordingMessageRepository();
+        ShortTermMemoryContextAssembler assembler = new ShortTermMemoryContextAssembler(
+                properties,
+                values -> values.stream().mapToInt(value -> value.content().length()).sum());
+
+        var context = new MemoryApplicationService(
+                messages,
+                new RecordingLongTermMemoryStore(),
+                properties,
+                new AgentDataPersistenceProperties(),
+                assembler).loadForRun(command, null, null, true);
+
+        assertThat(messages.findRecentCalls).isZero();
+        assertThat(context.shortTermEnabled()).isTrue();
+        assertThat(context.recentMessages()).isEmpty();
+        assertThat(context.agentRuntimeMessages()).isEmpty();
     }
 
     @Test
@@ -127,6 +210,7 @@ class MemoryApplicationServiceTest {
     private static class RecordingMessageRepository implements ChatMessageRepository {
         private int findRecentCalls;
         private int lastLimit;
+        private String lastLeafMessageId;
         private List<ChatMessage> recentMessages = List.of();
 
         @Override
@@ -138,6 +222,15 @@ class MemoryApplicationServiceTest {
         public List<ChatMessage> findRecentMessages(String tenantId, String userId, String sessionId, int limit) {
             findRecentCalls++;
             lastLimit = limit;
+            return recentMessages;
+        }
+
+        @Override
+        public List<ChatMessage> findRecentMessages(
+                String tenantId, String userId, String sessionId, String leafMessageId, int limit) {
+            findRecentCalls++;
+            lastLimit = limit;
+            lastLeafMessageId = leafMessageId;
             return recentMessages;
         }
 

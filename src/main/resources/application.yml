@@ -292,16 +292,23 @@ financeex:
   memory:
     short-term:
       enabled: ${FINANCEEX_MEMORY_SHORT_TERM_ENABLED:false}
-      recent-turns: ${FINANCEEX_MEMORY_SHORT_TERM_RECENT_TURNS:5}
       cache-enabled: ${FINANCEEX_MEMORY_SHORT_TERM_CACHE_ENABLED:true}
+      # Redis 仅作为热缓存；每轮按最多 user+assistant 两条消息计算。
+      cache-recent-turns: ${FINANCEEX_MEMORY_SHORT_TERM_CACHE_RECENT_TURNS:5}
       # 逻辑前缀；实际 key 为 fin_ex:{env}:memory:short_term:...
       redis-key-prefix: fin_ex:memory:short_term
       ttl: 3d
-      max-cached-messages: 200
       failure-backoff: 30s
+      agent-runtime:
+        recent-turns: ${FINANCEEX_MEMORY_SHORT_TERM_AGENT_RUNTIME_RECENT_TURNS:5}
+        max-context-tokens: ${FINANCEEX_MEMORY_SHORT_TERM_AGENT_RUNTIME_MAX_CONTEXT_TOKENS:4096}
+      intent:
+        recent-turns: ${FINANCEEX_MEMORY_SHORT_TERM_INTENT_RECENT_TURNS:5}
+        max-context-tokens: ${FINANCEEX_MEMORY_SHORT_TERM_INTENT_MAX_CONTEXT_TOKENS:4096}
       storage:
         database-required: ${FINANCEEX_SHORT_TERM_DB_REQUIRED:true}
         database-failure-backoff: 30s
+        database-query-timeout-seconds: ${FINANCEEX_MEMORY_SHORT_TERM_DATABASE_QUERY_TIMEOUT_SECONDS:2}
     long-term:
       enabled: ${FINANCEEX_MEMORY_LONG_TERM_ENABLED:false}
       provider: ${FINANCEEX_MEMORY_LONG_TERM_PROVIDER:disabled}

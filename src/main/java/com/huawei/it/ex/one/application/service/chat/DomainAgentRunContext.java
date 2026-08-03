@@ -14,6 +14,7 @@ import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -35,12 +36,39 @@ record DomainAgentRunContext(
         Set<String> rejectedDomainAgentIds,
         int rerouteCount,
         String routeMemoryQuery,
-        AgentDataPersistenceState persistenceState
+        AgentDataPersistenceState persistenceState,
+        AtomicReference<Map<String, Object>> pendingInteractionPayloadRef
 ) {
     DomainAgentRunContext {
         persistenceState = persistenceState == null
                 ? AgentDataPersistenceState.full()
                 : persistenceState;
+        pendingInteractionPayloadRef = pendingInteractionPayloadRef == null
+                ? new AtomicReference<>()
+                : pendingInteractionPayloadRef;
+    }
+
+    DomainAgentRunContext(
+            ChatCommand command,
+            String runId,
+            ChatSession session,
+            MemoryContext memory,
+            RouteTarget route,
+            UserContext user,
+            AtomicReference<RouteTarget> routeRef,
+            AtomicReference<RuntimeBinding> bindingRef,
+            RunExecutionClaim executionClaim,
+            RuntimeForwardHeaders forwardHeaders,
+            TraceContext traceContext,
+            IntentDecision intentDecision,
+            List<UploadedDocument> documents,
+            Set<String> rejectedDomainAgentIds,
+            int rerouteCount,
+            String routeMemoryQuery,
+            AgentDataPersistenceState persistenceState) {
+        this(command, runId, session, memory, route, user, routeRef, bindingRef, executionClaim,
+                forwardHeaders, traceContext, intentDecision, documents, rejectedDomainAgentIds,
+                rerouteCount, routeMemoryQuery, persistenceState, new AtomicReference<>());
     }
 
     DomainAgentRunContext(
@@ -62,6 +90,6 @@ record DomainAgentRunContext(
             String routeMemoryQuery) {
         this(command, runId, session, memory, route, user, routeRef, bindingRef, executionClaim,
                 forwardHeaders, traceContext, intentDecision, documents, rejectedDomainAgentIds,
-                rerouteCount, routeMemoryQuery, AgentDataPersistenceState.full());
+                rerouteCount, routeMemoryQuery, AgentDataPersistenceState.full(), new AtomicReference<>());
     }
 }

@@ -20,4 +20,16 @@ final class RunMemoryContextAssembler {
     MemoryContext assemble(ChatCommand command) {
         return memoryService.loadForRun(command);
     }
+
+    MemoryContext assemble(ChatCommand command, String currentLeafMessageId) {
+        return memoryService.loadForRun(command, currentLeafMessageId);
+    }
+
+    MemoryContext assemble(ChatCommand command, String currentLeafMessageId, boolean emptyShortTermPath) {
+        return memoryService.loadForRun(command, currentLeafMessageId, null, emptyShortTermPath);
+    }
+
+    MemoryContext assemble(ChatCommand command, String currentLeafMessageId, String excludedMessageId) {
+        return memoryService.loadForRun(command, currentLeafMessageId, excludedMessageId);
+    }
 }

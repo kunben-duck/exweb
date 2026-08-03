@@ -1,12 +1,15 @@
 package com.huawei.it.ex.one.infrastructure.memory;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.application.config.ChatStreamProperties;
+import com.huawei.it.ex.one.application.config.MemoryProperties;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePart;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -73,6 +76,70 @@ class LayeredChatMessageRepositoryTest {
                 .containsExactly("DOMAIN_AGENT_REFUSAL", "ANSWER");
     }
 
+    @Test
+    void redisMissLoadsAndWarmsTheSameRequestedWindowFromDatabase() {
+        FakeRedisCache cache = new FakeRedisCache();
+        FakeDatabaseStore database = new FakeDatabaseStore();
+        database.recentMessages = List.of(message(), message());
+        LayeredChatMessageRepository repository = repository(cache, database);
+
+        List<ChatMessage> messages = repository.findRecentMessages(
+                "tenant1", "user1", "session1", "leaf-message", 6);
+
+        assertThat(messages).hasSize(2);
+        assertThat(cache.findRecentLimit).isEqualTo(6);
+        assertThat(cache.findRecentLeaf).isEqualTo("leaf-message");
+        assertThat(database.findRecentLimit).isEqualTo(6);
+        assertThat(database.findRecentLeaf).isEqualTo("leaf-message");
+        assertThat(cache.replacedMessages).containsExactlyElementsOf(database.recentMessages);
+    }
+
+    @Test
+    void databaseReadFailureReturnsEmptyAndBacksOffEvenWhenDatabaseIsRequired() {
+        FakeRedisCache cache = new FakeRedisCache();
+        FakeDatabaseStore database = new FakeDatabaseStore();
+        database.findRecentFailure = new IllegalStateException("database unavailable");
+        LayeredChatMessageRepository repository = repository(cache, database);
+
+        assertThat(repository.findRecentMessages("tenant1", "user1", "session1", "leaf-message", 6))
+                .isEmpty();
+        database.findRecentFailure = null;
+        database.recentMessages = List.of(message());
+
+        assertThat(repository.findRecentMessages("tenant1", "user1", "session1", "leaf-message", 6))
+                .isEmpty();
+        assertThat(database.findRecentCalls).hasValue(1);
+        assertThat(cache.replaceCalls).hasValue(0);
+    }
+
+    @Test
+    void redisHitRemainsAvailableDuringDatabaseReadBackoff() {
+        FakeRedisCache cache = new FakeRedisCache();
+        FakeDatabaseStore database = new FakeDatabaseStore();
+        database.findRecentFailure = new QueryTimeoutException("query timed out");
+        LayeredChatMessageRepository repository = repository(cache, database);
+
+        assertThat(repository.findRecentMessages("tenant1", "user1", "session1", "leaf-message", 6))
+                .isEmpty();
+        cache.recentMessages = List.of(message());
+
+        assertThat(repository.findRecentMessages("tenant1", "user1", "session1", "leaf-message", 6))
+                .containsExactlyElementsOf(cache.recentMessages);
+        assertThat(database.findRecentCalls).hasValue(1);
+    }
+
+    @Test
+    void databaseRequiredStillRejectsMessageWriteFailure() {
+        FakeRedisCache cache = new FakeRedisCache();
+        FakeDatabaseStore database = new FakeDatabaseStore();
+        database.saveFailure = new IllegalStateException("write failed");
+        LayeredChatMessageRepository repository = repository(cache, database);
+
+        assertThatThrownBy(() -> repository.save(message()))
+                .isSameAs(database.saveFailure);
+        assertThat(cache.appendCalls).hasValue(0);
+    }
+
     private LayeredChatMessageRepository repository(FakeRedisCache cache, FakeDatabaseStore database) {
         ShortTermMemoryStorageProperties properties = new ShortTermMemoryStorageProperties();
         properties.setDatabaseRequired(true);
@@ -102,9 +169,14 @@ class LayeredChatMessageRepositoryTest {
     private static final class FakeRedisCache extends RedisShortTermMemoryCache {
         private final AtomicInteger appendCalls = new AtomicInteger();
         private ChatMessage appended;
+        private int findRecentLimit;
+        private String findRecentLeaf;
+        private final AtomicInteger replaceCalls = new AtomicInteger();
+        private List<ChatMessage> recentMessages = List.of();
+        private List<ChatMessage> replacedMessages = List.of();
 
         private FakeRedisCache() {
-            super(null, null, new ShortTermMemoryRedisProperties(), null);
+            super(null, null, new ShortTermMemoryRedisProperties(), new MemoryProperties(), null);
         }
 
         @Override
@@ -115,13 +187,42 @@ class LayeredChatMessageRepositoryTest {
         }
 
         @Override
+        public List<ChatMessage> findRecentMessages(String tenantId, String userId, String sessionId, int limit) {
+            findRecentLimit = limit;
+            return recentMessages;
+        }
+
+        @Override
+        public List<ChatMessage> findRecentMessages(
+                String tenantId, String userId, String sessionId, String leafMessageId, int limit) {
+            findRecentLeaf = leafMessageId;
+            return findRecentMessages(tenantId, userId, sessionId, limit);
+        }
+
+        @Override
+        public void replaceSessionMessages(
+                String tenantId,
+                String userId,
+                String sessionId,
+                List<ChatMessage> messages) {
+            replaceCalls.incrementAndGet();
+            replacedMessages = List.copyOf(messages);
+        }
+
+        @Override
         public void remove(ChatMessage message) {
         }
     }
 
     private static final class FakeDatabaseStore extends MyBatisChatMessageStore {
         private final AtomicInteger saveCalls = new AtomicInteger();
+        private final AtomicInteger findRecentCalls = new AtomicInteger();
         private ChatMessage saved;
+        private RuntimeException saveFailure;
+        private RuntimeException findRecentFailure;
+        private int findRecentLimit;
+        private String findRecentLeaf;
+        private List<ChatMessage> recentMessages = List.of();
 
         private FakeDatabaseStore() {
             super(null, null, new ChatStreamProperties());
@@ -130,6 +231,9 @@ class LayeredChatMessageRepositoryTest {
         @Override
         public ChatMessage save(ChatMessage message) {
             saveCalls.incrementAndGet();
+            if (saveFailure != null) {
+                throw saveFailure;
+            }
             saved = message;
             return message;
         }
@@ -143,6 +247,23 @@ class LayeredChatMessageRepositoryTest {
         @Override
         public Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId) {
             return Optional.ofNullable(saved);
+        }
+
+        @Override
+        public List<ChatMessage> findRecentMessages(String tenantId, String userId, String sessionId, int limit) {
+            findRecentCalls.incrementAndGet();
+            findRecentLimit = limit;
+            if (findRecentFailure != null) {
+                throw findRecentFailure;
+            }
+            return recentMessages;
+        }
+
+        @Override
+        public List<ChatMessage> findRecentMessages(
+                String tenantId, String userId, String sessionId, String leafMessageId, int limit) {
+            findRecentLeaf = leafMessageId;
+            return findRecentMessages(tenantId, userId, sessionId, limit);
         }
     }
 }

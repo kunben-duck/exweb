@@ -402,6 +402,50 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     /**
+     * 解析本轮新消息写入前应读取的短期记忆路径终点。
+     *
+     * <p>编辑和重新生成会从历史节点创建新分支，不能继续使用会话当前旧分支的 leaf。</p>
+     */
+    ShortTermMemoryPath resolveShortTermMemoryPath(ChatCommand command, ChatSession session) {
+        if (command == null || session == null) {
+            throw new IllegalArgumentException("短期记忆路径缺少命令或会话上下文");
+        }
+        ChatRunMode mode = command.runMode() == null ? ChatRunMode.NEXT : command.runMode();
+        return switch (mode) {
+            case NEXT -> {
+                String requestedParent = blankToNull(command.parentMessageId());
+                if (requestedParent == null) {
+                    yield ShortTermMemoryPath.fromLeaf(session.currentLeafMessageId());
+                }
+                yield ShortTermMemoryPath.fromLeaf(requireMessageInSession(session, requestedParent).id());
+            }
+            case EDIT_USER -> {
+                ChatMessage edited = requireMessageInSession(session, command.editedMessageId());
+                ensureUnlockedUserMessage(edited, "被编辑消息");
+                yield ShortTermMemoryPath.fromLeaf(edited.parentMessageId());
+            }
+            case REGENERATE_ASSISTANT -> {
+                ChatMessage regenerated = requireMessageInSession(session, command.regeneratedMessageId());
+                ensureUnlockedAssistantMessage(regenerated, "被重新生成消息");
+                ChatMessage userMessage = requireMessageInSession(session, regenerated.parentMessageId());
+                if (!"user".equals(userMessage.role())) {
+                    throw new IllegalArgumentException("assistant 消息父节点不是 user 消息，不能重新生成");
+                }
+                yield ShortTermMemoryPath.fromLeaf(userMessage.parentMessageId());
+            }
+            case CONTINUE_INTERACTION -> ShortTermMemoryPath.fromLeaf(session.currentLeafMessageId());
+        };
+    }
+
+    record ShortTermMemoryPath(String leafMessageId, boolean emptyPath) {
+        private static ShortTermMemoryPath fromLeaf(String leafMessageId) {
+            return leafMessageId == null || leafMessageId.isBlank()
+                    ? new ShortTermMemoryPath(null, true)
+                    : new ShortTermMemoryPath(leafMessageId, false);
+        }
+    }
+
+    /**
      * 将已受理的意图澄清答案保存为普通 user 消息节点。
      *
      * <p>调用方必须把本方法与 continuation run 插入、旧 Interaction ANSWERED 更新放在同一事务中。</p>

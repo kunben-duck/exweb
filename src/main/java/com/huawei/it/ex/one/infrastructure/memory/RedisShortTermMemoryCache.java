@@ -1,5 +1,7 @@
 package com.huawei.it.ex.one.infrastructure.memory;
 
+import com.huawei.it.ex.one.application.config.MemoryProperties;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.logging.AppLogger;
@@ -17,8 +19,8 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Redis 短期记忆缓存。
@@ -33,15 +35,18 @@ public class RedisShortTermMemoryCache {
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
     private final ShortTermMemoryRedisProperties properties;
+    private final MemoryProperties memoryProperties;
     private final FinanceExRedisKeyBuilder redisKeys;
     private volatile Instant retryAfter = Instant.MIN;
 
     public RedisShortTermMemoryCache(StringRedisTemplate redis, ObjectMapper objectMapper,
                                      ShortTermMemoryRedisProperties properties,
+                                     MemoryProperties memoryProperties,
                                      FinanceExRedisKeyBuilder redisKeys) {
         this.redis = redis;
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.memoryProperties = memoryProperties;
         this.redisKeys = redisKeys;
     }
 
@@ -51,8 +56,8 @@ public class RedisShortTermMemoryCache {
         }
         try {
             String key = redisKeys.shortTermMemoryMessages(message.tenantId(), message.userId(), message.sessionId());
-            redis.opsForList().rightPush(key, serialize(message));
-            redis.opsForList().trim(key, -maxCachedMessages(), -1);
+            redis.opsForList().rightPush(key, serialize(toEntry(message)));
+            redis.opsForList().trim(key, -cacheMessageLimit(), -1);
             redis.expire(key, properties.getTtl());
             return true;
         } catch (RuntimeException ex) {
@@ -62,7 +67,12 @@ public class RedisShortTermMemoryCache {
     }
 
     public List<ChatMessage> findRecentMessages(String tenantId, String userId, String sessionId, int limit) {
-        if (!canUseRedis() || sessionId == null || limit <= 0) {
+        return findRecentMessages(tenantId, userId, sessionId, null, limit);
+    }
+
+    public List<ChatMessage> findRecentMessages(
+            String tenantId, String userId, String sessionId, String expectedLeafMessageId, int limit) {
+        if (!canUseRedis() || sessionId == null || limit <= 0 || limit > cacheMessageLimit()) {
             return List.of();
         }
         try {
@@ -71,16 +81,20 @@ public class RedisShortTermMemoryCache {
             if (values == null || values.isEmpty()) {
                 return List.of();
             }
-            List<ChatMessage> messages = new ArrayList<>(values.size());
+            List<MemoryCacheEntry> entries = new ArrayList<>(values.size());
             for (String value : values) {
-                ChatMessage message = deserialize(value);
-                if (message != null) {
-                    messages.add(message);
+                MemoryCacheEntry entry = deserialize(value);
+                if (entry == null) {
+                    return List.of();
                 }
+                entries.add(entry);
             }
-            // Redis 列表保存最近消息窗口；返回给 MemoryContext 时使用阅读顺序，避免下游上下文倒序。
-            messages.sort(Comparator.comparing(ChatMessage::createdAt));
-            return messages;
+            if (!validPath(entries, expectedLeafMessageId, limit)) {
+                return List.of();
+            }
+            return entries.stream()
+                    .map(entry -> toMessage(tenantId, userId, sessionId, entry))
+                    .toList();
         } catch (RuntimeException ex) {
             markRedisFailure(ex);
             return List.of();
@@ -88,16 +102,15 @@ public class RedisShortTermMemoryCache {
     }
 
     public void replaceSessionMessages(String tenantId, String userId, String sessionId, List<ChatMessage> messages) {
-        if (!canUseRedis() || sessionId == null || messages == null || messages.isEmpty()) {
+        if (!canUseRedis() || sessionId == null || messages == null) {
             return;
         }
         try {
             String key = redisKeys.shortTermMemoryMessages(tenantId, userId, sessionId);
             redis.delete(key);
-            List<String> values = messages.stream()
-                    .sorted(Comparator.comparing(ChatMessage::createdAt).reversed())
-                    .limit(maxCachedMessages())
-                    .sorted(Comparator.comparing(ChatMessage::createdAt))
+            int fromIndex = Math.max(0, messages.size() - cacheMessageLimit());
+            List<String> values = messages.subList(fromIndex, messages.size()).stream()
+                    .map(this::toEntry)
                     .map(this::serialize)
                     .toList();
             if (!values.isEmpty()) {
@@ -115,7 +128,7 @@ public class RedisShortTermMemoryCache {
         }
         try {
             String key = redisKeys.shortTermMemoryMessages(message.tenantId(), message.userId(), message.sessionId());
-            redis.opsForList().remove(key, 1, serialize(message));
+            redis.opsForList().remove(key, 1, serialize(toEntry(message)));
         } catch (RuntimeException ex) {
             markRedisFailure(ex);
         }
@@ -135,7 +148,13 @@ public class RedisShortTermMemoryCache {
                     .build(), ex);
             return;
         }
-        throw ex;
+        SystemErrorCode code = ex instanceof IllegalStateException
+                ? SystemErrorCode.REDIS_SERIALIZATION_FAILED
+                : SystemErrorCode.REDIS_READ_FAILED;
+        log.warn(SystemErrorLogEntry.builder(code,
+                        "Short-term memory Redis operation failed; falling back to database")
+                .operation("short-term-memory.cache.access")
+                .build(), ex);
     }
 
     private boolean isRedisConnectionProblem(RuntimeException ex) {
@@ -144,17 +163,18 @@ public class RedisShortTermMemoryCache {
                 || ex.getCause() instanceof RedisConnectionFailureException;
     }
 
-    private String serialize(ChatMessage message) {
+    private String serialize(MemoryCacheEntry entry) {
         try {
-            return objectMapper.writeValueAsString(message);
+            return objectMapper.writeValueAsString(entry);
         } catch (JsonProcessingException ex) {
-            throw new IllegalStateException("短期记忆消息序列化失败", ex);
+            throw new IllegalStateException("Short-term memory entry serialization failed", ex);
         }
     }
 
-    private ChatMessage deserialize(String value) {
+    private MemoryCacheEntry deserialize(String value) {
         try {
-            return objectMapper.readValue(value, ChatMessage.class);
+            MemoryCacheEntry entry = objectMapper.readValue(value, MemoryCacheEntry.class);
+            return validEntry(entry) ? entry : null;
         } catch (JsonProcessingException ex) {
             log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_DESERIALIZATION_FAILED,
                             "Ignoring an invalid short-term memory Redis entry")
@@ -164,7 +184,91 @@ public class RedisShortTermMemoryCache {
         }
     }
 
-    private int maxCachedMessages() {
-        return Math.max(1, properties.getMaxCachedMessages());
+    private boolean validPath(List<MemoryCacheEntry> entries, String expectedLeafMessageId, int requestedLimit) {
+        if (entries.isEmpty()) {
+            return false;
+        }
+        MemoryCacheEntry last = entries.getLast();
+        if (expectedLeafMessageId != null && !expectedLeafMessageId.isBlank()
+                && !expectedLeafMessageId.equals(last.messageId())) {
+            return false;
+        }
+        for (int index = 1; index < entries.size(); index++) {
+            if (!Objects.equals(entries.get(index).parentMessageId(), entries.get(index - 1).messageId())) {
+                return false;
+            }
+        }
+        return entries.size() >= requestedLimit
+                || entries.getFirst().parentMessageId() == null
+                || entries.getFirst().parentMessageId().isBlank();
+    }
+
+    private boolean validEntry(MemoryCacheEntry entry) {
+        return entry != null
+                && entry.messageId() != null
+                && !entry.messageId().isBlank()
+                && entry.role() != null
+                && !entry.role().isBlank()
+                && entry.createdAt() != null;
+    }
+
+    private MemoryCacheEntry toEntry(ChatMessage message) {
+        boolean eligible = message != null
+                && ("user".equalsIgnoreCase(message.role()) || "assistant".equalsIgnoreCase(message.role()))
+                && message.content() != null
+                && !message.content().isBlank()
+                && !("assistant".equalsIgnoreCase(message.role())
+                && AgentDataPersistenceMetadata.placeholderAssistant(message.metadataJson()));
+        return new MemoryCacheEntry(
+                message.id(),
+                message.parentMessageId(),
+                message.nodeOrder(),
+                message.runId(),
+                message.role(),
+                eligible ? message.content() : null,
+                eligible,
+                message.createdAt());
+    }
+
+    private ChatMessage toMessage(
+            String tenantId, String userId, String sessionId, MemoryCacheEntry entry) {
+        return new ChatMessage(
+                entry.messageId(),
+                tenantId,
+                userId,
+                sessionId,
+                entry.parentMessageId(),
+                entry.nodeOrder(),
+                0,
+                0,
+                entry.role(),
+                entry.memoryEligible() ? entry.content() : null,
+                null,
+                entry.runId(),
+                "NORMAL",
+                false,
+                null,
+                null,
+                null,
+                null,
+                null,
+                entry.createdAt());
+    }
+
+    private int cacheMessageLimit() {
+        return memoryProperties.getShortTerm().cacheMessageLimit();
+    }
+
+    /** Redis 只保存上下文组装及 active path 校验需要的紧凑字段。 */
+    private record MemoryCacheEntry(
+            String messageId,
+            String parentMessageId,
+            Long nodeOrder,
+            String runId,
+            String role,
+            String content,
+            boolean memoryEligible,
+            Instant createdAt
+    ) {
     }
 }

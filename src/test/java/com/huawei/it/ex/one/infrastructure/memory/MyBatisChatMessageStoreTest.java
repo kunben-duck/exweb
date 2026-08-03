@@ -16,13 +16,29 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.unit.DataSize;
 
+import java.lang.reflect.Method;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
 class MyBatisChatMessageStoreTest {
+    private static final String MEMORY_QUERY_TIMEOUT_PROPERTY =
+            "${financeex.memory.short-term.storage.database-query-timeout-seconds:2}";
+
+    @Test
+    void recentMessageQueriesUseReadOnlyConfiguredTransactionTimeout() throws NoSuchMethodException {
+        Method defaultPath = MyBatisChatMessageStore.class.getMethod(
+                "findRecentMessages", String.class, String.class, String.class, int.class);
+        Method selectedPath = MyBatisChatMessageStore.class.getMethod(
+                "findRecentMessages", String.class, String.class, String.class, String.class, int.class);
+
+        assertReadOnlyMemoryQuery(defaultPath);
+        assertReadOnlyMemoryQuery(selectedPath);
+    }
+
     @Test
     void savesTerminalPartsInOrderedMultiRowBatches() {
         ChatMessageMapper mapper = successfulMapper();
@@ -96,6 +112,13 @@ class MyBatisChatMessageStoreTest {
         when(mapper.updateAssistant(org.mockito.ArgumentMatchers.any())).thenReturn(1);
         when(mapper.insertParts(anyList())).thenAnswer(invocation -> invocation.<List<?>>getArgument(0).size());
         return mapper;
+    }
+
+    private void assertReadOnlyMemoryQuery(Method method) {
+        Transactional transactional = method.getAnnotation(Transactional.class);
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.readOnly()).isTrue();
+        assertThat(transactional.timeoutString()).isEqualTo(MEMORY_QUERY_TIMEOUT_PROPERTY);
     }
 
     private MyBatisChatMessageStore store(ChatMessageMapper mapper, int maxSize, DataSize maxBytes) {

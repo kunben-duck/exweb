@@ -10,6 +10,7 @@ import com.huawei.it.ex.one.application.integration.agent.DomainAgentSelectionPa
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
+import com.huawei.it.ex.one.domain.memory.MemoryContext;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -43,6 +44,7 @@ public class DomainAgentRuntime implements AgentRuntime {
     @Override
     public Flux<ChatEvent> query(AgentRuntimeRequest request) {
         String domainAgentId = domainAgentId(request);
+        MemoryContext memory = request.memoryContext() == null ? MemoryContext.empty() : request.memoryContext();
         DomainAgentRequest domainRequest = new DomainAgentRequest(
                 user(request),
                 request.sessionId(),
@@ -51,6 +53,8 @@ public class DomainAgentRuntime implements AgentRuntime {
                 runtimeSessionId(request),
                 request.message(),
                 request.documents(),
+                memory.agentRuntimeMessages(),
+                memory.shortTermEnabled(),
                 request.metadata(),
                 request.forwardHeaders()
         );

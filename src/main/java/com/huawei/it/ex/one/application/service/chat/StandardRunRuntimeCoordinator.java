@@ -92,7 +92,8 @@ final class StandardRunRuntimeCoordinator {
                         null,
                         prepared.command().agentMode(),
                         plan.bindingLifecycle(),
-                        plan.assistant().persistenceState());
+                        plan.assistant().persistenceState(),
+                        plan.pendingInteractionPayloadRef());
                 return runtimeDispatchCoordinator.execute(request, () -> routeResolutionCoordinator.prepareInitial(
                         new RouteResolutionCoordinator.InitialRoutePreparation(
                                 prepared.user(),

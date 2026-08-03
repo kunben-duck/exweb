@@ -13,7 +13,9 @@ import com.huawei.it.ex.one.domain.chat.ChatMessagePart;
 
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Primary;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.TransactionTimedOutException;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -21,6 +23,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+
+import java.sql.SQLTimeoutException;
 
 /**
  * 聊天历史消息组合仓储。
@@ -38,6 +42,7 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
     private final MyBatisChatMessageStore databaseStore;
     private final ShortTermMemoryStorageProperties properties;
     private volatile Instant databaseRetryAfter = Instant.MIN;
+    private volatile Instant memoryReadRetryAfter = Instant.MIN;
 
     public LayeredChatMessageRepository(RedisShortTermMemoryCache redisCache, MyBatisChatMessageStore databaseStore,
                                         ShortTermMemoryStorageProperties properties) {
@@ -97,26 +102,31 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
 
     @Override
     public List<ChatMessage> findRecentMessages(String tenantId, String userId, String sessionId, int limit) {
-        List<ChatMessage> cached = redisCache.findRecentMessages(tenantId, userId, sessionId, limit);
+        return findRecentMessages(tenantId, userId, sessionId, null, limit);
+    }
+
+    @Override
+    public List<ChatMessage> findRecentMessages(
+            String tenantId, String userId, String sessionId, String leafMessageId, int limit) {
+        List<ChatMessage> cached = redisCache.findRecentMessages(
+                tenantId, userId, sessionId, leafMessageId, limit);
         if (!cached.isEmpty()) {
             return cached;
         }
-        if (!canUseDatabase()) {
+        if (!canReadMemoryFromDatabase()) {
             return List.of();
         }
         List<ChatMessage> persisted;
         try {
-            persisted = databaseStore.findRecentMessages(tenantId, userId, sessionId, limit);
+            persisted = databaseStore.findRecentMessages(
+                    tenantId, userId, sessionId, leafMessageId, limit);
         } catch (RuntimeException ex) {
-            if (properties.isDatabaseRequired()) {
-                throw ex;
-            }
-            markDatabaseFailure(ex);
+            // 记忆是可选增强；数据库回源失败时必须放行主流程，写入严格性仍由 databaseRequired 控制。
+            markMemoryReadFailure(sessionId, ex);
             return List.of();
         }
-        if (!persisted.isEmpty()) {
-            redisCache.replaceSessionMessages(tenantId, userId, sessionId, persisted);
-        }
+        // 数据库成功回源后始终重建缓存；空路径也会删除不连续或已切换分支的旧 key。
+        redisCache.replaceSessionMessages(tenantId, userId, sessionId, persisted);
         return persisted;
     }
 
@@ -212,6 +222,10 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
         return properties.isDatabaseRequired() || !Instant.now().isBefore(databaseRetryAfter);
     }
 
+    private boolean canReadMemoryFromDatabase() {
+        return !Instant.now().isBefore(memoryReadRetryAfter);
+    }
+
     private void markDatabaseFailure(RuntimeException ex) {
         databaseRetryAfter = Instant.now().plus(properties.getDatabaseFailureBackoff());
         log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_UNAVAILABLE,
@@ -219,6 +233,37 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
                 .operation("chat-message.database.access")
                 .attribute("failureBackoff", properties.getDatabaseFailureBackoff())
                 .build(), ex);
+    }
+
+    private void markMemoryReadFailure(String sessionId, RuntimeException ex) {
+        memoryReadRetryAfter = Instant.now().plus(properties.getDatabaseFailureBackoff());
+        boolean timeout = isQueryTimeout(ex);
+        SystemErrorCode errorCode = timeout
+                ? SystemErrorCode.DATABASE_QUERY_TIMEOUT
+                : SystemErrorCode.DATABASE_READ_FAILED;
+        String message = timeout
+                ? "Short-term memory database query timed out; continuing without memory"
+                : "Short-term memory database read failed; continuing without memory";
+        log.warn(SystemErrorLogEntry.builder(errorCode, message)
+                .sessionId(sessionId)
+                .operation("short-term-memory.database.read")
+                .attribute("failureBackoff", properties.getDatabaseFailureBackoff())
+                .attribute("queryTimeoutSeconds", properties.getDatabaseQueryTimeoutSeconds())
+                .attribute("failureType", ex.getClass().getName())
+                .build());
+    }
+
+    private boolean isQueryTimeout(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof QueryTimeoutException
+                    || current instanceof TransactionTimedOutException
+                    || current instanceof SQLTimeoutException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private void updateCacheAfterCommit(Runnable cacheUpdate) {

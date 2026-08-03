@@ -4,6 +4,7 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppend
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.service.memory.RouteMemoryApplicationService;
+import com.huawei.it.ex.one.application.service.memory.ShortTermMemoryContextAssembler;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
@@ -142,8 +143,14 @@ final class ChatRunCompletionCoordinator {
                 && !runtimeExecutor.supportsWaitingUserResponse(runtimeProvider)) {
             return;
         }
-        context.pendingInteractionPayloadRef().compareAndSet(null,
-                ChatPayloadMaps.immutableCopy(stored.payload()));
+        context.pendingInteractionPayloadRef().updateAndGet(existing -> {
+            Map<String, Object> merged = new LinkedHashMap<>(stored.payload());
+            if (existing != null) {
+                // 卡片落库时补齐标准字段，同时保留仅供后续澄清使用的私有上下文。
+                merged.putAll(existing);
+            }
+            return ChatPayloadMaps.immutableCopy(merged);
+        });
     }
 
     private ChatEvent publishCommitted(ChatRunTerminalCommitService.CommitResult result,
@@ -166,7 +173,8 @@ final class ChatRunCompletionCoordinator {
         }
         Object interactionId = payload.get("interactionId");
         routeMemoryService.appendClarification(context.user(), context.session().id(), stored.runId(),
-                interactionId == null ? null : String.valueOf(interactionId), requestPayload);
+                interactionId == null ? null : String.valueOf(interactionId),
+                ShortTermMemoryContextAssembler.publicInteractionPayload(requestPayload));
     }
 
     private ChatRunTerminalCommitService.TerminalCommitContext terminalCommitContext(

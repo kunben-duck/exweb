@@ -43,6 +43,7 @@ final class RouteSwitchContinuationCoordinator {
     private final DomainAgentRefusalCoordinator refusalCoordinator;
     private final AgentRuntimeExecutor runtimeExecutor;
     private final AgentDataPersistenceGate persistenceGate;
+    private final RunMemoryContextAssembler memoryAssembler;
 
     RouteSwitchContinuationCoordinator(
             RuntimeBindingApplicationService runtimeBindingService,
@@ -65,6 +66,20 @@ final class RouteSwitchContinuationCoordinator {
             DomainAgentRefusalCoordinator refusalCoordinator,
             AgentRuntimeExecutor runtimeExecutor,
             AgentDataPersistenceGate persistenceGate) {
+        this(runtimeBindingService, lifecycle, appliedRouteRecorder, interactionEventFactory,
+                eventPersistenceCoordinator, refusalCoordinator, runtimeExecutor, persistenceGate, null);
+    }
+
+    RouteSwitchContinuationCoordinator(
+            RuntimeBindingApplicationService runtimeBindingService,
+            InteractionRunLifecycle lifecycle,
+            AppliedRouteRecorder appliedRouteRecorder,
+            InteractionEventFactory interactionEventFactory,
+            ChatEventPersistenceCoordinator eventPersistenceCoordinator,
+            DomainAgentRefusalCoordinator refusalCoordinator,
+            AgentRuntimeExecutor runtimeExecutor,
+            AgentDataPersistenceGate persistenceGate,
+            RunMemoryContextAssembler memoryAssembler) {
         this.contextResolver = new RouteSwitchContextResolver(runtimeBindingService);
         this.lifecycle = lifecycle;
         this.appliedRouteRecorder = appliedRouteRecorder;
@@ -73,6 +88,7 @@ final class RouteSwitchContinuationCoordinator {
         this.refusalCoordinator = refusalCoordinator;
         this.runtimeExecutor = runtimeExecutor;
         this.persistenceGate = persistenceGate;
+        this.memoryAssembler = memoryAssembler;
     }
 
     Flux<ChatEvent> execute(Request request) {
@@ -123,6 +139,7 @@ final class RouteSwitchContinuationCoordinator {
                 executionClaim,
                 "after-domain-switch-execution-create");
         AtomicReference<RouteTarget> routeRef = new AtomicReference<>(route);
+        AtomicReference<Map<String, Object>> pendingInteractionPayloadRef = new AtomicReference<>();
         AssistantAssembly assistant = new AssistantAssembly();
         RunEventPipelineContext pipelineContext = new RunEventPipelineContext(
                 request.user(),
@@ -133,7 +150,7 @@ final class RouteSwitchContinuationCoordinator {
                 assistant,
                 request.runId(),
                 executionClaim,
-                new AtomicReference<>(),
+                pendingInteractionPayloadRef,
                 interaction,
                 request.startAttempt(),
                 List.of());
@@ -146,7 +163,8 @@ final class RouteSwitchContinuationCoordinator {
                 executionClaim,
                 routeRef,
                 bindingRef,
-                assistant);
+                assistant,
+                pendingInteractionPayloadRef);
         try {
             return eventPersistenceCoordinator.executeAfterRunStarted(
                     pipelineContext, () -> executeAfterStart(context));
@@ -202,6 +220,11 @@ final class RouteSwitchContinuationCoordinator {
         RouteTarget route = context.route();
         RuntimeBinding binding = selection.binding();
         IntentDecision switchIntent = appliedRouteRecorder.routeSwitchIntent(interaction, route);
+        ChatCommand command = runtimeCommand(request, interaction, input, route);
+        MemoryContext sourceMemory = memoryAssembler == null
+                ? MemoryContext.empty()
+                : memoryAssembler.assemble(
+                        command, request.session().currentLeafMessageId(), interaction.userMessageId());
         MemoryContext runtimeMemory = appliedRouteRecorder.recordAppliedRouteDecision(
                 new AppliedRouteRecorder.AppliedRouteDecision(
                         request.user(),
@@ -211,8 +234,7 @@ final class RouteSwitchContinuationCoordinator {
                         switchIntent,
                         route,
                         binding,
-                        MemoryContext.empty()));
-        ChatCommand command = runtimeCommand(request, interaction, input, route);
+                        sourceMemory));
         ApprovedSwitchContext approved = new ApprovedSwitchContext(
                 context, selection, command, runtimeMemory, switchIntent);
         Flux<ChatEvent> body = route.type() == RouteType.DOMAIN_AGENT
@@ -278,7 +300,8 @@ final class RouteSwitchContinuationCoordinator {
                 new HashSet<>(),
                 0,
                 context.input().candidateRouteQuery(),
-                context.assistant().persistenceState());
+                context.assistant().persistenceState(),
+                context.pendingInteractionPayloadRef());
         return eventPersistenceCoordinator.requireCurrentOwnerRunning(
                         context.executionClaim(), "before-route-switch-domain-agent")
                 .thenMany(Flux.defer(() -> refusalCoordinator.execute(domainContext)));
@@ -334,7 +357,8 @@ final class RouteSwitchContinuationCoordinator {
             RunExecutionClaim executionClaim,
             AtomicReference<RouteTarget> routeRef,
             AtomicReference<RuntimeBinding> bindingRef,
-            AssistantAssembly assistant
+            AssistantAssembly assistant,
+            AtomicReference<Map<String, Object>> pendingInteractionPayloadRef
     ) {
     }
 

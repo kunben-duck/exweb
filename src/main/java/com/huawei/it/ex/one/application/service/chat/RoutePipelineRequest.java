@@ -43,12 +43,45 @@ record RoutePipelineRequest(
         Map<String, Object> runtimeMetadataOverride,
         AgentModeProfile agentMode,
         RuntimeBindingDispatchLifecycle bindingLifecycle,
-        AgentDataPersistenceState persistenceState
+        AgentDataPersistenceState persistenceState,
+        AtomicReference<Map<String, Object>> pendingInteractionPayloadRef
 ) {
     RoutePipelineRequest {
         persistenceState = persistenceState == null
                 ? AgentDataPersistenceState.full()
                 : persistenceState;
+        pendingInteractionPayloadRef = pendingInteractionPayloadRef == null
+                ? new AtomicReference<>()
+                : pendingInteractionPayloadRef;
+    }
+
+    RoutePipelineRequest(
+            UserContext user,
+            ChatSession session,
+            ChatCommand runCommand,
+            List<AttachmentRef> attachments,
+            List<UploadedDocument> documents,
+            MemoryContext memory,
+            String runId,
+            String runtimeBindingLeafId,
+            RuntimeForwardHeaders forwardHeaders,
+            TraceContext traceContext,
+            AtomicReference<RouteTarget> routeRef,
+            AtomicReference<RuntimeBinding> bindingRef,
+            AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
+            RunExecutionClaim executionClaim,
+            ChatRun run,
+            String routeMemoryQuery,
+            String intentQuery,
+            String intentRouteMemoryQuery,
+            Map<String, Object> runtimeMetadataOverride,
+            AgentModeProfile agentMode,
+            RuntimeBindingDispatchLifecycle bindingLifecycle,
+            AgentDataPersistenceState persistenceState) {
+        this(user, session, runCommand, attachments, documents, memory, runId, runtimeBindingLeafId,
+                forwardHeaders, traceContext, routeRef, bindingRef, runtimeSessionModeRef, executionClaim,
+                run, routeMemoryQuery, intentQuery, intentRouteMemoryQuery, runtimeMetadataOverride,
+                agentMode, bindingLifecycle, persistenceState, new AtomicReference<>());
     }
 
     RoutePipelineRequest(
@@ -76,6 +109,6 @@ record RoutePipelineRequest(
         this(user, session, runCommand, attachments, documents, memory, runId, runtimeBindingLeafId,
                 forwardHeaders, traceContext, routeRef, bindingRef, runtimeSessionModeRef, executionClaim,
                 run, routeMemoryQuery, intentQuery, intentRouteMemoryQuery, runtimeMetadataOverride,
-                agentMode, bindingLifecycle, AgentDataPersistenceState.full());
+                agentMode, bindingLifecycle, AgentDataPersistenceState.full(), new AtomicReference<>());
     }
 }

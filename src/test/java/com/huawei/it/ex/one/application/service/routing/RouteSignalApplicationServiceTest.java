@@ -3,6 +3,7 @@ package com.huawei.it.ex.one.application.service.routing;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.it.ex.one.application.config.IntentFailureStrategy;
+import com.huawei.it.ex.one.application.config.MemoryProperties;
 import com.huawei.it.ex.one.application.config.RouteSignalProperties;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
@@ -10,12 +11,15 @@ import com.huawei.it.ex.one.application.integration.intent.IntentService;
 import com.huawei.it.ex.one.application.integration.usecase.UseCaseLibraryClient;
 import com.huawei.it.ex.one.application.integration.usecase.UseCaseMatchRequest;
 import com.huawei.it.ex.one.application.service.memory.RouteMemoryApplicationService;
+import com.huawei.it.ex.one.application.service.memory.ShortTermMemoryContextAssembler;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
+import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
+import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryContext;
 import com.huawei.it.ex.one.domain.routing.RouteType;
@@ -335,6 +339,69 @@ class RouteSignalApplicationServiceTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void userCorrectionAddsUserOnlyMemoryToLatestVisibleRouteWithoutChangingRouteAction() {
+        AtomicReference<MemoryContext> capturedMemory = new AtomicReference<>();
+        RouteMemoryApplicationService routeMemoryService = new RouteMemoryApplicationService(null, null, null) {
+            @Override
+            public boolean latestRouteIsRelayFallback(UserContext user, String sessionId) {
+                return false;
+            }
+
+            @Override
+            public RouteMemoryContext loadForIntent(UserContext user, String sessionId, String routeTrigger,
+                                                    Map<String, Object> lastIntentRejectReason) {
+                return new RouteMemoryContext(
+                        routeTrigger,
+                        List.of(Map.of(
+                                "type", "route",
+                                "query", "查询经营数据",
+                                "intent", "finance_data_query",
+                                "routeAction", "ROUTE_SINGLE")),
+                        lastIntentRejectReason,
+                        "run-route");
+            }
+        };
+        MemoryProperties memoryProperties = new MemoryProperties();
+        memoryProperties.getShortTerm().setEnabled(true);
+        ShortTermMemoryContextAssembler assembler = new ShortTermMemoryContextAssembler(
+                memoryProperties,
+                values -> values.stream().mapToInt(value -> value.content().length()).sum());
+        RouteSignalApplicationService service = new RouteSignalApplicationService(
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                new BlockingIntentAgentRuntime((intentCommand, intentMemory, routeUser) -> {
+                    capturedMemory.set(intentMemory);
+                    return simpleDomainAgentIntent();
+                }),
+                new RoutingPolicy(0.85),
+                new RouteSignalProperties(false, true, IntentFailureStrategy.RELAY_FALLBACK),
+                routeMemoryService,
+                assembler);
+        List<ChatMessage> recent = List.of(
+                message("m1", null, "run-route", "user", "查询经营数据", 1),
+                message("m2", "m1", "run-route", "assistant", "经营数据如下", 2),
+                message("m3", "m2", "run-follow", "user", "华南区域呢", 3),
+                message("m4", "m3", "run-follow", "assistant", "华南数据如下", 4));
+        MemoryContext sourceMemory = new MemoryContext(recent, List.of(), RouteMemoryContext.empty(), true, List.of());
+        ChatCommand correction = new ChatCommand("cmd2", "tenant1", "user1", "session1",
+                null, "web", "改用深度分析技能", List.of(), Map.of(),
+                null, null, com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT,
+                null, null, null, "user_correction");
+
+        RouteSignalResult result = service.routeInitialWithProgress(new RouteSignalRequest(
+                        "run-current", user, session, correction, List.of(), sourceMemory))
+                .filter(RouteSignalFrame::resultFrame)
+                .map(RouteSignalFrame::result)
+                .blockLast();
+
+        assertThat(result).isNotNull();
+        Map<String, Object> route = capturedMemory.get().routeMemory().history().getFirst();
+        assertThat(route).containsEntry("routeAction", "ROUTE_SINGLE");
+        assertThat((List<ConversationMemoryMessage>) route.get("domainSessionMessages"))
+                .containsExactly(new ConversationMemoryMessage("user", "华南区域呢"));
+    }
+
+    @Test
     void intentWaitingClarificationStopsAtWaitingRoute() {
         IntentService intentService = new IntentService() {
             @Override
@@ -589,5 +656,34 @@ class RouteSignalApplicationServiceTest {
     private IntentDecision complexIntent(double confidence) {
         return new IntentDecision("finance.complex", "复杂财经任务", TaskComplexity.COMPLEX, confidence,
                 false, null, Map.of(), List.of(), Map.of());
+    }
+
+    private ChatMessage message(String id,
+                                String parentMessageId,
+                                String runId,
+                                String role,
+                                String content,
+                                long nodeOrder) {
+        return new ChatMessage(
+                id,
+                "tenant1",
+                "user1",
+                "session1",
+                parentMessageId,
+                nodeOrder,
+                Math.toIntExact(nodeOrder - 1),
+                0,
+                role,
+                content,
+                null,
+                runId,
+                "NORMAL",
+                false,
+                null,
+                null,
+                null,
+                null,
+                null,
+                Instant.EPOCH.plusSeconds(nodeOrder));
     }
 }

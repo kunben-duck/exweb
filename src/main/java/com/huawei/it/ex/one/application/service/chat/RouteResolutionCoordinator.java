@@ -3,6 +3,7 @@ package com.huawei.it.ex.one.application.service.chat;
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
+import com.huawei.it.ex.one.application.service.memory.ShortTermMemoryContextAssembler;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalApplicationService;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalResult;
 import com.huawei.it.ex.one.application.service.runtime.DomainAgentBindingCommand;
@@ -126,7 +127,8 @@ final class RouteResolutionCoordinator {
     }
 
     ChatCommand runtimeCommand(RuntimeCommandRequest request) {
-        ChatCommand command = withFoldedQuery(request.command(), request.routeMemoryQuery());
+        ChatCommand command = withoutPrivateIntentMemory(
+                withFoldedQuery(request.command(), request.routeMemoryQuery()));
         return withIntentDocuments(
                 command,
                 request.documents(),
@@ -137,13 +139,25 @@ final class RouteResolutionCoordinator {
 
     ChatCommand withoutDomainAgentRerouteContext(ChatCommand command) {
         if (command == null || command.metadata() == null
-                || !command.metadata().containsKey(DOMAIN_AGENT_REROUTE_CONTEXT_METADATA)) {
+                || (!command.metadata().containsKey(DOMAIN_AGENT_REROUTE_CONTEXT_METADATA)
+                && !command.metadata().containsKey(ShortTermMemoryContextAssembler.PRIVATE_INTENT_MESSAGES_KEY))) {
             return command;
         }
         Map<String, Object> metadata = new LinkedHashMap<>(command.metadata());
         // 拒答重路由上下文仅供 Intent 使用，目标确定后不得透传给 Runtime。
         metadata.remove(DOMAIN_AGENT_REROUTE_CONTEXT_METADATA);
         metadata.remove(DomainAgentRejectReason.METADATA_KEY);
+        metadata.remove(ShortTermMemoryContextAssembler.PRIVATE_INTENT_MESSAGES_KEY);
+        return copyCommand(command, command.message(), metadata);
+    }
+
+    private ChatCommand withoutPrivateIntentMemory(ChatCommand command) {
+        if (command == null || command.metadata() == null
+                || !command.metadata().containsKey(ShortTermMemoryContextAssembler.PRIVATE_INTENT_MESSAGES_KEY)) {
+            return command;
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>(command.metadata());
+        metadata.remove(ShortTermMemoryContextAssembler.PRIVATE_INTENT_MESSAGES_KEY);
         return copyCommand(command, command.message(), metadata);
     }
 

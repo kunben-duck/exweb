@@ -146,8 +146,16 @@ RESUMABLE -> ACTIVE
 - 可选长期记忆。
 - Intent 使用的 RouteMemory 快照。
 
-调用位置在 admission 前，因此短期记忆不会包含本轮尚未持久化的 user message。
+调用位置在 admission 前，因此短期记忆不会包含本轮尚未持久化的 user message。普通续问沿当前 leaf
+读取；显式父节点、编辑和重新生成则沿目标分支的写入点之前读取，不能回退到当前其他分支。
 记忆全部关闭时，现有快速路径返回空上下文，不应新增数据库或长期记忆调用。
+
+短期记忆由 `ShortTermMemoryContextAssembler` 在上层按消费方投影：Agent Runtime 使用独立的
+user/assistant 轮次与 Token 预算；Intent 仅在拒答或用户纠偏链路使用独立的 user-only 窗口。
+Redis 只是可关闭的紧凑热缓存，缓存容量不足以覆盖消费方窗口时必须回源数据库当前消息路径。
+数据库记忆回源有独立的只读事务和 Statement 超时；读取失败时按短退避返回空上下文并继续 run，
+不会把普通请求或 route-switch 卡在记忆加载阶段。消息事实写入仍遵循原有严格策略。
+后续接入真实 GLM tokenizer 时替换 `MemoryTokenCounter`，不修改 Chat 编排或下游 adapter。
 
 ### 6.2 RouteMemory
 

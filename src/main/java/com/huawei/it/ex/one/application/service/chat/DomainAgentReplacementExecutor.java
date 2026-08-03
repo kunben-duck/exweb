@@ -404,7 +404,8 @@ final class DomainAgentReplacementExecutor {
                 reroute.rejectedDomainAgentIds(),
                 context.rerouteCount() + 1,
                 context.routeMemoryQuery(),
-                context.persistenceState());
+                context.persistenceState(),
+                context.pendingInteractionPayloadRef());
     }
 
     private Mono<Void> requireCurrentOwnerRunning(RunExecutionClaim claim, String stage) {

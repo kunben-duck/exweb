@@ -354,15 +354,23 @@ ChatService 保留未来演进为独立 SuperAgent 的记忆扩展点，但正�
 
 ```bash
 export FINANCEEX_MEMORY_SHORT_TERM_ENABLED=false
-export FINANCEEX_MEMORY_SHORT_TERM_RECENT_TURNS=5
 export FINANCEEX_MEMORY_SHORT_TERM_CACHE_ENABLED=true
+export FINANCEEX_MEMORY_SHORT_TERM_CACHE_RECENT_TURNS=5
+export FINANCEEX_MEMORY_SHORT_TERM_AGENT_RUNTIME_RECENT_TURNS=5
+export FINANCEEX_MEMORY_SHORT_TERM_AGENT_RUNTIME_MAX_CONTEXT_TOKENS=4096
+export FINANCEEX_MEMORY_SHORT_TERM_INTENT_RECENT_TURNS=5
+export FINANCEEX_MEMORY_SHORT_TERM_INTENT_MAX_CONTEXT_TOKENS=4096
+export FINANCEEX_MEMORY_SHORT_TERM_DATABASE_QUERY_TIMEOUT_SECONDS=2
 
 export FINANCEEX_MEMORY_LONG_TERM_ENABLED=false
 export FINANCEEX_MEMORY_LONG_TERM_PROVIDER=disabled
 export FINANCEEX_MEMORY_LONG_TERM_TOP_K=5
 ```
 
-- 短期记忆开启后，按 `recent-turns` 装配最近几轮 user/assistant 问答，优先读 Redis 热缓存，miss 后回源数据库历史消息并回填。
+- 短期记忆开启后，Redis、Agent Runtime 和 Intent 使用独立窗口。`cache-recent-turns` 只控制 Redis 热缓存容量；Agent Runtime 按自身 `recent-turns` 读取 user/assistant，Intent 在拒答或用户纠偏链路按自身 `recent-turns` 读取 user。业务窗口大于缓存窗口、缓存失效或缓存关闭时直接从数据库当前消息路径读取，不会静默缩短上下文。
+- Agent Runtime 和 Intent 各自使用 `max-context-tokens` 限制新增历史数组。默认计数器以序列化后的 UTF-8 字节数作保守估算，可通过 `MemoryTokenCounter` 替换为 GLM tokenizer。Relay 普通 `user-message` 和 DomainAgent 请求根节点使用 `messages`；短期记忆关闭时不增加该字段。
+- Intent 只在 `domain_reject`、`user_correction` 及其后续 `clarify_answer` 中，把 user-only 快照放入最近可见 route 的 `domainSessionMessages`。澄清链使用首次调用时冻结的私有快照，不修改 RouteMemory 事实或 `routeAction`。
+- Redis miss 后的短期记忆数据库回源使用默认 2 秒只读事务和 Statement 超时。超时、连接获取失败或其他读取异常均以空记忆继续当前 run，并在默认 30 秒读退避期间避免重复回源；Redis 命中仍可正常使用。`database-required` 只约束消息事实写入，不改变该读取降级语义。
 - 长期记忆开启后，通过 `LongTermMemoryStore` 防腐层按当前 query 检索 topK 条相关记忆；默认 `disabled` provider 返回空结果。
 - 两者都关闭时，普通短期/长期 `MemoryContext` 为空上下文，且不会发生 memory 相关 Redis、历史消息读取或长期记忆调用。RouteMemory 是独立的路由事实源；只要意图服务开启，ChatService 仍会按会话加载最近成功路由和未完成意图澄清链路，用于组装意图服务 `conversationContext`。
 

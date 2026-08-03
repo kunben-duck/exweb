@@ -10,6 +10,7 @@ import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.document.DocumentSource;
 import com.huawei.it.ex.one.domain.document.DocumentStatus;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
+import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -97,6 +98,54 @@ class DomainAgentChatRequestMapperTest {
         assertThatThrownBy(() -> mapper.toWireRequest(request))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("attachments");
+    }
+
+    @Test
+    void enabledShortTermMemoryOverridesClientMessagesAtRoot() {
+        DomainAgentRequest request = new DomainAgentRequest(
+                new UserContext("tenant1", "user1", "User One"),
+                "session1",
+                "run1",
+                "skill-tax",
+                "session1",
+                "hello",
+                List.of(),
+                List.of(
+                        new ConversationMemoryMessage("user", "历史问题"),
+                        new ConversationMemoryMessage("assistant", "历史回答")),
+                true,
+                Map.of("messages", List.of(Map.of("role", "user", "content", "forged"))),
+                RuntimeForwardHeaders.empty());
+
+        Map<String, Object> wire = mapper.toWireRequest(request);
+
+        assertThat(wire.get("messages")).isEqualTo(List.of(
+                new ConversationMemoryMessage("user", "历史问题"),
+                new ConversationMemoryMessage("assistant", "历史回答")));
+    }
+
+    @Test
+    void enabledShortTermMemorySendsEmptyMessagesArrayWithoutHistory() {
+        DomainAgentRequest request = new DomainAgentRequest(
+                new UserContext("tenant1", "user1", "User One"),
+                "session1",
+                "run1",
+                "skill-tax",
+                "session1",
+                "hello",
+                List.of(),
+                List.of(),
+                true,
+                Map.of(),
+                RuntimeForwardHeaders.empty());
+
+        assertThat(mapper.toWireRequest(request)).containsEntry("messages", List.of());
+    }
+
+    @Test
+    void disabledShortTermMemoryDoesNotAddMessagesField() {
+        assertThat(mapper.toWireRequest(request(Map.of(), List.of())))
+                .doesNotContainKey("messages");
     }
 
     private DomainAgentRequest request(Map<String, Object> metadata, List<UploadedDocument> documents) {

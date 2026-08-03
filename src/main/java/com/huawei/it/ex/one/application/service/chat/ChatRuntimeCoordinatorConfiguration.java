@@ -102,14 +102,16 @@ class ChatRuntimeCoordinatorConfiguration {
             InteractionRunLifecycle lifecycle,
             ChatRuntimeDispatchCoordinator runtimeDispatchCoordinator,
             ChatEventPersistenceCoordinator persistenceCoordinator,
-            ChatRunAdmissionCoordinator admissionCoordinator) {
+            ChatRunAdmissionCoordinator admissionCoordinator,
+            RunMemoryContextAssembler memoryAssembler) {
         return new IntentClarificationRunCoordinator(
                 clarificationAssembler,
                 eventFactory,
                 lifecycle,
                 runtimeDispatchCoordinator,
                 persistenceCoordinator,
-                admissionCoordinator);
+                admissionCoordinator,
+                memoryAssembler);
     }
 
     @Bean
@@ -120,7 +122,8 @@ class ChatRuntimeCoordinatorConfiguration {
             InteractionRunLifecycle lifecycle,
             ChatRuntimeDispatchCoordinator runtimeDispatchCoordinator,
             ChatEventPersistenceCoordinator persistenceCoordinator,
-            ChatRunAdmissionCoordinator admissionCoordinator) {
+            ChatRunAdmissionCoordinator admissionCoordinator,
+            RunMemoryContextAssembler memoryAssembler) {
         return new AmbiguousRouteContinuationCoordinator(
                 selectionResolver,
                 clarificationAssembler,
@@ -128,7 +131,8 @@ class ChatRuntimeCoordinatorConfiguration {
                 lifecycle,
                 runtimeDispatchCoordinator,
                 persistenceCoordinator,
-                admissionCoordinator);
+                admissionCoordinator,
+                memoryAssembler);
     }
 
     @Bean
@@ -140,7 +144,8 @@ class ChatRuntimeCoordinatorConfiguration {
             ChatEventPersistenceCoordinator persistenceCoordinator,
             DomainAgentRefusalCoordinator refusalCoordinator,
             AgentRuntimeExecutor runtimeExecutor,
-            AgentDataPersistenceGate persistenceGate) {
+            AgentDataPersistenceGate persistenceGate,
+            RunMemoryContextAssembler memoryAssembler) {
         return new RouteSwitchContinuationCoordinator(
                 runtimeBindingService,
                 lifecycle,
@@ -149,7 +154,8 @@ class ChatRuntimeCoordinatorConfiguration {
                 persistenceCoordinator,
                 refusalCoordinator,
                 runtimeExecutor,
-                persistenceGate);
+                persistenceGate,
+                memoryAssembler);
     }
 
     @Bean

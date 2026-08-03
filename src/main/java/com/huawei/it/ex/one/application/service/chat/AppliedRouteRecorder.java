@@ -151,7 +151,8 @@ final class AppliedRouteRecorder {
                             decision.user(), decision.sessionId(), decision.runId(),
                             blankToDefault(decision.query(), ""), routeMemoryIntent, decision.route());
             routeMemoryService.recordRouteDecision(command);
-            return appendInlineRouteHistory(currentMemory, routeMemoryService.routeHistory(command));
+            return appendInlineRouteHistory(
+                    currentMemory, routeMemoryService.routeHistory(command), decision.runId());
         } catch (RuntimeException ex) {
             log.warn(SystemErrorLogEntry.builder(SystemErrorCode.TASK_REJECTED,
                             "RouteMemory route decision scheduling failed and was ignored")
@@ -209,7 +210,8 @@ final class AppliedRouteRecorder {
                 Map.of("targetProvider", "relay", "routeAction", routeAction));
     }
 
-    private MemoryContext appendInlineRouteHistory(MemoryContext memory, Map<String, Object> historyItem) {
+    private MemoryContext appendInlineRouteHistory(
+            MemoryContext memory, Map<String, Object> historyItem, String sourceRunId) {
         if (historyItem == null || historyItem.isEmpty()) {
             return memory;
         }
@@ -220,8 +222,11 @@ final class AppliedRouteRecorder {
         if (!history.contains(historyItem)) {
             history.add(historyItem);
         }
+        String latestRouteSourceRunId = "route".equals(String.valueOf(historyItem.get("type")))
+                ? sourceRunId
+                : current.latestRouteSourceRunId();
         return memory.withRouteMemory(new RouteMemoryContext(
-                current.routeTrigger(), history, current.lastIntentRejectReason()));
+                current.routeTrigger(), history, current.lastIntentRejectReason(), latestRouteSourceRunId));
     }
 
     private String firstText(Object... values) {

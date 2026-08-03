@@ -4,6 +4,7 @@ import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceGate;
+import com.huawei.it.ex.one.application.service.memory.ShortTermMemoryContextAssembler;
 import com.huawei.it.ex.one.application.service.routing.IntentRoutingFailedException;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalApplicationService;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalFrame;
@@ -27,6 +28,7 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Scheduler;
 
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -350,6 +352,11 @@ final class DomainAgentRefusalCoordinator {
                                                   RouteSignalResult signal) {
         DomainAgentRunContext context = reroute.context();
         RuntimeBinding binding = context.bindingRef().get();
+        Map<String, Object> internalPayload = eventFactory.clarificationPayload(
+                reroute,
+                signal.intentClarificationPayload(),
+                bindingPolicy.routeSource(binding));
+        context.pendingInteractionPayloadRef().compareAndSet(null, internalPayload);
         return Flux.just(
                 eventFactory.rerouteMetadata(
                         context,
@@ -359,10 +366,7 @@ final class DomainAgentRefusalCoordinator {
                 eventFactory.intentClarificationRequest(
                         context.runId(),
                         context.session().id(),
-                        eventFactory.clarificationPayload(
-                                reroute,
-                                signal.intentClarificationPayload(),
-                                bindingPolicy.routeSource(binding))),
+                        ShortTermMemoryContextAssembler.publicInteractionPayload(internalPayload)),
                 MessageCompletedEvent.of(context.runId(), context.session().id()));
     }
 
@@ -388,7 +392,8 @@ final class DomainAgentRefusalCoordinator {
                 state.rejectedDomainAgentIds(),
                 state.rerouteCount(),
                 source.routeMemoryQuery(),
-                source.persistenceState());
+                source.persistenceState(),
+                source.pendingInteractionPayloadRef());
     }
 
     private boolean invalidDomainAgentRoute(RouteTarget route) {

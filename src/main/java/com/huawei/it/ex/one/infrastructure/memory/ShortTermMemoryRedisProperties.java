@@ -22,8 +22,6 @@ public class ShortTermMemoryRedisProperties {
     private String redisKeyPrefix = "fin_ex:memory:short_term";
     /** 最近消息缓存 TTL。 */
     private Duration ttl = Duration.ofDays(3);
-    /** 每个会话最多缓存的消息条数。 */
-    private int maxCachedMessages = 200;
     /** Redis 连接失败后的退避时间。 */
     private Duration failureBackoff = Duration.ofSeconds(30);
 
@@ -57,14 +55,6 @@ public class ShortTermMemoryRedisProperties {
 
     public void setTtl(Duration ttl) {
         this.ttl = ttl;
-    }
-
-    public int getMaxCachedMessages() {
-        return maxCachedMessages;
-    }
-
-    public void setMaxCachedMessages(int maxCachedMessages) {
-        this.maxCachedMessages = maxCachedMessages;
     }
 
     public Duration getFailureBackoff() {

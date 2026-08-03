@@ -1,5 +1,7 @@
 package com.huawei.it.ex.one.domain.memory;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -10,7 +12,8 @@ import java.util.Map;
 public record RouteMemoryContext(
         String routeTrigger,
         List<Map<String, Object>> history,
-        Map<String, Object> lastIntentRejectReason
+        Map<String, Object> lastIntentRejectReason,
+        @JsonIgnore String latestRouteSourceRunId
 ) {
     public RouteMemoryContext {
         routeTrigger = routeTrigger == null || routeTrigger.isBlank() ? "first_turn" : routeTrigger;
@@ -18,8 +21,13 @@ public record RouteMemoryContext(
         lastIntentRejectReason = lastIntentRejectReason == null ? Map.of() : Map.copyOf(lastIntentRejectReason);
     }
 
+    public RouteMemoryContext(String routeTrigger, List<Map<String, Object>> history,
+                              Map<String, Object> lastIntentRejectReason) {
+        this(routeTrigger, history, lastIntentRejectReason, null);
+    }
+
     public static RouteMemoryContext empty() {
-        return new RouteMemoryContext("first_turn", List.of(), Map.of());
+        return new RouteMemoryContext("first_turn", List.of(), Map.of(), null);
     }
 
     public Map<String, Object> toConversationContext() {

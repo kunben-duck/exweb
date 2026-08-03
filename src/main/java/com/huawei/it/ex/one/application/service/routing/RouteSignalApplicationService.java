@@ -11,6 +11,7 @@ import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResu
 import com.huawei.it.ex.one.application.integration.usecase.UseCaseLibraryClient;
 import com.huawei.it.ex.one.application.integration.usecase.UseCaseMatchRequest;
 import com.huawei.it.ex.one.application.service.memory.RouteMemoryApplicationService;
+import com.huawei.it.ex.one.application.service.memory.ShortTermMemoryContextAssembler;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.logging.AppLogger;
@@ -57,6 +58,7 @@ public class RouteSignalApplicationService {
     private final RoutingPolicy routingPolicy;
     private final RouteSignalProperties properties;
     private final RouteMemoryApplicationService routeMemoryService;
+    private final ShortTermMemoryContextAssembler shortTermMemoryAssembler;
 
     /**
      * 创建可选路由信号编排服务。
@@ -69,17 +71,25 @@ public class RouteSignalApplicationService {
     @Autowired
     public RouteSignalApplicationService(UseCaseLibraryClient useCaseLibraryClient, IntentAgentRuntime intentAgentRuntime,
                                          RoutingPolicy routingPolicy, RouteSignalProperties properties,
-                                         RouteMemoryApplicationService routeMemoryService) {
+                                         RouteMemoryApplicationService routeMemoryService,
+                                         ShortTermMemoryContextAssembler shortTermMemoryAssembler) {
         this.useCaseLibraryClient = useCaseLibraryClient;
         this.intentAgentRuntime = intentAgentRuntime;
         this.routingPolicy = routingPolicy;
         this.properties = properties;
         this.routeMemoryService = routeMemoryService;
+        this.shortTermMemoryAssembler = shortTermMemoryAssembler;
+    }
+
+    public RouteSignalApplicationService(UseCaseLibraryClient useCaseLibraryClient, IntentAgentRuntime intentAgentRuntime,
+                                         RoutingPolicy routingPolicy, RouteSignalProperties properties,
+                                         RouteMemoryApplicationService routeMemoryService) {
+        this(useCaseLibraryClient, intentAgentRuntime, routingPolicy, properties, routeMemoryService, null);
     }
 
     public RouteSignalApplicationService(UseCaseLibraryClient useCaseLibraryClient, IntentAgentRuntime intentAgentRuntime,
                                          RoutingPolicy routingPolicy, RouteSignalProperties properties) {
-        this(useCaseLibraryClient, intentAgentRuntime, routingPolicy, properties, null);
+        this(useCaseLibraryClient, intentAgentRuntime, routingPolicy, properties, null, null);
     }
 
     /**
@@ -209,7 +219,8 @@ public class RouteSignalApplicationService {
                         "intent clarification max rounds exceeded"));
                 return intentResultAndRouteFrames(request, routeResult, null, latencyMs, "DEGRADED");
             }
-            Map<String, Object> clarificationPayload = intentClarificationPayload(request.command(), result);
+            Map<String, Object> clarificationPayload = intentClarificationPayload(
+                    request.command(), result, request.routeTrigger(), intentMemory);
             return Flux.just(RouteSignalFrame.result(RouteSignalResult.waitingIntentClarification(
                     clarificationPayload,
                     latencyMs,
@@ -225,7 +236,8 @@ public class RouteSignalApplicationService {
                         intent, latencyMs, routingPolicy.intentConfidenceThreshold());
                 return intentResultAndRouteFrames(request, routeResult, intent, latencyMs, "DEGRADED");
             }
-            Map<String, Object> clarificationPayload = intentClarificationPayload(request.command(), result);
+            Map<String, Object> clarificationPayload = intentClarificationPayload(
+                    request.command(), result, request.routeTrigger(), intentMemory);
             return Flux.just(RouteSignalFrame.result(RouteSignalResult.waitingIntentClarification(
                     clarificationPayload,
                     latencyMs,
@@ -378,8 +390,17 @@ public class RouteSignalApplicationService {
                 : routeMemoryService.loadForIntent(request.user(), request.session().id(),
                 request.routeTrigger(), request.lastRejectReason());
         context = mergeInlineRouteHistory(context, request.memory());
-        return (request.memory() == null ? MemoryContext.empty() : request.memory())
-                .withRouteMemory(mergeInlineClarificationHistory(context, request.command()));
+        context = mergeInlineClarificationHistory(context, request.command());
+        MemoryContext memory = request.memory() == null ? MemoryContext.empty() : request.memory();
+        if (shortTermMemoryAssembler == null) {
+            return memory.withRouteMemory(context);
+        }
+        return memory.withRouteMemory(shortTermMemoryAssembler.projectIntent(
+                memory,
+                context,
+                request.routeTrigger(),
+                request.runId(),
+                request.command() == null ? Map.of() : request.command().metadata()).routeMemory());
     }
 
     private RouteMemoryContext mergeInlineRouteHistory(RouteMemoryContext context, MemoryContext memory) {
@@ -403,7 +424,10 @@ public class RouteSignalApplicationService {
         return new RouteMemoryContext(
                 context == null ? RouteMemoryApplicationService.TRIGGER_FIRST_TURN : context.routeTrigger(),
                 history,
-                context == null ? Map.of() : context.lastIntentRejectReason());
+                context == null ? Map.of() : context.lastIntentRejectReason(),
+                memory.routeMemory().latestRouteSourceRunId() == null
+                        ? context == null ? null : context.latestRouteSourceRunId()
+                        : memory.routeMemory().latestRouteSourceRunId());
     }
 
     private void trimOldestRoutes(List<Map<String, Object>> history) {
@@ -443,7 +467,8 @@ public class RouteSignalApplicationService {
         return new RouteMemoryContext(
                 context == null ? RouteMemoryApplicationService.TRIGGER_CLARIFY_ANSWER : context.routeTrigger(),
                 history,
-                context == null ? Map.of() : context.lastIntentRejectReason());
+                context == null ? Map.of() : context.lastIntentRejectReason(),
+                context == null ? null : context.latestRouteSourceRunId());
     }
 
     private String routeTrigger(UserContext user, ChatSession session, ChatCommand command) {
@@ -489,7 +514,11 @@ public class RouteSignalApplicationService {
         return reason.isEmpty() ? Map.of() : Map.copyOf(reason);
     }
 
-    private Map<String, Object> intentClarificationPayload(ChatCommand command, IntentRecognitionResult result) {
+    private Map<String, Object> intentClarificationPayload(
+            ChatCommand command,
+            IntentRecognitionResult result,
+            String routeTrigger,
+            MemoryContext intentMemory) {
         Map<String, Object> payload = new java.util.LinkedHashMap<>(result.normalizedClarificationPayload());
         payload.putIfAbsent("source", IntentAgentRuntime.PROVIDER);
         payload.put("sourceType", "intent-clarification-request");
@@ -505,6 +534,14 @@ public class RouteSignalApplicationService {
         }
         if (result.intentRequestId() != null && !result.intentRequestId().isBlank()) {
             payload.put("intentRequestId", result.intentRequestId());
+        }
+        if (shortTermMemoryAssembler != null) {
+            shortTermMemoryAssembler.privateMessagesForClarification(
+                            intentMemory,
+                            routeTrigger,
+                            command == null ? Map.of() : command.metadata())
+                    .ifPresent(messages -> payload.put(
+                            ShortTermMemoryContextAssembler.PRIVATE_INTENT_MESSAGES_KEY, messages));
         }
         return Map.copyOf(payload);
     }

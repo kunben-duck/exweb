@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceGate;
+import com.huawei.it.ex.one.application.service.memory.ShortTermMemoryContextAssembler;
 import com.huawei.it.ex.one.application.service.routing.IntentRoutingFailedException;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalApplicationService;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalFrame;
@@ -18,6 +19,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.HashSet;
+import java.util.Map;
 
 /** Executes the existing Intent routing and selected Runtime dispatch workflow. */
 final class ChatRuntimeDispatchCoordinator {
@@ -148,10 +150,12 @@ final class ChatRuntimeDispatchCoordinator {
                 resolveRoute(request, routeSignal, recordIntentRecognition);
         if (resolution.waitingIntentClarification()) {
             appliedRouteRecorder.bindIntentAgentProvider(request.runId());
+            Map<String, Object> internalPayload = resolution.intentClarificationPayload();
+            request.pendingInteractionPayloadRef().compareAndSet(null, internalPayload);
             return interactionEventFactory.intentClarificationWaitingBody(
                     request.runId(),
                     request.session().id(),
-                    resolution.intentClarificationPayload());
+                    ShortTermMemoryContextAssembler.publicInteractionPayload(internalPayload));
         }
         return dispatchResolvedRuntime(request, resolution, recordIntentRecognition);
     }
@@ -271,7 +275,8 @@ final class ChatRuntimeDispatchCoordinator {
                     new HashSet<>(),
                     0,
                     request.routeMemoryQuery(),
-                    request.persistenceState()));
+                    request.persistenceState(),
+                    request.pendingInteractionPayloadRef()));
             case SYSTEM_RESPONSE -> systemResponseExecutor.execute(
                     runtimeCommand, request.runId(), resolution.intent(), resolution.route());
             case AGENT_RUNTIME -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
@@ -323,7 +328,8 @@ final class ChatRuntimeDispatchCoordinator {
                 state.rejectedDomainAgentIds(),
                 state.rerouteCount(),
                 request.routeMemoryQuery(),
-                request.persistenceState());
+                request.persistenceState(),
+                request.pendingInteractionPayloadRef());
         return domainAgentRefusalCoordinator.continueAfterClarification(
                 new DomainAgentRefusalCoordinator.ClarifiedContinuation(
                         context,

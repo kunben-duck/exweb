@@ -2,6 +2,8 @@ package com.huawei.it.ex.one.domain.memory;
 
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import java.util.List;
 
 /**
@@ -16,12 +18,20 @@ import java.util.List;
 public record MemoryContext(
         List<ChatMessage> recentMessages,
         List<LongTermMemoryItem> longTermMemories,
-        RouteMemoryContext routeMemory
+        RouteMemoryContext routeMemory,
+        @JsonIgnore boolean shortTermEnabled,
+        @JsonIgnore List<ConversationMemoryMessage> agentRuntimeMessages
 ) {
     public MemoryContext {
         recentMessages = recentMessages == null ? List.of() : List.copyOf(recentMessages);
         longTermMemories = longTermMemories == null ? List.of() : List.copyOf(longTermMemories);
         routeMemory = routeMemory == null ? RouteMemoryContext.empty() : routeMemory;
+        agentRuntimeMessages = agentRuntimeMessages == null ? List.of() : List.copyOf(agentRuntimeMessages);
+    }
+
+    public MemoryContext(List<ChatMessage> recentMessages, List<LongTermMemoryItem> longTermMemories,
+                         RouteMemoryContext routeMemory) {
+        this(recentMessages, longTermMemories, routeMemory, false, List.of());
     }
 
     public MemoryContext(List<ChatMessage> recentMessages, List<LongTermMemoryItem> longTermMemories) {
@@ -34,7 +44,7 @@ public record MemoryContext(
      * @return 不包含短期消息和长期记忆的上下文快照。
      */
     public static MemoryContext empty() {
-        return new MemoryContext(List.of(), List.of(), RouteMemoryContext.empty());
+        return new MemoryContext(List.of(), List.of(), RouteMemoryContext.empty(), false, List.of());
     }
 
     /**
@@ -42,14 +52,15 @@ public record MemoryContext(
      * @return 替换 RouteMemory 后的新快照。
      */
     public MemoryContext withRouteMemory(RouteMemoryContext routeMemory) {
-        return new MemoryContext(recentMessages, longTermMemories, routeMemory);
+        return new MemoryContext(recentMessages, longTermMemories, routeMemory,
+                shortTermEnabled, agentRuntimeMessages);
     }
 
     /**
      * @return 当前上下文是否不包含任何记忆增强数据。
      */
     public boolean isEmpty() {
-        return recentMessages.isEmpty() && longTermMemories.isEmpty()
+        return recentMessages.isEmpty() && agentRuntimeMessages.isEmpty() && longTermMemories.isEmpty()
                 && (routeMemory == null || !routeMemory.hasHistory());
     }
 }

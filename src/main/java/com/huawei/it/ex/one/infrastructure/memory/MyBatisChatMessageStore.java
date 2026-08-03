@@ -12,6 +12,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -200,7 +201,20 @@ public class MyBatisChatMessageStore {
         return row;
     }
 
+    @Transactional(
+            readOnly = true,
+            timeoutString = "${financeex.memory.short-term.storage.database-query-timeout-seconds:2}"
+    )
     public List<ChatMessage> findRecentMessages(String tenantId, String userId, String sessionId, int limit) {
+        return findRecentMessages(tenantId, userId, sessionId, null, limit);
+    }
+
+    @Transactional(
+            readOnly = true,
+            timeoutString = "${financeex.memory.short-term.storage.database-query-timeout-seconds:2}"
+    )
+    public List<ChatMessage> findRecentMessages(
+            String tenantId, String userId, String sessionId, String leafMessageId, int limit) {
         if (sessionId == null || limit <= 0) {
             return List.of();
         }
@@ -208,7 +222,7 @@ public class MyBatisChatMessageStore {
             return List.of();
         }
         // SQL 先从 leaf 向 root 取最近 N 条，返回给 Runtime/DomainAgent 前再恢复为上下文阅读顺序。
-        return mapper.findRecentActivePath(tenantId, userId, sessionId, null, limit).stream()
+        return mapper.findRecentActivePath(tenantId, userId, sessionId, leafMessageId, limit).stream()
                 .map(this::toDomain)
                 .sorted(Comparator.comparing(ChatMessage::treeDepth).thenComparing(ChatMessage::nodeOrder))
                 .toList();

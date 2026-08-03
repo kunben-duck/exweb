@@ -910,7 +910,13 @@ ChatLiveEventBus 在本机出现 run topic 订阅者时动态订阅对应 Redis 
 ## 可选记忆上下文
 
 - `financeex.memory.short-term.enabled=false` 时，不装配最近问答，也不访问 Redis 短期记忆缓存。
-- `financeex.memory.short-term.recent-turns=5` 表示短期记忆开启后读取最近 5 轮问答，即最多 10 条消息。
-- `financeex.memory.short-term.cache-enabled=true` 表示短期记忆开启时优先使用 Redis 热缓存，miss 后回源数据库。
+- `financeex.memory.short-term.cache-enabled=true` 表示优先使用 Redis 热缓存；关闭时不执行任何短期记忆 Redis 读写，数据库仍是事实源。
+- `cache-recent-turns=5` 只限制 Redis 容量，按每轮最多 user/assistant 两条消息保存紧凑条目。条目不包含 Parts、附件、完整 metadata 或重复的归属字段。
+- `agent-runtime.recent-turns=5` 与 `agent-runtime.max-context-tokens=4096` 独立控制 Relay 和 DomainAgent 的 user/assistant 历史。Relay 只在普通 `user-message.messages` 中发送；DomainAgent 在请求根节点 `messages` 中发送，并覆盖前端 metadata 的同名字段。控制帧不携带历史。
+- `intent.recent-turns=5` 与 `intent.max-context-tokens=4096` 独立控制拒答和用户纠偏链路的 user-only 历史。上下文附加在最近一条 Intent 可见 route 的 `domainSessionMessages`，后续澄清复用首次冻结快照；普通首次意图和普通澄清不增加该字段。
+- 缓存窗口小于业务窗口、缓存 miss、路径不连续或 leaf 不匹配时直接回源当前 active path，并按缓存窗口重新预热。Redis 异常不得阻断聊天主流程。
+- 数据库回源由 `financeex.memory.short-term.storage.database-query-timeout-seconds` 限制只读事务和 JDBC Statement，默认 2 秒、允许 1 到 30 秒。查询超时、连接失败或读取异常时返回空记忆并继续路由；失败后按 `database-failure-backoff` 暂停新的数据库记忆读取，但仍先尝试 Redis。该退避不改变消息写入的严格性。
+- 普通 `NEXT` 从当前 leaf 读取；显式 `parentMessageId`、`EDIT_USER` 和 `REGENERATE_ASSISTANT` 从目标分支的新消息写入点之前读取。目标位于根节点时使用空历史，禁止回退到会话当前的其他分支。
+- 两个 Token 预算只约束新增历史数组，不包含当前 `query/content`。默认 `MemoryTokenCounter` 使用 JSON UTF-8 字节数保守估算，可替换为真实 GLM tokenizer。
 - `financeex.memory.long-term.enabled=false` 时，不调用长期记忆服务。
 - `financeex.memory.long-term.provider=disabled` 是默认安全 provider，开启长期记忆但未接真实服务时返回空结果。

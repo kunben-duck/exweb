@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.huawei.it.ex.one.application.service.memory.ShortTermMemoryContextAssembler;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
@@ -85,6 +86,23 @@ class IntentClarificationContextAssemblerTest {
                 .containsEntry("routeTrigger", "clarify_answer")
                 .doesNotContainKey("lastIntentRejectReason")
                 .doesNotContainKey("domainAgentRerouteContext");
+    }
+
+    @Test
+    void frozenIntentMessagesContinuePrivatelyWithoutEnteringPublicRequestSnapshot() {
+        List<Map<String, Object>> frozen = List.of(Map.of("role", "user", "content", "历史追问"));
+        Map<String, Object> requestPayload = new LinkedHashMap<>(
+                requestPayload("原始问题", "原始问题", "请补充场景", List.of(), null));
+        requestPayload.put(ShortTermMemoryContextAssembler.PRIVATE_INTENT_MESSAGES_KEY, frozen);
+
+        ChatCommand command = command(Map.copyOf(requestPayload), "补充信息");
+
+        assertThat(command.metadata()).containsEntry(
+                ShortTermMemoryContextAssembler.PRIVATE_INTENT_MESSAGES_KEY, frozen);
+        assertThat(map(map(command.metadata().get("intentClarification")).get("request")))
+                .doesNotContainKey(ShortTermMemoryContextAssembler.PRIVATE_INTENT_MESSAGES_KEY);
+        assertThat(ShortTermMemoryContextAssembler.publicInteractionPayload(requestPayload))
+                .doesNotContainKey(ShortTermMemoryContextAssembler.PRIVATE_INTENT_MESSAGES_KEY);
     }
 
     private ChatCommand command(Map<String, Object> requestPayload, String answer) {

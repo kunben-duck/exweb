@@ -46,6 +46,24 @@ public interface ChatMessageRepository {
     List<ChatMessage> findRecentMessages(String tenantId, String userId, String sessionId, int limit);
 
     /**
+     * 按指定消息树叶子读取最近消息。
+     *
+     * <p>默认实现兼容不支持消息树的仓储；支持 active path 的实现应覆盖该方法，确保编辑、重新生成和
+     * 分支切换后的短期上下文只来自当前路径。</p>
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param leafMessageId 当前 active path 的叶子消息；为空时由仓储读取会话当前叶子。
+     * @param limit 最大返回条数。
+     * @return 按上下文阅读顺序排列的最近消息。
+     */
+    default List<ChatMessage> findRecentMessages(
+            String tenantId, String userId, String sessionId, String leafMessageId, int limit) {
+        return findRecentMessages(tenantId, userId, sessionId, limit);
+    }
+
+    /**
      * 分页查询历史消息，供前端会话详情页使用。
      *
      * @param tenantId 租户标识。

@@ -41,8 +41,12 @@ public class MemoryProperties {
     public static class ShortTerm {
         /** 是否启用短期最近问答上下文装配，默认关闭。 */
         private boolean enabled = false;
-        /** 最近问答轮次数；一轮通常包含一条 user 消息和一条 assistant 消息。 */
-        private int recentTurns = 5;
+        /** Redis 最近问答缓存轮次数。 */
+        private int cacheRecentTurns = 5;
+        /** Relay 与 DomainAgent 共用的短期上下文窗口。 */
+        private final ContextWindow agentRuntime = new ContextWindow();
+        /** Intent 特定重路由场景使用的短期上下文窗口。 */
+        private final ContextWindow intent = new ContextWindow();
 
         public boolean isEnabled() {
             return enabled;
@@ -52,6 +56,45 @@ public class MemoryProperties {
             this.enabled = enabled;
         }
 
+        public int getCacheRecentTurns() {
+            return cacheRecentTurns;
+        }
+
+        public void setCacheRecentTurns(int cacheRecentTurns) {
+            this.cacheRecentTurns = cacheRecentTurns;
+        }
+
+        public ContextWindow getAgentRuntime() {
+            return agentRuntime;
+        }
+
+        public ContextWindow getIntent() {
+            return intent;
+        }
+
+        public int cacheMessageLimit() {
+            return doubledLimit(cacheRecentTurns);
+        }
+
+        public int sourceMessageLimit() {
+            return Math.max(agentRuntime.messageLimit(), intent.messageScanLimit());
+        }
+
+        private int doubledLimit(int turns) {
+            int normalized = Math.max(1, turns);
+            return normalized > Integer.MAX_VALUE / 2 ? Integer.MAX_VALUE : normalized * 2;
+        }
+    }
+
+    /**
+     * 单个下游用途的短期上下文窗口。
+     */
+    public static class ContextWindow {
+        /** 最近问答轮次数。 */
+        private int recentTurns = 5;
+        /** 新增历史消息数组的最大 Token 预算。 */
+        private int maxContextTokens = 4096;
+
         public int getRecentTurns() {
             return recentTurns;
         }
@@ -60,13 +103,33 @@ public class MemoryProperties {
             this.recentTurns = recentTurns;
         }
 
-        /**
-         * 将最近轮次转换为最近消息条数。
-         *
-         * @return 至少 2 条消息，避免配置为 0 时产生无意义查询。
-         */
-        public int recentMessageLimit() {
-            return Math.max(1, recentTurns) * 2;
+        public int getMaxContextTokens() {
+            return maxContextTokens;
+        }
+
+        public void setMaxContextTokens(int maxContextTokens) {
+            this.maxContextTokens = maxContextTokens;
+        }
+
+        public int normalizedRecentTurns() {
+            return Math.max(1, recentTurns);
+        }
+
+        public int normalizedMaxContextTokens() {
+            return Math.max(1, maxContextTokens);
+        }
+
+        public int messageLimit() {
+            return doubledRecentTurns();
+        }
+
+        public int messageScanLimit() {
+            return doubledRecentTurns();
+        }
+
+        private int doubledRecentTurns() {
+            int turns = normalizedRecentTurns();
+            return turns > Integer.MAX_VALUE / 2 ? Integer.MAX_VALUE : turns * 2;
         }
     }
 

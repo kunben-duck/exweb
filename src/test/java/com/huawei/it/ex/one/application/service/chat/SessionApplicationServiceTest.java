@@ -366,6 +366,53 @@ class SessionApplicationServiceTest {
     }
 
     @Test
+    void shortTermMemoryPathUsesTheTargetBranchInsteadOfCurrentLeaf() {
+        TestFixture fixture = fixture();
+        MessagePair first = completeTurn(fixture, "第一问", "第一答", "run1");
+        ChatRunMessagePlan secondPlan = fixture.service.prepareRunMessage(
+                user(),
+                command("第二问", ChatRunMode.NEXT, first.assistant().id(), null, null),
+                fixture.session,
+                "run2",
+                List.of());
+        MessagePair second = new MessagePair(
+                secondPlan.userMessage(),
+                saveAssistant(fixture, "第二答", "run2", secondPlan.userMessage().id(), null));
+
+        SessionApplicationService.ShortTermMemoryPath explicitBranch =
+                fixture.service.resolveShortTermMemoryPath(
+                        command("分支问题", ChatRunMode.NEXT, first.assistant().id(), null, null),
+                        fixture.session);
+        SessionApplicationService.ShortTermMemoryPath edited =
+                fixture.service.resolveShortTermMemoryPath(
+                        command("编辑后的第二问", ChatRunMode.EDIT_USER, null, second.user().id(), null),
+                        fixture.session);
+        SessionApplicationService.ShortTermMemoryPath regenerated =
+                fixture.service.resolveShortTermMemoryPath(
+                        command(null, ChatRunMode.REGENERATE_ASSISTANT, null, null, second.assistant().id()),
+                        fixture.session);
+
+        assertThat(explicitBranch).isEqualTo(
+                new SessionApplicationService.ShortTermMemoryPath(first.assistant().id(), false));
+        assertThat(edited).isEqualTo(
+                new SessionApplicationService.ShortTermMemoryPath(first.assistant().id(), false));
+        assertThat(regenerated).isEqualTo(
+                new SessionApplicationService.ShortTermMemoryPath(first.assistant().id(), false));
+    }
+
+    @Test
+    void editingRootQuestionUsesAnExplicitlyEmptyShortTermMemoryPath() {
+        TestFixture fixture = fixture();
+        MessagePair first = completeTurn(fixture, "第一问", "第一答", "run1");
+
+        SessionApplicationService.ShortTermMemoryPath path = fixture.service.resolveShortTermMemoryPath(
+                command("编辑后的第一问", ChatRunMode.EDIT_USER, null, first.user().id(), null),
+                fixture.session);
+
+        assertThat(path).isEqualTo(new SessionApplicationService.ShortTermMemoryPath(null, true));
+    }
+
+    @Test
     void branchCopiesReadonlySnapshotAndRejectsEditingSnapshotMessages() {
         TestFixture fixture = fixture();
         MessagePair original = completeTurn(fixture, "报销问题", "报销回答", "run1");

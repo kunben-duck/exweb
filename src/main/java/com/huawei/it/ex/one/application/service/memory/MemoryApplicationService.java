@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * 可选 SuperAgent 记忆上下文装配服务。
@@ -28,15 +29,24 @@ public class MemoryApplicationService {
     private final LongTermMemoryStore longTermMemory;
     private final MemoryProperties properties;
     private final AgentDataPersistenceProperties persistenceProperties;
+    private final ShortTermMemoryContextAssembler shortTermAssembler;
 
     @Autowired
     public MemoryApplicationService(ChatMessageRepository messages, LongTermMemoryStore longTermMemory,
                                     MemoryProperties properties,
-                                    AgentDataPersistenceProperties persistenceProperties) {
+                                    AgentDataPersistenceProperties persistenceProperties,
+                                    ShortTermMemoryContextAssembler shortTermAssembler) {
         this.messages = messages;
         this.longTermMemory = longTermMemory;
         this.properties = properties;
         this.persistenceProperties = persistenceProperties;
+        this.shortTermAssembler = shortTermAssembler;
+    }
+
+    public MemoryApplicationService(ChatMessageRepository messages, LongTermMemoryStore longTermMemory,
+                                    MemoryProperties properties,
+                                    AgentDataPersistenceProperties persistenceProperties) {
+        this(messages, longTermMemory, properties, persistenceProperties, null);
     }
 
     public MemoryApplicationService(ChatMessageRepository messages, LongTermMemoryStore longTermMemory,
@@ -51,13 +61,48 @@ public class MemoryApplicationService {
      * @return 记忆上下文；全部记忆关闭时返回空上下文。
      */
     public MemoryContext loadForRun(ChatCommand command) {
+        return loadForRun(command, null);
+    }
+
+    /**
+     * 根据当前 active path 叶子装配本轮不可变记忆快照。
+     *
+     * @param command 当前聊天命令。
+     * @param currentLeafMessageId 读取记忆时会话的当前叶子；本轮用户消息尚未落库。
+     * @return 本轮记忆上下文。
+     */
+    public MemoryContext loadForRun(ChatCommand command, String currentLeafMessageId) {
+        return loadForRun(command, currentLeafMessageId, null);
+    }
+
+    /**
+     * 装配 Interaction continuation 的记忆，并排除已经存在于历史路径中的本轮 query 消息。
+     */
+    public MemoryContext loadForRun(
+            ChatCommand command, String currentLeafMessageId, String excludedMessageId) {
+        return loadForRun(command, currentLeafMessageId, excludedMessageId, false);
+    }
+
+    /**
+     * 装配指定消息路径的记忆；新分支位于根节点前时可显式跳过短期消息读取。
+     */
+    public MemoryContext loadForRun(
+            ChatCommand command,
+            String currentLeafMessageId,
+            String excludedMessageId,
+            boolean emptyShortTermPath) {
         if (!properties.contextEnabled()) {
             return MemoryContext.empty();
         }
-        List<ChatMessage> recentMessages = properties.getShortTerm().isEnabled()
+        int sourceLimit = shortTermAssembler == null
+                ? properties.getShortTerm().sourceMessageLimit()
+                : shortTermAssembler.sourceMessageLimit();
+        List<ChatMessage> recentMessages = properties.getShortTerm().isEnabled() && !emptyShortTermPath
                 ? messages.findRecentMessages(command.tenantId(), command.userId(), command.sessionId(),
-                        properties.getShortTerm().recentMessageLimit()).stream()
-                        .filter(message -> !placeholderAssistant(message))
+                        currentLeafMessageId, sourceLimit).stream()
+                        .filter(message -> message != null
+                                && !Objects.equals(excludedMessageId, message.id()))
+                        .filter(this::memoryEligibleMessage)
                         .toList()
                 : List.of();
         List<LongTermMemoryItem> longTermMemories = properties.getLongTerm().isEnabled()
@@ -66,13 +111,27 @@ public class MemoryApplicationService {
                         .filter(memory -> !placeholderMemory(memory))
                         .toList()
                 : List.of();
-        return new MemoryContext(recentMessages, longTermMemories);
+        return new MemoryContext(
+                recentMessages,
+                longTermMemories,
+                null,
+                properties.getShortTerm().isEnabled(),
+                shortTermAssembler == null ? List.of() : shortTermAssembler.agentRuntimeMessages(recentMessages));
     }
 
     private boolean placeholderAssistant(ChatMessage message) {
         return message != null
                 && "assistant".equalsIgnoreCase(message.role())
                 && AgentDataPersistenceMetadata.placeholderAssistant(message.metadataJson());
+    }
+
+    private boolean memoryEligibleMessage(ChatMessage message) {
+        if (message == null || message.content() == null || message.content().isBlank()) {
+            return false;
+        }
+        boolean supportedRole = "user".equalsIgnoreCase(message.role())
+                || "assistant".equalsIgnoreCase(message.role());
+        return supportedRole && !placeholderAssistant(message);
     }
 
     private boolean placeholderMemory(LongTermMemoryItem memory) {

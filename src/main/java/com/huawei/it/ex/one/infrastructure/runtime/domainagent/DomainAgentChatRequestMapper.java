@@ -37,6 +37,9 @@ public class DomainAgentChatRequestMapper {
         Map<String, Object> body = deepCopyMap(request.metadata());
         validateDocList(body, request.documents());
         Map<String, Object> next = new LinkedHashMap<>(body);
+        if (request.shortTermMemoryEnabled()) {
+            next.put("messages", request.messages());
+        }
         next.put("skillId", request.domainAgentId());
         next.put("query", request.query());
         next.put("sessionId", sessionId(request));

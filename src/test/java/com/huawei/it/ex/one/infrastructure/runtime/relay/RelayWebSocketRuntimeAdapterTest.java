@@ -10,6 +10,7 @@ import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDispatchState;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.common.trace.TraceContext;
+import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -111,6 +112,36 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(userMessage.path("traceId").asText()).isEqualTo("relay-trace-1");
         assertThat(userMessage.path("metadata").path("userAccount").asText()).isEqualTo("account1");
         assertThat(userMessage.path("metadata").path("globalUserId").asLong()).isEqualTo(1001L);
+        assertThat(userMessage.has("messages")).isFalse();
+    }
+
+    @Test
+    void enabledShortTermMemoryAddsMessagesToNormalUserMessage() throws Exception {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
+                "{\"type\":\"agent\",\"content\":\"你好\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+        MemoryContext memory = new MemoryContext(
+                List.of(),
+                List.of(),
+                null,
+                true,
+                List.of(
+                        new ConversationMemoryMessage("user", "历史问题"),
+                        new ConversationMemoryMessage("assistant", "历史回答")));
+
+        StepVerifier.create(adapter.query(requestWithMemory(memory)))
+                .expectNextCount(4)
+                .verifyComplete();
+
+        JsonNode userMessage = objectMapper.readTree(client.sent().get(1));
+        assertThat(userMessage.path("messages").isArray()).isTrue();
+        assertThat(userMessage.path("messages").get(0).path("role").asText()).isEqualTo("user");
+        assertThat(userMessage.path("messages").get(0).path("content").asText()).isEqualTo("历史问题");
+        assertThat(userMessage.path("messages").get(1).path("role").asText()).isEqualTo("assistant");
+        assertThat(userMessage.path("messages").get(1).path("content").asText()).isEqualTo("历史回答");
     }
 
     @Test
@@ -1143,6 +1174,29 @@ class RelayWebSocketRuntimeAdapterTest {
                 forwardHeaders,
                 traceContext
         );
+    }
+
+    private AgentRuntimeRequest requestWithMemory(MemoryContext memory) {
+        AgentRuntimeRequest request = request(null, RuntimeForwardHeaders.empty());
+        return new AgentRuntimeRequest(
+                request.tenantId(),
+                request.userId(),
+                request.userAccount(),
+                request.globalUserId(),
+                request.sessionId(),
+                request.runId(),
+                request.runtimeSessionId(),
+                request.runtimeSessionMode(),
+                request.message(),
+                request.attachments(),
+                request.documents(),
+                memory,
+                request.intentDecision(),
+                request.routeTarget(),
+                request.metadata(),
+                request.bindingMetadata(),
+                request.forwardHeaders(),
+                request.traceContext());
     }
 
     private AgentRuntimeCancelRequest cancelRequest(String runId) {

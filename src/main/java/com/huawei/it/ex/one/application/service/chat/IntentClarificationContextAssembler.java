@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.service.memory.ShortTermMemoryContextAssembler;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
@@ -73,6 +74,11 @@ final class IntentClarificationContextAssembler {
             metadata.put(DOMAIN_AGENT_REROUTE_CONTEXT, rerouteState);
             metadata.put(DomainAgentRejectReason.METADATA_KEY,
                     DomainAgentRejectReason.fromRerouteState(rerouteState).toMap());
+        }
+        Object frozenIntentMessages = requestPayload.get(
+                ShortTermMemoryContextAssembler.PRIVATE_INTENT_MESSAGES_KEY);
+        if (frozenIntentMessages instanceof List<?> messages) {
+            metadata.put(ShortTermMemoryContextAssembler.PRIVATE_INTENT_MESSAGES_KEY, List.copyOf(messages));
         }
         return new ChatCommand(null, user.tenantId(), user.ownerUserId(), session.id(), null,
                 null, clarifyAnswer == null ? "" : clarifyAnswer,
@@ -172,11 +178,14 @@ final class IntentClarificationContextAssembler {
     }
 
     Map<String, Object> withoutDocumentIds(Map<String, Object> payload) {
-        if (payload == null || payload.isEmpty() || !payload.containsKey(DOCUMENT_IDS)) {
+        if (payload == null || payload.isEmpty()
+                || (!payload.containsKey(DOCUMENT_IDS)
+                && !payload.containsKey(ShortTermMemoryContextAssembler.PRIVATE_INTENT_MESSAGES_KEY))) {
             return payload == null ? Map.of() : payload;
         }
         Map<String, Object> copy = new LinkedHashMap<>(payload);
         copy.remove(DOCUMENT_IDS);
+        copy.remove(ShortTermMemoryContextAssembler.PRIVATE_INTENT_MESSAGES_KEY);
         return ChatPayloadMaps.immutableCopy(copy);
     }
 

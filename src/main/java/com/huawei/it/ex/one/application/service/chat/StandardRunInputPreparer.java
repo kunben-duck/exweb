@@ -80,7 +80,10 @@ final class StandardRunInputPreparer {
                                 request.user().ownerUserId(),
                                 session.id()))
                 : startAttempt.runId();
-        MemoryContext memory = memoryAssembler.assemble(normalized);
+        SessionApplicationService.ShortTermMemoryPath memoryPath =
+                sessionService.resolveShortTermMemoryPath(normalized, session);
+        MemoryContext memory = memoryAssembler.assemble(
+                normalized, memoryPath.leafMessageId(), memoryPath.emptyPath());
         runStartCoordinator.ensureActive(startAttempt, "after-memory-load");
         return new PreparedRun(
                 request.user(),

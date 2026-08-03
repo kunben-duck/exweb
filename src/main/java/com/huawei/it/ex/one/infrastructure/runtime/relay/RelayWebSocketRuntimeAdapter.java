@@ -678,6 +678,9 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         Map<String, Object> message = new LinkedHashMap<>();
         message.put("type", "user-message");
         message.put("content", request.message() == null ? "" : request.message());
+        if (request.memoryContext() != null && request.memoryContext().shortTermEnabled()) {
+            message.put("messages", request.memoryContext().agentRuntimeMessages());
+        }
         putTraceId(message, request.traceContext());
         Map<String, Object> metadata = RelayRuntimeWireRequestMapper.relayMetadata(
                 request.metadata(), request.userAccount(), request.globalUserId());

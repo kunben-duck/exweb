@@ -90,16 +90,31 @@ public class RouteMemoryApplicationService {
                     List<RouteMemoryItem> routes = new ArrayList<>(repository.findRecentRoutes(user.tenantId(),
                             user.ownerUserId(), sessionId, properties.normalizedTopK()));
                     Collections.reverse(routes);
-                    routes.stream()
+                    List<RouteMemoryItem> visibleRoutes = routes.stream()
                             .filter(this::visibleInIntentHistory)
+                            .toList();
+                    visibleRoutes.stream()
                             .map(this::toHistoryRoute)
                             .forEach(history::add);
                     repository.findActiveClarifications(user.tenantId(), user.ownerUserId(), sessionId).stream()
                             .map(this::toHistoryClarify)
                             .forEach(history::add);
                     return new RouteMemoryContext(blankToDefault(routeTrigger, TRIGGER_FIRST_TURN),
-                            history, lastIntentRejectReason);
+                            history, lastIntentRejectReason, latestRouteSourceRunId(visibleRoutes));
                 });
+    }
+
+    private String latestRouteSourceRunId(List<RouteMemoryItem> routes) {
+        if (routes == null || routes.isEmpty()) {
+            return null;
+        }
+        for (int index = routes.size() - 1; index >= 0; index--) {
+            RouteMemoryItem item = routes.get(index);
+            if ("route".equals(String.valueOf(toHistoryRoute(item).get("type")))) {
+                return item.sourceRunId();
+            }
+        }
+        return null;
     }
 
     public int activeClarificationCount(UserContext user, String sessionId) {

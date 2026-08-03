@@ -19,6 +19,7 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
 import reactor.core.publisher.Flux;
 
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -32,6 +33,26 @@ final class AmbiguousRouteContinuationCoordinator {
     private final ChatRuntimeDispatchCoordinator runtimeDispatchCoordinator;
     private final ChatEventPersistenceCoordinator eventPersistenceCoordinator;
     private final ChatRunAdmissionCoordinator admissionCoordinator;
+    private final RunMemoryContextAssembler memoryAssembler;
+
+    AmbiguousRouteContinuationCoordinator(
+            AmbiguousRouteSelectionResolver selectionResolver,
+            IntentClarificationContextAssembler clarificationAssembler,
+            InteractionEventFactory interactionEventFactory,
+            InteractionRunLifecycle lifecycle,
+            ChatRuntimeDispatchCoordinator runtimeDispatchCoordinator,
+            ChatEventPersistenceCoordinator eventPersistenceCoordinator,
+            ChatRunAdmissionCoordinator admissionCoordinator,
+            RunMemoryContextAssembler memoryAssembler) {
+        this.selectionResolver = selectionResolver;
+        this.clarificationAssembler = clarificationAssembler;
+        this.interactionEventFactory = interactionEventFactory;
+        this.lifecycle = lifecycle;
+        this.runtimeDispatchCoordinator = runtimeDispatchCoordinator;
+        this.eventPersistenceCoordinator = eventPersistenceCoordinator;
+        this.admissionCoordinator = admissionCoordinator;
+        this.memoryAssembler = memoryAssembler;
+    }
 
     AmbiguousRouteContinuationCoordinator(
             AmbiguousRouteSelectionResolver selectionResolver,
@@ -41,13 +62,8 @@ final class AmbiguousRouteContinuationCoordinator {
             ChatRuntimeDispatchCoordinator runtimeDispatchCoordinator,
             ChatEventPersistenceCoordinator eventPersistenceCoordinator,
             ChatRunAdmissionCoordinator admissionCoordinator) {
-        this.selectionResolver = selectionResolver;
-        this.clarificationAssembler = clarificationAssembler;
-        this.interactionEventFactory = interactionEventFactory;
-        this.lifecycle = lifecycle;
-        this.runtimeDispatchCoordinator = runtimeDispatchCoordinator;
-        this.eventPersistenceCoordinator = eventPersistenceCoordinator;
-        this.admissionCoordinator = admissionCoordinator;
+        this(selectionResolver, clarificationAssembler, interactionEventFactory, lifecycle,
+                runtimeDispatchCoordinator, eventPersistenceCoordinator, admissionCoordinator, null);
     }
 
     Flux<ChatEvent> execute(Request request) {
@@ -56,6 +72,13 @@ final class AmbiguousRouteContinuationCoordinator {
         if (plan == null || !plan.selectedCandidate()) {
             throw new IllegalArgumentException("AMBIGUOUS_ROUTE 候选执行计划不能为空");
         }
+        String routeQuery = clarificationAssembler.routeMemoryQueryForSelection(interaction);
+        ChatCommand command = clarificationAssembler.selectionCommand(
+                request.user(), request.session(), interaction, request.input(), routeQuery);
+        MemoryContext memory = memoryAssembler == null
+                ? MemoryContext.empty()
+                : memoryAssembler.assemble(
+                        command, request.session().currentLeafMessageId(), interaction.userMessageId());
         ChatRunAdmissionCommitService.AdmissionResult admission =
                 admissionCoordinator.admitIntentClarification(
                         new ChatRunAdmissionCoordinator.IntentClarificationAdmission(
@@ -85,7 +108,8 @@ final class AmbiguousRouteContinuationCoordinator {
                 "after-ambiguous-route-execution-create");
         return executeStarted(
                 request,
-                new StartedExecution(interaction, plan, messagePlan, run, executionClaim));
+                new StartedExecution(
+                        interaction, plan, messagePlan, run, executionClaim, command, routeQuery, memory));
     }
 
     private Flux<ChatEvent> executeStarted(Request request, StartedExecution started) {
@@ -97,7 +121,8 @@ final class AmbiguousRouteContinuationCoordinator {
                 routeRef,
                 bindingRef,
                 runtimeSessionModeRef,
-                new AssistantAssembly());
+                new AssistantAssembly(),
+                new AtomicReference<>());
         RunEventPipelineContext context = new RunEventPipelineContext(
                 request.user(),
                 request.session(),
@@ -107,17 +132,10 @@ final class AmbiguousRouteContinuationCoordinator {
                 runtimeReferences.assistant(),
                 request.runId(),
                 started.executionClaim(),
-                new AtomicReference<>(),
+                runtimeReferences.pendingInteractionPayloadRef(),
                 started.interaction(),
                 request.startAttempt(),
                 request.input().cumulativeDocumentIds());
-        String routeQuery = clarificationAssembler.routeMemoryQueryForSelection(started.interaction());
-        ChatCommand command = clarificationAssembler.selectionCommand(
-                request.user(),
-                request.session(),
-                started.interaction(),
-                request.input(),
-                routeQuery);
         RouteSignalResult routeSignal = selectionResolver.routeSignal(
                 started.plan().candidate(),
                 started.plan().routeSource());
@@ -136,8 +154,8 @@ final class AmbiguousRouteContinuationCoordinator {
                                             request,
                                             started,
                                             runtimeReferences,
-                                            command,
-                                            routeQuery),
+                                            started.command(),
+                                            started.routeQuery()),
                                     routeSignal)));
         } catch (RuntimeException ex) {
             return lifecycle.failContinuation(context, ex);
@@ -156,7 +174,7 @@ final class AmbiguousRouteContinuationCoordinator {
                 command,
                 request.input().cumulativeAttachments(),
                 request.input().cumulativeDocuments(),
-                MemoryContext.empty(),
+                started.memory(),
                 request.runId(),
                 started.messagePlan().parentMessageId(),
                 request.forwardHeaders(),
@@ -172,7 +190,8 @@ final class AmbiguousRouteContinuationCoordinator {
                 request.input().runtimeMetadata(),
                 request.input().agentMode(),
                 new RuntimeBindingDispatchLifecycle(),
-                runtimeReferences.assistant().persistenceState());
+                runtimeReferences.assistant().persistenceState(),
+                runtimeReferences.pendingInteractionPayloadRef());
     }
 
     record Request(
@@ -193,7 +212,10 @@ final class AmbiguousRouteContinuationCoordinator {
             AmbiguousRouteContinuationPlan plan,
             ChatRunMessagePlan messagePlan,
             ChatRun run,
-            RunExecutionClaim executionClaim
+            RunExecutionClaim executionClaim,
+            ChatCommand command,
+            String routeQuery,
+            MemoryContext memory
     ) {
     }
 
@@ -201,7 +223,8 @@ final class AmbiguousRouteContinuationCoordinator {
             AtomicReference<RouteTarget> routeRef,
             AtomicReference<RuntimeBinding> bindingRef,
             AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
-            AssistantAssembly assistant
+            AssistantAssembly assistant,
+            AtomicReference<Map<String, Object>> pendingInteractionPayloadRef
     ) {
     }
 }

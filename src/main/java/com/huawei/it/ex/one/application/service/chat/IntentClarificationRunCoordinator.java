@@ -28,6 +28,24 @@ final class IntentClarificationRunCoordinator {
     private final ChatRuntimeDispatchCoordinator runtimeDispatchCoordinator;
     private final ChatEventPersistenceCoordinator eventPersistenceCoordinator;
     private final ChatRunAdmissionCoordinator admissionCoordinator;
+    private final RunMemoryContextAssembler memoryAssembler;
+
+    IntentClarificationRunCoordinator(
+            IntentClarificationContextAssembler clarificationAssembler,
+            InteractionEventFactory interactionEventFactory,
+            InteractionRunLifecycle lifecycle,
+            ChatRuntimeDispatchCoordinator runtimeDispatchCoordinator,
+            ChatEventPersistenceCoordinator eventPersistenceCoordinator,
+            ChatRunAdmissionCoordinator admissionCoordinator,
+            RunMemoryContextAssembler memoryAssembler) {
+        this.clarificationAssembler = clarificationAssembler;
+        this.interactionEventFactory = interactionEventFactory;
+        this.lifecycle = lifecycle;
+        this.runtimeDispatchCoordinator = runtimeDispatchCoordinator;
+        this.eventPersistenceCoordinator = eventPersistenceCoordinator;
+        this.admissionCoordinator = admissionCoordinator;
+        this.memoryAssembler = memoryAssembler;
+    }
 
     IntentClarificationRunCoordinator(
             IntentClarificationContextAssembler clarificationAssembler,
@@ -36,12 +54,8 @@ final class IntentClarificationRunCoordinator {
             ChatRuntimeDispatchCoordinator runtimeDispatchCoordinator,
             ChatEventPersistenceCoordinator eventPersistenceCoordinator,
             ChatRunAdmissionCoordinator admissionCoordinator) {
-        this.clarificationAssembler = clarificationAssembler;
-        this.interactionEventFactory = interactionEventFactory;
-        this.lifecycle = lifecycle;
-        this.runtimeDispatchCoordinator = runtimeDispatchCoordinator;
-        this.eventPersistenceCoordinator = eventPersistenceCoordinator;
-        this.admissionCoordinator = admissionCoordinator;
+        this(clarificationAssembler, interactionEventFactory, lifecycle, runtimeDispatchCoordinator,
+                eventPersistenceCoordinator, admissionCoordinator, null);
     }
 
     Flux<ChatEvent> execute(Request request) {
@@ -57,7 +71,10 @@ final class IntentClarificationRunCoordinator {
                 request.session().id(),
                 interaction,
                 request.claim().responsePayload());
-        MemoryContext memory = MemoryContext.empty();
+        MemoryContext memory = memoryAssembler == null
+                ? MemoryContext.empty()
+                : memoryAssembler.assemble(
+                        command, request.session().currentLeafMessageId(), interaction.userMessageId());
         AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>();
         AtomicReference<RouteTarget> routeRef = new AtomicReference<>();
         AtomicReference<RuntimeSessionMode> runtimeSessionModeRef =
@@ -90,6 +107,7 @@ final class IntentClarificationRunCoordinator {
                 executionClaim,
                 "after-intent-interaction-execution-create");
         AssistantAssembly assistant = new AssistantAssembly();
+        AtomicReference<java.util.Map<String, Object>> pendingInteractionPayloadRef = new AtomicReference<>();
         RunEventPipelineContext context = new RunEventPipelineContext(
                 request.user(),
                 request.session(),
@@ -99,7 +117,7 @@ final class IntentClarificationRunCoordinator {
                 assistant,
                 request.runId(),
                 executionClaim,
-                new AtomicReference<>(),
+                pendingInteractionPayloadRef,
                 interaction,
                 request.startAttempt(),
                 request.input().cumulativeDocumentIds());
@@ -132,7 +150,8 @@ final class IntentClarificationRunCoordinator {
                                     request.input().runtimeMetadata(),
                                     request.input().agentMode(),
                                     new RuntimeBindingDispatchLifecycle(),
-                                    assistant.persistenceState()))));
+                                    assistant.persistenceState(),
+                                    pendingInteractionPayloadRef))));
         } catch (RuntimeException ex) {
             return lifecycle.failContinuation(context, ex);
         }

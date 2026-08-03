@@ -189,7 +189,7 @@ final class ChatRuntimeDispatchCoordinator {
         Mono<?> policyResolution = persistenceGate == null
                 ? Mono.just(request.persistenceState())
                 : persistenceGate.resolve(
-                        request.user(), resolution.route(), request.persistenceState());
+                        request.user(), resolution.route(), request.persistenceState(), request.forwardHeaders());
         return policyResolution.thenMany(Flux.defer(() -> {
             persistResolvedRoute(request, resolution, recordIntentRecognition);
             return dispatchPersistedRuntime(request, resolution);

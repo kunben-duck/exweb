@@ -3,177 +3,204 @@ package com.huawei.it.ex.one.infrastructure.domainagentconfig;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfiguration;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfigurationException;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfigurationQuery;
 
-import reactor.core.scheduler.Scheduler;
-import reactor.core.scheduler.Schedulers;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+import org.springframework.web.reactive.function.client.WebClient;
 
-import java.util.List;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.LockSupport;
 
 class DefaultDomainAgentSkillConfigurationProviderTest {
-    @Test
-    void sendsSingleSkillIdAndMapsExplicitNo() {
-        AtomicReference<List<String>> requestedSkillIds = new AtomicReference<>();
-        DomainAgentSkillConfigurationClient client = skillIds -> {
-            requestedSkillIds.set(skillIds);
-            return response(item("skill-1", "N"));
-        };
+    private HttpServer server;
 
-        DomainAgentSkillConfiguration configuration = resolve(provider(client), "skill-1");
-
-        assertThat(configuration)
-                .isEqualTo(new DomainAgentSkillConfiguration("skill-1", Boolean.FALSE));
-        assertThat(requestedSkillIds.get()).containsExactly("skill-1");
+    @AfterEach
+    void stopServer() {
+        if (server != null) {
+            server.stop(0);
+        }
     }
 
     @Test
-    void mapsYesBlankAndMissingConfigurationWithoutInventingDefaults() {
-        assertThat(resolve(provider(skillIds -> response(item("skill-1", "y"))), "skill-1"))
-                .extracting(DomainAgentSkillConfiguration::saveSession)
-                .isEqualTo(Boolean.TRUE);
-        assertThat(resolve(provider(skillIds -> response(item("skill-1", "  "))), "skill-1")
-                .saveSession())
+    void sendsSingleSkillIdAndOnlyForwardsCookie() throws Exception {
+        AtomicReference<CapturedRequest> captured = new AtomicReference<>();
+        startServer(200, response(item("skill-1", "N")), Duration.ZERO, captured);
+        RuntimeForwardHeaders forwardHeaders = RuntimeForwardHeaders.fromCookieHeader(
+                "SESSION=test-cookie; tenant=tenant-1", 8192);
+
+        DomainAgentSkillConfiguration configuration = resolve(provider("2s"), "skill-1", forwardHeaders);
+
+        assertThat(configuration)
+                .isEqualTo(new DomainAgentSkillConfiguration("skill-1", Boolean.FALSE));
+        assertThat(captured.get().method()).isEqualTo("POST");
+        assertThat(captured.get().path()).isEqualTo("/skill-config");
+        assertThat(captured.get().body()).isEqualTo("[\"skill-1\"]");
+        assertThat(captured.get().contentType()).startsWith("application/json");
+        assertThat(captured.get().accept()).contains("application/json");
+        assertThat(captured.get().cookie()).isEqualTo("SESSION=test-cookie; tenant=tenant-1");
+        assertThat(captured.get().authorization()).isNull();
+        assertThat(forwardHeaders.toString()).doesNotContain("test-cookie", "tenant=tenant-1");
+    }
+
+    @Test
+    void callsEndpointWithoutCookieWhenRequestHasNoCookie() throws Exception {
+        AtomicReference<CapturedRequest> captured = new AtomicReference<>();
+        startServer(200, response(item("skill-1", "Y")), Duration.ZERO, captured);
+
+        DomainAgentSkillConfiguration configuration = resolve(
+                provider("2s"), "skill-1", RuntimeForwardHeaders.empty());
+
+        assertThat(configuration.saveSession()).isTrue();
+        assertThat(captured.get().cookie()).isNull();
+    }
+
+    @Test
+    void mapsBlankAndMissingConfigurationWithoutInventingDefaults() throws Exception {
+        startServer(200, response(item("skill-1", "  ")), Duration.ZERO, new AtomicReference<>());
+        assertThat(resolve(provider("2s"), "skill-1", RuntimeForwardHeaders.empty()).saveSession())
                 .isNull();
-        assertThat(resolve(provider(skillIds -> response(item("another-skill", "N"))), "skill-1"))
+
+        stopServer();
+        startServer(200, response(item("another-skill", "N")), Duration.ZERO, new AtomicReference<>());
+        assertThat(resolve(provider("2s"), "skill-1", RuntimeForwardHeaders.empty()))
                 .isEqualTo(DomainAgentSkillConfiguration.unconfigured("skill-1"));
     }
 
     @Test
-    void rejectsUnknownOrConflictingSaveSessionValues() {
-        assertProtocolInvalid(provider(skillIds -> response(item("skill-1", "MAYBE"))));
-        assertProtocolInvalid(provider(skillIds -> response(
-                item("skill-1", "Y"),
-                item("skill-1", "N"))));
+    void rejectsUnknownOrConflictingSaveSessionValues() throws Exception {
+        startServer(200, response(item("skill-1", "MAYBE")), Duration.ZERO, new AtomicReference<>());
+        assertReason(provider("2s"), DomainAgentSkillConfigurationException.Reason.PROTOCOL_INVALID);
+
+        stopServer();
+        startServer(200, response(item("skill-1", "Y"), item("skill-1", "N")),
+                Duration.ZERO, new AtomicReference<>());
+        assertReason(provider("2s"), DomainAgentSkillConfigurationException.Reason.PROTOCOL_INVALID);
     }
 
     @Test
-    void rejectsEmptyOrMalformedResponses() {
-        assertProtocolInvalid(provider(skillIds -> null));
-        assertProtocolInvalid(provider(skillIds -> new SkillConfigurationResponse(null, List.of())));
+    void distinguishesProtocolHttpAndTimeoutFailures() throws Exception {
+        startServer(200, "{invalid-json", Duration.ZERO, new AtomicReference<>());
+        assertReason(provider("2s"), DomainAgentSkillConfigurationException.Reason.PROTOCOL_INVALID);
+
+        stopServer();
+        startServer(503, "{}", Duration.ZERO, new AtomicReference<>());
+        assertReason(provider("2s"), DomainAgentSkillConfigurationException.Reason.UNAVAILABLE);
+
+        stopServer();
+        startServer(200, response(item("skill-1", "Y")), Duration.ofMillis(200), new AtomicReference<>());
+        assertReason(provider("10ms"), DomainAgentSkillConfigurationException.Reason.TIMEOUT);
     }
 
     @Test
-    void preservesClientProtocolErrorsAndMapsOtherFailuresToUnavailable() {
-        DefaultDomainAgentSkillConfigurationProvider protocolFailure = provider(skillIds -> {
-            throw new DomainAgentSkillConfigurationException(
-                    DomainAgentSkillConfigurationException.Reason.PROTOCOL_INVALID,
-                    "Invalid enterprise response");
-        });
-        assertProtocolInvalid(protocolFailure);
-
-        DefaultDomainAgentSkillConfigurationProvider unavailable = provider(skillIds -> {
-            throw new IllegalStateException("Enterprise client unavailable");
-        });
-        assertReason(unavailable, DomainAgentSkillConfigurationException.Reason.UNAVAILABLE);
-    }
-
-    @Test
-    void executesBlockingClientOnConfiguredScheduler() {
-        AtomicReference<String> threadName = new AtomicReference<>();
-        Scheduler scheduler = Schedulers.newSingle("skill-config-client-test");
-        try {
-            DefaultDomainAgentSkillConfigurationProvider provider = provider(skillIds -> {
-                threadName.set(Thread.currentThread().getName());
-                return response(item("skill-1", "Y"));
-            }, scheduler, "2s");
-
-            resolve(provider, "skill-1");
-
-            assertThat(threadName.get()).startsWith("skill-config-client-test");
-        } finally {
-            scheduler.dispose();
-        }
-    }
-
-    @Test
-    void mapsConfiguredTimeoutToTimeoutReason() {
-        Scheduler scheduler = Schedulers.newBoundedElastic(1, 1, "skill-config-timeout-test");
-        try {
-            DefaultDomainAgentSkillConfigurationProvider provider = provider(skillIds -> {
-                LockSupport.parkNanos(200_000_000L);
-                return response(item("skill-1", "Y"));
-            }, scheduler, "10ms");
-
-            assertReason(provider, DomainAgentSkillConfigurationException.Reason.TIMEOUT);
-        } finally {
-            scheduler.dispose();
-        }
-    }
-
-    @Test
-    void rejectsMissingTimeoutAndInvalidQueriesAsProtocolErrors() {
-        DefaultDomainAgentSkillConfigurationProvider missingTimeout = provider(
-                skillIds -> response(item("skill-1", "Y")),
-                Schedulers.immediate(),
-                "");
-        assertProtocolInvalid(missingTimeout);
-
-        DefaultDomainAgentSkillConfigurationProvider provider = provider(
-                skillIds -> response(item("skill-1", "Y")));
-        assertThatThrownBy(() -> provider.findBySkillId(null).block())
+    void rejectsInvalidQueriesAndUsesTwoSecondDefaultTimeout() {
+        assertThat(new DomainAgentSkillConfigurationProperties().normalizedTimeout())
+                .isEqualTo(Duration.ofSeconds(2));
+        assertThatThrownBy(() -> provider("2s").findBySkillId(null).block())
                 .isInstanceOfSatisfying(DomainAgentSkillConfigurationException.class,
                         error -> assertThat(error.reason())
                                 .isEqualTo(DomainAgentSkillConfigurationException.Reason.PROTOCOL_INVALID));
     }
 
-    @Test
-    void exposesStableEnterpriseOperationNameAndCurrentCompilePlaceholder() {
-        DefaultDomainAgentSkillConfigurationClient client =
-                new DefaultDomainAgentSkillConfigurationClient();
-
-        assertThat(DefaultDomainAgentSkillConfigurationClient.OPERATION_NAME)
-                .isEqualTo("findSkillConfigBySkillIds");
-        assertThatThrownBy(() -> client.findBySkillIds(List.of("skill-1")))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("DomainAgent skill configuration client is not configured");
-    }
-
     private DomainAgentSkillConfiguration resolve(
             DefaultDomainAgentSkillConfigurationProvider provider,
-            String skillId) {
-        return provider.findBySkillId(
-                        new DomainAgentSkillConfigurationQuery("tenant-1", "user-1", skillId))
-                .block();
-    }
-
-    private void assertProtocolInvalid(DefaultDomainAgentSkillConfigurationProvider provider) {
-        assertReason(provider, DomainAgentSkillConfigurationException.Reason.PROTOCOL_INVALID);
+            String skillId,
+            RuntimeForwardHeaders forwardHeaders) {
+        return provider.findBySkillId(new DomainAgentSkillConfigurationQuery(
+                        "tenant-1", "user-1", skillId, forwardHeaders))
+                .block(Duration.ofSeconds(3));
     }
 
     private void assertReason(
             DefaultDomainAgentSkillConfigurationProvider provider,
             DomainAgentSkillConfigurationException.Reason expected) {
-        assertThatThrownBy(() -> resolve(provider, "skill-1"))
+        assertThatThrownBy(() -> resolve(provider, "skill-1", RuntimeForwardHeaders.empty()))
                 .isInstanceOfSatisfying(DomainAgentSkillConfigurationException.class,
                         error -> assertThat(error.reason()).isEqualTo(expected));
     }
 
-    private DefaultDomainAgentSkillConfigurationProvider provider(
-            DomainAgentSkillConfigurationClient client) {
-        return provider(client, Schedulers.immediate(), "2s");
-    }
-
-    private DefaultDomainAgentSkillConfigurationProvider provider(
-            DomainAgentSkillConfigurationClient client,
-            Scheduler scheduler,
-            String timeout) {
-        DomainAgentSkillConfigurationProperties properties =
-                new DomainAgentSkillConfigurationProperties();
+    private DefaultDomainAgentSkillConfigurationProvider provider(String timeout) {
+        DomainAgentSkillConfigurationProperties properties = new DomainAgentSkillConfigurationProperties();
+        properties.setBaseUrl(server == null
+                ? "http://127.0.0.1:1"
+                : "http://127.0.0.1:" + server.getAddress().getPort());
+        properties.setQueryPath("/skill-config");
         properties.setTimeout(timeout);
-        return new DefaultDomainAgentSkillConfigurationProvider(client, properties, scheduler);
+        return new DefaultDomainAgentSkillConfigurationProvider(WebClient.builder(), properties);
     }
 
-    private SkillConfigurationResponse response(SkillConfigurationItem... items) {
-        return new SkillConfigurationResponse("success", List.of(items));
+    private void startServer(
+            int status,
+            String responseBody,
+            Duration delay,
+            AtomicReference<CapturedRequest> captured) throws IOException {
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/skill-config", exchange -> respond(
+                exchange, status, responseBody, delay, captured));
+        server.start();
     }
 
-    private SkillConfigurationItem item(String skillId, String isSaveSession) {
-        return new SkillConfigurationItem(skillId, isSaveSession);
+    private void respond(
+            HttpExchange exchange,
+            int status,
+            String responseBody,
+            Duration delay,
+            AtomicReference<CapturedRequest> captured) throws IOException {
+        captured.set(new CapturedRequest(
+                exchange.getRequestMethod(),
+                exchange.getRequestURI().getPath(),
+                new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8),
+                exchange.getRequestHeaders().getFirst(HttpHeaders.CONTENT_TYPE),
+                exchange.getRequestHeaders().getFirst(HttpHeaders.ACCEPT),
+                exchange.getRequestHeaders().getFirst(HttpHeaders.COOKIE),
+                exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION)));
+        if (!delay.isZero()) {
+            try {
+                Thread.sleep(delay);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        byte[] response = responseBody.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set(HttpHeaders.CONTENT_TYPE, MediaTypeValues.APPLICATION_JSON);
+        exchange.sendResponseHeaders(status, response.length);
+        exchange.getResponseBody().write(response);
+        exchange.close();
+    }
+
+    private String response(String... items) {
+        return "{\"status\":\"success\",\"data\":[" + String.join(",", items) + "]}";
+    }
+
+    private String item(String skillId, String isSaveSession) {
+        return "{\"skillId\":\"" + skillId + "\",\"isSaveSession\":\""
+                + isSaveSession + "\"}";
+    }
+
+    private record CapturedRequest(
+            String method,
+            String path,
+            String body,
+            String contentType,
+            String accept,
+            String cookie,
+            String authorization) {
+    }
+
+    private static final class MediaTypeValues {
+        private static final String APPLICATION_JSON = "application/json";
+
+        private MediaTypeValues() {
+        }
     }
 }

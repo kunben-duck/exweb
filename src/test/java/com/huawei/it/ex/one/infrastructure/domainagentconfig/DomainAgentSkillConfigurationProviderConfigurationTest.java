@@ -10,28 +10,27 @@ import reactor.core.publisher.Mono;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-
-import java.util.List;
+import org.springframework.web.reactive.function.client.WebClient;
 
 class DomainAgentSkillConfigurationProviderConfigurationTest {
     private static final String ENABLED = "financeex.agent-data-persistence.enabled=true";
-    private static final String TIMEOUT = "financeex.domain-agent-skill-config.timeout=2s";
+    private static final String BASE_URL =
+            "financeex.domain-agent-skill-config.base-url=https://skill-config.example.test";
+    private static final String QUERY_PATH =
+            "financeex.domain-agent-skill-config.query-path=/skill-config";
 
     @Test
-    void createsDefaultProviderAndPlaceholderClientWhenFeatureIsDisabled() {
+    void createsDefaultHttpProviderWhenFeatureIsDisabled() {
         contextRunner().run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context).hasSingleBean(DomainAgentSkillConfigurationProvider.class);
             assertThat(context.getBean(DomainAgentSkillConfigurationProvider.class))
                     .isInstanceOf(DefaultDomainAgentSkillConfigurationProvider.class);
-            assertThat(context).hasSingleBean(DomainAgentSkillConfigurationClient.class);
-            assertThat(context.getBean(DomainAgentSkillConfigurationClient.class))
-                    .isInstanceOf(DefaultDomainAgentSkillConfigurationClient.class);
         });
     }
 
     @Test
-    void customProviderOverridesDefaultWithoutRequiringClientOrTimeout() {
+    void customProviderOverridesDefaultWithoutRequiringHttpConfiguration() {
         DomainAgentSkillConfigurationProvider custom = query -> Mono.just(
                 DomainAgentSkillConfiguration.unconfigured(query.skillId()));
 
@@ -47,68 +46,65 @@ class DomainAgentSkillConfigurationProviderConfigurationTest {
     }
 
     @Test
-    void enabledDefaultProviderStartsWhenTimeoutIsConfigured() {
+    void enabledDefaultProviderUsesDefaultTwoSecondTimeout() {
         contextRunner()
-                .withPropertyValues(ENABLED, TIMEOUT)
+                .withPropertyValues(ENABLED, BASE_URL, QUERY_PATH)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context.getBean(DomainAgentSkillConfigurationProvider.class))
                             .isInstanceOf(DefaultDomainAgentSkillConfigurationProvider.class);
-                    assertThat(context.getBean(DomainAgentSkillConfigurationClient.class))
-                            .isInstanceOf(DefaultDomainAgentSkillConfigurationClient.class);
+                    assertThat(context.getBean(DomainAgentSkillConfigurationProperties.class)
+                            .normalizedTimeout()).isEqualTo(java.time.Duration.ofSeconds(2));
                 });
     }
 
     @Test
-    void enabledDefaultProviderRequiresExplicitTimeout() {
+    void enabledDefaultProviderRequiresBaseUrl() {
         contextRunner()
-                .withPropertyValues(ENABLED)
-                .withBean(DomainAgentSkillConfigurationClient.class,
-                        DomainAgentSkillConfigurationProviderConfigurationTest::configuredClient)
+                .withPropertyValues(ENABLED, QUERY_PATH)
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
                             .hasRootCauseMessage(
-                                    "financeex.domain-agent-skill-config.timeout must be explicitly configured "
+                                    "financeex.domain-agent-skill-config.base-url must be explicitly configured "
                                             + "when agent data persistence is enabled");
                 });
     }
 
     @Test
-    void enabledDefaultProviderRejectsInvalidTimeout() {
+    void enabledDefaultProviderRequiresQueryPath() {
         contextRunner()
-                .withPropertyValues(ENABLED, "financeex.domain-agent-skill-config.timeout=0s")
-                .withBean(DomainAgentSkillConfigurationClient.class,
-                        DomainAgentSkillConfigurationProviderConfigurationTest::configuredClient)
-                .run(context -> assertThat(context).hasFailed());
+                .withPropertyValues(ENABLED, BASE_URL)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasRootCauseMessage(
+                                    "financeex.domain-agent-skill-config.query-path must be explicitly configured "
+                                            + "when agent data persistence is enabled");
+                });
     }
 
     @Test
-    void customClientOverridesPlaceholderAndStartsDefaultProvider() {
-        DomainAgentSkillConfigurationClient custom = configuredClient();
-
+    void enabledDefaultProviderRejectsInvalidTimeoutAndEndpoint() {
         contextRunner()
-                .withPropertyValues(ENABLED, TIMEOUT)
-                .withBean(DomainAgentSkillConfigurationClient.class, () -> custom)
-                .run(context -> {
-                    assertThat(context).hasNotFailed();
-                    assertThat(context).hasSingleBean(DomainAgentSkillConfigurationClient.class);
-                    assertThat(context.getBean(DomainAgentSkillConfigurationClient.class))
-                            .isSameAs(custom);
-                    assertThat(context.getBean(DomainAgentSkillConfigurationProvider.class))
-                            .isInstanceOf(DefaultDomainAgentSkillConfigurationProvider.class);
-                });
+                .withPropertyValues(ENABLED, BASE_URL, QUERY_PATH,
+                        "financeex.domain-agent-skill-config.timeout=0s")
+                .run(context -> assertThat(context).hasFailed());
+        contextRunner()
+                .withPropertyValues(ENABLED,
+                        "financeex.domain-agent-skill-config.base-url=file:///tmp/config",
+                        QUERY_PATH)
+                .run(context -> assertThat(context).hasFailed());
+        contextRunner()
+                .withPropertyValues(ENABLED, BASE_URL,
+                        "financeex.domain-agent-skill-config.query-path=relative/path")
+                .run(context -> assertThat(context).hasFailed());
     }
 
     private ApplicationContextRunner contextRunner() {
         return new ApplicationContextRunner()
                 .withUserConfiguration(DomainAgentSkillConfigurationProviderConfiguration.class)
-                .withBean(AgentDataPersistenceProperties.class, AgentDataPersistenceProperties::new);
-    }
-
-    private static DomainAgentSkillConfigurationClient configuredClient() {
-        return skillIds -> new SkillConfigurationResponse(
-                "success",
-                List.of(new SkillConfigurationItem(skillIds.getFirst(), "Y")));
+                .withBean(AgentDataPersistenceProperties.class, AgentDataPersistenceProperties::new)
+                .withBean(WebClient.Builder.class, WebClient::builder);
     }
 }

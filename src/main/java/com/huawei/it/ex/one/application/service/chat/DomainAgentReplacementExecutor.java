@@ -204,7 +204,8 @@ final class DomainAgentReplacementExecutor {
         }
         Mono<?> policyResolution = persistenceGate == null
                 ? Mono.just(context.persistenceState())
-                : persistenceGate.resolve(context.user(), nextRoute, context.persistenceState());
+                : persistenceGate.resolve(
+                        context.user(), nextRoute, context.persistenceState(), context.forwardHeaders());
         return policyResolution.then(requireCurrentOwnerRunning(
                 context.executionClaim(), "before-domain-agent-reroute-binding"))
                 .thenMany(Flux.usingWhen(

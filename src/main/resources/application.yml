@@ -92,8 +92,10 @@ financeex:
     default-language: ${FINANCEEX_SESSION_TITLE_DEFAULT_LANGUAGE:zh-CN}
     max-title-length: ${FINANCEEX_SESSION_TITLE_MAX_LENGTH:50}
   domain-agent-skill-config:
-    # 无默认值；启用 assistant 留存控制时必须接入企业 Client 并显式配置调用超时。
-    timeout: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_TIMEOUT:}
+    # 启用 assistant 留存控制且使用默认 Provider 时，接口地址和路径必须显式配置。
+    base-url: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_BASE_URL:}
+    query-path: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_QUERY_PATH:}
+    timeout: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_TIMEOUT:2s}
   agent-data-persistence:
     # 默认关闭，开启后仅 isSaveSession=N 的 DomainAgent 使用 assistant 占位历史。
     enabled: ${FINANCEEX_AGENT_DATA_PERSISTENCE_ENABLED:false}
@@ -328,7 +330,7 @@ financeex:
       agent-context-as-answer: ${FINANCEEX_RELAY_AGENT_CONTEXT_AS_ANSWER:true}
     forward-cookie:
       # 仅把 /chat/runs 与 /chat/runs/{runId}/stop 入口捕获到的 Cookie 透传给可信下游：
-      # Relay WebSocket 和 DomainAgent。
+      # Relay WebSocket、DomainAgent及DomainAgent技能配置查询。
       # 文档上传 Cookie 透传由 financeex.document 与 financeex.storage.api-store 单独控制。
       # Cookie 不写入 metadata_json、不落库、不进入事件 payload，也不会写入下游请求体。
       enabled: ${FINANCEEX_AGENT_RUNTIME_FORWARD_COOKIE_ENABLED:true}

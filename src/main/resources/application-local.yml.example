@@ -39,8 +39,10 @@ financeex:
     stream-auth-io-max-size: 4
     stream-auth-io-queue-capacity: 128
     failure-strategy: RELAY_FALLBACK
-  # 启用 agent-data-persistence 前，必须接入企业技能配置 Client 并主动配置调用超时。
+  # 启用 agent-data-persistence 前，必须显式配置技能配置HTTP接口；timeout默认2秒。
   # domain-agent-skill-config:
+  #   base-url: https://skill-config.example.test
+  #   query-path: /eurekax/agent/services/skillService/findSkillConfigBySkillIds
   #   timeout: 2s
   agent-data-persistence:
     enabled: false

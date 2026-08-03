@@ -6,8 +6,8 @@ import java.time.Instant;
  * 单次下游调用可透传的 HTTP 请求头快照。
  *
  * <p>该对象只在一次请求触发的内存调用链中传递，用于把请求入口捕获到的企业鉴权 Cookie
- * 透传给可信的 Relay Runtime adapter、DomainAgent adapter 或文档 provider upload adapter。它不应写入
- * metadata、数据库、事件 payload 或日志。</p>
+ * 透传给可信的 Relay Runtime adapter、DomainAgent adapter、DomainAgent 技能配置 Provider 或文档
+ * provider upload adapter。它不应写入 metadata、数据库、事件 payload 或日志。</p>
  *
  * @param cookieHeader 原始 HTTP {@code Cookie} 请求头；为空表示不透传。
  * @param createdAt 请求头快照创建时间，用于诊断内存对象生命周期，不作为业务时间事实。
@@ -47,5 +47,11 @@ public record RuntimeForwardHeaders(String cookieHeader, Instant createdAt) {
      */
     public boolean hasCookie() {
         return cookieHeader != null && !cookieHeader.isBlank();
+    }
+
+    /** 避免记录该内存对象时由 record 默认实现输出原始 Cookie。 */
+    @Override
+    public String toString() {
+        return "RuntimeForwardHeaders[hasCookie=" + hasCookie() + ", createdAt=" + createdAt + "]";
     }
 }

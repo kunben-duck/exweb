@@ -666,11 +666,11 @@ POST /v1/chat/runs/{runId}/stop
 
 `streamTopicId` 是 ChatService 的 run 级订阅 topic，不是 Relay 的会话 ID。后端内部 `AgentRuntime.query` 固定通过出站 Relay WebSocket 执行，但这个内部实现不改变前端协议。
 
-如果 `POST /v1/chat/runs`、`POST /v1/chat/runs/{runId}/stop` 或 `POST /v1/documents` 请求携带标准 `Cookie` 头，后端会在入口捕获一次，并只把它透传给可信下游：Relay WebSocket、DomainAgent chat/cancel，以及配置了 `forward-cookie=true` 的 api-store 文档上传。该 Cookie 不会出现在请求 body、multipart form、metadata、事件、历史消息、文档元数据或前端响应中。
+如果 `POST /v1/chat/runs`、`POST /v1/chat/runs/{runId}/stop` 或 `POST /v1/documents` 请求携带标准 `Cookie` 头，后端会在入口捕获一次，并只把它透传给可信下游：Relay WebSocket、DomainAgent chat/cancel、DomainAgent技能配置查询，以及配置了 `forward-cookie=true` 的 api-store 文档上传。该 Cookie 不会出现在请求 body、multipart form、metadata、事件、历史消息、文档元数据或前端响应中。
 
 DomainAgent chat、绑定续接和 stop 会统一发送后端配置的标准 `Referer` 请求头。该值来自 `FINANCEEX_DOMAIN_AGENT_REFERER`，未配置或为空时回退到 `FINANCEEX_DOMAIN_AGENT_BASE_URL`；前端无需也不能通过 metadata 或 Cookie 覆盖，Referer 配置值不会进入下游 body、ChatEvent 或历史数据。
 
-集成服务鉴权请求头由后端 `AuthHeaderProviderRegistry` 统一注入，前端不需要传 Sgov token，也不要在请求体中放服务鉴权信息。当前可配置接入的 serviceCode 包括 `welink-share`、`intent-service` 和 `use-case-library`；Relay Runtime、DomainAgent、技能配置查询和文档存储 adapter 默认不走该集成服务鉴权层。技能配置查询使用独立企业 Client 防腐接口；生产部署必须完成默认Client实现并配置调用超时，前端无需提供任何配置查询参数或鉴权信息。
+集成服务鉴权请求头由后端 `AuthHeaderProviderRegistry` 统一注入，前端不需要传 Sgov token，也不要在请求体中放服务鉴权信息。当前可配置接入的 serviceCode 包括 `welink-share`、`intent-service` 和 `use-case-library`；Relay Runtime、DomainAgent、技能配置查询和文档存储 adapter 默认不走该集成服务鉴权层。技能配置查询使用独立 Provider 防腐接口，默认HTTP实现只透传当前run入口Cookie；前端无需提供配置查询参数，也不得把Cookie放入metadata。
 
 DomainAgent 技能配置可能要求 assistant 历史使用占位投影。该策略不增加任何前端请求字段或 ChatEvent 字段：
 

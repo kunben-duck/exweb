@@ -5,8 +5,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * 下游 Agent Cookie 请求头透传配置。
  *
- * <p>Cookie 透传只用于 FinanceEXChatService 到可信下游 Agent 的出站调用，
- * 包括 Relay WebSocket 和 DomainAgent。</p>
+ * <p>Cookie 透传只用于 FinanceEXChatService 到可信下游 Agent 及技能配置服务的出站调用，
+ * 包括 Relay WebSocket、DomainAgent 和 DomainAgent 技能配置查询。</p>
  */
 @ConfigurationProperties(prefix = "financeex.agent-runtime.forward-cookie")
 public class AgentRuntimeForwardCookieProperties {

@@ -17,7 +17,7 @@ import java.time.Duration;
 
 class RedisAgentDataPersistencePolicyCacheTest {
     private static final String KEY =
-            "fin_ex:test:agent_data_persistence:domain-agent:skill-1";
+            "fin_ex:test:agent_data_persistence:tenant-1:domain-agent:skill-1";
 
     @Test
     void writesOnlyPolicyValueWithConfiguredTtlAndEnvironmentKey() {
@@ -27,7 +27,7 @@ class RedisAgentDataPersistencePolicyCacheTest {
         when(redis.opsForValue()).thenReturn(values);
         RedisAgentDataPersistencePolicyCache cache = cache(redis);
 
-        cache.put("domain-agent", "skill-1", AgentDataPersistencePolicy.FULL,
+        cache.put("tenant-1", "domain-agent", "skill-1", AgentDataPersistencePolicy.FULL,
                 Duration.ofMinutes(10));
 
         verify(values).set(KEY, "FULL", Duration.ofMinutes(10));
@@ -42,7 +42,7 @@ class RedisAgentDataPersistencePolicyCacheTest {
         when(values.get(KEY)).thenReturn("UNKNOWN");
         RedisAgentDataPersistencePolicyCache cache = cache(redis);
 
-        assertThat(cache.get("domain-agent", "skill-1")).isEmpty();
+        assertThat(cache.get("tenant-1", "domain-agent", "skill-1")).isEmpty();
         verify(redis).delete(KEY);
     }
 

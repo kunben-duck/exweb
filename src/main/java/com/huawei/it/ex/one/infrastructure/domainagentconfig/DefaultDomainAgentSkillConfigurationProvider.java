@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.infrastructure.domainagentconfig;
 
+import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfiguration;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfigurationException;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfigurationProvider;
@@ -7,7 +8,11 @@ import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgen
 
 import reactor.core.Exceptions;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Scheduler;
+
+import org.springframework.core.codec.DecodingException;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.web.reactive.function.client.WebClient;
 
 import java.time.Duration;
 import java.util.List;
@@ -15,20 +20,17 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.TimeoutException;
 
-/** 通过企业内部同步Client查询DomainAgent技能配置的默认防腐层实现。 */
+/** 通过 Cookie 透传 HTTP 接口查询 DomainAgent 技能配置的默认防腐层实现。 */
 public final class DefaultDomainAgentSkillConfigurationProvider
         implements DomainAgentSkillConfigurationProvider {
-    private final DomainAgentSkillConfigurationClient client;
+    private final WebClient webClient;
     private final DomainAgentSkillConfigurationProperties properties;
-    private final Scheduler ioScheduler;
 
     public DefaultDomainAgentSkillConfigurationProvider(
-            DomainAgentSkillConfigurationClient client,
-            DomainAgentSkillConfigurationProperties properties,
-            Scheduler ioScheduler) {
-        this.client = Objects.requireNonNull(client, "client");
+            WebClient.Builder webClientBuilder,
+            DomainAgentSkillConfigurationProperties properties) {
+        this.webClient = Objects.requireNonNull(webClientBuilder, "webClientBuilder").build();
         this.properties = Objects.requireNonNull(properties, "properties");
-        this.ioScheduler = Objects.requireNonNull(ioScheduler, "ioScheduler");
     }
 
     @Override
@@ -45,13 +47,59 @@ public final class DefaultDomainAgentSkillConfigurationProvider
             return Mono.error(protocolError("DomainAgent skill configuration timeout is not configured"));
         }
         String skillId = query.skillId().trim();
-        return Mono.fromCallable(() -> client.findBySkillIds(List.of(skillId)))
-                .subscribeOn(ioScheduler)
+        return requestConfiguration(query, skillId)
                 .timeout(timeout)
-                .switchIfEmpty(Mono.error(protocolError(
-                        "DomainAgent skill configuration response is empty")))
                 .map(response -> mapResponse(skillId, response))
                 .onErrorMap(this::translateFailure);
+    }
+
+    private Mono<SkillConfigurationResponse> requestConfiguration(
+            DomainAgentSkillConfigurationQuery query,
+            String skillId) {
+        String requestUrl = requestUrl();
+        if (requestUrl == null) {
+            return Mono.error(protocolError("DomainAgent skill configuration endpoint is not configured"));
+        }
+        return webClient.post()
+                .uri(requestUrl)
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .headers(headers -> applyForwardHeaders(headers, query.forwardHeaders()))
+                .bodyValue(List.of(skillId))
+                .exchangeToMono(response -> {
+                    if (!response.statusCode().is2xxSuccessful()) {
+                        return response.releaseBody().then(Mono.error(unavailable(
+                                "DomainAgent skill configuration service returned HTTP "
+                                        + response.statusCode().value(),
+                                null)));
+                    }
+                    return response.bodyToMono(SkillConfigurationResponse.class)
+                            .switchIfEmpty(Mono.error(protocolError(
+                                    "DomainAgent skill configuration response is empty")));
+                });
+    }
+
+    private void applyForwardHeaders(HttpHeaders headers, RuntimeForwardHeaders forwardHeaders) {
+        if (forwardHeaders == null || !forwardHeaders.hasCookie()) {
+            return;
+        }
+        // Cookie 仅作为配置查询出站请求头使用，不能进入请求体、缓存、日志或持久化数据。
+        headers.set(HttpHeaders.COOKIE, forwardHeaders.cookieHeader());
+    }
+
+    private String requestUrl() {
+        String baseUrl = properties.normalizedBaseUrl();
+        String queryPath = properties.normalizedQueryPath();
+        if (baseUrl == null || queryPath == null) {
+            return null;
+        }
+        if (baseUrl.endsWith("/") && queryPath.startsWith("/")) {
+            return baseUrl.substring(0, baseUrl.length() - 1) + queryPath;
+        }
+        if (!baseUrl.endsWith("/") && !queryPath.startsWith("/")) {
+            return baseUrl + "/" + queryPath;
+        }
+        return baseUrl + queryPath;
     }
 
     private DomainAgentSkillConfiguration mapResponse(
@@ -105,6 +153,12 @@ public final class DefaultDomainAgentSkillConfigurationProvider
             return new DomainAgentSkillConfigurationException(
                     DomainAgentSkillConfigurationException.Reason.TIMEOUT,
                     "DomainAgent skill configuration request timed out",
+                    cause);
+        }
+        if (cause instanceof DecodingException) {
+            return new DomainAgentSkillConfigurationException(
+                    DomainAgentSkillConfigurationException.Reason.PROTOCOL_INVALID,
+                    "DomainAgent skill configuration response is invalid",
                     cause);
         }
         return unavailable("DomainAgent skill configuration request failed", cause);

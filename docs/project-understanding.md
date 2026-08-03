@@ -191,9 +191,8 @@ IntentAgent、RouteMemory、run metadata、事件或历史 parts。完整规则�
 
 DomainAgent assistant 留存策略与 `agentMode` 无关。仅外部技能配置明确返回 `isSaveSession=N` 时，本轮使用
 占位历史：完整事件继续落库和实时推送，assistant 只保存占位正文及必要控制 Parts。每个新 run 重新解析，
-同一 run 内重路由只能收紧策略。默认配置 Provider 通过有界调度器调用企业同步 Client；当前 Client 为
-无企业依赖时的编译占位，生产部署前必须完成默认实现。应用启动时校验调用超时，但不额外探测Client接入
-状态。实现与运维边界参见
+同一 run 内重路由只能收紧策略。默认配置 Provider 使用非阻塞HTTP接口并透传当前run入口捕获的Cookie；
+功能开启时接口地址和路径必须显式配置，调用超时默认2秒。策略缓存按租户和skillId隔离。实现与运维边界参见
 [DomainAgent Assistant 留存控制设计](architecture/domain-agent-assistant-persistence.md)。
 
 关键分支：

@@ -6,13 +6,15 @@ import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgen
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.reactive.function.client.WebClient;
 
-/** DomainAgent 技能配置默认Provider及阻塞IO隔离调度器装配。 */
+import java.net.URI;
+
+/** DomainAgent 技能配置默认 Provider 及 Redis IO 隔离调度器装配。 */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(DomainAgentSkillConfigurationProperties.class)
 public class DomainAgentSkillConfigurationProviderConfiguration {
@@ -22,31 +24,50 @@ public class DomainAgentSkillConfigurationProviderConfiguration {
     }
 
     @Bean
-    @ConditionalOnMissingBean(DomainAgentSkillConfigurationClient.class)
-    public DomainAgentSkillConfigurationClient domainAgentSkillConfigurationClient() {
-        return new DefaultDomainAgentSkillConfigurationClient();
-    }
-
-    @Bean
     @ConditionalOnMissingBean(DomainAgentSkillConfigurationProvider.class)
     public DomainAgentSkillConfigurationProvider domainAgentSkillConfigurationProvider(
-            DomainAgentSkillConfigurationClient client,
+            WebClient.Builder webClientBuilder,
             DomainAgentSkillConfigurationProperties properties,
-            AgentDataPersistenceProperties persistenceProperties,
-            @Qualifier("agentDataPersistenceIoScheduler") Scheduler ioScheduler) {
+            AgentDataPersistenceProperties persistenceProperties) {
         if (persistenceProperties.isEnabled()) {
             validateRequiredConfiguration(properties);
         }
         return new DefaultDomainAgentSkillConfigurationProvider(
-                client,
-                properties,
-                ioScheduler);
+                webClientBuilder,
+                properties);
     }
 
-    /** 默认Provider启用时必须在启动阶段确认调用超时已配置。 */
+    /** 默认 Provider 启用时在启动阶段校验外部接口地址及调用超时。 */
     private void validateRequiredConfiguration(DomainAgentSkillConfigurationProperties properties) {
+        validateBaseUrl(properties.normalizedBaseUrl());
+        String queryPath = properties.normalizedQueryPath();
+        if (queryPath == null) {
+            throw missingConfiguration("financeex.domain-agent-skill-config.query-path");
+        }
+        if (!queryPath.startsWith("/") || queryPath.startsWith("//")) {
+            throw new IllegalStateException(
+                    "financeex.domain-agent-skill-config.query-path must be an absolute HTTP path");
+        }
         if (properties.normalizedTimeout() == null) {
-            throw missingConfiguration("financeex.domain-agent-skill-config.timeout");
+            throw new IllegalStateException(
+                    "financeex.domain-agent-skill-config.timeout must be a positive duration");
+        }
+    }
+
+    private void validateBaseUrl(String baseUrl) {
+        if (baseUrl == null) {
+            throw missingConfiguration("financeex.domain-agent-skill-config.base-url");
+        }
+        try {
+            URI uri = URI.create(baseUrl);
+            if (!("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))
+                    || uri.getHost() == null) {
+                throw new IllegalArgumentException("unsupported URI");
+            }
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalStateException(
+                    "financeex.domain-agent-skill-config.base-url must be a valid HTTP URL",
+                    ex);
         }
     }
 

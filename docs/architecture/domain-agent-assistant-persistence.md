@@ -36,44 +36,28 @@ public interface DomainAgentSkillConfigurationProvider {
 }
 ```
 
-默认实现 `DefaultDomainAgentSkillConfigurationProvider` 依赖同步Client：
+默认实现 `DefaultDomainAgentSkillConfigurationProvider` 使用非阻塞 HTTP 调用。请求只包含一个可信
+`skillId`，并按当前 run 在入口捕获到的 Cookie 透传：
 
-```java
-public interface DomainAgentSkillConfigurationClient {
-    SkillConfigurationResponse findBySkillIds(List<String> skillIds);
-}
+```http
+POST {baseUrl}{queryPath}
+Content-Type: application/json
+Accept: application/json
+Cookie: <当前请求Cookie，可选>
 ```
 
-默认Provider通过 `Mono.fromCallable` 包装同步调用，并在 `agentDataPersistenceIoScheduler` 有界调度器中
-执行。它只读取响应中的 `status`、`data[].skillId` 和 `data[].isSaveSession`。应用层不依赖企业框架、
-服务地址、鉴权实现、外部DTO或 `Y/N`。
-
-`DefaultDomainAgentSkillConfigurationClient` 是必须完成的默认企业集成点。当前源码中的调用体仅用于缺少
-企业依赖时保持编译，生产部署前必须替换；应用不通过额外布尔字段探测Client是否已接入。启用功能时会
-校验调用超时。企业也可以提供新的 `DomainAgentSkillConfigurationClient` Bean，或提供完整的
-`DomainAgentSkillConfigurationProvider` Bean替换默认实现，策略缓存和主编排不需要修改。客户端Cookie、
-Authorization和metadata鉴权字段均不会传给技能配置Client。
-
-接入Jalor企业依赖后，默认Client中的TODO调用形式为：
-
-```java
-HttpEntity<List<String>> requestEntity = new HttpEntity<>(skillIds);
-ResponseEntity<SkillConfigurationResponse> result = jalorRestTemplate.exchangeInApp(
-        "findSkillConfigBySkillIds",
-        requestEntity,
-        SkillConfigurationResponse.class,
-        null,
-        null);
-return result.getBody();
+```json
+["e6d6367bf48e4af4bcb0bea5c517d849"]
 ```
 
-对应的企业配置由部署环境提供。本仓库不创建真实 `restServices.properties`，参考内容如下：
+默认 Provider 只读取响应中的 `status`、`data[].skillId` 和 `data[].isSaveSession`。Cookie 只存在于
+`RuntimeForwardHeaders` 内存快照和出站 HTTP Header，不进入请求体、Redis、metadata、事件、数据库或
+日志；当前请求没有 Cookie 时仍调用接口，但不发送 Cookie Header。该调用不使用 SGOV、Authorization
+或其他入口 Header，也不增加重试。
 
-```properties
-domainAgentSkillConfigService=http://enterprise-service
-restConfig.restMap.findSkillConfigBySkillIds.requestUrl=${domainAgentSkillConfigService}/eurekax/agent/services/skillService/findSkillConfigBySkillIds
-restConfig.restMap.findSkillConfigBySkillIds.method=POST
-```
+Chat 编排和策略服务不依赖 HTTP 地址、Cookie或外部响应 DTO。未来改为微服务、RPC、本地配置或其他
+鉴权方式时，提供新的 `DomainAgentSkillConfigurationProvider` Bean即可替换默认实现，缓存和主编排无需
+修改。
 
 ## 4. 调用顺序
 
@@ -81,7 +65,7 @@ restConfig.restMap.findSkillConfigBySkillIds.method=POST
 flowchart TD
     A["确定可信 Runtime 目标"] --> B{"目标是 DomainAgent?"}
     B -- "否" --> C["保持当前策略，Relay 不查询配置"]
-    B -- "是" --> D["按 provider + skillId 读取 Redis"]
+    B -- "是" --> D["按 tenant + provider + skillId 读取 Redis"]
     D --> E{"缓存命中?"}
     E -- "是" --> F["得到 FULL 或 ASSISTANT_PLACEHOLDER"]
     E -- "否" --> G["通过 Provider 查询技能配置"]
@@ -117,7 +101,7 @@ ASSISTANT_PLACEHOLDER -> ASSISTANT_PLACEHOLDER
 缓存 key：
 
 ```text
-fin_ex:{env}:agent_data_persistence:domain-agent:{skillId}
+fin_ex:{env}:agent_data_persistence:{tenantId}:domain-agent:{skillId}
 ```
 
 缓存 value 只允许：
@@ -130,9 +114,9 @@ ASSISTANT_PLACEHOLDER
 默认 TTL 为 10 分钟，`FULL` 和 `ASSISTANT_PLACEHOLDER` 均缓存。Redis 读取失败时回源 Provider；Provider
 成功但 Redis 写入失败时，当前 run 继续使用已解析策略。无缓存且 Provider 失败时不降级为 `FULL`。
 
-Redis同步操作和企业技能配置同步调用共用 `agentDataPersistenceIoScheduler` 有界调度器。该调度器当前
-固定为4个线程、128个排队任务。响应式timeout只限制主流程等待时间；企业调用实现仍必须配置自身连接、
-读取和调用超时，避免不可中断调用长期占用工作线程。
+缓存按租户隔离，同一 `skillId` 不会跨租户共享策略。升级后不再读取旧的无租户缓存 key；旧 key 按原
+TTL自然过期，无需迁移。Redis同步操作继续运行在 `agentDataPersistenceIoScheduler` 有界调度器中；默认
+Provider的HTTP交换使用WebClient非阻塞执行，并由配置的总超时约束。
 
 ## 6. Assistant 投影
 
@@ -155,7 +139,9 @@ assistant；长期记忆返回值中等于当前占位文案的条目也会在�
 ```yaml
 financeex:
   domain-agent-skill-config:
-    timeout: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_TIMEOUT}
+    base-url: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_BASE_URL:}
+    query-path: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_QUERY_PATH:}
+    timeout: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_TIMEOUT:2s}
 
   agent-data-persistence:
     enabled: ${FINANCEEX_AGENT_DATA_PERSISTENCE_ENABLED:false}
@@ -164,13 +150,14 @@ financeex:
     placeholder-content: ${FINANCEEX_AGENT_DATA_PERSISTENCE_PLACEHOLDER:根据数据留存策略，本次回答不在消息历史中展示。}
 ```
 
-正数timeout是默认Provider启用时的启动必填项。默认Client必须在生产构建中完成企业调用实现，但应用不
-执行额外的接入状态探测。企业自定义 `DomainAgentSkillConfigurationProvider` 覆盖默认Bean后，不要求配置
-默认Client或该timeout。
+使用默认Provider且功能开启时，`base-url`和`query-path`必须显式配置，缺失或非法会阻止应用启动。
+`timeout`默认2秒，可由部署环境覆盖，零值、负数或非法格式会阻止启动。企业自定义
+`DomainAgentSkillConfigurationProvider`覆盖默认Bean后，不要求配置默认HTTP接口。
 
 ## 8. 运行限制
 
 - 该能力不是事件零留存，完整业务回答仍可从 ChatEvent 和 Event Resume 获取。
 - 该能力不向 DomainAgent 或 Relay 发送留存参数，不控制下游存储。
 - Redis 缓存存在最多一个 TTL 周期的配置生效延迟；紧急变更需要删除对应 key。
+- `financeex.agent-runtime.forward-cookie.enabled=false` 时配置查询仍会执行，但不会携带 Cookie。
 - run metadata 和 assistant metadata 只保存内部策略标记及占位文案，不保存外部配置响应。

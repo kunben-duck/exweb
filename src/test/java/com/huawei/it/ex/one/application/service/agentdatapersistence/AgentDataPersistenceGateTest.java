@@ -3,6 +3,7 @@ package com.huawei.it.ex.one.application.service.agentdatapersistence;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.it.ex.one.application.config.AgentDataPersistenceProperties;
+import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agentdatapersistence.AgentDataPersistencePolicyCache;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfiguration;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfigurationProvider;
@@ -16,6 +17,7 @@ import reactor.core.scheduler.Schedulers;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -31,16 +33,19 @@ class AgentDataPersistenceGateTest {
             return Mono.just(new DomainAgentSkillConfiguration(query.skillId(), Boolean.FALSE));
         });
         AgentDataPersistenceState state = new AgentDataPersistenceState("回答已隐藏");
+        RuntimeForwardHeaders forwardHeaders = new RuntimeForwardHeaders(
+                "SESSION=test", Instant.parse("2026-08-03T12:00:00Z"));
 
         AgentDataPersistenceState resolved = gate.resolve(
                 user,
                 RouteTarget.domainAgent("skill-trusted", "intent-agent", 0.9, "matched"),
-                state).block();
+                state,
+                forwardHeaders).block();
 
         assertThat(resolved).isSameAs(state);
         assertThat(resolved.placeholderMode()).isTrue();
         assertThat(captured.get()).isEqualTo(new DomainAgentSkillConfigurationQuery(
-                "tenant-1", "user-1", "skill-trusted"));
+                "tenant-1", "user-1", "skill-trusted", forwardHeaders));
     }
 
     @Test
@@ -66,12 +71,13 @@ class AgentDataPersistenceGateTest {
         properties.setEnabled(true);
         AgentDataPersistencePolicyCache cache = new AgentDataPersistencePolicyCache() {
             @Override
-            public Optional<AgentDataPersistencePolicy> get(String runtimeProvider, String skillId) {
+            public Optional<AgentDataPersistencePolicy> get(
+                    String tenantId, String runtimeProvider, String skillId) {
                 return Optional.empty();
             }
 
             @Override
-            public void put(String runtimeProvider, String skillId,
+            public void put(String tenantId, String runtimeProvider, String skillId,
                             AgentDataPersistencePolicy policy, Duration ttl) {
             }
         };

@@ -161,7 +161,8 @@ final class RouteSwitchContinuationCoordinator {
                 : persistenceGate.resolve(
                         context.request().user(),
                         context.route(),
-                        context.assistant().persistenceState());
+                        context.assistant().persistenceState(),
+                        context.request().forwardHeaders());
         return policyResolution.thenMany(Flux.defer(() -> executeAfterPolicy(context)));
     }
 

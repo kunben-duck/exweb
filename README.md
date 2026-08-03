@@ -114,10 +114,10 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 
 `FINANCEEX_AGENT_DATA_PERSISTENCE_ENABLED=true` 时，DomainAgent 调用前使用可信 `skillId` 查询技能配置。
 仅明确返回 `isSaveSession=N` 时，ChatEvent 和实时输出保持完整，但 assistant 历史只保存配置化占位文案和
-必要的交互控制 Parts；`Y`、空值、`null` 或未配置均使用原有 `FULL` 行为。策略按环境和 skillId 在 Redis
-缓存 10 分钟。无有效缓存且配置查询失败时禁止调用 DomainAgent，不降级为 `FULL`。默认技能配置 Provider
-使用企业内部同步 Client，阻塞调用由有界调度器隔离。默认 Client 是必须完成的企业集成点；当前源码中的
-调用体仅用于无企业依赖时编译，生产部署前必须替换，并显式配置调用 timeout。应用不额外探测Client接入状态。
+必要的交互控制 Parts；`Y`、空值、`null` 或未配置均使用原有 `FULL` 行为。策略按环境、租户和 skillId 在
+Redis缓存10分钟。无有效缓存且配置查询失败时禁止调用DomainAgent，不降级为`FULL`。默认技能配置
+Provider使用HTTP接口并透传当前run入口捕获的Cookie；接口地址和路径必须显式配置，调用超时默认2秒。
+Cookie不进入请求体、缓存、事件、metadata、数据库或日志。
 
 租户和用户身份不从前端 Header/Query/Body 透传，统一由请求入口通过 `AuthContextProvider` 从服务端身份上下文解析一次，并以不可变 `UserContext` 传入应用层。系统内部 `user_id/owner_user_id` 写入值统一来自 `UserContext.ownerUserId()`，优先使用企业 `globalUserId`，缺省回退本地开发态 `userId`。应用层、后台 run 和 `boundedElastic` 阻塞线程不会再次读取请求 ThreadLocal。当前 `ApplicationAuthContextProvider` 直接构造完整 `UserContext`，接入企业身份源时替换该防腐层即可。
 
@@ -532,7 +532,7 @@ run-A 与 run-B 使用不同 runId，但复用同一 user/assistant 消息，选
 parts 追加到该 assistant。后端不注册本机定时任务；没有在线前端时 Interaction 保持 `WAITING`，重新打开
 会话后由前端根据 `stream-status.autoSelectAt` 立即触发。
 
-Cookie 透传适用于 Relay WebSocket、DomainAgent chat/cancel，以及 `forward-cookie=true`
+Cookie 透传适用于 Relay WebSocket、DomainAgent chat/cancel、DomainAgent技能配置查询，以及 `forward-cookie=true`
 的 HTTP 文档 provider upload 会把入口 Cookie 放入下游 HTTP 请求头。`AgentRuntimeRequest.forwardHeaders`、
 `DomainAgentRequest.forwardHeaders`、`DocumentUploadCommand.forwardHeaders` 与 cancel 请求中的转发头均被 JSON 忽略，避免 Cookie 进入下游请求体、multipart form 或文档元数据。
 

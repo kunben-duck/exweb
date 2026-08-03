@@ -136,8 +136,14 @@ public class FinanceExRedisKeyBuilder {
     /**
      * @return DomainAgent assistant 留存策略缓存 key。
      */
-    public String agentDataPersistencePolicy(String logicalPrefix, String runtimeProvider, String skillId) {
+    public String agentDataPersistencePolicy(
+            String logicalPrefix,
+            String tenantId,
+            String runtimeProvider,
+            String skillId) {
         return prefix(logicalPrefix)
+                + ":"
+                + normalize(tenantId)
                 + ":"
                 + normalize(runtimeProvider)
                 + ":"

@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.service.agentdatapersistence;
 
 import com.huawei.it.ex.one.application.config.AgentDataPersistenceProperties;
+import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agentdatapersistence.AgentDataPersistencePolicyCache;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfiguration;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfigurationException;
@@ -50,24 +51,42 @@ public class AgentDataPersistencePolicyService {
         return properties.normalizedPlaceholderContent();
     }
 
-    public Mono<AgentDataPersistencePolicy> resolve(UserContext user, String skillId) {
+    public Mono<AgentDataPersistencePolicy> resolve(
+            UserContext user,
+            String skillId,
+            RuntimeForwardHeaders forwardHeaders) {
         if (!enabled()) {
             return Mono.just(AgentDataPersistencePolicy.FULL);
+        }
+        if (user == null || user.tenantId() == null || user.tenantId().isBlank()) {
+            return Mono.error(new DomainAgentSkillConfigurationException(
+                    DomainAgentSkillConfigurationException.Reason.PROTOCOL_INVALID,
+                    "Resolved DomainAgent route has no tenantId"));
         }
         if (skillId == null || skillId.isBlank()) {
             return Mono.error(new DomainAgentSkillConfigurationException(
                     DomainAgentSkillConfigurationException.Reason.PROTOCOL_INVALID,
                     "Resolved DomainAgent route has no skillId"));
         }
+        String tenantId = user.tenantId().trim();
         String normalizedSkillId = skillId.trim();
-        return readCache(normalizedSkillId)
+        RuntimeForwardHeaders safeForwardHeaders = forwardHeaders == null
+                ? RuntimeForwardHeaders.empty()
+                : forwardHeaders;
+        return readCache(tenantId, normalizedSkillId)
                 .flatMap(cached -> cached
                         .map(Mono::just)
-                        .orElseGet(() -> resolveFromProvider(user, normalizedSkillId)));
+                        .orElseGet(() -> resolveFromProvider(
+                                user, tenantId, normalizedSkillId, safeForwardHeaders)));
     }
 
-    private Mono<Optional<AgentDataPersistencePolicy>> readCache(String skillId) {
-        return Mono.fromCallable(() -> cache.get(DOMAIN_AGENT_PROVIDER, skillId))
+    /** 保留不需要出站请求头的内部调用兼容入口。 */
+    public Mono<AgentDataPersistencePolicy> resolve(UserContext user, String skillId) {
+        return resolve(user, skillId, RuntimeForwardHeaders.empty());
+    }
+
+    private Mono<Optional<AgentDataPersistencePolicy>> readCache(String tenantId, String skillId) {
+        return Mono.fromCallable(() -> cache.get(tenantId, DOMAIN_AGENT_PROVIDER, skillId))
                 .subscribeOn(ioScheduler)
                 .onErrorResume(ex -> {
                     log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_READ_FAILED,
@@ -78,11 +97,16 @@ public class AgentDataPersistencePolicyService {
                 });
     }
 
-    private Mono<AgentDataPersistencePolicy> resolveFromProvider(UserContext user, String skillId) {
+    private Mono<AgentDataPersistencePolicy> resolveFromProvider(
+            UserContext user,
+            String tenantId,
+            String skillId,
+            RuntimeForwardHeaders forwardHeaders) {
         DomainAgentSkillConfigurationQuery query = new DomainAgentSkillConfigurationQuery(
-                user == null ? null : user.tenantId(),
-                user == null ? null : user.ownerUserId(),
-                skillId);
+                tenantId,
+                user.ownerUserId(),
+                skillId,
+                forwardHeaders);
         return Mono.defer(() -> {
                     Mono<DomainAgentSkillConfiguration> source = configurationProvider.findBySkillId(query);
                     return source == null
@@ -100,7 +124,7 @@ public class AgentDataPersistencePolicyService {
                                 "DomainAgent skill configuration provider failed",
                                 error))
                 .map(configuration -> toPolicy(skillId, configuration))
-                .flatMap(policy -> writeCache(skillId, policy).thenReturn(policy));
+                .flatMap(policy -> writeCache(tenantId, skillId, policy).thenReturn(policy));
     }
 
     private AgentDataPersistencePolicy toPolicy(
@@ -122,8 +146,12 @@ public class AgentDataPersistencePolicyService {
                 : AgentDataPersistencePolicy.FULL;
     }
 
-    private Mono<Void> writeCache(String skillId, AgentDataPersistencePolicy policy) {
+    private Mono<Void> writeCache(
+            String tenantId,
+            String skillId,
+            AgentDataPersistencePolicy policy) {
         return Mono.fromRunnable(() -> cache.put(
+                        tenantId,
                         DOMAIN_AGENT_PROVIDER,
                         skillId,
                         policy,

@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.application.service.agentdatapersistence;
 
+import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfigurationException;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
@@ -24,7 +25,8 @@ public class AgentDataPersistenceGate {
     public Mono<AgentDataPersistenceState> resolve(
             UserContext user,
             RouteTarget route,
-            AgentDataPersistenceState state) {
+            AgentDataPersistenceState state,
+            RuntimeForwardHeaders forwardHeaders) {
         AgentDataPersistenceState targetState = state == null
                 ? new AgentDataPersistenceState(policyService.placeholderContent())
                 : state;
@@ -38,7 +40,15 @@ public class AgentDataPersistenceGate {
                     DomainAgentSkillConfigurationException.Reason.PROTOCOL_INVALID,
                     "Resolved DomainAgent route has no skillId"));
         }
-        return policyService.resolve(user, skillId)
+        return policyService.resolve(user, skillId, forwardHeaders)
                 .map(targetState::tighten);
+    }
+
+    /** 保留不需要出站请求头的内部调用兼容入口。 */
+    public Mono<AgentDataPersistenceState> resolve(
+            UserContext user,
+            RouteTarget route,
+            AgentDataPersistenceState state) {
+        return resolve(user, route, state, RuntimeForwardHeaders.empty());
     }
 }

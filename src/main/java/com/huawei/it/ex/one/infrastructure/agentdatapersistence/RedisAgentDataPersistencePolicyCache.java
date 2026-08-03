@@ -28,21 +28,25 @@ public class RedisAgentDataPersistencePolicyCache implements AgentDataPersistenc
     }
 
     @Override
-    public Optional<AgentDataPersistencePolicy> get(String runtimeProvider, String skillId) {
-        String value = redis.opsForValue().get(key(runtimeProvider, skillId));
+    public Optional<AgentDataPersistencePolicy> get(
+            String tenantId,
+            String runtimeProvider,
+            String skillId) {
+        String value = redis.opsForValue().get(key(tenantId, runtimeProvider, skillId));
         if (value == null || value.isBlank()) {
             return Optional.empty();
         }
         try {
             return Optional.of(AgentDataPersistencePolicy.valueOf(value.trim()));
         } catch (IllegalArgumentException ex) {
-            redis.delete(key(runtimeProvider, skillId));
+            redis.delete(key(tenantId, runtimeProvider, skillId));
             return Optional.empty();
         }
     }
 
     @Override
     public void put(
+            String tenantId,
             String runtimeProvider,
             String skillId,
             AgentDataPersistencePolicy policy,
@@ -50,11 +54,11 @@ public class RedisAgentDataPersistencePolicyCache implements AgentDataPersistenc
         if (policy == null) {
             return;
         }
-        redis.opsForValue().set(key(runtimeProvider, skillId), policy.name(), ttl);
+        redis.opsForValue().set(key(tenantId, runtimeProvider, skillId), policy.name(), ttl);
     }
 
-    private String key(String runtimeProvider, String skillId) {
+    private String key(String tenantId, String runtimeProvider, String skillId) {
         return redisKeys.agentDataPersistencePolicy(
-                properties.normalizedCacheKeyPrefix(), runtimeProvider, skillId);
+                properties.normalizedCacheKeyPrefix(), tenantId, runtimeProvider, skillId);
     }
 }

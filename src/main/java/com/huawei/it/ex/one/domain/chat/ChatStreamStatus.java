@@ -17,9 +17,9 @@ import java.time.Instant;
  * @param cancellable 当前 active run 是否可通过 stop 接口取消。
  * @param waitingUserInput 当前会话是否存在等待用户输入请求。
  * @param waitingSourceRunId 当前等待请求的来源 run；前端使用该值调用统一 stop 接口。
- * @param interactionId 当前等待请求 ID。
- * @param interactionType 等待类型。
- * @param assistantMessageId 承载等待卡片的 assistant 消息 ID。
+ * @param interactionId 当前等待请求 ID；复用 assistant 的 active continuation 同样返回。
+ * @param interactionType 等待或 active continuation 的 Interaction 类型。
+ * @param assistantMessageId 承载等待卡片或 active continuation 实时事件的 assistant 消息 ID。
  * @param expiresAt 等待请求过期时间。
  * @param autoSelectAt AMBIGUOUS_ROUTE 前端提交代选的截止时间；其他等待类型为空。
  * @param autoSelectTimeoutMs AMBIGUOUS_ROUTE 前端建议等待毫秒数；其他等待类型为空。

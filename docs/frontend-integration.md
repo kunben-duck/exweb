@@ -167,7 +167,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 新会话首轮提问 | 可选 `POST /v1/chat/sessions`，或直接 `POST /v1/chat/runs` 不传 `sessionId` -> WS `subscribe(streamTopicId, firstSeq)` | `runId`、`sessionId`、`firstSeq`、`streamTopicId` | 乐观渲染 user 消息；收到 `message.delta` 创建/追加 assistant 草稿，收到 `message.snapshot` 替换草稿；终态后关闭 loading |
 | 已有会话继续提问 | `GET /v1/chat/sessions/{sessionId}/stream-status` 确认无 active run -> `POST /v1/chat/runs(sessionId, runMode=NEXT)` -> WS subscribe | `sessionId`、`parentMessageId` 可选、`streamTopicId` | 同一 session 存在 active run 时不要再次发送；遇到 409 使用 stop 或等待终态 |
 | 当前页短暂断线重连 | 本地保存 `lastSeq` -> 重建 WS -> `subscribe(topicId, afterSeq=lastSeq)`；如果收到 `RECOVER_REQUIRED`，先 Event Resume 再重新 subscribe | `topicId`、`lastSeq`、`sequence` | 以 `sessionId + sequence` 去重；不要重复追加同一 delta |
-| 新页签/新浏览器/跨电脑打开 active run | `GET /messages` 渲染历史 -> `GET /stream-status` -> 若有 `activeRunId`，调用 `GET /runs/{activeRunId}/events/resume?afterSeq=activeRunFirstSeq-1` | `activeRunId`、`activeRunFirstSeq`、`activeStreamTopicId` | run 级 Event Resume 会先补发已落库事件再 tail 实时源；live tail 异常时当前恢复流结束且不发送 `done`，前端退避后重新 resume；同一个 run 恢复期间不要再 WebSocket subscribe |
+| 新页签/新浏览器/跨电脑打开 active run | `GET /messages` 渲染历史 -> `GET /stream-status` -> 若有 `activeRunId`，调用 `GET /runs/{activeRunId}/events/resume?afterSeq=activeRunFirstSeq-1` | `activeRunId`、`activeRunFirstSeq`、`activeStreamTopicId`；可复用 continuation 还返回 `assistantMessageId` | run 级 Event Resume 会先补发已落库事件再 tail 实时源；`assistantMessageId` 非空时先定位已有 assistant，再把 run-B 事件追加到该消息；live tail 异常时当前恢复流结束且不发送 `done`，前端退避后重新 resume；同一个 run 恢复期间不要再 WebSocket subscribe |
 | 停止回答 | 用户点击停止 -> `POST /runs/{runId}/stop` -> 等待 WS 或 Event Resume 收到 `run.cancelled` | `runId`、stop 前本地 `lastSeq` | stop 不是关闭 WebSocket；若 stop 前已有正文或用户可见 parts，历史消息会保存 partial assistant |
 | 编辑历史 user 消息 | 用户点击编辑 -> `POST /v1/chat/runs(runMode=EDIT_USER, editedMessageId, message)` -> 订阅新 run -> `run.completed` 后重新 `GET /v1/chat/sessions/{sessionId}/messages` | `editedMessageId`、新 user `messageId`、新 assistant `messageId`、`versionInfo` | 旧消息不覆盖；新 user sibling 进入旧 user 的 `versionInfo.variants` |
 | 重新生成 assistant | 用户点击重新生成 -> `POST /v1/chat/runs(runMode=REGENERATE_ASSISTANT, regeneratedMessageId)` -> 订阅新 run -> `run.completed` 后重新 `GET /v1/chat/sessions/{sessionId}/messages` | `regeneratedMessageId`、原父 user messageId、新 assistant messageId、`versionInfo` | 复用原 user 节点，新 assistant sibling 进入旧 assistant 的 `versionInfo.variants` |
@@ -575,9 +575,9 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 | `cancellable` | 当前 active run 是否允许调用 stop。 |
 | `waitingUserInput` | 当前会话是否停在等待用户交互输入状态。 |
 | `waitingSourceRunId` | 当前等待请求的来源 run-A；取消等待时必须将该值作为 stop 路径中的 `runId`。 |
-| `interactionId` | `waitingUserInput=true` 时返回，后续用 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 续接。 |
-| `interactionType` | 等待交互类型，例如 `INTENT_CLARIFICATION`、`AGENT_CLARIFICATION`、`ROUTE_SWITCH_CONFIRMATION`。 |
-| `assistantMessageId` | 等待卡片挂载的 assistant 消息 ID，刷新后用于定位历史消息中的 request part。 |
+| `interactionId` | 等待态返回待续接请求 ID；active run 是 `REUSE_ASSISTANT` continuation 时继续返回，用于刷新后关联 run-B。 |
+| `interactionType` | 等待或 active continuation 的交互类型，例如 `INTENT_CLARIFICATION`、`AGENT_CLARIFICATION`、`ROUTE_SWITCH_CONFIRMATION`。 |
+| `assistantMessageId` | 等待卡片挂载的 assistant 消息 ID；`REUSE_ASSISTANT` 的 run-B active 期间继续返回，前端据此把 Resume 事件追加到原 assistant。普通 run 和 `NEW_TURN` Intent 澄清为空。 |
 | `expiresAt` | Interaction 过期时间；为空表示不过期。 |
 | `autoSelectAt` | `AMBIGUOUS_ROUTE` 前端提交代为选择的服务端截止时间；其他 Interaction 为 `null`。 |
 | `autoSelectTimeoutMs` | `AMBIGUOUS_ROUTE` 前端建议等待毫秒数；其他 Interaction 为 `null`。 |
@@ -1588,8 +1588,9 @@ Relay 返回 `approval-request(operation_type=questionnaire)` 时，run-A 保存
 前端使用 `firstSeq` 订阅 run-B。ChatService 不调用 IntentAgent，而是校验 run-A 保存的 ACTIVE Relay
 Binding 和 execution owner/fencing，建立新的下游短连接，发送 `config(sessionMode=resume)`；收到
 `session-ready` 后再发送严格的 `approval-response`。run-A 与 run-B 的事件按 runId 分开，但复用同一个
-assistant。刷新页面时先用 `/messages` 恢复 run-A 卡片，再通过 `stream-status.activeRunId` 和 run 级 Resume
-追加 run-B；最终 `run.completed` 后重新读取历史即可得到同一 assistant 的完整 parts 和正文。
+assistant。刷新页面时先用 `/messages` 恢复 run-A 卡片，再通过
+`stream-status.activeRunId/assistantMessageId` 定位该 assistant，并用 run 级 Resume 追加 run-B；最终
+`run.completed` 后重新读取历史即可得到同一 assistant 的完整 parts 和正文。
 
 run-B 启动 Relay 前会先以 execution owner/fencing 条件持久化本轮最终 Runtime 路由。路由写入失败或
 `approval-response` 发送前发生 config 握手、`session-ready` 等错误时，Relay 不会收到答案；run-B 返回

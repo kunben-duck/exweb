@@ -193,6 +193,62 @@ class ChatRunApplicationServiceTest {
         assertThat(status.activeRunFirstSeq()).isEqualTo(1L);
         assertThat(status.activeRunLastSeq()).isEqualTo(3L);
         assertThat(status.cancellable()).isTrue();
+        assertThat(status.waitingUserInput()).isFalse();
+        assertThat(status.interactionId()).isNull();
+        assertThat(status.interactionType()).isNull();
+        assertThat(status.assistantMessageId()).isNull();
+    }
+
+    @Test
+    void streamStatusReturnsAssistantAssociationForReusableActiveContinuation() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRun run = runningRun()
+                .withFirstSeq(21L)
+                .withMetadata(Map.of(
+                        "interactionId", "interaction-1",
+                        "interactionType", ChatInteractionType.AGENT_CLARIFICATION.name(),
+                        "interactionMessageStrategy", "REUSE_ASSISTANT",
+                        "interactionAssistantMessageId", "message-assistant"));
+        repository.save(run);
+        cache.putActive(run);
+        ChatRunApplicationService service = new ChatRunApplicationService(
+                repository, cache, new InMemoryEventStore(23L),
+                new PermissionChecker(), new FixedSessionRepository());
+
+        var status = service.streamStatus(user(), "session1");
+
+        assertThat(status.activeRunId()).isEqualTo("run1");
+        assertThat(status.waitingUserInput()).isFalse();
+        assertThat(status.interactionId()).isEqualTo("interaction-1");
+        assertThat(status.interactionType()).isEqualTo("AGENT_CLARIFICATION");
+        assertThat(status.assistantMessageId()).isEqualTo("message-assistant");
+    }
+
+    @Test
+    void streamStatusDoesNotReuseAssistantForNewTurnIntentContinuation() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRun run = runningRun()
+                .withFirstSeq(31L)
+                .withMetadata(Map.of(
+                        "interactionId", "interaction-2",
+                        "interactionType", ChatInteractionType.INTENT_CLARIFICATION.name(),
+                        "interactionMessageStrategy", "NEW_TURN",
+                        "interactionAssistantMessageId", "message-old-assistant"));
+        repository.save(run);
+        cache.putActive(run);
+        ChatRunApplicationService service = new ChatRunApplicationService(
+                repository, cache, new InMemoryEventStore(33L),
+                new PermissionChecker(), new FixedSessionRepository());
+
+        var status = service.streamStatus(user(), "session1");
+
+        assertThat(status.activeRunId()).isEqualTo("run1");
+        assertThat(status.waitingUserInput()).isFalse();
+        assertThat(status.interactionId()).isNull();
+        assertThat(status.interactionType()).isNull();
+        assertThat(status.assistantMessageId()).isNull();
     }
 
     @Test

@@ -443,7 +443,8 @@ paths:
         - Relay 的 autoActionAt 已到：前端提交 ignore=true。
 
         run-A 与续接 run-B 使用不同 runId，但 AMBIGUOUS_ROUTE 和 Relay 问卷会复用同一个 assistant。
-        run-B 事件中的 assistantMessageId/sourceRunId 用于合并实时展示。
+        run-B 处于 active 状态时，本接口继续返回 interactionId、interactionType 和 assistantMessageId；
+        前端使用 assistantMessageId 定位历史消息，并将 run-B 的 Resume 事件追加到同一个 assistant。
       parameters:
         - $ref: '#/components/parameters/SessionId'
       responses:
@@ -456,7 +457,7 @@ paths:
                   - $ref: '#/components/schemas/ChatStreamStatus'
                   - $ref: '#/components/schemas/ApiErrorResponse'
               examples:
-                activeRun:
+                activeReusableContinuation:
                   value:
                     sessionId: session_001
                     latestSeq: 1300
@@ -467,6 +468,9 @@ paths:
                     activeRunLastSeq: 1300
                     cancellable: true
                     waitingUserInput: false
+                    interactionId: interaction_001
+                    interactionType: AGENT_CLARIFICATION
+                    assistantMessageId: msg_assistant_001
                 ambiguousWaiting:
                   value:
                     sessionId: session_001
@@ -1993,6 +1997,7 @@ components:
         interactionId:
           type: string
           nullable: true
+          description: 等待请求ID；复用原assistant的active continuation同样返回
         interactionStatus:
           type: string
           nullable: true
@@ -2056,6 +2061,7 @@ components:
         assistantMessageId:
           type: string
           nullable: true
+          description: 等待卡片或复用原assistant的active continuation所关联的assistant消息ID
         expiresAt:
           type: string
           format: date-time

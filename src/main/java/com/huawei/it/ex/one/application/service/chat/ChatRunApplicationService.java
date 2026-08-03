@@ -52,6 +52,9 @@ public class ChatRunApplicationService {
     private static final AppLogger log = AppLoggerFactory.getLogger(ChatRunApplicationService.class);
     private static final String SESSION_STATUS_ACTIVE = "ACTIVE";
     private static final String SESSION_STATUS_DELETED = "DELETED";
+    private static final String INTERACTION_ID_METADATA = "interactionId";
+    private static final String INTERACTION_TYPE_METADATA = "interactionType";
+    private static final String INTERACTION_ASSISTANT_MESSAGE_ID_METADATA = "interactionAssistantMessageId";
 
     private final ChatRunRepository repository;
     private final ChatRunCache cache;
@@ -491,13 +494,45 @@ public class ChatRunApplicationService {
         long currentLatestSeq = latestSeq;
         BindingSummary bindingSummary = bindingSummary(user, sessionId);
         return active
-                .map(run -> new ChatStreamStatus(sessionId, currentLatestSeq, run.id(), run.status(),
-                        ChatStreamTopics.runTopic(run.id()), run.firstSeq(), run.lastSeq(), run.cancellable(),
-                        false, null, null, null, null, null, null, null, null, null, null,
-                        bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
-                        bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
-                        bindingSummary.updatedAt(), bindingSummary.agentMode()))
+                .map(run -> activeStatus(sessionId, currentLatestSeq, run, bindingSummary))
                 .orElseGet(() -> waitingStatus(user, sessionId, currentLatestSeq, bindingSummary));
+    }
+
+    private ChatStreamStatus activeStatus(String sessionId, long latestSeq, ChatRun run,
+                                          BindingSummary bindingSummary) {
+        ActiveContinuationSummary continuation = activeContinuationSummary(run);
+        return new ChatStreamStatus(sessionId, latestSeq, run.id(), run.status(),
+                ChatStreamTopics.runTopic(run.id()), run.firstSeq(), run.lastSeq(), run.cancellable(),
+                false, null, continuation.interactionId(), continuation.interactionType(),
+                continuation.assistantMessageId(), null, null, null, null, null, null,
+                bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
+                bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
+                bindingSummary.updatedAt(), bindingSummary.agentMode());
+    }
+
+    private ActiveContinuationSummary activeContinuationSummary(ChatRun run) {
+        if (run == null || InteractionMessageStrategy.newTurn(run)) {
+            return ActiveContinuationSummary.empty();
+        }
+        String interactionId = metadataText(run, INTERACTION_ID_METADATA);
+        String interactionType = metadataText(run, INTERACTION_TYPE_METADATA);
+        String assistantMessageId = metadataText(run, INTERACTION_ASSISTANT_MESSAGE_ID_METADATA);
+        if (interactionId == null || interactionType == null || assistantMessageId == null) {
+            return ActiveContinuationSummary.empty();
+        }
+        return new ActiveContinuationSummary(interactionId, interactionType, assistantMessageId);
+    }
+
+    private String metadataText(ChatRun run, String key) {
+        if (run == null || run.metadata() == null || key == null) {
+            return null;
+        }
+        Object value = run.metadata().get(key);
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isBlank() ? null : text;
     }
 
     private ChatStreamStatus waitingStatus(UserContext user, String sessionId, long latestSeq,
@@ -526,6 +561,15 @@ public class ChatRunApplicationService {
                         bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                         bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
                         bindingSummary.updatedAt(), bindingSummary.agentMode()));
+    }
+
+    private record ActiveContinuationSummary(
+            String interactionId,
+            String interactionType,
+            String assistantMessageId) {
+        private static ActiveContinuationSummary empty() {
+            return new ActiveContinuationSummary(null, null, null);
+        }
     }
 
     private Instant autoSelectAt(com.huawei.it.ex.one.domain.chat.ChatInteractionRequest request) {

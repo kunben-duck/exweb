@@ -70,7 +70,6 @@
 |------|------|------|------|
 | label | string | 是 | 选项标签 |
 | description | string | 否 | 选项说明 |
-| input_prompt | string | 否 | 输入提示，选中后需用户输入额外内容 |
 
 ## 三、WebSocket 入参（前端→后端）
 
@@ -80,14 +79,15 @@
 ```json
 {
   "type": "approval-response",
-  "approval_id": "uuid-string",
+  "request_id": "uuid-string",
   "approved": true,
   "scope": "once",
   "questionnaire_answers": {
     "label": {
       "请选择技术方案": "方案A（推荐）",
       "请选择部署环境": ["开发环境", "测试环境"]
-    }
+    },
+    "ignore": false
   }
 }
 ```
@@ -96,7 +96,7 @@
 ```json
 {
   "type": "approval-response",
-  "approval_id": "uuid-string",
+  "request_id": "uuid-string",
   "approved": false,
   "scope": "once",
   "questionnaire_answers": {
@@ -109,13 +109,14 @@
 ```json
 {
   "type": "approval-response",
-  "approval_id": "uuid-string",
+  "request_id": "uuid-string",
   "approved": true,
   "scope": "once",
   "questionnaire_answers": {
     "label": {
       "请选择技术方案": "用户自定义答案"
-    }
+    },
+    "ignore": false
   }
 }
 ```
@@ -125,7 +126,7 @@
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | type | string | 是 | 固定值 "approval-response" |
-| approval_id | string | 是 | 匹配approval-request的approval_id |
+| request_id | string | 是 | 使用approval-request的approval_id进行响应匹配 |
 | approved | boolean | 是 | 是否批准/响应 |
 | scope | string | 是 | 作用域，固定值 "once" |
 | questionnaire_answers | object | 是 | 问卷答案对象 |
@@ -157,55 +158,3 @@
       ]
     }
 ```
-
-## 六、ChatService 集成约束
-
-FinanceEXChatService 收到 `approval-request(operation_type=questionnaire)` 后，不保持当前下游 WebSocket：
-
-```text
-run-A 保存 runtime.card 和 AGENT_CLARIFICATION_REQUEST part
--> 原子保存 WAITING Interaction 和 ACTIVE Relay Binding
--> 输出 run.waiting_user
--> 关闭 run-A 下游连接
-```
-
-前端通过 `/v1/chat/runs` 提交 `CONTINUE_INTERACTION`。ChatService 创建 run-B，校验 Interaction 保存的
-`runtimeBindingId/runtimeSessionId/approvalId` 及 execution owner/fencing 后，重新连接 Relay：
-
-```text
-config(sessionMode=resume, sessionId=<真实 Relay session>)
--> session-ready
--> approval-response
--> 剩余业务事件
-```
-
-ChatService 只发送本文件定义的 `approval_id/approved/scope/questionnaire_answers`，不发送旧
-`request_id`、扁平答案、metadata 或 timestamp。Relay 必须在物理连接关闭后保留 pending questionnaire，
-并允许同一 `runtimeSessionId + approval_id` 恢复；Relay 自身问卷超时应关闭，或大于前端等待和重连时间。
-因此，上述 60 秒 Relay 内部超时不能直接作为 ChatService 集成环境的默认值，除非前端截止时间及重连窗口
-明确小于该值。
-
-ChatService 在连接 Relay 前先以 run/execution owner/fencing 条件持久化 run-B 的最终 Runtime 路由。
-更新失败时不会输出回答确认事件，也不会建立 Relay 连接。续接失败按发送边界处理：
-
-- `approval-response` 进入 WebSocket outbound 前失败：条件恢复 Binding 到 run-A，Interaction 恢复
-  `WAITING`，允许使用同一 `interactionId` 重试。
-- `approval-response` 进入 outbound 后失败：结果视为未知，不自动重发；Interaction 和仍由 run-B 持有的
-  ACTIVE Binding 均取消，前端必须发起新的 `NEXT`。
-- `RUNTIME_SESSION_UNAVAILABLE` 或 Binding 恢复失败：按不可重试处理并取消 Interaction 与 Binding。
-
-发送阶段只在当前 JVM 请求链内记录，不写入 Relay 请求、ChatEvent、Redis 或数据库。
-
-可选配置 `financeex.relay.questionnaire-wait-timeout` 默认 `0s`。零值表示永久等待；正数只生成供前端使用的
-`autoActionAt/autoActionTimeoutMs/autoActionType=IGNORE_QUESTIONNAIRE`，ChatService 不启动后台定时任务。
-
-等待期间取消统一使用 run stop 接口。前端从 `stream-status.waitingSourceRunId` 取得 run-A：
-
-```http
-POST /v1/chat/runs/{waitingSourceRunId}/stop
-```
-
-ChatService 原子取消 Interaction 和其引用的 ACTIVE Relay Binding；run-A 仍保留 `WAITING_USER` 历史状态。
-物理问卷连接已经关闭时，ChatService 使用 Interaction 保存的真实 `runtimeSessionId` 建立临时连接，完成
-`config(sessionMode=resume) -> session-ready -> stop_all_agents` 后释放连接。下游停止失败不会恢复本地等待，
-用户仍可立即发起新的 `NEXT` 请求。

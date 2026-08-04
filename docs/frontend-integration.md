@@ -1604,12 +1604,16 @@ assistant。刷新页面时先用 `/messages` 恢复 run-A 卡片，再通过
 `stream-status.activeRunId/assistantMessageId` 定位该 assistant，并用 run 级 Resume 追加 run-B；最终
 `run.completed` 后重新读取历史即可得到同一 assistant 的完整 parts 和正文。
 
+Relay 入站问卷卡片继续返回 `approval_id`，前端不需要读取或回传该字段。ChatService 使用 Interaction
+保存的值组装出站 `request_id`；前端正常回答仍只提交 `questionnaireAnswers.label`，adapter 转发时自动增加
+`questionnaire_answers.ignore=false`。忽略问卷仍使用 `questionnaireAnswers.ignore=true`。
+
 run-B 启动 Relay 前会先以 execution owner/fencing 条件持久化本轮最终 Runtime 路由。路由写入失败或
 `approval-response` 发送前发生 config 握手、`session-ready` 等错误时，Relay 不会收到答案；run-B 返回
 `run.failed`，Interaction 恢复为 `WAITING`，前端可以保留问卷卡片并使用同一 `interactionId` 重试。
 如果答案已进入 WebSocket outbound 后才断连、超时或协议失败，Relay 处理结果无法判定，后端会将
 Interaction 和仍由 run-B 持有的 ACTIVE Binding 取消。此时前端应禁用原卡片并发起新的 `NEXT`，不得自动
-重发同一个 `approval_id`。`RUNTIME_SESSION_UNAVAILABLE` 以及 Binding 条件恢复失败也按不可重试处理。
+重发同一个 `request_id`。`RUNTIME_SESSION_UNAVAILABLE` 以及 Binding 条件恢复失败也按不可重试处理。
 
 多页签提交竞争同一 Interaction CAS。收到 `INTERACTION_ALREADY_HANDLED` 的页签应重新查询
 `stream-status`；若存在 active run，使用 `activeRunFirstSeq - 1` 打开 run 级 Resume。run-B 再次收到问卷时，

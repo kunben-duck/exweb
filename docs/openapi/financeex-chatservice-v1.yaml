@@ -2491,23 +2491,25 @@ components:
       x-internal-relay-forwarding:
         answer:
           type: approval-response
-          approval_id: approval_xxx
+          request_id: approval_xxx
           approved: true
           scope: once
           questionnaire_answers:
             label:
               请选择技术方案: 方案A
               请选择部署环境: [开发环境, 测试环境]
+            ignore: false
         ignore:
           type: approval-response
-          approval_id: approval_xxx
+          request_id: approval_xxx
           approved: false
           scope: once
           questionnaire_answers:
             ignore: true
         notes: |
           run-B 跳过 Intent，使用原 Relay runtimeSessionId 执行 RESUME，等待 session-ready 后发送
-          approval-response。当前协议不发送 request_id、metadata 或 timestamp。
+          approval-response。request_id 的值来源于入站 approval-request.approval_id；当前协议不发送
+          approval_id、metadata 或 timestamp。正常回答由后端补充 questionnaire_answers.ignore=false。
 
     RelayQuestionnaireQuestion:
       type: object

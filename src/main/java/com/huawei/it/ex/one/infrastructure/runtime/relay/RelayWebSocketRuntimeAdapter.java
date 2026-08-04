@@ -699,16 +699,30 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     private String approvalResponseMessage(AgentRuntimeInteractionResponseRequest request) {
         Map<String, Object> message = new LinkedHashMap<>();
         message.put("type", "approval-response");
-        message.put("approval_id", request.approvalId());
+        message.put("request_id", request.approvalId());
         message.put("approved", booleanValue(request.responsePayload().get("approved")));
         message.put("scope", stringOrDefault(request.responsePayload().get("scope"), "once"));
         Object answers = request.responsePayload().get("questionnaireAnswers");
         if (answers instanceof Map<?, ?> answerMap) {
-            message.put("questionnaire_answers", answerMap);
+            message.put("questionnaire_answers", relayQuestionnaireAnswers(answerMap));
         } else {
             message.put("questionnaire_answers", Map.of());
         }
         return toJson(message);
+    }
+
+    private Map<String, Object> relayQuestionnaireAnswers(Map<?, ?> answerMap) {
+        if (answerMap.containsKey("label")) {
+            // 前端仍只提交 label；Relay 新协议要求正常回答显式声明未忽略问卷。
+            Map<String, Object> answers = new LinkedHashMap<>();
+            answers.put("label", answerMap.get("label"));
+            answers.put("ignore", false);
+            return answers;
+        }
+        if (answerMap.containsKey("ignore")) {
+            return Map.of("ignore", answerMap.get("ignore"));
+        }
+        return Map.of();
     }
 
     private boolean booleanValue(Object value) {

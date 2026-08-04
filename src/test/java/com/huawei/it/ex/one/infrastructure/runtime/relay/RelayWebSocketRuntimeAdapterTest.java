@@ -856,13 +856,18 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(config.path("config").path("traceId").asText()).isEqualTo("interaction-trace-1");
         assertThat(response.path("type").asText()).isEqualTo("approval-response");
         assertThat(response.has("traceId")).isFalse();
-        assertThat(response.path("approval_id").asText()).isEqualTo("approval-1");
+        assertThat(response.path("request_id").asText()).isEqualTo("approval-1");
         assertThat(response.path("approved").asBoolean()).isTrue();
         assertThat(response.path("scope").asText()).isEqualTo("once");
         assertThat(response.path("questionnaire_answers").path("label")
                 .path("您对哪类 Sub-Agent 最感兴趣？").asText())
-                .isEqualTo("工具与扩展类");
-        assertThat(response.has("request_id")).isFalse();
+                .isEqualTo("用户自定义答案");
+        assertThat(response.path("questionnaire_answers").path("label")
+                .path("请选择部署环境").size())
+                .isEqualTo(2);
+        assertThat(response.path("questionnaire_answers").has("ignore")).isTrue();
+        assertThat(response.path("questionnaire_answers").path("ignore").asBoolean()).isFalse();
+        assertThat(response.has("approval_id")).isFalse();
         assertThat(response.has("metadata")).isFalse();
         assertThat(response.has("timestamp")).isFalse();
     }
@@ -907,10 +912,12 @@ class RelayWebSocketRuntimeAdapterTest {
                 .verifyComplete();
 
         JsonNode response = objectMapper.readTree(client.sent().get(1));
-        assertThat(response.path("approval_id").asText()).isEqualTo("approval-1");
+        assertThat(response.path("request_id").asText()).isEqualTo("approval-1");
         assertThat(response.path("approved").asBoolean()).isFalse();
         assertThat(response.path("scope").asText()).isEqualTo("once");
         assertThat(response.path("questionnaire_answers").path("ignore").asBoolean()).isTrue();
+        assertThat(response.path("questionnaire_answers").has("label")).isFalse();
+        assertThat(response.has("approval_id")).isFalse();
     }
 
     @Test
@@ -1225,7 +1232,9 @@ class RelayWebSocketRuntimeAdapterTest {
 
     private AgentRuntimeInteractionResponseRequest interactionRequest() {
         return interactionRequest(true, Map.of(
-                "label", Map.of("您对哪类 Sub-Agent 最感兴趣？", "工具与扩展类")));
+                "label", Map.of(
+                        "您对哪类 Sub-Agent 最感兴趣？", "用户自定义答案",
+                        "请选择部署环境", List.of("开发环境", "测试环境"))));
     }
 
     private AgentRuntimeInteractionResponseRequest interactionRequest(

@@ -20,7 +20,7 @@ import java.util.Map;
  * @param provider Runtime provider 编码。
  * @param interactionId ChatService Interaction 请求 ID。
  * @param interactionType 等待类型，例如 CLARIFICATION。
- * @param approvalId 下游协议级请求 ID，例如 Relay approval_id。
+ * @param approvalId 下游问卷请求 ID；Relay 从 approval-request.approval_id 读取，响应时映射为 request_id。
  * @param responsePayload 用户提交的回答 payload。
  * @param forwardHeaders 入口请求头快照，仅在内存中传递给可信 adapter。
  * @param traceContext 当前 Interaction HTTP 入口捕获的链路追踪快照。

@@ -92,14 +92,15 @@ ws://{host}:{port}/ws/{client_id}
 ```json
 {
   "type": "approval-response",
-  "approval_id": "c95ceb53-f66f-4da2-a3ba-2a190aec5d6f",
+  "request_id": "c95ceb53-f66f-4da2-a3ba-2a190aec5d6f",
   "approved": true,
   "scope": "once",
   "questionnaire_answers": {
     "label": {
       "请选择技术方案": "方案A",
       "请选择部署环境": ["开发环境", "测试环境"]
-    }
+    },
+    "ignore": false
   }
 }
 ```
@@ -109,7 +110,7 @@ ws://{host}:{port}/ws/{client_id}
 ```json
 {
   "type": "approval-response",
-  "approval_id": "c95ceb53-f66f-4da2-a3ba-2a190aec5d6f",
+  "request_id": "c95ceb53-f66f-4da2-a3ba-2a190aec5d6f",
   "approved": false,
   "scope": "once",
   "questionnaire_answers": {
@@ -121,12 +122,12 @@ ws://{host}:{port}/ws/{client_id}
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | type | string | 是 | 固定值 `"approval-response"` |
-| approval_id | string | 是 | 对应 `approval-request` 中的 `approval_id` |
+| request_id | string | 是 | 值取自对应 `approval-request` 中的 `approval_id` |
 | approved | bool | 是 | 是否批准 |
 | scope | string | 是 | 当前固定为 `"once"` |
-| questionnaire_answers | object | 是 | 只能包含 `label` 或 `ignore`；问题文本位于 `label` 内层 |
+| questionnaire_answers | object | 是 | 正常回答包含 `label` 和 `ignore=false`；忽略问卷只包含 `ignore=true` |
 
-> ChatService 不发送旧 `request_id`、扁平答案、`metadata` 或 `timestamp`。完整问卷协议以
+> ChatService 不发送 `approval_id`、扁平答案、`metadata` 或 `timestamp`。完整问卷协议以
 > [ask_user 交互文档](relay-clarify.md)为准。
 
 ### 2.4 interrupt / pause — 中断当前轮次

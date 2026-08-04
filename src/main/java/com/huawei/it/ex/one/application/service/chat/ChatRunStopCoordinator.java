@@ -236,6 +236,13 @@ public class ChatRunStopCoordinator {
             UserContext user,
             String reason,
             StopRunContext stopContext) {
+        Map<String, Object> cancelMetadata = new java.util.LinkedHashMap<>();
+        if (target != null && target.routeType() != null) {
+            cancelMetadata.put("routeType", target.routeType());
+        }
+        if (target != null) {
+            cancelMetadata.putAll(target.runtimeMetadata());
+        }
         AgentRuntimeCancelRequest request = new AgentRuntimeCancelRequest(
                 user.tenantId(),
                 user.ownerUserId(),
@@ -245,9 +252,7 @@ public class ChatRunStopCoordinator {
                 target == null ? null : target.provider(),
                 target == null ? null : target.runtimeTargetId(),
                 reason,
-                target == null || target.routeType() == null
-                        ? Map.of()
-                        : Map.of("routeType", target.routeType()),
+                cancelMetadata.isEmpty() ? Map.of() : Map.copyOf(cancelMetadata),
                 stopContext.forwardHeaders(),
                 stopContext.traceContext());
         try {

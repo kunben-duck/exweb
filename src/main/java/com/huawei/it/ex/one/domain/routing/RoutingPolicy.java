@@ -20,14 +20,23 @@ public class RoutingPolicy {
     private final double useCaseMinScore;
     /** 保留意图置信度阈值仅用于记录和兼容旧统计，不参与 DomainAgent 裁决。 */
     private final double intentConfidenceThreshold;
+    /** Intent accessName 归一化后命中该值时进入 Relay 专家模式。 */
+    private final String domainExpertAccessName;
 
     public RoutingPolicy(double useCaseMinScore) {
-        this(useCaseMinScore, 0.85);
+        this(useCaseMinScore, 0.85, "domain_expert");
     }
 
     public RoutingPolicy(double useCaseMinScore, double intentConfidenceThreshold) {
+        this(useCaseMinScore, intentConfidenceThreshold, "domain_expert");
+    }
+
+    public RoutingPolicy(double useCaseMinScore, double intentConfidenceThreshold,
+                         String domainExpertAccessName) {
         this.useCaseMinScore = useCaseMinScore;
         this.intentConfidenceThreshold = intentConfidenceThreshold;
+        this.domainExpertAccessName = requireText(domainExpertAccessName,
+                "financeex.intent.domain-expert-access-name");
     }
 
     public double intentConfidenceThreshold() {
@@ -58,10 +67,22 @@ public class RoutingPolicy {
         if (intent.simpleTask()
                 && intent.candidateDomainAgentId() != null
                 && !intent.candidateDomainAgentId().isBlank()) {
+            if (RuntimeProfile.forIntentCandidate(
+                    intent.candidateDomainAgentId(), domainExpertAccessName) == RuntimeProfile.DOMAIN_EXPERT) {
+                return RouteTarget.agentRuntime("intent-agent", intent.confidence(),
+                        "route single domain expert intent", RuntimeProfile.DOMAIN_EXPERT);
+            }
             return RouteTarget.domainAgent(intent.candidateDomainAgentId(), "intent-agent", intent.confidence(),
                     "route single domain agent intent");
         }
 
         return RouteTarget.agentRuntime("intent-agent", intent.confidence(), "intent requires agent runtime");
+    }
+
+    private String requireText(String value, String property) {
+        if (value == null || value.trim().isEmpty()) {
+            throw new IllegalArgumentException(property + " must not be blank");
+        }
+        return value.trim();
     }
 }

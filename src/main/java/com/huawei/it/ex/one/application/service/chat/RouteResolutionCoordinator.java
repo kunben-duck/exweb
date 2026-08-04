@@ -209,7 +209,8 @@ final class RouteResolutionCoordinator {
                 : RouteTarget.agentRuntime(
                         "runtime-binding",
                         1.0,
-                        "active relay runtime binding");
+                        "active relay runtime binding",
+                        runtimeBindingService.runtimeProfile(binding));
         preparation.bindingRef().set(binding);
         preparation.routeRef().set(route);
         preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
@@ -243,12 +244,14 @@ final class RouteResolutionCoordinator {
             return new BindingResolution(route, binding, normalizedMode(request.currentRuntimeSessionMode()));
         }
         if (route.type() == RouteType.AGENT_RUNTIME) {
-            RuntimeBindingResolution resolution = runtimeBindingService.resolveForRun(
-                    request.user().tenantId(),
-                    request.user().ownerUserId(),
-                    request.session().id(),
-                    request.runId(),
-                    request.runtimeBindingLeafId());
+            RuntimeBindingResolution resolution = runtimeBindingService.resolveForProfile(
+                    new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                            request.user().tenantId(),
+                            request.user().ownerUserId(),
+                            request.session().id(),
+                            request.runId(),
+                            request.runtimeBindingLeafId(),
+                            route.runtimeProfile()));
             if (resolution.previousBinding() == null) {
                 request.bindingLifecycle().trackCreated(resolution.binding());
             } else {

@@ -12,6 +12,7 @@ import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.IntentRecognitionRecord;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RouteType;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -151,10 +152,14 @@ public class IntentRecognitionRecordService {
     }
 
     private boolean accepted(IntentDecision intent, RouteTarget route) {
-        return intent != null
-                && route != null
-                && route.type() == RouteType.DOMAIN_AGENT
-                && intent.candidateDomainAgentId() != null
+        if (intent == null || route == null || intent.candidateDomainAgentId() == null) {
+            return false;
+        }
+        if (route.type() == RouteType.AGENT_RUNTIME
+                && route.runtimeProfile() == RuntimeProfile.DOMAIN_EXPERT) {
+            return !intent.candidateDomainAgentId().isBlank();
+        }
+        return route.type() == RouteType.DOMAIN_AGENT
                 && intent.candidateDomainAgentId().equals(route.selectedAgentCode());
     }
 

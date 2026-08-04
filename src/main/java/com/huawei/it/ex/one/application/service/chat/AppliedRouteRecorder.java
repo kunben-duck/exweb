@@ -20,7 +20,9 @@ import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryContext;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RouteType;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -101,9 +103,7 @@ final class AppliedRouteRecorder {
 
     void bindResolvedRouteRequired(ChatRun run, RouteTarget route, RuntimeBinding binding,
                                    RunExecutionClaim claim, AgentDataPersistenceState persistenceState) {
-        Map<String, Object> metadata = persistenceState == null
-                ? Map.of()
-                : persistenceState.runMetadataOverlay();
+        Map<String, Object> metadata = resolvedRouteMetadata(binding, persistenceState);
         if (chatRunService.bindResolvedRoute(run, route, binding, claim, metadata) == null) {
             throw new IllegalStateException("ChatRun guarded resolved route update found no run: "
                     + (run == null ? null : run.id()));
@@ -118,9 +118,7 @@ final class AppliedRouteRecorder {
 
     void bindResolvedRouteRequired(String runId, RouteTarget route, RuntimeBinding binding,
                                    RunExecutionClaim claim, AgentDataPersistenceState persistenceState) {
-        Map<String, Object> metadata = persistenceState == null
-                ? Map.of()
-                : persistenceState.runMetadataOverlay();
+        Map<String, Object> metadata = resolvedRouteMetadata(binding, persistenceState);
         if (chatRunService.bindResolvedRoute(runId, route, binding, claim, metadata) == null) {
             throw new IllegalStateException("ChatRun guarded resolved route update found no run: " + runId);
         }
@@ -221,6 +219,15 @@ final class AppliedRouteRecorder {
                 : interaction.requestPayload();
         if (route != null && route.type() == RouteType.AGENT_RUNTIME) {
             String routeAction = blankToDefault(firstText(requestPayload.get("routeAction")), "NO_MATCH");
+            if (route.runtimeProfile() == RuntimeProfile.DOMAIN_EXPERT) {
+                String intentCode = firstText(requestPayload.get("candidateIntentCode"), "domain_expert");
+                String intentName = firstText(requestPayload.get("candidateIntentName"), intentCode);
+                String accessName = firstText(requestPayload.get("candidateTargetId"), intentCode);
+                return new IntentDecision(intentCode, intentName, TaskComplexity.SIMPLE, 1.0,
+                        true, accessName,
+                        Map.of("routeAction", "ROUTE_SINGLE", "accessName", accessName),
+                        List.of(), Map.of("targetProvider", "relay", "routeAction", "ROUTE_SINGLE"));
+            }
             return new IntentDecision("relay", "no_match", TaskComplexity.COMPLEX, 1.0,
                     false, null, Map.of("routeAction", routeAction), List.of(),
                     Map.of("targetProvider", "relay", "routeAction", routeAction));
@@ -241,7 +248,8 @@ final class AppliedRouteRecorder {
     }
 
     private IntentDecision normalizedRouteMemoryIntent(IntentDecision intent, RouteTarget route) {
-        if (route == null || route.type() != RouteType.AGENT_RUNTIME) {
+        if (route == null || route.type() != RouteType.AGENT_RUNTIME
+                || route.runtimeProfile() == RuntimeProfile.DOMAIN_EXPERT) {
             return intent;
         }
         String routeAction = firstText(
@@ -290,6 +298,19 @@ final class AppliedRouteRecorder {
 
     private String blankToDefault(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value;
+    }
+
+    private Map<String, Object> resolvedRouteMetadata(
+            RuntimeBinding binding,
+            AgentDataPersistenceState persistenceState) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        if (persistenceState != null) {
+            metadata.putAll(persistenceState.runMetadataOverlay());
+        }
+        if (binding != null) {
+            metadata.putAll(RuntimeProfileMetadata.runMetadataOverlayFromBinding(binding.metadata()));
+        }
+        return metadata.isEmpty() ? Map.of() : Map.copyOf(metadata);
     }
 
     record AppliedRouteDecision(

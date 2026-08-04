@@ -130,6 +130,27 @@ class ChatProtocolConvergenceTest {
     }
 
     @Test
+    void translatorRemovesRelayRuntimeProfileMetadata() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1",
+                "session1",
+                "conversation1",
+                "分析一下资产负债率",
+                List.of(),
+                Map.of(
+                        "scene", "finance",
+                        "_relayRuntimeProfile", Map.of("runtimeProfile", "DOMAIN_EXPERT"),
+                        "runtimeProfile", "DOMAIN_EXPERT",
+                        "relayAppMode", "domain_expert",
+                        "relayRoleName", "system-awareness"));
+
+        ChatCommand command = translator.toCommand(request);
+
+        assertThat(command.metadata()).containsExactlyEntriesOf(Map.of("scene", "finance"));
+    }
+
+    @Test
     void translatorCarriesAppTagOutsideMetadata() {
         ChatRequestTranslator translator = new ChatRequestTranslator();
         CreateChatRunRequest request = new CreateChatRunRequest(

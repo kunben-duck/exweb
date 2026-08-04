@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
+import com.huawei.it.ex.one.domain.routing.RouteType;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 
 import org.junit.jupiter.api.Test;
 
@@ -68,6 +70,20 @@ class AmbiguousRouteSelectionResolverTest {
         assertThat(result.route().routeSource()).isEqualTo("user-confirmed");
         assertThat(result.intentDecision().intentCode()).isEqualTo("intent-a");
         assertThat(result.intentDecision().intentName()).isEqualTo("技能A");
+    }
+
+    @Test
+    void selectedDomainExpertCandidateBuildsRelayProfileWithoutCallingIntentAgain() {
+        AmbiguousRouteSelectionResolver.Candidate candidate =
+                resolver.autoSelect(payload(List.of(
+                        candidate("intent-expert", "领域专家", "domain_expert", 0.91))))
+                        .orElseThrow();
+
+        var result = resolver.routeSignal(candidate, "user-confirmed");
+
+        assertThat(result.route().type()).isEqualTo(RouteType.AGENT_RUNTIME);
+        assertThat(result.route().runtimeProfile()).isEqualTo(RuntimeProfile.DOMAIN_EXPERT);
+        assertThat(result.intentDecision().intentCode()).isEqualTo("intent-expert");
     }
 
     private Map<String, Object> payload(List<Map<String, Object>> candidates) {

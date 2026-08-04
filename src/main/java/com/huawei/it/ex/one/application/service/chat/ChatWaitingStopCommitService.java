@@ -13,6 +13,7 @@ import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,6 +21,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -207,7 +209,8 @@ public class ChatWaitingStopCommitService {
                     binding.provider(),
                     binding.runtimeSessionId(),
                     targetId,
-                    sourceRun.routeType());
+                    sourceRun.routeType(),
+                    RuntimeProfileMetadata.copyBindingProfileAsRunMetadata(binding.metadata()));
         }
         return hasRuntime(sourceRun) ? WaitingRuntimeTarget.fromRun(sourceRun) : null;
     }
@@ -276,11 +279,21 @@ public class ChatWaitingStopCommitService {
             String provider,
             String runtimeSessionId,
             String runtimeTargetId,
-            String routeType) {
+            String routeType,
+            Map<String, Object> runtimeMetadata) {
+        public WaitingRuntimeTarget {
+            runtimeMetadata = runtimeMetadata == null ? Map.of() : Map.copyOf(runtimeMetadata);
+        }
+
+        public WaitingRuntimeTarget(String runId, String sessionId, String provider,
+                                    String runtimeSessionId, String runtimeTargetId, String routeType) {
+            this(runId, sessionId, provider, runtimeSessionId, runtimeTargetId, routeType, Map.of());
+        }
+
         static WaitingRuntimeTarget fromRun(ChatRun run) {
             return new WaitingRuntimeTarget(
                     run.id(), run.sessionId(), run.runtimeProvider(), run.runtimeSessionId(),
-                    run.agentCode(), run.routeType());
+                    run.agentCode(), run.routeType(), RuntimeProfileMetadata.copyRunMetadata(run.metadata()));
         }
     }
 }

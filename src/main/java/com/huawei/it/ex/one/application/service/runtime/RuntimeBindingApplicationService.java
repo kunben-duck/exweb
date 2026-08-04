@@ -10,10 +10,13 @@ import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingReposi
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -48,6 +51,9 @@ public class RuntimeBindingApplicationService {
     private final IdGenerator idGenerator;
     private final Duration ttl;
     private final String runtimeProvider;
+    private final String delegateAppMode;
+    private final String domainExpertAppMode;
+    private final String domainExpertRoleName;
 
     /**
      * 创建 Runtime 绑定服务。
@@ -59,14 +65,30 @@ public class RuntimeBindingApplicationService {
      * @param runtimeProvider 默认 AgentRuntime provider 编码。
      */
     public RuntimeBindingApplicationService(RuntimeBindingRepository repository, RuntimeBindingCache cache,
-                                            IdGenerator idGenerator,
-                                            @Value("${financeex.runtime-binding.ttl:0s}") Duration ttl,
-                                            @Value("${financeex.agent-runtime.default-provider:relay}") String runtimeProvider) {
+                                            IdGenerator idGenerator, Duration ttl, String runtimeProvider) {
+        this(repository, cache, idGenerator, ttl, runtimeProvider,
+                "delegate", "domain_expert", "system-awareness");
+    }
+
+    @Autowired
+    public RuntimeBindingApplicationService(
+            RuntimeBindingRepository repository,
+            RuntimeBindingCache cache,
+            IdGenerator idGenerator,
+            @Value("${financeex.runtime-binding.ttl:0s}") Duration ttl,
+            @Value("${financeex.agent-runtime.default-provider:relay}") String runtimeProvider,
+            @Value("${financeex.agent-runtime.relay.websocket.app-mode:delegate}") String delegateAppMode,
+            @Value("${financeex.agent-runtime.relay.domain-expert.app-mode:domain_expert}") String domainExpertAppMode,
+            @Value("${financeex.agent-runtime.relay.domain-expert.role-name:system-awareness}")
+            String domainExpertRoleName) {
         this.repository = repository;
         this.cache = cache;
         this.idGenerator = idGenerator;
         this.ttl = RuntimeBindingExpirationPolicy.normalize(ttl);
         this.runtimeProvider = normalizeProvider(runtimeProvider);
+        this.delegateAppMode = requireText(delegateAppMode, "Delegate Relay appMode");
+        this.domainExpertAppMode = requireText(domainExpertAppMode, "Domain expert Relay appMode");
+        this.domainExpertRoleName = requireText(domainExpertRoleName, "Domain expert Relay roleName");
     }
 
     /**
@@ -103,10 +125,28 @@ public class RuntimeBindingApplicationService {
      */
     public RuntimeBindingResolution resolveForRun(String tenantId, String userId, String sessionId,
                                                   String runId, String leafMessageId) {
+        return resolveForProfile(new ProfiledRunBindingRequest(
+                tenantId, userId, sessionId, runId, leafMessageId, RuntimeProfile.DELEGATE));
+    }
+
+    /**
+     * 按调用档案解析本轮 Relay Binding，避免 Delegate 与 Domain Expert 复用同一 Runtime session。
+     */
+    public RuntimeBindingResolution resolveForProfile(ProfiledRunBindingRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("ProfiledRunBindingRequest must not be null");
+        }
+        String tenantId = request.tenantId();
+        String userId = request.userId();
+        String sessionId = request.sessionId();
+        String runId = request.runId();
+        String leafMessageId = request.leafMessageId();
         Instant now = Instant.now();
+        RuntimeProfileMetadata.Snapshot desiredProfile = configuredProfile(request.runtimeProfile());
         List<RuntimeBinding> activeBindings = repository.findActiveBySession(tenantId, userId, sessionId, runtimeProvider)
                 .stream()
                 .filter(binding -> routableForCurrentProvider(binding, now))
+                .filter(binding -> matchingProfile(binding, desiredProfile))
                 .sorted(Comparator.comparing(RuntimeBinding::updatedAt, Comparator.nullsLast(Comparator.naturalOrder()))
                         .reversed())
                 .toList();
@@ -121,6 +161,7 @@ public class RuntimeBindingApplicationService {
                 .findResumableBySession(tenantId, userId, sessionId, runtimeProvider)
                 .stream()
                 .filter(this::resumableForCurrentProvider)
+                .filter(binding -> matchingProfile(binding, desiredProfile))
                 .sorted(Comparator.comparing(RuntimeBinding::updatedAt,
                                 Comparator.nullsLast(Comparator.naturalOrder()))
                         .reversed())
@@ -132,8 +173,23 @@ public class RuntimeBindingApplicationService {
             cancelDuplicateBindings(resumableBindings, selected);
             return new RuntimeBindingResolution(selected, RuntimeSessionMode.RESUME, previous);
         }
-        RuntimeBinding created = create(tenantId, userId, sessionId, runId, leafMessageId);
+        RuntimeBinding created = create(new RuntimeBindingCreateCommand(
+                tenantId, userId, sessionId, runtimeProvider, runId, leafMessageId, sessionId,
+                desiredProfile.toMetadata()));
         return new RuntimeBindingResolution(created, RuntimeSessionMode.NEW);
+    }
+
+    /** 带 Relay 调用档案的 Binding 解析请求。 */
+    public record ProfiledRunBindingRequest(
+            String tenantId,
+            String userId,
+            String sessionId,
+            String runId,
+            String leafMessageId,
+            RuntimeProfile runtimeProfile) {
+        public ProfiledRunBindingRequest {
+            runtimeProfile = runtimeProfile == null ? RuntimeProfile.DELEGATE : runtimeProfile;
+        }
     }
 
     /**
@@ -656,8 +712,57 @@ public class RuntimeBindingApplicationService {
         return binding.routableAt(now) && runtimeProvider.equals(binding.provider());
     }
 
+    /**
+     * 读取 Relay Binding 的调用档案。存量 Binding 缺少档案时按 Delegate 兼容。
+     */
+    public RuntimeProfile runtimeProfile(RuntimeBinding binding) {
+        if (binding == null || !runtimeProvider.equals(binding.provider())) {
+            return RuntimeProfile.DELEGATE;
+        }
+        return bindingProfile(binding).profile();
+    }
+
+    /**
+     * 将 Relay Binding 的调用档案转换为 ChatRun 私有 metadata。
+     */
+    public Map<String, Object> runProfileMetadata(RuntimeBinding binding) {
+        if (binding == null || !runtimeProvider.equals(binding.provider())) {
+            return Map.of();
+        }
+        return Map.of(RuntimeProfileMetadata.RUN_METADATA_KEY, bindingProfile(binding).toMetadata());
+    }
+
+    private RuntimeProfileMetadata.Snapshot configuredProfile(RuntimeProfile profile) {
+        return RuntimeProfileMetadata.bindingSnapshot(
+                RuntimeProfileMetadata.bindingMetadata(
+                        profile, delegateAppMode, domainExpertAppMode, domainExpertRoleName),
+                delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+    }
+
+    private RuntimeProfileMetadata.Snapshot bindingProfile(RuntimeBinding binding) {
+        return RuntimeProfileMetadata.bindingSnapshot(
+                binding == null ? Map.of() : binding.metadata(),
+                delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+    }
+
+    private boolean matchingProfile(RuntimeBinding binding, RuntimeProfileMetadata.Snapshot desiredProfile) {
+        try {
+            return desiredProfile.equals(bindingProfile(binding));
+        } catch (IllegalStateException ex) {
+            // 非法档案不能静默降级为 Delegate，否则可能把请求发到错误的 Relay 会话。
+            return false;
+        }
+    }
+
     private String normalizeProvider(String provider) {
         return provider == null || provider.isBlank() ? DEFAULT_RUNTIME_PROVIDER : provider.trim();
+    }
+
+    private String requireText(String value, String field) {
+        if (value == null || value.trim().isEmpty()) {
+            throw new IllegalArgumentException(field + " must not be blank");
+        }
+        return value.trim();
     }
 
     private Map<String, Object> domainAgentMetadata(String domainAgentId, String routeSource,

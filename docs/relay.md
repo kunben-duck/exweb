@@ -53,7 +53,7 @@ ws://{host}:{port}/ws/{client_id}
 | config.sessionMode | string | 是 | `"new"` 新建会话 / `"resume"` 恢复已有会话 |
 | config.sessionId | string | 否 | 会话 ID；`new` 模式下若提供则使用该 ID，否则后端自动生成 UUID；`resume` 模式下必填，用于指定要恢复的会话 |
 | config.uid | string | 否 | 用户工号，用于用户隔离；后端存入 `ctx.uid`，可用于会话归属标识 |
-| config.appMode | string | 否 | 运行模式：`delegate`(默认) / `roleplay` / `solo` / `groupchat` / `guarded` |
+| config.appMode | string | 否 | 运行模式：普通委托为 `delegate`（默认），ChatService 专家模式为 `domain_expert` |
 | config.supports_incremental_recovery | bool | 否 | 是否支持增量恢复；`true` 时服务端发送 `session-init(mode="incremental")`，客户端通过 `get-incremental-events` 查询驱动历史恢复；`false` 或缺省时走 legacy 全量回放路径 |
 
 > **注意**：`project_home` 无需传入，后端自动使用默认路径 `~/tmp/xxx`。
@@ -84,6 +84,26 @@ ws://{host}:{port}/ws/{client_id}
 > 不写入 Relay Binding，也不映射到 Relay `config`、`user-message.metadata` 或 `approval-response`。
 > `config.appMode` 是 Relay 自身运行配置，与前端 `agentMode` 无关。完整规则参见
 > [AgentMode 仅记录技术设计](architecture/agent-mode-recording.md)。
+
+### 2.2.1 chat_expert — Domain Expert 专家问答
+
+当 Intent 的规范化 `accessName` 命中 ChatService 配置的专家标识时，ChatService 不发送
+`user-message`，而是发送：
+
+```json
+{
+  "type": "chat_expert",
+  "role_name": "system-awareness",
+  "content": "资产负债率怎么计算？",
+  "messages": [],
+  "traceId": "trace_xxx",
+  "metadata": {}
+}
+```
+
+专家 NEW 和 RESUME 都发送 Binding 中固化的 `role_name`。`messages`、`traceId`、安全过滤后的
+`metadata` 及 WebSocket Cookie Header 与普通问答沿用同一透传规则；当前问题只出现在 `content`。
+专家模式和 Delegate 使用独立的可恢复 Binding，不交叉复用 Runtime session。
 
 ### 2.3 approval-response — 回复问卷
 
@@ -345,7 +365,7 @@ ws://{host}:{port}/ws/{client_id}
 }
 ```
 
-#### session-ready — 初始化完成（唯一结束信号）★
+#### session-ready — 初始化完成 ★
 
 ```json
 {
@@ -361,7 +381,9 @@ ws://{host}:{port}/ws/{client_id}
 | session_id | 会话 ID |
 | session_mode | `"new"` 或 `"resume"` |
 
-**此事件是 config 阶段的唯一结束标识**，无论 `new` 还是 `resume` 模式都会发送。收到此事件后，客户端可发送 `user-message`。
+Delegate 只以该事件结束 config 阶段。Domain Expert 还兼容 `type=system` 且 `content` 明确包含
+`Ready to chat` 的初始化完成帧。初始化完成后，ChatService 按调用档案发送 `user-message` 或
+`chat_expert`。
 
 #### relay-start — 启动开始
 
@@ -1154,7 +1176,8 @@ Resume 时，若客户端传入的 `project_home` 与存储值不一致，后端
 | `session-id` | 初始化 | 会话 ID 确认 |
 | `session-init` | 初始化 | 增量恢复开始（仅 resume） |
 | `role-changed` | 初始化 | 角色状态恢复（仅 resume） |
-| `session-ready` | 初始化 | **config 阶段唯一结束信号**（new/resume 统一） |
+| `session-ready` | 初始化 | Delegate config 完成信号；Domain Expert 还兼容明确的 `Ready to chat` system 帧 |
+| `expert_rejection` | 输出 | 专家拒答卡片；不是终态，继续等待 `session-state` |
 | `relay-start` | 初始化 | Agent 系统启动 |
 | `relay-progress` | 初始化 | 启动进度 |
 | `relay-end` | 初始化 | 启动完成 |
@@ -1201,13 +1224,20 @@ Resume 时，若客户端传入的 `project_home` 与存储值不一致，后端
 
 **Config 阶段**：从客户端发送 `config` 消息开始，到服务端确认会话初始化完成、客户端可以发送 `user-message` 为止。
 
-### 6.2 唯一结束信号
+### 6.2 Profile 对应完成信号
 
-**`session-ready` 是 config 阶段的唯一结束标识**，无论 `new` 还是 `resume` 模式都会发送。
+Delegate 只接受 `session-ready`。Domain Expert 接受 `session-ready`，也兼容
+`type=system` 且 `content` 明确包含 `Ready to chat` 的帧。
 
 ```python
-def is_config_complete(event: dict) -> bool:
-    return event.get("type") == "session-ready"
+def is_config_complete(event: dict, runtime_profile: str) -> bool:
+    if event.get("type") == "session-ready":
+        return True
+    return (
+        runtime_profile == "DOMAIN_EXPERT"
+        and event.get("type") == "system"
+        and "Ready to chat" in event.get("content", "")
+    )
 ```
 
 ### 6.3 各模式事件序列
@@ -1274,13 +1304,14 @@ def is_config_complete(event: dict) -> bool:
 - 后台 Agent 的 `thinking-content-update` / `agent` / `thinking-operation-end` 等（如 `topic_generator`）
 - `token-update`（Token 用量更新）
 
-### 7.2 三个信号的可靠性分析
+### 7.2 终态与过程事件
 
 | 信号 | 可靠性 | 说明 |
 |------|--------|------|
-| `session-state` 终态 | ✅ **可靠**（正常路径） | 在 `handle_user_message` 返回后显式广播，是用户轮次结束的**权威信号** |
-| `agent-call(is_start=false)` 根 Agent | ⚠️ **辅助** | 正常路径下先于 `session-state` 到达；中断/异常路径有 safety-net 补发；但 `get_observability_call_state()` 为 None 时会丢失 |
-| `generate-response(is_final=true)` | ❌ **不可靠** | Agent 无文本输出时跳过；被 mode 过滤规则跳过；**不能**用作轮次结束信号 |
+| `session-state` 终态 | ✅ **唯一终态** | `idle/completed/waiting_user_input/paused` 结束本轮 |
+| `agent-call(is_start=false)` | ❌ **过程事件** | 统一映射为 `runtime.agent`，根 Agent 与子 Agent 均不得结束本轮 |
+| `generate-response(is_final=true)` | ❌ **回答快照** | 可更新正文快照，但不得结束本轮 |
+| `stream-complete/[DONE]` 等兼容帧 | ❌ **过程兼容事件** | 不结束 Relay WebSocket 用户轮次 |
 
 ### 7.3 正常路径事件顺序（代码保证）
 
@@ -1313,7 +1344,6 @@ class TurnState:
     def __init__(self):
         self.turn_active = False       # 当前轮次是否在进行中
         self.user_message_sent = False  # 是否已发送过 user-message（区分初始化阶段的 session-state）
-        self.root_instance_id = None    # 根 Agent 的 instance_id
 
     def on_send_user_message(self):
         """客户端发送 user-message 时调用"""
@@ -1346,20 +1376,7 @@ class TurnState:
                 # waiting_approval 等非终态，轮次仍在进行（只是需要用户回复审批）
                 return "turn_active"
 
-        # --- 信号2（辅助）：根 Agent 的 agent-call(end) ---
-        if event_type == "agent-call":
-            if event.get("is_start") is True:
-                parent_id = event.get("parent_id")
-                if parent_id in (None, "relay-system-root"):
-                    self.root_instance_id = event.get("instance_id")
-
-            elif event.get("is_start") is False:
-                instance_id = event.get("instance_id")
-                if instance_id == self.root_instance_id:
-                    # 根 Agent 执行完毕，但 session-state 尚未到达
-                    # 可提前做 UI 准备（如显示"生成完成"），但不应启用输入框
-                    # 因为 session-state 才是权威的轮次结束信号
-                    return "turn_active"
+        # agent-call、generate-response 和其他过程事件只更新展示，不改变轮次状态。
 
         # --- 后台异步事件：终态后忽略 ---
         if not self.turn_active and event_type in self.BACKGROUND_EVENT_TYPES:

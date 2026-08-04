@@ -29,6 +29,8 @@ public class RelayAgentProperties {
     public static class Relay {
         /** 是否启用 Relay Runtime provider。 */
         private boolean enabled = true;
+        /** Domain Expert 专家模式配置。 */
+        private DomainExpert domainExpert = new DomainExpert();
         /** WebSocket 通信配置。 */
         private WebSocket websocket = new WebSocket();
 
@@ -40,12 +42,44 @@ public class RelayAgentProperties {
             this.enabled = enabled;
         }
 
+        public DomainExpert getDomainExpert() {
+            return domainExpert;
+        }
+
+        public void setDomainExpert(DomainExpert domainExpert) {
+            this.domainExpert = domainExpert == null ? new DomainExpert() : domainExpert;
+        }
+
         public WebSocket getWebsocket() {
             return websocket;
         }
 
         public void setWebsocket(WebSocket websocket) {
             this.websocket = websocket == null ? new WebSocket() : websocket;
+        }
+    }
+
+    /** Relay Domain Expert 的协议参数。 */
+    public static class DomainExpert {
+        /** 专家模式写入 config.appMode 的值。 */
+        private String appMode = "domain_expert";
+        /** chat_expert 请求使用的专家角色。 */
+        private String roleName = "system-awareness";
+
+        public String getAppMode() {
+            return appMode;
+        }
+
+        public void setAppMode(String appMode) {
+            this.appMode = appMode;
+        }
+
+        public String getRoleName() {
+            return roleName;
+        }
+
+        public void setRoleName(String roleName) {
+            this.roleName = roleName;
         }
     }
 
@@ -59,7 +93,7 @@ public class RelayAgentProperties {
         private String appMode = "delegate";
         /** 建立下游 WebSocket 连接的超时时间。 */
         private Duration connectTimeout = Duration.ofSeconds(5);
-        /** 分别限制 HTTP Upgrade opening handshake 和 config -> session-ready 的等待时间。 */
+        /** 分别限制 HTTP Upgrade 和 config 后 Profile 对应 ready 信号的等待时间。 */
         private Duration configHandshakeTimeout = Duration.ofSeconds(10);
         /** 跨实例 stop 临时连接发送 interrupt 后等待 Relay paused 确认的最长时间。 */
         private Duration interruptAckTimeout = Duration.ofSeconds(5);

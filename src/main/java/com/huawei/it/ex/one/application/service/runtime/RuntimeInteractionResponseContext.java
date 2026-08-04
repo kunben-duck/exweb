@@ -23,12 +23,14 @@ public record RuntimeInteractionResponseContext(
         Map<String, Object> responsePayload,
         RuntimeForwardHeaders forwardHeaders,
         TraceContext traceContext,
+        Map<String, Object> runtimeMetadata,
         RuntimeInteractionDispatchState dispatchState
 ) {
     public RuntimeInteractionResponseContext {
         responsePayload = ChatPayloadMaps.immutableCopy(responsePayload);
         forwardHeaders = forwardHeaders == null ? RuntimeForwardHeaders.empty() : forwardHeaders;
         traceContext = traceContext == null ? TraceContext.empty() : traceContext;
+        runtimeMetadata = ChatPayloadMaps.immutableCopy(runtimeMetadata);
         dispatchState = dispatchState == null ? RuntimeInteractionDispatchState.untracked() : dispatchState;
     }
 
@@ -39,7 +41,18 @@ public record RuntimeInteractionResponseContext(
                                              RuntimeForwardHeaders forwardHeaders,
                                              TraceContext traceContext) {
         this(user, sessionId, runId, runtimeProvider, runtimeSessionId, interactionId, interactionType, approvalId,
-                responsePayload, forwardHeaders, traceContext, RuntimeInteractionDispatchState.untracked());
+                responsePayload, forwardHeaders, traceContext, Map.of(), RuntimeInteractionDispatchState.untracked());
+    }
+
+    public RuntimeInteractionResponseContext(UserContext user, String sessionId, String runId,
+                                             String runtimeProvider, String runtimeSessionId,
+                                             String interactionId, String interactionType, String approvalId,
+                                             Map<String, Object> responsePayload,
+                                             RuntimeForwardHeaders forwardHeaders,
+                                             TraceContext traceContext,
+                                             RuntimeInteractionDispatchState dispatchState) {
+        this(user, sessionId, runId, runtimeProvider, runtimeSessionId, interactionId, interactionType, approvalId,
+                responsePayload, forwardHeaders, traceContext, Map.of(), dispatchState);
     }
 
     public RuntimeInteractionResponseContext(UserContext user, String sessionId, String runId,
@@ -48,6 +61,7 @@ public record RuntimeInteractionResponseContext(
                                              Map<String, Object> responsePayload,
                                              RuntimeForwardHeaders forwardHeaders) {
         this(user, sessionId, runId, runtimeProvider, runtimeSessionId, interactionId, interactionType, approvalId,
-                responsePayload, forwardHeaders, TraceContext.empty(), RuntimeInteractionDispatchState.untracked());
+                responsePayload, forwardHeaders, TraceContext.empty(), Map.of(),
+                RuntimeInteractionDispatchState.untracked());
     }
 }

@@ -12,6 +12,9 @@ import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
+import com.huawei.it.ex.one.domain.routing.RouteTarget;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -46,20 +49,22 @@ class RelayWebSocketRuntimeAdapterTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
-    void uppercaseTerminalTextDoesNotDependOnDefaultLocale() {
+    void terminalTextDoesNotCompleteBeforeTerminalSessionState() {
         Locale previousLocale = Locale.getDefault();
         try {
             Locale.setDefault(Locale.forLanguageTag("tr-TR"));
             FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                     "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                     "{\"type\":\"relay-start\",\"content\":\"processing\",\"session_id\":\"relay-session-1\"}",
-                    "STREAM-COMPLETE"
+                    "STREAM-COMPLETE",
+                    "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"
             ));
             RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
             StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
                     .assertNext(this::assertSessionReadyMetadata)
                     .assertNext(event -> assertThat(event.type()).isEqualTo("runtime.progress"))
+                    .assertNext(event -> assertThat(event.type()).isEqualTo("runtime.metadata"))
                     .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
                     .verifyComplete();
         } finally {
@@ -142,6 +147,65 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(userMessage.path("messages").get(0).path("content").asText()).isEqualTo("历史问题");
         assertThat(userMessage.path("messages").get(1).path("role").asText()).isEqualTo("assistant");
         assertThat(userMessage.path("messages").get(1).path("content").asText()).isEqualTo("历史回答");
+    }
+
+    @Test
+    void domainExpertNewUsesSystemReadyAndWaitsForTerminalSessionState() throws Exception {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"system\",\"content\":\"Ready to chat with expert\"}",
+                "{\"type\":\"agent-call\",\"is_start\":true}",
+                "{\"type\":\"generate-response\",\"content\":\"专家回答\",\"is_final\":true}",
+                "{\"type\":\"agent-call\",\"is_start\":false}",
+                "{\"type\":\"expert_rejection\",\"reason\":\"示例拒答\"}",
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"expert-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+        MemoryContext memory = new MemoryContext(
+                List.of(), List.of(), null, true,
+                List.of(new ConversationMemoryMessage("user", "历史问题")));
+
+        StepVerifier.create(adapter.query(expertRequest(null, RuntimeSessionMode.NEW, memory)))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("runtime.agent"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.snapshot"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("runtime.agent"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("runtime.card"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("runtime.metadata"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                .verifyComplete();
+
+        assertThat(client.headers().getFirst(HttpHeaders.COOKIE)).isEqualTo("sid=expert");
+        JsonNode config = objectMapper.readTree(client.sent().get(0));
+        JsonNode expert = objectMapper.readTree(client.sent().get(1));
+        assertThat(config.path("config").path("sessionMode").asText()).isEqualTo("new");
+        assertThat(config.path("config").path("appMode").asText()).isEqualTo("domain_expert");
+        assertThat(expert.path("type").asText()).isEqualTo("chat_expert");
+        assertThat(expert.path("role_name").asText()).isEqualTo("system-awareness");
+        assertThat(expert.path("content").asText()).isEqualTo("专家问题");
+        assertThat(expert.path("messages").get(0).path("content").asText()).isEqualTo("历史问题");
+        assertThat(expert.path("traceId").asText()).isEqualTo("expert-trace");
+        assertThat(expert.path("metadata").path("clientTraceId").asText()).isEqualTo("client-expert");
+    }
+
+    @Test
+    void domainExpertResumeKeepsRoleAndRuntimeSession() throws Exception {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"expert-session-1\",\"session_mode\":\"resume\"}",
+                "{\"type\":\"agent-call\",\"is_start\":false}",
+                "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"expert-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.query(expertRequest(
+                        "expert-session-1", RuntimeSessionMode.RESUME, MemoryContext.empty())))
+                .expectNextCount(4)
+                .verifyComplete();
+
+        JsonNode config = objectMapper.readTree(client.sent().get(0));
+        JsonNode expert = objectMapper.readTree(client.sent().get(1));
+        assertThat(config.path("config").path("sessionMode").asText()).isEqualTo("resume");
+        assertThat(config.path("config").path("sessionId").asText()).isEqualTo("expert-session-1");
+        assertThat(config.path("config").path("appMode").asText()).isEqualTo("domain_expert");
+        assertThat(expert.path("role_name").asText()).isEqualTo("system-awareness");
     }
 
     @Test
@@ -371,7 +435,7 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
-    void idleAndCompletedBeforeRelayStartAfterUserMessageDoNotCloseEmptyAnswer() {
+    void firstTerminalSessionStateCompletesEvenWithoutRelayStart() {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}",
@@ -385,13 +449,8 @@ class RelayWebSocketRuntimeAdapterTest {
         StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
                 .assertNext(this::assertSessionReadyMetadata)
                 .assertNext(event -> {
-                    assertThat(event.type()).isEqualTo("runtime.progress");
-                    assertThat(event.payload()).containsEntry("sourceType", "relay-start");
-                })
-                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "A"))
-                .assertNext(event -> {
                     assertThat(event.type()).isEqualTo("runtime.metadata");
-                    assertThat(event.payload()).containsEntry("state", "completed");
+                    assertThat(event.payload()).containsEntry("state", "idle");
                 })
                 .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
                 .verifyComplete();
@@ -672,15 +731,15 @@ class RelayWebSocketRuntimeAdapterTest {
     void heartbeatResponseRefreshesLivenessWithoutPublishingChatEvent() {
         ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient();
         RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10), Duration.ofSeconds(5),
-                Duration.ofSeconds(1), Duration.ofMillis(20), Duration.ofSeconds(5), Duration.ofMillis(100));
+                Duration.ofSeconds(5), Duration.ofMillis(20), Duration.ofSeconds(5), Duration.ofSeconds(1));
 
         StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
                 .then(() -> client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}"))
                 .assertNext(this::assertSessionReadyMetadata)
-                .thenAwait(Duration.ofMillis(70))
+                .thenAwait(Duration.ofMillis(600))
                 .then(() -> client.emit("{\"type\":\"heartbeat-response\",\"state\":\"agent_thinking\","
                         + "\"detail\":\"Root Agent is processing your request\",\"session_id\":\"relay-session-1\"}"))
-                .thenAwait(Duration.ofMillis(70))
+                .thenAwait(Duration.ofMillis(600))
                 .then(() -> client.emit("{\"type\":\"agent\",\"content\":\"A\",\"session_id\":\"relay-session-1\"}"))
                 .then(() -> client.emit("{\"type\":\"session-state\",\"state\":\"completed\","
                         + "\"session_id\":\"relay-session-1\"}"))
@@ -873,6 +932,25 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
+    void domainExpertInteractionResumesProfileAndOnlySendsApprovalResponse() throws Exception {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"expert-session-1\"}",
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"expert-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.continueWithUserResponse(expertInteractionRequest()))
+                .expectNextCount(3)
+                .verifyComplete();
+
+        JsonNode config = objectMapper.readTree(client.sent().get(0));
+        JsonNode response = objectMapper.readTree(client.sent().get(1));
+        assertThat(config.path("config").path("appMode").asText()).isEqualTo("domain_expert");
+        assertThat(response.path("type").asText()).isEqualTo("approval-response");
+        assertThat(client.sent()).noneMatch(frame -> frame.contains("chat_expert"));
+    }
+
+    @Test
     void interactionDispatchIsMarkedAfterApprovalResponseEntersOutbound() {
         RuntimeInteractionDispatchState dispatchState = RuntimeInteractionDispatchState.tracked();
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
@@ -980,6 +1058,22 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(config.path("config").path("uid").asText()).isEqualTo("user1");
         assertThat(config.path("config").path("traceId").asText()).isEqualTo("stop-trace-1");
         assertThat(config.path("config").path("supports_incremental_recovery").asBoolean()).isTrue();
+        assertThat(client.sent().get(1)).isEqualTo("{\"type\":\"stop_all_agents\"}");
+    }
+
+    @Test
+    void domainExpertTemporaryStopUsesExpertAppMode() throws Exception {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"expert-session-1\"}",
+                "{\"type\":\"session-state\",\"state\":\"paused\",\"session_id\":\"expert-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.cancel(expertCancelRequest()))
+                .verifyComplete();
+
+        JsonNode config = objectMapper.readTree(client.sent().get(0));
+        assertThat(config.path("config").path("appMode").asText()).isEqualTo("domain_expert");
         assertThat(client.sent().get(1)).isEqualTo("{\"type\":\"stop_all_agents\"}");
     }
 
@@ -1206,6 +1300,35 @@ class RelayWebSocketRuntimeAdapterTest {
                 request.traceContext());
     }
 
+    private AgentRuntimeRequest expertRequest(String runtimeSessionId,
+                                              RuntimeSessionMode sessionMode,
+                                              MemoryContext memory) {
+        return new AgentRuntimeRequest(
+                "tenant1",
+                "user1",
+                "account1",
+                1001L,
+                "session1",
+                "run-expert-1",
+                runtimeSessionId,
+                sessionMode,
+                "专家问题",
+                List.of(),
+                List.of(),
+                memory,
+                null,
+                RouteTarget.agentRuntime(
+                        "intent-agent", 1.0, "domain expert", RuntimeProfile.DOMAIN_EXPERT),
+                Map.of("clientTraceId", "client-expert"),
+                RuntimeProfileMetadata.bindingMetadata(
+                        RuntimeProfile.DOMAIN_EXPERT,
+                        "delegate",
+                        "domain_expert",
+                        "system-awareness"),
+                RuntimeForwardHeaders.fromCookieHeader("sid=expert", 8192),
+                new TraceContext("expert-trace"));
+    }
+
     private AgentRuntimeCancelRequest cancelRequest(String runId) {
         return cancelRequest(runId, "relay-session-1");
     }
@@ -1228,6 +1351,29 @@ class RelayWebSocketRuntimeAdapterTest {
                 RuntimeForwardHeaders.empty(),
                 traceContext
         );
+    }
+
+    private AgentRuntimeCancelRequest expertCancelRequest() {
+        return new AgentRuntimeCancelRequest(
+                "tenant1",
+                "user1",
+                "session1",
+                "run-expert-1",
+                "expert-session-1",
+                "relay",
+                null,
+                "USER_STOP",
+                RuntimeProfileMetadata.runMetadataOverlay(
+                        RuntimeProfileMetadata.bindingMetadata(
+                                RuntimeProfile.DOMAIN_EXPERT,
+                                "delegate",
+                                "domain_expert",
+                                "system-awareness"),
+                        "delegate",
+                        "domain_expert",
+                        "system-awareness"),
+                RuntimeForwardHeaders.empty(),
+                TraceContext.empty());
     }
 
     private AgentRuntimeInteractionResponseRequest interactionRequest() {
@@ -1269,6 +1415,35 @@ class RelayWebSocketRuntimeAdapterTest {
                 new TraceContext("interaction-trace-1"),
                 dispatchState
         );
+    }
+
+    private AgentRuntimeInteractionResponseRequest expertInteractionRequest() {
+        AgentRuntimeInteractionResponseRequest delegate = interactionRequest();
+        return new AgentRuntimeInteractionResponseRequest(
+                delegate.tenantId(),
+                delegate.userId(),
+                delegate.userAccount(),
+                delegate.globalUserId(),
+                delegate.sessionId(),
+                delegate.runId(),
+                "expert-session-1",
+                delegate.provider(),
+                delegate.interactionId(),
+                delegate.interactionType(),
+                delegate.approvalId(),
+                delegate.responsePayload(),
+                delegate.forwardHeaders(),
+                delegate.traceContext(),
+                RuntimeProfileMetadata.runMetadataOverlay(
+                        RuntimeProfileMetadata.bindingMetadata(
+                                RuntimeProfile.DOMAIN_EXPERT,
+                                "delegate",
+                                "domain_expert",
+                                "system-awareness"),
+                        "delegate",
+                        "domain_expert",
+                        "system-awareness"),
+                delegate.dispatchState());
     }
 
     private static final class NeverOpeningWebSocketClient implements WebSocketClient {

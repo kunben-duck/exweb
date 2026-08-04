@@ -15,6 +15,7 @@ import com.huawei.it.ex.one.domain.memory.RouteMemoryItem;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryItemStatus;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryItemType;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 
 import org.junit.jupiter.api.Test;
 
@@ -195,6 +196,36 @@ class RouteMemoryApplicationServiceTest {
         assertThat(context.history()).containsExactly(
                 Map.of("type", "route", "query", "复杂任务问题",
                         "intent", "财经智能问数;财经知识助手"));
+    }
+
+    @Test
+    void domainExpertRelayPreservesOriginalIntentRouteMemory() {
+        IntentDecision expertIntent = new IntentDecision(
+                "intent-expert", "领域专家", TaskComplexity.SIMPLE, 0.93,
+                true, "domain_expert",
+                Map.of("routeAction", "ROUTE_SINGLE", "accessName", "domain_expert"),
+                List.of(), Map.of());
+        RouteTarget expertRoute = RouteTarget.agentRuntime(
+                "intent-agent", 0.93, "domain expert", RuntimeProfile.DOMAIN_EXPERT);
+        RouteMemoryApplicationService.RouteMemoryRouteCommand command =
+                new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                        user, "expert-session", "run-expert", "专家问题", expertIntent, expertRoute);
+
+        service.recordRouteDecision(command);
+
+        RouteMemoryItem route = repository.items.stream()
+                .filter(item -> item.itemType() == RouteMemoryItemType.ROUTE)
+                .findFirst()
+                .orElseThrow();
+        assertThat(route.intentId()).isEqualTo("intent-expert");
+        assertThat(route.intentName()).isEqualTo("领域专家");
+        assertThat(route.payload())
+                .containsEntry("targetProvider", "relay")
+                .containsEntry("routeAction", "ROUTE_SINGLE");
+        assertThat(service.routeHistory(command)).containsExactlyInAnyOrderEntriesOf(Map.of(
+                "type", "route",
+                "query", "专家问题",
+                "intent", "领域专家"));
     }
 
     @Test

@@ -15,6 +15,7 @@ import com.huawei.it.ex.one.domain.memory.RouteMemoryItem;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryItemStatus;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryItemType;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -559,7 +560,7 @@ public class RouteMemoryApplicationService {
     }
 
     private String routeIntentId(IntentDecision intent, RouteTarget route) {
-        if (route != null && route.type() == com.huawei.it.ex.one.domain.routing.RouteType.AGENT_RUNTIME) {
+        if (delegateRelay(route)) {
             return "relay";
         }
         if (intent != null && !blank(intent.intentCode())) {
@@ -569,7 +570,7 @@ public class RouteMemoryApplicationService {
     }
 
     private String routeIntentName(IntentDecision intent, RouteTarget route) {
-        if (route != null && route.type() == com.huawei.it.ex.one.domain.routing.RouteType.AGENT_RUNTIME) {
+        if (delegateRelay(route)) {
             return "no_match";
         }
         if (intent != null && !blank(intent.intentName())) {
@@ -582,6 +583,12 @@ public class RouteMemoryApplicationService {
         return route != null && route.type() == com.huawei.it.ex.one.domain.routing.RouteType.DOMAIN_AGENT
                 ? route.selectedAgentCode()
                 : null;
+    }
+
+    private boolean delegateRelay(RouteTarget route) {
+        return route != null
+                && route.type() == com.huawei.it.ex.one.domain.routing.RouteType.AGENT_RUNTIME
+                && route.runtimeProfile() != RuntimeProfile.DOMAIN_EXPERT;
     }
 
     private String routeAction(IntentDecision intent) {

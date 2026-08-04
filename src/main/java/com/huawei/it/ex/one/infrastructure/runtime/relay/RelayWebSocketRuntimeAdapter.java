@@ -13,6 +13,8 @@ import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.MessageCompletedEvent;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -70,6 +72,9 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     private final AgentRuntimeForwardCookieProperties forwardCookieProperties;
     private final RelayRuntimeResponseNormalizer responseNormalizer;
     private final WebSocketClient webSocketClient;
+    private final String delegateAppMode;
+    private final String domainExpertAppMode;
+    private final String domainExpertRoleName;
     /** Active run -> outbound exchange, used only for best-effort Relay WS interrupt on stop/delete. */
     private final ConcurrentHashMap<String, ActiveRelayWebSocketExchange> activeExchanges = new ConcurrentHashMap<>();
 
@@ -91,6 +96,15 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         this.forwardCookieProperties = forwardCookieProperties;
         this.responseNormalizer = responseNormalizer;
         this.webSocketClient = webSocketClient;
+        this.delegateAppMode = requireText(
+                websocketProperties().getAppMode(),
+                "financeex.agent-runtime.relay.websocket.app-mode 不能为空");
+        this.domainExpertAppMode = requireText(
+                properties.getRelay().getDomainExpert().getAppMode(),
+                "financeex.agent-runtime.relay.domain-expert.app-mode 不能为空");
+        this.domainExpertRoleName = requireText(
+                properties.getRelay().getDomainExpert().getRoleName(),
+                "financeex.agent-runtime.relay.domain-expert.role-name 不能为空");
     }
 
     @Override
@@ -169,18 +183,19 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     }
 
     private Flux<ChatEvent> queryWithShortConnection(AgentRuntimeRequest request, AtomicBoolean messageCompleted) {
+        RuntimeProfileMetadata.Snapshot runtimeProfile = relayProfile(request);
         return Flux.create(sink -> {
             ShortRunExchange exchange = new ShortRunExchange(request.runId());
             registerActiveExchange(request.runId(), exchange);
             var subscription = executeWithOpeningHandshakeTimeout(
                     endpointUri(request), outboundHeaders(request.forwardHeaders()), request.runId(),
                     session -> {
-                        Mono<Void> outbound = session.send(exchange.outbound(configMessage(request))
+                        Mono<Void> outbound = session.send(exchange.outbound(configMessage(request, runtimeProfile))
                                 .map(session::textMessage));
                         Flux<String> frames = session.receive()
                                 .map(WebSocketMessage::getPayloadAsText)
                                 .doOnNext(frame -> validateFrameSize(frame, request.runId()));
-                        Flux<ChatEvent> normalized = userMessageFrames(frames, request, exchange)
+                        Flux<ChatEvent> normalized = userMessageFrames(frames, request, exchange, runtimeProfile)
                                 .transform(frameStream -> normalizeFrames(frameStream, request.runId(),
                                         request.sessionId(), messageCompleted))
                                 .doOnNext(sink::next)
@@ -200,18 +215,20 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
 
     private Flux<ChatEvent> interactionWithShortConnection(AgentRuntimeInteractionResponseRequest request,
                                                     AtomicBoolean messageCompleted) {
+        RuntimeProfileMetadata.Snapshot runtimeProfile = relayProfile(request);
         return Flux.create(sink -> {
             ShortRunExchange exchange = new ShortRunExchange(request.runId());
             registerActiveExchange(request.runId(), exchange);
             var subscription = executeWithOpeningHandshakeTimeout(
                     endpointUri(request.runId()), outboundHeaders(request.forwardHeaders()), request.runId(),
                     session -> {
-                        Mono<Void> outbound = session.send(exchange.outbound(configMessage(request))
+                        Mono<Void> outbound = session.send(exchange.outbound(configMessage(request, runtimeProfile))
                                 .map(session::textMessage));
                         Flux<String> frames = session.receive()
                                 .map(WebSocketMessage::getPayloadAsText)
                                 .doOnNext(frame -> validateFrameSize(frame, request.runId()));
-                        Flux<ChatEvent> normalized = interactionResponseFrames(frames, request, exchange)
+                        Flux<ChatEvent> normalized = interactionResponseFrames(
+                                        frames, request, exchange, runtimeProfile)
                                 .transform(frameStream -> normalizeFrames(frameStream, request.runId(),
                                         request.sessionId(), messageCompleted))
                                 .doOnNext(sink::next)
@@ -234,8 +251,9 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         return frames
                 .takeUntil(this::userTurnTerminalFrame)
                 .concatMap(frame -> Flux.fromIterable(responseNormalizer.normalize(
-                        runId, sessionId, frame)))
-                .takeUntil(event -> "message.completed".equals(event.type()))
+                                runId, sessionId, frame))
+                        // Relay 轮次只由 session-state 或问卷等待边界结束；其他兼容完成帧不得提前截断连接。
+                        .filter(event -> !"message.completed".equals(event.type())))
                 .doOnNext(event -> emitEvent(messageCompleted, event));
     }
 
@@ -272,16 +290,21 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         }
         String clientId = interruptClientId(request.runId());
         String relaySessionId = relaySessionIdForCancel(request);
+        RuntimeProfileMetadata.Snapshot runtimeProfile = relayProfile(request);
         return executeWithOpeningHandshakeTimeout(
                 endpointUri(clientId), outboundHeaders(request.forwardHeaders()), request.runId(), session -> {
             Sinks.Many<String> outbound = Sinks.many().unicast().onBackpressureBuffer();
-            Mono<Void> outboundSend = session.send(Flux.concat(Mono.just(configMessage(request)), outbound.asFlux())
+            Mono<Void> outboundSend = session.send(Flux.concat(
+                            Mono.just(configMessage(request, runtimeProfile)), outbound.asFlux())
                     .map(session::textMessage));
             Flux<String> frames = session.receive()
                     .map(WebSocketMessage::getPayloadAsText)
                     .doOnNext(frame -> validateFrameSize(frame, request.runId()))
                     .timeout(websocketProperties().getIdleTimeout());
-            Mono<Void> releaseInterrupt = waitForInterruptPausedAck(frames, outbound, request, clientId, relaySessionId)
+            Mono<Void> releaseInterrupt = waitForInterruptPausedAck(
+                            frames,
+                            outbound,
+                            new InterruptWaitContext(request, clientId, relaySessionId, runtimeProfile))
                     .doFinally(signal -> outbound.tryEmitComplete())
                     .then(session.close())
                     .onErrorResume(error -> session.close().then(Mono.error(error)));
@@ -310,9 +333,14 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         });
     }
 
-    private Mono<Void> waitForInterruptPausedAck(Flux<String> frames, Sinks.Many<String> outbound,
-                                                 AgentRuntimeCancelRequest request, String clientId,
-                                                 String relaySessionId) {
+    private Mono<Void> waitForInterruptPausedAck(
+            Flux<String> frames,
+            Sinks.Many<String> outbound,
+            InterruptWaitContext context) {
+        AgentRuntimeCancelRequest request = context.request();
+        String clientId = context.clientId();
+        String relaySessionId = context.relaySessionId();
+        RuntimeProfileMetadata.Snapshot runtimeProfile = context.runtimeProfile();
         return Mono.create(sink -> {
             AtomicBoolean done = new AtomicBoolean(false);
             AtomicBoolean configReady = new AtomicBoolean(false);
@@ -360,7 +388,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                             fail.accept(configFailure);
                             return;
                         }
-                        if (configHandshakeCompleteFrame(frame)) {
+                        if (configHandshakeCompleteFrame(frame, runtimeProfile)) {
                             configReady.set(true);
                             Disposable configTimer = configTimeout.getAndSet(null);
                             if (configTimer != null) {
@@ -442,19 +470,27 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     }
 
     private Flux<String> userMessageFrames(Flux<String> frames, AgentRuntimeRequest request,
-                                           ShortRunExchange exchange) {
-        return businessFramesAfterConfig(frames, request.runId(), exchange, userMessage(request), () -> { });
+                                           ShortRunExchange exchange,
+                                           RuntimeProfileMetadata.Snapshot runtimeProfile) {
+        return businessFramesAfterConfig(frames, new BusinessFrameContext(
+                request.runId(), exchange, businessMessage(request, runtimeProfile),
+                () -> { }, runtimeProfile));
     }
 
     private Flux<String> interactionResponseFrames(Flux<String> frames, AgentRuntimeInteractionResponseRequest request,
-                                            ShortRunExchange exchange) {
-        return businessFramesAfterConfig(frames, request.runId(), exchange, approvalResponseMessage(request),
-                request.dispatchState()::markResponseDispatched);
+                                            ShortRunExchange exchange,
+                                            RuntimeProfileMetadata.Snapshot runtimeProfile) {
+        return businessFramesAfterConfig(frames, new BusinessFrameContext(
+                request.runId(), exchange, approvalResponseMessage(request),
+                request.dispatchState()::markResponseDispatched, runtimeProfile));
     }
 
-    private Flux<String> businessFramesAfterConfig(Flux<String> frames, String runId,
-                                                   ShortRunExchange exchange, String initialBusinessMessage,
-                                                   Runnable initialBusinessMessageDispatched) {
+    private Flux<String> businessFramesAfterConfig(Flux<String> frames, BusinessFrameContext context) {
+        String runId = context.runId();
+        ShortRunExchange exchange = context.exchange();
+        String initialBusinessMessage = context.initialBusinessMessage();
+        Runnable initialBusinessMessageDispatched = context.initialBusinessMessageDispatched();
+        RuntimeProfileMetadata.Snapshot runtimeProfile = context.runtimeProfile();
         return Flux.create(sink -> {
             AtomicBoolean done = new AtomicBoolean(false);
             AtomicBoolean userMessageReleased = new AtomicBoolean(false);
@@ -502,7 +538,8 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                         fail.accept(configFailure);
                         return;
                     }
-                    if (configHandshakeCompleteFrame(frame) && userMessageReleased.compareAndSet(false, true)) {
+                    if (configHandshakeCompleteFrame(frame, runtimeProfile)
+                            && userMessageReleased.compareAndSet(false, true)) {
                         Disposable handshake = handshakeTimeout.getAndSet(null);
                         if (handshake != null) {
                             handshake.dispose();
@@ -512,7 +549,9 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                          * adapter 仅放行该受控 metadata，用于持久化 run 与 RuntimeBinding 的
                          * runtimeSessionId；其他 config 初始化帧继续隔离，避免污染用户回答流。
                          */
-                        sink.next(frame);
+                        if (sessionReadyFrame(frame)) {
+                            sink.next(frame);
+                        }
                         try {
                             exchange.send(initialBusinessMessage);
                             initialBusinessMessageDispatched.run();
@@ -528,7 +567,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 if (!shouldEmitUserResponseFrame(frame, responseStarted)) {
                     return;
                 }
-                if (userTurnTerminalFrame(frame) || terminalTextFrame(frame)) {
+                if (userTurnTerminalFrame(frame)) {
                     terminalFrameSeen.set(true);
                 }
                 sink.next(frame);
@@ -616,6 +655,9 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         if (heartbeatFrame(frame)) {
             return false;
         }
+        if (userTurnTerminalFrame(frame)) {
+            return true;
+        }
         if (responseStarted.get()) {
             return true;
         }
@@ -632,7 +674,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         }
     }
 
-    private String configMessage(AgentRuntimeRequest request) {
+    private String configMessage(AgentRuntimeRequest request, RuntimeProfileMetadata.Snapshot runtimeProfile) {
         String relaySessionId = relaySessionIdForQuery(request);
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("sessionMode", request.runtimeSessionMode() == RuntimeSessionMode.NEW ? "new" : "resume");
@@ -642,41 +684,62 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         if (request.runtimeSessionMode() == RuntimeSessionMode.RESUME) {
             config.put("supports_incremental_recovery", true);
         }
-        if (websocketProperties().getAppMode() != null && !websocketProperties().getAppMode().isBlank()) {
-            config.put("appMode", websocketProperties().getAppMode());
-        }
+        config.put("appMode", runtimeProfile.appMode());
         return toJson(Map.of("type", "config", "config", Map.copyOf(config)));
     }
 
-    private String configMessage(AgentRuntimeCancelRequest request) {
+    private String configMessage(AgentRuntimeCancelRequest request,
+                                 RuntimeProfileMetadata.Snapshot runtimeProfile) {
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("sessionMode", "resume");
         config.put("sessionId", relaySessionIdForCancel(request));
         config.put("uid", request.userId());
         putTraceId(config, request.traceContext());
         config.put("supports_incremental_recovery", true);
-        if (websocketProperties().getAppMode() != null && !websocketProperties().getAppMode().isBlank()) {
-            config.put("appMode", websocketProperties().getAppMode());
-        }
+        config.put("appMode", runtimeProfile.appMode());
         return toJson(Map.of("type", "config", "config", Map.copyOf(config)));
     }
 
-    private String configMessage(AgentRuntimeInteractionResponseRequest request) {
+    private String configMessage(AgentRuntimeInteractionResponseRequest request,
+                                 RuntimeProfileMetadata.Snapshot runtimeProfile) {
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("sessionMode", "resume");
         config.put("sessionId", blank(request.runtimeSessionId()) ? request.sessionId() : request.runtimeSessionId());
         config.put("uid", request.userId());
         putTraceId(config, request.traceContext());
         config.put("supports_incremental_recovery", true);
-        if (websocketProperties().getAppMode() != null && !websocketProperties().getAppMode().isBlank()) {
-            config.put("appMode", websocketProperties().getAppMode());
-        }
+        config.put("appMode", runtimeProfile.appMode());
         return toJson(Map.of("type", "config", "config", Map.copyOf(config)));
+    }
+
+    private String businessMessage(AgentRuntimeRequest request,
+                                   RuntimeProfileMetadata.Snapshot runtimeProfile) {
+        return runtimeProfile.profile() == RuntimeProfile.DOMAIN_EXPERT
+                ? expertMessage(request, runtimeProfile)
+                : userMessage(request);
     }
 
     private String userMessage(AgentRuntimeRequest request) {
         Map<String, Object> message = new LinkedHashMap<>();
         message.put("type", "user-message");
+        message.put("content", request.message() == null ? "" : request.message());
+        if (request.memoryContext() != null && request.memoryContext().shortTermEnabled()) {
+            message.put("messages", request.memoryContext().agentRuntimeMessages());
+        }
+        putTraceId(message, request.traceContext());
+        Map<String, Object> metadata = RelayRuntimeWireRequestMapper.relayMetadata(
+                request.metadata(), request.userAccount(), request.globalUserId());
+        if (!metadata.isEmpty()) {
+            message.put("metadata", metadata);
+        }
+        return toJson(message);
+    }
+
+    private String expertMessage(AgentRuntimeRequest request,
+                                 RuntimeProfileMetadata.Snapshot runtimeProfile) {
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("type", "chat_expert");
+        message.put("role_name", runtimeProfile.roleName());
         message.put("content", request.message() == null ? "" : request.message());
         if (request.memoryContext() != null && request.memoryContext().shortTermEnabled()) {
             message.put("messages", request.memoryContext().agentRuntimeMessages());
@@ -763,6 +826,39 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         return blank(request.runtimeSessionId()) ? request.sessionId() : request.runtimeSessionId();
     }
 
+    private RuntimeProfileMetadata.Snapshot relayProfile(AgentRuntimeRequest request) {
+        Map<String, Object> bindingMetadata = request == null || request.bindingMetadata() == null
+                ? Map.of()
+                : request.bindingMetadata();
+        if (bindingMetadata.containsKey(RuntimeProfileMetadata.PROFILE_KEY)) {
+            return RuntimeProfileMetadata.bindingSnapshot(
+                    bindingMetadata, delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+        }
+        RuntimeProfile routeProfile = request == null || request.routeTarget() == null
+                ? RuntimeProfile.DELEGATE
+                : request.routeTarget().runtimeProfile();
+        return configuredProfile(routeProfile);
+    }
+
+    private RuntimeProfileMetadata.Snapshot relayProfile(AgentRuntimeInteractionResponseRequest request) {
+        return RuntimeProfileMetadata.requestSnapshot(
+                request == null ? Map.of() : request.runtimeMetadata(),
+                delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+    }
+
+    private RuntimeProfileMetadata.Snapshot relayProfile(AgentRuntimeCancelRequest request) {
+        return RuntimeProfileMetadata.requestSnapshot(
+                request == null ? Map.of() : request.metadata(),
+                delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+    }
+
+    private RuntimeProfileMetadata.Snapshot configuredProfile(RuntimeProfile runtimeProfile) {
+        Map<String, Object> metadata = RuntimeProfileMetadata.bindingMetadata(
+                runtimeProfile, delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+        return RuntimeProfileMetadata.bindingSnapshot(
+                metadata, delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+    }
+
     private boolean blank(String value) {
         return value == null || value.isBlank();
     }
@@ -809,18 +905,43 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         return headers;
     }
 
-    private boolean configHandshakeCompleteFrame(String frame) {
+    private boolean configHandshakeCompleteFrame(
+            String frame,
+            RuntimeProfileMetadata.Snapshot runtimeProfile) {
         if (frame == null || frame.isBlank()) {
             return false;
         }
         try {
             JsonNode root = objectMapper.readTree(frame);
             String type = RelayRuntimeResponseNormalizer.normalizeTypeName(text(root.path("type")));
-            // Relay config phase has a single release signal. Other initialization frames are isolated here.
-            return "session-ready".equals(type);
+            if ("session-ready".equals(type)) {
+                return true;
+            }
+            // 专家协议允许用明确的 system ready 文案完成 config；普通 Delegate 仍只接受 session-ready。
+            return runtimeProfile.profile() == RuntimeProfile.DOMAIN_EXPERT
+                    && "system".equals(type)
+                    && systemReadyContent(root);
         } catch (JsonProcessingException ex) {
             return false;
         }
+    }
+
+    private boolean sessionReadyFrame(String frame) {
+        if (frame == null || frame.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(frame);
+            return "session-ready".equals(
+                    RelayRuntimeResponseNormalizer.normalizeTypeName(text(root.path("type"))));
+        } catch (JsonProcessingException ex) {
+            return false;
+        }
+    }
+
+    private boolean systemReadyContent(JsonNode root) {
+        String content = text(root == null ? null : root.path("content"));
+        return content != null && content.contains("Ready to chat");
     }
 
     private RelayRuntimeProtocolException configHandshakeFailure(String frame) {
@@ -959,20 +1080,6 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         }
     }
 
-    private boolean terminalTextFrame(String frame) {
-        if (frame == null) {
-            return false;
-        }
-        String normalized = frame.trim().toLowerCase(Locale.ROOT);
-        return "[done]".equals(normalized)
-                || "done".equals(normalized)
-                || "message.completed".equals(normalized)
-                || "steam-complete".equals(normalized)
-                || "stream-complete".equals(normalized)
-                || "stream.complete".equals(normalized)
-                || "stream-completed".equals(normalized);
-    }
-
     private boolean interruptPausedAckFrame(String frame) {
         if (frame == null || frame.isBlank()) {
             return false;
@@ -1108,6 +1215,23 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
 
     private interface ActiveRelayWebSocketExchange {
         void interrupt(String runId);
+    }
+
+    /** 跨实例 stop 临时连接在 config 与中断确认阶段使用的不可变上下文。 */
+    private record InterruptWaitContext(
+            AgentRuntimeCancelRequest request,
+            String clientId,
+            String relaySessionId,
+            RuntimeProfileMetadata.Snapshot runtimeProfile) {
+    }
+
+    /** config 完成后释放首个业务帧所需的不可变上下文。 */
+    private record BusinessFrameContext(
+            String runId,
+            ShortRunExchange exchange,
+            String initialBusinessMessage,
+            Runnable initialBusinessMessageDispatched,
+            RuntimeProfileMetadata.Snapshot runtimeProfile) {
     }
 
     private record RunControlContext(ShortRunExchange exchange,

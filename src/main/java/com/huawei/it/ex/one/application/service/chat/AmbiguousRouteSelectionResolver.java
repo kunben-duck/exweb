@@ -6,6 +6,7 @@ import com.huawei.it.ex.one.domain.chat.ChatPayloadMaps;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -17,6 +18,19 @@ import java.util.Optional;
  * 解析 AMBIGUOUS_ROUTE 的可信候选，并统一用户选择与自动选择规则。
  */
 final class AmbiguousRouteSelectionResolver {
+    private final String domainExpertAccessName;
+
+    AmbiguousRouteSelectionResolver() {
+        this("domain_expert");
+    }
+
+    AmbiguousRouteSelectionResolver(String domainExpertAccessName) {
+        if (domainExpertAccessName == null || domainExpertAccessName.trim().isEmpty()) {
+            throw new IllegalArgumentException("financeex.intent.domain-expert-access-name must not be blank");
+        }
+        this.domainExpertAccessName = domainExpertAccessName.trim();
+    }
+
     List<Candidate> candidates(ChatInteractionRequest interaction) {
         return interaction == null ? List.of() : candidates(interaction.requestPayload());
     }
@@ -65,11 +79,16 @@ final class AmbiguousRouteSelectionResolver {
             throw new IllegalArgumentException("AMBIGUOUS_ROUTE routeSource 不能为空");
         }
         IntentDecision decision = candidate.intentDecision();
-        RouteTarget route = RouteTarget.domainAgent(
-                candidate.skillId(),
-                source,
-                candidate.confidence(),
-                "ambiguous route candidate selected");
+        RuntimeProfile profile = RuntimeProfile.forIntentCandidate(
+                candidate.skillId(), domainExpertAccessName);
+        RouteTarget route = profile == RuntimeProfile.DOMAIN_EXPERT
+                ? RouteTarget.agentRuntime(source, candidate.confidence(),
+                        "ambiguous route domain expert candidate selected", profile)
+                : RouteTarget.domainAgent(
+                        candidate.skillId(),
+                        source,
+                        candidate.confidence(),
+                        "ambiguous route candidate selected");
         return RouteSignalResult.ofIntent(route, decision, 0L, 0.0);
     }
 

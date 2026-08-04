@@ -15,10 +15,12 @@ import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
 import com.huawei.it.ex.one.domain.chat.MessageCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import org.junit.jupiter.api.Test;
 
@@ -233,6 +235,71 @@ class RuntimeBindingApplicationServiceTest {
         assertThat(resolution.previousBinding()).isNull();
         assertThat(resolution.binding().runtimeSessionId()).isEqualTo("s");
         assertThat(resolution.binding().leafMessageId()).isEqualTo("leaf1");
+        assertThat(resolution.binding().metadata())
+                .containsEntry("runtimeProfile", "DELEGATE")
+                .containsEntry("relayAppMode", "delegate")
+                .doesNotContainKey("relayRoleName");
+    }
+
+    @Test
+    void domainExpertReusesOnlyMatchingProfileBinding() {
+        Instant now = Instant.now();
+        RuntimeBinding delegate = new RuntimeBinding(
+                "binding-delegate", "t", "u", "s", "relay", "leaf-delegate", "runtime-delegate",
+                RuntimeBindingStatus.RESUMABLE, "run-delegate", null, now.minusSeconds(1), now.minusSeconds(1),
+                Map.of("runtimeSessionEstablished", true));
+        Map<String, Object> expertMetadata = new LinkedHashMap<>(RuntimeProfileMetadata.bindingMetadata(
+                RuntimeProfile.DOMAIN_EXPERT, "delegate", "domain_expert", "system-awareness"));
+        expertMetadata.put("runtimeSessionEstablished", true);
+        RuntimeBinding expert = new RuntimeBinding(
+                "binding-expert", "t", "u", "s", "relay", "leaf-expert", "runtime-expert",
+                RuntimeBindingStatus.RESUMABLE, "run-expert", null, now, now, expertMetadata);
+        MultiBindingRepository repository = new MultiBindingRepository(List.of(delegate, expert));
+        RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(
+                repository, new InMemoryRuntimeBindingCache(), new FixedIdGenerator(), Duration.ofDays(3), "relay",
+                "delegate", "domain_expert", "system-awareness");
+
+        RuntimeBindingResolution resolution = service.resolveForProfile(
+                new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                        "t", "u", "s", "run-next", "leaf-next", RuntimeProfile.DOMAIN_EXPERT));
+
+        assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
+        assertThat(resolution.binding().id()).isEqualTo("binding-expert");
+        assertThat(resolution.binding().runtimeSessionId()).isEqualTo("runtime-expert");
+        assertThat(service.runtimeProfile(resolution.binding())).isEqualTo(RuntimeProfile.DOMAIN_EXPERT);
+        assertThat(repository.findById("binding-delegate"))
+                .get()
+                .extracting(RuntimeBinding::status)
+                .isEqualTo(RuntimeBindingStatus.RESUMABLE);
+    }
+
+    @Test
+    void changedExpertRoleDoesNotReuseOldExpertSession() {
+        Instant now = Instant.now();
+        Map<String, Object> oldMetadata = new LinkedHashMap<>(RuntimeProfileMetadata.bindingMetadata(
+                RuntimeProfile.DOMAIN_EXPERT, "delegate", "domain_expert", "old-role"));
+        oldMetadata.put("runtimeSessionEstablished", true);
+        RuntimeBinding oldExpert = new RuntimeBinding(
+                "binding-old-expert", "t", "u", "s", "relay", "leaf-old", "runtime-old",
+                RuntimeBindingStatus.RESUMABLE, "run-old", null, now, now, oldMetadata);
+        MultiBindingRepository repository = new MultiBindingRepository(List.of(oldExpert));
+        RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(
+                repository, new InMemoryRuntimeBindingCache(), new FixedIdGenerator(), Duration.ofDays(3), "relay",
+                "delegate", "domain_expert", "system-awareness");
+
+        RuntimeBindingResolution resolution = service.resolveForProfile(
+                new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                        "t", "u", "s", "run-next", "leaf-next", RuntimeProfile.DOMAIN_EXPERT));
+
+        assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.NEW);
+        assertThat(resolution.binding().id()).isEqualTo("runtime_binding_1");
+        assertThat(resolution.binding().metadata())
+                .containsEntry("runtimeProfile", "DOMAIN_EXPERT")
+                .containsEntry("relayRoleName", "system-awareness");
+        assertThat(repository.findById("binding-old-expert"))
+                .get()
+                .extracting(RuntimeBinding::status)
+                .isEqualTo(RuntimeBindingStatus.RESUMABLE);
     }
 
     @Test

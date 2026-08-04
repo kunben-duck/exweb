@@ -12,6 +12,7 @@ import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.IntentRecognitionRecord;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -95,6 +96,23 @@ class IntentRecognitionRecordServiceTest {
         assertThat(record.status()).isEqualTo("SUCCESS");
         assertThat(record.accepted()).isFalse();
         assertThat(record.routeType()).isEqualTo("AGENT_RUNTIME");
+    }
+
+    @Test
+    void recordsDomainExpertRelayAsAcceptedIntent() {
+        CapturingRepository repository = new CapturingRepository();
+        IntentRecognitionRecordService service = new IntentRecognitionRecordService(
+                enabledProperties(), repository, idGenerator, objectMapper, Runnable::run);
+
+        service.recordAsync(snapshot(successfulIntent(0.95),
+                RouteTarget.agentRuntime(
+                        "intent-agent", 0.95, "domain expert", RuntimeProfile.DOMAIN_EXPERT), 8L));
+
+        assertThat(repository.records).singleElement().satisfies(record -> {
+            assertThat(record.accepted()).isTrue();
+            assertThat(record.routeType()).isEqualTo("AGENT_RUNTIME");
+            assertThat(record.routeAgentCode()).isNull();
+        });
     }
 
     @Test

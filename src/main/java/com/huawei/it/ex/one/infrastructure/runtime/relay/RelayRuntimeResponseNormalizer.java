@@ -339,7 +339,8 @@ public class RelayRuntimeResponseNormalizer {
                     RuntimeEvent.thinking(runId, sessionId, relayPayload(root, sourceType));
             case "tool-call-streaming", "tool-execution", "tool-structured-result" ->
                     RuntimeEvent.tool(runId, sessionId, relayPayload(root, sourceType));
-            case "approval-request" -> RuntimeEvent.card(runId, sessionId, relayPayload(root, sourceType));
+            case "approval-request", "expert-rejection" ->
+                    RuntimeEvent.card(runId, sessionId, relayPayload(root, sourceType));
             case "url-moderation", "url-moderation-result", "search-result-groups", "content-references",
                     "citations", "sources", "references", "safe-urls" ->
                     RuntimeEvent.reference(runId, sessionId, relayPayload(root, sourceType));

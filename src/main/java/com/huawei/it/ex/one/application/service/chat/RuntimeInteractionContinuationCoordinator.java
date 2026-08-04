@@ -24,6 +24,7 @@ import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -203,6 +204,7 @@ final class RuntimeInteractionContinuationCoordinator {
                                         execution.request().claim().responsePayload(),
                                         execution.request().forwardHeaders(),
                                         execution.request().traceContext(),
+                                        RuntimeProfileMetadata.copyBindingProfileAsRunMetadata(binding.metadata()),
                                         bindingLifecycle.dispatchState())))));
     }
 

@@ -106,6 +106,7 @@ public class AgentRuntimeExecutor {
                 context.responsePayload(),
                 context.forwardHeaders(),
                 context.traceContext(),
+                context.runtimeMetadata(),
                 context.dispatchState()
         );
         return protect(context.runtimeProvider(), runtimeRegistry.continueWithUserResponse(request));
@@ -128,6 +129,10 @@ public class AgentRuntimeExecutor {
         if (run == null) {
             return Mono.empty();
         }
+        Map<String, Object> cancelMetadata = new java.util.LinkedHashMap<>();
+        cancelMetadata.put("routeType", run.routeType() == null ? "" : run.routeType());
+        cancelMetadata.putAll(com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata.copyRunMetadata(
+                run.metadata()));
         AgentRuntimeCancelRequest request = new AgentRuntimeCancelRequest(
                 user.tenantId(),
                 user.ownerUserId(),
@@ -137,7 +142,7 @@ public class AgentRuntimeExecutor {
                 run.runtimeProvider(),
                 run.agentCode(),
                 run.cancelReason(),
-                Map.of("routeType", run.routeType() == null ? "" : run.routeType()),
+                Map.copyOf(cancelMetadata),
                 forwardHeaders,
                 traceContext
         );

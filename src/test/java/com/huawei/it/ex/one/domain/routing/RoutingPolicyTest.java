@@ -35,6 +35,33 @@ class RoutingPolicyTest {
     }
 
     @Test
+    void routesConfiguredDomainExpertIntentToRelayProfile() {
+        RoutingPolicy expertPolicy = new RoutingPolicy(0.85, 0.85, "domain_expert");
+        IntentDecision intent = new IntentDecision(
+                "finance.expert", "领域专家", TaskComplexity.SIMPLE, 0.95, true,
+                "domain_expert", Map.of("routeAction", "ROUTE_SINGLE"), java.util.List.of(), Map.of());
+
+        RouteTarget target = expertPolicy.decideFromIntent(null, null, intent, null);
+
+        assertThat(target.type()).isEqualTo(RouteType.AGENT_RUNTIME);
+        assertThat(target.runtimeProfile()).isEqualTo(RuntimeProfile.DOMAIN_EXPERT);
+        assertThat(target.selectedAgentCode()).isNull();
+    }
+
+    @Test
+    void domainExpertAccessNameMatchIsCaseSensitive() {
+        RoutingPolicy expertPolicy = new RoutingPolicy(0.85, 0.85, "domain_expert");
+        IntentDecision intent = new IntentDecision(
+                "finance.expert", "领域专家", TaskComplexity.SIMPLE, 0.95, true,
+                "DOMAIN_EXPERT", Map.of("routeAction", "ROUTE_SINGLE"), java.util.List.of(), Map.of());
+
+        RouteTarget target = expertPolicy.decideFromIntent(null, null, intent, null);
+
+        assertThat(target.type()).isEqualTo(RouteType.DOMAIN_AGENT);
+        assertThat(target.selectedAgentCode()).isEqualTo("DOMAIN_EXPERT");
+    }
+
+    @Test
     void intentConfidenceNoLongerBlocksRouteSingleDomainAgent() {
         RoutingPolicy strictPolicy = new RoutingPolicy(0.85, 0.96);
         IntentDecision intent = new IntentDecision("finance.office.query", "office", TaskComplexity.SIMPLE, 0.95, true,

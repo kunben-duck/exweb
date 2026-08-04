@@ -108,12 +108,14 @@ final class DomainAgentReplacementExecutor {
         DomainAgentRunContext context = reroute.context();
         context.bindingRef().set(bindingPolicy.markRejected(
                 context.bindingRef().get(), reroute.refusal()));
-        RuntimeBindingResolution resolution = runtimeBindingService.resolveForRun(
-                context.user().tenantId(),
-                context.user().ownerUserId(),
-                context.session().id(),
-                context.runId(),
-                bindingPolicy.runtimeBindingLeafId(context.command()));
+        RuntimeBindingResolution resolution = runtimeBindingService.resolveForProfile(
+                new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                        context.user().tenantId(),
+                        context.user().ownerUserId(),
+                        context.session().id(),
+                        context.runId(),
+                        bindingPolicy.runtimeBindingLeafId(context.command()),
+                        nextRoute.runtimeProfile()));
         trackRelayBinding(lifecycle, resolution);
         context.bindingRef().set(resolution.binding());
         context.routeRef().set(nextRoute);

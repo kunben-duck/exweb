@@ -8,6 +8,7 @@ import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
@@ -50,10 +51,14 @@ final class RouteSwitchContextResolver {
         String candidateRouteQuery = blankToDefault(
                 firstText(interaction.requestPayload().get("routeMemoryQuery")),
                 normalizedQuery);
+        RuntimeProfile candidateRuntimeProfile = relayRuntimeProfile(
+                candidateProvider,
+                firstText(interaction.requestPayload().get("routeAction")));
         return new RouteSwitchInput(
                 approved,
                 candidateProvider,
                 candidateTargetId,
+                candidateRuntimeProfile,
                 currentTargetId,
                 normalizedQuery,
                 candidateRouteQuery);
@@ -72,6 +77,7 @@ final class RouteSwitchContextResolver {
         return approvedTarget(
                 input.candidateProvider(),
                 input.candidateTargetId(),
+                input.candidateRuntimeProfile(),
                 "user-confirmed");
     }
 
@@ -101,12 +107,14 @@ final class RouteSwitchContextResolver {
         } else if (RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(
                 input.candidateProvider())) {
             cancelCurrentBinding(interaction, request.runId());
-            RuntimeBindingResolution resolution = runtimeBindingService.resolveForRun(
-                    request.user().tenantId(),
-                    request.user().ownerUserId(),
-                    request.session().id(),
-                    request.runId(),
-                    interaction.assistantMessageId());
+            RuntimeBindingResolution resolution = runtimeBindingService.resolveForProfile(
+                    new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                            request.user().tenantId(),
+                            request.user().ownerUserId(),
+                            request.session().id(),
+                            request.runId(),
+                            interaction.assistantMessageId(),
+                            input.candidateRuntimeProfile()));
             binding = resolution.binding();
             runtimeSessionMode = resolution.sessionMode();
         } else {
@@ -127,6 +135,7 @@ final class RouteSwitchContextResolver {
     private RouteTarget approvedTarget(
             String provider,
             String targetId,
+            RuntimeProfile runtimeProfile,
             String routeSource) {
         if (RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(provider)) {
             if (targetId == null || targetId.isBlank()) {
@@ -138,10 +147,18 @@ final class RouteSwitchContextResolver {
         }
         if (RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(provider)) {
             return RouteTarget.agentRuntime(
-                    routeSource, 1.0, "confirmed route switch to relay");
+                    routeSource, 1.0, "confirmed route switch to relay", runtimeProfile);
         }
         throw new IllegalArgumentException(
                 "不支持的候选 Runtime provider: " + provider);
+    }
+
+    private RuntimeProfile relayRuntimeProfile(String provider, String routeAction) {
+        if (RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(provider)
+                && "ROUTE_SINGLE".equals(routeAction)) {
+            return RuntimeProfile.DOMAIN_EXPERT;
+        }
+        return RuntimeProfile.DELEGATE;
     }
 
     private String routeSource(ChatInteractionRequest interaction) {
@@ -198,6 +215,7 @@ record RouteSwitchInput(
         boolean approved,
         String candidateProvider,
         String candidateTargetId,
+        RuntimeProfile candidateRuntimeProfile,
         String currentTargetId,
         String originalQuery,
         String candidateRouteQuery

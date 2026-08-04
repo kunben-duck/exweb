@@ -115,6 +115,8 @@ financeex:
     access-name: ${FINANCEEX_INTENT_ACCESS_NAME:}
     # 可选：从意图响应 items[].accessName 开头移除一次，得到真实 DomainAgent skillId。
     response-access-name-prefix: ${FINANCEEX_INTENT_RESPONSE_ACCESS_NAME_PREFIX:}
+    # 归一化后的 accessName 命中该值时，改由 Relay Domain Expert 模式执行。
+    domain-expert-access-name: ${FINANCEEX_INTENT_DOMAIN_EXPERT_ACCESS_NAME:domain_expert}
     # NO_MATCH 仍进入 Relay；该配置只控制 intent-result 中展示的目标 Agent 名称。
     no-match-agent-name: ${FINANCEEX_INTENT_NO_MATCH_AGENT_NAME:FIN Supervisor Agent}
     # 默认使用 SSE 流式接口；显式切换为 BLOCKING 时调用原阻塞接口。
@@ -318,11 +320,14 @@ financeex:
     default-provider: ${FINANCEEX_AGENT_RUNTIME_DEFAULT_PROVIDER:relay}
     relay:
       enabled: ${FINANCEEX_RELAY_RUNTIME_ENABLED:true}
+      domain-expert:
+        app-mode: ${FINANCEEX_RELAY_DOMAIN_EXPERT_APP_MODE:domain_expert}
+        role-name: ${FINANCEEX_RELAY_DOMAIN_EXPERT_ROLE_NAME:system-awareness}
       websocket:
         url: ${FINANCEEX_RELAY_WS_URL:}
         app-mode: ${FINANCEEX_RELAY_WS_APP_MODE:delegate}
         connect-timeout: ${FINANCEEX_RELAY_WS_CONNECT_TIMEOUT:5s}
-        # 分别限制 HTTP Upgrade opening handshake，以及 Upgrade 成功后的 config -> session-ready 阶段。
+        # 分别限制 HTTP Upgrade，以及 config -> Profile 对应 ready 信号阶段。
         config-handshake-timeout: ${FINANCEEX_RELAY_WS_CONFIG_HANDSHAKE_TIMEOUT:10s}
         interrupt-ack-timeout: ${FINANCEEX_RELAY_WS_INTERRUPT_ACK_TIMEOUT:5s}
         max-run-duration: ${FINANCEEX_RELAY_WS_MAX_RUN_DURATION:30m}

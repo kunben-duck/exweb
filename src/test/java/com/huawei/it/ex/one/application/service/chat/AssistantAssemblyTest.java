@@ -166,4 +166,32 @@ class AssistantAssemblyTest {
         assertThat(assembly.shouldPersistMessage()).isFalse();
         assertThat(assembly.parts()).isEmpty();
     }
+
+    @Test
+    void placeholderPolicyCreatesAssistantAfterRuntimeDispatchStartsWithoutBusinessEvents() {
+        AgentDataPersistenceState state = new AgentDataPersistenceState("回答已隐藏")
+                .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER)
+                .markRuntimeDispatchStarted();
+        AssistantAssembly assembly = new AssistantAssembly(state);
+
+        assertThat(assembly.shouldPersistMessage()).isTrue();
+        assertThat(assembly.finalContent()).isEqualTo("回答已隐藏");
+        assertThat(assembly.parts()).isEmpty();
+    }
+
+    @Test
+    void runtimeDispatchMarkerRoundTripsOnlyInPrivateRunMetadata() {
+        AgentDataPersistenceState original = new AgentDataPersistenceState("回答已隐藏")
+                .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER)
+                .markRuntimeDispatchStarted();
+
+        AgentDataPersistenceState restored = AgentDataPersistenceState.fromRunMetadata(
+                original.runMetadataOverlay(), null);
+
+        assertThat(restored.placeholderMode()).isTrue();
+        assertThat(restored.runtimeDispatchStarted()).isTrue();
+        assertThat(restored.placeholderContent()).isEqualTo("回答已隐藏");
+        assertThat(AgentDataPersistenceMetadata.removeRunPolicy(original.runMetadataOverlay()))
+                .isEmpty();
+    }
 }

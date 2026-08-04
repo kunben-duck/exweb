@@ -7,6 +7,7 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppend
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+import com.huawei.it.ex.one.domain.chat.SequencedChatEvent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -157,6 +158,55 @@ class MyBatisChatEventStoreTest {
                 .isInstanceOf(ChatEventAppendRejectedException.class)
                 .hasMessageContaining("批量写入被 execution guard 拒绝");
         assertThat(mapper.batchInsertCalls).isEqualTo(1);
+    }
+
+    @Test
+    void sequenceLiveBatchUsesGuardAndSequenceWithoutInsertingOrCreatingEventIds() {
+        ReturningEventMapper mapper = new ReturningEventMapper();
+        java.util.concurrent.atomic.AtomicInteger generatedIds = new java.util.concurrent.atomic.AtomicInteger();
+        MyBatisChatEventStore store = new MyBatisChatEventStore(
+                mapper,
+                new ObjectMapper(),
+                (bizType, context) -> {
+                    generatedIds.incrementAndGet();
+                    return "unexpected";
+                }
+        );
+
+        List<ChatEvent> sequenced = store.sequenceLiveBatchWithExecutionGuard(List.of(
+                        MessageDeltaEvent.of("run1", "session1", "a"),
+                        MessageDeltaEvent.of("run1", "session1", "b")),
+                new RunExecutionClaim("run1", "instance-1", 7L));
+
+        assertThat(sequenced).allSatisfy(event -> assertThat(event)
+                .isInstanceOf(SequencedChatEvent.class));
+        assertThat(sequenced).extracting(ChatEvent::sequence).containsExactly(42L, 43L);
+        assertThat(mapper.lockCalls).isEqualTo(1);
+        assertThat(mapper.lockOwnerInstanceId).isEqualTo("instance-1");
+        assertThat(mapper.lockFencingToken).isEqualTo(7L);
+        assertThat(mapper.batchSequenceCalls).isEqualTo(1);
+        assertThat(mapper.batchInsertCalls).isZero();
+        assertThat(mapper.singleRow).isNull();
+        assertThat(generatedIds).hasValue(0);
+    }
+
+    @Test
+    void sequenceLiveBatchRejectsBeforeAllocatingSequenceWhenRunGateDoesNotMatch() {
+        ReturningEventMapper mapper = new ReturningEventMapper();
+        mapper.lockResult = null;
+        MyBatisChatEventStore store = new MyBatisChatEventStore(
+                mapper,
+                new ObjectMapper(),
+                (bizType, context) -> "event_1"
+        );
+
+        assertThatThrownBy(() -> store.sequenceLiveBatchWithExecutionGuard(
+                List.of(MessageDeltaEvent.of("run1", "session1", "a")),
+                new RunExecutionClaim("run1", "instance-1", 7L)))
+                .isInstanceOf(ChatEventAppendRejectedException.class)
+                .hasMessageContaining("行栅栏拒绝");
+        assertThat(mapper.batchSequenceCalls).isZero();
+        assertThat(mapper.batchInsertCalls).isZero();
     }
 
     private static class ReturningEventMapper implements ChatEventMapper {

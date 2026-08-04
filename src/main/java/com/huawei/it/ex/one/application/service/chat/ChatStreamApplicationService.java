@@ -36,10 +36,10 @@ import java.util.Map;
 /**
  * 聊天事件流应用服务。
  *
- * <p>所有事件先写入数据库，再发布到 run 级实时 topic。WebSocket 用于当前页面新建 run 的
- * 实时订阅；run 级事件恢复用于新页签、新浏览器或跨电脑恢复已经存在的 active run，它会先从
- * 数据库补发 afterSeq 之后的事实事件，再接续 live topic。若 live source 异常，服务端返回恢复错误，
- * 不做循环 DB polling，避免 Redis 抖动时放大数据库压力。</p>
+ * <p>通常事件先写入数据库，再发布到 run 级实时 topic。留存策略也允许业务内容只分配全局
+ * sequence 后实时发布，这类事件不会进入 Event Resume。WebSocket 用于当前页面新建 run 的实时订阅；
+ * run 级事件恢复会先从数据库补发 afterSeq 之后的事实事件，再接续 live topic。若 live source 异常，
+ * 服务端返回恢复错误，不做循环 DB polling，避免 Redis 抖动时放大数据库压力。</p>
  */
 @Service
 public class ChatStreamApplicationService {
@@ -132,6 +132,15 @@ public class ChatStreamApplicationService {
     }
 
     /**
+     * 为不进入事件事实表的业务事件分配全局 sequence。
+     */
+    public List<ChatEvent> sequenceLiveBatchWithExecutionGuard(
+            List<ChatEvent> events,
+            RunExecutionClaim claim) {
+        return eventStore.sequenceLiveBatchWithExecutionGuard(events, claim);
+    }
+
+    /**
      * 查询某个 run 已经成功落库的事实事件。
      *
      * <p>该方法服务于 stop 后的部分回答固化：只使用数据库中已经获得 seq 的事件重建
@@ -159,34 +168,56 @@ public class ChatStreamApplicationService {
      * @param persisted 已持久化并带有 seq 的事件。
      */
     public void publishPersisted(ChatEvent persisted) {
+        publishLiveChannels(persisted, true);
+    }
+
+    /**
+     * 发布仅实时传输的事件。
+     *
+     * <p>调用方必须先完成 execution guard 和全局 sequence 分配。该事件不会写入事实表，断线后不能
+     * 通过 Event Resume 补发。</p>
+     */
+    public void publishLiveOnly(ChatEvent event) {
+        publishLiveChannels(event, false);
+    }
+
+    private void publishLiveChannels(ChatEvent event, boolean persisted) {
         RuntimeException publishFailure = null;
         try {
-            registry.publish(persisted);
+            registry.publish(event);
         } catch (RuntimeException ex) {
-            publishFailure = new IllegalStateException("本机聊天事件发布失败: runId=" + persisted.runId()
-                    + ", sequence=" + persisted.sequence(), ex);
+            publishFailure = new IllegalStateException("本机聊天事件发布失败: runId=" + event.runId()
+                    + ", sequence=" + event.sequence(), ex);
             log.warn(SystemErrorLogEntry.builder(SystemErrorCode.WEBSOCKET_SEND_FAILED,
-                            "Persisted chat event publication to the local live stream failed")
-                    .runId(persisted.runId())
-                    .sessionId(persisted.sessionId())
+                            persisted
+                                    ? "Persisted chat event publication to the local live stream failed"
+                                    : "Live-only chat event publication to the local live stream failed")
+                    .runId(event.runId())
+                    .sessionId(event.sessionId())
                     .operation("chat-event.publish.local")
-                    .attribute("sequence", persisted.sequence())
+                    .attribute("sequence", event.sequence())
                     .build(), ex);
         }
-        if (persisted.runId() != null && !persisted.runId().isBlank()) {
+        if (event.runId() != null && !event.runId().isBlank()) {
             try {
-                liveEventBus.publish(ChatStreamTopics.runTopic(persisted.runId()), persisted);
+                if (persisted) {
+                    liveEventBus.publish(ChatStreamTopics.runTopic(event.runId()), event);
+                } else {
+                    liveEventBus.publishLiveOnly(ChatStreamTopics.runTopic(event.runId()), event);
+                }
             } catch (RuntimeException ex) {
                 log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_PUBLISH_FAILED,
-                                "Persisted chat event publication to the cross-instance live bus failed")
-                        .runId(persisted.runId())
-                        .sessionId(persisted.sessionId())
+                                persisted
+                                        ? "Persisted chat event publication to the cross-instance live bus failed"
+                                        : "Live-only chat event publication to the cross-instance live bus failed")
+                        .runId(event.runId())
+                        .sessionId(event.sessionId())
                         .operation("chat-event.publish.live-bus")
-                        .attribute("sequence", persisted.sequence())
+                        .attribute("sequence", event.sequence())
                         .build(), ex);
                 if (publishFailure == null) {
-                    publishFailure = new IllegalStateException("跨实例聊天事件发布失败: runId=" + persisted.runId()
-                            + ", sequence=" + persisted.sequence(), ex);
+                    publishFailure = new IllegalStateException("跨实例聊天事件发布失败: runId=" + event.runId()
+                            + ", sequence=" + event.sequence(), ex);
                 } else {
                     publishFailure.addSuppressed(ex);
                 }

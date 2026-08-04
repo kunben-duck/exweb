@@ -90,6 +90,34 @@ class ChatStreamApplicationServiceTest {
     }
 
     @Test
+    void publishLiveOnlyUsesNonRecoverableCrossInstanceEntry() {
+        AtomicInteger persistedCalls = new AtomicInteger();
+        AtomicInteger liveOnlyCalls = new AtomicInteger();
+        ChatLiveEventBus liveBus = new ChatLiveEventBus() {
+            @Override
+            public void publish(String topicId, ChatEvent event) {
+                persistedCalls.incrementAndGet();
+            }
+
+            @Override
+            public void publishLiveOnly(String topicId, ChatEvent event) {
+                liveOnlyCalls.incrementAndGet();
+            }
+
+            @Override
+            public Flux<ChatEvent> subscribe(String topicId) {
+                return Flux.never();
+            }
+        };
+        ChatStreamApplicationService service = service(new LocalChatEventStreamRegistry(), liveBus);
+
+        service.publishLiveOnly(stored(2L, "live-only"));
+
+        assertThat(liveOnlyCalls).hasValue(1);
+        assertThat(persistedCalls).hasValue(0);
+    }
+
+    @Test
     void appendAssignsSeqAndResumeSessionReplaysOnlyPersistedEvents() {
         InMemoryChatEventStore store = new InMemoryChatEventStore();
         LocalChatEventStreamRegistry registry = new LocalChatEventStreamRegistry();

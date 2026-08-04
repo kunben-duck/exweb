@@ -113,11 +113,14 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 和 DomainAgent 文档 provider 默认不接入该鉴权头，仍保持现有 Cookie/普通调用行为。
 
 `FINANCEEX_AGENT_DATA_PERSISTENCE_ENABLED=true` 时，DomainAgent 调用前使用可信 `skillId` 查询技能配置。
-仅明确返回 `isSaveSession=N` 时，ChatEvent 和实时输出保持完整，但 assistant 历史只保存配置化占位文案和
+仅明确返回 `isSaveSession=N` 时，业务 Event 只通过本机流和 Redis Pub/Sub 实时输出，不写入事件表；
+run 生命周期、Intent、路由、拒答、澄清、确认和终态 Event 仍持久化。assistant 历史只保存配置化占位文案和
 必要的交互控制 Parts；`Y`、空值、`null` 或未配置均使用原有 `FULL` 行为。策略按环境、租户和 skillId 在
 Redis缓存10分钟。无有效缓存且配置查询失败时禁止调用DomainAgent，不降级为`FULL`。默认技能配置
 Provider使用HTTP接口并透传当前run入口捕获的Cookie；接口地址和路径必须显式配置，调用超时默认2秒。
-Cookie不进入请求体、缓存、事件、metadata、数据库或日志。
+Cookie不进入请求体、缓存、事件、metadata、数据库或日志。Agent或Relay的Interaction continuation会从
+可信source run继承策略和占位文案，但不会继承来源run的Runtime启动标记；相似命名的未知下游事件不会因
+包含approval、clarification或confirmation字样而被当作控制事实落库。Intent过程Event仍按既定边界持久化。
 
 租户和用户身份不从前端 Header/Query/Body 透传，统一由请求入口通过 `AuthContextProvider` 从服务端身份上下文解析一次，并以不可变 `UserContext` 传入应用层。系统内部 `user_id/owner_user_id` 写入值统一来自 `UserContext.ownerUserId()`，优先使用企业 `globalUserId`，缺省回退本地开发态 `userId`。应用层、后台 run 和 `boundedElastic` 阻塞线程不会再次读取请求 ThreadLocal。当前 `ApplicationAuthContextProvider` 直接构造完整 `UserContext`，接入企业身份源时替换该防腐层即可。
 
@@ -153,13 +156,18 @@ topic 需要恢复，恢复控制消息按较慢间隔重试，远端前端通�
 事件写入也会校验 run 与 session 的 tenant/user 归属一致，避免下游 Runtime/DomainAgent 返回错误
 `runId/sessionId` 时污染事件事实源。
 
-Relay 和 DomainAgent 的普通运行事件默认按同一 run 批量落库，批次在条数、等待时间或序列化
+`FULL` 策略下，Relay 和 DomainAgent 的普通运行事件默认按同一 run 批量落库，批次在条数、等待时间或序列化
 字节数任一阈值命中时提交；默认值分别为
 `financeex.chat-stream.event-batch-max-size=16`、`event-batch-max-wait=20ms` 和
 `event-batch-max-bytes=256KB`。`run.started`、IntentAgent 路由事件、Interaction、DomainAgent
 拒答、`message.completed` 和 run 终态仍立即单条提交，并会先刷新待处理普通事件。批量事务提交后
 仍按原事件顺序逐条发布，前端事件数量、payload、sequence 和 Event Resume 协议不变；通过
 `event-batch-enabled=false` 可恢复逐事件落库。
+
+`ASSISTANT_PLACEHOLDER` 策略下，普通 `message.*` 与下游 `runtime.*` 业务 Event 使用同一数据库全局
+sequence 分配顺序，但不执行 Event INSERT；`run.lastSeq` 和 `stream-status.latestSeq` 只表示最新持久化
+位置。实时业务 sequence 与后续持久化控制/终态 sequence 之间允许出现缺口。Event Resume 不会补发这些
+缺口，页面未订阅或断线期间遗漏的业务内容不可恢复。
 
 当前 `ApplicationAuthContextProvider` 直接构造完整 `UserContext`，不再通过配置文件或环境变量模拟
 tenant/user。接入企业身份源时，只需替换该防腐层的身份读取逻辑。

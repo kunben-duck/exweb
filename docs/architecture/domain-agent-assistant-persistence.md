@@ -2,14 +2,15 @@
 
 ## 1. 适用范围
 
-本文描述 FinanceEXChatService 当前已经实现的 DomainAgent assistant 历史留存控制。该能力只控制
-ChatService 中 assistant 正文和 message parts 的历史投影，不是 `NO_STORE`，也不构成端到端零留存承诺。
+本文描述 FinanceEXChatService 当前已经实现的 DomainAgent assistant 历史与业务 Event 留存控制。
+该能力不是 `NO_STORE`，也不构成端到端零留存承诺。
 
 以下数据保持原有保存行为：
 
 - 用户消息和附件引用；
 - ChatRun、RuntimeBinding、Interaction 和 RouteMemory；
-- 完整 ChatEvent、Redis Pub/Sub 实时消息和 Event Resume；
+- run 生命周期、Intent、路由、拒答、澄清、确认和终态 ChatEvent；
+- Redis Pub/Sub 实时消息；
 - DomainAgent、模型、工具及其他下游系统自行保存的数据。
 
 ## 2. 配置语义
@@ -124,7 +125,10 @@ Provider的HTTP交换使用WebClient非阻塞执行，并由配置的总超时�
 
 `ASSISTANT_PLACEHOLDER` 下：
 
-- ChatEvent 仍完整落库并实时发布；
+- `message.delta/snapshot/completed` 和普通下游 `runtime.*` 业务 Event 只实时发布，不写入事件表；
+- run 生命周期、Intent、路由、拒答、澄清、确认、Relay 问卷和终态 Event 仍落库并实时发布；
+- 控制事件只按可信 `source`、精确 `sourceType` 和必要协议字段识别，名字相似的未知下游事件默认 live-only；
+- live-only Event 仍从数据库全局 sequence 获取有序编号，但不推进 `run.lastSeq`；
 - assistant `content` 保存配置的占位文案；
 - 不保存 `ANSWER`、`MESSAGE_SNAPSHOT`、`THINKING`、`TOOL`、`REFERENCE`、普通 `CARD` 等业务 Parts；
 - 保留 Intent 澄清、AMBIGUOUS_ROUTE、路由切换确认和 Relay 问卷所需控制 Parts；
@@ -133,6 +137,13 @@ Provider的HTTP交换使用WebClient非阻塞执行，并由配置的总超时�
 
 分享和反馈仍可引用这条 assistant，但只能读取占位正文和保留的控制 Parts。短期记忆会排除带占位标记的
 assistant；长期记忆返回值中等于当前占位文案的条目也会在上下文装配时排除。
+
+Runtime 调用前会在私有 run metadata 中以 owner/fencing 保护记录 `runtimeDispatchStarted=true`。因此用户
+主动 stop 时，即使业务 Event 没有落库，仍能确认 Runtime 已经开始并保存占位 assistant；标记写入前 stop
+不会额外创建 assistant。`runtime.metadata(session-ready)` 虽属于 live-only Event，仍会更新 run 和
+RuntimeBinding 的真实 `runtimeSessionId`。Agent澄清、审批或Relay问卷创建run-B时，从归属正确的source
+run继承策略和占位文案，但将`runtimeDispatchStarted`重置为`false`；只有run-B实际调用Runtime前才重新写入。
+live-only事件携带的`runtimeSessionId`与当前Binding相同时不查询run表，只有首次建立或真实变化时写回。
 
 ## 7. 配置项
 
@@ -156,7 +167,9 @@ financeex:
 
 ## 8. 运行限制
 
-- 该能力不是事件零留存，完整业务回答仍可从 ChatEvent 和 Event Resume 获取。
+- 该能力不是全量事件零留存：控制与终态事实仍保存在 ChatEvent 表；下游系统也可能自行留存业务数据。
+- live-only 业务 Event 不支持 Event Resume。页面初次订阅前、断线期间或 Redis 发布失败时遗漏的内容不可恢复。
+- `stream-status.latestSeq` 是最新持久化 Event 位置，不代表最新实时业务 sequence。
 - 该能力不向 DomainAgent 或 Relay 发送留存参数，不控制下游存储。
 - Redis 缓存存在最多一个 TTL 周期的配置生效延迟；紧急变更需要删除对应 key。
 - `financeex.agent-runtime.forward-cookie.enabled=false` 时配置查询仍会执行，但不会携带 Cookie。

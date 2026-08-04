@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
 
 /**
- * 将同一 run 的普通 Runtime 事件按条数、等待时间和序列化字节数组成持久化批次。
+ * 将同一 run 的普通 Runtime 事件按条数、等待时间和序列化字节数组成有序处理批次。
  *
  * <p>调用方负责提供可批量事件判定。控制事件会立即关闭当前缓冲并作为单事件批次输出，
  * 因此 run 准入、Interaction、拒答和终态事件仍可沿用原来的单事件事务。</p>
@@ -52,7 +52,7 @@ public class ChatEventBatcher {
     }
 
     /**
-     * 按三个阈值生成有序持久化批次。
+     * 按三个阈值生成有序处理批次。
      *
      * @param source 已完成 run/session 身份校验的事件流。
      * @param batchable 判断事件是否属于 Relay/DomainAgent 普通运行事件。
@@ -163,7 +163,7 @@ public class ChatEventBatcher {
     }
 
     /**
-     * 一个数据库持久化单元。batchable=false 表示必须沿用原单事件业务路径。
+     * 一个事件处理单元。batchable=false 表示必须沿用原单事件业务路径。
      */
     public record Batch(List<ChatEvent> events, boolean batchable) {
         public Batch {

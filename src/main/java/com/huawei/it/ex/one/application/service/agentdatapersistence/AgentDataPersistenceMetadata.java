@@ -16,6 +16,7 @@ public final class AgentDataPersistenceMetadata {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() { };
     private static final String POLICY_KEY = "policy";
     private static final String PLACEHOLDER_CONTENT_KEY = "placeholderContent";
+    private static final String RUNTIME_DISPATCH_STARTED_KEY = "runtimeDispatchStarted";
 
     private AgentDataPersistenceMetadata() {
     }
@@ -23,10 +24,20 @@ public final class AgentDataPersistenceMetadata {
     public static Map<String, Object> runMetadata(
             AgentDataPersistencePolicy policy,
             String placeholderContent) {
+        return runMetadata(policy, placeholderContent, false);
+    }
+
+    public static Map<String, Object> runMetadata(
+            AgentDataPersistencePolicy policy,
+            String placeholderContent,
+            boolean runtimeDispatchStarted) {
         Map<String, Object> policyValue = new LinkedHashMap<>();
         policyValue.put(POLICY_KEY, normalizePolicy(policy).name());
         if (normalizePolicy(policy) == AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER) {
             policyValue.put(PLACEHOLDER_CONTENT_KEY, placeholderContent);
+            if (runtimeDispatchStarted) {
+                policyValue.put(RUNTIME_DISPATCH_STARTED_KEY, true);
+            }
         }
         return Map.of(RUN_METADATA_KEY, Map.copyOf(policyValue));
     }
@@ -39,7 +50,10 @@ public final class AgentDataPersistenceMetadata {
         if (policy == null) {
             return null;
         }
-        return new RunPolicySnapshot(policy, text(raw.get(PLACEHOLDER_CONTENT_KEY)));
+        return new RunPolicySnapshot(
+                policy,
+                text(raw.get(PLACEHOLDER_CONTENT_KEY)),
+                Boolean.TRUE.equals(raw.get(RUNTIME_DISPATCH_STARTED_KEY)));
     }
 
     /**
@@ -130,7 +144,8 @@ public final class AgentDataPersistenceMetadata {
 
     public record RunPolicySnapshot(
             AgentDataPersistencePolicy policy,
-            String placeholderContent
+            String placeholderContent,
+            boolean runtimeDispatchStarted
     ) {
     }
 }

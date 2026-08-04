@@ -150,7 +150,14 @@ final class DomainAgentReplacementExecutor {
             DomainAgentRunContext context,
             RelayReplacementExecution execution,
             RuntimeBindingDispatchLifecycle lifecycle) {
-        return Flux.defer(() -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
+        return Flux.defer(() -> {
+            appliedRouteRecorder.markRuntimeDispatchStartedRequired(
+                    context.runId(),
+                    execution.nextRoute(),
+                    execution.resolution().binding(),
+                    context.executionClaim(),
+                    context.persistenceState());
+            return agentRuntimeExecutor.execute(new RuntimeExecutionContext(
                         execution.runtimeCommand(),
                         context.runId(),
                         execution.runtimeMemory(),
@@ -161,7 +168,8 @@ final class DomainAgentReplacementExecutor {
                         execution.resolution().sessionMode(),
                         context.forwardHeaders(),
                         context.documents(),
-                        context.traceContext())))
+                        context.traceContext()));
+        })
                 .doOnSubscribe(ignored -> lifecycle.markRuntimeSubscribed());
     }
 
@@ -275,6 +283,12 @@ final class DomainAgentReplacementExecutor {
             DomainAgentRunContext context,
             ReplacementBindingLifecycle replacement) {
         return Flux.defer(() -> {
+            appliedRouteRecorder.markRuntimeDispatchStartedRequired(
+                    context.runId(),
+                    context.route(),
+                    replacement.binding(),
+                    context.executionClaim(),
+                    context.persistenceState());
             Flux<ChatEvent> runtimeEvents = continuation.apply(context);
             if (runtimeEvents == null) {
                 return Flux.error(new IllegalStateException(

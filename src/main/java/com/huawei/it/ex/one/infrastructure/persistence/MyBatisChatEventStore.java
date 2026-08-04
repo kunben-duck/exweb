@@ -6,6 +6,7 @@ import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+import com.huawei.it.ex.one.domain.chat.SequencedChatEvent;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -25,8 +26,8 @@ import java.sql.SQLException;
 /**
  * 聊天事件数据库事实源。
  *
- * <p>事件流会被 WebSocket 实时消费，并通过 Event Resume 在断线重连、刷新页面、审计和排障时回放。
- * 因此这里不再使用 JVM 内存列表，而是把每个 ChatEvent 持久化到 fin_ex_chat_event_t。</p>
+ * <p>持久化事件可通过 Event Resume 在断线重连、刷新页面、审计和排障时回放。留存策略要求
+ * 仅实时传输的业务事件只在本仓储分配全局 sequence，不写入 fin_ex_chat_event_t。</p>
  */
 @Repository
 public class MyBatisChatEventStore implements ChatEventStore {
@@ -161,6 +162,51 @@ public class MyBatisChatEventStore implements ChatEventStore {
             stored.add(toStoredEvent(events.get(index), sequences.get(index), preparedEvents.get(index).createdAt()));
         }
         return List.copyOf(stored);
+    }
+
+    @Override
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public List<ChatEvent> sequenceLiveBatchWithExecutionGuard(
+            List<ChatEvent> events,
+            RunExecutionClaim claim) {
+        if (events == null || events.isEmpty()) {
+            return List.of();
+        }
+        validateBatch(events, claim);
+        ChatEvent first = events.getFirst();
+        ChatEventAppendContextRow context;
+        try {
+            context = mapper.lockRunForEventAppend(first.sessionId(), first.runId(),
+                    claim.ownerInstanceId(), claim.fencingToken());
+            if (context == null) {
+                throw new ChatEventAppendRejectedException(
+                        "实时事件序号分配被 run/execution 行栅栏拒绝: runId="
+                                + first.runId() + ", sessionId=" + first.sessionId());
+            }
+        } catch (RuntimeException ex) {
+            if (lockUnavailable(ex)) {
+                throw new ChatEventAppendRejectedException(
+                        "实时事件序号分配发现终态行锁，拒绝迟到事件: runId="
+                                + first.runId() + ", sessionId=" + first.sessionId(), ex);
+            }
+            throw ex;
+        }
+        validateAppendContext(context, first);
+        List<Long> sequences = mapper.nextSeqs(events.size());
+        if (sequences == null || sequences.size() != events.size()
+                || sequences.stream().anyMatch(java.util.Objects::isNull)) {
+            throw new IllegalStateException("实时事件批量序号生成失败: expected=" + events.size()
+                    + ", actual=" + (sequences == null ? 0 : sequences.size()));
+        }
+        List<ChatEvent> sequenced = new java.util.ArrayList<>(events.size());
+        for (int index = 0; index < events.size(); index++) {
+            ChatEvent event = events.get(index);
+            Instant createdAt = event.createdAt() == null ? Instant.now() : event.createdAt();
+            sequenced.add(new SequencedChatEvent(
+                    event.runId(), event.sessionId(), sequences.get(index),
+                    event.type(), createdAt, event.payload()));
+        }
+        return List.copyOf(sequenced);
     }
 
     private void validateAppendContext(ChatEventAppendContextRow context, ChatEvent event) {

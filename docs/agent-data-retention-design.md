@@ -5,8 +5,8 @@
 > 适用范围：FinanceEXChatService、直接调用的 DomainAgent Runtime、Relay Runtime、Relay 通过 A2A/MCP 调用的下游 Agent 与工具
 > 结论：ChatService 与本轮实际经过的 Runtime/Agent/Tool 必须逐层执行 `NO_STORE`，才能称为端到端零留存
 
-> 当前实现说明：本仓库第一版只实现 DomainAgent `isSaveSession=N` 对应的 assistant 占位历史。
-> ChatEvent、Event Resume、用户消息和下游存储仍保留，因此不属于本文的 `NO_STORE`。
+> 当前实现说明：本仓库第一版实现 DomainAgent `isSaveSession=N` 对应的 assistant 占位历史和业务
+> Event live-only。控制及终态 ChatEvent、用户消息和下游存储仍保留，因此不属于本文的 `NO_STORE`。
 > 当前实现见 `docs/architecture/domain-agent-assistant-persistence.md`；本文其余内容仍是端到端增强提案。
 
 ## 1. 背景
@@ -281,17 +281,21 @@ sequenceDiagram
 | DomainAgent 内部上下文/业务写入 | 本仓库无法确认线程模型 | DomainAgent session、日志、缓存或业务结果，具体范围由 DomainAgent 实现决定 | 必须在 DomainAgent 实现仓确认，不能因为 ChatService 异步调用就推断下游异步落库 |
 | Relay 内部历史/事件写入 | 本仓库无法确认线程模型 | Relay session、带 `version_id` 的持久化事件、可恢复历史和 Agent 响应 | Relay 接口文档证明存在持久化与恢复能力，但同步/异步需要在 Relay 实现仓确认 |
 | ChatEvent 标准化 | 当前 Runtime adapter 的响应流内同步转换 | 内存 ChatEvent，不直接写数据库 | 非法协议帧可能被忽略或转失败事件 |
-| ChatEvent 落库 | `publishOn(chatStreamEventScheduler)` 后，通过 `concatMap` 按顺序同步 guarded insert | event type、完整 payload、全局 seq、run/session/owner | insert 被 cancel/fencing guard 拒绝后停止后续事件写入 |
-| AssistantAssembly | event 成功落库后同步内存更新 | delta 草稿、最后 snapshot、所有 snapshot/runtime part drafts | 不单独持久化；随 run 生命周期存在 |
-| 本机实时发布 | event 落库后同步调用 local registry | 已带数据库 seq 的 ChatEvent | 本机订阅者即时收到 |
-| Redis 跨实例实时发布 | `publish()` 先入有界队列，再由 publish executor 异步 `convertAndSend`，包含重试 | 已落库 ChatEvent 的序列化副本 | 失败记录 recovery marker，前端应使用数据库 Event Resume |
+| ChatEvent 处理 | `publishOn(chatStreamEventScheduler)` 后，通过 `concatMap` 保序；`FULL` 执行 guarded insert，占位策略的业务 Event 只执行 guarded sequence 分配 | 持久化事件保存完整 payload；live-only 事件不生成 eventId、不序列化 payload、不 INSERT | owner/fencing guard 拒绝后停止后续事件处理 |
+| AssistantAssembly | 事件完成持久化或 live-only sequence 分配后同步观察 | `FULL` 汇总正文及 Parts；占位策略只保留控制 Parts | 不单独持久化；随 run 生命周期存在 |
+| Runtime Interaction continuation | 创建 run-B 前读取归属正确的 source run | 只继承留存策略和占位文案，run-B 的 Runtime 启动标记重新计算 | source run 缺失、归属不匹配或私有策略非法时禁止调用 Runtime |
+| 本机实时发布 | 持久化或 sequence 分配成功后同步调用 local registry | 带全局 sequence 的 ChatEvent | 本机订阅者即时收到 |
+| Redis 跨实例实时发布 | `publish()` 先入有界队列，再由 publish executor 异步 `convertAndSend`，包含重试 | 带全局 sequence 的 ChatEvent 序列化副本 | `FULL` 可通过 Event Resume 补偿；live-only 业务 Event 失败后不可恢复 |
 | `run.completed`/`run.waiting_user` | `ChatRunTerminalCommitService` 短事务同步提交 | terminal event、assistant、parts、run、execution、binding、Interaction 状态 | 事务失败转 `run.failed`；终态在提交成功后才发布 |
 | IntentRecognition | 独立 executor 异步 best-effort | 意图、候选、路由和可选原始摘要 | 写失败仅告警，不阻断 run |
 | RouteMemory | 独立 write executor 异步 best-effort | route 或 clarify 记录；完成路由时同任务 fold + append | 写失败只影响后续路由上下文 |
 | 历史消息 Redis 缓存 | `LayeredChatMessageRepository` 调用内同步更新短期缓存，数据库仍是事实源 | 最近 ChatMessage 上下文 | 数据库必需模式下 DB 失败会移除刚写入缓存并抛错 |
 | Event Resume/历史查询 | Controller 使用 bounded elastic 承接同步数据库读取 | 不新增业务数据 | 读取失败返回接口错误，不改变 run |
 
-这里的“事件实时推送”不是先推前端再异步落库。当前顺序固定为：**事件数据库写成功 -> 内存 assistant 汇总 -> run/binding 状态推进 -> 本机/Redis 发布**。因此前端实时看到的 ChatEvent 都应具有数据库 seq，并可由 Event Resume 重放。
+这里的“事件实时推送”不是无栅栏发布。`FULL` 顺序固定为：**事件数据库写成功 -> 内存 assistant 汇总 ->
+run/binding 状态推进 -> 本机/Redis 发布**。`ASSISTANT_PLACEHOLDER` 的业务 Event 顺序为：**execution guard
+校验并分配数据库全局 sequence -> 必要运行状态观察 -> 本机/Redis 发布**。两种事件都具有全局 sequence，
+但只有已写入事件表的控制、Intent 和终态 Event 可以由 Event Resume 重放。
 
 ### 4.4 Runtime 下游消息与 ChatEvent 的处理映射
 

@@ -47,9 +47,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * 基于 Redis Pub/Sub 的跨实例聊天实时事件总线。
  *
- * <p>该实现只传播已经写入数据库的事件。Redis 不可用时，本机 WebSocket 与 Event Resume 仍可工作；
- * 跨实例实时推送会退化为前端使用 {@code afterSeq} 重新补发。Redis Cluster 下不使用全局 pattern
- * 订阅，而是在本机出现 run topic 订阅者时动态订阅对应 channel，减少集群广播和模式订阅的不确定性。</p>
+ * <p>该实现传播持久化事件和明确标记的 live-only 业务事件。持久化事件发布失败时可以提示前端使用
+ * {@code afterSeq} 补发；live-only 事件发布失败时只记录失败，不能生成错误的恢复承诺。Redis Cluster 下
+ * 不使用全局 pattern 订阅，而是在本机出现 run topic 订阅者时动态订阅对应 channel。</p>
  */
 @Component
 public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener {
@@ -137,17 +137,31 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
 
     @Override
     public void publish(String topicId, ChatEvent event) {
+        publish(topicId, event, true);
+    }
+
+    @Override
+    public void publishLiveOnly(String topicId, ChatEvent event) {
+        publish(topicId, event, false);
+    }
+
+    private void publish(String topicId, ChatEvent event, boolean recoverable) {
         if (topicId == null || topicId.isBlank() || event == null) {
             return;
         }
         try {
             PendingPublish pending = PendingPublish.event(topicId, channel(topicId), event,
-                    objectMapper.writeValueAsString(ChatLiveEventPayload.from(event, instanceIdProvider.currentInstanceId())));
+                    objectMapper.writeValueAsString(ChatLiveEventPayload.from(
+                            event, instanceIdProvider.currentInstanceId())), recoverable);
             TopicPublisher publisher = topicPublishers.computeIfAbsent(topicId,
                     ignored -> new TopicPublisher(topicId, channel(topicId)));
             if (!publisher.offer(pending, properties)) {
-                RecoveryMarker marker = publisher.markDegraded(pending, "REDIS_PUBLISH_QUEUE_OVERFLOW");
-                logPublishFailure("REDIS_PUBLISH_QUEUE_OVERFLOW", pending, null, marker, 0);
+                if (pending.recoverable()) {
+                    RecoveryMarker marker = publisher.markDegraded(pending, "REDIS_PUBLISH_QUEUE_OVERFLOW");
+                    logPublishFailure("REDIS_PUBLISH_QUEUE_OVERFLOW", pending, null, marker, 0);
+                } else {
+                    logPublishFailure("REDIS_PUBLISH_QUEUE_OVERFLOW", pending, null, null, 0);
+                }
                 scheduleDrain(publisher);
                 return;
             }
@@ -386,12 +400,16 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
             publishExecutor.execute(() -> drainPublisher(publisher));
         } catch (RuntimeException ex) {
             publisher.stopDraining();
-            RecoveryMarker marker = publisher.markDegraded(publisher.peek(), "REDIS_PUBLISH_EXECUTOR_REJECTED");
+            PendingPublish recoverable = publisher.firstRecoverable();
+            RecoveryMarker marker = recoverable == null
+                    ? null
+                    : publisher.markDegraded(recoverable, "REDIS_PUBLISH_EXECUTOR_REJECTED");
             log.warn(SystemErrorLogEntry.builder(SystemErrorCode.TASK_REJECTED,
                             "Redis live event publish executor rejected a task")
                     .operation("chat-live-bus.publish.schedule")
                     .attribute("topicId", publisher.topicId())
-                    .attribute("recoveryAfterSeq", marker.recoveryAfterSeq())
+                    .attribute("recoveryAfterSeq", marker == null ? null : marker.recoveryAfterSeq())
+                    .attribute("liveOnly", marker == null)
                     .attribute("thread", Thread.currentThread().getName())
                     .attribute("interrupted", Thread.currentThread().isInterrupted())
                     .build(), ex);
@@ -441,7 +459,9 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
                     return;
                 }
                 if (!publishWithRetry(pending)) {
-                    publisher.markDegraded(pending, "REDIS_PUBLISH_FAILED");
+                    if (pending.recoverable()) {
+                        publisher.markDegraded(pending, "REDIS_PUBLISH_FAILED");
+                    }
                     continue;
                 }
                 if (pending.terminal()) {
@@ -477,7 +497,9 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     }
 
     private boolean publishWithRetry(PendingPublish pending) {
-        return publishWithRetry(pending, RecoveryMarker.from(pending, "REDIS_PUBLISH_FAILED"));
+        return publishWithRetry(pending, pending.recoverable()
+                ? RecoveryMarker.from(pending, "REDIS_PUBLISH_FAILED")
+                : null);
     }
 
     private boolean publishWithRetry(PendingPublish pending, RecoveryMarker failureMarker) {
@@ -522,14 +544,21 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
     private void logPublishFailure(String reason, PendingPublish pending, RuntimeException ex,
                                    RecoveryMarker marker, int retryCount) {
         SystemErrorLogEntry event = SystemErrorLogEntry.builder(SystemErrorCode.REDIS_PUBLISH_FAILED,
-                        "Redis live event publish failed; subscribers must recover from the database event log")
+                        marker == null
+                                ? "Live-only Redis event publish failed and cannot be recovered"
+                                : "Redis live event publish failed; subscribers must recover from the database event log")
                 .runId(pending == null ? null : pending.runId())
                 .sessionId(pending == null ? null : pending.sessionId())
                 .operation("chat-live-bus.publish")
                 .attribute("failureReason", reason)
-                .attribute("topicId", pending == null ? marker.topicId() : pending.topicId())
-                .attribute("sequence", pending == null ? marker.actualSeq() : pending.sequence())
-                .attribute("recoveryAfterSeq", marker.recoveryAfterSeq())
+                .attribute("topicId", pending == null
+                        ? marker == null ? null : marker.topicId()
+                        : pending.topicId())
+                .attribute("sequence", pending == null
+                        ? marker == null ? null : marker.actualSeq()
+                        : pending.sequence())
+                .attribute("recoveryAfterSeq", marker == null ? null : marker.recoveryAfterSeq())
+                .attribute("liveOnly", marker == null)
                 .attribute("retryCount", retryCount)
                 .attribute("thread", Thread.currentThread().getName())
                 .attribute("interrupted", Thread.currentThread().isInterrupted())
@@ -547,7 +576,7 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
      * @param publisherInstanceId 发布该事件的应用实例 ID；旧版本可能为空。
      * @param runId 本轮执行追踪标识。
      * @param sessionId 前端聊天会话标识。
-     * @param sequence 持久化事件序号。
+     * @param sequence 数据库全局事件序号。
      * @param eventType 事件类型。
      * @param createdAt 事件创建时间。
      * @param payload 事件载荷。
@@ -581,16 +610,22 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
             long sequence,
             String eventType,
             String body,
-            int bodyBytes
+            int bodyBytes,
+            boolean recoverable
     ) {
-        private static PendingPublish event(String topicId, String channel, ChatEvent event, String body) {
+        private static PendingPublish event(
+                String topicId,
+                String channel,
+                ChatEvent event,
+                String body,
+                boolean recoverable) {
             return new PendingPublish(topicId, channel, event.runId(), event.sessionId(), event.sequence(),
-                    event.type(), body, body.getBytes(StandardCharsets.UTF_8).length);
+                    event.type(), body, body.getBytes(StandardCharsets.UTF_8).length, recoverable);
         }
 
         private static PendingPublish control(String topicId, String channel, String body) {
             return new PendingPublish(topicId, channel, null, null, 0L,
-                    "RECOVER_REQUIRED", body, body.getBytes(StandardCharsets.UTF_8).length);
+                    "RECOVER_REQUIRED", body, body.getBytes(StandardCharsets.UTF_8).length, true);
         }
 
         private boolean terminal() {
@@ -650,8 +685,8 @@ public class RedisChatLiveEventBus implements ChatLiveEventBus, MessageListener 
             return pending;
         }
 
-        private synchronized PendingPublish peek() {
-            return queue.peek();
+        private synchronized PendingPublish firstRecoverable() {
+            return queue.stream().filter(PendingPublish::recoverable).findFirst().orElse(null);
         }
 
         private synchronized boolean startDraining() {

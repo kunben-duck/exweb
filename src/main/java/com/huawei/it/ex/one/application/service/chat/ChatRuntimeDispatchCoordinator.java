@@ -227,6 +227,12 @@ final class ChatRuntimeDispatchCoordinator {
                         request.runtimeMetadataOverride()));
         return eventPersistenceCoordinator.requireCurrentOwnerRunning(
                         request.executionClaim(), "before-runtime")
+                .then(Mono.fromRunnable(() -> appliedRouteRecorder.markRuntimeDispatchStartedRequired(
+                        request.run(),
+                        resolution.route(),
+                        resolution.binding(),
+                        request.executionClaim(),
+                        request.persistenceState())))
                 .thenMany(Flux.defer(() -> executeRuntime(
                         request, resolution, runtimeCommand, runtimeMemory)));
     }

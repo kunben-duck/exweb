@@ -211,6 +211,29 @@ public class ChatRunApplicationService {
     }
 
     /**
+     * 仅同步 live-only Runtime 事件中的会话标识，不把未持久化 sequence 写入 run.lastSeq。
+     */
+    public ChatRun observeLiveOnlyRuntimeState(ChatEvent event) {
+        if (event == null || event.runId() == null || event.runId().isBlank()
+                || event.payload() == null) {
+            return null;
+        }
+        Object runtimeSessionId = event.payload().get("runtimeSessionId");
+        if (runtimeSessionId == null || String.valueOf(runtimeSessionId).isBlank()) {
+            return null;
+        }
+        return repository.findById(event.runId())
+                .map(run -> {
+                    if (run.status().terminal() || run.status() == ChatRunStatus.CANCELLING
+                            || String.valueOf(runtimeSessionId).equals(run.runtimeSessionId())) {
+                        return run;
+                    }
+                    return save(run.withRuntimeSessionId(String.valueOf(runtimeSessionId)));
+                })
+                .orElse(null);
+    }
+
+    /**
      * run.completed 后回填最终 assistant 消息，建立 run 与可见历史消息的关联。
      */
     public ChatRun bindAssistantMessage(String runId, String assistantMessageId) {

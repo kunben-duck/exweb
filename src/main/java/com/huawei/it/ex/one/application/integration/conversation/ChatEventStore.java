@@ -51,6 +51,23 @@ public interface ChatEventStore {
     }
 
     /**
+     * 在 execution 写入权保护下为仅实时事件分配全局序号，但不写入事件事实表。
+     *
+     * <p>默认实现故意失败关闭，避免新仓储实现把留存策略要求不落库的业务事件误写入事实源。
+     * 生产实现必须只执行 owner/fencing 校验和数据库 sequence 分配。</p>
+     *
+     * @param events 同一 run、同一 session 的有序实时事件。
+     * @param claim 当前 execution 写入权声明。
+     * @return 按输入顺序返回带全局 sequence 的非持久化事件。
+     */
+    default List<ChatEvent> sequenceLiveBatchWithExecutionGuard(
+            List<ChatEvent> events,
+            RunExecutionClaim claim) {
+        throw new UnsupportedOperationException(
+                "ChatEventStore does not support live-only sequence allocation");
+    }
+
+    /**
      * 按用户归属查询指定会话在某个序号之后的事件。
      *
      * <p>事件补发接口必须直接在事实源查询中携带 owner 条件，不能只依赖上层先校验 session

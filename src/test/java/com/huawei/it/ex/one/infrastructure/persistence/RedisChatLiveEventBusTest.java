@@ -125,6 +125,19 @@ class RedisChatLiveEventBusTest {
     }
 
     @Test
+    void liveOnlyPublishFailureDoesNotScheduleDatabaseRecoveryControl() {
+        AlwaysFailingStringRedisTemplate redis = new AlwaysFailingStringRedisTemplate();
+        ChatLiveEventBusProperties properties = new ChatLiveEventBusProperties();
+        properties.setRedisPublishRetryBackoff(Duration.ZERO);
+        RedisChatLiveEventBus bus = newBus(redis, properties, Runnable::run);
+
+        bus.publishLiveOnly("chat-run-run1", event(1L));
+
+        org.assertj.core.api.Assertions.assertThat(redis.attempts()).isEqualTo(3);
+        org.assertj.core.api.Assertions.assertThat(redis.message).isNull();
+    }
+
+    @Test
     void subscribeAcceptsSelfEchoPayloadInRedisOnlyMode() throws Exception {
         RedisChatLiveEventBus bus = newBus(new CapturingStringRedisTemplate());
 
@@ -377,6 +390,20 @@ class RedisChatLiveEventBusTest {
                 throw new IllegalStateException("Redis command interrupted");
             }
             return super.convertAndSend(channel, message);
+        }
+
+        private int attempts() {
+            return attempts.get();
+        }
+    }
+
+    private static class AlwaysFailingStringRedisTemplate extends CapturingStringRedisTemplate {
+        private final AtomicInteger attempts = new AtomicInteger();
+
+        @Override
+        public Long convertAndSend(String channel, Object message) {
+            attempts.incrementAndGet();
+            throw new IllegalStateException("Redis unavailable");
         }
 
         private int attempts() {

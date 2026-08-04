@@ -6,8 +6,8 @@ import java.util.Map;
 /**
  * 聊天事件统一接口。
  *
- * <p>所有事件都带 runId/sessionId/type/payload，便于 WebSocket 实时订阅和 Event Resume 断点恢复
- * 使用同一套事件结构。</p>
+ * <p>所有事件都带 runId/sessionId/type/payload，WebSocket 实时订阅和 Event Resume 使用同一套
+ * 事件结构。数据留存策略允许部分业务事件只实时传输；这类事件具有全局 sequence，但不能从事件表恢复。</p>
  */
 public interface ChatEvent {
     /**
@@ -21,7 +21,7 @@ public interface ChatEvent {
     String sessionId();
 
     /**
-     * @return 事件持久化后的恢复游标序号，由数据库事实源生成。
+     * @return 数据库全局序列生成的事件顺序编号；仅持久化事件可将其作为恢复游标。
      */
     long sequence();
 

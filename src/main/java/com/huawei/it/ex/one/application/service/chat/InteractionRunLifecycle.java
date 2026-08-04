@@ -1,5 +1,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
+import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
@@ -8,6 +10,7 @@ import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import reactor.core.publisher.Flux;
 
 import java.util.Map;
+import java.util.Objects;
 
 /** Shared lifecycle operations for the existing Interaction continuation run variants. */
 final class InteractionRunLifecycle {
@@ -43,6 +46,24 @@ final class InteractionRunLifecycle {
                 InteractionMessageStrategy.forInteraction(interaction).name(),
                 INTERACTION_ASSISTANT_MESSAGE_ID_METADATA,
                 assistantMessageId);
+    }
+
+    /**
+     * 从可信 source run 继承留存策略，避免 continuation 重新按 FULL 保存真实业务输出。
+     */
+    AgentDataPersistenceState inheritedPersistenceState(
+            UserContext user,
+            ChatInteractionRequest interaction) {
+        if (interaction == null || interaction.sourceRunId() == null
+                || interaction.sourceRunId().isBlank()) {
+            throw new IllegalStateException("Interaction continuation 缺少 sourceRunId");
+        }
+        ChatRun sourceRun = chatRunService.requireOwnedRun(user, interaction.sourceRunId());
+        if (interaction.sessionId() == null || interaction.sessionId().isBlank()
+                || !Objects.equals(interaction.sessionId(), sourceRun.sessionId())) {
+            throw new IllegalStateException("Interaction continuation 的 source run 会话不匹配");
+        }
+        return AgentDataPersistenceState.inheritFromRunMetadata(sourceRun.metadata(), null);
     }
 
     ChatRun create(CreateChatRunContext context, ChatInteractionRequest interaction) {

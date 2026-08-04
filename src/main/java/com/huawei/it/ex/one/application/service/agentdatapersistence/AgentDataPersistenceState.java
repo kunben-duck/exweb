@@ -15,6 +15,7 @@ public final class AgentDataPersistenceState {
     private final AtomicReference<AgentDataPersistencePolicy> policy =
             new AtomicReference<>(AgentDataPersistencePolicy.FULL);
     private final AtomicBoolean resolved = new AtomicBoolean();
+    private final AtomicBoolean runtimeDispatchStarted = new AtomicBoolean();
     private final AtomicReference<String> placeholderContent;
 
     public AgentDataPersistenceState(String placeholderContent) {
@@ -36,10 +37,36 @@ public final class AgentDataPersistenceState {
         }
         state.policy.set(snapshot.policy());
         state.resolved.set(true);
-        return snapshot.placeholderContent() == null || snapshot.placeholderContent().isBlank()
-                ? state
-                : new AgentDataPersistenceState(snapshot.placeholderContent())
-                        .tightened(snapshot.policy());
+        state.runtimeDispatchStarted.set(
+                snapshot.policy() == AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER
+                        && snapshot.runtimeDispatchStarted());
+        if (snapshot.placeholderContent() != null && !snapshot.placeholderContent().isBlank()) {
+            state.usePlaceholderContent(snapshot.placeholderContent());
+        }
+        return state;
+    }
+
+    /**
+     * 为新的 Interaction continuation 继承来源 run 的策略，但不继承来源 run 的执行启动状态。
+     */
+    public static AgentDataPersistenceState inheritFromRunMetadata(
+            Map<String, Object> metadata,
+            String defaultPlaceholderContent) {
+        AgentDataPersistenceState state = new AgentDataPersistenceState(defaultPlaceholderContent);
+        if (metadata == null || !metadata.containsKey(AgentDataPersistenceMetadata.RUN_METADATA_KEY)) {
+            return state;
+        }
+        AgentDataPersistenceMetadata.RunPolicySnapshot snapshot =
+                AgentDataPersistenceMetadata.readRunPolicy(metadata);
+        if (snapshot == null) {
+            throw new IllegalStateException("来源 run 的 assistant 留存策略 metadata 非法");
+        }
+        state.policy.set(snapshot.policy());
+        state.resolved.set(true);
+        if (snapshot.placeholderContent() != null && !snapshot.placeholderContent().isBlank()) {
+            state.usePlaceholderContent(snapshot.placeholderContent());
+        }
+        return state;
     }
 
     public AgentDataPersistenceState tighten(AgentDataPersistencePolicy candidate) {
@@ -67,6 +94,15 @@ public final class AgentDataPersistenceState {
         return placeholderContent.get();
     }
 
+    public boolean runtimeDispatchStarted() {
+        return runtimeDispatchStarted.get();
+    }
+
+    public AgentDataPersistenceState markRuntimeDispatchStarted() {
+        runtimeDispatchStarted.set(true);
+        return this;
+    }
+
     public AgentDataPersistenceState usePlaceholderContent(String content) {
         placeholderContent.set(normalizePlaceholder(content));
         return this;
@@ -74,12 +110,15 @@ public final class AgentDataPersistenceState {
 
     public Map<String, Object> runMetadataOverlay() {
         return resolved()
-                ? AgentDataPersistenceMetadata.runMetadata(policy(), placeholderContent())
+                ? AgentDataPersistenceMetadata.runMetadata(
+                        policy(), placeholderContent(), runtimeDispatchStarted())
                 : Map.of();
     }
 
-    private AgentDataPersistenceState tightened(AgentDataPersistencePolicy nextPolicy) {
-        return tighten(nextPolicy);
+    public Map<String, Object> runtimeDispatchStartedMetadataOverlay() {
+        return resolved()
+                ? AgentDataPersistenceMetadata.runMetadata(policy(), placeholderContent(), true)
+                : Map.of();
     }
 
     private static String normalizePlaceholder(String value) {

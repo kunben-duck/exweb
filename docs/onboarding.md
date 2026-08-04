@@ -178,7 +178,7 @@ RouteMemory 不等于聊天消息历史，也不应写入 run metadata 或 Runti
 - `CLARIFY` 创建 Intent Interaction。
 - `ROUTE_SINGLE` 绑定 DomainAgent。
 - `NO_MATCH/ROUTE_MULTI` 进入 Relay。
-- Intent progress 也是 ChatEvent，必须先落库再发布。
+- Intent progress 也是 ChatEvent，所有留存策略下都必须先落库再发布。
 
 ### DomainAgent
 
@@ -205,14 +205,15 @@ RouteMemory 不等于聊天消息历史，也不应写入 run metadata 或 Runti
 -> ChatEvent
 -> ChatEventPipeline
 -> execution guard
--> fin_ex_chat_event_t
+-> FULL: fin_ex_chat_event_t
+-> ASSISTANT_PLACEHOLDER: 仅分配全局 sequence
 -> assistant/run/binding observation
 -> Redis/local live publish
 ```
 
 普通事件可按条数、等待时间和字节数批量落库。控制事件、拒答和终态会先刷新
-待处理批次，再立即提交。数据库是 Event Resume 的事实源；Redis Pub/Sub
-不保存历史。
+待处理批次，再立即提交。占位策略的业务 Event 不落库且不可恢复；数据库仍是控制与终态 Event Resume
+的事实源，Redis Pub/Sub 不保存历史。
 
 终态路径由 `ChatRunCompletionCoordinator` 和
 `ChatRunTerminalCommitService` 共同完成，事务内保存：

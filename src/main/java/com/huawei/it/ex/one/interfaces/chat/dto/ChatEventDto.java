@@ -7,7 +7,7 @@ import java.util.Map;
  *
  * @param runId 本轮执行追踪标识。
  * @param sessionId 前端聊天会话标识。
- * @param sequence 事件持久化后的恢复游标序号，前端用作 WebSocket offset 和 Event Resume afterSeq。
+ * @param sequence 数据库全局事件序号；仅已持久化事件可用作 Event Resume afterSeq。
  * @param type 事件类型，例如 run.started、message.delta。
  * @param payload 事件载荷。
  */

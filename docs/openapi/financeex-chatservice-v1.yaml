@@ -59,8 +59,9 @@ x-websocket:
   description: |
     WebSocket 仅承载实时扇出和订阅控制，不是事件事实源。连接建立后先发送 `connect`，再按
     `streamTopicId` 发送 `subscribe`。服务端 `message.payload` 与 SSE 的
-    `ConversationTurnStream` 完全一致。真实持久化事件仅位于
-    `payload.payload.encodedItem.data`；heartbeat 和 done 不推进 afterSeq。
+    `ConversationTurnStream` 完全一致。真实 ChatEvent 位于
+    `payload.payload.encodedItem.data`；heartbeat 和 done 不推进 afterSeq。占位留存策略下，业务
+    ChatEvent 可能仅实时传输，不进入 Event Resume。
 
     Redis 或本机 live buffer 无法保证继续实时交付时，服务端返回 `RECOVER_REQUIRED`。客户端
     应停止当前订阅，使用 `details.recoveryAfterSeq` 调用 run 级 Event Resume，再选择一条实时
@@ -415,6 +416,9 @@ paths:
       description: |
         实现先订阅 live buffer，再查询数据库，以覆盖查询与实时订阅之间的窗口；随后按 sequence 去重并
         输出 `sequence > afterSeq` 的事件。active run 会继续输出 live tail，直到持久化终态后发送 done。
+
+        `ASSISTANT_PLACEHOLDER` 留存策略下，数据库补发只包含控制、Intent和终态事件；连接建立后的
+        live-only业务事件仍实时输出，但连接建立前或断线期间遗漏的业务内容不可恢复。
 
         页面重新打开时，若 `stream-status.activeRunId` 存在，建议以
         `activeRunFirstSeq - 1` 为 afterSeq 恢复完整当前 run。收到 `RECOVER_REQUIRED` 后，以服务端建议
@@ -1507,7 +1511,8 @@ components:
     ConversationTurnStreamResponse:
       description: |
         SSE event name 固定为 `conversation-turn-stream`。每个 data 是 ConversationTurnStream；
-        只有 `payload.type=stream-item` 携带持久化 ChatEvent。heartbeat/done 不推进 afterSeq。
+        只有 `payload.type=stream-item` 携带 ChatEvent。stream-item 可能是持久化事实，也可能是在
+        `ASSISTANT_PLACEHOLDER` 策略下仅实时传输的业务 Event；heartbeat/done 不推进 afterSeq。
       headers:
         Cache-Control:
           schema:
@@ -2189,6 +2194,7 @@ components:
         sequence:
           type: integer
           format: int64
+          description: 数据库全局 sequence；live-only业务 Event 也会分配，但不能作为可恢复事实
         type:
           type: string
           example: message.delta
@@ -2201,7 +2207,8 @@ components:
             - type: object
               additionalProperties: true
       description: |
-        数据库事实事件。payload 由 type 决定；WAIT 相关主要 payload schema 见本定义的
+        标准聊天事件。默认是数据库事实；`ASSISTANT_PLACEHOLDER` 策略下的业务内容 Event 仅实时传输，
+        控制和终态仍是数据库事实。payload 由 type 决定；WAIT 相关主要 payload schema 见本定义的
         RunWaitingUserPayload、AmbiguousRouteCardPayload、RouteSwitchConfirmationPayload 和
         RelayQuestionnaireCardPayload。
 
@@ -3566,7 +3573,7 @@ components:
         offset:
           type: string
           nullable: true
-          description: stream-item 的持久化 sequence 字符串；heartbeat/done 不推进 offset
+          description: stream-item 的全局 sequence 字符串；live-only值不可由Event Resume补发
         payload:
           type: object
           allOf:

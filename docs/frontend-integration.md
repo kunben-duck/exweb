@@ -686,11 +686,16 @@ DomainAgent chat、绑定续接和 stop 会统一发送后端配置的标准 `Re
 
 DomainAgent 技能配置可能要求 assistant 历史使用占位投影。该策略不增加任何前端请求字段或 ChatEvent 字段：
 
-- WebSocket 和 Event Resume 仍返回完整 ChatEvent，实时渲染逻辑不变；
+- WebSocket 仍实时返回完整业务 ChatEvent，事件 JSON 格式不变；
+- Event Resume 只返回已持久化的 Intent、路由、WAIT、拒答、确认和 run 终态，不补发业务内容 Event；
 - 历史消息中的 assistant `content` 返回服务端配置的占位文案；
 - 历史 `parts` 不包含真实回答、思考、工具、引用或普通卡片，只保留完成 WAIT 流程所需的控制 Parts；
 - 分享和反馈仍引用原 assistant messageId，但分享内容同样是占位投影；
-- 前端不得根据历史占位文案推断 Event Resume 已被禁用，事件恢复能力仍然存在。
+- 业务 Event 的 sequence 可能不会出现在事件表，前端不得把 sequence 缺口视为丢包；
+- `stream-status.latestSeq` 只表示最新持久化位置。页面未提前订阅或断线期间遗漏的业务内容不可恢复。
+
+因此前端无需识别策略字段，但必须在创建 run 后立即订阅 `streamTopicId`。在占位策略可能生效的环境中，
+不能承诺通过刷新页面、Event Resume 或历史消息恢复完整回答；Resume 只负责恢复控制状态和终态。
 
 ## 推荐前端流程
 
@@ -2645,7 +2650,7 @@ async function resumeActiveRun(status) {
 
 前端可以保留本地事件缓存做 UI 加速，但 active run 恢复时不要在 run 级事件恢复之前 replay 未完成 run 的缓存事件，也不要让 BroadcastChannel 抢先渲染当前 run。正确顺序是：加载已完成历史消息 -> 打开 run 级事件恢复 -> 事件恢复先补发再持续 tail live 事件直到本轮 run 终态。这样新页签、新浏览器或新电脑看到的未完成回答都来自服务端事实源和服务端 live topic，而不是某个浏览器实例的内存或 localStorage。
 
-服务端 Event Resume 的 SSE event name 固定为 `conversation-turn-stream`，data 是 `ConversationTurnStreamDto`。会话级事件恢复是有限补发；run 级事件恢复在 run 未终止时会保持连接并继续输出 live 事件直到终态。推荐使用 `fetch` 读取响应流，避免 `EventSource` 在短流结束后自动重连造成重复补发。若必须使用 `EventSource`，需要监听 `conversation-turn-stream`，并在收到 `done` 后主动关闭。
+服务端 Event Resume 的 SSE event name 固定为 `conversation-turn-stream`，data 是 `ConversationTurnStreamDto`。会话级事件恢复是有限补发；run 级事件恢复在 run 未终止时会保持连接并继续输出 live 事件直到终态。占位留存策略下，数据库 catchup 不包含 live-only 业务 Event，但建立恢复连接后的新实时 Event 仍会继续输出。推荐使用 `fetch` 读取响应流，避免 `EventSource` 在短流结束后自动重连造成重复补发。若必须使用 `EventSource`，需要监听 `conversation-turn-stream`，并在收到 `done` 后主动关闭。
 
 run 级事件恢复会在无业务事件时发送 turn stream `heartbeat`，用于防止 MVC Servlet async、
 网关或代理把连接误判为空闲。前端收到 heartbeat 时只更新连接活跃状态，不要把它渲染成聊天消息，也不要把 `lastSeq` 当作新事件游标写入本地。
@@ -3143,7 +3148,7 @@ async function stopCurrentRun() {
 
 - `WS_AUTH_FAILED`：后端没有解析到有效用户身份。接入企业身份源后，需检查 `ApplicationAuthContextProvider` 或替换实现是否能解析完整 `UserContext`。
 - `SUBSCRIBE_ERROR` 且提示 run 不存在或不属于当前用户：确认 `streamTopicId` 来自当前用户刚创建的 `/v1/chat/runs` 响应，不要手写 topic。
-- WebSocket 收不到实时事件：先调用 Event Resume 看事件是否已落库；如果 Event Resume 能补发，通常是 WebSocket 连接、订阅 topic 或 Redis 跨实例 fanout 问题。run 级 Event Resume 若遇到 live source 异常会结束当前连接，不会自动按事件表轮询；前端应使用最后已处理的 `sequence` 重新请求。
+- WebSocket 收不到实时事件：先调用 Event Resume 检查控制和终态事实。`FULL` 策略下若能补发，通常是 WebSocket 连接、订阅 topic 或 Redis 跨实例 fanout 问题；占位策略下业务 Event 本来就不会出现在 Resume，不能据此判断下游没有输出。run 级 Event Resume 若遇到 live source 异常会结束当前连接，不会自动按事件表轮询；前端应使用最后已处理的持久化 `sequence` 重新请求。
 - stop 后仍看到少量 delta：前端应以 `run.cancelled` 为终态，忽略同一 run 后续迟到的非终态事件；后端也会在事件追加前检查 cancel flag。
 - 上传后聊天提示文档不可用：确认文档 `status=AVAILABLE`，并且上传文档和聊天请求使用同一个后端用户上下文。
 - 复制页签后重复显示文本：前端需要按 `sessionId + sequence` 去重。active run 恢复会刻意从 `activeRunFirstSeq - 1` 补发，重复事件是可预期的，不能只依赖“是否大于本地 lastSeq”来判断是否渲染。

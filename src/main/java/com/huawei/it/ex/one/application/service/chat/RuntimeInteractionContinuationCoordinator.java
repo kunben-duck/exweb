@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDispatchState;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeInteractionResponseContext;
@@ -84,6 +85,8 @@ final class RuntimeInteractionContinuationCoordinator {
                 interaction.userMessageId(),
                 userMessage,
                 null);
+        AgentDataPersistenceState persistenceState =
+                lifecycle.inheritedPersistenceState(request.user(), interaction);
         RuntimeInteractionDispatchState dispatchState = RelayQuestionnaireAnswerValidator.isRelayQuestionnaire(interaction)
                 ? RuntimeInteractionDispatchState.tracked()
                 : RuntimeInteractionDispatchState.untracked();
@@ -110,13 +113,14 @@ final class RuntimeInteractionContinuationCoordinator {
                 request.startAttempt(),
                 executionClaim,
                 "after-interaction-execution-create");
+        AssistantAssembly assistant = new AssistantAssembly(persistenceState);
         RunEventPipelineContext context = new RunEventPipelineContext(
                 request.user(),
                 request.session(),
                 messagePlan,
                 new AtomicReference<>(route),
                 bindingRef,
-                new AssistantAssembly(),
+                assistant,
                 request.runId(),
                 executionClaim,
                 new AtomicReference<>(),
@@ -131,7 +135,8 @@ final class RuntimeInteractionContinuationCoordinator {
                 responseEvent,
                 route,
                 executionClaim,
-                bindingRef);
+                bindingRef,
+                assistant);
         try {
             return eventPersistenceCoordinator.executeAfterRunStarted(context, () ->
                     eventPersistenceCoordinator.requireCurrentOwnerRunning(
@@ -173,11 +178,18 @@ final class RuntimeInteractionContinuationCoordinator {
         RuntimeBinding binding = bindingLifecycle.binding();
         execution.bindingRef().set(binding);
         appliedRouteRecorder.bindResolvedRouteRequired(
-                execution.run(), execution.route(), binding, execution.executionClaim());
+                execution.run(), execution.route(), binding, execution.executionClaim(),
+                execution.assistant().persistenceState());
         return Flux.concat(
                 Flux.just(execution.responseEvent()),
                 eventPersistenceCoordinator.requireCurrentOwnerRunning(
                                 execution.executionClaim(), "before-runtime-interaction")
+                        .then(Mono.fromRunnable(() -> appliedRouteRecorder.markRuntimeDispatchStartedRequired(
+                                execution.run(),
+                                execution.route(),
+                                binding,
+                                execution.executionClaim(),
+                                execution.assistant().persistenceState())))
                         .thenMany(Flux.defer(() -> runtimeExecutor
                                 .continueWithUserResponse(new RuntimeInteractionResponseContext(
                                         execution.request().user(),
@@ -250,7 +262,8 @@ final class RuntimeInteractionContinuationCoordinator {
             RuntimeEvent responseEvent,
             RouteTarget route,
             RunExecutionClaim executionClaim,
-            AtomicReference<RuntimeBinding> bindingRef
+            AtomicReference<RuntimeBinding> bindingRef,
+            AssistantAssembly assistant
     ) {
     }
 

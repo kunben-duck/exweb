@@ -163,6 +163,25 @@ class ChatRunApplicationServiceTest {
     }
 
     @Test
+    void observeLiveOnlyRuntimeMetadataUpdatesSessionWithoutAdvancingPersistedSequence() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRunApplicationService service = service(repository, cache);
+        repository.save(runningRun().withFirstSeq(7L));
+
+        service.observeLiveOnlyRuntimeState(new StoredChatEvent(
+                "run1",
+                "session1",
+                11L,
+                "runtime.metadata",
+                Instant.now(),
+                Map.of("runtimeSessionId", "relay-session-live-only")));
+
+        assertThat(repository.saved.runtimeSessionId()).isEqualTo("relay-session-live-only");
+        assertThat(repository.saved.lastSeq()).isEqualTo(7L);
+    }
+
+    @Test
     void shouldRejectEventsImmediatelyWhenRedisCancelFlagExists() {
         InMemoryRunRepository repository = new InMemoryRunRepository();
         InMemoryRunCache cache = new InMemoryRunCache();

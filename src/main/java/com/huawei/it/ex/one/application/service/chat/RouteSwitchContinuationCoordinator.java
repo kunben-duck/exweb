@@ -304,6 +304,12 @@ final class RouteSwitchContinuationCoordinator {
                 context.pendingInteractionPayloadRef());
         return eventPersistenceCoordinator.requireCurrentOwnerRunning(
                         context.executionClaim(), "before-route-switch-domain-agent")
+                .then(Mono.fromRunnable(() -> appliedRouteRecorder.markRuntimeDispatchStartedRequired(
+                        request.runId(),
+                        context.route(),
+                        context.bindingRef().get(),
+                        context.executionClaim(),
+                        context.assistant().persistenceState())))
                 .thenMany(Flux.defer(() -> refusalCoordinator.execute(domainContext)));
     }
 
@@ -312,6 +318,12 @@ final class RouteSwitchContinuationCoordinator {
         Request request = context.request();
         return eventPersistenceCoordinator.requireCurrentOwnerRunning(
                         context.executionClaim(), "before-route-switch-relay")
+                .then(Mono.fromRunnable(() -> appliedRouteRecorder.markRuntimeDispatchStartedRequired(
+                        request.runId(),
+                        context.route(),
+                        context.bindingRef().get(),
+                        context.executionClaim(),
+                        context.assistant().persistenceState())))
                 .thenMany(Flux.defer(() -> runtimeExecutor.execute(
                         new RuntimeExecutionContext(
                                 approved.command(),

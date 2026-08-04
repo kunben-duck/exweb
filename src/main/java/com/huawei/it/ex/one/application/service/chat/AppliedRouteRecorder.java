@@ -126,6 +126,53 @@ final class AppliedRouteRecorder {
         }
     }
 
+    /**
+     * 占位策略在实际 Runtime 订阅前固化私有运行标记，供跨实例 stop 判断是否应保存占位消息。
+     */
+    void markRuntimeDispatchStartedRequired(
+            ChatRun run,
+            RouteTarget route,
+            RuntimeBinding binding,
+            RunExecutionClaim claim,
+            AgentDataPersistenceState persistenceState) {
+        if (persistenceState == null || !persistenceState.placeholderMode()
+                || persistenceState.runtimeDispatchStarted()) {
+            return;
+        }
+        if (chatRunService.bindResolvedRoute(
+                run,
+                route,
+                binding,
+                claim,
+                persistenceState.runtimeDispatchStartedMetadataOverlay()) == null) {
+            throw new IllegalStateException("ChatRun guarded Runtime dispatch marker update found no run: "
+                    + (run == null ? null : run.id()));
+        }
+        persistenceState.markRuntimeDispatchStarted();
+    }
+
+    void markRuntimeDispatchStartedRequired(
+            String runId,
+            RouteTarget route,
+            RuntimeBinding binding,
+            RunExecutionClaim claim,
+            AgentDataPersistenceState persistenceState) {
+        if (persistenceState == null || !persistenceState.placeholderMode()
+                || persistenceState.runtimeDispatchStarted()) {
+            return;
+        }
+        if (chatRunService.bindResolvedRoute(
+                runId,
+                route,
+                binding,
+                claim,
+                persistenceState.runtimeDispatchStartedMetadataOverlay()) == null) {
+            throw new IllegalStateException(
+                    "ChatRun guarded Runtime dispatch marker update found no run: " + runId);
+        }
+        persistenceState.markRuntimeDispatchStarted();
+    }
+
     void bindIntentAgentProvider(String runId) {
         try {
             chatRunService.bindRuntimeProvider(runId, "intent-agent");

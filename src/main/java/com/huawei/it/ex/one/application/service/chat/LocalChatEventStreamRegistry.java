@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * 当前服务实例内的 run topic 在线事件发布器。
  *
- * <p>数据库是事件事实源，本发布器只负责把刚落库的事件推给当前 JVM 在线 WebSocket 连接。
+ * <p>数据库是持久化事件事实源，本发布器负责把已排序的持久化或 live-only 事件推给当前 JVM 在线连接。
  * 跨实例实时推送由 Redis Pub/Sub 完成，断线恢复仍以 {@code afterSeq} 从数据库补发为准。</p>
  */
 @Component
@@ -30,9 +30,9 @@ public class LocalChatEventStreamRegistry {
     private final Map<String, TopicSink> topicSinks = new ConcurrentHashMap<>();
 
     /**
-     * 发布一个已经落库的事件。
+     * 发布一个已经分配全局 sequence 的实时事件。
      *
-     * @param event 带持久化 sequence 的聊天事件。
+     * @param event 带数据库全局 sequence 的聊天事件。
      */
     public void publish(ChatEvent event) {
         if (event == null || event.runId() == null || event.runId().isBlank()) {

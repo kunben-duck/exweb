@@ -8,11 +8,12 @@
 | 适用范围 | FinanceEXChatService |
 | 业务数据库 | openGauss |
 | 策略粒度 | Runtime Provider + DomainAgent SkillId |
-| 实施状态 | 三档扩展策略未实施；当前第一版仅实现 assistant 占位历史 |
+| 实施状态 | 三档扩展策略未实施；当前第一版实现 assistant 占位和业务 Event live-only |
 | 关联文档 | `docs/agent-data-retention-design.md` |
 
-> 当前实现边界：`isSaveSession=N` 只启用 `ASSISTANT_PLACEHOLDER`，完整 ChatEvent 仍落库并支持
-> Event Resume，用户消息、Run、Binding 和下游存储保持原行为。该能力不是下文定义的
+> 当前实现边界：`isSaveSession=N` 启用 `ASSISTANT_PLACEHOLDER`。assistant 只保存占位投影，
+> DomainAgent/Relay 业务 Event 只实时传输；控制和终态 ChatEvent、用户消息、Run、Binding 与下游存储
+> 保持原行为。该能力不是下文定义的
 > `NO_MESSAGE_HISTORY` 或 `LIVE_ONLY`。实际实现见
 > `docs/architecture/domain-agent-assistant-persistence.md`；本文其余内容保留为后续扩展评审材料。
 

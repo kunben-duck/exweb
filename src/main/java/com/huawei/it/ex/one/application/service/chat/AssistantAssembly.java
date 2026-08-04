@@ -91,7 +91,8 @@ final class AssistantAssembly {
 
     boolean shouldPersistMessage() {
         if (persistenceState.placeholderMode()) {
-            return persistableOutputObserved
+            return persistenceState.runtimeDispatchStarted()
+                    || persistableOutputObserved
                     || persistedParts().stream().anyMatch(AssistantAssembly::userVisiblePart);
         }
         return hasContent() || persistedParts().stream().anyMatch(AssistantAssembly::userVisiblePart);

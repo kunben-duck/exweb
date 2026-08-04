@@ -14,6 +14,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -21,7 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
 /**
- * Ordered persistence, batching and post-commit processing pipeline for one chat run.
+ * 同一 run 内按原始顺序执行持久化或仅实时分发，并完成提交后的状态观察。
  */
 final class ChatEventPipeline {
     private static final AppLogger log = AppLoggerFactory.getLogger(ChatEventPipeline.class);
@@ -45,6 +46,8 @@ final class ChatEventPipeline {
     private final ChatStreamApplicationService chatStreamService;
     private final RuntimeBindingApplicationService runtimeBindingService;
     private final ChatRunCompletionCoordinator completionCoordinator;
+    private final AgentDataPersistenceEventPolicy eventRetentionPolicy =
+            new AgentDataPersistenceEventPolicy();
 
     ChatEventPipeline(ChatDeltaCoalescer chatDeltaCoalescer,
                       Scheduler eventIoScheduler,
@@ -123,7 +126,7 @@ final class ChatEventPipeline {
                     "run 已停止接受后续事件: runId=" + persistence.runId()));
             return Flux.empty();
         }
-        return persistEventBatchAsync(batch, persistence.context(), persistence.singleEventWriter())
+        return processBatch(batch, persistence.context(), persistence.singleEventWriter())
                 .onErrorResume(ChatEventAppendRejectedException.class, ex -> {
                     rejectPersistenceAcknowledgements(batch.events(), ex);
                     persistence.writeRejected().set(true);
@@ -155,6 +158,86 @@ final class ChatEventPipeline {
                     persistence.writeRejected().set(true);
                     return Flux.just(failed);
                 });
+    }
+
+    private Flux<ChatEvent> processBatch(
+            ChatEventBatcher.Batch batch,
+            RunEventPipelineContext context,
+            Function<ChatEvent, Mono<ChatEvent>> singleEventWriter) {
+        return Flux.fromIterable(retentionSegments(batch, context))
+                .concatMap(segment -> segment.retention()
+                        == AgentDataPersistenceEventPolicy.EventRetention.PERSISTED
+                        ? persistEventBatchAsync(
+                                new ChatEventBatcher.Batch(segment.events(), batch.batchable()),
+                                context,
+                                singleEventWriter)
+                        : sequenceAndPublishLiveBatch(segment.events(), context), 0);
+    }
+
+    private List<RetentionSegment> retentionSegments(
+            ChatEventBatcher.Batch batch,
+            RunEventPipelineContext context) {
+        if (batch == null || batch.events().isEmpty()) {
+            return List.of();
+        }
+        List<RetentionSegment> result = new ArrayList<>();
+        List<ChatEvent> current = new ArrayList<>();
+        AgentDataPersistenceEventPolicy.EventRetention currentRetention = null;
+        for (ChatEvent event : batch.events()) {
+            AgentDataPersistenceEventPolicy.EventRetention retention =
+                    eventRetentionPolicy.retention(event, context);
+            if (currentRetention != null && currentRetention != retention) {
+                result.add(new RetentionSegment(currentRetention, current));
+                current = new ArrayList<>();
+            }
+            currentRetention = retention;
+            current.add(event);
+        }
+        if (!current.isEmpty()) {
+            result.add(new RetentionSegment(currentRetention, current));
+        }
+        return List.copyOf(result);
+    }
+
+    private Flux<ChatEvent> sequenceAndPublishLiveBatch(
+            List<ChatEvent> events,
+            RunEventPipelineContext context) {
+        if (events == null || events.isEmpty()) {
+            return Flux.empty();
+        }
+        if (events.stream().anyMatch(PersistenceAcknowledgedEvent.class::isInstance)) {
+            return Flux.error(new IllegalStateException(
+                    "Persistence-acknowledged control event cannot use live-only delivery"));
+        }
+        return Mono.fromCallable(() -> chatStreamService.sequenceLiveBatchWithExecutionGuard(
+                        events, context.executionClaim()))
+                .subscribeOn(eventIoScheduler)
+                .flatMapMany(sequenced -> {
+                    if (sequenced.size() != events.size()) {
+                        return Flux.error(new IllegalStateException(
+                                "实时事件批量序号结果数量不一致: expected=" + events.size()
+                                        + ", actual=" + sequenced.size()));
+                    }
+                    for (ChatEvent event : sequenced) {
+                        context.assistant().observe(event);
+                        RuntimeBinding currentBinding = context.bindingRef().get();
+                        if (runtimeSessionChanged(currentBinding, event)) {
+                            chatRunService.observeLiveOnlyRuntimeState(event);
+                        }
+                        context.bindingRef().set(runtimeBindingService.observeEvent(currentBinding, event));
+                        chatStreamService.publishLiveOnly(event);
+                    }
+                    return Flux.fromIterable(sequenced);
+                });
+    }
+
+    private boolean runtimeSessionChanged(RuntimeBinding binding, ChatEvent event) {
+        if (binding == null || event == null || event.payload() == null) {
+            return false;
+        }
+        Object value = event.payload().get("runtimeSessionId");
+        return value != null && !String.valueOf(value).isBlank()
+                && !String.valueOf(value).equals(binding.runtimeSessionId());
     }
 
     private Flux<ChatEvent> persistEventBatchAsync(
@@ -340,6 +423,15 @@ final class ChatEventPipeline {
             String runId,
             String sessionId
     ) {
+    }
+
+    private record RetentionSegment(
+            AgentDataPersistenceEventPolicy.EventRetention retention,
+            List<ChatEvent> events
+    ) {
+        private RetentionSegment {
+            events = events == null ? List.of() : List.copyOf(events);
+        }
     }
 
     private static final class CommittedBatchPostProcessingException extends RuntimeException {

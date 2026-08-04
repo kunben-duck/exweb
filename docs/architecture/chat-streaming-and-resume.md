@@ -13,7 +13,7 @@
 当前方案解决四个问题：
 
 1. 浏览器发起任务后，即使刷新或关闭页面，后台 run 仍继续执行。
-2. 任何已经对前端可见的业务事件都可以从数据库重新读取。
+2. 默认 `FULL` 策略下，对前端可见的业务事件可以从数据库重新读取。
 3. 多实例部署时，连接在任意实例上的浏览器都能实时收到其他实例产生的事件。
 4. 实时链路出现丢包、乱序或断开时，客户端可以使用 `afterSeq` 从数据库事实源恢复。
 
@@ -22,6 +22,7 @@
 - Redis Pub/Sub 不是可靠消息队列，不保存历史消息。
 - 浏览器消费游标不在服务端持久化，每个浏览器自行维护。
 - Event Resume 只恢复 ChatEvent 消费，不恢复下游 Runtime 的计算过程。
+- `ASSISTANT_PLACEHOLDER` 策略下的业务内容 Event 只实时传输，页面晚订阅或断线期间遗漏的内容不能恢复。
 - 当前 Relay、DomainAgent 不支持实例宕机后的在途任务接管。watchdog 会将失联 run 闭合为失败，
   不会从中断位置继续生成回答。
 
@@ -50,7 +51,8 @@ flowchart LR
     Relay --> Pipeline
     Domain --> Pipeline
 
-    Pipeline -->|"单条或同 run 批量事务"| EventDB[("fin_ex_chat_event_t")]
+    Pipeline -->|"持久化控制、Intent与终态"| EventDB[("fin_ex_chat_event_t")]
+    Pipeline -->|"live-only业务Event"| Observe
     Pipeline --> Observe["assistant/run/binding/Interaction 观察"]
     Observe --> Local["本机 live registry"]
     Observe --> Redis["Redis Pub/Sub"]
@@ -70,15 +72,16 @@ flowchart LR
 
 | 层 | 是否可靠 | 职责 |
 | --- | --- | --- |
-| `fin_ex_chat_event_t` | 是 | ChatEvent 事实源、顺序游标、审计和恢复 |
+| `fin_ex_chat_event_t` | 是 | 已持久化 ChatEvent 的事实源、审计和恢复 |
 | `fin_ex_chat_run_t` / execution | 是 | run 生命周期、owner、fencing、lease 和终态竞争 |
 | Redis Pub/Sub | 否 | 跨实例实时扇出和恢复提示 |
 | 本机 live registry | 否 | `local-only/merge` 模式和本机调试 |
 | WebSocket/SSE | 否 | 向当前连接传输事实事件和非持久化传输控制片段 |
 | 浏览器本地游标 | 客户端负责 | 记录最后实际处理成功的 sequence |
 
-核心不变量是：**先提交数据库事实，再尝试实时发布**。Redis 或 WebSocket 中不能出现数据库无法恢复的
-悬空业务事件。
+核心不变量是：持久化事件必须**先提交数据库事实，再尝试实时发布**；占位策略的业务 Event 必须先通过
+execution owner/fencing 校验并获取数据库全局 sequence，再进行实时发布。后者不进入事件表，属于明确允许、
+不可恢复的 live-only 输出。
 
 ## 4. 创建 run 与首事件交接
 
@@ -177,13 +180,14 @@ INDEX(tenant_id, user_id, run_id, seq)
 - 在数据库层单调递增，支持多实例共同分配。
 - 同一 run 或 session 内不保证连续；其他会话会消耗序号。
 - 事务回滚不会回滚 sequence，因此出现间隙是正常现象。
+- live-only 业务 Event 也会消耗 sequence，但不会产生事件表记录，因此间隙还可能来自留存策略。
 - 客户端只能比较大小，不能等待 `lastSeq + 1` 或把间隙直接判断为丢包。
 
 恢复查询固定使用服务端身份边界和 `seq > afterSeq`，并按 `seq ASC` 返回。
 
 ### 5.2 事件分类
 
-当前允许参与同 run 批量落库的普通 Relay/DomainAgent 事件：
+`FULL` 策略下，当前允许参与同 run 批量落库的普通 Relay/DomainAgent 事件：
 
 ```text
 message.delta
@@ -200,6 +204,11 @@ runtime.event
 
 IntentAgent 的 `intent-progress` 和 `intent-delta` 也使用相同的三重阈值批量落库。
 `intent-start` 与 `intent-result` 不参与批量，并在处理前刷新待提交过程事件。
+
+`ASSISTANT_PLACEHOLDER` 策略下，上述 `message.*` 和普通下游 `runtime.*` 业务 Event 使用同一批处理边界
+分配 sequence，但不执行 Event INSERT。Intent、拒答、Interaction、路由和 run 生命周期事件仍持久化。
+Interaction continuation从source run继承留存策略，并重置run级Runtime启动标记。拒答和Relay问卷按标准
+协议精确识别；包含控制关键字但不满足可信source、事件类型及必要字段的下游事件仍按live-only处理。
 
 以下事件保持立即处理，并在自身处理前刷新已缓存的普通事件：
 
@@ -1023,7 +1032,7 @@ bindingIntentCode / bindingIntentName / bindingRouteSource / bindingUpdatedAt
 bindingAgentMode
 ```
 
-`latestSeq` 直接查询事件表最大 sequence。为避免 run 表成为每个 delta 的热点，`message.delta`、snapshot 和
+`latestSeq` 直接查询事件表最大 sequence，因此不包含 live-only 业务 Event。为避免 run 表成为每个 delta 的热点，`message.delta`、snapshot 和
 `message.completed` 不保证持续刷新 `fin_ex_chat_run_t.last_seq`；因此 `activeRunLastSeq` 只用于运行状态摘要，
 恢复事实位置以 `latestSeq` 和事件表为准。
 

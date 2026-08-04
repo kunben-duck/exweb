@@ -39,6 +39,15 @@ class ChatFlowFoundationConfiguration {
     }
 
     @Bean
+    RouteSwitchConfirmationWaitPolicy routeSwitchConfirmationWaitPolicy(
+            ObjectProvider<ChatInteractionProperties> interactionPropertiesProvider,
+            @Value("${financeex.intent.ambiguous-route-wait-timeout:30s}") String timeout) {
+        return new RouteSwitchConfirmationWaitPolicy(
+                interactionPropertiesProvider.getIfAvailable(),
+                DurationStyle.detectAndParse(timeout));
+    }
+
+    @Bean
     RelayQuestionnaireWaitPolicy relayQuestionnaireWaitPolicy(
             ObjectProvider<ChatInteractionProperties> interactionPropertiesProvider,
             @Value("${financeex.relay.questionnaire-wait-timeout:0s}") String timeout) {

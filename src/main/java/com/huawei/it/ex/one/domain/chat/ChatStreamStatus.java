@@ -25,7 +25,7 @@ import java.time.Instant;
  * @param autoSelectTimeoutMs AMBIGUOUS_ROUTE 前端建议等待毫秒数；其他等待类型为空。
  * @param autoActionAt 通用前端自动动作截止时间；未配置自动动作时为空。
  * @param autoActionTimeoutMs 通用前端自动动作建议等待毫秒数；未配置时为空。
- * @param autoActionType 通用前端自动动作类型；当前 Relay 问卷使用 IGNORE_QUESTIONNAIRE。
+ * @param autoActionType 通用前端自动动作类型；当前支持 IGNORE_QUESTIONNAIRE 和 APPROVE_ROUTE_SWITCH。
  * @param bindingProvider 当前会话 active binding provider。
  * @param bindingTargetType 当前绑定目标类型。
  * @param bindingTargetId 当前绑定目标 ID。

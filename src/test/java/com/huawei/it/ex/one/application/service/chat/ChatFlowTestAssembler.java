@@ -70,6 +70,10 @@ final class ChatFlowTestAssembler {
                         ambiguousRouteSelectionResolver,
                         new ChatInteractionProperties(),
                         Duration.ofSeconds(30));
+        RouteSwitchConfirmationWaitPolicy routeSwitchConfirmationWaitPolicy =
+                new RouteSwitchConfirmationWaitPolicy(
+                        new ChatInteractionProperties(),
+                        Duration.ofSeconds(30));
         InteractionEventFactory interactionEventFactory =
                 new InteractionEventFactory();
         AppliedRouteRecorder routeRecorder = new AppliedRouteRecorder(
@@ -154,7 +158,9 @@ final class ChatFlowTestAssembler {
                         completionCoordinator,
                         refusalCoordinator,
                         committedEventObserver,
-                        ambiguousRouteWaitPolicy);
+                        ambiguousRouteWaitPolicy,
+                        routeSwitchConfirmationWaitPolicy,
+                        null);
         this.refusalCommitCoordinator =
                 new DomainAgentRefusalCommitCoordinator(
                         terminalCommitService,

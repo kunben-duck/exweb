@@ -1456,6 +1456,9 @@ async function triggerInteractionAutoAction(task) {
     };
     if (task.autoActionType === "AUTO_SELECT") {
       request.interactionAction = "AUTO_SELECT";
+    } else if (task.autoActionType === "APPROVE_ROUTE_SWITCH") {
+      request.approved = true;
+      request.scope = "once";
     } else if (task.autoActionType === "IGNORE_QUESTIONNAIRE") {
       request.approved = false;
       request.scope = "once";

@@ -50,9 +50,11 @@ x-wait-time-semantics:
     AMBIGUOUS_ROUTE 的前端建议代选时间，由 financeex.intent.ambiguous-route-wait-timeout 配置，当前默认
     30 秒；由前端触发 AUTO_SELECT，后端不注册定时任务。
   autoActionAt: >-
-    Relay 问卷的前端建议忽略时间，由 financeex.relay.questionnaire-wait-timeout 配置；默认 0s 表示
-    永久等待且不返回 autoActionAt，正数仅生成前端时间事实，后端不注册定时任务。
-  routeSwitchConfirmation: ROUTE_SWITCH_CONFIRMATION 当前没有独立自动确认超时。
+    通用前端自动动作时间。Relay 问卷由 financeex.relay.questionnaire-wait-timeout 配置；
+    ROUTE_SWITCH_CONFIRMATION 与 AMBIGUOUS_ROUTE 共用 financeex.intent.ambiguous-route-wait-timeout。
+    后端只返回时间事实，不注册定时任务。
+  routeSwitchConfirmation: >-
+    ROUTE_SWITCH_CONFIRMATION 到期后前端提交 approved=true，自动同意切换到候选 Runtime。
 x-websocket:
   url: /v1/chat/ws
   tag: Realtime WebSocket
@@ -111,7 +113,7 @@ paths:
         - AMBIGUOUS_ROUTE 指定候选：提交 `targetType=DOMAIN_AGENT + targetId=skillId`。
         - AMBIGUOUS_ROUTE 代选：提交 `interactionAction=AUTO_SELECT`。
         - AMBIGUOUS_ROUTE 其他：提交答案或附件，重新调用 Intent。
-        - 拒答切换确认：提交 `approved=true/false`；没有独立自动确认超时。
+        - 拒答切换确认：提交 `approved=true/false`；到达 autoActionAt 后前端提交 `approved=true`。
         - Relay 问卷：严格使用 `questionnaireAnswers.label`，忽略使用 `ignore=true`。
 
         `Cookie` 只作为内存请求头快照透传给可信 Runtime，不得出现在 body 或 metadata。
@@ -444,6 +446,7 @@ paths:
         - 有 activeRunId：使用 run 级 Resume。
         - waitingUserInput=true：使用 waitingSourceRunId 执行 stop，或使用 interactionId 续接。
         - AMBIGUOUS_ROUTE 的 autoSelectAt 已到：前端提交 AUTO_SELECT。
+        - 路由切换确认的 autoActionAt 已到：前端提交 approved=true。
         - Relay 的 autoActionAt 已到：前端提交 ignore=true。
 
         run-A 与续接 run-B 使用不同 runId，但 AMBIGUOUS_ROUTE 和 Relay 问卷会复用同一个 assistant。
@@ -1681,6 +1684,9 @@ components:
                 refusalCode: FN-EX-CHAT-BIZ-DAG-001
                 refusalReason: 当前请求不属于该技能处理范围
                 originalQuery: 帮我解释这个财经指标
+                autoActionAt: '2026-08-05T10:00:30Z'
+                autoActionTimeoutMs: 30000
+                autoActionType: APPROVE_ROUTE_SWITCH
     RelayQuestionnaireCardEvent:
       summary: Relay 返回单选和多选问卷卡片
       value:
@@ -2085,7 +2091,7 @@ components:
           type: string
           format: date-time
           nullable: true
-          description: Relay 问卷前端触发忽略的建议绝对时间
+          description: Relay 问卷忽略或路由切换自动同意的建议绝对时间
         autoActionTimeoutMs:
           type: integer
           format: int64
@@ -2093,7 +2099,7 @@ components:
         autoActionType:
           type: string
           nullable: true
-          enum: [IGNORE_QUESTIONNAIRE]
+          enum: [IGNORE_QUESTIONNAIRE, APPROVE_ROUTE_SWITCH]
         bindingProvider:
           type: string
           nullable: true
@@ -2263,7 +2269,7 @@ components:
         autoActionType:
           type: string
           nullable: true
-          enum: [IGNORE_QUESTIONNAIRE]
+          enum: [IGNORE_QUESTIONNAIRE, APPROVE_ROUTE_SWITCH]
 
     IntentCandidate:
       type: object
@@ -2420,9 +2426,20 @@ components:
         originalQuery:
           type: string
           nullable: true
+        autoActionAt:
+          type: string
+          format: date-time
+          description: 前端自动同意切换的绝对截止时间
+        autoActionTimeoutMs:
+          type: integer
+          format: int64
+        autoActionType:
+          type: string
+          enum: [APPROVE_ROUTE_SWITCH]
       description: |
         手动来源的 DomainAgent 拒答后，候选目标发生变化且自动切换配置关闭时生成。同一技能、
-        自动来源或开启 refusal-auto-switch-enabled 时不生成。该 WAIT 没有独立自动确认截止时间。
+        自动来源或开启 refusal-auto-switch-enabled 时不生成。截止时间与 AMBIGUOUS_ROUTE 共用配置，
+        到期后由前端提交现有 approved=true 请求。
 
     RelayQuestionnaireCardPayload:
       type: object

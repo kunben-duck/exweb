@@ -1161,7 +1161,7 @@ assistant 汇总连续和 execution fencing 正确，因此当前不能视为实
 | `financeex.chat-run.execution-init-orphan-grace` | `2m` | execution 初始化孤儿宽限期 |
 | `financeex.chat-run.first-event-timeout` | `30s` | `/runs` 首持久化事件等待上限 |
 | `financeex.chat-run.external-terminal-transaction-timeout-seconds` | `10` | 准入/栅栏/终态短事务上限 |
-| `financeex.intent.ambiguous-route-wait-timeout` | `30s` | 服务端生成前端代选截止时间的等待时长 |
+| `financeex.intent.ambiguous-route-wait-timeout` | `30s` | AMBIGUOUS_ROUTE 代选与拒答路由切换自动同意共用的前端等待时长 |
 | `financeex.relay.questionnaire-wait-timeout` | `0s` | Relay 问卷前端忽略截止时间；`0s` 表示永久等待 |
 | `financeex.runtime-binding.interaction-resume-transaction-timeout-seconds` | `2` | Relay 问卷续接 Binding owner/fencing 刷新与补偿事务超时 |
 

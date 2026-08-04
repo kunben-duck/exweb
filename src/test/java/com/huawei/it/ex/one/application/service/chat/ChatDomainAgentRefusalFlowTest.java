@@ -1720,7 +1720,16 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 .containsEntry("currentTargetId", "agent-a")
                 .containsEntry("candidateProvider", "domain-agent")
                 .containsEntry("candidateTargetId", "agent-b")
-                .containsEntry("refusalCode", "FN-EX-CAHT-BIZ-DAG-001");
+                .containsEntry("refusalCode", "FN-EX-CAHT-BIZ-DAG-001")
+                .containsEntry("autoActionTimeoutMs", 30_000L)
+                .containsEntry("autoActionType", "APPROVE_ROUTE_SWITCH")
+                .containsKey("autoActionAt");
+        assertThat(events.events).filteredOn(event -> "run.waiting_user".equals(event.type()))
+                .first()
+                .satisfies(event -> assertThat(event.payload())
+                        .containsEntry("autoActionTimeoutMs", 30_000L)
+                        .containsEntry("autoActionType", "APPROVE_ROUTE_SWITCH")
+                        .containsKey("autoActionAt"));
         ChatMessage waitingAssistant = messages.messages.stream()
                 .filter(message -> "assistant".equals(message.role()))
                 .findFirst()

@@ -17,6 +17,7 @@ final class ChatEventCommitCoordinator {
     private final DomainAgentRefusalCoordinator refusalCoordinator;
     private final CommittedChatEventObserver committedEventObserver;
     private final AmbiguousRouteWaitPolicy ambiguousRouteWaitPolicy;
+    private final RouteSwitchConfirmationWaitPolicy routeSwitchConfirmationWaitPolicy;
     private final RelayQuestionnaireWaitPolicy relayQuestionnaireWaitPolicy;
     private final ChatRunFailureMapper runFailureMapper = new ChatRunFailureMapper();
 
@@ -29,6 +30,7 @@ final class ChatEventCommitCoordinator {
                                DomainAgentRefusalCoordinator refusalCoordinator,
                                CommittedChatEventObserver committedEventObserver,
                                AmbiguousRouteWaitPolicy ambiguousRouteWaitPolicy,
+                               RouteSwitchConfirmationWaitPolicy routeSwitchConfirmationWaitPolicy,
                                RelayQuestionnaireWaitPolicy relayQuestionnaireWaitPolicy) {
         this.sessionService = sessionService;
         this.chatRunService = chatRunService;
@@ -39,7 +41,23 @@ final class ChatEventCommitCoordinator {
         this.refusalCoordinator = refusalCoordinator;
         this.committedEventObserver = committedEventObserver;
         this.ambiguousRouteWaitPolicy = ambiguousRouteWaitPolicy;
+        this.routeSwitchConfirmationWaitPolicy = routeSwitchConfirmationWaitPolicy;
         this.relayQuestionnaireWaitPolicy = relayQuestionnaireWaitPolicy;
+    }
+
+    ChatEventCommitCoordinator(SessionApplicationService sessionService,
+                               ChatRunApplicationService chatRunService,
+                               ChatStreamApplicationService chatStreamService,
+                               ChatInteractionApplicationService chatInteractionService,
+                               RuntimeBindingApplicationService runtimeBindingService,
+                               ChatRunCompletionCoordinator completionCoordinator,
+                               DomainAgentRefusalCoordinator refusalCoordinator,
+                               CommittedChatEventObserver committedEventObserver,
+                               AmbiguousRouteWaitPolicy ambiguousRouteWaitPolicy,
+                               RelayQuestionnaireWaitPolicy relayQuestionnaireWaitPolicy) {
+        this(sessionService, chatRunService, chatStreamService, chatInteractionService,
+                runtimeBindingService, completionCoordinator, refusalCoordinator,
+                committedEventObserver, ambiguousRouteWaitPolicy, null, relayQuestionnaireWaitPolicy);
     }
 
     ChatEventCommitCoordinator(SessionApplicationService sessionService,
@@ -53,7 +71,7 @@ final class ChatEventCommitCoordinator {
                                AmbiguousRouteWaitPolicy ambiguousRouteWaitPolicy) {
         this(sessionService, chatRunService, chatStreamService, chatInteractionService,
                 runtimeBindingService, completionCoordinator, refusalCoordinator,
-                committedEventObserver, ambiguousRouteWaitPolicy, null);
+                committedEventObserver, ambiguousRouteWaitPolicy, null, null);
     }
 
     ChatEventCommitCoordinator(SessionApplicationService sessionService,
@@ -66,13 +84,16 @@ final class ChatEventCommitCoordinator {
                                CommittedChatEventObserver committedEventObserver) {
         this(sessionService, chatRunService, chatStreamService, chatInteractionService,
                 runtimeBindingService, completionCoordinator, refusalCoordinator,
-                committedEventObserver, null, null);
+                committedEventObserver, null, null, null);
     }
 
     ChatEvent commit(ChatEvent event, RunEventPipelineContext context) {
         ChatEvent preparedEvent = ambiguousRouteWaitPolicy == null
                 ? event
                 : ambiguousRouteWaitPolicy.decorate(event);
+        preparedEvent = routeSwitchConfirmationWaitPolicy == null
+                ? preparedEvent
+                : routeSwitchConfirmationWaitPolicy.decorate(preparedEvent);
         preparedEvent = relayQuestionnaireWaitPolicy == null
                 ? preparedEvent
                 : relayQuestionnaireWaitPolicy.decorate(preparedEvent);

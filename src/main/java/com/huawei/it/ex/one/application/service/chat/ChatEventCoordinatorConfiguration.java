@@ -90,6 +90,7 @@ class ChatEventCoordinatorConfiguration {
             DomainAgentRefusalCoordinator refusalCoordinator,
             CommittedChatEventObserver committedEventObserver,
             AmbiguousRouteWaitPolicy ambiguousRouteWaitPolicy,
+            RouteSwitchConfirmationWaitPolicy routeSwitchConfirmationWaitPolicy,
             RelayQuestionnaireWaitPolicy relayQuestionnaireWaitPolicy) {
         return new ChatEventCommitCoordinator(
                 sessionService,
@@ -101,6 +102,7 @@ class ChatEventCoordinatorConfiguration {
                 refusalCoordinator,
                 committedEventObserver,
                 ambiguousRouteWaitPolicy,
+                routeSwitchConfirmationWaitPolicy,
                 relayQuestionnaireWaitPolicy);
     }
 

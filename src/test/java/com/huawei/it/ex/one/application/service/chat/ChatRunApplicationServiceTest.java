@@ -387,6 +387,65 @@ class ChatRunApplicationServiceTest {
 
     @Test
     @SuppressWarnings("unchecked")
+    void streamStatusReturnsRouteSwitchAutoApprovalDeadline() {
+        ChatInteractionApplicationService interactionService =
+                mock(ChatInteractionApplicationService.class);
+        ObjectProvider<ChatInteractionApplicationService> interactionProvider =
+                mock(ObjectProvider.class);
+        when(interactionProvider.getIfAvailable()).thenReturn(interactionService);
+        Instant now = Instant.parse("2026-08-05T10:00:00Z");
+        ChatInteractionRequest waiting = new ChatInteractionRequest(
+                "interaction-switch",
+                "tenant1",
+                "user1",
+                "session1",
+                "run-a",
+                null,
+                "message-user",
+                "message-assistant",
+                "domain-agent",
+                "binding-domain",
+                "domain-session-1",
+                null,
+                ChatInteractionType.ROUTE_SWITCH_CONFIRMATION,
+                ChatInteractionStatus.WAITING,
+                Map.of(
+                        "source", "chatservice",
+                        "sourceType", "route-switch-confirmation-request",
+                        "autoActionAt", "2026-08-05T10:00:30Z",
+                        "autoActionTimeoutMs", 30_000L,
+                        "autoActionType", "APPROVE_ROUTE_SWITCH"),
+                Map.of(),
+                now.plusSeconds(3600),
+                null,
+                null,
+                now,
+                now);
+        when(interactionService.findWaiting(user(), "session1"))
+                .thenReturn(Optional.of(waiting));
+        ChatRunApplicationService service = new ChatRunApplicationService(
+                new InMemoryRunRepository(),
+                new InMemoryRunCache(),
+                new InMemoryEventStore(12L),
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                null,
+                null,
+                interactionProvider,
+                null);
+
+        var status = service.streamStatus(user(), "session1");
+
+        assertThat(status.waitingUserInput()).isTrue();
+        assertThat(status.interactionType()).isEqualTo("ROUTE_SWITCH_CONFIRMATION");
+        assertThat(status.autoActionAt()).isEqualTo(Instant.parse("2026-08-05T10:00:30Z"));
+        assertThat(status.autoActionTimeoutMs()).isEqualTo(30_000L);
+        assertThat(status.autoActionType()).isEqualTo("APPROVE_ROUTE_SWITCH");
+        assertThat(status.autoSelectAt()).isNull();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
     void streamStatusReturnsModeOnlyForActiveDomainAgentBinding() {
         RuntimeBindingApplicationService bindingService = mock(RuntimeBindingApplicationService.class);
         ObjectProvider<RuntimeBindingApplicationService> bindingProvider = mock(ObjectProvider.class);

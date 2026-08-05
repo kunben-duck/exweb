@@ -238,7 +238,7 @@ session-state(终态)        → ⭐ 轮次结束信号
 |---------|------|---------|
 | `session-id` | 会话ID | 保存用于恢复会话 |
 | `session-ready` | 会话就绪 | 初始化完成信号 |
-| `session-state` | 会话状态 | `idle/completed/waiting_user_input/paused` 是轮次结束信号 |
+| `session-state` | 会话状态 | `completed/waiting_user_input/paused` 是轮次结束信号；`idle` 是过程状态 |
 | `system` | 系统消息 | 显示给用户 |
 | `error` | 错误消息 | 显示给用户，记录日志 |
 | `approval-request` | 需用户确认 | 回复 `approval-response` |
@@ -329,7 +329,7 @@ GET /api/skills?project_home=D:\project
 ### Q1: 如何判断一轮对话完成？
 
 只监听终态 `session-state`：
-- `state=idle/completed/waiting_user_input/paused` 表示本轮结束
+- `state=completed/waiting_user_input/paused` 表示本轮结束；`idle` 不结束本轮
 - `agent-call(is_start=false)`、`generate-response(is_final=true)` 和 `relay-end` 都不是轮次结束信号
 - 缺少终态 `session-state` 时，由 ChatService 现有心跳和最大运行时长按协议失败收口
 

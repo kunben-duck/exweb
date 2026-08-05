@@ -73,7 +73,7 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
-    void newRuntimeSessionSendsConfigThenUserMessageAndCompletesOnIdleState() throws Exception {
+    void idleAfterResponseStartRemainsVisibleAndCompletedEndsTurn() throws Exception {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"relay-start\",\"content\":\"initializing\"}",
                 "{\"type\":\"relay-progress\",\"content\":\"loading modes\"}",
@@ -82,7 +82,8 @@ class RelayWebSocketRuntimeAdapterTest {
                 "{\"type\":\"relay-end\",\"content\":\"ready\"}",
                 "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"agent\",\"content\":\"你好\",\"is_streaming\":true,\"session_id\":\"relay-session-1\"}",
-                "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}"
+                "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"
         ));
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
@@ -98,6 +99,10 @@ class RelayWebSocketRuntimeAdapterTest {
                 .assertNext(event -> {
                     assertThat(event.type()).isEqualTo("runtime.metadata");
                     assertThat(event.payload()).containsEntry("state", "idle");
+                })
+                .assertNext(event -> {
+                    assertThat(event.type()).isEqualTo("runtime.metadata");
+                    assertThat(event.payload()).containsEntry("state", "completed");
                 })
                 .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
                 .verifyComplete();
@@ -125,7 +130,7 @@ class RelayWebSocketRuntimeAdapterTest {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"agent\",\"content\":\"你好\",\"session_id\":\"relay-session-1\"}",
-                "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}"
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"
         ));
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
         MemoryContext memory = new MemoryContext(
@@ -191,7 +196,7 @@ class RelayWebSocketRuntimeAdapterTest {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"session-ready\",\"session_id\":\"expert-session-1\",\"session_mode\":\"resume\"}",
                 "{\"type\":\"agent-call\",\"is_start\":false}",
-                "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"expert-session-1\"}"
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"expert-session-1\"}"
         ));
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
@@ -213,7 +218,7 @@ class RelayWebSocketRuntimeAdapterTest {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"agent\",\"content\":\"你好\",\"session_id\":\"relay-session-1\"}",
-                "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}"
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"
         ));
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
@@ -232,7 +237,7 @@ class RelayWebSocketRuntimeAdapterTest {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"agent\",\"content\":\"你好\",\"session_id\":\"relay-session-1\"}",
-                "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}"
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"
         ));
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
         Map<String, Object> metadata = Map.of(
@@ -263,7 +268,7 @@ class RelayWebSocketRuntimeAdapterTest {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"agent\",\"content\":\"你好\",\"session_id\":\"relay-session-1\"}",
-                "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}"
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"
         ));
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
         Map<String, Object> metadata = Map.of(
@@ -301,7 +306,7 @@ class RelayWebSocketRuntimeAdapterTest {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"agent\",\"content\":\"你好\",\"session_id\":\"relay-session-1\"}",
-                "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}"
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"
         ));
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
@@ -435,7 +440,7 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
-    void firstTerminalSessionStateCompletesEvenWithoutRelayStart() {
+    void idleBeforeResponseIsIgnoredAndCompletedEndsTurnWithoutRelayStart() {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
                 "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}",
@@ -450,7 +455,7 @@ class RelayWebSocketRuntimeAdapterTest {
                 .assertNext(this::assertSessionReadyMetadata)
                 .assertNext(event -> {
                     assertThat(event.type()).isEqualTo("runtime.metadata");
-                    assertThat(event.payload()).containsEntry("state", "idle");
+                    assertThat(event.payload()).containsEntry("state", "completed");
                 })
                 .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
                 .verifyComplete();
@@ -583,7 +588,7 @@ class RelayWebSocketRuntimeAdapterTest {
                         + "\"session_id\":\"relay-session-1\"}",
                 "{\"type\":\"agent-call\",\"is_start\":false,\"agent_name\":\"delegate\","
                         + "\"session_id\":\"relay-session-1\"}",
-                "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}"
+                "{\"type\":\"session-state\",\"state\":\"completed\",\"session_id\":\"relay-session-1\"}"
         ));
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
 
@@ -614,6 +619,26 @@ class RelayWebSocketRuntimeAdapterTest {
         StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
                 .assertNext(this::assertSessionReadyMetadata)
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "answer"))
+                .expectErrorSatisfies(this::assertClosedBeforeTerminal)
+                .verify();
+    }
+
+    @Test
+    void idleAfterResponseThenWebSocketCloseFailsProtocol() {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\",\"session_mode\":\"new\"}",
+                "{\"type\":\"agent\",\"content\":\"answer\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"session-state\",\"state\":\"idle\",\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .assertNext(this::assertSessionReadyMetadata)
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "answer"))
+                .assertNext(event -> {
+                    assertThat(event.type()).isEqualTo("runtime.metadata");
+                    assertThat(event.payload()).containsEntry("state", "idle");
+                })
                 .expectErrorSatisfies(this::assertClosedBeforeTerminal)
                 .verify();
     }

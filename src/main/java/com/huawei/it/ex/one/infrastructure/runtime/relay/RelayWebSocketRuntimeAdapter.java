@@ -1100,8 +1100,8 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
 
     private boolean ordinaryTerminalState(String state) {
         String normalizedState = RelayRuntimeResponseNormalizer.normalizeTypeName(state);
-        return "idle".equals(normalizedState)
-                || "completed".equals(normalizedState)
+        // idle 仅表示 Relay 当前空闲，后续仍可能继续输出，不能据此提前结束本轮。
+        return "completed".equals(normalizedState)
                 || "waiting-user-input".equals(normalizedState)
                 || "paused".equals(normalizedState);
     }

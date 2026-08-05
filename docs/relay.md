@@ -1308,7 +1308,7 @@ def is_config_complete(event: dict, runtime_profile: str) -> bool:
 
 | 信号 | 可靠性 | 说明 |
 |------|--------|------|
-| `session-state` 终态 | ✅ **唯一终态** | `idle/completed/waiting_user_input/paused` 结束本轮 |
+| `session-state` 终态 | ✅ **唯一终态** | `completed/waiting_user_input/paused` 结束本轮；`idle` 不结束本轮 |
 | `agent-call(is_start=false)` | ❌ **过程事件** | 统一映射为 `runtime.agent`，根 Agent 与子 Agent 均不得结束本轮 |
 | `generate-response(is_final=true)` | ❌ **回答快照** | 可更新正文快照，但不得结束本轮 |
 | `stream-complete/[DONE]` 等兼容帧 | ❌ **过程兼容事件** | 不结束 Relay WebSocket 用户轮次 |
@@ -1332,9 +1332,9 @@ session-state(state="waiting_user_input")  ← handle_user_message 返回后广
 class TurnState:
     """用户轮次状态跟踪器"""
 
-    TERMINAL_STATES = {"idle", "waiting_user_input", "completed", "paused"}
+    TERMINAL_STATES = {"waiting_user_input", "completed", "paused"}
     # 非终态，收到这些不应改变轮次状态
-    NON_TERMINAL_STATES = {"ready", "running", "agent_thinking", "waiting_approval"}
+    NON_TERMINAL_STATES = {"ready", "running", "idle", "agent_thinking", "waiting_approval"}
     # 后台异步事件类型，收到终态后应忽略
     BACKGROUND_EVENT_TYPES = {
         "self-evolution-status", "token-update",
@@ -1392,7 +1392,7 @@ class TurnState:
 | **正常完成** | `agent-call(start)` → ... → `generate-response` → `agent-call(end)` → `session-state(waiting_user_input)` | `session-state` 到达时 → `turn_ended` |
 | **澄清问** | `agent-call(start)` → ... → `approval-request` → `session-state(agent_thinking)` → [用户回复] → `agent-call(end)` → `session-state(waiting_user_input)` | `session-state(waiting_user_input)` 到达时 → `turn_ended` |
 | **用户中断** | `agent-call(start)` → ... → `agent-call(end, error="...PAUSE")` → `session-state(paused)` | `session-state(paused)` 到达时 → `turn_ended` |
-| **Agent 异常** | `agent-call(start)` → ... → `agent-call(end, error="...")` → `session-state(idle)` | `session-state(idle)` 到达时 → `turn_ended` |
+| **Agent 异常** | `agent-call(start)` → ... → `agent-call(end, error="...")` → `session-state(idle)` | `idle` 不结束本轮；继续等待有效终态，缺失时由超时失败收口 |
 | **后台事件干扰**（反例） | `session-state(waiting_user_input)` → `self-evolution-status` → `thinking-content-update(topic_generator)` | `session-state` 到达时 → `turn_ended`；后续事件 → `background`，不改变状态 |
 
 ### 7.6 兜底机制

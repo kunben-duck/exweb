@@ -63,8 +63,6 @@ public class RelayAgentProperties {
     public static class DomainExpert {
         /** 专家模式写入 config.appMode 的值。 */
         private String appMode = "domain_expert";
-        /** chat_expert 请求使用的专家角色。 */
-        private String roleName = "system-awareness";
 
         public String getAppMode() {
             return appMode;
@@ -72,14 +70,6 @@ public class RelayAgentProperties {
 
         public void setAppMode(String appMode) {
             this.appMode = appMode;
-        }
-
-        public String getRoleName() {
-            return roleName;
-        }
-
-        public void setRoleName(String roleName) {
-            this.roleName = roleName;
         }
     }
 

@@ -16,7 +16,7 @@ import java.util.Map;
 
 class AmbiguousRouteSelectionResolverTest {
     private final AmbiguousRouteSelectionResolver resolver =
-            new AmbiguousRouteSelectionResolver();
+            new AmbiguousRouteSelectionResolver("RE_");
 
     @Test
     void autoSelectsHighestValidConfidenceAndKeepsOriginalOrderOnTie() {
@@ -76,13 +76,14 @@ class AmbiguousRouteSelectionResolverTest {
     void selectedDomainExpertCandidateBuildsRelayProfileWithoutCallingIntentAgain() {
         AmbiguousRouteSelectionResolver.Candidate candidate =
                 resolver.autoSelect(payload(List.of(
-                        candidate("intent-expert", "领域专家", "domain_expert", 0.91))))
+                        candidate("intent-expert", "领域专家", "RE_system-awareness", 0.91))))
                         .orElseThrow();
 
         var result = resolver.routeSignal(candidate, "user-confirmed");
 
         assertThat(result.route().type()).isEqualTo(RouteType.AGENT_RUNTIME);
         assertThat(result.route().runtimeProfile()).isEqualTo(RuntimeProfile.DOMAIN_EXPERT);
+        assertThat(result.route().runtimeRoleName()).isEqualTo("system-awareness");
         assertThat(result.intentDecision().intentCode()).isEqualTo("intent-expert");
     }
 

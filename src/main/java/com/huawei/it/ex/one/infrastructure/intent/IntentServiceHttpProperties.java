@@ -21,6 +21,8 @@ public class IntentServiceHttpProperties {
     private String accessName = "";
     /** 意图响应 items[].accessName 转换为 DomainAgent skillId 时移除的可选前缀。 */
     private String responseAccessNamePrefix = "";
+    /** 规范化 accessName 命中该前缀时进入 Relay 专家模式。 */
+    private String domainExpertAccessNamePrefix = "";
     /** NO_MATCH 进入 Relay 时向用户展示的目标 Agent 名称。 */
     private String noMatchAgentName = DEFAULT_NO_MATCH_AGENT_NAME;
     /** 意图识别接口路径。 */
@@ -70,6 +72,14 @@ public class IntentServiceHttpProperties {
 
     public void setResponseAccessNamePrefix(String responseAccessNamePrefix) {
         this.responseAccessNamePrefix = responseAccessNamePrefix;
+    }
+
+    public String getDomainExpertAccessNamePrefix() {
+        return domainExpertAccessNamePrefix;
+    }
+
+    public void setDomainExpertAccessNamePrefix(String domainExpertAccessNamePrefix) {
+        this.domainExpertAccessNamePrefix = domainExpertAccessNamePrefix;
     }
 
     public String getNoMatchAgentName() {

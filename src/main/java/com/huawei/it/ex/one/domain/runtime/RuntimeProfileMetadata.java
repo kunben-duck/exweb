@@ -22,13 +22,13 @@ public final class RuntimeProfileMetadata {
     public static Map<String, Object> bindingMetadata(RuntimeProfile profile,
                                                       String delegateAppMode,
                                                       String domainExpertAppMode,
-                                                      String domainExpertRoleName) {
+                                                      String runtimeRoleName) {
         RuntimeProfile normalized = profile == null ? RuntimeProfile.DELEGATE : profile;
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put(PROFILE_KEY, normalized.name());
         if (normalized == RuntimeProfile.DOMAIN_EXPERT) {
             metadata.put(APP_MODE_KEY, required(domainExpertAppMode, "Domain expert Relay appMode"));
-            metadata.put(ROLE_NAME_KEY, required(domainExpertRoleName, "Domain expert Relay roleName"));
+            metadata.put(ROLE_NAME_KEY, required(runtimeRoleName, "Domain expert Relay roleName"));
         } else {
             metadata.put(APP_MODE_KEY, required(delegateAppMode, "Delegate Relay appMode"));
         }
@@ -37,8 +37,7 @@ public final class RuntimeProfileMetadata {
 
     public static Snapshot bindingSnapshot(Map<String, Object> metadata,
                                            String delegateAppMode,
-                                           String domainExpertAppMode,
-                                           String domainExpertRoleName) {
+                                           String domainExpertAppMode) {
         Map<String, Object> source = metadata == null ? Map.of() : metadata;
         RuntimeProfile profile = profile(source.get(PROFILE_KEY), true);
         if (profile == RuntimeProfile.DOMAIN_EXPERT) {
@@ -46,7 +45,7 @@ public final class RuntimeProfileMetadata {
                     profile,
                     required(textOrDefault(source.get(APP_MODE_KEY), domainExpertAppMode),
                             "Domain expert Relay appMode"),
-                    required(textOrDefault(source.get(ROLE_NAME_KEY), domainExpertRoleName),
+                    required(text(source.get(ROLE_NAME_KEY)),
                             "Domain expert Relay roleName"));
         }
         return new Snapshot(
@@ -57,8 +56,7 @@ public final class RuntimeProfileMetadata {
 
     public static Snapshot requestSnapshot(Map<String, Object> metadata,
                                            String delegateAppMode,
-                                           String domainExpertAppMode,
-                                           String domainExpertRoleName) {
+                                           String domainExpertAppMode) {
         Map<String, Object> source = metadata == null ? Map.of() : metadata;
         Object nested = source.get(RUN_METADATA_KEY);
         if (nested instanceof Map<?, ?> map) {
@@ -68,17 +66,16 @@ public final class RuntimeProfileMetadata {
                     values.put(String.valueOf(key), value);
                 }
             });
-            return bindingSnapshot(values, delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+            return bindingSnapshot(values, delegateAppMode, domainExpertAppMode);
         }
-        return bindingSnapshot(source, delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+        return bindingSnapshot(source, delegateAppMode, domainExpertAppMode);
     }
 
     public static Map<String, Object> runMetadataOverlay(Map<String, Object> bindingMetadata,
                                                          String delegateAppMode,
-                                                         String domainExpertAppMode,
-                                                         String domainExpertRoleName) {
+                                                         String domainExpertAppMode) {
         Snapshot snapshot = bindingSnapshot(
-                bindingMetadata, delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+                bindingMetadata, delegateAppMode, domainExpertAppMode);
         return Map.of(RUN_METADATA_KEY, snapshot.toMetadata());
     }
 

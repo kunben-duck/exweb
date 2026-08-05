@@ -3,6 +3,7 @@ package com.huawei.it.ex.one.infrastructure.intent;
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
+import com.huawei.it.ex.one.domain.routing.DomainExpertAccessNameResolver;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -31,10 +32,13 @@ public class IntentServiceResponseMapper {
 
     private final ObjectMapper objectMapper;
     private final IntentServiceHttpProperties properties;
+    private final DomainExpertAccessNameResolver domainExpertResolver;
 
     public IntentServiceResponseMapper(ObjectMapper objectMapper, IntentServiceHttpProperties properties) {
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.domainExpertResolver = new DomainExpertAccessNameResolver(
+                properties == null ? null : properties.getDomainExpertAccessNamePrefix());
     }
 
     /**
@@ -77,6 +81,10 @@ public class IntentServiceResponseMapper {
         JsonNode result = data.path("result");
         String routeAction = text(result.path("routeAction"));
         if ("CLARIFY".equalsIgnoreCase(routeAction)) {
+            if (hasMalformedDomainExpertCandidate(result.path("clarification").path("candidateIntents"))) {
+                return IntentRecognitionResult.degraded(protocolError(root, result, null,
+                        "CLARIFY domain expert accessName has no roleName"));
+            }
             return IntentRecognitionResult.waitingClarification(clarificationPayload(root, result),
                     firstText(result.path("intentSessionId"), data.path("intentSessionId")),
                     firstText(result.path("intentRequestId"), data.path("intentRequestId")));
@@ -112,6 +120,10 @@ public class IntentServiceResponseMapper {
         if (domainAgentId == null) {
             return IntentRecognitionResult.degraded(protocolError(root, result, selected,
                     "ROUTE_SINGLE accessName missing after normalization"));
+        }
+        if (domainExpertResolver.resolve(domainAgentId).malformedDomainExpert()) {
+            return IntentRecognitionResult.degraded(protocolError(root, result, selected,
+                    "ROUTE_SINGLE domain expert accessName has no roleName"));
         }
         return IntentRecognitionResult.finalDecision(itemToDomainAgentDecision(
                 root, selected, result, domainAgentId, "routeAction=ROUTE_SINGLE"));
@@ -247,12 +259,25 @@ public class IntentServiceResponseMapper {
                 }
             });
             String skillId = normalizeDomainAgentId(text(candidate.path("accessName")));
-            if (skillId != null) {
+            if (skillId != null && !domainExpertResolver.resolve(skillId).malformedDomainExpert()) {
                 item.put("skillId", skillId);
             }
             normalized.add(Collections.unmodifiableMap(item));
         }
         return List.copyOf(normalized);
+    }
+
+    private boolean hasMalformedDomainExpertCandidate(JsonNode candidates) {
+        if (candidates == null || !candidates.isArray()) {
+            return false;
+        }
+        for (JsonNode candidate : candidates) {
+            String skillId = normalizeDomainAgentId(text(candidate.path("accessName")));
+            if (skillId != null && domainExpertResolver.resolve(skillId).malformedDomainExpert()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

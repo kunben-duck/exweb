@@ -24,8 +24,8 @@ import org.springframework.context.annotation.Configuration;
 class ChatFlowFoundationConfiguration {
     @Bean
     AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver(
-            @Value("${financeex.intent.domain-expert-access-name:domain_expert}") String domainExpertAccessName) {
-        return new AmbiguousRouteSelectionResolver(domainExpertAccessName);
+            @Value("${financeex.intent.domain-expert-access-name-prefix:}") String domainExpertAccessNamePrefix) {
+        return new AmbiguousRouteSelectionResolver(domainExpertAccessNamePrefix);
     }
 
     @Bean

@@ -115,7 +115,8 @@ final class DomainAgentReplacementExecutor {
                         context.session().id(),
                         context.runId(),
                         bindingPolicy.runtimeBindingLeafId(context.command()),
-                        nextRoute.runtimeProfile()));
+                        nextRoute.runtimeProfile(),
+                        nextRoute.runtimeRoleName()));
         trackRelayBinding(lifecycle, resolution);
         context.bindingRef().set(resolution.binding());
         context.routeRef().set(nextRoute);

@@ -20,23 +20,22 @@ public class RoutingPolicy {
     private final double useCaseMinScore;
     /** 保留意图置信度阈值仅用于记录和兼容旧统计，不参与 DomainAgent 裁决。 */
     private final double intentConfidenceThreshold;
-    /** Intent accessName 归一化后命中该值时进入 Relay 专家模式。 */
-    private final String domainExpertAccessName;
+    /** Intent accessName 归一化后的专家角色解析器。 */
+    private final DomainExpertAccessNameResolver domainExpertResolver;
 
     public RoutingPolicy(double useCaseMinScore) {
-        this(useCaseMinScore, 0.85, "domain_expert");
+        this(useCaseMinScore, 0.85, "");
     }
 
     public RoutingPolicy(double useCaseMinScore, double intentConfidenceThreshold) {
-        this(useCaseMinScore, intentConfidenceThreshold, "domain_expert");
+        this(useCaseMinScore, intentConfidenceThreshold, "");
     }
 
     public RoutingPolicy(double useCaseMinScore, double intentConfidenceThreshold,
-                         String domainExpertAccessName) {
+                         String domainExpertAccessNamePrefix) {
         this.useCaseMinScore = useCaseMinScore;
         this.intentConfidenceThreshold = intentConfidenceThreshold;
-        this.domainExpertAccessName = requireText(domainExpertAccessName,
-                "financeex.intent.domain-expert-access-name");
+        this.domainExpertResolver = new DomainExpertAccessNameResolver(domainExpertAccessNamePrefix);
     }
 
     public double intentConfidenceThreshold() {
@@ -67,22 +66,20 @@ public class RoutingPolicy {
         if (intent.simpleTask()
                 && intent.candidateDomainAgentId() != null
                 && !intent.candidateDomainAgentId().isBlank()) {
-            if (RuntimeProfile.forIntentCandidate(
-                    intent.candidateDomainAgentId(), domainExpertAccessName) == RuntimeProfile.DOMAIN_EXPERT) {
+            DomainExpertAccessNameResolver.Resolution expert = domainExpertResolver.resolve(
+                    intent.candidateDomainAgentId());
+            if (expert.malformedDomainExpert()) {
+                throw new IllegalArgumentException("Domain expert accessName has no roleName");
+            }
+            if (expert.validDomainExpert()) {
                 return RouteTarget.agentRuntime("intent-agent", intent.confidence(),
-                        "route single domain expert intent", RuntimeProfile.DOMAIN_EXPERT);
+                        "route single domain expert intent", RuntimeProfile.DOMAIN_EXPERT,
+                        expert.roleName());
             }
             return RouteTarget.domainAgent(intent.candidateDomainAgentId(), "intent-agent", intent.confidence(),
                     "route single domain agent intent");
         }
 
         return RouteTarget.agentRuntime("intent-agent", intent.confidence(), "intent requires agent runtime");
-    }
-
-    private String requireText(String value, String property) {
-        if (value == null || value.trim().isEmpty()) {
-            throw new IllegalArgumentException(property + " must not be blank");
-        }
-        return value.trim();
     }
 }

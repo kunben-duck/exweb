@@ -87,8 +87,8 @@ ws://{host}:{port}/ws/{client_id}
 
 ### 2.2.1 chat_expert — Domain Expert 专家问答
 
-当 Intent 的规范化 `accessName` 命中 ChatService 配置的专家标识时，ChatService 不发送
-`user-message`，而是发送：
+当 Intent 的规范化 `accessName` 区分大小写命中 ChatService 配置的专家前缀时，ChatService
+移除一次该前缀，将剩余后缀作为动态 `role_name`，不发送 `user-message`，而是发送：
 
 ```json
 {
@@ -101,7 +101,7 @@ ws://{host}:{port}/ws/{client_id}
 }
 ```
 
-专家 NEW 和 RESUME 都发送 Binding 中固化的 `role_name`。`messages`、`traceId`、安全过滤后的
+专家 NEW 和 RESUME 都发送 Binding 中固化的动态 `role_name`。同一角色复用匹配的专家会话，不同角色分别创建 Binding，不能交叉恢复。`messages`、`traceId`、安全过滤后的
 `metadata` 及 WebSocket Cookie Header 与普通问答沿用同一透传规则；当前问题只出现在 `content`。
 专家模式和 Delegate 使用独立的可恢复 Binding，不交叉复用 Runtime session。
 

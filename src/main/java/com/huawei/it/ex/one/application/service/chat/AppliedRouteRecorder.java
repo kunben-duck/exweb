@@ -222,7 +222,10 @@ final class AppliedRouteRecorder {
             if (route.runtimeProfile() == RuntimeProfile.DOMAIN_EXPERT) {
                 String intentCode = firstText(requestPayload.get("candidateIntentCode"), "domain_expert");
                 String intentName = firstText(requestPayload.get("candidateIntentName"), intentCode);
-                String accessName = firstText(requestPayload.get("candidateTargetId"), intentCode);
+                String accessName = firstText(
+                        requestPayload.get("candidateAccessName"),
+                        requestPayload.get("candidateTargetId"),
+                        intentCode);
                 return new IntentDecision(intentCode, intentName, TaskComplexity.SIMPLE, 1.0,
                         true, accessName,
                         Map.of("routeAction", "ROUTE_SINGLE", "accessName", accessName),

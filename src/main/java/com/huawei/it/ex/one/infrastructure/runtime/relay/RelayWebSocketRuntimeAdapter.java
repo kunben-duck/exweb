@@ -74,7 +74,6 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     private final WebSocketClient webSocketClient;
     private final String delegateAppMode;
     private final String domainExpertAppMode;
-    private final String domainExpertRoleName;
     /** Active run -> outbound exchange, used only for best-effort Relay WS interrupt on stop/delete. */
     private final ConcurrentHashMap<String, ActiveRelayWebSocketExchange> activeExchanges = new ConcurrentHashMap<>();
 
@@ -102,9 +101,6 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         this.domainExpertAppMode = requireText(
                 properties.getRelay().getDomainExpert().getAppMode(),
                 "financeex.agent-runtime.relay.domain-expert.app-mode 不能为空");
-        this.domainExpertRoleName = requireText(
-                properties.getRelay().getDomainExpert().getRoleName(),
-                "financeex.agent-runtime.relay.domain-expert.role-name 不能为空");
     }
 
     @Override
@@ -832,31 +828,36 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 : request.bindingMetadata();
         if (bindingMetadata.containsKey(RuntimeProfileMetadata.PROFILE_KEY)) {
             return RuntimeProfileMetadata.bindingSnapshot(
-                    bindingMetadata, delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+                    bindingMetadata, delegateAppMode, domainExpertAppMode);
         }
         RuntimeProfile routeProfile = request == null || request.routeTarget() == null
                 ? RuntimeProfile.DELEGATE
                 : request.routeTarget().runtimeProfile();
-        return configuredProfile(routeProfile);
+        String runtimeRoleName = request == null || request.routeTarget() == null
+                ? null
+                : request.routeTarget().runtimeRoleName();
+        return configuredProfile(routeProfile, runtimeRoleName);
     }
 
     private RuntimeProfileMetadata.Snapshot relayProfile(AgentRuntimeInteractionResponseRequest request) {
         return RuntimeProfileMetadata.requestSnapshot(
                 request == null ? Map.of() : request.runtimeMetadata(),
-                delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+                delegateAppMode, domainExpertAppMode);
     }
 
     private RuntimeProfileMetadata.Snapshot relayProfile(AgentRuntimeCancelRequest request) {
         return RuntimeProfileMetadata.requestSnapshot(
                 request == null ? Map.of() : request.metadata(),
-                delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+                delegateAppMode, domainExpertAppMode);
     }
 
-    private RuntimeProfileMetadata.Snapshot configuredProfile(RuntimeProfile runtimeProfile) {
+    private RuntimeProfileMetadata.Snapshot configuredProfile(
+            RuntimeProfile runtimeProfile,
+            String runtimeRoleName) {
         Map<String, Object> metadata = RuntimeProfileMetadata.bindingMetadata(
-                runtimeProfile, delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+                runtimeProfile, delegateAppMode, domainExpertAppMode, runtimeRoleName);
         return RuntimeProfileMetadata.bindingSnapshot(
-                metadata, delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+                metadata, delegateAppMode, domainExpertAppMode);
     }
 
     private boolean blank(String value) {

@@ -9,13 +9,5 @@ public enum RuntimeProfile {
     /** Relay 普通委托模式。 */
     DELEGATE,
     /** Relay 单领域专家模式。 */
-    DOMAIN_EXPERT;
-
-    public static RuntimeProfile forIntentCandidate(String accessName, String domainExpertAccessName) {
-        if (accessName != null && domainExpertAccessName != null
-                && accessName.trim().equals(domainExpertAccessName.trim())) {
-            return DOMAIN_EXPERT;
-        }
-        return DELEGATE;
-    }
+    DOMAIN_EXPERT
 }

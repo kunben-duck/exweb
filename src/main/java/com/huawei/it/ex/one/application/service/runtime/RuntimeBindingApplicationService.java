@@ -53,7 +53,6 @@ public class RuntimeBindingApplicationService {
     private final String runtimeProvider;
     private final String delegateAppMode;
     private final String domainExpertAppMode;
-    private final String domainExpertRoleName;
 
     /**
      * 创建 Runtime 绑定服务。
@@ -67,7 +66,7 @@ public class RuntimeBindingApplicationService {
     public RuntimeBindingApplicationService(RuntimeBindingRepository repository, RuntimeBindingCache cache,
                                             IdGenerator idGenerator, Duration ttl, String runtimeProvider) {
         this(repository, cache, idGenerator, ttl, runtimeProvider,
-                "delegate", "domain_expert", "system-awareness");
+                "delegate", "domain_expert");
     }
 
     @Autowired
@@ -78,9 +77,7 @@ public class RuntimeBindingApplicationService {
             @Value("${financeex.runtime-binding.ttl:0s}") Duration ttl,
             @Value("${financeex.agent-runtime.default-provider:relay}") String runtimeProvider,
             @Value("${financeex.agent-runtime.relay.websocket.app-mode:delegate}") String delegateAppMode,
-            @Value("${financeex.agent-runtime.relay.domain-expert.app-mode:domain_expert}") String domainExpertAppMode,
-            @Value("${financeex.agent-runtime.relay.domain-expert.role-name:system-awareness}")
-            String domainExpertRoleName) {
+            @Value("${financeex.agent-runtime.relay.domain-expert.app-mode:domain_expert}") String domainExpertAppMode) {
         this.repository = repository;
         this.cache = cache;
         this.idGenerator = idGenerator;
@@ -88,7 +85,6 @@ public class RuntimeBindingApplicationService {
         this.runtimeProvider = normalizeProvider(runtimeProvider);
         this.delegateAppMode = requireText(delegateAppMode, "Delegate Relay appMode");
         this.domainExpertAppMode = requireText(domainExpertAppMode, "Domain expert Relay appMode");
-        this.domainExpertRoleName = requireText(domainExpertRoleName, "Domain expert Relay roleName");
     }
 
     /**
@@ -126,7 +122,7 @@ public class RuntimeBindingApplicationService {
     public RuntimeBindingResolution resolveForRun(String tenantId, String userId, String sessionId,
                                                   String runId, String leafMessageId) {
         return resolveForProfile(new ProfiledRunBindingRequest(
-                tenantId, userId, sessionId, runId, leafMessageId, RuntimeProfile.DELEGATE));
+                tenantId, userId, sessionId, runId, leafMessageId, RuntimeProfile.DELEGATE, null));
     }
 
     /**
@@ -142,7 +138,8 @@ public class RuntimeBindingApplicationService {
         String runId = request.runId();
         String leafMessageId = request.leafMessageId();
         Instant now = Instant.now();
-        RuntimeProfileMetadata.Snapshot desiredProfile = configuredProfile(request.runtimeProfile());
+        RuntimeProfileMetadata.Snapshot desiredProfile = configuredProfile(
+                request.runtimeProfile(), request.runtimeRoleName());
         List<RuntimeBinding> activeBindings = repository.findActiveBySession(tenantId, userId, sessionId, runtimeProvider)
                 .stream()
                 .filter(binding -> routableForCurrentProvider(binding, now))
@@ -186,9 +183,25 @@ public class RuntimeBindingApplicationService {
             String sessionId,
             String runId,
             String leafMessageId,
-            RuntimeProfile runtimeProfile) {
+            RuntimeProfile runtimeProfile,
+            String runtimeRoleName) {
         public ProfiledRunBindingRequest {
             runtimeProfile = runtimeProfile == null ? RuntimeProfile.DELEGATE : runtimeProfile;
+            runtimeRoleName = normalizeText(runtimeRoleName);
+            if (runtimeProfile == RuntimeProfile.DOMAIN_EXPERT && runtimeRoleName == null) {
+                throw new IllegalArgumentException("Domain expert runtimeRoleName must not be blank");
+            }
+            if (runtimeProfile != RuntimeProfile.DOMAIN_EXPERT) {
+                runtimeRoleName = null;
+            }
+        }
+
+        private static String normalizeText(String value) {
+            if (value == null) {
+                return null;
+            }
+            String normalized = value.trim();
+            return normalized.isEmpty() ? null : normalized;
         }
     }
 
@@ -722,6 +735,14 @@ public class RuntimeBindingApplicationService {
         return bindingProfile(binding).profile();
     }
 
+    /** 读取Relay专家Binding中已经固化的动态角色名。 */
+    public String runtimeRoleName(RuntimeBinding binding) {
+        if (binding == null || !runtimeProvider.equals(binding.provider())) {
+            return null;
+        }
+        return bindingProfile(binding).roleName();
+    }
+
     /**
      * 将 Relay Binding 的调用档案转换为 ChatRun 私有 metadata。
      */
@@ -732,17 +753,17 @@ public class RuntimeBindingApplicationService {
         return Map.of(RuntimeProfileMetadata.RUN_METADATA_KEY, bindingProfile(binding).toMetadata());
     }
 
-    private RuntimeProfileMetadata.Snapshot configuredProfile(RuntimeProfile profile) {
+    private RuntimeProfileMetadata.Snapshot configuredProfile(RuntimeProfile profile, String runtimeRoleName) {
         return RuntimeProfileMetadata.bindingSnapshot(
                 RuntimeProfileMetadata.bindingMetadata(
-                        profile, delegateAppMode, domainExpertAppMode, domainExpertRoleName),
-                delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+                        profile, delegateAppMode, domainExpertAppMode, runtimeRoleName),
+                delegateAppMode, domainExpertAppMode);
     }
 
     private RuntimeProfileMetadata.Snapshot bindingProfile(RuntimeBinding binding) {
         return RuntimeProfileMetadata.bindingSnapshot(
                 binding == null ? Map.of() : binding.metadata(),
-                delegateAppMode, domainExpertAppMode, domainExpertRoleName);
+                delegateAppMode, domainExpertAppMode);
     }
 
     private boolean matchingProfile(RuntimeBinding binding, RuntimeProfileMetadata.Snapshot desiredProfile) {

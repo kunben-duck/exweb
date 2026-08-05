@@ -23,9 +23,9 @@ public class ApplicationBeanConfig {
     @Bean
     public RoutingPolicy routingPolicy(@Value("${financeex.use-case-library.min-score:0.85}") double minScore,
                                        @Value("${financeex.intent.confidence-threshold:0.85}") double intentConfidenceThreshold,
-                                       @Value("${financeex.intent.domain-expert-access-name:domain_expert}")
-                                       String domainExpertAccessName) {
-        return new RoutingPolicy(minScore, intentConfidenceThreshold, domainExpertAccessName);
+                                       @Value("${financeex.intent.domain-expert-access-name-prefix:}")
+                                       String domainExpertAccessNamePrefix) {
+        return new RoutingPolicy(minScore, intentConfidenceThreshold, domainExpertAccessNamePrefix);
     }
 
     /**

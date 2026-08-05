@@ -60,11 +60,22 @@ class FinanceExRequiredConfigurationValidatorTest {
             assertThat(context).hasFailed();
             assertThat(context.getStartupFailure())
                     .hasMessageContaining("financeex.intent.base-url")
+                    .hasMessageContaining("financeex.intent.domain-expert-access-name-prefix")
                     .hasMessageContaining("financeex.use-case-library.base-url")
                     .hasMessageContaining("financeex.domain-agent.base-url")
                     .hasMessageContaining("financeex.share.share-url-prefix")
                     .hasMessageContaining("financeex.share.delivery.providers.welink.base-url");
         });
+    }
+
+    @Test
+    void enabledIntentStartsWithExplicitDomainExpertPrefix() {
+        contextWith(
+                "financeex.intent.enabled=true",
+                "financeex.intent.base-url=https://intent.example.com",
+                "financeex.intent.access-name=intent-service",
+                "financeex.intent.domain-expert-access-name-prefix=RE_"
+        ).run(context -> assertThat(context).hasNotFailed());
     }
 
     @Test

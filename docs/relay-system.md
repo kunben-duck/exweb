@@ -10,6 +10,19 @@ Domain-Expert 是一种专门的 Agent 模式，提供**单专业领域**的专�
 - ✅ 会话绑定：一个会话绑定一个专家
 - ✅ 子代理委派：支持通过 sub_agent_names 委派
 
+### ChatService 角色映射
+
+ChatService 不再配置固定专家角色。Intent `items[].accessName` 先移除一次通用响应前缀，再区分大小写匹配显式配置的专家前缀；命中后移除一次专家前缀并 trim，剩余后缀直接作为本协议的 `role_name`。
+
+```text
+原始 accessName: domain_agent_domain_expert_system-awareness
+通用前缀:       domain_agent_
+专家前缀:       domain_expert_
+role_name:       system-awareness
+```
+
+前缀命中但后缀为空时，ChatService 将其视为 Intent 协议错误，不调用 Relay。动态角色会固化在 Relay Binding 中；相同角色可以恢复原 session，不同角色分别维护自己的 Binding。前端不提交 `role_name`。
+
 ---
 
 ## 调用流程

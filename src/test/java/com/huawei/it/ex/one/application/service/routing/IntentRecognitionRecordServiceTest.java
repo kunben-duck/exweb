@@ -106,7 +106,8 @@ class IntentRecognitionRecordServiceTest {
 
         service.recordAsync(snapshot(successfulIntent(0.95),
                 RouteTarget.agentRuntime(
-                        "intent-agent", 0.95, "domain expert", RuntimeProfile.DOMAIN_EXPERT), 8L));
+                        "intent-agent", 0.95, "domain expert", RuntimeProfile.DOMAIN_EXPERT,
+                        "system-awareness"), 8L));
 
         assertThat(repository.records).singleElement().satisfies(record -> {
             assertThat(record.accepted()).isTrue();

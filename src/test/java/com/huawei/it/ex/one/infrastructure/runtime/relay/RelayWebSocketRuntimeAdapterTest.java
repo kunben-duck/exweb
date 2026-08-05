@@ -1318,7 +1318,8 @@ class RelayWebSocketRuntimeAdapterTest {
                 memory,
                 null,
                 RouteTarget.agentRuntime(
-                        "intent-agent", 1.0, "domain expert", RuntimeProfile.DOMAIN_EXPERT),
+                        "intent-agent", 1.0, "domain expert", RuntimeProfile.DOMAIN_EXPERT,
+                        "system-awareness"),
                 Map.of("clientTraceId", "client-expert"),
                 RuntimeProfileMetadata.bindingMetadata(
                         RuntimeProfile.DOMAIN_EXPERT,
@@ -1370,8 +1371,7 @@ class RelayWebSocketRuntimeAdapterTest {
                                 "domain_expert",
                                 "system-awareness"),
                         "delegate",
-                        "domain_expert",
-                        "system-awareness"),
+                        "domain_expert"),
                 RuntimeForwardHeaders.empty(),
                 TraceContext.empty());
     }
@@ -1441,8 +1441,7 @@ class RelayWebSocketRuntimeAdapterTest {
                                 "domain_expert",
                                 "system-awareness"),
                         "delegate",
-                        "domain_expert",
-                        "system-awareness"),
+                        "domain_expert"),
                 delegate.dispatchState());
     }
 

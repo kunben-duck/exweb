@@ -54,11 +54,19 @@ final class RouteSwitchContextResolver {
         RuntimeProfile candidateRuntimeProfile = relayRuntimeProfile(
                 candidateProvider,
                 firstText(interaction.requestPayload().get("routeAction")));
+        String candidateRuntimeRoleName = firstText(
+                interaction.requestPayload().get("candidateRuntimeRoleName"));
+        if (candidateRuntimeProfile == RuntimeProfile.DOMAIN_EXPERT
+                && candidateRuntimeRoleName == null) {
+            throw new IllegalStateException(
+                    "路由切换 Interaction 缺少 Relay 专家 roleName");
+        }
         return new RouteSwitchInput(
                 approved,
                 candidateProvider,
                 candidateTargetId,
                 candidateRuntimeProfile,
+                candidateRuntimeRoleName,
                 currentTargetId,
                 normalizedQuery,
                 candidateRouteQuery);
@@ -78,6 +86,7 @@ final class RouteSwitchContextResolver {
                 input.candidateProvider(),
                 input.candidateTargetId(),
                 input.candidateRuntimeProfile(),
+                input.candidateRuntimeRoleName(),
                 "user-confirmed");
     }
 
@@ -114,7 +123,8 @@ final class RouteSwitchContextResolver {
                             request.session().id(),
                             request.runId(),
                             interaction.assistantMessageId(),
-                            input.candidateRuntimeProfile()));
+                            input.candidateRuntimeProfile(),
+                            input.candidateRuntimeRoleName()));
             binding = resolution.binding();
             runtimeSessionMode = resolution.sessionMode();
         } else {
@@ -136,6 +146,7 @@ final class RouteSwitchContextResolver {
             String provider,
             String targetId,
             RuntimeProfile runtimeProfile,
+            String runtimeRoleName,
             String routeSource) {
         if (RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(provider)) {
             if (targetId == null || targetId.isBlank()) {
@@ -147,7 +158,8 @@ final class RouteSwitchContextResolver {
         }
         if (RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(provider)) {
             return RouteTarget.agentRuntime(
-                    routeSource, 1.0, "confirmed route switch to relay", runtimeProfile);
+                    routeSource, 1.0, "confirmed route switch to relay", runtimeProfile,
+                    runtimeRoleName);
         }
         throw new IllegalArgumentException(
                 "不支持的候选 Runtime provider: " + provider);
@@ -216,6 +228,7 @@ record RouteSwitchInput(
         String candidateProvider,
         String candidateTargetId,
         RuntimeProfile candidateRuntimeProfile,
+        String candidateRuntimeRoleName,
         String currentTargetId,
         String originalQuery,
         String candidateRouteQuery

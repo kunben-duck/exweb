@@ -257,16 +257,18 @@ class RuntimeBindingApplicationServiceTest {
         MultiBindingRepository repository = new MultiBindingRepository(List.of(delegate, expert));
         RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(
                 repository, new InMemoryRuntimeBindingCache(), new FixedIdGenerator(), Duration.ofDays(3), "relay",
-                "delegate", "domain_expert", "system-awareness");
+                "delegate", "domain_expert");
 
         RuntimeBindingResolution resolution = service.resolveForProfile(
                 new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
-                        "t", "u", "s", "run-next", "leaf-next", RuntimeProfile.DOMAIN_EXPERT));
+                        "t", "u", "s", "run-next", "leaf-next", RuntimeProfile.DOMAIN_EXPERT,
+                        "system-awareness"));
 
         assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
         assertThat(resolution.binding().id()).isEqualTo("binding-expert");
         assertThat(resolution.binding().runtimeSessionId()).isEqualTo("runtime-expert");
         assertThat(service.runtimeProfile(resolution.binding())).isEqualTo(RuntimeProfile.DOMAIN_EXPERT);
+        assertThat(service.runtimeRoleName(resolution.binding())).isEqualTo("system-awareness");
         assertThat(repository.findById("binding-delegate"))
                 .get()
                 .extracting(RuntimeBinding::status)
@@ -285,11 +287,12 @@ class RuntimeBindingApplicationServiceTest {
         MultiBindingRepository repository = new MultiBindingRepository(List.of(oldExpert));
         RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(
                 repository, new InMemoryRuntimeBindingCache(), new FixedIdGenerator(), Duration.ofDays(3), "relay",
-                "delegate", "domain_expert", "system-awareness");
+                "delegate", "domain_expert");
 
         RuntimeBindingResolution resolution = service.resolveForProfile(
                 new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
-                        "t", "u", "s", "run-next", "leaf-next", RuntimeProfile.DOMAIN_EXPERT));
+                        "t", "u", "s", "run-next", "leaf-next", RuntimeProfile.DOMAIN_EXPERT,
+                        "system-awareness"));
 
         assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.NEW);
         assertThat(resolution.binding().id()).isEqualTo("runtime_binding_1");

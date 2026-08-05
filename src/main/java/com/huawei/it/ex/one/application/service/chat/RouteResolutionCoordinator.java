@@ -210,7 +210,8 @@ final class RouteResolutionCoordinator {
                         "runtime-binding",
                         1.0,
                         "active relay runtime binding",
-                        runtimeBindingService.runtimeProfile(binding));
+                        runtimeBindingService.runtimeProfile(binding),
+                        runtimeBindingService.runtimeRoleName(binding));
         preparation.bindingRef().set(binding);
         preparation.routeRef().set(route);
         preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
@@ -251,7 +252,8 @@ final class RouteResolutionCoordinator {
                             request.session().id(),
                             request.runId(),
                             request.runtimeBindingLeafId(),
-                            route.runtimeProfile()));
+                            route.runtimeProfile(),
+                            route.runtimeRoleName()));
             if (resolution.previousBinding() == null) {
                 request.bindingLifecycle().trackCreated(resolution.binding());
             } else {

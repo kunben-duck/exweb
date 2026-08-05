@@ -206,7 +206,8 @@ class RouteMemoryApplicationServiceTest {
                 Map.of("routeAction", "ROUTE_SINGLE", "accessName", "domain_expert"),
                 List.of(), Map.of());
         RouteTarget expertRoute = RouteTarget.agentRuntime(
-                "intent-agent", 0.93, "domain expert", RuntimeProfile.DOMAIN_EXPERT);
+                "intent-agent", 0.93, "domain expert", RuntimeProfile.DOMAIN_EXPERT,
+                "system-awareness");
         RouteMemoryApplicationService.RouteMemoryRouteCommand command =
                 new RouteMemoryApplicationService.RouteMemoryRouteCommand(
                         user, "expert-session", "run-expert", "专家问题", expertIntent, expertRoute);

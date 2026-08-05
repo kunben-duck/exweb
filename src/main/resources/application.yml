@@ -115,8 +115,8 @@ financeex:
     access-name: ${FINANCEEX_INTENT_ACCESS_NAME:}
     # 可选：从意图响应 items[].accessName 开头移除一次，得到真实 DomainAgent skillId。
     response-access-name-prefix: ${FINANCEEX_INTENT_RESPONSE_ACCESS_NAME_PREFIX:}
-    # 归一化后的 accessName 命中该值时，改由 Relay Domain Expert 模式执行。
-    domain-expert-access-name: ${FINANCEEX_INTENT_DOMAIN_EXPERT_ACCESS_NAME:domain_expert}
+    # 归一化后的accessName命中该前缀时，移除前缀后的内容作为Relay专家role_name。
+    domain-expert-access-name-prefix: ${FINANCEEX_INTENT_DOMAIN_EXPERT_ACCESS_NAME_PREFIX:}
     # NO_MATCH 仍进入 Relay；该配置只控制 intent-result 中展示的目标 Agent 名称。
     no-match-agent-name: ${FINANCEEX_INTENT_NO_MATCH_AGENT_NAME:FIN Supervisor Agent}
     # 默认使用 SSE 流式接口；显式切换为 BLOCKING 时调用原阻塞接口。
@@ -322,7 +322,6 @@ financeex:
       enabled: ${FINANCEEX_RELAY_RUNTIME_ENABLED:true}
       domain-expert:
         app-mode: ${FINANCEEX_RELAY_DOMAIN_EXPERT_APP_MODE:domain_expert}
-        role-name: ${FINANCEEX_RELAY_DOMAIN_EXPERT_ROLE_NAME:system-awareness}
       websocket:
         url: ${FINANCEEX_RELAY_WS_URL:}
         app-mode: ${FINANCEEX_RELAY_WS_APP_MODE:delegate}

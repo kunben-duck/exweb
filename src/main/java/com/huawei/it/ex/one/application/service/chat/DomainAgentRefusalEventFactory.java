@@ -96,6 +96,9 @@ final class DomainAgentRefusalEventFactory {
         IntentDecision intent = nextSignal.intentDecision();
         putIfNotNull(payload, "candidateIntentCode", intent == null ? null : intent.intentCode());
         putIfNotNull(payload, "candidateIntentName", intent == null ? null : intent.intentName());
+        putIfNotNull(payload, "candidateAccessName",
+                intent == null ? null : intent.candidateDomainAgentId());
+        putIfNotNull(payload, "candidateRuntimeRoleName", candidate.runtimeRoleName());
         putIfNotNull(payload, "routeAction", routeAction(intent));
         putIfNotNull(payload, "refusalCode", refusal.code());
         putIfNotNull(payload, "refusalReasonCode", refusal.reasonCode());

@@ -43,6 +43,56 @@ class IntentServiceResponseMapperTest {
     }
 
     @Test
+    void appliesGeneralPrefixBeforeDomainExpertPrefix() throws Exception {
+        IntentDecision decision = mapper("domain_agent_", "RE_")
+                .toDecision(response("intent-expert", "domain_agent_RE_system-awareness"));
+
+        assertThat(decision.candidateDomainAgentId()).isEqualTo("RE_system-awareness");
+        assertThat(decision.slots()).containsEntry("accessName", "RE_system-awareness");
+    }
+
+    @Test
+    void domainExpertPrefixWithoutRoleIsProtocolFailure() throws Exception {
+        IntentRecognitionResult result = mapper("domain_agent_", "RE_")
+                .toRecognitionResult(response("intent-expert", "domain_agent_RE_"));
+
+        assertThat(result.status()).isEqualTo(IntentRecognitionResult.Status.FAILED_OR_DEGRADED);
+        assertThat(result.decision().intentCode()).isEqualTo("finance.runtime.intent_error");
+        assertThat(result.decision().raw()).containsEntry(
+                "reason", "ROUTE_SINGLE domain expert accessName has no roleName");
+    }
+
+    @Test
+    void ambiguousDomainExpertPrefixWithoutRoleIsProtocolFailure() throws Exception {
+        IntentRecognitionResult result = mapper("domain_agent_", "RE_").toRecognitionResult(
+                objectMapper.readTree("""
+                        {
+                          "code": 200,
+                          "status": "success",
+                          "data": {
+                            "result": {
+                              "routeAction": "CLARIFY",
+                              "clarification": {
+                                "type": "AMBIGUOUS_ROUTE",
+                                "candidateIntents": [
+                                  {
+                                    "intentId": "expert-intent",
+                                    "intentName": "专家模式",
+                                    "accessName": "domain_agent_RE_"
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                        """));
+
+        assertThat(result.status()).isEqualTo(IntentRecognitionResult.Status.FAILED_OR_DEGRADED);
+        assertThat(result.decision().raw()).containsEntry(
+                "reason", "CLARIFY domain expert accessName has no roleName");
+    }
+
+    @Test
     void routeSingleWithoutUsableAccessNameIsProtocolFailure() throws Exception {
         IntentRecognitionResult missingResult = mapper("ex_").toRecognitionResult(response("intent-1", null));
         IntentRecognitionResult prefixOnlyResult = mapper("ex_").toRecognitionResult(response("intent-1", "ex_"));
@@ -165,8 +215,13 @@ class IntentServiceResponseMapperTest {
     }
 
     private IntentServiceResponseMapper mapper(String prefix) {
+        return mapper(prefix, "");
+    }
+
+    private IntentServiceResponseMapper mapper(String prefix, String domainExpertPrefix) {
         IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
         properties.setResponseAccessNamePrefix(prefix);
+        properties.setDomainExpertAccessNamePrefix(domainExpertPrefix);
         return mapper(properties);
     }
 

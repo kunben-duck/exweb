@@ -109,7 +109,8 @@ final class InteractionContinuationCoordinator {
                 command.agentMode(),
                 command.targetType(),
                 command.targetId(),
-                command.interactionAction());
+                command.interactionAction(),
+                command.channel());
     }
 
     private Flux<ChatEvent> executeClaimedContinuation(ContinuationStartContext context,
@@ -454,15 +455,17 @@ final class InteractionContinuationCoordinator {
         if (hasText(command.sessionId()) && !command.sessionId().equals(interaction.sessionId())) {
             throw new IllegalArgumentException("sessionId 与 Interaction 所属会话不一致");
         }
-        if (command.appId() == null && command.appName() == null) {
+        boolean hasAppTag = command.appId() != null || command.appName() != null;
+        if (!hasText(command.channel()) && !hasAppTag) {
             return;
         }
-        if (!hasText(command.sessionId())) {
+        if (hasAppTag && !hasText(command.sessionId())) {
             throw new IllegalArgumentException("CONTINUE_INTERACTION 携带 App Tag 时 sessionId 不能为空");
         }
-        sessionService.validateAppTag(
+        sessionService.validateSessionContext(
                 user,
                 interaction.sessionId(),
+                command.channel(),
                 command.appId(),
                 command.appName());
     }

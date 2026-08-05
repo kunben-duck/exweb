@@ -1,9 +1,12 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.application.config.SessionTitleProperties;
+import com.huawei.it.ex.one.application.integration.conversation.SessionAppCategory;
+import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
@@ -111,6 +114,53 @@ class SessionApplicationServiceTest {
     }
 
     @Test
+    void runChannelCreatesMobileSessionAndValidatesOnlyExplicitExistingChannel() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        SessionApplicationService service = service(sessions, messages);
+
+        ChatSession mobile = service.loadOrCreate(new ChatCommand(
+                "mobile-command", "tenant1", "user1", null, null, " mobile ",
+                "移动端问题", List.of(), Map.of()));
+        ChatSession web = service.loadOrCreate(new ChatCommand(
+                "web-command", "tenant1", "user1", null, null, null,
+                "PC问题", List.of(), Map.of()));
+
+        assertThat(mobile.channel()).isEqualTo("mobile");
+        assertThat(web.channel()).isEqualTo("web");
+        assertThat(service.loadOrCreate(new ChatCommand(
+                "next-mobile", "tenant1", "user1", mobile.id(), null, "mobile",
+                "继续提问", List.of(), Map.of())).id()).isEqualTo(mobile.id());
+        assertThat(service.loadOrCreate(new ChatCommand(
+                "pc-all", "tenant1", "user1", mobile.id(), null, null,
+                "PC继续提问", List.of(), Map.of())).id()).isEqualTo(mobile.id());
+        assertThatThrownBy(() -> service.loadOrCreate(new ChatCommand(
+                "wrong-channel", "tenant1", "user1", mobile.id(), null, "web",
+                "错误渠道", List.of(), Map.of())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("channel 与已有会话不一致");
+    }
+
+    @Test
+    void interactionSessionContextValidatesChannelAndAppTagWithOneLookup() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        ChatSession session = sessions.save(sessionWithChannel(
+                "mobile-fund", "移动资金分析", "fund-app", "mobile", Instant.now()));
+        SessionApplicationService service = service(sessions, messages);
+
+        service.validateSessionContext(user(), session.id(), " mobile ", "fund-app", "应用");
+
+        assertThat(sessions.ownerLookupCalls).hasValue(1);
+        assertThatCode(() -> service.validateSessionContext(user(), session.id(), "  ", null, null))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> service.validateSessionContext(
+                user(), session.id(), "web", "fund-app", "应用"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("channel 与已有会话不一致");
+    }
+
+    @Test
     void messageReadWatermarksAreMonotonicClampedAndDoNotReorderSession() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
@@ -195,6 +245,39 @@ class SessionApplicationServiceTest {
     }
 
     @Test
+    void channelCombinesWithAppAndTitleFiltersForBothPaginationModes() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        Instant now = Instant.now();
+        sessions.save(sessionWithChannel(
+                "mobile-fund", "移动利润分析", "fund-app", "mobile", now.plusSeconds(3)));
+        sessions.save(sessionWithChannel(
+                "web-fund", "PC利润分析", "fund-app", "web", now.plusSeconds(2)));
+        sessions.save(sessionWithChannel(
+                "mobile-tax", "移动税务", "tax-app", "mobile", now.plusSeconds(1)));
+        SessionApplicationService service = service(sessions, messages);
+
+        assertThat(service.listSessions(
+                user(), new SessionListFilter("fund-app", "利润", "mobile"), null, 20).items())
+                .extracting(ChatSession::id)
+                .containsExactly("mobile-fund");
+        ChatSessionNumberPage page = service.listSessionsByPage(
+                user(), new SessionListFilter("fund-app", "利润", "mobile"), 1, 20);
+        assertThat(page.items()).extracting(ChatSession::id).containsExactly("mobile-fund");
+        assertThat(page.totalRows()).isEqualTo(1);
+        assertThat(service.listSessions(user(), SessionListFilter.empty(), null, 20).items())
+                .extracting(ChatSession::id)
+                .containsExactlyInAnyOrder("mobile-fund", "web-fund", "mobile-tax");
+        assertThat(service.listSessions(
+                user(), new SessionListFilter(null, null, "   "), null, 20).items())
+                .extracting(ChatSession::id)
+                .containsExactlyInAnyOrder("mobile-fund", "web-fund", "mobile-tax");
+        assertThat(service.listSessions(
+                user(), new SessionListFilter(null, null, "Mobile"), null, 20).items())
+                .isEmpty();
+    }
+
+    @Test
     void appCategoriesAreOwnerScopedDeduplicatedAndSortedByLatestActivity() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
@@ -228,6 +311,25 @@ class SessionApplicationServiceTest {
                         "a-app|null");
         assertThat(service.listSessionApps(new UserContext("tenant1", "missing-user", "Missing User")))
                 .isEmpty();
+    }
+
+    @Test
+    void appCategoriesCanBeFilteredByChannel() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        Instant now = Instant.now();
+        sessions.save(sessionWithChannel(
+                "mobile-fund", "移动资金", "fund-app", "mobile", now.plusSeconds(2)));
+        sessions.save(sessionWithChannel(
+                "web-tax", "PC税务", "tax-app", "web", now.plusSeconds(3)));
+        SessionApplicationService service = service(sessions, messages);
+
+        assertThat(service.listSessionApps(user(), "mobile"))
+                .extracting(SessionAppCategory::appId)
+                .containsExactly("fund-app");
+        assertThat(service.listSessionApps(user(), null))
+                .extracting(SessionAppCategory::appId)
+                .containsExactly("tax-app", "fund-app");
     }
 
     @Test
@@ -724,6 +826,12 @@ class SessionApplicationServiceTest {
                 null, id, null, null, 0L, null, updatedAt.minusSeconds(1), updatedAt);
     }
 
+    private ChatSession sessionWithChannel(
+            String id, String title, String appId, String channel, Instant updatedAt) {
+        return new ChatSession(id, "tenant1", "user1", title, "ACTIVE", channel, appId, "应用",
+                null, id, null, null, 0L, null, updatedAt.minusSeconds(1), updatedAt);
+    }
+
     private SessionApplicationService service(InMemorySessionRepository sessions, InMemoryMessageRepository messages) {
         return new SessionApplicationService(
                 sessions,
@@ -778,6 +886,7 @@ class SessionApplicationServiceTest {
 
     private static class InMemorySessionRepository implements SessionRepository {
         private final Map<String, ChatSession> sessions = new HashMap<>();
+        private final AtomicInteger ownerLookupCalls = new AtomicInteger();
 
         @Override
         public Optional<ChatSession> findById(String sessionId) {
@@ -786,6 +895,7 @@ class SessionApplicationServiceTest {
 
         @Override
         public Optional<ChatSession> findByTenantIdAndUserIdAndId(String tenantId, String userId, String sessionId) {
+            ownerLookupCalls.incrementAndGet();
             return findById(sessionId)
                     .filter(session -> tenantId.equals(session.tenantId()))
                     .filter(session -> userId.equals(session.userId()));

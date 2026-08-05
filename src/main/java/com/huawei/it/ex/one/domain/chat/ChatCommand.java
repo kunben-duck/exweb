@@ -18,7 +18,7 @@ import java.util.Map;
  * @param userId 用户标识；进入 application 后会被服务端身份上下文覆盖。
  * @param sessionId 前端聊天会话标识。
  * @param conversationId 前端对话标识，通常与 sessionId 一致或为空。
- * @param channel 请求来源渠道，当前正式版固定为 web，保留用于会话审计。
+ * @param channel 请求来源渠道；为空时自动创建的会话使用 web，已有会话仅校验显式传入值。
  * @param message 本轮用户输入文本。
  * @param attachments 本轮关联附件引用。
  * @param metadata 前端或上游传入的扩展元数据。

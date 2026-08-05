@@ -61,10 +61,12 @@ public interface ChatSessionMapper {
      *
      * @param tenantId 租户标识。
      * @param userId 用户标识。
+     * @param channel 可选会话来源渠道精确过滤条件。
      * @return 已去重并按最近活动时间倒序排列的应用分类。
      */
     List<ChatSessionAppRow> findAppsByOwner(@Param("tenantId") String tenantId,
-                                            @Param("userId") String userId);
+                                            @Param("userId") String userId,
+                                            @Param("channel") String channel);
 
     /**
      * 游标分页查询当前用户未删除会话。
@@ -73,6 +75,7 @@ public interface ChatSessionMapper {
      * @param userId 用户标识。
      * @param appId 可选应用标识过滤条件。
      * @param titlePattern 可选、已转义的标题包含匹配参数。
+     * @param channel 可选会话来源渠道精确过滤条件。
      * @param cursorUpdatedAt 上一页最后一条会话的更新时间，可为空。
      * @param cursorId 上一页最后一条会话 ID，可为空。
      * @param limit 最大返回条数。
@@ -82,6 +85,7 @@ public interface ChatSessionMapper {
                                          @Param("userId") String userId,
                                          @Param("appId") String appId,
                                          @Param("titlePattern") String titlePattern,
+                                         @Param("channel") String channel,
                                          @Param("cursorUpdatedAt") Instant cursorUpdatedAt,
                                          @Param("cursorId") String cursorId,
                                          @Param("limit") int limit);
@@ -93,12 +97,14 @@ public interface ChatSessionMapper {
      * @param userId 用户标识。
      * @param appId 可选应用标识过滤条件。
      * @param titlePattern 可选、已转义的标题包含匹配参数。
+     * @param channel 可选会话来源渠道精确过滤条件。
      * @return 会话总数。
      */
     long countPageByOwner(@Param("tenantId") String tenantId,
                           @Param("userId") String userId,
                           @Param("appId") String appId,
-                          @Param("titlePattern") String titlePattern);
+                          @Param("titlePattern") String titlePattern,
+                          @Param("channel") String channel);
 
     /**
      * 页码式查询当前用户未删除会话。
@@ -107,6 +113,7 @@ public interface ChatSessionMapper {
      * @param userId 用户标识。
      * @param appId 可选应用标识过滤条件。
      * @param titlePattern 可选、已转义的标题包含匹配参数。
+     * @param channel 可选会话来源渠道精确过滤条件。
      * @param limit 本页最大返回数量。
      * @param offset 分页偏移量。
      * @return 会话列表。
@@ -115,6 +122,7 @@ public interface ChatSessionMapper {
                                                @Param("userId") String userId,
                                                @Param("appId") String appId,
                                                @Param("titlePattern") String titlePattern,
+                                               @Param("channel") String channel,
                                                @Param("limit") int limit,
                                                @Param("offset") long offset);
 

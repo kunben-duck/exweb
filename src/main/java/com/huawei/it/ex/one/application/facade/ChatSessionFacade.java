@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.facade;
 
 import com.huawei.it.ex.one.application.integration.conversation.SessionAppCategory;
+import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePage;
@@ -79,6 +80,16 @@ public interface ChatSessionFacade {
         return listSessions(user, appId, cursor, limit);
     }
 
+    /** 按组合过滤条件查询当前用户的会话列表。 */
+    default ChatSessionPage listSessions(
+            UserContext user, SessionListFilter filter, String cursor, int limit) {
+        SessionListFilter effectiveFilter = filter == null ? SessionListFilter.empty() : filter;
+        if (effectiveFilter.channel() != null && !effectiveFilter.channel().isBlank()) {
+            throw new UnsupportedOperationException("当前会话实现不支持 channel 过滤");
+        }
+        return listSessions(user, effectiveFilter.appId(), effectiveFilter.title(), cursor, limit);
+    }
+
     /**
      * 按页码查询当前用户的会话列表。
      *
@@ -116,6 +127,16 @@ public interface ChatSessionFacade {
         return listSessionsByPage(user, appId, curPage, pageSize);
     }
 
+    /** 按组合过滤条件执行页码分页查询。 */
+    default ChatSessionNumberPage listSessionsByPage(
+            UserContext user, SessionListFilter filter, int curPage, int pageSize) {
+        SessionListFilter effectiveFilter = filter == null ? SessionListFilter.empty() : filter;
+        if (effectiveFilter.channel() != null && !effectiveFilter.channel().isBlank()) {
+            throw new UnsupportedOperationException("当前会话实现不支持 channel 过滤");
+        }
+        return listSessionsByPage(user, effectiveFilter.appId(), effectiveFilter.title(), curPage, pageSize);
+    }
+
     /**
      * 查询当前用户非删除会话中的全部应用分类。
      *
@@ -124,6 +145,14 @@ public interface ChatSessionFacade {
      */
     default List<SessionAppCategory> listSessionApps(UserContext user) {
         throw new UnsupportedOperationException("当前会话实现不支持 App 分类查询");
+    }
+
+    /** 按可选渠道查询当前用户非删除会话中的应用分类。 */
+    default List<SessionAppCategory> listSessionApps(UserContext user, String channel) {
+        if (channel != null && !channel.isBlank()) {
+            throw new UnsupportedOperationException("当前会话实现不支持 App 分类 channel 过滤");
+        }
+        return listSessionApps(user);
     }
 
     /**

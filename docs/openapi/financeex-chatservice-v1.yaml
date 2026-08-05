@@ -135,6 +135,15 @@ paths:
                   message: 帮我分析本季度利润变化
                   language: zh-CN
                   metadata: {}
+              mobileNextWithNewSession:
+                summary: 移动端自动创建 mobile 会话并提问
+                value:
+                  commandId: cmd_mobile_001
+                  sessionId: null
+                  runMode: NEXT
+                  message: 查询资产负债率
+                  channel: mobile
+                  metadata: {}
               nextAttachmentOnly:
                 summary: 普通 NEXT 附件-only；历史 user content 保存为空
                 value:
@@ -589,7 +598,7 @@ paths:
               $ref: '#/components/schemas/CreateChatSessionRequest'
             example:
               title: 财务分析
-              channel: WEB
+              channel: web
               appId: finance-web
               appName: 财经助手
       responses:
@@ -604,15 +613,16 @@ paths:
       operationId: listChatSessionsByCursor
       summary: 游标分页查询会话
       description: >-
-        appId 使用区分大小写的精确匹配；title 使用不区分大小写的包含匹配，两个条件同时存在时取交集。
-        不使用 title 时继续生成兼容的 v2 游标；使用 title 时生成同时绑定 appId 和规范化标题的 v3 游标。
+        appId 和 channel 使用区分大小写的精确匹配；title 使用不区分大小写的包含匹配，多个条件同时存在时取交集。
+        不使用 channel 时继续生成兼容的 v2/v3 游标；使用 channel 时生成同时绑定 appId、规范化标题和 channel 的 v4 游标。
       parameters:
         - $ref: '#/components/parameters/AppIdQuery'
         - $ref: '#/components/parameters/SessionTitleQuery'
+        - $ref: '#/components/parameters/SessionChannelQuery'
         - name: cursor
           in: query
           required: false
-          description: 上一页游标；必须继续使用生成该游标时相同的 appId 和 title 条件
+          description: 上一页游标；必须继续使用生成该游标时相同的 appId、title 和 channel 条件
           schema:
             type: string
         - name: limit
@@ -667,10 +677,11 @@ paths:
       tags: [Chat Sessions & Messages]
       operationId: listChatSessionsByPage
       summary: 页码分页查询会话
-      description: appId 使用区分大小写的精确匹配；title 使用不区分大小写的包含匹配，两个条件同时存在时取交集。
+      description: appId 和 channel 使用区分大小写的精确匹配；title 使用不区分大小写的包含匹配，多个条件同时存在时取交集。
       parameters:
         - $ref: '#/components/parameters/AppIdQuery'
         - $ref: '#/components/parameters/SessionTitleQuery'
+        - $ref: '#/components/parameters/SessionChannelQuery'
         - name: curPage
           in: query
           required: false
@@ -707,7 +718,10 @@ paths:
       summary: 查询会话应用分类
       description: >-
         返回当前用户 ACTIVE 和 ARCHIVED 会话中的全部应用分类，排除 DELETED 和未设置 appId 的会话。
-        相同 appId 合并，appName 取最近更新会话中的非空快照，并按分类最近活动时间倒序返回。
+        可按区分大小写的 channel 精确过滤；相同 appId 合并，appName 取最近更新会话中的非空快照，
+        并按分类最近活动时间倒序返回。
+      parameters:
+        - $ref: '#/components/parameters/SessionChannelQuery'
       responses:
         '200':
           description: 当前用户的会话应用分类
@@ -1448,6 +1462,15 @@ components:
         type: string
         maxLength: 256
         example: 利润
+    SessionChannelQuery:
+      name: channel
+      in: query
+      required: false
+      description: 会话来源渠道；trim 后为空表示不筛选，使用区分大小写的精确匹配；移动端统一传 mobile
+      schema:
+        type: string
+        maxLength: 64
+        example: mobile
 
   responses:
     BadRequest:
@@ -1869,6 +1892,14 @@ components:
           description: |
             会话标题总结语言。服务端 trim 后为空时使用配置的默认语言；该字段不进入 metadata、
             IntentAgent、DomainAgent 或 Relay 请求，也不影响本轮路由和回答。
+        channel:
+          type: string
+          maxLength: 64
+          nullable: true
+          description: |
+            会话来源渠道。自动创建会话时保存该值，未传时默认 web；已有会话中显式提交时必须与
+            会话原值完全一致，CONTINUE_INTERACTION 同样在 claim 前校验。PC 端省略该字段，
+            移动端统一提交小写 mobile。
       x-interaction-rules:
         ordinaryIntentClarification: questionnaireAnswers 或有效 attachments；不得提交 message。
         ambiguousCandidate: targetType=DOMAIN_AGENT 且 targetId 必须精确匹配服务端候选 skillId。
@@ -2570,7 +2601,9 @@ components:
           nullable: true
         channel:
           type: string
+          maxLength: 64
           nullable: true
+          description: 会话来源渠道；省略或空白时默认 web，移动端显式传小写 mobile
         appId:
           type: string
           maxLength: 128

@@ -24,8 +24,19 @@ public record ChatInteractionResponseCommand(
         AgentModeProfile agentMode,
         String targetType,
         String targetId,
-        String interactionAction
+        String interactionAction,
+        String channel
 ) {
+    /** 兼容尚未携带会话 channel 的完整内部命令。 */
+    public ChatInteractionResponseCommand(
+            UserContext user, String interactionId, Boolean approved, String scope,
+            Map<String, Object> questionnaireAnswers, Map<String, Object> metadata,
+            String sessionId, String appId, String appName, List<AttachmentRef> attachments,
+            AgentModeProfile agentMode, String targetType, String targetId, String interactionAction) {
+        this(user, interactionId, approved, scope, questionnaireAnswers, metadata,
+                sessionId, appId, appName, attachments, agentMode, targetType, targetId, interactionAction, null);
+    }
+
     /** 兼容尚未携带 AMBIGUOUS_ROUTE 选择字段的完整内部命令。 */
     public ChatInteractionResponseCommand(
             UserContext user, String interactionId, Boolean approved, String scope,
@@ -69,6 +80,7 @@ public record ChatInteractionResponseCommand(
         targetType = normalize(targetType);
         targetId = normalize(targetId);
         interactionAction = normalize(interactionAction);
+        channel = normalize(channel);
     }
 
     private static String normalize(String value) {

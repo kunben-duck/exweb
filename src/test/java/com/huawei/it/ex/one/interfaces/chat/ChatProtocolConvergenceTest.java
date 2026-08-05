@@ -47,13 +47,30 @@ class ChatProtocolConvergenceTest {
         CreateChatRunRequest request = new CreateChatRunRequest(
                 "cmd1", "session1", null, "分析资金情况", "NEXT", null, null, null,
                 null, null, null, null, null, List.of(), null, null, null,
-                Map.of("scene", "fund"), null, null, null, null, " en-US ");
+                Map.of("scene", "fund"), null, null, null, null, " en-US ", " mobile ");
 
         ChatCommand command = translator.toCommand(request);
 
         assertThat(command.language()).isEqualTo("en-US");
+        assertThat(command.channel()).isEqualTo("mobile");
         assertThat(command.metadata()).containsExactlyEntriesOf(Map.of("scene", "fund"));
         assertThat(command.metadata()).doesNotContainKey("language");
+    }
+
+    @Test
+    void runChannelIsLimitedToSixtyFourCharacters() {
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1", null, null, "移动端问题", "NEXT", null, null, null,
+                null, null, null, null, null, List.of(), null, null, null,
+                Map.of(), null, null, null, null, null, "m".repeat(65));
+
+        var violations = jakarta.validation.Validation.buildDefaultValidatorFactory()
+                .getValidator()
+                .validate(request);
+
+        assertThat(violations)
+                .extracting(violation -> violation.getPropertyPath().toString())
+                .contains("channel");
     }
 
     @Test
@@ -123,7 +140,7 @@ class ChatProtocolConvergenceTest {
         var command = translator.toCommand(request);
 
         assertThat(command.commandId()).isEqualTo("cmd1");
-        assertThat(command.channel()).isEqualTo("web");
+        assertThat(command.channel()).isNull();
         assertThat(command.message()).isEqualTo("分析一下这个文档");
         assertThat(command.attachments()).hasSize(1);
         assertThat(command.metadata()).containsExactlyEntriesOf(Map.of("clientMessageId", "front1"));

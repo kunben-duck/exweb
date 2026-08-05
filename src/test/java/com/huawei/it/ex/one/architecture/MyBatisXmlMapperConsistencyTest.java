@@ -303,6 +303,9 @@ class MyBatisXmlMapperConsistencyTest {
         assertSessionTitleFilter(mapper, "findPageByOwner");
         assertSessionTitleFilter(mapper, "countPageByOwner");
         assertSessionTitleFilter(mapper, "findNumberPageByOwner");
+        assertSessionChannelFilter(mapper, "findPageByOwner");
+        assertSessionChannelFilter(mapper, "countPageByOwner");
+        assertSessionChannelFilter(mapper, "findNumberPageByOwner");
     }
 
     @Test
@@ -321,9 +324,17 @@ class MyBatisXmlMapperConsistencyTest {
                 .contains("WHERE tenant_id = #{tenantId}")
                 .contains("AND user_id = #{userId}")
                 .contains("AND status &lt;&gt; 'DELETED'")
+                .contains("AND channel = #{channel}")
                 .contains("AND app_id IS NOT NULL")
                 .contains("ORDER BY latest_activity_at DESC, app_id ASC")
                 .doesNotContain("sessionColumns", "metadata_json", "SELECT *");
+    }
+
+    private void assertSessionChannelFilter(String mapper, String statementId) {
+        String statement = statement(mapper, "select", statementId);
+        assertThat(statement)
+                .contains("channel != null and channel != ''")
+                .contains("AND channel = #{channel}");
     }
 
     @Test

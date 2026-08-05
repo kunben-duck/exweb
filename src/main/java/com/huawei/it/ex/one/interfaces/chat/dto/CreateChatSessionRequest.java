@@ -12,6 +12,7 @@ import jakarta.validation.constraints.Size;
  */
 public record CreateChatSessionRequest(
         String title,
+        @Size(max = 64, message = "channel 长度不能超过 64")
         String channel,
         @Size(max = 128, message = "appId 长度不能超过 128")
         String appId,

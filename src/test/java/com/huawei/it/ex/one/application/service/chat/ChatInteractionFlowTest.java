@@ -234,7 +234,7 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
                 new com.huawei.it.ex.one.application.config.DomainAgentProperties());
         Instant now = Instant.now();
         ChatSession session = sessions.save(new ChatSession("session1", user.tenantId(), user.ownerUserId(),
-                "测试会话", "ACTIVE", "web", "msg-user", "msg-assistant", null, null, 1L,
+                "测试会话", "ACTIVE", "mobile", "msg-user", "msg-assistant", null, null, 1L,
                 null, now, now));
         messages.save(new ChatMessage("msg-user", user.tenantId(), user.ownerUserId(), session.id(),
                 null, 1L, 0, 1, "user", "原问题", null, "run-source",
@@ -252,7 +252,7 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
         interactions.insert(waiting);
 
         StepVerifier.create(service.startRun(user, new ChatCommand(
-                        null, null, null, session.id(), null, "web", null, List.of(), Map.of(),
+                        null, null, null, session.id(), null, null, null, List.of(), Map.of(),
                         null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
                         null, waiting.id(), null, null, Map.of("请补充范围", "账务")),
                         RuntimeForwardHeaders.empty()))
@@ -271,7 +271,7 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
     }
 
     @Test
-    void interactionAppTagMismatchIsRejectedBeforeClaim() {
+    void interactionSessionContextMismatchIsRejectedBeforeClaim() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryRunRepository runs = new InMemoryRunRepository();
@@ -280,7 +280,7 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
         UserContext user = new UserContext("tenant1", "user1", "User One");
         Instant now = Instant.now();
         ChatSession session = sessions.save(new ChatSession(
-                "session1", user.tenantId(), user.ownerUserId(), "测试会话", "ACTIVE", "web",
+                "session1", user.tenantId(), user.ownerUserId(), "测试会话", "ACTIVE", "mobile",
                 "fund-app", "资金助手", null, "session1", null, null, 0L, null, now, now));
         ChatInteractionRequest waiting = new ChatInteractionRequest(
                 "interaction1", user.tenantId(), user.ownerUserId(), session.id(), "run-source", null,
@@ -296,7 +296,7 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
                 interactions);
 
         assertThatThrownBy(() -> service.startRun(user, new ChatCommand(
-                        null, null, null, "another-session", null, "web", null, List.of(), Map.of(),
+                        null, null, null, "another-session", null, "mobile", null, List.of(), Map.of(),
                         null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
                         null, waiting.id(), null, null, Map.of("请补充范围", "账务")),
                         RuntimeForwardHeaders.empty()).block())
@@ -304,12 +304,28 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
                 .hasMessageContaining("sessionId 与 Interaction 所属会话不一致");
 
         assertThatThrownBy(() -> service.startRun(user, new ChatCommand(
-                        null, null, null, session.id(), null, "web", null, List.of(), Map.of(),
+                        null, null, null, session.id(), null, "mobile", null, List.of(), Map.of(),
                         null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
                         null, waiting.id(), null, null, Map.of("请补充范围", "账务"),
                         "tax-app", "税务助手"), RuntimeForwardHeaders.empty()).block())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("appId 与已有会话不一致");
+
+        assertThatThrownBy(() -> service.startRun(user, new ChatCommand(
+                        null, null, null, session.id(), null, "web", null, List.of(), Map.of(),
+                        null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
+                        null, waiting.id(), null, null, Map.of("请补充范围", "账务")),
+                        RuntimeForwardHeaders.empty()).block())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("channel 与已有会话不一致");
+
+        assertThatThrownBy(() -> service.startRun(user, new ChatCommand(
+                        null, null, null, session.id(), null, "Mobile", null, List.of(), Map.of(),
+                        null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
+                        null, waiting.id(), null, null, Map.of("请补充范围", "账务")),
+                        RuntimeForwardHeaders.empty()).block())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("channel 与已有会话不一致");
 
         assertThat(interactions.claimCalls).hasValue(0);
         assertThat(interactions.requests.get(waiting.id()).status()).isEqualTo(ChatInteractionStatus.WAITING);

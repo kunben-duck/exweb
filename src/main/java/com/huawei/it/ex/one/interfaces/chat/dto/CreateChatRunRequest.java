@@ -37,6 +37,7 @@ import java.util.Map;
  * @param agentMode 可选 Agent 模式完整快照；空 selections 表示显式清除。
  * @param interactionAction Interaction 专用动作；当前仅 AMBIGUOUS_ROUTE 支持 AUTO_SELECT。
  * @param language 会话标题总结语言；为空时使用服务端默认语言，不进入下游请求。
+ * @param channel 会话来源渠道；仅在自动创建会话或校验已有会话时使用，为空时新会话默认 web。
  */
 public record CreateChatRunRequest(
         @Size(max = 128, message = "commandId 长度不能超过 128")
@@ -83,8 +84,24 @@ public record CreateChatRunRequest(
         @Size(max = 32, message = "interactionAction 长度不能超过 32")
         String interactionAction,
         @Size(max = 32, message = "language 长度不能超过 32")
-        String language
+        String language,
+        @Size(max = 64, message = "channel 长度不能超过 64")
+        String channel
 ) {
+    /** 兼容尚未携带会话渠道的完整请求构造器。 */
+    public CreateChatRunRequest(
+            String commandId, String sessionId, String conversationId, String message, String runMode,
+            String parentMessageId, String editedMessageId, String regeneratedMessageId, Boolean forceReroute,
+            String interactionId, Boolean approved, String scope, Map<String, Object> questionnaireAnswers,
+            List<ChatAttachmentDto> attachments, String targetType, String targetId,
+            ChatSelectedIntentDto selectedIntent, Map<String, Object> metadata, String appId, String appName,
+            ChatAgentModeDto agentMode, String interactionAction, String language) {
+        this(commandId, sessionId, conversationId, message, runMode, parentMessageId, editedMessageId,
+                regeneratedMessageId, forceReroute, interactionId, approved, scope, questionnaireAnswers,
+                attachments, targetType, targetId, selectedIntent, metadata, appId, appName, agentMode,
+                interactionAction, language, null);
+    }
+
     /** 兼容尚未携带标题总结语言的完整请求构造器。 */
     public CreateChatRunRequest(
             String commandId, String sessionId, String conversationId, String message, String runMode,
@@ -145,7 +162,7 @@ public record CreateChatRunRequest(
     public CreateChatRunRequest(String commandId, String sessionId, String conversationId, String message,
                                 List<ChatAttachmentDto> attachments, Map<String, ?> metadata) {
         this(commandId, sessionId, conversationId, message, null, null, null, null, null, null, null, null, null,
-                attachments, null, null, null, copyMetadata(metadata), null, null, null, null, null);
+                attachments, null, null, null, copyMetadata(metadata), null, null, null, null, null, null);
     }
 
     private static Map<String, Object> copyMetadata(Map<String, ?> metadata) {

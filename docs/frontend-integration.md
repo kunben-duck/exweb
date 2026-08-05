@@ -190,8 +190,8 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 接口 | 请求字段 | 响应字段 | 后续关联 |
 | --- | --- | --- | --- |
 | `POST /chat/sessions` | Body：`title` 会话标题，可空；`channel` 来源渠道，可空 | `ChatSessionDto` 全字段 | 使用 `sessionId` 作为会话路由和后续 run 入参 |
-| `GET /chat/sessions` | Query：`limit` 页大小；`cursor` 上一页游标 | `items[]`、`nextCursor`；item 带 `firstAssistantAnswer` | 游标分页；`nextCursor` 查下一页；`sessionId` 用于会话详情、历史消息和 stream-status |
-| `GET /chat/sessions/page` | Query：`curPage` 当前页，默认 1；`pageSize` 页大小，默认 20 | `items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；item 带 `firstAssistantAnswer` | 页码分页；适合传统分页组件，旧游标接口保持不变 |
+| `GET /chat/sessions` | Query：`appId/title/channel` 可选；`limit` 页大小；`cursor` 上一页游标 | `items[]`、`nextCursor`；item 带 `firstAssistantAnswer` | 移动端传 `channel=mobile`；后续页必须沿用生成游标时的全部过滤条件 |
+| `GET /chat/sessions/page` | Query：`appId/title/channel` 可选；`curPage` 当前页，默认 1；`pageSize` 页大小，默认 20 | `items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；item 带 `firstAssistantAnswer` | 移动端传 `channel=mobile`；总数和数据使用相同过滤条件 |
 | `GET /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto` | 只拿元数据，不返回历史和流状态 |
 | `POST /chat/sessions/{sessionId}/read` | Path：`sessionId`；Body：`readThroughSeq` 必填且不小于 0 | 更新后的 `ChatSessionDto` | 历史消息或实时终态实际展示后提交；服务端不允许回退或越过最新水位 |
 | `GET /chat/sessions/{sessionId}/messages` | Path：`sessionId`；Query：`leafMessageId` 可选，`cursor` 保留，`limit` | `ChatMessagePageDto.items[]`、`nextCursor`；item 可能带 `versionInfo` | 普通聊天页主接口；用 `messageId` 做反馈、分支和重新生成，用 `versionInfo.variants[].switchLeafMessageId` 切换版本 |
@@ -204,7 +204,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `POST /chat/sessions/{sessionId}/restore` | Path：`sessionId` | `ChatSessionDto(status=ACTIVE)` | 恢复后可继续发 run |
 | `DELETE /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto(status=DELETED)` | 删除后清理本地当前会话状态和订阅 |
 | `DELETE /chat/sessions` | Body：`sessionIds[]` | `deletedCount`、`items[]` | 批量删除成功后从列表移除这些 session |
-| `POST /v1/chat/runs` | Body：`commandId`、`sessionId`、`conversationId`、`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`interactionId`、`approved`、`scope`、`questionnaireAnswers`、`attachments[]`、`targetType`、`targetId`、`metadata` | `runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId` | 用 `streamTopicId` 订阅；用 `runId` stop/恢复/反馈 |
+| `POST /v1/chat/runs` | Body：`commandId`、`sessionId`、`conversationId`、`message`、`runMode`、`channel`、消息树、Interaction、附件和路由字段 | `runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId` | 移动端统一传 `channel=mobile`；省略时自动创建的会话默认为 `web` |
 | `POST /v1/chat/runs/{runId}/stop` | Path：运行态传 `activeRunId`，等待态传 `waitingSourceRunId`；Header：可选 Cookie | 原有 run 字段，以及可选 `interactionId/interactionStatus/interactionCancelledAt/effectiveRunId` | 运行态用 Event Resume 补齐 `run.cancelled`；等待态不新增事件，stop 后重新查询 `stream-status` |
 | `GET /chat/sessions/{sessionId}/events/resume` | Path：`sessionId`；Query：`afterSeq` | SSE data：`ConversationTurnStreamDto` | 补会话缺失事件；`ConversationTurnStreamDto.payload.encodedItem.data` 中的 ChatEvent 更新本地 `lastSeq` |
 | `GET /chat/runs/{runId}/events/resume` | Path：`runId`；Query：`afterSeq` | SSE data：`ConversationTurnStreamDto`，active run 会持续到终态 | 新页签/跨设备恢复 active run 首选；会额外发送 heartbeat/done |
@@ -230,9 +230,9 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
 | `POST /v1/chat/sessions` | 用户点击“新建会话”时显式创建。 | JSON body：`title/channel/appId/appName` 均可选。 | `ChatSessionDto`：包含 `appId/appName`。 | `appName` 不能脱离 `appId`；前端不传租户和用户。 |
-| `GET /v1/chat/sessions/apps` | 初始化会话分类栏。 | 无。 | `ChatSessionAppListDto`：`items[].appId/appName`。 | 只返回当前用户非删除会话中的分类；不包含未分类项，不分页。 |
-| `GET /v1/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`appId/title` 可选；`limit` 默认 20；`cursor` 可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每项含 `appId/appName/firstAssistantAnswer`。 | `appId` 区分大小写并精确匹配；`title` 大小写不敏感并执行包含搜索；后续页必须沿用相同过滤条件。 |
-| `GET /v1/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`appId/title` 可选；`curPage` 默认 1；`pageSize` 默认 20，最大 200。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`。 | `totalRows/totalPages` 按相同 `appId + title` 条件计算；不返回 `DELETED` 会话。 |
+| `GET /v1/chat/sessions/apps` | 初始化会话分类栏。 | Query：`channel` 可选。 | `ChatSessionAppListDto`：`items[].appId/appName`。 | 移动端传 `mobile`；PC 端省略后返回全部渠道分类。 |
+| `GET /v1/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`appId/title/channel` 可选；`limit` 默认 20；`cursor` 可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每项含 `appId/appName/firstAssistantAnswer`。 | `appId/channel` 区分大小写并精确匹配；`title` 大小写不敏感；后续页必须沿用相同过滤条件。 |
+| `GET /v1/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`appId/title/channel` 可选；`curPage` 默认 1；`pageSize` 默认 20，最大 200。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`。 | `totalRows/totalPages` 按相同 `appId + title + channel` 条件计算；不返回 `DELETED` 会话。 |
 | `GET /v1/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
 | `POST /v1/chat/sessions/{sessionId}/read` | 最新历史消息或实时 assistant 终态已经展示。 | Path：`sessionId`；JSON body：`readThroughSeq` 必填、最小为 0。 | 更新后的 `ChatSessionDto`。 | 提交列表/详情中观察到的 `latestMessageSeq`，或实时 `run.completed/run.waiting_user` 的 sequence；不会更新会话 `updatedAt`。 |
 | `GET /v1/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 保留。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 不传 `leafMessageId` 时返回当前 active path；传入时返回 root 到该 leaf 的路径。 |
@@ -253,7 +253,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /v1/chat/runs` | 唯一任务提交入口，创建后台 run 或续接 Interaction。 | JSON body：`commandId`、`sessionId`、`conversationId`、`message`、`runMode`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId`、`forceReroute`、`interactionId`、`interactionAction`、`approved`、`scope`、`questionnaireAnswers`、`attachments[]`、`targetType`、`targetId`、`selectedIntent`、`agentMode`、`metadata`、`appId`、`appName`、`language`，各字段是否必填见后文矩阵。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | 不传 `sessionId` 时使用 tag 自动建会话；已有会话中显式传入的 tag 必须与会话快照一致，不一致时不会创建消息或 run。tag 和 `language` 均不进入 metadata 或任何 Agent 请求。其他 runMode 约束不变。 |
+| `POST /v1/chat/runs` | 唯一任务提交入口，创建后台 run 或续接 Interaction。 | JSON body：现有字段外增加可选 `channel`，最大64字符。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | 移动端统一传 `mobile`；自动建会话时保存该值，省略则默认 `web`。已有会话显式传入时必须一致，PC 省略后仍可访问任意渠道。 |
 | `POST /v1/chat/runs/{runId}/stop` | 用户停止运行中的回答，或取消当前会话的等待输入。 | Path：运行态传 `activeRunId`；等待态传 `waitingSourceRunId`。 | `ChatRunStopDto`：原有字段，以及 `waitingUserInput`、`interactionId`、`interactionStatus`、`interactionCancelledAt`、`effectiveRunId`。 | 幂等；停止语义不是关闭 WebSocket。等待态历史 run-A 不改写为 `CANCELLED`。 |
 | `GET /v1/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`；只处理 `stream-item` 中的 `encodedItem.data`。 |
 | `GET /v1/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态，并以 `done` 闭合。live source 异常时当前 tail 会结束且不会自动轮询数据库，前端应使用已处理的最大 `sequence` 重新请求。 |
@@ -294,9 +294,9 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 接口 | 最小入参示例 |
 | --- | --- |
 | `POST /v1/chat/sessions` | Body：`{"title":"资金分析","channel":"web","appId":"fund-app","appName":"资金助手"}`；四个字段都可省略，但 `appName` 不能单独出现。 |
-| `GET /v1/chat/sessions/apps` | 无 Query 和 body；返回当前用户全部非删除会话分类。 |
-| `GET /v1/chat/sessions` | Query：`?appId=fund-app&title=利润&limit=20&cursor=cursor_xxx`；过滤条件均可省略，同一 cursor 不得切换 appId 或 title。 |
-| `GET /v1/chat/sessions/page` | Query：`?appId=fund-app&title=利润&curPage=1&pageSize=20`；`appId/title` 均可省略。 |
+| `GET /v1/chat/sessions/apps` | 移动端 Query：`?channel=mobile`；PC 端不传 channel。 |
+| `GET /v1/chat/sessions` | Query：`?appId=fund-app&title=利润&channel=mobile&limit=20&cursor=cursor_xxx`；过滤条件均可省略，同一 cursor 不得切换 appId、title 或 channel。 |
+| `GET /v1/chat/sessions/page` | Query：`?appId=fund-app&title=利润&channel=mobile&curPage=1&pageSize=20`；`appId/title/channel` 均可省略。 |
 | `GET /v1/chat/sessions/{sessionId}` | Path：`session_xxx`。 |
 | `POST /v1/chat/sessions/{sessionId}/read` | Body：`{"readThroughSeq":63252}`；使用已经实际展示的会话水位或实时终态 sequence。 |
 | `GET /v1/chat/sessions/{sessionId}/messages` | Query：`?limit=50`；查看指定版本路径时传 `?leafMessageId=msg_xxx&limit=50`。 |
@@ -309,7 +309,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `POST /v1/chat/sessions/{sessionId}/restore` | Path：`session_xxx`；无 body。 |
 | `DELETE /v1/chat/sessions/{sessionId}` | Path：`session_xxx`；无 body。 |
 | `DELETE /v1/chat/sessions` | Body：`{"sessionIds":["session_a","session_b"]}`。 |
-| `POST /v1/chat/runs` 普通提问 | 已有会话：`{"sessionId":"session_xxx","runMode":"NEXT","message":"帮我分析一下费用趋势"}`。自动建分组会话：`{"runMode":"NEXT","message":"分析资金趋势","appId":"fund-app","appName":"资金助手"}`。 |
+| `POST /v1/chat/runs` 普通提问 | PC 已有会话：`{"sessionId":"session_xxx","runMode":"NEXT","message":"帮我分析一下费用趋势"}`。移动端自动建会话：`{"runMode":"NEXT","message":"分析资金趋势","channel":"mobile"}`。 |
 | `POST /v1/chat/runs` 用户主动纠正路由 | Body：`{"sessionId":"session_xxx","runMode":"NEXT","message":"重新判断应该由哪个技能处理","forceReroute":true,"metadata":{"lastIntentRejectReason":{"lastIntent":"旧意图","domainRejectMessage":"用户主动重新选择"}}}`；`forceReroute` 为非必填，只有用户主动要求重新路由时传 `true`。 |
 | `POST /v1/chat/runs` 显式 DomainAgent | Body：`{"sessionId":"session_xxx","runMode":"NEXT","message":"查询支付成功率","targetType":"DOMAIN_AGENT","targetId":"skill_xxx","selectedIntent":{"intentId":"payment_success","intentName":"支付成功率"},"metadata":{}}`；`selectedIntent` 可整体省略。 |
 | `POST /v1/chat/runs` 编辑 user | Body：`{"sessionId":"session_xxx","runMode":"EDIT_USER","editedMessageId":"msg_user_old","message":"新的问题"}`。 |
@@ -353,7 +353,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `tenantId` / `userId` | 服务端身份上下文解析出的归属字段，仅用于调试展示，不要回传 |
 | `title` | 会话标题 |
 | `status` | `ACTIVE`、`ARCHIVED`、`DELETED` 等会话状态；`DELETED` 会话对列表和详情不可见 |
-| `channel` | 会话来源渠道，例如 `web`、`web-local-test` |
+| `channel` | 会话来源渠道，例如 `web`、`mobile`、`web-local-test` |
 | `appId` | 可选、大小写敏感的应用分组键；最大 128 字符，未分组会话为 `null` |
 | `appName` | 可选应用展示名称快照；最大 256 字符，创建后不可变，未传为 `null` |
 | `currentLeafMessageId` | 当前激活消息树路径的叶子；历史查询默认返回 root 到该 leaf |
@@ -384,7 +384,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | DTO | 字段 | 含义 |
 | --- | --- | --- |
 | `CreateChatSessionRequest` | `title` | 新会话标题；为空时后端使用默认标题。 |
-| `CreateChatSessionRequest` | `channel` | 会话来源渠道；普通 Web 端可传 `web`，本地联调台可传 `web-local-test`。 |
+| `CreateChatSessionRequest` | `channel` | 会话来源渠道，最大64字符；PC端可省略并默认 `web`，移动端统一传小写 `mobile`。 |
 | `CreateChatSessionRequest` | `appId` | 可选稳定分组键；trim 后保存，空字符串按未传处理。 |
 | `CreateChatSessionRequest` | `appName` | 可选展示名称快照；不能脱离 `appId` 单独使用。 |
 | `UpdateChatSessionRequest` | `title` | 重命名后的会话标题；为空时保留原值。 |
@@ -856,12 +856,12 @@ curl -X POST http://localhost:8080/v1/chat/sessions \
 }
 ```
 
-前端展示可以使用 `sessionId` 作为会话路由参数，并按 `appId` 分组、用 `appName` 展示分组名称。tag 创建后不可变；分支会话自动继承。租户和用户字段只用于调试展示，不应回传给聊天接口。
+前端展示可以使用 `sessionId` 作为会话路由参数，并按 `appId` 分组、用 `appName` 展示分组名称。tag 创建后不可变；分支会话自动继承。移动端创建会话时传 `channel=mobile`，PC端省略后默认创建 `web` 会话。租户和用户字段只用于调试展示，不应回传给聊天接口。
 
 初始化分类栏时查询：
 
 ```bash
-curl "http://localhost:8080/v1/chat/sessions/apps"
+curl "http://localhost:8080/v1/chat/sessions/apps?channel=mobile"
 ```
 
 ```json
@@ -881,12 +881,13 @@ curl "http://localhost:8080/v1/chat/sessions/apps"
 
 分类按各 `appId` 最近一条非删除会话的活动时间倒序返回；时间相同时按 `appId` 升序。同一 `appId`
 只返回一次，`appName` 使用最近更新会话中的非空快照。接口包含 `ACTIVE/ARCHIVED` 会话，排除
-`DELETED` 和未设置 `appId` 的会话；“全部”和“未分类”入口由前端自行增加。
+`DELETED` 和未设置 `appId` 的会话；“全部”和“未分类”入口由前端自行增加。示例中的 `channel=mobile`
+只返回移动端会话，PC端省略该参数即可查询全部渠道。
 
 查询会话列表，游标分页用于无限滚动：
 
 ```bash
-curl "http://localhost:8080/v1/chat/sessions?appId=fund-app&title=%E5%88%A9%E6%B6%A6&limit=20"
+curl "http://localhost:8080/v1/chat/sessions?appId=fund-app&title=%E5%88%A9%E6%B6%A6&channel=mobile&limit=20"
 ```
 
 响应按更新时间倒序返回：
@@ -920,13 +921,14 @@ curl "http://localhost:8080/v1/chat/sessions?appId=fund-app&title=%E5%88%A9%E6%B
 ```
 
 `title` 最大256字符，服务端 trim 后执行大小写不敏感的包含搜索；空白值等同未传，`%`、`_` 和 `!`
-按普通标题字符匹配。`appId` 与 `title` 同时存在时取交集。后续游标页必须继续提交生成游标时相同的
-`appId/title`；切换搜索条件时应丢弃旧 `cursor` 并从第一页重新查询。
+按普通标题字符匹配。`appId`、`title` 与 `channel` 同时存在时取交集；channel 精确匹配并区分大小写。
+后续游标页必须继续提交生成游标时相同的 `appId/title/channel`；切换搜索条件时应丢弃旧 `cursor`
+并从第一页重新查询。带 channel 的查询使用 v4 游标，无 channel 的既有 v2/v3 游标继续兼容。
 
 查询会话列表，页码分页用于传统分页组件：
 
 ```bash
-curl "http://localhost:8080/v1/chat/sessions/page?appId=fund-app&title=%E5%88%A9%E6%B6%A6&curPage=1&pageSize=20"
+curl "http://localhost:8080/v1/chat/sessions/page?appId=fund-app&title=%E5%88%A9%E6%B6%A6&channel=mobile&curPage=1&pageSize=20"
 ```
 
 页码分页响应会返回总行数：
@@ -1262,6 +1264,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `appId` | string | 否 | 会话分组键，最大 128；无 `sessionId` 时保存到新会话，已有会话中显式传入时必须与原值完全一致 |
 | `appName` | string | 否 | 会话分组展示名称快照，最大 256；不能脱离 `appId`，已有会话中显式传入时必须与原值完全一致 |
 | `language` | string | 否 | 会话标题总结语言，最大32字符；trim后为空使用服务端默认 `zh-CN`。不进入 metadata、IntentAgent、DomainAgent 或 Relay 请求，不改变本轮路由和回答 |
+| `channel` | string | 否 | 会话来源渠道，最大64字符。移动端统一传小写 `mobile`；自动创建会话时省略则默认 `web`。已有会话显式传入时必须与会话原值一致，`CONTINUE_INTERACTION` 在 claim 前执行相同校验；PC省略时不限制访问渠道 |
 
 响应：
 

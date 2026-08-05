@@ -55,8 +55,16 @@ public interface SessionRepository {
      * @return 按最近会话活动时间倒序排列的应用分类。
      */
     default List<SessionAppCategory> findAppsByTenantIdAndUserId(String tenantId, String userId) {
+        return findAppsByTenantIdAndUserId(tenantId, userId, null);
+    }
+
+    /** 按可选渠道查询当前用户非删除会话中的应用分类。 */
+    default List<SessionAppCategory> findAppsByTenantIdAndUserId(
+            String tenantId, String userId, String channel) {
+        String normalizedChannel = normalizeFilter(channel);
         Map<String, List<ChatSession>> sessionsByApp = findByTenantIdAndUserId(tenantId, userId).stream()
                 .filter(session -> !"DELETED".equals(session.status()))
+                .filter(session -> normalizedChannel == null || normalizedChannel.equals(session.channel()))
                 .filter(session -> session.appId() != null && !session.appId().isBlank())
                 .collect(Collectors.groupingBy(ChatSession::appId));
         return sessionsByApp.values().stream()
@@ -93,16 +101,20 @@ public interface SessionRepository {
             String tenantId, String userId, SessionListFilter filter, String cursor, int limit) {
         String appId = filter == null ? null : filter.appId();
         String title = filter == null ? null : filter.title();
-        if ((title == null || title.isBlank()) && (appId == null || appId.isBlank())) {
+        String channel = filter == null ? null : filter.channel();
+        if ((title == null || title.isBlank()) && (appId == null || appId.isBlank())
+                && (channel == null || channel.isBlank())) {
             return pageByTenantIdAndUserId(tenantId, userId, cursor, limit);
         }
         int pageSize = Math.max(1, Math.min(limit <= 0 ? 20 : limit, 200));
         String normalizedAppId = normalizeFilter(appId);
         String normalizedTitle = normalizeTitleFilter(title);
+        String normalizedChannel = normalizeFilter(channel);
         List<ChatSession> items = findByTenantIdAndUserId(tenantId, userId).stream()
                 .filter(session -> !"DELETED".equals(session.status()))
                 .filter(session -> normalizedAppId == null || normalizedAppId.equals(session.appId()))
                 .filter(session -> titleContains(session.title(), normalizedTitle))
+                .filter(session -> normalizedChannel == null || normalizedChannel.equals(session.channel()))
                 .sorted(Comparator.comparing(ChatSession::updatedAt).reversed()
                         .thenComparing(ChatSession::id, Comparator.reverseOrder()))
                 .limit(pageSize)
@@ -124,7 +136,8 @@ public interface SessionRepository {
      */
     default ChatSessionNumberPage pageNumberByTenantIdAndUserId(
             String tenantId, String userId, int curPage, int pageSize) {
-        return pageNumberFromSessions(findByTenantIdAndUserId(tenantId, userId), null, curPage, pageSize);
+        return pageNumberFromSessions(
+                findByTenantIdAndUserId(tenantId, userId), SessionListFilter.empty(), curPage, pageSize);
     }
 
     /**
@@ -139,27 +152,28 @@ public interface SessionRepository {
     /** 按可选应用标识和标题关键词执行页码分页查询。 */
     default ChatSessionNumberPage pageNumberByTenantIdAndUserId(
             String tenantId, String userId, SessionListFilter filter, int curPage, int pageSize) {
-        String appId = filter == null ? null : filter.appId();
-        String title = filter == null ? null : filter.title();
         return pageNumberFromSessions(
-                findByTenantIdAndUserId(tenantId, userId), appId, title, curPage, pageSize);
+                findByTenantIdAndUserId(tenantId, userId), filter, curPage, pageSize);
     }
 
     private static ChatSessionNumberPage pageNumberFromSessions(
             List<ChatSession> sessions, String appId, int curPage, int pageSize) {
-        return pageNumberFromSessions(sessions, appId, null, curPage, pageSize);
+        return pageNumberFromSessions(sessions, new SessionListFilter(appId, null, null), curPage, pageSize);
     }
 
     private static ChatSessionNumberPage pageNumberFromSessions(
-            List<ChatSession> sessions, String appId, String title, int curPage, int pageSize) {
+            List<ChatSession> sessions, SessionListFilter filter, int curPage, int pageSize) {
         int normalizedPage = Math.max(1, curPage);
         int normalizedSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 200));
-        String normalizedAppId = normalizeFilter(appId);
-        String normalizedTitle = normalizeTitleFilter(title);
+        SessionListFilter effectiveFilter = filter == null ? SessionListFilter.empty() : filter;
+        String normalizedAppId = normalizeFilter(effectiveFilter.appId());
+        String normalizedTitle = normalizeTitleFilter(effectiveFilter.title());
+        String normalizedChannel = normalizeFilter(effectiveFilter.channel());
         List<ChatSession> all = sessions.stream()
                 .filter(session -> !"DELETED".equals(session.status()))
                 .filter(session -> normalizedAppId == null || normalizedAppId.equals(session.appId()))
                 .filter(session -> titleContains(session.title(), normalizedTitle))
+                .filter(session -> normalizedChannel == null || normalizedChannel.equals(session.channel()))
                 .sorted(Comparator.comparing(ChatSession::updatedAt).reversed()
                         .thenComparing(ChatSession::id, Comparator.reverseOrder()))
                 .toList();

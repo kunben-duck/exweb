@@ -52,9 +52,9 @@ DomainAgent `isSaveSession` 对 assistant 历史投影的控制边界、企业�
 
 - `POST /v1/chat/runs`：唯一任务提交入口。普通提问创建后台 run；`runMode=CONTINUE_INTERACTION` 时提交澄清/审批/确认响应并启动续接 run；返回 `runId`、`sessionId`、`firstSeq` 和 `streamTopicId`。
 - `POST /v1/chat/sessions`：显式创建会话；可选传 `appId/appName` 作为不可变分组标识和名称快照。也可以在 `/v1/chat/runs` 中不传 `sessionId`，由后端使用相同字段自动创建会话。
-- `GET /v1/chat/sessions/apps`：查询当前用户非删除会话中的全部 App 分类；返回去重后的 `appId/appName`，按分类最近活动时间倒序排列。
-- `GET /v1/chat/sessions?appId=fund-app&title=利润&limit=20&cursor=...`：游标分页查询当前用户会话列表；`appId/title` 可选，并返回每个会话第一条 assistant 回答 `firstAssistantAnswer`。
-- `GET /v1/chat/sessions/page?appId=fund-app&title=利润&curPage=1&pageSize=20`：页码分页查询当前用户历史会话；`appId/title` 可选，返回 `totalRows/totalPages` 和每个会话的 `firstAssistantAnswer`。
+- `GET /v1/chat/sessions/apps?channel=mobile`：查询当前用户非删除会话中的全部 App 分类；`channel` 可选，返回去重后的 `appId/appName`，按分类最近活动时间倒序排列。
+- `GET /v1/chat/sessions?appId=fund-app&title=利润&channel=mobile&limit=20&cursor=...`：游标分页查询当前用户会话列表；`appId/title/channel` 可选，并返回每个会话第一条 assistant 回答 `firstAssistantAnswer`。
+- `GET /v1/chat/sessions/page?appId=fund-app&title=利润&channel=mobile&curPage=1&pageSize=20`：页码分页查询当前用户历史会话；`appId/title/channel` 可选，返回 `totalRows/totalPages` 和每个会话的 `firstAssistantAnswer`。
 - `GET /v1/chat/sessions/{sessionId}`：查询单个会话元数据，不返回历史消息和流式状态。
 - `POST /v1/chat/sessions/{sessionId}/read`：提交前端已经实际展示到的 `readThroughSeq`，原子推进会话已读水位；不会改变会话列表排序。
 - `GET /v1/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50`：选择会话后查询当前 active path 或指定 leaf path 的完整 user/assistant 消息；有多个版本的消息会带 `versionInfo`。
@@ -98,6 +98,8 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 `/v1/chat/runs` 支持消息树写入模式：`runMode=NEXT` 表示沿当前 leaf 继续提问；`EDIT_USER` 表示编辑历史 user 消息并创建新的 user sibling；`REGENERATE_ASSISTANT` 表示复用原 user 消息重新生成新的 assistant sibling；`CONTINUE_INTERACTION` 表示提交等待态澄清、审批或确认响应并启动续接 run。普通意图澄清采用完整消息链，每个澄清问题和回答分别保存为 assistant/user 节点；`AMBIGUOUS_ROUTE` 候选确认、Agent 澄清、审批和 DomainAgent 切换确认复用原等待态 assistant。历史版本不会被覆盖，前端通过 `/messages.versionInfo` 展示版本游标，并通过 `leafMessageId/path` 切换和保存展示路径。
 
 会话 App Tag 仅用于产品分组和可选列表过滤，不替代 `tenantId + userId` 归属校验。`appId/appName` 均可省略；`appName` 不能脱离 `appId` 单独传入，空字符串按未传处理。已有会话中显式传入的 tag 必须与创建快照完全一致，分支会话继承源 tag，重命名、归档和恢复不会修改它。`/sessions/apps` 排除已删除和未分类会话，相同 `appId` 只返回一次，展示名称取最近的非空 `appName` 快照。tag 不进入 run metadata、RouteMemory、IntentAgent、Relay 或 DomainAgent 请求。
+
+移动端会话创建和列表隔离复用现有 `channel`：移动端在自动创建 run 及三个列表接口中统一传小写 `mobile`；PC 端省略该字段，新会话继续默认保存为 `web`，列表仍可查看全部渠道。已有会话只有在请求显式携带 `channel` 时才校验一致性，因此该过滤属于展示和创建隔离，不替代会话的 `tenantId + userId` 归属校验。带 channel 的游标使用绑定 `appId/title/channel` 的 v4 格式；无 channel 的 v2/v3 游标继续兼容。
 
 启用 `financeex.session-title.enabled=true` 后，服务端会在有效 `NEXT/EDIT_USER` 用户消息提交后异步使用当前路径前三个业务问题总结会话标题。前三问完整总结尚未成功时，第四轮及后续有效问题会继续触发补偿调用，但请求内容仍固定为前三问；成功提交后不再因普通后续轮次调用。标题调用不阻塞首事件、Intent或Runtime，不产生实时事件；前端在后续会话列表或详情查询中读取结果。请求可选字段 `language` 最大32字符，空白时使用 `financeex.session-title.default-language`，且不进入 metadata 或 Agent 请求。自动结果只覆盖服务端默认或自动标题，显式标题、手动重命名、只读分支及没有私有状态标记的存量会话均受保护。开启功能时必须显式配置 `base-url`、正数且不超过30秒的 `timeout` 和有效的 `session-title` 鉴权 provider；默认路径为 `/session_title`，默认最大标题长度为50个Unicode码点。每实例默认最多保留8个在途标题请求，可通过 `max-concurrent-requests` 在1到64之间调整；容量已满时仅跳过本次标题总结，不阻塞或中止聊天主流程。
 

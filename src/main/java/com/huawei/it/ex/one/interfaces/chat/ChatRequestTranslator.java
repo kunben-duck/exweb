@@ -55,7 +55,8 @@ public class ChatRequestTranslator {
         }
         // 身份字段留空进入 application，由 Controller 入口解析出的 UserContext 统一回填。
         // 这样前端无法通过 Header/Query/Body 改写租户或用户，后续接入企业权限框架也只替换身份防腐层。
-        return new ChatCommand(request.commandId(), null, null, request.sessionId(), request.conversationId(), "web",
+        return new ChatCommand(request.commandId(), null, null, request.sessionId(), request.conversationId(),
+                normalizeText(request.channel()),
                 request.message(), toAttachmentRefs(request.attachments()), metadata,
                 request.targetType(), request.targetId(),
                 runMode, request.parentMessageId(), request.editedMessageId(),
@@ -71,6 +72,10 @@ public class ChatRequestTranslator {
 
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private String normalizeText(String value) {
+        return hasText(value) ? value.trim() : null;
     }
 
     private void validateSelectedIntent(ChatSelectedIntentDto selectedIntent, ChatRunMode runMode,

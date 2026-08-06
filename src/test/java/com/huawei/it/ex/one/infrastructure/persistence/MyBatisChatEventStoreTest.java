@@ -89,7 +89,7 @@ class MyBatisChatEventStoreTest {
                 MessageDeltaEvent.of("run1", "session1", "hello"),
                 new RunExecutionClaim("run1", "instance-1", 7L)))
                 .isInstanceOf(ChatEventAppendRejectedException.class)
-                .hasMessageContaining("终态行锁");
+                .hasMessageContaining("run 行锁竞争");
         assertThat(mapper.sequenceCalls).isZero();
     }
 

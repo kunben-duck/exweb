@@ -287,6 +287,7 @@ final class DomainAgentRefusalCoordinator {
                 rejected,
                 rerouteIntentQuery,
                 null);
+        IntentResultPersistenceBarrier persistenceBarrier = new IntentResultPersistenceBarrier();
         return requireCurrentOwnerRunning(context.executionClaim(), "before-domain-agent-reroute")
                 .thenMany(Flux.defer(() -> routeSignalService.routeInitialWithProgress(new RouteSignalRequest(
                         context.runId(),
@@ -296,14 +297,15 @@ final class DomainAgentRefusalCoordinator {
                         rerouteCommand.attachments(),
                         context.memory(),
                         rerouteIntentQuery))))
-                .concatMap(frame -> processRerouteFrame(reroute, frame));
+                .concatMap(frame -> processRerouteFrame(reroute, frame, persistenceBarrier));
     }
 
     private Flux<ChatEvent> processRerouteFrame(DomainAgentRerouteContext reroute,
-                                                RouteSignalFrame frame) {
+                                                RouteSignalFrame frame,
+                                                IntentResultPersistenceBarrier persistenceBarrier) {
         DomainAgentRunContext context = reroute.context();
         if (frame.eventFrame()) {
-            return Flux.just(frame.event());
+            return Flux.just(persistenceBarrier.guard(frame.event()));
         }
         if (frame.progressFrame()) {
             return Flux.just(eventFactory.routeProgress(
@@ -311,7 +313,9 @@ final class DomainAgentRefusalCoordinator {
                     context.session().id(),
                     frame.progress()));
         }
-        return requireCurrentOwnerRunning(context.executionClaim(), "after-domain-agent-reroute")
+        // 拒答重意图同样先确认 Intent Result 落库，再允许替换 Binding 或调用新 Runtime。
+        return persistenceBarrier.awaitBeforeRoute()
+                .then(requireCurrentOwnerRunning(context.executionClaim(), "after-domain-agent-reroute"))
                 .thenMany(Flux.defer(() -> continueAfterReroute(reroute, frame.result())));
     }
 

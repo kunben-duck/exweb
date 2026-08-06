@@ -1160,6 +1160,67 @@ abstract class ChatFlowTestSupport {
         }
     }
 
+    static class RejectingIntentResultEventStore extends InMemoryEventStore {
+        @Override
+        public ChatEvent appendWithExecutionGuard(ChatEvent event, RunExecutionClaim claim) {
+            if (intentResult(event)) {
+                throw new ChatEventAppendRejectedException("test intent-result fencing rejection");
+            }
+            return super.appendWithExecutionGuard(event, claim);
+        }
+    }
+
+    static final class BlockingIntentResultEventStore extends InMemoryEventStore {
+        private final java.util.concurrent.CountDownLatch writeStarted =
+                new java.util.concurrent.CountDownLatch(1);
+        private final java.util.concurrent.CountDownLatch release =
+                new java.util.concurrent.CountDownLatch(1);
+        final List<String> operations = new CopyOnWriteArrayList<>();
+
+        @Override
+        public ChatEvent appendWithExecutionGuard(ChatEvent event, RunExecutionClaim claim) {
+            if (!intentResult(event)) {
+                return super.appendWithExecutionGuard(event, claim);
+            }
+            writeStarted.countDown();
+            awaitRelease();
+            ChatEvent stored = super.appendWithExecutionGuard(event, claim);
+            operations.add("intent-result-persisted");
+            return stored;
+        }
+
+        boolean awaitWriteStarted() throws InterruptedException {
+            return writeStarted.await(5, java.util.concurrent.TimeUnit.SECONDS);
+        }
+
+        void releaseWrite() {
+            release.countDown();
+        }
+
+        private void awaitRelease() {
+            boolean interrupted = false;
+            while (true) {
+                try {
+                    if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("Timed out waiting to release intent-result persistence");
+                    }
+                    break;
+                } catch (InterruptedException ex) {
+                    interrupted = true;
+                }
+            }
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    private static boolean intentResult(ChatEvent event) {
+        return event != null && event.payload() != null
+                && "intent-agent".equals(event.payload().get("source"))
+                && "intent-result".equals(event.payload().get("sourceType"));
+    }
+
     static class InMemoryExecutionRepository implements ChatRunExecutionRepository {
         final Map<String, ChatRunExecution> executions = new HashMap<>();
         volatile boolean rejectOwnerRunningChecks;

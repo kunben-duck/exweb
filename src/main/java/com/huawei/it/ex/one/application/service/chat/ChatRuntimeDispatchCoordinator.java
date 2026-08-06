@@ -87,6 +87,7 @@ final class ChatRuntimeDispatchCoordinator {
     }
 
     private Flux<ChatEvent> executeRouteFrames(RoutePipelineRequest request) {
+        IntentResultPersistenceBarrier persistenceBarrier = new IntentResultPersistenceBarrier();
         Flux<RouteSignalFrame> frames = eventPersistenceCoordinator.requireCurrentOwnerRunning(
                         request.executionClaim(), "before-route")
                 .thenMany(Flux.defer(() -> request.routeRef().get() == null
@@ -100,7 +101,7 @@ final class ChatRuntimeDispatchCoordinator {
                                 request.intentQuery()))
                         : Flux.just(RouteSignalFrame.result(
                                 RouteSignalResult.of(request.routeRef().get())))));
-        return frames.concatMap(frame -> executeFrame(request, frame));
+        return frames.concatMap(frame -> executeFrame(request, frame, persistenceBarrier));
     }
 
     Flux<ChatEvent> executeResolved(
@@ -119,16 +120,19 @@ final class ChatRuntimeDispatchCoordinator {
     }
 
     private Flux<ChatEvent> executeFrame(RoutePipelineRequest request,
-                                         RouteSignalFrame frame) {
+                                         RouteSignalFrame frame,
+                                         IntentResultPersistenceBarrier persistenceBarrier) {
         if (frame.eventFrame()) {
-            return Flux.just(frame.event());
+            return Flux.just(persistenceBarrier.guard(frame.event()));
         }
         if (frame.progressFrame()) {
             return Flux.just(interactionEventFactory.routeProgressEvent(
                     request.runId(), request.session().id(), frame.progress()));
         }
-        return eventPersistenceCoordinator.requireCurrentOwnerRunning(
-                        request.executionClaim(), "after-route")
+        // Intent 结果必须先成为可恢复事实，避免最终路由更新与事件 NOWAIT 栅栏竞争同一 run 行。
+        return persistenceBarrier.awaitBeforeRoute()
+                .then(eventPersistenceCoordinator.requireCurrentOwnerRunning(
+                        request.executionClaim(), "after-route"))
                 .thenMany(Flux.defer(() -> executeResolvedRoute(request, frame.result(), true)));
     }
 

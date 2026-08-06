@@ -85,7 +85,7 @@ public class MyBatisChatEventStore implements ChatEventStore {
             }
         } catch (RuntimeException ex) {
             if (lockUnavailable(ex)) {
-                throw new ChatEventAppendRejectedException("聊天事件写入发现终态行锁，拒绝迟到事件: runId="
+                throw new ChatEventAppendRejectedException("聊天事件写入遇到 run 行锁竞争，拒绝迟到事件: runId="
                         + event.runId() + ", sessionId=" + event.sessionId(), ex);
             }
             throw ex;
@@ -130,7 +130,7 @@ public class MyBatisChatEventStore implements ChatEventStore {
             }
         } catch (RuntimeException ex) {
             if (lockUnavailable(ex)) {
-                throw new ChatEventAppendRejectedException("聊天事件批量写入发现终态行锁，拒绝迟到事件: runId="
+                throw new ChatEventAppendRejectedException("聊天事件批量写入遇到 run 行锁竞争，拒绝迟到事件: runId="
                         + first.runId() + ", sessionId=" + first.sessionId(), ex);
             }
             throw ex;
@@ -186,7 +186,7 @@ public class MyBatisChatEventStore implements ChatEventStore {
         } catch (RuntimeException ex) {
             if (lockUnavailable(ex)) {
                 throw new ChatEventAppendRejectedException(
-                        "实时事件序号分配发现终态行锁，拒绝迟到事件: runId="
+                        "实时事件序号分配遇到 run 行锁竞争，拒绝迟到事件: runId="
                                 + first.runId() + ", sessionId=" + first.sessionId(), ex);
             }
             throw ex;

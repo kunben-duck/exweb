@@ -1418,6 +1418,81 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
     }
 
     @Test
+    void rejectedRerouteIntentResultDoesNotStartReplacementRelay() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        RejectingIntentResultEventStore events = new RejectingIntentResultEventStore();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        AtomicInteger routeCalls = new AtomicInteger();
+        RouteSignalApplicationService routeService = new RouteSignalApplicationService(
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                intentAgent((command, memory, routeUser) -> null),
+                new com.huawei.it.ex.one.domain.routing.RoutingPolicy(0.85),
+                new RouteSignalProperties(false, false)) {
+            @Override
+            public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
+                if (routeCalls.incrementAndGet() == 1) {
+                    return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.domainAgent(
+                            "agent-a", "intent-agent", 1.0, "initial intent route"))));
+                }
+                return Flux.just(
+                        RouteSignalFrame.event(RuntimeEvent.progress(
+                                request.runId(),
+                                request.session().id(),
+                                Map.of(
+                                        "source", "intent-agent",
+                                        "sourceType", "intent-result",
+                                        "routeAction", "NO_MATCH",
+                                        "targetProvider", "relay"))),
+                        RouteSignalFrame.result(RouteSignalResult.of(
+                                RouteTarget.agentRuntime("intent-agent", 0.0, "reroute to relay"))));
+            }
+        };
+        AtomicInteger domainAgentCalls = new AtomicInteger();
+        DomainAgentClient domainClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                domainAgentCalls.incrementAndGet();
+                return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        AtomicInteger relayCalls = new AtomicInteger();
+        AgentRuntime relay = new AgentRuntime() {
+            @Override
+            public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                relayCalls.incrementAndGet();
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = financeServiceWithDomainClient(
+                sessions, messages, runs, events, routeService, domainClient, relay);
+
+        StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
+                        null, null, "web", "hello", List.of(), Map.of())).collectList())
+                .assertNext(stream -> assertThat(stream).extracting(ChatEvent::type)
+                        .contains("run.started")
+                        .doesNotContain("run.completed"))
+                .verifyComplete();
+
+        assertThat(routeCalls).hasValue(2);
+        assertThat(domainAgentCalls).hasValue(1);
+        assertThat(relayCalls).hasValue(0);
+        assertThat(events.events).noneMatch(event -> event.payload() != null
+                && "intent-result".equals(event.payload().get("sourceType")));
+    }
+
+    @Test
     void frontSelectedRefusalAutoSwitchesToIntentDomainAgentWhenEnabled() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();

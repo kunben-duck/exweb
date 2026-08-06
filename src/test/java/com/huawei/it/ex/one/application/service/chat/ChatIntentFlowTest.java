@@ -37,6 +37,7 @@ import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.MessageSnapshotEvent;
+import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
@@ -52,9 +53,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+
 class ChatIntentFlowTest extends ChatFlowTestSupport {
     @Test
     void intentCallingProgressIsPersistedBeforeIntentRouteCompletes() {
@@ -125,6 +128,97 @@ class ChatIntentFlowTest extends ChatFlowTestSupport {
                     assertThat(session.latestMessageSeq()).isEqualTo(completed.sequence());
                     assertThat(session.lastReadSeq()).isZero();
                     assertThat(session.hasUnread()).isTrue();
+                });
+    }
+
+    @Test
+    void intentResultPersistenceCompletesBeforeRelayDispatch() throws Exception {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        BlockingIntentResultEventStore events = new BlockingIntentResultEventStore();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        RouteSignalApplicationService routeService = intentResultRouteService(
+                RouteTarget.agentRuntime("intent-agent", 0.0, "no match routes to relay"),
+                "NO_MATCH",
+                "relay");
+        AtomicInteger runtimeCalls = new AtomicInteger();
+        AgentRuntime runtime = new AgentRuntime() {
+            @Override
+            public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                runtimeCalls.incrementAndGet();
+                events.operations.add("runtime-called");
+                return Flux.just(MessageSnapshotEvent.of(request.runId(), request.sessionId(), "relay answer"));
+            }
+
+            @Override
+            public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = defaultFinanceService(
+                sessions, messages, runs, events, routeService, runtime);
+
+        var execution = service.executeRun(user, new ChatCommand("cmd1", null, null,
+                        null, null, "web", "hello", List.of(), Map.of()))
+                .collectList()
+                .toFuture();
+        try {
+            assertThat(events.awaitWriteStarted()).isTrue();
+            assertThat(runtimeCalls).hasValue(0);
+            assertThat(runs.runs.values()).singleElement()
+                    .extracting(ChatRun::runtimeProvider)
+                    .isNull();
+        } finally {
+            events.releaseWrite();
+        }
+
+        List<ChatEvent> stream = execution.get(10, TimeUnit.SECONDS);
+        assertThat(runtimeCalls).hasValue(1);
+        assertThat(events.operations).containsExactly("intent-result-persisted", "runtime-called");
+        assertThat(indexOfEvent(stream, "runtime.progress", "intent-result"))
+                .isLessThan(indexOfEvent(stream, "message.snapshot", null));
+    }
+
+    @Test
+    void rejectedIntentResultPersistenceDoesNotCallDomainAgentOrSaveRoute() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        RejectingIntentResultEventStore events = new RejectingIntentResultEventStore();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        RouteSignalApplicationService routeService = intentResultRouteService(
+                RouteTarget.domainAgent("agent-a", "intent-agent", 0.95, "single intent route"),
+                "ROUTE_SINGLE",
+                "domain-agent");
+        AtomicInteger domainAgentCalls = new AtomicInteger();
+        DomainAgentClient domainClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                domainAgentCalls.incrementAndGet();
+                return Flux.just(MessageSnapshotEvent.of(request.runId(), request.sessionId(), "unexpected"));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = financeServiceWithDomainClient(
+                sessions, messages, runs, events, routeService, domainClient, noopRuntime());
+
+        StepVerifier.create(service.executeRun(user, new ChatCommand("cmd1", null, null,
+                        null, null, "web", "hello", List.of(), Map.of())).collectList())
+                .assertNext(stream -> assertThat(stream).extracting(ChatEvent::type)
+                        .containsExactly("run.started"))
+                .verifyComplete();
+
+        assertThat(domainAgentCalls).hasValue(0);
+        assertThat(events.events).extracting(ChatEvent::type).containsExactly("run.started");
+        assertThat(runs.runs.values()).singleElement()
+                .satisfies(run -> {
+                    assertThat(run.runtimeProvider()).isNull();
+                    assertThat(run.agentCode()).isNull();
                 });
     }
 
@@ -540,5 +634,31 @@ class ChatIntentFlowTest extends ChatFlowTestSupport {
                 });
         assertThat(runs.runs.values()).singleElement()
                 .satisfies(run -> assertThat(run.status()).isEqualTo(ChatRunStatus.FAILED));
+    }
+
+    private RouteSignalApplicationService intentResultRouteService(
+            RouteTarget route,
+            String routeAction,
+            String targetProvider) {
+        return new RouteSignalApplicationService(
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                intentAgent((command, memory, routeUser) -> null),
+                new com.huawei.it.ex.one.domain.routing.RoutingPolicy(0.85),
+                new RouteSignalProperties(false, false)) {
+            @Override
+            public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
+                ChatEvent intentResult = RuntimeEvent.progress(
+                        request.runId(),
+                        request.session().id(),
+                        Map.of(
+                                "source", "intent-agent",
+                                "sourceType", "intent-result",
+                                "routeAction", routeAction,
+                                "targetProvider", targetProvider));
+                return Flux.just(
+                        RouteSignalFrame.event(intentResult),
+                        RouteSignalFrame.result(RouteSignalResult.of(route)));
+            }
+        };
     }
 }

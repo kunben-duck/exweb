@@ -613,16 +613,18 @@ paths:
       operationId: listChatSessionsByCursor
       summary: 游标分页查询会话
       description: >-
+        appScope=MAIN_SITE 仅查询 appId 为 null 的主站会话，不能同时指定 appId；省略 appScope 和 appId 时查询全量。
         appId 和 channel 使用区分大小写的精确匹配；title 使用不区分大小写的包含匹配，多个条件同时存在时取交集。
-        不使用 channel 时继续生成兼容的 v2/v3 游标；使用 channel 时生成同时绑定 appId、规范化标题和 channel 的 v4 游标。
+        主站查询使用绑定全部过滤条件的 v5 游标，既有 v2/v3/v4 游标继续兼容。
       parameters:
         - $ref: '#/components/parameters/AppIdQuery'
+        - $ref: '#/components/parameters/AppScopeQuery'
         - $ref: '#/components/parameters/SessionTitleQuery'
         - $ref: '#/components/parameters/SessionChannelQuery'
         - name: cursor
           in: query
           required: false
-          description: 上一页游标；必须继续使用生成该游标时相同的 appId、title 和 channel 条件
+          description: 上一页游标；必须继续使用生成该游标时相同的 appScope、appId、title 和 channel 条件
           schema:
             type: string
         - name: limit
@@ -677,9 +679,12 @@ paths:
       tags: [Chat Sessions & Messages]
       operationId: listChatSessionsByPage
       summary: 页码分页查询会话
-      description: appId 和 channel 使用区分大小写的精确匹配；title 使用不区分大小写的包含匹配，多个条件同时存在时取交集。
+      description: >-
+        appScope=MAIN_SITE 仅查询 appId 为 null 的主站会话且不能同时指定 appId；省略 appScope 和 appId 时查询全量。
+        appId、title、channel 与范围条件同时存在时取交集。
       parameters:
         - $ref: '#/components/parameters/AppIdQuery'
+        - $ref: '#/components/parameters/AppScopeQuery'
         - $ref: '#/components/parameters/SessionTitleQuery'
         - $ref: '#/components/parameters/SessionChannelQuery'
         - name: curPage
@@ -1453,6 +1458,15 @@ components:
         type: string
         maxLength: 128
         example: fund-app
+    AppScopeQuery:
+      name: appScope
+      in: query
+      required: false
+      description: 会话 App 范围；MAIN_SITE 仅查询 app_id IS NULL 的主站会话，不能同时指定 appId；省略时保持现有全量语义
+      schema:
+        type: string
+        enum: [MAIN_SITE]
+        example: MAIN_SITE
     SessionTitleQuery:
       name: title
       in: query

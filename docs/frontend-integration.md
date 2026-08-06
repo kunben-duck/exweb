@@ -190,8 +190,8 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 接口 | 请求字段 | 响应字段 | 后续关联 |
 | --- | --- | --- | --- |
 | `POST /chat/sessions` | Body：`title` 会话标题，可空；`channel` 来源渠道，可空 | `ChatSessionDto` 全字段 | 使用 `sessionId` 作为会话路由和后续 run 入参 |
-| `GET /chat/sessions` | Query：`appId/title/channel` 可选；`limit` 页大小；`cursor` 上一页游标 | `items[]`、`nextCursor`；item 带 `firstAssistantAnswer` | 移动端传 `channel=mobile`；后续页必须沿用生成游标时的全部过滤条件 |
-| `GET /chat/sessions/page` | Query：`appId/title/channel` 可选；`curPage` 当前页，默认 1；`pageSize` 页大小，默认 20 | `items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；item 带 `firstAssistantAnswer` | 移动端传 `channel=mobile`；总数和数据使用相同过滤条件 |
+| `GET /chat/sessions` | Query：`appId/appScope/title/channel` 可选；`appScope=MAIN_SITE`只查主站；`limit`页大小；`cursor`上一页游标 | `items[]`、`nextCursor`；item带`firstAssistantAnswer` | `MAIN_SITE`不能同时传`appId`；移动端传`channel=mobile`；后续页沿用全部过滤条件 |
+| `GET /chat/sessions/page` | Query：`appId/appScope/title/channel`可选；`curPage`默认1；`pageSize`默认20 | `items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；item带`firstAssistantAnswer` | 主站传`appScope=MAIN_SITE`；省略`appScope/appId`查询全量；总数和数据条件一致 |
 | `GET /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto` | 只拿元数据，不返回历史和流状态 |
 | `POST /chat/sessions/{sessionId}/read` | Path：`sessionId`；Body：`readThroughSeq` 必填且不小于 0 | 更新后的 `ChatSessionDto` | 历史消息或实时终态实际展示后提交；服务端不允许回退或越过最新水位 |
 | `GET /chat/sessions/{sessionId}/messages` | Path：`sessionId`；Query：`leafMessageId` 可选，`cursor` 保留，`limit` | `ChatMessagePageDto.items[]`、`nextCursor`；item 可能带 `versionInfo` | 普通聊天页主接口；用 `messageId` 做反馈、分支和重新生成，用 `versionInfo.variants[].switchLeafMessageId` 切换版本 |
@@ -231,8 +231,8 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | --- | --- | --- | --- | --- |
 | `POST /v1/chat/sessions` | 用户点击“新建会话”时显式创建。 | JSON body：`title/channel/appId/appName` 均可选。 | `ChatSessionDto`：包含 `appId/appName`。 | `appName` 不能脱离 `appId`；前端不传租户和用户。 |
 | `GET /v1/chat/sessions/apps` | 初始化会话分类栏。 | Query：`channel` 可选。 | `ChatSessionAppListDto`：`items[].appId/appName`。 | 移动端传 `mobile`；PC 端省略后返回全部渠道分类。 |
-| `GET /v1/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`appId/title/channel` 可选；`limit` 默认 20；`cursor` 可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每项含 `appId/appName/firstAssistantAnswer`。 | `appId/channel` 区分大小写并精确匹配；`title` 大小写不敏感；后续页必须沿用相同过滤条件。 |
-| `GET /v1/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`appId/title/channel` 可选；`curPage` 默认 1；`pageSize` 默认 20，最大 200。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`。 | `totalRows/totalPages` 按相同 `appId + title + channel` 条件计算；不返回 `DELETED` 会话。 |
+| `GET /v1/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`appId/appScope/title/channel`可选；主站使用`appScope=MAIN_SITE`；`limit`默认20；`cursor`可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每项含`appId/appName/firstAssistantAnswer`。 | `MAIN_SITE`仅返回`appId=null`且不能同时传`appId`；后续页必须沿用相同过滤条件。 |
+| `GET /v1/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`appId/appScope/title/channel`可选；`curPage`默认1；`pageSize`默认20，最大200。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`。 | `totalRows/totalPages`按相同范围、标题和渠道条件计算；不返回`DELETED`会话。 |
 | `GET /v1/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
 | `POST /v1/chat/sessions/{sessionId}/read` | 最新历史消息或实时 assistant 终态已经展示。 | Path：`sessionId`；JSON body：`readThroughSeq` 必填、最小为 0。 | 更新后的 `ChatSessionDto`。 | 提交列表/详情中观察到的 `latestMessageSeq`，或实时 `run.completed/run.waiting_user` 的 sequence；不会更新会话 `updatedAt`。 |
 | `GET /v1/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 保留。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 不传 `leafMessageId` 时返回当前 active path；传入时返回 root 到该 leaf 的路径。 |
@@ -295,8 +295,8 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | --- | --- |
 | `POST /v1/chat/sessions` | Body：`{"title":"资金分析","channel":"web","appId":"fund-app","appName":"资金助手"}`；四个字段都可省略，但 `appName` 不能单独出现。 |
 | `GET /v1/chat/sessions/apps` | 移动端 Query：`?channel=mobile`；PC 端不传 channel。 |
-| `GET /v1/chat/sessions` | Query：`?appId=fund-app&title=利润&channel=mobile&limit=20&cursor=cursor_xxx`；过滤条件均可省略，同一 cursor 不得切换 appId、title 或 channel。 |
-| `GET /v1/chat/sessions/page` | Query：`?appId=fund-app&title=利润&channel=mobile&curPage=1&pageSize=20`；`appId/title/channel` 均可省略。 |
+| `GET /v1/chat/sessions` | Query：`?appScope=MAIN_SITE&title=利润&channel=mobile&limit=20&cursor=cursor_xxx`；也可使用具体`appId`，同一cursor不得切换过滤条件。 |
+| `GET /v1/chat/sessions/page` | Query：`?appScope=MAIN_SITE&title=利润&channel=mobile&curPage=1&pageSize=20`；省略`appScope/appId`时查询全量。 |
 | `GET /v1/chat/sessions/{sessionId}` | Path：`session_xxx`。 |
 | `POST /v1/chat/sessions/{sessionId}/read` | Body：`{"readThroughSeq":63252}`；使用已经实际展示的会话水位或实时终态 sequence。 |
 | `GET /v1/chat/sessions/{sessionId}/messages` | Query：`?limit=50`；查看指定版本路径时传 `?leafMessageId=msg_xxx&limit=50`。 |
@@ -881,13 +881,19 @@ curl "http://localhost:8080/v1/chat/sessions/apps?channel=mobile"
 
 分类按各 `appId` 最近一条非删除会话的活动时间倒序返回；时间相同时按 `appId` 升序。同一 `appId`
 只返回一次，`appName` 使用最近更新会话中的非空快照。接口包含 `ACTIVE/ARCHIVED` 会话，排除
-`DELETED` 和未设置 `appId` 的会话；“全部”和“未分类”入口由前端自行增加。示例中的 `channel=mobile`
+`DELETED` 和未设置 `appId` 的主站会话；“全部”和“主站”入口由前端自行增加。示例中的 `channel=mobile`
 只返回移动端会话，PC端省略该参数即可查询全部渠道。
 
 查询会话列表，游标分页用于无限滚动：
 
 ```bash
 curl "http://localhost:8080/v1/chat/sessions?appId=fund-app&title=%E5%88%A9%E6%B6%A6&channel=mobile&limit=20"
+```
+
+主站会话使用独立范围参数：
+
+```bash
+curl "http://localhost:8080/v1/chat/sessions?appScope=MAIN_SITE&channel=mobile&limit=20"
 ```
 
 响应按更新时间倒序返回：
@@ -921,9 +927,10 @@ curl "http://localhost:8080/v1/chat/sessions?appId=fund-app&title=%E5%88%A9%E6%B
 ```
 
 `title` 最大256字符，服务端 trim 后执行大小写不敏感的包含搜索；空白值等同未传，`%`、`_` 和 `!`
-按普通标题字符匹配。`appId`、`title` 与 `channel` 同时存在时取交集；channel 精确匹配并区分大小写。
-后续游标页必须继续提交生成游标时相同的 `appId/title/channel`；切换搜索条件时应丢弃旧 `cursor`
-并从第一页重新查询。带 channel 的查询使用 v4 游标，无 channel 的既有 v2/v3 游标继续兼容。
+按普通标题字符匹配。`appScope=MAIN_SITE`严格匹配数据库`app_id IS NULL`，不能与具体`appId`同时使用；
+省略`appScope/appId`时查询主站和作业系统全量会话。范围、标题与渠道条件取交集，channel精确匹配并区分大小写。
+后续游标页必须继续提交相同的`appScope/appId/title/channel`；切换条件时应丢弃旧`cursor`并从第一页重新查询。
+主站查询使用v5游标；既有v2/v3/v4游标继续兼容。
 
 查询会话列表，页码分页用于传统分页组件：
 

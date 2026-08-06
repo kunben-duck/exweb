@@ -84,6 +84,9 @@ public interface ChatSessionFacade {
     default ChatSessionPage listSessions(
             UserContext user, SessionListFilter filter, String cursor, int limit) {
         SessionListFilter effectiveFilter = filter == null ? SessionListFilter.empty() : filter;
+        if (effectiveFilter.appScope() != null) {
+            throw new UnsupportedOperationException("当前会话实现不支持 appScope 过滤");
+        }
         if (effectiveFilter.channel() != null && !effectiveFilter.channel().isBlank()) {
             throw new UnsupportedOperationException("当前会话实现不支持 channel 过滤");
         }
@@ -131,6 +134,9 @@ public interface ChatSessionFacade {
     default ChatSessionNumberPage listSessionsByPage(
             UserContext user, SessionListFilter filter, int curPage, int pageSize) {
         SessionListFilter effectiveFilter = filter == null ? SessionListFilter.empty() : filter;
+        if (effectiveFilter.appScope() != null) {
+            throw new UnsupportedOperationException("当前会话实现不支持 appScope 过滤");
+        }
         if (effectiveFilter.channel() != null && !effectiveFilter.channel().isBlank()) {
             throw new UnsupportedOperationException("当前会话实现不支持 channel 过滤");
         }

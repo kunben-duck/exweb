@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.application.config.SessionTitleProperties;
 import com.huawei.it.ex.one.application.integration.conversation.SessionAppCategory;
+import com.huawei.it.ex.one.application.integration.conversation.SessionAppScope;
 import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
@@ -208,6 +209,13 @@ class SessionApplicationServiceTest {
         assertThat(service.listSessions(user(), null, 20).items())
                 .extracting(ChatSession::id)
                 .containsExactlyInAnyOrder("fund-1", "tax-1", "plain-1");
+        SessionListFilter mainSite = new SessionListFilter(null, null, null, SessionAppScope.MAIN_SITE);
+        assertThat(service.listSessions(user(), mainSite, null, 20).items())
+                .extracting(ChatSession::id)
+                .containsExactly("plain-1");
+        ChatSessionNumberPage mainSitePage = service.listSessionsByPage(user(), mainSite, 1, 20);
+        assertThat(mainSitePage.items()).extracting(ChatSession::id).containsExactly("plain-1");
+        assertThat(mainSitePage.totalRows()).isEqualTo(1);
     }
 
     @Test

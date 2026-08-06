@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.interfaces.chat;
 
 import com.huawei.it.ex.one.application.facade.ChatSessionFacade;
+import com.huawei.it.ex.one.application.integration.conversation.SessionAppScope;
 import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
 import com.huawei.it.ex.one.application.integration.identity.AuthContextProvider;
 import com.huawei.it.ex.one.application.service.chat.ChatFeedbackApplicationService;
@@ -137,6 +138,7 @@ public class ChatSessionController {
      * 分页查询当前用户会话列表。
      *
      * @param appId 可选应用标识精确过滤条件。
+     * @param appScope 可选 App 范围；MAIN_SITE 表示仅查询未绑定 appId 的主站会话。
      * @param title 可选会话标题包含过滤条件。
      * @param channel 可选会话来源渠道精确过滤条件。
      * @param cursor 上一页返回的游标；为空时查询第一页。
@@ -147,6 +149,7 @@ public class ChatSessionController {
     public Mono<ChatSessionPageDto> list(
             @Size(max = 128, message = "appId 长度不能超过 128")
             @RequestParam(value = "appId", required = false) String appId,
+            @RequestParam(value = "appScope", required = false) SessionAppScope appScope,
             @Size(max = 256, message = "title 长度不能超过 256")
             @RequestParam(value = "title", required = false) String title,
             @Size(max = 64, message = "channel 长度不能超过 64")
@@ -156,7 +159,7 @@ public class ChatSessionController {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> {
                     ChatSessionPage page = facade.listSessions(
-                            user, new SessionListFilter(appId, title, channel), cursor, limit);
+                            user, new SessionListFilter(appId, title, channel, appScope), cursor, limit);
                     Map<String, String> firstAnswers = facade.findFirstAssistantAnswers(user, page.items());
                     return new ChatSessionPageDto(
                             page.items().stream()
@@ -175,6 +178,7 @@ public class ChatSessionController {
      * 保持不变。返回项会批量装配首条 assistant 完整回答，避免列表页逐会话查询历史消息。</p>
      *
      * @param appId 可选应用标识精确过滤条件。
+     * @param appScope 可选 App 范围；MAIN_SITE 表示仅查询未绑定 appId 的主站会话。
      * @param title 可选会话标题包含过滤条件。
      * @param channel 可选会话来源渠道精确过滤条件。
      * @param curPage 当前页码，从 1 开始；非法值由应用层归一化。
@@ -185,6 +189,7 @@ public class ChatSessionController {
     public Mono<ChatSessionNumberPageDto> listByPage(
             @Size(max = 128, message = "appId 长度不能超过 128")
             @RequestParam(value = "appId", required = false) String appId,
+            @RequestParam(value = "appScope", required = false) SessionAppScope appScope,
             @Size(max = 256, message = "title 长度不能超过 256")
             @RequestParam(value = "title", required = false) String title,
             @Size(max = 64, message = "channel 长度不能超过 64")
@@ -194,7 +199,7 @@ public class ChatSessionController {
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> {
                     ChatSessionNumberPage page = facade.listSessionsByPage(
-                            user, new SessionListFilter(appId, title, channel), curPage, pageSize);
+                            user, new SessionListFilter(appId, title, channel, appScope), curPage, pageSize);
                     Map<String, String> firstAnswers = facade.findFirstAssistantAnswers(user, page.items());
                     return new ChatSessionNumberPageDto(
                             page.items().stream()

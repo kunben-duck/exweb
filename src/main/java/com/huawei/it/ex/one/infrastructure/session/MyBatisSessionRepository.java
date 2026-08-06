@@ -29,9 +29,11 @@ public class MyBatisSessionRepository implements SessionRepository {
     private static final String CURSOR_VERSION_V2 = "v2";
     private static final String CURSOR_VERSION_V3 = "v3";
     private static final String CURSOR_VERSION_V4 = "v4";
+    private static final String CURSOR_VERSION_V5 = "v5";
     private static final String APP_ID_FILTER_MISMATCH = "cursor 与当前 appId 过滤条件不一致";
     private static final String TITLE_FILTER_MISMATCH = "cursor 与当前 title 过滤条件不一致";
     private static final String CHANNEL_FILTER_MISMATCH = "cursor 与当前 channel 过滤条件不一致";
+    private static final String APP_SCOPE_FILTER_MISMATCH = "cursor 与当前 appScope 过滤条件不一致";
 
     private final ChatSessionMapper mapper;
 
@@ -88,7 +90,12 @@ public class MyBatisSessionRepository implements SessionRepository {
         String normalizedAppId = normalize(appId);
         String normalizedTitle = normalizeTitle(title);
         String normalizedChannel = normalize(channel);
-        Cursor decoded = decodeCursor(cursor, normalizedAppId, normalizedTitle, normalizedChannel);
+        String normalizedAppScope = filter == null || filter.appScope() == null
+                ? null
+                : filter.appScope().name();
+        boolean mainSiteOnly = filter != null && filter.mainSiteOnly();
+        Cursor decoded = decodeCursor(
+                cursor, normalizedAppId, normalizedTitle, normalizedChannel, normalizedAppScope);
         int pageSize = Math.max(1, Math.min(limit <= 0 ? 20 : limit, 200));
         List<ChatSession> rows = mapper.findPageByOwner(
                         tenantId,
@@ -96,6 +103,7 @@ public class MyBatisSessionRepository implements SessionRepository {
                         normalizedAppId,
                         titlePattern(normalizedTitle),
                         normalizedChannel,
+                        mainSiteOnly,
                         decoded.updatedAt(),
                         decoded.id(),
                         pageSize + 1
@@ -105,7 +113,8 @@ public class MyBatisSessionRepository implements SessionRepository {
         boolean hasMore = rows.size() > pageSize;
         List<ChatSession> items = hasMore ? rows.subList(0, pageSize) : rows;
         String nextCursor = hasMore
-                ? encodeCursor(items.get(items.size() - 1), normalizedAppId, normalizedTitle, normalizedChannel)
+                ? encodeCursor(items.get(items.size() - 1), normalizedAppId, normalizedTitle, normalizedChannel,
+                        normalizedAppScope)
                 : null;
         return new ChatSessionPage(items, nextCursor);
     }
@@ -135,16 +144,17 @@ public class MyBatisSessionRepository implements SessionRepository {
         String normalizedAppId = normalize(appId);
         String normalizedTitle = normalizeTitle(title);
         String normalizedChannel = normalize(channel);
+        boolean mainSiteOnly = filter != null && filter.mainSiteOnly();
         String titlePattern = titlePattern(normalizedTitle);
         long totalRows = mapper.countPageByOwner(
-                tenantId, userId, normalizedAppId, titlePattern, normalizedChannel);
+                tenantId, userId, normalizedAppId, titlePattern, normalizedChannel, mainSiteOnly);
         long totalPages = totalRows == 0 ? 0 : (totalRows + normalizedSize - 1) / normalizedSize;
         long offset = (long) (normalizedPage - 1) * normalizedSize;
         List<ChatSession> items = totalRows == 0 || offset >= totalRows
                 ? List.of()
                 : mapper.findNumberPageByOwner(
                         tenantId, userId, normalizedAppId, titlePattern, normalizedChannel,
-                        normalizedSize, offset).stream()
+                        mainSiteOnly, normalizedSize, offset).stream()
                 .map(this::toDomain)
                 .toList();
         return new ChatSessionNumberPage(items, normalizedPage, normalizedSize, totalRows, totalPages);
@@ -277,9 +287,15 @@ public class MyBatisSessionRepository implements SessionRepository {
                 session.latestMessageSeq(), session.lastReadSeq(), metadataJson, session.createdAt(), updatedAt);
     }
 
-    private String encodeCursor(ChatSession session, String appId, String title, String channel) {
+    private String encodeCursor(
+            ChatSession session, String appId, String title, String channel, String appScope) {
         String raw;
-        if (channel != null) {
+        if (appScope != null) {
+            raw = CURSOR_VERSION_V5 + CURSOR_SEPARATOR + encodeFilter(appScope) + CURSOR_SEPARATOR
+                    + encodeFilter(appId) + CURSOR_SEPARATOR + encodeFilter(title) + CURSOR_SEPARATOR
+                    + encodeFilter(channel) + CURSOR_SEPARATOR + session.updatedAt() + CURSOR_SEPARATOR
+                    + session.id();
+        } else if (channel != null) {
             raw = CURSOR_VERSION_V4 + CURSOR_SEPARATOR + encodeFilter(appId) + CURSOR_SEPARATOR
                     + encodeFilter(title) + CURSOR_SEPARATOR + encodeFilter(channel) + CURSOR_SEPARATOR
                     + session.updatedAt() + CURSOR_SEPARATOR + session.id();
@@ -294,16 +310,18 @@ public class MyBatisSessionRepository implements SessionRepository {
     }
 
     private Cursor decodeCursor(
-            String cursor, String expectedAppId, String expectedTitle, String expectedChannel) {
+            String cursor, String expectedAppId, String expectedTitle, String expectedChannel,
+            String expectedAppScope) {
         if (cursor == null || cursor.isBlank()) {
             return Cursor.empty();
         }
         try {
             String raw = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
-            return decodeCursorValue(raw, expectedAppId, expectedTitle, expectedChannel);
+            return decodeCursorValue(raw, expectedAppId, expectedTitle, expectedChannel, expectedAppScope);
         } catch (IllegalArgumentException ex) {
             if (APP_ID_FILTER_MISMATCH.equals(ex.getMessage()) || TITLE_FILTER_MISMATCH.equals(ex.getMessage())
-                    || CHANNEL_FILTER_MISMATCH.equals(ex.getMessage())) {
+                    || CHANNEL_FILTER_MISMATCH.equals(ex.getMessage())
+                    || APP_SCOPE_FILTER_MISMATCH.equals(ex.getMessage())) {
                 throw ex;
             }
             return Cursor.empty();
@@ -313,25 +331,36 @@ public class MyBatisSessionRepository implements SessionRepository {
     }
 
     private Cursor decodeCursorValue(
-            String raw, String expectedAppId, String expectedTitle, String expectedChannel) {
+            String raw, String expectedAppId, String expectedTitle, String expectedChannel,
+            String expectedAppScope) {
         String[] parts = raw.split("\\|", -1);
         if (parts.length == 4 && CURSOR_VERSION_V2.equals(parts[0])) {
+            validateFilter(expectedAppScope, null, APP_SCOPE_FILTER_MISMATCH);
             validateFilter(expectedAppId, decodeFilter(parts[1]), APP_ID_FILTER_MISMATCH);
             validateFilter(expectedTitle, null, TITLE_FILTER_MISMATCH);
             validateFilter(expectedChannel, null, CHANNEL_FILTER_MISMATCH);
             return new Cursor(Instant.parse(parts[2]), parts[3]);
         }
         if (parts.length == 5 && CURSOR_VERSION_V3.equals(parts[0])) {
+            validateFilter(expectedAppScope, null, APP_SCOPE_FILTER_MISMATCH);
             validateFilter(expectedAppId, decodeFilter(parts[1]), APP_ID_FILTER_MISMATCH);
             validateFilter(expectedTitle, decodeFilter(parts[2]), TITLE_FILTER_MISMATCH);
             validateFilter(expectedChannel, null, CHANNEL_FILTER_MISMATCH);
             return new Cursor(Instant.parse(parts[3]), parts[4]);
         }
         if (parts.length == 6 && CURSOR_VERSION_V4.equals(parts[0])) {
+            validateFilter(expectedAppScope, null, APP_SCOPE_FILTER_MISMATCH);
             validateFilter(expectedAppId, decodeFilter(parts[1]), APP_ID_FILTER_MISMATCH);
             validateFilter(expectedTitle, decodeFilter(parts[2]), TITLE_FILTER_MISMATCH);
             validateFilter(expectedChannel, decodeFilter(parts[3]), CHANNEL_FILTER_MISMATCH);
             return new Cursor(Instant.parse(parts[4]), parts[5]);
+        }
+        if (parts.length == 7 && CURSOR_VERSION_V5.equals(parts[0])) {
+            validateFilter(expectedAppScope, decodeFilter(parts[1]), APP_SCOPE_FILTER_MISMATCH);
+            validateFilter(expectedAppId, decodeFilter(parts[2]), APP_ID_FILTER_MISMATCH);
+            validateFilter(expectedTitle, decodeFilter(parts[3]), TITLE_FILTER_MISMATCH);
+            validateFilter(expectedChannel, decodeFilter(parts[4]), CHANNEL_FILTER_MISMATCH);
+            return new Cursor(Instant.parse(parts[5]), parts[6]);
         }
         return Cursor.empty();
     }

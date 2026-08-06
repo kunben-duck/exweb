@@ -296,7 +296,7 @@ class MyBatisXmlMapperConsistencyTest {
     }
 
     @Test
-    void sessionPagesShouldUseTheSameEscapedTitleFilter() throws IOException {
+    void sessionPagesShouldUseTheSameFilters() throws IOException {
         String mapper = Files.readString(
                 MAPPER_XML_ROOT.resolve("session/ChatSessionMapper.opengauss.xml"));
 
@@ -306,6 +306,9 @@ class MyBatisXmlMapperConsistencyTest {
         assertSessionChannelFilter(mapper, "findPageByOwner");
         assertSessionChannelFilter(mapper, "countPageByOwner");
         assertSessionChannelFilter(mapper, "findNumberPageByOwner");
+        assertSessionMainSiteFilter(mapper, "findPageByOwner");
+        assertSessionMainSiteFilter(mapper, "countPageByOwner");
+        assertSessionMainSiteFilter(mapper, "findNumberPageByOwner");
     }
 
     @Test
@@ -335,6 +338,15 @@ class MyBatisXmlMapperConsistencyTest {
         assertThat(statement)
                 .contains("channel != null and channel != ''")
                 .contains("AND channel = #{channel}");
+    }
+
+    private void assertSessionMainSiteFilter(String mapper, String statementId) {
+        String statement = statement(mapper, "select", statementId);
+        assertThat(statement)
+                .contains("<when test=\"mainSiteOnly\">")
+                .contains("AND app_id IS NULL")
+                .contains("<when test=\"appId != null and appId != ''\">")
+                .contains("AND app_id = #{appId}");
     }
 
     @Test

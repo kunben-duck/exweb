@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.application.integration.conversation.SessionAppCategory;
+import com.huawei.it.ex.one.application.integration.conversation.SessionAppScope;
 import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
@@ -107,6 +108,39 @@ class MyBatisSessionRepositoryTest {
     }
 
     @Test
+    void mainSiteScopeBindsVersionFiveCursorAndCannotBeChanged() {
+        RecordingMapper mapper = new RecordingMapper();
+        mapper.pageRows = List.of(
+                row("session-2", null, Instant.parse("2026-07-13T02:00:00Z")),
+                row("session-1", null, Instant.parse("2026-07-13T01:00:00Z"))
+        );
+        MyBatisSessionRepository repository = new MyBatisSessionRepository(mapper);
+        SessionListFilter mainSite = new SessionListFilter(null, "利润", "mobile", SessionAppScope.MAIN_SITE);
+
+        ChatSessionPage firstPage = repository.pageByTenantIdAndUserId(
+                "tenant1", "user1", mainSite, null, 1);
+
+        assertThat(mapper.lastCursorMainSiteOnly).isTrue();
+        assertThat(mapper.lastAppId).isNull();
+        assertThat(decodeCursor(firstPage.nextCursor())).startsWith("v5|");
+        assertThat(repository.pageByTenantIdAndUserId(
+                "tenant1", "user1", mainSite, firstPage.nextCursor(), 1).items()).isNotEmpty();
+        assertThatThrownBy(() -> repository.pageByTenantIdAndUserId(
+                "tenant1", "user1", new SessionListFilter(null, "利润", "mobile"),
+                firstPage.nextCursor(), 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cursor 与当前 appScope 过滤条件不一致");
+    }
+
+    @Test
+    void mainSiteScopeRejectsExplicitAppId() {
+        assertThatThrownBy(() -> new SessionListFilter(
+                "fund-app", null, null, SessionAppScope.MAIN_SITE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("不能同时指定 appId");
+    }
+
+    @Test
     void numberPageUsesSameTitlePatternForCountAndRows() {
         RecordingMapper mapper = new RecordingMapper();
         mapper.totalRows = 3;
@@ -119,8 +153,24 @@ class MyBatisSessionRepositoryTest {
         assertThat(mapper.lastNumberPageTitlePattern).isEqualTo("%profit%");
         assertThat(mapper.lastCountChannel).isEqualTo("mobile");
         assertThat(mapper.lastNumberPageChannel).isEqualTo("mobile");
+        assertThat(mapper.lastCountMainSiteOnly).isFalse();
+        assertThat(mapper.lastNumberPageMainSiteOnly).isFalse();
         assertThat(page.totalRows()).isEqualTo(3);
         assertThat(page.totalPages()).isEqualTo(2);
+    }
+
+    @Test
+    void mainSiteNumberPageUsesSameScopeForCountAndRows() {
+        RecordingMapper mapper = new RecordingMapper();
+        mapper.totalRows = 1;
+        MyBatisSessionRepository repository = new MyBatisSessionRepository(mapper);
+
+        repository.pageNumberByTenantIdAndUserId(
+                "tenant1", "user1", new SessionListFilter(
+                        null, null, "mobile", SessionAppScope.MAIN_SITE), 1, 20);
+
+        assertThat(mapper.lastCountMainSiteOnly).isTrue();
+        assertThat(mapper.lastNumberPageMainSiteOnly).isTrue();
     }
 
     @Test
@@ -196,7 +246,7 @@ class MyBatisSessionRepositoryTest {
         row.setStatus("ACTIVE");
         row.setChannel("web");
         row.setAppId(appId);
-        row.setAppName("资金助手");
+        row.setAppName(appId == null ? null : "资金助手");
         row.setRootSessionId(id);
         row.setLastNodeOrder(0L);
         row.setCreatedAt(updatedAt.minusSeconds(1));
@@ -229,6 +279,9 @@ class MyBatisSessionRepositoryTest {
         private String lastCountChannel;
         private String lastNumberPageTitlePattern;
         private String lastNumberPageChannel;
+        private boolean lastCursorMainSiteOnly;
+        private boolean lastCountMainSiteOnly;
+        private boolean lastNumberPageMainSiteOnly;
         private int lastCursorLimit;
         private int lastNumberPageLimit;
         private long totalRows;
@@ -256,27 +309,32 @@ class MyBatisSessionRepositoryTest {
 
         @Override
         public List<ChatSessionRow> findPageByOwner(String tenantId, String userId, String appId, String titlePattern,
-                                                    String channel, Instant cursorUpdatedAt, String cursorId, int limit) {
+                                                    String channel, boolean mainSiteOnly,
+                                                    Instant cursorUpdatedAt, String cursorId, int limit) {
             lastAppId = appId;
             lastCursorTitlePattern = titlePattern;
             lastCursorChannel = channel;
+            lastCursorMainSiteOnly = mainSiteOnly;
             lastCursorLimit = limit;
             return pageRows;
         }
 
         @Override
         public long countPageByOwner(
-                String tenantId, String userId, String appId, String titlePattern, String channel) {
+                String tenantId, String userId, String appId, String titlePattern, String channel,
+                boolean mainSiteOnly) {
             lastCountTitlePattern = titlePattern;
             lastCountChannel = channel;
+            lastCountMainSiteOnly = mainSiteOnly;
             return totalRows;
         }
 
         @Override public List<ChatSessionRow> findNumberPageByOwner(
                 String tenantId, String userId, String appId, String titlePattern, String channel,
-                int limit, long offset) {
+                boolean mainSiteOnly, int limit, long offset) {
             lastNumberPageTitlePattern = titlePattern;
             lastNumberPageChannel = channel;
+            lastNumberPageMainSiteOnly = mainSiteOnly;
             lastNumberPageLimit = limit;
             return List.of();
         }

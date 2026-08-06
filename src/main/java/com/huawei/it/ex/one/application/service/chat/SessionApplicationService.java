@@ -230,7 +230,8 @@ public class SessionApplicationService implements ChatSessionFacade {
                 new SessionListFilter(
                         normalizeTag(effectiveFilter.appId()),
                         normalizeTag(effectiveFilter.title()),
-                        normalizeTag(effectiveFilter.channel())),
+                        normalizeTag(effectiveFilter.channel()),
+                        effectiveFilter.appScope()),
                 cursor,
                 limit);
     }
@@ -261,7 +262,8 @@ public class SessionApplicationService implements ChatSessionFacade {
                 new SessionListFilter(
                         normalizeTag(effectiveFilter.appId()),
                         normalizeTag(effectiveFilter.title()),
-                        normalizeTag(effectiveFilter.channel())),
+                        normalizeTag(effectiveFilter.channel()),
+                        effectiveFilter.appScope()),
                 curPage,
                 pageSize);
     }

@@ -102,8 +102,9 @@ public interface SessionRepository {
         String appId = filter == null ? null : filter.appId();
         String title = filter == null ? null : filter.title();
         String channel = filter == null ? null : filter.channel();
+        boolean mainSiteOnly = filter != null && filter.mainSiteOnly();
         if ((title == null || title.isBlank()) && (appId == null || appId.isBlank())
-                && (channel == null || channel.isBlank())) {
+                && (channel == null || channel.isBlank()) && !mainSiteOnly) {
             return pageByTenantIdAndUserId(tenantId, userId, cursor, limit);
         }
         int pageSize = Math.max(1, Math.min(limit <= 0 ? 20 : limit, 200));
@@ -112,6 +113,7 @@ public interface SessionRepository {
         String normalizedChannel = normalizeFilter(channel);
         List<ChatSession> items = findByTenantIdAndUserId(tenantId, userId).stream()
                 .filter(session -> !"DELETED".equals(session.status()))
+                .filter(session -> !mainSiteOnly || session.appId() == null)
                 .filter(session -> normalizedAppId == null || normalizedAppId.equals(session.appId()))
                 .filter(session -> titleContains(session.title(), normalizedTitle))
                 .filter(session -> normalizedChannel == null || normalizedChannel.equals(session.channel()))
@@ -169,8 +171,10 @@ public interface SessionRepository {
         String normalizedAppId = normalizeFilter(effectiveFilter.appId());
         String normalizedTitle = normalizeTitleFilter(effectiveFilter.title());
         String normalizedChannel = normalizeFilter(effectiveFilter.channel());
+        boolean mainSiteOnly = effectiveFilter.mainSiteOnly();
         List<ChatSession> all = sessions.stream()
                 .filter(session -> !"DELETED".equals(session.status()))
+                .filter(session -> !mainSiteOnly || session.appId() == null)
                 .filter(session -> normalizedAppId == null || normalizedAppId.equals(session.appId()))
                 .filter(session -> titleContains(session.title(), normalizedTitle))
                 .filter(session -> normalizedChannel == null || normalizedChannel.equals(session.channel()))

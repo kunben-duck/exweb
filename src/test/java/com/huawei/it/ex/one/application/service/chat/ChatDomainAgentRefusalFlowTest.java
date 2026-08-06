@@ -80,6 +80,8 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
         AtomicInteger routeCalls = new AtomicInteger();
         AtomicInteger oldAgentTailSubscriptions = new AtomicInteger();
         AtomicReference<Map<String, Object>> rerouteMetadata = new AtomicReference<>();
+        AtomicReference<String> initialUserMessageId = new AtomicReference<>();
+        AtomicReference<String> reroutedUserMessageId = new AtomicReference<>();
         RouteSignalApplicationService routeService = new RouteSignalApplicationService(
                 request -> UseCaseMatchResult.notMatched("disabled"),
                 intentAgent((command, memory, routeUser) -> null),
@@ -128,6 +130,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
             @Override
             public Flux<ChatEvent> query(AgentRuntimeRequest request) {
                 if ("agent-a".equals(request.routeTarget().selectedAgentCode())) {
+                    initialUserMessageId.set(request.userMessageId());
                     return Flux.concat(
                             Flux.just(
                                     MessageSnapshotEvent.of(request.runId(), request.sessionId(), "obsolete answer"),
@@ -138,6 +141,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                                         request.runId(), request.sessionId(), "late old-agent output"));
                             }));
                 }
+                reroutedUserMessageId.set(request.userMessageId());
                 return Flux.just(
                         MessageDeltaEvent.of(request.runId(), request.sessionId(), "rerouted answer"),
                         com.huawei.it.ex.one.domain.chat.MessageCompletedEvent.of(
@@ -166,6 +170,11 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 .verifyComplete();
 
         assertThat(oldAgentTailSubscriptions).hasValue(0);
+        assertThat(initialUserMessageId).hasValue(reroutedUserMessageId.get());
+        assertThat(messages.messages).filteredOn(message -> "user".equals(message.role()))
+                .singleElement()
+                .extracting(ChatMessage::id)
+                .isEqualTo(initialUserMessageId.get());
         assertThat(rerouteMetadata.get().get("lastIntentRejectReason")).isEqualTo(Map.of(
                 "lastIntent", "财经知识问答",
                 "domainRejectMessage", "cannot answer this domain"));

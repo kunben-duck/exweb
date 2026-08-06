@@ -15,6 +15,12 @@ public record DomainAgentExecutionContext(
         RouteTarget route,
         UserContext user,
         RuntimeBinding binding,
-        RuntimeForwardHeaders forwardHeaders
+        RuntimeForwardHeaders forwardHeaders,
+        String userMessageId
 ) {
+    public DomainAgentExecutionContext(ChatCommand command, String runId, RouteTarget route,
+                                       UserContext user, RuntimeBinding binding,
+                                       RuntimeForwardHeaders forwardHeaders) {
+        this(command, runId, route, user, binding, forwardHeaders, null);
+    }
 }

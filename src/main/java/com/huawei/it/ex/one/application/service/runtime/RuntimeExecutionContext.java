@@ -31,11 +31,22 @@ public record RuntimeExecutionContext(
         RuntimeSessionMode runtimeSessionMode,
         RuntimeForwardHeaders forwardHeaders,
         List<UploadedDocument> documents,
+        String userMessageId,
         TraceContext traceContext
 ) {
     public RuntimeExecutionContext {
         documents = documents == null ? List.of() : List.copyOf(documents);
+        userMessageId = userMessageId == null || userMessageId.isBlank() ? null : userMessageId.trim();
         traceContext = traceContext == null ? TraceContext.empty() : traceContext;
+    }
+
+    public RuntimeExecutionContext(ChatCommand command, String runId, MemoryContext memory,
+                                   IntentDecision intent, RouteTarget route, UserContext user,
+                                   RuntimeBinding binding, RuntimeSessionMode runtimeSessionMode,
+                                   RuntimeForwardHeaders forwardHeaders, List<UploadedDocument> documents,
+                                   TraceContext traceContext) {
+        this(command, runId, memory, intent, route, user, binding, runtimeSessionMode, forwardHeaders, documents,
+                null, traceContext);
     }
 
     public RuntimeExecutionContext(ChatCommand command, String runId, MemoryContext memory,
@@ -43,7 +54,7 @@ public record RuntimeExecutionContext(
                                    RuntimeBinding binding, RuntimeSessionMode runtimeSessionMode,
                                    RuntimeForwardHeaders forwardHeaders, List<UploadedDocument> documents) {
         this(command, runId, memory, intent, route, user, binding, runtimeSessionMode, forwardHeaders, documents,
-                TraceContext.empty());
+                null, TraceContext.empty());
     }
 
     public RuntimeExecutionContext(ChatCommand command, String runId, MemoryContext memory,
@@ -51,6 +62,6 @@ public record RuntimeExecutionContext(
                                    RuntimeBinding binding, RuntimeSessionMode runtimeSessionMode,
                                    RuntimeForwardHeaders forwardHeaders) {
         this(command, runId, memory, intent, route, user, binding, runtimeSessionMode, forwardHeaders, List.of(),
-                TraceContext.empty());
+                null, TraceContext.empty());
     }
 }

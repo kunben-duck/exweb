@@ -19,7 +19,7 @@ import java.util.Map;
 /**
  * DomainAgent chat wire DTO 映射器。
  *
- * <p>DomainAgent 的请求体以前端 {@code metadata} 作为业务扩展，但 {@code skillId/query/sessionId}
+ * <p>DomainAgent 的请求体以前端 {@code metadata} 作为业务扩展，但 {@code messageId/skillId/query/sessionId}
  * 是会话绑定正确性的保留字段，必须由服务端按当前绑定强制覆盖。ChatService 只在边界处校验
  * docList 中的 docId/url 必须来自已鉴权附件，避免伪造文档引用。</p>
  */
@@ -37,6 +37,11 @@ public class DomainAgentChatRequestMapper {
         Map<String, Object> body = deepCopyMap(request.metadata());
         validateDocList(body, request.documents());
         Map<String, Object> next = new LinkedHashMap<>(body);
+        // messageId只能来自已落库的ChatService user消息，不能信任前端metadata中的同名字段。
+        next.remove("messageId");
+        if (request.messageId() != null) {
+            next.put("messageId", request.messageId());
+        }
         if (request.shortTermMemoryEnabled()) {
             next.put("messages", request.messages());
         }

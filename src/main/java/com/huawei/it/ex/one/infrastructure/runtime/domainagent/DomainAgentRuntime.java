@@ -52,6 +52,7 @@ public class DomainAgentRuntime implements AgentRuntime {
                 domainAgentId,
                 runtimeSessionId(request),
                 request.message(),
+                request.userMessageId(),
                 request.documents(),
                 memory.agentRuntimeMessages(),
                 memory.shortTermEnabled(),

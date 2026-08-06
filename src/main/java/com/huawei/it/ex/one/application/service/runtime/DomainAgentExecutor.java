@@ -51,6 +51,7 @@ public class DomainAgentExecutor {
                 context.route().selectedAgentCode(),
                 context.binding() == null ? command.sessionId() : context.binding().runtimeSessionId(),
                 command.message(),
+                context.userMessageId(),
                 documents,
                 SelectedIntentContext.removeReserved(command.metadata()),
                 context.forwardHeaders()

@@ -407,6 +407,7 @@ final class DomainAgentReplacementExecutor {
         return new DomainAgentRunContext(
                 replacement.runtimeCommand(),
                 context.runId(),
+                context.userMessageId(),
                 context.session(),
                 replacement.runtimeMemory(),
                 replacement.nextRoute(),

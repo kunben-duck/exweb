@@ -267,6 +267,7 @@ final class ChatRuntimeDispatchCoordinator {
             case DOMAIN_AGENT -> domainAgentRefusalCoordinator.execute(new DomainAgentRunContext(
                     runtimeCommand,
                     request.runId(),
+                    request.run().userMessageId(),
                     request.session(),
                     runtimeMemory,
                     resolution.route(),
@@ -320,6 +321,7 @@ final class ChatRuntimeDispatchCoordinator {
         DomainAgentRunContext context = new DomainAgentRunContext(
                 request.runCommand(),
                 request.runId(),
+                request.run().userMessageId(),
                 request.session(),
                 request.memory(),
                 null,

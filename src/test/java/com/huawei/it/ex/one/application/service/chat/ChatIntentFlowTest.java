@@ -376,6 +376,10 @@ class ChatIntentFlowTest extends ChatFlowTestSupport {
 
         assertThat(captured.get()).isNotNull();
         assertThat(captured.get().query()).isEqualTo("分析这张图片");
+        assertThat(messages.messages).filteredOn(message -> "user".equals(message.role()))
+                .singleElement()
+                .extracting(ChatMessage::id)
+                .isEqualTo(captured.get().messageId());
         assertThat(captured.get().metadata().get("sceneParam")).isInstanceOfSatisfying(Map.class,
                 sceneParam -> {
                     assertThat(sceneParam).containsEntry("region", "CN");

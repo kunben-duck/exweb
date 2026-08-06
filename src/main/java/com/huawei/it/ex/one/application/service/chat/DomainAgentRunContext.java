@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicReference;
 record DomainAgentRunContext(
         ChatCommand command,
         String runId,
+        String userMessageId,
         ChatSession session,
         MemoryContext memory,
         RouteTarget route,
@@ -40,6 +41,7 @@ record DomainAgentRunContext(
         AtomicReference<Map<String, Object>> pendingInteractionPayloadRef
 ) {
     DomainAgentRunContext {
+        userMessageId = userMessageId == null || userMessageId.isBlank() ? null : userMessageId.trim();
         persistenceState = persistenceState == null
                 ? AgentDataPersistenceState.full()
                 : persistenceState;
@@ -66,7 +68,7 @@ record DomainAgentRunContext(
             int rerouteCount,
             String routeMemoryQuery,
             AgentDataPersistenceState persistenceState) {
-        this(command, runId, session, memory, route, user, routeRef, bindingRef, executionClaim,
+        this(command, runId, null, session, memory, route, user, routeRef, bindingRef, executionClaim,
                 forwardHeaders, traceContext, intentDecision, documents, rejectedDomainAgentIds,
                 rerouteCount, routeMemoryQuery, persistenceState, new AtomicReference<>());
     }
@@ -88,7 +90,7 @@ record DomainAgentRunContext(
             Set<String> rejectedDomainAgentIds,
             int rerouteCount,
             String routeMemoryQuery) {
-        this(command, runId, session, memory, route, user, routeRef, bindingRef, executionClaim,
+        this(command, runId, null, session, memory, route, user, routeRef, bindingRef, executionClaim,
                 forwardHeaders, traceContext, intentDecision, documents, rejectedDomainAgentIds,
                 rerouteCount, routeMemoryQuery, AgentDataPersistenceState.full(), new AtomicReference<>());
     }

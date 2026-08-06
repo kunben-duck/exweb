@@ -82,7 +82,8 @@ public class AgentRuntimeExecutor {
                 SelectedIntentContext.removeReserved(command.metadata()),
                 binding == null ? Map.of() : binding.metadata(),
                 context.forwardHeaders(),
-                context.traceContext()
+                context.traceContext(),
+                context.userMessageId()
         );
         AgentRuntime runtime = context.binding() == null
                 ? runtimeRegistry.defaultRuntime()

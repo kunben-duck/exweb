@@ -29,6 +29,7 @@ class DomainAgentChatRequestMapperTest {
     @SuppressWarnings("unchecked")
     void forwardsMetadataExtensionsButOverridesReservedBindingFields() {
         Map<String, Object> metadata = Map.of(
+                "messageId", "forged-message",
                 "skillId", "skill-tax",
                 "query", "front query",
                 "platform", "MOBILE",
@@ -44,6 +45,7 @@ class DomainAgentChatRequestMapperTest {
         Map<String, Object> wire = mapper.toWireRequest(request(metadata, List.of(domainAgentDocument())));
 
         assertThat(wire)
+                .containsEntry("messageId", "msg-user-1")
                 .containsEntry("skillId", "skill-tax")
                 .containsEntry("query", "hello")
                 .containsEntry("sessionId", "session1")
@@ -148,6 +150,22 @@ class DomainAgentChatRequestMapperTest {
                 .doesNotContainKey("messages");
     }
 
+    @Test
+    void missingTrustedMessageIdDoesNotForwardMetadataValue() {
+        DomainAgentRequest request = new DomainAgentRequest(
+                new UserContext("tenant1", "user1", "User One"),
+                "session1",
+                "run1",
+                "skill-tax",
+                "session1",
+                "hello",
+                List.of(),
+                Map.of("messageId", "forged-message"),
+                RuntimeForwardHeaders.empty());
+
+        assertThat(mapper.toWireRequest(request)).doesNotContainKey("messageId");
+    }
+
     private DomainAgentRequest request(Map<String, Object> metadata, List<UploadedDocument> documents) {
         return new DomainAgentRequest(
                 new UserContext("tenant1", "user1", "User One"),
@@ -156,7 +174,10 @@ class DomainAgentChatRequestMapperTest {
                 "skill-tax",
                 "session1",
                 "hello",
+                "msg-user-1",
                 documents,
+                List.of(),
+                false,
                 metadata,
                 RuntimeForwardHeaders.empty()
         );

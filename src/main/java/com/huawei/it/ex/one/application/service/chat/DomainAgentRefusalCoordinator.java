@@ -234,6 +234,7 @@ final class DomainAgentRefusalCoordinator {
                 RuntimeSessionMode.RESUME,
                 context.forwardHeaders(),
                 context.documents(),
+                context.userMessageId(),
                 context.traceContext());
     }
 
@@ -378,6 +379,7 @@ final class DomainAgentRefusalCoordinator {
         return new DomainAgentRunContext(
                 runtimeCommand,
                 source.runId(),
+                source.userMessageId(),
                 source.session(),
                 source.memory(),
                 currentRoute,

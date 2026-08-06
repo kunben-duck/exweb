@@ -28,6 +28,7 @@ import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
+import com.huawei.it.ex.one.domain.chat.ChatMessageAttachment;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
@@ -186,6 +187,10 @@ class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
         assertThat(capturedHeaders.get().cookieHeader()).isEqualTo("sid=abc");
         assertThat(capturedRequest.get()).isNotNull();
         assertThat(capturedRequest.get().query()).isEmpty();
+        assertThat(messages.attachments).filteredOn(attachment -> "doc1".equals(attachment.documentId()))
+                .singleElement()
+                .extracting(ChatMessageAttachment::messageId)
+                .isEqualTo(capturedRequest.get().messageId());
         assertThat(capturedRequest.get().documents()).extracting(UploadedDocument::id).containsExactly("doc1");
         assertThat(capturedRequest.get().metadata())
                 .containsExactlyEntriesOf(Map.of("skillId", "skill-other"));
@@ -234,6 +239,10 @@ class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
                 .verifyComplete();
 
         assertThat(capturedRequest.get().query()).isEmpty();
+        assertThat(messages.attachments).filteredOn(attachment -> "doc2".equals(attachment.documentId()))
+                .singleElement()
+                .extracting(ChatMessageAttachment::messageId)
+                .isEqualTo(capturedRequest.get().messageId());
         assertThat(capturedRequest.get().documents()).extracting(UploadedDocument::id).containsExactly("doc2");
         assertThat(messages.parts.stream()
                 .filter(part -> "METADATA".equals(part.partType()))
@@ -342,8 +351,10 @@ class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
         assertThat(messages.messages).filteredOn(message -> "user".equals(message.role()))
                 .filteredOn(message -> "本轮直连问题".equals(message.content()))
                 .singleElement()
-                .extracting(ChatMessage::parentMessageId)
-                .isEqualTo("msg-wait-assistant");
+                .satisfies(message -> {
+                    assertThat(message.parentMessageId()).isEqualTo("msg-wait-assistant");
+                    assertThat(message.id()).isEqualTo(capturedRequest.get().messageId());
+                });
         assertThat(bindings.bindingsForProvider("relay"))
                 .extracting(RuntimeBinding::status)
                 .containsExactlyInAnyOrder(RuntimeBindingStatus.RESUMABLE, RuntimeBindingStatus.CANCELLED);

@@ -44,7 +44,8 @@ final class LegacyDomainAgentAwareExecutor extends AgentRuntimeExecutor {
                     context.route(),
                     context.user(),
                     context.binding(),
-                    context.forwardHeaders()));
+                    context.forwardHeaders(),
+                    context.userMessageId()));
         }
         return delegate.execute(context);
     }

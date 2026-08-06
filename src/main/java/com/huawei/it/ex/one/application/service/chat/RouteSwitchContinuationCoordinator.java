@@ -286,6 +286,7 @@ final class RouteSwitchContinuationCoordinator {
         DomainAgentRunContext domainContext = new DomainAgentRunContext(
                 approved.command(),
                 request.runId(),
+                context.interaction().userMessageId(),
                 request.session(),
                 approved.runtimeMemory(),
                 context.route(),

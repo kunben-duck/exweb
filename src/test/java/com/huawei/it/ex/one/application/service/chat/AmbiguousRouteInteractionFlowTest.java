@@ -141,6 +141,7 @@ class AmbiguousRouteInteractionFlowTest extends ChatFlowTestSupport {
         assertThat(scenario.domainRequest().get()).satisfies(request -> {
             assertThat(request.domainAgentId()).isEqualTo("skill-low");
             assertThat(request.query()).isEqualTo("用户:分析经营情况");
+            assertThat(request.messageId()).isEqualTo(scenario.interaction().userMessageId());
             assertThat(request.metadata()).containsEntry("language", "zh_CN");
             assertThat(request.forwardHeaders().cookieHeader()).isEqualTo("SESSION=selected");
         });

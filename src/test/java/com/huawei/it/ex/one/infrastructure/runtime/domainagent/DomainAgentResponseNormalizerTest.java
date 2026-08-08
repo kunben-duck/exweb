@@ -376,7 +376,30 @@ class DomainAgentResponseNormalizerTest {
         assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.card");
         assertThat(events.getFirst().payload()).containsEntry("sourceType", "diyCardScene")
                 .containsEntry("cardType", "diyCardScene")
-                .containsEntry("cardSources", List.of("diyCardScene"));
+                .containsEntry("cardSources", List.of("diyCardScene"))
+                .doesNotContainKey("contentAgent");
+    }
+
+    @Test
+    void keepsContentAgentOnlyWhenItAccompaniesDiyCardScene() {
+        List<ChatEvent> valued = normalizer.normalize("run1", "session1", """
+                message: {"diyCardScene":{"type":"tax"},"contentAgent":"卡片补充内容"}
+                """);
+        List<ChatEvent> empty = normalizer.normalize("run1", "session1", """
+                message: {"diyCardScene":{"type":"tax"},"contentAgent":""}
+                """);
+        List<ChatEvent> otherCard = normalizer.normalize("run1", "session1", """
+                message: {"cardList":[{"title":"卡片"}],"contentAgent":"不应附加"}
+                """);
+
+        assertThat(valued).extracting(ChatEvent::type).containsExactly("runtime.card");
+        assertThat(valued.getFirst().payload())
+                .containsEntry("sourceType", "diyCardScene")
+                .containsEntry("cardType", "diyCardScene")
+                .containsEntry("cardSources", List.of("diyCardScene"))
+                .containsEntry("contentAgent", "卡片补充内容");
+        assertThat(empty.getFirst().payload()).containsEntry("contentAgent", "");
+        assertThat(otherCard.getFirst().payload()).doesNotContainKey("contentAgent");
     }
 
     @Test

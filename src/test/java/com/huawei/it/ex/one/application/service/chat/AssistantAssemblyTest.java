@@ -124,6 +124,25 @@ class AssistantAssemblyTest {
     }
 
     @Test
+    void keepsDiyCardSceneContentAgentInHistoricalPart() {
+        AssistantAssembly assembly = new AssistantAssembly();
+        assembly.observe(RuntimeEvent.card("run1", "session1", Map.of(
+                "source", "domain-agent",
+                "sourceType", "diyCardScene",
+                "cardType", "diyCardScene",
+                "cardSources", List.of("diyCardScene"),
+                "diyCardScene", Map.of("type", "tax"),
+                "contentAgent", "卡片补充内容"
+        )));
+
+        assertThat(assembly.parts()).singleElement().satisfies(part -> {
+            assertThat(part.partType()).isEqualTo("CARD");
+            assertThat(part.sourceType()).isEqualTo("diyCardScene");
+            assertThat(part.payload()).containsEntry("contentAgent", "卡片补充内容");
+        });
+    }
+
+    @Test
     void placeholderPolicyDropsBusinessContentAndKeepsInteractionControls() {
         AgentDataPersistenceState state = new AgentDataPersistenceState("回答已隐藏")
                 .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);

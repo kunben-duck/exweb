@@ -15,6 +15,7 @@ public class AgentDataPersistenceProperties {
             "根据数据留存策略，本次回答不在消息历史中展示。";
 
     private boolean enabled;
+    private boolean cacheEnabled = true;
     private Duration cacheTtl = DEFAULT_CACHE_TTL;
     private String cacheKeyPrefix = DEFAULT_CACHE_KEY_PREFIX;
     private String placeholderContent = DEFAULT_PLACEHOLDER_CONTENT;
@@ -25,6 +26,14 @@ public class AgentDataPersistenceProperties {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public boolean isCacheEnabled() {
+        return cacheEnabled;
+    }
+
+    public void setCacheEnabled(boolean cacheEnabled) {
+        this.cacheEnabled = cacheEnabled;
     }
 
     public Duration getCacheTtl() {

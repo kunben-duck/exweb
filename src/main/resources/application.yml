@@ -99,6 +99,8 @@ financeex:
   agent-data-persistence:
     # 默认关闭，开启后仅 isSaveSession=N 的 DomainAgent 使用 assistant 占位历史。
     enabled: ${FINANCEEX_AGENT_DATA_PERSISTENCE_ENABLED:false}
+    # 关闭后完全跳过Redis读写，每次策略解析都实时查询技能配置Provider。
+    cache-enabled: ${FINANCEEX_AGENT_DATA_PERSISTENCE_CACHE_ENABLED:true}
     cache-ttl: ${FINANCEEX_AGENT_DATA_PERSISTENCE_CACHE_TTL:10m}
     cache-key-prefix: fin_ex:agent_data_persistence
     placeholder-content: ${FINANCEEX_AGENT_DATA_PERSISTENCE_PLACEHOLDER:根据数据留存策略，本次回答不在消息历史中展示。}

@@ -66,10 +66,12 @@ Chat 编排和策略服务不依赖 HTTP 地址、Cookie或外部响应 DTO。�
 flowchart TD
     A["确定可信 Runtime 目标"] --> B{"目标是 DomainAgent?"}
     B -- "否" --> C["保持当前策略，Relay 不查询配置"]
-    B -- "是" --> D["按 tenant + provider + skillId 读取 Redis"]
-    D --> E{"缓存命中?"}
-    E -- "是" --> F["得到 FULL 或 ASSISTANT_PLACEHOLDER"]
-    E -- "否" --> G["通过 Provider 查询技能配置"]
+    B -- "是" --> D{"策略缓存已开启?"}
+    D -- "是" --> E["按 tenant + provider + skillId 读取 Redis"]
+    E --> K{"缓存命中?"}
+    K -- "是" --> F["得到 FULL 或 ASSISTANT_PLACEHOLDER"]
+    K -- "否" --> G["通过 Provider 查询技能配置"]
+    D -- "否" --> G
     G --> F
     F --> H["同一 run 内只允许收紧策略"]
     H --> I["owner/fencing 保护下写入最终路由和 run metadata"]
@@ -112,8 +114,13 @@ FULL
 ASSISTANT_PLACEHOLDER
 ```
 
-默认 TTL 为 10 分钟，`FULL` 和 `ASSISTANT_PLACEHOLDER` 均缓存。Redis 读取失败时回源 Provider；Provider
-成功但 Redis 写入失败时，当前 run 继续使用已解析策略。无缓存且 Provider 失败时不降级为 `FULL`。
+`cache-enabled` 默认开启，保持升级前的缓存行为。开启时默认 TTL 为 10 分钟，`FULL` 和
+`ASSISTANT_PLACEHOLDER` 均缓存；Redis 读取失败时回源 Provider，Provider成功但 Redis 写入失败时，
+当前 run 继续使用已解析策略。无缓存且 Provider 失败时不降级为 `FULL`。
+
+`cache-enabled=false` 时完全跳过 Redis `GET/SET`，每次新的策略解析都直接查询 Provider，`cache-ttl`
+不参与该模式。关闭缓存不会删除已有 key，旧数据等待原 TTL 自然过期。Interaction continuation 仍继承
+source run 已固化的策略，不因等待期间配置变化重新查询或放宽 no-store 策略。
 
 缓存按租户隔离，同一 `skillId` 不会跨租户共享策略。升级后不再读取旧的无租户缓存 key；旧 key 按原
 TTL自然过期，无需迁移。Redis同步操作继续运行在 `agentDataPersistenceIoScheduler` 有界调度器中；默认
@@ -156,6 +163,7 @@ financeex:
 
   agent-data-persistence:
     enabled: ${FINANCEEX_AGENT_DATA_PERSISTENCE_ENABLED:false}
+    cache-enabled: ${FINANCEEX_AGENT_DATA_PERSISTENCE_CACHE_ENABLED:true}
     cache-ttl: ${FINANCEEX_AGENT_DATA_PERSISTENCE_CACHE_TTL:10m}
     cache-key-prefix: fin_ex:agent_data_persistence
     placeholder-content: ${FINANCEEX_AGENT_DATA_PERSISTENCE_PLACEHOLDER:根据数据留存策略，本次回答不在消息历史中展示。}
@@ -171,6 +179,6 @@ financeex:
 - live-only 业务 Event 不支持 Event Resume。页面初次订阅前、断线期间或 Redis 发布失败时遗漏的内容不可恢复。
 - `stream-status.latestSeq` 是最新持久化 Event 位置，不代表最新实时业务 sequence。
 - 该能力不向 DomainAgent 或 Relay 发送留存参数，不控制下游存储。
-- Redis 缓存存在最多一个 TTL 周期的配置生效延迟；紧急变更需要删除对应 key。
+- 缓存开启时，配置变更最多延迟一个 TTL 周期生效；需要每次实时获取时可关闭缓存并重启服务。
 - `financeex.agent-runtime.forward-cookie.enabled=false` 时配置查询仍会执行，但不会携带 Cookie。
 - run metadata 和 assistant metadata 只保存内部策略标记及占位文案，不保存外部配置响应。

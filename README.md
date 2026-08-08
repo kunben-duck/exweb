@@ -119,8 +119,9 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 `FINANCEEX_AGENT_DATA_PERSISTENCE_ENABLED=true` 时，DomainAgent 调用前使用可信 `skillId` 查询技能配置。
 仅明确返回 `isSaveSession=N` 时，业务 Event 只通过本机流和 Redis Pub/Sub 实时输出，不写入事件表；
 run 生命周期、Intent、路由、拒答、澄清、确认和终态 Event 仍持久化。assistant 历史只保存配置化占位文案和
-必要的交互控制 Parts；`Y`、空值、`null` 或未配置均使用原有 `FULL` 行为。策略按环境、租户和 skillId 在
-Redis缓存10分钟。无有效缓存且配置查询失败时禁止调用DomainAgent，不降级为`FULL`。默认技能配置
+必要的交互控制 Parts；`Y`、空值、`null` 或未配置均使用原有 `FULL` 行为。策略默认按环境、租户和 skillId
+在Redis缓存10分钟；设置`FINANCEEX_AGENT_DATA_PERSISTENCE_CACHE_ENABLED=false`后完全跳过Redis读写，
+每次新的策略解析都实时查询Provider。无有效缓存且配置查询失败时禁止调用DomainAgent，不降级为`FULL`。默认技能配置
 Provider使用HTTP接口并透传当前run入口捕获的Cookie；接口地址和路径必须显式配置，调用超时默认2秒。
 Cookie不进入请求体、缓存、事件、metadata、数据库或日志。Agent或Relay的Interaction continuation会从
 可信source run继承策略和占位文案，但不会继承来源run的Runtime启动标记；相似命名的未知下游事件不会因

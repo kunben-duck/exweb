@@ -73,6 +73,9 @@ public class AgentDataPersistencePolicyService {
         RuntimeForwardHeaders safeForwardHeaders = forwardHeaders == null
                 ? RuntimeForwardHeaders.empty()
                 : forwardHeaders;
+        if (!properties.isCacheEnabled()) {
+            return resolveFromProvider(user, tenantId, normalizedSkillId, safeForwardHeaders);
+        }
         return readCache(tenantId, normalizedSkillId)
                 .flatMap(cached -> cached
                         .map(Mono::just)
@@ -124,7 +127,9 @@ public class AgentDataPersistencePolicyService {
                                 "DomainAgent skill configuration provider failed",
                                 error))
                 .map(configuration -> toPolicy(skillId, configuration))
-                .flatMap(policy -> writeCache(tenantId, skillId, policy).thenReturn(policy));
+                .flatMap(policy -> properties.isCacheEnabled()
+                        ? writeCache(tenantId, skillId, policy).thenReturn(policy)
+                        : Mono.just(policy));
     }
 
     private AgentDataPersistencePolicy toPolicy(

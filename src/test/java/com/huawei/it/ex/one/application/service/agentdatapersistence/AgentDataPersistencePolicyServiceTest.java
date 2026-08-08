@@ -29,6 +29,7 @@ class AgentDataPersistencePolicyServiceTest {
     @Test
     void mapsExplicitNoToPlaceholderAndCachesThePolicy() {
         AgentDataPersistenceProperties properties = enabledProperties();
+        assertThat(properties.isCacheEnabled()).isTrue();
         RecordingCache cache = new RecordingCache();
         AtomicInteger providerCalls = new AtomicInteger();
         DomainAgentSkillConfigurationProvider provider = query -> {
@@ -44,6 +45,48 @@ class AgentDataPersistencePolicyServiceTest {
         assertThat(providerCalls).hasValue(1);
         assertThat(cache.values).containsEntry(
                 "tenant1:domain-agent:skill-1", AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
+    }
+
+    @Test
+    void cacheDisabledQueriesProviderEveryTimeWithoutRedisAccess() {
+        AgentDataPersistenceProperties properties = enabledProperties();
+        properties.setCacheEnabled(false);
+        RecordingCache cache = new RecordingCache();
+        cache.values.put("tenant1:domain-agent:skill-1", AgentDataPersistencePolicy.FULL);
+        AtomicInteger providerCalls = new AtomicInteger();
+        AgentDataPersistencePolicyService service = service(query -> {
+            providerCalls.incrementAndGet();
+            return Mono.just(new DomainAgentSkillConfiguration(query.skillId(), Boolean.FALSE));
+        }, cache, properties);
+
+        assertThat(service.resolve(user, "skill-1").block())
+                .isEqualTo(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
+        assertThat(service.resolve(user, "skill-1").block())
+                .isEqualTo(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
+
+        assertThat(providerCalls).hasValue(2);
+        assertThat(cache.getCalls).isZero();
+        assertThat(cache.putCalls).isZero();
+        assertThat(cache.values).containsEntry(
+                "tenant1:domain-agent:skill-1", AgentDataPersistencePolicy.FULL);
+    }
+
+    @Test
+    void cacheDisabledDoesNotUseExistingValueWhenProviderFails() {
+        AgentDataPersistenceProperties properties = enabledProperties();
+        properties.setCacheEnabled(false);
+        RecordingCache cache = new RecordingCache();
+        cache.values.put("tenant1:domain-agent:skill-1", AgentDataPersistencePolicy.FULL);
+        DomainAgentSkillConfigurationException failure = new DomainAgentSkillConfigurationException(
+                DomainAgentSkillConfigurationException.Reason.UNAVAILABLE,
+                "service unavailable");
+        AgentDataPersistencePolicyService service = service(
+                query -> Mono.error(failure), cache, properties);
+
+        assertThatThrownBy(() -> service.resolve(user, "skill-1").block())
+                .isSameAs(failure);
+        assertThat(cache.getCalls).isZero();
+        assertThat(cache.putCalls).isZero();
     }
 
     @Test
@@ -200,6 +243,7 @@ class AgentDataPersistencePolicyServiceTest {
                 .isEqualTo(AgentDataPersistencePolicy.FULL);
         assertThat(providerCalls).hasValue(0);
         assertThat(cache.getCalls).isZero();
+        assertThat(cache.putCalls).isZero();
     }
 
     private AgentDataPersistencePolicyService service(
@@ -219,6 +263,7 @@ class AgentDataPersistencePolicyServiceTest {
     private static final class RecordingCache implements AgentDataPersistencePolicyCache {
         private final Map<String, AgentDataPersistencePolicy> values = new HashMap<>();
         private int getCalls;
+        private int putCalls;
 
         @Override
         public Optional<AgentDataPersistencePolicy> get(
@@ -230,6 +275,7 @@ class AgentDataPersistencePolicyServiceTest {
         @Override
         public void put(String tenantId, String runtimeProvider, String skillId,
                         AgentDataPersistencePolicy policy, Duration ttl) {
+            putCalls++;
             values.put(tenantId + ":" + runtimeProvider + ":" + skillId, policy);
         }
     }

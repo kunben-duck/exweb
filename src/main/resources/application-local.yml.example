@@ -46,6 +46,7 @@ financeex:
   #   timeout: 2s
   agent-data-persistence:
     enabled: false
+    cache-enabled: true
     cache-ttl: 10m
     placeholder-content: 根据数据留存策略，本次回答不在消息历史中展示。
   domain-agent:

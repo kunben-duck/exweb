@@ -2,13 +2,20 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.huawei.it.ex.one.application.config.RuntimeStreamLimitsProperties;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistencePolicy;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
+import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
+import com.huawei.it.ex.one.domain.chat.MessageSnapshotEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 
-import org.junit.jupiter.api.Test;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
+import org.junit.jupiter.api.Test;
+import org.springframework.util.unit.DataSize;
+
+import java.lang.reflect.Field;
 import java.util.List;
 import java.util.Map;
 
@@ -199,6 +206,74 @@ class AssistantAssemblyTest {
     }
 
     @Test
+    void interactionControlResponseIsNotResourceLimitPartialOutput() {
+        List<RuntimeEvent> controlResponses = List.of(
+                RuntimeEvent.card("run-b", "session1", Map.of(
+                        "source", "chatservice",
+                        "sourceType", "intent-clarification-response",
+                        "interactionType", "INTENT_CLARIFICATION",
+                        "clarificationType", "AMBIGUOUS_ROUTE",
+                        "answerText", "财经知识助手"
+                )),
+                RuntimeEvent.card("run-b", "session1", Map.of(
+                        "source", "chatservice",
+                        "sourceType", "clarification-response",
+                        "interactionType", "AGENT_CLARIFICATION",
+                        "answerText", "确认"
+                )),
+                RuntimeEvent.card("run-b", "session1", Map.of(
+                        "source", "chatservice",
+                        "sourceType", "route-switch-confirmation-response",
+                        "interactionType", "ROUTE_SWITCH_CONFIRMATION",
+                        "approved", true
+                )));
+
+        controlResponses.forEach(event -> {
+            AssistantAssembly assembly = new AssistantAssembly();
+            assembly.observe(event);
+            assertThat(assembly.shouldPersistMessage()).isTrue();
+            assertThat(assembly.hasResourceLimitPartialOutput()).isFalse();
+        });
+    }
+
+    @Test
+    void retainedBusinessOutputIsResourceLimitPartialOutput() {
+        AssistantAssembly bodyAssembly = new AssistantAssembly();
+        AssistantAssembly cardAssembly = new AssistantAssembly();
+
+        bodyAssembly.observe(MessageDeltaEvent.of("run-b", "session1", "部分回答"));
+        cardAssembly.observe(RuntimeEvent.card("run-b", "session1", Map.of(
+                "source", "domain-agent",
+                "sourceType", "diyCardScene",
+                "diyCardScene", Map.of("type", "tax")
+        )));
+
+        assertThat(bodyAssembly.hasResourceLimitPartialOutput()).isTrue();
+        assertThat(cardAssembly.hasResourceLimitPartialOutput()).isTrue();
+    }
+
+    @Test
+    void placeholderResourceLimitRequiresObservedBusinessOutput() {
+        AgentDataPersistenceState state = new AgentDataPersistenceState("回答已隐藏")
+                .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER)
+                .markRuntimeDispatchStarted();
+        AssistantAssembly controlOnly = new AssistantAssembly(state);
+        AssistantAssembly withBusinessOutput = new AssistantAssembly(state);
+
+        controlOnly.observe(RuntimeEvent.card("run-b", "session1", Map.of(
+                "source", "chatservice",
+                "sourceType", "clarification-response",
+                "interactionType", "AGENT_CLARIFICATION",
+                "answerText", "确认"
+        )));
+        withBusinessOutput.observe(MessageDeltaEvent.of("run-b", "session1", "真实回答"));
+
+        assertThat(controlOnly.shouldPersistMessage()).isTrue();
+        assertThat(controlOnly.hasResourceLimitPartialOutput()).isFalse();
+        assertThat(withBusinessOutput.hasResourceLimitPartialOutput()).isTrue();
+    }
+
+    @Test
     void runtimeDispatchMarkerRoundTripsOnlyInPrivateRunMetadata() {
         AgentDataPersistenceState original = new AgentDataPersistenceState("回答已隐藏")
                 .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER)
@@ -212,5 +287,179 @@ class AssistantAssemblyTest {
         assertThat(restored.placeholderContent()).isEqualTo("回答已隐藏");
         assertThat(AgentDataPersistenceMetadata.removeRunPolicy(original.runMetadataOverlay()))
                 .isEmpty();
+    }
+
+    @Test
+    void filtersProcessPartsAfterProcessSubBudgetWithoutChangingEssentialPart() {
+        RuntimeStreamLimitsProperties properties = limits(4, 25, DataSize.ofMegabytes(1).toBytes());
+        AssistantAssemblyBudgetRegistry registry = new AssistantAssemblyBudgetRegistry(
+                properties, new ObjectMapper());
+        AssistantAssembly assembly = boundedAssembly("run1", registry);
+
+        AssistantAssembly.ObservationResult first = assembly.observe(RuntimeEvent.progress(
+                "run1", "session1", Map.of("sourceType", "progress-1", "text", "one")));
+        AssistantAssembly.ObservationResult filtered = assembly.observe(RuntimeEvent.thinking(
+                "run1", "session1", Map.of("sourceType", "thinking-2", "text", "two")));
+        AssistantAssembly.ObservationResult card = assembly.observe(RuntimeEvent.card(
+                "run1", "session1", Map.of("sourceType", "business-card", "title", "result")));
+
+        assertThat(first.status()).isEqualTo(AssistantAssembly.Status.ACCEPTED);
+        assertThat(filtered.status()).isEqualTo(AssistantAssembly.Status.FILTERED);
+        assertThat(card.status()).isEqualTo(AssistantAssembly.Status.ACCEPTED);
+        assertThat(assembly.parts()).extracting(part -> part.partType())
+                .containsExactly("PROGRESS", "CARD");
+        assembly.close();
+        assertThat(registry.activeParts()).isZero();
+        assertThat(registry.activeBytes()).isZero();
+    }
+
+    @Test
+    void evictsOldestProcessPartToKeepEssentialPart() {
+        RuntimeStreamLimitsProperties properties = limits(2, 100, DataSize.ofMegabytes(1).toBytes());
+        AssistantAssemblyBudgetRegistry registry = new AssistantAssemblyBudgetRegistry(
+                properties, new ObjectMapper());
+        AssistantAssembly assembly = boundedAssembly("run1", registry);
+
+        assembly.observe(RuntimeEvent.progress(
+                "run1", "session1", Map.of("sourceType", "old-progress", "text", "old")));
+        assembly.observe(RuntimeEvent.thinking(
+                "run1", "session1", Map.of("sourceType", "recent-thinking", "text", "recent")));
+        AssistantAssembly.ObservationResult result = assembly.observe(RuntimeEvent.card(
+                "run1", "session1", Map.of("sourceType", "business-card", "title", "result")));
+
+        assertThat(result.status()).isEqualTo(AssistantAssembly.Status.ACCEPTED);
+        assertThat(assembly.parts()).extracting(part -> part.partType())
+                .containsExactly("THINKING", "CARD");
+        assembly.close();
+    }
+
+    @Test
+    void keepsUnicodeSafeBodyPrefixAndReleasesInstanceBudgetOnClose() {
+        RuntimeStreamLimitsProperties properties = limits(10, 100, 4L);
+        AssistantAssemblyBudgetRegistry registry = new AssistantAssemblyBudgetRegistry(
+                properties, new ObjectMapper());
+        AssistantAssembly first = boundedAssembly("run1", registry);
+
+        AssistantAssembly.ObservationResult overflow = first.observe(
+                MessageDeltaEvent.of("run1", "session1", "你a🙂"));
+
+        assertThat(overflow.status()).isEqualTo(AssistantAssembly.Status.ESSENTIAL_OVERFLOW);
+        assertThat(overflow.limitType()).isEqualTo(
+                com.huawei.it.ex.one.application.service.runtime.RuntimeStreamLimitType.ASSISTANT_BYTES);
+        assertThat(first.finalContent()).isEqualTo("你a");
+        assertThat(registry.activeBytes()).isEqualTo(4L);
+        first.close();
+        assertThat(registry.activeBytes()).isZero();
+
+        AssistantAssembly second = boundedAssembly("run2", registry);
+        assertThat(second.observe(MessageDeltaEvent.of("run2", "session1", "test")).status())
+                .isEqualTo(AssistantAssembly.Status.ACCEPTED);
+        assertThat(second.finalContent()).isEqualTo("test");
+        second.close();
+    }
+
+    @Test
+    void snapshotReleasesReplacedDeltaDraftBudget() {
+        RuntimeStreamLimitsProperties properties = limits(10, 100, DataSize.ofMegabytes(1).toBytes());
+        AssistantAssemblyBudgetRegistry registry = new AssistantAssemblyBudgetRegistry(
+                properties, new ObjectMapper());
+        AssistantAssembly assembly = boundedAssembly("run1", registry);
+
+        assembly.observe(MessageDeltaEvent.of("run1", "session1", "旧草稿内容"));
+        AssistantAssembly.ObservationResult result = assembly.observe(
+                MessageSnapshotEvent.of("run1", "session1", "最终正文"));
+
+        assertThat(result.status()).isEqualTo(AssistantAssembly.Status.ACCEPTED);
+        assertThat(assembly.finalContent()).isEqualTo("最终正文");
+        assertThat(assembly.parts()).singleElement()
+                .extracting(part -> part.partType())
+                .isEqualTo("MESSAGE_SNAPSHOT");
+        long expectedBytes = registry.textBytes("最终正文")
+                + registry.serializedBytes(assembly.parts().getFirst());
+        assertThat(registry.activeBytes()).isEqualTo(expectedBytes);
+        assembly.close();
+        assertThat(registry.activeBytes()).isZero();
+    }
+
+    @Test
+    void snapshotDetachesLargeDeltaBuilderCapacity() throws Exception {
+        RuntimeStreamLimitsProperties properties = limits(
+                10, 100, DataSize.ofMegabytes(4).toBytes());
+        AssistantAssemblyBudgetRegistry registry = new AssistantAssemblyBudgetRegistry(
+                properties, new ObjectMapper());
+        AssistantAssembly assembly = boundedAssembly("run1", registry);
+        String largeDelta = "x".repeat(1_000_000);
+
+        assembly.observe(MessageDeltaEvent.of("run1", "session1", largeDelta));
+        int expandedCapacity = deltaDraft(assembly).capacity();
+        assembly.observe(MessageSnapshotEvent.of("run1", "session1", "最终正文"));
+
+        assertThat(expandedCapacity).isGreaterThanOrEqualTo(largeDelta.length());
+        assertThat(deltaDraft(assembly).capacity()).isLessThan(1_024);
+        assembly.close();
+    }
+
+    @Test
+    void releasesSharedInstancePartBudgetForAnotherRun() {
+        RuntimeStreamLimitsProperties properties = limits(2, 100, DataSize.ofMegabytes(1).toBytes());
+        properties.setAssistantMaxActivePartsPerInstance(2);
+        AssistantAssemblyBudgetRegistry registry = new AssistantAssemblyBudgetRegistry(
+                properties, new ObjectMapper());
+        AssistantAssembly first = boundedAssembly("run1", registry);
+        AssistantAssembly second = boundedAssembly("run2", registry);
+
+        first.observe(RuntimeEvent.card("run1", "session1", Map.of("sourceType", "card-a")));
+        second.observe(RuntimeEvent.card("run2", "session1", Map.of("sourceType", "card-b")));
+        AssistantAssembly.ObservationResult overflow = second.observe(
+                RuntimeEvent.card("run2", "session1", Map.of("sourceType", "card-c")));
+        assertThat(overflow.status()).isEqualTo(AssistantAssembly.Status.ESSENTIAL_OVERFLOW);
+
+        first.close();
+        assertThat(second.observe(RuntimeEvent.card(
+                "run2", "session1", Map.of("sourceType", "card-d"))).status())
+                .isEqualTo(AssistantAssembly.Status.ACCEPTED);
+        second.close();
+        assertThat(registry.activeParts()).isZero();
+    }
+
+    @Test
+    void stopSealRejectsLateProjectionMutationAndKeepsBudgetUntilClose() {
+        RuntimeStreamLimitsProperties properties = limits(10, 100, DataSize.ofMegabytes(1).toBytes());
+        AssistantAssemblyBudgetRegistry registry = new AssistantAssemblyBudgetRegistry(
+                properties, new ObjectMapper());
+        AssistantAssembly assembly = boundedAssembly("run1", registry);
+
+        assembly.observe(MessageDeltaEvent.of("run1", "session1", "已接收正文"));
+        long retainedBytes = registry.activeBytes();
+        assembly.sealForStop();
+
+        AssistantAssembly.ObservationResult late = assembly.observe(
+                MessageDeltaEvent.of("run1", "session1", "迟到正文"));
+
+        assertThat(late.status()).isEqualTo(AssistantAssembly.Status.ACCEPTED);
+        assertThat(assembly.finalContent()).isEqualTo("已接收正文");
+        assertThat(registry.activeBytes()).isEqualTo(retainedBytes);
+        assembly.close();
+        assertThat(registry.activeBytes()).isZero();
+    }
+
+    private AssistantAssembly boundedAssembly(String runId, AssistantAssemblyBudgetRegistry registry) {
+        return new AssistantAssembly(AgentDataPersistenceState.full(), registry, registry.open(runId));
+    }
+
+    private StringBuilder deltaDraft(AssistantAssembly assembly) throws Exception {
+        Field field = AssistantAssembly.class.getDeclaredField("deltaDraft");
+        field.setAccessible(true);
+        return (StringBuilder) field.get(assembly);
+    }
+
+    private RuntimeStreamLimitsProperties limits(int parts, int processRatio, long bytes) {
+        RuntimeStreamLimitsProperties properties = new RuntimeStreamLimitsProperties();
+        properties.setAssistantMaxPartsPerRun(parts);
+        properties.setAssistantMaxActivePartsPerInstance(Math.max(parts, 10));
+        properties.setAssistantMaxBytesPerRun(DataSize.ofBytes(bytes));
+        properties.setAssistantMaxActiveBytesPerInstance(DataSize.ofBytes(Math.max(bytes, 1_024L)));
+        properties.setAssistantProcessMaxRatio(processRatio);
+        return properties;
     }
 }

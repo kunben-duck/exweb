@@ -29,6 +29,26 @@ final class IntentClarificationRunCoordinator {
     private final ChatEventPersistenceCoordinator eventPersistenceCoordinator;
     private final ChatRunAdmissionCoordinator admissionCoordinator;
     private final RunMemoryContextAssembler memoryAssembler;
+    private final AssistantAssemblyFactory assistantAssemblyFactory;
+
+    IntentClarificationRunCoordinator(
+            IntentClarificationContextAssembler clarificationAssembler,
+            InteractionEventFactory interactionEventFactory,
+            InteractionRunLifecycle lifecycle,
+            ChatRuntimeDispatchCoordinator runtimeDispatchCoordinator,
+            ChatEventPersistenceCoordinator eventPersistenceCoordinator,
+            ChatRunAdmissionCoordinator admissionCoordinator,
+            RunMemoryContextAssembler memoryAssembler,
+            AssistantAssemblyFactory assistantAssemblyFactory) {
+        this.clarificationAssembler = clarificationAssembler;
+        this.interactionEventFactory = interactionEventFactory;
+        this.lifecycle = lifecycle;
+        this.runtimeDispatchCoordinator = runtimeDispatchCoordinator;
+        this.eventPersistenceCoordinator = eventPersistenceCoordinator;
+        this.admissionCoordinator = admissionCoordinator;
+        this.memoryAssembler = memoryAssembler;
+        this.assistantAssemblyFactory = assistantAssemblyFactory;
+    }
 
     IntentClarificationRunCoordinator(
             IntentClarificationContextAssembler clarificationAssembler,
@@ -38,13 +58,8 @@ final class IntentClarificationRunCoordinator {
             ChatEventPersistenceCoordinator eventPersistenceCoordinator,
             ChatRunAdmissionCoordinator admissionCoordinator,
             RunMemoryContextAssembler memoryAssembler) {
-        this.clarificationAssembler = clarificationAssembler;
-        this.interactionEventFactory = interactionEventFactory;
-        this.lifecycle = lifecycle;
-        this.runtimeDispatchCoordinator = runtimeDispatchCoordinator;
-        this.eventPersistenceCoordinator = eventPersistenceCoordinator;
-        this.admissionCoordinator = admissionCoordinator;
-        this.memoryAssembler = memoryAssembler;
+        this(clarificationAssembler, interactionEventFactory, lifecycle, runtimeDispatchCoordinator,
+                eventPersistenceCoordinator, admissionCoordinator, memoryAssembler, null);
     }
 
     IntentClarificationRunCoordinator(
@@ -55,7 +70,7 @@ final class IntentClarificationRunCoordinator {
             ChatEventPersistenceCoordinator eventPersistenceCoordinator,
             ChatRunAdmissionCoordinator admissionCoordinator) {
         this(clarificationAssembler, interactionEventFactory, lifecycle, runtimeDispatchCoordinator,
-                eventPersistenceCoordinator, admissionCoordinator, null);
+                eventPersistenceCoordinator, admissionCoordinator, null, null);
     }
 
     Flux<ChatEvent> execute(Request request) {
@@ -106,7 +121,9 @@ final class IntentClarificationRunCoordinator {
                 request.startAttempt(),
                 executionClaim,
                 "after-intent-interaction-execution-create");
-        AssistantAssembly assistant = new AssistantAssembly();
+        AssistantAssembly assistant = assistantAssemblyFactory == null
+                ? new AssistantAssembly()
+                : assistantAssemblyFactory.create(request.runId());
         AtomicReference<java.util.Map<String, Object>> pendingInteractionPayloadRef = new AtomicReference<>();
         RunEventPipelineContext context = new RunEventPipelineContext(
                 request.user(),

@@ -195,6 +195,8 @@ public interface ChatRunRepository {
 
     enum ExternalTerminalGuard {
         NONE,
+        STOP_FALLBACK,
+        OWNER_STOP,
         RECOVERY,
         ORPHAN_INTERACTION,
         EXECUTION_INIT_FAILURE,

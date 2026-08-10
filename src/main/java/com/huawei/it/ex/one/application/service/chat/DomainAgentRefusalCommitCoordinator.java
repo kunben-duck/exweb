@@ -88,11 +88,14 @@ final class DomainAgentRefusalCommitCoordinator {
         ChatEvent stored = result.event();
         RuntimeBinding binding = result.binding();
         context.bindingRef().set(binding);
-        context.assistant().observe(stored);
+        AssistantAssembly.ObservationResult assistantObservation = context.assistant().observe(stored);
         completionCoordinator.rememberPendingInteractionRequest(stored, context);
         chatRunService.observeEvent(stored);
         committedEventObserver.observeBindingAndPublish(stored, context, binding);
         acknowledgePersistence(sourceEvent);
+        if (assistantObservation.essentialOverflow()) {
+            throw context.assistant().overflowException(assistantObservation);
+        }
         return stored;
     }
 

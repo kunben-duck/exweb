@@ -17,6 +17,7 @@ import java.util.List;
  * @param partDrafts 本次续接新增的 parts。
  * @param metadataJson 覆盖后的消息元数据 JSON；可为空以清理等待态标记。
  * @param appendAnswerPart 是否追加合成 ANSWER part。
+ * @param preserveExistingProjection 是否保留原正文及metadata，仅追加本轮parts。
  */
 public record AssistantMessageUpdateCommand(
         String tenantId,
@@ -27,12 +28,20 @@ public record AssistantMessageUpdateCommand(
         String runId,
         List<ChatMessagePartDraft> partDrafts,
         String metadataJson,
-        boolean appendAnswerPart
+        boolean appendAnswerPart,
+        boolean preserveExistingProjection
 ) {
     public AssistantMessageUpdateCommand(String tenantId, String userId, ChatSession session, String messageId,
                                          String content, String runId, List<ChatMessagePartDraft> partDrafts,
+                                         String metadataJson, boolean appendAnswerPart) {
+        this(tenantId, userId, session, messageId, content, runId, partDrafts, metadataJson,
+                appendAnswerPart, false);
+    }
+
+    public AssistantMessageUpdateCommand(String tenantId, String userId, ChatSession session, String messageId,
+                                         String content, String runId, List<ChatMessagePartDraft> partDrafts,
                                          String metadataJson) {
-        this(tenantId, userId, session, messageId, content, runId, partDrafts, metadataJson, true);
+        this(tenantId, userId, session, messageId, content, runId, partDrafts, metadataJson, true, false);
     }
 
     public List<ChatMessagePartDraft> safePartDrafts() {

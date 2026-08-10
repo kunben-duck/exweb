@@ -118,6 +118,26 @@ public class MyBatisChatRunExecutionRepository implements ChatRunExecutionReposi
     }
 
     @Override
+    public boolean shortenLeaseForCancellingRun(String runId, Duration leaseDuration) {
+        if (runId == null || runId.isBlank()) {
+            return false;
+        }
+        Instant leaseUntil = Instant.now().plus(normalizeLease(leaseDuration));
+        return mapper.shortenLeaseForCancellingRun(runId, leaseUntil) > 0;
+    }
+
+    @Override
+    public boolean markOwnerStopAccepted(ChatRun run, RunExecutionClaim claim, Duration leaseDuration) {
+        if (run == null || claim == null || !run.id().equals(claim.runId())) {
+            return false;
+        }
+        Instant leaseUntil = Instant.now().plus(normalizeLease(leaseDuration));
+        return mapper.markOwnerStopAccepted(
+                run.id(), run.tenantId(), run.userId(), run.sessionId(),
+                claim.ownerInstanceId(), claim.fencingToken(), leaseUntil) == 1;
+    }
+
+    @Override
     public boolean markTerminal(String runId, ChatRunExecutionStatus terminalStatus) {
         if (terminalStatus == null || !terminalStatus.terminal()) {
             return false;

@@ -29,6 +29,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Run 取消协调器。
@@ -57,6 +58,9 @@ public class ChatRunStopCoordinator {
     private final ChatRunTerminalCommitService terminalCommitService;
     private final IdGenerator idGenerator;
     private ChatWaitingStopCommitService waitingStopCommitService;
+    private AssistantAssemblyFactory assistantAssemblyFactory;
+    private RunStopHandoffCoordinator stopHandoffCoordinator;
+    private ChatRunStopReplayService stopReplayService;
 
     @Autowired
     public ChatRunStopCoordinator(SessionApplicationService sessionService,
@@ -108,6 +112,24 @@ public class ChatRunStopCoordinator {
         this.waitingStopCommitService = waitingStopCommitService;
     }
 
+    /** stop重建partial assistant时也使用统一历史投影预算。 */
+    @Autowired(required = false)
+    void setAssistantAssemblyFactory(AssistantAssemblyFactory assistantAssemblyFactory) {
+        this.assistantAssemblyFactory = assistantAssemblyFactory;
+    }
+
+    /** 生产路径优先把stop移交给持有内存Assembly的execution owner。 */
+    @Autowired(required = false)
+    void setStopHandoffCoordinator(RunStopHandoffCoordinator stopHandoffCoordinator) {
+        this.stopHandoffCoordinator = stopHandoffCoordinator;
+    }
+
+    /** owner不可达时使用分页、有界的Event重放完成本地取消。 */
+    @Autowired(required = false)
+    void setStopReplayService(ChatRunStopReplayService stopReplayService) {
+        this.stopReplayService = stopReplayService;
+    }
+
     public ChatRunStopCoordinator(SessionApplicationService sessionService,
                                   ChatStreamApplicationService chatStreamService,
                                   ChatRunApplicationService chatRunService,
@@ -152,6 +174,85 @@ public class ChatRunStopCoordinator {
 
     private ChatRunStopResult stopActiveRun(UserContext user, ChatRun requestedRun, String reason,
                                             StopRunContext stopContext) {
+        if (stopHandoffCoordinator != null && stopReplayService != null && terminalCommitService != null) {
+            return stopActiveRunWithOwnerHandoff(user, requestedRun, reason, stopContext);
+        }
+        return stopActiveRunLegacy(user, requestedRun, reason, stopContext);
+    }
+
+    private ChatRunStopResult stopActiveRunWithOwnerHandoff(
+            UserContext user,
+            ChatRun requestedRun,
+            String reason,
+            StopRunContext stopContext) {
+        if (requestedRun.status().terminal()) {
+            reconcileTerminalInteraction(requestedRun);
+            return chatRunService.toStopResult(requestedRun);
+        }
+        String effectiveReason = normalizeReason(reason);
+        AtomicBoolean downstreamCancelIssued = new AtomicBoolean(false);
+        Runnable cancelAfterAccepted = () -> {
+            // Relay owner会先利用仍存活的本机exchange发送stop；DomainAgent由请求实例携带当前请求头取消。
+            if (!"relay".equalsIgnoreCase(requestedRun.runtimeProvider())) {
+                cancelDownstreamOnce(
+                        requestedRun.cancelling(effectiveReason),
+                        user,
+                        stopContext,
+                        downstreamCancelIssued);
+            }
+        };
+        RunStopHandoffCoordinator.Outcome handoff = stopHandoffCoordinator.handoff(
+                user, requestedRun, effectiveReason, cancelAfterAccepted);
+        if (handoff.committed()) {
+            ChatRun latest = chatRunService.requireOwnedRun(user, requestedRun.id());
+            reconcileTerminalInteraction(latest);
+            return chatRunService.toStopResult(latest);
+        }
+
+        ChatRun latest = chatRunService.requireOwnedRun(user, requestedRun.id());
+        if (latest.status().terminal()) {
+            reconcileTerminalInteraction(latest);
+            return chatRunService.toStopResult(latest);
+        }
+        if (handoff.accepted() || chatRunLeaseService.stopFallbackBlocked(latest.id())) {
+            // ACCEPTED可能先于COMMITTED返回，ACK也可能丢失；数据库execution状态是最终判定依据。
+            cancelDownstreamOnce(latest, user, stopContext, downstreamCancelIssued);
+            latest = chatRunService.convergeExpiredCancellingRun(user, latest);
+            if (latest.status().terminal()) {
+                reconcileTerminalInteraction(latest);
+            }
+            return chatRunService.toStopResult(latest);
+        }
+        ChatRunStopDecision decision = chatRunService.requestStop(user, latest, effectiveReason);
+        ChatRun cancelling = decision.run();
+        if (!decision.appendCancelledEvent()) {
+            reconcileTerminalInteraction(cancelling);
+            return chatRunService.toStopResult(cancelling);
+        }
+        cancelDownstreamOnce(cancelling, user, stopContext, downstreamCancelIssued);
+        if (!handoff.accepted()) {
+            runExecutionRegistry.cancel(cancelling.id());
+        }
+        ChatRunStopTerminalFinalizer.Result fallback = stopReplayService.replayAndCommit(
+                user, cancelling, effectiveReason, stopContext.sessionSnapshot());
+        ChatRun result = fallback == null || fallback.run() == null ? cancelling : fallback.run();
+        return chatRunService.toStopResult(result);
+    }
+
+    private void cancelDownstreamOnce(
+            ChatRun run,
+            UserContext user,
+            StopRunContext stopContext,
+            AtomicBoolean issued) {
+        if (issued.compareAndSet(false, true)) {
+            cancelDownstreamBestEffort(
+                    run, user, stopContext.traceContext(), stopContext.forwardHeaders());
+        }
+    }
+
+    /** 兼容直接构造协调器的存量单元测试；生产Spring装配不进入该全量重放路径。 */
+    private ChatRunStopResult stopActiveRunLegacy(UserContext user, ChatRun requestedRun, String reason,
+                                                  StopRunContext stopContext) {
         String effectiveReason = normalizeReason(reason);
         RuntimeForwardHeaders headerSnapshot = stopContext.forwardHeaders();
         ChatRunStopDecision decision = chatRunService.requestStop(user, requestedRun, effectiveReason);
@@ -401,30 +502,38 @@ public class ChatRunStopCoordinator {
         try {
             AgentDataPersistenceState persistenceState =
                     AgentDataPersistenceState.fromRunMetadata(run.metadata(), null);
-            AssistantAssembly assistant = new AssistantAssembly(persistenceState);
-            chatStreamService.findPersistedRunEvents(user, run).forEach(assistant::observe);
-            if (!assistant.shouldPersistMessage()) {
-                return StopMessageTarget.notReady();
+            AssistantAssembly assistant = assistantAssemblyFactory == null
+                    ? new AssistantAssembly(persistenceState)
+                    : assistantAssemblyFactory.create(run.id(), persistenceState);
+            try {
+                chatStreamService.findPersistedRunEvents(user, run).forEach(assistant::observe);
+                if (!assistant.shouldPersistMessage()) {
+                    return StopMessageTarget.notReady();
+                }
+                ChatSession session = sessionSnapshot == null
+                        ? sessionService.getSession(user, run.sessionId())
+                        : sessionSnapshot;
+                String assistantMessageId = interactionContinuation && !newTurnInteraction
+                        ? interactionAssistantMessageId
+                        : idGenerator.newId("msg",
+                                IdGenerateContext.of(user.tenantId(), user.ownerUserId(), session.id(), run.id()));
+                AssistantMessageSaveCommand partialAssistant = new AssistantMessageSaveCommand(
+                        user.tenantId(),
+                        user.ownerUserId(),
+                        session,
+                        assistant.finalContent(),
+                        run.id(),
+                        parentMessageId,
+                        null,
+                        assistant.parts(),
+                        assistant.assistantMetadata(partialMetadata(reason)),
+                        assistantMessageId,
+                        assistant.appendAnswerPart()
+                );
+                return StopMessageTarget.ready(assistantMessageId, partialAssistant);
+            } finally {
+                assistant.close();
             }
-            ChatSession session = sessionSnapshot == null ? sessionService.getSession(user, run.sessionId()) : sessionSnapshot;
-            String assistantMessageId = interactionContinuation && !newTurnInteraction
-                    ? interactionAssistantMessageId
-                    : idGenerator.newId("msg",
-                            IdGenerateContext.of(user.tenantId(), user.ownerUserId(), session.id(), run.id()));
-            AssistantMessageSaveCommand partialAssistant = new AssistantMessageSaveCommand(
-                    user.tenantId(),
-                    user.ownerUserId(),
-                    session,
-                    assistant.finalContent(),
-                    run.id(),
-                    parentMessageId,
-                    null,
-                    assistant.parts(),
-                    assistant.assistantMetadata(partialMetadata(reason)),
-                    assistantMessageId,
-                    assistant.appendAnswerPart()
-            );
-            return StopMessageTarget.ready(assistantMessageId, partialAssistant);
         } catch (Exception ex) {
             log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
                             "Partial assistant preparation failed during ChatRun stop")

@@ -5,6 +5,8 @@ import com.huawei.it.ex.one.application.integration.agent.DomainAgentCancelReque
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentClient;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.application.service.runtime.RuntimePendingEventBridgeFactory;
+import com.huawei.it.ex.one.application.service.runtime.RuntimeStreamLimitExceededException;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.logging.AppLogger;
@@ -14,8 +16,8 @@ import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import reactor.core.Exceptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.http.HttpHeaders;
@@ -27,9 +29,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 
 import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 配置化 DomainAgent HTTP adapter。
@@ -46,15 +46,27 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
     private final DomainAgentProperties properties;
     private final DomainAgentChatRequestMapper requestMapper;
     private final DomainAgentResponseNormalizer responseNormalizer;
+    private final RuntimePendingEventBridgeFactory pendingBridgeFactory;
+
+    @Autowired
+    public ConfiguredDomainAgentClient(WebClient.Builder webClientBuilder,
+                                       DomainAgentProperties properties,
+                                       DomainAgentChatRequestMapper requestMapper,
+                                       DomainAgentResponseNormalizer responseNormalizer,
+                                       RuntimePendingEventBridgeFactory pendingBridgeFactory) {
+        this.webClientBuilder = webClientBuilder;
+        this.properties = properties;
+        this.requestMapper = requestMapper;
+        this.responseNormalizer = responseNormalizer;
+        this.pendingBridgeFactory = pendingBridgeFactory;
+    }
 
     public ConfiguredDomainAgentClient(WebClient.Builder webClientBuilder,
                                        DomainAgentProperties properties,
                                        DomainAgentChatRequestMapper requestMapper,
                                        DomainAgentResponseNormalizer responseNormalizer) {
-        this.webClientBuilder = webClientBuilder;
-        this.properties = properties;
-        this.requestMapper = requestMapper;
-        this.responseNormalizer = responseNormalizer;
+        this(webClientBuilder, properties, requestMapper, responseNormalizer,
+                RuntimePendingEventBridgeFactory.defaults());
     }
 
     @Override
@@ -91,7 +103,12 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
                      */
                     .takeUntil(event -> "message.completed".equals(event.type()));
         });
-        return enforceDomainAgentDeadline(source)
+        Flux<ChatEvent> guarded = pendingBridgeFactory.guard(
+                request.runId(), enforceDomainAgentDeadline(source));
+        return guarded
+                .onErrorResume(RuntimeStreamLimitExceededException.class, ex ->
+                        cancelAfterStreamLimit(request).thenMany(Flux.error(ex)))
+                .doOnCancel(() -> cancelAfterStreamLimit(request).subscribe())
                 .doOnError(ex -> log.warn(SystemErrorLogEntry.builder(classifyDomainAgentFailure(ex),
                                 "DomainAgent response stream failed")
                         .runId(request.runId())
@@ -176,37 +193,25 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
         if (timeout == null || timeout.isZero() || timeout.isNegative()) {
             return source;
         }
-        return Flux.create(sink -> {
-            AtomicBoolean terminated = new AtomicBoolean(false);
-            var timer = Schedulers.parallel().schedule(() -> {
-                if (terminated.compareAndSet(false, true) && !sink.isCancelled()) {
-                    sink.error(new TimeoutException("DomainAgent stream timed out after " + timeout));
-                }
-            }, Math.max(1L, timeout.toMillis()), TimeUnit.MILLISECONDS);
-            var upstream = source.subscribe(
-                    event -> {
-                        if (!terminated.get() && !sink.isCancelled()) {
-                            sink.next(event);
-                        }
-                    },
-                    error -> {
-                        if (terminated.compareAndSet(false, true) && !sink.isCancelled()) {
-                            timer.dispose();
-                            sink.error(error);
-                        }
-                    },
-                    () -> {
-                        if (terminated.compareAndSet(false, true) && !sink.isCancelled()) {
-                            timer.dispose();
-                            sink.complete();
-                        }
-                    });
-            sink.onDispose(() -> {
-                terminated.set(true);
-                timer.dispose();
-                upstream.dispose();
-            });
-        });
+        // 终止信号只负责取消源流，不再手工订阅并缓存业务事件，WebClient demand可直接传递到Event管线。
+        Mono<Long> deadline = Mono.delay(timeout)
+                .flatMap(ignored -> Mono.error(
+                        new TimeoutException("DomainAgent stream timed out after " + timeout)));
+        return source.takeUntilOther(deadline);
+    }
+
+    private Mono<Void> cancelAfterStreamLimit(DomainAgentRequest request) {
+        DomainAgentCancelRequest cancelRequest = new DomainAgentCancelRequest(
+                request.user(),
+                request.sessionId(),
+                request.runId(),
+                request.domainAgentId(),
+                RuntimeStreamLimitExceededException.CODE,
+                Map.of("limitReason", RuntimeStreamLimitExceededException.CODE),
+                request.forwardHeaders());
+        return cancel(cancelRequest)
+                .timeout(pendingBridgeFactory.overflowCancelTimeout())
+                .onErrorResume(ignored -> Mono.empty());
     }
 
     private SystemErrorCode classifyDomainAgentFailure(Throwable failure) {

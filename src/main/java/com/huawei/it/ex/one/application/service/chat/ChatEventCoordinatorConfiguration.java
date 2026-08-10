@@ -1,9 +1,11 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.config.RuntimeStreamLimitsProperties;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.service.memory.RouteMemoryApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
+import com.huawei.it.ex.one.application.service.runtime.RuntimePendingEventGuard;
 
 import reactor.core.scheduler.Scheduler;
 
@@ -40,7 +42,8 @@ class ChatEventCoordinatorConfiguration {
             ChatRunApplicationService chatRunService,
             ChatStreamApplicationService chatStreamService,
             RuntimeBindingApplicationService runtimeBindingService,
-            ChatRunCompletionCoordinator completionCoordinator) {
+            ChatRunCompletionCoordinator completionCoordinator,
+            RuntimePendingEventGuard pendingEventGuard) {
         return new ChatEventPipeline(
                 chatDeltaCoalescer,
                 eventIoScheduler,
@@ -48,7 +51,8 @@ class ChatEventCoordinatorConfiguration {
                 chatRunService,
                 chatStreamService,
                 runtimeBindingService,
-                completionCoordinator);
+                completionCoordinator,
+                pendingEventGuard);
     }
 
     @Bean
@@ -132,13 +136,57 @@ class ChatEventCoordinatorConfiguration {
             ChatRunLeaseApplicationService chatRunLeaseService,
             LocalChatRunExecutionRegistry runExecutionRegistry,
             ChatEventPipeline eventPipeline,
+            RuntimePendingEventGuard pendingEventGuard,
+            ChatRunOwnerStopFinalizer ownerStopFinalizer,
             @Qualifier("chatStreamEventScheduler") Scheduler eventIoScheduler) {
         return new ChatRunExecutionGateCoordinator(
                 runStartCoordinator,
                 chatRunLeaseService,
                 runExecutionRegistry,
                 eventPipeline,
-                eventIoScheduler);
+                eventIoScheduler,
+                pendingEventGuard,
+                ownerStopFinalizer);
+    }
+
+    @Bean
+    ChatRunOwnerStopFinalizer chatRunOwnerStopFinalizer(
+            ChatRunStopTerminalFinalizer terminalFinalizer,
+            LocalChatRunExecutionRegistry runExecutionRegistry,
+            RuntimePendingEventGuard pendingEventGuard,
+            RuntimeStreamLimitsProperties streamLimits,
+            @Qualifier("chatStreamEventScheduler") Scheduler eventIoScheduler) {
+        return new ChatRunOwnerStopFinalizer(
+                terminalFinalizer, runExecutionRegistry, pendingEventGuard, eventIoScheduler, streamLimits);
+    }
+
+    @Bean
+    ChatRunStopAssistantProjector chatRunStopAssistantProjector(
+            SessionApplicationService sessionService,
+            IdGenerator idGenerator) {
+        return new ChatRunStopAssistantProjector(sessionService, idGenerator);
+    }
+
+    @Bean
+    ChatRunStopTerminalFinalizer chatRunStopTerminalFinalizer(
+            ChatRunStopAssistantProjector assistantProjector,
+            ChatRunTerminalCommitService terminalCommitService,
+            ChatRunApplicationService chatRunService,
+            ChatStreamApplicationService chatStreamService) {
+        return new ChatRunStopTerminalFinalizer(
+                assistantProjector, terminalCommitService, chatRunService, chatStreamService);
+    }
+
+    @Bean
+    RunStopOwnerCoordinator runStopOwnerCoordinator(
+            com.huawei.it.ex.one.application.integration.conversation.RunStopControlBus controlBus,
+            LocalChatRunExecutionRegistry runExecutionRegistry,
+            ChatRunLeaseApplicationService leaseService,
+            ChatRunApplicationService chatRunService,
+            AgentRuntimeExecutor runtimeExecutor,
+            @Qualifier("chatStreamEventScheduler") Scheduler eventIoScheduler) {
+        return new RunStopOwnerCoordinator(
+                controlBus, runExecutionRegistry, leaseService, chatRunService, runtimeExecutor, eventIoScheduler);
     }
 
     @Bean

@@ -6,6 +6,9 @@ import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractio
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
+import com.huawei.it.ex.one.application.service.runtime.RuntimePendingEventBridge;
+import com.huawei.it.ex.one.application.service.runtime.RuntimePendingEventBridgeFactory;
+import com.huawei.it.ex.one.application.service.runtime.RuntimeStreamLimitExceededException;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.logging.AppLogger;
@@ -24,7 +27,6 @@ import io.netty.channel.ChannelOption;
 import reactor.core.Disposable;
 import reactor.core.Exceptions;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.netty.http.client.HttpClient;
@@ -72,6 +74,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     private final AgentRuntimeForwardCookieProperties forwardCookieProperties;
     private final RelayRuntimeResponseNormalizer responseNormalizer;
     private final WebSocketClient webSocketClient;
+    private final RuntimePendingEventBridgeFactory pendingBridgeFactory;
     private final String delegateAppMode;
     private final String domainExpertAppMode;
     /** Active run -> outbound exchange, used only for best-effort Relay WS interrupt on stop/delete. */
@@ -81,8 +84,18 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     public RelayWebSocketRuntimeAdapter(ObjectMapper objectMapper,
                                         RelayAgentProperties properties,
                                         AgentRuntimeForwardCookieProperties forwardCookieProperties,
+                                        RelayRuntimeResponseNormalizer responseNormalizer,
+                                        RuntimePendingEventBridgeFactory pendingBridgeFactory) {
+        this(objectMapper, properties, forwardCookieProperties, responseNormalizer,
+                webSocketClient(properties), pendingBridgeFactory);
+    }
+
+    public RelayWebSocketRuntimeAdapter(ObjectMapper objectMapper,
+                                        RelayAgentProperties properties,
+                                        AgentRuntimeForwardCookieProperties forwardCookieProperties,
                                         RelayRuntimeResponseNormalizer responseNormalizer) {
-        this(objectMapper, properties, forwardCookieProperties, responseNormalizer, webSocketClient(properties));
+        this(objectMapper, properties, forwardCookieProperties, responseNormalizer,
+                webSocketClient(properties), RuntimePendingEventBridgeFactory.defaults());
     }
 
     RelayWebSocketRuntimeAdapter(ObjectMapper objectMapper,
@@ -90,11 +103,22 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                                  AgentRuntimeForwardCookieProperties forwardCookieProperties,
                                  RelayRuntimeResponseNormalizer responseNormalizer,
                                  WebSocketClient webSocketClient) {
+        this(objectMapper, properties, forwardCookieProperties, responseNormalizer,
+                webSocketClient, RuntimePendingEventBridgeFactory.defaults());
+    }
+
+    RelayWebSocketRuntimeAdapter(ObjectMapper objectMapper,
+                                 RelayAgentProperties properties,
+                                 AgentRuntimeForwardCookieProperties forwardCookieProperties,
+                                 RelayRuntimeResponseNormalizer responseNormalizer,
+                                 WebSocketClient webSocketClient,
+                                 RuntimePendingEventBridgeFactory pendingBridgeFactory) {
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.forwardCookieProperties = forwardCookieProperties;
         this.responseNormalizer = responseNormalizer;
         this.webSocketClient = webSocketClient;
+        this.pendingBridgeFactory = pendingBridgeFactory;
         this.delegateAppMode = requireText(
                 websocketProperties().getAppMode(),
                 "financeex.agent-runtime.relay.websocket.app-mode 不能为空");
@@ -180,66 +204,111 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
 
     private Flux<ChatEvent> queryWithShortConnection(AgentRuntimeRequest request, AtomicBoolean messageCompleted) {
         RuntimeProfileMetadata.Snapshot runtimeProfile = relayProfile(request);
-        return Flux.create(sink -> {
+        return Flux.defer(() -> {
+            RuntimePendingEventBridge bridge = pendingBridgeFactory.create(request.runId());
             ShortRunExchange exchange = new ShortRunExchange(request.runId());
             registerActiveExchange(request.runId(), exchange);
             var subscription = executeWithOpeningHandshakeTimeout(
                     endpointUri(request), outboundHeaders(request.forwardHeaders()), request.runId(),
                     session -> {
-                        Mono<Void> outbound = session.send(exchange.outbound(configMessage(request, runtimeProfile))
-                                .map(session::textMessage));
+                        Mono<Void> outbound = exchange.trackOutbound(session.send(
+                                exchange.outbound(configMessage(request, runtimeProfile))
+                                        .map(session::textMessage)));
                         Flux<String> frames = session.receive()
                                 .map(WebSocketMessage::getPayloadAsText)
-                                .doOnNext(frame -> validateFrameSize(frame, request.runId()));
+                                .doOnNext(frame -> {
+                                    validateFrameSize(frame, request.runId());
+                                    exchange.observeFrame(frame);
+                                });
                         Flux<ChatEvent> normalized = userMessageFrames(frames, request, exchange, runtimeProfile)
                                 .transform(frameStream -> normalizeFrames(frameStream, request.runId(),
                                         request.sessionId(), messageCompleted))
-                                .doOnNext(sink::next)
+                                .doOnNext(event -> emitBounded(bridge, exchange, request.runId(), event))
                                 .doFinally(signal -> exchange.completeSending());
                         return Mono.when(outbound, normalized.then());
                     })
                     .doFinally(signal -> activeExchanges.remove(request.runId(), exchange))
-                    .subscribe(null, sink::error, sink::complete);
+                    .subscribe(null, bridge::fail, bridge::complete);
             exchange.subscription(subscription);
-            sink.onCancel(subscription::dispose);
-            sink.onDispose(() -> {
-                activeExchanges.remove(request.runId(), exchange);
-                exchange.close(null);
-            });
-        }, FluxSink.OverflowStrategy.BUFFER);
+            bridge.attach(subscription);
+            return bridge.flux()
+                    .doOnCancel(() -> interruptQuietly(exchange, request.runId()))
+                    .doFinally(ignored -> {
+                        activeExchanges.remove(request.runId(), exchange);
+                        exchange.close(null);
+                    });
+        });
     }
 
     private Flux<ChatEvent> interactionWithShortConnection(AgentRuntimeInteractionResponseRequest request,
                                                     AtomicBoolean messageCompleted) {
         RuntimeProfileMetadata.Snapshot runtimeProfile = relayProfile(request);
-        return Flux.create(sink -> {
+        return Flux.defer(() -> {
+            RuntimePendingEventBridge bridge = pendingBridgeFactory.create(request.runId());
             ShortRunExchange exchange = new ShortRunExchange(request.runId());
             registerActiveExchange(request.runId(), exchange);
             var subscription = executeWithOpeningHandshakeTimeout(
                     endpointUri(request.runId()), outboundHeaders(request.forwardHeaders()), request.runId(),
                     session -> {
-                        Mono<Void> outbound = session.send(exchange.outbound(configMessage(request, runtimeProfile))
-                                .map(session::textMessage));
+                        Mono<Void> outbound = exchange.trackOutbound(session.send(
+                                exchange.outbound(configMessage(request, runtimeProfile))
+                                        .map(session::textMessage)));
                         Flux<String> frames = session.receive()
                                 .map(WebSocketMessage::getPayloadAsText)
-                                .doOnNext(frame -> validateFrameSize(frame, request.runId()));
+                                .doOnNext(frame -> {
+                                    validateFrameSize(frame, request.runId());
+                                    exchange.observeFrame(frame);
+                                });
                         Flux<ChatEvent> normalized = interactionResponseFrames(
                                         frames, request, exchange, runtimeProfile)
                                 .transform(frameStream -> normalizeFrames(frameStream, request.runId(),
                                         request.sessionId(), messageCompleted))
-                                .doOnNext(sink::next)
+                                .doOnNext(event -> emitBounded(bridge, exchange, request.runId(), event))
                                 .doFinally(signal -> exchange.completeSending());
                         return Mono.when(outbound, normalized.then());
                     })
                     .doFinally(signal -> activeExchanges.remove(request.runId(), exchange))
-                    .subscribe(null, sink::error, sink::complete);
+                    .subscribe(null, bridge::fail, bridge::complete);
             exchange.subscription(subscription);
-            sink.onCancel(subscription::dispose);
-            sink.onDispose(() -> {
-                activeExchanges.remove(request.runId(), exchange);
-                exchange.close(null);
-            });
-        }, FluxSink.OverflowStrategy.BUFFER);
+            bridge.attach(subscription);
+            return bridge.flux()
+                    .doOnCancel(() -> interruptQuietly(exchange, request.runId()))
+                    .doFinally(ignored -> {
+                        activeExchanges.remove(request.runId(), exchange);
+                        exchange.close(null);
+                    });
+        });
+    }
+
+    private void emitBounded(RuntimePendingEventBridge bridge,
+                             ShortRunExchange exchange,
+                             String runId,
+                             ChatEvent event) {
+        try {
+            bridge.emit(event);
+        } catch (RuntimeStreamLimitExceededException ex) {
+            interruptQuietly(exchange, runId);
+            throw ex;
+        }
+    }
+
+    private void interruptQuietly(ShortRunExchange exchange, String runId) {
+        try {
+            exchange.interrupt(runId).subscribe(
+                    ignored -> {
+                    },
+                    ex -> log.warn(SystemErrorLogEntry.builder(SystemErrorCode.RELAY_INTERRUPT_FAILED,
+                                    "Relay interrupt failed after runtime stream cancellation")
+                            .runId(runId)
+                            .operation("relay.stream-limit.interrupt")
+                            .build(), ex));
+        } catch (RuntimeException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.RELAY_INTERRUPT_FAILED,
+                            "Relay interrupt failed after runtime stream cancellation")
+                    .runId(runId)
+                    .operation("relay.stream-limit.interrupt")
+                    .build(), ex);
+        }
     }
 
     private Flux<ChatEvent> normalizeFrames(Flux<String> frames, String runId, String sessionId,
@@ -259,10 +328,11 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     if (request == null || request.runId() == null || request.runId().isBlank()) {
                         return Mono.empty();
                     }
-                    ActiveRelayWebSocketExchange exchange = activeExchanges.remove(request.runId());
+                    ActiveRelayWebSocketExchange exchange = activeExchanges.get(request.runId());
                     if (exchange != null) {
                         log.info("Relay WebSocket interrupt uses active exchange. runId={}", request.runId());
-                        return Mono.fromRunnable(() -> exchange.interrupt(request.runId()));
+                        return exchange.interrupt(request.runId())
+                                .doFinally(ignored -> activeExchanges.remove(request.runId(), exchange));
                     }
                     return interruptViaResumeConnection(request);
                 })
@@ -487,34 +557,26 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         String initialBusinessMessage = context.initialBusinessMessage();
         Runnable initialBusinessMessageDispatched = context.initialBusinessMessageDispatched();
         RuntimeProfileMetadata.Snapshot runtimeProfile = context.runtimeProfile();
-        return Flux.create(sink -> {
+        return Flux.defer(() -> {
             AtomicBoolean done = new AtomicBoolean(false);
             AtomicBoolean userMessageReleased = new AtomicBoolean(false);
             AtomicBoolean responseStarted = new AtomicBoolean(false);
             AtomicBoolean terminalFrameSeen = new AtomicBoolean(false);
-            AtomicReference<Disposable> frameSubscription = new AtomicReference<>();
             AtomicReference<Disposable> handshakeTimeout = new AtomicReference<>();
             AtomicReference<Disposable> heartbeatTimer = new AtomicReference<>();
             AtomicReference<Disposable> livenessTimer = new AtomicReference<>();
             AtomicReference<Disposable> maxRunTimer = new AtomicReference<>();
             AtomicLong lastInboundNanos = new AtomicLong(System.nanoTime());
+            Sinks.One<Throwable> failureSignal = Sinks.one();
             Runnable cleanup = () -> {
                 disposeAndClear(handshakeTimeout);
                 disposeAndClear(heartbeatTimer);
                 disposeAndClear(livenessTimer);
                 disposeAndClear(maxRunTimer);
-                disposeAndClear(frameSubscription);
             };
             Consumer<Throwable> fail = error -> {
                 if (done.compareAndSet(false, true)) {
-                    cleanup.run();
-                    sink.error(error);
-                }
-            };
-            Runnable complete = () -> {
-                if (done.compareAndSet(false, true)) {
-                    cleanup.run();
-                    sink.complete();
+                    failureSignal.tryEmitValue(error);
                 }
             };
             handshakeTimeout.set(Mono.delay(configHandshakeTimeout())
@@ -524,7 +586,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                                     + "config handshake timed out. runId=" + runId));
                         }
                     }, fail));
-            frameSubscription.set(frames.subscribe(frame -> {
+            Flux<String> processed = frames.<String>handle((frame, sink) -> {
                 if (done.get()) {
                     return;
                 }
@@ -552,7 +614,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                             exchange.send(initialBusinessMessage);
                             initialBusinessMessageDispatched.run();
                             startRunControls(new RunControlContext(exchange, runId, heartbeatTimer, livenessTimer,
-                                    maxRunTimer, lastInboundNanos, fail));
+                                    maxRunTimer, lastInboundNanos, done, failureSignal, fail));
                         } catch (RuntimeException ex) {
                             fail.accept(ex);
                         }
@@ -567,26 +629,27 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     terminalFrameSeen.set(true);
                 }
                 sink.next(frame);
-            }, error -> {
-                fail.accept(error);
-            }, () -> {
+            }).concatWith(Flux.<String>defer(() -> {
                 if (!userMessageReleased.get()) {
-                    fail.accept(new RelayRuntimeProtocolException("Relay WebSocket closed before config handshake "
-                            + "completed. runId=" + runId));
-                    return;
+                    return Flux.error(new RelayRuntimeProtocolException(
+                            "Relay WebSocket closed before config handshake completed. runId=" + runId));
                 }
                 if (terminalFrameSeen.get()) {
-                    complete.run();
-                    return;
+                    return Flux.empty();
                 }
-                fail.accept(new RelayRuntimeProtocolException("RELAY_WS_CLOSED_BEFORE_TERMINAL: Relay WebSocket "
-                        + "closed before terminal session-state. runId=" + runId));
+                return Flux.error(new RelayRuntimeProtocolException(
+                        "RELAY_WS_CLOSED_BEFORE_TERMINAL: Relay WebSocket closed before terminal session-state. "
+                                + "runId=" + runId));
             }));
-            sink.onDispose(() -> {
-                done.set(true);
-                cleanup.run();
-            });
-        }, FluxSink.OverflowStrategy.BUFFER);
+            Mono<Void> asynchronousFailure = failureSignal.asMono()
+                    .flatMap(error -> Mono.error(error));
+            return processed
+                    .takeUntilOther(asynchronousFailure)
+                    .doFinally(ignored -> {
+                        done.set(true);
+                        cleanup.run();
+                    });
+        });
     }
 
     private void disposeAndClear(AtomicReference<Disposable> disposableReference) {
@@ -612,36 +675,50 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                 if (elapsedNanos < durationToNanos(heartbeatResponseTimeout)) {
                     return;
                 }
-                // 已确认心跳响应超时后先停止周期发送，避免 stop 关闭 outbound 后旧心跳覆盖真实超时原因。
-                disposeAndClear(context.heartbeatTimer());
-                try {
-                    context.exchange().interrupt(context.runId());
-                } catch (Throwable ex) {
-                    log.warn(SystemErrorLogEntry.builder(SystemErrorCode.RELAY_INTERRUPT_FAILED,
-                                    "Relay interrupt failed after heartbeat timeout")
-                            .runId(context.runId())
-                            .operation("relay.heartbeat-timeout.interrupt")
-                            .build(), ex);
-                }
-                context.fail().accept(new RelayRuntimeProtocolException("RELAY_WS_HEARTBEAT_RESPONSE_TIMEOUT: Relay "
-                        + "WebSocket heartbeat response timed out. runId=" + context.runId()
-                        + ", timeout=" + heartbeatResponseTimeout));
+                terminateRunControl(context,
+                        new RelayRuntimeProtocolException("RELAY_WS_HEARTBEAT_RESPONSE_TIMEOUT: Relay "
+                                + "WebSocket heartbeat response timed out. runId=" + context.runId()
+                                + ", timeout=" + heartbeatResponseTimeout),
+                        "Relay interrupt failed after heartbeat timeout",
+                        "relay.heartbeat-timeout.interrupt");
             }, context.fail()));
         }
         context.maxRunTimer().set(Mono.delay(maxRunDuration()).subscribe(ignored -> {
-            try {
-                context.exchange().interrupt(context.runId());
-            } catch (Throwable ex) {
-                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.RELAY_INTERRUPT_FAILED,
-                                "Relay interrupt failed after maximum run duration")
-                        .runId(context.runId())
-                        .operation("relay.max-duration.interrupt")
-                        .build(), ex);
-            }
-            context.fail().accept(new RelayRuntimeProtocolException("RELAY_WS_MAX_RUN_DURATION_EXCEEDED: Relay WebSocket "
-                    + "run exceeded max duration. runId=" + context.runId()
-                    + ", maxRunDuration=" + maxRunDuration()));
+            terminateRunControl(context,
+                    new RelayRuntimeProtocolException("RELAY_WS_MAX_RUN_DURATION_EXCEEDED: Relay WebSocket "
+                            + "run exceeded max duration. runId=" + context.runId()
+                            + ", maxRunDuration=" + maxRunDuration()),
+                    "Relay interrupt failed after maximum run duration",
+                    "relay.max-duration.interrupt");
         }, context.fail()));
+    }
+
+    private void terminateRunControl(RunControlContext context,
+                                     RelayRuntimeProtocolException failure,
+                                     String interruptFailureMessage,
+                                     String operation) {
+        // 先原子占有终态原因，再关闭outbound，避免并发心跳写入覆盖真正的超时错误。
+        if (!context.done().compareAndSet(false, true)) {
+            return;
+        }
+        disposeAndClear(context.heartbeatTimer());
+        try {
+            context.exchange().interrupt(context.runId()).subscribe(
+                    ignored -> {
+                    },
+                    ex -> log.warn(SystemErrorLogEntry.builder(SystemErrorCode.RELAY_INTERRUPT_FAILED,
+                                    interruptFailureMessage)
+                            .runId(context.runId())
+                            .operation(operation)
+                            .build(), ex));
+        } catch (Throwable ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.RELAY_INTERRUPT_FAILED,
+                            interruptFailureMessage)
+                    .runId(context.runId())
+                    .operation(operation)
+                    .build(), ex);
+        }
+        context.failureSignal().tryEmitValue(failure);
     }
 
     private boolean shouldEmitUserResponseFrame(String frame, AtomicBoolean responseStarted) {
@@ -1215,7 +1292,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     }
 
     private interface ActiveRelayWebSocketExchange {
-        void interrupt(String runId);
+        Mono<Void> interrupt(String runId);
     }
 
     /** 跨实例 stop 临时连接在 config 与中断确认阶段使用的不可变上下文。 */
@@ -1241,13 +1318,18 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                                      AtomicReference<Disposable> livenessTimer,
                                      AtomicReference<Disposable> maxRunTimer,
                                      AtomicLong lastInboundNanos,
+                                     AtomicBoolean done,
+                                     Sinks.One<Throwable> failureSignal,
                                      Consumer<Throwable> fail) {
     }
 
     private final class ShortRunExchange implements ActiveRelayWebSocketExchange {
         private final String runId;
         private final Sinks.Many<String> outbound = Sinks.many().unicast().onBackpressureBuffer();
+        private final Sinks.One<Void> outboundCompleted = Sinks.one();
+        private final Sinks.One<Void> pausedAcknowledged = Sinks.one();
         private final AtomicReference<Disposable> subscription = new AtomicReference<>();
+        private final AtomicBoolean interruptRequested = new AtomicBoolean(false);
         private final AtomicBoolean closed = new AtomicBoolean(false);
 
         private ShortRunExchange(String runId) {
@@ -1256,6 +1338,21 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
 
         Flux<String> outbound(String configMessage) {
             return Flux.concat(Mono.just(configMessage), outbound.asFlux());
+        }
+
+        Mono<Void> trackOutbound(Mono<Void> outboundSend) {
+            return outboundSend
+                    .doOnSuccess(ignored -> outboundCompleted.tryEmitEmpty())
+                    .doOnError(error -> outboundCompleted.tryEmitError(error))
+                    .doOnCancel(() -> outboundCompleted.tryEmitError(
+                            new RelayRuntimeProtocolException(
+                                    "Relay WebSocket outbound was cancelled. runId=" + runId)));
+        }
+
+        void observeFrame(String frame) {
+            if (interruptRequested.get() && interruptPausedAckFrame(frame)) {
+                pausedAcknowledged.tryEmitEmpty();
+            }
         }
 
         void subscription(Disposable disposable) {
@@ -1281,22 +1378,34 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         }
 
         @Override
-        public void interrupt(String requestedRunId) {
-            if (requestedRunId == null || !requestedRunId.equals(runId)) {
-                return;
-            }
-            if (closed.get()) {
-                return;
-            }
-            /*
-             * Stop 是 best-effort：先把 stop_all_agents 控制帧送入当前 outbound，再结束本侧发送流。
-             * ChatService 的取消正确性仍由 cancel flag、DB guarded insert 与 run.cancelled 事件保证。
-             */
-            try {
-                send(stopAllAgentsMessage());
-            } finally {
-                completeSending();
-            }
+        public Mono<Void> interrupt(String requestedRunId) {
+            return Mono.defer(() -> {
+                synchronized (this) {
+                    if (requestedRunId == null || !requestedRunId.equals(runId)) {
+                        return Mono.empty();
+                    }
+                    if (closed.get()) {
+                        return Mono.error(new RelayRuntimeProtocolException(
+                                "Relay WebSocket short connection is closed. runId=" + runId));
+                    }
+                    if (interruptRequested.compareAndSet(false, true)) {
+                        try {
+                            send(stopAllAgentsMessage());
+                        } finally {
+                            completeSending();
+                        }
+                    }
+                }
+                /*
+                 * session.send完成表示stop帧所在的outbound已排空；paused则是更强的远端确认。
+                 * 两者任一到达即可关闭本机执行，避免网络背压时过早dispose连接。
+                 */
+                return Mono.firstWithSignal(
+                                outboundCompleted.asMono(),
+                                pausedAcknowledged.asMono())
+                        .timeout(interruptAckTimeout())
+                        .then();
+            });
         }
 
         void close(Throwable cause) {
@@ -1309,6 +1418,14 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     outbound.tryEmitComplete();
                 } else {
                     outbound.tryEmitError(cause);
+                }
+                if (interruptRequested.get()) {
+                    Throwable failure = cause == null
+                            ? new RelayRuntimeProtocolException(
+                                    "Relay WebSocket closed before stop was flushed. runId=" + runId)
+                            : cause;
+                    outboundCompleted.tryEmitError(failure);
+                    pausedAcknowledged.tryEmitError(failure);
                 }
                 disposable = subscription.getAndSet(null);
             }

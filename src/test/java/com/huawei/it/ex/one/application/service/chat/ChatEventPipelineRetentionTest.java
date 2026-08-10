@@ -11,9 +11,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.config.ChatStreamProperties;
+import com.huawei.it.ex.one.application.config.RuntimeStreamLimitsProperties;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistencePolicy;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
+import com.huawei.it.ex.one.application.service.runtime.RuntimePendingEventGuard;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
@@ -23,11 +25,15 @@ import com.huawei.it.ex.one.domain.chat.SequencedChatEvent;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.util.unit.DataSize;
 
 import java.time.Instant;
 import java.util.List;
@@ -126,6 +132,77 @@ class ChatEventPipelineRetentionTest {
         assertThat(persisted).isTrue();
         verify(fixture.streamService, never())
                 .sequenceLiveBatchWithExecutionGuard(anyList(), any());
+    }
+
+    @Test
+    void pendingReservationIsReleasedOnlyAfterEventProcessingCompletes() {
+        Fixture fixture = new Fixture();
+        RuntimePendingEventGuard pendingGuard = mock(RuntimePendingEventGuard.class);
+        ChatEvent input = MessageDeltaEvent.of(RUN_ID, SESSION_ID, "完整回答");
+        when(pendingGuard.unwrap(input)).thenReturn(input);
+        Sinks.One<ChatEvent> writeCompletion = Sinks.one();
+        ChatEventPipeline guardedPipeline = new ChatEventPipeline(
+                new ChatDeltaCoalescer(new ChatStreamProperties()),
+                Schedulers.immediate(),
+                null,
+                fixture.runService,
+                fixture.streamService,
+                fixture.bindingService,
+                new ChatRunCompletionCoordinator(null, null, null, null, null, null, null),
+                pendingGuard);
+
+        guardedPipeline.persistAndPublish(
+                        Flux.just(input),
+                        fixture.context(false),
+                        ignored -> writeCompletion.asMono())
+                .subscribe();
+
+        verify(pendingGuard, never()).release(input);
+        writeCompletion.tryEmitValue(stored(input, 11L));
+        verify(pendingGuard).release(input);
+    }
+
+    @Test
+    void processPartFilteringDoesNotRemovePersistedOrPublishedEvents() {
+        Fixture fixture = new Fixture();
+        RuntimeStreamLimitsProperties limits = new RuntimeStreamLimitsProperties();
+        limits.setAssistantMaxPartsPerRun(4);
+        limits.setAssistantMaxActivePartsPerInstance(8);
+        limits.setAssistantMaxBytesPerRun(DataSize.ofMegabytes(1));
+        limits.setAssistantMaxActiveBytesPerInstance(DataSize.ofMegabytes(2));
+        limits.setAssistantProcessMaxRatio(25);
+        AssistantAssemblyBudgetRegistry registry = new AssistantAssemblyBudgetRegistry(
+                limits, new ObjectMapper());
+        AssistantAssembly boundedAssistant = new AssistantAssembly(
+                AgentDataPersistenceState.full(), registry, registry.open(RUN_ID));
+        ChatStreamProperties batchProperties = new ChatStreamProperties();
+        batchProperties.setEventBatchMaxSize(2);
+        fixture.pipeline.setBatcher(new ChatEventBatcher(
+                batchProperties, new ObjectMapper(), Schedulers.parallel()));
+        List<ChatEvent> inputs = List.of(
+                RuntimeEvent.progress(RUN_ID, SESSION_ID, Map.of(
+                        "source", "relay", "sourceType", "progress-1", "text", "one")),
+                RuntimeEvent.thinking(RUN_ID, SESSION_ID, Map.of(
+                        "source", "relay", "sourceType", "thinking-2", "text", "two")));
+        AtomicLong sequence = new AtomicLong(401L);
+        when(fixture.streamService.appendBatchWithExecutionGuard(anyList(), eq(CLAIM)))
+                .thenAnswer(invocation -> invocation.<List<ChatEvent>>getArgument(0).stream()
+                        .map(event -> stored(event, sequence.getAndIncrement()))
+                        .toList());
+
+        List<ChatEvent> output = fixture.pipeline.persistAndPublish(
+                        Flux.fromIterable(inputs),
+                        fixture.context(boundedAssistant, null),
+                        event -> Mono.error(new AssertionError("Unexpected single event persistence")))
+                .collectList()
+                .block();
+
+        assertThat(output).hasSize(2);
+        assertThat(boundedAssistant.parts()).singleElement()
+                .extracting(part -> part.partType())
+                .isEqualTo("PROGRESS");
+        verify(fixture.streamService, times(2)).publishPersisted(any());
+        boundedAssistant.close();
     }
 
     @Test
@@ -265,6 +342,10 @@ class ChatEventPipelineRetentionTest {
             AssistantAssembly selectedAssistant = placeholder
                     ? assistant
                     : new AssistantAssembly();
+            return context(selectedAssistant, binding);
+        }
+
+        private RunEventPipelineContext context(AssistantAssembly selectedAssistant, RuntimeBinding binding) {
             ChatSession session = new ChatSession(
                     SESSION_ID, "tenant1", "user1", "title", "ACTIVE", "web",
                     Instant.EPOCH, Instant.EPOCH);

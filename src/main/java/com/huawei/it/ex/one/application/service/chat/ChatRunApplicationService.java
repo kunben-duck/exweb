@@ -33,6 +33,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
 import java.util.Collection;
@@ -331,34 +333,113 @@ public class ChatRunApplicationService {
     /**
      * 接收 stop 请求并写入取消标记。
      */
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public ChatRunStopDecision requestStop(UserContext user, String runId, String reason) {
         return requestStop(user, requireOwnedRun(user, runId), reason);
     }
 
     /** 使用已完成归属校验的 run 接收 stop，避免协调器分流等待态时重复首查。 */
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public ChatRunStopDecision requestStop(UserContext user, ChatRun run, String reason) {
         if (user == null || run == null
                 || !user.tenantId().equals(run.tenantId())
                 || !user.ownerUserId().equals(run.userId())) {
             throw new SecurityException("run 不存在或不属于当前用户");
         }
-        if (!run.stopRetryable()) {
-            return new ChatRunStopDecision(run, false);
+        ChatRun locked = repository.findByTenantIdAndUserIdAndIdForUpdate(
+                        user.tenantId(), user.ownerUserId(), run.id())
+                .orElseThrow(() -> new SecurityException("run 不存在或不属于当前用户"));
+        if (!locked.stopRetryable()) {
+            return new ChatRunStopDecision(locked, false);
         }
-        if (run.status() == ChatRunStatus.CANCELLING) {
-            cache.markCancellationRequested(run.id());
-            return new ChatRunStopDecision(run, true);
+        if (locked.status() == ChatRunStatus.CANCELLING) {
+            shortenStopLease(locked.id());
+            synchronizeCancellationCacheAfterCommit(locked, false);
+            return new ChatRunStopDecision(locked, stopFallbackAllowed(locked.id()));
         }
         String effectiveReason = reason == null || reason.isBlank() ? "USER_STOP" : reason;
         repository.tryMarkCancelling(new ChatRunRepository.StopClaim(
-                run.id(), user.tenantId(), user.ownerUserId(), effectiveReason, Instant.now()));
-        ChatRun latest = requireOwnedRun(user, run.id());
+                locked.id(), user.tenantId(), user.ownerUserId(), effectiveReason, Instant.now()));
+        ChatRun latest = requireOwnedRun(user, locked.id());
         if (latest.status() != ChatRunStatus.CANCELLING) {
             return new ChatRunStopDecision(latest, false);
         }
-        cache.markCancellationRequested(run.id());
-        cache.putActive(latest);
-        return new ChatRunStopDecision(latest, true);
+        shortenStopLease(latest.id());
+        synchronizeCancellationCacheAfterCommit(latest, true);
+        return new ChatRunStopDecision(latest, stopFallbackAllowed(latest.id()));
+    }
+
+    /** 当前execution owner接受stop并取得独占终态收口权。 */
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public OwnerStopDecision requestOwnerStop(
+            UserContext user,
+            ChatRun run,
+            String reason,
+            RunExecutionClaim claim) {
+        if (user == null || run == null || claim == null || !run.id().equals(claim.runId())
+                || !user.tenantId().equals(run.tenantId())
+                || !user.ownerUserId().equals(run.userId())) {
+            return new OwnerStopDecision(run, false);
+        }
+        // 与终态提交保持run -> execution锁顺序，数据库成功后才能发送ACCEPTED。
+        ChatRun locked = repository.findByTenantIdAndUserIdAndIdForUpdate(
+                        user.tenantId(), user.ownerUserId(), run.id())
+                .orElseThrow(() -> new SecurityException("run 不存在或不属于当前用户"));
+        if (locked.status().terminal()) {
+            return new OwnerStopDecision(locked, false);
+        }
+        String effectiveReason = reason == null || reason.isBlank() ? "USER_STOP" : reason;
+        if (locked.status() == ChatRunStatus.RUNNING) {
+            repository.tryMarkCancelling(new ChatRunRepository.StopClaim(
+                    locked.id(), user.tenantId(), user.ownerUserId(), effectiveReason, Instant.now()));
+            locked = repository.findById(locked.id()).orElse(locked);
+        }
+        boolean accepted = locked.status() == ChatRunStatus.CANCELLING
+                && leaseService != null
+                && leaseService.markOwnerStopAccepted(locked, claim);
+        if (locked.status() == ChatRunStatus.CANCELLING) {
+            synchronizeCancellationCacheAfterCommit(locked, true);
+        }
+        return new OwnerStopDecision(locked, accepted);
+    }
+
+    private void synchronizeCancellationCacheAfterCommit(ChatRun run, boolean refreshActiveRun) {
+        Runnable synchronization = () -> {
+            try {
+                cache.markCancellationRequested(run.id());
+            } catch (RuntimeException ex) {
+                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_CACHE_SYNC_FAILED,
+                                "ChatRun database state committed but cancellation cache synchronization failed")
+                        .runId(run.id())
+                        .sessionId(run.sessionId())
+                        .operation("chat-run.cancel-cache.after-commit")
+                        .attribute("runStatus", run.status())
+                        .build(), ex);
+            }
+            if (refreshActiveRun) {
+                synchronizeCommittedRunCache(run);
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    synchronization.run();
+                }
+            });
+            return;
+        }
+        synchronization.run();
+    }
+
+    private void shortenStopLease(String runId) {
+        if (leaseService != null) {
+            leaseService.shortenLeaseForStop(runId);
+        }
+    }
+
+    private boolean stopFallbackAllowed(String runId) {
+        return leaseService == null || !leaseService.stopFallbackBlocked(runId);
     }
 
     /**
@@ -451,9 +532,32 @@ public class ChatRunApplicationService {
      */
     public void rejectIfActiveRunExists(UserContext user, String sessionId) {
         findActive(user.tenantId(), user.ownerUserId(), sessionId)
+                .map(run -> convergeExpiredCancellingRun(user, run))
+                .filter(run -> !run.status().terminal())
                 .ifPresent(active -> {
                     throw new ActiveRunExistsException(sessionId, active.id());
                 });
+    }
+
+    /** stop收口租约已过期时复用watchdog单run恢复，避免下一条用户请求继续被旧run阻塞。 */
+    public ChatRun convergeExpiredCancellingRun(UserContext user, ChatRun run) {
+        if (run == null || run.status() != ChatRunStatus.CANCELLING || leaseService == null
+                || !leaseService.isLeaseExpired(run.id())) {
+            return run;
+        }
+        ChatRunRecoveryOrchestrator orchestrator = recoveryOrchestratorProvider == null
+                ? null
+                : recoveryOrchestratorProvider.getIfAvailable();
+        if (orchestrator != null) {
+            orchestrator.recoverExpiredRun(run.id());
+        }
+        ChatRun latest = repository.findByTenantIdAndUserIdAndId(
+                        user.tenantId(), user.ownerUserId(), run.id())
+                .orElse(run);
+        if (latest.status().terminal()) {
+            synchronizeCommittedRunCache(latest);
+        }
+        return latest;
     }
 
     /**
@@ -747,6 +851,10 @@ public class ChatRunApplicationService {
             throw new IllegalArgumentException("会话不存在: " + sessionId);
         }
         return session;
+    }
+
+    /** owner stop数据库受理结果；accepted=true后才能对外发送ACCEPTED。 */
+    public record OwnerStopDecision(ChatRun run, boolean accepted) {
     }
 
 }

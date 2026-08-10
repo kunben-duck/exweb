@@ -626,10 +626,16 @@ public class SessionApplicationService implements ChatSessionFacade {
         ChatSession session = command.session();
         ChatMessage existing = requireMessageInSession(session, command.messageId());
         ensureUnlockedAssistantMessage(existing, "Interaction 续接 assistant 消息");
+        String requestedContent = command.preserveExistingProjection()
+                ? existing.content()
+                : command.content();
+        String requestedMetadata = command.preserveExistingProjection()
+                ? existing.metadataJson()
+                : command.metadataJson();
         AssistantPersistenceProjection projection = projectAssistantPersistence(
-                command.content(),
+                requestedContent,
                 command.safePartDrafts(),
-                command.metadataJson(),
+                requestedMetadata,
                 command.appendAnswerPart());
         Instant now = Instant.now();
         int startOrder = existing.parts() == null ? 1 : existing.parts().size() + 1;

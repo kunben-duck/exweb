@@ -2255,6 +2255,7 @@ components:
             - $ref: '#/components/schemas/AmbiguousRouteCardPayload'
             - $ref: '#/components/schemas/RouteSwitchConfirmationPayload'
             - $ref: '#/components/schemas/RelayQuestionnaireCardPayload'
+            - $ref: '#/components/schemas/RuntimeStreamLimitFailurePayload'
             - type: object
               additionalProperties: true
       description: |
@@ -2262,6 +2263,39 @@ components:
         控制和终态仍是数据库事实。payload 由 type 决定；WAIT 相关主要 payload schema 见本定义的
         RunWaitingUserPayload、AmbiguousRouteCardPayload、RouteSwitchConfirmationPayload 和
         RelayQuestionnaireCardPayload。
+
+    RuntimeStreamLimitFailurePayload:
+      type: object
+      required: [code, limitType, message, messageReady, partialAnswerSaved]
+      properties:
+        code:
+          type: string
+          enum: [RUNTIME_STREAM_LIMIT_EXCEEDED]
+        limitType:
+          type: string
+          enum:
+            - PENDING_EVENTS
+            - PENDING_BYTES
+            - PENDING_INSTANCE_EVENTS
+            - PENDING_INSTANCE_BYTES
+            - ASSISTANT_PARTS
+            - ASSISTANT_BYTES
+            - ASSISTANT_INSTANCE_PARTS
+            - ASSISTANT_INSTANCE_BYTES
+        message:
+          type: string
+        messageReady:
+          type: boolean
+          description: 是否已保存可供历史和反馈引用的部分assistant
+        assistantMessageId:
+          type: string
+          nullable: true
+        feedbackTargetMessageId:
+          type: string
+          nullable: true
+        partialAnswerSaved:
+          type: boolean
+      description: Runtime待消费队列或assistant历史投影超过硬边界时的run.failed payload。
 
     RunWaitingUserPayload:
       type: object

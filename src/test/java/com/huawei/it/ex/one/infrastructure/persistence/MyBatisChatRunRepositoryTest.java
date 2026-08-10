@@ -11,6 +11,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
@@ -26,6 +27,24 @@ import java.time.Instant;
 import java.util.Map;
 
 class MyBatisChatRunRepositoryTest {
+    @Test
+    void ownerStopTerminalClaimCarriesOwnerAndFencingGuard() {
+        ChatRunMapper mapper = mock(ChatRunMapper.class);
+        when(mapper.claimExternalTerminal(any(ChatRunExternalTerminalClaimRow.class))).thenReturn(1);
+        MyBatisChatRunRepository repository = new MyBatisChatRunRepository(mapper, new ObjectMapper());
+
+        boolean claimed = repository.tryClaimExternalTerminal(new ChatRunRepository.ExternalTerminalClaim(
+                "run1", "tenant1", "user1", "session1", ChatRunStatus.CANCELLED,
+                "USER_STOP", Instant.now(), ChatRunRepository.ExternalTerminalGuard.OWNER_STOP,
+                "instance-1", 7L, null, null));
+
+        assertThat(claimed).isTrue();
+        verify(mapper).claimExternalTerminal(argThat(row ->
+                "OWNER_STOP".equals(row.guard())
+                        && "instance-1".equals(row.recoveredByInstanceId())
+                        && Long.valueOf(7L).equals(row.fencingToken())));
+    }
+
     @Test
     void interactionContinuationLocksSessionThenClaimBeforeValuesInsert() {
         ChatRunMapper mapper = mock(ChatRunMapper.class);

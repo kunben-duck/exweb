@@ -44,6 +44,7 @@ final class RouteSwitchContinuationCoordinator {
     private final AgentRuntimeExecutor runtimeExecutor;
     private final AgentDataPersistenceGate persistenceGate;
     private final RunMemoryContextAssembler memoryAssembler;
+    private final AssistantAssemblyFactory assistantAssemblyFactory;
 
     RouteSwitchContinuationCoordinator(
             RuntimeBindingApplicationService runtimeBindingService,
@@ -79,7 +80,8 @@ final class RouteSwitchContinuationCoordinator {
             DomainAgentRefusalCoordinator refusalCoordinator,
             AgentRuntimeExecutor runtimeExecutor,
             AgentDataPersistenceGate persistenceGate,
-            RunMemoryContextAssembler memoryAssembler) {
+            RunMemoryContextAssembler memoryAssembler,
+            AssistantAssemblyFactory assistantAssemblyFactory) {
         this.contextResolver = new RouteSwitchContextResolver(runtimeBindingService);
         this.lifecycle = lifecycle;
         this.appliedRouteRecorder = appliedRouteRecorder;
@@ -89,6 +91,22 @@ final class RouteSwitchContinuationCoordinator {
         this.runtimeExecutor = runtimeExecutor;
         this.persistenceGate = persistenceGate;
         this.memoryAssembler = memoryAssembler;
+        this.assistantAssemblyFactory = assistantAssemblyFactory;
+    }
+
+    RouteSwitchContinuationCoordinator(
+            RuntimeBindingApplicationService runtimeBindingService,
+            InteractionRunLifecycle lifecycle,
+            AppliedRouteRecorder appliedRouteRecorder,
+            InteractionEventFactory interactionEventFactory,
+            ChatEventPersistenceCoordinator eventPersistenceCoordinator,
+            DomainAgentRefusalCoordinator refusalCoordinator,
+            AgentRuntimeExecutor runtimeExecutor,
+            AgentDataPersistenceGate persistenceGate,
+            RunMemoryContextAssembler memoryAssembler) {
+        this(runtimeBindingService, lifecycle, appliedRouteRecorder, interactionEventFactory,
+                eventPersistenceCoordinator, refusalCoordinator, runtimeExecutor, persistenceGate,
+                memoryAssembler, null);
     }
 
     Flux<ChatEvent> execute(Request request) {
@@ -140,7 +158,9 @@ final class RouteSwitchContinuationCoordinator {
                 "after-domain-switch-execution-create");
         AtomicReference<RouteTarget> routeRef = new AtomicReference<>(route);
         AtomicReference<Map<String, Object>> pendingInteractionPayloadRef = new AtomicReference<>();
-        AssistantAssembly assistant = new AssistantAssembly();
+        AssistantAssembly assistant = assistantAssemblyFactory == null
+                ? new AssistantAssembly()
+                : assistantAssemblyFactory.create(request.runId());
         RunEventPipelineContext pipelineContext = new RunEventPipelineContext(
                 request.user(),
                 request.session(),

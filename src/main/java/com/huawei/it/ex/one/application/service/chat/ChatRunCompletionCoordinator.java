@@ -7,6 +7,7 @@ import com.huawei.it.ex.one.application.service.memory.RouteMemoryApplicationSer
 import com.huawei.it.ex.one.application.service.memory.ShortTermMemoryContextAssembler;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
+import com.huawei.it.ex.one.application.service.runtime.RuntimeStreamLimitExceededException;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.logging.AppLogger;
@@ -105,22 +106,35 @@ final class ChatRunCompletionCoordinator {
     }
 
     ChatEvent commitTerminalOnly(ChatEvent eventToPersist, RunEventPipelineContext context) {
+        return commitTerminalOnly(eventToPersist, context, completionMessageTarget(eventToPersist, context));
+    }
+
+    ChatEvent commitTerminalOnly(ChatEvent eventToPersist,
+                                 RunEventPipelineContext context,
+                                 CompletionMessageTarget target) {
         ChatRunTerminalCommitService.CommitResult result = terminalCommitService.commitTerminalOnly(
                 new ChatRunTerminalCommitService.TerminalOnlyCommitCommand(
                         eventToPersist,
-                        terminalCommitContext(context)
+                        terminalCommitContext(context),
+                        terminalMessageTarget(target)
                 ));
         return publishCommitted(result, context);
     }
 
     ChatEvent commitTerminalFailure(RunEventPipelineContext context, RuntimeException ex) {
-        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_TRANSACTION_FAILED,
+        ChatEvent failure = failureMapper.toEvent(context.runId(), context.session().id(), ex);
+        boolean streamLimit = RuntimeStreamLimitExceededException.CODE.equals(
+                String.valueOf(failure.payload().get("code")));
+        log.warn(SystemErrorLogEntry.builder(streamLimit
+                                ? SystemErrorCode.RESOURCE_EXHAUSTED
+                                : SystemErrorCode.DATABASE_TRANSACTION_FAILED,
                         "Chat run terminal processing failed; falling back to run.failed")
                 .runId(context.runId())
                 .sessionId(context.session().id())
                 .operation("chat-run.terminal-commit")
                 .build(), ex);
-        return commitTerminalOnly(failureMapper.toEvent(context.runId(), context.session().id(), ex), context);
+        CompletionPlan plan = prepare(failure, context);
+        return commitTerminalOnly(plan.eventToPersist(), context, plan.target());
     }
 
     void recordRouteMemoryAfterCommitted(ChatEvent stored, RunEventPipelineContext context) {
@@ -197,24 +211,33 @@ final class ChatRunCompletionCoordinator {
     }
 
     private CompletionMessageTarget completionMessageTarget(ChatEvent event, RunEventPipelineContext context) {
-        if (event == null || !"run.completed".equals(event.type())) {
+        boolean runCompleted = event != null && "run.completed".equals(event.type());
+        boolean resourceFailure = resourceLimitFailure(event);
+        if (!runCompleted && !resourceFailure) {
             return CompletionMessageTarget.notRunCompleted();
         }
         if (context.continuationInteractionRequest() != null
                 && !InteractionMessageStrategy.newTurn(context.continuationInteractionRequest())) {
-            return CompletionMessageTarget.ready(context.continuationInteractionRequest().assistantMessageId());
+            if (resourceFailure && !context.assistant().hasResourceLimitPartialOutput()) {
+                // 续跑尚无真实业务输出时保留原等待消息，避免空投影覆盖澄清卡片上下文。
+                return CompletionMessageTarget.notReady(runCompleted, true);
+            }
+            return CompletionMessageTarget.ready(
+                    runCompleted,
+                    resourceFailure,
+                    context.continuationInteractionRequest().assistantMessageId());
         }
         if (!context.assistant().shouldPersistMessage()) {
-            return CompletionMessageTarget.notReady();
+            return CompletionMessageTarget.notReady(runCompleted, resourceFailure);
         }
         String assistantMessageId = idGenerator.newId("msg",
                 IdGenerateContext.of(context.user().tenantId(), context.user().ownerUserId(),
                         context.session().id(), context.runId()));
-        return CompletionMessageTarget.ready(assistantMessageId);
+        return CompletionMessageTarget.ready(runCompleted, resourceFailure, assistantMessageId);
     }
 
     private ChatEvent withCompletionFeedbackPayload(ChatEvent event, CompletionMessageTarget target) {
-        if (event == null || !target.runCompleted()) {
+        if (event == null || (!target.runCompleted() && !target.resourceLimitFailure())) {
             return event;
         }
         Map<String, Object> payload = new LinkedHashMap<>(event.payload() == null ? Map.of() : event.payload());
@@ -223,8 +246,24 @@ final class ChatRunCompletionCoordinator {
             payload.put("assistantMessageId", target.assistantMessageId());
             payload.put("feedbackTargetMessageId", target.assistantMessageId());
         }
-        return new RunCompletedEvent(event.runId(), event.sessionId(), event.sequence(),
-                event.createdAt(), java.util.Collections.unmodifiableMap(payload));
+        if (target.resourceLimitFailure()) {
+            payload.put("partialAnswerSaved", target.messageReady());
+            String code = String.valueOf(payload.getOrDefault("code", RuntimeStreamLimitExceededException.CODE));
+            String message = String.valueOf(payload.getOrDefault("message",
+                    "Runtime流式输出超过服务内存保护上限，本轮已停止"));
+            return com.huawei.it.ex.one.domain.chat.ErrorEvent.of(
+                    event.runId(), event.sessionId(), code, message,
+                    java.util.Collections.unmodifiableMap(payload));
+        }
+        return new RunCompletedEvent(event.runId(), event.sessionId(), event.sequence(), event.createdAt(),
+                java.util.Collections.unmodifiableMap(payload));
+    }
+
+    private boolean resourceLimitFailure(ChatEvent event) {
+        return event != null
+                && "run.failed".equals(event.type())
+                && event.payload() != null
+                && RuntimeStreamLimitExceededException.CODE.equals(String.valueOf(event.payload().get("code")));
     }
 
     private ChatInteractionRequest waitingRequest(ChatEvent event,
@@ -355,19 +394,22 @@ final class ChatRunCompletionCoordinator {
 
     record CompletionMessageTarget(
             boolean runCompleted,
+            boolean resourceLimitFailure,
             boolean messageReady,
             String assistantMessageId
     ) {
         private static CompletionMessageTarget notRunCompleted() {
-            return new CompletionMessageTarget(false, false, null);
+            return new CompletionMessageTarget(false, false, false, null);
         }
 
-        private static CompletionMessageTarget notReady() {
-            return new CompletionMessageTarget(true, false, null);
+        private static CompletionMessageTarget notReady(boolean runCompleted, boolean resourceFailure) {
+            return new CompletionMessageTarget(runCompleted, resourceFailure, false, null);
         }
 
-        private static CompletionMessageTarget ready(String assistantMessageId) {
-            return new CompletionMessageTarget(true, true, assistantMessageId);
+        private static CompletionMessageTarget ready(boolean runCompleted,
+                                                     boolean resourceFailure,
+                                                     String assistantMessageId) {
+            return new CompletionMessageTarget(runCompleted, resourceFailure, true, assistantMessageId);
         }
     }
 }

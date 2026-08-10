@@ -103,6 +103,26 @@ public interface ChatEventMapper {
     );
 
     /**
+     * 分页查询指定 run 在事件游标之后的事实事件，供 stop fallback 有界重放。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param runId run 标识。
+     * @param afterSeq 已处理的最大事件序号。
+     * @param limit 单页最大事件数。
+     * @return 按 seq 正序排列的一页事件。
+     */
+    List<ChatEventRow> findPageByOwnerAndRunAfterSeq(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionId") String sessionId,
+            @Param("runId") String runId,
+            @Param("afterSeq") long afterSeq,
+            @Param("limit") int limit
+    );
+
+    /**
      * 查询指定会话当前最新事件序号。
      *
      * @param tenantId 租户标识。

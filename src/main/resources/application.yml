@@ -320,6 +320,28 @@ financeex:
   agent-runtime:
     # 没有显式 RuntimeBinding 时使用的 fallback provider；Relay 与 DomainAgent 可同时注册。
     default-provider: ${FINANCEEX_AGENT_RUNTIME_DEFAULT_PROVIDER:relay}
+    stream-limits:
+      # Runtime桥接待消费队列硬边界；任一边界超限都会停止当前Runtime并以资源失败收口。
+      pending-max-events-per-run: ${FINANCEEX_RUNTIME_PENDING_MAX_EVENTS_PER_RUN:512}
+      pending-max-bytes-per-run: ${FINANCEEX_RUNTIME_PENDING_MAX_BYTES_PER_RUN:4MB}
+      pending-max-events-per-instance: ${FINANCEEX_RUNTIME_PENDING_MAX_EVENTS_PER_INSTANCE:8192}
+      pending-max-bytes-per-instance: ${FINANCEEX_RUNTIME_PENDING_MAX_BYTES_PER_INSTANCE:64MB}
+      # assistant历史投影边界；过程Part可以过滤，正文和必要结构化Part优先保留。
+      assistant-max-parts-per-run: ${FINANCEEX_RUNTIME_ASSISTANT_MAX_PARTS_PER_RUN:10000}
+      assistant-max-bytes-per-run: ${FINANCEEX_RUNTIME_ASSISTANT_MAX_BYTES_PER_RUN:16MB}
+      assistant-process-max-ratio: ${FINANCEEX_RUNTIME_ASSISTANT_PROCESS_MAX_RATIO:25}
+      assistant-max-active-parts-per-instance: ${FINANCEEX_RUNTIME_ASSISTANT_MAX_ACTIVE_PARTS_PER_INSTANCE:100000}
+      assistant-max-active-bytes-per-instance: ${FINANCEEX_RUNTIME_ASSISTANT_MAX_ACTIVE_BYTES_PER_INSTANCE:256MB}
+      overflow-cancel-timeout: ${FINANCEEX_RUNTIME_OVERFLOW_CANCEL_TIMEOUT:5s}
+      # stop优先由execution owner使用内存Assembly收口；失联时使用有界分页Event重放。
+      stop-owner-handoff-timeout: ${FINANCEEX_RUNTIME_STOP_OWNER_HANDOFF_TIMEOUT:2s}
+      # owner接受stop后的独占终态收口租约；必须大于handoff和外部终态事务超时。
+      stop-finalization-lease: ${FINANCEEX_RUNTIME_STOP_FINALIZATION_LEASE:15s}
+      stop-replay-page-size: ${FINANCEEX_RUNTIME_STOP_REPLAY_PAGE_SIZE:16}
+      stop-replay-max-events-per-run: ${FINANCEEX_RUNTIME_STOP_REPLAY_MAX_EVENTS_PER_RUN:10000}
+      stop-replay-max-concurrency: ${FINANCEEX_RUNTIME_STOP_REPLAY_MAX_CONCURRENCY:2}
+      stop-replay-query-timeout-seconds: ${FINANCEEX_RUNTIME_STOP_REPLAY_QUERY_TIMEOUT_SECONDS:2}
+      stop-replay-total-timeout: ${FINANCEEX_RUNTIME_STOP_REPLAY_TOTAL_TIMEOUT:5s}
     relay:
       enabled: ${FINANCEEX_RELAY_RUNTIME_ENABLED:true}
       domain-expert:

@@ -169,6 +169,24 @@ topic 需要恢复，恢复控制消息按较慢间隔重试，远端前端通�
 仍按原事件顺序逐条发布，前端事件数量、payload、sequence 和 Event Resume 协议不变；通过
 `event-batch-enabled=false` 可恢复逐事件落库。
 
+Relay 与 DomainAgent 的业务帧进入 Event 管线前受 `financeex.agent-runtime.stream-limits` 两层内存边界保护。
+第一层按 run 和实例限制待消费事件数与序列化字节数，默认分别为 `512/4MB` 和 `8192/64MB`；任一帧
+超过边界时拒绝该帧、停止下游 Runtime、排空已接受事件，并以
+`run.failed(code=RUNTIME_STREAM_LIMIT_EXCEEDED)` 收口。第二层只限制终态 assistant 历史投影，默认每 run
+最多 `10000` 个 Parts、`16MB`，实例最多 `100000` 个 Parts、`256MB`；过程 Part 最多占其中 `25%`。
+过程进度、思考、Agent 状态、普通 metadata 和未知 Runtime Part 可以被过滤或按最旧优先淘汰，但原始
+ChatEvent 的落库、实时推送和 Event Resume 不受影响。正文或必要结构化 Part 在淘汰后仍无法容纳时，
+服务端保存已有部分回答并失败；`ASSISTANT_PLACEHOLDER` 仍只保存占位正文和允许的控制 Parts。
+
+运行态 stop 优先通过按实例定向的 Redis Pub/Sub 控制频道通知当前 execution owner，由 owner 复用内存中的
+`AssistantAssembly` 保存 partial assistant；请求和响应只携带 run、owner、fencing 与状态，不携带 Cookie、
+正文或 Parts。owner 接受时会在同一短事务内把 run 和 execution 都置为 `CANCELLING`，并获得默认 15 秒的
+独占收口租约；即使 `stop-owner-handoff-timeout=2s` 内尚未提交终态，请求实例也只返回 `CANCELLING`，不会
+与 owner 竞争 Event 回放。只有 owner 未取得该数据库收口权时，请求实例才按 seq 分页重放已持久化 Event。
+重放默认每页 16 条、最多 10000 条、单实例最多 2 个并发，单次查询和整体分别限制为 2 秒和 5 秒；容量不足、
+查询失败或超限时只跳过 partial assistant 重建，`run.cancelled` 仍正常提交。run 进入 `CANCELLING` 后 heartbeat
+不再续租；owner 失联时由 15 秒租约、懒恢复或 watchdog 闭合。no-store 的 live-only 内容不会被 fallback 恢复。
+
 `ASSISTANT_PLACEHOLDER` 策略下，普通 `message.*` 与下游 `runtime.*` 业务 Event 使用同一数据库全局
 sequence 分配顺序，但不执行 Event INSERT；`run.lastSeq` 和 `stream-status.latestSeq` 只表示最新持久化
 位置。实时业务 sequence 与后续持久化控制/终态 sequence 之间允许出现缺口。Event Resume 不会补发这些
@@ -244,7 +262,7 @@ DomainAgent/Relay 请求或事件。意图澄清和路由切换确认不会暂�
 - `runtimeSessionId`：当前 AgentRuntime provider 自己的会话 ID，由 Runtime 返回后保存在 RuntimeBinding 中，下一轮续接时带回。
 
 `runId` 不是长期任务会话；它是单轮执行 correlation id。事件表 `fin_ex_chat_event_t.run_id` 和绑定表 `fin_ex_runtime_binding_t.last_run_id` 都用它做运行轨迹和排障定位。
-run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。`CANCELLING` 不允许被迟到的通用 run 更新恢复为 `RUNNING`。运行态 stop 保持 RuntimeBinding 的既有生命周期；等待态 stop 会取消 Interaction 精确引用、仍属于该等待链的 `ACTIVE` Binding，不影响无关的历史 `RESUMABLE` Relay Binding。历史 run-A 仍保留 `WAITING_USER`，以保持事件和消息历史不变。如果用户主动 stop 前已经有 `message.delta`、`message.snapshot` 或卡片、引用、思考、工具、进度等用户可见 parts 成功落库，ChatService 会把截至 stop 时的内容保存为 partial assistant 历史消息，并在消息 `metadata_json` 中标记 `partial=true`、`finishReason=USER_STOP`。partial assistant 只由赢得外部终态 CAS 的实例在同一短事务中保存，CAS 失败者不会改写消息、parts 或 session leaf。
+run 生命周期事实源保存在 `fin_ex_chat_run_t`，状态包括 `RUNNING`、`CANCELLING`、`CANCELLED`、`COMPLETED`、`FAILED`。`CANCELLING` 不允许被迟到的通用 run 更新恢复为 `RUNNING`。运行态 stop 保持 RuntimeBinding 的既有生命周期；等待态 stop 会取消 Interaction 精确引用、仍属于该等待链的 `ACTIVE` Binding，不影响无关的历史 `RESUMABLE` Relay Binding。历史 run-A 仍保留 `WAITING_USER`，以保持事件和消息历史不变。如果用户主动 stop 前已经产生正文或用户可见 parts，execution owner 会优先使用当前内存 Assembly 保存 partial assistant；owner 失联时才以有界分页方式从已落库 Event 重建。消息 `metadata_json` 标记 `partial=true`、`finishReason=USER_STOP`。partial assistant 只由赢得外部终态 CAS 的实例在同一短事务中保存，CAS 失败者不会改写消息、parts 或 session leaf。
 run 执行控制面保存在 `fin_ex_chat_run_execution_t`，只保存 owner 实例、心跳、租约、恢复状态和 `fencing_token`，不混入业务 run 表。后台执行流写入 run 事件时通过数据库 guarded insert 原子校验 execution owner 与 `fencing_token`；stop、watchdog 或未来 Runtime takeover 递增 token 后，旧实例迟到 delta/completed 会被拒绝。路由、Runtime Interaction 和 Relay/DomainAgent 调用前还会执行少量只读 owner 检查；检查只发生在外部副作用边界，不进入普通 chunk 写入热路径。
 当前生产版本保持下游标准事件原粒度，不在 ChatService 内合并 `message.delta`；普通 Relay/DomainAgent
 事件以及 IntentAgent 的 `intent-progress/intent-delta` 只在数据库提交层按三重阈值组批，
@@ -267,7 +285,7 @@ assistant 的思考、工具、进度、agent 调用等过程信息保存到 `fi
 
 同一会话的 `RUNNING/CANCELLING` run 由数据库部分唯一索引保证唯一；用户消息、附件关系、current leaf 与 run 创建处于同一个短事务中，并发失败不会留下无 run 的消息节点。Redis active run 仅作为热缓存，不承担准入正确性。普通流式事件写入前使用 run 行 `FOR SHARE NOWAIT` 与 owner/stop/watchdog 终态串行，终态已持锁时迟到事件立即拒绝。
 
-stop 与 watchdog 写入 `run.cancelled/run.failed` 前会通过 run 行条件更新竞争唯一外部终态写入权，失败者不会再写事件或发布实时消息。stop 首次 `RUNNING -> CANCELLING` 也使用条件 CAS；终态事务失败后，`CANCELLING` run 允许再次 stop 重试。若最终由 watchdog 接管，也会按取消语义闭合为 `run.cancelled`。上述 run 协调短事务默认受 `financeex.chat-run.external-terminal-transaction-timeout-seconds=10` 限制，超时整体回滚，不长期占用数据库连接和工作线程。Interaction 提交后若实例在 continuation run/execution 创建完成前退出，watchdog 会在 `financeex.chat-interaction.responding-orphan-grace`（默认 `2m`）后回收孤儿 `RESPONDING` claim；普通 run 已创建但 execution 未创建时，则由 `financeex.chat-run.execution-init-orphan-grace`（默认 `2m`）控制回收。两类扫描均使用专用索引和既有 batch 上限，不进入普通聊天请求热路径。
+stop 与 watchdog 写入 `run.cancelled/run.failed` 前会通过 run 行条件更新竞争唯一外部终态写入权，失败者不会再写事件或发布实时消息。stop 首次 `RUNNING -> CANCELLING` 也使用条件 CAS；owner 尚未取得独占权且终态事务失败时，`CANCELLING` run 允许再次 stop 执行 fallback，owner 已持有 `execution=CANCELLING` 时重复 stop 仅幂等返回。若最终由 watchdog 接管，也会按取消语义闭合为 `run.cancelled`。上述 run 协调短事务默认受 `financeex.chat-run.external-terminal-transaction-timeout-seconds=10` 限制，超时整体回滚，不长期占用数据库连接和工作线程。Interaction 提交后若实例在 continuation run/execution 创建完成前退出，watchdog 会在 `financeex.chat-interaction.responding-orphan-grace`（默认 `2m`）后回收孤儿 `RESPONDING` claim；普通 run 已创建但 execution 未创建时，则由 `financeex.chat-run.execution-init-orphan-grace`（默认 `2m`）控制回收。两类扫描均使用专用索引和既有 batch 上限，不进入普通聊天请求热路径。
 
 默认恢复策略链是 `MANUAL_CONFIRMATION,FAIL_FAST`：
 

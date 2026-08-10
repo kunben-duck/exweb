@@ -45,6 +45,26 @@ final class RuntimeInteractionContinuationCoordinator {
     private final InteractionRunLifecycle lifecycle;
     private final ChatEventPersistenceCoordinator eventPersistenceCoordinator;
     private final Scheduler eventIoScheduler;
+    private final AssistantAssemblyFactory assistantAssemblyFactory;
+
+    RuntimeInteractionContinuationCoordinator(
+            RuntimeBindingApplicationService runtimeBindingService,
+            AgentRuntimeExecutor runtimeExecutor,
+            AppliedRouteRecorder appliedRouteRecorder,
+            InteractionEventFactory interactionEventFactory,
+            InteractionRunLifecycle lifecycle,
+            ChatEventPersistenceCoordinator eventPersistenceCoordinator,
+            Scheduler eventIoScheduler,
+            AssistantAssemblyFactory assistantAssemblyFactory) {
+        this.runtimeBindingService = runtimeBindingService;
+        this.runtimeExecutor = runtimeExecutor;
+        this.appliedRouteRecorder = appliedRouteRecorder;
+        this.interactionEventFactory = interactionEventFactory;
+        this.lifecycle = lifecycle;
+        this.eventPersistenceCoordinator = eventPersistenceCoordinator;
+        this.eventIoScheduler = eventIoScheduler;
+        this.assistantAssemblyFactory = assistantAssemblyFactory;
+    }
 
     RuntimeInteractionContinuationCoordinator(
             RuntimeBindingApplicationService runtimeBindingService,
@@ -54,13 +74,8 @@ final class RuntimeInteractionContinuationCoordinator {
             InteractionRunLifecycle lifecycle,
             ChatEventPersistenceCoordinator eventPersistenceCoordinator,
             Scheduler eventIoScheduler) {
-        this.runtimeBindingService = runtimeBindingService;
-        this.runtimeExecutor = runtimeExecutor;
-        this.appliedRouteRecorder = appliedRouteRecorder;
-        this.interactionEventFactory = interactionEventFactory;
-        this.lifecycle = lifecycle;
-        this.eventPersistenceCoordinator = eventPersistenceCoordinator;
-        this.eventIoScheduler = eventIoScheduler;
+        this(runtimeBindingService, runtimeExecutor, appliedRouteRecorder, interactionEventFactory,
+                lifecycle, eventPersistenceCoordinator, eventIoScheduler, null);
     }
 
     Flux<ChatEvent> execute(Request request) {
@@ -114,7 +129,9 @@ final class RuntimeInteractionContinuationCoordinator {
                 request.startAttempt(),
                 executionClaim,
                 "after-interaction-execution-create");
-        AssistantAssembly assistant = new AssistantAssembly(persistenceState);
+        AssistantAssembly assistant = assistantAssemblyFactory == null
+                ? new AssistantAssembly(persistenceState)
+                : assistantAssemblyFactory.create(request.runId(), persistenceState);
         RunEventPipelineContext context = new RunEventPipelineContext(
                 request.user(),
                 request.session(),

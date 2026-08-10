@@ -2518,7 +2518,7 @@ Relay WebSocket 始终使用短连接：每个 run 新建下游 WS，先发送 `
 | `runtime.card` | Relay `approval-request` 原始字段 + `{ "source": "relay", "sourceType": "approval-request" }`；domain-agent 卡片仍按 DomainAgent payload 规则返回 |
 | `runtime.event` | 未识别合法 Relay JSON 原始字段 + `{ "source": "relay", "sourceType": "未知下游 type" }` |
 | `message.completed` | `{ "status": "MESSAGE_COMPLETED", "finishReason": "可选", "runtimeSessionId": "可选", "agentSessionId": "可选" }` |
-| `run.failed` | `{ "code": "错误码", "message": "错误说明", "recoverable": "可选", "recoveryOptions": "可选" }` |
+| `run.failed` | `{ "code": "错误码", "message": "错误说明", "recoverable": "可选", "recoveryOptions": "可选" }`；流式内存超限时还可包含 `limitType/messageReady/assistantMessageId/feedbackTargetMessageId/partialAnswerSaved` |
 
 Relay 映射规则：
 
@@ -2538,6 +2538,26 @@ Relay 映射规则：
 
 当前生产版本按下游标准事件原粒度输出 `message.delta`，前端只需要按 `seq`
 顺序追加 `payload.delta`，不要假设一个 delta 等于一个 token，也不要依赖任何 Relay 私有字段。
+
+当 Runtime 输出累计超过服务端内存硬边界时，终态为：
+
+```json
+{
+  "type": "run.failed",
+  "payload": {
+    "code": "RUNTIME_STREAM_LIMIT_EXCEEDED",
+    "limitType": "ASSISTANT_BYTES",
+    "messageReady": true,
+    "assistantMessageId": "msg_xxx",
+    "feedbackTargetMessageId": "msg_xxx",
+    "partialAnswerSaved": true
+  }
+}
+```
+
+前端应停止 loading，并在 `messageReady=true` 时保留已渲染内容、使用返回的 messageId 关联历史和反馈。
+过程进度或思考 Part 可能只在历史消息中被服务端过滤，原始 Event 仍照常实时推送并可按既有留存策略
+Resume；这不表示流式事件丢失。`messageReady=false` 表示没有可保存的正文或用户可见结构化内容。
 历史消息中，最终正文保存在 `ChatMessageDto.content`；过程信息通过
 `ChatMessageDto.parts` 返回，刷新会话后也可以回显思考、工具、进度和 agent 调用过程。
 
@@ -2790,7 +2810,7 @@ run-A 从 `WAITING_USER` 改成 `CANCELLED`；它会把 Interaction 改为 `CANC
 
 用户主动 stop 时，如果该 run 已经有 `message.delta`、`message.snapshot` 或用户可见的 `runtime.progress/runtime.tool/runtime.thinking/runtime.reference/runtime.card` 成功落库，后端会把截至 stop 时的内容保存为一条 assistant 历史消息。该消息的 `metadataJson` 会包含 `partial=true`、`finishReason=USER_STOP`、`runStatus=CANCELLED`。如果 stop 时只有 trace、domain-agent session 等内部 `runtime.metadata`，则不会创建空 assistant 消息；这些内部事件仍可通过 Event Resume 或事件表排障。
 
-前端点击停止后，不应把关闭 WebSocket 当作取消语义。推荐流程是：保存当前本地 `lastSeq`，调用 stop，随后继续通过 WebSocket 等待 `run.cancelled`；如果页面已经断线或没有收到终态事件，则用 stop 前保存的 `lastSeq` 调 Event Resume 补齐 `run.cancelled`。当 stop 前已有正文或用户可见 parts 时，`run.cancelled.payload.messageReady=true`，并携带 `assistantMessageId/feedbackTargetMessageId`；HTTP stop 响应也会返回同样的反馈目标作为兜底。stop 响应里的 `latestSeq` 是服务端事实源位置，不代表当前页签已经消费到该事件。
+前端点击停止后，不应把关闭 WebSocket 当作取消语义。推荐流程是：保存当前本地 `lastSeq`，调用 stop，随后继续通过 WebSocket 等待 `run.cancelled`；如果 owner 已接受但尚未完成内存汇总，stop 接口可以先返回 `status=CANCELLING`，此时不要重复创建新 run，继续等待实时终态或使用 Event Resume。页面已经断线或没有收到终态事件时，用 stop 前保存的 `lastSeq` 调 Event Resume 补齐 `run.cancelled`。当 stop 前已有正文或用户可见 parts 时，`run.cancelled.payload.messageReady=true`，并携带 `assistantMessageId/feedbackTargetMessageId`；HTTP stop 响应也会返回同样的反馈目标作为兜底。stop 响应里的 `latestSeq` 是服务端事实源位置，不代表当前页签已经消费到该事件。
 
 stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可信 Relay WebSocket 或 DomainAgent cancel adapter，用于下游企业权限校验。Relay 优先在本机 active WS 上发送 `{"type":"stop_all_agents"}`。如果 stop 请求落到其他实例、本机连接已清理或处于 Relay 问卷等待，后端会新建临时 Relay WS，使用可信 `runtimeSessionId` 发送 `config(sessionMode=resume, supports_incremental_recovery=true)`，收到 `session-ready` 后再发送 `stop_all_agents`，然后等待 `session-state=paused` 或 ack 超时后释放临时连接。DomainAgent 等待链使用 source/effective run 的真实技能标识调用现有 cancel 接口。等待态本地事务会先取消 Interaction 及其精确关联的 ACTIVE Binding；即使下游 cancel 失败，也不会恢复等待，不阻止用户提交下一条问题。无关的 `RESUMABLE` Relay Binding 不会被取消。
 

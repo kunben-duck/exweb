@@ -96,6 +96,23 @@ public interface ChatRunExecutionRepository {
     }
 
     /**
+     * run已进入CANCELLING但owner尚未接受收口时，只缩短当前RUNNING execution租约。
+     */
+    default boolean shortenLeaseForCancellingRun(String runId, Duration leaseDuration) {
+        return false;
+    }
+
+    /**
+     * 当前owner接受stop并取得独占终态收口权。
+     *
+     * <p>生产实现必须校验run归属、CANCELLING状态以及owner/fencing，并原子地把execution从
+     * RUNNING更新为CANCELLING。</p>
+     */
+    default boolean markOwnerStopAccepted(ChatRun run, RunExecutionClaim claim, Duration leaseDuration) {
+        return false;
+    }
+
+    /**
      * 将 execution 同步到 run 终态。
      *
      * @param runId run 标识。

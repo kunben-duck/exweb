@@ -10,6 +10,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.huawei.it.ex.one.domain.chat.ChatRun;
+import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,6 +24,7 @@ import java.lang.reflect.Method;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 class MyBatisChatRunExecutionRepositoryTest {
     @Test
@@ -103,11 +106,43 @@ class MyBatisChatRunExecutionRepositoryTest {
                 .isEqualTo("${financeex.chat-run.heartbeat-transaction-timeout-seconds:2}");
     }
 
+    @Test
+    void shortensCancellingRunLeaseWithoutExtendingItInApplicationCode() {
+        ChatRunExecutionMapper mapper = mock(ChatRunExecutionMapper.class);
+        when(mapper.shortenLeaseForCancellingRun(eq("run-1"), any(Instant.class))).thenReturn(1);
+        MyBatisChatRunExecutionRepository repository =
+                new MyBatisChatRunExecutionRepository(mapper, new ObjectMapper());
+
+        assertThat(repository.shortenLeaseForCancellingRun("run-1", Duration.ofSeconds(15))).isTrue();
+        verify(mapper).shortenLeaseForCancellingRun(eq("run-1"), any(Instant.class));
+    }
+
+    @Test
+    void ownerStopAcceptanceUsesCompleteOwnershipAndFencingGuard() {
+        ChatRunExecutionMapper mapper = mock(ChatRunExecutionMapper.class);
+        RunExecutionClaim claim = new RunExecutionClaim("run-1", "instance-a", 7L);
+        when(mapper.markOwnerStopAccepted(
+                eq("run-1"), eq("tenant1"), eq("user1"), eq("session1"),
+                eq("instance-a"), eq(7L), any(Instant.class))).thenReturn(1);
+        MyBatisChatRunExecutionRepository repository =
+                new MyBatisChatRunExecutionRepository(mapper, new ObjectMapper());
+
+        assertThat(repository.markOwnerStopAccepted(run(), claim, Duration.ofSeconds(15))).isTrue();
+    }
+
     private ChatRunExecutionRow row(RunExecutionClaim claim) {
         ChatRunExecutionRow row = new ChatRunExecutionRow();
         row.setRunId(claim.runId());
         row.setOwnerInstanceId(claim.ownerInstanceId());
         row.setFencingToken(claim.fencingToken());
         return row;
+    }
+
+    private ChatRun run() {
+        Instant now = Instant.now();
+        return new ChatRun(
+                "run-1", "tenant1", "user1", "session1", ChatRunStatus.CANCELLING,
+                "AGENT_RUNTIME", null, "relay", null, null, null,
+                "USER_STOP", now, null, Map.of(), now, now);
     }
 }

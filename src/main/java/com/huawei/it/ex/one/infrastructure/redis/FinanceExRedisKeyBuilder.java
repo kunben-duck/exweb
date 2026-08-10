@@ -157,6 +157,11 @@ public class FinanceExRedisKeyBuilder {
         return prefix(liveEventBusProperties.getRedisChannelPrefix()) + ":" + normalize(streamTopicId);
     }
 
+    /** @return 指定应用实例的 ChatRun stop 控制频道。 */
+    public String runStopControlChannel(String instanceId) {
+        return prefix("fin_ex:chat_run_stop_control") + ":" + normalize(instanceId);
+    }
+
     /**
      * 从 Redis Pub/Sub channel 反解 stream topic id。
      *

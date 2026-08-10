@@ -1,8 +1,12 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
@@ -26,6 +30,7 @@ import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
 import com.huawei.it.ex.one.domain.chat.RunCompletedEvent;
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
@@ -35,6 +40,8 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -94,6 +101,76 @@ class ChatRunApplicationServiceTest {
     }
 
     @Test
+    void repeatedStopDoesNotStartFallbackWhileOwnerHasExclusiveFinalization() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRunLeaseApplicationService leaseService = mock(ChatRunLeaseApplicationService.class);
+        repository.save(runningRun().cancelling("USER_STOP"));
+        when(leaseService.stopFallbackBlocked("run1")).thenReturn(true);
+        ChatRunApplicationService service = service(repository, cache, leaseService);
+
+        var decision = service.requestStop(user(), "run1", "USER_STOP");
+
+        assertThat(decision.appendCancelledEvent()).isFalse();
+        assertThat(decision.run().status()).isEqualTo(ChatRunStatus.CANCELLING);
+        verify(leaseService).shortenLeaseForStop("run1");
+    }
+
+    @Test
+    void ownerAcceptsStopOnlyAfterExecutionClaimIsPersisted() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRunLeaseApplicationService leaseService = mock(ChatRunLeaseApplicationService.class);
+        ChatRun running = runningRun();
+        RunExecutionClaim claim = new RunExecutionClaim("run1", "instance-a", 7L);
+        repository.save(running);
+        when(leaseService.markOwnerStopAccepted(any(ChatRun.class), eq(claim))).thenReturn(true);
+        ChatRunApplicationService service = service(repository, cache, leaseService);
+
+        ChatRunApplicationService.OwnerStopDecision decision =
+                service.requestOwnerStop(user(), running, "USER_STOP", claim);
+
+        assertThat(decision.accepted()).isTrue();
+        assertThat(decision.run().status()).isEqualTo(ChatRunStatus.CANCELLING);
+        verify(leaseService).markOwnerStopAccepted(any(ChatRun.class), eq(claim));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void newRunAdmissionConvergesExpiredCancellingRunAndClearsActiveCache() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRunLeaseApplicationService leaseService = mock(ChatRunLeaseApplicationService.class);
+        ChatRunRecoveryOrchestrator recovery = mock(ChatRunRecoveryOrchestrator.class);
+        ObjectProvider<ChatRunRecoveryOrchestrator> recoveryProvider = mock(ObjectProvider.class);
+        ChatRun cancelling = runningRun().cancelling("USER_STOP");
+        repository.save(cancelling);
+        cache.putActive(cancelling);
+        when(leaseService.isLeaseExpired("run1")).thenReturn(true);
+        when(recoveryProvider.getIfAvailable()).thenReturn(recovery);
+        when(recovery.recoverExpiredRun("run1")).thenAnswer(ignored -> {
+            repository.save(cancelling.cancelled(9L));
+            return true;
+        });
+        ChatRunApplicationService service = new ChatRunApplicationService(
+                repository,
+                cache,
+                new InMemoryEventStore(0L),
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                leaseService,
+                recoveryProvider,
+                mock(ObjectProvider.class),
+                mock(ObjectProvider.class));
+
+        assertThatCode(() -> service.rejectIfActiveRunExists(user(), "session1"))
+                .doesNotThrowAnyException();
+
+        assertThat(cache.getActive("tenant1", "user1", "session1")).isEmpty();
+        verify(recovery).recoverExpiredRun("run1");
+    }
+
+    @Test
     void stopDatabaseFailureDoesNotWriteRedisCancellationFlag() {
         FailingStopClaimRunRepository repository = new FailingStopClaimRunRepository();
         InMemoryRunCache cache = new InMemoryRunCache();
@@ -107,6 +184,87 @@ class ChatRunApplicationServiceTest {
         assertThat(repository.findById("run1").orElseThrow().status()).isEqualTo(ChatRunStatus.RUNNING);
         assertThat(cache.cancellationSignal("run1")).isEqualTo(ChatRunCancelSignal.NOT_REQUESTED);
         assertThat(service.shouldAcceptEvent(MessageDeltaEvent.of("run1", "session1", "still running"))).isTrue();
+    }
+
+    @Test
+    void stopSynchronizesCancellationCacheOnlyAfterTransactionCommit() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRunApplicationService service = service(repository, cache);
+        ChatRun running = runningRun();
+        repository.save(running);
+        cache.putActive(running);
+
+        beginTransactionSynchronization();
+        try {
+            service.requestStop(user(), running, "USER_STOP");
+
+            assertThat(repository.saved.status()).isEqualTo(ChatRunStatus.CANCELLING);
+            assertThat(cache.cancellationSignal("run1")).isEqualTo(ChatRunCancelSignal.NOT_REQUESTED);
+            assertThat(cache.getActive("tenant1", "user1", "session1"))
+                    .get()
+                    .extracting(ChatRun::status)
+                    .isEqualTo(ChatRunStatus.RUNNING);
+
+            commitTransactionSynchronization();
+
+            assertThat(cache.cancellationSignal("run1")).isEqualTo(ChatRunCancelSignal.REQUESTED);
+            assertThat(cache.getActive("tenant1", "user1", "session1"))
+                    .get()
+                    .extracting(ChatRun::status)
+                    .isEqualTo(ChatRunStatus.CANCELLING);
+        } finally {
+            endTransactionSynchronization();
+        }
+    }
+
+    @Test
+    void rolledBackStopDoesNotPublishCancellationCacheState() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        ChatRunApplicationService service = service(repository, cache);
+        ChatRun running = runningRun();
+        repository.save(running);
+        cache.putActive(running);
+
+        beginTransactionSynchronization();
+        try {
+            service.requestStop(user(), running, "USER_STOP");
+
+            assertThat(cache.cancellationSignal("run1")).isEqualTo(ChatRunCancelSignal.NOT_REQUESTED);
+        } finally {
+            endTransactionSynchronization();
+        }
+
+        assertThat(cache.cancellationSignal("run1")).isEqualTo(ChatRunCancelSignal.NOT_REQUESTED);
+        assertThat(cache.getActive("tenant1", "user1", "session1"))
+                .get()
+                .extracting(ChatRun::status)
+                .isEqualTo(ChatRunStatus.RUNNING);
+        assertThat(service.shouldAcceptEvent(MessageDeltaEvent.of("run1", "session1", "still running"))).isTrue();
+    }
+
+    @Test
+    void cancellationCacheFailureAfterCommitDoesNotFailStopOrActiveCacheRefresh() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new FailingCancellationRunCache();
+        ChatRunApplicationService service = service(repository, cache);
+        ChatRun running = runningRun();
+        repository.save(running);
+        cache.putActive(running);
+
+        beginTransactionSynchronization();
+        try {
+            service.requestStop(user(), running, "USER_STOP");
+
+            assertThatCode(this::commitTransactionSynchronization).doesNotThrowAnyException();
+            assertThat(cache.getActive("tenant1", "user1", "session1"))
+                    .get()
+                    .extracting(ChatRun::status)
+                    .isEqualTo(ChatRunStatus.CANCELLING);
+        } finally {
+            endTransactionSynchronization();
+        }
     }
 
     @Test
@@ -630,6 +788,36 @@ class ChatRunApplicationServiceTest {
                 new PermissionChecker(), new FixedSessionRepository());
     }
 
+    @SuppressWarnings("unchecked")
+    private ChatRunApplicationService service(InMemoryRunRepository repository, InMemoryRunCache cache,
+                                              ChatRunLeaseApplicationService leaseService) {
+        return new ChatRunApplicationService(
+                repository,
+                cache,
+                new InMemoryEventStore(0L),
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                leaseService,
+                mock(ObjectProvider.class),
+                mock(ObjectProvider.class),
+                mock(ObjectProvider.class));
+    }
+
+    private void beginTransactionSynchronization() {
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+    }
+
+    private void commitTransactionSynchronization() {
+        TransactionSynchronizationManager.getSynchronizations()
+                .forEach(TransactionSynchronization::afterCommit);
+    }
+
+    private void endTransactionSynchronization() {
+        TransactionSynchronizationManager.clearSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(false);
+    }
+
     private UserContext user() {
         return new UserContext("tenant1", "user1", "User One");
     }
@@ -745,6 +933,13 @@ class ChatRunApplicationServiceTest {
             return Boolean.TRUE.equals(cancelled.get(runId))
                     ? ChatRunCancelSignal.REQUESTED
                     : ChatRunCancelSignal.NOT_REQUESTED;
+        }
+    }
+
+    private static final class FailingCancellationRunCache extends InMemoryRunCache {
+        @Override
+        public void markCancellationRequested(String runId) {
+            throw new IllegalStateException("cancellation cache failure");
         }
     }
 

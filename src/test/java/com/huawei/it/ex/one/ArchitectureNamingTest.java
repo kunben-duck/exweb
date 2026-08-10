@@ -120,6 +120,19 @@ class ArchitectureNamingTest {
     }
 
     @Test
+    void runtimeAdaptersDoNotUseUnboundedFluxCreateBridge() throws Exception {
+        for (String source : new String[]{
+                "src/main/java/com/huawei/it/ex/one/infrastructure/runtime/domainagent/ConfiguredDomainAgentClient.java",
+                "src/main/java/com/huawei/it/ex/one/infrastructure/runtime/relay/RelayWebSocketRuntimeAdapter.java"
+        }) {
+            assertThat(Files.readString(Path.of(source)))
+                    .as(source + " must keep Runtime business frames behind a bounded or demand-aware bridge")
+                    .doesNotContain("FluxSink.OverflowStrategy.BUFFER")
+                    .doesNotContain("Flux.create(");
+        }
+    }
+
+    @Test
     void infrastructurePackagesDoNotKeepRedundantTechnologySubpackages() throws Exception {
         String sourceRoot = "src/main/java/com/huawei/it/ex/one/infrastructure";
         try (Stream<Path> files = Files.walk(Path.of(sourceRoot))) {

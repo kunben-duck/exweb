@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
+import com.huawei.it.ex.one.application.config.RuntimeStreamLimitsProperties;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunExecutionRepository;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
@@ -14,6 +15,7 @@ import com.huawei.it.ex.one.domain.chat.ChatRunExecution;
 import com.huawei.it.ex.one.domain.chat.ChatRunExecutionStatus;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -22,6 +24,7 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -39,6 +42,7 @@ public class ChatRunLeaseApplicationService {
     private final ChatRunOperationalProperties properties;
     private final IdGenerator idGenerator;
     private final LocalChatRunExecutionRegistry executionRegistry;
+    private RuntimeStreamLimitsProperties streamLimitsProperties = new RuntimeStreamLimitsProperties();
 
     public ChatRunLeaseApplicationService(ChatRunExecutionRepository executionRepository,
                                           ApplicationInstanceIdProvider instanceIdProvider,
@@ -50,6 +54,14 @@ public class ChatRunLeaseApplicationService {
         this.properties = properties;
         this.idGenerator = idGenerator;
         this.executionRegistry = executionRegistry;
+    }
+
+    /** 保持直接构造的存量测试兼容；生产上下文注入统一stop收口租约配置。 */
+    @Autowired(required = false)
+    void setRuntimeStreamLimitsProperties(RuntimeStreamLimitsProperties streamLimitsProperties) {
+        if (streamLimitsProperties != null) {
+            this.streamLimitsProperties = streamLimitsProperties;
+        }
     }
 
     /**
@@ -108,6 +120,43 @@ public class ChatRunLeaseApplicationService {
      */
     public boolean isCurrentOwnerRunning(RunExecutionClaim claim) {
         return executionRepository.isCurrentOwnerRunning(claim);
+    }
+
+    /** 返回指定run当前持久化的execution控制面快照。 */
+    public Optional<ChatRunExecution> findExecution(String runId) {
+        if (runId == null || runId.isBlank()) {
+            return Optional.empty();
+        }
+        return executionRepository.findByRunId(runId);
+    }
+
+    /** run已收到stop时缩短当前RUNNING execution租约，重复调用不会延长截止时间。 */
+    public boolean shortenLeaseForStop(String runId) {
+        if (runId == null || runId.isBlank()) {
+            return false;
+        }
+        return executionRepository.shortenLeaseForCancellingRun(
+                runId, streamLimitsProperties.getStopFinalizationLease());
+    }
+
+    /** 当前owner以完整claim取得stop终态独占收口权。 */
+    public boolean markOwnerStopAccepted(ChatRun run, RunExecutionClaim claim) {
+        return executionRepository.markOwnerStopAccepted(
+                run, claim, streamLimitsProperties.getStopFinalizationLease());
+    }
+
+    /** execution是否已由owner接管stop收口，或已进入恢复抢占。 */
+    public boolean stopFallbackBlocked(String runId) {
+        return findExecution(runId)
+                .map(ChatRunExecution::executionStatus)
+                .map(status -> status == ChatRunExecutionStatus.CANCELLING
+                        || status == ChatRunExecutionStatus.RECOVERING)
+                .orElse(false);
+    }
+
+    /** 返回当前JVM稳定的实例标识。 */
+    public String currentInstanceId() {
+        return instanceIdProvider.currentInstanceId();
     }
 
     /**

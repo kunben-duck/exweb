@@ -47,7 +47,10 @@ final class ChatRunFailureCoordinator {
                         Flux.just(runtimeErrorEvent(
                                 context.runId(), context.session().id(), failure)),
                         context)
-                .doFinally(ignored -> runExecutionRegistry.complete(context.executionClaim()));
+                .doFinally(ignored -> {
+                    context.assistant().close();
+                    runExecutionRegistry.complete(context.executionClaim());
+                });
     }
 
     Flux<ChatEvent> failExecutionInitialization(ChatRun run,

@@ -303,6 +303,21 @@ sequenceDiagram
 正式版只保留后台 run 创建模式。`POST /v1/chat/runs` 是唯一任务提交入口：普通提问、编辑历史 user、重新生成 assistant，以及等待态 Interaction 续接都走该接口，通过 `runMode` 区分。
 本页新创建的 run 默认通过 WebSocket topic 接实时事件；新页签、新浏览器或跨电脑恢复已经存在的 active run 时，使用 run 级事件恢复先补发历史事件，再持续接续 live 事件直到本轮 run 终态。会话级事件恢复 仍只负责有限缺失事件补发。
 
+Runtime 流式内存保护分为两个互不混淆的边界：Runtime adapter 到 Event 管线使用按 run/实例计费的
+有界 pending 桥接，超限时停止 Runtime 并在排空已接受事件后失败；Event 已经进入串行管线后，
+`AssistantAssembly` 只对终态历史投影计费。后者可以过滤或淘汰过程 Parts，但不会删除、改写或停止发布
+原始 Event。正文、工具、引用、卡片、拒答和交互控制优先保留；必要内容仍超限时保存部分 assistant，
+并以 `RUNTIME_STREAM_LIMIT_EXCEEDED` 结束 run。所有实例额度在完成、失败、stop、fencing 和取消时释放。
+
+运行态 stop 不再默认一次性加载该 run 的全部 Event。请求实例先按数据库 owner/fencing 提示，通过
+`fin_ex:{env}:chat_run_stop_control:{instanceId}` 定向通知实际执行实例；owner 将 run 置为 `CANCELLING`，
+并把 execution 原子更新为 `CANCELLING`，随后停止 Runtime，并用仍在内存中的 Assembly 独占终态提交。
+owner 已取得收口权但默认 2 秒内尚未提交时，stop 只返回 `CANCELLING`；请求实例不得进入 fallback。
+owner 未取得收口权时才以 seq 游标每页 16 条读取、最多扫描 10000 条，单查询 2 秒、总计 5 秒，且每实例
+仅允许 2 个并发重放。owner 与 fallback 通过 run 行锁及 execution 状态互斥，失败方不能写 assistant、Parts
+或终态 Event。`CANCELLING` run 不再续租，默认 15 秒收口租约过期后由懒恢复或 watchdog 接管；no-store 的
+live-only 内容不可重建。
+
 ```text
 POST /v1/chat/runs
 POST /v1/chat/messages/{messageId}/feedback
@@ -828,8 +843,8 @@ stateDiagram-v2
 stop 语义：
 
 - 集群事实源优先：stop 先写 Redis cancel flag 与数据库 `CANCELLING` 状态，再发布 `run.cancelled`。
-- JVM subscription registry 只是本机资源释放加速器；即使 stop 请求与输出流落在不同实例，输出实例也必须在追加事件前读取 Redis cancel flag。非终态事件通过数据库行栅栏同时校验 run 状态、session 归属和 execution fencing，栅栏持有到后续 `VALUES` 写入提交。
-- 用户主动 stop 且已有 assistant 正文或用户可见 runtime parts 成功落库时，会从事件事实源重建并保存 partial assistant 历史消息，消息 metadata 标记 `partial=true`、`finishReason=USER_STOP`；只有 trace、domain-agent session 等内部 metadata 时不创建空 assistant。
+- JVM execution registry 保存当前 subscription、claim 和 Assembly。跨实例 stop 先通过定向 Redis Pub/Sub 请求 owner 汇总；owner 取得数据库 `execution=CANCELLING` 独占权后，即使回执等待超时也不启动 fallback。仅通知不可达且 owner 未取得收口权时，请求实例才执行有界 Event fallback。非终态事件仍通过数据库行栅栏同时校验 run 状态、session 归属和 execution fencing，栅栏持有到后续 `VALUES` 写入提交。
+- 用户主动 stop 且已有 assistant 正文或用户可见 runtime parts 时，优先由 owner 使用内存 Assembly 保存 partial assistant；fallback 只能重建已持久化 Event。消息 metadata 标记 `partial=true`、`finishReason=USER_STOP`；只有内部 metadata 或重放无法安全完成时不创建 assistant。
 - 下游尽力取消：Relay 本机命中 active WebSocket 时发送 `{"type":"stop_all_agents"}`；跨实例或本机连接已清理时用临时 WS `resume` 到 run 中已回填的 Relay `runtimeSessionId`，收到 `session-ready` 后发送 `stop_all_agents`；DomainAgent 走 DomainAgent cancel adapter。这些下游取消失败只记录日志，不影响前端收到本服务 `run.cancelled` 终态。
 - 运行态 stop 不改变 RuntimeBinding 的既有生命周期；等待态 stop 会条件取消 Interaction 精确引用且仍由该等待链持有的 ACTIVE Binding，并保留无关的历史 `RESUMABLE` Relay Binding。历史 run-A 继续保持 `WAITING_USER`。
 

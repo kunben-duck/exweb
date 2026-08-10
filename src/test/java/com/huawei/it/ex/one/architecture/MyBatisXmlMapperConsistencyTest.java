@@ -471,7 +471,8 @@ class MyBatisXmlMapperConsistencyTest {
         assertThat(mapper.substring(start, end))
                 .contains("owner_instance_id = #{ownerInstanceId}")
                 .contains("fencing_token = #{fencingToken}")
-                .contains("execution_status IN ('RUNNING', 'CANCELLING')");
+                .contains("e.execution_status = 'RUNNING'")
+                .contains("r.status = 'RUNNING'");
     }
 
     @Test
@@ -488,14 +489,36 @@ class MyBatisXmlMapperConsistencyTest {
         assertThat(readStart).isGreaterThan(updateEnd);
         assertThat(readEnd).isGreaterThan(readStart);
         assertThat(mapper.substring(updateStart, updateEnd))
-                .contains("execution_status IN ('RUNNING', 'CANCELLING')")
-                .contains("(run_id, owner_instance_id, fencing_token) IN")
+                .contains("e.execution_status = 'RUNNING'")
+                .contains("r.status = 'RUNNING'")
+                .contains("(e.run_id, e.owner_instance_id, e.fencing_token) IN")
                 .contains("#{claim.runId}")
                 .contains("#{claim.ownerInstanceId}")
                 .contains("#{claim.fencingToken}");
         assertThat(mapper.substring(readStart, readEnd))
-                .contains("execution_status IN ('RUNNING', 'CANCELLING')")
-                .contains("(run_id, owner_instance_id, fencing_token) IN");
+                .contains("e.execution_status = 'RUNNING'")
+                .contains("r.status = 'RUNNING'")
+                .contains("(e.run_id, e.owner_instance_id, e.fencing_token) IN");
+    }
+
+    @Test
+    void ownerStopAndFallbackShouldUseMutuallyExclusiveExecutionStates() throws IOException {
+        String executionMapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("persistence/ChatRunExecutionMapper.opengauss.xml"));
+        String runMapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("persistence/ChatRunMapper.opengauss.xml"));
+
+        assertThat(statement(executionMapper, "update", "markOwnerStopAccepted"))
+                .contains("execution_status = 'CANCELLING'")
+                .contains("e.execution_status = 'RUNNING'")
+                .contains("e.owner_instance_id = #{ownerInstanceId}")
+                .contains("e.fencing_token = #{fencingToken}")
+                .contains("r.status = 'CANCELLING'");
+        assertThat(statement(runMapper, "update", "claimExternalTerminal"))
+                .contains("guard == \"STOP_FALLBACK\"")
+                .contains("e.execution_status IN ('CANCELLING', 'RECOVERING')")
+                .contains("guard == \"OWNER_STOP\"")
+                .contains("e.execution_status = 'CANCELLING'");
     }
 
     @Test

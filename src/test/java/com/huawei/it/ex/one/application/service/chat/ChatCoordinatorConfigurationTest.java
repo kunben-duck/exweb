@@ -5,8 +5,10 @@ import static org.mockito.Mockito.mock;
 
 import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
 import com.huawei.it.ex.one.application.config.DomainAgentProperties;
+import com.huawei.it.ex.one.application.config.RuntimeStreamLimitsProperties;
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
 import com.huawei.it.ex.one.application.facade.FinanceChatFacade;
+import com.huawei.it.ex.one.application.integration.conversation.RunStopControlBus;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceGate;
 import com.huawei.it.ex.one.application.service.memory.MemoryApplicationService;
@@ -15,6 +17,7 @@ import com.huawei.it.ex.one.application.service.routing.IntentRecognitionRecordS
 import com.huawei.it.ex.one.application.service.routing.RouteSignalApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
+import com.huawei.it.ex.one.application.service.runtime.RuntimePendingEventGuard;
 import com.huawei.it.ex.one.application.service.runtime.SystemResponseExecutor;
 
 import reactor.core.scheduler.Scheduler;
@@ -70,9 +73,16 @@ class ChatCoordinatorConfigurationTest {
                             () -> mock(ChatRunAdmissionCommitService.class))
                     .withBean(ChatEventBatcher.class,
                             () -> mock(ChatEventBatcher.class))
+                    .withBean(RuntimePendingEventGuard.class,
+                            () -> mock(RuntimePendingEventGuard.class))
+                    .withBean(RunStopControlBus.class,
+                            () -> mock(RunStopControlBus.class))
+                    .withBean(AssistantAssemblyFactory.class,
+                            () -> mock(AssistantAssemblyFactory.class))
                     .withBean(ChatRunOperationalProperties.class,
                             ChatRunOperationalProperties::new)
                     .withBean(DomainAgentProperties.class, DomainAgentProperties::new)
+                    .withBean(RuntimeStreamLimitsProperties.class, RuntimeStreamLimitsProperties::new)
                     .withBean(AgentDataPersistenceGate.class,
                             () -> mock(AgentDataPersistenceGate.class))
                     .withBean(

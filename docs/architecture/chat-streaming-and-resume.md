@@ -894,18 +894,18 @@ POST /v1/chat/runs/{runId}/stop
 
 运行态 run 的执行顺序如下：
 
-1. 校验 run 归属。首次 stop 通过带 10 秒事务超时的条件更新把 `RUNNING` 改为 `CANCELLING`；对已经处于
-   `CANCELLING` 的 run 直接进入幂等重试。
-2. 只有数据库回读确认状态为 `CANCELLING` 后，才写 Redis cancel flag 和 active-run 投影。数据库更新失败时不会留下
-   提前生效的 Redis 取消标记。
-3. 先 best-effort 通知下游停止，再 dispose 本实例的后台 run subscription。Relay 优先复用活动 WebSocket 发送
-   `{"type":"stop_all_agents"}`；活动连接不在本实例时，可建立临时 `RESUME` 连接发送同一控制帧并有界等待 paused
-   acknowledgement。下游中断失败不取代 ChatService 自身的终态竞争。
-4. 从已经持久化的事件准备可选 partial assistant。该阶段只读取和组装，不写 message、part、session leaf 或 run。
-5. external-terminal 短事务先通过 run 条件 CAS 抢占唯一终态。只有胜者才保存 partial assistant、parts 和 session leaf，
-   绑定 assistantMessageId，追加 `run.cancelled`，并完成 run、Interaction 和 execution；任一步失败均回滚整笔事务。
-6. 事务提交后同步 run 缓存并 best-effort 发布 `run.cancelled`。CAS 失败表示 stop、watchdog 或原 owner 已经完成收口，
-   本次不会保存 partial assistant，也不会重复发布终态事件。
+1. 校验 run 归属，并通过定向 Redis Pub/Sub 尝试把 stop 移交给当前 execution owner。
+2. owner 在同一短事务中按 `run -> execution` 锁顺序把 run 与 execution 更新为 `CANCELLING`，并把 execution
+   租约设置为默认 15 秒；只有完整 owner/fencing 条件更新成功后才返回 `ACCEPTED`。
+3. owner 停止本机 Runtime，并使用内存中的 Assembly 保存 partial assistant。2 秒 handoff 等待内尚未完成时，
+   stop 接口返回 `CANCELLING`，请求实例不得启动 Event fallback。ACK 丢失时也以数据库
+   `execution=CANCELLING` 为准。
+4. owner 未取得收口权时，请求实例把 run 置为 `CANCELLING`，使用 `LEAST` 把 RUNNING execution 租约缩短到
+   15 秒以内，并从持久化 Event 按 seq 分页、有界重建可选 partial assistant。
+5. fallback 终态只允许在 run 为 `CANCELLING` 且 execution 不为 `CANCELLING/RECOVERING` 时提交；owner 与
+   fallback 通过同一 run 行锁串行，只有胜者能保存 assistant、Parts、`run.cancelled` 和终态状态。
+6. Relay 与 DomainAgent 下游取消仍为 best-effort。run 进入 `CANCELLING` 后 heartbeat 不再续租；owner 失联或
+   fallback 失败时，由租约到期后的懒恢复或 watchdog 闭合为 `CANCELLED`。
 
 因此 `CANCELLING` 是可重试状态：首次终态事务超时或写入失败后，重复 stop 或 watchdog 仍可继续闭合为
 `CANCELLED`。stop 的数据库状态与 Redis cancel flag 提供快速停止，真正禁止迟到事件的最终栅栏仍是 run/execution

@@ -103,7 +103,8 @@ class ChatRuntimeCoordinatorConfiguration {
             ChatRuntimeDispatchCoordinator runtimeDispatchCoordinator,
             ChatEventPersistenceCoordinator persistenceCoordinator,
             ChatRunAdmissionCoordinator admissionCoordinator,
-            RunMemoryContextAssembler memoryAssembler) {
+            RunMemoryContextAssembler memoryAssembler,
+            AssistantAssemblyFactory assistantAssemblyFactory) {
         return new IntentClarificationRunCoordinator(
                 clarificationAssembler,
                 eventFactory,
@@ -111,7 +112,8 @@ class ChatRuntimeCoordinatorConfiguration {
                 runtimeDispatchCoordinator,
                 persistenceCoordinator,
                 admissionCoordinator,
-                memoryAssembler);
+                memoryAssembler,
+                assistantAssemblyFactory);
     }
 
     @Bean
@@ -123,7 +125,8 @@ class ChatRuntimeCoordinatorConfiguration {
             ChatRuntimeDispatchCoordinator runtimeDispatchCoordinator,
             ChatEventPersistenceCoordinator persistenceCoordinator,
             ChatRunAdmissionCoordinator admissionCoordinator,
-            RunMemoryContextAssembler memoryAssembler) {
+            RunMemoryContextAssembler memoryAssembler,
+            AssistantAssemblyFactory assistantAssemblyFactory) {
         return new AmbiguousRouteContinuationCoordinator(
                 selectionResolver,
                 clarificationAssembler,
@@ -132,7 +135,8 @@ class ChatRuntimeCoordinatorConfiguration {
                 runtimeDispatchCoordinator,
                 persistenceCoordinator,
                 admissionCoordinator,
-                memoryAssembler);
+                memoryAssembler,
+                assistantAssemblyFactory);
     }
 
     @Bean
@@ -145,7 +149,8 @@ class ChatRuntimeCoordinatorConfiguration {
             DomainAgentRefusalCoordinator refusalCoordinator,
             AgentRuntimeExecutor runtimeExecutor,
             AgentDataPersistenceGate persistenceGate,
-            RunMemoryContextAssembler memoryAssembler) {
+            RunMemoryContextAssembler memoryAssembler,
+            AssistantAssemblyFactory assistantAssemblyFactory) {
         return new RouteSwitchContinuationCoordinator(
                 runtimeBindingService,
                 lifecycle,
@@ -155,7 +160,8 @@ class ChatRuntimeCoordinatorConfiguration {
                 refusalCoordinator,
                 runtimeExecutor,
                 persistenceGate,
-                memoryAssembler);
+                memoryAssembler,
+                assistantAssemblyFactory);
     }
 
     @Bean
@@ -166,6 +172,7 @@ class ChatRuntimeCoordinatorConfiguration {
             InteractionEventFactory eventFactory,
             InteractionRunLifecycle lifecycle,
             ChatEventPersistenceCoordinator persistenceCoordinator,
+            AssistantAssemblyFactory assistantAssemblyFactory,
             @Qualifier("chatStreamEventScheduler") Scheduler eventIoScheduler) {
         return new RuntimeInteractionContinuationCoordinator(
                 runtimeBindingService,
@@ -174,7 +181,8 @@ class ChatRuntimeCoordinatorConfiguration {
                 eventFactory,
                 lifecycle,
                 persistenceCoordinator,
-                eventIoScheduler);
+                eventIoScheduler,
+                assistantAssemblyFactory);
     }
 
     @Bean
@@ -237,14 +245,16 @@ class ChatRuntimeCoordinatorConfiguration {
             ChatRuntimeDispatchCoordinator runtimeDispatchCoordinator,
             ChatEventPersistenceCoordinator persistenceCoordinator,
             ChatRunFailureCoordinator failureCoordinator,
-            LocalChatRunExecutionRegistry runExecutionRegistry) {
+            LocalChatRunExecutionRegistry runExecutionRegistry,
+            AssistantAssemblyFactory assistantAssemblyFactory) {
         return new StandardRunRuntimeCoordinator(
                 clarificationAssembler,
                 routeResolutionCoordinator,
                 runtimeDispatchCoordinator,
                 persistenceCoordinator,
                 failureCoordinator,
-                runExecutionRegistry);
+                runExecutionRegistry,
+                assistantAssemblyFactory);
     }
 
     @Bean

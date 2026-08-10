@@ -40,6 +40,8 @@ import java.util.concurrent.atomic.AtomicReference;
 @Service
 public class ChatRunTerminalCommitService {
     private static final String WAITING_ASSISTANT_METADATA = "{\"finishReason\":\"WAITING_USER\"}";
+    private static final String STREAM_LIMIT_ASSISTANT_METADATA =
+            "{\"partial\":true,\"finishReason\":\"RUNTIME_STREAM_LIMIT\",\"runStatus\":\"FAILED\"}";
     private static final String DOMAIN_AGENT_PROVIDER = "domain-agent";
     private static final String RELAY_PROVIDER = "relay";
     private static final String RUNTIME_SESSION_ESTABLISHED = "runtimeSessionEstablished";
@@ -141,9 +143,17 @@ public class ChatRunTerminalCommitService {
 
     @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public CommitResult commitTerminalOnly(TerminalOnlyCommitCommand command) {
+        if (resourceLimitPartialAssistant(command)) {
+            lockOwnerTerminalSession(command.context());
+        }
         fenceOwnerTerminalCommit(command.context());
         ChatEvent stored = append(command.event(), command.context());
         command.context().assistant().observe(stored);
+        ChatMessage savedAssistant = saveResourceLimitAssistant(command);
+        if (savedAssistant != null) {
+            advanceLatestMessageSeq(command.context(), stored);
+            bindAssistantMessage(stored.runId(), savedAssistant.id());
+        }
         observeRun(stored);
         boolean cancelFailedRelayInteraction = cancelFailedRelayInteraction(command.context(), stored);
         if (cancelFailedRelayInteraction) {
@@ -169,6 +179,51 @@ public class ChatRunTerminalCommitService {
         }
         binding = observeRuntimeBindingEvent(binding, stored);
         return new CommitResult(stored, binding);
+    }
+
+    private ChatMessage saveResourceLimitAssistant(TerminalOnlyCommitCommand command) {
+        if (!resourceLimitPartialAssistant(command)) {
+            return null;
+        }
+        TerminalCommitContext context = command.context();
+        UserContext user = context.user();
+        MessageTarget target = command.target();
+        String metadata = context.assistant().assistantMetadata(STREAM_LIMIT_ASSISTANT_METADATA);
+        if (context.continuationInteractionRequest() == null || newTurnInteraction(context)) {
+            return sessionService.saveAssistantMessage(new AssistantMessageSaveCommand(
+                    user.tenantId(),
+                    user.ownerUserId(),
+                    context.session(),
+                    context.assistant().finalContent(),
+                    context.runId(),
+                    context.messagePlan().userMessage().id(),
+                    context.messagePlan().regeneratedFromMessageId(),
+                    context.assistant().parts(),
+                    metadata,
+                    target.assistantMessageId(),
+                    context.assistant().appendAnswerPart()));
+        }
+        return sessionService.updateAssistantMessage(new AssistantMessageUpdateCommand(
+                user.tenantId(),
+                user.ownerUserId(),
+                context.session(),
+                context.continuationInteractionRequest().assistantMessageId(),
+                context.assistant().finalContent(),
+                context.runId(),
+                context.assistant().parts(),
+                metadata,
+                context.assistant().appendAnswerPart()));
+    }
+
+    private boolean resourceLimitPartialAssistant(TerminalOnlyCommitCommand command) {
+        return command != null
+                && command.target() != null
+                && command.target().messageReady()
+                && command.event() != null
+                && "run.failed".equals(command.event().type())
+                && command.event().payload() != null
+                && com.huawei.it.ex.one.application.service.runtime.RuntimeStreamLimitExceededException.CODE
+                .equals(String.valueOf(command.event().payload().get("code")));
     }
 
     /**
@@ -253,7 +308,9 @@ public class ChatRunTerminalCommitService {
                     partialAssistant.content(),
                     partialAssistant.runId(),
                     partialAssistant.safePartDrafts(),
-                    partialAssistant.metadataJson()
+                    partialAssistant.metadataJson(),
+                    partialAssistant.appendAnswerPart(),
+                    command.preserveExistingAssistantProjection()
             ));
         } else {
             saved = sessionService.saveAssistantMessage(partialAssistant);
@@ -726,8 +783,12 @@ public class ChatRunTerminalCommitService {
 
     public record TerminalOnlyCommitCommand(
             ChatEvent event,
-            TerminalCommitContext context
+            TerminalCommitContext context,
+            MessageTarget target
     ) {
+        public TerminalOnlyCommitCommand(ChatEvent event, TerminalCommitContext context) {
+            this(event, context, new MessageTarget(false, null));
+        }
     }
 
     public record DomainAgentRefusalCommitCommand(
@@ -746,24 +807,69 @@ public class ChatRunTerminalCommitService {
             Long fencingToken,
             String interactionId,
             java.time.Instant orphanBefore,
-            AssistantMessageSaveCommand partialAssistant
+            AssistantMessageSaveCommand partialAssistant,
+            boolean preserveExistingAssistantProjection
     ) {
+        public ExternalTerminalCommitCommand(
+                ChatEvent event,
+                ChatRun run,
+                ChatRunRepository.ExternalTerminalGuard guard,
+                String recoveredByInstanceId,
+                Long fencingToken,
+                String interactionId,
+                java.time.Instant orphanBefore,
+                AssistantMessageSaveCommand partialAssistant) {
+            this(event, run, guard, recoveredByInstanceId, fencingToken, interactionId,
+                    orphanBefore, partialAssistant, false);
+        }
+
         public ExternalTerminalCommitCommand(ChatEvent event, ChatRun run) {
             this(event, run, ChatRunRepository.ExternalTerminalGuard.NONE,
-                    null, null, null, null, null);
+                    null, null, null, null, null, false);
         }
 
         public static ExternalTerminalCommitCommand stop(ChatEvent event, ChatRun run,
                                                          AssistantMessageSaveCommand partialAssistant) {
+            return stop(event, run, partialAssistant, false);
+        }
+
+        public static ExternalTerminalCommitCommand stop(
+                ChatEvent event,
+                ChatRun run,
+                AssistantMessageSaveCommand partialAssistant,
+                boolean preserveExistingAssistantProjection) {
             return new ExternalTerminalCommitCommand(
                     event,
                     run,
-                    ChatRunRepository.ExternalTerminalGuard.NONE,
+                    ChatRunRepository.ExternalTerminalGuard.STOP_FALLBACK,
                     null,
                     null,
                     null,
                     null,
-                    partialAssistant
+                    partialAssistant,
+                    preserveExistingAssistantProjection
+            );
+        }
+
+        public static ExternalTerminalCommitCommand ownerStop(
+                ChatEvent event,
+                ChatRun run,
+                AssistantMessageSaveCommand partialAssistant,
+                boolean preserveExistingAssistantProjection,
+                RunExecutionClaim claim) {
+            if (claim == null || !run.id().equals(claim.runId())) {
+                throw new IllegalArgumentException("owner stop execution claim与run不匹配");
+            }
+            return new ExternalTerminalCommitCommand(
+                    event,
+                    run,
+                    ChatRunRepository.ExternalTerminalGuard.OWNER_STOP,
+                    claim.ownerInstanceId(),
+                    claim.fencingToken(),
+                    null,
+                    null,
+                    partialAssistant,
+                    preserveExistingAssistantProjection
             );
         }
 
@@ -777,7 +883,8 @@ public class ChatRunTerminalCommitService {
                     execution == null ? null : execution.fencingToken(),
                     null,
                     null,
-                    null
+                    null,
+                    false
             );
         }
 
@@ -792,7 +899,8 @@ public class ChatRunTerminalCommitService {
                     null,
                     interactionId,
                     orphanBefore,
-                    null
+                    null,
+                    false
             );
         }
 
@@ -806,7 +914,8 @@ public class ChatRunTerminalCommitService {
                     null,
                     interactionId,
                     null,
-                    null
+                    null,
+                    false
             );
         }
 
@@ -820,7 +929,8 @@ public class ChatRunTerminalCommitService {
                     null,
                     null,
                     orphanBefore,
-                    null
+                    null,
+                    false
             );
         }
 
@@ -835,7 +945,8 @@ public class ChatRunTerminalCommitService {
                     executionClaim == null ? null : executionClaim.fencingToken(),
                     interactionId,
                     null,
-                    null
+                    null,
+                    false
             );
         }
     }

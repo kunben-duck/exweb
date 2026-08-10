@@ -43,6 +43,8 @@ flowchart TB
             RetentionGate["留存策略栅栏<br/>FULL / ASSISTANT_PLACEHOLDER"]
             Binding["RuntimeBinding<br/>DomainAgent / Relay NEW、RESUME"]
             RuntimeDispatch["Runtime 分发<br/>DomainAgent / Relay / System"]
+            StreamBudget["流式内存边界<br/>Pending有界桥接 / Assistant投影预算"]
+            StopHandoff["Stop 协调<br/>Owner内存汇总 / 有界分页Fallback"]
             EventPipeline["ChatEvent 管线<br/>顺序、批处理、留存分类、发布"]
             Terminal["终态短事务<br/>Run / Execution / Assistant / Parts / Interaction"]
         end
@@ -119,8 +121,12 @@ flowchart TB
     Routing --> RetentionGate
     RetentionGate --> Binding
     Binding --> RuntimeDispatch
-    RuntimeDispatch ==> EventPipeline
+    RuntimeDispatch ==>|"pending预算"| StreamBudget
+    StreamBudget ==>|"有序ChatEvent"| EventPipeline
     EventPipeline --> Terminal
+    InteractionStop --> StopHandoff
+    StopHandoff --> Lease
+    StopHandoff --> Terminal
     EventPipeline ==> RealtimeApi
     InteractionStop --> RunOrchestrator
     InteractionStop --> RuntimeDispatch
@@ -138,6 +144,8 @@ flowchart TB
     EventPipeline --> StreamAdapter
     StreamAdapter --> OpenGauss
     StreamAdapter ==>|"跨实例实时扇出"| Redis
+    StopHandoff -.->|"按owner实例定向控制"| Redis
+    StopHandoff -->|"fallback按seq分页"| OpenGauss
     RealtimeApi ==>|"订阅 run topic"| Redis
     RealtimeApi ==>|"Event Resume afterSeq"| OpenGauss
 
@@ -187,7 +195,7 @@ flowchart TB
 
     class PC,Mobile,Gateway client;
     class RestApi,ShareApi,DocumentApi,RealtimeApi,RunOrchestrator,SessionMessage,InteractionStop,ShareService,DocumentService service;
-    class Admission,Lease,Routing,RetentionGate,Binding,RuntimeDispatch,EventPipeline,Terminal core;
+    class Admission,Lease,Routing,RetentionGate,Binding,RuntimeDispatch,StreamBudget,StopHandoff,EventPipeline,Terminal core;
     class UseCaseAdapter,IntentAdapter,SkillConfigAdapter,DomainAdapter,RelayAdapter,AuthAdapter,StorageAdapter,StreamAdapter adapter;
     class OpenGauss,Redis,LocalStorage,Obs data;
     class UseCaseService,IntentService,SkillConfigService,DomainAgentService,RelayService,SessionTitleService,WeLink,ApiStore,EnterpriseAuth,LongTermMemory external;
@@ -315,7 +323,7 @@ sequenceDiagram
 
         loop "下游流式帧按原顺序处理"
             Runtime-->>Binding: "delta / snapshot / progress / card / metadata / terminal"
-            Binding->>Events: "标准化ChatEvent"
+            Binding->>Events: "标准化ChatEvent（Pending预算）"
             alt "FULL或必要控制事实"
                 Events->>DB: "批量Event INSERT + 状态观察"
             else "ASSISTANT_PLACEHOLDER业务内容"
@@ -334,18 +342,23 @@ sequenceDiagram
             Events->>DB: "Interaction WAITING + run.waiting_user<br/>Relay Binding保持可续接"
             Events-->>Redis: "等待卡片"
         else "失败"
-            Events->>DB: "run.failed + Execution终态 + Interaction补偿"
+            Events->>DB: "run.failed + Execution终态 + Interaction补偿<br/>资源超限可保存部分assistant"
             Events-->>Redis: "run.failed"
         else "用户Stop"
             API->>Events: "运行态或等待态统一stop"
-            Events->>DB: "本地状态先收口：cancel Interaction/Binding/Run"
+            Events-->>Redis: "定向通知execution owner"
+            alt "owner取得execution=CANCELLING独占权"
+                Events->>DB: "复用内存Assembly + 15秒收口租约<br/>2秒未完成则接口返回CANCELLING"
+            else "owner未接受或通知不可达"
+                Events->>DB: "按seq分页有界重放 + STOP_FALLBACK栅栏"
+            end
             Events-->>Runtime: "best-effort DomainAgent cancel / Relay stop_all_agents"
             Events-->>Redis: "run.cancelled"
         end
     end
 
     par "周期治理，不属于单次HTTP请求线程"
-        Binding-->>DB: "Heartbeat批量续租（默认15s）"
+        Binding-->>DB: "仅RUNNING run/execution批量续租（默认15s）"
     and
         Binding-->>DB: "Watchdog扫描失联Execution（默认30s）"
         Binding-->>Redis: "Recover Lock与跨实例恢复协调"

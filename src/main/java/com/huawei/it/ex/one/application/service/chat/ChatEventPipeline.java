@@ -2,6 +2,8 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
+import com.huawei.it.ex.one.application.service.runtime.RuntimePendingEventGuard;
+import com.huawei.it.ex.one.application.service.runtime.RuntimeStreamLimitExceededException;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.logging.AppLogger;
@@ -46,6 +48,7 @@ final class ChatEventPipeline {
     private final ChatStreamApplicationService chatStreamService;
     private final RuntimeBindingApplicationService runtimeBindingService;
     private final ChatRunCompletionCoordinator completionCoordinator;
+    private final RuntimePendingEventGuard pendingEventGuard;
     private final AgentDataPersistenceEventPolicy eventRetentionPolicy =
             new AgentDataPersistenceEventPolicy();
 
@@ -55,7 +58,8 @@ final class ChatEventPipeline {
                       ChatRunApplicationService chatRunService,
                       ChatStreamApplicationService chatStreamService,
                       RuntimeBindingApplicationService runtimeBindingService,
-                      ChatRunCompletionCoordinator completionCoordinator) {
+                      ChatRunCompletionCoordinator completionCoordinator,
+                      RuntimePendingEventGuard pendingEventGuard) {
         this.chatDeltaCoalescer = chatDeltaCoalescer;
         this.eventIoScheduler = eventIoScheduler;
         this.chatEventBatcher = chatEventBatcher;
@@ -63,6 +67,19 @@ final class ChatEventPipeline {
         this.chatStreamService = chatStreamService;
         this.runtimeBindingService = runtimeBindingService;
         this.completionCoordinator = completionCoordinator;
+        this.pendingEventGuard = pendingEventGuard;
+    }
+
+    ChatEventPipeline(ChatDeltaCoalescer chatDeltaCoalescer,
+                      Scheduler eventIoScheduler,
+                      ChatEventBatcher chatEventBatcher,
+                      ChatRunApplicationService chatRunService,
+                      ChatStreamApplicationService chatStreamService,
+                      RuntimeBindingApplicationService runtimeBindingService,
+                      ChatRunCompletionCoordinator completionCoordinator) {
+        this(chatDeltaCoalescer, eventIoScheduler, chatEventBatcher, chatRunService,
+                chatStreamService, runtimeBindingService,
+                completionCoordinator, null);
     }
 
     void setBatcher(ChatEventBatcher chatEventBatcher) {
@@ -85,7 +102,9 @@ final class ChatEventPipeline {
                 context.session().id());
         return batches
                 .publishOn(eventIoScheduler)
-                .concatMap(batch -> persistBatch(batch, persistence), 0);
+                .concatMap(batch -> persistReservedBatch(batch, persistence), 0)
+                .doOnDiscard(ChatEventBatcher.Batch.class, this::releasePendingBatch)
+                .doOnDiscard(Object.class, this::releaseDiscardedPending);
     }
 
     private Flux<ChatEvent> acceptedEvents(Flux<ChatEvent> events,
@@ -96,27 +115,72 @@ final class ChatEventPipeline {
         return chatDeltaCoalescer.coalesce(events)
                 .publishOn(eventIoScheduler)
                 .<ChatEvent>handle((event, sink) -> {
+                    ChatEvent accepted = unwrapPending(event);
                     if (writeRejected.get()) {
+                        releasePending(event);
                         sink.complete();
                         return;
                     }
-                    if (!eventBelongsToCurrentRun(event, runId, sessionId)) {
-                        logMismatchedEvent(event, runId, sessionId);
-                        rejectPersistenceAcknowledgement(event, new ChatEventAppendRejectedException(
+                    if (!eventBelongsToCurrentRun(accepted, runId, sessionId)) {
+                        releasePending(event);
+                        logMismatchedEvent(accepted, runId, sessionId);
+                        rejectPersistenceAcknowledgement(accepted, new ChatEventAppendRejectedException(
                                 "下游返回的事件身份与当前 run/session 不一致"));
                         sink.next(ErrorEvent.of(runId, sessionId, "RUN_EVENT_IDENTITY_MISMATCH",
                                 "下游返回的事件身份与当前 run/session 不一致，已终止本轮回答"));
                         sink.complete();
                         return;
                     }
-                    if (!chatRunService.shouldAcceptEvent(event)) {
-                        rejectPersistenceAcknowledgement(event, new ChatEventAppendRejectedException(
+                    if (!chatRunService.shouldAcceptEvent(accepted)) {
+                        releasePending(event);
+                        rejectPersistenceAcknowledgement(accepted, new ChatEventAppendRejectedException(
                                 "run 已不再接受事件: runId=" + runId));
                         sink.complete();
                         return;
                     }
+                    // reservation必须继续覆盖batcher和后续IO队列，直到该Event完成持久化及发布。
                     sink.next(event);
-                });
+                })
+                .doOnDiscard(Object.class, this::releaseDiscardedPending);
+    }
+
+    private ChatEvent unwrapPending(ChatEvent event) {
+        return pendingEventGuard == null ? event : pendingEventGuard.unwrap(event);
+    }
+
+    private void releasePending(ChatEvent event) {
+        if (pendingEventGuard != null) {
+            pendingEventGuard.release(event);
+        }
+    }
+
+    private void releaseDiscardedPending(Object value) {
+        if (pendingEventGuard != null) {
+            pendingEventGuard.releaseDiscarded(value);
+        }
+    }
+
+    private Flux<ChatEvent> persistReservedBatch(
+            ChatEventBatcher.Batch reservedBatch,
+            BatchPersistenceContext persistence) {
+        return Flux.defer(() -> persistBatch(unwrapPendingBatch(reservedBatch), persistence))
+                .doFinally(ignored -> releasePendingBatch(reservedBatch));
+    }
+
+    private ChatEventBatcher.Batch unwrapPendingBatch(ChatEventBatcher.Batch batch) {
+        if (batch == null || pendingEventGuard == null) {
+            return batch;
+        }
+        return new ChatEventBatcher.Batch(
+                batch.events().stream().map(pendingEventGuard::unwrap).toList(),
+                batch.batchable());
+    }
+
+    private void releasePendingBatch(ChatEventBatcher.Batch batch) {
+        if (batch == null || pendingEventGuard == null) {
+            return;
+        }
+        batch.events().forEach(pendingEventGuard::release);
     }
 
     private Flux<ChatEvent> persistBatch(ChatEventBatcher.Batch batch,
@@ -213,19 +277,28 @@ final class ChatEventPipeline {
                         events, context.executionClaim()))
                 .subscribeOn(eventIoScheduler)
                 .flatMapMany(sequenced -> {
+                    RuntimeStreamLimitExceededException assistantOverflow = null;
                     if (sequenced.size() != events.size()) {
                         return Flux.error(new IllegalStateException(
                                 "实时事件批量序号结果数量不一致: expected=" + events.size()
                                         + ", actual=" + sequenced.size()));
                     }
                     for (ChatEvent event : sequenced) {
-                        context.assistant().observe(event);
+                        if (assistantOverflow == null) {
+                            AssistantAssembly.ObservationResult observation = context.assistant().observe(event);
+                            if (observation.essentialOverflow()) {
+                                assistantOverflow = context.assistant().overflowException(observation);
+                            }
+                        }
                         RuntimeBinding currentBinding = context.bindingRef().get();
                         if (runtimeSessionChanged(currentBinding, event)) {
                             chatRunService.observeLiveOnlyRuntimeState(event);
                         }
                         context.bindingRef().set(runtimeBindingService.observeEvent(currentBinding, event));
                         chatStreamService.publishLiveOnly(event);
+                    }
+                    if (assistantOverflow != null) {
+                        throw assistantOverflow;
                     }
                     return Flux.fromIterable(sequenced);
                 });
@@ -270,17 +343,32 @@ final class ChatEventPipeline {
         }
         events.forEach(this::acknowledgePersistence);
         CommittedBatchPostProcessingException failure = null;
+        RuntimeStreamLimitExceededException assistantOverflow = null;
         for (ChatEvent stored : storedEvents) {
-            failure = attemptCommittedBatchOperation(failure, "assistant.observe", stored,
-                    () -> context.assistant().observe(stored));
-            failure = attemptCommittedBatchOperation(failure, "interaction.observe", stored,
-                    () -> completionCoordinator.rememberPendingInteractionRequest(stored, context));
+            if (assistantOverflow == null) {
+                try {
+                    AssistantAssembly.ObservationResult observation = context.assistant().observe(stored);
+                    if (observation.essentialOverflow()) {
+                        assistantOverflow = context.assistant().overflowException(observation);
+                        failure = appendPostProcessingFailure(
+                                failure, stored, "assistant.stream-limit", assistantOverflow);
+                    }
+                } catch (RuntimeException ex) {
+                    failure = appendPostProcessingFailure(failure, stored, "assistant.observe", ex);
+                }
+            }
+            if (assistantOverflow == null) {
+                failure = attemptCommittedBatchOperation(failure, "interaction.observe", stored,
+                        () -> completionCoordinator.rememberPendingInteractionRequest(stored, context));
+            }
             failure = attemptCommittedBatchOperation(failure, "run.observe", stored,
                     () -> chatRunService.observeEvent(stored));
             failure = attemptCommittedBatchOperation(failure, "binding.observe", stored, () ->
                     context.bindingRef().set(runtimeBindingService.observeEvent(context.bindingRef().get(), stored)));
-            failure = attemptCommittedBatchOperation(failure, "route-memory.observe", stored,
-                    () -> completionCoordinator.recordRouteMemoryAfterCommitted(stored, context));
+            if (assistantOverflow == null) {
+                failure = attemptCommittedBatchOperation(failure, "route-memory.observe", stored,
+                        () -> completionCoordinator.recordRouteMemoryAfterCommitted(stored, context));
+            }
             failure = attemptCommittedBatchOperation(failure, "stream.publish", stored,
                     () -> chatStreamService.publishPersisted(stored));
         }
@@ -305,15 +393,24 @@ final class ChatEventPipeline {
                     .attribute("eventType", event.type())
                     .attribute("failedOperation", operation)
                     .build());
-            if (failure == null) {
-                return new CommittedBatchPostProcessingException(event, operation, ex);
-            }
-            failure.addSuppressed(ex);
-            return failure;
+            return appendPostProcessingFailure(failure, event, operation, ex);
         }
     }
 
+    private CommittedBatchPostProcessingException appendPostProcessingFailure(
+            CommittedBatchPostProcessingException failure,
+            ChatEvent event,
+            String operation,
+            RuntimeException cause) {
+        if (failure == null) {
+            return new CommittedBatchPostProcessingException(event, operation, cause);
+        }
+        failure.addSuppressed(cause);
+        return failure;
+    }
+
     private boolean batchableRuntimeEvent(ChatEvent event, RunEventPipelineContext context) {
+        event = unwrapPending(event);
         if (event == null || event instanceof PersistenceAcknowledgedEvent
                 || !BATCHABLE_RUNTIME_EVENT_TYPES.contains(event.type())
                 || DomainAgentRefusal.from(event) != null

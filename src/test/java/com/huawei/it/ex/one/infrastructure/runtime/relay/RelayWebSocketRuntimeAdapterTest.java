@@ -19,6 +19,7 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -1062,6 +1063,27 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
+    void activeCancelWaitsUntilOutboundContainingStopFrameIsFlushed() {
+        Sinks.Empty<Void> flushGate = Sinks.empty();
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient(flushGate);
+        RelayWebSocketRuntimeAdapter adapter = adapter(client, Duration.ofSeconds(10));
+        Disposable query = adapter.query(request("relay-session-1", RuntimeSessionMode.RESUME, "run1"))
+                .subscribe();
+        client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}");
+        AtomicBoolean cancelCompleted = new AtomicBoolean(false);
+
+        adapter.cancel(cancelRequest("run1"))
+                .doOnSuccess(ignored -> cancelCompleted.set(true))
+                .subscribe();
+
+        assertThat(client.sent()).contains("{\"type\":\"stop_all_agents\"}");
+        assertThat(cancelCompleted).isFalse();
+        flushGate.tryEmitEmpty();
+        assertThat(cancelCompleted).isTrue();
+        query.dispose();
+    }
+
+    @Test
     void cancelWithoutActiveExchangeOpensTemporaryResumeConnectionAndSendsInterrupt() throws Exception {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}",
@@ -1496,9 +1518,18 @@ class RelayWebSocketRuntimeAdapterTest {
 
     private static final class ReusableFakeWebSocketClient implements WebSocketClient {
         private final java.util.List<String> sent = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        private final Sinks.Empty<Void> flushGate;
         private ReusableFakeWebSocketSession session;
         private URI uri;
         private int executeCount;
+
+        private ReusableFakeWebSocketClient() {
+            this(null);
+        }
+
+        private ReusableFakeWebSocketClient(Sinks.Empty<Void> flushGate) {
+            this.flushGate = flushGate;
+        }
 
         @Override
         public Mono<Void> execute(URI url, WebSocketHandler handler) {
@@ -1509,7 +1540,7 @@ class RelayWebSocketRuntimeAdapterTest {
         public Mono<Void> execute(URI url, HttpHeaders requestHeaders, WebSocketHandler handler) {
             executeCount++;
             this.uri = url;
-            this.session = new ReusableFakeWebSocketSession(sent);
+            this.session = new ReusableFakeWebSocketSession(sent, flushGate);
             return handler.handle(session);
         }
 
@@ -1537,9 +1568,11 @@ class RelayWebSocketRuntimeAdapterTest {
         private final DataBufferFactory bufferFactory = new DefaultDataBufferFactory();
         private final Sinks.Many<String> inbound = Sinks.many().replay().all();
         private final java.util.List<String> sent;
+        private final Sinks.Empty<Void> flushGate;
 
-        private ReusableFakeWebSocketSession(java.util.List<String> sent) {
+        private ReusableFakeWebSocketSession(java.util.List<String> sent, Sinks.Empty<Void> flushGate) {
             this.sent = sent;
+            this.flushGate = flushGate;
         }
 
         @Override
@@ -1569,10 +1602,11 @@ class RelayWebSocketRuntimeAdapterTest {
 
         @Override
         public Mono<Void> send(Publisher<WebSocketMessage> messages) {
-            return Flux.from(messages)
+            Mono<Void> sentMessages = Flux.from(messages)
                     .map(WebSocketMessage::getPayloadAsText)
                     .doOnNext(sent::add)
                     .then();
+            return flushGate == null ? sentMessages : sentMessages.then(flushGate.asMono());
         }
 
         @Override

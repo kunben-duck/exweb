@@ -84,6 +84,36 @@ public interface ChatRunExecutionMapper {
     List<ChatRunExecutionRow> findHeartbeatEligibleClaims(@Param("claims") List<RunExecutionClaim> claims);
 
     /**
+     * 缩短已进入 CANCELLING 的 run 所对应 RUNNING execution 租约，不允许重复 stop 延长截止时间。
+     *
+     * @param runId run 主键。
+     * @param leaseUntil stop fallback 最晚接管时间。
+     * @return 影响行数；为 0 表示 execution 已变化或 run 不在 CANCELLING。
+     */
+    int shortenLeaseForCancellingRun(@Param("runId") String runId,
+                                     @Param("leaseUntil") Instant leaseUntil);
+
+    /**
+     * 当前 owner 以完整归属和 fencing 条件取得 stop 终态独占收口权。
+     *
+     * @param runId run 主键。
+     * @param tenantId 租户 ID。
+     * @param userId 用户 ID。
+     * @param sessionId 会话 ID。
+     * @param ownerInstanceId 当前执行实例 ID。
+     * @param fencingToken 当前 execution fencing token。
+     * @param leaseUntil owner 独占收口租约截止时间。
+     * @return 影响行数；必须为 1 才表示 owner 已取得收口权。
+     */
+    int markOwnerStopAccepted(@Param("runId") String runId,
+                              @Param("tenantId") String tenantId,
+                              @Param("userId") String userId,
+                              @Param("sessionId") String sessionId,
+                              @Param("ownerInstanceId") String ownerInstanceId,
+                              @Param("fencingToken") long fencingToken,
+                              @Param("leaseUntil") Instant leaseUntil);
+
+    /**
      * 将 execution 标记为终态。
      *
      * @param runId run 主键。

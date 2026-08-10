@@ -34,6 +34,28 @@ final class AmbiguousRouteContinuationCoordinator {
     private final ChatEventPersistenceCoordinator eventPersistenceCoordinator;
     private final ChatRunAdmissionCoordinator admissionCoordinator;
     private final RunMemoryContextAssembler memoryAssembler;
+    private final AssistantAssemblyFactory assistantAssemblyFactory;
+
+    AmbiguousRouteContinuationCoordinator(
+            AmbiguousRouteSelectionResolver selectionResolver,
+            IntentClarificationContextAssembler clarificationAssembler,
+            InteractionEventFactory interactionEventFactory,
+            InteractionRunLifecycle lifecycle,
+            ChatRuntimeDispatchCoordinator runtimeDispatchCoordinator,
+            ChatEventPersistenceCoordinator eventPersistenceCoordinator,
+            ChatRunAdmissionCoordinator admissionCoordinator,
+            RunMemoryContextAssembler memoryAssembler,
+            AssistantAssemblyFactory assistantAssemblyFactory) {
+        this.selectionResolver = selectionResolver;
+        this.clarificationAssembler = clarificationAssembler;
+        this.interactionEventFactory = interactionEventFactory;
+        this.lifecycle = lifecycle;
+        this.runtimeDispatchCoordinator = runtimeDispatchCoordinator;
+        this.eventPersistenceCoordinator = eventPersistenceCoordinator;
+        this.admissionCoordinator = admissionCoordinator;
+        this.memoryAssembler = memoryAssembler;
+        this.assistantAssemblyFactory = assistantAssemblyFactory;
+    }
 
     AmbiguousRouteContinuationCoordinator(
             AmbiguousRouteSelectionResolver selectionResolver,
@@ -44,14 +66,9 @@ final class AmbiguousRouteContinuationCoordinator {
             ChatEventPersistenceCoordinator eventPersistenceCoordinator,
             ChatRunAdmissionCoordinator admissionCoordinator,
             RunMemoryContextAssembler memoryAssembler) {
-        this.selectionResolver = selectionResolver;
-        this.clarificationAssembler = clarificationAssembler;
-        this.interactionEventFactory = interactionEventFactory;
-        this.lifecycle = lifecycle;
-        this.runtimeDispatchCoordinator = runtimeDispatchCoordinator;
-        this.eventPersistenceCoordinator = eventPersistenceCoordinator;
-        this.admissionCoordinator = admissionCoordinator;
-        this.memoryAssembler = memoryAssembler;
+        this(selectionResolver, clarificationAssembler, interactionEventFactory, lifecycle,
+                runtimeDispatchCoordinator, eventPersistenceCoordinator, admissionCoordinator,
+                memoryAssembler, null);
     }
 
     AmbiguousRouteContinuationCoordinator(
@@ -63,7 +80,7 @@ final class AmbiguousRouteContinuationCoordinator {
             ChatEventPersistenceCoordinator eventPersistenceCoordinator,
             ChatRunAdmissionCoordinator admissionCoordinator) {
         this(selectionResolver, clarificationAssembler, interactionEventFactory, lifecycle,
-                runtimeDispatchCoordinator, eventPersistenceCoordinator, admissionCoordinator, null);
+                runtimeDispatchCoordinator, eventPersistenceCoordinator, admissionCoordinator, null, null);
     }
 
     Flux<ChatEvent> execute(Request request) {
@@ -121,7 +138,9 @@ final class AmbiguousRouteContinuationCoordinator {
                 routeRef,
                 bindingRef,
                 runtimeSessionModeRef,
-                new AssistantAssembly(),
+                assistantAssemblyFactory == null
+                        ? new AssistantAssembly()
+                        : assistantAssemblyFactory.create(request.runId()),
                 new AtomicReference<>());
         RunEventPipelineContext context = new RunEventPipelineContext(
                 request.user(),

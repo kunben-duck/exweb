@@ -24,6 +24,24 @@ final class StandardRunRuntimeCoordinator {
     private final ChatEventPersistenceCoordinator eventPersistenceCoordinator;
     private final ChatRunFailureCoordinator failureCoordinator;
     private final LocalChatRunExecutionRegistry runExecutionRegistry;
+    private final AssistantAssemblyFactory assistantAssemblyFactory;
+
+    StandardRunRuntimeCoordinator(
+            IntentClarificationContextAssembler clarificationAssembler,
+            RouteResolutionCoordinator routeResolutionCoordinator,
+            ChatRuntimeDispatchCoordinator runtimeDispatchCoordinator,
+            ChatEventPersistenceCoordinator eventPersistenceCoordinator,
+            ChatRunFailureCoordinator failureCoordinator,
+            LocalChatRunExecutionRegistry runExecutionRegistry,
+            AssistantAssemblyFactory assistantAssemblyFactory) {
+        this.clarificationAssembler = clarificationAssembler;
+        this.routeResolutionCoordinator = routeResolutionCoordinator;
+        this.runtimeDispatchCoordinator = runtimeDispatchCoordinator;
+        this.eventPersistenceCoordinator = eventPersistenceCoordinator;
+        this.failureCoordinator = failureCoordinator;
+        this.runExecutionRegistry = runExecutionRegistry;
+        this.assistantAssemblyFactory = assistantAssemblyFactory;
+    }
 
     StandardRunRuntimeCoordinator(
             IntentClarificationContextAssembler clarificationAssembler,
@@ -32,12 +50,8 @@ final class StandardRunRuntimeCoordinator {
             ChatEventPersistenceCoordinator eventPersistenceCoordinator,
             ChatRunFailureCoordinator failureCoordinator,
             LocalChatRunExecutionRegistry runExecutionRegistry) {
-        this.clarificationAssembler = clarificationAssembler;
-        this.routeResolutionCoordinator = routeResolutionCoordinator;
-        this.runtimeDispatchCoordinator = runtimeDispatchCoordinator;
-        this.eventPersistenceCoordinator = eventPersistenceCoordinator;
-        this.failureCoordinator = failureCoordinator;
-        this.runExecutionRegistry = runExecutionRegistry;
+        this(clarificationAssembler, routeResolutionCoordinator, runtimeDispatchCoordinator,
+                eventPersistenceCoordinator, failureCoordinator, runExecutionRegistry, null);
     }
 
     RuntimePlan prepare(
@@ -61,7 +75,7 @@ final class StandardRunRuntimeCoordinator {
                 new AtomicReference<>(),
                 new AtomicReference<>(RuntimeSessionMode.RESUME),
                 new AtomicReference<>(),
-                new AssistantAssembly(),
+                assistant(prepared.runId()),
                 new RuntimeBindingDispatchLifecycle());
     }
 
@@ -115,8 +129,17 @@ final class StandardRunRuntimeCoordinator {
                             Flux.just(failureCoordinator.runtimeErrorEvent(
                                     prepared.runId(), prepared.session().id(), ex)),
                             context)
-                    .doFinally(ignored -> runExecutionRegistry.complete(executionClaim));
+                    .doFinally(ignored -> {
+                        plan.assistant().close();
+                        runExecutionRegistry.complete(executionClaim);
+                    });
         }
+    }
+
+    private AssistantAssembly assistant(String runId) {
+        return assistantAssemblyFactory == null
+                ? new AssistantAssembly()
+                : assistantAssemblyFactory.create(runId);
     }
 
     private RunEventPipelineContext pipelineContext(

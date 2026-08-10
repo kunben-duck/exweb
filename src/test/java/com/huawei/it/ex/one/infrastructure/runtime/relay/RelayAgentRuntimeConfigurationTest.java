@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.it.ex.one.application.config.AgentRuntimeForwardCookieProperties;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntime;
+import com.huawei.it.ex.one.application.service.runtime.RuntimePendingEventBridgeFactory;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -13,6 +14,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 class RelayAgentRuntimeConfigurationTest {
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withBean(ObjectMapper.class, ObjectMapper::new)
+            .withBean(RuntimePendingEventBridgeFactory.class, RuntimePendingEventBridgeFactory::defaults)
             .withUserConfiguration(
                     RelayAgentRuntime.class,
                     RelayRuntimeResponseNormalizer.class,

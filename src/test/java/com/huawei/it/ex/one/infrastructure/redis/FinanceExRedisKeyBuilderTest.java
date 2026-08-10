@@ -60,6 +60,8 @@ class FinanceExRedisKeyBuilderTest {
         assertThat(redisKeys.agentDataPersistencePolicy(
                 "fin_ex:agent_data_persistence", "tenant1", "domain-agent", "skill1"))
                 .isEqualTo("fin_ex:dev:agent_data_persistence:tenant1:domain-agent:skill1");
+        assertThat(redisKeys.runStopControlChannel("instance-a"))
+                .isEqualTo("fin_ex:dev:chat_run_stop_control:instance-a");
     }
 
     @Test

@@ -147,6 +147,22 @@
     </select>
 
     <!--
+      stop fallback按seq游标有界读取，禁止一次把长run的全部payload装入JVM。
+      入参: tenantId/userId/sessionId/runId为归属边界，afterSeq为游标，limit为单页上限。
+    -->
+    <select id="findPageByOwnerAndRunAfterSeq" resultMap="chatEventResultMap">
+        SELECT <include refid="chatEventColumns"/>
+        FROM fin_ex_chat_event_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND run_id = #{runId}
+          AND seq > #{afterSeq}
+        ORDER BY seq ASC
+        LIMIT #{limit}
+    </select>
+
+    <!--
       查询会话最新事件 seq，用于 stream-status 展示服务端事实进度。
       入参: tenantId/userId/sessionId 为归属边界。
     -->

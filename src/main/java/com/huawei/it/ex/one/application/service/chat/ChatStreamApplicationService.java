@@ -158,6 +158,23 @@ public class ChatStreamApplicationService {
         return eventStore.findByOwnerAndRunAfterSeq(user.tenantId(), user.ownerUserId(), run.sessionId(), run.id(), afterSeq);
     }
 
+    /** stop fallback按游标读取一页已经落库的run事件。 */
+    public java.util.List<ChatEvent> findPersistedRunEventPage(
+            UserContext user,
+            ChatRun run,
+            long afterSeq,
+            int limit) {
+        permissionChecker.checkChatPermission(user);
+        if (run == null
+                || !user.tenantId().equals(run.tenantId())
+                || !user.ownerUserId().equals(run.userId())) {
+            throw new SecurityException("run 不存在或不属于当前用户");
+        }
+        return eventStore.findPageByOwnerAndRunAfterSeq(
+                new com.huawei.it.ex.one.application.integration.conversation.ChatEventPageQuery(
+                        user.tenantId(), user.ownerUserId(), run.sessionId(), run.id(), afterSeq, limit));
+    }
+
     /**
      * 发布已经写入数据库的事实事件。
      *

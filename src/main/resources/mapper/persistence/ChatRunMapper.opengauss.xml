@@ -263,6 +263,32 @@
           AND r.session_id = #{sessionId}
           AND r.status IN ('RUNNING', 'CANCELLING')
         <choose>
+            <when test='guard == "STOP_FALLBACK"'>
+                AND r.status = 'CANCELLING'
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM fin_ex_chat_run_execution_t e
+                    WHERE e.run_id = r.id
+                      AND e.tenant_id = r.tenant_id
+                      AND e.user_id = r.user_id
+                      AND e.session_id = r.session_id
+                      AND e.execution_status IN ('CANCELLING', 'RECOVERING')
+                )
+            </when>
+            <when test='guard == "OWNER_STOP"'>
+                AND r.status = 'CANCELLING'
+                AND EXISTS (
+                    SELECT 1
+                    FROM fin_ex_chat_run_execution_t e
+                    WHERE e.run_id = r.id
+                      AND e.tenant_id = r.tenant_id
+                      AND e.user_id = r.user_id
+                      AND e.session_id = r.session_id
+                      AND e.execution_status = 'CANCELLING'
+                      AND e.owner_instance_id = #{recoveredByInstanceId}
+                      AND e.fencing_token = #{fencingToken}
+                )
+            </when>
             <when test='guard == "RECOVERY"'>
                 AND EXISTS (
                     SELECT 1

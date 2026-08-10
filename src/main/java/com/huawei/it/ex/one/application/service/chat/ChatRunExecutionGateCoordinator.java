@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
+import com.huawei.it.ex.one.application.service.runtime.RuntimePendingEventGuard;
 import com.huawei.it.ex.one.common.logging.AppLogger;
 import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
@@ -27,24 +28,50 @@ final class ChatRunExecutionGateCoordinator {
     private final LocalChatRunExecutionRegistry runExecutionRegistry;
     private final ChatEventPipeline chatEventPipeline;
     private final Scheduler eventIoScheduler;
+    private final RuntimePendingEventGuard pendingEventGuard;
+    private final ChatRunOwnerStopFinalizer ownerStopFinalizer;
     private final ChatRunFailureMapper runFailureMapper = new ChatRunFailureMapper();
 
     ChatRunExecutionGateCoordinator(ChatRunStartCoordinator runStartCoordinator,
                                     ChatRunLeaseApplicationService chatRunLeaseService,
                                     LocalChatRunExecutionRegistry runExecutionRegistry,
                                     ChatEventPipeline chatEventPipeline,
-                                    Scheduler eventIoScheduler) {
+                                    Scheduler eventIoScheduler,
+                                    RuntimePendingEventGuard pendingEventGuard,
+                                    ChatRunOwnerStopFinalizer ownerStopFinalizer) {
         this.runStartCoordinator = runStartCoordinator;
         this.chatRunLeaseService = chatRunLeaseService;
         this.runExecutionRegistry = runExecutionRegistry;
         this.chatEventPipeline = chatEventPipeline;
         this.eventIoScheduler = eventIoScheduler;
+        this.pendingEventGuard = pendingEventGuard;
+        this.ownerStopFinalizer = ownerStopFinalizer;
+    }
+
+    ChatRunExecutionGateCoordinator(ChatRunStartCoordinator runStartCoordinator,
+                                    ChatRunLeaseApplicationService chatRunLeaseService,
+                                    LocalChatRunExecutionRegistry runExecutionRegistry,
+                                    ChatEventPipeline chatEventPipeline,
+                                    Scheduler eventIoScheduler,
+                                    RuntimePendingEventGuard pendingEventGuard) {
+        this(runStartCoordinator, chatRunLeaseService, runExecutionRegistry, chatEventPipeline,
+                eventIoScheduler, pendingEventGuard, null);
+    }
+
+    ChatRunExecutionGateCoordinator(ChatRunStartCoordinator runStartCoordinator,
+                                    ChatRunLeaseApplicationService chatRunLeaseService,
+                                    LocalChatRunExecutionRegistry runExecutionRegistry,
+                                    ChatEventPipeline chatEventPipeline,
+                                    Scheduler eventIoScheduler) {
+        this(runStartCoordinator, chatRunLeaseService, runExecutionRegistry,
+                chatEventPipeline, eventIoScheduler, null, null);
     }
 
     Flux<ChatEvent> execute(
             RunEventPipelineContext context,
             Supplier<Flux<ChatEvent>> bodySupplier,
             Function<ChatEvent, Mono<ChatEvent>> singleEventWriter) {
+        runExecutionRegistry.attachContext(context);
         return persistRunStartedGate(context, singleEventWriter).flatMapMany(outcome -> {
             if (outcome.status() == RunStartGateStatus.REJECTED) {
                 log.info("Chat run start gate rejected execution; skip route and runtime side effects. runId={}",
@@ -76,7 +103,23 @@ final class ChatRunExecutionGateCoordinator {
             return Flux.concat(
                     Flux.just(outcome.event()),
                     persistAndPublish(body, context, singleEventWriter));
-        }).doFinally(ignored -> runExecutionRegistry.complete(context.executionClaim()));
+        }).doFinally(ignored -> finishPipeline(context));
+    }
+
+    private void finishPipeline(RunEventPipelineContext context) {
+        java.util.Optional<LocalChatRunExecutionRegistry.OwnerStopFinalization> ownerStop =
+                runExecutionRegistry.finishPipeline(context.executionClaim());
+        if (ownerStop.isPresent() && ownerStopFinalizer != null) {
+            ownerStopFinalizer.finalizeAsync(ownerStop.get());
+            return;
+        }
+        context.assistant().close();
+        if (pendingEventGuard != null) {
+            pendingEventGuard.releaseRun(context.runId());
+        }
+        if (ownerStop.isPresent()) {
+            runExecutionRegistry.completeOwnerStopFinalization(context.executionClaim());
+        }
     }
 
     Mono<Void> requireCurrentOwnerRunning(RunExecutionClaim claim, String stage) {

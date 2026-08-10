@@ -94,6 +94,20 @@ public interface ChatEventStore {
     List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId, String runId, long afterSeq);
 
     /**
+     * 按seq游标分页读取指定run事件，供stop在owner失联时进行有界历史投影。
+     */
+    default List<ChatEvent> findPageByOwnerAndRunAfterSeq(ChatEventPageQuery query) {
+        if (query == null) {
+            return List.of();
+        }
+        return findByOwnerAndRunAfterSeq(
+                        query.tenantId(), query.userId(), query.sessionId(), query.runId(), query.afterSeq())
+                .stream()
+                .limit(query.limit())
+                .toList();
+    }
+
+    /**
      * 按用户归属查询会话当前最大事件序号。
      *
      * @param tenantId 租户标识。

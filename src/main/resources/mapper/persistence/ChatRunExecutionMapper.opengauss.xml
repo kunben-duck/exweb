@@ -110,14 +110,23 @@
       leaseUntil 为新的租约截止时间。
     -->
     <update id="heartbeat">
-        UPDATE fin_ex_chat_run_execution_t
+        UPDATE fin_ex_chat_run_execution_t e
         SET heartbeat_at = CURRENT_TIMESTAMP,
             lease_until = #{leaseUntil},
             updated_at = CURRENT_TIMESTAMP
-        WHERE run_id = #{runId}
-          AND owner_instance_id = #{ownerInstanceId}
-          AND fencing_token = #{fencingToken}
-          AND execution_status IN ('RUNNING', 'CANCELLING')
+        WHERE e.run_id = #{runId}
+          AND e.owner_instance_id = #{ownerInstanceId}
+          AND e.fencing_token = #{fencingToken}
+          AND e.execution_status = 'RUNNING'
+          AND EXISTS (
+              SELECT 1
+              FROM fin_ex_chat_run_t r
+              WHERE r.id = e.run_id
+                AND r.tenant_id = e.tenant_id
+                AND r.user_id = e.user_id
+                AND r.session_id = e.session_id
+                AND r.status = 'RUNNING'
+          )
     </update>
 
     <!--
@@ -125,15 +134,24 @@
       入参: claims 为同一 heartbeat 批次，leaseUntil 为本批统一的新租约截止时间。
     -->
     <update id="heartbeatBatch">
-        UPDATE fin_ex_chat_run_execution_t
+        UPDATE fin_ex_chat_run_execution_t e
         SET heartbeat_at = CURRENT_TIMESTAMP,
             lease_until = #{leaseUntil},
             updated_at = CURRENT_TIMESTAMP
-        WHERE execution_status IN ('RUNNING', 'CANCELLING')
-          AND (run_id, owner_instance_id, fencing_token) IN
+        WHERE e.execution_status = 'RUNNING'
+          AND (e.run_id, e.owner_instance_id, e.fencing_token) IN
           <foreach collection="claims" item="claim" open="(" separator="," close=")">
               (#{claim.runId}, #{claim.ownerInstanceId}, #{claim.fencingToken})
           </foreach>
+          AND EXISTS (
+              SELECT 1
+              FROM fin_ex_chat_run_t r
+              WHERE r.id = e.run_id
+                AND r.tenant_id = e.tenant_id
+                AND r.user_id = e.user_id
+                AND r.session_id = e.session_id
+                AND r.status = 'RUNNING'
+          )
     </update>
 
     <!--
@@ -141,14 +159,73 @@
       入参: claims 与 heartbeatBatch 相同。
     -->
     <select id="findHeartbeatEligibleClaims" resultMap="chatRunExecutionResultMap">
-        SELECT <include refid="executionColumns"/>
-        FROM fin_ex_chat_run_execution_t
-        WHERE execution_status IN ('RUNNING', 'CANCELLING')
-          AND (run_id, owner_instance_id, fencing_token) IN
+        SELECT e.id, e.run_id, e.tenant_id, e.user_id, e.session_id, e.execution_status,
+               e.owner_instance_id, e.heartbeat_at, e.lease_until, e.fencing_token,
+               e.recovery_strategy, e.recovered_by_instance_id, e.recovery_attempts,
+               e.recovery_lease_until, e.runtime_resume_token, e.metadata_json,
+               e.created_at, e.updated_at
+        FROM fin_ex_chat_run_execution_t e
+        JOIN fin_ex_chat_run_t r
+          ON r.id = e.run_id
+         AND r.tenant_id = e.tenant_id
+         AND r.user_id = e.user_id
+         AND r.session_id = e.session_id
+        WHERE e.execution_status = 'RUNNING'
+          AND r.status = 'RUNNING'
+          AND (e.run_id, e.owner_instance_id, e.fencing_token) IN
           <foreach collection="claims" item="claim" open="(" separator="," close=")">
               (#{claim.runId}, #{claim.ownerInstanceId}, #{claim.fencingToken})
           </foreach>
     </select>
+
+    <!--
+      run 已收到 stop 但 owner 尚未接受时，只缩短 RUNNING execution 租约，重复 stop 不得延长。
+      入参: runId 定位 execution，leaseUntil 为 fallback 最晚接管时间。
+    -->
+    <update id="shortenLeaseForCancellingRun">
+        UPDATE fin_ex_chat_run_execution_t e
+        SET lease_until = LEAST(e.lease_until, #{leaseUntil}),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE e.run_id = #{runId}
+          AND e.execution_status = 'RUNNING'
+          AND EXISTS (
+              SELECT 1
+              FROM fin_ex_chat_run_t r
+              WHERE r.id = e.run_id
+                AND r.tenant_id = e.tenant_id
+                AND r.user_id = e.user_id
+                AND r.session_id = e.session_id
+                AND r.status = 'CANCELLING'
+          )
+    </update>
+
+    <!--
+      owner 在 run 行锁之后调用，以完整归属、owner 和 fencing 条件取得独占 stop 终态收口权。
+      入参: runId/tenantId/userId/sessionId 为归属边界，ownerInstanceId/fencingToken 为当前 claim，
+            leaseUntil 为 owner 独占收口租约截止时间。
+    -->
+    <update id="markOwnerStopAccepted">
+        UPDATE fin_ex_chat_run_execution_t e
+        SET execution_status = 'CANCELLING',
+            lease_until = #{leaseUntil},
+            updated_at = CURRENT_TIMESTAMP
+        WHERE e.run_id = #{runId}
+          AND e.tenant_id = #{tenantId}
+          AND e.user_id = #{userId}
+          AND e.session_id = #{sessionId}
+          AND e.owner_instance_id = #{ownerInstanceId}
+          AND e.fencing_token = #{fencingToken}
+          AND e.execution_status = 'RUNNING'
+          AND EXISTS (
+              SELECT 1
+              FROM fin_ex_chat_run_t r
+              WHERE r.id = e.run_id
+                AND r.tenant_id = e.tenant_id
+                AND r.user_id = e.user_id
+                AND r.session_id = e.session_id
+                AND r.status = 'CANCELLING'
+          )
+    </update>
 
     <!--
       标记 execution 终态，避免 watchdog 再次抢占已完成 run。

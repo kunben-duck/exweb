@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeSessionUnavailable;
 import com.huawei.it.ex.one.application.service.routing.IntentRoutingFailedException;
+import com.huawei.it.ex.one.application.service.runtime.RuntimeStreamLimitExceededException;
 import com.huawei.it.ex.one.domain.chat.ErrorEvent;
 
 import java.util.LinkedHashMap;
@@ -10,6 +11,16 @@ import java.util.Map;
 /** Maps execution failures to the existing stable run.failed contract. */
 final class ChatRunFailureMapper {
     ErrorEvent toEvent(String runId, String sessionId, Throwable failure) {
+        RuntimeStreamLimitExceededException streamLimit =
+                findCause(failure, RuntimeStreamLimitExceededException.class);
+        if (streamLimit != null) {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("code", RuntimeStreamLimitExceededException.CODE);
+            payload.put("limitType", streamLimit.limitType().name());
+            payload.put("message", "Runtime流式输出超过服务内存保护上限，本轮已停止");
+            return ErrorEvent.of(runId, sessionId, RuntimeStreamLimitExceededException.CODE,
+                    "Runtime流式输出超过服务内存保护上限，本轮已停止", Map.copyOf(payload));
+        }
         IntentRoutingFailedException intentFailure = findCause(failure, IntentRoutingFailedException.class);
         if (intentFailure != null) {
             return intentFailureEvent(runId, sessionId);

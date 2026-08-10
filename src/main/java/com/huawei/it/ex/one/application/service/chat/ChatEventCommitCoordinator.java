@@ -110,11 +110,18 @@ final class ChatEventCommitCoordinator {
             if ("run.completed".equals(eventToPersist.type()) && target.messageReady()) {
                 return completionCoordinator.commitCompleted(completion, context);
             }
-            return completionCoordinator.commitTerminalOnly(eventToPersist, context);
+            return completionCoordinator.commitTerminalOnly(eventToPersist, context, target);
         }
         ChatEvent stored = chatStreamService.appendWithExecutionGuard(
                 eventToPersist, context.executionClaim());
-        context.assistant().observe(stored);
+        AssistantAssembly.ObservationResult assistantObservation = context.assistant().observe(stored);
+        if (assistantObservation.essentialOverflow()) {
+            // 当前Event已经成为事实，仍完成run/binding观察和实时发布；不得再创建WAIT等控制副作用。
+            chatRunService.observeEvent(stored);
+            committedEventObserver.observeBindingAndPublish(stored, context, context.bindingRef().get());
+            acknowledgePersistence(event);
+            throw context.assistant().overflowException(assistantObservation);
+        }
         cancelPersistedAutomaticDomainAgentBinding(stored, context);
         completionCoordinator.rememberPendingInteractionRequest(stored, context);
         saveCompletedAssistant(stored, target, context);

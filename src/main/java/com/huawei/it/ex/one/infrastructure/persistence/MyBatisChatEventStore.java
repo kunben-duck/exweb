@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.infrastructure.persistence;
 
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
+import com.huawei.it.ex.one.application.integration.conversation.ChatEventPageQuery;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
@@ -273,6 +274,21 @@ public class MyBatisChatEventStore implements ChatEventStore {
     public List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId,
                                                      String runId, long afterSeq) {
         return mapper.findByOwnerAndRunAfterSeq(tenantId, userId, sessionId, runId, afterSeq)
+                .stream()
+                .map(this::toDomain)
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true,
+            timeoutString = "${financeex.agent-runtime.stream-limits.stop-replay-query-timeout-seconds:2}")
+    public List<ChatEvent> findPageByOwnerAndRunAfterSeq(ChatEventPageQuery query) {
+        if (query == null) {
+            return List.of();
+        }
+        return mapper.findPageByOwnerAndRunAfterSeq(
+                        query.tenantId(), query.userId(), query.sessionId(), query.runId(),
+                        query.afterSeq(), query.limit())
                 .stream()
                 .map(this::toDomain)
                 .toList();

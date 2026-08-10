@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
+import com.huawei.it.ex.one.application.integration.conversation.ChatEventPageQuery;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
@@ -13,12 +14,25 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
 class MyBatisChatEventStoreTest {
+    @Test
+    void stopReplayPageQueryUsesReadOnlyStatementTimeout() throws Exception {
+        Transactional transactional = MyBatisChatEventStore.class
+                .getMethod("findPageByOwnerAndRunAfterSeq", ChatEventPageQuery.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.readOnly()).isTrue();
+        assertThat(transactional.timeoutString()).isEqualTo(
+                "${financeex.agent-runtime.stream-limits.stop-replay-query-timeout-seconds:2}");
+    }
+
     @Test
     void appendUsesDatabaseSequenceAsRecoveryCursor() {
         ChatEventMapper mapper = new ReturningEventMapper();
@@ -280,6 +294,17 @@ class MyBatisChatEventStoreTest {
         @Override
         public List<ChatEventRow> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId,
                                                             String runId, long afterSeq) {
+            return List.of();
+        }
+
+        @Override
+        public List<ChatEventRow> findPageByOwnerAndRunAfterSeq(
+                String tenantId,
+                String userId,
+                String sessionId,
+                String runId,
+                long afterSeq,
+                int limit) {
             return List.of();
         }
 

@@ -3,6 +3,7 @@ package com.huawei.it.ex.one.interfaces.chat;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
+import com.huawei.it.ex.one.domain.chat.ChatMessageVersionCandidate;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageVersionInfoDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageVersionItemDto;
 
@@ -85,9 +86,44 @@ class ChatMessageVersionViewAssemblerTest {
         }
     }
 
+    @Test
+    void assemblePageUsesOnlyBoundedVersionCandidates() {
+        ChatMessage selected = message("a2", "q1", 3, 1, 2, "assistant");
+        List<ChatMessageVersionCandidate> candidates = List.of(
+                candidate("a2", "a2", 2, "leaf-a2"),
+                candidate("a2", "a1", 1, "leaf-a1")
+        );
+
+        Map<String, ChatMessageVersionInfoDto> result = assembler.assemblePage(List.of(selected), candidates);
+
+        ChatMessageVersionInfoDto info = result.get("a2");
+        assertThat(info.currentIndex()).isEqualTo(2);
+        assertThat(info.total()).isEqualTo(2);
+        assertThat(info.variants()).extracting(ChatMessageVersionItemDto::messageId)
+                .containsExactly("a1", "a2");
+        assertThat(info.variants()).extracting(ChatMessageVersionItemDto::switchLeafMessageId)
+                .containsExactly("leaf-a1", "leaf-a2");
+    }
+
     private ChatMessage message(String id, String parentId, long nodeOrder, int depth, int siblingIndex, String role) {
         return new ChatMessage(id, "tenant1", "user1", "session1", parentId, nodeOrder, depth, siblingIndex,
                 role, role + "-" + id, null, "run1", "NORMAL", false, null, null, null, null, null,
                 Instant.EPOCH.plusSeconds(nodeOrder));
+    }
+
+    private ChatMessageVersionCandidate candidate(
+            String pageMessageId, String messageId, int siblingIndex, String switchLeafMessageId) {
+        return new ChatMessageVersionCandidate(
+                pageMessageId,
+                messageId,
+                "assistant",
+                siblingIndex,
+                false,
+                "NORMAL",
+                null,
+                null,
+                Instant.EPOCH.plusSeconds(siblingIndex),
+                switchLeafMessageId
+        );
     }
 }

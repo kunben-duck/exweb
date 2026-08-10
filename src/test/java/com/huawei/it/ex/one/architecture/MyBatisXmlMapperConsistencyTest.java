@@ -545,6 +545,35 @@ class MyBatisXmlMapperConsistencyTest {
     }
 
     @Test
+    void chatMessageHistoryPaginationShouldStayBoundedAndAvoidFullTreeProjection() throws IOException {
+        String mapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("memory/ChatMessageMapper.opengauss.xml"));
+        int pageStart = mapper.indexOf("<select id=\"findActivePathPage\"");
+        int pageEnd = mapper.indexOf("</select>", pageStart);
+        String pageQuery = mapper.substring(pageStart, pageEnd);
+        assertThat(pageQuery)
+                .contains("child.page_depth &lt; #{fetchLimit}")
+                .contains("LIMIT #{fetchLimit}");
+
+        int versionsStart = mapper.indexOf("<select id=\"findVersionCandidatesByMessages\"");
+        int versionsEnd = mapper.indexOf("</select>", versionsStart);
+        String versionsQuery = mapper.substring(versionsStart, versionsEnd);
+        assertThat(versionsQuery)
+                .contains("messageIds")
+                .doesNotContain("m.content")
+                .doesNotContain("metadata_json")
+                .doesNotContain("fin_ex_chat_message_part_t")
+                .doesNotContain("fin_ex_chat_message_attachment_t");
+
+        String controller = Files.readString(Path.of(
+                "src/main/java/com/huawei/it/ex/one/interfaces/chat/ChatSessionController.java"));
+        int endpointStart = controller.indexOf("@GetMapping(\"/{sessionId}/messages\")");
+        int endpointEnd = controller.indexOf("@GetMapping(\"/{sessionId}/messages/tree\")", endpointStart);
+        assertThat(controller.substring(endpointStart, endpointEnd))
+                .doesNotContain("listMessageTreeNodes");
+    }
+
+    @Test
     void routeMemoryIntentHistoryShouldExcludeFrontSelectedBeforeTopK() throws IOException {
         String mapper = Files.readString(
                 MAPPER_XML_ROOT.resolve("persistence/RouteMemoryMapper.opengauss.xml"));

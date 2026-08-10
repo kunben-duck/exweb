@@ -57,7 +57,7 @@ DomainAgent `isSaveSession` 对 assistant 历史投影的控制边界、企业�
 - `GET /v1/chat/sessions/page?appScope=MAIN_SITE&title=利润&channel=mobile&curPage=1&pageSize=20`：页码分页查询当前用户历史会话；过滤语义与游标分页一致，返回 `totalRows/totalPages` 和每个会话的 `firstAssistantAnswer`。
 - `GET /v1/chat/sessions/{sessionId}`：查询单个会话元数据，不返回历史消息和流式状态。
 - `POST /v1/chat/sessions/{sessionId}/read`：提交前端已经实际展示到的 `readThroughSeq`，原子推进会话已读水位；不会改变会话列表排序。
-- `GET /v1/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50`：选择会话后查询当前 active path 或指定 leaf path 的完整 user/assistant 消息；有多个版本的消息会带 `versionInfo`。
+- `GET /v1/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50`：选择会话后查询当前 active path 或指定 leaf path 的最近一页 user/assistant 消息；通过 `nextCursor`向更早消息翻页并在前端 prepend，有多个版本的页内消息会带 `versionInfo`。
 - `GET /v1/chat/sessions/{sessionId}/messages/{messageId}/variants`：查询某条消息同父节点下的候选版本完整内容；普通聊天页优先使用 `/messages` 返回的 `versionInfo`。
 - `POST /v1/chat/sessions/{sessionId}/path`：持久化会话当前 active path leaf；UI 切换可先使用 `/messages?leafMessageId=...` 刷新展示。
 - `POST /v1/chat/sessions/{sessionId}/branches`：从指定消息创建只读历史快照分支。
@@ -287,7 +287,7 @@ stop 与 watchdog 写入 `run.cancelled/run.failed` 前会通过 run 行条件�
 
 前端点赞/点踩只能针对已落库 assistant 消息。流式阶段的 `message.delta/message.snapshot/message.completed` 只用于渲染草稿；`run.completed` 和用户主动 stop 后的 `run.cancelled` 在 `payload.messageReady=true` 时会携带 `assistantMessageId` 和 `feedbackTargetMessageId`，前端应使用该 ID 绑定反馈按钮。
 
-历史消息接口分两层：`GET /v1/chat/sessions/{sessionId}/messages` 返回当前 active path，并在有多个 sibling 版本的消息上返回 `versionInfo`，前端可直接展示 `<currentIndex/total>` 版本游标；`versionInfo.variants[].switchLeafMessageId` 是切换该版本时传给 `/messages?leafMessageId=` 和 `/path` 的 leaf。`GET /v1/chat/sessions/{sessionId}/messages/tree` 返回完整可见消息树 `mapping/currentLeafMessageId/rootMessageIds`，用于复杂版本树和联调排障。tree 视图只包含业务可见的 user/assistant 消息，不暴露 hidden system 或下游工具原始节点。
+历史消息接口分两层：`GET /v1/chat/sessions/{sessionId}/messages` 首次返回当前 active path 最近一页，后续使用 `nextCursor`向 root 翻页；每页内部保持 root 到 leaf 正序，前端把后续页 prepend 到已有列表。cursor 固定首次请求的 leaf，新消息或 current leaf 切换不会改变正在翻阅的路径，损坏、跨会话或与显式 `leafMessageId` 不匹配的 cursor 返回 400。接口只为当前页中有多个 sibling 版本的消息返回 `versionInfo`，前端可直接展示 `<currentIndex/total>`；`versionInfo.variants[].switchLeafMessageId` 是切换该版本时传给 `/messages?leafMessageId=` 和 `/path` 的 leaf。`GET /v1/chat/sessions/{sessionId}/messages/tree` 返回完整可见消息树 `mapping/currentLeafMessageId/rootMessageIds`，用于复杂版本树和联调排障。tree 视图只包含业务可见的 user/assistant 消息，不暴露 hidden system 或下游工具原始节点。
 
 从某条消息新建分支时，服务端会复制 root 到该消息的可见路径到新 session，并将复制出的历史消息标记为 `origin_type=BRANCH_SNAPSHOT`、`locked=true`。这些快照消息只能展示和继续向后提问，不能编辑、删除或重新生成；分支后续新增消息仍为 `NORMAL`，可以参与消息树版本管理。
 

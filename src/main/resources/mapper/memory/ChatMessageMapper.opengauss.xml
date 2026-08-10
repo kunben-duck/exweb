@@ -54,6 +54,20 @@
         <result column="created_at" property="createdAt"/>
     </resultMap>
 
+    <resultMap id="chatMessageVersionCandidateResultMap"
+               type="com.huawei.it.ex.one.infrastructure.memory.ChatMessageVersionCandidateRow">
+        <result column="page_message_id" property="pageMessageId"/>
+        <result column="message_id" property="messageId"/>
+        <result column="role" property="role"/>
+        <result column="sibling_index" property="siblingIndex"/>
+        <result column="locked" property="locked"/>
+        <result column="origin_type" property="originType"/>
+        <result column="edited_from_message_id" property="editedFromMessageId"/>
+        <result column="regenerated_from_message_id" property="regeneratedFromMessageId"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="switch_leaf_message_id" property="switchLeafMessageId"/>
+    </resultMap>
+
     <sql id="chatMessageColumns">
         id, tenant_id, user_id, session_id, parent_message_id, node_order, tree_depth,
         sibling_index, role, content, token_count, run_id, origin_type, locked,
@@ -230,6 +244,51 @@
     </select>
 
     <!--
+      历史消息游标分页：从cursor起点或首屏leaf向root最多回溯fetchLimit条。
+      多取的一条只用于生成下一页cursor，不返回给当前页。
+      入参: tenantId/userId/sessionId 为归属边界；pageStartMessageId/leafMessageId确定起点；
+            fetchLimit为pageSize+1。
+    -->
+    <select id="findActivePathPage" resultMap="chatMessageResultMap">
+        WITH RECURSIVE active_path AS (
+            SELECT
+            <include refid="chatMessageColumnsWithAlias"/>,
+            1 AS page_depth
+            FROM fin_ex_chat_message_t m
+            JOIN fin_ex_chat_session_t s ON s.id = m.session_id
+            WHERE m.tenant_id = #{tenantId}
+              AND m.user_id = #{userId}
+              AND m.session_id = #{sessionId}
+            <choose>
+                <when test="pageStartMessageId != null">
+              AND m.id = #{pageStartMessageId}
+                </when>
+                <when test="leafMessageId != null">
+              AND m.id = #{leafMessageId}
+                </when>
+                <otherwise>
+              AND m.id = s.current_leaf_message_id
+                </otherwise>
+            </choose>
+            UNION ALL
+            SELECT
+            <include refid="chatMessageColumnsWithAlias"/>,
+            child.page_depth + 1 AS page_depth
+            FROM fin_ex_chat_message_t m
+            JOIN active_path child ON child.parent_message_id = m.id
+            WHERE m.tenant_id = #{tenantId}
+              AND m.user_id = #{userId}
+              AND m.session_id = #{sessionId}
+              AND child.page_depth &lt; #{fetchLimit}
+        )
+        SELECT
+        <include refid="chatMessageColumns"/>
+        FROM active_path
+        ORDER BY page_depth ASC
+        LIMIT #{fetchLimit}
+    </select>
+
+    <!--
       查询当前会话内全部可见 user/assistant 消息节点，用于 tree view 和分支快照。
       入参: tenantId/userId/sessionId 为归属边界。
     -->
@@ -242,6 +301,140 @@
           AND session_id = #{sessionId}
           AND role IN ('user', 'assistant')
         ORDER BY node_order ASC, created_at ASC, id ASC
+    </select>
+
+    <!--
+      只为当前页消息计算版本摘要。SQL仅返回同父同角色siblings及每个候选的switch leaf，
+      不传输后代正文、metadata、附件或parts。
+      入参: tenantId/userId/sessionId 为归属边界；messageIds为当前页消息标识集合。
+    -->
+    <select id="findVersionCandidatesByMessages" resultMap="chatMessageVersionCandidateResultMap">
+        WITH RECURSIVE page_messages AS (
+            SELECT m.id AS page_message_id, m.parent_message_id, m.role
+            FROM fin_ex_chat_message_t m
+            WHERE m.tenant_id = #{tenantId}
+              AND m.user_id = #{userId}
+              AND m.session_id = #{sessionId}
+              AND m.role IN ('user', 'assistant')
+              <choose>
+                <when test="messageIds != null and messageIds.size() > 0">
+              AND m.id IN
+                  <foreach collection="messageIds" item="messageId" open="(" separator="," close=")">
+                      #{messageId}
+                  </foreach>
+                </when>
+                <otherwise>
+              AND 1 = 0
+                </otherwise>
+              </choose>
+        ),
+        sibling_candidates AS (
+            SELECT p.page_message_id,
+                   s.id AS candidate_id,
+                   s.role AS candidate_role,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY p.page_message_id
+                       ORDER BY s.node_order ASC, s.created_at ASC, s.id ASC
+                   ) AS version_index,
+                   COUNT(1) OVER (PARTITION BY p.page_message_id) AS sibling_count,
+                   s.locked,
+                   s.origin_type,
+                   s.edited_from_message_id,
+                   s.regenerated_from_message_id,
+                   s.created_at,
+                   s.tree_depth,
+                   s.node_order
+            FROM page_messages p
+            JOIN fin_ex_chat_message_t s
+              ON s.tenant_id = #{tenantId}
+             AND s.user_id = #{userId}
+             AND s.session_id = #{sessionId}
+             AND s.role = p.role
+             AND (
+                    s.parent_message_id = p.parent_message_id
+                    OR (s.parent_message_id IS NULL AND p.parent_message_id IS NULL)
+                 )
+        ),
+        version_candidates AS (
+            SELECT page_message_id,
+                   candidate_id,
+                   candidate_role,
+                   version_index,
+                   sibling_count,
+                   locked,
+                   origin_type,
+                   edited_from_message_id,
+                   regenerated_from_message_id,
+                   created_at,
+                   tree_depth,
+                   node_order
+            FROM sibling_candidates
+            WHERE sibling_count &gt; 1
+        ),
+        descendants (
+            page_message_id, candidate_id, candidate_role,
+            node_id, node_role, tree_depth, node_order, created_at
+        ) AS (
+            SELECT vc.page_message_id, vc.candidate_id, vc.candidate_role,
+                   vc.candidate_id, vc.candidate_role, vc.tree_depth, vc.node_order, vc.created_at
+            FROM version_candidates vc
+            UNION ALL
+            SELECT d.page_message_id, d.candidate_id, d.candidate_role,
+                   child.id, child.role, child.tree_depth, child.node_order, child.created_at
+            FROM descendants d
+            JOIN fin_ex_chat_message_t child
+              ON child.tenant_id = #{tenantId}
+             AND child.user_id = #{userId}
+             AND child.session_id = #{sessionId}
+             AND child.parent_message_id = d.node_id
+             AND child.role IN ('user', 'assistant')
+        ),
+        ranked_switches AS (
+            SELECT d.page_message_id,
+                   d.candidate_id,
+                   d.node_id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY d.page_message_id, d.candidate_id
+                       ORDER BY d.tree_depth DESC, d.node_order DESC, d.created_at DESC, d.node_id DESC
+                   ) AS switch_rank
+            FROM descendants d
+            WHERE (
+                    d.candidate_role = 'user'
+                    AND d.node_role = 'assistant'
+                  )
+               OR (
+                    d.candidate_role = 'assistant'
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM fin_ex_chat_message_t visible_child
+                        WHERE visible_child.tenant_id = #{tenantId}
+                          AND visible_child.user_id = #{userId}
+                          AND visible_child.session_id = #{sessionId}
+                          AND visible_child.parent_message_id = d.node_id
+                          AND visible_child.role IN ('user', 'assistant')
+                    )
+                  )
+        ),
+        best_switches AS (
+            SELECT page_message_id, candidate_id, node_id
+            FROM ranked_switches
+            WHERE switch_rank = 1
+        )
+        SELECT vc.page_message_id,
+               vc.candidate_id AS message_id,
+               vc.candidate_role AS role,
+               vc.version_index AS sibling_index,
+               vc.locked,
+               vc.origin_type,
+               vc.edited_from_message_id,
+               vc.regenerated_from_message_id,
+               vc.created_at,
+               bs.node_id AS switch_leaf_message_id
+        FROM version_candidates vc
+        LEFT JOIN best_switches bs
+          ON bs.page_message_id = vc.page_message_id
+         AND bs.candidate_id = vc.candidate_id
+        ORDER BY vc.page_message_id ASC, vc.version_index ASC
     </select>
 
     <!--

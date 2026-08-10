@@ -260,7 +260,12 @@ public class ChatSessionController {
                     ChatMessagePage page = facade.listMessages(user, sessionId, leafMessageId, cursor, limit);
                     Map<String, ChatMessageVersionInfoDto> versionInfos = page.items().isEmpty()
                             ? Map.of()
-                            : versionViewAssembler.assemble(page.items(), facade.listMessageTreeNodes(user, sessionId));
+                            : versionViewAssembler.assemblePage(
+                                    page.items(),
+                                    facade.listMessageVersionCandidates(
+                                            user,
+                                            sessionId,
+                                            page.items().stream().map(ChatMessage::id).toList()));
                     return toMessagePageDto(user, sessionId, page, versionInfos);
                 })
                 .subscribeOn(Schedulers.boundedElastic());

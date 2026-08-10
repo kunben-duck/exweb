@@ -819,9 +819,15 @@ paths:
       operationId: listChatMessages
       summary: 查询会话 active path 历史消息
       description: |
+        首次请求返回所选 active path 最近 limit 条消息，页内按 root 到 leaf 方向正序排列；有更早消息时
+        返回 nextCursor。后续携带 nextCursor 向更早消息翻页，前端应将该页 prepend 到已有列表。
+        Cursor 固定首次请求使用的 leaf，因此翻页期间即使产生新消息或 current leaf 变化，也不会改变原路径。
+        后续页可以省略 leafMessageId；若显式携带则必须与 cursor 固定的 leaf 一致。损坏、跨会话、起点失效
+        或 leaf 不匹配的 cursor 返回 400。
+
         返回 user/assistant 消息、附件和已保存 Parts。等待态 assistant 即使正文为空，只要存在已保存
         卡片 Parts 也会返回，页面可据此恢复 WAIT 卡片。Intent 的 intent-start/progress/delta 仅保存在
-        ChatEvent，不进入历史 Parts；intent-result 仍进入 Parts。
+        ChatEvent，不进入历史 Parts；intent-result 仍进入 Parts。versionInfo 只为当前页消息批量计算。
       parameters:
         - $ref: '#/components/parameters/SessionId'
         - name: leafMessageId
@@ -833,6 +839,7 @@ paths:
         - name: cursor
           in: query
           required: false
+          description: 上一页返回的不透明游标；用于读取同一固定 leaf 路径上的更早消息
           schema:
             type: string
         - name: limit
@@ -2811,6 +2818,7 @@ components:
         nextCursor:
           type: string
           nullable: true
+          description: 读取紧邻当前页的更早消息所需的不透明游标；null表示已到达root
 
     ChatMessage:
       type: object

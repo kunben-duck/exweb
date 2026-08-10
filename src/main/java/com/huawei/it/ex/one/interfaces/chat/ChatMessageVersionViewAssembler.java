@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.interfaces.chat;
 
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
+import com.huawei.it.ex.one.domain.chat.ChatMessageVersionCandidate;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageVersionInfoDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageVersionItemDto;
 
@@ -80,6 +81,71 @@ public class ChatMessageVersionViewAssembler {
             result.put(message.id(), toVersionInfo(message, siblings, childrenByParent));
         }
         return result;
+    }
+
+    /**
+     * 使用数据库为当前页预计算的轻量候选装配版本摘要。
+     *
+     * <p>该入口供游标分页使用，避免为了少量页内消息读取完整会话树。</p>
+     */
+    public Map<String, ChatMessageVersionInfoDto> assemblePage(
+            List<ChatMessage> pageMessages, List<ChatMessageVersionCandidate> candidates) {
+        if (pageMessages == null || pageMessages.isEmpty() || candidates == null || candidates.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, List<ChatMessageVersionCandidate>> candidatesByPageMessage = candidates.stream()
+                .filter(Objects::nonNull)
+                .filter(candidate -> candidate.pageMessageId() != null)
+                .collect(Collectors.groupingBy(
+                        ChatMessageVersionCandidate::pageMessageId,
+                        LinkedHashMap::new,
+                        Collectors.toList()));
+        Map<String, ChatMessageVersionInfoDto> result = new LinkedHashMap<>();
+        for (ChatMessage message : pageMessages) {
+            if (message == null) {
+                continue;
+            }
+            List<ChatMessageVersionCandidate> siblings = candidatesByPageMessage
+                    .getOrDefault(message.id(), List.of()).stream()
+                    .sorted(Comparator.comparingInt(ChatMessageVersionCandidate::siblingIndex)
+                            .thenComparing(ChatMessageVersionCandidate::createdAt,
+                                    Comparator.nullsLast(Instant::compareTo))
+                            .thenComparing(ChatMessageVersionCandidate::messageId,
+                                    Comparator.nullsLast(String::compareTo)))
+                    .toList();
+            if (siblings.size() <= 1 || siblings.stream().noneMatch(candidate -> message.id().equals(candidate.messageId()))) {
+                continue;
+            }
+            result.put(message.id(), toVersionInfo(message, siblings));
+        }
+        return result;
+    }
+
+    private ChatMessageVersionInfoDto toVersionInfo(
+            ChatMessage current, List<ChatMessageVersionCandidate> siblings) {
+        List<ChatMessageVersionItemDto> variants = new ArrayList<>();
+        int currentIndex = 1;
+        for (int index = 0; index < siblings.size(); index++) {
+            ChatMessageVersionCandidate candidate = siblings.get(index);
+            boolean selected = current.id().equals(candidate.messageId());
+            if (selected) {
+                currentIndex = index + 1;
+            }
+            variants.add(new ChatMessageVersionItemDto(
+                    candidate.messageId(),
+                    index + 1,
+                    selected,
+                    candidate.switchLeafMessageId() == null
+                            ? candidate.messageId()
+                            : candidate.switchLeafMessageId(),
+                    candidate.locked(),
+                    candidate.originType(),
+                    candidate.editedFromMessageId(),
+                    candidate.regeneratedFromMessageId(),
+                    candidate.createdAt()
+            ));
+        }
+        return new ChatMessageVersionInfoDto(current.role(), current.id(), currentIndex, siblings.size(), variants);
     }
 
     private ChatMessageVersionInfoDto toVersionInfo(

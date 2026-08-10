@@ -10,6 +10,7 @@ import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessageAttachment;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePage;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePart;
+import com.huawei.it.ex.one.domain.chat.ChatMessageVersionCandidate;
 
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Primary;
@@ -156,6 +157,12 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
     @Override
     public List<ChatMessage> findAllMessageNodesBySession(String tenantId, String userId, String sessionId) {
         return databaseStore.findAllMessageNodesBySession(tenantId, userId, sessionId);
+    }
+
+    @Override
+    public List<ChatMessageVersionCandidate> findVersionCandidatesByMessageIds(
+            String tenantId, String userId, String sessionId, List<String> messageIds) {
+        return databaseStore.findVersionCandidatesByMessageIds(tenantId, userId, sessionId, messageIds);
     }
 
     @Override

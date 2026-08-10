@@ -79,6 +79,42 @@ public interface ChatMessageMapper {
     );
 
     /**
+     * 从指定分页起点向 root 有界回溯 active path。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param pageStartMessageId cursor 指定的下一页起点；第一页为空时使用 leaf/current leaf。
+     * @param leafMessageId 第一页显式指定的 leaf；cursor 页不使用。
+     * @param fetchLimit 最多读取条数，调用方传入 pageSize + 1。
+     * @return 从分页起点向 root 排列的有界消息行。
+     */
+    List<ChatMessageRow> findActivePathPage(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionId") String sessionId,
+            @Param("pageStartMessageId") String pageStartMessageId,
+            @Param("leafMessageId") String leafMessageId,
+            @Param("fetchLimit") int fetchLimit
+    );
+
+    /**
+     * 批量查询当前页消息的同父同角色版本摘要及切换 leaf。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param messageIds 当前页消息标识。
+     * @return 当前页有多个版本的消息候选摘要。
+     */
+    List<ChatMessageVersionCandidateRow> findVersionCandidatesByMessages(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionId") String sessionId,
+            @Param("messageIds") List<String> messageIds
+    );
+
+    /**
      * 查询会话内全部可见 user/assistant 消息。
      *
      * @param tenantId 租户标识。

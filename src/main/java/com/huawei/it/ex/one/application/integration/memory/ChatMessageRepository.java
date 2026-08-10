@@ -4,6 +4,7 @@ import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessageAttachment;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePage;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePart;
+import com.huawei.it.ex.one.domain.chat.ChatMessageVersionCandidate;
 
 import java.util.List;
 import java.util.Map;
@@ -119,8 +120,9 @@ public interface ChatMessageRepository {
     /**
      * 查询当前会话内全部可见消息树节点，但不要求装配 message parts。
      *
-     * <p>该方法用于 /messages 的版本摘要计算，避免为了计算 sibling 和 switch leaf 读取整棵树的
-     * assistant parts。需要展示完整 tree 的调用方继续使用 {@link #findAllBySession(String, String, String)}。</p>
+     * <p>该兼容能力用于只需要完整节点集合、但不需要 assistant parts 的内部流程。
+     * /messages 分页版本摘要使用按页候选查询；完整 tree 展示继续使用
+     * {@link #findAllBySession(String, String, String)}。</p>
      *
      * @param tenantId 租户标识。
      * @param userId 用户标识。
@@ -129,6 +131,16 @@ public interface ChatMessageRepository {
      */
     default List<ChatMessage> findAllMessageNodesBySession(String tenantId, String userId, String sessionId) {
         return findAllBySession(tenantId, userId, sessionId);
+    }
+
+    /**
+     * 批量查询当前页消息对应的轻量版本候选。
+     *
+     * <p>实现只应读取同父同角色 sibling 及其预计算的切换 leaf，不得为分页接口加载整棵消息树。</p>
+     */
+    default List<ChatMessageVersionCandidate> findVersionCandidatesByMessageIds(
+            String tenantId, String userId, String sessionId, List<String> messageIds) {
+        return List.of();
     }
 
     /**

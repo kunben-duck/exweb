@@ -27,6 +27,7 @@ import com.huawei.it.ex.one.domain.chat.ChatMessageAttachment;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePage;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePart;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePartDraft;
+import com.huawei.it.ex.one.domain.chat.ChatMessageVersionCandidate;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
@@ -202,6 +203,15 @@ public class SessionApplicationService implements ChatSessionFacade {
         checkChatUser(user);
         ChatSession session = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
         return messageRepository.findAllMessageNodesBySession(session.tenantId(), session.userId(), session.id());
+    }
+
+    @Override
+    public List<ChatMessageVersionCandidate> listMessageVersionCandidates(
+            UserContext user, String sessionId, List<String> messageIds) {
+        checkChatUser(user);
+        ChatSession session = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
+        return messageRepository.findVersionCandidatesByMessageIds(
+                session.tenantId(), session.userId(), session.id(), messageIds);
     }
 
     @Override

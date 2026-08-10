@@ -45,7 +45,7 @@ query、routeAction、候选意图、最终路由是否采纳和调用耗时。D
 | 会话列表（页码） | `GET` | `/v1/chat/sessions/page?curPage=1&pageSize=20` | 当前用户历史会话页码分页，返回 totalRows |
 | 会话详情 | `GET` | `/v1/chat/sessions/{sessionId}` | 查询单个会话元数据 |
 | 标记会话已读 | `POST` | `/v1/chat/sessions/{sessionId}/read` | 提交已经实际展示到的 `readThroughSeq`，返回最新会话水位 |
-| 历史消息 | `GET` | `/v1/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50` | 查询当前 active path 或指定 leaf path，消息带轻量 `versionInfo` 和附件快照 |
+| 历史消息 | `GET` | `/v1/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50` | 查询当前 active path 或指定 leaf path 的最近一页；使用 `nextCursor`向前翻页并 prepend，消息带轻量 `versionInfo` 和附件快照 |
 | 消息树视图 | `GET` | `/v1/chat/sessions/{sessionId}/messages/tree` | 查询完整可见消息树 mapping，用于复杂版本树或调试，节点消息同样带附件快照 |
 | 消息版本详情 | `GET` | `/v1/chat/sessions/{sessionId}/messages/{messageId}/variants` | 查询同父节点候选版本完整内容；普通聊天页优先使用 `/messages.versionInfo` |
 | 切换路径 | `POST` | `/v1/chat/sessions/{sessionId}/path` | 将会话当前 leaf 切换到指定消息 |
@@ -194,7 +194,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `GET /chat/sessions/page` | Query：`appId/appScope/title/channel`可选；`curPage`默认1；`pageSize`默认20 | `items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；item带`firstAssistantAnswer` | 主站传`appScope=MAIN_SITE`；省略`appScope/appId`查询全量；总数和数据条件一致 |
 | `GET /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto` | 只拿元数据，不返回历史和流状态 |
 | `POST /chat/sessions/{sessionId}/read` | Path：`sessionId`；Body：`readThroughSeq` 必填且不小于 0 | 更新后的 `ChatSessionDto` | 历史消息或实时终态实际展示后提交；服务端不允许回退或越过最新水位 |
-| `GET /chat/sessions/{sessionId}/messages` | Path：`sessionId`；Query：`leafMessageId` 可选，`cursor` 保留，`limit` | `ChatMessagePageDto.items[]`、`nextCursor`；item 可能带 `versionInfo`，并原样返回 `metadataJson` 字符串 | 普通聊天页主接口；用 `messageId` 做反馈、分支和重新生成，用 `versionInfo.variants[].switchLeafMessageId` 切换版本 |
+| `GET /chat/sessions/{sessionId}/messages` | Path：`sessionId`；Query：`leafMessageId` 可选，`cursor` 为上一页游标，`limit` | `ChatMessagePageDto.items[]`、`nextCursor`；item 可能带 `versionInfo`，并原样返回 `metadataJson` 字符串 | 首页取最近消息；后续页 prepend。cursor 固定首次 leaf，损坏、跨会话或 leaf 不匹配返回400 |
 | `GET /chat/sessions/{sessionId}/messages/tree` | Path：`sessionId` | `ChatMessageTreeDto`：`sessionId`、`currentLeafMessageId`、`rootMessageIds[]`、`mapping` | 读取完整可见消息树；不返回 hidden system 或下游工具原始节点 |
 | `GET /chat/sessions/{sessionId}/messages/{messageId}/variants` | Path：`sessionId`、`messageId` | `ChatMessageDto[]` | 查询完整候选内容和排障；普通聊天页优先使用 `/messages` 的 `versionInfo` |
 | `POST /chat/sessions/{sessionId}/path` | Path：`sessionId`；Body：`leafMessageId` | `ChatSessionDto` | 持久化当前 active leaf；UI 切换可先用 `/messages?leafMessageId=` 刷新，不必阻塞等待该接口 |
@@ -235,7 +235,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `GET /v1/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`appId/appScope/title/channel`可选；`curPage`默认1；`pageSize`默认20，最大200。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`。 | `totalRows/totalPages`按相同范围、标题和渠道条件计算；不返回`DELETED`会话。 |
 | `GET /v1/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
 | `POST /v1/chat/sessions/{sessionId}/read` | 最新历史消息或实时 assistant 终态已经展示。 | Path：`sessionId`；JSON body：`readThroughSeq` 必填、最小为 0。 | 更新后的 `ChatSessionDto`。 | 提交列表/详情中观察到的 `latestMessageSeq`，或实时 `run.completed/run.waiting_user` 的 sequence；不会更新会话 `updatedAt`。 |
-| `GET /v1/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 保留。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 不传 `leafMessageId` 时返回当前 active path；传入时返回 root 到该 leaf 的路径。 |
+| `GET /v1/chat/sessions/{sessionId}/messages` | 历史消息路径回看。 | Path：`sessionId`；Query：`leafMessageId` 可选，`limit` 默认 50，`cursor` 为上一页返回值。 | `ChatMessagePageDto`：`items[]`、`nextCursor`。 | 首页返回路径最近一页；后续页读取更早消息并 prepend。cursor 固定首次 leaf，后续可调整 limit。 |
 | `GET /v1/chat/sessions/{sessionId}/messages/tree` | 复杂前端读取完整消息树，或联调排查版本关系。 | Path：`sessionId`。 | `ChatMessageTreeDto`。 | 只读接口；不改变当前路径，不创建 run；mapping 只包含业务可见 user/assistant 消息。 |
 | `GET /v1/chat/sessions/{sessionId}/messages/{messageId}/variants` | 切换编辑/重新生成后的候选版本。 | Path：`sessionId`、`messageId`。 | `ChatMessageDto[]`。 | 返回同父节点、同角色的 sibling 版本。 |
 | `POST /v1/chat/sessions/{sessionId}/path` | 用户选择某个历史版本作为当前路径。 | Path：`sessionId`；JSON body：`leafMessageId`。 | `ChatSessionDto`。 | 只切换 `currentLeafMessageId`，不创建 run。 |
@@ -1021,9 +1021,18 @@ curl "http://localhost:8080/v1/chat/sessions/session_xxx/messages?limit=50"
 
 # 查询某个历史版本 leaf 的路径
 curl "http://localhost:8080/v1/chat/sessions/session_xxx/messages?leafMessageId=msg_older_leaf&limit=50"
+
+# 使用第一页返回的nextCursor读取紧邻的更早一页；leafMessageId可省略
+curl "http://localhost:8080/v1/chat/sessions/session_xxx/messages?cursor=opaque_cursor&limit=50"
 ```
 
-响应按创建时间正序返回，适合直接渲染历史消息气泡：
+第一页是所选路径最近的 `limit` 条；每页内部按 root 到 leaf 方向正序返回。收到下一页后应将
+`items` 整页 prepend 到已有消息列表，而不是 append。`nextCursor` 固定第一页实际使用的 leaf，
+所以翻页过程中即使会话收到新消息或切换 current leaf，旧 cursor 仍沿原路径读取。后续页允许调整
+`limit`；若同时携带 `leafMessageId`，它必须与 cursor 固定的 leaf 一致。损坏、跨会话、起点不存在或
+leaf 不匹配均返回 `400 BAD_REQUEST`。
+
+响应示例：
 
 ```json
 {
@@ -1086,7 +1095,7 @@ curl "http://localhost:8080/v1/chat/sessions/session_xxx/messages?leafMessageId=
       "createdAt": "2026-05-17T01:01:10Z"
     }
   ],
-  "nextCursor": null
+  "nextCursor": "opaque_cursor"
 }
 ```
 

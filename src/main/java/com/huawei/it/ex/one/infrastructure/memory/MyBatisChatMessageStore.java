@@ -6,6 +6,7 @@ import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessageAttachment;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePage;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePart;
+import com.huawei.it.ex.one.domain.chat.ChatMessageVersionCandidate;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -38,6 +39,7 @@ public class MyBatisChatMessageStore {
     private final ObjectMapper objectMapper;
     private final int partBatchMaxSize;
     private final long partBatchMaxBytes;
+    private final ChatMessagePageCursorCodec messagePageCursorCodec = new ChatMessagePageCursorCodec();
 
     public MyBatisChatMessageStore(ChatMessageMapper mapper, ObjectMapper objectMapper,
                                    ChatStreamProperties chatStreamProperties) {
@@ -247,17 +249,46 @@ public class MyBatisChatMessageStore {
             return new ChatMessagePage(List.of(), null);
         }
         int pageSize = Math.max(1, Math.min(query.limit() <= 0 ? 50 : query.limit(), 200));
-        List<ChatMessage> rows = mapper.findActivePath(query.tenantId(), query.userId(), query.sessionId(),
-                        query.leafMessageId()).stream()
+        String requestedLeafMessageId = normalizeText(query.leafMessageId());
+        String pageStartMessageId = null;
+        String anchorLeafMessageId = requestedLeafMessageId;
+        boolean cursorRequest = query.cursor() != null && !query.cursor().isBlank();
+        if (cursorRequest) {
+            ChatMessagePageCursorCodec.Cursor cursor = messagePageCursorCodec.decode(query.cursor());
+            if (!query.sessionId().equals(cursor.sessionId())) {
+                throw new IllegalArgumentException("消息分页游标不属于当前会话");
+            }
+            if (requestedLeafMessageId != null
+                    && !requestedLeafMessageId.equals(cursor.anchorLeafMessageId())) {
+                throw new IllegalArgumentException("leafMessageId 与消息分页游标不匹配");
+            }
+            anchorLeafMessageId = cursor.anchorLeafMessageId();
+            pageStartMessageId = cursor.pageStartMessageId();
+        }
+
+        List<ChatMessageRow> rows = mapper.findActivePathPage(
+                query.tenantId(), query.userId(), query.sessionId(), pageStartMessageId,
+                cursorRequest ? null : requestedLeafMessageId, pageSize + 1);
+        if (cursorRequest && rows.isEmpty()) {
+            throw new IllegalArgumentException("消息分页游标指向的消息不存在或不属于当前路径");
+        }
+        if (rows.isEmpty()) {
+            return new ChatMessagePage(List.of(), null);
+        }
+        if (anchorLeafMessageId == null) {
+            anchorLeafMessageId = rows.getFirst().getId();
+        }
+
+        boolean hasMore = rows.size() > pageSize;
+        List<ChatMessage> pageItemsAscending = rows.subList(0, Math.min(pageSize, rows.size())).stream()
                 .map(this::toDomain)
-                .toList();
-        // active path 是一条有限可见路径，首版不再按 created_at 翻页；limit 用于保护极长历史。
-        List<ChatMessage> pageItems = rows.size() > pageSize ? rows.subList(Math.max(0, rows.size() - pageSize), rows.size()) : rows;
-        List<ChatMessage> pageItemsAscending = pageItems.stream()
                 .sorted(Comparator.comparing(ChatMessage::treeDepth).thenComparing(ChatMessage::nodeOrder))
                 .toList();
+        String nextCursor = hasMore
+                ? messagePageCursorCodec.encode(query.sessionId(), anchorLeafMessageId, rows.get(pageSize).getId())
+                : null;
         return new ChatMessagePage(attachMessageChildren(query.tenantId(), query.userId(), query.sessionId(), pageItemsAscending),
-                null);
+                nextCursor);
     }
 
     public List<ChatMessage> findAllBySession(String tenantId, String userId, String sessionId) {
@@ -276,6 +307,35 @@ public class MyBatisChatMessageStore {
         }
         return mapper.findAllBySession(tenantId, userId, sessionId).stream()
                 .map(this::toDomain)
+                .toList();
+    }
+
+    public List<ChatMessageVersionCandidate> findVersionCandidatesByMessageIds(
+            String tenantId, String userId, String sessionId, List<String> messageIds) {
+        if (tenantId == null || userId == null || sessionId == null || messageIds == null || messageIds.isEmpty()) {
+            return List.of();
+        }
+        List<String> normalizedIds = messageIds.stream()
+                .map(this::normalizeText)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        if (normalizedIds.isEmpty()) {
+            return List.of();
+        }
+        return mapper.findVersionCandidatesByMessages(tenantId, userId, sessionId, normalizedIds).stream()
+                .map(row -> new ChatMessageVersionCandidate(
+                        row.getPageMessageId(),
+                        row.getMessageId(),
+                        row.getRole(),
+                        row.getSiblingIndex() == null ? 0 : row.getSiblingIndex(),
+                        Boolean.TRUE.equals(row.getLocked()),
+                        row.getOriginType(),
+                        row.getEditedFromMessageId(),
+                        row.getRegeneratedFromMessageId(),
+                        row.getCreatedAt() == null ? Instant.EPOCH : row.getCreatedAt(),
+                        row.getSwitchLeafMessageId()
+                ))
                 .toList();
     }
 
@@ -474,5 +534,13 @@ public class MyBatisChatMessageStore {
         } catch (JsonProcessingException ex) {
             throw new IllegalArgumentException("反序列化消息 part payload 失败", ex);
         }
+    }
+
+    private String normalizeText(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim();
+        return normalized.isEmpty() ? null : normalized;
     }
 }

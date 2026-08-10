@@ -5,6 +5,7 @@ import com.huawei.it.ex.one.application.integration.conversation.SessionListFilt
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePage;
+import com.huawei.it.ex.one.domain.chat.ChatMessageVersionCandidate;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
@@ -190,7 +191,7 @@ public interface ChatSessionFacade {
      * @param user 请求入口解析出的不可变用户身份快照。
      * @param sessionId 会话标识。
      * @param leafMessageId 指定 leaf；为空时使用会话当前 leaf。
-     * @param cursor 保留分页游标；当前 active path 查询返回空 nextCursor。
+     * @param cursor 上一页返回的游标；为空时读取所选路径最近一页。
      * @param limit 最大返回条数。
      * @return root 到 leaf 的可见消息路径。
      */
@@ -214,7 +215,8 @@ public interface ChatSessionFacade {
     /**
      * 查询当前用户可见会话的轻量消息树节点。
      *
-     * <p>该方法用于历史消息接口装配版本摘要，不要求返回 assistant parts。</p>
+     * <p>该兼容能力供需要完整节点集合的内部流程使用，不要求返回 assistant parts；
+     * 历史消息分页的版本摘要使用按页候选查询，不再调用该方法。</p>
      *
      * @param user 请求入口解析出的不可变用户身份快照。
      * @param sessionId 会话标识。
@@ -222,6 +224,17 @@ public interface ChatSessionFacade {
      */
     default List<ChatMessage> listMessageTreeNodes(UserContext user, String sessionId) {
         return listMessageTree(user, sessionId);
+    }
+
+    /**
+     * 查询历史消息当前页所需的轻量版本候选。
+     *
+     * @param messageIds 当前页消息标识。
+     * @return 同父同角色的版本候选及预计算切换 leaf。
+     */
+    default List<ChatMessageVersionCandidate> listMessageVersionCandidates(
+            UserContext user, String sessionId, List<String> messageIds) {
+        return List.of();
     }
 
     /**

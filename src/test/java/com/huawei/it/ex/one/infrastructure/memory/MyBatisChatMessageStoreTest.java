@@ -2,14 +2,20 @@ package com.huawei.it.ex.one.infrastructure.memory;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.config.ChatStreamProperties;
+import com.huawei.it.ex.one.application.integration.memory.ChatMessagePageQuery;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
+import com.huawei.it.ex.one.domain.chat.ChatMessagePage;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePart;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,6 +29,7 @@ import java.lang.reflect.Method;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
 
 class MyBatisChatMessageStoreTest {
     private static final String MEMORY_QUERY_TIMEOUT_PROPERTY =
@@ -107,6 +114,94 @@ class MyBatisChatMessageStoreTest {
                 .isEqualTo("part-1");
     }
 
+    @Test
+    void pagesOneHundredTwentyPathMessagesWithoutDuplicatesOrOmissions() {
+        ChatMessageMapper mapper = mock(ChatMessageMapper.class);
+        when(mapper.findActivePathPage(
+                eq("tenant-1"), eq("user-1"), eq("session-1"), any(), any(), anyInt()))
+                .thenAnswer(invocation -> {
+                    String pageStart = invocation.getArgument(3);
+                    String leaf = invocation.getArgument(4);
+                    int fetchLimit = invocation.getArgument(5);
+                    int start = messageNumber(pageStart != null ? pageStart : leaf);
+                    if (start == 0) {
+                        start = 120;
+                    }
+                    return descendingRows(start, fetchLimit);
+                });
+        MyBatisChatMessageStore store = store(mapper, 100, DataSize.ofMegabytes(1));
+
+        ChatMessagePage first = store.pageMessages(
+                new ChatMessagePageQuery("tenant-1", "user-1", "session-1", null, null, 50));
+        ChatMessagePage second = store.pageMessages(
+                new ChatMessagePageQuery("tenant-1", "user-1", "session-1", null, first.nextCursor(), 50));
+        ChatMessagePage third = store.pageMessages(
+                new ChatMessagePageQuery("tenant-1", "user-1", "session-1", null, second.nextCursor(), 25));
+
+        assertThat(first.items()).extracting(ChatMessage::id)
+                .containsExactlyElementsOf(messageIds(71, 120));
+        assertThat(second.items()).extracting(ChatMessage::id)
+                .containsExactlyElementsOf(messageIds(21, 70));
+        assertThat(third.items()).extracting(ChatMessage::id)
+                .containsExactlyElementsOf(messageIds(1, 20));
+        assertThat(first.nextCursor()).isNotBlank();
+        assertThat(second.nextCursor()).isNotBlank();
+        assertThat(third.nextCursor()).isNull();
+
+        List<String> prepended = new java.util.ArrayList<>();
+        prepended.addAll(third.items().stream().map(ChatMessage::id).toList());
+        prepended.addAll(second.items().stream().map(ChatMessage::id).toList());
+        prepended.addAll(first.items().stream().map(ChatMessage::id).toList());
+        assertThat(prepended).containsExactlyElementsOf(messageIds(1, 120));
+        verify(mapper, never()).findActivePath(any(), any(), any(), any());
+    }
+
+    @Test
+    void cursorPinsInitialLeafAndRejectsMismatchedLeafOrSession() {
+        ChatMessageMapper mapper = mock(ChatMessageMapper.class);
+        when(mapper.findActivePathPage(
+                eq("tenant-1"), eq("user-1"), eq("session-1"), any(), any(), anyInt()))
+                .thenReturn(descendingRows(5, 3));
+        MyBatisChatMessageStore store = store(mapper, 100, DataSize.ofMegabytes(1));
+
+        ChatMessagePage first = store.pageMessages(
+                new ChatMessagePageQuery("tenant-1", "user-1", "session-1", "message-5", null, 2));
+
+        assertThatThrownBy(() -> store.pageMessages(
+                new ChatMessagePageQuery("tenant-1", "user-1", "session-1", "message-other",
+                        first.nextCursor(), 2)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("leafMessageId");
+        assertThatThrownBy(() -> store.pageMessages(
+                new ChatMessagePageQuery("tenant-1", "user-1", "session-2", null,
+                        first.nextCursor(), 2)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("当前会话");
+    }
+
+    @Test
+    void rejectsDamagedOrMissingCursorTarget() {
+        ChatMessageMapper mapper = mock(ChatMessageMapper.class);
+        when(mapper.findActivePathPage(
+                eq("tenant-1"), eq("user-1"), eq("session-1"), any(), any(), anyInt()))
+                .thenReturn(descendingRows(3, 2))
+                .thenReturn(List.of());
+        MyBatisChatMessageStore store = store(mapper, 100, DataSize.ofMegabytes(1));
+
+        assertThatThrownBy(() -> store.pageMessages(
+                new ChatMessagePageQuery("tenant-1", "user-1", "session-1", null, "damaged", 1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("游标无效");
+
+        ChatMessagePage first = store.pageMessages(
+                new ChatMessagePageQuery("tenant-1", "user-1", "session-1", null, null, 1));
+        assertThatThrownBy(() -> store.pageMessages(
+                new ChatMessagePageQuery("tenant-1", "user-1", "session-1", null,
+                        first.nextCursor(), 1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("不存在或不属于当前路径");
+    }
+
     private ChatMessageMapper successfulMapper() {
         ChatMessageMapper mapper = mock(ChatMessageMapper.class);
         when(mapper.updateAssistant(org.mockito.ArgumentMatchers.any())).thenReturn(1);
@@ -169,5 +264,40 @@ class MyBatisChatMessageStoreTest {
                 order,
                 Instant.parse("2026-07-30T00:00:00Z")
         );
+    }
+
+    private List<ChatMessageRow> descendingRows(int start, int limit) {
+        return IntStream.iterate(start, value -> value > 0, value -> value - 1)
+                .limit(limit)
+                .mapToObj(this::messageRow)
+                .toList();
+    }
+
+    private ChatMessageRow messageRow(int number) {
+        ChatMessageRow row = new ChatMessageRow();
+        row.setId("message-" + number);
+        row.setTenantId("tenant-1");
+        row.setUserId("user-1");
+        row.setSessionId("session-1");
+        row.setParentMessageId(number == 1 ? null : "message-" + (number - 1));
+        row.setNodeOrder((long) number);
+        row.setTreeDepth(number - 1);
+        row.setSiblingIndex(1);
+        row.setRole(number % 2 == 0 ? "assistant" : "user");
+        row.setContent("content-" + number);
+        row.setLocked(false);
+        row.setCreatedAt(Instant.EPOCH.plusSeconds(number));
+        return row;
+    }
+
+    private int messageNumber(String messageId) {
+        if (messageId == null) {
+            return 0;
+        }
+        return Integer.parseInt(messageId.substring("message-".length()));
+    }
+
+    private List<String> messageIds(int first, int last) {
+        return IntStream.rangeClosed(first, last).mapToObj(value -> "message-" + value).toList();
     }
 }

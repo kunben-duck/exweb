@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.interfaces.chat.dto;
 
 import java.time.Instant;
+import java.util.Map;
 
 /**
  * 前端消息反馈响应 DTO。
@@ -12,6 +13,7 @@ import java.time.Instant;
  * @param status 当前反馈状态，ACTIVE 表示当前用户仍保留反馈，CANCELLED 表示已取消。
  * @param reasonCode 结构化反馈原因编码。
  * @param commentText 用户补充的反馈说明文本。
+ * @param metadata 反馈扩展诊断信息；未提供时为空对象。
  * @param createdAt 反馈创建时间。
  * @param updatedAt 反馈最后更新时间。
  */
@@ -23,6 +25,7 @@ public record MessageFeedbackDto(
         String status,
         String reasonCode,
         String commentText,
+        Map<String, Object> metadata,
         Instant createdAt,
         Instant updatedAt
 ) {}

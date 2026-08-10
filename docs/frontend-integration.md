@@ -194,7 +194,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `GET /chat/sessions/page` | Query：`appId/appScope/title/channel`可选；`curPage`默认1；`pageSize`默认20 | `items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；item带`firstAssistantAnswer` | 主站传`appScope=MAIN_SITE`；省略`appScope/appId`查询全量；总数和数据条件一致 |
 | `GET /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto` | 只拿元数据，不返回历史和流状态 |
 | `POST /chat/sessions/{sessionId}/read` | Path：`sessionId`；Body：`readThroughSeq` 必填且不小于 0 | 更新后的 `ChatSessionDto` | 历史消息或实时终态实际展示后提交；服务端不允许回退或越过最新水位 |
-| `GET /chat/sessions/{sessionId}/messages` | Path：`sessionId`；Query：`leafMessageId` 可选，`cursor` 保留，`limit` | `ChatMessagePageDto.items[]`、`nextCursor`；item 可能带 `versionInfo` | 普通聊天页主接口；用 `messageId` 做反馈、分支和重新生成，用 `versionInfo.variants[].switchLeafMessageId` 切换版本 |
+| `GET /chat/sessions/{sessionId}/messages` | Path：`sessionId`；Query：`leafMessageId` 可选，`cursor` 保留，`limit` | `ChatMessagePageDto.items[]`、`nextCursor`；item 可能带 `versionInfo`，并原样返回 `metadataJson` 字符串 | 普通聊天页主接口；用 `messageId` 做反馈、分支和重新生成，用 `versionInfo.variants[].switchLeafMessageId` 切换版本 |
 | `GET /chat/sessions/{sessionId}/messages/tree` | Path：`sessionId` | `ChatMessageTreeDto`：`sessionId`、`currentLeafMessageId`、`rootMessageIds[]`、`mapping` | 读取完整可见消息树；不返回 hidden system 或下游工具原始节点 |
 | `GET /chat/sessions/{sessionId}/messages/{messageId}/variants` | Path：`sessionId`、`messageId` | `ChatMessageDto[]` | 查询完整候选内容和排障；普通聊天页优先使用 `/messages` 的 `versionInfo` |
 | `POST /chat/sessions/{sessionId}/path` | Path：`sessionId`；Body：`leafMessageId` | `ChatSessionDto` | 持久化当前 active leaf；UI 切换可先用 `/messages?leafMessageId=` 刷新，不必阻塞等待该接口 |
@@ -258,7 +258,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `GET /v1/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`；只处理 `stream-item` 中的 `encodedItem.data`。 |
 | `GET /v1/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态，并以 `done` 闭合。live source 异常时当前 tail 会结束且不会自动轮询数据库，前端应使用已处理的最大 `sequence` 重新请求。 |
 | `GET /v1/chat/sessions/{sessionId}/stream-status` | 判断是否存在 active run、是否可停止、从哪里恢复、是否等待用户澄清输入，以及当前会话绑定的 DomainAgent/Runtime 摘要。 | Path：`sessionId`。 | `ChatStreamStatusDto`：`latestSeq`、`activeRunId`、`activeStreamTopicId`、`activeRunFirstSeq`、`activeRunLastSeq`、`cancellable`、`waitingUserInput`、`waitingSourceRunId`、`interactionId`、`interactionType`、`assistantMessageId`、`expiresAt`、`autoSelectAt`、`autoSelectTimeoutMs`、`autoActionAt`、`autoActionTimeoutMs`、`autoActionType`、`bindingProvider`、`bindingTargetType`、`bindingTargetId`、`bindingIntentCode`、`bindingIntentName`、`bindingRouteSource`、`bindingUpdatedAt`、`bindingAgentMode`。 | `latestSeq` 是服务端事实源最新位置，不是客户端已消费位置；等待态 stop 必须使用服务端返回的 `waitingSourceRunId`。Interaction 默认 24h 过期，且必须长于已配置的前端自动动作等待时间。 |
-| `POST /v1/chat/messages/{messageId}/feedback` | 用户对完整 assistant 消息点赞、点踩或切换反馈。 | Path：`messageId`；JSON body：`runId` 可选，`rating=LIKE/DISLIKE`，`reasonCode` 可选，`commentText` 可选，`metadata` 可选。 | `MessageFeedbackDto`：`feedbackId`、`messageId`、`runId`、`rating`、`status=ACTIVE`、`reasonCode`、`commentText`、`createdAt`、`updatedAt`。 | 同一用户同一消息最多一条当前反馈；重复提交表示修改当前反馈。 |
+| `POST /v1/chat/messages/{messageId}/feedback` | 用户对完整 assistant 消息点赞、点踩或切换反馈。 | Path：`messageId`；JSON body：`runId` 可选，`rating=LIKE/DISLIKE`，`reasonCode` 可选，`commentText` 可选，`metadata` 可选。 | `MessageFeedbackDto`：`feedbackId`、`messageId`、`runId`、`rating`、`status=ACTIVE`、`reasonCode`、`commentText`、`metadata`、`createdAt`、`updatedAt`。 | 同一用户同一消息最多一条当前反馈；重复提交表示修改当前反馈。 |
 | `DELETE /v1/chat/messages/{messageId}/feedback` | 用户取消已点赞或已点踩状态。 | Path：`messageId`；Query：`runId` 可选。 | `MessageFeedbackDto`：`status=CANCELLED`。 | 幂等；没有历史反馈时也返回取消成功。历史消息中的 `feedback` 会返回 `null`。 |
 
 同一会话同一时间只允许一个 active run。若发送时已有 `RUNNING/CANCELLING` run，
@@ -412,6 +412,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `sourceSessionId` / `sourceMessageId` | 分支快照来源 |
 | `editedFromMessageId` | 编辑历史 user 消息时的新版本来源 |
 | `regeneratedFromMessageId` | 重新生成 assistant 消息时的新版本来源 |
+| `metadataJson` | 消息扩展元数据原始 JSON 字符串，可为空；服务端不解析、不清洗，前端按需执行 `JSON.parse` |
 | `parts` | assistant 消息结构化过程信息，包括思考、工具、进度、agent 调用和 ANSWER 快照；user 消息通常为空数组 |
 | `attachments` | 消息关联附件展示快照；通常用于 user 消息回显上传文档，下载/预览仍需调用文档库接口 |
 | `feedback` | 当前用户对该 assistant 消息的有效反馈；user 消息或已取消反馈为 `null` |
@@ -603,6 +604,7 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 | `status` | `ACTIVE` 表示当前反馈有效；`CANCELLED` 表示已取消。 |
 | `reasonCode` | 可选结构化原因编码，例如 `INACCURATE`、`UNHELPFUL`。 |
 | `commentText` | 可选用户反馈文本；历史消息也会返回当前 ACTIVE 反馈的该字段。 |
+| `metadata` | 反馈扩展诊断对象；未提供时返回空对象 `{}`，无需前端再次解析。 |
 | `createdAt` / `updatedAt` | 创建和最后更新时间。 |
 
 ### `MessageFeedbackRequest`

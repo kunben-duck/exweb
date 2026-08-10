@@ -26,6 +26,7 @@ import java.util.List;
  * @param sourceMessageId 分支快照来源消息。
  * @param editedFromMessageId 编辑历史 user 消息的来源。
  * @param regeneratedFromMessageId 重新生成 assistant 消息的来源。
+ * @param metadataJson 消息扩展元数据原始 JSON 字符串，可为空。
  * @param parts assistant 消息结构化过程信息；user 消息通常为空。
  * @param attachments 消息关联附件展示快照；通常用于 user 消息回显上传文档。
  * @param feedback 当前用户对该 assistant 消息的有效反馈；user 消息或已取消反馈时为空。
@@ -50,6 +51,7 @@ public record ChatMessageDto(
         String sourceMessageId,
         String editedFromMessageId,
         String regeneratedFromMessageId,
+        String metadataJson,
         List<ChatMessagePartDto> parts,
         List<ChatMessageAttachmentDto> attachments,
         MessageFeedbackDto feedback,

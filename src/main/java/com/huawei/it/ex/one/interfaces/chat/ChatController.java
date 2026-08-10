@@ -394,6 +394,7 @@ public class ChatController {
                 feedback.status(),
                 feedback.reasonCode(),
                 feedback.commentText(),
+                feedback.metadata(),
                 feedback.createdAt(),
                 feedback.updatedAt()
         );

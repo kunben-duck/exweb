@@ -2874,6 +2874,10 @@ components:
         regeneratedFromMessageId:
           type: string
           nullable: true
+        metadataJson:
+          type: string
+          nullable: true
+          description: 消息扩展元数据原始 JSON 字符串；服务端不解析或清洗，前端按需 JSON.parse
         parts:
           type: array
           items:
@@ -3074,7 +3078,7 @@ components:
 
     MessageFeedback:
       type: object
-      required: [feedbackId, messageId, status, createdAt, updatedAt]
+      required: [feedbackId, messageId, status, metadata, createdAt, updatedAt]
       properties:
         feedbackId:
           type: string
@@ -3096,6 +3100,10 @@ components:
         commentText:
           type: string
           nullable: true
+        metadata:
+          type: object
+          description: 反馈扩展诊断信息；未提供时为空对象
+          additionalProperties: true
         createdAt:
           type: string
           format: date-time

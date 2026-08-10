@@ -26,6 +26,9 @@ import com.huawei.it.ex.one.interfaces.chat.dto.ChatEventDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSelectedIntentDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.CreateChatRunRequest;
+import com.huawei.it.ex.one.interfaces.chat.dto.MessageFeedbackDto;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -435,6 +438,38 @@ class ChatProtocolConvergenceTest {
                 .toList();
 
         assertThat(components).containsSubsequence("runId", "assistantSource", "originType");
+        assertThat(components).containsSubsequence(
+                "regeneratedFromMessageId", "metadataJson", "parts");
+    }
+
+    @Test
+    void historyMessageDtoKeepsRawMetadataJsonUnchanged() {
+        for (String metadataJson : Arrays.asList(null, "", "not-json", "{\"partial\":true}")) {
+            ChatMessageDto dto = messageDto(metadataJson);
+
+            assertThat(dto.metadataJson()).isSameAs(metadataJson);
+        }
+
+        var json = new ObjectMapper().findAndRegisterModules()
+                .valueToTree(messageDto("{\"partial\":true}"));
+        assertThat(json.path("metadataJson").asText()).isEqualTo("{\"partial\":true}");
+    }
+
+    @Test
+    void feedbackDtoExposesStructuredMetadataObject() {
+        Instant now = Instant.parse("2026-08-10T00:00:00Z");
+        MessageFeedbackDto populated = new MessageFeedbackDto(
+                "feedback1", "message1", "run1", "LIKE", "ACTIVE", null, null,
+                Map.of("clientTraceId", "trace1"), now, now);
+        MessageFeedbackDto empty = new MessageFeedbackDto(
+                "feedback2", "message2", null, null, "CANCELLED", null, null,
+                Map.of(), now, now);
+
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        assertThat(objectMapper.valueToTree(populated).path("metadata").path("clientTraceId").asText())
+                .isEqualTo("trace1");
+        assertThat(objectMapper.valueToTree(empty).path("metadata").isObject()).isTrue();
+        assertThat(objectMapper.valueToTree(empty).path("metadata").isEmpty()).isTrue();
     }
 
     @Test
@@ -454,6 +489,14 @@ class ChatProtocolConvergenceTest {
         assertThat(heartbeat.payload().encodedItem()).isNull();
         assertThat(done.payload().type()).isEqualTo("done");
         assertThat(done.payload().terminalEventType()).isEqualTo("run.completed");
+    }
+
+    private ChatMessageDto messageDto(String metadataJson) {
+        return new ChatMessageDto(
+                "message1", "session1", null, 1L, 0, 1,
+                "assistant", "answer", null, "run1", "relay", "NORMAL", false,
+                null, null, null, null, metadataJson,
+                List.of(), List.of(), null, null, Instant.parse("2026-08-10T00:00:00Z"));
     }
 
     @Test

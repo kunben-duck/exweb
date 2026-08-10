@@ -471,6 +471,7 @@ public class ChatSessionController {
                 message.sourceMessageId(),
                 message.editedFromMessageId(),
                 message.regeneratedFromMessageId(),
+                message.metadataJson(),
                 toPartDtos(message.parts()),
                 toAttachmentDtos(message.attachments()),
                 feedback == null ? null : toFeedbackDto(feedback),
@@ -607,6 +608,7 @@ public class ChatSessionController {
                 feedback.status(),
                 feedback.reasonCode(),
                 feedback.commentText(),
+                feedback.metadata(),
                 feedback.createdAt(),
                 feedback.updatedAt()
         );

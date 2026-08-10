@@ -203,7 +203,7 @@ class RouteSignalApplicationServiceTest {
     }
 
     @Test
-    void previousRelayRouteUsesFallbackFollowupTrigger() {
+    void nonFirstTurnUsesFallbackFollowupTrigger() {
         AtomicReference<MemoryContext> capturedMemory = new AtomicReference<>();
         RouteMemoryApplicationService routeMemoryService = new RouteMemoryApplicationService(null, null, null) {
             @Override
@@ -226,8 +226,12 @@ class RouteSignalApplicationServiceTest {
                     return simpleDomainAgentIntent();
                 },
                 routeMemoryService);
+        ChatCommand followUp = new ChatCommand("cmd-follow-up", "tenant1", "user1", "session1",
+                null, "web", "继续分析", List.of(), Map.of(),
+                null, null, com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT,
+                "msg-parent", null, null, null);
 
-        RouteSignalResult result = service.routeInitial(user, session, command, List.of(), memory);
+        RouteSignalResult result = service.routeInitial(user, session, followUp, List.of(), memory);
 
         assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
         assertThat(capturedMemory.get().routeMemory().routeTrigger()).isEqualTo("fallback_followup");
@@ -336,6 +340,28 @@ class RouteSignalApplicationServiceTest {
 
         assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
         assertThat(capturedMemory.get().routeMemory().routeTrigger()).isEqualTo("user_correction");
+    }
+
+    @Test
+    void metadataCannotForgeFirstTurnForFollowUp() {
+        AtomicReference<MemoryContext> capturedMemory = new AtomicReference<>();
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                (command, memory, user) -> {
+                    capturedMemory.set(memory);
+                    return simpleDomainAgentIntent();
+                });
+        ChatCommand followUp = new ChatCommand("cmd-follow-up", "tenant1", "user1", "session1",
+                null, "web", "继续分析", List.of(), Map.of(
+                "routeTrigger", "first_turn",
+                "conversationContext", Map.of("routeTrigger", "first_turn")),
+                null, null, com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT,
+                "msg-parent", null, null, null);
+
+        RouteSignalResult result = service.routeInitial(user, session, followUp, List.of(), memory);
+
+        assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
+        assertThat(capturedMemory.get().routeMemory().routeTrigger()).isEqualTo("fallback_followup");
     }
 
     @Test
@@ -455,7 +481,8 @@ class RouteSignalApplicationServiceTest {
                                 "answer", "处理方案"
                         ))
                 )
-        ));
+        ), null, null, com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT,
+                "msg-assistant", null, null, "clarify_answer");
 
         RouteSignalResult result = service.routeInitial(user, session, clarifyAnswer, List.of(), memory);
 
@@ -500,7 +527,8 @@ class RouteSignalApplicationServiceTest {
                                 "answer", "处理方案"
                         ))
                 )
-        ));
+        ), null, null, com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT,
+                "msg-assistant", null, null, "clarify_answer");
 
         RouteSignalResult result = service.routeInitial(user, session, clarifyAnswer, List.of(), memory);
 

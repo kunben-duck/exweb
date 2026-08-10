@@ -19,6 +19,7 @@ import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
+import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
@@ -158,7 +159,7 @@ public class RouteSignalApplicationService {
         MemoryContext memory = request.memory();
         if (properties.intentEnabled()) {
             ChatCommand intentCommand = commandWithMessage(command, request.intentQuery());
-            String routeTrigger = routeTrigger(user, session, intentCommand);
+            String routeTrigger = routeTrigger(intentCommand);
             Map<String, Object> lastRejectReason = lastIntentRejectReason(intentCommand);
             IntentRouteRequest routeRequest = new IntentRouteRequest(
                     user, session, intentCommand, memory, routeTrigger, lastRejectReason, runId);
@@ -471,22 +472,22 @@ public class RouteSignalApplicationService {
                 context == null ? null : context.latestRouteSourceRunId());
     }
 
-    private String routeTrigger(UserContext user, ChatSession session, ChatCommand command) {
-        Map<String, Object> metadata = command == null || command.metadata() == null ? Map.of() : command.metadata();
-        String trigger = firstText(command == null ? null : command.routeTrigger(),
-                metadata.get("routeTrigger"),
-                map(metadata.get("conversationContext")).get("routeTrigger"));
+    private String routeTrigger(ChatCommand command) {
+        String trigger = command == null ? null : command.routeTrigger();
         if ("intent_clarification".equals(trigger)) {
             return RouteMemoryApplicationService.TRIGGER_CLARIFY_ANSWER;
         }
-        if (trigger != null) {
+        if (RouteMemoryApplicationService.TRIGGER_DOMAIN_REJECT.equals(trigger)
+                || RouteMemoryApplicationService.TRIGGER_USER_CORRECTION.equals(trigger)
+                || RouteMemoryApplicationService.TRIGGER_CLARIFY_ANSWER.equals(trigger)
+                || RouteMemoryApplicationService.TRIGGER_FALLBACK_FOLLOWUP.equals(trigger)) {
             return trigger;
         }
-        if (routeMemoryService != null && session != null
-                && routeMemoryService.latestRouteIsRelayFallback(user, session.id())) {
-            return RouteMemoryApplicationService.TRIGGER_FALLBACK_FOLLOWUP;
+        if (command != null && command.runMode() == ChatRunMode.NEXT
+                && (command.parentMessageId() == null || command.parentMessageId().isBlank())) {
+            return RouteMemoryApplicationService.TRIGGER_FIRST_TURN;
         }
-        return RouteMemoryApplicationService.TRIGGER_FIRST_TURN;
+        return RouteMemoryApplicationService.TRIGGER_FALLBACK_FOLLOWUP;
     }
 
     private Map<String, Object> lastIntentRejectReason(ChatCommand command) {

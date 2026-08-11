@@ -189,7 +189,7 @@ public class ChatShareDeliveryApplicationService {
         if (title == null) {
             title = blankToNull(shareTitle);
         }
-        return title == null ? "问答分享" : truncate(singleLine(title), 120);
+        return ChatShareTitleNormalizer.normalize(title, "问答分享");
     }
 
     private String chooseContent(String requestContent, ChatShare share) {

@@ -35,7 +35,6 @@ import java.util.List;
 @Service
 public class ChatShareApplicationService {
     private static final String STATUS_DELETED = "DELETED";
-    private static final int MAX_TITLE_LENGTH = 120;
 
     private final ChatShareRepository shareRepository;
     private final ChatMessageRepository messageRepository;
@@ -222,10 +221,6 @@ public class ChatShareApplicationService {
 
     private String titleOrDefault(String title, String question) {
         String candidate = title == null || title.isBlank() ? question : title.trim();
-        if (candidate == null || candidate.isBlank()) {
-            return "问答分享";
-        }
-        String singleLine = candidate.replaceAll("\\s+", " ").trim();
-        return singleLine.length() <= MAX_TITLE_LENGTH ? singleLine : singleLine.substring(0, MAX_TITLE_LENGTH);
+        return ChatShareTitleNormalizer.normalize(candidate, "问答分享");
     }
 }

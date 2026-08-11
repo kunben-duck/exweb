@@ -3125,6 +3125,9 @@ components:
         title:
           type: string
           nullable: true
+          description: |
+            分享标题；为空时使用父 user 问题生成。前端应限制为最多120个Unicode字符且UTF-8不超过
+            256字节；服务端会按相同边界安全截断，响应返回最终持久化标题。
         expiresAt:
           type: string
           format: date-time
@@ -3151,6 +3154,9 @@ components:
         title:
           type: string
           nullable: true
+          description: |
+            分享标题；为空时按所选消息生成。前端应限制为最多120个Unicode字符且UTF-8不超过
+            256字节；服务端会按相同边界安全截断，响应返回最终持久化标题。
         expiresAt:
           type: string
           format: date-time
@@ -3163,6 +3169,9 @@ components:
         title:
           type: string
           nullable: true
+          description: |
+            分享及发送标题。前端应限制为最多120个Unicode字符且UTF-8不超过256字节；服务端会按
+            相同边界安全截断，响应返回最终持久化标题。
         expiresAt:
           type: string
           format: date-time
@@ -3209,6 +3218,9 @@ components:
         title:
           type: string
           nullable: true
+          description: |
+            分享卡片标题；为空时使用分享标题。前端应限制为最多120个Unicode字符且UTF-8不超过
+            256字节；服务端会按相同边界安全截断。
         content:
           type: string
           nullable: true

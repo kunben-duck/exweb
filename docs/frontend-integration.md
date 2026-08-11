@@ -1971,8 +1971,24 @@ curl -X POST http://localhost:8080/v1/chat/messages/msg_assistant_001/share \
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `messageId` | 是 | Path 参数，必须是当前用户可访问的 `assistant` 消息。 |
-| `title` | 否 | 分享标题；为空时服务端使用父 user 问题生成。 |
+| `title` | 否 | 分享标题；为空时服务端使用父 user 问题生成。最多120个Unicode字符且UTF-8不超过256字节，服务端超限时安全截断。 |
 | `expiresAt` | 否 | 分享过期时间；为空表示不过期，传入时必须晚于当前时间。 |
+
+前端提交前应同时校验字符数和UTF-8字节数，不能只使用输入框的`maxlength`：
+
+```js
+function normalizeShareTitle(value) {
+  return String(value ?? "").replace(/\s+/gu, " ").trim();
+}
+
+function isShareTitleWithinLimit(value) {
+  const title = normalizeShareTitle(value);
+  return Array.from(title).length <= 120
+    && new TextEncoder().encode(title).length <= 256;
+}
+```
+
+后端仍执行相同边界的安全截断。创建成功后，前端应使用响应中的`title`作为最终展示值。
 
 创建响应：
 
@@ -2087,7 +2103,7 @@ curl -X POST http://localhost:8080/v1/chat/shares \
 | --- | --- | --- |
 | `sessionId` | 是 | 所选消息共同所属的会话。 |
 | `messageIds` | 是 | 原始数组最多50项；服务端 trim、过滤空项并有序去重，结果至少一项。 |
-| `title` | 否 | 默认取第一条非空 user 正文；没有 user 时取第一条非空选中消息。 |
+| `title` | 否 | 默认取第一条非空 user 正文；没有 user 时取第一条非空选中消息。沿用120个Unicode字符及256个UTF-8字节限制。 |
 | `expiresAt` | 否 | 为空表示不过期；存在时必须晚于当前时间。 |
 
 服务端会校验所有消息属于当前用户、指定会话及同一条 root-to-leaf 分支，然后按真实消息路径排序。
@@ -2217,7 +2233,7 @@ curl -X POST http://localhost:8080/v1/chat/shares/share_xxx/deliveries \
 | `provider` | 是 | 发送 provider 编码，首版支持 `welink`；未知或未启用 provider 返回明确错误。 |
 | `targetAccounts` | 否 | 被分享人账号列表，服务端会去空、去重，并转为 WeLink `targetAccount="u001,u002"`。 |
 | `groupIds` | 否 | 被分享群组 ID 列表，服务端会去空、去重，并转为 WeLink `groupID="g001"`。 |
-| `title` | 否 | 分享卡片标题；为空时使用 `share.title`。 |
+| `title` | 否 | 分享卡片标题；为空时使用 `share.title`。沿用120个Unicode字符及256个UTF-8字节限制，服务端超限时安全截断。 |
 | `content` | 否 | 分享卡片正文；为空时，单轮分享依次使用 answer、question 正文，多消息分享优先使用首条非空 assistant 正文，否则使用首条非空选中消息；默认最多 200 字符。 |
 | `language` | 否 | 前端透传给 provider。 |
 

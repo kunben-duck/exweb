@@ -25,6 +25,7 @@ import com.huawei.it.ex.one.infrastructure.share.DefaultChatShareAccessPolicy;
 
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -91,6 +92,20 @@ class ChatShareDeliveryApplicationServiceTest {
 
         assertThat(delivery.content()).isEqualTo("12345");
         assertThat(provider.lastRequest.content()).isEqualTo("12345");
+    }
+
+    @Test
+    void safelyTruncatesDeliveryTitleToUtf8ColumnLimit() {
+        Fixture fixture = fixture(providerResult(true));
+
+        ChatShareDelivery delivery = fixture.service.deliver(user(), new CreateChatShareDeliveryCommand(
+                "share1", "welink", List.of("a"), List.of(), "中".repeat(86), null,
+                null, RuntimeForwardHeaders.empty()));
+        CapturingProvider provider = (CapturingProvider) fixture.provider;
+
+        assertThat(delivery.title()).isEqualTo("中".repeat(85));
+        assertThat(delivery.title().getBytes(StandardCharsets.UTF_8)).hasSize(255);
+        assertThat(provider.lastRequest.title()).isEqualTo(delivery.title());
     }
 
     @Test

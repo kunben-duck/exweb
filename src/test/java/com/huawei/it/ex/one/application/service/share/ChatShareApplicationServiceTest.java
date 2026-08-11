@@ -27,6 +27,7 @@ import com.huawei.it.ex.one.infrastructure.share.DefaultChatShareAccessPolicy;
 
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -69,6 +70,23 @@ class ChatShareApplicationServiceTest {
                 new CreateChatShareCommand("msg_assistant", null, Instant.now().minusSeconds(1))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("expiresAt");
+    }
+
+    @Test
+    void createShareSafelyTruncatesExplicitAndDefaultChineseTitles() {
+        Fixture explicitFixture = fixture(new DefaultChatShareAccessPolicy());
+        ChatShare explicitShare = explicitFixture.service.create(user(), new CreateChatShareCommand(
+                "msg_assistant", "中".repeat(85) + "a中", null));
+
+        assertThat(explicitShare.title()).isEqualTo("中".repeat(85) + "a");
+        assertThat(explicitShare.title().getBytes(StandardCharsets.UTF_8)).hasSize(256);
+
+        Fixture defaultFixture = fixture(new DefaultChatShareAccessPolicy(), "中".repeat(86));
+        ChatShare defaultShare = defaultFixture.service.create(user(),
+                new CreateChatShareCommand("msg_assistant", null, null));
+
+        assertThat(defaultShare.title()).isEqualTo("中".repeat(85));
+        assertThat(defaultShare.title().getBytes(StandardCharsets.UTF_8)).hasSize(255);
     }
 
     @Test
@@ -134,6 +152,10 @@ class ChatShareApplicationServiceTest {
     }
 
     private Fixture fixture(ChatShareAccessPolicy policy) {
+        return fixture(policy, "报销流程是什么");
+    }
+
+    private Fixture fixture(ChatShareAccessPolicy policy, String question) {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         InMemoryShareRepository shares = new InMemoryShareRepository();
@@ -141,7 +163,7 @@ class ChatShareApplicationServiceTest {
         sessions.save(new ChatSession("session1", "tenant1", "user1", "报销", "ACTIVE", "web",
                 "msg_assistant", "session1", null, null, 2L, null, now, now));
         messages.save(new ChatMessage("msg_user", "tenant1", "user1", "session1", null, 1L,
-                0, 1, "user", "报销流程是什么", null, "run1", "NORMAL", false,
+                0, 1, "user", question, null, "run1", "NORMAL", false,
                 null, null, null, null, null, now));
         messages.save(new ChatMessage("msg_assistant", "tenant1", "user1", "session1", "msg_user",
                 2L, 1, 1, "assistant", "请先提交发票和审批单", null, "run1", "NORMAL",

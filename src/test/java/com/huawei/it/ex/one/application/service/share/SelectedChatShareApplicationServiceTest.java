@@ -28,6 +28,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -97,6 +98,17 @@ class SelectedChatShareApplicationServiceTest {
                 .containsExactly("doc1");
         assertThat(fixture.messages.attachmentBatchCalls()).isEqualTo(1);
         assertThat(fixture.messages.partBatchCalls()).isEqualTo(1);
+    }
+
+    @Test
+    void safelyTruncatesSelectedShareTitleToUtf8ColumnLimit() {
+        Fixture fixture = fixture();
+
+        ChatShare share = fixture.service.create(user(), new CreateSelectedChatShareCommand(
+                "session1", List.of("assistant2"), "中".repeat(86), null));
+
+        assertThat(share.title()).isEqualTo("中".repeat(85));
+        assertThat(share.title().getBytes(StandardCharsets.UTF_8)).hasSize(255);
     }
 
     @Test

@@ -44,7 +44,6 @@ public class SelectedChatShareApplicationService {
     private static final String STATUS_DELETED = "DELETED";
     private static final String ROLE_USER = "user";
     private static final String ROLE_ASSISTANT = "assistant";
-    private static final int MAX_TITLE_LENGTH = 120;
 
     private final ChatShareRepository shareRepository;
     private final ChatMessageRepository messageRepository;
@@ -300,10 +299,7 @@ public class SelectedChatShareApplicationService {
                     .findFirst()
                     .orElse("消息分享");
         }
-        String singleLine = candidate.replaceAll("\\s+", " ").trim();
-        return singleLine.length() <= MAX_TITLE_LENGTH
-                ? singleLine
-                : singleLine.substring(0, MAX_TITLE_LENGTH);
+        return ChatShareTitleNormalizer.normalize(candidate, "消息分享");
     }
 
     private String blankToNull(String value) {

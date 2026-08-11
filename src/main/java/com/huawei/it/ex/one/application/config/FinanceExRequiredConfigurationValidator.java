@@ -3,11 +3,13 @@ package com.huawei.it.ex.one.application.config;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+import org.springframework.boot.convert.DurationStyle;
 import org.springframework.context.EnvironmentAware;
 import org.springframework.core.Ordered;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -121,6 +123,10 @@ public class FinanceExRequiredConfigurationValidator
     }
 
     private void validateOptionalIntegrations(List<String> missing) {
+        requirePositiveDuration(missing, "financeex.domain-agent.stream-idle-timeout",
+                "FINANCEEX_DOMAIN_AGENT_STREAM_IDLE_TIMEOUT", "300s");
+        requirePositiveDuration(missing, "financeex.domain-agent.stream-total-timeout",
+                "FINANCEEX_DOMAIN_AGENT_STREAM_TOTAL_TIMEOUT", "15m");
         if (enabled("financeex.intent.enabled")) {
             requireText(missing, "financeex.intent.base-url", "FINANCEEX_INTENT_BASE_URL");
             requireText(missing, "financeex.intent.access-name", "FINANCEEX_INTENT_ACCESS_NAME");
@@ -145,6 +151,21 @@ public class FinanceExRequiredConfigurationValidator
     private void requireText(List<String> missing, String property, String envName) {
         if (text(property).isBlank()) {
             missing.add(property + " / " + envName + " 不能为空");
+        }
+    }
+
+    private void requirePositiveDuration(List<String> missing,
+                                         String property,
+                                         String envName,
+                                         String fallback) {
+        String configured = defaultText(property, fallback);
+        try {
+            Duration duration = DurationStyle.detectAndParse(configured);
+            if (duration.isZero() || duration.isNegative()) {
+                missing.add(property + " / " + envName + " 必须为正数，当前值: " + configured);
+            }
+        } catch (RuntimeException ex) {
+            missing.add(property + " / " + envName + " 不是合法Duration，当前值: " + configured);
         }
     }
 

@@ -79,6 +79,45 @@ class FinanceExRequiredConfigurationValidatorTest {
     }
 
     @Test
+    void enabledDomainAgentRejectsNonPositiveOrInvalidStreamTimeouts() {
+        contextWith(
+                "financeex.domain-agent.enabled=true",
+                "financeex.domain-agent.base-url=https://domain-agent.example.com",
+                "financeex.domain-agent.stream-idle-timeout=0s",
+                "financeex.domain-agent.stream-total-timeout=not-a-duration"
+        ).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(context.getStartupFailure())
+                    .hasMessageContaining("financeex.domain-agent.stream-idle-timeout")
+                    .hasMessageContaining("必须为正数")
+                    .hasMessageContaining("financeex.domain-agent.stream-total-timeout")
+                    .hasMessageContaining("不是合法Duration");
+        });
+    }
+
+    @Test
+    void enabledDomainAgentAcceptsPositiveStreamTimeouts() {
+        contextWith(
+                "financeex.domain-agent.enabled=true",
+                "financeex.domain-agent.base-url=https://domain-agent.example.com",
+                "financeex.domain-agent.stream-idle-timeout=300s",
+                "financeex.domain-agent.stream-total-timeout=15m"
+        ).run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @Test
+    void invalidDomainAgentStreamTimeoutFailsEvenWhileIntegrationIsDisabled() {
+        contextWith(
+                "financeex.domain-agent.enabled=false",
+                "financeex.domain-agent.stream-idle-timeout=-1s"
+        ).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(context.getStartupFailure())
+                    .hasMessageContaining("financeex.domain-agent.stream-idle-timeout");
+        });
+    }
+
+    @Test
     void huaweiS3StorageRequiresObjectStorageConfiguration() {
         contextWith(
                 "financeex.storage.provider=huawei-s3"

@@ -6,10 +6,18 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.MapPropertySource;
+import org.springframework.core.env.StandardEnvironment;
+import org.springframework.core.io.FileSystemResource;
 
+import java.io.IOException;
 import java.time.Duration;
+import java.util.Map;
 
 class DomainAgentPropertiesTest {
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
@@ -18,8 +26,14 @@ class DomainAgentPropertiesTest {
 
     @Test
     void keepsRefusalAutoSwitchDisabledByDefault() {
-        contextRunner.run(context -> assertThat(context.getBean(DomainAgentProperties.class)
-                .isRefusalAutoSwitchEnabled()).isFalse());
+        contextRunner.run(context -> {
+            DomainAgentProperties properties = context.getBean(DomainAgentProperties.class);
+
+            assertThat(properties.isRefusalAutoSwitchEnabled()).isFalse();
+            assertThat(properties.getTimeout()).isEqualTo(Duration.ofSeconds(120));
+            assertThat(properties.getStreamIdleTimeout()).isEqualTo(Duration.ofSeconds(300));
+            assertThat(properties.getStreamTotalTimeout()).isEqualTo(Duration.ofMinutes(15));
+        });
     }
 
     @Test
@@ -41,6 +55,38 @@ class DomainAgentPropertiesTest {
                     assertThat(properties.normalizedBindingCompensationRetryBackoff())
                             .isEqualTo(Duration.ofSeconds(1));
                 });
+    }
+
+    @Test
+    void applicationYamlUsesLegacyTimeoutAsFallbackForBothStreamTimeouts() throws IOException {
+        DomainAgentProperties properties = bindApplicationYaml(Map.of(
+                "FINANCEEX_DOMAIN_AGENT_TIMEOUT", "180s"));
+
+        assertThat(properties.getTimeout()).isEqualTo(Duration.ofSeconds(180));
+        assertThat(properties.getStreamIdleTimeout()).isEqualTo(Duration.ofSeconds(180));
+        assertThat(properties.getStreamTotalTimeout()).isEqualTo(Duration.ofSeconds(180));
+    }
+
+    @Test
+    void applicationYamlPrefersNewStreamTimeoutOverLegacyTimeout() throws IOException {
+        DomainAgentProperties properties = bindApplicationYaml(Map.of(
+                "FINANCEEX_DOMAIN_AGENT_TIMEOUT", "180s",
+                "FINANCEEX_DOMAIN_AGENT_STREAM_IDLE_TIMEOUT", "300s"));
+
+        assertThat(properties.getTimeout()).isEqualTo(Duration.ofSeconds(180));
+        assertThat(properties.getStreamIdleTimeout()).isEqualTo(Duration.ofSeconds(300));
+        assertThat(properties.getStreamTotalTimeout()).isEqualTo(Duration.ofSeconds(180));
+    }
+
+    private DomainAgentProperties bindApplicationYaml(Map<String, Object> environmentValues) throws IOException {
+        StandardEnvironment environment = new StandardEnvironment();
+        environment.getPropertySources().addFirst(new MapPropertySource("test-environment", environmentValues));
+        new YamlPropertySourceLoader()
+                .load("application", new FileSystemResource("src/main/resources/application.yml"))
+                .forEach(environment.getPropertySources()::addLast);
+        return Binder.get(environment)
+                .bind("financeex.domain-agent", Bindable.of(DomainAgentProperties.class))
+                .orElseThrow(() -> new IllegalStateException("financeex.domain-agent was not bound"));
     }
 
     @Configuration(proxyBeanMethods = false)

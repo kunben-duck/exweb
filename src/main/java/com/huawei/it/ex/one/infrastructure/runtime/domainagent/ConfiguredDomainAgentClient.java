@@ -78,9 +78,10 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
                      * 因此这里读取原始 DataBuffer，再交给 DomainAgentResponseNormalizer 兼容 message/data/plain JSON。
                      */
                     .bodyToFlux(DataBuffer.class)
+                    .timeout(properties.getStreamIdleTimeout(), Flux.error(domainAgentTimeout(
+                            "IDLE", properties.getStreamIdleTimeout())))
                     .map(utf8Decoder::decode)
                     .concatWith(Mono.fromSupplier(utf8Decoder::finish))
-                    .timeout(properties.getTimeout())
                     .flatMapIterable(chunk -> responseNormalizer.normalize(
                             request.runId(), request.sessionId(), chunk, streamState))
                     .concatWith(Flux.defer(() -> Flux.fromIterable(
@@ -91,7 +92,7 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
                      */
                     .takeUntil(event -> "message.completed".equals(event.type()));
         });
-        return enforceDomainAgentDeadline(source)
+        return enforceDomainAgentTotalDeadline(source)
                 .doOnError(ex -> log.warn(SystemErrorLogEntry.builder(classifyDomainAgentFailure(ex),
                                 "DomainAgent response stream failed")
                         .runId(request.runId())
@@ -171,8 +172,8 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
         return baseUrl + nextPath;
     }
 
-    private Flux<ChatEvent> enforceDomainAgentDeadline(Flux<ChatEvent> source) {
-        Duration timeout = properties.getTimeout();
+    private Flux<ChatEvent> enforceDomainAgentTotalDeadline(Flux<ChatEvent> source) {
+        Duration timeout = properties.getStreamTotalTimeout();
         if (timeout == null || timeout.isZero() || timeout.isNegative()) {
             return source;
         }
@@ -180,7 +181,7 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
             AtomicBoolean terminated = new AtomicBoolean(false);
             var timer = Schedulers.parallel().schedule(() -> {
                 if (terminated.compareAndSet(false, true) && !sink.isCancelled()) {
-                    sink.error(new TimeoutException("DomainAgent stream timed out after " + timeout));
+                    sink.error(domainAgentTimeout("TOTAL", timeout));
                 }
             }, Math.max(1L, timeout.toMillis()), TimeUnit.MILLISECONDS);
             var upstream = source.subscribe(
@@ -207,6 +208,10 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
                 upstream.dispose();
             });
         });
+    }
+
+    private TimeoutException domainAgentTimeout(String type, Duration timeout) {
+        return new TimeoutException("DomainAgent stream " + type + " timeout after " + timeout);
     }
 
     private SystemErrorCode classifyDomainAgentFailure(Throwable failure) {

@@ -24,8 +24,12 @@ public class DomainAgentProperties {
     private String chatPath = "/api/chat";
     /** DomainAgent stop 接口路径；为空表示不支持下游取消。 */
     private String stopPath = "";
-    /** DomainAgent 调用超时时间。 */
+    /** DomainAgent stop 请求超时时间；保留旧配置兼容。 */
     private Duration timeout = Duration.ofSeconds(120);
+    /** DomainAgent 首个原始响应 chunk 及相邻 chunk 之间的空闲超时。 */
+    private Duration streamIdleTimeout = Duration.ofSeconds(300);
+    /** DomainAgent 查询从 HTTP 订阅开始计算的绝对总超时。 */
+    private Duration streamTotalTimeout = Duration.ofMinutes(15);
     /** 单次 DomainAgent 调用最大附件数。 */
     private int maxAttachments = 10;
     /** 单个完整或未完成 DomainAgent 流式 frame 的最大字节数，防止下游异常大 JSON 导致 OOM。 */
@@ -62,6 +66,10 @@ public class DomainAgentProperties {
     public void setStopPath(String stopPath) { this.stopPath = stopPath; }
     public Duration getTimeout() { return timeout; }
     public void setTimeout(Duration timeout) { this.timeout = timeout; }
+    public Duration getStreamIdleTimeout() { return streamIdleTimeout; }
+    public void setStreamIdleTimeout(Duration streamIdleTimeout) { this.streamIdleTimeout = streamIdleTimeout; }
+    public Duration getStreamTotalTimeout() { return streamTotalTimeout; }
+    public void setStreamTotalTimeout(Duration streamTotalTimeout) { this.streamTotalTimeout = streamTotalTimeout; }
     public int getMaxAttachments() { return maxAttachments; }
     public void setMaxAttachments(int maxAttachments) { this.maxAttachments = maxAttachments; }
     public int getMaxPendingFrameBytes() { return maxPendingFrameBytes; }

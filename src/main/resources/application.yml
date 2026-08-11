@@ -405,7 +405,12 @@ financeex:
     referer: ${FINANCEEX_DOMAIN_AGENT_REFERER:${FINANCEEX_DOMAIN_AGENT_BASE_URL:}}
     chat-path: ${FINANCEEX_DOMAIN_AGENT_CHAT_PATH:/api/chat}
     stop-path: ${FINANCEEX_DOMAIN_AGENT_STOP_PATH:}
+    # 兼容旧部署并继续控制 DomainAgent stop 请求；查询流使用下面两个独立超时。
     timeout: ${FINANCEEX_DOMAIN_AGENT_TIMEOUT:120s}
+    # 首个原始响应 chunk 及相邻 chunk 之间允许的最大无数据时间。
+    stream-idle-timeout: ${FINANCEEX_DOMAIN_AGENT_STREAM_IDLE_TIMEOUT:${FINANCEEX_DOMAIN_AGENT_TIMEOUT:300s}}
+    # 单次 DomainAgent 查询从 HTTP 订阅开始计算的绝对总时限。
+    stream-total-timeout: ${FINANCEEX_DOMAIN_AGENT_STREAM_TOTAL_TIMEOUT:${FINANCEEX_DOMAIN_AGENT_TIMEOUT:15m}}
     max-attachments: ${FINANCEEX_DOMAIN_AGENT_MAX_ATTACHMENTS:10}
     # 单个 DomainAgent frame 的硬上限，默认 256KB；完整或未完成 frame 超限都会失败，禁止输出残缺业务事件。
     max-pending-frame-bytes: ${FINANCEEX_DOMAIN_AGENT_MAX_PENDING_FRAME_BYTES:262144}

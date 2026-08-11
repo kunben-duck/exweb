@@ -54,6 +54,10 @@ financeex:
     base-url: http://localhost:9300
     # 可省略；为空时自动使用 base-url。
     referer: http://localhost:9300
+    # stop沿用旧timeout；查询流分别限制原始chunk空闲时间和整轮绝对时长。
+    timeout: 120s
+    stream-idle-timeout: 300s
+    stream-total-timeout: 15m
     # 默认保留手动 DomainAgent 拒答后的用户切换确认。
     refusal-auto-switch-enabled: false
   use-case-library:

@@ -24,9 +24,12 @@ import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 class ConfiguredDomainAgentClientTest {
@@ -244,6 +247,130 @@ class ConfiguredDomainAgentClientTest {
                         .isInstanceOf(DomainAgentProtocolException.class)
                         .hasMessageContaining("DOMAIN_AGENT_FRAME_TOO_LARGE"))
                 .verify();
+    }
+
+    @Test
+    void queryAppliesIdleTimeoutBeforeFirstRawChunk() {
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_EVENT_STREAM_VALUE)
+                        .body(Flux.never())
+                        .build()));
+        DomainAgentProperties properties = properties();
+        properties.setStreamIdleTimeout(Duration.ofSeconds(2));
+        properties.setStreamTotalTimeout(Duration.ofSeconds(10));
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
+                builder,
+                properties,
+                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentResponseNormalizer(objectMapper, properties));
+
+        StepVerifier.withVirtualTime(() -> client.query(queryRequest(RuntimeForwardHeaders.empty())))
+                .expectSubscription()
+                .thenAwait(Duration.ofSeconds(2))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(TimeoutException.class)
+                        .hasMessageContaining("stream IDLE timeout"))
+                .verify();
+    }
+
+    @Test
+    void queryAppliesIdleTimeoutBetweenRawChunks() {
+        DefaultDataBufferFactory buffers = new DefaultDataBufferFactory();
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_EVENT_STREAM_VALUE)
+                        .body(Flux.concat(
+                                Flux.just(buffers.wrap(
+                                        "message: {\"content\":\"first\"}\n\n".getBytes(StandardCharsets.UTF_8))),
+                                Mono.delay(Duration.ofSeconds(3)).map(ignored -> buffers.wrap(
+                                        "message: {\"endFlag\":true}\n\n".getBytes(StandardCharsets.UTF_8)))))
+                        .build()));
+        DomainAgentProperties properties = properties();
+        properties.setStreamIdleTimeout(Duration.ofSeconds(2));
+        properties.setStreamTotalTimeout(Duration.ofSeconds(10));
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
+                builder,
+                properties,
+                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentResponseNormalizer(objectMapper, properties));
+
+        StepVerifier.withVirtualTime(() -> client.query(queryRequest(RuntimeForwardHeaders.empty())))
+                .expectSubscription()
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "first"))
+                .thenAwait(Duration.ofSeconds(2))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(TimeoutException.class)
+                        .hasMessageContaining("stream IDLE timeout"))
+                .verify();
+    }
+
+    @Test
+    void queryAppliesAbsoluteTotalTimeoutWhileChunksRemainActive() {
+        DefaultDataBufferFactory buffers = new DefaultDataBufferFactory();
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_EVENT_STREAM_VALUE)
+                        .body(Flux.interval(Duration.ZERO, Duration.ofSeconds(1))
+                                .map(index -> buffers.wrap(("message: {\"content\":\"" + index
+                                        + "\"}\n\n").getBytes(StandardCharsets.UTF_8))))
+                        .build()));
+        DomainAgentProperties properties = properties();
+        properties.setStreamIdleTimeout(Duration.ofSeconds(2));
+        properties.setStreamTotalTimeout(Duration.ofMillis(3500));
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
+                builder,
+                properties,
+                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentResponseNormalizer(objectMapper, properties));
+
+        StepVerifier.withVirtualTime(() -> client.query(queryRequest(RuntimeForwardHeaders.empty())))
+                .expectSubscription()
+                .expectNextCount(1)
+                .thenAwait(Duration.ofSeconds(1))
+                .expectNextCount(1)
+                .thenAwait(Duration.ofSeconds(1))
+                .expectNextCount(1)
+                .thenAwait(Duration.ofSeconds(1))
+                .expectNextCount(1)
+                .thenAwait(Duration.ofMillis(500))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(TimeoutException.class)
+                        .hasMessageContaining("stream TOTAL timeout"))
+                .verify();
+    }
+
+    @Test
+    void cancelContinuesToUseLegacyTimeout() {
+        AtomicBoolean cancelled = new AtomicBoolean(false);
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> Mono.<ClientResponse>never()
+                        .doOnCancel(() -> cancelled.set(true)));
+        DomainAgentProperties properties = properties();
+        properties.setStopPath("/api/stop");
+        properties.setTimeout(Duration.ofSeconds(2));
+        properties.setStreamIdleTimeout(Duration.ofMillis(10));
+        properties.setStreamTotalTimeout(Duration.ofMillis(10));
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
+                builder,
+                properties,
+                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentResponseNormalizer(objectMapper, properties));
+
+        StepVerifier.withVirtualTime(() -> client.cancel(new DomainAgentCancelRequest(
+                        user(),
+                        "session1",
+                        "run1",
+                        "skill-tax",
+                        "USER_STOP",
+                        Map.of(),
+                        RuntimeForwardHeaders.empty())))
+                .expectSubscription()
+                .expectNoEvent(Duration.ofSeconds(1))
+                .thenAwait(Duration.ofSeconds(1))
+                .verifyComplete();
+
+        assertThat(cancelled).isTrue();
     }
 
     private DomainAgentRequest queryRequest(RuntimeForwardHeaders forwardHeaders) {

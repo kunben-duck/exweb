@@ -143,6 +143,88 @@ class AssistantAssemblyTest {
     }
 
     @Test
+    void mergesConsecutiveStandaloneContentAgentCardsIntoOneHistoricalPart() {
+        AssistantAssembly assembly = new AssistantAssembly();
+        assembly.observe(RuntimeEvent.card("run1", "session1", Map.of(
+                "source", "domain-agent",
+                "sourceType", "cardUrl",
+                "cardType", "url",
+                "cardSources", List.of("cardUrl"),
+                "cardUrl", "https://card"
+        )));
+        assembly.observe(contentAgentCard("<think>"));
+        assembly.observe(contentAgentCard(""));
+        assembly.observe(contentAgentCard("简单的问候。</think>"));
+
+        assertThat(assembly.finalContent()).isEmpty();
+        assertThat(assembly.parts()).hasSize(2);
+        assertThat(assembly.parts().get(0).sourceType()).isEqualTo("cardUrl");
+        assertThat(assembly.parts().get(0).contentText()).isEqualTo("https://card");
+        assertThat(assembly.parts().get(1)).satisfies(part -> {
+            assertThat(part.partType()).isEqualTo("CARD");
+            assertThat(part.sourceType()).isEqualTo("contentAgent");
+            assertThat(part.contentText()).isNull();
+            assertThat(part.payload())
+                    .containsEntry("cardType", "contentAgent")
+                    .containsEntry("cardSources", List.of("contentAgent"))
+                    .containsEntry("contentAgent", "<think>简单的问候。</think>")
+                    .containsKey("serverTimestampMs");
+        });
+    }
+
+    @Test
+    void startsANewContentAgentPartAfterAnotherStructuredDomainAgentCard() {
+        AssistantAssembly assembly = new AssistantAssembly();
+        assembly.observe(contentAgentCard("第一张卡片"));
+        assembly.observe(RuntimeEvent.card("run1", "session1", Map.of(
+                "source", "domain-agent",
+                "sourceType", "cardList",
+                "cardType", "cardList",
+                "cardSources", List.of("cardList"),
+                "cardList", List.of(Map.of("title", "第二张卡片"))
+        )));
+        assembly.observe(contentAgentCard("第二张卡片正文"));
+
+        assertThat(assembly.parts()).extracting(part -> part.sourceType())
+                .containsExactly("contentAgent", "cardList", "contentAgent");
+        assertThat(assembly.parts()).extracting(part -> part.contentText())
+                .containsExactly(null, "cardList", null);
+        assertThat(assembly.parts().get(0).payload()).containsEntry("contentAgent", "第一张卡片");
+        assertThat(assembly.parts().get(2).payload()).containsEntry("contentAgent", "第二张卡片正文");
+    }
+
+    @Test
+    void startsANewContentAgentPartAfterDomainAgentRefusalReroute() {
+        AssistantAssembly assembly = new AssistantAssembly();
+        assembly.observe(contentAgentCard("Agent A 卡片内容"));
+        assembly.observe(RuntimeEvent.metadata("run1", "session1", Map.of(
+                "source", "domain-agent",
+                "sourceType", "agent.refusal",
+                "metadataType", "domain_agent_control",
+                "supervisorAction", "REROUTE",
+                "type", "agent.refusal",
+                "code", "FN-EX-CAHT-BIZ-DAG-001",
+                "reason", "需要切换领域"
+        )));
+        assembly.observe(RuntimeEvent.metadata("run1", "session1", Map.of(
+                "source", "chatservice",
+                "sourceType", "domain-agent-reroute",
+                "metadataType", "domain_agent_reroute",
+                "action", "AUTO_SWITCH"
+        )));
+        assembly.observe(contentAgentCard("Agent B 卡片内容"));
+
+        assertThat(assembly.parts()).extracting(part -> part.partType())
+                .containsExactly("CARD", "DOMAIN_AGENT_REFUSAL", "METADATA", "CARD");
+        assertThat(assembly.parts()).extracting(part -> part.sourceType())
+                .containsExactly("contentAgent", "agent.refusal", "domain-agent-reroute", "contentAgent");
+        assertThat(assembly.parts().get(0).contentText()).isNull();
+        assertThat(assembly.parts().get(0).payload()).containsEntry("contentAgent", "Agent A 卡片内容");
+        assertThat(assembly.parts().get(3).contentText()).isNull();
+        assertThat(assembly.parts().get(3).payload()).containsEntry("contentAgent", "Agent B 卡片内容");
+    }
+
+    @Test
     void placeholderPolicyDropsBusinessContentAndKeepsInteractionControls() {
         AgentDataPersistenceState state = new AgentDataPersistenceState("回答已隐藏")
                 .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
@@ -187,6 +269,19 @@ class AssistantAssemblyTest {
     }
 
     @Test
+    void placeholderPolicyDoesNotPersistContentAgentCardData() {
+        AgentDataPersistenceState state = new AgentDataPersistenceState("回答已隐藏")
+                .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
+        AssistantAssembly assembly = new AssistantAssembly(state);
+
+        assembly.observe(contentAgentCard("真实卡片正文"));
+
+        assertThat(assembly.shouldPersistMessage()).isTrue();
+        assertThat(assembly.finalContent()).isEqualTo("回答已隐藏");
+        assertThat(assembly.parts()).isEmpty();
+    }
+
+    @Test
     void placeholderPolicyCreatesAssistantAfterRuntimeDispatchStartsWithoutBusinessEvents() {
         AgentDataPersistenceState state = new AgentDataPersistenceState("回答已隐藏")
                 .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER)
@@ -212,5 +307,15 @@ class AssistantAssemblyTest {
         assertThat(restored.placeholderContent()).isEqualTo("回答已隐藏");
         assertThat(AgentDataPersistenceMetadata.removeRunPolicy(original.runMetadataOverlay()))
                 .isEmpty();
+    }
+
+    private RuntimeEvent contentAgentCard(String content) {
+        return RuntimeEvent.card("run1", "session1", Map.of(
+                "source", "domain-agent",
+                "sourceType", "contentAgent",
+                "cardType", "contentAgent",
+                "cardSources", List.of("contentAgent"),
+                "contentAgent", content
+        ));
     }
 }

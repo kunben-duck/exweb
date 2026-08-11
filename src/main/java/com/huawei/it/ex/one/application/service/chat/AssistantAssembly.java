@@ -24,6 +24,9 @@ final class AssistantAssembly {
     private String snapshot;
     private String structuredFallbackContent;
     private boolean persistableOutputObserved;
+    private int activeContentAgentPartIndex = -1;
+    private StringBuilder activeContentAgentContent;
+    private Map<String, Object> activeContentAgentPayload;
 
     AssistantAssembly() {
         this(AgentDataPersistenceState.full());
@@ -62,14 +65,18 @@ final class AssistantAssembly {
             if (isTransientIntentProcessEvent(event.payload())) {
                 return;
             }
+            if (isDomainAgentStructuredCard(event)) {
+                closeContentAgentPart();
+            }
             if (isIntentClarificationResponse(event.payload())) {
                 if (!AmbiguousRouteSupport.isAmbiguous(event.payload())) {
                     return;
                 }
             }
             if (isDomainAgentRefusal(event.payload())) {
+                closeContentAgentPart();
                 // 拒答前已经输出的正文只作为 MESSAGE_SNAPSHOT/过程 part 保留，不能与新 Agent
-                // 的回答拼成最终 content。
+                // 的回答拼成最终 content；卡片内容也必须在此切断归属。
                 snapshot = null;
                 deltaDraft.setLength(0);
                 structuredFallbackContent = firstText(event.payload(),
@@ -84,6 +91,10 @@ final class AssistantAssembly {
                     deltaDraft.setLength(0);
                 }
                 structuredFallbackContent = firstText(event.payload(), "message", "reason", "sourceType");
+            }
+            if (isContentAgentCard(event)) {
+                appendContentAgentPart(event);
+                return;
             }
             parts.add(runtimePart(event));
         }
@@ -135,12 +146,51 @@ final class AssistantAssembly {
     }
 
     private List<ChatMessagePartDraft> persistedParts() {
+        materializeContentAgentPart();
         if (!persistenceState.placeholderMode()) {
             return parts;
         }
         return parts.stream()
                 .filter(AssistantAssembly::controlPart)
                 .toList();
+    }
+
+    private void appendContentAgentPart(ChatEvent event) {
+        String chunk = stringValue(event.payload().get("contentAgent"));
+        if (chunk == null) {
+            return;
+        }
+        if (activeContentAgentPartIndex < 0) {
+            activeContentAgentPartIndex = parts.size();
+            activeContentAgentContent = new StringBuilder();
+            activeContentAgentPayload = eventPartPayload(event);
+            parts.add(contentAgentPart(chunk, activeContentAgentPayload));
+        } else {
+            activeContentAgentPayload = eventPartPayload(event);
+        }
+        activeContentAgentContent.append(chunk);
+    }
+
+    private void closeContentAgentPart() {
+        materializeContentAgentPart();
+        activeContentAgentPartIndex = -1;
+        activeContentAgentContent = null;
+        activeContentAgentPayload = null;
+    }
+
+    private void materializeContentAgentPart() {
+        if (activeContentAgentPartIndex < 0 || activeContentAgentContent == null
+                || activeContentAgentPayload == null) {
+            return;
+        }
+        String content = activeContentAgentContent.toString();
+        Map<String, Object> payload = new LinkedHashMap<>(activeContentAgentPayload);
+        payload.put("contentAgent", content);
+        parts.set(activeContentAgentPartIndex, contentAgentPart(content, payload));
+    }
+
+    private static ChatMessagePartDraft contentAgentPart(String content, Map<String, Object> payload) {
+        return new ChatMessagePartDraft("CARD", "contentAgent", null, payload);
     }
 
     private boolean hasContent() {
@@ -196,6 +246,22 @@ final class AssistantAssembly {
                 && event.type().startsWith("runtime.")
                 && !isTransientIntentProcessEvent(event.payload())
                 && userVisiblePart(runtimePart(event));
+    }
+
+    private static boolean isContentAgentCard(ChatEvent event) {
+        return event != null
+                && "runtime.card".equals(event.type())
+                && "domain-agent".equals(stringValue(event.payload().get("source")))
+                && "contentAgent".equals(stringValue(event.payload().get("sourceType")))
+                && "contentAgent".equals(stringValue(event.payload().get("cardType")))
+                && event.payload().get("contentAgent") instanceof String;
+    }
+
+    private static boolean isDomainAgentStructuredCard(ChatEvent event) {
+        return event != null
+                && "runtime.card".equals(event.type())
+                && "domain-agent".equals(stringValue(event.payload().get("source")))
+                && !isContentAgentCard(event);
     }
 
     private static boolean nonEmpty(Object value) {

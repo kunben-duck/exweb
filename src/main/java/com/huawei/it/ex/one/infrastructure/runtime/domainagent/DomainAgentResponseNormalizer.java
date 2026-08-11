@@ -435,7 +435,8 @@ public class DomainAgentResponseNormalizer {
                 || root.hasNonNull("diyCardScene")
                 || root.hasNonNull("cardList")
                 || root.hasNonNull("openCard")
-                || root.hasNonNull("specificSceneInfo");
+                || root.hasNonNull("specificSceneInfo")
+                || standaloneContentAgent(root);
     }
 
     private Map<String, Object> processPayload(JsonNode root) {
@@ -482,6 +483,8 @@ public class DomainAgentResponseNormalizer {
             if (root.hasNonNull("contentAgent")) {
                 payload.put("contentAgent", sanitizeBusiness(root.get("contentAgent")));
             }
+        } else if (standaloneContentAgent(root)) {
+            payload.put("contentAgent", sanitizeBusiness(root.get("contentAgent")));
         }
         if (root.hasNonNull("cardList")) {
             payload.put("cardList", sanitizeBusiness(root.get("cardList")));
@@ -509,7 +512,19 @@ public class DomainAgentResponseNormalizer {
         if (root.hasNonNull("specificSceneInfo")) {
             sources.add("specificSceneInfo");
         }
+        if (sources.isEmpty() && standaloneContentAgent(root)) {
+            sources.add("contentAgent");
+        }
         return List.copyOf(sources);
+    }
+
+    private boolean standaloneContentAgent(JsonNode root) {
+        return root.hasNonNull("contentAgent")
+                && !root.hasNonNull("cardUrl")
+                && !root.hasNonNull("diyCardScene")
+                && !root.hasNonNull("cardList")
+                && !root.hasNonNull("openCard")
+                && !root.hasNonNull("specificSceneInfo");
     }
 
     /**
@@ -530,6 +545,7 @@ public class DomainAgentResponseNormalizer {
             case "cardList" -> "cardList";
             case "openCard" -> "openCard";
             case "specificSceneInfo" -> "specificSceneInfo";
+            case "contentAgent" -> "contentAgent";
             default -> "domain-agent-card";
         };
     }

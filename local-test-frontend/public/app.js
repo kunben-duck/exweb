@@ -1018,7 +1018,10 @@ function messagePartsNode(parts) {
     const label = [part.partOrder, part.title || part.partType, part.status, part.channel, part.sourceType]
       .filter(value => value !== undefined && value !== null && value !== "")
       .join(" · ");
-    row.textContent = part.contentText ? `${label}: ${part.contentText}` : label;
+    const contentText = part.sourceType === "contentAgent" && typeof part.payload?.contentAgent === "string"
+      ? part.payload.contentAgent
+      : part.contentText;
+    row.textContent = contentText ? `${label}: ${contentText}` : label;
     details.appendChild(row);
   }
   return details;

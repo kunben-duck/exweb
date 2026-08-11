@@ -403,6 +403,58 @@ class DomainAgentResponseNormalizerTest {
     }
 
     @Test
+    void mapsStandaloneContentAgentFramesToRuntimeCardsWithoutParsingTheirContent() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                message: {"contentAgent":"<think>"}
+
+                message: {"contentAgent":""}
+
+                message: {"contentAgent":"简单的问候。</think>"}
+
+                """);
+
+        assertThat(events).extracting(ChatEvent::type)
+                .containsExactly("runtime.card", "runtime.card", "runtime.card");
+        assertThat(events).allSatisfy(event -> assertThat(event.payload())
+                .containsEntry("source", "domain-agent")
+                .containsEntry("sourceType", "contentAgent")
+                .containsEntry("cardType", "contentAgent")
+                .containsEntry("cardSources", List.of("contentAgent")));
+        assertThat(events).extracting(event -> event.payload().get("contentAgent"))
+                .containsExactly("<think>", "", "简单的问候。</think>");
+    }
+
+    @Test
+    void keepsStandaloneContentAgentSeparateFromThePrecedingCardUrl() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                message: {"cardUrl":"https://card","intent":"tax","skillId":"skill-tax"}
+
+                message: {"contentAgent":"卡片内部正文"}
+
+                """);
+
+        assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.card", "runtime.card");
+        assertThat(events.get(0).payload())
+                .containsEntry("sourceType", "cardUrl")
+                .containsEntry("cardType", "url")
+                .doesNotContainKey("contentAgent");
+        assertThat(events.get(1).payload())
+                .containsEntry("sourceType", "contentAgent")
+                .containsEntry("cardType", "contentAgent")
+                .containsEntry("contentAgent", "卡片内部正文")
+                .doesNotContainKey("cardUrl");
+    }
+
+    @Test
+    void doesNotTreatNullContentAgentAsACard() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1",
+                "message: {\"contentAgent\":null}");
+
+        assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.event");
+        assertThat(events.getFirst().payload()).containsEntry("sourceType", "unknown");
+    }
+
+    @Test
     void mapsSpecificSceneInfoToCompleteCardAndPreservesAuthorizationBusinessFields() throws Exception {
         ObjectNode root = objectMapper.createObjectNode();
         ObjectNode scene = root.putArray("specificSceneInfo").addObject();

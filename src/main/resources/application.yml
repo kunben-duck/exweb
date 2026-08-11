@@ -89,7 +89,7 @@ financeex:
     timeout: ${FINANCEEX_SESSION_TITLE_TIMEOUT:}
     # 单实例标题服务在途请求上限；达到上限时跳过本次旁路总结，不阻塞聊天主流程。
     max-concurrent-requests: ${FINANCEEX_SESSION_TITLE_MAX_CONCURRENT_REQUESTS:8}
-    default-language: ${FINANCEEX_SESSION_TITLE_DEFAULT_LANGUAGE:zh-CN}
+    default-language: ${FINANCEEX_SESSION_TITLE_DEFAULT_LANGUAGE:zh_CN}
     max-title-length: ${FINANCEEX_SESSION_TITLE_MAX_LENGTH:50}
   domain-agent-skill-config:
     # 启用 assistant 留存控制且使用默认 Provider 时，接口地址和路径必须显式配置。

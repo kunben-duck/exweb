@@ -99,7 +99,7 @@ class SessionTitleApplicationServiceTest {
             runs.put(run.id(), run);
             path.add(message);
             paths.put(message.id(), List.copyOf(path));
-            service.schedule(user(), command("问题" + index, ChatRunMode.NEXT, "zh-CN"), session.get(),
+            service.schedule(user(), command("问题" + index, ChatRunMode.NEXT, "zh_CN"), session.get(),
                     new ChatRunMessagePlan(ChatRunMode.NEXT, message.parentMessageId(), message, null), run);
         }
 
@@ -107,7 +107,7 @@ class SessionTitleApplicationServiceTest {
         assertThat(requests.get(0).queries()).containsExactly("问题1");
         assertThat(requests.get(1).queries()).containsExactly("问题1", "问题2");
         assertThat(requests.get(2).queries()).containsExactly("问题1", "问题2", "问题3");
-        assertThat(requests.get(2).language()).isEqualTo("zh-CN");
+        assertThat(requests.get(2).language()).isEqualTo("zh_CN");
         assertThat(session.get().title()).isEqualTo("经营 情况 分析");
         assertThat(metadata.read(session.get().metadataJson()))
                 .contains(new SessionTitleSummaryState(SessionTitleSummarySource.AUTO, 3, 3L));
@@ -176,7 +176,7 @@ class SessionTitleApplicationServiceTest {
         assertThat(requests).singleElement()
                 .extracting(SessionTitleRequest::queries)
                 .isEqualTo(List.of("重复问题", "重复问题"));
-        assertThat(requests.getFirst().language()).isEqualTo("zh-CN");
+        assertThat(requests.getFirst().language()).isEqualTo("zh_CN");
     }
 
     @Test

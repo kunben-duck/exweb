@@ -47,7 +47,7 @@ class SessionTitleCommitServiceTest {
     private SessionTitleCandidate candidate(int queryCount, long nodeOrder) {
         return new SessionTitleCandidate(
                 "tenant-1", "user-1", "session-1", "run-1", List.of("问题"),
-                "zh-CN", queryCount, nodeOrder);
+                "zh_CN", queryCount, nodeOrder);
     }
 
     private ChatSession session(String metadataJson) {

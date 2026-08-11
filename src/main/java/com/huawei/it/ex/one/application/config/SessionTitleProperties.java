@@ -17,7 +17,7 @@ public class SessionTitleProperties {
     private String baseUrl = "";
     private String path = "/session_title";
     private String timeout = "";
-    private String defaultLanguage = "zh-CN";
+    private String defaultLanguage = "zh_CN";
     private int maxTitleLength = 50;
     private int maxConcurrentRequests = DEFAULT_MAX_CONCURRENT_REQUESTS;
 
@@ -119,7 +119,7 @@ public class SessionTitleProperties {
 
     public String normalizedDefaultLanguage() {
         String normalized = normalize(defaultLanguage);
-        return normalized == null ? "zh-CN" : normalized;
+        return normalized == null ? "zh_CN" : normalized;
     }
 
     public String normalizeLanguage(String language) {

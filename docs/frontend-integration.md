@@ -1244,7 +1244,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
     "conversationId": "session_xxx",
     "message": "帮我分析一下这个费用趋势",
     "runMode": "NEXT",
-    "language": "zh-CN",
+    "language": "zh_CN",
     "parentMessageId": null,
     "editedMessageId": null,
     "regeneratedMessageId": null,
@@ -1281,7 +1281,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `metadata` | object | 否 | 扩展字段；DomainAgent 路由时会作为下游业务扩展，不能覆盖服务端保留的 `skillId/query/sessionId` |
 | `appId` | string | 否 | 会话分组键，最大 128；无 `sessionId` 时保存到新会话，已有会话中显式传入时必须与原值完全一致 |
 | `appName` | string | 否 | 会话分组展示名称快照，最大 256；不能脱离 `appId`，已有会话中显式传入时必须与原值完全一致 |
-| `language` | string | 否 | 会话标题总结语言，最大32字符；trim后为空使用服务端默认 `zh-CN`。不进入 metadata、IntentAgent、DomainAgent 或 Relay 请求，不改变本轮路由和回答 |
+| `language` | string | 否 | 会话标题总结语言，最大32字符；中文使用 `zh_CN`，英文使用 `en_US`，trim后为空使用服务端默认 `zh_CN`。不进入 metadata、IntentAgent、DomainAgent 或 Relay 请求，不改变本轮路由和回答 |
 | `channel` | string | 否 | 会话来源渠道，最大64字符。移动端统一传小写 `mobile`；自动创建会话时省略则默认 `web`。已有会话显式传入时必须与会话原值一致，`CONTINUE_INTERACTION` 在 claim 前执行相同校验；PC省略时不限制访问渠道 |
 
 响应：

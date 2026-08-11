@@ -133,7 +133,7 @@ paths:
                   sessionId: session_001
                   runMode: NEXT
                   message: 帮我分析本季度利润变化
-                  language: zh-CN
+                  language: zh_CN
                   metadata: {}
               mobileNextWithNewSession:
                 summary: 移动端自动创建 mobile 会话并提问
@@ -1909,9 +1909,9 @@ components:
           type: string
           maxLength: 32
           nullable: true
-          default: zh-CN
+          default: zh_CN
           description: |
-            会话标题总结语言。服务端 trim 后为空时使用配置的默认语言；该字段不进入 metadata、
+            会话标题总结语言，中文使用 zh_CN，英文使用 en_US。服务端 trim 后为空时使用配置的默认语言；该字段不进入 metadata、
             IntentAgent、DomainAgent 或 Relay 请求，也不影响本轮路由和回答。
         channel:
           type: string

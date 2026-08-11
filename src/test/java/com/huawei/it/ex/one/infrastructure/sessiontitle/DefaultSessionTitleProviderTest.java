@@ -59,12 +59,12 @@ class DefaultSessionTitleProviderTest {
                 WebClient.builder(), properties, authHeaders, Schedulers.immediate());
 
         String title = provider.generate(new SessionTitleRequest(
-                        "tenant-1", "user-1", "session-1", List.of("问题一", "问题二"), "zh-CN"))
+                        "tenant-1", "user-1", "session-1", List.of("问题一", "问题二"), "zh_CN"))
                 .block(Duration.ofSeconds(3));
 
         assertThat(title).isEqualTo("经营情况分析");
         assertThat(authHeader.get()).isEqualTo("Bearer test-token");
         assertThat(requestBody.get()).isEqualTo(
-                "{\"session_id\":\"session-1\",\"queries\":[\"问题一\",\"问题二\"],\"language\":\"zh-CN\"}");
+                "{\"session_id\":\"session-1\",\"queries\":[\"问题一\",\"问题二\"],\"language\":\"zh_CN\"}");
     }
 }

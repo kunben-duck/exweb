@@ -50,11 +50,11 @@ class ChatProtocolConvergenceTest {
         CreateChatRunRequest request = new CreateChatRunRequest(
                 "cmd1", "session1", null, "分析资金情况", "NEXT", null, null, null,
                 null, null, null, null, null, List.of(), null, null, null,
-                Map.of("scene", "fund"), null, null, null, null, " en-US ", " mobile ");
+                Map.of("scene", "fund"), null, null, null, null, " en_US ", " mobile ");
 
         ChatCommand command = translator.toCommand(request);
 
-        assertThat(command.language()).isEqualTo("en-US");
+        assertThat(command.language()).isEqualTo("en_US");
         assertThat(command.channel()).isEqualTo("mobile");
         assertThat(command.metadata()).containsExactlyEntriesOf(Map.of("scene", "fund"));
         assertThat(command.metadata()).doesNotContainKey("language");

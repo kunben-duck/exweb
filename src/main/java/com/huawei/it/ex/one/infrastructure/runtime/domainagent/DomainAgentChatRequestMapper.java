@@ -4,10 +4,6 @@ import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -20,22 +16,21 @@ import java.util.Map;
  * DomainAgent chat wire DTO 映射器。
  *
  * <p>DomainAgent 的请求体以前端 {@code metadata} 作为业务扩展，但 {@code messageId/skillId/query/sessionId}
- * 是会话绑定正确性的保留字段，必须由服务端按当前绑定强制覆盖。ChatService 只在边界处校验
- * docList 中的 docId/url 必须来自已鉴权附件，避免伪造文档引用。</p>
+ * 是会话绑定正确性的保留字段，必须由服务端按当前绑定强制覆盖。标准附件由应用层独立完成权限校验；
+ * {@code docList} 作为业务 metadata 只在此检查基本结构。</p>
  */
 @Component
 public class DomainAgentChatRequestMapper {
-    private final ObjectMapper objectMapper;
     private final DomainAgentProperties properties;
 
-    public DomainAgentChatRequestMapper(ObjectMapper objectMapper, DomainAgentProperties properties) {
-        this.objectMapper = objectMapper;
+    public DomainAgentChatRequestMapper(DomainAgentProperties properties) {
         this.properties = properties;
     }
 
     public Map<String, Object> toWireRequest(DomainAgentRequest request) {
         Map<String, Object> body = deepCopyMap(request.metadata());
-        validateDocList(body, request.documents());
+        validateAttachmentCount(request.documents());
+        validateDocListStructure(body);
         Map<String, Object> next = new LinkedHashMap<>(body);
         // messageId只能来自已落库的ChatService user消息，不能信任前端metadata中的同名字段。
         next.remove("messageId");
@@ -57,29 +52,24 @@ public class DomainAgentChatRequestMapper {
                 : request.runtimeSessionId();
     }
 
-    private void validateDocList(Map<String, Object> body, List<UploadedDocument> documents) {
-        if (documents == null || documents.isEmpty()) {
-            Object sceneParam = body.get("sceneParam");
-            Object docList = sceneParam instanceof Map<?, ?> sceneMap ? sceneMap.get("docList") : null;
-            if (docList instanceof List<?> list && !list.isEmpty()) {
-                throw new IllegalArgumentException("metadata.sceneParam.docList 引用了未授权文档，请同时在 attachments 中传入 documentId");
-            }
+    private void validateAttachmentCount(List<UploadedDocument> documents) {
+        if (documents == null) {
             return;
         }
         if (documents.size() > properties.normalizedMaxAttachments()) {
             throw new IllegalArgumentException("DomainAgent 附件数量超过上限: " + properties.normalizedMaxAttachments());
         }
+    }
+
+    private void validateDocListStructure(Map<String, Object> body) {
         Object sceneParam = body.get("sceneParam");
-        if (!(sceneParam instanceof Map<?, ?> sceneMap)) {
-            throw new IllegalArgumentException("metadata.sceneParam 必须是 JSON object，并包含与 attachments 匹配的 docList");
+        if (!(sceneParam instanceof Map<?, ?> sceneMap) || !sceneMap.containsKey("docList")) {
+            return;
         }
         Object docList = sceneMap.get("docList");
-        if (!(docList instanceof List<?> list) || list.isEmpty()) {
-            throw new IllegalArgumentException("metadata.sceneParam.docList 不能为空，且必须与 attachments 中的文档匹配");
+        if (!(docList instanceof List<?> list)) {
+            throw new IllegalArgumentException("metadata.sceneParam.docList 必须是 JSON array");
         }
-        List<Map<String, Object>> authorizedDocuments = documents.stream()
-                .map(this::providerDocument)
-                .toList();
         for (Object item : list) {
             if (!(item instanceof Map<?, ?> itemMap)) {
                 throw new IllegalArgumentException("metadata.sceneParam.docList 每一项必须是 JSON object");
@@ -89,34 +79,6 @@ public class DomainAgentChatRequestMapper {
             if (docId.isBlank() && url.isBlank()) {
                 throw new IllegalArgumentException("metadata.sceneParam.docList 每一项必须包含 docId 或 url");
             }
-            if (authorizedDocuments.stream().anyMatch(provider -> documentReferenceMatches(provider, docId, url))) {
-                continue;
-            }
-            throw new IllegalArgumentException("metadata.sceneParam.docList 包含未授权文档引用: "
-                    + (docId.isBlank() ? url : docId));
-        }
-    }
-
-    private boolean documentReferenceMatches(Map<String, Object> provider, String docId, String url) {
-        String providerDocId = stringValue(provider.get("docId"), "");
-        String providerUrl = stringValue(provider.get("url"), "");
-        boolean docIdMatches = docId.isBlank() || (!providerDocId.isBlank() && providerDocId.equals(docId));
-        boolean urlMatches = url.isBlank() || (!providerUrl.isBlank() && providerUrl.equals(url));
-        return docIdMatches && urlMatches;
-    }
-
-    private Map<String, Object> providerDocument(UploadedDocument document) {
-        try {
-            JsonNode root = objectMapper.readTree(document.metadataJson() == null ? "{}" : document.metadataJson());
-            JsonNode providerDocument = root.get("providerDocument");
-            if (providerDocument == null || !providerDocument.isObject()) {
-                throw new IllegalArgumentException("DomainAgent 文档缺少 providerDocument 元数据: " + document.id());
-            }
-            return objectMapper.convertValue(providerDocument, new TypeReference<Map<String, Object>>() {});
-        } catch (IllegalArgumentException ex) {
-            throw ex;
-        } catch (Exception ex) {
-            throw new IllegalArgumentException("domain-agent 文档元数据解析失败: " + document.id(), ex);
         }
     }
 

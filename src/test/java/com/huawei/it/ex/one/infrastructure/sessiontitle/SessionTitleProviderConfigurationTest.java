@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 
 import com.huawei.it.ex.one.application.config.IntegrationAuthProperties;
 import com.huawei.it.ex.one.application.config.SessionTitleProperties;
+import com.huawei.it.ex.one.application.integration.sessiontitle.SessionTitleAppExclusionProvider;
 import com.huawei.it.ex.one.application.integration.sessiontitle.SessionTitleProvider;
 import com.huawei.it.ex.one.application.service.auth.AuthHeaderProviderRegistry;
 
@@ -74,6 +75,40 @@ class SessionTitleProviderConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context.getBean(SessionTitleProvider.class)).isSameAs(custom);
+                });
+    }
+
+    @Test
+    void defaultAppExclusionProviderUsesConfiguredAppIds() {
+        SessionTitleProvider customTitleProvider = request -> Mono.just("custom");
+
+        new ApplicationContextRunner()
+                .withUserConfiguration(SessionTitleProviderConfiguration.class)
+                .withPropertyValues("financeex.session-title.excluded-app-ids= app-a,app-b ")
+                .withBean(SessionTitleProvider.class, () -> customTitleProvider)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    SessionTitleAppExclusionProvider provider =
+                            context.getBean(SessionTitleAppExclusionProvider.class);
+                    assertThat(provider).isInstanceOf(DefaultSessionTitleAppExclusionProvider.class);
+                    assertThat(provider.isExcluded("app-a").block()).isTrue();
+                    assertThat(provider.isExcluded("APP-A").block()).isFalse();
+                });
+    }
+
+    @Test
+    void customAppExclusionProviderOverridesDefault() {
+        SessionTitleProvider customTitleProvider = request -> Mono.just("custom");
+        SessionTitleAppExclusionProvider customExclusionProvider = appId -> Mono.just(true);
+
+        new ApplicationContextRunner()
+                .withUserConfiguration(SessionTitleProviderConfiguration.class)
+                .withBean(SessionTitleProvider.class, () -> customTitleProvider)
+                .withBean(SessionTitleAppExclusionProvider.class, () -> customExclusionProvider)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(SessionTitleAppExclusionProvider.class))
+                            .isSameAs(customExclusionProvider);
                 });
     }
 

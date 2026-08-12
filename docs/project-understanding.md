@@ -957,7 +957,7 @@ cancelActive(...)
 | 实例挂掉 run 不结束 | `ChatRunLeaseApplicationService#heartbeatActiveRuns(...)`、`ChatRunWatchdogScheduler`、`ChatRunRecoveryOrchestrator` |
 | 跨电脑续接缺内容 | `stream-status`、run 级事件恢复 `afterSeq`、`fin_ex_chat_event_t` |
 | assistant 历史消息没保存 | `persistAndPublishRunEvents(...)` 处理 `run.completed` 的分支、`SessionApplicationService#saveAssistantMessage(...)` |
-| 文档附件没有进 Runtime 或 DomainAgent 指定调用 | `DocumentFacade#resolveChatAttachmentsForUser(...)`、`replaceRuntimeDocumentMetadata(...)`、`DomainAgentChatRequestMapper#validateDocList(...)`、`AgentRuntimeRequest.documents`。实际调用 IntentAgent 的路由会用可信文档的完整 `providerDocument` 覆盖 `sceneParam.docList`；显式直连和 active binding 续接仍只校验前端 `docList` 与已授权附件的 `docId/url` 是否匹配。 |
+| 文档附件没有进 Runtime 或 DomainAgent 指定调用 | `DocumentFacade#resolveChatAttachmentsForUser(...)`、`replaceRuntimeDocumentMetadata(...)`、`DomainAgentChatRequestMapper#validateDocListStructure(...)`、`AgentRuntimeRequest.documents`。实际调用 IntentAgent 的路由会用可信文档的完整 `providerDocument` 覆盖 `sceneParam.docList`；显式直连和 active binding 续接仅校验前端 `docList` 的基本结构，不再与附件做权限关联。 |
 
 ## 18. 推荐调试顺序
 

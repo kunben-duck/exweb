@@ -6,12 +6,14 @@ import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.config.SessionTitleProperties;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.integration.memory.ChatMessageRepository;
+import com.huawei.it.ex.one.application.integration.sessiontitle.SessionTitleAppExclusionProvider;
 import com.huawei.it.ex.one.application.integration.sessiontitle.SessionTitleProvider;
 import com.huawei.it.ex.one.application.integration.sessiontitle.SessionTitleRequest;
 import com.huawei.it.ex.one.domain.auth.UserContext;
@@ -224,6 +226,67 @@ class SessionTitleApplicationServiceTest {
     }
 
     @Test
+    void excludedAppIdSkipsSchedulingBeforeRepositoryOrProviderWork() {
+        AtomicReference<String> checkedAppId = new AtomicReference<>();
+        AtomicInteger exclusionChecks = new AtomicInteger();
+        SessionTitleProvider titleProvider = mock(SessionTitleProvider.class);
+        service = serviceWith(appId -> {
+            checkedAppId.set(appId);
+            exclusionChecks.incrementAndGet();
+            return Mono.just(true);
+        }, titleProvider);
+        session.set(session(metadata.initialize(null, SessionTitleSummarySource.AUTO), "app-disabled"));
+        for (int index = 1; index <= 6; index++) {
+            ChatRun run = run("run-excluded-" + index, ChatRunMode.NEXT, Map.of());
+            ChatMessage message = message("message-excluded-" + index, run.id(), "问题" + index, index);
+            service.schedule(user(), command(message.content(), ChatRunMode.NEXT, null), session.get(),
+                    new ChatRunMessagePlan(ChatRunMode.NEXT, null, message, null), run);
+        }
+
+        assertThat(checkedAppId).hasValue("app-disabled");
+        assertThat(exclusionChecks).hasValue(6);
+        assertThat(requests).isEmpty();
+        verifyNoInteractions(messageRepository, runRepository, titleProvider);
+    }
+
+    @Test
+    void appIdExclusionIsCaseSensitiveAndMainSiteSessionRemainsEligible() {
+        List<String> checkedAppIds = new ArrayList<>();
+        service = serviceWith(appId -> {
+            checkedAppIds.add(appId);
+            return Mono.just("app-disabled".equals(appId));
+        }, recordingTitleProvider());
+
+        session.set(session(metadata.initialize(null, SessionTitleSummarySource.AUTO), "APP-DISABLED"));
+        scheduleQuestion("case-sensitive", 1L);
+        assertThat(requests).hasSize(1);
+
+        session.set(session(metadata.initialize(null, SessionTitleSummarySource.AUTO), null));
+        scheduleQuestion("main-site", 2L);
+        assertThat(requests).hasSize(2);
+        assertThat(checkedAppIds).containsExactly("APP-DISABLED", null);
+    }
+
+    @Test
+    void emptyAndFailedExclusionChecksContinueTitleSummary() {
+        List<SessionTitleAppExclusionProvider> providers = List.of(
+                appId -> Mono.empty(),
+                appId -> Mono.error(new IllegalStateException("async exclusion failure")),
+                appId -> {
+                    throw new IllegalStateException("sync exclusion failure");
+                });
+        long nodeOrder = 1L;
+        for (SessionTitleAppExclusionProvider exclusionProvider : providers) {
+            session.set(session(metadata.initialize(null, SessionTitleSummarySource.AUTO), "app-a"));
+            service = serviceWith(exclusionProvider, recordingTitleProvider());
+            scheduleQuestion("exclusion-fallback-" + nodeOrder, nodeOrder);
+            nodeOrder++;
+        }
+
+        assertThat(requests).hasSize(3);
+    }
+
+    @Test
     void titleTruncationUsesUnicodeCodePoints() {
         properties.setMaxTitleLength(2);
         generatedTitle.set("\uD83D\uDE00\u8D22\u52A1");
@@ -321,8 +384,15 @@ class SessionTitleApplicationServiceTest {
     }
 
     private SessionTitleApplicationService serviceWith(SessionTitleProvider provider) {
+        return serviceWith(appId -> Mono.just(false), provider);
+    }
+
+    private SessionTitleApplicationService serviceWith(
+            SessionTitleAppExclusionProvider exclusionProvider,
+            SessionTitleProvider provider) {
         return new SessionTitleApplicationService(
                 properties,
+                exclusionProvider,
                 provider,
                 new SessionTitleCommitService(sessionRepository, metadata),
                 metadata,
@@ -330,6 +400,13 @@ class SessionTitleApplicationServiceTest {
                 messageRepository,
                 runRepository,
                 Schedulers.immediate());
+    }
+
+    private SessionTitleProvider recordingTitleProvider() {
+        return request -> {
+            requests.add(request);
+            return Mono.just(generatedTitle.get());
+        };
     }
 
     private void scheduleQuestion(String suffix, long nodeOrder) {
@@ -385,10 +462,14 @@ class SessionTitleApplicationServiceTest {
     }
 
     private ChatSession session(String metadataJson) {
+        return session(metadataJson, null);
+    }
+
+    private ChatSession session(String metadataJson, String appId) {
         Instant now = Instant.parse("2026-08-03T00:00:00Z");
         return new ChatSession(
                 "session-1", "tenant-1", "user-1", "初始标题", "ACTIVE", "web",
-                null, null, null, "session-1", null, null, 0L, 0L, 0L,
+                appId, appId == null ? null : "应用", null, "session-1", null, null, 0L, 0L, 0L,
                 metadataJson, now, now);
     }
 

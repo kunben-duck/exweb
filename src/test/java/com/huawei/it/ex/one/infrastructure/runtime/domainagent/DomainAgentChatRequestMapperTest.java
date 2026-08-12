@@ -12,8 +12,6 @@ import com.huawei.it.ex.one.domain.document.DocumentStatus;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
 import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -23,7 +21,7 @@ import java.util.Map;
 class DomainAgentChatRequestMapperTest {
     private final DomainAgentProperties properties = new DomainAgentProperties();
     private final DomainAgentChatRequestMapper mapper =
-            new DomainAgentChatRequestMapper(new ObjectMapper(), properties);
+            new DomainAgentChatRequestMapper(properties);
 
     @Test
     @SuppressWarnings("unchecked")
@@ -61,23 +59,24 @@ class DomainAgentChatRequestMapperTest {
     }
 
     @Test
-    void rejectsAttachmentsWithoutMetadataDocList() {
+    void acceptsAttachmentsWithoutMetadataDocList() {
         DomainAgentRequest request = request(Map.of("skillId", "skill-tax"), List.of(domainAgentDocument()));
 
-        assertThatThrownBy(() -> mapper.toWireRequest(request))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("metadata.sceneParam");
+        assertThat(mapper.toWireRequest(request)).doesNotContainKey("sceneParam");
     }
 
     @Test
-    void rejectsForgedDocIdNotOwnedByAttachments() {
+    @SuppressWarnings("unchecked")
+    void acceptsDocListThatDoesNotMatchAttachments() {
         DomainAgentRequest request = request(Map.of(
                 "sceneParam", Map.of("docList", List.of(Map.of("docId", "forged-doc")))
         ), List.of(domainAgentDocument()));
 
-        assertThatThrownBy(() -> mapper.toWireRequest(request))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("未授权文档引用");
+        Map<String, Object> wire = mapper.toWireRequest(request);
+
+        Map<String, Object> sceneParam = (Map<String, Object>) wire.get("sceneParam");
+        assertThat(sceneParam.get("docList"))
+                .isEqualTo(List.of(Map.of("docId", "forged-doc")));
     }
 
     @Test
@@ -92,14 +91,80 @@ class DomainAgentChatRequestMapperTest {
     }
 
     @Test
-    void rejectsDocListWhenAttachmentReferencesAreMissing() {
+    @SuppressWarnings("unchecked")
+    void acceptsDocListWithoutAttachmentReferences() {
         DomainAgentRequest request = request(Map.of(
                 "sceneParam", Map.of("docList", List.of(Map.of("docId", "domain-doc-001")))
         ), List.of());
 
+        Map<String, Object> wire = mapper.toWireRequest(request);
+
+        Map<String, Object> sceneParam = (Map<String, Object>) wire.get("sceneParam");
+        assertThat(sceneParam.get("docList"))
+                .isEqualTo(List.of(Map.of("docId", "domain-doc-001")));
+    }
+
+    @Test
+    void acceptsMissingAndEmptyDocList() {
+        assertThat(mapper.toWireRequest(request(Map.of(), List.of())))
+                .doesNotContainKey("sceneParam");
+        assertThat(mapper.toWireRequest(request(Map.of("sceneParam", Map.of()), List.of())))
+                .containsEntry("sceneParam", Map.of());
+        assertThat(mapper.toWireRequest(request(
+                Map.of("sceneParam", Map.of("docList", List.of())), List.of())))
+                .containsEntry("sceneParam", Map.of("docList", List.of()));
+    }
+
+    @Test
+    void rejectsNullDocList() {
+        Map<String, Object> sceneParam = new java.util.LinkedHashMap<>();
+        sceneParam.put("docList", null);
+        DomainAgentRequest request = request(Map.of("sceneParam", sceneParam), List.of());
+
         assertThatThrownBy(() -> mapper.toWireRequest(request))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("attachments");
+                .hasMessageContaining("必须是 JSON array");
+    }
+
+    @Test
+    void rejectsNonArrayDocList() {
+        DomainAgentRequest request = request(
+                Map.of("sceneParam", Map.of("docList", "domain-doc-001")), List.of());
+
+        assertThatThrownBy(() -> mapper.toWireRequest(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("必须是 JSON array");
+    }
+
+    @Test
+    void rejectsNonObjectDocListItem() {
+        DomainAgentRequest request = request(
+                Map.of("sceneParam", Map.of("docList", List.of("domain-doc-001"))), List.of());
+
+        assertThatThrownBy(() -> mapper.toWireRequest(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("每一项必须是 JSON object");
+    }
+
+    @Test
+    void rejectsDocListItemWithoutDocIdOrUrl() {
+        DomainAgentRequest request = request(
+                Map.of("sceneParam", Map.of("docList", List.of(Map.of("docName", "invoice.pdf")))), List.of());
+
+        assertThatThrownBy(() -> mapper.toWireRequest(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("必须包含 docId 或 url");
+    }
+
+    @Test
+    void enforcesDomainAgentAttachmentCountLimit() {
+        properties.setMaxAttachments(1);
+        DomainAgentRequest request = request(
+                Map.of(), List.of(domainAgentDocument(), urlOnlyDocument()));
+
+        assertThatThrownBy(() -> mapper.toWireRequest(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("附件数量超过上限: 1");
     }
 
     @Test

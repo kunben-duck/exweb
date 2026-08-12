@@ -48,7 +48,7 @@ class ConfiguredDomainAgentClientTest {
                 });
         DomainAgentProperties properties = properties();
         properties.setReferer("  https://portal.example.com/domain-agent  ");
-        DomainAgentChatRequestMapper mapper = new DomainAgentChatRequestMapper(objectMapper, properties);
+        DomainAgentChatRequestMapper mapper = new DomainAgentChatRequestMapper(properties);
         ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
                 builder, properties, mapper, new DomainAgentResponseNormalizer(objectMapper));
         DomainAgentRequest request = queryRequest(RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192));
@@ -92,7 +92,7 @@ class ConfiguredDomainAgentClientTest {
         ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
                 builder,
                 properties,
-                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentChatRequestMapper(properties),
                 new DomainAgentResponseNormalizer(objectMapper));
 
         StepVerifier.create(client.cancel(new DomainAgentCancelRequest(
@@ -129,7 +129,7 @@ class ConfiguredDomainAgentClientTest {
         ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
                 builder,
                 properties,
-                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentChatRequestMapper(properties),
                 new DomainAgentResponseNormalizer(objectMapper));
 
         StepVerifier.create(client.query(queryRequest(RuntimeForwardHeaders.empty())))
@@ -155,7 +155,7 @@ class ConfiguredDomainAgentClientTest {
         ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
                 builder,
                 properties,
-                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentChatRequestMapper(properties),
                 new DomainAgentResponseNormalizer(objectMapper));
 
         StepVerifier.create(client.cancel(new DomainAgentCancelRequest(
@@ -191,7 +191,7 @@ class ConfiguredDomainAgentClientTest {
         ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
                 builder,
                 properties,
-                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentChatRequestMapper(properties),
                 new DomainAgentResponseNormalizer(objectMapper));
 
         StepVerifier.create(client.query(queryRequest(RuntimeForwardHeaders.empty())))
@@ -217,7 +217,7 @@ class ConfiguredDomainAgentClientTest {
         ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
                 builder,
                 properties,
-                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentChatRequestMapper(properties),
                 new DomainAgentResponseNormalizer(objectMapper, properties));
 
         StepVerifier.create(client.query(queryRequest(RuntimeForwardHeaders.empty())))
@@ -239,7 +239,7 @@ class ConfiguredDomainAgentClientTest {
         ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
                 builder,
                 properties,
-                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentChatRequestMapper(properties),
                 new DomainAgentResponseNormalizer(objectMapper, properties));
 
         StepVerifier.create(client.query(queryRequest(RuntimeForwardHeaders.empty())))
@@ -262,7 +262,7 @@ class ConfiguredDomainAgentClientTest {
         ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
                 builder,
                 properties,
-                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentChatRequestMapper(properties),
                 new DomainAgentResponseNormalizer(objectMapper, properties));
 
         StepVerifier.withVirtualTime(() -> client.query(queryRequest(RuntimeForwardHeaders.empty())))
@@ -292,7 +292,7 @@ class ConfiguredDomainAgentClientTest {
         ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
                 builder,
                 properties,
-                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentChatRequestMapper(properties),
                 new DomainAgentResponseNormalizer(objectMapper, properties));
 
         StepVerifier.withVirtualTime(() -> client.query(queryRequest(RuntimeForwardHeaders.empty())))
@@ -321,7 +321,7 @@ class ConfiguredDomainAgentClientTest {
         ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
                 builder,
                 properties,
-                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentChatRequestMapper(properties),
                 new DomainAgentResponseNormalizer(objectMapper, properties));
 
         StepVerifier.withVirtualTime(() -> client.query(queryRequest(RuntimeForwardHeaders.empty())))
@@ -354,7 +354,7 @@ class ConfiguredDomainAgentClientTest {
         ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
                 builder,
                 properties,
-                new DomainAgentChatRequestMapper(objectMapper, properties),
+                new DomainAgentChatRequestMapper(properties),
                 new DomainAgentResponseNormalizer(objectMapper, properties));
 
         StepVerifier.withVirtualTime(() -> client.cancel(new DomainAgentCancelRequest(

@@ -1724,6 +1724,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
         };
         AtomicInteger agentACalls = new AtomicInteger();
         AtomicInteger agentBCalls = new AtomicInteger();
+        AtomicReference<Map<String, Object>> agentBMetadata = new AtomicReference<>();
         DomainAgentClient domainClient = new DomainAgentClient() {
             @Override
             public Flux<ChatEvent> query(DomainAgentRequest request) {
@@ -1731,6 +1732,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                     agentACalls.incrementAndGet();
                     return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
                 }
+                agentBMetadata.set(request.metadata());
                 if (agentBCalls.incrementAndGet() == 1) {
                     return Flux.just(MessageSnapshotEvent.of(
                             request.runId(), request.sessionId(), "agent-b final answer"));
@@ -1744,10 +1746,12 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
             }
         };
         AtomicInteger relayCalls = new AtomicInteger();
+        AtomicReference<Map<String, Object>> relayMetadata = new AtomicReference<>();
         AgentRuntime relayRuntime = new AgentRuntime() {
             @Override
             public Flux<ChatEvent> query(AgentRuntimeRequest request) {
                 relayCalls.incrementAndGet();
+                relayMetadata.set(request.metadata());
                 return Flux.just(MessageSnapshotEvent.of(
                         request.runId(), request.sessionId(), "relay final answer"));
             }
@@ -1795,10 +1799,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 .verifyComplete();
 
         awaitEvent(events, "run.waiting_user");
-        ChatInteractionRequest waiting = interactions.requests.values().stream()
-                .filter(request -> request.status() == ChatInteractionStatus.WAITING)
-                .findFirst()
-                .orElseThrow();
+        ChatInteractionRequest waiting = awaitWaitingInteraction(interactions);
         assertThat(waiting.interactionType()).isEqualTo(ChatInteractionType.ROUTE_SWITCH_CONFIRMATION);
         assertThat(waiting.requestPayload())
                 .containsEntry("currentTargetId", "agent-a")
@@ -1838,8 +1839,14 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
         assertThat(SelectedIntentContext.intentId(rerouteMetadata.get())).isNull();
         assertThat(SelectedIntentContext.intentName(rerouteMetadata.get())).isNull();
 
+        Map<String, Object> agentConfirmationMetadata = Map.of(
+                "platform", "PC",
+                "sceneParam", Map.of(
+                        "one-portal", List.of(Map.of("onestop", "CountryCFO")),
+                        "docList", List.of(Map.of("docId", "domain-doc-from-confirmation"))));
         StepVerifier.create(service.startRun(user, new ChatCommand(
-                        null, null, null, waiting.sessionId(), null, "web", null, List.of(), Map.of(),
+                        null, null, null, waiting.sessionId(), null, "web", null, List.of(),
+                        agentConfirmationMetadata,
                         null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
                         null, waiting.id(), true, null, Map.of()), RuntimeForwardHeaders.empty()))
                 .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
@@ -1847,6 +1854,12 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
 
         awaitEvent(events, "run.completed");
         assertThat(agentBCalls).hasValue(1);
+        assertThat(agentBMetadata.get())
+                .containsAllEntriesOf(agentConfirmationMetadata)
+                .doesNotContainKey("scene");
+        assertThat(agentBMetadata.get().get("sceneParam")).isInstanceOfSatisfying(Map.class,
+                sceneParam -> assertThat(sceneParam.get("docList"))
+                        .isEqualTo(List.of(Map.of("docId", "domain-doc-from-confirmation"))));
         assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role()))
                 .singleElement()
                 .satisfies(message -> {
@@ -1908,8 +1921,12 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 .containsEntry("currentRouteSource", "user-confirmed")
                 .containsEntry("candidateProvider", "relay");
 
+        Map<String, Object> relayConfirmationMetadata = Map.of(
+                "platform", "PC",
+                "qaType", "normalQa");
         StepVerifier.create(service.startRun(user, new ChatCommand(
-                        null, null, null, nextRelayWaiting.sessionId(), null, "web", null, List.of(), Map.of(),
+                        null, null, null, nextRelayWaiting.sessionId(), null, "web", null, List.of(),
+                        relayConfirmationMetadata,
                         null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
                         null, nextRelayWaiting.id(), true, null, Map.of()), RuntimeForwardHeaders.empty()))
                 .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
@@ -1917,6 +1934,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
 
         awaitEventCount(events, "run.completed", 3);
         assertThat(relayCalls).hasValue(1);
+        assertThat(relayMetadata.get()).containsAllEntriesOf(relayConfirmationMetadata);
         assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role()))
                 .filteredOn(message -> "relay final answer".equals(message.content()))
                 .singleElement()

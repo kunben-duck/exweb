@@ -4,6 +4,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.convert.DurationStyle;
 
 import java.time.Duration;
+import java.util.LinkedHashSet;
+import java.util.List;
 
 /** 会话标题自动总结配置。 */
 @ConfigurationProperties(prefix = "financeex.session-title")
@@ -20,6 +22,7 @@ public class SessionTitleProperties {
     private String defaultLanguage = "zh_CN";
     private int maxTitleLength = 50;
     private int maxConcurrentRequests = DEFAULT_MAX_CONCURRENT_REQUESTS;
+    private List<String> excludedAppIds = List.of();
 
     public boolean isEnabled() {
         return enabled;
@@ -75,6 +78,23 @@ public class SessionTitleProperties {
 
     public void setMaxConcurrentRequests(int maxConcurrentRequests) {
         this.maxConcurrentRequests = maxConcurrentRequests;
+    }
+
+    public List<String> getExcludedAppIds() {
+        return excludedAppIds;
+    }
+
+    public void setExcludedAppIds(List<String> excludedAppIds) {
+        if (excludedAppIds == null || excludedAppIds.isEmpty()) {
+            this.excludedAppIds = List.of();
+            return;
+        }
+        LinkedHashSet<String> normalized = new LinkedHashSet<>();
+        excludedAppIds.stream()
+                .map(this::normalize)
+                .filter(value -> value != null)
+                .forEach(normalized::add);
+        this.excludedAppIds = List.copyOf(normalized);
     }
 
     public String normalizedBaseUrl() {

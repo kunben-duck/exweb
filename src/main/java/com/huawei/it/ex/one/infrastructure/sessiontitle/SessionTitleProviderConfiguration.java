@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.infrastructure.sessiontitle;
 
 import com.huawei.it.ex.one.application.config.IntegrationAuthProperties;
 import com.huawei.it.ex.one.application.config.SessionTitleProperties;
+import com.huawei.it.ex.one.application.integration.sessiontitle.SessionTitleAppExclusionProvider;
 import com.huawei.it.ex.one.application.integration.sessiontitle.SessionTitleProvider;
 import com.huawei.it.ex.one.application.service.auth.AuthHeaderProviderRegistry;
 
@@ -26,6 +27,13 @@ public class SessionTitleProviderConfiguration {
     @Bean(name = "sessionTitleIoScheduler", destroyMethod = "dispose")
     public Scheduler sessionTitleIoScheduler() {
         return Schedulers.newBoundedElastic(4, 128, "finex-session-title-io");
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(SessionTitleAppExclusionProvider.class)
+    public SessionTitleAppExclusionProvider sessionTitleAppExclusionProvider(
+            SessionTitleProperties properties) {
+        return new DefaultSessionTitleAppExclusionProvider(properties);
     }
 
     @Bean

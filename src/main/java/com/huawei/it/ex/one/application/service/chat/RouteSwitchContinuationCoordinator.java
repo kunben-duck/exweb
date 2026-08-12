@@ -30,6 +30,7 @@ import reactor.core.publisher.Mono;
 
 import java.time.Instant;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -281,7 +282,7 @@ final class RouteSwitchContinuationCoordinator {
                 null,
                 input.originalQuery(),
                 List.of(),
-                Map.of(),
+                responseMetadata(request.claim()),
                 route.type() == RouteType.DOMAIN_AGENT ? "DOMAIN_AGENT" : null,
                 route.type() == RouteType.DOMAIN_AGENT ? input.candidateTargetId() : null,
                 ChatRunMode.NEXT,
@@ -296,6 +297,22 @@ final class RouteSwitchContinuationCoordinator {
                 null,
                 null,
                 request.agentMode());
+    }
+
+    private Map<String, Object> responseMetadata(ChatInteractionClaimResult claim) {
+        Object value = claim == null || claim.responsePayload() == null
+                ? null
+                : claim.responsePayload().get("metadata");
+        if (!(value instanceof Map<?, ?> metadata) || metadata.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Object> copy = new LinkedHashMap<>();
+        metadata.forEach((key, item) -> {
+            if (key instanceof String name && item != null) {
+                copy.put(name, item);
+            }
+        });
+        return copy.isEmpty() ? Map.of() : Map.copyOf(copy);
     }
 
     private Flux<ChatEvent> executeDomainAgent(ApprovedSwitchContext approved) {

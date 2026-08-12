@@ -89,6 +89,8 @@ financeex:
     timeout: ${FINANCEEX_SESSION_TITLE_TIMEOUT:}
     # 单实例标题服务在途请求上限；达到上限时跳过本次旁路总结，不阻塞聊天主流程。
     max-concurrent-requests: ${FINANCEEX_SESSION_TITLE_MAX_CONCURRENT_REQUESTS:8}
+    # 逗号分隔且区分大小写；命中的App会话跳过第三方标题提炼，主站appId=null不受影响。
+    excluded-app-ids: ${FINANCEEX_SESSION_TITLE_EXCLUDED_APP_IDS:}
     default-language: ${FINANCEEX_SESSION_TITLE_DEFAULT_LANGUAGE:zh_CN}
     max-title-length: ${FINANCEEX_SESSION_TITLE_MAX_LENGTH:50}
   domain-agent-skill-config:

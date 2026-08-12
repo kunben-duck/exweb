@@ -180,7 +180,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 切换历史版本 | 从当前消息 `versionInfo.variants` 取目标项 -> `GET /messages?leafMessageId={switchLeafMessageId}` 重渲染 -> 后台 `POST /path` 保存选择 | `versionInfo.currentIndex/total`、`switchLeafMessageId`、`currentLeafMessageId` | 先刷新展示路径，不创建 run，不调用 Runtime；`/path` 只负责持久化当前 leaf |
 | 从消息新建分支 | `POST /sessions/{sessionId}/branches(sourceMessageId)` -> 选择新 `sessionId` -> `GET /messages`、`GET /stream-status` | `sourceMessageId`、新 `sessionId`、`sourceSessionId/sourceMessageId` | 分支快照消息 `locked=true`，禁用编辑、删除和重新生成 |
 | 上传文件并作为附件提问 | `POST /v1/documents(file, sessionId)` -> 等状态 `AVAILABLE` -> `POST /v1/chat/runs(attachments[{documentId}])` | `documentId`、`sessionId`、`attachments[].documentId` | 附件不是消息类型；PROCESSING/FAILED/DELETED 不可作为聊天附件 |
-| 选中 DomainAgent 并带文档提问 | `POST /v1/documents(file,metadata.skillId)` -> `POST /v1/chat/runs(targetType=DOMAIN_AGENT,targetId,attachments,metadata)` | `documentId`、`targetId`、`metadata.sceneParam.docList` | 后端绑定 `provider=domain-agent`、`routeSource=front-selected`；metadata 作为业务扩展传给下游，但 `skillId/query/sessionId` 由服务端按绑定和本轮问题覆盖；附件 docList 的 docId/url 必须匹配 attachments 授权文档 |
+| 选中 DomainAgent 并带文档提问 | `POST /v1/documents(file,metadata.skillId)` -> `POST /v1/chat/runs(targetType=DOMAIN_AGENT,targetId,attachments,metadata)` | `documentId`、`targetId`、`metadata.sceneParam.docList` | 后端绑定 `provider=domain-agent`、`routeSource=front-selected`；metadata 作为业务扩展传给下游，但 `skillId/query/sessionId` 由服务端按绑定和本轮问题覆盖；attachments 独立校验归属和状态，docList 只校验基本结构，不要求二者匹配 |
 | 点赞/点踩/取消 | 历史消息中找到 assistant `messageId` -> `POST /messages/{messageId}/feedback`；再次点击已选按钮 -> `DELETE /feedback` | `messageId`、可选 `runId`、`feedback.rating/status` | 历史消息 `feedback` 非空时高亮；取消后返回 `status=CANCELLED`，历史消息再查为 `feedback=null` |
 | 会话归档/恢复/删除 | 单个：`POST /archive`、`POST /restore`、`DELETE /sessions/{sessionId}`；批量：`DELETE /sessions` body `sessionIds[]` | `sessionId`、`sessionIds[]` | 删除是软删除；有 active run 时后端会先主动取消 run |
 | 文档库管理 | `GET /documents` -> `GET /documents/{documentId}`/`status`/`preview-url`/`download`/`PATCH`/`DELETE` | `documentId`、`cursor`、`status` | 列表默认不返回 DELETED；下载和预览只允许 AVAILABLE |
@@ -1320,6 +1320,11 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 标记的存量会话不会被自动覆盖。每实例默认最多执行8个在途标题请求，容量不足或调用超过30秒时仅保留当前标题，
 不影响本轮聊天。`language`只传递给标题服务，不能放入`metadata`代替该字段。
 
+服务端通过可替换的App排除Provider按当前会话`appId`判断是否提炼。默认实现读取
+`FINANCEEX_SESSION_TITLE_EXCLUDED_APP_IDS`配置的逗号分隔集合，trim、忽略空项并去重后按大小写敏感的
+精确值匹配；命中的会话保留默认、首问或用户手动标题，不执行前三轮提炼和晚轮补偿。`appId=null`的主站会话
+继续提炼。部署可替换Provider改用第三方配置来源，前端无需增加请求字段或分支逻辑。
+
 ### `/v1/chat/runs` 不同场景请求体示例
 
 普通首轮提问。`sessionId` 可以不传，后端会创建或归一化会话：
@@ -1396,7 +1401,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 }
 ```
 
-前端显式选择 DomainAgent。`targetType=DOMAIN_AGENT,targetId=...` 会绑定该会话；若带附件，`metadata.sceneParam.docList` 中的 `docId/url` 必须能匹配 `attachments[]` 中已授权文档的 `providerDocument.docId/url`：
+前端显式选择 DomainAgent。`targetType=DOMAIN_AGENT,targetId=...` 会绑定该会话；`attachments[]` 会按当前用户校验归属和可用状态，`metadata.sceneParam.docList` 只需符合 DomainAgent 的基本结构，不要求与附件匹配：
 
 ```json
 {
@@ -2950,8 +2955,8 @@ api-store S3 文档响应示例：
 api-store 带 `metadata.skillId` 时，下游通常上传到企业 EDM 并返回 `docId`。这类实际返回 `docId`
 的文档 `source` 为 `EDM_UPLOAD`，可作为聊天附件引用。普通提问实际调用 IntentAgent 后，前端只需传
 `attachments[].documentId`，服务端在意图确定 DomainAgent/Relay 后把已保存的完整 `providerDocument`
-覆盖到 `metadata.sceneParam.docList`。显式 DomainAgent 直连和 active binding 续接仍要求前端提供
-匹配已授权附件 `providerDocument.docId/url` 的 `docList`；意图澄清续接则使用累计可信附件由服务端覆盖。
+覆盖到 `metadata.sceneParam.docList`。显式 DomainAgent 直连和 active binding 续接不再将前端 `docList`
+与附件做权限关联，只校验其基本结构；意图澄清续接仍使用累计可信附件由服务端覆盖。
 
 EDM docId 模式的 `metadataJson.providerDocument` 示例：
 
@@ -3040,9 +3045,9 @@ curl -OJ http://localhost:8080/v1/documents/doc_xxx/download
 后端会按当前用户回查文档库，补齐可信的文件名、MIME、大小、来源和 tokenSize。前端传入的附件展示字段不会被当作事实源。
 
 指定 DomainAgent 调用时，`targetType=DOMAIN_AGENT` 和 `targetId` 触发 `DOMAIN_AGENT` 路由，并把当前会话绑定到该 DomainAgent。
-`metadata` 会作为下游业务扩展传递，但后端会按绑定和本轮问题强制写入 `skillId/query/sessionId`，前端传入同名字段也不会覆盖。若携带附件，前端必须把上传返回的
-`providerDocument.docId/url` 放入 `metadata.sceneParam.docList`，且这些引用必须和 `attachments[]`
-中的已授权 `documentId` 匹配：
+`metadata` 会作为下游业务扩展传递，但后端会按绑定和本轮问题强制写入 `skillId/query/sessionId`，前端传入同名字段也不会覆盖。
+`metadata.sceneParam.docList` 存在时必须是 JSON 数组，每项必须是对象并包含非空 `docId` 或 `url`；它不要求与
+`attachments[]` 匹配。`attachments[]` 仍由后端独立校验当前用户归属、AVAILABLE 状态和数量上限：
 
 ```json
 {
@@ -3080,7 +3085,7 @@ curl -OJ http://localhost:8080/v1/documents/doc_xxx/download
 }
 ```
 
-DomainAgent 路由会跳过用例库和意图服务，并创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding，后续未指定 target 的普通提问会优先续接该绑定。`selectedIntent` 可整体省略；传入时只作为可信度较低的展示摘要保存到 binding，第二轮续接无需再次传入。如果 `metadata.sceneParam.docList` 缺失、为空，或引用了未在 `attachments[]` 中授权的 `docId/url`，后端会拒绝本轮 run。ChatService 不校验 `targetId` 是否可调用；DomainAgent 权限由下游服务负责。
+DomainAgent 路由会跳过用例库和意图服务，并创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding，后续未指定 target 的普通提问会优先续接该绑定。`selectedIntent` 可整体省略；传入时只作为可信度较低的展示摘要保存到 binding，第二轮续接无需再次传入。`metadata.sceneParam.docList` 可以缺失或为空数组；存在内容时只校验数组项结构，不校验资源归属。ChatService 不校验 `targetId` 或 `docList` 资源是否可调用；相关权限由下游服务负责。
 
 该显式路径只有 `runMode=NEXT` 可以绕过等待态。若会话存在意图澄清、Relay/Agent 澄清、审批、确认或路由切换确认，服务端会在消息/run admission 的同一短事务中取消所有开放 Interaction，然后以当前请求的 `message/metadata/attachments` 调用指定 DomainAgent；旧澄清答案和 `questionnaireAnswers` 不会进入下游。旧等待 run 保留为历史，新 user 消息接在等待 assistant 后。当前 ACTIVE Relay/DomainAgent binding 会被取消并替换为 `routeSource=front-selected` 的目标 binding，历史 `RESUMABLE` Relay binding 不删除。该能力不会抢占 `RUNNING/CANCELLING` run。
 本轮显式选择的 DomainAgent 会进入 `runtime.metadata`，并在历史 assistant 的 `parts` 返回：

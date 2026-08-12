@@ -4,6 +4,7 @@ import com.huawei.it.ex.one.application.config.SessionTitleProperties;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.integration.memory.ChatMessageRepository;
+import com.huawei.it.ex.one.application.integration.sessiontitle.SessionTitleAppExclusionProvider;
 import com.huawei.it.ex.one.application.integration.sessiontitle.SessionTitleProvider;
 import com.huawei.it.ex.one.application.integration.sessiontitle.SessionTitleRequest;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
@@ -40,6 +41,7 @@ class SessionTitleApplicationService {
     private static final int MAX_QUERY_COUNT = 3;
 
     private final SessionTitleProperties properties;
+    private final SessionTitleAppExclusionProvider appExclusionProvider;
     private final SessionTitleProvider provider;
     private final SessionTitleCommitService commitService;
     private final SessionTitleMetadata titleMetadata;
@@ -53,6 +55,7 @@ class SessionTitleApplicationService {
 
     SessionTitleApplicationService(
             SessionTitleProperties properties,
+            SessionTitleAppExclusionProvider appExclusionProvider,
             SessionTitleProvider provider,
             SessionTitleCommitService commitService,
             SessionTitleMetadata titleMetadata,
@@ -61,6 +64,7 @@ class SessionTitleApplicationService {
             ChatRunRepository runRepository,
             @Qualifier("sessionTitleIoScheduler") Scheduler ioScheduler) {
         this.properties = properties;
+        this.appExclusionProvider = appExclusionProvider;
         this.provider = provider;
         this.commitService = commitService;
         this.titleMetadata = titleMetadata;
@@ -82,8 +86,11 @@ class SessionTitleApplicationService {
                 user.tenantId(), user.ownerUserId(), session.id(), run.id(),
                 messagePlan.userMessage().id(), properties.normalizeLanguage(command.language()));
         try {
-            Mono.fromCallable(() -> collectCandidate(trigger))
+            appExcluded(session.appId(), trigger)
                     .subscribeOn(ioScheduler)
+                    .filter(excluded -> !excluded)
+                    .flatMap(ignored -> Mono.fromCallable(() -> collectCandidate(trigger))
+                            .subscribeOn(ioScheduler))
                     .flatMap(Mono::justOrEmpty)
                     .flatMap(candidate -> generateAndCommit(candidate)
                             .onErrorResume(ignored -> {
@@ -139,6 +146,15 @@ class SessionTitleApplicationService {
         return titleMetadata.read(session.metadataJson())
                 .map(state -> state.source().autoReplaceable())
                 .orElse(false);
+    }
+
+    private Mono<Boolean> appExcluded(String appId, Trigger trigger) {
+        return Mono.defer(() -> appExclusionProvider.isExcluded(appId))
+                .defaultIfEmpty(false)
+                .onErrorResume(ignored -> {
+                    logAppExclusionFailure(trigger);
+                    return Mono.just(false);
+                });
     }
 
     private Optional<SessionTitleCandidate> collectCandidate(Trigger trigger) {
@@ -252,6 +268,16 @@ class SessionTitleApplicationService {
                 .sessionId(trigger.sessionId())
                 .operation("session-title.generate")
                 .attribute("queryCount", queryCount)
+                .retryable(false)
+                .build());
+    }
+
+    private void logAppExclusionFailure(Trigger trigger) {
+        log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTERNAL_EXECUTION_FAILED,
+                        "Session title app exclusion check failed; continuing title summary")
+                .runId(trigger.runId())
+                .sessionId(trigger.sessionId())
+                .operation("session-title.app-exclusion")
                 .retryable(false)
                 .build());
     }

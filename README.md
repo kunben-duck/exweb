@@ -102,7 +102,7 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 
 移动端会话创建和列表隔离复用现有 `channel`：移动端在自动创建 run 及三个列表接口中统一传小写 `mobile`；PC 端省略该字段，新会话继续默认保存为 `web`，列表仍可查看全部渠道。已有会话只有在请求显式携带 `channel` 时才校验一致性，因此该过滤属于展示和创建隔离，不替代会话的 `tenantId + userId` 归属校验。带 channel 的游标使用绑定 `appId/title/channel` 的 v4 格式；无 channel 的 v2/v3 游标继续兼容。
 
-启用 `financeex.session-title.enabled=true` 后，服务端会在有效 `NEXT/EDIT_USER` 用户消息提交后异步使用当前路径前三个业务问题总结会话标题。前三问完整总结尚未成功时，第四轮及后续有效问题会继续触发补偿调用，但请求内容仍固定为前三问；成功提交后不再因普通后续轮次调用。标题调用不阻塞首事件、Intent或Runtime，不产生实时事件；前端在后续会话列表或详情查询中读取结果。请求可选字段 `language` 最大32字符，空白时使用 `financeex.session-title.default-language`，且不进入 metadata 或 Agent 请求。自动结果只覆盖服务端默认或自动标题，显式标题、手动重命名、只读分支及没有私有状态标记的存量会话均受保护。开启功能时必须显式配置 `base-url`、正数且不超过30秒的 `timeout` 和有效的 `session-title` 鉴权 provider；默认路径为 `/session_title`，默认最大标题长度为50个Unicode码点。每实例默认最多保留8个在途标题请求，可通过 `max-concurrent-requests` 在1到64之间调整；容量已满时仅跳过本次标题总结，不阻塞或中止聊天主流程。
+启用 `financeex.session-title.enabled=true` 后，服务端会在有效 `NEXT/EDIT_USER` 用户消息提交后异步使用当前路径前三个业务问题总结会话标题。前三问完整总结尚未成功时，第四轮及后续有效问题会继续触发补偿调用，但请求内容仍固定为前三问；成功提交后不再因普通后续轮次调用。标题调用不阻塞首事件、Intent或Runtime，不产生实时事件；前端在后续会话列表或详情查询中读取结果。请求可选字段 `language` 最大32字符，空白时使用 `financeex.session-title.default-language`，且不进入 metadata 或 Agent 请求。自动结果只覆盖服务端默认或自动标题，显式标题、手动重命名、只读分支及没有私有状态标记的存量会话均受保护。标题编排通过`SessionTitleAppExclusionProvider`按当前可信会话AppId判断是否跳过；默认实现读取逗号分隔的`excluded-app-ids`，配置项会trim、去空并去重，再按大小写敏感的精确值匹配，`appId=null`的主站会话不受影响。企业可提供自定义Provider替换配置来源；查询失败或返回空结果时继续标题提炼。排除规则不会回滚已有自动标题，仅阻止后续提炼及晚轮补偿。开启功能时必须显式配置 `base-url`、正数且不超过30秒的 `timeout` 和有效的 `session-title` 鉴权 provider；默认路径为 `/session_title`，默认最大标题长度为50个Unicode码点。每实例默认最多保留8个在途标题请求，可通过 `max-concurrent-requests` 在1到64之间调整；容量已满时仅跳过本次标题总结，不阻塞或中止聊天主流程。
 
 会话列表和详情通过 `hasUnread/latestMessageSeq/lastReadSeq` 返回未读状态。只有成功保存 assistant 的 `run.completed` 和产生用户交互内容的 `run.waiting_user` 会推进最新消息水位；失败、取消和没有 assistant 的完成态不会产生未读。前端应在对应历史消息或实时终态实际展示后调用 `/read`，并提交当时观察到的 sequence；服务端会单调推进且截断超前值，避免旧页签清除后来到达的新消息。
 
@@ -201,8 +201,9 @@ DomainAgent binding，历史 `RESUMABLE` Relay session 保留。
 但不参与路由、鉴权、RouteMemory 或意图统计，也不会进入 run metadata、用例库、IntentAgent 或 Runtime 请求。
 DomainAgent 下游请求体会把 `metadata` 作为业务扩展，但服务端保留字段 `skillId/query/sessionId`
 始终以绑定的 DomainAgentId、本轮用户问题和 RuntimeBinding.runtimeSessionId 为准，前端传同名字段也不会覆盖。
-显式 DomainAgent 直连和 active binding 续接仍只校验附件引用：`metadata.sceneParam.docList` 中的 `docId/url`
-必须能匹配已授权文档的 `metadataJson.providerDocument.docId/url`。实际调用过 IntentAgent 的路由由服务端生成
+`metadata.sceneParam.docList` 作为下游业务参数只校验基本结构，不要求与 `attachments[]` 匹配；其中引用的资源权限
+由 DomainAgent 或其下游服务负责。标准 `attachments[]` 仍由 ChatService 独立校验当前用户归属、可用状态和数量上限。
+实际调用过 IntentAgent 的路由由服务端生成
 可信 `docList`：首轮使用本轮附件，意图澄清使用整条澄清链累计附件，并将每个文档已保存的完整
 `providerDocument` 覆盖到 Runtime metadata 中；前端传入的 `docList` 不参与这些意图路由。
 ChatService 不校验 `targetId` 是否可调用；DomainAgent 权限和 body 业务合法性由下游服务负责。
@@ -648,7 +649,7 @@ Servlet/MVC 使用 `MultipartFile`，纯 WebFlux 使用 `FilePart`，两者共�
 `api-store-url:{sha256(url)}` 这种短稳定定位符，完整 URL 只保存在 `metadataJson.providerDocument.url`。
 API Store 文档的 `source` 按实际响应定位符确定：有效 `docId` 表示 `EDM_UPLOAD`，仅有 `url` 表示
 `S3_UPLOAD`；该字段不依赖请求是否携带 `metadata.skillId`。
-这类 URL-only 文档可以通过 `providerDocument.url` 进入 `sceneParam.docList`，并继续接受附件归属校验。
+这类 URL-only 文档可以通过 `providerDocument.url` 进入 `sceneParam.docList`。标准附件引用仍独立接受当前用户归属和状态校验。
 
 文档接口：
 
@@ -679,8 +680,9 @@ API Store 文档的 `source` 按实际响应定位符确定：有效 `docId` 表
 指定 DomainAgent 且需要附件时，前端应先在上传请求 `metadata.skillId` 中放入对应技能 ID。若后端
 `financeex.storage.provider=api-store`，服务端会把该 `skillId` 透传给下游新文档接口，并把返回的
 `docId/url/docName/docSize/serverName/docVersion` 等字段保存到 `metadataJson.providerDocument`；随后
-`/v1/chat/runs` 使用 `targetType=DOMAIN_AGENT,targetId=...` 触发 DomainAgent chat adapter。前端需要把已授权
-文档的 `docId/url` 放入 `metadata.sceneParam.docList`；显式 DomainAgent 直连和 active binding 续接只做匹配校验。
+`/v1/chat/runs` 使用 `targetType=DOMAIN_AGENT,targetId=...` 触发 DomainAgent chat adapter。前端可按 DomainAgent
+业务协议把 `docId/url` 放入 `metadata.sceneParam.docList`；ChatService 只校验该字段是对象数组且每项包含
+`docId` 或 `url`，不要求它与 `attachments[]` 匹配。
 普通提问实际进入 IntentAgent 后，服务端会在路由确定时用可信附件的完整 `providerDocument` 覆盖该字段；
 `INTENT_CLARIFICATION` 续接使用整条澄清链累计的可信附件执行同样覆盖。
 

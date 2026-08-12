@@ -8,6 +8,7 @@ import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.routing.DomainExpertAccessNameResolver;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
+import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -20,13 +21,21 @@ import java.util.Optional;
  */
 final class AmbiguousRouteSelectionResolver {
     private final DomainExpertAccessNameResolver domainExpertResolver;
+    private final SensitiveInformationAccessNameResolver sensitiveInformationResolver;
 
     AmbiguousRouteSelectionResolver() {
-        this("");
+        this("", "");
     }
 
     AmbiguousRouteSelectionResolver(String domainExpertAccessNamePrefix) {
+        this(domainExpertAccessNamePrefix, "");
+    }
+
+    AmbiguousRouteSelectionResolver(String domainExpertAccessNamePrefix,
+                                    String sensitiveInformationAccessName) {
         this.domainExpertResolver = new DomainExpertAccessNameResolver(domainExpertAccessNamePrefix);
+        this.sensitiveInformationResolver = new SensitiveInformationAccessNameResolver(
+                sensitiveInformationAccessName);
     }
 
     List<Candidate> candidates(ChatInteractionRequest interaction) {
@@ -78,10 +87,14 @@ final class AmbiguousRouteSelectionResolver {
         }
         IntentDecision decision = candidate.intentDecision();
         DomainExpertAccessNameResolver.Resolution expert = domainExpertResolver.resolve(candidate.skillId());
-        if (expert.malformedDomainExpert()) {
+        boolean sensitiveInformation = sensitiveInformationResolver.matches(candidate.skillId());
+        if (!sensitiveInformation && expert.malformedDomainExpert()) {
             throw new IllegalArgumentException("AMBIGUOUS_ROUTE 专家候选缺少 roleName");
         }
-        RouteTarget route = expert.validDomainExpert()
+        RouteTarget route = sensitiveInformation
+                ? RouteTarget.agentRuntime(source, candidate.confidence(),
+                        "ambiguous route sensitive information candidate selected", RuntimeProfile.DELEGATE)
+                : expert.validDomainExpert()
                 ? RouteTarget.agentRuntime(source, candidate.confidence(),
                         "ambiguous route domain expert candidate selected", RuntimeProfile.DOMAIN_EXPERT,
                         expert.roleName())

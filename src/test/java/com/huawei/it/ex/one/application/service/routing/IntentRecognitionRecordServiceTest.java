@@ -117,6 +117,36 @@ class IntentRecognitionRecordServiceTest {
     }
 
     @Test
+    void recordsSensitiveInformationRelayAsAcceptedIntent() {
+        CapturingRepository repository = new CapturingRepository();
+        IntentRecognitionRecordService service = new IntentRecognitionRecordService(
+                enabledProperties(), repository, idGenerator, objectMapper, Runnable::run);
+        IntentDecision sensitiveIntent = new IntentDecision(
+                "intent-sensitive",
+                "敏感信息",
+                TaskComplexity.SIMPLE,
+                0.96,
+                true,
+                "sensitive_information",
+                Map.of("routeAction", "ROUTE_SINGLE"),
+                List.of(),
+                Map.of());
+
+        service.recordAsync(snapshot(sensitiveIntent,
+                RouteTarget.agentRuntime(
+                        "intent-agent", 0.96, "sensitive information", RuntimeProfile.DELEGATE), 8L));
+
+        assertThat(repository.records).singleElement().satisfies(record -> {
+            assertThat(record.status()).isEqualTo("SUCCESS");
+            assertThat(record.intentId()).isEqualTo("intent-sensitive");
+            assertThat(record.intentName()).isEqualTo("敏感信息");
+            assertThat(record.accepted()).isTrue();
+            assertThat(record.routeType()).isEqualTo("AGENT_RUNTIME");
+            assertThat(record.routeAgentCode()).isNull();
+        });
+    }
+
+    @Test
     void recordsDegradedIntentWithoutThrowing() {
         CapturingRepository repository = new CapturingRepository();
         IntentRecognitionRecordService service = new IntentRecognitionRecordService(

@@ -9,6 +9,7 @@ import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
+import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
@@ -18,10 +19,20 @@ import java.util.Map;
 /** Resolves route-switch input, target and binding without changing workflow order. */
 final class RouteSwitchContextResolver {
     private final RuntimeBindingApplicationService runtimeBindingService;
+    private final SensitiveInformationAccessNameResolver sensitiveInformationResolver;
 
     RouteSwitchContextResolver(
             RuntimeBindingApplicationService runtimeBindingService) {
+        this(runtimeBindingService, new SensitiveInformationAccessNameResolver(""));
+    }
+
+    RouteSwitchContextResolver(
+            RuntimeBindingApplicationService runtimeBindingService,
+            SensitiveInformationAccessNameResolver sensitiveInformationResolver) {
         this.runtimeBindingService = runtimeBindingService;
+        this.sensitiveInformationResolver = sensitiveInformationResolver == null
+                ? new SensitiveInformationAccessNameResolver("")
+                : sensitiveInformationResolver;
     }
 
     RouteSwitchInput input(
@@ -53,7 +64,8 @@ final class RouteSwitchContextResolver {
                 normalizedQuery);
         RuntimeProfile candidateRuntimeProfile = relayRuntimeProfile(
                 candidateProvider,
-                firstText(interaction.requestPayload().get("routeAction")));
+                firstText(interaction.requestPayload().get("routeAction")),
+                firstText(interaction.requestPayload().get("candidateAccessName")));
         String candidateRuntimeRoleName = firstText(
                 interaction.requestPayload().get("candidateRuntimeRoleName"));
         if (candidateRuntimeProfile == RuntimeProfile.DOMAIN_EXPERT
@@ -165,9 +177,10 @@ final class RouteSwitchContextResolver {
                 "不支持的候选 Runtime provider: " + provider);
     }
 
-    private RuntimeProfile relayRuntimeProfile(String provider, String routeAction) {
+    private RuntimeProfile relayRuntimeProfile(String provider, String routeAction, String candidateAccessName) {
         if (RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(provider)
-                && "ROUTE_SINGLE".equals(routeAction)) {
+                && "ROUTE_SINGLE".equals(routeAction)
+                && !sensitiveInformationResolver.matches(candidateAccessName)) {
             return RuntimeProfile.DOMAIN_EXPERT;
         }
         return RuntimeProfile.DELEGATE;

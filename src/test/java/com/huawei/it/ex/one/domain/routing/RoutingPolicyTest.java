@@ -50,6 +50,62 @@ class RoutingPolicyTest {
     }
 
     @Test
+    void routesConfiguredSensitiveInformationIntentToRelayDelegate() {
+        RoutingPolicy sensitivePolicy = new RoutingPolicy(
+                0.85,
+                0.85,
+                "RE_",
+                new SensitiveInformationAccessNameResolver("sensitive_information"));
+        IntentDecision intent = new IntentDecision(
+                "finance.sensitive", "敏感信息", TaskComplexity.SIMPLE, 0.95, true,
+                "sensitive_information", Map.of("routeAction", "ROUTE_SINGLE"),
+                java.util.List.of(), Map.of());
+
+        RouteTarget target = sensitivePolicy.decideFromIntent(null, null, intent, null);
+
+        assertThat(target.type()).isEqualTo(RouteType.AGENT_RUNTIME);
+        assertThat(target.runtimeProfile()).isEqualTo(RuntimeProfile.DELEGATE);
+        assertThat(target.runtimeRoleName()).isNull();
+        assertThat(target.selectedAgentCode()).isNull();
+    }
+
+    @Test
+    void sensitiveInformationExactMatchTakesPriorityOverDomainExpertPrefix() {
+        RoutingPolicy sensitivePolicy = new RoutingPolicy(
+                0.85,
+                0.85,
+                "RE_",
+                new SensitiveInformationAccessNameResolver("RE_"));
+        IntentDecision intent = new IntentDecision(
+                "finance.sensitive", "敏感信息", TaskComplexity.SIMPLE, 0.95, true,
+                "RE_", Map.of("routeAction", "ROUTE_SINGLE"), java.util.List.of(), Map.of());
+
+        RouteTarget target = sensitivePolicy.decideFromIntent(null, null, intent, null);
+
+        assertThat(target.type()).isEqualTo(RouteType.AGENT_RUNTIME);
+        assertThat(target.runtimeProfile()).isEqualTo(RuntimeProfile.DELEGATE);
+        assertThat(target.runtimeRoleName()).isNull();
+    }
+
+    @Test
+    void sensitiveInformationAccessNameMatchIsCaseSensitive() {
+        RoutingPolicy sensitivePolicy = new RoutingPolicy(
+                0.85,
+                0.85,
+                "RE_",
+                new SensitiveInformationAccessNameResolver("sensitive_information"));
+        IntentDecision intent = new IntentDecision(
+                "finance.sensitive", "敏感信息", TaskComplexity.SIMPLE, 0.95, true,
+                "SENSITIVE_INFORMATION", Map.of("routeAction", "ROUTE_SINGLE"),
+                java.util.List.of(), Map.of());
+
+        RouteTarget target = sensitivePolicy.decideFromIntent(null, null, intent, null);
+
+        assertThat(target.type()).isEqualTo(RouteType.DOMAIN_AGENT);
+        assertThat(target.selectedAgentCode()).isEqualTo("SENSITIVE_INFORMATION");
+    }
+
+    @Test
     void domainExpertAccessNameMatchIsCaseSensitive() {
         RoutingPolicy expertPolicy = new RoutingPolicy(0.85, 0.85, "RE_");
         IntentDecision intent = new IntentDecision(

@@ -219,8 +219,11 @@ final class AppliedRouteRecorder {
                 : interaction.requestPayload();
         if (route != null && route.type() == RouteType.AGENT_RUNTIME) {
             String routeAction = blankToDefault(firstText(requestPayload.get("routeAction")), "NO_MATCH");
-            if (route.runtimeProfile() == RuntimeProfile.DOMAIN_EXPERT) {
-                String intentCode = firstText(requestPayload.get("candidateIntentCode"), "domain_expert");
+            if ("ROUTE_SINGLE".equalsIgnoreCase(routeAction)) {
+                String defaultIntentCode = route.runtimeProfile() == RuntimeProfile.DOMAIN_EXPERT
+                        ? "domain_expert"
+                        : "relay";
+                String intentCode = firstText(requestPayload.get("candidateIntentCode"), defaultIntentCode);
                 String intentName = firstText(requestPayload.get("candidateIntentName"), intentCode);
                 String accessName = firstText(
                         requestPayload.get("candidateAccessName"),
@@ -252,7 +255,8 @@ final class AppliedRouteRecorder {
 
     private IntentDecision normalizedRouteMemoryIntent(IntentDecision intent, RouteTarget route) {
         if (route == null || route.type() != RouteType.AGENT_RUNTIME
-                || route.runtimeProfile() == RuntimeProfile.DOMAIN_EXPERT) {
+                || route.runtimeProfile() == RuntimeProfile.DOMAIN_EXPERT
+                || routeSingleIntent(intent)) {
             return intent;
         }
         String routeAction = firstText(
@@ -266,6 +270,15 @@ final class AppliedRouteRecorder {
         return new IntentDecision("relay", "no_match", TaskComplexity.COMPLEX, 0.0,
                 false, null, slots, List.of(),
                 Map.of("targetProvider", "relay", "routeAction", routeAction));
+    }
+
+    private boolean routeSingleIntent(IntentDecision intent) {
+        return intent != null
+                && intent.simpleTask()
+                && firstText(intent.candidateDomainAgentId()) != null
+                && "ROUTE_SINGLE".equalsIgnoreCase(firstText(
+                intent == null || intent.slots() == null ? null : intent.slots().get("routeAction"),
+                intent == null || intent.raw() == null ? null : intent.raw().get("routeAction")));
     }
 
     private MemoryContext appendInlineRouteHistory(

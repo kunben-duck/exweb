@@ -87,6 +87,24 @@ class AmbiguousRouteSelectionResolverTest {
         assertThat(result.intentDecision().intentCode()).isEqualTo("intent-expert");
     }
 
+    @Test
+    void selectedSensitiveInformationCandidateBuildsDelegateRouteWithoutCallingIntentAgain() {
+        AmbiguousRouteSelectionResolver sensitiveResolver =
+                new AmbiguousRouteSelectionResolver("RE_", "sensitive_information");
+        AmbiguousRouteSelectionResolver.Candidate candidate =
+                sensitiveResolver.autoSelect(payload(List.of(
+                        candidate("intent-sensitive", "敏感信息", "sensitive_information", 0.92))))
+                        .orElseThrow();
+
+        var result = sensitiveResolver.routeSignal(candidate, "user-confirmed");
+
+        assertThat(result.route().type()).isEqualTo(RouteType.AGENT_RUNTIME);
+        assertThat(result.route().runtimeProfile()).isEqualTo(RuntimeProfile.DELEGATE);
+        assertThat(result.route().runtimeRoleName()).isNull();
+        assertThat(result.intentDecision().intentCode()).isEqualTo("intent-sensitive");
+        assertThat(result.intentDecision().candidateDomainAgentId()).isEqualTo("sensitive_information");
+    }
+
     private Map<String, Object> payload(List<Map<String, Object>> candidates) {
         return Map.of(
                 "clarificationType", AmbiguousRouteSupport.CLARIFICATION_TYPE,

@@ -8,6 +8,7 @@ import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
 import com.huawei.it.ex.one.domain.routing.RouteType;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
+import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
 
 import org.junit.jupiter.api.Test;
 
@@ -44,13 +45,45 @@ class RouteSwitchContextResolverTest {
                 .hasMessageContaining("roleName");
     }
 
+    @Test
+    void approvedSensitiveInformationRouteRestoresDelegateAndOriginalIntent() {
+        RouteSwitchContextResolver sensitiveResolver = new RouteSwitchContextResolver(
+                null, new SensitiveInformationAccessNameResolver("sensitive_information"));
+        ChatInteractionRequest interaction = interaction(
+                "sensitive_information", null, "intent-sensitive", "敏感信息");
+        ChatInteractionClaimResult claim = new ChatInteractionClaimResult(
+                interaction, Map.of("approved", true));
+
+        RouteSwitchInput input = sensitiveResolver.input(interaction, claim);
+        var target = sensitiveResolver.target(interaction, input);
+        var restoredIntent = new AppliedRouteRecorder(null, null, null)
+                .routeSwitchIntent(interaction, target);
+
+        assertThat(target.type()).isEqualTo(RouteType.AGENT_RUNTIME);
+        assertThat(target.runtimeProfile()).isEqualTo(RuntimeProfile.DELEGATE);
+        assertThat(target.runtimeRoleName()).isNull();
+        assertThat(restoredIntent.intentCode()).isEqualTo("intent-sensitive");
+        assertThat(restoredIntent.intentName()).isEqualTo("敏感信息");
+        assertThat(restoredIntent.candidateDomainAgentId()).isEqualTo("sensitive_information");
+        assertThat(restoredIntent.slots()).containsEntry("routeAction", "ROUTE_SINGLE");
+    }
+
     private ChatInteractionRequest interaction(String runtimeRoleName) {
+        return interaction("RE_system-awareness", runtimeRoleName, "intent-expert", "领域专家");
+    }
+
+    private ChatInteractionRequest interaction(String accessName,
+                                               String runtimeRoleName,
+                                               String intentCode,
+                                               String intentName) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("currentProvider", "domain-agent");
         payload.put("currentTargetId", "agent-a");
         payload.put("candidateProvider", "relay");
         payload.put("candidateTargetId", "relay");
-        payload.put("candidateAccessName", "RE_system-awareness");
+        payload.put("candidateIntentCode", intentCode);
+        payload.put("candidateIntentName", intentName);
+        payload.put("candidateAccessName", accessName);
         payload.put("routeAction", "ROUTE_SINGLE");
         payload.put("originalQuery", "分析资产负债率");
         if (runtimeRoleName != null) {

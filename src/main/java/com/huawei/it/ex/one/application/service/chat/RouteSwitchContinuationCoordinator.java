@@ -21,6 +21,7 @@ import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RouteType;
+import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
@@ -80,7 +81,24 @@ final class RouteSwitchContinuationCoordinator {
             AgentRuntimeExecutor runtimeExecutor,
             AgentDataPersistenceGate persistenceGate,
             RunMemoryContextAssembler memoryAssembler) {
-        this.contextResolver = new RouteSwitchContextResolver(runtimeBindingService);
+        this(runtimeBindingService, lifecycle, appliedRouteRecorder, interactionEventFactory,
+                eventPersistenceCoordinator, refusalCoordinator, runtimeExecutor, persistenceGate,
+                memoryAssembler, new SensitiveInformationAccessNameResolver(""));
+    }
+
+    RouteSwitchContinuationCoordinator(
+            RuntimeBindingApplicationService runtimeBindingService,
+            InteractionRunLifecycle lifecycle,
+            AppliedRouteRecorder appliedRouteRecorder,
+            InteractionEventFactory interactionEventFactory,
+            ChatEventPersistenceCoordinator eventPersistenceCoordinator,
+            DomainAgentRefusalCoordinator refusalCoordinator,
+            AgentRuntimeExecutor runtimeExecutor,
+            AgentDataPersistenceGate persistenceGate,
+            RunMemoryContextAssembler memoryAssembler,
+            SensitiveInformationAccessNameResolver sensitiveInformationResolver) {
+        this.contextResolver = new RouteSwitchContextResolver(
+                runtimeBindingService, sensitiveInformationResolver);
         this.lifecycle = lifecycle;
         this.appliedRouteRecorder = appliedRouteRecorder;
         this.interactionEventFactory = interactionEventFactory;

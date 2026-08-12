@@ -8,6 +8,7 @@ import com.huawei.it.ex.one.application.service.routing.RouteSignalApplicationSe
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.SystemResponseExecutor;
+import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
 
 import reactor.core.scheduler.Scheduler;
 
@@ -145,7 +146,8 @@ class ChatRuntimeCoordinatorConfiguration {
             DomainAgentRefusalCoordinator refusalCoordinator,
             AgentRuntimeExecutor runtimeExecutor,
             AgentDataPersistenceGate persistenceGate,
-            RunMemoryContextAssembler memoryAssembler) {
+            RunMemoryContextAssembler memoryAssembler,
+            SensitiveInformationAccessNameResolver sensitiveInformationResolver) {
         return new RouteSwitchContinuationCoordinator(
                 runtimeBindingService,
                 lifecycle,
@@ -155,7 +157,8 @@ class ChatRuntimeCoordinatorConfiguration {
                 refusalCoordinator,
                 runtimeExecutor,
                 persistenceGate,
-                memoryAssembler);
+                memoryAssembler,
+                sensitiveInformationResolver);
     }
 
     @Bean

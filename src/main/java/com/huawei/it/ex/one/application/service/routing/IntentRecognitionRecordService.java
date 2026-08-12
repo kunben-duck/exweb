@@ -156,7 +156,8 @@ public class IntentRecognitionRecordService {
             return false;
         }
         if (route.type() == RouteType.AGENT_RUNTIME
-                && route.runtimeProfile() == RuntimeProfile.DOMAIN_EXPERT) {
+                && (route.runtimeProfile() == RuntimeProfile.DOMAIN_EXPERT
+                || "ROUTE_SINGLE".equalsIgnoreCase(stringValue(intent.slots().get("routeAction"))))) {
             return !intent.candidateDomainAgentId().isBlank();
         }
         return route.type() == RouteType.DOMAIN_AGENT

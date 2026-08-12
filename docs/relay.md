@@ -80,6 +80,11 @@ ws://{host}:{port}/ws/{client_id}
 
 > **注意**：`app_mode` 无需传入，后端默认使用 `delegate` 模式。
 
+ChatService 在 Intent 的规范化 `accessName` 区分大小写精确命中
+`financeex.intent.sensitive-information-access-name` 时，也使用本节完全相同的 Delegate
+`config + user-message` 协议。该规则不增加新的 Relay Profile，敏感信息任务与普通 Delegate
+任务复用匹配的 `RESUMABLE` Binding；公开 `intent-result` 仍保留原始 `ROUTE_SINGLE` 和敏感意图信息。
+
 > **ChatService 集成边界**：前端 `/v1/chat/runs.agentMode` 仅记录在 active DomainAgent Binding，
 > 不写入 Relay Binding，也不映射到 Relay `config`、`user-message.metadata` 或 `approval-response`。
 > `config.appMode` 是 Relay 自身运行配置，与前端 `agentMode` 无关。完整规则参见

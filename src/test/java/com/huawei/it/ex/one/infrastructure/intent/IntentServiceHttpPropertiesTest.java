@@ -30,6 +30,14 @@ class IntentServiceHttpPropertiesTest {
     }
 
     @Test
+    void bindsOptionalSensitiveInformationAccessName() {
+        contextRunner.withPropertyValues(
+                        "financeex.intent.sensitive-information-access-name=sensitive_information")
+                .run(context -> assertThat(context.getBean(IntentServiceHttpProperties.class)
+                        .getSensitiveInformationAccessName()).isEqualTo("sensitive_information"));
+    }
+
+    @Test
     void defaultsToStreamingInvocationAndBoundedStreamResources() {
         contextRunner.run(context -> {
             IntentServiceHttpProperties properties = context.getBean(IntentServiceHttpProperties.class);

@@ -741,9 +741,9 @@ sequenceDiagram
 
 注意：上图里的 WebSocket 只负责订阅 `streamTopicId` 对应的 ChatEvent。后台 run 的执行由 `POST /v1/chat/runs` 在服务端启动，WebSocket `subscribe` 不会触发 DomainAgent 或 Runtime query。
 
-### DomainAgent 绑定与切换
+### Intent目标、DomainAgent绑定与切换
 
-- 意图服务完成 `ROUTE_SINGLE` 后会先推送 `runtime.progress(payload.sourceType=intent-result)`。其中 `intentId` 是原始意图编码，`skillId` 和 `targetId` 都是后端完成可选前缀归一化后的真实 DomainAgent skillId：
+- 意图服务完成 `ROUTE_SINGLE` 后会先推送 `runtime.progress(payload.sourceType=intent-result)`。其中 `intentId` 是原始意图编码，`skillId` 是后端完成可选通用前缀归一化后的可信 `accessName`；普通 DomainAgent 目标还会返回相同值的 `targetId`：
   ```json
   {
     "source": "intent-agent",
@@ -789,11 +789,11 @@ sequenceDiagram
   ```
   前端可展示技能选择入口，用户选中后重新调用 `/v1/chat/runs`，传 `targetType=DOMAIN_AGENT,targetId=<skillId>`。
 - 前端手动选择领域 Agent 时，调用 `/v1/chat/runs` 传 `targetType=DOMAIN_AGENT,targetId=...`。后端会把该会话绑定到目标 DomainAgent，`stream-status` 中可通过 `bindingProvider/bindingTargetId/bindingRouteSource` 查看当前绑定。
-- 未传 target 时，后端优先续接当前 active DomainAgent binding。普通 Relay 回答正常完成后把 binding 改为 `RESUMABLE`，因此下次提交问题仍调用用例库或意图服务；再次进入 Relay 时只恢复 Profile、`appMode` 和 `roleName` 都匹配的 session。意图服务 `ROUTE_SINGLE.items[0].accessName` 先移除一次可选通用前缀，通常作为 `DomainAgentId/skillId`；若区分大小写命中后端专家前缀，则移除该前缀并把剩余后缀作为 Relay Domain Expert 的动态 `role_name`。前端直接选择同名 DomainAgent 不会触发该转换。
+- 未传 target 时，后端优先续接当前 active DomainAgent binding。普通 Relay 回答正常完成后把 binding 改为 `RESUMABLE`，因此下次提交问题仍调用用例库或意图服务；再次进入 Relay 时只恢复 Profile、`appMode` 和 `roleName` 都匹配的 session。意图服务 `ROUTE_SINGLE.items[0].accessName` 先移除一次可选通用前缀；归一化值若精确命中后端敏感信息配置则进入 Relay Delegate，否则命中专家前缀时移除该前缀并把剩余后缀作为 Relay Domain Expert 的动态 `role_name`，均未命中才作为 `DomainAgentId/skillId`。前端直接选择同名 DomainAgent不会触发该转换。
 
-- Domain Expert 的公开 `intent-result` 仍保留原始 `routeAction=ROUTE_SINGLE`、`intentId/intentName/skillId`，但 `routeType=AGENT_RUNTIME,targetProvider=relay`。前端不需要提交 Runtime Profile、`appMode` 或 `role_name`；动态角色由服务端从可信 Intent accessName 解析，并与专家 appMode 一起固化到 Binding。不同角色不会交叉复用 Relay session。专家与 Delegate 对前端使用相同 ChatEvent 契约。
+- 敏感信息和 Domain Expert 的公开 `intent-result` 都保留原始 `routeAction=ROUTE_SINGLE`、`intentId/intentName/skillId`，但返回 `routeType=AGENT_RUNTIME,targetProvider=relay`，不返回 DomainAgent `targetId`。敏感信息使用普通 Delegate `user-message`并共享 Delegate Binding；专家使用动态 `role_name` 和独立 Profile。前端不需要提交 Runtime Profile、`appMode` 或 `role_name`，两者与普通 Relay 使用相同 ChatEvent 契约。
 - DomainAgent 下游 body 以 `metadata` 为业务扩展，但 `skillId/query/sessionId` 由后端按当前绑定和本轮问题强制写入，前端传同名字段也不会覆盖。
-- 意图服务上下文由后端 RouteMemory 维护：首次路由传 `routeTrigger=first_turn`；最新 Relay/no_match route 的来源 run 正常完成时传 `fallback_followup`；DomainAgent 拒答重路由传 `domain_reject` 和本次拒答摘要；提交意图澄清后传 `clarify_answer`；前端 `forceReroute=true` 由后端转换为用户纠正触发原因。目标 binding 成功后、调用 Runtime 前即异步记录 `ROUTE`，所以后续任务失败、取消或拒答仍会保留本次路由；但 `routeSource=front-selected` 只作为路由事实保存，不进入发送给 IntentAgent 的 history，也不占用 TopK，前端无需为直选结果提供意图名称。`user-confirmed` 和 `intent-agent` 路由仍进入 history；已有 binding 的普通追问和 Agent Interaction 续接不新增 route。Relay route 固定保存为 `intent=no_match,intentCode=relay,targetProvider=relay`，只有正常完成才影响下一轮 trigger。手动 Agent 拒答后的候选在默认确认模式下要等用户确认并成功绑定后才记录；开启拒答自动切换后则在新 Binding 生效、调用候选 Runtime 前记录。RouteMemory 始终 best-effort，不阻断 `/v1/chat/runs`。
+- 意图服务上下文由后端 RouteMemory 维护：首次路由传 `routeTrigger=first_turn`；最新 Relay/no_match route 的来源 run 正常完成时传 `fallback_followup`；DomainAgent 拒答重路由传 `domain_reject` 和本次拒答摘要；提交意图澄清后传 `clarify_answer`；前端 `forceReroute=true` 由后端转换为用户纠正触发原因。目标 binding 成功后、调用 Runtime 前即异步记录 `ROUTE`，所以后续任务失败、取消或拒答仍会保留本次路由；但 `routeSource=front-selected` 只作为路由事实保存，不进入发送给 IntentAgent 的 history，也不占用 TopK，前端无需为直选结果提供意图名称。`user-confirmed` 和 `intent-agent` 路由仍进入 history；已有 binding 的普通追问和 Agent Interaction 续接不新增 route。只有 `ROUTE_MULTI/NO_MATCH/RELAY_FALLBACK` 的 Delegate route 保存为 `intent=no_match,intentCode=relay` 并在正常完成后影响下一轮 trigger；敏感信息 Delegate保留原始 `ROUTE_SINGLE` 意图，不视为 no-match fallback。手动 Agent 拒答后的候选在默认确认模式下要等用户确认并成功绑定后才记录；开启拒答自动切换后则在新 Binding 生效、调用候选 Runtime 前记录。RouteMemory 始终 best-effort，不阻断 `/v1/chat/runs`。
 - DomainAgent 流式返回 `type=agent.refusal,code=FN-EX-CAHT-BIZ-DAG-001` 后，后端立即终止旧 Agent 流并以 `routeTrigger=domain_reject` 重新调用 intent-agent。若意图返回澄清，后续每轮请求使用 `routeTrigger=clarify_answer` 并继续携带本次拒答摘要；普通澄清不携带该字段。旧拒答编码和单独的 `reasonCode` 不再触发重路由。
 - 如果当前绑定来自意图或用例库，后端自动切换到新 DomainAgent；合法 `NO_MATCH/ROUTE_MULTI` 或失败策略为 `RELAY_FALLBACK` 时执行 Relay。后端直接采用本次 Intent 结果，返回当前或曾拒答技能时仍会重新调用，并由 `max-reroutes` 防止无界循环。若当前绑定来源为 `front-selected/user-confirmed`，默认会先返回 `run.waiting_user`，消息 parts 包含 `DOMAIN_AGENT_REFUSAL` 和 `ROUTE_SWITCH_CONFIRMATION_REQUEST`；同意后使用原问题调用候选 Runtime，拒绝后保留原绑定。等待事件返回 `autoActionAt/autoActionTimeoutMs/autoActionType=APPROVE_ROUTE_SWITCH`，并与 AMBIGUOUS_ROUTE 共用默认30秒配置；到期后前端提交现有 `approved=true` 请求。重意图返回当前技能时目标未变化，不生成切换确认。部署配置 `financeex.domain-agent.refusal-auto-switch-enabled=true` 后，手动来源拒答时也会原子取消旧 Binding，并直接调用重意图得到的 DomainAgent 或 Relay，不生成路由切换 Interaction。意图本身要求澄清时仍进入 `INTENT_CLARIFICATION`。等待确认阶段不生成 `ANSWER`，最终回答、拒答与确认过程复用同一个 assistantMessageId。
 

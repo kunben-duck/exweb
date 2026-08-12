@@ -230,6 +230,63 @@ class RouteMemoryApplicationServiceTest {
     }
 
     @Test
+    void sensitiveInformationRelayPreservesOriginalIntentRouteMemory() {
+        IntentDecision sensitiveIntent = new IntentDecision(
+                "intent-sensitive", "敏感信息", TaskComplexity.SIMPLE, 0.94,
+                true, "sensitive_information",
+                Map.of("routeAction", "ROUTE_SINGLE", "accessName", "sensitive_information"),
+                List.of(), Map.of());
+        RouteTarget sensitiveRoute = RouteTarget.agentRuntime(
+                "intent-agent", 0.94, "sensitive information", RuntimeProfile.DELEGATE);
+        RouteMemoryApplicationService.RouteMemoryRouteCommand command =
+                new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                        user, "sensitive-session", "run-sensitive", "敏感信息问题",
+                        sensitiveIntent, sensitiveRoute);
+
+        service.recordRouteDecision(command);
+
+        RouteMemoryItem route = repository.items.stream()
+                .filter(item -> item.itemType() == RouteMemoryItemType.ROUTE)
+                .findFirst()
+                .orElseThrow();
+        assertThat(route.intentId()).isEqualTo("intent-sensitive");
+        assertThat(route.intentName()).isEqualTo("敏感信息");
+        assertThat(route.domainAgentId()).isNull();
+        assertThat(route.payload())
+                .containsEntry("targetProvider", "relay")
+                .containsEntry("routeAction", "ROUTE_SINGLE");
+        assertThat(service.routeHistory(command)).containsExactlyInAnyOrderEntriesOf(Map.of(
+                "type", "route",
+                "query", "敏感信息问题",
+                "intent", "敏感信息"));
+        repository.markRunCompleted("run-sensitive");
+        assertThat(service.latestRouteIsRelayFallback(user, "sensitive-session")).isFalse();
+    }
+
+    @Test
+    void unusableRouteSingleIntentRemainsRelayFallback() {
+        IntentDecision failedIntent = new IntentDecision(
+                "finance.runtime.intent_error", "意图服务协议异常", TaskComplexity.COMPLEX, 0.0,
+                false, null, Map.of("routeAction", "ROUTE_SINGLE"), List.of(),
+                Map.of("source", "http-intent-degraded"));
+        RouteMemoryApplicationService.RouteMemoryRouteCommand command =
+                new RouteMemoryApplicationService.RouteMemoryRouteCommand(
+                        user, "failed-single-session", "run-failed-single", "协议异常问题",
+                        failedIntent,
+                        RouteTarget.agentRuntime("intent-agent", 0.0, "intent degraded"));
+
+        service.recordRouteDecision(command);
+
+        RouteMemoryItem route = repository.items.stream()
+                .filter(item -> item.itemType() == RouteMemoryItemType.ROUTE)
+                .findFirst()
+                .orElseThrow();
+        assertThat(route.intentId()).isEqualTo("relay");
+        assertThat(route.intentName()).isEqualTo("no_match");
+        assertThat(route.domainAgentId()).isNull();
+    }
+
+    @Test
     void routeMultiWithoutCandidateNamesFallsBackToNoMatchHistory() {
         IntentDecision relayIntent = new IntentDecision("relay", "no_match", TaskComplexity.COMPLEX, 0.0,
                 false, null, Map.of("routeAction", "ROUTE_MULTI"), List.of(), Map.of());

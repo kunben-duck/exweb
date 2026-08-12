@@ -24,6 +24,8 @@ import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryContext;
 import com.huawei.it.ex.one.domain.routing.RouteType;
 import com.huawei.it.ex.one.domain.routing.RoutingPolicy;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
+import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
 import com.huawei.it.ex.one.domain.usecase.UseCaseMatchResult;
 import com.huawei.it.ex.one.infrastructure.runtime.intentagent.BlockingIntentAgentRuntime;
 
@@ -128,6 +130,53 @@ class RouteSignalApplicationServiceTest {
         assertThat(result.route().type()).isEqualTo(RouteType.DOMAIN_AGENT);
         assertThat(result.route().selectedAgentCode()).isEqualTo("employee_reimbursement_agent");
         assertThat(result.intentDecision()).isNotNull();
+    }
+
+    @Test
+    void sensitiveInformationIntentEmitsOriginalIntentAndRoutesToRelayDelegate() {
+        IntentDecision sensitiveIntent = new IntentDecision(
+                "intent-sensitive",
+                "敏感信息",
+                TaskComplexity.SIMPLE,
+                0.96,
+                true,
+                "sensitive_information",
+                Map.of(
+                        "routeAction", "ROUTE_SINGLE",
+                        "intentId", "intent-sensitive",
+                        "accessName", "sensitive_information"),
+                List.of(),
+                Map.of());
+        RouteSignalApplicationService service = new RouteSignalApplicationService(
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                new BlockingIntentAgentRuntime((command, memory, user) -> sensitiveIntent),
+                new RoutingPolicy(
+                        0.85,
+                        0.85,
+                        "RE_",
+                        new SensitiveInformationAccessNameResolver("sensitive_information")),
+                new RouteSignalProperties(false, true));
+
+        List<RouteSignalFrame> frames = service.routeInitialWithProgress(new RouteSignalRequest(
+                "run-sensitive", user, session, command, List.of(), memory)).collectList().block();
+
+        assertThat(frames).isNotNull();
+        assertThat(frames)
+                .filteredOn(frame -> frame.eventFrame()
+                        && "intent-result".equals(frame.event().payload().get("sourceType")))
+                .singleElement()
+                .satisfies(frame -> assertThat(frame.event().payload())
+                        .containsEntry("routeAction", "ROUTE_SINGLE")
+                        .containsEntry("intentCode", "intent-sensitive")
+                        .containsEntry("intentId", "intent-sensitive")
+                        .containsEntry("intentName", "敏感信息")
+                        .containsEntry("skillId", "sensitive_information")
+                        .containsEntry("routeType", "AGENT_RUNTIME")
+                        .containsEntry("targetProvider", "relay"));
+        assertThat(frames.getLast().result().route().type()).isEqualTo(RouteType.AGENT_RUNTIME);
+        assertThat(frames.getLast().result().route().runtimeProfile()).isEqualTo(RuntimeProfile.DELEGATE);
+        assertThat(frames.getLast().result().route().runtimeRoleName()).isNull();
+        assertThat(frames.getLast().result().intentDecision()).isSameAs(sensitiveIntent);
     }
 
     @Test

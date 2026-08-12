@@ -560,7 +560,7 @@ public class RouteMemoryApplicationService {
     }
 
     private String routeIntentId(IntentDecision intent, RouteTarget route) {
-        if (delegateRelay(route)) {
+        if (delegateRelayFallback(intent, route)) {
             return "relay";
         }
         if (intent != null && !blank(intent.intentCode())) {
@@ -570,7 +570,7 @@ public class RouteMemoryApplicationService {
     }
 
     private String routeIntentName(IntentDecision intent, RouteTarget route) {
-        if (delegateRelay(route)) {
+        if (delegateRelayFallback(intent, route)) {
             return "no_match";
         }
         if (intent != null && !blank(intent.intentName())) {
@@ -585,10 +585,18 @@ public class RouteMemoryApplicationService {
                 : null;
     }
 
-    private boolean delegateRelay(RouteTarget route) {
+    private boolean delegateRelayFallback(IntentDecision intent, RouteTarget route) {
         return route != null
                 && route.type() == com.huawei.it.ex.one.domain.routing.RouteType.AGENT_RUNTIME
-                && route.runtimeProfile() != RuntimeProfile.DOMAIN_EXPERT;
+                && route.runtimeProfile() != RuntimeProfile.DOMAIN_EXPERT
+                && !adoptedRouteSingleIntent(intent);
+    }
+
+    private boolean adoptedRouteSingleIntent(IntentDecision intent) {
+        return intent != null
+                && intent.simpleTask()
+                && !blank(intent.candidateDomainAgentId())
+                && "ROUTE_SINGLE".equalsIgnoreCase(routeAction(intent));
     }
 
     private String routeAction(IntentDecision intent) {

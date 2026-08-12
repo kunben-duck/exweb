@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.application.config;
 
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.domain.routing.RoutingPolicy;
+import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -24,8 +25,16 @@ public class ApplicationBeanConfig {
     public RoutingPolicy routingPolicy(@Value("${financeex.use-case-library.min-score:0.85}") double minScore,
                                        @Value("${financeex.intent.confidence-threshold:0.85}") double intentConfidenceThreshold,
                                        @Value("${financeex.intent.domain-expert-access-name-prefix:}")
-                                       String domainExpertAccessNamePrefix) {
-        return new RoutingPolicy(minScore, intentConfidenceThreshold, domainExpertAccessNamePrefix);
+                                       String domainExpertAccessNamePrefix,
+                                       SensitiveInformationAccessNameResolver sensitiveInformationResolver) {
+        return new RoutingPolicy(minScore, intentConfidenceThreshold, domainExpertAccessNamePrefix,
+                sensitiveInformationResolver);
+    }
+
+    @Bean
+    public SensitiveInformationAccessNameResolver sensitiveInformationAccessNameResolver(
+            @Value("${financeex.intent.sensitive-information-access-name:}") String accessName) {
+        return new SensitiveInformationAccessNameResolver(accessName);
     }
 
     /**

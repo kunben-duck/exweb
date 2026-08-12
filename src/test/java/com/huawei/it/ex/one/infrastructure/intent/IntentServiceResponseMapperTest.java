@@ -63,6 +63,17 @@ class IntentServiceResponseMapperTest {
     }
 
     @Test
+    void sensitiveInformationMatchTakesPriorityOverDomainExpertPrefixValidation() throws Exception {
+        IntentRecognitionResult result = mapper("domain_agent_", "RE_", "RE_")
+                .toRecognitionResult(response("intent-sensitive", "domain_agent_RE_"));
+
+        assertThat(result.status()).isEqualTo(IntentRecognitionResult.Status.FINAL);
+        assertThat(result.decision().intentCode()).isEqualTo("intent-sensitive");
+        assertThat(result.decision().candidateDomainAgentId()).isEqualTo("RE_");
+        assertThat(result.decision().slots()).containsEntry("accessName", "RE_");
+    }
+
+    @Test
     void ambiguousDomainExpertPrefixWithoutRoleIsProtocolFailure() throws Exception {
         IntentRecognitionResult result = mapper("domain_agent_", "RE_").toRecognitionResult(
                 objectMapper.readTree("""
@@ -219,9 +230,16 @@ class IntentServiceResponseMapperTest {
     }
 
     private IntentServiceResponseMapper mapper(String prefix, String domainExpertPrefix) {
+        return mapper(prefix, domainExpertPrefix, "");
+    }
+
+    private IntentServiceResponseMapper mapper(String prefix,
+                                               String domainExpertPrefix,
+                                               String sensitiveInformationAccessName) {
         IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
         properties.setResponseAccessNamePrefix(prefix);
         properties.setDomainExpertAccessNamePrefix(domainExpertPrefix);
+        properties.setSensitiveInformationAccessName(sensitiveInformationAccessName);
         return mapper(properties);
     }
 

@@ -173,9 +173,10 @@ Authorization: {dynamicToken}
 }
 ```
 
-调用方必须优先读取 `data.result.routeAction`，不能只通过 `items.length` 判断结果。ChatService 固定把
-`ROUTE_SINGLE.items[0].accessName` 经可选字面量前缀归一化后作为可调用的 `DomainAgentId/skillId`；
-未配置前缀或前缀不匹配时使用原始 `accessName`。`intentId` 保留为意图编码，
+调用方必须优先读取 `data.result.routeAction`，不能只通过 `items.length` 判断结果。ChatService 先将
+`ROUTE_SINGLE.items[0].accessName` 经可选字面量前缀归一化，再依次判断敏感信息精确匹配、Domain Expert
+前缀和普通 DomainAgent。敏感匹配进入 Relay Delegate，专家匹配进入 Relay Domain Expert，均未命中时
+规范化值作为 `DomainAgentId/skillId`；未配置通用前缀或前缀不匹配时使用原始 `accessName`。`intentId` 保留为意图编码，
 `resourceInstruction.resourceId` 只进入诊断字段和统计记录；缺少 item 或有效 `accessName` 时视为协议失败，
 按重试和 `financeex.intent.failure-strategy` 处理，不会使用 `intentId/resourceId` 兜底。
 
@@ -183,7 +184,7 @@ Authorization: {dynamicToken}
 
 | routeAction | items | clarification | ChatService / Supervisor 行为 |
 | --- | --- | --- | --- |
-| `ROUTE_SINGLE` | 1 个 | null | 直接路由到 `items[0]` 对应 DomainAgent。 |
+| `ROUTE_SINGLE` | 1 个 | null | 按规范化后的 `accessName` 路由到敏感信息 Relay Delegate、Relay Domain Expert 或普通 DomainAgent。 |
 | `ROUTE_MULTI` | 多个 | null | 进入 Supervisor / Relay 规划，适合复杂任务。 |
 | `NO_MATCH` | 空 | null | 当前领域无匹配，进入 Relay；`intentName` 展示目标由 `financeex.intent.no-match-agent-name` 配置。 |
 | `CLARIFY` | 空或候选建议 | 非空 | 展示 `clarification.clarifyQuestion` 并进入等待态；普通澄清提交回答后再次调用意图服务，`AMBIGUOUS_ROUTE` 可直接选择候选。 |
@@ -489,13 +490,13 @@ Authorization: {dynamicToken}
 ## 8. ChatService 对接规则
 
 1. 必须优先读取 `data.result.routeAction`。
-2. `ROUTE_SINGLE`：读取唯一 `items[0].accessName`，按 `financeex.intent.response-access-name-prefix` 移除一次匹配的开头前缀后作为 DomainAgentId/skillId，创建或刷新 `provider=domain-agent` 的 RuntimeBinding；该配置为空时使用原始值。`intentId` 只作为意图编码，`resourceInstruction.resourceId` 只记录排障，均不参与路由；缺少 item 或有效 `accessName` 视为协议失败，按重试和 `financeex.intent.failure-strategy` 处理；`confidence` 只用于记录，不参与二次裁决。
+2. `ROUTE_SINGLE`：读取唯一 `items[0].accessName`，先按 `financeex.intent.response-access-name-prefix` 移除一次匹配的开头前缀。归一化结果先区分大小写精确匹配可选的 `financeex.intent.sensitive-information-access-name`，命中时使用 Relay Delegate；否则匹配 `financeex.intent.domain-expert-access-name-prefix`，命中时使用 Relay Domain Expert；均未命中时作为 DomainAgentId/skillId 创建或刷新 `provider=domain-agent` 的 RuntimeBinding。敏感配置为空表示关闭，且精确敏感匹配优先于专家前缀。`intentId` 只作为意图编码，`resourceInstruction.resourceId` 只记录排障，均不参与路由；缺少 item 或有效 `accessName` 视为协议失败，按重试和 `financeex.intent.failure-strategy` 处理；`confidence` 只用于记录，不参与二次裁决。
 3. `ROUTE_MULTI`：进入复杂任务规划，通常走 Relay Runtime。
 4. `NO_MATCH`：进入 Relay Runtime；`intentName` 固定组装为“未识别到可用意图，进入 {Agent 名称}”，名称由 `financeex.intent.no-match-agent-name` 配置，默认 `FIN Supervisor Agent`。该配置仅影响展示，不改变 `intentCode=finance.runtime.no_intent`、路由或 RouteMemory。
 5. `CLARIFY`：本轮 run 进入 `WAITING_USER`，写入 `run.waiting_user`，前端通过 `POST /v1/chat/runs` + `runMode=CONTINUE_INTERACTION` 提交澄清回答或候选选择。
 6. 意图澄清属于路由阶段，不创建 RuntimeBinding，不调用 AgentRuntime。
 7. 普通澄清以及 `AMBIGUOUS_ROUTE` 的“其他”输入创建 continuation run，并再次调用当前配置模式对应的意图决策接口。
-8. `AMBIGUOUS_ROUTE` 候选中的 `accessName` 使用与 `ROUTE_SINGLE` 相同的前缀规则生成 `skillId`。指定候选、点击“代为选择”或等待超时后，创建新的 continuation run，跳过 IntentAgent 并直接调用所选 DomainAgent；最高 confidence 相同时按候选响应顺序。
+8. `AMBIGUOUS_ROUTE` 候选中的 `accessName` 使用与 `ROUTE_SINGLE` 相同的归一化和目标判断规则。指定候选、点击“代为选择”或等待超时后，创建新的 continuation run，跳过 IntentAgent并直接调用对应 DomainAgent、Relay Delegate 或 Relay Domain Expert；最高 confidence 相同时按候选响应顺序。
 9. DomainAgent 拒答回流时，`routeTrigger=domain_reject`，只传当前这一次拒答原因。
 10. `history` 按时间顺序传最新 TopK；澄清链路未完成时，TopK 必须保留当前澄清上下文。
 11. 前端 `agentMode` 不进入 `/getIntentDecision` 请求。`CLARIFY` 期间不暂存模式；最终

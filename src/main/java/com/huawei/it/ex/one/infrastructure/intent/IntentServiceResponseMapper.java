@@ -4,6 +4,7 @@ import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResu
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.routing.DomainExpertAccessNameResolver;
+import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -33,12 +34,15 @@ public class IntentServiceResponseMapper {
     private final ObjectMapper objectMapper;
     private final IntentServiceHttpProperties properties;
     private final DomainExpertAccessNameResolver domainExpertResolver;
+    private final SensitiveInformationAccessNameResolver sensitiveInformationResolver;
 
     public IntentServiceResponseMapper(ObjectMapper objectMapper, IntentServiceHttpProperties properties) {
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.domainExpertResolver = new DomainExpertAccessNameResolver(
                 properties == null ? null : properties.getDomainExpertAccessNamePrefix());
+        this.sensitiveInformationResolver = new SensitiveInformationAccessNameResolver(
+                properties == null ? null : properties.getSensitiveInformationAccessName());
     }
 
     /**
@@ -121,7 +125,8 @@ public class IntentServiceResponseMapper {
             return IntentRecognitionResult.degraded(protocolError(root, result, selected,
                     "ROUTE_SINGLE accessName missing after normalization"));
         }
-        if (domainExpertResolver.resolve(domainAgentId).malformedDomainExpert()) {
+        if (!sensitiveInformationResolver.matches(domainAgentId)
+                && domainExpertResolver.resolve(domainAgentId).malformedDomainExpert()) {
             return IntentRecognitionResult.degraded(protocolError(root, result, selected,
                     "ROUTE_SINGLE domain expert accessName has no roleName"));
         }
@@ -259,7 +264,8 @@ public class IntentServiceResponseMapper {
                 }
             });
             String skillId = normalizeDomainAgentId(text(candidate.path("accessName")));
-            if (skillId != null && !domainExpertResolver.resolve(skillId).malformedDomainExpert()) {
+            if (skillId != null && (sensitiveInformationResolver.matches(skillId)
+                    || !domainExpertResolver.resolve(skillId).malformedDomainExpert())) {
                 item.put("skillId", skillId);
             }
             normalized.add(Collections.unmodifiableMap(item));
@@ -273,7 +279,8 @@ public class IntentServiceResponseMapper {
         }
         for (JsonNode candidate : candidates) {
             String skillId = normalizeDomainAgentId(text(candidate.path("accessName")));
-            if (skillId != null && domainExpertResolver.resolve(skillId).malformedDomainExpert()) {
+            if (skillId != null && !sensitiveInformationResolver.matches(skillId)
+                    && domainExpertResolver.resolve(skillId).malformedDomainExpert()) {
                 return true;
             }
         }

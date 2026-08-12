@@ -16,6 +16,7 @@ import com.huawei.it.ex.one.application.service.routing.RouteSignalApplicationSe
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.SystemResponseExecutor;
+import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
 
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
@@ -73,6 +74,8 @@ class ChatCoordinatorConfigurationTest {
                     .withBean(ChatRunOperationalProperties.class,
                             ChatRunOperationalProperties::new)
                     .withBean(DomainAgentProperties.class, DomainAgentProperties::new)
+                    .withBean(SensitiveInformationAccessNameResolver.class,
+                            () -> new SensitiveInformationAccessNameResolver(null))
                     .withBean(AgentDataPersistenceGate.class,
                             () -> mock(AgentDataPersistenceGate.class))
                     .withBean(

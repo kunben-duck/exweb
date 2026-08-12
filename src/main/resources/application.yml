@@ -119,6 +119,8 @@ financeex:
     response-access-name-prefix: ${FINANCEEX_INTENT_RESPONSE_ACCESS_NAME_PREFIX:}
     # 归一化后的accessName命中该前缀时，移除前缀后的内容作为Relay专家role_name。
     domain-expert-access-name-prefix: ${FINANCEEX_INTENT_DOMAIN_EXPERT_ACCESS_NAME_PREFIX:}
+    # 可选：归一化后的accessName精确命中该值时，使用Relay Delegate处理敏感信息问答。
+    sensitive-information-access-name: ${FINANCEEX_INTENT_SENSITIVE_INFORMATION_ACCESS_NAME:}
     # NO_MATCH 仍进入 Relay；该配置只控制 intent-result 中展示的目标 Agent 名称。
     no-match-agent-name: ${FINANCEEX_INTENT_NO_MATCH_AGENT_NAME:FIN Supervisor Agent}
     # 默认使用 SSE 流式接口；显式切换为 BLOCKING 时调用原阻塞接口。

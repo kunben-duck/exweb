@@ -22,20 +22,32 @@ public class RoutingPolicy {
     private final double intentConfidenceThreshold;
     /** Intent accessName 归一化后的专家角色解析器。 */
     private final DomainExpertAccessNameResolver domainExpertResolver;
+    /** Intent accessName 归一化后的敏感信息解析器。 */
+    private final SensitiveInformationAccessNameResolver sensitiveInformationResolver;
 
     public RoutingPolicy(double useCaseMinScore) {
-        this(useCaseMinScore, 0.85, "");
+        this(useCaseMinScore, 0.85, "", new SensitiveInformationAccessNameResolver(""));
     }
 
     public RoutingPolicy(double useCaseMinScore, double intentConfidenceThreshold) {
-        this(useCaseMinScore, intentConfidenceThreshold, "");
+        this(useCaseMinScore, intentConfidenceThreshold, "", new SensitiveInformationAccessNameResolver(""));
     }
 
     public RoutingPolicy(double useCaseMinScore, double intentConfidenceThreshold,
                          String domainExpertAccessNamePrefix) {
+        this(useCaseMinScore, intentConfidenceThreshold, domainExpertAccessNamePrefix,
+                new SensitiveInformationAccessNameResolver(""));
+    }
+
+    public RoutingPolicy(double useCaseMinScore, double intentConfidenceThreshold,
+                         String domainExpertAccessNamePrefix,
+                         SensitiveInformationAccessNameResolver sensitiveInformationResolver) {
         this.useCaseMinScore = useCaseMinScore;
         this.intentConfidenceThreshold = intentConfidenceThreshold;
         this.domainExpertResolver = new DomainExpertAccessNameResolver(domainExpertAccessNamePrefix);
+        this.sensitiveInformationResolver = sensitiveInformationResolver == null
+                ? new SensitiveInformationAccessNameResolver("")
+                : sensitiveInformationResolver;
     }
 
     public double intentConfidenceThreshold() {
@@ -66,6 +78,10 @@ public class RoutingPolicy {
         if (intent.simpleTask()
                 && intent.candidateDomainAgentId() != null
                 && !intent.candidateDomainAgentId().isBlank()) {
+            if (sensitiveInformationResolver.matches(intent.candidateDomainAgentId())) {
+                return RouteTarget.agentRuntime("intent-agent", intent.confidence(),
+                        "route single sensitive information intent", RuntimeProfile.DELEGATE);
+            }
             DomainExpertAccessNameResolver.Resolution expert = domainExpertResolver.resolve(
                     intent.candidateDomainAgentId());
             if (expert.malformedDomainExpert()) {

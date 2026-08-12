@@ -190,8 +190,8 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 接口 | 请求字段 | 响应字段 | 后续关联 |
 | --- | --- | --- | --- |
 | `POST /chat/sessions` | Body：`title` 会话标题，可空；`channel` 来源渠道，可空 | `ChatSessionDto` 全字段 | 使用 `sessionId` 作为会话路由和后续 run 入参 |
-| `GET /chat/sessions` | Query：`appId/appScope/title/channel` 可选；`appScope=MAIN_SITE`只查主站；`limit`页大小；`cursor`上一页游标 | `items[]`、`nextCursor`；item带`firstAssistantAnswer` | `MAIN_SITE`不能同时传`appId`；移动端传`channel=mobile`；后续页沿用全部过滤条件 |
-| `GET /chat/sessions/page` | Query：`appId/appScope/title/channel`可选；`curPage`默认1；`pageSize`默认20 | `items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；item带`firstAssistantAnswer` | 主站传`appScope=MAIN_SITE`；省略`appScope/appId`查询全量；总数和数据条件一致 |
+| `GET /chat/sessions` | Query：`appId/appScope/title/channel` 可选；`appScope=MAIN_SITE`只查主站；`limit`页大小；`cursor`上一页游标 | `items[]`、`nextCursor`；item带`firstAssistantAnswer/firstAssistantMetadataJson` | `MAIN_SITE`不能同时传`appId`；移动端传`channel=mobile`；后续页沿用全部过滤条件 |
+| `GET /chat/sessions/page` | Query：`appId/appScope/title/channel`可选；`curPage`默认1；`pageSize`默认20 | `items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；item带首条assistant正文及metadata | 主站传`appScope=MAIN_SITE`；省略`appScope/appId`查询全量；总数和数据条件一致 |
 | `GET /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto` | 只拿元数据，不返回历史和流状态 |
 | `POST /chat/sessions/{sessionId}/read` | Path：`sessionId`；Body：`readThroughSeq` 必填且不小于 0 | 更新后的 `ChatSessionDto` | 历史消息或实时终态实际展示后提交；服务端不允许回退或越过最新水位 |
 | `GET /chat/sessions/{sessionId}/messages` | Path：`sessionId`；Query：`leafMessageId` 可选，`cursor` 为上一页游标，`limit` | `ChatMessagePageDto.items[]`、`nextCursor`；item 可能带 `versionInfo`，并原样返回 `metadataJson` 字符串 | 首页取最近消息；后续页 prepend。cursor 固定首次 leaf，损坏、跨会话或 leaf 不匹配返回400 |
@@ -231,7 +231,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | --- | --- | --- | --- | --- |
 | `POST /v1/chat/sessions` | 用户点击“新建会话”时显式创建。 | JSON body：`title/channel/appId/appName` 均可选。 | `ChatSessionDto`：包含 `appId/appName`。 | `appName` 不能脱离 `appId`；前端不传租户和用户。 |
 | `GET /v1/chat/sessions/apps` | 初始化会话分类栏。 | Query：`channel` 可选。 | `ChatSessionAppListDto`：`items[].appId/appName`。 | 移动端传 `mobile`；PC 端省略后返回全部渠道分类。 |
-| `GET /v1/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`appId/appScope/title/channel`可选；主站使用`appScope=MAIN_SITE`；`limit`默认20；`cursor`可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每项含`appId/appName/firstAssistantAnswer`。 | `MAIN_SITE`仅返回`appId=null`且不能同时传`appId`；后续页必须沿用相同过滤条件。 |
+| `GET /v1/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`appId/appScope/title/channel`可选；主站使用`appScope=MAIN_SITE`；`limit`默认20；`cursor`可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每项含`appId/appName/firstAssistantAnswer/firstAssistantMetadataJson`。 | `MAIN_SITE`仅返回`appId=null`且不能同时传`appId`；后续页必须沿用相同过滤条件。 |
 | `GET /v1/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`appId/appScope/title/channel`可选；`curPage`默认1；`pageSize`默认20，最大200。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`。 | `totalRows/totalPages`按相同范围、标题和渠道条件计算；不返回`DELETED`会话。 |
 | `GET /v1/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
 | `POST /v1/chat/sessions/{sessionId}/read` | 最新历史消息或实时 assistant 终态已经展示。 | Path：`sessionId`；JSON body：`readThroughSeq` 必填、最小为 0。 | 更新后的 `ChatSessionDto`。 | 提交列表/详情中观察到的 `latestMessageSeq`，或实时 `run.completed/run.waiting_user` 的 sequence；不会更新会话 `updatedAt`。 |
@@ -364,6 +364,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `latestMessageSeq` | 当前会话最新可见 assistant 消息水位；来自已保存消息对应的终态事件 sequence |
 | `lastReadSeq` | 前端已确认展示的消息水位；服务端保证单调递增且不超过 `latestMessageSeq` |
 | `firstAssistantAnswer` | 会话第一条 assistant 完整回答，仅会话分页列表保证装配；创建、详情、state 等非列表场景可为空 |
+| `firstAssistantMetadataJson` | 与`firstAssistantAnswer`来自同一条assistant消息的原始metadata字符串；分页列表保证装配，前端按需`JSON.parse`，非列表场景可为空 |
 | `createdAt` / `updatedAt` | 创建和最后更新时间 |
 
 ### `BatchDeleteChatSessionsRequest`
@@ -853,6 +854,7 @@ curl -X POST http://localhost:8080/v1/chat/sessions \
   "latestMessageSeq": 0,
   "lastReadSeq": 0,
   "firstAssistantAnswer": null,
+  "firstAssistantMetadataJson": null,
   "createdAt": "2026-05-17T01:00:00Z",
   "updatedAt": "2026-05-17T01:00:00Z"
 }
@@ -920,6 +922,7 @@ curl "http://localhost:8080/v1/chat/sessions?appScope=MAIN_SITE&channel=mobile&l
       "latestMessageSeq": 63252,
       "lastReadSeq": 63180,
       "firstAssistantAnswer": "从趋势看，差旅费在三月出现明显上升...",
+      "firstAssistantMetadataJson": "{\"finishReason\":\"STOP\"}",
       "createdAt": "2026-05-17T01:00:00Z",
       "updatedAt": "2026-05-17T01:10:00Z"
     }
@@ -962,6 +965,7 @@ curl "http://localhost:8080/v1/chat/sessions/page?appId=fund-app&title=%E5%88%A9
       "latestMessageSeq": 63252,
       "lastReadSeq": 63180,
       "firstAssistantAnswer": "从趋势看，差旅费在三月出现明显上升...",
+      "firstAssistantMetadataJson": "{\"finishReason\":\"STOP\"}",
       "createdAt": "2026-05-17T01:00:00Z",
       "updatedAt": "2026-05-17T01:10:00Z"
     }
@@ -999,6 +1003,7 @@ curl "http://localhost:8080/v1/chat/sessions/session_xxx/stream-status"
   "latestMessageSeq": 63252,
   "lastReadSeq": 63180,
   "firstAssistantAnswer": null,
+  "firstAssistantMetadataJson": null,
   "createdAt": "2026-05-17T01:00:00Z",
   "updatedAt": "2026-05-17T01:10:00Z"
 }

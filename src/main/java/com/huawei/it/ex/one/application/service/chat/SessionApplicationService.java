@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.facade.ChatSessionFacade;
+import com.huawei.it.ex.one.application.facade.ChatSessionFirstAssistantSummary;
 import com.huawei.it.ex.one.application.integration.conversation.SessionAppCategory;
 import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
@@ -291,7 +292,8 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     @Override
-    public Map<String, String> findFirstAssistantAnswers(UserContext user, List<ChatSession> sessions) {
+    public Map<String, ChatSessionFirstAssistantSummary> findFirstAssistantSummaries(
+            UserContext user, List<ChatSession> sessions) {
         checkChatUser(user);
         if (sessions == null || sessions.isEmpty()) {
             return Map.of();
@@ -311,7 +313,9 @@ public class SessionApplicationService implements ChatSessionFacade {
                 .stream()
                 .filter(entry -> entry.getValue() != null)
                 .collect(Collectors.toMap(Map.Entry::getKey,
-                        entry -> entry.getValue().content() == null ? "" : entry.getValue().content()));
+                        entry -> new ChatSessionFirstAssistantSummary(
+                                entry.getValue().content() == null ? "" : entry.getValue().content(),
+                                entry.getValue().metadataJson())));
     }
 
     @Override

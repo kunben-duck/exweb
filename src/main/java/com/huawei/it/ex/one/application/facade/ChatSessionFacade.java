@@ -163,16 +163,17 @@ public interface ChatSessionFacade {
     }
 
     /**
-     * 批量查询会话首条 assistant 回答。
+     * 批量查询会话首条 assistant 消息摘要。
      *
      * <p>该能力专门服务会话分页列表摘要展示，避免 Controller 对每个会话逐个查历史消息造成 N+1 查询。
-     * 返回 Map 的 key 为 sessionId，value 为该会话第一条完整 assistant 消息正文。</p>
+     * 返回 Map 的 key 为 sessionId，value 同时包含该条消息的完整正文和原始 metadata。</p>
      *
      * @param user 请求入口解析出的不可变用户身份快照。
      * @param sessions 当前分页页内会话快照，必须已通过 owner 查询得到。
-     * @return sessionId 到首条 assistant 回答的映射；没有 assistant 回复的会话不会出现在 Map 中。
+     * @return sessionId 到首条 assistant 消息摘要的映射；没有 assistant 回复的会话不会出现在 Map 中。
      */
-    Map<String, String> findFirstAssistantAnswers(UserContext user, List<ChatSession> sessions);
+    Map<String, ChatSessionFirstAssistantSummary> findFirstAssistantSummaries(
+            UserContext user, List<ChatSession> sessions);
 
     /**
      * 查询当前用户可见会话的历史消息。

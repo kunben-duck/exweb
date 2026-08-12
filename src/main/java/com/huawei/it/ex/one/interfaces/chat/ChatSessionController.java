@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.interfaces.chat;
 
 import com.huawei.it.ex.one.application.facade.ChatSessionFacade;
+import com.huawei.it.ex.one.application.facade.ChatSessionFirstAssistantSummary;
 import com.huawei.it.ex.one.application.integration.conversation.SessionAppScope;
 import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
 import com.huawei.it.ex.one.application.integration.identity.AuthContextProvider;
@@ -160,10 +161,11 @@ public class ChatSessionController {
         return Mono.fromCallable(() -> {
                     ChatSessionPage page = facade.listSessions(
                             user, new SessionListFilter(appId, title, channel, appScope), cursor, limit);
-                    Map<String, String> firstAnswers = facade.findFirstAssistantAnswers(user, page.items());
+                    Map<String, ChatSessionFirstAssistantSummary> firstAssistantSummaries =
+                            facade.findFirstAssistantSummaries(user, page.items());
                     return new ChatSessionPageDto(
                             page.items().stream()
-                                    .map(session -> toDto(session, firstAnswers.get(session.id())))
+                                    .map(session -> toDto(session, firstAssistantSummaries.get(session.id())))
                                     .toList(),
                             page.nextCursor()
                     );
@@ -200,10 +202,11 @@ public class ChatSessionController {
         return Mono.fromCallable(() -> {
                     ChatSessionNumberPage page = facade.listSessionsByPage(
                             user, new SessionListFilter(appId, title, channel, appScope), curPage, pageSize);
-                    Map<String, String> firstAnswers = facade.findFirstAssistantAnswers(user, page.items());
+                    Map<String, ChatSessionFirstAssistantSummary> firstAssistantSummaries =
+                            facade.findFirstAssistantSummaries(user, page.items());
                     return new ChatSessionNumberPageDto(
                             page.items().stream()
-                                    .map(session -> toDto(session, firstAnswers.get(session.id())))
+                                    .map(session -> toDto(session, firstAssistantSummaries.get(session.id())))
                                     .toList(),
                             page.curPage(),
                             page.pageSize(),
@@ -431,7 +434,7 @@ public class ChatSessionController {
         return toDto(session, null);
     }
 
-    private ChatSessionDto toDto(ChatSession session, String firstAssistantAnswer) {
+    private ChatSessionDto toDto(ChatSession session, ChatSessionFirstAssistantSummary firstAssistant) {
         return new ChatSessionDto(
                 session.id(),
                 session.tenantId(),
@@ -448,7 +451,8 @@ public class ChatSessionController {
                 session.hasUnread(),
                 session.latestMessageSeq(),
                 session.lastReadSeq(),
-                firstAssistantAnswer,
+                firstAssistant == null ? null : firstAssistant.content(),
+                firstAssistant == null ? null : firstAssistant.metadataJson(),
                 session.createdAt(),
                 session.updatedAt()
         );

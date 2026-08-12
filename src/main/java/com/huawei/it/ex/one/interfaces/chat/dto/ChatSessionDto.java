@@ -21,6 +21,7 @@ import java.time.Instant;
  * @param latestMessageSeq 当前会话最新可见 assistant 消息事件水位。
  * @param lastReadSeq 当前用户已确认展示的消息事件水位。
  * @param firstAssistantAnswer 会话第一条 assistant 完整回答；列表页用于展示首轮回答摘要，非列表场景可为空。
+ * @param firstAssistantMetadataJson 首条 assistant 消息的原始 metadata JSON；非列表场景可为空。
  * @param createdAt 创建时间。
  * @param updatedAt 最近更新时间。
  */
@@ -41,6 +42,7 @@ public record ChatSessionDto(
         long latestMessageSeq,
         long lastReadSeq,
         String firstAssistantAnswer,
+        String firstAssistantMetadataJson,
         Instant createdAt,
         Instant updatedAt
 ) {}

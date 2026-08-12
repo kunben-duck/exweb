@@ -2745,6 +2745,12 @@ components:
         firstAssistantAnswer:
           type: string
           nullable: true
+          description: 会话第一条assistant完整回答，仅会话分页列表保证装配。
+        firstAssistantMetadataJson:
+          type: string
+          nullable: true
+          description: 首条assistant消息的原始metadata_json字符串，仅会话分页列表保证装配，调用方可按需解析。
+          example: '{"finishReason":"STOP"}'
         createdAt:
           type: string
           format: date-time

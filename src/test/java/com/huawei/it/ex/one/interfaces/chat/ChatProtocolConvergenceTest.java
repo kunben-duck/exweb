@@ -2,13 +2,22 @@ package com.huawei.it.ex.one.interfaces.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.config.AgentRuntimeForwardCookieProperties;
 import com.huawei.it.ex.one.application.config.ChatStreamProperties;
+import com.huawei.it.ex.one.application.facade.ChatSessionFacade;
+import com.huawei.it.ex.one.application.facade.ChatSessionFirstAssistantSummary;
 import com.huawei.it.ex.one.application.facade.FinanceChatFacade;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
+import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
 import com.huawei.it.ex.one.application.integration.trace.TraceContextProvider;
+import com.huawei.it.ex.one.application.service.chat.ChatFeedbackApplicationService;
+import com.huawei.it.ex.one.application.service.chat.ChatRunApplicationService;
 import com.huawei.it.ex.one.application.service.chat.ChatStreamApplicationService;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.common.trace.TraceContext;
@@ -18,6 +27,9 @@ import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatRunStartResult;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatRunStopResult;
+import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
+import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
 import com.huawei.it.ex.one.domain.chat.ChatStreamTopics;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAgentModeDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAgentModeSelectionDto;
@@ -25,6 +37,7 @@ import com.huawei.it.ex.one.interfaces.chat.dto.ChatAttachmentDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatEventDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSelectedIntentDto;
+import com.huawei.it.ex.one.interfaces.chat.dto.ChatSessionDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.CreateChatRunRequest;
 import com.huawei.it.ex.one.interfaces.chat.dto.MessageFeedbackDto;
 
@@ -440,6 +453,57 @@ class ChatProtocolConvergenceTest {
         assertThat(components).containsSubsequence("runId", "assistantSource", "originType");
         assertThat(components).containsSubsequence(
                 "regeneratedFromMessageId", "metadataJson", "parts");
+    }
+
+    @Test
+    void sessionDtoPlacesFirstAssistantMetadataAfterItsAnswer() {
+        List<String> components = Arrays.stream(ChatSessionDto.class.getRecordComponents())
+                .map(component -> component.getName())
+                .toList();
+
+        assertThat(components).containsSubsequence(
+                "firstAssistantAnswer", "firstAssistantMetadataJson", "createdAt");
+    }
+
+    @Test
+    void sessionPaginationMapsFirstAssistantContentAndRawMetadataTogether() {
+        ChatSessionFacade facade = mock(ChatSessionFacade.class);
+        UserContext user = user();
+        Instant now = Instant.parse("2026-08-13T00:00:00Z");
+        ChatSession session = new ChatSession(
+                "session1", "tenant1", "user1", "title", "ACTIVE", "web", now, now);
+        SessionListFilter filter = SessionListFilter.empty();
+        ChatSessionFirstAssistantSummary summary = new ChatSessionFirstAssistantSummary(
+                "第一条回答", "not-json");
+        when(facade.listSessions(user, filter, null, 20))
+                .thenReturn(new ChatSessionPage(List.of(session), null));
+        when(facade.listSessionsByPage(user, filter, 1, 20))
+                .thenReturn(new ChatSessionNumberPage(List.of(session), 1, 20, 1, 1));
+        when(facade.findFirstAssistantSummaries(user, List.of(session)))
+                .thenReturn(Map.of(session.id(), summary));
+        when(facade.getSession(user, session.id())).thenReturn(session);
+        ChatSessionController controller = new ChatSessionController(
+                facade,
+                mock(ChatFeedbackApplicationService.class),
+                mock(ChatRunApplicationService.class),
+                () -> user,
+                new PermissionChecker(),
+                new ChatMessageVersionViewAssembler());
+
+        var cursorPage = controller.list(null, null, null, null, null, 20).block();
+        var numberPage = controller.listByPage(null, null, null, null, 1, 20).block();
+        ChatSessionDto detail = controller.get(session.id()).block();
+
+        assertThat(cursorPage).isNotNull();
+        assertThat(cursorPage.items().getFirst().firstAssistantAnswer()).isEqualTo("第一条回答");
+        assertThat(cursorPage.items().getFirst().firstAssistantMetadataJson()).isEqualTo("not-json");
+        assertThat(numberPage).isNotNull();
+        assertThat(numberPage.items().getFirst().firstAssistantAnswer()).isEqualTo("第一条回答");
+        assertThat(numberPage.items().getFirst().firstAssistantMetadataJson()).isEqualTo("not-json");
+        assertThat(detail).isNotNull();
+        assertThat(detail.firstAssistantAnswer()).isNull();
+        assertThat(detail.firstAssistantMetadataJson()).isNull();
+        verify(facade, times(2)).findFirstAssistantSummaries(user, List.of(session));
     }
 
     @Test

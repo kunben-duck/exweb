@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.application.config.SessionTitleProperties;
+import com.huawei.it.ex.one.application.facade.ChatSessionFirstAssistantSummary;
 import com.huawei.it.ex.one.application.integration.conversation.SessionAppCategory;
 import com.huawei.it.ex.one.application.integration.conversation.SessionAppScope;
 import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
@@ -586,7 +587,7 @@ class SessionApplicationServiceTest {
     }
 
     @Test
-    void findFirstAssistantAnswersReturnsOneAnswerPerSession() {
+    void findFirstAssistantSummariesReturnContentAndMetadataFromTheSameMessage() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
         Instant now = Instant.now();
@@ -595,17 +596,50 @@ class SessionApplicationServiceTest {
         messages.save(new ChatMessage("msg1", "tenant1", "user1", "session1", null, 1L, 0, 1,
                 "user", "问题一", null, "run1", "NORMAL", false, null, null, null, null, null, now));
         messages.save(new ChatMessage("msg2", "tenant1", "user1", "session1", "msg1", 2L, 1, 1,
-                "assistant", "第一条回答", null, "run1", "NORMAL", false, null, null, null, null, null, now.plusSeconds(1)));
+                "assistant", "第一条回答", null, "run1", "NORMAL", false, null, null, null, null,
+                "{\"finishReason\":\"STOP\"}", now.plusSeconds(1)));
         messages.save(new ChatMessage("msg3", "tenant1", "user1", "session1", "msg1", 3L, 1, 2,
-                "assistant", "第二条回答", null, "run2", "NORMAL", false, null, null, null, null, null, now.plusSeconds(2)));
+                "assistant", "第二条回答", null, "run2", "NORMAL", false, null, null, null, null,
+                "{\"finishReason\":\"COMPLETED\"}", now.plusSeconds(2)));
         messages.save(new ChatMessage("msg4", "tenant1", "user1", "session2", null, 1L, 0, 1,
                 "user", "尚未回答", null, "run3", "NORMAL", false, null, null, null, null, null, now));
         SessionApplicationService service = service(sessions, messages);
 
-        Map<String, String> firstAnswers = service.findFirstAssistantAnswers(user(), List.of(first, second));
+        Map<String, ChatSessionFirstAssistantSummary> summaries =
+                service.findFirstAssistantSummaries(user(), List.of(first, second));
 
-        assertThat(firstAnswers).containsEntry("session1", "第一条回答");
-        assertThat(firstAnswers).doesNotContainKey("session2");
+        assertThat(summaries.get("session1").content()).isEqualTo("第一条回答");
+        assertThat(summaries.get("session1").metadataJson()).isEqualTo("{\"finishReason\":\"STOP\"}");
+        assertThat(summaries).doesNotContainKey("session2");
+        assertThat(messages.firstAssistantQueryCount).isEqualTo(1);
+    }
+
+    @Test
+    void findFirstAssistantSummariesKeepRawMetadataAndEmptyContentSemantics() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        Instant now = Instant.now();
+        List<String> rawMetadata = java.util.Arrays.asList(null, "", "not-json");
+        List<ChatSession> pageSessions = new ArrayList<>();
+        for (int index = 0; index < rawMetadata.size(); index++) {
+            String sessionId = "session" + index;
+            pageSessions.add(sessions.save(new ChatSession(
+                    sessionId, "tenant1", "user1", "title", "ACTIVE", "web", now, now)));
+            messages.save(new ChatMessage(
+                    "msg" + index, "tenant1", "user1", sessionId, null, 1L, 0, 1,
+                    "assistant", null, null, "run" + index, "NORMAL", false,
+                    null, null, null, null, rawMetadata.get(index), now));
+        }
+        SessionApplicationService service = service(sessions, messages);
+
+        Map<String, ChatSessionFirstAssistantSummary> summaries =
+                service.findFirstAssistantSummaries(user(), pageSessions);
+
+        for (int index = 0; index < rawMetadata.size(); index++) {
+            ChatSessionFirstAssistantSummary summary = summaries.get("session" + index);
+            assertThat(summary.content()).isEmpty();
+            assertThat(summary.metadataJson()).isSameAs(rawMetadata.get(index));
+        }
     }
 
     @Test
@@ -628,14 +662,15 @@ class SessionApplicationServiceTest {
         SessionApplicationService service = service(sessions, messages);
 
         ChatSessionNumberPage page = service.listSessionsByPage(user(), 1, 1);
-        Map<String, String> firstAnswers = service.findFirstAssistantAnswers(user(), page.items());
+        Map<String, ChatSessionFirstAssistantSummary> summaries =
+                service.findFirstAssistantSummaries(user(), page.items());
 
         assertThat(page.items()).extracting(ChatSession::id).containsExactly("session2");
         assertThat(page.curPage()).isEqualTo(1);
         assertThat(page.pageSize()).isEqualTo(1);
         assertThat(page.totalRows()).isEqualTo(2);
         assertThat(page.totalPages()).isEqualTo(2);
-        assertThat(firstAnswers).containsEntry("session2", "归档回答");
+        assertThat(summaries.get("session2").content()).isEqualTo("归档回答");
     }
 
     @Test
@@ -1084,6 +1119,7 @@ class SessionApplicationServiceTest {
     private static class InMemoryMessageRepository implements ChatMessageRepository {
         private final Map<String, ChatMessage> messages = new LinkedHashMap<>();
         private final List<ChatMessageAttachment> attachments = new ArrayList<>();
+        private int firstAssistantQueryCount;
 
         @Override
         public ChatMessage save(ChatMessage message) {
@@ -1105,6 +1141,7 @@ class SessionApplicationServiceTest {
         @Override
         public Map<String, ChatMessage> findFirstAssistantMessagesBySessionIds(
                 String tenantId, String userId, List<String> sessionIds) {
+            firstAssistantQueryCount++;
             return sessionIds.stream()
                     .distinct()
                     .map(sessionId -> messages.values().stream()

@@ -86,6 +86,11 @@ class DefaultDomainAgentSkillConfigurationProviderTest {
         startServer(200, response(item("skill-1", "Y"), item("skill-1", "N")),
                 Duration.ZERO, new AtomicReference<>());
         assertReason(provider("2s"), DomainAgentSkillConfigurationException.Reason.PROTOCOL_INVALID);
+
+        stopServer();
+        startServer(200, response(item("skill-1", " "), item("skill-1", "Y")),
+                Duration.ZERO, new AtomicReference<>());
+        assertReason(provider("2s"), DomainAgentSkillConfigurationException.Reason.PROTOCOL_INVALID);
     }
 
     @Test

@@ -119,9 +119,9 @@ public final class DefaultDomainAgentSkillConfigurationProvider
             if (item == null || !requestedSkillId.equals(normalize(item.skillId()))) {
                 continue;
             }
-            DomainAgentSkillConfiguration candidate = new DomainAgentSkillConfiguration(
+            DomainAgentSkillConfiguration candidate = parseConfiguration(
                     requestedSkillId,
-                    parseSaveSession(item.isSaveSession()));
+                    item.isSaveSession());
             if (matched != null && !Objects.equals(matched.saveSession(), candidate.saveSession())) {
                 throw protocolError("Conflicting DomainAgent skill configuration entries");
             }
@@ -132,14 +132,14 @@ public final class DefaultDomainAgentSkillConfigurationProvider
                 : matched;
     }
 
-    private Boolean parseSaveSession(String value) {
+    private DomainAgentSkillConfiguration parseConfiguration(String skillId, String value) {
         String normalized = normalize(value).toUpperCase(Locale.ROOT);
         if (normalized.isEmpty()) {
-            return null;
+            return DomainAgentSkillConfiguration.unconfigured(skillId);
         }
         return switch (normalized) {
-            case "N" -> Boolean.FALSE;
-            case "Y" -> Boolean.TRUE;
+            case "N" -> new DomainAgentSkillConfiguration(skillId, Boolean.FALSE);
+            case "Y" -> new DomainAgentSkillConfiguration(skillId, Boolean.TRUE);
             default -> throw protocolError("Invalid isSaveSession value in DomainAgent skill configuration");
         };
     }

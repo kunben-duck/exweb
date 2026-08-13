@@ -178,7 +178,7 @@ sequence 分配顺序，但不执行 Event INSERT；`run.lastSeq` 和 `stream-st
 当前 `ApplicationAuthContextProvider` 直接构造完整 `UserContext`，不再通过配置文件或环境变量模拟
 tenant/user。接入企业身份源时，只需替换该防腐层的身份读取逻辑。
 
-同一个 ChatService 会话下，Relay Delegate 与 Domain Expert 分别维护可恢复会话：各 Profile 首次进入时使用 `new`，再次命中相同 Profile 和相同 `appMode/roleName` 时使用 `resume`。敏感信息意图与普通复杂任务共用 Delegate Profile。Relay 正常完成后只把 binding 从 `ACTIVE` 改为 `RESUMABLE`，让下一轮重新意图，但永久保留真实 `runtimeSessionId`；两个 Profile 不交叉复用。
+同一个 ChatService 会话下，Relay Delegate 与 Domain Expert 分别维护可恢复会话：各 Profile 首次进入时使用 `new`，再次命中相同 Profile 和相同 `appMode/roleName` 时使用 `resume`。敏感信息意图与普通复杂任务共用 Delegate Profile，但仅该 run 保留答案 `message.delta/message.snapshot`、问卷和必要会话状态；Relay 的 thinking、progress、agent、tool、reference、普通 card 及未知过程事件会在公共 Event 管线前丢弃，不推送、不落库且不生成历史 Parts。答案仍逐帧实时输出并可通过 Event Resume 恢复。该模式只保存在 run 私有 metadata，不写入 Binding，因此后续普通 Delegate run 恢复完整事件流。Relay 正常完成后只把 binding 从 `ACTIVE` 改为 `RESUMABLE`，让下一轮重新意图，但永久保留真实 `runtimeSessionId`；两个 Profile 不交叉复用。
 
 `targetType=DOMAIN_AGENT` 用于前端显式选择财经领域 DomainAgent 的场景，`targetId` 为目标 DomainAgent ID。
 该路径会跳过用例库和意图服务，创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding，并调用 DomainAgent Runtime。

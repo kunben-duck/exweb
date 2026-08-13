@@ -6,6 +6,7 @@ import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
+import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
 import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAttachmentDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSelectedIntentDto;
@@ -48,6 +49,7 @@ public class ChatRequestTranslator {
         Map<String, Object> metadata = normalizeMetadata(request.metadata());
         metadata = SelectedIntentContext.removeReserved(metadata);
         metadata = RuntimeProfileMetadata.removePrivateRunMetadata(metadata);
+        metadata = RelayOutputModeMetadata.removePrivateRunMetadata(metadata);
         if (request.selectedIntent() != null) {
             validateSelectedIntent(request.selectedIntent(), runMode, request.targetType(), request.targetId());
             metadata = SelectedIntentContext.attach(metadata,

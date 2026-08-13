@@ -92,8 +92,8 @@ final class AmbiguousRouteSelectionResolver {
             throw new IllegalArgumentException("AMBIGUOUS_ROUTE 专家候选缺少 roleName");
         }
         RouteTarget route = sensitiveInformation
-                ? RouteTarget.agentRuntime(source, candidate.confidence(),
-                        "ambiguous route sensitive information candidate selected", RuntimeProfile.DELEGATE)
+                ? RouteTarget.agentRuntimeAnswerStreamOnly(source, candidate.confidence(),
+                        "ambiguous route sensitive information candidate selected")
                 : expert.validDomainExpert()
                 ? RouteTarget.agentRuntime(source, candidate.confidence(),
                         "ambiguous route domain expert candidate selected", RuntimeProfile.DOMAIN_EXPERT,

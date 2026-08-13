@@ -6,6 +6,8 @@ import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+import com.huawei.it.ex.one.domain.routing.RelayOutputMode;
+import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
 
 import reactor.core.publisher.Flux;
 
@@ -54,6 +56,12 @@ final class InteractionRunLifecycle {
     AgentDataPersistenceState inheritedPersistenceState(
             UserContext user,
             ChatInteractionRequest interaction) {
+        return inheritedRunState(user, interaction).persistenceState();
+    }
+
+    InheritedRunState inheritedRunState(
+            UserContext user,
+            ChatInteractionRequest interaction) {
         if (interaction == null || interaction.sourceRunId() == null
                 || interaction.sourceRunId().isBlank()) {
             throw new IllegalStateException("Interaction continuation 缺少 sourceRunId");
@@ -63,7 +71,9 @@ final class InteractionRunLifecycle {
                 || !Objects.equals(interaction.sessionId(), sourceRun.sessionId())) {
             throw new IllegalStateException("Interaction continuation 的 source run 会话不匹配");
         }
-        return AgentDataPersistenceState.inheritFromRunMetadata(sourceRun.metadata(), null);
+        return new InheritedRunState(
+                AgentDataPersistenceState.inheritFromRunMetadata(sourceRun.metadata(), null),
+                RelayOutputModeMetadata.fromRunMetadata(sourceRun.metadata()));
     }
 
     ChatRun create(CreateChatRunContext context, ChatInteractionRequest interaction) {
@@ -104,5 +114,19 @@ final class InteractionRunLifecycle {
         return value == null || String.valueOf(value).isBlank()
                 ? null
                 : String.valueOf(value);
+    }
+
+    record InheritedRunState(
+            AgentDataPersistenceState persistenceState,
+            RelayOutputMode relayOutputMode
+    ) {
+        InheritedRunState {
+            persistenceState = persistenceState == null
+                    ? AgentDataPersistenceState.full()
+                    : persistenceState;
+            relayOutputMode = relayOutputMode == null
+                    ? RelayOutputMode.FULL_STREAM
+                    : relayOutputMode;
+        }
     }
 }

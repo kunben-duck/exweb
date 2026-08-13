@@ -27,6 +27,7 @@ import com.huawei.it.ex.one.domain.chat.ChatStreamTopics;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
+import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
 import org.springframework.beans.factory.ObjectProvider;
@@ -163,7 +164,8 @@ public class ChatRunApplicationService {
                 null,
                 now,
                 null,
-                AgentDataPersistenceMetadata.removeRunPolicy(context.safeMetadata()),
+                RelayOutputModeMetadata.removePrivateRunMetadata(
+                        AgentDataPersistenceMetadata.removeRunPolicy(context.safeMetadata())),
                 now,
                 now
         );
@@ -246,11 +248,16 @@ public class ChatRunApplicationService {
      * 外部路由进入 run pipeline 后，run.started 会先落库；路由完成后再回填最终路由诊断字段。
      */
     public ChatRun bindResolvedRoute(String runId, RouteTarget route, RuntimeBinding binding) {
+        return bindResolvedRoute(runId, route, binding, Map.of());
+    }
+
+    public ChatRun bindResolvedRoute(String runId, RouteTarget route, RuntimeBinding binding,
+                                     Map<String, Object> metadataOverlay) {
         if (runId == null || runId.isBlank() || route == null) {
             return null;
         }
         return repository.findById(runId)
-                .map(run -> updateResolvedRoute(run.withResolvedRoute(
+                .map(run -> updateResolvedRoute(run.withMetadata(metadataOverlay).withResolvedRoute(
                         route.type() == null ? null : route.type().name(),
                         route.selectedAgentCode(),
                         binding == null ? null : binding.provider(),

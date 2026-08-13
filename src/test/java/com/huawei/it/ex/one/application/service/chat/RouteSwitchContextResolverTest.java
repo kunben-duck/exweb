@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
+import com.huawei.it.ex.one.domain.routing.RelayOutputMode;
 import com.huawei.it.ex.one.domain.routing.RouteType;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
@@ -31,7 +32,24 @@ class RouteSwitchContextResolverTest {
         assertThat(target.type()).isEqualTo(RouteType.AGENT_RUNTIME);
         assertThat(target.runtimeProfile()).isEqualTo(RuntimeProfile.DOMAIN_EXPERT);
         assertThat(target.runtimeRoleName()).isEqualTo("system-awareness");
+        assertThat(target.relayOutputMode()).isEqualTo(RelayOutputMode.FULL_STREAM);
         assertThat(target.routeSource()).isEqualTo("user-confirmed");
+    }
+
+    @Test
+    void approvedExpertRouteAcceptsMixedCaseRouteAction() {
+        ChatInteractionRequest interaction = interaction(
+                "RE_system-awareness", "system-awareness", "intent-expert", "领域专家",
+                "RoUtE_SiNgLe");
+        ChatInteractionClaimResult claim = new ChatInteractionClaimResult(
+                interaction, Map.of("approved", true));
+
+        RouteSwitchInput input = resolver.input(interaction, claim);
+        var target = resolver.target(interaction, input);
+
+        assertThat(target.runtimeProfile()).isEqualTo(RuntimeProfile.DOMAIN_EXPERT);
+        assertThat(target.runtimeRoleName()).isEqualTo("system-awareness");
+        assertThat(target.relayOutputMode()).isEqualTo(RelayOutputMode.FULL_STREAM);
     }
 
     @Test
@@ -62,10 +80,28 @@ class RouteSwitchContextResolverTest {
         assertThat(target.type()).isEqualTo(RouteType.AGENT_RUNTIME);
         assertThat(target.runtimeProfile()).isEqualTo(RuntimeProfile.DELEGATE);
         assertThat(target.runtimeRoleName()).isNull();
+        assertThat(target.relayOutputMode()).isEqualTo(RelayOutputMode.ANSWER_STREAM_ONLY);
         assertThat(restoredIntent.intentCode()).isEqualTo("intent-sensitive");
         assertThat(restoredIntent.intentName()).isEqualTo("敏感信息");
         assertThat(restoredIntent.candidateDomainAgentId()).isEqualTo("sensitive_information");
         assertThat(restoredIntent.slots()).containsEntry("routeAction", "ROUTE_SINGLE");
+    }
+
+    @Test
+    void approvedSensitiveInformationRouteAcceptsLowerCaseRouteAction() {
+        RouteSwitchContextResolver sensitiveResolver = new RouteSwitchContextResolver(
+                null, new SensitiveInformationAccessNameResolver("sensitive_information"));
+        ChatInteractionRequest interaction = interaction(
+                "sensitive_information", null, "intent-sensitive", "敏感信息", "route_single");
+        ChatInteractionClaimResult claim = new ChatInteractionClaimResult(
+                interaction, Map.of("approved", true));
+
+        RouteSwitchInput input = sensitiveResolver.input(interaction, claim);
+        var target = sensitiveResolver.target(interaction, input);
+
+        assertThat(target.runtimeProfile()).isEqualTo(RuntimeProfile.DELEGATE);
+        assertThat(target.runtimeRoleName()).isNull();
+        assertThat(target.relayOutputMode()).isEqualTo(RelayOutputMode.ANSWER_STREAM_ONLY);
     }
 
     private ChatInteractionRequest interaction(String runtimeRoleName) {
@@ -76,6 +112,14 @@ class RouteSwitchContextResolverTest {
                                                String runtimeRoleName,
                                                String intentCode,
                                                String intentName) {
+        return interaction(accessName, runtimeRoleName, intentCode, intentName, "ROUTE_SINGLE");
+    }
+
+    private ChatInteractionRequest interaction(String accessName,
+                                               String runtimeRoleName,
+                                               String intentCode,
+                                               String intentName,
+                                               String routeAction) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("currentProvider", "domain-agent");
         payload.put("currentTargetId", "agent-a");
@@ -84,7 +128,7 @@ class RouteSwitchContextResolverTest {
         payload.put("candidateIntentCode", intentCode);
         payload.put("candidateIntentName", intentName);
         payload.put("candidateAccessName", accessName);
-        payload.put("routeAction", "ROUTE_SINGLE");
+        payload.put("routeAction", routeAction);
         payload.put("originalQuery", "分析资产负债率");
         if (runtimeRoleName != null) {
             payload.put("candidateRuntimeRoleName", runtimeRoleName);

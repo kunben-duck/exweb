@@ -16,8 +16,11 @@ import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+import com.huawei.it.ex.one.domain.routing.RelayOutputMode;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
+import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -92,15 +95,64 @@ class AgentDataPersistenceRuntimeDispatchMarkerTest {
     }
 
     @Test
-    void placeholderMarkerIsPersistedWithExecutionGuardBeforeUpdatingMemoryState() {
+    void interactionContinuationInheritsAnswerOnlyModeFromTrustedSourceRun() {
+        ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
+        InteractionRunLifecycle lifecycle = new InteractionRunLifecycle(
+                runService, null, null, null);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        ChatInteractionRequest interaction = mock(ChatInteractionRequest.class);
+        ChatRun sourceRun = mock(ChatRun.class);
+        when(interaction.sourceRunId()).thenReturn("run-source");
+        when(interaction.sessionId()).thenReturn("session1");
+        when(sourceRun.sessionId()).thenReturn("session1");
+        when(sourceRun.metadata()).thenReturn(Map.of(
+                RelayOutputModeMetadata.RUN_METADATA_KEY, true));
+        when(runService.requireOwnedRun(user, "run-source")).thenReturn(sourceRun);
+
+        InteractionRunLifecycle.InheritedRunState inherited =
+                lifecycle.inheritedRunState(user, interaction);
+
+        assertThat(inherited.relayOutputMode()).isEqualTo(RelayOutputMode.ANSWER_STREAM_ONLY);
+        assertThat(inherited.persistenceState().placeholderMode()).isFalse();
+    }
+
+    @Test
+    void sensitiveRelayRoutePersistsAnswerOnlyMarkerWithExecutionGuard() {
         ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
         AppliedRouteRecorder recorder = new AppliedRouteRecorder(null, null, runService);
         ChatRun run = mock(ChatRun.class);
         RuntimeBinding binding = mock(RuntimeBinding.class);
-        RouteTarget route = RouteTarget.domainAgent("skill1", "intent-agent");
+        RouteTarget route = RouteTarget.agentRuntimeAnswerStreamOnly(
+                "intent-agent", 1.0, "sensitive information");
+        RunExecutionClaim claim = new RunExecutionClaim("run1", "instance1", 9L);
+        when(runService.bindResolvedRoute(eq(run), eq(route), eq(binding), eq(claim), any()))
+                .thenReturn(run);
+
+        recorder.bindResolvedRouteRequired(
+                run, route, binding, claim, AgentDataPersistenceState.full());
+
+        ArgumentCaptor<Map<String, Object>> metadataCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(runService).bindResolvedRoute(
+                eq(run), eq(route), eq(binding), eq(claim), metadataCaptor.capture());
+        assertThat(metadataCaptor.getValue())
+                .containsEntry(RelayOutputModeMetadata.RUN_METADATA_KEY, true);
+        assertThat(binding.metadata()).doesNotContainKey(RelayOutputModeMetadata.RUN_METADATA_KEY);
+    }
+
+    @Test
+    void placeholderDispatchMarkerKeepsSensitiveOutputModeAndRuntimeProfile() {
+        ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
+        AppliedRouteRecorder recorder = new AppliedRouteRecorder(null, null, runService);
+        ChatRun run = mock(ChatRun.class);
+        RuntimeBinding binding = mock(RuntimeBinding.class);
+        RouteTarget route = RouteTarget.agentRuntimeAnswerStreamOnly(
+                "intent-agent", 1.0, "sensitive information");
         RunExecutionClaim claim = new RunExecutionClaim("run1", "instance1", 9L);
         AgentDataPersistenceState state = new AgentDataPersistenceState("回答已隐藏")
                 .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
+        when(binding.metadata()).thenReturn(Map.of(
+                RuntimeProfileMetadata.PROFILE_KEY, "DELEGATE",
+                RuntimeProfileMetadata.APP_MODE_KEY, "delegate"));
         when(runService.bindResolvedRoute(eq(run), eq(route), eq(binding), eq(claim), any()))
                 .thenReturn(run);
 
@@ -114,6 +166,11 @@ class AgentDataPersistenceRuntimeDispatchMarkerTest {
         assertThat(snapshot).isNotNull();
         assertThat(snapshot.policy()).isEqualTo(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
         assertThat(snapshot.runtimeDispatchStarted()).isTrue();
+        assertThat(metadataCaptor.getValue())
+                .containsEntry(RelayOutputModeMetadata.RUN_METADATA_KEY, true)
+                .containsKey(RuntimeProfileMetadata.RUN_METADATA_KEY);
+        assertThat(RuntimeProfileMetadata.copyRunMetadata(metadataCaptor.getValue()))
+                .containsKey(RuntimeProfileMetadata.RUN_METADATA_KEY);
         assertThat(state.runtimeDispatchStarted()).isTrue();
     }
 

@@ -31,6 +31,7 @@ import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
 import com.huawei.it.ex.one.domain.chat.ChatStreamTopics;
+import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAgentModeDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAgentModeSelectionDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAttachmentDto;
@@ -176,7 +177,8 @@ class ChatProtocolConvergenceTest {
                         "_relayRuntimeProfile", Map.of("runtimeProfile", "DOMAIN_EXPERT"),
                         "runtimeProfile", "DOMAIN_EXPERT",
                         "relayAppMode", "domain_expert",
-                        "relayRoleName", "system-awareness"));
+                        "relayRoleName", "system-awareness",
+                        RelayOutputModeMetadata.RUN_METADATA_KEY, true));
 
         ChatCommand command = translator.toCommand(request);
 

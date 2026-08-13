@@ -21,8 +21,10 @@ import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
+import com.huawei.it.ex.one.domain.routing.RelayOutputMode;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
+import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
@@ -31,7 +33,9 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Executes non-Intent, non-route-switch Interaction continuations. */
@@ -65,8 +69,14 @@ final class RuntimeInteractionContinuationCoordinator {
 
     Flux<ChatEvent> execute(Request request) {
         ChatInteractionRequest interaction = request.claim().request();
-        RouteTarget route = RouteTarget.agentRuntime(
-                "interaction-continuation", 1.0, "continue waiting user input");
+        InteractionRunLifecycle.InheritedRunState inheritedState =
+                lifecycle.inheritedRunState(request.user(), interaction);
+        RelayOutputMode relayOutputMode = inheritedState.relayOutputMode();
+        RouteTarget route = relayOutputMode == RelayOutputMode.ANSWER_STREAM_ONLY
+                ? RouteTarget.agentRuntimeAnswerStreamOnly(
+                        "interaction-continuation", 1.0, "continue waiting user input")
+                : RouteTarget.agentRuntime(
+                        "interaction-continuation", 1.0, "continue waiting user input");
         RuntimeEvent responseEvent = interactionEventFactory.clarificationResponseEvent(
                 request.runId(),
                 request.session().id(),
@@ -86,8 +96,7 @@ final class RuntimeInteractionContinuationCoordinator {
                 interaction.userMessageId(),
                 userMessage,
                 null);
-        AgentDataPersistenceState persistenceState =
-                lifecycle.inheritedPersistenceState(request.user(), interaction);
+        AgentDataPersistenceState persistenceState = inheritedState.persistenceState();
         RuntimeInteractionDispatchState dispatchState = RelayQuestionnaireAnswerValidator.isRelayQuestionnaire(interaction)
                 ? RuntimeInteractionDispatchState.tracked()
                 : RuntimeInteractionDispatchState.untracked();
@@ -204,8 +213,15 @@ final class RuntimeInteractionContinuationCoordinator {
                                         execution.request().claim().responsePayload(),
                                         execution.request().forwardHeaders(),
                                         execution.request().traceContext(),
-                                        RuntimeProfileMetadata.copyBindingProfileAsRunMetadata(binding.metadata()),
+                                        runtimeMetadata(binding, execution.route()),
                                         bindingLifecycle.dispatchState())))));
+    }
+
+    private Map<String, Object> runtimeMetadata(RuntimeBinding binding, RouteTarget route) {
+        Map<String, Object> metadata = new LinkedHashMap<>(
+                RuntimeProfileMetadata.copyBindingProfileAsRunMetadata(binding.metadata()));
+        metadata.putAll(RelayOutputModeMetadata.runMetadataOverlay(route));
+        return Map.copyOf(metadata);
     }
 
     private Mono<Void> cleanupUnstartedInteraction(

@@ -79,8 +79,9 @@ public class RoutingPolicy {
                 && intent.candidateDomainAgentId() != null
                 && !intent.candidateDomainAgentId().isBlank()) {
             if (sensitiveInformationResolver.matches(intent.candidateDomainAgentId())) {
-                return RouteTarget.agentRuntime("intent-agent", intent.confidence(),
-                        "route single sensitive information intent", RuntimeProfile.DELEGATE);
+                return RouteTarget.agentRuntimeAnswerStreamOnly(
+                        "intent-agent", intent.confidence(),
+                        "route single sensitive information intent");
             }
             DomainExpertAccessNameResolver.Resolution expert = domainExpertResolver.resolve(
                     intent.candidateDomainAgentId());

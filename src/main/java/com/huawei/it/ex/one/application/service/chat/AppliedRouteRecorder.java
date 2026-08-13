@@ -21,6 +21,7 @@ import com.huawei.it.ex.one.domain.memory.RouteMemoryContext;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RouteType;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
+import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
@@ -88,7 +89,8 @@ final class AppliedRouteRecorder {
      * 拒答重路由必须先保存最终 Runtime，避免 stop 继续取消旧 Agent。
      */
     void bindResolvedRouteRequired(String runId, RouteTarget route, RuntimeBinding binding) {
-        if (chatRunService.bindResolvedRoute(runId, route, binding) == null) {
+        if (chatRunService.bindResolvedRoute(
+                runId, route, binding, RelayOutputModeMetadata.runMetadataOverlay(route)) == null) {
             throw new IllegalStateException("ChatRun resolved route update found no run: " + runId);
         }
     }
@@ -103,7 +105,7 @@ final class AppliedRouteRecorder {
 
     void bindResolvedRouteRequired(ChatRun run, RouteTarget route, RuntimeBinding binding,
                                    RunExecutionClaim claim, AgentDataPersistenceState persistenceState) {
-        Map<String, Object> metadata = resolvedRouteMetadata(binding, persistenceState);
+        Map<String, Object> metadata = resolvedRouteMetadata(route, binding, persistenceState);
         if (chatRunService.bindResolvedRoute(run, route, binding, claim, metadata) == null) {
             throw new IllegalStateException("ChatRun guarded resolved route update found no run: "
                     + (run == null ? null : run.id()));
@@ -118,7 +120,7 @@ final class AppliedRouteRecorder {
 
     void bindResolvedRouteRequired(String runId, RouteTarget route, RuntimeBinding binding,
                                    RunExecutionClaim claim, AgentDataPersistenceState persistenceState) {
-        Map<String, Object> metadata = resolvedRouteMetadata(binding, persistenceState);
+        Map<String, Object> metadata = resolvedRouteMetadata(route, binding, persistenceState);
         if (chatRunService.bindResolvedRoute(runId, route, binding, claim, metadata) == null) {
             throw new IllegalStateException("ChatRun guarded resolved route update found no run: " + runId);
         }
@@ -142,7 +144,7 @@ final class AppliedRouteRecorder {
                 route,
                 binding,
                 claim,
-                persistenceState.runtimeDispatchStartedMetadataOverlay()) == null) {
+                runtimeDispatchStartedMetadata(route, binding, persistenceState)) == null) {
             throw new IllegalStateException("ChatRun guarded Runtime dispatch marker update found no run: "
                     + (run == null ? null : run.id()));
         }
@@ -164,7 +166,7 @@ final class AppliedRouteRecorder {
                 route,
                 binding,
                 claim,
-                persistenceState.runtimeDispatchStartedMetadataOverlay()) == null) {
+                runtimeDispatchStartedMetadata(route, binding, persistenceState)) == null) {
             throw new IllegalStateException(
                     "ChatRun guarded Runtime dispatch marker update found no run: " + runId);
         }
@@ -317,9 +319,11 @@ final class AppliedRouteRecorder {
     }
 
     private Map<String, Object> resolvedRouteMetadata(
+            RouteTarget route,
             RuntimeBinding binding,
             AgentDataPersistenceState persistenceState) {
         Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.putAll(RelayOutputModeMetadata.runMetadataOverlay(route));
         if (persistenceState != null) {
             metadata.putAll(persistenceState.runMetadataOverlay());
         }
@@ -327,6 +331,16 @@ final class AppliedRouteRecorder {
             metadata.putAll(RuntimeProfileMetadata.runMetadataOverlayFromBinding(binding.metadata()));
         }
         return metadata.isEmpty() ? Map.of() : Map.copyOf(metadata);
+    }
+
+    private Map<String, Object> runtimeDispatchStartedMetadata(
+            RouteTarget route,
+            RuntimeBinding binding,
+            AgentDataPersistenceState persistenceState) {
+        Map<String, Object> metadata = new LinkedHashMap<>(
+                resolvedRouteMetadata(route, binding, persistenceState));
+        metadata.putAll(persistenceState.runtimeDispatchStartedMetadataOverlay());
+        return Map.copyOf(metadata);
     }
 
     record AppliedRouteDecision(

@@ -7,6 +7,7 @@ import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingResolution
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.routing.RelayOutputMode;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
@@ -66,6 +67,10 @@ final class RouteSwitchContextResolver {
                 candidateProvider,
                 firstText(interaction.requestPayload().get("routeAction")),
                 firstText(interaction.requestPayload().get("candidateAccessName")));
+        RelayOutputMode candidateRelayOutputMode = relayOutputMode(
+                candidateProvider,
+                firstText(interaction.requestPayload().get("routeAction")),
+                firstText(interaction.requestPayload().get("candidateAccessName")));
         String candidateRuntimeRoleName = firstText(
                 interaction.requestPayload().get("candidateRuntimeRoleName"));
         if (candidateRuntimeProfile == RuntimeProfile.DOMAIN_EXPERT
@@ -79,6 +84,7 @@ final class RouteSwitchContextResolver {
                 candidateTargetId,
                 candidateRuntimeProfile,
                 candidateRuntimeRoleName,
+                candidateRelayOutputMode,
                 currentTargetId,
                 normalizedQuery,
                 candidateRouteQuery);
@@ -94,12 +100,7 @@ final class RouteSwitchContextResolver {
                     1.0,
                     "declined route switch");
         }
-        return approvedTarget(
-                input.candidateProvider(),
-                input.candidateTargetId(),
-                input.candidateRuntimeProfile(),
-                input.candidateRuntimeRoleName(),
-                "user-confirmed");
+        return approvedTarget(input, "user-confirmed");
     }
 
     RouteSwitchBindingSelection selectBinding(
@@ -154,36 +155,47 @@ final class RouteSwitchContextResolver {
                 firstText(interaction.requestPayload().get("refusalCode")));
     }
 
-    private RouteTarget approvedTarget(
-            String provider,
-            String targetId,
-            RuntimeProfile runtimeProfile,
-            String runtimeRoleName,
-            String routeSource) {
-        if (RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(provider)) {
-            if (targetId == null || targetId.isBlank()) {
+    private RouteTarget approvedTarget(RouteSwitchInput input, String routeSource) {
+        if (RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(input.candidateProvider())) {
+            if (input.candidateTargetId() == null || input.candidateTargetId().isBlank()) {
                 throw new IllegalArgumentException(
                         "切换到 DomainAgent 时 candidateTargetId 不能为空");
             }
             return RouteTarget.domainAgent(
-                    targetId, routeSource, 1.0, "confirmed route switch");
+                    input.candidateTargetId(), routeSource, 1.0, "confirmed route switch");
         }
-        if (RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(provider)) {
+        if (RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(input.candidateProvider())) {
+            if (input.candidateRelayOutputMode() == RelayOutputMode.ANSWER_STREAM_ONLY) {
+                return RouteTarget.agentRuntimeAnswerStreamOnly(
+                        routeSource, 1.0, "confirmed route switch to relay");
+            }
             return RouteTarget.agentRuntime(
-                    routeSource, 1.0, "confirmed route switch to relay", runtimeProfile,
-                    runtimeRoleName);
+                    routeSource, 1.0, "confirmed route switch to relay",
+                    input.candidateRuntimeProfile(), input.candidateRuntimeRoleName());
         }
         throw new IllegalArgumentException(
-                "不支持的候选 Runtime provider: " + provider);
+                "不支持的候选 Runtime provider: " + input.candidateProvider());
     }
 
     private RuntimeProfile relayRuntimeProfile(String provider, String routeAction, String candidateAccessName) {
         if (RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(provider)
-                && "ROUTE_SINGLE".equals(routeAction)
+                && isRouteSingle(routeAction)
                 && !sensitiveInformationResolver.matches(candidateAccessName)) {
             return RuntimeProfile.DOMAIN_EXPERT;
         }
         return RuntimeProfile.DELEGATE;
+    }
+
+    private RelayOutputMode relayOutputMode(String provider, String routeAction, String candidateAccessName) {
+        return RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(provider)
+                && isRouteSingle(routeAction)
+                && sensitiveInformationResolver.matches(candidateAccessName)
+                ? RelayOutputMode.ANSWER_STREAM_ONLY
+                : RelayOutputMode.FULL_STREAM;
+    }
+
+    private boolean isRouteSingle(String routeAction) {
+        return "ROUTE_SINGLE".equalsIgnoreCase(routeAction);
     }
 
     private String routeSource(ChatInteractionRequest interaction) {
@@ -242,6 +254,7 @@ record RouteSwitchInput(
         String candidateTargetId,
         RuntimeProfile candidateRuntimeProfile,
         String candidateRuntimeRoleName,
+        RelayOutputMode candidateRelayOutputMode,
         String currentTargetId,
         String originalQuery,
         String candidateRouteQuery

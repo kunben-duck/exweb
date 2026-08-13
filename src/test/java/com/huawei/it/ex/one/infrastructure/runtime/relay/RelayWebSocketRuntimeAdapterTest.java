@@ -14,6 +14,7 @@ import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
+import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
 import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -47,6 +48,134 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 class RelayWebSocketRuntimeAdapterTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Test
+    void sensitiveInformationRelayKeepsAnswerStreamAndFiltersProcessEvents() {
+        List<String> frames = List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"relay-start\",\"content\":\"starting\"}",
+                "{\"type\":\"agent-call\",\"content\":\"delegating\"}",
+                "{\"type\":\"thinking-content-update\",\"content\":\"thinking\"}",
+                "{\"type\":\"tool-execution\",\"content\":\"tool\"}",
+                "{\"type\":\"citations\",\"content\":\"reference\"}",
+                "{\"type\":\"expert_rejection\",\"content\":\"card\"}",
+                "{\"type\":\"future-process-event\",\"content\":\"unknown\"}",
+                "{\"type\":\"agent\",\"content\":\"流式回答\",\"is_streaming\":true}",
+                "{\"type\":\"generate-response\",\"content\":\"最终回答\"}",
+                "{\"type\":\"session-state\",\"state\":\"completed\","
+                        + "\"session_id\":\"relay-session-1\"}"
+        );
+        RelayWebSocketRuntimeAdapter adapter = adapter(new FakeWebSocketClient(frames));
+
+        List<com.huawei.it.ex.one.domain.chat.ChatEvent> events = adapter.query(answerOnlyRequest())
+                .collectList()
+                .block();
+
+        assertThat(events).isNotNull();
+        assertThat(events).extracting(com.huawei.it.ex.one.domain.chat.ChatEvent::type)
+                .containsExactly(
+                        "runtime.metadata",
+                        "message.delta",
+                        "message.snapshot",
+                        "runtime.metadata",
+                        "message.completed");
+        assertThat(events.get(0).payload()).containsEntry("sourceType", "session-ready");
+        assertThat(events.get(1).payload()).containsEntry("delta", "流式回答");
+        assertThat(events.get(2).payload()).containsEntry("content", "最终回答");
+        assertThat(events.get(3).payload())
+                .containsEntry("sourceType", "session-state")
+                .containsEntry("state", "completed");
+    }
+
+    @Test
+    void ordinaryDelegateKeepsFullProcessEventStream() {
+        List<String> frames = List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"relay-start\",\"content\":\"starting\"}",
+                "{\"type\":\"agent-call\",\"content\":\"delegating\"}",
+                "{\"type\":\"thinking-content-update\",\"content\":\"thinking\"}",
+                "{\"type\":\"tool-execution\",\"content\":\"tool\"}",
+                "{\"type\":\"citations\",\"content\":\"reference\"}",
+                "{\"type\":\"expert_rejection\",\"content\":\"card\"}",
+                "{\"type\":\"future-process-event\",\"content\":\"unknown\"}",
+                "{\"type\":\"agent\",\"content\":\"流式回答\",\"is_streaming\":true}",
+                "{\"type\":\"generate-response\",\"content\":\"最终回答\"}",
+                "{\"type\":\"session-state\",\"state\":\"completed\","
+                        + "\"session_id\":\"relay-session-1\"}"
+        );
+        RelayWebSocketRuntimeAdapter adapter = adapter(new FakeWebSocketClient(frames));
+
+        List<com.huawei.it.ex.one.domain.chat.ChatEvent> events = adapter.query(
+                        request(null, RuntimeForwardHeaders.empty()))
+                .collectList()
+                .block();
+
+        assertThat(events).isNotNull();
+        assertThat(events).extracting(com.huawei.it.ex.one.domain.chat.ChatEvent::type)
+                .containsExactly(
+                        "runtime.metadata",
+                        "runtime.progress",
+                        "runtime.agent",
+                        "runtime.thinking",
+                        "runtime.tool",
+                        "runtime.reference",
+                        "runtime.card",
+                        "runtime.event",
+                        "message.delta",
+                        "message.snapshot",
+                        "runtime.metadata",
+                        "message.completed");
+    }
+
+    @Test
+    void sensitiveInformationRelayKeepsQuestionnaireControlCard() {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"relay-start\",\"content\":\"starting\"}",
+                "{\"type\":\"approval-request\",\"approval_id\":\"approval-1\","
+                        + "\"operation_type\":\"questionnaire\","
+                        + "\"questions\":[{\"question\":\"请选择方向\"}]}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        StepVerifier.create(adapter.query(answerOnlyRequest()))
+                .assertNext(this::assertSessionReadyMetadata)
+                .assertNext(event -> {
+                    assertThat(event.type()).isEqualTo("runtime.card");
+                    assertThat(event.payload())
+                            .containsEntry("sourceType", "approval-request")
+                            .containsEntry("operation_type", "questionnaire");
+                })
+                .assertNext(event -> assertThat(event.type()).isEqualTo("message.completed"))
+                .verifyComplete();
+    }
+
+    @Test
+    void sensitiveQuestionnaireContinuationKeepsInheritedAnswerStreamOnly() {
+        FakeWebSocketClient client = new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"relay-start\",\"content\":\"continue\"}",
+                "{\"type\":\"thinking-content-update\",\"content\":\"thinking\"}",
+                "{\"type\":\"agent\",\"content\":\"续接回答\",\"is_streaming\":true}",
+                "{\"type\":\"session-state\",\"state\":\"completed\","
+                        + "\"session_id\":\"relay-session-1\"}"
+        ));
+        RelayWebSocketRuntimeAdapter adapter = adapter(client);
+
+        List<com.huawei.it.ex.one.domain.chat.ChatEvent> events = adapter
+                .continueWithUserResponse(answerOnlyInteractionRequest())
+                .collectList()
+                .block();
+
+        assertThat(events).isNotNull();
+        assertThat(events).extracting(com.huawei.it.ex.one.domain.chat.ChatEvent::type)
+                .containsExactly(
+                        "runtime.metadata",
+                        "message.delta",
+                        "runtime.metadata",
+                        "message.completed");
+        assertThat(events.get(1).payload()).containsEntry("delta", "续接回答");
+    }
 
     @Test
     void terminalTextDoesNotCompleteBeforeTerminalSessionState() {
@@ -1325,6 +1454,30 @@ class RelayWebSocketRuntimeAdapterTest {
                 request.traceContext());
     }
 
+    private AgentRuntimeRequest answerOnlyRequest() {
+        AgentRuntimeRequest request = request(null, RuntimeForwardHeaders.empty());
+        return new AgentRuntimeRequest(
+                request.tenantId(),
+                request.userId(),
+                request.userAccount(),
+                request.globalUserId(),
+                request.sessionId(),
+                request.runId(),
+                request.runtimeSessionId(),
+                request.runtimeSessionMode(),
+                request.message(),
+                request.attachments(),
+                request.documents(),
+                request.memoryContext(),
+                request.intentDecision(),
+                RouteTarget.agentRuntimeAnswerStreamOnly(
+                        "intent-agent", 1.0, "sensitive information"),
+                request.metadata(),
+                request.bindingMetadata(),
+                request.forwardHeaders(),
+                request.traceContext());
+    }
+
     private AgentRuntimeRequest expertRequest(String runtimeSessionId,
                                               RuntimeSessionMode sessionMode,
                                               MemoryContext memory) {
@@ -1467,6 +1620,27 @@ class RelayWebSocketRuntimeAdapterTest {
                                 "system-awareness"),
                         "delegate",
                         "domain_expert"),
+                delegate.dispatchState());
+    }
+
+    private AgentRuntimeInteractionResponseRequest answerOnlyInteractionRequest() {
+        AgentRuntimeInteractionResponseRequest delegate = interactionRequest();
+        return new AgentRuntimeInteractionResponseRequest(
+                delegate.tenantId(),
+                delegate.userId(),
+                delegate.userAccount(),
+                delegate.globalUserId(),
+                delegate.sessionId(),
+                delegate.runId(),
+                delegate.runtimeSessionId(),
+                delegate.provider(),
+                delegate.interactionId(),
+                delegate.interactionType(),
+                delegate.approvalId(),
+                delegate.responsePayload(),
+                delegate.forwardHeaders(),
+                delegate.traceContext(),
+                Map.of(RelayOutputModeMetadata.RUN_METADATA_KEY, true),
                 delegate.dispatchState());
     }
 

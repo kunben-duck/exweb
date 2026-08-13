@@ -46,6 +46,7 @@ class RoutingPolicyTest {
         assertThat(target.type()).isEqualTo(RouteType.AGENT_RUNTIME);
         assertThat(target.runtimeProfile()).isEqualTo(RuntimeProfile.DOMAIN_EXPERT);
         assertThat(target.runtimeRoleName()).isEqualTo("system-awareness");
+        assertThat(target.relayOutputMode()).isEqualTo(RelayOutputMode.FULL_STREAM);
         assertThat(target.selectedAgentCode()).isNull();
     }
 
@@ -66,6 +67,7 @@ class RoutingPolicyTest {
         assertThat(target.type()).isEqualTo(RouteType.AGENT_RUNTIME);
         assertThat(target.runtimeProfile()).isEqualTo(RuntimeProfile.DELEGATE);
         assertThat(target.runtimeRoleName()).isNull();
+        assertThat(target.relayOutputMode()).isEqualTo(RelayOutputMode.ANSWER_STREAM_ONLY);
         assertThat(target.selectedAgentCode()).isNull();
     }
 
@@ -85,6 +87,7 @@ class RoutingPolicyTest {
         assertThat(target.type()).isEqualTo(RouteType.AGENT_RUNTIME);
         assertThat(target.runtimeProfile()).isEqualTo(RuntimeProfile.DELEGATE);
         assertThat(target.runtimeRoleName()).isNull();
+        assertThat(target.relayOutputMode()).isEqualTo(RelayOutputMode.ANSWER_STREAM_ONLY);
     }
 
     @Test

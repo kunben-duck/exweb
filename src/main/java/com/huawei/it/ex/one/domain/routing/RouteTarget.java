@@ -12,6 +12,7 @@ package com.huawei.it.ex.one.domain.routing;
  * @param reason 路由原因或系统回复文本。
  * @param runtimeProfile AgentRuntime 内部调用档案；非 AgentRuntime 路由忽略该字段。
  * @param runtimeRoleName Relay专家模式的动态角色名；其他路由为空。
+ * @param relayOutputMode 本轮Relay事件输出模式；普通路径默认完整流式输出。
  */
 public record RouteTarget(
         RouteType type,
@@ -20,10 +21,12 @@ public record RouteTarget(
         double score,
         String reason,
         RuntimeProfile runtimeProfile,
-        String runtimeRoleName
+        String runtimeRoleName,
+        RelayOutputMode relayOutputMode
 ) {
     public RouteTarget {
         runtimeProfile = runtimeProfile == null ? RuntimeProfile.DELEGATE : runtimeProfile;
+        relayOutputMode = relayOutputMode == null ? RelayOutputMode.FULL_STREAM : relayOutputMode;
         runtimeRoleName = normalize(runtimeRoleName);
         if (runtimeProfile == RuntimeProfile.DOMAIN_EXPERT && runtimeRoleName == null) {
             throw new IllegalArgumentException("Domain expert runtimeRoleName must not be blank");
@@ -31,31 +34,42 @@ public record RouteTarget(
         if (runtimeProfile != RuntimeProfile.DOMAIN_EXPERT) {
             runtimeRoleName = null;
         }
+        if (type != RouteType.AGENT_RUNTIME || runtimeProfile != RuntimeProfile.DELEGATE) {
+            relayOutputMode = RelayOutputMode.FULL_STREAM;
+        }
+    }
+
+    public RouteTarget(RouteType type, String selectedAgentCode, String routeSource,
+                       double score, String reason, RuntimeProfile runtimeProfile,
+                       String runtimeRoleName) {
+        this(type, selectedAgentCode, routeSource, score, reason, runtimeProfile, runtimeRoleName,
+                RelayOutputMode.FULL_STREAM);
     }
 
     public RouteTarget(RouteType type, String selectedAgentCode, String routeSource,
                        double score, String reason, RuntimeProfile runtimeProfile) {
-        this(type, selectedAgentCode, routeSource, score, reason, runtimeProfile, null);
+        this(type, selectedAgentCode, routeSource, score, reason, runtimeProfile, null,
+                RelayOutputMode.FULL_STREAM);
     }
 
     public static RouteTarget domainAgent(String domainAgentId, String reason) {
         return new RouteTarget(RouteType.DOMAIN_AGENT, domainAgentId, "domain-agent", 1.0, reason,
-                RuntimeProfile.DELEGATE, null);
+                RuntimeProfile.DELEGATE, null, RelayOutputMode.FULL_STREAM);
     }
 
     public static RouteTarget domainAgent(String domainAgentId, String routeSource, double score, String reason) {
         return new RouteTarget(RouteType.DOMAIN_AGENT, domainAgentId, routeSource, score, reason,
-                RuntimeProfile.DELEGATE, null);
+                RuntimeProfile.DELEGATE, null, RelayOutputMode.FULL_STREAM);
     }
 
     public static RouteTarget systemResponse(String reason) {
         return new RouteTarget(RouteType.SYSTEM_RESPONSE, null, "system", 1.0, reason,
-                RuntimeProfile.DELEGATE, null);
+                RuntimeProfile.DELEGATE, null, RelayOutputMode.FULL_STREAM);
     }
 
     public static RouteTarget agentRuntime(String reason) {
         return new RouteTarget(RouteType.AGENT_RUNTIME, null, "agent-runtime", 0.0, reason,
-                RuntimeProfile.DELEGATE, null);
+                RuntimeProfile.DELEGATE, null, RelayOutputMode.FULL_STREAM);
     }
 
     public static RouteTarget agentRuntime(String routeSource, double score, String reason) {
@@ -70,7 +84,15 @@ public record RouteTarget(
     public static RouteTarget agentRuntime(String routeSource, double score, String reason,
                                            RuntimeProfile runtimeProfile, String runtimeRoleName) {
         return new RouteTarget(RouteType.AGENT_RUNTIME, null, routeSource, score, reason,
-                runtimeProfile, runtimeRoleName);
+                runtimeProfile, runtimeRoleName, RelayOutputMode.FULL_STREAM);
+    }
+
+    public static RouteTarget agentRuntimeAnswerStreamOnly(
+            String routeSource,
+            double score,
+            String reason) {
+        return new RouteTarget(RouteType.AGENT_RUNTIME, null, routeSource, score, reason,
+                RuntimeProfile.DELEGATE, null, RelayOutputMode.ANSWER_STREAM_ONLY);
     }
 
     private static String normalize(String value) {

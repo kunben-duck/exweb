@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
+import com.huawei.it.ex.one.domain.routing.RelayOutputMode;
 import com.huawei.it.ex.one.domain.routing.RouteType;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 
@@ -84,6 +85,7 @@ class AmbiguousRouteSelectionResolverTest {
         assertThat(result.route().type()).isEqualTo(RouteType.AGENT_RUNTIME);
         assertThat(result.route().runtimeProfile()).isEqualTo(RuntimeProfile.DOMAIN_EXPERT);
         assertThat(result.route().runtimeRoleName()).isEqualTo("system-awareness");
+        assertThat(result.route().relayOutputMode()).isEqualTo(RelayOutputMode.FULL_STREAM);
         assertThat(result.intentDecision().intentCode()).isEqualTo("intent-expert");
     }
 
@@ -101,6 +103,7 @@ class AmbiguousRouteSelectionResolverTest {
         assertThat(result.route().type()).isEqualTo(RouteType.AGENT_RUNTIME);
         assertThat(result.route().runtimeProfile()).isEqualTo(RuntimeProfile.DELEGATE);
         assertThat(result.route().runtimeRoleName()).isNull();
+        assertThat(result.route().relayOutputMode()).isEqualTo(RelayOutputMode.ANSWER_STREAM_ONLY);
         assertThat(result.intentDecision().intentCode()).isEqualTo("intent-sensitive");
         assertThat(result.intentDecision().candidateDomainAgentId()).isEqualTo("sensitive_information");
     }

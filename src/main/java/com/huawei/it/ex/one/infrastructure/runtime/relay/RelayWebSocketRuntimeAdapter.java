@@ -13,7 +13,9 @@ import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.MessageCompletedEvent;
+import com.huawei.it.ex.one.domain.routing.RelayOutputMode;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
+import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
 import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -106,7 +108,9 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     @Override
     public Flux<ChatEvent> query(AgentRuntimeRequest request) {
         AtomicBoolean messageCompleted = new AtomicBoolean(false);
-        Flux<ChatEvent> events = queryWithShortConnection(request, messageCompleted);
+        Flux<ChatEvent> events = filterOutput(
+                queryWithShortConnection(request, messageCompleted),
+                RelayOutputModeMetadata.fromRoute(request == null ? null : request.routeTarget()));
 
         return events.concatWith(Mono.defer(() -> messageCompleted.get()
                         ? Mono.empty()
@@ -123,12 +127,57 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     @Override
     public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeInteractionResponseRequest request) {
         AtomicBoolean messageCompleted = new AtomicBoolean(false);
-        Flux<ChatEvent> events = interactionWithShortConnection(request, messageCompleted);
+        Flux<ChatEvent> events = filterOutput(
+                interactionWithShortConnection(request, messageCompleted),
+                RelayOutputModeMetadata.fromRunMetadata(
+                        request == null ? Map.of() : request.runtimeMetadata()));
         return events.concatWith(Mono.defer(() -> messageCompleted.get()
                         ? Mono.empty()
                         : Mono.just(MessageCompletedEvent.of(request.runId(), request.sessionId()))))
                 .doOnError(ex -> logRelayFailure(
                         request.runId(), request.sessionId(), request.traceContext(), "relay.interaction", ex));
+    }
+
+    private Flux<ChatEvent> filterOutput(Flux<ChatEvent> events, RelayOutputMode outputMode) {
+        if (outputMode != RelayOutputMode.ANSWER_STREAM_ONLY) {
+            return events;
+        }
+        return events.filter(this::answerStreamEvent);
+    }
+
+    private boolean answerStreamEvent(ChatEvent event) {
+        if (event == null || event.type() == null) {
+            return false;
+        }
+        if ("message.delta".equals(event.type())
+                || "message.snapshot".equals(event.type())
+                || "message.completed".equals(event.type())) {
+            return true;
+        }
+        String sourceType = normalizedRelaySourceType(event);
+        if ("runtime.metadata".equals(event.type())) {
+            return "session-ready".equals(sourceType) || "session-state".equals(sourceType);
+        }
+        return "runtime.card".equals(event.type())
+                && "approval-request".equals(sourceType)
+                && "questionnaire".equalsIgnoreCase(textValue(event.payload().get("operation_type")));
+    }
+
+    private String normalizedRelaySourceType(ChatEvent event) {
+        if (event.payload() == null) {
+            return "";
+        }
+        String sourceType = textValue(event.payload().get("type"));
+        if (sourceType == null) {
+            sourceType = textValue(event.payload().get("sourceType"));
+        }
+        return RelayRuntimeResponseNormalizer.normalizeTypeName(sourceType);
+    }
+
+    private String textValue(Object value) {
+        return value == null || String.valueOf(value).isBlank()
+                ? null
+                : String.valueOf(value).trim();
     }
 
     private void logRelayFailure(String runId, String sessionId, TraceContext traceContext,

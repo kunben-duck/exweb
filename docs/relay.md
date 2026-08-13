@@ -84,6 +84,10 @@ ChatService 在 Intent 的规范化 `accessName` 区分大小写精确命中
 `financeex.intent.sensitive-information-access-name` 时，也使用本节完全相同的 Delegate
 `config + user-message` 协议。该规则不增加新的 Relay Profile，敏感信息任务与普通 Delegate
 任务复用匹配的 `RESUMABLE` Binding；公开 `intent-result` 仍保留原始 `ROUTE_SINGLE` 和敏感意图信息。
+敏感信息 run 仍实时输出并保存 `message.delta/message.snapshot`，同时保留 `session-ready/session-state`
+和 questionnaire `approval-request`。其他 Relay 过程事件在进入公共 Event 管线前丢弃，不推送、
+不落库且不生成历史 Parts。该输出模式只属于当前 run，不写入 Binding；复用同一 Delegate Binding
+的普通 run 继续输出完整事件流。
 
 > **ChatService 集成边界**：前端 `/v1/chat/runs.agentMode` 仅记录在 active DomainAgent Binding，
 > 不写入 Relay Binding，也不映射到 Relay `config`、`user-message.metadata` 或 `approval-response`。

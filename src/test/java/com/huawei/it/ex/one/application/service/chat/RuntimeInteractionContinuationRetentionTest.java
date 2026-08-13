@@ -3,7 +3,6 @@ package com.huawei.it.ex.one.application.service.chat;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -13,6 +12,7 @@ import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPe
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
+import com.huawei.it.ex.one.application.service.runtime.RuntimeInteractionResponseContext;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
@@ -23,6 +23,9 @@ import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+import com.huawei.it.ex.one.domain.routing.RelayOutputMode;
+import com.huawei.it.ex.one.domain.routing.RouteTarget;
+import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
 import reactor.core.publisher.Flux;
@@ -30,6 +33,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.time.Instant;
 import java.util.List;
@@ -39,7 +43,7 @@ import java.util.function.Supplier;
 
 class RuntimeInteractionContinuationRetentionTest {
     @Test
-    void runtimeContinuationUsesInheritedPlaceholderState() {
+    void relayQuestionnaireContinuationInheritsPlaceholderAndAnswerOnlyStates() {
         RuntimeBindingApplicationService bindingService = mock(RuntimeBindingApplicationService.class);
         AgentRuntimeExecutor runtimeExecutor = mock(AgentRuntimeExecutor.class);
         AppliedRouteRecorder routeRecorder = mock(AppliedRouteRecorder.class);
@@ -61,9 +65,9 @@ class RuntimeInteractionContinuationRetentionTest {
         Instant now = Instant.now();
         ChatInteractionRequest interaction = new ChatInteractionRequest(
                 "interaction1", "tenant1", "user1", session.id(), "run-a", "run-b",
-                "msg-user", "msg-assistant", "domain-agent", "binding1", "runtime-session1", null,
+                "msg-user", "msg-assistant", "relay", "binding1", "runtime-session1", "approval-1",
                 ChatInteractionType.AGENT_CLARIFICATION, ChatInteractionStatus.RESPONDING,
-                Map.of("sourceType", "agent-clarification"), Map.of(),
+                Map.of("sourceType", "approval-request", "operation_type", "questionnaire"), Map.of(),
                 now.plusSeconds(60), now, null, now, now);
         ChatInteractionClaimResult claim = new ChatInteractionClaimResult(
                 interaction, Map.of("questionnaireAnswers", Map.of("问题", "答案")));
@@ -74,14 +78,16 @@ class RuntimeInteractionContinuationRetentionTest {
         AgentDataPersistenceState persistenceState = new AgentDataPersistenceState("回答已隐藏")
                 .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
         AtomicReference<RunEventPipelineContext> pipelineContext = new AtomicReference<>();
-        when(lifecycle.inheritedPersistenceState(user, interaction)).thenReturn(persistenceState);
+        when(lifecycle.inheritedRunState(user, interaction)).thenReturn(
+                new InteractionRunLifecycle.InheritedRunState(
+                        persistenceState, RelayOutputMode.ANSWER_STREAM_ONLY));
         when(lifecycle.metadata(interaction)).thenReturn(Map.of(
                 "interactionAssistantMessageId", "msg-assistant"));
         when(lifecycle.create(any(), eq(interaction))).thenReturn(run);
         when(lifecycle.startExecution(run, interaction)).thenReturn(executionClaim);
-        when(bindingService.resumeForInteraction(eq(interaction), eq("run-b"), isNull()))
+        when(bindingService.resumeRelayForInteraction(interaction, "run-b", executionClaim))
                 .thenReturn(binding);
-        when(binding.provider()).thenReturn("domain-agent");
+        when(binding.provider()).thenReturn("relay");
         when(binding.runtimeSessionId()).thenReturn("runtime-session1");
         when(persistenceCoordinator.requireCurrentOwnerRunning(eq(executionClaim), any()))
                 .thenReturn(Mono.empty());
@@ -111,7 +117,18 @@ class RuntimeInteractionContinuationRetentionTest {
         assertThat(pipelineContext.get()).isNotNull();
         assertThat(pipelineContext.get().assistant().persistenceState()).isSameAs(persistenceState);
         assertThat(pipelineContext.get().assistant().persistenceState().placeholderMode()).isTrue();
-        verify(lifecycle).inheritedPersistenceState(user, interaction);
-        verify(runtimeExecutor).continueWithUserResponse(any());
+        verify(lifecycle).inheritedRunState(user, interaction);
+
+        ArgumentCaptor<RouteTarget> routeCaptor = ArgumentCaptor.forClass(RouteTarget.class);
+        verify(routeRecorder).bindResolvedRouteRequired(
+                eq(run), routeCaptor.capture(), eq(binding), eq(executionClaim), eq(persistenceState));
+        assertThat(routeCaptor.getValue().relayOutputMode())
+                .isEqualTo(RelayOutputMode.ANSWER_STREAM_ONLY);
+
+        ArgumentCaptor<RuntimeInteractionResponseContext> runtimeCaptor =
+                ArgumentCaptor.forClass(RuntimeInteractionResponseContext.class);
+        verify(runtimeExecutor).continueWithUserResponse(runtimeCaptor.capture());
+        assertThat(runtimeCaptor.getValue().runtimeMetadata())
+                .containsEntry(RelayOutputModeMetadata.RUN_METADATA_KEY, true);
     }
 }

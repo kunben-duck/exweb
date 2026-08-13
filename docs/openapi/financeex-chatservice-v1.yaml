@@ -3199,7 +3199,10 @@ components:
         content:
           type: string
           nullable: true
-          description: 分享卡片正文；为空时依次使用单轮分享的 answer、question 正文。
+          maxLength: 8192
+          description: |
+            分享卡片正文。严格使用本次请求值；null、空字符串或纯空白会向provider发送空字符串，
+            原始输入按UTF-16长度最多8192，非空值会移除HTML并转换为纯文本，最后按content-max-length截断。
         language:
           type: string
           nullable: true
@@ -3230,9 +3233,11 @@ components:
         content:
           type: string
           nullable: true
+          maxLength: 8192
           description: |
-            分享卡片正文。为空时，单轮分享依次使用 answer、question 正文；多消息分享优先使用
-            第一条非空 assistant 正文，没有 assistant 正文时使用第一条非空选中消息正文。
+            分享卡片正文。严格使用本次请求值；null、空字符串或纯空白会向provider发送空字符串，
+            不回退分享快照。原始输入按UTF-16长度最多8192，非空值会移除HTML并转换为纯文本，
+            最后按content-max-length截断。
         language:
           type: string
           nullable: true

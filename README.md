@@ -324,7 +324,10 @@ stop 与 watchdog 写入 `run.cancelled/run.failed` 前会通过 run 行条件�
 `POST /v1/chat/shares/{shareId}/deliveries` 发送；也可以用
 `POST /v1/chat/messages/{messageId}/share/deliveries` 一键创建并发送。首版 `welink`
 provider 会把分享链接转换为 WeLink 卡片请求，`linkUrl` 由 `financeex.share.share-url-prefix + shareId`
-生成，`targetAccounts[]/groupIds[]` 会去空去重后以英文逗号拼接。WeLink 出站请求会设置
+生成，`targetAccounts[]/groupIds[]` 会去空去重后以英文逗号拼接。发送正文严格使用前端本次请求的
+`content`：空值发送空字符串且不回退分享快照，非空值移除HTML并转换为纯文本后按配置截断；发送记录与
+WeLink请求保存相同的最终正文。原始`content`按UTF-16长度最多8192，超限请求返回400且不调用WeLink。
+WeLink 出站请求会设置
 `Referer`，默认取 `financeex.share.delivery.providers.welink.base-url`，也可通过
 `financeex.share.delivery.providers.welink.referer` 覆盖；分享发送入口的标准 `Cookie` 请求头会作为
 出站 header 透传给 WeLink，但不会进入请求体、发送记录或分享快照。发送失败只写

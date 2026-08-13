@@ -68,7 +68,7 @@ public class ChatShareDeliveryApplicationService {
         ChatShareDeliveryProvider provider = providerRegistry.requiredProvider(providerCode);
         String linkUrl = buildShareUrl(share.id());
         String title = chooseTitle(safeCommand.title(), share.title());
-        String content = chooseContent(safeCommand.content(), share);
+        String content = chooseContent(safeCommand.content());
         ChatShareProviderDeliveryRequest providerRequest = new ChatShareProviderDeliveryRequest(
                 share.tenantId(),
                 providerUserAccount(user),
@@ -192,30 +192,11 @@ public class ChatShareDeliveryApplicationService {
         return ChatShareTitleNormalizer.normalize(title, "问答分享");
     }
 
-    private String chooseContent(String requestContent, ChatShare share) {
-        String content = blankToNull(requestContent);
-        if (content == null && share.snapshot() != null && share.snapshot().answer() != null) {
-            content = blankToNull(share.snapshot().answer().content());
-        }
-        if (content == null && share.snapshot() != null && share.snapshot().question() != null) {
-            content = blankToNull(share.snapshot().question().content());
-        }
-        if (content == null && share.snapshot() != null && !share.snapshot().messages().isEmpty()) {
-            content = share.snapshot().messages().stream()
-                    .filter(message -> "assistant".equals(message.role()))
-                    .map(message -> blankToNull(message.content()))
-                    .filter(value -> value != null)
-                    .findFirst()
-                    .orElse(null);
-        }
-        if (content == null && share.snapshot() != null && !share.snapshot().messages().isEmpty()) {
-            content = share.snapshot().messages().stream()
-                    .map(message -> blankToNull(message.content()))
-                    .filter(value -> value != null)
-                    .findFirst()
-                    .orElse(null);
-        }
-        return truncate(singleLine(content == null ? "" : content), properties.normalizedContentMaxLength());
+    private String chooseContent(String requestContent) {
+        return ChatShareDeliveryContentNormalizer.normalize(
+                requestContent,
+                properties.normalizedContentMaxLength()
+        );
     }
 
     private ChatShareProviderDeliveryResult callProvider(ChatShareDeliveryProvider provider,
@@ -251,17 +232,6 @@ public class ChatShareDeliveryApplicationService {
         } finally {
             deliverySemaphore.release();
         }
-    }
-
-    private String singleLine(String value) {
-        return value == null ? "" : value.replaceAll("\\s+", " ").trim();
-    }
-
-    private String truncate(String value, int maxLength) {
-        if (value == null || value.length() <= maxLength) {
-            return value;
-        }
-        return value.substring(0, maxLength);
     }
 
     private String blankToNull(String value) {

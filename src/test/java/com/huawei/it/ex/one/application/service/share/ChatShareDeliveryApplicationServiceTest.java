@@ -53,7 +53,8 @@ class ChatShareDeliveryApplicationServiceTest {
         assertThat(provider.lastRequest.groupId()).isEqualTo("g1,g2");
         assertThat(provider.lastRequest.userAccount()).isEqualTo("user1");
         assertThat(provider.lastRequest.title()).isEqualTo("发送标题");
-        assertThat(provider.lastRequest.content()).isEqualTo("这是一段很长的回答");
+        assertThat(delivery.content()).isEmpty();
+        assertThat(provider.lastRequest.content()).isEmpty();
         assertThat(fixture.deliveries.saved).containsExactly(delivery);
     }
 
@@ -92,6 +93,115 @@ class ChatShareDeliveryApplicationServiceTest {
 
         assertThat(delivery.content()).isEqualTo("12345");
         assertThat(provider.lastRequest.content()).isEqualTo("12345");
+    }
+
+    @Test
+    void contentIsConvertedToPlainTextBeforeSavingAndDelivery() {
+        Fixture fixture = fixture(providerResult(true));
+
+        ChatShareDelivery delivery = fixture.service.deliver(user(), new CreateChatShareDeliveryCommand(
+                "share1", "welink", List.of("a"), List.of(), null,
+                " <p>经营&nbsp;分析：利润 / 成本 ± 5% 😀</p><!--hidden-->"
+                        + "<script>alert('x')</script><style>.x{color:red}</style>"
+                        + "<div>第二行 &lt; 10 &amp; &gt; 2</div> ",
+                null, RuntimeForwardHeaders.empty()));
+        CapturingProvider provider = (CapturingProvider) fixture.provider;
+
+        assertThat(delivery.content()).isEqualTo("经营 分析：利润 / 成本 ± 5% 😀 第二行 < 10 & > 2");
+        assertThat(provider.lastRequest.content()).isEqualTo(delivery.content());
+    }
+
+    @Test
+    void contentTruncationPreservesUnicodeCodePoint() {
+        Fixture fixture = fixture(providerResult(true));
+        fixture.properties.getDelivery().setContentMaxLength(3);
+
+        ChatShareDelivery delivery = fixture.service.deliver(user(), new CreateChatShareDeliveryCommand(
+                "share1", "welink", List.of("a"), List.of(), null, "甲😀乙丙", null,
+                RuntimeForwardHeaders.empty()));
+
+        assertThat(delivery.content()).isEqualTo("甲😀乙");
+    }
+
+    @Test
+    void contentAtRawInputLimitIsAccepted() {
+        Fixture fixture = fixture(providerResult(true));
+
+        ChatShareDelivery delivery = fixture.service.deliver(user(), new CreateChatShareDeliveryCommand(
+                "share1", "welink", List.of("a"), List.of(), null, "a".repeat(8192), null,
+                RuntimeForwardHeaders.empty()));
+        CapturingProvider provider = (CapturingProvider) fixture.provider;
+
+        assertThat(delivery.content()).isEqualTo("a".repeat(200));
+        assertThat(provider.lastRequest.content()).isEqualTo(delivery.content());
+    }
+
+    @Test
+    void oversizedRawContentIsRejectedBeforeProviderAndDeliveryPersistence() {
+        Fixture fixture = fixture(providerResult(true));
+        CapturingProvider provider = (CapturingProvider) fixture.provider;
+
+        assertThatThrownBy(() -> fixture.service.deliver(user(), new CreateChatShareDeliveryCommand(
+                "share1", "welink", List.of("a"), List.of(), null, "a".repeat(8193), null,
+                RuntimeForwardHeaders.empty())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("分享发送content长度不能超过8192");
+        assertThat(provider.lastRequest).isNull();
+        assertThat(fixture.deliveries.saved).isEmpty();
+    }
+
+    @Test
+    void scriptAndStyleBlocksAreRemovedWithClosedOrUnclosedEnding() {
+        Fixture fixture = fixture(providerResult(true));
+
+        ChatShareDelivery delivery = fixture.service.deliver(user(), new CreateChatShareDeliveryCommand(
+                "share1", "welink", List.of("a"), List.of(), null,
+                "前文<script>first()</script>中间<STYLE>body{color:red}</STYLE>后文<script>unfinished()",
+                null, RuntimeForwardHeaders.empty()));
+        CapturingProvider provider = (CapturingProvider) fixture.provider;
+
+        assertThat(delivery.content()).isEqualTo("前文 中间 后文");
+        assertThat(provider.lastRequest.content()).isEqualTo(delivery.content());
+    }
+
+    @Test
+    void repeatedUnclosedScriptInputAtLimitIsRemoved() {
+        Fixture fixture = fixture(providerResult(true));
+
+        ChatShareDelivery delivery = fixture.service.deliver(user(), new CreateChatShareDeliveryCommand(
+                "share1", "welink", List.of("a"), List.of(), null, "<script>".repeat(1024), null,
+                RuntimeForwardHeaders.empty()));
+
+        assertThat(delivery.content()).isEmpty();
+    }
+
+    @Test
+    void htmlOnlyContentIsSentAsEmptyString() {
+        Fixture fixture = fixture(providerResult(true));
+
+        ChatShareDelivery delivery = fixture.service.deliver(user(), new CreateChatShareDeliveryCommand(
+                "share1", "welink", List.of("a"), List.of(), null,
+                "<p><!--hidden--><script>alert('x')</script><style>.x{}</style><br></p>",
+                null, RuntimeForwardHeaders.empty()));
+        CapturingProvider provider = (CapturingProvider) fixture.provider;
+
+        assertThat(delivery.content()).isEmpty();
+        assertThat(provider.lastRequest.content()).isEmpty();
+    }
+
+    @Test
+    void nullEmptyAndBlankContentAreSentAsEmptyStringWithoutSnapshotFallback() {
+        for (String content : java.util.Arrays.asList(null, "", " \n\t ")) {
+            Fixture fixture = fixture(providerResult(true));
+
+            ChatShareDelivery delivery = fixture.service.deliver(user(), new CreateChatShareDeliveryCommand(
+                    "share1", "welink", List.of("a"), List.of(), null, content, null,
+                    RuntimeForwardHeaders.empty()));
+            CapturingProvider provider = (CapturingProvider) fixture.provider;
+
+            assertThat(delivery.content()).isEmpty();
+            assertThat(provider.lastRequest.content()).isEmpty();
+        }
     }
 
     @Test
@@ -149,7 +259,7 @@ class ChatShareDeliveryApplicationServiceTest {
     }
 
     @Test
-    void selectedMessagesPreferAssistantContentAndFallbackToUserContent() {
+    void selectedMessagesDoNotProvideFallbackDeliveryContent() {
         Fixture fixture = fixture(providerResult(true));
         fixture.shares.save(selectedShare("share_selected", List.of(
                 selectedMessage("msg_user", "user", "选中的问题"),
@@ -164,8 +274,8 @@ class ChatShareDeliveryApplicationServiceTest {
                 "share_user_only", "welink", List.of("a"), List.of(), null, null, null,
                 RuntimeForwardHeaders.empty()));
 
-        assertThat(assistantDelivery.content()).isEqualTo("选中的回答");
-        assertThat(userDelivery.content()).isEqualTo("失败轮次问题");
+        assertThat(assistantDelivery.content()).isEmpty();
+        assertThat(userDelivery.content()).isEmpty();
     }
 
     private Fixture fixture(ChatShareProviderDeliveryResult providerResult) {

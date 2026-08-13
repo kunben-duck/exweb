@@ -383,6 +383,7 @@ financeex:
       # 固定快照序列化后的 UTF-8 字节上限，仅由应用校验，不在数据库增加 CHECK 约束。
       max-snapshot-bytes: ${FINANCEEX_SHARE_SELECTED_MESSAGES_MAX_SNAPSHOT_BYTES:5242880}
     delivery:
+      # 前端发送正文纯文本化后的Unicode码点上限；空值不回退分享快照。
       content-max-length: ${FINANCEEX_SHARE_DELIVERY_CONTENT_MAX_LENGTH:200}
       max-targets: ${FINANCEEX_SHARE_DELIVERY_MAX_TARGETS:100}
       # 分享发送入口 Cookie 最大透传长度；仅 WeLink 等显式支持 Cookie 的 provider 使用，不进入请求体和发送记录。

@@ -16,7 +16,7 @@ import java.util.List;
  * @param provider 发送 provider 编码。
  * @param targetAccounts 目标用户账号列表。
  * @param groupIds 目标群组 ID 列表。
- * @param content 发送正文覆盖值。
+ * @param content 前端提供的发送正文；为空时发送空字符串，非空时转换为纯文本摘要。
  * @param language 前端透传语言标识。
  * @param forwardHeaders 请求入口捕获到的敏感转发头快照，仅在出站 provider 调用中使用。
  */

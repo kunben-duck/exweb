@@ -2244,12 +2244,13 @@ curl -X POST http://localhost:8080/v1/chat/shares/share_xxx/deliveries \
 | `targetAccounts` | 否 | 被分享人账号列表，服务端会去空、去重，并转为 WeLink `targetAccount="u001,u002"`。 |
 | `groupIds` | 否 | 被分享群组 ID 列表，服务端会去空、去重，并转为 WeLink `groupID="g001"`。 |
 | `title` | 否 | 分享卡片标题；为空时使用 `share.title`。沿用120个Unicode字符及256个UTF-8字节限制，服务端超限时安全截断。 |
-| `content` | 否 | 分享卡片正文；为空时，单轮分享依次使用 answer、question 正文，多消息分享优先使用首条非空 assistant 正文，否则使用首条非空选中消息；默认最多 200 字符。 |
+| `content` | 否 | 分享卡片正文；严格使用本次请求值，null、空字符串或纯空白均发送空字符串且不回退快照。原始值按JavaScript `length`最多8192，超限返回400；非空值由服务端移除HTML并转换为纯文本，默认最多200个Unicode字符。 |
 | `language` | 否 | 前端透传给 provider。 |
 
 `targetAccounts` 和 `groupIds` 至少需要一个非空目标。WeLink 发送时，后端会用
 `financeex.share.share-url-prefix + shareId` 生成 `linkUrl`，并使用当前登录用户的 `userId`
-作为 `userAccount`。
+作为 `userAccount`。发送记录中的 `content` 与 WeLink 请求完全一致；纯文本转换会删除HTML注释、
+`script/style`及其他HTML标签，合并空白，同时保留中文、Emoji、标点、斜杠和数学符号。
 WeLink 出站请求会自动设置 `Referer`，默认取 `financeex.share.delivery.providers.welink.base-url`，
 也可通过 `financeex.share.delivery.providers.welink.referer` 覆盖。如果分享发送接口请求带有标准
 `Cookie` header，后端会把该 Cookie 作为 WeLink 出站 header 透传；前端不要把 Cookie 放入 JSON body，

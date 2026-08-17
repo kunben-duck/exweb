@@ -478,6 +478,9 @@ public class DomainAgentResponseNormalizer {
         putIfPresent(payload, "openCard", text(root, "openCard"));
         putIfPresent(payload, "intent", text(root, "intent"));
         putIfPresent(payload, "domainAgentId", text(root, "skillId"));
+        if (root.hasNonNull("recommendedQuestions")) {
+            payload.put("recommendedQuestions", sanitizeBusiness(root.get("recommendedQuestions")));
+        }
         if (root.hasNonNull("diyCardScene")) {
             payload.put("diyCardScene", sanitizeBusiness(root.get("diyCardScene")));
             if (root.hasNonNull("contentAgent")) {

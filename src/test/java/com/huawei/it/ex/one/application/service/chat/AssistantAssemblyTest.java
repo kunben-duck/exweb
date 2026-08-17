@@ -124,6 +124,32 @@ class AssistantAssemblyTest {
     }
 
     @Test
+    void keepsRecommendedQuestionsInOpenCardHistoricalPart() {
+        List<Map<String, Object>> recommendedQuestions = List.of(
+                Map.of("query", "请展开下一个印章的审核结果？", "id", 1, "metadata", Map.of()),
+                Map.of("query", "请展开下一个文件的审核结果？", "id", 2, "metadata", Map.of())
+        );
+        AssistantAssembly assembly = new AssistantAssembly();
+        assembly.observe(RuntimeEvent.card("run1", "session1", Map.of(
+                "source", "domain-agent",
+                "sourceType", "openCard",
+                "cardType", "openCard",
+                "cardSources", List.of("openCard"),
+                "openCard", "Y",
+                "recommendedQuestions", recommendedQuestions
+        )));
+
+        assertThat(assembly.parts()).singleElement().satisfies(part -> {
+            assertThat(part.partType()).isEqualTo("CARD");
+            assertThat(part.sourceType()).isEqualTo("openCard");
+            assertThat(part.payload())
+                    .containsEntry("openCard", "Y")
+                    .containsEntry("recommendedQuestions", recommendedQuestions)
+                    .containsKey("serverTimestampMs");
+        });
+    }
+
+    @Test
     void keepsDiyCardSceneContentAgentInHistoricalPart() {
         AssistantAssembly assembly = new AssistantAssembly();
         assembly.observe(RuntimeEvent.card("run1", "session1", Map.of(

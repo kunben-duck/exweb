@@ -528,6 +528,40 @@ class DomainAgentResponseNormalizerTest {
     }
 
     @Test
+    void preservesCompleteRecommendedQuestionsInOpenCardPayload() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                data: {"recommendedQuestions":[{"query":"请展开下一个印章的审核结果？","id":1,\
+                "type":"1","languageCode":"zh_CN","metadata":{"scene":"seal","apiToken":"secret"},\
+                "extension":{"copyable":true}},{"query":"请展开下一个文件的审核结果？","id":2,\
+                "type":"1","languageCode":"zh_CN","metadata":{}}],"openCard":"Y"}
+                """);
+
+        assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.card");
+        assertThat(events.getFirst().payload())
+                .containsEntry("sourceType", "openCard")
+                .containsEntry("cardType", "openCard")
+                .containsEntry("cardSources", List.of("openCard"))
+                .containsEntry("openCard", "Y")
+                .containsEntry("recommendedQuestions", List.of(
+                        Map.of(
+                                "query", "请展开下一个印章的审核结果？",
+                                "id", 1,
+                                "type", "1",
+                                "languageCode", "zh_CN",
+                                "metadata", Map.of("scene", "seal", "apiToken", "[REDACTED]"),
+                                "extension", Map.of("copyable", true)
+                        ),
+                        Map.of(
+                                "query", "请展开下一个文件的审核结果？",
+                                "id", 2,
+                                "type", "1",
+                                "languageCode", "zh_CN",
+                                "metadata", Map.of()
+                        )
+                ));
+    }
+
+    @Test
     void keepsDefensiveMixedCardMappingForUnexpectedCombinedFrame() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1", """
                 message: {"diyCardScene":{"type":"tax"},"cardList":[{"title":"卡片"}]}

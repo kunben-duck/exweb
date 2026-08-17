@@ -51,10 +51,16 @@ class ChatShareApplicationServiceTest {
         assertThat(share.snapshot().answer().content()).isEqualTo("请先提交发票和审批单");
         assertThat(share.snapshot().question().attachments()).hasSize(1);
         assertThat(share.snapshot().parts()).extracting(part -> part.partType())
-                .containsExactly("PROGRESS", "CARD");
+                .containsExactly("PROGRESS", "CARD", "CARD");
         assertThat(share.snapshot().parts().get(1).payload())
                 .containsEntry("sourceType", "specificSceneInfo")
                 .containsKey("specificSceneInfo");
+        assertThat(share.snapshot().parts().get(2).payload())
+                .containsEntry("sourceType", "openCard")
+                .containsEntry("recommendedQuestions", List.of(
+                        Map.of("query", "请展开下一个印章的审核结果？", "id", 1, "metadata", Map.of()),
+                        Map.of("query", "请展开下一个文件的审核结果？", "id", 2, "metadata", Map.of())
+                ));
         assertThat(fixture.shares.findById(share.id())).contains(share);
     }
 
@@ -171,6 +177,7 @@ class ChatShareApplicationServiceTest {
                 List.of(
                         part("part_visible", true, "PROGRESS"),
                         specificSceneInfoPart(),
+                        recommendedQuestionsPart(),
                         part("part_hidden", false, "RUNTIME_EVENT")
                 ), now.plusSeconds(1)));
         messages.saveAttachment(new ChatMessageAttachment("att1", "tenant1", "user1", "session1",
@@ -196,6 +203,22 @@ class ChatShareApplicationServiceTest {
                         "cardSources", List.of("specificSceneInfo"),
                         "specificSceneInfo", List.of(Map.of("type", "authorization"))
                 ), 2, Instant.now());
+    }
+
+    private ChatMessagePart recommendedQuestionsPart() {
+        return new ChatMessagePart("part_recommended_questions", "tenant1", "user1", "session1",
+                "msg_assistant", "run1", "CARD", "openCard", "openCard",
+                "卡片展示", "INFO", "card", "inline", true, Map.of(
+                        "source", "domain-agent",
+                        "sourceType", "openCard",
+                        "cardType", "openCard",
+                        "cardSources", List.of("openCard"),
+                        "openCard", "Y",
+                        "recommendedQuestions", List.of(
+                                Map.of("query", "请展开下一个印章的审核结果？", "id", 1, "metadata", Map.of()),
+                                Map.of("query", "请展开下一个文件的审核结果？", "id", 2, "metadata", Map.of())
+                        )
+                ), 3, Instant.now());
     }
 
     private UserContext user() {

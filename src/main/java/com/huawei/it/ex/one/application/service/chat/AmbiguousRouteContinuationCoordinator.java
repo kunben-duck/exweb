@@ -191,6 +191,7 @@ final class AmbiguousRouteContinuationCoordinator {
                 request.input().agentMode(),
                 new RuntimeBindingDispatchLifecycle(),
                 runtimeReferences.assistant().persistenceState(),
+                runtimeReferences.assistant().messageSkill(),
                 runtimeReferences.pendingInteractionPayloadRef());
     }
 

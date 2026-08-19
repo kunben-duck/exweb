@@ -1,10 +1,15 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDispatchState;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingExpirationPolicy;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
@@ -20,6 +25,9 @@ import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,6 +47,7 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @Service
 public class ChatRunTerminalCommitService {
+    private static final AppLogger log = AppLoggerFactory.getLogger(ChatRunTerminalCommitService.class);
     private static final String WAITING_ASSISTANT_METADATA = "{\"finishReason\":\"WAITING_USER\"}";
     private static final String DOMAIN_AGENT_PROVIDER = "domain-agent";
     private static final String RELAY_PROVIDER = "relay";
@@ -54,14 +63,17 @@ public class ChatRunTerminalCommitService {
     private final RuntimeBindingRepository runtimeBindingRepository;
     private final ChatInteractionApplicationService chatInteractionService;
     private final Duration runtimeBindingTtl;
+    private final MessageSkillMetadata messageSkillMetadata;
 
+    @Autowired
     public ChatRunTerminalCommitService(ChatStreamApplicationService chatStreamService,
                                         SessionApplicationService sessionService,
                                         ChatRunRepository runRepository,
                                         ChatRunLeaseApplicationService runLeaseService,
                                         RuntimeBindingRepository runtimeBindingRepository,
                                         ChatInteractionApplicationService chatInteractionService,
-                                        @Value("${financeex.runtime-binding.ttl:0s}") Duration runtimeBindingTtl) {
+                                        @Value("${financeex.runtime-binding.ttl:0s}") Duration runtimeBindingTtl,
+                                        ObjectMapper objectMapper) {
         this.chatStreamService = chatStreamService;
         this.sessionService = sessionService;
         this.runRepository = runRepository;
@@ -69,6 +81,18 @@ public class ChatRunTerminalCommitService {
         this.runtimeBindingRepository = runtimeBindingRepository;
         this.chatInteractionService = chatInteractionService;
         this.runtimeBindingTtl = RuntimeBindingExpirationPolicy.normalize(runtimeBindingTtl);
+        this.messageSkillMetadata = new MessageSkillMetadata(objectMapper);
+    }
+
+    public ChatRunTerminalCommitService(ChatStreamApplicationService chatStreamService,
+                                        SessionApplicationService sessionService,
+                                        ChatRunRepository runRepository,
+                                        ChatRunLeaseApplicationService runLeaseService,
+                                        RuntimeBindingRepository runtimeBindingRepository,
+                                        ChatInteractionApplicationService chatInteractionService,
+                                        Duration runtimeBindingTtl) {
+        this(chatStreamService, sessionService, runRepository, runLeaseService,
+                runtimeBindingRepository, chatInteractionService, runtimeBindingTtl, new ObjectMapper());
     }
 
     /**
@@ -106,7 +130,8 @@ public class ChatRunTerminalCommitService {
         fenceOwnerTerminalCommit(command.context());
         ChatEvent stored = append(command.event(), command.context());
         command.context().assistant().observe(stored);
-        ChatMessage savedAssistant = saveCompletedAssistant(command);
+        ChatMessage savedAssistant = saveCompletedAssistant(
+                command, command.context().assistant().messageSkill().current());
         advanceLatestMessageSeq(command.context(), stored);
         bindAssistantMessage(stored.runId(), savedAssistant.id());
         RuntimeBinding binding = completeBinding(command.context(), savedAssistant.id());
@@ -125,7 +150,8 @@ public class ChatRunTerminalCommitService {
         fenceOwnerTerminalCommit(command.context());
         ChatEvent stored = append(command.event(), command.context());
         command.context().assistant().observe(stored);
-        ChatMessage savedAssistant = saveWaitingAssistant(command);
+        ChatMessage savedAssistant = saveWaitingAssistant(
+                command, command.context().assistant().messageSkill().current());
         advanceLatestMessageSeq(command.context(), stored);
         bindAssistantMessage(stored.runId(), savedAssistant.id());
         RuntimeBinding binding = refreshBinding(command.context(), savedAssistant.id());
@@ -210,17 +236,21 @@ public class ChatRunTerminalCommitService {
             ChatRun latest = runRepository.findById(command.run().id()).orElse(command.run());
             return new ExternalTerminalCommitResult(null, latest, false);
         }
-        persistExternalPartialAssistant(command);
+        ChatRun latestRun = runRepository.findById(command.run().id())
+                .orElseThrow(() -> new IllegalStateException(
+                        "外部终态抢占成功后run回读失败: " + command.run().id()));
+        String skillId = MessageSkillContext.runSkillId(latestRun.metadata());
+        persistExternalPartialAssistant(command, latestRun, skillId);
         ChatEvent stored = chatStreamService.appendWithoutPublish(command.event());
         ChatRun committedRun = runRepository.finalizeExternalTerminal(
                 new ChatRunRepository.ExternalTerminalFinalize(
-                        command.run().id(),
-                        command.run().tenantId(),
-                        command.run().userId(),
-                        command.run().sessionId(),
+                        latestRun.id(),
+                        latestRun.tenantId(),
+                        latestRun.userId(),
+                        latestRun.sessionId(),
                         terminalStatus,
                         stored.sequence(),
-                        command.run().cancelReason(),
+                        latestRun.cancelReason(),
                         finishedAt
                 ));
         // run.cancelled 表示用户 stop 已经取得控制权；watchdog 只负责闭合终态，不能恢复等待。
@@ -233,15 +263,18 @@ public class ChatRunTerminalCommitService {
         return new ExternalTerminalCommitResult(stored, committedRun, true);
     }
 
-    private void persistExternalPartialAssistant(ExternalTerminalCommitCommand command) {
+    private void persistExternalPartialAssistant(
+            ExternalTerminalCommitCommand command,
+            ChatRun latestRun,
+            String skillId) {
         AssistantMessageSaveCommand partialAssistant = command.partialAssistant();
         if (partialAssistant == null) {
             return;
         }
         String expectedId = partialAssistant.normalizedMessageId();
         ChatMessage saved;
-        if (interactionContinuation(command.run()) && !InteractionMessageStrategy.newTurn(command.run())) {
-            String assistantMessageId = interactionAssistantMessageId(command.run());
+        if (interactionContinuation(latestRun) && !InteractionMessageStrategy.newTurn(latestRun)) {
+            String assistantMessageId = interactionAssistantMessageId(latestRun);
             if (assistantMessageId == null || !assistantMessageId.equals(expectedId)) {
                 throw new IllegalStateException("Interaction stop partial assistant 必须复用原 assistantMessageId");
             }
@@ -253,15 +286,17 @@ public class ChatRunTerminalCommitService {
                     partialAssistant.content(),
                     partialAssistant.runId(),
                     partialAssistant.safePartDrafts(),
-                    partialAssistant.metadataJson()
+                    assistantMetadata(partialAssistant.metadataJson(), skillId)
             ));
         } else {
-            saved = sessionService.saveAssistantMessage(partialAssistant);
+            saved = sessionService.saveAssistantMessage(withMetadata(
+                    partialAssistant,
+                    assistantMetadata(partialAssistant.metadataJson(), skillId)));
         }
         if (expectedId == null || !expectedId.equals(saved.id())) {
             throw new IllegalStateException("stop partial assistant ID 与预分配 ID 不一致");
         }
-        bindAssistantMessage(command.run().id(), saved.id());
+        bindAssistantMessage(latestRun.id(), saved.id());
     }
 
     private boolean interactionContinuation(ChatRun run) {
@@ -347,7 +382,9 @@ public class ChatRunTerminalCommitService {
         }
     }
 
-    private ChatMessage saveCompletedAssistant(CompletedCommitCommand command) {
+    private ChatMessage saveCompletedAssistant(
+            CompletedCommitCommand command,
+            String skillId) {
         TerminalCommitContext context = command.context();
         UserContext user = context.user();
         if (context.continuationInteractionRequest() == null || newTurnInteraction(context)) {
@@ -360,7 +397,7 @@ public class ChatRunTerminalCommitService {
                     context.messagePlan().userMessage().id(),
                     context.messagePlan().regeneratedFromMessageId(),
                     context.assistant().parts(),
-                    context.assistant().assistantMetadata(null),
+                    assistantMetadata(context.assistant().assistantMetadata(null), skillId),
                     command.target().assistantMessageId(),
                     context.assistant().appendAnswerPart()
             ));
@@ -373,12 +410,14 @@ public class ChatRunTerminalCommitService {
                 context.assistant().finalContent(),
                 context.runId(),
                 context.assistant().parts(),
-                context.assistant().assistantMetadata(null),
+                assistantMetadata(context.assistant().assistantMetadata(null), skillId),
                 context.assistant().appendAnswerPart()
         ));
     }
 
-    private ChatMessage saveWaitingAssistant(WaitingUserCommitCommand command) {
+    private ChatMessage saveWaitingAssistant(
+            WaitingUserCommitCommand command,
+            String skillId) {
         TerminalCommitContext context = command.context();
         UserContext user = context.user();
         ChatInteractionRequest continuation = context.continuationInteractionRequest();
@@ -395,7 +434,8 @@ public class ChatRunTerminalCommitService {
                     context.messagePlan().userMessage().id(),
                     context.messagePlan().regeneratedFromMessageId(),
                     context.assistant().parts(),
-                    context.assistant().assistantMetadata(WAITING_ASSISTANT_METADATA),
+                    assistantMetadata(
+                            context.assistant().assistantMetadata(WAITING_ASSISTANT_METADATA), skillId),
                     command.target().assistantMessageId(),
                     context.assistant().appendAnswerPart()
                             && appendWaitingAnswer(command.waitingRequest())
@@ -418,7 +458,7 @@ public class ChatRunTerminalCommitService {
                 context.assistant().finalContent(),
                 context.runId(),
                 context.assistant().parts(),
-                context.assistant().assistantMetadata(WAITING_ASSISTANT_METADATA),
+                assistantMetadata(context.assistant().assistantMetadata(WAITING_ASSISTANT_METADATA), skillId),
                 context.assistant().appendAnswerPart()
                         && appendWaitingAnswer(command.waitingRequest())
         ));
@@ -427,6 +467,34 @@ public class ChatRunTerminalCommitService {
     private boolean appendWaitingAnswer(ChatInteractionRequest waitingRequest) {
         return waitingRequest == null
                 || waitingRequest.interactionType() != ChatInteractionType.ROUTE_SWITCH_CONFIRMATION;
+    }
+
+    private String assistantMetadata(String metadataJson, String skillId) {
+        MessageSkillMetadata.MergeResult result = messageSkillMetadata.replace(metadataJson, skillId);
+        if (result.invalidExistingMetadata()) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DESERIALIZATION_FAILED,
+                            "Assistant metadata is invalid; skillId projection was skipped")
+                    .operation("chat-message.skill-metadata")
+                    .build());
+        }
+        return result.metadataJson();
+    }
+
+    private AssistantMessageSaveCommand withMetadata(
+            AssistantMessageSaveCommand command,
+            String metadataJson) {
+        return new AssistantMessageSaveCommand(
+                command.tenantId(),
+                command.userId(),
+                command.session(),
+                command.content(),
+                command.runId(),
+                command.parentMessageId(),
+                command.regeneratedFromMessageId(),
+                command.safePartDrafts(),
+                metadataJson,
+                command.messageId(),
+                command.appendAnswerPart());
     }
 
     private void validateNewTurnWaitingRequest(TerminalCommitContext context, WaitingUserCommitCommand command) {

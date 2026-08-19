@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
@@ -73,7 +74,8 @@ final class InteractionRunLifecycle {
         }
         return new InheritedRunState(
                 AgentDataPersistenceState.inheritFromRunMetadata(sourceRun.metadata(), null),
-                RelayOutputModeMetadata.fromRunMetadata(sourceRun.metadata()));
+                RelayOutputModeMetadata.fromRunMetadata(sourceRun.metadata()),
+                lastInvocationSkillId(sourceRun));
     }
 
     ChatRun create(CreateChatRunContext context, ChatInteractionRequest interaction) {
@@ -116,10 +118,29 @@ final class InteractionRunLifecycle {
                 : String.valueOf(value);
     }
 
+    private String lastInvocationSkillId(ChatRun sourceRun) {
+        String skillId = MessageSkillContext.runSkillId(sourceRun.metadata());
+        if (skillId != null) {
+            return skillId;
+        }
+        if (!"domain-agent".equals(sourceRun.runtimeProvider())
+                || sourceRun.agentCode() == null || sourceRun.agentCode().isBlank()) {
+            return null;
+        }
+        return sourceRun.agentCode().trim();
+    }
+
     record InheritedRunState(
             AgentDataPersistenceState persistenceState,
-            RelayOutputMode relayOutputMode
+            RelayOutputMode relayOutputMode,
+            String invocationSkillId
     ) {
+        InheritedRunState(
+                AgentDataPersistenceState persistenceState,
+                RelayOutputMode relayOutputMode) {
+            this(persistenceState, relayOutputMode, null);
+        }
+
         InheritedRunState {
             persistenceState = persistenceState == null
                     ? AgentDataPersistenceState.full()

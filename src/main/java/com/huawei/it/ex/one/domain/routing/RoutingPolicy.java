@@ -16,6 +16,7 @@ import com.huawei.it.ex.one.domain.usecase.UseCaseMatchResult;
  * unsupported 分支。</p>
  */
 public class RoutingPolicy {
+    private static final String NO_MATCH = "NO_MATCH";
     /** 用例库命中进入 DomainAgent fast path 的最低分数。 */
     private final double useCaseMinScore;
     /** 保留意图置信度阈值仅用于记录和兼容旧统计，不参与 DomainAgent 裁决。 */
@@ -81,7 +82,8 @@ public class RoutingPolicy {
             if (sensitiveInformationResolver.matches(intent.candidateDomainAgentId())) {
                 return RouteTarget.agentRuntimeAnswerStreamOnly(
                         "intent-agent", intent.confidence(),
-                        "route single sensitive information intent");
+                        "route single sensitive information intent",
+                        intent.candidateDomainAgentId());
             }
             DomainExpertAccessNameResolver.Resolution expert = domainExpertResolver.resolve(
                     intent.candidateDomainAgentId());
@@ -89,14 +91,18 @@ public class RoutingPolicy {
                 throw new IllegalArgumentException("Domain expert accessName has no roleName");
             }
             if (expert.validDomainExpert()) {
-                return RouteTarget.agentRuntime("intent-agent", intent.confidence(),
-                        "route single domain expert intent", RuntimeProfile.DOMAIN_EXPERT,
-                        expert.roleName());
+                return RouteTarget.domainExpertRuntime("intent-agent", intent.confidence(),
+                        "route single domain expert intent",
+                        expert.roleName(), intent.candidateDomainAgentId());
             }
             return RouteTarget.domainAgent(intent.candidateDomainAgentId(), "intent-agent", intent.confidence(),
                     "route single domain agent intent");
         }
 
+        if (NO_MATCH.equalsIgnoreCase(String.valueOf(intent.slots().get("routeAction")))) {
+            return RouteTarget.agentRuntimeWithInvocationSkill("intent-agent", intent.confidence(),
+                    "intent requires agent runtime", NO_MATCH);
+        }
         return RouteTarget.agentRuntime("intent-agent", intent.confidence(), "intent requires agent runtime");
     }
 }

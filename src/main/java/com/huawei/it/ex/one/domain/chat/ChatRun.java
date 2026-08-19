@@ -148,6 +148,16 @@ public record ChatRun(
     }
 
     /**
+     * 替换完整run metadata快照，用于服务端需要删除私有标记的受保护更新。
+     */
+    public ChatRun withMetadataSnapshot(Map<String, Object> nextMetadata) {
+        return new ChatRun(id, tenantId, userId, sessionId, status, routeType, agentCode, runtimeProvider,
+                runtimeSessionId, runMode, parentMessageId, userMessageId, assistantMessageId,
+                firstSeq, lastSeq, cancelReason, startedAt, finishedAt,
+                nextMetadata, createdAt, Instant.now());
+    }
+
+    /**
      * 回填 run 终态后生成的 assistant 消息 ID。
      */
     public ChatRun withAssistantMessageId(String nextAssistantMessageId) {

@@ -123,6 +123,7 @@ final class DomainAgentReplacementExecutor {
         appliedRouteRecorder.bindResolvedRouteRequired(
                 context.runId(), nextRoute, resolution.binding(), context.executionClaim(),
                 context.persistenceState());
+        context.messageSkill().replace(nextRoute.invocationSkillId());
         MemoryContext runtimeMemory = recordAppliedRoute(reroute, signal, nextRoute, resolution.binding());
         ChatCommand runtimeCommand = runtimeCommand(context, nextRoute, signal.intentDecision());
         String action = signal.intentFailure() ? "RELAY_FALLBACK" : "ROUTE_TO_RELAY";
@@ -258,6 +259,7 @@ final class DomainAgentReplacementExecutor {
                     appliedRouteRecorder.bindResolvedRouteRequired(
                             context.runId(), nextRoute, nextBinding, context.executionClaim(),
                             context.persistenceState());
+                    context.messageSkill().replace(nextRoute.invocationSkillId());
                     MemoryContext runtimeMemory = recordAppliedRoute(reroute, signal, nextRoute, nextBinding);
                     ChatCommand runtimeCommand = runtimeCommand(context, nextRoute, signal.intentDecision());
                     DomainAgentRunContext nextContext = nextRunContext(
@@ -423,6 +425,7 @@ final class DomainAgentReplacementExecutor {
                 context.rerouteCount() + 1,
                 context.routeMemoryQuery(),
                 context.persistenceState(),
+                context.messageSkill(),
                 context.pendingInteractionPayloadRef());
     }
 

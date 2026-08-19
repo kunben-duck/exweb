@@ -20,6 +20,7 @@ class RoutingPolicyTest {
         assertThat(target.type()).isEqualTo(RouteType.DOMAIN_AGENT);
         assertThat(target.selectedAgentCode()).isEqualTo("finance.office.agent");
         assertThat(target.routeSource()).isEqualTo("use-case-library");
+        assertThat(target.invocationSkillId()).isEqualTo("finance.office.agent");
     }
 
     @Test
@@ -32,6 +33,7 @@ class RoutingPolicyTest {
         assertThat(target.type()).isEqualTo(RouteType.DOMAIN_AGENT);
         assertThat(target.selectedAgentCode()).isEqualTo("finance.office.agent");
         assertThat(target.routeSource()).isEqualTo("intent-agent");
+        assertThat(target.invocationSkillId()).isEqualTo("finance.office.agent");
     }
 
     @Test
@@ -48,6 +50,7 @@ class RoutingPolicyTest {
         assertThat(target.runtimeRoleName()).isEqualTo("system-awareness");
         assertThat(target.relayOutputMode()).isEqualTo(RelayOutputMode.FULL_STREAM);
         assertThat(target.selectedAgentCode()).isNull();
+        assertThat(target.invocationSkillId()).isEqualTo("RE_system-awareness");
     }
 
     @Test
@@ -69,6 +72,7 @@ class RoutingPolicyTest {
         assertThat(target.runtimeRoleName()).isNull();
         assertThat(target.relayOutputMode()).isEqualTo(RelayOutputMode.ANSWER_STREAM_ONLY);
         assertThat(target.selectedAgentCode()).isNull();
+        assertThat(target.invocationSkillId()).isEqualTo("sensitive_information");
     }
 
     @Test
@@ -141,6 +145,22 @@ class RoutingPolicyTest {
         RouteTarget target = policy.decideFromIntent(null, null, intent, null);
 
         assertThat(target.type()).isEqualTo(RouteType.AGENT_RUNTIME);
+        assertThat(target.invocationSkillId()).isNull();
+    }
+
+    @Test
+    void recordsLegalNoMatchWithoutTaggingOtherRelayFallbacks() {
+        IntentDecision noMatch = new IntentDecision(
+                "no-match", "未匹配", TaskComplexity.COMPLEX, 0.0, false,
+                null, Map.of("routeAction", "NO_MATCH"), java.util.List.of(), Map.of());
+        IntentDecision routeMulti = new IntentDecision(
+                "multi", "多意图", TaskComplexity.COMPLEX, 0.8, false,
+                null, Map.of("routeAction", "ROUTE_MULTI"), java.util.List.of(), Map.of());
+
+        assertThat(policy.decideFromIntent(null, null, noMatch, null).invocationSkillId())
+                .isEqualTo("NO_MATCH");
+        assertThat(policy.decideFromIntent(null, null, routeMulti, null).invocationSkillId())
+                .isNull();
     }
 
     @Test

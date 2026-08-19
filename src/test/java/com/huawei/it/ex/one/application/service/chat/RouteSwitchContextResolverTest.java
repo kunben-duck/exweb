@@ -7,6 +7,7 @@ import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
 import com.huawei.it.ex.one.domain.routing.RelayOutputMode;
+import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RouteType;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
@@ -34,6 +35,7 @@ class RouteSwitchContextResolverTest {
         assertThat(target.runtimeRoleName()).isEqualTo("system-awareness");
         assertThat(target.relayOutputMode()).isEqualTo(RelayOutputMode.FULL_STREAM);
         assertThat(target.routeSource()).isEqualTo("user-confirmed");
+        assertThat(target.invocationSkillId()).isEqualTo("RE_system-awareness");
     }
 
     @Test
@@ -81,6 +83,7 @@ class RouteSwitchContextResolverTest {
         assertThat(target.runtimeProfile()).isEqualTo(RuntimeProfile.DELEGATE);
         assertThat(target.runtimeRoleName()).isNull();
         assertThat(target.relayOutputMode()).isEqualTo(RelayOutputMode.ANSWER_STREAM_ONLY);
+        assertThat(target.invocationSkillId()).isEqualTo("sensitive_information");
         assertThat(restoredIntent.intentCode()).isEqualTo("intent-sensitive");
         assertThat(restoredIntent.intentName()).isEqualTo("敏感信息");
         assertThat(restoredIntent.candidateDomainAgentId()).isEqualTo("sensitive_information");
@@ -102,6 +105,21 @@ class RouteSwitchContextResolverTest {
         assertThat(target.runtimeProfile()).isEqualTo(RuntimeProfile.DELEGATE);
         assertThat(target.runtimeRoleName()).isNull();
         assertThat(target.relayOutputMode()).isEqualTo(RelayOutputMode.ANSWER_STREAM_ONLY);
+        assertThat(target.invocationSkillId()).isEqualTo("sensitive_information");
+    }
+
+    @Test
+    void approvedNoMatchRouteUsesExplicitNoMatchInvocationSkill() {
+        ChatInteractionRequest interaction = interaction(
+                null, null, "intent-no-match", "未匹配", "NO_MATCH");
+        ChatInteractionClaimResult claim = new ChatInteractionClaimResult(
+                interaction, Map.of("approved", true));
+
+        RouteTarget target = resolver.target(interaction, resolver.input(interaction, claim));
+
+        assertThat(target.type()).isEqualTo(RouteType.AGENT_RUNTIME);
+        assertThat(target.runtimeProfile()).isEqualTo(RuntimeProfile.DELEGATE);
+        assertThat(target.invocationSkillId()).isEqualTo("NO_MATCH");
     }
 
     private ChatInteractionRequest interaction(String runtimeRoleName) {

@@ -38,6 +38,7 @@ record DomainAgentRunContext(
         int rerouteCount,
         String routeMemoryQuery,
         AgentDataPersistenceState persistenceState,
+        MessageSkillTracker messageSkill,
         AtomicReference<Map<String, Object>> pendingInteractionPayloadRef
 ) {
     DomainAgentRunContext {
@@ -45,6 +46,7 @@ record DomainAgentRunContext(
         persistenceState = persistenceState == null
                 ? AgentDataPersistenceState.full()
                 : persistenceState;
+        messageSkill = messageSkill == null ? new MessageSkillTracker() : messageSkill;
         pendingInteractionPayloadRef = pendingInteractionPayloadRef == null
                 ? new AtomicReference<>()
                 : pendingInteractionPayloadRef;
@@ -70,7 +72,8 @@ record DomainAgentRunContext(
             AgentDataPersistenceState persistenceState) {
         this(command, runId, null, session, memory, route, user, routeRef, bindingRef, executionClaim,
                 forwardHeaders, traceContext, intentDecision, documents, rejectedDomainAgentIds,
-                rerouteCount, routeMemoryQuery, persistenceState, new AtomicReference<>());
+                rerouteCount, routeMemoryQuery, persistenceState, new MessageSkillTracker(),
+                new AtomicReference<>());
     }
 
     DomainAgentRunContext(
@@ -92,6 +95,7 @@ record DomainAgentRunContext(
             String routeMemoryQuery) {
         this(command, runId, null, session, memory, route, user, routeRef, bindingRef, executionClaim,
                 forwardHeaders, traceContext, intentDecision, documents, rejectedDomainAgentIds,
-                rerouteCount, routeMemoryQuery, AgentDataPersistenceState.full(), new AtomicReference<>());
+                rerouteCount, routeMemoryQuery, AgentDataPersistenceState.full(),
+                new MessageSkillTracker(), new AtomicReference<>());
     }
 }

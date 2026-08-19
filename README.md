@@ -258,6 +258,8 @@ assistant 终态保存时，message parts 使用多行 `INSERT ... VALUES` 分�
 Relay `is_streaming=false` 或 `generate-response.content` 给出的最终回答会映射为 `message.snapshot`，
 前端用它替换当前草稿，历史消息正文也优先使用最后一个快照。
 assistant 的思考、工具、进度、agent 调用等过程信息保存到 `fin_ex_chat_message_part_t`，并通过 `ChatMessageDto.parts` 返回；每个 `message.snapshot` 也会保存为隐藏的 `MESSAGE_SNAPSHOT` part，用于历史消息恢复所有回答快照，最终 `ANSWER` part 仍只保存最终正文。用户消息关联的文档附件保存到 `fin_ex_chat_message_attachment_t`，历史消息、tree 和 variants 会通过 `ChatMessageDto.attachments` 返回附件展示快照；下载和预览仍走文档库接口重新鉴权。parts 会提供稳定的 `title/status/channel/displayHint/visible` 展示语义，前端不需要解析 Relay 私有 payload。启用短期记忆缓存时，assistant 先写数据库，Redis 热缓存只在事务提交后更新，事务回滚不会留下超前于数据库的消息。
+
+历史assistant消息的原始 `metadataJson` 可包含服务端维护的单值 `skillId`，记录该消息当前 `runId` 最后一次实际调用的 DomainAgent、敏感信息或专家 Intent accessName，以及合法 Intent `NO_MATCH`。同一run拒答重路由时后一调用覆盖前一调用；最终路由没有可记录标识时不保留旧值。普通 Relay fallback、`ROUTE_MULTI`、Intent 异常降级和系统回复不写入该标记，user消息不写入该字段。SkillId随现有路由提交记录并在终态原有assistant写入中落库，不改变 Runtime 请求、Event、Parts 或路由事实。
 集群部署时，取消正确性依赖 Redis cancel flag 和数据库 run 状态；实例故障治理依赖数据库 execution 条件抢占和 fencing token。JVM 内 subscription registry 只用于命中本机执行流时快速释放资源，不作为跨实例事实源。
 同一 `tenantId + userId + sessionId` 同一时间只允许一个 active run。若会话已有
 `RUNNING/CANCELLING` run，`POST /v1/chat/runs` 会返回 `ACTIVE_RUN_EXISTS`，前端应先调用 stop

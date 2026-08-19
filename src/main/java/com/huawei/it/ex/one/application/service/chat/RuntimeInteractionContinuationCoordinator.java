@@ -74,9 +74,11 @@ final class RuntimeInteractionContinuationCoordinator {
         RelayOutputMode relayOutputMode = inheritedState.relayOutputMode();
         RouteTarget route = relayOutputMode == RelayOutputMode.ANSWER_STREAM_ONLY
                 ? RouteTarget.agentRuntimeAnswerStreamOnly(
-                        "interaction-continuation", 1.0, "continue waiting user input")
-                : RouteTarget.agentRuntime(
-                        "interaction-continuation", 1.0, "continue waiting user input");
+                        "interaction-continuation", 1.0, "continue waiting user input",
+                        inheritedState.invocationSkillId())
+                : RouteTarget.agentRuntimeWithInvocationSkill(
+                        "interaction-continuation", 1.0, "continue waiting user input",
+                        inheritedState.invocationSkillId());
         RuntimeEvent responseEvent = interactionEventFactory.clarificationResponseEvent(
                 request.runId(),
                 request.session().id(),
@@ -190,6 +192,7 @@ final class RuntimeInteractionContinuationCoordinator {
         appliedRouteRecorder.bindResolvedRouteRequired(
                 execution.run(), execution.route(), binding, execution.executionClaim(),
                 execution.assistant().persistenceState());
+        execution.assistant().messageSkill().replace(execution.route().invocationSkillId());
         return Flux.concat(
                 Flux.just(execution.responseEvent()),
                 eventPersistenceCoordinator.requireCurrentOwnerRunning(

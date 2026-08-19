@@ -151,6 +151,7 @@ final class IntentClarificationRunCoordinator {
                                     request.input().agentMode(),
                                     new RuntimeBindingDispatchLifecycle(),
                                     assistant.persistenceState(),
+                                    assistant.messageSkill(),
                                     pendingInteractionPayloadRef))));
         } catch (RuntimeException ex) {
             return lifecycle.failContinuation(context, ex);

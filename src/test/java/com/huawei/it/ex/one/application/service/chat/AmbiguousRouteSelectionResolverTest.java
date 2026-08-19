@@ -68,6 +68,7 @@ class AmbiguousRouteSelectionResolverTest {
         var result = resolver.routeSignal(candidate, "user-confirmed");
 
         assertThat(result.route().selectedAgentCode()).isEqualTo("skill-a");
+        assertThat(result.route().invocationSkillId()).isEqualTo("skill-a");
         assertThat(result.route().routeSource()).isEqualTo("user-confirmed");
         assertThat(result.intentDecision().intentCode()).isEqualTo("intent-a");
         assertThat(result.intentDecision().intentName()).isEqualTo("技能A");
@@ -86,6 +87,7 @@ class AmbiguousRouteSelectionResolverTest {
         assertThat(result.route().runtimeProfile()).isEqualTo(RuntimeProfile.DOMAIN_EXPERT);
         assertThat(result.route().runtimeRoleName()).isEqualTo("system-awareness");
         assertThat(result.route().relayOutputMode()).isEqualTo(RelayOutputMode.FULL_STREAM);
+        assertThat(result.route().invocationSkillId()).isEqualTo("RE_system-awareness");
         assertThat(result.intentDecision().intentCode()).isEqualTo("intent-expert");
     }
 
@@ -104,6 +106,7 @@ class AmbiguousRouteSelectionResolverTest {
         assertThat(result.route().runtimeProfile()).isEqualTo(RuntimeProfile.DELEGATE);
         assertThat(result.route().runtimeRoleName()).isNull();
         assertThat(result.route().relayOutputMode()).isEqualTo(RelayOutputMode.ANSWER_STREAM_ONLY);
+        assertThat(result.route().invocationSkillId()).isEqualTo("sensitive_information");
         assertThat(result.intentDecision().intentCode()).isEqualTo("intent-sensitive");
         assertThat(result.intentDecision().candidateDomainAgentId()).isEqualTo("sensitive_information");
     }

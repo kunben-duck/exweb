@@ -219,6 +219,7 @@ final class RouteSwitchContinuationCoordinator {
             appliedRouteRecorder.bindResolvedRouteRequired(
                     context.request().runId(), context.route(), binding, context.executionClaim(),
                     context.assistant().persistenceState());
+            context.assistant().messageSkill().replace(context.route().invocationSkillId());
         } else {
             // 拒绝切换不会启动下游，保留原有 best-effort 诊断更新语义。
             appliedRouteRecorder.bindResolvedRoute(
@@ -337,6 +338,7 @@ final class RouteSwitchContinuationCoordinator {
                 0,
                 context.input().candidateRouteQuery(),
                 context.assistant().persistenceState(),
+                context.assistant().messageSkill(),
                 context.pendingInteractionPayloadRef());
         return eventPersistenceCoordinator.requireCurrentOwnerRunning(
                         context.executionClaim(), "before-route-switch-domain-agent")

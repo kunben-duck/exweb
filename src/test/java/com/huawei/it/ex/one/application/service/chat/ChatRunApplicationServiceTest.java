@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
+import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunCache;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
@@ -26,8 +27,10 @@ import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
 import com.huawei.it.ex.one.domain.chat.RunCompletedEvent;
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
+import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
@@ -42,6 +45,49 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 class ChatRunApplicationServiceTest {
+    @Test
+    void guardedResolvedRouteKeepsOnlyTheLastInvocationSkill() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        ChatRunApplicationService service = service(repository, new InMemoryRunCache());
+        repository.save(runningRun());
+        RunExecutionClaim claim = new RunExecutionClaim("run1", "instance1", 7L);
+
+        service.bindResolvedRoute(
+                "run1", RouteTarget.domainAgent("skill-a", "intent-agent"), null, claim, Map.of());
+        service.bindResolvedRoute(
+                "run1", RouteTarget.domainAgent("skill-b", "intent-agent"), null, claim, Map.of());
+
+        assertThat(MessageSkillContext.runSkillId(repository.saved.metadata())).isEqualTo("skill-b");
+    }
+
+    @Test
+    void guardedResolvedRouteClearsSkillWhenFinalRouteHasNoInvocationIdentifier() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        ChatRunApplicationService service = service(repository, new InMemoryRunCache());
+        repository.save(runningRun().withMetadata(Map.of("existing", "value")));
+        RunExecutionClaim claim = new RunExecutionClaim("run1", "instance1", 7L);
+
+        service.bindResolvedRoute(
+                "run1", RouteTarget.domainAgent("skill-a", "intent-agent"), null, claim, Map.of());
+        service.bindResolvedRoute(
+                "run1", RouteTarget.agentRuntime("intent-fallback", 0.0, "fallback"), null, claim, Map.of());
+
+        assertThat(MessageSkillContext.runSkillId(repository.saved.metadata())).isNull();
+        assertThat(repository.saved.metadata()).containsEntry("existing", "value");
+    }
+
+    @Test
+    void unguardedDiagnosticRouteUpdateDoesNotRecordInvocationSkill() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        ChatRunApplicationService service = service(repository, new InMemoryRunCache());
+        repository.save(runningRun());
+
+        service.bindResolvedRoute(
+                "run1", RouteTarget.domainAgent("skill-not-invoked", "user-declined"), null);
+
+        assertThat(MessageSkillContext.runSkillId(repository.saved.metadata())).isNull();
+    }
+
     @Test
     void stopRunningRunMarksCancelAndCancelledEventClosesRun() {
         InMemoryRunRepository repository = new InMemoryRunRepository();

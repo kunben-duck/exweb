@@ -21,6 +21,7 @@ final class AssistantAssembly {
     private final StringBuilder deltaDraft = new StringBuilder();
     private final List<ChatMessagePartDraft> parts = new ArrayList<>();
     private final AgentDataPersistenceState persistenceState;
+    private final MessageSkillTracker messageSkill = new MessageSkillTracker();
     private String snapshot;
     private String structuredFallbackContent;
     private boolean persistableOutputObserved;
@@ -136,6 +137,10 @@ final class AssistantAssembly {
 
     AgentDataPersistenceState persistenceState() {
         return persistenceState;
+    }
+
+    MessageSkillTracker messageSkill() {
+        return messageSkill;
     }
 
     static List<ChatMessagePartDraft> controlParts(List<ChatMessagePartDraft> drafts) {

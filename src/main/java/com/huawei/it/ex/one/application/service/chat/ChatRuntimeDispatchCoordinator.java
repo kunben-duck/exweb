@@ -248,6 +248,7 @@ final class ChatRuntimeDispatchCoordinator {
         appliedRouteRecorder.bindResolvedRouteRequired(
                 request.run(), resolution.route(), resolution.binding(), request.executionClaim(),
                 request.persistenceState());
+        request.messageSkill().replace(resolution.route().invocationSkillId());
         if (recordIntentRecognition && resolution.intent() != null) {
             appliedRouteRecorder.recordIntent(
                     request.user(),
@@ -287,6 +288,7 @@ final class ChatRuntimeDispatchCoordinator {
                     0,
                     request.routeMemoryQuery(),
                     request.persistenceState(),
+                    request.messageSkill(),
                     request.pendingInteractionPayloadRef()));
             case SYSTEM_RESPONSE -> systemResponseExecutor.execute(
                     runtimeCommand, request.runId(), resolution.intent(), resolution.route());
@@ -341,6 +343,7 @@ final class ChatRuntimeDispatchCoordinator {
                 state.rerouteCount(),
                 request.routeMemoryQuery(),
                 request.persistenceState(),
+                request.messageSkill(),
                 request.pendingInteractionPayloadRef());
         return domainAgentRefusalCoordinator.continueAfterClarification(
                 new DomainAgentRefusalCoordinator.ClarifiedContinuation(

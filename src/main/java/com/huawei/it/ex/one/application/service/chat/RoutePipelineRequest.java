@@ -44,6 +44,7 @@ record RoutePipelineRequest(
         AgentModeProfile agentMode,
         RuntimeBindingDispatchLifecycle bindingLifecycle,
         AgentDataPersistenceState persistenceState,
+        MessageSkillTracker messageSkill,
         AtomicReference<Map<String, Object>> pendingInteractionPayloadRef
 ) {
     RoutePipelineRequest {
@@ -53,6 +54,7 @@ record RoutePipelineRequest(
         pendingInteractionPayloadRef = pendingInteractionPayloadRef == null
                 ? new AtomicReference<>()
                 : pendingInteractionPayloadRef;
+        messageSkill = messageSkill == null ? new MessageSkillTracker() : messageSkill;
     }
 
     RoutePipelineRequest(
@@ -81,7 +83,7 @@ record RoutePipelineRequest(
         this(user, session, runCommand, attachments, documents, memory, runId, runtimeBindingLeafId,
                 forwardHeaders, traceContext, routeRef, bindingRef, runtimeSessionModeRef, executionClaim,
                 run, routeMemoryQuery, intentQuery, intentRouteMemoryQuery, runtimeMetadataOverride,
-                agentMode, bindingLifecycle, persistenceState, new AtomicReference<>());
+                agentMode, bindingLifecycle, persistenceState, new MessageSkillTracker(), new AtomicReference<>());
     }
 
     RoutePipelineRequest(
@@ -109,6 +111,7 @@ record RoutePipelineRequest(
         this(user, session, runCommand, attachments, documents, memory, runId, runtimeBindingLeafId,
                 forwardHeaders, traceContext, routeRef, bindingRef, runtimeSessionModeRef, executionClaim,
                 run, routeMemoryQuery, intentQuery, intentRouteMemoryQuery, runtimeMetadataOverride,
-                agentMode, bindingLifecycle, AgentDataPersistenceState.full(), new AtomicReference<>());
+                agentMode, bindingLifecycle, AgentDataPersistenceState.full(), new MessageSkillTracker(),
+                new AtomicReference<>());
     }
 }

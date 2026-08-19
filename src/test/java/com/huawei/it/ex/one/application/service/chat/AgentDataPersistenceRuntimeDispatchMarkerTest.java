@@ -9,6 +9,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistencePolicy;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
@@ -208,5 +209,42 @@ class AgentDataPersistenceRuntimeDispatchMarkerTest {
         verify(runService, never()).bindResolvedRoute(
                 any(ChatRun.class), any(), any(), any(), any());
         assertThat(state.runtimeDispatchStarted()).isFalse();
+    }
+
+    @Test
+    void interactionContinuationInheritsFinalInvocationSkill() {
+        ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
+        InteractionRunLifecycle lifecycle = new InteractionRunLifecycle(runService, null, null, null);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        ChatInteractionRequest interaction = mock(ChatInteractionRequest.class);
+        ChatRun sourceRun = mock(ChatRun.class);
+        when(interaction.sourceRunId()).thenReturn("run-source");
+        when(interaction.sessionId()).thenReturn("session1");
+        when(sourceRun.sessionId()).thenReturn("session1");
+        when(sourceRun.metadata()).thenReturn(Map.of(
+                MessageSkillContext.RUN_METADATA_KEY, "skill-b"));
+        when(runService.requireOwnedRun(user, "run-source")).thenReturn(sourceRun);
+
+        assertThat(lifecycle.inheritedRunState(user, interaction).invocationSkillId())
+                .isEqualTo("skill-b");
+    }
+
+    @Test
+    void legacyDomainAgentContinuationFallsBackToTrustedRunAgentCode() {
+        ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
+        InteractionRunLifecycle lifecycle = new InteractionRunLifecycle(runService, null, null, null);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        ChatInteractionRequest interaction = mock(ChatInteractionRequest.class);
+        ChatRun sourceRun = mock(ChatRun.class);
+        when(interaction.sourceRunId()).thenReturn("run-source");
+        when(interaction.sessionId()).thenReturn("session1");
+        when(sourceRun.sessionId()).thenReturn("session1");
+        when(sourceRun.metadata()).thenReturn(Map.of());
+        when(sourceRun.runtimeProvider()).thenReturn("domain-agent");
+        when(sourceRun.agentCode()).thenReturn(" skill-legacy ");
+        when(runService.requireOwnedRun(user, "run-source")).thenReturn(sourceRun);
+
+        assertThat(lifecycle.inheritedRunState(user, interaction).invocationSkillId())
+                .isEqualTo("skill-legacy");
     }
 }

@@ -6,9 +6,11 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDispatchState;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
@@ -21,12 +23,15 @@ import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
+import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
+import com.huawei.it.ex.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
 import com.huawei.it.ex.one.domain.chat.ErrorEvent;
+import com.huawei.it.ex.one.domain.chat.MessageSnapshotEvent;
 import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
 import com.huawei.it.ex.one.domain.chat.RunCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
@@ -36,6 +41,7 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
@@ -48,6 +54,119 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 class ChatRunTerminalCommitServiceTest {
+    @Test
+    void completedAssistantUsesInMemoryFinalRunSkillWithoutExtraRunLookup() {
+        ChatStreamApplicationService streamService = mock(ChatStreamApplicationService.class);
+        SessionApplicationService sessionService = mock(SessionApplicationService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRunLeaseApplicationService leaseService = mock(ChatRunLeaseApplicationService.class);
+        ChatRunTerminalCommitService service = new ChatRunTerminalCommitService(
+                streamService, sessionService, runRepository, leaseService, null, null, Duration.ZERO);
+        Instant now = Instant.now();
+        ChatRun run = new ChatRun(
+                "run1", "tenant1", "user1", "session1", ChatRunStatus.RUNNING,
+                "DOMAIN_AGENT", "skill-a", "domain-agent", null, ChatRunMode.NEXT,
+                null, "msg-user", null, null, null, null, now, null,
+                Map.of(MessageSkillContext.RUN_METADATA_KEY, "stale-db-skill"), now, now);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        ChatSession session = new ChatSession(
+                "session1", "tenant1", "user1", "test", "ACTIVE", "web", now, now);
+        ChatMessage userMessage = new ChatMessage(
+                "msg-user", "tenant1", "user1", "session1", "user", "question", null, now);
+        AssistantAssembly assistant = new AssistantAssembly();
+        assistant.observe(MessageSnapshotEvent.of("run1", "session1", "answer"));
+        assistant.messageSkill().replace("skill-a");
+        assistant.messageSkill().replace("skill-b");
+        RunExecutionClaim claim = new RunExecutionClaim("run1", "instance-test", 1L);
+        ChatRunTerminalCommitService.TerminalCommitContext context =
+                new ChatRunTerminalCommitService.TerminalCommitContext(
+                        user, session,
+                        new ChatRunMessagePlan(ChatRunMode.NEXT, userMessage.id(), userMessage, null),
+                        new AtomicReference<>(), assistant, "run1", claim, null);
+        ChatEvent event = RunCompletedEvent.of("run1", "session1", Map.of("status", "COMPLETED"));
+        ChatEvent stored = new RunCompletedEvent(
+                "run1", "session1", 9L, now, event.payload());
+        ChatMessage savedAssistant = mock(ChatMessage.class);
+        when(savedAssistant.id()).thenReturn("msg-assistant");
+        when(runRepository.tryFenceOwnerTerminalCommit(any(ChatRunRepository.OwnerTerminalFence.class)))
+                .thenReturn(true);
+        when(runRepository.findById("run1")).thenReturn(Optional.of(run));
+        when(runRepository.save(any(ChatRun.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(streamService.appendWithExecutionGuard(event, claim)).thenReturn(stored);
+        when(sessionService.saveAssistantMessage(any(AssistantMessageSaveCommand.class)))
+                .thenReturn(savedAssistant);
+
+        service.commitCompleted(new ChatRunTerminalCommitService.CompletedCommitCommand(
+                event, context, new ChatRunTerminalCommitService.MessageTarget(true, "msg-assistant")));
+
+        ArgumentCaptor<AssistantMessageSaveCommand> commandCaptor =
+                ArgumentCaptor.forClass(AssistantMessageSaveCommand.class);
+        verify(sessionService).saveAssistantMessage(commandCaptor.capture());
+        assertThat(commandCaptor.getValue().metadataJson())
+                .contains("\"skillId\":\"skill-b\"")
+                .doesNotContain("skill-a")
+                .doesNotContain("stale-db-skill");
+        // bind assistant及既有observeRun各读取一次；SkillId投影不再增加第三次查询。
+        verify(runRepository, times(2)).findById("run1");
+    }
+
+    @Test
+    void reusedAssistantReceivesOnlyCurrentRunFinalSkill() {
+        ChatStreamApplicationService streamService = mock(ChatStreamApplicationService.class);
+        SessionApplicationService sessionService = mock(SessionApplicationService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRunLeaseApplicationService leaseService = mock(ChatRunLeaseApplicationService.class);
+        ChatInteractionApplicationService interactionService = mock(ChatInteractionApplicationService.class);
+        ChatRunTerminalCommitService service = new ChatRunTerminalCommitService(
+                streamService, sessionService, runRepository, leaseService, null, interactionService, Duration.ZERO);
+        Instant now = Instant.now();
+        ChatRun run = new ChatRun(
+                "run-b", "tenant1", "user1", "session1", ChatRunStatus.RUNNING,
+                "DOMAIN_AGENT", "skill-new", "domain-agent", null, ChatRunMode.CONTINUE_INTERACTION,
+                null, "msg-user", null, null, null, null, now, null, Map.of(), now, now);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        ChatSession session = new ChatSession(
+                "session1", "tenant1", "user1", "test", "ACTIVE", "web", now, now);
+        ChatMessage userMessage = new ChatMessage(
+                "msg-user", "tenant1", "user1", "session1", "user", "answer", null, now);
+        ChatInteractionRequest interaction = mock(ChatInteractionRequest.class);
+        when(interaction.interactionType()).thenReturn(ChatInteractionType.AGENT_CLARIFICATION);
+        when(interaction.assistantMessageId()).thenReturn("msg-assistant");
+        AssistantAssembly assistant = new AssistantAssembly();
+        assistant.observe(MessageSnapshotEvent.of("run-b", "session1", "continued answer"));
+        assistant.messageSkill().replace("skill-new");
+        RunExecutionClaim claim = new RunExecutionClaim("run-b", "instance-test", 2L);
+        ChatRunTerminalCommitService.TerminalCommitContext context =
+                new ChatRunTerminalCommitService.TerminalCommitContext(
+                        user, session,
+                        new ChatRunMessagePlan(ChatRunMode.CONTINUE_INTERACTION,
+                                userMessage.id(), userMessage, null),
+                        new AtomicReference<>(), assistant, "run-b", claim, interaction);
+        ChatEvent event = RunCompletedEvent.of("run-b", "session1", Map.of("status", "COMPLETED"));
+        ChatEvent stored = new RunCompletedEvent(
+                "run-b", "session1", 10L, now, event.payload());
+        ChatMessage savedAssistant = mock(ChatMessage.class);
+        when(savedAssistant.id()).thenReturn("msg-assistant");
+        when(runRepository.tryFenceOwnerTerminalCommit(any(ChatRunRepository.OwnerTerminalFence.class)))
+                .thenReturn(true);
+        when(runRepository.findById("run-b")).thenReturn(Optional.of(run));
+        when(runRepository.save(any(ChatRun.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(streamService.appendWithExecutionGuard(event, claim)).thenReturn(stored);
+        when(sessionService.updateAssistantMessage(any(AssistantMessageUpdateCommand.class)))
+                .thenReturn(savedAssistant);
+
+        service.commitCompleted(new ChatRunTerminalCommitService.CompletedCommitCommand(
+                event, context, new ChatRunTerminalCommitService.MessageTarget(true, "msg-assistant")));
+
+        ArgumentCaptor<AssistantMessageUpdateCommand> commandCaptor =
+                ArgumentCaptor.forClass(AssistantMessageUpdateCommand.class);
+        verify(sessionService).updateAssistantMessage(commandCaptor.capture());
+        assertThat(commandCaptor.getValue().runId()).isEqualTo("run-b");
+        assertThat(commandCaptor.getValue().metadataJson())
+                .contains("\"skillId\":\"skill-new\"")
+                .doesNotContain("skillIds");
+    }
+
     @Test
     void domainAgentRefusalCommitHasBoundedTransactionTimeout() throws Exception {
         Transactional transactional = ChatRunTerminalCommitService.class
@@ -132,6 +251,57 @@ class ChatRunTerminalCommitServiceTest {
         assertThat(transactional).isNotNull();
         assertThat(transactional.timeoutString())
                 .isEqualTo("${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}");
+    }
+
+    @Test
+    void externalTerminalUsesLatestClaimedRunSkillForPartialAssistant() {
+        ChatStreamApplicationService streamService = mock(ChatStreamApplicationService.class);
+        SessionApplicationService sessionService = mock(SessionApplicationService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRunLeaseApplicationService leaseService = mock(ChatRunLeaseApplicationService.class);
+        ChatRunTerminalCommitService service = new ChatRunTerminalCommitService(
+                streamService, sessionService, runRepository, leaseService, null, null, Duration.ZERO);
+        Instant now = Instant.now();
+        ChatRun staleRun = new ChatRun(
+                "run1", "tenant1", "user1", "session1", ChatRunStatus.CANCELLING,
+                "DOMAIN_AGENT", "skill-stale", "domain-agent", null, ChatRunMode.NEXT,
+                null, "msg-user", null, null, null, "USER_STOP", now, null,
+                Map.of(MessageSkillContext.RUN_METADATA_KEY, "skill-stale"), now, now);
+        ChatRun latestRun = staleRun.withMetadata(Map.of(
+                MessageSkillContext.RUN_METADATA_KEY, "skill-latest"));
+        ChatSession session = new ChatSession(
+                "session1", "tenant1", "user1", "test", "ACTIVE", "web", now, now);
+        AssistantMessageSaveCommand partial = new AssistantMessageSaveCommand(
+                "tenant1", "user1", session, "partial", "run1", "msg-user", null,
+                List.of(), "{\"partial\":true,\"skillIds\":[\"skill-old\"]}", "msg-assistant");
+        ChatEvent event = RunCancelledEvent.of(
+                "run1", "session1", "USER_STOP", true, "msg-assistant");
+        ChatEvent stored = new RunCancelledEvent(
+                "run1", "session1", 12L, now, event.payload());
+        ChatMessage savedAssistant = mock(ChatMessage.class);
+        when(savedAssistant.id()).thenReturn("msg-assistant");
+        when(runRepository.tryClaimExternalTerminal(any(ChatRunRepository.ExternalTerminalClaim.class)))
+                .thenReturn(true);
+        when(runRepository.findById("run1")).thenReturn(Optional.of(latestRun));
+        when(runRepository.save(any(ChatRun.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(runRepository.finalizeExternalTerminal(any(ChatRunRepository.ExternalTerminalFinalize.class)))
+                .thenReturn(latestRun.cancelled(12L));
+        when(sessionService.saveAssistantMessage(any(AssistantMessageSaveCommand.class)))
+                .thenReturn(savedAssistant);
+        when(streamService.appendWithoutPublish(event)).thenReturn(stored);
+
+        ChatRunTerminalCommitService.ExternalTerminalCommitResult result = service.commitExternalTerminal(
+                ChatRunTerminalCommitService.ExternalTerminalCommitCommand.stop(event, staleRun, partial));
+
+        ArgumentCaptor<AssistantMessageSaveCommand> commandCaptor =
+                ArgumentCaptor.forClass(AssistantMessageSaveCommand.class);
+        verify(sessionService).saveAssistantMessage(commandCaptor.capture());
+        assertThat(commandCaptor.getValue().metadataJson())
+                .contains("\"skillId\":\"skill-latest\"")
+                .doesNotContain("skillIds")
+                .doesNotContain("skill-stale")
+                .doesNotContain("skill-old");
+        assertThat(result.committed()).isTrue();
     }
 
     @Test
@@ -249,6 +419,7 @@ class ChatRunTerminalCommitServiceTest {
                 run.id(), run.sessionId(), 5L, now, event.payload());
         when(runRepository.tryClaimExternalTerminal(any(ChatRunRepository.ExternalTerminalClaim.class)))
                 .thenReturn(true);
+        when(runRepository.findById("run1")).thenReturn(Optional.of(run));
         when(streamService.appendWithoutPublish(event)).thenReturn(stored);
         when(runRepository.finalizeExternalTerminal(any(ChatRunRepository.ExternalTerminalFinalize.class)))
                 .thenReturn(committedRun);

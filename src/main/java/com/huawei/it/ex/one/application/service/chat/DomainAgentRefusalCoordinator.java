@@ -399,6 +399,7 @@ final class DomainAgentRefusalCoordinator {
                 state.rerouteCount(),
                 source.routeMemoryQuery(),
                 source.persistenceState(),
+                source.messageSkill(),
                 source.pendingInteractionPayloadRef());
     }
 

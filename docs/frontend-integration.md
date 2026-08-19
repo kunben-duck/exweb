@@ -413,7 +413,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `sourceSessionId` / `sourceMessageId` | 分支快照来源 |
 | `editedFromMessageId` | 编辑历史 user 消息时的新版本来源 |
 | `regeneratedFromMessageId` | 重新生成 assistant 消息时的新版本来源 |
-| `metadataJson` | 消息扩展元数据原始 JSON 字符串，可为空；服务端不解析、不清洗，前端按需执行 `JSON.parse` |
+| `metadataJson` | 消息扩展元数据原始 JSON 字符串，可为空；前端按需执行 `JSON.parse`。assistant消息中的服务端单值字段`skillId`记录当前`message.runId`最后一次实际调用的技能/Intent标识；user消息及最终无标识的assistant不写该key |
 | `parts` | assistant 消息结构化过程信息，包括思考、工具、进度、agent 调用和 ANSWER 快照；user 消息通常为空数组 |
 | `attachments` | 消息关联附件展示快照；通常用于 user 消息回显上传文档，下载/预览仍需调用文档库接口 |
 | `feedback` | 当前用户对该 assistant 消息的有效反馈；user 消息或已取消反馈为 `null` |

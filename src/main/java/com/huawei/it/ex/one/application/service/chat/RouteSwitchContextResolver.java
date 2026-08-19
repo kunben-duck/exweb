@@ -19,6 +19,7 @@ import java.util.Map;
 
 /** Resolves route-switch input, target and binding without changing workflow order. */
 final class RouteSwitchContextResolver {
+    private static final String NO_MATCH = "NO_MATCH";
     private final RuntimeBindingApplicationService runtimeBindingService;
     private final SensitiveInformationAccessNameResolver sensitiveInformationResolver;
 
@@ -63,14 +64,17 @@ final class RouteSwitchContextResolver {
         String candidateRouteQuery = blankToDefault(
                 firstText(interaction.requestPayload().get("routeMemoryQuery")),
                 normalizedQuery);
+        String routeAction = firstText(interaction.requestPayload().get("routeAction"));
+        String candidateAccessName = firstText(
+                interaction.requestPayload().get("candidateAccessName"));
         RuntimeProfile candidateRuntimeProfile = relayRuntimeProfile(
                 candidateProvider,
-                firstText(interaction.requestPayload().get("routeAction")),
-                firstText(interaction.requestPayload().get("candidateAccessName")));
+                routeAction,
+                candidateAccessName);
         RelayOutputMode candidateRelayOutputMode = relayOutputMode(
                 candidateProvider,
-                firstText(interaction.requestPayload().get("routeAction")),
-                firstText(interaction.requestPayload().get("candidateAccessName")));
+                routeAction,
+                candidateAccessName);
         String candidateRuntimeRoleName = firstText(
                 interaction.requestPayload().get("candidateRuntimeRoleName"));
         if (candidateRuntimeProfile == RuntimeProfile.DOMAIN_EXPERT
@@ -85,6 +89,7 @@ final class RouteSwitchContextResolver {
                 candidateRuntimeProfile,
                 candidateRuntimeRoleName,
                 candidateRelayOutputMode,
+                invocationSkillId(candidateProvider, candidateTargetId, routeAction, candidateAccessName),
                 currentTargetId,
                 normalizedQuery,
                 candidateRouteQuery);
@@ -167,11 +172,17 @@ final class RouteSwitchContextResolver {
         if (RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(input.candidateProvider())) {
             if (input.candidateRelayOutputMode() == RelayOutputMode.ANSWER_STREAM_ONLY) {
                 return RouteTarget.agentRuntimeAnswerStreamOnly(
-                        routeSource, 1.0, "confirmed route switch to relay");
+                        routeSource, 1.0, "confirmed route switch to relay",
+                        input.invocationSkillId());
             }
-            return RouteTarget.agentRuntime(
+            if (input.candidateRuntimeProfile() == RuntimeProfile.DOMAIN_EXPERT) {
+                return RouteTarget.domainExpertRuntime(
+                        routeSource, 1.0, "confirmed route switch to relay",
+                        input.candidateRuntimeRoleName(), input.invocationSkillId());
+            }
+            return RouteTarget.agentRuntimeWithInvocationSkill(
                     routeSource, 1.0, "confirmed route switch to relay",
-                    input.candidateRuntimeProfile(), input.candidateRuntimeRoleName());
+                    input.invocationSkillId());
         }
         throw new IllegalArgumentException(
                 "不支持的候选 Runtime provider: " + input.candidateProvider());
@@ -196,6 +207,23 @@ final class RouteSwitchContextResolver {
 
     private boolean isRouteSingle(String routeAction) {
         return "ROUTE_SINGLE".equalsIgnoreCase(routeAction);
+    }
+
+    private String invocationSkillId(
+            String provider,
+            String targetId,
+            String routeAction,
+            String accessName) {
+        if (RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(provider)) {
+            return targetId;
+        }
+        if (!RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(provider)) {
+            return null;
+        }
+        if (NO_MATCH.equalsIgnoreCase(routeAction)) {
+            return NO_MATCH;
+        }
+        return isRouteSingle(routeAction) ? accessName : null;
     }
 
     private String routeSource(ChatInteractionRequest interaction) {
@@ -255,6 +283,7 @@ record RouteSwitchInput(
         RuntimeProfile candidateRuntimeProfile,
         String candidateRuntimeRoleName,
         RelayOutputMode candidateRelayOutputMode,
+        String invocationSkillId,
         String currentTargetId,
         String originalQuery,
         String candidateRouteQuery

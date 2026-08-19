@@ -7,7 +7,6 @@ import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.routing.DomainExpertAccessNameResolver;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
-import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
 
 import java.util.ArrayList;
@@ -93,11 +92,11 @@ final class AmbiguousRouteSelectionResolver {
         }
         RouteTarget route = sensitiveInformation
                 ? RouteTarget.agentRuntimeAnswerStreamOnly(source, candidate.confidence(),
-                        "ambiguous route sensitive information candidate selected")
+                        "ambiguous route sensitive information candidate selected", candidate.skillId())
                 : expert.validDomainExpert()
-                ? RouteTarget.agentRuntime(source, candidate.confidence(),
-                        "ambiguous route domain expert candidate selected", RuntimeProfile.DOMAIN_EXPERT,
-                        expert.roleName())
+                ? RouteTarget.domainExpertRuntime(source, candidate.confidence(),
+                        "ambiguous route domain expert candidate selected",
+                        expert.roleName(), candidate.skillId())
                 : RouteTarget.domainAgent(
                         candidate.skillId(),
                         source,

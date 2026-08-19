@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
+import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunCache;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
@@ -164,8 +165,9 @@ public class ChatRunApplicationService {
                 null,
                 now,
                 null,
-                RelayOutputModeMetadata.removePrivateRunMetadata(
-                        AgentDataPersistenceMetadata.removeRunPolicy(context.safeMetadata())),
+                MessageSkillContext.removeReserved(
+                        RelayOutputModeMetadata.removePrivateRunMetadata(
+                                AgentDataPersistenceMetadata.removeRunPolicy(context.safeMetadata()))),
                 now,
                 now
         );
@@ -283,7 +285,8 @@ public class ChatRunApplicationService {
             return null;
         }
         // 使用 admission 已持有的 run 快照，避免 guarded UPDATE 前再执行一次无超时查询。
-        return updateResolvedRouteWithExecutionGuard(run.withMetadata(metadataOverlay).withResolvedRoute(
+        return updateResolvedRouteWithExecutionGuard(run.withMetadataSnapshot(resolvedRouteMetadata(
+                run, route, metadataOverlay)).withResolvedRoute(
                 route.type() == null ? null : route.type().name(),
                 route.selectedAgentCode(),
                 binding == null ? null : binding.provider(),
@@ -314,12 +317,24 @@ public class ChatRunApplicationService {
             return null;
         }
         return repository.findById(runId)
-                .map(run -> updateResolvedRouteWithExecutionGuard(run.withMetadata(metadataOverlay).withResolvedRoute(
+                .map(run -> updateResolvedRouteWithExecutionGuard(run.withMetadataSnapshot(resolvedRouteMetadata(
+                        run, route, metadataOverlay)).withResolvedRoute(
                         route.type() == null ? null : route.type().name(),
                         route.selectedAgentCode(),
                         binding == null ? null : binding.provider(),
                         binding == null ? null : binding.runtimeSessionId()), claim))
                 .orElse(null);
+    }
+
+    private Map<String, Object> resolvedRouteMetadata(
+            ChatRun run,
+            RouteTarget route,
+            Map<String, Object> metadataOverlay) {
+        Map<String, Object> metadata = new LinkedHashMap<>(run.metadata());
+        if (metadataOverlay != null) {
+            metadata.putAll(metadataOverlay);
+        }
+        return MessageSkillContext.replaceRunSkill(metadata, route.invocationSkillId());
     }
 
     /**

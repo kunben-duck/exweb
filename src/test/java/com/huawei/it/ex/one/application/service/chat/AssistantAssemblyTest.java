@@ -84,6 +84,30 @@ class AssistantAssemblyTest {
     }
 
     @Test
+    void keepsSearchListMetadataInHistoricalReferencePart() {
+        Map<String, Object> metadata = Map.of(
+                "knowLevel", List.of("MIP", "CIP", "IIP"),
+                "knowMapping", List.of(Map.of("type", "MIP", "name", "作业依据"))
+        );
+        AssistantAssembly assembly = new AssistantAssembly();
+        assembly.observe(RuntimeEvent.reference("run1", "session1", Map.of(
+                "source", "domain-agent",
+                "sourceType", "searchList",
+                "referenceType", "search_list",
+                "references", List.of(Map.of("title", "任命通知（子公司CFO）")),
+                "metadata", metadata
+        )));
+
+        assertThat(assembly.parts()).singleElement().satisfies(part -> {
+            assertThat(part.partType()).isEqualTo("REFERENCE");
+            assertThat(part.sourceType()).isEqualTo("searchList");
+            assertThat(part.payload())
+                    .containsEntry("metadata", metadata)
+                    .containsKey("serverTimestampMs");
+        });
+    }
+
+    @Test
     void preservesNoMatchAgentDisplayNameInHistoricalPart() {
         AssistantAssembly assembly = new AssistantAssembly();
         assembly.observe(RuntimeEvent.progress("run1", "session1", Map.of(

@@ -51,7 +51,7 @@ class ChatShareApplicationServiceTest {
         assertThat(share.snapshot().answer().content()).isEqualTo("请先提交发票和审批单");
         assertThat(share.snapshot().question().attachments()).hasSize(1);
         assertThat(share.snapshot().parts()).extracting(part -> part.partType())
-                .containsExactly("PROGRESS", "CARD", "CARD");
+                .containsExactly("PROGRESS", "CARD", "CARD", "REFERENCE");
         assertThat(share.snapshot().parts().get(1).payload())
                 .containsEntry("sourceType", "specificSceneInfo")
                 .containsKey("specificSceneInfo");
@@ -60,6 +60,12 @@ class ChatShareApplicationServiceTest {
                 .containsEntry("recommendedQuestions", List.of(
                         Map.of("query", "请展开下一个印章的审核结果？", "id", 1, "metadata", Map.of()),
                         Map.of("query", "请展开下一个文件的审核结果？", "id", 2, "metadata", Map.of())
+                ));
+        assertThat(share.snapshot().parts().get(3).payload())
+                .containsEntry("sourceType", "searchList")
+                .containsEntry("metadata", Map.of(
+                        "knowLevel", List.of("MIP", "CIP", "IIP"),
+                        "knowMapping", List.of(Map.of("type", "MIP", "name", "作业依据"))
                 ));
         assertThat(fixture.shares.findById(share.id())).contains(share);
     }
@@ -178,6 +184,7 @@ class ChatShareApplicationServiceTest {
                         part("part_visible", true, "PROGRESS"),
                         specificSceneInfoPart(),
                         recommendedQuestionsPart(),
+                        searchListPart(),
                         part("part_hidden", false, "RUNTIME_EVENT")
                 ), now.plusSeconds(1)));
         messages.saveAttachment(new ChatMessageAttachment("att1", "tenant1", "user1", "session1",
@@ -219,6 +226,21 @@ class ChatShareApplicationServiceTest {
                                 Map.of("query", "请展开下一个文件的审核结果？", "id", 2, "metadata", Map.of())
                         )
                 ), 3, Instant.now());
+    }
+
+    private ChatMessagePart searchListPart() {
+        return new ChatMessagePart("part_search_list", "tenant1", "user1", "session1",
+                "msg_assistant", "run1", "REFERENCE", "searchList", "search_list",
+                "引用", "INFO", "reference", "inline", true, Map.of(
+                        "source", "domain-agent",
+                        "sourceType", "searchList",
+                        "referenceType", "search_list",
+                        "references", List.of(Map.of("title", "任命通知（子公司CFO）")),
+                        "metadata", Map.of(
+                                "knowLevel", List.of("MIP", "CIP", "IIP"),
+                                "knowMapping", List.of(Map.of("type", "MIP", "name", "作业依据"))
+                        )
+                ), 4, Instant.now());
     }
 
     private UserContext user() {

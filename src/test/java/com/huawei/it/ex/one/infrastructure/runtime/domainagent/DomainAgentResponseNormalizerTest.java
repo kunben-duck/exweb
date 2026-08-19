@@ -175,12 +175,66 @@ class DomainAgentResponseNormalizerTest {
         );
         assertThat(events.get(0).payload()).containsEntry("status", "STARTED")
                 .containsEntry("stateDesc", "思考中");
-        assertThat(events.get(1).payload()).containsEntry("referenceType", "search_list");
+        assertThat(events.get(1).payload()).containsEntry("referenceType", "search_list")
+                .doesNotContainKey("metadata");
         assertThat(events.get(2).payload()).containsEntry("referenceType", "source_documents");
         assertThat(events.get(3).payload()).containsEntry("stage", "GENERATE");
         assertThat(events.get(4).payload()).containsEntry("sourceType", "diyCardScene")
                 .containsEntry("cardType", "diyCardScene")
                 .containsEntry("cardSources", List.of("diyCardScene"));
+    }
+
+    @Test
+    void preservesSearchListSiblingMetadataInReferencePayload() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                data: {"searchList":[{"doc_id":"w3_20596973_CN_W3","index":16,"is_full":true,\
+                "title":"任命通知（子公司CFO）","content":"任命正文"}],"metadata":{\
+                "knowLevel":["MIP","CIP","IIP"],"knowMapping":[{"type":"MIP","name":"作业依据"},\
+                {"type":"CIP","name":"组织资产"},{"type":"IIP","name":"其他"}],\
+                "extension":{"apiToken":"secret","enabled":true}}}
+                """);
+
+        assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.reference");
+        assertThat(events.getFirst().payload())
+                .containsEntry("source", "domain-agent")
+                .containsEntry("sourceType", "searchList")
+                .containsEntry("referenceType", "search_list")
+                .containsEntry("references", List.of(Map.of(
+                        "doc_id", "w3_20596973_CN_W3",
+                        "index", 16,
+                        "is_full", true,
+                        "title", "任命通知（子公司CFO）",
+                        "content", "任命正文"
+                )))
+                .containsEntry("metadata", Map.of(
+                        "knowLevel", List.of("MIP", "CIP", "IIP"),
+                        "knowMapping", List.of(
+                                Map.of("type", "MIP", "name", "作业依据"),
+                                Map.of("type", "CIP", "name", "组织资产"),
+                                Map.of("type", "IIP", "name", "其他")
+                        ),
+                        "extension", Map.of("apiToken", "[REDACTED]", "enabled", true)
+                ));
+    }
+
+    @Test
+    void handlesAbsentNullAndEmptySearchListMetadataWithoutChangingOtherReferences() {
+        List<ChatEvent> absent = normalizer.normalize("run1", "session1",
+                "data: {\"searchList\":[{\"title\":\"网页\"}]}");
+        List<ChatEvent> nullMetadata = normalizer.normalize("run1", "session1",
+                "data: {\"searchList\":[{\"title\":\"网页\"}],\"metadata\":null}");
+        List<ChatEvent> emptyMetadata = normalizer.normalize("run1", "session1",
+                "data: {\"searchList\":[{\"title\":\"网页\"}],\"metadata\":{}}");
+        List<ChatEvent> sourceDocuments = normalizer.normalize("run1", "session1",
+                "data: {\"sourcesDocuments\":[{\"docName\":\"制度.pdf\"}],"
+                        + "\"metadata\":{\"knowLevel\":[\"MIP\"]}}");
+
+        assertThat(absent.getFirst().payload()).doesNotContainKey("metadata");
+        assertThat(nullMetadata.getFirst().payload()).doesNotContainKey("metadata");
+        assertThat(emptyMetadata.getFirst().payload()).containsEntry("metadata", Map.of());
+        assertThat(sourceDocuments.getFirst().payload())
+                .containsEntry("sourceType", "sourcesDocuments")
+                .doesNotContainKey("metadata");
     }
 
     @Test

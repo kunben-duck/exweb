@@ -414,8 +414,7 @@ public class DomainAgentResponseNormalizer {
             events.add(RuntimeEvent.progress(runId, sessionId, processPayload(root)));
         }
         if (root.hasNonNull("searchList")) {
-            events.add(RuntimeEvent.reference(runId, sessionId,
-                    referencePayload("search_list", "searchList", root.get("searchList"))));
+            events.add(RuntimeEvent.reference(runId, sessionId, searchListPayload(root)));
         }
         if (root.hasNonNull("sourcesDocuments")) {
             events.add(RuntimeEvent.reference(runId, sessionId,
@@ -464,6 +463,14 @@ public class DomainAgentResponseNormalizer {
         payload.put("sourceType", fieldName);
         payload.put("referenceType", referenceType);
         payload.put("references", sanitizeBusiness(value));
+        return payload;
+    }
+
+    private Map<String, Object> searchListPayload(JsonNode root) {
+        Map<String, Object> payload = referencePayload("search_list", "searchList", root.get("searchList"));
+        if (root.hasNonNull("metadata")) {
+            payload.put("metadata", sanitizeBusiness(root.get("metadata")));
+        }
         return payload;
     }
 

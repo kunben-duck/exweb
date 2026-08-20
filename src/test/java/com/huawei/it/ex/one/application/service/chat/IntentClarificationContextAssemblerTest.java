@@ -89,6 +89,74 @@ class IntentClarificationContextAssemblerTest {
     }
 
     @Test
+    void ambiguousOtherAddsOnlyOrderedCandidateIntentSummaries() {
+        Map<String, Object> requestPayload = new LinkedHashMap<>(
+                requestPayload("帮我分析基金", "帮我分析基金", "请选择要使用的技能", List.of(), null));
+        requestPayload.put("clarificationType", "AMBIGUOUS_ROUTE");
+        requestPayload.put("candidateIntents", List.of(
+                Map.of(
+                        "intentId", " finance_data_query ",
+                        "intentName", " 财经智能问数 ",
+                        "accessName", "EX_finance_data_query",
+                        "confidence", 0.82),
+                Map.of("intentId", "finance_knowledge", "skillId", "skill-knowledge"),
+                Map.of("intentName", "财经知识助手", "resourceInstruction", "knowledge"),
+                Map.of("intentId", " ", "intentName", " ")));
+
+        ChatCommand command = command(Map.copyOf(requestPayload), "我需要查询基金净值");
+
+        List<Map<String, Object>> history = listOfMaps(
+                map(command.metadata().get("intentClarification")).get("clarificationHistory"));
+        assertThat(history).singleElement().satisfies(item -> {
+            assertThat(item).containsEntry("clarificationType", "AMBIGUOUS_ROUTE");
+            assertThat(listOfMaps(item.get("candidateIntents"))).containsExactly(
+                    Map.of("intentId", "finance_data_query", "intentName", "财经智能问数"),
+                    Map.of("intentId", "finance_knowledge"),
+                    Map.of("intentName", "财经知识助手"));
+        });
+    }
+
+    @Test
+    void ordinaryClarificationDoesNotAddCandidateIntents() {
+        Map<String, Object> requestPayload = new LinkedHashMap<>(
+                requestPayload("原始问题", "原始问题", "请补充场景", List.of(), null));
+        requestPayload.put("candidateIntents", List.of(Map.of(
+                "intentId", "forged-intent",
+                "intentName", "不应透传")));
+
+        ChatCommand command = command(Map.copyOf(requestPayload), "补充信息");
+
+        assertThat(listOfMaps(map(command.metadata().get("intentClarification"))
+                .get("clarificationHistory"))).singleElement()
+                .satisfies(item -> assertThat(item).doesNotContainKey("candidateIntents"));
+    }
+
+    @Test
+    void multipleAmbiguousTurnsKeepCandidatesForTheirOwnHistoryEntries() {
+        Map<String, Object> firstPayload = ambiguousPayload(
+                "原始问题", "请选择第一轮技能", List.of(Map.of(
+                        "intentId", "intent-a", "intentName", "技能A")));
+        ChatCommand first = command(firstPayload, "其他答案一");
+
+        List<Map<String, Object>> firstHistory = listOfMaps(
+                map(first.metadata().get("intentClarification")).get("clarificationHistory"));
+        Map<String, Object> secondPayload = new LinkedHashMap<>(ambiguousPayload(
+                "其他答案一", "请选择第二轮技能", List.of(Map.of(
+                        "intentId", "intent-b", "intentName", "技能B"))));
+        secondPayload.put("clarificationHistory", firstHistory);
+
+        ChatCommand second = command(Map.copyOf(secondPayload), "其他答案二");
+
+        List<Map<String, Object>> history = listOfMaps(
+                map(second.metadata().get("intentClarification")).get("clarificationHistory"));
+        assertThat(history).hasSize(2);
+        assertThat(listOfMaps(history.get(0).get("candidateIntents")))
+                .containsExactly(Map.of("intentId", "intent-a", "intentName", "技能A"));
+        assertThat(listOfMaps(history.get(1).get("candidateIntents")))
+                .containsExactly(Map.of("intentId", "intent-b", "intentName", "技能B"));
+    }
+
+    @Test
     void frozenIntentMessagesContinuePrivatelyWithoutEnteringPublicRequestSnapshot() {
         List<Map<String, Object>> frozen = List.of(Map.of("role", "user", "content", "历史追问"));
         Map<String, Object> requestPayload = new LinkedHashMap<>(
@@ -161,6 +229,19 @@ class IntentClarificationContextAssemblerTest {
         if (rerouteContext != null) {
             payload.put("domainAgentRerouteContext", rerouteContext);
         }
+        return Map.copyOf(payload);
+    }
+
+    private Map<String, Object> ambiguousPayload(
+            String clarifyTriggerQuery,
+            String clarifyQuestion,
+            List<Map<String, Object>> candidateIntents) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("originalQuery", "原始问题");
+        payload.put("clarifyTriggerQuery", clarifyTriggerQuery);
+        payload.put("clarifyQuestion", clarifyQuestion);
+        payload.put("clarificationType", "AMBIGUOUS_ROUTE");
+        payload.put("candidateIntents", candidateIntents);
         return Map.copyOf(payload);
     }
 

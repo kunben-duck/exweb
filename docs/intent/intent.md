@@ -131,7 +131,18 @@ Authorization: {dynamicToken}
   "type": "clarify",
   "query": "再帮我看下方案",
   "clarifyQuestion": "你想看处理方案还是项目方案？",
-  "clarificationType": "AMBIGUOUS_ROUTE"
+  "clarificationType": "AMBIGUOUS_ROUTE",
+  "answer": "我需要查询基金净值",
+  "candidateIntents": [
+    {
+      "intentId": "finance_data_query",
+      "intentName": "财经智能问数"
+    },
+    {
+      "intentId": "finance_knowledge",
+      "intentName": "财经知识助手"
+    }
+  ]
 }
 ```
 
@@ -141,8 +152,10 @@ Authorization: {dynamicToken}
 | `query` | string | 触发这轮澄清的用户输入。 |
 | `clarifyQuestion` | string | 意图服务上一轮返回、Supervisor 展示给用户的问题。 |
 | `clarificationType` | string | 可选。当前为 `AMBIGUOUS_ROUTE` 或 `UNCLEAR_REFERENCE`。 |
+| `answer` | string | 本轮用户回答；顶层`query`仍使用同一回答。 |
+| `candidateIntents` | array | 仅`AMBIGUOUS_ROUTE`选择“其他”后携带当轮可信候选，候选只包含可用的`intentId/intentName`。 |
 
-多轮澄清时可以追加多条 `clarify`。澄清成功后，建议把多条澄清过程折叠成一条 `route` 记录，避免长期把完整澄清链路放入在线路由上下文。
+多轮澄清时可以追加多条 `clarify`，每条`AMBIGUOUS_ROUTE`记录保留各自当轮候选顺序。澄清成功后，建议把多条澄清过程折叠成一条 `route` 记录，避免长期把完整澄清链路放入在线路由上下文。
 
 ## 4. 响应结构
 

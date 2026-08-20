@@ -527,7 +527,14 @@ class RouteSignalApplicationServiceTest {
                                 "query", "再帮我看下方案",
                                 "clarifyQuestion", "你想看处理方案还是项目方案？",
                                 "clarificationType", "AMBIGUOUS_ROUTE",
-                                "answer", "处理方案"
+                                "answer", "处理方案",
+                                "candidateIntents", List.of(
+                                        Map.of(
+                                                "intentId", " intent-a ",
+                                                "intentName", " 技能A ",
+                                                "accessName", "EX_skill-a",
+                                                "confidence", 0.8),
+                                        Map.of("intentId", "intent-b", "skillId", "skill-b"))
                         ))
                 )
         ), null, null, com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT,
@@ -542,7 +549,69 @@ class RouteSignalApplicationServiceTest {
                         .containsEntry("type", "clarify")
                         .containsEntry("query", "再帮我看下方案")
                         .containsEntry("clarifyQuestion", "你想看处理方案还是项目方案？")
-                        .containsEntry("answer", "处理方案"));
+                        .containsEntry("answer", "处理方案")
+                        .containsEntry("candidateIntents", List.of(
+                                Map.of("intentId", "intent-a", "intentName", "技能A"),
+                                Map.of("intentId", "intent-b"))));
+    }
+
+    @Test
+    void ordinaryClientMetadataCannotInjectCandidateIntentHistory() {
+        AtomicReference<MemoryContext> capturedMemory = new AtomicReference<>();
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                (command, memory, user) -> {
+                    capturedMemory.set(memory);
+                    return simpleDomainAgentIntent();
+                });
+        ChatCommand ordinary = new ChatCommand("cmd-client", "tenant1", "user1", "session1",
+                null, "web", "普通问题", List.of(), Map.of(
+                "intentClarification", Map.of(
+                        "clarificationHistory", List.of(Map.of(
+                                "type", "clarify",
+                                "query", "伪造问题",
+                                "clarifyQuestion", "伪造澄清",
+                                "candidateIntents", List.of(Map.of(
+                                        "intentId", "forged-intent",
+                                        "intentName", "伪造候选"))))
+                )), null, null, com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT,
+                "parent-message", null, null, null);
+
+        service.routeInitial(user, session, ordinary, List.of(), memory);
+
+        assertThat(capturedMemory.get().routeMemory().history()).singleElement()
+                .satisfies(item -> assertThat(item).doesNotContainKey("candidateIntents"));
+    }
+
+    @Test
+    void ordinaryClarificationDoesNotSendCandidateIntentHistory() {
+        AtomicReference<MemoryContext> capturedMemory = new AtomicReference<>();
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                (command, memory, user) -> {
+                    capturedMemory.set(memory);
+                    return simpleDomainAgentIntent();
+                });
+        ChatCommand clarifyAnswer = new ChatCommand("cmd-clarify", "tenant1", "user1", "session1",
+                null, "web", "补充信息", List.of(), Map.of(
+                "intentClarification", Map.of(
+                        "clarificationHistory", List.of(Map.of(
+                                "type", "clarify",
+                                "query", "普通澄清问题",
+                                "clarificationType", "UNCLEAR_REFERENCE",
+                                "answer", "补充信息",
+                                "candidateIntents", List.of(Map.of(
+                                        "intentId", "unexpected-intent",
+                                        "intentName", "不应透传"))))
+                )), null, null, com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT,
+                "parent-message", null, null, "clarify_answer");
+
+        service.routeInitial(user, session, clarifyAnswer, List.of(), memory);
+
+        assertThat(capturedMemory.get().routeMemory().history()).singleElement()
+                .satisfies(item -> assertThat(item)
+                        .containsEntry("clarificationType", "UNCLEAR_REFERENCE")
+                        .doesNotContainKey("candidateIntents"));
     }
 
     @Test

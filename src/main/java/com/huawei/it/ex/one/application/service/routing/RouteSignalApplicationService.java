@@ -557,14 +557,17 @@ public class RouteSignalApplicationService {
         if (!(value instanceof List<?> list) || list.isEmpty()) {
             return List.of();
         }
+        boolean trustedClarificationContinuation = trustedClarificationContinuation(command);
         return list.stream()
                 .filter(Map.class::isInstance)
-                .map(item -> historyClarification(map(item)))
+                .map(item -> historyClarification(map(item), trustedClarificationContinuation))
                 .filter(item -> !item.isEmpty())
                 .toList();
     }
 
-    private Map<String, Object> historyClarification(Map<String, Object> source) {
+    private Map<String, Object> historyClarification(
+            Map<String, Object> source,
+            boolean trustedClarificationContinuation) {
         Map<String, Object> history = new LinkedHashMap<>();
         history.put("type", "clarify");
         String query = firstText(source.get("query"), source.get("originalQuery"), source.get("clarifyTriggerQuery"));
@@ -587,7 +590,51 @@ public class RouteSignalApplicationService {
         if (answer != null) {
             history.put("answer", answer);
         }
+        if (trustedClarificationContinuation && ambiguousClarification(source)) {
+            List<Map<String, Object>> candidateIntents = candidateIntents(source.get("candidateIntents"));
+            if (!candidateIntents.isEmpty()) {
+                history.put("candidateIntents", candidateIntents);
+            }
+        }
         return history.size() <= 1 ? Map.of() : Map.copyOf(history);
+    }
+
+    private boolean trustedClarificationContinuation(ChatCommand command) {
+        String trigger = command == null ? null : command.routeTrigger();
+        return RouteMemoryApplicationService.TRIGGER_CLARIFY_ANSWER.equals(trigger)
+                || "intent_clarification".equals(trigger);
+    }
+
+    private boolean ambiguousClarification(Map<String, Object> source) {
+        String type = firstText(
+                source.get("clarificationType"),
+                map(source.get("clarification")).get("type"));
+        return "AMBIGUOUS_ROUTE".equalsIgnoreCase(type);
+    }
+
+    private List<Map<String, Object>> candidateIntents(Object value) {
+        if (!(value instanceof List<?> candidates)) {
+            return List.of();
+        }
+        return candidates.stream()
+                .filter(Map.class::isInstance)
+                .map(this::candidateIntent)
+                .filter(candidate -> !candidate.isEmpty())
+                .toList();
+    }
+
+    private Map<String, Object> candidateIntent(Object value) {
+        Map<String, Object> source = map(value);
+        Map<String, Object> candidate = new LinkedHashMap<>();
+        String intentId = normalizedText(source.get("intentId"));
+        String intentName = normalizedText(source.get("intentName"));
+        if (intentId != null) {
+            candidate.put("intentId", intentId);
+        }
+        if (intentName != null) {
+            candidate.put("intentName", intentName);
+        }
+        return candidate.isEmpty() ? Map.of() : Map.copyOf(candidate);
     }
 
     private Map<String, Object> intentClarification(ChatCommand command) {
@@ -614,6 +661,10 @@ public class RouteSignalApplicationService {
 
     private String blankToDefault(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value;
+    }
+
+    private String normalizedText(Object value) {
+        return value == null || String.valueOf(value).isBlank() ? null : String.valueOf(value).trim();
     }
 
     private record IntentRouteRequest(UserContext user,

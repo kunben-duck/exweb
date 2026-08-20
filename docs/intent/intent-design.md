@@ -470,11 +470,14 @@ JSON 数组顺序是稳定的，因此可以用来表达历史顺序。
 | `query`             | string | 触发这轮澄清的用户输入。                                                            |
 | `clarifyQuestion`   | string | 意图服务返回、Supervisor 展示给用户的澄清问题。                                     |
 | `clarificationType` | string | 可选。意图服务返回的澄清类型，当前为 `AMBIGUOUS_ROUTE` 或 `UNCLEAR_REFERENCE`。 |
+| `answer`            | string | 本轮用户回答；顶层 `query` 仍携带同一回答。                                         |
+| `candidateIntents`  | array  | 仅 `AMBIGUOUS_ROUTE` 选择“其他”后携带；每项只保留可用的 `intentId/intentName`。       |
 
 说明：
 
 * 不单独设计 `pending_clarify`。
-* `clarify` 一条记录表达用户“触发澄清的问题 + Supervisor 澄清问题”；普通回答或 `AMBIGUOUS_ROUTE` 的“其他”输入作为本轮再次调用当前配置的意图决策接口的 `query` 传入，不在 `clarify` 记录中重复保存。
+* `clarify` 一条记录表达用户“触发澄清的问题 + Supervisor 澄清问题”；普通回答或 `AMBIGUOUS_ROUTE` 的“其他”输入同时作为本轮 `query` 和该记录的 `answer` 传入。
+* `AMBIGUOUS_ROUTE` 的“其他”输入还会在对应记录中携带当轮候选摘要，保持响应顺序且不发送 `confidence/accessName/skillId` 等扩展字段。
 * `AMBIGUOUS_ROUTE` 直接选择和前端代为选择不再次调用意图服务。
 * 多轮澄清时追加多条 `clarify`。
 * 澄清成功后，将多条 `clarify` 折叠成一条 `route`。

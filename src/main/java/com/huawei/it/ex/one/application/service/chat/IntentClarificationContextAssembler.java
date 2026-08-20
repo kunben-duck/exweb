@@ -232,6 +232,10 @@ final class IntentClarificationContextAssembler {
                 requestPayload.get("clarifyTriggerQuery"), requestPayload.get("originalQuery"), originalQuery));
         putNonNull(current, "clarifyQuestion", question(requestPayload));
         putNonNull(current, "clarificationType", type(requestPayload));
+        List<Map<String, Object>> candidateIntents = candidateIntents(requestPayload);
+        if (!candidateIntents.isEmpty()) {
+            current.put("candidateIntents", candidateIntents);
+        }
         if (answerText != null && !answerText.isBlank()) {
             current.put("answer", answerText);
         }
@@ -242,6 +246,33 @@ final class IntentClarificationContextAssembler {
             result.add(Map.copyOf(current));
         }
         return List.copyOf(result);
+    }
+
+    private List<Map<String, Object>> candidateIntents(Map<String, Object> payload) {
+        if (!AmbiguousRouteSupport.isAmbiguous(payload)) {
+            return List.of();
+        }
+        Object value = payload.get("candidateIntents");
+        if (!(value instanceof List<?>)) {
+            Object clarification = payload.get("clarification");
+            value = clarification instanceof Map<?, ?> map ? map.get("candidateIntents") : null;
+        }
+        if (!(value instanceof List<?> candidates)) {
+            return List.of();
+        }
+        return candidates.stream()
+                .filter(Map.class::isInstance)
+                .map(this::candidateIntent)
+                .filter(candidate -> !candidate.isEmpty())
+                .toList();
+    }
+
+    private Map<String, Object> candidateIntent(Object value) {
+        Map<String, Object> source = mapOrEmpty(value);
+        Map<String, Object> candidate = new LinkedHashMap<>();
+        putNonNull(candidate, "intentId", normalizedText(source.get("intentId")));
+        putNonNull(candidate, "intentName", normalizedText(source.get("intentName")));
+        return ChatPayloadMaps.immutableCopy(candidate);
     }
 
     private String answer(Map<String, Object> responsePayload) {
@@ -336,6 +367,10 @@ final class IntentClarificationContextAssembler {
 
     private String blankToDefault(String value, String defaultValue) {
         return value == null || value.isBlank() ? defaultValue : value;
+    }
+
+    private String normalizedText(Object value) {
+        return value == null || String.valueOf(value).isBlank() ? null : String.valueOf(value).trim();
     }
 
     private Map<String, Object> mapOrEmpty(Object value) {

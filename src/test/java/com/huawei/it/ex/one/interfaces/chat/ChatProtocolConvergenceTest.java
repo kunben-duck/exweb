@@ -313,8 +313,7 @@ class ChatProtocolConvergenceTest {
                 "DOMAIN_AGENT", "fund-agent",
                 new ChatSelectedIntentDto(" fund_management ", " 资金管理 "),
                 Map.of("scene", "fund",
-                        MessageSkillContext.RUN_METADATA_KEY, "forged-skill",
-                        MessageSkillContext.LEGACY_RUN_METADATA_KEY, List.of("forged-legacy-skill")));
+                        MessageSkillContext.RUN_METADATA_KEY, "forged-skill"));
 
         ChatCommand command = translator.toCommand(request);
 
@@ -323,7 +322,6 @@ class ChatProtocolConvergenceTest {
         assertThat(SelectedIntentContext.removeReserved(command.metadata()))
                 .containsExactlyEntriesOf(Map.of("scene", "fund"));
         assertThat(command.metadata()).doesNotContainKey(MessageSkillContext.RUN_METADATA_KEY);
-        assertThat(command.metadata()).doesNotContainKey(MessageSkillContext.LEGACY_RUN_METADATA_KEY);
     }
 
     @Test

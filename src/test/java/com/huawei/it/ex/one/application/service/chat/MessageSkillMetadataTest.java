@@ -17,15 +17,14 @@ class MessageSkillMetadataTest {
     @Test
     void replacePreservesOtherKeysAndUsesOnlyCurrentRunSkillId() throws Exception {
         MessageSkillMetadata.MergeResult result = metadata.replace(
-                "{\"migration\":true,\"skillIds\":[\"skill-old\"]}",
+                "{\"migration\":true}",
                 "skill-b");
 
         assertThat(result.changed()).isTrue();
         assertThat(result.invalidExistingMetadata()).isFalse();
         assertThat(objectMapper.readValue(result.metadataJson(), MAP_TYPE))
                 .containsEntry("migration", true)
-                .containsEntry("skillId", "skill-b")
-                .doesNotContainKey("skillIds");
+                .containsEntry("skillId", "skill-b");
     }
 
     @Test
@@ -38,30 +37,27 @@ class MessageSkillMetadataTest {
     }
 
     @Test
-    void incompatibleExistingSkillFieldsAreReplacedWithoutChangingOtherKeys() throws Exception {
-        String original = "{\"migration\":true,\"skillIds\":{\"unexpected\":true}}";
+    void existingSkillIdIsOverwrittenWithoutChangingOtherKeys() throws Exception {
+        String original = "{\"migration\":true,\"skillId\":\"skill-a\"}";
 
-        MessageSkillMetadata.MergeResult result = metadata.replace(original, "skill-a");
+        MessageSkillMetadata.MergeResult result = metadata.replace(original, "skill-b");
 
         assertThat(result.changed()).isTrue();
         assertThat(result.invalidExistingMetadata()).isFalse();
         assertThat(objectMapper.readValue(result.metadataJson(), MAP_TYPE))
                 .containsEntry("migration", true)
-                .containsEntry("skillId", "skill-a")
-                .doesNotContainKey("skillIds");
+                .containsEntry("skillId", "skill-b");
     }
 
     @Test
-    void emptyCurrentRunRemovesNewAndLegacySkillFields() throws Exception {
+    void emptyCurrentRunRemovesSkillId() throws Exception {
         MessageSkillMetadata.MergeResult result = metadata.replace(
-                "{\"finishReason\":\"USER_STOP\",\"skillId\":\"skill-a\","
-                        + "\"skillIds\":[\"skill-old\"]}",
+                "{\"finishReason\":\"USER_STOP\",\"skillId\":\"skill-a\"}",
                 null);
 
         assertThat(objectMapper.readValue(result.metadataJson(), MAP_TYPE))
                 .containsEntry("finishReason", "USER_STOP")
-                .doesNotContainKey("skillId")
-                .doesNotContainKey("skillIds");
+                .doesNotContainKey("skillId");
     }
 
     @Test

@@ -29,20 +29,16 @@ final class MessageSkillMetadata {
             return new MergeResult(metadataJson, false, true);
         }
         Object current = metadata.get(MessageSkillContext.MESSAGE_METADATA_KEY);
-        boolean legacyRemoved = metadata.containsKey(MessageSkillContext.LEGACY_MESSAGE_METADATA_KEY);
-        metadata.remove(MessageSkillContext.LEGACY_MESSAGE_METADATA_KEY);
-        if (!legacyRemoved && normalized != null && normalized.equals(current)) {
+        if (normalized != null && normalized.equals(current)) {
             return new MergeResult(metadataJson, false, false);
         }
-        boolean currentRemoved = false;
         if (normalized == null) {
-            currentRemoved = metadata.containsKey(MessageSkillContext.MESSAGE_METADATA_KEY);
+            if (!metadata.containsKey(MessageSkillContext.MESSAGE_METADATA_KEY)) {
+                return new MergeResult(metadataJson, false, false);
+            }
             metadata.remove(MessageSkillContext.MESSAGE_METADATA_KEY);
         } else {
             metadata.put(MessageSkillContext.MESSAGE_METADATA_KEY, normalized);
-        }
-        if (!legacyRemoved && !currentRemoved && normalized == null) {
-            return new MergeResult(metadataJson, false, false);
         }
         return new MergeResult(write(metadata), true, false);
     }
@@ -51,8 +47,7 @@ final class MessageSkillMetadata {
         if (metadataJson == null) {
             return false;
         }
-        return metadataJson.contains("\"" + MessageSkillContext.MESSAGE_METADATA_KEY + "\"")
-                || metadataJson.contains("\"" + MessageSkillContext.LEGACY_MESSAGE_METADATA_KEY + "\"");
+        return metadataJson.contains("\"" + MessageSkillContext.MESSAGE_METADATA_KEY + "\"");
     }
 
     private Map<String, Object> parseObject(String metadataJson) {

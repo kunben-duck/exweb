@@ -6,22 +6,18 @@ import java.util.Map;
 /** 服务端在run中暂存最后一次Runtime调用标识，并在终态投影到消息metadata。 */
 public final class MessageSkillContext {
     public static final String RUN_METADATA_KEY = "_messageSkillId";
-    public static final String LEGACY_RUN_METADATA_KEY = "_messageSkillIds";
     public static final String MESSAGE_METADATA_KEY = "skillId";
-    public static final String LEGACY_MESSAGE_METADATA_KEY = "skillIds";
 
     private MessageSkillContext() {
     }
 
     public static Map<String, Object> removeReserved(Map<String, Object> metadata) {
         if (metadata == null || metadata.isEmpty()
-                || (!metadata.containsKey(RUN_METADATA_KEY)
-                && !metadata.containsKey(LEGACY_RUN_METADATA_KEY))) {
+                || !metadata.containsKey(RUN_METADATA_KEY)) {
             return metadata == null ? Map.of() : Map.copyOf(metadata);
         }
         Map<String, Object> sanitized = new LinkedHashMap<>(metadata);
         sanitized.remove(RUN_METADATA_KEY);
-        sanitized.remove(LEGACY_RUN_METADATA_KEY);
         return sanitized.isEmpty() ? Map.of() : Map.copyOf(sanitized);
     }
 
@@ -34,7 +30,6 @@ public final class MessageSkillContext {
             String skillId) {
         Map<String, Object> replaced = new LinkedHashMap<>(metadata == null ? Map.of() : metadata);
         replaced.remove(RUN_METADATA_KEY);
-        replaced.remove(LEGACY_RUN_METADATA_KEY);
         String normalized = normalizeSkillId(skillId);
         if (normalized != null) {
             replaced.put(RUN_METADATA_KEY, normalized);

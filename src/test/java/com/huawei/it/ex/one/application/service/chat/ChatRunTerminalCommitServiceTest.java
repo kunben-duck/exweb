@@ -163,8 +163,7 @@ class ChatRunTerminalCommitServiceTest {
         verify(sessionService).updateAssistantMessage(commandCaptor.capture());
         assertThat(commandCaptor.getValue().runId()).isEqualTo("run-b");
         assertThat(commandCaptor.getValue().metadataJson())
-                .contains("\"skillId\":\"skill-new\"")
-                .doesNotContain("skillIds");
+                .contains("\"skillId\":\"skill-new\"");
     }
 
     @Test
@@ -273,7 +272,7 @@ class ChatRunTerminalCommitServiceTest {
                 "session1", "tenant1", "user1", "test", "ACTIVE", "web", now, now);
         AssistantMessageSaveCommand partial = new AssistantMessageSaveCommand(
                 "tenant1", "user1", session, "partial", "run1", "msg-user", null,
-                List.of(), "{\"partial\":true,\"skillIds\":[\"skill-old\"]}", "msg-assistant");
+                List.of(), "{\"partial\":true,\"skillId\":\"skill-old\"}", "msg-assistant");
         ChatEvent event = RunCancelledEvent.of(
                 "run1", "session1", "USER_STOP", true, "msg-assistant");
         ChatEvent stored = new RunCancelledEvent(
@@ -298,7 +297,6 @@ class ChatRunTerminalCommitServiceTest {
         verify(sessionService).saveAssistantMessage(commandCaptor.capture());
         assertThat(commandCaptor.getValue().metadataJson())
                 .contains("\"skillId\":\"skill-latest\"")
-                .doesNotContain("skillIds")
                 .doesNotContain("skill-stale")
                 .doesNotContain("skill-old");
         assertThat(result.committed()).isTrue();

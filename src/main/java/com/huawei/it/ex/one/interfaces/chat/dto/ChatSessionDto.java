@@ -10,6 +10,7 @@ import java.time.Instant;
  * @param userId 用户标识。
  * @param title 会话标题。
  * @param status 会话状态。
+ * @param running 当前是否存在活动run；仅游标列表保证装配。
  * @param channel 会话来源渠道。
  * @param appId 会话所属应用标识。
  * @param appName 会话所属应用名称快照。
@@ -31,6 +32,7 @@ public record ChatSessionDto(
         String userId,
         String title,
         String status,
+        Boolean running,
         String channel,
         String appId,
         String appName,

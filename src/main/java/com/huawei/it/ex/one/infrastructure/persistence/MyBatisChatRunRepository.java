@@ -20,6 +20,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * ChatRun 的数据库事实源实现。
@@ -265,6 +266,15 @@ public class MyBatisChatRunRepository implements ChatRunRepository {
     @Override
     public Optional<ChatRun> findActiveBySession(String tenantId, String userId, String sessionId) {
         return Optional.ofNullable(mapper.findActiveBySession(tenantId, userId, sessionId)).map(this::toDomain);
+    }
+
+    @Override
+    public Set<String> findActiveSessionIds(
+            String tenantId, String userId, Collection<String> sessionIds) {
+        if (sessionIds == null || sessionIds.isEmpty()) {
+            return Set.of();
+        }
+        return Set.copyOf(mapper.findActiveSessionIds(tenantId, userId, sessionIds));
     }
 
     @Override

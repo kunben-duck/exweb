@@ -430,6 +430,22 @@
     </select>
 
     <!--
+      按租户、用户和当前页会话集合批量查询存在 RUNNING/CANCELLING run 的会话 ID。
+      入参: tenantId/userId 为归属边界，sessionIds 为当前页会话 ID 集合；调用方保证集合非空。
+    -->
+    <select id="findActiveSessionIds" resultType="string">
+        SELECT session_id
+        FROM fin_ex_chat_run_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id IN
+          <foreach collection="sessionIds" item="sessionId" open="(" separator="," close=")">
+              #{sessionId}
+          </foreach>
+          AND status IN ('RUNNING', 'CANCELLING')
+    </select>
+
+    <!--
       扫描 execution 初始化阶段中断的普通 run。Interaction continuation 使用独立对账，
       避免两个恢复链路重复处理同一个 RESPONDING claim。
       入参: orphanBefore 为初始化宽限期截止时间，limit 为本轮最大返回数量。

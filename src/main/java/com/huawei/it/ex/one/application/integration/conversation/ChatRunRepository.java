@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * ChatRun 事实源仓储端口。
@@ -124,6 +125,24 @@ public interface ChatRunRepository {
      * @return 当前 active run；不存在时为空。
      */
     Optional<ChatRun> findActiveBySession(String tenantId, String userId, String sessionId);
+
+    /**
+     * 批量查询当前仍在运行或取消中的会话标识。
+     *
+     * <p>默认实现只处理空集合；非空查询必须由仓储实现为单次轻量批量读取，禁止退化为逐会话查询。</p>
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionIds 当前页会话标识集合。
+     * @return 当前 owner 下存在 active run 的会话标识。
+     */
+    default Set<String> findActiveSessionIds(
+            String tenantId, String userId, Collection<String> sessionIds) {
+        if (sessionIds == null || sessionIds.isEmpty()) {
+            return Set.of();
+        }
+        throw new UnsupportedOperationException("当前ChatRun仓储不支持批量active session查询");
+    }
 
     /**
      * 查询超过初始化宽限期、尚未创建 execution 的普通 run。

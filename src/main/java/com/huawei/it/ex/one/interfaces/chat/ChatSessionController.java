@@ -163,9 +163,11 @@ public class ChatSessionController {
                             user, new SessionListFilter(appId, title, channel, appScope), cursor, limit);
                     Map<String, ChatSessionFirstAssistantSummary> firstAssistantSummaries =
                             facade.findFirstAssistantSummaries(user, page.items());
+                    Set<String> activeSessionIds = activeSessionIds(user, page.items());
                     return new ChatSessionPageDto(
                             page.items().stream()
-                                    .map(session -> toDto(session, firstAssistantSummaries.get(session.id())))
+                                    .map(session -> toDto(session, firstAssistantSummaries.get(session.id()),
+                                            activeSessionIds == null ? null : activeSessionIds.contains(session.id())))
                                     .toList(),
                             page.nextCursor()
                     );
@@ -431,16 +433,22 @@ public class ChatSessionController {
     }
 
     private ChatSessionDto toDto(ChatSession session) {
-        return toDto(session, null);
+        return toDto(session, null, null);
     }
 
     private ChatSessionDto toDto(ChatSession session, ChatSessionFirstAssistantSummary firstAssistant) {
+        return toDto(session, firstAssistant, null);
+    }
+
+    private ChatSessionDto toDto(ChatSession session, ChatSessionFirstAssistantSummary firstAssistant,
+                                 Boolean running) {
         return new ChatSessionDto(
                 session.id(),
                 session.tenantId(),
                 session.userId(),
                 session.title(),
                 session.status(),
+                running,
                 session.channel(),
                 session.appId(),
                 session.appName(),
@@ -456,6 +464,25 @@ public class ChatSessionController {
                 session.createdAt(),
                 session.updatedAt()
         );
+    }
+
+    private Set<String> activeSessionIds(UserContext user, List<ChatSession> sessions) {
+        if (sessions == null || sessions.isEmpty()) {
+            return Set.of();
+        }
+        List<String> sessionIds = sessions.stream()
+                .map(ChatSession::id)
+                .toList();
+        try {
+            return chatRunService.findActiveSessionIds(user, sessionIds);
+        } catch (RuntimeException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_READ_FAILED,
+                            "Active session batch lookup failed; returning session list without running status")
+                    .operation("chat-session.active-run.batch-read")
+                    .attribute("sessionCount", sessionIds.size())
+                    .build(), ex);
+            return null;
+        }
     }
 
     private ChatMessageDto toMessageDto(ChatMessage message, ChatMessageFeedback feedback,

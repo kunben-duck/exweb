@@ -23,9 +23,35 @@ import org.mockito.InOrder;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 class MyBatisChatRunRepositoryTest {
+    @Test
+    void activeSessionIdsUseSingleOwnerScopedMapperCall() {
+        ChatRunMapper mapper = mock(ChatRunMapper.class);
+        List<String> sessionIds = List.of("session1", "session2");
+        when(mapper.findActiveSessionIds("tenant1", "user1", sessionIds))
+                .thenReturn(List.of("session1"));
+        MyBatisChatRunRepository repository = new MyBatisChatRunRepository(mapper, new ObjectMapper());
+
+        assertThat(repository.findActiveSessionIds("tenant1", "user1", sessionIds))
+                .containsExactly("session1");
+
+        verify(mapper).findActiveSessionIds("tenant1", "user1", sessionIds);
+        verify(mapper, never()).findActiveBySession(any(), any(), any());
+    }
+
+    @Test
+    void activeSessionIdsForEmptySessionPageSkipMapper() {
+        ChatRunMapper mapper = mock(ChatRunMapper.class);
+        MyBatisChatRunRepository repository = new MyBatisChatRunRepository(mapper, new ObjectMapper());
+
+        assertThat(repository.findActiveSessionIds("tenant1", "user1", List.of())).isEmpty();
+
+        verify(mapper, never()).findActiveSessionIds(any(), any(), any());
+    }
+
     @Test
     void interactionContinuationLocksSessionThenClaimBeforeValuesInsert() {
         ChatRunMapper mapper = mock(ChatRunMapper.class);

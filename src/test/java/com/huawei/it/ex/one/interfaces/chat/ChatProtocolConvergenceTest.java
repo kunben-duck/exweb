@@ -55,6 +55,7 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 class ChatProtocolConvergenceTest {
@@ -466,6 +467,7 @@ class ChatProtocolConvergenceTest {
                 .map(component -> component.getName())
                 .toList();
 
+        assertThat(components).containsSubsequence("status", "running", "channel");
         assertThat(components).containsSubsequence(
                 "firstAssistantAnswer", "firstAssistantMetadataJson", "createdAt");
     }
@@ -487,10 +489,13 @@ class ChatProtocolConvergenceTest {
         when(facade.findFirstAssistantSummaries(user, List.of(session)))
                 .thenReturn(Map.of(session.id(), summary));
         when(facade.getSession(user, session.id())).thenReturn(session);
+        ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
+        when(runService.findActiveSessionIds(user, List.of(session.id())))
+                .thenReturn(Set.of(session.id()));
         ChatSessionController controller = new ChatSessionController(
                 facade,
                 mock(ChatFeedbackApplicationService.class),
-                mock(ChatRunApplicationService.class),
+                runService,
                 () -> user,
                 new PermissionChecker(),
                 new ChatMessageVersionViewAssembler());
@@ -502,13 +507,94 @@ class ChatProtocolConvergenceTest {
         assertThat(cursorPage).isNotNull();
         assertThat(cursorPage.items().getFirst().firstAssistantAnswer()).isEqualTo("第一条回答");
         assertThat(cursorPage.items().getFirst().firstAssistantMetadataJson()).isEqualTo("not-json");
+        assertThat(cursorPage.items().getFirst().running()).isTrue();
         assertThat(numberPage).isNotNull();
         assertThat(numberPage.items().getFirst().firstAssistantAnswer()).isEqualTo("第一条回答");
         assertThat(numberPage.items().getFirst().firstAssistantMetadataJson()).isEqualTo("not-json");
+        assertThat(numberPage.items().getFirst().running()).isNull();
         assertThat(detail).isNotNull();
         assertThat(detail.firstAssistantAnswer()).isNull();
         assertThat(detail.firstAssistantMetadataJson()).isNull();
+        assertThat(detail.running()).isNull();
         verify(facade, times(2)).findFirstAssistantSummaries(user, List.of(session));
+        verify(runService).findActiveSessionIds(user, List.of(session.id()));
+    }
+
+    @Test
+    void cursorSessionListReturnsNotRunningWhenNoActiveRunExists() {
+        ChatSessionFacade facade = mock(ChatSessionFacade.class);
+        ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
+        UserContext user = user();
+        Instant now = Instant.parse("2026-08-13T00:00:00Z");
+        ChatSession session = new ChatSession(
+                "session1", "tenant1", "user1", "title", "ACTIVE", "web", now, now);
+        when(facade.listSessions(user, SessionListFilter.empty(), null, 20))
+                .thenReturn(new ChatSessionPage(List.of(session), null));
+        when(facade.findFirstAssistantSummaries(user, List.of(session))).thenReturn(Map.of());
+        when(runService.findActiveSessionIds(user, List.of(session.id()))).thenReturn(Set.of());
+        ChatSessionController controller = new ChatSessionController(
+                facade,
+                mock(ChatFeedbackApplicationService.class),
+                runService,
+                () -> user,
+                new PermissionChecker(),
+                new ChatMessageVersionViewAssembler());
+
+        var page = controller.list(null, null, null, null, null, 20).block();
+
+        assertThat(page).isNotNull();
+        assertThat(page.items().getFirst().running()).isFalse();
+    }
+
+    @Test
+    void cursorSessionListKeepsItemsWhenActiveRunBatchLookupFails() {
+        ChatSessionFacade facade = mock(ChatSessionFacade.class);
+        ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
+        UserContext user = user();
+        Instant now = Instant.parse("2026-08-13T00:00:00Z");
+        ChatSession session = new ChatSession(
+                "session1", "tenant1", "user1", "title", "ACTIVE", "web", now, now);
+        when(facade.listSessions(user, SessionListFilter.empty(), null, 20))
+                .thenReturn(new ChatSessionPage(List.of(session), null));
+        when(facade.findFirstAssistantSummaries(user, List.of(session))).thenReturn(Map.of());
+        when(runService.findActiveSessionIds(user, List.of(session.id())))
+                .thenThrow(new IllegalStateException("database unavailable"));
+        ChatSessionController controller = new ChatSessionController(
+                facade,
+                mock(ChatFeedbackApplicationService.class),
+                runService,
+                () -> user,
+                new PermissionChecker(),
+                new ChatMessageVersionViewAssembler());
+
+        var page = controller.list(null, null, null, null, null, 20).block();
+
+        assertThat(page).isNotNull();
+        assertThat(page.items()).hasSize(1);
+        assertThat(page.items().getFirst().running()).isNull();
+    }
+
+    @Test
+    void emptyCursorSessionPageSkipsActiveRunBatchLookup() {
+        ChatSessionFacade facade = mock(ChatSessionFacade.class);
+        ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
+        UserContext user = user();
+        when(facade.listSessions(user, SessionListFilter.empty(), null, 20))
+                .thenReturn(new ChatSessionPage(List.of(), null));
+        when(facade.findFirstAssistantSummaries(user, List.of())).thenReturn(Map.of());
+        ChatSessionController controller = new ChatSessionController(
+                facade,
+                mock(ChatFeedbackApplicationService.class),
+                runService,
+                () -> user,
+                new PermissionChecker(),
+                new ChatMessageVersionViewAssembler());
+
+        var page = controller.list(null, null, null, null, null, 20).block();
+
+        assertThat(page).isNotNull();
+        assertThat(page.items()).isEmpty();
+        verify(runService, times(0)).findActiveSessionIds(user, List.of());
     }
 
     @Test

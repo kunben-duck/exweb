@@ -253,6 +253,25 @@ class MyBatisXmlMapperConsistencyTest {
     }
 
     @Test
+    void chatRunActiveSessionBatchLookupShouldBeOwnerScopedAndActiveOnly() throws IOException {
+        String mapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("persistence/ChatRunMapper.opengauss.xml"));
+        int start = mapper.indexOf("<select id=\"findActiveSessionIds\"");
+        int end = mapper.indexOf("</select>", start);
+
+        assertThat(start).isGreaterThanOrEqualTo(0);
+        assertThat(end).isGreaterThan(start);
+        assertThat(mapper.substring(start, end))
+                .contains("SELECT session_id")
+                .contains("tenant_id = #{tenantId}")
+                .contains("user_id = #{userId}")
+                .contains("session_id IN")
+                .contains("collection=\"sessionIds\"")
+                .contains("status IN ('RUNNING', 'CANCELLING')")
+                .doesNotContain("chatRunColumns", "metadata_json");
+    }
+
+    @Test
     void runtimeBindingResumableLookupShouldUseOpenGaussNullSemantics() throws IOException {
         String mapper = Files.readString(
                 MAPPER_XML_ROOT.resolve("runtime/RuntimeBindingMapper.opengauss.xml"));

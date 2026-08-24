@@ -190,7 +190,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 接口 | 请求字段 | 响应字段 | 后续关联 |
 | --- | --- | --- | --- |
 | `POST /chat/sessions` | Body：`title` 会话标题，可空；`channel` 来源渠道，可空 | `ChatSessionDto` 全字段 | 使用 `sessionId` 作为会话路由和后续 run 入参 |
-| `GET /chat/sessions` | Query：`appId/appScope/title/channel` 可选；`appScope=MAIN_SITE`只查主站；`limit`页大小；`cursor`上一页游标 | `items[]`、`nextCursor`；item带`firstAssistantAnswer/firstAssistantMetadataJson` | `MAIN_SITE`不能同时传`appId`；移动端传`channel=mobile`；后续页沿用全部过滤条件 |
+| `GET /chat/sessions` | Query：`appId/appScope/title/channel` 可选；`appScope=MAIN_SITE`只查主站；`limit`页大小；`cursor`上一页游标 | `items[]`、`nextCursor`；item带首条assistant摘要及`running` | `running=true`表示当前存在RUNNING/CANCELLING；MAIN_SITE不能同时传appId；后续页沿用全部过滤条件 |
 | `GET /chat/sessions/page` | Query：`appId/appScope/title/channel`可选；`curPage`默认1；`pageSize`默认20 | `items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`；item带首条assistant正文及metadata | 主站传`appScope=MAIN_SITE`；省略`appScope/appId`查询全量；总数和数据条件一致 |
 | `GET /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto` | 只拿元数据，不返回历史和流状态 |
 | `POST /chat/sessions/{sessionId}/read` | Path：`sessionId`；Body：`readThroughSeq` 必填且不小于 0 | 更新后的 `ChatSessionDto` | 历史消息或实时终态实际展示后提交；服务端不允许回退或越过最新水位 |
@@ -231,7 +231,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | --- | --- | --- | --- | --- |
 | `POST /v1/chat/sessions` | 用户点击“新建会话”时显式创建。 | JSON body：`title/channel/appId/appName` 均可选。 | `ChatSessionDto`：包含 `appId/appName`。 | `appName` 不能脱离 `appId`；前端不传租户和用户。 |
 | `GET /v1/chat/sessions/apps` | 初始化会话分类栏。 | Query：`channel` 可选。 | `ChatSessionAppListDto`：`items[].appId/appName`。 | 移动端传 `mobile`；PC 端省略后返回全部渠道分类。 |
-| `GET /v1/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`appId/appScope/title/channel`可选；主站使用`appScope=MAIN_SITE`；`limit`默认20；`cursor`可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每项含`appId/appName/firstAssistantAnswer/firstAssistantMetadataJson`。 | `MAIN_SITE`仅返回`appId=null`且不能同时传`appId`；后续页必须沿用相同过滤条件。 |
+| `GET /v1/chat/sessions` | 左侧会话列表游标分页加载。 | Query：`appId/appScope/title/channel`可选；主站使用`appScope=MAIN_SITE`；`limit`默认20；`cursor`可选。 | `ChatSessionPageDto`：`items[]`、`nextCursor`；每项含首条assistant摘要及`running`。 | `running=true`只对应RUNNING/CANCELLING；完整恢复和WAIT信息仍查stream-status。 |
 | `GET /v1/chat/sessions/page` | 左侧会话列表页码分页加载。 | Query：`appId/appScope/title/channel`可选；`curPage`默认1；`pageSize`默认20，最大200。 | `ChatSessionNumberPageDto`：`items[]`、`curPage`、`pageSize`、`totalRows`、`totalPages`。 | `totalRows/totalPages`按相同范围、标题和渠道条件计算；不返回`DELETED`会话。 |
 | `GET /v1/chat/sessions/{sessionId}` | 只需要会话元数据时使用。 | Path：`sessionId`。 | `ChatSessionDto`。 | 会校验当前用户是否拥有该会话。 |
 | `POST /v1/chat/sessions/{sessionId}/read` | 最新历史消息或实时 assistant 终态已经展示。 | Path：`sessionId`；JSON body：`readThroughSeq` 必填、最小为 0。 | 更新后的 `ChatSessionDto`。 | 提交列表/详情中观察到的 `latestMessageSeq`，或实时 `run.completed/run.waiting_user` 的 sequence；不会更新会话 `updatedAt`。 |
@@ -353,6 +353,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `tenantId` / `userId` | 服务端身份上下文解析出的归属字段，仅用于调试展示，不要回传 |
 | `title` | 会话标题 |
 | `status` | `ACTIVE`、`ARCHIVED`、`DELETED` 等会话状态；`DELETED` 会话对列表和详情不可见 |
+| `running` | 仅游标列表保证装配；存在RUNNING/CANCELLING时为`true`，没有活动run时为`false`；其他接口或批量读取失败时为`null` |
 | `channel` | 会话来源渠道，例如 `web`、`mobile`、`web-local-test` |
 | `appId` | 可选、大小写敏感的应用分组键；最大 128 字符，未分组会话为 `null` |
 | `appName` | 可选应用展示名称快照；最大 256 字符，创建后不可变，未传为 `null` |
@@ -911,6 +912,7 @@ curl "http://localhost:8080/v1/chat/sessions?appScope=MAIN_SITE&channel=mobile&l
       "userId": "user_dev",
       "title": "财经问答",
       "status": "ACTIVE",
+      "running": true,
       "channel": "web",
       "appId": "fund-app",
       "appName": "资金助手",
@@ -935,7 +937,8 @@ curl "http://localhost:8080/v1/chat/sessions?appScope=MAIN_SITE&channel=mobile&l
 按普通标题字符匹配。`appScope=MAIN_SITE`严格匹配数据库`app_id IS NULL`，不能与具体`appId`同时使用；
 省略`appScope/appId`时查询主站和作业系统全量会话。范围、标题与渠道条件取交集，channel精确匹配并区分大小写。
 后续游标页必须继续提交相同的`appScope/appId/title/channel`；切换条件时应丢弃旧`cursor`并从第一页重新查询。
-主站查询使用v5游标；既有v2/v3/v4游标继续兼容。
+主站查询使用v5游标；既有v2/v3/v4游标继续兼容。`RUNNING/CANCELLING`均返回`running=true`；
+终态后返回`running=false`，该值只表示当前没有活动run，不能推断最近一轮一定为`COMPLETED`或区分取消中状态。
 
 查询会话列表，页码分页用于传统分页组件：
 
@@ -954,6 +957,7 @@ curl "http://localhost:8080/v1/chat/sessions/page?appId=fund-app&title=%E5%88%A9
       "userId": "user_dev",
       "title": "财经问答",
       "status": "ACTIVE",
+      "running": null,
       "channel": "web",
       "appId": "fund-app",
       "appName": "资金助手",

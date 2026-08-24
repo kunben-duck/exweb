@@ -134,7 +134,17 @@ paths:
                   runMode: NEXT
                   message: 帮我分析本季度利润变化
                   language: zh_CN
-                  metadata: {}
+                  metadata:
+                    bizContext:
+                      contextVersion: 1
+                      application:
+                        appId: com.huawei.finance.front.one
+                        name: 财经作业平台
+                        description: 面向财经作业人员的业务系统
+                      page:
+                        pageId: country-cfo-summary
+                        name: 事项进展总结
+                        description: 用于生成事项总结结论
               mobileNextWithNewSession:
                 summary: 移动端自动创建 mobile 会话并提问
                 value:
@@ -1883,8 +1893,13 @@ components:
           type: object
           nullable: true
           maxProperties: 50
+          properties:
+            bizContext:
+              $ref: '#/components/schemas/ChatBizContext'
           additionalProperties: true
-          description: 不得包含 Cookie、Token、traceId 或其他凭据
+          description: |
+            本轮业务扩展字段，不得包含 Cookie、Token、traceId 或其他凭据。`bizContext`用于描述
+            当前应用服务和页面业务上下文，不表示浏览器、操作系统或部署环境。
         appId:
           type: string
           maxLength: 128
@@ -1928,6 +1943,56 @@ components:
         ambiguousOther: questionnaireAnswers 或有效 attachments，重新调用 Intent。
         routeSwitchConfirmation: approved=true/false，不提交 target、答案、附件或 interactionAction。
         relayQuestionnaire: questionnaireAnswers.label 或 questionnaireAnswers.ignore=true，二者互斥。
+
+    ChatBizContext:
+      type: object
+      nullable: true
+      description: |
+        用户发起本轮问题时所在的业务应用与页面上下文。字段均为可选扩展信息，ChatService当前不增加
+        内容校验；每个需要下游使用该上下文的run都应显式提交。
+      properties:
+        contextVersion:
+          type: integer
+          format: int32
+          example: 1
+          description: bizContext结构版本，当前使用1
+        application:
+          type: object
+          nullable: true
+          additionalProperties: true
+          properties:
+            appId:
+              type: string
+              nullable: true
+              example: com.huawei.finance.front.one
+              description: 应用服务稳定标识；不会从请求顶层appId自动复制
+            name:
+              type: string
+              nullable: true
+              example: 财经作业平台
+            description:
+              type: string
+              nullable: true
+              example: 面向财经作业人员的业务系统
+        page:
+          type: object
+          nullable: true
+          additionalProperties: true
+          properties:
+            pageId:
+              type: string
+              nullable: true
+              example: country-cfo-summary
+              description: 页面稳定标识
+            name:
+              type: string
+              nullable: true
+              example: 事项进展总结
+            description:
+              type: string
+              nullable: true
+              example: 用于生成事项总结结论
+      additionalProperties: true
 
     ChatAttachment:
       type: object

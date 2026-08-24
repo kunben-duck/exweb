@@ -1283,7 +1283,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `targetId` | string | `targetType=DOMAIN_AGENT` 必填 | 普通直连时为 DomainAgent 目标 ID；歧义路由选择时必须精确等于等待卡片中的可信候选 `skillId` |
 | `selectedIntent` | object | 否 | 显式选择 DomainAgent 时的展示摘要，只允许与 `targetType=DOMAIN_AGENT,targetId` 同时使用；`intentId` 可选且最长 128，`intentName` 必填且最长 256；仅在当前请求内用于生成 binding 展示信息，不写 run metadata，也不发送给用例库、IntentAgent 或 Runtime |
 | `agentMode` | object | 否 | Agent 模式完整快照。`selections` 最多 16 项；每项 `scheme`、`code` 必填，`displayName` 可选，同一请求不允许重复 `scheme`。缺失或 `null` 对同一 active DomainAgent 表示不更新，新 Binding 不继承；`selections=[]` 表示清除。仅记录到 DomainAgent RuntimeBinding，不进入 IntentAgent、Relay 或 DomainAgent 请求。澄清及切换确认的最终请求需要重新提交 |
-| `metadata` | object | 否 | 扩展字段；DomainAgent 路由时会作为下游业务扩展，不能覆盖服务端保留的 `skillId/query/sessionId` |
+| `metadata` | object | 否 | 本轮扩展字段，最多50个顶层属性；可通过`bizContext`描述当前业务应用和页面。DomainAgent路由时会作为下游业务扩展，不能覆盖服务端保留的`messageId/skillId/query/sessionId` |
 | `appId` | string | 否 | 会话分组键，最大 128；无 `sessionId` 时保存到新会话，已有会话中显式传入时必须与原值完全一致 |
 | `appName` | string | 否 | 会话分组展示名称快照，最大 256；不能脱离 `appId`，已有会话中显式传入时必须与原值完全一致 |
 | `language` | string | 否 | 会话标题总结语言，最大32字符；中文使用 `zh_CN`，英文使用 `en_US`，trim后为空使用服务端默认 `zh_CN`。不进入 metadata、IntentAgent、DomainAgent 或 Relay 请求，不改变本轮路由和回答 |
@@ -1312,6 +1312,50 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `streamTopicId` | WebSocket 订阅 topic，只能由当前用户订阅 |
 
 前端不需要后端返回 WebSocket/Event Resume/stop URL，这些 URL 应由前端环境配置或网关配置管理。
+
+#### 业务上下文 `bizContext`
+
+前端可以在每次`POST /v1/chat/runs`的`metadata.bizContext`中提交用户当前所在的业务应用与页面信息。
+该对象只描述业务使用上下文，不表示浏览器、操作系统或开发、测试、生产等部署环境：
+
+```json
+{
+  "metadata": {
+    "bizContext": {
+      "contextVersion": 1,
+      "application": {
+        "appId": "com.huawei.finance.front.one",
+        "name": "财经作业平台",
+        "description": "面向财经作业人员的业务系统"
+      },
+      "page": {
+        "pageId": "country-cfo-summary",
+        "name": "事项进展总结",
+        "description": "用于生成事项总结结论"
+      }
+    }
+  }
+}
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `contextVersion` | `bizContext`结构版本，当前使用`1` |
+| `application.appId` | 应用服务稳定标识；请求顶层`appId`只用于会话分组，不会自动复制到此处 |
+| `application.name` | 应用服务名称 |
+| `application.description` | 应用服务业务描述 |
+| `page.pageId` | 页面稳定标识 |
+| `page.name` | 页面名称 |
+| `page.description` | 页面业务描述 |
+
+这些字段当前均为可选扩展信息，ChatService不增加内容校验。普通DomainAgent调用会在下游请求根节点携带
+`bizContext`；Relay Delegate在`user-message.metadata.bizContext`中携带，Domain Expert在
+`chat_expert.metadata.bizContext`中携带。前端必须在每个需要下游使用该信息的run中显式提交：拒答后的
+`ROUTE_SWITCH_CONFIRMATION`确认请求只使用本次`CONTINUE_INTERACTION`重新提交的metadata，不继承第一轮；
+Relay问卷续接只发送`approval-response`控制帧，不携带普通metadata。
+
+`bizContext`不得包含Cookie、Token、Authorization、密码或其他凭据，也不要放入带鉴权参数的完整页面URL。
+Relay虽然会递归过滤敏感键，但前端不能依赖该过滤代替输入治理。
 
 #### 会话标题自动总结
 
@@ -1343,7 +1387,20 @@ curl -X POST http://localhost:8080/v1/chat/runs \
   "appName": "资金助手",
   "attachments": [],
   "metadata": {
-    "clientMessageId": "msg_001"
+    "clientMessageId": "msg_001",
+    "bizContext": {
+      "contextVersion": 1,
+      "application": {
+        "appId": "com.huawei.finance.front.one",
+        "name": "财经作业平台",
+        "description": "面向财经作业人员的业务系统"
+      },
+      "page": {
+        "pageId": "country-cfo-summary",
+        "name": "事项进展总结",
+        "description": "用于生成事项总结结论"
+      }
+    }
   }
 }
 ```

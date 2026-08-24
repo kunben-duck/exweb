@@ -189,6 +189,9 @@ IntentAgent 时，服务端才使用可信文件名派生临时 query：附件-o
 该临时 query 不覆盖消息正文或 run metadata；DomainAgent 直连、active binding 续接以及最终
 Relay/DomainAgent 请求仍使用用户原文，附件-only 时 query 为 `""`。由 IntentAgent 形成的
 RouteMemory 使用临时 Intent query，前端直选路由仍使用用户原文。前端传入的附件名称不参与生成。
+当附件-only请求未传`sessionId`并由`/runs`自动创建会话时，服务端在原有附件校验中取得可信文件名，
+仅使用第一个附件并移除其最后一个扩展名，直接作为现有会话INSERT的初始AUTO标题；不会增加附件查询、
+标题UPDATE或数据库往返。预先创建的会话及后续附件-only轮次不修改标题，该轮仍不参与前三问标题提炼。
 空 message 且没有有效附件仍返回“用户消息不能为空”，`EDIT_USER` 也仍要求提供文本。
 当请求为 `runMode=NEXT` 时，该直连路径也可以从 `WAITING_USER` 会话直接发起：后端在同一个 admission
 短事务中取消会话下所有 `WAITING/RESPONDING` Interaction，再保存本轮 user 消息与 RUNNING run。旧的

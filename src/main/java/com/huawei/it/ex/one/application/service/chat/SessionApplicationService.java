@@ -130,13 +130,18 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     public ChatSession loadOrCreate(ChatCommand command) {
+        return loadOrCreate(command, null);
+    }
+
+    ChatSession loadOrCreate(ChatCommand command, String trustedInitialTitle) {
         // 聊天主编排会先把 UserContext 回填到 ChatCommand；这里只根据已识别身份维护会话归属。
         if (command.sessionId() == null || command.sessionId().isBlank()) {
+            String initialTitle = hasText(command.message()) ? command.message() : trustedInitialTitle;
             return createOwnedSession(command.tenantId(), command.userId(), new SessionCreationSpec(
-                    shortTitle(command.message()),
+                    shortTitle(initialTitle),
                     command.channel(),
                     new SessionAppTag(command.appId(), command.appName()),
-                    hasText(command.message()) ? SessionTitleSummarySource.AUTO : SessionTitleSummarySource.DEFAULT));
+                    hasText(initialTitle) ? SessionTitleSummarySource.AUTO : SessionTitleSummarySource.DEFAULT));
         }
         ChatSession session = requireOwnedSession(command.tenantId(), command.userId(), command.sessionId());
         validateChannel(session, command.channel());

@@ -1267,7 +1267,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `commandId` | string | 否 | 前端命令 ID，用于排障和幂等扩展 |
 | `sessionId` | string | 否 | 聊天会话 ID；为空时后端会创建或归一化 |
 | `conversationId` | string | 否 | 前端对话 ID，通常与 `sessionId` 一致 |
-| `message` | string | 条件必填 | `EDIT_USER` 必填；`NEXT` 必须提供非空 message 或至少一个有效附件。附件-only 的历史正文和 Runtime query 为 `""`；仅 IntentAgent query 会使用可信文件名生成 `[用户上传文档] xxx.pdf，xxx.xls`。`REGENERATE_ASSISTANT` 和 `CONTINUE_INTERACTION` 可为空 |
+| `message` | string | 条件必填 | `EDIT_USER` 必填；`NEXT` 必须提供非空 message 或至少一个有效附件。附件-only 的历史正文和 Runtime query 为 `""`；仅 IntentAgent query 会使用可信文件名生成 `[用户上传文档] xxx.pdf，xxx.xls`。未传`sessionId`自动创建会话时，可信文件名去除最后扩展名后同时作为初始标题。`REGENERATE_ASSISTANT` 和 `CONTINUE_INTERACTION` 可为空 |
 | `runMode` | string | 否 | 消息树写入模式：`NEXT`、`EDIT_USER`、`REGENERATE_ASSISTANT`、`CONTINUE_INTERACTION`，默认 `NEXT` |
 | `parentMessageId` | string | 否 | `NEXT` 模式显式父节点；为空时使用会话 `currentLeafMessageId` |
 | `editedMessageId` | string | EDIT_USER 必填 | 被编辑的未锁定 user 消息 |
@@ -1428,7 +1428,9 @@ Relay虽然会递归过滤敏感键，但前端不能依赖该过滤代替输入
 
 普通附件-only 提问。`message` 可以省略、传 `null` 或空字符串；附件校验成功后，历史 user 消息正文
 保存为 `""` 并返回标准附件。若本轮实际调用 IntentAgent，服务端使用真实文件名生成临时路由 query；
-最终 Relay/DomainAgent query 仍为 `""`。前端传入的附件名称不会被采用：
+最终 Relay/DomainAgent query 仍为 `""`。前端传入的附件名称不会被采用。若同时省略`sessionId`，服务端
+使用文档库第一个可信附件的文件名生成初始会话标题：移除其最后扩展名，并直接写入创建
+会话的原INSERT；不会额外查询或更新标题。已有会话不执行该标题替换：
 
 ```json
 {

@@ -327,6 +327,7 @@ class ChatIntentFlowTest extends ChatFlowTestSupport {
         AtomicReference<ChatCommand> routedCommand = new AtomicReference<>();
         AtomicReference<String> intentQuery = new AtomicReference<>();
         AtomicReference<AgentRuntimeRequest> runtimeRequest = new AtomicReference<>();
+        AtomicInteger attachmentResolveCalls = new AtomicInteger();
         RouteSignalApplicationService routeService = new RouteSignalApplicationService(
                 request -> UseCaseMatchResult.notMatched("disabled"),
                 intentAgent((command, memory, routeUser) -> null),
@@ -367,15 +368,23 @@ class ChatIntentFlowTest extends ChatFlowTestSupport {
                 return Mono.empty();
             }
         };
+        var defaultDocuments = documentFacade();
+        var countingDocuments = documentFacade((resolvedUser, requestedAttachments) -> {
+            attachmentResolveCalls.incrementAndGet();
+            return defaultDocuments.resolveChatAttachmentsForUser(resolvedUser, requestedAttachments);
+        });
         FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
                 sessions, messages, runs, events, routeService, domainClient, runtime,
                 new CapturingRuntimeBindingRepository(),
                 new com.huawei.it.ex.one.application.config.DomainAgentProperties(),
-                liveEventBus());
+                liveEventBus(), new InMemoryInteractionRequestRepository(), runtimeBindingCache(), null,
+                countingDocuments);
 
         StepVerifier.create(service.executeRun(user, new TraceContext("relay-trace-attachment"), new ChatCommand(
                                 "cmd-attachment-only", null, null, null, null, "web", null,
-                                List.of(new AttachmentRef("doc1", "forged-name.txt", "text/plain", 1L)),
+                                List.of(
+                                        new AttachmentRef("doc1", "forged-name.txt", "text/plain", 1L),
+                                        new AttachmentRef("doc2", "forged-second.txt", "text/plain", 1L)),
                                 Map.of(
                                         "language", "zh_CN",
                                         "sceneParam", Map.of(
@@ -389,33 +398,47 @@ class ChatIntentFlowTest extends ChatFlowTestSupport {
 
         assertThat(routedCommand.get()).isNotNull();
         assertThat(routedCommand.get().message()).isEmpty();
-        assertThat(intentQuery).hasValue("[用户上传文档] invoice.pdf");
+        assertThat(intentQuery).hasValue("[用户上传文档] invoice.pdf，invoice.pdf");
         assertThat(runtimeRequest.get()).isNotNull();
         assertThat(runtimeRequest.get().traceContext().traceId()).isEqualTo("relay-trace-attachment");
         assertThat(runtimeRequest.get().message()).isEmpty();
         assertThat(runtimeRequest.get().attachments()).extracting(AttachmentRef::name)
-                .containsExactly("invoice.pdf");
+                .containsExactly("invoice.pdf", "invoice.pdf");
         assertThat(runtimeRequest.get().metadata()).containsEntry("language", "zh_CN");
         assertThat(runtimeRequest.get().metadata().get("sceneParam")).isInstanceOfSatisfying(Map.class,
                 sceneParam -> {
                     assertThat(sceneParam).containsEntry("region", "CN");
-                    assertThat(sceneParam.get("docList")).isEqualTo(List.of(Map.of(
-                            "providerLocatorType", "DOC_ID",
-                            "docId", "provider-doc1",
-                            "docName", "invoice.pdf",
-                            "docSize", 128L)));
+                    assertThat(sceneParam.get("docList")).isEqualTo(List.of(
+                            Map.of(
+                                    "providerLocatorType", "DOC_ID",
+                                    "docId", "provider-doc1",
+                                    "docName", "invoice.pdf",
+                                    "docSize", 128L),
+                            Map.of(
+                                    "providerLocatorType", "DOC_ID",
+                                    "docId", "provider-doc2",
+                                    "docName", "invoice.pdf",
+                                    "docSize", 128L)));
                 });
+        assertThat(attachmentResolveCalls).hasValue(1);
+        assertThat(sessions.sessions.values()).singleElement()
+                .satisfies(session -> assertThat(session.title()).isEqualTo("invoice"));
         assertThat(messages.messages).filteredOn(message -> "user".equals(message.role()))
                 .singleElement()
                 .satisfies(message -> {
                     assertThat(message.content()).isEmpty();
                     assertThat(messages.attachments.stream()
-                            .filter(attachment -> message.id().equals(attachment.messageId())))
-                            .singleElement()
-                            .satisfies(attachment -> {
-                                assertThat(attachment.documentId()).isEqualTo("doc1");
-                                assertThat(attachment.name()).isEqualTo("invoice.pdf");
-                            });
+                            .filter(attachment -> message.id().equals(attachment.messageId()))
+                            .toList())
+                            .satisfiesExactly(
+                                    attachment -> {
+                                        assertThat(attachment.documentId()).isEqualTo("doc1");
+                                        assertThat(attachment.name()).isEqualTo("invoice.pdf");
+                                    },
+                                    attachment -> {
+                                        assertThat(attachment.documentId()).isEqualTo("doc2");
+                                        assertThat(attachment.name()).isEqualTo("invoice.pdf");
+                                    });
                 });
     }
 

@@ -70,6 +70,10 @@ class SessionApplicationServiceTest {
         ChatSession explicitTitle = service.createSession(user(), "人工标题", "web");
         ChatSession automaticTitle = service.loadOrCreate(new ChatCommand(
                 "command", "tenant1", "user1", null, null, "web", "第一问", List.of(), Map.of()));
+        ChatSession attachmentTitle = service.loadOrCreate(new ChatCommand(
+                        "attachment-command", "tenant1", "user1", null, null, "web", null,
+                        List.of(new AttachmentRef("doc-1", "前端名称.txt", "text/plain", 1L)), Map.of()),
+                "可信附件名称");
         ChatSession renamed = service.renameSession(user(), defaultTitle.id(), "修改后的标题");
 
         assertThat(metadata.read(defaultTitle.metadataJson()).orElseThrow().source())
@@ -78,8 +82,25 @@ class SessionApplicationServiceTest {
                 .isEqualTo(SessionTitleSummarySource.USER);
         assertThat(metadata.read(automaticTitle.metadataJson()).orElseThrow().source())
                 .isEqualTo(SessionTitleSummarySource.AUTO);
+        assertThat(attachmentTitle.title()).isEqualTo("可信附件名称");
+        assertThat(metadata.read(attachmentTitle.metadataJson()).orElseThrow().source())
+                .isEqualTo(SessionTitleSummarySource.AUTO);
         assertThat(metadata.read(renamed.metadataJson()).orElseThrow().source())
                 .isEqualTo(SessionTitleSummarySource.USER);
+    }
+
+    @Test
+    void attachmentTitleUsesOnlyFirstTrustedNameAndRemovesItsFinalExtension() {
+        assertThat(StandardRunInputPreparer.attachmentTitle(List.of(
+                new AttachmentRef("doc-1", "年度财报.final.pdf", "application/pdf", 1L),
+                new AttachmentRef("doc-2", "预算明细.xlsx", "application/vnd.ms-excel", 1L),
+                new AttachmentRef("doc-3", ".env", "text/plain", 1L),
+                new AttachmentRef("doc-4", "说明.", "text/plain", 1L))))
+                .isEqualTo("年度财报.final");
+        assertThat(StandardRunInputPreparer.attachmentTitle(List.of(
+                new AttachmentRef("doc-1", " ", "text/plain", 1L),
+                new AttachmentRef("doc-2", "不会作为标题.pdf", "application/pdf", 1L))))
+                .isNull();
     }
 
     @Test

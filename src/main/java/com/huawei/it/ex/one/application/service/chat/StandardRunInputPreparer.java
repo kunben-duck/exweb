@@ -58,16 +58,25 @@ final class StandardRunInputPreparer {
             throw new IllegalArgumentException(
                     "forceReroute=true 时不能同时指定 targetType/targetId");
         }
-        ChatSession session = sessionService.loadOrCreate(identified);
+        ResolvedChatAttachments resolved = null;
+        String trustedInitialTitle = null;
+        if (shouldResolveAttachmentsBeforeSession(identified)) {
+            resolved = resolveAttachments(request.user(), identified);
+            runStartCoordinator.ensureActive(startAttempt, "after-document-resolve");
+            trustedInitialTitle = attachmentTitle(resolved.attachments());
+        }
+        ChatSession session = sessionService.loadOrCreate(identified, trustedInitialTitle);
         runStartCoordinator.ensureActive(startAttempt, "after-session-load");
         if (interactionService != null && !directBypass) {
             interactionService.rejectIfWaiting(request.user(), session.id());
         }
         chatRunService.rejectIfActiveRunExists(request.user(), session.id());
-        ResolvedChatAttachments resolved = resolveAttachments(request.user(), identified);
+        if (resolved == null) {
+            resolved = resolveAttachments(request.user(), identified);
+            runStartCoordinator.ensureActive(startAttempt, "after-document-resolve");
+        }
         List<AttachmentRef> attachments = resolved.attachments();
         List<UploadedDocument> documents = resolved.documents();
-        runStartCoordinator.ensureActive(startAttempt, "after-document-resolve");
         String effectiveMessage = nextMessageWithAttachments(
                 identified.runMode(), identified.message(), attachments);
         ChatCommand normalized = normalizedCommand(
@@ -110,6 +119,33 @@ final class StandardRunInputPreparer {
         return requested.isEmpty()
                 ? ResolvedChatAttachments.empty()
                 : documentFacade.resolveChatAttachmentsForUser(user, requested);
+    }
+
+    private boolean shouldResolveAttachmentsBeforeSession(ChatCommand command) {
+        return command != null
+                && (command.sessionId() == null || command.sessionId().isBlank())
+                && command.runMode() == ChatRunMode.NEXT
+                && (command.message() == null || command.message().isBlank())
+                && command.attachments() != null
+                && !command.attachments().isEmpty();
+    }
+
+    static String attachmentTitle(List<AttachmentRef> attachments) {
+        if (attachments == null || attachments.isEmpty()) {
+            return null;
+        }
+        AttachmentRef first = attachments.getFirst();
+        if (first == null || first.name() == null || first.name().isBlank()) {
+            return null;
+        }
+        return removeLastExtension(first.name().trim());
+    }
+
+    private static String removeLastExtension(String name) {
+        int separator = name.lastIndexOf('.');
+        return separator > 0 && separator < name.length() - 1
+                ? name.substring(0, separator)
+                : name;
     }
 
     private ChatCommand identifiedCommand(UserContext user, ChatCommand command) {

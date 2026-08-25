@@ -67,7 +67,8 @@ public class ChatRequestTranslator {
                 request.regeneratedMessageId(), routeTrigger(request.forceReroute()),
                 request.interactionId(), request.approved(), request.scope(),
                 normalizeMetadata(request.questionnaireAnswers()), request.appId(), request.appName(),
-                toAgentMode(request.agentMode()), request.interactionAction(), request.language());
+                toAgentMode(request.agentMode()), request.interactionAction(), request.language(),
+                normalizeText(request.intentAccessName()));
     }
 
     private String routeTrigger(Boolean forceReroute) {

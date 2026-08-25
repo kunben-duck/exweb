@@ -110,7 +110,8 @@ final class InteractionContinuationCoordinator {
                 command.targetType(),
                 command.targetId(),
                 command.interactionAction(),
-                command.channel());
+                command.channel(),
+                command.intentAccessName());
     }
 
     private Flux<ChatEvent> executeClaimedContinuation(ContinuationStartContext context,
@@ -141,6 +142,7 @@ final class InteractionContinuationCoordinator {
                         startAttempt,
                         context.inputRef().get(),
                         context.command().agentMode(),
+                        context.command().intentAccessName(),
                         context.ambiguousPlanRef().get()));
             } catch (RuntimeException ex) {
                 interactionService.markWaiting(claim.request());
@@ -316,7 +318,8 @@ final class InteractionContinuationCoordinator {
                 cumulative.documents(),
                 cumulative.documentIds(),
                 command.metadata(),
-                command.agentMode());
+                command.agentMode(),
+                command.intentAccessName());
     }
 
     private IntentClarificationContextAssembler.ContinuationInput prepareIntentClarificationInput(
@@ -353,7 +356,8 @@ final class InteractionContinuationCoordinator {
                 cumulative.documents(),
                 cumulative.documentIds(),
                 command.metadata(),
-                command.agentMode());
+                command.agentMode(),
+                command.intentAccessName());
     }
 
     private LinkedHashMap<String, AttachmentRef> currentAttachmentRequests(
@@ -495,6 +499,7 @@ final class InteractionContinuationCoordinator {
             RunStartAttempt startAttempt,
             IntentClarificationContextAssembler.ContinuationInput clarificationInput,
             AgentModeProfile agentMode,
+            String intentAccessName,
             AmbiguousRouteContinuationPlan ambiguousRoutePlan
     ) {
     }

@@ -89,6 +89,29 @@ class IntentClarificationContextAssemblerTest {
     }
 
     @Test
+    void clarificationRunUsesOnlyCurrentRequestIntentAccessName() {
+        ChatCommand command = command(
+                requestPayload("原始问题", "原始问题", "请补充场景", List.of(), null),
+                "补充信息",
+                " Run-B-Entry ");
+
+        assertThat(command.intentAccessName()).isEqualTo("Run-B-Entry");
+        assertThat(command.metadata()).doesNotContainKey("intentAccessName");
+    }
+
+    @Test
+    void clarificationRunDoesNotInheritIntentAccessNameFromSourceInteraction() {
+        Map<String, Object> requestPayload = new LinkedHashMap<>(
+                requestPayload("原始问题", "原始问题", "请补充场景", List.of(), null));
+        requestPayload.put("intentAccessName", "source-run-entry");
+
+        ChatCommand command = command(Map.copyOf(requestPayload), "补充信息");
+
+        assertThat(command.intentAccessName()).isNull();
+        assertThat(command.metadata()).doesNotContainKey("intentAccessName");
+    }
+
+    @Test
     void ambiguousOtherAddsOnlyOrderedCandidateIntentSummaries() {
         Map<String, Object> requestPayload = new LinkedHashMap<>(
                 requestPayload("帮我分析基金", "帮我分析基金", "请选择要使用的技能", List.of(), null));
@@ -174,6 +197,10 @@ class IntentClarificationContextAssemblerTest {
     }
 
     private ChatCommand command(Map<String, Object> requestPayload, String answer) {
+        return command(requestPayload, answer, null);
+    }
+
+    private ChatCommand command(Map<String, Object> requestPayload, String answer, String intentAccessName) {
         ChatInteractionRequest interaction = new ChatInteractionRequest(
                 "interaction-" + answer,
                 user.tenantId(),
@@ -209,7 +236,8 @@ class IntentClarificationContextAssemblerTest {
                         List.of(),
                         List.of(),
                         Map.of(),
-                        null));
+                        null,
+                        intentAccessName));
     }
 
     private Map<String, Object> requestPayload(

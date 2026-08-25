@@ -48,11 +48,13 @@ Authorization: {dynamicToken}
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `accessName` / `intentID` / `entranceID` | string | 三选一 | 意图入口，由意图服务配置决定。当前示例使用 `accessName`。 |
+| `accessName` / `intentID` / `entranceID` | string | 三选一 | 意图入口。ChatService当前使用`accessName`：优先取`POST /v1/chat/runs.intentAccessName`，未传或空白时回退`financeex.intent.access-name`。 |
 | `query` | string | 是 | 当前待分类用户问题。澄清回答场景下，填用户对澄清问题的最新回答。 |
 | `userId` | string | 否 | 用户工号或用户标识，用于画像增强、审计或日志。 |
 | `conversationContext` | object | 否 | 多轮路由上下文。首轮可为空，但建议显式传空结构。 |
 | `options.trace` | boolean | 否 | 是否返回调试 trace。生产调用建议为 `false`。 |
+
+`intentAccessName`只控制本次Intent出站请求，不进入聊天metadata，也不透传给DomainAgent或Relay。同一run内因DomainAgent拒答再次调用Intent时继续使用本次值；Intent澄清创建的新run不会继承source run，前端未再次提交时使用服务端配置。
 
 ### 2.2 conversationContext
 

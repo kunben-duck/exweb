@@ -297,7 +297,10 @@ final class RouteSwitchContinuationCoordinator {
                 null,
                 null,
                 null,
-                request.agentMode());
+                request.agentMode(),
+                null,
+                null,
+                request.intentAccessName());
     }
 
     private Map<String, Object> responseMetadata(ChatInteractionClaimResult claim) {
@@ -394,7 +397,8 @@ final class RouteSwitchContinuationCoordinator {
             RuntimeForwardHeaders forwardHeaders,
             TraceContext traceContext,
             RunStartAttempt startAttempt,
-            AgentModeProfile agentMode
+            AgentModeProfile agentMode,
+            String intentAccessName
     ) {
     }
 

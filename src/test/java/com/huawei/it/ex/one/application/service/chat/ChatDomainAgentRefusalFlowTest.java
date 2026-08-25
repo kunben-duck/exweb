@@ -1945,4 +1945,90 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                     assertThat(message.parts()).filteredOn(part -> "ANSWER".equals(part.partType())).hasSize(1);
                 });
     }
+
+    @Test
+    void routeSwitchConfirmationUsesOnlyCurrentIntentAccessNameForAnotherRefusal() {
+        assertThat(intentAccessNameAfterConfirmedRouteSwitch("source-run-entry", "run-b-entry"))
+                .isEqualTo("run-b-entry");
+        assertThat(intentAccessNameAfterConfirmedRouteSwitch("source-run-entry", null))
+                .isNull();
+    }
+
+    private String intentAccessNameAfterConfirmedRouteSwitch(
+            String sourceRunIntentAccessName,
+            String continuationIntentAccessName) {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        InMemoryInteractionRequestRepository interactions = new InMemoryInteractionRequestRepository();
+        CapturingRuntimeBindingRepository bindings = new CapturingRuntimeBindingRepository();
+        AtomicInteger routeCalls = new AtomicInteger();
+        AtomicReference<String> secondRerouteAccessName = new AtomicReference<>();
+        RouteSignalApplicationService routeService = new RouteSignalApplicationService(
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                intentAgent((command, memory, user) -> null),
+                new com.huawei.it.ex.one.domain.routing.RoutingPolicy(0.85),
+                new RouteSignalProperties(false, false)) {
+            @Override
+            public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
+                int call = routeCalls.incrementAndGet();
+                if (call == 2) {
+                    secondRerouteAccessName.set(request.command().intentAccessName());
+                }
+                String target = call == 1 ? "agent-b" : "agent-c";
+                return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.domainAgent(
+                        target, "intent-agent", 1.0, "rerouted after refusal"))));
+            }
+        };
+        DomainAgentClient domainClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                if ("agent-a".equals(request.domainAgentId()) || "agent-b".equals(request.domainAgentId())) {
+                    return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
+                }
+                return Flux.just(MessageSnapshotEvent.of(
+                        request.runId(), request.sessionId(), "agent-c must wait for confirmation"));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions,
+                messages,
+                runs,
+                events,
+                routeService,
+                domainClient,
+                noopRuntime(),
+                bindings,
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties(),
+                liveEventBus(),
+                interactions);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                        null, null, null, null, null, "web", "原问题", List.of(),
+                        SelectedIntentContext.attach(Map.of(), "intent-a", "领域 A"),
+                        "DOMAIN_AGENT", "agent-a", ChatRunMode.NEXT, null, null, null,
+                        null, null, null, null, Map.of(), null, null, null, null, null,
+                        sourceRunIntentAccessName), RuntimeForwardHeaders.empty()))
+                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .verifyComplete();
+
+        ChatInteractionRequest waiting = awaitWaitingInteraction(interactions);
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                        null, null, null, waiting.sessionId(), null, "web", null, List.of(), Map.of(),
+                        null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
+                        null, waiting.id(), true, null, Map.of(), null, null, null, null, null,
+                        continuationIntentAccessName), RuntimeForwardHeaders.empty()))
+                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .verifyComplete();
+
+        awaitAtomicValue(routeCalls, 2, "route switch reroute decisions");
+        return secondRerouteAccessName.get();
+    }
 }

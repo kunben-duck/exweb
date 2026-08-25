@@ -61,6 +61,38 @@ import java.util.concurrent.atomic.AtomicReference;
 class ChatProtocolConvergenceTest {
 
     @Test
+    void translatorCarriesIntentAccessNameOutsideMetadata() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1", "session1", null, "分析资金情况", "NEXT", null, null, null,
+                null, null, null, null, null, List.of(), null, null, null,
+                Map.of("scene", "fund"), null, null, null, null, null, null,
+                " Finance-PC-Entry ");
+
+        ChatCommand command = translator.toCommand(request);
+
+        assertThat(command.intentAccessName()).isEqualTo("Finance-PC-Entry");
+        assertThat(command.metadata()).containsExactlyEntriesOf(Map.of("scene", "fund"));
+        assertThat(command.metadata()).doesNotContainKey("intentAccessName");
+    }
+
+    @Test
+    void runIntentAccessNameIsLimitedToOneHundredTwentyEightCharacters() {
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1", null, null, "问题", "NEXT", null, null, null,
+                null, null, null, null, null, List.of(), null, null, null,
+                Map.of(), null, null, null, null, null, null, "a".repeat(129));
+
+        var violations = jakarta.validation.Validation.buildDefaultValidatorFactory()
+                .getValidator()
+                .validate(request);
+
+        assertThat(violations)
+                .extracting(violation -> violation.getPropertyPath().toString())
+                .contains("intentAccessName");
+    }
+
+    @Test
     void translatorKeepsSessionTitleLanguageOutsideMetadata() {
         ChatRequestTranslator translator = new ChatRequestTranslator();
         CreateChatRunRequest request = new CreateChatRunRequest(

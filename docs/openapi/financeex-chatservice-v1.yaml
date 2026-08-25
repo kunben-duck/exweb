@@ -1830,6 +1830,11 @@ components:
           maxLength: 20000
           nullable: true
           description: NEXT 有有效附件时可为空；同时未传sessionId时，可信附件名去除最后扩展名后作为新会话初始标题；EDIT_USER仍要求非空
+        intentAccessName:
+          type: string
+          maxLength: 128
+          nullable: true
+          description: 可选Intent入口名称；trim后非空时覆盖本次Intent请求的服务端默认值，未传或空白时回退financeex.intent.access-name。仅进入Intent请求，不进入metadata或Runtime请求；Interaction续接不继承source run值。
         runMode:
           type: string
           maxLength: 32

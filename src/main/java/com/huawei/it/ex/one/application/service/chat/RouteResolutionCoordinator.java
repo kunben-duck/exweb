@@ -319,7 +319,10 @@ final class RouteResolutionCoordinator {
                 command.questionnaireAnswers(),
                 command.appId(),
                 command.appName(),
-                command.agentMode());
+                command.agentMode(),
+                command.interactionAction(),
+                command.language(),
+                command.intentAccessName());
     }
 
     private boolean runtimeRoute(RouteTarget route) {

@@ -84,7 +84,8 @@ final class IntentClarificationContextAssembler {
                 null, clarifyAnswer == null ? "" : clarifyAnswer,
                 input.cumulativeAttachments(), Map.copyOf(metadata),
                 null, null, ChatRunMode.NEXT, interaction.assistantMessageId(), null, null, "clarify_answer",
-                null, null, null, Map.of(), null, null, input.agentMode());
+                null, null, null, Map.of(), null, null, input.agentMode(), null, null,
+                input.intentAccessName());
     }
 
     ChatCommand selectionCommand(
@@ -116,7 +117,10 @@ final class IntentClarificationContextAssembler {
                 Map.of(),
                 null,
                 null,
-                input.agentMode());
+                input.agentMode(),
+                null,
+                null,
+                input.intentAccessName());
     }
 
     String routeMemoryQuery(ChatRunMessagePlan messagePlan, ChatInteractionRequest interaction) {
@@ -394,8 +398,22 @@ final class IntentClarificationContextAssembler {
             List<UploadedDocument> cumulativeDocuments,
             List<String> cumulativeDocumentIds,
             Map<String, Object> runtimeMetadata,
-            AgentModeProfile agentMode
+            AgentModeProfile agentMode,
+            String intentAccessName
     ) {
+        ContinuationInput(
+                String messageText,
+                String intentQuery,
+                List<AttachmentRef> currentAttachments,
+                List<AttachmentRef> cumulativeAttachments,
+                List<UploadedDocument> cumulativeDocuments,
+                List<String> cumulativeDocumentIds,
+                Map<String, Object> runtimeMetadata,
+                AgentModeProfile agentMode) {
+            this(messageText, intentQuery, currentAttachments, cumulativeAttachments, cumulativeDocuments,
+                    cumulativeDocumentIds, runtimeMetadata, agentMode, null);
+        }
+
         ContinuationInput {
             messageText = messageText == null ? "" : messageText;
             intentQuery = intentQuery == null ? "" : intentQuery;
@@ -404,6 +422,12 @@ final class IntentClarificationContextAssembler {
             cumulativeDocuments = cumulativeDocuments == null ? List.of() : List.copyOf(cumulativeDocuments);
             cumulativeDocumentIds = cumulativeDocumentIds == null ? List.of() : List.copyOf(cumulativeDocumentIds);
             runtimeMetadata = runtimeMetadata == null ? Map.of() : ChatPayloadMaps.immutableCopy(runtimeMetadata);
+            intentAccessName = intentAccessName == null || intentAccessName.isBlank()
+                    ? null
+                    : intentAccessName.trim();
+            if (intentAccessName != null && intentAccessName.length() > 128) {
+                throw new IllegalArgumentException("intentAccessName 长度不能超过 128");
+            }
         }
     }
 }

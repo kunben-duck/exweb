@@ -98,7 +98,8 @@ final class InteractionRunCoordinator {
                             request.forwardHeaders(),
                             request.traceContext(),
                             request.startAttempt(),
-                            request.agentMode()));
+                            request.agentMode(),
+                            request.intentAccessName()));
         }
         return runtimeInteractionCoordinator.execute(
                 new RuntimeInteractionContinuationCoordinator.Request(
@@ -121,6 +122,7 @@ final class InteractionRunCoordinator {
             RunStartAttempt startAttempt,
             IntentClarificationContextAssembler.ContinuationInput clarificationInput,
             AgentModeProfile agentMode,
+            String intentAccessName,
             AmbiguousRouteContinuationPlan ambiguousRoutePlan
     ) {
         Request(
@@ -133,7 +135,7 @@ final class InteractionRunCoordinator {
                 IntentClarificationContextAssembler.ContinuationInput clarificationInput,
                 AgentModeProfile agentMode) {
             this(user, claim, runId, forwardHeaders, traceContext, startAttempt,
-                    clarificationInput, agentMode, null);
+                    clarificationInput, agentMode, null, null);
         }
     }
 }

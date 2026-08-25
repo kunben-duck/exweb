@@ -111,6 +111,7 @@ final class FinanceChatOrchestrator {
                                 request.startAttempt(),
                                 request.clarificationInput(),
                                 request.agentMode(),
+                                request.intentAccessName(),
                                 request.ambiguousRoutePlan())));
     }
 

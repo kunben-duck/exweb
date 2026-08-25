@@ -1253,6 +1253,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
     "conversationId": "session_xxx",
     "message": "帮我分析一下这个费用趋势",
     "runMode": "NEXT",
+    "intentAccessName": "finance_pc_entry",
     "language": "zh_CN",
     "parentMessageId": null,
     "editedMessageId": null,
@@ -1272,6 +1273,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `sessionId` | string | 否 | 聊天会话 ID；为空时后端会创建或归一化 |
 | `conversationId` | string | 否 | 前端对话 ID，通常与 `sessionId` 一致 |
 | `message` | string | 条件必填 | `EDIT_USER` 必填；`NEXT` 必须提供非空 message 或至少一个有效附件。附件-only 的历史正文和 Runtime query 为 `""`；仅 IntentAgent query 会使用可信文件名生成 `[用户上传文档] xxx.pdf，xxx.xls`。未传`sessionId`自动创建会话时，可信文件名去除最后扩展名后同时作为初始标题。`REGENERATE_ASSISTANT` 和 `CONTINUE_INTERACTION` 可为空 |
+| `intentAccessName` | string | 否 | 本次Intent调用的入口名称，最大128字符并保留大小写。trim后非空时优先于服务端`FINANCEEX_INTENT_ACCESS_NAME`；未传或空白时使用服务端配置。该字段不进入metadata、DomainAgent或Relay请求。同一run内拒答重意图继续使用本次值；`CONTINUE_INTERACTION`创建的run-B不继承source run，需要特定入口时应再次提交。 |
 | `runMode` | string | 否 | 消息树写入模式：`NEXT`、`EDIT_USER`、`REGENERATE_ASSISTANT`、`CONTINUE_INTERACTION`，默认 `NEXT` |
 | `parentMessageId` | string | 否 | `NEXT` 模式显式父节点；为空时使用会话 `currentLeafMessageId` |
 | `editedMessageId` | string | EDIT_USER 必填 | 被编辑的未锁定 user 消息 |

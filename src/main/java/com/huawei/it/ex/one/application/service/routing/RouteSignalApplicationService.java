@@ -193,7 +193,8 @@ public class RouteSignalApplicationService {
                 command.targetType(), command.targetId(), command.runMode(), command.parentMessageId(),
                 command.editedMessageId(), command.regeneratedMessageId(), command.routeTrigger(),
                 command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers(),
-                command.appId(), command.appName(), command.agentMode());
+                command.appId(), command.appName(), command.agentMode(), command.interactionAction(),
+                command.language(), command.intentAccessName());
     }
 
     private Flux<RouteSignalFrame> toRouteSignalFrames(IntentRouteRequest request, MemoryContext intentMemory,

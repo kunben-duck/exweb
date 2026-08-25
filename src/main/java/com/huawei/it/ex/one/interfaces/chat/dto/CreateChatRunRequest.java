@@ -38,6 +38,7 @@ import java.util.Map;
  * @param interactionAction Interaction 专用动作；当前仅 AMBIGUOUS_ROUTE 支持 AUTO_SELECT。
  * @param language 会话标题总结语言；为空时使用服务端默认语言，不进入下游请求。
  * @param channel 会话来源渠道；仅在自动创建会话或校验已有会话时使用，为空时新会话默认 web。
+ * @param intentAccessName 可选Intent入口名称；空值使用服务端默认配置。
  */
 public record CreateChatRunRequest(
         @Size(max = 128, message = "commandId 长度不能超过 128")
@@ -86,8 +87,24 @@ public record CreateChatRunRequest(
         @Size(max = 32, message = "language 长度不能超过 32")
         String language,
         @Size(max = 64, message = "channel 长度不能超过 64")
-        String channel
+        String channel,
+        @Size(max = 128, message = "intentAccessName 长度不能超过 128")
+        String intentAccessName
 ) {
+    /** 兼容尚未携带Intent入口名称的完整请求构造器。 */
+    public CreateChatRunRequest(
+            String commandId, String sessionId, String conversationId, String message, String runMode,
+            String parentMessageId, String editedMessageId, String regeneratedMessageId, Boolean forceReroute,
+            String interactionId, Boolean approved, String scope, Map<String, Object> questionnaireAnswers,
+            List<ChatAttachmentDto> attachments, String targetType, String targetId,
+            ChatSelectedIntentDto selectedIntent, Map<String, Object> metadata, String appId, String appName,
+            ChatAgentModeDto agentMode, String interactionAction, String language, String channel) {
+        this(commandId, sessionId, conversationId, message, runMode, parentMessageId, editedMessageId,
+                regeneratedMessageId, forceReroute, interactionId, approved, scope, questionnaireAnswers,
+                attachments, targetType, targetId, selectedIntent, metadata, appId, appName, agentMode,
+                interactionAction, language, channel, null);
+    }
+
     /** 兼容尚未携带会话渠道的完整请求构造器。 */
     public CreateChatRunRequest(
             String commandId, String sessionId, String conversationId, String message, String runMode,
@@ -99,7 +116,7 @@ public record CreateChatRunRequest(
         this(commandId, sessionId, conversationId, message, runMode, parentMessageId, editedMessageId,
                 regeneratedMessageId, forceReroute, interactionId, approved, scope, questionnaireAnswers,
                 attachments, targetType, targetId, selectedIntent, metadata, appId, appName, agentMode,
-                interactionAction, language, null);
+                interactionAction, language, null, null);
     }
 
     /** 兼容尚未携带标题总结语言的完整请求构造器。 */
@@ -113,7 +130,7 @@ public record CreateChatRunRequest(
         this(commandId, sessionId, conversationId, message, runMode, parentMessageId, editedMessageId,
                 regeneratedMessageId, forceReroute, interactionId, approved, scope, questionnaireAnswers,
                 attachments, targetType, targetId, selectedIntent, metadata, appId, appName, agentMode,
-                interactionAction, null);
+                interactionAction, null, null, null);
     }
 
     /** 兼容尚未携带 Interaction 动作的完整请求构造器。 */
@@ -126,7 +143,8 @@ public record CreateChatRunRequest(
             ChatAgentModeDto agentMode) {
         this(commandId, sessionId, conversationId, message, runMode, parentMessageId, editedMessageId,
                 regeneratedMessageId, forceReroute, interactionId, approved, scope, questionnaireAnswers,
-                attachments, targetType, targetId, selectedIntent, metadata, appId, appName, agentMode, null, null);
+                attachments, targetType, targetId, selectedIntent, metadata, appId, appName, agentMode,
+                null, null, null, null);
     }
 
     /** 兼容尚未携带 Agent 模式的完整请求构造器。 */
@@ -138,7 +156,8 @@ public record CreateChatRunRequest(
             ChatSelectedIntentDto selectedIntent, Map<String, Object> metadata, String appId, String appName) {
         this(commandId, sessionId, conversationId, message, runMode, parentMessageId, editedMessageId,
                 regeneratedMessageId, forceReroute, interactionId, approved, scope, questionnaireAnswers,
-                attachments, targetType, targetId, selectedIntent, metadata, appId, appName, null, null, null);
+                attachments, targetType, targetId, selectedIntent, metadata, appId, appName,
+                null, null, null, null, null);
     }
 
     /** 兼容尚未携带 App Tag 的完整请求构造器。 */
@@ -150,7 +169,8 @@ public record CreateChatRunRequest(
             ChatSelectedIntentDto selectedIntent, Map<String, Object> metadata) {
         this(commandId, sessionId, conversationId, message, runMode, parentMessageId, editedMessageId,
                 regeneratedMessageId, forceReroute, interactionId, approved, scope, questionnaireAnswers,
-                attachments, targetType, targetId, selectedIntent, metadata, null, null, null, null, null);
+                attachments, targetType, targetId, selectedIntent, metadata,
+                null, null, null, null, null, null);
     }
 
     /**
@@ -162,7 +182,7 @@ public record CreateChatRunRequest(
     public CreateChatRunRequest(String commandId, String sessionId, String conversationId, String message,
                                 List<ChatAttachmentDto> attachments, Map<String, ?> metadata) {
         this(commandId, sessionId, conversationId, message, null, null, null, null, null, null, null, null, null,
-                attachments, null, null, null, copyMetadata(metadata), null, null, null, null, null, null);
+                attachments, null, null, null, copyMetadata(metadata), null, null, null, null, null, null, null);
     }
 
     private static Map<String, Object> copyMetadata(Map<String, ?> metadata) {

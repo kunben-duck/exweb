@@ -32,7 +32,7 @@ public class IntentServiceRequestMapper {
      */
     public IntentRecognizeRequest toWireRequest(ChatCommand command, MemoryContext memory, UserContext user) {
         return new IntentRecognizeRequest(
-                normalizedAccessName(),
+                normalizedAccessName(command),
                 command == null ? "" : blankToDefault(command.message(), ""),
                 intentUserId(user),
                 conversationContext(memory),
@@ -40,7 +40,10 @@ public class IntentServiceRequestMapper {
         );
     }
 
-    private String normalizedAccessName() {
+    private String normalizedAccessName(ChatCommand command) {
+        if (command != null && command.intentAccessName() != null && !command.intentAccessName().isBlank()) {
+            return command.intentAccessName().trim();
+        }
         String accessName = properties.getAccessName();
         return accessName == null ? "" : accessName.trim();
     }

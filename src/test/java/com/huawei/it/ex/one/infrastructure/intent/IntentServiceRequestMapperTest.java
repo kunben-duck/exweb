@@ -18,6 +18,32 @@ import java.util.Map;
 
 class IntentServiceRequestMapperTest {
     @Test
+    void frontendIntentAccessNameOverridesConfiguredDefault() {
+        IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
+        properties.setAccessName("configured-entry");
+        IntentServiceRequestMapper mapper = new IntentServiceRequestMapper(properties);
+
+        IntentRecognizeRequest request = mapper.toWireRequest(
+                command(" Frontend-Entry "), MemoryContext.empty(),
+                new UserContext("tenant1", "user1", "User One"));
+
+        assertThat(request.accessName()).isEqualTo("Frontend-Entry");
+    }
+
+    @Test
+    void blankFrontendIntentAccessNameFallsBackToConfiguredDefault() {
+        IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
+        properties.setAccessName(" configured-entry ");
+        IntentServiceRequestMapper mapper = new IntentServiceRequestMapper(properties);
+
+        IntentRecognizeRequest request = mapper.toWireRequest(
+                command("   "), MemoryContext.empty(),
+                new UserContext("tenant1", "user1", "User One"));
+
+        assertThat(request.accessName()).isEqualTo("configured-entry");
+    }
+
+    @Test
     void agentModeNeverEntersIntentWireRequest() {
         ChatCommand command = new ChatCommand(
                 "cmd1", "tenant1", "user1", "session1", null, "web", "分析资金情况",
@@ -31,5 +57,13 @@ class IntentServiceRequestMapperTest {
 
         assertThat(request.query()).isEqualTo("分析资金情况");
         assertThat(new ObjectMapper().valueToTree(request).has("agentMode")).isFalse();
+    }
+
+    private ChatCommand command(String intentAccessName) {
+        return new ChatCommand(
+                "cmd1", "tenant1", "user1", "session1", null, "web", "分析资金情况",
+                List.of(), Map.of("scene", "fund"), null, null, ChatRunMode.NEXT,
+                null, null, null, null, null, null, null, Map.of(), null, null,
+                null, null, null, intentAccessName);
     }
 }

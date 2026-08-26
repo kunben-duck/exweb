@@ -3,12 +3,20 @@ package com.huawei.it.ex.one.infrastructure.session;
 import com.huawei.it.ex.one.application.integration.conversation.SessionAppCategory;
 import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
+import com.huawei.it.ex.one.application.integration.conversation.SessionSearchTimeoutException;
+import com.huawei.it.ex.one.common.error.SystemErrorCode;
+import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
+import com.huawei.it.ex.one.common.logging.AppLogger;
+import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.TransactionTimedOutException;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,11 +28,15 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 
+import java.sql.SQLException;
+import java.sql.SQLTimeoutException;
+
 /**
  * 聊天会话数据库事实源实现。
  */
 @Repository
 public class MyBatisSessionRepository implements SessionRepository {
+    private static final AppLogger log = AppLoggerFactory.getLogger(MyBatisSessionRepository.class);
     private static final String CURSOR_SEPARATOR = "|";
     private static final String CURSOR_VERSION_V2 = "v2";
     private static final String CURSOR_VERSION_V3 = "v3";
@@ -36,9 +48,17 @@ public class MyBatisSessionRepository implements SessionRepository {
     private static final String APP_SCOPE_FILTER_MISMATCH = "cursor 与当前 appScope 过滤条件不一致";
 
     private final ChatSessionMapper mapper;
+    private final SessionPageKeywordSearchExecutor keywordSearchExecutor;
 
     public MyBatisSessionRepository(ChatSessionMapper mapper) {
+        this(mapper, null);
+    }
+
+    @Autowired
+    public MyBatisSessionRepository(
+            ChatSessionMapper mapper, SessionPageKeywordSearchExecutor keywordSearchExecutor) {
         this.mapper = mapper;
+        this.keywordSearchExecutor = keywordSearchExecutor;
     }
 
     @Override
@@ -137,27 +157,75 @@ public class MyBatisSessionRepository implements SessionRepository {
     public ChatSessionNumberPage pageNumberByTenantIdAndUserId(
             String tenantId, String userId, SessionListFilter filter, int curPage, int pageSize) {
         String appId = filter == null ? null : filter.appId();
-        String title = filter == null ? null : filter.title();
+        String keyword = filter == null ? null : filter.keyword();
         String channel = filter == null ? null : filter.channel();
         int normalizedPage = Math.max(1, curPage);
         int normalizedSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 200));
         String normalizedAppId = normalize(appId);
-        String normalizedTitle = normalizeTitle(title);
+        String normalizedKeyword = normalizeTitle(keyword);
         String normalizedChannel = normalize(channel);
         boolean mainSiteOnly = filter != null && filter.mainSiteOnly();
-        String titlePattern = titlePattern(normalizedTitle);
-        long totalRows = mapper.countPageByOwner(
-                tenantId, userId, normalizedAppId, titlePattern, normalizedChannel, mainSiteOnly);
-        long totalPages = totalRows == 0 ? 0 : (totalRows + normalizedSize - 1) / normalizedSize;
+        String keywordPattern = titlePattern(normalizedKeyword);
         long offset = (long) (normalizedPage - 1) * normalizedSize;
-        List<ChatSession> items = totalRows == 0 || offset >= totalRows
-                ? List.of()
-                : mapper.findNumberPageByOwner(
-                        tenantId, userId, normalizedAppId, titlePattern, normalizedChannel,
-                        mainSiteOnly, normalizedSize, offset).stream()
+        SessionPageKeywordSearchExecutor.Query query = new SessionPageKeywordSearchExecutor.Query(
+                tenantId, userId, normalizedAppId, keywordPattern, normalizedChannel,
+                mainSiteOnly, normalizedSize, offset);
+        SessionPageKeywordSearchExecutor.Result result = keywordPattern == null || keywordSearchExecutor == null
+                ? queryNumberPage(query)
+                : searchNumberPage(query);
+        long totalPages = result.totalRows() == 0
+                ? 0
+                : (result.totalRows() + normalizedSize - 1) / normalizedSize;
+        List<ChatSession> items = result.rows().stream()
                 .map(this::toDomain)
                 .toList();
-        return new ChatSessionNumberPage(items, normalizedPage, normalizedSize, totalRows, totalPages);
+        return new ChatSessionNumberPage(
+                items, normalizedPage, normalizedSize, result.totalRows(), totalPages);
+    }
+
+    private SessionPageKeywordSearchExecutor.Result queryNumberPage(
+            SessionPageKeywordSearchExecutor.Query query) {
+        long totalRows = mapper.countPageByOwner(
+                query.tenantId(), query.userId(), query.appId(), query.keywordPattern(),
+                query.channel(), query.mainSiteOnly());
+        List<ChatSessionRow> rows = totalRows == 0 || query.offset() >= totalRows
+                ? List.of()
+                : mapper.findNumberPageByOwner(
+                        query.tenantId(), query.userId(), query.appId(), query.keywordPattern(),
+                        query.channel(), query.mainSiteOnly(), query.limit(), query.offset());
+        return new SessionPageKeywordSearchExecutor.Result(totalRows, rows);
+    }
+
+    private SessionPageKeywordSearchExecutor.Result searchNumberPage(
+            SessionPageKeywordSearchExecutor.Query query) {
+        try {
+            return keywordSearchExecutor.search(query);
+        } catch (RuntimeException ex) {
+            if (!isQueryTimeout(ex)) {
+                throw ex;
+            }
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_QUERY_TIMEOUT,
+                            "Session keyword search database query timed out")
+                    .operation("chat-session.page.keyword-search")
+                    .attribute("failureType", ex.getClass().getName())
+                    .build());
+            throw new SessionSearchTimeoutException("会话关键字搜索超时，请稍后重试", ex);
+        }
+    }
+
+    private boolean isQueryTimeout(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof QueryTimeoutException
+                    || current instanceof TransactionTimedOutException
+                    || current instanceof SQLTimeoutException
+                    || current instanceof SQLException sqlException
+                    && "57014".equals(sqlException.getSQLState())) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     @Override

@@ -17,10 +17,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * ChatRun 的数据库事实源实现。
@@ -269,12 +269,19 @@ public class MyBatisChatRunRepository implements ChatRunRepository {
     }
 
     @Override
-    public Set<String> findActiveSessionIds(
+    @Transactional(
+            readOnly = true,
+            timeoutString = "${financeex.session-search.database-query-timeout-seconds:2}"
+    )
+    public Map<String, ChatRunStatus> findLastRunStatuses(
             String tenantId, String userId, Collection<String> sessionIds) {
         if (sessionIds == null || sessionIds.isEmpty()) {
-            return Set.of();
+            return Map.of();
         }
-        return Set.copyOf(mapper.findActiveSessionIds(tenantId, userId, sessionIds));
+        Map<String, ChatRunStatus> statuses = new LinkedHashMap<>();
+        mapper.findLastRunStatuses(tenantId, userId, sessionIds).forEach(row ->
+                statuses.put(row.getSessionId(), ChatRunStatus.valueOf(row.getStatus())));
+        return Map.copyOf(statuses);
     }
 
     @Override

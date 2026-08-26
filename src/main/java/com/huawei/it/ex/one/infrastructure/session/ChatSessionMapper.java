@@ -98,7 +98,7 @@ public interface ChatSessionMapper {
      * @param tenantId 租户标识。
      * @param userId 用户标识。
      * @param appId 可选应用标识过滤条件。
-     * @param titlePattern 可选、已转义的标题包含匹配参数。
+     * @param keywordPattern 可选、已转义的标题和消息正文包含匹配参数。
      * @param channel 可选会话来源渠道精确过滤条件。
      * @param mainSiteOnly 是否仅查询 app_id 为 NULL 的主站会话。
      * @return 会话总数。
@@ -106,7 +106,7 @@ public interface ChatSessionMapper {
     long countPageByOwner(@Param("tenantId") String tenantId,
                           @Param("userId") String userId,
                           @Param("appId") String appId,
-                          @Param("titlePattern") String titlePattern,
+                          @Param("keywordPattern") String keywordPattern,
                           @Param("channel") String channel,
                           @Param("mainSiteOnly") boolean mainSiteOnly);
 
@@ -116,7 +116,7 @@ public interface ChatSessionMapper {
      * @param tenantId 租户标识。
      * @param userId 用户标识。
      * @param appId 可选应用标识过滤条件。
-     * @param titlePattern 可选、已转义的标题包含匹配参数。
+     * @param keywordPattern 可选、已转义的标题和消息正文包含匹配参数。
      * @param channel 可选会话来源渠道精确过滤条件。
      * @param mainSiteOnly 是否仅查询 app_id 为 NULL 的主站会话。
      * @param limit 本页最大返回数量。
@@ -126,7 +126,7 @@ public interface ChatSessionMapper {
     List<ChatSessionRow> findNumberPageByOwner(@Param("tenantId") String tenantId,
                                                @Param("userId") String userId,
                                                @Param("appId") String appId,
-                                               @Param("titlePattern") String titlePattern,
+                                               @Param("keywordPattern") String keywordPattern,
                                                @Param("channel") String channel,
                                                @Param("mainSiteOnly") boolean mainSiteOnly,
                                                @Param("limit") int limit,

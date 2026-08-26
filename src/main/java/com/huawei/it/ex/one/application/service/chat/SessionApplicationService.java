@@ -247,7 +247,8 @@ public class SessionApplicationService implements ChatSessionFacade {
                         normalizeTag(effectiveFilter.appId()),
                         normalizeTag(effectiveFilter.title()),
                         normalizeTag(effectiveFilter.channel()),
-                        effectiveFilter.appScope()),
+                        effectiveFilter.appScope(),
+                        null),
                 cursor,
                 limit);
     }
@@ -264,8 +265,9 @@ public class SessionApplicationService implements ChatSessionFacade {
 
     @Override
     public ChatSessionNumberPage listSessionsByPage(
-            UserContext user, String appId, String title, int curPage, int pageSize) {
-        return listSessionsByPage(user, new SessionListFilter(appId, title, null), curPage, pageSize);
+            UserContext user, String appId, String keyword, int curPage, int pageSize) {
+        return listSessionsByPage(
+                user, SessionListFilter.forPage(appId, keyword, null, null), curPage, pageSize);
     }
 
     @Override
@@ -277,11 +279,27 @@ public class SessionApplicationService implements ChatSessionFacade {
                 user.tenantId(), user.ownerUserId(),
                 new SessionListFilter(
                         normalizeTag(effectiveFilter.appId()),
-                        normalizeTag(effectiveFilter.title()),
+                        null,
                         normalizeTag(effectiveFilter.channel()),
-                        effectiveFilter.appScope()),
+                        effectiveFilter.appScope(),
+                        normalizeSearchKeyword(effectiveFilter.keyword())),
                 curPage,
                 pageSize);
+    }
+
+    private String normalizeSearchKeyword(String keyword) {
+        String normalized = normalizeTag(keyword);
+        if (normalized == null) {
+            return null;
+        }
+        int codePoints = normalized.codePointCount(0, normalized.length());
+        if (codePoints < 2) {
+            throw new IllegalArgumentException("keyword 至少需要 2 个字符");
+        }
+        if (codePoints > 128) {
+            throw new IllegalArgumentException("keyword 长度不能超过 128 个字符");
+        }
+        return normalized;
     }
 
     @Override

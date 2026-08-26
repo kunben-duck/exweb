@@ -151,7 +151,7 @@ public interface SessionRepository {
                 tenantId, userId, new SessionListFilter(appId, null), curPage, pageSize);
     }
 
-    /** 按可选应用标识和标题关键词执行页码分页查询。 */
+    /** 按可选应用标识和统一关键词执行页码分页查询。 */
     default ChatSessionNumberPage pageNumberByTenantIdAndUserId(
             String tenantId, String userId, SessionListFilter filter, int curPage, int pageSize) {
         return pageNumberFromSessions(
@@ -169,14 +169,15 @@ public interface SessionRepository {
         int normalizedSize = Math.max(1, Math.min(pageSize <= 0 ? 20 : pageSize, 200));
         SessionListFilter effectiveFilter = filter == null ? SessionListFilter.empty() : filter;
         String normalizedAppId = normalizeFilter(effectiveFilter.appId());
-        String normalizedTitle = normalizeTitleFilter(effectiveFilter.title());
+        // 默认替代仓储没有消息事实源，只能保持会话标题的关键字匹配；生产实现会同时搜索问答正文。
+        String normalizedKeyword = normalizeTitleFilter(effectiveFilter.keyword());
         String normalizedChannel = normalizeFilter(effectiveFilter.channel());
         boolean mainSiteOnly = effectiveFilter.mainSiteOnly();
         List<ChatSession> all = sessions.stream()
                 .filter(session -> !"DELETED".equals(session.status()))
                 .filter(session -> !mainSiteOnly || session.appId() == null)
                 .filter(session -> normalizedAppId == null || normalizedAppId.equals(session.appId()))
-                .filter(session -> titleContains(session.title(), normalizedTitle))
+                .filter(session -> titleContains(session.title(), normalizedKeyword))
                 .filter(session -> normalizedChannel == null || normalizedChannel.equals(session.channel()))
                 .sorted(Comparator.comparing(ChatSession::updatedAt).reversed()
                         .thenComparing(ChatSession::id, Comparator.reverseOrder()))

@@ -867,10 +867,11 @@ GET /v1/documents/{documentId}/status
 - active path 深度：20、100、500、2000。
 - assistant parts：10、200、1000、3000。
 - `appId`：未传、命中高频分组、命中低频分组。
+- 页码`keyword`：未传、标题命中、user正文命中、assistant正文命中、无命中；搜索输入按约300毫秒防抖。
 - 缓存：应用重启后的冷状态、预热后的热状态。
 
 `/messages` 当前还会装配版本信息并读取消息树节点；不能只用 20 条消息的会话测试该接口。
-`/sessions/page` 会执行总数统计和页内首条 assistant 摘要查询；必须同时测试首页和深页。
+`/sessions/page` 会执行总数统计和页内首条 assistant 摘要查询；keyword非空时还会扫描归属范围内的持久化问答正文，必须同时测试首页、深页、命中和无命中，并验证2秒超时不会退化为全量查询。
 
 ### 17.3 单接口 QPS 阶梯
 

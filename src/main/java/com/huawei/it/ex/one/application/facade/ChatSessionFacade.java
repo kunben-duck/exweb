@@ -122,11 +122,11 @@ public interface ChatSessionFacade {
         return listSessionsByPage(user, curPage, pageSize);
     }
 
-    /** 按可选 appId 和标题关键词执行页码分页查询。 */
+    /** 按可选 appId 和统一关键词执行页码分页查询。 */
     default ChatSessionNumberPage listSessionsByPage(
-            UserContext user, String appId, String title, int curPage, int pageSize) {
-        if (title != null && !title.isBlank()) {
-            throw new UnsupportedOperationException("当前会话实现不支持 title 过滤");
+            UserContext user, String appId, String keyword, int curPage, int pageSize) {
+        if (keyword != null && !keyword.isBlank()) {
+            throw new UnsupportedOperationException("当前会话实现不支持 keyword 过滤");
         }
         return listSessionsByPage(user, appId, curPage, pageSize);
     }
@@ -141,7 +141,7 @@ public interface ChatSessionFacade {
         if (effectiveFilter.channel() != null && !effectiveFilter.channel().isBlank()) {
             throw new UnsupportedOperationException("当前会话实现不支持 channel 过滤");
         }
-        return listSessionsByPage(user, effectiveFilter.appId(), effectiveFilter.title(), curPage, pageSize);
+        return listSessionsByPage(user, effectiveFilter.appId(), effectiveFilter.keyword(), curPage, pageSize);
     }
 
     /**

@@ -202,6 +202,8 @@ CREATE TABLE IF NOT EXISTS fin_ex_chat_run_t (
 
 CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_run_owner_session_status_updated_at
     ON fin_ex_chat_run_t(tenant_id, user_id, session_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_run_owner_session_created_id_status
+    ON fin_ex_chat_run_t(tenant_id, user_id, session_id, created_at DESC, id DESC, status);
 CREATE UNIQUE INDEX IF NOT EXISTS uk_fin_ex_chat_run_active_session
     ON fin_ex_chat_run_t(tenant_id, user_id, session_id)
     WHERE status IN ('RUNNING', 'CANCELLING');

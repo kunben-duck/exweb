@@ -25,6 +25,12 @@
         <result column="updated_at" property="updatedAt"/>
     </resultMap>
 
+    <resultMap id="chatSessionLastRunStatusResultMap"
+               type="com.huawei.it.ex.one.infrastructure.persistence.ChatSessionLastRunStatusRow">
+        <result column="session_id" property="sessionId"/>
+        <result column="status" property="status"/>
+    </resultMap>
+
     <sql id="chatRunColumns">
         id, tenant_id, user_id, session_id, status, route_type, agent_code, runtime_provider,
         runtime_session_id, run_mode, parent_message_id, user_message_id, assistant_message_id,
@@ -430,19 +436,27 @@
     </select>
 
     <!--
-      按租户、用户和当前页会话集合批量查询存在 RUNNING/CANCELLING run 的会话 ID。
+      按租户、用户和当前页会话集合批量查询每个会话最后创建的 run 状态。
       入参: tenantId/userId 为归属边界，sessionIds 为当前页会话 ID 集合；调用方保证集合非空。
     -->
-    <select id="findActiveSessionIds" resultType="string">
-        SELECT session_id
-        FROM fin_ex_chat_run_t
-        WHERE tenant_id = #{tenantId}
-          AND user_id = #{userId}
-          AND session_id IN
-          <foreach collection="sessionIds" item="sessionId" open="(" separator="," close=")">
-              #{sessionId}
-          </foreach>
-          AND status IN ('RUNNING', 'CANCELLING')
+    <select id="findLastRunStatuses" resultMap="chatSessionLastRunStatusResultMap">
+        SELECT session_id, status
+        FROM (
+            SELECT session_id,
+                   status,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY session_id
+                       ORDER BY created_at DESC, id DESC
+                   ) AS row_num
+            FROM fin_ex_chat_run_t
+            WHERE tenant_id = #{tenantId}
+              AND user_id = #{userId}
+              AND session_id IN
+              <foreach collection="sessionIds" item="sessionId" open="(" separator="," close=")">
+                  #{sessionId}
+              </foreach>
+        ) latest
+        WHERE row_num = 1
     </select>
 
     <!--

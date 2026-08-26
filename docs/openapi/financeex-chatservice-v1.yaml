@@ -692,11 +692,13 @@ paths:
       summary: 页码分页查询会话
       description: >-
         appScope=MAIN_SITE 仅查询 appId 为 null 的主站会话且不能同时指定 appId；省略 appScope 和 appId 时查询全量。
-        appId、title、channel 与范围条件同时存在时取交集。
+        keyword 对会话标题、已持久化user问题和assistant回答执行不区分大小写的连续子串搜索，
+        与appId、appScope、channel取交集；不搜索Parts、附件、metadata或no-store未持久化内容。
+        旧title参数不再受支持，非空时返回400。
       parameters:
         - $ref: '#/components/parameters/AppIdQuery'
         - $ref: '#/components/parameters/AppScopeQuery'
-        - $ref: '#/components/parameters/SessionTitleQuery'
+        - $ref: '#/components/parameters/SessionKeywordQuery'
         - $ref: '#/components/parameters/SessionChannelQuery'
         - name: curPage
           in: query
@@ -726,6 +728,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/SessionSearchTimeout'
 
   /v1/chat/sessions/apps:
     get:
@@ -1494,6 +1498,16 @@ components:
         type: string
         maxLength: 256
         example: 利润
+    SessionKeywordQuery:
+      name: keyword
+      in: query
+      required: false
+      description: 标题、已持久化user问题和assistant回答的统一包含搜索；trim后为空表示不筛选，%/_/!按普通字符处理
+      schema:
+        type: string
+        minLength: 2
+        maxLength: 128
+        example: 资产负债率
     SessionChannelQuery:
       name: channel
       in: query
@@ -1541,6 +1555,19 @@ components:
             error: Unauthorized
             code: AUTH_CONTEXT_MISSING
             message: 用户身份上下文缺失
+    SessionSearchTimeout:
+      description: 会话关键字搜索超过数据库查询预算
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiErrorResponse'
+          example:
+            timestamp: '2026-08-26T10:00:00Z'
+            path: /v1/chat/sessions/page
+            status: 503
+            error: Service Unavailable
+            code: SESSION_SEARCH_TIMEOUT
+            message: 会话关键字搜索超时，请稍后重试
     Conflict:
       description: |
         资源状态冲突。常见 code 包括 ACTIVE_RUN_EXISTS、INTERACTION_ALREADY_HANDLED、
@@ -2784,10 +2811,12 @@ components:
         status:
           type: string
           example: ACTIVE
-        running:
-          type: boolean
+        lastRunStatus:
+          type: string
           nullable: true
-          description: 是否存在RUNNING或CANCELLING run；仅游标会话列表保证装配，其他接口或批量查询失败时为null。
+          enum: [RUNNING, CANCELLING, COMPLETED, WAITING_USER, FAILED, CANCELLED]
+          example: WAITING_USER
+          description: 最后创建的业务Run状态；两个会话列表接口保证装配，无Run、其他接口或批量查询失败时为null。
         channel:
           type: string
           nullable: true

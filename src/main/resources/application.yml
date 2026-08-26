@@ -93,6 +93,9 @@ financeex:
     excluded-app-ids: ${FINANCEEX_SESSION_TITLE_EXCLUDED_APP_IDS:}
     default-language: ${FINANCEEX_SESSION_TITLE_DEFAULT_LANGUAGE:zh_CN}
     max-title-length: ${FINANCEEX_SESSION_TITLE_MAX_LENGTH:50}
+  session-search:
+    # 约束页码关键字搜索事务及会话列表最后Run状态批量读取；后者超时后仅省略状态字段。
+    database-query-timeout-seconds: ${FINANCEEX_SESSION_SEARCH_DATABASE_QUERY_TIMEOUT_SECONDS:2}
   domain-agent-skill-config:
     # 启用 assistant 留存控制且使用默认 Provider 时，接口地址和路径必须显式配置。
     base-url: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_BASE_URL:}

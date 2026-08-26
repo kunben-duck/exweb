@@ -292,7 +292,7 @@ class SessionApplicationServiceTest {
                 .extracting(ChatSession::id)
                 .containsExactly("mobile-fund");
         ChatSessionNumberPage page = service.listSessionsByPage(
-                user(), new SessionListFilter("fund-app", "利润", "mobile"), 1, 20);
+                user(), SessionListFilter.forPage("fund-app", "利润", "mobile", null), 1, 20);
         assertThat(page.items()).extracting(ChatSession::id).containsExactly("mobile-fund");
         assertThat(page.totalRows()).isEqualTo(1);
         assertThat(service.listSessions(user(), SessionListFilter.empty(), null, 20).items())
@@ -305,6 +305,23 @@ class SessionApplicationServiceTest {
         assertThat(service.listSessions(
                 user(), new SessionListFilter(null, null, "Mobile"), null, 20).items())
                 .isEmpty();
+    }
+
+    @Test
+    void numberPageKeywordUsesUnicodeCodePointLimits() {
+        SessionApplicationService service = service(
+                new InMemorySessionRepository(), new InMemoryMessageRepository());
+
+        assertThatThrownBy(() -> service.listSessionsByPage(user(), null, "中", 1, 20))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("至少需要 2 个字符");
+        assertThatCode(() -> service.listSessionsByPage(user(), null, "😀".repeat(128), 1, 20))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> service.listSessionsByPage(user(), null, "😀".repeat(129), 1, 20))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("不能超过 128 个字符");
+        assertThatCode(() -> service.listSessionsByPage(user(), null, "   ", 1, 20))
+                .doesNotThrowAnyException();
     }
 
     @Test

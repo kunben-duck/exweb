@@ -55,9 +55,9 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 class ChatProtocolConvergenceTest {
 
     @Test
@@ -499,7 +499,7 @@ class ChatProtocolConvergenceTest {
                 .map(component -> component.getName())
                 .toList();
 
-        assertThat(components).containsSubsequence("status", "running", "channel");
+        assertThat(components).containsSubsequence("status", "lastRunStatus", "channel");
         assertThat(components).containsSubsequence(
                 "firstAssistantAnswer", "firstAssistantMetadataJson", "createdAt");
     }
@@ -522,8 +522,8 @@ class ChatProtocolConvergenceTest {
                 .thenReturn(Map.of(session.id(), summary));
         when(facade.getSession(user, session.id())).thenReturn(session);
         ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
-        when(runService.findActiveSessionIds(user, List.of(session.id())))
-                .thenReturn(Set.of(session.id()));
+        when(runService.findLastRunStatuses(user, List.of(session.id())))
+                .thenReturn(Map.of(session.id(), ChatRunStatus.WAITING_USER));
         ChatSessionController controller = new ChatSessionController(
                 facade,
                 mock(ChatFeedbackApplicationService.class),
@@ -533,27 +533,94 @@ class ChatProtocolConvergenceTest {
                 new ChatMessageVersionViewAssembler());
 
         var cursorPage = controller.list(null, null, null, null, null, 20).block();
-        var numberPage = controller.listByPage(null, null, null, null, 1, 20).block();
+        var numberPage = controller.listByPage(null, null, null, null, null, 1, 20).block();
         ChatSessionDto detail = controller.get(session.id()).block();
 
         assertThat(cursorPage).isNotNull();
         assertThat(cursorPage.items().getFirst().firstAssistantAnswer()).isEqualTo("第一条回答");
         assertThat(cursorPage.items().getFirst().firstAssistantMetadataJson()).isEqualTo("not-json");
-        assertThat(cursorPage.items().getFirst().running()).isTrue();
+        assertThat(cursorPage.items().getFirst().lastRunStatus()).isEqualTo("WAITING_USER");
         assertThat(numberPage).isNotNull();
         assertThat(numberPage.items().getFirst().firstAssistantAnswer()).isEqualTo("第一条回答");
         assertThat(numberPage.items().getFirst().firstAssistantMetadataJson()).isEqualTo("not-json");
-        assertThat(numberPage.items().getFirst().running()).isNull();
+        assertThat(numberPage.items().getFirst().lastRunStatus()).isEqualTo("WAITING_USER");
         assertThat(detail).isNotNull();
         assertThat(detail.firstAssistantAnswer()).isNull();
         assertThat(detail.firstAssistantMetadataJson()).isNull();
-        assertThat(detail.running()).isNull();
+        assertThat(detail.lastRunStatus()).isNull();
         verify(facade, times(2)).findFirstAssistantSummaries(user, List.of(session));
-        verify(runService).findActiveSessionIds(user, List.of(session.id()));
+        verify(runService, times(2)).findLastRunStatuses(user, List.of(session.id()));
     }
 
     @Test
-    void cursorSessionListReturnsNotRunningWhenNoActiveRunExists() {
+    void numberPageUsesKeywordAndRejectsLegacyTitle() {
+        ChatSessionFacade facade = mock(ChatSessionFacade.class);
+        UserContext user = user();
+        SessionListFilter filter = SessionListFilter.forPage(
+                "fund-app", "利润", "mobile", null);
+        when(facade.listSessionsByPage(user, filter, 1, 20))
+                .thenReturn(new ChatSessionNumberPage(List.of(), 1, 20, 0, 0));
+        ChatSessionController controller = new ChatSessionController(
+                facade,
+                mock(ChatFeedbackApplicationService.class),
+                mock(ChatRunApplicationService.class),
+                () -> user,
+                new PermissionChecker(),
+                new ChatMessageVersionViewAssembler());
+
+        var page = controller.listByPage(
+                "fund-app", null, null, "利润", "mobile", 1, 20).block();
+
+        assertThat(page).isNotNull();
+        verify(facade).listSessionsByPage(user, filter, 1, 20);
+        assertThatThrownBy(() -> controller.listByPage(
+                null, null, "旧标题", null, null, 1, 20))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("改用 keyword");
+    }
+
+    @Test
+    void bothSessionListsExposeEveryBusinessRunStatus() {
+        ChatSessionFacade facade = mock(ChatSessionFacade.class);
+        ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
+        UserContext user = user();
+        Instant now = Instant.parse("2026-08-13T00:00:00Z");
+        List<ChatSession> sessions = Arrays.stream(ChatRunStatus.values())
+                .map(status -> new ChatSession(
+                        "session-" + status.name(), "tenant1", "user1", status.name(),
+                        "ACTIVE", "web", now, now))
+                .toList();
+        Map<String, ChatRunStatus> statuses = Arrays.stream(ChatRunStatus.values())
+                .collect(Collectors.toMap(status -> "session-" + status.name(), status -> status));
+        when(facade.listSessions(user, SessionListFilter.empty(), null, 20))
+                .thenReturn(new ChatSessionPage(sessions, null));
+        when(facade.listSessionsByPage(user, SessionListFilter.empty(), 1, 20))
+                .thenReturn(new ChatSessionNumberPage(sessions, 1, 20, sessions.size(), 1));
+        when(facade.findFirstAssistantSummaries(user, sessions)).thenReturn(Map.of());
+        when(runService.findLastRunStatuses(user, sessions.stream().map(ChatSession::id).toList()))
+                .thenReturn(statuses);
+        ChatSessionController controller = new ChatSessionController(
+                facade,
+                mock(ChatFeedbackApplicationService.class),
+                runService,
+                () -> user,
+                new PermissionChecker(),
+                new ChatMessageVersionViewAssembler());
+
+        var cursorPage = controller.list(null, null, null, null, null, 20).block();
+        var numberPage = controller.listByPage(null, null, null, null, null, 1, 20).block();
+        List<String> expected = Arrays.stream(ChatRunStatus.values()).map(Enum::name).toList();
+
+        assertThat(cursorPage).isNotNull();
+        assertThat(cursorPage.items()).extracting(ChatSessionDto::lastRunStatus)
+                .containsExactlyElementsOf(expected);
+        assertThat(numberPage).isNotNull();
+        assertThat(numberPage.items()).extracting(ChatSessionDto::lastRunStatus)
+                .containsExactlyElementsOf(expected);
+    }
+
+    @Test
+    void cursorSessionListReturnsNullWhenSessionHasNoRun() {
         ChatSessionFacade facade = mock(ChatSessionFacade.class);
         ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
         UserContext user = user();
@@ -563,7 +630,7 @@ class ChatProtocolConvergenceTest {
         when(facade.listSessions(user, SessionListFilter.empty(), null, 20))
                 .thenReturn(new ChatSessionPage(List.of(session), null));
         when(facade.findFirstAssistantSummaries(user, List.of(session))).thenReturn(Map.of());
-        when(runService.findActiveSessionIds(user, List.of(session.id()))).thenReturn(Set.of());
+        when(runService.findLastRunStatuses(user, List.of(session.id()))).thenReturn(Map.of());
         ChatSessionController controller = new ChatSessionController(
                 facade,
                 mock(ChatFeedbackApplicationService.class),
@@ -575,11 +642,11 @@ class ChatProtocolConvergenceTest {
         var page = controller.list(null, null, null, null, null, 20).block();
 
         assertThat(page).isNotNull();
-        assertThat(page.items().getFirst().running()).isFalse();
+        assertThat(page.items().getFirst().lastRunStatus()).isNull();
     }
 
     @Test
-    void cursorSessionListKeepsItemsWhenActiveRunBatchLookupFails() {
+    void sessionListsKeepItemsWhenLastRunStatusBatchLookupFails() {
         ChatSessionFacade facade = mock(ChatSessionFacade.class);
         ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
         UserContext user = user();
@@ -588,8 +655,10 @@ class ChatProtocolConvergenceTest {
                 "session1", "tenant1", "user1", "title", "ACTIVE", "web", now, now);
         when(facade.listSessions(user, SessionListFilter.empty(), null, 20))
                 .thenReturn(new ChatSessionPage(List.of(session), null));
+        when(facade.listSessionsByPage(user, SessionListFilter.empty(), 1, 20))
+                .thenReturn(new ChatSessionNumberPage(List.of(session), 1, 20, 1, 1));
         when(facade.findFirstAssistantSummaries(user, List.of(session))).thenReturn(Map.of());
-        when(runService.findActiveSessionIds(user, List.of(session.id())))
+        when(runService.findLastRunStatuses(user, List.of(session.id())))
                 .thenThrow(new IllegalStateException("database unavailable"));
         ChatSessionController controller = new ChatSessionController(
                 facade,
@@ -600,19 +669,25 @@ class ChatProtocolConvergenceTest {
                 new ChatMessageVersionViewAssembler());
 
         var page = controller.list(null, null, null, null, null, 20).block();
+        var numberPage = controller.listByPage(null, null, null, null, null, 1, 20).block();
 
         assertThat(page).isNotNull();
         assertThat(page.items()).hasSize(1);
-        assertThat(page.items().getFirst().running()).isNull();
+        assertThat(page.items().getFirst().lastRunStatus()).isNull();
+        assertThat(numberPage).isNotNull();
+        assertThat(numberPage.items()).hasSize(1);
+        assertThat(numberPage.items().getFirst().lastRunStatus()).isNull();
     }
 
     @Test
-    void emptyCursorSessionPageSkipsActiveRunBatchLookup() {
+    void emptySessionPagesSkipLastRunStatusBatchLookup() {
         ChatSessionFacade facade = mock(ChatSessionFacade.class);
         ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
         UserContext user = user();
         when(facade.listSessions(user, SessionListFilter.empty(), null, 20))
                 .thenReturn(new ChatSessionPage(List.of(), null));
+        when(facade.listSessionsByPage(user, SessionListFilter.empty(), 1, 20))
+                .thenReturn(new ChatSessionNumberPage(List.of(), 1, 20, 0, 0));
         when(facade.findFirstAssistantSummaries(user, List.of())).thenReturn(Map.of());
         ChatSessionController controller = new ChatSessionController(
                 facade,
@@ -623,10 +698,13 @@ class ChatProtocolConvergenceTest {
                 new ChatMessageVersionViewAssembler());
 
         var page = controller.list(null, null, null, null, null, 20).block();
+        var numberPage = controller.listByPage(null, null, null, null, null, 1, 20).block();
 
         assertThat(page).isNotNull();
         assertThat(page.items()).isEmpty();
-        verify(runService, times(0)).findActiveSessionIds(user, List.of());
+        assertThat(numberPage).isNotNull();
+        assertThat(numberPage.items()).isEmpty();
+        verify(runService, times(0)).findLastRunStatuses(user, List.of());
     }
 
     @Test

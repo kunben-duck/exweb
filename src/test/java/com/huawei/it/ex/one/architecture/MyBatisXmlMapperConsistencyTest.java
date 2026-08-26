@@ -253,22 +253,43 @@ class MyBatisXmlMapperConsistencyTest {
     }
 
     @Test
-    void chatRunActiveSessionBatchLookupShouldBeOwnerScopedAndActiveOnly() throws IOException {
+    void chatRunLastStatusBatchLookupShouldBeOwnerScopedAndLightweight() throws IOException {
         String mapper = Files.readString(
                 MAPPER_XML_ROOT.resolve("persistence/ChatRunMapper.opengauss.xml"));
-        int start = mapper.indexOf("<select id=\"findActiveSessionIds\"");
+        int start = mapper.indexOf("<select id=\"findLastRunStatuses\"");
         int end = mapper.indexOf("</select>", start);
 
         assertThat(start).isGreaterThanOrEqualTo(0);
         assertThat(end).isGreaterThan(start);
         assertThat(mapper.substring(start, end))
-                .contains("SELECT session_id")
+                .contains("SELECT session_id, status")
                 .contains("tenant_id = #{tenantId}")
                 .contains("user_id = #{userId}")
                 .contains("session_id IN")
                 .contains("collection=\"sessionIds\"")
-                .contains("status IN ('RUNNING', 'CANCELLING')")
+                .contains("ROW_NUMBER() OVER")
+                .contains("PARTITION BY session_id")
+                .contains("ORDER BY created_at DESC, id DESC")
+                .contains("WHERE row_num = 1")
                 .doesNotContain("chatRunColumns", "metadata_json");
+    }
+
+    @Test
+    void chatRunLastStatusBatchLookupShouldHaveMatchingUstoreIndex() throws IOException {
+        String indexColumns = "(tenant_id, user_id, session_id, created_at DESC, id DESC, status)";
+        String initScript = Files.readString(DATABASE_SCRIPT_ROOT.resolve("init-20260718.sql"))
+                .replaceAll("\\s+", " ");
+        String incrementalScript = Files.readString(DATABASE_SCRIPT_ROOT.resolve(
+                        "incremental-20260826-chat-run-last-status-index.sql"))
+                .replaceAll("\\s+", " ");
+
+        assertThat(initScript)
+                .contains("CREATE INDEX IF NOT EXISTS idx_fin_ex_chat_run_owner_session_created_id_status")
+                .contains(indexColumns);
+        assertThat(incrementalScript)
+                .contains("CREATE INDEX CONCURRENTLY idx_fin_ex_chat_run_owner_session_created_id_status")
+                .contains(indexColumns)
+                .doesNotContain("START TRANSACTION", "BEGIN");
     }
 
     @Test
@@ -320,14 +341,15 @@ class MyBatisXmlMapperConsistencyTest {
                 MAPPER_XML_ROOT.resolve("session/ChatSessionMapper.opengauss.xml"));
 
         assertSessionTitleFilter(mapper, "findPageByOwner");
-        assertSessionTitleFilter(mapper, "countPageByOwner");
-        assertSessionTitleFilter(mapper, "findNumberPageByOwner");
+        assertSessionKeywordFilter(mapper, "countPageByOwner");
+        assertSessionKeywordFilter(mapper, "findNumberPageByOwner");
         assertSessionChannelFilter(mapper, "findPageByOwner");
         assertSessionChannelFilter(mapper, "countPageByOwner");
         assertSessionChannelFilter(mapper, "findNumberPageByOwner");
         assertSessionMainSiteFilter(mapper, "findPageByOwner");
         assertSessionMainSiteFilter(mapper, "countPageByOwner");
         assertSessionMainSiteFilter(mapper, "findNumberPageByOwner");
+        assertThat(mapper).doesNotContain("USING gin", "USING GIN", "ASTORE", "Astore");
     }
 
     @Test
@@ -411,6 +433,21 @@ class MyBatisXmlMapperConsistencyTest {
                 .contains("<if test=\"titlePattern != null\">")
                 .contains("AND title ILIKE #{titlePattern} ESCAPE '!'")
                 .doesNotContain("${titlePattern}");
+    }
+
+    private void assertSessionKeywordFilter(String mapper, String statementId) {
+        String sql = statement(mapper, "select", statementId);
+        assertThat(sql)
+                .contains("<if test=\"keywordPattern != null\">")
+                .contains("title ILIKE #{keywordPattern} ESCAPE '!'")
+                .contains("OR EXISTS (")
+                .contains("FROM fin_ex_chat_message_t m")
+                .contains("m.tenant_id = #{tenantId}")
+                .contains("m.user_id = #{userId}")
+                .contains("m.session_id = fin_ex_chat_session_t.id")
+                .contains("m.role IN ('user', 'assistant')")
+                .contains("m.content ILIKE #{keywordPattern} ESCAPE '!'")
+                .doesNotContain("${keywordPattern}", "titlePattern", "JOIN fin_ex_chat_message_t");
     }
 
     @Test

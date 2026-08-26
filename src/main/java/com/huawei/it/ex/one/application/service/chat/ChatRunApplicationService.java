@@ -42,7 +42,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * ChatRun 生命周期应用服务。
@@ -467,22 +466,22 @@ public class ChatRunApplicationService {
     }
 
     /**
-     * 批量查询当前页存在 active run 的会话标识，不触发租约恢复、Binding 或 Interaction 查询。
+     * 批量查询当前页每个会话最后创建的 run 状态，不触发租约恢复、Binding 或 Interaction 查询。
      */
-    public Set<String> findActiveSessionIds(
+    public Map<String, ChatRunStatus> findLastRunStatuses(
             UserContext user, Collection<String> sessionIds) {
         permissionChecker.checkChatPermission(user);
         if (sessionIds == null || sessionIds.isEmpty()) {
-            return Set.of();
+            return Map.of();
         }
         List<String> normalizedSessionIds = sessionIds.stream()
                 .filter(sessionId -> sessionId != null && !sessionId.isBlank())
                 .distinct()
                 .toList();
         if (normalizedSessionIds.isEmpty()) {
-            return Set.of();
+            return Map.of();
         }
-        return repository.findActiveSessionIds(
+        return repository.findLastRunStatuses(
                 user.tenantId(), user.ownerUserId(), normalizedSessionIds);
     }
 

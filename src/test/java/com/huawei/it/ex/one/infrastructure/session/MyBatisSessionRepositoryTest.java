@@ -2,15 +2,20 @@ package com.huawei.it.ex.one.infrastructure.session;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.integration.conversation.SessionAppCategory;
 import com.huawei.it.ex.one.application.integration.conversation.SessionAppScope;
 import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
+import com.huawei.it.ex.one.application.integration.conversation.SessionSearchTimeoutException;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.QueryTimeoutException;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -141,16 +146,17 @@ class MyBatisSessionRepositoryTest {
     }
 
     @Test
-    void numberPageUsesSameTitlePatternForCountAndRows() {
+    void numberPageUsesSameKeywordPatternForCountAndRows() {
         RecordingMapper mapper = new RecordingMapper();
         mapper.totalRows = 3;
         MyBatisSessionRepository repository = new MyBatisSessionRepository(mapper);
 
         ChatSessionNumberPage page = repository.pageNumberByTenantIdAndUserId(
-                "tenant1", "user1", new SessionListFilter("fund-app", " PROFIT ", "mobile"), 1, 2);
+                "tenant1", "user1",
+                SessionListFilter.forPage("fund-app", " PROFIT%_! ", "mobile", null), 1, 2);
 
-        assertThat(mapper.lastCountTitlePattern).isEqualTo("%profit%");
-        assertThat(mapper.lastNumberPageTitlePattern).isEqualTo("%profit%");
+        assertThat(mapper.lastCountTitlePattern).isEqualTo("%profit!%!_!!%");
+        assertThat(mapper.lastNumberPageTitlePattern).isEqualTo("%profit!%!_!!%");
         assertThat(mapper.lastCountChannel).isEqualTo("mobile");
         assertThat(mapper.lastNumberPageChannel).isEqualTo("mobile");
         assertThat(mapper.lastCountMainSiteOnly).isFalse();
@@ -171,6 +177,33 @@ class MyBatisSessionRepositoryTest {
 
         assertThat(mapper.lastCountMainSiteOnly).isTrue();
         assertThat(mapper.lastNumberPageMainSiteOnly).isTrue();
+    }
+
+    @Test
+    void keywordSearchTimeoutUsesStableApplicationException() {
+        RecordingMapper mapper = new RecordingMapper();
+        SessionPageKeywordSearchExecutor executor = mock(SessionPageKeywordSearchExecutor.class);
+        when(executor.search(new SessionPageKeywordSearchExecutor.Query(
+                "tenant1", "user1", null, "%profit%", null, false, 20, 0L)))
+                .thenThrow(new QueryTimeoutException("statement timed out"));
+        MyBatisSessionRepository repository = new MyBatisSessionRepository(mapper, executor);
+
+        assertThatThrownBy(() -> repository.pageNumberByTenantIdAndUserId(
+                "tenant1", "user1", SessionListFilter.forPage(null, "PROFIT", null, null), 1, 20))
+                .isInstanceOf(SessionSearchTimeoutException.class)
+                .hasMessage("会话关键字搜索超时，请稍后重试");
+    }
+
+    @Test
+    void pageWithoutKeywordKeepsDirectMapperPath() {
+        RecordingMapper mapper = new RecordingMapper();
+        SessionPageKeywordSearchExecutor executor = mock(SessionPageKeywordSearchExecutor.class);
+        MyBatisSessionRepository repository = new MyBatisSessionRepository(mapper, executor);
+
+        repository.pageNumberByTenantIdAndUserId(
+                "tenant1", "user1", SessionListFilter.empty(), 1, 20);
+
+        verifyNoInteractions(executor);
     }
 
     @Test

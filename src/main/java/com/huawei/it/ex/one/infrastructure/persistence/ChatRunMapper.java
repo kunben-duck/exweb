@@ -200,16 +200,17 @@ public interface ChatRunMapper {
                                    @Param("sessionId") String sessionId);
 
     /**
-     * 按 owner 边界批量查询当前页存在 active run 的会话标识。
+     * 按 owner 边界批量查询当前页每个会话最后创建的 run 状态。
      *
      * @param tenantId 租户标识。
      * @param userId 用户标识。
      * @param sessionIds 当前页会话标识集合。
-     * @return 存在 RUNNING 或 CANCELLING run 的会话标识。
+     * @return 每个存在 run 的会话对应的最后状态轻量行。
      */
-    List<String> findActiveSessionIds(@Param("tenantId") String tenantId,
-                                      @Param("userId") String userId,
-                                      @Param("sessionIds") Collection<String> sessionIds);
+    List<ChatSessionLastRunStatusRow> findLastRunStatuses(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionIds") Collection<String> sessionIds);
 
     /**
      * 扫描尚未写入 run.started 且没有 execution 的普通 run。

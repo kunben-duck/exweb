@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.interfaces;
 
+import com.huawei.it.ex.one.application.integration.conversation.SessionSearchTimeoutException;
 import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ChatShareUnavailableException;
@@ -26,6 +27,14 @@ import java.time.Instant;
 @RestControllerAdvice(basePackages = "com.huawei.it.ex.one.interfaces")
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class ApiExceptionHandler {
+
+    /** 将受保护的会话关键字查询超时映射为稳定的可重试响应。 */
+    @ExceptionHandler(SessionSearchTimeoutException.class)
+    public ResponseEntity<ApiErrorResponse> handleSessionSearchTimeout(
+            SessionSearchTimeoutException ex, HttpServletRequest request) {
+        return error(HttpStatus.SERVICE_UNAVAILABLE, "SESSION_SEARCH_TIMEOUT",
+                ex.getMessage(), requestPath(request));
+    }
 
     /**
      * 处理身份缺失和越权访问。

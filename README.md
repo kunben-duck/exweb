@@ -55,7 +55,9 @@ DomainAgent `isSaveSession` 对 assistant 历史投影的控制边界、企业�
 - `POST /v1/chat/sessions`：显式创建会话；可选传 `appId/appName` 作为不可变分组标识和名称快照。也可以在 `/v1/chat/runs` 中不传 `sessionId`，由后端使用相同字段自动创建会话。
 - `GET /v1/chat/sessions/apps?channel=mobile`：查询当前用户非删除会话中的全部 App 分类；`channel` 可选，返回去重后的 `appId/appName`，按分类最近活动时间倒序排列。
 - `GET /v1/chat/sessions?appScope=MAIN_SITE&title=利润&channel=mobile&limit=20&cursor=...`：游标分页查询当前用户会话列表；`appScope=MAIN_SITE` 仅返回 `appId=null` 的主站会话，省略时保持全量语义；也可改传具体 `appId`，并返回每个会话第一条 assistant 的 `firstAssistantAnswer/firstAssistantMetadataJson`。
-- `GET /v1/chat/sessions/page?appScope=MAIN_SITE&title=利润&channel=mobile&curPage=1&pageSize=20`：页码分页查询当前用户历史会话；过滤语义与游标分页一致，返回 `totalRows/totalPages` 和每个会话第一条 assistant 的正文及原始 metadata 字符串。
+- `GET /v1/chat/sessions/page?appScope=MAIN_SITE&keyword=利润&channel=mobile&curPage=1&pageSize=20`：页码分页查询当前用户历史会话；`keyword`统一模糊匹配标题、已持久化user问题和assistant回答，返回 `totalRows/totalPages` 和每个会话第一条 assistant 的正文及原始 metadata 字符串。搜索事务默认限时2秒，超时返回`503/SESSION_SEARCH_TIMEOUT`。
+
+页码会话关键字搜索及两个会话列表的最后Run状态批量读取，共用`FINANCEEX_SESSION_SEARCH_DATABASE_QUERY_TIMEOUT_SECONDS`数据库事务超时，允许`1..30`秒，默认2秒；非法值会使服务启动失败。关键字搜索超时返回`503/SESSION_SEARCH_TIMEOUT`，最后Run状态读取超时则保持列表成功并返回`lastRunStatus=null`；普通列表主体查询不使用该超时配置。
 - `GET /v1/chat/sessions/{sessionId}`：查询单个会话元数据，不返回历史消息和流式状态。
 - `POST /v1/chat/sessions/{sessionId}/read`：提交前端已经实际展示到的 `readThroughSeq`，原子推进会话已读水位；不会改变会话列表排序。
 - `GET /v1/chat/sessions/{sessionId}/messages?leafMessageId=...&limit=50`：选择会话后查询当前 active path 或指定 leaf path 的最近一页 user/assistant 消息；通过 `nextCursor`向更早消息翻页并在前端 prepend，有多个版本的页内消息会带 `versionInfo`。

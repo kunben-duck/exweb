@@ -23,33 +23,50 @@ import org.mockito.InOrder;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
 class MyBatisChatRunRepositoryTest {
     @Test
-    void activeSessionIdsUseSingleOwnerScopedMapperCall() {
+    void lastRunStatusesUseSingleOwnerScopedMapperCall() {
         ChatRunMapper mapper = mock(ChatRunMapper.class);
         List<String> sessionIds = List.of("session1", "session2");
-        when(mapper.findActiveSessionIds("tenant1", "user1", sessionIds))
-                .thenReturn(List.of("session1"));
+        when(mapper.findLastRunStatuses("tenant1", "user1", sessionIds))
+                .thenReturn(List.of(
+                        lastRunStatusRow("session1", ChatRunStatus.RUNNING),
+                        lastRunStatusRow("session2", ChatRunStatus.WAITING_USER)));
         MyBatisChatRunRepository repository = new MyBatisChatRunRepository(mapper, new ObjectMapper());
 
-        assertThat(repository.findActiveSessionIds("tenant1", "user1", sessionIds))
-                .containsExactly("session1");
+        assertThat(repository.findLastRunStatuses("tenant1", "user1", sessionIds))
+                .containsExactlyInAnyOrderEntriesOf(Map.of(
+                        "session1", ChatRunStatus.RUNNING,
+                        "session2", ChatRunStatus.WAITING_USER));
 
-        verify(mapper).findActiveSessionIds("tenant1", "user1", sessionIds);
+        verify(mapper).findLastRunStatuses("tenant1", "user1", sessionIds);
         verify(mapper, never()).findActiveBySession(any(), any(), any());
     }
 
     @Test
-    void activeSessionIdsForEmptySessionPageSkipMapper() {
+    void lastRunStatusesForEmptySessionPageSkipMapper() {
         ChatRunMapper mapper = mock(ChatRunMapper.class);
         MyBatisChatRunRepository repository = new MyBatisChatRunRepository(mapper, new ObjectMapper());
 
-        assertThat(repository.findActiveSessionIds("tenant1", "user1", List.of())).isEmpty();
+        assertThat(repository.findLastRunStatuses("tenant1", "user1", List.of())).isEmpty();
 
-        verify(mapper, never()).findActiveSessionIds(any(), any(), any());
+        verify(mapper, never()).findLastRunStatuses(any(), any(), any());
+    }
+
+    @Test
+    void lastRunStatusesUseSessionSearchTransactionTimeout() throws Exception {
+        Transactional transactional = MyBatisChatRunRepository.class
+                .getMethod("findLastRunStatuses", String.class, String.class, Collection.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.readOnly()).isTrue();
+        assertThat(transactional.timeoutString())
+                .isEqualTo("${financeex.session-search.database-query-timeout-seconds:2}");
     }
 
     @Test
@@ -244,6 +261,13 @@ class MyBatisChatRunRepositoryTest {
         row.setMetadataJson("{}");
         row.setCreatedAt(run.createdAt());
         row.setUpdatedAt(run.updatedAt());
+        return row;
+    }
+
+    private ChatSessionLastRunStatusRow lastRunStatusRow(String sessionId, ChatRunStatus status) {
+        ChatSessionLastRunStatusRow row = new ChatSessionLastRunStatusRow();
+        row.setSessionId(sessionId);
+        row.setStatus(status.name());
         return row;
     }
 }

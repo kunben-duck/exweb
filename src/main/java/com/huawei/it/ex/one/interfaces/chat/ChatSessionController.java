@@ -19,6 +19,7 @@ import com.huawei.it.ex.one.domain.chat.ChatMessageFeedback;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePage;
 import com.huawei.it.ex.one.domain.chat.ChatMessagePart;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
+import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
@@ -163,11 +164,11 @@ public class ChatSessionController {
                             user, new SessionListFilter(appId, title, channel, appScope), cursor, limit);
                     Map<String, ChatSessionFirstAssistantSummary> firstAssistantSummaries =
                             facade.findFirstAssistantSummaries(user, page.items());
-                    Set<String> activeSessionIds = activeSessionIds(user, page.items());
+                    Map<String, ChatRunStatus> lastRunStatuses = lastRunStatuses(user, page.items());
                     return new ChatSessionPageDto(
                             page.items().stream()
                                     .map(session -> toDto(session, firstAssistantSummaries.get(session.id()),
-                                            activeSessionIds == null ? null : activeSessionIds.contains(session.id())))
+                                            lastRunStatuses == null ? null : lastRunStatuses.get(session.id())))
                                     .toList(),
                             page.nextCursor()
                     );
@@ -183,7 +184,8 @@ public class ChatSessionController {
      *
      * @param appId 可选应用标识精确过滤条件。
      * @param appScope 可选 App 范围；MAIN_SITE 表示仅查询未绑定 appId 的主站会话。
-     * @param title 可选会话标题包含过滤条件。
+     * @param title 已废弃的标题过滤参数；非空时提示调用方改用 keyword。
+     * @param keyword 可选标题、user问题及assistant回答统一包含过滤条件。
      * @param channel 可选会话来源渠道精确过滤条件。
      * @param curPage 当前页码，从 1 开始；非法值由应用层归一化。
      * @param pageSize 每页条数；应用层会限制最大值。
@@ -194,21 +196,26 @@ public class ChatSessionController {
             @Size(max = 128, message = "appId 长度不能超过 128")
             @RequestParam(value = "appId", required = false) String appId,
             @RequestParam(value = "appScope", required = false) SessionAppScope appScope,
-            @Size(max = 256, message = "title 长度不能超过 256")
             @RequestParam(value = "title", required = false) String title,
+            @RequestParam(value = "keyword", required = false) String keyword,
             @Size(max = 64, message = "channel 长度不能超过 64")
             @RequestParam(value = "channel", required = false) String channel,
             @RequestParam(value = "curPage", defaultValue = "1") int curPage,
             @RequestParam(value = "pageSize", defaultValue = "20") int pageSize) {
+        if (title != null && !title.isBlank()) {
+            throw new IllegalArgumentException("会话页码查询已不支持 title，请改用 keyword");
+        }
         UserContext user = resolveChatUser();
         return Mono.fromCallable(() -> {
                     ChatSessionNumberPage page = facade.listSessionsByPage(
-                            user, new SessionListFilter(appId, title, channel, appScope), curPage, pageSize);
+                            user, SessionListFilter.forPage(appId, keyword, channel, appScope), curPage, pageSize);
                     Map<String, ChatSessionFirstAssistantSummary> firstAssistantSummaries =
                             facade.findFirstAssistantSummaries(user, page.items());
+                    Map<String, ChatRunStatus> lastRunStatuses = lastRunStatuses(user, page.items());
                     return new ChatSessionNumberPageDto(
                             page.items().stream()
-                                    .map(session -> toDto(session, firstAssistantSummaries.get(session.id())))
+                                    .map(session -> toDto(session, firstAssistantSummaries.get(session.id()),
+                                            lastRunStatuses == null ? null : lastRunStatuses.get(session.id())))
                                     .toList(),
                             page.curPage(),
                             page.pageSize(),
@@ -441,14 +448,14 @@ public class ChatSessionController {
     }
 
     private ChatSessionDto toDto(ChatSession session, ChatSessionFirstAssistantSummary firstAssistant,
-                                 Boolean running) {
+                                 ChatRunStatus lastRunStatus) {
         return new ChatSessionDto(
                 session.id(),
                 session.tenantId(),
                 session.userId(),
                 session.title(),
                 session.status(),
-                running,
+                lastRunStatus == null ? null : lastRunStatus.name(),
                 session.channel(),
                 session.appId(),
                 session.appName(),
@@ -466,19 +473,19 @@ public class ChatSessionController {
         );
     }
 
-    private Set<String> activeSessionIds(UserContext user, List<ChatSession> sessions) {
+    private Map<String, ChatRunStatus> lastRunStatuses(UserContext user, List<ChatSession> sessions) {
         if (sessions == null || sessions.isEmpty()) {
-            return Set.of();
+            return Map.of();
         }
         List<String> sessionIds = sessions.stream()
                 .map(ChatSession::id)
                 .toList();
         try {
-            return chatRunService.findActiveSessionIds(user, sessionIds);
+            return chatRunService.findLastRunStatuses(user, sessionIds);
         } catch (RuntimeException ex) {
             log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_READ_FAILED,
-                            "Active session batch lookup failed; returning session list without running status")
-                    .operation("chat-session.active-run.batch-read")
+                            "Last run status batch lookup failed; returning session list without run status")
+                    .operation("chat-session.last-run-status.batch-read")
                     .attribute("sessionCount", sessionIds.size())
                     .build(), ex);
             return null;

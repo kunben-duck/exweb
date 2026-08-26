@@ -133,6 +133,37 @@ class RouteSignalApplicationServiceTest {
     }
 
     @Test
+    void forwardsTrustedUserMessageIdToBlockingIntentRequest() {
+        AtomicReference<String> capturedMessageId = new AtomicReference<>();
+        IntentService intentService = new IntentService() {
+            @Override
+            public IntentDecision recognize(ChatCommand command, MemoryContext memory, UserContext user) {
+                throw new AssertionError("legacy overload should not be used");
+            }
+
+            @Override
+            public IntentRecognitionResult recognizeForRouting(
+                    ChatCommand command,
+                    MemoryContext memory,
+                    UserContext user,
+                    String userMessageId) {
+                capturedMessageId.set(userMessageId);
+                return IntentRecognitionResult.finalDecision(simpleDomainAgentIntent());
+            }
+        };
+        RouteSignalApplicationService service = service(
+                false, true, request -> UseCaseMatchResult.notMatched("disabled"), intentService);
+
+        service.routeInitialWithProgress(new RouteSignalRequest(
+                        "run1", user, session, command, List.of(), memory,
+                        command.message(), "msg-user"))
+                .collectList()
+                .block();
+
+        assertThat(capturedMessageId.get()).isEqualTo("msg-user");
+    }
+
+    @Test
     void sensitiveInformationIntentEmitsOriginalIntentAndRoutesToRelayDelegate() {
         IntentDecision sensitiveIntent = new IntentDecision(
                 "intent-sensitive",

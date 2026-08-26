@@ -59,6 +59,24 @@ class IntentServiceRequestMapperTest {
         assertThat(new ObjectMapper().valueToTree(request).has("agentMode")).isFalse();
     }
 
+    @Test
+    void trustedMessageIdIsIncludedAndMissingValueIsOmitted() {
+        IntentServiceRequestMapper mapper = new IntentServiceRequestMapper(new IntentServiceHttpProperties());
+        ObjectMapper objectMapper = new ObjectMapper();
+
+        IntentRecognizeRequest associated = mapper.toWireRequest(
+                command(null), MemoryContext.empty(),
+                new UserContext("tenant1", "user1", "User One"), " msg-user ");
+        IntentRecognizeRequest compatible = mapper.toWireRequest(
+                command(null), MemoryContext.empty(),
+                new UserContext("tenant1", "user1", "User One"));
+
+        assertThat(associated.messageId()).isEqualTo("msg-user");
+        assertThat(objectMapper.valueToTree(associated).path("messageId").asText()).isEqualTo("msg-user");
+        assertThat(compatible.messageId()).isNull();
+        assertThat(objectMapper.valueToTree(compatible).has("messageId")).isFalse();
+    }
+
     private ChatCommand command(String intentAccessName) {
         return new ChatCommand(
                 "cmd1", "tenant1", "user1", "session1", null, "web", "分析资金情况",

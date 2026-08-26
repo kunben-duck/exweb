@@ -12,7 +12,8 @@ import java.util.List;
  * 路由阶段上下文。
  *
  * <p>runId 只用于把 intent-agent 路由过程转换成可落库的 ChatEvent；没有 runId 的同步调用仍只返回最终路由结果。
- * intentQuery 是只提供给 IntentAgent 的临时问题，不覆盖 command 中的历史消息和 Runtime query。</p>
+ * intentQuery 是只提供给 IntentAgent 的临时问题，不覆盖 command 中的历史消息和 Runtime query。
+ * userMessageId来自当前ChatRun，只用于关联Intent服务日志。</p>
  */
 public record RouteSignalRequest(String runId,
                                  UserContext user,
@@ -20,7 +21,18 @@ public record RouteSignalRequest(String runId,
                                  ChatCommand command,
                                  List<AttachmentRef> attachments,
                                  MemoryContext memory,
-                                 String intentQuery) {
+                                 String intentQuery,
+                                 String userMessageId) {
+
+    public RouteSignalRequest(String runId,
+                              UserContext user,
+                              ChatSession session,
+                              ChatCommand command,
+                              List<AttachmentRef> attachments,
+                              MemoryContext memory,
+                              String intentQuery) {
+        this(runId, user, session, command, attachments, memory, intentQuery, null);
+    }
 
     public RouteSignalRequest(String runId,
                               UserContext user,
@@ -29,6 +41,6 @@ public record RouteSignalRequest(String runId,
                               List<AttachmentRef> attachments,
                               MemoryContext memory) {
         this(runId, user, session, command, attachments, memory,
-                command == null ? null : command.message());
+                command == null ? null : command.message(), null);
     }
 }

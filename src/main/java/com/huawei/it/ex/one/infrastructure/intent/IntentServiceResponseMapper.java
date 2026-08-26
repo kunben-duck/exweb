@@ -163,16 +163,9 @@ public class IntentServiceResponseMapper {
     }
 
     private String normalizeDomainAgentId(String accessName) {
-        if (accessName == null || accessName.isBlank()) {
-            return null;
-        }
-        String normalized = accessName.trim();
-        String configuredPrefix = properties == null ? null : properties.getResponseAccessNamePrefix();
-        String prefix = configuredPrefix == null ? "" : configuredPrefix.trim();
-        if (!prefix.isEmpty() && normalized.startsWith(prefix)) {
-            normalized = normalized.substring(prefix.length()).trim();
-        }
-        return normalized.isEmpty() ? null : normalized;
+        return IntentAccessNameNormalizer.normalize(
+                accessName,
+                properties == null ? null : properties.getResponseAccessNamePrefix());
     }
 
     private IntentDecision complexDecision(JsonNode root, JsonNode result, String code, String name, String reason) {

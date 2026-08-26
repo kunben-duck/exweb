@@ -61,16 +61,32 @@ public class FinEurekaIntentService implements IntentService {
 
     @Override
     public IntentDecision recognize(ChatCommand command, MemoryContext memory, UserContext user) {
-        IntentRecognitionResult result = recognizeForRouting(command, memory, user);
+        return recognize(command, memory, user, null);
+    }
+
+    @Override
+    public IntentDecision recognize(ChatCommand command,
+                                    MemoryContext memory,
+                                    UserContext user,
+                                    String userMessageId) {
+        IntentRecognitionResult result = recognizeForRouting(command, memory, user, userMessageId);
         return result.decision() == null ? wireMapper.degraded("intent response has no final decision") : result.decision();
     }
 
     @Override
     public IntentRecognitionResult recognizeForRouting(ChatCommand command, MemoryContext memory, UserContext user) {
+        return recognizeForRouting(command, memory, user, null);
+    }
+
+    @Override
+    public IntentRecognitionResult recognizeForRouting(ChatCommand command,
+                                                        MemoryContext memory,
+                                                        UserContext user,
+                                                        String userMessageId) {
         int maxAttempts = 1 + properties.normalizedMaxRetries();
         IntentRecognitionResult lastResult = null;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            lastResult = recognizeOnce(command, memory, user);
+            lastResult = recognizeOnce(command, memory, user, userMessageId);
             if (lastResult.waitingClarification()) {
                 return lastResult;
             }
@@ -101,7 +117,10 @@ public class FinEurekaIntentService implements IntentService {
         }
     }
 
-    private IntentRecognitionResult recognizeOnce(ChatCommand command, MemoryContext memory, UserContext user) {
+    private IntentRecognitionResult recognizeOnce(ChatCommand command,
+                                                   MemoryContext memory,
+                                                   UserContext user,
+                                                   String userMessageId) {
         if (properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()) {
             return IntentRecognitionResult.degraded(wireMapper.degraded("intent service base-url is not configured"));
         }
@@ -109,7 +128,7 @@ public class FinEurekaIntentService implements IntentService {
             IntentRecognitionResult result = webClient.post()
                     .uri(properties.getRecognizePath())
                     .headers(headers -> applyAuthHeaders(headers, user))
-                    .bodyValue(wireMapper.toWireRequest(command, memory, user))
+                    .bodyValue(wireMapper.toWireRequest(command, memory, user, userMessageId))
                     .retrieve()
                     .bodyToMono(JsonNode.class)
                     .map(wireMapper::toRecognitionResult)

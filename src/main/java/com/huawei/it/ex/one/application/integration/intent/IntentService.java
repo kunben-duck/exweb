@@ -22,6 +22,13 @@ public interface IntentService {
      */
     IntentDecision recognize(ChatCommand command, MemoryContext memory, UserContext user);
 
+    default IntentDecision recognize(ChatCommand command,
+                                     MemoryContext memory,
+                                     UserContext user,
+                                     String userMessageId) {
+        return recognize(command, memory, user);
+    }
+
     /**
      * 识别当前输入并允许意图服务返回多轮澄清状态。
      *
@@ -36,5 +43,12 @@ public interface IntentService {
     default IntentRecognitionResult recognizeForRouting(ChatCommand command, MemoryContext memory, UserContext user) {
         IntentDecision decision = recognize(command, memory, user);
         return IntentRecognitionResult.finalDecision(decision);
+    }
+
+    default IntentRecognitionResult recognizeForRouting(ChatCommand command,
+                                                         MemoryContext memory,
+                                                         UserContext user,
+                                                         String userMessageId) {
+        return recognizeForRouting(command, memory, user);
     }
 }

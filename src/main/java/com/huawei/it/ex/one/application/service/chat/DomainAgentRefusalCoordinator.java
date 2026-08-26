@@ -296,7 +296,8 @@ final class DomainAgentRefusalCoordinator {
                         rerouteCommand,
                         rerouteCommand.attachments(),
                         context.memory(),
-                        rerouteIntentQuery))))
+                        rerouteIntentQuery,
+                        context.userMessageId()))))
                 .concatMap(frame -> processRerouteFrame(reroute, frame, persistenceBarrier));
     }
 

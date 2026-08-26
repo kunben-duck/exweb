@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.interfaces;
 
 import com.huawei.it.ex.one.application.integration.conversation.SessionSearchTimeoutException;
+import com.huawei.it.ex.one.application.integration.intent.IntentCandidateQueryException;
 import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ChatShareUnavailableException;
@@ -27,6 +28,19 @@ import java.time.Instant;
 @RestControllerAdvice(basePackages = "com.huawei.it.ex.one.interfaces")
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class ApiExceptionHandler {
+
+    /** 将候选技能下游失败映射为稳定的网关错误。 */
+    @ExceptionHandler(IntentCandidateQueryException.class)
+    public ResponseEntity<ApiErrorResponse> handleIntentCandidateQuery(
+            IntentCandidateQueryException ex, HttpServletRequest request) {
+        HttpStatus status = ex.isBusy()
+                ? HttpStatus.TOO_MANY_REQUESTS
+                : ex.timeout() ? HttpStatus.GATEWAY_TIMEOUT : HttpStatus.BAD_GATEWAY;
+        String code = ex.isBusy()
+                ? "INTENT_CANDIDATES_BUSY"
+                : ex.timeout() ? "INTENT_CANDIDATES_TIMEOUT" : "INTENT_CANDIDATES_UPSTREAM_FAILED";
+        return error(status, code, ex.getMessage(), requestPath(request));
+    }
 
     /** 将受保护的会话关键字查询超时映射为稳定的可重试响应。 */
     @ExceptionHandler(SessionSearchTimeoutException.class)

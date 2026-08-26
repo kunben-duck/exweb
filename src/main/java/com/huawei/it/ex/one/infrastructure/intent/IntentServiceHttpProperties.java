@@ -31,6 +31,8 @@ public class IntentServiceHttpProperties {
     private String recognizePath = "/intent-recognition-configuration/getIntentDecision";
     /** 意图识别流式接口路径。 */
     private String recognizeStreamPath = "/intent-recognition-configuration/getIntentDecisionStream";
+    /** 按消息ID查询意图候选技能的接口路径。 */
+    private String confidencePath = "/intent-recognition-configuration/getIntentConfidence";
     /** 意图识别调用协议，默认使用流式模式。 */
     private IntentInvocationMode invocationMode = IntentInvocationMode.STREAMING;
     /** 是否要求意图服务返回 trace。 */
@@ -114,6 +116,14 @@ public class IntentServiceHttpProperties {
 
     public void setRecognizeStreamPath(String recognizeStreamPath) {
         this.recognizeStreamPath = recognizeStreamPath;
+    }
+
+    public String getConfidencePath() {
+        return confidencePath;
+    }
+
+    public void setConfidencePath(String confidencePath) {
+        this.confidencePath = confidencePath;
     }
 
     public IntentInvocationMode getInvocationMode() {

@@ -132,6 +132,7 @@ financeex:
     invocation-mode: ${FINANCEEX_INTENT_INVOCATION_MODE:STREAMING}
     recognize-path: ${FINANCEEX_INTENT_RECOGNIZE_PATH:/intent-recognition-configuration/getIntentDecision}
     recognize-stream-path: ${FINANCEEX_INTENT_RECOGNIZE_STREAM_PATH:/intent-recognition-configuration/getIntentDecisionStream}
+    confidence-path: ${FINANCEEX_INTENT_CONFIDENCE_PATH:/intent-recognition-configuration/getIntentConfidence}
     trace: ${FINANCEEX_INTENT_TRACE:false}
     # confidence 仅用于记录和排障；是否进入 DomainAgent 以 routeAction=ROUTE_SINGLE 为准。
     confidence-threshold: ${FINANCEEX_INTENT_CONFIDENCE_THRESHOLD:0.85}
@@ -146,6 +147,13 @@ financeex:
     ambiguous-route-wait-timeout: ${FINANCEEX_INTENT_AMBIGUOUS_ROUTE_WAIT_TIMEOUT:30s}
     # 意图服务调用失败后的最大重试次数；不包含首次调用，运行时最多按 10 次生效。
     max-retries: ${FINANCEEX_INTENT_MAX_RETRIES:3}
+    candidate:
+      # 候选查询是用户主动旁路，使用非等待并发隔离，不与聊天主路由争抢鉴权线程。
+      max-concurrency: ${FINANCEEX_INTENT_CANDIDATE_MAX_CONCURRENCY:8}
+      auth-io-max-size: ${FINANCEEX_INTENT_CANDIDATE_AUTH_IO_MAX_SIZE:2}
+      auth-io-queue-capacity: ${FINANCEEX_INTENT_CANDIDATE_AUTH_IO_QUEUE_CAPACITY:16}
+      retry-min-backoff: ${FINANCEEX_INTENT_CANDIDATE_RETRY_MIN_BACKOFF:200ms}
+      retry-max-backoff: ${FINANCEEX_INTENT_CANDIDATE_RETRY_MAX_BACKOFF:1s}
     # 意图技术/协议失败在重试耗尽后的处理：RELAY_FALLBACK 或 FAIL_RUN。
     failure-strategy: ${FINANCEEX_INTENT_FAILURE_STRATEGY:RELAY_FALLBACK}
   intent-record:

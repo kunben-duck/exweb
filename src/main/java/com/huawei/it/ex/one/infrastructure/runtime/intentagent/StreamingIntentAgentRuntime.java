@@ -33,7 +33,7 @@ public class StreamingIntentAgentRuntime implements IntentAgentRuntime {
         long started = System.nanoTime();
         Flux<IntentAgentRouteFrame> start = startFrame(request);
         Flux<IntentAgentRouteFrame> stream = streamClient
-                .recognize(request.command(), request.memory(), request.user())
+                .recognize(request.command(), request.memory(), request.user(), request.userMessageId())
                 .concatMap(frame -> toRouteFrames(request, frame, started));
         return start.concatWith(stream);
     }

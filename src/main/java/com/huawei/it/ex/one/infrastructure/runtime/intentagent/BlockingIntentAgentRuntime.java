@@ -53,7 +53,8 @@ public class BlockingIntentAgentRuntime implements IntentAgentRuntime {
         long started = System.nanoTime();
         IntentRecognitionResult result;
         try {
-            result = intentService.recognizeForRouting(request.command(), request.memory(), request.user());
+            result = intentService.recognizeForRouting(
+                    request.command(), request.memory(), request.user(), request.userMessageId());
         } catch (RuntimeException ex) {
             log.warn(SystemErrorLogEntry.builder(SystemErrorCode.INTENT_DECISION_STREAM_FAILED,
                             "IntentDecision routing failed; returning the configured degraded result")

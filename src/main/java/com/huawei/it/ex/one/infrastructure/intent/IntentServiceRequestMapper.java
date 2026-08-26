@@ -31,13 +31,25 @@ public class IntentServiceRequestMapper {
      * @return 发送给意图服务的 HTTP 请求体。
      */
     public IntentRecognizeRequest toWireRequest(ChatCommand command, MemoryContext memory, UserContext user) {
+        return toWireRequest(command, memory, user, null);
+    }
+
+    public IntentRecognizeRequest toWireRequest(ChatCommand command,
+                                                MemoryContext memory,
+                                                UserContext user,
+                                                String userMessageId) {
         return new IntentRecognizeRequest(
+                normalizeMessageId(userMessageId),
                 normalizedAccessName(command),
                 command == null ? "" : blankToDefault(command.message(), ""),
                 intentUserId(user),
                 conversationContext(memory),
                 Map.of("trace", properties.isTrace())
         );
+    }
+
+    private String normalizeMessageId(String messageId) {
+        return messageId == null || messageId.isBlank() ? null : messageId.trim();
     }
 
     private String normalizedAccessName(ChatCommand command) {

@@ -98,7 +98,8 @@ final class ChatRuntimeDispatchCoordinator {
                                 request.runCommand(),
                                 request.attachments(),
                                 request.memory(),
-                                request.intentQuery()))
+                                request.intentQuery(),
+                                request.run() == null ? null : request.run().userMessageId()))
                         : Flux.just(RouteSignalFrame.result(
                                 RouteSignalResult.of(request.routeRef().get())))));
         return frames.concatMap(frame -> executeFrame(request, frame, persistenceBarrier));

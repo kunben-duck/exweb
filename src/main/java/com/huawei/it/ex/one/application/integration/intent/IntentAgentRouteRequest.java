@@ -14,6 +14,15 @@ public record IntentAgentRouteRequest(
         ChatCommand command,
         MemoryContext memory,
         String runId,
-        String routeTrigger
+        String routeTrigger,
+        String userMessageId
 ) {
+    public IntentAgentRouteRequest(UserContext user,
+                                   ChatSession session,
+                                   ChatCommand command,
+                                   MemoryContext memory,
+                                   String runId,
+                                   String routeTrigger) {
+        this(user, session, command, memory, runId, routeTrigger, null);
+    }
 }

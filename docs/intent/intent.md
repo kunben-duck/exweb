@@ -30,6 +30,7 @@ Authorization: {dynamicToken}
 
 ```json
 {
+  "messageId": "msg_d0a6c41dd1ed43efbc9ece562b66d44",
   "accessName": "eureka2_260718",
   "query": "对账差异识别",
   "userId": "00859938",
@@ -48,6 +49,7 @@ Authorization: {dynamicToken}
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
+| `messageId` | string | 否 | 当前ChatRun对应的可信user消息ID，用于Intent侧日志关联；无Run兼容调用时省略，不发送null。 |
 | `accessName` / `intentID` / `entranceID` | string | 三选一 | 意图入口。ChatService当前使用`accessName`：优先取`POST /v1/chat/runs.intentAccessName`，未传或空白时回退`financeex.intent.access-name`。 |
 | `query` | string | 是 | 当前待分类用户问题。澄清回答场景下，填用户对澄清问题的最新回答。 |
 | `userId` | string | 否 | 用户工号或用户标识，用于画像增强、审计或日志。 |

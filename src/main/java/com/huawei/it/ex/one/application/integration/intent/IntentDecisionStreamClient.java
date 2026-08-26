@@ -23,4 +23,11 @@ public interface IntentDecisionStreamClient {
      * @return ordered process and result frames.
      */
     Flux<IntentDecisionStreamFrame> recognize(ChatCommand command, MemoryContext memory, UserContext user);
+
+    default Flux<IntentDecisionStreamFrame> recognize(ChatCommand command,
+                                                      MemoryContext memory,
+                                                      UserContext user,
+                                                      String userMessageId) {
+        return recognize(command, memory, user);
+    }
 }

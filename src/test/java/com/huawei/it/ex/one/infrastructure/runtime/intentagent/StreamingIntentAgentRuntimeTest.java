@@ -23,6 +23,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 class StreamingIntentAgentRuntimeTest {
     @Test
@@ -76,13 +77,44 @@ class StreamingIntentAgentRuntimeTest {
         assertThat(cancelled).isTrue();
     }
 
+    @Test
+    void forwardsTrustedUserMessageIdToStreamingClient() {
+        AtomicReference<String> captured = new AtomicReference<>();
+        IntentDecision decision = new IntentDecision(
+                "intent-1", "知识问答", TaskComplexity.SIMPLE, 0.9, true,
+                "skill-1", Map.of(), List.of(), Map.of());
+        IntentDecisionStreamClient client = new IntentDecisionStreamClient() {
+            @Override
+            public Flux<IntentDecisionStreamFrame> recognize(
+                    ChatCommand command, MemoryContext memory, UserContext user) {
+                throw new AssertionError("legacy overload should not be used");
+            }
+
+            @Override
+            public Flux<IntentDecisionStreamFrame> recognize(
+                    ChatCommand command, MemoryContext memory, UserContext user, String userMessageId) {
+                captured.set(userMessageId);
+                return Flux.just(IntentDecisionStreamFrame.result(
+                        IntentRecognitionResult.finalDecision(decision), 1, 1));
+            }
+        };
+
+        new StreamingIntentAgentRuntime(client).route(request("msg-user")).collectList().block();
+
+        assertThat(captured.get()).isEqualTo("msg-user");
+    }
+
     private IntentAgentRouteRequest request() {
+        return request(null);
+    }
+
+    private IntentAgentRouteRequest request(String userMessageId) {
         UserContext user = new UserContext("tenant1", "user1", "Alice");
         ChatSession session = new ChatSession(
                 "session1", "tenant1", "user1", "test", "ACTIVE", "web", Instant.now(), Instant.now());
         ChatCommand command = new ChatCommand(
                 "command1", "tenant1", "user1", "session1", null, "web", "问题", List.of(), Map.of());
         return new IntentAgentRouteRequest(
-                user, session, command, MemoryContext.empty(), "run1", "first_turn");
+                user, session, command, MemoryContext.empty(), "run1", "first_turn", userMessageId);
     }
 }

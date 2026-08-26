@@ -83,8 +83,17 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
 
     @Override
     public Flux<IntentDecisionStreamFrame> recognize(ChatCommand command, MemoryContext memory, UserContext user) {
+        return recognize(command, memory, user, null);
+    }
+
+    @Override
+    public Flux<IntentDecisionStreamFrame> recognize(ChatCommand command,
+                                                     MemoryContext memory,
+                                                     UserContext user,
+                                                     String userMessageId) {
         int maxAttempts = 1 + properties.normalizedMaxRetries();
-        return executeAttempt(new StreamAttemptContext(command, memory, user, 1, maxAttempts));
+        return executeAttempt(new StreamAttemptContext(
+                command, memory, user, userMessageId, 1, maxAttempts));
     }
 
     private Flux<IntentDecisionStreamFrame> executeAttempt(StreamAttemptContext context) {
@@ -106,7 +115,8 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
                 .uri(properties.getRecognizeStreamPath())
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .headers(headers -> resolvedAuthHeaders.forEach(headers::set))
-                .bodyValue(wireMapper.toWireRequest(context.command(), context.memory(), context.user()))
+                .bodyValue(wireMapper.toWireRequest(
+                        context.command(), context.memory(), context.user(), context.userMessageId()))
                 .exchangeToFlux(response -> responseFrames(response, context));
         Flux<IntentDecisionStreamFrame> firstEventBound = responseFrames.timeout(
                 Mono.delay(properties.normalizedStreamFirstEventTimeout()), ignored -> Mono.never());
@@ -442,6 +452,7 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
             ChatCommand command,
             MemoryContext memory,
             UserContext user,
+            String userMessageId,
             int attempt,
             int maxAttempts
     ) {
@@ -450,7 +461,8 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
         }
 
         private StreamAttemptContext nextAttempt() {
-            return new StreamAttemptContext(command, memory, user, attempt + 1, maxAttempts);
+            return new StreamAttemptContext(
+                    command, memory, user, userMessageId, attempt + 1, maxAttempts);
         }
     }
 

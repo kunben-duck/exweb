@@ -47,6 +47,8 @@ class IntentServiceHttpPropertiesTest {
                     .isEqualTo("/intent-recognition-configuration/getIntentDecision");
             assertThat(properties.getRecognizeStreamPath())
                     .isEqualTo("/intent-recognition-configuration/getIntentDecisionStream");
+            assertThat(properties.getConfidencePath())
+                    .isEqualTo("/intent-recognition-configuration/getIntentConfidence");
             assertThat(properties.normalizedStreamFirstEventTimeout()).isEqualTo(Duration.ofSeconds(5));
             assertThat(properties.normalizedStreamIdleTimeout()).isEqualTo(Duration.ofSeconds(30));
             assertThat(properties.normalizedStreamTotalTimeout()).isEqualTo(Duration.ofSeconds(120));
@@ -61,6 +63,7 @@ class IntentServiceHttpPropertiesTest {
         contextRunner.withPropertyValues(
                         "financeex.intent.invocation-mode=STREAMING",
                         "financeex.intent.recognize-stream-path=/stream",
+                        "financeex.intent.confidence-path=/confidence",
                         "financeex.intent.stream-first-event-timeout=2s",
                         "financeex.intent.stream-idle-timeout=12s",
                         "financeex.intent.stream-total-timeout=90s",
@@ -72,6 +75,7 @@ class IntentServiceHttpPropertiesTest {
 
                     assertThat(properties.getInvocationMode()).isEqualTo(IntentInvocationMode.STREAMING);
                     assertThat(properties.getRecognizeStreamPath()).isEqualTo("/stream");
+                    assertThat(properties.getConfidencePath()).isEqualTo("/confidence");
                     assertThat(properties.normalizedStreamFirstEventTimeout()).isEqualTo(Duration.ofSeconds(2));
                     assertThat(properties.normalizedStreamIdleTimeout()).isEqualTo(Duration.ofSeconds(12));
                     assertThat(properties.normalizedStreamTotalTimeout()).isEqualTo(Duration.ofSeconds(90));

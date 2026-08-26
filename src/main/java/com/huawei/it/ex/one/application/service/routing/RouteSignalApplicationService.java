@@ -165,7 +165,8 @@ public class RouteSignalApplicationService {
                     user, session, intentCommand, memory, routeTrigger, lastRejectReason, runId);
             MemoryContext intentMemory = memoryWithRouteContext(routeRequest);
             return intentAgentRuntime.route(new IntentAgentRouteRequest(
-                            user, session, intentCommand, intentMemory, runId, routeTrigger))
+                            user, session, intentCommand, intentMemory, runId, routeTrigger,
+                            request.userMessageId()))
                     .concatMap(frame -> toRouteSignalFrames(routeRequest, intentMemory, frame))
                     .onErrorResume(ex -> {
                         String reason = "intent agent stream failed: "

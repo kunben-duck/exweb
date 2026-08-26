@@ -3,6 +3,7 @@ package com.huawei.it.ex.one.interfaces;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.it.ex.one.application.integration.conversation.SessionSearchTimeoutException;
+import com.huawei.it.ex.one.application.integration.intent.IntentCandidateQueryException;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -102,6 +103,32 @@ class ApiExceptionHandlerTest {
         assertThat(reactiveResponse.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         assertThat(reactiveResponse.getBody()).isNotNull();
         assertThat(reactiveResponse.getBody().code()).isEqualTo("SESSION_SEARCH_TIMEOUT");
+    }
+
+    @Test
+    void mapsIntentCandidateFailuresToGatewayStatuses() {
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> timeout =
+                handler.handleIntentCandidateQuery(
+                        IntentCandidateQueryException.timeout(new RuntimeException("timeout")),
+                        servletRequest("/v1/chat/intent-candidates"));
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> upstream =
+                reactiveHandler.handleIntentCandidateQuery(
+                        IntentCandidateQueryException.upstream("upstream failed"),
+                        exchange("/v1/chat/intent-candidates"));
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> busy =
+                handler.handleIntentCandidateQuery(
+                        IntentCandidateQueryException.busy(),
+                        servletRequest("/v1/chat/intent-candidates"));
+
+        assertThat(timeout.getStatusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+        assertThat(timeout.getBody()).isNotNull();
+        assertThat(timeout.getBody().code()).isEqualTo("INTENT_CANDIDATES_TIMEOUT");
+        assertThat(upstream.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+        assertThat(upstream.getBody()).isNotNull();
+        assertThat(upstream.getBody().code()).isEqualTo("INTENT_CANDIDATES_UPSTREAM_FAILED");
+        assertThat(busy.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThat(busy.getBody()).isNotNull();
+        assertThat(busy.getBody().code()).isEqualTo("INTENT_CANDIDATES_BUSY");
     }
 
     private MockHttpServletRequest servletRequest(String path) {

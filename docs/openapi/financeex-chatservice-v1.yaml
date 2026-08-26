@@ -348,6 +348,91 @@ paths:
         '409':
           $ref: '#/components/responses/Conflict'
 
+  /v1/chat/intent-candidates:
+    post:
+      tags: [Chat Runs & Streaming]
+      operationId: queryIntentCandidates
+      summary: 按user消息查询Intent候选技能
+      description: |
+        校验messageId属于当前用户且role=user后，转发Intent置信度接口并直接返回
+        data.confidence.topCandidates。候选不缓存、不持久化，也不执行敏感信息或专家模式解析。
+        accessName保持下游原值，skillId仅按financeex.intent.response-access-name-prefix
+        区分大小写移除一次并trim。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntentCandidateQueryRequest'
+            example:
+              messageId: msg_d0a6c41dd1ed43efbc9ece562b66d44
+      responses:
+        '200':
+          description: 候选数组，或沿用现有资源越权提示体
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items:
+                      $ref: '#/components/schemas/IntentCandidateQueryItem'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                candidates:
+                  value:
+                    - intentId: 607294d4b2da408894fba3e92aad3c25
+                      accessName: EX_finance_query
+                      skillId: finance_query
+                      intentName: 财经智能问数
+                      confidence: 0.92
+                empty:
+                  value: []
+                accessDenied:
+                  $ref: '#/components/examples/AccessDenied'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          description: 当前实例的Intent候选查询或候选鉴权容量已满
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              example:
+                timestamp: '2026-08-27T10:00:00Z'
+                path: /v1/chat/intent-candidates
+                status: 429
+                error: Too Many Requests
+                code: INTENT_CANDIDATES_BUSY
+                message: Intent候选技能查询繁忙，请稍后重试
+        '502':
+          description: Intent候选技能服务调用或协议解析失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              example:
+                timestamp: '2026-08-27T10:00:00Z'
+                path: /v1/chat/intent-candidates
+                status: 502
+                error: Bad Gateway
+                code: INTENT_CANDIDATES_UPSTREAM_FAILED
+                message: Intent候选技能服务调用失败
+        '504':
+          description: Intent候选技能查询重试耗尽且最终失败为超时
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              example:
+                timestamp: '2026-08-27T10:00:00Z'
+                path: /v1/chat/intent-candidates
+                status: 504
+                error: Gateway Timeout
+                code: INTENT_CANDIDATES_TIMEOUT
+                message: Intent候选技能查询超时
+
   /v1/chat/runs/{runId}/stop:
     post:
       tags: [Chat Runs & Streaming]
@@ -1832,6 +1917,40 @@ components:
           type: string
         message:
           type: string
+
+    IntentCandidateQueryRequest:
+      type: object
+      required: [messageId]
+      additionalProperties: false
+      properties:
+        messageId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: 当前用户拥有的user消息ID；服务端trim后校验长度
+
+    IntentCandidateQueryItem:
+      type: object
+      required: [intentId, accessName, skillId, intentName, confidence]
+      properties:
+        intentId:
+          type: string
+          nullable: true
+        accessName:
+          type: string
+          nullable: true
+          description: Intent服务返回的原始accessName
+        skillId:
+          type: string
+          nullable: true
+          description: 按通用响应前缀区分大小写移除一次并trim后的accessName
+        intentName:
+          type: string
+          nullable: true
+        confidence:
+          type: number
+          format: double
+          nullable: true
 
     CreateChatRunRequest:
       type: object

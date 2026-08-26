@@ -39,6 +39,13 @@ public class IntentServiceWireMapper {
         return requestMapper.toWireRequest(command, memory, user);
     }
 
+    public IntentRecognizeRequest toWireRequest(ChatCommand command,
+                                                MemoryContext memory,
+                                                UserContext user,
+                                                String userMessageId) {
+        return requestMapper.toWireRequest(command, memory, user, userMessageId);
+    }
+
     /**
      * 将意图服务响应转换为稳定领域模型。
      *

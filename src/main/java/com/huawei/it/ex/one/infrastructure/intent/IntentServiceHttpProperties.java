@@ -1,6 +1,10 @@
 package com.huawei.it.ex.one.infrastructure.intent;
 
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.validation.annotation.Validated;
 
 import java.time.Duration;
 
@@ -11,6 +15,7 @@ import java.time.Duration;
  * 反复修改 HTTP 调用编排。</p>
  */
 @ConfigurationProperties(prefix = "financeex.intent")
+@Validated
 public class IntentServiceHttpProperties {
     private static final int MAX_NORMALIZED_RETRIES = 10;
     private static final String DEFAULT_NO_MATCH_AGENT_NAME = "FIN Supervisor Agent";
@@ -53,6 +58,10 @@ public class IntentServiceHttpProperties {
     private int streamAuthIoQueueCapacity = 128;
     /** 意图服务调用失败后的最大重试次数；不包含首次调用，运行时会限制到安全上限。 */
     private int maxRetries = 3;
+    /** 发送给意图服务的最近用户偏好纠正数量；0表示关闭数据库读取。 */
+    @Min(0)
+    @Max(20)
+    private int userPreferenceCorrectionsLimit = 5;
 
     public String getBaseUrl() {
         return baseUrl;
@@ -204,6 +213,14 @@ public class IntentServiceHttpProperties {
 
     public void setMaxRetries(int maxRetries) {
         this.maxRetries = maxRetries;
+    }
+
+    public int getUserPreferenceCorrectionsLimit() {
+        return userPreferenceCorrectionsLimit;
+    }
+
+    public void setUserPreferenceCorrectionsLimit(int userPreferenceCorrectionsLimit) {
+        this.userPreferenceCorrectionsLimit = userPreferenceCorrectionsLimit;
     }
 
     public Duration normalizedTimeout() {

@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.infrastructure.intent;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.huawei.it.ex.one.application.integration.intent.IntentUserPreferenceCorrection;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
@@ -13,10 +14,32 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
 class IntentServiceRequestMapperTest {
+    @Test
+    void includesPreferenceCorrectionsAndAlwaysSerializesTheArray() {
+        IntentServiceRequestMapper mapper = new IntentServiceRequestMapper(new IntentServiceHttpProperties());
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        IntentUserPreferenceCorrection correction = new IntentUserPreferenceCorrection(
+                "原始问题", "支付成功率分析", null, Instant.parse("2026-08-27T02:00:00Z"));
+
+        IntentRecognizeRequest populated = mapper.toWireRequest(
+                command(null), MemoryContext.empty(),
+                new UserContext("tenant1", "user1", "User One"), "msg-user", List.of(correction));
+        IntentRecognizeRequest empty = mapper.toWireRequest(
+                command(null), MemoryContext.empty(),
+                new UserContext("tenant1", "user1", "User One"), "msg-user");
+
+        assertThat(populated.userPreferenceCorrections()).containsExactly(correction);
+        assertThat(objectMapper.valueToTree(populated)
+                .path("userPreferenceCorrections").get(0).has("originalIntent")).isFalse();
+        assertThat(objectMapper.valueToTree(empty).path("userPreferenceCorrections").isArray()).isTrue();
+        assertThat(objectMapper.valueToTree(empty).path("userPreferenceCorrections")).isEmpty();
+    }
+
     @Test
     void frontendIntentAccessNameOverridesConfiguredDefault() {
         IntentServiceHttpProperties properties = new IntentServiceHttpProperties();

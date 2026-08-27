@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.it.ex.one.application.integration.conversation.SessionSearchTimeoutException;
 import com.huawei.it.ex.one.application.integration.intent.IntentCandidateQueryException;
+import com.huawei.it.ex.one.application.integration.intent.IntentPreferenceUnavailableException;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -129,6 +130,26 @@ class ApiExceptionHandlerTest {
         assertThat(busy.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(busy.getBody()).isNotNull();
         assertThat(busy.getBody().code()).isEqualTo("INTENT_CANDIDATES_BUSY");
+    }
+
+    @Test
+    void mapsIntentPreferenceWriteFailureToServiceUnavailable() {
+        IntentPreferenceUnavailableException exception = new IntentPreferenceUnavailableException(
+                "意图偏好记录暂不可用，请稍后重试", new RuntimeException("database down"));
+
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> servletResponse =
+                handler.handleIntentPreferenceUnavailable(
+                        exception, servletRequest("/v1/chat/intent-preference-corrections"));
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> reactiveResponse =
+                reactiveHandler.handleIntentPreferenceUnavailable(
+                        exception, exchange("/v1/chat/intent-preference-corrections"));
+
+        assertThat(servletResponse.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(servletResponse.getBody()).isNotNull();
+        assertThat(servletResponse.getBody().code()).isEqualTo("INTENT_PREFERENCE_UNAVAILABLE");
+        assertThat(reactiveResponse.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(reactiveResponse.getBody()).isNotNull();
+        assertThat(reactiveResponse.getBody().code()).isEqualTo("INTENT_PREFERENCE_UNAVAILABLE");
     }
 
     private MockHttpServletRequest servletRequest(String path) {

@@ -255,6 +255,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | --- | --- | --- | --- | --- |
 | `POST /v1/chat/runs` | 唯一任务提交入口，创建后台 run 或续接 Interaction。 | JSON body：现有字段外增加可选 `channel`，最大64字符。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | 移动端统一传 `mobile`；自动建会话时保存该值，省略则默认 `web`。已有会话显式传入时必须一致，PC 省略后仍可访问任意渠道。 |
 | `POST /v1/chat/intent-candidates` | 用户主动查看某条user消息的Intent候选技能。 | JSON body：`messageId`必填，trim后最大64字符。 | 候选裸数组；每项为`intentId/accessName/skillId/intentName/confidence`。 | 仅允许当前用户的user消息；`accessName`保留下游原值，`skillId`只移除一次服务端通用前缀。不缓存候选；本机容量满返回`429/INTENT_CANDIDATES_BUSY`，上游失败返回502，HTTP响应超时重试耗尽返回504。前端收到BUSY后应延迟重试。 |
+| `POST /v1/chat/intent-preference-corrections` | 用户勾选“记录我的偏好”后独立保存所选意图。 | `selectionType=INTENT_CANDIDATE`时提交`sourceMessageId + selectedIntent`；`AMBIGUOUS_ROUTE`时提交`interactionId`；两者均可提交`intentAccessName`。 | `204 No Content`。 | 必须先等待对应Run成功受理，再异步调用本接口。偏好失败返回`503/INTENT_PREFERENCE_UNAVAILABLE`，不得取消当前Run；可独立重试。 |
 | `POST /v1/chat/runs/{runId}/stop` | 用户停止运行中的回答，或取消当前会话的等待输入。 | Path：运行态传 `activeRunId`；等待态传 `waitingSourceRunId`。 | `ChatRunStopDto`：原有字段，以及 `waitingUserInput`、`interactionId`、`interactionStatus`、`interactionCancelledAt`、`effectiveRunId`。 | 幂等；停止语义不是关闭 WebSocket。等待态历史 run-A 不改写为 `CANCELLED`。 |
 | `GET /v1/chat/sessions/{sessionId}/events/resume` | 断线、刷新、复制页签后补齐整个会话缺失 event。 | Path：`sessionId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 使用本地已处理最大 `sequence` 作为 `afterSeq`；只处理 `stream-item` 中的 `encodedItem.data`。 |
 | `GET /v1/chat/runs/{runId}/events/resume` | 跨页签、跨浏览器或跨电脑续接当前正在输出的 active run。 | Path：`runId`；Query：`afterSeq` 默认 0。 | `text/event-stream`，data 为 `ConversationTurnStreamDto`。 | 页面初始化恢复 active run 时，统一使用 `activeRunFirstSeq - 1` 作为 `afterSeq`；该连接会先补发历史事件，再持续输出 live 事件直到 run 终态，并以 `done` 闭合。live source 异常时当前 tail 会结束且不会自动轮询数据库，前端应使用已处理的最大 `sequence` 重新请求。 |
@@ -1901,6 +1902,34 @@ run-B 不创建新的可见 user 或 assistant 消息，最终更新原 assistan
 本轮文本语义作为 response part 追加到同一 assistant，新附件则追加到原 user 消息的标准
 `attachments[]`；若再次得到 `AMBIGUOUS_ROUTE`，新候选卡片继续复用该 assistant。普通
 `UNCLEAR_REFERENCE` 等 Intent 澄清仍采用 `NEW_TURN`，不能按此规则合并。
+
+用户人工指定候选并勾选“记录我的偏好”时，必须先等待上述`POST /v1/chat/runs`成功受理，再独立提交：
+
+```json
+{
+  "selectionType": "AMBIGUOUS_ROUTE",
+  "interactionId": "interaction_xxx",
+  "intentAccessName": "finance_pc_entry"
+}
+```
+
+从`POST /v1/chat/intent-candidates`结果选择新技能时，Run成功受理后提交原user消息和所选摘要：
+
+```json
+{
+  "selectionType": "INTENT_CANDIDATE",
+  "sourceMessageId": "msg_original",
+  "selectedIntent": {
+    "intentId": "intent_xxx",
+    "intentName": "支付成功率分析"
+  },
+  "intentAccessName": "finance_pc_entry"
+}
+```
+
+偏好接口成功返回`204`。不能与Run并行提交，否则Run失败时偏好仍可能保存。偏好保存失败只单独提示或重试，
+不得stop或撤销已经启动的Run。使用非默认Intent入口时，两次请求必须提交相同的`intentAccessName`；省略时均
+使用服务端默认入口。`AUTO_SELECT`、选择“其他”、取消和过期Interaction不能记录偏好。
 
 Cookie 只通过本次 `CONTINUE_INTERACTION` HTTP 请求头进入下游，禁止放入 `metadata`。后端不保留
 run-A 入口 Cookie、TraceContext 或 metadata，也不注册本机自动选择任务。前端到期提交时应携带当前

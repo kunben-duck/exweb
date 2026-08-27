@@ -55,7 +55,20 @@ class IntentServiceHttpPropertiesTest {
             assertThat(properties.normalizedStreamAuthTimeout()).isEqualTo(Duration.ofSeconds(5));
             assertThat(properties.normalizedStreamAuthIoMaxSize()).isEqualTo(4);
             assertThat(properties.normalizedStreamAuthIoQueueCapacity()).isEqualTo(128);
+            assertThat(properties.getUserPreferenceCorrectionsLimit()).isEqualTo(5);
         });
+    }
+
+    @Test
+    void validatesUserPreferenceCorrectionsLimit() {
+        contextRunner.withPropertyValues("financeex.intent.user-preference-corrections-limit=0")
+                .run(context -> assertThat(context).hasNotFailed());
+        contextRunner.withPropertyValues("financeex.intent.user-preference-corrections-limit=20")
+                .run(context -> assertThat(context).hasNotFailed());
+        contextRunner.withPropertyValues("financeex.intent.user-preference-corrections-limit=-1")
+                .run(context -> assertThat(context).hasFailed());
+        contextRunner.withPropertyValues("financeex.intent.user-preference-corrections-limit=21")
+                .run(context -> assertThat(context).hasFailed());
     }
 
     @Test

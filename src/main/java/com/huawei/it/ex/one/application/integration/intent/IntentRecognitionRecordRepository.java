@@ -2,6 +2,8 @@ package com.huawei.it.ex.one.application.integration.intent;
 
 import com.huawei.it.ex.one.domain.intent.IntentRecognitionRecord;
 
+import java.util.Optional;
+
 /**
  * 意图识别记录仓储端口。
  *
@@ -14,4 +16,13 @@ public interface IntentRecognitionRecordRepository {
      * @param record 意图识别记录。
      */
     void save(IntentRecognitionRecord record);
+
+    /**
+     * Finds the latest successful or no-match Intent name associated with one trusted user message run.
+     * The default keeps lightweight test repositories source compatible.
+     */
+    default Optional<String> findLatestRecognizedIntentName(
+            String tenantId, String userId, String sessionId, String runId) {
+        return Optional.empty();
+    }
 }

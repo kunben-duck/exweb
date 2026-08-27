@@ -200,3 +200,39 @@ Intent路由共享流式鉴权资源。
 `504/INTENT_CANDIDATES_TIMEOUT`；其他下游、鉴权或协议失败返回
 `502/INTENT_CANDIDATES_UPSTREAM_FAILED`。Intent服务返回的HTTP 429不在ChatService内重试，
 并按上游失败映射为502，避免与本机容量不足混淆。
+
+## 13. 用户偏好独立记录
+
+前端从本接口候选中选择技能并勾选“记录我的偏好”时，应先提交Run；Run成功受理后再调用：
+
+```http
+POST /v1/chat/intent-preference-corrections
+Content-Type: application/json
+```
+
+```json
+{
+  "selectionType": "INTENT_CANDIDATE",
+  "sourceMessageId": "msg_original",
+  "selectedIntent": {
+    "intentId": "intent_xxx",
+    "intentName": "支付成功率分析"
+  },
+  "intentAccessName": "finance_pc_entry"
+}
+```
+
+模糊意图人工选择使用已成功受理或已完成的Interaction作为可信来源：
+
+```json
+{
+  "selectionType": "AMBIGUOUS_ROUTE",
+  "interactionId": "interaction_xxx",
+  "intentAccessName": "finance_pc_entry"
+}
+```
+
+成功返回`204`。偏好按租户、用户和有效Intent入口跨会话生效；同一source user消息重复提交时，
+原子更新为最后一次选择。偏好保存失败返回`503/INTENT_PREFERENCE_UNAVAILABLE`，不影响已经受理的Run。
+后续阻塞和流式Intent调用都会在请求顶层携带最近记录的`userPreferenceCorrections`；默认最多5条，
+由`FINANCEEX_INTENT_USER_PREFERENCE_CORRECTIONS_LIMIT`控制，设为`0`时跳过数据库读取并发送`[]`。

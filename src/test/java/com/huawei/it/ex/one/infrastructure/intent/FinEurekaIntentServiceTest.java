@@ -6,6 +6,7 @@ import com.huawei.it.ex.one.application.config.IntegrationAuthProperties;
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.it.ex.one.application.integration.intent.IntentRetryContext;
 import com.huawei.it.ex.one.application.integration.intent.IntentRetryPolicy;
+import com.huawei.it.ex.one.application.integration.intent.IntentUserPreferenceCorrection;
 import com.huawei.it.ex.one.application.service.auth.AuthHeaderProviderRegistry;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
@@ -27,6 +28,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -35,6 +37,66 @@ import java.util.concurrent.atomic.AtomicReference;
 
 class FinEurekaIntentServiceTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Test
+    void loadsPreferencesOnceAndReusesThemAcrossBlockingRetries() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicReference<String> lastRequestBody = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/recognize", exchange -> {
+            lastRequestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            int attempt = attempts.incrementAndGet();
+            String response = attempt == 1
+                    ? "{\"code\":500,\"data\":{\"status\":\"failed\"}}"
+                    : "{\"code\":200,\"data\":{\"status\":\"success\",\"result\":{"
+                            + "\"routeAction\":\"ROUTE_SINGLE\",\"items\":[{\"intentId\":\"ok\","
+                            + "\"intentName\":\"OK\",\"accessName\":\"skill-ok\"}]}}}";
+            byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream output = exchange.getResponseBody()) {
+                output.write(bytes);
+            }
+        });
+        server.start();
+        try {
+            IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
+            properties.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort());
+            properties.setRecognizePath("/recognize");
+            properties.setAccessName("intent-entry");
+            properties.setMaxRetries(1);
+            AtomicInteger preferenceLoads = new AtomicInteger();
+            List<IntentUserPreferenceCorrection> preferences = List.of(new IntentUserPreferenceCorrection(
+                    "问题", "偏好意图", "原始意图", Instant.parse("2026-08-27T02:00:00Z")));
+            IntentPreferenceCorrectionLoader loader = new IntentPreferenceCorrectionLoader(
+                    null, null, null, null, Runnable::run) {
+                @Override
+                public List<IntentUserPreferenceCorrection> loadBlocking(
+                        ChatCommand command, UserContext user) {
+                    preferenceLoads.incrementAndGet();
+                    return preferences;
+                }
+            };
+            AuthHeaderProviderRegistry authHeaders = new AuthHeaderProviderRegistry(
+                    new IntegrationAuthProperties(), List.of(new NoopAuthHeaderProvider()));
+            IntentServiceWireMapper mapper = new IntentServiceWireMapper(
+                    new IntentServiceRequestMapper(properties),
+                    new IntentServiceResponseMapper(objectMapper, properties));
+            FinEurekaIntentService service = new FinEurekaIntentService(
+                    WebClient.builder(), properties, mapper, authHeaders,
+                    new DefaultIntentRetryPolicy(), loader);
+
+            IntentDecision decision = service.recognize(command(), MemoryContext.empty(), user());
+
+            assertThat(decision.intentCode()).isEqualTo("ok");
+            assertThat(attempts.get()).isEqualTo(2);
+            assertThat(lastRequestBody.get()).contains(
+                    "\"userPreferenceCorrections\":[{\"query\":\"问题\",\"preferenceIntent\":\"偏好意图\"");
+            assertThat(preferenceLoads.get()).isEqualTo(1);
+        } finally {
+            server.stop(0);
+        }
+    }
 
     @Test
     void mapsInternalCommandToIntentWireRequest() {

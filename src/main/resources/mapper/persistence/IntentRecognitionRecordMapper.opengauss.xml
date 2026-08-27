@@ -24,4 +24,21 @@
             #{resultMessage}, #{itemsJson}, #{rawResponseJson}, #{errorMessage}, #{latencyMs}, #{createdAt}
         )
     </insert>
+
+    <!--
+      查询一个可信user消息所属run最近记录的SUCCESS或NO_MATCH意图名称，供候选偏好记录原始意图。
+      入参: tenantId/userId/sessionId为归属边界，runId为user消息关联的run标识。
+    -->
+    <select id="findLatestRecognizedIntentName" resultType="java.lang.String">
+        SELECT intent_name
+        FROM fin_ex_intent_recognition_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND run_id = #{runId}
+          AND status IN ('SUCCESS', 'NO_MATCH')
+          AND intent_name IS NOT NULL
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+    </select>
 </mapper>

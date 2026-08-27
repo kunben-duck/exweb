@@ -1,11 +1,15 @@
 package com.huawei.it.ex.one.infrastructure.intent;
 
+import com.huawei.it.ex.one.application.integration.intent.IntentAccessNameResolver;
+import com.huawei.it.ex.one.application.integration.intent.IntentUserPreferenceCorrection;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -17,9 +21,23 @@ import java.util.Map;
 @Component
 public class IntentServiceRequestMapper {
     private final IntentServiceHttpProperties properties;
+    private final IntentAccessNameResolver accessNameResolver;
 
     public IntentServiceRequestMapper(IntentServiceHttpProperties properties) {
+        this(properties, requested -> {
+            if (requested != null && !requested.isBlank()) {
+                return requested.trim();
+            }
+            String configured = properties.getAccessName();
+            return configured == null ? "" : configured.trim();
+        });
+    }
+
+    @Autowired
+    public IntentServiceRequestMapper(IntentServiceHttpProperties properties,
+                                      IntentAccessNameResolver accessNameResolver) {
         this.properties = properties;
+        this.accessNameResolver = accessNameResolver;
     }
 
     /**
@@ -38,11 +56,21 @@ public class IntentServiceRequestMapper {
                                                 MemoryContext memory,
                                                 UserContext user,
                                                 String userMessageId) {
+        return toWireRequest(command, memory, user, userMessageId, List.of());
+    }
+
+    public IntentRecognizeRequest toWireRequest(
+            ChatCommand command,
+            MemoryContext memory,
+            UserContext user,
+            String userMessageId,
+            List<IntentUserPreferenceCorrection> preferenceCorrections) {
         return new IntentRecognizeRequest(
                 normalizeMessageId(userMessageId),
-                normalizedAccessName(command),
+                accessNameResolver.resolve(command == null ? null : command.intentAccessName()),
                 command == null ? "" : blankToDefault(command.message(), ""),
                 intentUserId(user),
+                preferenceCorrections == null ? List.of() : List.copyOf(preferenceCorrections),
                 conversationContext(memory),
                 Map.of("trace", properties.isTrace())
         );
@@ -50,14 +78,6 @@ public class IntentServiceRequestMapper {
 
     private String normalizeMessageId(String messageId) {
         return messageId == null || messageId.isBlank() ? null : messageId.trim();
-    }
-
-    private String normalizedAccessName(ChatCommand command) {
-        if (command != null && command.intentAccessName() != null && !command.intentAccessName().isBlank()) {
-            return command.intentAccessName().trim();
-        }
-        String accessName = properties.getAccessName();
-        return accessName == null ? "" : accessName.trim();
     }
 
     private String intentUserId(UserContext user) {

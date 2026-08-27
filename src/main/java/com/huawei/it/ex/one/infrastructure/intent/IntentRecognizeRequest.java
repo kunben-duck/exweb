@@ -1,7 +1,10 @@
 package com.huawei.it.ex.one.infrastructure.intent;
 
+import com.huawei.it.ex.one.application.integration.intent.IntentUserPreferenceCorrection;
+
 import com.fasterxml.jackson.annotation.JsonInclude;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -13,6 +16,7 @@ import java.util.Map;
  * @param accessName 意图服务入口名称。
  * @param query 当前待分类用户问题；澄清回答场景填用户最新回答。
  * @param userId 用户工号或用户标识。
+ * @param userPreferenceCorrections 当前用户在同一Intent入口下最近记录的路由偏好。
  * @param conversationContext 多轮路由上下文。
  * @param options 调试和扩展选项。
  */
@@ -21,6 +25,7 @@ public record IntentRecognizeRequest(
         String accessName,
         String query,
         String userId,
+        List<IntentUserPreferenceCorrection> userPreferenceCorrections,
         Map<String, Object> conversationContext,
         Map<String, Object> options
 ) {
@@ -29,6 +34,15 @@ public record IntentRecognizeRequest(
                                   String userId,
                                   Map<String, Object> conversationContext,
                                   Map<String, Object> options) {
-        this(null, accessName, query, userId, conversationContext, options);
+        this(null, accessName, query, userId, List.of(), conversationContext, options);
+    }
+
+    public IntentRecognizeRequest(String messageId,
+                                  String accessName,
+                                  String query,
+                                  String userId,
+                                  Map<String, Object> conversationContext,
+                                  Map<String, Object> options) {
+        this(messageId, accessName, query, userId, List.of(), conversationContext, options);
     }
 }

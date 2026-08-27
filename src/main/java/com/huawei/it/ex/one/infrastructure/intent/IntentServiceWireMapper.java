@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.infrastructure.intent;
 
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
+import com.huawei.it.ex.one.application.integration.intent.IntentUserPreferenceCorrection;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
@@ -9,6 +10,8 @@ import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import org.springframework.stereotype.Component;
+
+import java.util.List;
 
 /**
  * 财经 Eureka 意图服务 wire 协议转换门面。
@@ -44,6 +47,16 @@ public class IntentServiceWireMapper {
                                                 UserContext user,
                                                 String userMessageId) {
         return requestMapper.toWireRequest(command, memory, user, userMessageId);
+    }
+
+    public IntentRecognizeRequest toWireRequest(
+            ChatCommand command,
+            MemoryContext memory,
+            UserContext user,
+            String userMessageId,
+            List<IntentUserPreferenceCorrection> preferenceCorrections) {
+        return requestMapper.toWireRequest(
+                command, memory, user, userMessageId, preferenceCorrections);
     }
 
     /**

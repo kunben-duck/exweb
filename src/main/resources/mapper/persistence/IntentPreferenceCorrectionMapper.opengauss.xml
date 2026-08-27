@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huawei.it.ex.one.infrastructure.persistence.IntentPreferenceCorrectionMapper">
+    <!--
+      按归属、Intent入口和source消息原子新增或覆盖用户偏好，重复提交只保留最后一次选择。
+      入参: IntentPreferenceCorrectionWriteRow，包含主键、owner、来源消息、可信问题、选择结果和服务端时间。
+    -->
+    <insert id="upsert" parameterType="com.huawei.it.ex.one.infrastructure.persistence.IntentPreferenceCorrectionWriteRow">
+        INSERT INTO fin_ex_intent_preference_correction_t(
+            id, tenant_id, user_id, intent_access_name, session_id, source_message_id,
+            source_type, query_text, preference_intent, original_intent, created_at, updated_at
+        )
+        VALUES(
+            #{id}, #{tenantId}, #{userId}, #{intentAccessName}, #{sessionId}, #{sourceMessageId},
+            #{sourceType}, #{queryText}, #{preferenceIntent}, #{originalIntent}, #{createdAt}, #{updatedAt}
+        )
+        ON DUPLICATE KEY UPDATE
+            session_id = EXCLUDED.session_id,
+            source_type = EXCLUDED.source_type,
+            query_text = EXCLUDED.query_text,
+            preference_intent = EXCLUDED.preference_intent,
+            original_intent = EXCLUDED.original_intent,
+            updated_at = EXCLUDED.updated_at
+    </insert>
+
+    <!--
+      查询当前用户在有效Intent入口下最近更新的偏好，供一次Intent逻辑调用构造顶层请求数组。
+      入参: tenantId/userId为归属边界，intentAccessName为区分大小写的入口，limit为最大返回条数。
+    -->
+    <select id="findRecent" resultType="com.huawei.it.ex.one.infrastructure.persistence.IntentPreferenceCorrectionReadRow">
+        SELECT
+            query_text AS queryText,
+            preference_intent AS preferenceIntent,
+            original_intent AS originalIntent,
+            updated_at AS updatedAt
+        FROM fin_ex_intent_preference_correction_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND intent_access_name = #{intentAccessName}
+        ORDER BY updated_at DESC, id DESC
+        LIMIT #{limit}
+    </select>
+</mapper>

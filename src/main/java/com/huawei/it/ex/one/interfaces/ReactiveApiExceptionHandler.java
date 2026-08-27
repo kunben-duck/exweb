@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.interfaces;
 
 import com.huawei.it.ex.one.application.integration.conversation.SessionSearchTimeoutException;
 import com.huawei.it.ex.one.application.integration.intent.IntentCandidateQueryException;
+import com.huawei.it.ex.one.application.integration.intent.IntentPreferenceUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ChatShareUnavailableException;
@@ -26,6 +27,14 @@ import org.springframework.web.server.ServerWebExchange;
 @RestControllerAdvice(basePackages = "com.huawei.it.ex.one.interfaces")
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.REACTIVE)
 public class ReactiveApiExceptionHandler {
+    /** Preference recording is independent from run admission and reports a retryable 503. */
+    @ExceptionHandler(IntentPreferenceUnavailableException.class)
+    public ResponseEntity<ApiExceptionHandler.ApiErrorResponse> handleIntentPreferenceUnavailable(
+            IntentPreferenceUnavailableException ex, ServerWebExchange exchange) {
+        return ApiExceptionHandler.error(HttpStatus.SERVICE_UNAVAILABLE, "INTENT_PREFERENCE_UNAVAILABLE",
+                ex.getMessage(), requestPath(exchange));
+    }
+
     /** 将候选技能下游失败映射为稳定的网关错误。 */
     @ExceptionHandler(IntentCandidateQueryException.class)
     public ResponseEntity<ApiExceptionHandler.ApiErrorResponse> handleIntentCandidateQuery(

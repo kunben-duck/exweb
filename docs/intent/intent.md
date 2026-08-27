@@ -34,6 +34,14 @@ Authorization: {dynamicToken}
   "accessName": "eureka2_260718",
   "query": "对账差异识别",
   "userId": "00859938",
+  "userPreferenceCorrections": [
+    {
+      "query": "上次查询支付成功率的问题",
+      "preferenceIntent": "支付成功率分析",
+      "originalIntent": "支付数据查询",
+      "timestamp": "2026-08-27T02:00:00Z"
+    }
+  ],
   "conversationContext": {
     "routeTrigger": "first_turn",
     "lastIntentRejectReason": null,
@@ -53,10 +61,13 @@ Authorization: {dynamicToken}
 | `accessName` / `intentID` / `entranceID` | string | 三选一 | 意图入口。ChatService当前使用`accessName`：优先取`POST /v1/chat/runs.intentAccessName`，未传或空白时回退`financeex.intent.access-name`。 |
 | `query` | string | 是 | 当前待分类用户问题。澄清回答场景下，填用户对澄清问题的最新回答。 |
 | `userId` | string | 否 | 用户工号或用户标识，用于画像增强、审计或日志。 |
+| `userPreferenceCorrections` | array | 是 | 当前用户在有效accessName下最近记录的人工路由偏好，按更新时间从新到旧；无记录、功能关闭或读取失败时固定为`[]`。默认最多5条。 |
 | `conversationContext` | object | 否 | 多轮路由上下文。首轮可为空，但建议显式传空结构。 |
 | `options.trace` | boolean | 否 | 是否返回调试 trace。生产调用建议为 `false`。 |
 
 `intentAccessName`只控制本次Intent出站请求，不进入聊天metadata，也不透传给DomainAgent或Relay。同一run内因DomainAgent拒答再次调用Intent时继续使用本次值；Intent澄清创建的新run不会继承source run，前端未再次提交时使用服务端配置。
+
+`userPreferenceCorrections`来自独立偏好表，不进入`conversationContext.history`。每项只包含可信问题、用户选择的意图名称、可选原始意图名称和服务端UTC更新时间；同一次阻塞或流式Intent重试复用同一列表，不重复读取数据库。读取使用独立有界执行器和失败开放策略，因此偏好能力不可用时仍会正常调用Intent，只发送空数组。
 
 ### 2.2 conversationContext
 

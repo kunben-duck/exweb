@@ -433,6 +433,68 @@ paths:
                 code: INTENT_CANDIDATES_TIMEOUT
                 message: Intent候选技能查询超时
 
+  /v1/chat/intent-preference-corrections:
+    post:
+      tags: [Chat Runs & Streaming]
+      operationId: recordIntentPreferenceCorrection
+      summary: 独立记录用户选择的Intent偏好
+      description: |
+        前端应先提交Run，收到成功受理响应后再异步调用本接口。偏好保存失败不撤销已启动的Run，
+        后续实际调用Intent时按当前用户和有效intentAccessName读取最近记录。
+
+        INTENT_CANDIDATE使用当前用户拥有的source user消息及前端选择的意图摘要；
+        AMBIGUOUS_ROUTE只接受已成功受理或已完成的人工SELECT_CANDIDATE Interaction，候选信息由服务端恢复。
+        同一来源重复提交会覆盖为最后一次选择。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntentPreferenceCorrectionRequest'
+            examples:
+              intentCandidate:
+                value:
+                  selectionType: INTENT_CANDIDATE
+                  sourceMessageId: msg_original
+                  selectedIntent:
+                    intentId: intent_xxx
+                    intentName: 支付成功率分析
+                  intentAccessName: finance_pc_entry
+              ambiguousRoute:
+                value:
+                  selectionType: AMBIGUOUS_ROUTE
+                  interactionId: interaction_xxx
+                  intentAccessName: finance_pc_entry
+      responses:
+        '204':
+          description: 偏好已记录，无响应体
+        '200':
+          description: 资源不存在或不属于当前用户时沿用ACCESS_DENIED提示体
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                accessDenied:
+                  $ref: '#/components/examples/AccessDenied'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: 偏好记录数据库或独立写入执行器暂不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              example:
+                timestamp: '2026-08-27T10:00:00Z'
+                path: /v1/chat/intent-preference-corrections
+                status: 503
+                error: Service Unavailable
+                code: INTENT_PREFERENCE_UNAVAILABLE
+                message: 意图偏好记录暂不可用，请稍后重试
+
   /v1/chat/runs/{runId}/stop:
     post:
       tags: [Chat Runs & Streaming]
@@ -1952,6 +2014,38 @@ components:
           format: double
           nullable: true
 
+    IntentPreferenceCorrectionRequest:
+      type: object
+      required: [selectionType]
+      additionalProperties: false
+      properties:
+        selectionType:
+          type: string
+          minLength: 1
+          maxLength: 32
+          enum: [INTENT_CANDIDATE, AMBIGUOUS_ROUTE]
+        sourceMessageId:
+          type: string
+          maxLength: 64
+          nullable: true
+          description: INTENT_CANDIDATE必填；必须是当前用户拥有的user消息
+        selectedIntent:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/ChatSelectedIntent'
+          nullable: true
+          description: INTENT_CANDIDATE必填；AMBIGUOUS_ROUTE不得提交
+        interactionId:
+          type: string
+          maxLength: 64
+          nullable: true
+          description: AMBIGUOUS_ROUTE必填；必须指向已成功受理或已完成人工候选选择的Interaction
+        intentAccessName:
+          type: string
+          maxLength: 128
+          nullable: true
+          description: 偏好隔离使用的Intent入口；空白或未传时使用服务端默认值，区分大小写
+
     CreateChatRunRequest:
       type: object
       description: |
@@ -2190,7 +2284,7 @@ components:
           type: string
           minLength: 1
           maxLength: 256
-      description: 仅用于显式直连 DomainAgent 的展示摘要，不参与服务端路由判断。
+      description: 在Run请求中仅用于显式直连DomainAgent的展示摘要；在偏好接口中表示用户选择的Intent。均不参与服务端路由判断。
 
     ChatAgentMode:
       type: object

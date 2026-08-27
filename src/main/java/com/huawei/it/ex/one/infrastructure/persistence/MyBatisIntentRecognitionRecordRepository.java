@@ -5,6 +5,8 @@ import com.huawei.it.ex.one.domain.intent.IntentRecognitionRecord;
 
 import org.springframework.stereotype.Repository;
 
+import java.util.Optional;
+
 /**
  * 意图识别记录数据库实现。
  *
@@ -48,5 +50,12 @@ public class MyBatisIntentRecognitionRecordRepository implements IntentRecogniti
                 record.latencyMs(),
                 record.createdAt()
         ));
+    }
+
+    @Override
+    public Optional<String> findLatestRecognizedIntentName(
+            String tenantId, String userId, String sessionId, String runId) {
+        return Optional.ofNullable(mapper.findLatestRecognizedIntentName(
+                tenantId, userId, sessionId, runId));
     }
 }

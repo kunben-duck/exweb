@@ -5,6 +5,7 @@ import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResu
 import com.huawei.it.ex.one.application.integration.intent.IntentRetryContext;
 import com.huawei.it.ex.one.application.integration.intent.IntentRetryPolicy;
 import com.huawei.it.ex.one.application.integration.intent.IntentService;
+import com.huawei.it.ex.one.application.integration.intent.IntentUserPreferenceCorrection;
 import com.huawei.it.ex.one.application.service.auth.AuthHeaderProviderRegistry;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
@@ -20,6 +21,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import reactor.core.Exceptions;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.core.codec.DecodingException;
 import org.springframework.http.HttpHeaders;
@@ -28,6 +30,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
+import java.util.List;
 import java.util.concurrent.TimeoutException;
 
 /**
@@ -46,10 +49,19 @@ public class FinEurekaIntentService implements IntentService {
     private final IntentServiceWireMapper wireMapper;
     private final AuthHeaderProviderRegistry authHeaders;
     private final IntentRetryPolicy retryPolicy;
+    private final IntentPreferenceCorrectionLoader preferenceLoader;
 
     public FinEurekaIntentService(WebClient.Builder webClientBuilder, IntentServiceHttpProperties properties,
                                   IntentServiceWireMapper wireMapper, AuthHeaderProviderRegistry authHeaders,
                                   IntentRetryPolicy retryPolicy) {
+        this(webClientBuilder, properties, wireMapper, authHeaders, retryPolicy, null);
+    }
+
+    @Autowired
+    public FinEurekaIntentService(WebClient.Builder webClientBuilder, IntentServiceHttpProperties properties,
+                                  IntentServiceWireMapper wireMapper, AuthHeaderProviderRegistry authHeaders,
+                                  IntentRetryPolicy retryPolicy,
+                                  IntentPreferenceCorrectionLoader preferenceLoader) {
         this.webClient = properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()
                 ? webClientBuilder.build()
                 : webClientBuilder.baseUrl(properties.getBaseUrl().trim()).build();
@@ -57,6 +69,7 @@ public class FinEurekaIntentService implements IntentService {
         this.wireMapper = wireMapper;
         this.authHeaders = authHeaders;
         this.retryPolicy = retryPolicy;
+        this.preferenceLoader = preferenceLoader;
     }
 
     @Override
@@ -84,9 +97,13 @@ public class FinEurekaIntentService implements IntentService {
                                                         UserContext user,
                                                         String userMessageId) {
         int maxAttempts = 1 + properties.normalizedMaxRetries();
+        List<IntentUserPreferenceCorrection> preferenceCorrections = preferenceLoader == null
+                || properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()
+                ? List.of()
+                : preferenceLoader.loadBlocking(command, user);
         IntentRecognitionResult lastResult = null;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            lastResult = recognizeOnce(command, memory, user, userMessageId);
+            lastResult = recognizeOnce(command, memory, user, userMessageId, preferenceCorrections);
             if (lastResult.waitingClarification()) {
                 return lastResult;
             }
@@ -120,7 +137,8 @@ public class FinEurekaIntentService implements IntentService {
     private IntentRecognitionResult recognizeOnce(ChatCommand command,
                                                    MemoryContext memory,
                                                    UserContext user,
-                                                   String userMessageId) {
+                                                   String userMessageId,
+                                                   List<IntentUserPreferenceCorrection> preferenceCorrections) {
         if (properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()) {
             return IntentRecognitionResult.degraded(wireMapper.degraded("intent service base-url is not configured"));
         }
@@ -128,7 +146,8 @@ public class FinEurekaIntentService implements IntentService {
             IntentRecognitionResult result = webClient.post()
                     .uri(properties.getRecognizePath())
                     .headers(headers -> applyAuthHeaders(headers, user))
-                    .bodyValue(wireMapper.toWireRequest(command, memory, user, userMessageId))
+                    .bodyValue(wireMapper.toWireRequest(
+                            command, memory, user, userMessageId, preferenceCorrections))
                     .retrieve()
                     .bodyToMono(JsonNode.class)
                     .map(wireMapper::toRecognitionResult)

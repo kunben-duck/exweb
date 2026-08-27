@@ -7,6 +7,7 @@ import com.huawei.it.ex.one.application.integration.auth.AuthHeaderProvider;
 import com.huawei.it.ex.one.application.integration.auth.AuthHeaderRequest;
 import com.huawei.it.ex.one.application.integration.intent.IntentDecisionStreamFrame;
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
+import com.huawei.it.ex.one.application.integration.intent.IntentUserPreferenceCorrection;
 import com.huawei.it.ex.one.application.service.auth.AuthHeaderProviderRegistry;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
@@ -19,6 +20,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
@@ -31,6 +33,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -58,6 +61,50 @@ class FinEurekaIntentStreamClientTest {
             data: {"status":"success","code":200,"message":"success","data":{"result":{"routeAction":"CLARIFY","items":[],"clarification":{"type":"AMBIGUOUS_ROUTE","clarifyQuestion":"请补充问题范围"}}}}
 
             """;
+
+    @Test
+    void loadsPreferencesOnceAndReusesThemAcrossStreamRetries() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicInteger preferenceLoads = new AtomicInteger();
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        IntentServiceHttpProperties properties = properties(1);
+        List<IntentUserPreferenceCorrection> preferences = List.of(new IntentUserPreferenceCorrection(
+                "问题", "偏好意图", null, Instant.parse("2026-08-27T02:00:00Z")));
+        IntentPreferenceCorrectionLoader loader = new IntentPreferenceCorrectionLoader(
+                null, null, null, null, Runnable::run) {
+            @Override
+            public Mono<List<IntentUserPreferenceCorrection>> load(ChatCommand command, UserContext user) {
+                preferenceLoads.incrementAndGet();
+                return Mono.just(preferences);
+            }
+        };
+        try (StreamServerFixture fixture = server(requestBody, null, exchange -> {
+            if (attempts.incrementAndGet() == 1) {
+                write(exchange, "event: error\ndata: {\"code\":504}\n\n");
+                return;
+            }
+            write(exchange, ROUTE_SINGLE_RESULT);
+        })) {
+            properties.setBaseUrl(fixture.baseUrl());
+            properties.setRecognizeStreamPath("/stream");
+            ObjectMapper objectMapper = new ObjectMapper();
+            IntentServiceWireMapper wireMapper = new IntentServiceWireMapper(
+                    new IntentServiceRequestMapper(properties),
+                    new IntentServiceResponseMapper(objectMapper, properties));
+            FinEurekaIntentStreamClient client = new FinEurekaIntentStreamClient(
+                    WebClient.builder(), objectMapper, properties, wireMapper, noopAuthHeaders(),
+                    new DefaultIntentRetryPolicy(), Schedulers.boundedElastic(), loader);
+
+            IntentDecisionStreamFrame result = client
+                    .recognize(command(), MemoryContext.empty(), user())
+                    .blockLast();
+
+            assertThat(result.recognitionResult().decision().intentCode()).isEqualTo("knowledge");
+            assertThat(attempts.get()).isEqualTo(2);
+            assertThat(requestBody.get()).contains("\"userPreferenceCorrections\":[{");
+            assertThat(preferenceLoads.get()).isEqualTo(1);
+        }
+    }
 
     @Test
     void emitsProgressDeltaAndFinalResultInOrder() throws Exception {

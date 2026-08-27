@@ -6,6 +6,7 @@ import com.huawei.it.ex.one.application.integration.intent.IntentDecisionStreamF
 import com.huawei.it.ex.one.application.integration.intent.IntentRecognitionResult;
 import com.huawei.it.ex.one.application.integration.intent.IntentRetryContext;
 import com.huawei.it.ex.one.application.integration.intent.IntentRetryPolicy;
+import com.huawei.it.ex.one.application.integration.intent.IntentUserPreferenceCorrection;
 import com.huawei.it.ex.one.application.service.auth.AuthHeaderProviderRegistry;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
@@ -24,6 +25,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.core.ParameterizedTypeReference;
@@ -36,6 +38,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeoutException;
@@ -62,6 +65,7 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
     private final AuthHeaderProviderRegistry authHeaders;
     private final IntentRetryPolicy retryPolicy;
     private final Scheduler authIoScheduler;
+    private final IntentPreferenceCorrectionLoader preferenceLoader;
 
     public FinEurekaIntentStreamClient(WebClient.Builder webClientBuilder,
                                       ObjectMapper objectMapper,
@@ -70,6 +74,19 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
                                       AuthHeaderProviderRegistry authHeaders,
                                       IntentRetryPolicy retryPolicy,
                                       @Qualifier("intentStreamAuthScheduler") Scheduler authIoScheduler) {
+        this(webClientBuilder, objectMapper, properties, wireMapper, authHeaders,
+                retryPolicy, authIoScheduler, null);
+    }
+
+    @Autowired
+    public FinEurekaIntentStreamClient(WebClient.Builder webClientBuilder,
+                                      ObjectMapper objectMapper,
+                                      IntentServiceHttpProperties properties,
+                                      IntentServiceWireMapper wireMapper,
+                                      AuthHeaderProviderRegistry authHeaders,
+                                      IntentRetryPolicy retryPolicy,
+                                      @Qualifier("intentStreamAuthScheduler") Scheduler authIoScheduler,
+                                      IntentPreferenceCorrectionLoader preferenceLoader) {
         this.webClient = properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()
                 ? webClientBuilder.build()
                 : webClientBuilder.baseUrl(properties.getBaseUrl().trim()).build();
@@ -79,6 +96,7 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
         this.authHeaders = authHeaders;
         this.retryPolicy = retryPolicy;
         this.authIoScheduler = authIoScheduler;
+        this.preferenceLoader = preferenceLoader;
     }
 
     @Override
@@ -92,8 +110,12 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
                                                      UserContext user,
                                                      String userMessageId) {
         int maxAttempts = 1 + properties.normalizedMaxRetries();
-        return executeAttempt(new StreamAttemptContext(
-                command, memory, user, userMessageId, 1, maxAttempts));
+        Mono<List<IntentUserPreferenceCorrection>> preferences = preferenceLoader == null
+                || properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()
+                ? Mono.just(List.of())
+                : preferenceLoader.load(command, user);
+        return preferences.flatMapMany(items -> executeAttempt(new StreamAttemptContext(
+                command, memory, user, userMessageId, items, 1, maxAttempts)));
     }
 
     private Flux<IntentDecisionStreamFrame> executeAttempt(StreamAttemptContext context) {
@@ -116,7 +138,8 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .headers(headers -> resolvedAuthHeaders.forEach(headers::set))
                 .bodyValue(wireMapper.toWireRequest(
-                        context.command(), context.memory(), context.user(), context.userMessageId()))
+                        context.command(), context.memory(), context.user(), context.userMessageId(),
+                        context.preferenceCorrections()))
                 .exchangeToFlux(response -> responseFrames(response, context));
         Flux<IntentDecisionStreamFrame> firstEventBound = responseFrames.timeout(
                 Mono.delay(properties.normalizedStreamFirstEventTimeout()), ignored -> Mono.never());
@@ -453,16 +476,24 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
             MemoryContext memory,
             UserContext user,
             String userMessageId,
+            List<IntentUserPreferenceCorrection> preferenceCorrections,
             int attempt,
             int maxAttempts
     ) {
+        private StreamAttemptContext {
+            preferenceCorrections = preferenceCorrections == null
+                    ? List.of()
+                    : List.copyOf(preferenceCorrections);
+        }
+
         private boolean hasRemainingAttempts() {
             return attempt < maxAttempts;
         }
 
         private StreamAttemptContext nextAttempt() {
             return new StreamAttemptContext(
-                    command, memory, user, userMessageId, attempt + 1, maxAttempts);
+                    command, memory, user, userMessageId, preferenceCorrections,
+                    attempt + 1, maxAttempts);
         }
     }
 

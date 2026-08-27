@@ -140,6 +140,19 @@ class LayeredChatMessageRepositoryTest {
         assertThat(cache.appendCalls).hasValue(0);
     }
 
+    @Test
+    void ownedMessageRoleLookupDelegatesToLightweightDatabaseMethod() {
+        FakeRedisCache cache = new FakeRedisCache();
+        FakeDatabaseStore database = new FakeDatabaseStore();
+        database.saved = message();
+        LayeredChatMessageRepository repository = repository(cache, database);
+
+        assertThat(repository.findRoleByOwnerAndId("tenant1", "user1", "msg1"))
+                .contains("assistant");
+        assertThat(database.findRoleCalls).hasValue(1);
+        assertThat(database.findMessageCalls).hasValue(0);
+    }
+
     private LayeredChatMessageRepository repository(FakeRedisCache cache, FakeDatabaseStore database) {
         ShortTermMemoryStorageProperties properties = new ShortTermMemoryStorageProperties();
         properties.setDatabaseRequired(true);
@@ -217,6 +230,8 @@ class LayeredChatMessageRepositoryTest {
     private static final class FakeDatabaseStore extends MyBatisChatMessageStore {
         private final AtomicInteger saveCalls = new AtomicInteger();
         private final AtomicInteger findRecentCalls = new AtomicInteger();
+        private final AtomicInteger findRoleCalls = new AtomicInteger();
+        private final AtomicInteger findMessageCalls = new AtomicInteger();
         private ChatMessage saved;
         private RuntimeException saveFailure;
         private RuntimeException findRecentFailure;
@@ -246,7 +261,14 @@ class LayeredChatMessageRepositoryTest {
 
         @Override
         public Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId) {
+            findMessageCalls.incrementAndGet();
             return Optional.ofNullable(saved);
+        }
+
+        @Override
+        public Optional<String> findRoleByOwnerAndId(String tenantId, String userId, String messageId) {
+            findRoleCalls.incrementAndGet();
+            return Optional.ofNullable(saved).map(ChatMessage::role);
         }
 
         @Override

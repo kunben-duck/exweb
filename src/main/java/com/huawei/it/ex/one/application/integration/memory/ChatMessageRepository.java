@@ -154,6 +154,20 @@ public interface ChatMessageRepository {
     Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId);
 
     /**
+     * 按归属读取单条消息角色，不装配正文、Parts或附件。
+     *
+     * <p>默认实现兼容存量仓储；生产数据库仓储应覆盖该方法并使用轻量列投影。</p>
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param messageId 消息标识。
+     * @return 当前用户拥有的消息角色；不存在或不属于当前用户时为空。
+     */
+    default Optional<String> findRoleByOwnerAndId(String tenantId, String userId, String messageId) {
+        return findByOwnerAndId(tenantId, userId, messageId).map(ChatMessage::role);
+    }
+
+    /**
      * 按归属、会话和消息 ID 集合批量读取消息节点，不装配附件与 parts。
      *
      * @param tenantId 租户标识。

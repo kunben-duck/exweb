@@ -3030,6 +3030,11 @@ components:
           enum: [RUNNING, CANCELLING, COMPLETED, WAITING_USER, FAILED, CANCELLED]
           example: WAITING_USER
           description: 最后创建的业务Run状态；两个会话列表接口保证装配，无Run、其他接口或批量查询失败时为null。
+        lastRunSkillId:
+          type: string
+          nullable: true
+          example: skill_finance_query
+          description: 最后创建的业务Run最终Runtime调用标识；仅页码会话列表保证装配，无Run、无可记录标识、其他接口或批量查询失败时为null。
         channel:
           type: string
           nullable: true

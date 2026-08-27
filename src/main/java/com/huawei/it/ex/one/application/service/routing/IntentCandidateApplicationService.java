@@ -10,7 +10,6 @@ import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
 import com.huawei.it.ex.one.common.logging.AppLogger;
 import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.auth.UserContext;
-import com.huawei.it.ex.one.domain.chat.ChatMessage;
 
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -51,21 +50,21 @@ public class IntentCandidateApplicationService {
                         .build());
                 return Mono.error(IntentCandidateQueryException.busy());
             }
-            return Mono.fromCallable(() -> requireOwnedUserMessage(user, normalizedMessageId))
+            return Mono.fromCallable(() -> requireOwnedUserMessageId(user, normalizedMessageId))
                     .subscribeOn(Schedulers.boundedElastic())
-                    .flatMap(message -> candidateProvider.findCandidates(user, message.id()))
+                    .flatMap(ownedMessageId -> candidateProvider.findCandidates(user, ownedMessageId))
                     .doFinally(ignored -> permits.release());
         });
     }
 
-    private ChatMessage requireOwnedUserMessage(UserContext user, String messageId) {
-        ChatMessage message = messageRepository
-                .findByOwnerAndId(user.tenantId(), user.ownerUserId(), messageId)
+    private String requireOwnedUserMessageId(UserContext user, String messageId) {
+        String role = messageRepository
+                .findRoleByOwnerAndId(user.tenantId(), user.ownerUserId(), messageId)
                 .orElseThrow(() -> new SecurityException("消息不存在或不属于当前用户"));
-        if (!"user".equals(message.role())) {
+        if (!"user".equals(role)) {
             throw new IllegalArgumentException("messageId必须指向user消息");
         }
-        return message;
+        return messageId;
     }
 
     private String normalizeMessageId(String messageId) {

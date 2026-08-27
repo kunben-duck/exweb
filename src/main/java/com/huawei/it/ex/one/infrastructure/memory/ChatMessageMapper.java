@@ -157,6 +157,20 @@ public interface ChatMessageMapper {
     );
 
     /**
+     * 按owner边界轻量查询单条消息角色。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param messageId 消息标识。
+     * @return 消息角色。
+     */
+    Optional<String> findRoleByOwnerAndId(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("messageId") String messageId
+    );
+
+    /**
      * 按 owner、会话和消息 ID 集合批量查询消息节点。
      *
      * @param tenantId 租户标识。

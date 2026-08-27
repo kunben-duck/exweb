@@ -11,6 +11,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.huawei.it.ex.one.application.integration.conversation.ChatSessionLastRunSummary;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
@@ -61,6 +62,48 @@ class MyBatisChatRunRepositoryTest {
     void lastRunStatusesUseSessionSearchTransactionTimeout() throws Exception {
         Transactional transactional = MyBatisChatRunRepository.class
                 .getMethod("findLastRunStatuses", String.class, String.class, Collection.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.readOnly()).isTrue();
+        assertThat(transactional.timeoutString())
+                .isEqualTo("${financeex.session-search.database-query-timeout-seconds:2}");
+    }
+
+    @Test
+    void lastRunSummariesUseSingleOwnerScopedMapperCallAndParseSkillId() {
+        ChatRunMapper mapper = mock(ChatRunMapper.class);
+        List<String> sessionIds = List.of("session1", "session2");
+        when(mapper.findLastRunSummaries("tenant1", "user1", sessionIds))
+                .thenReturn(List.of(
+                        lastRunSummaryRow("session1", ChatRunStatus.COMPLETED,
+                                "{\"_messageSkillId\":\"skill-a\"}"),
+                        lastRunSummaryRow("session2", ChatRunStatus.FAILED, "not-json")));
+        MyBatisChatRunRepository repository = new MyBatisChatRunRepository(mapper, new ObjectMapper());
+
+        assertThat(repository.findLastRunSummaries("tenant1", "user1", sessionIds))
+                .containsExactlyInAnyOrderEntriesOf(Map.of(
+                        "session1", new ChatSessionLastRunSummary(ChatRunStatus.COMPLETED, "skill-a"),
+                        "session2", new ChatSessionLastRunSummary(ChatRunStatus.FAILED, null)));
+
+        verify(mapper).findLastRunSummaries("tenant1", "user1", sessionIds);
+        verify(mapper, never()).findLastRunStatuses(any(), any(), any());
+    }
+
+    @Test
+    void lastRunSummariesForEmptySessionPageSkipMapper() {
+        ChatRunMapper mapper = mock(ChatRunMapper.class);
+        MyBatisChatRunRepository repository = new MyBatisChatRunRepository(mapper, new ObjectMapper());
+
+        assertThat(repository.findLastRunSummaries("tenant1", "user1", List.of())).isEmpty();
+
+        verify(mapper, never()).findLastRunSummaries(any(), any(), any());
+    }
+
+    @Test
+    void lastRunSummariesUseSessionSearchTransactionTimeout() throws Exception {
+        Transactional transactional = MyBatisChatRunRepository.class
+                .getMethod("findLastRunSummaries", String.class, String.class, Collection.class)
                 .getAnnotation(Transactional.class);
 
         assertThat(transactional).isNotNull();
@@ -268,6 +311,15 @@ class MyBatisChatRunRepositoryTest {
         ChatSessionLastRunStatusRow row = new ChatSessionLastRunStatusRow();
         row.setSessionId(sessionId);
         row.setStatus(status.name());
+        return row;
+    }
+
+    private ChatSessionLastRunSummaryRow lastRunSummaryRow(
+            String sessionId, ChatRunStatus status, String metadataJson) {
+        ChatSessionLastRunSummaryRow row = new ChatSessionLastRunSummaryRow();
+        row.setSessionId(sessionId);
+        row.setStatus(status.name());
+        row.setMetadataJson(metadataJson);
         return row;
     }
 }

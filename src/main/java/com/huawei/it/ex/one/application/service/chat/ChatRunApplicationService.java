@@ -5,6 +5,7 @@ import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunCache;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
+import com.huawei.it.ex.one.application.integration.conversation.ChatSessionLastRunSummary;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
@@ -482,6 +483,26 @@ public class ChatRunApplicationService {
             return Map.of();
         }
         return repository.findLastRunStatuses(
+                user.tenantId(), user.ownerUserId(), normalizedSessionIds);
+    }
+
+    /**
+     * 批量查询页码列表中每个会话最后创建的run状态及最终Runtime调用标识。
+     */
+    public Map<String, ChatSessionLastRunSummary> findLastRunSummaries(
+            UserContext user, Collection<String> sessionIds) {
+        permissionChecker.checkChatPermission(user);
+        if (sessionIds == null || sessionIds.isEmpty()) {
+            return Map.of();
+        }
+        List<String> normalizedSessionIds = sessionIds.stream()
+                .filter(sessionId -> sessionId != null && !sessionId.isBlank())
+                .distinct()
+                .toList();
+        if (normalizedSessionIds.isEmpty()) {
+            return Map.of();
+        }
+        return repository.findLastRunSummaries(
                 user.tenantId(), user.ownerUserId(), normalizedSessionIds);
     }
 

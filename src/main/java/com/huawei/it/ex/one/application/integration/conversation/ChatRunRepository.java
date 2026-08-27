@@ -145,6 +145,24 @@ public interface ChatRunRepository {
     }
 
     /**
+     * 批量查询当前页每个会话最后创建的run状态和最终Runtime调用标识。
+     *
+     * <p>该入口供页码列表使用；生产实现必须以单条批量SQL完成，禁止逐会话读取run。</p>
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionIds 当前页会话标识集合。
+     * @return sessionId到最后run摘要的映射；没有run的会话不包含在结果中。
+     */
+    default Map<String, ChatSessionLastRunSummary> findLastRunSummaries(
+            String tenantId, String userId, Collection<String> sessionIds) {
+        if (sessionIds == null || sessionIds.isEmpty()) {
+            return Map.of();
+        }
+        throw new UnsupportedOperationException("当前ChatRun仓储不支持批量最后run摘要查询");
+    }
+
+    /**
      * 查询超过初始化宽限期、尚未创建 execution 的普通 run。
      *
      * <p>Interaction continuation 由专用对账链路处理，生产实现应排除仍处于

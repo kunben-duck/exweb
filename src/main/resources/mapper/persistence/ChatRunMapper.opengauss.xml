@@ -31,6 +31,13 @@
         <result column="status" property="status"/>
     </resultMap>
 
+    <resultMap id="chatSessionLastRunSummaryResultMap"
+               type="com.huawei.it.ex.one.infrastructure.persistence.ChatSessionLastRunSummaryRow">
+        <result column="session_id" property="sessionId"/>
+        <result column="status" property="status"/>
+        <result column="metadata_json" property="metadataJson"/>
+    </resultMap>
+
     <sql id="chatRunColumns">
         id, tenant_id, user_id, session_id, status, route_type, agent_code, runtime_provider,
         runtime_session_id, run_mode, parent_message_id, user_message_id, assistant_message_id,
@@ -457,6 +464,43 @@
               </foreach>
         ) latest
         WHERE row_num = 1
+    </select>
+
+    <!--
+      按租户、用户和当前页会话集合批量查询每个会话最后创建的run状态及metadata。
+      窗口阶段只携带索引字段，命中每个会话最后run后再按主键读取metadata，避免历史metadata参与排序。
+      入参: tenantId/userId为归属边界，sessionIds为当前页会话ID集合；调用方保证集合非空。
+    -->
+    <select id="findLastRunSummaries" resultMap="chatSessionLastRunSummaryResultMap">
+        SELECT latest.session_id,
+               latest.status,
+               r.metadata_json
+        FROM (
+            SELECT ranked.id,
+                   ranked.session_id,
+                   ranked.status
+            FROM (
+                SELECT id,
+                       session_id,
+                       status,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY session_id
+                           ORDER BY created_at DESC, id DESC
+                       ) AS row_num
+                FROM fin_ex_chat_run_t
+                WHERE tenant_id = #{tenantId}
+                  AND user_id = #{userId}
+                  AND session_id IN
+                  <foreach collection="sessionIds" item="sessionId" open="(" separator="," close=")">
+                      #{sessionId}
+                  </foreach>
+            ) ranked
+            WHERE ranked.row_num = 1
+        ) latest
+        INNER JOIN fin_ex_chat_run_t r
+                ON r.id = latest.id
+               AND r.tenant_id = #{tenantId}
+               AND r.user_id = #{userId}
     </select>
 
     <!--

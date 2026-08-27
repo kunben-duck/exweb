@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.interfaces.chat;
 
 import com.huawei.it.ex.one.application.facade.ChatSessionFacade;
 import com.huawei.it.ex.one.application.facade.ChatSessionFirstAssistantSummary;
+import com.huawei.it.ex.one.application.integration.conversation.ChatSessionLastRunSummary;
 import com.huawei.it.ex.one.application.integration.conversation.SessionAppScope;
 import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
 import com.huawei.it.ex.one.application.integration.identity.AuthContextProvider;
@@ -211,11 +212,17 @@ public class ChatSessionController {
                             user, SessionListFilter.forPage(appId, keyword, channel, appScope), curPage, pageSize);
                     Map<String, ChatSessionFirstAssistantSummary> firstAssistantSummaries =
                             facade.findFirstAssistantSummaries(user, page.items());
-                    Map<String, ChatRunStatus> lastRunStatuses = lastRunStatuses(user, page.items());
+                    Map<String, ChatSessionLastRunSummary> lastRunSummaries =
+                            lastRunSummaries(user, page.items());
                     return new ChatSessionNumberPageDto(
                             page.items().stream()
-                                    .map(session -> toDto(session, firstAssistantSummaries.get(session.id()),
-                                            lastRunStatuses == null ? null : lastRunStatuses.get(session.id())))
+                                    .map(session -> {
+                                        ChatSessionLastRunSummary summary = lastRunSummaries == null
+                                                ? null : lastRunSummaries.get(session.id());
+                                        return toDto(session, firstAssistantSummaries.get(session.id()),
+                                                summary == null ? null : summary.status(),
+                                                summary == null ? null : summary.skillId());
+                                    })
                                     .toList(),
                             page.curPage(),
                             page.pageSize(),
@@ -440,15 +447,20 @@ public class ChatSessionController {
     }
 
     private ChatSessionDto toDto(ChatSession session) {
-        return toDto(session, null, null);
+        return toDto(session, null, null, null);
     }
 
     private ChatSessionDto toDto(ChatSession session, ChatSessionFirstAssistantSummary firstAssistant) {
-        return toDto(session, firstAssistant, null);
+        return toDto(session, firstAssistant, null, null);
     }
 
     private ChatSessionDto toDto(ChatSession session, ChatSessionFirstAssistantSummary firstAssistant,
                                  ChatRunStatus lastRunStatus) {
+        return toDto(session, firstAssistant, lastRunStatus, null);
+    }
+
+    private ChatSessionDto toDto(ChatSession session, ChatSessionFirstAssistantSummary firstAssistant,
+                                 ChatRunStatus lastRunStatus, String lastRunSkillId) {
         return new ChatSessionDto(
                 session.id(),
                 session.tenantId(),
@@ -456,6 +468,7 @@ public class ChatSessionController {
                 session.title(),
                 session.status(),
                 lastRunStatus == null ? null : lastRunStatus.name(),
+                lastRunSkillId,
                 session.channel(),
                 session.appId(),
                 session.appName(),
@@ -486,6 +499,26 @@ public class ChatSessionController {
             log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_READ_FAILED,
                             "Last run status batch lookup failed; returning session list without run status")
                     .operation("chat-session.last-run-status.batch-read")
+                    .attribute("sessionCount", sessionIds.size())
+                    .build(), ex);
+            return null;
+        }
+    }
+
+    private Map<String, ChatSessionLastRunSummary> lastRunSummaries(
+            UserContext user, List<ChatSession> sessions) {
+        if (sessions == null || sessions.isEmpty()) {
+            return Map.of();
+        }
+        List<String> sessionIds = sessions.stream()
+                .map(ChatSession::id)
+                .toList();
+        try {
+            return chatRunService.findLastRunSummaries(user, sessionIds);
+        } catch (RuntimeException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_READ_FAILED,
+                            "Last run summary batch lookup failed; returning session list without run summary")
+                    .operation("chat-session.last-run-summary.batch-read")
                     .attribute("sessionCount", sessionIds.size())
                     .build(), ex);
             return null;

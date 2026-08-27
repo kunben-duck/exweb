@@ -10,6 +10,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.config.ChatStreamProperties;
@@ -44,6 +45,20 @@ class MyBatisChatMessageStoreTest {
 
         assertReadOnlyMemoryQuery(defaultPath);
         assertReadOnlyMemoryQuery(selectedPath);
+    }
+
+    @Test
+    void ownedMessageRoleLookupUsesOnlyTheLightweightMapperQuery() {
+        ChatMessageMapper mapper = mock(ChatMessageMapper.class);
+        when(mapper.findRoleByOwnerAndId("tenant-1", "user-1", "message-1"))
+                .thenReturn(java.util.Optional.of("user"));
+        MyBatisChatMessageStore store = store(mapper, 100, DataSize.ofMegabytes(1));
+
+        assertThat(store.findRoleByOwnerAndId("tenant-1", "user-1", "message-1"))
+                .contains("user");
+
+        verify(mapper).findRoleByOwnerAndId("tenant-1", "user-1", "message-1");
+        verifyNoMoreInteractions(mapper);
     }
 
     @Test

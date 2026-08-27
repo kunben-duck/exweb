@@ -275,6 +275,36 @@ class MyBatisXmlMapperConsistencyTest {
     }
 
     @Test
+    void chatRunLastSummaryBatchLookupShouldReadMetadataOnlyAfterLatestRunSelection() throws IOException {
+        String mapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("persistence/ChatRunMapper.opengauss.xml"));
+        int start = mapper.indexOf("<select id=\"findLastRunSummaries\"");
+        int end = mapper.indexOf("</select>", start);
+
+        assertThat(start).isGreaterThanOrEqualTo(0);
+        assertThat(end).isGreaterThan(start);
+        String query = mapper.substring(start, end);
+        int metadataProjection = query.indexOf("r.metadata_json");
+        int windowStart = query.indexOf("FROM (");
+        int windowEnd = query.indexOf(") latest");
+        assertThat(query)
+                .contains("tenant_id = #{tenantId}")
+                .contains("user_id = #{userId}")
+                .contains("session_id IN")
+                .contains("collection=\"sessionIds\"")
+                .contains("ROW_NUMBER() OVER")
+                .contains("PARTITION BY session_id")
+                .contains("ORDER BY created_at DESC, id DESC")
+                .contains("WHERE ranked.row_num = 1")
+                .contains("INNER JOIN fin_ex_chat_run_t r")
+                .contains("ON r.id = latest.id")
+                .doesNotContain("chatRunColumns");
+        assertThat(metadataProjection).isGreaterThanOrEqualTo(0);
+        assertThat(windowStart).isGreaterThan(metadataProjection);
+        assertThat(query.substring(windowStart, windowEnd)).doesNotContain("metadata_json");
+    }
+
+    @Test
     void chatRunLastStatusBatchLookupShouldHaveMatchingUstoreIndex() throws IOException {
         String indexColumns = "(tenant_id, user_id, session_id, created_at DESC, id DESC, status)";
         String initScript = Files.readString(DATABASE_SCRIPT_ROOT.resolve("init-20260718.sql"))
@@ -627,6 +657,25 @@ class MyBatisXmlMapperConsistencyTest {
         int endpointEnd = controller.indexOf("@GetMapping(\"/{sessionId}/messages/tree\")", endpointStart);
         assertThat(controller.substring(endpointStart, endpointEnd))
                 .doesNotContain("listMessageTreeNodes");
+    }
+
+    @Test
+    void intentCandidateOwnershipLookupShouldReadOnlyTheMessageRole() throws IOException {
+        String mapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("memory/ChatMessageMapper.opengauss.xml"));
+        int queryStart = mapper.indexOf("<select id=\"findRoleByOwnerAndId\"");
+        int queryEnd = mapper.indexOf("</select>", queryStart);
+        String query = mapper.substring(queryStart, queryEnd);
+
+        assertThat(query)
+                .contains("SELECT role")
+                .contains("tenant_id = #{tenantId}")
+                .contains("user_id = #{userId}")
+                .contains("id = #{messageId}")
+                .doesNotContain("chatMessageColumns")
+                .doesNotContain("metadata_json")
+                .doesNotContain("fin_ex_chat_message_part_t")
+                .doesNotContain("fin_ex_chat_message_attachment_t");
     }
 
     @Test

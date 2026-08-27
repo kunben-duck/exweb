@@ -348,6 +348,13 @@ public class MyBatisChatMessageStore {
                 .map(message -> attachMessageChildren(tenantId, userId, message.sessionId(), List.of(message)).getFirst());
     }
 
+    public Optional<String> findRoleByOwnerAndId(String tenantId, String userId, String messageId) {
+        if (messageId == null || messageId.isBlank()) {
+            return Optional.empty();
+        }
+        return mapper.findRoleByOwnerAndId(tenantId, userId, messageId);
+    }
+
     public List<ChatMessage> findByOwnerAndSessionAndIds(
             String tenantId, String userId, String sessionId, List<String> messageIds) {
         if (tenantId == null || userId == null || sessionId == null || messageIds == null || messageIds.isEmpty()) {

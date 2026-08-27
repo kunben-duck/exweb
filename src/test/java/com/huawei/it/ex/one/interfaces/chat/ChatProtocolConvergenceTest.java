@@ -15,6 +15,7 @@ import com.huawei.it.ex.one.application.facade.FinanceChatFacade;
 import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
+import com.huawei.it.ex.one.application.integration.conversation.ChatSessionLastRunSummary;
 import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
 import com.huawei.it.ex.one.application.integration.trace.TraceContextProvider;
 import com.huawei.it.ex.one.application.service.chat.ChatFeedbackApplicationService;
@@ -499,7 +500,8 @@ class ChatProtocolConvergenceTest {
                 .map(component -> component.getName())
                 .toList();
 
-        assertThat(components).containsSubsequence("status", "lastRunStatus", "channel");
+        assertThat(components).containsSubsequence(
+                "status", "lastRunStatus", "lastRunSkillId", "channel");
         assertThat(components).containsSubsequence(
                 "firstAssistantAnswer", "firstAssistantMetadataJson", "createdAt");
     }
@@ -524,6 +526,9 @@ class ChatProtocolConvergenceTest {
         ChatRunApplicationService runService = mock(ChatRunApplicationService.class);
         when(runService.findLastRunStatuses(user, List.of(session.id())))
                 .thenReturn(Map.of(session.id(), ChatRunStatus.WAITING_USER));
+        when(runService.findLastRunSummaries(user, List.of(session.id())))
+                .thenReturn(Map.of(session.id(), new ChatSessionLastRunSummary(
+                        ChatRunStatus.WAITING_USER, "skill-latest")));
         ChatSessionController controller = new ChatSessionController(
                 facade,
                 mock(ChatFeedbackApplicationService.class),
@@ -540,16 +545,20 @@ class ChatProtocolConvergenceTest {
         assertThat(cursorPage.items().getFirst().firstAssistantAnswer()).isEqualTo("第一条回答");
         assertThat(cursorPage.items().getFirst().firstAssistantMetadataJson()).isEqualTo("not-json");
         assertThat(cursorPage.items().getFirst().lastRunStatus()).isEqualTo("WAITING_USER");
+        assertThat(cursorPage.items().getFirst().lastRunSkillId()).isNull();
         assertThat(numberPage).isNotNull();
         assertThat(numberPage.items().getFirst().firstAssistantAnswer()).isEqualTo("第一条回答");
         assertThat(numberPage.items().getFirst().firstAssistantMetadataJson()).isEqualTo("not-json");
         assertThat(numberPage.items().getFirst().lastRunStatus()).isEqualTo("WAITING_USER");
+        assertThat(numberPage.items().getFirst().lastRunSkillId()).isEqualTo("skill-latest");
         assertThat(detail).isNotNull();
         assertThat(detail.firstAssistantAnswer()).isNull();
         assertThat(detail.firstAssistantMetadataJson()).isNull();
         assertThat(detail.lastRunStatus()).isNull();
+        assertThat(detail.lastRunSkillId()).isNull();
         verify(facade, times(2)).findFirstAssistantSummaries(user, List.of(session));
-        verify(runService, times(2)).findLastRunStatuses(user, List.of(session.id()));
+        verify(runService).findLastRunStatuses(user, List.of(session.id()));
+        verify(runService).findLastRunSummaries(user, List.of(session.id()));
     }
 
     @Test
@@ -592,6 +601,10 @@ class ChatProtocolConvergenceTest {
                 .toList();
         Map<String, ChatRunStatus> statuses = Arrays.stream(ChatRunStatus.values())
                 .collect(Collectors.toMap(status -> "session-" + status.name(), status -> status));
+        Map<String, ChatSessionLastRunSummary> summaries = Arrays.stream(ChatRunStatus.values())
+                .collect(Collectors.toMap(
+                        status -> "session-" + status.name(),
+                        status -> new ChatSessionLastRunSummary(status, "skill-" + status.name())));
         when(facade.listSessions(user, SessionListFilter.empty(), null, 20))
                 .thenReturn(new ChatSessionPage(sessions, null));
         when(facade.listSessionsByPage(user, SessionListFilter.empty(), 1, 20))
@@ -599,6 +612,8 @@ class ChatProtocolConvergenceTest {
         when(facade.findFirstAssistantSummaries(user, sessions)).thenReturn(Map.of());
         when(runService.findLastRunStatuses(user, sessions.stream().map(ChatSession::id).toList()))
                 .thenReturn(statuses);
+        when(runService.findLastRunSummaries(user, sessions.stream().map(ChatSession::id).toList()))
+                .thenReturn(summaries);
         ChatSessionController controller = new ChatSessionController(
                 facade,
                 mock(ChatFeedbackApplicationService.class),
@@ -614,9 +629,13 @@ class ChatProtocolConvergenceTest {
         assertThat(cursorPage).isNotNull();
         assertThat(cursorPage.items()).extracting(ChatSessionDto::lastRunStatus)
                 .containsExactlyElementsOf(expected);
+        assertThat(cursorPage.items()).extracting(ChatSessionDto::lastRunSkillId)
+                .containsOnlyNulls();
         assertThat(numberPage).isNotNull();
         assertThat(numberPage.items()).extracting(ChatSessionDto::lastRunStatus)
                 .containsExactlyElementsOf(expected);
+        assertThat(numberPage.items()).extracting(ChatSessionDto::lastRunSkillId)
+                .containsExactlyElementsOf(expected.stream().map(status -> "skill-" + status).toList());
     }
 
     @Test
@@ -643,6 +662,7 @@ class ChatProtocolConvergenceTest {
 
         assertThat(page).isNotNull();
         assertThat(page.items().getFirst().lastRunStatus()).isNull();
+        assertThat(page.items().getFirst().lastRunSkillId()).isNull();
     }
 
     @Test
@@ -660,6 +680,8 @@ class ChatProtocolConvergenceTest {
         when(facade.findFirstAssistantSummaries(user, List.of(session))).thenReturn(Map.of());
         when(runService.findLastRunStatuses(user, List.of(session.id())))
                 .thenThrow(new IllegalStateException("database unavailable"));
+        when(runService.findLastRunSummaries(user, List.of(session.id())))
+                .thenThrow(new IllegalStateException("database unavailable"));
         ChatSessionController controller = new ChatSessionController(
                 facade,
                 mock(ChatFeedbackApplicationService.class),
@@ -674,9 +696,11 @@ class ChatProtocolConvergenceTest {
         assertThat(page).isNotNull();
         assertThat(page.items()).hasSize(1);
         assertThat(page.items().getFirst().lastRunStatus()).isNull();
+        assertThat(page.items().getFirst().lastRunSkillId()).isNull();
         assertThat(numberPage).isNotNull();
         assertThat(numberPage.items()).hasSize(1);
         assertThat(numberPage.items().getFirst().lastRunStatus()).isNull();
+        assertThat(numberPage.items().getFirst().lastRunSkillId()).isNull();
     }
 
     @Test
@@ -705,6 +729,7 @@ class ChatProtocolConvergenceTest {
         assertThat(numberPage).isNotNull();
         assertThat(numberPage.items()).isEmpty();
         verify(runService, times(0)).findLastRunStatuses(user, List.of());
+        verify(runService, times(0)).findLastRunSummaries(user, List.of());
     }
 
     @Test

@@ -1,6 +1,8 @@
 package com.huawei.it.ex.one.infrastructure.persistence;
 
+import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
+import com.huawei.it.ex.one.application.integration.conversation.ChatSessionLastRunSummary;
 import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
@@ -282,6 +284,26 @@ public class MyBatisChatRunRepository implements ChatRunRepository {
         mapper.findLastRunStatuses(tenantId, userId, sessionIds).forEach(row ->
                 statuses.put(row.getSessionId(), ChatRunStatus.valueOf(row.getStatus())));
         return Map.copyOf(statuses);
+    }
+
+    @Override
+    @Transactional(
+            readOnly = true,
+            timeoutString = "${financeex.session-search.database-query-timeout-seconds:2}"
+    )
+    public Map<String, ChatSessionLastRunSummary> findLastRunSummaries(
+            String tenantId, String userId, Collection<String> sessionIds) {
+        if (sessionIds == null || sessionIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, ChatSessionLastRunSummary> summaries = new LinkedHashMap<>();
+        mapper.findLastRunSummaries(tenantId, userId, sessionIds).forEach(row -> {
+            Map<String, Object> metadata = fromJson(row.getMetadataJson());
+            summaries.put(row.getSessionId(), new ChatSessionLastRunSummary(
+                    ChatRunStatus.valueOf(row.getStatus()),
+                    MessageSkillContext.runSkillId(metadata)));
+        });
+        return Map.copyOf(summaries);
     }
 
     @Override

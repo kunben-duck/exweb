@@ -489,6 +489,18 @@
     </select>
 
     <!--
+      按owner和message ID只读取角色，供Intent候选接口执行轻量归属校验。
+      入参: tenantId/userId为归属边界，messageId为目标消息。
+    -->
+    <select id="findRoleByOwnerAndId" resultType="java.lang.String">
+        SELECT role
+        FROM fin_ex_chat_message_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{messageId}
+    </select>
+
+    <!--
       按 owner、会话和消息 ID 集合批量查询消息节点，供多消息分享做归属与分支校验。
       入参: tenantId/userId/sessionId 为归属边界；messageIds 为待查询消息 ID，空集合返回空结果。
     -->

@@ -213,6 +213,19 @@ public interface ChatRunMapper {
             @Param("sessionIds") Collection<String> sessionIds);
 
     /**
+     * 按owner边界批量查询当前页每个会话最后创建的run状态及metadata。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionIds 当前页会话标识集合。
+     * @return 每个存在run的会话对应的最后run摘要行。
+     */
+    List<ChatSessionLastRunSummaryRow> findLastRunSummaries(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionIds") Collection<String> sessionIds);
+
+    /**
      * 扫描尚未写入 run.started 且没有 execution 的普通 run。
      *
      * @param orphanBefore 只扫描更新时间早于该时刻的 run。

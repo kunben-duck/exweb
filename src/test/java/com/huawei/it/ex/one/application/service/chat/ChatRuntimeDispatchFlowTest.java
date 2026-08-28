@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.huawei.it.ex.one.application.config.MemoryProperties;
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
 import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
+import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeCancelRequest;
+import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentCancelRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentClient;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
@@ -40,6 +42,9 @@ import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
+import com.huawei.it.ex.one.infrastructure.runtime.relay.RelayAgentRuntime;
+import com.huawei.it.ex.one.infrastructure.runtime.relay.RelayRuntimeProtocolAdapter;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -54,6 +59,135 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
+    @Test
+    void explicitDomainExpertStaysPinnedAndCanBeReplaced() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        MultiBindingRuntimeBindingRepository bindings = new MultiBindingRuntimeBindingRepository();
+        AtomicInteger routeCalls = new AtomicInteger();
+        AtomicReference<AgentRuntimeRequest> capturedRequest = new AtomicReference<>();
+        RelayRuntimeProtocolAdapter relayAdapter = new RelayRuntimeProtocolAdapter() {
+            @Override
+            public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                capturedRequest.set(request);
+                return Flux.just(MessageSnapshotEvent.of(
+                        request.runId(), request.sessionId(), "expert answer"));
+            }
+
+            @Override
+            public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        DomainAgentClient domainClient = new DomainAgentClient() {
+            @Override public Flux<ChatEvent> query(DomainAgentRequest request) { return Flux.empty(); }
+            @Override public Mono<Void> cancel(DomainAgentCancelRequest request) { return Mono.empty(); }
+        };
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions, messages, runs, events, countingRuntimeRouteService(routeCalls), domainClient,
+                new RelayAgentRuntime(relayAdapter), bindings,
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties(), liveEventBus(),
+                new InMemoryInteractionRequestRepository());
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        Map<String, Object> selected = SelectedIntentContext.attach(
+                Map.of("scene", "finance"), "finance_analysis", "经营分析专家");
+
+        List<ChatEvent> first = service.executeRun(user, new ChatCommand(
+                        "cmd-expert-a", null, null, null, null, "web", "分析经营情况",
+                        List.of(), selected, "DOMAIN_EXPERT", "financial-analysis",
+                        ChatRunMode.NEXT, null, null, null))
+                .collectList().block();
+
+        assertThat(first).isNotNull();
+        assertThat(first).extracting(ChatEvent::type)
+                .containsExactly("run.started", "runtime.metadata", "message.snapshot", "run.completed");
+        assertThat(first.get(1).payload())
+                .containsEntry("metadataType", "selected_domain_expert")
+                .containsEntry("targetType", "DOMAIN_EXPERT")
+                .containsEntry("targetId", "financial-analysis")
+                .containsEntry("roleName", "financial-analysis")
+                .containsEntry("routeSource", "front-selected")
+                .containsEntry("intentId", "finance_analysis")
+                .containsEntry("intentName", "经营分析专家");
+        assertThat(routeCalls).hasValue(0);
+        assertThat(capturedRequest.get().routeTarget().runtimeRoleName()).isEqualTo("financial-analysis");
+        assertThat(capturedRequest.get().metadata()).containsExactlyEntriesOf(Map.of("scene", "finance"));
+        RuntimeBinding expertA = bindings.bindingsForProvider("relay").getFirst();
+        assertThat(expertA.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(expertA.metadata())
+                .containsEntry(RuntimeProfileMetadata.PROFILE_KEY, "DOMAIN_EXPERT")
+                .containsEntry(RuntimeProfileMetadata.ROLE_NAME_KEY, "financial-analysis")
+                .containsEntry(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true)
+                .containsEntry("routeSource", "front-selected")
+                .containsEntry("intentCode", "finance_analysis")
+                .containsEntry("intentName", "经营分析专家");
+        assertThat(messages.parts).anySatisfy(part -> assertThat(part.payload())
+                .containsEntry("metadataType", "selected_domain_expert"));
+        assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role()))
+                .singleElement()
+                .extracting(ChatMessage::metadataJson)
+                .asString()
+                .contains("\"skillId\":\"financial-analysis\"");
+
+        String sessionId = runs.runs.values().stream().findFirst().orElseThrow().sessionId();
+        List<ChatEvent> continued = service.executeRun(user, new ChatCommand(
+                        "cmd-expert-a-next", null, null, sessionId, null, "web", "继续分析",
+                        List.of(), Map.of()))
+                .collectList().block();
+        assertThat(continued).isNotNull();
+        assertThat(continued.get(1).payload())
+                .containsEntry("metadataType", "selected_domain_expert")
+                .containsEntry("routeSource", "runtime-binding")
+                .containsEntry("intentName", "经营分析专家");
+        assertThat(routeCalls).hasValue(0);
+        assertThat(bindings.bindingsForProvider("relay")).singleElement()
+                .extracting(RuntimeBinding::id)
+                .isEqualTo(expertA.id());
+
+        List<ChatEvent> reselected = service.executeRun(user, new ChatCommand(
+                        "cmd-expert-a-reselected", null, null, sessionId, null, "web", "重新选择当前专家",
+                        List.of(), Map.of(), "DOMAIN_EXPERT", "financial-analysis",
+                        ChatRunMode.NEXT, null, null, null))
+                .collectList().block();
+        assertThat(reselected).isNotNull();
+        assertThat(reselected.get(1).payload())
+                .containsEntry("metadataType", "selected_domain_expert")
+                .containsEntry("intentName", "financial-analysis")
+                .doesNotContainKey("intentId");
+        assertThat(bindings.bindingsForProvider("relay")).singleElement()
+                .satisfies(binding -> {
+                    assertThat(binding.id()).isEqualTo(expertA.id());
+                    assertThat(binding.metadata())
+                            .doesNotContainKey("intentCode")
+                            .containsEntry("intentName", "financial-analysis");
+                });
+
+        service.executeRun(user, new ChatCommand(
+                        "cmd-expert-b", null, null, sessionId, null, "web", "改用风险专家",
+                        List.of(), Map.of(), "DOMAIN_EXPERT", "risk-analysis",
+                        ChatRunMode.NEXT, null, null, null))
+                .collectList().block();
+
+        assertThat(routeCalls).hasValue(0);
+        assertThat(capturedRequest.get().routeTarget().runtimeRoleName()).isEqualTo("risk-analysis");
+        assertThat(bindings.bindingsForProvider("relay"))
+                .filteredOn(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
+                .singleElement()
+                .satisfies(binding -> {
+                    assertThat(binding.id()).isNotEqualTo(expertA.id());
+                    assertThat(binding.metadata())
+                            .containsEntry(RuntimeProfileMetadata.ROLE_NAME_KEY, "risk-analysis")
+                            .containsEntry("intentName", "risk-analysis");
+                });
+        assertThat(bindings.bindingsForProvider("relay"))
+                .filteredOn(binding -> binding.id().equals(expertA.id()))
+                .singleElement()
+                .extracting(RuntimeBinding::status)
+                .isEqualTo(RuntimeBindingStatus.CANCELLED);
+    }
+
     @Test
     void ownerLossAfterDirectBindingCreationCancelsUnstartedBinding() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();

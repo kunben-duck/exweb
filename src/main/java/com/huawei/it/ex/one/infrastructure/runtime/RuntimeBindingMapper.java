@@ -49,6 +49,20 @@ public interface RuntimeBindingMapper {
                                            @Param("claim") RunExecutionClaim claim);
 
     /**
+     * 固定专家 Binding 变更前锁定并校验当前 run/execution 写入权。
+     *
+     * @param tenantId 当前租户标识。
+     * @param userId 当前归属用户标识。
+     * @param sessionId 当前会话标识。
+     * @param claim 当前 execution 写入权。
+     * @return 1 表示 run/execution 仍由当前 claim 持有，否则为空。
+     */
+    Integer lockRunExecutionForBindingMutation(@Param("tenantId") String tenantId,
+                                               @Param("userId") String userId,
+                                               @Param("sessionId") String sessionId,
+                                               @Param("claim") RunExecutionClaim claim);
+
+    /**
      * 条件刷新仍由等待态来源 run 持有的 ACTIVE Relay Binding。
      *
      * @param row 待刷新 Binding 的可信字段。

@@ -50,11 +50,11 @@ final class StandardRunInputPreparer {
         runStartCoordinator.ensureActive(startAttempt, "before-run-prepare");
         RuntimeForwardHeaders headers = normalizeForwardHeaders(request.forwardHeaders());
         ChatCommand identified = identifiedCommand(request.user(), request.command());
-        String explicitDomainAgentId = explicitDomainAgentId(identified);
+        ExplicitRuntimeTarget explicitRuntimeTarget = explicitRuntimeTarget(identified);
         boolean directBypass = admissionCoordinator.transactionalAdmissionAvailable()
-                && directDomainAgentWaitBypass(identified, explicitDomainAgentId);
+                && directRuntimeWaitBypass(identified, explicitRuntimeTarget);
         boolean forceReroute = forceReroute(identified);
-        if (forceReroute && explicitDomainAgentId != null) {
+        if (forceReroute && explicitRuntimeTarget != null) {
             throw new IllegalArgumentException(
                     "forceReroute=true 时不能同时指定 targetType/targetId");
         }
@@ -104,7 +104,7 @@ final class StandardRunInputPreparer {
                 documents,
                 memory,
                 runId,
-                explicitDomainAgentId,
+                explicitRuntimeTarget,
                 forceReroute,
                 directBypass,
                 startAttempt);
@@ -230,29 +230,34 @@ final class StandardRunInputPreparer {
                         .TRIGGER_USER_CORRECTION.equals(command.routeTrigger());
     }
 
-    private boolean directDomainAgentWaitBypass(
+    private boolean directRuntimeWaitBypass(
             ChatCommand command,
-            String explicitDomainAgentId) {
+            ExplicitRuntimeTarget explicitRuntimeTarget) {
         return command != null
                 && command.runMode() == ChatRunMode.NEXT
-                && explicitDomainAgentId != null;
+                && explicitRuntimeTarget != null;
     }
 
-    private String explicitDomainAgentId(ChatCommand command) {
+    private ExplicitRuntimeTarget explicitRuntimeTarget(ChatCommand command) {
         String targetType = command == null ? null : command.targetType();
         if (targetType == null || targetType.isBlank()) {
             return null;
         }
-        if (!"DOMAIN_AGENT".equalsIgnoreCase(targetType)) {
+        ExplicitRuntimeTarget.Type type;
+        if ("DOMAIN_AGENT".equalsIgnoreCase(targetType)) {
+            type = ExplicitRuntimeTarget.Type.DOMAIN_AGENT;
+        } else if ("DOMAIN_EXPERT".equalsIgnoreCase(targetType)) {
+            type = ExplicitRuntimeTarget.Type.DOMAIN_EXPERT;
+        } else {
             throw new IllegalArgumentException(
-                    "targetType 仅支持 DOMAIN_AGENT，当前值: " + targetType);
+                    "targetType 仅支持 DOMAIN_AGENT/DOMAIN_EXPERT，当前值: " + targetType);
         }
-        String domainAgentId = command.targetId();
-        if (domainAgentId == null || domainAgentId.isBlank()) {
+        String targetId = command.targetId();
+        if (targetId == null || targetId.isBlank()) {
             throw new IllegalArgumentException(
-                    "targetType=DOMAIN_AGENT 时 targetId 不能为空");
+                    "targetType=" + type.name() + " 时 targetId 不能为空");
         }
-        return domainAgentId.trim();
+        return new ExplicitRuntimeTarget(type, targetId);
     }
 
     private RuntimeForwardHeaders normalizeForwardHeaders(
@@ -281,9 +286,9 @@ final class StandardRunInputPreparer {
             List<UploadedDocument> documents,
             MemoryContext memory,
             String runId,
-            String explicitDomainAgentId,
+            ExplicitRuntimeTarget explicitRuntimeTarget,
             boolean forceReroute,
-            boolean directDomainAgentWaitBypass,
+            boolean directRuntimeWaitBypass,
             RunStartAttempt startAttempt
     ) {
     }

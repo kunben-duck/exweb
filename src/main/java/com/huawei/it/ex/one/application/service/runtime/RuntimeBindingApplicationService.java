@@ -129,6 +129,34 @@ public class RuntimeBindingApplicationService {
      * 按调用档案解析本轮 Relay Binding，避免 Delegate 与 Domain Expert 复用同一 Runtime session。
      */
     public RuntimeBindingResolution resolveForProfile(ProfiledRunBindingRequest request) {
+        return resolveForProfile(request, Map.of());
+    }
+
+    /**
+     * 解析前端固定选择的Relay专家Binding，并在同一次Binding保存中固化展示摘要。
+     */
+    @Transactional(timeoutString =
+            "${financeex.runtime-binding.interaction-resume-transaction-timeout-seconds:2}")
+    public RuntimeBindingResolution resolvePinnedDomainExpertForRun(
+            ProfiledRunBindingRequest request,
+            Map<String, Object> metadataOverlay,
+            RunExecutionClaim claim) {
+        if (request == null || request.runtimeProfile() != RuntimeProfile.DOMAIN_EXPERT) {
+            throw new IllegalArgumentException("Pinned domain expert requires DOMAIN_EXPERT profile");
+        }
+        if (!repository.lockRunExecutionForBindingMutation(
+                request.tenantId(), request.userId(), request.sessionId(), claim)) {
+            throw new ChatEventAppendRejectedException(
+                    "Pinned domain expert Binding 被 run/execution 栅栏拒绝: runId="
+                            + (claim == null ? null : claim.runId()));
+        }
+        cancelActiveExceptPinnedDomainExpert(
+                request.tenantId(), request.userId(), request.sessionId(), request.runtimeRoleName());
+        return resolveForProfile(request, metadataOverlay);
+    }
+
+    private RuntimeBindingResolution resolveForProfile(ProfiledRunBindingRequest request,
+                                                       Map<String, Object> metadataOverlay) {
         if (request == null) {
             throw new IllegalArgumentException("ProfiledRunBindingRequest must not be null");
         }
@@ -149,7 +177,8 @@ public class RuntimeBindingApplicationService {
                 .toList();
         if (!activeBindings.isEmpty()) {
             RuntimeBinding previous = activeBindings.getFirst();
-            RuntimeBinding selected = touchForRun(previous, runId);
+            RuntimeBinding selected = touchForRun(
+                    previous.withMetadata(bindingMetadata(previous, desiredProfile, metadataOverlay)), runId);
             cancelDuplicateBindings(activeBindings, selected);
             cache.put(selected);
             return new RuntimeBindingResolution(selected, RuntimeSessionMode.RESUME, previous);
@@ -166,13 +195,14 @@ public class RuntimeBindingApplicationService {
         if (!resumableBindings.isEmpty()) {
             RuntimeBinding previous = resumableBindings.getFirst();
             RuntimeBinding selected = activateResumableForRun(
-                    previous, runId, leafMessageId);
+                    previous.withMetadata(bindingMetadata(previous, desiredProfile, metadataOverlay)),
+                    runId, leafMessageId);
             cancelDuplicateBindings(resumableBindings, selected);
             return new RuntimeBindingResolution(selected, RuntimeSessionMode.RESUME, previous);
         }
         RuntimeBinding created = create(new RuntimeBindingCreateCommand(
                 tenantId, userId, sessionId, runtimeProvider, runId, leafMessageId, sessionId,
-                desiredProfile.toMetadata()));
+                bindingMetadata(null, desiredProfile, metadataOverlay)));
         return new RuntimeBindingResolution(created, RuntimeSessionMode.NEW);
     }
 
@@ -444,7 +474,7 @@ public class RuntimeBindingApplicationService {
         if (binding == null) {
             return null;
         }
-        if (DOMAIN_AGENT_PROVIDER.equals(binding.provider())) {
+        if (DOMAIN_AGENT_PROVIDER.equals(binding.provider()) || isPinnedDomainExpert(binding)) {
             return touchAndMoveToLeaf(binding, runId, leafMessageId);
         }
         RuntimeBinding next = markRelaySessionEstablished(binding, binding.runtimeSessionId())
@@ -521,18 +551,28 @@ public class RuntimeBindingApplicationService {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public List<RuntimeBinding> cancelActiveForAdmission(String tenantId, String userId, String sessionId) {
-        Map<String, RuntimeBinding> active = new LinkedHashMap<>();
-        repository.findActiveBySession(tenantId, userId, sessionId)
-                .forEach(binding -> active.putIfAbsent(binding.id(), binding));
-        if (active.isEmpty()) {
-            repository.findActiveBySession(tenantId, userId, sessionId, DEFAULT_RUNTIME_PROVIDER)
-                    .forEach(binding -> active.putIfAbsent(binding.id(), binding));
-            repository.findActiveBySession(tenantId, userId, sessionId, DOMAIN_AGENT_PROVIDER)
-                    .forEach(binding -> active.putIfAbsent(binding.id(), binding));
-        }
+        Map<String, RuntimeBinding> active = activeBindingsForAdmission(tenantId, userId, sessionId);
         List<RuntimeBinding> cancelled = new ArrayList<>();
         for (RuntimeBinding binding : active.values()) {
             if (binding.status() == RuntimeBindingStatus.ACTIVE) {
+                cancelled.add(repository.save(binding.withStatus(RuntimeBindingStatus.CANCELLED)));
+            }
+        }
+        return List.copyOf(cancelled);
+    }
+
+    /**
+     * 直连专家准入时保留同一固定专家，其余ACTIVE Binding仍在同一事务内取消。
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public List<RuntimeBinding> cancelActiveForAdmissionExceptPinnedDomainExpert(
+            String tenantId, String userId, String sessionId, String roleName) {
+        Map<String, RuntimeBinding> active = activeBindingsForAdmission(tenantId, userId, sessionId);
+        RuntimeBinding preserved = newestPinnedDomainExpert(active.values().stream().toList(), roleName);
+        List<RuntimeBinding> cancelled = new ArrayList<>();
+        for (RuntimeBinding binding : active.values()) {
+            if (binding.status() == RuntimeBindingStatus.ACTIVE
+                    && (preserved == null || !preserved.id().equals(binding.id()))) {
                 cancelled.add(repository.save(binding.withStatus(RuntimeBindingStatus.CANCELLED)));
             }
         }
@@ -773,6 +813,13 @@ public class RuntimeBindingApplicationService {
         return bindingProfile(binding).roleName();
     }
 
+    /** 是否为前端固定选择的Relay专家Binding。 */
+    public boolean isPinnedDomainExpert(RuntimeBinding binding) {
+        return binding != null
+                && runtimeProvider.equals(binding.provider())
+                && RuntimeProfileMetadata.isPinnedDomainExpert(binding.metadata());
+    }
+
     /**
      * 将 Relay Binding 的调用档案转换为 ChatRun 私有 metadata。
      */
@@ -803,6 +850,74 @@ public class RuntimeBindingApplicationService {
             // 非法档案不能静默降级为 Delegate，否则可能把请求发到错误的 Relay 会话。
             return false;
         }
+    }
+
+    private void cancelActiveExceptPinnedDomainExpert(
+            String tenantId, String userId, String sessionId, String roleName) {
+        List<RuntimeBinding> active = repository.findActiveBySession(tenantId, userId, sessionId);
+        if (active.isEmpty()) {
+            active = repository.findActiveBySession(tenantId, userId, sessionId, runtimeProvider);
+        }
+        RuntimeBinding preserved = newestPinnedDomainExpert(active, roleName);
+        for (RuntimeBinding binding : active) {
+            if (binding.status() == RuntimeBindingStatus.ACTIVE
+                    && (preserved == null || !preserved.id().equals(binding.id()))) {
+                if (!cancelActiveForRun(binding, binding.lastRunId())) {
+                    throw new ChatEventAppendRejectedException(
+                            "Pinned domain expert Binding 条件取消失败: bindingId=" + binding.id());
+                }
+            }
+        }
+    }
+
+    private RuntimeBinding newestPinnedDomainExpert(List<RuntimeBinding> bindings, String roleName) {
+        if (bindings == null || roleName == null || roleName.isBlank()) {
+            return null;
+        }
+        return bindings.stream()
+                .filter(this::isPinnedDomainExpert)
+                .filter(binding -> roleName.equals(runtimeRoleName(binding)))
+                .max(Comparator.comparing(RuntimeBinding::updatedAt,
+                        Comparator.nullsFirst(Comparator.naturalOrder())))
+                .orElse(null);
+    }
+
+    private Map<String, RuntimeBinding> activeBindingsForAdmission(
+            String tenantId, String userId, String sessionId) {
+        Map<String, RuntimeBinding> active = new LinkedHashMap<>();
+        repository.findActiveBySession(tenantId, userId, sessionId)
+                .forEach(binding -> active.putIfAbsent(binding.id(), binding));
+        if (active.isEmpty()) {
+            repository.findActiveBySession(tenantId, userId, sessionId, runtimeProvider)
+                    .forEach(binding -> active.putIfAbsent(binding.id(), binding));
+            repository.findActiveBySession(tenantId, userId, sessionId, DOMAIN_AGENT_PROVIDER)
+                    .forEach(binding -> active.putIfAbsent(binding.id(), binding));
+        }
+        return active;
+    }
+
+    private Map<String, Object> bindingMetadata(
+            RuntimeBinding previous,
+            RuntimeProfileMetadata.Snapshot desiredProfile,
+            Map<String, Object> metadataOverlay) {
+        if (previous != null && (metadataOverlay == null || metadataOverlay.isEmpty())) {
+            return previous.metadata();
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        if (previous != null && previous.metadata() != null) {
+            metadata.putAll(previous.metadata());
+        }
+        if (metadataOverlay != null
+                && Boolean.TRUE.equals(metadataOverlay.get(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY))) {
+            // 本次没有 selectedIntent 时必须回退 roleName，不能沿用上一次选择的展示摘要。
+            metadata.remove("intentCode");
+            metadata.remove("intentName");
+        }
+        metadata.putAll(desiredProfile.toMetadata());
+        if (metadataOverlay != null) {
+            metadata.putAll(metadataOverlay);
+        }
+        return Map.copyOf(metadata);
     }
 
     private String normalizeProvider(String provider) {

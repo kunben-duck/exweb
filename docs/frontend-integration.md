@@ -315,6 +315,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `POST /v1/chat/runs` 普通提问 | PC 已有会话：`{"sessionId":"session_xxx","runMode":"NEXT","message":"帮我分析一下费用趋势"}`。移动端自动建会话：`{"runMode":"NEXT","message":"分析资金趋势","channel":"mobile"}`。 |
 | `POST /v1/chat/runs` 用户主动纠正路由 | Body：`{"sessionId":"session_xxx","runMode":"NEXT","message":"重新判断应该由哪个技能处理","forceReroute":true,"metadata":{"lastIntentRejectReason":{"lastIntent":"旧意图","domainRejectMessage":"用户主动重新选择"}}}`；`forceReroute` 为非必填，只有用户主动要求重新路由时传 `true`。 |
 | `POST /v1/chat/runs` 显式 DomainAgent | Body：`{"sessionId":"session_xxx","runMode":"NEXT","message":"查询支付成功率","targetType":"DOMAIN_AGENT","targetId":"skill_xxx","selectedIntent":{"intentId":"payment_success","intentName":"支付成功率"},"metadata":{}}`；`selectedIntent` 可整体省略。 |
+| `POST /v1/chat/runs` 固定 Relay 专家 | Body：`{"sessionId":"session_xxx","runMode":"NEXT","message":"分析当前经营情况","targetType":"DOMAIN_EXPERT","targetId":"financial-analysis","selectedIntent":{"intentId":"finance_analysis","intentName":"经营分析专家"},"metadata":{}}`；`targetId` 直接作为 Relay `chat_expert.role_name`。 |
 | `POST /v1/chat/runs` 编辑 user | Body：`{"sessionId":"session_xxx","runMode":"EDIT_USER","editedMessageId":"msg_user_old","message":"新的问题"}`。 |
 | `POST /v1/chat/runs` 重新生成 assistant | Body：`{"sessionId":"session_xxx","runMode":"REGENERATE_ASSISTANT","regeneratedMessageId":"msg_assistant_old"}`。 |
 | `POST /v1/chat/runs` 续接 Interaction | 普通澄清：`{"sessionId":"session_xxx","runMode":"CONTINUE_INTERACTION","interactionId":"interaction_xxx","questionnaireAnswers":{"问题":"答案"}}`。Relay 问卷必须使用 `{"label":{"问题":"答案"}}` 或 `{"ignore":true}`，详见后文。 |
@@ -1300,9 +1301,9 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `scope` | string | 否 | 授权或确认范围，澄清类默认 `once` |
 | `questionnaireAnswers` | object | 澄清类通常必填 | 普通意图澄清以问题文案为 key；Relay 问卷严格使用 `label` 嵌套对象或 `ignore=true`；`INTENT_CLARIFICATION` 可用有效附件代替文本答案 |
 | `attachments` | array | 否 | 文档附件引用列表；Interaction 续接中仅 `INTENT_CLARIFICATION` 支持 |
-| `targetType` | string | 否 | 显式直连目标类型；普通 run 和 `AMBIGUOUS_ROUTE` 候选选择支持 `DOMAIN_AGENT` |
-| `targetId` | string | `targetType=DOMAIN_AGENT` 必填 | 普通直连时为 DomainAgent 目标 ID；歧义路由选择时必须精确等于等待卡片中的可信候选 `skillId` |
-| `selectedIntent` | object | 否 | 显式选择 DomainAgent 时的展示摘要，只允许与 `targetType=DOMAIN_AGENT,targetId` 同时使用；`intentId` 可选且最长 128，`intentName` 必填且最长 256；仅在当前请求内用于生成 binding 展示信息，不写 run metadata，也不发送给用例库、IntentAgent 或 Runtime |
+| `targetType` | string | 否 | 普通 run 显式直连支持 `DOMAIN_AGENT/DOMAIN_EXPERT`，大小写不敏感；`AMBIGUOUS_ROUTE` 候选选择仍使用 `DOMAIN_AGENT` |
+| `targetId` | string | 传入targetType时必填 | `DOMAIN_AGENT` 时为技能 ID；`DOMAIN_EXPERT` 时直接作为区分大小写的 Relay `roleName`；歧义路由选择时必须精确等于等待卡片中的可信候选 `skillId` |
+| `selectedIntent` | object | 否 | 显式选择 DomainAgent 或 Relay 专家时的展示摘要；`intentId` 可选且最长 128，`intentName` 必填且最长 256；仅用于生成 binding 和选择事件的展示信息，不写 run metadata，也不发送给用例库、IntentAgent 或 Runtime；专家未传时以 roleName 作为展示名称 |
 | `agentMode` | object | 否 | Agent 模式完整快照。`selections` 最多 16 项；每项 `scheme`、`code` 必填，`displayName` 可选，同一请求不允许重复 `scheme`。缺失或 `null` 对同一 active DomainAgent 表示不更新，新 Binding 不继承；`selections=[]` 表示清除。仅记录到 DomainAgent RuntimeBinding，不进入 IntentAgent、Relay 或 DomainAgent 请求。澄清及切换确认的最终请求需要重新提交 |
 | `metadata` | object | 否 | 本轮扩展字段，最多50个顶层属性；可通过`bizContext`描述当前业务应用和页面。DomainAgent路由时会作为下游业务扩展，不能覆盖服务端保留的`messageId/skillId/query/sessionId` |
 | `appId` | string | 否 | 会话分组键，最大 128；无 `sessionId` 时保存到新会话，已有会话中显式传入时必须与原值完全一致 |
@@ -2947,7 +2948,7 @@ run-A 从 `WAITING_USER` 改成 `CANCELLED`；它会把 Interaction 改为 `CANC
 
 前端点击停止后，不应把关闭 WebSocket 当作取消语义。推荐流程是：保存当前本地 `lastSeq`，调用 stop，随后继续通过 WebSocket 等待 `run.cancelled`；如果页面已经断线或没有收到终态事件，则用 stop 前保存的 `lastSeq` 调 Event Resume 补齐 `run.cancelled`。当 stop 前已有正文或用户可见 parts 时，`run.cancelled.payload.messageReady=true`，并携带 `assistantMessageId/feedbackTargetMessageId`；HTTP stop 响应也会返回同样的反馈目标作为兜底。stop 响应里的 `latestSeq` 是服务端事实源位置，不代表当前页签已经消费到该事件。
 
-stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可信 Relay WebSocket 或 DomainAgent cancel adapter，用于下游企业权限校验。Relay 优先在本机 active WS 上发送 `{"type":"stop_all_agents"}`。如果 stop 请求落到其他实例、本机连接已清理或处于 Relay 问卷等待，后端会新建临时 Relay WS，使用可信 `runtimeSessionId` 发送 `config(sessionMode=resume, supports_incremental_recovery=true)`，收到 `session-ready` 后再发送 `stop_all_agents`，然后等待 `session-state=paused` 或 ack 超时后释放临时连接。DomainAgent 等待链使用 source/effective run 的真实技能标识调用现有 cancel 接口。等待态本地事务会先取消 Interaction 及其精确关联的 ACTIVE Binding；即使下游 cancel 失败，也不会恢复等待，不阻止用户提交下一条问题。无关的 `RESUMABLE` Relay Binding 不会被取消。
+stop 请求如果携带 Cookie，后端会按同一规则把 Cookie 透传给可信 Relay WebSocket 或 DomainAgent cancel adapter，用于下游企业权限校验。Relay 优先在本机 active WS 上发送 `{"type":"stop_all_agents"}`，并在 `interrupt-ack-timeout` 内等待发送链完成或 stop 后的 `session-state=paused`；这段时间 run 保持 `CANCELLING`，同会话不能创建新 run。如果 stop 请求落到其他实例、本机连接已清理或处于 Relay 问卷等待，后端会新建临时 Relay WS，使用可信 `runtimeSessionId` 发送 `config(sessionMode=resume, supports_incremental_recovery=true)`，收到 `session-ready` 后再发送 `stop_all_agents`，然后等待 `session-state=paused` 或 ack 超时后释放临时连接。确认、失败或超时后都会提交本地取消终态。固定专家的运行态 stop 不取消 Binding，下一轮继续使用同一 `runtimeSessionId` 执行 `RESUME`。DomainAgent 等待链使用 source/effective run 的真实技能标识调用现有 cancel 接口。等待态本地事务会先取消 Interaction 及其精确关联的 ACTIVE Binding；即使下游 cancel 失败，也不会恢复等待，不阻止用户提交下一条问题。无关的 `RESUMABLE` Relay Binding 不会被取消。
 
 ## Run 故障恢复事件
 
@@ -3243,6 +3244,65 @@ DomainAgent binding 返回值。
   }
 }
 ```
+
+### Relay 专家直连与固定 Binding
+
+前端可通过 `targetType=DOMAIN_EXPERT` 直接选择 Relay 专家；`targetId` 会原样作为
+`chat_expert.role_name`，该路径跳过用例库和 IntentAgent：
+
+```json
+{
+  "sessionId": "session_xxx",
+  "runMode": "NEXT",
+  "message": "分析当前经营情况",
+  "targetType": "DOMAIN_EXPERT",
+  "targetId": "financial-analysis",
+  "selectedIntent": {
+    "intentId": "finance_analysis",
+    "intentName": "经营分析专家"
+  },
+  "metadata": {}
+}
+```
+
+首次选择会创建或恢复与该 `roleName` 精确匹配的 Relay Domain Expert Binding。正常完成后 Binding
+保持 `ACTIVE`，后续普通提问无需再传 target，仍通过 `chat_expert` 续接同一专家；再次显式选择同一专家时
+复用当前 Binding，选择其他专家或 DomainAgent 时取消旧 ACTIVE Binding 并切换。`forceReroute=true`、
+等待态 stop、会话删除或 Relay session 不可恢复会取消固定关系；运行中 stop 只停止当前 run，Binding 保留。
+由 Intent 动态选择的 Domain Expert 没有固定标记，正常完成后仍转为 `RESUMABLE`，不会改变既有行为。
+
+每轮固定专家调用前会先推送并持久化一个 `runtime.metadata`，历史中对应 `METADATA` Part：
+
+```json
+{
+  "type": "runtime.metadata",
+  "payload": {
+    "source": "chatservice",
+    "sourceType": "selectedDomainExpert",
+    "metadataType": "selected_domain_expert",
+    "routeType": "AGENT_RUNTIME",
+    "targetType": "DOMAIN_EXPERT",
+    "targetId": "financial-analysis",
+    "roleName": "financial-analysis",
+    "routeSource": "front-selected",
+    "intentId": "finance_analysis",
+    "intentName": "经营分析专家",
+    "intentResult": {
+      "accepted": true,
+      "source": "front-selected",
+      "resourceId": "financial-analysis",
+      "skillId": "financial-analysis",
+      "intentId": "finance_analysis",
+      "intentName": "经营分析专家"
+    }
+  }
+}
+```
+
+`selectedIntent` 省略时不返回 `intentId`，`intentName` 使用 roleName。assistant metadata 的
+`skillId` 为 roleName；`stream-status` 返回 `bindingProvider=relay`、
+`bindingTargetType=DOMAIN_EXPERT`、`bindingTargetId=roleName`，并携带可用的展示摘要和
+`bindingRouteSource=front-selected`。
 
 ## 前端联调最小示例
 

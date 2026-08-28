@@ -35,6 +35,7 @@ import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
@@ -541,6 +542,27 @@ class ChatRunApplicationServiceTest {
                 .thenReturn(Optional.of(relayBinding));
 
         assertThat(service.streamStatus(user(), "session1").bindingAgentMode()).isNull();
+
+        Map<String, Object> expertMetadata = new HashMap<>(RuntimeProfileMetadata.bindingMetadata(
+                com.huawei.it.ex.one.domain.routing.RuntimeProfile.DOMAIN_EXPERT,
+                "delegate", "domain_expert", "financial-analysis"));
+        expertMetadata.put(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true);
+        expertMetadata.put("intentCode", "finance_analysis");
+        expertMetadata.put("intentName", "经营分析专家");
+        expertMetadata.put("routeSource", "front-selected");
+        RuntimeBinding pinnedExpert = new RuntimeBinding(
+                "binding3", "tenant1", "user1", "session1", "relay", "runtime3",
+                RuntimeBindingStatus.ACTIVE, "run3", null, now, now, expertMetadata);
+        when(bindingService.findActiveBySession("tenant1", "user1", "session1"))
+                .thenReturn(Optional.of(pinnedExpert));
+
+        var expertStatus = service.streamStatus(user(), "session1");
+        assertThat(expertStatus.bindingProvider()).isEqualTo("relay");
+        assertThat(expertStatus.bindingTargetType()).isEqualTo("DOMAIN_EXPERT");
+        assertThat(expertStatus.bindingTargetId()).isEqualTo("financial-analysis");
+        assertThat(expertStatus.bindingIntentCode()).isEqualTo("finance_analysis");
+        assertThat(expertStatus.bindingIntentName()).isEqualTo("经营分析专家");
+        assertThat(expertStatus.bindingRouteSource()).isEqualTo("front-selected");
     }
 
     @Test

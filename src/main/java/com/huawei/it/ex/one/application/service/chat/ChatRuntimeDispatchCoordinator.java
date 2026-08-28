@@ -77,10 +77,12 @@ final class ChatRuntimeDispatchCoordinator {
     Flux<ChatEvent> execute(RoutePipelineRequest request, Runnable initialPreparation) {
         return Flux.usingWhen(
                 Mono.just(request.bindingLifecycle()),
-                ignored -> Flux.defer(() -> {
-                    initialPreparation.run();
-                    return executeRouteFrames(request);
-                }),
+                ignored -> eventPersistenceCoordinator.requireCurrentOwnerRunning(
+                                request.executionClaim(), "before-initial-preparation")
+                        .thenMany(Flux.defer(() -> {
+                            initialPreparation.run();
+                            return executeRouteFrames(request);
+                        })),
                 ignored -> cleanupUnstartedBinding(request, "complete"),
                 (ignored, failure) -> cleanupUnstartedBinding(request, "error"),
                 ignored -> cleanupUnstartedBinding(request, "cancel"));
@@ -88,9 +90,7 @@ final class ChatRuntimeDispatchCoordinator {
 
     private Flux<ChatEvent> executeRouteFrames(RoutePipelineRequest request) {
         IntentResultPersistenceBarrier persistenceBarrier = new IntentResultPersistenceBarrier();
-        Flux<RouteSignalFrame> frames = eventPersistenceCoordinator.requireCurrentOwnerRunning(
-                        request.executionClaim(), "before-route")
-                .thenMany(Flux.defer(() -> request.routeRef().get() == null
+        Flux<RouteSignalFrame> frames = Flux.defer(() -> request.routeRef().get() == null
                         ? routeSignalService.routeInitialWithProgress(new RouteSignalRequest(
                                 request.runId(),
                                 request.user(),
@@ -101,7 +101,7 @@ final class ChatRuntimeDispatchCoordinator {
                                 request.intentQuery(),
                                 request.run() == null ? null : request.run().userMessageId()))
                         : Flux.just(RouteSignalFrame.result(
-                                RouteSignalResult.of(request.routeRef().get())))));
+                                RouteSignalResult.of(request.routeRef().get()))));
         return frames.concatMap(frame -> executeFrame(request, frame, persistenceBarrier));
     }
 

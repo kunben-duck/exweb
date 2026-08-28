@@ -170,8 +170,8 @@ FinanceEXChatService#executeRun(...)
 5. `IdGenerator#newId("run", ...)` 生成 runId。
 6. `MemoryApplicationService#loadForRun(...)` 按配置加载可选记忆。
 7. `SessionApplicationService#prepareRunMessage(...)` 写入或定位本轮 user message。
-8. 先检查 `targetType=DOMAIN_AGENT,targetId=...`；存在时进入 `DOMAIN_AGENT` 路由，不读取 RuntimeBinding。可选 `selectedIntent` 只保存为 binding 展示摘要，不参与目标选择或 DomainAgent 请求。
-9. 未显式指定 DomainAgent 时只查询当前 active RuntimeBinding；没有绑定时先保持 route 为空。
+8. 先检查显式 target：`DOMAIN_AGENT`进入领域Agent路由；`DOMAIN_EXPERT`以`targetId`作为Relay roleName并固定专家Binding。两者都跳过用例库和Intent；可选`selectedIntent`只用于Binding和选择事件回显，不发送给Runtime。
+9. 未显式指定 target 时查询当前 active RuntimeBinding；固定Relay专家与DomainAgent可持续续接，其他Relay仍遵循既有未闭合任务语义。
 10. `ChatRunApplicationService#createRunning(...)` 创建业务 run。
 11. `ChatRunLeaseApplicationService#startRun(...)` 创建 execution lease。
 12. 先持久化并推送 `run.started`，让前端立即拿到首个事实事件。
@@ -208,7 +208,7 @@ RouteType.AGENT_RUNTIME    -> AgentRuntimeExecutor#execute(...)
 
 - 新问题没有进入 Relay：查看 `RouteSignalApplicationService#routeInitial(...)` 返回的 `RouteTarget`。
 - 意图识别已调用但统计表没有记录：确认 `financeex.intent-record.enabled=true`，再看 `IntentRecognitionRecordService#recordAsync(...)` 是否被线程池拒绝或 repository 写库失败；该链路是 best-effort，不会向前端报错。
-- DomainAgent 指定调用没有进入 DomainAgent 路由，或 chat Cookie 未透传：查看 `CreateChatRunRequest.targetType/targetId`、`FinanceEXChatService#explicitDomainAgentId(...)`、`AgentRuntimeRegistry`、`DomainAgentRuntime#query(...)` 和 `ConfiguredDomainAgentClient#query(...)`。
+- 显式Runtime没有进入预期路由：查看`CreateChatRunRequest.targetType/targetId`、`StandardRunInputPreparer#explicitRuntimeTarget(...)`和`RouteResolutionCoordinator#prepareInitial(...)`；DomainAgent继续检查`DomainAgentRuntime/ConfiguredDomainAgentClient`，Relay专家继续检查`RelayAgentRuntime/RelayRuntimeProtocolAdapter`。
 - 多轮没有续接 Runtime：查看 `RuntimeBindingApplicationService#findActive(...)` 是否命中当前 `leafMessageId`。
 - 同一会话连续发两条报错：查看 `ChatRunApplicationService#rejectIfActiveRunExists(...)` 和 `ChatRunApplicationService#createRunning(...)`。
 - user message 已写入但 run 没创建：异常可能发生在 `prepareRunMessage(...)` 之后、`createRunning(...)` 之前，需要看日志和事务边界。

@@ -243,8 +243,12 @@ public class ChatInteractionApplicationService {
     }
 
     public void cancelOpenBySession(UserContext user, String sessionId) {
+        cancelOpenBySessionAndCount(user, sessionId);
+    }
+
+    int cancelOpenBySessionAndCount(UserContext user, String sessionId) {
         permissionChecker.checkChatPermission(user);
-        repository.cancelOpenBySession(user.tenantId(), user.ownerUserId(), sessionId, Instant.now());
+        return repository.cancelOpenBySession(user.tenantId(), user.ownerUserId(), sessionId, Instant.now());
     }
 
     /**

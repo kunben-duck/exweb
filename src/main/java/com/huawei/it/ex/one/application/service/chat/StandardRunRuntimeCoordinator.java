@@ -102,12 +102,13 @@ final class StandardRunRuntimeCoordinator {
                                 prepared.runId(),
                                 plan.runtimeBindingLeafId(),
                                 plan.runCommand(),
-                                prepared.explicitDomainAgentId(),
+                                prepared.explicitRuntimeTarget(),
                                 prepared.forceReroute(),
                                 plan.routeRef(),
                                 plan.bindingRef(),
                                 plan.runtimeSessionModeRef(),
                                 prepared.command().agentMode(),
+                                executionClaim,
                                 plan.bindingLifecycle())));
             });
         } catch (RuntimeException ex) {

@@ -20,6 +20,7 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -1191,6 +1192,66 @@ class RelayWebSocketRuntimeAdapterTest {
     }
 
     @Test
+    void activeCancelWaitsForOutboundSendCompletion() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient(true);
+        RelayWebSocketRuntimeAdapter adapter = adapter(
+                client, Duration.ofSeconds(10), Duration.ofSeconds(1));
+        Disposable query = adapter.query(request("relay-session-1", RuntimeSessionMode.RESUME, "run1"))
+                .subscribe();
+        try {
+            client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}");
+
+            StepVerifier.create(adapter.cancel(cancelRequest("run1")))
+                    .thenAwait(Duration.ofMillis(20))
+                    .then(() -> assertThat(client.sent()).contains("{\"type\":\"stop_all_agents\"}"))
+                    .expectNoEvent(Duration.ofMillis(30))
+                    .then(client::completeOutbound)
+                    .verifyComplete();
+        } finally {
+            query.dispose();
+        }
+    }
+
+    @Test
+    void activeCancelAcceptsPausedAckBeforeOutboundSendCompletes() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient(true);
+        RelayWebSocketRuntimeAdapter adapter = adapter(
+                client, Duration.ofSeconds(10), Duration.ofSeconds(1));
+        Disposable query = adapter.query(request("relay-session-1", RuntimeSessionMode.RESUME, "run1"))
+                .subscribe();
+        try {
+            client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}");
+
+            StepVerifier.create(adapter.cancel(cancelRequest("run1")))
+                    .thenAwait(Duration.ofMillis(20))
+                    .then(() -> client.emit(
+                            "{\"type\":\"session-state\",\"state\":\"paused\","
+                                    + "\"session_id\":\"relay-session-1\"}"))
+                    .verifyComplete();
+        } finally {
+            query.dispose();
+        }
+    }
+
+    @Test
+    void activeCancelTimeoutStillCompletesBestEffortCancellation() {
+        ReusableFakeWebSocketClient client = new ReusableFakeWebSocketClient(true);
+        RelayWebSocketRuntimeAdapter adapter = adapter(
+                client, Duration.ofSeconds(10), Duration.ofMillis(30));
+        Disposable query = adapter.query(request("relay-session-1", RuntimeSessionMode.RESUME, "run1"))
+                .subscribe();
+        try {
+            client.emit("{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}");
+
+            StepVerifier.create(adapter.cancel(cancelRequest("run1")))
+                    .verifyComplete();
+            assertThat(client.sent()).contains("{\"type\":\"stop_all_agents\"}");
+        } finally {
+            query.dispose();
+        }
+    }
+
+    @Test
     void cancelWithoutActiveExchangeOpensTemporaryResumeConnectionAndSendsInterrupt() throws Exception {
         FakeWebSocketClient client = new FakeWebSocketClient(List.of(
                 "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}",
@@ -1670,9 +1731,19 @@ class RelayWebSocketRuntimeAdapterTest {
 
     private static final class ReusableFakeWebSocketClient implements WebSocketClient {
         private final java.util.List<String> sent = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        private final boolean gateOutboundCompletion;
+        private final Sinks.One<Void> outboundCompletion = Sinks.one();
         private ReusableFakeWebSocketSession session;
         private URI uri;
         private int executeCount;
+
+        private ReusableFakeWebSocketClient() {
+            this(false);
+        }
+
+        private ReusableFakeWebSocketClient(boolean gateOutboundCompletion) {
+            this.gateOutboundCompletion = gateOutboundCompletion;
+        }
 
         @Override
         public Mono<Void> execute(URI url, WebSocketHandler handler) {
@@ -1683,7 +1754,9 @@ class RelayWebSocketRuntimeAdapterTest {
         public Mono<Void> execute(URI url, HttpHeaders requestHeaders, WebSocketHandler handler) {
             executeCount++;
             this.uri = url;
-            this.session = new ReusableFakeWebSocketSession(sent);
+            this.session = new ReusableFakeWebSocketSession(
+                    sent,
+                    gateOutboundCompletion ? outboundCompletion.asMono() : Mono.empty());
             return handler.handle(session);
         }
 
@@ -1705,15 +1778,21 @@ class RelayWebSocketRuntimeAdapterTest {
         private URI uri() {
             return uri;
         }
+
+        private void completeOutbound() {
+            outboundCompletion.tryEmitEmpty();
+        }
     }
 
     private static final class ReusableFakeWebSocketSession implements WebSocketSession {
         private final DataBufferFactory bufferFactory = new DefaultDataBufferFactory();
         private final Sinks.Many<String> inbound = Sinks.many().replay().all();
         private final java.util.List<String> sent;
+        private final Mono<Void> outboundCompletion;
 
-        private ReusableFakeWebSocketSession(java.util.List<String> sent) {
+        private ReusableFakeWebSocketSession(java.util.List<String> sent, Mono<Void> outboundCompletion) {
             this.sent = sent;
+            this.outboundCompletion = outboundCompletion;
         }
 
         @Override
@@ -1746,7 +1825,7 @@ class RelayWebSocketRuntimeAdapterTest {
             return Flux.from(messages)
                     .map(WebSocketMessage::getPayloadAsText)
                     .doOnNext(sent::add)
-                    .then();
+                    .then(outboundCompletion);
         }
 
         @Override

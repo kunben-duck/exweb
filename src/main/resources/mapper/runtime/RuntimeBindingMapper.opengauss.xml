@@ -101,6 +101,31 @@
     </select>
 
     <!--
+      固定专家 Binding 解析、取消或替换前锁定当前 run/execution。锁持续到调用方短事务提交，
+      使 stop 不能在校验与 Binding 条件更新之间改变 owner 或 fencing 状态。
+      入参: tenantId/userId/sessionId 提供可信归属，claim 提供 runId/ownerInstanceId/fencingToken。
+    -->
+    <select id="lockRunExecutionForBindingMutation" resultType="java.lang.Integer">
+        SELECT 1
+        FROM fin_ex_chat_run_t r
+        JOIN fin_ex_chat_run_execution_t e
+          ON e.run_id = r.id
+         AND e.tenant_id = r.tenant_id
+         AND e.user_id = r.user_id
+         AND e.session_id = r.session_id
+        WHERE r.id = #{claim.runId}
+          AND r.tenant_id = #{tenantId}
+          AND r.user_id = #{userId}
+          AND r.session_id = #{sessionId}
+          AND r.status = 'RUNNING'
+          AND e.owner_instance_id = #{claim.ownerInstanceId}
+          AND e.fencing_token = #{claim.fencingToken}
+          AND e.execution_status = 'RUNNING'
+        FOR SHARE OF r
+        FOR SHARE OF e
+    </select>
+
+    <!--
       只刷新仍由 source run 持有的 ACTIVE Relay Binding；不创建新 Binding，也不改变 Relay session。
       入参: row 提供 Binding 主键、可信归属和待刷新状态，expectedLastRunId 为等待态来源 run 标识。
     -->

@@ -41,7 +41,8 @@ final class StandardRunAdmissionCoordinator {
                                 prepared.session(),
                                 prepared.runId(),
                                 prepared.attachments(),
-                                prepared.directDomainAgentWaitBypass()));
+                                prepared.explicitRuntimeTarget(),
+                                prepared.directRuntimeWaitBypass()));
         ChatRunMessagePlan messagePlan = result.messagePlan();
         ChatRun run = result.run();
         result.cancelledBindings().forEach(cacheSynchronizer::schedule);

@@ -130,6 +130,20 @@ public class MyBatisRuntimeBindingRepository implements RuntimeBindingRepository
     }
 
     @Override
+    public boolean lockRunExecutionForBindingMutation(
+            String tenantId,
+            String userId,
+            String sessionId,
+            RunExecutionClaim claim) {
+        if (claim == null) {
+            return false;
+        }
+        Integer locked = mapper.lockRunExecutionForBindingMutation(
+                tenantId, userId, sessionId, claim);
+        return locked != null && locked == 1;
+    }
+
+    @Override
     @Transactional(timeoutString =
             "${financeex.runtime-binding.interaction-resume-transaction-timeout-seconds:2}")
     public boolean restoreInteractionResume(String bindingId, String continueRunId, String sourceRunId) {

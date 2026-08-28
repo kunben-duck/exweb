@@ -31,6 +31,7 @@ import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -723,18 +724,24 @@ public class ChatRunApplicationService {
 
     private BindingSummary toBindingSummary(RuntimeBinding binding) {
         Map<String, Object> metadata = binding.metadata();
-        String targetType = RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider())
+        boolean domainAgent = RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider());
+        boolean pinnedDomainExpert = !domainAgent
+                && RuntimeProfileMetadata.isPinnedDomainExpert(metadata);
+        String targetType = domainAgent
                 ? "DOMAIN_AGENT"
-                : "AGENT_RUNTIME";
+                : pinnedDomainExpert ? "DOMAIN_EXPERT" : "AGENT_RUNTIME";
+        String targetId = domainAgent
+                ? stringValue(metadata.get("domainAgentId"))
+                : pinnedDomainExpert ? stringValue(metadata.get(RuntimeProfileMetadata.ROLE_NAME_KEY)) : null;
         return new BindingSummary(
                 binding.provider(),
                 targetType,
-                stringValue(metadata.get("domainAgentId")),
+                targetId,
                 stringValue(metadata.get("intentCode")),
                 stringValue(metadata.get("intentName")),
                 stringValue(metadata.get("routeSource")),
                 binding.updatedAt(),
-                RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider())
+                domainAgent
                         ? AgentModeBindingContext.fromBinding(binding)
                         : null);
     }

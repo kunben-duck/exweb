@@ -15,6 +15,7 @@ public final class RuntimeProfileMetadata {
     public static final String PROFILE_KEY = "runtimeProfile";
     public static final String APP_MODE_KEY = "relayAppMode";
     public static final String ROLE_NAME_KEY = "relayRoleName";
+    public static final String RELAY_EXPERT_PINNED_KEY = "relayExpertPinned";
 
     private RuntimeProfileMetadata() {
     }
@@ -135,7 +136,16 @@ public final class RuntimeProfileMetadata {
         sanitized.remove(PROFILE_KEY);
         sanitized.remove(APP_MODE_KEY);
         sanitized.remove(ROLE_NAME_KEY);
+        sanitized.remove(RELAY_EXPERT_PINNED_KEY);
         return sanitized.isEmpty() ? Map.of() : Map.copyOf(sanitized);
+    }
+
+    /** 判断Binding是否为前端显式选择并固定续接的Relay专家。 */
+    public static boolean isPinnedDomainExpert(Map<String, Object> metadata) {
+        Map<String, Object> source = metadata == null ? Map.of() : metadata;
+        return Boolean.TRUE.equals(source.get(RELAY_EXPERT_PINNED_KEY))
+                && RuntimeProfile.DOMAIN_EXPERT.name().equals(text(source.get(PROFILE_KEY)))
+                && text(source.get(ROLE_NAME_KEY)) != null;
     }
 
     private static RuntimeProfile profile(Object value, boolean missingAsDelegate) {

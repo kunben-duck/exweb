@@ -192,6 +192,7 @@ RouteMemory 不等于聊天消息历史，也不应写入 run metadata 或 Runti
 
 - `RuntimeBinding.provider=agent-runtime`。
 - 通过 `AgentRuntimeExecutor` 和 Relay WebSocket adapter 调用。
+- 显式`targetType=DOMAIN_EXPERT`以`targetId`作为`chat_expert.role_name`并建立固定ACTIVE Binding；Intent动态专家不固定。
 - 首次进入使用 `NEW`；已有可恢复 Relay binding 时使用 `RESUME`。
 - Relay `RESUME` 是下一个 run 恢复下游会话，不是在途 run 跨实例接管。
 

@@ -186,6 +186,19 @@ paths:
                         code: deep
                         displayName: 深度思考
                   metadata: {}
+              directDomainExpert:
+                summary: 显式直连并固定Relay专家
+                value:
+                  commandId: cmd_expert_001
+                  sessionId: session_001
+                  runMode: NEXT
+                  message: 分析当前经营情况
+                  targetType: DOMAIN_EXPERT
+                  targetId: financial-analysis
+                  selectedIntent:
+                    intentId: finance_analysis
+                    intentName: 经营分析专家
+                  metadata: {}
               editUser:
                 summary: 编辑历史 user 消息
                 value:
@@ -2258,16 +2271,19 @@ components:
           type: string
           maxLength: 32
           nullable: true
-          enum: [DOMAIN_AGENT]
+          enum: [DOMAIN_AGENT, DOMAIN_EXPERT]
+          description: DOMAIN_AGENT直连领域Agent；DOMAIN_EXPERT直连并固定Relay专家
         targetId:
           type: string
           maxLength: 128
           nullable: true
+          description: DOMAIN_AGENT时为技能ID；DOMAIN_EXPERT时为区分大小写的Relay roleName
         selectedIntent:
           type: object
           allOf:
             - $ref: '#/components/schemas/ChatSelectedIntent'
           nullable: true
+          description: 显式目标的可选展示摘要，不参与路由且不发送给Runtime
         metadata:
           type: object
           nullable: true
@@ -2602,9 +2618,11 @@ components:
         bindingTargetType:
           type: string
           nullable: true
+          description: 当前绑定目标类型；固定Relay专家返回DOMAIN_EXPERT
         bindingTargetId:
           type: string
           nullable: true
+          description: DomainAgent技能ID或固定Relay专家roleName
         bindingIntentCode:
           type: string
           nullable: true

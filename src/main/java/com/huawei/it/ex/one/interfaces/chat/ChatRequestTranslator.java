@@ -98,8 +98,11 @@ public class ChatRequestTranslator {
         if (runMode == ChatRunMode.CONTINUE_INTERACTION) {
             throw new IllegalArgumentException("CONTINUE_INTERACTION 模式不支持 selectedIntent");
         }
-        if (!"DOMAIN_AGENT".equalsIgnoreCase(targetType) || !hasText(targetId)) {
-            throw new IllegalArgumentException("selectedIntent 仅允许与 targetType=DOMAIN_AGENT 和有效 targetId 同时使用");
+        boolean supportedTarget = "DOMAIN_AGENT".equalsIgnoreCase(targetType)
+                || "DOMAIN_EXPERT".equalsIgnoreCase(targetType);
+        if (!supportedTarget || !hasText(targetId)) {
+            throw new IllegalArgumentException(
+                    "selectedIntent 仅允许与 targetType=DOMAIN_AGENT/DOMAIN_EXPERT 和有效 targetId 同时使用");
         }
         if (!hasText(selectedIntent.intentName())) {
             throw new IllegalArgumentException("selectedIntent.intentName 不能为空");

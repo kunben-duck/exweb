@@ -41,13 +41,14 @@ final class ChatRunAdmissionCoordinator {
         if (service == null) {
             return legacyStandardAdmission(request);
         }
-        if (request.directDomainAgentWaitBypass()) {
-            return service.commitDirectDomainAgent(
+        if (request.directRuntimeWaitBypass()) {
+            return service.commitDirectRuntime(new ChatRunAdmissionCommitService.DirectRuntimeAdmissionCommand(
                     request.user(),
                     request.command(),
                     request.session(),
                     request.runId(),
-                    request.attachments());
+                    request.attachments(),
+                    request.explicitRuntimeTarget()));
         }
         return service.commit(
                 request.user(),
@@ -161,7 +162,8 @@ final class ChatRunAdmissionCoordinator {
             ChatSession session,
             String runId,
             List<AttachmentRef> attachments,
-            boolean directDomainAgentWaitBypass
+            ExplicitRuntimeTarget explicitRuntimeTarget,
+            boolean directRuntimeWaitBypass
     ) {
     }
 

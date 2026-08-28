@@ -35,9 +35,11 @@ FinanceEXChatService 是前端聊天入口和 SuperAgent 主控服务。正式�
 flowchart TD
     User["用户请求"] --> Normalize["身份解析与会话归一化"]
     Normalize --> Memory["按配置加载 MemoryContext"]
-    Memory --> ExplicitSkill{"targetType=DOMAIN_AGENT?"}
-    ExplicitSkill -- "是" --> DomainAgent["DOMAIN_AGENT：DomainAgent 指定调用"]
-    ExplicitSkill -- "否" --> FindRuntime["按会话查询 RuntimeBinding"]
+    Memory --> ExplicitTarget{"显式 targetType?"}
+    ExplicitTarget -- "DOMAIN_AGENT" --> DomainAgent["DOMAIN_AGENT：DomainAgent 指定调用"]
+    ExplicitTarget -- "DOMAIN_EXPERT" --> PinnedExpert["AGENT_RUNTIME：固定 Relay 专家"]
+    ExplicitTarget -- "未指定" --> FindRuntime["按会话查询 RuntimeBinding"]
+    PinnedExpert --> RuntimeQuery
 
     FindRuntime --> HasRuntime{"存在 active RuntimeBinding?"}
     HasRuntime -- "是：domain-agent" --> BoundDomainAgent["续接绑定 DomainAgent"]
@@ -121,7 +123,10 @@ sequenceDiagram
     alt "targetType=DOMAIN_AGENT"
         SuperAgent->>SuperAgent: "RouteTarget.DOMAIN_AGENT，绑定 routeSource=front-selected"
         SuperAgent->>DomainAgent: "chat(boundDomainAgentId, query, metadata)"
-    else "未显式指定 DomainAgent"
+    else "targetType=DOMAIN_EXPERT"
+        SuperAgent->>Binding: "解析/固定 DOMAIN_EXPERT(roleName) Binding"
+        SuperAgent->>Runtime: "chat_expert(roleName)"
+    else "未显式指定 Runtime"
         SuperAgent->>Binding: "findActive(sessionId)"
         Binding->>Redis: "读取 RuntimeBinding"
         alt "Redis miss"
@@ -233,6 +238,8 @@ sequenceDiagram
 
     alt "targetType=DOMAIN_AGENT"
         EX->>DomainAgent: "绑定前端指定 DomainAgent 并调用"
+    else "targetType=DOMAIN_EXPERT"
+        EX->>Relay: "绑定固定专家并发送 chat_expert(roleName)"
     else "存在 DomainAgent 绑定或路由信号命中"
         EX->>DomainAgent: "续接/绑定 DomainAgent"
     else "进入 Relay Runtime"
@@ -735,7 +742,8 @@ flowchart TB
 ## 路由规则
 
 - `targetType=DOMAIN_AGENT,targetId=...` 优先级最高；存在时进入 `DOMAIN_AGENT` 路由并绑定对应 DomainAgent，`routeSource=front-selected`。`runMode=NEXT` 直连可原子取消会话下开放的 `WAITING/RESPONDING` Interaction 并解除等待，但不抢占真正执行中的 run；旧等待 run/message 保留，新 user 节点挂在等待 assistant 后。直连只使用本轮 message/metadata/attachments，取消当前 ACTIVE binding、保留历史 RESUMABLE Relay session。可选 `selectedIntent` 只作为展示摘要写入 binding；后续复用 binding 时用于补齐 `selectedDomainAgent` 历史 part，不参与路由或下游请求。
-- active RuntimeBinding 优先级次之；`provider=domain-agent` 时续接当前 DomainAgent，`provider=relay` 只用于未闭合或等待用户输入的 Relay 任务。Relay 正常完成后转为 `RESUMABLE`，下次普通提问仍重新路由；再次选择 Relay 时，只恢复 Runtime Profile、`appMode` 和 `roleName` 都匹配的 session。存量无 Profile Binding 按 `DELEGATE` 兼容。
+- `targetType=DOMAIN_EXPERT,targetId=...` 进入 Relay `DOMAIN_EXPERT`，`targetId`直接作为区分大小写的`roleName`。Binding以`relayExpertPinned=true`标记前端固定选择，正常完成后保持`ACTIVE`；后续普通问题继续`chat_expert`，同专家复用、不同专家替换。每轮调用前生成`selected_domain_expert`元数据事件，assistant以roleName记录`skillId`。可选`selectedIntent`只保存展示摘要，缺失时以roleName回退，不发送给Relay。Intent动态专家没有固定标记，完成后仍转为`RESUMABLE`。
+- active RuntimeBinding 优先级次之；`provider=domain-agent` 时续接当前 DomainAgent，固定的`provider=relay + DOMAIN_EXPERT`也可持续续接；其他 Relay binding 只用于未闭合或等待用户输入的任务。普通Relay和动态专家正常完成后转为 `RESUMABLE`，下次普通提问仍重新路由；再次选择 Relay 时，只恢复 Runtime Profile、`appMode` 和 `roleName` 都匹配的 session。存量无 Profile Binding 按 `DELEGATE` 兼容。
 - 用例库和意图服务是可选路由信号，默认关闭；关闭时不调用外部 API。
 - 用例库开启时优先匹配；命中阈值默认 `0.85`，命中并返回 DomainAgent 路由目标后绑定为 DomainAgent。
 - 用例库关闭或未命中后，只有意图服务开启才调用 `IntentService`。
@@ -835,8 +843,8 @@ stop 语义：
 - 集群事实源优先：stop 先写 Redis cancel flag 与数据库 `CANCELLING` 状态，再发布 `run.cancelled`。
 - JVM subscription registry 只是本机资源释放加速器；即使 stop 请求与输出流落在不同实例，输出实例也必须在追加事件前读取 Redis cancel flag。非终态事件通过数据库行栅栏同时校验 run 状态、session 归属和 execution fencing，栅栏持有到后续 `VALUES` 写入提交。
 - 用户主动 stop 且已有 assistant 正文或用户可见 runtime parts 成功落库时，会从事件事实源重建并保存 partial assistant 历史消息，消息 metadata 标记 `partial=true`、`finishReason=USER_STOP`；只有 trace、domain-agent session 等内部 metadata 时不创建空 assistant。
-- 下游尽力取消：Relay 本机命中 active WebSocket 时发送 `{"type":"stop_all_agents"}`；跨实例或本机连接已清理时用临时 WS `resume` 到 run 中已回填的 Relay `runtimeSessionId`，收到 `session-ready` 后发送 `stop_all_agents`；DomainAgent 走 DomainAgent cancel adapter。这些下游取消失败只记录日志，不影响前端收到本服务 `run.cancelled` 终态。
-- 运行态 stop 不改变 RuntimeBinding 的既有生命周期；等待态 stop 会条件取消 Interaction 精确引用且仍由该等待链持有的 ACTIVE Binding，并保留无关的历史 `RESUMABLE` Relay Binding。历史 run-A 继续保持 `WAITING_USER`。
+- 下游尽力取消：Relay 本机命中 active WebSocket 时发送 `{"type":"stop_all_agents"}`，并在既有 `interrupt-ack-timeout` 内等待发送链完成或 stop 后的 `session-state=paused`；跨实例或本机连接已清理时用临时 WS `resume` 到 run 中已回填的 Relay `runtimeSessionId`，收到 `session-ready` 后发送控制帧并等待 paused 或超时。等待期间 run 保持 `CANCELLING`；确认、失败或超时后才提交本地 `run.cancelled`。DomainAgent 仍走异步 best-effort cancel adapter。
+- 运行态 stop 不改变 RuntimeBinding 的既有生命周期；固定专家 Binding 继续保持 `ACTIVE`，下一轮使用同一 `runtimeSessionId` 执行 `RESUME`。等待态 stop 会条件取消 Interaction 精确引用且仍由该等待链持有的 ACTIVE Binding，并保留无关的历史 `RESUMABLE` Relay Binding。历史 run-A 继续保持 `WAITING_USER`。同一 Relay session 内迟到 stop 与后续 run 的代次隔离由 Relay 协议保证。
 
 ## 外部 API 接入
 

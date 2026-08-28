@@ -149,6 +149,12 @@ abstract class ChatFlowTestSupport {
 
     FinanceEXChatService stopService(InMemorySessionRepository sessions, InMemoryMessageRepository messages,
                                              InMemoryRunRepository runs, InMemoryEventStore events) {
+        return stopService(sessions, messages, runs, events, noopRuntime());
+    }
+
+    FinanceEXChatService stopService(InMemorySessionRepository sessions, InMemoryMessageRepository messages,
+                                     InMemoryRunRepository runs, InMemoryEventStore events,
+                                     AgentRuntime runtime) {
         IdGenerator ids = new FixedIdGenerator();
         PermissionChecker permissionChecker = new PermissionChecker();
         WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
@@ -174,7 +180,7 @@ abstract class ChatFlowTestSupport {
         ChatRunTerminalCommitService terminalCommitService = new ChatRunTerminalCommitService(
                 streamService, sessionService, runs, leaseService, runtimeBindingRepository(), interactionService,
                 Duration.ofDays(3));
-        AgentRuntimeExecutor runtimeExecutor = new AgentRuntimeExecutor(noopRuntime(), limiter);
+        AgentRuntimeExecutor runtimeExecutor = new AgentRuntimeExecutor(runtime, limiter);
         ChatRunStopCoordinator stopCoordinator = new ChatRunStopCoordinator(
                 sessionService, streamService, runService, leaseService, executionRegistry,
                 runtimeExecutor, interactionService, terminalCommitService, ids);

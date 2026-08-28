@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.application.config.ChatInteractionProperties;
 import com.huawei.it.ex.one.application.config.MemoryProperties;
+import com.huawei.it.ex.one.application.integration.agent.AgentRuntime;
+import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeCancelRequest;
+import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.integration.identity.ApplicationInstanceIdProvider;
@@ -37,6 +40,9 @@ import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 import org.junit.jupiter.api.Test;
@@ -45,8 +51,78 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 class ChatTerminalFlowTest extends ChatFlowTestSupport {
+    @Test
+    void relayStopWaitsForCancellationBarrierBeforeTerminalCommit() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        seedRunningRun(sessions, messages, runs, user, "run1", "session1", "msg-user");
+        Sinks.One<Void> cancelConfirmation = Sinks.one();
+        AtomicBoolean cancelSubscribed = new AtomicBoolean(false);
+        AgentRuntime runtime = new AgentRuntime() {
+            @Override
+            public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+                return Mono.defer(() -> {
+                    cancelSubscribed.set(true);
+                    return cancelConfirmation.asMono();
+                });
+            }
+        };
+        FinanceEXChatService service = stopService(sessions, messages, runs, events, runtime);
+
+        StepVerifier.create(service.stopRun(user, "run1", RuntimeForwardHeaders.empty()))
+                .then(() -> {
+                    assertThat(cancelSubscribed).isTrue();
+                    assertThat(runs.findById("run1").orElseThrow().status())
+                            .isEqualTo(ChatRunStatus.CANCELLING);
+                    assertThat(events.events).noneMatch(event -> "run.cancelled".equals(event.type()));
+                })
+                .expectNoEvent(Duration.ofMillis(30))
+                .then(cancelConfirmation::tryEmitEmpty)
+                .assertNext(result -> assertThat(result.status()).isEqualTo(ChatRunStatus.CANCELLED))
+                .verifyComplete();
+
+        assertThat(events.events).anyMatch(event -> "run.cancelled".equals(event.type()));
+    }
+
+    @Test
+    void relayStopStillCommitsWhenCancellationBarrierFails() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        seedRunningRun(sessions, messages, runs, user, "run1", "session1", "msg-user");
+        AgentRuntime runtime = new AgentRuntime() {
+            @Override
+            public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
+                return Mono.error(new IllegalStateException("relay stop failed"));
+            }
+        };
+        FinanceEXChatService service = stopService(sessions, messages, runs, events, runtime);
+
+        var result = service.stopRun(user, "run1", RuntimeForwardHeaders.empty()).block();
+
+        assertThat(result).isNotNull();
+        assertThat(result.status()).isEqualTo(ChatRunStatus.CANCELLED);
+        assertThat(events.events).anyMatch(event -> "run.cancelled".equals(event.type()));
+    }
+
     @Test
     void cancelledRunDoesNotPersistPartialAssistantMessageAsHistory() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();

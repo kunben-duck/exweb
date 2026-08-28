@@ -306,6 +306,71 @@ class RuntimeBindingApplicationServiceTest {
     }
 
     @Test
+    void pinnedDomainExpertRejectsBindingMutationAfterExecutionOwnershipLoss() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        RuntimeBinding active = pinnedExpertBinding("financial-analysis", "run-old");
+        repository.saved = active;
+        repository.bindingMutationGuardAccepted = false;
+        RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache());
+        RunExecutionClaim claim = new RunExecutionClaim("run-new", "instance-old", 7L);
+
+        assertThatThrownBy(() -> service.resolvePinnedDomainExpertForRun(
+                        new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                                "t", "u", "s", "run-new", "leaf-new",
+                                RuntimeProfile.DOMAIN_EXPERT, "risk-analysis"),
+                        Map.of(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true),
+                        claim))
+                .isInstanceOf(ChatEventAppendRejectedException.class)
+                .hasMessageContaining("run/execution 栅栏拒绝");
+
+        assertThat(repository.bindingMutationClaim).isEqualTo(claim);
+        assertThat(repository.saved).isEqualTo(active);
+    }
+
+    @Test
+    void pinnedDomainExpertDoesNotCancelBindingRefreshedByAnotherRun() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        RuntimeBinding active = pinnedExpertBinding("financial-analysis", "run-newer");
+        repository.saved = active;
+        repository.cancelActiveGuardAccepted = false;
+        RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache());
+
+        assertThatThrownBy(() -> service.resolvePinnedDomainExpertForRun(
+                        new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                                "t", "u", "s", "run-current", "leaf-current",
+                                RuntimeProfile.DOMAIN_EXPERT, "risk-analysis"),
+                        Map.of(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true),
+                        new RunExecutionClaim("run-current", "instance-current", 8L)))
+                .isInstanceOf(ChatEventAppendRejectedException.class)
+                .hasMessageContaining("条件取消失败");
+
+        assertThat(repository.cancelActiveExpectedRunId).isEqualTo("run-newer");
+        assertThat(repository.saved).isEqualTo(active);
+    }
+
+    @Test
+    void pinnedDomainExpertReusesSameSessionAfterPreviousRunStops() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        RuntimeBinding active = pinnedExpertBinding("financial-analysis", "run-stopped")
+                .withRuntimeSessionId("runtime-expert-1");
+        repository.saved = active;
+        RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache());
+
+        RuntimeBindingResolution resolution = service.resolvePinnedDomainExpertForRun(
+                new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                        "t", "u", "s", "run-next", "leaf-next",
+                        RuntimeProfile.DOMAIN_EXPERT, "financial-analysis"),
+                Map.of(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true),
+                new RunExecutionClaim("run-next", "instance-current", 9L));
+
+        assertThat(resolution.sessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
+        assertThat(resolution.binding().id()).isEqualTo(active.id());
+        assertThat(resolution.binding().runtimeSessionId()).isEqualTo("runtime-expert-1");
+        assertThat(resolution.binding().status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(resolution.binding().lastRunId()).isEqualTo("run-next");
+    }
+
+    @Test
     void resolveForRunReusesSessionBindingEvenWhenLeafChanges() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
         InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
@@ -424,6 +489,27 @@ class RuntimeBindingApplicationServiceTest {
         assertThat(completed.leafMessageId()).isEqualTo("leaf2");
         assertThat(completed.expiresAt()).isNull();
         assertThat(cache.get("t", "u", "s")).isEmpty();
+    }
+
+    @Test
+    void completedPinnedDomainExpertBindingStaysActive() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        Map<String, Object> metadata = new LinkedHashMap<>(RuntimeProfileMetadata.bindingMetadata(
+                RuntimeProfile.DOMAIN_EXPERT, "delegate", "domain_expert", "financial-analysis"));
+        metadata.put(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true);
+        RuntimeBinding active = binding(RuntimeBindingStatus.ACTIVE)
+                .withRuntimeSessionId("runtime-expert-1")
+                .withMetadata(metadata);
+        repository.saved = active;
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        RuntimeBinding completed = service.completeAfterRun(active, "run2", "leaf2");
+
+        assertThat(completed.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(completed.runtimeSessionId()).isEqualTo("runtime-expert-1");
+        assertThat(completed.leafMessageId()).isEqualTo("leaf2");
+        assertThat(completed.metadata()).containsEntry(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true);
     }
 
     @Test
@@ -821,12 +907,26 @@ class RuntimeBindingApplicationServiceTest {
                 Map.of("runtimeSessionEstablished", true));
     }
 
+    private RuntimeBinding pinnedExpertBinding(String roleName, String runId) {
+        Map<String, Object> metadata = new LinkedHashMap<>(RuntimeProfileMetadata.bindingMetadata(
+                RuntimeProfile.DOMAIN_EXPERT, "delegate", "domain_expert", roleName));
+        metadata.put(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true);
+        return binding(RuntimeBindingStatus.ACTIVE)
+                .withRuntimeSessionId("relay-session-1")
+                .withRun(runId, null)
+                .withMetadata(metadata);
+    }
+
     private static class InMemoryRuntimeBindingRepository implements RuntimeBindingRepository {
         private RuntimeBinding saved;
         private int findActiveCalls;
         private boolean resumeGuardAccepted = true;
+        private boolean bindingMutationGuardAccepted = true;
+        private boolean cancelActiveGuardAccepted = true;
         private String resumeExpectedLastRunId;
+        private String cancelActiveExpectedRunId;
         private RunExecutionClaim resumeClaim;
+        private RunExecutionClaim bindingMutationClaim;
 
         @Override
         public Optional<RuntimeBinding> findById(String bindingId) {
@@ -868,6 +968,23 @@ class RuntimeBindingApplicationServiceTest {
                     ? RuntimeBindingRepository.super.resumeInteractionWithExecutionGuard(
                             binding, expectedLastRunId, claim)
                     : Optional.empty();
+        }
+
+        @Override
+        public boolean lockRunExecutionForBindingMutation(
+                String tenantId,
+                String userId,
+                String sessionId,
+                RunExecutionClaim claim) {
+            bindingMutationClaim = claim;
+            return bindingMutationGuardAccepted;
+        }
+
+        @Override
+        public boolean cancelActiveForRun(String bindingId, String runId) {
+            cancelActiveExpectedRunId = runId;
+            return cancelActiveGuardAccepted
+                    && RuntimeBindingRepository.super.cancelActiveForRun(bindingId, runId);
         }
     }
 

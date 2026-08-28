@@ -5,7 +5,10 @@ import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeCancelRequ
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteraction;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
+import com.huawei.it.ex.one.application.integration.agent.DomainExpertSelectionPayload;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
+import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -37,6 +40,24 @@ public class RelayAgentRuntime implements AgentRuntime, AgentRuntimeInteraction 
 
     @Override
     public Flux<ChatEvent> query(AgentRuntimeRequest request) {
+        if (RuntimeProfileMetadata.isPinnedDomainExpert(request.bindingMetadata())) {
+            String roleName = request.routeTarget() == null
+                    ? null
+                    : request.routeTarget().runtimeRoleName();
+            if (roleName == null || roleName.isBlank()) {
+                Object bindingRoleName = request.bindingMetadata().get(RuntimeProfileMetadata.ROLE_NAME_KEY);
+                roleName = bindingRoleName == null ? null : String.valueOf(bindingRoleName);
+            }
+            String routeSource = request.routeTarget() == null
+                    ? null
+                    : request.routeTarget().routeSource();
+            ChatEvent selected = RuntimeEvent.metadata(
+                    request.runId(),
+                    request.sessionId(),
+                    DomainExpertSelectionPayload.create(
+                            roleName, routeSource, request.bindingMetadata()));
+            return Flux.concat(Flux.just(selected), protocolAdapter.query(request));
+        }
         return protocolAdapter.query(request);
     }
 
@@ -47,6 +68,18 @@ public class RelayAgentRuntime implements AgentRuntime, AgentRuntimeInteraction 
 
     @Override
     public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeInteractionResponseRequest request) {
+        if (RuntimeProfileMetadata.isPinnedDomainExpert(request.runtimeMetadata())) {
+            Object roleName = request.runtimeMetadata().get(RuntimeProfileMetadata.ROLE_NAME_KEY);
+            Object routeSource = request.runtimeMetadata().get("routeSource");
+            ChatEvent selected = RuntimeEvent.metadata(
+                    request.runId(),
+                    request.sessionId(),
+                    DomainExpertSelectionPayload.create(
+                            roleName == null ? null : String.valueOf(roleName),
+                            routeSource == null ? "interaction-continuation" : String.valueOf(routeSource),
+                            request.runtimeMetadata()));
+            return Flux.concat(Flux.just(selected), protocolAdapter.continueWithUserResponse(request));
+        }
         return protocolAdapter.continueWithUserResponse(request);
     }
 

@@ -138,6 +138,24 @@ public interface RuntimeBindingRepository {
     }
 
     /**
+     * 锁定并校验即将修改 Binding 的 run/execution 写入权。
+     *
+     * <p>生产实现应在调用方事务中持有 run/execution 行锁，直到 Binding 变更提交。默认实现
+     * 仅供不具备数据库锁的测试替身使用。</p>
+     */
+    default boolean lockRunExecutionForBindingMutation(
+            String tenantId,
+            String userId,
+            String sessionId,
+            RunExecutionClaim claim) {
+        return claim != null
+                && claim.runId() != null
+                && !claim.runId().isBlank()
+                && claim.ownerInstanceId() != null
+                && !claim.ownerInstanceId().isBlank();
+    }
+
+    /**
      * run-B 尚未订阅 Runtime 时，把 Binding 的最近 run 条件恢复为等待态来源 run。
      */
     default boolean restoreInteractionResume(String bindingId, String continueRunId, String sourceRunId) {

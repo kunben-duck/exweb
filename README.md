@@ -1,6 +1,6 @@
 # FinanceEXChatService
 
-FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务。当前正式版本采用 DomainAgent 会话绑定：用例库、意图服务或前端显式选择命中的 `DomainAgentId` 会绑定为会话级 DomainAgent；复杂任务、未命中任务以及配置的敏感信息意图进入 Relay Delegate。Intent 的规范化 `accessName` 命中专家前缀时进入 Relay Domain Expert。Relay 只承接当前任务，正常 `run.completed` 后会释放 active RuntimeBinding，下次普通提问重新路由。
+FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务。当前正式版本采用 DomainAgent 会话绑定：用例库、意图服务或前端显式选择命中的 `DomainAgentId` 会绑定为会话级 DomainAgent；复杂任务、未命中任务以及配置的敏感信息意图进入 Relay Delegate。Intent 的规范化 `accessName` 命中专家前缀时进入动态 Relay Domain Expert；前端也可用`targetType=DOMAIN_EXPERT`固定选择专家。普通 Relay 与动态专家正常完成后释放 active RuntimeBinding，固定专家则保持 ACTIVE 并续接。
 
 ## 核心链路
 
@@ -15,6 +15,7 @@ FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务
     -> 有未闭合的 Relay RuntimeBinding：继续当前 Relay 任务
     -> 无 active RuntimeBinding：读取可选路由信号
         -> 前端 targetType=DOMAIN_AGENT：绑定并调用指定 DomainAgent
+        -> 前端 targetType=DOMAIN_EXPERT：固定并调用指定 Relay 专家
         -> 用例库/意图服务命中 DomainAgentId：绑定并调用对应 DomainAgent
         -> Intent accessName 精确命中敏感信息配置：使用 Relay Delegate
         -> Intent accessName 命中专家前缀：解析动态 roleName 后使用 Relay Domain Expert
@@ -204,7 +205,7 @@ RouteMemory 使用临时 Intent query，前端直选路由仍使用用户原文�
 不会携带旧澄清答案，也不会通知或续接旧 Relay；当前 ACTIVE binding 会被替换为 `front-selected`
 DomainAgent binding，历史 `RESUMABLE` Relay session 保留。
 前端可选传 `selectedIntent={intentId?,intentName}` 作为历史展示摘要；对象存在时 `intentName` 必填，且只能与
-`targetType=DOMAIN_AGENT,targetId=...` 同时使用。该摘要会写入 RuntimeBinding，并在后续自动续接该 binding 时继续返回，
+`targetType=DOMAIN_AGENT/DOMAIN_EXPERT,targetId=...` 同时使用。该摘要会写入 RuntimeBinding，并在后续自动续接该 binding 时继续返回，
 但不参与路由、鉴权、RouteMemory 或意图统计，也不会进入 run metadata、用例库、IntentAgent 或 Runtime 请求。
 DomainAgent 下游请求体会把 `metadata` 作为业务扩展，但服务端保留字段 `runId/messageId/skillId/query/sessionId`
 始终以绑定的 DomainAgentId、本轮用户问题和 RuntimeBinding.runtimeSessionId 为准，前端传同名字段也不会覆盖。
@@ -630,7 +631,7 @@ domain-agent DomainAgent 指定调用响应也遵守同一标准事件契约：`
 
 ## 上线版本边界
 
-当前上线版本支持多个 AgentRuntime provider 同时注册：`relay` 与 `domain-agent` 同级运行，`financeex.agent-runtime.default-provider` 只表示没有显式 RuntimeBinding 时的 fallback provider，默认 `relay`。复杂任务通过 Relay WebSocket Runtime 执行；Relay 正常完成后不保持 active 路由绑定，但会永久保留 `RESUMABLE` 会话引用。简单任务或前端显式 `targetType=DOMAIN_AGENT,targetId=...` 会绑定并调用 `domain-agent` Runtime。`FINANCEEX_RUNTIME_BINDING_TTL` 默认 `0s`，未配置、零值或负值表示不过期；配置正数时只对 DomainAgent 使用滑动 TTL，Redis `redis-ttl` 仍只是可重建热缓存的过期时间。
+当前上线版本支持多个 AgentRuntime provider 同时注册：`relay` 与 `domain-agent` 同级运行，`financeex.agent-runtime.default-provider` 只表示没有显式 RuntimeBinding 时的 fallback provider，默认 `relay`。复杂任务通过 Relay WebSocket Runtime 执行；普通 Relay 与Intent动态专家正常完成后不保持 active 路由绑定，但会永久保留 `RESUMABLE` 会话引用。前端显式 `targetType=DOMAIN_EXPERT,targetId=<roleName>` 的专家Binding正常完成后保持`ACTIVE`，直到手动切换、forceReroute、等待态stop、会话删除或Runtime session不可恢复。简单任务或前端显式 `targetType=DOMAIN_AGENT,targetId=...` 会绑定并调用 `domain-agent` Runtime。`FINANCEEX_RUNTIME_BINDING_TTL` 默认 `0s`，未配置、零值或负值表示不过期；配置正数时只对 DomainAgent 使用滑动 TTL，Redis `redis-ttl` 仍只是可重建热缓存的过期时间。
 
 AgentRuntime 防腐层必须保留：应用层普通问答只依赖 `AgentRuntime` 和 `AgentRuntimeRequest` 契约，协议级澄清/审批/确认续接只依赖 `AgentRuntimeInteraction` 和 `AgentRuntimeInteractionResponseRequest` 契约，不依赖 Relay 或 DomainAgent 的 wire DTO、HTTP、WebSocket 或 chunk/frame 格式。`AgentRuntime.provider()` 是稳定 provider 编码；Relay provider 当前只注册一个 `RelayRuntimeProtocolAdapter` WebSocket 实现。后续新增 Runtime provider 时注册新的 `AgentRuntime` 实现；替换 Relay 下游协议时仍应在协议防腐层内完成，不把细节写入主编排。
 

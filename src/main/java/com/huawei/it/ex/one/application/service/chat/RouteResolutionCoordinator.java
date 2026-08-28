@@ -13,11 +13,13 @@ import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RouteType;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
@@ -43,8 +45,9 @@ final class RouteResolutionCoordinator {
     }
 
     void prepareInitial(InitialRoutePreparation preparation) {
-        if (preparation.explicitDomainAgentId() != null) {
-            RouteTarget route = RouteTarget.domainAgent(preparation.explicitDomainAgentId(), "front-selected", 1.0,
+        ExplicitRuntimeTarget explicitTarget = preparation.explicitRuntimeTarget();
+        if (explicitTarget != null && explicitTarget.domainAgent()) {
+            RouteTarget route = RouteTarget.domainAgent(explicitTarget.targetId(), "front-selected", 1.0,
                     "front selected domain agent");
             RuntimeBinding binding = runtimeBindingService.bindDomainAgentForRun(new DomainAgentBindingCommand(
                     preparation.user().tenantId(),
@@ -52,7 +55,7 @@ final class RouteResolutionCoordinator {
                     preparation.session().id(),
                     preparation.runId(),
                     preparation.runtimeBindingLeafId(),
-                    preparation.explicitDomainAgentId(),
+                    explicitTarget.targetId(),
                     "front-selected",
                     domainAgentBindingMetadata(route, null,
                             preparation.command() == null ? Map.of() : preparation.command().metadata()),
@@ -61,6 +64,27 @@ final class RouteResolutionCoordinator {
             preparation.bindingRef().set(binding);
             preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
             preparation.bindingLifecycle().trackCreated(binding);
+            return;
+        }
+        if (explicitTarget != null && explicitTarget.domainExpert()) {
+            RouteTarget route = RouteTarget.domainExpertRuntime(
+                    "front-selected", 1.0, "front selected domain expert",
+                    explicitTarget.targetId(), explicitTarget.targetId());
+            RuntimeBindingResolution resolution = runtimeBindingService.resolvePinnedDomainExpertForRun(
+                    new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                            preparation.user().tenantId(),
+                            preparation.user().ownerUserId(),
+                            preparation.session().id(),
+                            preparation.runId(),
+                            preparation.runtimeBindingLeafId(),
+                            RuntimeProfile.DOMAIN_EXPERT,
+                            explicitTarget.targetId()),
+                    domainExpertBindingMetadata(preparation.command(), explicitTarget.targetId()),
+                    preparation.executionClaim());
+            preparation.routeRef().set(route);
+            preparation.bindingRef().set(resolution.binding());
+            preparation.runtimeSessionModeRef().set(resolution.sessionMode());
+            trackBindingResolution(preparation.bindingLifecycle(), resolution);
             return;
         }
         if (preparation.forceReroute()) {
@@ -184,6 +208,16 @@ final class RouteResolutionCoordinator {
         return Map.copyOf(metadata);
     }
 
+    private Map<String, Object> domainExpertBindingMetadata(ChatCommand command, String roleName) {
+        Map<String, Object> commandMetadata = command == null ? Map.of() : command.metadata();
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("routeSource", "front-selected");
+        metadata.put(com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true);
+        putIfNotNull(metadata, "intentCode", SelectedIntentContext.intentId(commandMetadata));
+        metadata.put("intentName", firstText(SelectedIntentContext.intentName(commandMetadata), roleName));
+        return Map.copyOf(metadata);
+    }
+
     String domainAgentId(RuntimeBinding binding) {
         if (binding == null || binding.metadata() == null) {
             return null;
@@ -200,13 +234,22 @@ final class RouteResolutionCoordinator {
                         preparation.runId(),
                         preparation.agentMode())
                 : runtimeBindingService.touchForRun(active, preparation.runId());
+        boolean pinnedDomainExpert = !domainAgent
+                && runtimeBindingService.isPinnedDomainExpert(binding);
         RouteTarget route = domainAgent
                 ? RouteTarget.domainAgent(
                         domainAgentId(binding),
                         "runtime-binding",
                         1.0,
                         "active domain agent binding")
-                : RouteTarget.agentRuntime(
+                : pinnedDomainExpert
+                        ? RouteTarget.domainExpertRuntime(
+                                "runtime-binding",
+                                1.0,
+                                "active pinned domain expert binding",
+                                runtimeBindingService.runtimeRoleName(binding),
+                                runtimeBindingService.runtimeRoleName(binding))
+                        : RouteTarget.agentRuntime(
                         "runtime-binding",
                         1.0,
                         "active relay runtime binding",
@@ -254,12 +297,7 @@ final class RouteResolutionCoordinator {
                             request.runtimeBindingLeafId(),
                             route.runtimeProfile(),
                             route.runtimeRoleName()));
-            if (resolution.previousBinding() == null) {
-                request.bindingLifecycle().trackCreated(resolution.binding());
-            } else {
-                request.bindingLifecycle().trackReused(
-                        resolution.binding(), resolution.previousBinding());
-            }
+            trackBindingResolution(request.bindingLifecycle(), resolution);
             return new BindingResolution(route, resolution.binding(), resolution.sessionMode());
         }
         return new BindingResolution(route, request.currentBinding(),
@@ -344,18 +382,35 @@ final class RouteResolutionCoordinator {
         }
     }
 
+    private void trackBindingResolution(RuntimeBindingDispatchLifecycle lifecycle,
+                                        RuntimeBindingResolution resolution) {
+        if (resolution.previousBinding() == null) {
+            lifecycle.trackCreated(resolution.binding());
+        } else {
+            lifecycle.trackReused(resolution.binding(), resolution.previousBinding());
+        }
+    }
+
+    private String firstText(String first, String fallback) {
+        if (first != null && !first.isBlank()) {
+            return first.trim();
+        }
+        return fallback == null || fallback.isBlank() ? null : fallback.trim();
+    }
+
     record InitialRoutePreparation(
             UserContext user,
             ChatSession session,
             String runId,
             String runtimeBindingLeafId,
             ChatCommand command,
-            String explicitDomainAgentId,
+            ExplicitRuntimeTarget explicitRuntimeTarget,
             boolean forceReroute,
             AtomicReference<RouteTarget> routeRef,
             AtomicReference<RuntimeBinding> bindingRef,
             AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
             AgentModeProfile agentMode,
+            RunExecutionClaim executionClaim,
             RuntimeBindingDispatchLifecycle bindingLifecycle
     ) {
     }

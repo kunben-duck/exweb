@@ -236,10 +236,13 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     endpointUri(request), outboundHeaders(request.forwardHeaders()), request.runId(),
                     session -> {
                         Mono<Void> outbound = session.send(exchange.outbound(configMessage(request, runtimeProfile))
-                                .map(session::textMessage));
+                                        .map(session::textMessage))
+                                .doOnSuccess(ignored -> exchange.outboundFlushed())
+                                .doOnError(exchange::outboundFailed);
                         Flux<String> frames = session.receive()
                                 .map(WebSocketMessage::getPayloadAsText)
-                                .doOnNext(frame -> validateFrameSize(frame, request.runId()));
+                                .doOnNext(frame -> validateFrameSize(frame, request.runId()))
+                                .doOnNext(exchange::observeInbound);
                         Flux<ChatEvent> normalized = userMessageFrames(frames, request, exchange, runtimeProfile)
                                 .transform(frameStream -> normalizeFrames(frameStream, request.runId(),
                                         request.sessionId(), messageCompleted))
@@ -268,10 +271,13 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     endpointUri(request.runId()), outboundHeaders(request.forwardHeaders()), request.runId(),
                     session -> {
                         Mono<Void> outbound = session.send(exchange.outbound(configMessage(request, runtimeProfile))
-                                .map(session::textMessage));
+                                        .map(session::textMessage))
+                                .doOnSuccess(ignored -> exchange.outboundFlushed())
+                                .doOnError(exchange::outboundFailed);
                         Flux<String> frames = session.receive()
                                 .map(WebSocketMessage::getPayloadAsText)
-                                .doOnNext(frame -> validateFrameSize(frame, request.runId()));
+                                .doOnNext(frame -> validateFrameSize(frame, request.runId()))
+                                .doOnNext(exchange::observeInbound);
                         Flux<ChatEvent> normalized = interactionResponseFrames(
                                         frames, request, exchange, runtimeProfile)
                                 .transform(frameStream -> normalizeFrames(frameStream, request.runId(),
@@ -308,10 +314,10 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     if (request == null || request.runId() == null || request.runId().isBlank()) {
                         return Mono.empty();
                     }
-                    ActiveRelayWebSocketExchange exchange = activeExchanges.remove(request.runId());
+                    ActiveRelayWebSocketExchange exchange = activeExchanges.get(request.runId());
                     if (exchange != null) {
                         log.info("Relay WebSocket interrupt uses active exchange. runId={}", request.runId());
-                        return Mono.fromRunnable(() -> exchange.interrupt(request.runId()));
+                        return exchange.interrupt(request.runId());
                     }
                     return interruptViaResumeConnection(request);
                 })
@@ -1264,7 +1270,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     }
 
     private interface ActiveRelayWebSocketExchange {
-        void interrupt(String runId);
+        Mono<Void> interrupt(String runId);
     }
 
     /** 跨实例 stop 临时连接在 config 与中断确认阶段使用的不可变上下文。 */
@@ -1296,8 +1302,13 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
     private final class ShortRunExchange implements ActiveRelayWebSocketExchange {
         private final String runId;
         private final Sinks.Many<String> outbound = Sinks.many().unicast().onBackpressureBuffer();
+        private final Sinks.One<Void> interruptCompletion = Sinks.one();
         private final AtomicReference<Disposable> subscription = new AtomicReference<>();
+        private final AtomicReference<Throwable> outboundFailure = new AtomicReference<>();
         private final AtomicBoolean closed = new AtomicBoolean(false);
+        private final AtomicBoolean interruptRequested = new AtomicBoolean(false);
+        private final AtomicBoolean outboundFlushed = new AtomicBoolean(false);
+        private final AtomicBoolean pausedObserved = new AtomicBoolean(false);
 
         private ShortRunExchange(String runId) {
             this.runId = runId;
@@ -1329,22 +1340,61 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
             }
         }
 
+        void outboundFlushed() {
+            outboundFlushed.set(true);
+            completeInterruptIfConfirmed();
+        }
+
+        void outboundFailed(Throwable failure) {
+            outboundFailure.compareAndSet(null, failure);
+            if (interruptRequested.get()) {
+                interruptCompletion.tryEmitError(failure);
+            }
+        }
+
+        void observeInbound(String frame) {
+            if (interruptRequested.get() && interruptPausedAckFrame(frame)) {
+                pausedObserved.set(true);
+                completeInterruptIfConfirmed();
+            }
+        }
+
         @Override
-        public void interrupt(String requestedRunId) {
+        public Mono<Void> interrupt(String requestedRunId) {
             if (requestedRunId == null || !requestedRunId.equals(runId)) {
-                return;
+                return Mono.empty();
             }
             if (closed.get()) {
-                return;
+                return Mono.empty();
             }
-            /*
-             * Stop 是 best-effort：先把 stop_all_agents 控制帧送入当前 outbound，再结束本侧发送流。
-             * ChatService 的取消正确性仍由 cancel flag、DB guarded insert 与 run.cancelled 事件保证。
-             */
-            try {
-                send(stopAllAgentsMessage());
-            } finally {
-                completeSending();
+            if (interruptRequested.compareAndSet(false, true)) {
+                try {
+                    send(stopAllAgentsMessage());
+                } catch (Throwable failure) {
+                    interruptCompletion.tryEmitError(failure);
+                } finally {
+                    completeSending();
+                }
+            }
+            Throwable failure = outboundFailure.get();
+            if (failure != null) {
+                interruptCompletion.tryEmitError(failure);
+            } else {
+                completeInterruptIfConfirmed();
+            }
+            return interruptCompletion.asMono()
+                    .timeout(interruptAckTimeout())
+                    .doOnError(TimeoutException.class, ignored -> log.warn(
+                            SystemErrorLogEntry.builder(SystemErrorCode.RELAY_INTERRUPT_FAILED,
+                                            "Relay active WebSocket interrupt confirmation timed out")
+                                    .runId(runId)
+                                    .operation("relay.interrupt.active-confirmation")
+                                    .build()));
+        }
+
+        private void completeInterruptIfConfirmed() {
+            if (interruptRequested.get() && (outboundFlushed.get() || pausedObserved.get())) {
+                interruptCompletion.tryEmitEmpty();
             }
         }
 
@@ -1358,6 +1408,13 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                     outbound.tryEmitComplete();
                 } else {
                     outbound.tryEmitError(cause);
+                }
+                if (interruptRequested.get()) {
+                    Throwable interruptFailure = cause == null
+                            ? new RelayRuntimeProtocolException(
+                                    "Relay WebSocket closed before interrupt confirmation. runId=" + runId)
+                            : cause;
+                    interruptCompletion.tryEmitError(interruptFailure);
                 }
                 disposable = subscription.getAndSet(null);
             }

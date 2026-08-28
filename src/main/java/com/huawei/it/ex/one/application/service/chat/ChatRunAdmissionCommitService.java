@@ -46,24 +46,45 @@ public class ChatRunAdmissionCommitService {
         return commitRun(user, command, session, runId, attachments);
     }
 
-    /**
-     * 原子受理前端直连 DomainAgent：提交当前 user 消息和 RUNNING run 后，再取消等待态与旧绑定。
-     */
+    /** 原子受理前端直连 Runtime：提交当前 user 消息和 RUNNING run 后，再取消等待态与冲突绑定。 */
     @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
-    public AdmissionResult commitDirectDomainAgent(UserContext user, ChatCommand command, ChatSession session,
-                                                   String runId, List<AttachmentRef> attachments) {
+    public AdmissionResult commitDirectRuntime(DirectRuntimeAdmissionCommand request) {
+        if (request == null) {
+            throw new IllegalArgumentException("Runtime 直连 admission 参数不能为空");
+        }
         if (interactionService == null) {
-            throw new IllegalStateException("DomainAgent 直连 admission 缺少 Interaction 服务");
+            throw new IllegalStateException("Runtime 直连 admission 缺少 Interaction 服务");
         }
         if (runtimeBindingService == null) {
-            throw new IllegalStateException("DomainAgent 直连 admission 缺少 RuntimeBinding 服务");
+            throw new IllegalStateException("Runtime 直连 admission 缺少 RuntimeBinding 服务");
+        }
+        UserContext user = request.user();
+        ChatCommand command = request.command();
+        ChatSession session = request.session();
+        String runId = request.runId();
+        List<AttachmentRef> attachments = request.attachments();
+        ExplicitRuntimeTarget explicitTarget = request.explicitTarget();
+        if (explicitTarget == null) {
+            throw new IllegalArgumentException("Runtime 直连目标不能为空");
         }
         sessionService.lockForMessageMutation(user.tenantId(), user.ownerUserId(), session);
         AdmissionResult admission = commitRun(user, command, session, runId, attachments);
-        interactionService.cancelOpenBySession(user, session.id());
-        List<RuntimeBinding> cancelledBindings = runtimeBindingService.cancelActiveForAdmission(
-                user.tenantId(), user.ownerUserId(), session.id());
+        int cancelledInteractions = interactionService.cancelOpenBySessionAndCount(user, session.id());
+        List<RuntimeBinding> cancelledBindings = explicitTarget.domainExpert() && cancelledInteractions == 0
+                ? runtimeBindingService.cancelActiveForAdmissionExceptPinnedDomainExpert(
+                        user.tenantId(), user.ownerUserId(), session.id(), explicitTarget.targetId())
+                : runtimeBindingService.cancelActiveForAdmission(
+                        user.tenantId(), user.ownerUserId(), session.id());
         return new AdmissionResult(admission.messagePlan(), admission.run(), cancelledBindings);
+    }
+
+    /** 兼容现有内部调用与事务契约测试。 */
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public AdmissionResult commitDirectDomainAgent(UserContext user, ChatCommand command, ChatSession session,
+                                                   String runId, List<AttachmentRef> attachments) {
+        return commitDirectRuntime(new DirectRuntimeAdmissionCommand(
+                user, command, session, runId, attachments,
+                new ExplicitRuntimeTarget(ExplicitRuntimeTarget.Type.DOMAIN_AGENT, command.targetId())));
     }
 
     private AdmissionResult commitRun(UserContext user, ChatCommand command, ChatSession session,
@@ -168,6 +189,19 @@ public class ChatRunAdmissionCommitService {
                                                    ChatInteractionRequest interaction, String answerText,
                                                    java.util.Map<String, Object> runMetadata) {
             this(user, session, runId, interaction, answerText, List.of(), runMetadata);
+        }
+    }
+
+    record DirectRuntimeAdmissionCommand(
+            UserContext user,
+            ChatCommand command,
+            ChatSession session,
+            String runId,
+            List<AttachmentRef> attachments,
+            ExplicitRuntimeTarget explicitTarget
+    ) {
+        DirectRuntimeAdmissionCommand {
+            attachments = attachments == null ? List.of() : List.copyOf(attachments);
         }
     }
 

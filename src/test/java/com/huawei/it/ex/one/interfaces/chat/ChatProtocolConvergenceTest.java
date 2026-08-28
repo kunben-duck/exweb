@@ -34,6 +34,7 @@ import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
 import com.huawei.it.ex.one.domain.chat.ChatStreamTopics;
 import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAgentModeDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAgentModeSelectionDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAttachmentDto;
@@ -358,6 +359,25 @@ class ChatProtocolConvergenceTest {
                 .containsExactlyEntriesOf(Map.of("scene", "fund"));
         assertThat(command.metadata()).doesNotContainKey(MessageSkillContext.RUN_METADATA_KEY);
         assertThat(command.metadata()).doesNotContainKey("_domainAgentAsyncTask");
+    }
+
+    @Test
+    void translatorAcceptsSelectedIntentForExplicitDomainExpert() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1", "session1", "conversation1", "分析经营情况", "NEXT",
+                null, null, null, null, null, null, null, null, List.of(),
+                "domain_expert", " financial-analysis ",
+                new ChatSelectedIntentDto("finance_analysis", "经营分析专家"),
+                Map.of(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true));
+
+        ChatCommand command = translator.toCommand(request);
+
+        assertThat(command.targetType()).isEqualTo("domain_expert");
+        assertThat(command.targetId()).isEqualTo("financial-analysis");
+        assertThat(SelectedIntentContext.intentId(command.metadata())).isEqualTo("finance_analysis");
+        assertThat(SelectedIntentContext.intentName(command.metadata())).isEqualTo("经营分析专家");
+        assertThat(command.metadata()).doesNotContainKey(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY);
     }
 
     @Test

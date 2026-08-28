@@ -223,6 +223,10 @@ final class RuntimeInteractionContinuationCoordinator {
     private Map<String, Object> runtimeMetadata(RuntimeBinding binding, RouteTarget route) {
         Map<String, Object> metadata = new LinkedHashMap<>(
                 RuntimeProfileMetadata.copyBindingProfileAsRunMetadata(binding.metadata()));
+        if (RuntimeProfileMetadata.isPinnedDomainExpert(binding.metadata())) {
+            metadata.putAll(binding.metadata());
+            metadata.put("routeSource", route.routeSource());
+        }
         metadata.putAll(RelayOutputModeMetadata.runMetadataOverlay(route));
         return Map.copyOf(metadata);
     }

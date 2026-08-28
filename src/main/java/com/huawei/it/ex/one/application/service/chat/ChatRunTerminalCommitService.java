@@ -24,6 +24,7 @@ import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
+import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -712,7 +713,8 @@ public class ChatRunTerminalCommitService {
         if (binding == null) {
             return null;
         }
-        if (!DOMAIN_AGENT_PROVIDER.equals(binding.provider())) {
+        if (!DOMAIN_AGENT_PROVIDER.equals(binding.provider())
+                && !RuntimeProfileMetadata.isPinnedDomainExpert(binding.metadata())) {
             RuntimeBinding next = markRelaySessionEstablished(binding, binding.runtimeSessionId())
                     .withRun(context.runId(), null);
             if (leafMessageId != null && !leafMessageId.isBlank()

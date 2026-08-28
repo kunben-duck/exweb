@@ -28,9 +28,9 @@ import java.util.Map;
  * @param scope 授权或确认范围；澄清类默认 once。
  * @param questionnaireAnswers 澄清问题答案。
  * @param attachments 本轮关联附件列表。
- * @param targetType 显式直连目标类型；当前支持 DOMAIN_AGENT，为空时走普通路由。
- * @param targetId 显式直连目标 ID；targetType=DOMAIN_AGENT 时表示 DomainAgent ID。
- * @param selectedIntent 前端显式选择 DomainAgent 时提供的展示用意图摘要；不参与路由判断。
+ * @param targetType 显式直连目标类型；支持 DOMAIN_AGENT、DOMAIN_EXPERT，为空时走普通路由。
+ * @param targetId 显式直连目标 ID；DOMAIN_AGENT 时为技能 ID，DOMAIN_EXPERT 时为 Relay roleName。
+ * @param selectedIntent 前端显式选择目标时提供的展示用意图摘要；不参与路由判断。
  * @param metadata 前端扩展元数据；DomainAgent 直连时会作为下游请求 body 透传。
  * @param appId 自动创建会话时保存的应用标识；已有会话中若传入必须与原值一致。
  * @param appName 自动创建会话时保存的应用名称快照；存在时必须同时提供 appId。

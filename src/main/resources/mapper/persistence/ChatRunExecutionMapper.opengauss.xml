@@ -163,6 +163,24 @@
     </update>
 
     <!--
+      DomainAgent转后台后将execution改为ASYNC_WAITING，释放owner并递增fencing以拒绝旧HTTP流写入。
+      入参: runId定位execution，ownerInstanceId/fencingToken校验当前owner，expiresAt作为异步等待租约。
+    -->
+    <update id="markAsyncWaiting">
+        UPDATE fin_ex_chat_run_execution_t
+        SET execution_status = 'ASYNC_WAITING',
+            owner_instance_id = NULL,
+            heartbeat_at = CURRENT_TIMESTAMP,
+            lease_until = #{expiresAt},
+            fencing_token = fencing_token + 1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE run_id = #{runId}
+          AND execution_status = 'RUNNING'
+          AND owner_instance_id = #{ownerInstanceId}
+          AND fencing_token = #{fencingToken}
+    </update>
+
+    <!--
       扫描运行租约过期的 RUNNING/CANCELLING execution，供 watchdog 分批处理。
       入参: limit 为本轮最多返回的 stale execution 数量。
     -->
@@ -185,6 +203,19 @@
         WHERE execution_status = 'RECOVERING'
           AND recovery_lease_until &lt; CURRENT_TIMESTAMP
         ORDER BY recovery_lease_until ASC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+      扫描超过异步等待截止时间的execution，供watchdog按批次提交DOMAIN_AGENT_ASYNC_TIMEOUT。
+      入参: limit为本轮最多返回的过期异步任务数量。
+    -->
+    <select id="findAsyncWaitingExpired" resultMap="chatRunExecutionResultMap">
+        SELECT <include refid="executionColumns"/>
+        FROM fin_ex_chat_run_execution_t
+        WHERE execution_status = 'ASYNC_WAITING'
+          AND lease_until &lt; CURRENT_TIMESTAMP
+        ORDER BY lease_until ASC
         LIMIT #{limit}
     </select>
 
@@ -234,7 +265,7 @@
         SELECT COUNT(1)
         FROM fin_ex_chat_run_execution_t
         WHERE run_id = #{runId}
-          AND execution_status IN ('RUNNING', 'CANCELLING')
+          AND execution_status IN ('RUNNING', 'CANCELLING', 'ASYNC_WAITING')
           AND lease_until &lt; CURRENT_TIMESTAMP
     </select>
 </mapper>

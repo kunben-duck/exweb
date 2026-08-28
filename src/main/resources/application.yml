@@ -443,3 +443,9 @@ financeex:
     binding-compensation-transaction-timeout-seconds: ${FINANCEEX_DOMAIN_AGENT_BINDING_COMPENSATION_TRANSACTION_TIMEOUT_SECONDS:2}
     binding-compensation-max-attempts: ${FINANCEEX_DOMAIN_AGENT_BINDING_COMPENSATION_MAX_ATTEMPTS:2}
     binding-compensation-retry-backoff: ${FINANCEEX_DOMAIN_AGENT_BINDING_COMPENSATION_RETRY_BACKOFF:50ms}
+    # 后台异步任务协议默认关闭；开启后agent.async_started会把run挂起等待可信回调。
+    async-task-enabled: ${FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_ENABLED:false}
+    async-task-max-duration: ${FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_MAX_DURATION:24h}
+    async-task-callback-max-frames: ${FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_CALLBACK_MAX_FRAMES:512}
+    async-task-callback-max-bytes: ${FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_CALLBACK_MAX_BYTES:4194304}
+    async-task-callback-max-concurrency: ${FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_CALLBACK_MAX_CONCURRENCY:4}

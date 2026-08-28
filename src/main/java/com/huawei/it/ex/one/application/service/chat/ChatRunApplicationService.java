@@ -593,7 +593,10 @@ public class ChatRunApplicationService {
                 continuation.assistantMessageId(), null, null, null, null, null, null,
                 bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                 bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
-                bindingSummary.updatedAt(), bindingSummary.agentMode());
+                bindingSummary.updatedAt(), bindingSummary.agentMode(),
+                DomainAgentAsyncTaskMetadata.isAsyncRunning(run)
+                        ? DomainAgentAsyncTaskMetadata.PHASE_RUNNING : null,
+                DomainAgentAsyncTaskMetadata.expiresAt(run));
     }
 
     private ActiveContinuationSummary activeContinuationSummary(ChatRun run) {

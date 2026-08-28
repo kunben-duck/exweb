@@ -52,6 +52,7 @@ public class ChatRequestTranslator {
         metadata = MessageSkillContext.removeReserved(metadata);
         metadata = RuntimeProfileMetadata.removePrivateRunMetadata(metadata);
         metadata = RelayOutputModeMetadata.removePrivateRunMetadata(metadata);
+        metadata = removeDomainAgentAsyncTaskMetadata(metadata);
         if (request.selectedIntent() != null) {
             validateSelectedIntent(request.selectedIntent(), runMode, request.targetType(), request.targetId());
             metadata = SelectedIntentContext.attach(metadata,
@@ -69,6 +70,15 @@ public class ChatRequestTranslator {
                 normalizeMetadata(request.questionnaireAnswers()), request.appId(), request.appName(),
                 toAgentMode(request.agentMode()), request.interactionAction(), request.language(),
                 normalizeText(request.intentAccessName()));
+    }
+
+    private Map<String, Object> removeDomainAgentAsyncTaskMetadata(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty() || !metadata.containsKey("_domainAgentAsyncTask")) {
+            return metadata == null ? Map.of() : metadata;
+        }
+        Map<String, Object> sanitized = new LinkedHashMap<>(metadata);
+        sanitized.remove("_domainAgentAsyncTask");
+        return sanitized.isEmpty() ? Map.of() : Map.copyOf(sanitized);
     }
 
     private String routeTrigger(Boolean forceReroute) {

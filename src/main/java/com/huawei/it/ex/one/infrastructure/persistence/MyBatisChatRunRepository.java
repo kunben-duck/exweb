@@ -90,6 +90,18 @@ public class MyBatisChatRunRepository implements ChatRunRepository {
     }
 
     @Override
+    public ChatRun transitionToAsyncWaiting(ChatRun run, RunExecutionClaim claim) {
+        if (run == null || claim == null || !run.id().equals(claim.runId())) {
+            throw new IllegalArgumentException("异步任务挂起缺少匹配的execution claim");
+        }
+        if (mapper.transitionToAsyncWaiting(toRow(run), claim) != 1) {
+            throw new IllegalStateException("run已停止或execution owner失效，无法进入异步等待: " + run.id());
+        }
+        return findById(run.id())
+                .orElseThrow(() -> new IllegalStateException("异步任务挂起后run回读失败: " + run.id()));
+    }
+
+    @Override
     public ChatRun insert(ChatRun run) {
         try {
             mapper.insert(toRow(run));

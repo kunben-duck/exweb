@@ -1,5 +1,7 @@
 package com.huawei.it.ex.one.application.config;
 
+import jakarta.annotation.PostConstruct;
+
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
@@ -53,6 +55,16 @@ public class DomainAgentProperties {
     private int bindingCompensationMaxAttempts = 2;
     /** 拒答重路由 Binding 补偿的重试间隔。 */
     private Duration bindingCompensationRetryBackoff = Duration.ofMillis(50);
+    /** 是否接收 DomainAgent 后台异步任务协议。 */
+    private boolean asyncTaskEnabled = false;
+    /** DomainAgent 后台异步任务最长等待时间。 */
+    private Duration asyncTaskMaxDuration = Duration.ofHours(24);
+    /** 单次异步结果回调允许的最大 frame 数。 */
+    private int asyncTaskCallbackMaxFrames = 512;
+    /** 单次异步结果回调序列化后的最大 UTF-8 字节数。 */
+    private int asyncTaskCallbackMaxBytes = 4 * 1024 * 1024;
+    /** 单实例同时处理的异步结果回调数量。 */
+    private int asyncTaskCallbackMaxConcurrency = 4;
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
@@ -100,6 +112,24 @@ public class DomainAgentProperties {
     public void setBindingCompensationRetryBackoff(Duration bindingCompensationRetryBackoff) {
         this.bindingCompensationRetryBackoff = bindingCompensationRetryBackoff;
     }
+    public boolean isAsyncTaskEnabled() { return asyncTaskEnabled; }
+    public void setAsyncTaskEnabled(boolean asyncTaskEnabled) { this.asyncTaskEnabled = asyncTaskEnabled; }
+    public Duration getAsyncTaskMaxDuration() { return asyncTaskMaxDuration; }
+    public void setAsyncTaskMaxDuration(Duration asyncTaskMaxDuration) {
+        this.asyncTaskMaxDuration = asyncTaskMaxDuration;
+    }
+    public int getAsyncTaskCallbackMaxFrames() { return asyncTaskCallbackMaxFrames; }
+    public void setAsyncTaskCallbackMaxFrames(int asyncTaskCallbackMaxFrames) {
+        this.asyncTaskCallbackMaxFrames = asyncTaskCallbackMaxFrames;
+    }
+    public int getAsyncTaskCallbackMaxBytes() { return asyncTaskCallbackMaxBytes; }
+    public void setAsyncTaskCallbackMaxBytes(int asyncTaskCallbackMaxBytes) {
+        this.asyncTaskCallbackMaxBytes = asyncTaskCallbackMaxBytes;
+    }
+    public int getAsyncTaskCallbackMaxConcurrency() { return asyncTaskCallbackMaxConcurrency; }
+    public void setAsyncTaskCallbackMaxConcurrency(int asyncTaskCallbackMaxConcurrency) {
+        this.asyncTaskCallbackMaxConcurrency = asyncTaskCallbackMaxConcurrency;
+    }
 
     public int normalizedMaxAttachments() {
         return maxAttachments <= 0 ? 10 : maxAttachments;
@@ -145,5 +175,41 @@ public class DomainAgentProperties {
         return bindingCompensationRetryBackoff.compareTo(Duration.ofSeconds(1)) > 0
                 ? Duration.ofSeconds(1)
                 : bindingCompensationRetryBackoff;
+    }
+
+    public Duration requiredAsyncTaskMaxDuration() {
+        if (asyncTaskMaxDuration == null || asyncTaskMaxDuration.isZero() || asyncTaskMaxDuration.isNegative()) {
+            throw new IllegalStateException("financeex.domain-agent.async-task-max-duration must be positive");
+        }
+        return asyncTaskMaxDuration;
+    }
+
+    public int requiredAsyncTaskCallbackMaxFrames() {
+        if (asyncTaskCallbackMaxFrames <= 0) {
+            throw new IllegalStateException("financeex.domain-agent.async-task-callback-max-frames must be positive");
+        }
+        return asyncTaskCallbackMaxFrames;
+    }
+
+    public int requiredAsyncTaskCallbackMaxBytes() {
+        if (asyncTaskCallbackMaxBytes <= 0) {
+            throw new IllegalStateException("financeex.domain-agent.async-task-callback-max-bytes must be positive");
+        }
+        return asyncTaskCallbackMaxBytes;
+    }
+
+    public int requiredAsyncTaskCallbackMaxConcurrency() {
+        if (asyncTaskCallbackMaxConcurrency <= 0) {
+            throw new IllegalStateException("financeex.domain-agent.async-task-callback-max-concurrency must be positive");
+        }
+        return asyncTaskCallbackMaxConcurrency;
+    }
+
+    @PostConstruct
+    void validateAsyncTaskConfiguration() {
+        requiredAsyncTaskMaxDuration();
+        requiredAsyncTaskCallbackMaxFrames();
+        requiredAsyncTaskCallbackMaxBytes();
+        requiredAsyncTaskCallbackMaxConcurrency();
     }
 }

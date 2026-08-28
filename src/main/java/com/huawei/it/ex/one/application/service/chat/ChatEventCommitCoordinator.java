@@ -19,6 +19,7 @@ final class ChatEventCommitCoordinator {
     private final AmbiguousRouteWaitPolicy ambiguousRouteWaitPolicy;
     private final RouteSwitchConfirmationWaitPolicy routeSwitchConfirmationWaitPolicy;
     private final RelayQuestionnaireWaitPolicy relayQuestionnaireWaitPolicy;
+    private final DomainAgentAsyncTaskApplicationService asyncTaskService;
     private final ChatRunFailureMapper runFailureMapper = new ChatRunFailureMapper();
 
     ChatEventCommitCoordinator(SessionApplicationService sessionService,
@@ -31,7 +32,8 @@ final class ChatEventCommitCoordinator {
                                CommittedChatEventObserver committedEventObserver,
                                AmbiguousRouteWaitPolicy ambiguousRouteWaitPolicy,
                                RouteSwitchConfirmationWaitPolicy routeSwitchConfirmationWaitPolicy,
-                               RelayQuestionnaireWaitPolicy relayQuestionnaireWaitPolicy) {
+                               RelayQuestionnaireWaitPolicy relayQuestionnaireWaitPolicy,
+                               DomainAgentAsyncTaskApplicationService asyncTaskService) {
         this.sessionService = sessionService;
         this.chatRunService = chatRunService;
         this.chatStreamService = chatStreamService;
@@ -43,6 +45,24 @@ final class ChatEventCommitCoordinator {
         this.ambiguousRouteWaitPolicy = ambiguousRouteWaitPolicy;
         this.routeSwitchConfirmationWaitPolicy = routeSwitchConfirmationWaitPolicy;
         this.relayQuestionnaireWaitPolicy = relayQuestionnaireWaitPolicy;
+        this.asyncTaskService = asyncTaskService;
+    }
+
+    ChatEventCommitCoordinator(SessionApplicationService sessionService,
+                               ChatRunApplicationService chatRunService,
+                               ChatStreamApplicationService chatStreamService,
+                               ChatInteractionApplicationService chatInteractionService,
+                               RuntimeBindingApplicationService runtimeBindingService,
+                               ChatRunCompletionCoordinator completionCoordinator,
+                               DomainAgentRefusalCoordinator refusalCoordinator,
+                               CommittedChatEventObserver committedEventObserver,
+                               AmbiguousRouteWaitPolicy ambiguousRouteWaitPolicy,
+                               RouteSwitchConfirmationWaitPolicy routeSwitchConfirmationWaitPolicy,
+                               RelayQuestionnaireWaitPolicy relayQuestionnaireWaitPolicy) {
+        this(sessionService, chatRunService, chatStreamService, chatInteractionService,
+                runtimeBindingService, completionCoordinator, refusalCoordinator,
+                committedEventObserver, ambiguousRouteWaitPolicy, routeSwitchConfirmationWaitPolicy,
+                relayQuestionnaireWaitPolicy, null);
     }
 
     ChatEventCommitCoordinator(SessionApplicationService sessionService,
@@ -57,7 +77,7 @@ final class ChatEventCommitCoordinator {
                                RelayQuestionnaireWaitPolicy relayQuestionnaireWaitPolicy) {
         this(sessionService, chatRunService, chatStreamService, chatInteractionService,
                 runtimeBindingService, completionCoordinator, refusalCoordinator,
-                committedEventObserver, ambiguousRouteWaitPolicy, null, relayQuestionnaireWaitPolicy);
+                committedEventObserver, ambiguousRouteWaitPolicy, null, relayQuestionnaireWaitPolicy, null);
     }
 
     ChatEventCommitCoordinator(SessionApplicationService sessionService,
@@ -71,7 +91,7 @@ final class ChatEventCommitCoordinator {
                                AmbiguousRouteWaitPolicy ambiguousRouteWaitPolicy) {
         this(sessionService, chatRunService, chatStreamService, chatInteractionService,
                 runtimeBindingService, completionCoordinator, refusalCoordinator,
-                committedEventObserver, ambiguousRouteWaitPolicy, null, null);
+                committedEventObserver, ambiguousRouteWaitPolicy, null, null, null);
     }
 
     ChatEventCommitCoordinator(SessionApplicationService sessionService,
@@ -84,10 +104,21 @@ final class ChatEventCommitCoordinator {
                                CommittedChatEventObserver committedEventObserver) {
         this(sessionService, chatRunService, chatStreamService, chatInteractionService,
                 runtimeBindingService, completionCoordinator, refusalCoordinator,
-                committedEventObserver, null, null, null);
+                committedEventObserver, null, null, null, null);
     }
 
     ChatEvent commit(ChatEvent event, RunEventPipelineContext context) {
+        if (event instanceof com.huawei.it.ex.one.domain.chat.RunAsyncRunningEvent asyncEvent) {
+            if (asyncTaskService == null) {
+                throw new IllegalStateException("DomainAgent async task service is unavailable");
+            }
+            DomainAgentAsyncTaskApplicationService.StartResult result =
+                    asyncTaskService.commitStarted(asyncEvent, context);
+            context.asyncRunningObserved().set(true);
+            chatRunService.synchronizeCommittedRunCache(result.run());
+            chatStreamService.publishPersisted(result.event());
+            return result.event();
+        }
         ChatEvent preparedEvent = ambiguousRouteWaitPolicy == null
                 ? event
                 : ambiguousRouteWaitPolicy.decorate(event);

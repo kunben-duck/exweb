@@ -106,6 +106,14 @@ public class ChatStreamApplicationService {
         return eventStore.append(event);
     }
 
+    public List<ChatEvent> appendBatchWithoutPublish(List<ChatEvent> events) {
+        return eventStore.appendBatch(events);
+    }
+
+    public List<ChatEvent> sequenceLiveBatchWithoutExecutionGuard(List<ChatEvent> events) {
+        return eventStore.sequenceLiveBatch(events);
+    }
+
     /**
      * 在 execution 写入权保护下持久化事件，但暂不发布。
      *
@@ -421,7 +429,9 @@ public class ChatStreamApplicationService {
                         .subscribeOn(Schedulers.boundedElastic())
                         .flatMapMany(replay -> {
                             Flux<ChatEvent> replayFlux = Flux.fromIterable(replay);
-                            if (run.status().terminal() || replay.stream().anyMatch(this::terminalEvent)) {
+                            if (run.status().terminal()
+                                    || DomainAgentAsyncTaskMetadata.isAsyncRunning(run)
+                                    || replay.stream().anyMatch(this::terminalOrAsyncBoundaryEvent)) {
                                 return replayFlux;
                             }
                             // liveBuffer 已经在查库前建立，避免 DB catchup 与 live 订阅之间产生事件空窗。
@@ -446,7 +456,7 @@ public class ChatStreamApplicationService {
                                                         return Flux.empty();
                                                     })
                                     )
-                                    .takeUntil(this::terminalEvent);
+                                    .takeUntil(this::terminalOrAsyncBoundaryEvent);
                         }),
                 RunTopicLiveBuffer::dispose
         );
@@ -457,6 +467,10 @@ public class ChatStreamApplicationService {
                 || "run.failed".equals(event.type())
                 || "run.cancelled".equals(event.type())
                 || "run.waiting_user".equals(event.type()));
+    }
+
+    private boolean terminalOrAsyncBoundaryEvent(ChatEvent event) {
+        return terminalEvent(event) || event != null && "run.async_running".equals(event.type());
     }
 
     /**

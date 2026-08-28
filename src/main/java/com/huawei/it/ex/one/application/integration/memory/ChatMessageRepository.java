@@ -35,6 +35,12 @@ public interface ChatMessageRepository {
         return message;
     }
 
+    /** 删除指定assistant中由当前run生成的Parts，供异步结果REPLACE使用。 */
+    default int deletePartsByMessageAndRun(
+            String tenantId, String userId, String sessionId, String messageId, String runId) {
+        return 0;
+    }
+
     /**
      * 按租户、用户和会话读取最近消息，避免跨用户会话记忆串用。
      *

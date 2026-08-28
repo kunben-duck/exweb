@@ -62,8 +62,27 @@ public record ChatStreamStatus(
         String bindingIntentName,
         String bindingRouteSource,
         Instant bindingUpdatedAt,
-        AgentModeProfile bindingAgentMode
+        AgentModeProfile bindingAgentMode,
+        String activeRunPhase,
+        Instant asyncExpiresAt
 ) {
+    /** 兼容未返回异步阶段的完整内部构造调用。 */
+    public ChatStreamStatus(
+            String sessionId, long latestSeq, String activeRunId, ChatRunStatus activeRunStatus,
+            String activeStreamTopicId, Long activeRunFirstSeq, Long activeRunLastSeq, boolean cancellable,
+            boolean waitingUserInput, String waitingSourceRunId, String interactionId, String interactionType,
+            String assistantMessageId, Instant expiresAt, Instant autoSelectAt, Long autoSelectTimeoutMs,
+            Instant autoActionAt, Long autoActionTimeoutMs, String autoActionType, String bindingProvider,
+            String bindingTargetType, String bindingTargetId, String bindingIntentCode, String bindingIntentName,
+            String bindingRouteSource, Instant bindingUpdatedAt, AgentModeProfile bindingAgentMode) {
+        this(sessionId, latestSeq, activeRunId, activeRunStatus, activeStreamTopicId, activeRunFirstSeq,
+                activeRunLastSeq, cancellable, waitingUserInput, waitingSourceRunId, interactionId,
+                interactionType, assistantMessageId, expiresAt, autoSelectAt, autoSelectTimeoutMs,
+                autoActionAt, autoActionTimeoutMs, autoActionType, bindingProvider, bindingTargetType,
+                bindingTargetId, bindingIntentCode, bindingIntentName, bindingRouteSource, bindingUpdatedAt,
+                bindingAgentMode, null, null);
+    }
+
     /** 兼容尚未返回 Agent 模式的内部构造调用。 */
     public ChatStreamStatus(
             String sessionId, long latestSeq, String activeRunId, ChatRunStatus activeRunStatus,
@@ -75,7 +94,7 @@ public record ChatStreamStatus(
                 activeRunLastSeq, cancellable, waitingUserInput, null, interactionId, interactionType,
                 assistantMessageId, expiresAt, null, null, null, null, null,
                 bindingProvider, bindingTargetType, bindingTargetId,
-                bindingIntentCode, bindingIntentName, bindingRouteSource, bindingUpdatedAt, null);
+                bindingIntentCode, bindingIntentName, bindingRouteSource, bindingUpdatedAt, null, null, null);
     }
 
     /** 兼容尚未返回自动选择字段但已经返回 Agent 模式的内部构造调用。 */
@@ -90,6 +109,7 @@ public record ChatStreamStatus(
                 activeRunLastSeq, cancellable, waitingUserInput, null, interactionId, interactionType,
                 assistantMessageId, expiresAt, null, null, null, null, null,
                 bindingProvider, bindingTargetType, bindingTargetId,
-                bindingIntentCode, bindingIntentName, bindingRouteSource, bindingUpdatedAt, bindingAgentMode);
+                bindingIntentCode, bindingIntentName, bindingRouteSource, bindingUpdatedAt,
+                bindingAgentMode, null, null);
     }
 }

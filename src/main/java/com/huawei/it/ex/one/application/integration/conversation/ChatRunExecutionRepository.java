@@ -105,6 +105,13 @@ public interface ChatRunExecutionRepository {
     boolean markTerminal(String runId, ChatRunExecutionStatus terminalStatus);
 
     /**
+     * 将当前owner持有的执行流转换为DomainAgent后台等待，并递增fencing使旧执行流立即失效。
+     */
+    default boolean markAsyncWaiting(RunExecutionClaim claim, Instant expiresAt) {
+        return false;
+    }
+
+    /**
      * 查询运行租约已过期的 execution 候选。
      *
      * @param limit 最大返回数量。
@@ -119,6 +126,11 @@ public interface ChatRunExecutionRepository {
      * @return stale recovering execution 列表。
      */
     List<ChatRunExecution> findRecoveryExpired(int limit);
+
+    /** 查询已超过异步任务截止时间的执行记录。 */
+    default List<ChatRunExecution> findAsyncWaitingExpired(int limit) {
+        return List.of();
+    }
 
     /**
      * 尝试把 stale execution 抢占为 RECOVERING。

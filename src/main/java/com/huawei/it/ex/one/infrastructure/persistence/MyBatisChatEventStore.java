@@ -71,6 +71,61 @@ public class MyBatisChatEventStore implements ChatEventStore {
 
     @Override
     @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public List<ChatEvent> appendBatch(List<ChatEvent> events) {
+        if (events == null || events.isEmpty()) {
+            return List.of();
+        }
+        validateUnguardedBatch(events);
+        ChatEvent first = events.getFirst();
+        ChatEventAppendContextRow context = mapper.findEventAppendContext(first.sessionId(), first.runId());
+        if (context == null) {
+            throw new IllegalStateException("聊天事件批量落库上下文不存在: runId=" + first.runId());
+        }
+        validateAppendContext(context, first);
+        List<PreparedBatchEvent> prepared = prepareBatchEvents(events);
+        List<Long> sequences = requiredSequences(events.size());
+        List<ChatEventWriteRow> rows = new java.util.ArrayList<>(events.size());
+        List<ChatEvent> stored = new java.util.ArrayList<>(events.size());
+        for (int index = 0; index < events.size(); index++) {
+            PreparedBatchEvent item = prepared.get(index);
+            long sequence = sequences.get(index);
+            rows.add(new ChatEventWriteRow(
+                    item.eventId(), context.tenantId(), context.userId(), context.sessionId(), context.runId(),
+                    sequence, item.event().type(), item.payloadJson(), item.createdAt()));
+            stored.add(toStoredEvent(item.event(), sequence, item.createdAt()));
+        }
+        if (mapper.insertBatch(rows) != rows.size()) {
+            throw new IllegalStateException("聊天事件批量INSERT数量不一致: runId=" + first.runId());
+        }
+        return List.copyOf(stored);
+    }
+
+    @Override
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public List<ChatEvent> sequenceLiveBatch(List<ChatEvent> events) {
+        if (events == null || events.isEmpty()) {
+            return List.of();
+        }
+        validateUnguardedBatch(events);
+        ChatEvent first = events.getFirst();
+        ChatEventAppendContextRow context = mapper.findEventAppendContext(first.sessionId(), first.runId());
+        if (context == null) {
+            throw new IllegalStateException("实时事件序号上下文不存在: runId=" + first.runId());
+        }
+        validateAppendContext(context, first);
+        List<Long> sequences = requiredSequences(events.size());
+        List<ChatEvent> result = new java.util.ArrayList<>(events.size());
+        for (int index = 0; index < events.size(); index++) {
+            ChatEvent event = events.get(index);
+            result.add(new SequencedChatEvent(
+                    event.runId(), event.sessionId(), sequences.get(index), event.type(),
+                    event.createdAt() == null ? Instant.now() : event.createdAt(), event.payload()));
+        }
+        return List.copyOf(result);
+    }
+
+    @Override
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public ChatEvent appendWithExecutionGuard(ChatEvent event, RunExecutionClaim claim) {
         if (claim == null) {
             throw new ChatEventAppendRejectedException("run execution claim 为空，拒绝写入聊天事件");
@@ -244,6 +299,29 @@ public class MyBatisChatEventStore implements ChatEventStore {
                 throw new IllegalArgumentException("聊天事件批次只能包含同一 run/session 的事件");
             }
         }
+    }
+
+    private void validateUnguardedBatch(List<ChatEvent> events) {
+        ChatEvent first = events.getFirst();
+        if (first == null || first.runId() == null || first.sessionId() == null) {
+            throw new IllegalArgumentException("聊天事件批次缺少run/session");
+        }
+        for (ChatEvent event : events) {
+            if (event == null || !first.runId().equals(event.runId())
+                    || !first.sessionId().equals(event.sessionId())) {
+                throw new IllegalArgumentException("聊天事件批次只能包含同一run/session的事件");
+            }
+        }
+    }
+
+    private List<Long> requiredSequences(int count) {
+        List<Long> sequences = mapper.nextSeqs(count);
+        if (sequences == null || sequences.size() != count
+                || sequences.stream().anyMatch(java.util.Objects::isNull)) {
+            throw new IllegalStateException("聊天事件批量序号生成失败: expected=" + count
+                    + ", actual=" + (sequences == null ? 0 : sequences.size()));
+        }
+        return sequences;
     }
 
     private boolean lockUnavailable(Throwable error) {

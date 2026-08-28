@@ -126,6 +126,12 @@ public class MyBatisChatRunExecutionRepository implements ChatRunExecutionReposi
     }
 
     @Override
+    public boolean markAsyncWaiting(RunExecutionClaim claim, Instant expiresAt) {
+        return claim != null && expiresAt != null && mapper.markAsyncWaiting(
+                claim.runId(), claim.ownerInstanceId(), claim.fencingToken(), expiresAt) == 1;
+    }
+
+    @Override
     public List<ChatRunExecution> findLeaseExpired(int limit) {
         return mapper.findLeaseExpired(Math.max(1, limit)).stream().map(this::toDomain).toList();
     }
@@ -133,6 +139,11 @@ public class MyBatisChatRunExecutionRepository implements ChatRunExecutionReposi
     @Override
     public List<ChatRunExecution> findRecoveryExpired(int limit) {
         return mapper.findRecoveryExpired(Math.max(1, limit)).stream().map(this::toDomain).toList();
+    }
+
+    @Override
+    public List<ChatRunExecution> findAsyncWaitingExpired(int limit) {
+        return mapper.findAsyncWaitingExpired(Math.max(1, limit)).stream().map(this::toDomain).toList();
     }
 
     @Override

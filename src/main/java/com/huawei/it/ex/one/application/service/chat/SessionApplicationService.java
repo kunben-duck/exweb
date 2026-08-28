@@ -1124,6 +1124,26 @@ public class SessionApplicationService implements ChatSessionFacade {
                 .orElseThrow(() -> new IllegalArgumentException("消息不存在或不属于当前会话: " + messageId));
     }
 
+    ChatMessage requireAssistantForInternalUpdate(ChatSession session, String messageId) {
+        ChatMessage message = requireMessageInSession(session, messageId);
+        if (!"assistant".equalsIgnoreCase(message.role())) {
+            throw new IllegalArgumentException("异步任务目标消息必须是assistant消息");
+        }
+        return message;
+    }
+
+    ChatSession requireSessionForInternalUpdate(String tenantId, String userId, String sessionId) {
+        return requireOwnedSession(tenantId, userId, sessionId, false);
+    }
+
+    int deleteAssistantPartsForRun(ChatSession session, String messageId, String runId) {
+        if (session == null || messageId == null || messageId.isBlank() || runId == null || runId.isBlank()) {
+            throw new IllegalArgumentException("异步结果Part删除参数不完整");
+        }
+        return messageRepository.deletePartsByMessageAndRun(
+                session.tenantId(), session.userId(), session.id(), messageId, runId);
+    }
+
     /**
      * 计算前端版本游标切换后的真实 leaf。
      *

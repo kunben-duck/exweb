@@ -201,6 +201,34 @@ class ConfiguredDomainAgentClientTest {
     }
 
     @Test
+    void queryStopsLiveHttpStreamAtAsyncBoundaryWithoutMessageCompleted() {
+        WebClient.Builder builder = WebClient.builder()
+                .exchangeFunction(request -> Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_EVENT_STREAM_VALUE)
+                        .body("""
+                                message: {"content":"已受理"}
+
+                                message: {"type":"agent.async_started","message":"后台处理中"}
+
+                                message: {"content":"late"}
+
+                                """)
+                        .build()));
+        DomainAgentProperties properties = properties();
+        properties.setAsyncTaskEnabled(true);
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(
+                builder,
+                properties,
+                new DomainAgentChatRequestMapper(properties),
+                new DomainAgentResponseNormalizer(objectMapper, properties));
+
+        StepVerifier.create(client.query(queryRequest(RuntimeForwardHeaders.empty())))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "已受理"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("run.async_running"))
+                .verifyComplete();
+    }
+
+    @Test
     void queryPreservesUtf8CharacterSplitAcrossRawDataBuffers() {
         String response = "message: {\"content\":\"分析结果\"}\n\nmessage: {\"endFlag\":true}\n\n";
         byte[] bytes = response.getBytes(StandardCharsets.UTF_8);

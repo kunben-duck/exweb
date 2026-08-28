@@ -6,8 +6,8 @@ info:
     FinanceEX ChatService 当前公开业务接口的 OpenAPI 3.0.3 定义。
 
     本文档以当前代码实现为准，覆盖聊天 Run、会话与消息、流式恢复、反馈、分享、文档和
-    WebSocket 实时订阅。Actuator 以及 IntentAgent、DomainAgent、Relay 的内部服务接口不属于
-    公开 API。
+    WebSocket 实时订阅。除显式列出的 DomainAgent 异步任务回调外，Actuator 以及 IntentAgent、
+    DomainAgent、Relay 的其他内部服务接口不属于公开 API。
 
     所有接口依赖企业网关或企业框架在服务端建立身份上下文。本文档不约定或虚构固定的身份
     Header。资源不存在或不属于当前用户时，当前实现可能返回 HTTP 200 和
@@ -32,6 +32,8 @@ tags:
     description: 文档上传、文档库、预览和下载
   - name: Realtime WebSocket
     description: Run topic 的实时订阅协议
+  - name: Internal DomainAgent
+    description: 仅允许企业网关ACL内的DomainAgent调用
 
 x-enterprise-authentication:
   description: |
@@ -495,6 +497,70 @@ paths:
                 code: INTENT_PREFERENCE_UNAVAILABLE
                 message: 意图偏好记录暂不可用，请稍后重试
 
+  /v1/internal/domain-agent/async-tasks/callback:
+    post:
+      tags: [Internal DomainAgent]
+      operationId: completeDomainAgentAsyncTask
+      summary: 回调DomainAgent后台任务结果
+      description: |
+        仅允许企业网关ACL内的DomainAgent调用，不依赖用户Cookie。`runId`是ChatService调用
+        DomainAgent时提供的可信任务标识。只有仍处于`ASYNC_RUNNING`的Run可以接受一次回调；
+        重复、迟到以及已经stop或超时的回调返回`accepted=false`。
+
+        `frames`复用DomainAgent流式响应帧格式。非空时必须指定`APPEND`或`REPLACE`；为空时只提交
+        任务终态。成功接受后依次推送`run.async_result_started`、标准结果事件、
+        `message.completed`和`run.completed/run.failed`。
+      x-enterprise-gateway-acl: required
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DomainAgentAsyncTaskCallbackRequest'
+            examples:
+              completedWithResult:
+                value:
+                  runId: run_xxx
+                  status: COMPLETED
+                  resultMode: APPEND
+                  frames:
+                    - content: 异步任务结果
+                    - searchList: []
+                  error: null
+              completedWithoutResult:
+                value:
+                  runId: run_xxx
+                  status: COMPLETED
+                  frames: []
+      responses:
+        '200':
+          description: 回调已接受或已幂等忽略
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainAgentAsyncTaskCallbackResponse'
+              examples:
+                accepted:
+                  value:
+                    accepted: true
+                duplicate:
+                  value:
+                    accepted: false
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: 异步任务协议未启用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+        '429':
+          description: 本实例异步回调并发容量已满
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+
   /v1/chat/runs/{runId}/stop:
     post:
       tags: [Chat Runs & Streaming]
@@ -585,6 +651,10 @@ paths:
         实现先订阅 live buffer，再查询数据库，以覆盖查询与实时订阅之间的窗口；随后按 sequence 去重并
         输出 `sequence > afterSeq` 的事件。active run 会继续输出 live tail，直到持久化终态后发送 done。
 
+        DomainAgent返回`agent.async_started`后，服务端持久化`run.async_running`并结束本次Run Resume，
+        但业务Run仍保持RUNNING且不会发送done。回调完成后再次Resume可补发异步结果和真正终态；已建立的
+        WebSocket Run topic订阅也可直接收到回调事件。
+
         `ASSISTANT_PLACEHOLDER` 留存策略下，数据库补发只包含控制、Intent和终态事件；连接建立后的
         live-only业务事件仍实时输出，但连接建立前或断线期间遗漏的业务内容不可恢复。
 
@@ -618,6 +688,9 @@ paths:
         run-A 与续接 run-B 使用不同 runId，但 AMBIGUOUS_ROUTE 和 Relay 问卷会复用同一个 assistant。
         run-B 处于 active 状态时，本接口继续返回 interactionId、interactionType 和 assistantMessageId；
         前端使用 assistantMessageId 定位历史消息，并将 run-B 的 Resume 事件追加到同一个 assistant。
+
+        `activeRunPhase=ASYNC_RUNNING`表示DomainAgent已关闭原流并转入后台任务；此时仍可stop，且同会话
+        不能发起新Run。`asyncExpiresAt`是后台任务等待截止时间。
       parameters:
         - $ref: '#/components/parameters/SessionId'
       responses:
@@ -644,6 +717,20 @@ paths:
                     interactionId: interaction_001
                     interactionType: AGENT_CLARIFICATION
                     assistantMessageId: msg_assistant_001
+                domainAgentAsyncRunning:
+                  value:
+                    sessionId: session_001
+                    latestSeq: 1350
+                    activeRunId: run_async_001
+                    activeRunStatus: RUNNING
+                    activeRunPhase: ASYNC_RUNNING
+                    asyncExpiresAt: '2026-08-29T10:00:00Z'
+                    activeStreamTopicId: chat-run-run_async_001
+                    activeRunFirstSeq: 1310
+                    activeRunLastSeq: 1350
+                    cancellable: true
+                    waitingUserInput: false
+                    assistantMessageId: msg_assistant_async_001
                 ambiguousWaiting:
                   value:
                     sessionId: session_001
@@ -2046,6 +2133,44 @@ components:
           nullable: true
           description: 偏好隔离使用的Intent入口；空白或未传时使用服务端默认值，区分大小写
 
+    DomainAgentAsyncTaskCallbackRequest:
+      type: object
+      required: [runId, status]
+      properties:
+        runId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: ChatService调用DomainAgent时提供的可信runId
+        status:
+          type: string
+          enum: [COMPLETED, FAILED]
+        resultMode:
+          type: string
+          nullable: true
+          enum: [APPEND, REPLACE]
+          description: frames非空时必填
+        frames:
+          type: array
+          maxItems: 512
+          nullable: true
+          items:
+            type: object
+            additionalProperties: true
+          description: DomainAgent标准响应帧；总序列化大小默认不超过4MiB
+        error:
+          type: object
+          nullable: true
+          additionalProperties: true
+
+    DomainAgentAsyncTaskCallbackResponse:
+      type: object
+      required: [accepted]
+      properties:
+        accepted:
+          type: boolean
+          description: false表示Run已终态、已取消、已超时或回调已被其他请求提交
+
     CreateChatRunRequest:
       type: object
       description: |
@@ -2491,6 +2616,16 @@ components:
             - $ref: '#/components/schemas/ChatAgentMode'
           nullable: true
           description: 仅当前 active DomainAgent Binding 有合法记录时返回
+        activeRunPhase:
+          type: string
+          nullable: true
+          enum: [ASYNC_RUNNING]
+          description: DomainAgent后台任务等待阶段；普通active run为空
+        asyncExpiresAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: DomainAgent后台任务等待截止时间
 
     ConversationTurnStream:
       type: object
@@ -2569,6 +2704,7 @@ components:
           example: message.delta
         payload:
           anyOf:
+            - $ref: '#/components/schemas/RunAsyncRunningPayload'
             - $ref: '#/components/schemas/RunWaitingUserPayload'
             - $ref: '#/components/schemas/AmbiguousRouteCardPayload'
             - $ref: '#/components/schemas/RouteSwitchConfirmationPayload'
@@ -2580,6 +2716,32 @@ components:
         控制和终态仍是数据库事实。payload 由 type 决定；WAIT 相关主要 payload schema 见本定义的
         RunWaitingUserPayload、AmbiguousRouteCardPayload、RouteSwitchConfirmationPayload 和
         RelayQuestionnaireCardPayload。
+
+    RunAsyncRunningPayload:
+      type: object
+      required: [source, sourceType, status, messageReady, assistantMessageId, expiresAt]
+      properties:
+        source:
+          type: string
+          enum: [domain-agent]
+        sourceType:
+          type: string
+          enum: [agent.async_started]
+        status:
+          type: string
+          enum: [ASYNC_RUNNING]
+        message:
+          type: string
+          nullable: true
+        messageReady:
+          type: boolean
+        assistantMessageId:
+          type: string
+        feedbackTargetMessageId:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
 
     RunWaitingUserPayload:
       type: object

@@ -134,6 +134,39 @@ class DomainAgentResponseNormalizerTest {
     }
 
     @Test
+    void mapsEnabledAsyncStartedFrameToRunBoundaryWithoutCompletingMessage() {
+        DomainAgentProperties properties = new DomainAgentProperties();
+        properties.setAsyncTaskEnabled(true);
+        DomainAgentResponseNormalizer asyncNormalizer =
+                new DomainAgentResponseNormalizer(objectMapper, properties);
+
+        List<ChatEvent> events = asyncNormalizer.normalize("run1", "session1", """
+                message: {"type":"agent.async_started","message":"任务已转入后台执行"}
+
+                """);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.getFirst().type()).isEqualTo("run.async_running");
+        assertThat(events.getFirst().payload())
+                .containsEntry("status", "ASYNC_RUNNING")
+                .containsEntry("message", "任务已转入后台执行");
+    }
+
+    @Test
+    void rejectsNestedAsyncStartedCallbackFrame() throws Exception {
+        DomainAgentProperties properties = new DomainAgentProperties();
+        properties.setAsyncTaskEnabled(true);
+        DomainAgentResponseNormalizer asyncNormalizer =
+                new DomainAgentResponseNormalizer(objectMapper, properties);
+
+        assertThatThrownBy(() -> asyncNormalizer.normalizeCallbackFrame(
+                "run1", "session1", objectMapper.readTree("{\"type\":\"agent.async_started\"}"),
+                asyncNormalizer.newStreamState()))
+                .isInstanceOf(DomainAgentProtocolException.class)
+                .hasMessageContaining("cannot start another async task");
+    }
+
+    @Test
     void supportsDomainAgentMessagePrefixesAndRedactsSensitiveUnknownPayload() {
         String chunk = """
                 message. {"content":"A"}

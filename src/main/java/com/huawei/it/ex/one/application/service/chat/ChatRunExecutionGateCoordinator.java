@@ -54,18 +54,26 @@ final class ChatRunExecutionGateCoordinator {
             if (outcome.status() == RunStartGateStatus.TERMINATED) {
                 return Flux.just(outcome.event());
             }
+            Flux<ChatEvent> runtimeBody = Flux.defer(bodySupplier)
+                    .doOnNext(event -> {
+                        if (event != null && "run.async_running".equals(event.type())) {
+                            context.asyncRunningObserved().set(true);
+                        }
+                    });
             Flux<ChatEvent> body = Flux.concat(
                             Mono.fromRunnable(() -> runStartCoordinator.ensureActive(
                                             context.startAttempt(), "after-run-started"))
                                     .then(requireCurrentOwnerRunning(
                                             context.executionClaim(), "after-run-started"))
-                                    .thenMany(Flux.defer(bodySupplier)),
-                            Flux.defer(() -> Flux.just(RunCompletedEvent.of(
-                                    context.runId(),
-                                    context.session().id(),
-                                    runCompletedPayload(
-                                            context.routeRef().get(),
-                                            context.bindingRef().get())))))
+                                    .thenMany(runtimeBody),
+                            Flux.defer(() -> context.asyncRunningObserved().get()
+                                    ? Flux.empty()
+                                    : Flux.just(RunCompletedEvent.of(
+                                            context.runId(),
+                                            context.session().id(),
+                                            runCompletedPayload(
+                                                    context.routeRef().get(),
+                                                    context.bindingRef().get())))))
                     .onErrorResume(ChatEventAppendRejectedException.class, ex -> {
                         log.info("Chat run owner lost before external side effect; stop local flow. runId={}, reason={}",
                                 context.runId(), ex.getMessage());

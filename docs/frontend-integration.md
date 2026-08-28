@@ -168,6 +168,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 已有会话继续提问 | `GET /v1/chat/sessions/{sessionId}/stream-status` 确认无 active run -> `POST /v1/chat/runs(sessionId, runMode=NEXT)` -> WS subscribe | `sessionId`、`parentMessageId` 可选、`streamTopicId` | 同一 session 存在 active run 时不要再次发送；遇到 409 使用 stop 或等待终态 |
 | 当前页短暂断线重连 | 本地保存 `lastSeq` -> 重建 WS -> `subscribe(topicId, afterSeq=lastSeq)`；如果收到 `RECOVER_REQUIRED`，先 Event Resume 再重新 subscribe | `topicId`、`lastSeq`、`sequence` | 以 `sessionId + sequence` 去重；不要重复追加同一 delta |
 | 新页签/新浏览器/跨电脑打开 active run | `GET /messages` 渲染历史 -> `GET /stream-status` -> 若有 `activeRunId`，调用 `GET /runs/{activeRunId}/events/resume?afterSeq=activeRunFirstSeq-1` | `activeRunId`、`activeRunFirstSeq`、`activeStreamTopicId`；可复用 continuation 还返回 `assistantMessageId` | run 级 Event Resume 会先补发已落库事件再 tail 实时源；`assistantMessageId` 非空时先定位已有 assistant，再把 run-B 事件追加到该消息；live tail 异常时当前恢复流结束且不发送 `done`，前端退避后重新 resume；同一个 run 恢复期间不要再 WebSocket subscribe |
+| DomainAgent后台任务 | 收到`run.async_running` -> 保留当前run的运行中和停止按钮 -> 可保留WebSocket topic订阅；刷新后读取`stream-status` | `activeRunId`、`assistantMessageId`、`activeRunPhase=ASYNC_RUNNING`、`asyncExpiresAt` | 原Run Resume在异步边界结束且不发送done，不要立即重连循环；同会话禁止新Query。回调到达时WebSocket直接收到结果与终态；页面已关闭时，重新Resume或历史查询可恢复已保存结果 |
 | 停止回答 | 用户点击停止 -> `POST /runs/{runId}/stop` -> 等待 WS 或 Event Resume 收到 `run.cancelled` | `runId`、stop 前本地 `lastSeq` | stop 不是关闭 WebSocket；若 stop 前已有正文或用户可见 parts，历史消息会保存 partial assistant |
 | 编辑历史 user 消息 | 用户点击编辑 -> `POST /v1/chat/runs(runMode=EDIT_USER, editedMessageId, message)` -> 订阅新 run -> `run.completed` 后重新 `GET /v1/chat/sessions/{sessionId}/messages` | `editedMessageId`、新 user `messageId`、新 assistant `messageId`、`versionInfo` | 旧消息不覆盖；新 user sibling 进入旧 user 的 `versionInfo.variants` |
 | 重新生成 assistant | 用户点击重新生成 -> `POST /v1/chat/runs(runMode=REGENERATE_ASSISTANT, regeneratedMessageId)` -> 订阅新 run -> `run.completed` 后重新 `GET /v1/chat/sessions/{sessionId}/messages` | `regeneratedMessageId`、原父 user messageId、新 assistant messageId、`versionInfo` | 复用原 user 节点，新 assistant sibling 进入旧 assistant 的 `versionInfo.variants` |
@@ -207,8 +208,8 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `POST /v1/chat/runs` | Body：`commandId`、`sessionId`、`conversationId`、`message`、`runMode`、`channel`、消息树、Interaction、附件和路由字段 | `runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId` | 移动端统一传 `channel=mobile`；省略时自动创建的会话默认为 `web` |
 | `POST /v1/chat/runs/{runId}/stop` | Path：运行态传 `activeRunId`，等待态传 `waitingSourceRunId`；Header：可选 Cookie | 原有 run 字段，以及可选 `interactionId/interactionStatus/interactionCancelledAt/effectiveRunId` | 运行态用 Event Resume 补齐 `run.cancelled`；等待态不新增事件，stop 后重新查询 `stream-status` |
 | `GET /chat/sessions/{sessionId}/events/resume` | Path：`sessionId`；Query：`afterSeq` | SSE data：`ConversationTurnStreamDto` | 补会话缺失事件；`ConversationTurnStreamDto.payload.encodedItem.data` 中的 ChatEvent 更新本地 `lastSeq` |
-| `GET /chat/runs/{runId}/events/resume` | Path：`runId`；Query：`afterSeq` | SSE data：`ConversationTurnStreamDto`，active run 会持续到终态 | 新页签/跨设备恢复 active run 首选；会额外发送 heartbeat/done |
-| `GET /chat/sessions/{sessionId}/stream-status` | Path：`sessionId` | `ChatStreamStatusDto` | 判断 active run、stop 按钮、恢复起点 |
+| `GET /chat/runs/{runId}/events/resume` | Path：`runId`；Query：`afterSeq` | SSE data：`ConversationTurnStreamDto`；普通active run持续到终态，DomainAgent异步run在`run.async_running`边界结束且不发送done | 新页签/跨设备恢复active run首选；异步回调完成后可再次调用以补发结果和终态 |
+| `GET /chat/sessions/{sessionId}/stream-status` | Path：`sessionId` | `ChatStreamStatusDto` | 判断active run、stop按钮、恢复起点及`ASYNC_RUNNING`后台任务阶段 |
 | `POST /chat/messages/{messageId}/feedback` | Path：`messageId`；Body：`runId`、`rating`、`reasonCode`、`commentText`、`metadata` | `MessageFeedbackDto(status=ACTIVE)` | 更新历史消息按钮高亮 |
 | `DELETE /chat/messages/{messageId}/feedback` | Path：`messageId`；Query：`runId` 可选 | `MessageFeedbackDto(status=CANCELLED)` | 取消按钮高亮 |
 | `POST /chat/messages/{messageId}/share` | Path：assistant `messageId`；Body：`title`、`expiresAt` 可选 | `ChatShareDto(status=ACTIVE)` | 用 `shareId` 拼接分享页路由 |
@@ -597,6 +598,8 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 | `bindingRouteSource` | 绑定来源，例如 `front-selected`、`intent-agent`、`use-case-library`。 |
 | `bindingUpdatedAt` | 当前绑定最近更新时间。 |
 | `bindingAgentMode` | 当前 active DomainAgent binding 的 Agent 模式记录；Relay、未设置或当前无 active DomainAgent 时为 `null`。 |
+| `activeRunPhase` | DomainAgent后台任务等待时为`ASYNC_RUNNING`；普通运行态为空。此阶段`activeRunStatus`仍为`RUNNING`。 |
+| `asyncExpiresAt` | DomainAgent后台任务等待截止时间；超时由服务端收口为`run.failed(code=DOMAIN_AGENT_ASYNC_TIMEOUT)`。 |
 
 ### `MessageFeedbackDto`
 
@@ -2620,6 +2623,8 @@ heartbeat 和 done 使用同一个 envelope，不携带 `encodedItem`，也不�
 | 事件类型 | 说明 | 前端处理 |
 | --- | --- | --- |
 | `run.started` | run 已创建 | 可记录 run 状态为 running |
+| `run.async_running` | DomainAgent已转入后台任务；包含`assistantMessageId/expiresAt` | 保持会话运行中、禁用新Query并保留stop；结束当前Run Resume但不要按终态处理 |
+| `run.async_result_started` | 后台任务回调结果开始；包含`resultMode=APPEND/REPLACE/NONE` | APPEND继续追加；REPLACE先清空该run当前回答草稿；NONE只等待终态 |
 | `message.delta` | assistant 文本增量 | 追加 `payload.delta` 到当前 assistant 消息 |
 | `message.snapshot` | assistant 回答快照，例如 Relay `type=agent,is_streaming=false` 或 `type=generate-response` | 使用 `payload.content` 替换当前 assistant 草稿，不要追加；历史消息会把每个 snapshot 保存为 `MESSAGE_SNAPSHOT` part |
 | `runtime.progress` | 运行进度文本，例如 ChatService `route-progress`、Relay `relay-progress` | 展示到运行进度区域，不要拼入 assistant 正文 |
@@ -2635,6 +2640,10 @@ heartbeat 和 done 使用同一个 envelope，不携带 `encodedItem`，也不�
 | `run.waiting_user` | 本轮进入等待用户交互状态，可能是意图澄清、Agent questionnaire、审批/确认或路由切换确认 | 关闭当前 loading，展示对应卡片；后续调用 `POST /v1/chat/runs(runMode=CONTINUE_INTERACTION, interactionId)` 续接 |
 | `run.failed` | 本轮 run 失败 | 展示错误信息，关闭 loading |
 | `run.cancelled` | 用户停止本轮回答；若 `payload.messageReady=true`，`payload.assistantMessageId` 即为 partial assistant 反馈目标 | 展示已停止，关闭 loading，并在有反馈目标时启用点赞/点踩 |
+
+DomainAgent异步任务的完整事件顺序为`run.async_running`，随后在回调时输出
+`run.async_result_started -> 结果标准事件 -> message.completed -> run.completed/run.failed`。
+`run.async_running`不是终态，不会伴随`message.completed`、`run.completed`或SSE `done`。
 
 ChatService 会在 Runtime adapter 边界把下游 Relay 的 plain text、JSON chunk 或 SSE-like `data:` chunk 归一化成上表事件。下游原始响应不再单独持久化；Relay JSON frame 会作为标准事件的 `payload` 保存、推送和恢复。Relay payload 保留原始字段名和嵌套结构，后端只额外补充 `source=relay`、`sourceType=<Relay原始type>`、`runtimeSessionId`，前端可以按 Relay 接口文档解析 payload。
 
@@ -2675,6 +2684,7 @@ Relay 映射规则：
 - Relay WebSocket 中 `approval-request(operation_type=questionnaire)` 是 Interaction 等待信号，adapter 会在输出对应 `runtime.card` 后闭合当前用户轮次，由应用层生成 `run.waiting_user`。
 - `tool-structured-result` 是 Relay 内部工具调用的结构化结果，本轮不再拆分 `result_data/resultData.widget.data`，统一作为 `runtime.tool` 输出。payload 完整保留原字段，`result_data.is_last=true` 不表示本轮完成；只认终态 `session-state`，WebSocket 正常关闭但缺少终态帧会被视为 Relay 协议异常。
 - domain-agent DomainAgent 指定调用响应中，`content` 的 `<think>...</think>` 片段映射为 `runtime.thinking`，不会拼入 assistant 正文；非 think 内容映射为 `message.delta`。独立流式 `contentAgent` 是自定义卡片内部 MD，每帧映射为 `runtime.card`，payload 固定包含 `source=domain-agent`、`sourceType=contentAgent`、`cardType=contentAgent`、`cardSources=[contentAgent]` 和原始 `contentAgent`；空串及 `<think>` 标记也原样推送，前端按同一 run 的事件顺序追加到最近的自定义卡片，不得拼入普通回答正文。历史消息会把同一段连续片段合并为一个可见 `CARD` part，合并内容只保存在 `payload.contentAgent`，`contentText` 为 `null`；DomainAgent 拒答或新结构化卡片会结束当前聚合段，后续Agent的内容生成新Part。`traceId/sessionId/messageId` 映射为 `runtime.metadata`；单独出现的 `intent/domainAgentId` 映射为 `runtime.metadata`；如果 `intent/domainAgentId` 与某个卡片字段同帧出现，则一起放入 `runtime.card`。当前 domain-agent 协议下 `cardUrl/diyCardScene/cardList/openCard/specificSceneInfo` 通常不会在同一个 chunk 中同时出现，因此卡片事件会保留原始 `sourceType`，例如 `diyCardScene`、`openCard` 或 `specificSceneInfo`；服务端仅保留 `sourceType=domain-agent-card/cardType=mixed` 作为非预期混合帧的防御兜底。`specificSceneInfo` 位于 `payload.specificSceneInfo`，对应历史 `CARD` part 默认可见并进入新创建的分享快照。`processResult` 映射为 `runtime.progress`，`searchList/sourcesDocuments` 映射为 `runtime.reference`，`endFlag=true` 映射为 `message.completed`。
+- 启用DomainAgent异步任务协议后，ChatService会在请求根节点补充可信`runId`。DomainAgent返回独立帧`{"type":"agent.async_started","message":"任务已转入后台执行"}`时，当前HTTP响应流结束，但run保持`RUNNING`并发出`run.async_running`。前端可继续保留原Run topic WebSocket；刷新后的Run Resume在该边界完成，不保持长连接。后台结果由DomainAgent通过企业网关ACL保护的内部回调提交，前端不调用该回调接口。
 - DomainAgent `openCard`同帧返回的`recommendedQuestions`完整保存在`runtime.card.payload.recommendedQuestions`中；数组顺序、嵌套`metadata`及业务扩展字段保持不变，且该字段不参与`cardSources`分类。
 - DomainAgent `searchList`同帧返回的`metadata`保存在同一个`runtime.reference.payload.metadata`中，不额外生成metadata事件；`sourcesDocuments/sourceDocuments`保持原有映射。
 - 当 domain-agent 的 `diyCardScene/openCard/specificSceneInfo/searchList/sourcesDocuments/processResult` 等结构化对象跨多个网络 DataBuffer 到达时，服务端会在默认 `256KB` 的单帧上限内完成增量 UTF-8 解码和 JSON 闭合，再输出一个完整的 `runtime.card`、`runtime.reference` 或 `runtime.progress`。前端直接读取标准 payload，不再按 `fragment/itemId/delta/complete` 重组 DomainAgent 对象；超出单帧上限的响应会失败且不会输出残缺事件。

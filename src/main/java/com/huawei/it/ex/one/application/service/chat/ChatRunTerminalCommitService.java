@@ -64,6 +64,7 @@ public class ChatRunTerminalCommitService {
     private final ChatInteractionApplicationService chatInteractionService;
     private final Duration runtimeBindingTtl;
     private final MessageSkillMetadata messageSkillMetadata;
+    private final ObjectMapper objectMapper;
 
     @Autowired
     public ChatRunTerminalCommitService(ChatStreamApplicationService chatStreamService,
@@ -82,6 +83,7 @@ public class ChatRunTerminalCommitService {
         this.chatInteractionService = chatInteractionService;
         this.runtimeBindingTtl = RuntimeBindingExpirationPolicy.normalize(runtimeBindingTtl);
         this.messageSkillMetadata = new MessageSkillMetadata(objectMapper);
+        this.objectMapper = objectMapper;
     }
 
     public ChatRunTerminalCommitService(ChatStreamApplicationService chatStreamService,
@@ -240,7 +242,13 @@ public class ChatRunTerminalCommitService {
                 .orElseThrow(() -> new IllegalStateException(
                         "外部终态抢占成功后run回读失败: " + command.run().id()));
         String skillId = MessageSkillContext.runSkillId(latestRun.metadata());
-        persistExternalPartialAssistant(command, latestRun, skillId);
+        if (DomainAgentAsyncTaskMetadata.isAsyncRunning(latestRun)) {
+            persistAsyncTerminalAssistant(latestRun, terminalStatus);
+            latestRun = runRepository.save(latestRun.withMetadataSnapshot(
+                    DomainAgentAsyncTaskMetadata.clearRunMetadata(latestRun.metadata())));
+        } else {
+            persistExternalPartialAssistant(command, latestRun, skillId);
+        }
         ChatEvent stored = chatStreamService.appendWithoutPublish(command.event());
         ChatRun committedRun = runRepository.finalizeExternalTerminal(
                 new ChatRunRepository.ExternalTerminalFinalize(
@@ -261,6 +269,25 @@ public class ChatRunTerminalCommitService {
         }
         markExecutionTerminal(stored);
         return new ExternalTerminalCommitResult(stored, committedRun, true);
+    }
+
+    private void persistAsyncTerminalAssistant(ChatRun run, ChatRunStatus terminalStatus) {
+        String assistantMessageId = DomainAgentAsyncTaskMetadata.assistantMessageId(run);
+        if (assistantMessageId == null || assistantMessageId.isBlank()) {
+            assistantMessageId = run.assistantMessageId();
+        }
+        if (assistantMessageId == null || assistantMessageId.isBlank()) {
+            return;
+        }
+        ChatSession session = sessionService.requireSessionForInternalUpdate(
+                run.tenantId(), run.userId(), run.sessionId());
+        ChatMessage existing = sessionService.requireAssistantForInternalUpdate(session, assistantMessageId);
+        String status = terminalStatus == ChatRunStatus.CANCELLED ? "CANCELLED" : "FAILED";
+        String metadata = DomainAgentAsyncTaskMetadata.mergeAssistantMetadata(
+                objectMapper, existing.metadataJson(), status, null);
+        sessionService.updateAssistantMessage(new AssistantMessageUpdateCommand(
+                run.tenantId(), run.userId(), session, existing.id(), existing.content(), run.id(),
+                java.util.List.of(), metadata, false));
     }
 
     private void persistExternalPartialAssistant(
@@ -345,6 +372,12 @@ public class ChatRunTerminalCommitService {
     private void lockExternalPartialAssistantSession(ExternalTerminalCommitCommand command) {
         AssistantMessageSaveCommand partialAssistant = command.partialAssistant();
         if (partialAssistant == null) {
+            ChatRun run = command.run();
+            if (DomainAgentAsyncTaskMetadata.isAsyncRunning(run)) {
+                ChatSession session = sessionService.requireSessionForInternalUpdate(
+                        run.tenantId(), run.userId(), run.sessionId());
+                sessionService.lockForMessageMutation(run.tenantId(), run.userId(), session);
+            }
             return;
         }
         ChatRun run = command.run();
@@ -843,6 +876,19 @@ public class ChatRunTerminalCommitService {
                     ChatRunRepository.ExternalTerminalGuard.RECOVERY,
                     instanceId,
                     execution == null ? null : execution.fencingToken(),
+                    null,
+                    null,
+                    null
+            );
+        }
+
+        public static ExternalTerminalCommitCommand asyncTimeout(ChatEvent event, ChatRun run) {
+            return new ExternalTerminalCommitCommand(
+                    event,
+                    run,
+                    ChatRunRepository.ExternalTerminalGuard.ASYNC_TIMEOUT,
+                    null,
+                    null,
                     null,
                     null,
                     null

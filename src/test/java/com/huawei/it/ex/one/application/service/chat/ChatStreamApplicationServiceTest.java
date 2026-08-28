@@ -17,6 +17,7 @@ import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
 import com.huawei.it.ex.one.domain.chat.ChatStreamTopics;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
+import com.huawei.it.ex.one.domain.chat.RunAsyncRunningEvent;
 import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
 
@@ -484,6 +485,35 @@ class ChatStreamApplicationServiceTest {
         StepVerifier.create(service.resumeRun(user(), "run1", first.sequence()))
                 .assertNext(event -> assertThat(event.payload()).containsEntry("delta", " world"))
                 .assertNext(event -> assertThat(event.type()).isEqualTo("run.completed"))
+                .verifyComplete();
+    }
+
+    @Test
+    void resumeRunEndsAtPersistedAsyncBoundaryWithoutWaitingForLiveEvents() {
+        InMemoryChatEventStore store = new InMemoryChatEventStore();
+        InMemoryRunRepository runRepository = new InMemoryRunRepository();
+        ChatStreamApplicationService service = new ChatStreamApplicationService(
+                store,
+                new LocalChatEventStreamRegistry(),
+                new InMemoryLiveEventBus(),
+                runRepository,
+                new PermissionChecker(),
+                new FixedSessionRepository(),
+                new com.huawei.it.ex.one.application.config.ChatWebSocketProperties()
+        );
+        ChatRun running = runningRun("run1", "tenant1", "user1")
+                .withMetadata(DomainAgentAsyncTaskMetadata.runningOverlay(
+                        "msg-assistant", Instant.now().plus(Duration.ofHours(1))));
+        runRepository.save(running);
+        ChatEvent first = service.appendAndPublish(MessageDeltaEvent.of("run1", "session1", "partial"));
+        ChatEvent boundary = service.appendAndPublish(
+                RunAsyncRunningEvent.of("run1", "session1", "background"));
+
+        StepVerifier.create(service.resumeRun(user(), "run1", first.sequence()))
+                .assertNext(event -> {
+                    assertThat(event.sequence()).isEqualTo(boundary.sequence());
+                    assertThat(event.type()).isEqualTo("run.async_running");
+                })
                 .verifyComplete();
     }
 

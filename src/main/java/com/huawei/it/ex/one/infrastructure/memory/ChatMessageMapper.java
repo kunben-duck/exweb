@@ -38,6 +38,23 @@ public interface ChatMessageMapper {
     int insertParts(@Param("rows") List<ChatMessagePartRow> rows);
 
     /**
+     * 删除指定assistant消息中由当前run生成的parts。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param messageId assistant消息标识。
+     * @param runId 需要替换结果的run标识。
+     * @return 实际删除行数。
+     */
+    int deletePartsByMessageAndRun(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionId") String sessionId,
+            @Param("messageId") String messageId,
+            @Param("runId") String runId);
+
+    /**
      * 写入消息与文档附件的引用关系。
      *
      * @param row 附件引用写入行，包含消息归属、documentId、展示快照和排序号。

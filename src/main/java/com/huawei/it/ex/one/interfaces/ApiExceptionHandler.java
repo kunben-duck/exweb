@@ -6,6 +6,7 @@ import com.huawei.it.ex.one.application.integration.intent.IntentPreferenceUnava
 import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ChatShareUnavailableException;
+import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackBusyException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
@@ -29,6 +30,13 @@ import java.time.Instant;
 @RestControllerAdvice(basePackages = "com.huawei.it.ex.one.interfaces")
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class ApiExceptionHandler {
+
+    @ExceptionHandler(DomainAgentAsyncCallbackBusyException.class)
+    public ResponseEntity<ApiErrorResponse> handleDomainAgentAsyncCallbackBusy(
+            DomainAgentAsyncCallbackBusyException ex, HttpServletRequest request) {
+        return error(HttpStatus.TOO_MANY_REQUESTS, "DOMAIN_AGENT_ASYNC_CALLBACK_BUSY",
+                ex.getMessage(), requestPath(request));
+    }
 
     /** Preference recording is independent from run admission and reports a retryable 503. */
     @ExceptionHandler(IntentPreferenceUnavailableException.class)

@@ -26,4 +26,9 @@ public final class DomainAgentProtocolException extends RuntimeException {
         return new DomainAgentProtocolException(
                 INVALID_UTF8 + ": DomainAgent response contains malformed UTF-8", cause);
     }
+
+    public static DomainAgentProtocolException invalidFrame(String message) {
+        String detail = message == null || message.isBlank() ? "invalid control frame" : message.trim();
+        return new DomainAgentProtocolException("DOMAIN_AGENT_PROTOCOL_INVALID: " + detail);
+    }
 }

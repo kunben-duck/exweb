@@ -11,6 +11,7 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Immutable inputs and run-scoped atomic references shared by the event and completion pipeline. */
@@ -27,7 +28,8 @@ record RunEventPipelineContext(
         ChatInteractionRequest continuationInteractionRequest,
         RunStartAttempt startAttempt,
         List<String> intentClarificationDocumentIds,
-        RuntimeInteractionDispatchState interactionDispatchState
+        RuntimeInteractionDispatchState interactionDispatchState,
+        AtomicBoolean asyncRunningObserved
 ) {
     RunEventPipelineContext {
         intentClarificationDocumentIds = intentClarificationDocumentIds == null
@@ -36,6 +38,7 @@ record RunEventPipelineContext(
         interactionDispatchState = interactionDispatchState == null
                 ? RuntimeInteractionDispatchState.untracked()
                 : interactionDispatchState;
+        asyncRunningObserved = asyncRunningObserved == null ? new AtomicBoolean() : asyncRunningObserved;
     }
 
     RunEventPipelineContext(
@@ -53,6 +56,25 @@ record RunEventPipelineContext(
             List<String> intentClarificationDocumentIds) {
         this(user, session, messagePlan, routeRef, bindingRef, assistant, runId, executionClaim,
                 pendingInteractionPayloadRef, continuationInteractionRequest, startAttempt,
-                intentClarificationDocumentIds, RuntimeInteractionDispatchState.untracked());
+                intentClarificationDocumentIds, RuntimeInteractionDispatchState.untracked(), new AtomicBoolean());
+    }
+
+    RunEventPipelineContext(
+            UserContext user,
+            ChatSession session,
+            ChatRunMessagePlan messagePlan,
+            AtomicReference<RouteTarget> routeRef,
+            AtomicReference<RuntimeBinding> bindingRef,
+            AssistantAssembly assistant,
+            String runId,
+            RunExecutionClaim executionClaim,
+            AtomicReference<Map<String, Object>> pendingInteractionPayloadRef,
+            ChatInteractionRequest continuationInteractionRequest,
+            RunStartAttempt startAttempt,
+            List<String> intentClarificationDocumentIds,
+            RuntimeInteractionDispatchState interactionDispatchState) {
+        this(user, session, messagePlan, routeRef, bindingRef, assistant, runId, executionClaim,
+                pendingInteractionPayloadRef, continuationInteractionRequest, startAttempt,
+                intentClarificationDocumentIds, interactionDispatchState, new AtomicBoolean());
     }
 }

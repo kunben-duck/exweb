@@ -33,6 +33,7 @@ public class DomainAgentResponseNormalizer {
     private final ObjectMapper objectMapper;
     private final DomainAgentControlEventMapper controlEventMapper;
     private final int maxPendingFrameBytes;
+    private final boolean asyncTaskEnabled;
 
     public DomainAgentResponseNormalizer(ObjectMapper objectMapper) {
         this(objectMapper, new DomainAgentProperties());
@@ -44,6 +45,7 @@ public class DomainAgentResponseNormalizer {
         this.controlEventMapper = new DomainAgentControlEventMapper();
         DomainAgentProperties nextProperties = properties == null ? new DomainAgentProperties() : properties;
         this.maxPendingFrameBytes = nextProperties.normalizedMaxPendingFrameBytes();
+        this.asyncTaskEnabled = nextProperties.isAsyncTaskEnabled();
     }
 
     public List<ChatEvent> normalize(String runId, String sessionId, String chunk) {
@@ -93,6 +95,23 @@ public class DomainAgentResponseNormalizer {
             }
         }
         return List.copyOf(events);
+    }
+
+    /** Normalizes one already parsed callback frame without applying the live HTTP frame-size limit again. */
+    public List<ChatEvent> normalizeCallbackFrame(
+            String runId,
+            String sessionId,
+            JsonNode frame,
+            DomainAgentStreamState state) {
+        if (frame == null || !frame.isObject()) {
+            throw DomainAgentProtocolException.invalidFrame(
+                    "DomainAgent async callback frame must be a JSON object");
+        }
+        if ("agent.async_started".equals(text(frame, "type"))) {
+            throw DomainAgentProtocolException.invalidFrame(
+                    "DomainAgent async callback cannot start another async task");
+        }
+        return normalizeJson(runId, sessionId, frame, state == null ? newStreamState() : state);
     }
 
     /**
@@ -325,6 +344,19 @@ public class DomainAgentResponseNormalizer {
                     Map.of("value", truncate(root.asText(""))))));
         }
         List<ChatEvent> events = new ArrayList<>();
+        if (asyncTaskEnabled && "agent.async_started".equals(text(root, "type"))) {
+            if (state != null && state.asyncStarted) {
+                throw DomainAgentProtocolException.invalidFrame(
+                        "DomainAgent repeated agent.async_started frame");
+            }
+            events.addAll(flushPendingContent(runId, sessionId, state));
+            if (state != null) {
+                state.asyncStarted = true;
+            }
+            events.add(com.huawei.it.ex.one.domain.chat.RunAsyncRunningEvent.of(
+                    runId, sessionId, text(root, "message")));
+            return List.copyOf(events);
+        }
         DomainAgentControlEventMapper.ControlEvent controlEvent = controlEventMapper.map(root).orElse(null);
         if (controlEvent != null) {
             if (controlEvent.reroute()) {
@@ -938,5 +970,6 @@ public class DomainAgentResponseNormalizer {
         private String pending = "";
         private final StringBuilder frameBuffer = new StringBuilder();
         private DomainAgentPendingFrame pendingFrame;
+        private boolean asyncStarted;
     }
 }

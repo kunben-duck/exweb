@@ -52,6 +52,13 @@ public interface ChatRunRepository {
     }
 
     /**
+     * 在当前execution保护下保存异步assistant、事件游标和私有任务上下文，业务run仍保持RUNNING。
+     */
+    default ChatRun transitionToAsyncWaiting(ChatRun run, RunExecutionClaim claim) {
+        return save(run);
+    }
+
+    /**
      * 严格插入一个新 run，不执行 upsert。
      *
      * <p>生产实现依赖 active-run 部分唯一索引完成跨实例并发准入。</p>
@@ -226,13 +233,17 @@ public interface ChatRunRepository {
                 .orElseThrow(() -> new IllegalStateException("run 不存在: " + command.runId()));
         ChatRun terminal = command.terminalStatus() == ChatRunStatus.CANCELLED
                 ? current.cancelled(command.sequence())
-                : current.failed(command.sequence());
+                : command.terminalStatus() == ChatRunStatus.COMPLETED
+                        ? current.completed(command.sequence())
+                        : current.failed(command.sequence());
         return save(terminal);
     }
 
     enum ExternalTerminalGuard {
         NONE,
         RECOVERY,
+        ASYNC_CALLBACK,
+        ASYNC_TIMEOUT,
         ORPHAN_INTERACTION,
         EXECUTION_INIT_FAILURE,
         ORPHAN_RUN_INIT,

@@ -1,6 +1,9 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.config.ChatInteractionProperties;
 import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
@@ -119,6 +122,32 @@ class ChatRunRecoveryOrchestratorTest {
                 .isEqualTo(ChatRunExecutionStatus.CANCELLED);
         assertThat(fixture.events.events).extracting(ChatEvent::type).containsExactly("run.cancelled");
         assertThat(fixture.events.events.getFirst().payload()).containsEntry("messageReady", false);
+    }
+
+    @Test
+    void watchdogClosesExpiredAsyncWaitingRunWithoutTreatingItAsOwnerRecovery() {
+        TestFixture fixture = fixture();
+        Instant now = Instant.now();
+        ChatRun run = runningRun().withMetadataSnapshot(
+                DomainAgentAsyncTaskMetadata.runningOverlay("", now.minusSeconds(1)));
+        fixture.runs.save(run);
+        fixture.executions.put(new ChatRunExecution(
+                "exec-async", run.id(), run.tenantId(), run.userId(), run.sessionId(),
+                ChatRunExecutionStatus.ASYNC_WAITING, null, null, now.minusSeconds(1),
+                2L, null, null, 0, null, null, Map.of(), now.minusSeconds(60), now));
+
+        int recovered = fixture.orchestrator.recoverExpiredRuns();
+
+        assertThat(recovered).isEqualTo(1);
+        assertThat(fixture.runs.findById(run.id())).get().extracting(ChatRun::status)
+                .isEqualTo(ChatRunStatus.FAILED);
+        assertThat(fixture.executions.findByRunId(run.id())).get()
+                .extracting(ChatRunExecution::executionStatus)
+                .isEqualTo(ChatRunExecutionStatus.FAILED);
+        assertThat(fixture.events.events).singleElement().satisfies(event -> {
+            assertThat(event.type()).isEqualTo("run.failed");
+            assertThat(event.payload()).containsEntry("code", "DOMAIN_AGENT_ASYNC_TIMEOUT");
+        });
     }
 
     @Test
@@ -433,7 +462,15 @@ class ChatRunRecoveryOrchestratorTest {
                                                                 ChatRunRepository runs,
                                                                 ChatRunLeaseApplicationService leaseService,
                                                                 ChatInteractionApplicationService interactionService) {
-        return new ChatRunTerminalCommitService(streamService, null, runs, leaseService, null,
+        SessionApplicationService sessionService = mock(SessionApplicationService.class);
+        when(sessionService.requireSessionForInternalUpdate(anyString(), anyString(), anyString()))
+                .thenAnswer(invocation -> {
+                    Instant now = Instant.now();
+                    return new ChatSession(
+                            invocation.getArgument(2), invocation.getArgument(0), invocation.getArgument(1),
+                            "title", "ACTIVE", "web", now, now);
+                });
+        return new ChatRunTerminalCommitService(streamService, sessionService, runs, leaseService, null,
                 interactionService, Duration.ofDays(3));
     }
 
@@ -650,6 +687,14 @@ class ChatRunRecoveryOrchestratorTest {
                     .filter(e -> e.leaseUntil().isBefore(now)).limit(limit).toList();
         }
         @Override public List<ChatRunExecution> findRecoveryExpired(int limit) { return List.of(); }
+        @Override public List<ChatRunExecution> findAsyncWaitingExpired(int limit) {
+            Instant now = Instant.now();
+            return executions.values().stream()
+                    .filter(e -> e.executionStatus() == ChatRunExecutionStatus.ASYNC_WAITING)
+                    .filter(e -> e.leaseUntil() != null && e.leaseUntil().isBefore(now))
+                    .limit(limit)
+                    .toList();
+        }
         @Override public Optional<ChatRunExecution> tryClaimRecovering(String runId, String recoveredByInstanceId, String strategy, Duration recoveryLeaseDuration) {
             ChatRunExecution current = executions.get(runId);
             if (current == null || current.executionStatus() != ChatRunExecutionStatus.RUNNING || current.leaseUntil().isAfter(Instant.now())) {

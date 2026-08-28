@@ -265,6 +265,28 @@ class ChatRunApplicationServiceTest {
     }
 
     @Test
+    void streamStatusReturnsDomainAgentAsyncRunningPhaseAndDeadline() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        Instant expiresAt = Instant.parse("2026-08-29T10:00:00Z");
+        ChatRun run = runningRun()
+                .withAssistantMessageId("msg-assistant")
+                .withMetadata(DomainAgentAsyncTaskMetadata.runningOverlay("msg-assistant", expiresAt));
+        repository.save(run);
+        cache.putActive(run);
+        ChatRunApplicationService service = new ChatRunApplicationService(
+                repository, cache, new InMemoryEventStore(17L),
+                new PermissionChecker(), new FixedSessionRepository());
+
+        var status = service.streamStatus(user(), "session1");
+
+        assertThat(status.activeRunStatus()).isEqualTo(ChatRunStatus.RUNNING);
+        assertThat(status.cancellable()).isTrue();
+        assertThat(status.activeRunPhase()).isEqualTo("ASYNC_RUNNING");
+        assertThat(status.asyncExpiresAt()).isEqualTo(expiresAt);
+    }
+
+    @Test
     void streamStatusReturnsAssistantAssociationForReusableActiveContinuation() {
         InMemoryRunRepository repository = new InMemoryRunRepository();
         InMemoryRunCache cache = new InMemoryRunCache();

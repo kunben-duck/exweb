@@ -793,6 +793,24 @@ run 仍活跃时，接口连接 Redis live tail。若 live source 返回 `Stream
 
 该边界避免 Redis 故障时所有长连接同时转为数据库轮询，放大数据库压力。
 
+### 11.6 DomainAgent 异步任务边界
+
+可选异步任务协议开启后，DomainAgent 返回 `agent.async_started` 不表示本轮完成。ChatService 先持久化
+`run.async_running`，保存当时已有的assistant投影，再将execution转为`ASYNC_WAITING`并释放原owner和心跳；
+业务run仍保持`RUNNING`，因此同会话的active run约束继续生效。
+
+`run.async_running`是当前HTTP流的明确边界，但不是run终态：
+
+- 原始DomainAgent HTTP流在该事件后关闭。
+- run Event Resume重放到该事件后直接结束，不发送`message.completed`、`run.completed`或done，也不保持live tail。
+- 已经订阅run topic的WebSocket可以继续保持，并在内部回调到达时接收新事件；页面关闭不会影响后台任务。
+- 页面重新打开时先读取`stream-status.activeRunPhase=ASYNC_RUNNING`，无需保持一个长期SSE连接。
+
+DomainAgent随后使用可信`runId`调用内部回调。服务端按
+`run.async_result_started -> 标准业务事件 -> message.completed -> run.completed/run.failed`提交并发布；无结果帧时
+仍发布开始和终态事件。回调、用户stop和24小时超时竞争同一数据库终态CAS，只有获胜者能够更新assistant、
+推进未读sequence并关闭run，重复或迟到回调不会覆盖已有终态。
+
 ## 12. 浏览器恢复流程
 
 ### 12.1 游标规则

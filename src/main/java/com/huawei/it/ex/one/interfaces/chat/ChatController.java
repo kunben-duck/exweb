@@ -371,7 +371,9 @@ public class ChatController {
                 status.bindingIntentName(),
                 status.bindingRouteSource(),
                 status.bindingUpdatedAt(),
-                toAgentModeDto(status.bindingAgentMode())
+                toAgentModeDto(status.bindingAgentMode()),
+                status.activeRunPhase(),
+                status.asyncExpiresAt()
         );
     }
 

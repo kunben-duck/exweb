@@ -18,6 +18,7 @@ import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunExecution;
+import com.huawei.it.ex.one.domain.chat.ChatRunExecutionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ErrorEvent;
 import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
@@ -117,9 +118,72 @@ public class ChatRunRecoveryOrchestrator {
         if (remainingClaims == 0) {
             return recovered;
         }
+        int asyncExpired = expireAsyncWaitingTasks(batchSize, remainingClaims);
+        recovered += asyncExpired;
+        remainingClaims = Math.max(0, remainingClaims - asyncExpired);
+        if (remainingClaims == 0) {
+            return recovered;
+        }
         List<ChatRunExecution> candidates = new ArrayList<>(executionRepository.findLeaseExpired(batchSize));
         candidates.addAll(executionRepository.findRecoveryExpired(Math.max(1, batchSize - candidates.size())));
         return recovered + recoverCandidates(candidates, remainingClaims);
+    }
+
+    private int expireAsyncWaitingTasks(int batchSize, int maxClaims) {
+        if (terminalCommitService == null || streamService == null || runService == null || maxClaims <= 0) {
+            return 0;
+        }
+        int expired = 0;
+        for (ChatRunExecution execution : executionRepository.findAsyncWaitingExpired(batchSize)) {
+            if (expired >= maxClaims) {
+                break;
+            }
+            try {
+                if (expireAsyncWaitingTask(execution)) {
+                    expired++;
+                }
+            } catch (RuntimeException ex) {
+                log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_TRANSACTION_FAILED,
+                                "DomainAgent async task timeout finalization failed")
+                        .runId(execution == null ? null : execution.runId())
+                        .operation("chat-run.watchdog.domain-agent-async-timeout")
+                        .build(), ex);
+            }
+        }
+        return expired;
+    }
+
+    private boolean expireAsyncWaitingTask(ChatRunExecution execution) {
+        ChatRun run = runRepository.findById(execution.runId()).orElse(null);
+        if (run == null || run.status().terminal()) {
+            executionRepository.markTerminal(execution.runId(), statusFromRun(run));
+            return false;
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("code", "DOMAIN_AGENT_ASYNC_TIMEOUT");
+        payload.put("message", "DomainAgent后台任务等待超时");
+        payload.put("source", "chat-run-watchdog");
+        payload.put("asyncTask", true);
+        payload.put("messageReady", run.assistantMessageId() != null);
+        if (run.assistantMessageId() != null) {
+            payload.put("assistantMessageId", run.assistantMessageId());
+            payload.put("feedbackTargetMessageId", run.assistantMessageId());
+        }
+        ChatEvent event = ErrorEvent.of(
+                run.id(),
+                run.sessionId(),
+                "DOMAIN_AGENT_ASYNC_TIMEOUT",
+                "DomainAgent后台任务等待超时",
+                payload);
+        ChatRunTerminalCommitService.ExternalTerminalCommitResult result =
+                terminalCommitService.commitExternalTerminal(
+                        ChatRunTerminalCommitService.ExternalTerminalCommitCommand.asyncTimeout(event, run));
+        if (!result.committed()) {
+            return result.run() != null && result.run().status().terminal();
+        }
+        runService.synchronizeCommittedRunCache(result.run());
+        publishTerminalBestEffort(result.event());
+        return true;
     }
 
     private int reconcileRunExecutionInitOrphans(int limit) {
@@ -238,6 +302,9 @@ public class ChatRunRecoveryOrchestrator {
         Optional<ChatRunExecution> execution = executionRepository.findByRunId(runId);
         if (execution.isEmpty() || !executionRepository.isLeaseExpired(runId, java.time.Instant.now())) {
             return true;
+        }
+        if (execution.get().executionStatus() == ChatRunExecutionStatus.ASYNC_WAITING) {
+            return expireAsyncWaitingTask(execution.get());
         }
         return recoverCandidates(List.of(execution.get()), 1) > 0;
     }

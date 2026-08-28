@@ -150,6 +150,7 @@ IAM、SOA：Authorization，APIG：X-HW-ID，X-HW-APPKEY
 "edmid_002"
 ],
 "query": "帮我分析一下最近的资金流向",        // 用户query内容，意图指代不明的澄清信息，目前仅支持文本类
+"runId": "run_xyz_789",                   // ChatService生成的可信运行标识；后台异步任务直接复用
 "messageId": "msg_abc123",               // 用户query生成的message标识，按需消费
 "w3Account": "00961281",                  // 用户工号，标准格式w3account
 "globalUserId": "131269512",              // 用户身份标识，标准格式globaluserid
@@ -318,6 +319,40 @@ data: {"id": 2, "query": "投资性流出详细分析", "type": "send", "languag
 data: {"id": 3, "query": "生成资金流向报告", "type": "copy", "language_code": "zh_CN"}
 
 data: [DONE]
+
+### 6.4、后台异步任务
+
+异步任务能力默认关闭。启用后，DomainAgent需要在决定关闭当前流并转入后台执行时返回一条独立帧：
+
+```text
+data: {"type":"agent.async_started","message":"任务已转入后台执行"}
+```
+
+ChatService收到该帧后结束本次DomainAgent HTTP流，但业务Run保持`RUNNING`。DomainAgent应保存请求中的
+`runId`，并在任务结束后通过企业网关ACL保护的内部接口回调：
+
+```http
+POST /v1/internal/domain-agent/async-tasks/callback
+```
+
+```json
+{
+  "runId": "run_xyz_789",
+  "status": "COMPLETED",
+  "resultMode": "APPEND",
+  "frames": [
+    {"content": "异步任务结果"},
+    {"searchList": []}
+  ],
+  "error": null
+}
+```
+
+- `status`仅支持`COMPLETED/FAILED`。
+- `frames`可为空；非空时`resultMode`必须为`APPEND/REPLACE`。
+- 回调帧沿用本章标准响应结构，不得再次发送`agent.async_started`。
+- 同一个`runId`只接受一次有效回调；stop、超时或已完成后的回调返回`accepted=false`。
+- DomainAgent stop接口继续使用同一个`runId`停止后台任务。
  
 
 七、集成开发准入条件

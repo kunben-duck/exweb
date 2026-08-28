@@ -33,7 +33,19 @@ class DomainAgentPropertiesTest {
             assertThat(properties.getTimeout()).isEqualTo(Duration.ofSeconds(120));
             assertThat(properties.getStreamIdleTimeout()).isEqualTo(Duration.ofSeconds(300));
             assertThat(properties.getStreamTotalTimeout()).isEqualTo(Duration.ofMinutes(15));
+            assertThat(properties.isAsyncTaskEnabled()).isFalse();
+            assertThat(properties.getAsyncTaskMaxDuration()).isEqualTo(Duration.ofHours(24));
+            assertThat(properties.getAsyncTaskCallbackMaxFrames()).isEqualTo(512);
+            assertThat(properties.getAsyncTaskCallbackMaxBytes()).isEqualTo(4 * 1024 * 1024);
+            assertThat(properties.getAsyncTaskCallbackMaxConcurrency()).isEqualTo(4);
         });
+    }
+
+    @Test
+    void rejectsInvalidAsyncTaskLimitsAtStartup() {
+        contextRunner.withPropertyValues(
+                        "financeex.domain-agent.async-task-callback-max-concurrency=0")
+                .run(context -> assertThat(context).hasFailed());
     }
 
     @Test

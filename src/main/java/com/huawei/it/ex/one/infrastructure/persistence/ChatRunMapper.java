@@ -94,6 +94,16 @@ public interface ChatRunMapper {
                                               @Param("claim") RunExecutionClaim claim);
 
     /**
+     * 在owner/fencing保护下保存DomainAgent异步等待上下文。
+     *
+     * @param row 包含assistant、事件序号及异步metadata的run写入行。
+     * @param claim 当前execution写入权声明。
+     * @return 影响行数；1表示异步上下文保存成功。
+     */
+    int transitionToAsyncWaiting(@Param("row") ChatRunWriteRow row,
+                                 @Param("claim") RunExecutionClaim claim);
+
+    /**
      * 首次 stop 条件更新，只允许 RUNNING 进入 CANCELLING。
      *
      * @param runId run 主键。

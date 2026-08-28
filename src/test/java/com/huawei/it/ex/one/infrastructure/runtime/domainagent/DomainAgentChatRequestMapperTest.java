@@ -27,6 +27,7 @@ class DomainAgentChatRequestMapperTest {
     @SuppressWarnings("unchecked")
     void forwardsMetadataExtensionsButOverridesReservedBindingFields() {
         Map<String, Object> metadata = Map.of(
+                "runId", "forged-run",
                 "messageId", "forged-message",
                 "skillId", "skill-tax",
                 "query", "front query",
@@ -43,6 +44,7 @@ class DomainAgentChatRequestMapperTest {
         Map<String, Object> wire = mapper.toWireRequest(request(metadata, List.of(domainAgentDocument())));
 
         assertThat(wire)
+                .containsEntry("runId", "run1")
                 .containsEntry("messageId", "msg-user-1")
                 .containsEntry("skillId", "skill-tax")
                 .containsEntry("query", "hello")

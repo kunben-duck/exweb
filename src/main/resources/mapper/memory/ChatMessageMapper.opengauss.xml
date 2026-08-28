@@ -154,6 +154,19 @@
     </insert>
 
     <!--
+      异步回调REPLACE模式删除目标assistant下仅由当前run生成的旧parts，保留其他run历史。
+      入参: tenantId/userId/sessionId/messageId限定消息归属，runId限定待替换的part来源。
+    -->
+    <delete id="deletePartsByMessageAndRun">
+        DELETE FROM fin_ex_chat_message_part_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND message_id = #{messageId}
+          AND run_id = #{runId}
+    </delete>
+
+    <!--
       写入消息与文档附件的引用关系，分支时复制引用而不复制对象存储文件。
       入参: ChatMessageAttachmentRow，id 为附件引用主键，tenantId/userId/sessionId/messageId 为归属边界，
             documentId 指向统一文档库，attachmentOrder/name/contentType/sizeBytes/sourceAttachmentId 为展示快照。

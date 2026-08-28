@@ -64,6 +64,11 @@ public class MyBatisChatMessageStore {
         return message;
     }
 
+    public int deletePartsByMessageAndRun(
+            String tenantId, String userId, String sessionId, String messageId, String runId) {
+        return mapper.deletePartsByMessageAndRun(tenantId, userId, sessionId, messageId, runId);
+    }
+
     public ChatMessagePart savePart(ChatMessagePart part) {
         insertPartBatch(List.of(toRow(part)));
         return part;

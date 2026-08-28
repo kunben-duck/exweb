@@ -90,7 +90,8 @@ public class ConfiguredDomainAgentClient implements DomainAgentClient {
                      * DomainAgent 的 endFlag=true 已经映射为 message.completed。收到后主动闭合本轮流，
                      * 避免下游 HTTP 连接未关闭时持续占用本机 bulkhead 和 WebClient 资源。
                      */
-                    .takeUntil(event -> "message.completed".equals(event.type()));
+                    .takeUntil(event -> "message.completed".equals(event.type())
+                            || "run.async_running".equals(event.type()));
         });
         return enforceDomainAgentTotalDeadline(source)
                 .doOnError(ex -> log.warn(SystemErrorLogEntry.builder(classifyDomainAgentFailure(ex),

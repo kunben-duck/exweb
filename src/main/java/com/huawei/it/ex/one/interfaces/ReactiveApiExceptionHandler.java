@@ -6,6 +6,7 @@ import com.huawei.it.ex.one.application.integration.intent.IntentPreferenceUnava
 import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ChatShareUnavailableException;
+import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackBusyException;
 
 import jakarta.validation.ConstraintViolationException;
 
@@ -27,6 +28,12 @@ import org.springframework.web.server.ServerWebExchange;
 @RestControllerAdvice(basePackages = "com.huawei.it.ex.one.interfaces")
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.REACTIVE)
 public class ReactiveApiExceptionHandler {
+    @ExceptionHandler(DomainAgentAsyncCallbackBusyException.class)
+    public ResponseEntity<ApiExceptionHandler.ApiErrorResponse> handleDomainAgentAsyncCallbackBusy(
+            DomainAgentAsyncCallbackBusyException ex, ServerWebExchange exchange) {
+        return ApiExceptionHandler.error(HttpStatus.TOO_MANY_REQUESTS,
+                "DOMAIN_AGENT_ASYNC_CALLBACK_BUSY", ex.getMessage(), requestPath(exchange));
+    }
     /** Preference recording is independent from run admission and reports a retryable 503. */
     @ExceptionHandler(IntentPreferenceUnavailableException.class)
     public ResponseEntity<ApiExceptionHandler.ApiErrorResponse> handleIntentPreferenceUnavailable(

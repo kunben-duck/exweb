@@ -64,6 +64,8 @@ class ChatCoordinatorConfigurationTest {
                             () -> mock(ChatInteractionApplicationService.class))
                     .withBean(ChatRunTerminalCommitService.class,
                             () -> mock(ChatRunTerminalCommitService.class))
+                    .withBean(DomainAgentAsyncTaskApplicationService.class,
+                            () -> mock(DomainAgentAsyncTaskApplicationService.class))
                     .withBean(IdGenerator.class, () -> mock(IdGenerator.class))
                     .withBean(RouteMemoryApplicationService.class,
                             () -> mock(RouteMemoryApplicationService.class))

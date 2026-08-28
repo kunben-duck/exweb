@@ -32,8 +32,12 @@ public class DomainAgentChatRequestMapper {
         validateAttachmentCount(request.documents());
         validateDocListStructure(body);
         Map<String, Object> next = new LinkedHashMap<>(body);
-        // messageId只能来自已落库的ChatService user消息，不能信任前端metadata中的同名字段。
+        // runId/messageId只能来自ChatService事实，不能信任前端metadata中的同名字段。
+        next.remove("runId");
         next.remove("messageId");
+        if (request.runId() != null && !request.runId().isBlank()) {
+            next.put("runId", request.runId().trim());
+        }
         if (request.messageId() != null) {
             next.put("messageId", request.messageId());
         }

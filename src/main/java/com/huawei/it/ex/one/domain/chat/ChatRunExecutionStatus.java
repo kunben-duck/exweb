@@ -11,6 +11,8 @@ public enum ChatRunExecutionStatus {
     RUNNING,
     /** stop 已被接受，执行实例正在终止本轮输出。 */
     CANCELLING,
+    /** DomainAgent 已转入后台执行，本地 Runtime 连接和 owner 租约均已释放。 */
+    ASYNC_WAITING,
     /** 某个存活实例已抢占 stale run，正在执行恢复策略。 */
     RECOVERING,
     /** run 已正常完成，执行控制面也已闭合。 */

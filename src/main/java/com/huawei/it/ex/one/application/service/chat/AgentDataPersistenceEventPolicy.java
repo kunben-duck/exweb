@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.infrastructure.runtime.domainagent.DomainAgentControlEventMapper;
 
@@ -29,7 +30,12 @@ final class AgentDataPersistenceEventPolicy {
     );
 
     EventRetention retention(ChatEvent event, RunEventPipelineContext context) {
-        if (!placeholderMode(context)) {
+        return retention(event, context == null || context.assistant() == null
+                ? null : context.assistant().persistenceState());
+    }
+
+    EventRetention retention(ChatEvent event, AgentDataPersistenceState state) {
+        if (state == null || !state.placeholderMode()) {
             return EventRetention.PERSISTED;
         }
         if (event instanceof PersistenceAcknowledgedEvent
@@ -41,12 +47,6 @@ final class AgentDataPersistenceEventPolicy {
         }
         // 留存策略已经收紧时，未知下游事件按业务输出处理，避免协议扩展后意外写入真实内容。
         return EventRetention.LIVE_ONLY;
-    }
-
-    private boolean placeholderMode(RunEventPipelineContext context) {
-        return context != null
-                && context.assistant() != null
-                && context.assistant().persistenceState().placeholderMode();
     }
 
     private boolean runLifecycleEvent(ChatEvent event) {

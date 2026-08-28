@@ -20,6 +20,19 @@ public interface ChatEventStore {
      */
     ChatEvent append(ChatEvent event);
 
+    /** 在调用方已持有run终态CAS时批量追加事件，不再校验execution owner。 */
+    default List<ChatEvent> appendBatch(List<ChatEvent> events) {
+        if (events == null || events.isEmpty()) {
+            return List.of();
+        }
+        return events.stream().map(this::append).toList();
+    }
+
+    /** 为调用方已持有run终态CAS的live-only事件批量分配sequence。 */
+    default List<ChatEvent> sequenceLiveBatch(List<ChatEvent> events) {
+        throw new UnsupportedOperationException("ChatEventStore does not support unguarded live sequencing");
+    }
+
     /**
      * 在 execution 写入权保护下追加事件，并返回带持久化序号的事件。
      *

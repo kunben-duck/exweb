@@ -94,6 +94,20 @@ public interface ChatRunExecutionMapper {
                      @Param("terminalStatus") String terminalStatus);
 
     /**
+     * 将DomainAgent执行转为后台等待态并释放当前owner。
+     *
+     * @param runId run主键。
+     * @param ownerInstanceId 当前执行实例标识。
+     * @param fencingToken 当前execution fencing token。
+     * @param expiresAt 异步任务等待截止时间。
+     * @return 影响行数；1表示状态迁移成功。
+     */
+    int markAsyncWaiting(@Param("runId") String runId,
+                         @Param("ownerInstanceId") String ownerInstanceId,
+                         @Param("fencingToken") long fencingToken,
+                         @Param("expiresAt") Instant expiresAt);
+
+    /**
      * 扫描运行租约已过期的 execution。
      *
      * @param limit 本轮最多返回数量。
@@ -108,6 +122,14 @@ public interface ChatRunExecutionMapper {
      * @return 按恢复租约过期时间正序排列的 stale recovering execution。
      */
     List<ChatRunExecutionRow> findRecoveryExpired(@Param("limit") int limit);
+
+    /**
+     * 扫描已超过等待截止时间的DomainAgent异步execution。
+     *
+     * @param limit 本轮最多返回数量。
+     * @return 按等待截止时间正序排列的异步execution。
+     */
+    List<ChatRunExecutionRow> findAsyncWaitingExpired(@Param("limit") int limit);
 
     /**
      * 条件抢占过期 execution 并递增 fencing token。

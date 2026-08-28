@@ -218,6 +218,34 @@
     </update>
 
     <!--
+      在当前owner/fencing保护下保存DomainAgent异步assistant、最后事件序号和私有任务metadata。
+      入参: row提供run归属及异步上下文，claim提供当前owner实例和fencing token。
+    -->
+    <update id="transitionToAsyncWaiting">
+        UPDATE fin_ex_chat_run_t r
+        SET assistant_message_id = #{row.assistantMessageId},
+            last_seq = #{row.lastSeq},
+            metadata_json = #{row.metadataJson},
+            updated_at = #{row.updatedAt}
+        WHERE r.id = #{row.id}
+          AND r.tenant_id = #{row.tenantId}
+          AND r.user_id = #{row.userId}
+          AND r.session_id = #{row.sessionId}
+          AND r.status = 'RUNNING'
+          AND EXISTS (
+              SELECT 1
+              FROM fin_ex_chat_run_execution_t e
+              WHERE e.run_id = r.id
+                AND e.tenant_id = r.tenant_id
+                AND e.user_id = r.user_id
+                AND e.session_id = r.session_id
+                AND e.execution_status = 'RUNNING'
+                AND e.owner_instance_id = #{claim.ownerInstanceId}
+                AND e.fencing_token = #{claim.fencingToken}
+          )
+    </update>
+
+    <!--
       首次 stop 的短事务 CAS。CANCELLING 重试和已终态幂等由应用层回读当前状态处理。
       入参: runId/tenantId/userId 为归属边界，reason 为取消原因，requestedAt 为状态更新时间。
     -->
@@ -287,6 +315,31 @@
                       AND e.execution_status = 'RECOVERING'
                       AND e.recovered_by_instance_id = #{recoveredByInstanceId}
                       AND e.fencing_token = #{fencingToken}
+                )
+            </when>
+            <when test='guard == "ASYNC_CALLBACK"'>
+                AND r.status = 'RUNNING'
+                AND EXISTS (
+                    SELECT 1
+                    FROM fin_ex_chat_run_execution_t e
+                    WHERE e.run_id = r.id
+                      AND e.tenant_id = r.tenant_id
+                      AND e.user_id = r.user_id
+                      AND e.session_id = r.session_id
+                      AND e.execution_status = 'ASYNC_WAITING'
+                )
+            </when>
+            <when test='guard == "ASYNC_TIMEOUT"'>
+                AND r.status = 'RUNNING'
+                AND EXISTS (
+                    SELECT 1
+                    FROM fin_ex_chat_run_execution_t e
+                    WHERE e.run_id = r.id
+                      AND e.tenant_id = r.tenant_id
+                      AND e.user_id = r.user_id
+                      AND e.session_id = r.session_id
+                      AND e.execution_status = 'ASYNC_WAITING'
+                      AND e.lease_until &lt; CURRENT_TIMESTAMP
                 )
             </when>
             <when test='guard == "ORPHAN_INTERACTION"'>

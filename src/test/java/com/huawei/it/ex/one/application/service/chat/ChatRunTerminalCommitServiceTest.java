@@ -25,6 +25,7 @@ import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
+import com.huawei.it.ex.one.domain.chat.ChatRunExecutionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
@@ -300,6 +301,67 @@ class ChatRunTerminalCommitServiceTest {
                 .doesNotContain("skill-stale")
                 .doesNotContain("skill-old");
         assertThat(result.committed()).isTrue();
+    }
+
+    @Test
+    void stopClosesAsyncWaitingRunWithoutReplacingExistingAssistantContent() {
+        ChatStreamApplicationService streamService = mock(ChatStreamApplicationService.class);
+        SessionApplicationService sessionService = mock(SessionApplicationService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRunLeaseApplicationService leaseService = mock(ChatRunLeaseApplicationService.class);
+        ChatRunTerminalCommitService service = new ChatRunTerminalCommitService(
+                streamService, sessionService, runRepository, leaseService, null, null, Duration.ZERO);
+        Instant now = Instant.now();
+        ChatRun stopping = new ChatRun(
+                "run-async", "tenant1", "user1", "session1", ChatRunStatus.RUNNING,
+                "DOMAIN_AGENT", "skill-a", "domain-agent", null, ChatRunMode.NEXT,
+                null, "msg-user", "msg-assistant", 1L, 4L, null, now, null,
+                DomainAgentAsyncTaskMetadata.runningOverlay(
+                        "msg-assistant", now.plus(Duration.ofHours(1))), now, now)
+                .cancelling("USER_STOP");
+        ChatRun claimed = stopping.cancelled(0L);
+        ChatRun committed = claimed.withMetadataSnapshot(Map.of()).cancelled(12L);
+        ChatSession session = new ChatSession(
+                "session1", "tenant1", "user1", "test", "ACTIVE", "web", now, now);
+        ChatMessage assistant = new ChatMessage(
+                "msg-assistant", "tenant1", "user1", "session1",
+                "msg-user", 2L, 1, 0, "assistant", "partial async answer", null,
+                "run-async", "NORMAL", false, null, null, null, null,
+                "{\"skillId\":\"skill-a\",\"domainAgentAsyncTask\":{\"status\":\"ASYNC_RUNNING\"}}",
+                now);
+        ChatEvent event = RunCancelledEvent.of(
+                stopping.id(), stopping.sessionId(), "USER_STOP", true, assistant.id());
+        ChatEvent stored = new RunCancelledEvent(
+                stopping.id(), stopping.sessionId(), 12L, now, event.payload());
+        when(sessionService.requireSessionForInternalUpdate(
+                stopping.tenantId(), stopping.userId(), stopping.sessionId())).thenReturn(session);
+        when(sessionService.requireAssistantForInternalUpdate(session, assistant.id())).thenReturn(assistant);
+        when(runRepository.tryClaimExternalTerminal(any(ChatRunRepository.ExternalTerminalClaim.class)))
+                .thenReturn(true);
+        when(runRepository.findById(stopping.id())).thenReturn(Optional.of(claimed));
+        when(runRepository.save(any(ChatRun.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(streamService.appendWithoutPublish(event)).thenReturn(stored);
+        when(runRepository.finalizeExternalTerminal(any())).thenReturn(committed);
+
+        ChatRunTerminalCommitService.ExternalTerminalCommitResult result = service.commitExternalTerminal(
+                ChatRunTerminalCommitService.ExternalTerminalCommitCommand.stop(event, stopping, null));
+
+        ArgumentCaptor<AssistantMessageUpdateCommand> assistantCaptor =
+                ArgumentCaptor.forClass(AssistantMessageUpdateCommand.class);
+        verify(sessionService).updateAssistantMessage(assistantCaptor.capture());
+        assertThat(assistantCaptor.getValue().content()).isEqualTo("partial async answer");
+        assertThat(assistantCaptor.getValue().safePartDrafts()).isEmpty();
+        assertThat(assistantCaptor.getValue().appendAnswerPart()).isFalse();
+        assertThat(assistantCaptor.getValue().metadataJson())
+                .contains("\"skillId\":\"skill-a\"")
+                .contains("\"status\":\"CANCELLED\"");
+        ArgumentCaptor<ChatRun> savedRunCaptor = ArgumentCaptor.forClass(ChatRun.class);
+        verify(runRepository).save(savedRunCaptor.capture());
+        assertThat(savedRunCaptor.getValue().metadata())
+                .doesNotContainKey(DomainAgentAsyncTaskMetadata.RUN_METADATA_KEY);
+        verify(leaseService).markTerminal(stopping.id(), ChatRunExecutionStatus.CANCELLED);
+        assertThat(result.committed()).isTrue();
+        assertThat(result.run().status()).isEqualTo(ChatRunStatus.CANCELLED);
     }
 
     @Test

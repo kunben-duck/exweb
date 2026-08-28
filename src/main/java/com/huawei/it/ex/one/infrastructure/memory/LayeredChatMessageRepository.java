@@ -88,6 +88,18 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
         return cacheValue;
     }
 
+    @Override
+    public int deletePartsByMessageAndRun(
+            String tenantId, String userId, String sessionId, String messageId, String runId) {
+        ChatMessage previous = databaseStore.findByOwnerAndId(tenantId, userId, messageId).orElse(null);
+        int deleted = databaseStore.deletePartsByMessageAndRun(
+                tenantId, userId, sessionId, messageId, runId);
+        if (deleted > 0 && previous != null) {
+            updateCacheAfterCommit(() -> redisCache.remove(previous));
+        }
+        return deleted;
+    }
+
     private ChatMessage mergeParts(ChatMessage previous, ChatMessage updated) {
         if (previous == null || previous.parts() == null || previous.parts().isEmpty()) {
             return updated;

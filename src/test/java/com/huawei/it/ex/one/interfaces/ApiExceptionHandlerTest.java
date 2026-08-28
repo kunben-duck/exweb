@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.huawei.it.ex.one.application.integration.conversation.SessionSearchTimeoutException;
 import com.huawei.it.ex.one.application.integration.intent.IntentCandidateQueryException;
 import com.huawei.it.ex.one.application.integration.intent.IntentPreferenceUnavailableException;
+import com.huawei.it.ex.one.domain.chat.CandidateSwitchConflictException;
 import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackNotReadyException;
 import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackPayloadTooLargeException;
 
@@ -61,6 +62,23 @@ class ApiExceptionHandlerTest {
 
         assertThat(badRequest.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(conflict.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    @Test
+    void mapsCandidateSwitchConflictsToStableCodes() {
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> pending = handler.handleConflict(
+                CandidateSwitchConflictException.stopPending("run_a"),
+                servletRequest("/v1/chat/runs/run_a/switch-domain-agent"));
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> stale = reactiveHandler.handleConflict(
+                CandidateSwitchConflictException.staleSource("run_a"),
+                exchange("/v1/chat/runs/run_a/switch-domain-agent"));
+
+        assertThat(pending.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(pending.getBody()).isNotNull();
+        assertThat(pending.getBody().code()).isEqualTo("CANDIDATE_SWITCH_STOP_PENDING");
+        assertThat(stale.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(stale.getBody()).isNotNull();
+        assertThat(stale.getBody().code()).isEqualTo("CANDIDATE_SWITCH_STALE_SOURCE");
     }
 
     @Test

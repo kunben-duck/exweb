@@ -43,21 +43,46 @@ final class ChatRunExecutionCoordinator {
                             request.startAttempt()));
             StandardRunAdmissionCoordinator.Admission admission =
                     admissionCoordinator.admit(prepared);
-            StandardRunRuntimeCoordinator.RuntimePlan runtimePlan =
-                    runtimeCoordinator.prepare(prepared, admission);
-            RunExecutionClaim executionClaim;
-            try {
-                executionClaim = chatRunLeaseService.startRun(admission.run());
-            } catch (RuntimeException ex) {
-                return failureCoordinator.failExecutionInitialization(
-                        admission.run(), null, ex);
-            }
-            runStartCoordinator.trackExecution(
-                    request.startAttempt(),
-                    executionClaim,
-                    "after-execution-create");
-            return runtimeCoordinator.execute(runtimePlan, executionClaim);
+            return executePrepared(request, prepared, admission);
         });
+    }
+
+    Flux<ChatEvent> executeCandidateSwitch(
+            Request request,
+            CandidateSwitchRunSource source) {
+        return Flux.defer(() -> {
+            StandardRunInputPreparer.PreparedRun prepared = inputPreparer.prepareCandidateSwitch(
+                    new StandardRunInputPreparer.Request(
+                            request.user(),
+                            request.traceContext(),
+                            request.command(),
+                            request.forwardHeaders(),
+                            request.startAttempt()),
+                    source);
+            StandardRunAdmissionCoordinator.Admission admission =
+                    admissionCoordinator.admitCandidateSwitch(prepared, source);
+            return executePrepared(request, prepared, admission);
+        });
+    }
+
+    private Flux<ChatEvent> executePrepared(
+            Request request,
+            StandardRunInputPreparer.PreparedRun prepared,
+            StandardRunAdmissionCoordinator.Admission admission) {
+        StandardRunRuntimeCoordinator.RuntimePlan runtimePlan =
+                runtimeCoordinator.prepare(prepared, admission);
+        RunExecutionClaim executionClaim;
+        try {
+            executionClaim = chatRunLeaseService.startRun(admission.run());
+        } catch (RuntimeException ex) {
+            return failureCoordinator.failExecutionInitialization(
+                    admission.run(), null, ex);
+        }
+        runStartCoordinator.trackExecution(
+                request.startAttempt(),
+                executionClaim,
+                "after-execution-create");
+        return runtimeCoordinator.execute(runtimePlan, executionClaim);
     }
 
     record Request(

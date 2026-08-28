@@ -48,6 +48,17 @@ class ChatRunCoordinationTransactionTest {
     }
 
     @Test
+    void candidateSwitchAdmissionUsesBoundedTransaction() throws Exception {
+        Transactional transactional = ChatRunAdmissionCommitService.class
+                .getMethod("commitCandidateSwitch",
+                        ChatRunAdmissionCommitService.CandidateSwitchAdmissionCommand.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.timeoutString()).isEqualTo(TIMEOUT);
+    }
+
+    @Test
     void intentClarificationAdmissionUsesBoundedTransaction() throws Exception {
         Transactional transactional = ChatRunAdmissionCommitService.class
                 .getMethod("commitIntentClarification",

@@ -43,6 +43,25 @@ final class StandardRunAdmissionCoordinator {
                                 prepared.attachments(),
                                 prepared.explicitRuntimeTarget(),
                                 prepared.directRuntimeWaitBypass()));
+        return completeAdmission(prepared, result);
+    }
+
+    Admission admitCandidateSwitch(
+            StandardRunInputPreparer.PreparedRun prepared,
+            CandidateSwitchRunSource source) {
+        ChatRunAdmissionCommitService.AdmissionResult result =
+                admissionCoordinator.admitCandidateSwitch(
+                        new ChatRunAdmissionCoordinator.CandidateSwitchAdmission(
+                                prepared.user(),
+                                prepared.command(),
+                                prepared.runId(),
+                                source));
+        return completeAdmission(prepared, result);
+    }
+
+    private Admission completeAdmission(
+            StandardRunInputPreparer.PreparedRun prepared,
+            ChatRunAdmissionCommitService.AdmissionResult result) {
         ChatRunMessagePlan messagePlan = result.messagePlan();
         ChatRun run = result.run();
         result.cancelledBindings().forEach(cacheSynchronizer::schedule);

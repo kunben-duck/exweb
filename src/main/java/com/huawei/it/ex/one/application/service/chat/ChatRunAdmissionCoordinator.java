@@ -86,6 +86,20 @@ final class ChatRunAdmissionCoordinator {
                         request.runMetadata()));
     }
 
+    ChatRunAdmissionCommitService.AdmissionResult admitCandidateSwitch(
+            CandidateSwitchAdmission request) {
+        ChatRunAdmissionCommitService service = commitService;
+        if (service == null) {
+            throw new IllegalStateException("候选技能切换需要事务化Run admission");
+        }
+        return service.commitCandidateSwitch(
+                new ChatRunAdmissionCommitService.CandidateSwitchAdmissionCommand(
+                        request.user(),
+                        request.command(),
+                        request.runId(),
+                        request.source()));
+    }
+
     private ChatRunAdmissionCommitService.AdmissionResult legacyStandardAdmission(
             StandardAdmission request) {
         ChatRunMessagePlan messagePlan = sessionService.prepareRunMessage(
@@ -164,6 +178,14 @@ final class ChatRunAdmissionCoordinator {
             List<AttachmentRef> attachments,
             ExplicitRuntimeTarget explicitRuntimeTarget,
             boolean directRuntimeWaitBypass
+    ) {
+    }
+
+    record CandidateSwitchAdmission(
+            UserContext user,
+            ChatCommand command,
+            String runId,
+            CandidateSwitchRunSource source
     ) {
     }
 

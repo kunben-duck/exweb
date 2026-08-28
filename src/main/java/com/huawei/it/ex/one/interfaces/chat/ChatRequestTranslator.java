@@ -3,6 +3,7 @@ package com.huawei.it.ex.one.interfaces.chat;
 import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
+import com.huawei.it.ex.one.domain.chat.CandidateDomainAgentSwitchCommand;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
@@ -12,6 +13,7 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAttachmentDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSelectedIntentDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.CreateChatRunRequest;
+import com.huawei.it.ex.one.interfaces.chat.dto.SwitchDomainAgentRequest;
 
 import org.springframework.stereotype.Component;
 
@@ -47,12 +49,7 @@ public class ChatRequestTranslator {
         if (Boolean.TRUE.equals(request.forceReroute()) && (hasText(request.targetType()) || hasText(request.targetId()))) {
             throw new IllegalArgumentException("forceReroute=true 时不能同时指定 targetType/targetId");
         }
-        Map<String, Object> metadata = normalizeMetadata(request.metadata());
-        metadata = SelectedIntentContext.removeReserved(metadata);
-        metadata = MessageSkillContext.removeReserved(metadata);
-        metadata = RuntimeProfileMetadata.removePrivateRunMetadata(metadata);
-        metadata = RelayOutputModeMetadata.removePrivateRunMetadata(metadata);
-        metadata = removeDomainAgentAsyncTaskMetadata(metadata);
+        Map<String, Object> metadata = sanitizeClientMetadata(request.metadata());
         if (request.selectedIntent() != null) {
             validateSelectedIntent(request.selectedIntent(), runMode, request.targetType(), request.targetId());
             metadata = SelectedIntentContext.attach(metadata,
@@ -70,6 +67,67 @@ public class ChatRequestTranslator {
                 normalizeMetadata(request.questionnaireAnswers()), request.appId(), request.appName(),
                 toAgentMode(request.agentMode()), request.interactionAction(), request.language(),
                 normalizeText(request.intentAccessName()));
+    }
+
+    /** 将候选技能立即切换请求转换为不携带历史query和附件的应用命令。 */
+    public CandidateDomainAgentSwitchCommand toCandidateSwitchCommand(
+            String sourceRunId,
+            SwitchDomainAgentRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("候选技能切换请求体不能为空");
+        }
+        String normalizedSourceRunId = normalizeRequiredId(sourceRunId, "sourceRunId");
+        String normalizedMessageId = normalizeRequiredId(request.messageId(), "messageId");
+        String normalizedSkillId = normalizeRequiredText(request.skillId(), "skillId");
+        if (normalizedSkillId.length() > 128) {
+            throw new IllegalArgumentException("skillId长度不能超过128");
+        }
+        if (request.selectedIntent() == null) {
+            throw new IllegalArgumentException("selectedIntent不能为空");
+        }
+        validateSelectedIntent(
+                request.selectedIntent(),
+                ChatRunMode.REGENERATE_ASSISTANT,
+                "DOMAIN_AGENT",
+                normalizedSkillId);
+        Map<String, Object> metadata = SelectedIntentContext.attach(
+                sanitizeClientMetadata(request.metadata()),
+                request.selectedIntent().intentId(),
+                request.selectedIntent().intentName());
+        return new CandidateDomainAgentSwitchCommand(
+                normalizedSourceRunId,
+                normalizedMessageId,
+                normalizedSkillId,
+                metadata,
+                toAgentMode(request.agentMode()),
+                normalizeText(request.intentAccessName()));
+    }
+
+    private Map<String, Object> sanitizeClientMetadata(Map<String, Object> metadata) {
+        Map<String, Object> sanitized = normalizeMetadata(metadata);
+        sanitized = SelectedIntentContext.removeReserved(sanitized);
+        sanitized = MessageSkillContext.removeReserved(sanitized);
+        sanitized = RuntimeProfileMetadata.removePrivateRunMetadata(sanitized);
+        sanitized = RelayOutputModeMetadata.removePrivateRunMetadata(sanitized);
+        return removeDomainAgentAsyncTaskMetadata(sanitized);
+    }
+
+    private String normalizeRequiredId(String value, String fieldName) {
+        String normalized = normalizeRequiredText(value, fieldName);
+        if (normalized.length() > 64) {
+            throw new IllegalArgumentException(fieldName + "长度不能超过64");
+        }
+        return normalized;
+    }
+
+    private String normalizeRequiredText(String value, String fieldName) {
+        String normalized = normalizeText(value);
+        if (normalized == null
+                || "null".equalsIgnoreCase(normalized)
+                || "undefined".equalsIgnoreCase(normalized)) {
+            throw new IllegalArgumentException(fieldName + "不能为空");
+        }
+        return normalized;
     }
 
     private Map<String, Object> removeDomainAgentAsyncTaskMetadata(Map<String, Object> metadata) {

@@ -2,6 +2,9 @@ package com.huawei.it.ex.one.interfaces.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -18,12 +21,14 @@ import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.application.integration.conversation.ChatSessionLastRunSummary;
 import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
 import com.huawei.it.ex.one.application.integration.trace.TraceContextProvider;
+import com.huawei.it.ex.one.application.service.chat.CandidateDomainAgentSwitchApplicationService;
 import com.huawei.it.ex.one.application.service.chat.ChatFeedbackApplicationService;
 import com.huawei.it.ex.one.application.service.chat.ChatRunApplicationService;
 import com.huawei.it.ex.one.application.service.chat.ChatStreamApplicationService;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+import com.huawei.it.ex.one.domain.chat.CandidateDomainAgentSwitchCommand;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatRunStartResult;
@@ -44,6 +49,7 @@ import com.huawei.it.ex.one.interfaces.chat.dto.ChatSelectedIntentDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSessionDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.CreateChatRunRequest;
 import com.huawei.it.ex.one.interfaces.chat.dto.MessageFeedbackDto;
+import com.huawei.it.ex.one.interfaces.chat.dto.SwitchDomainAgentRequest;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -61,6 +67,30 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 class ChatProtocolConvergenceTest {
+
+    @Test
+    void translatorBuildsCandidateSwitchCommandWithoutSourceMetadataInheritance() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        SwitchDomainAgentRequest request = new SwitchDomainAgentRequest(
+                " msg_user ",
+                " skill_b ",
+                new ChatSelectedIntentDto("intent_b", "候选技能B"),
+                Map.of("bizKey", "current-only", MessageSkillContext.RUN_METADATA_KEY, "forged"),
+                null,
+                " finance_pc_entry ");
+
+        CandidateDomainAgentSwitchCommand command =
+                translator.toCandidateSwitchCommand(" run_a ", request);
+
+        assertThat(command.sourceRunId()).isEqualTo("run_a");
+        assertThat(command.messageId()).isEqualTo("msg_user");
+        assertThat(command.skillId()).isEqualTo("skill_b");
+        assertThat(command.intentAccessName()).isEqualTo("finance_pc_entry");
+        assertThat(command.metadata()).containsEntry("bizKey", "current-only");
+        assertThat(command.metadata()).doesNotContainKey(MessageSkillContext.RUN_METADATA_KEY);
+        assertThat(SelectedIntentContext.intentId(command.metadata())).isEqualTo("intent_b");
+        assertThat(SelectedIntentContext.intentName(command.metadata())).isEqualTo("候选技能B");
+    }
 
     @Test
     void translatorCarriesIntentAccessNameOutsideMetadata() {
@@ -418,6 +448,7 @@ class ChatProtocolConvergenceTest {
         ChatStreamApplicationService streamService = null;
         ChatController controller = new ChatController(
                 chatFacade,
+                null,
                 streamService,
                 null,
                 null,
@@ -458,6 +489,49 @@ class ChatProtocolConvergenceTest {
     }
 
     @Test
+    void candidateSwitchEndpointReturnsReplacementRunSubscription() {
+        CandidateDomainAgentSwitchApplicationService switchService =
+                mock(CandidateDomainAgentSwitchApplicationService.class);
+        ChatRunStartResult started = new ChatRunStartResult(
+                "run_b", "session1", 20L, Instant.parse("2026-08-29T00:00:00Z"),
+                ChatStreamTopics.runTopic("run_b"));
+        when(switchService.switchDomainAgent(
+                any(UserContext.class), any(TraceContext.class),
+                any(CandidateDomainAgentSwitchCommand.class), any(RuntimeForwardHeaders.class)))
+                .thenReturn(Mono.just(started));
+        ChatController controller = new ChatController(
+                null,
+                switchService,
+                null,
+                null,
+                null,
+                () -> user(),
+                TraceContext::empty,
+                new PermissionChecker(),
+                new ChatRequestTranslator(),
+                new ChatEventTranslator(),
+                new ChatTurnStreamTranslator(),
+                new RuntimeForwardHeaderExtractor(new AgentRuntimeForwardCookieProperties()),
+                new ChatStreamProperties());
+
+        var result = controller.switchDomainAgent(
+                "run_a",
+                new SwitchDomainAgentRequest(
+                        "msg_user", "skill_b",
+                        new ChatSelectedIntentDto("intent_b", "候选技能B"),
+                        Map.of("bizKey", "value"), null, "finance_pc_entry"),
+                "finex_proxy_profile=profile1").block();
+
+        assertThat(result).isNotNull();
+        assertThat(result.runId()).isEqualTo("run_b");
+        assertThat(result.streamTopicId()).isEqualTo("chat-run-run_b");
+        verify(switchService).switchDomainAgent(
+                eq(user()), eq(TraceContext.empty()),
+                any(CandidateDomainAgentSwitchCommand.class),
+                argThat(headers -> "finex_proxy_profile=profile1".equals(headers.cookieHeader())));
+    }
+
+    @Test
     void traceProviderFailureFallsBackToEmptyContextAtEntry() {
         AtomicReference<TraceContext> startTrace = new AtomicReference<>();
         FinanceChatFacade chatFacade = new RunStartOnlyChatFacade(
@@ -469,6 +543,7 @@ class ChatProtocolConvergenceTest {
         );
         ChatController controller = new ChatController(
                 chatFacade,
+                null,
                 null,
                 null,
                 null,

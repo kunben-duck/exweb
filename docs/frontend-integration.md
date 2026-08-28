@@ -206,6 +206,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `DELETE /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto(status=DELETED)` | 删除后清理本地当前会话状态和订阅 |
 | `DELETE /chat/sessions` | Body：`sessionIds[]` | `deletedCount`、`items[]` | 批量删除成功后从列表移除这些 session |
 | `POST /v1/chat/runs` | Body：`commandId`、`sessionId`、`conversationId`、`message`、`runMode`、`channel`、消息树、Interaction、附件和路由字段 | `runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId` | 移动端统一传 `channel=mobile`；省略时自动创建的会话默认为 `web` |
+| `POST /v1/chat/runs/{sourceRunId}/switch-domain-agent` | Path：当前或历史source Run；Body：可信user `messageId`、目标`skillId`、`selectedIntent`及本轮可选metadata | replacement Run的标准`ChatRunStartDto` | 服务端先停止A再创建B；成功后改订阅B的topic，偏好记录仍独立异步提交 |
 | `POST /v1/chat/runs/{runId}/stop` | Path：运行态传 `activeRunId`，等待态传 `waitingSourceRunId`；Header：可选 Cookie | 原有 run 字段，以及可选 `interactionId/interactionStatus/interactionCancelledAt/effectiveRunId` | 运行态用 Event Resume 补齐 `run.cancelled`；等待态不新增事件，stop 后重新查询 `stream-status` |
 | `GET /chat/sessions/{sessionId}/events/resume` | Path：`sessionId`；Query：`afterSeq` | SSE data：`ConversationTurnStreamDto` | 补会话缺失事件；`ConversationTurnStreamDto.payload.encodedItem.data` 中的 ChatEvent 更新本地 `lastSeq` |
 | `GET /chat/runs/{runId}/events/resume` | Path：`runId`；Query：`afterSeq` | SSE data：`ConversationTurnStreamDto`；普通active run持续到终态，DomainAgent异步run在`run.async_running`边界结束且不发送done | 新页签/跨设备恢复active run首选；异步回调完成后可再次调用以补发完成通知和终态 |
@@ -319,6 +320,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `POST /v1/chat/runs` 编辑 user | Body：`{"sessionId":"session_xxx","runMode":"EDIT_USER","editedMessageId":"msg_user_old","message":"新的问题"}`。 |
 | `POST /v1/chat/runs` 重新生成 assistant | Body：`{"sessionId":"session_xxx","runMode":"REGENERATE_ASSISTANT","regeneratedMessageId":"msg_assistant_old"}`。 |
 | `POST /v1/chat/runs` 续接 Interaction | 普通澄清：`{"sessionId":"session_xxx","runMode":"CONTINUE_INTERACTION","interactionId":"interaction_xxx","questionnaireAnswers":{"问题":"答案"}}`。Relay 问卷必须使用 `{"label":{"问题":"答案"}}` 或 `{"ignore":true}`，详见后文。 |
+| `POST /v1/chat/runs/{sourceRunId}/switch-domain-agent` | Body：`{"messageId":"msg_user_xxx","skillId":"skill_b","selectedIntent":{"intentId":"intent_b","intentName":"候选技能B"},"metadata":{},"intentAccessName":"finance_pc_entry"}`。 |
 | `POST /v1/chat/runs/{runId}/stop` | Path：`run_xxx`；无 body。 |
 | `GET /v1/chat/sessions/{sessionId}/events/resume` | Query：`?afterSeq=12000`；首次补齐可传 `?afterSeq=0`。 |
 | `GET /v1/chat/runs/{runId}/events/resume` | Query：`?afterSeq={activeRunFirstSeq - 1}`。 |
@@ -1911,7 +1913,39 @@ run-B 不创建新的可见 user 或 assistant 消息，最终更新原 assistan
 `attachments[]`；若再次得到 `AMBIGUOUS_ROUTE`，新候选卡片继续复用该 assistant。普通
 `UNCLEAR_REFERENCE` 等 Intent 澄清仍采用 `NEW_TURN`，不能按此规则合并。
 
-用户人工指定候选并勾选“记录我的偏好”时，必须先等待上述`POST /v1/chat/runs`成功受理，再独立提交：
+### 候选技能立即切换
+
+对于`POST /v1/chat/intent-candidates`返回的其他候选，不要先分别调用stop和普通`POST /runs`。
+使用以下独立接口，由服务端保证A终态后才创建B：
+
+```http
+POST /v1/chat/runs/{sourceRunId}/switch-domain-agent
+```
+
+```json
+{
+  "messageId": "msg_user_xxx",
+  "skillId": "skill_b",
+  "selectedIntent": {
+    "intentId": "intent_b",
+    "intentName": "候选技能B"
+  },
+  "metadata": {},
+  "agentMode": null,
+  "intentAccessName": "finance_pc_entry"
+}
+```
+
+前端在请求期间继续保留A的订阅，以接收标准`run.cancelled`。接口成功返回标准
+`ChatRunStartDto`后，清空A尚未固化的临时思维链和正文，改订阅B的`streamTopicId`；B的漏失事件按普通
+Run使用`GET /v1/chat/runs/{runB}/events/resume`恢复。页面刷新时，`stream-status`会把B作为当前active Run。
+
+服务端复用A关联的可信user正文和附件，不创建第二条query，也不继承A的metadata。A已有可保存assistant时，
+B保存为同一user下的新assistant版本，默认`/messages`展示B，`versionInfo`可切回A；A没有可保存assistant时，
+历史只有一个user和assistant-B。`CANDIDATE_SWITCH_STOP_PENDING`表示A尚未形成终态，可稍后用相同请求重试；
+`CANDIDATE_SWITCH_STALE_SOURCE`表示会话路径已变化，必须刷新后重新选择。
+
+用户人工指定候选并勾选“记录我的偏好”时，必须先等待上述候选切换接口成功受理，再独立提交：
 
 ```json
 {

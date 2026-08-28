@@ -4,6 +4,7 @@ import com.huawei.it.ex.one.application.integration.conversation.SessionSearchTi
 import com.huawei.it.ex.one.application.integration.intent.IntentCandidateQueryException;
 import com.huawei.it.ex.one.application.integration.intent.IntentPreferenceUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
+import com.huawei.it.ex.one.domain.chat.CandidateSwitchConflictException;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ChatShareUnavailableException;
 import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackBusyException;
@@ -145,6 +146,9 @@ public class ApiExceptionHandler {
     public ResponseEntity<ApiErrorResponse> handleConflict(IllegalStateException ex, HttpServletRequest request) {
         if (ex instanceof ActiveRunExistsException) {
             return error(HttpStatus.CONFLICT, "ACTIVE_RUN_EXISTS", ex.getMessage(), requestPath(request));
+        }
+        if (ex instanceof CandidateSwitchConflictException switchEx) {
+            return error(HttpStatus.CONFLICT, switchEx.code(), switchEx.getMessage(), requestPath(request));
         }
         if (ex instanceof ChatInteractionUnavailableException interactionEx) {
             return error(HttpStatus.CONFLICT, interactionEx.code(), interactionEx.getMessage(), requestPath(request));

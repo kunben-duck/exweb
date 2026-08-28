@@ -363,6 +363,79 @@ paths:
         '409':
           $ref: '#/components/responses/Conflict'
 
+  /v1/chat/runs/{sourceRunId}/switch-domain-agent:
+    post:
+      tags: [Chat Runs & Streaming]
+      operationId: switchChatRunDomainAgent
+      summary: 停止原Run并使用原问题立即调用候选DomainAgent
+      description: |
+        服务端串行完成停止source Run和创建replacement Run，不允许两个Run并发。新Run复用source Run
+        关联的可信user消息、正文及附件，不创建第二条user消息；metadata仅使用本次请求显式提交值。
+
+        source已有assistant时，新回答作为同一user下的assistant sibling并建立版本关系；source没有可保存
+        assistant时，新回答是该user下的首个assistant。成功后前端改订阅返回的streamTopicId，漏失事件继续
+        使用replacement runId调用Run级Resume。
+      parameters:
+        - name: sourceRunId
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 64
+        - $ref: '#/components/parameters/OptionalCookie'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SwitchDomainAgentRequest'
+            example:
+              messageId: msg_user_001
+              skillId: finance_query
+              selectedIntent:
+                intentId: finance.query
+                intentName: 财经智能问数
+              metadata:
+                bizContext:
+                  contextVersion: 1
+                  page:
+                    pageId: finance-dashboard
+                    name: 财经看板
+              agentMode: null
+              intentAccessName: finance_pc_entry
+      responses:
+        '200':
+          description: Replacement Run已创建，首个事件已经持久化
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ChatRunStart'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: source停止未完成、已离开当前消息路径或被其他Run抢占
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                stopPending:
+                  value:
+                    status: 409
+                    error: Conflict
+                    code: CANDIDATE_SWITCH_STOP_PENDING
+                    message: 原任务尚未完成停止，请稍后重试
+                staleSource:
+                  value:
+                    status: 409
+                    error: Conflict
+                    code: CANDIDATE_SWITCH_STALE_SOURCE
+                    message: 原任务已不在当前消息路径，请刷新会话后重试
+
   /v1/chat/intent-candidates:
     post:
       tags: [Chat Runs & Streaming]
@@ -2338,6 +2411,42 @@ components:
         ambiguousOther: questionnaireAnswers 或有效 attachments，重新调用 Intent。
         routeSwitchConfirmation: approved=true/false，不提交 target、答案、附件或 interactionAction。
         relayQuestionnaire: questionnaireAnswers.label 或 questionnaireAnswers.ignore=true，二者互斥。
+
+    SwitchDomainAgentRequest:
+      type: object
+      required: [messageId, skillId, selectedIntent]
+      properties:
+        messageId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: 必须等于source Run关联的可信user消息ID
+        skillId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: replacement Run直连的DomainAgent技能ID
+        selectedIntent:
+          $ref: '#/components/schemas/ChatSelectedIntent'
+        metadata:
+          type: object
+          nullable: true
+          maxProperties: 50
+          properties:
+            bizContext:
+              $ref: '#/components/schemas/ChatBizContext'
+          additionalProperties: true
+          description: 仅使用本次值，不继承source Run metadata
+        agentMode:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/ChatAgentMode'
+          nullable: true
+        intentAccessName:
+          type: string
+          maxLength: 128
+          nullable: true
+          description: 新DomainAgent拒答并在同一replacement Run重意图时使用；空白回退服务端配置
 
     ChatBizContext:
       type: object

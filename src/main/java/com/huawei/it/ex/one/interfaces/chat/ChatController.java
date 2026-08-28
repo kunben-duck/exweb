@@ -5,6 +5,7 @@ import com.huawei.it.ex.one.application.facade.FinanceChatFacade;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.identity.AuthContextProvider;
 import com.huawei.it.ex.one.application.integration.trace.TraceContextProvider;
+import com.huawei.it.ex.one.application.service.chat.CandidateDomainAgentSwitchApplicationService;
 import com.huawei.it.ex.one.application.service.chat.ChatFeedbackApplicationService;
 import com.huawei.it.ex.one.application.service.chat.ChatRunApplicationService;
 import com.huawei.it.ex.one.application.service.chat.ChatStreamApplicationService;
@@ -29,6 +30,7 @@ import com.huawei.it.ex.one.interfaces.chat.dto.ConversationTurnStreamDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.CreateChatRunRequest;
 import com.huawei.it.ex.one.interfaces.chat.dto.MessageFeedbackDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.MessageFeedbackRequest;
+import com.huawei.it.ex.one.interfaces.chat.dto.SwitchDomainAgentRequest;
 
 import jakarta.validation.Valid;
 import reactor.core.publisher.Flux;
@@ -68,6 +70,7 @@ public class ChatController {
     private static final AppLogger log = AppLoggerFactory.getLogger(ChatController.class);
 
     private final FinanceChatFacade chatFacade;
+    private final CandidateDomainAgentSwitchApplicationService candidateSwitchService;
     private final ChatStreamApplicationService chatStreamService;
     private final ChatRunApplicationService chatRunService;
     private final ChatFeedbackApplicationService feedbackService;
@@ -79,7 +82,9 @@ public class ChatController {
     private final ChatTurnStreamTranslator turnStreamTranslator;
     private final RuntimeForwardHeaderExtractor forwardHeaderExtractor;
     private final ChatStreamProperties chatStreamProperties;
-    public ChatController(FinanceChatFacade chatFacade, ChatStreamApplicationService chatStreamService,
+    public ChatController(FinanceChatFacade chatFacade,
+                          CandidateDomainAgentSwitchApplicationService candidateSwitchService,
+                          ChatStreamApplicationService chatStreamService,
                           ChatRunApplicationService chatRunService, ChatFeedbackApplicationService feedbackService,
                           AuthContextProvider auth, TraceContextProvider traceContextProvider,
                           PermissionChecker permissionChecker,
@@ -88,6 +93,7 @@ public class ChatController {
                           RuntimeForwardHeaderExtractor forwardHeaderExtractor,
                           ChatStreamProperties chatStreamProperties) {
         this.chatFacade = chatFacade;
+        this.candidateSwitchService = candidateSwitchService;
         this.chatStreamService = chatStreamService;
         this.chatRunService = chatRunService;
         this.feedbackService = feedbackService;
@@ -118,13 +124,25 @@ public class ChatController {
         TraceContext traceContext = resolveTraceContext();
         RuntimeForwardHeaders forwardHeaders = forwardHeaderExtractor.fromCookieHeader(cookieHeader);
         return chatFacade.startRun(user, traceContext, requestTranslator.toCommand(request), forwardHeaders)
-                .map(runStart -> new ChatRunStartDto(
-                        runStart.runId(),
-                        runStart.sessionId(),
-                        runStart.firstSeq(),
-                        runStart.createdAt(),
-                        runStart.streamTopicId()
-                ))
+                .map(this::toRunStartDto)
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /** 停止source Run并使用同一user消息直连指定候选DomainAgent。 */
+    @PostMapping(value = "/runs/{sourceRunId}/switch-domain-agent")
+    public Mono<ChatRunStartDto> switchDomainAgent(
+            @PathVariable("sourceRunId") String sourceRunId,
+            @Valid @RequestBody SwitchDomainAgentRequest request,
+            @RequestHeader(value = HttpHeaders.COOKIE, required = false) String cookieHeader) {
+        UserContext user = resolveChatUser();
+        TraceContext traceContext = resolveTraceContext();
+        RuntimeForwardHeaders forwardHeaders = forwardHeaderExtractor.fromCookieHeader(cookieHeader);
+        return candidateSwitchService.switchDomainAgent(
+                        user,
+                        traceContext,
+                        requestTranslator.toCandidateSwitchCommand(sourceRunId, request),
+                        forwardHeaders)
+                .map(this::toRunStartDto)
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -262,6 +280,16 @@ public class ChatController {
                     .build(), ex);
             return TraceContext.empty();
         }
+    }
+
+    private ChatRunStartDto toRunStartDto(
+            com.huawei.it.ex.one.domain.chat.ChatRunStartResult runStart) {
+        return new ChatRunStartDto(
+                runStart.runId(),
+                runStart.sessionId(),
+                runStart.firstSeq(),
+                runStart.createdAt(),
+                runStart.streamTopicId());
     }
 
     private ResponseEntity<Flux<ServerSentEvent<ConversationTurnStreamDto>>> sseResponse(

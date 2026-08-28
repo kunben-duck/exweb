@@ -73,6 +73,7 @@ DomainAgent `isSaveSession` 对 assistant 历史投影的控制边界、企业�
 - `GET /v1/chat/runs/{runId}/events/resume?afterSeq={seq}`：run 级事件恢复并接续 live，用于跨页签、跨浏览器或跨电脑续接正在输出的当前回答，直到 run 终态；长时间无业务事件时发送 turn stream `heartbeat`，终态后发送 `done`。live tail 异常时当前连接结束，前端从最后成功处理的 sequence 重新恢复。
 - `GET /v1/chat/sessions/{sessionId}/stream-status`：查询当前会话最新事件序号、active run、`activeStreamTopicId`、是否可取消、是否等待用户澄清输入，以及当前 `bindingProvider/bindingTargetId/bindingIntentName/bindingRouteSource` 等绑定摘要。等待态返回 `waitingSourceRunId`，供前端调用统一 stop；`AMBIGUOUS_ROUTE` 等待态还会返回 `autoSelectAt/autoSelectTimeoutMs`。
 - `POST /v1/chat/intent-candidates`：校验当前用户的user `messageId`后调用Intent置信度接口，直接返回有序候选数组；复用Intent单次超时和最大重试次数，但只重试网络异常、HTTP 408/5xx，并使用候选专用并发闸门、鉴权线程池和退避，不占用普通Intent流式鉴权资源。候选结果不缓存、不持久化。
+- `POST /v1/chat/runs/{sourceRunId}/switch-domain-agent`：串行停止source Run后，复用其可信user消息和附件直连候选DomainAgent；不重复创建user消息。成功后返回replacement Run的`runId/streamTopicId`，source已有assistant时形成A/B版本。
 - `POST /v1/chat/intent-preference-corrections`：在Run成功受理后独立记录候选技能或模糊意图的人工选择；同一用户、Intent入口和source消息只保留最后一次选择，写入失败不回滚已启动的Run。
 - `POST /v1/chat/runs/{runId}/stop`：运行态传 active runId；等待态传 `waitingSourceRunId`。等待态 stop 取消当前 Interaction，并对其关联的 Relay/DomainAgent 执行 best-effort 真实取消；历史 run-A 仍保留 `WAITING_USER`。
 - `POST /v1/chat/messages/{messageId}/feedback`：提交或切换 assistant 消息点赞/点踩。

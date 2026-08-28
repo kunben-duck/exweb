@@ -4,6 +4,7 @@ import com.huawei.it.ex.one.application.integration.conversation.SessionSearchTi
 import com.huawei.it.ex.one.application.integration.intent.IntentCandidateQueryException;
 import com.huawei.it.ex.one.application.integration.intent.IntentPreferenceUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
+import com.huawei.it.ex.one.domain.chat.CandidateSwitchConflictException;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ChatShareUnavailableException;
 import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackBusyException;
@@ -140,6 +141,10 @@ public class ReactiveApiExceptionHandler {
                                                                                ServerWebExchange exchange) {
         if (ex instanceof ActiveRunExistsException) {
             return ApiExceptionHandler.error(HttpStatus.CONFLICT, "ACTIVE_RUN_EXISTS", ex.getMessage(), requestPath(exchange));
+        }
+        if (ex instanceof CandidateSwitchConflictException switchEx) {
+            return ApiExceptionHandler.error(
+                    HttpStatus.CONFLICT, switchEx.code(), switchEx.getMessage(), requestPath(exchange));
         }
         if (ex instanceof ChatInteractionUnavailableException interactionEx) {
             return ApiExceptionHandler.error(HttpStatus.CONFLICT, interactionEx.code(), interactionEx.getMessage(), requestPath(exchange));

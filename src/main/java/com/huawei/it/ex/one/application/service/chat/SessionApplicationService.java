@@ -21,6 +21,7 @@ import com.huawei.it.ex.one.common.logging.AppLogger;
 import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
+import com.huawei.it.ex.one.domain.chat.CandidateSwitchConflictException;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
@@ -1067,6 +1068,42 @@ public class SessionApplicationService implements ChatSessionFacade {
         }
         sessionRepository.updateCurrentLeaf(user.tenantId(), user.ownerUserId(), session.id(), userMessage.id());
         return new ChatRunMessagePlan(ChatRunMode.REGENERATE_ASSISTANT, userMessage.id(), userMessage, regenerated.id());
+    }
+
+    /**
+     * 在候选切换admission事务中复用可信user消息，并按source Run已有结果建立assistant版本关系。
+     */
+    ChatRunMessagePlan prepareCandidateSwitchPlan(
+            UserContext user,
+            ChatSession session,
+            String sourceRunId,
+            String userMessageId,
+            String assistantMessageId) {
+        ChatMessage userMessage = requireMessageInSession(session, userMessageId);
+        ensureUnlockedUserMessage(userMessage, "候选技能关联消息");
+        ChatMessage sourceAssistant = null;
+        if (assistantMessageId != null && !assistantMessageId.isBlank()) {
+            sourceAssistant = requireMessageInSession(session, assistantMessageId);
+            ensureUnlockedAssistantMessage(sourceAssistant, "候选技能被替换消息");
+            if (!userMessage.id().equals(sourceAssistant.parentMessageId())
+                    || sourceRunId == null
+                    || !sourceRunId.equals(sourceAssistant.runId())) {
+                throw CandidateSwitchConflictException.staleSource(sourceRunId);
+            }
+        }
+        String currentLeaf = session.currentLeafMessageId();
+        boolean currentUser = userMessage.id().equals(currentLeaf);
+        boolean currentAssistant = sourceAssistant != null && sourceAssistant.id().equals(currentLeaf);
+        if (!currentUser && !currentAssistant) {
+            throw CandidateSwitchConflictException.staleSource(sourceRunId);
+        }
+        sessionRepository.updateCurrentLeaf(
+                user.tenantId(), user.ownerUserId(), session.id(), userMessage.id());
+        return new ChatRunMessagePlan(
+                ChatRunMode.REGENERATE_ASSISTANT,
+                userMessage.id(),
+                userMessage,
+                sourceAssistant == null ? null : sourceAssistant.id());
     }
 
     private ChatMessage createUserMessage(UserMessageCreateCommand command) {

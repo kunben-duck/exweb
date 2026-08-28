@@ -3,7 +3,9 @@ package com.huawei.it.ex.one.application.service.chat;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
+import com.huawei.it.ex.one.domain.chat.CandidateSwitchConflictException;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
@@ -105,6 +107,50 @@ public class ChatRunAdmissionCommitService {
         return new AdmissionResult(messagePlan, run);
     }
 
+    /** 原子受理候选DomainAgent切换：复用source user消息并替换冲突Binding。 */
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
+    public AdmissionResult commitCandidateSwitch(CandidateSwitchAdmissionCommand request) {
+        if (request == null || request.source() == null) {
+            throw new IllegalArgumentException("候选技能切换admission参数不能为空");
+        }
+        UserContext user = request.user();
+        ChatSession session = request.source().session();
+        sessionService.lockForMessageMutation(
+                user.tenantId(), user.ownerUserId(), session);
+        ChatSession currentSession = sessionService.requireSessionForInternalUpdate(
+                user.tenantId(), user.ownerUserId(), session.id());
+        try {
+            chatRunService.rejectIfActiveRunExists(user, currentSession.id());
+        } catch (ActiveRunExistsException ex) {
+            throw CandidateSwitchConflictException.staleSource(request.source().sourceRunId());
+        }
+        ChatRunMessagePlan messagePlan = sessionService.prepareCandidateSwitchPlan(
+                user,
+                currentSession,
+                request.source().sourceRunId(),
+                request.source().userMessage().id(),
+                request.source().assistantMessageId());
+        ChatRun run;
+        try {
+            run = chatRunService.insertRunning(new CreateChatRunContext(
+                    request.runId(),
+                    user,
+                    currentSession.id(),
+                    null,
+                    null,
+                    SelectedIntentContext.removeReserved(request.command().metadata()),
+                    messagePlan.runMode(),
+                    messagePlan.parentMessageId(),
+                    messagePlan.userMessage().id()));
+        } catch (ActiveRunExistsException ex) {
+            throw CandidateSwitchConflictException.staleSource(request.source().sourceRunId());
+        }
+        interactionService.cancelOpenBySessionAndCount(user, currentSession.id());
+        List<RuntimeBinding> cancelledBindings = runtimeBindingService.cancelActiveForAdmission(
+                user.tenantId(), user.ownerUserId(), currentSession.id());
+        return new AdmissionResult(messagePlan, run, cancelledBindings);
+    }
+
     /**
      * 原子受理意图澄清回答：新 user 节点、continuation run 和旧 Interaction ANSWERED 同时成立。
      */
@@ -203,6 +249,14 @@ public class ChatRunAdmissionCommitService {
         DirectRuntimeAdmissionCommand {
             attachments = attachments == null ? List.of() : List.copyOf(attachments);
         }
+    }
+
+    record CandidateSwitchAdmissionCommand(
+            UserContext user,
+            ChatCommand command,
+            String runId,
+            CandidateSwitchRunSource source
+    ) {
     }
 
     public record AdmissionResult(ChatRunMessagePlan messagePlan, ChatRun run,

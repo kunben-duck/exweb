@@ -22,6 +22,7 @@ import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicatio
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
+import com.huawei.it.ex.one.domain.chat.CandidateSwitchConflictException;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessageAttachment;
@@ -512,6 +513,63 @@ class SessionApplicationServiceTest {
         assertThat(fixture.service.listVariants(user(), fixture.session.id(), original.assistant().id()))
                 .extracting(ChatMessage::content)
                 .containsExactly("第一次回答", "第二次回答");
+    }
+
+    @Test
+    void candidateSwitchReusesUserAndCreatesAssistantSiblingWhenSourceAnswerExists() {
+        TestFixture fixture = fixture();
+        MessagePair original = completeTurn(fixture, "问题", "第一次回答", "run1");
+        ChatSession current = fixture.sessions.findById(fixture.session.id()).orElseThrow();
+
+        ChatRunMessagePlan plan = fixture.service.prepareCandidateSwitchPlan(
+                user(), current, "run1", original.user().id(), original.assistant().id());
+
+        assertThat(plan.runMode()).isEqualTo(ChatRunMode.REGENERATE_ASSISTANT);
+        assertThat(plan.userMessage().id()).isEqualTo(original.user().id());
+        assertThat(plan.regeneratedFromMessageId()).isEqualTo(original.assistant().id());
+        assertThat(fixture.sessions.findById(fixture.session.id()).orElseThrow().currentLeafMessageId())
+                .isEqualTo(original.user().id());
+    }
+
+    @Test
+    void candidateSwitchUsesSameUserWithoutRequiringExistingAssistant() {
+        TestFixture fixture = fixture();
+        ChatRunMessagePlan original = fixture.service.prepareRunMessage(
+                user(),
+                command("问题", ChatRunMode.NEXT, null, null, null),
+                fixture.session,
+                "run1",
+                List.of());
+        ChatSession current = fixture.sessions.findById(fixture.session.id()).orElseThrow();
+
+        ChatRunMessagePlan plan = fixture.service.prepareCandidateSwitchPlan(
+                user(), current, "run1", original.userMessage().id(), null);
+
+        assertThat(plan.userMessage().id()).isEqualTo(original.userMessage().id());
+        assertThat(plan.regeneratedFromMessageId()).isNull();
+        assertThat(fixture.service.listMessages(user(), fixture.session.id(), null, 50).items())
+                .extracting(ChatMessage::id)
+                .containsExactly(original.userMessage().id());
+    }
+
+    @Test
+    void candidateSwitchRejectsSourceOutsideCurrentPath() {
+        TestFixture fixture = fixture();
+        MessagePair first = completeTurn(fixture, "第一问", "第一答", "run1");
+        ChatRunMessagePlan secondPlan = fixture.service.prepareRunMessage(
+                user(),
+                command("第二问", ChatRunMode.NEXT, first.assistant().id(), null, null),
+                fixture.sessions.findById(fixture.session.id()).orElseThrow(),
+                "run2",
+                List.of());
+        saveAssistant(fixture, "第二答", "run2", secondPlan.userMessage().id(), null);
+        ChatSession current = fixture.sessions.findById(fixture.session.id()).orElseThrow();
+
+        assertThatThrownBy(() -> fixture.service.prepareCandidateSwitchPlan(
+                        user(), current, "run1", first.user().id(), first.assistant().id()))
+                .isInstanceOf(CandidateSwitchConflictException.class)
+                .extracting(error -> ((CandidateSwitchConflictException) error).code())
+                .isEqualTo(CandidateSwitchConflictException.STALE_SOURCE);
     }
 
     @Test

@@ -7,7 +7,9 @@ import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
+import com.huawei.it.ex.one.domain.chat.CandidateSwitchConflictException;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
@@ -107,6 +109,66 @@ final class StandardRunInputPreparer {
                 explicitRuntimeTarget,
                 forceReroute,
                 directBypass,
+                startAttempt);
+    }
+
+    /**
+     * 使用候选切换入口已经校验的可信user消息准备Run-B，不创建新的user节点。
+     */
+    PreparedRun prepareCandidateSwitch(Request request, CandidateSwitchRunSource source) {
+        if (source == null || source.session() == null || source.userMessage() == null
+                || source.resolvedAttachments() == null) {
+            throw new IllegalArgumentException("候选技能切换source上下文不完整");
+        }
+        RunStartAttempt startAttempt = request.startAttempt();
+        runStartCoordinator.ensureActive(startAttempt, "before-candidate-switch-prepare");
+        RuntimeForwardHeaders headers = normalizeForwardHeaders(request.forwardHeaders());
+        ChatCommand identified = identifiedCommand(request.user(), request.command());
+        ExplicitRuntimeTarget explicitRuntimeTarget = explicitRuntimeTarget(identified);
+        if (explicitRuntimeTarget == null || !explicitRuntimeTarget.domainAgent()) {
+            throw new IllegalArgumentException("候选技能切换仅支持直连DomainAgent");
+        }
+        ChatSession session = source.session();
+        if (!session.id().equals(identified.sessionId())
+                || !session.id().equals(source.userMessage().sessionId())) {
+            throw CandidateSwitchConflictException.staleSource(source.sourceRunId());
+        }
+        try {
+            chatRunService.rejectIfActiveRunExists(request.user(), session.id());
+        } catch (ActiveRunExistsException ex) {
+            throw CandidateSwitchConflictException.staleSource(source.sourceRunId());
+        }
+        List<AttachmentRef> attachments = source.resolvedAttachments().attachments();
+        List<UploadedDocument> documents = source.resolvedAttachments().documents();
+        ChatCommand normalized = normalizedCommand(
+                request.user(), session, identified, source.userMessage().content(), attachments);
+        String runId = startAttempt == null
+                ? idGenerator.newId(
+                        "run",
+                        IdGenerateContext.of(
+                                request.user().tenantId(),
+                                request.user().ownerUserId(),
+                                session.id()))
+                : startAttempt.runId();
+        String memoryLeaf = source.userMessage().parentMessageId();
+        MemoryContext memory = memoryAssembler.assemble(
+                normalized,
+                memoryLeaf,
+                memoryLeaf == null || memoryLeaf.isBlank());
+        runStartCoordinator.ensureActive(startAttempt, "after-candidate-switch-memory-load");
+        return new PreparedRun(
+                request.user(),
+                request.traceContext(),
+                headers,
+                normalized,
+                session,
+                attachments,
+                documents,
+                memory,
+                runId,
+                explicitRuntimeTarget,
+                false,
+                true,
                 startAttempt);
     }
 

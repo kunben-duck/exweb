@@ -91,6 +91,26 @@ public class MyBatisRuntimeBindingRepository implements RuntimeBindingRepository
 
     @Override
     @Transactional(timeoutString =
+            "${financeex.domain-agent.binding-compensation-transaction-timeout-seconds:2}")
+    public boolean completeActiveDomainAgentForRun(
+            RuntimeBinding binding,
+            String expectedLastRunId,
+            String leafMessageId,
+            Instant expiresAt,
+            Instant updatedAt) {
+        if (binding == null || expectedLastRunId == null || expectedLastRunId.isBlank()
+                || leafMessageId == null || leafMessageId.isBlank()) {
+            return false;
+        }
+        RuntimeBinding desired = new RuntimeBinding(
+                binding.id(), binding.tenantId(), binding.userId(), binding.chatSessionId(), binding.provider(),
+                leafMessageId, binding.runtimeSessionId(), binding.status(), binding.lastRunId(), expiresAt,
+                binding.createdAt(), updatedAt, binding.metadata());
+        return mapper.completeActiveDomainAgentForRun(toRow(desired), expectedLastRunId) == 1;
+    }
+
+    @Override
+    @Transactional(timeoutString =
             "${financeex.runtime-binding.interaction-resume-transaction-timeout-seconds:2}")
     public Optional<RuntimeBinding> resumeInteractionWithExecutionGuard(
             RuntimeBinding binding,

@@ -35,10 +35,9 @@ public interface ChatMessageRepository {
         return message;
     }
 
-    /** 删除指定assistant中由当前run生成的Parts，供异步结果REPLACE使用。 */
-    default int deletePartsByMessageAndRun(
-            String tenantId, String userId, String sessionId, String messageId, String runId) {
-        return 0;
+    /** Updates only assistant metadata while preserving content, run association, timestamps and parts. */
+    default ChatMessage updateAssistantMetadata(ChatMessage existing, String metadataJson) {
+        return existing == null ? null : existing.withMetadataJson(metadataJson);
     }
 
     /**

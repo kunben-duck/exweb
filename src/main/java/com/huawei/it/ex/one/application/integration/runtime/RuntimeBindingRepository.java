@@ -4,6 +4,7 @@ import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -83,6 +84,37 @@ public interface RuntimeBindingRepository {
      * @return 已保存的 Runtime 绑定。
      */
     RuntimeBinding save(RuntimeBinding binding);
+
+    /**
+     * Moves a DomainAgent binding to the completed assistant only while the same run still owns it.
+     * Production implementations must use one conditional update rather than saving the input snapshot.
+     */
+    default boolean completeActiveDomainAgentForRun(
+            RuntimeBinding binding,
+            String expectedLastRunId,
+            String leafMessageId,
+            Instant expiresAt,
+            Instant updatedAt) {
+        if (binding == null || expectedLastRunId == null || expectedLastRunId.isBlank()
+                || leafMessageId == null || leafMessageId.isBlank()) {
+            return false;
+        }
+        return findById(binding.id())
+                .filter(current -> current.status() == RuntimeBindingStatus.ACTIVE)
+                .filter(current -> expectedLastRunId.equals(current.lastRunId()))
+                .filter(current -> binding.tenantId().equals(current.tenantId()))
+                .filter(current -> binding.userId().equals(current.userId()))
+                .filter(current -> binding.chatSessionId().equals(current.chatSessionId()))
+                .filter(current -> "domain-agent".equals(current.provider()))
+                .map(current -> {
+                    save(new RuntimeBinding(
+                            current.id(), current.tenantId(), current.userId(), current.chatSessionId(),
+                            current.provider(), leafMessageId, current.runtimeSessionId(), current.status(),
+                            current.lastRunId(), expiresAt, current.createdAt(), updatedAt, current.metadata()));
+                    return true;
+                })
+                .orElse(false);
+    }
 
     /**
      * 在 run/execution 写入权保护下刷新等待态 Relay Binding。

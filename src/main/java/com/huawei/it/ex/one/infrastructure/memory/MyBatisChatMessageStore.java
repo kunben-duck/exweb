@@ -64,9 +64,13 @@ public class MyBatisChatMessageStore {
         return message;
     }
 
-    public int deletePartsByMessageAndRun(
-            String tenantId, String userId, String sessionId, String messageId, String runId) {
-        return mapper.deletePartsByMessageAndRun(tenantId, userId, sessionId, messageId, runId);
+    public ChatMessage updateAssistantMetadata(ChatMessage existing, String metadataJson) {
+        ChatMessage updatedMessage = existing.withMetadataJson(metadataJson);
+        int updated = mapper.updateAssistantMetadata(toRow(updatedMessage));
+        if (updated != 1) {
+            throw new IllegalArgumentException("assistant 消息不存在或不属于当前用户: " + existing.id());
+        }
+        return updatedMessage;
     }
 
     public ChatMessagePart savePart(ChatMessagePart part) {

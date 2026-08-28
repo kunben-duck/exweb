@@ -131,6 +131,21 @@
     </update>
 
     <!--
+      异步任务完成时只更新 assistant 状态元数据，不覆盖正文、来源 run、时间或 parts。
+      入参: ChatMessageRow，tenantId/userId/sessionId/id 定位当前用户当前会话的 assistant 消息，
+            metadataJson 为完成通知合并后的新元数据。
+    -->
+    <update id="updateAssistantMetadata" parameterType="com.huawei.it.ex.one.infrastructure.memory.ChatMessageRow">
+        UPDATE fin_ex_chat_message_t
+        SET metadata_json = #{metadataJson}
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND id = #{id}
+          AND role = 'assistant'
+    </update>
+
+    <!--
       批量写入 assistant 过程化展示片段，如 thinking、tool、reference、card 和 answer 校验片段。
       入参: rows 为 ChatMessagePartRow 列表，每行的 id 为 part 主键，
             tenantId/userId/sessionId/messageId/runId 为归属与关联边界，
@@ -152,19 +167,6 @@
             )
         </foreach>
     </insert>
-
-    <!--
-      异步回调REPLACE模式删除目标assistant下仅由当前run生成的旧parts，保留其他run历史。
-      入参: tenantId/userId/sessionId/messageId限定消息归属，runId限定待替换的part来源。
-    -->
-    <delete id="deletePartsByMessageAndRun">
-        DELETE FROM fin_ex_chat_message_part_t
-        WHERE tenant_id = #{tenantId}
-          AND user_id = #{userId}
-          AND session_id = #{sessionId}
-          AND message_id = #{messageId}
-          AND run_id = #{runId}
-    </delete>
 
     <!--
       写入消息与文档附件的引用关系，分支时复制引用而不复制对象存储文件。

@@ -525,6 +525,42 @@ class MyBatisXmlMapperConsistencyTest {
     }
 
     @Test
+    void asyncCallbackTerminalGateShouldRejectExpiredExecutionLease() throws IOException {
+        String mapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("persistence/ChatRunMapper.opengauss.xml"));
+        int guardStart = mapper.indexOf("guard == \"ASYNC_CALLBACK\"");
+        int guardEnd = mapper.indexOf("</when>", guardStart);
+
+        assertThat(guardStart).isGreaterThanOrEqualTo(0);
+        assertThat(guardEnd).isGreaterThan(guardStart);
+        assertThat(mapper.substring(guardStart, guardEnd))
+                .contains("e.execution_status = 'ASYNC_WAITING'")
+                .contains("e.lease_until &gt;= #{finishedAt}");
+    }
+
+    @Test
+    void asyncDomainAgentBindingCompletionShouldBeOwnershipGuardedAndNarrow() throws IOException {
+        String mapper = Files.readString(
+                MAPPER_XML_ROOT.resolve("runtime/RuntimeBindingMapper.opengauss.xml"));
+        int updateStart = mapper.indexOf("<update id=\"completeActiveDomainAgentForRun\"");
+        int updateEnd = mapper.indexOf("</update>", updateStart);
+
+        assertThat(updateStart).isGreaterThanOrEqualTo(0);
+        assertThat(updateEnd).isGreaterThan(updateStart);
+        assertThat(mapper.substring(updateStart, updateEnd))
+                .contains("SET leaf_message_id = #{row.leafMessageId}")
+                .contains("expires_at = #{row.expiresAt}")
+                .contains("updated_at = #{row.updatedAt}")
+                .contains("tenant_id = #{row.tenantId}")
+                .contains("user_id = #{row.userId}")
+                .contains("chat_session_id = #{row.chatSessionId}")
+                .contains("provider = 'domain-agent'")
+                .contains("status = 'ACTIVE'")
+                .contains("last_run_id = #{expectedLastRunId}")
+                .doesNotContain("last_run_id = #{row.lastRunId}", "metadata_json =", "status = #{row.status}");
+    }
+
+    @Test
     void interactionExecutionGateShouldAcceptAnsweredIntentClarificationOnly() throws IOException {
         String mapper = Files.readString(
                 MAPPER_XML_ROOT.resolve("persistence/ChatRunExecutionMapper.opengauss.xml"));

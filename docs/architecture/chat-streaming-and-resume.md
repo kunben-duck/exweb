@@ -806,10 +806,14 @@ run 仍活跃时，接口连接 Redis live tail。若 live source 返回 `Stream
 - 已经订阅run topic的WebSocket可以继续保持，并在内部回调到达时接收新事件；页面关闭不会影响后台任务。
 - 页面重新打开时先读取`stream-status.activeRunPhase=ASYNC_RUNNING`，无需保持一个长期SSE连接。
 
-DomainAgent随后使用可信`runId`调用内部回调。服务端按
-`run.async_result_started -> 标准业务事件 -> message.completed -> run.completed/run.failed`提交并发布；无结果帧时
-仍发布开始和终态事件。回调、用户stop和24小时超时竞争同一数据库终态CAS，只有获胜者能够更新assistant、
-推进未读sequence并关闭run，重复或迟到回调不会覆盖已有终态。
+DomainAgent随后使用可信`runId`调用内部回调。第一版只提交完成或失败，不接收结果帧；服务端按
+`run.async_finished -> message.completed -> run.completed/run.failed`提交并发布。回调只修改assistant的异步状态
+metadata，不修改正文、runId或Parts。回调、用户stop和24小时超时竞争同一数据库终态CAS，只有获胜者能够
+推进未读sequence并关闭run，重复或迟到回调不会覆盖已有终态。回调早于`ASYNC_WAITING`提交时返回带
+`Retry-After: 1`的可重试409；到期租约直接在终态CAS中拒绝。原始请求体受硬边界保护，可选`error`
+仅接受文本并最多保留1024个Unicode码点。Binding
+只在expected `lastRunId`仍匹配时条件移动。数据库事实先提交，实时发布失败不回滚，客户端通过Run Resume
+恢复持久化的完成通知和终态。
 
 ## 12. 浏览器恢复流程
 

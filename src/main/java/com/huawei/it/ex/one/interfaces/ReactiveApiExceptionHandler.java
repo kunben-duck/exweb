@@ -7,6 +7,8 @@ import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ChatShareUnavailableException;
 import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackBusyException;
+import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackNotReadyException;
+import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackPayloadTooLargeException;
 
 import jakarta.validation.ConstraintViolationException;
 
@@ -33,6 +35,23 @@ public class ReactiveApiExceptionHandler {
             DomainAgentAsyncCallbackBusyException ex, ServerWebExchange exchange) {
         return ApiExceptionHandler.error(HttpStatus.TOO_MANY_REQUESTS,
                 "DOMAIN_AGENT_ASYNC_CALLBACK_BUSY", ex.getMessage(), requestPath(exchange));
+    }
+
+    @ExceptionHandler(DomainAgentAsyncCallbackNotReadyException.class)
+    public ResponseEntity<ApiExceptionHandler.ApiErrorResponse> handleDomainAgentAsyncCallbackNotReady(
+            DomainAgentAsyncCallbackNotReadyException ex, ServerWebExchange exchange) {
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> response = ApiExceptionHandler.error(
+                HttpStatus.CONFLICT, "DOMAIN_AGENT_ASYNC_NOT_READY", ex.getMessage(), requestPath(exchange));
+        return ResponseEntity.status(response.getStatusCode())
+                .header("Retry-After", "1")
+                .body(response.getBody());
+    }
+
+    @ExceptionHandler(DomainAgentAsyncCallbackPayloadTooLargeException.class)
+    public ResponseEntity<ApiExceptionHandler.ApiErrorResponse> handleDomainAgentAsyncCallbackPayloadTooLarge(
+            DomainAgentAsyncCallbackPayloadTooLargeException ex, ServerWebExchange exchange) {
+        return ApiExceptionHandler.error(HttpStatus.PAYLOAD_TOO_LARGE,
+                "DOMAIN_AGENT_ASYNC_CALLBACK_TOO_LARGE", ex.getMessage(), requestPath(exchange));
     }
     /** Preference recording is independent from run admission and reports a retryable 503. */
     @ExceptionHandler(IntentPreferenceUnavailableException.class)

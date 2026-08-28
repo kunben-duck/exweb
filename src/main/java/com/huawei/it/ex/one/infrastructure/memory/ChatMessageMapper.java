@@ -30,29 +30,20 @@ public interface ChatMessageMapper {
     int updateAssistant(ChatMessageRow row);
 
     /**
+     * 仅更新已有 assistant 消息的元数据，不覆盖正文、来源 run、时间或 Parts。
+     *
+     * @param row 消息更新行，tenantId/userId/sessionId/id 定位消息，metadataJson 为新值。
+     * @return 影响行数。
+     */
+    int updateAssistantMetadata(ChatMessageRow row);
+
+    /**
      * 批量写入 assistant 消息过程片段。
      *
      * @param rows part 写入行，包含消息归属、part 类型、展示语义、payload 和排序号。
      * @return 实际插入行数。
      */
     int insertParts(@Param("rows") List<ChatMessagePartRow> rows);
-
-    /**
-     * 删除指定assistant消息中由当前run生成的parts。
-     *
-     * @param tenantId 租户标识。
-     * @param userId 用户标识。
-     * @param sessionId 会话标识。
-     * @param messageId assistant消息标识。
-     * @param runId 需要替换结果的run标识。
-     * @return 实际删除行数。
-     */
-    int deletePartsByMessageAndRun(
-            @Param("tenantId") String tenantId,
-            @Param("userId") String userId,
-            @Param("sessionId") String sessionId,
-            @Param("messageId") String messageId,
-            @Param("runId") String runId);
 
     /**
      * 写入消息与文档附件的引用关系。

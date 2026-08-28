@@ -339,20 +339,20 @@ POST /v1/internal/domain-agent/async-tasks/callback
 {
   "runId": "run_xyz_789",
   "status": "COMPLETED",
-  "resultMode": "APPEND",
-  "frames": [
-    {"content": "异步任务结果"},
-    {"searchList": []}
-  ],
   "error": null
 }
 ```
 
 - `status`仅支持`COMPLETED/FAILED`。
-- `frames`可为空；非空时`resultMode`必须为`APPEND/REPLACE`。
-- 回调帧沿用本章标准响应结构，不得再次发送`agent.async_started`。
+- 第一版回调只通知任务终态，不接收结果帧，不修改已有assistant正文或Parts。
 - 同一个`runId`只接受一次有效回调；stop、超时或已完成后的回调返回`accepted=false`。
+- 回调早于ChatService提交`ASYNC_WAITING`时返回`409/DOMAIN_AGENT_ASYNC_NOT_READY`及
+  `Retry-After: 1`；DomainAgent必须使用同一`runId`和请求体按秒重试至少15秒。
+- 原始请求体默认最多5MiB；可选`error`仅接受文本，trim后为空则省略，超过1024个Unicode码点时
+  安全截断；单实例默认最多并发处理4个回调，容量满返回429，请求体超限返回413。
 - DomainAgent stop接口继续使用同一个`runId`停止后台任务。
+- ChatService持久化`run.async_finished`并依次发布`message.completed`和run终态；只更新assistant异步状态metadata。
+  数据库提交后再发布实时Event，发布失败不回滚终态，前端可通过Run Resume恢复。
  
 
 七、集成开发准入条件

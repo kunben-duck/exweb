@@ -327,6 +327,7 @@
                       AND e.user_id = r.user_id
                       AND e.session_id = r.session_id
                       AND e.execution_status = 'ASYNC_WAITING'
+                      AND e.lease_until &gt;= #{finishedAt}
                 )
             </when>
             <when test='guard == "ASYNC_TIMEOUT"'>

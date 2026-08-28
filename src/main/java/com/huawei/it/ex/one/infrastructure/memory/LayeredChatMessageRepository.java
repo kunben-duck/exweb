@@ -89,15 +89,13 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
     }
 
     @Override
-    public int deletePartsByMessageAndRun(
-            String tenantId, String userId, String sessionId, String messageId, String runId) {
-        ChatMessage previous = databaseStore.findByOwnerAndId(tenantId, userId, messageId).orElse(null);
-        int deleted = databaseStore.deletePartsByMessageAndRun(
-                tenantId, userId, sessionId, messageId, runId);
-        if (deleted > 0 && previous != null) {
-            updateCacheAfterCommit(() -> redisCache.remove(previous));
-        }
-        return deleted;
+    public ChatMessage updateAssistantMetadata(ChatMessage existing, String metadataJson) {
+        ChatMessage updated = databaseStore.updateAssistantMetadata(existing, metadataJson);
+        updateCacheAfterCommit(() -> {
+            redisCache.remove(existing);
+            redisCache.append(updated);
+        });
+        return updated;
     }
 
     private ChatMessage mergeParts(ChatMessage previous, ChatMessage updated) {

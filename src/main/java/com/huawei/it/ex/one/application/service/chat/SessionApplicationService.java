@@ -1132,16 +1132,23 @@ public class SessionApplicationService implements ChatSessionFacade {
         return message;
     }
 
-    ChatSession requireSessionForInternalUpdate(String tenantId, String userId, String sessionId) {
-        return requireOwnedSession(tenantId, userId, sessionId, false);
+    ChatMessage updateAssistantMetadataForInternalUse(
+            ChatSession session,
+            ChatMessage existing,
+            String metadataJson) {
+        if (session == null || existing == null
+                || !session.id().equals(existing.sessionId())
+                || !session.tenantId().equals(existing.tenantId())
+                || !session.userId().equals(existing.userId())
+                || !"assistant".equalsIgnoreCase(existing.role())) {
+            throw new IllegalArgumentException("异步任务目标消息不属于当前会话");
+        }
+        ensureUnlockedAssistantMessage(existing, "异步任务 assistant 消息");
+        return messageRepository.updateAssistantMetadata(existing, metadataJson);
     }
 
-    int deleteAssistantPartsForRun(ChatSession session, String messageId, String runId) {
-        if (session == null || messageId == null || messageId.isBlank() || runId == null || runId.isBlank()) {
-            throw new IllegalArgumentException("异步结果Part删除参数不完整");
-        }
-        return messageRepository.deletePartsByMessageAndRun(
-                session.tenantId(), session.userId(), session.id(), messageId, runId);
+    ChatSession requireSessionForInternalUpdate(String tenantId, String userId, String sessionId) {
+        return requireOwnedSession(tenantId, userId, sessionId, false);
     }
 
     /**

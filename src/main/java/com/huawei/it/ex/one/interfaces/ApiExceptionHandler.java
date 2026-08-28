@@ -7,6 +7,8 @@ import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ChatShareUnavailableException;
 import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackBusyException;
+import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackNotReadyException;
+import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackPayloadTooLargeException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
@@ -35,6 +37,22 @@ public class ApiExceptionHandler {
     public ResponseEntity<ApiErrorResponse> handleDomainAgentAsyncCallbackBusy(
             DomainAgentAsyncCallbackBusyException ex, HttpServletRequest request) {
         return error(HttpStatus.TOO_MANY_REQUESTS, "DOMAIN_AGENT_ASYNC_CALLBACK_BUSY",
+                ex.getMessage(), requestPath(request));
+    }
+
+    @ExceptionHandler(DomainAgentAsyncCallbackNotReadyException.class)
+    public ResponseEntity<ApiErrorResponse> handleDomainAgentAsyncCallbackNotReady(
+            DomainAgentAsyncCallbackNotReadyException ex, HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .header("Retry-After", "1")
+                .body(errorBody(HttpStatus.CONFLICT, "DOMAIN_AGENT_ASYNC_NOT_READY",
+                        ex.getMessage(), requestPath(request)));
+    }
+
+    @ExceptionHandler(DomainAgentAsyncCallbackPayloadTooLargeException.class)
+    public ResponseEntity<ApiErrorResponse> handleDomainAgentAsyncCallbackPayloadTooLarge(
+            DomainAgentAsyncCallbackPayloadTooLargeException ex, HttpServletRequest request) {
+        return error(HttpStatus.PAYLOAD_TOO_LARGE, "DOMAIN_AGENT_ASYNC_CALLBACK_TOO_LARGE",
                 ex.getMessage(), requestPath(request));
     }
 
@@ -147,14 +165,18 @@ public class ApiExceptionHandler {
      * @return HTTP 错误响应。
      */
     static ResponseEntity<ApiErrorResponse> error(HttpStatus status, String code, String message, String path) {
-        return ResponseEntity.status(status).body(new ApiErrorResponse(
+        return ResponseEntity.status(status).body(errorBody(status, code, message, path));
+    }
+
+    private static ApiErrorResponse errorBody(HttpStatus status, String code, String message, String path) {
+        return new ApiErrorResponse(
                 Instant.now(),
                 path,
                 status.value(),
                 status.getReasonPhrase(),
                 code,
                 message == null || message.isBlank() ? status.getReasonPhrase() : message
-        ));
+        );
     }
 
     /**

@@ -1,6 +1,5 @@
 package com.huawei.it.ex.one.application.service.chat;
 
-import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunExecutionRepository;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
@@ -17,7 +16,6 @@ import com.huawei.it.ex.one.domain.chat.MessageCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.RunCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.springframework.stereotype.Service;
@@ -27,10 +25,9 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
-/** Performs one async callback terminal CAS and all related database writes in one transaction. */
+/** Performs one async completion callback terminal CAS and related database writes. */
 @Service
 public class DomainAgentAsyncTaskCallbackCommitService {
     private final ChatRunRepository runRepository;
@@ -63,6 +60,8 @@ public class DomainAgentAsyncTaskCallbackCommitService {
                 || initial.status() != ChatRunStatus.RUNNING) {
             return CommitResult.rejected(initial);
         }
+        String assistantMessageId = requiredAssistantMessageId(initial);
+        List<ChatEvent> ordered = callbackEvents(callback, initial, assistantMessageId);
         ChatSession session = sessionRepository.findByTenantIdAndUserIdAndId(
                         initial.tenantId(), initial.userId(), initial.sessionId())
                 .orElseThrow(() -> new IllegalStateException("DomainAgent async callback session is unavailable"));
@@ -82,20 +81,19 @@ public class DomainAgentAsyncTaskCallbackCommitService {
         }
         ChatRun claimedRun = runRepository.findById(initial.id())
                 .orElseThrow(() -> new IllegalStateException("DomainAgent async callback run reload failed"));
-        String assistantMessageId = firstNonBlank(
-                DomainAgentAsyncTaskMetadata.assistantMessageId(initial), claimedRun.assistantMessageId());
+        assistantMessageId = firstNonBlank(assistantMessageId, claimedRun.assistantMessageId());
         ChatMessage existing = sessionService.requireAssistantForInternalUpdate(session, assistantMessageId);
         AgentDataPersistenceState persistenceState =
                 AgentDataPersistenceState.fromRunMetadata(initial.metadata(), null);
-        AssistantAssembly assembly = new AssistantAssembly(persistenceState);
-        assembly.messageSkill().replace(MessageSkillContext.runSkillId(initial.metadata()));
-        callback.businessEvents().forEach(assembly::observe);
-
-        List<ChatEvent> ordered = callbackEvents(callback, initial, assistantMessageId);
         List<PublishedEvent> sequenced = sequenceAndPersist(ordered, persistenceState);
         ChatEvent terminal = sequenced.getLast().event();
 
-        updateAssistant(callback, session, initial, existing, assembly);
+        String metadata = DomainAgentAsyncTaskMetadata.mergeAssistantMetadata(
+                objectMapper,
+                existing.metadataJson(),
+                callback.completed() ? "COMPLETED" : "FAILED",
+                null);
+        sessionService.updateAssistantMetadataForInternalUse(session, existing, metadata);
         ChatRun metadataCleared = claimedRun.withMetadataSnapshot(
                 DomainAgentAsyncTaskMetadata.clearRunMetadata(claimedRun.metadata()));
         runRepository.save(metadataCleared);
@@ -116,16 +114,20 @@ public class DomainAgentAsyncTaskCallbackCommitService {
             PreparedCallback callback,
             ChatRun run,
             String assistantMessageId) {
+        String status = callback.completed() ? "COMPLETED" : "FAILED";
+        Map<String, Object> finishedPayload = new LinkedHashMap<>();
+        finishedPayload.put("source", "domain-agent");
+        finishedPayload.put("sourceType", "agent.async_finished");
+        finishedPayload.put("status", status);
+        finishedPayload.put("asyncTask", true);
+        finishedPayload.put("messageReady", true);
+        finishedPayload.put("assistantMessageId", assistantMessageId);
+        finishedPayload.put("feedbackTargetMessageId", assistantMessageId);
+
         List<ChatEvent> events = new ArrayList<>();
         events.add(new RuntimeEvent(
-                run.id(), run.sessionId(), 0L, Instant.now(), "run.async_result_started",
-                Map.of(
-                        "source", "domain-agent",
-                        "sourceType", "agent.async_result_started",
-                        "status", "ASYNC_RESULT_STARTED",
-                        "assistantMessageId", assistantMessageId,
-                        "resultMode", callback.resultMode() == null ? "NONE" : callback.resultMode())));
-        events.addAll(callback.businessEvents());
+                run.id(), run.sessionId(), 0L, Instant.now(), "run.async_finished",
+                Map.copyOf(finishedPayload)));
         events.add(MessageCompletedEvent.of(run.id(), run.sessionId(), Map.of(
                 "messageReady", true,
                 "assistantMessageId", assistantMessageId,
@@ -133,12 +135,11 @@ public class DomainAgentAsyncTaskCallbackCommitService {
                 "asyncTask", true)));
         if (callback.completed()) {
             events.add(RunCompletedEvent.of(run.id(), run.sessionId(), Map.of(
-                    "status", "COMPLETED",
+                    "status", status,
                     "asyncTask", true,
                     "messageReady", true,
                     "assistantMessageId", assistantMessageId,
-                    "feedbackTargetMessageId", assistantMessageId,
-                    "resultProvided", !callback.businessEvents().isEmpty())));
+                    "feedbackTargetMessageId", assistantMessageId)));
         } else {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("code", "DOMAIN_AGENT_ASYNC_FAILED");
@@ -147,8 +148,8 @@ public class DomainAgentAsyncTaskCallbackCommitService {
             payload.put("messageReady", true);
             payload.put("assistantMessageId", assistantMessageId);
             payload.put("feedbackTargetMessageId", assistantMessageId);
-            if (callback.error() != null && !callback.error().isNull()) {
-                payload.put("error", objectMapper.convertValue(callback.error(), Object.class));
+            if (callback.error() != null) {
+                payload.put("error", callback.error());
             }
             events.add(ErrorEvent.of(
                     run.id(), run.sessionId(), "DOMAIN_AGENT_ASYNC_FAILED",
@@ -190,36 +191,13 @@ public class DomainAgentAsyncTaskCallbackCommitService {
         sequenced.forEach(event -> result.add(new PublishedEvent(event, persisted)));
     }
 
-    private void updateAssistant(
-            PreparedCallback callback,
-            ChatSession session,
-            ChatRun run,
-            ChatMessage existing,
-            AssistantAssembly assembly) {
-        boolean hasFrames = !callback.businessEvents().isEmpty();
-        boolean replace = hasFrames && "REPLACE".equals(callback.resultMode());
-        if (replace) {
-            sessionService.deleteAssistantPartsForRun(session, existing.id(), run.id());
+    private String requiredAssistantMessageId(ChatRun run) {
+        String messageId = firstNonBlank(
+                DomainAgentAsyncTaskMetadata.assistantMessageId(run), run.assistantMessageId());
+        if (messageId == null) {
+            throw new IllegalStateException("DomainAgent async callback assistant message is unavailable");
         }
-        String content = existing.content();
-        if (hasFrames && !assembly.persistenceState().placeholderMode()) {
-            content = replace
-                    ? assembly.finalContent()
-                    : nullToEmpty(existing.content()) + assembly.finalContent();
-        }
-        String metadata = DomainAgentAsyncTaskMetadata.mergeAssistantMetadata(
-                objectMapper,
-                existing.metadataJson(),
-                callback.completed() ? "COMPLETED" : "FAILED",
-                null);
-        sessionService.updateAssistantMessage(new AssistantMessageUpdateCommand(
-                run.tenantId(), run.userId(), session, existing.id(), content, run.id(),
-                hasFrames ? assembly.parts() : List.of(), metadata,
-                hasFrames && !assembly.persistenceState().placeholderMode() && assembly.appendAnswerPart()));
-    }
-
-    private String nullToEmpty(String value) {
-        return value == null ? "" : value;
+        return messageId;
     }
 
     private String firstNonBlank(String first, String second) {
@@ -229,13 +207,7 @@ public class DomainAgentAsyncTaskCallbackCommitService {
     public record PreparedCallback(
             String runId,
             boolean completed,
-            String resultMode,
-            List<ChatEvent> businessEvents,
-            JsonNode error) {
-        public PreparedCallback {
-            resultMode = resultMode == null ? null : resultMode.trim().toUpperCase(Locale.ROOT);
-            businessEvents = businessEvents == null ? List.of() : List.copyOf(businessEvents);
-        }
+            String error) {
     }
 
     public record PublishedEvent(ChatEvent event, boolean persisted) {

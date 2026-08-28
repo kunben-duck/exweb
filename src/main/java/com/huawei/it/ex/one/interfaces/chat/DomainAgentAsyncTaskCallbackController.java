@@ -30,8 +30,7 @@ public class DomainAgentAsyncTaskCallbackController {
     public Mono<DomainAgentAsyncTaskCallbackResponse> callback(
             @Valid @RequestBody DomainAgentAsyncTaskCallbackRequest request) {
         return service.callback(new DomainAgentAsyncTaskCallbackCommand(
-                        request.runId(), request.status(), request.resultMode(),
-                        request.frames(), request.error()))
+                        request.runId(), request.status(), request.error()))
                 .map(result -> new DomainAgentAsyncTaskCallbackResponse(result.accepted()));
     }
 }

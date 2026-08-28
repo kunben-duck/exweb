@@ -29,6 +29,16 @@ public interface RuntimeBindingMapper {
     int update(RuntimeBindingRow row);
 
     /**
+     * Conditionally moves a DomainAgent binding that is still owned by the completed async run.
+     *
+     * @param row trusted owner fields plus the target leaf and expiry.
+     * @param expectedLastRunId run that must still own the binding.
+     * @return affected row count.
+     */
+    int completeActiveDomainAgentForRun(@Param("row") RuntimeBindingRow row,
+                                        @Param("expectedLastRunId") String expectedLastRunId);
+
+    /**
      * 锁定并校验 Interaction continuation 的 run/execution 写入权。
      *
      * @param row 待更新 Binding 的可信归属。

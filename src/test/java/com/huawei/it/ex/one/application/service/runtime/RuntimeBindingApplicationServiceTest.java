@@ -427,6 +427,46 @@ class RuntimeBindingApplicationServiceTest {
     }
 
     @Test
+    void asyncDomainAgentCompletionMovesLeafWithoutOverwritingBindingOwnership() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        RuntimeBinding active = binding("domain-agent", RuntimeBindingStatus.ACTIVE)
+                .withRun("run-async", Instant.now().plus(Duration.ofHours(1)))
+                .withMetadata(Map.of("agentCode", "skill-a"));
+        repository.saved = active;
+        cache.put(active);
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        boolean completed = service.completeDomainAgentAfterAsyncRun(
+                "t", "u", "s", "run-async", "msg-assistant");
+
+        assertThat(completed).isTrue();
+        assertThat(repository.saved.leafMessageId()).isEqualTo("msg-assistant");
+        assertThat(repository.saved.lastRunId()).isEqualTo("run-async");
+        assertThat(repository.saved.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(repository.saved.metadata()).containsEntry("agentCode", "skill-a");
+        assertThat(cache.get("t", "u", "s")).isEmpty();
+    }
+
+    @Test
+    void asyncDomainAgentCompletionSkipsBindingAlreadyOwnedByNextRun() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        RuntimeBinding nextRun = binding("domain-agent", RuntimeBindingStatus.ACTIVE)
+                .withRun("run-next", Instant.now().plus(Duration.ofHours(1)));
+        repository.saved = nextRun;
+        cache.put(nextRun);
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        boolean completed = service.completeDomainAgentAfterAsyncRun(
+                "t", "u", "s", "run-async", "msg-assistant");
+
+        assertThat(completed).isFalse();
+        assertThat(repository.saved).isEqualTo(nextRun);
+        assertThat(cache.get("t", "u", "s")).contains(nextRun);
+    }
+
+    @Test
     void deletingSessionCancelsResumableRelayBinding() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
         InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();

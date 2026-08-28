@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.huawei.it.ex.one.application.integration.conversation.SessionSearchTimeoutException;
 import com.huawei.it.ex.one.application.integration.intent.IntentCandidateQueryException;
 import com.huawei.it.ex.one.application.integration.intent.IntentPreferenceUnavailableException;
+import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackNotReadyException;
+import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackPayloadTooLargeException;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -150,6 +152,43 @@ class ApiExceptionHandlerTest {
         assertThat(reactiveResponse.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         assertThat(reactiveResponse.getBody()).isNotNull();
         assertThat(reactiveResponse.getBody().code()).isEqualTo("INTENT_PREFERENCE_UNAVAILABLE");
+    }
+
+    @Test
+    void mapsAsyncCallbackNotReadyToRetryableConflict() {
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> servletResponse =
+                handler.handleDomainAgentAsyncCallbackNotReady(
+                        new DomainAgentAsyncCallbackNotReadyException(),
+                        servletRequest("/v1/internal/domain-agent/async-tasks/callback"));
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> reactiveResponse =
+                reactiveHandler.handleDomainAgentAsyncCallbackNotReady(
+                        new DomainAgentAsyncCallbackNotReadyException(),
+                        exchange("/v1/internal/domain-agent/async-tasks/callback"));
+
+        assertThat(servletResponse.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(servletResponse.getHeaders().getFirst("Retry-After")).isEqualTo("1");
+        assertThat(servletResponse.getBody()).isNotNull();
+        assertThat(servletResponse.getBody().code()).isEqualTo("DOMAIN_AGENT_ASYNC_NOT_READY");
+        assertThat(reactiveResponse.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(reactiveResponse.getHeaders().getFirst("Retry-After")).isEqualTo("1");
+    }
+
+    @Test
+    void mapsAsyncCallbackCapacityOverflowToPayloadTooLarge() {
+        DomainAgentAsyncCallbackPayloadTooLargeException exception =
+                new DomainAgentAsyncCallbackPayloadTooLargeException("too large");
+
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> servletResponse =
+                handler.handleDomainAgentAsyncCallbackPayloadTooLarge(
+                        exception, servletRequest("/v1/internal/domain-agent/async-tasks/callback"));
+        ResponseEntity<ApiExceptionHandler.ApiErrorResponse> reactiveResponse =
+                reactiveHandler.handleDomainAgentAsyncCallbackPayloadTooLarge(
+                        exception, exchange("/v1/internal/domain-agent/async-tasks/callback"));
+
+        assertThat(servletResponse.getStatusCode()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
+        assertThat(servletResponse.getBody()).isNotNull();
+        assertThat(servletResponse.getBody().code()).isEqualTo("DOMAIN_AGENT_ASYNC_CALLBACK_TOO_LARGE");
+        assertThat(reactiveResponse.getStatusCode()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
     }
 
     private MockHttpServletRequest servletRequest(String path) {

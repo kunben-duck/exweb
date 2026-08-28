@@ -125,4 +125,12 @@ public record ChatMessage(
                 sourceMessageId, editedFromMessageId, regeneratedFromMessageId, metadataJson, parts,
                 nextAttachments, createdAt);
     }
+
+    /** Returns a copy whose only changed field is {@code metadataJson}. */
+    public ChatMessage withMetadataJson(String nextMetadataJson) {
+        return new ChatMessage(id, tenantId, userId, sessionId, parentMessageId, nodeOrder, treeDepth,
+                siblingIndex, role, content, tokenCount, runId, originType, locked, sourceSessionId,
+                sourceMessageId, editedFromMessageId, regeneratedFromMessageId, nextMetadataJson, parts,
+                attachments, createdAt);
+    }
 }

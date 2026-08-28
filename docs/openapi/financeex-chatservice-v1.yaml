@@ -501,15 +501,19 @@ paths:
     post:
       tags: [Internal DomainAgent]
       operationId: completeDomainAgentAsyncTask
-      summary: 回调DomainAgent后台任务结果
+      summary: 回调DomainAgent后台任务完成状态
       description: |
         仅允许企业网关ACL内的DomainAgent调用，不依赖用户Cookie。`runId`是ChatService调用
         DomainAgent时提供的可信任务标识。只有仍处于`ASYNC_RUNNING`的Run可以接受一次回调；
         重复、迟到以及已经stop或超时的回调返回`accepted=false`。
 
-        `frames`复用DomainAgent流式响应帧格式。非空时必须指定`APPEND`或`REPLACE`；为空时只提交
-        任务终态。成功接受后依次推送`run.async_result_started`、标准结果事件、
-        `message.completed`和`run.completed/run.failed`。
+        第一版回调只提交`COMPLETED/FAILED`，不接收或回填业务结果。成功接受后依次推送
+        `run.async_finished`、`message.completed`和`run.completed/run.failed`。原assistant只更新
+        `domainAgentAsyncTask.status`，正文、runId和Parts保持不变。
+
+        若回调早于`ASYNC_WAITING`事务提交，返回`409/DOMAIN_AGENT_ASYNC_NOT_READY`和
+        `Retry-After: 1`；DomainAgent必须使用相同runId和请求体按秒重试至少15秒。原始请求体默认
+        最多5MiB。可选error仅接受文本，trim后为空则省略，超过1024个Unicode码点时服务端安全截断。
       x-enterprise-gateway-acl: required
       requestBody:
         required: true
@@ -518,20 +522,16 @@ paths:
             schema:
               $ref: '#/components/schemas/DomainAgentAsyncTaskCallbackRequest'
             examples:
-              completedWithResult:
+              completed:
                 value:
                   runId: run_xxx
                   status: COMPLETED
-                  resultMode: APPEND
-                  frames:
-                    - content: 异步任务结果
-                    - searchList: []
                   error: null
-              completedWithoutResult:
+              failed:
                 value:
                   runId: run_xxx
-                  status: COMPLETED
-                  frames: []
+                  status: FAILED
+                  error: 领域任务执行失败
       responses:
         '200':
           description: 回调已接受或已幂等忽略
@@ -549,7 +549,28 @@ paths:
         '400':
           $ref: '#/components/responses/BadRequest'
         '409':
-          description: 异步任务协议未启用
+          description: 异步状态尚未提交（可重试），或异步任务协议未启用
+          headers:
+            Retry-After:
+              description: 仅`DOMAIN_AGENT_ASYNC_NOT_READY`返回；再次提交同一回调前等待的秒数
+              schema:
+                type: string
+                example: '1'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                notReady:
+                  value:
+                    timestamp: '2026-08-28T10:00:00Z'
+                    path: /v1/internal/domain-agent/async-tasks/callback
+                    status: 409
+                    error: Conflict
+                    code: DOMAIN_AGENT_ASYNC_NOT_READY
+                    message: DomainAgent async callback state is not ready; retry the same callback later
+        '413':
+          description: 原始请求体超过容量限制
           content:
             application/json:
               schema:
@@ -2145,23 +2166,10 @@ components:
         status:
           type: string
           enum: [COMPLETED, FAILED]
-        resultMode:
+        error:
           type: string
           nullable: true
-          enum: [APPEND, REPLACE]
-          description: frames非空时必填
-        frames:
-          type: array
-          maxItems: 512
-          nullable: true
-          items:
-            type: object
-            additionalProperties: true
-          description: DomainAgent标准响应帧；总序列化大小默认不超过4MiB
-        error:
-          type: object
-          nullable: true
-          additionalProperties: true
+          description: FAILED时可选的简短错误文本；trim后空白省略，超过1024个Unicode码点由服务端安全截断
 
     DomainAgentAsyncTaskCallbackResponse:
       type: object

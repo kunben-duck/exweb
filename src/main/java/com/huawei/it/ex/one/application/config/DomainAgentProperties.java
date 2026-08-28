@@ -59,12 +59,10 @@ public class DomainAgentProperties {
     private boolean asyncTaskEnabled = false;
     /** DomainAgent 后台异步任务最长等待时间。 */
     private Duration asyncTaskMaxDuration = Duration.ofHours(24);
-    /** 单次异步结果回调允许的最大 frame 数。 */
-    private int asyncTaskCallbackMaxFrames = 512;
-    /** 单次异步结果回调序列化后的最大 UTF-8 字节数。 */
-    private int asyncTaskCallbackMaxBytes = 4 * 1024 * 1024;
-    /** 单实例同时处理的异步结果回调数量。 */
+    /** 单实例同时处理的异步完成回调数量。 */
     private int asyncTaskCallbackMaxConcurrency = 4;
+    /** 异步完成回调原始 HTTP 请求体最大字节数，在 JSON 反序列化前生效。 */
+    private int asyncTaskCallbackRequestMaxBytes = 5 * 1024 * 1024;
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
@@ -118,17 +116,13 @@ public class DomainAgentProperties {
     public void setAsyncTaskMaxDuration(Duration asyncTaskMaxDuration) {
         this.asyncTaskMaxDuration = asyncTaskMaxDuration;
     }
-    public int getAsyncTaskCallbackMaxFrames() { return asyncTaskCallbackMaxFrames; }
-    public void setAsyncTaskCallbackMaxFrames(int asyncTaskCallbackMaxFrames) {
-        this.asyncTaskCallbackMaxFrames = asyncTaskCallbackMaxFrames;
-    }
-    public int getAsyncTaskCallbackMaxBytes() { return asyncTaskCallbackMaxBytes; }
-    public void setAsyncTaskCallbackMaxBytes(int asyncTaskCallbackMaxBytes) {
-        this.asyncTaskCallbackMaxBytes = asyncTaskCallbackMaxBytes;
-    }
     public int getAsyncTaskCallbackMaxConcurrency() { return asyncTaskCallbackMaxConcurrency; }
     public void setAsyncTaskCallbackMaxConcurrency(int asyncTaskCallbackMaxConcurrency) {
         this.asyncTaskCallbackMaxConcurrency = asyncTaskCallbackMaxConcurrency;
+    }
+    public int getAsyncTaskCallbackRequestMaxBytes() { return asyncTaskCallbackRequestMaxBytes; }
+    public void setAsyncTaskCallbackRequestMaxBytes(int asyncTaskCallbackRequestMaxBytes) {
+        this.asyncTaskCallbackRequestMaxBytes = asyncTaskCallbackRequestMaxBytes;
     }
 
     public int normalizedMaxAttachments() {
@@ -184,20 +178,6 @@ public class DomainAgentProperties {
         return asyncTaskMaxDuration;
     }
 
-    public int requiredAsyncTaskCallbackMaxFrames() {
-        if (asyncTaskCallbackMaxFrames <= 0) {
-            throw new IllegalStateException("financeex.domain-agent.async-task-callback-max-frames must be positive");
-        }
-        return asyncTaskCallbackMaxFrames;
-    }
-
-    public int requiredAsyncTaskCallbackMaxBytes() {
-        if (asyncTaskCallbackMaxBytes <= 0) {
-            throw new IllegalStateException("financeex.domain-agent.async-task-callback-max-bytes must be positive");
-        }
-        return asyncTaskCallbackMaxBytes;
-    }
-
     public int requiredAsyncTaskCallbackMaxConcurrency() {
         if (asyncTaskCallbackMaxConcurrency <= 0) {
             throw new IllegalStateException("financeex.domain-agent.async-task-callback-max-concurrency must be positive");
@@ -205,11 +185,18 @@ public class DomainAgentProperties {
         return asyncTaskCallbackMaxConcurrency;
     }
 
+    public int requiredAsyncTaskCallbackRequestMaxBytes() {
+        if (asyncTaskCallbackRequestMaxBytes <= 0) {
+            throw new IllegalStateException(
+                    "financeex.domain-agent.async-task-callback-request-max-bytes must be positive");
+        }
+        return asyncTaskCallbackRequestMaxBytes;
+    }
+
     @PostConstruct
     void validateAsyncTaskConfiguration() {
         requiredAsyncTaskMaxDuration();
-        requiredAsyncTaskCallbackMaxFrames();
-        requiredAsyncTaskCallbackMaxBytes();
         requiredAsyncTaskCallbackMaxConcurrency();
+        requiredAsyncTaskCallbackRequestMaxBytes();
     }
 }

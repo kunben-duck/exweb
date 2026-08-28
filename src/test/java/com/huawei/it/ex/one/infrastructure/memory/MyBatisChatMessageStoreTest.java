@@ -62,6 +62,26 @@ class MyBatisChatMessageStoreTest {
     }
 
     @Test
+    void assistantMetadataUpdateDoesNotWriteContentOrParts() {
+        ChatMessageMapper mapper = mock(ChatMessageMapper.class);
+        when(mapper.updateAssistantMetadata(any())).thenReturn(1);
+        MyBatisChatMessageStore store = store(mapper, 100, DataSize.ofMegabytes(1));
+        ChatMessage existing = message(List.of(part("part-1", 1, "existing")));
+
+        ChatMessage updated = store.updateAssistantMetadata(
+                existing, "{\"domainAgentAsyncTask\":{\"status\":\"COMPLETED\"}}");
+
+        assertThat(updated.content()).isEqualTo(existing.content());
+        assertThat(updated.runId()).isEqualTo(existing.runId());
+        assertThat(updated.createdAt()).isEqualTo(existing.createdAt());
+        assertThat(updated.parts()).containsExactlyElementsOf(existing.parts());
+        assertThat(updated.metadataJson()).contains("\"status\":\"COMPLETED\"");
+        verify(mapper).updateAssistantMetadata(any());
+        verify(mapper, never()).updateAssistant(any());
+        verify(mapper, never()).insertParts(anyList());
+    }
+
+    @Test
     void savesTerminalPartsInOrderedMultiRowBatches() {
         ChatMessageMapper mapper = successfulMapper();
         MyBatisChatMessageStore store = store(mapper, 2, DataSize.ofMegabytes(1));

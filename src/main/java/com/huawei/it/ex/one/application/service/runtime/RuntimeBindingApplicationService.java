@@ -457,6 +457,36 @@ public class RuntimeBindingApplicationService {
     }
 
     /**
+     * Completes an async DomainAgent binding without writing a stale binding snapshot over a later run.
+     */
+    public boolean completeDomainAgentAfterAsyncRun(
+            String tenantId,
+            String userId,
+            String sessionId,
+            String runId,
+            String leafMessageId) {
+        RuntimeBinding binding = repository.findActiveBySession(
+                        tenantId, userId, sessionId, DOMAIN_AGENT_PROVIDER).stream()
+                .filter(candidate -> runId.equals(candidate.lastRunId()))
+                .sorted(Comparator.comparing(RuntimeBinding::updatedAt,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .reversed())
+                .findFirst()
+                .orElse(null);
+        if (binding == null) {
+            return false;
+        }
+        boolean completed = repository.completeActiveDomainAgentForRun(
+                binding, runId, leafMessageId,
+                expiresAt(DOMAIN_AGENT_PROVIDER, false), Instant.now());
+        if (completed) {
+            // The database update intentionally changes only leaf/expiry; evict instead of caching the old snapshot.
+            cache.evict(tenantId, userId, sessionId);
+        }
+        return completed;
+    }
+
+    /**
      * Runtime 完成后把绑定移动到新 assistant 叶子。
      */
     public RuntimeBinding moveToLeaf(RuntimeBinding binding, String leafMessageId) {

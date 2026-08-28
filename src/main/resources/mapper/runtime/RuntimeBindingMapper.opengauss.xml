@@ -55,6 +55,24 @@
     </update>
 
     <!--
+      异步DomainAgent回调只移动仍由当前run持有的ACTIVE binding，不覆盖后续run刷新出的会话档案。
+      入参: row提供可信归属、目标leaf和新过期时间，expectedLastRunId限定当前持有者。
+    -->
+    <update id="completeActiveDomainAgentForRun">
+        UPDATE fin_ex_runtime_binding_t
+        SET leaf_message_id = #{row.leafMessageId},
+            expires_at = #{row.expiresAt},
+            updated_at = #{row.updatedAt}
+        WHERE id = #{row.id}
+          AND tenant_id = #{row.tenantId}
+          AND user_id = #{row.userId}
+          AND chat_session_id = #{row.chatSessionId}
+          AND provider = 'domain-agent'
+          AND status = 'ACTIVE'
+          AND last_run_id = #{expectedLastRunId}
+    </update>
+
+    <!--
       Interaction run 在刷新 Relay Binding 前锁定 run/execution，确保 owner 和 fencing token 在本事务内不漂移。
       入参: row 提供 tenant/user/session 可信归属，claim 提供 runId/ownerInstanceId/fencingToken。
     -->

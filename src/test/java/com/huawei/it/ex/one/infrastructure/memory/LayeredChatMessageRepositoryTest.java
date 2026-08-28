@@ -77,6 +77,34 @@ class LayeredChatMessageRepositoryTest {
     }
 
     @Test
+    void assistantMetadataUpdateReusesLoadedSnapshotAndRefreshesCacheAfterCommit() {
+        FakeRedisCache cache = new FakeRedisCache();
+        FakeDatabaseStore database = new FakeDatabaseStore();
+        LayeredChatMessageRepository repository = repository(cache, database);
+        ChatMessage existing = message().withParts(List.of(part("part1", "CARD", 1)));
+        beginTransactionSynchronization();
+        try {
+            ChatMessage updated = repository.updateAssistantMetadata(
+                    existing, "{\"domainAgentAsyncTask\":{\"status\":\"COMPLETED\"}}");
+
+            assertThat(database.metadataUpdateCalls).hasValue(1);
+            assertThat(database.findMessageCalls).hasValue(0);
+            assertThat(updated.content()).isEqualTo(existing.content());
+            assertThat(updated.parts()).containsExactlyElementsOf(existing.parts());
+            assertThat(cache.appendCalls).hasValue(0);
+
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(TransactionSynchronization::afterCommit);
+
+            assertThat(cache.removeCalls).hasValue(1);
+            assertThat(cache.appendCalls).hasValue(1);
+            assertThat(cache.appended.metadataJson()).contains("\"status\":\"COMPLETED\"");
+        } finally {
+            endTransactionSynchronization();
+        }
+    }
+
+    @Test
     void redisMissLoadsAndWarmsTheSameRequestedWindowFromDatabase() {
         FakeRedisCache cache = new FakeRedisCache();
         FakeDatabaseStore database = new FakeDatabaseStore();
@@ -181,6 +209,7 @@ class LayeredChatMessageRepositoryTest {
 
     private static final class FakeRedisCache extends RedisShortTermMemoryCache {
         private final AtomicInteger appendCalls = new AtomicInteger();
+        private final AtomicInteger removeCalls = new AtomicInteger();
         private ChatMessage appended;
         private int findRecentLimit;
         private String findRecentLeaf;
@@ -224,6 +253,7 @@ class LayeredChatMessageRepositoryTest {
 
         @Override
         public void remove(ChatMessage message) {
+            removeCalls.incrementAndGet();
         }
     }
 
@@ -232,6 +262,7 @@ class LayeredChatMessageRepositoryTest {
         private final AtomicInteger findRecentCalls = new AtomicInteger();
         private final AtomicInteger findRoleCalls = new AtomicInteger();
         private final AtomicInteger findMessageCalls = new AtomicInteger();
+        private final AtomicInteger metadataUpdateCalls = new AtomicInteger();
         private ChatMessage saved;
         private RuntimeException saveFailure;
         private RuntimeException findRecentFailure;
@@ -257,6 +288,13 @@ class LayeredChatMessageRepositoryTest {
         public ChatMessage updateAssistantMessage(ChatMessage message) {
             saved = message;
             return message;
+        }
+
+        @Override
+        public ChatMessage updateAssistantMetadata(ChatMessage existing, String metadataJson) {
+            metadataUpdateCalls.incrementAndGet();
+            saved = existing.withMetadataJson(metadataJson);
+            return saved;
         }
 
         @Override

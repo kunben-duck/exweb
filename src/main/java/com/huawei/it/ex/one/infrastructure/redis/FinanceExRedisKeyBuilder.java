@@ -151,6 +151,20 @@ public class FinanceExRedisKeyBuilder {
     }
 
     /**
+     * @return DomainAgent完整技能配置缓存key。
+     */
+    public String domainAgentSkillConfiguration(
+            String logicalPrefix,
+            String tenantId,
+            String skillId) {
+        return prefix(logicalPrefix)
+                + ":"
+                + normalize(tenantId)
+                + ":"
+                + normalize(skillId);
+    }
+
+    /**
      * @return WebSocket run topic 对应的 Redis Pub/Sub channel。
      */
     public String chatStreamChannel(String streamTopicId) {

@@ -121,7 +121,9 @@ public final class DefaultDomainAgentSkillConfigurationProvider
             }
             DomainAgentSkillConfiguration candidate = parseConfiguration(
                     requestedSkillId,
-                    item.isSaveSession());
+                    item.skillName(),
+                    item.isSaveSession(),
+                    item.attachmentType());
             if (matched != null && !Objects.equals(matched.saveSession(), candidate.saveSession())) {
                 throw protocolError("Conflicting DomainAgent skill configuration entries");
             }
@@ -132,16 +134,28 @@ public final class DefaultDomainAgentSkillConfigurationProvider
                 : matched;
     }
 
-    private DomainAgentSkillConfiguration parseConfiguration(String skillId, String value) {
+    private DomainAgentSkillConfiguration parseConfiguration(
+            String skillId,
+            String skillName,
+            String value,
+            String attachmentType) {
         String normalized = normalize(value).toUpperCase(Locale.ROOT);
         if (normalized.isEmpty()) {
-            return DomainAgentSkillConfiguration.unconfigured(skillId);
+            return new DomainAgentSkillConfiguration(
+                    skillId, nullableText(skillName), null, nullableText(attachmentType));
         }
         return switch (normalized) {
-            case "N" -> new DomainAgentSkillConfiguration(skillId, Boolean.FALSE);
-            case "Y" -> new DomainAgentSkillConfiguration(skillId, Boolean.TRUE);
+            case "N" -> new DomainAgentSkillConfiguration(
+                    skillId, nullableText(skillName), Boolean.FALSE, nullableText(attachmentType));
+            case "Y" -> new DomainAgentSkillConfiguration(
+                    skillId, nullableText(skillName), Boolean.TRUE, nullableText(attachmentType));
             default -> throw protocolError("Invalid isSaveSession value in DomainAgent skill configuration");
         };
+    }
+
+    private String nullableText(String value) {
+        String normalized = normalize(value);
+        return normalized.isEmpty() ? null : normalized;
     }
 
     private Throwable translateFailure(Throwable failure) {

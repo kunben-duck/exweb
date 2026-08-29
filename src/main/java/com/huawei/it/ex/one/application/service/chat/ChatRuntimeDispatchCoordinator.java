@@ -33,6 +33,8 @@ final class ChatRuntimeDispatchCoordinator {
     private final AgentRuntimeExecutor agentRuntimeExecutor;
     private final RuntimeBindingDispatchCompensator bindingCompensator;
     private final AgentDataPersistenceGate persistenceGate;
+    private final DomainAgentAttachmentValidationFailureExecutor attachmentFailureExecutor =
+            new DomainAgentAttachmentValidationFailureExecutor();
 
     ChatRuntimeDispatchCoordinator(RouteSignalApplicationService routeSignalService,
                                    ChatEventPersistenceCoordinator eventPersistenceCoordinator,
@@ -195,14 +197,42 @@ final class ChatRuntimeDispatchCoordinator {
             RoutePipelineRequest request,
             RouteResolutionCoordinator.RouteExecutionResolution resolution,
             boolean recordIntentRecognition) {
-        Mono<?> policyResolution = persistenceGate == null
-                ? Mono.just(request.persistenceState())
-                : persistenceGate.resolve(
-                        request.user(), resolution.route(), request.persistenceState(), request.forwardHeaders());
-        return policyResolution.thenMany(Flux.defer(() -> {
-            persistResolvedRoute(request, resolution, recordIntentRecognition);
-            return dispatchPersistedRuntime(request, resolution);
-        }));
+        Mono<AgentDataPersistenceGate.Decision> preflight = persistenceGate == null
+                ? Mono.just(AgentDataPersistenceGate.Decision.allowed(request.persistenceState()))
+                : persistenceGate.evaluate(
+                        request.user(),
+                        resolution.route(),
+                        request.persistenceState(),
+                        request.forwardHeaders(),
+                        request.documents());
+        return preflight.flatMapMany(decision -> decision.unsupportedAttachment()
+                ? eventPersistenceCoordinator.requireCurrentOwnerRunning(
+                                request.executionClaim(), "before-attachment-validation-rejection")
+                        .then(compensateRejectedBinding(request))
+                        .thenMany(attachmentFailureExecutor.execute(
+                                request.runId(), request.session().id(), decision.payload()))
+                : Flux.defer(() -> {
+                    persistResolvedRoute(request, resolution, recordIntentRecognition);
+                    return dispatchPersistedRuntime(request, resolution);
+                }));
+    }
+
+    private Mono<Void> compensateRejectedBinding(RoutePipelineRequest request) {
+        return bindingCompensator.cleanup(
+                        request.bindingLifecycle(),
+                        request.runId(),
+                        request.session().id(),
+                        request.bindingRef(),
+                        "attachment-validation")
+                .then(Mono.defer(() -> {
+                    RuntimeBindingDispatchLifecycle lifecycle = request.bindingLifecycle();
+                    if (lifecycle == null || lifecycle.activation() == null
+                            || lifecycle.runtimeSubscribed() || lifecycle.compensated()) {
+                        return Mono.empty();
+                    }
+                    return Mono.error(new IllegalStateException(
+                            "Attachment validation binding compensation did not complete"));
+                }));
     }
 
     private Flux<ChatEvent> dispatchPersistedRuntime(

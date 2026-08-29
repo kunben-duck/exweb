@@ -6,6 +6,8 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record SkillConfigurationItem(
         String skillId,
-        String isSaveSession
+        String skillName,
+        String isSaveSession,
+        String attachmentType
 ) {
 }

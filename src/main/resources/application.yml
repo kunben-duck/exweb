@@ -97,14 +97,18 @@ financeex:
     # 约束页码关键字搜索事务及会话列表最后Run状态批量读取；后者超时后仅省略状态字段。
     database-query-timeout-seconds: ${FINANCEEX_SESSION_SEARCH_DATABASE_QUERY_TIMEOUT_SECONDS:2}
   domain-agent-skill-config:
-    # 启用 assistant 留存控制且使用默认 Provider 时，接口地址和路径必须显式配置。
+    # 启用assistant留存控制时地址必须显式配置；仅附件校验使用且接口不可用时按fail-open放行。
     base-url: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_BASE_URL:}
     query-path: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_QUERY_PATH:}
     timeout: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_TIMEOUT:2s}
+    # 完整技能配置由留存策略和附件类型校验共享，旧留存缓存开关与TTL继续作为兼容回退。
+    cache-enabled: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_CACHE_ENABLED:${FINANCEEX_AGENT_DATA_PERSISTENCE_CACHE_ENABLED:true}}
+    cache-ttl: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_CACHE_TTL:${FINANCEEX_AGENT_DATA_PERSISTENCE_CACHE_TTL:10m}}
+    cache-key-prefix: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_CACHE_KEY_PREFIX:fin_ex:domain_agent_skill_config:v1}
   agent-data-persistence:
     # 默认关闭，开启后仅 isSaveSession=N 的 DomainAgent 使用 assistant 占位历史。
     enabled: ${FINANCEEX_AGENT_DATA_PERSISTENCE_ENABLED:false}
-    # 关闭后完全跳过Redis读写，每次策略解析都实时查询技能配置Provider。
+    # 以下旧缓存配置仅作为新完整技能配置缓存的环境变量兼容入口。
     cache-enabled: ${FINANCEEX_AGENT_DATA_PERSISTENCE_CACHE_ENABLED:true}
     cache-ttl: ${FINANCEEX_AGENT_DATA_PERSISTENCE_CACHE_TTL:10m}
     cache-key-prefix: fin_ex:agent_data_persistence

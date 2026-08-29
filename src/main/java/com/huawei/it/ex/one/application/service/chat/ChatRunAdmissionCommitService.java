@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
+import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService.AdmissionCancellation;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
@@ -72,12 +73,13 @@ public class ChatRunAdmissionCommitService {
         sessionService.lockForMessageMutation(user.tenantId(), user.ownerUserId(), session);
         AdmissionResult admission = commitRun(user, command, session, runId, attachments);
         int cancelledInteractions = interactionService.cancelOpenBySessionAndCount(user, session.id());
-        List<RuntimeBinding> cancelledBindings = explicitTarget.domainExpert() && cancelledInteractions == 0
-                ? runtimeBindingService.cancelActiveForAdmissionExceptPinnedDomainExpert(
+        List<AdmissionCancellation> bindingCancellations = explicitTarget.domainExpert()
+                && cancelledInteractions == 0
+                ? runtimeBindingService.cancelActiveForAdmissionExceptPinnedDomainExpertWithSnapshots(
                         user.tenantId(), user.ownerUserId(), session.id(), explicitTarget.targetId())
-                : runtimeBindingService.cancelActiveForAdmission(
+                : runtimeBindingService.cancelActiveForAdmissionWithSnapshots(
                         user.tenantId(), user.ownerUserId(), session.id());
-        return new AdmissionResult(admission.messagePlan(), admission.run(), cancelledBindings);
+        return new AdmissionResult(admission.messagePlan(), admission.run(), bindingCancellations);
     }
 
     /** 兼容现有内部调用与事务契约测试。 */
@@ -146,9 +148,10 @@ public class ChatRunAdmissionCommitService {
             throw CandidateSwitchConflictException.staleSource(request.source().sourceRunId());
         }
         interactionService.cancelOpenBySessionAndCount(user, currentSession.id());
-        List<RuntimeBinding> cancelledBindings = runtimeBindingService.cancelActiveForAdmission(
+        List<AdmissionCancellation> bindingCancellations =
+                runtimeBindingService.cancelActiveForAdmissionWithSnapshots(
                 user.tenantId(), user.ownerUserId(), currentSession.id());
-        return new AdmissionResult(messagePlan, run, cancelledBindings);
+        return new AdmissionResult(messagePlan, run, bindingCancellations);
     }
 
     /**
@@ -260,13 +263,19 @@ public class ChatRunAdmissionCommitService {
     }
 
     public record AdmissionResult(ChatRunMessagePlan messagePlan, ChatRun run,
-                                  List<RuntimeBinding> cancelledBindings) {
+                                  List<AdmissionCancellation> bindingCancellations) {
         public AdmissionResult {
-            cancelledBindings = cancelledBindings == null ? List.of() : List.copyOf(cancelledBindings);
+            bindingCancellations = bindingCancellations == null
+                    ? List.of()
+                    : List.copyOf(bindingCancellations);
         }
 
         public AdmissionResult(ChatRunMessagePlan messagePlan, ChatRun run) {
             this(messagePlan, run, List.of());
+        }
+
+        public List<RuntimeBinding> cancelledBindings() {
+            return bindingCancellations.stream().map(AdmissionCancellation::cancelled).toList();
         }
     }
 }

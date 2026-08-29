@@ -66,6 +66,21 @@ class DefaultDomainAgentSkillConfigurationProviderTest {
     }
 
     @Test
+    void mapsSkillNameAndAttachmentTypeIntoTheSharedConfiguration() throws Exception {
+        startServer(200, response(
+                        "{\"skillId\":\"skill-1\",\"skillName\":\"专项计税\","
+                                + "\"isSaveSession\":\"Y\","
+                                + "\"attachmentType\":\".xlsx.xls;.rar;.zip\"}"),
+                Duration.ZERO, new AtomicReference<>());
+
+        DomainAgentSkillConfiguration configuration = resolve(
+                provider("2s"), "skill-1", RuntimeForwardHeaders.empty());
+
+        assertThat(configuration).isEqualTo(new DomainAgentSkillConfiguration(
+                "skill-1", "专项计税", Boolean.TRUE, ".xlsx.xls;.rar;.zip"));
+    }
+
+    @Test
     void mapsBlankAndMissingConfigurationWithoutInventingDefaults() throws Exception {
         startServer(200, response(item("skill-1", "  ")), Duration.ZERO, new AtomicReference<>());
         assertThat(resolve(provider("2s"), "skill-1", RuntimeForwardHeaders.empty()).saveSession())

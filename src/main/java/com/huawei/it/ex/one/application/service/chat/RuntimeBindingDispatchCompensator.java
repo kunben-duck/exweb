@@ -38,7 +38,8 @@ final class RuntimeBindingDispatchCompensator {
             String sessionId,
             AtomicReference<RuntimeBinding> bindingRef,
             String terminationSignal) {
-        if (lifecycle == null || lifecycle.runtimeSubscribed() || lifecycle.activation() == null) {
+        if (lifecycle == null || lifecycle.runtimeSubscribed() || lifecycle.compensated()
+                || lifecycle.activation() == null) {
             return Mono.empty();
         }
         RuntimeBindingDispatchLifecycle.Activation activation = lifecycle.activation();
@@ -52,7 +53,8 @@ final class RuntimeBindingDispatchCompensator {
                     .filter(RuntimeException.class::isInstance)
                     .onRetryExhaustedThrow((spec, signal) -> signal.failure()));
         }
-        return cleanup.onErrorResume(ex -> {
+        return cleanup.doOnSuccess(ignored -> lifecycle.markCompensated())
+                .onErrorResume(ex -> {
                     log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_WRITE_FAILED,
                                     "Unstarted Runtime binding compensation failed")
                             .runId(runId)
@@ -76,14 +78,21 @@ final class RuntimeBindingDispatchCompensator {
             case CANCEL_NEW -> runtimeBindingService.cancelActiveForRun(activation.binding(), runId);
             case RESTORE_PREVIOUS -> runtimeBindingService.restoreUnstartedForRun(
                     activation.previousBinding(), runId);
+            case RESTORE_ADMISSION -> runtimeBindingService.restoreAdmissionBindingsForUnstartedRun(
+                    activation.binding(), activation.admissionCancellations(), runId);
         };
         if (!compensated || bindingRef == null) {
             return;
         }
-        RuntimeBinding replacement = activation.compensation()
-                == RuntimeBindingDispatchLifecycle.Compensation.RESTORE_PREVIOUS
-                ? activation.previousBinding()
-                : activation.binding().withStatus(RuntimeBindingStatus.CANCELLED);
+        RuntimeBinding replacement = switch (activation.compensation()) {
+            case RESTORE_PREVIOUS -> activation.previousBinding();
+            case RESTORE_ADMISSION -> activation.admissionCancellations().getFirst().previous();
+            case CANCEL_NEW -> activation.binding().withStatus(RuntimeBindingStatus.CANCELLED);
+        };
         bindingRef.compareAndSet(activation.binding(), replacement);
+        if (activation.compensation() == RuntimeBindingDispatchLifecycle.Compensation.RESTORE_ADMISSION) {
+            activation.admissionCancellations().forEach(cancellation ->
+                    runtimeBindingService.synchronizeCache(cancellation.previous()));
+        }
     }
 }

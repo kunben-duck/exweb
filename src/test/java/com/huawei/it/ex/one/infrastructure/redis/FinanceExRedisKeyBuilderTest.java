@@ -60,6 +60,9 @@ class FinanceExRedisKeyBuilderTest {
         assertThat(redisKeys.agentDataPersistencePolicy(
                 "fin_ex:agent_data_persistence", "tenant1", "domain-agent", "skill1"))
                 .isEqualTo("fin_ex:dev:agent_data_persistence:tenant1:domain-agent:skill1");
+        assertThat(redisKeys.domainAgentSkillConfiguration(
+                "fin_ex:domain_agent_skill_config:v1", "tenant1", "skill1"))
+                .isEqualTo("fin_ex:dev:domain_agent_skill_config:v1:tenant1:skill1");
     }
 
     @Test

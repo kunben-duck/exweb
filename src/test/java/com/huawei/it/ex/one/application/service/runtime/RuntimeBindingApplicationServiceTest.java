@@ -473,6 +473,35 @@ class RuntimeBindingApplicationServiceTest {
     }
 
     @Test
+    void restoresAdmissionCancelledBindingAndCancelsUnstartedReplacement() {
+        Instant now = Instant.parse("2026-08-29T00:00:00Z");
+        RuntimeBinding previous = new RuntimeBinding(
+                "binding-old", "t", "u", "s", "relay", "leaf-old", "runtime-old",
+                RuntimeBindingStatus.ACTIVE, "run-old", null, now, now, Map.of());
+        RuntimeBinding cancelled = previous.withStatus(RuntimeBindingStatus.CANCELLED);
+        RuntimeBinding replacement = new RuntimeBinding(
+                "binding-new", "t", "u", "s", "domain-agent", "leaf-new", "s",
+                RuntimeBindingStatus.ACTIVE, "run-new", null, now, now, Map.of());
+        MultiBindingRepository repository = new MultiBindingRepository(List.of(cancelled, replacement));
+        RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(
+                repository, new InMemoryRuntimeBindingCache(), new FixedIdGenerator(),
+                Duration.ofDays(3), "relay");
+
+        boolean restored = service.restoreAdmissionBindingsForUnstartedRun(
+                replacement,
+                List.of(new RuntimeBindingApplicationService.AdmissionCancellation(previous, cancelled)),
+                "run-new");
+
+        assertThat(restored).isTrue();
+        assertThat(repository.findById(previous.id())).get()
+                .extracting(RuntimeBinding::status)
+                .isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(repository.findById(replacement.id())).get()
+                .extracting(RuntimeBinding::status)
+                .isEqualTo(RuntimeBindingStatus.CANCELLED);
+    }
+
+    @Test
     void completedRelayBindingBecomesResumableAndKeepsActualSessionId() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
         InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();

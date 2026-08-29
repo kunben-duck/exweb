@@ -95,6 +95,17 @@ public interface RuntimeBindingMapper {
                                @Param("currentRunId") String currentRunId);
 
     /**
+     * 直连或候选切换尚未订阅 Runtime 时，条件恢复 admission 取消的 Binding 快照。
+     *
+     * @param row admission 取消前的完整 Binding 快照。
+     * @param expectedCancelledUpdatedAt admission 取消后快照的更新时间。
+     * @return 影响行数。
+     */
+    int restoreCancelledAfterAdmission(
+            @Param("row") RuntimeBindingRow row,
+            @Param("expectedCancelledUpdatedAt") java.time.Instant expectedCancelledUpdatedAt);
+
+    /**
      * 条件取消仍由指定 run 持有的 ACTIVE RuntimeBinding。
      *
      * @param bindingId RuntimeBinding 主键。

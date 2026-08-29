@@ -223,6 +223,9 @@ final class AssistantAssembly {
         if (part == null || part.partType() == null) {
             return false;
         }
+        if ("domain-agent-attachment-validation".equals(part.sourceType())) {
+            return true;
+        }
         return switch (part.partType()) {
             case "CLARIFICATION_REQUEST", "CLARIFICATION_RESPONSE",
                  "AGENT_CLARIFICATION_REQUEST", "AGENT_CLARIFICATION_RESPONSE",

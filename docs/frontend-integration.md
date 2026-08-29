@@ -3245,6 +3245,43 @@ curl -OJ http://localhost:8080/v1/documents/doc_xxx/download
 
 DomainAgent 路由会跳过用例库和意图服务，并创建或覆盖当前会话的 `provider=domain-agent` RuntimeBinding，后续未指定 target 的普通提问会优先续接该绑定。`selectedIntent` 可整体省略；传入时只作为可信度较低的展示摘要保存到 binding，第二轮续接无需再次传入。`metadata.sceneParam.docList` 可以缺失或为空数组；存在内容时只校验数组项结构，不校验资源归属。ChatService 不校验 `targetId` 或 `docList` 资源是否可调用；相关权限由下游服务负责。
 
+当请求携带标准`attachments[]`且最终路由为DomainAgent时，ChatService会使用文档库返回的可信文件名扩展名
+校验技能配置中的`attachmentType`。例如`.xlsx.xls;.rar;.zip`表示支持`.xlsx/.xls/.rar/.zip`，比较忽略大小写；
+无扩展名文件和空限制直接放行。任一附件格式不支持时不会调用DomainAgent，事件顺序为：
+
+```text
+runtime.progress
+-> runtime.card
+-> message.completed
+-> run.completed
+```
+
+`runtime.progress/runtime.card`共享以下结构化字段，前端据此生成本地化提示，不依赖正文文案：
+
+```json
+{
+  "source": "chatservice",
+  "sourceType": "domain-agent-attachment-validation",
+  "code": "DOMAIN_AGENT_ATTACHMENT_TYPE_UNSUPPORTED",
+  "skillId": "skill_tax_opinion",
+  "skillName": "税务意见",
+  "supportedAttachmentTypes": [".xlsx", ".xls", ".rar", ".zip"],
+  "unsupportedAttachmentTypes": [".pdf"],
+  "unsupportedAttachments": [
+    {
+      "documentId": "doc_xxx",
+      "name": "report.pdf",
+      "extension": ".pdf"
+    }
+  ]
+}
+```
+
+其中progress额外包含`stage=attachment_validation,status=FAILED`，card额外包含
+`cardType=domainAgentAttachmentUnsupported,cardSources=[attachmentValidation]`；`message.completed`包含
+`finishReason=ATTACHMENT_TYPE_UNSUPPORTED,skillInvocationStarted=false`。该场景按业务完成处理，不产生
+`message.delta`；FULL历史保存结构化Parts，no-store历史保存占位正文和这些必要控制Parts，Event Resume可恢复。
+
 该显式路径只有 `runMode=NEXT` 可以绕过等待态。若会话存在意图澄清、Relay/Agent 澄清、审批、确认或路由切换确认，服务端会在消息/run admission 的同一短事务中取消所有开放 Interaction，然后以当前请求的 `message/metadata/attachments` 调用指定 DomainAgent；旧澄清答案和 `questionnaireAnswers` 不会进入下游。旧等待 run 保留为历史，新 user 消息接在等待 assistant 后。当前 ACTIVE Relay/DomainAgent binding 会被取消并替换为 `routeSource=front-selected` 的目标 binding，历史 `RESUMABLE` Relay binding 不删除。该能力不会抢占 `RUNNING/CANCELLING` run。
 本轮显式选择的 DomainAgent 会进入 `runtime.metadata`，并在历史 assistant 的 `parts` 返回：
 `partType=METADATA`、`payload.metadataType=selected_domain_agent`、`payload.targetType=DOMAIN_AGENT`、`payload.targetId=所选目标 ID`、

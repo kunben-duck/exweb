@@ -50,6 +50,8 @@ final class StandardRunRuntimeCoordinator {
         String intentQuery = IntentClarificationContextAssembler.answerWithAttachments(
                 runCommand.message(), prepared.attachments());
         String runtimeBindingLeafId = runtimeBindingLeafId(admission.messagePlan());
+        RuntimeBindingDispatchLifecycle bindingLifecycle = new RuntimeBindingDispatchLifecycle();
+        bindingLifecycle.trackAdmissionCancellations(admission.bindingCancellations());
         return new RuntimePlan(
                 prepared,
                 admission,
@@ -62,7 +64,7 @@ final class StandardRunRuntimeCoordinator {
                 new AtomicReference<>(RuntimeSessionMode.RESUME),
                 new AtomicReference<>(),
                 new AssistantAssembly(),
-                new RuntimeBindingDispatchLifecycle());
+                bindingLifecycle);
     }
 
     Flux<ChatEvent> execute(RuntimePlan plan, RunExecutionClaim executionClaim) {

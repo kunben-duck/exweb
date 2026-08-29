@@ -26,7 +26,8 @@ final class AgentDataPersistenceEventPolicy {
             "route-switch-confirmation-request",
             "route-switch-confirmation-response",
             "route-switch-declined",
-            "route-switch-applied"
+            "route-switch-applied",
+            "domain-agent-attachment-validation"
     );
 
     EventRetention retention(ChatEvent event, RunEventPipelineContext context) {

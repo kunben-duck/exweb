@@ -177,7 +177,7 @@ FinanceEXChatService#executeRun(...)
 12. 先持久化并推送 `run.started`，让前端立即拿到首个事实事件。
 13. route 为空时进入 run pipeline 内的 `RouteSignalApplicationService#routeInitialWithProgress(...)`：用例库调用前输出 `runtime.progress(sourceType=route-progress,stage=use_case_matching)`；intent-agent 调用前输出 `runtime.progress(sourceType=intent-start,stage=intent_calling)`，裁决后输出 `sourceType=intent-result`，再继续执行最终路由。
 14. 如果本轮实际调用了意图服务，`IntentRecognitionRecordService#recordAsync(...)` 用当前 `UserContext`、query、`IntentDecision`、最终 `RouteTarget` 和 runId 构造不可变快照，并提交到专用 Servlet/MVC 异步线程池；写入失败不影响主链路。
-15. 功能开启时，`AgentDataPersistenceGate` 在调用 DomainAgent 前按可信 skillId 查询配置并解析 assistant 留存策略；Relay 不查询。策略和最终路由在 owner/fencing 保护下写入 run metadata。
+15. `AgentDataPersistenceGate` 在调用 DomainAgent 前按可信skillId读取统一技能配置快照；带扩展名附件按`attachmentType`校验，留存功能开启时同一快照再解析assistant留存策略。Relay和无须配置的请求不查询。附件不支持时不订阅Runtime，完成Binding补偿后输出结构化业务完成事件；正常路径继续按原顺序写入最终路由和run metadata。
 16. 根据最终 `RouteType` 调用 SystemResponse 或 `AgentRuntimeExecutor`；DomainAgent 作为 `provider=domain-agent` 的 AgentRuntime 执行。
 17. 外层补齐 `run.completed`，所有事件统一进入 `persistAndPublishRunEvents(...)`。
 

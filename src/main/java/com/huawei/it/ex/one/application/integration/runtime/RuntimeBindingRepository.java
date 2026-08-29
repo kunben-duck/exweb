@@ -201,6 +201,26 @@ public interface RuntimeBindingRepository {
                 .orElse(false);
     }
 
+    /** 恢复admission刚刚取消且快照仍未变化的Binding。 */
+    default boolean restoreCancelledAfterAdmission(
+            RuntimeBinding previousBinding,
+            Instant expectedCancelledUpdatedAt) {
+        if (previousBinding == null || expectedCancelledUpdatedAt == null) {
+            return false;
+        }
+        return findById(previousBinding.id())
+                .filter(current -> current.status() == RuntimeBindingStatus.CANCELLED)
+                .filter(current -> expectedCancelledUpdatedAt.equals(current.updatedAt()))
+                .filter(current -> previousBinding.tenantId().equals(current.tenantId()))
+                .filter(current -> previousBinding.userId().equals(current.userId()))
+                .filter(current -> previousBinding.chatSessionId().equals(current.chatSessionId()))
+                .map(current -> {
+                    save(previousBinding);
+                    return true;
+                })
+                .orElse(false);
+    }
+
     /**
      * 仅当绑定仍由指定 run 持有且保持 ACTIVE 时取消绑定。
      *

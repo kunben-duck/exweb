@@ -161,6 +161,17 @@ public class MyBatisRuntimeBindingRepository implements RuntimeBindingRepository
     }
 
     @Override
+    public boolean restoreCancelledAfterAdmission(
+            RuntimeBinding previousBinding,
+            Instant expectedCancelledUpdatedAt) {
+        if (previousBinding == null || expectedCancelledUpdatedAt == null) {
+            return false;
+        }
+        return mapper.restoreCancelledAfterAdmission(
+                toRow(previousBinding), expectedCancelledUpdatedAt) == 1;
+    }
+
+    @Override
     @Transactional(timeoutString =
             "${financeex.domain-agent.binding-compensation-transaction-timeout-seconds:2}")
     public boolean cancelActiveForRun(String bindingId, String runId) {

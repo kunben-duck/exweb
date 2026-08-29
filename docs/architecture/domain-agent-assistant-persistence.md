@@ -1,9 +1,9 @@
-# DomainAgent Assistant 留存控制设计
+# DomainAgent 技能配置与 Assistant 留存控制设计
 
 ## 1. 适用范围
 
-本文描述 FinanceEXChatService 当前已经实现的 DomainAgent assistant 历史与业务 Event 留存控制。
-该能力不是 `NO_STORE`，也不构成端到端零留存承诺。
+本文描述 FinanceEXChatService 对DomainAgent技能配置的统一查询、缓存、附件类型校验，以及assistant历史与
+业务Event留存控制。留存能力不是`NO_STORE`，也不构成端到端零留存承诺。
 
 以下数据保持原有保存行为：
 
@@ -15,7 +15,16 @@
 
 ## 2. 配置语义
 
-当前策略来自可信 DomainAgent `skillId` 对应配置中的 `isSaveSession`：
+内部不可变配置快照包含：
+
+```text
+skillId
+skillName
+saveSession
+attachmentType
+```
+
+留存策略来自可信DomainAgent `skillId`对应配置中的`isSaveSession`：
 
 | 外部值 | 内部配置值 | 生效策略 |
 |---|---:|---|
@@ -24,7 +33,8 @@
 | `null`、空白、无目标记录 | `saveSession=null` | `FULL` |
 | 其他非空值或冲突记录 | 协议错误 | fail closed，不调用 DomainAgent |
 
-功能默认关闭。关闭时不读取 Redis 策略缓存，也不查询外部配置，原有消息、Parts、事件和下游请求保持不变。
+留存控制默认关闭。此时无附件或附件均无扩展名的调用不读取配置；带扩展名附件仍会读取同一配置快照完成
+`attachmentType`校验。Relay和系统响应始终不读取DomainAgent技能配置。
 
 ## 3. 防腐层
 
@@ -51,7 +61,8 @@ Cookie: <当前请求Cookie，可选>
 ["e6d6367bf48e4af4bcb0bea5c517d849"]
 ```
 
-默认 Provider 只读取响应中的 `status`、`data[].skillId` 和 `data[].isSaveSession`。Cookie 只存在于
+默认 Provider 只读取响应中的 `status`、`data[].skillId`、`data[].skillName`、
+`data[].isSaveSession`和`data[].attachmentType`。Cookie 只存在于
 `RuntimeForwardHeaders` 内存快照和出站 HTTP Header，不进入请求体、Redis、metadata、事件、数据库或
 日志；当前请求没有 Cookie 时仍调用接口，但不发送 Cookie Header。该调用不使用 SGOV、Authorization
 或其他入口 Header，也不增加重试。
@@ -66,16 +77,18 @@ Chat 编排和策略服务不依赖 HTTP 地址、Cookie或外部响应 DTO。�
 flowchart TD
     A["确定可信 Runtime 目标"] --> B{"目标是 DomainAgent?"}
     B -- "否" --> C["保持当前策略，Relay 不查询配置"]
-    B -- "是" --> D{"策略缓存已开启?"}
-    D -- "是" --> E["按 tenant + provider + skillId 读取 Redis"]
+    B -- "是" --> D{"留存开启或存在带扩展名附件?"}
+    D -- "否" --> J["沿用原链路调用 DomainAgent"]
+    D -- "是" --> E["按 tenant + skillId 读取完整配置缓存"]
     E --> K{"缓存命中?"}
-    K -- "是" --> F["得到 FULL 或 ASSISTANT_PLACEHOLDER"]
+    K -- "是" --> F["得到不可变配置快照"]
     K -- "否" --> G["通过 Provider 查询技能配置"]
-    D -- "否" --> G
     G --> F
-    F --> H["同一 run 内只允许收紧策略"]
-    H --> I["owner/fencing 保护下写入最终路由和 run metadata"]
-    I --> J["调用 DomainAgent 或 Relay"]
+    F --> H{"附件扩展名均受支持?"}
+    H -- "否" --> L["补偿Binding并输出结构化业务完成事件"]
+    H -- "是" --> M["同一 run 内只允许收紧留存策略"]
+    M --> I["owner/fencing 保护下写入最终路由和 run metadata"]
+    I --> J
 ```
 
 栅栏覆盖以下 DomainAgent 入口：
@@ -87,8 +100,9 @@ flowchart TD
 - DomainAgent 拒答后重路由；
 - 路由切换确认。
 
-策略解析失败发生在 Runtime 订阅之前。无有效缓存且 Provider 超时、鉴权失败、服务异常或协议错误时，
-本轮禁止调用 DomainAgent，并沿用现有 run 失败收口和未启动 Binding 补偿。
+配置解析发生在Runtime订阅之前。留存控制开启时，无有效缓存且Provider超时、服务异常或协议错误继续
+fail closed，本轮不调用DomainAgent并沿用现有失败收口和Binding补偿。仅附件校验需要配置时，Provider失败
+记录告警并fail open，避免新增配置依赖阻断原有调用。
 
 每个新 run 独立解析。单个 run 内发生重路由时只允许：
 
@@ -101,32 +115,38 @@ ASSISTANT_PLACEHOLDER -> ASSISTANT_PLACEHOLDER
 
 ## 5. Redis 缓存
 
-缓存 key：
+版本化缓存 key：
 
 ```text
-fin_ex:{env}:agent_data_persistence:{tenantId}:domain-agent:{skillId}
+fin_ex:{env}:domain_agent_skill_config:v1:{tenantId}:{skillId}
 ```
 
-缓存 value 只允许：
-
-```text
-FULL
-ASSISTANT_PLACEHOLDER
-```
-
-`cache-enabled` 默认开启，保持升级前的缓存行为。开启时默认 TTL 为 10 分钟，`FULL` 和
-`ASSISTANT_PLACEHOLDER` 均缓存；Redis 读取失败时回源 Provider，Provider成功但 Redis 写入失败时，
-当前 run 继续使用已解析策略。无缓存且 Provider 失败时不降级为 `FULL`。
+缓存value为完整`DomainAgentSkillConfiguration` JSON，不再只缓存留存枚举。`cache-enabled`默认开启，
+TTL为10分钟；Redis读取失败时回源Provider，Provider成功但Redis写入失败时当前调用继续使用已解析快照。
 
 `cache-enabled=false` 时完全跳过 Redis `GET/SET`，每次新的策略解析都直接查询 Provider，`cache-ttl`
-不参与该模式。关闭缓存不会删除已有 key，旧数据等待原 TTL 自然过期。Interaction continuation 仍继承
+不参与该模式。关闭缓存不会删除已有key。Interaction continuation仍继承
 source run 已固化的策略，不因等待期间配置变化重新查询或放宽 no-store 策略。
 
-缓存按租户隔离，同一 `skillId` 不会跨租户共享策略。升级后不再读取旧的无租户缓存 key；旧 key 按原
-TTL自然过期，无需迁移。Redis同步操作继续运行在 `agentDataPersistenceIoScheduler` 有界调度器中；默认
+缓存按租户隔离，同一`skillId`不会跨租户共享配置。升级后不再读取旧的
+`agent_data_persistence`枚举key，旧key按原TTL自然过期，无需迁移。Redis同步操作继续运行在
+`agentDataPersistenceIoScheduler`有界调度器中；默认
 Provider的HTTP交换使用WebClient非阻塞执行，并由配置的总超时约束。
 
-## 6. Assistant 投影
+## 6. 附件类型校验
+
+- 文件事实只使用当前主流程已经解析的`UploadedDocument.originalName`，不增加附件SQL；
+- `.xlsx.xls;.rar;.zip`解析为`.xlsx/.xls/.rar/.zip`，按小写扩展名比较；
+- 文件扩展名取最后一个非首位`.`之后的内容；无扩展名文件直接允许；
+- `attachmentType`缺失或空白表示不限制；非空但无法解析合法扩展名时记录告警并放行；
+- 任一带扩展名附件不支持时拒绝整个DomainAgent调用，不生成`message.delta`。
+
+拒绝事件顺序为`runtime.progress -> runtime.card -> message.completed -> run.completed`，公共payload使用
+`sourceType=domain-agent-attachment-validation`和`code=DOMAIN_AGENT_ATTACHMENT_TYPE_UNSUPPORTED`，并携带
+技能、支持格式及不支持附件清单。该结果是业务完成而非系统失败；FULL保存结构化Parts，
+ASSISTANT_PLACEHOLDER保存占位正文和必要控制Parts，Event Resume可恢复。
+
+## 7. Assistant 投影
 
 `FULL` 完全沿用原有行为。
 
@@ -138,7 +158,7 @@ Provider的HTTP交换使用WebClient非阻塞执行，并由配置的总超时�
 - live-only Event 仍从数据库全局 sequence 获取有序编号，但不推进 `run.lastSeq`；
 - assistant `content` 保存配置的占位文案；
 - 不保存 `ANSWER`、`MESSAGE_SNAPSHOT`、`THINKING`、`TOOL`、`REFERENCE`、普通 `CARD` 等业务 Parts；
-- 保留 Intent 澄清、AMBIGUOUS_ROUTE、路由切换确认和 Relay 问卷所需控制 Parts；
+- 保留 Intent 澄清、AMBIGUOUS_ROUTE、路由切换确认、附件校验结果和 Relay 问卷所需控制 Parts；
 - completed、waiting、用户 stop 的 partial assistant 和 Interaction 更新使用同一投影规则；
 - 原本不会创建 assistant 的失败路径不会因为该策略新增消息。
 
@@ -152,7 +172,7 @@ RuntimeBinding 的真实 `runtimeSessionId`。Agent澄清、审批或Relay问卷
 run继承策略和占位文案，但将`runtimeDispatchStarted`重置为`false`；只有run-B实际调用Runtime前才重新写入。
 live-only事件携带的`runtimeSessionId`与当前Binding相同时不查询run表，只有首次建立或真实变化时写回。
 
-## 7. 配置项
+## 8. 配置项
 
 ```yaml
 financeex:
@@ -160,12 +180,12 @@ financeex:
     base-url: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_BASE_URL:}
     query-path: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_QUERY_PATH:}
     timeout: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_TIMEOUT:2s}
+    cache-enabled: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_CACHE_ENABLED:${FINANCEEX_AGENT_DATA_PERSISTENCE_CACHE_ENABLED:true}}
+    cache-ttl: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_CACHE_TTL:${FINANCEEX_AGENT_DATA_PERSISTENCE_CACHE_TTL:10m}}
+    cache-key-prefix: ${FINANCEEX_DOMAIN_AGENT_SKILL_CONFIG_CACHE_KEY_PREFIX:fin_ex:domain_agent_skill_config:v1}
 
   agent-data-persistence:
     enabled: ${FINANCEEX_AGENT_DATA_PERSISTENCE_ENABLED:false}
-    cache-enabled: ${FINANCEEX_AGENT_DATA_PERSISTENCE_CACHE_ENABLED:true}
-    cache-ttl: ${FINANCEEX_AGENT_DATA_PERSISTENCE_CACHE_TTL:10m}
-    cache-key-prefix: fin_ex:agent_data_persistence
     placeholder-content: ${FINANCEEX_AGENT_DATA_PERSISTENCE_PLACEHOLDER:根据数据留存策略，本次回答不在消息历史中展示。}
 ```
 
@@ -173,7 +193,7 @@ financeex:
 `timeout`默认2秒，可由部署环境覆盖，零值、负数或非法格式会阻止启动。企业自定义
 `DomainAgentSkillConfigurationProvider`覆盖默认Bean后，不要求配置默认HTTP接口。
 
-## 8. 运行限制
+## 9. 运行限制
 
 - 该能力不是全量事件零留存：控制与终态事实仍保存在 ChatEvent 表；下游系统也可能自行留存业务数据。
 - live-only 业务 Event 不支持 Event Resume。页面初次订阅前、断线期间或 Redis 发布失败时遗漏的内容不可恢复。

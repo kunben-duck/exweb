@@ -359,6 +359,35 @@ class AssistantAssemblyTest {
                 .isEmpty();
     }
 
+    @Test
+    void placeholderPolicyKeepsAttachmentValidationControlParts() {
+        AgentDataPersistenceState state = new AgentDataPersistenceState("回答已隐藏")
+                .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
+        AssistantAssembly assembly = new AssistantAssembly(state);
+
+        assembly.observe(RuntimeEvent.progress("run1", "session1", Map.of(
+                "source", "chatservice",
+                "sourceType", "domain-agent-attachment-validation",
+                "code", "DOMAIN_AGENT_ATTACHMENT_TYPE_UNSUPPORTED",
+                "skillId", "skill-1",
+                "stage", "attachment_validation",
+                "status", "FAILED")));
+        assembly.observe(RuntimeEvent.card("run1", "session1", Map.of(
+                "source", "chatservice",
+                "sourceType", "domain-agent-attachment-validation",
+                "code", "DOMAIN_AGENT_ATTACHMENT_TYPE_UNSUPPORTED",
+                "skillId", "skill-1",
+                "cardType", "domainAgentAttachmentUnsupported",
+                "cardSources", List.of("attachmentValidation"))));
+
+        assertThat(assembly.shouldPersistMessage()).isTrue();
+        assertThat(assembly.finalContent()).isEqualTo("回答已隐藏");
+        assertThat(assembly.parts()).extracting(part -> part.partType())
+                .containsExactly("PROGRESS", "CARD");
+        assertThat(assembly.parts()).allSatisfy(part ->
+                assertThat(part.sourceType()).isEqualTo("domain-agent-attachment-validation"));
+    }
+
     private RuntimeEvent contentAgentCard(String content) {
         return RuntimeEvent.card("run1", "session1", Map.of(
                 "source", "domain-agent",

@@ -47,6 +47,8 @@ final class DomainAgentReplacementExecutor {
     private final DomainAgentProperties domainAgentProperties;
     private final RuntimeBindingDispatchCompensator bindingCompensator;
     private final AgentDataPersistenceGate persistenceGate;
+    private final DomainAgentAttachmentValidationFailureExecutor attachmentFailureExecutor =
+            new DomainAgentAttachmentValidationFailureExecutor();
 
     DomainAgentReplacementExecutor(AgentRuntimeExecutor agentRuntimeExecutor,
                                    RuntimeBindingApplicationService runtimeBindingService,
@@ -214,23 +216,39 @@ final class DomainAgentReplacementExecutor {
                     signal,
                     currentRouteSource));
         }
-        Mono<?> policyResolution = persistenceGate == null
-                ? Mono.just(context.persistenceState())
-                : persistenceGate.resolve(
-                        context.user(), nextRoute, context.persistenceState(), context.forwardHeaders());
-        return policyResolution.then(requireCurrentOwnerRunning(
-                context.executionClaim(), "before-domain-agent-reroute-binding"))
-                .thenMany(Flux.usingWhen(
-                        Mono.fromCallable(() -> prepareDomainAgentReplacement(reroute, signal, nextRoute))
-                                .subscribeOn(eventIoScheduler),
-                        replacement -> executeDomainAgentReplacement(
-                                reroute, signal, nextRoute, continuation, replacement),
-                        replacement -> cleanupUnstartedReplacement(
-                                context, replacement, "complete"),
-                        (replacement, failure) -> cleanupUnstartedReplacement(
-                                context, replacement, "error"),
-                        replacement -> cleanupUnstartedReplacement(
-                                context, replacement, "cancel")));
+        Mono<AgentDataPersistenceGate.Decision> preflight = persistenceGate == null
+                ? Mono.just(AgentDataPersistenceGate.Decision.allowed(context.persistenceState()))
+                : persistenceGate.evaluate(
+                        context.user(),
+                        nextRoute,
+                        context.persistenceState(),
+                        context.forwardHeaders(),
+                        context.documents());
+        return preflight.flatMapMany(decision -> {
+            if (decision.unsupportedAttachment()) {
+                return requireCurrentOwnerRunning(
+                                context.executionClaim(), "before-domain-agent-attachment-rejection")
+                        .thenMany(Flux.defer(() -> {
+                            context.bindingRef().set(bindingPolicy.markRejected(
+                                    context.bindingRef().get(), reroute.refusal()));
+                            return attachmentFailureExecutor.execute(
+                                    context.runId(), context.session().id(), decision.payload());
+                        }));
+            }
+            return requireCurrentOwnerRunning(
+                    context.executionClaim(), "before-domain-agent-reroute-binding")
+                    .thenMany(Flux.usingWhen(
+                            Mono.fromCallable(() -> prepareDomainAgentReplacement(reroute, signal, nextRoute))
+                                    .subscribeOn(eventIoScheduler),
+                            replacement -> executeDomainAgentReplacement(
+                                    reroute, signal, nextRoute, continuation, replacement),
+                            replacement -> cleanupUnstartedReplacement(
+                                    context, replacement, "complete"),
+                            (replacement, failure) -> cleanupUnstartedReplacement(
+                                    context, replacement, "error"),
+                            replacement -> cleanupUnstartedReplacement(
+                                    context, replacement, "cancel")));
+        });
     }
 
     private ReplacementBindingLifecycle prepareDomainAgentReplacement(

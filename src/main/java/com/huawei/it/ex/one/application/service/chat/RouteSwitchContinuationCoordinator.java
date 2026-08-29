@@ -46,6 +46,8 @@ final class RouteSwitchContinuationCoordinator {
     private final AgentRuntimeExecutor runtimeExecutor;
     private final AgentDataPersistenceGate persistenceGate;
     private final RunMemoryContextAssembler memoryAssembler;
+    private final DomainAgentAttachmentValidationFailureExecutor attachmentFailureExecutor =
+            new DomainAgentAttachmentValidationFailureExecutor();
 
     RouteSwitchContinuationCoordinator(
             RuntimeBindingApplicationService runtimeBindingService,
@@ -193,14 +195,25 @@ final class RouteSwitchContinuationCoordinator {
     }
 
     private Flux<ChatEvent> executeAfterStart(StartedSwitchContext context) {
-        Mono<?> policyResolution = !context.input().approved() || persistenceGate == null
-                ? Mono.just(context.assistant().persistenceState())
-                : persistenceGate.resolve(
+        Mono<AgentDataPersistenceGate.Decision> preflight = !context.input().approved() || persistenceGate == null
+                ? Mono.just(AgentDataPersistenceGate.Decision.allowed(
+                        context.assistant().persistenceState()))
+                : persistenceGate.evaluate(
                         context.request().user(),
                         context.route(),
                         context.assistant().persistenceState(),
-                        context.request().forwardHeaders());
-        return policyResolution.thenMany(Flux.defer(() -> executeAfterPolicy(context)));
+                        context.request().forwardHeaders(),
+                        List.of());
+        return preflight.flatMapMany(decision -> decision.unsupportedAttachment()
+                ? eventPersistenceCoordinator.requireCurrentOwnerRunning(
+                                context.executionClaim(), "before-route-switch-attachment-rejection")
+                        .thenMany(Flux.concat(
+                                Flux.just(context.responseEvent()),
+                                attachmentFailureExecutor.execute(
+                                        context.request().runId(),
+                                        context.request().session().id(),
+                                        decision.payload())))
+                : Flux.defer(() -> executeAfterPolicy(context)));
     }
 
     private Flux<ChatEvent> executeAfterPolicy(StartedSwitchContext context) {

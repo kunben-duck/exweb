@@ -1,7 +1,10 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService.AdmissionCancellation;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMessagePlan;
+
+import java.util.List;
 
 /** Preserves standard run admission selection and post-commit cache order. */
 final class StandardRunAdmissionCoordinator {
@@ -74,9 +77,21 @@ final class StandardRunAdmissionCoordinator {
             sessionTitleService.schedule(
                     prepared.user(), prepared.command(), prepared.session(), messagePlan, run);
         }
-        return new Admission(messagePlan, run);
+        return new Admission(messagePlan, run, result.bindingCancellations());
     }
 
-    record Admission(ChatRunMessagePlan messagePlan, ChatRun run) {
+    record Admission(
+            ChatRunMessagePlan messagePlan,
+            ChatRun run,
+            List<AdmissionCancellation> bindingCancellations) {
+        Admission {
+            bindingCancellations = bindingCancellations == null
+                    ? List.of()
+                    : List.copyOf(bindingCancellations);
+        }
+
+        Admission(ChatRunMessagePlan messagePlan, ChatRun run) {
+            this(messagePlan, run, List.of());
+        }
     }
 }

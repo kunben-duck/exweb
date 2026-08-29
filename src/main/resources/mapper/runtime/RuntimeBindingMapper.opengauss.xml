@@ -185,6 +185,29 @@
     </update>
 
     <!--
+      直连/候选切换在Runtime订阅前被业务栅栏拒绝时，恢复admission取消的原Binding。
+      cancelled快照时间必须匹配，避免覆盖后续流程已经修改的Binding。
+      入参: row为admission取消前快照，expectedCancelledUpdatedAt为取消后快照更新时间。
+    -->
+    <update id="restoreCancelledAfterAdmission">
+        UPDATE fin_ex_runtime_binding_t
+        SET leaf_message_id = #{row.leafMessageId},
+            runtime_session_id = #{row.runtimeSessionId},
+            status = #{row.status},
+            last_run_id = #{row.lastRunId},
+            expires_at = #{row.expiresAt},
+            metadata_json = #{row.metadataJson},
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = #{row.id}
+          AND tenant_id = #{row.tenantId}
+          AND user_id = #{row.userId}
+          AND chat_session_id = #{row.chatSessionId}
+          AND provider = #{row.provider}
+          AND status = 'CANCELLED'
+          AND updated_at = #{expectedCancelledUpdatedAt}
+    </update>
+
+    <!--
       拒答重路由在 Runtime 订阅前被 stop 时，条件取消本轮刚创建的 ACTIVE binding。
       bindingId、lastRunId 和 ACTIVE 状态必须同时匹配，避免迟到补偿覆盖后续 run 已刷新的绑定。
       入参: bindingId 为待补偿绑定主键，runId 为创建该绑定的拒答重路由 run 标识。

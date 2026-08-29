@@ -551,11 +551,23 @@ public class RuntimeBindingApplicationService {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public List<RuntimeBinding> cancelActiveForAdmission(String tenantId, String userId, String sessionId) {
+        return cancelActiveForAdmissionWithSnapshots(tenantId, userId, sessionId).stream()
+                .map(AdmissionCancellation::cancelled)
+                .toList();
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public List<AdmissionCancellation> cancelActiveForAdmissionWithSnapshots(
+            String tenantId,
+            String userId,
+            String sessionId) {
         Map<String, RuntimeBinding> active = activeBindingsForAdmission(tenantId, userId, sessionId);
-        List<RuntimeBinding> cancelled = new ArrayList<>();
+        List<AdmissionCancellation> cancelled = new ArrayList<>();
         for (RuntimeBinding binding : active.values()) {
             if (binding.status() == RuntimeBindingStatus.ACTIVE) {
-                cancelled.add(repository.save(binding.withStatus(RuntimeBindingStatus.CANCELLED)));
+                RuntimeBinding cancelledBinding = repository.save(
+                        binding.withStatus(RuntimeBindingStatus.CANCELLED));
+                cancelled.add(new AdmissionCancellation(binding, cancelledBinding));
             }
         }
         return List.copyOf(cancelled);
@@ -567,13 +579,27 @@ public class RuntimeBindingApplicationService {
     @Transactional(propagation = Propagation.MANDATORY)
     public List<RuntimeBinding> cancelActiveForAdmissionExceptPinnedDomainExpert(
             String tenantId, String userId, String sessionId, String roleName) {
+        return cancelActiveForAdmissionExceptPinnedDomainExpertWithSnapshots(
+                tenantId, userId, sessionId, roleName).stream()
+                .map(AdmissionCancellation::cancelled)
+                .toList();
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public List<AdmissionCancellation> cancelActiveForAdmissionExceptPinnedDomainExpertWithSnapshots(
+            String tenantId,
+            String userId,
+            String sessionId,
+            String roleName) {
         Map<String, RuntimeBinding> active = activeBindingsForAdmission(tenantId, userId, sessionId);
         RuntimeBinding preserved = newestPinnedDomainExpert(active.values().stream().toList(), roleName);
-        List<RuntimeBinding> cancelled = new ArrayList<>();
+        List<AdmissionCancellation> cancelled = new ArrayList<>();
         for (RuntimeBinding binding : active.values()) {
             if (binding.status() == RuntimeBindingStatus.ACTIVE
                     && (preserved == null || !preserved.id().equals(binding.id()))) {
-                cancelled.add(repository.save(binding.withStatus(RuntimeBindingStatus.CANCELLED)));
+                RuntimeBinding cancelledBinding = repository.save(
+                        binding.withStatus(RuntimeBindingStatus.CANCELLED));
+                cancelled.add(new AdmissionCancellation(binding, cancelledBinding));
             }
         }
         return List.copyOf(cancelled);
@@ -633,6 +659,32 @@ public class RuntimeBindingApplicationService {
             synchronizeCache(previousBinding);
         }
         return restored;
+    }
+
+    /**
+     * 直连或候选切换尚未订阅Runtime时，原子取消本轮新Binding并恢复admission取消的旧Binding。
+     */
+    @Transactional(timeoutString =
+            "${financeex.domain-agent.binding-compensation-transaction-timeout-seconds:2}")
+    public boolean restoreAdmissionBindingsForUnstartedRun(
+            RuntimeBinding currentBinding,
+            List<AdmissionCancellation> cancellations,
+            String currentRunId) {
+        if (currentBinding == null || currentRunId == null || currentRunId.isBlank()
+                || cancellations == null || cancellations.isEmpty()) {
+            return false;
+        }
+        if (!repository.cancelActiveForRun(currentBinding.id(), currentRunId)) {
+            return false;
+        }
+        for (AdmissionCancellation cancellation : cancellations) {
+            if (cancellation == null || cancellation.previous() == null || cancellation.cancelled() == null
+                    || !repository.restoreCancelledAfterAdmission(
+                            cancellation.previous(), cancellation.cancelled().updatedAt())) {
+                throw new IllegalStateException("Admission binding compensation lost its expected snapshot");
+            }
+        }
+        return true;
     }
 
     /**
@@ -894,6 +946,14 @@ public class RuntimeBindingApplicationService {
                     .forEach(binding -> active.putIfAbsent(binding.id(), binding));
         }
         return active;
+    }
+
+    public record AdmissionCancellation(RuntimeBinding previous, RuntimeBinding cancelled) {
+        public AdmissionCancellation {
+            if (previous == null || cancelled == null || !previous.id().equals(cancelled.id())) {
+                throw new IllegalArgumentException("Admission binding cancellation snapshot is invalid");
+            }
+        }
     }
 
     private Map<String, Object> bindingMetadata(

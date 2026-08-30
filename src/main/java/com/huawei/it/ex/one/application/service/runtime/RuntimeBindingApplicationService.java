@@ -315,14 +315,17 @@ public class RuntimeBindingApplicationService {
     }
 
     private RuntimeBinding create(RuntimeBindingCreateCommand command) {
+        return save(newBinding(command));
+    }
+
+    private RuntimeBinding newBinding(RuntimeBindingCreateCommand command) {
         Instant now = Instant.now();
         String id = idGenerator.newId("runtime_binding",
                 IdGenerateContext.of(command.tenantId(), command.userId(), command.sessionId()));
-        RuntimeBinding binding = new RuntimeBinding(id, command.tenantId(), command.userId(), command.sessionId(),
+        return new RuntimeBinding(id, command.tenantId(), command.userId(), command.sessionId(),
                 normalizeProvider(command.provider()), command.leafMessageId(),
                 blankToDefault(command.runtimeSessionId(), command.sessionId()), RuntimeBindingStatus.ACTIVE,
                 command.runId(), expiresAt(command.provider(), false), now, now, command.metadata());
-        return save(binding);
     }
 
     public RuntimeBinding create(String tenantId, String userId, String sessionId, String runId) {
@@ -330,14 +333,90 @@ public class RuntimeBindingApplicationService {
     }
 
     public RuntimeBinding bindDomainAgentForRun(DomainAgentBindingCommand command) {
-        if (command == null || command.domainAgentId() == null || command.domainAgentId().isBlank()) {
-            throw new IllegalArgumentException("DomainAgent ID 不能为空");
-        }
+        validateDomainAgentBindingCommand(command);
         cancelActive(command.tenantId(), command.userId(), command.sessionId());
-        Map<String, Object> metadata = domainAgentMetadata(command.domainAgentId(), command.routeSource(),
-                command.intentMetadata(), null, command.agentMode());
-        return create(new RuntimeBindingCreateCommand(command.tenantId(), command.userId(), command.sessionId(),
-                DOMAIN_AGENT_PROVIDER, command.runId(), command.leafMessageId(), command.sessionId(), metadata));
+        return save(newDomainAgentBinding(command));
+    }
+
+    /**
+     * Atomically switches a confirmed route interaction to a new DomainAgent behind the current execution fence.
+     * Redis is synchronized by the caller only after this transaction commits.
+     */
+    @Transactional(timeoutString =
+            "${financeex.runtime-binding.interaction-resume-transaction-timeout-seconds:2}")
+    public RuntimeBinding switchDomainAgentForInteraction(
+            ChatInteractionRequest interaction,
+            DomainAgentBindingCommand command,
+            RunExecutionClaim claim) {
+        validateDomainAgentRouteSwitch(interaction, command, claim);
+        if (!repository.lockRunExecutionForBindingMutation(
+                command.tenantId(), command.userId(), command.sessionId(), claim)) {
+            throw new ChatEventAppendRejectedException(
+                    "DomainAgent route-switch Binding 被 run/execution 栅栏拒绝: runId="
+                            + claim.runId());
+        }
+
+        RuntimeBinding source = loadInteractionBinding(interaction);
+        validateDomainAgentRouteSwitchSource(interaction, source);
+        RuntimeBinding candidate = newDomainAgentBinding(command);
+
+        RuntimeBinding cancelledSource = routeSwitchCancelledSource(
+                source, interaction, command.runId());
+        repository.save(cancelledSource);
+        cancelOtherActiveBindingsForRouteSwitch(candidate, source.id());
+        return repository.save(candidate);
+    }
+
+    /** Prepares a new DomainAgent binding without changing the database or Redis. */
+    public DeferredDomainAgentBinding prepareDomainAgentForRun(DomainAgentBindingCommand command) {
+        validateDomainAgentBindingCommand(command);
+        return new DeferredDomainAgentBinding(newDomainAgentBinding(command), null);
+    }
+
+    /** Prepares an ACTIVE DomainAgent continuation without refreshing persisted run ownership. */
+    public DeferredDomainAgentBinding prepareActiveDomainAgentForRun(
+            RuntimeBinding binding,
+            String runId,
+            AgentModeProfile agentMode) {
+        if (binding == null
+                || !DOMAIN_AGENT_PROVIDER.equals(binding.provider())
+                || binding.status() != RuntimeBindingStatus.ACTIVE) {
+            throw new IllegalArgumentException("Deferred DomainAgent continuation requires an ACTIVE binding");
+        }
+        RuntimeBinding candidate = binding
+                .withRun(runId, expiresAt(binding.provider(), false))
+                .withMetadata(AgentModeBindingContext.apply(binding.metadata(), agentMode));
+        return new DeferredDomainAgentBinding(candidate, binding);
+    }
+
+    /**
+     * Persists a validated DomainAgent binding immediately before Runtime subscription.
+     * Cache synchronization is deliberately performed by the caller after this transaction commits.
+     */
+    @Transactional(timeoutString =
+            "${financeex.runtime-binding.interaction-resume-transaction-timeout-seconds:2}")
+    public DeferredDomainAgentBindingActivation activateDeferredDomainAgentForRuntime(
+            DeferredDomainAgentBinding deferred,
+            RunExecutionClaim claim) {
+        RuntimeBinding candidate = requireDeferredCandidate(deferred);
+        if (!repository.lockRunExecutionForBindingMutation(
+                candidate.tenantId(), candidate.userId(), candidate.chatSessionId(), claim)) {
+            throw new ChatEventAppendRejectedException(
+                    "Deferred DomainAgent Binding 被 run/execution 栅栏拒绝: runId="
+                            + (claim == null ? null : claim.runId()));
+        }
+        List<AdmissionCancellation> cancellations = cancelOtherActiveBindingsForDeferred(candidate);
+        RuntimeBinding saved = saveDeferredCandidate(deferred, candidate);
+        return new DeferredDomainAgentBindingActivation(saved, deferred.previousBinding(), cancellations);
+    }
+
+    /** Clears stale leaf cache keys before exposing an atomically activated DomainAgent binding. */
+    public void synchronizeDeferredDomainAgentActivation(RuntimeBinding binding) {
+        if (binding == null) {
+            return;
+        }
+        cache.evict(binding.tenantId(), binding.userId(), binding.chatSessionId());
+        cache.put(binding);
     }
 
     public RuntimeBinding touchDomainAgentForRun(RuntimeBinding binding, String runId,
@@ -622,11 +701,15 @@ public class RuntimeBindingApplicationService {
         if (binding == null) {
             return null;
         }
+        return save(notRoutable(binding, rejectCode));
+    }
+
+    private RuntimeBinding notRoutable(RuntimeBinding binding, String rejectCode) {
         Map<String, Object> metadata = new LinkedHashMap<>(binding.metadata());
         if (rejectCode != null && !rejectCode.isBlank()) {
             metadata.put("lastRejectCode", rejectCode);
         }
-        return save(binding.withMetadata(metadata).withStatus(RuntimeBindingStatus.CANCELLED));
+        return binding.withMetadata(metadata).withStatus(RuntimeBindingStatus.CANCELLED);
     }
 
     /**
@@ -948,11 +1031,159 @@ public class RuntimeBindingApplicationService {
         return active;
     }
 
+    private RuntimeBinding newDomainAgentBinding(DomainAgentBindingCommand command) {
+        Map<String, Object> metadata = domainAgentMetadata(
+                command.domainAgentId(), command.routeSource(), command.intentMetadata(), null,
+                command.agentMode());
+        return newBinding(new RuntimeBindingCreateCommand(
+                command.tenantId(), command.userId(), command.sessionId(), DOMAIN_AGENT_PROVIDER,
+                command.runId(), command.leafMessageId(), command.sessionId(), metadata));
+    }
+
+    private void validateDomainAgentBindingCommand(DomainAgentBindingCommand command) {
+        if (command == null || command.domainAgentId() == null || command.domainAgentId().isBlank()) {
+            throw new IllegalArgumentException("DomainAgent ID 不能为空");
+        }
+    }
+
+    private RuntimeBinding requireDeferredCandidate(DeferredDomainAgentBinding deferred) {
+        if (deferred == null || deferred.candidate() == null) {
+            throw new IllegalArgumentException("Deferred DomainAgent binding must not be null");
+        }
+        return deferred.candidate();
+    }
+
+    private List<AdmissionCancellation> cancelOtherActiveBindingsForDeferred(
+            RuntimeBinding candidate) {
+        Map<String, RuntimeBinding> active = activeBindingsForAdmission(
+                candidate.tenantId(), candidate.userId(), candidate.chatSessionId());
+        List<AdmissionCancellation> cancelled = new ArrayList<>();
+        for (RuntimeBinding binding : active.values()) {
+            if (binding.status() == RuntimeBindingStatus.ACTIVE
+                    && !binding.id().equals(candidate.id())) {
+                RuntimeBinding cancelledBinding = repository.save(
+                        binding.withStatus(RuntimeBindingStatus.CANCELLED));
+                cancelled.add(new AdmissionCancellation(binding, cancelledBinding));
+            }
+        }
+        return List.copyOf(cancelled);
+    }
+
+    private void cancelOtherActiveBindingsForRouteSwitch(
+            RuntimeBinding candidate,
+            String sourceBindingId) {
+        activeBindingsForAdmission(
+                candidate.tenantId(), candidate.userId(), candidate.chatSessionId())
+                .values()
+                .stream()
+                .filter(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
+                .filter(binding -> !binding.id().equals(sourceBindingId))
+                .filter(binding -> !binding.id().equals(candidate.id()))
+                .forEach(binding -> repository.save(
+                        binding.withStatus(RuntimeBindingStatus.CANCELLED)));
+    }
+
+    private void validateDomainAgentRouteSwitch(
+            ChatInteractionRequest interaction,
+            DomainAgentBindingCommand command,
+            RunExecutionClaim claim) {
+        validateDomainAgentBindingCommand(command);
+        if (interaction == null || claim == null
+                || !Objects.equals(command.runId(), claim.runId())
+                || !Objects.equals(command.tenantId(), interaction.tenantId())
+                || !Objects.equals(command.userId(), interaction.userId())
+                || !Objects.equals(command.sessionId(), interaction.sessionId())
+                || (interaction.continueRunId() != null
+                && !interaction.continueRunId().isBlank()
+                && !Objects.equals(command.runId(), interaction.continueRunId()))) {
+            throw new IllegalArgumentException("DomainAgent route-switch Binding 参数不完整或不匹配");
+        }
+    }
+
+    private void validateDomainAgentRouteSwitchSource(
+            ChatInteractionRequest interaction,
+            RuntimeBinding source) {
+        if (!DOMAIN_AGENT_PROVIDER.equals(interaction.runtimeProvider())
+                || !DOMAIN_AGENT_PROVIDER.equals(source.provider())
+                || (source.status() != RuntimeBindingStatus.ACTIVE
+                && source.status() != RuntimeBindingStatus.CANCELLED)
+                || interaction.sourceRunId() == null
+                || interaction.sourceRunId().isBlank()
+                || !Objects.equals(interaction.sourceRunId(), source.lastRunId())) {
+            throw new ChatEventAppendRejectedException(
+                    "DomainAgent route-switch source Binding 已变化: bindingId=" + source.id());
+        }
+    }
+
+    private RuntimeBinding routeSwitchCancelledSource(
+            RuntimeBinding source,
+            ChatInteractionRequest interaction,
+            String runId) {
+        RuntimeBinding next = withRuntimeSessionId(source, interaction.runtimeSessionId())
+                .withRun(runId, expiresAt(source.provider(), false));
+        if (interaction.assistantMessageId() != null
+                && !interaction.assistantMessageId().isBlank()
+                && !interaction.assistantMessageId().equals(next.leafMessageId())) {
+            next = next.withLeafMessageId(interaction.assistantMessageId());
+        }
+        return notRoutable(next, interactionPayloadText(interaction, "refusalCode"));
+    }
+
+    private String interactionPayloadText(
+            ChatInteractionRequest interaction,
+            String key) {
+        Object value = interaction == null || interaction.requestPayload() == null
+                ? null
+                : interaction.requestPayload().get(key);
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private RuntimeBinding saveDeferredCandidate(
+            DeferredDomainAgentBinding deferred,
+            RuntimeBinding candidate) {
+        if (!deferred.reusesExistingBinding()) {
+            if (repository.findById(candidate.id()).isPresent()) {
+                throw new IllegalStateException("Deferred DomainAgent binding ID already exists");
+            }
+            return repository.save(candidate);
+        }
+        RuntimeBinding previous = deferred.previousBinding();
+        RuntimeBinding current = repository.findById(previous.id())
+                .filter(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
+                .filter(binding -> previous.tenantId().equals(binding.tenantId()))
+                .filter(binding -> previous.userId().equals(binding.userId()))
+                .filter(binding -> previous.chatSessionId().equals(binding.chatSessionId()))
+                .filter(binding -> DOMAIN_AGENT_PROVIDER.equals(binding.provider()))
+                .filter(binding -> Objects.equals(previous.lastRunId(), binding.lastRunId()))
+                .orElseThrow(() -> new ChatEventAppendRejectedException(
+                        "Deferred DomainAgent binding is no longer current: bindingId=" + previous.id()));
+        RuntimeBinding next = new RuntimeBinding(
+                current.id(), current.tenantId(), current.userId(), current.chatSessionId(), current.provider(),
+                candidate.leafMessageId(), current.runtimeSessionId(), RuntimeBindingStatus.ACTIVE,
+                candidate.lastRunId(), candidate.expiresAt(), current.createdAt(), candidate.updatedAt(),
+                candidate.metadata());
+        return repository.save(next);
+    }
+
     public record AdmissionCancellation(RuntimeBinding previous, RuntimeBinding cancelled) {
         public AdmissionCancellation {
             if (previous == null || cancelled == null || !previous.id().equals(cancelled.id())) {
                 throw new IllegalArgumentException("Admission binding cancellation snapshot is invalid");
             }
+        }
+    }
+
+    public record DeferredDomainAgentBindingActivation(
+            RuntimeBinding binding,
+            RuntimeBinding previousBinding,
+            List<AdmissionCancellation> cancellations
+    ) {
+        public DeferredDomainAgentBindingActivation {
+            cancellations = cancellations == null ? List.of() : List.copyOf(cancellations);
         }
     }
 

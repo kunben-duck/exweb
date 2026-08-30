@@ -5,6 +5,7 @@ import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
 import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceGate;
 import com.huawei.it.ex.one.application.service.memory.MemoryApplicationService;
 import com.huawei.it.ex.one.application.service.memory.RouteMemoryApplicationService;
 import com.huawei.it.ex.one.application.service.routing.IntentRecognitionRecordService;
@@ -12,6 +13,7 @@ import com.huawei.it.ex.one.application.service.routing.RouteSignalApplicationSe
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.SystemResponseExecutor;
+import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
 
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
@@ -48,7 +50,8 @@ final class ChatFlowTestAssembler {
             Scheduler eventIoScheduler,
             DomainAgentProperties domainAgentProperties,
             RouteMemoryApplicationService routeMemoryService,
-            ChatRunOperationalProperties runOperationalProperties) {
+            ChatRunOperationalProperties runOperationalProperties,
+            AgentDataPersistenceGate routeSwitchPersistenceGate) {
         Scheduler eventScheduler = eventIoScheduler == null
                 ? Schedulers.boundedElastic()
                 : eventIoScheduler;
@@ -129,7 +132,8 @@ final class ChatFlowTestAssembler {
                         terminalCommitService,
                         chatStreamService,
                         runtimeBindingService,
-                        routeMemoryService);
+                        routeMemoryService,
+                        routeRecorder);
         this.eventPipeline = new ChatEventPipeline(
                 chatDeltaCoalescer,
                 eventScheduler,
@@ -219,6 +223,9 @@ final class ChatFlowTestAssembler {
                         routeRecorder,
                         refusalCoordinator,
                         ambiguousRouteSelectionResolver,
+                        documentFacade,
+                        routeSwitchPersistenceGate,
+                        bindingCompensator,
                         eventScheduler));
         ChatRunExecutionCoordinator runExecutionCoordinator =
                 standardRunCoordinator(new StandardRunAssembly(
@@ -311,7 +318,11 @@ final class ChatFlowTestAssembler {
                         inputs.eventFactory(),
                         inputs.persistenceCoordinator(),
                         inputs.refusalCoordinator(),
-                        inputs.runtimeExecutor());
+                        inputs.runtimeExecutor(),
+                        inputs.routeSwitchPersistenceGate(),
+                        null,
+                        new SensitiveInformationAccessNameResolver(""),
+                        inputs.documentFacade());
         RuntimeInteractionContinuationCoordinator runtimeInteractionCoordinator =
                 new RuntimeInteractionContinuationCoordinator(
                         inputs.runtimeBindingService(),
@@ -380,6 +391,9 @@ final class ChatFlowTestAssembler {
             AppliedRouteRecorder routeRecorder,
             DomainAgentRefusalCoordinator refusalCoordinator,
             AmbiguousRouteSelectionResolver ambiguousRouteSelectionResolver,
+            DocumentFacade documentFacade,
+            AgentDataPersistenceGate routeSwitchPersistenceGate,
+            RuntimeBindingDispatchCompensator bindingCompensator,
             Scheduler eventScheduler
     ) {
     }

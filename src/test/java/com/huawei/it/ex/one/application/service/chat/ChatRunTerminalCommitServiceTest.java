@@ -17,6 +17,7 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
+import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
@@ -55,6 +56,174 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 class ChatRunTerminalCommitServiceTest {
+    @Test
+    void completedTransactionCommitsRouteSwitchEventAndDeferredBindingTogether() {
+        ChatStreamApplicationService streamService = mock(ChatStreamApplicationService.class);
+        SessionApplicationService sessionService = mock(SessionApplicationService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRunLeaseApplicationService leaseService = mock(ChatRunLeaseApplicationService.class);
+        RuntimeBindingRepository bindingRepository = mock(RuntimeBindingRepository.class);
+        ChatRunTerminalCommitService service = new ChatRunTerminalCommitService(
+                streamService, sessionService, runRepository, leaseService,
+                bindingRepository, null, Duration.ofMinutes(10));
+        Instant now = Instant.now();
+        RuntimeBinding previous = new RuntimeBinding(
+                "binding-a", "tenant1", "user1", "session1", "domain-agent",
+                "leaf-a", "session1", RuntimeBindingStatus.ACTIVE, "run-a", now.plusSeconds(60),
+                now, now, Map.of("domainAgentId", "skill-a"));
+        RuntimeBinding candidate = new RuntimeBinding(
+                "binding-b", "tenant1", "user1", "session1", "domain-agent",
+                "leaf-a", "session1", RuntimeBindingStatus.ACTIVE, "run-b", now.plusSeconds(60),
+                now, now, Map.of("domainAgentId", "skill-b"));
+        AtomicReference<DeferredDomainAgentBinding> deferredRef = new AtomicReference<>(
+                new DeferredDomainAgentBinding(candidate, null));
+        RuntimeEvent applied = RuntimeEvent.metadata("run-b", "session1", Map.of(
+                "source", "chatservice",
+                "sourceType", "route-switch-applied",
+                "targetProvider", "domain-agent",
+                "targetId", "skill-b"));
+        AtomicReference<PendingRouteSwitchAppliedEvent> pendingAppliedRef = new AtomicReference<>(
+                new PendingRouteSwitchAppliedEvent(applied, candidate.id()));
+        AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>(candidate);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        ChatSession session = new ChatSession(
+                "session1", "tenant1", "user1", "test", "ACTIVE", "web", now, now);
+        ChatMessage userMessage = new ChatMessage(
+                "msg-user", "tenant1", "user1", "session1", "user", "question", null, now);
+        AssistantAssembly assistant = new AssistantAssembly();
+        assistant.messageSkill().replace("skill-b");
+        RunExecutionClaim claim = new RunExecutionClaim("run-b", "instance-test", 2L);
+        ChatRunTerminalCommitService.TerminalCommitContext context =
+                new ChatRunTerminalCommitService.TerminalCommitContext(
+                        user, session,
+                        new ChatRunMessagePlan(ChatRunMode.NEXT, userMessage.id(), userMessage, null),
+                        bindingRef, assistant, "run-b", claim, null,
+                        RuntimeInteractionDispatchState.untracked(), deferredRef, pendingAppliedRef);
+        ChatEvent event = RunCompletedEvent.of("run-b", "session1", Map.of("status", "COMPLETED"));
+        ChatEvent storedApplied = new RuntimeEvent(
+                "run-b", "session1", 8L, now, "runtime.metadata", applied.payload());
+        ChatEvent stored = new RunCompletedEvent("run-b", "session1", 9L, now, event.payload());
+        ChatMessage savedAssistant = mock(ChatMessage.class);
+        when(savedAssistant.id()).thenReturn("msg-assistant");
+        when(runRepository.tryFenceOwnerTerminalCommit(any())).thenReturn(true);
+        when(runRepository.findById("run-b")).thenReturn(Optional.empty());
+        when(streamService.appendBatchWithExecutionGuard(eq(List.of(applied, event)), eq(claim)))
+                .thenReturn(List.of(storedApplied, stored));
+        when(sessionService.saveAssistantMessage(any())).thenReturn(savedAssistant);
+        when(bindingRepository.findById("binding-b")).thenReturn(Optional.empty());
+        when(bindingRepository.findActiveBySession("tenant1", "user1", "session1"))
+                .thenReturn(List.of(previous));
+        when(bindingRepository.cancelActiveForRun("binding-a", "run-a")).thenReturn(true);
+        when(bindingRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ChatRunTerminalCommitService.CommitResult result = service.commitCompleted(
+                new ChatRunTerminalCommitService.CompletedCommitCommand(
+                        event, context,
+                        new ChatRunTerminalCommitService.MessageTarget(true, "msg-assistant")));
+
+        ArgumentCaptor<RuntimeBinding> bindingCaptor = ArgumentCaptor.forClass(RuntimeBinding.class);
+        verify(bindingRepository).cancelActiveForRun("binding-a", "run-a");
+        verify(bindingRepository).save(bindingCaptor.capture());
+        RuntimeBinding activated = bindingCaptor.getValue();
+        assertThat(activated.id()).isEqualTo("binding-b");
+        assertThat(activated.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(activated.lastRunId()).isEqualTo("run-b");
+        assertThat(activated.leafMessageId()).isEqualTo("msg-assistant");
+        assertThat(result.binding()).isEqualTo(activated);
+        assertThat(result.replaceBindingCache()).isTrue();
+        assertThat(result.precedingEvents()).containsExactly(storedApplied);
+        verify(streamService, never()).appendWithExecutionGuard(any(), any());
+        ArgumentCaptor<AssistantMessageSaveCommand> assistantCaptor =
+                ArgumentCaptor.forClass(AssistantMessageSaveCommand.class);
+        verify(sessionService).saveAssistantMessage(assistantCaptor.capture());
+        assertThat(assistantCaptor.getValue().partDrafts())
+                .filteredOn(part -> "route-switch-applied".equals(part.sourceType()))
+                .singleElement()
+                .satisfies(part -> assertThat(part.partType()).isEqualTo("METADATA"));
+    }
+
+    @Test
+    void pendingRouteSwitchEventMustMatchDeferredBindingBeforeAnyEventWrite() {
+        ChatStreamApplicationService streamService = mock(ChatStreamApplicationService.class);
+        SessionApplicationService sessionService = mock(SessionApplicationService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRunLeaseApplicationService leaseService = mock(ChatRunLeaseApplicationService.class);
+        RuntimeBindingRepository bindingRepository = mock(RuntimeBindingRepository.class);
+        ChatRunTerminalCommitService service = new ChatRunTerminalCommitService(
+                streamService, sessionService, runRepository, leaseService,
+                bindingRepository, null, Duration.ZERO);
+        Instant now = Instant.now();
+        RuntimeBinding candidate = new RuntimeBinding(
+                "binding-b", "tenant1", "user1", "session1", "domain-agent",
+                null, "session1", RuntimeBindingStatus.ACTIVE, "run-b", null,
+                now, now, Map.of("domainAgentId", "skill-b"));
+        RuntimeEvent applied = RuntimeEvent.metadata("run-b", "session1", Map.of(
+                "source", "chatservice",
+                "sourceType", "route-switch-applied"));
+        ChatRunTerminalCommitService.TerminalCommitContext context =
+                new ChatRunTerminalCommitService.TerminalCommitContext(
+                        new UserContext("tenant1", "user1", "User One"),
+                        new ChatSession(
+                                "session1", "tenant1", "user1", "test", "ACTIVE", "web", now, now),
+                        null,
+                        new AtomicReference<>(candidate),
+                        new AssistantAssembly(),
+                        "run-b",
+                        new RunExecutionClaim("run-b", "instance-test", 2L),
+                        null,
+                        RuntimeInteractionDispatchState.untracked(),
+                        new AtomicReference<>(new DeferredDomainAgentBinding(candidate, null)),
+                        new AtomicReference<>(new PendingRouteSwitchAppliedEvent(applied, "binding-other")));
+        when(runRepository.tryFenceOwnerTerminalCommit(any())).thenReturn(true);
+
+        assertThatThrownBy(() -> service.commitCompleted(
+                new ChatRunTerminalCommitService.CompletedCommitCommand(
+                        RunCompletedEvent.of("run-b", "session1"),
+                        context,
+                        new ChatRunTerminalCommitService.MessageTarget(true, "msg-assistant"))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("does not match");
+
+        verify(streamService, never()).appendWithExecutionGuard(any(), any());
+        verify(streamService, never()).appendBatchWithExecutionGuard(any(), any());
+        verify(bindingRepository, never()).save(any());
+    }
+
+    @Test
+    void failedTerminalDoesNotPersistDeferredBinding() {
+        ChatStreamApplicationService streamService = mock(ChatStreamApplicationService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRunLeaseApplicationService leaseService = mock(ChatRunLeaseApplicationService.class);
+        RuntimeBindingRepository bindingRepository = mock(RuntimeBindingRepository.class);
+        ChatRunTerminalCommitService service = new ChatRunTerminalCommitService(
+                streamService, null, runRepository, leaseService, bindingRepository, null, Duration.ZERO);
+        Instant now = Instant.now();
+        RuntimeBinding candidate = new RuntimeBinding(
+                "binding-b", "tenant1", "user1", "session1", "domain-agent",
+                null, "session1", RuntimeBindingStatus.ACTIVE, "run-b", null,
+                now, now, Map.of("domainAgentId", "skill-b"));
+        AtomicReference<DeferredDomainAgentBinding> deferredRef = new AtomicReference<>(
+                new DeferredDomainAgentBinding(candidate, null));
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        ChatSession session = new ChatSession(
+                "session1", "tenant1", "user1", "test", "ACTIVE", "web", now, now);
+        RunExecutionClaim claim = new RunExecutionClaim("run-b", "instance-test", 2L);
+        ChatRunTerminalCommitService.TerminalCommitContext context =
+                new ChatRunTerminalCommitService.TerminalCommitContext(
+                        user, session, null, new AtomicReference<>(candidate), new AssistantAssembly(),
+                        "run-b", claim, null, RuntimeInteractionDispatchState.untracked(), deferredRef);
+        ChatEvent event = ErrorEvent.of("run-b", "session1", "FAILED", "failed");
+        when(runRepository.tryFenceOwnerTerminalCommit(any())).thenReturn(true);
+        when(streamService.appendWithExecutionGuard(event, claim)).thenReturn(event);
+
+        ChatRunTerminalCommitService.CommitResult result = service.commitTerminalOnly(
+                new ChatRunTerminalCommitService.TerminalOnlyCommitCommand(event, context));
+
+        assertThat(result.binding()).isNull();
+        assertThat(result.replaceBindingCache()).isFalse();
+        verify(bindingRepository, never()).save(any());
+    }
+
     @Test
     void completedAssistantUsesInMemoryFinalRunSkillWithoutExtraRunLookup() {
         ChatStreamApplicationService streamService = mock(ChatStreamApplicationService.class);

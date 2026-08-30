@@ -185,7 +185,9 @@ final class ChatRuntimeDispatchCoordinator {
                                 request.bindingRef().get(),
                                 request.runtimeSessionModeRef().get(),
                                 request.agentMode(),
-                                request.bindingLifecycle()),
+                                request.bindingLifecycle(),
+                                !request.documents().isEmpty(),
+                                request.deferredDomainAgentBindingRef()),
                         routeSignal);
         request.routeRef().set(resolution.route());
         request.bindingRef().set(resolution.binding());
@@ -208,46 +210,57 @@ final class ChatRuntimeDispatchCoordinator {
         return preflight.flatMapMany(decision -> decision.unsupportedAttachment()
                 ? eventPersistenceCoordinator.requireCurrentOwnerRunning(
                                 request.executionClaim(), "before-attachment-validation-rejection")
-                        .then(compensateRejectedBinding(request))
-                        .thenMany(attachmentFailureExecutor.execute(
-                                request.runId(), request.session().id(), decision.payload()))
-                : Flux.defer(() -> {
-                    persistResolvedRoute(request, resolution, recordIntentRecognition);
-                    return dispatchPersistedRuntime(request, resolution);
-                }));
+                        .thenMany(Flux.defer(() -> {
+                            persistResolvedRoute(request, resolution, recordIntentRecognition);
+                            appliedRouteRecorder.deferRouteMemoryDecision(
+                                    request.pendingRouteMemoryDecisionRef(),
+                                    new PendingRouteMemoryDecision(
+                                            request.user(),
+                                            request.session().id(),
+                                            request.runId(),
+                                            appliedRouteQuery(request, resolution),
+                                            resolution.intent(),
+                                            resolution.route()));
+                            return attachmentFailureExecutor.execute(
+                                    request.runId(), request.session().id(), decision.payload());
+                        }))
+                : dispatchValidatedRuntime(request, resolution, recordIntentRecognition));
     }
 
-    private Mono<Void> compensateRejectedBinding(RoutePipelineRequest request) {
-        return bindingCompensator.cleanup(
-                        request.bindingLifecycle(),
-                        request.runId(),
-                        request.session().id(),
-                        request.bindingRef(),
-                        "attachment-validation")
-                .then(Mono.defer(() -> {
-                    RuntimeBindingDispatchLifecycle lifecycle = request.bindingLifecycle();
-                    if (lifecycle == null || lifecycle.activation() == null
-                            || lifecycle.runtimeSubscribed() || lifecycle.compensated()) {
-                        return Mono.empty();
-                    }
-                    return Mono.error(new IllegalStateException(
-                            "Attachment validation binding compensation did not complete"));
+    private Flux<ChatEvent> dispatchValidatedRuntime(
+            RoutePipelineRequest request,
+            RouteResolutionCoordinator.RouteExecutionResolution resolution,
+            boolean recordIntentRecognition) {
+        if (request.deferredDomainAgentBindingRef().get() == null) {
+            return Flux.defer(() -> {
+                persistResolvedRoute(request, resolution, recordIntentRecognition);
+                return dispatchPersistedRuntime(request, resolution);
+            });
+        }
+        return eventPersistenceCoordinator.requireCurrentOwnerRunning(
+                        request.executionClaim(), "before-domain-agent-binding-materialization")
+                .thenMany(Flux.defer(() -> {
+                    RouteResolutionCoordinator.RouteExecutionResolution materialized =
+                            routeResolutionCoordinator.materializeDeferredDomainAgentBinding(
+                                    resolution,
+                                    request.deferredDomainAgentBindingRef(),
+                                    request.executionClaim(),
+                                    request.bindingLifecycle());
+                    request.bindingRef().set(materialized.binding());
+                    persistResolvedRoute(request, materialized, recordIntentRecognition);
+                    return dispatchPersistedRuntime(request, materialized);
                 }));
     }
 
     private Flux<ChatEvent> dispatchPersistedRuntime(
             RoutePipelineRequest request,
             RouteResolutionCoordinator.RouteExecutionResolution resolution) {
-        String appliedRouteQuery = resolution.intent() == null
-                ? request.routeMemoryQuery()
-                : blankToDefault(
-                        request.intentRouteMemoryQuery(), request.routeMemoryQuery());
         MemoryContext runtimeMemory = appliedRouteRecorder.recordAppliedRouteDecision(
                 new AppliedRouteRecorder.AppliedRouteDecision(
                         request.user(),
                         request.session().id(),
                         request.runId(),
-                        appliedRouteQuery,
+                        appliedRouteQuery(request, resolution),
                         resolution.intent(),
                         resolution.route(),
                         resolution.binding(),
@@ -270,6 +283,14 @@ final class ChatRuntimeDispatchCoordinator {
                         request.persistenceState())))
                 .thenMany(Flux.defer(() -> executeRuntime(
                         request, resolution, runtimeCommand, runtimeMemory)));
+    }
+
+    private String appliedRouteQuery(
+            RoutePipelineRequest request,
+            RouteResolutionCoordinator.RouteExecutionResolution resolution) {
+        return resolution.intent() == null
+                ? request.routeMemoryQuery()
+                : blankToDefault(request.intentRouteMemoryQuery(), request.routeMemoryQuery());
     }
 
     private void persistResolvedRoute(
@@ -320,7 +341,9 @@ final class ChatRuntimeDispatchCoordinator {
                     request.routeMemoryQuery(),
                     request.persistenceState(),
                     request.messageSkill(),
-                    request.pendingInteractionPayloadRef()));
+                    request.pendingInteractionPayloadRef(),
+                    request.deferredDomainAgentBindingRef(),
+                    request.pendingRouteMemoryDecisionRef()));
             case SYSTEM_RESPONSE -> systemResponseExecutor.execute(
                     runtimeCommand, request.runId(), resolution.intent(), resolution.route());
             case AGENT_RUNTIME -> agentRuntimeExecutor.execute(new RuntimeExecutionContext(
@@ -375,7 +398,9 @@ final class ChatRuntimeDispatchCoordinator {
                 request.routeMemoryQuery(),
                 request.persistenceState(),
                 request.messageSkill(),
-                request.pendingInteractionPayloadRef());
+                request.pendingInteractionPayloadRef(),
+                request.deferredDomainAgentBindingRef(),
+                request.pendingRouteMemoryDecisionRef());
         return domainAgentRefusalCoordinator.continueAfterClarification(
                 new DomainAgentRefusalCoordinator.ClarifiedContinuation(
                         context,

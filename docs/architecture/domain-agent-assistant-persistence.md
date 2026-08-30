@@ -85,7 +85,7 @@ flowchart TD
     K -- "否" --> G["通过 Provider 查询技能配置"]
     G --> F
     F --> H{"附件扩展名均受支持?"}
-    H -- "否" --> L["补偿Binding并输出结构化业务完成事件"]
+    H -- "否" --> L["准备未落库Binding草稿并输出结构化业务完成事件"]
     H -- "是" --> M["同一 run 内只允许收紧留存策略"]
     M --> I["owner/fencing 保护下写入最终路由和 run metadata"]
     I --> J
@@ -99,6 +99,8 @@ flowchart TD
 - Intent 澄清或 AMBIGUOUS_ROUTE 最终选中；
 - DomainAgent 拒答后重路由；
 - 路由切换确认。
+
+路由切换确认只使用本次`approved=true`请求显式提交并重新鉴权的附件，不自动继承原run附件，也不修改原user消息附件关系。
 
 配置解析发生在Runtime订阅之前。留存控制开启时，无有效缓存且Provider超时、服务异常或协议错误继续
 fail closed，本轮不调用DomainAgent并沿用现有失败收口和Binding补偿。仅附件校验需要配置时，Provider失败
@@ -144,7 +146,14 @@ Provider的HTTP交换使用WebClient非阻塞执行，并由配置的总超时�
 拒绝事件顺序为`runtime.progress -> runtime.card -> message.completed -> run.completed`，公共payload使用
 `sourceType=domain-agent-attachment-validation`和`code=DOMAIN_AGENT_ATTACHMENT_TYPE_UNSUPPORTED`，并携带
 技能、支持格式及不支持附件清单。该结果是业务完成而非系统失败；FULL保存结构化Parts，
-ASSISTANT_PLACEHOLDER保存占位正文和必要控制Parts，Event Resume可恢复。
+ASSISTANT_PLACEHOLDER保存占位正文和必要控制Parts，Event Resume可恢复。校验拒绝时只在run内存中准备最终
+DomainAgent Binding草稿，不提前取消旧Binding、写数据库或更新Redis；只有`run.completed`终态事务成功时，
+才与Event、assistant、run和execution一起原子取消旧Binding并激活最终Binding。下一轮随后继续直连该技能；
+本轮不订阅Runtime，是否实际调用由`skillInvocationStarted=false`明确区分。终态事务失败、stop、owner失效或
+watchdog收口均不会激活草稿，附件校验前的Binding状态保持不变；可信拒答已经取消的旧Binding不恢复。
+路由切换确认的附件拒绝不会提前持久化`route-switch-applied`；该事件与`run.completed`批量写入同一终态事务，
+并在Binding缓存同步后按sequence发布。stop、失权或终态回滚只保留确认响应和已经提交的校验过程事件，
+不会留下可被Resume误解为切换成功的事件。
 
 ## 7. Assistant 投影
 

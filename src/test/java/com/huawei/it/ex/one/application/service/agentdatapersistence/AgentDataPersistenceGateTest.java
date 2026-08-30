@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.application.config.AgentDataPersistenceProperties;
+import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfiguration;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfigurationCache;
@@ -111,9 +112,50 @@ class AgentDataPersistenceGateTest {
                 .isSameAs(failure);
     }
 
+    @Test
+    void attachmentCountIsRejectedBeforeConfigurationLookup() {
+        AtomicInteger providerCalls = new AtomicInteger();
+        AgentDataPersistenceGate gate = gate(false, query -> {
+            providerCalls.incrementAndGet();
+            return Mono.just(configuration(query.skillId(), Boolean.TRUE, ".pdf"));
+        }, 10);
+        List<UploadedDocument> documents = java.util.stream.IntStream.rangeClosed(1, 11)
+                .mapToObj(index -> document("doc-" + index, "report-" + index + ".pdf"))
+                .toList();
+
+        assertThatThrownBy(() -> gate.evaluate(
+                user, RouteTarget.domainAgent("skill-1", "direct"),
+                new AgentDataPersistenceState("回答已隐藏"), RuntimeForwardHeaders.empty(),
+                documents).block())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("DomainAgent 附件数量超过上限: 10");
+
+        assertThat(providerCalls).hasValue(0);
+    }
+
+    @Test
+    void customAttachmentCountLimitIsApplied() {
+        AgentDataPersistenceGate gate = gate(false,
+                query -> Mono.just(configuration(query.skillId(), Boolean.TRUE, ".pdf")), 1);
+
+        assertThatThrownBy(() -> gate.evaluate(
+                user, RouteTarget.domainAgent("skill-1", "direct"),
+                new AgentDataPersistenceState("回答已隐藏"), RuntimeForwardHeaders.empty(),
+                List.of(document("doc-1", "first.pdf"), document("doc-2", "second.pdf"))).block())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("DomainAgent 附件数量超过上限: 1");
+    }
+
     private AgentDataPersistenceGate gate(
             boolean persistenceEnabled,
             DomainAgentSkillConfigurationProvider provider) {
+        return gate(persistenceEnabled, provider, new DomainAgentProperties().normalizedMaxAttachments());
+    }
+
+    private AgentDataPersistenceGate gate(
+            boolean persistenceEnabled,
+            DomainAgentSkillConfigurationProvider provider,
+            int maxAttachments) {
         AgentDataPersistenceProperties persistence = new AgentDataPersistenceProperties();
         persistence.setEnabled(persistenceEnabled);
         DomainAgentSkillConfigurationProperties configuration = new DomainAgentSkillConfigurationProperties();
@@ -132,8 +174,11 @@ class AgentDataPersistenceGateTest {
         DomainAgentSkillConfigurationService configurationService =
                 new DomainAgentSkillConfigurationService(
                         provider, cache, configuration, Schedulers.immediate());
+        DomainAgentProperties domainAgent = new DomainAgentProperties();
+        domainAgent.setMaxAttachments(maxAttachments);
         return new AgentDataPersistenceGate(
-                new AgentDataPersistencePolicyService(persistence), configurationService);
+                new AgentDataPersistencePolicyService(persistence), configurationService,
+                domainAgent);
     }
 
     private DomainAgentSkillConfiguration configuration(

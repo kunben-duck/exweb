@@ -22,7 +22,8 @@ class ChatEventCoordinatorConfiguration {
             ChatRunTerminalCommitService terminalCommitService,
             ChatStreamApplicationService streamService,
             RuntimeBindingApplicationService bindingService,
-            RouteMemoryApplicationService routeMemoryService) {
+            RouteMemoryApplicationService routeMemoryService,
+            AppliedRouteRecorder appliedRouteRecorder) {
         return new ChatRunCompletionCoordinator(
                 interactionService,
                 runtimeExecutor,
@@ -30,7 +31,8 @@ class ChatEventCoordinatorConfiguration {
                 terminalCommitService,
                 streamService,
                 bindingService,
-                routeMemoryService);
+                routeMemoryService,
+                appliedRouteRecorder);
     }
 
     @Bean

@@ -48,6 +48,7 @@ import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.chat.MessageSnapshotEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
+import com.huawei.it.ex.one.domain.document.UploadedDocument;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
@@ -1725,6 +1726,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
         AtomicInteger agentACalls = new AtomicInteger();
         AtomicInteger agentBCalls = new AtomicInteger();
         AtomicReference<Map<String, Object>> agentBMetadata = new AtomicReference<>();
+        AtomicReference<List<UploadedDocument>> agentBDocuments = new AtomicReference<>();
         DomainAgentClient domainClient = new DomainAgentClient() {
             @Override
             public Flux<ChatEvent> query(DomainAgentRequest request) {
@@ -1733,6 +1735,7 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                     return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
                 }
                 agentBMetadata.set(request.metadata());
+                agentBDocuments.set(request.documents());
                 if (agentBCalls.incrementAndGet() == 1) {
                     return Flux.just(MessageSnapshotEvent.of(
                             request.runId(), request.sessionId(), "agent-b final answer"));
@@ -1845,7 +1848,9 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                         "one-portal", List.of(Map.of("onestop", "CountryCFO")),
                         "docList", List.of(Map.of("docId", "domain-doc-from-confirmation"))));
         StepVerifier.create(service.startRun(user, new ChatCommand(
-                        null, null, null, waiting.sessionId(), null, "web", null, List.of(),
+                        null, null, null, waiting.sessionId(), null, "web", null,
+                        List.of(new AttachmentRef(
+                                "route-switch-doc", "forged-name.txt", "text/plain", 1L)),
                         agentConfirmationMetadata,
                         null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
                         null, waiting.id(), true, null, Map.of()), RuntimeForwardHeaders.empty()))
@@ -1855,11 +1860,23 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
         awaitEvent(events, "run.completed");
         assertThat(agentBCalls).hasValue(1);
         assertThat(agentBMetadata.get())
-                .containsAllEntriesOf(agentConfirmationMetadata)
+                .containsEntry("platform", "PC")
                 .doesNotContainKey("scene");
         assertThat(agentBMetadata.get().get("sceneParam")).isInstanceOfSatisfying(Map.class,
-                sceneParam -> assertThat(sceneParam.get("docList"))
-                        .isEqualTo(List.of(Map.of("docId", "domain-doc-from-confirmation"))));
+                sceneParam -> {
+                    assertThat(sceneParam.get("one-portal"))
+                            .isEqualTo(List.of(Map.of("onestop", "CountryCFO")));
+                    assertThat(sceneParam.get("docList"))
+                            .isEqualTo(List.of(Map.of(
+                                    "providerLocatorType", "DOC_ID",
+                                    "docId", "provider-route-switch-doc",
+                                    "docName", "invoice.pdf",
+                                    "docSize", 128L)));
+                });
+        assertThat(agentBDocuments.get()).singleElement().satisfies(document -> {
+            assertThat(document.id()).isEqualTo("route-switch-doc");
+            assertThat(document.originalName()).isEqualTo("invoice.pdf");
+        });
         assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role()))
                 .singleElement()
                 .satisfies(message -> {
@@ -1887,6 +1904,16 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                 .containsEntry("candidateProvider", "relay")
                 .containsEntry("candidateTargetId", "relay");
         assertThat(relayCalls).hasValue(0);
+
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                        null, null, null, relayWaiting.sessionId(), null, "web", null,
+                        List.of(new AttachmentRef("declined-doc", null, null, null)), Map.of(),
+                        null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
+                        null, relayWaiting.id(), false, null, Map.of()), RuntimeForwardHeaders.empty()))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("已批准的 ROUTE_SWITCH_CONFIRMATION"))
+                .verify();
 
         StepVerifier.create(service.startRun(user, new ChatCommand(
                         null, null, null, relayWaiting.sessionId(), null, "web", null, List.of(), Map.of(),
@@ -1923,7 +1950,9 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
 
         Map<String, Object> relayConfirmationMetadata = Map.of(
                 "platform", "PC",
-                "qaType", "normalQa");
+                "qaType", "normalQa",
+                "sceneParam", Map.of(
+                        "docList", List.of(Map.of("docId", "relay-doc-from-confirmation"))));
         StepVerifier.create(service.startRun(user, new ChatCommand(
                         null, null, null, nextRelayWaiting.sessionId(), null, "web", null, List.of(),
                         relayConfirmationMetadata,
@@ -1944,6 +1973,191 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                                     "ROUTE_SWITCH_CONFIRMATION_RESPONSE", "MESSAGE_SNAPSHOT", "ANSWER");
                     assertThat(message.parts()).filteredOn(part -> "ANSWER".equals(part.partType())).hasSize(1);
                 });
+    }
+
+    @Test
+    void routeSwitchConfirmationRejectsUnsupportedTrustedAttachmentWithoutCallingNewAgent() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        InMemoryInteractionRequestRepository interactions = new InMemoryInteractionRequestRepository();
+        CapturingRuntimeBindingRepository bindings = new CapturingRuntimeBindingRepository();
+        CapturingRouteMemoryService routeMemory = new CapturingRouteMemoryService();
+        AtomicInteger rerouteCalls = new AtomicInteger();
+        AtomicInteger agentBCalls = new AtomicInteger();
+        RouteSignalApplicationService routeService =
+                repeatedDomainAgentRouteService(rerouteCalls, "agent-b");
+        DomainAgentClient domainClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                if ("agent-a".equals(request.domainAgentId())) {
+                    return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
+                }
+                agentBCalls.incrementAndGet();
+                return Flux.just(MessageSnapshotEvent.of(
+                        request.runId(), request.sessionId(), "must not be called"));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        DocumentFacade documents = documentFacade();
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions,
+                messages,
+                runs,
+                events,
+                routeService,
+                domainClient,
+                noopRuntime(),
+                bindings,
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties(),
+                liveEventBus(),
+                interactions,
+                runtimeBindingCache(),
+                null,
+                documents,
+                new InMemoryExecutionRepository(),
+                attachmentValidationGate(skillId -> ".xlsx"),
+                routeMemory);
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                        null, null, null, null, null, "web", "原问题", List.of(), Map.of(),
+                        "DOMAIN_AGENT", "agent-a", ChatRunMode.NEXT, null, null, null),
+                        RuntimeForwardHeaders.empty()))
+                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .verifyComplete();
+
+        ChatInteractionRequest waiting = awaitWaitingInteraction(interactions);
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                        null, null, null, waiting.sessionId(), null, "web", null,
+                        List.of(new AttachmentRef("route-switch-doc", "forged.xlsx", null, null)),
+                        Map.of(), null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
+                        null, waiting.id(), true, null, Map.of()), RuntimeForwardHeaders.empty()))
+                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .verifyComplete();
+
+        awaitEvent(events, "run.completed");
+        assertThat(agentBCalls).hasValue(0);
+        assertThat(events.events)
+                .filteredOn(event -> "runtime.card".equals(event.type())
+                        && "DOMAIN_AGENT_ATTACHMENT_TYPE_UNSUPPORTED".equals(
+                                event.payload().get("code")))
+                .singleElement()
+                .satisfies(event -> assertThat(event.payload())
+                        .containsEntry("skillId", "agent-b")
+                        .containsEntry("unsupportedAttachmentTypes", List.of(".pdf")));
+        ChatEvent routeSwitchApplied = events.events.stream()
+                .filter(event -> "route-switch-applied".equals(event.payload().get("sourceType")))
+                .findFirst()
+                .orElseThrow();
+        ChatEvent messageCompleted = events.events.stream()
+                .filter(event -> routeSwitchApplied.runId().equals(event.runId()))
+                .filter(event -> "message.completed".equals(event.type()))
+                .findFirst()
+                .orElseThrow();
+        ChatEvent runCompleted = events.events.stream()
+                .filter(event -> routeSwitchApplied.runId().equals(event.runId()))
+                .filter(event -> "run.completed".equals(event.type()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(routeSwitchApplied.sequence())
+                .isGreaterThan(messageCompleted.sequence())
+                .isLessThan(runCompleted.sequence());
+        assertThat(bindings.saved.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(bindings.saved.metadata()).containsEntry("domainAgentId", "agent-b");
+        assertThat(routeMemory.routeDecisions).hasSize(2);
+        assertThat(routeMemory.routeDecisions.getLast().query()).isEqualTo("原问题");
+        assertThat(routeMemory.routeDecisions.getLast().route().selectedAgentCode()).isEqualTo("agent-b");
+        assertThat(messages.attachments).isEmpty();
+    }
+
+    @Test
+    void routeSwitchAttachmentCountFailsBeforeConfigurationAndBindingChanges() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        InMemoryInteractionRequestRepository interactions = new InMemoryInteractionRequestRepository();
+        CapturingRuntimeBindingRepository bindings = new CapturingRuntimeBindingRepository();
+        AtomicInteger providerCalls = new AtomicInteger();
+        AtomicInteger agentBCalls = new AtomicInteger();
+        RouteSignalApplicationService routeService =
+                repeatedDomainAgentRouteService(new AtomicInteger(), "agent-b");
+        DomainAgentClient domainClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                if ("agent-a".equals(request.domainAgentId())) {
+                    return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
+                }
+                agentBCalls.incrementAndGet();
+                return Flux.just(MessageSnapshotEvent.of(
+                        request.runId(), request.sessionId(), "must not be called"));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions,
+                messages,
+                runs,
+                events,
+                routeService,
+                domainClient,
+                noopRuntime(),
+                bindings,
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties(),
+                liveEventBus(),
+                interactions,
+                runtimeBindingCache(),
+                null,
+                documentFacade(),
+                new InMemoryExecutionRepository(),
+                attachmentValidationGate(skillId -> {
+                    providerCalls.incrementAndGet();
+                    return ".xlsx";
+                }));
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                        null, null, null, null, null, "web", "原问题", List.of(), Map.of(),
+                        "DOMAIN_AGENT", "agent-a", ChatRunMode.NEXT, null, null, null),
+                        RuntimeForwardHeaders.empty()))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        ChatInteractionRequest waiting = awaitWaitingInteraction(interactions);
+        RuntimeBinding bindingBefore = bindings.saved;
+        List<AttachmentRef> attachments = java.util.stream.IntStream.rangeClosed(1, 11)
+                .mapToObj(index -> new AttachmentRef(
+                        "route-switch-doc-" + index, "forged-" + index + ".xlsx", null, null))
+                .toList();
+        StepVerifier.create(service.startRun(user, new ChatCommand(
+                        null, null, null, waiting.sessionId(), null, "web", null,
+                        attachments, Map.of(), null, null, ChatRunMode.CONTINUE_INTERACTION,
+                        null, null, null, null, waiting.id(), true, null, Map.of()),
+                        RuntimeForwardHeaders.empty()))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        awaitEvent(events, "run.failed");
+        assertThat(providerCalls).hasValue(0);
+        assertThat(agentBCalls).hasValue(0);
+        assertThat(bindings.saved).isEqualTo(bindingBefore);
+        assertThat(bindings.savedHistory).noneSatisfy(binding ->
+                assertThat(binding.metadata()).containsEntry("domainAgentId", "agent-b"));
+        assertThat(interactions.findByOwnerAndId(
+                        user.tenantId(), user.ownerUserId(), waiting.id()))
+                .get()
+                .extracting(ChatInteractionRequest::status)
+                .isEqualTo(ChatInteractionStatus.WAITING);
     }
 
     @Test

@@ -772,7 +772,7 @@ flowchart LR
 ```
 - `financeex.intent-record.enabled=true` 时，只有实际调用过意图服务的 run 会异步写入 `fin_ex_intent_recognition_t`。记录内容包含本轮 query、routeAction、候选 items、最终路由是否采纳和意图服务耗时；DomainAgent、RuntimeBinding 续接、用例库已命中、意图服务关闭时不会记录。
 - `routeAction=ROUTE_MULTI` 和 `routeAction=NO_MATCH` 都是合法业务结果，无论 failure strategy 如何配置都进入 Relay Runtime。意图关闭时仍直接进入默认 Relay；只有已启用意图的技术/协议失败才应用 failure strategy。
-- DomainAgent 绑定会一直续接，直到下游流式返回 `type=agent.refusal,code=FN-EX-CAHT-BIZ-DAG-001`。ChatService 通过控制事件防腐层归一化并立即取消旧流：意图/用例库绑定自动切换；`front-selected/user-confirmed` 绑定默认生成 `ROUTE_SWITCH_CONFIRMATION`，候选 DomainAgent 或 Relay 均需用户确认，但重意图仍返回当前技能时因目标未变化而直接重新调用。该确认与 AMBIGUOUS_ROUTE 共用 `financeex.intent.ambiguous-route-wait-timeout`，前端到期后通过现有 `approved=true` 请求自动同意，后端不持有定时任务。ChatService 不再排除当前或曾拒答技能，完全采用 Intent 结果，并以 `financeex.domain-agent.max-reroutes` 作为循环保护。`financeex.domain-agent.refusal-auto-switch-enabled=true` 时，手动来源也会在拒答事实提交时原子取消旧 Binding，并直接执行重意图得到的有效目标；IntentAgent 返回 `CLARIFY` 时仍保留意图澄清等待，后续每轮 `clarify_answer` 均携带触发当前澄清链的拒答原因。
+- DomainAgent 绑定会一直续接，直到下游流式返回 `type=agent.refusal,code=FN-EX-CAHT-BIZ-DAG-001`。ChatService 通过控制事件防腐层归一化并立即取消旧流：意图/用例库绑定自动切换；`front-selected/user-confirmed` 绑定默认生成 `ROUTE_SWITCH_CONFIRMATION`，候选 DomainAgent 或 Relay 均需用户确认，但重意图仍返回当前技能时因目标未变化而直接重新调用。批准确认时可提交本轮可信附件，附件不会从原run继承或写回原user消息，并同时进入附件类型校验及候选Runtime请求。该确认与 AMBIGUOUS_ROUTE 共用 `financeex.intent.ambiguous-route-wait-timeout`，前端到期后通过现有 `approved=true` 请求自动同意，后端不持有定时任务。ChatService 不再排除当前或曾拒答技能，完全采用 Intent 结果，并以 `financeex.domain-agent.max-reroutes` 作为循环保护。`financeex.domain-agent.refusal-auto-switch-enabled=true` 时，手动来源也会在拒答事实提交时原子取消旧 Binding，并直接执行重意图得到的有效目标；IntentAgent 返回 `CLARIFY` 时仍保留意图澄清等待，后续每轮 `clarify_answer` 均携带触发当前澄清链的拒答原因。
 
 ## RuntimeBinding
 

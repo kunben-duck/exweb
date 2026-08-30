@@ -73,12 +73,14 @@ public class ChatRunAdmissionCommitService {
         sessionService.lockForMessageMutation(user.tenantId(), user.ownerUserId(), session);
         AdmissionResult admission = commitRun(user, command, session, runId, attachments);
         int cancelledInteractions = interactionService.cancelOpenBySessionAndCount(user, session.id());
-        List<AdmissionCancellation> bindingCancellations = explicitTarget.domainExpert()
-                && cancelledInteractions == 0
-                ? runtimeBindingService.cancelActiveForAdmissionExceptPinnedDomainExpertWithSnapshots(
-                        user.tenantId(), user.ownerUserId(), session.id(), explicitTarget.targetId())
-                : runtimeBindingService.cancelActiveForAdmissionWithSnapshots(
-                        user.tenantId(), user.ownerUserId(), session.id());
+        boolean deferDomainAgentBinding = explicitTarget.domainAgent() && !attachments.isEmpty();
+        List<AdmissionCancellation> bindingCancellations = deferDomainAgentBinding
+                ? List.of()
+                : explicitTarget.domainExpert() && cancelledInteractions == 0
+                        ? runtimeBindingService.cancelActiveForAdmissionExceptPinnedDomainExpertWithSnapshots(
+                                user.tenantId(), user.ownerUserId(), session.id(), explicitTarget.targetId())
+                        : runtimeBindingService.cancelActiveForAdmissionWithSnapshots(
+                                user.tenantId(), user.ownerUserId(), session.id());
         return new AdmissionResult(admission.messagePlan(), admission.run(), bindingCancellations);
     }
 
@@ -148,9 +150,13 @@ public class ChatRunAdmissionCommitService {
             throw CandidateSwitchConflictException.staleSource(request.source().sourceRunId());
         }
         interactionService.cancelOpenBySessionAndCount(user, currentSession.id());
-        List<AdmissionCancellation> bindingCancellations =
-                runtimeBindingService.cancelActiveForAdmissionWithSnapshots(
-                user.tenantId(), user.ownerUserId(), currentSession.id());
+        List<AttachmentRef> requestedAttachments = request.command().attachments() == null
+                ? List.of()
+                : request.command().attachments();
+        List<AdmissionCancellation> bindingCancellations = requestedAttachments.isEmpty()
+                ? runtimeBindingService.cancelActiveForAdmissionWithSnapshots(
+                        user.tenantId(), user.ownerUserId(), currentSession.id())
+                : List.of();
         return new AdmissionResult(messagePlan, run, bindingCancellations);
     }
 

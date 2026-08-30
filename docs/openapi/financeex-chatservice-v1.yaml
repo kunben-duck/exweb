@@ -2338,6 +2338,9 @@ components:
           type: array
           nullable: true
           maxItems: 20
+          description: >-
+            文档附件引用。CONTINUE_INTERACTION时仅普通INTENT_CLARIFICATION，或approved=true的
+            ROUTE_SWITCH_CONFIRMATION支持；路由切换只使用本次显式提交附件，不继承原run附件。
           items:
             $ref: '#/components/schemas/ChatAttachment'
         targetType:

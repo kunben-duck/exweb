@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
+import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
@@ -64,7 +65,9 @@ final class StandardRunRuntimeCoordinator {
                 new AtomicReference<>(RuntimeSessionMode.RESUME),
                 new AtomicReference<>(),
                 new AssistantAssembly(),
-                bindingLifecycle);
+                bindingLifecycle,
+                new AtomicReference<>(),
+                new AtomicReference<>());
     }
 
     Flux<ChatEvent> execute(RuntimePlan plan, RunExecutionClaim executionClaim) {
@@ -96,7 +99,9 @@ final class StandardRunRuntimeCoordinator {
                         plan.bindingLifecycle(),
                         plan.assistant().persistenceState(),
                         plan.assistant().messageSkill(),
-                        plan.pendingInteractionPayloadRef());
+                        plan.pendingInteractionPayloadRef(),
+                        plan.deferredDomainAgentBindingRef(),
+                        plan.pendingRouteMemoryDecisionRef());
                 return runtimeDispatchCoordinator.execute(request, () -> routeResolutionCoordinator.prepareInitial(
                         new RouteResolutionCoordinator.InitialRoutePreparation(
                                 prepared.user(),
@@ -111,7 +116,9 @@ final class StandardRunRuntimeCoordinator {
                                 plan.runtimeSessionModeRef(),
                                 prepared.command().agentMode(),
                                 executionClaim,
-                                plan.bindingLifecycle())));
+                                plan.bindingLifecycle(),
+                                !prepared.documents().isEmpty(),
+                                plan.deferredDomainAgentBindingRef())));
             });
         } catch (RuntimeException ex) {
             RunEventPipelineContext context = pipelineContext(plan, executionClaim);
@@ -139,7 +146,9 @@ final class StandardRunRuntimeCoordinator {
                 plan.pendingInteractionPayloadRef(),
                 null,
                 prepared.startAttempt(),
-                documentIds(prepared.documents()));
+                documentIds(prepared.documents()),
+                plan.deferredDomainAgentBindingRef(),
+                plan.pendingRouteMemoryDecisionRef());
     }
 
     private ChatCommand commandForExecution(
@@ -213,7 +222,9 @@ final class StandardRunRuntimeCoordinator {
             AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
             AtomicReference<Map<String, Object>> pendingInteractionPayloadRef,
             AssistantAssembly assistant,
-            RuntimeBindingDispatchLifecycle bindingLifecycle
+            RuntimeBindingDispatchLifecycle bindingLifecycle,
+            AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef,
+            AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef
     ) {
     }
 }

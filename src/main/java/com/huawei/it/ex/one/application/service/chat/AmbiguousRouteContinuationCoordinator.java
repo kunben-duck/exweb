@@ -3,6 +3,7 @@ package com.huawei.it.ex.one.application.service.chat;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalResult;
+import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
@@ -122,6 +123,8 @@ final class AmbiguousRouteContinuationCoordinator {
                 bindingRef,
                 runtimeSessionModeRef,
                 new AssistantAssembly(),
+                new AtomicReference<>(),
+                new AtomicReference<>(),
                 new AtomicReference<>());
         RunEventPipelineContext context = new RunEventPipelineContext(
                 request.user(),
@@ -135,7 +138,9 @@ final class AmbiguousRouteContinuationCoordinator {
                 runtimeReferences.pendingInteractionPayloadRef(),
                 started.interaction(),
                 request.startAttempt(),
-                request.input().cumulativeDocumentIds());
+                request.input().cumulativeDocumentIds(),
+                runtimeReferences.deferredDomainAgentBindingRef(),
+                runtimeReferences.pendingRouteMemoryDecisionRef());
         RouteSignalResult routeSignal = selectionResolver.routeSignal(
                 started.plan().candidate(),
                 started.plan().routeSource());
@@ -192,7 +197,9 @@ final class AmbiguousRouteContinuationCoordinator {
                 new RuntimeBindingDispatchLifecycle(),
                 runtimeReferences.assistant().persistenceState(),
                 runtimeReferences.assistant().messageSkill(),
-                runtimeReferences.pendingInteractionPayloadRef());
+                runtimeReferences.pendingInteractionPayloadRef(),
+                runtimeReferences.deferredDomainAgentBindingRef(),
+                runtimeReferences.pendingRouteMemoryDecisionRef());
     }
 
     record Request(
@@ -225,7 +232,9 @@ final class AmbiguousRouteContinuationCoordinator {
             AtomicReference<RuntimeBinding> bindingRef,
             AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
             AssistantAssembly assistant,
-            AtomicReference<Map<String, Object>> pendingInteractionPayloadRef
+            AtomicReference<Map<String, Object>> pendingInteractionPayloadRef,
+            AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef,
+            AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef
     ) {
     }
 }

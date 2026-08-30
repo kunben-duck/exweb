@@ -2,15 +2,29 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
+import com.huawei.it.ex.one.application.service.runtime.DomainAgentBindingCommand;
+import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
+import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
+import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.routing.RelayOutputMode;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RouteType;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.routing.SensitiveInformationAccessNameResolver;
+import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
+import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 
 import org.junit.jupiter.api.Test;
 
@@ -122,6 +136,95 @@ class RouteSwitchContextResolverTest {
         assertThat(target.invocationSkillId()).isEqualTo("NO_MATCH");
     }
 
+    @Test
+    void approvedDomainAgentSelectionUsesExecutionGuardedAtomicSwitch() {
+        RuntimeBindingApplicationService bindingService = mock(RuntimeBindingApplicationService.class);
+        RouteSwitchContextResolver bindingResolver = new RouteSwitchContextResolver(bindingService);
+        ChatInteractionRequest interaction = domainAgentInteraction();
+        RouteSwitchInput input = bindingResolver.input(
+                interaction, new ChatInteractionClaimResult(interaction, Map.of("approved", true)));
+        RunExecutionClaim claim = new RunExecutionClaim("run-b", "instance-1", 7L);
+        RuntimeBinding candidate = binding("binding-b", "agent-b", RuntimeBindingStatus.ACTIVE, "run-b");
+        when(bindingService.switchDomainAgentForInteraction(
+                eq(interaction), any(DomainAgentBindingCommand.class), eq(claim)))
+                .thenReturn(candidate);
+
+        RouteSwitchBindingSelection selection = bindingResolver.selectBinding(
+                interaction,
+                input,
+                new RouteSwitchBindingRequest(
+                        new UserContext("tenant-1", "user-1", "account-1"),
+                        new ChatSession("session-1", "tenant-1", "user-1", "title", "ACTIVE",
+                                "web", Instant.now(), Instant.now()),
+                        "run-b",
+                        null,
+                        claim));
+
+        assertThat(selection.binding()).isEqualTo(candidate);
+        assertThat(selection.sessionMode()).isEqualTo(
+                com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode.RESUME);
+        verify(bindingService).switchDomainAgentForInteraction(
+                eq(interaction), any(DomainAgentBindingCommand.class), eq(claim));
+        verify(bindingService).synchronizeDeferredDomainAgentActivation(candidate);
+        verify(bindingService, never()).bindDomainAgentForRun(any(DomainAgentBindingCommand.class));
+        verify(bindingService, never()).markNotRoutable(any(), any());
+    }
+
+    @Test
+    void unsupportedAttachmentSelectionOnlyPreparesCandidateBinding() {
+        RuntimeBindingApplicationService bindingService = mock(RuntimeBindingApplicationService.class);
+        RouteSwitchContextResolver bindingResolver = new RouteSwitchContextResolver(bindingService);
+        ChatInteractionRequest interaction = domainAgentInteraction();
+        RouteSwitchInput input = bindingResolver.input(
+                interaction, new ChatInteractionClaimResult(interaction, Map.of("approved", true)));
+        RuntimeBinding candidate = binding("binding-b", "agent-b", RuntimeBindingStatus.ACTIVE, "run-b");
+        DeferredDomainAgentBinding deferred = new DeferredDomainAgentBinding(candidate, null);
+        when(bindingService.prepareDomainAgentForRun(any(DomainAgentBindingCommand.class)))
+                .thenReturn(deferred);
+
+        DeferredDomainAgentBinding selection =
+                bindingResolver.prepareDomainAgentBindingForUnsupportedAttachment(
+                        interaction,
+                        input,
+                        new RouteSwitchBindingRequest(
+                                new UserContext("tenant-1", "user-1", "account-1"),
+                                new ChatSession("session-1", "tenant-1", "user-1", "title", "ACTIVE",
+                                "web", Instant.now(), Instant.now()),
+                                "run-b",
+                                null,
+                                new RunExecutionClaim("run-b", "instance-1", 7L)));
+
+        assertThat(selection).isSameAs(deferred);
+        verify(bindingService).prepareDomainAgentForRun(any(DomainAgentBindingCommand.class));
+        verify(bindingService, never()).bindDomainAgentForRun(any(DomainAgentBindingCommand.class));
+    }
+
+    @Test
+    void candidatePreparationFailureDoesNotMutateSourceBinding() {
+        RuntimeBindingApplicationService bindingService = mock(RuntimeBindingApplicationService.class);
+        RouteSwitchContextResolver bindingResolver = new RouteSwitchContextResolver(bindingService);
+        ChatInteractionRequest interaction = domainAgentInteraction();
+        RouteSwitchInput input = bindingResolver.input(
+                interaction, new ChatInteractionClaimResult(interaction, Map.of("approved", true)));
+        when(bindingService.prepareDomainAgentForRun(any(DomainAgentBindingCommand.class)))
+                .thenThrow(new IllegalStateException("candidate create failed"));
+
+        assertThatThrownBy(() -> bindingResolver.prepareDomainAgentBindingForUnsupportedAttachment(
+                interaction,
+                input,
+                new RouteSwitchBindingRequest(
+                        new UserContext("tenant-1", "user-1", "account-1"),
+                        new ChatSession("session-1", "tenant-1", "user-1", "title", "ACTIVE",
+                                "web", Instant.now(), Instant.now()),
+                        "run-b",
+                        null,
+                        new RunExecutionClaim("run-b", "instance-1", 7L))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("candidate create failed");
+
+        verify(bindingService, never()).bindDomainAgentForRun(any(DomainAgentBindingCommand.class));
+    }
+
     private ChatInteractionRequest interaction(String runtimeRoleName) {
         return interaction("RE_system-awareness", runtimeRoleName, "intent-expert", "领域专家");
     }
@@ -157,5 +260,45 @@ class RouteSwitchContextResolverTest {
                 "message-user", "message-assistant", "domain-agent", "binding-a", "session-1", null,
                 ChatInteractionType.ROUTE_SWITCH_CONFIRMATION, ChatInteractionStatus.WAITING,
                 payload, Map.of(), now.plusSeconds(3600), null, null, now, now);
+    }
+
+    private ChatInteractionRequest domainAgentInteraction() {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("currentProvider", "domain-agent");
+        payload.put("currentTargetId", "agent-a");
+        payload.put("candidateProvider", "domain-agent");
+        payload.put("candidateTargetId", "agent-b");
+        payload.put("candidateIntentCode", "intent-b");
+        payload.put("candidateIntentName", "技能B");
+        payload.put("originalQuery", "分析附件");
+        payload.put("refusalCode", "REFUSED");
+        Instant now = Instant.parse("2026-08-30T10:00:00Z");
+        return new ChatInteractionRequest(
+                "interaction-domain", "tenant-1", "user-1", "session-1", "run-a", "run-b",
+                "message-user", "message-assistant", "domain-agent", "binding-a", "session-1", null,
+                ChatInteractionType.ROUTE_SWITCH_CONFIRMATION, ChatInteractionStatus.RESPONDING,
+                payload, Map.of(), now.plusSeconds(3600), null, null, now, now);
+    }
+
+    private RuntimeBinding binding(
+            String id,
+            String skillId,
+            RuntimeBindingStatus status,
+            String runId) {
+        Instant now = Instant.parse("2026-08-30T10:00:00Z");
+        return new RuntimeBinding(
+                id,
+                "tenant-1",
+                "user-1",
+                "session-1",
+                RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER,
+                "message-assistant",
+                "session-1",
+                status,
+                runId,
+                null,
+                now,
+                now,
+                Map.of("domainAgentId", skillId));
     }
 }

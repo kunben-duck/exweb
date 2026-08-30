@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.application.service.agentdatapersistence;
 
+import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfigurationException;
 import com.huawei.it.ex.one.application.service.domainagentconfig.DomainAgentSkillConfigurationService;
@@ -26,14 +27,19 @@ public class AgentDataPersistenceGate {
 
     private final AgentDataPersistencePolicyService policyService;
     private final DomainAgentSkillConfigurationService configurationService;
+    private final DomainAgentProperties domainAgentProperties;
     private final DomainAgentAttachmentTypeValidator attachmentValidator =
             new DomainAgentAttachmentTypeValidator();
 
     public AgentDataPersistenceGate(
             AgentDataPersistencePolicyService policyService,
-            DomainAgentSkillConfigurationService configurationService) {
+            DomainAgentSkillConfigurationService configurationService,
+            DomainAgentProperties domainAgentProperties) {
         this.policyService = policyService;
         this.configurationService = configurationService;
+        this.domainAgentProperties = domainAgentProperties == null
+                ? new DomainAgentProperties()
+                : domainAgentProperties;
     }
 
     /**
@@ -70,6 +76,7 @@ public class AgentDataPersistenceGate {
         if (route == null || route.type() != RouteType.DOMAIN_AGENT) {
             return Mono.just(Decision.allowed(targetState));
         }
+        validateAttachmentCount(documents);
         String skillId = route.selectedAgentCode();
         if (skillId == null || skillId.isBlank()) {
             return Mono.error(new DomainAgentSkillConfigurationException(
@@ -112,6 +119,13 @@ public class AgentDataPersistenceGate {
                             .build(), error);
                     return Mono.just(Decision.allowed(targetState));
                 });
+    }
+
+    private void validateAttachmentCount(List<UploadedDocument> documents) {
+        if (documents != null && documents.size() > domainAgentProperties.normalizedMaxAttachments()) {
+            throw new IllegalArgumentException(
+                    "DomainAgent 附件数量超过上限: " + domainAgentProperties.normalizedMaxAttachments());
+        }
     }
 
     public record Decision(Status status, AgentDataPersistenceState state, Map<String, Object> payload) {

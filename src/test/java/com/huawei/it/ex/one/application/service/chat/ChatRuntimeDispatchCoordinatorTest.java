@@ -3,8 +3,8 @@ package com.huawei.it.ex.one.application.service.chat;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -16,6 +16,7 @@ import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPe
 import com.huawei.it.ex.one.application.service.routing.RouteSignalApplicationService;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalResult;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
+import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.application.service.runtime.SystemResponseExecutor;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
@@ -28,10 +29,13 @@ import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
+import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.List;
 import java.util.Map;
@@ -40,7 +44,7 @@ import java.util.concurrent.atomic.AtomicReference;
 class ChatRuntimeDispatchCoordinatorTest {
 
     @Test
-    void unsupportedAttachmentCompletesWithoutPersistingRouteOrSubscribingRuntime() {
+    void unsupportedAttachmentPersistsSelectedRouteAndRetainsBindingWithoutRuntime() {
         RouteSignalApplicationService routeSignals = mock(RouteSignalApplicationService.class);
         ChatEventPersistenceCoordinator eventPersistence = mock(ChatEventPersistenceCoordinator.class);
         InteractionEventFactory interactionEvents = mock(InteractionEventFactory.class);
@@ -64,7 +68,11 @@ class ChatRuntimeDispatchCoordinatorTest {
                 persistenceGate);
 
         RouteTarget route = RouteTarget.domainAgent("skill-1", "intent", 0.9, "matched");
-        RuntimeBinding binding = mock(RuntimeBinding.class);
+        java.time.Instant now = java.time.Instant.now();
+        RuntimeBinding binding = new RuntimeBinding(
+                "binding-b", "tenant-1", "user-1", "session-1", "domain-agent",
+                null, "session-1", RuntimeBindingStatus.ACTIVE, "run-1", now.plusSeconds(60),
+                now, now, Map.of("domainAgentId", "skill-1"));
         RouteSignalResult signal = RouteSignalResult.of(route);
         when(routeResolution.resolve(any(), any())).thenReturn(
                 new RouteResolutionCoordinator.RouteExecutionResolution(
@@ -91,6 +99,9 @@ class ChatRuntimeDispatchCoordinatorTest {
         RuntimeBindingDispatchLifecycle lifecycle = new RuntimeBindingDispatchLifecycle();
         AtomicReference<RouteTarget> routeRef = new AtomicReference<>();
         AtomicReference<RuntimeBinding> bindingRef = new AtomicReference<>();
+        RunExecutionClaim executionClaim = new RunExecutionClaim("run-1", "instance-1", 1L);
+        ChatRun run = mock(ChatRun.class);
+        AgentDataPersistenceState persistenceState = AgentDataPersistenceState.full();
         RoutePipelineRequest request = new RoutePipelineRequest(
                 new UserContext("tenant-1", "user-1", "account-1"),
                 session,
@@ -106,15 +117,17 @@ class ChatRuntimeDispatchCoordinatorTest {
                 routeRef,
                 bindingRef,
                 new AtomicReference<>(RuntimeSessionMode.RESUME),
-                new RunExecutionClaim("run-1", "instance-1", 1L),
-                mock(ChatRun.class),
+                executionClaim,
+                run,
                 "query",
                 "query",
                 "query",
                 null,
                 null,
                 lifecycle,
-                AgentDataPersistenceState.full());
+                persistenceState);
+        DeferredDomainAgentBinding deferred = new DeferredDomainAgentBinding(binding, null);
+        request.deferredDomainAgentBindingRef().set(deferred);
 
         List<ChatEvent> events = coordinator.executeResolved(request, signal).collectList().block();
 
@@ -122,8 +135,20 @@ class ChatRuntimeDispatchCoordinatorTest {
                 .containsExactly("runtime.progress", "runtime.card", "message.completed");
         assertThat(routeRef).hasValue(route);
         assertThat(bindingRef).hasValue(binding);
-        verify(bindingCompensator, atLeastOnce()).cleanup(
-                any(), anyString(), anyString(), any(), anyString());
-        verifyNoInteractions(runtimeExecutor, routeRecorder);
+        assertThat(lifecycle.activation()).isNull();
+        assertThat(lifecycle.runtimeSubscribed()).isFalse();
+        assertThat(request.deferredDomainAgentBindingRef()).hasValue(deferred);
+        assertThat(persistenceState.runtimeDispatchStarted()).isFalse();
+        assertThat(request.messageSkill().current()).isEqualTo("skill-1");
+        verify(routeRecorder).bindResolvedRouteRequired(
+                run, route, binding, executionClaim, persistenceState);
+        ArgumentCaptor<PendingRouteMemoryDecision> pendingDecision =
+                ArgumentCaptor.forClass(PendingRouteMemoryDecision.class);
+        verify(routeRecorder).deferRouteMemoryDecision(
+                any(AtomicReference.class), pendingDecision.capture());
+        assertThat(pendingDecision.getValue().query()).isEqualTo("query");
+        assertThat(pendingDecision.getValue().route()).isEqualTo(route);
+        verify(routeRecorder, never()).recordAppliedRouteDecision(any());
+        verifyNoInteractions(runtimeExecutor);
     }
 }

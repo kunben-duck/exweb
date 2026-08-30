@@ -5,6 +5,7 @@ import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDisp
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
+import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingExpirationPolicy;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
@@ -35,6 +36,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
@@ -131,24 +133,30 @@ public class ChatRunTerminalCommitService {
     public CommitResult commitCompleted(CompletedCommitCommand command) {
         lockOwnerTerminalSession(command.context());
         fenceOwnerTerminalCommit(command.context());
-        ChatEvent stored = append(command.event(), command.context());
+        CompletedEvents completedEvents = appendCompletedEvents(command);
+        completedEvents.precedingEvents().forEach(command.context().assistant()::observe);
+        ChatEvent stored = completedEvents.terminalEvent();
         command.context().assistant().observe(stored);
         ChatMessage savedAssistant = saveCompletedAssistant(
                 command, command.context().assistant().messageSkill().current());
         advanceLatestMessageSeq(command.context(), stored);
         bindAssistantMessage(stored.runId(), savedAssistant.id());
-        RuntimeBinding binding = completeBinding(command.context(), savedAssistant.id());
+        boolean replaceBindingCache = hasDeferredDomainAgentBinding(command.context());
+        RuntimeBinding binding = replaceBindingCache
+                ? activateDeferredDomainAgentBinding(command.context(), savedAssistant.id())
+                : completeBinding(command.context(), savedAssistant.id());
         if (reusableInteraction(command.context())) {
             chatInteractionService.markAnswered(command.context().continuationInteractionRequest());
         }
         observeRun(stored);
         markExecutionTerminal(stored);
         binding = observeRuntimeBindingEvent(binding, stored);
-        return new CommitResult(stored, binding);
+        return new CommitResult(stored, binding, replaceBindingCache, completedEvents.precedingEvents());
     }
 
     @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public CommitResult commitWaitingUser(WaitingUserCommitCommand command) {
+        rejectDeferredDomainAgentBinding(command.context(), "run.waiting_user");
         lockOwnerTerminalSession(command.context());
         fenceOwnerTerminalCommit(command.context());
         ChatEvent stored = append(command.event(), command.context());
@@ -188,15 +196,20 @@ public class ChatRunTerminalCommitService {
                     request.tenantId(), request.userId(), request.id(), command.context().runId(),
                     java.time.Instant.now());
         }
-        RuntimeBinding binding = command.context().bindingRef().get();
-        if (cancelFailedRelayInteraction) {
+        DeferredDomainAgentBinding deferred = deferredDomainAgentBinding(command.context());
+        RuntimeBinding binding = deferred == null
+                ? command.context().bindingRef().get()
+                : deferred.previousBinding();
+        if (cancelFailedRelayInteraction && deferred == null) {
             binding = cancelFailedRelayInteractionBinding(binding, command.context());
         }
         markExecutionTerminal(stored);
-        if (!cancelFailedRelayInteraction) {
+        if (!cancelFailedRelayInteraction && deferred == null) {
             binding = invalidateUnavailableRuntimeSession(binding, stored);
         }
-        binding = observeRuntimeBindingEvent(binding, stored);
+        if (deferred == null) {
+            binding = observeRuntimeBindingEvent(binding, stored);
+        }
         return new CommitResult(stored, binding);
     }
 
@@ -362,6 +375,32 @@ public class ChatRunTerminalCommitService {
 
     private ChatEvent append(ChatEvent event, TerminalCommitContext context) {
         return chatStreamService.appendWithExecutionGuard(event, context.executionClaim());
+    }
+
+    private CompletedEvents appendCompletedEvents(CompletedCommitCommand command) {
+        TerminalCommitContext context = command.context();
+        PendingRouteSwitchAppliedEvent pending = pendingRouteSwitchAppliedEvent(context);
+        if (pending == null) {
+            return new CompletedEvents(List.of(), append(command.event(), context));
+        }
+        DeferredDomainAgentBinding deferred = deferredDomainAgentBinding(context);
+        if (deferred == null) {
+            throw new IllegalStateException(
+                    "Pending route-switch applied event requires a deferred DomainAgent binding");
+        }
+        ChatEvent appliedEvent = pending.event();
+        if (!pending.candidateBindingId().equals(deferred.candidate().id())
+                || !context.runId().equals(appliedEvent.runId())
+                || !context.session().id().equals(appliedEvent.sessionId())) {
+            throw new IllegalStateException(
+                    "Pending route-switch applied event does not match the deferred binding or run");
+        }
+        List<ChatEvent> stored = chatStreamService.appendBatchWithExecutionGuard(
+                List.of(appliedEvent, command.event()), context.executionClaim());
+        if (stored == null || stored.size() != 2) {
+            throw new IllegalStateException("Route-switch terminal event batch size mismatch");
+        }
+        return new CompletedEvents(List.of(stored.getFirst()), stored.getLast());
     }
 
     private void lockOwnerTerminalSession(TerminalCommitContext context) {
@@ -688,6 +727,83 @@ public class ChatRunTerminalCommitService {
         }
     }
 
+    private boolean hasDeferredDomainAgentBinding(TerminalCommitContext context) {
+        return deferredDomainAgentBinding(context) != null;
+    }
+
+    private DeferredDomainAgentBinding deferredDomainAgentBinding(TerminalCommitContext context) {
+        return context == null || context.deferredDomainAgentBindingRef() == null
+                ? null
+                : context.deferredDomainAgentBindingRef().get();
+    }
+
+    private PendingRouteSwitchAppliedEvent pendingRouteSwitchAppliedEvent(TerminalCommitContext context) {
+        return context == null || context.pendingRouteSwitchAppliedEventRef() == null
+                ? null
+                : context.pendingRouteSwitchAppliedEventRef().get();
+    }
+
+    private void rejectDeferredDomainAgentBinding(TerminalCommitContext context, String terminalType) {
+        if (hasDeferredDomainAgentBinding(context)) {
+            throw new IllegalStateException(
+                    "Deferred DomainAgent binding only supports run.completed: terminalType=" + terminalType);
+        }
+    }
+
+    private RuntimeBinding activateDeferredDomainAgentBinding(
+            TerminalCommitContext context,
+            String leafMessageId) {
+        DeferredDomainAgentBinding deferred = deferredDomainAgentBinding(context);
+        if (deferred == null) {
+            throw new IllegalStateException("Deferred DomainAgent binding is missing");
+        }
+        RuntimeBinding candidate = deferred.candidate();
+        if (!context.user().tenantId().equals(candidate.tenantId())
+                || !context.user().ownerUserId().equals(candidate.userId())
+                || !context.session().id().equals(candidate.chatSessionId())
+                || !context.runId().equals(candidate.lastRunId())
+                || !DOMAIN_AGENT_PROVIDER.equals(candidate.provider())) {
+            throw new IllegalStateException("Deferred DomainAgent binding ownership is invalid");
+        }
+        RuntimeBinding current = null;
+        if (deferred.reusesExistingBinding()) {
+            RuntimeBinding previous = deferred.previousBinding();
+            current = runtimeBindingRepository.findById(previous.id())
+                    .filter(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
+                    .filter(binding -> previous.tenantId().equals(binding.tenantId()))
+                    .filter(binding -> previous.userId().equals(binding.userId()))
+                    .filter(binding -> previous.chatSessionId().equals(binding.chatSessionId()))
+                    .filter(binding -> DOMAIN_AGENT_PROVIDER.equals(binding.provider()))
+                    .filter(binding -> Objects.equals(previous.lastRunId(), binding.lastRunId()))
+                    .orElseThrow(() -> new ChatEventAppendRejectedException(
+                            "Deferred DomainAgent binding is no longer current: bindingId=" + previous.id()));
+        } else if (runtimeBindingRepository.findById(candidate.id()).isPresent()) {
+            throw new IllegalStateException("Deferred DomainAgent binding ID already exists");
+        }
+        for (RuntimeBinding active : runtimeBindingRepository.findActiveBySession(
+                candidate.tenantId(), candidate.userId(), candidate.chatSessionId())) {
+            if (active.status() == RuntimeBindingStatus.ACTIVE
+                    && !active.id().equals(candidate.id())) {
+                if (!runtimeBindingRepository.cancelActiveForRun(active.id(), active.lastRunId())) {
+                    throw new ChatEventAppendRejectedException(
+                            "Deferred DomainAgent binding could not replace the current binding: bindingId="
+                                    + active.id());
+                }
+            }
+        }
+        java.time.Instant now = java.time.Instant.now();
+        RuntimeBinding activated = new RuntimeBinding(
+                candidate.id(), candidate.tenantId(), candidate.userId(), candidate.chatSessionId(),
+                candidate.provider(), leafMessageId, current == null
+                        ? candidate.runtimeSessionId()
+                        : current.runtimeSessionId(),
+                RuntimeBindingStatus.ACTIVE, context.runId(), expiresAt(DOMAIN_AGENT_PROVIDER, false),
+                current == null ? candidate.createdAt() : current.createdAt(), now, candidate.metadata());
+        RuntimeBinding saved = runtimeBindingRepository.save(activated);
+        context.bindingRef().set(saved);
+        return saved;
+    }
+
     private RuntimeBinding refreshBinding(TerminalCommitContext context, String leafMessageId) {
         RuntimeBinding binding = context.bindingRef().get();
         if (binding == null) {
@@ -793,8 +909,19 @@ public class ChatRunTerminalCommitService {
             String runId,
             RunExecutionClaim executionClaim,
             ChatInteractionRequest continuationInteractionRequest,
-            RuntimeInteractionDispatchState interactionDispatchState
+            RuntimeInteractionDispatchState interactionDispatchState,
+            AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef,
+            AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef
     ) {
+        public TerminalCommitContext {
+            deferredDomainAgentBindingRef = deferredDomainAgentBindingRef == null
+                    ? new AtomicReference<>()
+                    : deferredDomainAgentBindingRef;
+            pendingRouteSwitchAppliedEventRef = pendingRouteSwitchAppliedEventRef == null
+                    ? new AtomicReference<>()
+                    : pendingRouteSwitchAppliedEventRef;
+        }
+
         public TerminalCommitContext(
                 UserContext user,
                 ChatSession session,
@@ -805,7 +932,39 @@ public class ChatRunTerminalCommitService {
                 RunExecutionClaim executionClaim,
                 ChatInteractionRequest continuationInteractionRequest) {
             this(user, session, messagePlan, bindingRef, assistant, runId, executionClaim,
-                    continuationInteractionRequest, RuntimeInteractionDispatchState.untracked());
+                    continuationInteractionRequest, RuntimeInteractionDispatchState.untracked(),
+                    new AtomicReference<>(), new AtomicReference<>());
+        }
+
+        public TerminalCommitContext(
+                UserContext user,
+                ChatSession session,
+                ChatRunMessagePlan messagePlan,
+                AtomicReference<RuntimeBinding> bindingRef,
+                AssistantAssembly assistant,
+                String runId,
+                RunExecutionClaim executionClaim,
+                ChatInteractionRequest continuationInteractionRequest,
+                RuntimeInteractionDispatchState interactionDispatchState) {
+            this(user, session, messagePlan, bindingRef, assistant, runId, executionClaim,
+                    continuationInteractionRequest, interactionDispatchState,
+                    new AtomicReference<>(), new AtomicReference<>());
+        }
+
+        public TerminalCommitContext(
+                UserContext user,
+                ChatSession session,
+                ChatRunMessagePlan messagePlan,
+                AtomicReference<RuntimeBinding> bindingRef,
+                AssistantAssembly assistant,
+                String runId,
+                RunExecutionClaim executionClaim,
+                ChatInteractionRequest continuationInteractionRequest,
+                RuntimeInteractionDispatchState interactionDispatchState,
+                AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef) {
+            this(user, session, messagePlan, bindingRef, assistant, runId, executionClaim,
+                    continuationInteractionRequest, interactionDispatchState,
+                    deferredDomainAgentBindingRef, new AtomicReference<>());
         }
     }
 
@@ -959,6 +1118,29 @@ public class ChatRunTerminalCommitService {
     public record ExternalTerminalCommitResult(ChatEvent event, ChatRun run, boolean committed) {
     }
 
-    public record CommitResult(ChatEvent event, RuntimeBinding binding) {
+    private record CompletedEvents(List<ChatEvent> precedingEvents, ChatEvent terminalEvent) {
+        private CompletedEvents {
+            precedingEvents = precedingEvents == null ? List.of() : List.copyOf(precedingEvents);
+            Objects.requireNonNull(terminalEvent, "Terminal event must not be null");
+        }
+    }
+
+    public record CommitResult(
+            ChatEvent event,
+            RuntimeBinding binding,
+            boolean replaceBindingCache,
+            List<ChatEvent> precedingEvents
+    ) {
+        public CommitResult {
+            precedingEvents = precedingEvents == null ? List.of() : List.copyOf(precedingEvents);
+        }
+
+        public CommitResult(ChatEvent event, RuntimeBinding binding, boolean replaceBindingCache) {
+            this(event, binding, replaceBindingCache, List.of());
+        }
+
+        public CommitResult(ChatEvent event, RuntimeBinding binding) {
+            this(event, binding, false, List.of());
+        }
     }
 }

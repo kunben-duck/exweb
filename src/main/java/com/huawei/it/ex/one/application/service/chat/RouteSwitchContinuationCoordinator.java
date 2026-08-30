@@ -1,8 +1,11 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.facade.DocumentFacade;
+import com.huawei.it.ex.one.application.facade.ResolvedChatAttachments;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceGate;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
+import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeExecutionContext;
 import com.huawei.it.ex.one.common.trace.TraceContext;
@@ -46,6 +49,7 @@ final class RouteSwitchContinuationCoordinator {
     private final AgentRuntimeExecutor runtimeExecutor;
     private final AgentDataPersistenceGate persistenceGate;
     private final RunMemoryContextAssembler memoryAssembler;
+    private final DocumentFacade documentFacade;
     private final DomainAgentAttachmentValidationFailureExecutor attachmentFailureExecutor =
             new DomainAgentAttachmentValidationFailureExecutor();
 
@@ -100,6 +104,23 @@ final class RouteSwitchContinuationCoordinator {
             AgentDataPersistenceGate persistenceGate,
             RunMemoryContextAssembler memoryAssembler,
             SensitiveInformationAccessNameResolver sensitiveInformationResolver) {
+        this(runtimeBindingService, lifecycle, appliedRouteRecorder, interactionEventFactory,
+                eventPersistenceCoordinator, refusalCoordinator, runtimeExecutor, persistenceGate,
+                memoryAssembler, sensitiveInformationResolver, null);
+    }
+
+    RouteSwitchContinuationCoordinator(
+            RuntimeBindingApplicationService runtimeBindingService,
+            InteractionRunLifecycle lifecycle,
+            AppliedRouteRecorder appliedRouteRecorder,
+            InteractionEventFactory interactionEventFactory,
+            ChatEventPersistenceCoordinator eventPersistenceCoordinator,
+            DomainAgentRefusalCoordinator refusalCoordinator,
+            AgentRuntimeExecutor runtimeExecutor,
+            AgentDataPersistenceGate persistenceGate,
+            RunMemoryContextAssembler memoryAssembler,
+            SensitiveInformationAccessNameResolver sensitiveInformationResolver,
+            DocumentFacade documentFacade) {
         this.contextResolver = new RouteSwitchContextResolver(
                 runtimeBindingService, sensitiveInformationResolver);
         this.lifecycle = lifecycle;
@@ -110,6 +131,7 @@ final class RouteSwitchContinuationCoordinator {
         this.runtimeExecutor = runtimeExecutor;
         this.persistenceGate = persistenceGate;
         this.memoryAssembler = memoryAssembler;
+        this.documentFacade = documentFacade;
     }
 
     Flux<ChatEvent> execute(Request request) {
@@ -162,6 +184,10 @@ final class RouteSwitchContinuationCoordinator {
         AtomicReference<RouteTarget> routeRef = new AtomicReference<>(route);
         AtomicReference<Map<String, Object>> pendingInteractionPayloadRef = new AtomicReference<>();
         AssistantAssembly assistant = new AssistantAssembly();
+        AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef = new AtomicReference<>();
+        AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef = new AtomicReference<>();
+        AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef =
+                new AtomicReference<>();
         RunEventPipelineContext pipelineContext = new RunEventPipelineContext(
                 request.user(),
                 request.session(),
@@ -174,7 +200,10 @@ final class RouteSwitchContinuationCoordinator {
                 pendingInteractionPayloadRef,
                 interaction,
                 request.startAttempt(),
-                List.of());
+                documentIds(request.resolvedAttachments()),
+                deferredDomainAgentBindingRef,
+                pendingRouteMemoryDecisionRef,
+                pendingRouteSwitchAppliedEventRef);
         StartedSwitchContext context = new StartedSwitchContext(
                 request,
                 interaction,
@@ -185,7 +214,10 @@ final class RouteSwitchContinuationCoordinator {
                 routeRef,
                 bindingRef,
                 assistant,
-                pendingInteractionPayloadRef);
+                pendingInteractionPayloadRef,
+                deferredDomainAgentBindingRef,
+                pendingRouteMemoryDecisionRef,
+                pendingRouteSwitchAppliedEventRef);
         try {
             return eventPersistenceCoordinator.executeAfterRunStarted(
                     pipelineContext, () -> executeAfterStart(context));
@@ -203,21 +235,69 @@ final class RouteSwitchContinuationCoordinator {
                         context.route(),
                         context.assistant().persistenceState(),
                         context.request().forwardHeaders(),
-                        List.of());
+                        context.request().resolvedAttachments().documents());
         return preflight.flatMapMany(decision -> decision.unsupportedAttachment()
                 ? eventPersistenceCoordinator.requireCurrentOwnerRunning(
                                 context.executionClaim(), "before-route-switch-attachment-rejection")
-                        .thenMany(Flux.concat(
-                                Flux.just(context.responseEvent()),
-                                attachmentFailureExecutor.execute(
-                                        context.request().runId(),
-                                        context.request().session().id(),
-                                        decision.payload())))
+                        .thenMany(Flux.defer(() -> executeUnsupportedAttachment(context, decision)))
                 : Flux.defer(() -> executeAfterPolicy(context)));
+    }
+
+    private Flux<ChatEvent> executeUnsupportedAttachment(
+            StartedSwitchContext context,
+            AgentDataPersistenceGate.Decision decision) {
+        Request request = context.request();
+        DeferredDomainAgentBinding deferred =
+                contextResolver.prepareDomainAgentBindingForUnsupportedAttachment(
+                        context.interaction(),
+                        context.input(),
+                        new RouteSwitchBindingRequest(
+                                request.user(),
+                                request.session(),
+                                request.runId(),
+                                request.agentMode(),
+                                context.executionClaim()));
+        RuntimeBinding binding = deferred.candidate();
+        context.deferredDomainAgentBindingRef().set(deferred);
+        context.bindingRef().set(binding);
+        appliedRouteRecorder.bindResolvedRouteRequired(
+                request.runId(), context.route(), binding, context.executionClaim(),
+                context.assistant().persistenceState());
+        context.assistant().messageSkill().replace(context.route().invocationSkillId());
+        IntentDecision switchIntent = appliedRouteRecorder.routeSwitchIntent(
+                context.interaction(), context.route());
+        appliedRouteRecorder.deferRouteMemoryDecision(
+                context.pendingRouteMemoryDecisionRef(),
+                new PendingRouteMemoryDecision(
+                        request.user(),
+                        request.session().id(),
+                        request.runId(),
+                        context.input().candidateRouteQuery(),
+                        switchIntent,
+                        context.route()));
+        PendingRouteSwitchAppliedEvent pendingAppliedEvent = new PendingRouteSwitchAppliedEvent(
+                interactionEventFactory.routeSwitchAppliedEvent(
+                        request.runId(),
+                        request.session().id(),
+                        context.interaction(),
+                        context.route(),
+                        binding),
+                binding.id());
+        if (!context.pendingRouteSwitchAppliedEventRef().compareAndSet(null, pendingAppliedEvent)) {
+            throw new IllegalStateException("Route-switch applied event is already pending for run: "
+                    + request.runId());
+        }
+        return Flux.concat(
+                Flux.just(context.responseEvent()),
+                attachmentFailureExecutor.execute(
+                        request.runId(), request.session().id(), decision.payload()));
     }
 
     private Flux<ChatEvent> executeAfterPolicy(StartedSwitchContext context) {
         Request request = context.request();
+        ChatCommand command = context.input().approved()
+                ? runtimeCommand(request, context.interaction(), context.input(), context.route())
+                : null;
         RouteSwitchBindingSelection selection = contextResolver.selectBinding(
                 context.interaction(),
                 context.input(),
@@ -225,7 +305,8 @@ final class RouteSwitchContinuationCoordinator {
                         request.user(),
                         request.session(),
                         request.runId(),
-                        request.agentMode()));
+                        request.agentMode(),
+                        context.executionClaim()));
         RuntimeBinding binding = selection.binding();
         context.bindingRef().set(binding);
         if (context.input().approved()) {
@@ -239,21 +320,21 @@ final class RouteSwitchContinuationCoordinator {
                     context.request().runId(), context.route(), binding);
         }
         Flux<ChatEvent> body = context.input().approved()
-                ? approvedBody(context, selection)
+                ? approvedBody(context, selection, command)
                 : declinedBody(context.request(), context.interaction());
         return Flux.concat(Flux.just(context.responseEvent()), body);
     }
 
     private Flux<ChatEvent> approvedBody(
             StartedSwitchContext context,
-            RouteSwitchBindingSelection selection) {
+            RouteSwitchBindingSelection selection,
+            ChatCommand command) {
         Request request = context.request();
         ChatInteractionRequest interaction = context.interaction();
         RouteSwitchInput input = context.input();
         RouteTarget route = context.route();
         RuntimeBinding binding = selection.binding();
         IntentDecision switchIntent = appliedRouteRecorder.routeSwitchIntent(interaction, route);
-        ChatCommand command = runtimeCommand(request, interaction, input, route);
         MemoryContext sourceMemory = memoryAssembler == null
                 ? MemoryContext.empty()
                 : memoryAssembler.assemble(
@@ -295,8 +376,8 @@ final class RouteSwitchContinuationCoordinator {
                 null,
                 null,
                 input.originalQuery(),
-                List.of(),
-                responseMetadata(request.claim()),
+                request.resolvedAttachments().attachments(),
+                runtimeMetadata(request),
                 route.type() == RouteType.DOMAIN_AGENT ? "DOMAIN_AGENT" : null,
                 route.type() == RouteType.DOMAIN_AGENT ? input.candidateTargetId() : null,
                 ChatRunMode.NEXT,
@@ -349,13 +430,15 @@ final class RouteSwitchContinuationCoordinator {
                 request.forwardHeaders(),
                 request.traceContext(),
                 approved.switchIntent(),
-                List.of(),
+                request.resolvedAttachments().documents(),
                 new HashSet<>(),
                 0,
                 context.input().candidateRouteQuery(),
                 context.assistant().persistenceState(),
                 context.assistant().messageSkill(),
-                context.pendingInteractionPayloadRef());
+                context.pendingInteractionPayloadRef(),
+                context.deferredDomainAgentBindingRef(),
+                context.pendingRouteMemoryDecisionRef());
         return eventPersistenceCoordinator.requireCurrentOwnerRunning(
                         context.executionClaim(), "before-route-switch-domain-agent")
                 .then(Mono.fromRunnable(() -> appliedRouteRecorder.markRuntimeDispatchStartedRequired(
@@ -389,8 +472,33 @@ final class RouteSwitchContinuationCoordinator {
                                 approved.selection().binding(),
                                 approved.selection().sessionMode(),
                                 request.forwardHeaders(),
-                                List.of(),
+                                request.resolvedAttachments().documents(),
                                 request.traceContext()))));
+    }
+
+    private Map<String, Object> runtimeMetadata(Request request) {
+        Map<String, Object> metadata = responseMetadata(request.claim());
+        if (request.resolvedAttachments().documents().isEmpty()) {
+            return metadata;
+        }
+        if (documentFacade == null) {
+            throw new IllegalStateException("路由切换附件缺少文档metadata组装器");
+        }
+        return documentFacade.replaceRuntimeDocumentMetadata(
+                metadata, request.resolvedAttachments().documents());
+    }
+
+    private List<String> documentIds(ResolvedChatAttachments attachments) {
+        if (attachments.documents().isEmpty()) {
+            return List.of();
+        }
+        Map<String, Boolean> ids = new LinkedHashMap<>();
+        attachments.documents().forEach(document -> {
+            if (document != null && document.id() != null && !document.id().isBlank()) {
+                ids.putIfAbsent(document.id(), Boolean.TRUE);
+            }
+        });
+        return List.copyOf(ids.keySet());
     }
 
     private Flux<ChatEvent> declinedBody(
@@ -411,8 +519,14 @@ final class RouteSwitchContinuationCoordinator {
             TraceContext traceContext,
             RunStartAttempt startAttempt,
             AgentModeProfile agentMode,
-            String intentAccessName
+            String intentAccessName,
+            ResolvedChatAttachments resolvedAttachments
     ) {
+        Request {
+            resolvedAttachments = resolvedAttachments == null
+                    ? ResolvedChatAttachments.empty()
+                    : resolvedAttachments;
+        }
     }
 
     private record StartedSwitchContext(
@@ -425,7 +539,10 @@ final class RouteSwitchContinuationCoordinator {
             AtomicReference<RouteTarget> routeRef,
             AtomicReference<RuntimeBinding> bindingRef,
             AssistantAssembly assistant,
-            AtomicReference<Map<String, Object>> pendingInteractionPayloadRef
+            AtomicReference<Map<String, Object>> pendingInteractionPayloadRef,
+            AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef,
+            AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef,
+            AtomicReference<PendingRouteSwitchAppliedEvent> pendingRouteSwitchAppliedEventRef
     ) {
     }
 

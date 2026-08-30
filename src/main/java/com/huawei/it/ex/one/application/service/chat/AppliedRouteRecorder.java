@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Records applied route facts after a binding succeeds.
@@ -213,6 +214,33 @@ final class AppliedRouteRecorder {
                     .build(), ex);
             return currentMemory;
         }
+    }
+
+    void deferRouteMemoryDecision(
+            AtomicReference<PendingRouteMemoryDecision> pendingRef,
+            PendingRouteMemoryDecision decision) {
+        if (pendingRef == null || decision == null || routeMemoryService == null
+                || !routeMemoryService.isNewRouteDecision(decision.route())) {
+            return;
+        }
+        pendingRef.set(decision);
+    }
+
+    void recordCommittedRouteDecision(
+            PendingRouteMemoryDecision decision,
+            RuntimeBinding binding) {
+        if (decision == null || binding == null) {
+            return;
+        }
+        recordAppliedRouteDecision(new AppliedRouteDecision(
+                decision.user(),
+                decision.sessionId(),
+                decision.runId(),
+                decision.query(),
+                decision.intent(),
+                decision.route(),
+                binding,
+                MemoryContext.empty()));
     }
 
     IntentDecision routeSwitchIntent(ChatInteractionRequest interaction, RouteTarget route) {

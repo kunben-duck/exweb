@@ -4,6 +4,7 @@ import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
 import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceGate;
 import com.huawei.it.ex.one.application.service.memory.MemoryApplicationService;
 import com.huawei.it.ex.one.application.service.memory.RouteMemoryApplicationService;
 import com.huawei.it.ex.one.application.service.routing.IntentRecognitionRecordService;
@@ -221,6 +222,56 @@ final class ChatFlowTestFixture {
             DomainAgentProperties domainAgentProperties,
             RouteMemoryApplicationService routeMemoryService,
             ChatRunOperationalProperties runOperationalProperties) {
+        return service(
+                sessionService,
+                memoryService,
+                runtimeBindingService,
+                routeSignalService,
+                intentRecognitionRecordService,
+                systemResponseExecutor,
+                agentRuntimeExecutor,
+                documentFacade,
+                chatStreamService,
+                chatRunService,
+                chatRunLeaseService,
+                chatDeltaCoalescer,
+                runExecutionRegistry,
+                runAdmissionControl,
+                stopCoordinator,
+                chatInteractionService,
+                terminalCommitService,
+                idGenerator,
+                eventIoScheduler,
+                domainAgentProperties,
+                routeMemoryService,
+                runOperationalProperties,
+                null);
+    }
+
+    static FinanceEXChatService service(
+            SessionApplicationService sessionService,
+            MemoryApplicationService memoryService,
+            RuntimeBindingApplicationService runtimeBindingService,
+            RouteSignalApplicationService routeSignalService,
+            IntentRecognitionRecordService intentRecognitionRecordService,
+            SystemResponseExecutor systemResponseExecutor,
+            AgentRuntimeExecutor agentRuntimeExecutor,
+            DocumentFacade documentFacade,
+            ChatStreamApplicationService chatStreamService,
+            ChatRunApplicationService chatRunService,
+            ChatRunLeaseApplicationService chatRunLeaseService,
+            ChatDeltaCoalescer chatDeltaCoalescer,
+            LocalChatRunExecutionRegistry runExecutionRegistry,
+            RunAdmissionControlService runAdmissionControl,
+            ChatRunStopCoordinator stopCoordinator,
+            ChatInteractionApplicationService chatInteractionService,
+            ChatRunTerminalCommitService terminalCommitService,
+            IdGenerator idGenerator,
+            Scheduler eventIoScheduler,
+            DomainAgentProperties domainAgentProperties,
+            RouteMemoryApplicationService routeMemoryService,
+            ChatRunOperationalProperties runOperationalProperties,
+            AgentDataPersistenceGate routeSwitchPersistenceGate) {
         ChatFlowTestAssembler assembler =
                 new ChatFlowTestAssembler(
                         sessionService,
@@ -244,13 +295,65 @@ final class ChatFlowTestFixture {
                         eventIoScheduler,
                         domainAgentProperties,
                         routeMemoryService,
-                        runOperationalProperties);
+                        runOperationalProperties,
+                        routeSwitchPersistenceGate);
         return new FinanceEXChatService(
                 assembler.orchestrator(),
                 assembler.admissionCoordinator(),
                 assembler.cacheSynchronizer(),
                 assembler.refusalCommitCoordinator(),
                 assembler.eventPipeline());
+    }
+
+    static FinanceEXChatService service(
+            SessionApplicationService sessionService,
+            MemoryApplicationService memoryService,
+            RuntimeBindingApplicationService runtimeBindingService,
+            RouteSignalApplicationService routeSignalService,
+            IntentRecognitionRecordService intentRecognitionRecordService,
+            DomainAgentExecutor domainAgentExecutor,
+            SystemResponseExecutor systemResponseExecutor,
+            AgentRuntimeExecutor agentRuntimeExecutor,
+            DocumentFacade documentFacade,
+            ChatStreamApplicationService chatStreamService,
+            ChatRunApplicationService chatRunService,
+            ChatRunLeaseApplicationService chatRunLeaseService,
+            ChatDeltaCoalescer chatDeltaCoalescer,
+            LocalChatRunExecutionRegistry runExecutionRegistry,
+            RunAdmissionControlService runAdmissionControl,
+            ChatRunStopCoordinator stopCoordinator,
+            ChatInteractionApplicationService chatInteractionService,
+            ChatRunTerminalCommitService terminalCommitService,
+            IdGenerator idGenerator,
+            Scheduler eventIoScheduler,
+            DomainAgentProperties domainAgentProperties,
+            RouteMemoryApplicationService routeMemoryService,
+            ChatRunOperationalProperties runOperationalProperties,
+            AgentDataPersistenceGate routeSwitchPersistenceGate) {
+        return service(
+                sessionService,
+                memoryService,
+                runtimeBindingService,
+                routeSignalService,
+                intentRecognitionRecordService,
+                systemResponseExecutor,
+                legacyCompatibleExecutor(domainAgentExecutor, agentRuntimeExecutor),
+                documentFacade,
+                chatStreamService,
+                chatRunService,
+                chatRunLeaseService,
+                chatDeltaCoalescer,
+                runExecutionRegistry,
+                runAdmissionControl,
+                stopCoordinator,
+                chatInteractionService,
+                terminalCommitService,
+                idGenerator,
+                eventIoScheduler,
+                domainAgentProperties,
+                routeMemoryService,
+                runOperationalProperties,
+                routeSwitchPersistenceGate);
     }
 
     private static AgentRuntimeExecutor legacyCompatibleExecutor(

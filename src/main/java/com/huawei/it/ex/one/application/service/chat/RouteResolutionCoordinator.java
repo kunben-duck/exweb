@@ -6,8 +6,10 @@ import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.application.service.memory.ShortTermMemoryContextAssembler;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalApplicationService;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalResult;
+import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.application.service.runtime.DomainAgentBindingCommand;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
+import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService.DeferredDomainAgentBindingActivation;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingResolution;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
@@ -49,7 +51,7 @@ final class RouteResolutionCoordinator {
         if (explicitTarget != null && explicitTarget.domainAgent()) {
             RouteTarget route = RouteTarget.domainAgent(explicitTarget.targetId(), "front-selected", 1.0,
                     "front selected domain agent");
-            RuntimeBinding binding = runtimeBindingService.bindDomainAgentForRun(new DomainAgentBindingCommand(
+            DomainAgentBindingCommand bindingCommand = new DomainAgentBindingCommand(
                     preparation.user().tenantId(),
                     preparation.user().ownerUserId(),
                     preparation.session().id(),
@@ -59,7 +61,17 @@ final class RouteResolutionCoordinator {
                     "front-selected",
                     domainAgentBindingMetadata(route, null,
                             preparation.command() == null ? Map.of() : preparation.command().metadata()),
-                    preparation.agentMode()));
+                    preparation.agentMode());
+            if (preparation.deferDomainAgentBinding()) {
+                DeferredDomainAgentBinding deferred =
+                        runtimeBindingService.prepareDomainAgentForRun(bindingCommand);
+                preparation.deferredDomainAgentBindingRef().set(deferred);
+                preparation.routeRef().set(route);
+                preparation.bindingRef().set(deferred.candidate());
+                preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
+                return;
+            }
+            RuntimeBinding binding = runtimeBindingService.bindDomainAgentForRun(bindingCommand);
             preparation.routeRef().set(route);
             preparation.bindingRef().set(binding);
             preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
@@ -228,12 +240,20 @@ final class RouteResolutionCoordinator {
 
     private void restoreActiveBinding(InitialRoutePreparation preparation, RuntimeBinding active) {
         boolean domainAgent = RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(active.provider());
-        RuntimeBinding binding = domainAgent
-                ? runtimeBindingService.touchDomainAgentForRun(
-                        active,
-                        preparation.runId(),
-                        preparation.agentMode())
-                : runtimeBindingService.touchForRun(active, preparation.runId());
+        RuntimeBinding binding;
+        if (domainAgent && preparation.deferDomainAgentBinding()) {
+            DeferredDomainAgentBinding deferred = runtimeBindingService.prepareActiveDomainAgentForRun(
+                    active, preparation.runId(), preparation.agentMode());
+            preparation.deferredDomainAgentBindingRef().set(deferred);
+            binding = deferred.candidate();
+        } else {
+            binding = domainAgent
+                    ? runtimeBindingService.touchDomainAgentForRun(
+                            active,
+                            preparation.runId(),
+                            preparation.agentMode())
+                    : runtimeBindingService.touchForRun(active, preparation.runId());
+        }
         boolean pinnedDomainExpert = !domainAgent
                 && runtimeBindingService.isPinnedDomainExpert(binding);
         RouteTarget route = domainAgent
@@ -258,7 +278,9 @@ final class RouteResolutionCoordinator {
         preparation.bindingRef().set(binding);
         preparation.routeRef().set(route);
         preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
-        preparation.bindingLifecycle().trackReused(binding, active);
+        if (!(domainAgent && preparation.deferDomainAgentBinding())) {
+            preparation.bindingLifecycle().trackReused(binding, active);
+        }
     }
 
     private BindingResolution bindResolvedRoute(RouteResolutionRequest request,
@@ -274,7 +296,7 @@ final class RouteResolutionCoordinator {
                     normalizedMode(request.currentRuntimeSessionMode()));
         }
         if (route.type() == RouteType.DOMAIN_AGENT) {
-            RuntimeBinding binding = runtimeBindingService.bindDomainAgentForRun(new DomainAgentBindingCommand(
+            DomainAgentBindingCommand bindingCommand = new DomainAgentBindingCommand(
                     request.user().tenantId(),
                     request.user().ownerUserId(),
                     request.session().id(),
@@ -283,7 +305,15 @@ final class RouteResolutionCoordinator {
                     route.selectedAgentCode(),
                     route.routeSource(),
                     domainAgentBindingMetadata(route, intent),
-                    request.agentMode()));
+                    request.agentMode());
+            if (request.deferDomainAgentBinding()) {
+                DeferredDomainAgentBinding deferred =
+                        runtimeBindingService.prepareDomainAgentForRun(bindingCommand);
+                request.deferredDomainAgentBindingRef().set(deferred);
+                return new BindingResolution(
+                        route, deferred.candidate(), normalizedMode(request.currentRuntimeSessionMode()));
+            }
+            RuntimeBinding binding = runtimeBindingService.bindDomainAgentForRun(bindingCommand);
             request.bindingLifecycle().trackCreated(binding);
             return new BindingResolution(route, binding, normalizedMode(request.currentRuntimeSessionMode()));
         }
@@ -302,6 +332,28 @@ final class RouteResolutionCoordinator {
         }
         return new BindingResolution(route, request.currentBinding(),
                 normalizedMode(request.currentRuntimeSessionMode()));
+    }
+
+    RouteExecutionResolution materializeDeferredDomainAgentBinding(
+            RouteExecutionResolution resolution,
+            AtomicReference<DeferredDomainAgentBinding> deferredRef,
+            RunExecutionClaim executionClaim,
+            RuntimeBindingDispatchLifecycle lifecycle) {
+        DeferredDomainAgentBinding deferred = deferredRef == null ? null : deferredRef.get();
+        if (deferred == null) {
+            return resolution;
+        }
+        DeferredDomainAgentBindingActivation activation =
+                runtimeBindingService.activateDeferredDomainAgentForRuntime(deferred, executionClaim);
+        if (activation.previousBinding() == null) {
+            lifecycle.trackAdmissionCancellations(activation.cancellations());
+            lifecycle.trackCreated(activation.binding());
+        } else {
+            lifecycle.trackReused(activation.binding(), activation.previousBinding());
+        }
+        runtimeBindingService.synchronizeDeferredDomainAgentActivation(activation.binding());
+        deferredRef.compareAndSet(deferred, null);
+        return resolution.withBinding(activation.binding());
     }
 
     private ChatCommand withFoldedQuery(ChatCommand command, String foldedQuery) {
@@ -411,8 +463,34 @@ final class RouteResolutionCoordinator {
             AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
             AgentModeProfile agentMode,
             RunExecutionClaim executionClaim,
-            RuntimeBindingDispatchLifecycle bindingLifecycle
+            RuntimeBindingDispatchLifecycle bindingLifecycle,
+            boolean deferDomainAgentBinding,
+            AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef
     ) {
+        InitialRoutePreparation {
+            deferredDomainAgentBindingRef = deferredDomainAgentBindingRef == null
+                    ? new AtomicReference<>()
+                    : deferredDomainAgentBindingRef;
+        }
+
+        InitialRoutePreparation(
+                UserContext user,
+                ChatSession session,
+                String runId,
+                String runtimeBindingLeafId,
+                ChatCommand command,
+                ExplicitRuntimeTarget explicitRuntimeTarget,
+                boolean forceReroute,
+                AtomicReference<RouteTarget> routeRef,
+                AtomicReference<RuntimeBinding> bindingRef,
+                AtomicReference<RuntimeSessionMode> runtimeSessionModeRef,
+                AgentModeProfile agentMode,
+                RunExecutionClaim executionClaim,
+                RuntimeBindingDispatchLifecycle bindingLifecycle) {
+            this(user, session, runId, runtimeBindingLeafId, command, explicitRuntimeTarget, forceReroute,
+                    routeRef, bindingRef, runtimeSessionModeRef, agentMode, executionClaim, bindingLifecycle,
+                    false, new AtomicReference<>());
+        }
     }
 
     record RouteResolutionRequest(
@@ -427,8 +505,33 @@ final class RouteResolutionCoordinator {
             RuntimeBinding currentBinding,
             RuntimeSessionMode currentRuntimeSessionMode,
             AgentModeProfile agentMode,
-            RuntimeBindingDispatchLifecycle bindingLifecycle
+            RuntimeBindingDispatchLifecycle bindingLifecycle,
+            boolean deferDomainAgentBinding,
+            AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef
     ) {
+        RouteResolutionRequest {
+            deferredDomainAgentBindingRef = deferredDomainAgentBindingRef == null
+                    ? new AtomicReference<>()
+                    : deferredDomainAgentBindingRef;
+        }
+
+        RouteResolutionRequest(
+                UserContext user,
+                ChatSession session,
+                ChatCommand runCommand,
+                List<AttachmentRef> attachments,
+                MemoryContext memory,
+                String runId,
+                String runtimeBindingLeafId,
+                RouteTarget currentRoute,
+                RuntimeBinding currentBinding,
+                RuntimeSessionMode currentRuntimeSessionMode,
+                AgentModeProfile agentMode,
+                RuntimeBindingDispatchLifecycle bindingLifecycle) {
+            this(user, session, runCommand, attachments, memory, runId, runtimeBindingLeafId,
+                    currentRoute, currentBinding, currentRuntimeSessionMode, agentMode, bindingLifecycle,
+                    false, new AtomicReference<>());
+        }
     }
 
     record RouteExecutionResolution(
@@ -441,6 +544,11 @@ final class RouteResolutionCoordinator {
             boolean waitingIntentClarification,
             Map<String, Object> intentClarificationPayload
     ) {
+        RouteExecutionResolution withBinding(RuntimeBinding nextBinding) {
+            return new RouteExecutionResolution(
+                    route, nextBinding, runtimeSessionMode, intent, intentLatencyMs,
+                    intentConfidenceThreshold, waitingIntentClarification, intentClarificationPayload);
+        }
     }
 
     record RuntimeCommandRequest(

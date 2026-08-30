@@ -2,6 +2,7 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
+import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
@@ -107,6 +108,8 @@ final class IntentClarificationRunCoordinator {
                 executionClaim,
                 "after-intent-interaction-execution-create");
         AssistantAssembly assistant = new AssistantAssembly();
+        AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef = new AtomicReference<>();
+        AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef = new AtomicReference<>();
         AtomicReference<java.util.Map<String, Object>> pendingInteractionPayloadRef = new AtomicReference<>();
         RunEventPipelineContext context = new RunEventPipelineContext(
                 request.user(),
@@ -120,7 +123,9 @@ final class IntentClarificationRunCoordinator {
                 pendingInteractionPayloadRef,
                 interaction,
                 request.startAttempt(),
-                request.input().cumulativeDocumentIds());
+                request.input().cumulativeDocumentIds(),
+                deferredDomainAgentBindingRef,
+                pendingRouteMemoryDecisionRef);
         String foldedRouteQuery = clarificationAssembler.routeMemoryQuery(
                 messagePlan, interaction, request.input().intentQuery());
         try {
@@ -152,7 +157,9 @@ final class IntentClarificationRunCoordinator {
                                     new RuntimeBindingDispatchLifecycle(),
                                     assistant.persistenceState(),
                                     assistant.messageSkill(),
-                                    pendingInteractionPayloadRef))));
+                                    pendingInteractionPayloadRef,
+                                    deferredDomainAgentBindingRef,
+                                    pendingRouteMemoryDecisionRef))));
         } catch (RuntimeException ex) {
             return lifecycle.failContinuation(context, ex);
         }

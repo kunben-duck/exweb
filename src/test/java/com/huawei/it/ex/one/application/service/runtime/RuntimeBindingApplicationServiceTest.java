@@ -23,6 +23,7 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -32,6 +33,155 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 class RuntimeBindingApplicationServiceTest {
+    @Test
+    void guardedRouteSwitchRejectsOwnershipLossBeforeBindingMutation() {
+        Instant now = Instant.now();
+        RuntimeBinding source = new RuntimeBinding(
+                "binding-a", "t", "u", "s", "domain-agent", "leaf-a", "runtime-a",
+                RuntimeBindingStatus.CANCELLED, "run-a", null, now, now,
+                Map.of("domainAgentId", "agent-a"));
+        MultiBindingRepository repository = new MultiBindingRepository(List.of(source));
+        repository.bindingMutationGuardAccepted = false;
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        cache.put(source);
+        RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(
+                repository, cache, new FixedIdGenerator(), Duration.ofDays(3), "relay");
+        RunExecutionClaim claim = new RunExecutionClaim("run-b", "instance-old", 7L);
+
+        assertThatThrownBy(() -> service.switchDomainAgentForInteraction(
+                        domainAgentRouteSwitchInteraction(),
+                        new DomainAgentBindingCommand(
+                                "t", "u", "s", "run-b", "msg-assistant",
+                                "agent-b", "user-confirmed", Map.of()),
+                        claim))
+                .isInstanceOf(ChatEventAppendRejectedException.class)
+                .hasMessageContaining("run/execution 栅栏拒绝");
+
+        assertThat(repository.bindingMutationClaim).isEqualTo(claim);
+        assertThat(repository.findByIdCalls).isZero();
+        assertThat(repository.findById("binding-a")).contains(source);
+        assertThat(repository.bindings).hasSize(1);
+        assertThat(cache.get("t", "u", "s")).contains(source);
+    }
+
+    @Test
+    void guardedRouteSwitchAtomicallyCancelsSourceAndCreatesCandidateBeforeCacheSync() {
+        Instant now = Instant.now();
+        RuntimeBinding source = new RuntimeBinding(
+                "binding-a", "t", "u", "s", "domain-agent", "leaf-a", "runtime-a",
+                RuntimeBindingStatus.CANCELLED, "run-a", null, now, now,
+                Map.of("domainAgentId", "agent-a"));
+        MultiBindingRepository repository = new MultiBindingRepository(List.of(source));
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        cache.put(source);
+        RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(
+                repository, cache, new FixedIdGenerator(), Duration.ofDays(3), "relay");
+        RunExecutionClaim claim = new RunExecutionClaim("run-b", "instance-1", 8L);
+
+        RuntimeBinding candidate = service.switchDomainAgentForInteraction(
+                domainAgentRouteSwitchInteraction(),
+                new DomainAgentBindingCommand(
+                        "t", "u", "s", "run-b", "msg-assistant",
+                        "agent-b", "user-confirmed", Map.of("intentName", "技能B")),
+                claim);
+
+        assertThat(repository.bindingMutationClaim).isEqualTo(claim);
+        assertThat(repository.findById("binding-a")).get().satisfies(cancelled -> {
+            assertThat(cancelled.status()).isEqualTo(RuntimeBindingStatus.CANCELLED);
+            assertThat(cancelled.lastRunId()).isEqualTo("run-b");
+            assertThat(cancelled.leafMessageId()).isEqualTo("msg-assistant");
+            assertThat(cancelled.metadata()).containsEntry("lastRejectCode", "REFUSED");
+        });
+        assertThat(candidate.id()).isEqualTo("runtime_binding_1");
+        assertThat(candidate.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(candidate.lastRunId()).isEqualTo("run-b");
+        assertThat(candidate.metadata()).containsEntry("domainAgentId", "agent-b");
+        assertThat(cache.get("t", "u", "s")).contains(source);
+
+        service.synchronizeDeferredDomainAgentActivation(candidate);
+
+        assertThat(cache.get("t", "u", "s")).contains(candidate);
+    }
+
+    @Test
+    void guardedRouteSwitchUsesBoundedTransaction() throws NoSuchMethodException {
+        Transactional transactional = RuntimeBindingApplicationService.class.getMethod(
+                        "switchDomainAgentForInteraction",
+                        ChatInteractionRequest.class,
+                        DomainAgentBindingCommand.class,
+                        RunExecutionClaim.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.timeoutString()).isEqualTo(
+                "${financeex.runtime-binding.interaction-resume-transaction-timeout-seconds:2}");
+    }
+
+    @Test
+    void preparesDomainAgentBindingWithoutPersistingOrUpdatingCache() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        DeferredDomainAgentBinding deferred = service.prepareDomainAgentForRun(new DomainAgentBindingCommand(
+                "t", "u", "s", "run-new", "leaf-new", "skill-b", "intent", Map.of()));
+
+        assertThat(deferred.previousBinding()).isNull();
+        assertThat(deferred.candidate().provider())
+                .isEqualTo(RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER);
+        assertThat(deferred.candidate().lastRunId()).isEqualTo("run-new");
+        assertThat(repository.saved).isNull();
+        assertThat(cache.get("t", "u", "s")).isEmpty();
+    }
+
+    @Test
+    void activatesDeferredBindingBehindExecutionFenceWithoutSynchronizingCache() {
+        Instant now = Instant.now();
+        RuntimeBinding previous = new RuntimeBinding(
+                "binding-old", "t", "u", "s", "relay", "leaf-old", "runtime-old",
+                RuntimeBindingStatus.ACTIVE, "run-old", null, now, now, Map.of());
+        MultiBindingRepository repository = new MultiBindingRepository(List.of(previous));
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        cache.put(previous);
+        RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(
+                repository, cache, new FixedIdGenerator(), Duration.ofDays(3), "relay");
+        DeferredDomainAgentBinding deferred = service.prepareDomainAgentForRun(new DomainAgentBindingCommand(
+                "t", "u", "s", "run-new", "leaf-new", "skill-b", "intent", Map.of()));
+
+        RuntimeBindingApplicationService.DeferredDomainAgentBindingActivation activation =
+                service.activateDeferredDomainAgentForRuntime(
+                        deferred, new RunExecutionClaim("run-new", "instance-1", 7L));
+
+        assertThat(repository.findById(previous.id())).get()
+                .extracting(RuntimeBinding::status)
+                .isEqualTo(RuntimeBindingStatus.CANCELLED);
+        assertThat(repository.findById(deferred.candidate().id())).contains(activation.binding());
+        assertThat(activation.binding().status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(activation.cancellations()).singleElement()
+                .extracting(RuntimeBindingApplicationService.AdmissionCancellation::previous)
+                .isEqualTo(previous);
+        assertThat(cache.get("t", "u", "s")).contains(previous);
+
+        service.synchronizeDeferredDomainAgentActivation(activation.binding());
+
+        assertThat(cache.get("t", "u", "s")).contains(activation.binding());
+    }
+
+    @Test
+    void rejectedExecutionFenceDoesNotPersistDeferredBinding() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        repository.bindingMutationGuardAccepted = false;
+        RuntimeBindingApplicationService service = service(repository, new InMemoryRuntimeBindingCache());
+        DeferredDomainAgentBinding deferred = service.prepareDomainAgentForRun(new DomainAgentBindingCommand(
+                "t", "u", "s", "run-new", "leaf-new", "skill-b", "intent", Map.of()));
+
+        assertThatThrownBy(() -> service.activateDeferredDomainAgentForRuntime(
+                        deferred, new RunExecutionClaim("run-new", "instance-old", 7L)))
+                .isInstanceOf(ChatEventAppendRejectedException.class)
+                .hasMessageContaining("run/execution");
+        assertThat(repository.saved).isNull();
+    }
+
     @Test
     void relayBindingDoesNotRecordAgentMode() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
@@ -889,6 +1039,32 @@ class RuntimeBindingApplicationServiceTest {
                 Map.of(), null, null, null, now, now);
     }
 
+    private ChatInteractionRequest domainAgentRouteSwitchInteraction() {
+        Instant now = Instant.now();
+        return new ChatInteractionRequest(
+                "interaction-route-switch",
+                "t",
+                "u",
+                "s",
+                "run-a",
+                "run-b",
+                "msg-user",
+                "msg-assistant",
+                "domain-agent",
+                "binding-a",
+                "runtime-a",
+                null,
+                ChatInteractionType.ROUTE_SWITCH_CONFIRMATION,
+                ChatInteractionStatus.RESPONDING,
+                Map.of("refusalCode", "REFUSED"),
+                Map.of(),
+                now.plusSeconds(300),
+                null,
+                null,
+                now,
+                now);
+    }
+
     private ChatInteractionRequest relayQuestionnaireRequest(String runtimeSessionId) {
         Instant now = Instant.now();
         return new ChatInteractionRequest(
@@ -1019,6 +1195,9 @@ class RuntimeBindingApplicationServiceTest {
 
     private static class MultiBindingRepository implements RuntimeBindingRepository {
         private final Map<String, RuntimeBinding> bindings = new LinkedHashMap<>();
+        private boolean bindingMutationGuardAccepted = true;
+        private RunExecutionClaim bindingMutationClaim;
+        private int findByIdCalls;
 
         private MultiBindingRepository(List<RuntimeBinding> initialBindings) {
             initialBindings.forEach(binding -> bindings.put(binding.id(), binding));
@@ -1026,6 +1205,7 @@ class RuntimeBindingApplicationServiceTest {
 
         @Override
         public Optional<RuntimeBinding> findById(String bindingId) {
+            findByIdCalls++;
             return Optional.ofNullable(bindings.get(bindingId));
         }
 
@@ -1035,6 +1215,16 @@ class RuntimeBindingApplicationServiceTest {
                     .filter(binding -> provider.equals(binding.provider()))
                     .filter(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
                     .findFirst();
+        }
+
+        @Override
+        public List<RuntimeBinding> findActiveBySession(String tenantId, String userId, String sessionId) {
+            return bindings.values().stream()
+                    .filter(binding -> tenantId.equals(binding.tenantId()))
+                    .filter(binding -> userId.equals(binding.userId()))
+                    .filter(binding -> sessionId.equals(binding.chatSessionId()))
+                    .filter(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
+                    .toList();
         }
 
         @Override
@@ -1050,6 +1240,16 @@ class RuntimeBindingApplicationServiceTest {
         public RuntimeBinding save(RuntimeBinding binding) {
             bindings.put(binding.id(), binding);
             return binding;
+        }
+
+        @Override
+        public boolean lockRunExecutionForBindingMutation(
+                String tenantId,
+                String userId,
+                String sessionId,
+                RunExecutionClaim claim) {
+            bindingMutationClaim = claim;
+            return bindingMutationGuardAccepted;
         }
     }
 

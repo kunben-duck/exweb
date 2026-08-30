@@ -112,7 +112,8 @@ final class FinanceChatOrchestrator {
                                 request.clarificationInput(),
                                 request.agentMode(),
                                 request.intentAccessName(),
-                                request.ambiguousRoutePlan())));
+                                request.ambiguousRoutePlan(),
+                                request.routeSwitchAttachments())));
     }
 
     private void validateStandardRunCommand(ChatCommand command) {

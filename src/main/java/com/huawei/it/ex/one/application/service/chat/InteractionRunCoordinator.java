@@ -1,5 +1,6 @@
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.facade.ResolvedChatAttachments;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
@@ -99,7 +100,8 @@ final class InteractionRunCoordinator {
                             request.traceContext(),
                             request.startAttempt(),
                             request.agentMode(),
-                            request.intentAccessName()));
+                            request.intentAccessName(),
+                            request.routeSwitchAttachments()));
         }
         return runtimeInteractionCoordinator.execute(
                 new RuntimeInteractionContinuationCoordinator.Request(
@@ -123,8 +125,15 @@ final class InteractionRunCoordinator {
             IntentClarificationContextAssembler.ContinuationInput clarificationInput,
             AgentModeProfile agentMode,
             String intentAccessName,
-            AmbiguousRouteContinuationPlan ambiguousRoutePlan
+            AmbiguousRouteContinuationPlan ambiguousRoutePlan,
+            ResolvedChatAttachments routeSwitchAttachments
     ) {
+        Request {
+            routeSwitchAttachments = routeSwitchAttachments == null
+                    ? ResolvedChatAttachments.empty()
+                    : routeSwitchAttachments;
+        }
+
         Request(
                 UserContext user,
                 ChatInteractionClaimResult claim,
@@ -135,7 +144,7 @@ final class InteractionRunCoordinator {
                 IntentClarificationContextAssembler.ContinuationInput clarificationInput,
                 AgentModeProfile agentMode) {
             this(user, claim, runId, forwardHeaders, traceContext, startAttempt,
-                    clarificationInput, agentMode, null, null);
+                    clarificationInput, agentMode, null, null, ResolvedChatAttachments.empty());
         }
     }
 }

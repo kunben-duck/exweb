@@ -3,8 +3,10 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.command.DocumentUpdateCommand;
 import com.huawei.it.ex.one.application.command.DocumentUploadCommand;
+import com.huawei.it.ex.one.application.config.AgentDataPersistenceProperties;
 import com.huawei.it.ex.one.application.config.ChatInteractionProperties;
 import com.huawei.it.ex.one.application.config.ChatRunOperationalProperties;
+import com.huawei.it.ex.one.application.config.DomainAgentProperties;
 import com.huawei.it.ex.one.application.config.IntentRecordProperties;
 import com.huawei.it.ex.one.application.config.MemoryProperties;
 import com.huawei.it.ex.one.application.config.RouteSignalProperties;
@@ -24,6 +26,8 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatRunCache;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunExecutionRepository;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
+import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfiguration;
+import com.huawei.it.ex.one.application.integration.domainagentconfig.DomainAgentSkillConfigurationCache;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.integration.identity.ApplicationInstanceIdProvider;
@@ -32,6 +36,9 @@ import com.huawei.it.ex.one.application.integration.memory.ChatMessageRepository
 import com.huawei.it.ex.one.application.integration.memory.LongTermMemoryStore;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceGate;
+import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistencePolicyService;
+import com.huawei.it.ex.one.application.service.domainagentconfig.DomainAgentSkillConfigurationService;
 import com.huawei.it.ex.one.application.service.memory.MemoryApplicationService;
 import com.huawei.it.ex.one.application.service.memory.RouteMemoryApplicationService;
 import com.huawei.it.ex.one.application.service.routing.IntentRecognitionRecordService;
@@ -75,6 +82,7 @@ import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import com.huawei.it.ex.one.domain.usecase.UseCaseMatchResult;
+import com.huawei.it.ex.one.infrastructure.domainagentconfig.DomainAgentSkillConfigurationProperties;
 import com.huawei.it.ex.one.infrastructure.runtime.intentagent.BlockingIntentAgentRuntime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -95,6 +103,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 abstract class ChatFlowTestSupport {
     static int indexOfEvent(List<ChatEvent> events, String type, String sourceType) {
         for (int i = 0; i < events.size(); i++) {
@@ -313,6 +322,39 @@ abstract class ChatFlowTestSupport {
                 return Map.copyOf(copy);
             }
         };
+    }
+
+    AgentDataPersistenceGate attachmentValidationGate(Function<String, String> attachmentTypes) {
+        AgentDataPersistenceProperties persistence = new AgentDataPersistenceProperties();
+        persistence.setEnabled(false);
+        DomainAgentSkillConfigurationProperties configuration =
+                new DomainAgentSkillConfigurationProperties();
+        configuration.setCacheEnabled(false);
+        DomainAgentSkillConfigurationCache cache = new DomainAgentSkillConfigurationCache() {
+            @Override
+            public Optional<DomainAgentSkillConfiguration> get(String tenantId, String skillId) {
+                return Optional.empty();
+            }
+
+            @Override
+            public void put(
+                    String tenantId,
+                    String skillId,
+                    DomainAgentSkillConfiguration value,
+                    Duration ttl) {
+            }
+        };
+        DomainAgentSkillConfigurationService configurationService =
+                new DomainAgentSkillConfigurationService(
+                        query -> Mono.just(new DomainAgentSkillConfiguration(
+                                query.skillId(), "技能B", Boolean.TRUE,
+                                attachmentTypes.apply(query.skillId()))),
+                        cache,
+                        configuration,
+                        reactor.core.scheduler.Schedulers.immediate());
+        return new AgentDataPersistenceGate(
+                new AgentDataPersistencePolicyService(persistence), configurationService,
+                new DomainAgentProperties());
     }
 
     DomainAgentExecutor domainAgentExecutor(DocumentFacade documentFacade, WorkloadConcurrencyLimiter limiter) {
@@ -813,6 +855,53 @@ abstract class ChatFlowTestSupport {
             reactor.core.scheduler.Scheduler domainAgentControlIoScheduler,
             DocumentFacade documents,
             InMemoryExecutionRepository executions) {
+        return financeServiceWithDomainClientAndBindings(
+                sessions, messages, runs, events, routeService, domainClient, relayRuntime, bindings,
+                domainAgentProperties, eventBus, interactions, bindingCache, domainAgentControlIoScheduler,
+                documents, executions, null);
+    }
+
+    FinanceEXChatService financeServiceWithDomainClientAndBindings(
+            InMemorySessionRepository sessions,
+            InMemoryMessageRepository messages,
+            InMemoryRunRepository runs,
+            InMemoryEventStore events,
+            RouteSignalApplicationService routeService,
+            DomainAgentClient domainClient,
+            AgentRuntime relayRuntime,
+            RuntimeBindingRepository bindings,
+            com.huawei.it.ex.one.application.config.DomainAgentProperties domainAgentProperties,
+            ChatLiveEventBus eventBus,
+            InMemoryInteractionRequestRepository interactions,
+            RuntimeBindingCache bindingCache,
+            reactor.core.scheduler.Scheduler domainAgentControlIoScheduler,
+            DocumentFacade documents,
+            InMemoryExecutionRepository executions,
+            AgentDataPersistenceGate routeSwitchPersistenceGate) {
+        return financeServiceWithDomainClientAndBindings(
+                sessions, messages, runs, events, routeService, domainClient, relayRuntime, bindings,
+                domainAgentProperties, eventBus, interactions, bindingCache, domainAgentControlIoScheduler,
+                documents, executions, routeSwitchPersistenceGate, null);
+    }
+
+    FinanceEXChatService financeServiceWithDomainClientAndBindings(
+            InMemorySessionRepository sessions,
+            InMemoryMessageRepository messages,
+            InMemoryRunRepository runs,
+            InMemoryEventStore events,
+            RouteSignalApplicationService routeService,
+            DomainAgentClient domainClient,
+            AgentRuntime relayRuntime,
+            RuntimeBindingRepository bindings,
+            com.huawei.it.ex.one.application.config.DomainAgentProperties domainAgentProperties,
+            ChatLiveEventBus eventBus,
+            InMemoryInteractionRequestRepository interactions,
+            RuntimeBindingCache bindingCache,
+            reactor.core.scheduler.Scheduler domainAgentControlIoScheduler,
+            DocumentFacade documents,
+            InMemoryExecutionRepository executions,
+            AgentDataPersistenceGate routeSwitchPersistenceGate,
+            RouteMemoryApplicationService routeMemoryService) {
         IdGenerator ids = new SequentialIdGenerator();
         PermissionChecker permissionChecker = new PermissionChecker();
         WorkloadConcurrencyLimiter limiter = new WorkloadConcurrencyLimiter(
@@ -862,7 +951,10 @@ abstract class ChatFlowTestSupport {
                 terminalCommitService,
                 ids,
                 reactor.core.scheduler.Schedulers.boundedElastic(),
-                domainAgentProperties);
+                domainAgentProperties,
+                routeMemoryService,
+                runProperties,
+                routeSwitchPersistenceGate);
         if (domainAgentControlIoScheduler != null) {
             service.setDomainAgentControlIoScheduler(domainAgentControlIoScheduler);
         }

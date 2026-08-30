@@ -401,7 +401,8 @@ final class DomainAgentRefusalCoordinator {
                 source.routeMemoryQuery(),
                 source.persistenceState(),
                 source.messageSkill(),
-                source.pendingInteractionPayloadRef());
+                source.pendingInteractionPayloadRef(),
+                source.deferredDomainAgentBindingRef());
     }
 
     private boolean invalidDomainAgentRoute(RouteTarget route) {

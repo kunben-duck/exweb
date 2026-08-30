@@ -5,6 +5,7 @@ import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppend
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceGate;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalResult;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
+import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.application.service.runtime.DomainAgentBindingCommand;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingResolution;
@@ -228,12 +229,8 @@ final class DomainAgentReplacementExecutor {
             if (decision.unsupportedAttachment()) {
                 return requireCurrentOwnerRunning(
                                 context.executionClaim(), "before-domain-agent-attachment-rejection")
-                        .thenMany(Flux.defer(() -> {
-                            context.bindingRef().set(bindingPolicy.markRejected(
-                                    context.bindingRef().get(), reroute.refusal()));
-                            return attachmentFailureExecutor.execute(
-                                    context.runId(), context.session().id(), decision.payload());
-                        }));
+                        .thenMany(Flux.defer(() -> retainUnsupportedDomainAgentReplacement(
+                                reroute, signal, nextRoute, decision)));
             }
             return requireCurrentOwnerRunning(
                     context.executionClaim(), "before-domain-agent-reroute-binding")
@@ -259,6 +256,35 @@ final class DomainAgentReplacementExecutor {
         context.bindingRef().set(bindingPolicy.markRejected(
                 context.bindingRef().get(), reroute.refusal()));
         return new ReplacementBindingLifecycle(bindDomainAgent(reroute, signal, nextRoute));
+    }
+
+    private Flux<ChatEvent> retainUnsupportedDomainAgentReplacement(
+            DomainAgentRerouteContext reroute,
+            RouteSignalResult signal,
+            RouteTarget nextRoute,
+            AgentDataPersistenceGate.Decision decision) {
+        DomainAgentRunContext context = reroute.context();
+        DeferredDomainAgentBinding deferred = runtimeBindingService.prepareDomainAgentForRun(
+                domainAgentBindingCommand(reroute, signal, nextRoute));
+        RuntimeBinding nextBinding = deferred.candidate();
+        context.deferredDomainAgentBindingRef().set(deferred);
+        context.bindingRef().set(nextBinding);
+        context.routeRef().set(nextRoute);
+        appliedRouteRecorder.bindResolvedRouteRequired(
+                context.runId(), nextRoute, nextBinding, context.executionClaim(),
+                context.persistenceState());
+        context.messageSkill().replace(nextRoute.invocationSkillId());
+        appliedRouteRecorder.deferRouteMemoryDecision(
+                context.pendingRouteMemoryDecisionRef(),
+                new PendingRouteMemoryDecision(
+                        context.user(),
+                        context.session().id(),
+                        context.runId(),
+                        reroute.intentQuery(),
+                        signal.intentDecision(),
+                        nextRoute));
+        return attachmentFailureExecutor.execute(
+                context.runId(), context.session().id(), decision.payload());
     }
 
     private Flux<ChatEvent> executeDomainAgentReplacement(
@@ -366,7 +392,16 @@ final class DomainAgentReplacementExecutor {
                                            RouteSignalResult signal,
                                            RouteTarget nextRoute) {
         DomainAgentRunContext context = reroute.context();
-        return runtimeBindingService.bindDomainAgentForRun(new DomainAgentBindingCommand(
+        return runtimeBindingService.bindDomainAgentForRun(domainAgentBindingCommand(
+                reroute, signal, nextRoute));
+    }
+
+    private DomainAgentBindingCommand domainAgentBindingCommand(
+            DomainAgentRerouteContext reroute,
+            RouteSignalResult signal,
+            RouteTarget nextRoute) {
+        DomainAgentRunContext context = reroute.context();
+        return new DomainAgentBindingCommand(
                 context.user().tenantId(),
                 context.user().ownerUserId(),
                 context.session().id(),
@@ -375,7 +410,7 @@ final class DomainAgentReplacementExecutor {
                 nextRoute.selectedAgentCode(),
                 nextRoute.routeSource(),
                 routeResolutionCoordinator.domainAgentBindingMetadata(nextRoute, signal.intentDecision()),
-                reroute.agentMode()));
+                reroute.agentMode());
     }
 
     private MemoryContext recordAppliedRoute(DomainAgentRerouteContext reroute,
@@ -444,7 +479,9 @@ final class DomainAgentReplacementExecutor {
                 context.routeMemoryQuery(),
                 context.persistenceState(),
                 context.messageSkill(),
-                context.pendingInteractionPayloadRef());
+                context.pendingInteractionPayloadRef(),
+                context.deferredDomainAgentBindingRef(),
+                context.pendingRouteMemoryDecisionRef());
     }
 
     private Mono<Void> requireCurrentOwnerRunning(RunExecutionClaim claim, String stage) {
@@ -496,5 +533,6 @@ final class DomainAgentReplacementExecutor {
         private void markRuntimeSubscribed() {
             runtimeSubscribed.set(true);
         }
+
     }
 }

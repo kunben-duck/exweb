@@ -33,6 +33,7 @@ final class ChatRunCompletionCoordinator {
     private final ChatStreamApplicationService streamService;
     private final RuntimeBindingApplicationService bindingService;
     private final RouteMemoryApplicationService routeMemoryService;
+    private final AppliedRouteRecorder appliedRouteRecorder;
     private final ChatRunFailureMapper failureMapper = new ChatRunFailureMapper();
 
     ChatRunCompletionCoordinator(ChatInteractionApplicationService interactionService,
@@ -41,7 +42,8 @@ final class ChatRunCompletionCoordinator {
                                  ChatRunTerminalCommitService terminalCommitService,
                                  ChatStreamApplicationService streamService,
                                  RuntimeBindingApplicationService bindingService,
-                                 RouteMemoryApplicationService routeMemoryService) {
+                                 RouteMemoryApplicationService routeMemoryService,
+                                 AppliedRouteRecorder appliedRouteRecorder) {
         this.interactionService = interactionService;
         this.runtimeExecutor = runtimeExecutor;
         this.idGenerator = idGenerator;
@@ -49,6 +51,18 @@ final class ChatRunCompletionCoordinator {
         this.streamService = streamService;
         this.bindingService = bindingService;
         this.routeMemoryService = routeMemoryService;
+        this.appliedRouteRecorder = appliedRouteRecorder;
+    }
+
+    ChatRunCompletionCoordinator(ChatInteractionApplicationService interactionService,
+                                 AgentRuntimeExecutor runtimeExecutor,
+                                 IdGenerator idGenerator,
+                                 ChatRunTerminalCommitService terminalCommitService,
+                                 ChatStreamApplicationService streamService,
+                                 RuntimeBindingApplicationService bindingService,
+                                 RouteMemoryApplicationService routeMemoryService) {
+        this(interactionService, runtimeExecutor, idGenerator, terminalCommitService, streamService,
+                bindingService, routeMemoryService, null);
     }
 
     CompletionPlan prepare(ChatEvent event, RunEventPipelineContext context) {
@@ -124,10 +138,24 @@ final class ChatRunCompletionCoordinator {
     }
 
     void recordRouteMemoryAfterCommitted(ChatEvent stored, RunEventPipelineContext context) {
-        if (routeMemoryService == null || stored == null || context == null) {
+        if (stored == null || context == null) {
+            return;
+        }
+        if ("run.completed".equals(stored.type())) {
+            PendingRouteMemoryDecision pending = context.pendingRouteMemoryDecisionRef().getAndSet(null);
+            if (appliedRouteRecorder != null && pending != null) {
+                appliedRouteRecorder.recordCommittedRouteDecision(pending, context.bindingRef().get());
+            }
+            return;
+        }
+        if ("run.failed".equals(stored.type()) || "run.cancelled".equals(stored.type())) {
+            context.pendingRouteMemoryDecisionRef().set(null);
             return;
         }
         if ("run.waiting_user".equals(stored.type())) {
+            context.pendingRouteMemoryDecisionRef().set(null);
+        }
+        if (routeMemoryService != null && "run.waiting_user".equals(stored.type())) {
             recordIntentClarificationAfterWaiting(stored, context);
         }
     }
@@ -155,10 +183,17 @@ final class ChatRunCompletionCoordinator {
 
     private ChatEvent publishCommitted(ChatRunTerminalCommitService.CommitResult result,
                                        RunEventPipelineContext context) {
+        context.pendingRouteSwitchAppliedEventRef().set(null);
         context.bindingRef().set(result.binding());
-        bindingService.synchronizeCache(result.binding());
-        streamService.publishPersisted(result.event());
+        if (result.replaceBindingCache()) {
+            bindingService.synchronizeDeferredDomainAgentActivation(result.binding());
+            context.deferredDomainAgentBindingRef().set(null);
+        } else {
+            bindingService.synchronizeCache(result.binding());
+        }
         recordRouteMemoryAfterCommitted(result.event(), context);
+        result.precedingEvents().forEach(streamService::publishPersisted);
+        streamService.publishPersisted(result.event());
         return result.event();
     }
 
@@ -188,7 +223,9 @@ final class ChatRunCompletionCoordinator {
                 context.runId(),
                 context.executionClaim(),
                 context.continuationInteractionRequest(),
-                context.interactionDispatchState()
+                context.interactionDispatchState(),
+                context.deferredDomainAgentBindingRef(),
+                context.pendingRouteSwitchAppliedEventRef()
         );
     }
 

@@ -27,8 +27,8 @@ final class CommittedChatEventObserver {
         executionTerminalMarker.markIfTerminal(stored);
         RuntimeBinding observed = runtimeBindingService.observeEvent(binding, stored);
         context.bindingRef().set(observed);
-        chatStreamService.publishPersisted(stored);
         completionCoordinator.recordRouteMemoryAfterCommitted(stored, context);
+        chatStreamService.publishPersisted(stored);
         return observed;
     }
 }

@@ -1,12 +1,14 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
+import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.application.service.runtime.DomainAgentBindingCommand;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingResolution;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.routing.RelayOutputMode;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
@@ -119,8 +121,8 @@ final class RouteSwitchContextResolver {
                     interaction, request.runId(), request.agentMode());
         } else if (RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(
                 input.candidateProvider())) {
-            cancelCurrentBinding(interaction, request.runId());
-            binding = runtimeBindingService.bindDomainAgentForRun(
+            binding = runtimeBindingService.switchDomainAgentForInteraction(
+                    interaction,
                     new DomainAgentBindingCommand(
                             request.user().tenantId(),
                             request.user().ownerUserId(),
@@ -130,7 +132,9 @@ final class RouteSwitchContextResolver {
                             input.candidateTargetId(),
                             "user-confirmed",
                             bindingMetadata(interaction),
-                            request.agentMode()));
+                            request.agentMode()),
+                    request.executionClaim());
+            runtimeBindingService.synchronizeDeferredDomainAgentActivation(binding);
         } else if (RuntimeBindingApplicationService.DEFAULT_RUNTIME_PROVIDER.equals(
                 input.candidateProvider())) {
             cancelCurrentBinding(interaction, request.runId());
@@ -150,6 +154,28 @@ final class RouteSwitchContextResolver {
                     "不支持的候选 Runtime provider: " + input.candidateProvider());
         }
         return new RouteSwitchBindingSelection(binding, runtimeSessionMode);
+    }
+
+    DeferredDomainAgentBinding prepareDomainAgentBindingForUnsupportedAttachment(
+            ChatInteractionRequest interaction,
+            RouteSwitchInput input,
+            RouteSwitchBindingRequest request) {
+        if (!input.approved()
+                || !RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(
+                        input.candidateProvider())) {
+            throw new IllegalArgumentException(
+                    "附件类型拒绝只支持已批准的 DomainAgent 路由切换");
+        }
+        return runtimeBindingService.prepareDomainAgentForRun(new DomainAgentBindingCommand(
+                request.user().tenantId(),
+                request.user().ownerUserId(),
+                request.session().id(),
+                request.runId(),
+                interaction.assistantMessageId(),
+                input.candidateTargetId(),
+                "user-confirmed",
+                bindingMetadata(interaction),
+                request.agentMode()));
     }
 
     private void cancelCurrentBinding(
@@ -294,7 +320,8 @@ record RouteSwitchBindingRequest(
         UserContext user,
         ChatSession session,
         String runId,
-        AgentModeProfile agentMode
+        AgentModeProfile agentMode,
+        RunExecutionClaim executionClaim
 ) {
 }
 

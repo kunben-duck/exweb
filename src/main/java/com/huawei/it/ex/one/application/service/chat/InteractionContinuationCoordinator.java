@@ -74,7 +74,8 @@ final class InteractionContinuationCoordinator {
                 headerSnapshot,
                 execution,
                 new AtomicReference<>(),
-                new AtomicReference<>());
+                new AtomicReference<>(),
+                new AtomicReference<>(ResolvedChatAttachments.empty()));
         return runStartCoordinator.startInteraction(
                 user,
                 traceContext,
@@ -121,12 +122,7 @@ final class InteractionContinuationCoordinator {
             ChatInteractionClaimResult claim = interactionService.claimPreparedInteractionResponse(
                     context.command(),
                     runId,
-                    interaction -> prepareResponse(
-                            context.user(),
-                            context.command(),
-                            interaction,
-                            context.inputRef(),
-                            context.ambiguousPlanRef()));
+                    interaction -> prepareResponse(context, interaction));
             startAttempt.recordInteraction(claim.request());
             if (startAttempt.aborted()) {
                 interactionService.markWaiting(claim.request());
@@ -143,7 +139,8 @@ final class InteractionContinuationCoordinator {
                         context.inputRef().get(),
                         context.command().agentMode(),
                         context.command().intentAccessName(),
-                        context.ambiguousPlanRef().get()));
+                        context.ambiguousPlanRef().get(),
+                        context.routeSwitchAttachmentsRef().get()));
             } catch (RuntimeException ex) {
                 interactionService.markWaiting(claim.request());
                 return Flux.error(ex);
@@ -152,32 +149,37 @@ final class InteractionContinuationCoordinator {
     }
 
     private Map<String, Object> prepareResponse(
-            UserContext user,
-            ChatInteractionResponseCommand command,
-            ChatInteractionRequest interaction,
-            AtomicReference<IntentClarificationContextAssembler.ContinuationInput> inputRef,
-            AtomicReference<AmbiguousRouteContinuationPlan> ambiguousPlanRef) {
+            ContinuationStartContext context,
+            ChatInteractionRequest interaction) {
+        UserContext user = context.user();
+        ChatInteractionResponseCommand command = context.command();
         validateSessionContext(user, command, interaction);
         if (interaction.interactionType() != ChatInteractionType.INTENT_CLARIFICATION) {
             rejectAmbiguousRouteFields(command);
             if (!command.attachments().isEmpty()) {
-                throw new IllegalArgumentException("仅 INTENT_CLARIFICATION 支持在续接时提交附件");
+                if (interaction.interactionType() != ChatInteractionType.ROUTE_SWITCH_CONFIRMATION
+                        || !Boolean.TRUE.equals(command.approved())) {
+                    throw new IllegalArgumentException(
+                            "仅 INTENT_CLARIFICATION 或已批准的 ROUTE_SWITCH_CONFIRMATION 支持在续接时提交附件");
+                }
+                context.routeSwitchAttachmentsRef().set(
+                        documentFacade.resolveChatAttachmentsForUser(user, command.attachments()));
             }
             relayQuestionnaireAnswerValidator.validate(command, interaction);
             return interactionService.prepareResponsePayload(command, interaction.interactionType(), null);
         }
         if (AmbiguousRouteSupport.isAmbiguous(interaction)) {
             AmbiguousRouteContinuationPlan plan = ambiguousPlan(command, interaction);
-            ambiguousPlanRef.set(plan);
+            context.ambiguousPlanRef().set(plan);
             if (plan.selectedCandidate()) {
                 IntentClarificationContextAssembler.ContinuationInput input =
                         prepareAmbiguousSelectionInput(user, command, interaction);
-                inputRef.set(input);
+                context.inputRef().set(input);
                 return selectedCandidateResponse(command, interaction, plan);
             }
             IntentClarificationContextAssembler.ContinuationInput input =
                     prepareIntentClarificationInput(user, command, interaction);
-            inputRef.set(input);
+            context.inputRef().set(input);
             Map<String, Object> response = new LinkedHashMap<>(interactionService.prepareResponsePayload(
                     command,
                     interaction.interactionType(),
@@ -190,7 +192,7 @@ final class InteractionContinuationCoordinator {
         rejectAmbiguousRouteFields(command);
         IntentClarificationContextAssembler.ContinuationInput input =
                 prepareIntentClarificationInput(user, command, interaction);
-        inputRef.set(input);
+        context.inputRef().set(input);
         Map<String, Object> payload = new LinkedHashMap<>(interactionService.prepareResponsePayload(
                 command,
                 interaction.interactionType(),
@@ -500,8 +502,14 @@ final class InteractionContinuationCoordinator {
             IntentClarificationContextAssembler.ContinuationInput clarificationInput,
             AgentModeProfile agentMode,
             String intentAccessName,
-            AmbiguousRouteContinuationPlan ambiguousRoutePlan
+            AmbiguousRouteContinuationPlan ambiguousRoutePlan,
+            ResolvedChatAttachments routeSwitchAttachments
     ) {
+        ContinuationRequest {
+            routeSwitchAttachments = routeSwitchAttachments == null
+                    ? ResolvedChatAttachments.empty()
+                    : routeSwitchAttachments;
+        }
     }
 
     private record ContinuationStartContext(
@@ -511,7 +519,8 @@ final class InteractionContinuationCoordinator {
             RuntimeForwardHeaders forwardHeaders,
             ContinuationExecution execution,
             AtomicReference<IntentClarificationContextAssembler.ContinuationInput> inputRef,
-            AtomicReference<AmbiguousRouteContinuationPlan> ambiguousPlanRef
+            AtomicReference<AmbiguousRouteContinuationPlan> ambiguousPlanRef,
+            AtomicReference<ResolvedChatAttachments> routeSwitchAttachmentsRef
     ) {
     }
 

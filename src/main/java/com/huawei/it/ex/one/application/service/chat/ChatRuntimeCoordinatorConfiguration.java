@@ -147,7 +147,8 @@ class ChatRuntimeCoordinatorConfiguration {
             AgentRuntimeExecutor runtimeExecutor,
             AgentDataPersistenceGate persistenceGate,
             RunMemoryContextAssembler memoryAssembler,
-            SensitiveInformationAccessNameResolver sensitiveInformationResolver) {
+            SensitiveInformationAccessNameResolver sensitiveInformationResolver,
+            DocumentFacade documentFacade) {
         return new RouteSwitchContinuationCoordinator(
                 runtimeBindingService,
                 lifecycle,
@@ -158,7 +159,8 @@ class ChatRuntimeCoordinatorConfiguration {
                 runtimeExecutor,
                 persistenceGate,
                 memoryAssembler,
-                sensitiveInformationResolver);
+                sensitiveInformationResolver,
+                documentFacade);
     }
 
     @Bean

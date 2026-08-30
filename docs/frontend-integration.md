@@ -806,7 +806,7 @@ sequenceDiagram
 - DomainAgent 下游 body 以 `metadata` 为业务扩展，但 `skillId/query/sessionId` 由后端按当前绑定和本轮问题强制写入，前端传同名字段也不会覆盖。
 - 意图服务上下文由后端 RouteMemory 维护：首次路由传 `routeTrigger=first_turn`；最新 Relay/no_match route 的来源 run 正常完成时传 `fallback_followup`；DomainAgent 拒答重路由传 `domain_reject` 和本次拒答摘要；提交意图澄清后传 `clarify_answer`；前端 `forceReroute=true` 由后端转换为用户纠正触发原因。目标 binding 成功后、调用 Runtime 前即异步记录 `ROUTE`，所以后续任务失败、取消或拒答仍会保留本次路由；但 `routeSource=front-selected` 只作为路由事实保存，不进入发送给 IntentAgent 的 history，也不占用 TopK，前端无需为直选结果提供意图名称。`user-confirmed` 和 `intent-agent` 路由仍进入 history；已有 binding 的普通追问和 Agent Interaction 续接不新增 route。只有 `ROUTE_MULTI/NO_MATCH/RELAY_FALLBACK` 的 Delegate route 保存为 `intent=no_match,intentCode=relay` 并在正常完成后影响下一轮 trigger；敏感信息 Delegate保留原始 `ROUTE_SINGLE` 意图，不视为 no-match fallback。手动 Agent 拒答后的候选在默认确认模式下要等用户确认并成功绑定后才记录；开启拒答自动切换后则在新 Binding 生效、调用候选 Runtime 前记录。RouteMemory 始终 best-effort，不阻断 `/v1/chat/runs`。
 - DomainAgent 流式返回 `type=agent.refusal,code=FN-EX-CAHT-BIZ-DAG-001` 后，后端立即终止旧 Agent 流并以 `routeTrigger=domain_reject` 重新调用 intent-agent。若意图返回澄清，后续每轮请求使用 `routeTrigger=clarify_answer` 并继续携带本次拒答摘要；普通澄清不携带该字段。旧拒答编码和单独的 `reasonCode` 不再触发重路由。
-- 如果当前绑定来自意图或用例库，后端自动切换到新 DomainAgent；合法 `NO_MATCH/ROUTE_MULTI` 或失败策略为 `RELAY_FALLBACK` 时执行 Relay。后端直接采用本次 Intent 结果，返回当前或曾拒答技能时仍会重新调用，并由 `max-reroutes` 防止无界循环。若当前绑定来源为 `front-selected/user-confirmed`，默认会先返回 `run.waiting_user`，消息 parts 包含 `DOMAIN_AGENT_REFUSAL` 和 `ROUTE_SWITCH_CONFIRMATION_REQUEST`；同意后使用原问题调用候选 Runtime，拒绝后保留原绑定。等待事件返回 `autoActionAt/autoActionTimeoutMs/autoActionType=APPROVE_ROUTE_SWITCH`，并与 AMBIGUOUS_ROUTE 共用默认30秒配置；到期后前端提交现有 `approved=true` 请求。重意图返回当前技能时目标未变化，不生成切换确认。部署配置 `financeex.domain-agent.refusal-auto-switch-enabled=true` 后，手动来源拒答时也会原子取消旧 Binding，并直接调用重意图得到的 DomainAgent 或 Relay，不生成路由切换 Interaction。意图本身要求澄清时仍进入 `INTENT_CLARIFICATION`。等待确认阶段不生成 `ANSWER`，最终回答、拒答与确认过程复用同一个 assistantMessageId。
+- 如果当前绑定来自意图或用例库，后端自动切换到新 DomainAgent；合法 `NO_MATCH/ROUTE_MULTI` 或失败策略为 `RELAY_FALLBACK` 时执行 Relay。后端直接采用本次 Intent 结果，返回当前或曾拒答技能时仍会重新调用，并由 `max-reroutes` 防止无界循环。若当前绑定来源为 `front-selected/user-confirmed`，默认会先返回 `run.waiting_user`，消息 parts 包含 `DOMAIN_AGENT_REFUSAL` 和 `ROUTE_SWITCH_CONFIRMATION_REQUEST`；同意后使用原问题调用候选 Runtime，拒绝后保留原绑定。确认调用需要附件时，前端必须在本次 `approved=true` 请求中重新提交完整 `attachments`；后端不继承 run-A 附件，也不改写原 user 消息附件。等待事件返回 `autoActionAt/autoActionTimeoutMs/autoActionType=APPROVE_ROUTE_SWITCH`，并与 AMBIGUOUS_ROUTE 共用默认30秒配置；到期后前端提交现有 `approved=true` 请求。重意图返回当前技能时目标未变化，不生成切换确认。部署配置 `financeex.domain-agent.refusal-auto-switch-enabled=true` 后，手动来源拒答时也会原子取消旧 Binding，并直接调用重意图得到的 DomainAgent 或 Relay，不生成路由切换 Interaction。意图本身要求澄清时仍进入 `INTENT_CLARIFICATION`。等待确认阶段不生成 `ANSWER`，最终回答、拒答与确认过程复用同一个 assistantMessageId。
 
 路由切换等待事件的关键字段示例：
 
@@ -1302,7 +1302,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `approved` | boolean | 审批/确认类必填 | 澄清类可省略，服务端默认 true |
 | `scope` | string | 否 | 授权或确认范围，澄清类默认 `once` |
 | `questionnaireAnswers` | object | 澄清类通常必填 | 普通意图澄清以问题文案为 key；Relay 问卷严格使用 `label` 嵌套对象或 `ignore=true`；`INTENT_CLARIFICATION` 可用有效附件代替文本答案 |
-| `attachments` | array | 否 | 文档附件引用列表；Interaction 续接中仅 `INTENT_CLARIFICATION` 支持 |
+| `attachments` | array | 否 | 文档附件引用列表；Interaction续接中支持`INTENT_CLARIFICATION`，以及`approved=true`的`ROUTE_SWITCH_CONFIRMATION`。路由切换只使用本次显式附件，不继承原run附件。 |
 | `targetType` | string | 否 | 普通 run 显式直连支持 `DOMAIN_AGENT/DOMAIN_EXPERT`，大小写不敏感；`AMBIGUOUS_ROUTE` 候选选择仍使用 `DOMAIN_AGENT` |
 | `targetId` | string | 传入targetType时必填 | `DOMAIN_AGENT` 时为技能 ID；`DOMAIN_EXPERT` 时直接作为区分大小写的 Relay `roleName`；歧义路由选择时必须精确等于等待卡片中的可信候选 `skillId` |
 | `selectedIntent` | object | 否 | 显式选择 DomainAgent 或 Relay 专家时的展示摘要；`intentId` 可选且最长 128，`intentName` 必填且最长 256；仅用于生成 binding 和选择事件的展示信息，不写 run metadata，也不发送给用例库、IntentAgent 或 Runtime；专家未传时以 roleName 作为展示名称 |
@@ -1375,7 +1375,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 这些字段当前均为可选扩展信息，ChatService不增加内容校验。普通DomainAgent调用会在下游请求根节点携带
 `bizContext`；Relay Delegate在`user-message.metadata.bizContext`中携带，Domain Expert在
 `chat_expert.metadata.bizContext`中携带。前端必须在每个需要下游使用该信息的run中显式提交：拒答后的
-`ROUTE_SWITCH_CONFIRMATION`确认请求只使用本次`CONTINUE_INTERACTION`重新提交的metadata，不继承第一轮；
+`ROUTE_SWITCH_CONFIRMATION`确认请求只使用本次`CONTINUE_INTERACTION`重新提交的metadata和attachments，不继承第一轮；
 Relay问卷续接只发送`approval-response`控制帧，不携带普通metadata。
 
 `bizContext`不得包含Cookie、Token、Authorization、密码或其他凭据，也不要放入带鉴权参数的完整页面URL。
@@ -2040,7 +2040,7 @@ Agent 对话澄清续接。Relay questionnaire 等 Runtime 内部澄清同样使
 `approved=true` 请求。页面刷新或重新进入会话后，从 `stream-status` 恢复绝对截止时间；如果截止时间
 已经过去则立即提交。多页签并发提交由 Interaction CAS 保证最多一个成功。
 
-`CONTINUE_INTERACTION` 模式只用于等待态续接：必须传 `interactionId`；不要传 `message`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId` 或 `forceReroute=true`。`targetType/targetId/interactionAction` 仅用于上文的 `AMBIGUOUS_ROUTE` 候选操作，其他 Interaction 禁止传入。只有 `INTENT_CLARIFICATION` 可以携带 `attachments`；Agent 澄清、审批、确认和路由切换确认携带附件会在 claim 前返回参数错误。澄清类 `approved/scope` 可省略，服务端默认 `true/once`；审批、确认和路由切换确认类必须显式传 `approved`。
+`CONTINUE_INTERACTION` 模式只用于等待态续接：必须传 `interactionId`；不要传 `message`、`parentMessageId`、`editedMessageId`、`regeneratedMessageId` 或 `forceReroute=true`。`targetType/targetId/interactionAction` 仅用于上文的 `AMBIGUOUS_ROUTE` 候选操作，其他 Interaction 禁止传入。`INTENT_CLARIFICATION`可以携带附件；`ROUTE_SWITCH_CONFIRMATION`仅在`approved=true`时可以携带本次显式附件。Agent澄清、审批、拒绝路由切换及其他确认携带附件会在claim前返回参数错误。澄清类 `approved/scope` 可省略，服务端默认 `true/once`；审批、确认和路由切换确认类必须显式传 `approved`。
 
 ## 反馈
 
@@ -3281,6 +3281,13 @@ runtime.progress
 `cardType=domainAgentAttachmentUnsupported,cardSources=[attachmentValidation]`；`message.completed`包含
 `finishReason=ATTACHMENT_TYPE_UNSUPPORTED,skillInvocationStarted=false`。该场景按业务完成处理，不产生
 `message.delta`；FULL历史保存结构化Parts，no-store历史保存占位正文和这些必要控制Parts，Event Resume可恢复。
+只有上述`run.completed`与assistant成功落库后，服务端才在同一终态事务中激活最终选中的DomainAgent Binding，
+所以下一轮未显式改选时会继续直连该技能。终态失败、取消或失权不会激活候选Binding；
+`skillInvocationStarted=false`仅表示本轮因附件校验失败而没有向该技能发起Runtime请求。
+若该结果来自`ROUTE_SWITCH_CONFIRMATION`，`route-switch-confirmation-response`只表示用户确认已受理；
+`route-switch-applied`会与候选Binding及`run.completed`在同一终态事务提交，并按
+`message.completed -> route-switch-applied -> run.completed`发布。终态被stop抢占或事务失败时不会产生
+`route-switch-applied`，Event Resume也不会回放未实际生效的切换成功事实。
 
 该显式路径只有 `runMode=NEXT` 可以绕过等待态。若会话存在意图澄清、Relay/Agent 澄清、审批、确认或路由切换确认，服务端会在消息/run admission 的同一短事务中取消所有开放 Interaction，然后以当前请求的 `message/metadata/attachments` 调用指定 DomainAgent；旧澄清答案和 `questionnaireAnswers` 不会进入下游。旧等待 run 保留为历史，新 user 消息接在等待 assistant 后。当前 ACTIVE Relay/DomainAgent binding 会被取消并替换为 `routeSource=front-selected` 的目标 binding，历史 `RESUMABLE` Relay binding 不删除。该能力不会抢占 `RUNNING/CANCELLING` run。
 本轮显式选择的 DomainAgent 会进入 `runtime.metadata`，并在历史 assistant 的 `parts` 返回：

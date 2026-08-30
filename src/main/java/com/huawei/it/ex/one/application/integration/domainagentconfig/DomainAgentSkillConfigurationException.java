@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
+ */
+
 package com.huawei.it.ex.one.application.integration.domainagentconfig;
 
 /** DomainAgent 技能配置查询失败。 */

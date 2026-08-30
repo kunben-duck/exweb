@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
+ */
+
 package com.huawei.it.ex.one.domain.routing;
 
 /** 识别需要交给 Relay Delegate 处理的敏感信息意图 accessName。 */

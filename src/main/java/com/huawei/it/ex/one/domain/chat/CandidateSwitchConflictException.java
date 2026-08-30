@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
+ */
+
 package com.huawei.it.ex.one.domain.chat;
 
 /** 候选DomainAgent切换在当前Run或消息路径状态下无法继续。 */

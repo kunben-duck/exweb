@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
+ */
+
 package com.huawei.it.ex.one.application.service.routing;
 
 /** Request-independent command for recording one trusted Intent preference correction. */

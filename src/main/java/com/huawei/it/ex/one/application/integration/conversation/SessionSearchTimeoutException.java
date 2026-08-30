@@ -1,3 +1,7 @@
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
+ */
+
 package com.huawei.it.ex.one.application.integration.conversation;
 
 /** 会话关键字搜索超过数据库查询预算。 */

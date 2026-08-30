@@ -5,10 +5,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistencePolicy;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
+import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
+import com.huawei.it.ex.one.domain.chat.MessageSnapshotEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -275,18 +278,125 @@ class AssistantAssemblyTest {
     }
 
     @Test
+    void separatesHistoricalDomainAgentContentAfterThinking() {
+        AssistantAssembly assembly = new AssistantAssembly();
+
+        assembly.observe(domainAgentContent("第一段回答"));
+        assembly.observe(domainAgentThinking("content.think", "STARTED"));
+        assembly.observe(domainAgentThinking("content.think", "STREAMING"));
+        assembly.observe(domainAgentThinking("content.think", "COMPLETED"));
+        assembly.observe(domainAgentContent("第二段回答"));
+
+        assertThat(assembly.finalContent()).isEqualTo(
+                "第一段回答" + AssistantAssembly.DOMAIN_AGENT_CONTENT_SEGMENT_MARKER + "第二段回答");
+    }
+
+    @Test
+    void supportsStateAndDocumentedDomainAgentThinkingFrames() {
+        AssistantAssembly assembly = new AssistantAssembly();
+
+        assembly.observe(domainAgentContent("第一段"));
+        assembly.observe(domainAgentThinking("state", "STARTED"));
+        assembly.observe(domainAgentContent("第二段"));
+        assembly.observe(domainAgentFallbackThinking(Map.of(
+                "think_state", "start",
+                "think_content", "分析过程")));
+        assembly.observe(domainAgentContent("第三段"));
+        assembly.observe(domainAgentFallbackThinking(Map.of(
+                "thinkState", "stop",
+                "thinkContent", "分析完成")));
+        assembly.observe(domainAgentContent("第四段"));
+
+        String marker = AssistantAssembly.DOMAIN_AGENT_CONTENT_SEGMENT_MARKER;
+        assertThat(assembly.finalContent()).isEqualTo(
+                "第一段" + marker + "第二段" + marker + "第三段" + marker + "第四段");
+    }
+
+    @Test
+    void doesNotCreateEmptySegmentsAroundThinking() {
+        AssistantAssembly assembly = new AssistantAssembly();
+
+        assembly.observe(domainAgentThinking("content.think", "STARTED"));
+        assembly.observe(domainAgentContent("第一段"));
+        assembly.observe(domainAgentContent("连续正文"));
+        assembly.observe(domainAgentThinking("content.think", "COMPLETED"));
+
+        assertThat(assembly.finalContent()).isEqualTo("第一段连续正文");
+    }
+
+    @Test
+    void ignoresNonDomainAgentThinkingForHistoricalSegmentation() {
+        AssistantAssembly assembly = new AssistantAssembly();
+
+        assembly.observe(domainAgentContent("第一段"));
+        assembly.observe(RuntimeEvent.thinking("run1", "session1", Map.of(
+                "source", "relay",
+                "sourceType", "thinking-content-update",
+                "text", "Relay思考")));
+        assembly.observe(domainAgentContent("第二段"));
+
+        assertThat(assembly.finalContent()).isEqualTo("第一段第二段");
+    }
+
+    @Test
+    void resetsHistoricalSegmentationAfterDomainAgentRefusal() {
+        AssistantAssembly assembly = new AssistantAssembly();
+
+        assembly.observe(domainAgentContent("旧Agent回答"));
+        assembly.observe(domainAgentThinking("content.think", "STARTED"));
+        assembly.observe(RuntimeEvent.metadata("run1", "session1", Map.of(
+                "source", "domain-agent",
+                "sourceType", "agent.refusal",
+                "metadataType", "domain_agent_control",
+                "supervisorAction", "REROUTE",
+                "type", "agent.refusal",
+                "code", "REFUSED",
+                "reason", "切换技能")));
+        assembly.observe(domainAgentContent("新Agent回答"));
+
+        assertThat(assembly.finalContent()).isEqualTo("新Agent回答");
+    }
+
+    @Test
+    void resetsHistoricalSegmentationForRouteSwitchConfirmation() {
+        AssistantAssembly assembly = new AssistantAssembly();
+
+        assembly.observe(domainAgentContent("旧Agent回答"));
+        assembly.observe(domainAgentThinking("content.think", "STARTED"));
+        assembly.observe(RuntimeEvent.card("run1", "session1", Map.of(
+                "source", "chatservice",
+                "sourceType", "route-switch-confirmation-request",
+                "message", "是否切换技能")));
+        assembly.observe(domainAgentContent("新Agent回答"));
+
+        assertThat(assembly.finalContent()).isEqualTo("新Agent回答");
+    }
+
+    @Test
+    void keepsSnapshotAuthoritativeOverSegmentedDeltaHistory() {
+        AssistantAssembly assembly = new AssistantAssembly();
+
+        assembly.observe(domainAgentContent("第一段"));
+        assembly.observe(domainAgentThinking("content.think", "COMPLETED"));
+        assembly.observe(domainAgentContent("第二段"));
+        assembly.observe(MessageSnapshotEvent.of("run1", "session1", "最终快照"));
+
+        assertThat(assembly.finalContent()).isEqualTo("最终快照");
+    }
+
+    @Test
     void placeholderPolicyDropsBusinessContentAndKeepsInteractionControls() {
         AgentDataPersistenceState state = new AgentDataPersistenceState("回答已隐藏")
                 .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
         AssistantAssembly assembly = new AssistantAssembly(state);
 
-        assembly.observe(com.huawei.it.ex.one.domain.chat.MessageDeltaEvent.of(
-                "run1", "session1", "真实回答"));
+        assembly.observe(domainAgentContent("真实回答"));
         assembly.observe(RuntimeEvent.thinking("run1", "session1", Map.of(
                 "source", "domain-agent",
                 "sourceType", "thinking",
                 "text", "真实思考过程"
         )));
+        assembly.observe(domainAgentContent("第二段回答"));
         assembly.observe(RuntimeEvent.card("run1", "session1", Map.of(
                 "source", "chatservice",
                 "sourceType", "intent-clarification-request",
@@ -395,6 +505,33 @@ class AssistantAssemblyTest {
                 "cardType", "contentAgent",
                 "cardSources", List.of("contentAgent"),
                 "contentAgent", content
+        ));
+    }
+
+    private MessageDeltaEvent domainAgentContent(String content) {
+        return new MessageDeltaEvent("run1", "session1", 0, Instant.now(), content, Map.of(
+                "delta", content,
+                "sourceType", "domain-agent-content"
+        ));
+    }
+
+    private RuntimeEvent domainAgentThinking(String sourceType, String status) {
+        return RuntimeEvent.thinking("run1", "session1", Map.of(
+                "source", "domain-agent",
+                "sourceType", sourceType,
+                "status", status
+        ));
+    }
+
+    private RuntimeEvent domainAgentFallbackThinking(Map<String, Object> frame) {
+        return RuntimeEvent.fallback("run1", "session1", new RuntimeEvent.FallbackPayload(
+                "domain-agent",
+                "unknown",
+                "event",
+                "runtime",
+                "debug",
+                null,
+                Map.of("sourcePayload", frame)
         ));
     }
 }

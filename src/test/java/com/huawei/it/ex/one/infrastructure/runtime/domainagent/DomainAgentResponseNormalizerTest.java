@@ -692,6 +692,21 @@ class DomainAgentResponseNormalizerTest {
     }
 
     @Test
+    void keepsDocumentedThinkingFrameRealtimeMappingUnchanged() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1",
+                "data: {\"think_state\":\"start\",\"think_content\":\"分析过程\"}");
+
+        assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.event");
+        assertThat(events.getFirst().payload())
+                .containsEntry("source", "domain-agent")
+                .containsEntry("sourceType", "unknown");
+        Map<?, ?> sourcePayload = asMap(events.getFirst().payload().get("sourcePayload"));
+        Map<?, ?> frame = asMap(sourcePayload.get("sourcePayload"));
+        assertThat(frame.get("think_state")).isEqualTo("start");
+        assertThat(frame.get("think_content")).isEqualTo("分析过程");
+    }
+
+    @Test
     void splitsThinkContentFromAnswerContent() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1",
                 "message: {\"content\":\"<think>分析过程</think>最终答案\"}");

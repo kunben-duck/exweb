@@ -18,6 +18,8 @@ import java.util.Map;
  * 引用、思考或进度等用户可见 part，也会创建一条空正文 assistant 消息作为 parts 挂载点。</p>
  */
 final class AssistantAssembly {
+    static final String DOMAIN_AGENT_CONTENT_SEGMENT_MARKER = "<!--DOMAIN_AGENT_CONTENT_SEGMENT-->";
+
     private final StringBuilder deltaDraft = new StringBuilder();
     private final List<ChatMessagePartDraft> parts = new ArrayList<>();
     private final AgentDataPersistenceState persistenceState;
@@ -28,6 +30,8 @@ final class AssistantAssembly {
     private int activeContentAgentPartIndex = -1;
     private StringBuilder activeContentAgentContent;
     private Map<String, Object> activeContentAgentPayload;
+    private boolean domainAgentContentObserved;
+    private boolean domainAgentThinkingSinceContent;
 
     AssistantAssembly() {
         this(AgentDataPersistenceState.full());
@@ -50,7 +54,7 @@ final class AssistantAssembly {
         if ("message.delta".equals(event.type())) {
             Object delta = event.payload().get("delta");
             if (delta != null) {
-                deltaDraft.append(delta);
+                appendDelta(event, String.valueOf(delta));
             }
             return;
         }
@@ -59,12 +63,16 @@ final class AssistantAssembly {
             if (content != null) {
                 snapshot = String.valueOf(content);
             }
+            resetDomainAgentContentSegmentation();
             parts.add(snapshotPart(event));
             return;
         }
         if (event.type() != null && event.type().startsWith("runtime.")) {
             if (isTransientIntentProcessEvent(event.payload())) {
                 return;
+            }
+            if (isDomainAgentThinkingEvent(event) && domainAgentContentObserved) {
+                domainAgentThinkingSinceContent = true;
             }
             if (isDomainAgentStructuredCard(event)) {
                 closeContentAgentPart();
@@ -80,6 +88,7 @@ final class AssistantAssembly {
                 // 的回答拼成最终 content；卡片内容也必须在此切断归属。
                 snapshot = null;
                 deltaDraft.setLength(0);
+                resetDomainAgentContentSegmentation();
                 structuredFallbackContent = firstText(event.payload(),
                         "reason", "userMessage", "reasonCode", "code");
             }
@@ -90,6 +99,7 @@ final class AssistantAssembly {
                 if (isRouteSwitchConfirmationRequest(event.payload())) {
                     snapshot = null;
                     deltaDraft.setLength(0);
+                    resetDomainAgentContentSegmentation();
                 }
                 structuredFallbackContent = firstText(event.payload(), "message", "reason", "sourceType");
             }
@@ -99,6 +109,28 @@ final class AssistantAssembly {
             }
             parts.add(runtimePart(event));
         }
+    }
+
+    private void appendDelta(ChatEvent event, String delta) {
+        if (delta.isEmpty()) {
+            return;
+        }
+        if (!isDomainAgentContentDelta(event)) {
+            deltaDraft.append(delta);
+            resetDomainAgentContentSegmentation();
+            return;
+        }
+        if (domainAgentContentObserved && domainAgentThinkingSinceContent) {
+            deltaDraft.append(DOMAIN_AGENT_CONTENT_SEGMENT_MARKER);
+        }
+        deltaDraft.append(delta);
+        domainAgentContentObserved = true;
+        domainAgentThinkingSinceContent = false;
+    }
+
+    private void resetDomainAgentContentSegmentation() {
+        domainAgentContentObserved = false;
+        domainAgentThinkingSinceContent = false;
     }
 
     boolean shouldPersistMessage() {
@@ -270,6 +302,38 @@ final class AssistantAssembly {
                 && "runtime.card".equals(event.type())
                 && "domain-agent".equals(stringValue(event.payload().get("source")))
                 && !isContentAgentCard(event);
+    }
+
+    private static boolean isDomainAgentContentDelta(ChatEvent event) {
+        return event != null
+                && "message.delta".equals(event.type())
+                && "domain-agent-content".equals(stringValue(event.payload().get("sourceType")));
+    }
+
+    private static boolean isDomainAgentThinkingEvent(ChatEvent event) {
+        if (event == null || event.payload() == null
+                || !"domain-agent".equals(stringValue(event.payload().get("source")))) {
+            return false;
+        }
+        if ("runtime.thinking".equals(event.type())) {
+            return true;
+        }
+        return "runtime.event".equals(event.type())
+                && containsDomainAgentThinkingFields(event.payload().get("sourcePayload"));
+    }
+
+    private static boolean containsDomainAgentThinkingFields(Object sourcePayload) {
+        Object current = sourcePayload;
+        for (int depth = 0; depth < 3 && current instanceof Map<?, ?> map; depth++) {
+            if (map.containsKey("thinkState") || map.containsKey("think_state")
+                    || map.containsKey("thinkContent") || map.containsKey("think_content")
+                    || map.containsKey("thinkTitle") || map.containsKey("think_title")
+                    || map.containsKey("thinkTime") || map.containsKey("think_time")) {
+                return true;
+            }
+            current = map.get("sourcePayload");
+        }
+        return false;
     }
 
     private static boolean nonEmpty(Object value) {

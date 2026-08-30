@@ -321,7 +321,7 @@ Relay 原始 frame 不直接作为 ChatService 顶层事件。adapter 先收敛�
 
 | DomainAgent 输入 | ChatService event | event 表 | 实时前端 | AssistantAssembly / 历史 part |
 | --- | --- | --- | --- | --- |
-| `content` 普通文本 | `message.delta` | 保存每个标准化 delta | 追加当前 assistant 草稿 | 累加正文，不为每个 delta 建 part |
+| `content` 普通文本 | `message.delta` | 保存每个标准化 delta | 追加当前 assistant 草稿 | 累加正文；跨DomainAgent思维链的历史段之间插入`<!--DOMAIN_AGENT_CONTENT_SEGMENT-->`，不为每个 delta 建 part |
 | `content` 中的 thinking 片段 | `runtime.thinking` | 保存 | 展示思考过程 | `THINKING` part |
 | `state=THINKING` | `runtime.thinking` | 保存 | 展示思考状态 | `THINKING` part |
 | `state=GENERATE` | `runtime.progress` | 保存 | 展示生成进度 | `PROGRESS` part |

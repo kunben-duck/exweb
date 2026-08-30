@@ -472,7 +472,8 @@ class RouteSignalApplicationServiceTest {
         memoryProperties.getShortTerm().setEnabled(true);
         ShortTermMemoryContextAssembler assembler = new ShortTermMemoryContextAssembler(
                 memoryProperties,
-                values -> values.stream().mapToInt(value -> value.content().length()).sum());
+                values -> values.stream().mapToInt(value -> value.content().length()).sum(),
+                new com.fasterxml.jackson.databind.ObjectMapper());
         RouteSignalApplicationService service = new RouteSignalApplicationService(
                 request -> UseCaseMatchResult.notMatched("disabled"),
                 new BlockingIntentAgentRuntime((intentCommand, intentMemory, routeUser) -> {

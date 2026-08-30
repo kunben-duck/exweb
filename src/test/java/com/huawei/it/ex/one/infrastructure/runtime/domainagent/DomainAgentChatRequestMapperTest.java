@@ -180,8 +180,8 @@ class DomainAgentChatRequestMapperTest {
                 "hello",
                 List.of(),
                 List.of(
-                        new ConversationMemoryMessage("user", "历史问题"),
-                        new ConversationMemoryMessage("assistant", "历史回答")),
+                        new ConversationMemoryMessage("user", "历史问题", "skill-history"),
+                        new ConversationMemoryMessage("assistant", "历史回答", "skill-history")),
                 true,
                 Map.of("messages", List.of(Map.of("role", "user", "content", "forged"))),
                 RuntimeForwardHeaders.empty());
@@ -189,8 +189,12 @@ class DomainAgentChatRequestMapperTest {
         Map<String, Object> wire = mapper.toWireRequest(request);
 
         assertThat(wire.get("messages")).isEqualTo(List.of(
-                new ConversationMemoryMessage("user", "历史问题"),
-                new ConversationMemoryMessage("assistant", "历史回答")));
+                new ConversationMemoryMessage("user", "历史问题", "skill-history"),
+                new ConversationMemoryMessage("assistant", "历史回答", "skill-history")));
+        assertThat(wire).containsEntry("skillId", "skill-tax");
+        var serialized = new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(wire);
+        assertThat(serialized.path("messages").get(0).path("skillId").asText()).isEqualTo("skill-history");
+        assertThat(serialized.path("messages").get(1).path("skillId").asText()).isEqualTo("skill-history");
     }
 
     @Test

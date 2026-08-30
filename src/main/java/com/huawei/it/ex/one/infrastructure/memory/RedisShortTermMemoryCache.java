@@ -1,6 +1,7 @@
 package com.huawei.it.ex.one.infrastructure.memory;
 
 import com.huawei.it.ex.one.application.config.MemoryProperties;
+import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceMetadata;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
 import com.huawei.it.ex.one.common.error.SystemErrorLogEntry;
@@ -9,6 +10,7 @@ import com.huawei.it.ex.one.common.logging.AppLoggerFactory;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.infrastructure.redis.FinanceExRedisKeyBuilder;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -20,6 +22,7 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -227,6 +230,9 @@ public class RedisShortTermMemoryCache {
                 message.role(),
                 eligible ? message.content() : null,
                 eligible,
+                eligible && "assistant".equalsIgnoreCase(message.role())
+                        ? MessageSkillContext.messageSkillId(objectMapper, message.metadataJson())
+                        : null,
                 message.createdAt());
     }
 
@@ -251,8 +257,20 @@ public class RedisShortTermMemoryCache {
                 null,
                 null,
                 null,
-                null,
+                skillMetadataJson(entry.skillId()),
                 entry.createdAt());
+    }
+
+    private String skillMetadataJson(String skillId) {
+        String normalized = MessageSkillContext.normalizeSkillId(skillId);
+        if (normalized == null) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(Map.of(MessageSkillContext.MESSAGE_METADATA_KEY, normalized));
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("Short-term memory skill metadata serialization failed", ex);
+        }
     }
 
     private int cacheMessageLimit() {
@@ -268,6 +286,7 @@ public class RedisShortTermMemoryCache {
             String role,
             String content,
             boolean memoryEligible,
+            @JsonInclude(JsonInclude.Include.NON_NULL) String skillId,
             Instant createdAt
     ) {
     }

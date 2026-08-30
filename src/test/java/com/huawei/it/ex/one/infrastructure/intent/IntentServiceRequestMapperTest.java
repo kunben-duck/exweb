@@ -6,7 +6,9 @@ import com.huawei.it.ex.one.application.integration.intent.IntentUserPreferenceC
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
+import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
+import com.huawei.it.ex.one.domain.memory.RouteMemoryContext;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
 
@@ -19,6 +21,30 @@ import java.util.List;
 import java.util.Map;
 
 class IntentServiceRequestMapperTest {
+    @Test
+    void intentConversationHistoryDoesNotGainAgentRuntimeSkillField() {
+        IntentServiceRequestMapper mapper = new IntentServiceRequestMapper(new IntentServiceHttpProperties());
+        RouteMemoryContext routeMemory = new RouteMemoryContext(
+                "domain_reject",
+                List.of(Map.of(
+                        "type", "route",
+                        "domainSessionMessages", List.of(
+                                new ConversationMemoryMessage("user", "历史问题")))),
+                Map.of(),
+                "run-route");
+        MemoryContext memory = new MemoryContext(List.of(), List.of(), routeMemory, true, List.of());
+
+        IntentRecognizeRequest request = mapper.toWireRequest(
+                command(null), memory, new UserContext("tenant1", "user1", "User One"));
+        var historyMessage = new ObjectMapper().valueToTree(request)
+                .path("conversationContext").path("history").get(0)
+                .path("domainSessionMessages").get(0);
+
+        assertThat(historyMessage.path("role").asText()).isEqualTo("user");
+        assertThat(historyMessage.path("content").asText()).isEqualTo("历史问题");
+        assertThat(historyMessage.has("skillId")).isFalse();
+    }
+
     @Test
     void includesPreferenceCorrectionsAndAlwaysSerializesTheArray() {
         IntentServiceRequestMapper mapper = new IntentServiceRequestMapper(new IntentServiceHttpProperties());

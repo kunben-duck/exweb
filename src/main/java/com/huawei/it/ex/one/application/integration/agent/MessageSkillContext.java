@@ -1,5 +1,9 @@
 package com.huawei.it.ex.one.application.integration.agent;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -23,6 +27,23 @@ public final class MessageSkillContext {
 
     public static String runSkillId(Map<String, Object> metadata) {
         return metadata == null ? null : normalizeSkillId(metadata.get(RUN_METADATA_KEY));
+    }
+
+    /** Reads the server-maintained assistant skill identifier from message metadata. */
+    public static String messageSkillId(ObjectMapper objectMapper, String metadataJson) {
+        if (objectMapper == null || metadataJson == null || metadataJson.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode metadata = objectMapper.readTree(metadataJson);
+            if (metadata == null || !metadata.isObject()) {
+                return null;
+            }
+            JsonNode value = metadata.get(MESSAGE_METADATA_KEY);
+            return value != null && value.isTextual() ? normalizeSkillId(value.textValue()) : null;
+        } catch (JsonProcessingException | RuntimeException ex) {
+            return null;
+        }
     }
 
     public static Map<String, Object> replaceRunSkill(

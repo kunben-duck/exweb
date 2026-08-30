@@ -670,7 +670,9 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 短期记忆由 ChatService 根据当前会话消息路径组装，前端不提交历史 `messages`，也不在 metadata 中维护
 上下文窗口。功能关闭时，下游请求保持原格式；功能开启时，ChatService 只在普通 Relay
 `user-message.messages` 或 DomainAgent 请求根节点 `messages` 中增加受轮次和 Token 预算限制的历史。
-当前用户输入继续使用 `content/query`，不会重复进入 `messages`。
+当前用户输入继续使用 `content/query`，不会重复进入 `messages`。历史数组中的assistant使用服务端保存的
+单值`skillId`，同轮user使用当前active path直接子assistant的相同标识；存量消息或普通fallback没有可信
+标识时省略该字段。该字段由ChatService组装，前端metadata不能覆盖。
 
 Intent 的短期上下文不是公开请求字段。它只在领域拒答、用户纠偏及其后续澄清中，以
 `domainSessionMessages` 附加到服务端生成的最近 route history；普通首次意图、普通澄清、Relay 问卷、

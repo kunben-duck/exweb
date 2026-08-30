@@ -8,6 +8,8 @@ import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryContext;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -15,6 +17,36 @@ import java.util.List;
 import java.util.Map;
 
 class ShortTermMemoryContextAssemblerTest {
+    @Test
+    void agentRuntimeMessagesAttachCurrentPathSkillToUserAndAssistant() {
+        MemoryProperties properties = enabledProperties();
+        ShortTermMemoryContextAssembler assembler = assembler(properties);
+        List<ChatMessage> source = List.of(
+                message("m1", null, 1, "run-1", "user", "question one"),
+                message("m2", "m1", 2, "run-1", "assistant", "answer one", "{\"skillId\":\"skill-a\"}"),
+                message("m3", "m2", 3, "run-2", "user", "question two"),
+                message("m4", "m3", 4, "run-2", "assistant", "answer two", "{\"skillId\":\"skill-b\"}"));
+
+        assertThat(assembler.agentRuntimeMessages(source)).containsExactly(
+                new ConversationMemoryMessage("user", "question one", "skill-a"),
+                new ConversationMemoryMessage("assistant", "answer one", "skill-a"),
+                new ConversationMemoryMessage("user", "question two", "skill-b"),
+                new ConversationMemoryMessage("assistant", "answer two", "skill-b"));
+    }
+
+    @Test
+    void agentRuntimeMessagesOmitInvalidOrMissingSkillMetadata() throws Exception {
+        MemoryProperties properties = enabledProperties();
+        ShortTermMemoryContextAssembler assembler = assembler(properties);
+        List<ConversationMemoryMessage> messages = assembler.agentRuntimeMessages(List.of(
+                message("m1", null, 1, "run-1", "user", "question"),
+                message("m2", "m1", 2, "run-1", "assistant", "answer", "{\"skillId\":42}"),
+                message("m3", "m2", 3, "run-2", "assistant", "legacy", "not-json")));
+
+        assertThat(messages).allMatch(message -> message.skillId() == null);
+        assertThat(new ObjectMapper().valueToTree(messages).get(0).has("skillId")).isFalse();
+    }
+
     @Test
     void agentRuntimeAndIntentUseIndependentWindows() {
         MemoryProperties properties = enabledProperties();
@@ -69,6 +101,19 @@ class ShortTermMemoryContextAssemblerTest {
                 message("m1", null, 1, "run-1", "user", "😀😀😀")));
 
         assertThat(selected).containsExactly(new ConversationMemoryMessage("user", "😀😀"));
+    }
+
+    @Test
+    void oversizedAssistantKeepsSkillWhenContentIsTruncated() {
+        MemoryProperties properties = enabledProperties();
+        properties.getShortTerm().getAgentRuntime().setMaxContextTokens(2);
+        ShortTermMemoryContextAssembler assembler = assembler(properties);
+
+        List<ConversationMemoryMessage> selected = assembler.agentRuntimeMessages(List.of(
+                message("m1", null, 1, "run-1", "assistant", "😀😀😀",
+                        "{\"skillId\":\"skill-a\"}")));
+
+        assertThat(selected).containsExactly(new ConversationMemoryMessage("assistant", "😀😀", "skill-a"));
     }
 
     @Test
@@ -201,7 +246,7 @@ class ShortTermMemoryContextAssemblerTest {
     private ShortTermMemoryContextAssembler assembler(MemoryProperties properties) {
         return new ShortTermMemoryContextAssembler(properties, messages -> messages.stream()
                 .mapToInt(message -> message.content().codePointCount(0, message.content().length()))
-                .sum());
+                .sum(), new ObjectMapper());
     }
 
     private MemoryContext memory(List<ChatMessage> source,
@@ -234,6 +279,16 @@ class ShortTermMemoryContextAssemblerTest {
                                 String runId,
                                 String role,
                                 String content) {
+        return message(id, parentMessageId, nodeOrder, runId, role, content, null);
+    }
+
+    private ChatMessage message(String id,
+                                String parentMessageId,
+                                long nodeOrder,
+                                String runId,
+                                String role,
+                                String content,
+                                String metadataJson) {
         return new ChatMessage(
                 id,
                 "tenant-1",
@@ -253,7 +308,7 @@ class ShortTermMemoryContextAssemblerTest {
                 null,
                 null,
                 null,
-                null,
+                metadataJson,
                 Instant.EPOCH.plusSeconds(nodeOrder));
     }
 }

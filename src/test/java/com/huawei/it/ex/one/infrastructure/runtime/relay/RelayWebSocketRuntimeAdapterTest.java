@@ -269,8 +269,8 @@ class RelayWebSocketRuntimeAdapterTest {
                 null,
                 true,
                 List.of(
-                        new ConversationMemoryMessage("user", "历史问题"),
-                        new ConversationMemoryMessage("assistant", "历史回答")));
+                        new ConversationMemoryMessage("user", "历史问题", "skill-history"),
+                        new ConversationMemoryMessage("assistant", "历史回答", "skill-history")));
 
         StepVerifier.create(adapter.query(requestWithMemory(memory)))
                 .expectNextCount(4)
@@ -280,8 +280,10 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(userMessage.path("messages").isArray()).isTrue();
         assertThat(userMessage.path("messages").get(0).path("role").asText()).isEqualTo("user");
         assertThat(userMessage.path("messages").get(0).path("content").asText()).isEqualTo("历史问题");
+        assertThat(userMessage.path("messages").get(0).path("skillId").asText()).isEqualTo("skill-history");
         assertThat(userMessage.path("messages").get(1).path("role").asText()).isEqualTo("assistant");
         assertThat(userMessage.path("messages").get(1).path("content").asText()).isEqualTo("历史回答");
+        assertThat(userMessage.path("messages").get(1).path("skillId").asText()).isEqualTo("skill-history");
     }
 
     @Test
@@ -297,7 +299,7 @@ class RelayWebSocketRuntimeAdapterTest {
         RelayWebSocketRuntimeAdapter adapter = adapter(client);
         MemoryContext memory = new MemoryContext(
                 List.of(), List.of(), null, true,
-                List.of(new ConversationMemoryMessage("user", "历史问题")));
+                List.of(new ConversationMemoryMessage("user", "历史问题", "expert-history")));
 
         StepVerifier.create(adapter.query(expertRequest(null, RuntimeSessionMode.NEW, memory)))
                 .assertNext(event -> assertThat(event.type()).isEqualTo("runtime.agent"))
@@ -317,6 +319,7 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(expert.path("role_name").asText()).isEqualTo("system-awareness");
         assertThat(expert.path("content").asText()).isEqualTo("专家问题");
         assertThat(expert.path("messages").get(0).path("content").asText()).isEqualTo("历史问题");
+        assertThat(expert.path("messages").get(0).path("skillId").asText()).isEqualTo("expert-history");
         assertThat(expert.path("traceId").asText()).isEqualTo("expert-trace");
         assertThat(expert.path("metadata").path("clientTraceId").asText()).isEqualTo("client-expert");
     }

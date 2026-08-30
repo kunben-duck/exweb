@@ -21,4 +21,17 @@ class Utf8JsonMemoryTokenCounterTest {
         assertThat(counter.countTokens(messages))
                 .isEqualTo(objectMapper.writeValueAsBytes(messages).length);
     }
+
+    @Test
+    void skillIdIsIncludedInSerializedTokenBudget() {
+        ObjectMapper objectMapper = new ObjectMapper();
+        Utf8JsonMemoryTokenCounter counter = new Utf8JsonMemoryTokenCounter(objectMapper);
+
+        int withoutSkill = counter.countTokens(List.of(
+                new ConversationMemoryMessage("assistant", "answer")));
+        int withSkill = counter.countTokens(List.of(
+                new ConversationMemoryMessage("assistant", "answer", "skill-a")));
+
+        assertThat(withSkill).isGreaterThan(withoutSkill);
+    }
 }

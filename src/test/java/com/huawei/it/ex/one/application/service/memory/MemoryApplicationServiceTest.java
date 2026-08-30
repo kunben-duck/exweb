@@ -15,6 +15,8 @@ import com.huawei.it.ex.one.domain.chat.ChatMessagePage;
 import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
 import com.huawei.it.ex.one.domain.memory.LongTermMemoryItem;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -96,7 +98,8 @@ class MemoryApplicationServiceTest {
                 message("m-current", "user"));
         ShortTermMemoryContextAssembler assembler = new ShortTermMemoryContextAssembler(
                 properties,
-                values -> values.stream().mapToInt(value -> value.content().length()).sum());
+                values -> values.stream().mapToInt(value -> value.content().length()).sum(),
+                new ObjectMapper());
 
         var context = new MemoryApplicationService(
                 messages,
@@ -122,7 +125,8 @@ class MemoryApplicationServiceTest {
         RecordingMessageRepository messages = new RecordingMessageRepository();
         ShortTermMemoryContextAssembler assembler = new ShortTermMemoryContextAssembler(
                 properties,
-                values -> values.stream().mapToInt(value -> value.content().length()).sum());
+                values -> values.stream().mapToInt(value -> value.content().length()).sum(),
+                new ObjectMapper());
 
         var context = new MemoryApplicationService(
                 messages,

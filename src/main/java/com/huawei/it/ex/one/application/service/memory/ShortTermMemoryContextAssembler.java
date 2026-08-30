@@ -1,11 +1,14 @@
 package com.huawei.it.ex.one.application.service.memory;
 
 import com.huawei.it.ex.one.application.config.MemoryProperties;
+import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.integration.memory.MemoryTokenCounter;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryContext;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.springframework.stereotype.Component;
 
@@ -30,10 +33,14 @@ public class ShortTermMemoryContextAssembler {
 
     private final MemoryProperties properties;
     private final MemoryTokenCounter tokenCounter;
+    private final ObjectMapper objectMapper;
 
-    public ShortTermMemoryContextAssembler(MemoryProperties properties, MemoryTokenCounter tokenCounter) {
+    public ShortTermMemoryContextAssembler(MemoryProperties properties,
+                                           MemoryTokenCounter tokenCounter,
+                                           ObjectMapper objectMapper) {
         this.properties = properties;
         this.tokenCounter = tokenCounter;
+        this.objectMapper = objectMapper;
     }
 
     public int sourceMessageLimit() {
@@ -128,6 +135,21 @@ public class ShortTermMemoryContextAssembler {
         if (source == null || source.isEmpty()) {
             return List.of();
         }
+        Map<String, String> assistantSkills = new LinkedHashMap<>();
+        Map<String, String> userSkills = new LinkedHashMap<>();
+        for (ChatMessage message : source) {
+            if (message == null || !"assistant".equalsIgnoreCase(message.role())) {
+                continue;
+            }
+            String skillId = MessageSkillContext.messageSkillId(objectMapper, message.metadataJson());
+            if (skillId == null) {
+                continue;
+            }
+            assistantSkills.put(message.id(), skillId);
+            if (message.parentMessageId() != null && !message.parentMessageId().isBlank()) {
+                userSkills.put(message.parentMessageId(), skillId);
+            }
+        }
         List<ConversationMemoryMessage> result = new ArrayList<>();
         for (ChatMessage message : source) {
             if (message == null || blank(message.role()) || blank(message.content())) {
@@ -137,7 +159,10 @@ public class ShortTermMemoryContextAssembler {
             if (!"user".equals(role) && !(includeAssistant && "assistant".equals(role))) {
                 continue;
             }
-            result.add(new ConversationMemoryMessage(role, message.content().trim()));
+            String skillId = "assistant".equals(role)
+                    ? assistantSkills.get(message.id())
+                    : userSkills.get(message.id());
+            result.add(new ConversationMemoryMessage(role, message.content().trim(), skillId));
         }
         return List.copyOf(result);
     }
@@ -169,7 +194,8 @@ public class ShortTermMemoryContextAssembler {
         while (low <= high) {
             int middle = (low + high) >>> 1;
             String content = new String(codePoints, 0, middle);
-            ConversationMemoryMessage candidate = new ConversationMemoryMessage(message.role(), content);
+            ConversationMemoryMessage candidate = new ConversationMemoryMessage(
+                    message.role(), content, message.skillId());
             if (tokenCounter.countTokens(List.of(candidate)) <= tokenLimit) {
                 best = candidate;
                 low = middle + 1;

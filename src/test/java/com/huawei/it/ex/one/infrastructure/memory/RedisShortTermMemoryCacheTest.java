@@ -12,6 +12,7 @@ import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.infrastructure.redis.FinanceExRedisKeyBuilder;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
@@ -112,6 +113,27 @@ class RedisShortTermMemoryCacheTest {
                 "content", "memoryEligible", "createdAt");
         assertThat(serialized).doesNotContainKeys(
                 "tenantId", "userId", "sessionId", "metadataJson", "parts", "attachments");
+    }
+
+    @Test
+    void cachedAssistantPreservesNormalizedSkillWithoutFullMetadata() throws Exception {
+        CacheFixture fixture = fixture(true, 5);
+
+        assertThat(fixture.cache().append(assistantMessage())).isTrue();
+
+        ArgumentCaptor<String> value = ArgumentCaptor.forClass(String.class);
+        verify(fixture.operations()).rightPush(eq(CACHE_KEY), value.capture());
+        JsonNode cached = fixture.objectMapper().readTree(value.getValue());
+        assertThat(cached.path("skillId").asText()).isEqualTo("skill-a");
+        assertThat(cached.has("metadataJson")).isFalse();
+
+        when(fixture.operations().range(CACHE_KEY, -1, -1)).thenReturn(List.of(value.getValue()));
+        List<ChatMessage> messages = fixture.cache().findRecentMessages(
+                "tenant1", "user1", "session1", "msg-assistant", 1);
+
+        assertThat(messages).singleElement().satisfies(message ->
+                assertThat(fixture.objectMapper().readTree(message.metadataJson()).path("skillId").asText())
+                        .isEqualTo("skill-a"));
     }
 
     @Test
@@ -228,6 +250,30 @@ class RedisShortTermMemoryCacheTest {
                 "message " + index,
                 null,
                 Instant.EPOCH.plusSeconds(index));
+    }
+
+    private ChatMessage assistantMessage() {
+        return new ChatMessage(
+                "msg-assistant",
+                "tenant1",
+                "user1",
+                "session1",
+                "msg-user",
+                2L,
+                1,
+                0,
+                "assistant",
+                "answer",
+                null,
+                "run-2",
+                "NORMAL",
+                false,
+                null,
+                null,
+                null,
+                null,
+                "{\"skillId\":\"skill-a\",\"other\":true}",
+                Instant.EPOCH.plusSeconds(2));
     }
 
     private String messageId(ObjectMapper objectMapper, String value) {

@@ -606,7 +606,7 @@ no-store仅实时推送业务结果并保留占位历史。数据库提交成功
 即使前面没有 `relay-start` 或正文事件也会正常闭合空输出轮次；`idle` 和其他非终态初始化状态以及迟到的
 `config` 继续被隔离。
 
-上一段的 `user-message/session-ready` 握手描述适用于 Delegate。Domain Expert 在相同 `config` 字段上覆盖 `appMode`，并发送 `chat_expert(role_name/content/messages/traceId/metadata)`；`role_name` 来自本次 Intent `accessName` 的专家前缀后缀，并固化在 Binding 中。相同角色可 `RESUME` 原会话，不同角色分别创建和保留自己的 `RESUMABLE` Binding。配置阶段还兼容 `type=system` 且内容明确包含 `Ready to chat`。专家和 Delegate 的正常轮次都只由 `session-state.state=completed/waiting_user_input/paused` 结束；`idle`、`agent-call(is_start=false)`、`generate-response(is_final=true)`、`stream-complete` 和 `[DONE]` 均不生成轮次终态。`expert_rejection` 只映射为可见 `runtime.card`，继续等待后续 `session-state`。
+上一段的 `user-message/session-ready` 握手描述适用于 Delegate。Domain Expert 在相同 `config` 字段上覆盖 `appMode`并增加可信`roleName`，随后发送 `chat_expert(role_name/content/messages/traceId/metadata)`；两个角色字段取自同一专家档案，该值来自本次 Intent `accessName` 的专家前缀后缀并固化在 Binding 中。相同角色可 `RESUME` 原会话，不同角色分别创建和保留自己的 `RESUMABLE` Binding。配置阶段还兼容 `type=system` 且内容明确包含 `Ready to chat`。专家和 Delegate 的正常轮次都只由 `session-state.state=completed/waiting_user_input/paused` 结束；`idle`、`agent-call(is_start=false)`、`generate-response(is_final=true)`、`stream-complete` 和 `[DONE]` 均不生成轮次终态。`expert_rejection` 只映射为可见 `runtime.card`，继续等待后续 `session-state`。
 
 `ROUTE_SWITCH_CONFIRMATION` 与 `AMBIGUOUS_ROUTE` 共用
 `FINANCEEX_INTENT_AMBIGUOUS_ROUTE_WAIT_TIMEOUT`，默认 `30s`。等待事件和 `stream-status` 返回

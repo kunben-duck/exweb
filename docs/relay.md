@@ -54,6 +54,7 @@ ws://{host}:{port}/ws/{client_id}
 | config.sessionId | string | 否 | 会话 ID；`new` 模式下若提供则使用该 ID，否则后端自动生成 UUID；`resume` 模式下必填，用于指定要恢复的会话 |
 | config.uid | string | 否 | 用户工号，用于用户隔离；后端存入 `ctx.uid`，可用于会话归属标识 |
 | config.appMode | string | 否 | 运行模式：普通委托为 `delegate`（默认），ChatService 专家模式为 `domain_expert` |
+| config.roleName | string | 专家模式必填 | Domain Expert角色，来自ChatService可信路由或Binding；Delegate省略 |
 | config.supports_incremental_recovery | bool | 否 | 是否支持增量恢复；`true` 时服务端发送 `session-init(mode="incremental")`，客户端通过 `get-incremental-events` 查询驱动历史恢复；`false` 或缺省时走 legacy 全量回放路径 |
 
 > **注意**：`project_home` 无需传入，后端自动使用默认路径 `~/tmp/xxx`。
@@ -110,7 +111,7 @@ ChatService 在 Intent 的规范化 `accessName` 区分大小写精确命中
 }
 ```
 
-专家 NEW 和 RESUME 都发送 Binding 中固化的动态 `role_name`。同一角色复用匹配的专家会话，不同角色分别创建 Binding，不能交叉恢复。`messages`、`traceId`、安全过滤后的
+专家 NEW、RESUME、Interaction 和临时 Stop 的 Config 都发送 Binding 或Run可信档案中的`roleName`；正常业务帧继续发送相同值的动态 `role_name`。同一角色复用匹配的专家会话，不同角色分别创建 Binding，不能交叉恢复。`messages`、`traceId`、安全过滤后的
 `metadata` 及 WebSocket Cookie Header 与普通问答沿用同一透传规则；当前问题只出现在 `content`。
 专家模式和 Delegate 使用独立的可恢复 Binding，不交叉复用 Runtime session。
 

@@ -45,9 +45,10 @@ role_name:       system-awareness
 {
   "type": "config",
   "config": {
-    "sessionMode": "new",
-    "appMode": "domain_expert",
-    "sessionId": "session_xxx",
+   "sessionMode": "new",
+   "appMode": "domain_expert",
+   "roleName": "system-awareness",
+   "sessionId": "session_xxx",
     "uid": "user_xxx",
     "traceId": "trace_xxx"
   }
@@ -60,6 +61,7 @@ role_name:       system-awareness
 |------|------|:----:|------|--------|
 | `sessionMode` | string | ✅ | 会话模式 | `"new"` 新会话 / `"resume"` 恢复会话 |
 | `appMode` | string | ✅ | 应用模式 | 固定值 `"domain_expert"` |
+| `roleName` | string | ✅ | 专家角色；来自服务端可信路由或 Binding | `"system-awareness"` |
 | `sessionId` | string | ⚠️ | 会话ID | 恢复会话时必填 |
 | `uid` | string | ❌ | 用户ID | `"user_xxx"` |
 | `traceId` | string | ❌ | ChatService 捕获的调用链标识 | `"trace_xxx"` |
@@ -128,6 +130,8 @@ role_name:       system-awareness
 - 传递用户上下文信息
 - 服务端会注入到 MCP 工具调用中
 - 不体现在 WebSocket 响应中
+
+`config.roleName`与`chat_expert.role_name`取自同一个服务端可信专家档案。前者用于Relay初始化专家会话，后者保持现有业务调用协议；Delegate Config不发送`roleName`。
 
 ---
 

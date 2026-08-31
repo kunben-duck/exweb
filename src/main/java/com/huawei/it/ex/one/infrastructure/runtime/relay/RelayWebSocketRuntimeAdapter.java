@@ -740,6 +740,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
             config.put("supports_incremental_recovery", true);
         }
         config.put("appMode", runtimeProfile.appMode());
+        putDomainExpertRoleName(config, runtimeProfile);
         return toJson(Map.of("type", "config", "config", Map.copyOf(config)));
     }
 
@@ -752,6 +753,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         putTraceId(config, request.traceContext());
         config.put("supports_incremental_recovery", true);
         config.put("appMode", runtimeProfile.appMode());
+        putDomainExpertRoleName(config, runtimeProfile);
         return toJson(Map.of("type", "config", "config", Map.copyOf(config)));
     }
 
@@ -764,7 +766,15 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
         putTraceId(config, request.traceContext());
         config.put("supports_incremental_recovery", true);
         config.put("appMode", runtimeProfile.appMode());
+        putDomainExpertRoleName(config, runtimeProfile);
         return toJson(Map.of("type", "config", "config", Map.copyOf(config)));
+    }
+
+    private void putDomainExpertRoleName(Map<String, Object> config,
+                                         RuntimeProfileMetadata.Snapshot runtimeProfile) {
+        if (runtimeProfile.profile() == RuntimeProfile.DOMAIN_EXPERT) {
+            config.put("roleName", runtimeProfile.roleName());
+        }
     }
 
     private String businessMessage(AgentRuntimeRequest request,

@@ -250,6 +250,7 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(config.path("config").path("sessionId").asText()).isEqualTo("session1");
         assertThat(config.path("config").path("uid").asText()).isEqualTo("user1");
         assertThat(config.path("config").path("appMode").asText()).isEqualTo("delegate");
+        assertThat(config.path("config").has("roleName")).isFalse();
         assertThat(config.path("config").path("traceId").asText()).isEqualTo("relay-trace-1");
         assertThat(userMessage.path("type").asText()).isEqualTo("user-message");
         assertThat(userMessage.path("content").asText()).isEqualTo("hello");
@@ -319,6 +320,7 @@ class RelayWebSocketRuntimeAdapterTest {
         JsonNode expert = objectMapper.readTree(client.sent().get(1));
         assertThat(config.path("config").path("sessionMode").asText()).isEqualTo("new");
         assertThat(config.path("config").path("appMode").asText()).isEqualTo("domain_expert");
+        assertThat(config.path("config").path("roleName").asText()).isEqualTo("system-awareness");
         assertThat(expert.path("type").asText()).isEqualTo("chat_expert");
         assertThat(expert.path("role_name").asText()).isEqualTo("system-awareness");
         assertThat(expert.path("content").asText()).isEqualTo("专家问题");
@@ -347,6 +349,7 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(config.path("config").path("sessionMode").asText()).isEqualTo("resume");
         assertThat(config.path("config").path("sessionId").asText()).isEqualTo("expert-session-1");
         assertThat(config.path("config").path("appMode").asText()).isEqualTo("domain_expert");
+        assertThat(config.path("config").path("roleName").asText()).isEqualTo("system-awareness");
         assertThat(expert.path("role_name").asText()).isEqualTo("system-awareness");
     }
 
@@ -1075,6 +1078,7 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(config.path("config").path("sessionMode").asText()).isEqualTo("resume");
         assertThat(config.path("config").path("sessionId").asText()).isEqualTo("relay-session-1");
         assertThat(config.path("config").path("traceId").asText()).isEqualTo("interaction-trace-1");
+        assertThat(config.path("config").has("roleName")).isFalse();
         assertThat(response.path("type").asText()).isEqualTo("approval-response");
         assertThat(response.has("traceId")).isFalse();
         assertThat(response.path("request_id").asText()).isEqualTo("approval-1");
@@ -1108,6 +1112,7 @@ class RelayWebSocketRuntimeAdapterTest {
         JsonNode config = objectMapper.readTree(client.sent().get(0));
         JsonNode response = objectMapper.readTree(client.sent().get(1));
         assertThat(config.path("config").path("appMode").asText()).isEqualTo("domain_expert");
+        assertThat(config.path("config").path("roleName").asText()).isEqualTo("system-awareness");
         assertThat(response.path("type").asText()).isEqualTo("approval-response");
         assertThat(client.sent()).noneMatch(frame -> frame.contains("chat_expert"));
     }
@@ -1280,6 +1285,7 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(config.path("config").path("uid").asText()).isEqualTo("user1");
         assertThat(config.path("config").path("traceId").asText()).isEqualTo("stop-trace-1");
         assertThat(config.path("config").path("supports_incremental_recovery").asBoolean()).isTrue();
+        assertThat(config.path("config").has("roleName")).isFalse();
         assertThat(client.sent().get(1)).isEqualTo("{\"type\":\"stop_all_agents\"}");
     }
 
@@ -1296,6 +1302,7 @@ class RelayWebSocketRuntimeAdapterTest {
 
         JsonNode config = objectMapper.readTree(client.sent().get(0));
         assertThat(config.path("config").path("appMode").asText()).isEqualTo("domain_expert");
+        assertThat(config.path("config").path("roleName").asText()).isEqualTo("system-awareness");
         assertThat(client.sent().get(1)).isEqualTo("{\"type\":\"stop_all_agents\"}");
     }
 

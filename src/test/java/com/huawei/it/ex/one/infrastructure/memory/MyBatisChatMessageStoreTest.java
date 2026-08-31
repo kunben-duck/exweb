@@ -86,6 +86,35 @@ class MyBatisChatMessageStoreTest {
     }
 
     @Test
+    void asyncReplaceDeletesOnlyCurrentRunPartsBeforeWritingResult() {
+        ChatMessageMapper mapper = successfulMapper();
+        when(mapper.deletePartsByMessageAndRun(
+                "tenant-1", "user-1", "session-1", "message-1", "run-1"))
+                .thenReturn(2);
+        MyBatisChatMessageStore store = store(mapper, 100, DataSize.ofMegabytes(1));
+        ChatMessage update = message(List.of(part("new", 2, "new")));
+
+        store.updateAssistantAsyncResult(update, true);
+
+        verify(mapper).deletePartsByMessageAndRun(
+                "tenant-1", "user-1", "session-1", "message-1", "run-1");
+        verify(mapper).updateAssistant(any());
+        verify(mapper).insertParts(anyList());
+    }
+
+    @Test
+    void asyncAppendDoesNotDeleteExistingParts() {
+        ChatMessageMapper mapper = successfulMapper();
+        MyBatisChatMessageStore store = store(mapper, 100, DataSize.ofMegabytes(1));
+
+        store.updateAssistantAsyncResult(
+                message(List.of(part("new", 2, "new"))),
+                false);
+
+        verify(mapper, never()).deletePartsByMessageAndRun(any(), any(), any(), any(), any());
+    }
+
+    @Test
     void savesTerminalPartsInOrderedMultiRowBatches() {
         ChatMessageMapper mapper = successfulMapper();
         MyBatisChatMessageStore store = store(mapper, 2, DataSize.ofMegabytes(1));

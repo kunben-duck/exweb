@@ -42,6 +42,24 @@ public interface ChatMessageMapper {
     int updateAssistantMetadata(ChatMessageRow row);
 
     /**
+     * 删除指定 assistant 消息下由当前 run 产生的 Parts，并保留其他 run 的 Parts。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param messageId assistant 消息标识。
+     * @param runId 待替换 Parts 的来源 run 标识。
+     * @return 影响行数。
+     */
+    int deletePartsByMessageAndRun(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionId") String sessionId,
+            @Param("messageId") String messageId,
+            @Param("runId") String runId
+    );
+
+    /**
      * 批量写入 assistant 消息过程片段。
      *
      * @param rows part 写入行，包含消息归属、part 类型、展示语义、payload 和排序号。

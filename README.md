@@ -498,6 +498,9 @@ export FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_ENABLED=false
 export FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_MAX_DURATION=24h
 export FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_CALLBACK_MAX_CONCURRENCY=4
 export FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_CALLBACK_REQUEST_MAX_BYTES=5242880
+export FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_CALLBACK_MAX_FRAMES=128
+export FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_CALLBACK_MAX_EVENTS=128
+export FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_CALLBACK_MAX_EVENT_BYTES=1048576
 
 export FINANCEEX_AGENT_RUNTIME_DEFAULT_PROVIDER=relay
 export FINANCEEX_RELAY_RUNTIME_ENABLED=true
@@ -587,14 +590,17 @@ DomainAgent endpoint 是完整 HTTP 地址。DomainAgent chat、绑定续接和 
 `{"type":"agent.async_started","message":"任务已转入后台执行"}`，把当前run转入后台执行。
 ChatService关闭原HTTP流但保持run为`RUNNING`，持久化`run.async_running`并创建或更新原assistant；
 execution进入`ASYNC_WAITING`且释放owner。Run Resume在该边界结束，WebSocket Run topic可继续等待回调。
-DomainAgent使用请求中的可信`runId`调用`POST /v1/internal/domain-agent/async-tasks/callback`，第一版回调
-只通知`COMPLETED/FAILED`，不接收或回填业务结果；stop、回调和24小时超时竞争同一run终态CAS，同会话在终态前仍受
+DomainAgent使用请求中的可信`runId`调用`POST /v1/internal/domain-agent/async-tasks/callback`。回调可只通知
+`COMPLETED/FAILED`，也可通过`resultMode=APPEND/REPLACE`和有序`frames`返回与实时流相同协议的业务结果；stop、回调和24小时超时竞争同一run终态CAS，同会话在终态前仍受
 active run约束。若回调早于`ASYNC_WAITING`事务提交，接口返回
 `409/DOMAIN_AGENT_ASYNC_NOT_READY`和`Retry-After: 1`，DomainAgent必须使用相同请求体至少重试15秒。
-原始请求体有硬边界；可选`error`仅接受文本，trim后为空则省略，超过1024个Unicode码点时安全截断。本实例并发容量满时返回
-`429/DOMAIN_AGENT_ASYNC_CALLBACK_BUSY`，请求体超限返回413。该内部回调必须由企业网关ACL保护，
-不依赖用户Cookie。回调只更新assistant异步状态metadata，不修改正文、runId或Parts；数据库提交成功但实时发布失败时，
-前端通过Run Resume恢复持久化的`run.async_finished`和终态Event。
+纯`message.completed/agent.async_finished`帧会作为无结果通知处理，即使指定`REPLACE`也不会清空正文或Parts；
+同帧携带的正文、卡片或引用仍按业务结果处理。异步回调不接受`agent.async_started/agent.refusal`等状态机控制帧。
+原始请求体有硬边界，最多128帧、128个标准业务事件和1MiB标准事件数据；可选`error`仅接受文本，trim后为空则省略，超过1024个Unicode码点时安全截断。本实例并发容量满时返回
+`429/DOMAIN_AGENT_ASYNC_CALLBACK_BUSY`，请求体、帧或标准化事件容量超限返回413。该内部回调必须由企业网关ACL保护，
+不依赖用户Cookie。有结果时按`run.async_result_started -> 业务标准事件 -> run.async_finished -> message.completed -> run终态`
+提交；APPEND精确追加正文及Parts，REPLACE覆盖正文并仅替换当前run的Parts。FULL模式下结果、assistant和终态Event同事务提交；
+no-store仅实时推送业务结果并保留占位历史。数据库提交成功但实时发布失败时，前端通过Run Resume恢复持久化结果和终态Event。
 
 终态规则以本次统一协议为准：业务消息发送后，`session-state=completed/waiting_user_input/paused`
 即使前面没有 `relay-start` 或正文事件也会正常闭合空输出轮次；`idle` 和其他非终态初始化状态以及迟到的

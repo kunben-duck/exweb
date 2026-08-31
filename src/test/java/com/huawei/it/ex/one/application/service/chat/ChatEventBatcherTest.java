@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.util.unit.DataSize;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -160,6 +161,34 @@ class ChatEventBatcherTest {
                 })
                 .thenCancel()
                 .verify();
+    }
+
+    @Test
+    void partitionsMaterializedCallbackEventsWithNormalBatchLimits() {
+        ChatEventBatcher batcher = batcher(
+                2, Duration.ofSeconds(1), DataSize.ofMegabytes(1), VirtualTimeScheduler.create());
+        List<ChatEvent> events = List.of(delta("a"), delta("b"), delta("c"), delta("d"), delta("e"));
+
+        assertThat(batcher.partitionImmediately(events))
+                .extracting(batch -> batch.events().size())
+                .containsExactly(2, 2, 1);
+    }
+
+    @Test
+    void disabledBatchingPartitionsMaterializedCallbackEventsIndividually() {
+        ChatStreamProperties properties = properties(
+                16, Duration.ofSeconds(1), DataSize.ofMegabytes(1));
+        properties.setEventBatchEnabled(false);
+        ChatEventBatcher batcher = new ChatEventBatcher(
+                properties, new ObjectMapper(), VirtualTimeScheduler.create());
+        List<ChatEvent> events = List.of(delta("a"), delta("b"), delta("c"));
+
+        assertThat(batcher.partitionImmediately(events))
+                .allSatisfy(batch -> {
+                    assertThat(batch.events()).hasSize(1);
+                    assertThat(batch.databaseBatch()).isFalse();
+                })
+                .hasSize(3);
     }
 
     private ChatEventBatcher batcher(int maxSize, Duration maxWait, DataSize maxBytes,

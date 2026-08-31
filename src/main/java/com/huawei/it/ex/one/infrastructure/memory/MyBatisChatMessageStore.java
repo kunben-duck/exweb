@@ -77,6 +77,21 @@ public class MyBatisChatMessageStore {
         return updatedMessage;
     }
 
+    public ChatMessage updateAssistantAsyncResult(
+            ChatMessage update,
+            boolean replaceCurrentRunParts) {
+        if (replaceCurrentRunParts) {
+            mapper.deletePartsByMessageAndRun(
+                    update.tenantId(), update.userId(), update.sessionId(), update.id(), update.runId());
+        }
+        int updated = mapper.updateAssistant(toRow(update));
+        if (updated != 1) {
+            throw new IllegalArgumentException("assistant 消息不存在或不属于当前用户: " + update.id());
+        }
+        saveParts(update.parts());
+        return update;
+    }
+
     public ChatMessagePart savePart(ChatMessagePart part) {
         insertPartBatch(List.of(toRow(part)));
         return part;

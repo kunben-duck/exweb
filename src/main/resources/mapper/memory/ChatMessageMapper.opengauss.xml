@@ -146,6 +146,19 @@
     </update>
 
     <!--
+      删除指定 assistant 消息下由当前 run 产生的 Parts，供异步回调 REPLACE 时保留其他 run 的 Parts。
+      入参: tenantId/userId/sessionId/messageId 为消息归属边界；runId 为待替换 Parts 的来源 run 标识。
+    -->
+    <delete id="deletePartsByMessageAndRun">
+        DELETE FROM fin_ex_chat_message_part_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND message_id = #{messageId}
+          AND run_id = #{runId}
+    </delete>
+
+    <!--
       批量写入 assistant 过程化展示片段，如 thinking、tool、reference、card 和 answer 校验片段。
       入参: rows 为 ChatMessagePartRow 列表，每行的 id 为 part 主键，
             tenantId/userId/sessionId/messageId/runId 为归属与关联边界，

@@ -39,6 +39,7 @@ public class DomainAgentAsyncTaskCallbackCommitService {
     private final SessionRepository sessionRepository;
     private final SessionApplicationService sessionService;
     private final ChatStreamApplicationService streamService;
+    private final ChatEventBatcher eventBatcher;
     private final ObjectMapper objectMapper;
     private final AgentDataPersistenceEventPolicy retentionPolicy = new AgentDataPersistenceEventPolicy();
 
@@ -48,12 +49,14 @@ public class DomainAgentAsyncTaskCallbackCommitService {
             SessionRepository sessionRepository,
             SessionApplicationService sessionService,
             ChatStreamApplicationService streamService,
+            ChatEventBatcher eventBatcher,
             ObjectMapper objectMapper) {
         this.runRepository = runRepository;
         this.executionRepository = executionRepository;
         this.sessionRepository = sessionRepository;
         this.sessionService = sessionService;
         this.streamService = streamService;
+        this.eventBatcher = eventBatcher;
         this.objectMapper = objectMapper;
     }
 
@@ -89,15 +92,11 @@ public class DomainAgentAsyncTaskCallbackCommitService {
         ChatMessage existing = sessionService.requireAssistantForInternalUpdate(session, assistantMessageId);
         AgentDataPersistenceState persistenceState =
                 AgentDataPersistenceState.fromRunMetadata(initial.metadata(), null);
+        AssistantAssembly assembly = assemble(callback, existing, persistenceState);
         List<PublishedEvent> sequenced = sequenceAndPersist(ordered, persistenceState);
         ChatEvent terminal = sequenced.getLast().event();
 
-        String metadata = DomainAgentAsyncTaskMetadata.mergeAssistantMetadata(
-                objectMapper,
-                existing.metadataJson(),
-                callback.completed() ? "COMPLETED" : "FAILED",
-                null);
-        sessionService.updateAssistantMetadataForInternalUse(session, existing, metadata);
+        updateAssistant(callback, session, initial, existing, assembly);
         ChatRun metadataCleared = claimedRun.withMetadataSnapshot(
                 DomainAgentAsyncTaskMetadata.clearRunMetadata(claimedRun.metadata()));
         runRepository.save(metadataCleared);
@@ -129,6 +128,20 @@ public class DomainAgentAsyncTaskCallbackCommitService {
         finishedPayload.put("feedbackTargetMessageId", assistantMessageId);
 
         List<ChatEvent> events = new ArrayList<>();
+        if (callback.resultProvided()) {
+            Map<String, Object> startedPayload = new LinkedHashMap<>();
+            startedPayload.put("source", "domain-agent");
+            startedPayload.put("sourceType", "agent.async_result_started");
+            startedPayload.put("status", "ASYNC_RESULT_STARTED");
+            startedPayload.put("resultMode", callback.resultMode());
+            startedPayload.put("messageReady", true);
+            startedPayload.put("assistantMessageId", assistantMessageId);
+            startedPayload.put("feedbackTargetMessageId", assistantMessageId);
+            events.add(new RuntimeEvent(
+                    run.id(), run.sessionId(), 0L, Instant.now(), "run.async_result_started",
+                    Map.copyOf(startedPayload)));
+            events.addAll(callback.businessEvents());
+        }
         events.add(new RuntimeEvent(
                 run.id(), run.sessionId(), 0L, Instant.now(), "run.async_finished",
                 Map.copyOf(finishedPayload)));
@@ -189,10 +202,64 @@ public class DomainAgentAsyncTaskCallbackCommitService {
             return;
         }
         boolean persisted = retention == AgentDataPersistenceEventPolicy.EventRetention.PERSISTED;
-        List<ChatEvent> sequenced = persisted
-                ? streamService.appendBatchWithoutPublish(segment)
-                : streamService.sequenceLiveBatchWithoutExecutionGuard(segment);
-        sequenced.forEach(event -> result.add(new PublishedEvent(event, persisted)));
+        for (ChatEventBatcher.Batch batch : eventBatcher.partitionImmediately(segment)) {
+            List<ChatEvent> sequenced;
+            if (!persisted) {
+                sequenced = streamService.sequenceLiveBatchWithoutExecutionGuard(batch.events());
+            } else if (batch.databaseBatch()) {
+                sequenced = streamService.appendBatchWithoutPublish(batch.events());
+            } else {
+                sequenced = List.of(streamService.appendWithoutPublish(batch.events().getFirst()));
+            }
+            sequenced.forEach(event -> result.add(new PublishedEvent(event, persisted)));
+        }
+    }
+
+    private AssistantAssembly assemble(
+            PreparedCallback callback,
+            ChatMessage existing,
+            AgentDataPersistenceState persistenceState) {
+        AssistantAssembly assembly = new AssistantAssembly(persistenceState);
+        if (callback.resultProvided()
+                && "APPEND".equals(callback.resultMode())
+                && !persistenceState.placeholderMode()
+                && existing.content() != null
+                && !existing.content().isEmpty()) {
+            assembly.seedExistingDomainAgentContent();
+        }
+        callback.businessEvents().forEach(assembly::observe);
+        return assembly;
+    }
+
+    private void updateAssistant(
+            PreparedCallback callback,
+            ChatSession session,
+            ChatRun run,
+            ChatMessage existing,
+            AssistantAssembly assembly) {
+        String metadata = DomainAgentAsyncTaskMetadata.mergeAssistantMetadata(
+                objectMapper,
+                existing.metadataJson(),
+                callback.completed() ? "COMPLETED" : "FAILED",
+                null);
+        if (!callback.resultProvided()) {
+            sessionService.updateAssistantMetadataForInternalUse(session, existing, metadata);
+            return;
+        }
+        boolean replace = "REPLACE".equals(callback.resultMode());
+        String resultContent = assembly.finalContent();
+        String content = assembly.persistenceState().placeholderMode()
+                ? existing.content()
+                : replace ? resultContent : nullToEmpty(existing.content()) + resultContent;
+        sessionService.updateAssistantAsyncResult(new AsyncAssistantResultUpdateCommand(
+                run.tenantId(), run.userId(), session, existing, content, resultContent, run.id(),
+                assembly.parts(), metadata,
+                !assembly.persistenceState().placeholderMode() && assembly.appendAnswerPart(),
+                replace));
+    }
+
+    private String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 
     private String requiredAssistantMessageId(ChatRun run) {
@@ -211,7 +278,21 @@ public class DomainAgentAsyncTaskCallbackCommitService {
     public record PreparedCallback(
             String runId,
             boolean completed,
+            String resultMode,
+            boolean resultProvided,
+            List<ChatEvent> businessEvents,
             String error) {
+        public PreparedCallback {
+            resultMode = resultMode == null ? null : resultMode.trim().toUpperCase(java.util.Locale.ROOT);
+            businessEvents = businessEvents == null ? List.of() : List.copyOf(businessEvents);
+            if (resultProvided && !"APPEND".equals(resultMode) && !"REPLACE".equals(resultMode)) {
+                throw new IllegalArgumentException("存在业务结果时resultMode仅支持APPEND或REPLACE");
+            }
+        }
+
+        public PreparedCallback(String runId, boolean completed, String error) {
+            this(runId, completed, null, false, List.of(), error);
+        }
     }
 
     public record PublishedEvent(ChatEvent event, boolean persisted) {

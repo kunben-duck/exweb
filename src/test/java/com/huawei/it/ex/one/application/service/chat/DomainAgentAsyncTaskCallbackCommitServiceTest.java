@@ -9,9 +9,11 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.huawei.it.ex.one.application.config.ChatStreamProperties;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunExecutionRepository;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunRepository;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
@@ -23,6 +25,8 @@ import com.huawei.it.ex.one.domain.chat.ChatRunExecutionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
+import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -106,6 +110,85 @@ class DomainAgentAsyncTaskCallbackCommitServiceTest {
     }
 
     @Test
+    void appendResultPersistsBusinessEventsAndAppendsExactContent() {
+        Fixture fixture = new Fixture();
+        fixture.prepare(ChatRunStatus.COMPLETED, 16L, 10L);
+        List<ChatEvent> businessEvents = List.of(
+                RuntimeEvent.thinking(fixture.running.id(), fixture.running.sessionId(), Map.of(
+                        "source", "domain-agent", "sourceType", "content.think", "text", "work")),
+                new MessageDeltaEvent(fixture.running.id(), fixture.running.sessionId(), 0L, Instant.now(),
+                        "result", Map.of("delta", "result", "sourceType", "domain-agent-content")));
+
+        DomainAgentAsyncTaskCallbackCommitService.CommitResult result = fixture.service.commit(
+                new DomainAgentAsyncTaskCallbackCommitService.PreparedCallback(
+                        fixture.running.id(), true, "APPEND", true, businessEvents, null));
+
+        assertThat(result.events()).extracting(item -> item.event().type()).containsExactly(
+                "run.async_result_started", "runtime.thinking", "message.delta",
+                "run.async_finished", "message.completed", "run.completed");
+        ArgumentCaptor<AsyncAssistantResultUpdateCommand> commandCaptor =
+                ArgumentCaptor.forClass(AsyncAssistantResultUpdateCommand.class);
+        verify(fixture.sessionService).updateAssistantAsyncResult(commandCaptor.capture());
+        assertThat(commandCaptor.getValue().content()).isEqualTo(
+                "existing answer" + AssistantAssembly.DOMAIN_AGENT_CONTENT_SEGMENT_MARKER + "result");
+        assertThat(commandCaptor.getValue().resultContent()).isEqualTo(
+                AssistantAssembly.DOMAIN_AGENT_CONTENT_SEGMENT_MARKER + "result");
+        assertThat(commandCaptor.getValue().replaceCurrentRunParts()).isFalse();
+    }
+
+    @Test
+    void replaceResultUsesOnlyCallbackContentAndReplacesCurrentRunParts() {
+        Fixture fixture = new Fixture();
+        fixture.prepare(ChatRunStatus.COMPLETED, 14L, 10L);
+        List<ChatEvent> businessEvents = List.of(new MessageDeltaEvent(
+                fixture.running.id(), fixture.running.sessionId(), 0L, Instant.now(),
+                "replacement", Map.of("delta", "replacement", "sourceType", "domain-agent-content")));
+
+        fixture.service.commit(new DomainAgentAsyncTaskCallbackCommitService.PreparedCallback(
+                fixture.running.id(), true, "REPLACE", true, businessEvents, null));
+
+        ArgumentCaptor<AsyncAssistantResultUpdateCommand> commandCaptor =
+                ArgumentCaptor.forClass(AsyncAssistantResultUpdateCommand.class);
+        verify(fixture.sessionService).updateAssistantAsyncResult(commandCaptor.capture());
+        assertThat(commandCaptor.getValue().content()).isEqualTo("replacement");
+        assertThat(commandCaptor.getValue().resultContent()).isEqualTo("replacement");
+        assertThat(commandCaptor.getValue().replaceCurrentRunParts()).isTrue();
+    }
+
+    @Test
+    void replaceWithoutBusinessResultUpdatesOnlyAsyncMetadata() {
+        Fixture fixture = new Fixture();
+        fixture.prepare(ChatRunStatus.COMPLETED, 12L, 10L);
+
+        DomainAgentAsyncTaskCallbackCommitService.CommitResult result = fixture.service.commit(
+                new DomainAgentAsyncTaskCallbackCommitService.PreparedCallback(
+                        fixture.running.id(), true, "REPLACE", false, List.of(), null));
+
+        assertThat(result.events()).extracting(item -> item.event().type()).containsExactly(
+                "run.async_finished", "message.completed", "run.completed");
+        verify(fixture.sessionService).updateAssistantMetadataForInternalUse(
+                eq(fixture.session), eq(fixture.assistant), any());
+        verify(fixture.sessionService, never()).updateAssistantAsyncResult(any());
+    }
+
+    @Test
+    void disabledEventBatchingUsesSingleEventPersistencePath() {
+        Fixture fixture = new Fixture(false);
+        fixture.prepare(ChatRunStatus.COMPLETED, 15L, 10L);
+        List<ChatEvent> businessEvents = List.of(new MessageDeltaEvent(
+                fixture.running.id(), fixture.running.sessionId(), 0L, Instant.now(),
+                "result", Map.of("delta", "result", "sourceType", "domain-agent-content")));
+
+        DomainAgentAsyncTaskCallbackCommitService.CommitResult result = fixture.service.commit(
+                new DomainAgentAsyncTaskCallbackCommitService.PreparedCallback(
+                        fixture.running.id(), true, "APPEND", true, businessEvents, null));
+
+        assertThat(result.events()).hasSize(5);
+        verify(fixture.streamService, never()).appendBatchWithoutPublish(any());
+        verify(fixture.streamService, times(5)).appendWithoutPublish(any(ChatEvent.class));
+    }
+
+    @Test
     void rejectedTerminalClaimDoesNotTouchAssistantOrEvents() {
         Fixture fixture = new Fixture();
         when(fixture.runRepository.findById(fixture.running.id())).thenReturn(Optional.of(fixture.running));
@@ -131,15 +214,26 @@ class DomainAgentAsyncTaskCallbackCommitServiceTest {
         private final SessionApplicationService sessionService = mock(SessionApplicationService.class);
         private final ChatStreamApplicationService streamService = mock(ChatStreamApplicationService.class);
         private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        private final ChatEventBatcher eventBatcher;
         private final Instant now = Instant.now();
         private final ChatRun running = asyncRun(now);
         private final ChatSession session = new ChatSession(
                 "session1", "tenant1", "user1", "title", "ACTIVE", "web", now, now);
         private final ChatMessage assistant = assistant(now);
-        private final DomainAgentAsyncTaskCallbackCommitService service =
-                new DomainAgentAsyncTaskCallbackCommitService(
-                        runRepository, executionRepository, sessionRepository,
-                        sessionService, streamService, objectMapper);
+        private final DomainAgentAsyncTaskCallbackCommitService service;
+
+        private Fixture() {
+            this(true);
+        }
+
+        private Fixture(boolean eventBatchEnabled) {
+            ChatStreamProperties properties = new ChatStreamProperties();
+            properties.setEventBatchEnabled(eventBatchEnabled);
+            this.eventBatcher = new ChatEventBatcher(properties, objectMapper);
+            this.service = new DomainAgentAsyncTaskCallbackCommitService(
+                    runRepository, executionRepository, sessionRepository,
+                    sessionService, streamService, eventBatcher, objectMapper);
+        }
 
         private void prepare(ChatRunStatus terminalStatus, long terminalSequence, long firstSequence) {
             ChatRun claimed = terminalStatus == ChatRunStatus.COMPLETED
@@ -162,6 +256,12 @@ class DomainAgentAsyncTaskCallbackCommitServiceTest {
                                 event.runId(), event.sessionId(), sequence.getAndIncrement(),
                                 event.type(), event.createdAt(), event.payload()))
                         .toList();
+            });
+            when(streamService.appendWithoutPublish(any(ChatEvent.class))).thenAnswer(invocation -> {
+                ChatEvent event = invocation.getArgument(0);
+                return new StoredChatEvent(
+                        event.runId(), event.sessionId(), sequence.getAndIncrement(),
+                        event.type(), event.createdAt(), event.payload());
             });
             when(runRepository.save(any(ChatRun.class))).thenAnswer(invocation -> invocation.getArgument(0));
             when(runRepository.finalizeExternalTerminal(any())).thenReturn(committed);

@@ -41,6 +41,9 @@ class DomainAgentPropertiesTest {
             assertThat(properties.getAsyncTaskMaxDuration()).isEqualTo(Duration.ofHours(24));
             assertThat(properties.getAsyncTaskCallbackMaxConcurrency()).isEqualTo(4);
             assertThat(properties.getAsyncTaskCallbackRequestMaxBytes()).isEqualTo(5 * 1024 * 1024);
+            assertThat(properties.getAsyncTaskCallbackMaxFrames()).isEqualTo(128);
+            assertThat(properties.getAsyncTaskCallbackMaxEvents()).isEqualTo(128);
+            assertThat(properties.getAsyncTaskCallbackMaxEventBytes()).isEqualTo(1024 * 1024);
         });
     }
 
@@ -52,6 +55,30 @@ class DomainAgentPropertiesTest {
 
         contextRunner.withPropertyValues(
                         "financeex.domain-agent.async-task-callback-request-max-bytes=0")
+                .run(context -> assertThat(context).hasFailed());
+
+        contextRunner.withPropertyValues(
+                        "financeex.domain-agent.async-task-callback-max-frames=0")
+                .run(context -> assertThat(context).hasFailed());
+
+        contextRunner.withPropertyValues(
+                        "financeex.domain-agent.async-task-callback-max-events=0")
+                .run(context -> assertThat(context).hasFailed());
+
+        contextRunner.withPropertyValues(
+                        "financeex.domain-agent.async-task-callback-max-event-bytes=0")
+                .run(context -> assertThat(context).hasFailed());
+
+        contextRunner.withPropertyValues(
+                        "financeex.domain-agent.async-task-callback-max-frames=129")
+                .run(context -> assertThat(context).hasFailed());
+
+        contextRunner.withPropertyValues(
+                        "financeex.domain-agent.async-task-callback-max-events=129")
+                .run(context -> assertThat(context).hasFailed());
+
+        contextRunner.withPropertyValues(
+                        "financeex.domain-agent.async-task-callback-max-event-bytes=1048577")
                 .run(context -> assertThat(context).hasFailed());
     }
 

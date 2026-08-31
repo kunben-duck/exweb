@@ -137,6 +137,12 @@ final class AssistantAssembly {
         domainAgentThinkingSinceContent = false;
     }
 
+    /** Treats an existing persisted DomainAgent answer as the segment preceding callback events. */
+    void seedExistingDomainAgentContent() {
+        domainAgentContentObserved = true;
+        domainAgentThinkingSinceContent = false;
+    }
+
     boolean shouldPersistMessage() {
         if (persistenceState.placeholderMode()) {
             return persistenceState.runtimeDispatchStarted()

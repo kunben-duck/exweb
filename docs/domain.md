@@ -339,20 +339,31 @@ POST /v1/internal/domain-agent/async-tasks/callback
 {
   "runId": "run_xyz_789",
   "status": "COMPLETED",
+  "resultMode": "APPEND",
+  "frames": [
+    {"content": "异步任务结果"},
+    {"searchList": [], "metadata": {}}
+  ],
   "error": null
 }
 ```
 
 - `status`仅支持`COMPLETED/FAILED`。
-- 第一版回调只通知任务终态，不接收结果帧，不修改已有assistant正文或Parts。
+- `frames`可省略或为空，此时保持只通知任务终态；标准化后存在业务事件时`resultMode`必须为`APPEND`或`REPLACE`。
+- `frames`使用DomainAgent实时流相同的对象协议，按原顺序标准化；禁止返回`agent.async_started`、`agent.refusal`等状态机控制帧，下游完成信号由ChatService过滤并统一生成。
+- 纯`message.completed/agent.async_finished`帧按无结果通知处理，即使`resultMode=REPLACE`也不修改正文或Parts；同帧携带的正文、卡片或引用仍保留为业务结果。
+- `APPEND`精确追加正文并追加新Parts；`REPLACE`覆盖正文并仅删除该assistant下当前run产生的旧Parts。
+- `COMPLETED/FAILED`均可携带部分结果；FAILED仍使用不超过1024个Unicode码点的文本`error`收口。
 - 同一个`runId`只接受一次有效回调；stop、超时或已完成后的回调返回`accepted=false`。
 - 回调早于ChatService提交`ASYNC_WAITING`时返回`409/DOMAIN_AGENT_ASYNC_NOT_READY`及
   `Retry-After: 1`；DomainAgent必须使用同一`runId`和请求体按秒重试至少15秒。
-- 原始请求体默认最多5MiB；可选`error`仅接受文本，trim后为空则省略，超过1024个Unicode码点时
-  安全截断；单实例默认最多并发处理4个回调，容量满返回429，请求体超限返回413。
+- 原始请求体默认最多5MiB；单帧最多256KiB，最多128帧、128个标准业务事件和1MiB标准事件数据；
+  可选`error`仅接受文本，trim后为空则省略，超过1024个Unicode码点时安全截断。单实例默认最多并发处理4个回调，
+  容量满返回429，请求体、帧或事件容量超限返回413。
 - DomainAgent stop接口继续使用同一个`runId`停止后台任务。
-- ChatService持久化`run.async_finished`并依次发布`message.completed`和run终态；只更新assistant异步状态metadata。
-  数据库提交后再发布实时Event，发布失败不回滚终态，前端可通过Run Resume恢复。
+- 有结果时ChatService按`run.async_result_started -> 业务标准事件 -> run.async_finished -> message.completed -> run终态`
+  提交；无结果时保持原三事件顺序。FULL模式下Event、assistant正文、Parts和终态同事务提交；no-store只实时推送业务结果。
+  数据库提交后再发布实时Event，发布失败不回滚终态，前端可通过Run Resume和历史消息恢复。
  
 
 七、集成开发准入条件

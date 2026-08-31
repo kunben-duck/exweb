@@ -109,6 +109,27 @@ class LayeredChatMessageRepositoryTest {
     }
 
     @Test
+    void asyncReplaceUsesLoadedSnapshotAndPreservesOtherRunParts() {
+        FakeRedisCache cache = new FakeRedisCache();
+        FakeDatabaseStore database = new FakeDatabaseStore();
+        LayeredChatMessageRepository repository = repository(cache, database);
+        ChatMessagePart oldCurrent = partWithRun("part-current", "run1", "CARD", 1);
+        ChatMessagePart otherRun = partWithRun("part-other", "run0", "REFERENCE", 2);
+        ChatMessagePart replacement = partWithRun("part-new", "run1", "ANSWER", 3);
+        ChatMessage existing = messageWithRun("run1", List.of(oldCurrent, otherRun));
+        ChatMessage update = messageWithRun("run1", List.of(replacement));
+
+        ChatMessage result = repository.updateAssistantAsyncResult(existing, update, true);
+
+        assertThat(database.asyncResultUpdateCalls).hasValue(1);
+        assertThat(database.findMessageCalls).hasValue(0);
+        assertThat(result.parts()).extracting(ChatMessagePart::id)
+                .containsExactly("part-other", "part-new");
+        assertThat(cache.appended.parts()).extracting(ChatMessagePart::id)
+                .containsExactly("part-other", "part-new");
+    }
+
+    @Test
     void redisMissLoadsAndWarmsTheSameRequestedWindowFromDatabase() {
         FakeRedisCache cache = new FakeRedisCache();
         FakeDatabaseStore database = new FakeDatabaseStore();
@@ -201,6 +222,18 @@ class LayeredChatMessageRepositoryTest {
                 type, "test", type, Map.of(), order, Instant.now());
     }
 
+    private ChatMessagePart partWithRun(String id, String runId, String type, int order) {
+        return new ChatMessagePart(id, "tenant1", "user1", "session1", "msg1", runId,
+                type, "test", type, Map.of(), order, Instant.now());
+    }
+
+    private ChatMessage messageWithRun(String runId, List<ChatMessagePart> parts) {
+        return new ChatMessage(
+                "msg1", "tenant1", "user1", "session1", "user1", 2L, 1, 0,
+                "assistant", "answer", null, runId, "NORMAL", false,
+                null, null, null, null, null, parts, Instant.now());
+    }
+
     private void beginTransactionSynchronization() {
         TransactionSynchronizationManager.initSynchronization();
         TransactionSynchronizationManager.setActualTransactionActive(true);
@@ -267,6 +300,7 @@ class LayeredChatMessageRepositoryTest {
         private final AtomicInteger findRoleCalls = new AtomicInteger();
         private final AtomicInteger findMessageCalls = new AtomicInteger();
         private final AtomicInteger metadataUpdateCalls = new AtomicInteger();
+        private final AtomicInteger asyncResultUpdateCalls = new AtomicInteger();
         private ChatMessage saved;
         private RuntimeException saveFailure;
         private RuntimeException findRecentFailure;
@@ -299,6 +333,15 @@ class LayeredChatMessageRepositoryTest {
             metadataUpdateCalls.incrementAndGet();
             saved = existing.withMetadataJson(metadataJson);
             return saved;
+        }
+
+        @Override
+        public ChatMessage updateAssistantAsyncResult(
+                ChatMessage update,
+                boolean replaceCurrentRunParts) {
+            asyncResultUpdateCalls.incrementAndGet();
+            saved = update;
+            return update;
         }
 
         @Override

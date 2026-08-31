@@ -82,6 +82,19 @@ public class ChatEventBatcher {
                 }), 0);
     }
 
+    /** Splits an already materialized callback event segment using the normal event batch limits. */
+    List<Batch> partitionImmediately(List<ChatEvent> events) {
+        if (events == null || events.isEmpty()) {
+            return List.of();
+        }
+        if (!enabled) {
+            return events.stream()
+                    .map(event -> Batch.single(event, false))
+                    .toList();
+        }
+        return partition(events, ignored -> true);
+    }
+
     private Flux<Batch> batchRuntimeWindow(Flux<ChatEvent> window) {
         return Flux.defer(() -> {
             AtomicLong bufferedBytes = new AtomicLong();

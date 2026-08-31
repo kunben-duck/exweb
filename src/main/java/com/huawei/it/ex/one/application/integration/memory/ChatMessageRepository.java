@@ -39,6 +39,27 @@ public interface ChatMessageRepository {
         return message;
     }
 
+    /**
+     * Atomically updates an async assistant result and optionally replaces Parts produced by the same run.
+     * The supplied {@code update} contains only newly generated Parts.
+     */
+    default ChatMessage updateAssistantAsyncResult(
+            ChatMessage existing,
+            ChatMessage update,
+            boolean replaceCurrentRunParts) {
+        if (existing == null || update == null) {
+            return update;
+        }
+        List<ChatMessagePart> merged = new java.util.ArrayList<>();
+        for (ChatMessagePart part : existing.parts()) {
+            if (!replaceCurrentRunParts || !java.util.Objects.equals(update.runId(), part.runId())) {
+                merged.add(part);
+            }
+        }
+        merged.addAll(update.parts());
+        return update.withParts(List.copyOf(merged));
+    }
+
     /** Updates only assistant metadata while preserving content, run association, timestamps and parts. */
     default ChatMessage updateAssistantMetadata(ChatMessage existing, String metadataJson) {
         return existing == null ? null : existing.withMetadataJson(metadataJson);

@@ -452,3 +452,6 @@ financeex:
     async-task-max-duration: ${FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_MAX_DURATION:24h}
     async-task-callback-max-concurrency: ${FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_CALLBACK_MAX_CONCURRENCY:4}
     async-task-callback-request-max-bytes: ${FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_CALLBACK_REQUEST_MAX_BYTES:5242880}
+    async-task-callback-max-frames: ${FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_CALLBACK_MAX_FRAMES:128}
+    async-task-callback-max-events: ${FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_CALLBACK_MAX_EVENTS:128}
+    async-task-callback-max-event-bytes: ${FINANCEEX_DOMAIN_AGENT_ASYNC_TASK_CALLBACK_MAX_EVENT_BYTES:1048576}

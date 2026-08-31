@@ -1188,6 +1188,53 @@ public class SessionApplicationService implements ChatSessionFacade {
         return messageRepository.updateAssistantMetadata(existing, metadataJson);
     }
 
+    ChatMessage updateAssistantAsyncResult(AsyncAssistantResultUpdateCommand command) {
+        ChatSession session = command.session();
+        ChatMessage existing = command.existing();
+        if (session == null || existing == null
+                || !session.id().equals(existing.sessionId())
+                || !session.tenantId().equals(existing.tenantId())
+                || !session.userId().equals(existing.userId())
+                || !command.tenantId().equals(existing.tenantId())
+                || !command.userId().equals(existing.userId())
+                || !"assistant".equalsIgnoreCase(existing.role())) {
+            throw new IllegalArgumentException("异步任务目标消息不属于当前会话");
+        }
+        ensureUnlockedAssistantMessage(existing, "异步任务 assistant 消息");
+        AssistantPersistenceProjection projection = projectAssistantPersistence(
+                command.content(), command.safePartDrafts(), command.metadataJson(), command.appendAnswerPart());
+        boolean replaceParts = command.replaceCurrentRunParts()
+                && !AgentDataPersistenceMetadata.placeholderAssistant(projection.metadataJson());
+        int startOrder = nextAsyncPartOrder(existing.parts(), command.runId(), replaceParts);
+        String answerPartContent = command.resultContent() == null ? "" : command.resultContent();
+        List<ChatMessagePart> parts = buildMessageParts(new MessagePartBuildContext(
+                command.tenantId(), command.userId(), session.id(), existing.id(), command.runId(),
+                answerPartContent, projection.partDrafts(), Instant.now(), startOrder,
+                projection.appendAnswerPart()));
+        ChatMessage updated = new ChatMessage(
+                existing.id(), existing.tenantId(), existing.userId(), existing.sessionId(),
+                existing.parentMessageId(), existing.nodeOrder(), existing.treeDepth(), existing.siblingIndex(),
+                existing.role(), projection.content(), existing.tokenCount(), command.runId(), existing.originType(),
+                existing.locked(), existing.sourceSessionId(), existing.sourceMessageId(),
+                existing.editedFromMessageId(), existing.regeneratedFromMessageId(), projection.metadataJson(),
+                parts, existing.attachments(), existing.createdAt());
+        return messageRepository.updateAssistantAsyncResult(existing, updated, replaceParts);
+    }
+
+    private int nextAsyncPartOrder(
+            List<ChatMessagePart> existingParts,
+            String runId,
+            boolean replaceCurrentRunParts) {
+        int maxOrder = 0;
+        for (ChatMessagePart part : existingParts == null ? List.<ChatMessagePart>of() : existingParts) {
+            if (replaceCurrentRunParts && java.util.Objects.equals(runId, part.runId())) {
+                continue;
+            }
+            maxOrder = Math.max(maxOrder, part.partOrder());
+        }
+        return maxOrder + 1;
+    }
+
     ChatSession requireSessionForInternalUpdate(String tenantId, String userId, String sessionId) {
         return requireOwnedSession(tenantId, userId, sessionId, false);
     }

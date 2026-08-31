@@ -19,6 +19,9 @@ import java.time.Duration;
 @ConfigurationProperties(prefix = "financeex.domain-agent")
 public class DomainAgentProperties {
     private static final int DEFAULT_MAX_PENDING_FRAME_BYTES = 256 * 1024;
+    private static final int MAX_ASYNC_TASK_CALLBACK_FRAMES = 128;
+    private static final int MAX_ASYNC_TASK_CALLBACK_EVENTS = 128;
+    private static final int MAX_ASYNC_TASK_CALLBACK_EVENT_BYTES = 1024 * 1024;
 
     /** 是否启用 DomainAgent 指定调用能力。 */
     private boolean enabled = false;
@@ -67,6 +70,12 @@ public class DomainAgentProperties {
     private int asyncTaskCallbackMaxConcurrency = 4;
     /** 异步完成回调原始 HTTP 请求体最大字节数，在 JSON 反序列化前生效。 */
     private int asyncTaskCallbackRequestMaxBytes = 5 * 1024 * 1024;
+    /** 单次异步完成回调允许携带的最大原始响应帧数量。 */
+    private int asyncTaskCallbackMaxFrames = MAX_ASYNC_TASK_CALLBACK_FRAMES;
+    /** 单次异步完成回调标准化后的最大业务事件数量。 */
+    private int asyncTaskCallbackMaxEvents = MAX_ASYNC_TASK_CALLBACK_EVENTS;
+    /** 单次异步完成回调标准化后的业务事件序列化总字节数。 */
+    private int asyncTaskCallbackMaxEventBytes = MAX_ASYNC_TASK_CALLBACK_EVENT_BYTES;
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
@@ -127,6 +136,18 @@ public class DomainAgentProperties {
     public int getAsyncTaskCallbackRequestMaxBytes() { return asyncTaskCallbackRequestMaxBytes; }
     public void setAsyncTaskCallbackRequestMaxBytes(int asyncTaskCallbackRequestMaxBytes) {
         this.asyncTaskCallbackRequestMaxBytes = asyncTaskCallbackRequestMaxBytes;
+    }
+    public int getAsyncTaskCallbackMaxFrames() { return asyncTaskCallbackMaxFrames; }
+    public void setAsyncTaskCallbackMaxFrames(int asyncTaskCallbackMaxFrames) {
+        this.asyncTaskCallbackMaxFrames = asyncTaskCallbackMaxFrames;
+    }
+    public int getAsyncTaskCallbackMaxEvents() { return asyncTaskCallbackMaxEvents; }
+    public void setAsyncTaskCallbackMaxEvents(int asyncTaskCallbackMaxEvents) {
+        this.asyncTaskCallbackMaxEvents = asyncTaskCallbackMaxEvents;
+    }
+    public int getAsyncTaskCallbackMaxEventBytes() { return asyncTaskCallbackMaxEventBytes; }
+    public void setAsyncTaskCallbackMaxEventBytes(int asyncTaskCallbackMaxEventBytes) {
+        this.asyncTaskCallbackMaxEventBytes = asyncTaskCallbackMaxEventBytes;
     }
 
     public int normalizedMaxAttachments() {
@@ -197,10 +218,40 @@ public class DomainAgentProperties {
         return asyncTaskCallbackRequestMaxBytes;
     }
 
+    public int requiredAsyncTaskCallbackMaxFrames() {
+        if (asyncTaskCallbackMaxFrames <= 0
+                || asyncTaskCallbackMaxFrames > MAX_ASYNC_TASK_CALLBACK_FRAMES) {
+            throw new IllegalStateException(
+                    "financeex.domain-agent.async-task-callback-max-frames must be between 1 and 128");
+        }
+        return asyncTaskCallbackMaxFrames;
+    }
+
+    public int requiredAsyncTaskCallbackMaxEvents() {
+        if (asyncTaskCallbackMaxEvents <= 0
+                || asyncTaskCallbackMaxEvents > MAX_ASYNC_TASK_CALLBACK_EVENTS) {
+            throw new IllegalStateException(
+                    "financeex.domain-agent.async-task-callback-max-events must be between 1 and 128");
+        }
+        return asyncTaskCallbackMaxEvents;
+    }
+
+    public int requiredAsyncTaskCallbackMaxEventBytes() {
+        if (asyncTaskCallbackMaxEventBytes <= 0
+                || asyncTaskCallbackMaxEventBytes > MAX_ASYNC_TASK_CALLBACK_EVENT_BYTES) {
+            throw new IllegalStateException(
+                    "financeex.domain-agent.async-task-callback-max-event-bytes must be between 1 and 1048576");
+        }
+        return asyncTaskCallbackMaxEventBytes;
+    }
+
     @PostConstruct
     void validateAsyncTaskConfiguration() {
         requiredAsyncTaskMaxDuration();
         requiredAsyncTaskCallbackMaxConcurrency();
         requiredAsyncTaskCallbackRequestMaxBytes();
+        requiredAsyncTaskCallbackMaxFrames();
+        requiredAsyncTaskCallbackMaxEvents();
+        requiredAsyncTaskCallbackMaxEventBytes();
     }
 }

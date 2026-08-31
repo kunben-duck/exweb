@@ -20,13 +20,19 @@ import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackNotReadyException;
+import com.huawei.it.ex.one.domain.chat.DomainAgentAsyncCallbackPayloadTooLargeException;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
+import com.huawei.it.ex.one.infrastructure.runtime.domainagent.DomainAgentResponseNormalizer;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -193,6 +199,278 @@ class DomainAgentAsyncTaskCallbackApplicationServiceTest {
                 .isEqualTo("failed");
     }
 
+    @Test
+    void normalizesCallbackFramesAndFiltersDownstreamCompletionSignal() throws Exception {
+        DomainAgentProperties properties = enabledProperties();
+        DomainAgentAsyncTaskCallbackCommitService commitService =
+                mock(DomainAgentAsyncTaskCallbackCommitService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRun running = asyncRun();
+        when(runRepository.findById(running.id())).thenReturn(Optional.of(running));
+        when(commitService.commit(any())).thenReturn(
+                new DomainAgentAsyncTaskCallbackCommitService.CommitResult(
+                        true, running.completed(10L), "msg-assistant", List.of()));
+        DomainAgentAsyncTaskCallbackApplicationService service = service(
+                properties, commitService, runRepository,
+                mock(ChatRunApplicationService.class), mock(ChatStreamApplicationService.class),
+                mock(RuntimeBindingApplicationService.class));
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            service.callback(new DomainAgentAsyncTaskCallbackCommand(
+                    running.id(), "COMPLETED", "APPEND", List.of(
+                    mapper.readTree("{\"content\":\"result\",\"endFlag\":true}")), null)).block();
+
+            ArgumentCaptor<DomainAgentAsyncTaskCallbackCommitService.PreparedCallback> captor =
+                    ArgumentCaptor.forClass(DomainAgentAsyncTaskCallbackCommitService.PreparedCallback.class);
+            verify(commitService).commit(captor.capture());
+            assertThat(captor.getValue().resultProvided()).isTrue();
+            assertThat(captor.getValue().resultMode()).isEqualTo("APPEND");
+            assertThat(captor.getValue().businessEvents()).extracting(event -> event.type())
+                    .containsExactly("message.delta");
+        } finally {
+            service.closeScheduler();
+        }
+    }
+
+    @Test
+    void preservesBusinessContentCarriedByExplicitCompletionFrame() throws Exception {
+        DomainAgentProperties properties = enabledProperties();
+        DomainAgentAsyncTaskCallbackCommitService commitService =
+                mock(DomainAgentAsyncTaskCallbackCommitService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRun running = asyncRun();
+        when(runRepository.findById(running.id())).thenReturn(Optional.of(running));
+        when(commitService.commit(any())).thenReturn(
+                new DomainAgentAsyncTaskCallbackCommitService.CommitResult(
+                        true, running.completed(10L), "msg-assistant", List.of()));
+        DomainAgentAsyncTaskCallbackApplicationService service = service(
+                properties, commitService, runRepository,
+                mock(ChatRunApplicationService.class), mock(ChatStreamApplicationService.class),
+                mock(RuntimeBindingApplicationService.class));
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            service.callback(new DomainAgentAsyncTaskCallbackCommand(
+                    running.id(), "COMPLETED", "APPEND", List.of(
+                    mapper.readTree("{\"type\":\"message.completed\",\"content\":\"result\"}")), null)).block();
+
+            ArgumentCaptor<DomainAgentAsyncTaskCallbackCommitService.PreparedCallback> captor =
+                    ArgumentCaptor.forClass(DomainAgentAsyncTaskCallbackCommitService.PreparedCallback.class);
+            verify(commitService).commit(captor.capture());
+            assertThat(captor.getValue().businessEvents()).extracting(event -> event.type())
+                    .containsExactly("message.delta");
+            assertThat(captor.getValue().businessEvents().getFirst().payload())
+                    .containsEntry("delta", "result");
+        } finally {
+            service.closeScheduler();
+        }
+    }
+
+    @Test
+    void treatsPureTerminalFramesAsNotificationOnlyForReplace() throws Exception {
+        DomainAgentProperties properties = enabledProperties();
+        DomainAgentAsyncTaskCallbackCommitService commitService =
+                mock(DomainAgentAsyncTaskCallbackCommitService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRun running = asyncRun();
+        when(runRepository.findById(running.id())).thenReturn(Optional.of(running));
+        when(commitService.commit(any())).thenReturn(
+                new DomainAgentAsyncTaskCallbackCommitService.CommitResult(
+                        true, running.completed(10L), "msg-assistant", List.of()));
+        DomainAgentAsyncTaskCallbackApplicationService service = service(
+                properties, commitService, runRepository,
+                mock(ChatRunApplicationService.class), mock(ChatStreamApplicationService.class),
+                mock(RuntimeBindingApplicationService.class));
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            service.callback(new DomainAgentAsyncTaskCallbackCommand(
+                    running.id(), "COMPLETED", "REPLACE", List.of(
+                    mapper.readTree("{\"type\":\"message.completed\",\"finishReason\":\"STOP\"}"),
+                    mapper.readTree("{\"type\":\"agent.async_finished\",\"status\":\"COMPLETED\"}")),
+                    null)).block();
+
+            ArgumentCaptor<DomainAgentAsyncTaskCallbackCommitService.PreparedCallback> captor =
+                    ArgumentCaptor.forClass(DomainAgentAsyncTaskCallbackCommitService.PreparedCallback.class);
+            verify(commitService).commit(captor.capture());
+            assertThat(captor.getValue().resultProvided()).isFalse();
+            assertThat(captor.getValue().businessEvents()).isEmpty();
+        } finally {
+            service.closeScheduler();
+        }
+    }
+
+    @Test
+    void allowsPureTerminalFramesWithoutResultMode() throws Exception {
+        DomainAgentProperties properties = enabledProperties();
+        DomainAgentAsyncTaskCallbackCommitService commitService =
+                mock(DomainAgentAsyncTaskCallbackCommitService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRun running = asyncRun();
+        when(runRepository.findById(running.id())).thenReturn(Optional.of(running));
+        when(commitService.commit(any())).thenReturn(
+                new DomainAgentAsyncTaskCallbackCommitService.CommitResult(
+                        true, running.completed(10L), "msg-assistant", List.of()));
+        DomainAgentAsyncTaskCallbackApplicationService service = service(
+                properties, commitService, runRepository,
+                mock(ChatRunApplicationService.class), mock(ChatStreamApplicationService.class),
+                mock(RuntimeBindingApplicationService.class));
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            service.callback(new DomainAgentAsyncTaskCallbackCommand(
+                    running.id(), "COMPLETED", null, List.of(
+                    mapper.readTree("{\"type\":\"message.completed\"}")), null)).block();
+
+            ArgumentCaptor<DomainAgentAsyncTaskCallbackCommitService.PreparedCallback> captor =
+                    ArgumentCaptor.forClass(DomainAgentAsyncTaskCallbackCommitService.PreparedCallback.class);
+            verify(commitService).commit(captor.capture());
+            assertThat(captor.getValue().resultProvided()).isFalse();
+            assertThat(captor.getValue().resultMode()).isNull();
+        } finally {
+            service.closeScheduler();
+        }
+    }
+
+    @Test
+    void rejectsRefusalControlFrameBeforeLoadingOrClaimingRun() throws Exception {
+        DomainAgentProperties properties = enabledProperties();
+        DomainAgentAsyncTaskCallbackCommitService commitService =
+                mock(DomainAgentAsyncTaskCallbackCommitService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        DomainAgentAsyncTaskCallbackApplicationService service = service(
+                properties, commitService, runRepository,
+                mock(ChatRunApplicationService.class), mock(ChatStreamApplicationService.class),
+                mock(RuntimeBindingApplicationService.class));
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            assertThatThrownBy(() -> service.callback(new DomainAgentAsyncTaskCallbackCommand(
+                    "run1", "COMPLETED", "APPEND", List.of(
+                    mapper.readTree("{\"type\":\"agent.refusal\",\"code\":\"FN-EX-CAHT-BIZ-DAG-001\"}")),
+                    null)).block())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("不支持状态机控制事件");
+            verify(runRepository, never()).findById(any());
+            verify(commitService, never()).commit(any());
+        } finally {
+            service.closeScheduler();
+        }
+    }
+
+    @Test
+    void accepts128FramesAndRejects129BeforeTerminalClaim() throws Exception {
+        DomainAgentProperties properties = enabledProperties();
+        DomainAgentAsyncTaskCallbackCommitService commitService =
+                mock(DomainAgentAsyncTaskCallbackCommitService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRun running = asyncRun();
+        when(runRepository.findById(running.id())).thenReturn(Optional.of(running));
+        when(commitService.commit(any())).thenReturn(
+                new DomainAgentAsyncTaskCallbackCommitService.CommitResult(
+                        true, running.completed(10L), "msg-assistant", List.of()));
+        DomainAgentAsyncTaskCallbackApplicationService service = service(
+                properties, commitService, runRepository,
+                mock(ChatRunApplicationService.class), mock(ChatStreamApplicationService.class),
+                mock(RuntimeBindingApplicationService.class));
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            List<JsonNode> frames = new ArrayList<>();
+            for (int index = 0; index < 128; index++) {
+                frames.add(mapper.readTree("{\"type\":\"message.completed\"}"));
+            }
+            assertThat(service.callback(new DomainAgentAsyncTaskCallbackCommand(
+                    running.id(), "COMPLETED", null, frames, null)).block()).isNotNull();
+
+            frames.add(mapper.readTree("{\"type\":\"message.completed\"}"));
+            assertThatThrownBy(() -> service.callback(new DomainAgentAsyncTaskCallbackCommand(
+                    running.id(), "COMPLETED", null, frames, null)).block())
+                    .isInstanceOf(DomainAgentAsyncCallbackPayloadTooLargeException.class);
+            verify(commitService).commit(any());
+        } finally {
+            service.closeScheduler();
+        }
+    }
+
+    @Test
+    void accepts128BusinessEventsAtTheHardLimit() throws Exception {
+        DomainAgentProperties properties = enabledProperties();
+        DomainAgentAsyncTaskCallbackCommitService commitService =
+                mock(DomainAgentAsyncTaskCallbackCommitService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRun running = asyncRun();
+        when(runRepository.findById(running.id())).thenReturn(Optional.of(running));
+        when(commitService.commit(any())).thenReturn(
+                new DomainAgentAsyncTaskCallbackCommitService.CommitResult(
+                        true, running.completed(10L), "msg-assistant", List.of()));
+        DomainAgentAsyncTaskCallbackApplicationService service = service(
+                properties, commitService, runRepository,
+                mock(ChatRunApplicationService.class), mock(ChatStreamApplicationService.class),
+                mock(RuntimeBindingApplicationService.class));
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            List<JsonNode> frames = new ArrayList<>();
+            for (int index = 0; index < 128; index++) {
+                frames.add(mapper.readTree("{\"content\":\"x\"}"));
+            }
+            service.callback(new DomainAgentAsyncTaskCallbackCommand(
+                    running.id(), "COMPLETED", "APPEND", frames, null)).block();
+
+            ArgumentCaptor<DomainAgentAsyncTaskCallbackCommitService.PreparedCallback> captor =
+                    ArgumentCaptor.forClass(DomainAgentAsyncTaskCallbackCommitService.PreparedCallback.class);
+            verify(commitService).commit(captor.capture());
+            assertThat(captor.getValue().businessEvents()).hasSize(128);
+        } finally {
+            service.closeScheduler();
+        }
+    }
+
+    @Test
+    void rejectsNormalizedEventBytesBeforeTerminalClaim() throws Exception {
+        DomainAgentProperties properties = enabledProperties();
+        properties.setAsyncTaskCallbackMaxEventBytes(512);
+        DomainAgentAsyncTaskCallbackCommitService commitService =
+                mock(DomainAgentAsyncTaskCallbackCommitService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRun running = asyncRun();
+        when(runRepository.findById(running.id())).thenReturn(Optional.of(running));
+        DomainAgentAsyncTaskCallbackApplicationService service = service(
+                properties, commitService, runRepository,
+                mock(ChatRunApplicationService.class), mock(ChatStreamApplicationService.class),
+                mock(RuntimeBindingApplicationService.class));
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            assertThatThrownBy(() -> service.callback(new DomainAgentAsyncTaskCallbackCommand(
+                    running.id(), "COMPLETED", "APPEND", List.of(
+                    mapper.readTree("{\"content\":\"" + "x".repeat(1024) + "\"}")), null)).block())
+                    .isInstanceOf(DomainAgentAsyncCallbackPayloadTooLargeException.class);
+            verify(commitService, never()).commit(any());
+        } finally {
+            service.closeScheduler();
+        }
+    }
+
+    @Test
+    void rejectsThinkExpansionBeforeTerminalClaim() throws Exception {
+        DomainAgentProperties properties = enabledProperties();
+        properties.setAsyncTaskCallbackMaxEvents(4);
+        DomainAgentAsyncTaskCallbackCommitService commitService =
+                mock(DomainAgentAsyncTaskCallbackCommitService.class);
+        ChatRunRepository runRepository = mock(ChatRunRepository.class);
+        ChatRun running = asyncRun();
+        when(runRepository.findById(running.id())).thenReturn(Optional.of(running));
+        DomainAgentAsyncTaskCallbackApplicationService service = service(
+                properties, commitService, runRepository,
+                mock(ChatRunApplicationService.class), mock(ChatStreamApplicationService.class),
+                mock(RuntimeBindingApplicationService.class));
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            assertThatThrownBy(() -> service.callback(new DomainAgentAsyncTaskCallbackCommand(
+                    running.id(), "COMPLETED", "REPLACE", List.of(
+                    mapper.readTree("{\"content\":\"a<think>b</think>c\"}")), null)).block())
+                    .isInstanceOf(DomainAgentAsyncCallbackPayloadTooLargeException.class);
+            verify(commitService, never()).commit(any());
+        } finally {
+            service.closeScheduler();
+        }
+    }
+
     private DomainAgentAsyncTaskCallbackApplicationService service(
             DomainAgentProperties properties,
             DomainAgentAsyncTaskCallbackCommitService commitService,
@@ -200,13 +478,16 @@ class DomainAgentAsyncTaskCallbackApplicationServiceTest {
             ChatRunApplicationService runService,
             ChatStreamApplicationService streamService,
             RuntimeBindingApplicationService bindingService) {
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
         return new DomainAgentAsyncTaskCallbackApplicationService(
                 properties,
+                new DomainAgentResponseNormalizer(objectMapper, properties),
                 commitService,
                 runRepository,
                 runService,
                 streamService,
-                bindingService);
+                bindingService,
+                objectMapper);
     }
 
     private DomainAgentProperties enabledProperties() {

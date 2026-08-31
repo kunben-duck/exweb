@@ -102,6 +102,36 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
         return updated;
     }
 
+    @Override
+    public ChatMessage updateAssistantAsyncResult(
+            ChatMessage existing,
+            ChatMessage update,
+            boolean replaceCurrentRunParts) {
+        ChatMessage persisted = databaseStore.updateAssistantAsyncResult(
+                update, replaceCurrentRunParts);
+        ChatMessage cacheValue = mergeAsyncResultParts(
+                existing, persisted, replaceCurrentRunParts);
+        updateCacheAfterCommit(() -> {
+            redisCache.remove(existing);
+            redisCache.append(cacheValue);
+        });
+        return cacheValue;
+    }
+
+    private ChatMessage mergeAsyncResultParts(
+            ChatMessage existing,
+            ChatMessage update,
+            boolean replaceCurrentRunParts) {
+        List<ChatMessagePart> merged = new java.util.ArrayList<>();
+        for (ChatMessagePart part : existing.parts()) {
+            if (!replaceCurrentRunParts || !java.util.Objects.equals(update.runId(), part.runId())) {
+                merged.add(part);
+            }
+        }
+        merged.addAll(update.parts());
+        return update.withParts(List.copyOf(merged));
+    }
+
     private ChatMessage mergeParts(ChatMessage previous, ChatMessage updated) {
         if (previous == null || previous.parts() == null || previous.parts().isEmpty()) {
             return updated;

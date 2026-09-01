@@ -471,7 +471,8 @@ public class DomainAgentResponseNormalizer {
                 || root.hasNonNull("cardList")
                 || root.hasNonNull("openCard")
                 || root.hasNonNull("specificSceneInfo")
-                || standaloneContentAgent(root);
+                || standaloneContentAgent(root)
+                || standaloneRecommendedQuestions(root);
     }
 
     private Map<String, Object> processPayload(JsonNode root) {
@@ -524,6 +525,11 @@ public class DomainAgentResponseNormalizer {
         if (root.hasNonNull("recommendedQuestions")) {
             payload.put("recommendedQuestions", sanitizeBusiness(root.get("recommendedQuestions")));
         }
+        if (recommendedQuestionsFrame(root)) {
+            putBusinessFieldIfPresent(payload, root, "conv_id");
+            putBusinessFieldIfPresent(payload, root, "run_id");
+            putBusinessFieldIfPresent(payload, root, "seq");
+        }
         if (root.hasNonNull("diyCardScene")) {
             payload.put("diyCardScene", sanitizeBusiness(root.get("diyCardScene")));
             if (root.hasNonNull("contentAgent")) {
@@ -561,6 +567,9 @@ public class DomainAgentResponseNormalizer {
         if (sources.isEmpty() && standaloneContentAgent(root)) {
             sources.add("contentAgent");
         }
+        if (sources.isEmpty() && standaloneRecommendedQuestions(root)) {
+            sources.add("recommendedQuestions");
+        }
         return List.copyOf(sources);
     }
 
@@ -573,11 +582,32 @@ public class DomainAgentResponseNormalizer {
                 && !root.hasNonNull("specificSceneInfo");
     }
 
+    private boolean standaloneRecommendedQuestions(JsonNode root) {
+        return recommendedQuestionsFrame(root)
+                && !root.hasNonNull("cardUrl")
+                && !root.hasNonNull("diyCardScene")
+                && !root.hasNonNull("cardList")
+                && !root.hasNonNull("openCard")
+                && !root.hasNonNull("specificSceneInfo")
+                && !root.hasNonNull("contentAgent");
+    }
+
+    private boolean recommendedQuestionsFrame(JsonNode root) {
+        JsonNode recommendedQuestions = root == null ? null : root.get("recommendedQuestions");
+        return "recommended_questions".equals(text(root, "type"))
+                && recommendedQuestions != null
+                && !recommendedQuestions.isNull()
+                && recommendedQuestions.isArray();
+    }
+
     /**
      * 单一 DomainAgent 卡片字段保留原始字段名，方便前端按下游真实来源选择渲染器。
      * 多个卡片字段同帧到达时使用 domain-agent-card 作为聚合来源，并通过 cardSources 保留明细。
      */
     private String cardSourceType(List<String> sources) {
+        if (sources.size() == 1 && "recommendedQuestions".equals(sources.getFirst())) {
+            return "recommended_questions";
+        }
         return sources.size() == 1 ? sources.get(0) : "domain-agent-card";
     }
 
@@ -592,8 +622,15 @@ public class DomainAgentResponseNormalizer {
             case "openCard" -> "openCard";
             case "specificSceneInfo" -> "specificSceneInfo";
             case "contentAgent" -> "contentAgent";
+            case "recommendedQuestions" -> "recommendedQuestions";
             default -> "domain-agent-card";
         };
+    }
+
+    private void putBusinessFieldIfPresent(Map<String, Object> payload, JsonNode root, String field) {
+        if (root.hasNonNull(field)) {
+            payload.put(field, sanitizeBusiness(root.get(field)));
+        }
     }
 
     private Map<String, Object> metadataPayload(String metadataType, Map<String, Object> values) {

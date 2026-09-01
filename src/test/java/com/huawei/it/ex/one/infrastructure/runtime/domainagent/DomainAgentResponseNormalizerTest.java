@@ -653,6 +653,86 @@ class DomainAgentResponseNormalizerTest {
     }
 
     @Test
+    void mapsStandaloneRecommendedQuestionsToRuntimeCardAndPreservesEnvelope() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                data: {"type":"recommended_questions","conv_id":"70000811",\
+                "run_id":"8e84d51c-9092-44ca-97ab-675e09cd3183","seq":487,\
+                "recommendedQuestions":["如何判断是否构成常设机构?",\
+                "业务模式变更后如何重新评估?"]}
+                """);
+
+        assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.card");
+        assertThat(events.getFirst().payload())
+                .containsEntry("source", "domain-agent")
+                .containsEntry("sourceType", "recommended_questions")
+                .containsEntry("cardType", "recommendedQuestions")
+                .containsEntry("cardSources", List.of("recommendedQuestions"))
+                .containsEntry("conv_id", "70000811")
+                .containsEntry("run_id", "8e84d51c-9092-44ca-97ab-675e09cd3183")
+                .containsEntry("seq", 487)
+                .containsEntry("recommendedQuestions", List.of(
+                        "如何判断是否构成常设机构?",
+                        "业务模式变更后如何重新评估?"))
+                .doesNotContainKey("sourcePayload");
+    }
+
+    @Test
+    void mapsEmptyStandaloneRecommendedQuestionsToRuntimeCard() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                data: {"type":"recommended_questions","recommendedQuestions":[]}
+                """);
+
+        assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.card");
+        assertThat(events.getFirst().payload())
+                .containsEntry("sourceType", "recommended_questions")
+                .containsEntry("recommendedQuestions", List.of());
+    }
+
+    @Test
+    void sanitizesStandaloneRecommendedQuestionBusinessFields() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                data: {"type":"recommended_questions","recommendedQuestions":[{\
+                "query":"推荐问题","metadata":{"scene":"tax","apiToken":"secret"},\
+                "extension":{"copyable":true}}]}
+                """);
+
+        assertThat(events.getFirst().payload()).containsEntry("recommendedQuestions", List.of(Map.of(
+                "query", "推荐问题",
+                "metadata", Map.of("scene", "tax", "apiToken", "[REDACTED]"),
+                "extension", Map.of("copyable", true))));
+    }
+
+    @Test
+    void keepsExistingCardClassificationForRecommendedQuestionsFrameWithOpenCard() {
+        List<ChatEvent> events = normalizer.normalize("run1", "session1", """
+                data: {"type":"recommended_questions","conv_id":"70000811","seq":487,\
+                "recommendedQuestions":["推荐问题"],"openCard":"Y"}
+                """);
+
+        assertThat(events).extracting(ChatEvent::type).containsExactly("runtime.card");
+        assertThat(events.getFirst().payload())
+                .containsEntry("sourceType", "openCard")
+                .containsEntry("cardType", "openCard")
+                .containsEntry("cardSources", List.of("openCard"))
+                .containsEntry("conv_id", "70000811")
+                .containsEntry("seq", 487)
+                .containsEntry("recommendedQuestions", List.of("推荐问题"));
+    }
+
+    @Test
+    void keepsMalformedOrMismatchedRecommendedQuestionsAsFallbackEvent() {
+        List<ChatEvent> malformed = normalizer.normalize("run1", "session1", """
+                data: {"type":"recommended_questions","recommendedQuestions":{"query":"推荐问题"}}
+                """);
+        List<ChatEvent> mismatched = normalizer.normalize("run1", "session1", """
+                data: {"type":"RECOMMENDED_QUESTIONS","recommendedQuestions":["推荐问题"]}
+                """);
+
+        assertThat(malformed).extracting(ChatEvent::type).containsExactly("runtime.event");
+        assertThat(mismatched).extracting(ChatEvent::type).containsExactly("runtime.event");
+    }
+
+    @Test
     void keepsDefensiveMixedCardMappingForUnexpectedCombinedFrame() {
         List<ChatEvent> events = normalizer.normalize("run1", "session1", """
                 message: {"diyCardScene":{"type":"tax"},"cardList":[{"title":"卡片"}]}

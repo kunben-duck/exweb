@@ -200,6 +200,33 @@ class AssistantAssemblyTest {
     }
 
     @Test
+    void keepsRecommendedQuestionsInHistoricalCardPart() {
+        List<String> recommendedQuestions = List.of("推荐问题一", "推荐问题二");
+        AssistantAssembly assembly = new AssistantAssembly();
+        assembly.observe(RuntimeEvent.card("run1", "session1", Map.of(
+                "source", "domain-agent",
+                "sourceType", "recommended_questions",
+                "cardType", "recommendedQuestions",
+                "cardSources", List.of("recommendedQuestions"),
+                "conv_id", "70000811",
+                "run_id", "domain-run-1",
+                "seq", 487,
+                "recommendedQuestions", recommendedQuestions
+        )));
+
+        assertThat(assembly.finalContent()).isEmpty();
+        assertThat(assembly.parts()).singleElement().satisfies(part -> {
+            assertThat(part.partType()).isEqualTo("CARD");
+            assertThat(part.sourceType()).isEqualTo("recommended_questions");
+            assertThat(part.payload())
+                    .containsEntry("recommendedQuestions", recommendedQuestions)
+                    .containsEntry("conv_id", "70000811")
+                    .containsEntry("run_id", "domain-run-1")
+                    .containsEntry("seq", 487);
+        });
+    }
+
+    @Test
     void mergesConsecutiveStandaloneContentAgentCardsIntoOneHistoricalPart() {
         AssistantAssembly assembly = new AssistantAssembly();
         assembly.observe(RuntimeEvent.card("run1", "session1", Map.of(

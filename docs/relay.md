@@ -98,12 +98,12 @@ ChatService 在 Intent 的规范化 `accessName` 区分大小写精确命中
 ### 2.2.1 chat_expert — Domain Expert 专家问答
 
 当 Intent 的规范化 `accessName` 区分大小写命中 ChatService 配置的专家前缀时，ChatService
-移除一次该前缀，将剩余后缀作为动态 `role_name`，不发送 `user-message`，而是发送：
+移除一次该前缀，将剩余后缀作为动态 `roleName`，不发送 `user-message`，而是发送：
 
 ```json
 {
   "type": "chat_expert",
-  "role_name": "system-awareness",
+  "roleName": "system-awareness",
   "content": "资产负债率怎么计算？",
   "messages": [],
   "traceId": "trace_xxx",
@@ -111,7 +111,7 @@ ChatService 在 Intent 的规范化 `accessName` 区分大小写精确命中
 }
 ```
 
-专家 NEW、RESUME、Interaction 和临时 Stop 的 Config 都发送 Binding 或Run可信档案中的`roleName`；正常业务帧继续发送相同值的动态 `role_name`。同一角色复用匹配的专家会话，不同角色分别创建 Binding，不能交叉恢复。`messages`、`traceId`、安全过滤后的
+专家 NEW、RESUME、Interaction 和临时 Stop 的 Config 都发送 Binding 或Run可信档案中的`roleName`；正常业务帧继续发送相同字段和相同值。同一角色复用匹配的专家会话，不同角色分别创建 Binding，不能交叉恢复。`messages`、`traceId`、安全过滤后的
 `metadata` 及 WebSocket Cookie Header 与普通问答沿用同一透传规则；当前问题只出现在 `content`。
 专家模式和 Delegate 使用独立的可恢复 Binding，不交叉复用 Runtime session。
 

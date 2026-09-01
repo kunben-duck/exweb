@@ -308,7 +308,7 @@ sequenceDiagram
         else "Relay Delegate"
             Binding->>Runtime: "WebSocket config NEW/RESUME -> user-message"
         else "Relay Domain Expert"
-            Binding->>Runtime: "WebSocket config(appMode) -> chat_expert(role_name)"
+            Binding->>Runtime: "WebSocket config(appMode, roleName) -> chat_expert(roleName)"
         else "System Response"
             Binding->>Events: "本地生成受控回答"
         end

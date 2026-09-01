@@ -876,7 +876,7 @@ Relay WebSocket adapter 每个 run 都建立一条短生命周期下游连接，
 
 上段描述的是 `DELEGATE` 业务帧。`DOMAIN_EXPERT` 使用相同 WebSocket、Cookie、心跳、超时和
 NEW/RESUME 生命周期，但 config 写入专家 `appMode`和`roleName`，随后发送
-`chat_expert(role_name/content/messages/traceId/metadata)`。两个角色字段取自同一可信档案；动态角色在 Binding 中固化，相同角色恢复原专家 session，不同角色分别维护自己的 Binding。Interaction 续接仍只发送
+`chat_expert(roleName/content/messages/traceId/metadata)`。两个阶段的角色字段取自同一可信档案；动态角色在 Binding 中固化，相同角色恢复原专家 session，不同角色分别维护自己的 Binding。Interaction 续接仍只发送
 `approval-response`；同实例和临时跨实例 stop 均从 Binding/run 私有档案恢复正确 `appMode` 和 `roleName`。
 
 Relay WS 配置阶段中，Delegate 只以 `session-ready` 完成握手，Domain Expert 还接受明确包含 `Ready to chat` 的 system 帧；只有 `session-ready` 会作为 `runtime.metadata` 输出并用于尽早回填真实会话 ID。其他配置阶段 frame 只用于握手判定；若收到 `error/clear-session/session-mismatch` 则立即失败。业务阶段从 `relay-start`、首个业务帧或终态 `session-state` 开始映射标准事件；普通问答阶段定时发送 heartbeat。Delegate 与 Domain Expert 均只以 `session-state=completed/waiting_user_input/paused` 闭合轮次并补齐一次 `message.completed`；`idle` 仅作为过程状态，`agent-call` 始终是 `runtime.agent`，`generate-response` 只提供回答快照。若缺少终态，则由 `heartbeat-response-timeout` 或 `max-run-duration` 失败收口。

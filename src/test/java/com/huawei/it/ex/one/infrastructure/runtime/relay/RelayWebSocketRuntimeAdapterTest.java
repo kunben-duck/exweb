@@ -322,7 +322,9 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(config.path("config").path("appMode").asText()).isEqualTo("domain_expert");
         assertThat(config.path("config").path("roleName").asText()).isEqualTo("system-awareness");
         assertThat(expert.path("type").asText()).isEqualTo("chat_expert");
-        assertThat(expert.path("role_name").asText()).isEqualTo("system-awareness");
+        assertThat(expert.path("roleName").asText())
+                .isEqualTo(config.path("config").path("roleName").asText());
+        assertThat(expert.has("role_name")).isFalse();
         assertThat(expert.path("content").asText()).isEqualTo("专家问题");
         assertThat(expert.path("messages").get(0).path("content").asText()).isEqualTo("历史问题");
         assertThat(expert.path("messages").get(0).path("skillId").asText()).isEqualTo("expert-history");
@@ -350,7 +352,9 @@ class RelayWebSocketRuntimeAdapterTest {
         assertThat(config.path("config").path("sessionId").asText()).isEqualTo("expert-session-1");
         assertThat(config.path("config").path("appMode").asText()).isEqualTo("domain_expert");
         assertThat(config.path("config").path("roleName").asText()).isEqualTo("system-awareness");
-        assertThat(expert.path("role_name").asText()).isEqualTo("system-awareness");
+        assertThat(expert.path("roleName").asText())
+                .isEqualTo(config.path("config").path("roleName").asText());
+        assertThat(expert.has("role_name")).isFalse();
     }
 
     @Test

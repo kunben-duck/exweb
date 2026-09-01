@@ -804,7 +804,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                                  RuntimeProfileMetadata.Snapshot runtimeProfile) {
         Map<String, Object> message = new LinkedHashMap<>();
         message.put("type", "chat_expert");
-        message.put("role_name", runtimeProfile.roleName());
+        message.put("roleName", runtimeProfile.roleName());
         message.put("content", request.message() == null ? "" : request.message());
         if (request.memoryContext() != null && request.memoryContext().shortTermEnabled()) {
             message.put("messages", request.memoryContext().agentRuntimeMessages());

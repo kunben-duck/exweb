@@ -12,16 +12,16 @@ Domain-Expert 是一种专门的 Agent 模式，提供**单专业领域**的专�
 
 ### ChatService 角色映射
 
-ChatService 不再配置固定专家角色。Intent `items[].accessName` 先移除一次通用响应前缀，再区分大小写匹配显式配置的专家前缀；命中后移除一次专家前缀并 trim，剩余后缀直接作为本协议的 `role_name`。
+ChatService 不再配置固定专家角色。Intent `items[].accessName` 先移除一次通用响应前缀，再区分大小写匹配显式配置的专家前缀；命中后移除一次专家前缀并 trim，剩余后缀直接作为本协议的 `roleName`。
 
 ```text
 原始 accessName: domain_agent_domain_expert_system-awareness
 通用前缀:       domain_agent_
 专家前缀:       domain_expert_
-role_name:       system-awareness
+roleName:        system-awareness
 ```
 
-前缀命中但后缀为空时，ChatService 将其视为 Intent 协议错误，不调用 Relay。动态角色会固化在 Relay Binding 中；相同角色可以恢复原 session，不同角色分别维护自己的 Binding。前端不提交 `role_name`。
+前缀命中但后缀为空时，ChatService 将其视为 Intent 协议错误，不调用 Relay。动态角色会固化在 Relay Binding 中；相同角色可以恢复原 session，不同角色分别维护自己的 Binding。前端不提交 `roleName`。
 
 ---
 
@@ -81,7 +81,7 @@ role_name:       system-awareness
 ```json
 {
   "type": "chat_expert",
-  "role_name": "system-awareness",
+  "roleName": "system-awareness",
   "content": "资产负债率怎么计算？"
 }
 ```
@@ -91,7 +91,7 @@ role_name:       system-awareness
 ```json
 {
   "type": "chat_expert",
-  "role_name": "system-awareness",
+  "roleName": "system-awareness",
   "content": "你的问题",
   "messages": [],
   "traceId": "trace_xxx",
@@ -104,7 +104,7 @@ role_name:       system-awareness
 | 参数 | 类型 | 必填 | 说明 | 示例值 |
 |------|------|:----:|------|--------|
 | `type` | string | ✅ | 消息类型 | 固定值 `"chat_expert"` |
-| `role_name` | string | ✅ | 技能名称；ChatService 在 NEW/RESUME 中均发送 Binding 保存的值 | `"system-awareness"` |
+| `roleName` | string | ✅ | 技能名称；ChatService 在 NEW/RESUME 中均发送 Binding 保存的值 | `"system-awareness"` |
 | `content` | string | ✅ | 用户问题 | `"资产负债率怎么计算？"` |
 | `messages` | array | ❌ | 开启短期记忆后发送的历史 user/assistant 消息 | `[]` |
 | `traceId` | string | ❌ | ChatService 捕获的调用链标识 | `"trace_xxx"` |
@@ -131,14 +131,14 @@ role_name:       system-awareness
 - 服务端会注入到 MCP 工具调用中
 - 不体现在 WebSocket 响应中
 
-`config.roleName`与`chat_expert.role_name`取自同一个服务端可信专家档案。前者用于Relay初始化专家会话，后者保持现有业务调用协议；Delegate Config不发送`roleName`。
+`config.roleName`与`chat_expert.roleName`取自同一个服务端可信专家档案。前者用于Relay初始化专家会话，后者用于专家业务调用；Delegate Config不发送`roleName`。
 
 ---
 
 ## 3. 会话绑定规则
 
-- **首次调用**：必须传 `role_name`，会话绑定到该专家
-- **后续调用**：可省略 `role_name`，使用已绑定专家
+- **首次调用**：必须传 `roleName`，会话绑定到该专家
+- **后续调用**：可省略 `roleName`，使用已绑定专家
 - **切换专家**：必须创建新会话（`sessionMode: "new"`）
 
 **错误示例**：尝试在已绑定会话中切换专家
@@ -276,12 +276,12 @@ session-state(终态)        → ⭐ 轮次结束信号
 
 ## 5. 多轮对话
 
-### 首次提问（需要 role_name）
+### 首次提问（需要 roleName）
 
 ```json
 {
   "type": "chat_expert",
-  "role_name": "system-awareness",
+  "roleName": "system-awareness",
   "content": "资产负债率怎么计算？"
 }
 ```
@@ -291,7 +291,7 @@ session-state(终态)        → ⭐ 轮次结束信号
 ```json
 {
   "type": "chat_expert",
-  "role_name": "system-awareness",
+  "roleName": "system-awareness",
   "content": "那流动比率呢？"
 }
 ```
@@ -299,7 +299,7 @@ session-state(终态)        → ⭐ 轮次结束信号
 **说明**：
 - 会话持续绑定到 "system-awareness"
 - 专家保持上下文记忆
-- ChatService 在 NEW 和 RESUME 中均重复发送 Binding 保存的 `role_name`
+- ChatService 在 NEW 和 RESUME 中均重复发送 Binding 保存的 `roleName`
 
 ---
 
@@ -324,7 +324,7 @@ GET /api/skills?project_home=D:\project
 ]
 ```
 
-**使用方式**：使用技能的 `name` 字段作为 `role_name`。
+**使用方式**：使用技能的 `name` 字段作为 `roleName`。
 
 ---
 
@@ -375,7 +375,7 @@ GET /api/skills?project_home=D:\project
 
 | 错误场景 | 错误消息 | 解决方案 |
 |---------|---------|---------|
-| 技能不存在 | `Role not found: xxx` | 检查 `role_name` 是否正确 |
+| 技能不存在 | `Role not found: xxx` | 检查 `roleName` 是否正确 |
 | 会话冲突 | `当前会话已绑定专家 'xxx'，无法切换` | 创建新会话 |
 | 空消息 | 无响应 | 确保 `content` 非空 |
 | 连接失败 | WebSocket 连接失败 | 检查服务是否启动 |

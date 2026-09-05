@@ -32,8 +32,8 @@ import java.util.Map;
  * @param scope 授权或确认范围；澄清类默认 once。
  * @param questionnaireAnswers 澄清问题答案。
  * @param attachments 本轮关联附件列表。
- * @param targetType 显式直连目标类型；支持 DOMAIN_AGENT、DOMAIN_EXPERT，为空时走普通路由。
- * @param targetId 显式直连目标 ID；DOMAIN_AGENT 时为技能 ID，DOMAIN_EXPERT 时为 Relay roleName。
+ * @param targetType 显式目标类型；支持 DOMAIN_AGENT、DOMAIN_EXPERT、INTENT_EXPERT，为空时走普通路由。
+ * @param targetId 显式目标 ID；DOMAIN_AGENT 为技能 ID，DOMAIN_EXPERT 为 Relay roleName，INTENT_EXPERT 为父专家 ID。
  * @param selectedIntent 前端显式选择目标时提供的展示用意图摘要；不参与路由判断。
  * @param metadata 前端扩展元数据；DomainAgent 直连时会作为下游请求 body 透传。
  * @param appId 自动创建会话时保存的应用标识；已有会话中若传入必须与原值一致。
@@ -43,6 +43,7 @@ import java.util.Map;
  * @param language 会话标题总结语言；为空时使用服务端默认语言，不进入下游请求。
  * @param channel 会话来源渠道；仅在自动创建会话或校验已有会话时使用，为空时新会话默认 web。
  * @param intentAccessName 可选Intent入口名称；空值使用服务端默认配置。
+ * @param selectedExpert 聚合意图专家展示摘要；仅与targetType=INTENT_EXPERT同时使用。
  */
 public record CreateChatRunRequest(
         @Size(max = 128, message = "commandId 长度不能超过 128")
@@ -93,8 +94,25 @@ public record CreateChatRunRequest(
         @Size(max = 64, message = "channel 长度不能超过 64")
         String channel,
         @Size(max = 128, message = "intentAccessName 长度不能超过 128")
-        String intentAccessName
+        String intentAccessName,
+        @Valid
+        ChatSelectedExpertDto selectedExpert
 ) {
+    /** 兼容尚未携带聚合意图专家摘要的完整请求构造器。 */
+    public CreateChatRunRequest(
+            String commandId, String sessionId, String conversationId, String message, String runMode,
+            String parentMessageId, String editedMessageId, String regeneratedMessageId, Boolean forceReroute,
+            String interactionId, Boolean approved, String scope, Map<String, Object> questionnaireAnswers,
+            List<ChatAttachmentDto> attachments, String targetType, String targetId,
+            ChatSelectedIntentDto selectedIntent, Map<String, Object> metadata, String appId, String appName,
+            ChatAgentModeDto agentMode, String interactionAction, String language, String channel,
+            String intentAccessName) {
+        this(commandId, sessionId, conversationId, message, runMode, parentMessageId, editedMessageId,
+                regeneratedMessageId, forceReroute, interactionId, approved, scope, questionnaireAnswers,
+                attachments, targetType, targetId, selectedIntent, metadata, appId, appName, agentMode,
+                interactionAction, language, channel, intentAccessName, null);
+    }
+
     /** 兼容尚未携带Intent入口名称的完整请求构造器。 */
     public CreateChatRunRequest(
             String commandId, String sessionId, String conversationId, String message, String runMode,

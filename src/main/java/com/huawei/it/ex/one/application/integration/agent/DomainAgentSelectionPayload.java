@@ -46,6 +46,10 @@ public final class DomainAgentSelectionPayload {
         payload.put("runtimeSessionId", blankToDefault(runtimeSessionId, ""));
         putIfPresent(payload, "intentId", intentId);
         putIfPresent(payload, "intentName", intentName);
+        Map<String, Object> sourceExpert = IntentExpertContext.sourceExpert(bindingMetadata);
+        if (!sourceExpert.isEmpty()) {
+            payload.put("sourceExpert", sourceExpert);
+        }
         payload.put("intentResult", Map.copyOf(intentResult));
         return Map.copyOf(payload);
     }

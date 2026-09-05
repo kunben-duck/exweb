@@ -19,6 +19,7 @@ import com.huawei.it.ex.one.application.config.ChatStreamProperties;
 import com.huawei.it.ex.one.application.facade.ChatSessionFacade;
 import com.huawei.it.ex.one.application.facade.ChatSessionFirstAssistantSummary;
 import com.huawei.it.ex.one.application.facade.FinanceChatFacade;
+import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
@@ -49,6 +50,7 @@ import com.huawei.it.ex.one.interfaces.chat.dto.ChatAgentModeSelectionDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAttachmentDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatEventDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageDto;
+import com.huawei.it.ex.one.interfaces.chat.dto.ChatSelectedExpertDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSelectedIntentDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSessionDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.CreateChatRunRequest;
@@ -71,6 +73,43 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 class ChatProtocolConvergenceTest {
+
+    @Test
+    void translatorBuildsTrustedIntentExpertScopeOutsideClientMetadata() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1", "session1", null, "查询税务风险", "NEXT", null, null, null,
+                null, null, null, null, null, List.of(), " intent_expert ", " expert-a ", null,
+                Map.of(IntentExpertContext.METADATA_KEY, Map.of("expertId", "forged"), "scene", "tax"),
+                null, null, null, null, null, null, " expert_a_entry ",
+                new ChatSelectedExpertDto(" expert-a ", " 税务专家 "));
+
+        ChatCommand command = translator.toCommand(request);
+
+        assertThat(command.intentExpertScope().expertId()).isEqualTo("expert-a");
+        assertThat(command.intentExpertScope().expertName()).isEqualTo("税务专家");
+        assertThat(command.intentExpertScope().intentAccessName()).isEqualTo("expert_a_entry");
+        assertThat(command.intentAccessName()).isEqualTo("expert_a_entry");
+        assertThat(command.targetType()).isEqualTo("INTENT_EXPERT");
+        assertThat(command.targetId()).isEqualTo("expert-a");
+        assertThat(command.metadata())
+                .containsEntry("scene", "tax")
+                .doesNotContainKey(IntentExpertContext.METADATA_KEY);
+    }
+
+    @Test
+    void translatorRejectsMismatchedIntentExpertIdentity() {
+        ChatRequestTranslator translator = new ChatRequestTranslator();
+        CreateChatRunRequest request = new CreateChatRunRequest(
+                "cmd1", "session1", null, "查询税务风险", "NEXT", null, null, null,
+                null, null, null, null, null, List.of(), "INTENT_EXPERT", "expert-a", null,
+                Map.of(), null, null, null, null, null, null, "expert_a_entry",
+                new ChatSelectedExpertDto("expert-b", "税务专家"));
+
+        assertThatThrownBy(() -> translator.toCommand(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("selectedExpert.expertId");
+    }
 
     @Test
     void translatorBuildsCandidateSwitchCommandWithoutSourceMetadataInheritance() {

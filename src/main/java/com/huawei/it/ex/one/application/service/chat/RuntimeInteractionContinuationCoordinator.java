@@ -4,6 +4,7 @@
 
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDispatchState;
 import com.huawei.it.ex.one.application.service.agentdatapersistence.AgentDataPersistenceState;
@@ -227,7 +228,8 @@ final class RuntimeInteractionContinuationCoordinator {
     private Map<String, Object> runtimeMetadata(RuntimeBinding binding, RouteTarget route) {
         Map<String, Object> metadata = new LinkedHashMap<>(
                 RuntimeProfileMetadata.copyBindingProfileAsRunMetadata(binding.metadata()));
-        if (RuntimeProfileMetadata.isPinnedDomainExpert(binding.metadata())) {
+        if (RuntimeProfileMetadata.isPinnedDomainExpert(binding.metadata())
+                || IntentExpertContext.scopedDomainExpert(binding.metadata())) {
             metadata.putAll(binding.metadata());
             metadata.put("routeSource", route.routeSource());
         }

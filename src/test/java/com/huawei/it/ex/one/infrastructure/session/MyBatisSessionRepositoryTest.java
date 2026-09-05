@@ -28,6 +28,19 @@ import java.util.List;
 
 class MyBatisSessionRepositoryTest {
     @Test
+    void lockAndFindForMessageMutationUsesLatestLockedOwnerRow() {
+        RecordingMapper mapper = new RecordingMapper();
+        mapper.ownerRow = row("session-locked", "fund-app", Instant.parse("2026-09-05T01:00:00Z"));
+        MyBatisSessionRepository repository = new MyBatisSessionRepository(mapper);
+
+        ChatSession session = repository.lockAndFindForMessageMutation(
+                "tenant1", "user1", "session-locked");
+
+        assertThat(session.id()).isEqualTo("session-locked");
+        assertThat(mapper.findLockedByOwnerCalls).isEqualTo(1);
+    }
+
+    @Test
     void cursorCannotBeReusedWithAnotherAppIdFilter() {
         RecordingMapper mapper = new RecordingMapper();
         mapper.pageRows = List.of(
@@ -324,12 +337,18 @@ class MyBatisSessionRepositoryTest {
         private long totalRows;
         private ChatSessionRow ownerRow;
         private int findByOwnerCalls;
+        private int findLockedByOwnerCalls;
         private long lastReadThroughSeq;
 
         @Override public int insert(ChatSessionRow row) { return 1; }
         @Override public int update(ChatSessionRow row) { return 1; }
         @Override public ChatSessionRow findById(String sessionId) { return null; }
         @Override public ChatSessionRow findByOwnerAndId(String tenantId, String userId, String sessionId) { return ownerRow; }
+        @Override
+        public ChatSessionRow findByOwnerAndIdForUpdate(String tenantId, String userId, String sessionId) {
+            findLockedByOwnerCalls++;
+            return ownerRow;
+        }
         @Override
         public List<ChatSessionRow> findByOwner(String tenantId, String userId) {
             findByOwnerCalls++;

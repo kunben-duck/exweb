@@ -187,7 +187,8 @@ public class CandidateDomainAgentSwitchApplicationService {
                 command.agentMode(),
                 null,
                 null,
-                command.intentAccessName());
+                command.intentAccessName(),
+                null);
     }
 
     private void validateSourceMessage(

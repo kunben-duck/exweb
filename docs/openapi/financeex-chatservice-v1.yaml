@@ -118,6 +118,10 @@ paths:
         - 拒答切换确认：提交 `approved=true/false`；到达 autoActionAt 后前端提交 `approved=true`。
         - Relay 问卷：严格使用 `questionnaireAnswers.label`，忽略使用 `ignore=true`。
 
+        聚合意图专家首次选择或切换使用 `targetType=INTENT_EXPERT`、父专家 `targetId`、
+        `selectedExpert` 和专属 `intentAccessName`。后续普通轮次省略这些字段，服务端从会话恢复
+        父专家范围；实际 assistant skillId 仍记录最终子技能。
+
         `Cookie` 只作为内存请求头快照透传给可信 Runtime，不得出现在 body 或 metadata。
       parameters:
         - $ref: '#/components/parameters/OptionalCookie'
@@ -198,6 +202,20 @@ paths:
                   selectedIntent:
                     intentId: finance_analysis
                     intentName: 经营分析专家
+                  metadata: {}
+              intentExpert:
+                summary: 选择聚合意图专家并通过专属Intent入口路由子技能
+                value:
+                  commandId: cmd_intent_expert_001
+                  sessionId: session_001
+                  runMode: NEXT
+                  message: 分析本期税务风险
+                  targetType: INTENT_EXPERT
+                  targetId: tax-expert
+                  selectedExpert:
+                    expertId: tax-expert
+                    expertName: 税务专家
+                  intentAccessName: tax_expert_entry
                   metadata: {}
               editUser:
                 summary: 编辑历史 user 消息
@@ -2314,7 +2332,7 @@ components:
           type: string
           maxLength: 128
           nullable: true
-          description: 可选Intent入口名称；trim后非空时覆盖本次Intent请求的服务端默认值，未传或空白时回退financeex.intent.access-name。仅进入Intent请求，不进入metadata或Runtime请求；Interaction续接不继承source run值。
+          description: 可选Intent入口名称；trim后非空时覆盖本次Intent请求的服务端默认值，未传或空白时回退financeex.intent.access-name。INTENT_EXPERT首次选择或切换时必填并作为父专家身份的一部分。仅进入Intent请求，不进入业务metadata或Runtime请求；Interaction续接不继承source run值，但聚合意图专家范围内的澄清会使用会话保存值。
         runMode:
           type: string
           maxLength: 32
@@ -2368,19 +2386,25 @@ components:
           type: string
           maxLength: 32
           nullable: true
-          enum: [DOMAIN_AGENT, DOMAIN_EXPERT]
-          description: DOMAIN_AGENT直连领域Agent；DOMAIN_EXPERT直连并固定Relay专家
+          enum: [DOMAIN_AGENT, DOMAIN_EXPERT, INTENT_EXPERT]
+          description: DOMAIN_AGENT直连领域Agent；DOMAIN_EXPERT直连并固定Relay专家；INTENT_EXPERT选择父专家并通过其专属Intent入口路由子技能
         targetId:
           type: string
           maxLength: 128
           nullable: true
-          description: DOMAIN_AGENT时为技能ID；DOMAIN_EXPERT时为区分大小写的Relay roleName
+          description: DOMAIN_AGENT时为技能ID；DOMAIN_EXPERT时为区分大小写的Relay roleName；INTENT_EXPERT时为父专家ID
         selectedIntent:
           type: object
           allOf:
             - $ref: '#/components/schemas/ChatSelectedIntent'
           nullable: true
           description: 显式目标的可选展示摘要，不参与路由且不发送给Runtime
+        selectedExpert:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/ChatSelectedExpert'
+          nullable: true
+          description: 仅INTENT_EXPERT使用；expertId必须等于targetId，展示名称变化不改变专家身份
         metadata:
           type: object
           nullable: true
@@ -2567,6 +2591,33 @@ components:
           minLength: 1
           maxLength: 256
       description: 在Run请求中仅用于显式直连DomainAgent的展示摘要；在偏好接口中表示用户选择的Intent。均不参与服务端路由判断。
+
+    ChatSelectedExpert:
+      type: object
+      required: [expertId, expertName]
+      properties:
+        expertId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        expertName:
+          type: string
+          minLength: 1
+          maxLength: 256
+      description: 聚合意图父专家展示摘要；expertId必须与请求targetId一致。
+
+    ChatIntentExpertScope:
+      type: object
+      required: [expertId, intentAccessName]
+      properties:
+        expertId:
+          type: string
+        expertName:
+          type: string
+          nullable: true
+        intentAccessName:
+          type: string
+      description: stream-status返回的当前会话聚合意图专家范围。
 
     ChatAgentMode:
       type: object
@@ -2785,6 +2836,12 @@ components:
           format: date-time
           nullable: true
           description: DomainAgent后台任务等待截止时间
+        selectedExpert:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/ChatIntentExpertScope'
+          nullable: true
+          description: 当前会话选择的聚合意图父专家；未选择或已显式切换到普通目标时为空
 
     ConversationTurnStream:
       type: object

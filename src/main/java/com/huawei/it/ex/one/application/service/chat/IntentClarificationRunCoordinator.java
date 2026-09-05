@@ -96,6 +96,7 @@ final class IntentClarificationRunCoordinator {
                                 lifecycle.metadata(interaction)));
         ChatRunMessagePlan messagePlan = admission.messagePlan();
         ChatRun run = admission.run();
+        ChatCommand routedCommand = command.withIntentExpertScope(admission.intentExpertScope());
         lifecycle.trackRun(
                 request.startAttempt(),
                 run,
@@ -140,7 +141,7 @@ final class IntentClarificationRunCoordinator {
                             runtimeDispatchCoordinator.execute(new RoutePipelineRequest(
                                     request.user(),
                                     request.session(),
-                                    command,
+                                    routedCommand,
                                     request.input().cumulativeAttachments(),
                                     request.input().cumulativeDocuments(),
                                     memory,

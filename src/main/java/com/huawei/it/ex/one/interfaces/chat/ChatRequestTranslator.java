@@ -10,11 +10,13 @@ import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.CandidateDomainAgentSwitchCommand;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
+import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
 import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
 import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAttachmentDto;
+import com.huawei.it.ex.one.interfaces.chat.dto.ChatSelectedExpertDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSelectedIntentDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.CreateChatRunRequest;
 import com.huawei.it.ex.one.interfaces.chat.dto.SwitchDomainAgentRequest;
@@ -59,18 +61,21 @@ public class ChatRequestTranslator {
             metadata = SelectedIntentContext.attach(metadata,
                     request.selectedIntent().intentId(), request.selectedIntent().intentName());
         }
+        IntentExpertScope intentExpertScope = intentExpertScope(request, runMode);
+        String targetType = intentExpertScope == null ? request.targetType() : "INTENT_EXPERT";
+        String targetId = intentExpertScope == null ? request.targetId() : intentExpertScope.expertId();
         // 身份字段留空进入 application，由 Controller 入口解析出的 UserContext 统一回填。
         // 这样前端无法通过 Header/Query/Body 改写租户或用户，后续接入企业权限框架也只替换身份防腐层。
         return new ChatCommand(request.commandId(), null, null, request.sessionId(), request.conversationId(),
                 normalizeText(request.channel()),
                 request.message(), toAttachmentRefs(request.attachments()), metadata,
-                request.targetType(), request.targetId(),
+                targetType, targetId,
                 runMode, request.parentMessageId(), request.editedMessageId(),
                 request.regeneratedMessageId(), routeTrigger(request.forceReroute()),
                 request.interactionId(), request.approved(), request.scope(),
                 normalizeMetadata(request.questionnaireAnswers()), request.appId(), request.appName(),
                 toAgentMode(request.agentMode()), request.interactionAction(), request.language(),
-                normalizeText(request.intentAccessName()));
+                normalizeText(request.intentAccessName()), intentExpertScope);
     }
 
     /** 将候选技能立即切换请求转换为不携带历史query和附件的应用命令。 */
@@ -111,6 +116,7 @@ public class ChatRequestTranslator {
         Map<String, Object> sanitized = normalizeMetadata(metadata);
         sanitized = SelectedIntentContext.removeReserved(sanitized);
         sanitized = MessageSkillContext.removeReserved(sanitized);
+        sanitized = com.huawei.it.ex.one.application.integration.agent.IntentExpertContext.removeReserved(sanitized);
         sanitized = RuntimeProfileMetadata.removePrivateRunMetadata(sanitized);
         sanitized = RelayOutputModeMetadata.removePrivateRunMetadata(sanitized);
         return removeDomainAgentAsyncTaskMetadata(sanitized);
@@ -169,6 +175,32 @@ public class ChatRequestTranslator {
         if (!hasText(selectedIntent.intentName())) {
             throw new IllegalArgumentException("selectedIntent.intentName 不能为空");
         }
+    }
+
+    private IntentExpertScope intentExpertScope(CreateChatRunRequest request, ChatRunMode runMode) {
+        boolean intentExpert = "INTENT_EXPERT".equalsIgnoreCase(normalizeText(request.targetType()));
+        ChatSelectedExpertDto selectedExpert = request.selectedExpert();
+        if (!intentExpert) {
+            if (selectedExpert != null) {
+                throw new IllegalArgumentException(
+                        "selectedExpert 仅允许与 targetType=INTENT_EXPERT 同时使用");
+            }
+            return null;
+        }
+        if (runMode == ChatRunMode.CONTINUE_INTERACTION) {
+            throw new IllegalArgumentException("CONTINUE_INTERACTION 模式不支持 INTENT_EXPERT");
+        }
+        String targetId = normalizeRequiredText(request.targetId(), "targetId");
+        String intentAccessName = normalizeRequiredText(request.intentAccessName(), "intentAccessName");
+        if (selectedExpert == null) {
+            throw new IllegalArgumentException("targetType=INTENT_EXPERT 时 selectedExpert 不能为空");
+        }
+        String expertId = normalizeRequiredText(selectedExpert.expertId(), "selectedExpert.expertId");
+        if (!targetId.equals(expertId)) {
+            throw new IllegalArgumentException("selectedExpert.expertId 必须与 targetId 一致");
+        }
+        String expertName = normalizeRequiredText(selectedExpert.expertName(), "selectedExpert.expertName");
+        return new IntentExpertScope(expertId, expertName, intentAccessName);
     }
 
     private Map<String, Object> normalizeMetadata(Map<String, Object> metadata) {

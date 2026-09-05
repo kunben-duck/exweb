@@ -75,7 +75,8 @@ final class DomainAgentRefusalEventFactory {
                 command.agentMode(),
                 command.interactionAction(),
                 command.language(),
-                command.intentAccessName());
+                command.intentAccessName(),
+                command.intentExpertScope());
     }
 
     RuntimeEvent routeSwitchConfirmationRequest(DomainAgentRerouteContext reroute,

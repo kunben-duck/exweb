@@ -123,7 +123,9 @@ final class DomainAgentReplacementExecutor {
                         context.runId(),
                         bindingPolicy.runtimeBindingLeafId(context.command()),
                         nextRoute.runtimeProfile(),
-                        nextRoute.runtimeRoleName()));
+                        nextRoute.runtimeRoleName()),
+                routeResolutionCoordinator.relayBindingMetadata(
+                        nextRoute, signal.intentDecision(), context.command()));
         trackRelayBinding(lifecycle, resolution);
         context.bindingRef().set(resolution.binding());
         context.routeRef().set(nextRoute);
@@ -413,7 +415,11 @@ final class DomainAgentReplacementExecutor {
                 bindingPolicy.runtimeBindingLeafId(context.command()),
                 nextRoute.selectedAgentCode(),
                 nextRoute.routeSource(),
-                routeResolutionCoordinator.domainAgentBindingMetadata(nextRoute, signal.intentDecision()),
+                routeResolutionCoordinator.domainAgentBindingMetadata(
+                        nextRoute,
+                        signal.intentDecision(),
+                        context.command().metadata(),
+                        context.command().intentExpertScope()),
                 reroute.agentMode());
     }
 

@@ -5,6 +5,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
+import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.application.service.memory.ShortTermMemoryContextAssembler;
@@ -19,6 +20,7 @@ import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
@@ -110,10 +112,14 @@ final class RouteResolutionCoordinator {
                     preparation.session().id());
             return;
         }
-        runtimeBindingService.findActiveBySession(
+        IntentExpertScope intentExpertScope = preparation.command() == null
+                ? null
+                : preparation.command().intentExpertScope();
+        runtimeBindingService.findActiveBySessionInIntentExpertScope(
                         preparation.user().tenantId(),
                         preparation.user().ownerUserId(),
-                        preparation.session().id())
+                        preparation.session().id(),
+                        intentExpertScope)
                 .ifPresent(active -> restoreActiveBinding(preparation, active));
     }
 
@@ -208,6 +214,13 @@ final class RouteResolutionCoordinator {
     Map<String, Object> domainAgentBindingMetadata(RouteTarget route,
                                                    IntentDecision intent,
                                                    Map<String, Object> commandMetadata) {
+        return domainAgentBindingMetadata(route, intent, commandMetadata, null);
+    }
+
+    Map<String, Object> domainAgentBindingMetadata(RouteTarget route,
+                                                   IntentDecision intent,
+                                                   Map<String, Object> commandMetadata,
+                                                   IntentExpertScope intentExpertScope) {
         Map<String, Object> metadata = new LinkedHashMap<>();
         if (route != null) {
             metadata.put("domainAgentId", route.selectedAgentCode());
@@ -221,7 +234,7 @@ final class RouteResolutionCoordinator {
             putIfNotNull(metadata, "intentCode", SelectedIntentContext.intentId(commandMetadata));
             putIfNotNull(metadata, "intentName", SelectedIntentContext.intentName(commandMetadata));
         }
-        return Map.copyOf(metadata);
+        return IntentExpertContext.withScope(metadata, intentExpertScope);
     }
 
     private Map<String, Object> domainExpertBindingMetadata(ChatCommand command, String roleName) {
@@ -244,41 +257,53 @@ final class RouteResolutionCoordinator {
 
     private void restoreActiveBinding(InitialRoutePreparation preparation, RuntimeBinding active) {
         boolean domainAgent = RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(active.provider());
+        IntentExpertScope scope = preparation.command() == null
+                ? null
+                : preparation.command().intentExpertScope();
+        RuntimeBinding scopedActive = scope == null
+                ? active
+                : active.withMetadata(IntentExpertContext.withScope(active.metadata(), scope));
         RuntimeBinding binding;
         if (domainAgent && preparation.deferDomainAgentBinding()) {
             DeferredDomainAgentBinding deferred = runtimeBindingService.prepareActiveDomainAgentForRun(
-                    active, preparation.runId(), preparation.agentMode());
+                    scopedActive, preparation.runId(), preparation.agentMode());
             preparation.deferredDomainAgentBindingRef().set(deferred);
             binding = deferred.candidate();
         } else {
             binding = domainAgent
                     ? runtimeBindingService.touchDomainAgentForRun(
-                            active,
+                            scopedActive,
                             preparation.runId(),
                             preparation.agentMode())
-                    : runtimeBindingService.touchForRun(active, preparation.runId());
+                    : runtimeBindingService.touchForRun(scopedActive, preparation.runId());
         }
-        boolean pinnedDomainExpert = !domainAgent
-                && runtimeBindingService.isPinnedDomainExpert(binding);
+        boolean domainExpert = !domainAgent
+                && (runtimeBindingService.isPinnedDomainExpert(binding)
+                || runtimeBindingService.isIntentExpertDomainExpert(binding));
         RouteTarget route = domainAgent
                 ? RouteTarget.domainAgent(
                         domainAgentId(binding),
                         "runtime-binding",
                         1.0,
                         "active domain agent binding")
-                : pinnedDomainExpert
+                : domainExpert
                         ? RouteTarget.domainExpertRuntime(
                                 "runtime-binding",
                                 1.0,
                                 "active pinned domain expert binding",
                                 runtimeBindingService.runtimeRoleName(binding),
-                                runtimeBindingService.runtimeRoleName(binding))
-                        : RouteTarget.agentRuntime(
-                        "runtime-binding",
-                        1.0,
-                        "active relay runtime binding",
-                        runtimeBindingService.runtimeProfile(binding),
-                        runtimeBindingService.runtimeRoleName(binding));
+                                firstText(metadataText(binding, IntentExpertContext.INVOCATION_SKILL_ID_KEY),
+                                        runtimeBindingService.runtimeRoleName(binding)))
+                        : new RouteTarget(
+                                RouteType.AGENT_RUNTIME,
+                                null,
+                                "runtime-binding",
+                                1.0,
+                                "active relay runtime binding",
+                                runtimeBindingService.runtimeProfile(binding),
+                                runtimeBindingService.runtimeRoleName(binding),
+                                com.huawei.it.ex.one.domain.routing.RelayOutputMode.FULL_STREAM,
+                                metadataText(binding, IntentExpertContext.INVOCATION_SKILL_ID_KEY));
         preparation.bindingRef().set(binding);
         preparation.routeRef().set(route);
         preparation.runtimeSessionModeRef().set(RuntimeSessionMode.RESUME);
@@ -308,7 +333,11 @@ final class RouteResolutionCoordinator {
                     request.runtimeBindingLeafId(),
                     route.selectedAgentCode(),
                     route.routeSource(),
-                    domainAgentBindingMetadata(route, intent),
+                    domainAgentBindingMetadata(
+                            route,
+                            intent,
+                            request.runCommand() == null ? Map.of() : request.runCommand().metadata(),
+                            request.runCommand() == null ? null : request.runCommand().intentExpertScope()),
                     request.agentMode());
             if (request.deferDomainAgentBinding()) {
                 DeferredDomainAgentBinding deferred =
@@ -330,7 +359,8 @@ final class RouteResolutionCoordinator {
                             request.runId(),
                             request.runtimeBindingLeafId(),
                             route.runtimeProfile(),
-                            route.runtimeRoleName()));
+                            route.runtimeRoleName()),
+                    relayBindingMetadata(route, intent, request.runCommand()));
             trackBindingResolution(request.bindingLifecycle(), resolution);
             return new BindingResolution(route, resolution.binding(), resolution.sessionMode());
         }
@@ -416,7 +446,8 @@ final class RouteResolutionCoordinator {
                 command.agentMode(),
                 command.interactionAction(),
                 command.language(),
-                command.intentAccessName());
+                command.intentAccessName(),
+                command.intentExpertScope());
     }
 
     private boolean runtimeRoute(RouteTarget route) {
@@ -426,6 +457,26 @@ final class RouteResolutionCoordinator {
 
     private RuntimeSessionMode normalizedMode(RuntimeSessionMode mode) {
         return mode == null ? RuntimeSessionMode.RESUME : mode;
+    }
+
+    Map<String, Object> relayBindingMetadata(
+            RouteTarget route,
+            IntentDecision intent,
+            ChatCommand command) {
+        IntentExpertScope intentExpertScope = command == null ? null : command.intentExpertScope();
+        if (intentExpertScope == null) {
+            return Map.of();
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        putIfNotNull(metadata, "routeSource", route == null ? null : route.routeSource());
+        putIfNotNull(metadata, IntentExpertContext.INVOCATION_SKILL_ID_KEY,
+                route == null ? null : route.invocationSkillId());
+        if (intent != null) {
+            putIfNotNull(metadata, "intentCode", intent.intentCode());
+            putIfNotNull(metadata, "intentName", intent.intentName());
+            metadata.put("intentConfidence", intent.confidence());
+        }
+        return IntentExpertContext.withScope(metadata, intentExpertScope);
     }
 
     private RouteTarget fallbackRoute() {
@@ -452,6 +503,11 @@ final class RouteResolutionCoordinator {
             return first.trim();
         }
         return fallback == null || fallback.isBlank() ? null : fallback.trim();
+    }
+
+    private String metadataText(RuntimeBinding binding, String key) {
+        Object value = binding == null || binding.metadata() == null ? null : binding.metadata().get(key);
+        return value == null || String.valueOf(value).isBlank() ? null : String.valueOf(value).trim();
     }
 
     record InitialRoutePreparation(

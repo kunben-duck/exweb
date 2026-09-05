@@ -586,6 +586,25 @@ public class SessionApplicationService implements ChatSessionFacade {
         sessionRepository.lockForMessageMutation(tenantId, userId, session.id());
     }
 
+    /** 在调用方事务内锁定并返回数据库中的最新会话快照。 */
+    ChatSession lockAndReloadForMessageMutation(String tenantId, String userId, ChatSession session) {
+        if (tenantId == null || tenantId.isBlank() || userId == null || userId.isBlank() || session == null) {
+            throw new IllegalArgumentException("会话消息写入锁参数不完整");
+        }
+        if (!tenantId.equals(session.tenantId()) || !userId.equals(session.userId())) {
+            throw new SecurityException("会话不属于当前用户");
+        }
+        return sessionRepository.lockAndFindForMessageMutation(tenantId, userId, session.id());
+    }
+
+    /** 在调用方已持有会话锁的事务内只更新会话metadata，不推进会话活动时间。 */
+    ChatSession updateMetadataWithoutTouch(ChatSession session, String metadataJson) {
+        if (session == null) {
+            throw new IllegalArgumentException("会话metadata更新缺少会话");
+        }
+        return sessionRepository.updateTitleWithoutTouch(session, session.title(), metadataJson);
+    }
+
     /** 在当前终态事务内推进最新可见 assistant 消息水位。 */
     void advanceLatestMessageSeq(UserContext user, ChatSession session, long messageSeq) {
         if (user == null || session == null || messageSeq < 0L) {

@@ -43,6 +43,7 @@ import java.util.Map;
  * @param interactionAction Interaction 专用动作；当前仅 AMBIGUOUS_ROUTE 支持 AUTO_SELECT。
  * @param language 会话标题总结语言；不进入metadata、IntentAgent或Runtime请求。
  * @param intentAccessName 可选Intent入口名称；仅进入Intent请求，空值回退服务端配置。
+ * @param intentExpertScope 服务端确认的聚合意图专家范围；不进入下游Runtime metadata。
  */
 public record ChatCommand(
         String commandId,
@@ -70,8 +71,23 @@ public record ChatCommand(
         AgentModeProfile agentMode,
         String interactionAction,
         String language,
-        String intentAccessName
+        String intentAccessName,
+        IntentExpertScope intentExpertScope
 ) {
+    /** 兼容尚未携带聚合意图专家范围的完整命令构造器。 */
+    public ChatCommand(
+            String commandId, String tenantId, String userId, String sessionId, String conversationId,
+            String channel, String message, List<AttachmentRef> attachments, Map<String, Object> metadata,
+            String targetType, String targetId, ChatRunMode runMode, String parentMessageId,
+            String editedMessageId, String regeneratedMessageId, String routeTrigger, String interactionId,
+            Boolean approved, String scope, Map<String, Object> questionnaireAnswers, String appId, String appName,
+            AgentModeProfile agentMode, String interactionAction, String language, String intentAccessName) {
+        this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
+                targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
+                routeTrigger, interactionId, approved, scope, questionnaireAnswers, appId, appName, agentMode,
+                interactionAction, language, intentAccessName, null);
+    }
+
     /** 兼容尚未携带Intent入口名称的完整命令构造器。 */
     public ChatCommand(
             String commandId, String tenantId, String userId, String sessionId, String conversationId,
@@ -83,7 +99,7 @@ public record ChatCommand(
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
                 routeTrigger, interactionId, approved, scope, questionnaireAnswers, appId, appName, agentMode,
-                interactionAction, language, null);
+                interactionAction, language, null, null);
     }
 
     /** 兼容尚未携带标题总结语言的完整命令构造器。 */
@@ -97,7 +113,7 @@ public record ChatCommand(
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
                 routeTrigger, interactionId, approved, scope, questionnaireAnswers, appId, appName, agentMode,
-                interactionAction, null, null);
+                interactionAction, null, null, null);
     }
 
     /** 兼容尚未携带 Interaction 动作的完整命令构造器。 */
@@ -111,7 +127,7 @@ public record ChatCommand(
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
                 routeTrigger, interactionId, approved, scope, questionnaireAnswers, appId, appName, agentMode,
-                null, null, null);
+                null, null, null, null);
     }
 
     /** 兼容尚未携带 Agent 模式的完整命令构造器。 */
@@ -124,7 +140,7 @@ public record ChatCommand(
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
                 routeTrigger, interactionId, approved, scope, questionnaireAnswers, appId, appName,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     /** 兼容尚未携带 App Tag 的完整命令构造器。 */
@@ -137,7 +153,7 @@ public record ChatCommand(
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
                 routeTrigger, interactionId, approved, scope, questionnaireAnswers,
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
     }
 
     /**
@@ -147,7 +163,8 @@ public record ChatCommand(
                        String channel, String message, List<AttachmentRef> attachments, Map<String, Object> metadata) {
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 null, null,
-                ChatRunMode.NEXT, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
+                ChatRunMode.NEXT, null, null, null, null, null, null, null, null, null, null, null, null, null,
+                null, null);
     }
 
     /**
@@ -158,7 +175,7 @@ public record ChatCommand(
                        ChatRunMode runMode, String parentMessageId, String editedMessageId, String regeneratedMessageId) {
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 null, null, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
-                null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -170,7 +187,7 @@ public record ChatCommand(
                        String editedMessageId, String regeneratedMessageId) {
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
-                null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -182,7 +199,7 @@ public record ChatCommand(
                        String editedMessageId, String regeneratedMessageId, String routeTrigger) {
         this(commandId, tenantId, userId, sessionId, conversationId, channel, message, attachments, metadata,
                 targetType, targetId, runMode, parentMessageId, editedMessageId, regeneratedMessageId,
-                routeTrigger, null, null, null, null, null, null, null, null, null, null);
+                routeTrigger, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     public ChatCommand {
@@ -217,6 +234,16 @@ public record ChatCommand(
         if (appName != null && appName.length() > 256) {
             throw new IllegalArgumentException("appName 长度不能超过 256");
         }
+    }
+
+    /** 返回携带服务端可信聚合意图专家范围的命令副本。 */
+    public ChatCommand withIntentExpertScope(IntentExpertScope nextScope) {
+        return new ChatCommand(
+                commandId, tenantId, userId, sessionId, conversationId, channel, message,
+                attachments, metadata, targetType, targetId, runMode, parentMessageId,
+                editedMessageId, regeneratedMessageId, routeTrigger, interactionId, approved,
+                scope, questionnaireAnswers, appId, appName, agentMode, interactionAction,
+                language, nextScope == null ? intentAccessName : nextScope.intentAccessName(), nextScope);
     }
 
     private static String normalizeTag(String value) {

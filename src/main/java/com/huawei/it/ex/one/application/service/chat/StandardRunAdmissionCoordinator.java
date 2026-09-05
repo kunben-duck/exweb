@@ -7,6 +7,7 @@ package com.huawei.it.ex.one.application.service.chat;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService.AdmissionCancellation;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMessagePlan;
+import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 
 import java.util.List;
 
@@ -81,21 +82,29 @@ final class StandardRunAdmissionCoordinator {
             sessionTitleService.schedule(
                     prepared.user(), prepared.command(), prepared.session(), messagePlan, run);
         }
-        return new Admission(messagePlan, run, result.bindingCancellations());
+        return new Admission(messagePlan, run, result.restorableAdmissionCancellations(),
+                result.intentExpertScope(), result.emitIntentExpertSelection());
     }
 
     record Admission(
             ChatRunMessagePlan messagePlan,
             ChatRun run,
-            List<AdmissionCancellation> bindingCancellations) {
+            List<AdmissionCancellation> restorableAdmissionCancellations,
+            IntentExpertScope intentExpertScope,
+            boolean emitIntentExpertSelection) {
         Admission {
-            bindingCancellations = bindingCancellations == null
+            restorableAdmissionCancellations = restorableAdmissionCancellations == null
                     ? List.of()
-                    : List.copyOf(bindingCancellations);
+                    : List.copyOf(restorableAdmissionCancellations);
         }
 
         Admission(ChatRunMessagePlan messagePlan, ChatRun run) {
-            this(messagePlan, run, List.of());
+            this(messagePlan, run, List.of(), null, false);
+        }
+
+        Admission(ChatRunMessagePlan messagePlan, ChatRun run,
+                  List<AdmissionCancellation> bindingCancellations) {
+            this(messagePlan, run, bindingCancellations, null, false);
         }
     }
 }

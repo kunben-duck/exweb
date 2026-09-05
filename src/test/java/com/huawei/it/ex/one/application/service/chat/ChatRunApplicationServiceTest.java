@@ -10,6 +10,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
+import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunCache;
@@ -28,6 +29,7 @@ import com.huawei.it.ex.one.domain.chat.ChatRunCancelSignal;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
+import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
 import com.huawei.it.ex.one.domain.chat.RunCompletedEvent;
@@ -267,6 +269,30 @@ class ChatRunApplicationServiceTest {
         assertThat(status.interactionId()).isNull();
         assertThat(status.interactionType()).isNull();
         assertThat(status.assistantMessageId()).isNull();
+    }
+
+    @Test
+    void streamStatusReturnsSelectedIntentExpertFromOwnedSession() {
+        IntentExpertScope scope = new IntentExpertScope("expert-a", "专家A", "expert_a_entry");
+        SessionRepository sessions = new FixedSessionRepository() {
+            @Override
+            public Optional<ChatSession> findByTenantIdAndUserIdAndId(
+                    String tenantId, String userId, String sessionId) {
+                Instant now = Instant.now();
+                return Optional.of(new ChatSession(
+                        sessionId, tenantId, userId, "title", "ACTIVE", "web",
+                        null, sessionId, null, null, 0L,
+                        IntentExpertContext.replaceSessionMetadata(null, scope), now, now));
+            }
+        };
+        ChatRunApplicationService service = new ChatRunApplicationService(
+                new InMemoryRunRepository(), new InMemoryRunCache(), new InMemoryEventStore(0L),
+                new PermissionChecker(), sessions);
+
+        var status = service.streamStatus(user(), "session1");
+
+        assertThat(status.selectedExpert()).isEqualTo(scope);
+        assertThat(status.activeRunId()).isNull();
     }
 
     @Test

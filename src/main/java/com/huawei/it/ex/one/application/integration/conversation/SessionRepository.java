@@ -303,6 +303,17 @@ public interface SessionRepository {
     }
 
     /**
+     * 在当前事务内锁定并返回最新会话快照。
+     *
+     * <p>数据库实现应通过同一条 {@code SELECT ... FOR UPDATE}完成锁定和读取；默认实现用于
+     * 非数据库仓储，提供归属和存在性校验。</p>
+     */
+    default ChatSession lockAndFindForMessageMutation(String tenantId, String userId, String sessionId) {
+        return findByTenantIdAndUserIdAndId(tenantId, userId, sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在或不属于当前用户: " + sessionId));
+    }
+
+    /**
      * 为会话生成下一个消息树节点序号。
      *
      * @param tenantId 租户标识。

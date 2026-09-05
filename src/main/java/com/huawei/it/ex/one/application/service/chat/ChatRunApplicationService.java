@@ -5,6 +5,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
+import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.application.integration.conversation.ChatRunCache;
@@ -30,8 +31,10 @@ import com.huawei.it.ex.one.domain.chat.ChatRunStopResult;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatStreamStatus;
 import com.huawei.it.ex.one.domain.chat.ChatStreamTopics;
+import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.RelayOutputModeMetadata;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
@@ -569,7 +572,9 @@ public class ChatRunApplicationService {
      */
     public ChatStreamStatus streamStatus(UserContext user, String sessionId) {
         permissionChecker.checkChatPermission(user);
-        ensureOwnedSession(user, sessionId);
+        ChatSession session = loadOwnedNotDeletedSession(user, sessionId);
+        IntentExpertScope intentExpertScope = IntentExpertContext.fromSessionMetadata(
+                session.metadataJson()).orElse(null);
         long latestSeq = eventStore.findLatestSeqByOwnerAndSession(user.tenantId(), user.ownerUserId(), sessionId);
         Optional<ChatRun> active = findActive(user.tenantId(), user.ownerUserId(), sessionId);
         if (active.isPresent() && leaseService != null && leaseService.isLeaseExpired(active.get().id())) {
@@ -585,12 +590,15 @@ public class ChatRunApplicationService {
         long currentLatestSeq = latestSeq;
         BindingSummary bindingSummary = bindingSummary(user, sessionId);
         return active
-                .map(run -> activeStatus(sessionId, currentLatestSeq, run, bindingSummary))
-                .orElseGet(() -> waitingStatus(user, sessionId, currentLatestSeq, bindingSummary));
+                .map(run -> activeStatus(
+                        sessionId, currentLatestSeq, run, bindingSummary, intentExpertScope))
+                .orElseGet(() -> waitingStatus(
+                        user, sessionId, currentLatestSeq, bindingSummary, intentExpertScope));
     }
 
     private ChatStreamStatus activeStatus(String sessionId, long latestSeq, ChatRun run,
-                                          BindingSummary bindingSummary) {
+                                          BindingSummary bindingSummary,
+                                          IntentExpertScope intentExpertScope) {
         ActiveContinuationSummary continuation = activeContinuationSummary(run);
         return new ChatStreamStatus(sessionId, latestSeq, run.id(), run.status(),
                 ChatStreamTopics.runTopic(run.id()), run.firstSeq(), run.lastSeq(), run.cancellable(),
@@ -601,7 +609,8 @@ public class ChatRunApplicationService {
                 bindingSummary.updatedAt(), bindingSummary.agentMode(),
                 DomainAgentAsyncTaskMetadata.isAsyncRunning(run)
                         ? DomainAgentAsyncTaskMetadata.PHASE_RUNNING : null,
-                DomainAgentAsyncTaskMetadata.expiresAt(run));
+                DomainAgentAsyncTaskMetadata.expiresAt(run),
+                intentExpertScope);
     }
 
     private ActiveContinuationSummary activeContinuationSummary(ChatRun run) {
@@ -630,14 +639,15 @@ public class ChatRunApplicationService {
     }
 
     private ChatStreamStatus waitingStatus(UserContext user, String sessionId, long latestSeq,
-                                           BindingSummary bindingSummary) {
+                                           BindingSummary bindingSummary,
+                                           IntentExpertScope intentExpertScope) {
         ChatInteractionApplicationService interactionService = interactionServiceProvider == null ? null : interactionServiceProvider.getIfAvailable();
         if (interactionService == null) {
             return new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
                     false, false, null, null, null, null, null, null, null, null, null, null,
                     bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                     bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
-                    bindingSummary.updatedAt(), bindingSummary.agentMode());
+                    bindingSummary.updatedAt(), bindingSummary.agentMode(), null, null, intentExpertScope);
         }
         return interactionService.findWaiting(user, sessionId)
                 .map(request -> new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
@@ -649,12 +659,12 @@ public class ChatRunApplicationService {
                         payloadText(request, "autoActionType"),
                         bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                         bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
-                        bindingSummary.updatedAt(), bindingSummary.agentMode()))
+                        bindingSummary.updatedAt(), bindingSummary.agentMode(), null, null, intentExpertScope))
                 .orElseGet(() -> new ChatStreamStatus(sessionId, latestSeq, null, null, null, null, null,
                         false, false, null, null, null, null, null, null, null, null, null, null,
                         bindingSummary.provider(), bindingSummary.targetType(), bindingSummary.targetId(),
                         bindingSummary.intentCode(), bindingSummary.intentName(), bindingSummary.routeSource(),
-                        bindingSummary.updatedAt(), bindingSummary.agentMode()));
+                        bindingSummary.updatedAt(), bindingSummary.agentMode(), null, null, intentExpertScope));
     }
 
     private record ActiveContinuationSummary(
@@ -731,12 +741,17 @@ public class ChatRunApplicationService {
         boolean domainAgent = RuntimeBindingApplicationService.DOMAIN_AGENT_PROVIDER.equals(binding.provider());
         boolean pinnedDomainExpert = !domainAgent
                 && RuntimeProfileMetadata.isPinnedDomainExpert(metadata);
+        boolean intentExpertDomainExpert = !domainAgent
+                && IntentExpertContext.scopedDomainExpert(metadata)
+                && RuntimeProfile.DOMAIN_EXPERT.name().equals(
+                        stringValue(metadata.get(RuntimeProfileMetadata.PROFILE_KEY)));
+        boolean domainExpert = pinnedDomainExpert || intentExpertDomainExpert;
         String targetType = domainAgent
                 ? "DOMAIN_AGENT"
-                : pinnedDomainExpert ? "DOMAIN_EXPERT" : "AGENT_RUNTIME";
+                : domainExpert ? "DOMAIN_EXPERT" : "AGENT_RUNTIME";
         String targetId = domainAgent
                 ? stringValue(metadata.get("domainAgentId"))
-                : pinnedDomainExpert ? stringValue(metadata.get(RuntimeProfileMetadata.ROLE_NAME_KEY)) : null;
+                : domainExpert ? stringValue(metadata.get(RuntimeProfileMetadata.ROLE_NAME_KEY)) : null;
         return new BindingSummary(
                 binding.provider(),
                 targetType,

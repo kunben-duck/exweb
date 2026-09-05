@@ -398,7 +398,8 @@ final class RouteSwitchContinuationCoordinator {
                 request.agentMode(),
                 null,
                 null,
-                request.intentAccessName());
+                request.intentAccessName(),
+                null);
     }
 
     private Map<String, Object> responseMetadata(ChatInteractionClaimResult claim) {

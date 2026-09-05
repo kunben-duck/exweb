@@ -4,13 +4,16 @@
 
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.integration.agent.IntentExpertSelectionPayload;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.service.runtime.DeferredDomainAgentBinding;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatRunMessagePlan;
+import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
@@ -49,14 +52,14 @@ final class StandardRunRuntimeCoordinator {
             StandardRunInputPreparer.PreparedRun prepared,
             StandardRunAdmissionCoordinator.Admission admission) {
         ChatCommand runCommand = commandForExecution(
-                prepared.command(), admission.messagePlan());
+                prepared.command(), admission.messagePlan(), admission.intentExpertScope());
         String currentRouteQuery = clarificationAssembler.routeMemoryQuery(
                 admission.messagePlan(), null);
         String intentQuery = IntentClarificationContextAssembler.answerWithAttachments(
                 runCommand.message(), prepared.attachments());
         String runtimeBindingLeafId = runtimeBindingLeafId(admission.messagePlan());
         RuntimeBindingDispatchLifecycle bindingLifecycle = new RuntimeBindingDispatchLifecycle();
-        bindingLifecycle.trackAdmissionCancellations(admission.bindingCancellations());
+        bindingLifecycle.trackAdmissionCancellations(admission.restorableAdmissionCancellations());
         return new RuntimePlan(
                 prepared,
                 admission,
@@ -106,7 +109,7 @@ final class StandardRunRuntimeCoordinator {
                         plan.pendingInteractionPayloadRef(),
                         plan.deferredDomainAgentBindingRef(),
                         plan.pendingRouteMemoryDecisionRef());
-                return runtimeDispatchCoordinator.execute(request, () -> routeResolutionCoordinator.prepareInitial(
+                Flux<ChatEvent> runtimeEvents = runtimeDispatchCoordinator.execute(request, () -> routeResolutionCoordinator.prepareInitial(
                         new RouteResolutionCoordinator.InitialRoutePreparation(
                                 prepared.user(),
                                 prepared.session(),
@@ -123,6 +126,17 @@ final class StandardRunRuntimeCoordinator {
                                 plan.bindingLifecycle(),
                                 !prepared.documents().isEmpty(),
                                 plan.deferredDomainAgentBindingRef())));
+                if (!plan.admission().emitIntentExpertSelection()
+                        || plan.runCommand().intentExpertScope() == null) {
+                    return runtimeEvents;
+                }
+                return Flux.concat(
+                        Flux.just(RuntimeEvent.metadata(
+                                prepared.runId(),
+                                prepared.session().id(),
+                                IntentExpertSelectionPayload.create(
+                                        plan.runCommand().intentExpertScope()))),
+                        runtimeEvents);
             });
         } catch (RuntimeException ex) {
             RunEventPipelineContext context = pipelineContext(plan, executionClaim);
@@ -157,7 +171,8 @@ final class StandardRunRuntimeCoordinator {
 
     private ChatCommand commandForExecution(
             ChatCommand normalized,
-            ChatRunMessagePlan messagePlan) {
+            ChatRunMessagePlan messagePlan,
+            IntentExpertScope intentExpertScope) {
         ChatMessage userMessage = messagePlan.userMessage();
         return new ChatCommand(
                 normalized.commandId(),
@@ -185,7 +200,10 @@ final class StandardRunRuntimeCoordinator {
                 normalized.agentMode(),
                 normalized.interactionAction(),
                 normalized.language(),
-                normalized.intentAccessName());
+                intentExpertScope == null
+                        ? normalized.intentAccessName()
+                        : intentExpertScope.intentAccessName(),
+                intentExpertScope);
     }
 
     private String runtimeBindingLeafId(ChatRunMessagePlan messagePlan) {

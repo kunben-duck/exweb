@@ -96,6 +96,19 @@
     </select>
 
     <!--
+      按归属锁定并读取完整会话快照，供Run准入在锁后解析会话级路由状态。
+      入参: tenantId 为租户边界，userId 为用户边界，sessionId 为目标会话。
+    -->
+    <select id="findByOwnerAndIdForUpdate" resultMap="chatSessionResultMap">
+        SELECT <include refid="sessionColumns"/>
+        FROM fin_ex_chat_session_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{sessionId}
+        FOR UPDATE
+    </select>
+
+    <!--
       查询当前用户全部会话，主要用于内部批量装配或管理场景。
       入参: tenantId 为租户边界，userId 为用户边界，channel 为可选来源渠道。
     -->

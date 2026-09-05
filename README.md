@@ -1,6 +1,6 @@
 # FinanceEXChatService
 
-FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务。当前正式版本采用 DomainAgent 会话绑定：用例库、意图服务或前端显式选择命中的 `DomainAgentId` 会绑定为会话级 DomainAgent；复杂任务、未命中任务以及配置的敏感信息意图进入 Relay Delegate。Intent 的规范化 `accessName` 命中专家前缀时进入动态 Relay Domain Expert；前端也可用`targetType=DOMAIN_EXPERT`固定选择专家。普通 Relay 与动态专家正常完成后释放 active RuntimeBinding，固定专家则保持 ACTIVE 并续接。
+FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务。当前正式版本采用 DomainAgent 会话绑定：用例库、意图服务或前端显式选择命中的 `DomainAgentId` 会绑定为会话级 DomainAgent；复杂任务、未命中任务以及配置的敏感信息意图进入 Relay Delegate。Intent 的规范化 `accessName` 命中专家前缀时进入动态 Relay Domain Expert；前端也可用`targetType=DOMAIN_EXPERT`固定选择专家，或用`targetType=INTENT_EXPERT`选择带专属Intent入口的聚合专家。普通 Relay 与动态专家正常完成后释放 active RuntimeBinding，固定专家及聚合专家选中的子技能按各自生命周期续接。
 
 ## 核心链路
 
@@ -16,6 +16,7 @@ FinanceEXChatService 是 FinanceEX 前台聊天入口和 SuperAgent 主控服务
     -> 无 active RuntimeBinding：读取可选路由信号
         -> 前端 targetType=DOMAIN_AGENT：绑定并调用指定 DomainAgent
         -> 前端 targetType=DOMAIN_EXPERT：固定并调用指定 Relay 专家
+        -> 前端 targetType=INTENT_EXPERT：使用父专家专属 Intent 入口选择并绑定子技能
         -> 用例库/意图服务命中 DomainAgentId：绑定并调用对应 DomainAgent
         -> Intent accessName 精确命中敏感信息配置：使用 Relay Delegate
         -> Intent accessName 命中专家前缀：解析动态 roleName 后使用 Relay Domain Expert
@@ -213,6 +214,15 @@ DomainAgent binding，历史 `RESUMABLE` Relay session 保留。
 前端可选传 `selectedIntent={intentId?,intentName}` 作为历史展示摘要；对象存在时 `intentName` 必填，且只能与
 `targetType=DOMAIN_AGENT/DOMAIN_EXPERT,targetId=...` 同时使用。该摘要会写入 RuntimeBinding，并在后续自动续接该 binding 时继续返回，
 但不参与路由、鉴权、RouteMemory 或意图统计，也不会进入 run metadata、用例库、IntentAgent 或 Runtime 请求。
+
+`targetType=INTENT_EXPERT`用于选择聚合意图父专家。首次选择或从专家A切换到专家B时必须同时提交
+`targetId`、`selectedExpert={expertId,expertName}`和父专家专属`intentAccessName`；`expertId`必须等于
+`targetId`。服务端在会话锁内保存该范围、取消旧专家的ACTIVE子Binding并受理Run，随后跳过用例库，
+只通过该专家的Intent入口选择DomainAgent、Relay Domain Expert或Delegate子技能。后续普通轮次无需重传
+专家参数：存在ACTIVE子Binding时直接续接，否则仍使用保存的父专家入口重新意图；`forceReroute=true`
+只清除当前子Binding并在同一父专家范围内重新选择。显式选择普通DomainAgent或固定Relay专家会退出父专家
+范围。子DomainAgent和子Relay专家正常完成后保持ACTIVE，Delegate仍转为RESUMABLE；不同父专家及通用
+路由的Binding不会交叉复用。`stream-status.selectedExpert`返回当前父专家，assistant `skillId`仍是实际子技能。
 DomainAgent 下游请求体会把 `metadata` 作为业务扩展，但服务端保留字段 `runId/messageId/skillId/query/sessionId`
 始终以绑定的 DomainAgentId、本轮用户问题和 RuntimeBinding.runtimeSessionId 为准，前端传同名字段也不会覆盖。
 `metadata.sceneParam.docList` 作为下游业务参数只校验基本结构，不要求与 `attachments[]` 匹配；其中引用的资源权限

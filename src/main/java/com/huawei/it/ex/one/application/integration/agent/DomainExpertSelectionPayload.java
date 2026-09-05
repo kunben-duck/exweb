@@ -38,6 +38,10 @@ public final class DomainExpertSelectionPayload {
         payload.put("routeSource", normalizedRouteSource);
         putIfPresent(payload, "intentId", intentId);
         putIfPresent(payload, "intentName", intentName);
+        Map<String, Object> sourceExpert = IntentExpertContext.sourceExpert(bindingMetadata);
+        if (!sourceExpert.isEmpty()) {
+            payload.put("sourceExpert", sourceExpert);
+        }
         payload.put("intentResult", Map.copyOf(intentResult));
         return Map.copyOf(payload);
     }

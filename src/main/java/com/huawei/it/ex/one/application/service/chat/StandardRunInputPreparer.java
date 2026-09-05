@@ -241,7 +241,8 @@ final class StandardRunInputPreparer {
                 command.agentMode(),
                 command.interactionAction(),
                 command.language(),
-                command.intentAccessName());
+                command.intentAccessName(),
+                command.intentExpertScope());
     }
 
     private ChatCommand normalizedCommand(
@@ -276,7 +277,8 @@ final class StandardRunInputPreparer {
                 identified.agentMode(),
                 identified.interactionAction(),
                 identified.language(),
-                identified.intentAccessName());
+                identified.intentAccessName(),
+                identified.intentExpertScope());
     }
 
     private String nextMessageWithAttachments(
@@ -314,9 +316,11 @@ final class StandardRunInputPreparer {
             type = ExplicitRuntimeTarget.Type.DOMAIN_AGENT;
         } else if ("DOMAIN_EXPERT".equalsIgnoreCase(targetType)) {
             type = ExplicitRuntimeTarget.Type.DOMAIN_EXPERT;
+        } else if ("INTENT_EXPERT".equalsIgnoreCase(targetType)) {
+            type = ExplicitRuntimeTarget.Type.INTENT_EXPERT;
         } else {
             throw new IllegalArgumentException(
-                    "targetType 仅支持 DOMAIN_AGENT/DOMAIN_EXPERT，当前值: " + targetType);
+                    "targetType 仅支持 DOMAIN_AGENT/DOMAIN_EXPERT/INTENT_EXPERT，当前值: " + targetType);
         }
         String targetId = command.targetId();
         if (targetId == null || targetId.isBlank()) {

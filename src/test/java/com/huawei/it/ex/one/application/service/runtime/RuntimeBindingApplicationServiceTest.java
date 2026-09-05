@@ -8,6 +8,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
+import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
@@ -17,6 +18,7 @@ import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingReposi
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
+import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.chat.MessageCompletedEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
@@ -693,6 +695,96 @@ class RuntimeBindingApplicationServiceTest {
         assertThat(completed.runtimeSessionId()).isEqualTo("runtime-expert-1");
         assertThat(completed.leafMessageId()).isEqualTo("leaf2");
         assertThat(completed.metadata()).containsEntry(RuntimeProfileMetadata.RELAY_EXPERT_PINNED_KEY, true);
+    }
+
+    @Test
+    void completedIntentExpertChildDomainExpertBindingStaysActive() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        Map<String, Object> metadata = IntentExpertContext.withScope(
+                RuntimeProfileMetadata.bindingMetadata(
+                        RuntimeProfile.DOMAIN_EXPERT, "delegate", "domain_expert", "tax-analysis"),
+                new IntentExpertScope("tax-expert", "税务专家", "tax_entry"));
+        RuntimeBinding active = binding(RuntimeBindingStatus.ACTIVE)
+                .withRuntimeSessionId("runtime-expert-1")
+                .withMetadata(metadata);
+        repository.saved = active;
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        RuntimeBinding completed = service.completeAfterRun(active, "run2", "leaf2");
+
+        assertThat(completed.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
+        assertThat(completed.runtimeSessionId()).isEqualTo("runtime-expert-1");
+        assertThat(completed.leafMessageId()).isEqualTo("leaf2");
+        assertThat(IntentExpertContext.fromMetadata(completed.metadata()))
+                .contains(new IntentExpertScope("tax-expert", "税务专家", "tax_entry"));
+    }
+
+    @Test
+    void completedIntentExpertDelegateBindingRemainsResumable() {
+        InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        Map<String, Object> metadata = IntentExpertContext.withScope(
+                RuntimeProfileMetadata.bindingMetadata(
+                        RuntimeProfile.DELEGATE, "delegate", "domain_expert", null),
+                new IntentExpertScope("tax-expert", "税务专家", "tax_entry"));
+        RuntimeBinding active = binding(RuntimeBindingStatus.ACTIVE)
+                .withRuntimeSessionId("runtime-delegate-1")
+                .withMetadata(metadata);
+        repository.saved = active;
+        RuntimeBindingApplicationService service = service(repository, cache);
+
+        RuntimeBinding completed = service.completeAfterRun(active, "run2", "leaf2");
+
+        assertThat(completed.status()).isEqualTo(RuntimeBindingStatus.RESUMABLE);
+        assertThat(completed.runtimeSessionId()).isEqualTo("runtime-delegate-1");
+        assertThat(IntentExpertContext.fromMetadata(completed.metadata()))
+                .contains(new IntentExpertScope("tax-expert", "税务专家", "tax_entry"));
+    }
+
+    @Test
+    void relayProfileResumeIsIsolatedByIntentExpertIdentity() {
+        Instant now = Instant.now();
+        Map<String, Object> profile = RuntimeProfileMetadata.bindingMetadata(
+                RuntimeProfile.DOMAIN_EXPERT, "delegate", "domain_expert", "tax-analysis");
+        IntentExpertScope scopeA = new IntentExpertScope("expert-a", "专家A", "expert_a_entry");
+        IntentExpertScope scopeB = new IntentExpertScope("expert-b", "专家B", "expert_b_entry");
+        RuntimeBinding bindingA = new RuntimeBinding(
+                "binding-a", "t", "u", "s", "relay", "leaf-a", "runtime-a",
+                RuntimeBindingStatus.RESUMABLE, "run-a", null, now.minusSeconds(2), now.minusSeconds(2),
+                IntentExpertContext.withScope(profile, scopeA));
+        RuntimeBinding bindingB = new RuntimeBinding(
+                "binding-b", "t", "u", "s", "relay", "leaf-b", "runtime-b",
+                RuntimeBindingStatus.RESUMABLE, "run-b", null, now.minusSeconds(1), now.minusSeconds(1),
+                IntentExpertContext.withScope(profile, scopeB));
+        RuntimeBinding global = new RuntimeBinding(
+                "binding-global", "t", "u", "s", "relay", "leaf-global", "runtime-global",
+                RuntimeBindingStatus.RESUMABLE, "run-global", null, now, now, profile);
+        MultiBindingRepository repository = new MultiBindingRepository(List.of(bindingA, bindingB, global));
+        RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(
+                repository, new InMemoryRuntimeBindingCache(), new FixedIdGenerator(),
+                Duration.ofDays(3), "relay");
+        RuntimeBindingApplicationService.ProfiledRunBindingRequest request =
+                new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                        "t", "u", "s", "run-next", "leaf-next",
+                        RuntimeProfile.DOMAIN_EXPERT, "tax-analysis");
+
+        RuntimeBindingResolution scoped = service.resolveForProfile(
+                request, IntentExpertContext.withScope(Map.of(), scopeB));
+
+        assertThat(scoped.sessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
+        assertThat(scoped.binding().id()).isEqualTo("binding-b");
+        assertThat(scoped.binding().runtimeSessionId()).isEqualTo("runtime-b");
+
+        RuntimeBindingResolution unscoped = service.resolveForProfile(
+                new RuntimeBindingApplicationService.ProfiledRunBindingRequest(
+                        "t", "u", "s", "run-global-next", "leaf-global-next",
+                        RuntimeProfile.DOMAIN_EXPERT, "tax-analysis"),
+                Map.of());
+
+        assertThat(unscoped.sessionMode()).isEqualTo(RuntimeSessionMode.RESUME);
+        assertThat(unscoped.binding().id()).isEqualTo("binding-global");
+        assertThat(unscoped.binding().runtimeSessionId()).isEqualTo("runtime-global");
     }
 
     @Test

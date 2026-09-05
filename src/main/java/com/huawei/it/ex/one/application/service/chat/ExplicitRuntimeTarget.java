@@ -24,9 +24,14 @@ record ExplicitRuntimeTarget(Type type, String targetId) {
         return type == Type.DOMAIN_EXPERT;
     }
 
+    boolean intentExpert() {
+        return type == Type.INTENT_EXPERT;
+    }
+
     enum Type {
         DOMAIN_AGENT,
-        DOMAIN_EXPERT
+        DOMAIN_EXPERT,
+        INTENT_EXPERT
     }
 
     private static String normalize(String value) {

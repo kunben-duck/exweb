@@ -43,9 +43,23 @@ final class ChatRunAdmissionCoordinator {
             StandardAdmission request) {
         ChatRunAdmissionCommitService service = commitService;
         if (service == null) {
+            if (request.explicitRuntimeTarget() != null
+                    && request.explicitRuntimeTarget().intentExpert()) {
+                throw new IllegalStateException("聚合意图专家需要事务化Run admission");
+            }
             return legacyStandardAdmission(request);
         }
-        if (request.directRuntimeWaitBypass()) {
+        if (request.explicitRuntimeTarget() != null
+                && request.explicitRuntimeTarget().intentExpert()) {
+            return service.commitIntentExpert(new ChatRunAdmissionCommitService.DirectRuntimeAdmissionCommand(
+                    request.user(),
+                    request.command(),
+                    request.session(),
+                    request.runId(),
+                    request.attachments(),
+                    request.explicitRuntimeTarget()));
+        }
+        if (request.explicitRuntimeTarget() != null) {
             return service.commitDirectRuntime(new ChatRunAdmissionCommitService.DirectRuntimeAdmissionCommand(
                     request.user(),
                     request.command(),

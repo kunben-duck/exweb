@@ -76,6 +76,15 @@ public class MyBatisSessionRepository implements SessionRepository {
     }
 
     @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public ChatSession lockAndFindForMessageMutation(String tenantId, String userId, String sessionId) {
+        return Optional.ofNullable(mapper.findByOwnerAndIdForUpdate(tenantId, userId, sessionId))
+                .map(this::toDomain)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "会话不存在或不属于当前用户: " + sessionId));
+    }
+
+    @Override
     public List<ChatSession> findByTenantIdAndUserId(String tenantId, String userId) {
         return mapper.findByOwner(tenantId, userId).stream().map(this::toDomain).toList();
     }

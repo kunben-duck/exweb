@@ -27,6 +27,7 @@ import com.huawei.it.ex.one.domain.chat.ChatStreamStatus;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAgentModeDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAgentModeSelectionDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatEventDto;
+import com.huawei.it.ex.one.interfaces.chat.dto.ChatIntentExpertScopeDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatRunStartDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatRunStopDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatStreamStatusDto;
@@ -405,7 +406,13 @@ public class ChatController {
                 status.bindingUpdatedAt(),
                 toAgentModeDto(status.bindingAgentMode()),
                 status.activeRunPhase(),
-                status.asyncExpiresAt()
+                status.asyncExpiresAt(),
+                status.selectedExpert() == null
+                        ? null
+                        : new ChatIntentExpertScopeDto(
+                                status.selectedExpert().expertId(),
+                                status.selectedExpert().expertName(),
+                                status.selectedExpert().intentAccessName())
         );
     }
 

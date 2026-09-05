@@ -52,6 +52,18 @@ public interface ChatSessionMapper {
                                     @Param("sessionId") String sessionId);
 
     /**
+     * 按归属锁定并读取最新会话行。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @return 已锁定的最新会话行；不存在或不属于当前用户时为 {@code null}。
+     */
+    ChatSessionRow findByOwnerAndIdForUpdate(@Param("tenantId") String tenantId,
+                                             @Param("userId") String userId,
+                                             @Param("sessionId") String sessionId);
+
+    /**
      * 查询当前用户全部会话。
      *
      * @param tenantId 租户标识。

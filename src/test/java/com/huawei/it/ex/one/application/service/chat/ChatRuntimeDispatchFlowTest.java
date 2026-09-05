@@ -7,6 +7,7 @@ package com.huawei.it.ex.one.application.service.chat;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.it.ex.one.application.config.MemoryProperties;
+import com.huawei.it.ex.one.application.config.RouteSignalProperties;
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
 import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeCancelRequest;
@@ -14,11 +15,13 @@ import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentCancelRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentClient;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
+import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.application.integration.id.IdGenerator;
 import com.huawei.it.ex.one.application.integration.identity.ApplicationInstanceIdProvider;
 import com.huawei.it.ex.one.application.service.memory.MemoryApplicationService;
+import com.huawei.it.ex.one.application.service.routing.RouteSignalApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.AgentRuntimeExecutor;
 import com.huawei.it.ex.one.application.service.runtime.DomainAgentExecutor;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
@@ -39,14 +42,19 @@ import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.chat.MessageSnapshotEvent;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
+import com.huawei.it.ex.one.domain.intent.IntentDecision;
+import com.huawei.it.ex.one.domain.intent.TaskComplexity;
+import com.huawei.it.ex.one.domain.routing.RoutingPolicy;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
+import com.huawei.it.ex.one.domain.usecase.UseCaseMatchResult;
 import com.huawei.it.ex.one.infrastructure.runtime.relay.RelayAgentRuntime;
 import com.huawei.it.ex.one.infrastructure.runtime.relay.RelayRuntimeProtocolAdapter;
 
@@ -63,6 +71,152 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
+    @Test
+    void intentExpertScopesIntentAndKeepsItsSelectedChildBinding() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        MultiBindingRuntimeBindingRepository bindings = new MultiBindingRuntimeBindingRepository();
+        AtomicInteger useCaseCalls = new AtomicInteger();
+        AtomicInteger intentCalls = new AtomicInteger();
+        List<String> intentAccessNames = new java.util.concurrent.CopyOnWriteArrayList<>();
+        AtomicReference<DomainAgentRequest> capturedRequest = new AtomicReference<>();
+        RouteSignalApplicationService routeService = new RouteSignalApplicationService(
+                request -> {
+                    useCaseCalls.incrementAndGet();
+                    return UseCaseMatchResult.notMatched("not matched");
+                },
+                intentAgent((command, memory, user) -> {
+                    intentCalls.incrementAndGet();
+                    intentAccessNames.add(command.intentAccessName());
+                    String childSkill = "expert_b_entry".equals(command.intentAccessName())
+                            ? "child-b"
+                            : "child-a";
+                    return new IntentDecision(
+                            "intent-" + childSkill,
+                            "子技能" + childSkill,
+                            TaskComplexity.SIMPLE,
+                            0.99,
+                            true,
+                            childSkill,
+                            Map.of("routeAction", "ROUTE_SINGLE", "intentId", "intent-" + childSkill),
+                            List.of(),
+                            Map.of());
+                }),
+                new RoutingPolicy(0.85),
+                new RouteSignalProperties(true, true));
+        DomainAgentClient domainClient = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                capturedRequest.set(request);
+                return Flux.just(MessageSnapshotEvent.of(
+                        request.runId(), request.sessionId(), "answer from " + request.domainAgentId()));
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions, messages, runs, events, routeService, domainClient, noopRuntime(), bindings,
+                new com.huawei.it.ex.one.application.config.DomainAgentProperties());
+        UserContext user = new UserContext("tenant1", "user1", "User One");
+        IntentExpertScope expertA = new IntentExpertScope("expert-a", "专家A", "expert_a_entry");
+
+        List<ChatEvent> first = service.executeRun(user, new ChatCommand(
+                        "cmd-parent-a", null, null, null, null, "web", "查询税务风险",
+                        List.of(), Map.of("scene", "tax"), "INTENT_EXPERT", "expert-a",
+                        ChatRunMode.NEXT, null, null, null).withIntentExpertScope(expertA))
+                .collectList().block();
+
+        assertThat(first).isNotNull();
+        assertThat(indexOfEvent(first, "runtime.metadata", "selectedIntentExpert")).isEqualTo(1);
+        assertThat(first)
+                .filteredOn(event -> "intent-result".equals(event.payload().get("sourceType")))
+                .singleElement()
+                .satisfies(event -> assertThat(event.payload().get("sourceExpert"))
+                        .isEqualTo(IntentExpertContext.sourceExpert(expertA)));
+        assertThat(first)
+                .filteredOn(event -> "selectedDomainAgent".equals(event.payload().get("sourceType")))
+                .singleElement()
+                .satisfies(event -> assertThat(event.payload().get("sourceExpert"))
+                        .isEqualTo(IntentExpertContext.sourceExpert(expertA)));
+        assertThat(useCaseCalls).hasValue(0);
+        assertThat(intentCalls).hasValue(1);
+        assertThat(intentAccessNames).containsExactly("expert_a_entry");
+        assertThat(capturedRequest.get().domainAgentId()).isEqualTo("child-a");
+        assertThat(capturedRequest.get().metadata()).containsExactlyEntriesOf(Map.of("scene", "tax"));
+        RuntimeBinding childA = bindings.bindingsForProvider("domain-agent").getFirst();
+        assertThat(IntentExpertContext.fromMetadata(childA.metadata())).contains(expertA);
+
+        String sessionId = runs.runs.values().stream().findFirst().orElseThrow().sessionId();
+        service.executeRun(user, new ChatCommand(
+                        "cmd-parent-next", null, null, sessionId, null, "web", "继续查询",
+                        List.of(), Map.of()))
+                .collectList().block();
+
+        assertThat(intentCalls).hasValue(1);
+        assertThat(capturedRequest.get().domainAgentId()).isEqualTo("child-a");
+        assertThat(bindings.bindingsForProvider("domain-agent"))
+                .filteredOn(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
+                .singleElement()
+                .extracting(RuntimeBinding::id)
+                .isEqualTo(childA.id());
+
+        IntentExpertScope renamedExpertA = new IntentExpertScope(
+                "expert-a", "专家A新名称", "expert_a_entry");
+        List<ChatEvent> renamed = service.executeRun(user, new ChatCommand(
+                        "cmd-parent-a-renamed", null, null, sessionId, null, "web", "继续查询",
+                        List.of(), Map.of(), "INTENT_EXPERT", "expert-a",
+                        ChatRunMode.NEXT, null, null, null).withIntentExpertScope(renamedExpertA))
+                .collectList().block();
+
+        assertThat(renamed).isNotNull();
+        assertThat(renamed)
+                .noneMatch(event -> "selectedIntentExpert".equals(event.payload().get("sourceType")));
+        assertThat(intentCalls).hasValue(1);
+        assertThat(IntentExpertContext.fromSessionMetadata(
+                sessions.sessions.get(sessionId).metadataJson())).contains(renamedExpertA);
+
+        service.executeRun(user, new ChatCommand(
+                        "cmd-parent-reroute", null, null, sessionId, null, "web", "重新选择子技能",
+                        List.of(), Map.of(), null, null,
+                        ChatRunMode.NEXT, null, null, null, "user_correction"))
+                .collectList().block();
+
+        assertThat(intentCalls).hasValue(2);
+        assertThat(intentAccessNames).containsExactly("expert_a_entry", "expert_a_entry");
+        assertThat(bindings.bindingsForProvider("domain-agent"))
+                .filteredOn(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
+                .singleElement()
+                .satisfies(binding -> assertThat(IntentExpertContext.fromMetadata(binding.metadata()))
+                        .contains(renamedExpertA));
+
+        IntentExpertScope expertB = new IntentExpertScope("expert-b", "专家B", "expert_b_entry");
+        service.executeRun(user, new ChatCommand(
+                        "cmd-parent-b", null, null, sessionId, null, "web", "改用专家B",
+                        List.of(), Map.of(), "INTENT_EXPERT", "expert-b",
+                        ChatRunMode.NEXT, null, null, null).withIntentExpertScope(expertB))
+                .collectList().block();
+
+        assertThat(intentCalls).hasValue(3);
+        assertThat(intentAccessNames).containsExactly(
+                "expert_a_entry", "expert_a_entry", "expert_b_entry");
+        assertThat(capturedRequest.get().domainAgentId()).isEqualTo("child-b");
+        assertThat(bindings.bindingsForProvider("domain-agent"))
+                .filteredOn(binding -> binding.id().equals(childA.id()))
+                .singleElement()
+                .extracting(RuntimeBinding::status)
+                .isEqualTo(RuntimeBindingStatus.CANCELLED);
+        assertThat(bindings.bindingsForProvider("domain-agent"))
+                .filteredOn(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
+                .singleElement()
+                .satisfies(binding -> assertThat(IntentExpertContext.fromMetadata(binding.metadata()))
+                        .contains(expertB));
+    }
+
     @Test
     void explicitDomainExpertStaysPinnedAndCanBeReplaced() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();

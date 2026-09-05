@@ -4,6 +4,7 @@
 
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalResult;
@@ -96,6 +97,7 @@ final class AmbiguousRouteContinuationCoordinator {
                                 lifecycle.metadata(interaction)));
         ChatRunMessagePlan messagePlan = admission.messagePlan();
         ChatRun run = admission.run();
+        ChatCommand routedCommand = command.withIntentExpertScope(admission.intentExpertScope());
         lifecycle.trackRun(
                 request.startAttempt(),
                 run,
@@ -114,7 +116,7 @@ final class AmbiguousRouteContinuationCoordinator {
         return executeStarted(
                 request,
                 new StartedExecution(
-                        interaction, plan, messagePlan, run, executionClaim, command, routeQuery, memory));
+                        interaction, plan, messagePlan, run, executionClaim, routedCommand, routeQuery, memory));
     }
 
     private Flux<ChatEvent> executeStarted(Request request, StartedExecution started) {
@@ -147,7 +149,9 @@ final class AmbiguousRouteContinuationCoordinator {
                 runtimeReferences.pendingRouteMemoryDecisionRef());
         RouteSignalResult routeSignal = selectionResolver.routeSignal(
                 started.plan().candidate(),
-                started.plan().routeSource());
+                started.command().intentExpertScope() == null
+                        ? started.plan().routeSource()
+                        : IntentExpertContext.ROUTE_SOURCE);
         RuntimeEvent responseEvent = interactionEventFactory.clarificationResponseEvent(
                 request.runId(),
                 request.session().id(),

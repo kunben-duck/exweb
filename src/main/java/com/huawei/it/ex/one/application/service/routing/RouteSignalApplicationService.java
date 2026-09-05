@@ -6,6 +6,7 @@ package com.huawei.it.ex.one.application.service.routing;
 
 import com.huawei.it.ex.one.application.config.IntentFailureStrategy;
 import com.huawei.it.ex.one.application.config.RouteSignalProperties;
+import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.application.integration.intent.IntentAgentRouteFrame;
 import com.huawei.it.ex.one.application.integration.intent.IntentAgentRouteRequest;
@@ -141,7 +142,8 @@ public class RouteSignalApplicationService {
         ChatCommand command = request.command();
         List<AttachmentRef> attachments = request.attachments();
         MemoryContext memory = request.memory();
-        if (properties.useCaseLibraryEnabled()) {
+        if ((command == null || command.intentExpertScope() == null)
+                && properties.useCaseLibraryEnabled()) {
             return Flux.just(RouteSignalFrame.progress(progress("use_case_matching",
                             "正在匹配可用能力", Map.of())))
                     .concatWith(Mono.fromCallable(() -> routingPolicy.decideFromUseCase(
@@ -185,8 +187,11 @@ public class RouteSignalApplicationService {
                     });
         }
 
-        return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(RouteTarget.agentRuntime("route-signal", 0.0,
-                "use case library and intent service disabled or not matched"))));
+        RouteTarget fallback = scopedRoute(
+                RouteTarget.agentRuntime("route-signal", 0.0,
+                        "use case library and intent service disabled or not matched"),
+                command);
+        return Flux.just(RouteSignalFrame.result(RouteSignalResult.of(fallback)));
     }
 
     private ChatCommand commandWithMessage(ChatCommand command, String message) {
@@ -199,7 +204,7 @@ public class RouteSignalApplicationService {
                 command.editedMessageId(), command.regeneratedMessageId(), command.routeTrigger(),
                 command.interactionId(), command.approved(), command.scope(), command.questionnaireAnswers(),
                 command.appId(), command.appName(), command.agentMode(), command.interactionAction(),
-                command.language(), command.intentAccessName());
+                command.language(), command.intentAccessName(), command.intentExpertScope());
     }
 
     private Flux<RouteSignalFrame> toRouteSignalFrames(IntentRouteRequest request, MemoryContext intentMemory,
@@ -252,7 +257,9 @@ public class RouteSignalApplicationService {
                     result.intentSessionId(),
                     result.intentRequestId())));
         }
-        RouteTarget route = routingPolicy.decideFromIntent(request.command(), intentMemory, intent, request.user());
+        RouteTarget route = scopedRoute(
+                routingPolicy.decideFromIntent(request.command(), intentMemory, intent, request.user()),
+                request.command());
         RouteSignalResult routeResult = RouteSignalResult.ofIntent(route,
                 intent, latencyMs, routingPolicy.intentConfidenceThreshold());
         return intentResultAndRouteFrames(request, routeResult, intent, latencyMs,
@@ -267,6 +274,7 @@ public class RouteSignalApplicationService {
                 ? RouteTarget.agentRuntime(IntentAgentRuntime.PROVIDER, 0.0,
                 "intent routing failed, fallback to relay")
                 : null;
+        route = scopedRoute(route, request.command());
         RouteSignalResult routeResult = RouteSignalResult.intentFailure(
                 route, failureIntent, latencyMs, routingPolicy.intentConfidenceThreshold(),
                 new RouteSignalResult.IntentFailure(strategy, reason));
@@ -314,6 +322,10 @@ public class RouteSignalApplicationService {
         payload.put("routeAction", blankToDefault(routeAction, "UNKNOWN"));
         payload.put("routeTrigger", request.routeTrigger() == null ? "" : request.routeTrigger());
         payload.put("latencyMs", latencyMs);
+        if (request.command() != null && request.command().intentExpertScope() != null) {
+            payload.put("sourceExpert", IntentExpertContext.sourceExpert(
+                    request.command().intentExpertScope()));
+        }
         if (intent != null) {
             payload.put("intentCode", blankToDefault(intent.intentCode(), ""));
             payload.put("intentId", blankToDefault(firstText(intent.slots().get("intentId"), intent.intentCode()), ""));
@@ -343,6 +355,22 @@ public class RouteSignalApplicationService {
             }
         }
         return RuntimeEvent.progress(request.runId(), request.session().id(), Map.copyOf(payload));
+    }
+
+    private RouteTarget scopedRoute(RouteTarget route, ChatCommand command) {
+        if (route == null || command == null || command.intentExpertScope() == null) {
+            return route;
+        }
+        return new RouteTarget(
+                route.type(),
+                route.selectedAgentCode(),
+                IntentExpertContext.ROUTE_SOURCE,
+                route.score(),
+                route.reason(),
+                route.runtimeProfile(),
+                route.runtimeRoleName(),
+                route.relayOutputMode(),
+                route.invocationSkillId());
     }
 
     private Flux<RouteSignalFrame> intentResultAndRouteFrames(IntentRouteRequest request, RouteSignalResult routeResult,

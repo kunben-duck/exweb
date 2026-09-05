@@ -4,6 +4,7 @@
 
 package com.huawei.it.ex.one.application.service.chat;
 
+import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.integration.agent.MessageSkillContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDispatchState;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
@@ -27,6 +28,7 @@ import com.huawei.it.ex.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
@@ -834,7 +836,10 @@ public class ChatRunTerminalCommitService {
             return null;
         }
         if (!DOMAIN_AGENT_PROVIDER.equals(binding.provider())
-                && !RuntimeProfileMetadata.isPinnedDomainExpert(binding.metadata())) {
+                && !RuntimeProfileMetadata.isPinnedDomainExpert(binding.metadata())
+                && !(RuntimeProfile.DOMAIN_EXPERT.name().equals(
+                        String.valueOf(binding.metadata().get(RuntimeProfileMetadata.PROFILE_KEY)))
+                && IntentExpertContext.scopedDomainExpert(binding.metadata()))) {
             RuntimeBinding next = markRelaySessionEstablished(binding, binding.runtimeSessionId())
                     .withRun(context.runId(), null);
             if (leafMessageId != null && !leafMessageId.isBlank()

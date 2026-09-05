@@ -10,8 +10,10 @@ import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractio
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainExpertSelectionPayload;
+import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
+import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import reactor.core.publisher.Flux;
@@ -44,7 +46,7 @@ public class RelayAgentRuntime implements AgentRuntime, AgentRuntimeInteraction 
 
     @Override
     public Flux<ChatEvent> query(AgentRuntimeRequest request) {
-        if (RuntimeProfileMetadata.isPinnedDomainExpert(request.bindingMetadata())) {
+        if (selectedDomainExpert(request.bindingMetadata())) {
             String roleName = request.routeTarget() == null
                     ? null
                     : request.routeTarget().runtimeRoleName();
@@ -72,7 +74,7 @@ public class RelayAgentRuntime implements AgentRuntime, AgentRuntimeInteraction 
 
     @Override
     public Flux<ChatEvent> continueWithUserResponse(AgentRuntimeInteractionResponseRequest request) {
-        if (RuntimeProfileMetadata.isPinnedDomainExpert(request.runtimeMetadata())) {
+        if (selectedDomainExpert(request.runtimeMetadata())) {
             Object roleName = request.runtimeMetadata().get(RuntimeProfileMetadata.ROLE_NAME_KEY);
             Object routeSource = request.runtimeMetadata().get("routeSource");
             ChatEvent selected = RuntimeEvent.metadata(
@@ -90,5 +92,12 @@ public class RelayAgentRuntime implements AgentRuntime, AgentRuntimeInteraction 
     @Override
     public Mono<Void> cancel(AgentRuntimeCancelRequest request) {
         return protocolAdapter.cancel(request);
+    }
+
+    private boolean selectedDomainExpert(java.util.Map<String, Object> metadata) {
+        return RuntimeProfileMetadata.isPinnedDomainExpert(metadata)
+                || (IntentExpertContext.scopedDomainExpert(metadata)
+                && RuntimeProfile.DOMAIN_EXPERT.name().equals(
+                        String.valueOf(metadata.get(RuntimeProfileMetadata.PROFILE_KEY))));
     }
 }

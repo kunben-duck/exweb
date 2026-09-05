@@ -5,6 +5,7 @@
 package com.huawei.it.ex.one.application.service.runtime;
 
 import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
+import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeSessionMode;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
 import com.huawei.it.ex.one.application.integration.id.IdGenerateContext;
@@ -13,6 +14,7 @@ import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingCache;
 import com.huawei.it.ex.one.application.integration.runtime.RuntimeBindingRepository;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
+import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
 import com.huawei.it.ex.one.domain.routing.RuntimeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
@@ -159,8 +161,8 @@ public class RuntimeBindingApplicationService {
         return resolveForProfile(request, metadataOverlay);
     }
 
-    private RuntimeBindingResolution resolveForProfile(ProfiledRunBindingRequest request,
-                                                       Map<String, Object> metadataOverlay) {
+    public RuntimeBindingResolution resolveForProfile(ProfiledRunBindingRequest request,
+                                                      Map<String, Object> metadataOverlay) {
         if (request == null) {
             throw new IllegalArgumentException("ProfiledRunBindingRequest must not be null");
         }
@@ -172,10 +174,12 @@ public class RuntimeBindingApplicationService {
         Instant now = Instant.now();
         RuntimeProfileMetadata.Snapshot desiredProfile = configuredProfile(
                 request.runtimeProfile(), request.runtimeRoleName());
+        IntentExpertScope desiredIntentExpert = IntentExpertContext.fromMetadata(metadataOverlay).orElse(null);
         List<RuntimeBinding> activeBindings = repository.findActiveBySession(tenantId, userId, sessionId, runtimeProvider)
                 .stream()
                 .filter(binding -> routableForCurrentProvider(binding, now))
                 .filter(binding -> matchingProfile(binding, desiredProfile))
+                .filter(binding -> IntentExpertContext.matches(binding.metadata(), desiredIntentExpert))
                 .sorted(Comparator.comparing(RuntimeBinding::updatedAt, Comparator.nullsLast(Comparator.naturalOrder()))
                         .reversed())
                 .toList();
@@ -192,6 +196,7 @@ public class RuntimeBindingApplicationService {
                 .stream()
                 .filter(this::resumableForCurrentProvider)
                 .filter(binding -> matchingProfile(binding, desiredProfile))
+                .filter(binding -> IntentExpertContext.matches(binding.metadata(), desiredIntentExpert))
                 .sorted(Comparator.comparing(RuntimeBinding::updatedAt,
                                 Comparator.nullsLast(Comparator.naturalOrder()))
                         .reversed())
@@ -258,6 +263,30 @@ public class RuntimeBindingApplicationService {
                 .stream()
                 .filter(binding -> binding.routableAt(now))
                 .sorted(Comparator.comparing(RuntimeBinding::updatedAt, Comparator.nullsLast(Comparator.naturalOrder()))
+                        .reversed())
+                .toList();
+        if (activeBindings.isEmpty()) {
+            return Optional.empty();
+        }
+        RuntimeBinding selected = activeBindings.getFirst();
+        cancelDuplicateBindings(activeBindings, selected);
+        cache.put(selected);
+        return Optional.of(selected);
+    }
+
+    /** 查询与当前聚合意图专家范围严格匹配的active子Binding。 */
+    public Optional<RuntimeBinding> findActiveBySessionInIntentExpertScope(
+            String tenantId,
+            String userId,
+            String sessionId,
+            IntentExpertScope scope) {
+        Instant now = Instant.now();
+        List<RuntimeBinding> activeBindings = repository.findActiveBySession(tenantId, userId, sessionId)
+                .stream()
+                .filter(binding -> binding.routableAt(now))
+                .filter(binding -> IntentExpertContext.matches(binding.metadata(), scope))
+                .sorted(Comparator.comparing(RuntimeBinding::updatedAt,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
                         .reversed())
                 .toList();
         if (activeBindings.isEmpty()) {
@@ -557,7 +586,9 @@ public class RuntimeBindingApplicationService {
         if (binding == null) {
             return null;
         }
-        if (DOMAIN_AGENT_PROVIDER.equals(binding.provider()) || isPinnedDomainExpert(binding)) {
+        if (DOMAIN_AGENT_PROVIDER.equals(binding.provider())
+                || isPinnedDomainExpert(binding)
+                || isIntentExpertDomainExpert(binding)) {
             return touchAndMoveToLeaf(binding, runId, leafMessageId);
         }
         RuntimeBinding next = markRelaySessionEstablished(binding, binding.runtimeSessionId())
@@ -957,6 +988,14 @@ public class RuntimeBindingApplicationService {
         return binding != null
                 && runtimeProvider.equals(binding.provider())
                 && RuntimeProfileMetadata.isPinnedDomainExpert(binding.metadata());
+    }
+
+    /** 是否为聚合意图专家范围内选中的Relay专家子Binding。 */
+    public boolean isIntentExpertDomainExpert(RuntimeBinding binding) {
+        return binding != null
+                && runtimeProvider.equals(binding.provider())
+                && runtimeProfile(binding) == RuntimeProfile.DOMAIN_EXPERT
+                && IntentExpertContext.scopedDomainExpert(binding.metadata());
     }
 
     /**

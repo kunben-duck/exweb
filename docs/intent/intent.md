@@ -107,6 +107,12 @@ Authorization: {dynamicToken}
 
 `explicit_switch` 不走意图服务。ChatService 会保留前端直选的路由事实，但不把该结果追加到在线 history；前端展示用的 `selectedIntent` 也不参与意图上下文。ChatService 对外只允许前端通过 `/v1/chat/runs.forceReroute=true` 显式触发用户纠正；`first_turn/domain_reject/fallback_followup/clarify_answer` 都由后端根据会话状态自动生成。
 
+`targetType=INTENT_EXPERT`是单独的父专家范围选择，不属于`explicit_switch`子技能直连。首次选择时，
+ChatService使用请求中的`intentAccessName`调用本节相同的Intent协议，并在会话中保存
+`targetId + intentAccessName`身份。后续无ACTIVE子Binding、意图澄清或子DomainAgent拒答时，继续使用
+该父专家入口；用例库不参与这一范围内的路由。Intent请求体及响应结构不增加父专家字段，父专家信息只在
+ChatService事件的`sourceExpert`中回显。
+
 ## 3. history 结构
 
 `conversationContext.history` 只放在线路由需要的摘要，默认取最新 TopK。`routeSource=front-selected` 的路由事实在 TopK 前排除；`user-confirmed` 和 `intent-agent` 路由保持可见。完整链路、原始问题和澄清过程应保存在 ChatService 审计日志或消息历史中。

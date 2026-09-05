@@ -34,6 +34,7 @@ package com.huawei.it.ex.one.interfaces.chat.dto;
  * @param bindingRouteSource 当前绑定来源。
  * @param bindingUpdatedAt 当前绑定更新时间。
  * @param bindingAgentMode 当前 active DomainAgent binding 记录的模式快照；其他情况为空。
+ * @param selectedExpert 当前会话选择的聚合意图专家范围；未选择时为空。
  */
 public record ChatStreamStatusDto(
         String sessionId,
@@ -64,7 +65,8 @@ public record ChatStreamStatusDto(
         java.time.Instant bindingUpdatedAt,
         ChatAgentModeDto bindingAgentMode,
         String activeRunPhase,
-        java.time.Instant asyncExpiresAt
+        java.time.Instant asyncExpiresAt,
+        ChatIntentExpertScopeDto selectedExpert
 ) {
     /** 兼容未返回异步阶段的完整接口装配调用。 */
     public ChatStreamStatusDto(
@@ -81,7 +83,7 @@ public record ChatStreamStatusDto(
                 interactionType, assistantMessageId, expiresAt, autoSelectAt, autoSelectTimeoutMs,
                 autoActionAt, autoActionTimeoutMs, autoActionType, bindingProvider, bindingTargetType,
                 bindingTargetId, bindingIntentCode, bindingIntentName, bindingRouteSource, bindingUpdatedAt,
-                bindingAgentMode, null, null);
+                bindingAgentMode, null, null, null);
     }
 
     /** 兼容尚未返回 Agent 模式的接口装配调用。 */
@@ -96,7 +98,8 @@ public record ChatStreamStatusDto(
                 activeRunLastSeq, cancellable, waitingUserInput, null, interactionId, interactionType,
                 assistantMessageId, expiresAt, null, null, null, null, null,
                 bindingProvider, bindingTargetType, bindingTargetId,
-                bindingIntentCode, bindingIntentName, bindingRouteSource, bindingUpdatedAt, null, null, null);
+                bindingIntentCode, bindingIntentName, bindingRouteSource, bindingUpdatedAt,
+                null, null, null, null);
     }
 
     /** 兼容尚未返回自动选择字段但已经返回 Agent 模式的接口装配调用。 */
@@ -112,6 +115,25 @@ public record ChatStreamStatusDto(
                 assistantMessageId, expiresAt, null, null, null, null, null,
                 bindingProvider, bindingTargetType, bindingTargetId,
                 bindingIntentCode, bindingIntentName, bindingRouteSource, bindingUpdatedAt,
-                bindingAgentMode, null, null);
+                bindingAgentMode, null, null, null);
+    }
+
+    /** 兼容尚未返回聚合意图专家范围的完整接口装配调用。 */
+    public ChatStreamStatusDto(
+            String sessionId, long latestSeq, String activeRunId, String activeRunStatus,
+            String activeStreamTopicId, Long activeRunFirstSeq, Long activeRunLastSeq, boolean cancellable,
+            boolean waitingUserInput, String waitingSourceRunId, String interactionId, String interactionType,
+            String assistantMessageId, java.time.Instant expiresAt, java.time.Instant autoSelectAt,
+            Long autoSelectTimeoutMs, java.time.Instant autoActionAt, Long autoActionTimeoutMs,
+            String autoActionType, String bindingProvider, String bindingTargetType, String bindingTargetId,
+            String bindingIntentCode, String bindingIntentName, String bindingRouteSource,
+            java.time.Instant bindingUpdatedAt, ChatAgentModeDto bindingAgentMode,
+            String activeRunPhase, java.time.Instant asyncExpiresAt) {
+        this(sessionId, latestSeq, activeRunId, activeRunStatus, activeStreamTopicId, activeRunFirstSeq,
+                activeRunLastSeq, cancellable, waitingUserInput, waitingSourceRunId, interactionId,
+                interactionType, assistantMessageId, expiresAt, autoSelectAt, autoSelectTimeoutMs,
+                autoActionAt, autoActionTimeoutMs, autoActionType, bindingProvider, bindingTargetType,
+                bindingTargetId, bindingIntentCode, bindingIntentName, bindingRouteSource, bindingUpdatedAt,
+                bindingAgentMode, activeRunPhase, asyncExpiresAt, null);
     }
 }

@@ -197,6 +197,13 @@ flowchart TB
 
 ## 单个 Chat Run 运行视图
 
+聚合意图专家通过会话`metadata_json`中的服务端私有范围保存父专家身份，不新增数据库字段。
+首次选择或父专家切换与user消息、Run、开放Interaction取消及旧ACTIVE子Binding取消在同一准入事务提交；
+后续Run从会话恢复范围。存在匹配的ACTIVE子Binding时直接续接，否则跳过用例库并通过父专家专属
+`intentAccessName`调用既有Intent链路。子Binding metadata保存父专家身份以隔离不同父专家与通用路由；
+DomainAgent和Relay业务请求只接收原有metadata。子DomainAgent和子Relay Domain Expert完成后保持ACTIVE，
+Delegate仍转为RESUMABLE，stop协议及状态机不变。
+
 ```mermaid
 sequenceDiagram
     autonumber

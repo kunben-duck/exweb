@@ -65,7 +65,16 @@ Authorization: {dynamicToken}
 | `conversationContext` | object | 否 | 多轮路由上下文。首轮可为空，但建议显式传空结构。 |
 | `options.trace` | boolean | 否 | 是否返回调试 trace。生产调用建议为 `false`。 |
 
-`intentAccessName`只控制本次Intent出站请求，不进入聊天metadata，也不透传给DomainAgent或Relay。同一run内因DomainAgent拒答再次调用Intent时继续使用本次值；Intent澄清创建的新run不会继承source run，前端未再次提交时使用服务端配置。
+`intentAccessName`只控制本次Intent出站请求，不进入聊天metadata，也不透传给DomainAgent或Relay。对于按
+页面或应用入口隔离意图范围的前端，每个可能调用或重新调用Intent的Run都应显式提交当前入口，包括普通提问、
+直连DomainAgent、EDIT、REGENERATE、强制纠偏和Intent相关Interaction续接。ACTIVE Binding可能让本轮先跳过
+Intent，但同一run内DomainAgent拒答时仍使用本次值重新意图。普通模式不从上一run、source run或Binding继承；
+未提交时回退服务端配置。切换普通入口并要求立即重新选路时，应同时提交`forceReroute=true`。聚合意图专家的
+后续轮次继续使用会话保存的父专家入口。
+
+候选技能立即切换接口同样应提交当前入口。该值不参与replacement Run首次直连DomainAgent，但新技能在同一
+Run内拒答时会用它重新调用Intent；接口不会继承source Run入口。切换成功后若调用偏好记录接口，必须提交相同
+的`intentAccessName`，确保偏好保存到正确的入口范围。
 
 `userPreferenceCorrections`来自独立偏好表，不进入`conversationContext.history`。每项只包含可信问题、用户选择的意图名称、可选原始意图名称和服务端UTC更新时间；同一次阻塞或流式Intent重试复用同一列表，不重复读取数据库。读取使用独立有界执行器和失败开放策略，因此偏好能力不可用时仍会正常调用Intent，只发送空数组。
 

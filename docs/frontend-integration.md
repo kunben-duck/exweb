@@ -187,6 +187,12 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | 会话归档/恢复/删除 | 单个：`POST /archive`、`POST /restore`、`DELETE /sessions/{sessionId}`；批量：`DELETE /sessions` body `sessionIds[]` | `sessionId`、`sessionIds[]` | 删除是软删除；有 active run 时后端会先主动取消 run |
 | 文档库管理 | `GET /documents` -> `GET /documents/{documentId}`/`status`/`preview-url`/`download`/`PATCH`/`DELETE` | `documentId`、`cursor`、`status` | 列表默认不返回 DELETED；下载和预览只允许 AVAILABLE |
 
+对于存在多个Intent入口的前端，`intentAccessName`虽然为兼容旧客户端而保持接口可选，但属于前端联调必传字段。
+普通`NEXT`、`EDIT_USER`、`REGENERATE_ASSISTANT`、直连DomainAgent、`forceReroute`以及可能重新调用Intent的
+Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能让本轮跳过首次Intent调用，但DomainAgent在
+同一Run内拒答时仍会使用本次值；普通模式不会从上一Run或Binding继承。切换入口且希望立即按新范围选路时，
+必须同时提交`forceReroute=true`。聚合意图专家例外，其后续轮次使用会话保存的父专家入口。
+
 ### 逐接口字段矩阵
 
 | 接口 | 请求字段 | 响应字段 | 后续关联 |
@@ -206,8 +212,8 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | `POST /chat/sessions/{sessionId}/restore` | Path：`sessionId` | `ChatSessionDto(status=ACTIVE)` | 恢复后可继续发 run |
 | `DELETE /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto(status=DELETED)` | 删除后清理本地当前会话状态和订阅 |
 | `DELETE /chat/sessions` | Body：`sessionIds[]` | `deletedCount`、`items[]` | 批量删除成功后从列表移除这些 session |
-| `POST /v1/chat/runs` | Body：`commandId`、`sessionId`、`conversationId`、`message`、`runMode`、`channel`、消息树、Interaction、附件和路由字段 | `runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId` | 移动端统一传 `channel=mobile`；省略时自动创建的会话默认为 `web` |
-| `POST /v1/chat/runs/{sourceRunId}/switch-domain-agent` | Path：当前或历史source Run；Body：可信user `messageId`、目标`skillId`、`selectedIntent`及本轮可选metadata | replacement Run的标准`ChatRunStartDto` | 服务端先停止A再创建B；成功后改订阅B的topic，偏好记录仍独立异步提交 |
+| `POST /v1/chat/runs` | Body：`commandId`、`sessionId`、`conversationId`、`message`、`runMode`、`channel`、消息树、Interaction、附件和路由字段；多入口前端每次显式传当前`intentAccessName` | `runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId` | 移动端统一传 `channel=mobile`；切换普通入口并立即重新选路时同时传`forceReroute=true` |
+| `POST /v1/chat/runs/{sourceRunId}/switch-domain-agent` | Path：当前或历史source Run；Body：可信user `messageId`、目标`skillId`、`selectedIntent`、当前`intentAccessName`及本轮可选metadata | replacement Run的标准`ChatRunStartDto` | 服务端先停止A再创建B；入口不参与首次直连，但供B拒答重意图使用；成功后改订阅B的topic，偏好接口提交相同入口 |
 | `POST /v1/chat/runs/{runId}/stop` | Path：运行态传 `activeRunId`，等待态传 `waitingSourceRunId`；Header：可选 Cookie | 原有 run 字段，以及可选 `interactionId/interactionStatus/interactionCancelledAt/effectiveRunId` | 运行态用 Event Resume 补齐 `run.cancelled`；等待态不新增事件，stop 后重新查询 `stream-status` |
 | `GET /chat/sessions/{sessionId}/events/resume` | Path：`sessionId`；Query：`afterSeq` | SSE data：`ConversationTurnStreamDto` | 补会话缺失事件；`ConversationTurnStreamDto.payload.encodedItem.data` 中的 ChatEvent 更新本地 `lastSeq` |
 | `GET /chat/runs/{runId}/events/resume` | Path：`runId`；Query：`afterSeq` | SSE data：`ConversationTurnStreamDto`；普通active run持续到终态，DomainAgent异步run在`run.async_running`边界结束且不发送done | 新页签/跨设备恢复active run首选；异步回调完成后可再次调用以补发完成通知和终态 |
@@ -1296,12 +1302,12 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `sessionId` | string | 否 | 聊天会话 ID；为空时后端会创建或归一化 |
 | `conversationId` | string | 否 | 前端对话 ID，通常与 `sessionId` 一致 |
 | `message` | string | 条件必填 | `EDIT_USER` 必填；`NEXT` 必须提供非空 message 或至少一个有效附件。附件-only 的历史正文和 Runtime query 为 `""`；仅 IntentAgent query 会使用可信文件名生成 `[用户上传文档] xxx.pdf，xxx.xls`。未传`sessionId`自动创建会话时，可信文件名去除最后扩展名后同时作为初始标题。`REGENERATE_ASSISTANT` 和 `CONTINUE_INTERACTION` 可为空 |
-| `intentAccessName` | string | 否 | 本次Intent调用的入口名称，最大128字符并保留大小写。trim后非空时优先于服务端`FINANCEEX_INTENT_ACCESS_NAME`；未传或空白时使用服务端配置。`INTENT_EXPERT`首次选择或切换时必填，并与`targetId`共同定义父专家身份。该字段不进入业务metadata、DomainAgent或Relay请求；父专家范围内的澄清和拒答重意图使用会话保存值。 |
+| `intentAccessName` | string | 否 | 本次Intent调用的入口名称，最大128字符并保留大小写。字段为兼容旧客户端而保持可选，但多入口前端应在普通提问、直连DomainAgent、EDIT、REGENERATE、`forceReroute`及可能重新调用Intent的Interaction续接中每次显式提交当前入口。ACTIVE Binding可能跳过首次Intent，但同一Run内DomainAgent拒答时仍使用本次值；普通模式不继承上一Run或Binding。未传或空白时使用服务端`FINANCEEX_INTENT_ACCESS_NAME`。`INTENT_EXPERT`首次选择或切换时必填，后续使用会话保存值。该字段不进入业务metadata、DomainAgent或Relay请求。 |
 | `runMode` | string | 否 | 消息树写入模式：`NEXT`、`EDIT_USER`、`REGENERATE_ASSISTANT`、`CONTINUE_INTERACTION`，默认 `NEXT` |
 | `parentMessageId` | string | 否 | `NEXT` 模式显式父节点；为空时使用会话 `currentLeafMessageId` |
 | `editedMessageId` | string | EDIT_USER 必填 | 被编辑的未锁定 user 消息 |
 | `regeneratedMessageId` | string | REGENERATE_ASSISTANT 必填 | 被重新生成的未锁定 assistant 消息 |
-| `forceReroute` | boolean | 否 | 非必填，默认 `false`。仅普通 run 可传；`true` 表示用户主动要求重新路由，后端会忽略当前 active DomainAgent binding 并自动组装内部用户纠正触发原因。 |
+| `forceReroute` | boolean | 否 | 非必填，默认 `false`。仅普通 run 可传；`true` 表示用户主动要求重新路由，后端会忽略当前 active DomainAgent binding 并自动组装内部用户纠正触发原因。多入口前端切换入口时应与新的`intentAccessName`一起提交。 |
 | `interactionId` | string | CONTINUE_INTERACTION 必填 | `run.waiting_user` 或 `stream-status` 返回的 Interaction 请求 ID |
 | `interactionAction` | string | 否 | 仅 `AMBIGUOUS_ROUTE + CONTINUE_INTERACTION` 支持 `AUTO_SELECT`，表示立即由服务端选择最高 confidence 的有效候选；不能与 `targetType/targetId`、答案或附件同时提交 |
 | `approved` | boolean | 审批/确认类必填 | 澄清类可省略，服务端默认 true |
@@ -1945,6 +1951,11 @@ POST /v1/chat/runs/{sourceRunId}/switch-domain-agent
 前端在请求期间继续保留A的订阅，以接收标准`run.cancelled`。接口成功返回标准
 `ChatRunStartDto`后，清空A尚未固化的临时思维链和正文，改订阅B的`streamTopicId`；B的漏失事件按普通
 Run使用`GET /v1/chat/runs/{runB}/events/resume`恢复。页面刷新时，`stream-status`会把B作为当前active Run。
+
+多入口前端必须在切换请求中显式提交当前页面入口的`intentAccessName`。它不会发送给首次直连的
+DomainAgent-B，但B在同一replacement Run内拒答时，后端会使用该值重新调用Intent。该接口不会继承
+source Run的入口；省略或传空白值将直接使用服务端默认入口。B成功受理后若记录用户偏好，偏好接口必须
+提交同一个`intentAccessName`。
 
 服务端复用A关联的可信user正文和附件，不创建第二条query，也不继承A的metadata。A已有可保存assistant时，
 B保存为同一user下的新assistant版本，默认`/messages`展示B，`versionInfo`可切回A；A没有可保存assistant时，

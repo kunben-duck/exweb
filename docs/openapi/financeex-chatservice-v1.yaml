@@ -118,6 +118,12 @@ paths:
         - 拒答切换确认：提交 `approved=true/false`；到达 autoActionAt 后前端提交 `approved=true`。
         - Relay 问卷：严格使用 `questionnaireAnswers.label`，忽略使用 `ignore=true`。
 
+        多入口前端应在每次可能调用或重新调用 Intent 的请求中显式提交当前入口的
+        `intentAccessName`，包括普通提问、直连 DomainAgent、EDIT、REGENERATE、强制纠偏及
+        Intent 相关 Interaction 续接。ACTIVE Binding 可能使本轮先跳过 Intent，但 DomainAgent
+        在同一 Run 内拒答时仍会使用本次提交值重新调用 Intent。普通模式不从上一 Run 或 Binding
+        继承入口；切换入口且要求立即重新选路时，应同时提交 `forceReroute=true`。
+
         聚合意图专家首次选择或切换使用 `targetType=INTENT_EXPERT`、父专家 `targetId`、
         `selectedExpert` 和专属 `intentAccessName`。后续普通轮次省略这些字段，服务端从会话恢复
         父专家范围；实际 assistant skillId 仍记录最终子技能。
@@ -393,6 +399,10 @@ paths:
         source已有assistant时，新回答作为同一user下的assistant sibling并建立版本关系；source没有可保存
         assistant时，新回答是该user下的首个assistant。成功后前端改订阅返回的streamTopicId，漏失事件继续
         使用replacement runId调用Run级Resume。
+
+        多入口前端应显式提交当前入口的`intentAccessName`。该字段不参与首次直连DomainAgent请求，
+        但replacement Run内的新DomainAgent拒答时会用它重新调用Intent；未传时不继承source Run，
+        而是回退服务端默认入口。切换成功后如记录用户偏好，偏好接口必须提交相同入口。
       parameters:
         - name: sourceRunId
           in: path
@@ -2332,7 +2342,14 @@ components:
           type: string
           maxLength: 128
           nullable: true
-          description: 可选Intent入口名称；trim后非空时覆盖本次Intent请求的服务端默认值，未传或空白时回退financeex.intent.access-name。INTENT_EXPERT首次选择或切换时必填并作为父专家身份的一部分。仅进入Intent请求，不进入业务metadata或Runtime请求；Interaction续接不继承source run值，但聚合意图专家范围内的澄清会使用会话保存值。
+          description: |
+            可选Intent入口名称；trim后非空时覆盖本次Intent请求的服务端默认值，未传或空白时回退
+            financeex.intent.access-name。为保证多入口前端的意图范围，前端应在普通提问、直连
+            DomainAgent、EDIT、REGENERATE、forceReroute及可能重新调用Intent的Interaction续接中
+            显式提交当前入口。ACTIVE Binding可能使本轮先跳过Intent，但同一Run内DomainAgent拒答时
+            仍使用本次值。普通模式不继承上一Run或Binding；切换入口并要求立即重新选路时同时提交
+            forceReroute=true。INTENT_EXPERT首次选择或切换时必填并作为父专家身份的一部分，后续使用
+            会话保存值。该字段不进入业务metadata或Runtime请求。
         runMode:
           type: string
           maxLength: 32
@@ -2494,7 +2511,10 @@ components:
           type: string
           maxLength: 128
           nullable: true
-          description: 新DomainAgent拒答并在同一replacement Run重意图时使用；空白回退服务端配置
+          description: |
+            多入口前端应显式提交当前入口。该值不参与首次直连DomainAgent请求，仅在新DomainAgent
+            于同一replacement Run内拒答时用于重新调用Intent。未传或空白时不继承source Run，直接
+            回退服务端配置；后续记录用户偏好时应向偏好接口提交相同值。
 
     ChatBizContext:
       type: object

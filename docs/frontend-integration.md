@@ -1951,8 +1951,30 @@ POST /v1/chat/runs/{sourceRunId}/switch-domain-agent
 ```
 
 前端在请求期间继续保留A的订阅，以接收标准`run.cancelled`。接口成功返回标准
-`ChatRunStartDto`后，清空A尚未固化的临时思维链和正文，改订阅B的`streamTopicId`；B的漏失事件按普通
-Run使用`GET /v1/chat/runs/{runB}/events/resume`恢复。页面刷新时，`stream-status`会把B作为当前active Run。
+`ChatRunStartDto`后，清空A尚未固化的临时正文并改订阅B的`streamTopicId`；B会在自己的事件流中重新给出
+需要展示的可信路由过程，漏失事件按普通Run使用`GET /v1/chat/runs/{runB}/events/resume`恢复。页面刷新时，
+`stream-status`会把B作为当前active Run。
+
+Run-B的前缀事件顺序固定为：
+
+```text
+run.started
+-> Run-A的Intent start/progress/delta/result
+-> Run-A及更早候选Run的技能选择
+-> runtime.progress(sourceType=candidate-skill-switch)
+-> runtime.metadata(sourceType=selectedDomainAgent，目标为B)
+-> B的Runtime事件和终态
+```
+
+继承事件使用Run-B自己的外层`runId/sessionId/sequence`，并在payload中增加
+`candidateSwitchReplay.originRunId/originSequence`供前端去重和标识来源；旧事件中的
+`runtimeSessionId/runtimeBindingId`不会复制。切换标识payload包含`sourceRunId/skillId/targetId`及可用的
+`intentId/intentName`。只回放Intent过程、技能选择和既有候选切换标识，不回放正文、卡片、引用、工具、
+普通Runtime过程、拒答或终态。A到B再到C时沿来源run和sequence累计去重，整体最多32条、256KiB。
+
+FULL留存下，上述事件同时支持WebSocket、Run Resume，并作为Run-B的历史Parts保存；no-store继续遵循原有
+控制事实与业务数据留存边界。Run-B后续若拒答，仍进入现有DomainAgent拒答及重意图流程，不需要前端增加
+特殊分支。
 
 多入口前端必须在切换请求中显式提交当前页面入口的`intentAccessName`。它不会发送给首次直连的
 DomainAgent-B，但B在同一replacement Run内拒答时，后端会使用该值重新调用Intent。该接口不会继承

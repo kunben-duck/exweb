@@ -41,4 +41,17 @@ class AgentDataPersistenceEventPolicyTest {
         assertThat(new AgentDataPersistenceEventPolicy().retention(event, state))
                 .isEqualTo(AgentDataPersistenceEventPolicy.EventRetention.LIVE_ONLY);
     }
+
+    @Test
+    void placeholderModePersistsTrustedCandidateSwitchMarkerForResume() {
+        AgentDataPersistenceState state = new AgentDataPersistenceState("回答已隐藏")
+                .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
+        RuntimeEvent event = RuntimeEvent.progress("run-1", "session-1", Map.of(
+                "source", "chatservice",
+                "sourceType", "candidate-skill-switch",
+                "skillId", "skill-b"));
+
+        assertThat(new AgentDataPersistenceEventPolicy().retention(event, state))
+                .isEqualTo(AgentDataPersistenceEventPolicy.EventRetention.PERSISTED);
+    }
 }

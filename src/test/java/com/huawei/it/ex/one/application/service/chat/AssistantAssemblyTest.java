@@ -46,6 +46,33 @@ class AssistantAssemblyTest {
     }
 
     @Test
+    void keepsCandidateSwitchReplayedIntentProcessInHistoricalParts() {
+        AssistantAssembly assembly = new AssistantAssembly();
+        Map<String, Object> replay = Map.of(
+                "originRunId", "run-a",
+                "originSequence", 2L);
+
+        assembly.observe(RuntimeEvent.progress("run-b", "session1", Map.of(
+                "source", "intent-agent",
+                "sourceType", "intent-start",
+                "message", "正在识别问题意图",
+                CandidateSwitchRouteTrace.REPLAY_METADATA_KEY, replay
+        )));
+        assembly.observe(RuntimeEvent.thinking("run-b", "session1", Map.of(
+                "source", "intent-agent",
+                "sourceType", "intent-delta",
+                "text", "正在分析候选范围",
+                CandidateSwitchRouteTrace.REPLAY_METADATA_KEY, replay
+        )));
+
+        assertThat(assembly.parts())
+                .extracting(part -> part.partType())
+                .containsExactly("PROGRESS", "THINKING");
+        assertThat(assembly.parts()).allSatisfy(part -> assertThat(part.payload())
+                .containsEntry(CandidateSwitchRouteTrace.REPLAY_METADATA_KEY, replay));
+    }
+
+    @Test
     void keepsAmbiguousRouteSelectionResponseInHistoricalParts() {
         AssistantAssembly assembly = new AssistantAssembly();
 

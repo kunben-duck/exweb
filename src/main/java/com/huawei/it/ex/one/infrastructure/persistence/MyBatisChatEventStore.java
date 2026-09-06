@@ -361,6 +361,23 @@ public class MyBatisChatEventStore implements ChatEventStore {
     }
 
     @Override
+    public List<ChatEvent> findFirstByOwnerAndRunAfterSeq(
+            String tenantId,
+            String userId,
+            String sessionId,
+            String runId,
+            RunEventWindow window) {
+        if (window == null || window.limit() <= 0) {
+            return List.of();
+        }
+        return mapper.findFirstByOwnerAndRunAfterSeq(
+                        tenantId, userId, sessionId, runId, window.afterSeq(), window.limit())
+                .stream()
+                .map(this::toDomain)
+                .toList();
+    }
+
+    @Override
     public long findLatestSeqByOwnerAndSession(String tenantId, String userId, String sessionId) {
         return mapper.findLatestSeqByOwnerAndSession(tenantId, userId, sessionId);
     }

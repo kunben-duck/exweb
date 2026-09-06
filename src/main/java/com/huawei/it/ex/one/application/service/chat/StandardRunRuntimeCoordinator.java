@@ -18,6 +18,7 @@ import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -78,6 +79,22 @@ final class StandardRunRuntimeCoordinator {
     }
 
     Flux<ChatEvent> execute(RuntimePlan plan, RunExecutionClaim executionClaim) {
+        return execute(plan, executionClaim, CandidateSwitchRouteTrace.empty());
+    }
+
+    Flux<ChatEvent> executeCandidateSwitch(
+            RuntimePlan plan,
+            RunExecutionClaim executionClaim,
+            CandidateSwitchRouteTrace routeTrace) {
+        return execute(plan, executionClaim, routeTrace == null
+                ? CandidateSwitchRouteTrace.empty()
+                : routeTrace);
+    }
+
+    private Flux<ChatEvent> execute(
+            RuntimePlan plan,
+            RunExecutionClaim executionClaim,
+            CandidateSwitchRouteTrace routeTrace) {
         StandardRunInputPreparer.PreparedRun prepared = plan.prepared();
         try {
             RunEventPipelineContext context = pipelineContext(plan, executionClaim);
@@ -109,7 +126,7 @@ final class StandardRunRuntimeCoordinator {
                         plan.pendingInteractionPayloadRef(),
                         plan.deferredDomainAgentBindingRef(),
                         plan.pendingRouteMemoryDecisionRef());
-                Flux<ChatEvent> runtimeEvents = runtimeDispatchCoordinator.execute(request, () -> routeResolutionCoordinator.prepareInitial(
+                Flux<ChatEvent> runtimeEvents = Flux.defer(() -> runtimeDispatchCoordinator.execute(request, () -> routeResolutionCoordinator.prepareInitial(
                         new RouteResolutionCoordinator.InitialRoutePreparation(
                                 prepared.user(),
                                 prepared.session(),
@@ -125,18 +142,21 @@ final class StandardRunRuntimeCoordinator {
                                 executionClaim,
                                 plan.bindingLifecycle(),
                                 !prepared.documents().isEmpty(),
-                                plan.deferredDomainAgentBindingRef())));
-                if (!plan.admission().emitIntentExpertSelection()
-                        || plan.runCommand().intentExpertScope() == null) {
-                    return runtimeEvents;
+                                plan.deferredDomainAgentBindingRef()))));
+                Flux<ChatEvent> selectedAndRuntimeEvents = runtimeEvents;
+                if (plan.admission().emitIntentExpertSelection()
+                        && plan.runCommand().intentExpertScope() != null) {
+                    selectedAndRuntimeEvents = Flux.concat(
+                            Flux.just(RuntimeEvent.metadata(
+                                    prepared.runId(),
+                                    prepared.session().id(),
+                                    IntentExpertSelectionPayload.create(
+                                            plan.runCommand().intentExpertScope()))),
+                            runtimeEvents);
                 }
-                return Flux.concat(
-                        Flux.just(RuntimeEvent.metadata(
-                                prepared.runId(),
-                                prepared.session().id(),
-                                IntentExpertSelectionPayload.create(
-                                        plan.runCommand().intentExpertScope()))),
-                        runtimeEvents);
+                return replayBeforeRuntime(
+                        routeTrace.eventsFor(prepared.runId(), prepared.session().id()),
+                        selectedAndRuntimeEvents);
             });
         } catch (RuntimeException ex) {
             RunEventPipelineContext context = pipelineContext(plan, executionClaim);
@@ -146,6 +166,26 @@ final class StandardRunRuntimeCoordinator {
                             context)
                     .doFinally(ignored -> runExecutionRegistry.complete(executionClaim));
         }
+    }
+
+    private Flux<ChatEvent> replayBeforeRuntime(List<ChatEvent> replay, Flux<ChatEvent> runtime) {
+        if (replay.isEmpty()) {
+            return runtime;
+        }
+        return Flux.defer(() -> {
+            ChatEvent marker = replay.getLast();
+            if (!"runtime.progress".equals(marker.type())
+                    || !"chatservice".equals(marker.payload().get("source"))
+                    || !"candidate-skill-switch".equals(marker.payload().get("sourceType"))) {
+                return Flux.error(new IllegalStateException("Candidate switch replay must end with its switch marker"));
+            }
+            Sinks.One<Void> persisted = Sinks.one();
+            // Emission can be prefetched; only the final marker's commit acknowledges the whole prefix.
+            return Flux.concat(
+                    Flux.fromIterable(replay.subList(0, replay.size() - 1)),
+                    Flux.just(new PersistenceAcknowledgedEvent(marker, persisted)),
+                    persisted.asMono().thenMany(Flux.defer(() -> runtime)));
+        });
     }
 
     private RunEventPipelineContext pipelineContext(

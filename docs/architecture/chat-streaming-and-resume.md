@@ -995,7 +995,28 @@ run-A 在 `run.waiting_user` 后已经终止，不会重新打开。用户选择
 后端不注册自动选择定时任务，也不持久化 Cookie 或入口 metadata。没有在线前端时 Interaction 保持
 WAITING；重新打开会话后，前端根据 stream-status 中已经到期的 `autoSelectAt` 立即提交代选。
 
-### 12.9 Relay 问卷的 run-A/run-B 恢复
+### 12.9 候选技能立即切换的 Run-B 恢复
+
+候选技能切换继续使用独立接口。source Run仍在运行或等待时，服务端先完成stop；source已终态时直接创建
+replacement Run。两轮复用同一可信user消息和附件，不创建第二条user消息；已有assistant时，Run-B创建为
+同父assistant版本。
+
+Run-B在`run.started`之后、当前技能选择和Runtime事件之前，从source Run的事件事实中回放Intent
+start/progress/delta/result、技能选择及既有`candidate-skill-switch`标识。回放副本使用Run-B的事件身份，
+payload通过`candidateSwitchReplay.originRunId/originSequence`保留原始事实位置，并移除旧
+`runtimeSessionId/runtimeBindingId`。正文、卡片、引用、工具、普通Runtime过程、拒答和终态均不复制。
+多次A到B到C切换按原始run和sequence去重，前缀总量限制为32条、256KiB。
+
+候选回放以最后一条`candidate-skill-switch`的持久化ACK作为屏障：整个前缀顺序处理完成、最后标识
+提交并完成后处理后，才订阅后续路由、执行原有owner校验及Runtime调用。不能仅依赖`Flux.concat`
+的发出顺序，因为异步事件管线会预取。回放失败、stop或订阅取消不放行新路由；该屏障不新增事件、
+sequence或SQL，也不改变普通Run及no-store留存规则。ACK不表示前端已经收到事件。
+
+FULL模式下，回放事件沿用普通事件管线落库、实时发布并形成Run-B历史Parts，因此WebSocket断开后可从
+Run-B的`firstSeq - 1`执行Resume。no-store仍按已有策略只持久化必要控制事实，不借回放扩大业务数据留存。
+Run-B拒答继续走普通DomainAgent拒答、重意图和确认切换状态机。
+
+### 12.10 Relay 问卷的 run-A/run-B 恢复
 
 Relay 问卷同样采用两个 run，但不重新执行 Intent：
 

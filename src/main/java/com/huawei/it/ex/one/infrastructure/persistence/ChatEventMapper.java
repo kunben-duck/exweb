@@ -107,6 +107,26 @@ public interface ChatEventMapper {
     );
 
     /**
+     * 查询指定 run 的最早一批事件，避免候选切换读取完整长Run。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识，作为run查询的额外隔离边界。
+     * @param runId source run标识。
+     * @param afterSeq 起始事件游标，仅返回更大序号。
+     * @param limit 最大返回行数。
+     * @return 按seq正序排列的有界事件列表。
+     */
+    List<ChatEventRow> findFirstByOwnerAndRunAfterSeq(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("sessionId") String sessionId,
+            @Param("runId") String runId,
+            @Param("afterSeq") long afterSeq,
+            @Param("limit") int limit
+    );
+
+    /**
      * 查询指定会话当前最新事件序号。
      *
      * @param tenantId 租户标识。

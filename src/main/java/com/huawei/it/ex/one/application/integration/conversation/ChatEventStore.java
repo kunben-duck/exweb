@@ -111,6 +111,30 @@ public interface ChatEventStore {
     List<ChatEvent> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId, String runId, long afterSeq);
 
     /**
+     * 按用户归属有界查询指定 run 的最早一批事实事件。
+     *
+     * <p>默认实现保持内存仓储兼容；生产数据库实现应在SQL层应用limit，避免辅助流程加载完整长Run。</p>
+     */
+    default List<ChatEvent> findFirstByOwnerAndRunAfterSeq(
+            String tenantId,
+            String userId,
+            String sessionId,
+            String runId,
+            RunEventWindow window) {
+        if (window == null || window.limit() <= 0) {
+            return List.of();
+        }
+        return findByOwnerAndRunAfterSeq(tenantId, userId, sessionId, runId, window.afterSeq())
+                .stream()
+                .limit(window.limit())
+                .toList();
+    }
+
+    /** 起始游标与最大返回数量组成的有界Run事件窗口。 */
+    record RunEventWindow(long afterSeq, int limit) {
+    }
+
+    /**
      * 按用户归属查询会话当前最大事件序号。
      *
      * @param tenantId 租户标识。

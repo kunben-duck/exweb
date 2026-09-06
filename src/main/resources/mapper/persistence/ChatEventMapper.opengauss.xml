@@ -147,6 +147,22 @@
     </select>
 
     <!--
+      候选技能切换按owner/session/run查询source Run最早的有界事件窗口，防止加载完整长Run。
+      入参: tenantId/userId/sessionId/runId为归属边界；afterSeq为起始游标；limit限制最大返回行数。
+    -->
+    <select id="findFirstByOwnerAndRunAfterSeq" resultMap="chatEventResultMap">
+        SELECT <include refid="chatEventColumns"/>
+        FROM fin_ex_chat_event_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND session_id = #{sessionId}
+          AND run_id = #{runId}
+          AND seq > #{afterSeq}
+        ORDER BY seq ASC
+        LIMIT #{limit}
+    </select>
+
+    <!--
       查询会话最新事件 seq，用于 stream-status 展示服务端事实进度。
       入参: tenantId/userId/sessionId 为归属边界。
     -->

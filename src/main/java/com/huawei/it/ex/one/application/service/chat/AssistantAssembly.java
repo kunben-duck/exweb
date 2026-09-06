@@ -504,6 +504,9 @@ final class AssistantAssembly {
     }
 
     private static boolean isTransientIntentProcessEvent(Map<String, Object> payload) {
+        if (CandidateSwitchRouteTrace.replayed(payload)) {
+            return false;
+        }
         if (!"intent-agent".equals(stringValue(payload.get("source")))) {
             return false;
         }

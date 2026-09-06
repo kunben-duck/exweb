@@ -41,6 +41,7 @@ public class CandidateDomainAgentSwitchApplicationService {
     private final ChatRunStopCoordinator stopCoordinator;
     private final ChatRunStartCoordinator runStartCoordinator;
     private final ChatRunExecutionCoordinator runExecutionCoordinator;
+    private final CandidateSwitchRouteTraceService routeTraceService;
 
     public CandidateDomainAgentSwitchApplicationService(
             ChatRunApplicationService chatRunService,
@@ -49,7 +50,8 @@ public class CandidateDomainAgentSwitchApplicationService {
             DocumentFacade documentFacade,
             ChatRunStopCoordinator stopCoordinator,
             ChatRunStartCoordinator runStartCoordinator,
-            ChatRunExecutionCoordinator runExecutionCoordinator) {
+            ChatRunExecutionCoordinator runExecutionCoordinator,
+            CandidateSwitchRouteTraceService routeTraceService) {
         this.chatRunService = chatRunService;
         this.sessionService = sessionService;
         this.messageRepository = messageRepository;
@@ -57,6 +59,7 @@ public class CandidateDomainAgentSwitchApplicationService {
         this.stopCoordinator = stopCoordinator;
         this.runStartCoordinator = runStartCoordinator;
         this.runExecutionCoordinator = runExecutionCoordinator;
+        this.routeTraceService = routeTraceService;
     }
 
     public Mono<ChatRunStartResult> switchDomainAgent(
@@ -107,7 +110,8 @@ public class CandidateDomainAgentSwitchApplicationService {
                 session,
                 userMessage,
                 sourceRun.assistantMessageId(),
-                resolved);
+                resolved,
+                CandidateSwitchRouteTrace.empty());
     }
 
     private boolean requiresStop(ChatRunStatus status) {
@@ -135,13 +139,15 @@ public class CandidateDomainAgentSwitchApplicationService {
         });
         ChatSession currentSession = sessionService.getSession(user, source.session().id());
         ensureCurrentSource(currentSession, latestSource, source.userMessage().id());
+        CandidateSwitchRouteTrace routeTrace = routeTraceService.load(user, latestSource, command);
         CandidateSwitchRunSource currentSource = new CandidateSwitchRunSource(
                 source.sourceRunId(),
                 latestSource.status(),
                 currentSession,
                 source.userMessage(),
                 latestSource.assistantMessageId(),
-                source.resolvedAttachments());
+                source.resolvedAttachments(),
+                routeTrace);
         ChatCommand runCommand = replacementCommand(command, currentSource);
         return runStartCoordinator.startStandard(
                 user,

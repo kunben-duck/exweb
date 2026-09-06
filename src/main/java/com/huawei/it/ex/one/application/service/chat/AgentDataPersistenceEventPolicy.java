@@ -23,6 +23,7 @@ final class AgentDataPersistenceEventPolicy {
     );
     private static final Set<String> APPLICATION_CONTROL_SOURCE_TYPES = Set.of(
             "selecteddomainagent",
+            "candidate-skill-switch",
             "route-progress",
             "domain-agent-reroute",
             "intent-clarification-response",

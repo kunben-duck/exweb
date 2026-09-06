@@ -65,7 +65,7 @@ final class ChatRunExecutionCoordinator {
                     source);
             StandardRunAdmissionCoordinator.Admission admission =
                     admissionCoordinator.admitCandidateSwitch(prepared, source);
-            return executePrepared(request, prepared, admission);
+            return executePrepared(request, prepared, admission, source.routeTrace());
         });
     }
 
@@ -73,6 +73,14 @@ final class ChatRunExecutionCoordinator {
             Request request,
             StandardRunInputPreparer.PreparedRun prepared,
             StandardRunAdmissionCoordinator.Admission admission) {
+        return executePrepared(request, prepared, admission, null);
+    }
+
+    private Flux<ChatEvent> executePrepared(
+            Request request,
+            StandardRunInputPreparer.PreparedRun prepared,
+            StandardRunAdmissionCoordinator.Admission admission,
+            CandidateSwitchRouteTrace routeTrace) {
         StandardRunRuntimeCoordinator.RuntimePlan runtimePlan =
                 runtimeCoordinator.prepare(prepared, admission);
         RunExecutionClaim executionClaim;
@@ -86,7 +94,9 @@ final class ChatRunExecutionCoordinator {
                 request.startAttempt(),
                 executionClaim,
                 "after-execution-create");
-        return runtimeCoordinator.execute(runtimePlan, executionClaim);
+        return routeTrace == null
+                ? runtimeCoordinator.execute(runtimePlan, executionClaim)
+                : runtimeCoordinator.executeCandidateSwitch(runtimePlan, executionClaim, routeTrace);
     }
 
     record Request(

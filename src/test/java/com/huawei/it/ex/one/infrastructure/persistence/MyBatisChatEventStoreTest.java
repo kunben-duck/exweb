@@ -8,6 +8,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventAppendRejectedException;
+import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
@@ -145,6 +146,35 @@ class MyBatisChatEventStoreTest {
     }
 
     @Test
+    void boundedRunQueryDelegatesLimitAndRestoresStoredEvents() {
+        ReturningEventMapper mapper = new ReturningEventMapper();
+        ChatEventRow row = new ChatEventRow();
+        row.setRunId("run1");
+        row.setSessionId("session1");
+        row.setSeq(7L);
+        row.setEventType("runtime.progress");
+        row.setPayloadJson("{\"sourceType\":\"intent-start\"}");
+        row.setCreatedAt(Instant.parse("2026-09-06T00:00:00Z"));
+        mapper.boundedRows = List.of(row);
+        MyBatisChatEventStore store = new MyBatisChatEventStore(
+                mapper,
+                new ObjectMapper(),
+                (bizType, context) -> "event_1"
+        );
+
+        List<ChatEvent> events = store.findFirstByOwnerAndRunAfterSeq(
+                "tenant1", "user1", "session1", "run1",
+                new ChatEventStore.RunEventWindow(0L, 256));
+
+        assertThat(mapper.boundedQueryLimit).isEqualTo(256);
+        assertThat(events).singleElement().satisfies(event -> {
+            assertThat(event.runId()).isEqualTo("run1");
+            assertThat(event.sequence()).isEqualTo(7L);
+            assertThat(event.payload()).containsEntry("sourceType", "intent-start");
+        });
+    }
+
+    @Test
     void appendBatchWithExecutionGuardRejectsWholeBatchWhenGuardedInsertDoesNotMatch() {
         ReturningEventMapper mapper = new ReturningEventMapper();
         mapper.guardInsertResult = 0;
@@ -226,6 +256,8 @@ class MyBatisChatEventStoreTest {
         private ChatEventWriteRow singleRow;
         private String lockOwnerInstanceId;
         private long lockFencingToken;
+        private int boundedQueryLimit;
+        private List<ChatEventRow> boundedRows = List.of();
 
         @Override
         public Long nextSeq() {
@@ -285,6 +317,18 @@ class MyBatisChatEventStoreTest {
         public List<ChatEventRow> findByOwnerAndRunAfterSeq(String tenantId, String userId, String sessionId,
                                                             String runId, long afterSeq) {
             return List.of();
+        }
+
+        @Override
+        public List<ChatEventRow> findFirstByOwnerAndRunAfterSeq(
+                String tenantId,
+                String userId,
+                String sessionId,
+                String runId,
+                long afterSeq,
+                int limit) {
+            boundedQueryLimit = limit;
+            return boundedRows;
         }
 
         @Override

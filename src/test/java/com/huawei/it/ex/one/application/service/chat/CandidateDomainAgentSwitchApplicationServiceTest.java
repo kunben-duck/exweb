@@ -19,6 +19,7 @@ import com.huawei.it.ex.one.application.facade.DocumentFacade;
 import com.huawei.it.ex.one.application.facade.ResolvedChatAttachments;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
+import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
 import com.huawei.it.ex.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
@@ -34,8 +35,12 @@ import com.huawei.it.ex.one.domain.chat.ChatRunStartResult;
 import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatRunStopResult;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
 import com.huawei.it.ex.one.domain.document.UploadedDocument;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -58,6 +63,9 @@ class CandidateDomainAgentSwitchApplicationServiceTest {
     private final ChatRunStopCoordinator stopCoordinator = mock(ChatRunStopCoordinator.class);
     private final ChatRunStartCoordinator startCoordinator = mock(ChatRunStartCoordinator.class);
     private final ChatRunExecutionCoordinator executionCoordinator = mock(ChatRunExecutionCoordinator.class);
+    private final ChatEventStore eventStore = mock(ChatEventStore.class);
+    private final CandidateSwitchRouteTraceService routeTraceService =
+            new CandidateSwitchRouteTraceService(eventStore, new ObjectMapper());
     private final CandidateDomainAgentSwitchApplicationService service =
             new CandidateDomainAgentSwitchApplicationService(
                     runService,
@@ -66,7 +74,8 @@ class CandidateDomainAgentSwitchApplicationServiceTest {
                     documentFacade,
                     stopCoordinator,
                     startCoordinator,
-                    executionCoordinator);
+                    executionCoordinator,
+                    routeTraceService);
 
     private UserContext user;
     private ChatSession session;
@@ -81,6 +90,11 @@ class CandidateDomainAgentSwitchApplicationServiceTest {
         when(messageRepository.findByOwnerAndId("tenant1", "user1", "msg_user"))
                 .thenReturn(Optional.of(userMessage));
         when(runService.findActiveRun(user, "session1")).thenReturn(Optional.empty());
+        when(eventStore.findFirstByOwnerAndRunAfterSeq(
+                "tenant1", "user1", "session1", "run_a",
+                new ChatEventStore.RunEventWindow(
+                        0L, CandidateSwitchRouteTraceService.SOURCE_SCAN_LIMIT)))
+                .thenReturn(List.of());
     }
 
     @Test
@@ -120,10 +134,14 @@ class CandidateDomainAgentSwitchApplicationServiceTest {
         assertThat(replacement.regeneratedMessageId()).isEqualTo("msg_assistant_a");
         assertThat(replacement.metadata()).containsEntry("bizKey", "current-run-only");
         assertThat(SelectedIntentContext.intentName(replacement.metadata())).isEqualTo("候选技能B");
-        InOrder order = inOrder(stopCoordinator, startCoordinator);
+        InOrder order = inOrder(stopCoordinator, eventStore, startCoordinator);
         order.verify(stopCoordinator).stopRun(
                 eq(user), any(TraceContext.class), eq("run_a"), eq("CANDIDATE_SWITCH"),
                 any(RuntimeForwardHeaders.class));
+        order.verify(eventStore).findFirstByOwnerAndRunAfterSeq(
+                "tenant1", "user1", "session1", "run_a",
+                new ChatEventStore.RunEventWindow(
+                        0L, CandidateSwitchRouteTraceService.SOURCE_SCAN_LIMIT));
         order.verify(startCoordinator).startStandard(
                 eq(user), any(TraceContext.class), any(ChatCommand.class), any());
     }
@@ -237,6 +255,39 @@ class CandidateDomainAgentSwitchApplicationServiceTest {
                 eq(user), any(TraceContext.class), commandCaptor.capture(), any());
         assertThat(commandCaptor.getValue().regeneratedMessageId()).isNull();
         verify(stopCoordinator, never()).stopRun(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void passesLoadedRouteTraceToCandidateRunExecution() {
+        ChatRun completed = run(ChatRunStatus.COMPLETED, "msg_assistant_a");
+        when(runService.requireOwnedRun(user, "run_a")).thenReturn(completed, completed);
+        when(eventStore.findFirstByOwnerAndRunAfterSeq(
+                "tenant1", "user1", "session1", "run_a",
+                new ChatEventStore.RunEventWindow(
+                        0L, CandidateSwitchRouteTraceService.SOURCE_SCAN_LIMIT)))
+                .thenReturn(List.of(new StoredChatEvent(
+                        "run_a", "session1", 2L, "runtime.progress", NOW, Map.of(
+                                "source", "intent-agent",
+                                "sourceType", "intent-start"))));
+        when(executionCoordinator.executeCandidateSwitch(any(), any())).thenReturn(Flux.empty());
+        ChatRunStartResult expected = new ChatRunStartResult(
+                "run_b", "session1", 13L, NOW, "chat-run-run_b");
+        when(startCoordinator.startStandard(eq(user), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    ChatRunStartCoordinator.StandardRunFactory factory = invocation.getArgument(3);
+                    factory.create(new RunStartAttempt(user, "run_b", null)).collectList().block();
+                    return Mono.just(expected);
+                });
+
+        service.switchDomainAgent(
+                user, TraceContext.empty(), command(), RuntimeForwardHeaders.empty()).block();
+
+        ArgumentCaptor<CandidateSwitchRunSource> sourceCaptor =
+                ArgumentCaptor.forClass(CandidateSwitchRunSource.class);
+        verify(executionCoordinator).executeCandidateSwitch(any(), sourceCaptor.capture());
+        assertThat(sourceCaptor.getValue().routeTrace().eventsFor("run_b", "session1"))
+                .extracting(event -> event.payload().get("sourceType"))
+                .containsExactly("intent-start", "candidate-skill-switch");
     }
 
     private CandidateDomainAgentSwitchCommand command() {

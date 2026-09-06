@@ -33,8 +33,8 @@ attachmentType
 | `null`、空白、无目标记录 | `saveSession=null` | `FULL` |
 | 其他非空值或冲突记录 | 协议错误 | fail closed，不调用 DomainAgent |
 
-留存控制默认关闭。此时无附件或附件均无扩展名的调用不读取配置；带扩展名附件仍会读取同一配置快照完成
-`attachmentType`校验。Relay和系统响应始终不读取DomainAgent技能配置。
+留存控制默认关闭。此时无附件的调用不读取配置；只要DomainAgent调用携带附件，就会读取同一配置快照完成
+`attachmentType`校验，包括附件均无扩展名的场景。Relay和系统响应始终不读取DomainAgent技能配置。
 
 ## 3. 防腐层
 
@@ -139,9 +139,9 @@ Provider的HTTP交换使用WebClient非阻塞执行，并由配置的总超时�
 
 - 文件事实只使用当前主流程已经解析的`UploadedDocument.originalName`，不增加附件SQL；
 - `.xlsx.xls;.rar;.zip`解析为`.xlsx/.xls/.rar/.zip`，按小写扩展名比较；
-- 文件扩展名取最后一个非首位`.`之后的内容；无扩展名文件直接允许；
-- `attachmentType`缺失或空白表示不限制；非空但无法解析合法扩展名时记录告警并放行；
-- 任一带扩展名附件不支持时拒绝整个DomainAgent调用，不生成`message.delta`。
+- 文件扩展名取最后一个非首位`.`之后的内容；合法非空配置下无扩展名文件直接允许；
+- `attachmentType`缺失或空白表示技能不支持上传任何附件，未匹配到技能配置时使用相同语义；
+- 非空但无法解析合法扩展名时记录告警并放行；任一附件不支持时拒绝整个DomainAgent调用，不生成`message.delta`。
 
 拒绝事件顺序为`runtime.progress -> runtime.card -> message.completed -> run.completed`，公共payload使用
 `sourceType=domain-agent-attachment-validation`和`code=DOMAIN_AGENT_ATTACHMENT_TYPE_UNSUPPORTED`，并携带

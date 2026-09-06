@@ -69,7 +69,7 @@ class AgentDataPersistenceGateTest {
     }
 
     @Test
-    void relayAndExtensionlessAttachmentDoNotReadConfigurationWhenRetentionIsDisabled() {
+    void relaySkipsConfigurationButExtensionlessDomainAgentReadsIt() {
         AtomicInteger providerCalls = new AtomicInteger();
         AgentDataPersistenceGate gate = gate(false, query -> {
             providerCalls.incrementAndGet();
@@ -83,10 +83,35 @@ class AgentDataPersistenceGateTest {
         AgentDataPersistenceGate.Decision extensionless = gate.evaluate(
                 user, RouteTarget.domainAgent("skill-1", "direct"), state,
                 RuntimeForwardHeaders.empty(), List.of(document("doc-2", "README"))).block();
+        AgentDataPersistenceGate.Decision noAttachments = gate.evaluate(
+                user, RouteTarget.domainAgent("skill-1", "direct"), state,
+                RuntimeForwardHeaders.empty(), List.of()).block();
 
         assertThat(relay.status()).isEqualTo(AgentDataPersistenceGate.Status.ALLOW);
         assertThat(extensionless.status()).isEqualTo(AgentDataPersistenceGate.Status.ALLOW);
-        assertThat(providerCalls).hasValue(0);
+        assertThat(noAttachments.status()).isEqualTo(AgentDataPersistenceGate.Status.ALLOW);
+        assertThat(providerCalls).hasValue(1);
+    }
+
+    @Test
+    void unconfiguredSkillRejectsEveryAttachment() {
+        AtomicInteger providerCalls = new AtomicInteger();
+        AgentDataPersistenceGate gate = gate(false, query -> {
+            providerCalls.incrementAndGet();
+            return Mono.just(DomainAgentSkillConfiguration.unconfigured(query.skillId()));
+        });
+
+        AgentDataPersistenceGate.Decision decision = gate.evaluate(
+                user, RouteTarget.domainAgent("skill-1", "direct"),
+                new AgentDataPersistenceState("回答已隐藏"), RuntimeForwardHeaders.empty(),
+                List.of(document("doc-1", "report.pdf"), document("doc-2", "README"))).block();
+
+        assertThat(providerCalls).hasValue(1);
+        assertThat(decision.status()).isEqualTo(AgentDataPersistenceGate.Status.UNSUPPORTED_ATTACHMENT);
+        assertThat(decision.payload())
+                .containsEntry("supportedAttachmentTypes", List.of())
+                .containsEntry("unsupportedAttachmentTypes", List.of(".pdf"));
+        assertThat((List<?>) decision.payload().get("unsupportedAttachments")).hasSize(2);
     }
 
     @Test

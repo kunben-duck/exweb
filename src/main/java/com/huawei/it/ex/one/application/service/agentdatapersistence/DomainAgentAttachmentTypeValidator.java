@@ -26,18 +26,18 @@ final class DomainAgentAttachmentTypeValidator {
             Pattern.UNICODE_CHARACTER_CLASS);
 
     boolean requiresConfiguration(List<UploadedDocument> documents) {
-        return documents != null && documents.stream().anyMatch(document -> extension(document).isPresent());
+        return documents != null && documents.stream().anyMatch(document -> document != null);
     }
 
     Validation validate(
             DomainAgentSkillConfiguration configuration,
             List<UploadedDocument> documents) {
-        if (!requiresConfiguration(documents)) {
+        if (documents == null || documents.isEmpty()) {
             return Validation.allowed();
         }
         String configuredTypes = configuration == null ? null : configuration.attachmentType();
         if (configuredTypes == null || configuredTypes.isBlank()) {
-            return Validation.allowed();
+            return unsupportedAll(documents);
         }
         List<String> supportedTypes = configuredExtensions(configuredTypes);
         if (supportedTypes.isEmpty()) {
@@ -56,6 +56,25 @@ final class DomainAgentAttachmentTypeValidator {
         return unsupported.isEmpty()
                 ? Validation.allowed()
                 : Validation.unsupported(supportedTypes, List.copyOf(unsupportedTypes), unsupported);
+    }
+
+    private Validation unsupportedAll(List<UploadedDocument> documents) {
+        LinkedHashSet<String> unsupportedTypes = new LinkedHashSet<>();
+        List<UnsupportedAttachment> unsupported = new ArrayList<>();
+        for (UploadedDocument document : documents) {
+            if (document == null) {
+                continue;
+            }
+            String extension = extension(document).orElse("");
+            if (!extension.isEmpty()) {
+                unsupportedTypes.add(extension);
+            }
+            unsupported.add(new UnsupportedAttachment(
+                    document.id(), document.originalName(), extension));
+        }
+        return unsupported.isEmpty()
+                ? Validation.allowed()
+                : Validation.unsupported(List.of(), List.copyOf(unsupportedTypes), unsupported);
     }
 
     Map<String, Object> payload(

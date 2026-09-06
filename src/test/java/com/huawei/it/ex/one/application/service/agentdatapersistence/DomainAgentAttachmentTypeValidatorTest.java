@@ -12,6 +12,7 @@ import com.huawei.it.ex.one.domain.document.UploadedDocument;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
 
 class DomainAgentAttachmentTypeValidatorTest {
@@ -36,12 +37,36 @@ class DomainAgentAttachmentTypeValidatorTest {
     }
 
     @Test
-    void blankConfigurationAndExtensionlessFilesAreAllowed() {
-        assertThat(validator.validate(configuration(null), List.of(document("report.pdf"))).status())
-                .isEqualTo(DomainAgentAttachmentTypeValidator.Status.ALLOWED);
+    void blankConfigurationRejectsAllAttachments() {
+        for (String configuredTypes : Arrays.asList(null, "", "  ")) {
+            DomainAgentAttachmentTypeValidator.Validation validation = validator.validate(
+                    configuration(configuredTypes), List.of(document("report.pdf"), document("README")));
+
+            assertThat(validation.status()).isEqualTo(DomainAgentAttachmentTypeValidator.Status.UNSUPPORTED);
+            assertThat(validation.supportedTypes()).isEmpty();
+            assertThat(validation.unsupportedTypes()).containsExactly(".pdf");
+            assertThat(validation.unsupportedAttachments())
+                    .extracting(
+                            DomainAgentAttachmentTypeValidator.UnsupportedAttachment::name,
+                            DomainAgentAttachmentTypeValidator.UnsupportedAttachment::extension)
+                    .containsExactly(
+                            org.assertj.core.groups.Tuple.tuple("report.pdf", ".pdf"),
+                            org.assertj.core.groups.Tuple.tuple("README", ""));
+        }
+    }
+
+    @Test
+    void configuredTypesStillAllowExtensionlessFiles() {
         assertThat(validator.validate(configuration(".pdf"), List.of(document("README"))).status())
                 .isEqualTo(DomainAgentAttachmentTypeValidator.Status.ALLOWED);
-        assertThat(validator.requiresConfiguration(List.of(document(".env")))).isFalse();
+        assertThat(validator.requiresConfiguration(List.of(document(".env")))).isTrue();
+    }
+
+    @Test
+    void noAttachmentsDoNotRequireConfiguration() {
+        assertThat(validator.requiresConfiguration(List.of())).isFalse();
+        assertThat(validator.validate(configuration(null), List.of()).status())
+                .isEqualTo(DomainAgentAttachmentTypeValidator.Status.ALLOWED);
     }
 
     @Test

@@ -125,9 +125,10 @@ WebSocket、Event Resume 和 stop 的 URL 由前端 SDK 或网关配置管理，
 和 DomainAgent 文档 provider 默认不接入该鉴权头，仍保持现有 Cookie/普通调用行为。
 
 DomainAgent 调用前的技能配置由单一服务统一查询并缓存，快照包含`skillName/isSaveSession/attachmentType`。
-带扩展名的可信附件会按技能`attachmentType`校验；任一格式不支持时不订阅DomainAgent，改为输出
-`runtime.progress -> runtime.card -> message.completed -> run.completed`结构化业务完成事件。无扩展名文件、
-空限制或不可解析配置按放行处理；仅附件校验所需的配置查询失败也按fail-open放行。
+任何可信附件都会按技能`attachmentType`校验；任一格式不支持时不订阅DomainAgent，改为输出
+`runtime.progress -> runtime.card -> message.completed -> run.completed`结构化业务完成事件。`attachmentType`
+缺失或空白表示技能不支持上传任何附件；合法非空配置下无扩展名文件仍放行，非空但不可解析的配置记录告警并放行。
+仅附件校验所需的配置查询失败也按fail-open放行。
 
 `FINANCEEX_AGENT_DATA_PERSISTENCE_ENABLED=true` 时，同一配置快照还用于assistant留存控制。仅明确返回
 `isSaveSession=N` 时，业务 Event 只通过本机流和 Redis Pub/Sub 实时输出，不写入事件表；

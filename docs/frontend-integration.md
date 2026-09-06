@@ -3257,7 +3257,9 @@ DomainAgent 路由会跳过用例库和意图服务，并创建或覆盖当前�
 
 当请求携带标准`attachments[]`且最终路由为DomainAgent时，ChatService会使用文档库返回的可信文件名扩展名
 校验技能配置中的`attachmentType`。例如`.xlsx.xls;.rar;.zip`表示支持`.xlsx/.xls/.rar/.zip`，比较忽略大小写；
-无扩展名文件和空限制直接放行。任一附件格式不支持时不会调用DomainAgent，事件顺序为：
+`attachmentType`缺失、空字符串或纯空白表示该技能不支持上传任何附件，此时所有附件均进入
+`unsupportedAttachments`且`supportedAttachmentTypes=[]`。合法非空配置下无扩展名文件仍直接放行。
+任一附件格式不支持时不会调用DomainAgent，事件顺序为：
 
 ```text
 runtime.progress

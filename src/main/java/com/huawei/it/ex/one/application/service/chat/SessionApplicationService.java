@@ -81,6 +81,7 @@ public class SessionApplicationService implements ChatSessionFacade {
     private final ObjectProvider<ChatRunStopCoordinator> stopCoordinatorProvider;
     private final ObjectProvider<ChatInteractionApplicationService> interactionServiceProvider;
     private final ObjectProvider<SessionTitleMetadata> sessionTitleMetadataProvider;
+    private volatile RuntimeBindingCacheSynchronizer runtimeBindingCacheSynchronizer;
 
     @Autowired
     public SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository, IdGenerator idGenerator,
@@ -98,6 +99,11 @@ public class SessionApplicationService implements ChatSessionFacade {
         this.stopCoordinatorProvider = stopCoordinatorProvider;
         this.interactionServiceProvider = interactionServiceProvider;
         this.sessionTitleMetadataProvider = sessionTitleMetadataProvider;
+    }
+
+    @Autowired
+    void setRuntimeBindingCacheSynchronizer(RuntimeBindingCacheSynchronizer runtimeBindingCacheSynchronizer) {
+        this.runtimeBindingCacheSynchronizer = runtimeBindingCacheSynchronizer;
     }
 
     SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository,
@@ -347,9 +353,10 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     @Override
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public ChatSession renameSession(UserContext user, String sessionId, String title) {
         checkChatUser(user);
-        ChatSession session = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
+        ChatSession session = lockLatestOwnedSession(user, sessionId);
         String safeTitle = title == null || title.isBlank() ? session.title() : title.trim();
         String metadataJson = title == null || title.isBlank()
                 ? session.metadataJson()
@@ -358,20 +365,23 @@ public class SessionApplicationService implements ChatSessionFacade {
     }
 
     @Override
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public ChatSession archiveSession(UserContext user, String sessionId) {
         checkChatUser(user);
-        ChatSession session = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
+        ChatSession session = lockLatestOwnedSession(user, sessionId);
         return saveWith(session, session.title(), STATUS_ARCHIVED);
     }
 
     @Override
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public ChatSession restoreSession(UserContext user, String sessionId) {
         checkChatUser(user);
-        ChatSession session = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
+        ChatSession session = lockLatestOwnedSession(user, sessionId);
         return saveWith(session, session.title(), STATUS_ACTIVE);
     }
 
     @Override
+    @Transactional
     public ChatSession deleteSession(UserContext user, String sessionId) {
         return deleteSessions(user, List.of(sessionId)).getFirst();
     }
@@ -381,15 +391,17 @@ public class SessionApplicationService implements ChatSessionFacade {
     public List<ChatSession> deleteSessions(UserContext user, List<String> sessionIds) {
         checkChatUser(user);
         List<String> normalizedIds = normalizeDeleteSessionIds(sessionIds);
-        List<ChatSession> sessions = normalizedIds.stream()
+        List<ChatSession> validatedSessions = normalizedIds.stream()
                 .map(sessionId -> requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false))
                 .toList();
+        List<ChatSession> sessions = lockLatestOwnedSessionsForDelete(user, validatedSessions);
         List<SessionDeleteRunPlan> activeRunPlans = activeRunPlansForDelete(user, sessions);
         List<ChatSession> deleted = new ArrayList<>(sessions.size());
         for (ChatSession session : sessions) {
             ChatSession deletedSession = saveWith(session, session.title(), STATUS_DELETED);
             if (runtimeBindingService != null) {
-                runtimeBindingService.cancelAllForSession(user.tenantId(), user.ownerUserId(), session.id());
+                runtimeBindingService.cancelAllForSessionInTransaction(
+                        user.tenantId(), user.ownerUserId(), session.id());
             }
             if (shareRepository != null) {
                 shareRepository.revokeActiveBySession(user.tenantId(), user.ownerUserId(), session.id(), Instant.now());
@@ -400,8 +412,21 @@ public class SessionApplicationService implements ChatSessionFacade {
             }
             deleted.add(deletedSession);
         }
+        evictRuntimeBindingCachesAfterDeleteCommit(user, sessions);
         stopActiveRunsAfterDeleteCommit(user, activeRunPlans);
         return List.copyOf(deleted);
+    }
+
+    private List<ChatSession> lockLatestOwnedSessionsForDelete(
+            UserContext user, List<ChatSession> validatedSessions) {
+        Map<String, ChatSession> lockedById = validatedSessions.stream()
+                .sorted(java.util.Comparator.comparing(ChatSession::id))
+                .map(session -> ensureNotDeleted(lockAndReloadForMessageMutation(
+                        user.tenantId(), user.ownerUserId(), session)))
+                .collect(Collectors.toMap(ChatSession::id, session -> session));
+        return validatedSessions.stream()
+                .map(session -> lockedById.get(session.id()))
+                .toList();
     }
 
     private List<SessionDeleteRunPlan> activeRunPlansForDelete(UserContext user, List<ChatSession> sessions) {
@@ -413,10 +438,29 @@ public class SessionApplicationService implements ChatSessionFacade {
         }
         List<SessionDeleteRunPlan> plans = new ArrayList<>();
         for (ChatSession session : sessions) {
-            chatRunService.findActiveRun(user, session.id())
+            chatRunService.findPersistedActiveRunForDelete(user, session.id())
                     .ifPresent(run -> plans.add(new SessionDeleteRunPlan(session, run)));
         }
         return List.copyOf(plans);
+    }
+
+    private void evictRuntimeBindingCachesAfterDeleteCommit(UserContext user, List<ChatSession> sessions) {
+        RuntimeBindingCacheSynchronizer synchronizer = runtimeBindingCacheSynchronizer;
+        if (synchronizer == null || sessions == null || sessions.isEmpty()) {
+            return;
+        }
+        Runnable scheduleEvictions = () -> sessions.forEach(session -> synchronizer.scheduleEviction(
+                user.tenantId(), user.ownerUserId(), session.id()));
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    scheduleEvictions.run();
+                }
+            });
+            return;
+        }
+        scheduleEvictions.run();
     }
 
     private void stopActiveRunsAfterDeleteCommit(UserContext user, List<SessionDeleteRunPlan> plans) {
@@ -983,6 +1027,12 @@ public class SessionApplicationService implements ChatSessionFacade {
             throw new IllegalArgumentException("会话不存在: " + session.id());
         }
         return session;
+    }
+
+    private ChatSession lockLatestOwnedSession(UserContext user, String sessionId) {
+        ChatSession ownedSession = requireOwnedSession(user.tenantId(), user.ownerUserId(), sessionId, false);
+        return ensureNotDeleted(lockAndReloadForMessageMutation(
+                user.tenantId(), user.ownerUserId(), ownedSession));
     }
 
     private ChatSession touch(ChatSession session) {

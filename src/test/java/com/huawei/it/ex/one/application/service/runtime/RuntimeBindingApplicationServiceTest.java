@@ -842,6 +842,26 @@ class RuntimeBindingApplicationServiceTest {
     }
 
     @Test
+    void deletingSessionTransactionDoesNotTouchBindingCache() {
+        RuntimeBinding active = binding("domain-agent", RuntimeBindingStatus.ACTIVE);
+        MultiBindingRepository repository = new MultiBindingRepository(List.of(active));
+        InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();
+        cache.put(active);
+        RuntimeBindingApplicationService service = new RuntimeBindingApplicationService(
+                repository, cache, new FixedIdGenerator(), Duration.ofDays(3), "relay");
+
+        service.cancelAllForSessionInTransaction("t", "u", "s");
+
+        assertThat(repository.findById(active.id())).get()
+                .extracting(RuntimeBinding::status)
+                .isEqualTo(RuntimeBindingStatus.CANCELLED);
+        assertThat(cache.get("t", "u", "s")).contains(active);
+
+        service.evictSessionCache("t", "u", "s");
+        assertThat(cache.get("t", "u", "s")).isEmpty();
+    }
+
+    @Test
     void ignoresCachedBindingFromDifferentRuntimeProvider() {
         InMemoryRuntimeBindingRepository repository = new InMemoryRuntimeBindingRepository();
         InMemoryRuntimeBindingCache cache = new InMemoryRuntimeBindingCache();

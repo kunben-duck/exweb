@@ -113,11 +113,12 @@ public class ChatRunApplicationService {
     /**
      * 创建 RUNNING 状态的 run 快照。
      */
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public ChatRun createRunning(CreateChatRunContext context) {
         UserContext user = context.user();
-        ensureOwnedActiveSession(user, context.sessionId());
+        lockOwnedActiveSession(user, context.sessionId());
         rejectIfActiveRunExists(user, context.sessionId());
-        ChatRun saved = insertRunning(context);
+        ChatRun saved = insertRunningAfterSessionValidation(context);
         cache.putActive(saved);
         return saved;
     }
@@ -127,17 +128,18 @@ public class ChatRunApplicationService {
      */
     ChatRun insertRunning(CreateChatRunContext context) {
         ensureOwnedActiveSession(context.user(), context.sessionId());
-        return repository.insert(newRunning(context));
+        return insertRunningAfterSessionValidation(context);
     }
 
     /**
      * 创建 Interaction continuation run，并在数据库 INSERT 中再次校验 claim 仍归当前 runId 所有。
      */
+    @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public ChatRun createInteractionRunning(CreateChatRunContext context, String interactionId) {
         UserContext user = context.user();
-        ensureOwnedActiveSession(user, context.sessionId());
+        lockOwnedActiveSession(user, context.sessionId());
         rejectIfActiveRunExists(user, context.sessionId());
-        ChatRun saved = insertInteractionRunning(context, interactionId);
+        ChatRun saved = insertInteractionRunningAfterSessionValidation(context, interactionId);
         cache.putActive(saved);
         return saved;
     }
@@ -147,6 +149,15 @@ public class ChatRunApplicationService {
      */
     ChatRun insertInteractionRunning(CreateChatRunContext context, String interactionId) {
         ensureOwnedActiveSession(context.user(), context.sessionId());
+        return insertInteractionRunningAfterSessionValidation(context, interactionId);
+    }
+
+    private ChatRun insertRunningAfterSessionValidation(CreateChatRunContext context) {
+        return repository.insert(newRunning(context));
+    }
+
+    private ChatRun insertInteractionRunningAfterSessionValidation(
+            CreateChatRunContext context, String interactionId) {
         ChatRun run = newRunning(context);
         return repository.insertInteractionContinuationIfClaimed(run, interactionId)
                 .orElseThrow(() -> ChatInteractionUnavailableException.alreadyHandled(interactionId));
@@ -539,6 +550,13 @@ public class ChatRunApplicationService {
     }
 
     /**
+     * 会话删除已持有 Session 行锁时直接读取 active run 数据库事实，避免在事务内访问 Redis。
+     */
+    Optional<ChatRun> findPersistedActiveRunForDelete(UserContext user, String sessionId) {
+        return repository.findActiveBySession(user.tenantId(), user.ownerUserId(), sessionId);
+    }
+
+    /**
      * 判断事件是否仍允许写入 run 事件流。
      *
      * <p>这是集群部署下的关键保护：当前 JVM subscription registry 只能加速本机资源释放，
@@ -824,6 +842,20 @@ public class ChatRunApplicationService {
 
     private void ensureOwnedActiveSession(UserContext user, String sessionId) {
         ChatSession session = loadOwnedNotDeletedSession(user, sessionId);
+        ensureActiveSession(session, sessionId);
+    }
+
+    private void lockOwnedActiveSession(UserContext user, String sessionId) {
+        ensureOwnedActiveSession(user, sessionId);
+        ChatSession current = sessionRepository.lockAndFindForMessageMutation(
+                user.tenantId(), user.ownerUserId(), sessionId);
+        if (SESSION_STATUS_DELETED.equals(current.status())) {
+            throw new IllegalArgumentException("会话不存在: " + sessionId);
+        }
+        ensureActiveSession(current, sessionId);
+    }
+
+    private void ensureActiveSession(ChatSession session, String sessionId) {
         if (!SESSION_STATUS_ACTIVE.equals(session.status())) {
             throw new IllegalStateException("会话不可用: " + sessionId);
         }

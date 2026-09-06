@@ -7,6 +7,7 @@ package com.huawei.it.ex.one.application.service.chat;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
@@ -649,6 +650,22 @@ class ChatRunApplicationServiceTest {
     }
 
     @Test
+    void persistedActiveRunLookupForDeleteBypassesRedisCache() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        ChatRun active = runningRun();
+        repository.save(active);
+        ChatRunCache cache = mock(ChatRunCache.class);
+        ChatRunApplicationService service = new ChatRunApplicationService(
+                repository, cache, new InMemoryEventStore(0L),
+                new PermissionChecker(), new FixedSessionRepository());
+
+        Optional<ChatRun> found = service.findPersistedActiveRunForDelete(user(), "session1");
+
+        assertThat(found).contains(active);
+        verifyNoInteractions(cache);
+    }
+
+    @Test
     void createRunningUsesDatabaseInsertInsteadOfRedisClaim() {
         InMemoryRunRepository repository = new InMemoryRunRepository();
         InMemoryRunCache cache = new InMemoryRunCache() {
@@ -723,6 +740,40 @@ class ChatRunApplicationServiceTest {
     }
 
     @Test
+    void createRunningRejectsSessionDeletedBeforeTheLockedRead() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        DeletingSessionRepository sessions = new DeletingSessionRepository();
+        ChatRunApplicationService service = new ChatRunApplicationService(repository, cache,
+                new InMemoryEventStore(0L), new PermissionChecker(), sessions);
+
+        assertThatThrownBy(() -> service.createRunning(runContext("run2")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("会话不存在");
+
+        assertThat(sessions.lockCalls).isEqualTo(1);
+        assertThat(repository.findById("run2")).isEmpty();
+        assertThat(cache.getActive("tenant1", "user1", "session1")).isEmpty();
+    }
+
+    @Test
+    void createInteractionRunningRejectsSessionDeletedBeforeTheLockedRead() {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        DeletingSessionRepository sessions = new DeletingSessionRepository();
+        ChatRunApplicationService service = new ChatRunApplicationService(repository, cache,
+                new InMemoryEventStore(0L), new PermissionChecker(), sessions);
+
+        assertThatThrownBy(() -> service.createInteractionRunning(runContext("run2"), "interaction1"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("会话不存在");
+
+        assertThat(sessions.lockCalls).isEqualTo(1);
+        assertThat(repository.findById("run2")).isEmpty();
+        assertThat(cache.getActive("tenant1", "user1", "session1")).isEmpty();
+    }
+
+    @Test
     void interactionContinuationDoesNotCreateRunAfterClaimWasReconciled() {
         ClaimLostRunRepository repository = new ClaimLostRunRepository();
         InMemoryRunCache cache = new InMemoryRunCache();
@@ -748,6 +799,19 @@ class ChatRunApplicationServiceTest {
     private ChatRunApplicationService service(InMemoryRunRepository repository, InMemoryRunCache cache) {
         return new ChatRunApplicationService(repository, cache, new InMemoryEventStore(0L),
                 new PermissionChecker(), new FixedSessionRepository());
+    }
+
+    private CreateChatRunContext runContext(String runId) {
+        return new CreateChatRunContext(
+                runId,
+                user(),
+                "session1",
+                RouteTarget.agentRuntime("test", 1.0, "test"),
+                null,
+                Map.of(),
+                com.huawei.it.ex.one.domain.chat.ChatRunMode.NEXT,
+                null,
+                null);
     }
 
     private UserContext user() {
@@ -940,6 +1004,17 @@ class ChatRunApplicationServiceTest {
         public Optional<ChatSession> findByTenantIdAndUserIdAndId(String tenantId, String userId, String sessionId) {
             Instant now = Instant.now();
             return Optional.of(new ChatSession(sessionId, tenantId, userId, "title", status, "web", now, now));
+        }
+    }
+
+    private static final class DeletingSessionRepository extends FixedSessionRepository {
+        private int lockCalls;
+
+        @Override
+        public ChatSession lockAndFindForMessageMutation(String tenantId, String userId, String sessionId) {
+            lockCalls++;
+            Instant now = Instant.now();
+            return new ChatSession(sessionId, tenantId, userId, "title", "DELETED", "web", now, now);
         }
     }
 }

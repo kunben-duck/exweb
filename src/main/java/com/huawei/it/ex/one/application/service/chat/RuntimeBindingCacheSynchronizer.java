@@ -47,6 +47,23 @@ final class RuntimeBindingCacheSynchronizer {
         }
     }
 
+    void scheduleEviction(String tenantId, String userId, String sessionId) {
+        if (tenantId == null || tenantId.isBlank()
+                || userId == null || userId.isBlank()
+                || sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        try {
+            scheduler.schedule(() -> evict(tenantId, userId, sessionId));
+        } catch (RuntimeException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.TASK_REJECTED,
+                            "RuntimeBinding cache eviction task was rejected after database commit")
+                    .sessionId(sessionId)
+                    .operation("runtime-binding.cache-evict-schedule")
+                    .build(), ex);
+        }
+    }
+
     private void synchronize(RuntimeBinding binding) {
         try {
             runtimeBindingService.synchronizeCache(binding);
@@ -56,6 +73,18 @@ final class RuntimeBindingCacheSynchronizer {
                     .sessionId(binding.chatSessionId())
                     .operation("runtime-binding.cache-sync")
                     .attribute("bindingId", binding.id())
+                    .build(), ex);
+        }
+    }
+
+    private void evict(String tenantId, String userId, String sessionId) {
+        try {
+            runtimeBindingService.evictSessionCache(tenantId, userId, sessionId);
+        } catch (RuntimeException ex) {
+            log.warn(SystemErrorLogEntry.builder(SystemErrorCode.REDIS_CACHE_SYNC_FAILED,
+                            "RuntimeBinding cache eviction failed after database commit")
+                    .sessionId(sessionId)
+                    .operation("runtime-binding.cache-evict")
                     .build(), ex);
         }
     }

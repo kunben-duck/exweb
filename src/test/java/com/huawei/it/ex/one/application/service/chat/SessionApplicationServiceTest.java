@@ -45,8 +45,11 @@ import com.huawei.it.ex.one.domain.chat.ChatSharePage;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import reactor.core.scheduler.Schedulers;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -399,6 +402,65 @@ class SessionApplicationServiceTest {
             assertThat(session.appId()).isEqualTo("fund-app");
             assertThat(session.appName()).isEqualTo("资金助手");
         });
+    }
+
+    @Test
+    void sessionLifecycleMutationsPreserveTheLatestLockedSnapshot() throws Exception {
+        ChatSession staleActive = lifecycleSession("旧标题", "ACTIVE", "old-leaf", 3L,
+                "{\"stale\":true}");
+        ChatSession latestActive = lifecycleSession("最新标题", "ACTIVE", "latest-leaf", 17L,
+                "{\"_intentExpertScope\":{\"expertId\":\"expert-b\"},\"latest\":true}");
+        ChatSession latestArchived = lifecycleSession("最新标题", "ARCHIVED", "latest-leaf", 17L,
+                latestActive.metadataJson());
+        SessionTitleProperties properties = new SessionTitleProperties();
+        properties.setEnabled(true);
+        SessionTitleMetadata titleMetadata = new SessionTitleMetadata(new ObjectMapper(), properties);
+
+        StaleThenLockedSessionRepository renameRepository =
+                new StaleThenLockedSessionRepository(staleActive, latestActive);
+        SessionApplicationService renameService = lifecycleService(renameRepository, titleMetadata);
+        ChatSession renamed = renameService.renameSession(user(), staleActive.id(), "人工新标题");
+
+        assertThat(renamed.title()).isEqualTo("人工新标题");
+        assertLatestMutableStatePreserved(renamed, latestActive);
+        assertThat(titleMetadata.read(renamed.metadataJson()).orElseThrow().source())
+                .isEqualTo(SessionTitleSummarySource.USER);
+        assertThat(new ObjectMapper().readTree(renamed.metadataJson()).path("latest").asBoolean()).isTrue();
+        assertThat(renameRepository.lockCalls).isEqualTo(1);
+
+        StaleThenLockedSessionRepository archiveRepository =
+                new StaleThenLockedSessionRepository(staleActive, latestActive);
+        ChatSession archived = lifecycleService(archiveRepository, null)
+                .archiveSession(user(), staleActive.id());
+
+        assertThat(archived.status()).isEqualTo("ARCHIVED");
+        assertLatestMutableStatePreserved(archived, latestActive);
+        assertThat(archived.metadataJson()).isEqualTo(latestActive.metadataJson());
+        assertThat(archiveRepository.lockCalls).isEqualTo(1);
+
+        StaleThenLockedSessionRepository restoreRepository =
+                new StaleThenLockedSessionRepository(staleActive, latestArchived);
+        ChatSession restored = lifecycleService(restoreRepository, null)
+                .restoreSession(user(), staleActive.id());
+
+        assertThat(restored.status()).isEqualTo("ACTIVE");
+        assertLatestMutableStatePreserved(restored, latestArchived);
+        assertThat(restored.metadataJson()).isEqualTo(latestArchived.metadataJson());
+        assertThat(restoreRepository.lockCalls).isEqualTo(1);
+    }
+
+    @Test
+    void sessionLifecycleMutationRejectsAConcurrentDeleteAfterTheOwnershipRead() {
+        ChatSession initial = lifecycleSession("标题", "ACTIVE", "old-leaf", 3L, "{}");
+        ChatSession deleted = lifecycleSession("标题", "DELETED", "latest-leaf", 17L,
+                "{\"_intentExpertScope\":{\"expertId\":\"expert-b\"}}");
+        StaleThenLockedSessionRepository repository = new StaleThenLockedSessionRepository(initial, deleted);
+
+        assertThatThrownBy(() -> lifecycleService(repository, null)
+                .renameSession(user(), initial.id(), "不应写回"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("会话不存在");
+        assertThat(repository.savedSession).isNull();
     }
 
     @Test
@@ -908,6 +970,33 @@ class SessionApplicationServiceTest {
     }
 
     @Test
+    void deleteSessionsDefersBindingCacheEvictionUntilCommit() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        Instant now = Instant.now();
+        sessions.save(new ChatSession("session1", "tenant1", "user1", "first", "ACTIVE", "web", now, now));
+        sessions.save(new ChatSession("session2", "tenant1", "user1", "second", "ACTIVE", "web", now, now));
+        CountingRuntimeBindingService bindings = new CountingRuntimeBindingService();
+        SessionApplicationService service = service(sessions, messages, null, bindings);
+        service.setRuntimeBindingCacheSynchronizer(
+                new RuntimeBindingCacheSynchronizer(bindings, Schedulers.immediate()));
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.deleteSessions(user(), List.of("session2", "session1", "session2"));
+
+            assertThat(bindings.cancellations).isEqualTo(2);
+            assertThat(bindings.evictedSessions).isEmpty();
+
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(synchronization -> synchronization.afterCommit());
+            assertThat(bindings.evictedSessions).containsExactly("session2", "session1");
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
     void deleteSessionsStopsActiveRunsAndDeletesAll() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
@@ -925,6 +1014,41 @@ class SessionApplicationServiceTest {
         assertThat(stopCoordinator.stoppedSessions).containsExactly("session1", "session2");
         assertThat(stopCoordinator.stoppedRuns).containsExactly("run-session1", "run-session2");
         assertThat(bindings.cancellations).isEqualTo(2);
+    }
+
+    @Test
+    void deleteSessionsLocksInStableOrderBeforeLookingUpActiveRuns() {
+        OrderedLockSessionRepository sessions = new OrderedLockSessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        Instant now = Instant.now();
+        sessions.save(new ChatSession("session1", "tenant1", "user1", "first", "ACTIVE", "web", now, now));
+        sessions.save(new ChatSession("session2", "tenant1", "user1", "second", "ACTIVE", "web", now, now));
+        ActiveRunAfterLocksService runs = new ActiveRunAfterLocksService(
+                sessions, 2, List.of("session2"));
+        CountingStopCoordinator stopCoordinator = new CountingStopCoordinator();
+        SessionApplicationService service = service(
+                sessions, messages, runs, new CountingRuntimeBindingService(), null, stopCoordinator);
+
+        List<ChatSession> deleted = service.deleteSessions(user(), List.of("session2", "session1"));
+
+        assertThat(sessions.lockOrder).containsExactly("session1", "session2");
+        assertThat(runs.lookupOrder).containsExactly("session2", "session1");
+        assertThat(deleted).extracting(ChatSession::id).containsExactly("session2", "session1");
+        assertThat(stopCoordinator.stoppedSessions).containsExactly("session2");
+        assertThat(stopCoordinator.stoppedRuns).containsExactly("run-session2");
+    }
+
+    @Test
+    void deleteSessionsRejectsAConcurrentDeleteAfterInitialValidation() {
+        ChatSession initial = lifecycleSession("标题", "ACTIVE", "old-leaf", 3L, "{}");
+        ChatSession deleted = lifecycleSession("标题", "DELETED", "latest-leaf", 17L, "{}");
+        StaleThenLockedSessionRepository sessions = new StaleThenLockedSessionRepository(initial, deleted);
+
+        assertThatThrownBy(() -> lifecycleService(sessions, null)
+                .deleteSessions(user(), List.of(initial.id())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("会话不存在");
+        assertThat(sessions.savedSession).isNull();
     }
 
     private MessagePair completeTurn(TestFixture fixture, String userText, String assistantText, String runId) {
@@ -973,6 +1097,38 @@ class SessionApplicationServiceTest {
             String id, String title, String appId, String channel, Instant updatedAt) {
         return new ChatSession(id, "tenant1", "user1", title, "ACTIVE", channel, appId, "应用",
                 null, id, null, null, 0L, null, updatedAt.minusSeconds(1), updatedAt);
+    }
+
+    private ChatSession lifecycleSession(
+            String title, String status, String leafMessageId, long lastNodeOrder, String metadataJson) {
+        Instant createdAt = Instant.parse("2026-09-05T00:00:00Z");
+        return new ChatSession("session-lifecycle", "tenant1", "user1", title, status, "web",
+                "fund-app", "资金助手", leafMessageId, "session-lifecycle", null, null,
+                lastNodeOrder, 23L, 19L, metadataJson, createdAt, createdAt.plusSeconds(lastNodeOrder));
+    }
+
+    private void assertLatestMutableStatePreserved(ChatSession actual, ChatSession latest) {
+        assertThat(actual.currentLeafMessageId()).isEqualTo(latest.currentLeafMessageId());
+        assertThat(actual.lastNodeOrder()).isEqualTo(latest.lastNodeOrder());
+        assertThat(actual.latestMessageSeq()).isEqualTo(latest.latestMessageSeq());
+        assertThat(actual.lastReadSeq()).isEqualTo(latest.lastReadSeq());
+        assertThat(actual.appId()).isEqualTo(latest.appId());
+        assertThat(actual.appName()).isEqualTo(latest.appName());
+    }
+
+    private SessionApplicationService lifecycleService(
+            SessionRepository sessions, SessionTitleMetadata titleMetadata) {
+        return new SessionApplicationService(
+                sessions,
+                new InMemoryMessageRepository(),
+                new IncrementingIdGenerator(),
+                new PermissionChecker(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                titleMetadata == null ? null : singletonProvider(titleMetadata));
     }
 
     private SessionApplicationService service(InMemorySessionRepository sessions, InMemoryMessageRepository messages) {
@@ -1090,6 +1246,55 @@ class SessionApplicationServiceTest {
         }
     }
 
+    private static final class StaleThenLockedSessionRepository extends InMemorySessionRepository {
+        private final ChatSession initialSession;
+        private final ChatSession lockedSession;
+        private int lockCalls;
+        private ChatSession savedSession;
+
+        private StaleThenLockedSessionRepository(ChatSession initialSession, ChatSession lockedSession) {
+            this.initialSession = initialSession;
+            this.lockedSession = lockedSession;
+        }
+
+        @Override
+        public Optional<ChatSession> findById(String sessionId) {
+            return initialSession.id().equals(sessionId) ? Optional.of(initialSession) : Optional.empty();
+        }
+
+        @Override
+        public Optional<ChatSession> findByTenantIdAndUserIdAndId(
+                String tenantId, String userId, String sessionId) {
+            return initialSession.id().equals(sessionId)
+                    && initialSession.tenantId().equals(tenantId)
+                    && initialSession.userId().equals(userId)
+                    ? Optional.of(initialSession)
+                    : Optional.empty();
+        }
+
+        @Override
+        public ChatSession lockAndFindForMessageMutation(String tenantId, String userId, String sessionId) {
+            lockCalls++;
+            return lockedSession;
+        }
+
+        @Override
+        public ChatSession save(ChatSession session) {
+            savedSession = session;
+            return session;
+        }
+    }
+
+    private static final class OrderedLockSessionRepository extends InMemorySessionRepository {
+        private final List<String> lockOrder = new ArrayList<>();
+
+        @Override
+        public ChatSession lockAndFindForMessageMutation(String tenantId, String userId, String sessionId) {
+            lockOrder.add(sessionId);
+            return findByTenantIdAndUserIdAndId(tenantId, userId, sessionId).orElseThrow();
+        }
+    }
+
     private ObjectProvider<ChatRunStopCoordinator> singletonProvider(ChatRunStopCoordinator coordinator) {
         return new ObjectProvider<>() {
             @Override
@@ -1168,7 +1373,37 @@ class SessionApplicationServiceTest {
         }
 
         @Override
-        public Optional<ChatRun> findActiveRun(UserContext user, String sessionId) {
+        Optional<ChatRun> findPersistedActiveRunForDelete(UserContext user, String sessionId) {
+            if (!activeSessionIds.contains(sessionId)) {
+                return Optional.empty();
+            }
+            Instant now = Instant.now();
+            return Optional.of(new ChatRun("run-" + sessionId, user.tenantId(), user.ownerUserId(), sessionId,
+                    ChatRunStatus.RUNNING, "AGENT_RUNTIME", null, "relay", null, 1L,
+                    null, null, now, null, Map.of(), now, now));
+        }
+    }
+
+    private static final class ActiveRunAfterLocksService extends ChatRunApplicationService {
+        private final OrderedLockSessionRepository sessions;
+        private final int expectedLocks;
+        private final List<String> activeSessionIds;
+        private final List<String> lookupOrder = new ArrayList<>();
+
+        private ActiveRunAfterLocksService(
+                OrderedLockSessionRepository sessions, int expectedLocks, List<String> activeSessionIds) {
+            super(null, null, null, new PermissionChecker(), null);
+            this.sessions = sessions;
+            this.expectedLocks = expectedLocks;
+            this.activeSessionIds = List.copyOf(activeSessionIds);
+        }
+
+        @Override
+        Optional<ChatRun> findPersistedActiveRunForDelete(UserContext user, String sessionId) {
+            if (sessions.lockOrder.size() != expectedLocks) {
+                throw new AssertionError("active Run was queried before all Session rows were locked");
+            }
+            lookupOrder.add(sessionId);
             if (!activeSessionIds.contains(sessionId)) {
                 return Optional.empty();
             }
@@ -1181,14 +1416,20 @@ class SessionApplicationServiceTest {
 
     private static class CountingRuntimeBindingService extends RuntimeBindingApplicationService {
         private int cancellations;
+        private final List<String> evictedSessions = new ArrayList<>();
 
         CountingRuntimeBindingService() {
             super(null, null, null, Duration.ofDays(3), "relay");
         }
 
         @Override
-        public void cancelAllForSession(String tenantId, String userId, String sessionId) {
+        public void cancelAllForSessionInTransaction(String tenantId, String userId, String sessionId) {
             cancellations++;
+        }
+
+        @Override
+        public void evictSessionCache(String tenantId, String userId, String sessionId) {
+            evictedSessions.add(sessionId);
         }
     }
 

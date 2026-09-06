@@ -732,6 +732,25 @@ public class RuntimeBindingApplicationService {
         cache.evict(tenantId, userId, sessionId);
     }
 
+    /**
+     * 会话删除事务内只提交 Binding 数据库状态，缓存由调用方在事务提交后清理。
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void cancelAllForSessionInTransaction(String tenantId, String userId, String sessionId) {
+        Map<String, RuntimeBinding> bindings = new LinkedHashMap<>();
+        repository.findActiveBySession(tenantId, userId, sessionId)
+                .forEach(binding -> bindings.put(binding.id(), binding));
+        repository.findResumableBySession(tenantId, userId, sessionId, DEFAULT_RUNTIME_PROVIDER)
+                .forEach(binding -> bindings.put(binding.id(), binding));
+        bindings.values().forEach(binding -> repository.save(
+                binding.withStatus(RuntimeBindingStatus.CANCELLED)));
+    }
+
+    /** 事务提交后按会话清理 RuntimeBinding Redis 热缓存。 */
+    public void evictSessionCache(String tenantId, String userId, String sessionId) {
+        cache.evict(tenantId, userId, sessionId);
+    }
+
     public RuntimeBinding markNotRoutable(RuntimeBinding binding, String rejectCode) {
         if (binding == null) {
             return null;

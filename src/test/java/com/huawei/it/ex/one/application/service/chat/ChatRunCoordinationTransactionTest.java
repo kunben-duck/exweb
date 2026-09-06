@@ -85,6 +85,29 @@ class ChatRunCoordinationTransactionTest {
     }
 
     @Test
+    void sessionLifecycleMutationsUseBoundedTransactions() throws Exception {
+        assertSessionLifecycleTimeout("renameSession", UserContext.class, String.class, String.class);
+        assertSessionLifecycleTimeout("archiveSession", UserContext.class, String.class);
+        assertSessionLifecycleTimeout("restoreSession", UserContext.class, String.class);
+    }
+
+    @Test
+    void sessionDeletionEntrypointsAreTransactional() throws Exception {
+        assertThat(SessionApplicationService.class
+                .getMethod("deleteSession", UserContext.class, String.class)
+                .getAnnotation(Transactional.class)).isNotNull();
+        assertThat(SessionApplicationService.class
+                .getMethod("deleteSessions", UserContext.class, List.class)
+                .getAnnotation(Transactional.class)).isNotNull();
+    }
+
+    @Test
+    void compatibilityRunAdmissionsUseBoundedTransactions() throws Exception {
+        assertChatRunTimeout("createRunning", CreateChatRunContext.class);
+        assertChatRunTimeout("createInteractionRunning", CreateChatRunContext.class, String.class);
+    }
+
+    @Test
     void documentResolutionUsesReadOnlyBoundedTransactions() throws Exception {
         assertDocumentResolutionTimeout("resolveAttachmentsForUser");
         assertDocumentResolutionTimeout("resolveDocumentsForUser");
@@ -106,6 +129,16 @@ class ChatRunCoordinationTransactionTest {
     void directAdmissionBindingCancellationRequiresExistingTransaction() throws Exception {
         Transactional transactional = RuntimeBindingApplicationService.class
                 .getMethod("cancelActiveForAdmission", String.class, String.class, String.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.propagation()).isEqualTo(Propagation.MANDATORY);
+    }
+
+    @Test
+    void sessionDeletionBindingCancellationRequiresExistingTransaction() throws Exception {
+        Transactional transactional = RuntimeBindingApplicationService.class
+                .getMethod("cancelAllForSessionInTransaction", String.class, String.class, String.class)
                 .getAnnotation(Transactional.class);
 
         assertThat(transactional).isNotNull();
@@ -188,6 +221,24 @@ class ChatRunCoordinationTransactionTest {
 
         assertThat(transactional).isNotNull();
         assertThat(transactional.readOnly()).isTrue();
+        assertThat(transactional.timeoutString()).isEqualTo(TIMEOUT);
+    }
+
+    private void assertSessionLifecycleTimeout(String methodName, Class<?>... parameterTypes) throws Exception {
+        Transactional transactional = SessionApplicationService.class
+                .getMethod(methodName, parameterTypes)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
+        assertThat(transactional.timeoutString()).isEqualTo(TIMEOUT);
+    }
+
+    private void assertChatRunTimeout(String methodName, Class<?>... parameterTypes) throws Exception {
+        Transactional transactional = ChatRunApplicationService.class
+                .getMethod(methodName, parameterTypes)
+                .getAnnotation(Transactional.class);
+
+        assertThat(transactional).isNotNull();
         assertThat(transactional.timeoutString()).isEqualTo(TIMEOUT);
     }
 }

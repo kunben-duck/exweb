@@ -429,7 +429,7 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 | `sourceSessionId` / `sourceMessageId` | 分支快照来源 |
 | `editedFromMessageId` | 编辑历史 user 消息时的新版本来源 |
 | `regeneratedFromMessageId` | 重新生成 assistant 消息时的新版本来源 |
-| `metadataJson` | 消息扩展元数据原始 JSON 字符串，可为空；前端按需执行 `JSON.parse`。assistant消息中的服务端单值字段`skillId`记录当前`message.runId`最后一次实际调用的技能/Intent标识；user消息及最终无标识的assistant不写该key |
+| `metadataJson` | 消息扩展元数据JSON字符串，可为空；前端按需执行`JSON.parse`。新建user消息保存请求边界清理后的`metadata`；assistant消息中的服务端单值字段`skillId`记录当前`message.runId`最后一次实际调用的技能/Intent标识，user消息不会由服务端补写该key |
 | `parts` | assistant 消息结构化过程信息，包括思考、工具、进度、agent 调用和 ANSWER 快照；user 消息通常为空数组 |
 | `attachments` | 消息关联附件展示快照；通常用于 user 消息回显上传文档，下载/预览仍需调用文档库接口 |
 | `feedback` | 当前用户对该 assistant 消息的有效反馈；user 消息或已取消反馈为 `null` |
@@ -1319,7 +1319,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `selectedIntent` | object | 否 | 显式选择 DomainAgent 或 Relay 专家时的展示摘要；`intentId` 可选且最长 128，`intentName` 必填且最长 256；仅用于生成 binding 和选择事件的展示信息，不写 run metadata，也不发送给用例库、IntentAgent 或 Runtime；专家未传时以 roleName 作为展示名称 |
 | `selectedExpert` | object | INTENT_EXPERT必填 | 聚合意图父专家展示摘要：`expertId`最长128且必须等于`targetId`，`expertName`最长256且必填。相同`targetId + intentAccessName`仅名称变化时只更新展示，不取消子Binding或重新意图 |
 | `agentMode` | object | 否 | Agent 模式完整快照。`selections` 最多 16 项；每项 `scheme`、`code` 必填，`displayName` 可选，同一请求不允许重复 `scheme`。缺失或 `null` 对同一 active DomainAgent 表示不更新，新 Binding 不继承；`selections=[]` 表示清除。仅记录到 DomainAgent RuntimeBinding，不进入 IntentAgent、Relay 或 DomainAgent 请求。澄清及切换确认的最终请求需要重新提交 |
-| `metadata` | object | 否 | 本轮扩展字段，最多50个顶层属性；可通过`bizContext`描述当前业务应用和页面。DomainAgent路由时会作为下游业务扩展，不能覆盖服务端保留的`messageId/skillId/query/sessionId` |
+| `metadata` | object | 否 | 本轮扩展字段，最多50个顶层属性；可通过`bizContext`描述当前业务应用和页面。DomainAgent路由时会作为下游业务扩展，不能覆盖服务端保留的`messageId/skillId/query/sessionId`。NEXT、EDIT_USER及普通Intent澄清新建user消息时，清理后的metadata还会随原INSERT保存到历史`metadataJson` |
 | `appId` | string | 否 | 会话分组键，最大 128；无 `sessionId` 时保存到新会话，已有会话中显式传入时必须与原值完全一致 |
 | `appName` | string | 否 | 会话分组展示名称快照，最大 256；不能脱离 `appId`，已有会话中显式传入时必须与原值完全一致 |
 | `language` | string | 否 | 会话标题总结语言，最大32字符；中文使用 `zh_CN`，英文使用 `en_US`，trim后为空使用服务端默认 `zh_CN`。不进入 metadata、IntentAgent、DomainAgent 或 Relay 请求，不改变本轮路由和回答 |
@@ -1391,6 +1391,8 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 Relay问卷续接只发送`approval-response`控制帧，不携带普通metadata。
 
 `bizContext`不得包含Cookie、Token、Authorization、密码或其他凭据，也不要放入带鉴权参数的完整页面URL。
+
+请求metadata描述user消息创建时的业务上下文。重新生成assistant、候选技能立即切换、模糊候选选择、Agent问卷和路由切换确认等复用历史user消息的请求，不会覆盖原消息的`metadataJson`；未传或清理后为空时返回`null`。分享和消息分支快照沿用已有消息复制逻辑保留该字段。
 Relay虽然会递归过滤敏感键，但前端不能依赖该过滤代替输入治理。
 
 #### 会话标题自动总结
@@ -2209,7 +2211,7 @@ curl http://localhost:8080/v1/chat/shares/share_xxx
     "role": "user",
     "content": "报销流程是什么？",
     "runId": "run_xxx",
-    "metadataJson": null,
+    "metadataJson": "{\"bizContext\":{\"contextVersion\":1,\"application\":{\"appId\":\"finance-workbench\",\"name\":\"财经作业平台\"}}}",
     "attachments": [
       {
         "documentId": "doc_xxx",

@@ -2433,6 +2433,8 @@ components:
           description: |
             本轮业务扩展字段，不得包含 Cookie、Token、traceId 或其他凭据。`bizContext`用于描述
             当前应用服务和页面业务上下文，不表示浏览器、操作系统或部署环境。
+            NEXT、EDIT_USER和普通Intent澄清新建user消息时，清理后的metadata随原消息INSERT保存；
+            复用历史user消息的请求不会覆盖原消息metadata，空metadata保存为null。
         appId:
           type: string
           maxLength: 128
@@ -3611,7 +3613,7 @@ components:
         metadataJson:
           type: string
           nullable: true
-          description: 消息扩展元数据原始 JSON 字符串；服务端不解析或清洗，前端按需 JSON.parse
+          description: 新建user消息包含请求边界清理后的metadata，assistant消息包含服务端维护状态；以JSON字符串返回，前端按需JSON.parse
         parts:
           type: array
           items:

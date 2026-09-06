@@ -9,6 +9,7 @@ import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 创建用户消息节点的命令。
@@ -22,6 +23,7 @@ import java.util.List;
  * @param runId 关联 run ID。
  * @param editedFromMessageId 编辑历史用户问题来源节点。
  * @param regeneratedFromMessageId 重新生成 assistant 来源节点。
+ * @param metadata 经过请求边界清理的用户消息元数据。
  * @param attachments 本轮用户消息展示用附件引用。
  */
 record UserMessageCreateCommand(
@@ -34,8 +36,13 @@ record UserMessageCreateCommand(
         String runId,
         String editedFromMessageId,
         String regeneratedFromMessageId,
+        Map<String, Object> metadata,
         List<AttachmentRef> attachments
 ) {
+    Map<String, Object> safeMetadata() {
+        return metadata == null ? Map.of() : metadata;
+    }
+
     List<AttachmentRef> safeAttachments() {
         return attachments == null ? List.of() : attachments;
     }

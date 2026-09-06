@@ -6,6 +6,7 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import com.huawei.it.ex.one.application.facade.ChatSessionFacade;
 import com.huawei.it.ex.one.application.facade.ChatSessionFirstAssistantSummary;
+import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.application.integration.conversation.SessionAppCategory;
 import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
 import com.huawei.it.ex.one.application.integration.conversation.SessionRepository;
@@ -40,6 +41,9 @@ import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.ChatSessionNumberPage;
 import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import reactor.core.scheduler.Schedulers;
 
@@ -81,6 +85,7 @@ public class SessionApplicationService implements ChatSessionFacade {
     private final ObjectProvider<ChatRunStopCoordinator> stopCoordinatorProvider;
     private final ObjectProvider<ChatInteractionApplicationService> interactionServiceProvider;
     private final ObjectProvider<SessionTitleMetadata> sessionTitleMetadataProvider;
+    private final ObjectMapper objectMapper;
     private volatile RuntimeBindingCacheSynchronizer runtimeBindingCacheSynchronizer;
 
     @Autowired
@@ -90,7 +95,8 @@ public class SessionApplicationService implements ChatSessionFacade {
                                      ChatShareRepository shareRepository,
                                      ObjectProvider<ChatRunStopCoordinator> stopCoordinatorProvider,
                                      ObjectProvider<ChatInteractionApplicationService> interactionServiceProvider,
-                                     ObjectProvider<SessionTitleMetadata> sessionTitleMetadataProvider) {
+                                     ObjectProvider<SessionTitleMetadata> sessionTitleMetadataProvider,
+                                     ObjectMapper objectMapper) {
         this.sessionRepository = sessionRepository; this.messageRepository = messageRepository; this.idGenerator = idGenerator;
         this.permissionChecker = permissionChecker;
         this.chatRunService = chatRunService;
@@ -99,6 +105,20 @@ public class SessionApplicationService implements ChatSessionFacade {
         this.stopCoordinatorProvider = stopCoordinatorProvider;
         this.interactionServiceProvider = interactionServiceProvider;
         this.sessionTitleMetadataProvider = sessionTitleMetadataProvider;
+        this.objectMapper = objectMapper == null ? new ObjectMapper() : objectMapper;
+    }
+
+    public SessionApplicationService(SessionRepository sessionRepository, ChatMessageRepository messageRepository,
+                                     IdGenerator idGenerator, PermissionChecker permissionChecker,
+                                     ChatRunApplicationService chatRunService,
+                                     RuntimeBindingApplicationService runtimeBindingService,
+                                     ChatShareRepository shareRepository,
+                                     ObjectProvider<ChatRunStopCoordinator> stopCoordinatorProvider,
+                                     ObjectProvider<ChatInteractionApplicationService> interactionServiceProvider,
+                                     ObjectProvider<SessionTitleMetadata> sessionTitleMetadataProvider) {
+        this(sessionRepository, messageRepository, idGenerator, permissionChecker, chatRunService,
+                runtimeBindingService, shareRepository, stopCoordinatorProvider, interactionServiceProvider,
+                sessionTitleMetadataProvider, new ObjectMapper());
     }
 
     @Autowired
@@ -572,6 +592,14 @@ public class SessionApplicationService implements ChatSessionFacade {
     ChatRunMessagePlan prepareIntentClarificationAnswer(UserContext user, ChatSession session, String runId,
                                                         String parentAssistantMessageId, String answerText,
                                                         List<AttachmentRef> attachments) {
+        return prepareIntentClarificationAnswer(
+                user, session, runId, parentAssistantMessageId, answerText, attachments, Map.of());
+    }
+
+    ChatRunMessagePlan prepareIntentClarificationAnswer(UserContext user, ChatSession session, String runId,
+                                                        String parentAssistantMessageId, String answerText,
+                                                        List<AttachmentRef> attachments,
+                                                        Map<String, Object> metadata) {
         if (user == null || session == null) {
             throw new IllegalArgumentException("意图澄清回答缺少用户或会话上下文");
         }
@@ -581,7 +609,7 @@ public class SessionApplicationService implements ChatSessionFacade {
         }
         ChatMessage answer = createUserMessage(new UserMessageCreateCommand(
                 user.tenantId(), user.ownerUserId(), session, answerText, parent.id(), ChatRunMode.NEXT,
-                runId, null, null, attachments == null ? List.of() : attachments));
+                runId, null, null, metadata, attachments == null ? List.of() : attachments));
         return new ChatRunMessagePlan(ChatRunMode.NEXT, parent.id(), answer, null);
     }
 
@@ -660,7 +688,7 @@ public class SessionApplicationService implements ChatSessionFacade {
 
     public ChatMessage saveUserMessage(ChatCommand command, ChatSession session) {
         return createUserMessage(new UserMessageCreateCommand(command.tenantId(), command.userId(), session,
-                command.message(), null, command.runMode(), null, null, null, List.of()));
+                command.message(), null, command.runMode(), null, null, null, command.metadata(), List.of()));
     }
 
     public ChatMessage saveAssistantMessage(String tenantId, String userId, String sessionId, String content) {
@@ -1115,7 +1143,8 @@ public class SessionApplicationService implements ChatSessionFacade {
                 ? session.currentLeafMessageId()
                 : command.parentMessageId();
         ChatMessage message = createUserMessage(new UserMessageCreateCommand(user.tenantId(), user.ownerUserId(), session,
-                command.message(), parentMessageId, ChatRunMode.NEXT, runId, null, null, attachments));
+                command.message(), parentMessageId, ChatRunMode.NEXT, runId, null, null,
+                command.metadata(), attachments));
         return new ChatRunMessagePlan(ChatRunMode.NEXT, parentMessageId, message, null);
     }
 
@@ -1125,7 +1154,7 @@ public class SessionApplicationService implements ChatSessionFacade {
         ensureUnlockedUserMessage(edited, "被编辑消息");
         ChatMessage message = createUserMessage(new UserMessageCreateCommand(user.tenantId(), user.ownerUserId(), session,
                 command.message(), edited.parentMessageId(), ChatRunMode.EDIT_USER, runId, edited.id(), null,
-                attachments));
+                command.metadata(), attachments));
         return new ChatRunMessagePlan(ChatRunMode.EDIT_USER, edited.parentMessageId(), message, null);
     }
 
@@ -1208,13 +1237,25 @@ public class SessionApplicationService implements ChatSessionFacade {
                 null,
                 command.mode() == ChatRunMode.EDIT_USER ? command.editedFromMessageId() : null,
                 command.regeneratedFromMessageId(),
-                null,
+                requestMetadataJson(command.safeMetadata()),
                 Instant.now()
         );
         ChatMessage saved = messageRepository.save(message);
         saveAttachments(saved, attachments);
         sessionRepository.updateCurrentLeaf(command.tenantId(), command.userId(), session.id(), saved.id());
         return saved;
+    }
+
+    private String requestMetadataJson(Map<String, Object> metadata) {
+        Map<String, Object> persisted = SelectedIntentContext.removeReserved(metadata);
+        if (persisted.isEmpty()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(persisted);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("用户消息metadata序列化失败", ex);
+        }
     }
 
     private long nextNodeOrder(ChatSession session) {

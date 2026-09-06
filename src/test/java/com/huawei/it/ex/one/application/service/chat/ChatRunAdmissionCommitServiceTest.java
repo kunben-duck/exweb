@@ -102,8 +102,10 @@ class ChatRunAdmissionCommitServiceTest {
         when(fixture.sessionService().lockAndReloadForMessageMutation(
                 USER.tenantId(), USER.ownerUserId(), stale)).thenReturn(current);
         ChatRunMessagePlan clarificationPlan = messagePlan();
+        Map<String, Object> messageMetadata = Map.of("bizContext", Map.of("pageId", "summary"));
         when(fixture.sessionService().prepareIntentClarificationAnswer(
-                eq(USER), eq(current), eq("run1"), eq("assistant1"), eq("answer"), eq(List.of())))
+                eq(USER), eq(current), eq("run1"), eq("assistant1"), eq("answer"), eq(List.of()),
+                eq(messageMetadata)))
                 .thenReturn(clarificationPlan);
         when(fixture.runService().insertInteractionRunning(any(), eq("interaction1")))
                 .thenReturn(mock(ChatRun.class));
@@ -111,7 +113,7 @@ class ChatRunAdmissionCommitServiceTest {
 
         ChatRunAdmissionCommitService.AdmissionResult result = fixture.service().commitIntentClarification(
                 new ChatRunAdmissionCommitService.IntentClarificationAdmissionCommand(
-                        USER, stale, "run1", interaction, "answer", List.of(), Map.of()));
+                        USER, stale, "run1", interaction, "answer", List.of(), Map.of(), messageMetadata));
 
         ArgumentCaptor<CreateChatRunContext> context = ArgumentCaptor.forClass(CreateChatRunContext.class);
         verify(fixture.runService()).insertInteractionRunning(context.capture(), eq("interaction1"));

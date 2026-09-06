@@ -255,7 +255,7 @@ public class ChatRunAdmissionCommitService {
                 currentSession.metadataJson()).orElse(null);
         ChatRunMessagePlan messagePlan = sessionService.prepareIntentClarificationAnswer(
                 user, currentSession, runId, interaction.assistantMessageId(),
-                command.answerText(), command.attachments());
+                command.answerText(), command.attachments(), command.messageMetadata());
         ChatRun run = chatRunService.insertInteractionRunning(new CreateChatRunContext(
                 runId,
                 user,
@@ -317,17 +317,26 @@ public class ChatRunAdmissionCommitService {
             ChatInteractionRequest interaction,
             String answerText,
             List<AttachmentRef> attachments,
-            java.util.Map<String, Object> runMetadata
+            java.util.Map<String, Object> runMetadata,
+            java.util.Map<String, Object> messageMetadata
     ) {
         public IntentClarificationAdmissionCommand {
             attachments = attachments == null ? List.of() : List.copyOf(attachments);
             runMetadata = runMetadata == null ? java.util.Map.of() : java.util.Map.copyOf(runMetadata);
+            messageMetadata = messageMetadata == null ? java.util.Map.of() : java.util.Map.copyOf(messageMetadata);
+        }
+
+        public IntentClarificationAdmissionCommand(UserContext user, ChatSession session, String runId,
+                                                   ChatInteractionRequest interaction, String answerText,
+                                                   List<AttachmentRef> attachments,
+                                                   java.util.Map<String, Object> runMetadata) {
+            this(user, session, runId, interaction, answerText, attachments, runMetadata, java.util.Map.of());
         }
 
         public IntentClarificationAdmissionCommand(UserContext user, ChatSession session, String runId,
                                                    ChatInteractionRequest interaction, String answerText,
                                                    java.util.Map<String, Object> runMetadata) {
-            this(user, session, runId, interaction, answerText, List.of(), runMetadata);
+            this(user, session, runId, interaction, answerText, List.of(), runMetadata, java.util.Map.of());
         }
     }
 

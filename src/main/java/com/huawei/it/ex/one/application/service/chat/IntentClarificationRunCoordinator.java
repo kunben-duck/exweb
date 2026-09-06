@@ -93,7 +93,8 @@ final class IntentClarificationRunCoordinator {
                                 interaction,
                                 request.input().messageText(),
                                 request.input().currentAttachments(),
-                                lifecycle.metadata(interaction)));
+                                lifecycle.metadata(interaction),
+                                request.input().runtimeMetadata()));
         ChatRunMessagePlan messagePlan = admission.messagePlan();
         ChatRun run = admission.run();
         ChatCommand routedCommand = command.withIntentExpertScope(admission.intentExpertScope());

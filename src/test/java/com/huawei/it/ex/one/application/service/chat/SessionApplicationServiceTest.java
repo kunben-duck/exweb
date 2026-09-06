@@ -10,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.application.config.SessionTitleProperties;
 import com.huawei.it.ex.one.application.facade.ChatSessionFirstAssistantSummary;
+import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.application.integration.conversation.SessionAppCategory;
 import com.huawei.it.ex.one.application.integration.conversation.SessionAppScope;
 import com.huawei.it.ex.one.application.integration.conversation.SessionListFilter;
@@ -43,6 +44,7 @@ import com.huawei.it.ex.one.domain.chat.ChatSessionPage;
 import com.huawei.it.ex.one.domain.chat.ChatShare;
 import com.huawei.it.ex.one.domain.chat.ChatSharePage;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import reactor.core.scheduler.Schedulers;
@@ -517,16 +519,105 @@ class SessionApplicationServiceTest {
     }
 
     @Test
-    void attachmentOnlyNextStoresEmptyUserContent() {
+    void newUserMessagePersistsRequestMetadataWithoutSelectedIntentCarrier() throws Exception {
+        TestFixture fixture = fixture();
+        Map<String, Object> requestMetadata = new LinkedHashMap<>();
+        requestMetadata.put("bizContext", Map.of(
+                "contextVersion", 1,
+                "application", Map.of("appId", "finance-app", "name", "财经作业平台")));
+        requestMetadata.put("labels", List.of("中文", "finance"));
+        Map<String, Object> commandMetadata = SelectedIntentContext.attach(
+                requestMetadata, "intent-a", "经营分析");
+        ChatCommand command = new ChatCommand(
+                "cmd", "tenant1", "user1", "session1", null, "web", "hello", List.of(), commandMetadata);
+
+        ChatRunMessagePlan plan = fixture.service.prepareRunMessage(
+                user(), command, fixture.session, "run1", List.of());
+
+        JsonNode stored = new ObjectMapper().readTree(plan.userMessage().metadataJson());
+        assertThat(stored.path("bizContext").path("contextVersion").asInt()).isEqualTo(1);
+        assertThat(stored.path("bizContext").path("application").path("name").asText())
+                .isEqualTo("财经作业平台");
+        assertThat(stored.path("labels").get(0).asText()).isEqualTo("中文");
+        assertThat(stored.path("labels").get(1).asText()).isEqualTo("finance");
+        assertThat(stored.size()).isEqualTo(2);
+    }
+
+    @Test
+    void editedUserStoresItsOwnMetadataAndRegenerateDoesNotOverwriteOriginal() throws Exception {
+        TestFixture fixture = fixture();
+        ChatCommand originalCommand = new ChatCommand(
+                "cmd1", "tenant1", "user1", "session1", null, "web", "原始问题", List.of(),
+                Map.of("page", "original"));
+        ChatRunMessagePlan original = fixture.service.prepareRunMessage(
+                user(), originalCommand, fixture.session, "run1", List.of());
+        ChatMessage assistant = saveAssistant(fixture, "原始回答", "run1", original.userMessage().id(), null);
+        ChatSession current = fixture.sessions.findById(fixture.session.id()).orElseThrow();
+        ChatCommand editCommand = new ChatCommand(
+                "cmd2", "tenant1", "user1", "session1", null, "web", "编辑后问题", List.of(),
+                Map.of("page", "edited"), ChatRunMode.EDIT_USER, null, original.userMessage().id(), null);
+
+        ChatRunMessagePlan edited = fixture.service.prepareRunMessage(
+                user(), editCommand, current, "run2", List.of());
+        ChatCommand regenerateCommand = new ChatCommand(
+                "cmd3", "tenant1", "user1", "session1", null, "web", null, List.of(),
+                Map.of("page", "regenerate"), ChatRunMode.REGENERATE_ASSISTANT,
+                null, null, assistant.id());
+        ChatRunMessagePlan regenerated = fixture.service.prepareRunMessage(
+                user(), regenerateCommand,
+                fixture.sessions.findById(fixture.session.id()).orElseThrow(), "run3", List.of());
+
+        assertThat(new ObjectMapper().readTree(original.userMessage().metadataJson()).path("page").asText())
+                .isEqualTo("original");
+        assertThat(new ObjectMapper().readTree(edited.userMessage().metadataJson()).path("page").asText())
+                .isEqualTo("edited");
+        assertThat(regenerated.userMessage().metadataJson()).isEqualTo(original.userMessage().metadataJson());
+    }
+
+    @Test
+    void intentClarificationAnswerPersistsCurrentRequestMetadata() throws Exception {
+        TestFixture fixture = fixture();
+        MessagePair original = completeTurn(fixture, "原始问题", "请补充条件", "run1");
+
+        ChatRunMessagePlan answer = fixture.service.prepareIntentClarificationAnswer(
+                user(),
+                fixture.sessions.findById(fixture.session.id()).orElseThrow(),
+                "run2",
+                original.assistant().id(),
+                "补充答案",
+                List.of(),
+                Map.of("bizContext", Map.of("page", Map.of("pageId", "summary"))));
+
+        JsonNode stored = new ObjectMapper().readTree(answer.userMessage().metadataJson());
+        assertThat(stored.path("bizContext").path("page").path("pageId").asText())
+                .isEqualTo("summary");
+    }
+
+    @Test
+    void emptyRequestMetadataKeepsUserMessageMetadataNull() {
+        TestFixture fixture = fixture();
+
+        ChatRunMessagePlan plan = fixture.service.prepareRunMessage(
+                user(), command("hello", ChatRunMode.NEXT, null, null, null),
+                fixture.session, "run1", List.of());
+
+        assertThat(plan.userMessage().metadataJson()).isNull();
+    }
+
+    @Test
+    void attachmentOnlyNextStoresEmptyUserContentAndRequestMetadata() throws Exception {
         TestFixture fixture = fixture();
         AttachmentRef attachment = new AttachmentRef("doc1", "财务报表.pdf", "application/pdf", 1L);
         ChatCommand command = new ChatCommand("cmd", "tenant1", "user1", "session1", null, "web", "",
-                List.of(attachment), Map.of(), ChatRunMode.NEXT, null, null, null);
+                List.of(attachment), Map.of("page", "attachment-upload"),
+                ChatRunMode.NEXT, null, null, null);
 
         ChatRunMessagePlan plan = fixture.service.prepareRunMessage(
                 user(), command, fixture.session, "run1", List.of(attachment));
 
         assertThat(plan.userMessage().content()).isEmpty();
+        assertThat(new ObjectMapper().readTree(plan.userMessage().metadataJson()).path("page").asText())
+                .isEqualTo("attachment-upload");
     }
 
     @Test

@@ -91,7 +91,8 @@ final class ChatRunAdmissionCoordinator {
                             request.interaction(),
                             request.messageText(),
                             request.attachments(),
-                            request.runMetadata()));
+                            request.runMetadata(),
+                            request.messageMetadata()));
         }
         return service.commitIntentClarification(
                 new ChatRunAdmissionCommitService.IntentClarificationAdmissionCommand(
@@ -101,7 +102,8 @@ final class ChatRunAdmissionCoordinator {
                         request.interaction(),
                         request.messageText(),
                         request.attachments(),
-                        request.runMetadata()));
+                        request.runMetadata(),
+                        request.messageMetadata()));
     }
 
     ChatRunAdmissionCommitService.AdmissionResult admitCandidateSwitch(
@@ -170,7 +172,8 @@ final class ChatRunAdmissionCoordinator {
                 request.runId(),
                 request.interaction().assistantMessageId(),
                 request.messageText(),
-                request.attachments());
+                request.attachments(),
+                request.messageMetadata());
         ChatRun run = chatRunService.createInteractionRunning(new CreateChatRunContext(
                 request.runId(),
                 request.user(),
@@ -214,7 +217,18 @@ final class ChatRunAdmissionCoordinator {
             ChatInteractionRequest interaction,
             String messageText,
             List<AttachmentRef> attachments,
-            Map<String, Object> runMetadata
+            Map<String, Object> runMetadata,
+            Map<String, Object> messageMetadata
     ) {
+        IntentClarificationAdmission(
+                UserContext user,
+                ChatSession session,
+                String runId,
+                ChatInteractionRequest interaction,
+                String messageText,
+                List<AttachmentRef> attachments,
+                Map<String, Object> runMetadata) {
+            this(user, session, runId, interaction, messageText, attachments, runMetadata, Map.of());
+        }
     }
 }

@@ -124,6 +124,8 @@ financeex:
     enabled: ${FINANCEEX_INTENT_ENABLED:false}
     base-url: ${FINANCEEX_INTENT_BASE_URL:}
     access-name: ${FINANCEEX_INTENT_ACCESS_NAME:}
+    # 可选：仅为非空请求入口直接拼接前缀，不去重；默认入口、专家身份及偏好分组保持原值。
+    request-access-name-prefix: ${FINANCEEX_INTENT_REQUEST_ACCESS_NAME_PREFIX:}
     # 可选：从意图响应 items[].accessName 开头移除一次，得到真实 DomainAgent skillId。
     response-access-name-prefix: ${FINANCEEX_INTENT_RESPONSE_ACCESS_NAME_PREFIX:}
     # 归一化后的accessName命中该前缀时，移除前缀后的内容作为Relay专家role_name。

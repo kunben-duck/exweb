@@ -15,6 +15,7 @@ import com.huawei.it.ex.one.application.integration.intent.IntentUserPreferenceC
 import com.huawei.it.ex.one.application.service.auth.AuthHeaderProviderRegistry;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
+import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.infrastructure.auth.NoopAuthHeaderProvider;
@@ -29,6 +30,8 @@ import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -40,6 +43,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -66,12 +70,22 @@ class FinEurekaIntentStreamClientTest {
 
             """;
 
-    @Test
-    void loadsPreferencesOnceAndReusesThemAcrossStreamRetries() throws Exception {
+    @ParameterizedTest
+    @CsvSource({
+            "'', fin, fin",
+            "' EX_ ', ' fin ', EX_fin",
+            "EX_, EX_fin, EX_EX_fin",
+            "EX_, , intent-entry"
+    })
+    void reusesPreferencesAndLogicalEntryAcrossStreamRetries(
+            String prefix, String entry, String expected) throws Exception {
         AtomicInteger attempts = new AtomicInteger();
         AtomicInteger preferenceLoads = new AtomicInteger();
         AtomicReference<String> requestBody = new AtomicReference<>();
         IntentServiceHttpProperties properties = properties(1);
+        properties.setRequestAccessNamePrefix(prefix);
+        ObjectMapper objectMapper = new ObjectMapper();
+        List<String> accessNames = new CopyOnWriteArrayList<>();
         List<IntentUserPreferenceCorrection> preferences = List.of(new IntentUserPreferenceCorrection(
                 "问题", "偏好意图", null, Instant.parse("2026-08-27T02:00:00Z")));
         IntentPreferenceCorrectionLoader loader = new IntentPreferenceCorrectionLoader(
@@ -83,6 +97,7 @@ class FinEurekaIntentStreamClientTest {
             }
         };
         try (StreamServerFixture fixture = server(requestBody, null, exchange -> {
+            accessNames.add(objectMapper.readTree(requestBody.get()).path("accessName").asText());
             if (attempts.incrementAndGet() == 1) {
                 write(exchange, "event: error\ndata: {\"code\":504}\n\n");
                 return;
@@ -91,7 +106,6 @@ class FinEurekaIntentStreamClientTest {
         })) {
             properties.setBaseUrl(fixture.baseUrl());
             properties.setRecognizeStreamPath("/stream");
-            ObjectMapper objectMapper = new ObjectMapper();
             IntentServiceWireMapper wireMapper = new IntentServiceWireMapper(
                     new IntentServiceRequestMapper(properties),
                     new IntentServiceResponseMapper(objectMapper, properties));
@@ -99,14 +113,17 @@ class FinEurekaIntentStreamClientTest {
                     WebClient.builder(), objectMapper, properties, wireMapper, noopAuthHeaders(),
                     new DefaultIntentRetryPolicy(), Schedulers.boundedElastic(), loader);
 
+            ChatCommand command = command(entry);
             IntentDecisionStreamFrame result = client
-                    .recognize(command(), MemoryContext.empty(), user())
+                    .recognize(command, MemoryContext.empty(), user())
                     .blockLast();
 
             assertThat(result.recognitionResult().decision().intentCode()).isEqualTo("knowledge");
             assertThat(attempts.get()).isEqualTo(2);
             assertThat(requestBody.get()).contains("\"userPreferenceCorrections\":[{");
             assertThat(preferenceLoads.get()).isEqualTo(1);
+            assertThat(accessNames).containsExactly(expected, expected);
+            assertThat(command.intentAccessName()).isEqualTo(entry == null ? null : entry.trim());
         }
     }
 
@@ -739,8 +756,15 @@ class FinEurekaIntentStreamClientTest {
     }
 
     private ChatCommand command() {
+        return command(null);
+    }
+
+    private ChatCommand command(String intentAccessName) {
         return new ChatCommand(
-                "command1", "tenant1", "user1", "session1", null, "web", "用户问题", List.of(), Map.of());
+                "command1", "tenant1", "user1", "session1", null, "web", "用户问题", List.of(), Map.of(),
+                null, null, ChatRunMode.NEXT,
+                null, null, null, null, null, null, null, Map.of(), null, null,
+                null, null, null, intentAccessName);
     }
 
     private UserContext user() {

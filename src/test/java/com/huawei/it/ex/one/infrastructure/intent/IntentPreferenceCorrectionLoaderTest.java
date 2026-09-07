@@ -15,32 +15,42 @@ import com.huawei.it.ex.one.application.config.RouteMemoryProperties;
 import com.huawei.it.ex.one.application.integration.intent.IntentPreferenceCorrectionRepository;
 import com.huawei.it.ex.one.application.integration.intent.IntentUserPreferenceCorrection;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+import com.huawei.it.ex.one.domain.chat.ChatCommand;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Instant;
 import java.util.List;
 
 class IntentPreferenceCorrectionLoaderTest {
-    @Test
-    void loadsConfiguredLimitForTheEffectiveAccessName() {
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"   ", " fin ", "EX_fin"})
+    void loadsPreferencesByLogicalEntryWithoutOutboundPrefix(String entry) {
         IntentPreferenceCorrectionRepository repository = mock(IntentPreferenceCorrectionRepository.class);
         IntentServiceHttpProperties intent = new IntentServiceHttpProperties();
         intent.setAccessName("configured-entry");
+        intent.setRequestAccessNamePrefix("EX_");
         intent.setUserPreferenceCorrectionsLimit(5);
+        ChatCommand command = mock(ChatCommand.class);
+        when(command.intentAccessName()).thenReturn(entry);
+        String logicalEntry = entry == null || entry.isBlank() ? "configured-entry" : entry.trim();
         IntentUserPreferenceCorrection correction = new IntentUserPreferenceCorrection(
                 "问题", "偏好", "原始", Instant.parse("2026-08-27T02:00:00Z"));
-        when(repository.findRecent("tenant", "user", "configured-entry", 5))
+        when(repository.findRecent("tenant", "user", logicalEntry, 5))
                 .thenReturn(List.of(correction));
         IntentPreferenceCorrectionLoader loader = new IntentPreferenceCorrectionLoader(
                 repository, new DefaultIntentAccessNameResolver(intent), intent,
                 new RouteMemoryProperties(), Runnable::run);
 
         List<IntentUserPreferenceCorrection> loaded = loader.loadBlocking(
-                null, new UserContext("tenant", "user", "User"));
+                command, new UserContext("tenant", "user", "User"));
 
         assertThat(loaded).containsExactly(correction);
-        verify(repository).findRecent("tenant", "user", "configured-entry", 5);
+        verify(repository).findRecent("tenant", "user", logicalEntry, 5);
     }
 
     @Test

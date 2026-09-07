@@ -21,6 +21,20 @@ class IntentServiceHttpPropertiesTest {
             .withUserConfiguration(TestConfiguration.class);
 
     @Test
+    void defaultsRequestPrefixToEmptyAndBindsItIndependentlyOfResponsePrefix() {
+        contextRunner.run(context -> assertThat(context.getBean(IntentServiceHttpProperties.class)
+                .getRequestAccessNamePrefix()).isEmpty());
+        contextRunner.withPropertyValues(
+                        "financeex.intent.request-access-name-prefix=EX_",
+                        "financeex.intent.response-access-name-prefix=skill_")
+                .run(context -> {
+                    IntentServiceHttpProperties properties = context.getBean(IntentServiceHttpProperties.class);
+                    assertThat(properties.getRequestAccessNamePrefix()).isEqualTo("EX_");
+                    assertThat(properties.getResponseAccessNamePrefix()).isEqualTo("skill_");
+                });
+    }
+
+    @Test
     void defaultsNoMatchAgentName() {
         contextRunner.run(context -> assertThat(context.getBean(IntentServiceHttpProperties.class)
                 .normalizedNoMatchAgentName()).isEqualTo("FIN Supervisor Agent"));

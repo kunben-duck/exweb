@@ -28,6 +28,8 @@ public class IntentServiceHttpProperties {
     private String baseUrl = "";
     /** 意图入口名称。 */
     private String accessName = "";
+    /** 仅为非空请求入口拼接的出站前缀；服务端默认入口及内部逻辑入口不变。 */
+    private String requestAccessNamePrefix = "";
     /** 意图响应 items[].accessName 转换为内部路由标识时移除的可选前缀。 */
     private String responseAccessNamePrefix = "";
     /** 规范化 accessName 命中该前缀时进入 Relay 专家模式。 */
@@ -81,6 +83,14 @@ public class IntentServiceHttpProperties {
 
     public void setAccessName(String accessName) {
         this.accessName = accessName;
+    }
+
+    public String getRequestAccessNamePrefix() {
+        return requestAccessNamePrefix;
+    }
+
+    public void setRequestAccessNamePrefix(String requestAccessNamePrefix) {
+        this.requestAccessNamePrefix = requestAccessNamePrefix;
     }
 
     public String getResponseAccessNamePrefix() {

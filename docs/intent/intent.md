@@ -58,10 +58,10 @@ Authorization: {dynamicToken}
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `messageId` | string | 否 | 当前ChatRun对应的可信user消息ID，用于Intent侧日志关联；无Run兼容调用时省略，不发送null。 |
-| `accessName` / `intentID` / `entranceID` | string | 三选一 | 意图入口。ChatService当前使用`accessName`：优先取`POST /v1/chat/runs.intentAccessName`，未传或空白时回退`financeex.intent.access-name`。 |
+| `accessName` / `intentID` / `entranceID` | string | 三选一 | 意图入口。ChatService当前使用`accessName`：请求入口非空时取`trim(request-access-name-prefix) + trim(intentAccessName)`；未传或空白时使用`financeex.intent.access-name`，不加前缀。 |
 | `query` | string | 是 | 当前待分类用户问题。澄清回答场景下，填用户对澄清问题的最新回答。 |
 | `userId` | string | 否 | 用户工号或用户标识，用于画像增强、审计或日志。 |
-| `userPreferenceCorrections` | array | 是 | 当前用户在有效accessName下最近记录的人工路由偏好，按更新时间从新到旧；无记录、功能关闭或读取失败时固定为`[]`。默认最多5条。 |
+| `userPreferenceCorrections` | array | 是 | 当前用户在逻辑入口（未拼接请求前缀）下最近记录的人工路由偏好，按更新时间从新到旧；无记录、功能关闭或读取失败时固定为`[]`。默认最多5条。 |
 | `conversationContext` | object | 否 | 多轮路由上下文。首轮可为空，但建议显式传空结构。 |
 | `options.trace` | boolean | 否 | 是否返回调试 trace。生产调用建议为 `false`。 |
 
@@ -75,6 +75,29 @@ Intent，但同一run内DomainAgent拒答时仍使用本次值重新意图。普
 候选技能立即切换接口同样应提交当前入口。该值不参与replacement Run首次直连DomainAgent，但新技能在同一
 Run内拒答时会用它重新调用Intent；接口不会继承source Run入口。切换成功后若调用偏好记录接口，必须提交相同
 的`intentAccessName`，确保偏好保存到正确的入口范围。
+
+#### 请求入口前缀
+
+```yaml
+financeex:
+  intent:
+    request-access-name-prefix: ${FINANCEEX_INTENT_REQUEST_ACCESS_NAME_PREFIX:}
+```
+
+前缀默认空，只在阻塞和流式Intent共用的出站Mapper中应用；前端应提交不带部署前缀的逻辑入口。
+前缀和请求入口均trim并保留大小写，直接拼接，不识别或去重已有前缀：
+
+| 前端`intentAccessName` | 请求前缀 | Intent收到的`accessName` |
+| --- | --- | --- |
+| `fin` | 空 | `fin` |
+| `fin` | `EX_` | `EX_fin` |
+| `EX_fin` | `EX_` | `EX_EX_fin` |
+| 未传、空字符串或纯空白 | `EX_` | 原`financeex.intent.access-name`，不加前缀 |
+
+聚合专家从Session恢复的入口同样在出站时拼接。命令、Run metadata、Session专家身份和偏好读写key不变，
+同一次重试及拒答重意图均从原逻辑入口组装，不累加前缀。原有128字符限制只针对前端入口，拼接结果不截断。
+修改请求前缀不清理既有Binding；`response-access-name-prefix`及响应技能解析完全独立，DomainAgent和Relay
+请求不受影响。未传入口时仍要求配置有效的服务端默认入口。
 
 `userPreferenceCorrections`来自独立偏好表，不进入`conversationContext.history`。每项只包含可信问题、用户选择的意图名称、可选原始意图名称和服务端UTC更新时间；同一次阻塞或流式Intent重试复用同一列表，不重复读取数据库。读取使用独立有界执行器和失败开放策略，因此偏好能力不可用时仍会正常调用Intent，只发送空数组。
 

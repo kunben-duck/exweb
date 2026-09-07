@@ -71,13 +71,22 @@ public class IntentServiceRequestMapper {
             List<IntentUserPreferenceCorrection> preferenceCorrections) {
         return new IntentRecognizeRequest(
                 normalizeMessageId(userMessageId),
-                accessNameResolver.resolve(command == null ? null : command.intentAccessName()),
+                requestAccessName(command == null ? null : command.intentAccessName()),
                 command == null ? "" : blankToDefault(command.message(), ""),
                 intentUserId(user),
                 preferenceCorrections == null ? List.of() : List.copyOf(preferenceCorrections),
                 conversationContext(memory),
                 Map.of("trace", properties.isTrace())
         );
+    }
+
+    private String requestAccessName(String requestedAccessName) {
+        String accessName = accessNameResolver.resolve(requestedAccessName);
+        if (requestedAccessName == null || requestedAccessName.isBlank()) {
+            return accessName;
+        }
+        String prefix = properties.getRequestAccessNamePrefix();
+        return prefix == null || prefix.isBlank() ? accessName : prefix.trim() + accessName;
     }
 
     private String normalizeMessageId(String messageId) {

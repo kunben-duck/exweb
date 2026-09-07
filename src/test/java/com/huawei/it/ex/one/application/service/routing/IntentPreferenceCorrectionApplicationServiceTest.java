@@ -24,8 +24,13 @@ import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.intent.IntentPreferenceCorrection;
+import com.huawei.it.ex.one.infrastructure.intent.DefaultIntentAccessNameResolver;
+import com.huawei.it.ex.one.infrastructure.intent.IntentServiceHttpProperties;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 
 import java.time.Clock;
@@ -48,6 +53,34 @@ class IntentPreferenceCorrectionApplicationServiceTest {
                     messages, interactions, recognitions, corrections,
                     requested -> requested == null || requested.isBlank() ? "default-entry" : requested.trim(),
                     ids, Runnable::run, Clock.fixed(NOW, ZoneOffset.UTC));
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"   ", " fin ", "EX_fin"})
+    void persistsLogicalEntryWithoutOutboundPrefix(String entry) {
+        IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
+        properties.setAccessName("default-entry");
+        properties.setRequestAccessNamePrefix("EX_");
+        IntentPreferenceCorrectionApplicationService configuredService =
+                new IntentPreferenceCorrectionApplicationService(
+                        messages, interactions, recognitions, corrections,
+                        new DefaultIntentAccessNameResolver(properties),
+                        ids, Runnable::run, Clock.fixed(NOW, ZoneOffset.UTC));
+        when(ids.newId(any(), any())).thenReturn("intent-pref-prefix");
+        when(messages.findByOwnerAndId("tenant", "user", "msg-source"))
+                .thenReturn(Optional.of(userMessage("msg-source", "run-source", "原始问题")));
+
+        configuredService.record(user, new IntentPreferenceCorrectionCommand(
+                "INTENT_CANDIDATE", "msg-source",
+                new IntentPreferenceCorrectionCommand.SelectedIntent("intent-new", "偏好意图"),
+                null, entry)).block();
+
+        ArgumentCaptor<IntentPreferenceCorrection> captor =
+                ArgumentCaptor.forClass(IntentPreferenceCorrection.class);
+        verify(corrections).upsert(captor.capture());
+        assertThat(captor.getValue().intentAccessName())
+                .isEqualTo(entry == null || entry.isBlank() ? "default-entry" : entry.trim());
+    }
 
     @Test
     void recordsCandidateSelectionFromTrustedMessageAndRecognition() {

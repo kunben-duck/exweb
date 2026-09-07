@@ -14,6 +14,7 @@ import com.huawei.it.ex.one.application.integration.intent.IntentUserPreferenceC
 import com.huawei.it.ex.one.application.service.auth.AuthHeaderProviderRegistry;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
+import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
@@ -25,6 +26,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -36,19 +39,29 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 class FinEurekaIntentServiceTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @Test
-    void loadsPreferencesOnceAndReusesThemAcrossBlockingRetries() throws Exception {
+    @ParameterizedTest
+    @CsvSource({
+            "'', fin, fin",
+            "' EX_ ', ' fin ', EX_fin",
+            "EX_, EX_fin, EX_EX_fin",
+            "EX_, , intent-entry"
+    })
+    void reusesPreferencesAndLogicalEntryAcrossBlockingRetries(
+            String prefix, String entry, String expected) throws Exception {
         AtomicInteger attempts = new AtomicInteger();
         AtomicReference<String> lastRequestBody = new AtomicReference<>();
+        List<String> accessNames = new CopyOnWriteArrayList<>();
         HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
         server.createContext("/recognize", exchange -> {
             lastRequestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            accessNames.add(objectMapper.readTree(lastRequestBody.get()).path("accessName").asText());
             int attempt = attempts.incrementAndGet();
             String response = attempt == 1
                     ? "{\"code\":500,\"data\":{\"status\":\"failed\"}}"
@@ -68,6 +81,7 @@ class FinEurekaIntentServiceTest {
             properties.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort());
             properties.setRecognizePath("/recognize");
             properties.setAccessName("intent-entry");
+            properties.setRequestAccessNamePrefix(prefix);
             properties.setMaxRetries(1);
             AtomicInteger preferenceLoads = new AtomicInteger();
             List<IntentUserPreferenceCorrection> preferences = List.of(new IntentUserPreferenceCorrection(
@@ -90,13 +104,16 @@ class FinEurekaIntentServiceTest {
                     WebClient.builder(), properties, mapper, authHeaders,
                     new DefaultIntentRetryPolicy(), loader);
 
-            IntentDecision decision = service.recognize(command(), MemoryContext.empty(), user());
+            ChatCommand command = command(entry);
+            IntentDecision decision = service.recognize(command, MemoryContext.empty(), user());
 
             assertThat(decision.intentCode()).isEqualTo("ok");
             assertThat(attempts.get()).isEqualTo(2);
             assertThat(lastRequestBody.get()).contains(
                     "\"userPreferenceCorrections\":[{\"query\":\"问题\",\"preferenceIntent\":\"偏好意图\"");
             assertThat(preferenceLoads.get()).isEqualTo(1);
+            assertThat(accessNames).containsExactly(expected, expected);
+            assertThat(command.intentAccessName()).isEqualTo(entry == null ? null : entry.trim());
         } finally {
             server.stop(0);
         }
@@ -606,8 +623,14 @@ class FinEurekaIntentServiceTest {
     }
 
     private ChatCommand command() {
+        return command(null);
+    }
+
+    private ChatCommand command(String intentAccessName) {
         return new ChatCommand("cmd1", "tenant1", "user1", "session1", null, "web",
-                "今年库户的总利润是多少", List.of(), Map.of());
+                "今年库户的总利润是多少", List.of(), Map.of(), null, null, ChatRunMode.NEXT,
+                null, null, null, null, null, null, null, Map.of(), null, null,
+                null, null, null, intentAccessName);
     }
 
     private UserContext user() {

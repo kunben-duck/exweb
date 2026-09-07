@@ -193,6 +193,14 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 同一Run内拒答时仍会使用本次值；普通模式不会从上一Run或Binding继承。切换入口且希望立即按新范围选路时，
 必须同时提交`forceReroute=true`。聚合意图专家例外，其后续轮次使用会话保存的父专家入口。
 
+前端应提交**不带部署前缀的逻辑入口**。后端配置`financeex.intent.request-access-name-prefix`
+（环境变量`FINANCEEX_INTENT_REQUEST_ACCESS_NAME_PREFIX`，默认空）仅在Intent出站时拼接：
+前缀和入口均trim、保留大小写；`EX_`加`fin`发送`EX_fin`，加`EX_fin`发送`EX_EX_fin`，不会去重。
+未传或空白入口仍使用服务端默认入口，不加前缀。该规则同时适用于直连拒答、候选切换拒答、Interaction
+重意图及会话恢复的聚合专家入口；重试不会重复累加。128字符限制仍针对原始逻辑入口，不截断出站结果。
+偏好记录请求继续提交同一个逻辑入口，偏好分组、Session专家身份及回显值不会改为带前缀值。
+修改前缀不会取消已有Binding，只有实际调用Intent时才生效；不改变DomainAgent、Relay或响应侧技能ID解析。
+
 ### 逐接口字段矩阵
 
 | 接口 | 请求字段 | 响应字段 | 后续关联 |
@@ -1302,7 +1310,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `sessionId` | string | 否 | 聊天会话 ID；为空时后端会创建或归一化 |
 | `conversationId` | string | 否 | 前端对话 ID，通常与 `sessionId` 一致 |
 | `message` | string | 条件必填 | `EDIT_USER` 必填；`NEXT` 必须提供非空 message 或至少一个有效附件。附件-only 的历史正文和 Runtime query 为 `""`；仅 IntentAgent query 会使用可信文件名生成 `[用户上传文档] xxx.pdf，xxx.xls`。未传`sessionId`自动创建会话时，可信文件名去除最后扩展名后同时作为初始标题。`REGENERATE_ASSISTANT` 和 `CONTINUE_INTERACTION` 可为空 |
-| `intentAccessName` | string | 否 | 本次Intent调用的入口名称，最大128字符并保留大小写。字段为兼容旧客户端而保持可选，但多入口前端应在普通提问、直连DomainAgent、EDIT、REGENERATE、`forceReroute`及可能重新调用Intent的Interaction续接中每次显式提交当前入口。ACTIVE Binding可能跳过首次Intent，但同一Run内DomainAgent拒答时仍使用本次值；普通模式不继承上一Run或Binding。未传或空白时使用服务端`FINANCEEX_INTENT_ACCESS_NAME`。`INTENT_EXPERT`首次选择或切换时必填，后续使用会话保存值。该字段不进入业务metadata、DomainAgent或Relay请求。 |
+| `intentAccessName` | string | 否 | 本次Intent调用的逻辑入口名称，最大128字符并保留大小写；前端不带部署前缀，非空时由出站Mapper拼接`FINANCEEX_INTENT_REQUEST_ACCESS_NAME_PREFIX`（默认空，不去重）。字段为兼容旧客户端而保持可选，但多入口前端应在普通提问、直连DomainAgent、EDIT、REGENERATE、`forceReroute`及可能重新调用Intent的Interaction续接中每次显式提交当前入口。ACTIVE Binding可能跳过首次Intent，但同一Run内DomainAgent拒答时仍使用本次值；普通模式不继承上一Run或Binding。未传或空白时使用服务端`FINANCEEX_INTENT_ACCESS_NAME`，不加前缀。`INTENT_EXPERT`首次选择或切换时必填，后续使用会话保存值。该字段不进入业务metadata、DomainAgent或Relay请求。 |
 | `runMode` | string | 否 | 消息树写入模式：`NEXT`、`EDIT_USER`、`REGENERATE_ASSISTANT`、`CONTINUE_INTERACTION`，默认 `NEXT` |
 | `parentMessageId` | string | 否 | `NEXT` 模式显式父节点；为空时使用会话 `currentLeafMessageId` |
 | `editedMessageId` | string | EDIT_USER 必填 | 被编辑的未锁定 user 消息 |
@@ -1979,7 +1987,7 @@ FULL留存下，上述事件同时支持WebSocket、Run Resume，并作为Run-B�
 多入口前端必须在切换请求中显式提交当前页面入口的`intentAccessName`。它不会发送给首次直连的
 DomainAgent-B，但B在同一replacement Run内拒答时，后端会使用该值重新调用Intent。该接口不会继承
 source Run的入口；省略或传空白值将直接使用服务端默认入口。B成功受理后若记录用户偏好，偏好接口必须
-提交同一个`intentAccessName`。
+提交同一个未拼接前缀的逻辑`intentAccessName`；部署前缀只在Intent出站时应用，不用于偏好隔离。
 
 服务端复用A关联的可信user正文和附件，不创建第二条query，也不继承A的metadata。A已有可保存assistant时，
 B保存为同一user下的新assistant版本，默认`/messages`展示B，`versionInfo`可切回A；A没有可保存assistant时，

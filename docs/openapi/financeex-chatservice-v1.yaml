@@ -2280,7 +2280,7 @@ components:
           type: string
           maxLength: 128
           nullable: true
-          description: 偏好隔离使用的Intent入口；空白或未传时使用服务端默认值，区分大小写
+          description: 偏好隔离使用的逻辑Intent入口，应与Run请求一致且不带部署前缀；空白或未传时使用服务端默认值，区分大小写，不应用request-access-name-prefix
 
     DomainAgentAsyncTaskCallbackRequest:
       type: object
@@ -2349,13 +2349,16 @@ components:
           maxLength: 128
           nullable: true
           description: |
-            可选Intent入口名称；trim后非空时覆盖本次Intent请求的服务端默认值，未传或空白时回退
-            financeex.intent.access-name。为保证多入口前端的意图范围，前端应在普通提问、直连
+            可选逻辑Intent入口名称，前端应提交不带部署前缀的值。trim后非空时，仅在Intent出站请求中
+            拼接trim后的financeex.intent.request-access-name-prefix（默认空），保留大小写且不去重。
+            例如EX_加fin发送EX_fin，加EX_fin发送EX_EX_fin。未传或空白时使用原financeex.intent.access-name，
+            不加前缀；128字符上限仅限制逻辑入口，不截断拼接结果。为保证多入口前端的意图范围，前端应在普通提问、直连
             DomainAgent、EDIT、REGENERATE、forceReroute及可能重新调用Intent的Interaction续接中
             显式提交当前入口。ACTIVE Binding可能使本轮先跳过Intent，但同一Run内DomainAgent拒答时
             仍使用本次值。普通模式不继承上一Run或Binding；切换入口并要求立即重新选路时同时提交
             forceReroute=true。INTENT_EXPERT首次选择或切换时必填并作为父专家身份的一部分，后续使用
-            会话保存值。该字段不进入业务metadata或Runtime请求。
+            会话保存值并在出站时应用同一前缀。命令、Session专家身份及偏好分组保持逻辑入口原值，重试不累加前缀；
+            修改前缀不取消已有Binding。该字段不进入业务metadata或Runtime请求，响应侧前缀处理不变。
         runMode:
           type: string
           maxLength: 32
@@ -2522,7 +2525,10 @@ components:
           description: |
             多入口前端应显式提交当前入口。该值不参与首次直连DomainAgent请求，仅在新DomainAgent
             于同一replacement Run内拒答时用于重新调用Intent。未传或空白时不继承source Run，直接
-            回退服务端配置；后续记录用户偏好时应向偏好接口提交相同值。
+            回退服务端配置且不加请求前缀；后续记录用户偏好时应向偏好接口提交相同逻辑值。
+            前端应提交不带部署前缀的入口。非空时仅在Intent出站请求中直接拼接trim后的
+            financeex.intent.request-access-name-prefix（默认空），保留大小写、不去重；EX_加fin为EX_fin，
+            加EX_fin为EX_EX_fin。重试不累加前缀，128字符限制只针对前端逻辑入口，不截断拼接结果。
 
     ChatBizContext:
       type: object

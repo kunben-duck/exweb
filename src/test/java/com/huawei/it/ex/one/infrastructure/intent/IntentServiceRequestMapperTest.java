@@ -10,6 +10,7 @@ import com.huawei.it.ex.one.application.integration.intent.IntentUserPreferenceC
 import com.huawei.it.ex.one.domain.auth.UserContext;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
+import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
 import com.huawei.it.ex.one.domain.memory.MemoryContext;
 import com.huawei.it.ex.one.domain.memory.RouteMemoryContext;
@@ -17,14 +18,86 @@ import com.huawei.it.ex.one.domain.runtime.AgentModeProfile;
 import com.huawei.it.ex.one.domain.runtime.AgentModeSelection;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
 class IntentServiceRequestMapperTest {
+    @ParameterizedTest
+    @CsvSource(value = {
+            "NULL, fin, fin",
+            "'', fin, fin",
+            "'   ', fin, fin",
+            "EX_, fin, EX_fin",
+            "' EX_ ', ' fin ', EX_fin",
+            "ex_, FIN, ex_FIN",
+            "EX_, EX_fin, EX_EX_fin",
+            "EX_, NULL, configured-entry",
+            "EX_, '', configured-entry",
+            "EX_, '   ', configured-entry"
+    }, nullValues = "NULL")
+    void prefixesOnlyExplicitLogicalEntry(String prefix, String entry, String expected) {
+        IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
+        properties.setAccessName(" configured-entry ");
+        properties.setRequestAccessNamePrefix(prefix);
+        IntentServiceRequestMapper mapper = new IntentServiceRequestMapper(
+                properties, new DefaultIntentAccessNameResolver(properties));
+        ChatCommand command = command(entry);
+        ObjectMapper json = new ObjectMapper();
+        var originalCommand = json.valueToTree(command);
+
+        for (int attempt = 0; attempt < 3; attempt++) {
+            IntentRecognizeRequest request = mapper.toWireRequest(
+                    command, MemoryContext.empty(), new UserContext("tenant1", "user1", "User One"));
+            assertThat(request.accessName()).isEqualTo(expected);
+        }
+
+        var mappedCommand = json.valueToTree(command);
+        assertThat(mappedCommand).isEqualTo(originalCommand);
+        assertThat(new DefaultIntentAccessNameResolver(properties).resolve(entry))
+                .isEqualTo(entry == null || entry.isBlank() ? "configured-entry" : entry.trim());
+    }
+
+    @Test
+    void prefixesRestoredExpertEntryWithoutChangingScopeOrOtherRequestFields() {
+        IntentExpertScope scope = new IntentExpertScope("tax-expert", "税务专家", "tax_entry");
+        ChatCommand command = command(null).withIntentExpertScope(scope);
+        IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
+        IntentServiceRequestMapper mapper = new IntentServiceRequestMapper(
+                properties, new DefaultIntentAccessNameResolver(properties));
+        ObjectMapper json = new ObjectMapper();
+        ObjectNode before = json.valueToTree(mapper.toWireRequest(
+                command, MemoryContext.empty(), new UserContext("tenant1", "user1", "User One")));
+        properties.setRequestAccessNamePrefix("EX_");
+        properties.setResponseAccessNamePrefix("response_");
+        var after = json.valueToTree(mapper.toWireRequest(
+                command, MemoryContext.empty(), new UserContext("tenant1", "user1", "User One")));
+
+        assertThat(after.path("accessName").asText()).isEqualTo("EX_tax_entry");
+        before.put("accessName", "EX_tax_entry");
+        assertThat(after).isEqualTo(before);
+        assertThat(command.intentAccessName()).isEqualTo("tax_entry");
+        assertThat(command.intentExpertScope()).isEqualTo(scope);
+        assertThat(scope.intentAccessName()).isEqualTo("tax_entry");
+    }
+
+    @Test
+    void doesNotTruncatePrefixedEntryAtFrontendLengthLimit() {
+        IntentServiceHttpProperties properties = new IntentServiceHttpProperties();
+        properties.setRequestAccessNamePrefix("EX_");
+        var request = new IntentServiceRequestMapper(properties).toWireRequest(
+                command("f".repeat(128)), MemoryContext.empty(),
+                new UserContext("tenant1", "user1", "User One"));
+
+        assertThat(request.accessName()).isEqualTo("EX_" + "f".repeat(128));
+    }
+
     @Test
     void intentConversationHistoryDoesNotGainAgentRuntimeSkillField() {
         IntentServiceRequestMapper mapper = new IntentServiceRequestMapper(new IntentServiceHttpProperties());

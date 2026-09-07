@@ -6,6 +6,7 @@ package com.huawei.it.ex.one.interfaces;
 
 import com.huawei.it.ex.one.application.integration.conversation.SessionSearchTimeoutException;
 import com.huawei.it.ex.one.application.integration.intent.IntentCandidateQueryException;
+import com.huawei.it.ex.one.application.integration.intent.IntentFeedbackException;
 import com.huawei.it.ex.one.application.integration.intent.IntentPreferenceUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.CandidateSwitchConflictException;
@@ -35,6 +36,14 @@ import org.springframework.web.server.ServerWebExchange;
 @RestControllerAdvice(basePackages = "com.huawei.it.ex.one.interfaces")
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.REACTIVE)
 public class ReactiveApiExceptionHandler {
+    @ExceptionHandler(IntentFeedbackException.class)
+    public ResponseEntity<ApiExceptionHandler.ApiErrorResponse> handleIntentFeedback(
+            IntentFeedbackException ex, ServerWebExchange request) {
+        HttpStatus status = "INTENT_FEEDBACK_ALREADY_SUBMITTED".equals(ex.code())
+                ? HttpStatus.CONFLICT : HttpStatus.SERVICE_UNAVAILABLE;
+        return ApiExceptionHandler.error(status, ex.code(), ex.getMessage(), requestPath(request));
+    }
+
     @ExceptionHandler(DomainAgentAsyncCallbackBusyException.class)
     public ResponseEntity<ApiExceptionHandler.ApiErrorResponse> handleDomainAgentAsyncCallbackBusy(
             DomainAgentAsyncCallbackBusyException ex, ServerWebExchange exchange) {

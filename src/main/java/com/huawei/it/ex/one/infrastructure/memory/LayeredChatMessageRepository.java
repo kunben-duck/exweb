@@ -4,6 +4,7 @@
 
 package com.huawei.it.ex.one.infrastructure.memory;
 
+import com.huawei.it.ex.one.application.integration.memory.ChatMessageInput;
 import com.huawei.it.ex.one.application.integration.memory.ChatMessagePageQuery;
 import com.huawei.it.ex.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.it.ex.one.common.error.SystemErrorCode;
@@ -217,6 +218,11 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
     @Override
     public Optional<String> findRoleByOwnerAndId(String tenantId, String userId, String messageId) {
         return databaseStore.findRoleByOwnerAndId(tenantId, userId, messageId);
+    }
+
+    @Override
+    public Optional<ChatMessageInput> findInputByOwnerAndId(String tenantId, String userId, String messageId) {
+        return databaseStore.findInputByOwnerAndId(tenantId, userId, messageId);
     }
 
     @Override

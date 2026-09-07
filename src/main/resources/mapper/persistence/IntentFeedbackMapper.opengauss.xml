@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huawei.it.ex.one.infrastructure.persistence.IntentFeedbackMapper">
+    <sql id="feedbackColumns">
+        id, tenant_id AS tenantId, user_id AS userId, session_id AS sessionId, run_id AS runId,
+        source_message_id AS sourceMessageId, intent_access_name AS intentAccessName,
+        feedback_type AS feedbackType, comment_text AS commentText, replacement_run_id AS replacementRunId,
+        skill_id AS skillId, intent_id AS intentId, intent_name AS intentName, created_at AS createdAt
+    </sql>
+    <!-- Insert once; the unique constraint arbitrates concurrent submissions. 入参: immutable feedback fields. -->
+    <insert id="insert">
+        INSERT INTO fin_ex_intent_feedback_t(
+            id, tenant_id, user_id, session_id, run_id, source_message_id, intent_access_name,
+            feedback_type, comment_text, replacement_run_id, skill_id, intent_id, intent_name, created_at
+        ) VALUES (
+            #{id}, #{tenantId}, #{userId}, #{sessionId}, #{runId}, #{sourceMessageId}, #{intentAccessName},
+            #{feedbackType}, #{commentText}, #{replacementRunId}, #{skillId}, #{intentId}, #{intentName}, #{createdAt}
+        )
+    </insert>
+    <!-- Read the current owner's immutable evaluation. 入参: tenantId/userId/runId. -->
+    <select id="findByOwnerAndRun" resultType="com.huawei.it.ex.one.domain.intent.IntentFeedback">
+        SELECT <include refid="feedbackColumns"/>
+        FROM fin_ex_intent_feedback_t
+        WHERE tenant_id = #{tenantId} AND user_id = #{userId} AND run_id = #{runId}
+    </select>
+    <!-- Bounded history enrichment; empty input never scans the table. 入参: tenantId/userId/runIds. -->
+    <select id="findByOwnerAndRuns" resultType="com.huawei.it.ex.one.domain.intent.IntentFeedback">
+        SELECT <include refid="feedbackColumns"/>
+        FROM fin_ex_intent_feedback_t
+        WHERE tenant_id = #{tenantId} AND user_id = #{userId}
+        <choose>
+            <when test="runIds != null and runIds.size() > 0">
+                AND run_id IN
+                <foreach collection="runIds" item="runId" open="(" separator="," close=")">
+                    #{runId}
+                </foreach>
+            </when>
+            <otherwise>AND 1 = 0</otherwise>
+        </choose>
+    </select>
+</mapper>

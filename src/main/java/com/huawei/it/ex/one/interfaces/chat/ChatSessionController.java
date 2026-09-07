@@ -54,6 +54,7 @@ import jakarta.validation.constraints.Size;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -90,18 +91,28 @@ public class ChatSessionController {
     private final AuthContextProvider auth;
     private final PermissionChecker permissionChecker;
     private final ChatMessageVersionViewAssembler versionViewAssembler;
+    private final IntentFeedbackViewAssembler intentFeedbackViewAssembler;
 
+    @Autowired
     public ChatSessionController(ChatSessionFacade facade, ChatFeedbackApplicationService feedbackService,
-                                 ChatRunApplicationService chatRunService,
-                                 AuthContextProvider auth,
-                                 PermissionChecker permissionChecker,
-                                 ChatMessageVersionViewAssembler versionViewAssembler) {
+                                 ChatRunApplicationService chatRunService, AuthContextProvider auth,
+                                 PermissionChecker permissionChecker, ChatMessageVersionViewAssembler versionViewAssembler,
+                                 IntentFeedbackViewAssembler intentFeedbackViewAssembler) {
         this.facade = facade;
         this.feedbackService = feedbackService;
         this.chatRunService = chatRunService;
         this.auth = auth;
         this.permissionChecker = permissionChecker;
         this.versionViewAssembler = versionViewAssembler;
+        this.intentFeedbackViewAssembler = intentFeedbackViewAssembler;
+    }
+
+    public ChatSessionController(ChatSessionFacade facade, ChatFeedbackApplicationService feedbackService,
+                                 ChatRunApplicationService chatRunService,
+                                 AuthContextProvider auth,
+                                 PermissionChecker permissionChecker,
+                                 ChatMessageVersionViewAssembler versionViewAssembler) {
+        this(facade, feedbackService, chatRunService, auth, permissionChecker, versionViewAssembler, null);
     }
 
     /**
@@ -616,6 +627,10 @@ public class ChatSessionController {
         Map<String, ChatMessageVersionInfoDto> versionInfos =
                 versionViewAssembler.assemble(orderedMessages, orderedMessages);
         Map<String, String> assistantSources = assistantSources(user, orderedMessages);
+        Map<String, ChatMessageDto> views = enrichIntentFeedback(user, session.id(), orderedMessages.stream()
+                .map(message -> toMessageDto(message, feedbacks.get(message.id()), assistantSources.get(message.runId()),
+                        versionInfos.get(message.id()))).toList()).stream()
+                .collect(Collectors.toMap(ChatMessageDto::messageId, message -> message));
         Map<String, List<String>> childrenByParent = orderedMessages.stream()
                 .filter(message -> message.parentMessageId() != null && messageIds.contains(message.parentMessageId()))
                 .collect(Collectors.groupingBy(ChatMessage::parentMessageId, LinkedHashMap::new,
@@ -624,8 +639,7 @@ public class ChatSessionController {
         for (ChatMessage message : orderedMessages) {
             mapping.put(message.id(), new ChatMessageTreeNodeDto(
                     message.id(),
-                    toMessageDto(message, feedbacks.get(message.id()), assistantSources.get(message.runId()),
-                            versionInfos.get(message.id())),
+                    views.get(message.id()),
                     message.parentMessageId(),
                     childrenByParent.getOrDefault(message.id(), List.of())
             ));
@@ -645,10 +659,16 @@ public class ChatSessionController {
                                                Map<String, ChatMessageVersionInfoDto> versionInfos) {
         Map<String, ChatMessageFeedback> feedbacks = feedbackService.findActiveByMessages(user, sessionId, messages);
         Map<String, String> assistantSources = assistantSources(user, messages);
-        return messages.stream()
+        return enrichIntentFeedback(user, sessionId, messages.stream()
                 .map(message -> toMessageDto(message, feedbacks.get(message.id()), assistantSources.get(message.runId()),
                         versionInfos.get(message.id())))
-                .toList();
+                .toList());
+    }
+
+    private List<ChatMessageDto> enrichIntentFeedback(
+            UserContext user, String sessionId, List<ChatMessageDto> messages) {
+        return intentFeedbackViewAssembler == null ? messages
+                : intentFeedbackViewAssembler.enrich(user, sessionId, messages);
     }
 
     private Map<String, String> assistantSources(UserContext user, List<ChatMessage> messages) {

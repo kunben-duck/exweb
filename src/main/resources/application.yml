@@ -155,6 +155,11 @@ financeex:
     max-retries: ${FINANCEEX_INTENT_MAX_RETRIES:3}
     # 每次实际调用Intent时附带的最近用户偏好条数；0关闭读取但仍发送空数组。
     user-preference-corrections-limit: ${FINANCEEX_INTENT_USER_PREFERENCE_CORRECTIONS_LIMIT:5}
+    feedback:
+      # 独立反馈GET/POST队列；排队超时不影响已开始的数据库事务。
+      worker-count: ${FINANCEEX_INTENT_FEEDBACK_WORKER_COUNT:1}
+      queue-capacity: ${FINANCEEX_INTENT_FEEDBACK_QUEUE_CAPACITY:16}
+      queue-wait-timeout: ${FINANCEEX_INTENT_FEEDBACK_QUEUE_WAIT_TIMEOUT:500ms}
     candidate:
       # 候选查询是用户主动旁路，使用非等待并发隔离，不与聊天主路由争抢鉴权线程。
       max-concurrency: ${FINANCEEX_INTENT_CANDIDATE_MAX_CONCURRENCY:8}

@@ -788,3 +788,11 @@ export FINANCEEX_HUAWEI_S3_ACCESS_KEY=your-access-key
 export FINANCEEX_HUAWEI_S3_SECRET_KEY=your-secret-key
 export FINANCEEX_HUAWEI_S3_KEY_PREFIX=documents
 ```
+## 意图反馈与自动偏好
+
+- 新增独立 `POST/GET /v1/chat/runs/{runId}/intent-feedback`，每个Run首次反馈不可修改，相同请求幂等。
+- 准确且有明确目标、或者切换候选技能后，反馈与偏好在独立短事务中原子保存；纯文字错误只保存反馈。
+- 反馈GET/POST使用独立固定线程池，默认1线程、队列16、排队期限500ms；队列满或排队过期返回503/INTENT_FEEDBACK_UNAVAILABLE，过期任务不再执行，不挤占旧偏好读写队列。通过`FINANCEEX_INTENT_FEEDBACK_WORKER_COUNT`、`FINANCEEX_INTENT_FEEDBACK_QUEUE_CAPACITY`和`FINANCEEX_INTENT_FEEDBACK_QUEUE_WAIT_TIMEOUT`配置；已开始的事务仍使用原有超时。
+- 候选切换成功后再提交原Run反馈；失败只重试反馈，新流程不再额外调用旧偏好接口。
+- 历史消息在DTO层批量装配 `intentFeedback` 及对应Part的 `payload.intentFeedback`，不修改原Event/Parts或Run主流程。
+- 详细请求、回显、错误码及部署脚本见 [意图反馈联调说明](docs/intent/intent-feedback.md)。

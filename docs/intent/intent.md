@@ -570,3 +570,11 @@ ChatService事件的`sourceExpert`中回显。
 
 AgentMode 的完整记录语义参见
 [AgentMode 仅记录技术设计](../architecture/agent-mode-recording.md)。
+## 意图反馈与自动偏好
+
+- 新增独立 `POST/GET /v1/chat/runs/{runId}/intent-feedback`，每个Run首次反馈不可修改，相同请求幂等。
+- 准确且有明确目标、或者切换候选技能后，反馈与偏好在独立短事务中原子保存；纯文字错误只保存反馈。
+- 反馈GET/POST使用独立1线程、16位置队列，默认500ms排队期限；满队列或过期返回503/INTENT_FEEDBACK_UNAVAILABLE，过期任务不执行。旧偏好读写和Intent主路由不使用该队列，已开始的反馈事务继续使用原超时。
+- 候选切换成功后再提交原Run反馈；失败只重试反馈，新流程不再额外调用旧偏好接口。
+- 历史消息在DTO层批量装配 `intentFeedback` 及对应Part的 `payload.intentFeedback`，不修改原Event/Parts或Run主流程。
+- 详细请求、回显、错误码及部署脚本见 [意图反馈联调说明](intent-feedback.md)。

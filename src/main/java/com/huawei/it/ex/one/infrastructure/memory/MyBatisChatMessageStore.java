@@ -5,6 +5,7 @@
 package com.huawei.it.ex.one.infrastructure.memory;
 
 import com.huawei.it.ex.one.application.config.ChatStreamProperties;
+import com.huawei.it.ex.one.application.integration.memory.ChatMessageInput;
 import com.huawei.it.ex.one.application.integration.memory.ChatMessagePageQuery;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessageAttachment;
@@ -381,6 +382,10 @@ public class MyBatisChatMessageStore {
             return Optional.empty();
         }
         return mapper.findRoleByOwnerAndId(tenantId, userId, messageId);
+    }
+
+    public Optional<ChatMessageInput> findInputByOwnerAndId(String tenantId, String userId, String messageId) {
+        return mapper.findInputByOwnerAndId(tenantId, userId, messageId);
     }
 
     public List<ChatMessage> findByOwnerAndSessionAndIds(

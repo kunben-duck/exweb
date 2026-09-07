@@ -4,6 +4,8 @@
 
 package com.huawei.it.ex.one.interfaces.chat.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import java.time.Instant;
 import java.util.List;
 
@@ -36,6 +38,7 @@ import java.util.List;
  * @param feedback 当前用户对该 assistant 消息的有效反馈；user 消息或已取消反馈时为空。
  * @param versionInfo 同父同角色候选版本摘要；没有可切换版本时为空。
  * @param createdAt 消息创建时间。
+ * @param intentFeedback 当前assistant Run的意图评价，只在历史响应装配时关联。
  */
 public record ChatMessageDto(
         String messageId,
@@ -60,5 +63,24 @@ public record ChatMessageDto(
         List<ChatMessageAttachmentDto> attachments,
         MessageFeedbackDto feedback,
         ChatMessageVersionInfoDto versionInfo,
-        Instant createdAt
-) {}
+        Instant createdAt,
+        @JsonInclude(JsonInclude.Include.NON_NULL) IntentFeedbackDto intentFeedback
+) {
+    public ChatMessageDto(String messageId, String sessionId, String parentMessageId, Long nodeOrder,
+            Integer treeDepth, Integer siblingIndex, String role, String content, Integer tokenCount,
+            String runId, String assistantSource, String originType, boolean locked, String sourceSessionId,
+            String sourceMessageId, String editedFromMessageId, String regeneratedFromMessageId, String metadataJson,
+            List<ChatMessagePartDto> parts, List<ChatMessageAttachmentDto> attachments, MessageFeedbackDto feedback,
+            ChatMessageVersionInfoDto versionInfo, Instant createdAt) {
+        this(messageId, sessionId, parentMessageId, nodeOrder, treeDepth, siblingIndex, role, content, tokenCount,
+                runId, assistantSource, originType, locked, sourceSessionId, sourceMessageId, editedFromMessageId,
+                regeneratedFromMessageId, metadataJson, parts, attachments, feedback, versionInfo, createdAt, null);
+    }
+
+    public ChatMessageDto withIntentFeedback(IntentFeedbackDto intentFeedback, List<ChatMessagePartDto> parts) {
+        return new ChatMessageDto(messageId, sessionId, parentMessageId, nodeOrder, treeDepth, siblingIndex,
+                role, content, tokenCount, runId, assistantSource, originType, locked, sourceSessionId, sourceMessageId,
+                editedFromMessageId, regeneratedFromMessageId, metadataJson, parts, attachments, feedback,
+                versionInfo, createdAt, intentFeedback);
+    }
+}

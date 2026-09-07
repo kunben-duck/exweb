@@ -4,6 +4,8 @@
 
 package com.huawei.it.ex.one.infrastructure.memory;
 
+import com.huawei.it.ex.one.application.integration.memory.ChatMessageInput;
+
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
@@ -18,6 +20,17 @@ import java.util.Optional;
  */
 @Mapper
 public interface ChatMessageMapper {
+    /**
+     * Reads only message input fields; never loads metadata, Parts or attachments.
+     * @param tenantId tenant
+     * @param userId owner
+     * @param messageId source message
+     * @return owned input projection
+     */
+    Optional<ChatMessageInput> findInputByOwnerAndId(
+            @Param("tenantId") String tenantId, @Param("userId") String userId,
+            @Param("messageId") String messageId);
+
     /**
      * 写入一条 user 或 assistant 消息树节点。
      *

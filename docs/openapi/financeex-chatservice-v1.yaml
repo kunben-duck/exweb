@@ -555,6 +555,103 @@ paths:
                 code: INTENT_CANDIDATES_TIMEOUT
                 message: Intent候选技能查询超时
 
+  /v1/chat/runs/{runId}/intent-feedback:
+    parameters:
+      - name: runId
+        in: path
+        required: true
+        schema: {type: string, maxLength: 64}
+    post:
+      tags: [Chat Runs & Streaming]
+      operationId: recordIntentFeedback
+      summary: 记录不可修改的Run意图评价并按需同步偏好
+      description: |
+        每个Run首次反馈不可修改或撤销。相同请求幂等返回原反馈，不刷新偏好时间；
+        不同内容返回409。CORRECT带明确selectedIntent和INCORRECT_SWITCH自动写入偏好，
+        INCORRECT_COMMENT及无明确目标的CORRECT仅保存反馈。摘要是用户偏好，不是系统路由事实。
+        改选技能必须先调用switch-domain-agent，成功后再提交原Run反馈；失败只重试反馈，不重建Run。
+        replacementRunId必须归属当前用户、与source同会话和同user消息、为较后的REGENERATE_ASSISTANT Run，
+        不要求其Runtime完成，也不以可能已经重路由的最终agentCode校验用户偏好。
+        普通模式入口未传回退默认，不继承旧Run；聚合专家使用source Run保存的入口，不读当前Session。
+        不再额外调用旧偏好接口。反馈和偏好使用独立2秒事务，失败不影响已启动Run。
+        GET/POST使用独立反馈执行器，默认1线程、16个排队位置、500ms排队期限。
+        排队过期任务不会随后执行；已开始事务不受排队期限中断，该期限不是HTTP总超时。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntentFeedbackRequest'
+            examples:
+              correct:
+                value:
+                  feedbackType: CORRECT
+                  selectedIntent: {intentId: intent_a, intentName: 技能A}
+                  intentAccessName: fin
+              comment:
+                value:
+                  feedbackType: INCORRECT_COMMENT
+                  commentText: 没有提供合适的技能
+                  intentAccessName: fin
+              switch:
+                value:
+                  feedbackType: INCORRECT_SWITCH
+                  replacementRunId: run_b
+                  skillId: skill_b
+                  selectedIntent: {intentId: intent_b, intentName: 技能B}
+                  intentAccessName: fin
+      responses:
+        '200':
+          description: 已保存或相同请求的原反馈；归属错误沿用ACCESS_DENIED提示体
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/IntentFeedback'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: INTENT_FEEDBACK_ALREADY_SUBMITTED，原Run已有不同反馈
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+        '503':
+          description: INTENT_FEEDBACK_UNAVAILABLE，事务回滚、队列满、排队超时或执行器不可用，仅重试反馈，不重建Run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+    get:
+      tags: [Chat Runs & Streaming]
+      operationId: getIntentFeedback
+      summary: 查询当前用户对指定Run的意图反馈
+      description: assistant尚未生成时可单独查询；正常历史接口已批量装配，无须逐消息请求。与反馈POST共用独立队列，默认排队期限500ms，满队列或过期返回503；不影响旧偏好读写队列。
+      responses:
+        '200':
+          description: 已提交反馈；归属错误沿用ACCESS_DENIED提示体
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/IntentFeedback'
+                  - $ref: '#/components/schemas/ApiErrorResponse'
+        '204':
+          description: 当前用户拥有该Run，但尚未提交反馈
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: INTENT_FEEDBACK_UNAVAILABLE，队列满、排队超时或查询暂不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+
   /v1/chat/intent-preference-corrections:
     post:
       tags: [Chat Runs & Streaming]
@@ -2250,6 +2347,55 @@ components:
           format: double
           nullable: true
 
+    IntentFeedbackRequest:
+      type: object
+      required: [feedbackType]
+      properties:
+        feedbackType:
+          type: string
+          enum: [CORRECT, INCORRECT_COMMENT, INCORRECT_SWITCH]
+        commentText:
+          type: string
+          maxLength: 1024
+          description: 仅INCORRECT_COMMENT必填；trim后非空，最多1024个Unicode码点
+        replacementRunId:
+          type: string
+          maxLength: 64
+          description: 仅INCORRECT_SWITCH必填，现有切换接口成功受理的新Run
+        skillId:
+          type: string
+          maxLength: 128
+          description: 仅INCORRECT_SWITCH必填，用户选择的技能
+        selectedIntent:
+          type: object
+          required: [intentName]
+          properties:
+            intentId: {type: string, maxLength: 128}
+            intentName: {type: string, maxLength: 256}
+          description: CORRECT可选，INCORRECT_SWITCH必填，INCORRECT_COMMENT禁止
+        intentAccessName:
+          type: string
+          maxLength: 128
+          description: 被评价Run的未拼接请求前缀的逻辑入口；trim并保留大小写，聚合专家使用source Run入口
+    IntentFeedback:
+      type: object
+      required: [runId, feedbackType, intentAccessName, createdAt]
+      properties:
+        runId: {type: string}
+        feedbackType:
+          type: string
+          enum: [CORRECT, INCORRECT_COMMENT, INCORRECT_SWITCH]
+        commentText: {type: string}
+        replacementRunId: {type: string}
+        skillId: {type: string}
+        selectedIntent:
+          type: object
+          properties:
+            intentId: {type: string}
+            intentName: {type: string}
+        intentAccessName: {type: string}
+        createdAt: {type: string, format: date-time}
+
     IntentPreferenceCorrectionRequest:
       type: object
       required: [selectionType]
@@ -3639,6 +3785,10 @@ components:
           allOf:
             - $ref: '#/components/schemas/MessageFeedback'
           nullable: true
+        intentFeedback:
+          allOf:
+            - $ref: '#/components/schemas/IntentFeedback'
+          description: 当前assistant Run的意图评价；无记录、读取降级、user或分支快照时省略，不替代回答feedback
         versionInfo:
           type: object
           allOf:
@@ -3650,6 +3800,11 @@ components:
 
     ChatMessagePart:
       type: object
+      description: |
+        历史查询可在对应技能命中节点payload中装配intentFeedback，结构同IntentFeedback。
+        回放节点按candidateSwitchReplay.originRunId关联原Run；候选切换标识兜底使用sourceRunId。
+        每个来源Run只标注最后一个对应命中节点；没有节点不虚构Part。
+        此字段只在返回DTO时装配，不写原Parts、Event或sequence，WebSocket和Resume不增加反馈事件。
       required: [partId, messageId, partType, payload, createdAt]
       properties:
         partId:

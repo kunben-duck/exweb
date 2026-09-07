@@ -6,6 +6,7 @@ package com.huawei.it.ex.one.interfaces;
 
 import com.huawei.it.ex.one.application.integration.conversation.SessionSearchTimeoutException;
 import com.huawei.it.ex.one.application.integration.intent.IntentCandidateQueryException;
+import com.huawei.it.ex.one.application.integration.intent.IntentFeedbackException;
 import com.huawei.it.ex.one.application.integration.intent.IntentPreferenceUnavailableException;
 import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.CandidateSwitchConflictException;
@@ -37,6 +38,14 @@ import java.time.Instant;
 @RestControllerAdvice(basePackages = "com.huawei.it.ex.one.interfaces")
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class ApiExceptionHandler {
+    @ExceptionHandler(IntentFeedbackException.class)
+    public ResponseEntity<ApiExceptionHandler.ApiErrorResponse> handleIntentFeedback(
+            IntentFeedbackException ex, HttpServletRequest request) {
+        HttpStatus status = "INTENT_FEEDBACK_ALREADY_SUBMITTED".equals(ex.code())
+                ? HttpStatus.CONFLICT : HttpStatus.SERVICE_UNAVAILABLE;
+        return ApiExceptionHandler.error(status, ex.code(), ex.getMessage(), request.getRequestURI());
+    }
+
 
     @ExceptionHandler(DomainAgentAsyncCallbackBusyException.class)
     public ResponseEntity<ApiErrorResponse> handleDomainAgentAsyncCallbackBusy(

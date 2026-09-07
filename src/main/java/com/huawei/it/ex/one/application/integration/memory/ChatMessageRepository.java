@@ -183,6 +183,12 @@ public interface ChatMessageRepository {
      */
     Optional<ChatMessage> findByOwnerAndId(String tenantId, String userId, String messageId);
 
+    /** Reads only trusted input fields needed by independent feedback/preference writes. */
+    default Optional<ChatMessageInput> findInputByOwnerAndId(String tenantId, String userId, String messageId) {
+        return findByOwnerAndId(tenantId, userId, messageId)
+                .map(message -> new ChatMessageInput(message.sessionId(), message.role(), message.content()));
+    }
+
     /**
      * 按归属读取单条消息角色，不装配正文、Parts或附件。
      *

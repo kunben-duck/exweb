@@ -3558,3 +3558,11 @@ async function stopCurrentRun() {
 - stop 后仍看到少量 delta：前端应以 `run.cancelled` 为终态，忽略同一 run 后续迟到的非终态事件；后端也会在事件追加前检查 cancel flag。
 - 上传后聊天提示文档不可用：确认文档 `status=AVAILABLE`，并且上传文档和聊天请求使用同一个后端用户上下文。
 - 复制页签后重复显示文本：前端需要按 `sessionId + sequence` 去重。active run 恢复会刻意从 `activeRunFirstSeq - 1` 补发，重复事件是可预期的，不能只依赖“是否大于本地 lastSeq”来判断是否渲染。
+## 意图反馈与自动偏好
+
+- 新增独立 `POST/GET /v1/chat/runs/{runId}/intent-feedback`，每个Run首次反馈不可修改，相同请求幂等。
+- 准确且有明确目标、或者切换候选技能后，反馈与偏好在独立短事务中原子保存；纯文字错误只保存反馈。
+- 独立反馈GET/POST默认最多排队500ms；队列满、排队超时或服务不可用返回503/INTENT_FEEDBACK_UNAVAILABLE。只重试反馈，不重建候选Run；排队过期任务不会稍后写入，已开始事务不受排队期限中断。该期限不代表HTTP总耗时上限。
+- 候选切换成功后再提交原Run反馈；失败只重试反馈，新流程不再额外调用旧偏好接口。
+- 历史消息在DTO层批量装配 `intentFeedback` 及对应Part的 `payload.intentFeedback`，不修改原Event/Parts或Run主流程。
+- 详细请求、回显、错误码及部署脚本见 [意图反馈联调说明](intent/intent-feedback.md)。

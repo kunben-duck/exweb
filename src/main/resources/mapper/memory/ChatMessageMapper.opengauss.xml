@@ -528,6 +528,15 @@
           AND id = #{messageId}
     </select>
 
+    <!-- Read a trusted input without metadata, Parts or attachments. 入参: tenantId/userId/messageId. -->
+    <select id="findInputByOwnerAndId" resultType="com.huawei.it.ex.one.application.integration.memory.ChatMessageInput">
+        SELECT session_id AS sessionId, role, content
+        FROM fin_ex_chat_message_t
+        WHERE tenant_id = #{tenantId}
+          AND user_id = #{userId}
+          AND id = #{messageId}
+    </select>
+
     <!--
       按 owner、会话和消息 ID 集合批量查询消息节点，供多消息分享做归属与分支校验。
       入参: tenantId/userId/sessionId 为归属边界；messageIds 为待查询消息 ID，空集合返回空结果。

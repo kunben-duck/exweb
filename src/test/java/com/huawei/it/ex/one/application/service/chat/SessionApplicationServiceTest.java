@@ -318,20 +318,45 @@ class SessionApplicationServiceTest {
     }
 
     @Test
+    void numberPageKeywordAcceptsSingleCodePointAndTrimsWhitespace() {
+        for (String keyword : List.of("中", "A", "😀", "%", "_", "!")) {
+            SessionApplicationService service = service(
+                    new InMemorySessionRepository(), new InMemoryMessageRepository());
+            ChatSession matched = service.createSession(user(), "前" + keyword + "后", "web");
+            service.createSession(user(), "其他会话", "web");
+
+            ChatSessionNumberPage page = service.listSessionsByPage(user(), null, " " + keyword + " ", 1, 20);
+
+            assertThat(page.items()).extracting(ChatSession::id).containsExactly(matched.id());
+            assertThat(page.totalRows()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void numberPageEmptyKeywordDoesNotFilterSessions() {
+        SessionApplicationService service = service(
+                new InMemorySessionRepository(), new InMemoryMessageRepository());
+        ChatSession first = service.createSession(user(), "资金分析", "web");
+        ChatSession second = service.createSession(user(), "其他会话", "web");
+
+        for (String keyword : new String[] {null, "", " \t\n "}) {
+            ChatSessionNumberPage page = service.listSessionsByPage(user(), null, keyword, 1, 20);
+
+            assertThat(page.items()).extracting(ChatSession::id).containsExactlyInAnyOrder(first.id(), second.id());
+            assertThat(page.totalRows()).isEqualTo(2);
+        }
+    }
+
+    @Test
     void numberPageKeywordUsesUnicodeCodePointLimits() {
         SessionApplicationService service = service(
                 new InMemorySessionRepository(), new InMemoryMessageRepository());
 
-        assertThatThrownBy(() -> service.listSessionsByPage(user(), null, "中", 1, 20))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("至少需要 2 个字符");
         assertThatCode(() -> service.listSessionsByPage(user(), null, "😀".repeat(128), 1, 20))
                 .doesNotThrowAnyException();
         assertThatThrownBy(() -> service.listSessionsByPage(user(), null, "😀".repeat(129), 1, 20))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("不能超过 128 个字符");
-        assertThatCode(() -> service.listSessionsByPage(user(), null, "   ", 1, 20))
-                .doesNotThrowAnyException();
     }
 
     @Test

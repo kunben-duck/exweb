@@ -25,6 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 
 class MyBatisSessionRepositoryTest {
     @Test
@@ -183,6 +184,26 @@ class MyBatisSessionRepositoryTest {
     }
 
     @Test
+    void singleCodePointKeywordUsesSameEscapedPatternForCountAndRows() {
+        Map<String, String> patterns = Map.of(
+                "中", "%中%", "A", "%a%", "😀", "%😀%", "%", "%!%%", "_", "%!_%", "!", "%!!%");
+        patterns.forEach((keyword, expectedPattern) -> {
+            RecordingMapper mapper = new RecordingMapper();
+            mapper.totalRows = 1;
+            MyBatisSessionRepository repository = new MyBatisSessionRepository(
+                    mapper, new SessionPageKeywordSearchExecutor(mapper));
+
+            ChatSessionNumberPage page = repository.pageNumberByTenantIdAndUserId(
+                    "tenant1", "user1", SessionListFilter.forPage(null, " " + keyword + " ", null, null), 1, 20);
+
+            assertThat(mapper.lastCountTitlePattern).isEqualTo(expectedPattern);
+            assertThat(mapper.lastNumberPageTitlePattern).isEqualTo(expectedPattern);
+            assertThat(page.totalRows()).isEqualTo(1);
+            assertThat(page.totalPages()).isEqualTo(1);
+        });
+    }
+
+    @Test
     void mainSiteNumberPageUsesSameScopeForCountAndRows() {
         RecordingMapper mapper = new RecordingMapper();
         mapper.totalRows = 1;
@@ -217,8 +238,10 @@ class MyBatisSessionRepositoryTest {
         SessionPageKeywordSearchExecutor executor = mock(SessionPageKeywordSearchExecutor.class);
         MyBatisSessionRepository repository = new MyBatisSessionRepository(mapper, executor);
 
-        repository.pageNumberByTenantIdAndUserId(
-                "tenant1", "user1", SessionListFilter.empty(), 1, 20);
+        for (String keyword : new String[] {null, "", " \t\n "}) {
+            repository.pageNumberByTenantIdAndUserId(
+                    "tenant1", "user1", SessionListFilter.forPage(null, keyword, null, null), 1, 20);
+        }
 
         verifyNoInteractions(executor);
     }

@@ -324,9 +324,6 @@ public class SessionApplicationService implements ChatSessionFacade {
             return null;
         }
         int codePoints = normalized.codePointCount(0, normalized.length());
-        if (codePoints < 2) {
-            throw new IllegalArgumentException("keyword 至少需要 2 个字符");
-        }
         if (codePoints > 128) {
             throw new IllegalArgumentException("keyword 长度不能超过 128 个字符");
         }

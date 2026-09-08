@@ -1982,10 +1982,10 @@ components:
       name: keyword
       in: query
       required: false
-      description: 标题、已持久化user问题和assistant回答的统一包含搜索；trim后为空表示不筛选，%/_/!按普通字符处理
+      description: 标题、已持久化user问题和assistant回答的统一包含搜索；trim后为空表示不筛选，非空时为1到128个Unicode码点，%/_/!按普通字符处理
       schema:
         type: string
-        minLength: 2
+        minLength: 1
         maxLength: 128
         example: 资产负债率
     SessionChannelQuery:

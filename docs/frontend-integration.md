@@ -976,11 +976,12 @@ curl "http://localhost:8080/v1/chat/sessions?appScope=MAIN_SITE&channel=mobile&l
 curl "http://localhost:8080/v1/chat/sessions/page?appId=fund-app&keyword=%E5%88%A9%E6%B6%A6&channel=mobile&curPage=1&pageSize=20"
 ```
 
-`keyword` trim后为空表示不搜索，非空时为2到128个Unicode码点；它对会话标题、已持久化user问题和
+`keyword` trim后为空表示不搜索，非空时为1到128个Unicode码点，支持单个汉字、英文字母或Emoji；它对会话标题、已持久化user问题和
 assistant回答执行大小写不敏感的连续子串匹配，并与`appId/appScope/channel`取交集。`%`、`_`和`!`
 按普通字符处理。该搜索不覆盖Parts、附件、metadata及no-store未持久化内容；旧`title`参数仅属于游标接口，
 在页码接口提交非空`title`会返回400。建议输入防抖约300毫秒；数据库搜索超过配置预算时返回
 `503/SESSION_SEARCH_TIMEOUT`，前端应保留当前列表并提示稍后重试。
+单字符可能匹配更多历史内容并增加搜索耗时，仍受上述超时保护。
 
 页码分页响应会返回总行数：
 

@@ -400,6 +400,10 @@ paths:
         assistant时，新回答是该user下的首个assistant。成功后前端改订阅返回的streamTopicId，漏失事件继续
         使用replacement runId调用Run级Resume。
 
+        AMBIGUOUS_ROUTE选择OTHER重新意图后，sourceRunId必须使用CONTINUE_INTERACTION返回的新Run ID，
+        messageId仍为原user消息ID，不得沿用首次模糊意图的旧Run ID。运行中续跑复用的assistant由服务端
+        校验持久化Interaction后识别，不要求等待续跑完成才切换候选技能。
+
         replacement Run在run.started后有界回放source Run的Intent路由过程、技能选择及既有候选切换标识，
         随后输出runtime.progress(sourceType=candidate-skill-switch)和新DomainAgent选择事件。回放事件使用
         replacement Run身份，并通过candidateSwitchReplay.originRunId/originSequence标记可信来源；最多

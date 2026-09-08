@@ -13,11 +13,14 @@ import com.huawei.it.ex.one.application.integration.agent.DomainAgentCancelReque
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentClient;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalApplicationService;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalFrame;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalRequest;
 import com.huawei.it.ex.one.application.service.routing.RouteSignalResult;
+import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+import com.huawei.it.ex.one.domain.chat.CandidateDomainAgentSwitchCommand;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
@@ -26,6 +29,7 @@ import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
 import com.huawei.it.ex.one.domain.chat.ChatRunStartResult;
+import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.MessageSnapshotEvent;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
@@ -33,18 +37,26 @@ import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.routing.RouteTarget;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import com.huawei.it.ex.one.domain.usecase.UseCaseMatchResult;
+import com.huawei.it.ex.one.infrastructure.runtime.domainagent.DomainAgentRuntime;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -216,6 +228,109 @@ class AmbiguousRouteInteractionFlowTest extends ChatFlowTestSupport {
                 .containsEntry("selectionSource", "USER")
                 .containsEntry("interactionAction", "OTHER")
                 .containsEntry("answerText", "其他需求");
+    }
+
+    @ParameterizedTest
+    @CsvSource({"true,true", "true,false", "false,true", "false,false"})
+    void switchesRunningAmbiguousContinuationThroughRealStopAndEventPipeline(
+            boolean otherAnswer, boolean partialOutput) throws InterruptedException {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryEventStore events = new InMemoryEventStore();
+        InMemoryInteractionRequestRepository interactions = new InMemoryInteractionRequestRepository();
+        CapturingRuntimeBindingRepository bindings = new CapturingRuntimeBindingRepository();
+        AtomicInteger routeCalls = new AtomicInteger();
+        RouteSignalApplicationService singleRoute = routeService(new AtomicInteger(), new AtomicReference<>());
+        RouteSignalApplicationService ambiguousRoute = ambiguousWaitingRouteService();
+        RouteSignalApplicationService routes = new RouteSignalApplicationService(
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                intentAgent((command, memory, user) -> null),
+                new com.huawei.it.ex.one.domain.routing.RoutingPolicy(0.85),
+                new RouteSignalProperties(false, false)) {
+            @Override
+            public Flux<RouteSignalFrame> routeInitialWithProgress(RouteSignalRequest request) {
+                return (routeCalls.incrementAndGet() == 1 ? ambiguousRoute : singleRoute)
+                        .routeInitialWithProgress(request);
+            }
+        };
+        CountDownLatch runtimeStarted = new CountDownLatch(1);
+        AtomicReference<DomainAgentRequest> replacementRequest = new AtomicReference<>();
+        AtomicReference<String> cancelledRunId = new AtomicReference<>();
+        DomainAgentClient client = new DomainAgentClient() {
+            @Override
+            public Flux<ChatEvent> query(DomainAgentRequest request) {
+                if ("skill-replacement".equals(request.domainAgentId())) {
+                    replacementRequest.set(request);
+                    return Flux.just(MessageSnapshotEvent.of(request.runId(), request.sessionId(), "候选回答"));
+                }
+                Flux<ChatEvent> output = partialOutput
+                        ? Flux.just(MessageSnapshotEvent.of(request.runId(), request.sessionId(), "部分回答"))
+                        : Flux.empty();
+                return output.concatWith(Flux.never()).doOnSubscribe(ignored -> runtimeStarted.countDown());
+            }
+
+            @Override
+            public Mono<Void> cancel(DomainAgentCancelRequest request) {
+                cancelledRunId.set(request.runId());
+                return Mono.empty();
+            }
+        };
+        FinanceEXChatService service = financeServiceWithDomainClientAndBindings(
+                sessions, messages, runs, events, routes, client, new DomainAgentRuntime(client), bindings,
+                new DomainAgentProperties(), liveEventBus(), interactions);
+        UserContext user = new UserContext("tenant-1", "user-1", "User One");
+        Instant now = Instant.now();
+        sessions.save(new ChatSession("session-1", user.tenantId(), user.ownerUserId(),
+                "测试会话", "ACTIVE", "web", null, null, null, null, 0L, null, now, now));
+        service.executeRun(user, new ChatCommand("initial", null, null, "session-1", null,
+                        "web", "分析经营情况", List.of(), Map.of()), RuntimeForwardHeaders.empty())
+                .collectList().block(Duration.ofSeconds(5));
+        ChatInteractionRequest interaction = interactions.requests.values().iterator().next();
+        ChatRunStartResult continued = service.startRun(user, continueCommand(interaction.id(),
+                        otherAnswer ? null : "DOMAIN_AGENT", otherAnswer ? null : "skill-low",
+                        otherAnswer ? Map.of("请选择处理技能", "其他需求") : Map.of(),
+                        null, Map.of()), RuntimeForwardHeaders.empty()).block(Duration.ofSeconds(5));
+        assertThat(runtimeStarted.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(runs.findById(continued.runId()).orElseThrow().assistantMessageId()).isNull();
+        assertThat(sessions.findById("session-1").orElseThrow().currentLeafMessageId())
+                .isEqualTo(interaction.assistantMessageId());
+
+        Object orchestrator = ReflectionTestUtils.getField(service, "orchestrator");
+        ChatRunStopCoordinator stop = (ChatRunStopCoordinator) ReflectionTestUtils.getField(
+                orchestrator, "stopCoordinator");
+        CandidateDomainAgentSwitchApplicationService switches = new CandidateDomainAgentSwitchApplicationService(
+                (ChatRunApplicationService) ReflectionTestUtils.getField(stop, "chatRunService"),
+                (SessionApplicationService) ReflectionTestUtils.getField(stop, "sessionService"),
+                messages, documentFacade(), stop,
+                (ChatRunStartCoordinator) ReflectionTestUtils.getField(orchestrator, "runStartCoordinator"),
+                (ChatRunExecutionCoordinator) ReflectionTestUtils.getField(orchestrator, "runExecutionCoordinator"),
+                new CandidateSwitchRouteTraceService(events, new ObjectMapper()), interactions);
+        ChatRunStartResult replacement = switches.switchDomainAgent(user, TraceContext.empty(),
+                new CandidateDomainAgentSwitchCommand(continued.runId(), interaction.userMessageId(),
+                        "skill-replacement", SelectedIntentContext.attach(Map.of(), "intent-b", "候选技能B"),
+                        null, "finance_pc_entry"), RuntimeForwardHeaders.empty()).block(Duration.ofSeconds(5));
+        awaitEvent(events, "run.completed");
+
+        assertThat(runs.findById(continued.runId()).orElseThrow().status()).isEqualTo(ChatRunStatus.CANCELLED);
+        assertThat(cancelledRunId).hasValue(continued.runId());
+        assertThat(runs.findById(replacement.runId()).orElseThrow().status()).isEqualTo(ChatRunStatus.COMPLETED);
+        assertThat(messages.messages).filteredOn(message -> "user".equals(message.role())).hasSize(1);
+        assertThat(messages.messages).filteredOn(message -> "assistant".equals(message.role())).hasSize(2);
+        ChatMessage replacementAssistant = messages.messages.stream()
+                .filter(message -> replacement.runId().equals(message.runId())).findFirst().orElseThrow();
+        assertThat(replacementAssistant.parentMessageId()).isEqualTo(interaction.userMessageId());
+        assertThat(replacementAssistant.regeneratedFromMessageId()).isEqualTo(interaction.assistantMessageId());
+        assertThat(replacementAssistant.content()).isEqualTo("候选回答");
+        assertThat(sessions.findById("session-1").orElseThrow().currentLeafMessageId())
+                .isEqualTo(replacementAssistant.id());
+        assertThat(replacementRequest.get().messageId()).isEqualTo(interaction.userMessageId());
+        assertThat(routeCalls).hasValue(otherAnswer ? 2 : 1);
+        assertThat(events.events.stream().filter(event -> replacement.runId().equals(event.runId()))
+                .map(event -> event.payload().get("sourceType")).toList())
+                .containsSubsequence("candidate-skill-switch", "selectedDomainAgent");
+        assertThat(bindings.saved.metadata()).containsEntry("domainAgentId", "skill-replacement");
+        assertThat(bindings.saved.status()).isEqualTo(RuntimeBindingStatus.ACTIVE);
     }
 
     @Test

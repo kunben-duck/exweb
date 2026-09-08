@@ -12,7 +12,9 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
@@ -20,6 +22,7 @@ import com.huawei.it.ex.one.application.facade.ResolvedChatAttachments;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
 import com.huawei.it.ex.one.application.integration.agent.SelectedIntentContext;
 import com.huawei.it.ex.one.application.integration.conversation.ChatEventStore;
+import com.huawei.it.ex.one.application.integration.conversation.ChatInteractionRequestRepository;
 import com.huawei.it.ex.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
@@ -27,6 +30,9 @@ import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.CandidateDomainAgentSwitchCommand;
 import com.huawei.it.ex.one.domain.chat.CandidateSwitchConflictException;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
+import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
+import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
+import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessageAttachment;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
@@ -64,6 +70,7 @@ class CandidateDomainAgentSwitchApplicationServiceTest {
     private final ChatRunStartCoordinator startCoordinator = mock(ChatRunStartCoordinator.class);
     private final ChatRunExecutionCoordinator executionCoordinator = mock(ChatRunExecutionCoordinator.class);
     private final ChatEventStore eventStore = mock(ChatEventStore.class);
+    private final ChatInteractionRequestRepository interactionRepository = mock(ChatInteractionRequestRepository.class);
     private final CandidateSwitchRouteTraceService routeTraceService =
             new CandidateSwitchRouteTraceService(eventStore, new ObjectMapper());
     private final CandidateDomainAgentSwitchApplicationService service =
@@ -75,7 +82,8 @@ class CandidateDomainAgentSwitchApplicationServiceTest {
                     stopCoordinator,
                     startCoordinator,
                     executionCoordinator,
-                    routeTraceService);
+                    routeTraceService,
+                    interactionRepository);
 
     private UserContext user;
     private ChatSession session;
@@ -144,6 +152,159 @@ class CandidateDomainAgentSwitchApplicationServiceTest {
                         0L, CandidateSwitchRouteTraceService.SOURCE_SCAN_LIMIT));
         order.verify(startCoordinator).startStandard(
                 eq(user), any(TraceContext.class), any(ChatCommand.class), any());
+        verifyNoInteractions(interactionRepository);
+    }
+
+    @Test
+    void stopsReusedAssistantContinuationAndKeepsValidatedSourceWhenNoOutputWasSaved() {
+        assertReusableSwitch(ChatRunStatus.CANCELLED, null, "run_original");
+    }
+
+    @Test
+    void usesAssistantAssociatedByStopAfterPartialOutput() {
+        assertReusableSwitch(ChatRunStatus.CANCELLED, "msg_assistant_a", null);
+    }
+
+    @Test
+    void acceptsNaturalCompletionDuringContinuationStop() {
+        assertReusableSwitch(ChatRunStatus.COMPLETED, "msg_assistant_a", null);
+    }
+
+    @Test
+    void rejectsUntrustedInteractionAssociationsBeforeStop() {
+        when(runService.requireOwnedRun(user, "run_a"))
+                .thenReturn(run(ChatRunStatus.RUNNING, null).withMetadata(reuseMetadata()));
+        for (String field : List.of("tenant", "user", "session", "interaction", "continuation", "message",
+                "assistant", "clarificationType", "source")) {
+            when(interactionRepository.findByOwnerAndId("tenant1", "user1", "interaction1"))
+                    .thenReturn(Optional.of(reusedInteraction(Map.of(field, "source".equals(field) ? "" : "wrong"))));
+
+            assertThatThrownBy(() -> service.switchDomainAgent(
+                            user, TraceContext.empty(), command(), RuntimeForwardHeaders.empty()).block())
+                    .isInstanceOf(CandidateSwitchConflictException.class)
+                    .extracting(error -> ((CandidateSwitchConflictException) error).code())
+                    .isEqualTo(CandidateSwitchConflictException.STALE_SOURCE);
+        }
+
+        verifyNoInteractions(stopCoordinator, startCoordinator);
+    }
+
+    @Test
+    void rejectsMissingInteractionWithoutStoppingContinuation() {
+        when(runService.requireOwnedRun(user, "run_a"))
+                .thenReturn(run(ChatRunStatus.RUNNING, null).withMetadata(reuseMetadata()));
+        when(interactionRepository.findByOwnerAndId("tenant1", "user1", "interaction1"))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.switchDomainAgent(
+                        user, TraceContext.empty(), command(), RuntimeForwardHeaders.empty()).block())
+                .isInstanceOf(CandidateSwitchConflictException.class);
+
+        verifyNoInteractions(stopCoordinator, startCoordinator);
+    }
+
+    @Test
+    void clientMetadataCannotSupplyAssistantReuseProof() {
+        when(runService.requireOwnedRun(user, "run_a")).thenReturn(run(ChatRunStatus.RUNNING, null));
+        CandidateDomainAgentSwitchCommand forged = new CandidateDomainAgentSwitchCommand(
+                "run_a", "msg_user", "skill_b", reuseMetadata(), null, "finance_pc_entry");
+
+        assertThatThrownBy(() -> service.switchDomainAgent(
+                        user, TraceContext.empty(), forged, RuntimeForwardHeaders.empty()).block())
+                .isInstanceOf(CandidateSwitchConflictException.class);
+
+        verifyNoInteractions(interactionRepository, stopCoordinator, startCoordinator);
+    }
+
+    @Test
+    void reusedAssistantDoesNotBypassStopPendingOrAnotherActiveRun() {
+        ChatRun running = run(ChatRunStatus.RUNNING, null).withMetadata(reuseMetadata());
+        when(interactionRepository.findByOwnerAndId("tenant1", "user1", "interaction1"))
+                .thenReturn(Optional.of(reusedInteraction(Map.of())));
+        when(runService.requireOwnedRun(user, "run_a"))
+                .thenReturn(running, run(ChatRunStatus.CANCELLING, null).withMetadata(reuseMetadata()));
+        when(stopCoordinator.stopRun(any(), any(), any(), any(), any()))
+                .thenReturn(Mono.just(new ChatRunStopResult(
+                        "run_a", "session1", ChatRunStatus.CANCELLING, 12L, NOW)));
+
+        assertThatThrownBy(() -> service.switchDomainAgent(
+                        user, TraceContext.empty(), command(), RuntimeForwardHeaders.empty()).block())
+                .isInstanceOf(CandidateSwitchConflictException.class)
+                .extracting(error -> ((CandidateSwitchConflictException) error).code())
+                .isEqualTo(CandidateSwitchConflictException.STOP_PENDING);
+
+        when(runService.requireOwnedRun(user, "run_a"))
+                .thenReturn(running, run(ChatRunStatus.CANCELLED, null).withMetadata(reuseMetadata()));
+        ChatRun otherActive = mock(ChatRun.class);
+        when(otherActive.id()).thenReturn("run_other");
+        when(runService.findActiveRun(user, "session1")).thenReturn(Optional.of(otherActive));
+
+        assertThatThrownBy(() -> service.switchDomainAgent(
+                        user, TraceContext.empty(), command(), RuntimeForwardHeaders.empty()).block())
+                .isInstanceOf(CandidateSwitchConflictException.class)
+                .extracting(error -> ((CandidateSwitchConflictException) error).code())
+                .isEqualTo(CandidateSwitchConflictException.STALE_SOURCE);
+        verifyNoInteractions(startCoordinator);
+    }
+
+    @Test
+    void completedContinuationWithAssistantDoesNotQueryInteraction() {
+        ChatRun completed = run(ChatRunStatus.COMPLETED, "msg_assistant_a").withMetadata(reuseMetadata());
+        when(runService.requireOwnedRun(user, "run_a")).thenReturn(completed);
+        when(startCoordinator.startStandard(eq(user), any(), any(), any()))
+                .thenReturn(Mono.just(new ChatRunStartResult("run_b", "session1", 13L, NOW, "chat-run-run_b")));
+
+        service.switchDomainAgent(user, TraceContext.empty(), command(), RuntimeForwardHeaders.empty()).block();
+
+        verifyNoInteractions(interactionRepository, stopCoordinator);
+    }
+
+    private void assertReusableSwitch(ChatRunStatus terminal, String savedAssistantId, String expectedPreviousRunId) {
+        ChatRun running = run(ChatRunStatus.RUNNING, null).withMetadata(reuseMetadata());
+        ChatRun stopped = run(terminal, savedAssistantId).withMetadata(reuseMetadata());
+        when(runService.requireOwnedRun(user, "run_a")).thenReturn(running, stopped);
+        when(interactionRepository.findByOwnerAndId("tenant1", "user1", "interaction1"))
+                .thenReturn(Optional.of(reusedInteraction(Map.of())));
+        when(stopCoordinator.stopRun(any(), any(), any(), any(), any()))
+                .thenReturn(Mono.just(new ChatRunStopResult("run_a", "session1", terminal, 12L, NOW)));
+        when(executionCoordinator.executeCandidateSwitch(any(), any())).thenReturn(Flux.empty());
+        when(startCoordinator.startStandard(eq(user), any(), any(), any())).thenAnswer(invocation -> {
+            ChatRunStartCoordinator.StandardRunFactory factory = invocation.getArgument(3);
+            factory.create(new RunStartAttempt(user, "run_b", null)).collectList().block();
+            return Mono.just(new ChatRunStartResult("run_b", "session1", 13L, NOW, "chat-run-run_b"));
+        });
+
+        ChatRunStartResult started = service.switchDomainAgent(
+                user, TraceContext.empty(), command(), RuntimeForwardHeaders.empty()).block();
+
+        assertThat(started.runId()).isEqualTo("run_b");
+        ArgumentCaptor<CandidateSwitchRunSource> captured = ArgumentCaptor.forClass(CandidateSwitchRunSource.class);
+        verify(executionCoordinator).executeCandidateSwitch(any(), captured.capture());
+        assertThat(captured.getValue().assistantMessageId()).isEqualTo("msg_assistant_a");
+        assertThat(captured.getValue().reusedAssistantSourceRunId()).isEqualTo(expectedPreviousRunId);
+        assertThat(captured.getValue().userMessage().id()).isEqualTo("msg_user");
+        verify(interactionRepository, times(1)).findByOwnerAndId("tenant1", "user1", "interaction1");
+        InOrder order = inOrder(interactionRepository, stopCoordinator, startCoordinator);
+        order.verify(interactionRepository).findByOwnerAndId("tenant1", "user1", "interaction1");
+        order.verify(stopCoordinator).stopRun(any(), any(), eq("run_a"), eq("CANDIDATE_SWITCH"), any());
+        order.verify(startCoordinator).startStandard(eq(user), any(), any(), any());
+    }
+
+    private Map<String, Object> reuseMetadata() {
+        return Map.of("interactionId", "interaction1", "interactionType", "INTENT_CLARIFICATION",
+                "interactionMessageStrategy", "REUSE_ASSISTANT", "interactionAssistantMessageId", "msg_assistant_a");
+    }
+
+    private ChatInteractionRequest reusedInteraction(Map<String, String> overrides) {
+        return new ChatInteractionRequest(
+                overrides.getOrDefault("interaction", "interaction1"),
+                overrides.getOrDefault("tenant", "tenant1"), overrides.getOrDefault("user", "user1"),
+                overrides.getOrDefault("session", "session1"), overrides.getOrDefault("source", "run_original"),
+                overrides.getOrDefault("continuation", "run_a"), overrides.getOrDefault("message", "msg_user"),
+                overrides.getOrDefault("assistant", "msg_assistant_a"), "intent-agent", null, null, null,
+                ChatInteractionType.INTENT_CLARIFICATION, ChatInteractionStatus.RESPONDING,
+                Map.of("clarificationType", overrides.getOrDefault("clarificationType", "AMBIGUOUS_ROUTE")),
+                Map.of(), NOW.plusSeconds(3600), null, null, NOW, NOW);
     }
 
     @Test

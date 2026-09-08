@@ -16,6 +16,7 @@ record CandidateSwitchRunSource(
         ChatSession session,
         ChatMessage userMessage,
         String assistantMessageId,
+        String reusedAssistantSourceRunId,
         ResolvedChatAttachments resolvedAttachments,
         CandidateSwitchRouteTrace routeTrace
 ) {}

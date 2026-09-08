@@ -198,7 +198,8 @@ public class ChatRunAdmissionCommitService {
                 currentSession,
                 request.source().sourceRunId(),
                 request.source().userMessage().id(),
-                request.source().assistantMessageId());
+                request.source().assistantMessageId(),
+                request.source().reusedAssistantSourceRunId());
         ChatRun run;
         try {
             run = chatRunService.insertRunning(new CreateChatRunContext(

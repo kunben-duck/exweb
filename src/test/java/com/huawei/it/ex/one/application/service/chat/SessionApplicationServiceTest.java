@@ -735,6 +735,63 @@ class SessionApplicationServiceTest {
     }
 
     @Test
+    void candidateSwitchAcceptsVerifiedReusedAssistantWithoutSavedContinuationOutput() {
+        TestFixture fixture = fixture();
+        MessagePair original = completeTurn(fixture, "问题", "请选择技能", "run1");
+        ChatSession current = fixture.sessions.findById(fixture.session.id()).orElseThrow();
+
+        assertThatThrownBy(() -> fixture.service.prepareCandidateSwitchPlan(
+                        user(), current, "run2", original.user().id(), original.assistant().id()))
+                .isInstanceOf(CandidateSwitchConflictException.class);
+
+        ChatRunMessagePlan plan = fixture.service.prepareCandidateSwitchPlan(
+                user(), current, "run2", original.user().id(), original.assistant().id(), "run1");
+        ChatMessage replacement = saveAssistant(fixture, "候选回答", "run3",
+                plan.userMessage().id(), plan.regeneratedFromMessageId());
+
+        assertThat(plan.userMessage().id()).isEqualTo(original.user().id());
+        assertThat(replacement.parentMessageId()).isEqualTo(original.user().id());
+        assertThat(replacement.regeneratedFromMessageId()).isEqualTo(original.assistant().id());
+        assertThat(replacement.siblingIndex()).isEqualTo(2);
+        assertThat(fixture.service.listVariants(user(), current.id(), original.assistant().id()))
+                .extracting(ChatMessage::runId).containsExactly("run1", "run3");
+    }
+
+    @Test
+    void candidateSwitchReuseProofDoesNotAcceptAssistantTakenOverByAnotherRun() {
+        TestFixture fixture = fixture();
+        MessagePair original = completeTurn(fixture, "问题", "其他Run的回答", "run_other");
+        ChatSession current = fixture.sessions.findById(fixture.session.id()).orElseThrow();
+
+        assertThatThrownBy(() -> fixture.service.prepareCandidateSwitchPlan(
+                        user(), current, "run2", original.user().id(), original.assistant().id(), "run1"))
+                .isInstanceOf(CandidateSwitchConflictException.class)
+                .extracting(error -> ((CandidateSwitchConflictException) error).code())
+                .isEqualTo(CandidateSwitchConflictException.STALE_SOURCE);
+        assertThat(fixture.sessions.findById(current.id()).orElseThrow().currentLeafMessageId())
+                .isEqualTo(original.assistant().id());
+    }
+
+    @Test
+    void candidateSwitchReuseProofStillRequiresOriginalParentAndCurrentPath() {
+        TestFixture fixture = fixture();
+        MessagePair original = completeTurn(fixture, "第一问", "请选择技能", "run1");
+        ChatRunMessagePlan next = fixture.service.prepareRunMessage(user(),
+                command("第二问", ChatRunMode.NEXT, original.assistant().id(), null, null),
+                fixture.sessions.findById(fixture.session.id()).orElseThrow(), "run_other", List.of());
+        ChatSession current = fixture.sessions.findById(fixture.session.id()).orElseThrow();
+
+        assertThatThrownBy(() -> fixture.service.prepareCandidateSwitchPlan(
+                        user(), current, "run2", next.userMessage().id(), original.assistant().id(), "run1"))
+                .isInstanceOf(CandidateSwitchConflictException.class);
+        assertThatThrownBy(() -> fixture.service.prepareCandidateSwitchPlan(
+                        user(), current, "run2", original.user().id(), original.assistant().id(), "run1"))
+                .isInstanceOf(CandidateSwitchConflictException.class);
+        assertThat(fixture.sessions.findById(current.id()).orElseThrow().currentLeafMessageId())
+                .isEqualTo(next.userMessage().id());
+    }
+
+    @Test
     void candidateSwitchRejectsSourceOutsideCurrentPath() {
         TestFixture fixture = fixture();
         MessagePair first = completeTurn(fixture, "第一问", "第一答", "run1");

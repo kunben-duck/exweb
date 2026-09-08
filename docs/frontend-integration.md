@@ -1964,6 +1964,10 @@ POST /v1/chat/runs/{sourceRunId}/switch-domain-agent
 需要展示的可信路由过程，漏失事件按普通Run使用`GET /v1/chat/runs/{runB}/events/resume`恢复。页面刷新时，
 `stream-status`会把B作为当前active Run。
 
+模糊意图选择OTHER重新意图后，切换请求的`sourceRunId`必须使用本次`CONTINUE_INTERACTION`返回的新Run ID，
+不能沿用首次模糊意图的旧Run ID；`messageId`仍为复用的原user消息ID。即使续跑尚未完成、Run的assistant字段
+尚未回填，服务端也会验证持久化Interaction中的复用关系，先停止续跑，再基于原assistant创建新版本。
+
 Run-B的前缀事件顺序固定为：
 
 ```text

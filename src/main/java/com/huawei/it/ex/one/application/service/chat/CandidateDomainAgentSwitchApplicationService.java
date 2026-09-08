@@ -7,6 +7,7 @@ package com.huawei.it.ex.one.application.service.chat;
 import com.huawei.it.ex.one.application.facade.DocumentFacade;
 import com.huawei.it.ex.one.application.facade.ResolvedChatAttachments;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.application.integration.conversation.ChatInteractionRequestRepository;
 import com.huawei.it.ex.one.application.integration.memory.ChatMessageRepository;
 import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
@@ -14,6 +15,8 @@ import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.CandidateDomainAgentSwitchCommand;
 import com.huawei.it.ex.one.domain.chat.CandidateSwitchConflictException;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
+import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
+import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatMessageAttachment;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
@@ -28,6 +31,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 
 /** 串行协调候选DomainAgent切换，确保source Run终止后才复用原user消息创建新Run。 */
 @Service
@@ -42,6 +46,7 @@ public class CandidateDomainAgentSwitchApplicationService {
     private final ChatRunStartCoordinator runStartCoordinator;
     private final ChatRunExecutionCoordinator runExecutionCoordinator;
     private final CandidateSwitchRouteTraceService routeTraceService;
+    private final ChatInteractionRequestRepository interactionRepository;
 
     public CandidateDomainAgentSwitchApplicationService(
             ChatRunApplicationService chatRunService,
@@ -51,7 +56,8 @@ public class CandidateDomainAgentSwitchApplicationService {
             ChatRunStopCoordinator stopCoordinator,
             ChatRunStartCoordinator runStartCoordinator,
             ChatRunExecutionCoordinator runExecutionCoordinator,
-            CandidateSwitchRouteTraceService routeTraceService) {
+            CandidateSwitchRouteTraceService routeTraceService,
+            ChatInteractionRequestRepository interactionRepository) {
         this.chatRunService = chatRunService;
         this.sessionService = sessionService;
         this.messageRepository = messageRepository;
@@ -60,6 +66,7 @@ public class CandidateDomainAgentSwitchApplicationService {
         this.runStartCoordinator = runStartCoordinator;
         this.runExecutionCoordinator = runExecutionCoordinator;
         this.routeTraceService = routeTraceService;
+        this.interactionRepository = interactionRepository;
     }
 
     public Mono<ChatRunStartResult> switchDomainAgent(
@@ -102,16 +109,55 @@ public class CandidateDomainAgentSwitchApplicationService {
                         user.tenantId(), user.ownerUserId(), command.messageId())
                 .orElseThrow(() -> new SecurityException("消息不存在或不属于当前用户"));
         validateSourceMessage(sourceRun, session, userMessage);
-        ensureCurrentSource(session, sourceRun, userMessage.id());
+        AssistantSource assistant = resolveAssistantSource(user, sourceRun);
+        ensureCurrentSource(session, sourceRun.id(), userMessage.id(), assistant.messageId());
         ResolvedChatAttachments resolved = resolveAttachments(user, userMessage.attachments());
         return new CandidateSwitchRunSource(
                 sourceRun.id(),
                 sourceRun.status(),
                 session,
                 userMessage,
-                sourceRun.assistantMessageId(),
+                assistant.messageId(),
+                assistant.previousRunId(),
                 resolved,
                 CandidateSwitchRouteTrace.empty());
+    }
+
+    private AssistantSource resolveAssistantSource(UserContext user, ChatRun run) {
+        if (run.assistantMessageId() != null && !run.assistantMessageId().isBlank()) {
+            return new AssistantSource(run.assistantMessageId(), null);
+        }
+        if (!InteractionMessageStrategy.REUSE_ASSISTANT.name().equals(
+                run.metadata().get(InteractionMessageStrategy.METADATA_KEY))
+                || !ChatInteractionType.INTENT_CLARIFICATION.name().equals(run.metadata().get("interactionType"))) {
+            return new AssistantSource(null, null);
+        }
+        String interactionId = metadataText(run, "interactionId");
+        String assistantId = metadataText(run, "interactionAssistantMessageId");
+        if (interactionId == null || assistantId == null) {
+            throw CandidateSwitchConflictException.staleSource(run.id());
+        }
+        ChatInteractionRequest interaction = interactionRepository.findByOwnerAndId(
+                        user.tenantId(), user.ownerUserId(), interactionId)
+                .orElseThrow(() -> CandidateSwitchConflictException.staleSource(run.id()));
+        if (!Objects.equals(user.tenantId(), interaction.tenantId())
+                || !Objects.equals(user.ownerUserId(), interaction.userId())
+                || !Objects.equals(run.sessionId(), interaction.sessionId())
+                || !Objects.equals(interactionId, interaction.id())
+                || !Objects.equals(run.id(), interaction.continueRunId())
+                || !Objects.equals(run.userMessageId(), interaction.userMessageId())
+                || !Objects.equals(assistantId, interaction.assistantMessageId())
+                || interaction.interactionType() != ChatInteractionType.INTENT_CLARIFICATION
+                || !AmbiguousRouteSupport.isAmbiguous(interaction)
+                || interaction.sourceRunId() == null || interaction.sourceRunId().isBlank()) {
+            throw CandidateSwitchConflictException.staleSource(run.id());
+        }
+        return new AssistantSource(assistantId, interaction.sourceRunId());
+    }
+
+    private String metadataText(ChatRun run, String key) {
+        Object value = run.metadata().get(key);
+        return value instanceof String text && !text.isBlank() ? text.trim() : null;
     }
 
     private boolean requiresStop(ChatRunStatus status) {
@@ -138,14 +184,19 @@ public class CandidateDomainAgentSwitchApplicationService {
             throw CandidateSwitchConflictException.staleSource(source.sourceRunId());
         });
         ChatSession currentSession = sessionService.getSession(user, source.session().id());
-        ensureCurrentSource(currentSession, latestSource, source.userMessage().id());
+        AssistantSource assistant = latestSource.assistantMessageId() == null
+                || latestSource.assistantMessageId().isBlank()
+                ? new AssistantSource(source.assistantMessageId(), source.reusedAssistantSourceRunId())
+                : new AssistantSource(latestSource.assistantMessageId(), null);
+        ensureCurrentSource(currentSession, latestSource.id(), source.userMessage().id(), assistant.messageId());
         CandidateSwitchRouteTrace routeTrace = routeTraceService.load(user, latestSource, command);
         CandidateSwitchRunSource currentSource = new CandidateSwitchRunSource(
                 source.sourceRunId(),
                 latestSource.status(),
                 currentSession,
                 source.userMessage(),
-                latestSource.assistantMessageId(),
+                assistant.messageId(),
+                assistant.previousRunId(),
                 source.resolvedAttachments(),
                 routeTrace);
         ChatCommand runCommand = replacementCommand(command, currentSource);
@@ -215,14 +266,15 @@ public class CandidateDomainAgentSwitchApplicationService {
 
     private void ensureCurrentSource(
             ChatSession session,
-            ChatRun sourceRun,
-            String userMessageId) {
+            String sourceRunId,
+            String userMessageId,
+            String assistantMessageId) {
         String currentLeaf = session.currentLeafMessageId();
         boolean pointsToUser = userMessageId.equals(currentLeaf);
-        boolean pointsToAssistant = sourceRun.assistantMessageId() != null
-                && sourceRun.assistantMessageId().equals(currentLeaf);
+        boolean pointsToAssistant = assistantMessageId != null
+                && assistantMessageId.equals(currentLeaf);
         if (!pointsToUser && !pointsToAssistant) {
-            throw CandidateSwitchConflictException.staleSource(sourceRun.id());
+            throw CandidateSwitchConflictException.staleSource(sourceRunId);
         }
     }
 
@@ -242,4 +294,7 @@ public class CandidateDomainAgentSwitchApplicationService {
                 .toList();
         return documentFacade.resolveChatAttachmentsForUser(user, requested);
     }
+
+    /** The previous Run is accepted only after validating the persisted Interaction continuation. */
+    private record AssistantSource(String messageId, String previousRunId) {}
 }

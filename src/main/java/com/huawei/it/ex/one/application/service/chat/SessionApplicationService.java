@@ -1178,6 +1178,16 @@ public class SessionApplicationService implements ChatSessionFacade {
             String sourceRunId,
             String userMessageId,
             String assistantMessageId) {
+        return prepareCandidateSwitchPlan(user, session, sourceRunId, userMessageId, assistantMessageId, null);
+    }
+
+    ChatRunMessagePlan prepareCandidateSwitchPlan(
+            UserContext user,
+            ChatSession session,
+            String sourceRunId,
+            String userMessageId,
+            String assistantMessageId,
+            String reusedAssistantSourceRunId) {
         ChatMessage userMessage = requireMessageInSession(session, userMessageId);
         ensureUnlockedUserMessage(userMessage, "候选技能关联消息");
         ChatMessage sourceAssistant = null;
@@ -1186,7 +1196,9 @@ public class SessionApplicationService implements ChatSessionFacade {
             ensureUnlockedAssistantMessage(sourceAssistant, "候选技能被替换消息");
             if (!userMessage.id().equals(sourceAssistant.parentMessageId())
                     || sourceRunId == null
-                    || !sourceRunId.equals(sourceAssistant.runId())) {
+                    || !(sourceRunId.equals(sourceAssistant.runId())
+                    || (reusedAssistantSourceRunId != null
+                    && reusedAssistantSourceRunId.equals(sourceAssistant.runId())))) {
                 throw CandidateSwitchConflictException.staleSource(sourceRunId);
             }
         }

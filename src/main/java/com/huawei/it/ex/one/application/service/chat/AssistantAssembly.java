@@ -73,47 +73,51 @@ final class AssistantAssembly {
             return;
         }
         if (event.type() != null && event.type().startsWith("runtime.")) {
-            if (isTransientIntentProcessEvent(event.payload())) {
+            observeRuntimeEvent(event);
+        }
+    }
+
+    private void observeRuntimeEvent(ChatEvent event) {
+        if (isTransientIntentProcessEvent(event.payload())) {
+            return;
+        }
+        if (isDomainAgentThinkingEvent(event) && domainAgentContentObserved) {
+            domainAgentThinkingSinceContent = true;
+        }
+        if (isDomainAgentStructuredCard(event)) {
+            closeContentAgentPart();
+        }
+        if (isIntentClarificationResponse(event.payload())) {
+            if (!AmbiguousRouteSupport.isAmbiguous(event.payload())) {
                 return;
             }
-            if (isDomainAgentThinkingEvent(event) && domainAgentContentObserved) {
-                domainAgentThinkingSinceContent = true;
-            }
-            if (isDomainAgentStructuredCard(event)) {
-                closeContentAgentPart();
-            }
-            if (isIntentClarificationResponse(event.payload())) {
-                if (!AmbiguousRouteSupport.isAmbiguous(event.payload())) {
-                    return;
-                }
-            }
-            if (isDomainAgentRefusal(event.payload())) {
-                closeContentAgentPart();
-                // 拒答前已经输出的正文只作为 MESSAGE_SNAPSHOT/过程 part 保留，不能与新 Agent
-                // 的回答拼成最终 content；卡片内容也必须在此切断归属。
+        }
+        if (isDomainAgentRefusal(event.payload())) {
+            closeContentAgentPart();
+            // 拒答前已经输出的正文只作为 MESSAGE_SNAPSHOT/过程 part 保留，不能与新 Agent
+            // 的回答拼成最终 content；卡片内容也必须在此切断归属。
+            snapshot = null;
+            deltaDraft.setLength(0);
+            resetDomainAgentContentSegmentation();
+            structuredFallbackContent = firstText(event.payload(),
+                    "reason", "userMessage", "reasonCode", "code");
+        }
+        if (isIntentClarificationRequest(event.payload())) {
+            structuredFallbackContent = intentClarificationQuestion(event.payload());
+        }
+        if (isRouteSwitchConfirmationRequest(event.payload()) || isRouteSwitchDeclined(event.payload())) {
+            if (isRouteSwitchConfirmationRequest(event.payload())) {
                 snapshot = null;
                 deltaDraft.setLength(0);
                 resetDomainAgentContentSegmentation();
-                structuredFallbackContent = firstText(event.payload(),
-                        "reason", "userMessage", "reasonCode", "code");
             }
-            if (isIntentClarificationRequest(event.payload())) {
-                structuredFallbackContent = intentClarificationQuestion(event.payload());
-            }
-            if (isRouteSwitchConfirmationRequest(event.payload()) || isRouteSwitchDeclined(event.payload())) {
-                if (isRouteSwitchConfirmationRequest(event.payload())) {
-                    snapshot = null;
-                    deltaDraft.setLength(0);
-                    resetDomainAgentContentSegmentation();
-                }
-                structuredFallbackContent = firstText(event.payload(), "message", "reason", "sourceType");
-            }
-            if (isContentAgentCard(event)) {
-                appendContentAgentPart(event);
-                return;
-            }
-            parts.add(runtimePart(event));
+            structuredFallbackContent = firstText(event.payload(), "message", "reason", "sourceType");
         }
+        if (isContentAgentCard(event)) {
+            appendContentAgentPart(event);
+            return;
+        }
+        parts.add(runtimePart(event));
     }
 
     private void appendDelta(ChatEvent event, String delta) {
@@ -388,26 +392,11 @@ final class AssistantAssembly {
     }
 
     private static String partType(String eventType, Map<String, Object> payload) {
-        if ("runtime.card".equals(eventType) && isQuestionnaireApprovalRequest(payload)) {
-            return "AGENT_CLARIFICATION_REQUEST";
-        }
-        if ("runtime.card".equals(eventType) && isClarificationResponse(payload)) {
-            return agentClarificationResponse(payload) ? "AGENT_CLARIFICATION_RESPONSE" : "CLARIFICATION_RESPONSE";
-        }
-        if ("runtime.card".equals(eventType) && isIntentClarificationRequest(payload)) {
-            return "INTENT_CLARIFICATION_REQUEST";
-        }
-        if ("runtime.card".equals(eventType) && isIntentClarificationResponse(payload)) {
-            return "INTENT_CLARIFICATION_RESPONSE";
-        }
-        if ("runtime.card".equals(eventType) && isRouteSwitchConfirmationRequest(payload)) {
-            return "ROUTE_SWITCH_CONFIRMATION_REQUEST";
-        }
-        if ("runtime.card".equals(eventType) && isRouteSwitchConfirmationResponse(payload)) {
-            return "ROUTE_SWITCH_CONFIRMATION_RESPONSE";
-        }
-        if ("runtime.card".equals(eventType) && isRouteSwitchDeclined(payload)) {
-            return "ROUTE_SWITCH_DECLINED";
+        if ("runtime.card".equals(eventType)) {
+            String cardType = cardPartType(payload);
+            if (cardType != null) {
+                return cardType;
+            }
         }
         if (isDomainAgentRefusal(payload)) {
             return "DOMAIN_AGENT_REFUSAL";
@@ -422,6 +411,31 @@ final class AssistantAssembly {
             case "runtime.card" -> "CARD";
             default -> "RUNTIME_EVENT";
         };
+    }
+
+    private static String cardPartType(Map<String, Object> payload) {
+        if (isQuestionnaireApprovalRequest(payload)) {
+            return "AGENT_CLARIFICATION_REQUEST";
+        }
+        if (isClarificationResponse(payload)) {
+            return agentClarificationResponse(payload) ? "AGENT_CLARIFICATION_RESPONSE" : "CLARIFICATION_RESPONSE";
+        }
+        if (isIntentClarificationRequest(payload)) {
+            return "INTENT_CLARIFICATION_REQUEST";
+        }
+        if (isIntentClarificationResponse(payload)) {
+            return "INTENT_CLARIFICATION_RESPONSE";
+        }
+        if (isRouteSwitchConfirmationRequest(payload)) {
+            return "ROUTE_SWITCH_CONFIRMATION_REQUEST";
+        }
+        if (isRouteSwitchConfirmationResponse(payload)) {
+            return "ROUTE_SWITCH_CONFIRMATION_RESPONSE";
+        }
+        if (isRouteSwitchDeclined(payload)) {
+            return "ROUTE_SWITCH_DECLINED";
+        }
+        return null;
     }
 
     private static String contentText(String eventType, Map<String, Object> payload) {
@@ -458,30 +472,34 @@ final class AssistantAssembly {
             return firstText(payload, "delta", "title", "url", "referenceType", "sourceType");
         }
         if ("runtime.card".equals(eventType)) {
-            if (isQuestionnaireApprovalRequest(payload)) {
-                return firstText(payload, "title", "message", "detail", "sourceType");
-            }
-            if (isClarificationResponse(payload)) {
-                return firstText(payload, "answerText", "sourceType");
-            }
-            if (isIntentClarificationRequest(payload)) {
-                return intentClarificationQuestion(payload);
-            }
-            if (isIntentClarificationResponse(payload)) {
-                return firstText(payload, "answerText", "sourceType");
-            }
-            if (isRouteSwitchConfirmationRequest(payload)) {
-                return firstText(payload, "message", "candidateIntentName", "candidateTargetId", "sourceType");
-            }
-            if (isRouteSwitchConfirmationResponse(payload)) {
-                return firstText(payload, "message", "candidateTargetId", "sourceType");
-            }
-            if (isRouteSwitchDeclined(payload)) {
-                return firstText(payload, "message", "currentTargetId", "sourceType");
-            }
-            return firstText(payload, "delta", "cardUrl", "intent", "domainAgentId", "skillId", "cardType", "sourceType");
+            return cardContentText(payload);
         }
         return firstText(payload, "text", "displayText", "sourceType");
+    }
+
+    private static String cardContentText(Map<String, Object> payload) {
+        if (isQuestionnaireApprovalRequest(payload)) {
+            return firstText(payload, "title", "message", "detail", "sourceType");
+        }
+        if (isClarificationResponse(payload)) {
+            return firstText(payload, "answerText", "sourceType");
+        }
+        if (isIntentClarificationRequest(payload)) {
+            return intentClarificationQuestion(payload);
+        }
+        if (isIntentClarificationResponse(payload)) {
+            return firstText(payload, "answerText", "sourceType");
+        }
+        if (isRouteSwitchConfirmationRequest(payload)) {
+            return firstText(payload, "message", "candidateIntentName", "candidateTargetId", "sourceType");
+        }
+        if (isRouteSwitchConfirmationResponse(payload)) {
+            return firstText(payload, "message", "candidateTargetId", "sourceType");
+        }
+        if (isRouteSwitchDeclined(payload)) {
+            return firstText(payload, "message", "currentTargetId", "sourceType");
+        }
+        return firstText(payload, "delta", "cardUrl", "intent", "domainAgentId", "skillId", "cardType", "sourceType");
     }
 
     private static boolean isQuestionnaireApprovalRequest(Map<String, Object> payload) {

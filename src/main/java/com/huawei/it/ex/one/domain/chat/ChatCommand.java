@@ -205,26 +205,36 @@ public record ChatCommand(
     public ChatCommand {
         attachments = attachments == null ? List.of() : List.copyOf(attachments);
         metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
-        targetType = targetType == null || targetType.isBlank() ? null : targetType.trim();
-        targetId = targetId == null || targetId.isBlank() ? null : targetId.trim();
+        targetType = normalizeTag(targetType);
+        targetId = normalizeTag(targetId);
         runMode = runMode == null ? ChatRunMode.NEXT : runMode;
-        routeTrigger = routeTrigger == null || routeTrigger.isBlank() ? null : routeTrigger.trim();
-        interactionId = interactionId == null || interactionId.isBlank() ? null : interactionId.trim();
-        interactionAction = interactionAction == null || interactionAction.isBlank()
-                ? null
-                : interactionAction.trim();
-        language = language == null || language.isBlank() ? null : language.trim();
-        if (language != null && language.length() > 32) {
-            throw new IllegalArgumentException("language 长度不能超过 32");
-        }
+        routeTrigger = normalizeTag(routeTrigger);
+        interactionId = normalizeTag(interactionId);
+        interactionAction = normalizeTag(interactionAction);
+        language = normalizeTag(language);
+        validateLanguage(language);
         intentAccessName = normalizeTag(intentAccessName);
-        if (intentAccessName != null && intentAccessName.length() > 128) {
-            throw new IllegalArgumentException("intentAccessName 长度不能超过 128");
-        }
-        scope = scope == null || scope.isBlank() ? null : scope.trim();
+        validateIntentAccessName(intentAccessName);
+        scope = normalizeTag(scope);
         questionnaireAnswers = questionnaireAnswers == null ? Map.of() : Map.copyOf(questionnaireAnswers);
         appId = normalizeTag(appId);
         appName = normalizeTag(appName);
+        validateAppTags(appId, appName);
+    }
+
+    private static void validateLanguage(String language) {
+        if (language != null && language.length() > 32) {
+            throw new IllegalArgumentException("language 长度不能超过 32");
+        }
+    }
+
+    private static void validateIntentAccessName(String intentAccessName) {
+        if (intentAccessName != null && intentAccessName.length() > 128) {
+            throw new IllegalArgumentException("intentAccessName 长度不能超过 128");
+        }
+    }
+
+    private static void validateAppTags(String appId, String appName) {
         if (appId == null && appName != null) {
             throw new IllegalArgumentException("appName 不能脱离 appId 单独使用");
         }

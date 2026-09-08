@@ -14,12 +14,55 @@ import com.huawei.it.ex.one.domain.chat.MessageSnapshotEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
 class AssistantAssemblyTest {
+
+    @ParameterizedTest
+    @CsvSource({
+            "approval-request,AGENT_CLARIFICATION_REQUEST,approval-request",
+            "clarification-response,AGENT_CLARIFICATION_RESPONSE,clarification-response",
+            "intent-clarification-request,INTENT_CLARIFICATION_REQUEST,",
+            "intent-clarification-response,INTENT_CLARIFICATION_RESPONSE,intent-clarification-response",
+            "route-switch-confirmation-request,ROUTE_SWITCH_CONFIRMATION_REQUEST,route-switch-confirmation-request",
+            "route-switch-confirmation-response,ROUTE_SWITCH_CONFIRMATION_RESPONSE,route-switch-confirmation-response",
+            "route-switch-declined,ROUTE_SWITCH_DECLINED,route-switch-declined",
+            "future-card,CARD,generic fallback"
+    })
+    void cardClassificationAndMatchedEmptyTextKeepTheirPriority(
+            String sourceType, String expectedType, String expectedText) {
+        AssistantAssembly assembly = new AssistantAssembly();
+        assembly.observe(RuntimeEvent.card("run1", "session1", Map.of(
+                "sourceType", sourceType, "operation_type", "questionnaire",
+                "interactionType", "AGENT_CLARIFICATION", "clarificationType", "AMBIGUOUS_ROUTE",
+                "delta", "generic fallback")));
+
+        assertThat(assembly.parts()).singleElement().satisfies(part -> {
+            assertThat(part.partType()).isEqualTo(expectedType);
+            assertThat(part.contentText()).isEqualTo(expectedText);
+        });
+    }
+
+    @Test
+    void cardOnlyClassifiersDoNotReclassifyOtherRuntimeEvents() {
+        AssistantAssembly assembly = new AssistantAssembly();
+        assembly.observe(RuntimeEvent.progress("run1", "session1", Map.of(
+                "sourceType", "approval-request", "operation_type", "questionnaire", "message", "progress")));
+        assembly.observe(RuntimeEvent.tool("run1", "session1", Map.of(
+                "toolName", "lookup", "inputPreview", "query")));
+        assembly.observe(RuntimeEvent.thinking("run1", "session1", Map.of("operationId", "op1")));
+
+        assertThat(assembly.parts()).extracting(part -> part.partType())
+                .containsExactly("PROGRESS", "TOOL", "THINKING");
+        assertThat(assembly.parts()).extracting(part -> part.contentText())
+                .containsExactly("progress", "lookup: query", "null: op1");
+        assertThat(assembly.finalContent()).isEmpty();
+    }
 
     @Test
     void keepsIntentProcessEventsOutOfHistoricalParts() {

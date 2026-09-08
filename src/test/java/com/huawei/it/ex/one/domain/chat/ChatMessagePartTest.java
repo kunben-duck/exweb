@@ -7,6 +7,8 @@ package com.huawei.it.ex.one.domain.chat;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.time.Instant;
 import java.util.Map;
@@ -55,6 +57,32 @@ class ChatMessagePartTest {
         assertThat(part("CARD").displayHint()).isEqualTo("inline");
         assertThat(part("RUNTIME_EVENT").visible()).isFalse();
         assertThat(part("RUNTIME_EVENT").displayHint()).isEqualTo("debug");
+    }
+
+    @ParameterizedTest
+    @CsvSource({"ANSWER,COMPLETED", "PROGRESS,STREAMING", "TOOL,STREAMING",
+            "AGENT,INFO", "THINKING,UNKNOWN", "FUTURE_EVENT,INFO"})
+    void defaultStatusesKeepExistingTypeMapping(String type, String status) {
+        assertThat(part(type).status()).isEqualTo(status);
+    }
+
+    @Test
+    void informationalPartsAndDynamicStatusesKeepTheirDefaults() {
+        EXPECTED_TITLES.keySet().stream()
+                .filter(type -> !java.util.Set.of("ANSWER", "PROGRESS", "TOOL", "AGENT", "THINKING").contains(type))
+                .forEach(type -> assertThat(part(type).status()).as(type).isEqualTo("INFO"));
+        assertThat(partWithPayload("AGENT", Map.of("started", true)).status()).isEqualTo("STARTED");
+        assertThat(partWithPayload("AGENT", Map.of("started", false)).status()).isEqualTo("COMPLETED");
+        assertThat(partWithPayload("AGENT", Map.of("started", "true")).status()).isEqualTo("INFO");
+        assertThat(partWithPayload("THINKING", Map.of("status", "started")).status()).isEqualTo("STARTED");
+        assertThat(partWithPayload("THINKING", Map.of("status", "Ended")).status()).isEqualTo("COMPLETED");
+        assertThat(partWithPayload("THINKING", Map.of("status", "completed")).status()).isEqualTo("COMPLETED");
+        assertThat(partWithPayload("THINKING", Map.of("status", "future")).status()).isEqualTo("UNKNOWN");
+    }
+
+    private ChatMessagePart partWithPayload(String type, Map<String, Object> payload) {
+        return new ChatMessagePart("part1", "tenant1", "user1", "session1", "message1", "run1",
+                type, "source", "content", payload, 1, Instant.EPOCH);
     }
 
     private ChatMessagePart part(String partType) {

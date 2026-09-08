@@ -329,6 +329,13 @@ public class RouteSignalApplicationService {
             payload.put("sourceExpert", IntentExpertContext.sourceExpert(
                     request.command().intentExpertScope()));
         }
+        appendIntentResultFields(payload, intent);
+        appendIntentRouteFields(payload, route);
+        appendIntentFailureFields(payload, routeResult);
+        return RuntimeEvent.progress(request.runId(), request.session().id(), Map.copyOf(payload));
+    }
+
+    private void appendIntentResultFields(Map<String, Object> payload, IntentDecision intent) {
         if (intent != null) {
             payload.put("intentCode", blankToDefault(intent.intentCode(), ""));
             payload.put("intentId", blankToDefault(firstText(intent.slots().get("intentId"), intent.intentCode()), ""));
@@ -338,6 +345,9 @@ public class RouteSignalApplicationService {
                 payload.put("skillId", intent.candidateDomainAgentId());
             }
         }
+    }
+
+    private void appendIntentRouteFields(Map<String, Object> payload, RouteTarget route) {
         if (route != null && route.type() != null) {
             payload.put("routeType", route.type().name());
             payload.put("routeSource", blankToDefault(route.routeSource(), IntentAgentRuntime.PROVIDER));
@@ -350,6 +360,9 @@ public class RouteSignalApplicationService {
                 payload.put("targetProvider", "system");
             }
         }
+    }
+
+    private void appendIntentFailureFields(Map<String, Object> payload, RouteSignalResult routeResult) {
         if (routeResult != null && routeResult.intentFailure()) {
             payload.put("failureStrategy", routeResult.intentFailureStrategy().name());
             if (routeResult.failRunOnIntentFailure()) {
@@ -357,7 +370,6 @@ public class RouteSignalApplicationService {
                 payload.put("suggestedAction", "SELECT_DOMAIN_AGENT");
             }
         }
-        return RuntimeEvent.progress(request.runId(), request.session().id(), Map.copyOf(payload));
     }
 
     private RouteTarget scopedRoute(RouteTarget route, ChatCommand command) {

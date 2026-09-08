@@ -6,8 +6,12 @@ package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.integration.agent.AgentModeBindingContext;
@@ -45,6 +49,9 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.ObjectProvider;
 
 import java.time.Instant;
@@ -53,6 +60,87 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 class ChatRunApplicationServiceTest {
+    @Test
+    void skippedMessageEventsNeverReadOrWriteRunStorage() {
+        ChatRunRepository repository = mock(ChatRunRepository.class);
+        ChatRunCache cache = mock(ChatRunCache.class);
+        ChatRunApplicationService service = new ChatRunApplicationService(repository, cache, null,
+                new PermissionChecker(), new FixedSessionRepository());
+
+        assertThat(service.observeEvent(null)).isNull();
+        assertThat(service.observeEvent(new StoredChatEvent(" ", "session1", 2L,
+                "run.completed", Instant.EPOCH, Map.of()))).isNull();
+        for (String type : List.of("message.delta", "message.snapshot", "message.completed")) {
+            assertThat(service.observeEvent(new StoredChatEvent("run1", "session1", 2L,
+                    type, Instant.EPOCH, Map.of("runtimeSessionId", "ignored")))).isNull();
+        }
+        verifyNoInteractions(repository, cache);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"run.started,RUNNING", "run.completed,COMPLETED", "run.waiting_user,WAITING_USER",
+            "run.failed,FAILED", "run.cancelled,CANCELLED", "runtime.metadata,RUNNING"})
+    void observedEventsKeepStateAndDatabaseBeforeCacheOrder(String type, ChatRunStatus status) {
+        ChatRunRepository repository = mock(ChatRunRepository.class);
+        ChatRunCache cache = mock(ChatRunCache.class);
+        ChatRun current = runningRun();
+        when(repository.findById("run1")).thenReturn(Optional.of(current));
+        when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        ChatRunApplicationService service = new ChatRunApplicationService(repository, cache, null,
+                new PermissionChecker(), new FixedSessionRepository());
+
+        ChatRun result = service.observeEvent(new StoredChatEvent("run1", "session1", 23L, type,
+                Instant.EPOCH, Map.of("runtimeSessionId", "relay-session")));
+
+        assertThat(result.status()).isEqualTo(status);
+        assertThat(result.runtimeSessionId()).isEqualTo("relay-session");
+        assertThat(result.lastSeq()).isEqualTo(23L);
+        var order = inOrder(repository, cache);
+        order.verify(repository).findById("run1");
+        order.verify(repository).save(result);
+        if (status.terminal()) {
+            order.verify(cache).evictActive("tenant1", "user1", "session1");
+        } else {
+            order.verify(cache).putActive(result);
+        }
+        verifyNoMoreInteractions(repository, cache);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ChatRunStatus.class, names = {"COMPLETED", "FAILED", "CANCELLED", "WAITING_USER", "CANCELLING"})
+    void protectedRunsReturnExistingSnapshotWithoutWrites(ChatRunStatus status) {
+        ChatRunRepository repository = mock(ChatRunRepository.class);
+        ChatRunCache cache = mock(ChatRunCache.class);
+        ChatRun base = runningRun();
+        ChatRun current = new ChatRun(base.id(), base.tenantId(), base.userId(), base.sessionId(), status,
+                base.routeType(), base.agentCode(), base.runtimeProvider(), base.runtimeSessionId(),
+                base.firstSeq(), base.lastSeq(), base.cancelReason(), base.startedAt(), base.finishedAt(),
+                base.metadata(), base.createdAt(), base.updatedAt());
+        when(repository.findById("run1")).thenReturn(Optional.of(current));
+        ChatRunApplicationService service = new ChatRunApplicationService(repository, cache, null,
+                new PermissionChecker(), new FixedSessionRepository());
+
+        assertThat(service.observeEvent(new StoredChatEvent("run1", "session1", 23L, "run.completed",
+                Instant.EPOCH, Map.of("runtimeSessionId", "must-not-change")))).isSameAs(current);
+        verify(repository).findById("run1");
+        verifyNoMoreInteractions(repository);
+        verifyNoInteractions(cache);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"run.failed,FAILED", "run.cancelled,CANCELLED"})
+    void cancellingRunsStillAcceptFailureAndCancellation(String type, ChatRunStatus expected) {
+        InMemoryRunRepository repository = new InMemoryRunRepository();
+        InMemoryRunCache cache = new InMemoryRunCache();
+        repository.save(runningRun().cancelling("USER_STOP"));
+
+        ChatRun result = service(repository, cache).observeEvent(new StoredChatEvent("run1", "session1", 23L,
+                type, Instant.EPOCH, Map.of()));
+
+        assertThat(result.status()).isEqualTo(expected);
+        assertThat(result.lastSeq()).isEqualTo(23L);
+        assertThat(cache.getActive("tenant1", "user1", "session1")).isEmpty();
+    }
     @Test
     void guardedResolvedRouteKeepsOnlyTheLastInvocationSkill() {
         InMemoryRunRepository repository = new InMemoryRunRepository();

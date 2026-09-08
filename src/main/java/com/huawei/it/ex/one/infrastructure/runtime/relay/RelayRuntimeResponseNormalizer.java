@@ -337,12 +337,26 @@ public class RelayRuntimeResponseNormalizer {
             case "project-home", "available-modes", "availbale-modes", "session-ready", "session-state",
                     "self-evolution-status", "token-update", "heartbeat-response" ->
                     RuntimeEvent.metadata(runId, sessionId, relayPayload(root, sourceType));
+            default -> mappedExecutionEvent(runId, sessionId, root, sourceType, normalizedType);
+        };
+    }
+
+    private ChatEvent mappedExecutionEvent(String runId, String sessionId, JsonNode root,
+                                           String sourceType, String normalizedType) {
+        return switch (normalizedType) {
             case "agent-call" -> RuntimeEvent.agent(runId, sessionId, relayPayload(root, sourceType));
             case "agent-reasoning", "thinking-operation-start", "thinkink-operation-start",
                     "thinking-content-update", "thinking-operation-end", "thinking-operation-finish" ->
                     RuntimeEvent.thinking(runId, sessionId, relayPayload(root, sourceType));
             case "tool-call-streaming", "tool-execution", "tool-structured-result" ->
                     RuntimeEvent.tool(runId, sessionId, relayPayload(root, sourceType));
+            default -> mappedPresentationEvent(runId, sessionId, root, sourceType, normalizedType);
+        };
+    }
+
+    private ChatEvent mappedPresentationEvent(String runId, String sessionId, JsonNode root,
+                                              String sourceType, String normalizedType) {
+        return switch (normalizedType) {
             case "approval-request", "expert-rejection" ->
                     RuntimeEvent.card(runId, sessionId, relayPayload(root, sourceType));
             case "url-moderation", "url-moderation-result", "search-result-groups", "content-references",

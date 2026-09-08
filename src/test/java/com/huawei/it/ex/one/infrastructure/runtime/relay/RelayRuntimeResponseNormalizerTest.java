@@ -12,13 +12,53 @@ import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.stream.Stream;
 
 class RelayRuntimeResponseNormalizerTest {
     private final RelayRuntimeResponseNormalizer normalizer = new RelayRuntimeResponseNormalizer(new ObjectMapper());
+
+    @ParameterizedTest
+    @MethodSource("mappedEventTypes")
+    void mappedTypesKeepPriorityOverTerminalAndContentFields(String sourceType, String eventType) throws Exception {
+        String frame = new ObjectMapper().writeValueAsString(Map.of(
+                "type", sourceType, "content", "not an answer", "finishReason", "stop",
+                "metadata", Map.of("authorization", "secret", "value", List.of(1, 2))));
+
+        assertThat(normalizer.normalize("run1", "session1", frame)).singleElement().satisfies(event -> {
+            assertThat(event.type()).isEqualTo(eventType);
+            assertThat(event.runId()).isEqualTo("run1");
+            assertThat(event.sessionId()).isEqualTo("session1");
+            assertThat(event.sequence()).isZero();
+            assertThat(event.payload()).containsExactlyInAnyOrderEntriesOf(Map.of(
+                    "type", sourceType, "source", "relay", "sourceType", sourceType,
+                    "content", "not an answer", "finishReason", "stop",
+                    "metadata", Map.of("authorization", "[REDACTED]", "value", List.of(1, 2))));
+        });
+    }
+
+    private static Stream<Arguments> mappedEventTypes() {
+        return Map.of(
+                "runtime.progress", "relay-start relay-end relay-progress clarified-query plan-update "
+                        + "subagent-plan-created subagent-subtask approval-result approval-response",
+                "runtime.metadata", "project-home available-modes availbale-modes session-ready session-state "
+                        + "self-evolution-status token-update heartbeat-response",
+                "runtime.agent", "agent-call",
+                "runtime.thinking", "agent-reasoning thinking-operation-start thinkink-operation-start "
+                        + "thinking-content-update thinking-operation-end thinking-operation-finish",
+                "runtime.tool", "tool-call-streaming tool-execution tool-structured-result",
+                "runtime.card", "approval-request expert-rejection",
+                "runtime.reference", "url-moderation url-moderation-result search-result-groups "
+                        + "content-references citations sources references safe-urls")
+                .entrySet().stream().flatMap(entry -> Stream.of(entry.getValue().split(" "))
+                        .map(type -> Arguments.of(type, entry.getKey())));
+    }
 
     @Test
     void protocolNormalizationAndSensitiveFieldsDoNotDependOnDefaultLocale() {

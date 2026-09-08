@@ -98,25 +98,37 @@ public record ChatMessagePart(
 
     private static String defaultStatus(String partType, Map<String, Object> payload) {
         if ("AGENT".equals(partType)) {
-            Object started = payload.get("started");
-            if (Boolean.TRUE.equals(started)) {
-                return "STARTED";
-            }
-            if (Boolean.FALSE.equals(started)) {
-                return "COMPLETED";
-            }
-            return "INFO";
+            return defaultAgentStatus(payload);
         }
         if ("THINKING".equals(partType)) {
-            String status = stringValue(payload.get("status"));
-            if ("STARTED".equalsIgnoreCase(status)) {
-                return "STARTED";
-            }
-            if ("ENDED".equalsIgnoreCase(status) || "COMPLETED".equalsIgnoreCase(status)) {
-                return "COMPLETED";
-            }
-            return "UNKNOWN";
+            return defaultThinkingStatus(payload);
         }
+        return defaultStaticStatus(partType);
+    }
+
+    private static String defaultAgentStatus(Map<String, Object> payload) {
+        Object started = payload.get("started");
+        if (Boolean.TRUE.equals(started)) {
+            return "STARTED";
+        }
+        if (Boolean.FALSE.equals(started)) {
+            return "COMPLETED";
+        }
+        return "INFO";
+    }
+
+    private static String defaultThinkingStatus(Map<String, Object> payload) {
+        String status = stringValue(payload.get("status"));
+        if ("STARTED".equalsIgnoreCase(status)) {
+            return "STARTED";
+        }
+        if ("ENDED".equalsIgnoreCase(status) || "COMPLETED".equalsIgnoreCase(status)) {
+            return "COMPLETED";
+        }
+        return "UNKNOWN";
+    }
+
+    private static String defaultStaticStatus(String partType) {
         return switch (partType) {
             case "ANSWER" -> "COMPLETED";
             case "MESSAGE_SNAPSHOT" -> "INFO";

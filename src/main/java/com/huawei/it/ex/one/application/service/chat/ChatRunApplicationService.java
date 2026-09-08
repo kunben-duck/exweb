@@ -219,7 +219,13 @@ public class ChatRunApplicationService {
                 && !"run.cancelled".equals(event.type()) && !"run.failed".equals(event.type())) {
             return run;
         }
-        ChatRun next = switch (event.type()) {
+        ChatRun next = nextRunForEvent(run, event);
+        next = withEventRuntimeSession(next, event);
+        return save(next);
+    }
+
+    private ChatRun nextRunForEvent(ChatRun run, ChatEvent event) {
+        return switch (event.type()) {
             case "run.started" -> run.withFirstSeq(event.sequence());
             case "run.completed" -> run.completed(event.sequence());
             case "run.waiting_user" -> run.waitingUser(event.sequence());
@@ -227,12 +233,15 @@ public class ChatRunApplicationService {
             case "run.cancelled" -> run.cancelled(event.sequence());
             default -> run.withLastSeq(event.sequence());
         };
+    }
+
+    private ChatRun withEventRuntimeSession(ChatRun next, ChatEvent event) {
         Object runtimeSessionId = event.payload() == null ? null : event.payload().get("runtimeSessionId");
         if (runtimeSessionId != null && !String.valueOf(runtimeSessionId).isBlank()
                 && !String.valueOf(runtimeSessionId).equals(next.runtimeSessionId())) {
             next = next.withRuntimeSessionId(String.valueOf(runtimeSessionId));
         }
-        return save(next);
+        return next;
     }
 
     /**

@@ -21,6 +21,7 @@ import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
+import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.intent.IntentDecision;
 import com.huawei.it.ex.one.domain.intent.TaskComplexity;
 import com.huawei.it.ex.one.domain.memory.ConversationMemoryMessage;
@@ -36,8 +37,12 @@ import com.huawei.it.ex.one.infrastructure.runtime.intentagent.BlockingIntentAge
 import reactor.test.StepVerifier;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -49,6 +54,105 @@ class RouteSignalApplicationServiceTest {
     private final ChatCommand command = new ChatCommand("cmd1", "tenant1", "user1", "session1",
             null, "web", "帮我报销一张发票", List.of(), Map.of());
     private final MemoryContext memory = MemoryContext.empty();
+
+    @ParameterizedTest
+    @CsvSource({
+            "SIMPLE,DOMAIN_AGENT,domain-agent,ROUTE_SINGLE,false",
+            "SIMPLE,DOMAIN_AGENT,domain-agent,ROUTE_SINGLE,true",
+            "COMPLEX,AGENT_RUNTIME,relay,NO_MATCH,false",
+            "COMPLEX,AGENT_RUNTIME,relay,NO_MATCH,true",
+            "UNSUPPORTED,SYSTEM_RESPONSE,system,UNKNOWN,false"
+    })
+    void intentResultPayloadKeepsAllFieldsAndExpertScope(
+            TaskComplexity complexity, String routeType, String provider, String action, boolean expert) {
+        IntentDecision intent = new IntentDecision("intent-code", "意图名称", complexity, 0.92,
+                complexity == TaskComplexity.SIMPLE, complexity == TaskComplexity.SIMPLE ? "skill-a" : null,
+                Map.of("intentId", "explicit-id"), List.of(), Map.of());
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"), (command, memory, user) -> intent);
+        ChatCommand input = expert ? command.withIntentExpertScope(
+                new IntentExpertScope("expert-a", "专家A", "expert_entry")) : command;
+
+        List<RouteSignalFrame> frames = service.routeInitialWithProgress(new RouteSignalRequest(
+                "run1", user, session, input, List.of(), memory)).collectList().block();
+        Map<String, Object> payload = resultPayload(frames);
+        Map<String, Object> expected = baseResultPayload(action, payload.get("latencyMs"));
+        expected.put("intentCode", "intent-code");
+        expected.put("intentId", "explicit-id");
+        expected.put("intentName", "意图名称");
+        expected.put("confidence", 0.92);
+        expected.put("routeType", routeType);
+        expected.put("routeSource", expert ? "intent-expert"
+                : complexity == TaskComplexity.UNSUPPORTED ? "system" : "intent-agent");
+        expected.put("targetProvider", provider);
+        if (complexity == TaskComplexity.SIMPLE) {
+            expected.put("skillId", "skill-a");
+            expected.put("targetId", "skill-a");
+        }
+        if (expert) {
+            expected.put("sourceExpert", Map.of("expertId", "expert-a", "expertName", "专家A",
+                    "intentAccessName", "expert_entry"));
+        }
+        assertThat(payload).containsExactlyInAnyOrderEntriesOf(expected);
+        assertThat(frames.getLast().resultFrame()).isTrue();
+    }
+
+    @ParameterizedTest
+    @EnumSource(IntentFailureStrategy.class)
+    void failureResultKeepsProviderOverrideAndOptionalFields(IntentFailureStrategy strategy) {
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                (command, memory, user) -> { throw new IllegalStateException("intent unavailable"); },
+                null, strategy);
+        Map<String, Object> payload = resultPayload(service.routeInitialWithProgress(new RouteSignalRequest(
+                "run1", user, session, command, List.of(), memory)).collectList().block());
+        Map<String, Object> expected = baseResultPayload("DEGRADED", payload.get("latencyMs"));
+        expected.put("intentCode", "finance.runtime.degraded");
+        expected.put("intentId", "finance.runtime.degraded");
+        expected.put("intentName", "意图服务不可用，转入 AgentRuntime");
+        expected.put("confidence", 0.0);
+        expected.put("failureStrategy", strategy.name());
+        if (strategy == IntentFailureStrategy.FAIL_RUN) {
+            expected.put("targetProvider", "none");
+            expected.put("suggestedAction", "SELECT_DOMAIN_AGENT");
+        } else {
+            expected.put("routeType", "AGENT_RUNTIME");
+            expected.put("routeSource", "intent-agent");
+            expected.put("targetProvider", "relay");
+        }
+        assertThat(payload).containsExactlyInAnyOrderEntriesOf(expected);
+    }
+
+    @Test
+    void clarificationStillProducesNoExecutableIntentResultEvent() {
+        RouteSignalApplicationService service = service(false, true,
+                request -> UseCaseMatchResult.notMatched("disabled"),
+                (command, memory, user) -> new IntentDecision("clarify", "澄清", TaskComplexity.NEED_CLARIFICATION,
+                        0.0, false, null, Map.of("question", "请补充范围"), List.of(), Map.of()));
+
+        List<RouteSignalFrame> frames = service.routeInitialWithProgress(new RouteSignalRequest(
+                "run1", user, session, command, List.of(), memory)).collectList().block();
+
+        assertThat(frames).noneMatch(frame -> frame.eventFrame()
+                && "intent-result".equals(frame.event().payload().get("sourceType")));
+        assertThat(frames.getLast().result().waitingIntentClarification()).isTrue();
+    }
+
+    private Map<String, Object> resultPayload(List<RouteSignalFrame> frames) {
+        var results = frames.stream().filter(frame -> frame.eventFrame()
+                && "intent-result".equals(frame.event().payload().get("sourceType"))).toList();
+        assertThat(results).hasSize(1);
+        assertThat(results.getFirst().event().type()).isEqualTo("runtime.progress");
+        Map<String, Object> payload = results.getFirst().event().payload();
+        assertThat(((Number) payload.get("latencyMs")).longValue()).isNotNegative();
+        return payload;
+    }
+
+    private Map<String, Object> baseResultPayload(String action, Object latency) {
+        return new LinkedHashMap<>(Map.of("source", "intent-agent", "sourceType", "intent-result",
+                "stage", "intent_result", "message", "已完成意图识别", "routeAction", action,
+                "routeTrigger", "first_turn", "latencyMs", latency));
+    }
 
     @Test
     void disabledSignalsRouteInitialToRuntimeWithoutCallingClients() {

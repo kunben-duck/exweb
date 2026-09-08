@@ -137,6 +137,7 @@ public class ChatRunTerminalCommitService {
 
     @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public CommitResult commitCompleted(CompletedCommitCommand command) {
+        // 先锁消息树再验证执行权；Event、assistant、延迟 Binding 与终态必须一起提交或回滚。
         lockOwnerTerminalSession(command.context());
         fenceOwnerTerminalCommit(command.context());
         CompletedEvents completedEvents = appendCompletedEvents(command);
@@ -162,6 +163,7 @@ public class ChatRunTerminalCommitService {
 
     @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public CommitResult commitWaitingUser(WaitingUserCommitCommand command) {
+        // WAIT 结束本次执行而非整个会话；等待记录和可回显的 assistant 必须与等待终态原子可见。
         rejectDeferredDomainAgentBinding(command.context(), "run.waiting_user");
         lockOwnerTerminalSession(command.context());
         fenceOwnerTerminalCommit(command.context());
@@ -401,6 +403,7 @@ public class ChatRunTerminalCommitService {
             throw new IllegalStateException(
                     "Pending route-switch applied event does not match the deferred binding or run");
         }
+        // 切换成功标识不能早于 Binding 事实独立提交，否则 Stop/回滚会留下虚假的成功事件。
         List<ChatEvent> stored = chatStreamService.appendBatchWithExecutionGuard(
                 List.of(appliedEvent, command.event()), context.executionClaim());
         if (stored == null || stored.size() != 2) {
@@ -759,6 +762,7 @@ public class ChatRunTerminalCommitService {
     private RuntimeBinding activateDeferredDomainAgentBinding(
             TerminalCommitContext context,
             String leafMessageId) {
+        // 仅完成事务调用：附件拒绝表示技能已选中而未执行；失败/取消不得把候选变成 ACTIVE。
         DeferredDomainAgentBinding deferred = deferredDomainAgentBinding(context);
         if (deferred == null) {
             throw new IllegalStateException("Deferred DomainAgent binding is missing");

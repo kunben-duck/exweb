@@ -46,6 +46,7 @@ final class RuntimeBindingDispatchCompensator {
                 || lifecycle.activation() == null) {
             return Mono.empty();
         }
+        // 有界重试仅处理本进程清理失败，不是跨实例崩溃后的持久化补偿保证。
         RuntimeBindingDispatchLifecycle.Activation activation = lifecycle.activation();
         Mono<Void> cleanup = Mono.<Void>fromRunnable(() -> cleanupBinding(activation, runId, bindingRef))
                 .subscribeOn(controlIoScheduler);
@@ -78,6 +79,7 @@ final class RuntimeBindingDispatchCompensator {
             RuntimeBindingDispatchLifecycle.Activation activation,
             String runId,
             AtomicReference<RuntimeBinding> bindingRef) {
+        // 只补偿本 Run 尚未订阅 Runtime 的变更；条件更新失败时不恢复快照，避免覆盖后续 Run 接管。
         boolean compensated = switch (activation.compensation()) {
             case CANCEL_NEW -> runtimeBindingService.cancelActiveForRun(activation.binding(), runId);
             case RESTORE_PREVIOUS -> runtimeBindingService.restoreUnstartedForRun(

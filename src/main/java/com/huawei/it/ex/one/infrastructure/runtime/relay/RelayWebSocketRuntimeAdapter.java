@@ -323,6 +323,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
                         log.info("Relay WebSocket interrupt uses active exchange. runId={}", request.runId());
                         return exchange.interrupt(request.runId());
                     }
+                    // 跨实例或原连接已结束时，恢复同一个 Runtime session 发送 Stop，不新建业务会话。
                     return interruptViaResumeConnection(request);
                 })
                 .onErrorResume(ex -> {
@@ -779,6 +780,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
 
     private String businessMessage(AgentRuntimeRequest request,
                                    RuntimeProfileMetadata.Snapshot runtimeProfile) {
+        // Profile/roleName 来自可信路由或 Binding；Config 与业务帧必须选择同一模式，不由 metadata 覆盖。
         return runtimeProfile.profile() == RuntimeProfile.DOMAIN_EXPERT
                 ? expertMessage(request, runtimeProfile)
                 : userMessage(request);
@@ -802,6 +804,7 @@ public class RelayWebSocketRuntimeAdapter implements RelayRuntimeProtocolAdapter
 
     private String expertMessage(AgentRuntimeRequest request,
                                  RuntimeProfileMetadata.Snapshot runtimeProfile) {
+        // Config 和专家业务帧统一使用 roleName；不修改 Relay 入站事件的既有字段命名。
         Map<String, Object> message = new LinkedHashMap<>();
         message.put("type", "chat_expert");
         message.put("roleName", runtimeProfile.roleName());

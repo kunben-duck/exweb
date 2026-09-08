@@ -123,6 +123,7 @@ final class InteractionContinuationCoordinator {
                                                        String runId,
                                                        RunStartAttempt startAttempt) {
         return Flux.defer(() -> {
+            // 先校验响应及附件，再由 claim 竞争续跑资格；同步初始化失败需释放为可重试等待。
             ChatInteractionClaimResult claim = interactionService.claimPreparedInteractionResponse(
                     context.command(),
                     runId,
@@ -166,6 +167,7 @@ final class InteractionContinuationCoordinator {
                     throw new IllegalArgumentException(
                             "仅 INTENT_CLARIFICATION 或已批准的 ROUTE_SWITCH_CONFIRMATION 支持在续接时提交附件");
                 }
+                // 确认切换仅使用本次显式附件，解析结果在内存中下传，不给原 user 消息补写附件。
                 context.routeSwitchAttachmentsRef().set(
                         documentFacade.resolveChatAttachmentsForUser(user, command.attachments()));
             }
@@ -173,6 +175,7 @@ final class InteractionContinuationCoordinator {
             return interactionService.prepareResponsePayload(command, interaction.interactionType(), null);
         }
         if (AmbiguousRouteSupport.isAmbiguous(interaction)) {
+            // 人工候选直接走已校验候选；OTHER 把自定义回答交给澄清链重新调用 Intent。
             AmbiguousRouteContinuationPlan plan = ambiguousPlan(command, interaction);
             context.ambiguousPlanRef().set(plan);
             if (plan.selectedCandidate()) {

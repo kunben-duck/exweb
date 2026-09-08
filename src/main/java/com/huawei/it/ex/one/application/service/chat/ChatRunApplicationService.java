@@ -164,6 +164,7 @@ public class ChatRunApplicationService {
     }
 
     private ChatRun newRunning(CreateChatRunContext context) {
+        // 包括复用消息的续跑在内，新 Run 的 assistant 字段初始为空；保存结果或挂起快照时才关联。
         UserContext user = context.user();
         Instant now = Instant.now();
         return new ChatRun(

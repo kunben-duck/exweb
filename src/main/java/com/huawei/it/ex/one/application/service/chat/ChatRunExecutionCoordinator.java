@@ -38,6 +38,7 @@ final class ChatRunExecutionCoordinator {
 
     Flux<ChatEvent> execute(Request request) {
         return Flux.defer(() -> {
+            // 外部输入和记忆先准备；消息树、user 消息和 Run 的一致性由后续准入事务负责。
             StandardRunInputPreparer.PreparedRun prepared = inputPreparer.prepare(
                     new StandardRunInputPreparer.Request(
                             request.user(),
@@ -85,6 +86,7 @@ final class ChatRunExecutionCoordinator {
                 runtimeCoordinator.prepare(prepared, admission);
         RunExecutionClaim executionClaim;
         try {
+            // Run 已受理后再领取执行租约；初始化失败走独立收口，不能启动无 owner 的 Runtime。
             executionClaim = chatRunLeaseService.startRun(admission.run());
         } catch (RuntimeException ex) {
             return failureCoordinator.failExecutionInitialization(

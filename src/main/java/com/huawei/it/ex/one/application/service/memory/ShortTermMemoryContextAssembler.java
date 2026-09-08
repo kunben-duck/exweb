@@ -51,6 +51,7 @@ public class ShortTermMemoryContextAssembler {
         return properties.getShortTerm().sourceMessageLimit();
     }
 
+    /** 从已选消息路径生成下游历史；调用方需排除本轮 query，避免旧 assistant 版本混入上下文。 */
     public List<ConversationMemoryMessage> agentRuntimeMessages(List<ChatMessage> source) {
         MemoryProperties.ContextWindow window = properties.getShortTerm().getAgentRuntime();
         List<ConversationMemoryMessage> messages = normalizedMessages(source, true);
@@ -139,6 +140,7 @@ public class ShortTermMemoryContextAssembler {
         if (source == null || source.isEmpty()) {
             return List.of();
         }
+        // user 的技能取当前路径直接子 assistant 的服务端标识，不读取 user 请求 metadata 推断路由。
         Map<String, String> assistantSkills = new LinkedHashMap<>();
         Map<String, String> userSkills = new LinkedHashMap<>();
         for (ChatMessage message : source) {

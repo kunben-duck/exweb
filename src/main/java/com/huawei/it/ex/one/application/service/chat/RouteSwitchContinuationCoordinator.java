@@ -231,6 +231,7 @@ final class RouteSwitchContinuationCoordinator {
     }
 
     private Flux<ChatEvent> executeAfterStart(StartedSwitchContext context) {
+        // Gate 先于 Binding 变更；通过后的 DomainAgent 切换仍需在短事务内再次验证执行权。
         Mono<AgentDataPersistenceGate.Decision> preflight = !context.input().approved() || persistenceGate == null
                 ? Mono.just(AgentDataPersistenceGate.Decision.allowed(
                         context.assistant().persistenceState()))
@@ -279,6 +280,7 @@ final class RouteSwitchContinuationCoordinator {
                         context.input().candidateRouteQuery(),
                         switchIntent,
                         context.route()));
+        // 确认已受理不等于切换已生效；成功标识与候选 Binding 在 run.completed 事务中一起提交。
         PendingRouteSwitchAppliedEvent pendingAppliedEvent = new PendingRouteSwitchAppliedEvent(
                 interactionEventFactory.routeSwitchAppliedEvent(
                         request.runId(),

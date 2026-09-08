@@ -148,6 +148,7 @@ final class AmbiguousRouteContinuationCoordinator {
                 request.input().cumulativeDocumentIds(),
                 runtimeReferences.deferredDomainAgentBindingRef(),
                 runtimeReferences.pendingRouteMemoryDecisionRef());
+        // 候选来自已认领 Interaction 的选择计划，不再调用 Intent；子技能仍进入统一 Gate 和 Runtime。
         RouteSignalResult routeSignal = selectionResolver.routeSignal(
                 started.plan().candidate(),
                 started.command().intentExpertScope() == null

@@ -95,6 +95,7 @@ final class ChatRunStartCoordinator {
     }
 
     private BackgroundStartState newState(UserContext user, RunStartAttempt attempt) {
+        // 准入许可覆盖本机后台执行订阅，不随 HTTP 启动响应释放；异步挂起后该订阅即可结束。
         return new BackgroundStartState(
                 attempt,
                 new RunPermitGuard(admissionControl.acquire(user)),
@@ -108,6 +109,7 @@ final class ChatRunStartCoordinator {
             ChatEvent event,
             BackgroundStartState state,
             String operation) {
+        // 用首个已持久化事件交接启动结果，正常路径为 run.started；不表示前端已消费该事件。
         RunStartAttempt attempt = state.attempt();
         if (!attempt.beginFirstEventHandoff()) {
             return;
@@ -175,6 +177,7 @@ final class ChatRunStartCoordinator {
     }
 
     private void registerSubscription(BackgroundStartState state, Disposable disposable) {
+        // 同步事件可能早于 subscribe 返回；与 registerKnownRun 双向补登记，保证 Stop 能找到订阅。
         state.disposable().set(disposable);
         String runId = state.runId().get();
         if (runId != null && !state.terminal().get()) {

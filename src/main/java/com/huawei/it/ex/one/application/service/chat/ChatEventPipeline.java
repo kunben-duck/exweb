@@ -87,6 +87,7 @@ final class ChatEventPipeline {
                 writeRejected,
                 context.runId(),
                 context.session().id());
+        // 批次顺序提交，但上游仍可预取；需要先落库再执行的控制分支必须显式等待持久化 ACK。
         return batches
                 .publishOn(eventIoScheduler)
                 .concatMap(batch -> persistBatch(batch, persistence), 0);
@@ -132,6 +133,7 @@ final class ChatEventPipeline {
         }
         return processBatch(batch, persistence.context(), persistence.singleEventWriter())
                 .onErrorResume(ChatEventAppendRejectedException.class, ex -> {
+                    // 失权后不尝试用旧 owner 写失败终态；拒绝 ACK 并截断后续追加，由合法执行者收口。
                     rejectPersistenceAcknowledgements(batch.events(), ex);
                     persistence.writeRejected().set(true);
                     log.info("Stop chat run event stream after guarded insert rejection. runId={}, reason={}",
@@ -168,6 +170,7 @@ final class ChatEventPipeline {
             ChatEventBatcher.Batch batch,
             RunEventPipelineContext context,
             Function<ChatEvent, Mono<ChatEvent>> singleEventWriter) {
+        // 按原顺序切分持久化/仅实时片段，不能为批量写入把控制事实与 no-store 业务事件重排。
         return Flux.fromIterable(retentionSegments(batch, context))
                 .concatMap(segment -> segment.retention()
                         == AgentDataPersistenceEventPolicy.EventRetention.PERSISTED
@@ -209,6 +212,7 @@ final class ChatEventPipeline {
         if (events == null || events.isEmpty()) {
             return Flux.empty();
         }
+        // live-only 只分配序号并发布，不保存业务事件，不能承诺 Resume 恢复或返回持久化 ACK。
         if (events.stream().anyMatch(PersistenceAcknowledgedEvent.class::isInstance)) {
             return Flux.error(new IllegalStateException(
                     "Persistence-acknowledged control event cannot use live-only delivery"));

@@ -148,6 +148,7 @@ final class DomainAgentRefusalCoordinator {
                 persistenceGate);
     }
 
+    /** 截断发生拒答的下游流，等待拒答事件提交后再继续同一 Run 的重意图流程。 */
     Flux<ChatEvent> execute(DomainAgentRunContext context) {
         if (context.route() == null || context.route().selectedAgentCode() == null
                 || context.route().selectedAgentCode().isBlank()) {
@@ -275,6 +276,7 @@ final class DomainAgentRefusalCoordinator {
         DomainAgentRejectReason rejectReason = DomainAgentRejectReason.from(
                 rejectedIntentName(context),
                 refusal);
+        // 沿用本 Run 的命令、可信附件与入口，只补入本次拒答上下文；不从上一 Run 猜测入口。
         ChatCommand rerouteCommand = eventFactory.commandWithDomainRejectContext(
                 context.command(),
                 rejectReason);

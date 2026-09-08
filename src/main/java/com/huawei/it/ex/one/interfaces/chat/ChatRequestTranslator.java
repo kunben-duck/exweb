@@ -55,6 +55,7 @@ public class ChatRequestTranslator {
         if (Boolean.TRUE.equals(request.forceReroute()) && (hasText(request.targetType()) || hasText(request.targetId()))) {
             throw new IllegalArgumentException("forceReroute=true 时不能同时指定 targetType/targetId");
         }
+        // 先清除客户端伪造的内部标记，再装入经过本入口校验的选择摘要；摘要不作为下游路由事实。
         Map<String, Object> metadata = sanitizeClientMetadata(request.metadata());
         if (request.selectedIntent() != null) {
             validateSelectedIntent(request.selectedIntent(), runMode, request.targetType(), request.targetId());

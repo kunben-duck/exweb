@@ -53,6 +53,7 @@ final class RouteResolutionCoordinator {
     }
 
     void prepareInitial(InitialRoutePreparation preparation) {
+        // 显式目标优先；否则 forceReroute 清除续接资格，普通请求才尝试当前专家范围内的 ACTIVE Binding。
         ExplicitRuntimeTarget explicitTarget = preparation.explicitRuntimeTarget();
         if (explicitTarget != null && explicitTarget.domainAgent()) {
             RouteTarget route = RouteTarget.domainAgent(explicitTarget.targetId(), "front-selected", 1.0,
@@ -69,6 +70,7 @@ final class RouteResolutionCoordinator {
                             preparation.command() == null ? Map.of() : preparation.command().metadata()),
                     preparation.agentMode());
             if (preparation.deferDomainAgentBinding()) {
+                // 此处只准备候选，不写入本轮 Binding 变更；物化由 Gate 通过或完成事务决定。
                 DeferredDomainAgentBinding deferred =
                         runtimeBindingService.prepareDomainAgentForRun(bindingCommand);
                 preparation.deferredDomainAgentBindingRef().set(deferred);

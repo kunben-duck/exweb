@@ -50,6 +50,7 @@ public class DomainAgentSkillConfigurationService {
             UserContext user,
             String skillId,
             RuntimeForwardHeaders forwardHeaders) {
+        // 缓存与 Provider 只在此统一访问；命中返回完整配置，单次订阅未命中才查询 Provider。
         String tenantId = requireText(user == null ? null : user.tenantId(), "tenantId");
         String normalizedSkillId = requireText(skillId, "skillId");
         RuntimeForwardHeaders safeHeaders = forwardHeaders == null
@@ -112,6 +113,7 @@ public class DomainAgentSkillConfigurationService {
             String tenantId,
             String skillId,
             DomainAgentSkillConfiguration configuration) {
+        // 写缓存失败仍保留本次已解析配置；这里等写入结束再返回，但不将缓存成功当作业务成功条件。
         return Mono.fromRunnable(() -> cache.put(
                         tenantId, skillId, configuration, properties.normalizedCacheTtl()))
                 .subscribeOn(ioScheduler)

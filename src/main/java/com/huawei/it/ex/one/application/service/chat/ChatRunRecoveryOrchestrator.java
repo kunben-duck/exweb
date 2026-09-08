@@ -158,6 +158,7 @@ public class ChatRunRecoveryOrchestrator {
     }
 
     private boolean expireAsyncWaitingTask(ChatRunExecution execution) {
+        // 扫描到过期只是候选；最终仍由带租约条件的终态 CAS 与回调/Stop 竞争，不重发下游任务。
         ChatRun run = runRepository.findById(execution.runId()).orElse(null);
         if (run == null || run.status().terminal()) {
             executionRepository.markTerminal(execution.runId(), statusFromRun(run));
@@ -308,6 +309,7 @@ public class ChatRunRecoveryOrchestrator {
             return true;
         }
         if (execution.get().executionStatus() == ChatRunExecutionStatus.ASYNC_WAITING) {
+            // 异步任务不按普通失联执行恢复，截止时间到达后走专用超时收口。
             return expireAsyncWaitingTask(execution.get());
         }
         return recoverCandidates(List.of(execution.get()), 1) > 0;

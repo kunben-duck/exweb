@@ -132,6 +132,7 @@ public class ChatInteractionApplicationService {
         if (preClaimResponsePreparer == null) {
             throw new IllegalArgumentException("Interaction response preparer 不能为空");
         }
+        // 可能失败的答案/附件校验先做；真正防止重复续跑依赖随后的条件 claim，而非前面的 waiting 快照。
         Map<String, Object> responsePayload = preClaimResponsePreparer.apply(request);
         boolean claimed = repository.claimInteractionResponse(new ChatInteractionRequestRepository.ChatInteractionClaimCommand(
                 user.tenantId(), user.ownerUserId(), command.interactionId(), continueRunId, responsePayload, now));
@@ -162,6 +163,7 @@ public class ChatInteractionApplicationService {
         if (request == null || request.continueRunId() == null || request.continueRunId().isBlank()) {
             return;
         }
+        // 只释放当前 continueRunId 的认领，避免迟到失败把其他续跑的 Interaction 改回 WAITING。
         repository.markWaitingForRun(request.tenantId(), request.userId(), request.id(),
                 request.continueRunId());
     }

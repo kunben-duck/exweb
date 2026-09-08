@@ -361,6 +361,7 @@ public class DomainAgentResponseNormalizer {
                     runId, sessionId, text(root, "message")));
             return List.copyOf(events);
         }
+        // 控制帧优先于普通展示字段，重路由帧在此截断；Binding/重意图由上层状态机处理。
         DomainAgentControlEventMapper.ControlEvent controlEvent = controlEventMapper.map(root).orElse(null);
         if (controlEvent != null) {
             if (controlEvent.reroute()) {
@@ -371,6 +372,7 @@ public class DomainAgentResponseNormalizer {
                 return List.copyOf(events);
             }
         }
+        // 同帧可同时有状态、卡片与正文；按固定顺序拆出标准事件，事件身份始终使用可信入参。
         addMetadataEvents(runId, sessionId, root, events);
         addStateEvent(runId, sessionId, root, events);
         addStructuredEvents(runId, sessionId, root, events);

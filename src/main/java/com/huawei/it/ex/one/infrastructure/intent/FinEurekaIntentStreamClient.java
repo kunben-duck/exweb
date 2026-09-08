@@ -118,6 +118,7 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
                 || properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()
                 ? Mono.just(List.of())
                 : preferenceLoader.load(command, user);
+        // 每次识别先冻结偏好，重试复用逻辑入口、可信消息 ID 及同一快照，不再次查询偏好。
         return preferences.flatMapMany(items -> executeAttempt(new StreamAttemptContext(
                 command, memory, user, userMessageId, items, 1, maxAttempts)));
     }
@@ -151,6 +152,7 @@ public class FinEurekaIntentStreamClient implements IntentDecisionStreamClient {
     }
 
     private Mono<Map<String, String>> resolveAuthHeaders(StreamAttemptContext context) {
+        // 阻塞鉴权在独立有界 Scheduler 上执行；Reactive 超时不能保证底层阻塞调用立即退出。
         return Mono.fromCallable(() -> authHeaders.headers(authHeaderRequest(context.user())))
                 .map(headers -> headers == null ? Map.<String, String>of() : Map.copyOf(headers))
                 .subscribeOn(authIoScheduler)

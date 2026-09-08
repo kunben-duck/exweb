@@ -99,14 +99,17 @@ public class DomainAgentAsyncTaskCallbackApplicationService {
             return new CallbackResult(false);
         }
         if (!DomainAgentAsyncTaskMetadata.isAsyncRunning(sourceRun)) {
+            // 快速回调可能早于挂起事务提交，用可重试 409 区别于已终态/重复回调的 accepted=false。
             throw new DomainAgentAsyncCallbackNotReadyException();
         }
         Instant expiresAt = DomainAgentAsyncTaskMetadata.expiresAt(sourceRun);
         if (expiresAt != null && Instant.now().isAfter(expiresAt)) {
             return new CallbackResult(false);
         }
+        // 标准化、控制帧拒绝及容量检查都在终态锁/CAS 前，非法结果不会消耗唯一完成机会。
         List<ChatEvent> businessEvents = normalize(
                 validated.runId(), sourceRun.sessionId(), validated.frames());
+        // 必须依据过滤后的业务事件判断，纯终态帧的 REPLACE 不能清空旧正文或 Parts。
         boolean resultProvided = !businessEvents.isEmpty();
         if (resultProvided && validated.resultMode() == null) {
             throw new IllegalArgumentException("异步回调包含业务结果时resultMode仅支持APPEND或REPLACE");
@@ -118,6 +121,7 @@ public class DomainAgentAsyncTaskCallbackApplicationService {
         if (!committed.accepted()) {
             return new CallbackResult(false);
         }
+        // accepted 表示数据库受理；提交后发布是 best-effort，no-store 业务事件不保证可恢复。
         runService.synchronizeCommittedRunCache(committed.run());
         completeBindingBestEffort(committed.run(), committed.assistantMessageId());
         publishBestEffort(committed.events());

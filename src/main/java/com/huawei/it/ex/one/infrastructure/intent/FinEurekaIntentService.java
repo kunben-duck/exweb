@@ -101,6 +101,7 @@ public class FinEurekaIntentService implements IntentService {
                                                         UserContext user,
                                                         String userMessageId) {
         int maxAttempts = 1 + properties.normalizedMaxRetries();
+        // 同一次识别的重试共享偏好快照和 userMessageId，不在每次 HTTP 尝试中重复读取偏好。
         List<IntentUserPreferenceCorrection> preferenceCorrections = preferenceLoader == null
                 || properties.getBaseUrl() == null || properties.getBaseUrl().isBlank()
                 ? List.of()

@@ -168,6 +168,7 @@ final class StandardRunRuntimeCoordinator {
         }
     }
 
+    /** 候选回放以最后标识的持久化 ACK 放行路由，不能用源 Flux 发完或前端接收代替该屏障。 */
     private Flux<ChatEvent> replayBeforeRuntime(List<ChatEvent> replay, Flux<ChatEvent> runtime) {
         if (replay.isEmpty()) {
             return runtime;

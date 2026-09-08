@@ -58,6 +58,7 @@ public class DomainAgentAsyncTaskApplicationService {
 
     @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public StartResult commitStarted(RunAsyncRunningEvent event, RunEventPipelineContext context) {
+        // 异步边界保存当前回答快照并挂起 Execution，不生成正常完成事件；Run 仍占用活动资格。
         if (!properties.isAsyncTaskEnabled()) {
             throw new IllegalStateException("DomainAgent async task protocol is disabled");
         }
@@ -85,6 +86,7 @@ public class DomainAgentAsyncTaskApplicationService {
                 .withLastSeq(stored.sequence())
                 .withMetadata(DomainAgentAsyncTaskMetadata.runningOverlay(assistant.id(), expiresAt));
         ChatRun savedRun = runRepository.transitionToAsyncWaiting(pending, context.executionClaim());
+        // 与异步事件/Run 快照同事务，撤销原执行租约；此后的结果只能经回调终态竞争写入。
         if (!executionRepository.markAsyncWaiting(context.executionClaim(), expiresAt)) {
             throw new IllegalStateException("DomainAgent async execution transition was rejected");
         }

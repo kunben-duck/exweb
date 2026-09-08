@@ -84,6 +84,7 @@ final class IntentClarificationRunCoordinator {
         AtomicReference<RouteTarget> routeRef = new AtomicReference<>();
         AtomicReference<RuntimeSessionMode> runtimeSessionModeRef =
                 new AtomicReference<>(RuntimeSessionMode.RESUME);
+        // 普通澄清可新增 user 回答，AMBIGUOUS_ROUTE 的 OTHER 复用原问答；由消息策略统一决定。
         ChatRunAdmissionCommitService.AdmissionResult admission =
                 admissionCoordinator.admitIntentClarification(
                         new ChatRunAdmissionCoordinator.IntentClarificationAdmission(
@@ -114,6 +115,7 @@ final class IntentClarificationRunCoordinator {
                 executionClaim,
                 "after-intent-interaction-execution-create");
         AssistantAssembly assistant = new AssistantAssembly();
+        // 路由与终态管线共享待提交引用，附件拒绝不能只在局部事件源中确认 Binding 成功。
         AtomicReference<DeferredDomainAgentBinding> deferredDomainAgentBindingRef = new AtomicReference<>();
         AtomicReference<PendingRouteMemoryDecision> pendingRouteMemoryDecisionRef = new AtomicReference<>();
         AtomicReference<java.util.Map<String, Object>> pendingInteractionPayloadRef = new AtomicReference<>();
@@ -132,6 +134,7 @@ final class IntentClarificationRunCoordinator {
                 request.input().cumulativeDocumentIds(),
                 deferredDomainAgentBindingRef,
                 pendingRouteMemoryDecisionRef);
+        // 折叠问题用于 RouteMemory；实际 Intent 输入另行传递，避免把澄清回答丢出上下文。
         String foldedRouteQuery = clarificationAssembler.routeMemoryQuery(
                 messagePlan, interaction, request.input().intentQuery());
         try {

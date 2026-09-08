@@ -382,6 +382,7 @@ public class RuntimeBindingApplicationService {
             DomainAgentBindingCommand command,
             RunExecutionClaim claim) {
         validateDomainAgentRouteSwitch(interaction, command, claim);
+        // 与 Stop 竞争的是同一数据库执行权；检查与 A/B 切换必须在同一事务内，不能先查后写。
         if (!repository.lockRunExecutionForBindingMutation(
                 command.tenantId(), command.userId(), command.sessionId(), claim)) {
             throw new ChatEventAppendRejectedException(
@@ -432,6 +433,7 @@ public class RuntimeBindingApplicationService {
             DeferredDomainAgentBinding deferred,
             RunExecutionClaim claim) {
         RuntimeBinding candidate = requireDeferredCandidate(deferred);
+        // Gate 期间可能发生跨实例 Stop；这里只相信锁内的 owner/fencing 和运行状态。
         if (!repository.lockRunExecutionForBindingMutation(
                 candidate.tenantId(), candidate.userId(), candidate.chatSessionId(), claim)) {
             throw new ChatEventAppendRejectedException(

@@ -37,6 +37,7 @@ final class DomainAgentAttachmentTypeValidator {
         }
         String configuredTypes = configuration == null ? null : configuration.attachmentType();
         if (configuredTypes == null || configuredTypes.isBlank()) {
+            // 空配置明确表示不支持上传，包括无扩展名文件；与配置服务调用异常的降级语义不同。
             return unsupportedAll(documents);
         }
         List<String> supportedTypes = configuredExtensions(configuredTypes);
@@ -47,6 +48,7 @@ final class DomainAgentAttachmentTypeValidator {
         List<UnsupportedAttachment> unsupported = new ArrayList<>();
         LinkedHashSet<String> unsupportedTypes = new LinkedHashSet<>();
         for (UploadedDocument document : documents) {
+            // 合法非空配置只比较可信原文件名的最后扩展名；无扩展名仍按既有规则放行，不校验 MIME。
             extension(document).filter(value -> !supported.contains(value)).ifPresent(value -> {
                 unsupportedTypes.add(value);
                 unsupported.add(new UnsupportedAttachment(

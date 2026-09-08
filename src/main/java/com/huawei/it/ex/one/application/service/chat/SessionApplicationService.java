@@ -528,6 +528,7 @@ public class SessionApplicationService implements ChatSessionFacade {
     public ChatRunMessagePlan prepareRunMessage(UserContext user, ChatCommand command, ChatSession session,
                                                 String runId, List<AttachmentRef> attachments) {
         ChatRunMode mode = command.runMode() == null ? ChatRunMode.NEXT : command.runMode();
+        // NEXT/EDIT 新建 user 节点，REGENERATE 只复用父 user；Interaction 的消息策略由独立准入决定。
         return switch (mode) {
             case NEXT -> createNextUserMessage(user, command, session, runId, attachments);
             case EDIT_USER -> createEditedUserMessage(user, command, session, runId, attachments);
@@ -1194,6 +1195,7 @@ public class SessionApplicationService implements ChatSessionFacade {
         if (assistantMessageId != null && !assistantMessageId.isBlank()) {
             sourceAssistant = requireMessageInSession(session, assistantMessageId);
             ensureUnlockedAssistantMessage(sourceAssistant, "候选技能被替换消息");
+            // 除当前来源 Run 外，只额外接受已验证的 Interaction 原 Run，兼容 Stop 未保存复用结果。
             if (!userMessage.id().equals(sourceAssistant.parentMessageId())
                     || sourceRunId == null
                     || !(sourceRunId.equals(sourceAssistant.runId())

@@ -86,6 +86,7 @@ public final class DomainAgentAsyncTaskCallbackAdmissionFilter extends OncePerRe
             HttpServletRequest request,
             HttpServletResponse response,
             FilterChain filterChain) throws ServletException, IOException {
+        // 在 JSON 反序列化之前占用许可并限体积，不能等 Service 收到完整对象后才保护堆内存。
         DomainAgentAsyncCallbackAdmission.Permit permit = admission.tryAcquire();
         if (permit == null) {
             writeError(response, request, HttpStatus.TOO_MANY_REQUESTS,
@@ -113,11 +114,13 @@ public final class DomainAgentAsyncTaskCallbackAdmissionFilter extends OncePerRe
                 throw ex;
             }
             if (bounded.isAsyncStarted()) {
+                // Servlet 异步返回后业务可能仍在执行，许可交给完成监听器释放，而不是此时提前归还。
                 try {
                     bounded.getAsyncContext().addListener(new PermitReleaseListener(permit));
                     releaseByAsyncListener = true;
                 } catch (IllegalStateException ignored) {
                     // The async response completed between the state check and listener registration.
+                    // 未移交监听器时由 finally 释放，忽略此竞争不意味着遗漏许可清理。
                 }
             }
         } catch (DomainAgentAsyncCallbackPayloadTooLargeException ex) {

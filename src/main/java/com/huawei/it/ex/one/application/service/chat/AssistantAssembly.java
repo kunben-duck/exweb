@@ -52,6 +52,7 @@ final class AssistantAssembly {
             return;
         }
         persistableOutputObserved = persistableOutputObserved || persistableOutput(event);
+        // no-store 可观察业务输出是否出现，但历史只保留占位和控制事实，不积累真实正文/业务 Parts。
         if (persistenceState.placeholderMode() && !controlEvent(event)) {
             return;
         }
@@ -125,6 +126,7 @@ final class AssistantAssembly {
             return;
         }
         if (domainAgentContentObserved && domainAgentThinkingSinceContent) {
+            // 分段标识只改历史草稿；原 message.delta 不变，连续思维链直到下一段正文才形成一个边界。
             deltaDraft.append(DOMAIN_AGENT_CONTENT_SEGMENT_MARKER);
         }
         deltaDraft.append(delta);
@@ -157,6 +159,7 @@ final class AssistantAssembly {
             return persistenceState.placeholderContent();
         }
         if (snapshot != null) {
+            // 最终快照优先于 delta 草稿，也不会再拼接草稿中的思维链分段标识。
             return snapshot;
         }
         if (!deltaDraft.isEmpty()) {

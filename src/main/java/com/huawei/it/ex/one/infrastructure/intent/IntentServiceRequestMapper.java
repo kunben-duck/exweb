@@ -81,8 +81,10 @@ public class IntentServiceRequestMapper {
     }
 
     private String requestAccessName(String requestedAccessName) {
+        // 逻辑入口用于会话/偏好分组；仅出站时拼前缀，不回写命令，避免重试或拒答后重复累加。
         String accessName = accessNameResolver.resolve(requestedAccessName);
         if (requestedAccessName == null || requestedAccessName.isBlank()) {
+            // 服务端兜底入口已经是完整名称，不应用前端入口的部署前缀。
             return accessName;
         }
         String prefix = properties.getRequestAccessNamePrefix();

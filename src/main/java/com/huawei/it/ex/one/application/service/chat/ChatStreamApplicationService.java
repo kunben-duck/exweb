@@ -263,12 +263,13 @@ public class ChatStreamApplicationService {
      *
      * <p>该接口比会话级恢复更适合跨电脑续接“正在输出的当前回答”：新渲染实例应从
      * active run 的 firstSeq 之前开始补发。若 run 尚未终止，服务端会继续接入 live topic，
-     * 直到 {@code run.completed/run.failed/run.cancelled/run.waiting_user} 终态事件到达后再关闭事件恢复连接。</p>
+     * 直到 {@code run.completed/run.failed/run.cancelled/run.waiting_user} 或
+     * {@code run.async_running} 异步边界到达后关闭恢复连接；已挂起的 Run 补发后也直接结束。</p>
      *
      * @param user 请求入口解析出的不可变用户身份快照。
      * @param runId 需要恢复的 run 标识。
      * @param afterSeq 客户端已消费的最后事件序号。
-     * @return 指定 run 中大于 afterSeq 的历史事件，以及后续 live 事件直到终态。
+     * @return 指定 run 中大于 afterSeq 的已存事件，必要时接续 live 直到终态或异步边界。
      */
     public Flux<ChatEvent> resumeRun(UserContext user, String runId, long afterSeq) {
         return Mono.fromCallable(() -> {
@@ -286,7 +287,8 @@ public class ChatStreamApplicationService {
      * 恢复当前连接用户可访问的 run topic 事件流。
      *
      * <p>该方法是 WebSocket 的核心订阅入口：先用连接身份校验 run 归属，再按数据库 seq
-     * 补发历史事件，最后按 {@code financeex.chat-stream.live-source-mode} 接入实时事件源。</p>
+     * 补发历史事件，再消费按 {@code financeex.chat-stream.live-source-mode} 建立的实时源。
+     * 实际先建立有界 live 缓冲再查历史，避免查库期间漏掉新事件；异步边界不结束此 topic 订阅。</p>
      *
      * @param user WebSocket 握手时解析出的用户身份快照。
      * @param topicId {@code /chat/runs} 返回的 run 级 stream topic。

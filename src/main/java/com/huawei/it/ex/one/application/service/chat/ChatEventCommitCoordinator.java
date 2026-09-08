@@ -111,6 +111,7 @@ final class ChatEventCommitCoordinator {
                 committedEventObserver, null, null, null, null);
     }
 
+    /** 区分普通事件、等待和终态提交；必须完成对应数据库操作后才进入观察及发布。 */
     ChatEvent commit(ChatEvent event, RunEventPipelineContext context) {
         if (event instanceof com.huawei.it.ex.one.domain.chat.RunAsyncRunningEvent asyncEvent) {
             if (asyncTaskService == null) {
@@ -158,6 +159,7 @@ final class ChatEventCommitCoordinator {
         restoreContinuationInteractionOnFailure(stored, context);
         markRuntimeSessionUnavailable(stored, context);
         committedEventObserver.observeBindingAndPublish(stored, context, context.bindingRef().get());
+        // ACK 还包含本次提交后处理完成，不代表 WebSocket 或前端确认收到。
         acknowledgePersistence(event);
         return stored;
     }

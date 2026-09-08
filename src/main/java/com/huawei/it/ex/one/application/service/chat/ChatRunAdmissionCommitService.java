@@ -52,6 +52,7 @@ public class ChatRunAdmissionCommitService {
     @Transactional(timeoutString = "${financeex.chat-run.external-terminal-transaction-timeout-seconds:10}")
     public AdmissionResult commit(UserContext user, ChatCommand command, ChatSession session,
                                   String runId, List<AttachmentRef> attachments) {
+        // 准备阶段的 Session 可能已过时；专家范围必须与本次取得消息树行锁后的快照一致。
         ChatSession current = sessionService.lockAndReloadForMessageMutation(
                 user.tenantId(), user.ownerUserId(), session);
         IntentExpertScope scope = IntentExpertContext.fromSessionMetadata(current.metadataJson()).orElse(null);
@@ -93,6 +94,7 @@ public class ChatRunAdmissionCommitService {
             sessionService.updateMetadataWithoutTouch(current,
                     IntentExpertContext.replaceSessionMetadata(current.metadataJson(), requested));
         }
+        // 专家选择随准入提交即生效；取消快照仅同步缓存，不在订阅失败时恢复旧专家 Binding。
         return new AdmissionResult(admission.messagePlan(), admission.run(), cancellations, List.of(),
                 requested, identityChanged);
     }
@@ -128,6 +130,7 @@ public class ChatRunAdmissionCommitService {
         AdmissionResult admission = commitRun(new RunAdmissionContext(
                 user, command, currentSession, runId, attachments, null, false));
         int cancelledInteractions = interactionService.cancelOpenBySessionAndCount(user, session.id());
+        // 普通直连有附件时延后 Binding 切换；退出聚合专家范围的旧 Binding 取消仍随准入提交。
         boolean deferDomainAgentBinding = explicitTarget.domainAgent() && !attachments.isEmpty();
         List<AdmissionCancellation> bindingCancellations = deferDomainAgentBinding && previousScope == null
                 ? List.of()
@@ -189,6 +192,7 @@ public class ChatRunAdmissionCommitService {
         ChatSession currentSession = sessionService.lockAndReloadForMessageMutation(
                 user.tenantId(), user.ownerUserId(), session);
         try {
+            // Stop 与此事务之间可能已有其他请求准入；锁后复查，不能仅凭 Stop 返回值创建替代 Run。
             chatRunService.rejectIfActiveRunExists(user, currentSession.id());
         } catch (ActiveRunExistsException ex) {
             throw CandidateSwitchConflictException.staleSource(request.source().sourceRunId());
@@ -297,6 +301,7 @@ public class ChatRunAdmissionCommitService {
                 runId,
                 interaction,
                 command.attachments());
+        // 复用的是原问答节点，不是原 Run；assistant 的直接 Run 关联在后续保存结果时才回填。
         ChatRun run = chatRunService.insertInteractionRunning(new CreateChatRunContext(
                 runId,
                 user,

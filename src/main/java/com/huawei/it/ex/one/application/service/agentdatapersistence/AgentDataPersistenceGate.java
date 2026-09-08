@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Map;
 
-/** Runtime 调用前的 assistant 留存策略栅栏。 */
+/** DomainAgent 调用前统一检查附件数量、技能附件类型及 assistant 留存策略。 */
 @Component
 public class AgentDataPersistenceGate {
     private static final AppLogger log = AppLoggerFactory.getLogger(AgentDataPersistenceGate.class);
@@ -47,7 +47,7 @@ public class AgentDataPersistenceGate {
     }
 
     /**
-     * 仅 DomainAgent 使用可信 skillId 查询配置；Relay 和系统响应第一版固定为 FULL。
+     * 仅 DomainAgent 使用可信 skillId 查询配置；Relay 和系统响应直接沿用当前留存状态。
      */
     public Mono<AgentDataPersistenceState> resolve(
             UserContext user,
@@ -80,6 +80,7 @@ public class AgentDataPersistenceGate {
         if (route == null || route.type() != RouteType.DOMAIN_AGENT) {
             return Mono.just(Decision.allowed(targetState));
         }
+        // 数量错误先于缓存/Provider 读取抛出，避免在不可调用的请求上查询配置或继续物化 Binding。
         validateAttachmentCount(documents);
         String skillId = route.selectedAgentCode();
         if (skillId == null || skillId.isBlank()) {
@@ -91,6 +92,7 @@ public class AgentDataPersistenceGate {
         if (!policyService.enabled() && !attachmentCheckRequired) {
             return Mono.just(Decision.allowed(targetState));
         }
+        // 两项检查共享本次不可变配置快照，不分别读取缓存或调用 Provider。
         return configurationService.resolve(user, skillId, forwardHeaders)
                 .map(configuration -> {
                     if (policyService.enabled()) {
@@ -113,6 +115,7 @@ public class AgentDataPersistenceGate {
                             : Decision.allowed(targetState);
                 })
                 .onErrorResume(DomainAgentSkillConfigurationException.class, error -> {
+                    // 留存策略不能在配置未知时放宽；仅做附件检查时沿用失败开放，不等同于空配置放行。
                     if (policyService.enabled()) {
                         return Mono.error(error);
                     }

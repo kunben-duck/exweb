@@ -146,6 +146,7 @@ final class ChatRunCompletionCoordinator {
             return;
         }
         if ("run.completed".equals(stored.type())) {
+            // 附件拒绝的路由只能在 Binding 提交后补记一次；RouteMemory 仍不是终态事务的持久化保证。
             PendingRouteMemoryDecision pending = context.pendingRouteMemoryDecisionRef().getAndSet(null);
             if (appliedRouteRecorder != null && pending != null) {
                 appliedRouteRecorder.recordCommittedRouteDecision(pending, context.bindingRef().get());
@@ -187,6 +188,7 @@ final class ChatRunCompletionCoordinator {
 
     private ChatEvent publishCommitted(ChatRunTerminalCommitService.CommitResult result,
                                        RunEventPipelineContext context) {
+        // 数据库已提交，先同步 Binding 再发布成功事件；进程在发布前退出时，已存事件由 Resume 恢复。
         context.pendingRouteSwitchAppliedEventRef().set(null);
         context.bindingRef().set(result.binding());
         if (result.replaceBindingCache()) {

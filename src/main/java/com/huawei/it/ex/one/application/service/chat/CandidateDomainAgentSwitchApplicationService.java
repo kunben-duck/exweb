@@ -69,6 +69,7 @@ public class CandidateDomainAgentSwitchApplicationService {
         this.interactionRepository = interactionRepository;
     }
 
+    /** 先验证可信来源并停止旧 Run，再受理复用原 user 消息的替代 Run；两阶段不共用长事务。 */
     public Mono<ChatRunStartResult> switchDomainAgent(
             UserContext user,
             TraceContext traceContext,
@@ -111,6 +112,7 @@ public class CandidateDomainAgentSwitchApplicationService {
         validateSourceMessage(sourceRun, session, userMessage);
         AssistantSource assistant = resolveAssistantSource(user, sourceRun);
         ensureCurrentSource(session, sourceRun.id(), userMessage.id(), assistant.messageId());
+        // 在 Stop 前校验原消息附件，避免因附件无效先停止仍可继续的旧任务。
         ResolvedChatAttachments resolved = resolveAttachments(user, userMessage.attachments());
         return new CandidateSwitchRunSource(
                 sourceRun.id(),
@@ -132,6 +134,7 @@ public class CandidateDomainAgentSwitchApplicationService {
                 || !ChatInteractionType.INTENT_CLARIFICATION.name().equals(run.metadata().get("interactionType"))) {
             return new AssistantSource(null, null);
         }
+        // 续跑尚未保存结果时直接 assistant 关联为空；只以持久化 Interaction 证明复用关系。
         String interactionId = metadataText(run, "interactionId");
         String assistantId = metadataText(run, "interactionAssistantMessageId");
         if (interactionId == null || assistantId == null) {
@@ -172,6 +175,7 @@ public class CandidateDomainAgentSwitchApplicationService {
             CandidateDomainAgentSwitchCommand command,
             RuntimeForwardHeaders forwardHeaders,
             CandidateSwitchRunSource source) {
+        // Stop 可与自然完成竞争；必须回读终态和当前路径，后续准入事务还会在 Session 锁内复查。
         ChatRun latestSource = chatRunService.requireOwnedRun(user, source.sourceRunId());
         if (latestSource.status() == ChatRunStatus.RUNNING
                 || latestSource.status() == ChatRunStatus.CANCELLING) {

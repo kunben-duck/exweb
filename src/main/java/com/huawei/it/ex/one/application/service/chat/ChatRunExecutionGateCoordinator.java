@@ -49,6 +49,7 @@ final class ChatRunExecutionGateCoordinator {
             RunEventPipelineContext context,
             Supplier<Flux<ChatEvent>> bodySupplier,
             Function<ChatEvent, Mono<ChatEvent>> singleEventWriter) {
+        // run.started 提交成功才订阅业务体；开始事件写入被拒绝时不得产生路由或 Runtime 副作用。
         return persistRunStartedGate(context, singleEventWriter).flatMapMany(outcome -> {
             if (outcome.status() == RunStartGateStatus.REJECTED) {
                 log.info("Chat run start gate rejected execution; skip route and runtime side effects. runId={}",
@@ -70,6 +71,7 @@ final class ChatRunExecutionGateCoordinator {
                                     .then(requireCurrentOwnerRunning(
                                             context.executionClaim(), "after-run-started"))
                                     .thenMany(runtimeBody),
+                            // 下游流结束不等于异步任务结束，挂起后不能自动补 run.completed。
                             Flux.defer(() -> context.asyncRunningObserved().get()
                                     ? Flux.empty()
                                     : Flux.just(RunCompletedEvent.of(

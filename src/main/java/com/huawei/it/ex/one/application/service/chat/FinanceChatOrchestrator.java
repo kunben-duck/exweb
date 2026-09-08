@@ -43,6 +43,7 @@ final class FinanceChatOrchestrator {
             ChatCommand command,
             RuntimeForwardHeaders forwardHeaders) {
         TraceContext traceSnapshot = normalizeTraceContext(traceContext);
+        // Interaction 先校验并认领已有等待，再创建续跑；不能按普通 NEXT 直接新增一轮消息。
         if (command != null
                 && command.runMode() == ChatRunMode.CONTINUE_INTERACTION) {
             return Mono.defer(() -> startInteractionContinuation(
@@ -51,6 +52,7 @@ final class FinanceChatOrchestrator {
                     interactionContinuationCoordinator.responseCommand(user, command),
                     forwardHeaders));
         }
+        // 延迟到订阅时才准入和启动后台执行，构造响应 Mono 本身不创建 Run。
         return Mono.defer(() -> {
             validateStandardRunCommand(command);
             RuntimeForwardHeaders headers = normalizeForwardHeaders(forwardHeaders);

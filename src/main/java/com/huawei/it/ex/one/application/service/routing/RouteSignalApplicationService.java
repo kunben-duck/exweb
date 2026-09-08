@@ -142,6 +142,7 @@ public class RouteSignalApplicationService {
         ChatCommand command = request.command();
         List<AttachmentRef> attachments = request.attachments();
         MemoryContext memory = request.memory();
+        // 聚合专家必须使用自己的 Intent 范围，不能被通用用例库提前路由到范围外技能。
         if ((command == null || command.intentExpertScope() == null)
                 && properties.useCaseLibraryEnabled()) {
             return Flux.just(RouteSignalFrame.progress(progress("use_case_matching",
@@ -170,6 +171,7 @@ public class RouteSignalApplicationService {
             IntentRouteRequest routeRequest = new IntentRouteRequest(
                     user, session, intentCommand, memory, routeTrigger, lastRejectReason, runId);
             MemoryContext intentMemory = memoryWithRouteContext(routeRequest);
+            // messageId 来自已受理 Run 的 user 消息；进度事件和最终决策分别沿原事件/路由通道返回。
             return intentAgentRuntime.route(new IntentAgentRouteRequest(
                             user, session, intentCommand, intentMemory, runId, routeTrigger,
                             request.userMessageId()))
@@ -226,6 +228,7 @@ public class RouteSignalApplicationService {
             return intentFailureFrames(request, result.decision(), latencyMs, intentFailureReason(result.decision()));
         }
         if (result.waitingClarification()) {
+            // 澄清不是可执行路由；交由等待终态创建 Interaction，不能在这里启动候选 Runtime。
             if (clarificationRoundLimitReached(request)) {
                 RouteSignalResult routeResult = RouteSignalResult.of(RouteTarget.agentRuntime(IntentAgentRuntime.PROVIDER, 0.0,
                         "intent clarification max rounds exceeded"));

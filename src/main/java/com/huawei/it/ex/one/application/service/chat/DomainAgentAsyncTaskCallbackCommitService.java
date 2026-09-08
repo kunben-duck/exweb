@@ -77,6 +77,7 @@ public class DomainAgentAsyncTaskCallbackCommitService {
         Instant finishedAt = Instant.now();
         ChatRunStatus terminalStatus = callback.completed()
                 ? ChatRunStatus.COMPLETED : ChatRunStatus.FAILED;
+        // CAS 同时检查 RUNNING、ASYNC_WAITING 和截止时间；Stop、超时及重复回调只有一方可提交。
         boolean claimed = runRepository.tryClaimExternalTerminal(
                 new ChatRunRepository.ExternalTerminalClaim(
                         initial.id(), initial.tenantId(), initial.userId(), initial.sessionId(),
@@ -202,6 +203,7 @@ public class DomainAgentAsyncTaskCallbackCommitService {
             return;
         }
         boolean persisted = retention == AgentDataPersistenceEventPolicy.EventRetention.PERSISTED;
+        // 拆批限制单条 SQL 大小，但所有批次仍在同一回调事务内；不能在批次间发布未提交结果。
         for (ChatEventBatcher.Batch batch : eventBatcher.partitionImmediately(segment)) {
             List<ChatEvent> sequenced;
             if (!persisted) {
@@ -243,6 +245,7 @@ public class DomainAgentAsyncTaskCallbackCommitService {
                 callback.completed() ? "COMPLETED" : "FAILED",
                 null);
         if (!callback.resultProvided()) {
+            // 仅完成通知只更新异步 metadata，不碰已保存的正文和 Parts。
             sessionService.updateAssistantMetadataForInternalUse(session, existing, metadata);
             return;
         }

@@ -223,6 +223,7 @@ final class DomainAgentReplacementExecutor {
                     signal,
                     currentRouteSource));
         }
+        // 重路由仍校验原可信附件；新技能的配置和数量检查必须先于其 Binding 写入。
         Mono<AgentDataPersistenceGate.Decision> preflight = persistenceGate == null
                 ? Mono.just(AgentDataPersistenceGate.Decision.allowed(context.persistenceState()))
                 : persistenceGate.evaluate(
@@ -270,6 +271,7 @@ final class DomainAgentReplacementExecutor {
             RouteTarget nextRoute,
             AgentDataPersistenceGate.Decision decision) {
         DomainAgentRunContext context = reroute.context();
+        // 这里只暂存 B 的选择；完成事务才激活 B，失败时也不恢复已经因拒答失去资格的 A。
         DeferredDomainAgentBinding deferred = runtimeBindingService.prepareDomainAgentForRun(
                 domainAgentBindingCommand(reroute, signal, nextRoute));
         RuntimeBinding nextBinding = deferred.candidate();

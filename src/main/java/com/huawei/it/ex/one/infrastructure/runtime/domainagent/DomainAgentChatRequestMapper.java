@@ -33,6 +33,7 @@ public class DomainAgentChatRequestMapper {
 
     public Map<String, Object> toWireRequest(DomainAgentRequest request) {
         Map<String, Object> body = deepCopyMap(request.metadata());
+        // Gate 已前置数量检查，这里保留出站最后防线，兼容不经过标准路由的调用入口。
         validateAttachmentCount(request.documents());
         validateDocListStructure(body);
         Map<String, Object> next = new LinkedHashMap<>(body);
@@ -48,6 +49,7 @@ public class DomainAgentChatRequestMapper {
         if (request.shortTermMemoryEnabled()) {
             next.put("messages", request.messages());
         }
+        // 当前技能由最终路由覆盖 metadata；历史 messages[].skillId 则来自各轮已保存的 assistant。
         next.put("skillId", request.domainAgentId());
         next.put("query", request.query());
         next.put("sessionId", sessionId(request));

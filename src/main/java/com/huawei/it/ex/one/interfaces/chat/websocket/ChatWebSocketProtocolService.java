@@ -185,6 +185,7 @@ public class ChatWebSocketProtocolService {
                     if (connectionRegistry.get(connectionId).isEmpty()) {
                         return Mono.empty();
                     }
+                    // 连接只持有可取消订阅，不独占等待线程；断连/退订释放监听，不自动 Stop 后台 Run。
                     Sinks.Empty<Void> cancellation = Sinks.empty();
                     try {
                         connectionRegistry.subscribe(connectionId, topicId, run.sessionId(), afterSeq,
@@ -193,6 +194,7 @@ public class ChatWebSocketProtocolService {
                         cancellation.tryEmitEmpty();
                         return Mono.error(ex);
                     }
+                    // 这是订阅受理回复，历史补发尚未完成；afterSeq 表示客户端已消费位置而非服务端最新位置。
                     outbound.emit(ChatWebSocketEnvelopeDto.reply(commandId,
                             Map.of("type", "subscribe", "topicId", topicId, "recovered", afterSeq > 0,
                                     "lastSeq", afterSeq)));

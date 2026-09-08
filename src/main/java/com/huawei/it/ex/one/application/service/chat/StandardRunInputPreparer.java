@@ -67,6 +67,7 @@ final class StandardRunInputPreparer {
         ResolvedChatAttachments resolved = null;
         String trustedInitialTitle = null;
         if (shouldResolveAttachmentsBeforeSession(identified)) {
+            // 首轮附件-only 用可信首附件名生成 INSERT 标题；同一解析结果继续下传，避免重复查文档。
             resolved = resolveAttachments(request.user(), identified);
             runStartCoordinator.ensureActive(startAttempt, "after-document-resolve");
             trustedInitialTitle = attachmentTitle(resolved.attachments());
@@ -76,6 +77,7 @@ final class StandardRunInputPreparer {
         if (interactionService != null && !directBypass) {
             interactionService.rejectIfWaiting(request.user(), session.id());
         }
+        // 这里是尽早拒绝，不是并发准入的最终保证；事务内校验和 active-run 唯一索引仍不可省略。
         chatRunService.rejectIfActiveRunExists(request.user(), session.id());
         if (resolved == null) {
             resolved = resolveAttachments(request.user(), identified);
@@ -97,6 +99,7 @@ final class StandardRunInputPreparer {
                 : startAttempt.runId();
         SessionApplicationService.ShortTermMemoryPath memoryPath =
                 sessionService.resolveShortTermMemoryPath(normalized, session);
+        // 记忆按本次编辑/重生成目标分支预加载，不把当前待回答的 user 消息再作为历史输入。
         MemoryContext memory = memoryAssembler.assemble(
                 normalized, memoryPath.leafMessageId(), memoryPath.emptyPath());
         runStartCoordinator.ensureActive(startAttempt, "after-memory-load");
@@ -142,6 +145,7 @@ final class StandardRunInputPreparer {
         } catch (ActiveRunExistsException ex) {
             throw CandidateSwitchConflictException.staleSource(source.sourceRunId());
         }
+        // 候选入口已在 Stop 前校验原问题及附件，此处只复用可信结果，不重新创建 user 消息。
         List<AttachmentRef> attachments = source.resolvedAttachments().attachments();
         List<UploadedDocument> documents = source.resolvedAttachments().documents();
         ChatCommand normalized = normalizedCommand(

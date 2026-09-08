@@ -180,6 +180,7 @@ public class ChatRunStopCoordinator {
 
     private ChatRunStopResult finalizeActiveStop(UserContext user, ChatRun run, String effectiveReason,
                                                   StopRunContext stopContext) {
+        // 先停止本机生产事件，再准备 partial；跨实例和自然完成竞争最终仍由终态 CAS 裁决。
         runExecutionRegistry.cancel(run.id());
         if (!chatRunService.shouldAcceptEvent(RunCancelledEvent.of(run.id(), run.sessionId(), run.cancelReason()))) {
             ChatRun latest = chatRunService.requireOwnedRun(user, run.id());
@@ -215,6 +216,7 @@ public class ChatRunStopCoordinator {
 
     private Mono<ChatRunStopResult> stopWaitingRun(UserContext user, ChatRun sourceRun, String reason,
                                                    StopRunContext stopContext) {
+        // WAIT 可能刚被另一次请求认领；取消等待事务返回实际续跑 Run 后，继续停止该 Run。
         String effectiveReason = normalizeReason(reason);
         ChatWaitingStopCommitService.WaitingStopCommitResult waiting =
                 waitingStopCommitService.cancelWaiting(user, sourceRun, effectiveReason);

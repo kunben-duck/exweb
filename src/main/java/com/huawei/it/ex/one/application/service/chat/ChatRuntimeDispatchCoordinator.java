@@ -81,6 +81,7 @@ final class ChatRuntimeDispatchCoordinator {
     }
 
     Flux<ChatEvent> execute(RoutePipelineRequest request, Runnable initialPreparation) {
+        // 失权执行者不得先改 Binding 再检查 owner；usingWhen 同时覆盖正常结束、异常和取消的清理。
         return Flux.usingWhen(
                 Mono.just(request.bindingLifecycle()),
                 ignored -> eventPersistenceCoordinator.requireCurrentOwnerRunning(
@@ -96,6 +97,7 @@ final class ChatRuntimeDispatchCoordinator {
 
     private Flux<ChatEvent> executeRouteFrames(RoutePipelineRequest request) {
         IntentResultPersistenceBarrier persistenceBarrier = new IntentResultPersistenceBarrier();
+        // 直连或 Binding 已给出路由时不调用 Intent；其余请求才携带本 Run 的可信 userMessageId 识别。
         Flux<RouteSignalFrame> frames = Flux.defer(() -> request.routeRef().get() == null
                         ? routeSignalService.routeInitialWithProgress(new RouteSignalRequest(
                                 request.runId(),
@@ -215,6 +217,7 @@ final class ChatRuntimeDispatchCoordinator {
                 ? eventPersistenceCoordinator.requireCurrentOwnerRunning(
                                 request.executionClaim(), "before-attachment-validation-rejection")
                         .thenMany(Flux.defer(() -> {
+                            // 附件拒绝只确认最终选择；Binding 激活和 RouteMemory 补记等待完成事务，不启动 Runtime。
                             persistResolvedRoute(request, resolution, recordIntentRecognition);
                             appliedRouteRecorder.deferRouteMemoryDecision(
                                     request.pendingRouteMemoryDecisionRef(),
@@ -241,6 +244,7 @@ final class ChatRuntimeDispatchCoordinator {
                 return dispatchPersistedRuntime(request, resolution);
             });
         }
+        // 配置查询是异步间隔，返回时可能已被 Stop 抢占；物化 Binding 前重新检查执行权。
         return eventPersistenceCoordinator.requireCurrentOwnerRunning(
                         request.executionClaim(), "before-domain-agent-binding-materialization")
                 .thenMany(Flux.defer(() -> {
@@ -304,6 +308,7 @@ final class ChatRuntimeDispatchCoordinator {
         appliedRouteRecorder.bindResolvedRouteRequired(
                 request.run(), resolution.route(), resolution.binding(), request.executionClaim(),
                 request.persistenceState());
+        // 只有受 owner/fencing 保护的路由写入成功，才更新最终 skillId；它不等同于下游已接收请求。
         request.messageSkill().replace(resolution.route().invocationSkillId());
         if (recordIntentRecognition && resolution.intent() != null) {
             appliedRouteRecorder.recordIntent(

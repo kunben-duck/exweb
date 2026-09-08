@@ -50,6 +50,7 @@ final class InteractionRunCoordinator {
                 routeSwitchCoordinator, runtimeInteractionCoordinator);
     }
 
+    /** 仅接收已认领的 Interaction，按意图澄清、路由确认和 Runtime 问卷分派续跑。 */
     Flux<ChatEvent> execute(Request request) {
         ChatInteractionRequest interaction = request.claim().request();
         ChatSession session = sessionService.getSession(

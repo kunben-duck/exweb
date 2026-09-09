@@ -1,5 +1,9 @@
 # FinanceEXChatService 当前架构图
 
+> 全接口运行视图、Servlet有效默认容量、依赖超时、风险与验证记录见[高可用审计文档集](high-availability/README.md)（基线 `ab52f9bb`，仅分析，不代表加固建议已经实施）。
+
+> Run细节按[入口/准入/启动](high-availability/run-startup-details.md)、[会话标题提炼](high-availability/session-title-flow.md)、[路由与第三方](high-availability/run-routing-details.md)、[事件与控制](high-availability/run-control-details.md)分层展开，包含逐步骤风险表。入站为Jalor网关；实际网关超时、重试、ACL与容量尚未提供，不代表已验证这些保障。
+
 > 当前代码架构快照。实线表示同步或严格有序调用，粗线表示流式消息，虚线表示异步或 best-effort；橙色节点为周期治理任务。
 
 ## 整体架构图
@@ -10,7 +14,7 @@ flowchart TB
         direction LR
         PC["PC Web<br/>全量会话与实时续接"]
         Mobile["移动端<br/>channel=mobile"]
-        Gateway["企业网关 / 容器<br/>身份、Trace、Cookie"]
+        Gateway["Jalor网关 / 容器<br/>身份、Trace、Cookie配置待验"]
         PC --> Gateway
         Mobile --> Gateway
     end
@@ -209,6 +213,7 @@ sequenceDiagram
     autonumber
     box rgb(245,248,252) 客户端与接口
         participant FE as "PC / Mobile"
+        participant Gateway as "Jalor网关"
         participant API as "Chat REST + WS/SSE"
     end
     box rgb(235,244,252) FinanceEXChatService 主执行
@@ -228,13 +233,15 @@ sequenceDiagram
         participant Sidecar as "标题 / Intent记录"
     end
 
-    FE->>API: "POST /v1/chat/runs"
+    FE->>Gateway: "POST /v1/chat/runs"
+    Gateway->>API: "转发，实际超时与重试配置待确认"
     API->>Run: "身份、Trace、Cookie + ChatCommand"
     activate Run
     Note over Run,Events: "首事件交接前：会影响 POST 响应时间的有序关键路径"
     Run->>DB: "加载/创建Session，检查WAIT和Active Run"
     Run->>Run: "解析附件归属与消息模式"
-    Run->>Memory: "装配当前路径短期记忆"
+    Run->>Memory: "检查记忆开关，默认关闭返回空"
+    opt "短期记忆开启"
     alt "Redis缓存开启且窗口完整"
         Memory->>Redis: "读取紧凑消息窗口"
         Redis-->>Memory: "user/assistant历史"
@@ -248,9 +255,12 @@ sequenceDiagram
             Memory-->>Redis: "可选预热与裁剪"
         end
     end
+    end
     Memory-->>Run: "MemoryContext"
     Run->>DB: "准入短事务：user消息 + Run + 分支状态"
-    Run-->>Sidecar: "[异步] 会话标题候选，不等待结果"
+    Run->>Redis: "提交后同步Run缓存，另调度Binding缓存"
+    Run-->>Sidecar: "[异步] 条件调度标题，默认关闭"
+    Note over Sidecar,DB: "候选Session/路径/Run查询在8个生成许可前，标题提交另用Session锁TX2s；会竞争主流程资源"
     Run->>Binding: "创建Execution Claim"
     Binding->>DB: "RUNNING + ownerInstanceId + fencingToken"
     Run->>Events: "run.started"
@@ -258,7 +268,8 @@ sequenceDiagram
     Events-->>Redis: "[异步] 发布run topic"
     Events-->>Run: "首个持久化事件确认"
     Run-->>API: "ChatRunStartResult"
-    API-->>FE: "runId + firstSeq + streamTopicId"
+    API-->>Gateway: "runId + firstSeq + streamTopicId"
+    Gateway-->>FE: "转发启动响应"
     deactivate Run
 
     par "前端建立实时通道"

@@ -58,11 +58,16 @@ import com.huawei.it.ex.one.interfaces.chat.dto.MessageFeedbackDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.SwitchDomainAgentRequest;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.web.bind.annotation.GetMapping;
 
 import java.time.Instant;
@@ -74,12 +79,14 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 class ChatProtocolConvergenceTest {
 
-    @Test
-    void translatorBuildsTrustedIntentExpertScopeOutsideClientMetadata() {
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(booleans = {true, false})
+    void translatorBuildsTrustedIntentExpertScopeOutsideClientMetadata(Boolean forceReroute) {
         ChatRequestTranslator translator = new ChatRequestTranslator();
         CreateChatRunRequest request = new CreateChatRunRequest(
                 "cmd1", "session1", null, "查询税务风险", "NEXT", null, null, null,
-                null, null, null, null, null, List.of(), " intent_expert ", " expert-a ", null,
+                forceReroute, null, null, null, null, List.of(), " intent_expert ", " expert-a ", null,
                 Map.of(IntentExpertContext.METADATA_KEY, Map.of("expertId", "forged"), "scene", "tax"),
                 null, null, null, null, null, null, " expert_a_entry ",
                 new ChatSelectedExpertDto(" expert-a ", " 税务专家 "));
@@ -92,9 +99,77 @@ class ChatProtocolConvergenceTest {
         assertThat(command.intentAccessName()).isEqualTo("expert_a_entry");
         assertThat(command.targetType()).isEqualTo("INTENT_EXPERT");
         assertThat(command.targetId()).isEqualTo("expert-a");
+        assertThat(command.routeTrigger()).isEqualTo(Boolean.TRUE.equals(forceReroute) ? "user_correction" : null);
         assertThat(command.metadata())
                 .containsEntry("scene", "tax")
                 .doesNotContainKey(IntentExpertContext.METADATA_KEY);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"NEXT", "EDIT_USER", "REGENERATE_ASSISTANT"})
+    void translatorAllowsExpertRerouteInStandardRunModes(String mode) {
+        ObjectNode request = intentExpertRerouteRequest();
+        request.put("runMode", mode);
+        if ("EDIT_USER".equals(mode)) {
+            request.put("editedMessageId", "msg_user");
+        } else if ("REGENERATE_ASSISTANT".equals(mode)) {
+            request.remove("message");
+            request.put("regeneratedMessageId", "msg_assistant");
+        }
+
+        ChatCommand command = new ChatRequestTranslator().toCommand(
+                new ObjectMapper().convertValue(request, CreateChatRunRequest.class));
+
+        assertThat(command.routeTrigger()).isEqualTo("user_correction");
+        assertThat(command.intentExpertScope().intentAccessName()).isEqualTo("tax_entry");
+        assertThat(command.runMode().name()).isEqualTo(mode);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "targetId, targetId",
+            "intentAccessName, intentAccessName",
+            "selectedExpert, selectedExpert",
+            "expertId, selectedExpert.expertId",
+            "expertName, selectedExpert.expertName"
+    })
+    void expertRerouteStillRequiresCompleteExpertParameters(String missingField, String errorField) {
+        ObjectNode request = intentExpertRerouteRequest();
+        if ("expertId".equals(missingField) || "expertName".equals(missingField)) {
+            ((ObjectNode) request.get("selectedExpert")).put(missingField, "  ");
+        } else {
+            request.remove(missingField);
+        }
+
+        assertThatThrownBy(() -> new ChatRequestTranslator().toCommand(
+                new ObjectMapper().convertValue(request, CreateChatRunRequest.class)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(errorField);
+    }
+
+    @Test
+    void expertRerouteStillRejectsMismatchedIdentityAndInteractionContinuation() {
+        ObjectNode request = intentExpertRerouteRequest();
+        ((ObjectNode) request.get("selectedExpert")).put("expertId", "other-expert");
+        assertThatThrownBy(() -> new ChatRequestTranslator().toCommand(
+                new ObjectMapper().convertValue(request, CreateChatRunRequest.class)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("selectedExpert.expertId 必须与 targetId 一致");
+
+        request.put("runMode", "CONTINUE_INTERACTION");
+        request.put("interactionId", "interaction1");
+        assertThatThrownBy(() -> new ChatRequestTranslator().toCommand(
+                new ObjectMapper().convertValue(request, CreateChatRunRequest.class)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("CONTINUE_INTERACTION 模式不支持 forceReroute");
+    }
+
+    private ObjectNode intentExpertRerouteRequest() {
+        return new ObjectMapper().valueToTree(Map.of(
+                "sessionId", "session1", "runMode", "NEXT", "message", "分析税务风险",
+                "forceReroute", true, "targetType", "INTENT_EXPERT", "targetId", "tax-expert",
+                "intentAccessName", "tax_entry",
+                "selectedExpert", Map.of("expertId", "tax-expert", "expertName", "税务专家")));
     }
 
     @Test
@@ -353,8 +428,9 @@ class ChatProtocolConvergenceTest {
         assertThat(command.metadata()).containsEntry("routeTrigger", "first_turn");
     }
 
-    @Test
-    void translatorRejectsForceRerouteWithExplicitTarget() {
+    @ParameterizedTest
+    @ValueSource(strings = {"DOMAIN_AGENT", "DOMAIN_EXPERT", "UNKNOWN", ""})
+    void translatorRejectsForceRerouteWithExplicitTarget(String targetType) {
         ChatRequestTranslator translator = new ChatRequestTranslator();
         CreateChatRunRequest request = new CreateChatRunRequest(
                 "cmd1",
@@ -371,7 +447,7 @@ class ChatProtocolConvergenceTest {
                 null,
                 null,
                 List.of(),
-                "DOMAIN_AGENT",
+                targetType,
                 "skill-a",
                 null,
                 Map.of()

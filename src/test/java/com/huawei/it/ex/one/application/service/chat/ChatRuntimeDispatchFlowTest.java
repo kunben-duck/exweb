@@ -5,6 +5,7 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.huawei.it.ex.one.application.config.MemoryProperties;
 import com.huawei.it.ex.one.application.config.RouteSignalProperties;
@@ -29,6 +30,7 @@ import com.huawei.it.ex.one.application.service.runtime.SystemResponseExecutor;
 import com.huawei.it.ex.one.application.service.runtime.WorkloadConcurrencyLimiter;
 import com.huawei.it.ex.one.application.service.security.PermissionChecker;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
 import com.huawei.it.ex.one.domain.chat.AttachmentRef;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
@@ -55,6 +57,8 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBindingStatus;
 import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 import com.huawei.it.ex.one.domain.usecase.UseCaseMatchResult;
+import com.huawei.it.ex.one.infrastructure.intent.IntentServiceHttpProperties;
+import com.huawei.it.ex.one.infrastructure.intent.IntentServiceRequestMapper;
 import com.huawei.it.ex.one.infrastructure.runtime.relay.RelayAgentRuntime;
 import com.huawei.it.ex.one.infrastructure.runtime.relay.RelayRuntimeProtocolAdapter;
 
@@ -63,24 +67,47 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
-    @Test
-    void intentExpertScopesIntentAndKeepsItsSelectedChildBinding() {
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(booleans = {true, false})
+    void intentExpertScopesIntentAndKeepsItsSelectedChildBinding(Boolean forceReroute) {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
         InMemoryMessageRepository messages = new InMemoryMessageRepository();
-        InMemoryRunRepository runs = new InMemoryRunRepository();
+        InMemoryRunRepository runs = new InMemoryRunRepository() {
+            @Override
+            public synchronized Optional<ChatRun> findActiveBySession(String tenantId, String userId, String sessionId) {
+                return runs.values().stream()
+                        .filter(run -> tenantId.equals(run.tenantId()) && userId.equals(run.userId()))
+                        .filter(run -> sessionId.equals(run.sessionId()))
+                        .filter(run -> run.status() == ChatRunStatus.RUNNING || run.status() == ChatRunStatus.CANCELLING)
+                        .findFirst();
+            }
+        };
         InMemoryEventStore events = new InMemoryEventStore();
         MultiBindingRuntimeBindingRepository bindings = new MultiBindingRuntimeBindingRepository();
         AtomicInteger useCaseCalls = new AtomicInteger();
         AtomicInteger intentCalls = new AtomicInteger();
         List<String> intentAccessNames = new java.util.concurrent.CopyOnWriteArrayList<>();
+        List<String> wireAccessNames = new java.util.concurrent.CopyOnWriteArrayList<>();
+        List<String> routeTriggers = new java.util.concurrent.CopyOnWriteArrayList<>();
+        IntentServiceHttpProperties intentProperties = new IntentServiceHttpProperties();
+        intentProperties.setRequestAccessNamePrefix("EX_");
+        IntentServiceRequestMapper intentMapper = new IntentServiceRequestMapper(intentProperties);
+        AtomicBoolean refuseNext = new AtomicBoolean();
+        String routeTrigger = Boolean.TRUE.equals(forceReroute) ? "user_correction" : null;
         AtomicReference<DomainAgentRequest> capturedRequest = new AtomicReference<>();
         RouteSignalApplicationService routeService = new RouteSignalApplicationService(
                 request -> {
@@ -90,9 +117,14 @@ class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
                 intentAgent((command, memory, user) -> {
                     intentCalls.incrementAndGet();
                     intentAccessNames.add(command.intentAccessName());
+                    wireAccessNames.add(intentMapper.toWireRequest(command, memory, user).accessName());
+                    routeTriggers.add(command.routeTrigger());
                     String childSkill = "expert_b_entry".equals(command.intentAccessName())
                             ? "child-b"
                             : "child-a";
+                    if ("domain_reject".equals(command.routeTrigger())) {
+                        childSkill = "child-after-refusal";
+                    }
                     return new IntentDecision(
                             "intent-" + childSkill,
                             "子技能" + childSkill,
@@ -110,6 +142,9 @@ class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
             @Override
             public Flux<ChatEvent> query(DomainAgentRequest request) {
                 capturedRequest.set(request);
+                if (refuseNext.compareAndSet(true, false)) {
+                    return Flux.just(domainAgentRefusalEvent(request.runId(), request.sessionId()));
+                }
                 return Flux.just(MessageSnapshotEvent.of(
                         request.runId(), request.sessionId(), "answer from " + request.domainAgentId()));
             }
@@ -128,7 +163,7 @@ class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
         List<ChatEvent> first = service.executeRun(user, new ChatCommand(
                         "cmd-parent-a", null, null, null, null, "web", "查询税务风险",
                         List.of(), Map.of("scene", "tax"), "INTENT_EXPERT", "expert-a",
-                        ChatRunMode.NEXT, null, null, null).withIntentExpertScope(expertA))
+                        ChatRunMode.NEXT, null, null, null, routeTrigger).withIntentExpertScope(expertA))
                 .collectList().block();
 
         assertThat(first).isNotNull();
@@ -146,6 +181,10 @@ class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
         assertThat(useCaseCalls).hasValue(0);
         assertThat(intentCalls).hasValue(1);
         assertThat(intentAccessNames).containsExactly("expert_a_entry");
+        assertThat(wireAccessNames).containsExactly("EX_expert_a_entry");
+        if (Boolean.TRUE.equals(forceReroute)) {
+            assertThat(routeTriggers).containsExactly("user_correction");
+        }
         assertThat(capturedRequest.get().domainAgentId()).isEqualTo("child-a");
         assertThat(capturedRequest.get().metadata()).containsExactlyEntriesOf(Map.of("scene", "tax"));
         RuntimeBinding childA = bindings.bindingsForProvider("domain-agent").getFirst();
@@ -170,13 +209,22 @@ class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
         List<ChatEvent> renamed = service.executeRun(user, new ChatCommand(
                         "cmd-parent-a-renamed", null, null, sessionId, null, "web", "继续查询",
                         List.of(), Map.of(), "INTENT_EXPERT", "expert-a",
-                        ChatRunMode.NEXT, null, null, null).withIntentExpertScope(renamedExpertA))
+                        ChatRunMode.NEXT, null, null, null, routeTrigger).withIntentExpertScope(renamedExpertA))
                 .collectList().block();
 
         assertThat(renamed).isNotNull();
         assertThat(renamed)
                 .noneMatch(event -> "selectedIntentExpert".equals(event.payload().get("sourceType")));
-        assertThat(intentCalls).hasValue(1);
+        int callsAfterReselect = Boolean.TRUE.equals(forceReroute) ? 2 : 1;
+        assertThat(intentCalls).hasValue(callsAfterReselect);
+        RuntimeBinding selectedChildA = bindings.bindingsForProvider("domain-agent").stream()
+                .filter(binding -> binding.status() == RuntimeBindingStatus.ACTIVE).findFirst().orElseThrow();
+        if (Boolean.TRUE.equals(forceReroute)) {
+            assertThat(selectedChildA.id()).isNotEqualTo(childA.id());
+            assertThat(routeTriggers).containsExactly("user_correction", "user_correction");
+        } else {
+            assertThat(selectedChildA.id()).isEqualTo(childA.id());
+        }
         assertThat(IntentExpertContext.fromSessionMetadata(
                 sessions.sessions.get(sessionId).metadataJson())).contains(renamedExpertA);
 
@@ -186,8 +234,9 @@ class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
                         ChatRunMode.NEXT, null, null, null, "user_correction"))
                 .collectList().block();
 
-        assertThat(intentCalls).hasValue(2);
-        assertThat(intentAccessNames).containsExactly("expert_a_entry", "expert_a_entry");
+        assertThat(intentCalls).hasValue(callsAfterReselect + 1);
+        assertThat(intentAccessNames).hasSize(callsAfterReselect + 1).containsOnly("expert_a_entry");
+        assertThat(wireAccessNames).hasSize(callsAfterReselect + 1).containsOnly("EX_expert_a_entry");
         assertThat(bindings.bindingsForProvider("domain-agent"))
                 .filteredOn(binding -> binding.status() == RuntimeBindingStatus.ACTIVE)
                 .singleElement()
@@ -198,12 +247,12 @@ class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
         service.executeRun(user, new ChatCommand(
                         "cmd-parent-b", null, null, sessionId, null, "web", "改用专家B",
                         List.of(), Map.of(), "INTENT_EXPERT", "expert-b",
-                        ChatRunMode.NEXT, null, null, null).withIntentExpertScope(expertB))
+                        ChatRunMode.NEXT, null, null, null, routeTrigger).withIntentExpertScope(expertB))
                 .collectList().block();
 
-        assertThat(intentCalls).hasValue(3);
-        assertThat(intentAccessNames).containsExactly(
-                "expert_a_entry", "expert_a_entry", "expert_b_entry");
+        assertThat(intentCalls).hasValue(callsAfterReselect + 2);
+        assertThat(intentAccessNames.getLast()).isEqualTo("expert_b_entry");
+        assertThat(wireAccessNames.getLast()).isEqualTo("EX_expert_b_entry");
         assertThat(capturedRequest.get().domainAgentId()).isEqualTo("child-b");
         assertThat(bindings.bindingsForProvider("domain-agent"))
                 .filteredOn(binding -> binding.id().equals(childA.id()))
@@ -215,6 +264,50 @@ class ChatRuntimeDispatchFlowTest extends ChatFlowTestSupport {
                 .singleElement()
                 .satisfies(binding -> assertThat(IntentExpertContext.fromMetadata(binding.metadata()))
                         .contains(expertB));
+
+        // 上一轮纠偏不成为会话模式；普通追问先续接，子技能拒答后仍在同一专家范围内重意图。
+        refuseNext.set(true);
+        List<ChatEvent> refusalReroute = service.executeRun(user, new ChatCommand(
+                        "cmd-parent-refusal", null, null, sessionId, null, "web", "继续查询",
+                        List.of(), Map.of()))
+                .collectList().block();
+
+        assertThat(intentCalls).hasValue(callsAfterReselect + 3);
+        assertThat(routeTriggers.getLast()).isEqualTo("domain_reject");
+        assertThat(intentAccessNames.getLast()).isEqualTo("expert_b_entry");
+        assertThat(wireAccessNames.getLast()).isEqualTo("EX_expert_b_entry");
+        assertThat(capturedRequest.get().domainAgentId()).isEqualTo("child-after-refusal");
+        assertThat(useCaseCalls).hasValue(0);
+        assertThat(refusalReroute).isNotNull().anyMatch(event -> "run.completed".equals(event.type()));
+        assertThat(refusalReroute)
+                .filteredOn(event -> "intent-result".equals(event.payload().get("sourceType")))
+                .singleElement()
+                .satisfies(event -> assertThat(event.payload().get("sourceExpert"))
+                        .isEqualTo(IntentExpertContext.sourceExpert(expertB)));
+        assertThat(IntentExpertContext.fromSessionMetadata(sessions.sessions.get(sessionId).metadataJson()))
+                .contains(expertB);
+
+        ChatSession sessionBeforeConflict = sessions.sessions.get(sessionId);
+        List<RuntimeBinding> bindingsBeforeConflict = List.copyOf(bindings.bindingsForProvider("domain-agent"));
+        DomainAgentRequest requestBeforeConflict = capturedRequest.get();
+        for (ChatRunStatus status : List.of(ChatRunStatus.RUNNING, ChatRunStatus.CANCELLING)) {
+            Instant now = Instant.now();
+            runs.save(new ChatRun("run-active", "tenant1", "user1", sessionId, status,
+                    null, null, null, null, null, null, null, now, null, Map.of(), now, now));
+            ChatCommand switchWhileActive = new ChatCommand(
+                    "cmd-conflict", null, null, sessionId, null, "web", "切换专家并重新意图",
+                    List.of(), Map.of(), "INTENT_EXPERT", "expert-a",
+                    ChatRunMode.NEXT, null, null, null, "user_correction").withIntentExpertScope(expertA);
+
+            assertThatThrownBy(() -> service.executeRun(user, switchWhileActive).collectList().block())
+                    .isInstanceOf(ActiveRunExistsException.class);
+            // 现有入口会先 touch 会话时间，冲突必须保证专家范围及消息树不变。
+            assertThat(sessions.sessions.get(sessionId)).usingRecursiveComparison()
+                    .ignoringFields("updatedAt").isEqualTo(sessionBeforeConflict);
+            assertThat(bindings.bindingsForProvider("domain-agent")).containsExactlyElementsOf(bindingsBeforeConflict);
+            assertThat(capturedRequest.get()).isSameAs(requestBeforeConflict);
+            assertThat(intentCalls).hasValue(callsAfterReselect + 3);
+        }
     }
 
     @Test

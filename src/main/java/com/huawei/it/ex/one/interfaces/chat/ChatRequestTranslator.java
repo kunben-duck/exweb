@@ -52,7 +52,10 @@ public class ChatRequestTranslator {
         if (Boolean.TRUE.equals(request.forceReroute()) && runMode == ChatRunMode.CONTINUE_INTERACTION) {
             throw new IllegalArgumentException("CONTINUE_INTERACTION 模式不支持 forceReroute");
         }
-        if (Boolean.TRUE.equals(request.forceReroute()) && (hasText(request.targetType()) || hasText(request.targetId()))) {
+        // 聚合专家限定 Intent 范围，并非直连 Runtime；完整专家参数仍由下方校验。
+        if (Boolean.TRUE.equals(request.forceReroute())
+                && (hasText(request.targetType()) || hasText(request.targetId()))
+                && !"INTENT_EXPERT".equalsIgnoreCase(normalizeText(request.targetType()))) {
             throw new IllegalArgumentException("forceReroute=true 时不能同时指定 targetType/targetId");
         }
         // 先清除客户端伪造的内部标记，再装入经过本入口校验的选择摘要；摘要不作为下游路由事实。

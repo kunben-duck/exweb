@@ -221,7 +221,12 @@ DomainAgent binding，历史 `RESUMABLE` Relay session 保留。
 `targetId`。服务端在会话锁内保存该范围、取消旧专家的ACTIVE子Binding并受理Run，随后跳过用例库，
 只通过该专家的Intent入口选择DomainAgent、Relay Domain Expert或Delegate子技能。后续普通轮次无需重传
 专家参数：存在ACTIVE子Binding时直接续接，否则仍使用保存的父专家入口重新意图；`forceReroute=true`
-只清除当前子Binding并在同一父专家范围内重新选择。显式选择普通DomainAgent或固定Relay专家会退出父专家
+只清除当前子Binding并在本轮选定的父专家范围内重新选择。完整`INTENT_EXPERT`请求也可携带该开关，
+支持首次选择、重复选择及切换专家；`false/null/未传`优先续接当前专家的ACTIVE子Binding，无Binding或
+子DomainAgent拒答时仍可调用专家Intent。开关仅影响本次请求，不保存为会话模式；`true`可能再次命中原技能，
+失败沿用现有处理，不新增旧Binding恢复。`NEXT/EDIT_USER/REGENERATE_ASSISTANT`支持此开关，
+`CONTINUE_INTERACTION`或显式`DOMAIN_AGENT/DOMAIN_EXPERT`不能与`forceReroute=true`同时提交。
+显式选择普通DomainAgent或固定Relay专家会退出父专家
 范围。子DomainAgent和子Relay专家正常完成后保持ACTIVE，Delegate仍转为RESUMABLE；不同父专家及通用
 路由的Binding不会交叉复用。`stream-status.selectedExpert`返回当前父专家，assistant `skillId`仍是实际子技能。
 DomainAgent 下游请求体会把 `metadata` 作为业务扩展，但服务端保留字段 `runId/messageId/skillId/query/sessionId`

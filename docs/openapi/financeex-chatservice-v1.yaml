@@ -253,6 +253,20 @@ paths:
                     lastIntentRejectReason:
                       lastIntent: 智能文档
                       domainRejectMessage: 用户主动要求重新路由
+              intentExpertForceReroute:
+                summary: 在指定聚合专家范围内强制重新意图
+                description: 首次选择、重复选择或切换专家均可使用；取消当前子Binding续接资格，不保证选中不同技能。
+                value:
+                  sessionId: session_001
+                  runMode: NEXT
+                  message: 分析本期税务风险
+                  targetType: INTENT_EXPERT
+                  targetId: tax-expert
+                  selectedExpert:
+                    expertId: tax-expert
+                    expertName: 税务专家
+                  intentAccessName: tax_expert_entry
+                  forceReroute: true
               intentClarificationAnswer:
                 summary: 普通 Intent 澄清回答
                 value:
@@ -2531,7 +2545,13 @@ components:
           type: boolean
           nullable: true
           default: false
-          description: 仅 NEXT 使用；直接重新调用 Intent，不自动产生二次确认
+          description: >
+            NEXT/EDIT_USER/REGENERATE_ASSISTANT可用；true取消当前Binding续接资格并重新路由，
+            不自动产生二次确认。允许与完整合法的INTENT_EXPERT参数同时提交，使用本轮选定专家的Intent入口；
+            已选择专家的会话可省略完整专家参数并继续使用保存的范围。false/null/未传时优先续接当前范围内
+            的ACTIVE Binding，不存在或DomainAgent拒答时仍可调用Intent。开关仅影响本次请求，不保存为会话模式；
+            true可能再次命中原技能，失败沿用现有处理，不新增旧Binding恢复。
+            DOMAIN_AGENT/DOMAIN_EXPERT显式目标及CONTINUE_INTERACTION仍不能与true同时提交。
         interactionId:
           type: string
           maxLength: 64

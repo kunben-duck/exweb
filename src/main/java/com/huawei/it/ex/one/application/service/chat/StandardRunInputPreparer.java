@@ -60,7 +60,7 @@ final class StandardRunInputPreparer {
         boolean directBypass = admissionCoordinator.transactionalAdmissionAvailable()
                 && directRuntimeWaitBypass(identified, explicitRuntimeTarget);
         boolean forceReroute = forceReroute(identified);
-        if (forceReroute && explicitRuntimeTarget != null) {
+        if (forceReroute && explicitRuntimeTarget != null && !explicitRuntimeTarget.intentExpert()) {
             throw new IllegalArgumentException(
                     "forceReroute=true 时不能同时指定 targetType/targetId");
         }

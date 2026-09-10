@@ -1316,7 +1316,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | `parentMessageId` | string | 否 | `NEXT` 模式显式父节点；为空时使用会话 `currentLeafMessageId` |
 | `editedMessageId` | string | EDIT_USER 必填 | 被编辑的未锁定 user 消息 |
 | `regeneratedMessageId` | string | REGENERATE_ASSISTANT 必填 | 被重新生成的未锁定 assistant 消息 |
-| `forceReroute` | boolean | 否 | 非必填，默认 `false`。仅普通 run 可传；`true` 表示用户主动要求重新路由，后端会忽略当前 active DomainAgent binding 并自动组装内部用户纠正触发原因。多入口前端切换入口时应与新的`intentAccessName`一起提交。 |
+| `forceReroute` | boolean | 否 | `NEXT/EDIT_USER/REGENERATE_ASSISTANT`可传；`true`取消当前Binding续接资格并重新路由，内部触发原因为`user_correction`。允许与完整`INTENT_EXPERT`参数一起提交，在本轮专家范围内重新意图；显式`DOMAIN_AGENT/DOMAIN_EXPERT`和`CONTINUE_INTERACTION`仍不能与`true`组合。`false/null/未传`优先使用当前范围的ACTIVE Binding，无Binding或DomainAgent拒答时仍可调用Intent。仅本次请求生效。多入口前端切换普通入口时应与新的`intentAccessName`一起提交。 |
 | `interactionId` | string | CONTINUE_INTERACTION 必填 | `run.waiting_user` 或 `stream-status` 返回的 Interaction 请求 ID |
 | `interactionAction` | string | 否 | 仅 `AMBIGUOUS_ROUTE + CONTINUE_INTERACTION` 支持 `AUTO_SELECT`，表示立即由服务端选择最高 confidence 的有效候选；不能与 `targetType/targetId`、答案或附件同时提交 |
 | `approved` | boolean | 审批/确认类必填 | 澄清类可省略，服务端默认 true |
@@ -3446,7 +3446,8 @@ DomainAgent binding 返回值。
 
 ### 聚合意图专家与子技能 Binding
 
-聚合意图专家不是一个直接调用的 Runtime。首次选择或从专家A切换到专家B时提交完整父专家参数：
+聚合意图专家不是一个直接调用的 Runtime。首次选择或从专家A切换到专家B时提交完整父专家参数；
+也允许同时提交`forceReroute=true`，在指定专家范围内重新识别：
 
 ```json
 {
@@ -3460,6 +3461,7 @@ DomainAgent binding 返回值。
     "expertName": "税务专家"
   },
   "intentAccessName": "tax_expert_entry",
+  "forceReroute": true,
   "metadata": {}
 }
 ```
@@ -3471,8 +3473,19 @@ DomainAgent、Relay Domain Expert或Delegate。首次选择和身份切换会先
 Relay业务metadata，assistant metadata中的`skillId`仍记录实际子技能。
 
 后续普通提问只提交`sessionId/message/metadata`即可。ACTIVE子DomainAgent或子Relay专家会直接续接；
-没有ACTIVE子Binding时跳过用例库并继续使用父专家入口调用Intent。`forceReroute=true`会取消当前子Binding，
-但仍在相同父专家范围内重新选择。显式选择普通`DOMAIN_AGENT`或固定`DOMAIN_EXPERT`会退出父专家范围。
+没有ACTIVE子Binding时跳过用例库并继续使用父专家入口调用Intent。需要重新识别时，可仅增加
+`forceReroute=true`，无需重传完整专家参数。
+
+| `forceReroute` | 专家范围内的本轮行为 |
+| --- | --- |
+| `true` | 取消当前Binding续接资格，通过本轮选定或会话保存的专家入口重新意图 |
+| `false`、`null`或未传 | 优先续接当前专家范围内的ACTIVE Binding；不存在时调用该专家Intent |
+
+完整参数重复选择同一专家且开关为`true`时也会重新意图；切换不同专家时，无论开关取值如何都不能复用
+旧专家Binding。该开关不保存为会话模式，下一轮未传时恢复默认续接策略。`false`不禁止Intent，子DomainAgent
+拒答时继续按现有状态机在相同专家入口重意图；`true`也不保证命中不同技能，失败沿用既有处理，不新增旧Binding恢复。
+开关支持`NEXT/EDIT_USER/REGENERATE_ASSISTANT`，`CONTINUE_INTERACTION`仍不允许`true`。
+显式选择普通`DOMAIN_AGENT`或固定`DOMAIN_EXPERT`会退出父专家范围，且不能同时提交`forceReroute=true`。
 切换父专家时会在会话准入事务内取消旧专家的ACTIVE子Binding并保存新范围；存在运行中Run时仍返回409，
 不会自动stop。页面刷新通过`stream-status.selectedExpert`恢复父专家展示。
 

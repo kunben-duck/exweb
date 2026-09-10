@@ -357,7 +357,7 @@ public class RelayRuntimeResponseNormalizer {
     private ChatEvent mappedPresentationEvent(String runId, String sessionId, JsonNode root,
                                               String sourceType, String normalizedType) {
         return switch (normalizedType) {
-            case "approval-request", "expert-rejection" ->
+            case "approval-request", "expert-rejection", "skill-card-broadcast" ->
                     RuntimeEvent.card(runId, sessionId, relayPayload(root, sourceType));
             case "url-moderation", "url-moderation-result", "search-result-groups", "content-references",
                     "citations", "sources", "references", "safe-urls" ->

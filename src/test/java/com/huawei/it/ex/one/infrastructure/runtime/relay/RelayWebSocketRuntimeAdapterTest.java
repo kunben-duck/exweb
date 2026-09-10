@@ -55,6 +55,31 @@ class RelayWebSocketRuntimeAdapterTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
+    void skillBroadcastCardsDoNotTerminateTheTurnAsQuestionnaireRequests() {
+        RelayWebSocketRuntimeAdapter adapter = adapter(new FakeWebSocketClient(List.of(
+                "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}",
+                "{\"type\":\"relay-start\",\"content\":\"starting\"}",
+                RelaySkillCardTestFrames.URL_CARD,
+                RelaySkillCardTestFrames.SCENE_CARD,
+                "{\"type\":\"agent\",\"content\":\"继续执行\",\"is_streaming\":true}",
+                "{\"type\":\"session-state\",\"state\":\"completed\"}"
+        )));
+
+        StepVerifier.create(adapter.query(request(null, RuntimeForwardHeaders.empty())))
+                .expectNextMatches(event -> "runtime.metadata".equals(event.type()))
+                .expectNextMatches(event -> "runtime.progress".equals(event.type()))
+                .expectNextMatches(event -> "runtime.card".equals(event.type())
+                        && "url".equals(event.payload().get("cardType")))
+                .expectNextMatches(event -> "runtime.card".equals(event.type())
+                        && "diyCardScene".equals(event.payload().get("cardType")))
+                .expectNextMatches(event -> "message.delta".equals(event.type())
+                        && "继续执行".equals(event.payload().get("delta")))
+                .expectNextMatches(event -> "runtime.metadata".equals(event.type()))
+                .expectNextMatches(event -> "message.completed".equals(event.type()))
+                .verifyComplete();
+    }
+
+    @Test
     void sensitiveInformationRelayKeepsAnswerStreamAndFiltersProcessEvents() {
         List<String> frames = List.of(
                 "{\"type\":\"session-ready\",\"session_id\":\"relay-session-1\"}",
@@ -64,6 +89,8 @@ class RelayWebSocketRuntimeAdapterTest {
                 "{\"type\":\"tool-execution\",\"content\":\"tool\"}",
                 "{\"type\":\"citations\",\"content\":\"reference\"}",
                 "{\"type\":\"expert_rejection\",\"content\":\"card\"}",
+                RelaySkillCardTestFrames.URL_CARD,
+                RelaySkillCardTestFrames.SCENE_CARD,
                 "{\"type\":\"future-process-event\",\"content\":\"unknown\"}",
                 "{\"type\":\"agent\",\"content\":\"流式回答\",\"is_streaming\":true}",
                 "{\"type\":\"generate-response\",\"content\":\"最终回答\"}",

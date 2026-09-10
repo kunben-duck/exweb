@@ -878,6 +878,52 @@ MCP 工具返回 `structuredContent` 时，除 `tool-execution` 外还会推送�
 
 ### 3.6 响应输出事件
 
+#### skill-card-broadcast：技能展示卡片
+
+Relay 在进入本轮业务输出阶段后，可以分别广播卡片资源与卡片数据，以下是两条独立帧的示例。现有初始化过滤和业务开始判断不变，广播帧本身不作为业务开始信号：
+
+```json
+{
+  "type": "skill-card-broadcast",
+  "parent_instance_id": "domain_expert_agent_xxx",
+  "cardType": "url",
+  "cardSources": ["cardUrl"],
+  "cardUrl": "https://cards.example.test/index.js",
+  "intent": "ActuaryCaseCheck",
+  "domainAgentId": "skill_xxx",
+  "isSkillDiy": true,
+  "session_id": "relay_session_xxx",
+  "version_id": 10
+}
+```
+
+```json
+{
+  "type": "skill-card-broadcast",
+  "parent_instance_id": "domain_expert_agent_xxx",
+  "message": "请勾选要生成案例文章的作战任务：",
+  "min_selections": 1,
+  "cardType": "diyCardScene",
+  "cardSources": ["diyCardScene"],
+  "diyCardScene": {
+    "stepName": "selectTasks",
+    "dataList": [
+      {"item_id": "T001", "title": "案例任务", "selected": false}
+    ]
+  },
+  "isSkillDiy": true,
+  "session_id": "relay_session_xxx",
+  "version_id": 11
+}
+```
+
+- 每帧映射为一条 ChatService `runtime.card`，按到达顺序保留，不合并卡片，也不生成正文或额外终态。
+- payload 沿用现有 Relay 脱敏规则，补充 `source=relay`、`sourceType=skill-card-broadcast` 和 `runtimeSessionId`；原始卡片字段、`message/min_selections/isSkillDiy`、会话、实例、版本以及嵌套业务数据保持原类型和顺序。下游版本号不替代 ChatService 的事件 sequence。
+- 此类型仅表示卡片展示。即使携带选项或 `min_selections`，也不触发 Ask User；问卷等待仍使用 `approval-request(operation_type=questionnaire)`。
+- FULL 留存模式下，两帧各自生成可见的 `CARD` Part，`sourceType=skill-card-broadcast`、`channel=card`、`displayHint=inline`、`visible=true`。实时推送和 Event Resume 均使用 `runtime.card`；单轮及多消息分享会包含这些可见 Part 和脱敏后的完整业务 payload。
+- no-store 以及敏感信息 Relay 的 `answer-stream-only` 过滤规则不变。修复仅影响上线后接收的新事件，不回填旧的隐藏 Part 或已有固定分享快照。
+- 后端保证历史和分享响应包含卡片；分享页仍需支持 `cardType=url/diyCardScene`，外部脚本加载与卡片交互需要前端联调验证。
+
 #### generate-response — 最终响应
 
 ```json
@@ -1206,6 +1252,7 @@ Resume 时，若客户端传入的 `project_home` 与存储值不一致，后端
 | `subagent-plan-created` | Plan | Sub-Agent 计划创建 |
 | `subagent-subtask` | Plan | 子任务状态更新 |
 | `approval-request` | 审批 | 审批请求/澄清问 |
+| `skill-card-broadcast` | 卡片 | 技能展示卡片，映射为 `runtime.card`，不触发问卷等待 |
 | `approval-result` | 审批 | 审批结果确认 |
 | `clarified-query` | 审批 | 澄清后的查询 |
 | `generate-response` | 输出 | 最终响应 |

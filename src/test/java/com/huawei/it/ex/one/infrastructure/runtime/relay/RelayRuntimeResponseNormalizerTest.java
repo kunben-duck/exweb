@@ -10,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.huawei.it.ex.one.domain.chat.ChatEvent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -53,11 +54,34 @@ class RelayRuntimeResponseNormalizerTest {
                 "runtime.thinking", "agent-reasoning thinking-operation-start thinkink-operation-start "
                         + "thinking-content-update thinking-operation-end thinking-operation-finish",
                 "runtime.tool", "tool-call-streaming tool-execution tool-structured-result",
-                "runtime.card", "approval-request expert-rejection",
+                "runtime.card", "approval-request expert-rejection skill-card-broadcast",
                 "runtime.reference", "url-moderation url-moderation-result search-result-groups "
                         + "content-references citations sources references safe-urls")
                 .entrySet().stream().flatMap(entry -> Stream.of(entry.getValue().split(" "))
                         .map(type -> Arguments.of(type, entry.getKey())));
+    }
+
+    @ParameterizedTest
+    @MethodSource("skillCardFrames")
+    void skillBroadcastPreservesCardPayloadAndDoesNotEmitAnswerOrTerminal(String frame) throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        ObjectNode expected = (ObjectNode) mapper.readTree(frame);
+        expected.put("source", "relay");
+        expected.put("sourceType", "skill-card-broadcast");
+        expected.put("runtimeSessionId", "relay-session-1");
+        ((ObjectNode) expected.get("metadata")).put("authorization", "[REDACTED]");
+
+        assertThat(normalizer.normalize("run1", "session1", frame)).singleElement().satisfies(event -> {
+            assertThat(event.type()).isEqualTo("runtime.card");
+            assertThat(event.runId()).isEqualTo("run1");
+            assertThat(event.sessionId()).isEqualTo("session1");
+            assertThat(event.sequence()).isZero();
+            assertThat(mapper.<ObjectNode>valueToTree(event.payload())).isEqualTo(expected);
+        });
+    }
+
+    private static Stream<String> skillCardFrames() {
+        return Stream.of(RelaySkillCardTestFrames.URL_CARD, RelaySkillCardTestFrames.SCENE_CARD);
     }
 
     @Test

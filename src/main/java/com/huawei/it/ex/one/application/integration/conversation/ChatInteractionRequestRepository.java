@@ -43,6 +43,9 @@ public interface ChatInteractionRequestRepository {
      */
     Optional<ChatInteractionRequest> findWaitingBySession(String tenantId, String userId, String sessionId);
 
+    /** 只读检查 WAITING/RESPONDING，包含已认领但尚未创建续跑 Run 的窗口。 */
+    boolean hasOpenBySession(String tenantId, String userId, String sessionId);
+
     /**
      * 按来源 run 查询该轮产生的最新 Interaction。
      *

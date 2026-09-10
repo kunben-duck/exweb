@@ -66,6 +66,21 @@ class MyBatisChatMessageStoreTest {
     }
 
     @Test
+    void historicalPathCheckUsesOnlyLightweightQueryWithBoundedTimeout() throws NoSuchMethodException {
+        ChatMessageMapper mapper = mock(ChatMessageMapper.class);
+        when(mapper.isMessageOnPath("tenant1", "user1", "session1", "leaf", "ancestor")).thenReturn(true);
+        MyBatisChatMessageStore store = store(mapper, 100, DataSize.ofMegabytes(1));
+
+        assertThat(store.isMessageOnPath("tenant1", "user1", "session1", "leaf", "ancestor")).isTrue();
+        assertThat(store.isMessageOnPath("tenant1", "user1", "session1", null, "ancestor")).isFalse();
+        assertThat(store.isMessageOnPath("tenant1", "user1", "session1", "leaf", " ")).isFalse();
+        verify(mapper).isMessageOnPath("tenant1", "user1", "session1", "leaf", "ancestor");
+        verifyNoMoreInteractions(mapper);
+        assertReadOnlyMemoryQuery(MyBatisChatMessageStore.class.getMethod(
+                "isMessageOnPath", String.class, String.class, String.class, String.class, String.class));
+    }
+
+    @Test
     void assistantMetadataUpdateDoesNotWriteContentOrParts() {
         ChatMessageMapper mapper = mock(ChatMessageMapper.class);
         when(mapper.updateAssistantMetadata(any())).thenReturn(1);

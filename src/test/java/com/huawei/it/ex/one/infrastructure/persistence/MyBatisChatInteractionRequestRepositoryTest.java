@@ -5,6 +5,10 @@
 package com.huawei.it.ex.one.infrastructure.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionStatus;
@@ -20,6 +24,19 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 class MyBatisChatInteractionRequestRepositoryTest {
+    @Test
+    void openInteractionCheckUsesOnlyOwnerScopedExistenceQuery() {
+        ChatInteractionRequestMapper mapper = mock(ChatInteractionRequestMapper.class);
+        when(mapper.hasOpenBySession("tenant1", "user1", "session1")).thenReturn(true);
+        MyBatisChatInteractionRequestRepository repository =
+                new MyBatisChatInteractionRequestRepository(mapper, new ObjectMapper());
+
+        assertThat(repository.hasOpenBySession("tenant1", "user1", "session1")).isTrue();
+        assertThat(repository.hasOpenBySession("tenant1", "user1", " ")).isFalse();
+        verify(mapper).hasOpenBySession("tenant1", "user1", "session1");
+        verifyNoMoreInteractions(mapper);
+    }
+
     @Test
     void readsLegacyDomainAgentSwitchTypeAsRouteSwitchConfirmation() {
         ChatInteractionRequestRow row = waitingRow("DOMAIN_AGENT_SWITCH_CONFIRMATION");

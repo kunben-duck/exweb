@@ -75,6 +75,7 @@ DomainAgent `isSaveSession` 对 assistant 历史投影的控制边界、企业�
 - `GET /v1/chat/sessions/{sessionId}/stream-status`：查询当前会话最新事件序号、active run、`activeStreamTopicId`、是否可取消、是否等待用户澄清输入，以及当前 `bindingProvider/bindingTargetId/bindingIntentName/bindingRouteSource` 等绑定摘要。等待态返回 `waitingSourceRunId`，供前端调用统一 stop；`AMBIGUOUS_ROUTE` 等待态还会返回 `autoSelectAt/autoSelectTimeoutMs`。
 - `POST /v1/chat/intent-candidates`：校验当前用户的user `messageId`后调用Intent置信度接口，直接返回有序候选数组；复用Intent单次超时和最大重试次数，但只重试网络异常、HTTP 408/5xx，并使用候选专用并发闸门、鉴权线程池和退避，不占用普通Intent流式鉴权资源。候选结果不缓存、不持久化。
 - `POST /v1/chat/runs/{sourceRunId}/switch-domain-agent`：串行停止source Run后，复用其可信user消息和附件直连候选DomainAgent；不重复创建user消息。replacement Run在`run.started`后有界回放source Run的Intent路由过程与技能命中，再输出`candidate-skill-switch`标识和新技能选择；回放按来源run/sequence去重，最多32条、256KiB，不复制正文、卡片、引用、Runtime过程、拒答或终态。多入口前端应显式提交当前`intentAccessName`，该值不参与首次直连，但供新技能在同一replacement Run内拒答后重新调用Intent；不会继承source Run入口。成功后返回replacement Run的`runId/streamTopicId`，source已有assistant时形成A/B版本。
+- 历史候选切换也支持当前路径中的非末尾回答（来源Run已终态且有可编辑assistant）。受理后从原user分叉，新答案成为当前路径；后续旧问答保留在原分支，不在默认消息列表展示，可用版本/消息树/路径选择恢复。存在其他活动Run、开放Interaction或准备后路径变化时返回409，不停止无关任务；最新一轮保持原Stop行为，Binding继续沿用候选切换规则。
 - `POST /v1/chat/intent-preference-corrections`：在Run成功受理后独立记录候选技能或模糊意图的人工选择；同一用户、Intent入口和source消息只保留最后一次选择，写入失败不回滚已启动的Run。
 - `POST /v1/chat/runs/{runId}/stop`：运行态传 active runId；等待态传 `waitingSourceRunId`。等待态 stop 取消当前 Interaction，并对其关联的 Relay/DomainAgent 执行 best-effort 真实取消；历史 run-A 仍保留 `WAITING_USER`。
 - `POST /v1/chat/messages/{messageId}/feedback`：提交或切换 assistant 消息点赞/点踩。

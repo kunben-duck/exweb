@@ -255,6 +255,17 @@ public interface ChatMessageRepository {
         return findPathToMessage(tenantId, userId, sessionId, leafMessageId);
     }
 
+    /** 判断指定消息是否位于 leaf 的祖先路径上；生产实现只递归读取 ID 和父 ID。 */
+    default boolean isMessageOnPath(String tenantId, String userId, String sessionId,
+                                    String leafMessageId, String messageId) {
+        if (leafMessageId == null || leafMessageId.isBlank() || messageId == null || messageId.isBlank()) {
+            return false;
+        }
+        return findPathNodesToMessage(tenantId, userId, sessionId, leafMessageId).stream()
+                .anyMatch(message -> messageId.equals(message.id()) && tenantId.equals(message.tenantId())
+                        && userId.equals(message.userId()) && sessionId.equals(message.sessionId()));
+    }
+
     /**
      * 保存消息附件引用。
      */

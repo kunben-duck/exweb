@@ -739,6 +739,30 @@ class MyBatisXmlMapperConsistencyTest {
                 .doesNotContain("route_source &lt;&gt; 'front-selected'");
     }
 
+    @Test
+    void historicalCandidatePathQueryIsLightweightOwnerScopedAndCycleSafe() throws IOException {
+        String mapper = Files.readString(MAPPER_XML_ROOT.resolve("memory/ChatMessageMapper.opengauss.xml"));
+        int start = mapper.indexOf("<select id=\"isMessageOnPath\"");
+        String query = mapper.substring(start, mapper.indexOf("</select>", start));
+        assertThat(query).contains("timeout=\"2\"", "WITH RECURSIVE", "SELECT m.id, m.parent_message_id",
+                        "UNION", "SELECT EXISTS", "child.id != #{messageId}")
+                .doesNotContain("UNION ALL", "chatMessageColumns", "metadata_json", "content",
+                        "fin_ex_chat_message_part_t", "fin_ex_chat_message_attachment_t");
+        for (String boundary : List.of("m.tenant_id = #{tenantId}", "m.user_id = #{userId}", "m.session_id = #{sessionId}")) {
+            assertThat(query.split(Pattern.quote(boundary), -1)).hasSize(3);
+        }
+    }
+
+    @Test
+    void historicalCandidateOpenCheckIncludesRespondingWithoutReadingPayload() throws IOException {
+        String mapper = Files.readString(MAPPER_XML_ROOT.resolve("persistence/ChatInteractionRequestMapper.opengauss.xml"));
+        int start = mapper.indexOf("<select id=\"hasOpenBySession\"");
+        String query = mapper.substring(start, mapper.indexOf("</select>", start));
+        assertThat(query).contains("SELECT EXISTS", "tenant_id = #{tenantId}", "user_id = #{userId}",
+                        "session_id = #{sessionId}", "status IN ('WAITING', 'RESPONDING')", "timeout=\"2\"")
+                .doesNotContain("interactionColumns", "payload", "UPDATE");
+    }
+
     private List<String> validateXmlMapper(Path xmlFile) {
         try {
             String xml = Files.readString(xmlFile);

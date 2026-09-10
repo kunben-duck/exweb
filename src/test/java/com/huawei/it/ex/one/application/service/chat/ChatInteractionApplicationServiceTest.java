@@ -87,6 +87,24 @@ class ChatInteractionApplicationServiceTest {
     }
 
     @Test
+    void openCheckIncludesClaimedInteractionWithoutChangingItsState() {
+        MutableInteractionRepository repository = new MutableInteractionRepository();
+        ChatInteractionRequest waiting = repository.insert(waitingRequest(ChatInteractionType.INTENT_CLARIFICATION));
+        ChatInteractionApplicationService service = new ChatInteractionApplicationService(repository,
+                (bizType, context) -> bizType + "_fixed", new PermissionChecker(), new ChatInteractionProperties());
+
+        assertThat(service.hasOpen(user(), waiting.sessionId())).isTrue();
+        service.claimInteractionResponse(new ChatInteractionResponseCommand(
+                user(), waiting.id(), null, null, Map.of("问题", "答案"), Map.of()), "run-continue");
+        ChatInteractionRequest claimed = repository.requests.get(waiting.id());
+        assertThat(service.hasOpen(user(), waiting.sessionId())).isTrue();
+        assertThat(repository.requests.get(waiting.id())).isSameAs(claimed);
+        assertThat(service.hasOpen(user(), "other-session")).isFalse();
+        assertThat(service.hasOpen(new UserContext("other-tenant", user().ownerUserId(), "Other"), waiting.sessionId()))
+                .isFalse();
+    }
+
+    @Test
     void intentClarificationResponseRejectsBlankAnswersBeforeClaim() {
         MutableInteractionRepository repository = new MutableInteractionRepository();
         ChatInteractionRequest waiting = waitingRequest(ChatInteractionType.INTENT_CLARIFICATION);
@@ -259,6 +277,11 @@ class ChatInteractionApplicationServiceTest {
 
     private static class UnusedInteractionRepository implements ChatInteractionRequestRepository {
         @Override
+        public boolean hasOpenBySession(String tenantId, String userId, String sessionId) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public ChatInteractionRequest insert(ChatInteractionRequest request) {
             throw new UnsupportedOperationException();
         }
@@ -312,6 +335,13 @@ class ChatInteractionApplicationServiceTest {
     private static class MutableInteractionRepository implements ChatInteractionRequestRepository {
         private final Map<String, ChatInteractionRequest> requests = new java.util.HashMap<>();
         private int claimCalls;
+
+        @Override
+        public boolean hasOpenBySession(String tenantId, String userId, String sessionId) {
+            return requests.values().stream().anyMatch(request -> tenantId.equals(request.tenantId())
+                    && userId.equals(request.userId()) && sessionId.equals(request.sessionId())
+                    && (request.waiting() || request.status() == ChatInteractionStatus.RESPONDING));
+        }
 
         @Override
         public ChatInteractionRequest insert(ChatInteractionRequest request) {

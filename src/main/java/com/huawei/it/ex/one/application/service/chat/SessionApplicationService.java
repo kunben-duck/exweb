@@ -1189,6 +1189,18 @@ public class SessionApplicationService implements ChatSessionFacade {
             String userMessageId,
             String assistantMessageId,
             String reusedAssistantSourceRunId) {
+        return prepareCandidateSwitchPlan(user, session, sourceRunId, userMessageId, assistantMessageId,
+                reusedAssistantSourceRunId, null);
+    }
+
+    ChatRunMessagePlan prepareCandidateSwitchPlan(
+            UserContext user,
+            ChatSession session,
+            String sourceRunId,
+            String userMessageId,
+            String assistantMessageId,
+            String reusedAssistantSourceRunId,
+            String expectedCurrentLeafMessageId) {
         ChatMessage userMessage = requireMessageInSession(session, userMessageId);
         ensureUnlockedUserMessage(userMessage, "候选技能关联消息");
         ChatMessage sourceAssistant = null;
@@ -1207,7 +1219,14 @@ public class SessionApplicationService implements ChatSessionFacade {
         String currentLeaf = session.currentLeafMessageId();
         boolean currentUser = userMessage.id().equals(currentLeaf);
         boolean currentAssistant = sourceAssistant != null && sourceAssistant.id().equals(currentLeaf);
-        if (!currentUser && !currentAssistant) {
+        // 历史分叉必须在 Session 锁内再次证明路径；准备后的路径切换不能被迟到请求覆盖。
+        boolean validPath = expectedCurrentLeafMessageId == null
+                ? currentUser || currentAssistant
+                : expectedCurrentLeafMessageId.equals(currentLeaf)
+                && sourceAssistant != null
+                && messageRepository.isMessageOnPath(user.tenantId(), user.ownerUserId(), session.id(),
+                        currentLeaf, sourceAssistant.id());
+        if (!validPath) {
             throw CandidateSwitchConflictException.staleSource(sourceRunId);
         }
         sessionRepository.updateCurrentLeaf(

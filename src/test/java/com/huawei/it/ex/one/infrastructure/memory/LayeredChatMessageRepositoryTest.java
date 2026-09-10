@@ -6,6 +6,11 @@ package com.huawei.it.ex.one.infrastructure.memory;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
 
 import com.huawei.it.ex.one.application.config.ChatStreamProperties;
 import com.huawei.it.ex.one.application.config.MemoryProperties;
@@ -24,6 +29,20 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 class LayeredChatMessageRepositoryTest {
+    @Test
+    void historicalPathCheckBypassesRedisAndFullMessageLoading() {
+        RedisShortTermMemoryCache cache = mock(RedisShortTermMemoryCache.class);
+        MyBatisChatMessageStore database = mock(MyBatisChatMessageStore.class);
+        when(database.isMessageOnPath("tenant1", "user1", "session1", "leaf", "ancestor")).thenReturn(true);
+        LayeredChatMessageRepository repository = new LayeredChatMessageRepository(
+                cache, database, new ShortTermMemoryStorageProperties());
+
+        assertThat(repository.isMessageOnPath("tenant1", "user1", "session1", "leaf", "ancestor")).isTrue();
+        verify(database).isMessageOnPath("tenant1", "user1", "session1", "leaf", "ancestor");
+        verifyNoMoreInteractions(database);
+        verifyNoInteractions(cache);
+    }
+
     @Test
     void databaseSaveUpdatesRedisOnlyAfterTransactionCommit() {
         FakeRedisCache cache = new FakeRedisCache();

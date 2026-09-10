@@ -48,6 +48,18 @@ public interface ChatInteractionRequestMapper {
                                             @Param("sessionId") String sessionId);
 
     /**
+     * 判断是否仍有等待或响应中的请求，不读取 payload 或更新过期状态。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @return 是否存在 WAITING 或 RESPONDING 请求。
+     */
+    boolean hasOpenBySession(@Param("tenantId") String tenantId,
+                            @Param("userId") String userId,
+                            @Param("sessionId") String sessionId);
+
+    /**
      * 按来源 run 查询最新 Interaction，供等待态 stop 精确定位。
      *
      * @param tenantId 租户标识。

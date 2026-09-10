@@ -434,6 +434,17 @@ public class MyBatisChatMessageStore {
                 .toList();
     }
 
+    @Transactional(readOnly = true,
+            timeoutString = "${financeex.memory.short-term.storage.database-query-timeout-seconds:2}")
+    public boolean isMessageOnPath(String tenantId, String userId, String sessionId,
+                                   String leafMessageId, String messageId) {
+        if (tenantId == null || userId == null || sessionId == null
+                || leafMessageId == null || leafMessageId.isBlank() || messageId == null || messageId.isBlank()) {
+            return false;
+        }
+        return mapper.isMessageOnPath(tenantId, userId, sessionId, leafMessageId, messageId);
+    }
+
     public List<ChatMessageAttachment> findAttachments(String tenantId, String userId, String messageId) {
         return mapper.findAttachmentsByMessage(tenantId, userId, messageId).stream()
                 .map(this::toAttachmentDomain)

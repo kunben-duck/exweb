@@ -1724,6 +1724,12 @@ abstract class ChatFlowTestSupport {
         final AtomicInteger markWaitingForRunCalls = new AtomicInteger();
         final AtomicInteger claimCalls = new AtomicInteger();
 
+        @Override public boolean hasOpenBySession(String tenantId, String userId, String sessionId) {
+            return requests.values().stream().anyMatch(request -> tenantId.equals(request.tenantId())
+                    && userId.equals(request.userId()) && sessionId.equals(request.sessionId())
+                    && (request.waiting() || request.status() == ChatInteractionStatus.RESPONDING));
+        }
+
         @Override public ChatInteractionRequest insert(ChatInteractionRequest request) {
             requests.put(request.id(), request);
             return request;

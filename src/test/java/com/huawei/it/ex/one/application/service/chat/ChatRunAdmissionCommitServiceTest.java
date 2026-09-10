@@ -5,17 +5,24 @@
 package com.huawei.it.ex.one.application.service.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.huawei.it.ex.one.application.facade.ResolvedChatAttachments;
 import com.huawei.it.ex.one.application.integration.agent.IntentExpertContext;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService;
 import com.huawei.it.ex.one.application.service.runtime.RuntimeBindingApplicationService.AdmissionCancellation;
 import com.huawei.it.ex.one.domain.auth.UserContext;
+import com.huawei.it.ex.one.domain.chat.ActiveRunExistsException;
+import com.huawei.it.ex.one.domain.chat.CandidateSwitchConflictException;
 import com.huawei.it.ex.one.domain.chat.ChatCommand;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionRequest;
 import com.huawei.it.ex.one.domain.chat.ChatInteractionType;
@@ -23,6 +30,7 @@ import com.huawei.it.ex.one.domain.chat.ChatMessage;
 import com.huawei.it.ex.one.domain.chat.ChatRun;
 import com.huawei.it.ex.one.domain.chat.ChatRunMessagePlan;
 import com.huawei.it.ex.one.domain.chat.ChatRunMode;
+import com.huawei.it.ex.one.domain.chat.ChatRunStatus;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.IntentExpertScope;
 import com.huawei.it.ex.one.domain.runtime.RuntimeBinding;
@@ -187,6 +195,92 @@ class ChatRunAdmissionCommitServiceTest {
 
         assertThat(result.cancelledBindingsForCacheSync()).containsExactly(cancellation);
         assertThat(result.restorableAdmissionCancellations()).containsExactly(cancellation);
+    }
+
+    @Test
+    void historicalCandidateAdmissionChecksOpenInteractionBeforeAnyMutation() {
+        Fixture fixture = fixture();
+        var request = historicalRequest(fixture);
+        when(fixture.interactionService().hasOpen(USER, "session1")).thenReturn(true);
+
+        assertThatThrownBy(() -> fixture.service().commitCandidateSwitch(request))
+                .isInstanceOf(CandidateSwitchConflictException.class);
+
+        verify(fixture.sessionService(), never()).prepareCandidateSwitchPlan(
+                any(), any(), any(), any(), any(), any(), any());
+        verify(fixture.runService(), never()).insertRunning(any());
+        verify(fixture.interactionService(), never()).cancelOpenBySessionAndCount(any(), any());
+        verifyNoInteractions(fixture.bindingService());
+    }
+
+    @Test
+    void historicalCandidateAdmissionRechecksPathBeforeInsertAndKeepsExistingBindingPolicy() {
+        Fixture fixture = fixture();
+        var request = historicalRequest(fixture);
+        ChatRunMessagePlan plan = new ChatRunMessagePlan(ChatRunMode.REGENERATE_ASSISTANT,
+                "msg1", request.source().userMessage(), "assistant1");
+        when(fixture.sessionService().prepareCandidateSwitchPlan(USER, request.source().session(),
+                "run-source", "msg1", "assistant1", null, "tail"))
+                .thenReturn(plan);
+        AdmissionCancellation cancelled = cancellation();
+        when(fixture.bindingService().cancelActiveForAdmissionWithSnapshots("tenant1", "user1", "session1"))
+                .thenReturn(List.of(cancelled));
+
+        var result = fixture.service().commitCandidateSwitch(request);
+
+        assertThat(result.messagePlan()).isSameAs(plan);
+        assertThat(result.restorableAdmissionCancellations()).containsExactly(cancelled);
+        var order = inOrder(fixture.sessionService(), fixture.runService(), fixture.interactionService(), fixture.bindingService());
+        order.verify(fixture.sessionService()).lockAndReloadForMessageMutation("tenant1", "user1", request.source().session());
+        order.verify(fixture.runService()).rejectIfActiveRunExists(USER, "session1");
+        order.verify(fixture.interactionService()).hasOpen(USER, "session1");
+        order.verify(fixture.sessionService()).prepareCandidateSwitchPlan(USER, request.source().session(),
+                "run-source", "msg1", "assistant1", null, "tail");
+        order.verify(fixture.runService()).insertRunning(any());
+        order.verify(fixture.bindingService()).cancelActiveForAdmissionWithSnapshots("tenant1", "user1", "session1");
+        verify(fixture.interactionService(), never()).cancelOpenBySessionAndCount(any(), any());
+    }
+
+    @Test
+    void failedHistoricalPathRecheckDoesNotInsertRunOrCancelBinding() {
+        Fixture fixture = fixture();
+        var request = historicalRequest(fixture);
+        doThrow(CandidateSwitchConflictException.staleSource("run-source"))
+                .when(fixture.sessionService()).prepareCandidateSwitchPlan(USER, request.source().session(),
+                        "run-source", "msg1", "assistant1", null, "tail");
+
+        assertThatThrownBy(() -> fixture.service().commitCandidateSwitch(request))
+                .isInstanceOf(CandidateSwitchConflictException.class);
+
+        verify(fixture.runService(), never()).insertRunning(any());
+        verifyNoInteractions(fixture.bindingService());
+    }
+
+    @Test
+    void anotherRunAdmittedBeforeLockPreventsHistoricalBranchMutation() {
+        Fixture fixture = fixture();
+        var request = historicalRequest(fixture);
+        doThrow(new ActiveRunExistsException("session1", "run-other"))
+                .when(fixture.runService()).rejectIfActiveRunExists(USER, "session1");
+
+        assertThatThrownBy(() -> fixture.service().commitCandidateSwitch(request))
+                .isInstanceOf(CandidateSwitchConflictException.class);
+
+        verify(fixture.sessionService(), never()).prepareCandidateSwitchPlan(
+                any(), any(), any(), any(), any(), any(), any());
+        verify(fixture.runService(), never()).insertRunning(any());
+        verifyNoInteractions(fixture.bindingService(), fixture.interactionService());
+    }
+
+    private ChatRunAdmissionCommitService.CandidateSwitchAdmissionCommand historicalRequest(Fixture fixture) {
+        ChatSession session = session(null);
+        when(fixture.sessionService().lockAndReloadForMessageMutation("tenant1", "user1", session))
+                .thenReturn(session);
+        CandidateSwitchRunSource source = new CandidateSwitchRunSource("run-source", ChatRunStatus.COMPLETED,
+                session, messagePlan().userMessage(), "assistant1", null,
+                ResolvedChatAttachments.empty(), CandidateSwitchRouteTrace.empty(), "tail");
+        return new ChatRunAdmissionCommitService.CandidateSwitchAdmissionCommand(
+                USER, command("DOMAIN_AGENT", "skill-b", null), "run1", source);
     }
 
     private Fixture fixture() {

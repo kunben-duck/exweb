@@ -83,6 +83,20 @@
     </select>
 
     <!--
+      历史候选分叉只读准入检查，不能取消后续问答的 WAITING 或已认领的 RESPONDING 请求。
+      入参: tenantId/userId/sessionId 为归属边界。
+    -->
+    <select id="hasOpenBySession" resultType="boolean" timeout="2">
+        SELECT EXISTS (
+            SELECT 1 FROM fin_ex_chat_interaction_request_t
+            WHERE tenant_id = #{tenantId}
+              AND user_id = #{userId}
+              AND session_id = #{sessionId}
+              AND status IN ('WAITING', 'RESPONDING')
+        )
+    </select>
+
+    <!--
       按 source run 精确查询其产生的最新 Interaction。stop 旧 run 时不得回退到会话中的更新等待。
       入参: tenantId/userId/sessionId 为归属边界，sourceRunId 为请求 stop 的历史 WAITING_USER run。
     -->

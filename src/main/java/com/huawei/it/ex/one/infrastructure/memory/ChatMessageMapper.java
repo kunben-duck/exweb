@@ -122,6 +122,22 @@ public interface ChatMessageMapper {
     );
 
     /**
+     * 仅沿 ID/父 ID 判断路径归属，不装配正文、metadata 或消息子表。
+     *
+     * @param tenantId 租户标识。
+     * @param userId 用户标识。
+     * @param sessionId 会话标识。
+     * @param leafMessageId 准备阶段或锁后确认的当前叶子。
+     * @param messageId 待确认的历史 assistant 标识。
+     * @return 是否属于指定叶子的祖先路径（含叶子本身）。
+     */
+    boolean isMessageOnPath(@Param("tenantId") String tenantId,
+                            @Param("userId") String userId,
+                            @Param("sessionId") String sessionId,
+                            @Param("leafMessageId") String leafMessageId,
+                            @Param("messageId") String messageId);
+
+    /**
      * 从指定分页起点向 root 有界回溯 active path。
      *
      * @param tenantId 租户标识。

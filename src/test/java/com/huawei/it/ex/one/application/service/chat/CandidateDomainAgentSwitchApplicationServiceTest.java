@@ -462,6 +462,91 @@ class CandidateDomainAgentSwitchApplicationServiceTest {
                 "finance_pc_entry");
     }
 
+    @Test
+    void historicalSourceKeepsExpectedLeafAndUsesOriginalInputWithoutStopping() {
+        prepareHistoricalSource();
+        when(executionCoordinator.executeCandidateSwitch(any(), any())).thenReturn(Flux.empty());
+        when(startCoordinator.startStandard(eq(user), any(), any(), any())).thenAnswer(invocation -> {
+            ChatRunStartCoordinator.StandardRunFactory factory = invocation.getArgument(3);
+            factory.create(new RunStartAttempt(user, "run_b", null)).collectList().block();
+            return Mono.just(new ChatRunStartResult("run_b", "session1", 13L, NOW, "chat-run-run_b"));
+        });
+
+        service.switchDomainAgent(user, TraceContext.empty(), command(), RuntimeForwardHeaders.empty()).block();
+
+        ArgumentCaptor<CandidateSwitchRunSource> source = ArgumentCaptor.forClass(CandidateSwitchRunSource.class);
+        ArgumentCaptor<ChatRunExecutionCoordinator.Request> request =
+                ArgumentCaptor.forClass(ChatRunExecutionCoordinator.Request.class);
+        verify(executionCoordinator).executeCandidateSwitch(request.capture(), source.capture());
+        assertThat(source.getValue().historical()).isTrue();
+        assertThat(source.getValue().expectedCurrentLeafMessageId()).isEqualTo("msg_later");
+        assertThat(source.getValue().assistantMessageId()).isEqualTo("msg_assistant_a");
+        assertThat(request.getValue().command().message()).isEqualTo("原始问题");
+        assertThat(request.getValue().command().metadata()).containsEntry("bizKey", "current-run-only")
+                .doesNotContainKey("sourceOnly");
+        assertThat(request.getValue().command().intentAccessName()).isEqualTo("finance_pc_entry");
+        verify(messageRepository).isMessageOnPath("tenant1", "user1", "session1", "msg_later", "msg_assistant_a");
+        verifyNoInteractions(stopCoordinator);
+    }
+
+    @Test
+    void historicalSourceRejectsHiddenBranchAndOpenInteractionWithoutSideEffects() {
+        prepareHistoricalSource();
+        when(messageRepository.isMessageOnPath("tenant1", "user1", "session1", "msg_later", "msg_assistant_a"))
+                .thenReturn(false);
+        assertStaleHistoricalSwitch();
+        when(messageRepository.isMessageOnPath("tenant1", "user1", "session1", "msg_later", "msg_assistant_a"))
+                .thenReturn(true);
+        when(interactionRepository.hasOpenBySession("tenant1", "user1", "session1")).thenReturn(true);
+        assertStaleHistoricalSwitch();
+    }
+
+    @Test
+    void historicalSourceRejectsOtherActiveRunWithoutStoppingIt() {
+        prepareHistoricalSource();
+        ChatRun active = mock(ChatRun.class);
+        when(active.id()).thenReturn("run_other");
+        when(runService.findActiveRun(user, "session1")).thenReturn(Optional.of(active));
+        assertStaleHistoricalSwitch();
+    }
+
+    @Test
+    void historicalSourceRejectsPathChangeBetweenPreparationAndStart() {
+        prepareHistoricalSource();
+        when(sessionService.getSession(user, "session1"))
+                .thenReturn(session("msg_later"), session("msg_changed"));
+        assertStaleHistoricalSwitch();
+    }
+
+    @Test
+    void historicalSourceRequiresFinalRunAndSavedAssistant() {
+        prepareHistoricalSource();
+        for (ChatRunStatus status : List.of(ChatRunStatus.RUNNING, ChatRunStatus.CANCELLING,
+                ChatRunStatus.WAITING_USER)) {
+            when(runService.requireOwnedRun(user, "run_a")).thenReturn(run(status, "msg_assistant_a"));
+            assertStaleHistoricalSwitch();
+        }
+        when(runService.requireOwnedRun(user, "run_a")).thenReturn(run(ChatRunStatus.COMPLETED, null));
+        assertStaleHistoricalSwitch();
+        verify(messageRepository, never()).isMessageOnPath(any(), any(), any(), any(), any());
+    }
+
+    private void prepareHistoricalSource() {
+        when(runService.requireOwnedRun(user, "run_a")).thenReturn(run(ChatRunStatus.COMPLETED, "msg_assistant_a"));
+        when(sessionService.getSession(user, "session1")).thenReturn(session("msg_later"));
+        when(messageRepository.isMessageOnPath("tenant1", "user1", "session1", "msg_later", "msg_assistant_a"))
+                .thenReturn(true);
+    }
+
+    private void assertStaleHistoricalSwitch() {
+        assertThatThrownBy(() -> service.switchDomainAgent(
+                user, TraceContext.empty(), command(), RuntimeForwardHeaders.empty()).block())
+                .isInstanceOf(CandidateSwitchConflictException.class)
+                .extracting(error -> ((CandidateSwitchConflictException) error).code())
+                .isEqualTo(CandidateSwitchConflictException.STALE_SOURCE);
+        verifyNoInteractions(stopCoordinator, startCoordinator, executionCoordinator);
+    }
+
     private ChatRun run(ChatRunStatus status, String assistantMessageId) {
         return new ChatRun(
                 "run_a", "tenant1", "user1", "session1", status,

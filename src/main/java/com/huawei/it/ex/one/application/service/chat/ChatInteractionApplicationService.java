@@ -65,6 +65,11 @@ public class ChatInteractionApplicationService {
                 });
     }
 
+    public boolean hasOpen(UserContext user, String sessionId) {
+        permissionChecker.checkChatPermission(user);
+        return repository.hasOpenBySession(user.tenantId(), user.ownerUserId(), sessionId);
+    }
+
     public ChatInteractionRequest prepareInteraction(ChatInteractionCreateContext context) {
         Instant now = Instant.now();
         String id = idGenerator.newId("interaction",

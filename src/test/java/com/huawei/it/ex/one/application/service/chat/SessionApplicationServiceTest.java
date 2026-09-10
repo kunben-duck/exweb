@@ -792,7 +792,7 @@ class SessionApplicationServiceTest {
     }
 
     @Test
-    void candidateSwitchRejectsSourceOutsideCurrentPath() {
+    void candidateSwitchWithoutHistoricalProofStillRequiresCurrentLeaf() {
         TestFixture fixture = fixture();
         MessagePair first = completeTurn(fixture, "第一问", "第一答", "run1");
         ChatRunMessagePlan secondPlan = fixture.service.prepareRunMessage(
@@ -809,6 +809,96 @@ class SessionApplicationServiceTest {
                 .isInstanceOf(CandidateSwitchConflictException.class)
                 .extracting(error -> ((CandidateSwitchConflictException) error).code())
                 .isEqualTo(CandidateSwitchConflictException.STALE_SOURCE);
+    }
+
+    @Test
+    void historicalCandidateRegeneratesSiblingAndPreservesLaterBranch() {
+        TestFixture fixture = fixtureWithPaths();
+        MessagePair first = completeTurn(fixture, "问题1", "答案A", "run1");
+        MessagePair second = nextTurn(fixture, first.assistant(), "问题2", "答案2", "run2");
+        MessagePair third = nextTurn(fixture, second.assistant(), "问题3", "答案3", "run3");
+        ChatSession current = fixture.sessions.findById(fixture.session.id()).orElseThrow();
+
+        ChatRunMessagePlan plan = fixture.service.prepareCandidateSwitchPlan(user(), current, "run1",
+                first.user().id(), first.assistant().id(), null, third.assistant().id());
+        assertThat(fixture.sessions.findById(current.id()).orElseThrow().currentLeafMessageId())
+                .isEqualTo(first.user().id());
+        ChatMessage replacement = saveAssistant(fixture, "答案B", "run4",
+                plan.userMessage().id(), plan.regeneratedFromMessageId());
+
+        assertThat(replacement.parentMessageId()).isEqualTo(first.user().id());
+        assertThat(replacement.regeneratedFromMessageId()).isEqualTo(first.assistant().id());
+        assertThat(replacement.siblingIndex()).isEqualTo(2);
+        assertThat(fixture.service.listVariants(user(), current.id(), first.assistant().id()))
+                .extracting(ChatMessage::content).containsExactly("答案A", "答案B");
+        assertThat(fixture.service.listMessages(user(), current.id(), null, 50).items())
+                .extracting(ChatMessage::content).containsExactly("问题1", "答案B");
+        assertThat(fixture.service.listMessages(user(), current.id(), third.assistant().id(), null, 50).items())
+                .containsExactly(first.user(), first.assistant(), second.user(), second.assistant(),
+                        third.user(), third.assistant());
+
+        MessagePair fourth = nextTurn(fixture, replacement, "新问题", "新回答", "run5");
+        assertThat(fourth.user().parentMessageId()).isEqualTo(replacement.id());
+        fixture.service.selectPath(user(), current.id(), third.assistant().id());
+        assertThat(fixture.service.listMessages(user(), current.id(), null, 50).items())
+                .extracting(ChatMessage::content).containsExactly("问题1", "答案A", "问题2", "答案2", "问题3", "答案3");
+    }
+
+    @Test
+    void historicalCandidateRechecksLeafAndParentAndRunBeforeMovingPath() {
+        TestFixture fixture = fixture();
+        MessagePair first = completeTurn(fixture, "问题1", "答案A", "run1");
+        MessagePair second = nextTurn(fixture, first.assistant(), "问题2", "答案2", "run2");
+        ChatSession current = fixture.sessions.findById(fixture.session.id()).orElseThrow();
+        assertThatThrownBy(() -> fixture.service.prepareCandidateSwitchPlan(user(), current, "run1",
+                first.user().id(), first.assistant().id(), null, "stale-leaf"))
+                .isInstanceOf(CandidateSwitchConflictException.class);
+        assertThatThrownBy(() -> fixture.service.prepareCandidateSwitchPlan(user(), current, "wrong-run",
+                first.user().id(), first.assistant().id(), null, second.assistant().id()))
+                .isInstanceOf(CandidateSwitchConflictException.class);
+        assertThatThrownBy(() -> fixture.service.prepareCandidateSwitchPlan(user(), current, "run1",
+                second.user().id(), first.assistant().id(), null, second.assistant().id()))
+                .isInstanceOf(CandidateSwitchConflictException.class);
+        assertThatThrownBy(() -> fixture.service.prepareCandidateSwitchPlan(user(), current, "run1",
+                first.user().id(), null, null, second.assistant().id()))
+                .isInstanceOf(CandidateSwitchConflictException.class);
+        assertThat(fixture.sessions.findById(current.id()).orElseThrow().currentLeafMessageId())
+                .isEqualTo(second.assistant().id());
+    }
+
+    @Test
+    void historicalCandidateRejectsHiddenAssistantEvenWithMatchingLeafSnapshot() {
+        TestFixture fixture = fixture();
+        MessagePair first = completeTurn(fixture, "问题1", "答案A", "run1");
+        MessagePair oldTail = nextTurn(fixture, first.assistant(), "问题2", "答案2", "run2");
+        ChatMessage alternative = saveAssistant(fixture, "答案B", "run3", first.user().id(), first.assistant().id());
+        ChatSession current = fixture.sessions.findById(fixture.session.id()).orElseThrow();
+
+        assertThatThrownBy(() -> fixture.service.prepareCandidateSwitchPlan(user(), current, "run2",
+                oldTail.user().id(), oldTail.assistant().id(), null, alternative.id()))
+                .isInstanceOf(CandidateSwitchConflictException.class);
+        assertThat(fixture.sessions.findById(current.id()).orElseThrow().currentLeafMessageId()).isEqualTo(alternative.id());
+    }
+
+    @Test
+    void historicalCandidateAcceptsOnlyVerifiedContinuationReuse() {
+        TestFixture fixture = fixture();
+        MessagePair first = completeTurn(fixture, "问题1", "复用回答", "run1");
+        MessagePair tail = nextTurn(fixture, first.assistant(), "问题2", "答案2", "run3");
+        ChatSession current = fixture.sessions.findById(fixture.session.id()).orElseThrow();
+
+        ChatRunMessagePlan plan = fixture.service.prepareCandidateSwitchPlan(user(), current, "run2",
+                first.user().id(), first.assistant().id(), "run1", tail.assistant().id());
+
+        assertThat(plan.regeneratedFromMessageId()).isEqualTo(first.assistant().id());
+        assertThat(plan.userMessage()).isEqualTo(first.user());
+    }
+
+    private MessagePair nextTurn(TestFixture fixture, ChatMessage previous, String question, String answer, String runId) {
+        ChatSession current = fixture.sessions.findById(fixture.session.id()).orElseThrow();
+        ChatRunMessagePlan plan = fixture.service.prepareRunMessage(user(),
+                command(question, ChatRunMode.NEXT, previous.id(), null, null), current, runId, List.of());
+        return new MessagePair(plan.userMessage(), saveAssistant(fixture, answer, runId, plan.userMessage().id(), null));
     }
 
     @Test
@@ -1246,6 +1336,23 @@ class SessionApplicationServiceTest {
 
     private TestFixture fixture() {
         return fixture(null, null);
+    }
+
+    private TestFixture fixtureWithPaths() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        InMemoryMessageRepository messages = new InMemoryMessageRepository() {
+            @Override
+            public ChatMessagePage pageMessages(ChatMessagePageQuery query) {
+                String leaf = query.leafMessageId() == null
+                        ? sessions.findById(query.sessionId()).orElseThrow().currentLeafMessageId()
+                        : query.leafMessageId();
+                return new ChatMessagePage(findPathToMessage(query.tenantId(), query.userId(), query.sessionId(), leaf)
+                        .stream().limit(query.limit()).toList(), null);
+            }
+        };
+        ChatSession session = sessions.save(new ChatSession("session1", "tenant1", "user1", "title", "ACTIVE", "web",
+                null, null, null, "session1", null, null, 0L, null, Instant.now(), Instant.now()));
+        return new TestFixture(service(sessions, messages), sessions, session);
     }
 
     private TestFixture fixture(String appId, String appName) {

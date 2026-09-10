@@ -405,14 +405,26 @@ paths:
     post:
       tags: [Chat Runs & Streaming]
       operationId: switchChatRunDomainAgent
-      summary: 停止原Run并使用原问题立即调用候选DomainAgent
+      summary: 使用当前路径上的原问题立即调用候选DomainAgent并创建答案版本
       description: |
         服务端串行完成停止source Run和创建replacement Run，不允许两个Run并发。新Run复用source Run
         关联的可信user消息、正文及附件，不创建第二条user消息；metadata仅使用本次请求显式提交值。
 
-        source已有assistant时，新回答作为同一user下的assistant sibling并建立版本关系；source没有可保存
-        assistant时，新回答是该user下的首个assistant。成功后前端改订阅返回的streamTopicId，漏失事件继续
-        使用replacement runId调用Run级Resume。
+        最新一轮按原规则必要时先Stop；source已有assistant时，新回答作为同一user下的assistant sibling
+        并建立版本关系，没有可保存assistant时则是首个assistant。当前路径上的历史非末尾回答也可切换，
+        但必须已有可编辑assistant，且source Run为COMPLETED/FAILED/CANCELLED。sourceRunId使用该历史
+        assistant当前关联的Run，messageId使用其父user消息ID。
+
+        历史切换会创建新分支并将当前路径退回原user：原问题1→答案A→问题2→答案2，切换后默认列表为
+        原问题1→答案B。旧答案及后续问答仍在原分支，通过版本、消息树及路径选择访问，不删除、不原地覆盖。
+        后续新问题接在B之后，Binding沿用现有候选切换规则（拒答时以最终路由为准）。
+        其他分支、锁定快照、错误Run关联、准备后leaf变化，或历史切换时存在其他RUNNING/CANCELLING Run
+        或WAITING/RESPONDING Interaction，返回409/CANDIDATE_SWITCH_STALE_SOURCE，不停止无关任务。
+        准入失败不改变路径；准入成功后失败、Stop、WAIT及异步等待不自动恢复旧分支。
+
+        成功后前端改订阅返回的streamTopicId，展示原问题之前的历史、原问题及新回答区域，不追加到旧历史末尾；
+        漏失事件继续使用replacement runId调用Run级Resume，刷新页面按当前消息路径恢复。
+        原user正文和附件仍为可信输入，短期历史截止原user之前，不包含旧答案或其后续问答。
 
         AMBIGUOUS_ROUTE选择OTHER重新意图后，sourceRunId必须使用CONTINUE_INTERACTION返回的新Run ID，
         messageId仍为原user消息ID，不得沿用首次模糊意图的旧Run ID。运行中续跑复用的assistant由服务端
@@ -431,6 +443,7 @@ paths:
         - name: sourceRunId
           in: path
           required: true
+          description: 当前路径上待替换assistant关联的Run；模糊意图续跑使用CONTINUE_INTERACTION返回的新Run ID
           schema:
             type: string
             maxLength: 64

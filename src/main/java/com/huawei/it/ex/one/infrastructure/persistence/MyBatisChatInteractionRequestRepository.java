@@ -60,6 +60,12 @@ public class MyBatisChatInteractionRequestRepository implements ChatInteractionR
     }
 
     @Override
+    public boolean hasOpenBySession(String tenantId, String userId, String sessionId) {
+        return !blank(tenantId) && !blank(userId) && !blank(sessionId)
+                && mapper.hasOpenBySession(tenantId, userId, sessionId);
+    }
+
+    @Override
     public Optional<ChatInteractionRequest> findLatestBySourceRun(
             String tenantId, String userId, String sessionId, String sourceRunId) {
         if (blank(tenantId) || blank(userId) || blank(sessionId) || blank(sourceRunId)) {

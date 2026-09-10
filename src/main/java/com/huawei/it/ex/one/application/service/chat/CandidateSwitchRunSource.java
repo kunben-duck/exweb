@@ -18,5 +18,17 @@ record CandidateSwitchRunSource(
         String assistantMessageId,
         String reusedAssistantSourceRunId,
         ResolvedChatAttachments resolvedAttachments,
-        CandidateSwitchRouteTrace routeTrace
-) {}
+        CandidateSwitchRouteTrace routeTrace,
+        String expectedCurrentLeafMessageId
+) {
+    CandidateSwitchRunSource(String sourceRunId, ChatRunStatus sourceRunStatus, ChatSession session,
+                             ChatMessage userMessage, String assistantMessageId, String reusedAssistantSourceRunId,
+                             ResolvedChatAttachments resolvedAttachments, CandidateSwitchRouteTrace routeTrace) {
+        this(sourceRunId, sourceRunStatus, session, userMessage, assistantMessageId, reusedAssistantSourceRunId,
+                resolvedAttachments, routeTrace, null);
+    }
+
+    boolean historical() {
+        return expectedCurrentLeafMessageId != null;
+    }
+}

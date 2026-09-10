@@ -537,6 +537,13 @@ class ChatRunRecoveryOrchestratorTest {
         private final Set<String> missingExecutionRunIds = new HashSet<>();
 
         @Override
+        public boolean hasOpenBySession(String tenantId, String userId, String sessionId) {
+            return requests.values().stream().anyMatch(request -> tenantId.equals(request.tenantId())
+                    && userId.equals(request.userId()) && sessionId.equals(request.sessionId())
+                    && (request.waiting() || request.status() == ChatInteractionStatus.RESPONDING));
+        }
+
+        @Override
         public ChatInteractionRequest insert(ChatInteractionRequest request) {
             requests.put(request.id(), request);
             return request;

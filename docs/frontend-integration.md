@@ -1945,6 +1945,23 @@ run-B 不创建新的可见 user 或 assistant 消息，最终更新原 assistan
 POST /v1/chat/runs/{sourceRunId}/switch-domain-agent
 ```
 
+也支持当前消息路径中的历史非末尾回答：`sourceRunId`取该历史assistant当前关联的Run，`messageId`取其
+父user消息ID；必须已有可编辑assistant，来源Run为`COMPLETED/FAILED/CANCELLED`。其他分支或锁定快照不可操作。
+历史切换会**切换分支**，不会在原位置覆盖旧答案并保留后续问答于默认列表：
+
+```text
+原路径：问题1 → 答案A → 问题2 → 答案2 → 问题3 → 答案3
+新路径：问题1 → 答案B
+```
+
+旧答案A及问题2/3完整保留在原分支，可通过版本、消息树和路径选择恢复；A/B为同父user下的sibling版本。
+前端受理成功后展示问题1之前的历史、问题1及B的回答区域，不把B追加到旧列表末尾；之后的新问题接在B后。
+历史切换时若存在其他活动Run或开放Interaction（包括`RESPONDING`），返回现有409，不停止或取消无关任务。
+准备期间路径改变同样返回`CANDIDATE_SWITCH_STALE_SOURCE`。准入失败不改变路径；准入成功后出现失败、Stop、
+WAIT或异步等待，沿用重新生成规则，不自动切回原分支。Binding沿用原切换规则，后续续接最终选中的技能。
+
+运行输入继续使用原user的可信正文与附件；短期上下文截止原user之前，不包含被替换答案和后续问答。
+
 ```json
 {
   "messageId": "msg_user_xxx",
@@ -1959,7 +1976,7 @@ POST /v1/chat/runs/{sourceRunId}/switch-domain-agent
 }
 ```
 
-前端在请求期间继续保留A的订阅，以接收标准`run.cancelled`。接口成功返回标准
+最新一轮尚未结束时，前端在请求期间继续保留A的订阅，以接收标准`run.cancelled`；已终态的历史Run不会再发取消事件。接口成功返回标准
 `ChatRunStartDto`后，清空A尚未固化的临时正文并改订阅B的`streamTopicId`；B会在自己的事件流中重新给出
 需要展示的可信路由过程，漏失事件按普通Run使用`GET /v1/chat/runs/{runB}/events/resume`恢复。页面刷新时，
 `stream-status`会把B作为当前active Run。
@@ -1997,7 +2014,8 @@ source Run的入口；省略或传空白值将直接使用服务端默认入口�
 服务端复用A关联的可信user正文和附件，不创建第二条query，也不继承A的metadata。A已有可保存assistant时，
 B保存为同一user下的新assistant版本，默认`/messages`展示B，`versionInfo`可切回A；A没有可保存assistant时，
 历史只有一个user和assistant-B。`CANDIDATE_SWITCH_STOP_PENDING`表示A尚未形成终态，可稍后用相同请求重试；
-`CANDIDATE_SWITCH_STALE_SOURCE`表示会话路径已变化，必须刷新后重新选择。
+`CANDIDATE_SWITCH_STALE_SOURCE`表示来源不满足当前路径要求、路径已变化或历史操作遇到其他活动任务/开放Interaction，
+必须刷新并处理冲突后重新选择；历史非末尾节点在上述条件满足时不再被直接判为过期。
 
 用户人工指定候选并勾选“记录我的偏好”时，必须先等待上述候选切换接口成功受理，再独立提交：
 

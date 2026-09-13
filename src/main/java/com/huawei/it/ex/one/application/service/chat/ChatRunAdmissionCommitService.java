@@ -197,17 +197,13 @@ public class ChatRunAdmissionCommitService {
         } catch (ActiveRunExistsException ex) {
             throw CandidateSwitchConflictException.staleSource(request.source().sourceRunId());
         }
-        if (request.source().historical() && interactionService.hasOpen(user, currentSession.id())) {
-            throw CandidateSwitchConflictException.staleSource(request.source().sourceRunId());
-        }
         ChatRunMessagePlan messagePlan = sessionService.prepareCandidateSwitchPlan(
                 user,
                 currentSession,
                 request.source().sourceRunId(),
                 request.source().userMessage().id(),
                 request.source().assistantMessageId(),
-                request.source().reusedAssistantSourceRunId(),
-                request.source().expectedCurrentLeafMessageId());
+                request.source().reusedAssistantSourceRunId());
         ChatRun run;
         try {
             run = chatRunService.insertRunning(new CreateChatRunContext(
@@ -224,9 +220,7 @@ public class ChatRunAdmissionCommitService {
         } catch (ActiveRunExistsException ex) {
             throw CandidateSwitchConflictException.staleSource(request.source().sourceRunId());
         }
-        if (!request.source().historical()) {
-            interactionService.cancelOpenBySessionAndCount(user, currentSession.id());
-        }
+        interactionService.cancelOpenBySessionAndCount(user, currentSession.id());
         IntentExpertScope previousScope = IntentExpertContext.fromSessionMetadata(
                 currentSession.metadataJson()).orElse(null);
         List<AttachmentRef> requestedAttachments = request.command().attachments() == null

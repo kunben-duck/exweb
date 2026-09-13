@@ -111,7 +111,7 @@ public class CandidateDomainAgentSwitchApplicationService {
                 .orElseThrow(() -> new SecurityException("消息不存在或不属于当前用户"));
         validateSourceMessage(sourceRun, session, userMessage);
         AssistantSource assistant = resolveAssistantSource(user, sourceRun);
-        String expectedLeaf = resolveHistoricalLeaf(user, session, sourceRun, userMessage.id(), assistant.messageId());
+        ensureCurrentSource(session, sourceRun.id(), userMessage.id(), assistant.messageId());
         // 在 Stop 前校验原消息附件，避免因附件无效先停止仍可继续的旧任务。
         ResolvedChatAttachments resolved = resolveAttachments(user, userMessage.attachments());
         return new CandidateSwitchRunSource(
@@ -122,8 +122,7 @@ public class CandidateDomainAgentSwitchApplicationService {
                 assistant.messageId(),
                 assistant.previousRunId(),
                 resolved,
-                CandidateSwitchRouteTrace.empty(),
-                expectedLeaf);
+                CandidateSwitchRouteTrace.empty());
     }
 
     private AssistantSource resolveAssistantSource(UserContext user, ChatRun run) {
@@ -193,15 +192,7 @@ public class CandidateDomainAgentSwitchApplicationService {
                 || latestSource.assistantMessageId().isBlank()
                 ? new AssistantSource(source.assistantMessageId(), source.reusedAssistantSourceRunId())
                 : new AssistantSource(latestSource.assistantMessageId(), null);
-        if (source.historical()) {
-            if (requiresStop(latestSource.status())
-                    || !Objects.equals(source.expectedCurrentLeafMessageId(), currentSession.currentLeafMessageId())
-                    || !Objects.equals(source.assistantMessageId(), assistant.messageId())) {
-                throw CandidateSwitchConflictException.staleSource(source.sourceRunId());
-            }
-        } else {
-            ensureCurrentSource(currentSession, latestSource.id(), source.userMessage().id(), assistant.messageId());
-        }
+        ensureCurrentSource(currentSession, latestSource.id(), source.userMessage().id(), assistant.messageId());
         CandidateSwitchRouteTrace routeTrace = routeTraceService.load(user, latestSource, command);
         CandidateSwitchRunSource currentSource = new CandidateSwitchRunSource(
                 source.sourceRunId(),
@@ -211,8 +202,7 @@ public class CandidateDomainAgentSwitchApplicationService {
                 assistant.messageId(),
                 assistant.previousRunId(),
                 source.resolvedAttachments(),
-                routeTrace,
-                source.expectedCurrentLeafMessageId());
+                routeTrace);
         ChatCommand runCommand = replacementCommand(command, currentSource);
         return runStartCoordinator.startStandard(
                 user,
@@ -290,23 +280,6 @@ public class CandidateDomainAgentSwitchApplicationService {
         if (!pointsToUser && !pointsToAssistant) {
             throw CandidateSwitchConflictException.staleSource(sourceRunId);
         }
-    }
-
-    private String resolveHistoricalLeaf(UserContext user, ChatSession session, ChatRun sourceRun,
-                                         String userMessageId, String assistantMessageId) {
-        String leaf = session.currentLeafMessageId();
-        if (userMessageId.equals(leaf) || (assistantMessageId != null && assistantMessageId.equals(leaf))) {
-            return null;
-        }
-        // 只允许已结束的历史回答分叉；不能通过历史操作停止另一轮任务或取消其 Interaction。
-        if (!sourceRun.status().terminal() || requiresStop(sourceRun.status())
-                || assistantMessageId == null || assistantMessageId.isBlank()
-                || !messageRepository.isMessageOnPath(
-                        user.tenantId(), user.ownerUserId(), session.id(), leaf, assistantMessageId)
-                || interactionRepository.hasOpenBySession(user.tenantId(), user.ownerUserId(), session.id())) {
-            throw CandidateSwitchConflictException.staleSource(sourceRun.id());
-        }
-        return leaf;
     }
 
     private ResolvedChatAttachments resolveAttachments(

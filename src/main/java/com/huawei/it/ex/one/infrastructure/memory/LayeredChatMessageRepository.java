@@ -254,12 +254,6 @@ public class LayeredChatMessageRepository implements ChatMessageRepository {
     }
 
     @Override
-    public boolean isMessageOnPath(String tenantId, String userId, String sessionId,
-                                   String leafMessageId, String messageId) {
-        return databaseStore.isMessageOnPath(tenantId, userId, sessionId, leafMessageId, messageId);
-    }
-
-    @Override
     public ChatMessageAttachment saveAttachment(ChatMessageAttachment attachment) {
         return databaseStore.saveAttachment(attachment);
     }

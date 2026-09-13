@@ -136,7 +136,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 
 1. **身份与基础地址**：确认 HTTP base URL、WebSocket URL、context path、企业 Cookie/header 注入方式。所有接口都依赖同一个后端身份上下文，不在请求体传 `tenantId/userId`。
 2. **会话列表与历史消息**：先接 `GET /chat/sessions`、`GET /chat/sessions/{sessionId}` 和 `GET /chat/sessions/{sessionId}/messages`。会话列表负责左侧导航，会话详情只取元数据，历史消息接口负责主面板渲染。
-3. **创建 run 与实时输出**：接 `POST /v1/chat/runs`，拿到 `runId/sessionId/firstSeq/streamTopicId` 后，通过 WebSocket `subscribe(topicId, afterSeq)` 接实时事件。
+3. **创建 run 与实时输出**：接 `POST /v1/chat/runs`，拿到 `runId/sessionId/userMessageId/firstSeq/streamTopicId` 后，保存本轮user消息关联，通过 WebSocket `subscribe(topicId, afterSeq)` 接实时事件。
 4. **事件恢复与停止**：接 `stream-status`、run 级 `/events/resume` 和 `/runs/{runId}/stop`。这三者决定刷新、跨页签、跨电脑和停止回答时的正确行为。
 5. **消息树功能**：接 `messages`、`variants`、`path`、`branches`，实现编辑历史问题、重新生成回答、版本切换和从消息新建分支。
 6. **文档和反馈**：最后接文档库、附件引用、点赞点踩和取消反馈；这些能力都依赖已经能稳定渲染历史消息。
@@ -147,6 +147,7 @@ WebSocket 错误不使用 HTTP body，而是 envelope：
 | --- | --- | --- | --- |
 | `sessionId` | `POST /v1/chat/sessions`、`POST /v1/chat/runs`、会话列表 | 所有会话、消息、stream-status、Event Resume、文档上传关联 | 作为路由参数和会话状态 key 持久保存 |
 | `runId` | `POST /v1/chat/runs`、`stream-status.activeRunId` | stop、run 级 Event Resume、反馈可选关联、日志排障 | 当前 active run 保存到会话运行态，终态后可清空运行态但保留消息里的 `runId` |
+| `userMessageId` | Run及候选切换启动响应、`run.started.payload` | 候选查询、候选切换及本轮user消息定位 | 保存`runId → userMessageId`；复用消息时不要按新runId反查历史user消息 |
 | `streamTopicId` | `POST /v1/chat/runs`、`stream-status.activeStreamTopicId` | WebSocket `subscribe/unsubscribe` | 只用于实时订阅，不要手写；格式当前为 `chat-run-{runId}` |
 | `sequence` / `seq` | WebSocket `payload.sequence`、Event Resume 事件 | Event Resume `afterSeq`、本地去重 | 每个 session 保存已处理最大值；渲染事件前按 `sessionId + sequence` 去重 |
 | `firstSeq` | `POST /v1/chat/runs` | 新建 run 后首次 WebSocket subscribe 的 `afterSeq` | 创建 run 后立即保存；通常 `subscribe.afterSeq=firstSeq` |
@@ -220,7 +221,7 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 | `POST /chat/sessions/{sessionId}/restore` | Path：`sessionId` | `ChatSessionDto(status=ACTIVE)` | 恢复后可继续发 run |
 | `DELETE /chat/sessions/{sessionId}` | Path：`sessionId` | `ChatSessionDto(status=DELETED)` | 删除后清理本地当前会话状态和订阅 |
 | `DELETE /chat/sessions` | Body：`sessionIds[]` | `deletedCount`、`items[]` | 批量删除成功后从列表移除这些 session |
-| `POST /v1/chat/runs` | Body：`commandId`、`sessionId`、`conversationId`、`message`、`runMode`、`channel`、消息树、Interaction、附件和路由字段；多入口前端每次显式传当前`intentAccessName` | `runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId` | 移动端统一传 `channel=mobile`；切换普通入口并立即重新选路时同时传`forceReroute=true` |
+| `POST /v1/chat/runs` | Body：`commandId`、`sessionId`、`conversationId`、`message`、`runMode`、`channel`、消息树、Interaction、附件和路由字段；多入口前端每次显式传当前`intentAccessName` | `runId`、`sessionId`、`userMessageId`、`firstSeq`、`createdAt`、`streamTopicId` | 移动端统一传 `channel=mobile`；切换普通入口并立即重新选路时同时传`forceReroute=true` |
 | `POST /v1/chat/runs/{sourceRunId}/switch-domain-agent` | Path：当前或历史source Run；Body：可信user `messageId`、目标`skillId`、`selectedIntent`、当前`intentAccessName`及本轮可选metadata | replacement Run的标准`ChatRunStartDto` | 服务端先停止A再创建B；入口不参与首次直连，但供B拒答重意图使用；成功后改订阅B的topic，偏好接口提交相同入口 |
 | `POST /v1/chat/runs/{runId}/stop` | Path：运行态传 `activeRunId`，等待态传 `waitingSourceRunId`；Header：可选 Cookie | 原有 run 字段，以及可选 `interactionId/interactionStatus/interactionCancelledAt/effectiveRunId` | 运行态用 Event Resume 补齐 `run.cancelled`；等待态不新增事件，stop 后重新查询 `stream-status` |
 | `GET /chat/sessions/{sessionId}/events/resume` | Path：`sessionId`；Query：`afterSeq` | SSE data：`ConversationTurnStreamDto` | 补会话缺失事件；`ConversationTurnStreamDto.payload.encodedItem.data` 中的 ChatEvent 更新本地 `lastSeq` |
@@ -270,7 +271,7 @@ Interaction续接，都应显式提交当前页面入口。ACTIVE Binding可能�
 
 | 接口 | 使用场景 | 入参 | 出参 | 注意事项 |
 | --- | --- | --- | --- | --- |
-| `POST /v1/chat/runs` | 唯一任务提交入口，创建后台 run 或续接 Interaction。 | JSON body：现有字段外增加可选 `channel`，最大64字符。 | `ChatRunStartDto`：`runId`、`sessionId`、`firstSeq`、`createdAt`、`streamTopicId`。 | 移动端统一传 `mobile`；自动建会话时保存该值，省略则默认 `web`。已有会话显式传入时必须一致，PC 省略后仍可访问任意渠道。 |
+| `POST /v1/chat/runs` | 唯一任务提交入口，创建后台 run 或续接 Interaction。 | JSON body：现有字段外增加可选 `channel`，最大64字符。 | `ChatRunStartDto`：`runId`、`sessionId`、`userMessageId`、`firstSeq`、`createdAt`、`streamTopicId`。 | 移动端统一传 `mobile`；自动建会话时保存该值，省略则默认 `web`。已有会话显式传入时必须一致，PC 省略后仍可访问任意渠道。 |
 | `POST /v1/chat/intent-candidates` | 用户主动查看某条user消息的Intent候选技能。 | JSON body：`messageId`必填，trim后最大64字符。 | 候选裸数组；每项为`intentId/accessName/skillId/intentName/confidence`。 | 仅允许当前用户的user消息；`accessName`保留下游原值，`skillId`只移除一次服务端通用前缀。不缓存候选；本机容量满返回`429/INTENT_CANDIDATES_BUSY`，上游失败返回502，HTTP响应超时重试耗尽返回504。前端收到BUSY后应延迟重试。 |
 | `POST /v1/chat/intent-preference-corrections` | 用户勾选“记录我的偏好”后独立保存所选意图。 | `selectionType=INTENT_CANDIDATE`时提交`sourceMessageId + selectedIntent`；`AMBIGUOUS_ROUTE`时提交`interactionId`；两者均可提交`intentAccessName`。 | `204 No Content`。 | 必须先等待对应Run成功受理，再异步调用本接口。偏好失败返回`503/INTENT_PREFERENCE_UNAVAILABLE`，不得取消当前Run；可独立重试。 |
 | `POST /v1/chat/runs/{runId}/stop` | 用户停止运行中的回答，或取消当前会话的等待输入。 | Path：运行态传 `activeRunId`；等待态传 `waitingSourceRunId`。 | `ChatRunStopDto`：原有字段，以及 `waitingUserInput`、`interactionId`、`interactionStatus`、`interactionCancelledAt`、`effectiveRunId`。 | 幂等；停止语义不是关闭 WebSocket。等待态历史 run-A 不改写为 `CANCELLED`。 |
@@ -566,9 +567,29 @@ WebSocket `message.payload` 和 Event Resume SSE `data` 都使用同一个 turn 
 | --- | --- |
 | `runId` | 本轮后台 run 标识；stop、run 级事件恢复、排障使用。 |
 | `sessionId` | 本轮 run 所属会话；前端应以服务端返回值为准。 |
+| `userMessageId` | 本轮实际关联的user消息ID，启动时即可使用；缺少可信关联的兼容调用可为空。 |
 | `firstSeq` | `run.started` 的事件序号；当前页面首次订阅该 run topic 时通常作为 `afterSeq`。 |
 | `createdAt` | run 创建时间。 |
 | `streamTopicId` | 本轮回答的 WebSocket run topic；必须来自服务端返回，不允许前端拼接或手写。 |
+
+启动响应和`run.started.payload.userMessageId`使用同一份准入消息关联，不需要等待Agent产生正文。
+`NEXT`、`EDIT_USER`及普通意图澄清返回本次新建user消息ID；`REGENERATE_ASSISTANT`、候选技能切换、
+`AMBIGUOUS_ROUTE`候选或OTHER、Relay问卷及路由确认等复用路径返回原user消息ID。
+复用的user消息自身可能仍记录旧runId，前端不得以此否定新Run返回的关联，也不要取最后一条消息推断。
+
+新开始事件的payload示例：
+
+```json
+{
+  "type": "run.started",
+  "payload": {"status": "STARTED", "userMessageId": "msg_user_xxx"}
+}
+```
+
+前端优先保存启动响应中的`runId → userMessageId`。使用`afterSeq=firstSeq`订阅通常不会重放开始事件；
+刷新后仅在Resume游标覆盖`run.started`时才能从该事件恢复ID，任意增量Resume并不保证包含它。
+旧事件不回填字段，旧版本及缺少关联的响应允许字段缺失或为null；此时保持既有历史查询方式，不阻断事件消费。
+FULL和no-store均保留新开始事件中的关联；本次不扩展`stream-status`，也不新增事件或改变sequence。
 
 ### `ChatRunStopDto`
 
@@ -1340,6 +1361,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 {
   "runId": "run_xxx",
   "sessionId": "session_xxx",
+  "userMessageId": "msg_user_xxx",
   "firstSeq": 12001,
   "createdAt": "2026-05-17T01:01:00Z",
   "streamTopicId": "chat-run-run_xxx"
@@ -1352,6 +1374,7 @@ curl -X POST http://localhost:8080/v1/chat/runs \
 | --- | --- |
 | `runId` | 本轮回答的执行 ID，stop 和排障使用 |
 | `sessionId` | 本轮所属会话 |
+| `userMessageId` | 本轮关联的user消息ID；新建或复用语义见`ChatRunStartDto`，无需等待任务完成 |
 | `firstSeq` | `run.started` 事件序号，订阅时可作为 `afterSeq` |
 | `createdAt` | run started 时间 |
 | `streamTopicId` | WebSocket 订阅 topic，只能由当前用户订阅 |
@@ -1739,6 +1762,7 @@ Relay 返回 `approval-request(operation_type=questionnaire)` 时，run-A 保存
 {
   "runId": "run_B",
   "sessionId": "session_xxx",
+  "userMessageId": "msg_user_xxx",
   "firstSeq": 4201,
   "createdAt": "2026-08-01T10:00:31Z",
   "streamTopicId": "chat-run-run_B"
@@ -2711,7 +2735,7 @@ heartbeat 和 done 使用同一个 envelope，不携带 `encodedItem`，也不�
 
 | 事件类型 | 说明 | 前端处理 |
 | --- | --- | --- |
-| `run.started` | run 已创建 | 可记录 run 状态为 running |
+| `run.started` | run 已创建，新增`payload.userMessageId` | 记录running及user消息关联；兼容旧事件缺少字段 |
 | `run.async_running` | DomainAgent已转入后台任务；包含`assistantMessageId/expiresAt` | 保持会话运行中、禁用新Query并保留stop；结束当前Run Resume但不要按终态处理 |
 | `run.async_result_started` | DomainAgent后台任务开始回填结果；包含`resultMode/assistantMessageId/messageReady` | `APPEND`保留当前展示，`REPLACE`先清空当前assistant正文及当前run的Parts，再消费后续标准事件 |
 | `run.async_finished` | DomainAgent后台任务完成或失败；包含`status/assistantMessageId/messageReady` | 清除异步运行展示，随后按`message.completed`和run终态关闭本轮 |

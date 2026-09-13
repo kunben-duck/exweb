@@ -110,8 +110,10 @@ final class ChatRunExecutionGateCoordinator {
     private Mono<RunStartGateOutcome> persistRunStartedGate(
             RunEventPipelineContext context,
             Function<ChatEvent, Mono<ChatEvent>> singleEventWriter) {
+        String userMessageId = context.messagePlan() == null || context.messagePlan().userMessage() == null
+                ? null : context.messagePlan().userMessage().id();
         return persistAndPublish(
-                        Flux.just(RunStartedEvent.of(context.runId(), context.session().id())),
+                        Flux.just(RunStartedEvent.of(context.runId(), context.session().id(), userMessageId)),
                         context,
                         singleEventWriter)
                 .singleOrEmpty()

@@ -1858,7 +1858,14 @@ class ChatDomainAgentRefusalFlowTest extends ChatFlowTestSupport {
                         agentConfirmationMetadata,
                         null, null, ChatRunMode.CONTINUE_INTERACTION, null, null, null,
                         null, waiting.id(), true, null, Map.of()), RuntimeForwardHeaders.empty()))
-                .assertNext(result -> assertThat(result.firstSeq()).isGreaterThan(0L))
+                .assertNext(result -> {
+                    assertThat(result.firstSeq()).isGreaterThan(0L);
+                    assertThat(result.userMessageId()).isEqualTo(waiting.userMessageId());
+                    assertThat(events.events).filteredOn(event -> result.runId().equals(event.runId())
+                                    && "run.started".equals(event.type()))
+                            .singleElement().satisfies(event -> assertThat(event.payload())
+                                    .containsEntry("userMessageId", result.userMessageId()));
+                })
                 .verifyComplete();
 
         awaitEvent(events, "run.completed");

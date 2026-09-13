@@ -23,12 +23,15 @@ import com.huawei.it.ex.one.domain.chat.ChatStreamTopics;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.chat.RunAsyncRunningEvent;
 import com.huawei.it.ex.one.domain.chat.RunCancelledEvent;
+import com.huawei.it.ex.one.domain.chat.RunStartedEvent;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
 
 import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -38,6 +41,38 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 class ChatStreamApplicationServiceTest {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void runStartedUserAssociationSurvivesLivePublicationAndResume(boolean hasUserMessageId) {
+        InMemoryChatEventStore store = new InMemoryChatEventStore();
+        InMemoryLiveEventBus liveEventBus = new InMemoryLiveEventBus();
+        InMemoryRunRepository runs = new InMemoryRunRepository();
+        ChatStreamApplicationService service = new ChatStreamApplicationService(store,
+                new LocalChatEventStreamRegistry(), liveEventBus, runs, new PermissionChecker(),
+                new FixedSessionRepository(), new com.huawei.it.ex.one.application.config.ChatWebSocketProperties());
+        runs.save(runningRun("run1", "tenant1", "user1"));
+        RunStartedEvent started = RunStartedEvent.of("run1", "session1", hasUserMessageId ? "msg-user" : null);
+
+        StepVerifier.create(liveEventBus.subscribe(ChatStreamTopics.runTopic("run1")).take(1))
+                .then(() -> service.appendAndPublish(started))
+                .assertNext(event -> {
+                    assertThat(event.type()).isEqualTo("run.started");
+                    assertThat(event.payload()).isEqualTo(started.payload());
+                })
+                .verifyComplete();
+        service.appendAndPublish(new StoredChatEvent("run1", "session1", 0L, "run.completed",
+                Instant.now(), Map.of("status", "COMPLETED")));
+
+        StepVerifier.create(service.resumeRun(user(), "run1", 0))
+                .assertNext(event -> assertThat(event.payload()).isEqualTo(started.payload()))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("run.completed"))
+                .verifyComplete();
+        StepVerifier.create(service.resumeRunTopic(user(), ChatStreamTopics.runTopic("run1"), 0).take(2))
+                .assertNext(event -> assertThat(event.payload()).isEqualTo(started.payload()))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("run.completed"))
+                .verifyComplete();
+    }
+
     @Test
     void publishPersistedStillAttemptsLiveBusWhenLocalPublishThrows() {
         AtomicInteger liveCalls = new AtomicInteger();

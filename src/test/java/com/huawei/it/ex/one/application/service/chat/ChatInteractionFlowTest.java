@@ -760,6 +760,15 @@ class ChatInteractionFlowTest extends ChatFlowTestSupport {
                     assertThat(result.sessionId()).isEqualTo("session1");
                     assertThat(result.firstSeq()).isGreaterThan(0L);
                     assertThat(result.streamTopicId()).isEqualTo("chat-run-" + result.runId());
+                    assertThat(result.userMessageId()).isNotBlank().isNotEqualTo(waiting.userMessageId());
+                    assertThat(messages.messages).filteredOn(message -> result.userMessageId().equals(message.id()))
+                            .singleElement().satisfies(message -> {
+                                assertThat(message.role()).isEqualTo("user");
+                                assertThat(message.content()).isEqualTo("我是说账务审批的方案");
+                            });
+                    assertThat(events.events).filteredOn(event -> "run.started".equals(event.type()))
+                            .singleElement().satisfies(event -> assertThat(event.payload())
+                                    .containsEntry("userMessageId", result.userMessageId()));
                 })
                 .verifyComplete();
 

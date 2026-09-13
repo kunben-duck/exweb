@@ -22,6 +22,7 @@ import com.huawei.it.ex.one.domain.chat.ChatEvent;
 import com.huawei.it.ex.one.domain.chat.ChatSession;
 import com.huawei.it.ex.one.domain.chat.MessageDeltaEvent;
 import com.huawei.it.ex.one.domain.chat.RunExecutionClaim;
+import com.huawei.it.ex.one.domain.chat.RunStartedEvent;
 import com.huawei.it.ex.one.domain.chat.RuntimeEvent;
 import com.huawei.it.ex.one.domain.chat.SequencedChatEvent;
 import com.huawei.it.ex.one.domain.chat.StoredChatEvent;
@@ -32,6 +33,8 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Instant;
 import java.util.List;
@@ -45,6 +48,28 @@ class ChatEventPipelineRetentionTest {
     private static final String SESSION_ID = "session1";
     private static final RunExecutionClaim CLAIM =
             new RunExecutionClaim(RUN_ID, "instance1", 3L);
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void userMessageAssociationUsesSinglePersistentWriterWithoutExtraEvents(boolean placeholder) {
+        Fixture fixture = new Fixture();
+        ChatEvent input = RunStartedEvent.of(RUN_ID, SESSION_ID, "msg-user");
+        ChatEvent committed = stored(input, 101L);
+        AtomicLong writes = new AtomicLong();
+
+        List<ChatEvent> output = fixture.pipeline.persistAndPublish(Flux.just(input), fixture.context(placeholder),
+                        event -> {
+                            writes.incrementAndGet();
+                            assertThat(event.payload()).isEqualTo(input.payload());
+                            return Mono.just(committed);
+                        })
+                .collectList().block();
+
+        assertThat(writes).hasValue(1);
+        assertThat(output).containsExactly(committed);
+        verify(fixture.streamService, never()).sequenceLiveBatchWithExecutionGuard(anyList(), any());
+        verify(fixture.streamService, never()).publishLiveOnly(any());
+    }
 
     @Test
     void placeholderBusinessEventGetsSequenceAndLivePublicationWithoutPersistence() {

@@ -197,12 +197,17 @@ final class ChatRunStartCoordinator {
                 state.firstEvent().asMono(),
                 operationalProperties.normalizedFirstEventTimeout(),
                 () -> abortBeforeFirstEvent(state, operation))
-                .map(event -> new ChatRunStartResult(
-                        event.runId(),
-                        event.sessionId(),
-                        event.sequence(),
-                        event.createdAt(),
-                        ChatStreamTopics.runTopic(event.runId())));
+                .map(event -> {
+                    // 复用准入记录的关联，续跑时不能按新 runId 反查原 user 消息。
+                    ChatRun run = state.attempt().run();
+                    return new ChatRunStartResult(
+                            event.runId(),
+                            event.sessionId(),
+                            event.sequence(),
+                            event.createdAt(),
+                            ChatStreamTopics.runTopic(event.runId()),
+                            run == null ? null : run.userMessageId());
+                });
     }
 
     static <T> Mono<T> withFirstEventTimeout(Mono<T> source, Duration timeout, Runnable abort) {

@@ -17,11 +17,18 @@ import java.time.Instant;
  * @param firstSeq run.started 的持久化序号。
  * @param createdAt run.started 创建时间。
  * @param streamTopicId 本轮回答的 WebSocket run 级订阅 topic。
+ * @param userMessageId 本轮实际关联的 user 消息标识；缺少可信关联的兼容调用可为空。
  */
 public record ChatRunStartResult(
         String runId,
         String sessionId,
         long firstSeq,
         Instant createdAt,
-        String streamTopicId
-) {}
+        String streamTopicId,
+        String userMessageId
+) {
+    public ChatRunStartResult(String runId, String sessionId, long firstSeq, Instant createdAt,
+                              String streamTopicId) {
+        this(runId, sessionId, firstSeq, createdAt, streamTopicId, null);
+    }
+}

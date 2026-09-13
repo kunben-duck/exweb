@@ -153,6 +153,10 @@ class AmbiguousRouteInteractionFlowTest extends ChatFlowTestSupport {
 
         scenario.awaitCompleted();
 
+        assertThat(started.userMessageId()).isEqualTo(scenario.interaction().userMessageId());
+        assertThat(scenario.events.events).filteredOn(event -> "run.started".equals(event.type()))
+                .singleElement().satisfies(event -> assertThat(event.payload())
+                        .containsEntry("userMessageId", started.userMessageId()));
         assertThat(scenario.routeCalls()).hasValue(0);
         assertThat(scenario.domainRequest().get()).satisfies(request -> {
             assertThat(request.domainAgentId()).isEqualTo("skill-low");
@@ -292,6 +296,11 @@ class AmbiguousRouteInteractionFlowTest extends ChatFlowTestSupport {
                         otherAnswer ? Map.of("请选择处理技能", "其他需求") : Map.of(),
                         null, Map.of()), RuntimeForwardHeaders.empty()).block(Duration.ofSeconds(5));
         assertThat(runtimeStarted.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(continued.userMessageId()).isEqualTo(interaction.userMessageId());
+        assertThat(events.events).filteredOn(event -> continued.runId().equals(event.runId())
+                        && "run.started".equals(event.type()))
+                .singleElement().satisfies(event -> assertThat(event.payload())
+                        .containsEntry("userMessageId", continued.userMessageId()));
         assertThat(runs.findById(continued.runId()).orElseThrow().assistantMessageId()).isNull();
         assertThat(sessions.findById("session-1").orElseThrow().currentLeafMessageId())
                 .isEqualTo(interaction.assistantMessageId());
@@ -312,6 +321,11 @@ class AmbiguousRouteInteractionFlowTest extends ChatFlowTestSupport {
                         null, "finance_pc_entry"), RuntimeForwardHeaders.empty()).block(Duration.ofSeconds(5));
         awaitEvent(events, "run.completed");
 
+        assertThat(replacement.userMessageId()).isEqualTo(interaction.userMessageId());
+        assertThat(events.events).filteredOn(event -> replacement.runId().equals(event.runId())
+                        && "run.started".equals(event.type()))
+                .singleElement().satisfies(event -> assertThat(event.payload())
+                        .containsEntry("userMessageId", replacement.userMessageId()));
         assertThat(runs.findById(continued.runId()).orElseThrow().status()).isEqualTo(ChatRunStatus.CANCELLED);
         assertThat(cancelledRunId).hasValue(continued.runId());
         assertThat(runs.findById(replacement.runId()).orElseThrow().status()).isEqualTo(ChatRunStatus.COMPLETED);

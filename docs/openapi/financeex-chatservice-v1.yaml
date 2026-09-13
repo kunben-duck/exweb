@@ -106,7 +106,9 @@ paths:
         唯一的提问和 Interaction 续接入口。普通请求通常使用 `runMode=NEXT`；WAIT 场景使用
         `runMode=CONTINUE_INTERACTION` 和服务端返回的 `interactionId`。
 
-        接口只等待首个已经持久化的 ChatEvent，然后返回 runId、firstSeq 和 streamTopicId。
+        接口只等待首个已经持久化的 ChatEvent，然后返回 runId、userMessageId、firstSeq 和 streamTopicId。
+        userMessageId 为本轮实际关联的可信 user 消息ID，无须等待 Runtime 输出或完成。
+        新建消息返回新ID，重新生成及复用消息的 Interaction 返回原ID；不要求该消息自身的 runId 等于本轮 runId。
         后台 Run 不依赖浏览器连接继续执行。首次消费时将 `firstSeq` 视为已处理，然后使用
         WebSocket `subscribe(afterSeq=firstSeq)`；页面恢复 active run 时优先调用 run 级 Resume。
 
@@ -389,6 +391,7 @@ paths:
                   value:
                     runId: run_002
                     sessionId: session_001
+                    userMessageId: msg_user_002
                     firstSeq: 1042
                     createdAt: '2026-08-01T10:00:00Z'
                     streamTopicId: chat-run-run_002
@@ -2859,6 +2862,14 @@ components:
           type: string
         sessionId:
           type: string
+        userMessageId:
+          type: string
+          nullable: true
+          description: >-
+            本轮实际关联的服务端 user 消息ID。NEXT、EDIT_USER及普通意图澄清返回新建消息ID；
+            重新生成、候选技能切换及复用消息的Interaction续跑返回原user消息ID。
+            正常新启动响应与run.started.payload.userMessageId一致；缺少可信关联的兼容调用可为null。
+            不从客户端metadata推断，不回填旧事件；异常首事件继续沿用原处理。
         firstSeq:
           type: integer
           format: int64
@@ -3136,6 +3147,9 @@ components:
         控制和终态仍是数据库事实。payload 由 type 决定；WAIT 相关主要 payload schema 见本定义的
         RunWaitingUserPayload、AmbiguousRouteCardPayload、RouteSwitchConfirmationPayload 和
         RelayQuestionnaireCardPayload。
+        新生成的run.started包含payload.status=STARTED及可信payload.userMessageId，与正常启动响应一致。
+        FULL和ASSISTANT_PLACEHOLDER均持久化该开始事件；旧事件不回填该字段。
+        前端优先保存启动响应中的ID；仅当Resume游标覆盖开始事件时，才能从run.started恢复该关联。
 
     RunAsyncRunningPayload:
       type: object

@@ -24,7 +24,14 @@ public record RunStartedEvent(
         Map<String, Object> payload
 ) implements ChatEvent {
     public static RunStartedEvent of(String runId, String sessionId) {
-        return new RunStartedEvent(runId, sessionId, 0, Instant.now(), Map.of("status", "STARTED"));
+        return of(runId, sessionId, null);
+    }
+
+    public static RunStartedEvent of(String runId, String sessionId, String userMessageId) {
+        Map<String, Object> payload = userMessageId == null || userMessageId.isBlank()
+                ? Map.of("status", "STARTED")
+                : Map.of("status", "STARTED", "userMessageId", userMessageId);
+        return new RunStartedEvent(runId, sessionId, 0, Instant.now(), payload);
     }
     @Override public String type() { return "run.started"; }
 }

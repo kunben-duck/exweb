@@ -50,6 +50,7 @@ import com.huawei.it.ex.one.interfaces.chat.dto.ChatAgentModeSelectionDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatAttachmentDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatEventDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatMessageDto;
+import com.huawei.it.ex.one.interfaces.chat.dto.ChatRunStartDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSelectedExpertDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSelectedIntentDto;
 import com.huawei.it.ex.one.interfaces.chat.dto.ChatSessionDto;
@@ -543,6 +544,20 @@ class ChatProtocolConvergenceTest {
     }
 
     @Test
+    void legacyStartConstructorsKeepNullableUserMessageId() {
+        Instant now = Instant.parse("2026-09-13T00:00:00Z");
+        ChatRunStartResult result = new ChatRunStartResult("run1", "session1", 10L, now, "chat-run-run1");
+        ChatRunStartDto dto = new ChatRunStartDto("run1", "session1", 10L, now, "chat-run-run1");
+
+        assertThat(result.userMessageId()).isNull();
+        assertThat(dto.userMessageId()).isNull();
+        var json = new ObjectMapper().findAndRegisterModules().valueToTree(dto);
+        assertThat(json.path("userMessageId").isNull()).isTrue();
+        assertThat(json.path("runId").asText()).isEqualTo("run1");
+        assertThat(json.path("firstSeq").asLong()).isEqualTo(10L);
+    }
+
+    @Test
     void runsEndpointReturnsRunIdentifiersWithoutProtocolUrls() {
         AtomicReference<RuntimeForwardHeaders> startHeaders = new AtomicReference<>();
         AtomicReference<RuntimeForwardHeaders> stopHeaders = new AtomicReference<>();
@@ -556,7 +571,7 @@ class ChatProtocolConvergenceTest {
         };
         FinanceChatFacade chatFacade = new RunStartOnlyChatFacade(
                 new ChatRunStartResult("run1", "session1", 10L, Instant.parse("2026-05-16T00:00:00Z"),
-                        ChatStreamTopics.runTopic("run1")),
+                        ChatStreamTopics.runTopic("run1"), "msg_user"),
                 new ChatRunStopResult("run1", "session1", ChatRunStatus.CANCELLED, 12L,
                         Instant.parse("2026-05-16T00:00:01Z")),
                 startHeaders,
@@ -588,6 +603,9 @@ class ChatProtocolConvergenceTest {
         assertThat(runStart).isNotNull();
         assertThat(runStart.runId()).isEqualTo("run1");
         assertThat(runStart.sessionId()).isEqualTo("session1");
+        assertThat(runStart.userMessageId()).isEqualTo("msg_user");
+        assertThat(new ObjectMapper().findAndRegisterModules().valueToTree(runStart)
+                .path("userMessageId").asText()).isEqualTo("msg_user");
         assertThat(runStart.firstSeq()).isEqualTo(10L);
         assertThat(runStart.streamTopicId()).isEqualTo("chat-run-run1");
         assertThat(startHeaders.get()).isNotNull();
@@ -613,7 +631,7 @@ class ChatProtocolConvergenceTest {
                 mock(CandidateDomainAgentSwitchApplicationService.class);
         ChatRunStartResult started = new ChatRunStartResult(
                 "run_b", "session1", 20L, Instant.parse("2026-08-29T00:00:00Z"),
-                ChatStreamTopics.runTopic("run_b"));
+                ChatStreamTopics.runTopic("run_b"), "msg_user");
         when(switchService.switchDomainAgent(
                 any(UserContext.class), any(TraceContext.class),
                 any(CandidateDomainAgentSwitchCommand.class), any(RuntimeForwardHeaders.class)))
@@ -643,6 +661,7 @@ class ChatProtocolConvergenceTest {
 
         assertThat(result).isNotNull();
         assertThat(result.runId()).isEqualTo("run_b");
+        assertThat(result.userMessageId()).isEqualTo("msg_user");
         assertThat(result.streamTopicId()).isEqualTo("chat-run-run_b");
         verify(switchService).switchDomainAgent(
                 eq(user()), eq(TraceContext.empty()),

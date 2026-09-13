@@ -294,7 +294,8 @@ public class ChatController {
                 runStart.sessionId(),
                 runStart.firstSeq(),
                 runStart.createdAt(),
-                runStart.streamTopicId());
+                runStart.streamTopicId(),
+                runStart.userMessageId());
     }
 
     private ResponseEntity<Flux<ServerSentEvent<ConversationTurnStreamDto>>> sseResponse(

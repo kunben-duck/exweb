@@ -19,6 +19,21 @@ import java.util.Map;
 class AgentDataPersistenceEventPolicyTest {
 
     @Test
+    void domainAgentQuestionnaireIsARecoverableControlFactInNoStoreMode() {
+        AgentDataPersistenceState state = new AgentDataPersistenceState("hidden")
+                .tighten(AgentDataPersistencePolicy.ASSISTANT_PLACEHOLDER);
+        RuntimeEvent event = RuntimeEvent.card("r", "s", Map.of("source", "domain-agent",
+                "sourceType", "approval-request", "operation_type", "questionnaire", "approval_id", "q1",
+                "questions", List.of(Map.of("question", "period"))));
+        assertThat(new AgentDataPersistenceEventPolicy().retention(event, state))
+                .isEqualTo(AgentDataPersistenceEventPolicy.EventRetention.PERSISTED);
+        AssistantAssembly assistant = new AssistantAssembly(state);
+        assistant.observe(event);
+        assertThat(assistant.parts()).singleElement()
+                .satisfies(part -> assertThat(part.partType()).isEqualTo("AGENT_CLARIFICATION_REQUEST"));
+    }
+
+    @Test
     void runStartedWithUserMessageIdRemainsPersistedInFullAndPlaceholderModes() {
         RunStartedEvent event = RunStartedEvent.of("run1", "session1", "msg-user");
         for (AgentDataPersistenceState state : List.of(AgentDataPersistenceState.full(),

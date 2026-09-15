@@ -19,6 +19,24 @@ import java.util.Map;
 
 class RelayQuestionnaireWaitPolicyTest {
     @Test
+    void domainAgentTimeoutIsIndependentOfRelayAndDefaultsToDisabled() {
+        ChatEvent event = RuntimeEvent.card("r", "s", Map.of("source", "domain-agent",
+                "sourceType", "approval-request", "operation_type", "questionnaire", "approval_id", "q"));
+        assertThat(new RelayQuestionnaireWaitPolicy(interactionProperties(Duration.ofHours(24)),
+                Duration.ofSeconds(30)).decorate(event)).isSameAs(event);
+        RelayQuestionnaireWaitPolicy policy = new RelayQuestionnaireWaitPolicy(
+                interactionProperties(Duration.ofHours(24)), Duration.ZERO, Duration.ofSeconds(12));
+        assertThat(policy.decorate(event, Instant.parse("2026-08-01T10:00:00Z")).payload())
+                .containsEntry("autoActionAt", "2026-08-01T10:00:12Z")
+                .containsEntry("autoActionType", "IGNORE_QUESTIONNAIRE")
+                .containsEntry("autoActionTimeoutMs", 12_000L);
+        ChatEvent relay = questionnaireEvent();
+        assertThat(policy.decorate(relay)).isSameAs(relay);
+        assertThatThrownBy(() -> new RelayQuestionnaireWaitPolicy(
+                interactionProperties(Duration.ofSeconds(12)), Duration.ZERO, Duration.ofSeconds(12)))
+                .isInstanceOf(IllegalStateException.class);
+    }
+    @Test
     void zeroTimeoutLeavesQuestionnaireEventUnchanged() {
         ChatEvent event = questionnaireEvent();
         RelayQuestionnaireWaitPolicy policy = new RelayQuestionnaireWaitPolicy(

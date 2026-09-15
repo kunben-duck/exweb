@@ -1691,6 +1691,31 @@ user 消息正文仍为 `帮我看下这个方案`。多轮澄清按首次出现
 
 单个答案直接保存答案值；多个答案按问题名稳定排序并保存为多行 `问题：答案`。文本答案和附件都为空会返回参数错误，Interaction 仍保持 `WAITING`。
 
+### DomainAgent 问卷续接
+
+DomainAgent 也可返回 `runtime.card(source=domain-agent, sourceType=approval-request,
+operation_type=questionnaire)`，前端复用下节 Relay 的问卷卡片、`label/ignore` 答案格式及
+`CONTINUE_INTERACTION` 请求，不增加公开字段。不要将普通卡片视为 Ask User。
+
+1. 收到问卷卡片后，等待 `run.waiting_user` 中的可信 `interactionId/assistantMessageId`。
+   Run-A 已停止本轮流式执行，Binding 仍保持 ACTIVE。等待期间普通 NEXT 仍受原等待态规则约束。
+2. 正常回答提交 `approved=true, scope=once, questionnaireAnswers={"label":{"问题文本":"答案"}}`；
+   多选的值为数组。手动忽略提交 `approved=false, questionnaireAnswers={"ignore":true}`。
+   不能附加新附件，不用回传下游 approval_id，也不要重新发送原问题。
+3. 启动响应返回 Run-B 和原 `userMessageId`；订阅新的 `streamTopicId`，但继续在原 assistant 上展示。
+   DomainAgent 分支保留问卷前正文，后续正文和 Parts 追加到同一 assistant，不创建第二个 user。
+4. 刷新后用 `/messages` 恢复问卷及已保存结果、`stream-status` 判断 WAIT 或活动 Run，
+   活动 Run 使用其 Run Resume 恢复并续接。重复发问以新 Interaction 为准；旧 Interaction 不能再次提交。
+5. `financeex.domain-agent.questionnaire-wait-timeout=0s` 默认关闭自动忽略，不受 Relay 配置影响。
+   启用后按 `autoActionAt/autoActionTimeoutMs/autoActionType=IGNORE_QUESTIONNAIRE` 提交同一忽略请求。
+   页面关闭时没有后端代为提交；重新打开须先确认 Interaction 仍 WAITING 且未过期，再执行到期动作。
+
+发送前失败可条件恢复 WAITING，此时仅重试同一 Interaction，不创建普通 NEXT；HTTP 提交开始后的结果未知
+错误则取消 Interaction，不能自动重发答案。以最新 `stream-status` 为准，不能仅凭 HTTP 启动成功断言下游已收到。
+续跑首次调用不走 Intent；之后拒答仍可进入原有重意图、切换确认或 Relay 流程，使用发问时的逻辑入口和专家范围。
+问卷续跑专用可信上下文不返回前端。FULL 保留事件与 Parts；no-store 保留问卷、答案和终态控制事实，正文仍为占位。
+下游必须支持断流后恢复及 `ignore=true`，实际问卷渲染和自动动作需前后端联合验证。
+
 ### Relay 问卷续接
 
 Relay 返回 `approval-request(operation_type=questionnaire)` 时，run-A 保存完整卡片和

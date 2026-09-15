@@ -7,9 +7,12 @@ package com.huawei.it.ex.one.infrastructure.runtime.domainagent;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.it.ex.one.application.config.DomainAgentProperties;
+import com.huawei.it.ex.one.application.integration.agent.AgentRuntimeInteractionResponseRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentCancelRequest;
 import com.huawei.it.ex.one.application.integration.agent.DomainAgentRequest;
 import com.huawei.it.ex.one.application.integration.agent.RuntimeForwardHeaders;
+import com.huawei.it.ex.one.application.integration.agent.RuntimeInteractionDispatchState;
+import com.huawei.it.ex.one.common.trace.TraceContext;
 import com.huawei.it.ex.one.domain.auth.UserContext;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,6 +22,7 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -38,6 +42,39 @@ import java.util.concurrent.atomic.AtomicReference;
 
 class ConfiguredDomainAgentClientTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Test
+    void questionnaireAnswerUsesSameEndpointAndClosesHttpAtNextQuestion() {
+        AtomicReference<ClientRequest> captured = new AtomicReference<>();
+        AtomicBoolean cancelled = new AtomicBoolean();
+        RuntimeInteractionDispatchState dispatch = RuntimeInteractionDispatchState.tracked();
+        WebClient.Builder builder = WebClient.builder().exchangeFunction(request -> {
+            assertThat(dispatch.responseDispatched()).isTrue();
+            captured.set(request);
+            DataBuffer buffer = new DefaultDataBufferFactory().wrap(("data: {\"content\":\"before\"}\n\n"
+                    + "data: {\"type\":\"approval-request\",\"operation_type\":\"questionnaire\","
+                    + "\"approval_id\":\"q2\",\"questions\":[{\"question\":\"period\"}]}\n\n"
+                    + "data: {\"content\":\"late\"}\n\n").getBytes(StandardCharsets.UTF_8));
+            return Mono.just(ClientResponse.create(HttpStatus.OK).header(HttpHeaders.CONTENT_TYPE,
+                    MediaType.TEXT_EVENT_STREAM_VALUE).body(Flux.just(buffer).concatWith(Flux.never())
+                    .doOnCancel(() -> cancelled.set(true))).build());
+        });
+        DomainAgentProperties properties = properties();
+        ConfiguredDomainAgentClient client = new ConfiguredDomainAgentClient(builder, properties,
+                new DomainAgentChatRequestMapper(properties), new DomainAgentResponseNormalizer(objectMapper));
+        var request = new AgentRuntimeInteractionResponseRequest("t", "u", "u", null, "session", "run-b",
+                "domain-session", "domain-agent", "interaction", "CLARIFICATION", "q1",
+                Map.of("approved", false, "questionnaireAnswers", Map.of("ignore", true)),
+                RuntimeForwardHeaders.fromCookieHeader("sid=abc", 8192), TraceContext.empty(),
+                Map.of("userMessageId", "msg-u", "skillId", "skill-a"), dispatch);
+        StepVerifier.create(client.continueWithUserResponse(request))
+                .assertNext(event -> assertThat(event.payload()).containsEntry("delta", "before"))
+                .assertNext(event -> assertThat(event.type()).isEqualTo("runtime.card"))
+                .verifyComplete();
+        assertThat(cancelled).isTrue();
+        assertThat(captured.get().url().getPath()).isEqualTo(properties.getChatPath());
+        assertThat(captured.get().headers().getFirst(HttpHeaders.COOKIE)).isEqualTo("sid=abc");
+    }
 
     @Test
     void queryUsesTrimmedConfiguredRefererAndForwardsCookieAsHttpHeaders() throws Exception {

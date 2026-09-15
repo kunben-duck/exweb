@@ -35,6 +35,7 @@ import com.huawei.it.ex.one.domain.runtime.RuntimeProfileMetadata;
 
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Scheduler;
 
 import java.time.Instant;
@@ -54,6 +55,7 @@ final class RuntimeInteractionContinuationCoordinator {
     private final InteractionRunLifecycle lifecycle;
     private final ChatEventPersistenceCoordinator eventPersistenceCoordinator;
     private final Scheduler eventIoScheduler;
+    private final DomainAgentQuestionnaireContinuation domainAgentContinuation;
 
     RuntimeInteractionContinuationCoordinator(
             RuntimeBindingApplicationService runtimeBindingService,
@@ -63,6 +65,15 @@ final class RuntimeInteractionContinuationCoordinator {
             InteractionRunLifecycle lifecycle,
             ChatEventPersistenceCoordinator eventPersistenceCoordinator,
             Scheduler eventIoScheduler) {
+        this(runtimeBindingService, runtimeExecutor, appliedRouteRecorder, interactionEventFactory,
+                lifecycle, eventPersistenceCoordinator, eventIoScheduler, null);
+    }
+
+    RuntimeInteractionContinuationCoordinator(
+            RuntimeBindingApplicationService runtimeBindingService, AgentRuntimeExecutor runtimeExecutor,
+            AppliedRouteRecorder appliedRouteRecorder, InteractionEventFactory interactionEventFactory,
+            InteractionRunLifecycle lifecycle, ChatEventPersistenceCoordinator eventPersistenceCoordinator,
+            Scheduler eventIoScheduler, DomainAgentQuestionnaireContinuation domainAgentContinuation) {
         this.runtimeBindingService = runtimeBindingService;
         this.runtimeExecutor = runtimeExecutor;
         this.appliedRouteRecorder = appliedRouteRecorder;
@@ -70,6 +81,7 @@ final class RuntimeInteractionContinuationCoordinator {
         this.lifecycle = lifecycle;
         this.eventPersistenceCoordinator = eventPersistenceCoordinator;
         this.eventIoScheduler = eventIoScheduler;
+        this.domainAgentContinuation = domainAgentContinuation;
     }
 
     Flux<ChatEvent> execute(Request request) {
@@ -77,7 +89,13 @@ final class RuntimeInteractionContinuationCoordinator {
         InteractionRunLifecycle.InheritedRunState inheritedState =
                 lifecycle.inheritedRunState(request.user(), interaction);
         RelayOutputMode relayOutputMode = inheritedState.relayOutputMode();
-        RouteTarget route = relayOutputMode == RelayOutputMode.ANSWER_STREAM_ONLY
+        Map<String, Object> domainSnapshot = domainAgent(interaction)
+                ? DomainAgentQuestionnaireContext.require(interaction) : Map.of();
+        RouteTarget route = domainAgent(interaction)
+                ? RouteTarget.domainAgent(DomainAgentQuestionnaireContext.text(domainSnapshot.get("skillId")),
+                        DomainAgentQuestionnaireContext.text(domainSnapshot.get("routeSource")), 1.0,
+                        "continue domain agent questionnaire")
+                : relayOutputMode == RelayOutputMode.ANSWER_STREAM_ONLY
                 ? RouteTarget.agentRuntimeAnswerStreamOnly(
                         "interaction-continuation", 1.0, "continue waiting user input",
                         inheritedState.invocationSkillId())
@@ -114,7 +132,8 @@ final class RuntimeInteractionContinuationCoordinator {
                 request.session().id(),
                 route,
                 null,
-                lifecycle.metadata(interaction),
+                domainAgent(interaction) ? IntentExpertContext.withScope(lifecycle.metadata(interaction),
+                        IntentExpertContext.fromMetadata(domainSnapshot).orElse(null)) : lifecycle.metadata(interaction),
                 ChatRunMode.NEXT,
                 interaction.userMessageId(),
                 interaction.userMessageId()), interaction);
@@ -143,7 +162,7 @@ final class RuntimeInteractionContinuationCoordinator {
                 new AtomicReference<>(),
                 interaction,
                 request.startAttempt(),
-                List.of(),
+                domainAgent(interaction) ? DomainAgentQuestionnaireContext.strings(domainSnapshot.get("documentIds")) : List.of(),
                 dispatchState);
         InteractionExecution execution = new InteractionExecution(
                 request,
@@ -153,7 +172,8 @@ final class RuntimeInteractionContinuationCoordinator {
                 route,
                 executionClaim,
                 bindingRef,
-                assistant);
+                assistant,
+                context);
         try {
             return eventPersistenceCoordinator.executeAfterRunStarted(context, () ->
                     eventPersistenceCoordinator.requireCurrentOwnerRunning(
@@ -179,6 +199,12 @@ final class RuntimeInteractionContinuationCoordinator {
             ChatInteractionRequest interaction,
             RunExecutionClaim executionClaim,
             RuntimeInteractionDispatchState dispatchState) {
+        if (domainAgent(interaction)) {
+            RuntimeBinding binding = runtimeBindingService.resumeDomainAgentForInteraction(
+                    interaction, request.runId(), executionClaim,
+                    DomainAgentQuestionnaireContext.text(DomainAgentQuestionnaireContext.require(interaction).get("skillId")));
+            return new InteractionBindingLifecycle(binding, true, dispatchState);
+        }
         if (RelayQuestionnaireAnswerValidator.isRelayQuestionnaire(interaction)) {
             RuntimeBinding binding = runtimeBindingService.resumeRelayForInteraction(
                     interaction, request.runId(), executionClaim);
@@ -194,21 +220,43 @@ final class RuntimeInteractionContinuationCoordinator {
             InteractionBindingLifecycle bindingLifecycle) {
         RuntimeBinding binding = bindingLifecycle.binding();
         execution.bindingRef().set(binding);
+        if (domainAgent(execution.interaction())) {
+            if (domainAgentContinuation == null) {
+                return Flux.error(new IllegalStateException("DomainAgent questionnaire continuation is not configured"));
+            }
+            // 首个答案事件之前初始化正文，Stop partial 也必须保留发问前已提交的内容。
+            domainAgentContinuation.prepareAssistant(execution.pipeline(), execution.interaction());
+        }
         appliedRouteRecorder.bindResolvedRouteRequired(
                 execution.run(), execution.route(), binding, execution.executionClaim(),
                 execution.assistant().persistenceState());
         execution.assistant().messageSkill().replace(execution.route().invocationSkillId());
+        Sinks.One<Void> responsePersisted = Sinks.one();
+        ChatEvent response = domainAgent(execution.interaction())
+                ? new PersistenceAcknowledgedEvent(execution.responseEvent(), responsePersisted)
+                : execution.responseEvent();
         return Flux.concat(
-                Flux.just(execution.responseEvent()),
-                eventPersistenceCoordinator.requireCurrentOwnerRunning(
-                                execution.executionClaim(), "before-runtime-interaction")
+                Flux.just(response),
+                (domainAgent(execution.interaction()) ? responsePersisted.asMono() : Mono.<Void>empty())
+                        .then(eventPersistenceCoordinator.requireCurrentOwnerRunning(
+                                execution.executionClaim(), "before-runtime-interaction"))
                         .then(Mono.fromRunnable(() -> appliedRouteRecorder.markRuntimeDispatchStartedRequired(
                                 execution.run(),
                                 execution.route(),
                                 binding,
                                 execution.executionClaim(),
                                 execution.assistant().persistenceState())))
-                        .thenMany(Flux.defer(() -> runtimeExecutor
+                        .thenMany(Flux.defer(() -> runtimeEvents(execution, bindingLifecycle))));
+    }
+
+    private Flux<ChatEvent> runtimeEvents(InteractionExecution execution, InteractionBindingLifecycle bindingLifecycle) {
+        RuntimeBinding binding = bindingLifecycle.binding();
+        Map<String, Object> metadata = new LinkedHashMap<>(runtimeMetadata(binding, execution.route()));
+        if (domainAgent(execution.interaction())) {
+            metadata.put("userMessageId", execution.interaction().userMessageId());
+            metadata.put("skillId", execution.route().selectedAgentCode());
+        }
+        Flux<ChatEvent> source = Flux.defer(() -> runtimeExecutor
                                 .continueWithUserResponse(new RuntimeInteractionResponseContext(
                                         execution.request().user(),
                                         execution.request().session().id(),
@@ -221,8 +269,13 @@ final class RuntimeInteractionContinuationCoordinator {
                                         execution.request().claim().responsePayload(),
                                         execution.request().forwardHeaders(),
                                         execution.request().traceContext(),
-                                        runtimeMetadata(binding, execution.route()),
-                                        bindingLifecycle.dispatchState())))));
+                                        Map.copyOf(metadata),
+                                        bindingLifecycle.dispatchState())));
+        return domainAgent(execution.interaction())
+                ? domainAgentContinuation.execute(execution.pipeline(), execution.interaction(),
+                        execution.request().claim().responsePayload(), execution.request().forwardHeaders(),
+                        execution.request().traceContext(), source)
+                : source;
     }
 
     private Map<String, Object> runtimeMetadata(RuntimeBinding binding, RouteTarget route) {
@@ -243,17 +296,19 @@ final class RuntimeInteractionContinuationCoordinator {
             AtomicReference<RuntimeBinding> bindingRef,
             InteractionBindingLifecycle bindingLifecycle,
             String terminationSignal) {
-        if (!bindingLifecycle.restoreUnstartedRelayQuestionnaire()
+        if (!bindingLifecycle.restoreUnstartedQuestionnaire()
                 || bindingLifecycle.dispatchState().responseDispatched()) {
             return Mono.empty();
         }
         return Mono.<Void>fromRunnable(() -> {
                     RuntimeBinding binding = bindingLifecycle.binding();
-                    boolean restored = runtimeBindingService.restoreUnstartedRelayInteraction(
-                            binding, runId, interaction.sourceRunId());
+                    boolean restored = domainAgent(interaction)
+                            ? runtimeBindingService.restoreUnstartedDomainAgentInteraction(binding, runId, interaction.sourceRunId())
+                            : runtimeBindingService.restoreUnstartedRelayInteraction(binding, runId, interaction.sourceRunId());
                     if (restored) {
                         bindingLifecycle.dispatchState().markBindingRestored();
-                        bindingRef.compareAndSet(binding, binding.withRun(interaction.sourceRunId(), null));
+                        bindingRef.compareAndSet(binding, binding.withRun(interaction.sourceRunId(),
+                                domainAgent(interaction) ? binding.expiresAt() : null));
                     } else {
                         bindingLifecycle.dispatchState().markBindingRestoreFailed();
                     }
@@ -262,16 +317,20 @@ final class RuntimeInteractionContinuationCoordinator {
                 .onErrorResume(ex -> {
                     bindingLifecycle.dispatchState().markBindingRestoreFailed();
                     log.warn(SystemErrorLogEntry.builder(SystemErrorCode.DATABASE_WRITE_FAILED,
-                                    "Unstarted Relay interaction binding restore failed")
+                                    "Unstarted Runtime interaction binding restore failed")
                             .runId(runId)
                             .sessionId(interaction.sessionId())
-                            .operation("relay.interaction.binding-restore")
+                            .operation(interaction.runtimeProvider() + ".interaction.binding-restore")
                             .attribute("bindingId", bindingLifecycle.binding().id())
                             .attribute("terminationSignal", terminationSignal)
                             .build(), ex);
                     return Mono.empty();
                 })
                 .then();
+    }
+
+    private boolean domainAgent(ChatInteractionRequest interaction) {
+        return interaction != null && "domain-agent".equals(interaction.runtimeProvider());
     }
 
     record Request(
@@ -294,21 +353,22 @@ final class RuntimeInteractionContinuationCoordinator {
             RouteTarget route,
             RunExecutionClaim executionClaim,
             AtomicReference<RuntimeBinding> bindingRef,
-            AssistantAssembly assistant
+            AssistantAssembly assistant,
+            RunEventPipelineContext pipeline
     ) {
     }
 
     private static final class InteractionBindingLifecycle {
         private final RuntimeBinding binding;
-        private final boolean restoreUnstartedRelayQuestionnaire;
+        private final boolean restoreUnstartedQuestionnaire;
         private final RuntimeInteractionDispatchState dispatchState;
 
         private InteractionBindingLifecycle(
                 RuntimeBinding binding,
-                boolean restoreUnstartedRelayQuestionnaire,
+                boolean restoreUnstartedQuestionnaire,
                 RuntimeInteractionDispatchState dispatchState) {
             this.binding = binding;
-            this.restoreUnstartedRelayQuestionnaire = restoreUnstartedRelayQuestionnaire;
+            this.restoreUnstartedQuestionnaire = restoreUnstartedQuestionnaire;
             this.dispatchState = dispatchState;
         }
 
@@ -320,8 +380,8 @@ final class RuntimeInteractionContinuationCoordinator {
             return dispatchState;
         }
 
-        private boolean restoreUnstartedRelayQuestionnaire() {
-            return restoreUnstartedRelayQuestionnaire;
+        private boolean restoreUnstartedQuestionnaire() {
+            return restoreUnstartedQuestionnaire;
         }
     }
 }

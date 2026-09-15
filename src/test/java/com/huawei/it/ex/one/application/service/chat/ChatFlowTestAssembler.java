@@ -230,6 +230,7 @@ final class ChatFlowTestAssembler {
                         documentFacade,
                         routeSwitchPersistenceGate,
                         bindingCompensator,
+                        memoryAssembler,
                         eventScheduler));
         ChatRunExecutionCoordinator runExecutionCoordinator =
                 standardRunCoordinator(new StandardRunAssembly(
@@ -335,7 +336,9 @@ final class ChatFlowTestAssembler {
                         inputs.eventFactory(),
                         lifecycle,
                         inputs.persistenceCoordinator(),
-                        inputs.eventScheduler());
+                        inputs.eventScheduler(),
+                        new DomainAgentQuestionnaireContinuation(inputs.refusalCoordinator(),
+                                inputs.documentFacade(), inputs.memoryAssembler(), inputs.sessionService()));
         return new InteractionRunCoordinator(
                 inputs.sessionService(),
                 inputs.interactionService(),
@@ -398,6 +401,7 @@ final class ChatFlowTestAssembler {
             DocumentFacade documentFacade,
             AgentDataPersistenceGate routeSwitchPersistenceGate,
             RuntimeBindingDispatchCompensator bindingCompensator,
+            RunMemoryContextAssembler memoryAssembler,
             Scheduler eventScheduler
     ) {
     }

@@ -61,6 +61,9 @@ x-wait-time-semantics:
 x-websocket:
   url: /v1/chat/ws
   tag: Realtime WebSocket
+  externalDocs:
+    description: 完整 WebSocket 响应示例、字段字典及场景恢复手册（Servlet）
+    url: ../websocket-response-examples.md
   description: |
     WebSocket 仅承载实时扇出和订阅控制，不是事件事实源。连接建立后先发送 `connect`，再按
     `streamTopicId` 发送 `subscribe`。服务端 `message.payload` 与 SSE 的
@@ -71,6 +74,11 @@ x-websocket:
     Redis 或本机 live buffer 无法保证继续实时交付时，服务端返回 `RECOVER_REQUIRED`。客户端
     应停止当前订阅，使用 `details.recoveryAfterSeq` 调用 run 级 Event Resume，再选择一条实时
     消费链继续处理。同一 run 不应同时消费 WebSocket 和 run 级 SSE。
+
+    subscribe.reply.recovered 仅为 afterSeq > 0，reply.lastSeq 为请求游标，不表示补发完成。
+    streamItemId 当前为 evt_<sequence>。run.waiting_user 与 run.completed/failed/cancelled
+    均闭合当前 topic 并产生 done；run.async_running 不闭合 WebSocket topic。
+    presence 更新命令使用 state。下面的消息定义不是 HTTP response，完整分支及可选帧见场景手册。
   identityContext: 复用 WebSocket Upgrade 时企业框架建立的身份上下文和现有 Origin 校验。
   clientMessages:
     connect:
@@ -88,6 +96,32 @@ x-websocket:
       $ref: '#/components/schemas/ChatWebSocketEnvelope'
     error:
       $ref: '#/components/schemas/ChatWebSocketEnvelope'
+  serverExamples:
+    subscribeReply:
+      $ref: '#/components/examples/WebSocketSubscribeReply'
+    runStarted:
+      $ref: '#/components/examples/WebSocketRunStarted'
+    waitingUser:
+      $ref: '#/components/examples/WebSocketWaitingUser'
+    asyncRunning:
+      $ref: '#/components/examples/WebSocketAsyncRunning'
+    done:
+      $ref: '#/components/examples/WebSocketDone'
+    recoverRequired:
+      $ref: '#/components/examples/WebSocketRecoverRequired'
+  scenarioGuide:
+    connection: ../websocket-response-examples.md#s01
+    domainAgent: ../websocket-response-examples.md#s02
+    relay: ../websocket-response-examples.md#s03
+    expertAndBinding: ../websocket-response-examples.md#s04
+    intentClarification: ../websocket-response-examples.md#s05
+    runtimeQuestionnaire: ../websocket-response-examples.md#s06
+    refusalAndConfirmation: ../websocket-response-examples.md#s07
+    candidateSwitch: ../websocket-response-examples.md#s08
+    attachments: ../websocket-response-examples.md#s09
+    asyncTask: ../websocket-response-examples.md#s10
+    stopAndFailure: ../websocket-response-examples.md#s11
+    retentionAndResume: ../websocket-response-examples.md#s12
   errors:
     - WS_AUTH_FAILED
     - WS_ORIGIN_FORBIDDEN
@@ -2123,7 +2157,7 @@ components:
                   type: stream-item
                   conversationId: session_001
                   turnId: run_002
-                  streamItemId: seq-1043
+                  streamItemId: evt_1043
                   serverTimestampMs: 1785578400000
                   encodedItem:
                     encoding: chat-event-json-v1
@@ -2161,6 +2195,134 @@ components:
               - $ref: '#/components/schemas/ApiErrorResponse'
 
   examples:
+    WebSocketSubscribeReply:
+      summary: 订阅受理，不表示历史补发完成
+      value:
+        id: c3
+        type: reply
+        reply:
+          type: subscribe
+          topicId: chat-run-run_da
+          recovered: true
+          lastSeq: 1000
+    WebSocketRunStarted:
+      summary: 开始事件包含可信 userMessageId；订阅游标须覆盖此序号
+      value:
+        type: message
+        topicId: chat-run-run_da
+        offset: '1001'
+        payload:
+          type: conversation-turn-stream
+          payload:
+            type: stream-item
+            conversationId: session_demo
+            turnId: run_da
+            streamItemId: evt_1001
+            serverTimestampMs: 1789516801001
+            encodedItem:
+              encoding: chat-event-json-v1
+              event: run.started
+              data:
+                runId: run_da
+                sessionId: session_demo
+                sequence: 1001
+                type: run.started
+                payload:
+                  status: STARTED
+                  userMessageId: msg_user
+    WebSocketWaitingUser:
+      summary: DomainAgent 问卷等待；之后产生 done，回答改订阅新 Run topic
+      value:
+        type: message
+        topicId: chat-run-run_question_da
+        offset: '1702'
+        payload:
+          type: conversation-turn-stream
+          payload:
+            type: stream-item
+            conversationId: session_demo
+            turnId: run_question_da
+            streamItemId: evt_1702
+            serverTimestampMs: 1789516801702
+            encodedItem:
+              encoding: chat-event-json-v1
+              event: run.waiting_user
+              data:
+                runId: run_question_da
+                sessionId: session_demo
+                sequence: 1702
+                type: run.waiting_user
+                payload:
+                  status: WAITING_USER
+                  interactionType: AGENT_CLARIFICATION
+                  interactionId: interaction_da
+                  messageReady: true
+                  assistantMessageId: msg_question_da
+                  feedbackTargetMessageId: msg_question_da
+                  expiresAt: '2026-09-17T00:00:00Z'
+    WebSocketAsyncRunning:
+      summary: 异步等待不产生 done，原 topic 可继续接收回调
+      value:
+        type: message
+        topicId: chat-run-run_async
+        offset: '2101'
+        payload:
+          type: conversation-turn-stream
+          payload:
+            type: stream-item
+            conversationId: session_demo
+            turnId: run_async
+            streamItemId: evt_2101
+            serverTimestampMs: 1789516802101
+            encodedItem:
+              encoding: chat-event-json-v1
+              event: run.async_running
+              data:
+                runId: run_async
+                sessionId: session_demo
+                sequence: 2101
+                type: run.async_running
+                payload:
+                  source: domain-agent
+                  sourceType: agent.async_started
+                  status: ASYNC_RUNNING
+                  message: 任务已转入后台执行
+                  messageReady: true
+                  assistantMessageId: msg_async
+                  feedbackTargetMessageId: msg_async
+                  expiresAt: '2026-09-17T00:00:00Z'
+    WebSocketDone:
+      summary: 传输闭合消息，无 offset 或新的 sequence
+      value:
+        type: message
+        topicId: chat-run-run_da
+        payload:
+          type: conversation-turn-stream
+          payload:
+            type: done
+            conversationId: session_demo
+            turnId: run_da
+            serverTimestampMs: 1789516801016
+            lastSeq: 1015
+            terminalEventType: run.completed
+    WebSocketRecoverRequired:
+      summary: 序号回退，恢复起点可能低于本地最高已处理序号
+      value:
+        type: error
+        topicId: chat-run-run_recover
+        offset: '2250'
+        code: RECOVER_REQUIRED
+        message: 实时事件需要恢复，请使用 Event Resume 从 afterSeq=2249 补齐
+        details:
+          reason: SEQ_ROLLBACK
+          topicId: chat-run-run_recover
+          runId: run_recover
+          sessionId: session_demo
+          subscribeAfterSeq: 2240
+          recoveryAfterSeq: 2249
+          actualSeq: 2250
+          highestDeliveredSeq: 2252
+          lastSentSeq: 2252
     AccessDenied:
       summary: 当前实现的资源不可访问兼容响应
       value:
@@ -2178,7 +2340,7 @@ components:
           type: stream-item
           conversationId: session_001
           turnId: run_A
-          streamItemId: seq-2001
+          streamItemId: evt_2001
           encodedItem:
             encoding: chat-event-json-v1
             event: run.waiting_user
@@ -2203,7 +2365,7 @@ components:
           type: stream-item
           conversationId: session_001
           turnId: run_A
-          streamItemId: seq-2010
+          streamItemId: evt_2010
           encodedItem:
             encoding: chat-event-json-v1
             event: runtime.card
@@ -2248,7 +2410,7 @@ components:
           type: stream-item
           conversationId: session_001
           turnId: run_A
-          streamItemId: seq-2020
+          streamItemId: evt_2020
           encodedItem:
             encoding: chat-event-json-v1
             event: runtime.card
@@ -2281,7 +2443,7 @@ components:
           type: stream-item
           conversationId: session_001
           turnId: run_relay_A
-          streamItemId: seq-2030
+          streamItemId: evt_2030
           encodedItem:
             encoding: chat-event-json-v1
             event: runtime.card
@@ -3087,6 +3249,8 @@ components:
         streamItemId:
           type: string
           nullable: true
+          description: 仅 stream-item 存在，当前为 evt_<sequence>；heartbeat/done 省略
+          example: evt_1043
         serverTimestampMs:
           type: integer
           format: int64
@@ -3102,11 +3266,11 @@ components:
           type: integer
           format: int64
           nullable: true
-          description: heartbeat/done 看到的最近持久化 sequence；不推进客户端游标
+          description: WebSocket heartbeat 为该订阅已发出事件的最新 sequence（初始为 afterSeq），done 为闭合事件序号；可能含 live-only 序号，不是消费确认或数据库最新水位，不推进客户端游标
         terminalEventType:
           type: string
           nullable: true
-          description: done 对应的 run.completed/run.failed/run.cancelled 等终态
+          description: done 对应 run.completed/run.failed/run.cancelled/run.waiting_user；run.async_running 不产生 done
 
     EncodedChatEventItem:
       type: object
@@ -4536,20 +4700,21 @@ components:
 
     WebSocketPresenceCommand:
       type: object
-      required: [id, type, presence]
+      required: [id, type, state]
       properties:
         id:
           type: string
         type:
           type: string
           enum: [presence]
-        presence:
+        state:
           type: string
           enum: [foreground, background]
+          description: 当前更新命令读取 state；connect 命令的 presence 字段不能用于此命令
       example:
         id: ws_cmd_002
         type: presence
-        presence: background
+        state: background
 
     WebSocketSubscribeCommand:
       type: object
@@ -4568,7 +4733,7 @@ components:
           format: int64
           minimum: 0
           default: 0
-          description: 已实际处理成功的最大 sequence；新 run 通常使用 ChatRunStart.firstSeq
+          description: 排他游标，只发送 sequence 大于它的事件；新 Run 已处理启动响应时可用 firstSeq，需要 run.started 时用 firstSeq-1；补发仅覆盖留存事件
       example:
         id: ws_cmd_003
         type: subscribe
@@ -4594,20 +4759,26 @@ components:
     ChatWebSocketEnvelope:
       type: object
       required: [type]
+      description: |
+        WebSocket 文本消息，非 HTTP 响应体。当前 Servlet 实现省略外层 null 字段。
+        message.payload 为 ConversationTurnStream；reply/error 不含业务流 payload。
+        逐层字段及全部场景见 ../websocket-response-examples.md。
       properties:
         id:
           type: string
           nullable: true
+          description: 命令 reply/error 回显请求 ID；主动 message/恢复提示通常省略
         type:
           type: string
           enum: [reply, message, error]
         topicId:
           type: string
           nullable: true
+          description: message 或 RECOVER_REQUIRED 对应的 Run topic；reply 中的 topicId 位于 reply 对象
         offset:
           type: string
           nullable: true
-          description: stream-item 的全局 sequence 字符串；live-only值不可由Event Resume补发
+          description: stream-item 的全局 sequence 字符串；RECOVER_REQUIRED 为诊断 actualSeq，不是已消费游标；heartbeat/done 省略，live-only 业务不可由 Event Resume 补发
         payload:
           type: object
           allOf:
@@ -4617,16 +4788,20 @@ components:
           type: object
           nullable: true
           additionalProperties: true
+          description: 按 reply.type 区分；subscribe 返回 topicId、recovered=(afterSeq>0)、lastSeq=afterSeq，仅表示受理，不表示补发完成
         code:
           type: string
           nullable: true
+          description: 连接/订阅层 error 码，不等于 run.failed.payload.code；Upgrade 前拒绝可能只有 HTTP 错误
         message:
           type: string
           nullable: true
+          description: error 的可读说明；文本随原因变化，不作为业务判断键
         details:
           type: object
           nullable: true
           additionalProperties: true
+          description: 恢复诊断按原因提供 recoveryAfterSeq、actualSeq、lastSentSeq 等；恢复起点可能小于本地最高游标
       example:
         type: message
         topicId: chat-run-run_002
@@ -4637,7 +4812,7 @@ components:
             type: stream-item
             conversationId: session_001
             turnId: run_002
-            streamItemId: seq-1043
+            streamItemId: evt_1043
             encodedItem:
               encoding: chat-event-json-v1
               event: message.delta

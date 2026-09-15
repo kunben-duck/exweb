@@ -10,6 +10,10 @@
 覆盖普通请求、全部 Interaction WAIT、前端触发超时动作、页面恢复和等待态 stop；本联调文档继续说明
 前端状态组织与调用顺序。
 
+完整 WebSocket Envelope、逐层字段字典及各场景的流式消息顺序，见
+[WebSocket 响应示例与字段说明](websocket-response-examples.md)。手册覆盖 DomainAgent/Relay、专家与
+Binding、澄清/问卷、拒答/候选切换、附件拒绝、异步回填、Stop 和刷新恢复；示例为虚构协议数据。
+
 本文档以 FinanceEXChatService 的正式接口为准，采用系统自身的设计术语描述接口边界、调用顺序和错误处理；下游 Runtime、domain-agent 或浏览器实现细节只作为内部 adapter 行为说明，不作为前端协议依赖。
 
 ## 基础约定
@@ -2620,6 +2624,15 @@ curl "http://localhost:8080/v1/chat/shares?curPage=1&pageSize=20"
 ```
 
 ## WebSocket 协议
+
+本节说明连接与恢复规则；按实际消息外层封装的场景示例见
+[WebSocket 场景手册](websocket-response-examples.md#s01)。特别注意：
+
+- `presence` 更新命令使用 `state`，不是 `presence`；`connect` 才使用 `presence`。
+- `subscribe.reply.recovered` 仅表示 `afterSeq > 0`，`reply.lastSeq` 回显请求游标，不表示补发完成或最新数据库水位。
+- `streamItemId` 当前为 `evt_<sequence>`；`message.completed` 不等于 Run 终态。
+- `run.waiting_user` 后发送 `done` 并退订该 topic；`run.async_running` 不发送 `done`，可继续监听回调。
+- 等待态 Stop 没有活动续跑时只取消 Interaction，不额外向旧 Run 发送 `run.cancelled`；按 REST 结果及 `stream-status` 更新卡片。
 
 WebSocket 是用户级长连接，切换会话时不需要重建连接，也不要求释放其他会话的 run topic。
 同一连接可以同时订阅多个 session 的多个 run topic，服务端会在订阅前校验 topic 归属，
